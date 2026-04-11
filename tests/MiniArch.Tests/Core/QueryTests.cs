@@ -75,6 +75,46 @@ public sealed class QueryTests
     }
 
     [Fact]
+    public void Query_exposes_the_same_matching_chunks_as_chunk_enumeration()
+    {
+        var world = new World(chunkCapacity: 1);
+        for (var i = 0; i < 3; i++)
+        {
+            var entity = world.Create();
+            world.Add(entity, new Position(i, i));
+        }
+
+        var query = world.Query<Position>();
+
+        var enumeratedChunks = new List<Chunk>();
+        foreach (var chunk in query.Chunks)
+        {
+            enumeratedChunks.Add(chunk);
+        }
+
+        Assert.Equal(enumeratedChunks, query.MatchedChunks);
+        Assert.Equal(1, query.RefreshCount);
+    }
+
+    [Fact]
+    public void Matching_chunks_refresh_when_world_changes()
+    {
+        var world = new World(chunkCapacity: 1);
+        var first = world.Create();
+        world.Add(first, new Position(1, 1));
+
+        var query = world.Query<Position>();
+        Assert.Single(query.MatchedChunks);
+        Assert.Equal(1, query.RefreshCount);
+
+        var second = world.Create();
+        world.Add(second, new Position(2, 2));
+
+        Assert.Equal(2, query.MatchedChunks.Count);
+        Assert.Equal(2, query.RefreshCount);
+    }
+
+    [Fact]
     public async Task Same_query_can_be_enumerated_concurrently_by_multiple_tasks()
     {
         var world = CreateWorldWithMatchingEntities();

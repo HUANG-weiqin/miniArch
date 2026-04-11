@@ -79,7 +79,10 @@ updated: 2026-04-12
 - query cache 应该发布整个 `Dictionary<QueryFilter, Query>` 快照，而不是在共享字典上做并发写入。
 - 对大命中 query，读路径真正昂贵的通常不是 filter builder，而是逐 row 的 accessor 开销；如果 chunk 读 API 只能通过 `GetEntity(row)` / `GetComponent(row)` 这种逐元素方法走，边界检查和调用成本会在 `100k+` 档位开始放大。
 - 对 entity-only 的 query 消费，`ReadOnlySpan<Entity>` 这类批量读接口通常能立刻降低 CPU，且不会引入额外分配；它是比重构 query cache 更低风险的第一步优化。
+- 结合当前 query sampling，warmed query 的第一优先优化点应放在 traversal / accessor 路径，而不是优先重写 `BuildMatchingArchetypes`；matching 目前只是小头。
+- 如果 query 不只缓存 `Archetype[]`，还缓存了扁平 `Chunk[]`，失效条件就不能只看 archetype 集合变化；同 archetype 内新增或复用 chunk 也必须触发 query snapshot 刷新。
 - typed column 的收益会被 `Array` 抽象层吃掉一部分；如果迁移/删除路径仍长期停留在 `Array.Copy` / `Array.Clear` 的逐列调用上，结构变化 benchmark 的 CPU 还会继续偏高。
+- typed chunk 的删除路径不应该无差别清空所有列尾槽位；值类型列可以直接保留旧位模式，只有引用类型或“包含引用字段的 struct”才需要清尾，避免无意义的写带宽和 GC 压力。
 - 对照 `Arch` 源码时不要假设它会自动消除 `Create -> Add -> Add` 留下的中间 archetype；它同样保留这些 archetype，query 也是按 world archetype 列表全量匹配，空 archetype 只会在显式 `TrimExcess()` 后被移除。
 
 ## 认知模型
@@ -129,7 +132,10 @@ updated: 2026-04-12
 - query builder / query fluent API 如果直接调用 `ComponentRegistry.GetOrCreate<T>()`，会绕过 `World` 已经存在的泛型缓存；这不会破坏功能，但会把 query build 的固定成本抬高。
 - `QueryComponentSet.Add` / `Signature.Add` 这种“每次链式调用都复制一份小数组”的设计在 query build 不频繁时可以接受，但如果 benchmark 把 build 放进测量区，分配会稳定体现在结果里。
 - `Chunk.RemoveAt` 对所有列都做 `Array.Clear`，即使列元素不含引用也照样清空；这会在 remove/destroy 高频场景里制造纯写带宽开销，而不是必要的 GC 保护。
+- 判断 typed 列尾槽位是否需要清空时，不能只看 `Type.IsValueType`；带引用字段的 struct 同样需要 clear，运行时判定应以 `RuntimeHelpers.IsReferenceOrContainsReferences<T>()` 为准。
 - query benchmark 里如果 world shape 仍通过多次 `Add` 逐步长成，会残留一批历史空 archetype；它们不一定代表 steady-state query 的真实读取成本。
+- query profiling 里如果 top1 看起来只是某个外层 `Execute` 包装函数，不要直接把锅甩给 wrapper；常见原因是 `Chunk.GetEntity(row)`、chunk 枚举等小函数被 JIT inline 后折叠进调用者。
+- 扁平 chunk snapshot 如果仍然只绑定 `ArchetypeGeneration`，会在“同 archetype 内追加到新 chunk”时静默读到过期 chunk 列表；这种 bug 只有在 chunk 容量很小或 world 很大时才容易暴露。
 - 容易误判的地方：
   - 以为 `Set<T>` 永远只是原地写入
   - 以为 `Remove<T>` 不存在时应该报错，而不是直接返回

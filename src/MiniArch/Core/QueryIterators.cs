@@ -42,14 +42,12 @@ public readonly struct ChunkEnumerable : IEnumerable<Chunk>
 
 public struct ChunkEnumerator
 {
-    private readonly Archetype[] _archetypes;
-    private int _archetypeIndex;
+    private readonly Chunk[] _chunks;
     private int _chunkIndex;
 
     public ChunkEnumerator(Query query)
     {
-        _archetypes = query.EnsureMatchingArchetypes();
-        _archetypeIndex = 0;
+        _chunks = query.EnsureMatchingChunks();
         _chunkIndex = -1;
         Current = default!;
     }
@@ -58,18 +56,11 @@ public struct ChunkEnumerator
 
     public bool MoveNext()
     {
-        while (_archetypeIndex < _archetypes.Length)
+        _chunkIndex++;
+        if (_chunkIndex < _chunks.Length)
         {
-            var archetype = _archetypes[_archetypeIndex];
-            _chunkIndex++;
-            if (_chunkIndex < archetype.Chunks.Count)
-            {
-                Current = archetype.Chunks[_chunkIndex];
-                return true;
-            }
-
-            _archetypeIndex++;
-            _chunkIndex = -1;
+            Current = _chunks[_chunkIndex];
+            return true;
         }
 
         return false;

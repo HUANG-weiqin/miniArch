@@ -20,6 +20,7 @@ public sealed class World
     private RecycledEntity[] _freeIds;
     private int _freeIdCount;
     private int _archetypeGeneration;
+    private int _queryLayoutGeneration;
 
     public World(int chunkCapacity = 128, int entityCapacity = 64)
     {
@@ -46,6 +47,8 @@ public sealed class World
     internal Archetype[] Archetypes => Volatile.Read(ref _archetypeSnapshot);
 
     internal int ArchetypeGeneration => _archetypeGeneration;
+
+    internal int QueryLayoutGeneration => _queryLayoutGeneration;
 
     public Entity Create()
     {
@@ -447,6 +450,7 @@ public sealed class World
         if (_freeIdCount == 0)
         {
             CreateManyFresh(entities);
+            TouchQueryLayout();
             return;
         }
 
@@ -461,6 +465,7 @@ public sealed class World
             Span<EntityBatchRange> ranges = stackalloc EntityBatchRange[StackAllocatedBatchRangeLimit];
             var rangeCount = archetype.ReserveEntityRanges(entities.Length, ranges);
             WriteCreatedEntitiesAndLocations(archetype, entities, ranges[..rangeCount], reusedCount, startId);
+            TouchQueryLayout();
             return;
         }
 
@@ -475,6 +480,8 @@ public sealed class World
         {
             ArrayPool<EntityBatchRange>.Shared.Return(rentedRanges);
         }
+
+        TouchQueryLayout();
     }
 
     public void EnsureCapacity(int entityCapacity)
@@ -507,6 +514,8 @@ public sealed class World
         {
             _locations[movedEntity.Id] = info;
         }
+
+        TouchQueryLayout();
     }
 
     public void Add<T>(Entity entity, T component)
@@ -630,6 +639,7 @@ public sealed class World
         }
 
         _locations[entity.Id] = new EntityLocation(destination, destinationChunkIndex, destinationRowIndex);
+        TouchQueryLayout();
     }
 
     private void MoveEntity<T>(Entity entity, EntityLocation sourceInfo, Archetype destination, ComponentType componentType, in T componentValue)
@@ -649,6 +659,7 @@ public sealed class World
         }
 
         _locations[entity.Id] = new EntityLocation(destination, destinationChunkIndex, destinationRowIndex);
+        TouchQueryLayout();
     }
 
     private Archetype GetOrCreateDestinationArchetype(Archetype source, ComponentType componentType, Signature destinationSignature, bool isAdd)
@@ -772,6 +783,7 @@ public sealed class World
         var entity = new Entity(id, version);
         chunk = archetype.ReserveEntity(entity, out var chunkIndex, out rowIndex);
         _locations[id] = new EntityLocation(archetype, chunkIndex, rowIndex);
+        TouchQueryLayout();
         return entity;
     }
 
@@ -903,6 +915,11 @@ public sealed class World
     private RecycledEntity PopFreeId()
     {
         return _freeIds[--_freeIdCount];
+    }
+
+    private void TouchQueryLayout()
+    {
+        _queryLayoutGeneration++;
     }
 
     private ComponentType GetComponentType<T>()
