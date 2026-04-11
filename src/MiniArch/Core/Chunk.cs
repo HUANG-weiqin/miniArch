@@ -86,24 +86,6 @@ public sealed class Chunk
         return row;
     }
 
-    internal int Add(ReadOnlySpan<Entity> entities)
-    {
-        if (entities.Length == 0)
-        {
-            return Count;
-        }
-
-        if (Count + entities.Length > Capacity)
-        {
-            throw new InvalidOperationException("Chunk is full.");
-        }
-
-        var row = Count;
-        entities.CopyTo(_entities.AsSpan(row, entities.Length));
-        Count += entities.Length;
-        return row;
-    }
-
     internal int ReserveRows(int count)
     {
         if (count < 0)

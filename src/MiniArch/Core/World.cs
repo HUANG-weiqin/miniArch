@@ -10,10 +10,11 @@ public sealed class World
     private readonly ComponentRegistry _components = new();
     private readonly Dictionary<Signature, Archetype> _archetypes = new();
     private readonly List<int> _versions;
-    private readonly List<EntityInfo?> _locations;
-    private readonly Stack<int> _freeIds = new();
+    private readonly List<EntityLocation> _locations;
     private readonly Dictionary<QueryFilter, Query> _queries = new();
     private readonly int _chunkCapacity;
+    private RecycledEntity[] _freeIds;
+    private int _freeIdCount;
     private int _archetypeGeneration;
 
     public World(int chunkCapacity = 128, int entityCapacity = 64)
@@ -30,7 +31,8 @@ public sealed class World
 
         _chunkCapacity = chunkCapacity;
         _versions = new List<int>(entityCapacity);
-        _locations = new List<EntityInfo?>(entityCapacity);
+        _locations = new List<EntityLocation>(entityCapacity);
+        _freeIds = entityCapacity == 0 ? Array.Empty<RecycledEntity>() : new RecycledEntity[entityCapacity];
     }
 
     public ComponentRegistry Components => _components;
@@ -43,12 +45,11 @@ public sealed class World
 
     public Entity Create()
     {
-        var id = AcquireEntityId();
-        var version = _versions[id];
+        var id = AcquireEntityId(out var version);
         var entity = new Entity(id, version);
         var archetype = GetOrCreateArchetype(Signature.Empty);
         archetype.ReserveEntity(entity, out var chunkIndex, out var rowIndex);
-        _locations[id] = new EntityInfo(version, archetype, chunkIndex, rowIndex);
+        _locations[id] = new EntityLocation(archetype, chunkIndex, rowIndex);
         return entity;
     }
 
@@ -59,13 +60,14 @@ public sealed class World
             return;
         }
 
-        if (_freeIds.Count == 0)
+        if (_freeIdCount == 0)
         {
             CreateManyFresh(entities);
             return;
         }
 
-        FillCreatedEntities(entities);
+        var reusedCount = Math.Min(entities.Length, _freeIdCount);
+        var startId = AppendEntitySlots(entities.Length - reusedCount);
 
         var archetype = GetOrCreateArchetype(Signature.Empty);
         var maxRangeCount = Math.Min(entities.Length, archetype.Chunks.Count + ((entities.Length + _chunkCapacity - 1) / _chunkCapacity));
@@ -73,8 +75,8 @@ public sealed class World
         if (maxRangeCount <= StackAllocatedBatchRangeLimit)
         {
             Span<EntityBatchRange> ranges = stackalloc EntityBatchRange[StackAllocatedBatchRangeLimit];
-            var rangeCount = archetype.ReserveEntities(entities, ranges);
-            WriteBatchLocations(archetype, entities, ranges[..rangeCount]);
+            var rangeCount = archetype.ReserveEntityRanges(entities.Length, ranges);
+            WriteCreatedEntitiesAndLocations(archetype, entities, ranges[..rangeCount], reusedCount, startId);
             return;
         }
 
@@ -82,8 +84,8 @@ public sealed class World
         try
         {
             var ranges = rentedRanges.AsSpan(0, maxRangeCount);
-            var rangeCount = archetype.ReserveEntities(entities, ranges);
-            WriteBatchLocations(archetype, entities, ranges[..rangeCount]);
+            var rangeCount = archetype.ReserveEntityRanges(entities.Length, ranges);
+            WriteCreatedEntitiesAndLocations(archetype, entities, ranges[..rangeCount], reusedCount, startId);
         }
         finally
         {
@@ -98,21 +100,28 @@ public sealed class World
             throw new ArgumentOutOfRangeException(nameof(entityCapacity));
         }
 
-        _versions.EnsureCapacity(entityCapacity);
-        _locations.EnsureCapacity(entityCapacity);
+        if (_versions.Capacity < entityCapacity)
+        {
+            _versions.Capacity = entityCapacity;
+        }
+
+        if (_locations.Capacity < entityCapacity)
+        {
+            _locations.Capacity = entityCapacity;
+        }
     }
 
     public void Destroy(Entity entity)
     {
         var info = GetRequiredLocation(entity);
         info.Archetype.RemoveEntity(info.ChunkIndex, info.RowIndex, out var movedEntity);
-        _locations[entity.Id] = null;
+        _locations[entity.Id] = default;
         _versions[entity.Id] = entity.Version + 1;
-        _freeIds.Push(entity.Id);
+        PushFreeId(entity.Id, entity.Version + 1);
 
         if (movedEntity.IsValid)
         {
-            _locations[movedEntity.Id] = info with { Version = movedEntity.Version };
+            _locations[movedEntity.Id] = info;
         }
     }
 
@@ -213,17 +222,17 @@ public sealed class World
         }
 
         var stored = _locations[entity.Id];
-        if (stored is null || stored.Value.Version != entity.Version)
+        if (stored.Archetype is null || _versions[entity.Id] != entity.Version)
         {
             info = default;
             return false;
         }
 
-        info = stored.Value;
+        info = new EntityInfo(entity.Version, stored.Archetype, stored.ChunkIndex, stored.RowIndex);
         return true;
     }
 
-    private void MoveEntity(Entity entity, EntityInfo sourceInfo, Archetype destination)
+    private void MoveEntity(Entity entity, EntityLocation sourceInfo, Archetype destination)
     {
         var sourceChunk = sourceInfo.Archetype.GetChunk(sourceInfo.ChunkIndex);
         var destinationChunk = destination.ReserveEntity(entity, out var destinationChunkIndex, out var destinationRowIndex);
@@ -233,13 +242,13 @@ public sealed class World
 
         if (movedEntity.IsValid)
         {
-            _locations[movedEntity.Id] = new EntityInfo(movedEntity.Version, sourceInfo.Archetype, sourceInfo.ChunkIndex, sourceInfo.RowIndex);
+            _locations[movedEntity.Id] = sourceInfo;
         }
 
-        _locations[entity.Id] = new EntityInfo(entity.Version, destination, destinationChunkIndex, destinationRowIndex);
+        _locations[entity.Id] = new EntityLocation(destination, destinationChunkIndex, destinationRowIndex);
     }
 
-    private void MoveEntity<T>(Entity entity, EntityInfo sourceInfo, Archetype destination, ComponentType componentType, in T componentValue)
+    private void MoveEntity<T>(Entity entity, EntityLocation sourceInfo, Archetype destination, ComponentType componentType, in T componentValue)
     {
         var sourceChunk = sourceInfo.Archetype.GetChunk(sourceInfo.ChunkIndex);
         var destinationChunk = destination.ReserveEntity(entity, out var destinationChunkIndex, out var destinationRowIndex);
@@ -252,10 +261,10 @@ public sealed class World
 
         if (movedEntity.IsValid)
         {
-            _locations[movedEntity.Id] = new EntityInfo(movedEntity.Version, sourceInfo.Archetype, sourceInfo.ChunkIndex, sourceInfo.RowIndex);
+            _locations[movedEntity.Id] = sourceInfo;
         }
 
-        _locations[entity.Id] = new EntityInfo(entity.Version, destination, destinationChunkIndex, destinationRowIndex);
+        _locations[entity.Id] = new EntityLocation(destination, destinationChunkIndex, destinationRowIndex);
     }
 
     private Archetype GetOrCreateDestinationArchetype(Archetype source, ComponentType componentType, Signature destinationSignature, bool isAdd)
@@ -318,9 +327,15 @@ public sealed class World
         return query;
     }
 
-    private EntityInfo GetRequiredLocation(Entity entity)
+    private EntityLocation GetRequiredLocation(Entity entity)
     {
-        if (!TryGetLocation(entity, out var info))
+        if (entity.Id < 0 || entity.Id >= _locations.Count)
+        {
+            throw new InvalidOperationException($"Entity {entity} is stale or unknown.");
+        }
+
+        var info = _locations[entity.Id];
+        if (info.Archetype is null || _versions[entity.Id] != entity.Version)
         {
             throw new InvalidOperationException($"Entity {entity} is stale or unknown.");
         }
@@ -328,40 +343,24 @@ public sealed class World
         return info;
     }
 
-    private void FillCreatedEntities(Span<Entity> entities)
+    private int AppendEntitySlots(int newEntityCount)
     {
-        var reusedCount = Math.Min(entities.Length, _freeIds.Count);
-        for (var index = 0; index < reusedCount; index++)
-        {
-            var id = _freeIds.Pop();
-            entities[index] = new Entity(id, _versions[id]);
-        }
-
-        var newEntityCount = entities.Length - reusedCount;
+        var startId = _versions.Count;
         if (newEntityCount == 0)
         {
-            return;
+            return startId;
         }
 
-        var startId = _versions.Count;
         var requiredCount = startId + newEntityCount;
         EnsureCapacity(requiredCount);
         CollectionsMarshal.SetCount(_versions, requiredCount);
         CollectionsMarshal.SetCount(_locations, requiredCount);
-
-        for (var index = 0; index < newEntityCount; index++)
-        {
-            entities[reusedCount + index] = new Entity(startId + index, 0);
-        }
+        return startId;
     }
 
     private void CreateManyFresh(Span<Entity> entities)
     {
-        var startId = _versions.Count;
-        var requiredCount = startId + entities.Length;
-        EnsureCapacity(requiredCount);
-        CollectionsMarshal.SetCount(_versions, requiredCount);
-        CollectionsMarshal.SetCount(_locations, requiredCount);
+        var startId = AppendEntitySlots(entities.Length);
 
         var archetype = GetOrCreateArchetype(Signature.Empty);
         var maxRangeCount = Math.Min(entities.Length, archetype.Chunks.Count + ((entities.Length + _chunkCapacity - 1) / _chunkCapacity));
@@ -370,7 +369,7 @@ public sealed class World
         {
             Span<EntityBatchRange> ranges = stackalloc EntityBatchRange[StackAllocatedBatchRangeLimit];
             var rangeCount = archetype.ReserveEntityRanges(entities.Length, ranges);
-            WriteFreshEntitiesAndLocations(archetype, startId, entities, ranges[..rangeCount]);
+            WriteCreatedEntitiesAndLocations(archetype, entities, ranges[..rangeCount], 0, startId);
             return;
         }
 
@@ -379,7 +378,7 @@ public sealed class World
         {
             var ranges = rentedRanges.AsSpan(0, maxRangeCount);
             var rangeCount = archetype.ReserveEntityRanges(entities.Length, ranges);
-            WriteFreshEntitiesAndLocations(archetype, startId, entities, ranges[..rangeCount]);
+            WriteCreatedEntitiesAndLocations(archetype, entities, ranges[..rangeCount], 0, startId);
         }
         finally
         {
@@ -387,50 +386,70 @@ public sealed class World
         }
     }
 
-    private void WriteBatchLocations(Archetype archetype, ReadOnlySpan<Entity> entities, ReadOnlySpan<EntityBatchRange> ranges)
+    private void WriteCreatedEntitiesAndLocations(Archetype archetype, Span<Entity> entities, ReadOnlySpan<EntityBatchRange> ranges, int reusedCount, int startId)
     {
         var locations = CollectionsMarshal.AsSpan(_locations);
-        var entityIndex = 0;
-        foreach (var range in ranges)
-        {
-            for (var rowOffset = 0; rowOffset < range.Count; rowOffset++)
-            {
-                var entity = entities[entityIndex++];
-                locations[entity.Id] = new EntityInfo(entity.Version, archetype, range.ChunkIndex, range.StartRow + rowOffset);
-            }
-        }
-    }
-
-    private void WriteFreshEntitiesAndLocations(Archetype archetype, int startId, Span<Entity> entities, ReadOnlySpan<EntityBatchRange> ranges)
-    {
-        var locations = CollectionsMarshal.AsSpan(_locations);
+        var freeIds = _freeIds;
+        var freeIndex = _freeIdCount;
         var entityIndex = 0;
         var nextId = startId;
 
         foreach (var range in ranges)
         {
             var chunkEntities = archetype.GetChunk(range.ChunkIndex).GetReservedEntities(range.StartRow, range.Count);
-            for (var rowOffset = 0; rowOffset < range.Count; rowOffset++)
+            var rowOffset = 0;
+
+            for (; rowOffset < range.Count && entityIndex < reusedCount; rowOffset++)
+            {
+                var recycled = freeIds[--freeIndex];
+                var entity = new Entity(recycled.Id, recycled.Version);
+                entities[entityIndex++] = entity;
+                chunkEntities[rowOffset] = entity;
+                locations[entity.Id] = new EntityLocation(archetype, range.ChunkIndex, range.StartRow + rowOffset);
+            }
+
+            for (; rowOffset < range.Count; rowOffset++)
             {
                 var entity = new Entity(nextId++, 0);
                 entities[entityIndex++] = entity;
                 chunkEntities[rowOffset] = entity;
-                locations[entity.Id] = new EntityInfo(entity.Version, archetype, range.ChunkIndex, range.StartRow + rowOffset);
+                locations[entity.Id] = new EntityLocation(archetype, range.ChunkIndex, range.StartRow + rowOffset);
             }
         }
+
+        _freeIdCount = freeIndex;
     }
 
-    private int AcquireEntityId()
+    private int AcquireEntityId(out int version)
     {
-        if (_freeIds.Count > 0)
+        if (_freeIdCount > 0)
         {
-            return _freeIds.Pop();
+            var recycled = PopFreeId();
+            version = recycled.Version;
+            return recycled.Id;
         }
 
         var id = _versions.Count;
         _versions.Add(0);
-        _locations.Add(null);
+        _locations.Add(default);
+        version = 0;
         return id;
+    }
+
+    private void PushFreeId(int id, int version)
+    {
+        if (_freeIdCount == _freeIds.Length)
+        {
+            var newCapacity = _freeIds.Length == 0 ? 4 : _freeIds.Length * 2;
+            Array.Resize(ref _freeIds, newCapacity);
+        }
+
+        _freeIds[_freeIdCount++] = new RecycledEntity(id, version);
+    }
+
+    private RecycledEntity PopFreeId()
+    {
+        return _freeIds[--_freeIdCount];
     }
 
     private ComponentType GetComponentType<T>()
@@ -449,4 +468,6 @@ public sealed class World
         public static ComponentRegistry? Registry;
         public static ComponentType ComponentType;
     }
+
+    private readonly record struct RecycledEntity(int Id, int Version);
 }

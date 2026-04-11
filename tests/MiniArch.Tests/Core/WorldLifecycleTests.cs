@@ -223,4 +223,39 @@ public sealed class WorldLifecycleTests
             Assert.True(world.TryGetLocation(entity, out _));
         }
     }
+
+    [Fact]
+    public void CreateMany_mixed_ids_reuses_available_rows_before_appending_new_capacity()
+    {
+        var world = new World(chunkCapacity: 4);
+        var firstBatch = new Entity[6];
+        world.CreateMany(firstBatch);
+
+        world.Destroy(firstBatch[1]);
+        world.Destroy(firstBatch[4]);
+
+        var secondBatch = new Entity[4];
+        world.CreateMany(secondBatch);
+
+        Assert.Equal(4, secondBatch[0].Id);
+        Assert.Equal(1, secondBatch[1].Id);
+        Assert.Equal(6, secondBatch[2].Id);
+        Assert.Equal(7, secondBatch[3].Id);
+
+        Assert.True(world.TryGetLocation(secondBatch[0], out var firstReused));
+        Assert.Equal(1, firstReused.ChunkIndex);
+        Assert.Equal(1, firstReused.RowIndex);
+
+        Assert.True(world.TryGetLocation(secondBatch[1], out var secondReused));
+        Assert.Equal(1, secondReused.ChunkIndex);
+        Assert.Equal(2, secondReused.RowIndex);
+
+        Assert.True(world.TryGetLocation(secondBatch[2], out var firstFresh));
+        Assert.Equal(1, firstFresh.ChunkIndex);
+        Assert.Equal(3, firstFresh.RowIndex);
+
+        Assert.True(world.TryGetLocation(secondBatch[3], out var secondFresh));
+        Assert.Equal(0, secondFresh.ChunkIndex);
+        Assert.Equal(3, secondFresh.RowIndex);
+    }
 }
