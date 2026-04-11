@@ -62,6 +62,7 @@ updated: 2026-04-12
 - `WorldLifecycleTests` 还要覆盖 `CreateMany` 的 recycled/mixed id 语义，否则 fresh-path 优化很容易掩盖 free-list 路径的行为回退。
 - `WorldLifecycleTests` 还要覆盖带组件的 `Create<T...>` 直接进入最终 archetype，并锁定当前高性能重载上限 `16`；否则实现很容易退回 `Create + Add` 链路，或者在扩重载时静默漏掉目标 arity。
 - `ArchetypeEdges` 的 direct-index 化是性能目标本身，可以用一条小范围的结构测试锁定，避免静默退回字典实现。
+- `ChunkTests` 需要同时覆盖“引用类型列会清尾槽位”和“含引用字段的 struct 也会清尾槽位”；否则删除路径很容易被错误地简化成 `IsValueType` 判断。
 - mixed structural-change benchmark 默认使用 `20/20/20/20/20` 的均衡分布，并用固定种子生成同一条随机脚本。
 - `CreateMany` benchmark 不能只测 fresh append-only；必须把 recycled ids 和 mixed ids 分开跑，否则无法判断优化是否只对 `_freeIds.Count == 0` 的快路径有效。
 - benchmark 必须同时看时间和分配，不能只看平均耗时。
