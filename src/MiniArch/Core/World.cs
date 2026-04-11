@@ -1,3 +1,6 @@
+using System.Buffers;
+using System.Runtime.InteropServices;
+
 namespace MiniArch.Core;
 
 public sealed class World
@@ -54,18 +57,21 @@ public sealed class World
             return;
         }
 
-        var additionalIds = Math.Max(0, entities.Length - _freeIds.Count);
-        EnsureCapacity(_versions.Count + additionalIds);
+        FillCreatedEntities(entities);
 
         var archetype = GetOrCreateArchetype(Signature.Empty);
-        for (var i = 0; i < entities.Length; i++)
+        var maxRangeCount = Math.Min(entities.Length, archetype.Chunks.Count + ((entities.Length + _chunkCapacity - 1) / _chunkCapacity));
+        var rentedRanges = ArrayPool<EntityBatchRange>.Shared.Rent(maxRangeCount);
+
+        try
         {
-            var id = AcquireEntityId();
-            var version = _versions[id];
-            var entity = new Entity(id, version);
-            archetype.ReserveEntity(entity, out var chunkIndex, out var rowIndex);
-            _locations[id] = new EntityInfo(version, archetype, chunkIndex, rowIndex);
-            entities[i] = entity;
+            var ranges = rentedRanges.AsSpan(0, maxRangeCount);
+            var rangeCount = archetype.ReserveEntities(entities, ranges);
+            WriteBatchLocations(archetype, entities, ranges.Slice(0, rangeCount));
+        }
+        finally
+        {
+            ArrayPool<EntityBatchRange>.Shared.Return(rentedRanges);
         }
     }
 
@@ -304,6 +310,46 @@ public sealed class World
         }
 
         return info;
+    }
+
+    private void FillCreatedEntities(Span<Entity> entities)
+    {
+        var reusedCount = Math.Min(entities.Length, _freeIds.Count);
+        for (var index = 0; index < reusedCount; index++)
+        {
+            var id = _freeIds.Pop();
+            entities[index] = new Entity(id, _versions[id]);
+        }
+
+        var newEntityCount = entities.Length - reusedCount;
+        if (newEntityCount == 0)
+        {
+            return;
+        }
+
+        var startId = _versions.Count;
+        var requiredCount = startId + newEntityCount;
+        EnsureCapacity(requiredCount);
+        CollectionsMarshal.SetCount(_versions, requiredCount);
+        CollectionsMarshal.SetCount(_locations, requiredCount);
+
+        for (var index = 0; index < newEntityCount; index++)
+        {
+            entities[reusedCount + index] = new Entity(startId + index, 0);
+        }
+    }
+
+    private void WriteBatchLocations(Archetype archetype, ReadOnlySpan<Entity> entities, ReadOnlySpan<EntityBatchRange> ranges)
+    {
+        var entityIndex = 0;
+        foreach (var range in ranges)
+        {
+            for (var rowOffset = 0; rowOffset < range.Count; rowOffset++)
+            {
+                var entity = entities[entityIndex++];
+                _locations[entity.Id] = new EntityInfo(entity.Version, archetype, range.ChunkIndex, range.StartRow + rowOffset);
+            }
+        }
     }
 
     private int AcquireEntityId()

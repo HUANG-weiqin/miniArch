@@ -121,4 +121,46 @@ public sealed class WorldLifecycleTests
             Assert.Equal(i, info.RowIndex);
         }
     }
+
+    [Fact]
+    public void CreateMany_preserves_chunk_and_row_progression_across_chunk_boundaries()
+    {
+        var world = new World(chunkCapacity: 4);
+        var entities = new Entity[10];
+
+        world.CreateMany(entities);
+
+        for (var i = 0; i < entities.Length; i++)
+        {
+            Assert.True(world.TryGetLocation(entities[i], out var info));
+            Assert.Equal(i / 4, info.ChunkIndex);
+            Assert.Equal(i % 4, info.RowIndex);
+        }
+    }
+
+    [Fact]
+    public void CreateMany_appends_after_existing_empty_archetype_entities()
+    {
+        var world = new World(chunkCapacity: 4);
+        var firstBatch = new Entity[6];
+        var secondBatch = new Entity[5];
+
+        world.CreateMany(firstBatch);
+        world.CreateMany(secondBatch);
+
+        for (var i = 0; i < firstBatch.Length; i++)
+        {
+            Assert.True(world.TryGetLocation(firstBatch[i], out var info));
+            Assert.Equal(i / 4, info.ChunkIndex);
+            Assert.Equal(i % 4, info.RowIndex);
+        }
+
+        for (var i = 0; i < secondBatch.Length; i++)
+        {
+            Assert.True(world.TryGetLocation(secondBatch[i], out var info));
+            var absoluteIndex = firstBatch.Length + i;
+            Assert.Equal(absoluteIndex / 4, info.ChunkIndex);
+            Assert.Equal(absoluteIndex % 4, info.RowIndex);
+        }
+    }
 }

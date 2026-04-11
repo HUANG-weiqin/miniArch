@@ -6,202 +6,546 @@ using MiniWorld = MiniArch.Core.World;
 
 namespace MiniArch.Benchmarks;
 
+// Keep the benchmark focused on create/destroy and structural-change hot paths.
+// Memory diagnostics are enabled in the shared BenchmarkDotNet config.
 public class StructuralChangeBenchmarks
 {
-    private const int DefaultSeed = 0x4D694D78;
-    private const int OperationsPerCycle = 5;
+    [Params(1000)]
+    public int EntityCount { get; set; }
 
-    private const byte CreateKind = 0;
-    private const byte AddKind = 1;
-    private const byte SetKind = 2;
-    private const byte RemoveKind = 3;
-    private const byte DestroyKind = 4;
+    private MiniWorldState _miniAddState = null!;
+    private ArchWorldState _archAddState = null!;
+
+    private MiniWorldState _miniSetState = null!;
+    private ArchWorldState _archSetState = null!;
+
+    private MiniWorldState _miniRemoveState = null!;
+    private ArchWorldState _archRemoveState = null!;
+
+    private MiniWorldState _miniDestroyState = null!;
+    private ArchWorldState _archDestroyState = null!;
+
+    [IterationSetup(Target = nameof(Arch_Add_Position))]
+    public void SetupArchAdd() => _archAddState = BenchmarkWorldFactory.CreateArchEmptyWorld(EntityCount);
+
+    [IterationSetup(Target = nameof(MiniArch_Add_Position))]
+    public void SetupMiniAdd() => _miniAddState = BenchmarkWorldFactory.CreateMiniEmptyWorld(EntityCount);
+
+    [IterationSetup(Target = nameof(Arch_Set_Position))]
+    public void SetupArchSet() => _archSetState = BenchmarkWorldFactory.CreateArchWorldWithPosition(EntityCount);
+
+    [IterationSetup(Target = nameof(MiniArch_Set_Position))]
+    public void SetupMiniSet() => _miniSetState = BenchmarkWorldFactory.CreateMiniWorldWithPosition(EntityCount);
+
+    [IterationSetup(Target = nameof(Arch_Remove_Position))]
+    public void SetupArchRemove() => _archRemoveState = BenchmarkWorldFactory.CreateArchWorldWithPosition(EntityCount);
+
+    [IterationSetup(Target = nameof(MiniArch_Remove_Position))]
+    public void SetupMiniRemove() => _miniRemoveState = BenchmarkWorldFactory.CreateMiniWorldWithPosition(EntityCount);
+
+    [IterationSetup(Target = nameof(Arch_Destroy_Entity))]
+    public void SetupArchDestroy() => _archDestroyState = BenchmarkWorldFactory.CreateArchEmptyWorld(EntityCount);
+
+    [IterationSetup(Target = nameof(MiniArch_Destroy_Entity))]
+    public void SetupMiniDestroy() => _miniDestroyState = BenchmarkWorldFactory.CreateMiniEmptyWorld(EntityCount);
+
+    [IterationCleanup(Target = nameof(Arch_Add_Position))]
+    public void CleanupArchAdd() => _archAddState.Dispose();
+
+    [IterationCleanup(Target = nameof(Arch_Set_Position))]
+    public void CleanupArchSet() => _archSetState.Dispose();
+
+    [IterationCleanup(Target = nameof(Arch_Remove_Position))]
+    public void CleanupArchRemove() => _archRemoveState.Dispose();
+
+    [IterationCleanup(Target = nameof(Arch_Destroy_Entity))]
+    public void CleanupArchDestroy() => _archDestroyState.Dispose();
+
+    [Benchmark(Description = "Arch create empty entities")]
+    public void Arch_Create_Entity()
+    {
+        using var world = Arch.Core.World.Create();
+        for (var i = 0; i < EntityCount; i++)
+        {
+            world.Create();
+        }
+    }
+
+    [Benchmark(Description = "MiniArch create empty entities")]
+    public void MiniArch_Create_Entity()
+    {
+        var world = new MiniArch.Core.World();
+        for (var i = 0; i < EntityCount; i++)
+        {
+            world.Create();
+        }
+    }
+
+    [Benchmark(Description = "Arch create empty entities in bulk")]
+    public void Arch_CreateMany_Entity()
+    {
+        using var world = Arch.Core.World.Create();
+        var entities = new ArchEntity[EntityCount];
+        world.Create(entities, Arch.Core.Signature.Null, EntityCount);
+    }
+
+    [Benchmark(Description = "MiniArch create empty entities in bulk")]
+    public void MiniArch_CreateMany_Entity()
+    {
+        var world = new MiniArch.Core.World();
+        var entities = new MiniEntity[EntityCount];
+        world.CreateMany(entities);
+    }
+
+    [Benchmark(Description = "Arch add Position to empty entities")]
+    public void Arch_Add_Position()
+    {
+        var world = _archAddState.World;
+        var entities = _archAddState.Entities;
+        for (var i = 0; i < entities.Length; i++)
+        {
+            world.Add(entities[i], new Position(i, i));
+        }
+    }
+
+    [Benchmark(Description = "MiniArch add Position to empty entities")]
+    public void MiniArch_Add_Position()
+    {
+        var world = _miniAddState.World;
+        var entities = _miniAddState.Entities;
+        for (var i = 0; i < entities.Length; i++)
+        {
+            world.Add(entities[i], new Position(i, i));
+        }
+    }
+
+    [Benchmark(Description = "Arch set Position for existing entities")]
+    public void Arch_Set_Position()
+    {
+        var world = _archSetState.World;
+        var entities = _archSetState.Entities;
+        for (var i = 0; i < entities.Length; i++)
+        {
+            world.Set(entities[i], new Position(i + 1, i + 1));
+        }
+    }
+
+    [Benchmark(Description = "MiniArch set Position for existing entities")]
+    public void MiniArch_Set_Position()
+    {
+        var world = _miniSetState.World;
+        var entities = _miniSetState.Entities;
+        for (var i = 0; i < entities.Length; i++)
+        {
+            world.Set(entities[i], new Position(i + 1, i + 1));
+        }
+    }
+
+    [Benchmark(Description = "Arch remove Position from entities")]
+    public void Arch_Remove_Position()
+    {
+        var world = _archRemoveState.World;
+        var entities = _archRemoveState.Entities;
+        for (var i = 0; i < entities.Length; i++)
+        {
+            world.Remove<Position>(entities[i]);
+        }
+    }
+
+    [Benchmark(Description = "MiniArch remove Position from entities")]
+    public void MiniArch_Remove_Position()
+    {
+        var world = _miniRemoveState.World;
+        var entities = _miniRemoveState.Entities;
+        for (var i = 0; i < entities.Length; i++)
+        {
+            world.Remove<Position>(entities[i]);
+        }
+    }
+
+    [Benchmark(Description = "Arch destroy entities")]
+    public void Arch_Destroy_Entity()
+    {
+        var world = _archDestroyState.World;
+        var entities = _archDestroyState.Entities;
+        for (var i = 0; i < entities.Length; i++)
+        {
+            world.Destroy(entities[i]);
+        }
+    }
+
+    [Benchmark(Description = "MiniArch destroy entities")]
+    public void MiniArch_Destroy_Entity()
+    {
+        var world = _miniDestroyState.World;
+        var entities = _miniDestroyState.Entities;
+        for (var i = 0; i < entities.Length; i++)
+        {
+            world.Destroy(entities[i]);
+        }
+    }
+}
+
+// The mixed benchmark uses one deterministic script for both engines so the
+// result compares hot-path behavior instead of setup noise or random input drift.
+public class MixedStructuralChangeBenchmarks
+{
+    private const int DefaultSeed = 0x4D694D78;
 
     [Params(100, 1000, 10000)]
     public int EntityCount { get; set; }
 
-    private byte[] _operationKinds = null!;
-    private int[] _operationSlots = null!;
+    private MixedMiniWorldState _miniState = null!;
+    private MixedArchWorldState _archState = null!;
 
-    private MiniWorld _miniWorld = null!;
-    private MiniEntity[] _miniEntities = null!;
+    [IterationSetup(Target = nameof(Arch_Mixed_CreateAddSetRemoveDestroy))]
+    public void SetupArch() => _archState = MixedArchWorldState.Create(EntityCount);
 
-    private ArchWorld _archWorld = null!;
-    private ArchEntity[] _archEntities = null!;
+    [IterationSetup(Target = nameof(MiniArch_Mixed_CreateAddSetRemoveDestroy))]
+    public void SetupMini() => _miniState = MixedMiniWorldState.Create(EntityCount);
 
-    [IterationSetup]
-    public void IterationSetup()
-    {
-        (_operationKinds, _operationSlots) = CreateOperations(EntityCount);
-        _miniWorld = new MiniWorld();
-        _miniEntities = CreateMiniEntities(_miniWorld, EntityCount);
-        _archWorld = ArchWorld.Create();
-        _archEntities = CreateArchEntities(_archWorld, EntityCount);
-    }
-
-    [IterationCleanup]
-    public void IterationCleanup()
-    {
-        _archWorld.Dispose();
-        _miniWorld = null!;
-        _archWorld = null!;
-        _miniEntities = Array.Empty<MiniEntity>();
-        _archEntities = Array.Empty<ArchEntity>();
-    }
+    [IterationCleanup(Target = nameof(Arch_Mixed_CreateAddSetRemoveDestroy))]
+    public void CleanupArch() => _archState.Dispose();
 
     [Benchmark(Description = "Arch mixed create/add/set/remove/destroy")]
     public void Arch_Mixed_CreateAddSetRemoveDestroy()
     {
-        RunArchScript();
+        var state = _archState;
+        var operations = state.Operations;
+        for (var i = 0; i < operations.Length; i++)
+        {
+            state.Apply(operations[i], i);
+        }
     }
 
     [Benchmark(Description = "MiniArch mixed create/add/set/remove/destroy")]
     public void MiniArch_Mixed_CreateAddSetRemoveDestroy()
     {
-        RunMiniScript();
-    }
-
-    private void RunArchScript()
-    {
-        for (var i = 0; i < _operationKinds.Length; i++)
+        var state = _miniState;
+        var operations = state.Operations;
+        for (var i = 0; i < operations.Length; i++)
         {
-            ApplyArchOperation(_operationKinds[i], _operationSlots[i], i);
+            state.Apply(operations[i], i);
         }
     }
 
-    private void RunMiniScript()
+    private enum MixedOperationKind
     {
-        for (var i = 0; i < _operationKinds.Length; i++)
-        {
-            ApplyMiniOperation(_operationKinds[i], _operationSlots[i], i);
-        }
+        Create = 0,
+        Add = 1,
+        Set = 2,
+        Remove = 3,
+        Destroy = 4
     }
 
-    private void ApplyArchOperation(byte kind, int slot, int stepIndex)
-    {
-        switch (kind)
-        {
-            case CreateKind:
-                _archEntities[slot] = _archWorld.Create();
-                return;
-            case AddKind:
-                _archWorld.Add(_archEntities[slot], new Position(stepIndex, stepIndex));
-                return;
-            case SetKind:
-                _archWorld.Set(_archEntities[slot], new Position(stepIndex + 1, stepIndex + 1));
-                return;
-            case RemoveKind:
-                _archWorld.Remove<Position>(_archEntities[slot]);
-                return;
-            case DestroyKind:
-                _archWorld.Destroy(_archEntities[slot]);
-                return;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(kind));
-        }
-    }
+    private readonly record struct MixedOperation(MixedOperationKind Kind, int Selector);
 
-    private void ApplyMiniOperation(byte kind, int slot, int stepIndex)
+    private static MixedOperation[] CreateOperations(int operationCount)
     {
-        switch (kind)
-        {
-            case CreateKind:
-                _miniEntities[slot] = _miniWorld.Create();
-                return;
-            case AddKind:
-                _miniWorld.Add(_miniEntities[slot], new Position(stepIndex, stepIndex));
-                return;
-            case SetKind:
-                _miniWorld.Set(_miniEntities[slot], new Position(stepIndex + 1, stepIndex + 1));
-                return;
-            case RemoveKind:
-                _miniWorld.Remove<Position>(_miniEntities[slot]);
-                return;
-            case DestroyKind:
-                _miniWorld.Destroy(_miniEntities[slot]);
-                return;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(kind));
-        }
-    }
-
-    private static (byte[] Kinds, int[] Slots) CreateOperations(int entityCount)
-    {
-        var operationCount = entityCount * OperationsPerCycle;
-        var kinds = new byte[operationCount];
-        var slots = new int[operationCount];
-        var positionedSlots = new List<int>(entityCount);
-        var emptySlots = new List<int>(entityCount);
+        var operations = new MixedOperation[operationCount];
         var rng = new Random(DefaultSeed);
+        var quotas = BuildQuotas(operationCount);
         var writeIndex = 0;
-        var nextSlot = entityCount;
 
-        for (var slot = 0; slot < entityCount; slot++)
+        for (var kindIndex = 0; kindIndex < quotas.Length; kindIndex++)
         {
-            positionedSlots.Add(slot);
+            var kind = (MixedOperationKind)kindIndex;
+            for (var i = 0; i < quotas[kindIndex]; i++)
+            {
+                operations[writeIndex++] = new MixedOperation(kind, rng.Next());
+            }
         }
 
-        for (var cycle = 0; cycle < entityCount; cycle++)
-        {
-            var createSlot = nextSlot++;
-            kinds[writeIndex] = CreateKind;
-            slots[writeIndex++] = createSlot;
-            emptySlots.Add(createSlot);
-
-            var addSlot = PopAt(emptySlots, rng.Next(emptySlots.Count));
-            kinds[writeIndex] = AddKind;
-            slots[writeIndex++] = addSlot;
-            positionedSlots.Add(addSlot);
-
-            var setSlot = positionedSlots[rng.Next(positionedSlots.Count)];
-            kinds[writeIndex] = SetKind;
-            slots[writeIndex++] = setSlot;
-
-            var removeSlot = PopAt(positionedSlots, rng.Next(positionedSlots.Count));
-            kinds[writeIndex] = RemoveKind;
-            slots[writeIndex++] = removeSlot;
-            emptySlots.Add(removeSlot);
-
-            var destroySlot = PopAt(emptySlots, rng.Next(emptySlots.Count));
-            kinds[writeIndex] = DestroyKind;
-            slots[writeIndex++] = destroySlot;
-        }
-
-        return (kinds, slots);
+        Shuffle(operations, rng);
+        return operations;
     }
 
-    private static int PopAt(List<int> slots, int index)
+    private static int[] BuildQuotas(int operationCount)
     {
-        var lastIndex = slots.Count - 1;
-        var value = slots[index];
-        slots[index] = slots[lastIndex];
-        slots.RemoveAt(lastIndex);
-        return value;
-    }
+        var quotas = new int[5];
+        var baseQuota = operationCount / quotas.Length;
+        var remainder = operationCount % quotas.Length;
 
-    private static ArchEntity[] CreateArchEntities(ArchWorld world, int entityCount)
-    {
-        var entities = new ArchEntity[entityCount * 2];
-        for (var i = 0; i < entityCount; i++)
+        for (var i = 0; i < quotas.Length; i++)
         {
-            var entity = world.Create();
-            world.Add(entity, new Position(i, i));
-            entities[i] = entity;
+            quotas[i] = baseQuota + (i < remainder ? 1 : 0);
         }
 
-        return entities;
+        return quotas;
     }
 
-    private static MiniEntity[] CreateMiniEntities(MiniWorld world, int entityCount)
+    private static void Shuffle(MixedOperation[] operations, Random rng)
     {
-        var entities = new MiniEntity[entityCount * 2];
-        for (var i = 0; i < entityCount; i++)
+        for (var i = operations.Length - 1; i > 0; i--)
         {
-            var entity = world.Create();
-            world.Add(entity, new Position(i, i));
-            entities[i] = entity;
+            var j = rng.Next(i + 1);
+            (operations[i], operations[j]) = (operations[j], operations[i]);
+        }
+    }
+
+    private abstract class MixedWorldState<TEntity, TWorld>
+        where TEntity : struct
+    {
+        private readonly List<TEntity> _positionedEntities = new();
+        private readonly Dictionary<int, int> _positionedEntityIndex = new();
+        private readonly List<TEntity> _emptyEntities = new();
+        private readonly Dictionary<int, int> _emptyEntityIndex = new();
+        private readonly MixedOperation[] _operations;
+
+        protected MixedWorldState(TWorld world, MixedOperation[] operations, List<TEntity> positionedEntities, List<TEntity> emptyEntities)
+            : base()
+        {
+            World = world;
+            _operations = operations;
+            _positionedEntities = positionedEntities;
+            _emptyEntities = emptyEntities;
+            RebuildIndexes();
         }
 
-        return entities;
+        protected TWorld World { get; }
+
+        public MixedOperation[] Operations => _operations;
+
+        public void Apply(MixedOperation operation, int stepIndex)
+        {
+            switch (operation.Kind)
+            {
+                case MixedOperationKind.Create:
+                    ApplyCreate(stepIndex);
+                    return;
+                case MixedOperationKind.Add:
+                    ApplyAdd(stepIndex, operation.Selector);
+                    return;
+                case MixedOperationKind.Set:
+                    ApplySet(stepIndex, operation.Selector);
+                    return;
+                case MixedOperationKind.Remove:
+                    ApplyRemove(stepIndex, operation.Selector);
+                    return;
+                case MixedOperationKind.Destroy:
+                    ApplyDestroy(operation.Selector);
+                    return;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(operation));
+            }
+        }
+
+        protected abstract TEntity CreateEntity();
+
+        protected abstract void AddPosition(TEntity entity, int stepIndex);
+
+        protected abstract void SetPosition(TEntity entity, int stepIndex);
+
+        protected abstract void RemovePosition(TEntity entity);
+
+        protected abstract void DestroyEntity(TEntity entity);
+
+        protected abstract int GetEntityId(TEntity entity);
+
+        private void ApplyCreate(int stepIndex)
+        {
+            var entity = CreateEntity();
+            AddToPool(_emptyEntities, _emptyEntityIndex, entity);
+        }
+
+        private void ApplyAdd(int stepIndex, int selector)
+        {
+            var entity = RemoveFromPool(_emptyEntities, _emptyEntityIndex, selector);
+            AddPosition(entity, stepIndex);
+            AddToPool(_positionedEntities, _positionedEntityIndex, entity);
+        }
+
+        private void ApplySet(int stepIndex, int selector)
+        {
+            var entity = SelectFromPool(_positionedEntities, selector);
+            SetPosition(entity, stepIndex);
+        }
+
+        private void ApplyRemove(int stepIndex, int selector)
+        {
+            var entity = RemoveFromPool(_positionedEntities, _positionedEntityIndex, selector);
+            RemovePosition(entity);
+            AddToPool(_emptyEntities, _emptyEntityIndex, entity);
+        }
+
+        private void ApplyDestroy(int selector)
+        {
+            var positionedCount = _positionedEntities.Count;
+            var emptyCount = _emptyEntities.Count;
+            if (positionedCount == 0 && emptyCount == 0)
+            {
+                throw new InvalidOperationException("Mixed benchmark exhausted all entities.");
+            }
+
+            if (positionedCount == 0)
+            {
+                DestroyFromPool(_emptyEntities, _emptyEntityIndex, selector);
+                return;
+            }
+
+            if (emptyCount == 0)
+            {
+                DestroyFromPool(_positionedEntities, _positionedEntityIndex, selector);
+                return;
+            }
+
+            if (positionedCount >= emptyCount)
+            {
+                if (positionedCount == emptyCount && (selector & 1) != 0)
+                {
+                    DestroyFromPool(_emptyEntities, _emptyEntityIndex, selector);
+                    return;
+                }
+
+                DestroyFromPool(_positionedEntities, _positionedEntityIndex, selector);
+                return;
+            }
+
+            DestroyFromPool(_emptyEntities, _emptyEntityIndex, selector);
+        }
+
+        private TEntity RemoveFromPool(List<TEntity> pool, Dictionary<int, int> indexes, int selector)
+        {
+            var index = selector % pool.Count;
+            return RemoveFromPoolAt(pool, indexes, index);
+        }
+
+        private TEntity RemoveFromPoolAt(List<TEntity> pool, Dictionary<int, int> indexes, int index)
+        {
+            var lastIndex = pool.Count - 1;
+            var entity = pool[index];
+            var entityId = GetEntityId(entity);
+            if (index != lastIndex)
+            {
+                var lastEntity = pool[lastIndex];
+                pool[index] = lastEntity;
+                indexes[GetEntityId(lastEntity)] = index;
+            }
+
+            pool.RemoveAt(lastIndex);
+            indexes.Remove(entityId);
+            return entity;
+        }
+
+        private void DestroyFromPool(List<TEntity> pool, Dictionary<int, int> indexes, int selector)
+        {
+            var entity = RemoveFromPool(pool, indexes, selector);
+            DestroyEntity(entity);
+        }
+
+        private TEntity SelectFromPool(List<TEntity> pool, int selector)
+        {
+            return pool[selector % pool.Count];
+        }
+
+        private void AddToPool(List<TEntity> pool, Dictionary<int, int> indexes, TEntity entity)
+        {
+            indexes[GetEntityId(entity)] = pool.Count;
+            pool.Add(entity);
+        }
+
+        private void RebuildIndexes()
+        {
+            _positionedEntityIndex.Clear();
+            _emptyEntityIndex.Clear();
+
+            for (var i = 0; i < _positionedEntities.Count; i++)
+            {
+                _positionedEntityIndex[GetEntityId(_positionedEntities[i])] = i;
+            }
+
+            for (var i = 0; i < _emptyEntities.Count; i++)
+            {
+                _emptyEntityIndex[GetEntityId(_emptyEntities[i])] = i;
+            }
+        }
+    }
+
+    private sealed class MixedMiniWorldState : MixedWorldState<MiniEntity, MiniWorld>
+    {
+        private MixedMiniWorldState(MiniWorld world, MixedOperation[] operations, List<MiniEntity> positionedEntities, List<MiniEntity> emptyEntities)
+            : base(world, operations, positionedEntities, emptyEntities)
+        {
+        }
+
+        public static MixedMiniWorldState Create(int entityCount)
+        {
+            var world = new MiniWorld();
+            var positionedEntities = new List<MiniEntity>(entityCount / 2);
+            var emptyEntities = new List<MiniEntity>(entityCount);
+
+            for (var i = 0; i < entityCount; i++)
+            {
+                var entity = world.Create();
+                emptyEntities.Add(entity);
+            }
+
+            for (var i = 0; i < entityCount / 2; i++)
+            {
+                var entity = emptyEntities[^1];
+                emptyEntities.RemoveAt(emptyEntities.Count - 1);
+                world.Add(entity, new Position(i, i));
+                positionedEntities.Add(entity);
+            }
+
+            return new MixedMiniWorldState(world, CreateOperations(entityCount), positionedEntities, emptyEntities);
+        }
+
+        protected override MiniEntity CreateEntity() => World.Create();
+
+        protected override void AddPosition(MiniEntity entity, int stepIndex) => World.Add(entity, new Position(stepIndex, stepIndex));
+
+        protected override void SetPosition(MiniEntity entity, int stepIndex) => World.Set(entity, new Position(stepIndex + 1, stepIndex + 1));
+
+        protected override void RemovePosition(MiniEntity entity) => World.Remove<Position>(entity);
+
+        protected override void DestroyEntity(MiniEntity entity) => World.Destroy(entity);
+
+        protected override int GetEntityId(MiniEntity entity) => entity.Id;
+    }
+
+    private sealed class MixedArchWorldState : MixedWorldState<ArchEntity, ArchWorld>, IDisposable
+    {
+        private MixedArchWorldState(ArchWorld world, MixedOperation[] operations, List<ArchEntity> positionedEntities, List<ArchEntity> emptyEntities)
+            : base(world, operations, positionedEntities, emptyEntities)
+        {
+        }
+
+        public static MixedArchWorldState Create(int entityCount)
+        {
+            var world = ArchWorld.Create();
+            var positionedEntities = new List<ArchEntity>(entityCount / 2);
+            var emptyEntities = new List<ArchEntity>(entityCount);
+
+            for (var i = 0; i < entityCount; i++)
+            {
+                var entity = world.Create();
+                emptyEntities.Add(entity);
+            }
+
+            for (var i = 0; i < entityCount / 2; i++)
+            {
+                var entity = emptyEntities[^1];
+                emptyEntities.RemoveAt(emptyEntities.Count - 1);
+                world.Add(entity, new Position(i, i));
+                positionedEntities.Add(entity);
+            }
+
+            return new MixedArchWorldState(world, CreateOperations(entityCount), positionedEntities, emptyEntities);
+        }
+
+        protected override ArchEntity CreateEntity() => World.Create();
+
+        protected override void AddPosition(ArchEntity entity, int stepIndex) => World.Add(entity, new Position(stepIndex, stepIndex));
+
+        protected override void SetPosition(ArchEntity entity, int stepIndex) => World.Set(entity, new Position(stepIndex + 1, stepIndex + 1));
+
+        protected override void RemovePosition(ArchEntity entity) => World.Remove<Position>(entity);
+
+        protected override void DestroyEntity(ArchEntity entity) => World.Destroy(entity);
+
+        protected override int GetEntityId(ArchEntity entity) => entity.Id;
+
+        public void Dispose() => World.Dispose();
     }
 }

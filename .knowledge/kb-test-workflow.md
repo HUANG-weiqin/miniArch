@@ -52,6 +52,7 @@ updated: 2026-04-11
 - 结构变化相关测试必须保留 `Set` 的 in-place 语义断言，因为这是 typed-column / direct-index 重构的核心安全网。
 - `ArchetypeTests` 需要覆盖“复用前面空掉的 chunk”这一行为；否则 `Remove` benchmark 的分配回退很难在功能测试里暴露出来。
 - `WorldLifecycleTests` 需要覆盖 `EnsureCapacity` 和 `CreateMany`，否则 `Create` 的分配优化和批量语义很容易在重构时被回退。
+- `WorldLifecycleTests` 还要覆盖 `CreateMany` 的跨 chunk 顺序和二次批量追加语义，否则批量 reservation 很容易只保住“能跑”而丢掉位置正确性。
 - `ArchetypeEdges` 的 direct-index 化是性能目标本身，可以用一条小范围的结构测试锁定，避免静默退回字典实现。
 - mixed structural-change benchmark 默认使用 `20/20/20/20/20` 的均衡分布，并用固定种子生成同一条随机脚本。
 - benchmark 必须同时看时间和分配，不能只看平均耗时。
@@ -94,6 +95,7 @@ updated: 2026-04-11
   - `Remove` 只看时间变快，却没发现 archetype 没复用已有空 chunk，导致分配被隐藏放大
   - `Create` 只看时间，不看 entity metadata 扩容带来的分配回退
   - 加了 `CreateMany` 却没把它纳入 benchmark，导致 bulk path 长期失真
+  - `CreateMany` 只看分配下降，却没确认是否还在逐实体落位，导致 bulk time 仍明显慢于 Arch
   - 混合 benchmark 没有固定种子，导致 MiniArch 和 Arch 的输入不一致
 - 容易误判的地方：
   - 认为 query 结果对了，chunk 顺序就一定对了
@@ -109,4 +111,4 @@ updated: 2026-04-11
 - `kb-core-ecs.md`：被测试的运行时模块
 - `kb-repo-overview.md`：如何启动验证流程
 - `scripts/test.ps1`：测试入口
-- `benchmarks/MiniArch.Benchmarks/StructuralChangeBenchmarks.cs`：混合 structural-change benchmark
+- `benchmarks/MiniArch.Benchmarks/StructuralChangeBenchmarks.cs`：分项 structural-change benchmark 与 mixed structural-change benchmark
