@@ -76,6 +76,7 @@ updated: 2026-04-11
 - 如果是修 bug，先看：
   - 对应功能的测试文件
   - `scripts\test.ps1`
+  - `scripts\benchmark.ps1`：benchmark 入口，必要时配合 `--filter`
 - 如果是加功能，先看：
   - `QueryTests.cs`：query 行为约束
   - `QueryFilterTests.cs`：链式 filter 和 builder 契约
