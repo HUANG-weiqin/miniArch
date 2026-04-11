@@ -137,8 +137,10 @@ public class QueryBenchmarks
     private int ExecuteMiniQuery(MiniQuery query)
     {
         var checksum = 0;
-        foreach (var chunk in query.Chunks)
+        var chunks = query.GetChunkSpan();
+        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
         {
+            var chunk = chunks[chunkIndex];
             var entities = chunk.GetEntities();
             for (var row = 0; row < entities.Length; row++)
             {

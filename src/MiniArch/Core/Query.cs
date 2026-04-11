@@ -82,6 +82,12 @@ public sealed class Query
         }
     }
 
+    public ReadOnlySpan<Chunk> GetChunkSpan()
+    {
+        RefreshIfNeeded();
+        return Volatile.Read(ref _matching).Chunks;
+    }
+
     public ChunkEnumerable Chunks => new(this);
 
     internal Archetype[] EnsureMatchingArchetypes()

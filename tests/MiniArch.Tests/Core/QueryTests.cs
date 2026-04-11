@@ -93,6 +93,7 @@ public sealed class QueryTests
         }
 
         Assert.Equal(enumeratedChunks, query.MatchedChunks);
+        Assert.Equal(enumeratedChunks, query.GetChunkSpan().ToArray());
         Assert.Equal(1, query.RefreshCount);
     }
 
@@ -111,6 +112,7 @@ public sealed class QueryTests
         world.Add(second, new Position(2, 2));
 
         Assert.Equal(2, query.MatchedChunks.Count);
+        Assert.Equal(2, query.GetChunkSpan().Length);
         Assert.Equal(2, query.RefreshCount);
     }
 
