@@ -1,0 +1,11 @@
+E:\godot\arch\miniArch\src\MiniArch\bin\Debug\net8.0\MiniArch.deps.json
+E:\godot\arch\miniArch\src\MiniArch\bin\Debug\net8.0\MiniArch.dll
+E:\godot\arch\miniArch\src\MiniArch\bin\Debug\net8.0\MiniArch.pdb
+E:\godot\arch\miniArch\src\MiniArch\obj\Debug\net8.0\MiniArch.GeneratedMSBuildEditorConfig.editorconfig
+E:\godot\arch\miniArch\src\MiniArch\obj\Debug\net8.0\MiniArch.AssemblyInfoInputs.cache
+E:\godot\arch\miniArch\src\MiniArch\obj\Debug\net8.0\MiniArch.AssemblyInfo.cs
+E:\godot\arch\miniArch\src\MiniArch\obj\Debug\net8.0\MiniArch.csproj.CoreCompileInputs.cache
+E:\godot\arch\miniArch\src\MiniArch\obj\Debug\net8.0\MiniArch.dll
+E:\godot\arch\miniArch\src\MiniArch\obj\Debug\net8.0\refint\MiniArch.dll
+E:\godot\arch\miniArch\src\MiniArch\obj\Debug\net8.0\MiniArch.pdb
+E:\godot\arch\miniArch\src\MiniArch\obj\Debug\net8.0\ref\MiniArch.dll
