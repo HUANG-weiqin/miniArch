@@ -39,6 +39,31 @@ public sealed class WorldStructuralChangeTests
     }
 
     [Fact]
+    public void Set_only_mutates_the_target_component_when_multiple_components_are_present()
+    {
+        var world = new World();
+        var entity = world.Create();
+
+        var positionId = world.Components.GetOrCreate<Position>();
+        var velocityId = world.Components.GetOrCreate<Velocity>();
+
+        world.Add(entity, new Position(1, 2));
+        world.Add(entity, new Velocity(3, 4));
+        Assert.True(world.TryGetLocation(entity, out var before));
+
+        world.Set(entity, new Position(9, 9));
+
+        Assert.True(world.TryGetLocation(entity, out var after));
+        Assert.Same(before.Archetype, after.Archetype);
+        Assert.Equal(before.ChunkIndex, after.ChunkIndex);
+        Assert.Equal(before.RowIndex, after.RowIndex);
+
+        var chunk = after.Archetype.GetChunk(after.ChunkIndex);
+        Assert.Equal(new Position(9, 9), chunk.GetComponent<Position>(positionId, after.RowIndex));
+        Assert.Equal(new Velocity(3, 4), chunk.GetComponent<Velocity>(velocityId, after.RowIndex));
+    }
+
+    [Fact]
     public void Remove_moves_entity_back_to_smaller_archetype()
     {
         var world = new World();
@@ -63,6 +88,7 @@ public sealed class WorldStructuralChangeTests
     {
         var world = new World();
         var entities = new List<Entity>();
+        var positionId = world.Components.GetOrCreate<Position>();
 
         for (var i = 0; i < 1000; i++)
         {
@@ -71,13 +97,13 @@ public sealed class WorldStructuralChangeTests
             entities.Add(entity);
 
             Assert.True(world.TryGetLocation(entities[0], out var firstLocation));
-            Assert.Contains(world.Components.GetOrCreate<Position>(), firstLocation.Archetype.Signature);
+            Assert.Contains(positionId, firstLocation.Archetype.Signature);
         }
 
         foreach (var entity in entities)
         {
             Assert.True(world.TryGetLocation(entity, out var before));
-            Assert.Contains(world.Components.GetOrCreate<Position>(), before.Archetype.Signature);
+            Assert.Contains(positionId, before.Archetype.Signature);
             try
             {
                 world.Set(entity, new Position(42, 42));

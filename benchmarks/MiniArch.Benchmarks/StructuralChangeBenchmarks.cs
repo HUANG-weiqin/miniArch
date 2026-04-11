@@ -2,6 +2,8 @@ using BenchmarkDotNet.Attributes;
 
 namespace MiniArch.Benchmarks;
 
+// Keep the benchmark focused on the structural-change hot path.
+// Memory diagnostics are enabled in the shared BenchmarkDotNet config.
 public class StructuralChangeBenchmarks
 {
     [Params(1000)]
@@ -58,72 +60,88 @@ public class StructuralChangeBenchmarks
     [Benchmark(Description = "Arch add Position to empty entities")]
     public void Arch_Add_Position()
     {
-        for (var i = 0; i < _archAddState.Entities.Length; i++)
+        var world = _archAddState.World;
+        var entities = _archAddState.Entities;
+        for (var i = 0; i < entities.Length; i++)
         {
-            _archAddState.World.Add(_archAddState.Entities[i], new Position(i, i));
+            world.Add(entities[i], new Position(i, i));
         }
     }
 
     [Benchmark(Description = "MiniArch add Position to empty entities")]
     public void MiniArch_Add_Position()
     {
-        for (var i = 0; i < _miniAddState.Entities.Length; i++)
+        var world = _miniAddState.World;
+        var entities = _miniAddState.Entities;
+        for (var i = 0; i < entities.Length; i++)
         {
-            _miniAddState.World.Add(_miniAddState.Entities[i], new Position(i, i));
+            world.Add(entities[i], new Position(i, i));
         }
     }
 
     [Benchmark(Description = "Arch set Position for existing entities")]
     public void Arch_Set_Position()
     {
-        for (var i = 0; i < _archSetState.Entities.Length; i++)
+        var world = _archSetState.World;
+        var entities = _archSetState.Entities;
+        for (var i = 0; i < entities.Length; i++)
         {
-            _archSetState.World.Set(_archSetState.Entities[i], new Position(i + 1, i + 1));
+            world.Set(entities[i], new Position(i + 1, i + 1));
         }
     }
 
     [Benchmark(Description = "MiniArch set Position for existing entities")]
     public void MiniArch_Set_Position()
     {
-        for (var i = 0; i < _miniSetState.Entities.Length; i++)
+        var world = _miniSetState.World;
+        var entities = _miniSetState.Entities;
+        for (var i = 0; i < entities.Length; i++)
         {
-            _miniSetState.World.Set(_miniSetState.Entities[i], new Position(i + 1, i + 1));
+            world.Set(entities[i], new Position(i + 1, i + 1));
         }
     }
 
     [Benchmark(Description = "Arch remove Position from entities")]
     public void Arch_Remove_Position()
     {
-        for (var i = 0; i < _archRemoveState.Entities.Length; i++)
+        var world = _archRemoveState.World;
+        var entities = _archRemoveState.Entities;
+        for (var i = 0; i < entities.Length; i++)
         {
-            _archRemoveState.World.Remove<Position>(_archRemoveState.Entities[i]);
+            world.Remove<Position>(entities[i]);
         }
     }
 
     [Benchmark(Description = "MiniArch remove Position from entities")]
     public void MiniArch_Remove_Position()
     {
-        for (var i = 0; i < _miniRemoveState.Entities.Length; i++)
+        var world = _miniRemoveState.World;
+        var entities = _miniRemoveState.Entities;
+        for (var i = 0; i < entities.Length; i++)
         {
-            _miniRemoveState.World.Remove<Position>(_miniRemoveState.Entities[i]);
+            world.Remove<Position>(entities[i]);
         }
     }
 
     [Benchmark(Description = "Arch destroy entities")]
     public void Arch_Destroy_Entity()
     {
-        for (var i = 0; i < _archDestroyState.Entities.Length; i++)
+        var world = _archDestroyState.World;
+        var entities = _archDestroyState.Entities;
+        for (var i = 0; i < entities.Length; i++)
         {
-            _archDestroyState.World.Destroy(_archDestroyState.Entities[i]);
+            world.Destroy(entities[i]);
         }
     }
 
     [Benchmark(Description = "MiniArch destroy entities")]
     public void MiniArch_Destroy_Entity()
     {
-        for (var i = 0; i < _miniDestroyState.Entities.Length; i++)
+        var world = _miniDestroyState.World;
+        var entities = _miniDestroyState.Entities;
+        for (var i = 0; i < entities.Length; i++)
         {
-            _miniDestroyState.World.Destroy(_miniDestroyState.Entities[i]);
+            world.Destroy(entities[i]);
         }
     }
 }

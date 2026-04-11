@@ -11,7 +11,7 @@ public sealed class World
     private readonly int _chunkCapacity;
     private int _archetypeGeneration;
 
-    public World(int chunkCapacity = 4)
+    public World(int chunkCapacity = 128)
     {
         if (chunkCapacity <= 0)
         {
@@ -54,51 +54,63 @@ public sealed class World
 
     public void Add<T>(Entity entity, T component)
     {
-        var componentType = _components.GetOrCreate<T>();
+        var componentType = GetComponentType<T>();
         var info = GetRequiredLocation(entity);
-        var sourceSignature = info.Archetype.Signature;
+        var archetype = info.Archetype;
 
-        if (sourceSignature.Contains(componentType))
+        if (archetype.TryGetComponentIndex(componentType, out var componentIndex))
         {
-            info.Archetype.GetChunk(info.ChunkIndex).SetComponent(componentType, info.RowIndex, component);
+            archetype.GetChunk(info.ChunkIndex).SetComponentAtTyped(componentIndex, info.RowIndex, in component);
             return;
         }
 
-        var destinationSignature = sourceSignature.Add(componentType);
-        var destination = GetOrCreateDestinationArchetype(info.Archetype, componentType, destinationSignature, isAdd: true);
-        MoveEntity(entity, info, destination, componentType, component);
+        if (archetype.Edges.TryGetAdd(componentType, out var cached) && cached is not null)
+        {
+            MoveEntity(entity, info, cached, componentType, in component);
+            return;
+        }
+
+        var destinationSignature = archetype.Signature.Add(componentType);
+        var destination = GetOrCreateDestinationArchetype(archetype, componentType, destinationSignature, isAdd: true);
+        MoveEntity(entity, info, destination, componentType, in component);
     }
 
     public void Set<T>(Entity entity, T component)
     {
-        var componentType = _components.GetOrCreate<T>();
+        var componentType = GetComponentType<T>();
         var info = GetRequiredLocation(entity);
-        var sourceSignature = info.Archetype.Signature;
+        var archetype = info.Archetype;
 
-        if (sourceSignature.Contains(componentType))
+        if (archetype.TryGetComponentIndex(componentType, out var componentIndex))
         {
-            info.Archetype.GetChunk(info.ChunkIndex).SetComponent(componentType, info.RowIndex, component);
+            archetype.GetChunk(info.ChunkIndex).SetComponentAtTyped(componentIndex, info.RowIndex, in component);
             return;
         }
 
-        var destinationSignature = sourceSignature.Add(componentType);
-        var destination = GetOrCreateDestinationArchetype(info.Archetype, componentType, destinationSignature, isAdd: true);
-        MoveEntity(entity, info, destination, componentType, component);
+        var destinationSignature = archetype.Signature.Add(componentType);
+        var destination = GetOrCreateDestinationArchetype(archetype, componentType, destinationSignature, isAdd: true);
+        MoveEntity(entity, info, destination, componentType, in component);
     }
 
     public void Remove<T>(Entity entity)
     {
-        var componentType = _components.GetOrCreate<T>();
+        var componentType = GetComponentType<T>();
         var info = GetRequiredLocation(entity);
-        var sourceSignature = info.Archetype.Signature;
+        var archetype = info.Archetype;
 
-        if (!sourceSignature.Contains(componentType))
+        if (!archetype.TryGetComponentIndex(componentType, out _))
         {
             return;
         }
 
-        var destinationSignature = sourceSignature.Remove(componentType);
-        var destination = GetOrCreateDestinationArchetype(info.Archetype, componentType, destinationSignature, isAdd: false);
+        if (archetype.Edges.TryGetRemove(componentType, out var cached) && cached is not null)
+        {
+            MoveEntity(entity, info, cached);
+            return;
+        }
+
+        var destinationSignature = archetype.Signature.Remove(componentType);
+        var destination = GetOrCreateDestinationArchetype(archetype, componentType, destinationSignature, isAdd: false);
         MoveEntity(entity, info, destination);
     }
 
@@ -109,22 +121,22 @@ public sealed class World
 
     public Query Query<T1>()
     {
-        var componentType = _components.GetOrCreate<T1>();
+        var componentType = GetComponentType<T1>();
         return GetOrCreateQuery(QueryFilter.CreateRequired(componentType));
     }
 
     public Query Query<T1, T2>()
     {
-        var componentType1 = _components.GetOrCreate<T1>();
-        var componentType2 = _components.GetOrCreate<T2>();
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
         return GetOrCreateQuery(QueryFilter.CreateRequired(componentType1, componentType2));
     }
 
     public Query Query<T1, T2, T3>()
     {
-        var componentType1 = _components.GetOrCreate<T1>();
-        var componentType2 = _components.GetOrCreate<T2>();
-        var componentType3 = _components.GetOrCreate<T3>();
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
         return GetOrCreateQuery(QueryFilter.CreateRequired(componentType1, componentType2, componentType3));
     }
 
@@ -149,24 +161,28 @@ public sealed class World
 
     private void MoveEntity(Entity entity, EntityInfo sourceInfo, Archetype destination)
     {
-        MoveEntity(entity, sourceInfo, destination, default, null, hasOverride: false);
+        var sourceChunk = sourceInfo.Archetype.GetChunk(sourceInfo.ChunkIndex);
+        var destinationChunk = destination.ReserveEntity(entity, out var destinationChunkIndex, out var destinationRowIndex);
+        destinationChunk.CopySharedComponentsFrom(sourceChunk, sourceInfo.RowIndex, destinationRowIndex);
+
+        sourceInfo.Archetype.RemoveEntity(sourceInfo.ChunkIndex, sourceInfo.RowIndex, out var movedEntity);
+
+        if (movedEntity.IsValid)
+        {
+            _locations[movedEntity.Id] = new EntityInfo(movedEntity.Version, sourceInfo.Archetype, sourceInfo.ChunkIndex, sourceInfo.RowIndex);
+        }
+
+        _locations[entity.Id] = new EntityInfo(entity.Version, destination, destinationChunkIndex, destinationRowIndex);
     }
 
-    private void MoveEntity(Entity entity, EntityInfo sourceInfo, Archetype destination, ComponentType componentType, object? componentValue)
-    {
-        MoveEntity(entity, sourceInfo, destination, componentType, componentValue, hasOverride: true);
-    }
-
-    private void MoveEntity(Entity entity, EntityInfo sourceInfo, Archetype destination, ComponentType componentType, object? componentValue, bool hasOverride)
+    private void MoveEntity<T>(Entity entity, EntityInfo sourceInfo, Archetype destination, ComponentType componentType, in T componentValue)
     {
         var sourceChunk = sourceInfo.Archetype.GetChunk(sourceInfo.ChunkIndex);
         var destinationChunk = destination.ReserveEntity(entity, out var destinationChunkIndex, out var destinationRowIndex);
         destinationChunk.CopySharedComponentsFrom(sourceChunk, sourceInfo.RowIndex, destinationRowIndex);
 
-        if (hasOverride)
-        {
-            destinationChunk.SetComponent(componentType, destinationRowIndex, componentValue);
-        }
+        var destinationColumnIndex = destination.GetComponentIndex(componentType);
+        destinationChunk.SetComponentAtTyped(destinationColumnIndex, destinationRowIndex, in componentValue);
 
         sourceInfo.Archetype.RemoveEntity(sourceInfo.ChunkIndex, sourceInfo.RowIndex, out var movedEntity);
 
@@ -180,21 +196,6 @@ public sealed class World
 
     private Archetype GetOrCreateDestinationArchetype(Archetype source, ComponentType componentType, Signature destinationSignature, bool isAdd)
     {
-        if (isAdd)
-        {
-            if (source.Edges.TryGetAdd(componentType, out var cached) && cached is not null)
-            {
-                return cached;
-            }
-        }
-        else
-        {
-            if (source.Edges.TryGetRemove(componentType, out var cached) && cached is not null)
-            {
-                return cached;
-            }
-        }
-
         var destination = GetOrCreateArchetype(destinationSignature);
         if (isAdd)
         {
@@ -217,10 +218,28 @@ public sealed class World
             return archetype;
         }
 
-        archetype = new Archetype(signature, _chunkCapacity);
+        archetype = new Archetype(signature, ResolveComponentTypes(signature), _chunkCapacity);
         _archetypes.Add(signature, archetype);
         _archetypeGeneration++;
         return archetype;
+    }
+
+    private Type[] ResolveComponentTypes(Signature signature)
+    {
+        var componentCount = signature.Count;
+        if (componentCount == 0)
+        {
+            return Array.Empty<Type>();
+        }
+
+        var types = new Type[componentCount];
+        var components = signature.AsSpan();
+        for (var index = 0; index < componentCount; index++)
+        {
+            types[index] = _components.GetType(components[index]);
+        }
+
+        return types;
     }
 
     internal Query GetOrCreateQuery(QueryFilter filter)
@@ -256,5 +275,22 @@ public sealed class World
         _versions.Add(0);
         _locations.Add(null);
         return id;
+    }
+
+    private ComponentType GetComponentType<T>()
+    {
+        if (ComponentTypeCache<T>.Registry != _components)
+        {
+            ComponentTypeCache<T>.Registry = _components;
+            ComponentTypeCache<T>.ComponentType = _components.GetOrCreate<T>();
+        }
+
+        return ComponentTypeCache<T>.ComponentType;
+    }
+
+    private static class ComponentTypeCache<T>
+    {
+        public static ComponentRegistry? Registry;
+        public static ComponentType ComponentType;
     }
 }

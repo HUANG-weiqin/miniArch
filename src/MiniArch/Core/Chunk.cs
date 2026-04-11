@@ -1,26 +1,45 @@
+using System.Runtime.CompilerServices;
+
 namespace MiniArch.Core;
 
 public sealed class Chunk
 {
     private readonly Signature _signature;
     private readonly Entity[] _entities;
-    private readonly Dictionary<ComponentType, object?[]> _columns;
+    private readonly Array[] _columns;
+    private readonly int[] _componentIdToColumnIndex;
+    private readonly bool _typedColumns;
 
     public Chunk(Signature signature, int capacity = 4)
+        : this(signature, null, BuildComponentIdToColumnIndex(signature), capacity, false)
+    {
+    }
+
+    internal Chunk(Signature signature, int[] componentIdToColumnIndex, int capacity = 4)
+        : this(signature, null, componentIdToColumnIndex, capacity, false)
+    {
+    }
+
+    internal Chunk(Signature signature, Type[] componentTypes, int[] componentIdToColumnIndex, int capacity = 4)
+        : this(signature, componentTypes, componentIdToColumnIndex, capacity, true)
+    {
+    }
+
+    private Chunk(Signature signature, Type[]? componentTypes, int[] componentIdToColumnIndex, int capacity, bool hasTypedColumns)
     {
         ArgumentNullException.ThrowIfNull(signature);
+        ArgumentNullException.ThrowIfNull(componentIdToColumnIndex);
+
         if (capacity <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(capacity));
         }
 
         _signature = signature;
+        _typedColumns = hasTypedColumns;
+        _componentIdToColumnIndex = componentIdToColumnIndex;
         _entities = new Entity[capacity];
-        _columns = new Dictionary<ComponentType, object?[]>();
-        foreach (var component in signature)
-        {
-            _columns[component] = new object?[capacity];
-        }
+        _columns = CreateColumns(signature, componentTypes, capacity, hasTypedColumns);
     }
 
     public Signature Signature => _signature;
@@ -38,14 +57,17 @@ public sealed class Chunk
     public int Add(Entity entity, IReadOnlyDictionary<ComponentType, object?> components)
     {
         var row = Add(entity);
-        foreach (var component in _signature)
+        var signature = _signature.AsSpan();
+        for (var index = 0; index < signature.Length; index++)
         {
+            var component = signature[index];
             if (!components.TryGetValue(component, out var value))
             {
                 throw new InvalidOperationException($"Missing component {component.Value}.");
             }
 
-            _columns[component][row] = value;
+            var columnIndex = GetComponentIndex(component);
+            _columns[columnIndex].SetValue(value, row);
         }
 
         return row;
@@ -67,23 +89,78 @@ public sealed class Chunk
     public object? GetComponent(ComponentType component, int row)
     {
         ValidateRow(row);
-        return _columns[component][row];
+        var columnIndex = GetComponentIndex(component);
+        return _columns[columnIndex].GetValue(row);
     }
 
     public T GetComponent<T>(ComponentType component, int row)
     {
-        return (T)GetComponent(component, row)!;
+        ValidateRow(row);
+        var columnIndex = GetComponentIndex(component);
+        return GetComponentAt<T>(columnIndex, row);
     }
 
     public void SetComponent(ComponentType component, int row, object? value)
     {
         ValidateRow(row);
-        if (!_columns.ContainsKey(component))
+        var columnIndex = GetComponentIndex(component);
+        _columns[columnIndex].SetValue(value, row);
+    }
+
+    public void SetComponent<T>(ComponentType component, int row, in T value)
+    {
+        ValidateRow(row);
+        var columnIndex = GetComponentIndex(component);
+        SetComponentAt(columnIndex, row, in value);
+    }
+
+    internal void SetComponentAtTyped<T>(int columnIndex, int row, in T value)
+    {
+        ((T[])_columns[columnIndex])[row] = value;
+    }
+
+    internal void SetComponentAt<T>(int columnIndex, int row, in T value)
+    {
+        if (!_typedColumns)
         {
-            throw new ArgumentException($"Chunk does not contain component {component.Value}.", nameof(component));
+            _columns[columnIndex].SetValue(value, row);
+            return;
         }
 
-        _columns[component][row] = value;
+        SetComponentAtTyped(columnIndex, row, in value);
+    }
+
+    internal T GetComponentAt<T>(int columnIndex, int row)
+    {
+        if (!_typedColumns)
+        {
+            return (T)_columns[columnIndex].GetValue(row)!;
+        }
+
+        return ((T[])_columns[columnIndex])[row];
+    }
+
+    internal bool TryGetComponentIndex(ComponentType component, out int columnIndex)
+    {
+        var componentId = component.Value;
+        if ((uint)componentId >= (uint)_componentIdToColumnIndex.Length)
+        {
+            columnIndex = -1;
+            return false;
+        }
+
+        columnIndex = _componentIdToColumnIndex[componentId];
+        return columnIndex >= 0;
+    }
+
+    internal int GetComponentIndex(ComponentType component)
+    {
+        if (TryGetComponentIndex(component, out var columnIndex))
+        {
+            return columnIndex;
+        }
+
+        throw new ArgumentException($"Chunk does not contain component {component.Value}.", nameof(component));
     }
 
     internal void CopySharedComponentsFrom(Chunk source, int sourceRow, int destinationRow)
@@ -92,22 +169,28 @@ public sealed class Chunk
         source.ValidateRow(sourceRow);
         ValidateRow(destinationRow);
 
-        foreach (var component in _signature)
+        var components = _signature.AsSpan();
+        for (var index = 0; index < components.Length; index++)
         {
-            if (source._columns.TryGetValue(component, out var sourceColumn))
+            var component = components[index];
+            if (!source.TryGetComponentIndex(component, out var sourceColumnIndex))
             {
-                _columns[component][destinationRow] = sourceColumn[sourceRow];
+                continue;
             }
+
+            Array.Copy(source._columns[sourceColumnIndex], sourceRow, _columns[index], destinationRow, 1);
         }
     }
 
     public IReadOnlyDictionary<ComponentType, object?> CaptureRow(int row)
     {
         ValidateRow(row);
+
         var values = new Dictionary<ComponentType, object?>(_signature.Count);
-        foreach (var component in _signature)
+        var components = _signature.AsSpan();
+        for (var index = 0; index < components.Length; index++)
         {
-            values[component] = _columns[component][row];
+            values[components[index]] = _columns[index].GetValue(row);
         }
 
         return values;
@@ -123,24 +206,88 @@ public sealed class Chunk
             movedEntity = _entities[last];
             _entities[row] = movedEntity;
 
-            foreach (var component in _signature)
+            for (var index = 0; index < _columns.Length; index++)
             {
-                _columns[component][row] = _columns[component][last];
-                _columns[component][last] = null;
+                var column = _columns[index];
+                Array.Copy(column, last, column, row, 1);
+                Array.Clear(column, last, 1);
             }
         }
         else
         {
             movedEntity = new Entity(-1, -1);
-            foreach (var component in _signature)
+            for (var index = 0; index < _columns.Length; index++)
             {
-                _columns[component][last] = null;
+                Array.Clear(_columns[index], last, 1);
             }
         }
 
         _entities[last] = default;
         Count--;
         return row != last;
+    }
+
+    private static Array[] CreateColumns(Signature signature, Type[]? componentTypes, int capacity, bool typedColumns)
+    {
+        var componentCount = signature.Count;
+        var columns = new Array[componentCount];
+
+        if (componentCount == 0)
+        {
+            return columns;
+        }
+
+        if (!typedColumns)
+        {
+            for (var index = 0; index < componentCount; index++)
+            {
+                columns[index] = new object?[capacity];
+            }
+
+            return columns;
+        }
+
+        ArgumentNullException.ThrowIfNull(componentTypes);
+        if (componentTypes.Length != componentCount)
+        {
+            throw new ArgumentException("Component type count must match signature count.", nameof(componentTypes));
+        }
+
+        for (var index = 0; index < componentCount; index++)
+        {
+            columns[index] = Array.CreateInstance(componentTypes[index], capacity);
+        }
+
+        return columns;
+    }
+
+    private static int[] BuildComponentIdToColumnIndex(Signature signature)
+    {
+        var maxComponentId = -1;
+        var components = signature.AsSpan();
+        for (var index = 0; index < components.Length; index++)
+        {
+            var componentId = components[index].Value;
+            if (componentId > maxComponentId)
+            {
+                maxComponentId = componentId;
+            }
+        }
+
+        if (maxComponentId < 0)
+        {
+            return Array.Empty<int>();
+        }
+
+        var lookup = new int[maxComponentId + 1];
+        Array.Fill(lookup, -1);
+
+        for (var index = 0; index < components.Length; index++)
+        {
+            lookup[components[index].Value] = index;
+        }
+
+        return lookup;
     }
 
     private void ValidateRow(int row)

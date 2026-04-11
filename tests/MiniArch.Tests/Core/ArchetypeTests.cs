@@ -59,6 +59,36 @@ public sealed class ArchetypeTests
     }
 
     [Fact]
+    public void Reserving_entities_reuses_earlier_chunks_with_free_space()
+    {
+        var archetype = new Archetype(Signature.Empty, chunkCapacity: 2);
+
+        archetype.ReserveEntity(new Entity(1, 0), out _, out _);
+        archetype.ReserveEntity(new Entity(2, 0), out _, out _);
+        archetype.ReserveEntity(new Entity(3, 0), out _, out _);
+        archetype.ReserveEntity(new Entity(4, 0), out _, out _);
+
+        Assert.Equal(2, archetype.Chunks.Count);
+
+        archetype.RemoveEntity(0, 0, out _);
+        archetype.RemoveEntity(0, 0, out _);
+        archetype.RemoveEntity(1, 0, out _);
+        archetype.RemoveEntity(1, 0, out _);
+
+        Assert.Equal(0, archetype.Chunks[0].Count);
+        Assert.Equal(0, archetype.Chunks[1].Count);
+
+        archetype.ReserveEntity(new Entity(5, 0), out _, out _);
+        archetype.ReserveEntity(new Entity(6, 0), out _, out _);
+        archetype.ReserveEntity(new Entity(7, 0), out _, out _);
+        archetype.ReserveEntity(new Entity(8, 0), out _, out _);
+
+        Assert.Equal(2, archetype.Chunks.Count);
+        Assert.Equal(2, archetype.Chunks[0].Count);
+        Assert.Equal(2, archetype.Chunks[1].Count);
+    }
+
+    [Fact]
     public void Add_and_remove_transition_edges_are_cached_and_reused()
     {
         var world = new World();

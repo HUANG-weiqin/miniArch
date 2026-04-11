@@ -1,7 +1,7 @@
 ---
 title: Test Workflow
 module: MiniArch.Tests
-description: How the test suite is organized and how to run it
+description: How the test suite and structural-change benchmarks are organized and how to run them
 updated: 2026-04-11
 ---
 # Test Workflow
@@ -11,11 +11,11 @@ updated: 2026-04-11
 - 这个模块负责：
   - 验证 ECS core 的行为
   - 覆盖实体生命周期、chunk 存储、结构迁移和 query
+  - 作为 typed-column / direct-index 重构后的行为回归网
   - 为 future agent 提供回归判断
 - 这个模块不负责：
   - 业务特性设计
-  - 性能基准
-  - 运行时代码实现
+  - 核心运行时代码实现
 
 ## 架构
 
@@ -29,9 +29,11 @@ updated: 2026-04-11
   - `QueryTests.cs`
   - `QueryFilterTests.cs`
   - `IntegrationTests.cs`
+  - `StructuralChangeBenchmarks.cs`
 - 数据流 / 控制流：
   - 单元测试先锁定局部行为
   - 集成测试再验证迁移链路
+  - benchmark 只比较同构输入下的 Arch / MiniArch 热路径，不承担正确性证明
   - `scripts\verify.ps1` 统一跑 build + test
 - 和其他模块的交互方式：
   - 直接依赖 `MiniArch.Core`
@@ -43,6 +45,9 @@ updated: 2026-04-11
 - 每个核心概念一个测试文件，便于按模块定位问题。
 - 集成测试只保留一条完整迁移路径，避免重复覆盖。
 - 验证脚本和测试项目分离，方便 agent 在需要时只跑局部测试。
+- 结构变化相关测试必须保留 `Set` 的 in-place 语义断言，因为这是 typed-column / direct-index 重构的核心安全网。
+- `ArchetypeTests` 需要覆盖“复用前面空掉的 chunk”这一行为；否则 `Remove` benchmark 的分配回退很难在功能测试里暴露出来。
+- benchmark 必须同时看时间和分配，不能只看平均耗时。
 
 ## 认知模型
 
@@ -60,6 +65,7 @@ updated: 2026-04-11
 - 如果是第一次读这个模块，先看：
   - `IntegrationTests.cs`：最完整的端到端例子
   - `WorldStructuralChangeTests.cs`：结构迁移的关键行为
+  - `StructuralChangeBenchmarks.cs`：`Set` 热路径与 Arch 的对照口径
 - 如果是修 bug，先看：
   - 对应功能的测试文件
   - `scripts\test.ps1`
@@ -67,21 +73,29 @@ updated: 2026-04-11
   - `QueryTests.cs`：query 行为约束
   - `QueryFilterTests.cs`：链式 filter 和 builder 契约
   - `ChunkTests.cs`：存储密度约束
+  - `ArchetypeTests.cs`：chunk 复用和可写 chunk 选择策略
+  - `WorldStructuralChangeTests.cs`：`Set` / `Add` / `Remove` 的结构变化边界
+  - `StructuralChangeBenchmarks.cs`：性能回归口径
 
 ## 坑点
 
 - 历史上容易出问题的地方：
   - 只跑局部测试，没看整体迁移是否破坏
   - 断言太宽泛，漏掉 chunk 级行为
+  - 只看运行时，不看分配和 GC
+  - `Remove` 只看时间变快，却没发现 archetype 没复用已有空 chunk，导致分配被隐藏放大
 - 容易误判的地方：
   - 认为 query 结果对了，chunk 顺序就一定对了
   - 认为 entity 还活着，version 也一定没错
 - 改这里时要特别小心：
   - 测试名要稳定，方便 agent 用 `--filter` 定位
   - 集成测试不要过度依赖实现细节
+  - `Set` 相关测试要先确认核心是否已经切到 typed-column / direct-index；如果没有，先保留适配点，不要伪造新行为
+  - benchmark 输出要和 Arch 在相同 entity 布局下对齐，否则对比没有意义
 
 ## 关联模块
 
 - `kb-core-ecs.md`：被测试的运行时模块
 - `kb-repo-overview.md`：如何启动验证流程
 - `scripts/test.ps1`：测试入口
+- `benchmarks/MiniArch.Benchmarks/StructuralChangeBenchmarks.cs`：结构变化 benchmark

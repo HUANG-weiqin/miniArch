@@ -4,18 +4,38 @@ public sealed class Archetype
 {
     private readonly List<Chunk> _chunks = new();
     private readonly int _chunkCapacity;
+    private readonly Type[]? _componentTypes;
+    private readonly int[] _componentIdToColumnIndex;
 
     public Archetype(Signature signature, int chunkCapacity = 4)
+        : this(signature, null, chunkCapacity, false)
+    {
+    }
+
+    internal Archetype(Signature signature, Type[] componentTypes, int chunkCapacity = 4)
+        : this(signature, componentTypes, chunkCapacity, true)
+    {
+    }
+
+    private Archetype(Signature signature, Type[]? componentTypes, int chunkCapacity, bool typedColumns)
     {
         ArgumentNullException.ThrowIfNull(signature);
+
         if (chunkCapacity <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(chunkCapacity));
         }
 
+        if (componentTypes is not null && componentTypes.Length != signature.Count)
+        {
+            throw new ArgumentException("Component type count must match signature count.", nameof(componentTypes));
+        }
+
         Signature = signature;
         _chunkCapacity = chunkCapacity;
-        _chunks.Add(new Chunk(signature, chunkCapacity));
+        _componentTypes = componentTypes;
+        _componentIdToColumnIndex = BuildComponentIdToColumnIndex(signature);
+        _chunks.Add(CreateChunk(typedColumns));
     }
 
     public Signature Signature { get; }
@@ -50,18 +70,83 @@ public sealed class Archetype
 
     public Chunk GetChunk(int chunkIndex) => _chunks[chunkIndex];
 
-    private Chunk GetWritableChunk(out int chunkIndex)
+    internal bool TryGetComponentIndex(ComponentType component, out int columnIndex)
     {
-        chunkIndex = _chunks.Count - 1;
-        var chunk = _chunks[chunkIndex];
-        if (chunk.Count < chunk.Capacity)
+        var componentId = component.Value;
+        if ((uint)componentId >= (uint)_componentIdToColumnIndex.Length)
         {
-            return chunk;
+            columnIndex = -1;
+            return false;
         }
 
-        chunk = new Chunk(Signature, _chunkCapacity);
+        columnIndex = _componentIdToColumnIndex[componentId];
+        return columnIndex >= 0;
+    }
+
+    internal int GetComponentIndex(ComponentType component)
+    {
+        if (TryGetComponentIndex(component, out var columnIndex))
+        {
+            return columnIndex;
+        }
+
+        throw new ArgumentException($"Archetype does not contain component {component.Value}.", nameof(component));
+    }
+
+    private Chunk CreateChunk(bool typedColumns)
+    {
+        if (!typedColumns)
+        {
+            return new Chunk(Signature, _componentIdToColumnIndex, _chunkCapacity);
+        }
+
+        ArgumentNullException.ThrowIfNull(_componentTypes);
+        return new Chunk(Signature, _componentTypes, _componentIdToColumnIndex, _chunkCapacity);
+    }
+
+    private Chunk GetWritableChunk(out int chunkIndex)
+    {
+        for (chunkIndex = _chunks.Count - 1; chunkIndex >= 0; chunkIndex--)
+        {
+            var existingChunk = _chunks[chunkIndex];
+            if (existingChunk.Count < existingChunk.Capacity)
+            {
+                return existingChunk;
+            }
+        }
+
+        var chunk = CreateChunk(_componentTypes is not null);
         _chunks.Add(chunk);
         chunkIndex = _chunks.Count - 1;
         return chunk;
+    }
+
+    private static int[] BuildComponentIdToColumnIndex(Signature signature)
+    {
+        var components = signature.AsSpan();
+        var maxComponentId = -1;
+        for (var index = 0; index < components.Length; index++)
+        {
+            var componentId = components[index].Value;
+            if (componentId > maxComponentId)
+            {
+                maxComponentId = componentId;
+            }
+        }
+
+        if (maxComponentId < 0)
+        {
+            return Array.Empty<int>();
+        }
+
+        var lookup = new int[maxComponentId + 1];
+        Array.Fill(lookup, -1);
+
+        for (var index = 0; index < components.Length; index++)
+        {
+            lookup[components[index].Value] = index;
+        }
+
+        return lookup;
     }
 }
