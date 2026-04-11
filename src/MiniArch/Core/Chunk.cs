@@ -1,12 +1,17 @@
 using System.Runtime.CompilerServices;
+using System.Collections.Concurrent;
 
 namespace MiniArch.Core;
 
 public sealed class Chunk
 {
+    private static readonly ConcurrentDictionary<Type, bool> ColumnClearRequirementCache = new();
+
     private readonly Signature _signature;
     private readonly Entity[] _entities;
     private readonly Array[] _columns;
+    private readonly bool[] _columnRequiresClear;
+    private readonly ColumnClearMode _columnClearMode;
     private readonly int[] _componentIdToColumnIndex;
     private readonly bool _typedColumns;
 
@@ -40,6 +45,8 @@ public sealed class Chunk
         _componentIdToColumnIndex = componentIdToColumnIndex;
         _entities = new Entity[capacity];
         _columns = CreateColumns(signature, componentTypes, capacity, hasTypedColumns);
+        _columnRequiresClear = CreateColumnClearMap(_columns, componentTypes, hasTypedColumns);
+        _columnClearMode = GetColumnClearMode(_columnRequiresClear);
     }
 
     public Signature Signature => _signature;
@@ -48,11 +55,12 @@ public sealed class Chunk
 
     public int Count { get; private set; }
 
-    internal Entity[] Entities => _entities;
-
     internal Array[] Columns => _columns;
 
-    internal ReadOnlySpan<Entity> ActiveEntities => _entities.AsSpan(0, Count);
+    public ReadOnlySpan<Entity> GetEntities()
+    {
+        return _entities.AsSpan(0, Count);
+    }
 
     public Entity GetEntity(int row)
     {
@@ -92,22 +100,31 @@ public sealed class Chunk
         return row;
     }
 
-    internal int Add(ReadOnlySpan<Entity> entities)
+    internal int ReserveRows(int count)
     {
-        if (entities.Length == 0)
+        if (count < 0)
         {
-            return Count;
+            throw new ArgumentOutOfRangeException(nameof(count));
         }
 
-        if (Count + entities.Length > Capacity)
+        if (Count + count > Capacity)
         {
             throw new InvalidOperationException("Chunk is full.");
         }
 
         var row = Count;
-        entities.CopyTo(_entities.AsSpan(row, entities.Length));
-        Count += entities.Length;
+        Count += count;
         return row;
+    }
+
+    internal Span<Entity> GetReservedEntities(int startRow, int count)
+    {
+        if (startRow < 0 || count < 0 || startRow + count > Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(startRow));
+        }
+
+        return _entities.AsSpan(startRow, count);
     }
 
     public object? GetComponent(ComponentType component, int row)
@@ -229,21 +246,12 @@ public sealed class Chunk
         {
             movedEntity = _entities[last];
             _entities[row] = movedEntity;
-
-            for (var index = 0; index < _columns.Length; index++)
-            {
-                var column = _columns[index];
-                Array.Copy(column, last, column, row, 1);
-                Array.Clear(column, last, 1);
-            }
+            CopyRemovedRow(row, last);
         }
         else
         {
             movedEntity = new Entity(-1, -1);
-            for (var index = 0; index < _columns.Length; index++)
-            {
-                Array.Clear(_columns[index], last, 1);
-            }
+            ClearRemovedTail(last);
         }
 
         _entities[last] = default;
@@ -285,6 +293,156 @@ public sealed class Chunk
         return columns;
     }
 
+    private static bool[] CreateColumnClearMap(Array[] columns, Type[]? componentTypes, bool typedColumns)
+    {
+        var clearMap = new bool[columns.Length];
+        if (columns.Length == 0)
+        {
+            return clearMap;
+        }
+
+        if (!typedColumns)
+        {
+            Array.Fill(clearMap, true);
+            return clearMap;
+        }
+
+        ArgumentNullException.ThrowIfNull(componentTypes);
+        for (var index = 0; index < componentTypes.Length; index++)
+        {
+            clearMap[index] = RequiresClear(componentTypes[index]);
+        }
+
+        return clearMap;
+    }
+
+    private static bool RequiresClear(Type type)
+    {
+        return ColumnClearRequirementCache.GetOrAdd(type, static componentType =>
+        {
+            return (bool)typeof(Chunk)
+                .GetMethod(nameof(RequiresClearGeneric), System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
+                .MakeGenericMethod(componentType)
+                .Invoke(null, null)!;
+        });
+    }
+
+    private static bool RequiresClearGeneric<T>()
+    {
+        return RuntimeHelpers.IsReferenceOrContainsReferences<T>();
+    }
+
+    private static ColumnClearMode GetColumnClearMode(bool[] clearMap)
+    {
+        if (clearMap.Length == 0)
+        {
+            return ColumnClearMode.None;
+        }
+
+        var requiresClear = 0;
+        for (var index = 0; index < clearMap.Length; index++)
+        {
+            if (clearMap[index])
+            {
+                requiresClear++;
+            }
+        }
+
+        if (requiresClear == 0)
+        {
+            return ColumnClearMode.None;
+        }
+
+        if (requiresClear == clearMap.Length)
+        {
+            return ColumnClearMode.All;
+        }
+
+        return ColumnClearMode.Mixed;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void CopyRemovedRow(int row, int last)
+    {
+        switch (_columnClearMode)
+        {
+            case ColumnClearMode.None:
+                CopyColumnsWithoutClearing(row, last);
+                break;
+            case ColumnClearMode.All:
+                CopyColumnsAndClearAll(row, last);
+                break;
+            default:
+                CopyColumnsAndClearMixed(row, last);
+                break;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ClearRemovedTail(int last)
+    {
+        switch (_columnClearMode)
+        {
+            case ColumnClearMode.All:
+                ClearAllColumns(last);
+                break;
+            case ColumnClearMode.Mixed:
+                ClearMixedColumns(last);
+                break;
+        }
+    }
+
+    private void CopyColumnsWithoutClearing(int row, int last)
+    {
+        for (var index = 0; index < _columns.Length; index++)
+        {
+            var column = _columns[index];
+            Array.Copy(column, last, column, row, 1);
+        }
+    }
+
+    private void CopyColumnsAndClearAll(int row, int last)
+    {
+        for (var index = 0; index < _columns.Length; index++)
+        {
+            var column = _columns[index];
+            Array.Copy(column, last, column, row, 1);
+            Array.Clear(column, last, 1);
+        }
+    }
+
+    private void CopyColumnsAndClearMixed(int row, int last)
+    {
+        for (var index = 0; index < _columns.Length; index++)
+        {
+            var column = _columns[index];
+            Array.Copy(column, last, column, row, 1);
+            if (_columnRequiresClear[index])
+            {
+                Array.Clear(column, last, 1);
+            }
+        }
+    }
+
+    private void ClearAllColumns(int last)
+    {
+        for (var index = 0; index < _columns.Length; index++)
+        {
+            Array.Clear(_columns[index], last, 1);
+        }
+    }
+
+    private void ClearMixedColumns(int last)
+    {
+        for (var index = 0; index < _columns.Length; index++)
+        {
+            if (_columnRequiresClear[index])
+            {
+                Array.Clear(_columns[index], last, 1);
+            }
+        }
+    }
+
     private static int[] BuildComponentIdToColumnIndex(Signature signature)
     {
         var maxComponentId = -1;
@@ -320,5 +478,12 @@ public sealed class Chunk
         {
             throw new ArgumentOutOfRangeException(nameof(row));
         }
+    }
+
+    private enum ColumnClearMode
+    {
+        None,
+        All,
+        Mixed,
     }
 }

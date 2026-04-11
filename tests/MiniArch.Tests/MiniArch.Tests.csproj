@@ -22,6 +22,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\MiniArch\MiniArch.csproj" />
+    <ProjectReference Include="..\..\benchmarks\MiniArch.Benchmarks\MiniArch.Benchmarks.csproj" />
   </ItemGroup>
 
 </Project>

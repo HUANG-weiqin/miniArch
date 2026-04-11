@@ -6,6 +6,22 @@ public sealed class WorldLifecycleTests
 {
     private readonly record struct Position(int X, int Y);
     private readonly record struct Velocity(int X, int Y);
+    private readonly record struct C1(int Value);
+    private readonly record struct C2(int Value);
+    private readonly record struct C3(int Value);
+    private readonly record struct C4(int Value);
+    private readonly record struct C5(int Value);
+    private readonly record struct C6(int Value);
+    private readonly record struct C7(int Value);
+    private readonly record struct C8(int Value);
+    private readonly record struct C9(int Value);
+    private readonly record struct C10(int Value);
+    private readonly record struct C11(int Value);
+    private readonly record struct C12(int Value);
+    private readonly record struct C13(int Value);
+    private readonly record struct C14(int Value);
+    private readonly record struct C15(int Value);
+    private readonly record struct C16(int Value);
 
     [Fact]
     public void Create_returns_a_valid_entity()
@@ -59,6 +75,53 @@ public sealed class WorldLifecycleTests
         Assert.Contains(new ComponentType(1), info.Archetype.Signature);
         Assert.Equal(0, info.ChunkIndex);
         Assert.Equal(0, info.RowIndex);
+    }
+
+    [Fact]
+    public void Create_with_components_places_entity_directly_into_final_archetype_without_intermediate_archetypes()
+    {
+        var world = new World();
+        var entity = world.Create(new Position(1, 2), new Velocity(3, 4));
+        var positionId = world.Components.GetOrCreate<Position>();
+        var velocityId = world.Components.GetOrCreate<Velocity>();
+
+        Assert.True(world.TryGetLocation(entity, out var info));
+        Assert.Equal(2, info.Archetype.Signature.Count);
+        Assert.Contains(positionId, info.Archetype.Signature);
+        Assert.Contains(velocityId, info.Archetype.Signature);
+
+        var chunk = info.Archetype.GetChunk(info.ChunkIndex);
+        Assert.Equal(new Position(1, 2), chunk.GetComponent<Position>(positionId, info.RowIndex));
+        Assert.Equal(new Velocity(3, 4), chunk.GetComponent<Velocity>(velocityId, info.RowIndex));
+
+        var positionQuery = world.Query<Position>();
+        var matchedArchetypes = positionQuery.MatchedArchetypes;
+        Assert.Single(matchedArchetypes);
+        Assert.Same(info.Archetype, matchedArchetypes[0]);
+    }
+
+    [Fact]
+    public void Create_supports_up_to_sixteen_components_without_intermediate_archetypes()
+    {
+        var world = new World();
+        var entity = world.Create(
+            new C1(1), new C2(2), new C3(3), new C4(4),
+            new C5(5), new C6(6), new C7(7), new C8(8),
+            new C9(9), new C10(10), new C11(11), new C12(12),
+            new C13(13), new C14(14), new C15(15), new C16(16));
+        var c1 = world.Components.GetOrCreate<C1>();
+        var c16 = world.Components.GetOrCreate<C16>();
+
+        Assert.True(world.TryGetLocation(entity, out var info));
+        Assert.Equal(16, info.Archetype.Signature.Count);
+
+        var chunk = info.Archetype.GetChunk(info.ChunkIndex);
+        Assert.Equal(new C1(1), chunk.GetComponent<C1>(c1, info.RowIndex));
+        Assert.Equal(new C16(16), chunk.GetComponent<C16>(c16, info.RowIndex));
+
+        var matchedArchetypes = world.Query<C1>().MatchedArchetypes;
+        Assert.Single(matchedArchetypes);
+        Assert.Same(info.Archetype, matchedArchetypes[0]);
     }
 
     [Fact]
@@ -162,5 +225,100 @@ public sealed class WorldLifecycleTests
             Assert.Equal(absoluteIndex / 4, info.ChunkIndex);
             Assert.Equal(absoluteIndex % 4, info.RowIndex);
         }
+    }
+
+    [Fact]
+    public void CreateMany_reuses_destroyed_ids_with_incremented_versions()
+    {
+        var world = new World(chunkCapacity: 4);
+        var firstBatch = new Entity[6];
+        world.CreateMany(firstBatch);
+
+        for (var i = 0; i < firstBatch.Length; i++)
+        {
+            world.Destroy(firstBatch[i]);
+        }
+
+        var recycledBatch = new Entity[6];
+        world.CreateMany(recycledBatch);
+
+        var ids = recycledBatch.Select(entity => entity.Id).OrderBy(id => id).ToArray();
+        Assert.Equal(new[] { 0, 1, 2, 3, 4, 5 }, ids);
+
+        for (var i = 0; i < firstBatch.Length; i++)
+        {
+            Assert.False(world.TryGetLocation(firstBatch[i], out _));
+        }
+
+        foreach (var entity in recycledBatch)
+        {
+            Assert.Equal(1, entity.Version);
+            Assert.True(world.TryGetLocation(entity, out var info));
+            Assert.Equal(entity.Version, info.Version);
+        }
+    }
+
+    [Fact]
+    public void CreateMany_reuses_available_ids_before_allocating_new_ones()
+    {
+        var world = new World(chunkCapacity: 4);
+        var firstBatch = new Entity[6];
+        world.CreateMany(firstBatch);
+
+        world.Destroy(firstBatch[1]);
+        world.Destroy(firstBatch[4]);
+
+        var secondBatch = new Entity[4];
+        world.CreateMany(secondBatch);
+
+        var ids = secondBatch.Select(entity => entity.Id).OrderBy(id => id).ToArray();
+        Assert.Equal(new[] { 1, 4, 6, 7 }, ids);
+
+        foreach (var entity in secondBatch.Where(entity => entity.Id is 1 or 4))
+        {
+            Assert.Equal(1, entity.Version);
+            Assert.True(world.TryGetLocation(entity, out _));
+        }
+
+        foreach (var entity in secondBatch.Where(entity => entity.Id >= 6))
+        {
+            Assert.Equal(0, entity.Version);
+            Assert.True(world.TryGetLocation(entity, out _));
+        }
+    }
+
+    [Fact]
+    public void CreateMany_mixed_ids_reuses_available_rows_before_appending_new_capacity()
+    {
+        var world = new World(chunkCapacity: 4);
+        var firstBatch = new Entity[6];
+        world.CreateMany(firstBatch);
+
+        world.Destroy(firstBatch[1]);
+        world.Destroy(firstBatch[4]);
+
+        var secondBatch = new Entity[4];
+        world.CreateMany(secondBatch);
+
+        Assert.Equal(4, secondBatch[0].Id);
+        Assert.Equal(1, secondBatch[1].Id);
+        Assert.Equal(6, secondBatch[2].Id);
+        Assert.Equal(7, secondBatch[3].Id);
+
+        Assert.True(world.TryGetLocation(secondBatch[0], out var firstReused));
+        Assert.Equal(1, firstReused.ChunkIndex);
+        Assert.Equal(1, firstReused.RowIndex);
+
+        Assert.True(world.TryGetLocation(secondBatch[1], out var secondReused));
+        Assert.Equal(1, secondReused.ChunkIndex);
+        Assert.Equal(2, secondReused.RowIndex);
+
+        Assert.True(world.TryGetLocation(secondBatch[2], out var firstFresh));
+        Assert.Equal(1, firstFresh.ChunkIndex);
+        Assert.Equal(3, firstFresh.RowIndex);
+
+        Assert.True(world.TryGetLocation(secondBatch[3], out var secondFresh));
+        Assert.Equal(0, secondFresh.ChunkIndex);
+        Assert.Equal(3, secondFresh.RowIndex);
     }
 }

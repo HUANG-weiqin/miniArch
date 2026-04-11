@@ -16,6 +16,12 @@ public class StructuralChangeBenchmarks
     private MiniWorldState _miniAddState = null!;
     private ArchWorldState _archAddState = null!;
 
+    private MiniCreateManyWorldState _miniRecycledCreateManyState = null!;
+    private ArchCreateManyWorldState _archRecycledCreateManyState = null!;
+
+    private MiniCreateManyWorldState _miniMixedCreateManyState = null!;
+    private ArchCreateManyWorldState _archMixedCreateManyState = null!;
+
     private MiniWorldState _miniSetState = null!;
     private ArchWorldState _archSetState = null!;
 
@@ -33,6 +39,18 @@ public class StructuralChangeBenchmarks
 
     [IterationSetup(Target = nameof(Arch_Set_Position))]
     public void SetupArchSet() => _archSetState = BenchmarkWorldFactory.CreateArchWorldWithPosition(EntityCount);
+
+    [IterationSetup(Target = nameof(Arch_CreateMany_Entity_RecycledIds))]
+    public void SetupArchRecycledCreateMany() => _archRecycledCreateManyState = BenchmarkWorldFactory.CreateArchCreateManyRecycledWorld(EntityCount);
+
+    [IterationSetup(Target = nameof(MiniArch_CreateMany_Entity_RecycledIds))]
+    public void SetupMiniRecycledCreateMany() => _miniRecycledCreateManyState = BenchmarkWorldFactory.CreateMiniCreateManyRecycledWorld(EntityCount);
+
+    [IterationSetup(Target = nameof(Arch_CreateMany_Entity_MixedIds))]
+    public void SetupArchMixedCreateMany() => _archMixedCreateManyState = BenchmarkWorldFactory.CreateArchCreateManyMixedWorld(EntityCount);
+
+    [IterationSetup(Target = nameof(MiniArch_CreateMany_Entity_MixedIds))]
+    public void SetupMiniMixedCreateMany() => _miniMixedCreateManyState = BenchmarkWorldFactory.CreateMiniCreateManyMixedWorld(EntityCount);
 
     [IterationSetup(Target = nameof(MiniArch_Set_Position))]
     public void SetupMiniSet() => _miniSetState = BenchmarkWorldFactory.CreateMiniWorldWithPosition(EntityCount);
@@ -54,6 +72,12 @@ public class StructuralChangeBenchmarks
 
     [IterationCleanup(Target = nameof(Arch_Set_Position))]
     public void CleanupArchSet() => _archSetState.Dispose();
+
+    [IterationCleanup(Target = nameof(Arch_CreateMany_Entity_RecycledIds))]
+    public void CleanupArchRecycledCreateMany() => _archRecycledCreateManyState.Dispose();
+
+    [IterationCleanup(Target = nameof(Arch_CreateMany_Entity_MixedIds))]
+    public void CleanupArchMixedCreateMany() => _archMixedCreateManyState.Dispose();
 
     [IterationCleanup(Target = nameof(Arch_Remove_Position))]
     public void CleanupArchRemove() => _archRemoveState.Dispose();
@@ -95,6 +119,34 @@ public class StructuralChangeBenchmarks
         var world = new MiniArch.Core.World();
         var entities = new MiniEntity[EntityCount];
         world.CreateMany(entities);
+    }
+
+    [Benchmark(Description = "Arch create empty entities in bulk with recycled ids")]
+    public void Arch_CreateMany_Entity_RecycledIds()
+    {
+        var state = _archRecycledCreateManyState;
+        state.World.Create(state.Buffer, Arch.Core.Signature.Null, state.Buffer.Length);
+    }
+
+    [Benchmark(Description = "MiniArch create empty entities in bulk with recycled ids")]
+    public void MiniArch_CreateMany_Entity_RecycledIds()
+    {
+        var state = _miniRecycledCreateManyState;
+        state.World.CreateMany(state.Buffer);
+    }
+
+    [Benchmark(Description = "Arch create empty entities in bulk with mixed ids")]
+    public void Arch_CreateMany_Entity_MixedIds()
+    {
+        var state = _archMixedCreateManyState;
+        state.World.Create(state.Buffer, Arch.Core.Signature.Null, state.Buffer.Length);
+    }
+
+    [Benchmark(Description = "MiniArch create empty entities in bulk with mixed ids")]
+    public void MiniArch_CreateMany_Entity_MixedIds()
+    {
+        var state = _miniMixedCreateManyState;
+        state.World.CreateMany(state.Buffer);
     }
 
     [Benchmark(Description = "Arch add Position to empty entities")]

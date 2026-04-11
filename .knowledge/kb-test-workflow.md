@@ -1,8 +1,8 @@
 ---
 title: Test Workflow
 module: MiniArch.Tests
-description: How the test suite and mixed structural-change benchmarks are organized and how to run them
-updated: 2026-04-11
+description: How the test suite, query profiling, snapshot benchmarks, and structural-change benchmarks are organized and how to run them
+updated: 2026-04-12
 ---
 # Test Workflow
 
@@ -13,8 +13,11 @@ updated: 2026-04-11
   - 覆盖实体生命周期、chunk 存储、结构迁移和 query
   - 作为 typed-column / direct-index 重构后的行为回归网
   - 提供 `Create / CreateMany / Add / Set / Remove / Destroy` 的 benchmark 口径
-  - 提供 snapshot save/load 和 snapshot byte size 的 benchmark 口径
+  - 为 `CreateMany` 单独区分 append-only、recycled ids、mixed ids 三类场景
   - 单独保留 query 相关的性能对比口径
+  - 提供 query 采样 profiling 的独立入口，便于外部 CPU sampler 定位热点函数
+  - 用复杂 archetype 分布覆盖 query filter + traversal 的热路径
+  - 提供 snapshot save/load、snapshot bytes 和 `Bytes/entity` 的 benchmark 口径
   - 为 future agent 提供回归判断
 - 这个模块不负责：
   - 业务特性设计
@@ -33,6 +36,7 @@ updated: 2026-04-11
   - `QueryFilterTests.cs`
   - `IntegrationTests.cs`
   - `StructuralChangeBenchmarks.cs`
+  - `QueryBenchmarks.cs`
   - `SnapshotBenchmarks.cs`
 - 数据流 / 控制流：
   - 单元测试先锁定局部行为
@@ -41,6 +45,8 @@ updated: 2026-04-11
   - snapshot benchmark 预先构造“每 entity 10 个 unmanaged 组件”的 world，只测 `WorldSnapshot.Save` / `WorldSnapshot.Load` 本体，并单独导出 `SnapshotBytes`
   - benchmark 只比较同构输入下的 Arch / MiniArch 热路径，不承担正确性证明
   - setup、world 构建和脚本生成都放在测量区外
+  - complex query benchmark 用固定 archetype 配比生成同一类 world 布局，并在测量区内执行 query + 命中 entity 遍历
+  - query profiling 复用同一套 complex query world，但在 BenchmarkDotNet 之外跑固定时长循环，给 PerfView/Visual Studio CPU Usage 这类采样器一个干净窗口
   - `scripts\verify.ps1` 统一跑 build + test
 - 和其他模块的交互方式：
   - 直接依赖 `MiniArch.Core`
@@ -56,10 +62,25 @@ updated: 2026-04-11
 - `ArchetypeTests` 需要覆盖“复用前面空掉的 chunk”这一行为；否则 `Remove` benchmark 的分配回退很难在功能测试里暴露出来。
 - `WorldLifecycleTests` 需要覆盖 `EnsureCapacity` 和 `CreateMany`，否则 `Create` 的分配优化和批量语义很容易在重构时被回退。
 - `WorldLifecycleTests` 还要覆盖 `CreateMany` 的跨 chunk 顺序和二次批量追加语义，否则批量 reservation 很容易只保住“能跑”而丢掉位置正确性。
+- `WorldLifecycleTests` 还要覆盖 `CreateMany` 的 recycled/mixed id 语义，否则 fresh-path 优化很容易掩盖 free-list 路径的行为回退。
+- `WorldLifecycleTests` 还要覆盖带组件的 `Create<T...>` 直接进入最终 archetype，并锁定当前高性能重载上限 `16`；否则实现很容易退回 `Create + Add` 链路，或者在扩重载时静默漏掉目标 arity。
 - `ArchetypeEdges` 的 direct-index 化是性能目标本身，可以用一条小范围的结构测试锁定，避免静默退回字典实现。
+- `ChunkTests` 需要同时覆盖“引用类型列会清尾槽位”和“含引用字段的 struct 也会清尾槽位”；否则删除路径很容易被错误地简化成 `IsValueType` 判断。
 - mixed structural-change benchmark 默认使用 `20/20/20/20/20` 的均衡分布，并用固定种子生成同一条随机脚本。
+- `CreateMany` benchmark 不能只测 fresh append-only；必须把 recycled ids 和 mixed ids 分开跑，否则无法判断优化是否只对 `_freeIds.Count == 0` 的快路径有效。
 - benchmark 必须同时看时间和分配，不能只看平均耗时。
 - snapshot benchmark 的大小指标必须和时间分开导出，不能靠日志打印混进计时结果。
+- mixed `CreateMany` benchmark 看到巨大离群值时，要先排除 metadata 扩容边界；必要时结合单次调用诊断看 `Capacity` 变化、分配字节和 GC 代际计数，再判断是不是 free-list 热点本身。
+- `QueryTests` 需要覆盖“热缓存后的同一 query 并发枚举”和“冷缓存首次并发 materialize”两类只读场景；否则 query 的 copy-on-write 发布容易退回共享可变缓存。
+- complex query benchmark world 应该优先用 direct-create 先落 `Position/Velocity/Team` 这类 query 核心组件，再补剩余组件；否则 `Create + Add + Add + ...` 会留下过多历史空 archetype，污染 query benchmark。
+- complex query benchmark 不能只测 query builder 创建；必须测实际 query 执行。
+- complex query benchmark 的命中组件要放在最终 archetype 的后半段构建，避免 `MiniArch` 的迁移中间态空 archetype 混入结果。
+- query benchmark 需要同时保留 mixed 口径和 warmed 口径：mixed 反映 public query API 的整体成本，warmed 反映 steady-state traversal；两者不能互相替代。
+- 如果目标是看 entity-only 遍历热路径，benchmark 应优先用 chunk 的实体 span 视图，而不是在热循环里重复调用 `GetEntity(row)`；否则结果会掺入 accessor 固定成本。
+- 如果 query benchmark 把 builder 和执行放在同一个测量区，就要额外准备一条 steady-state benchmark：预热 query cache，只测 refresh 后的 chunk/entity 遍历。否则固定 build 分配会掩盖真正的读路径差距。
+- 如果 warmed query benchmark 的 short job 方差过大，尤其是 `50k/100k` 档位，不要只看一份 BenchmarkDotNet 均值；再用 `profile-query --temperature hot` 跑固定时长热循环，比较 `Completed iterations` 作为 traversal-only 的二次验证。
+- query 采样入口默认应走独立 runner，而不是直接采样 BenchmarkDotNet 子进程；前者更容易把样本集中在 `Query` 热路径上。
+- query 采样需要区分 `hot` 和 `cold`：`hot` 看 chunk traversal，`cold` 通过 fresh query 实例把 `RefreshIfNeeded / BuildMatchingArchetypes / Matches` 拉回样本。
 
 ## 认知模型
 
@@ -78,11 +99,14 @@ updated: 2026-04-11
   - `IntegrationTests.cs`：最完整的端到端例子
   - `WorldStructuralChangeTests.cs`：结构迁移的关键行为
   - `StructuralChangeBenchmarks.cs`：`Create / CreateMany / Add / Set / Remove / Destroy` 与 Arch 的时间和分配对照
-  - `SnapshotBenchmarks.cs`：`WorldSnapshot.Save` / `Load` 的时间、分配和 `SnapshotBytes`
+  - `QueryBenchmarks.cs`：复杂 query 场景下的 Arch / MiniArch 执行对照
+  - `SnapshotBenchmarks.cs`：`WorldSnapshot.Save` / `Load` 的时间、分配、`SnapshotBytes` 和 `Bytes/entity`
+  - `scripts\profile-query.ps1`：query 采样入口，适合定位热点函数
 - 如果是修 bug，先看：
   - 对应功能的测试文件
   - `scripts\test.ps1`
   - `scripts\benchmark.ps1`：benchmark 入口，必要时配合 `--filter`
+  - `scripts\profile-query.ps1`：如果问题是 query 热点分布，而不是均值回归
 - 如果是加功能，先看：
   - `QueryTests.cs`：query 行为约束
   - `QueryFilterTests.cs`：链式 filter 和 builder 契约
@@ -90,6 +114,7 @@ updated: 2026-04-11
   - `ArchetypeTests.cs`：chunk 复用和可写 chunk 选择策略
   - `WorldStructuralChangeTests.cs`：`Set` / `Add` / `Remove` 的结构变化边界
   - `StructuralChangeBenchmarks.cs`：性能回归口径
+  - `ComplexQueryBenchmarkScenarioTests.cs`：benchmark world shape、命中比例和 `>= 8 component` 契约
   - `SnapshotBenchmarks.cs`：snapshot 性能口径
 
 ## 坑点
@@ -102,23 +127,38 @@ updated: 2026-04-11
   - `Create` 只看时间，不看 entity metadata 扩容带来的分配回退
   - 加了 `CreateMany` 却没把它纳入 benchmark，导致 bulk path 长期失真
   - `CreateMany` 只看分配下降，却没确认是否还在逐实体落位，导致 bulk time 仍明显慢于 Arch
+  - `CreateMany` 只测 append-only，误把 fresh-path 成绩当成所有 free-list 场景的结论
+  - 带组件 `Create<T...>` 只断言组件值正确，却没检查 query 看到的 archetype 集合，容易漏掉“功能正确但留下空中间 archetype”的回退
   - 混合 benchmark 没有固定种子，导致 MiniArch 和 Arch 的输入不一致
   - snapshot benchmark 把 world 构建或 byte[] 预生成算进了 save/load 时间，导致结果失真
+  - query 并发测试只覆盖“缓存已热”的读取，而没压到“第一次并发建 query / 刷新快照”的冷路径
+  - complex query benchmark 如果从空实体一路逐组件 `Add` 到终态，最终 world 会残留大量空 archetype，导致 query benchmark 测到的不是“最终 world 上的 query”，而是“历史迁移残留 + query”的混合成本
+  - query benchmark 只测 builder 创建，误把 API 组装成本当成 query 热路径
+  - query benchmark 在 MiniArch 里把命中组件加得太早，导致中间态空 archetype 也被扫进结果
+  - query benchmark 只保留 builder+execute 的混合口径时，很难分清“固定分配来自 fluent builder”还是“规模退化来自 chunk/row 遍历”；要至少保留一条 warmed-query 口径。
+  - 如果 warmed query state 没有在 setup 阶段先 materialize 匹配 archetype，benchmark 名字虽然写着 warmed，实际测到的仍会掺入冷 refresh 成本。
+  - 直接采样 BenchmarkDotNet 子进程时，样本里会混入 harness、warmup 和 fork 开销；定位 query 热点时优先跑 `scripts\profile-query.ps1`
+  - 如果想看 archetype 匹配热点，不要只跑 `hot` 模式；热缓存会把刷新成本藏掉
 - 容易误判的地方：
   - 认为 query 结果对了，chunk 顺序就一定对了
   - 认为 entity 还活着，version 也一定没错
+  - 以为 `dotnet test --filter` 能绕过测试工程里的编译错误；实际上测试项目先能编译，filter 才有意义
 - 改这里时要特别小心：
   - 测试名要稳定，方便 agent 用 `--filter` 定位
   - 集成测试不要过度依赖实现细节
   - `Set` 相关测试要先确认核心是否已经切到 typed-column / direct-index；如果没有，先保留适配点，不要伪造新行为
   - benchmark 输出要和 Arch 在相同 entity 布局、相同操作脚本下对齐，否则对比没有意义
   - 运行 BenchmarkDotNet 时尽量从 `Release` 入口触发；虽然 BenchmarkDotNet 会单独编译 benchmark 可执行文件，但 debug host 警告会污染阅读
+  - 当前仓库里如果 benchmark 场景测试本身编译失败，必须先把它和本次功能验证分开说明，不要把 query 回归结果和现有编译阻塞混为一谈
 
 ## 关联模块
 
 - `kb-core-ecs.md`：被测试的运行时模块
 - `kb-snapshot-persistence.md`：snapshot 存档语义和约束
 - `kb-repo-overview.md`：如何启动验证流程
+- `kb-profiling-workflow.md`：如何做无侵入 CPU sampling
 - `scripts/test.ps1`：测试入口
 - `benchmarks/MiniArch.Benchmarks/StructuralChangeBenchmarks.cs`：分项 structural-change benchmark 与 mixed structural-change benchmark
-- `benchmarks/MiniArch.Benchmarks/SnapshotBenchmarks.cs`：snapshot save/load 与 snapshot size benchmark
+- `benchmarks/MiniArch.Benchmarks/QueryBenchmarks.cs`：复杂 query benchmark
+- `benchmarks/MiniArch.Benchmarks/SnapshotBenchmarks.cs`：snapshot save/load、snapshot bytes 与 bytes/entity benchmark
+- `scripts/profile-query.ps1`：复杂 query 采样 profiling 入口

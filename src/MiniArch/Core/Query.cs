@@ -1,14 +1,16 @@
+using System.Threading;
+
 namespace MiniArch.Core;
 
 public sealed class Query
 {
     private readonly World _world;
     private readonly QueryFilter _filter;
-    private readonly List<Archetype> _matchingArchetypes = new();
+    private MatchingSnapshot _matching = MatchingSnapshot.Empty;
     private Signature? _requiredSignature;
     private Signature? _excludedSignature;
     private Signature? _anySignature;
-    private int _cachedWorldGeneration = -1;
+    private int _refreshCount;
 
     internal Query(World world, QueryFilter filter)
     {
@@ -60,43 +62,121 @@ public sealed class Query
 
     public Query Or<T>() => Any<T>();
 
-    public int RefreshCount { get; private set; }
+    public int RefreshCount => Volatile.Read(ref _refreshCount);
 
     public IReadOnlyList<Archetype> MatchedArchetypes
     {
         get
         {
             RefreshIfNeeded();
-            return _matchingArchetypes;
+            return Volatile.Read(ref _matching).Archetypes;
         }
+    }
+
+    public IReadOnlyList<Chunk> MatchedChunks
+    {
+        get
+        {
+            RefreshIfNeeded();
+            return Volatile.Read(ref _matching).Chunks;
+        }
+    }
+
+    public ReadOnlySpan<Chunk> GetChunkSpan()
+    {
+        RefreshIfNeeded();
+        return Volatile.Read(ref _matching).Chunks;
     }
 
     public ChunkEnumerable Chunks => new(this);
 
-    internal IReadOnlyList<Archetype> EnsureMatchingArchetypes()
+    internal Archetype[] EnsureMatchingArchetypes()
     {
         RefreshIfNeeded();
-        return _matchingArchetypes;
+        return Volatile.Read(ref _matching).Archetypes;
+    }
+
+    internal Chunk[] EnsureMatchingChunks()
+    {
+        RefreshIfNeeded();
+        return Volatile.Read(ref _matching).Chunks;
     }
 
     private void RefreshIfNeeded()
     {
-        if (_cachedWorldGeneration == _world.ArchetypeGeneration)
+        var archetypeGeneration = _world.ArchetypeGeneration;
+        var layoutGeneration = _world.QueryLayoutGeneration;
+        while (true)
         {
-            return;
+            var snapshot = Volatile.Read(ref _matching);
+            if (snapshot.ArchetypeGeneration == archetypeGeneration
+                && snapshot.LayoutGeneration == layoutGeneration)
+            {
+                return;
+            }
+
+            var refreshed = BuildMatchingSnapshot(archetypeGeneration, layoutGeneration);
+            if (ReferenceEquals(Interlocked.CompareExchange(ref _matching, refreshed, snapshot), snapshot))
+            {
+                Interlocked.Increment(ref _refreshCount);
+                return;
+            }
+        }
+    }
+
+    private MatchingSnapshot BuildMatchingSnapshot(int archetypeGeneration, int layoutGeneration)
+    {
+        var archetypes = _world.Archetypes;
+        if (archetypes.Length == 0)
+        {
+            return new MatchingSnapshot(archetypeGeneration, layoutGeneration, Array.Empty<Archetype>(), Array.Empty<Chunk>());
         }
 
-        _matchingArchetypes.Clear();
-        foreach (var archetype in _world.Archetypes)
+        var matchingArchetypes = new Archetype[archetypes.Length];
+        var matchedArchetypeCount = 0;
+        var matchedChunkCount = 0;
+        foreach (var archetype in archetypes)
         {
             if (Matches(archetype))
             {
-                _matchingArchetypes.Add(archetype);
+                matchingArchetypes[matchedArchetypeCount++] = archetype;
+                matchedChunkCount += archetype.Chunks.Count;
             }
         }
 
-        _cachedWorldGeneration = _world.ArchetypeGeneration;
-        RefreshCount++;
+        if (matchedArchetypeCount == 0)
+        {
+            return new MatchingSnapshot(archetypeGeneration, layoutGeneration, Array.Empty<Archetype>(), Array.Empty<Chunk>());
+        }
+
+        Archetype[] trimmedArchetypes;
+        if (matchedArchetypeCount == matchingArchetypes.Length)
+        {
+            trimmedArchetypes = matchingArchetypes;
+        }
+        else
+        {
+            trimmedArchetypes = new Archetype[matchedArchetypeCount];
+            Array.Copy(matchingArchetypes, trimmedArchetypes, matchedArchetypeCount);
+        }
+
+        if (matchedChunkCount == 0)
+        {
+            return new MatchingSnapshot(archetypeGeneration, layoutGeneration, trimmedArchetypes, Array.Empty<Chunk>());
+        }
+
+        var matchingChunks = new Chunk[matchedChunkCount];
+        var chunkIndex = 0;
+        for (var archetypeIndex = 0; archetypeIndex < trimmedArchetypes.Length; archetypeIndex++)
+        {
+            var chunks = trimmedArchetypes[archetypeIndex].Chunks;
+            for (var i = 0; i < chunks.Count; i++)
+            {
+                matchingChunks[chunkIndex++] = chunks[i];
+            }
+        }
+
+        return new MatchingSnapshot(archetypeGeneration, layoutGeneration, trimmedArchetypes, matchingChunks);
     }
 
     private bool Matches(Archetype archetype)
@@ -134,5 +214,26 @@ public sealed class Query
         }
 
         return false;
+    }
+
+    private sealed class MatchingSnapshot
+    {
+        public static MatchingSnapshot Empty { get; } = new(-1, -1, Array.Empty<Archetype>(), Array.Empty<Chunk>());
+
+        public MatchingSnapshot(int archetypeGeneration, int layoutGeneration, Archetype[] archetypes, Chunk[] chunks)
+        {
+            ArchetypeGeneration = archetypeGeneration;
+            LayoutGeneration = layoutGeneration;
+            Archetypes = archetypes;
+            Chunks = chunks;
+        }
+
+        public int ArchetypeGeneration { get; }
+
+        public int LayoutGeneration { get; }
+
+        public Archetype[] Archetypes { get; }
+
+        public Chunk[] Chunks { get; }
     }
 }

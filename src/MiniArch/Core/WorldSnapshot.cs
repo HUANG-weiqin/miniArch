@@ -194,7 +194,7 @@ public static class WorldSnapshot
 
             writer.Write(chunk.Count);
 
-            foreach (var entity in chunk.ActiveEntities)
+            foreach (var entity in chunk.GetEntities())
             {
                 writer.Write(entity.Id);
             }

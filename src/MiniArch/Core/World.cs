@@ -1,18 +1,26 @@
 using System.Buffers;
+using System.Threading;
 using System.Runtime.InteropServices;
 
 namespace MiniArch.Core;
 
 public sealed class World
 {
+    private const int EmptyArchetypeChunkCapacity = 1024;
+    private const int EmptyArchetypeChunkCapacityThreshold = 128;
+    private const int StackAllocatedBatchRangeLimit = 128;
+
     private readonly ComponentRegistry _components = new();
     private readonly Dictionary<Signature, Archetype> _archetypes = new();
     private readonly List<int> _versions;
-    private readonly List<EntityInfo?> _locations;
-    private readonly Stack<int> _freeIds = new();
-    private readonly Dictionary<QueryFilter, Query> _queries = new();
+    private readonly List<EntityLocation> _locations;
+    private Dictionary<QueryFilter, Query> _queries = new();
+    private Archetype[] _archetypeSnapshot = Array.Empty<Archetype>();
     private readonly int _chunkCapacity;
+    private RecycledEntity[] _freeIds;
+    private int _freeIdCount;
     private int _archetypeGeneration;
+    private int _queryLayoutGeneration;
 
     public World(int chunkCapacity = 128, int entityCapacity = 64)
     {
@@ -28,7 +36,8 @@ public sealed class World
 
         _chunkCapacity = chunkCapacity;
         _versions = new List<int>(entityCapacity);
-        _locations = new List<EntityInfo?>(entityCapacity);
+        _locations = new List<EntityLocation>(entityCapacity);
+        _freeIds = entityCapacity == 0 ? Array.Empty<RecycledEntity>() : new RecycledEntity[entityCapacity];
     }
 
     public ComponentRegistry Components => _components;
@@ -41,9 +50,11 @@ public sealed class World
 
     internal ReadOnlySpan<int> EntityVersions => CollectionsMarshal.AsSpan(_versions);
 
-    internal Dictionary<Signature, Archetype>.ValueCollection Archetypes => _archetypes.Values;
+    internal Archetype[] Archetypes => Volatile.Read(ref _archetypeSnapshot);
 
     internal int ArchetypeGeneration => _archetypeGeneration;
+
+    internal int QueryLayoutGeneration => _queryLayoutGeneration;
 
     internal void ResetSnapshotState(int entitySlotCount)
     {
@@ -53,9 +64,11 @@ public sealed class World
         }
 
         _archetypes.Clear();
-        _queries.Clear();
-        _freeIds.Clear();
+        _archetypeSnapshot = Array.Empty<Archetype>();
+        _queries = new Dictionary<QueryFilter, Query>();
         _archetypeGeneration = 0;
+        _queryLayoutGeneration = 0;
+        _freeIdCount = 0;
 
         _versions.Clear();
         _locations.Clear();
@@ -64,6 +77,11 @@ public sealed class World
         CollectionsMarshal.SetCount(_locations, entitySlotCount);
         CollectionsMarshal.AsSpan(_versions).Clear();
         CollectionsMarshal.AsSpan(_locations).Clear();
+
+        if (_freeIds.Length < entitySlotCount)
+        {
+            Array.Resize(ref _freeIds, entitySlotCount);
+        }
     }
 
     internal void SetSnapshotEntityVersion(int entityId, int version)
@@ -75,30 +93,413 @@ public sealed class World
     internal void SetSnapshotLocation(Entity entity, Archetype archetype, int chunkIndex, int rowIndex)
     {
         ValidateSnapshotEntitySlot(entity.Id);
-        _locations[entity.Id] = new EntityInfo(entity.Version, archetype, chunkIndex, rowIndex);
+        _locations[entity.Id] = new EntityLocation(archetype, chunkIndex, rowIndex);
     }
 
     internal void RebuildFreeIdStack()
     {
-        _freeIds.Clear();
+        if (_freeIds.Length < _locations.Count)
+        {
+            Array.Resize(ref _freeIds, _locations.Count);
+        }
 
+        _freeIdCount = 0;
         for (var id = _locations.Count - 1; id >= 0; id--)
         {
-            if (_locations[id] is null)
+            if (_locations[id].Archetype is null)
             {
-                _freeIds.Push(id);
+                _freeIds[_freeIdCount++] = new RecycledEntity(id, _versions[id]);
             }
         }
     }
 
     public Entity Create()
     {
-        var id = AcquireEntityId();
-        var version = _versions[id];
-        var entity = new Entity(id, version);
         var archetype = GetOrCreateArchetype(Signature.Empty);
-        archetype.ReserveEntity(entity, out var chunkIndex, out var rowIndex);
-        _locations[id] = new EntityInfo(version, archetype, chunkIndex, rowIndex);
+        return CreateInArchetype(archetype, out _, out _);
+    }
+
+    public Entity Create<T1>(T1 component1)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        chunk.SetComponentAtTyped(archetype.GetComponentIndex(componentType1), rowIndex, in component1);
+        return entity;
+    }
+
+    public Entity Create<T1, T2>(T1 component1, T2 component2)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        chunk.SetComponentAtTyped(archetype.GetComponentIndex(componentType1), rowIndex, in component1);
+        chunk.SetComponentAtTyped(archetype.GetComponentIndex(componentType2), rowIndex, in component2);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3>(T1 component1, T2 component2, T3 component3)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4>(T1 component1, T2 component2, T3 component3, T4 component4)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5, T6>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var componentType6 = GetComponentType<T6>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5, T6, T7>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var componentType6 = GetComponentType<T6>();
+        var componentType7 = GetComponentType<T7>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var componentType6 = GetComponentType<T6>();
+        var componentType7 = GetComponentType<T7>();
+        var componentType8 = GetComponentType<T8>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var componentType6 = GetComponentType<T6>();
+        var componentType7 = GetComponentType<T7>();
+        var componentType8 = GetComponentType<T8>();
+        var componentType9 = GetComponentType<T9>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var componentType6 = GetComponentType<T6>();
+        var componentType7 = GetComponentType<T7>();
+        var componentType8 = GetComponentType<T8>();
+        var componentType9 = GetComponentType<T9>();
+        var componentType10 = GetComponentType<T10>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType10, in component10);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var componentType6 = GetComponentType<T6>();
+        var componentType7 = GetComponentType<T7>();
+        var componentType8 = GetComponentType<T8>();
+        var componentType9 = GetComponentType<T9>();
+        var componentType10 = GetComponentType<T10>();
+        var componentType11 = GetComponentType<T11>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType10, in component10);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType11, in component11);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var componentType6 = GetComponentType<T6>();
+        var componentType7 = GetComponentType<T7>();
+        var componentType8 = GetComponentType<T8>();
+        var componentType9 = GetComponentType<T9>();
+        var componentType10 = GetComponentType<T10>();
+        var componentType11 = GetComponentType<T11>();
+        var componentType12 = GetComponentType<T12>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType10, in component10);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType11, in component11);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType12, in component12);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var componentType6 = GetComponentType<T6>();
+        var componentType7 = GetComponentType<T7>();
+        var componentType8 = GetComponentType<T8>();
+        var componentType9 = GetComponentType<T9>();
+        var componentType10 = GetComponentType<T10>();
+        var componentType11 = GetComponentType<T11>();
+        var componentType12 = GetComponentType<T12>();
+        var componentType13 = GetComponentType<T13>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12, componentType13));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType10, in component10);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType11, in component11);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType12, in component12);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType13, in component13);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13, T14 component14)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var componentType6 = GetComponentType<T6>();
+        var componentType7 = GetComponentType<T7>();
+        var componentType8 = GetComponentType<T8>();
+        var componentType9 = GetComponentType<T9>();
+        var componentType10 = GetComponentType<T10>();
+        var componentType11 = GetComponentType<T11>();
+        var componentType12 = GetComponentType<T12>();
+        var componentType13 = GetComponentType<T13>();
+        var componentType14 = GetComponentType<T14>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12, componentType13, componentType14));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType10, in component10);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType11, in component11);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType12, in component12);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType13, in component13);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType14, in component14);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13, T14 component14, T15 component15)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var componentType6 = GetComponentType<T6>();
+        var componentType7 = GetComponentType<T7>();
+        var componentType8 = GetComponentType<T8>();
+        var componentType9 = GetComponentType<T9>();
+        var componentType10 = GetComponentType<T10>();
+        var componentType11 = GetComponentType<T11>();
+        var componentType12 = GetComponentType<T12>();
+        var componentType13 = GetComponentType<T13>();
+        var componentType14 = GetComponentType<T14>();
+        var componentType15 = GetComponentType<T15>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12, componentType13, componentType14, componentType15));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType10, in component10);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType11, in component11);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType12, in component12);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType13, in component13);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType14, in component14);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType15, in component15);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13, T14 component14, T15 component15, T16 component16)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var componentType6 = GetComponentType<T6>();
+        var componentType7 = GetComponentType<T7>();
+        var componentType8 = GetComponentType<T8>();
+        var componentType9 = GetComponentType<T9>();
+        var componentType10 = GetComponentType<T10>();
+        var componentType11 = GetComponentType<T11>();
+        var componentType12 = GetComponentType<T12>();
+        var componentType13 = GetComponentType<T13>();
+        var componentType14 = GetComponentType<T14>();
+        var componentType15 = GetComponentType<T15>();
+        var componentType16 = GetComponentType<T16>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12, componentType13, componentType14, componentType15, componentType16));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType10, in component10);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType11, in component11);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType12, in component12);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType13, in component13);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType14, in component14);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType15, in component15);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType16, in component16);
         return entity;
     }
 
@@ -109,22 +510,41 @@ public sealed class World
             return;
         }
 
-        FillCreatedEntities(entities);
+        if (_freeIdCount == 0)
+        {
+            CreateManyFresh(entities);
+            TouchQueryLayout();
+            return;
+        }
+
+        var reusedCount = Math.Min(entities.Length, _freeIdCount);
+        var startId = AppendEntitySlots(entities.Length - reusedCount);
 
         var archetype = GetOrCreateArchetype(Signature.Empty);
         var maxRangeCount = Math.Min(entities.Length, archetype.Chunks.Count + ((entities.Length + _chunkCapacity - 1) / _chunkCapacity));
-        var rentedRanges = ArrayPool<EntityBatchRange>.Shared.Rent(maxRangeCount);
 
+        if (maxRangeCount <= StackAllocatedBatchRangeLimit)
+        {
+            Span<EntityBatchRange> ranges = stackalloc EntityBatchRange[StackAllocatedBatchRangeLimit];
+            var rangeCount = archetype.ReserveEntityRanges(entities.Length, ranges);
+            WriteCreatedEntitiesAndLocations(archetype, entities, ranges[..rangeCount], reusedCount, startId);
+            TouchQueryLayout();
+            return;
+        }
+
+        var rentedRanges = ArrayPool<EntityBatchRange>.Shared.Rent(maxRangeCount);
         try
         {
             var ranges = rentedRanges.AsSpan(0, maxRangeCount);
-            var rangeCount = archetype.ReserveEntities(entities, ranges);
-            WriteBatchLocations(archetype, entities, ranges.Slice(0, rangeCount));
+            var rangeCount = archetype.ReserveEntityRanges(entities.Length, ranges);
+            WriteCreatedEntitiesAndLocations(archetype, entities, ranges[..rangeCount], reusedCount, startId);
         }
         finally
         {
             ArrayPool<EntityBatchRange>.Shared.Return(rentedRanges);
         }
+
+        TouchQueryLayout();
     }
 
     public void EnsureCapacity(int entityCapacity)
@@ -134,22 +554,31 @@ public sealed class World
             throw new ArgumentOutOfRangeException(nameof(entityCapacity));
         }
 
-        _versions.EnsureCapacity(entityCapacity);
-        _locations.EnsureCapacity(entityCapacity);
+        if (_versions.Capacity < entityCapacity)
+        {
+            _versions.Capacity = entityCapacity;
+        }
+
+        if (_locations.Capacity < entityCapacity)
+        {
+            _locations.Capacity = entityCapacity;
+        }
     }
 
     public void Destroy(Entity entity)
     {
         var info = GetRequiredLocation(entity);
         info.Archetype.RemoveEntity(info.ChunkIndex, info.RowIndex, out var movedEntity);
-        _locations[entity.Id] = null;
+        _locations[entity.Id] = default;
         _versions[entity.Id] = entity.Version + 1;
-        _freeIds.Push(entity.Id);
+        PushFreeId(entity.Id, entity.Version + 1);
 
         if (movedEntity.IsValid)
         {
-            _locations[movedEntity.Id] = info with { Version = movedEntity.Version };
+            _locations[movedEntity.Id] = info;
         }
+
+        TouchQueryLayout();
     }
 
     public void Add<T>(Entity entity, T component)
@@ -249,17 +678,17 @@ public sealed class World
         }
 
         var stored = _locations[entity.Id];
-        if (stored is null || stored.Value.Version != entity.Version)
+        if (stored.Archetype is null || _versions[entity.Id] != entity.Version)
         {
             info = default;
             return false;
         }
 
-        info = stored.Value;
+        info = new EntityInfo(entity.Version, stored.Archetype, stored.ChunkIndex, stored.RowIndex);
         return true;
     }
 
-    private void MoveEntity(Entity entity, EntityInfo sourceInfo, Archetype destination)
+    private void MoveEntity(Entity entity, EntityLocation sourceInfo, Archetype destination)
     {
         var sourceChunk = sourceInfo.Archetype.GetChunk(sourceInfo.ChunkIndex);
         var destinationChunk = destination.ReserveEntity(entity, out var destinationChunkIndex, out var destinationRowIndex);
@@ -269,13 +698,14 @@ public sealed class World
 
         if (movedEntity.IsValid)
         {
-            _locations[movedEntity.Id] = new EntityInfo(movedEntity.Version, sourceInfo.Archetype, sourceInfo.ChunkIndex, sourceInfo.RowIndex);
+            _locations[movedEntity.Id] = sourceInfo;
         }
 
-        _locations[entity.Id] = new EntityInfo(entity.Version, destination, destinationChunkIndex, destinationRowIndex);
+        _locations[entity.Id] = new EntityLocation(destination, destinationChunkIndex, destinationRowIndex);
+        TouchQueryLayout();
     }
 
-    private void MoveEntity<T>(Entity entity, EntityInfo sourceInfo, Archetype destination, ComponentType componentType, in T componentValue)
+    private void MoveEntity<T>(Entity entity, EntityLocation sourceInfo, Archetype destination, ComponentType componentType, in T componentValue)
     {
         var sourceChunk = sourceInfo.Archetype.GetChunk(sourceInfo.ChunkIndex);
         var destinationChunk = destination.ReserveEntity(entity, out var destinationChunkIndex, out var destinationRowIndex);
@@ -288,10 +718,11 @@ public sealed class World
 
         if (movedEntity.IsValid)
         {
-            _locations[movedEntity.Id] = new EntityInfo(movedEntity.Version, sourceInfo.Archetype, sourceInfo.ChunkIndex, sourceInfo.RowIndex);
+            _locations[movedEntity.Id] = sourceInfo;
         }
 
-        _locations[entity.Id] = new EntityInfo(entity.Version, destination, destinationChunkIndex, destinationRowIndex);
+        _locations[entity.Id] = new EntityLocation(destination, destinationChunkIndex, destinationRowIndex);
+        TouchQueryLayout();
     }
 
     private Archetype GetOrCreateDestinationArchetype(Archetype source, ComponentType componentType, Signature destinationSignature, bool isAdd)
@@ -318,10 +749,22 @@ public sealed class World
             return archetype;
         }
 
-        archetype = new Archetype(signature, ResolveComponentTypes(signature), _chunkCapacity);
+        var chunkCapacity = GetArchetypeChunkCapacity(signature);
+        archetype = new Archetype(signature, ResolveComponentTypes(signature), chunkCapacity);
         _archetypes.Add(signature, archetype);
+        PublishArchetypeSnapshot(archetype);
         _archetypeGeneration++;
         return archetype;
+    }
+
+    private int GetArchetypeChunkCapacity(Signature signature)
+    {
+        if (signature.Count == 0 && _chunkCapacity >= EmptyArchetypeChunkCapacityThreshold)
+        {
+            return Math.Max(_chunkCapacity, EmptyArchetypeChunkCapacity);
+        }
+
+        return _chunkCapacity;
     }
 
     private Type[] ResolveComponentTypes(Signature signature)
@@ -344,19 +787,52 @@ public sealed class World
 
     internal Query GetOrCreateQuery(QueryFilter filter)
     {
-        if (_queries.TryGetValue(filter, out var query))
+        while (true)
         {
-            return query;
-        }
+            var snapshot = Volatile.Read(ref _queries);
+            if (snapshot.TryGetValue(filter, out var query))
+            {
+                return query;
+            }
 
-        query = new Query(this, filter);
-        _queries.Add(filter, query);
-        return query;
+            var candidate = new Query(this, filter);
+            var updated = new Dictionary<QueryFilter, Query>(snapshot)
+            {
+                [filter] = candidate
+            };
+
+            if (ReferenceEquals(Interlocked.CompareExchange(ref _queries, updated, snapshot), snapshot))
+            {
+                return candidate;
+            }
+        }
     }
 
-    private EntityInfo GetRequiredLocation(Entity entity)
+    private void PublishArchetypeSnapshot(Archetype archetype)
     {
-        if (!TryGetLocation(entity, out var info))
+        while (true)
+        {
+            var snapshot = Volatile.Read(ref _archetypeSnapshot);
+            var updated = new Archetype[snapshot.Length + 1];
+            Array.Copy(snapshot, updated, snapshot.Length);
+            updated[^1] = archetype;
+
+            if (ReferenceEquals(Interlocked.CompareExchange(ref _archetypeSnapshot, updated, snapshot), snapshot))
+            {
+                return;
+            }
+        }
+    }
+
+    private EntityLocation GetRequiredLocation(Entity entity)
+    {
+        if (entity.Id < 0 || entity.Id >= _locations.Count)
+        {
+            throw new InvalidOperationException($"Entity {entity} is stale or unknown.");
+        }
+
+        var info = _locations[entity.Id];
+        if (info.Archetype is null || _versions[entity.Id] != entity.Version)
         {
             throw new InvalidOperationException($"Entity {entity} is stale or unknown.");
         }
@@ -364,57 +840,149 @@ public sealed class World
         return info;
     }
 
-    private void FillCreatedEntities(Span<Entity> entities)
+    private Entity CreateInArchetype(Archetype archetype, out Chunk chunk, out int rowIndex)
     {
-        var reusedCount = Math.Min(entities.Length, _freeIds.Count);
-        for (var index = 0; index < reusedCount; index++)
+        var id = AcquireEntityId(out var version);
+        var entity = new Entity(id, version);
+        chunk = archetype.ReserveEntity(entity, out var chunkIndex, out rowIndex);
+        _locations[id] = new EntityLocation(archetype, chunkIndex, rowIndex);
+        TouchQueryLayout();
+        return entity;
+    }
+
+    private static void SetCreatedComponent<T>(Archetype archetype, Chunk chunk, int rowIndex, ComponentType componentType, in T component)
+    {
+        chunk.SetComponentAtTyped(archetype.GetComponentIndex(componentType), rowIndex, in component);
+    }
+
+    private int AppendEntitySlots(int newEntityCount)
+    {
+        var startId = _versions.Count;
+        if (newEntityCount == 0)
         {
-            var id = _freeIds.Pop();
-            entities[index] = new Entity(id, _versions[id]);
+            return startId;
         }
 
-        var newEntityCount = entities.Length - reusedCount;
-        if (newEntityCount == 0)
+        var requiredCount = startId + newEntityCount;
+        EnsureBatchCapacity(requiredCount, newEntityCount);
+        CollectionsMarshal.SetCount(_versions, requiredCount);
+        CollectionsMarshal.SetCount(_locations, requiredCount);
+        return startId;
+    }
+
+    private void EnsureBatchCapacity(int requiredCount, int batchCount)
+    {
+        if (_versions.Capacity >= requiredCount && _locations.Capacity >= requiredCount)
         {
             return;
         }
 
-        var startId = _versions.Count;
-        var requiredCount = startId + newEntityCount;
-        EnsureCapacity(requiredCount);
-        CollectionsMarshal.SetCount(_versions, requiredCount);
-        CollectionsMarshal.SetCount(_locations, requiredCount);
-
-        for (var index = 0; index < newEntityCount; index++)
+        var targetCapacity = requiredCount + (batchCount / 2);
+        if (targetCapacity < requiredCount)
         {
-            entities[reusedCount + index] = new Entity(startId + index, 0);
+            targetCapacity = requiredCount;
+        }
+
+        EnsureCapacity(targetCapacity);
+    }
+
+    private void CreateManyFresh(Span<Entity> entities)
+    {
+        var startId = AppendEntitySlots(entities.Length);
+
+        var archetype = GetOrCreateArchetype(Signature.Empty);
+        var maxRangeCount = Math.Min(entities.Length, archetype.Chunks.Count + ((entities.Length + _chunkCapacity - 1) / _chunkCapacity));
+
+        if (maxRangeCount <= StackAllocatedBatchRangeLimit)
+        {
+            Span<EntityBatchRange> ranges = stackalloc EntityBatchRange[StackAllocatedBatchRangeLimit];
+            var rangeCount = archetype.ReserveEntityRanges(entities.Length, ranges);
+            WriteCreatedEntitiesAndLocations(archetype, entities, ranges[..rangeCount], 0, startId);
+            return;
+        }
+
+        var rentedRanges = ArrayPool<EntityBatchRange>.Shared.Rent(maxRangeCount);
+        try
+        {
+            var ranges = rentedRanges.AsSpan(0, maxRangeCount);
+            var rangeCount = archetype.ReserveEntityRanges(entities.Length, ranges);
+            WriteCreatedEntitiesAndLocations(archetype, entities, ranges[..rangeCount], 0, startId);
+        }
+        finally
+        {
+            ArrayPool<EntityBatchRange>.Shared.Return(rentedRanges);
         }
     }
 
-    private void WriteBatchLocations(Archetype archetype, ReadOnlySpan<Entity> entities, ReadOnlySpan<EntityBatchRange> ranges)
+    private void WriteCreatedEntitiesAndLocations(Archetype archetype, Span<Entity> entities, ReadOnlySpan<EntityBatchRange> ranges, int reusedCount, int startId)
     {
+        var locations = CollectionsMarshal.AsSpan(_locations);
+        var freeIds = _freeIds;
+        var freeIndex = _freeIdCount;
         var entityIndex = 0;
+        var nextId = startId;
+
         foreach (var range in ranges)
         {
-            for (var rowOffset = 0; rowOffset < range.Count; rowOffset++)
+            var chunkEntities = archetype.GetChunk(range.ChunkIndex).GetReservedEntities(range.StartRow, range.Count);
+            var rowOffset = 0;
+
+            for (; rowOffset < range.Count && entityIndex < reusedCount; rowOffset++)
             {
-                var entity = entities[entityIndex++];
-                _locations[entity.Id] = new EntityInfo(entity.Version, archetype, range.ChunkIndex, range.StartRow + rowOffset);
+                var recycled = freeIds[--freeIndex];
+                var entity = new Entity(recycled.Id, recycled.Version);
+                entities[entityIndex++] = entity;
+                chunkEntities[rowOffset] = entity;
+                locations[entity.Id] = new EntityLocation(archetype, range.ChunkIndex, range.StartRow + rowOffset);
+            }
+
+            for (; rowOffset < range.Count; rowOffset++)
+            {
+                var entity = new Entity(nextId++, 0);
+                entities[entityIndex++] = entity;
+                chunkEntities[rowOffset] = entity;
+                locations[entity.Id] = new EntityLocation(archetype, range.ChunkIndex, range.StartRow + rowOffset);
             }
         }
+
+        _freeIdCount = freeIndex;
     }
 
-    private int AcquireEntityId()
+    private int AcquireEntityId(out int version)
     {
-        if (_freeIds.Count > 0)
+        if (_freeIdCount > 0)
         {
-            return _freeIds.Pop();
+            var recycled = PopFreeId();
+            version = recycled.Version;
+            return recycled.Id;
         }
 
         var id = _versions.Count;
         _versions.Add(0);
-        _locations.Add(null);
+        _locations.Add(default);
+        version = 0;
         return id;
+    }
+
+    private void PushFreeId(int id, int version)
+    {
+        if (_freeIdCount == _freeIds.Length)
+        {
+            var newCapacity = _freeIds.Length == 0 ? 4 : _freeIds.Length * 2;
+            Array.Resize(ref _freeIds, newCapacity);
+        }
+
+        _freeIds[_freeIdCount++] = new RecycledEntity(id, version);
+    }
+
+    private RecycledEntity PopFreeId()
+    {
+        return _freeIds[--_freeIdCount];
+    }
+
+    private void TouchQueryLayout()
+    {
+        _queryLayoutGeneration++;
     }
 
     private ComponentType GetComponentType<T>()
@@ -441,4 +1009,6 @@ public sealed class World
         public static ComponentRegistry? Registry;
         public static ComponentType ComponentType;
     }
+
+    private readonly record struct RecycledEntity(int Id, int Version);
 }

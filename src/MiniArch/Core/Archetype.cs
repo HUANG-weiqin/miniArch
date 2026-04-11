@@ -90,20 +90,25 @@ public sealed class Archetype
             chunkIndex = _chunks.Count - 1;
         }
 
-        chunk.Add(entities);
+        var startRow = chunk.ReserveRows(entities.Length);
+        entities.CopyTo(chunk.GetReservedEntities(startRow, entities.Length));
         EntityCount += entities.Length;
         return chunk;
     }
 
-    internal int ReserveEntities(ReadOnlySpan<Entity> entities, Span<EntityBatchRange> ranges)
+    internal int ReserveEntityRanges(int entityCount, Span<EntityBatchRange> ranges)
     {
-        var remaining = entities.Length;
-        if (remaining == 0)
+        if (entityCount < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(entityCount));
+        }
+
+        if (entityCount == 0)
         {
             return 0;
         }
 
-        var entityOffset = 0;
+        var remaining = entityCount;
         var rangeCount = 0;
 
         for (var chunkIndex = _chunks.Count - 1; chunkIndex >= 0 && remaining > 0; chunkIndex--)
@@ -116,9 +121,8 @@ public sealed class Archetype
             }
 
             var fillCount = Math.Min(available, remaining);
-            var startRow = chunk.Add(entities.Slice(entityOffset, fillCount));
+            var startRow = chunk.ReserveRows(fillCount);
             ranges[rangeCount++] = new EntityBatchRange(chunkIndex, startRow, fillCount);
-            entityOffset += fillCount;
             remaining -= fillCount;
         }
 
@@ -128,13 +132,12 @@ public sealed class Archetype
             _chunks.Add(chunk);
 
             var fillCount = Math.Min(chunk.Capacity, remaining);
-            chunk.Add(entities.Slice(entityOffset, fillCount));
+            chunk.ReserveRows(fillCount);
             ranges[rangeCount++] = new EntityBatchRange(_chunks.Count - 1, 0, fillCount);
-            entityOffset += fillCount;
             remaining -= fillCount;
         }
 
-        EntityCount += entities.Length;
+        EntityCount += entityCount;
         return rangeCount;
     }
 

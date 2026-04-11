@@ -34,6 +34,18 @@ public struct Health
     public int Value;
 }
 
+public struct Acceleration
+{
+    public Acceleration(int x, int y)
+    {
+        X = x;
+        Y = y;
+    }
+
+    public int X;
+    public int Y;
+}
+
 public struct Mana
 {
     public Mana(int value)
@@ -54,16 +66,24 @@ public struct Armor
     public int Value;
 }
 
-public struct Damage
+public struct Mass
 {
-    public Damage(int min, int max)
+    public Mass(int value)
     {
-        Min = min;
-        Max = max;
+        Value = value;
     }
 
-    public int Min;
-    public int Max;
+    public int Value;
+}
+
+public struct Rotation
+{
+    public Rotation(int value)
+    {
+        Value = value;
+    }
+
+    public int Value;
 }
 
 public struct Team
@@ -74,6 +94,28 @@ public struct Team
     }
 
     public int Value;
+}
+
+public struct Shield
+{
+    public Shield(int value)
+    {
+        Value = value;
+    }
+
+    public int Value;
+}
+
+public struct DamageRange
+{
+    public DamageRange(int min, int max)
+    {
+        Min = min;
+        Max = max;
+    }
+
+    public int Min;
+    public int Max;
 }
 
 public struct Cooldown
@@ -104,4 +146,44 @@ public struct Target
     }
 
     public int EntityId;
+}
+
+public struct Damage
+{
+    public Damage(int value)
+    {
+        Value = value;
+    }
+
+    public int Value;
+}
+
+public struct ExcludedTag
+{
+    public ExcludedTag(int value)
+    {
+        Value = value;
+    }
+
+    public int Value;
+}
+
+public struct AnyTagA
+{
+    public AnyTagA(int value)
+    {
+        Value = value;
+    }
+
+    public int Value;
+}
+
+public struct AnyTagB
+{
+    public AnyTagB(int value)
+    {
+        Value = value;
+    }
+
+    public int Value;
 }
