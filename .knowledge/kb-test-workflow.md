@@ -15,6 +15,7 @@ updated: 2026-04-11
   - 提供 `Create / CreateMany / Add / Set / Remove / Destroy` 的 benchmark 口径
   - 为 `CreateMany` 单独区分 append-only、recycled ids、mixed ids 三类场景
   - 单独保留 query 相关的性能对比口径
+  - 用复杂 archetype 分布覆盖 query filter + traversal 的热路径
   - 为 future agent 提供回归判断
 - 这个模块不负责：
   - 业务特性设计
@@ -33,12 +34,14 @@ updated: 2026-04-11
   - `QueryFilterTests.cs`
   - `IntegrationTests.cs`
   - `StructuralChangeBenchmarks.cs`
+  - `QueryBenchmarks.cs`
 - 数据流 / 控制流：
   - 单元测试先锁定局部行为
   - 集成测试再验证迁移链路
   - mixed structural-change benchmark 用固定种子生成同一批 `Create / Add / Set / Remove / Destroy` 操作脚本
   - benchmark 只比较同构输入下的 Arch / MiniArch 热路径，不承担正确性证明
   - setup、world 构建和脚本生成都放在测量区外
+  - complex query benchmark 用固定 archetype 配比生成同一类 world 布局，并在测量区内执行 query + 命中 entity 遍历
   - `scripts\verify.ps1` 统一跑 build + test
 - 和其他模块的交互方式：
   - 直接依赖 `MiniArch.Core`
@@ -59,6 +62,9 @@ updated: 2026-04-11
 - mixed structural-change benchmark 默认使用 `20/20/20/20/20` 的均衡分布，并用固定种子生成同一条随机脚本。
 - `CreateMany` benchmark 不能只测 fresh append-only；必须把 recycled ids 和 mixed ids 分开跑，否则无法判断优化是否只对 `_freeIds.Count == 0` 的快路径有效。
 - benchmark 必须同时看时间和分配，不能只看平均耗时。
+- `QueryTests` 需要覆盖“热缓存后的同一 query 并发枚举”和“冷缓存首次并发 materialize”两类只读场景；否则 query 的 copy-on-write 发布容易退回共享可变缓存。
+- complex query benchmark 不能只测 query builder 创建；必须测实际 query 执行。
+- complex query benchmark 的命中组件要放在最终 archetype 的后半段构建，避免 `MiniArch` 的迁移中间态空 archetype 混入结果。
 
 ## 认知模型
 
@@ -77,6 +83,7 @@ updated: 2026-04-11
   - `IntegrationTests.cs`：最完整的端到端例子
   - `WorldStructuralChangeTests.cs`：结构迁移的关键行为
   - `StructuralChangeBenchmarks.cs`：`Create / CreateMany / Add / Set / Remove / Destroy` 与 Arch 的时间和分配对照
+  - `QueryBenchmarks.cs`：复杂 query 场景下的 Arch / MiniArch 执行对照
 - 如果是修 bug，先看：
   - 对应功能的测试文件
   - `scripts\test.ps1`
@@ -88,6 +95,7 @@ updated: 2026-04-11
   - `ArchetypeTests.cs`：chunk 复用和可写 chunk 选择策略
   - `WorldStructuralChangeTests.cs`：`Set` / `Add` / `Remove` 的结构变化边界
   - `StructuralChangeBenchmarks.cs`：性能回归口径
+  - `ComplexQueryBenchmarkScenarioTests.cs`：benchmark world shape、命中比例和 `>= 8 component` 契约
 
 ## 坑点
 
@@ -101,14 +109,19 @@ updated: 2026-04-11
   - `CreateMany` 只看分配下降，却没确认是否还在逐实体落位，导致 bulk time 仍明显慢于 Arch
   - `CreateMany` 只测 append-only，误把 fresh-path 成绩当成所有 free-list 场景的结论
   - 混合 benchmark 没有固定种子，导致 MiniArch 和 Arch 的输入不一致
+  - query 并发测试只覆盖“缓存已热”的读取，而没压到“第一次并发建 query / 刷新快照”的冷路径
+  - query benchmark 只测 builder 创建，误把 API 组装成本当成 query 热路径
+  - query benchmark 在 MiniArch 里把命中组件加得太早，导致中间态空 archetype 也被扫进结果
 - 容易误判的地方：
   - 认为 query 结果对了，chunk 顺序就一定对了
   - 认为 entity 还活着，version 也一定没错
+  - 以为 `dotnet test --filter` 能绕过测试工程里的编译错误；实际上测试项目先能编译，filter 才有意义
 - 改这里时要特别小心：
   - 测试名要稳定，方便 agent 用 `--filter` 定位
   - 集成测试不要过度依赖实现细节
   - `Set` 相关测试要先确认核心是否已经切到 typed-column / direct-index；如果没有，先保留适配点，不要伪造新行为
   - benchmark 输出要和 Arch 在相同 entity 布局、相同操作脚本下对齐，否则对比没有意义
+  - 当前仓库里如果 benchmark 场景测试本身编译失败，必须先把它和本次功能验证分开说明，不要把 query 回归结果和现有编译阻塞混为一谈
 
 ## 关联模块
 
@@ -116,3 +129,4 @@ updated: 2026-04-11
 - `kb-repo-overview.md`：如何启动验证流程
 - `scripts/test.ps1`：测试入口
 - `benchmarks/MiniArch.Benchmarks/StructuralChangeBenchmarks.cs`：分项 structural-change benchmark 与 mixed structural-change benchmark
+- `benchmarks/MiniArch.Benchmarks/QueryBenchmarks.cs`：复杂 query benchmark

@@ -33,3 +33,105 @@ public struct Health
 
     public int Value;
 }
+
+public struct Acceleration
+{
+    public Acceleration(int x, int y)
+    {
+        X = x;
+        Y = y;
+    }
+
+    public int X;
+    public int Y;
+}
+
+public struct Mana
+{
+    public Mana(int value)
+    {
+        Value = value;
+    }
+
+    public int Value;
+}
+
+public struct Mass
+{
+    public Mass(int value)
+    {
+        Value = value;
+    }
+
+    public int Value;
+}
+
+public struct Rotation
+{
+    public Rotation(int value)
+    {
+        Value = value;
+    }
+
+    public int Value;
+}
+
+public struct Team
+{
+    public Team(int value)
+    {
+        Value = value;
+    }
+
+    public int Value;
+}
+
+public struct Shield
+{
+    public Shield(int value)
+    {
+        Value = value;
+    }
+
+    public int Value;
+}
+
+public struct Damage
+{
+    public Damage(int value)
+    {
+        Value = value;
+    }
+
+    public int Value;
+}
+
+public struct ExcludedTag
+{
+    public ExcludedTag(int value)
+    {
+        Value = value;
+    }
+
+    public int Value;
+}
+
+public struct AnyTagA
+{
+    public AnyTagA(int value)
+    {
+        Value = value;
+    }
+
+    public int Value;
+}
+
+public struct AnyTagB
+{
+    public AnyTagB(int value)
+    {
+        Value = value;
+    }
+
+    public int Value;
+}
