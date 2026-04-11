@@ -80,9 +80,360 @@ public sealed class World
         var componentType3 = GetComponentType<T3>();
         var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3));
         var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
-        chunk.SetComponentAtTyped(archetype.GetComponentIndex(componentType1), rowIndex, in component1);
-        chunk.SetComponentAtTyped(archetype.GetComponentIndex(componentType2), rowIndex, in component2);
-        chunk.SetComponentAtTyped(archetype.GetComponentIndex(componentType3), rowIndex, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4>(T1 component1, T2 component2, T3 component3, T4 component4)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5, T6>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var componentType6 = GetComponentType<T6>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5, T6, T7>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var componentType6 = GetComponentType<T6>();
+        var componentType7 = GetComponentType<T7>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var componentType6 = GetComponentType<T6>();
+        var componentType7 = GetComponentType<T7>();
+        var componentType8 = GetComponentType<T8>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var componentType6 = GetComponentType<T6>();
+        var componentType7 = GetComponentType<T7>();
+        var componentType8 = GetComponentType<T8>();
+        var componentType9 = GetComponentType<T9>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var componentType6 = GetComponentType<T6>();
+        var componentType7 = GetComponentType<T7>();
+        var componentType8 = GetComponentType<T8>();
+        var componentType9 = GetComponentType<T9>();
+        var componentType10 = GetComponentType<T10>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType10, in component10);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var componentType6 = GetComponentType<T6>();
+        var componentType7 = GetComponentType<T7>();
+        var componentType8 = GetComponentType<T8>();
+        var componentType9 = GetComponentType<T9>();
+        var componentType10 = GetComponentType<T10>();
+        var componentType11 = GetComponentType<T11>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType10, in component10);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType11, in component11);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var componentType6 = GetComponentType<T6>();
+        var componentType7 = GetComponentType<T7>();
+        var componentType8 = GetComponentType<T8>();
+        var componentType9 = GetComponentType<T9>();
+        var componentType10 = GetComponentType<T10>();
+        var componentType11 = GetComponentType<T11>();
+        var componentType12 = GetComponentType<T12>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType10, in component10);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType11, in component11);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType12, in component12);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var componentType6 = GetComponentType<T6>();
+        var componentType7 = GetComponentType<T7>();
+        var componentType8 = GetComponentType<T8>();
+        var componentType9 = GetComponentType<T9>();
+        var componentType10 = GetComponentType<T10>();
+        var componentType11 = GetComponentType<T11>();
+        var componentType12 = GetComponentType<T12>();
+        var componentType13 = GetComponentType<T13>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12, componentType13));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType10, in component10);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType11, in component11);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType12, in component12);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType13, in component13);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13, T14 component14)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var componentType6 = GetComponentType<T6>();
+        var componentType7 = GetComponentType<T7>();
+        var componentType8 = GetComponentType<T8>();
+        var componentType9 = GetComponentType<T9>();
+        var componentType10 = GetComponentType<T10>();
+        var componentType11 = GetComponentType<T11>();
+        var componentType12 = GetComponentType<T12>();
+        var componentType13 = GetComponentType<T13>();
+        var componentType14 = GetComponentType<T14>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12, componentType13, componentType14));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType10, in component10);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType11, in component11);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType12, in component12);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType13, in component13);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType14, in component14);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13, T14 component14, T15 component15)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var componentType6 = GetComponentType<T6>();
+        var componentType7 = GetComponentType<T7>();
+        var componentType8 = GetComponentType<T8>();
+        var componentType9 = GetComponentType<T9>();
+        var componentType10 = GetComponentType<T10>();
+        var componentType11 = GetComponentType<T11>();
+        var componentType12 = GetComponentType<T12>();
+        var componentType13 = GetComponentType<T13>();
+        var componentType14 = GetComponentType<T14>();
+        var componentType15 = GetComponentType<T15>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12, componentType13, componentType14, componentType15));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType10, in component10);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType11, in component11);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType12, in component12);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType13, in component13);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType14, in component14);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType15, in component15);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13, T14 component14, T15 component15, T16 component16)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var componentType4 = GetComponentType<T4>();
+        var componentType5 = GetComponentType<T5>();
+        var componentType6 = GetComponentType<T6>();
+        var componentType7 = GetComponentType<T7>();
+        var componentType8 = GetComponentType<T8>();
+        var componentType9 = GetComponentType<T9>();
+        var componentType10 = GetComponentType<T10>();
+        var componentType11 = GetComponentType<T11>();
+        var componentType12 = GetComponentType<T12>();
+        var componentType13 = GetComponentType<T13>();
+        var componentType14 = GetComponentType<T14>();
+        var componentType15 = GetComponentType<T15>();
+        var componentType16 = GetComponentType<T16>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12, componentType13, componentType14, componentType15, componentType16));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType10, in component10);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType11, in component11);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType12, in component12);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType13, in component13);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType14, in component14);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType15, in component15);
+        SetCreatedComponent(archetype, chunk, rowIndex, componentType16, in component16);
         return entity;
     }
 
@@ -422,6 +773,11 @@ public sealed class World
         chunk = archetype.ReserveEntity(entity, out var chunkIndex, out rowIndex);
         _locations[id] = new EntityLocation(archetype, chunkIndex, rowIndex);
         return entity;
+    }
+
+    private static void SetCreatedComponent<T>(Archetype archetype, Chunk chunk, int rowIndex, ComponentType componentType, in T component)
+    {
+        chunk.SetComponentAtTyped(archetype.GetComponentIndex(componentType), rowIndex, in component);
     }
 
     private int AppendEntitySlots(int newEntityCount)

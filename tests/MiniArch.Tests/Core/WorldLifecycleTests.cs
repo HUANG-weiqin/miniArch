@@ -6,6 +6,22 @@ public sealed class WorldLifecycleTests
 {
     private readonly record struct Position(int X, int Y);
     private readonly record struct Velocity(int X, int Y);
+    private readonly record struct C1(int Value);
+    private readonly record struct C2(int Value);
+    private readonly record struct C3(int Value);
+    private readonly record struct C4(int Value);
+    private readonly record struct C5(int Value);
+    private readonly record struct C6(int Value);
+    private readonly record struct C7(int Value);
+    private readonly record struct C8(int Value);
+    private readonly record struct C9(int Value);
+    private readonly record struct C10(int Value);
+    private readonly record struct C11(int Value);
+    private readonly record struct C12(int Value);
+    private readonly record struct C13(int Value);
+    private readonly record struct C14(int Value);
+    private readonly record struct C15(int Value);
+    private readonly record struct C16(int Value);
 
     [Fact]
     public void Create_returns_a_valid_entity()
@@ -80,6 +96,30 @@ public sealed class WorldLifecycleTests
 
         var positionQuery = world.Query<Position>();
         var matchedArchetypes = positionQuery.MatchedArchetypes;
+        Assert.Single(matchedArchetypes);
+        Assert.Same(info.Archetype, matchedArchetypes[0]);
+    }
+
+    [Fact]
+    public void Create_supports_up_to_sixteen_components_without_intermediate_archetypes()
+    {
+        var world = new World();
+        var entity = world.Create(
+            new C1(1), new C2(2), new C3(3), new C4(4),
+            new C5(5), new C6(6), new C7(7), new C8(8),
+            new C9(9), new C10(10), new C11(11), new C12(12),
+            new C13(13), new C14(14), new C15(15), new C16(16));
+        var c1 = world.Components.GetOrCreate<C1>();
+        var c16 = world.Components.GetOrCreate<C16>();
+
+        Assert.True(world.TryGetLocation(entity, out var info));
+        Assert.Equal(16, info.Archetype.Signature.Count);
+
+        var chunk = info.Archetype.GetChunk(info.ChunkIndex);
+        Assert.Equal(new C1(1), chunk.GetComponent<C1>(c1, info.RowIndex));
+        Assert.Equal(new C16(16), chunk.GetComponent<C16>(c16, info.RowIndex));
+
+        var matchedArchetypes = world.Query<C1>().MatchedArchetypes;
         Assert.Single(matchedArchetypes);
         Assert.Same(info.Archetype, matchedArchetypes[0]);
     }
