@@ -1,7 +1,7 @@
 ---
 title: Test Workflow
 module: MiniArch.Tests
-description: How the test suite and structural-change benchmarks are organized and how to run them
+description: How the test suite and mixed structural-change benchmarks are organized and how to run them
 updated: 2026-04-11
 ---
 # Test Workflow
@@ -12,7 +12,8 @@ updated: 2026-04-11
   - 验证 ECS core 的行为
   - 覆盖实体生命周期、chunk 存储、结构迁移和 query
   - 作为 typed-column / direct-index 重构后的行为回归网
-  - 提供 `Create / Add / Set / Remove / Destroy / Query` 的对比 benchmark 口径
+  - 提供 `Create / Add / Set / Remove / Destroy` 的混合 structural-change benchmark 口径
+  - 单独保留 query 相关的性能对比口径
   - 为 future agent 提供回归判断
 - 这个模块不负责：
   - 业务特性设计
@@ -34,7 +35,9 @@ updated: 2026-04-11
 - 数据流 / 控制流：
   - 单元测试先锁定局部行为
   - 集成测试再验证迁移链路
+  - mixed structural-change benchmark 用固定种子生成同一批 `Create / Add / Set / Remove / Destroy` 操作脚本
   - benchmark 只比较同构输入下的 Arch / MiniArch 热路径，不承担正确性证明
+  - setup、world 构建和脚本生成都放在测量区外
   - `scripts\verify.ps1` 统一跑 build + test
 - 和其他模块的交互方式：
   - 直接依赖 `MiniArch.Core`
@@ -48,6 +51,7 @@ updated: 2026-04-11
 - 验证脚本和测试项目分离，方便 agent 在需要时只跑局部测试。
 - 结构变化相关测试必须保留 `Set` 的 in-place 语义断言，因为这是 typed-column / direct-index 重构的核心安全网。
 - `ArchetypeTests` 需要覆盖“复用前面空掉的 chunk”这一行为；否则 `Remove` benchmark 的分配回退很难在功能测试里暴露出来。
+- mixed structural-change benchmark 默认使用 `20/20/20/20/20` 的均衡分布，并用固定种子生成同一条随机脚本。
 - benchmark 必须同时看时间和分配，不能只看平均耗时。
 
 ## 认知模型
@@ -66,7 +70,7 @@ updated: 2026-04-11
 - 如果是第一次读这个模块，先看：
   - `IntegrationTests.cs`：最完整的端到端例子
   - `WorldStructuralChangeTests.cs`：结构迁移的关键行为
-  - `StructuralChangeBenchmarks.cs`：`Create / Add / Set / Remove / Destroy` 与 Arch 的对照口径
+  - `StructuralChangeBenchmarks.cs`：`Create / Add / Set / Remove / Destroy` 的混合 benchmark，与 Arch 做时间和分配对照
 - 如果是修 bug，先看：
   - 对应功能的测试文件
   - `scripts\test.ps1`
@@ -85,6 +89,7 @@ updated: 2026-04-11
   - 断言太宽泛，漏掉 chunk 级行为
   - 只看运行时，不看分配和 GC
   - `Remove` 只看时间变快，却没发现 archetype 没复用已有空 chunk，导致分配被隐藏放大
+  - 混合 benchmark 没有固定种子，导致 MiniArch 和 Arch 的输入不一致
 - 容易误判的地方：
   - 认为 query 结果对了，chunk 顺序就一定对了
   - 认为 entity 还活着，version 也一定没错
@@ -92,11 +97,11 @@ updated: 2026-04-11
   - 测试名要稳定，方便 agent 用 `--filter` 定位
   - 集成测试不要过度依赖实现细节
   - `Set` 相关测试要先确认核心是否已经切到 typed-column / direct-index；如果没有，先保留适配点，不要伪造新行为
-  - benchmark 输出要和 Arch 在相同 entity 布局下对齐，否则对比没有意义
+  - benchmark 输出要和 Arch 在相同 entity 布局、相同操作脚本下对齐，否则对比没有意义
 
 ## 关联模块
 
 - `kb-core-ecs.md`：被测试的运行时模块
 - `kb-repo-overview.md`：如何启动验证流程
 - `scripts/test.ps1`：测试入口
-- `benchmarks/MiniArch.Benchmarks/StructuralChangeBenchmarks.cs`：结构变化 benchmark
+- `benchmarks/MiniArch.Benchmarks/StructuralChangeBenchmarks.cs`：混合 structural-change benchmark
