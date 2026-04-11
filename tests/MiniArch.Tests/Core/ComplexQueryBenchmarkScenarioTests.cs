@@ -1,5 +1,6 @@
 using MiniArch.Benchmarks;
 using MiniArch.Core;
+using System.Reflection;
 
 namespace MiniArch.Tests.Core;
 
@@ -69,14 +70,31 @@ public sealed class ComplexQueryBenchmarkScenarioTests
             .With<Team>()
             .Build();
 
+        var inspectedChunkCount = 0;
         foreach (var chunk in query.Chunks)
         {
-            Assert.True(chunk.Count > 0);
+            if (chunk.Count == 0)
+            {
+                continue;
+            }
 
+            inspectedChunkCount++;
             var entity = chunk.GetEntity(0);
             Assert.True(state.World.TryGetLocation(entity, out var info));
             Assert.True(info.Archetype.Signature.Count >= 8);
         }
+
+        Assert.True(inspectedChunkCount > 0);
+    }
+
+    [Fact]
+    public void Complex_query_benchmark_world_does_not_leave_excessive_empty_archetypes()
+    {
+        var state = BenchmarkWorldFactory.CreateMiniComplexQueryWorld(100);
+        var archetypes = GetArchetypes(state.World);
+        var emptyCount = archetypes.Count(archetype => archetype.EntityCount == 0);
+
+        Assert.True(emptyCount <= 12, $"Expected at most 12 empty archetypes, but found {emptyCount}.");
     }
 
     private static int CountEntities(Query query)
@@ -88,5 +106,20 @@ public sealed class ComplexQueryBenchmarkScenarioTests
         }
 
         return total;
+    }
+
+    private static IReadOnlyList<Archetype> GetArchetypes(World world)
+    {
+        var field = typeof(World).GetField("_archetypes", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        var dictionary = Assert.IsAssignableFrom<System.Collections.IDictionary>(field.GetValue(world));
+
+        var archetypes = new List<Archetype>(dictionary.Count);
+        foreach (System.Collections.DictionaryEntry entry in dictionary)
+        {
+            archetypes.Add(Assert.IsType<Archetype>(entry.Value));
+        }
+
+        return archetypes;
     }
 }

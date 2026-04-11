@@ -1,14 +1,16 @@
+using System.Threading;
+
 namespace MiniArch.Core;
 
 public sealed class Query
 {
     private readonly World _world;
     private readonly QueryFilter _filter;
-    private readonly List<Archetype> _matchingArchetypes = new();
+    private MatchingArchetypeSnapshot _matchingArchetypes = MatchingArchetypeSnapshot.Empty;
     private Signature? _requiredSignature;
     private Signature? _excludedSignature;
     private Signature? _anySignature;
-    private int _cachedWorldGeneration = -1;
+    private int _refreshCount;
 
     internal Query(World world, QueryFilter filter)
     {
@@ -60,43 +62,77 @@ public sealed class Query
 
     public Query Or<T>() => Any<T>();
 
-    public int RefreshCount { get; private set; }
+    public int RefreshCount => Volatile.Read(ref _refreshCount);
 
     public IReadOnlyList<Archetype> MatchedArchetypes
     {
         get
         {
             RefreshIfNeeded();
-            return _matchingArchetypes;
+            return Volatile.Read(ref _matchingArchetypes).Archetypes;
         }
     }
 
     public ChunkEnumerable Chunks => new(this);
 
-    internal IReadOnlyList<Archetype> EnsureMatchingArchetypes()
+    internal Archetype[] EnsureMatchingArchetypes()
     {
         RefreshIfNeeded();
-        return _matchingArchetypes;
+        return Volatile.Read(ref _matchingArchetypes).Archetypes;
     }
 
     private void RefreshIfNeeded()
     {
-        if (_cachedWorldGeneration == _world.ArchetypeGeneration)
+        var worldGeneration = _world.ArchetypeGeneration;
+        while (true)
         {
-            return;
+            var snapshot = Volatile.Read(ref _matchingArchetypes);
+            if (snapshot.WorldGeneration == worldGeneration)
+            {
+                return;
+            }
+
+            var matchingArchetypes = BuildMatchingArchetypes();
+            var refreshed = new MatchingArchetypeSnapshot(worldGeneration, matchingArchetypes);
+            if (ReferenceEquals(Interlocked.CompareExchange(ref _matchingArchetypes, refreshed, snapshot), snapshot))
+            {
+                Interlocked.Increment(ref _refreshCount);
+                return;
+            }
+        }
+    }
+
+    private Archetype[] BuildMatchingArchetypes()
+    {
+        var archetypes = _world.Archetypes;
+        if (archetypes.Length == 0)
+        {
+            return Array.Empty<Archetype>();
         }
 
-        _matchingArchetypes.Clear();
-        foreach (var archetype in _world.Archetypes)
+        var matchingArchetypes = new Archetype[archetypes.Length];
+        var count = 0;
+        foreach (var archetype in archetypes)
         {
             if (Matches(archetype))
             {
-                _matchingArchetypes.Add(archetype);
+                matchingArchetypes[count++] = archetype;
             }
         }
 
-        _cachedWorldGeneration = _world.ArchetypeGeneration;
-        RefreshCount++;
+        if (count == 0)
+        {
+            return Array.Empty<Archetype>();
+        }
+
+        if (count == matchingArchetypes.Length)
+        {
+            return matchingArchetypes;
+        }
+
+        var trimmed = new Archetype[count];
+        Array.Copy(matchingArchetypes, trimmed, count);
+        return trimmed;
     }
 
     private bool Matches(Archetype archetype)
@@ -134,5 +170,20 @@ public sealed class Query
         }
 
         return false;
+    }
+
+    private sealed class MatchingArchetypeSnapshot
+    {
+        public static MatchingArchetypeSnapshot Empty { get; } = new(-1, Array.Empty<Archetype>());
+
+        public MatchingArchetypeSnapshot(int worldGeneration, Archetype[] archetypes)
+        {
+            WorldGeneration = worldGeneration;
+            Archetypes = archetypes;
+        }
+
+        public int WorldGeneration { get; }
+
+        public Archetype[] Archetypes { get; }
     }
 }

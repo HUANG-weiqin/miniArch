@@ -166,9 +166,9 @@ public static class BenchmarkWorldFactory
         {
             for (var i = 0; i < archetypeCounts[group]; i++)
             {
-                var entity = world.Create();
+                var entity = CreateMiniComplexEntity(world, group, entityIndex);
                 entities[entityIndex] = entity;
-                AddMiniComplexEntity(world, entity, group, entityIndex++);
+                entityIndex++;
             }
         }
 
@@ -185,9 +185,9 @@ public static class BenchmarkWorldFactory
         {
             for (var i = 0; i < archetypeCounts[group]; i++)
             {
-                var entity = world.Create();
+                var entity = CreateArchComplexEntity(world, group, entityIndex);
                 entities[entityIndex] = entity;
-                AddArchComplexEntity(world, entity, group, entityIndex++);
+                entityIndex++;
             }
         }
 
@@ -210,8 +210,18 @@ public static class BenchmarkWorldFactory
         return counts;
     }
 
-    private static void AddMiniComplexEntity(MiniWorld world, MiniEntity entity, int group, int entityIndex)
+    private static MiniEntity CreateMiniComplexEntity(MiniWorld world, int group, int entityIndex)
     {
+        var entity = world.Create(
+            new Position(entityIndex, entityIndex + 1),
+            new Velocity(entityIndex + 2, entityIndex + 3),
+            new Team(entityIndex % 4));
+
+        if (group != 4)
+        {
+            world.Add(entity, new Health(100 + (entityIndex % 50)));
+        }
+
         AddMiniSharedPrefix(world, entity, entityIndex);
 
         switch (group)
@@ -237,12 +247,23 @@ public static class BenchmarkWorldFactory
             default:
                 throw new ArgumentOutOfRangeException(nameof(group));
         }
-
-        AddMiniRequiredComponents(world, entity, entityIndex, includeHealth: group != 4);
+        
+        return entity;
     }
 
-    private static void AddArchComplexEntity(ArchWorld world, ArchEntity entity, int group, int entityIndex)
+    private static ArchEntity CreateArchComplexEntity(ArchWorld world, int group, int entityIndex)
     {
+        var position = new Position(entityIndex, entityIndex + 1);
+        var velocity = new Velocity(entityIndex + 2, entityIndex + 3);
+        var team = new Team(entityIndex % 4);
+        var entity = world.Create(position, velocity, team);
+
+        if (group != 4)
+        {
+            var health = new Health(100 + (entityIndex % 50));
+            world.Add(entity, health);
+        }
+
         AddArchSharedPrefix(world, entity, entityIndex);
 
         switch (group)
@@ -268,8 +289,8 @@ public static class BenchmarkWorldFactory
             default:
                 throw new ArgumentOutOfRangeException(nameof(group));
         }
-
-        AddArchRequiredComponents(world, entity, entityIndex, includeHealth: group != 4);
+        
+        return entity;
     }
 
     private static void AddMiniSharedPrefix(MiniWorld world, MiniEntity entity, int entityIndex)
@@ -280,36 +301,12 @@ public static class BenchmarkWorldFactory
         world.Add(entity, new Rotation(entityIndex % 360));
     }
 
-    private static void AddMiniRequiredComponents(MiniWorld world, MiniEntity entity, int entityIndex, bool includeHealth)
-    {
-        world.Add(entity, new Position(entityIndex, entityIndex + 1));
-        world.Add(entity, new Velocity(entityIndex + 2, entityIndex + 3));
-        world.Add(entity, new Team(entityIndex % 4));
-
-        if (includeHealth)
-        {
-            world.Add(entity, new Health(100 + (entityIndex % 50)));
-        }
-    }
-
     private static void AddArchSharedPrefix(ArchWorld world, ArchEntity entity, int entityIndex)
     {
         world.Add(entity, new Acceleration(entityIndex + 4, entityIndex + 5));
         world.Add(entity, new Mana(entityIndex % 100));
         world.Add(entity, new Mass(1 + (entityIndex % 8)));
         world.Add(entity, new Rotation(entityIndex % 360));
-    }
-
-    private static void AddArchRequiredComponents(ArchWorld world, ArchEntity entity, int entityIndex, bool includeHealth)
-    {
-        world.Add(entity, new Position(entityIndex, entityIndex + 1));
-        world.Add(entity, new Velocity(entityIndex + 2, entityIndex + 3));
-        world.Add(entity, new Team(entityIndex % 4));
-
-        if (includeHealth)
-        {
-            world.Add(entity, new Health(100 + (entityIndex % 50)));
-        }
     }
 }
 

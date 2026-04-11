@@ -42,7 +42,7 @@ public readonly struct ChunkEnumerable : IEnumerable<Chunk>
 
 public struct ChunkEnumerator
 {
-    private readonly IReadOnlyList<Archetype> _archetypes;
+    private readonly Archetype[] _archetypes;
     private int _archetypeIndex;
     private int _chunkIndex;
 
@@ -58,7 +58,7 @@ public struct ChunkEnumerator
 
     public bool MoveNext()
     {
-        while (_archetypeIndex < _archetypes.Count)
+        while (_archetypeIndex < _archetypes.Length)
         {
             var archetype = _archetypes[_archetypeIndex];
             _chunkIndex++;
