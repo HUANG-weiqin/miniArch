@@ -100,6 +100,25 @@ public sealed class ChunkTests
     }
 
     [Fact]
+    public void Typed_chunk_exposes_a_read_only_span_over_a_component_column()
+    {
+        var registry = new ComponentRegistry();
+        var position = registry.GetOrCreate<Position>();
+        var velocity = registry.GetOrCreate<Velocity>();
+        var signature = new Signature(position, velocity);
+        var chunk = CreateTypedChunk(signature, new[] { typeof(Position), typeof(Velocity) }, capacity: 4);
+
+        chunk.Add(new Entity(1, 0), Components(position, velocity, new Position(1, 2), new Velocity(3, 4)));
+        chunk.Add(new Entity(2, 0), Components(position, velocity, new Position(5, 6), new Velocity(7, 8)));
+
+        var positions = chunk.GetComponentSpan<Position>(position);
+
+        Assert.Equal(2, positions.Length);
+        Assert.Equal(new Position(1, 2), positions[0]);
+        Assert.Equal(new Position(5, 6), positions[1]);
+    }
+
+    [Fact]
     public void Removing_from_a_typed_chunk_only_clears_reference_columns()
     {
         var registry = new ComponentRegistry();

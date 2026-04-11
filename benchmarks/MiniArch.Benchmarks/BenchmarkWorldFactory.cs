@@ -6,6 +6,7 @@ namespace MiniArch.Benchmarks;
 using MiniEntity = MiniArch.Core.Entity;
 using MiniQuery = MiniArch.Core.Query;
 using MiniWorld = MiniArch.Core.World;
+using MiniComponentType = MiniArch.Core.ComponentType;
 using ArchEntity = Arch.Core.Entity;
 using ArchWorld = Arch.Core.World;
 
@@ -408,6 +409,8 @@ public sealed class MiniComplexQueryWorldState
     {
         World = world;
         Entities = entities;
+        PositionType = world.Components.GetOrCreate<Position>();
+        VelocityType = world.Components.GetOrCreate<Velocity>();
         WithAllQuery = BenchmarkWorldFactory.BuildMiniWithAllQuery(world);
         WithAllWithoutQuery = BenchmarkWorldFactory.BuildMiniWithAllWithoutQuery(world);
         WithAllAnyQuery = BenchmarkWorldFactory.BuildMiniWithAllAnyQuery(world);
@@ -419,6 +422,8 @@ public sealed class MiniComplexQueryWorldState
 
     public MiniWorld World;
     public MiniEntity[] Entities;
+    public MiniComponentType PositionType;
+    public MiniComponentType VelocityType;
     public MiniQuery WithAllQuery;
     public MiniQuery WithAllWithoutQuery;
     public MiniQuery WithAllAnyQuery;

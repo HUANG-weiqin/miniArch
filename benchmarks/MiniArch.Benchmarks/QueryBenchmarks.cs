@@ -5,6 +5,7 @@ using MiniArch.Core;
 namespace MiniArch.Benchmarks;
 
 using MiniQuery = MiniArch.Core.Query;
+using MiniComponentType = MiniArch.Core.ComponentType;
 
 public class QueryBenchmarks
 {
@@ -59,6 +60,24 @@ public class QueryBenchmarks
     public int MiniArch_WithAll_Execute_Warmed()
     {
         return ExecuteMiniQuery(_miniState.WithAllQuery);
+    }
+
+    [Benchmark(Description = "MiniArch complex query WithAll components execute warmed row-wise")]
+    public int MiniArch_WithAll_Components_Execute_Warmed_RowWise()
+    {
+        return ExecuteMiniComponentQueryRowWise(_miniState.WithAllQuery, _miniState.PositionType, _miniState.VelocityType);
+    }
+
+    [Benchmark(Description = "MiniArch complex query WithAll components execute warmed span")]
+    public int MiniArch_WithAll_Components_Execute_Warmed_Span()
+    {
+        return ExecuteMiniComponentQuerySpan(_miniState.WithAllQuery, _miniState.PositionType, _miniState.VelocityType);
+    }
+
+    [Benchmark(Description = "Arch complex query WithAll components execute warmed span")]
+    public int Arch_WithAll_Components_Execute_Warmed_Span()
+    {
+        return ExecuteArchComponentQuerySpan(_archState.WithAllDescription);
     }
 
     [Benchmark(Description = "Arch complex query WithAll+Without execute")]
@@ -151,6 +170,42 @@ public class QueryBenchmarks
         return checksum;
     }
 
+    private static int ExecuteMiniComponentQueryRowWise(MiniQuery query, MiniComponentType positionType, MiniComponentType velocityType)
+    {
+        var checksum = 0;
+        var chunks = query.GetChunkSpan();
+        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        {
+            var chunk = chunks[chunkIndex];
+            for (var row = 0; row < chunk.Count; row++)
+            {
+                var position = chunk.GetComponent<Position>(positionType, row);
+                var velocity = chunk.GetComponent<Velocity>(velocityType, row);
+                checksum += position.X + velocity.Y;
+            }
+        }
+
+        return checksum;
+    }
+
+    private static int ExecuteMiniComponentQuerySpan(MiniQuery query, MiniComponentType positionType, MiniComponentType velocityType)
+    {
+        var checksum = 0;
+        var chunks = query.GetChunkSpan();
+        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        {
+            var chunk = chunks[chunkIndex];
+            var positions = chunk.GetComponentSpan<Position>(positionType);
+            var velocities = chunk.GetComponentSpan<Velocity>(velocityType);
+            for (var row = 0; row < positions.Length; row++)
+            {
+                checksum += positions[row].X + velocities[row].Y;
+            }
+        }
+
+        return checksum;
+    }
+
     private int ExecuteArchQuery(QueryDescription description)
     {
         var checksum = 0;
@@ -160,6 +215,23 @@ public class QueryBenchmarks
             for (var row = 0; row < chunk.Count; row++)
             {
                 checksum += chunk.Entity(row).Id;
+            }
+        }
+
+        return checksum;
+    }
+
+    private int ExecuteArchComponentQuerySpan(QueryDescription description)
+    {
+        var checksum = 0;
+        var query = _archState.World.Query(in description);
+        foreach (var chunk in query)
+        {
+            var positions = chunk.GetSpan<Position>();
+            var velocities = chunk.GetSpan<Velocity>();
+            for (var row = 0; row < positions.Length; row++)
+            {
+                checksum += positions[row].X + velocities[row].Y;
             }
         }
 

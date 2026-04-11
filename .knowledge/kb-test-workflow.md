@@ -73,6 +73,7 @@ updated: 2026-04-12
 - complex query benchmark 的命中组件要放在最终 archetype 的后半段构建，避免 `MiniArch` 的迁移中间态空 archetype 混入结果。
 - query benchmark 需要同时保留 mixed 口径和 warmed 口径：mixed 反映 public query API 的整体成本，warmed 反映 steady-state traversal；两者不能互相替代。
 - 如果目标是看 entity-only 遍历热路径，benchmark 应优先用 chunk 的实体 span 视图，而不是在热循环里重复调用 `GetEntity(row)`；否则结果会掺入 accessor 固定成本。
+- 如果目标是看 component-consuming query，benchmark 应同时保留 `row-wise` 和 `span` 两条口径；对 typed chunk，`GetComponentSpan<T>()` 往往比逐 row `GetComponent<T>()` 快一个量级，适合先做 A/B 再决定是否推广到系统层遍历。
 - 如果 query benchmark 把 builder 和执行放在同一个测量区，就要额外准备一条 steady-state benchmark：预热 query cache，只测 refresh 后的 chunk/entity 遍历。否则固定 build 分配会掩盖真正的读路径差距。
 - 如果 warmed query benchmark 的 short job 方差过大，尤其是 `50k/100k` 档位，不要只看一份 BenchmarkDotNet 均值；再用 `profile-query --temperature hot` 跑固定时长热循环，比较 `Completed iterations` 作为 traversal-only 的二次验证。
 - query 采样入口默认应走独立 runner，而不是直接采样 BenchmarkDotNet 子进程；前者更容易把样本集中在 `Query` 热路径上。

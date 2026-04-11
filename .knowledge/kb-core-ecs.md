@@ -80,6 +80,8 @@ updated: 2026-04-12
 - 对大命中 query，读路径真正昂贵的通常不是 filter builder，而是逐 row 的 accessor 开销；如果 chunk 读 API 只能通过 `GetEntity(row)` / `GetComponent(row)` 这种逐元素方法走，边界检查和调用成本会在 `100k+` 档位开始放大。
 - 对 entity-only 的 query 消费，`ReadOnlySpan<Entity>` 这类批量读接口通常能立刻降低 CPU，且不会引入额外分配；它是比重构 query cache 更低风险的第一步优化。
 - 对 steady-state query 遍历，优先走 `Query.GetChunkSpan()` + `Chunk.GetEntities()` 这类批量读路径；保留 `Chunks` 枚举器作为兼容 API，但不要把它当作 benchmark / profiling 的首选消费方式。
+- 对 component-consuming query，优先走 typed chunk 的 `Chunk.GetComponentSpan<T>()`，不要在热循环里逐 row 调 `GetComponent<T>(..., row)`；后者会把列查找、边界检查和方法调用成本重复放大。
+- `Chunk.GetComponentSpan<T>()` 只适用于 world/archetype 创建出的 typed chunk；直接 `new Chunk(Signature, ...)` 得到的是兼容用 untyped chunk，这条 API 在那种实例上应视为不可用。
 - 结合当前 query sampling，warmed query 的第一优先优化点应放在 traversal / accessor 路径，而不是优先重写 `BuildMatchingArchetypes`；matching 目前只是小头。
 - 如果 query 不只缓存 `Archetype[]`，还缓存了扁平 `Chunk[]`，失效条件就不能只看 archetype 集合变化；同 archetype 内新增或复用 chunk 也必须触发 query snapshot 刷新。
 - typed column 的收益会被 `Array` 抽象层吃掉一部分；如果迁移/删除路径仍长期停留在 `Array.Copy` / `Array.Clear` 的逐列调用上，结构变化 benchmark 的 CPU 还会继续偏高。
