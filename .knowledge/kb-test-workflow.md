@@ -15,6 +15,7 @@ updated: 2026-04-12
   - 提供 `Create / CreateMany / Add / Set / Remove / Destroy` 的 benchmark 口径
   - 为 `CreateMany` 单独区分 append-only、recycled ids、mixed ids 三类场景
   - 单独保留 query 相关的性能对比口径
+  - 提供 query 采样 profiling 的独立入口，便于外部 CPU sampler 定位热点函数
   - 用复杂 archetype 分布覆盖 query filter + traversal 的热路径
   - 为 future agent 提供回归判断
 - 这个模块不负责：
@@ -42,6 +43,7 @@ updated: 2026-04-12
   - benchmark 只比较同构输入下的 Arch / MiniArch 热路径，不承担正确性证明
   - setup、world 构建和脚本生成都放在测量区外
   - complex query benchmark 用固定 archetype 配比生成同一类 world 布局，并在测量区内执行 query + 命中 entity 遍历
+  - query profiling 复用同一套 complex query world，但在 BenchmarkDotNet 之外跑固定时长循环，给 PerfView/Visual Studio CPU Usage 这类采样器一个干净窗口
   - `scripts\verify.ps1` 统一跑 build + test
 - 和其他模块的交互方式：
   - 直接依赖 `MiniArch.Core`
@@ -68,6 +70,11 @@ updated: 2026-04-12
 - complex query benchmark world 应该优先用 direct-create 先落 `Position/Velocity/Team` 这类 query 核心组件，再补剩余组件；否则 `Create + Add + Add + ...` 会留下过多历史空 archetype，污染 query benchmark。
 - complex query benchmark 不能只测 query builder 创建；必须测实际 query 执行。
 - complex query benchmark 的命中组件要放在最终 archetype 的后半段构建，避免 `MiniArch` 的迁移中间态空 archetype 混入结果。
+- query benchmark 需要同时保留 mixed 口径和 warmed 口径：mixed 反映 public query API 的整体成本，warmed 反映 steady-state traversal；两者不能互相替代。
+- 如果目标是看 entity-only 遍历热路径，benchmark 应优先用 chunk 的实体 span 视图，而不是在热循环里重复调用 `GetEntity(row)`；否则结果会掺入 accessor 固定成本。
+- 如果 query benchmark 把 builder 和执行放在同一个测量区，就要额外准备一条 steady-state benchmark：预热 query cache，只测 refresh 后的 chunk/entity 遍历。否则固定 build 分配会掩盖真正的读路径差距。
+- query 采样入口默认应走独立 runner，而不是直接采样 BenchmarkDotNet 子进程；前者更容易把样本集中在 `Query` 热路径上。
+- query 采样需要区分 `hot` 和 `cold`：`hot` 看 chunk traversal，`cold` 通过 fresh query 实例把 `RefreshIfNeeded / BuildMatchingArchetypes / Matches` 拉回样本。
 
 ## 认知模型
 
@@ -87,10 +94,12 @@ updated: 2026-04-12
   - `WorldStructuralChangeTests.cs`：结构迁移的关键行为
   - `StructuralChangeBenchmarks.cs`：`Create / CreateMany / Add / Set / Remove / Destroy` 与 Arch 的时间和分配对照
   - `QueryBenchmarks.cs`：复杂 query 场景下的 Arch / MiniArch 执行对照
+  - `scripts\profile-query.ps1`：query 采样入口，适合定位热点函数
 - 如果是修 bug，先看：
   - 对应功能的测试文件
   - `scripts\test.ps1`
   - `scripts\benchmark.ps1`：benchmark 入口，必要时配合 `--filter`
+  - `scripts\profile-query.ps1`：如果问题是 query 热点分布，而不是均值回归
 - 如果是加功能，先看：
   - `QueryTests.cs`：query 行为约束
   - `QueryFilterTests.cs`：链式 filter 和 builder 契约
@@ -113,10 +122,14 @@ updated: 2026-04-12
   - `CreateMany` 只测 append-only，误把 fresh-path 成绩当成所有 free-list 场景的结论
   - 带组件 `Create<T...>` 只断言组件值正确，却没检查 query 看到的 archetype 集合，容易漏掉“功能正确但留下空中间 archetype”的回退
   - 混合 benchmark 没有固定种子，导致 MiniArch 和 Arch 的输入不一致
-  - query 并发测试只覆盖“缓存已热”的读取，而没压到“第一次并发建 query / 刷新快照”的冷路径
-  - complex query benchmark 如果从空实体一路逐组件 `Add` 到终态，最终 world 会残留大量空 archetype，导致 query benchmark 测到的不是“最终 world 上的 query”，而是“历史迁移残留 + query”的混合成本
-  - query benchmark 只测 builder 创建，误把 API 组装成本当成 query 热路径
-  - query benchmark 在 MiniArch 里把命中组件加得太早，导致中间态空 archetype 也被扫进结果
+- query 并发测试只覆盖“缓存已热”的读取，而没压到“第一次并发建 query / 刷新快照”的冷路径
+- complex query benchmark 如果从空实体一路逐组件 `Add` 到终态，最终 world 会残留大量空 archetype，导致 query benchmark 测到的不是“最终 world 上的 query”，而是“历史迁移残留 + query”的混合成本
+- query benchmark 只测 builder 创建，误把 API 组装成本当成 query 热路径
+- query benchmark 在 MiniArch 里把命中组件加得太早，导致中间态空 archetype 也被扫进结果
+- query benchmark 只保留 builder+execute 的混合口径时，很难分清“固定分配来自 fluent builder”还是“规模退化来自 chunk/row 遍历”；要至少保留一条 warmed-query 口径。
+- 如果 warmed query state 没有在 setup 阶段先 materialize 匹配 archetype，benchmark 名字虽然写着 warmed，实际测到的仍会掺入冷 refresh 成本。
+- 直接采样 BenchmarkDotNet 子进程时，样本里会混入 harness、warmup 和 fork 开销；定位 query 热点时优先跑 `scripts\profile-query.ps1`
+- 如果想看 archetype 匹配热点，不要只跑 `hot` 模式；热缓存会把刷新成本藏掉
 - 容易误判的地方：
   - 认为 query 结果对了，chunk 顺序就一定对了
   - 认为 entity 还活着，version 也一定没错
@@ -132,6 +145,8 @@ updated: 2026-04-12
 
 - `kb-core-ecs.md`：被测试的运行时模块
 - `kb-repo-overview.md`：如何启动验证流程
+- `kb-profiling-workflow.md`：如何做无侵入 CPU sampling
 - `scripts/test.ps1`：测试入口
 - `benchmarks/MiniArch.Benchmarks/StructuralChangeBenchmarks.cs`：分项 structural-change benchmark 与 mixed structural-change benchmark
 - `benchmarks/MiniArch.Benchmarks/QueryBenchmarks.cs`：复杂 query benchmark
+- `scripts/profile-query.ps1`：复杂 query 采样 profiling 入口

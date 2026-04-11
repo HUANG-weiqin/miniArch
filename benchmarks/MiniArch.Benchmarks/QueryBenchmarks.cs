@@ -49,6 +49,18 @@ public class QueryBenchmarks
         return ExecuteMiniQuery(query);
     }
 
+    [Benchmark(Description = "Arch complex query WithAll execute warmed")]
+    public int Arch_WithAll_Execute_Warmed()
+    {
+        return ExecuteArchQuery(_archState.WithAllDescription);
+    }
+
+    [Benchmark(Description = "MiniArch complex query WithAll execute warmed")]
+    public int MiniArch_WithAll_Execute_Warmed()
+    {
+        return ExecuteMiniQuery(_miniState.WithAllQuery);
+    }
+
     [Benchmark(Description = "Arch complex query WithAll+Without execute")]
     public int Arch_WithAll_Without_Execute()
     {
@@ -71,6 +83,18 @@ public class QueryBenchmarks
             .Build();
 
         return ExecuteMiniQuery(query);
+    }
+
+    [Benchmark(Description = "Arch complex query WithAll+Without execute warmed")]
+    public int Arch_WithAll_Without_Execute_Warmed()
+    {
+        return ExecuteArchQuery(_archState.WithAllWithoutDescription);
+    }
+
+    [Benchmark(Description = "MiniArch complex query WithAll+Without execute warmed")]
+    public int MiniArch_WithAll_Without_Execute_Warmed()
+    {
+        return ExecuteMiniQuery(_miniState.WithAllWithoutQuery);
     }
 
     [Benchmark(Description = "Arch complex query WithAll+Any execute")]
@@ -98,14 +122,27 @@ public class QueryBenchmarks
         return ExecuteMiniQuery(query);
     }
 
+    [Benchmark(Description = "Arch complex query WithAll+Any execute warmed")]
+    public int Arch_WithAll_Any_Execute_Warmed()
+    {
+        return ExecuteArchQuery(_archState.WithAllAnyDescription);
+    }
+
+    [Benchmark(Description = "MiniArch complex query WithAll+Any execute warmed")]
+    public int MiniArch_WithAll_Any_Execute_Warmed()
+    {
+        return ExecuteMiniQuery(_miniState.WithAllAnyQuery);
+    }
+
     private int ExecuteMiniQuery(MiniQuery query)
     {
         var checksum = 0;
         foreach (var chunk in query.Chunks)
         {
-            for (var row = 0; row < chunk.Count; row++)
+            var entities = chunk.GetEntities();
+            for (var row = 0; row < entities.Length; row++)
             {
-                checksum += chunk.GetEntity(row).Id;
+                checksum += entities[row].Id;
             }
         }
 

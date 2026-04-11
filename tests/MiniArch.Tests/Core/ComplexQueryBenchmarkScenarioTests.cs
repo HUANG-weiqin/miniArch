@@ -88,13 +88,28 @@ public sealed class ComplexQueryBenchmarkScenarioTests
     }
 
     [Fact]
-    public void Complex_query_benchmark_world_does_not_leave_excessive_empty_archetypes()
+    public void Complex_query_benchmark_world_uses_only_final_archetypes()
     {
         var state = BenchmarkWorldFactory.CreateMiniComplexQueryWorld(100);
         var archetypes = GetArchetypes(state.World);
         var emptyCount = archetypes.Count(archetype => archetype.EntityCount == 0);
 
-        Assert.True(emptyCount <= 12, $"Expected at most 12 empty archetypes, but found {emptyCount}.");
+        Assert.Equal(5, archetypes.Count);
+        Assert.Equal(0, emptyCount);
+    }
+
+    [Fact]
+    public void Complex_query_benchmark_state_warms_miniarch_queries_before_measurement()
+    {
+        var state = BenchmarkWorldFactory.CreateMiniComplexQueryWorld(100);
+
+        Assert.Equal(1, state.WithAllQuery.RefreshCount);
+        Assert.Equal(1, state.WithAllWithoutQuery.RefreshCount);
+        Assert.Equal(1, state.WithAllAnyQuery.RefreshCount);
+
+        Assert.Equal(90, CountEntities(state.WithAllQuery));
+        Assert.Equal(70, CountEntities(state.WithAllWithoutQuery));
+        Assert.Equal(55, CountEntities(state.WithAllAnyQuery));
     }
 
     private static int CountEntities(Query query)

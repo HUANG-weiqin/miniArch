@@ -4,11 +4,12 @@ using MiniArch.Core;
 namespace MiniArch.Benchmarks;
 
 using MiniEntity = MiniArch.Core.Entity;
+using MiniQuery = MiniArch.Core.Query;
 using MiniWorld = MiniArch.Core.World;
 using ArchEntity = Arch.Core.Entity;
 using ArchWorld = Arch.Core.World;
 
-public static class BenchmarkWorldFactory
+public static partial class BenchmarkWorldFactory
 {
     public static MiniComplexQueryWorldState CreateMiniComplexQueryWorld(int entityCount)
     {
@@ -212,101 +213,134 @@ public static class BenchmarkWorldFactory
 
     private static MiniEntity CreateMiniComplexEntity(MiniWorld world, int group, int entityIndex)
     {
-        var entity = world.Create(
-            new Position(entityIndex, entityIndex + 1),
-            new Velocity(entityIndex + 2, entityIndex + 3),
-            new Team(entityIndex % 4));
-
-        if (group != 4)
-        {
-            world.Add(entity, new Health(100 + (entityIndex % 50)));
-        }
-
-        AddMiniSharedPrefix(world, entity, entityIndex);
-
         switch (group)
         {
             case 0:
-                world.Add(entity, new AnyTagA(entityIndex));
-                break;
+                return world.Create(
+                    new Position(entityIndex, entityIndex + 1),
+                    new Velocity(entityIndex + 2, entityIndex + 3),
+                    new Team(entityIndex % 4),
+                    new Health(100 + (entityIndex % 50)),
+                    new Acceleration(entityIndex + 4, entityIndex + 5),
+                    new Mana(entityIndex % 100),
+                    new Mass(1 + (entityIndex % 8)),
+                    new Rotation(entityIndex % 360),
+                    new AnyTagA(entityIndex));
             case 1:
-                world.Add(entity, new ExcludedTag(entityIndex));
-                break;
+                return world.Create(
+                    new Position(entityIndex, entityIndex + 1),
+                    new Velocity(entityIndex + 2, entityIndex + 3),
+                    new Team(entityIndex % 4),
+                    new Health(100 + (entityIndex % 50)),
+                    new Acceleration(entityIndex + 4, entityIndex + 5),
+                    new Mana(entityIndex % 100),
+                    new Mass(1 + (entityIndex % 8)),
+                    new Rotation(entityIndex % 360),
+                    new ExcludedTag(entityIndex));
             case 2:
-                world.Add(entity, new Shield(50 + (entityIndex % 10)));
-                world.Add(entity, new AnyTagB(entityIndex));
-                break;
+                return world.Create(
+                    new Position(entityIndex, entityIndex + 1),
+                    new Velocity(entityIndex + 2, entityIndex + 3),
+                    new Team(entityIndex % 4),
+                    new Health(100 + (entityIndex % 50)),
+                    new Acceleration(entityIndex + 4, entityIndex + 5),
+                    new Mana(entityIndex % 100),
+                    new Mass(1 + (entityIndex % 8)),
+                    new Rotation(entityIndex % 360),
+                    new Shield(50 + (entityIndex % 10)),
+                    new AnyTagB(entityIndex));
             case 3:
-                world.Add(entity, new Shield(80 + (entityIndex % 10)));
-                world.Add(entity, new Damage(10 + (entityIndex % 5)));
-                break;
+                return world.Create(
+                    new Position(entityIndex, entityIndex + 1),
+                    new Velocity(entityIndex + 2, entityIndex + 3),
+                    new Team(entityIndex % 4),
+                    new Health(100 + (entityIndex % 50)),
+                    new Acceleration(entityIndex + 4, entityIndex + 5),
+                    new Mana(entityIndex % 100),
+                    new Mass(1 + (entityIndex % 8)),
+                    new Rotation(entityIndex % 360),
+                    new Shield(80 + (entityIndex % 10)),
+                    new Damage(10 + (entityIndex % 5)));
             case 4:
-                world.Add(entity, new Damage(20 + (entityIndex % 7)));
-                world.Add(entity, new ExcludedTag(entityIndex));
-                break;
+                return world.Create(
+                    new Position(entityIndex, entityIndex + 1),
+                    new Velocity(entityIndex + 2, entityIndex + 3),
+                    new Team(entityIndex % 4),
+                    new Acceleration(entityIndex + 4, entityIndex + 5),
+                    new Mana(entityIndex % 100),
+                    new Mass(1 + (entityIndex % 8)),
+                    new Rotation(entityIndex % 360),
+                    new Damage(20 + (entityIndex % 7)),
+                    new ExcludedTag(entityIndex));
             default:
                 throw new ArgumentOutOfRangeException(nameof(group));
         }
-        
-        return entity;
     }
 
     private static ArchEntity CreateArchComplexEntity(ArchWorld world, int group, int entityIndex)
     {
-        var position = new Position(entityIndex, entityIndex + 1);
-        var velocity = new Velocity(entityIndex + 2, entityIndex + 3);
-        var team = new Team(entityIndex % 4);
-        var entity = world.Create(position, velocity, team);
-
-        if (group != 4)
-        {
-            var health = new Health(100 + (entityIndex % 50));
-            world.Add(entity, health);
-        }
-
-        AddArchSharedPrefix(world, entity, entityIndex);
-
         switch (group)
         {
             case 0:
-                world.Add(entity, new AnyTagA(entityIndex));
-                break;
+                return world.Create(
+                    new Position(entityIndex, entityIndex + 1),
+                    new Velocity(entityIndex + 2, entityIndex + 3),
+                    new Team(entityIndex % 4),
+                    new Health(100 + (entityIndex % 50)),
+                    new Acceleration(entityIndex + 4, entityIndex + 5),
+                    new Mana(entityIndex % 100),
+                    new Mass(1 + (entityIndex % 8)),
+                    new Rotation(entityIndex % 360),
+                    new AnyTagA(entityIndex));
             case 1:
-                world.Add(entity, new ExcludedTag(entityIndex));
-                break;
+                return world.Create(
+                    new Position(entityIndex, entityIndex + 1),
+                    new Velocity(entityIndex + 2, entityIndex + 3),
+                    new Team(entityIndex % 4),
+                    new Health(100 + (entityIndex % 50)),
+                    new Acceleration(entityIndex + 4, entityIndex + 5),
+                    new Mana(entityIndex % 100),
+                    new Mass(1 + (entityIndex % 8)),
+                    new Rotation(entityIndex % 360),
+                    new ExcludedTag(entityIndex));
             case 2:
-                world.Add(entity, new Shield(50 + (entityIndex % 10)));
-                world.Add(entity, new AnyTagB(entityIndex));
-                break;
+                return world.Create(
+                    new Position(entityIndex, entityIndex + 1),
+                    new Velocity(entityIndex + 2, entityIndex + 3),
+                    new Team(entityIndex % 4),
+                    new Health(100 + (entityIndex % 50)),
+                    new Acceleration(entityIndex + 4, entityIndex + 5),
+                    new Mana(entityIndex % 100),
+                    new Mass(1 + (entityIndex % 8)),
+                    new Rotation(entityIndex % 360),
+                    new Shield(50 + (entityIndex % 10)),
+                    new AnyTagB(entityIndex));
             case 3:
-                world.Add(entity, new Shield(80 + (entityIndex % 10)));
-                world.Add(entity, new Damage(10 + (entityIndex % 5)));
-                break;
+                return world.Create(
+                    new Position(entityIndex, entityIndex + 1),
+                    new Velocity(entityIndex + 2, entityIndex + 3),
+                    new Team(entityIndex % 4),
+                    new Health(100 + (entityIndex % 50)),
+                    new Acceleration(entityIndex + 4, entityIndex + 5),
+                    new Mana(entityIndex % 100),
+                    new Mass(1 + (entityIndex % 8)),
+                    new Rotation(entityIndex % 360),
+                    new Shield(80 + (entityIndex % 10)),
+                    new Damage(10 + (entityIndex % 5)));
             case 4:
-                world.Add(entity, new Damage(20 + (entityIndex % 7)));
-                world.Add(entity, new ExcludedTag(entityIndex));
-                break;
+                return world.Create(
+                    new Position(entityIndex, entityIndex + 1),
+                    new Velocity(entityIndex + 2, entityIndex + 3),
+                    new Team(entityIndex % 4),
+                    new Acceleration(entityIndex + 4, entityIndex + 5),
+                    new Mana(entityIndex % 100),
+                    new Mass(1 + (entityIndex % 8)),
+                    new Rotation(entityIndex % 360),
+                    new Damage(20 + (entityIndex % 7)),
+                    new ExcludedTag(entityIndex));
             default:
                 throw new ArgumentOutOfRangeException(nameof(group));
         }
-        
-        return entity;
-    }
-
-    private static void AddMiniSharedPrefix(MiniWorld world, MiniEntity entity, int entityIndex)
-    {
-        world.Add(entity, new Acceleration(entityIndex + 4, entityIndex + 5));
-        world.Add(entity, new Mana(entityIndex % 100));
-        world.Add(entity, new Mass(1 + (entityIndex % 8)));
-        world.Add(entity, new Rotation(entityIndex % 360));
-    }
-
-    private static void AddArchSharedPrefix(ArchWorld world, ArchEntity entity, int entityIndex)
-    {
-        world.Add(entity, new Acceleration(entityIndex + 4, entityIndex + 5));
-        world.Add(entity, new Mana(entityIndex % 100));
-        world.Add(entity, new Mass(1 + (entityIndex % 8)));
-        world.Add(entity, new Rotation(entityIndex % 360));
     }
 }
 
@@ -374,10 +408,20 @@ public sealed class MiniComplexQueryWorldState
     {
         World = world;
         Entities = entities;
+        WithAllQuery = BenchmarkWorldFactory.BuildMiniWithAllQuery(world);
+        WithAllWithoutQuery = BenchmarkWorldFactory.BuildMiniWithAllWithoutQuery(world);
+        WithAllAnyQuery = BenchmarkWorldFactory.BuildMiniWithAllAnyQuery(world);
+
+        _ = WithAllQuery.MatchedArchetypes;
+        _ = WithAllWithoutQuery.MatchedArchetypes;
+        _ = WithAllAnyQuery.MatchedArchetypes;
     }
 
     public MiniWorld World;
     public MiniEntity[] Entities;
+    public MiniQuery WithAllQuery;
+    public MiniQuery WithAllWithoutQuery;
+    public MiniQuery WithAllAnyQuery;
 }
 
 public sealed class ArchComplexQueryWorldState : IDisposable
@@ -386,13 +430,75 @@ public sealed class ArchComplexQueryWorldState : IDisposable
     {
         World = world;
         Entities = entities;
+        WithAllDescription = BenchmarkWorldFactory.BuildArchWithAllDescription();
+        WithAllWithoutDescription = BenchmarkWorldFactory.BuildArchWithAllWithoutDescription();
+        WithAllAnyDescription = BenchmarkWorldFactory.BuildArchWithAllAnyDescription();
     }
 
     public ArchWorld World;
     public ArchEntity[] Entities;
+    public QueryDescription WithAllDescription;
+    public QueryDescription WithAllWithoutDescription;
+    public QueryDescription WithAllAnyDescription;
 
     public void Dispose()
     {
         World.Dispose();
+    }
+}
+
+public static partial class BenchmarkWorldFactory
+{
+    internal static MiniQuery BuildMiniWithAllQuery(MiniWorld world)
+    {
+        return world.Query()
+            .With<Position>()
+            .With<Velocity>()
+            .With<Health>()
+            .With<Team>()
+            .Build();
+    }
+
+    internal static MiniQuery BuildMiniWithAllWithoutQuery(MiniWorld world)
+    {
+        return world.Query()
+            .With<Position>()
+            .With<Velocity>()
+            .With<Health>()
+            .With<Team>()
+            .Without<ExcludedTag>()
+            .Build();
+    }
+
+    internal static MiniQuery BuildMiniWithAllAnyQuery(MiniWorld world)
+    {
+        return world.Query()
+            .With<Position>()
+            .With<Velocity>()
+            .With<Health>()
+            .With<Team>()
+            .Any<AnyTagA>()
+            .Or<AnyTagB>()
+            .Build();
+    }
+
+    internal static QueryDescription BuildArchWithAllDescription()
+    {
+        return new QueryDescription()
+            .WithAll<Position, Velocity, Health, Team>();
+    }
+
+    internal static QueryDescription BuildArchWithAllWithoutDescription()
+    {
+        return new QueryDescription()
+            .WithAll<Position, Velocity, Health, Team>()
+            .WithNone<ExcludedTag>();
+    }
+
+    internal static QueryDescription BuildArchWithAllAnyDescription()
+    {
+        return new QueryDescription()
+            .WithAll<Position, Velocity, Health, Team>()
+            .WithAny<AnyTagA, AnyTagB>();
     }
 }

@@ -39,7 +39,8 @@ updated: 2026-04-12
   - `Add/Remove` 先算目标签名，再复用 edge cache
   - `Set` 在组件已存在时直接定位到 typed column 的 row，原地写回，不触发迁移
   - `Archetype` 负责把实体放进可写 chunk，并优先复用已有空位的 chunk，而不是盲目只往最后一个 chunk 追加
-  - `Chunk` 负责 dense row 的单个/批量插入、读取、swap-remove 和 direct-index 写入
+- `Chunk` 负责 dense row 的单个/批量插入、读取、swap-remove 和 direct-index 写入
+- `Chunk` 也应该暴露当前有效 entity 行的 span 视图，给 query / benchmark 这类纯读热路径直接扫 `_entities[0..Count)`，避免逐行 `GetEntity(row)` 的重复边界检查和调用成本
   - `QueryBuilder` 负责累积 `With/Without/Any/Or` 过滤条件
   - `Query` 先缓存匹配 archetype，再暴露 chunk 枚举
   - query 读路径使用 world 发布的 archetype 数组快照和 query 自身发布的 matched-archetype 数组快照，避免共享可变列表
@@ -58,6 +59,7 @@ updated: 2026-04-12
 - 用 chunk 级迭代而不是 entity 级全表扫描，保留局部性和后续优化空间。
 - `Set<T>` / `Add<T>` 的原地写入路径要优先走 typed columns + 组件 id -> 列索引表，避免 `object` 盒化和 chunk 字典查找。
 - `World` 侧可以对泛型组件类型做按 `T` 的注册缓存，减少热路径里的重复 registry 查找。
+- query builder / query 链式 API 也应该复用 world 侧的按 `T` component cache；如果它们绕开缓存直接打 `ComponentRegistry`，query build 的固定 CPU 成本会比必要值更高。
 - `World` 的 entity metadata 需要显式容量管理；如果只依赖 `List<T>` 的自然扩容，`Create` 的分配会长期高于合理水平。
 - 单实体带组件创建也应该直接落到目标签名 archetype；如果退回到 `Create` 后链式 `Add`，会制造只服务于迁移的中间 archetype 和空 chunk。
 - 由于 C# 没有 variadic generics，带组件 `Create` 的高性能主路径需要采用固定 arity 重载；当前上限定在 `16`，在保持 typed-column 直写的前提下足够覆盖常见 archetype 初始化。
@@ -69,11 +71,15 @@ updated: 2026-04-12
 - 空签名 archetype 只存 entity 列，默认 chunk size 可以比普通 archetype 更大；这样能减少 empty-world `CreateMany` 的 chunk/range 数量，而不会把组件列内存一并放大。
 - `World` 默认 chunk 容量不能太小；过小的默认值会在结构迁移时制造大量微型 chunk，把分配和 GC 放大到不合理的程度。
 - `Archetype` 不能只把写入目标锁死在最后一个 chunk；结构迁移把实体移走后，前面空掉的 chunk 必须可复用，否则 `Remove -> 空 archetype` 会无意义地重新分配 chunk。
+- 但“可复用前面空 chunk”不等于“每次插入都线性扫所有 chunk”；remove-heavy / fragmented 场景最终还是要有 non-full chunk 的显式索引，否则 chunk 数一多，插入和 batch reserve 都会退化成扫描成本。
 - `ArchetypeEdges` 应该和其他热路径一样使用 component id 直索引，而不是继续停留在 `Dictionary<ComponentType, Archetype>`。
 - 兼容构造仍然保留给直接 `new Archetype(...)` / `new Chunk(...)` 的测试和低频调用，但热路径不要依赖它。
 - `Set` 的热路径应该是 direct-index 原地写，不应该为了更新一个已存在组件去做结构迁移。
 - 在“world 不并发写入”的前提下，query 并发读优先用 copy-on-write 快照发布，而不是加锁；读路径保持数组遍历，写路径承担快照复制成本。
 - query cache 应该发布整个 `Dictionary<QueryFilter, Query>` 快照，而不是在共享字典上做并发写入。
+- 对大命中 query，读路径真正昂贵的通常不是 filter builder，而是逐 row 的 accessor 开销；如果 chunk 读 API 只能通过 `GetEntity(row)` / `GetComponent(row)` 这种逐元素方法走，边界检查和调用成本会在 `100k+` 档位开始放大。
+- 对 entity-only 的 query 消费，`ReadOnlySpan<Entity>` 这类批量读接口通常能立刻降低 CPU，且不会引入额外分配；它是比重构 query cache 更低风险的第一步优化。
+- typed column 的收益会被 `Array` 抽象层吃掉一部分；如果迁移/删除路径仍长期停留在 `Array.Copy` / `Array.Clear` 的逐列调用上，结构变化 benchmark 的 CPU 还会继续偏高。
 - 对照 `Arch` 源码时不要假设它会自动消除 `Create -> Add -> Add` 留下的中间 archetype；它同样保留这些 archetype，query 也是按 world archetype 列表全量匹配，空 archetype 只会在显式 `TrimExcess()` 后被移除。
 
 ## 认知模型
@@ -116,10 +122,14 @@ updated: 2026-04-12
   - `CreateMany` 退化成外部循环调用 `Create`，导致空 archetype 查找和容量检查无法摊平
   - `CreateMany` 只做了 upfront capacity，但仍逐实体 `ReserveEntity` 或逐实体扩展 metadata，bulk create 时间仍会明显慢于 Arch
   - `CreateMany` 的 free-list 路径如果先生成完整 entity span 再复制进 chunk，会在 recycled/mixed benchmark 里形成额外的双写/三遍历热点
-  - `CreateMany` 的 mixed benchmark 如果刚好落在 metadata 扩容边界上，测量结果会掺入 `List<T>` 扩容与零填充成本；要先分清这部分和 free-list 写入本体各占多少
-  - location metadata 如果把 version 和位置绑在一个较大的 struct 里，会把 mixed 场景里的 `_locations` 扩容与逐实体写回成本放大
-  - edge cache 继续用字典，导致热路径风格和 direct-index 存储体系脱节
-  - query 把匹配 archetype 缓存在共享 `List<Archetype>` 上并原地清空/重建，会在并发只读时制造竞态
+- `CreateMany` 的 mixed benchmark 如果刚好落在 metadata 扩容边界上，测量结果会掺入 `List<T>` 扩容与零填充成本；要先分清这部分和 free-list 写入本体各占多少
+- location metadata 如果把 version 和位置绑在一个较大的 struct 里，会把 mixed 场景里的 `_locations` 扩容与逐实体写回成本放大
+- edge cache 继续用字典，导致热路径风格和 direct-index 存储体系脱节
+- query 把匹配 archetype 缓存在共享 `List<Archetype>` 上并原地清空/重建，会在并发只读时制造竞态
+- query builder / query fluent API 如果直接调用 `ComponentRegistry.GetOrCreate<T>()`，会绕过 `World` 已经存在的泛型缓存；这不会破坏功能，但会把 query build 的固定成本抬高。
+- `QueryComponentSet.Add` / `Signature.Add` 这种“每次链式调用都复制一份小数组”的设计在 query build 不频繁时可以接受，但如果 benchmark 把 build 放进测量区，分配会稳定体现在结果里。
+- `Chunk.RemoveAt` 对所有列都做 `Array.Clear`，即使列元素不含引用也照样清空；这会在 remove/destroy 高频场景里制造纯写带宽开销，而不是必要的 GC 保护。
+- query benchmark 里如果 world shape 仍通过多次 `Add` 逐步长成，会残留一批历史空 archetype；它们不一定代表 steady-state query 的真实读取成本。
 - 容易误判的地方：
   - 以为 `Set<T>` 永远只是原地写入
   - 以为 `Remove<T>` 不存在时应该报错，而不是直接返回

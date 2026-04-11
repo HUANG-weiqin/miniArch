@@ -81,6 +81,23 @@ public sealed class ChunkTests
         Assert.Equal(new Position(9, 9), chunk.GetComponent<Position>(position, 1));
     }
 
+    [Fact]
+    public void Chunk_exposes_a_read_only_span_over_its_live_entities()
+    {
+        var chunk = new Chunk(Signature.Empty, capacity: 4);
+        var first = new Entity(1, 0);
+        var second = new Entity(2, 0);
+
+        chunk.Add(first);
+        chunk.Add(second);
+
+        var entities = chunk.GetEntities();
+
+        Assert.Equal(2, entities.Length);
+        Assert.Equal(first, entities[0]);
+        Assert.Equal(second, entities[1]);
+    }
+
     private static Dictionary<ComponentType, object?> Components(ComponentType position, ComponentType velocity, Position p, Velocity v)
     {
         return new Dictionary<ComponentType, object?>

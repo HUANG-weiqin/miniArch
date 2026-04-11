@@ -48,6 +48,11 @@ public sealed class Chunk
 
     public int Count { get; private set; }
 
+    public ReadOnlySpan<Entity> GetEntities()
+    {
+        return _entities.AsSpan(0, Count);
+    }
+
     public Entity GetEntity(int row)
     {
         ValidateRow(row);
