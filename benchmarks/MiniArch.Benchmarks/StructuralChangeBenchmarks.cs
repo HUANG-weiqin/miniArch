@@ -176,7 +176,7 @@ public class MixedStructuralChangeBenchmarks
 {
     private const int DefaultSeed = 0x4D694D78;
 
-    [Params(1000)]
+    [Params(100, 1000, 10000)]
     public int EntityCount { get; set; }
 
     private MixedMiniWorldState _miniState = null!;
