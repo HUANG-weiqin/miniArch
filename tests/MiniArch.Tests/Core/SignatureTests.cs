@@ -34,4 +34,24 @@ public sealed class SignatureTests
         Assert.Equal(new Signature(idA, idB), signature);
         Assert.Equal(new Signature(idB), signature.Remove(idA));
     }
+
+    [Fact]
+    public void Constructor_normalizes_order_and_duplicates()
+    {
+        var idA = new ComponentType(1);
+        var idB = new ComponentType(2);
+        var signature = new Signature(idB, idA, idB, idA);
+
+        Assert.Equal(new Signature(idA, idB), signature);
+    }
+
+    [Fact]
+    public void No_op_add_and_remove_reuse_existing_instance()
+    {
+        var idA = new ComponentType(1);
+        var signature = new Signature(idA);
+
+        Assert.Same(signature, signature.Add(idA));
+        Assert.Same(signature, signature.Remove(new ComponentType(99)));
+    }
 }

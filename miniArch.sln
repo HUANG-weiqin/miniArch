@@ -7,6 +7,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MiniArch", "src\MiniArch\Mi
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MiniArch.Tests", "tests\MiniArch.Tests\MiniArch.Tests.csproj", "{17E6A4F2-13C5-4D73-8BE8-26C9F0BDA2DD}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MiniArch.Benchmarks", "benchmarks\MiniArch.Benchmarks\MiniArch.Benchmarks.csproj", "{E60AB7AF-1D6A-4D1D-8E04-3E335B20F101}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -21,6 +23,10 @@ Global
 		{17E6A4F2-13C5-4D73-8BE8-26C9F0BDA2DD}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{17E6A4F2-13C5-4D73-8BE8-26C9F0BDA2DD}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{17E6A4F2-13C5-4D73-8BE8-26C9F0BDA2DD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E60AB7AF-1D6A-4D1D-8E04-3E335B20F101}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E60AB7AF-1D6A-4D1D-8E04-3E335B20F101}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E60AB7AF-1D6A-4D1D-8E04-3E335B20F101}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E60AB7AF-1D6A-4D1D-8E04-3E335B20F101}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

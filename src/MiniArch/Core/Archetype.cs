@@ -33,6 +33,14 @@ public sealed class Archetype
         EntityCount++;
     }
 
+    public Chunk ReserveEntity(Entity entity, out int chunkIndex, out int rowIndex)
+    {
+        var chunk = GetWritableChunk(out chunkIndex);
+        rowIndex = chunk.Add(entity);
+        EntityCount++;
+        return chunk;
+    }
+
     public bool RemoveEntity(int chunkIndex, int rowIndex, out Entity movedEntity)
     {
         var moved = _chunks[chunkIndex].RemoveAt(rowIndex, out movedEntity);

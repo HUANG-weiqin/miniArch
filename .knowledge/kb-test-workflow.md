@@ -27,6 +27,7 @@ updated: 2026-04-11
   - `ArchetypeTests.cs`
   - `WorldLifecycleTests.cs`
   - `QueryTests.cs`
+  - `QueryFilterTests.cs`
   - `IntegrationTests.cs`
 - 数据流 / 控制流：
   - 单元测试先锁定局部行为
@@ -64,6 +65,7 @@ updated: 2026-04-11
   - `scripts\test.ps1`
 - 如果是加功能，先看：
   - `QueryTests.cs`：query 行为约束
+  - `QueryFilterTests.cs`：链式 filter 和 builder 契约
   - `ChunkTests.cs`：存储密度约束
 
 ## 坑点

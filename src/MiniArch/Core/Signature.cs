@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Text;
 
 namespace MiniArch.Core;
 
@@ -7,7 +8,7 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
     private readonly ComponentType[] _components;
     private readonly int _hashCode;
 
-    public static Signature Empty { get; } = new(Array.Empty<ComponentType>());
+    public static Signature Empty { get; } = new(Array.Empty<ComponentType>(), isNormalized: true);
 
     public Signature(IEnumerable<ComponentType> components)
     {
@@ -21,6 +22,12 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
     {
     }
 
+    private Signature(ComponentType[] components, bool isNormalized)
+    {
+        _components = components.Length == 0 ? Array.Empty<ComponentType>() : components;
+        _hashCode = ComputeHashCode(_components);
+    }
+
     public int Count => _components.Length;
 
     public ReadOnlySpan<ComponentType> AsSpan() => _components;
@@ -29,22 +36,18 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
 
     public Signature Add(ComponentType component)
     {
-        if (Contains(component))
+        var index = Array.BinarySearch(_components, component);
+        if (index >= 0)
         {
             return this;
         }
 
+        index = ~index;
         var next = new ComponentType[_components.Length + 1];
-        var index = Array.BinarySearch(_components, component);
-        if (index < 0)
-        {
-            index = ~index;
-        }
-
         Array.Copy(_components, 0, next, 0, index);
         next[index] = component;
         Array.Copy(_components, index, next, index + 1, _components.Length - index);
-        return new Signature(next);
+        return new Signature(next, isNormalized: true);
     }
 
     public Signature Remove(ComponentType component)
@@ -58,7 +61,7 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
         var next = new ComponentType[_components.Length - 1];
         Array.Copy(_components, 0, next, 0, index);
         Array.Copy(_components, index + 1, next, index, _components.Length - index - 1);
-        return new Signature(next);
+        return new Signature(next, isNormalized: true);
     }
 
     public IEnumerator<ComponentType> GetEnumerator() => ((IEnumerable<ComponentType>)_components).GetEnumerator();
@@ -92,11 +95,112 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
 
     public override int GetHashCode() => _hashCode;
 
-    public override string ToString() => $"[{string.Join(", ", _components.Select(component => component.Value))}]";
+    public override string ToString()
+    {
+        if (_components.Length == 0)
+        {
+            return "[]";
+        }
+
+        var builder = new StringBuilder(_components.Length * 4);
+        builder.Append('[');
+        builder.Append(_components[0].Value);
+        for (var i = 1; i < _components.Length; i++)
+        {
+            builder.Append(", ");
+            builder.Append(_components[i].Value);
+        }
+
+        builder.Append(']');
+        return builder.ToString();
+    }
 
     private static ComponentType[] Normalize(IEnumerable<ComponentType> components)
     {
-        return components.Distinct().OrderBy(component => component.Value).ToArray();
+        var normalized = CopyToArray(components);
+        if (normalized.Length <= 1)
+        {
+            return normalized.Length == 0 ? Array.Empty<ComponentType>() : normalized;
+        }
+
+        Array.Sort(normalized);
+
+        var uniqueCount = 1;
+        for (var i = 1; i < normalized.Length; i++)
+        {
+            if (normalized[i] == normalized[uniqueCount - 1])
+            {
+                continue;
+            }
+
+            normalized[uniqueCount] = normalized[i];
+            uniqueCount++;
+        }
+
+        if (uniqueCount == normalized.Length)
+        {
+            return normalized;
+        }
+
+        var deduplicated = new ComponentType[uniqueCount];
+        Array.Copy(normalized, deduplicated, uniqueCount);
+        return deduplicated;
+    }
+
+    private static ComponentType[] CopyToArray(IEnumerable<ComponentType> components)
+    {
+        if (components is ComponentType[] array)
+        {
+            if (array.Length == 0)
+            {
+                return Array.Empty<ComponentType>();
+            }
+
+            var arrayCopy = new ComponentType[array.Length];
+            Array.Copy(array, arrayCopy, array.Length);
+            return arrayCopy;
+        }
+
+        if (components is ICollection<ComponentType> collection)
+        {
+            if (collection.Count == 0)
+            {
+                return Array.Empty<ComponentType>();
+            }
+
+            var collectionCopy = new ComponentType[collection.Count];
+            collection.CopyTo(collectionCopy, 0);
+            return collectionCopy;
+        }
+
+        using var enumerator = components.GetEnumerator();
+        if (!enumerator.MoveNext())
+        {
+            return Array.Empty<ComponentType>();
+        }
+
+        var buffer = new ComponentType[4];
+        var count = 0;
+        do
+        {
+            if (count == buffer.Length)
+            {
+                Array.Resize(ref buffer, buffer.Length * 2);
+            }
+
+            buffer[count] = enumerator.Current;
+            count++;
+        }
+        while (enumerator.MoveNext());
+
+        if (count == buffer.Length)
+        {
+            return buffer;
+        }
+
+        var trimmed = new ComponentType[count];
+        Array.Copy(buffer, trimmed, count);
+        return trimmed;
     }
 
     private static int ComputeHashCode(ReadOnlySpan<ComponentType> components)

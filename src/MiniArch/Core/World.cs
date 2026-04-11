@@ -7,7 +7,7 @@ public sealed class World
     private readonly List<int> _versions = new();
     private readonly List<EntityInfo?> _locations = new();
     private readonly Stack<int> _freeIds = new();
-    private readonly Dictionary<Signature, Query> _queries = new();
+    private readonly Dictionary<QueryFilter, Query> _queries = new();
     private readonly int _chunkCapacity;
     private int _archetypeGeneration;
 
@@ -23,7 +23,7 @@ public sealed class World
 
     public ComponentRegistry Components => _components;
 
-    internal IEnumerable<Archetype> Archetypes => _archetypes.Values;
+    internal Dictionary<Signature, Archetype>.ValueCollection Archetypes => _archetypes.Values;
 
     internal int ArchetypeGeneration => _archetypeGeneration;
 
@@ -33,7 +33,7 @@ public sealed class World
         var version = _versions[id];
         var entity = new Entity(id, version);
         var archetype = GetOrCreateArchetype(Signature.Empty);
-        archetype.AddEntity(entity, EmptyComponents, out var chunkIndex, out var rowIndex);
+        archetype.ReserveEntity(entity, out var chunkIndex, out var rowIndex);
         _locations[id] = new EntityInfo(version, archetype, chunkIndex, rowIndex);
         return entity;
     }
@@ -66,10 +66,7 @@ public sealed class World
 
         var destinationSignature = sourceSignature.Add(componentType);
         var destination = GetOrCreateDestinationArchetype(info.Archetype, componentType, destinationSignature, isAdd: true);
-        MoveEntity(entity, info, destination, components =>
-        {
-            components[componentType] = component;
-        });
+        MoveEntity(entity, info, destination, componentType, component);
     }
 
     public void Set<T>(Entity entity, T component)
@@ -86,10 +83,7 @@ public sealed class World
 
         var destinationSignature = sourceSignature.Add(componentType);
         var destination = GetOrCreateDestinationArchetype(info.Archetype, componentType, destinationSignature, isAdd: true);
-        MoveEntity(entity, info, destination, components =>
-        {
-            components[componentType] = component;
-        });
+        MoveEntity(entity, info, destination, componentType, component);
     }
 
     public void Remove<T>(Entity entity)
@@ -105,25 +99,33 @@ public sealed class World
 
         var destinationSignature = sourceSignature.Remove(componentType);
         var destination = GetOrCreateDestinationArchetype(info.Archetype, componentType, destinationSignature, isAdd: false);
-        MoveEntity(entity, info, destination, components =>
-        {
-            components.Remove(componentType);
-        });
+        MoveEntity(entity, info, destination);
+    }
+
+    public QueryBuilder Query()
+    {
+        return new QueryBuilder(this, QueryFilter.Empty);
     }
 
     public Query Query<T1>()
     {
-        return GetOrCreateQuery(new Signature(_components.GetOrCreate<T1>()));
+        var componentType = _components.GetOrCreate<T1>();
+        return GetOrCreateQuery(QueryFilter.CreateRequired(componentType));
     }
 
     public Query Query<T1, T2>()
     {
-        return GetOrCreateQuery(new Signature(_components.GetOrCreate<T1>(), _components.GetOrCreate<T2>()));
+        var componentType1 = _components.GetOrCreate<T1>();
+        var componentType2 = _components.GetOrCreate<T2>();
+        return GetOrCreateQuery(QueryFilter.CreateRequired(componentType1, componentType2));
     }
 
     public Query Query<T1, T2, T3>()
     {
-        return GetOrCreateQuery(new Signature(_components.GetOrCreate<T1>(), _components.GetOrCreate<T2>(), _components.GetOrCreate<T3>()));
+        var componentType1 = _components.GetOrCreate<T1>();
+        var componentType2 = _components.GetOrCreate<T2>();
+        var componentType3 = _components.GetOrCreate<T3>();
+        return GetOrCreateQuery(QueryFilter.CreateRequired(componentType1, componentType2, componentType3));
     }
 
     public bool TryGetLocation(Entity entity, out EntityInfo info)
@@ -145,15 +147,27 @@ public sealed class World
         return true;
     }
 
-    private void MoveEntity(Entity entity, EntityInfo sourceInfo, Archetype destination, Action<Dictionary<ComponentType, object?>> mutate)
+    private void MoveEntity(Entity entity, EntityInfo sourceInfo, Archetype destination)
     {
-        var componentValues = new Dictionary<ComponentType, object?>(sourceInfo.Archetype.Signature.Count + 1);
-        foreach (var component in sourceInfo.Archetype.Signature)
+        MoveEntity(entity, sourceInfo, destination, default, null, hasOverride: false);
+    }
+
+    private void MoveEntity(Entity entity, EntityInfo sourceInfo, Archetype destination, ComponentType componentType, object? componentValue)
+    {
+        MoveEntity(entity, sourceInfo, destination, componentType, componentValue, hasOverride: true);
+    }
+
+    private void MoveEntity(Entity entity, EntityInfo sourceInfo, Archetype destination, ComponentType componentType, object? componentValue, bool hasOverride)
+    {
+        var sourceChunk = sourceInfo.Archetype.GetChunk(sourceInfo.ChunkIndex);
+        var destinationChunk = destination.ReserveEntity(entity, out var destinationChunkIndex, out var destinationRowIndex);
+        destinationChunk.CopySharedComponentsFrom(sourceChunk, sourceInfo.RowIndex, destinationRowIndex);
+
+        if (hasOverride)
         {
-            componentValues[component] = sourceInfo.Archetype.GetChunk(sourceInfo.ChunkIndex).GetComponent(component, sourceInfo.RowIndex);
+            destinationChunk.SetComponent(componentType, destinationRowIndex, componentValue);
         }
 
-        mutate(componentValues);
         sourceInfo.Archetype.RemoveEntity(sourceInfo.ChunkIndex, sourceInfo.RowIndex, out var movedEntity);
 
         if (movedEntity.IsValid)
@@ -161,7 +175,6 @@ public sealed class World
             _locations[movedEntity.Id] = new EntityInfo(movedEntity.Version, sourceInfo.Archetype, sourceInfo.ChunkIndex, sourceInfo.RowIndex);
         }
 
-        destination.AddEntity(entity, componentValues, out var destinationChunkIndex, out var destinationRowIndex);
         _locations[entity.Id] = new EntityInfo(entity.Version, destination, destinationChunkIndex, destinationRowIndex);
     }
 
@@ -210,15 +223,15 @@ public sealed class World
         return archetype;
     }
 
-    private Query GetOrCreateQuery(Signature signature)
+    internal Query GetOrCreateQuery(QueryFilter filter)
     {
-        if (_queries.TryGetValue(signature, out var query))
+        if (_queries.TryGetValue(filter, out var query))
         {
             return query;
         }
 
-        query = new Query(this, signature);
-        _queries.Add(signature, query);
+        query = new Query(this, filter);
+        _queries.Add(filter, query);
         return query;
     }
 
@@ -244,6 +257,4 @@ public sealed class World
         _locations.Add(null);
         return id;
     }
-
-    private static IReadOnlyDictionary<ComponentType, object?> EmptyComponents { get; } = new Dictionary<ComponentType, object?>();
 }

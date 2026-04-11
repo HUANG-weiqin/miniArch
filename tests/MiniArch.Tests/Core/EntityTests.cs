@@ -21,4 +21,12 @@ public sealed class EntityTests
 
         Assert.True(entity.IsValid);
     }
+
+    [Fact]
+    public void Negative_identity_is_invalid()
+    {
+        var entity = new Entity(-1, -1);
+
+        Assert.False(entity.IsValid);
+    }
 }

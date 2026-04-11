@@ -37,13 +37,7 @@ public sealed class Chunk
 
     public int Add(Entity entity, IReadOnlyDictionary<ComponentType, object?> components)
     {
-        if (Count == Capacity)
-        {
-            throw new InvalidOperationException("Chunk is full.");
-        }
-
-        var row = Count;
-        _entities[row] = entity;
+        var row = Add(entity);
         foreach (var component in _signature)
         {
             if (!components.TryGetValue(component, out var value))
@@ -54,6 +48,18 @@ public sealed class Chunk
             _columns[component][row] = value;
         }
 
+        return row;
+    }
+
+    public int Add(Entity entity)
+    {
+        if (Count == Capacity)
+        {
+            throw new InvalidOperationException("Chunk is full.");
+        }
+
+        var row = Count;
+        _entities[row] = entity;
         Count++;
         return row;
     }
@@ -78,6 +84,21 @@ public sealed class Chunk
         }
 
         _columns[component][row] = value;
+    }
+
+    internal void CopySharedComponentsFrom(Chunk source, int sourceRow, int destinationRow)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        source.ValidateRow(sourceRow);
+        ValidateRow(destinationRow);
+
+        foreach (var component in _signature)
+        {
+            if (source._columns.TryGetValue(component, out var sourceColumn))
+            {
+                _columns[component][destinationRow] = sourceColumn[sourceRow];
+            }
+        }
     }
 
     public IReadOnlyDictionary<ComponentType, object?> CaptureRow(int row)
@@ -110,7 +131,7 @@ public sealed class Chunk
         }
         else
         {
-            movedEntity = default;
+            movedEntity = new Entity(-1, -1);
             foreach (var component in _signature)
             {
                 _columns[component][last] = null;

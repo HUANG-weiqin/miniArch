@@ -25,6 +25,7 @@ updated: 2026-04-11
   - `Archetype.cs`：chunk 列表、实体计数、迁移入口
   - `Chunk.cs`：实体列和组件列的密集存储
   - `Signature.cs`：组件集合键
+  - `QueryFilter.cs` / `QueryBuilder.cs`：链式 query filter 构造
   - `Query.cs` / `QueryIterators.cs`：archetype 过滤和 chunk 遍历
   - `ArchetypeEdges.cs`：增删组件迁移缓存
 - 数据流 / 控制流：
@@ -32,6 +33,7 @@ updated: 2026-04-11
   - `Add/Remove/Set` 先算目标签名，再复用 edge cache
   - `Archetype` 负责把实体放进可写 chunk
   - `Chunk` 负责 dense row 的插入、读取和 swap-remove
+  - `QueryBuilder` 负责累积 `With/Without/Any/Or` 过滤条件
   - `Query` 先缓存匹配 archetype，再暴露 chunk 枚举
 - 和其他模块的交互方式：
   - `World` 通过 `ComponentRegistry` 把类型映射成 `ComponentType`
@@ -43,6 +45,7 @@ updated: 2026-04-11
 - 用 `ComponentType` 而不是直接用 `Type` 作为运行时 key，保持签名和缓存更轻。
 - 把数据迁移逻辑放在 `World`，把存储细节放在 `Archetype` 和 `Chunk`，避免职责混杂。
 - 用 `Signature` 作为 archetype key，保证等价组件集合始终落在同一个 storage family。
+- query filter 也统一用 `Signature` 表达，避免额外的 query-only 组件集合结构。
 - 用 chunk 级迭代而不是 entity 级全表扫描，保留局部性和后续优化空间。
 
 ## 认知模型
