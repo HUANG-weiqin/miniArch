@@ -7,3 +7,8 @@ obj/
 *.suo
 BenchmarkDotNet.Artifacts/
 *.log
+profiles/
+TestResults/
+*.nettrace
+*.etlx
+*.trx
