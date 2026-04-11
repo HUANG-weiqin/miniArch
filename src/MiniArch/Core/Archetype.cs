@@ -104,6 +104,51 @@ public sealed class Archetype
         return rangeCount;
     }
 
+    internal int ReserveEntityRanges(int entityCount, Span<EntityBatchRange> ranges)
+    {
+        if (entityCount < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(entityCount));
+        }
+
+        if (entityCount == 0)
+        {
+            return 0;
+        }
+
+        var remaining = entityCount;
+        var rangeCount = 0;
+
+        for (var chunkIndex = _chunks.Count - 1; chunkIndex >= 0 && remaining > 0; chunkIndex--)
+        {
+            var chunk = _chunks[chunkIndex];
+            var available = chunk.Capacity - chunk.Count;
+            if (available <= 0)
+            {
+                continue;
+            }
+
+            var fillCount = Math.Min(available, remaining);
+            var startRow = chunk.ReserveRows(fillCount);
+            ranges[rangeCount++] = new EntityBatchRange(chunkIndex, startRow, fillCount);
+            remaining -= fillCount;
+        }
+
+        while (remaining > 0)
+        {
+            var chunk = CreateChunk(_componentTypes is not null);
+            _chunks.Add(chunk);
+
+            var fillCount = Math.Min(chunk.Capacity, remaining);
+            chunk.ReserveRows(fillCount);
+            ranges[rangeCount++] = new EntityBatchRange(_chunks.Count - 1, 0, fillCount);
+            remaining -= fillCount;
+        }
+
+        EntityCount += entityCount;
+        return rangeCount;
+    }
+
     public bool RemoveEntity(int chunkIndex, int rowIndex, out Entity movedEntity)
     {
         var moved = _chunks[chunkIndex].RemoveAt(rowIndex, out movedEntity);

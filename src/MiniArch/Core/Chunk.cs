@@ -104,6 +104,33 @@ public sealed class Chunk
         return row;
     }
 
+    internal int ReserveRows(int count)
+    {
+        if (count < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(count));
+        }
+
+        if (Count + count > Capacity)
+        {
+            throw new InvalidOperationException("Chunk is full.");
+        }
+
+        var row = Count;
+        Count += count;
+        return row;
+    }
+
+    internal Span<Entity> GetReservedEntities(int startRow, int count)
+    {
+        if (startRow < 0 || count < 0 || startRow + count > Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(startRow));
+        }
+
+        return _entities.AsSpan(startRow, count);
+    }
+
     public object? GetComponent(ComponentType component, int row)
     {
         ValidateRow(row);

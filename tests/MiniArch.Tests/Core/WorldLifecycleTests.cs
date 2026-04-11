@@ -163,4 +163,64 @@ public sealed class WorldLifecycleTests
             Assert.Equal(absoluteIndex % 4, info.RowIndex);
         }
     }
+
+    [Fact]
+    public void CreateMany_reuses_destroyed_ids_with_incremented_versions()
+    {
+        var world = new World(chunkCapacity: 4);
+        var firstBatch = new Entity[6];
+        world.CreateMany(firstBatch);
+
+        for (var i = 0; i < firstBatch.Length; i++)
+        {
+            world.Destroy(firstBatch[i]);
+        }
+
+        var recycledBatch = new Entity[6];
+        world.CreateMany(recycledBatch);
+
+        var ids = recycledBatch.Select(entity => entity.Id).OrderBy(id => id).ToArray();
+        Assert.Equal(new[] { 0, 1, 2, 3, 4, 5 }, ids);
+
+        for (var i = 0; i < firstBatch.Length; i++)
+        {
+            Assert.False(world.TryGetLocation(firstBatch[i], out _));
+        }
+
+        foreach (var entity in recycledBatch)
+        {
+            Assert.Equal(1, entity.Version);
+            Assert.True(world.TryGetLocation(entity, out var info));
+            Assert.Equal(entity.Version, info.Version);
+        }
+    }
+
+    [Fact]
+    public void CreateMany_reuses_available_ids_before_allocating_new_ones()
+    {
+        var world = new World(chunkCapacity: 4);
+        var firstBatch = new Entity[6];
+        world.CreateMany(firstBatch);
+
+        world.Destroy(firstBatch[1]);
+        world.Destroy(firstBatch[4]);
+
+        var secondBatch = new Entity[4];
+        world.CreateMany(secondBatch);
+
+        var ids = secondBatch.Select(entity => entity.Id).OrderBy(id => id).ToArray();
+        Assert.Equal(new[] { 1, 4, 6, 7 }, ids);
+
+        foreach (var entity in secondBatch.Where(entity => entity.Id is 1 or 4))
+        {
+            Assert.Equal(1, entity.Version);
+            Assert.True(world.TryGetLocation(entity, out _));
+        }
+
+        foreach (var entity in secondBatch.Where(entity => entity.Id >= 6))
+        {
+            Assert.Equal(0, entity.Version);
+            Assert.True(world.TryGetLocation(entity, out _));
+        }
+    }
 }

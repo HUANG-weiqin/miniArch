@@ -5,6 +5,8 @@ namespace MiniArch.Core;
 
 public sealed class World
 {
+    private const int StackAllocatedBatchRangeLimit = 128;
+
     private readonly ComponentRegistry _components = new();
     private readonly Dictionary<Signature, Archetype> _archetypes = new();
     private readonly List<int> _versions;
@@ -57,17 +59,31 @@ public sealed class World
             return;
         }
 
+        if (_freeIds.Count == 0)
+        {
+            CreateManyFresh(entities);
+            return;
+        }
+
         FillCreatedEntities(entities);
 
         var archetype = GetOrCreateArchetype(Signature.Empty);
         var maxRangeCount = Math.Min(entities.Length, archetype.Chunks.Count + ((entities.Length + _chunkCapacity - 1) / _chunkCapacity));
-        var rentedRanges = ArrayPool<EntityBatchRange>.Shared.Rent(maxRangeCount);
 
+        if (maxRangeCount <= StackAllocatedBatchRangeLimit)
+        {
+            Span<EntityBatchRange> ranges = stackalloc EntityBatchRange[StackAllocatedBatchRangeLimit];
+            var rangeCount = archetype.ReserveEntities(entities, ranges);
+            WriteBatchLocations(archetype, entities, ranges[..rangeCount]);
+            return;
+        }
+
+        var rentedRanges = ArrayPool<EntityBatchRange>.Shared.Rent(maxRangeCount);
         try
         {
             var ranges = rentedRanges.AsSpan(0, maxRangeCount);
             var rangeCount = archetype.ReserveEntities(entities, ranges);
-            WriteBatchLocations(archetype, entities, ranges.Slice(0, rangeCount));
+            WriteBatchLocations(archetype, entities, ranges[..rangeCount]);
         }
         finally
         {
@@ -339,15 +355,67 @@ public sealed class World
         }
     }
 
+    private void CreateManyFresh(Span<Entity> entities)
+    {
+        var startId = _versions.Count;
+        var requiredCount = startId + entities.Length;
+        EnsureCapacity(requiredCount);
+        CollectionsMarshal.SetCount(_versions, requiredCount);
+        CollectionsMarshal.SetCount(_locations, requiredCount);
+
+        var archetype = GetOrCreateArchetype(Signature.Empty);
+        var maxRangeCount = Math.Min(entities.Length, archetype.Chunks.Count + ((entities.Length + _chunkCapacity - 1) / _chunkCapacity));
+
+        if (maxRangeCount <= StackAllocatedBatchRangeLimit)
+        {
+            Span<EntityBatchRange> ranges = stackalloc EntityBatchRange[StackAllocatedBatchRangeLimit];
+            var rangeCount = archetype.ReserveEntityRanges(entities.Length, ranges);
+            WriteFreshEntitiesAndLocations(archetype, startId, entities, ranges[..rangeCount]);
+            return;
+        }
+
+        var rentedRanges = ArrayPool<EntityBatchRange>.Shared.Rent(maxRangeCount);
+        try
+        {
+            var ranges = rentedRanges.AsSpan(0, maxRangeCount);
+            var rangeCount = archetype.ReserveEntityRanges(entities.Length, ranges);
+            WriteFreshEntitiesAndLocations(archetype, startId, entities, ranges[..rangeCount]);
+        }
+        finally
+        {
+            ArrayPool<EntityBatchRange>.Shared.Return(rentedRanges);
+        }
+    }
+
     private void WriteBatchLocations(Archetype archetype, ReadOnlySpan<Entity> entities, ReadOnlySpan<EntityBatchRange> ranges)
     {
+        var locations = CollectionsMarshal.AsSpan(_locations);
         var entityIndex = 0;
         foreach (var range in ranges)
         {
             for (var rowOffset = 0; rowOffset < range.Count; rowOffset++)
             {
                 var entity = entities[entityIndex++];
-                _locations[entity.Id] = new EntityInfo(entity.Version, archetype, range.ChunkIndex, range.StartRow + rowOffset);
+                locations[entity.Id] = new EntityInfo(entity.Version, archetype, range.ChunkIndex, range.StartRow + rowOffset);
+            }
+        }
+    }
+
+    private void WriteFreshEntitiesAndLocations(Archetype archetype, int startId, Span<Entity> entities, ReadOnlySpan<EntityBatchRange> ranges)
+    {
+        var locations = CollectionsMarshal.AsSpan(_locations);
+        var entityIndex = 0;
+        var nextId = startId;
+
+        foreach (var range in ranges)
+        {
+            var chunkEntities = archetype.GetChunk(range.ChunkIndex).GetReservedEntities(range.StartRow, range.Count);
+            for (var rowOffset = 0; rowOffset < range.Count; rowOffset++)
+            {
+                var entity = new Entity(nextId++, 0);
+                entities[entityIndex++] = entity;
+                chunkEntities[rowOffset] = entity;
+                locations[entity.Id] = new EntityInfo(entity.Version, archetype, range.ChunkIndex, range.StartRow + rowOffset);
             }
         }
     }
