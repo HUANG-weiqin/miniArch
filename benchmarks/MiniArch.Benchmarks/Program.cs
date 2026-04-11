@@ -6,7 +6,13 @@ public static class Program
 {
     public static void Main(string[] args)
     {
-        BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly)
+        BenchmarkSwitcher.FromTypes(new[]
+            {
+                typeof(QueryBenchmarks),
+                typeof(StructuralChangeBenchmarks),
+                typeof(MixedStructuralChangeBenchmarks),
+                typeof(SnapshotBenchmarks),
+            })
             .Run(args, MiniArchBenchmarkConfig.Create());
     }
 }

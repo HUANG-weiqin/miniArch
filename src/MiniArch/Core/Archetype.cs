@@ -61,6 +61,40 @@ public sealed class Archetype
         return chunk;
     }
 
+    internal Chunk ImportSnapshotChunk(ReadOnlySpan<Entity> entities, out int chunkIndex)
+    {
+        if (entities.Length == 0)
+        {
+            if (_chunks.Count == 0)
+            {
+                var emptyChunk = CreateChunk(_componentTypes is not null);
+                _chunks.Add(emptyChunk);
+                chunkIndex = 0;
+                return emptyChunk;
+            }
+
+            chunkIndex = _chunks.Count - 1;
+            return _chunks[chunkIndex];
+        }
+
+        Chunk chunk;
+        if (_chunks.Count == 1 && _chunks[0].Count == 0 && EntityCount == 0)
+        {
+            chunk = _chunks[0];
+            chunkIndex = 0;
+        }
+        else
+        {
+            chunk = CreateChunk(_componentTypes is not null);
+            _chunks.Add(chunk);
+            chunkIndex = _chunks.Count - 1;
+        }
+
+        chunk.Add(entities);
+        EntityCount += entities.Length;
+        return chunk;
+    }
+
     internal int ReserveEntities(ReadOnlySpan<Entity> entities, Span<EntityBatchRange> ranges)
     {
         var remaining = entities.Length;

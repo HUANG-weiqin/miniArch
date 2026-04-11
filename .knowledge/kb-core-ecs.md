@@ -115,6 +115,7 @@ updated: 2026-04-11
 ## 关联模块
 
 - `kb-repo-overview.md`：仓库导航入口
+- `kb-snapshot-persistence.md`：运行时 layout 和 snapshot format 的分层边界
 - `kb-test-workflow.md`：对应行为覆盖和 benchmark 口径
 - `tests/MiniArch.Tests/Core/*.cs`：行为验证
 - `benchmarks/MiniArch.Benchmarks/StructuralChangeBenchmarks.cs`：`Create / CreateMany / Add / Set / Remove / Destroy` 热路径对比

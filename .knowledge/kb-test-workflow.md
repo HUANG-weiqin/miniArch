@@ -13,6 +13,7 @@ updated: 2026-04-11
   - 覆盖实体生命周期、chunk 存储、结构迁移和 query
   - 作为 typed-column / direct-index 重构后的行为回归网
   - 提供 `Create / CreateMany / Add / Set / Remove / Destroy` 的 benchmark 口径
+  - 提供 snapshot save/load 和 snapshot byte size 的 benchmark 口径
   - 单独保留 query 相关的性能对比口径
   - 为 future agent 提供回归判断
 - 这个模块不负责：
@@ -32,10 +33,12 @@ updated: 2026-04-11
   - `QueryFilterTests.cs`
   - `IntegrationTests.cs`
   - `StructuralChangeBenchmarks.cs`
+  - `SnapshotBenchmarks.cs`
 - 数据流 / 控制流：
   - 单元测试先锁定局部行为
   - 集成测试再验证迁移链路
   - mixed structural-change benchmark 用固定种子生成同一批 `Create / Add / Set / Remove / Destroy` 操作脚本
+  - snapshot benchmark 预先构造“每 entity 10 个 unmanaged 组件”的 world，只测 `WorldSnapshot.Save` / `WorldSnapshot.Load` 本体，并单独导出 `SnapshotBytes`
   - benchmark 只比较同构输入下的 Arch / MiniArch 热路径，不承担正确性证明
   - setup、world 构建和脚本生成都放在测量区外
   - `scripts\verify.ps1` 统一跑 build + test
@@ -56,6 +59,7 @@ updated: 2026-04-11
 - `ArchetypeEdges` 的 direct-index 化是性能目标本身，可以用一条小范围的结构测试锁定，避免静默退回字典实现。
 - mixed structural-change benchmark 默认使用 `20/20/20/20/20` 的均衡分布，并用固定种子生成同一条随机脚本。
 - benchmark 必须同时看时间和分配，不能只看平均耗时。
+- snapshot benchmark 的大小指标必须和时间分开导出，不能靠日志打印混进计时结果。
 
 ## 认知模型
 
@@ -74,6 +78,7 @@ updated: 2026-04-11
   - `IntegrationTests.cs`：最完整的端到端例子
   - `WorldStructuralChangeTests.cs`：结构迁移的关键行为
   - `StructuralChangeBenchmarks.cs`：`Create / CreateMany / Add / Set / Remove / Destroy` 与 Arch 的时间和分配对照
+  - `SnapshotBenchmarks.cs`：`WorldSnapshot.Save` / `Load` 的时间、分配和 `SnapshotBytes`
 - 如果是修 bug，先看：
   - 对应功能的测试文件
   - `scripts\test.ps1`
@@ -85,6 +90,7 @@ updated: 2026-04-11
   - `ArchetypeTests.cs`：chunk 复用和可写 chunk 选择策略
   - `WorldStructuralChangeTests.cs`：`Set` / `Add` / `Remove` 的结构变化边界
   - `StructuralChangeBenchmarks.cs`：性能回归口径
+  - `SnapshotBenchmarks.cs`：snapshot 性能口径
 
 ## 坑点
 
@@ -97,6 +103,7 @@ updated: 2026-04-11
   - 加了 `CreateMany` 却没把它纳入 benchmark，导致 bulk path 长期失真
   - `CreateMany` 只看分配下降，却没确认是否还在逐实体落位，导致 bulk time 仍明显慢于 Arch
   - 混合 benchmark 没有固定种子，导致 MiniArch 和 Arch 的输入不一致
+  - snapshot benchmark 把 world 构建或 byte[] 预生成算进了 save/load 时间，导致结果失真
 - 容易误判的地方：
   - 认为 query 结果对了，chunk 顺序就一定对了
   - 认为 entity 还活着，version 也一定没错
@@ -105,10 +112,13 @@ updated: 2026-04-11
   - 集成测试不要过度依赖实现细节
   - `Set` 相关测试要先确认核心是否已经切到 typed-column / direct-index；如果没有，先保留适配点，不要伪造新行为
   - benchmark 输出要和 Arch 在相同 entity 布局、相同操作脚本下对齐，否则对比没有意义
+  - 运行 BenchmarkDotNet 时尽量从 `Release` 入口触发；虽然 BenchmarkDotNet 会单独编译 benchmark 可执行文件，但 debug host 警告会污染阅读
 
 ## 关联模块
 
 - `kb-core-ecs.md`：被测试的运行时模块
+- `kb-snapshot-persistence.md`：snapshot 存档语义和约束
 - `kb-repo-overview.md`：如何启动验证流程
 - `scripts/test.ps1`：测试入口
 - `benchmarks/MiniArch.Benchmarks/StructuralChangeBenchmarks.cs`：分项 structural-change benchmark 与 mixed structural-change benchmark
+- `benchmarks/MiniArch.Benchmarks/SnapshotBenchmarks.cs`：snapshot save/load 与 snapshot size benchmark

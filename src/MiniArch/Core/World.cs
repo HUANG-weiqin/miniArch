@@ -35,9 +35,61 @@ public sealed class World
 
     public int EntityCapacity => _versions.Capacity;
 
+    internal int ChunkCapacity => _chunkCapacity;
+
+    internal int EntitySlotCount => _versions.Count;
+
+    internal ReadOnlySpan<int> EntityVersions => CollectionsMarshal.AsSpan(_versions);
+
     internal Dictionary<Signature, Archetype>.ValueCollection Archetypes => _archetypes.Values;
 
     internal int ArchetypeGeneration => _archetypeGeneration;
+
+    internal void ResetSnapshotState(int entitySlotCount)
+    {
+        if (entitySlotCount < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(entitySlotCount));
+        }
+
+        _archetypes.Clear();
+        _queries.Clear();
+        _freeIds.Clear();
+        _archetypeGeneration = 0;
+
+        _versions.Clear();
+        _locations.Clear();
+        EnsureCapacity(entitySlotCount);
+        CollectionsMarshal.SetCount(_versions, entitySlotCount);
+        CollectionsMarshal.SetCount(_locations, entitySlotCount);
+        CollectionsMarshal.AsSpan(_versions).Clear();
+        CollectionsMarshal.AsSpan(_locations).Clear();
+    }
+
+    internal void SetSnapshotEntityVersion(int entityId, int version)
+    {
+        ValidateSnapshotEntitySlot(entityId);
+        _versions[entityId] = version;
+    }
+
+    internal void SetSnapshotLocation(Entity entity, Archetype archetype, int chunkIndex, int rowIndex)
+    {
+        ValidateSnapshotEntitySlot(entity.Id);
+        _locations[entity.Id] = new EntityInfo(entity.Version, archetype, chunkIndex, rowIndex);
+    }
+
+    internal void RebuildFreeIdStack()
+    {
+        _freeIds.Clear();
+
+        for (var id = _locations.Count - 1; id >= 0; id--)
+        {
+            if (_locations[id] is null)
+            {
+                _freeIds.Push(id);
+            }
+        }
+    }
 
     public Entity Create()
     {
@@ -259,7 +311,7 @@ public sealed class World
         return destination;
     }
 
-    private Archetype GetOrCreateArchetype(Signature signature)
+    internal Archetype GetOrCreateArchetype(Signature signature)
     {
         if (_archetypes.TryGetValue(signature, out var archetype))
         {
@@ -374,6 +426,14 @@ public sealed class World
         }
 
         return ComponentTypeCache<T>.ComponentType;
+    }
+
+    private void ValidateSnapshotEntitySlot(int entityId)
+    {
+        if (entityId < 0 || entityId >= _versions.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(entityId));
+        }
     }
 
     private static class ComponentTypeCache<T>
