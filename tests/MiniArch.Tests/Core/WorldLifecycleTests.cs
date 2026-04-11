@@ -62,6 +62,29 @@ public sealed class WorldLifecycleTests
     }
 
     [Fact]
+    public void Create_with_components_places_entity_directly_into_final_archetype_without_intermediate_archetypes()
+    {
+        var world = new World();
+        var entity = world.Create(new Position(1, 2), new Velocity(3, 4));
+        var positionId = world.Components.GetOrCreate<Position>();
+        var velocityId = world.Components.GetOrCreate<Velocity>();
+
+        Assert.True(world.TryGetLocation(entity, out var info));
+        Assert.Equal(2, info.Archetype.Signature.Count);
+        Assert.Contains(positionId, info.Archetype.Signature);
+        Assert.Contains(velocityId, info.Archetype.Signature);
+
+        var chunk = info.Archetype.GetChunk(info.ChunkIndex);
+        Assert.Equal(new Position(1, 2), chunk.GetComponent<Position>(positionId, info.RowIndex));
+        Assert.Equal(new Velocity(3, 4), chunk.GetComponent<Velocity>(velocityId, info.RowIndex));
+
+        var positionQuery = world.Query<Position>();
+        var matchedArchetypes = positionQuery.MatchedArchetypes;
+        Assert.Single(matchedArchetypes);
+        Assert.Same(info.Archetype, matchedArchetypes[0]);
+    }
+
+    [Fact]
     public void EnsureCapacity_grows_entity_storage_before_creation()
     {
         var world = new World();

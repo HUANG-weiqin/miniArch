@@ -2,7 +2,7 @@
 title: Test Workflow
 module: MiniArch.Tests
 description: How the test suite and mixed structural-change benchmarks are organized and how to run them
-updated: 2026-04-11
+updated: 2026-04-12
 ---
 # Test Workflow
 
@@ -58,10 +58,12 @@ updated: 2026-04-11
 - `WorldLifecycleTests` 需要覆盖 `EnsureCapacity` 和 `CreateMany`，否则 `Create` 的分配优化和批量语义很容易在重构时被回退。
 - `WorldLifecycleTests` 还要覆盖 `CreateMany` 的跨 chunk 顺序和二次批量追加语义，否则批量 reservation 很容易只保住“能跑”而丢掉位置正确性。
 - `WorldLifecycleTests` 还要覆盖 `CreateMany` 的 recycled/mixed id 语义，否则 fresh-path 优化很容易掩盖 free-list 路径的行为回退。
+- `WorldLifecycleTests` 还要覆盖带组件的 `Create<T...>` 直接进入最终 archetype；否则实现很容易退回 `Create + Add` 链路并重新引入中间态 archetype。
 - `ArchetypeEdges` 的 direct-index 化是性能目标本身，可以用一条小范围的结构测试锁定，避免静默退回字典实现。
 - mixed structural-change benchmark 默认使用 `20/20/20/20/20` 的均衡分布，并用固定种子生成同一条随机脚本。
 - `CreateMany` benchmark 不能只测 fresh append-only；必须把 recycled ids 和 mixed ids 分开跑，否则无法判断优化是否只对 `_freeIds.Count == 0` 的快路径有效。
 - benchmark 必须同时看时间和分配，不能只看平均耗时。
+- mixed `CreateMany` benchmark 看到巨大离群值时，要先排除 metadata 扩容边界；必要时结合单次调用诊断看 `Capacity` 变化、分配字节和 GC 代际计数，再判断是不是 free-list 热点本身。
 - `QueryTests` 需要覆盖“热缓存后的同一 query 并发枚举”和“冷缓存首次并发 materialize”两类只读场景；否则 query 的 copy-on-write 发布容易退回共享可变缓存。
 - complex query benchmark 不能只测 query builder 创建；必须测实际 query 执行。
 - complex query benchmark 的命中组件要放在最终 archetype 的后半段构建，避免 `MiniArch` 的迁移中间态空 archetype 混入结果。
@@ -108,6 +110,7 @@ updated: 2026-04-11
   - 加了 `CreateMany` 却没把它纳入 benchmark，导致 bulk path 长期失真
   - `CreateMany` 只看分配下降，却没确认是否还在逐实体落位，导致 bulk time 仍明显慢于 Arch
   - `CreateMany` 只测 append-only，误把 fresh-path 成绩当成所有 free-list 场景的结论
+  - 带组件 `Create<T...>` 只断言组件值正确，却没检查 query 看到的 archetype 集合，容易漏掉“功能正确但留下空中间 archetype”的回退
   - 混合 benchmark 没有固定种子，导致 MiniArch 和 Arch 的输入不一致
   - query 并发测试只覆盖“缓存已热”的读取，而没压到“第一次并发建 query / 刷新快照”的冷路径
   - query benchmark 只测 builder 创建，误把 API 组装成本当成 query 热路径

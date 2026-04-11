@@ -1,17 +1,21 @@
 using System.Buffers;
+using System.Threading;
 using System.Runtime.InteropServices;
 
 namespace MiniArch.Core;
 
 public sealed class World
 {
+    private const int EmptyArchetypeChunkCapacity = 1024;
+    private const int EmptyArchetypeChunkCapacityThreshold = 128;
     private const int StackAllocatedBatchRangeLimit = 128;
 
     private readonly ComponentRegistry _components = new();
     private readonly Dictionary<Signature, Archetype> _archetypes = new();
     private readonly List<int> _versions;
     private readonly List<EntityLocation> _locations;
-    private readonly Dictionary<QueryFilter, Query> _queries = new();
+    private Dictionary<QueryFilter, Query> _queries = new();
+    private Archetype[] _archetypeSnapshot = Array.Empty<Archetype>();
     private readonly int _chunkCapacity;
     private RecycledEntity[] _freeIds;
     private int _freeIdCount;
@@ -39,17 +43,46 @@ public sealed class World
 
     public int EntityCapacity => _versions.Capacity;
 
-    internal Dictionary<Signature, Archetype>.ValueCollection Archetypes => _archetypes.Values;
+    internal Archetype[] Archetypes => Volatile.Read(ref _archetypeSnapshot);
 
     internal int ArchetypeGeneration => _archetypeGeneration;
 
     public Entity Create()
     {
-        var id = AcquireEntityId(out var version);
-        var entity = new Entity(id, version);
         var archetype = GetOrCreateArchetype(Signature.Empty);
-        archetype.ReserveEntity(entity, out var chunkIndex, out var rowIndex);
-        _locations[id] = new EntityLocation(archetype, chunkIndex, rowIndex);
+        return CreateInArchetype(archetype, out _, out _);
+    }
+
+    public Entity Create<T1>(T1 component1)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        chunk.SetComponentAtTyped(archetype.GetComponentIndex(componentType1), rowIndex, in component1);
+        return entity;
+    }
+
+    public Entity Create<T1, T2>(T1 component1, T2 component2)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        chunk.SetComponentAtTyped(archetype.GetComponentIndex(componentType1), rowIndex, in component1);
+        chunk.SetComponentAtTyped(archetype.GetComponentIndex(componentType2), rowIndex, in component2);
+        return entity;
+    }
+
+    public Entity Create<T1, T2, T3>(T1 component1, T2 component2, T3 component3)
+    {
+        var componentType1 = GetComponentType<T1>();
+        var componentType2 = GetComponentType<T2>();
+        var componentType3 = GetComponentType<T3>();
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3));
+        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
+        chunk.SetComponentAtTyped(archetype.GetComponentIndex(componentType1), rowIndex, in component1);
+        chunk.SetComponentAtTyped(archetype.GetComponentIndex(componentType2), rowIndex, in component2);
+        chunk.SetComponentAtTyped(archetype.GetComponentIndex(componentType3), rowIndex, in component3);
         return entity;
     }
 
@@ -291,10 +324,22 @@ public sealed class World
             return archetype;
         }
 
-        archetype = new Archetype(signature, ResolveComponentTypes(signature), _chunkCapacity);
+        var chunkCapacity = GetArchetypeChunkCapacity(signature);
+        archetype = new Archetype(signature, ResolveComponentTypes(signature), chunkCapacity);
         _archetypes.Add(signature, archetype);
+        PublishArchetypeSnapshot(archetype);
         _archetypeGeneration++;
         return archetype;
+    }
+
+    private int GetArchetypeChunkCapacity(Signature signature)
+    {
+        if (signature.Count == 0 && _chunkCapacity >= EmptyArchetypeChunkCapacityThreshold)
+        {
+            return Math.Max(_chunkCapacity, EmptyArchetypeChunkCapacity);
+        }
+
+        return _chunkCapacity;
     }
 
     private Type[] ResolveComponentTypes(Signature signature)
@@ -317,14 +362,41 @@ public sealed class World
 
     internal Query GetOrCreateQuery(QueryFilter filter)
     {
-        if (_queries.TryGetValue(filter, out var query))
+        while (true)
         {
-            return query;
-        }
+            var snapshot = Volatile.Read(ref _queries);
+            if (snapshot.TryGetValue(filter, out var query))
+            {
+                return query;
+            }
 
-        query = new Query(this, filter);
-        _queries.Add(filter, query);
-        return query;
+            var candidate = new Query(this, filter);
+            var updated = new Dictionary<QueryFilter, Query>(snapshot)
+            {
+                [filter] = candidate
+            };
+
+            if (ReferenceEquals(Interlocked.CompareExchange(ref _queries, updated, snapshot), snapshot))
+            {
+                return candidate;
+            }
+        }
+    }
+
+    private void PublishArchetypeSnapshot(Archetype archetype)
+    {
+        while (true)
+        {
+            var snapshot = Volatile.Read(ref _archetypeSnapshot);
+            var updated = new Archetype[snapshot.Length + 1];
+            Array.Copy(snapshot, updated, snapshot.Length);
+            updated[^1] = archetype;
+
+            if (ReferenceEquals(Interlocked.CompareExchange(ref _archetypeSnapshot, updated, snapshot), snapshot))
+            {
+                return;
+            }
+        }
     }
 
     private EntityLocation GetRequiredLocation(Entity entity)
@@ -343,6 +415,15 @@ public sealed class World
         return info;
     }
 
+    private Entity CreateInArchetype(Archetype archetype, out Chunk chunk, out int rowIndex)
+    {
+        var id = AcquireEntityId(out var version);
+        var entity = new Entity(id, version);
+        chunk = archetype.ReserveEntity(entity, out var chunkIndex, out rowIndex);
+        _locations[id] = new EntityLocation(archetype, chunkIndex, rowIndex);
+        return entity;
+    }
+
     private int AppendEntitySlots(int newEntityCount)
     {
         var startId = _versions.Count;
@@ -352,10 +433,26 @@ public sealed class World
         }
 
         var requiredCount = startId + newEntityCount;
-        EnsureCapacity(requiredCount);
+        EnsureBatchCapacity(requiredCount, newEntityCount);
         CollectionsMarshal.SetCount(_versions, requiredCount);
         CollectionsMarshal.SetCount(_locations, requiredCount);
         return startId;
+    }
+
+    private void EnsureBatchCapacity(int requiredCount, int batchCount)
+    {
+        if (_versions.Capacity >= requiredCount && _locations.Capacity >= requiredCount)
+        {
+            return;
+        }
+
+        var targetCapacity = requiredCount + (batchCount / 2);
+        if (targetCapacity < requiredCount)
+        {
+            targetCapacity = requiredCount;
+        }
+
+        EnsureCapacity(targetCapacity);
     }
 
     private void CreateManyFresh(Span<Entity> entities)

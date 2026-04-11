@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, typed columns, direct-index writes, signatures, and queries
-updated: 2026-04-11
+updated: 2026-04-12
 ---
 # MiniArch Core ECS
 
@@ -32,6 +32,7 @@ updated: 2026-04-11
   - `ArchetypeEdges.cs`：增删组件迁移缓存
 - 数据流 / 控制流：
   - `World` 创建实体后放入空签名 archetype
+  - `World.Create<T...>` 会先算目标签名，再把 entity 和组件直接写入最终 archetype，不经过 `Create -> Add -> Add` 的迁移链
   - `World.EnsureCapacity` 负责提前扩好 entity metadata 存储，避免 `Create` 只靠 `List<T>` 被动增长
   - `World.CreateMany` 先批量准备 entity id，再用 `Archetype` 的 chunk-batched reservation 一次性把一批实体落入空签名 archetype
   - `World` 内部把 entity version 和 entity location 分开存储：`_versions` 管版本校验，`_locations` 只保留 archetype/chunk/row，避免 metadata 热路径重复写 version
@@ -41,6 +42,7 @@ updated: 2026-04-11
   - `Chunk` 负责 dense row 的单个/批量插入、读取、swap-remove 和 direct-index 写入
   - `QueryBuilder` 负责累积 `With/Without/Any/Or` 过滤条件
   - `Query` 先缓存匹配 archetype，再暴露 chunk 枚举
+  - query 读路径使用 world 发布的 archetype 数组快照和 query 自身发布的 matched-archetype 数组快照，避免共享可变列表
 - 和其他模块的交互方式：
   - `World` 通过 `ComponentRegistry` 把类型映射成 `ComponentType`
   - `World` 通过 `Signature` 定位 archetype
@@ -57,15 +59,20 @@ updated: 2026-04-11
 - `Set<T>` / `Add<T>` 的原地写入路径要优先走 typed columns + 组件 id -> 列索引表，避免 `object` 盒化和 chunk 字典查找。
 - `World` 侧可以对泛型组件类型做按 `T` 的注册缓存，减少热路径里的重复 registry 查找。
 - `World` 的 entity metadata 需要显式容量管理；如果只依赖 `List<T>` 的自然扩容，`Create` 的分配会长期高于合理水平。
+- 单实体带组件创建也应该直接落到目标签名 archetype；如果退回到 `Create` 后链式 `Add`，会制造只服务于迁移的中间 archetype 和空 chunk。
 - `CreateMany` 应该复用一次空 archetype 查找和一次 upfront 容量保证；它不是“外面循环调用很多次 `Create`”的语法糖。
 - `CreateMany` 的快路径还需要把“新 id 生成”和“chunk 落位”都批量化；如果仍然逐实体 `List.Add` 或逐实体 `ReserveEntity`，时间会显著落后于 Arch。
 - free-list 场景的 `CreateMany` 也应该走 reserve-then-fill：先批量 reserve rows，再在同一轮里写 buffer、chunk entities 和 location metadata；先把 buffer 填满再复制进 chunk 会制造明显的双写。
+- `CreateMany` 的 entity metadata 容量不能每次都 exact-fit；mixed/free-list 场景会在 `oldCount + freshCount` 的边界上反复付出 `List<T>` 扩容成本。批量追加时留少量余量，通常比把扩容留到下一次 mixed create 更稳。
 - location metadata 不应该重复保存 version；version 已经由 world 级 metadata 持有，再在 location 里留一份会增加 mixed/free-list 路径的写放大与扩容成本。
+- 空签名 archetype 只存 entity 列，默认 chunk size 可以比普通 archetype 更大；这样能减少 empty-world `CreateMany` 的 chunk/range 数量，而不会把组件列内存一并放大。
 - `World` 默认 chunk 容量不能太小；过小的默认值会在结构迁移时制造大量微型 chunk，把分配和 GC 放大到不合理的程度。
 - `Archetype` 不能只把写入目标锁死在最后一个 chunk；结构迁移把实体移走后，前面空掉的 chunk 必须可复用，否则 `Remove -> 空 archetype` 会无意义地重新分配 chunk。
 - `ArchetypeEdges` 应该和其他热路径一样使用 component id 直索引，而不是继续停留在 `Dictionary<ComponentType, Archetype>`。
 - 兼容构造仍然保留给直接 `new Archetype(...)` / `new Chunk(...)` 的测试和低频调用，但热路径不要依赖它。
 - `Set` 的热路径应该是 direct-index 原地写，不应该为了更新一个已存在组件去做结构迁移。
+- 在“world 不并发写入”的前提下，query 并发读优先用 copy-on-write 快照发布，而不是加锁；读路径保持数组遍历，写路径承担快照复制成本。
+- query cache 应该发布整个 `Dictionary<QueryFilter, Query>` 快照，而不是在共享字典上做并发写入。
 
 ## 认知模型
 
@@ -103,19 +110,25 @@ updated: 2026-04-11
   - typed chunk 和 slow chunk 共存时，不能让 world 热路径误走 slow path
   - archetype 只复用最后一个 chunk，导致前面已经空掉的 chunk 永远闲置，`Remove` 分配和 GC 被错误放大
   - `Create` 没有 upfront capacity 管理，导致 entity metadata 在批量创建时不断扩容
+  - `Create<T...>` 如果内部复用 `Add` 迁移路径，会重新留下中间态 archetype 和空 chunk
   - `CreateMany` 退化成外部循环调用 `Create`，导致空 archetype 查找和容量检查无法摊平
   - `CreateMany` 只做了 upfront capacity，但仍逐实体 `ReserveEntity` 或逐实体扩展 metadata，bulk create 时间仍会明显慢于 Arch
   - `CreateMany` 的 free-list 路径如果先生成完整 entity span 再复制进 chunk，会在 recycled/mixed benchmark 里形成额外的双写/三遍历热点
+  - `CreateMany` 的 mixed benchmark 如果刚好落在 metadata 扩容边界上，测量结果会掺入 `List<T>` 扩容与零填充成本；要先分清这部分和 free-list 写入本体各占多少
   - location metadata 如果把 version 和位置绑在一个较大的 struct 里，会把 mixed 场景里的 `_locations` 扩容与逐实体写回成本放大
   - edge cache 继续用字典，导致热路径风格和 direct-index 存储体系脱节
+  - query 把匹配 archetype 缓存在共享 `List<Archetype>` 上并原地清空/重建，会在并发只读时制造竞态
 - 容易误判的地方：
   - 以为 `Set<T>` 永远只是原地写入
   - 以为 `Remove<T>` 不存在时应该报错，而不是直接返回
+  - 以为“query 是读操作”就天然线程安全；如果底层缓存仍在共享可变集合上原地刷新，一样会出问题
 - 改这里时要特别小心：
   - `Chunk` 的列必须和 `Signature` 完全一致
   - `World` 的 entity version 不能和 location 脱钩
   - 性能验证必须看 `Arch` 对照数据，不能只看自己变快
   - 当前代码库里这页描述的是目标态，不是旧版 `Dictionary<ComponentType, object?>` 实现
+  - 当前并发保证只覆盖“world 无写入时的 query 并发只读”；不要误把它扩展理解成读写并发安全
+  - 如果并发读阶段第一次查询一个从未注册过的组件类型，`ComponentRegistry.GetOrCreate<T>()` 仍然会触发 registry 写入；这不属于当前保证范围
 
 ## 关联模块
 
