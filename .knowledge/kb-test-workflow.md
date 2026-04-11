@@ -12,7 +12,7 @@ updated: 2026-04-11
   - 验证 ECS core 的行为
   - 覆盖实体生命周期、chunk 存储、结构迁移和 query
   - 作为 typed-column / direct-index 重构后的行为回归网
-  - 提供 `Create / Add / Set / Remove / Destroy` 的混合 structural-change benchmark 口径
+  - 提供 `Create / CreateMany / Add / Set / Remove / Destroy` 的 benchmark 口径
   - 单独保留 query 相关的性能对比口径
   - 为 future agent 提供回归判断
 - 这个模块不负责：
@@ -51,6 +51,8 @@ updated: 2026-04-11
 - 验证脚本和测试项目分离，方便 agent 在需要时只跑局部测试。
 - 结构变化相关测试必须保留 `Set` 的 in-place 语义断言，因为这是 typed-column / direct-index 重构的核心安全网。
 - `ArchetypeTests` 需要覆盖“复用前面空掉的 chunk”这一行为；否则 `Remove` benchmark 的分配回退很难在功能测试里暴露出来。
+- `WorldLifecycleTests` 需要覆盖 `EnsureCapacity` 和 `CreateMany`，否则 `Create` 的分配优化和批量语义很容易在重构时被回退。
+- `ArchetypeEdges` 的 direct-index 化是性能目标本身，可以用一条小范围的结构测试锁定，避免静默退回字典实现。
 - mixed structural-change benchmark 默认使用 `20/20/20/20/20` 的均衡分布，并用固定种子生成同一条随机脚本。
 - benchmark 必须同时看时间和分配，不能只看平均耗时。
 
@@ -70,7 +72,7 @@ updated: 2026-04-11
 - 如果是第一次读这个模块，先看：
   - `IntegrationTests.cs`：最完整的端到端例子
   - `WorldStructuralChangeTests.cs`：结构迁移的关键行为
-  - `StructuralChangeBenchmarks.cs`：`Create / Add / Set / Remove / Destroy` 的混合 benchmark，与 Arch 做时间和分配对照
+  - `StructuralChangeBenchmarks.cs`：`Create / CreateMany / Add / Set / Remove / Destroy` 与 Arch 的时间和分配对照
 - 如果是修 bug，先看：
   - 对应功能的测试文件
   - `scripts\test.ps1`
@@ -89,6 +91,8 @@ updated: 2026-04-11
   - 断言太宽泛，漏掉 chunk 级行为
   - 只看运行时，不看分配和 GC
   - `Remove` 只看时间变快，却没发现 archetype 没复用已有空 chunk，导致分配被隐藏放大
+  - `Create` 只看时间，不看 entity metadata 扩容带来的分配回退
+  - 加了 `CreateMany` 却没把它纳入 benchmark，导致 bulk path 长期失真
   - 混合 benchmark 没有固定种子，导致 MiniArch 和 Arch 的输入不一致
 - 容易误判的地方：
   - 认为 query 结果对了，chunk 顺序就一定对了

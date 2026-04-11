@@ -4,24 +4,33 @@ public sealed class World
 {
     private readonly ComponentRegistry _components = new();
     private readonly Dictionary<Signature, Archetype> _archetypes = new();
-    private readonly List<int> _versions = new();
-    private readonly List<EntityInfo?> _locations = new();
+    private readonly List<int> _versions;
+    private readonly List<EntityInfo?> _locations;
     private readonly Stack<int> _freeIds = new();
     private readonly Dictionary<QueryFilter, Query> _queries = new();
     private readonly int _chunkCapacity;
     private int _archetypeGeneration;
 
-    public World(int chunkCapacity = 128)
+    public World(int chunkCapacity = 128, int entityCapacity = 64)
     {
         if (chunkCapacity <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(chunkCapacity));
         }
 
+        if (entityCapacity < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(entityCapacity));
+        }
+
         _chunkCapacity = chunkCapacity;
+        _versions = new List<int>(entityCapacity);
+        _locations = new List<EntityInfo?>(entityCapacity);
     }
 
     public ComponentRegistry Components => _components;
+
+    public int EntityCapacity => _versions.Capacity;
 
     internal Dictionary<Signature, Archetype>.ValueCollection Archetypes => _archetypes.Values;
 
@@ -36,6 +45,39 @@ public sealed class World
         archetype.ReserveEntity(entity, out var chunkIndex, out var rowIndex);
         _locations[id] = new EntityInfo(version, archetype, chunkIndex, rowIndex);
         return entity;
+    }
+
+    public void CreateMany(Span<Entity> entities)
+    {
+        if (entities.Length == 0)
+        {
+            return;
+        }
+
+        var additionalIds = Math.Max(0, entities.Length - _freeIds.Count);
+        EnsureCapacity(_versions.Count + additionalIds);
+
+        var archetype = GetOrCreateArchetype(Signature.Empty);
+        for (var i = 0; i < entities.Length; i++)
+        {
+            var id = AcquireEntityId();
+            var version = _versions[id];
+            var entity = new Entity(id, version);
+            archetype.ReserveEntity(entity, out var chunkIndex, out var rowIndex);
+            _locations[id] = new EntityInfo(version, archetype, chunkIndex, rowIndex);
+            entities[i] = entity;
+        }
+    }
+
+    public void EnsureCapacity(int entityCapacity)
+    {
+        if (entityCapacity < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(entityCapacity));
+        }
+
+        _versions.EnsureCapacity(entityCapacity);
+        _locations.EnsureCapacity(entityCapacity);
     }
 
     public void Destroy(Entity entity)

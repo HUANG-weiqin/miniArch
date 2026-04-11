@@ -6,6 +6,7 @@ public sealed class ArchetypeTests
 {
     private readonly record struct Position(int X, int Y);
     private readonly record struct Velocity(int X, int Y);
+    private readonly record struct Health(int Value);
 
     [Fact]
     public void Creating_an_archetype_allocates_an_initial_chunk()
@@ -102,6 +103,34 @@ public sealed class ArchetypeTests
         Assert.True(world.TryGetLocation(entity, out var secondLocation));
 
         Assert.Same(firstLocation.Archetype, secondLocation.Archetype);
+    }
+
+    [Fact]
+    public void Transition_edges_handle_late_registered_component_ids()
+    {
+        var world = new World();
+        var entity = world.Create();
+
+        world.Add(entity, new Position(1, 1));
+        world.Remove<Position>(entity);
+        world.Add(entity, new Health(7));
+        Assert.True(world.TryGetLocation(entity, out var firstHealthLocation));
+
+        world.Remove<Health>(entity);
+        world.Add(entity, new Health(9));
+        Assert.True(world.TryGetLocation(entity, out var secondHealthLocation));
+
+        Assert.Same(firstHealthLocation.Archetype, secondHealthLocation.Archetype);
+    }
+
+    [Fact]
+    public void Archetype_edges_use_direct_index_storage_instead_of_dictionaries()
+    {
+        var fields = typeof(ArchetypeEdges)
+            .GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+        Assert.DoesNotContain(fields, field => field.FieldType.IsGenericType &&
+            field.FieldType.GetGenericTypeDefinition() == typeof(Dictionary<,>));
     }
 
     private static Dictionary<ComponentType, object?> Components(ComponentType position, Position value)

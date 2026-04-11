@@ -81,6 +81,22 @@ public class StructuralChangeBenchmarks
         }
     }
 
+    [Benchmark(Description = "Arch create empty entities in bulk")]
+    public void Arch_CreateMany_Entity()
+    {
+        using var world = Arch.Core.World.Create();
+        var entities = new ArchEntity[EntityCount];
+        world.Create(entities, Arch.Core.Signature.Null, EntityCount);
+    }
+
+    [Benchmark(Description = "MiniArch create empty entities in bulk")]
+    public void MiniArch_CreateMany_Entity()
+    {
+        var world = new MiniArch.Core.World();
+        var entities = new MiniEntity[EntityCount];
+        world.CreateMany(entities);
+    }
+
     [Benchmark(Description = "Arch add Position to empty entities")]
     public void Arch_Add_Position()
     {

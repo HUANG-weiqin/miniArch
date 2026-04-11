@@ -60,4 +60,65 @@ public sealed class WorldLifecycleTests
         Assert.Equal(0, info.ChunkIndex);
         Assert.Equal(0, info.RowIndex);
     }
+
+    [Fact]
+    public void EnsureCapacity_grows_entity_storage_before_creation()
+    {
+        var world = new World();
+
+        world.EnsureCapacity(256);
+
+        Assert.True(world.EntityCapacity >= 256);
+    }
+
+    [Fact]
+    public void Pre_sized_world_can_create_many_valid_entities()
+    {
+        var world = new World();
+        world.EnsureCapacity(512);
+
+        Entity last = default;
+        for (var i = 0; i < 512; i++)
+        {
+            last = world.Create();
+        }
+
+        Assert.Equal(512, world.EntityCapacity);
+        Assert.True(last.IsValid);
+        Assert.True(world.TryGetLocation(last, out var info));
+        Assert.Equal(last.Version, info.Version);
+    }
+
+    [Fact]
+    public void CreateMany_fills_the_supplied_buffer_with_valid_entities()
+    {
+        var world = new World();
+        var entities = new Entity[8];
+
+        world.CreateMany(entities);
+
+        for (var i = 0; i < entities.Length; i++)
+        {
+            Assert.True(entities[i].IsValid);
+            Assert.Equal(i, entities[i].Id);
+            Assert.True(world.TryGetLocation(entities[i], out var info));
+            Assert.Equal(entities[i].Version, info.Version);
+        }
+    }
+
+    [Fact]
+    public void CreateMany_preserves_location_order_inside_the_empty_archetype()
+    {
+        var world = new World();
+        var entities = new Entity[16];
+
+        world.CreateMany(entities);
+
+        for (var i = 0; i < entities.Length; i++)
+        {
+            Assert.True(world.TryGetLocation(entities[i], out var info));
+            Assert.Equal(0, info.ChunkIndex);
+            Assert.Equal(i, info.RowIndex);
+        }
+    }
 }
