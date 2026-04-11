@@ -2,7 +2,7 @@ using BenchmarkDotNet.Attributes;
 
 namespace MiniArch.Benchmarks;
 
-// Keep the benchmark focused on the structural-change hot path.
+// Keep the benchmark focused on create/destroy and structural-change hot paths.
 // Memory diagnostics are enabled in the shared BenchmarkDotNet config.
 public class StructuralChangeBenchmarks
 {
@@ -56,6 +56,26 @@ public class StructuralChangeBenchmarks
 
     [IterationCleanup(Target = nameof(Arch_Destroy_Entity))]
     public void CleanupArchDestroy() => _archDestroyState.Dispose();
+
+    [Benchmark(Description = "Arch create empty entities")]
+    public void Arch_Create_Entity()
+    {
+        using var world = Arch.Core.World.Create();
+        for (var i = 0; i < EntityCount; i++)
+        {
+            world.Create();
+        }
+    }
+
+    [Benchmark(Description = "MiniArch create empty entities")]
+    public void MiniArch_Create_Entity()
+    {
+        var world = new MiniArch.Core.World();
+        for (var i = 0; i < EntityCount; i++)
+        {
+            world.Create();
+        }
+    }
 
     [Benchmark(Description = "Arch add Position to empty entities")]
     public void Arch_Add_Position()

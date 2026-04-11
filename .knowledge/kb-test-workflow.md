@@ -12,6 +12,7 @@ updated: 2026-04-11
   - 验证 ECS core 的行为
   - 覆盖实体生命周期、chunk 存储、结构迁移和 query
   - 作为 typed-column / direct-index 重构后的行为回归网
+  - 提供 `Create / Add / Set / Remove / Destroy / Query` 的对比 benchmark 口径
   - 为 future agent 提供回归判断
 - 这个模块不负责：
   - 业务特性设计
@@ -65,7 +66,7 @@ updated: 2026-04-11
 - 如果是第一次读这个模块，先看：
   - `IntegrationTests.cs`：最完整的端到端例子
   - `WorldStructuralChangeTests.cs`：结构迁移的关键行为
-  - `StructuralChangeBenchmarks.cs`：`Set` 热路径与 Arch 的对照口径
+  - `StructuralChangeBenchmarks.cs`：`Create / Add / Set / Remove / Destroy` 与 Arch 的对照口径
 - 如果是修 bug，先看：
   - 对应功能的测试文件
   - `scripts\test.ps1`
