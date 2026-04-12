@@ -18,3 +18,33 @@ Minimal ECS learning project inspired by Arch.
 - component add/remove operations migrate entities between archetypes
 - chunks use dense structure-of-arrays storage
 - queries filter archetypes first, then iterate their chunks
+
+## API Layers
+
+- `MiniArch.Ecs`
+  - user-facing API for game logic
+  - `World`, `Entity`, `Query<T>`, `Query<T1, T2>`
+  - default queries support direct `foreach`
+  - `World.Advanced` is the escape hatch back to `MiniArch.Core`
+- `MiniArch.Core`
+  - advanced API for storage-aware access and profiling
+  - `Chunk`, `Archetype`, `Signature`, `QueryBuilder`, `ComponentRegistry`
+
+## User Query Example
+
+```csharp
+using MiniArch.Ecs;
+
+var world = new World();
+var entity = world.Create(new Position(1, 2), new Velocity(3, 4));
+
+if (world.TryGet(entity, out Position position))
+{
+    Console.WriteLine(position);
+}
+
+foreach (var item in world.Query<Position, Velocity>())
+{
+    Console.WriteLine($"{item.Entity}: {item.First} / {item.Second}");
+}
+```
