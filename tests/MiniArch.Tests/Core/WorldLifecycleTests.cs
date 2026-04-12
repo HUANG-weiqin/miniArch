@@ -367,4 +367,77 @@ public sealed class WorldLifecycleTests
         Assert.Single(query.MatchedArchetypes);
         Assert.Equal(2, query.GetChunkSpan().Length);
     }
+
+    [Fact]
+    public void Link_stores_parent_relationship_and_children_list()
+    {
+        var world = new World();
+        var parent = world.Create();
+        var firstChild = world.Create();
+        var secondChild = world.Create();
+
+        world.Link(parent, firstChild);
+        world.Link(parent, secondChild);
+
+        Assert.True(world.TryGetParent(firstChild, out var resolvedParent));
+        Assert.Equal(parent, resolvedParent);
+
+        var children = world.GetChildren(parent);
+        Assert.Equal(2, children.Count);
+        Assert.Equal([firstChild, secondChild], children.OrderBy(entity => entity.Id).ToArray());
+    }
+
+    [Fact]
+    public void Link_reparents_child_to_latest_parent()
+    {
+        var world = new World();
+        var firstParent = world.Create();
+        var secondParent = world.Create();
+        var child = world.Create();
+
+        world.Link(firstParent, child);
+        world.Link(secondParent, child);
+
+        Assert.True(world.TryGetParent(child, out var resolvedParent));
+        Assert.Equal(secondParent, resolvedParent);
+        Assert.Empty(world.GetChildren(firstParent));
+        Assert.Equal([child], world.GetChildren(secondParent));
+    }
+
+    [Fact]
+    public void Destroy_parent_cascades_to_all_descendants()
+    {
+        var world = new World();
+        var root = world.Create();
+        var child = world.Create();
+        var grandChild = world.Create();
+
+        world.Link(root, child);
+        world.Link(child, grandChild);
+
+        world.Destroy(root);
+
+        Assert.False(world.IsAlive(root));
+        Assert.False(world.IsAlive(child));
+        Assert.False(world.IsAlive(grandChild));
+        Assert.Empty(world.GetChildren(root));
+    }
+
+    [Fact]
+    public void Reused_entity_slot_does_not_inherit_destroyed_relationship()
+    {
+        var world = new World();
+        var parent = world.Create();
+        var child = world.Create();
+
+        world.Link(parent, child);
+        world.Destroy(child);
+
+        var replacement = world.Create();
+
+        Assert.Equal(child.Id, replacement.Id);
+        Assert.NotEqual(child.Version, replacement.Version);
+        Assert.False(world.TryGetParent(replacement, out _));
+        Assert.Empty(world.GetChildren(parent));
+    }
 }

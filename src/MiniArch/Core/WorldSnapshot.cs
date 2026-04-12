@@ -8,7 +8,7 @@ namespace MiniArch.Core;
 public static class WorldSnapshot
 {
     private const int Magic = 0x4D415243;
-    private const int FormatVersion = 1;
+    private const int FormatVersion = 2;
 
     private static readonly ConcurrentDictionary<Type, ColumnCodec> ColumnCodecs = new();
 
@@ -32,6 +32,7 @@ public static class WorldSnapshot
         writer.Write(world.EntitySlotCount);
         writer.Write(schemaEntries.Count);
         writer.Write(persistedArchetypes.Count);
+        writer.Write(world.Hierarchy.CountLiveLinks(world));
 
         foreach (var version in world.EntityVersions)
         {
@@ -46,6 +47,12 @@ public static class WorldSnapshot
         foreach (var archetype in persistedArchetypes)
         {
             WriteArchetype(writer, world, archetype, schemaEntries);
+        }
+
+        foreach (var (child, parent) in world.Hierarchy.EnumerateLiveLinks(world))
+        {
+            writer.Write(child.Id);
+            writer.Write(parent.Id);
         }
     }
 
@@ -66,6 +73,7 @@ public static class WorldSnapshot
         var entitySlotCount = reader.ReadInt32();
         var schemaCount = reader.ReadInt32();
         var archetypeCount = reader.ReadInt32();
+        var hierarchyLinkCount = reader.ReadInt32();
 
         var slotVersions = new int[entitySlotCount];
         for (var index = 0; index < slotVersions.Length; index++)
@@ -99,6 +107,15 @@ public static class WorldSnapshot
         for (var archetypeIndex = 0; archetypeIndex < archetypeCount; archetypeIndex++)
         {
             ReadArchetype(reader, world, schemaComponentTypes, slotVersions);
+        }
+
+        for (var linkIndex = 0; linkIndex < hierarchyLinkCount; linkIndex++)
+        {
+            var childId = reader.ReadInt32();
+            var parentId = reader.ReadInt32();
+            var child = new Entity(childId, slotVersions[childId]);
+            var parent = new Entity(parentId, slotVersions[parentId]);
+            world.LinkSnapshot(parent, child);
         }
 
         world.RebuildFreeIdStack();

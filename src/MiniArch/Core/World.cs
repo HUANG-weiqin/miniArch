@@ -23,6 +23,7 @@ public sealed class World
 
     private readonly ComponentRegistry _components = new();
     private readonly Dictionary<Signature, Archetype> _archetypes = new();
+    private readonly HierarchyTable _hierarchy = new();
     private readonly List<int> _versions;
     private readonly List<EntityLocation> _locations;
     private Dictionary<QueryFilter, Query> _queries = new();
@@ -65,6 +66,8 @@ public sealed class World
 
     internal Archetype[] Archetypes => Volatile.Read(ref _archetypeSnapshot);
 
+    internal HierarchyTable Hierarchy => _hierarchy;
+
     internal int ArchetypeGeneration => _archetypeGeneration;
 
     internal int QueryLayoutGeneration => _queryLayoutGeneration;
@@ -82,6 +85,7 @@ public sealed class World
         _archetypeGeneration = 0;
         _queryLayoutGeneration = 0;
         _freeIdCount = 0;
+        _hierarchy.Reset();
 
         _versions.Clear();
         _locations.Clear();
@@ -101,6 +105,12 @@ public sealed class World
     {
         ValidateSnapshotEntitySlot(entityId);
         _versions[entityId] = version;
+    }
+
+    internal int GetEntityVersion(int entityId)
+    {
+        ValidateSnapshotEntitySlot(entityId);
+        return _versions[entityId];
     }
 
     internal void SetSnapshotLocation(Entity entity, Archetype archetype, int chunkIndex, int rowIndex)
@@ -580,18 +590,40 @@ public sealed class World
 
     public void Destroy(Entity entity)
     {
-        var info = GetRequiredLocation(entity);
-        info.Archetype.RemoveEntity(info.ChunkIndex, info.RowIndex, out var movedEntity);
-        _locations[entity.Id] = default;
-        _versions[entity.Id] = entity.Version + 1;
-        PushFreeId(entity.Id, entity.Version + 1);
-
-        if (movedEntity.IsValid)
+        var destroyOrder = new List<Entity>();
+        _hierarchy.CollectDestroySubtree(this, entity, new HashSet<Entity>(), destroyOrder);
+        if (destroyOrder.Count == 0)
         {
-            _locations[movedEntity.Id] = info;
+            throw new InvalidOperationException($"Entity {entity} is stale or unknown.");
+        }
+
+        foreach (var target in destroyOrder)
+        {
+            DestroySingle(target);
         }
 
         TouchQueryLayout();
+    }
+
+    public void Link(Entity parent, Entity child)
+    {
+        _hierarchy.Link(this, parent, child);
+    }
+
+    public void Unlink(Entity child)
+    {
+        GetRequiredLocation(child);
+        _hierarchy.Unlink(child);
+    }
+
+    public bool TryGetParent(Entity child, out Entity parent)
+    {
+        return _hierarchy.TryGetParent(this, child, out parent);
+    }
+
+    public List<Entity> GetChildren(Entity parent)
+    {
+        return _hierarchy.GetChildren(this, parent);
     }
 
     public void Add<T>(Entity entity, T component)
@@ -902,6 +934,21 @@ public sealed class World
         return info;
     }
 
+    private void DestroySingle(Entity entity)
+    {
+        var info = GetRequiredLocation(entity);
+        info.Archetype.RemoveEntity(info.ChunkIndex, info.RowIndex, out var movedEntity);
+        _hierarchy.RemoveDestroyed(entity);
+        _locations[entity.Id] = default;
+        _versions[entity.Id] = entity.Version + 1;
+        PushFreeId(entity.Id, entity.Version + 1);
+
+        if (movedEntity.IsValid)
+        {
+            _locations[movedEntity.Id] = info;
+        }
+    }
+
     private Entity CreateInArchetype(Archetype archetype, out Chunk chunk, out int rowIndex)
     {
         var id = AcquireEntityId(out var version);
@@ -1064,6 +1111,11 @@ public sealed class World
         {
             throw new ArgumentOutOfRangeException(nameof(entityId));
         }
+    }
+
+    internal void LinkSnapshot(Entity parent, Entity child)
+    {
+        _hierarchy.LinkRestored(parent, child);
     }
 
     private static class ComponentTypeCache<T>

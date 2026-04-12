@@ -1,3 +1,5 @@
+using System.Linq;
+
 namespace MiniArch.Ecs;
 
 public sealed class World
@@ -31,6 +33,22 @@ public sealed class World
     public void Remove<T>(Entity entity) => _world.Remove<T>(entity.AsCore());
 
     public void Destroy(Entity entity) => _world.Destroy(entity.AsCore());
+
+    public void Link(Entity parent, Entity child) => _world.Link(parent.AsCore(), child.AsCore());
+
+    public void Unlink(Entity child) => _world.Unlink(child.AsCore());
+
+    public bool TryGetParent(Entity child, out Entity parent)
+    {
+        var result = _world.TryGetParent(child.AsCore(), out var resolved);
+        parent = Entity.FromCore(resolved);
+        return result;
+    }
+
+    public List<Entity> GetChildren(Entity parent)
+    {
+        return _world.GetChildren(parent.AsCore()).Select(Entity.FromCore).ToList();
+    }
 
     public bool IsAlive(Entity entity) => _world.IsAlive(entity.AsCore());
 

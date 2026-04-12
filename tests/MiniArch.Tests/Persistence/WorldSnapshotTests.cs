@@ -157,6 +157,53 @@ public sealed class WorldSnapshotTests
         Assert.True(loaded.TryGetLocation(recreated, out _));
     }
 
+    [Fact]
+    public void Snapshot_preserves_parent_and_children_relationships()
+    {
+        var world = new World();
+        var parent = world.Create();
+        var firstChild = world.Create();
+        var secondChild = world.Create();
+
+        world.Link(parent, firstChild);
+        world.Link(parent, secondChild);
+
+        using var stream = new MemoryStream();
+        WorldSnapshot.Save(stream, world);
+        stream.Position = 0;
+
+        var loaded = WorldSnapshot.Load(stream);
+
+        Assert.True(loaded.TryGetParent(firstChild, out var resolvedParent));
+        Assert.Equal(parent, resolvedParent);
+        Assert.Equal(
+            [firstChild, secondChild],
+            loaded.GetChildren(parent).OrderBy(entity => entity.Id).ToArray());
+    }
+
+    [Fact]
+    public void Snapshot_restores_hierarchy_so_cascade_destroy_still_works()
+    {
+        var world = new World();
+        var root = world.Create();
+        var child = world.Create();
+        var grandChild = world.Create();
+
+        world.Link(root, child);
+        world.Link(child, grandChild);
+
+        using var stream = new MemoryStream();
+        WorldSnapshot.Save(stream, world);
+        stream.Position = 0;
+
+        var loaded = WorldSnapshot.Load(stream);
+        loaded.Destroy(root);
+
+        Assert.False(loaded.IsAlive(root));
+        Assert.False(loaded.IsAlive(child));
+        Assert.False(loaded.IsAlive(grandChild));
+    }
+
     private static T GetComponent<T>(World world, Entity entity)
     {
         Assert.True(world.TryGetLocation(entity, out var location));
