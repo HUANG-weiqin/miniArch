@@ -34,6 +34,8 @@ public sealed class World
     private int _freeIdCount;
     private int _archetypeGeneration;
     private int _queryLayoutGeneration;
+    private int _queryLayoutSuppressionCount;
+    private bool _queryLayoutDirty;
 
     public World(int chunkCapacity = DefaultChunkCapacity, int entityCapacity = 64)
     {
@@ -669,23 +671,7 @@ public sealed class World
     public void Remove<T>(Entity entity)
     {
         var componentType = GetComponentType<T>();
-        var info = GetRequiredLocation(entity);
-        var archetype = info.Archetype;
-
-        if (!archetype.TryGetComponentIndex(componentType, out _))
-        {
-            return;
-        }
-
-        if (archetype.Edges.TryGetRemove(componentType, out var cached) && cached is not null)
-        {
-            MoveEntity(entity, info, cached);
-            return;
-        }
-
-        var destinationSignature = archetype.Signature.Remove(componentType);
-        var destination = GetOrCreateDestinationArchetype(archetype, componentType, destinationSignature, isAdd: false);
-        MoveEntity(entity, info, destination);
+        RemoveBoxed(entity, componentType);
     }
 
     public QueryBuilder Query()
@@ -763,6 +749,26 @@ public sealed class World
 
         var destinationColumnIndex = destination.GetComponentIndex(componentType);
         destinationChunk.SetComponentAtTyped(destinationColumnIndex, destinationRowIndex, in componentValue);
+
+        sourceInfo.Archetype.RemoveEntity(sourceInfo.ChunkIndex, sourceInfo.RowIndex, out var movedEntity);
+
+        if (movedEntity.IsValid)
+        {
+            _locations[movedEntity.Id] = sourceInfo;
+        }
+
+        _locations[entity.Id] = new EntityLocation(destination, destinationChunkIndex, destinationRowIndex);
+        TouchQueryLayout();
+    }
+
+    private void MoveEntityBoxed(Entity entity, EntityLocation sourceInfo, Archetype destination, ComponentType componentType, object? componentValue)
+    {
+        var sourceChunk = sourceInfo.Archetype.GetChunk(sourceInfo.ChunkIndex);
+        var destinationChunk = destination.ReserveEntity(entity, out var destinationChunkIndex, out var destinationRowIndex);
+        destinationChunk.CopySharedComponentsFrom(sourceChunk, sourceInfo.RowIndex, destinationRowIndex);
+
+        var destinationColumnIndex = destination.GetComponentIndex(componentType);
+        destinationChunk.SetComponent(componentType, destinationRowIndex, componentValue);
 
         sourceInfo.Archetype.RemoveEntity(sourceInfo.ChunkIndex, sourceInfo.RowIndex, out var movedEntity);
 
@@ -1092,6 +1098,12 @@ public sealed class World
 
     private void TouchQueryLayout()
     {
+        if (_queryLayoutSuppressionCount > 0)
+        {
+            _queryLayoutDirty = true;
+            return;
+        }
+
         _queryLayoutGeneration++;
     }
 
@@ -1117,6 +1129,308 @@ public sealed class World
     internal void LinkSnapshot(Entity parent, Entity child)
     {
         _hierarchy.LinkRestored(parent, child);
+    }
+
+    internal Entity ReserveDeferredEntity()
+    {
+        var id = AcquireEntityId(out var version);
+        return new Entity(id, version);
+    }
+
+    internal void ReleaseReservedEntity(Entity entity)
+    {
+        if (entity.Id < 0 || entity.Id >= _locations.Count)
+        {
+            throw new InvalidOperationException($"Entity {entity} is stale or unknown.");
+        }
+
+        if (_locations[entity.Id].Archetype is not null || _versions[entity.Id] != entity.Version)
+        {
+            throw new InvalidOperationException($"Entity {entity} is not a deferred reserved entity.");
+        }
+
+        var nextVersion = entity.Version + 1;
+        _versions[entity.Id] = nextVersion;
+        PushFreeId(entity.Id, nextVersion);
+    }
+
+    public void Replay(in FrameCommands frameCommands)
+    {
+        var state = frameCommands.State;
+        BeginDeferredLayoutUpdates();
+        try
+        {
+            foreach (var reserved in state.ReservedEntities)
+            {
+                EnsureReplayReservation(reserved);
+            }
+
+            foreach (var released in state.ReleasedEntities)
+            {
+                ReleaseReservedEntity(released);
+            }
+
+            foreach (var created in state.CreatedEntities)
+            {
+                MaterializeReservedEntity(created.Entity, created.Components);
+            }
+
+            foreach (var link in state.LinkCommands)
+            {
+                Link(link.Parent, link.Child);
+            }
+
+            foreach (var unlink in state.UnlinkCommands)
+            {
+                Unlink(unlink.Child);
+            }
+
+            foreach (var add in state.AddCommands)
+            {
+                AddBoxed(add.Entity, add.ComponentType, add.Value);
+            }
+
+            foreach (var set in state.SetCommands)
+            {
+                SetBoxed(set.Entity, set.ComponentType, set.Value);
+            }
+
+            foreach (var remove in state.RemoveCommands)
+            {
+                RemoveBoxed(remove.Entity, remove.ComponentType);
+            }
+
+            foreach (var entity in state.DestroyedEntities)
+            {
+                if (IsAlive(entity))
+                {
+                    Destroy(entity);
+                }
+            }
+        }
+        finally
+        {
+            EndDeferredLayoutUpdates();
+        }
+    }
+
+    internal void Replay(CommandBuffer.CompiledCommandBatch compiledCommands)
+    {
+        ArgumentNullException.ThrowIfNull(compiledCommands);
+
+        BeginDeferredLayoutUpdates();
+        try
+        {
+            foreach (var reserved in compiledCommands.ReservedEntities)
+            {
+                EnsureReplayReservation(reserved);
+            }
+
+            foreach (var released in compiledCommands.ReleasedEntities)
+            {
+                ReleaseReservedEntity(released);
+            }
+
+            foreach (var created in compiledCommands.CreatedEntities)
+            {
+                MaterializeReservedEntity(created.Entity, created.Components);
+            }
+
+            foreach (var link in compiledCommands.LinkCommands)
+            {
+                Link(link.Parent, link.Child);
+            }
+
+            foreach (var unlink in compiledCommands.UnlinkCommands)
+            {
+                Unlink(unlink.Child);
+            }
+
+            foreach (var add in compiledCommands.AddCommands)
+            {
+                AddBoxed(add.Entity, add.ComponentType, add.Value);
+            }
+
+            foreach (var set in compiledCommands.SetCommands)
+            {
+                SetBoxed(set.Entity, set.ComponentType, set.Value);
+            }
+
+            foreach (var remove in compiledCommands.RemoveCommands)
+            {
+                RemoveBoxed(remove.Entity, remove.ComponentType);
+            }
+
+            foreach (var entity in compiledCommands.DestroyedEntities)
+            {
+                if (IsAlive(entity))
+                {
+                    Destroy(entity);
+                }
+            }
+        }
+        finally
+        {
+            EndDeferredLayoutUpdates();
+        }
+    }
+
+    internal void MaterializeReservedEntity(Entity entity, IReadOnlyList<FrameComponentValue> components)
+    {
+        EnsureReplayReservation(entity);
+        var signature = BuildReplaySignature(components);
+        var archetype = GetOrCreateArchetype(signature);
+        var chunk = archetype.ReserveEntity(entity, out var chunkIndex, out var rowIndex);
+        _locations[entity.Id] = new EntityLocation(archetype, chunkIndex, rowIndex);
+
+        for (var index = 0; index < components.Count; index++)
+        {
+            var component = components[index];
+            chunk.SetComponent(GetComponentType(component.ComponentType), rowIndex, component.Value);
+        }
+
+        TouchQueryLayout();
+    }
+
+    internal void AddBoxed(Entity entity, Type componentType, object? component)
+    {
+        AddBoxed(entity, GetComponentType(componentType), component);
+    }
+
+    internal void AddBoxed(Entity entity, ComponentType componentType, object? component)
+    {
+        var info = GetRequiredLocation(entity);
+        var archetype = info.Archetype;
+
+        if (archetype.TryGetComponentIndex(componentType, out _))
+        {
+            archetype.GetChunk(info.ChunkIndex).SetComponent(componentType, info.RowIndex, component);
+            return;
+        }
+
+        if (archetype.Edges.TryGetAdd(componentType, out var cached) && cached is not null)
+        {
+            MoveEntityBoxed(entity, info, cached, componentType, component);
+            return;
+        }
+
+        var destinationSignature = archetype.Signature.Add(componentType);
+        var destination = GetOrCreateDestinationArchetype(archetype, componentType, destinationSignature, isAdd: true);
+        MoveEntityBoxed(entity, info, destination, componentType, component);
+    }
+
+    internal void SetBoxed(Entity entity, Type componentType, object? component)
+    {
+        SetBoxed(entity, GetComponentType(componentType), component);
+    }
+
+    internal void SetBoxed(Entity entity, ComponentType componentType, object? component)
+    {
+        var info = GetRequiredLocation(entity);
+        var archetype = info.Archetype;
+
+        if (archetype.TryGetComponentIndex(componentType, out _))
+        {
+            archetype.GetChunk(info.ChunkIndex).SetComponent(componentType, info.RowIndex, component);
+            return;
+        }
+
+        var destinationSignature = archetype.Signature.Add(componentType);
+        var destination = GetOrCreateDestinationArchetype(archetype, componentType, destinationSignature, isAdd: true);
+        MoveEntityBoxed(entity, info, destination, componentType, component);
+    }
+
+    internal void RemoveBoxed(Entity entity, Type componentType)
+    {
+        RemoveBoxed(entity, GetComponentType(componentType));
+    }
+
+    internal void RemoveBoxed(Entity entity, ComponentType componentType)
+    {
+        var info = GetRequiredLocation(entity);
+        var archetype = info.Archetype;
+
+        if (!archetype.TryGetComponentIndex(componentType, out _))
+        {
+            return;
+        }
+
+        if (archetype.Edges.TryGetRemove(componentType, out var cached) && cached is not null)
+        {
+            MoveEntity(entity, info, cached);
+            return;
+        }
+
+        var destinationSignature = archetype.Signature.Remove(componentType);
+        var destination = GetOrCreateDestinationArchetype(archetype, componentType, destinationSignature, isAdd: false);
+        MoveEntity(entity, info, destination);
+    }
+
+    private void BeginDeferredLayoutUpdates()
+    {
+        _queryLayoutSuppressionCount++;
+    }
+
+    private void EndDeferredLayoutUpdates()
+    {
+        _queryLayoutSuppressionCount--;
+        if (_queryLayoutSuppressionCount == 0 && _queryLayoutDirty)
+        {
+            _queryLayoutDirty = false;
+            _queryLayoutGeneration++;
+        }
+    }
+
+    private void EnsureReplayReservation(Entity entity)
+    {
+        if (entity.Id < _locations.Count &&
+            _locations[entity.Id].Archetype is null &&
+            _versions[entity.Id] == entity.Version &&
+            !IsEntityAvailableInFreeList(entity))
+        {
+            return;
+        }
+
+        var reserved = ReserveDeferredEntity();
+        if (reserved != entity)
+        {
+            throw new InvalidOperationException($"Replay target diverged while reserving {entity}; got {reserved} instead.");
+        }
+    }
+
+    private bool IsEntityAvailableInFreeList(Entity entity)
+    {
+        for (var index = 0; index < _freeIdCount; index++)
+        {
+            var recycled = _freeIds[index];
+            if (recycled.Id == entity.Id && recycled.Version == entity.Version)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private Signature BuildReplaySignature(IReadOnlyList<FrameComponentValue> components)
+    {
+        if (components.Count == 0)
+        {
+            return Signature.Empty;
+        }
+
+        var componentTypes = new ComponentType[components.Count];
+        for (var index = 0; index < components.Count; index++)
+        {
+            componentTypes[index] = GetComponentType(components[index].ComponentType);
+        }
+
+        return new Signature(componentTypes);
+    }
+
+    private ComponentType GetComponentType(Type componentType)
+    {
+        return _components.GetOrCreate(componentType);
     }
 
     private static class ComponentTypeCache<T>

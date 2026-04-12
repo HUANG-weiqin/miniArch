@@ -8,7 +8,7 @@
 - `kb-profiling-workflow.md`：可复用的 CPU sampling / profiling 方法和命令模板
 - `kb-throughput-workflow.md`：可复用的固定时长吞吐量对比方法和命令模板
 - `kb-core-ecs.md`：`MiniArch.Core` 的运行时架构说明
-- `kb-command-buffer-feasibility.md`：多线程记录 / 单线程回放 command buffer 的可行性边界与落地建议
+- `kb-command-buffer-feasibility.md`：command buffer 的已实现模型、回放顺序、并发 recording 边界和验证入口
 - `kb-user-api-layering.md`：`MiniArch.Ecs` 普通入口与 `MiniArch.Core` advanced 入口的分层边界
 - `kb-snapshot-persistence.md`：snapshot 存档格式、运行时桥接点和 load/save 边界
 - `kb-hierarchy-runtime.md`：runtime-owned parent-child、级联销毁和 hierarchy snapshot 恢复
@@ -33,7 +33,7 @@
 - 想复用采样定位性能热点的方法，先看 `kb-profiling-workflow.md`。
 - 想复用固定时长吞吐量对比的方法，先看 `kb-throughput-workflow.md`。
 - 想理解 ECS 运行时，先看 `kb-core-ecs.md`。
-- 想评估 command buffer 是否适合当前架构、以及 playback 顺序应该怎么定，先看 `kb-command-buffer-feasibility.md`。
+- 想理解 command buffer 现在已经实现到什么程度、playback/replay 顺序是什么、并发 recording 边界在哪，先看 `kb-command-buffer-feasibility.md`。
 - 想理解普通入口为什么放在 `MiniArch.Ecs`、而不是直接塞进根命名空间，先看 `kb-user-api-layering.md`。
 - 想理解存档为什么不能直接复制 chunk 对象，以及 snapshot 怎么重建 world，先看 `kb-snapshot-persistence.md`。
 - 想理解 parent-child 为什么不做成组件、destroy 为什么会级联，以及读档后关系怎么恢复，先看 `kb-hierarchy-runtime.md`。

@@ -11,6 +11,7 @@ updated: 2026-04-12
 - 这个模块负责：
   - 创建、销毁和迁移实体
   - 管理 entity metadata 容量和批量创建
+  - 给 command buffer 提供 deferred entity reservation、boxed structural mutation 和 batch replay 挂接点
   - 维护签名到 archetype 的映射
   - 用 chunk 做 dense SoA 存储
   - 让 `Set` 走 typed-column / direct-index 的原地写入路径
@@ -36,6 +37,7 @@ updated: 2026-04-12
   - `World.EnsureCapacity` 负责提前扩好 entity metadata 存储，避免 `Create` 只靠 `List<T>` 被动增长
   - `World.CreateMany` 先批量准备 entity id，再用 `Archetype` 的 chunk-batched reservation 一次性把一批实体落入空签名 archetype
 - `World` 内部把 entity version 和 entity location 分开存储：`_versions` 管版本校验，`_locations` 只保留 archetype/chunk/row，避免 metadata 热路径重复写 version
+  - `World.Replay(in FrameCommands)` 会在 batch 模式下 materialize created entities、应用 link/unlink 和结构变化，并把 query layout publish 合并为一次
   - `Entity` 句柄契约里，`default(Entity)` 必须视为非法；真实实体从 `Version = 1` 起步，避免空值和第一个真实句柄混淆
   - `World.IsAlive(Entity)` 复用 `TryGetLocation` 的同一套校验，只有在 `id` 在范围内、`_locations[id]` 非空且 `_versions[id] == entity.Version` 时才返回 `true`
   - `Add/Remove` 先算目标签名，再复用 edge cache
@@ -61,8 +63,10 @@ updated: 2026-04-12
 - 用 chunk 级迭代而不是 entity 级全表扫描，保留局部性和后续优化空间。
 - `Set<T>` / `Add<T>` 的原地写入路径要优先走 typed columns + 组件 id -> 列索引表，避免 `object` 盒化和 chunk 字典查找。
 - `World` 侧可以对泛型组件类型做按 `T` 的注册缓存，减少热路径里的重复 registry 查找。
+- command buffer 对运行时的扩展应该尽量复用 world 现有的 free-list、version 和迁移能力，而不是再维护一套平行实体生命周期。
 - query builder / query 链式 API 也应该复用 world 侧的按 `T` component cache；如果它们绕开缓存直接打 `ComponentRegistry`，query build 的固定 CPU 成本会比必要值更高。
 - `World` 的 entity metadata 需要显式容量管理；如果只依赖 `List<T>` 的自然扩容，`Create` 的分配会长期高于合理水平。
+- deferred entity reservation 不能直接把 reserved entity 视作 alive；只有 replay materialize 后 `_locations[id]` 才能变成可见实体。
 - `default(Entity)` 不应该是合法句柄；如果把 `(0,0)` 当成活体 entity，所有 optional/out/default 初始化场景都会变成隐性 bug 源。
 - 单实体带组件创建也应该直接落到目标签名 archetype；如果退回到 `Create` 后链式 `Add`，会制造只服务于迁移的中间 archetype 和空 chunk。
 - 由于 C# 没有 variadic generics，带组件 `Create` 的高性能主路径需要采用固定 arity 重载；当前上限定在 `16`，在保持 typed-column 直写的前提下足够覆盖常见 archetype 初始化。
@@ -105,6 +109,7 @@ updated: 2026-04-12
 - 常见误解：
   - 认为 query 直接遍历实体
   - 认为结构变化只是简单的集合增删
+  - 认为 reserved entity handle 已经等于 live entity
   - 认为 `Set` 和 `Add` 是同一条路径
 
 ## 入口
@@ -119,6 +124,7 @@ updated: 2026-04-12
 - 如果是加功能，先看：
   - `Archetype.cs`：chunk 扩展点
   - `ArchetypeEdges.cs`：迁移缓存扩展点
+  - `World.cs`：deferred reservation / replay / batch query invalidation 挂接点
 
 ## 坑点
 
@@ -132,7 +138,8 @@ updated: 2026-04-12
   - `Create<T...>` 如果内部复用 `Add` 迁移路径，会重新留下中间态 archetype 和空 chunk
   - `CreateMany` 退化成外部循环调用 `Create`，导致空 archetype 查找和容量检查无法摊平
   - `CreateMany` 只做了 upfront capacity，但仍逐实体 `ReserveEntity` 或逐实体扩展 metadata，bulk create 时间仍会明显慢于 Arch
-  - `CreateMany` 的 free-list 路径如果先生成完整 entity span 再复制进 chunk，会在 recycled/mixed benchmark 里形成额外的双写/三遍历热点
+- `CreateMany` 的 free-list 路径如果先生成完整 entity span 再复制进 chunk，会在 recycled/mixed benchmark 里形成额外的双写/三遍历热点
+- command buffer 如果在 replay 时退回逐条发布 query layout generation，会把 batch replay 重新退化成立即生效路径的可见性成本
 - `CreateMany` 的 mixed benchmark 如果刚好落在 metadata 扩容边界上，测量结果会掺入 `List<T>` 扩容与零填充成本；要先分清这部分和 free-list 写入本体各占多少
 - location metadata 如果把 version 和位置绑在一个较大的 struct 里，会把 mixed 场景里的 `_locations` 扩容与逐实体写回成本放大
 - edge cache 继续用字典，导致热路径风格和 direct-index 存储体系脱节

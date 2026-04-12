@@ -33,10 +33,12 @@ updated: 2026-04-12
   - `ChunkTests.cs`
   - `ArchetypeTests.cs`
   - `WorldLifecycleTests.cs`
+  - `CommandBufferTests.cs`
   - `QueryTests.cs`
   - `QueryFilterTests.cs`
   - `IntegrationTests.cs`
   - `StructuralChangeBenchmarks.cs`
+  - `CommandBufferBenchmarks.cs`
   - `QueryBenchmarks.cs`
   - `SnapshotBenchmarks.cs`
 - 数据流 / 控制流：
@@ -61,6 +63,8 @@ updated: 2026-04-12
 - 集成测试只保留一条完整迁移路径，避免重复覆盖。
 - 验证脚本和测试项目分离，方便 agent 在需要时只跑局部测试。
 - 结构变化相关测试必须保留 `Set` 的 in-place 语义断言，因为这是 typed-column / direct-index 重构的核心安全网。
+- command buffer 需要单独锁定 `Playback()` 不改 world、跨 world `Replay()`、created final archetype 和 free-list/version 语义；这些不能靠立即生效 API 测试替代。
+- command buffer 新增 `Play()` 后，还需要锁定 `Play()` 与 `Playback()+Replay()` 的结果等价，并用 benchmark 对比它们的分配差异。
 - `ArchetypeTests` 需要覆盖“复用前面空掉的 chunk”这一行为；否则 `Remove` benchmark 的分配回退很难在功能测试里暴露出来。
 - `WorldLifecycleTests` 需要覆盖 `EnsureCapacity` 和 `CreateMany`，否则 `Create` 的分配优化和批量语义很容易在重构时被回退。
 - `WorldLifecycleTests` 还要覆盖 `CreateMany` 的跨 chunk 顺序和二次批量追加语义，否则批量 reservation 很容易只保住“能跑”而丢掉位置正确性。
@@ -76,6 +80,7 @@ updated: 2026-04-12
 - snapshot benchmark 的大小指标必须和时间分开导出，不能靠日志打印混进计时结果。
 - mixed `CreateMany` benchmark 看到巨大离群值时，要先排除 metadata 扩容边界；必要时结合单次调用诊断看 `Capacity` 变化、分配字节和 GC 代际计数，再判断是不是 free-list 热点本身。
 - `QueryTests` 需要覆盖“热缓存后的同一 query 并发枚举”和“冷缓存首次并发 materialize”两类只读场景；否则 query 的 copy-on-write 发布容易退回共享可变缓存。
+- `CommandBufferTests` 需要同时覆盖 existing entity replay、created entity final-state、same-frame create+destroy 消除和并发 recording；否则很难看出 replay 顺序和 entity reservation 是否被悄悄改坏。
 - complex query benchmark world 应该优先用 direct-create 先落 `Position/Velocity/Team` 这类 query 核心组件，再补剩余组件；否则 `Create + Add + Add + ...` 会留下过多历史空 archetype，污染 query benchmark。
 - complex query benchmark 不能只测 query builder 创建；必须测实际 query 执行。
 - complex query benchmark 的命中组件要放在最终 archetype 的后半段构建，避免 `MiniArch` 的迁移中间态空 archetype 混入结果。
@@ -110,8 +115,11 @@ updated: 2026-04-12
 
 - 如果是第一次读这个模块，先看：
   - `IntegrationTests.cs`：最完整的端到端例子
+  - `CommandBufferTests.cs`：command buffer 专属语义、跨 world replay 和并发 recording
   - `WorldStructuralChangeTests.cs`：结构迁移的关键行为
   - `StructuralChangeBenchmarks.cs`：`Create / CreateMany / Add / Set / Remove / Destroy` 与 Arch 的时间和分配对照
+  - `CommandBufferBenchmarks.cs`：`record / playback / replay / end-to-end` 口径
+  - `CommandBufferBenchmarks.cs`：`record / play / playback / replay / end-to-end` 口径
   - `QueryBenchmarks.cs`：复杂 query 场景下的 Arch / MiniArch 执行对照
   - `SnapshotBenchmarks.cs`：`WorldSnapshot.Save` / `Load` 的时间、分配、`SnapshotBytes` 和 `Bytes/entity`
   - `scripts\profile-query.ps1`：query 采样入口，适合定位热点函数
@@ -134,6 +142,7 @@ updated: 2026-04-12
 
 - 历史上容易出问题的地方：
   - 只跑局部测试，没看整体迁移是否破坏
+  - 只跑 `CommandBufferTests`，却没回归 lifecycle / structural-change / query，容易漏掉对 world 基础契约的破坏
   - 断言太宽泛，漏掉 chunk 级行为
   - 只看运行时，不看分配和 GC
   - `Remove` 只看时间变快，却没发现 archetype 没复用已有空 chunk，导致分配被隐藏放大
@@ -164,6 +173,7 @@ updated: 2026-04-12
   - benchmark 输出要和 Arch 在相同 entity 布局、相同操作脚本下对齐，否则对比没有意义
   - 运行 BenchmarkDotNet 时尽量从 `Release` 入口触发；虽然 BenchmarkDotNet 会单独编译 benchmark 可执行文件，但 debug host 警告会污染阅读
   - 当前仓库里如果 benchmark 场景测试本身编译失败，必须先把它和本次功能验证分开说明，不要把 query 回归结果和现有编译阻塞混为一谈
+  - `FrameCommands` 当前可以保留后重放，但跨 world replay 仍要求双方从同一初始态按相同 frame 顺序推进；benchmark 不应把“偏离同步前提后的失败”误判成功能回归
 
 ## 关联模块
 
@@ -175,4 +185,5 @@ updated: 2026-04-12
 - `benchmarks/MiniArch.Benchmarks/StructuralChangeBenchmarks.cs`：分项 structural-change benchmark 与 mixed structural-change benchmark
 - `benchmarks/MiniArch.Benchmarks/QueryBenchmarks.cs`：复杂 query benchmark
 - `benchmarks/MiniArch.Benchmarks/SnapshotBenchmarks.cs`：snapshot save/load、snapshot bytes 与 bytes/entity benchmark
+- `benchmarks/MiniArch.Benchmarks/CommandBufferBenchmarks.cs`：command buffer 性能入口
 - `scripts/profile-query.ps1`：复杂 query 采样 profiling 入口

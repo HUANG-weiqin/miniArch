@@ -18,6 +18,12 @@ Minimal ECS learning project inspired by Arch.
 - component add/remove operations migrate entities between archetypes
 - chunks use dense structure-of-arrays storage
 - queries filter archetypes first, then iterate their chunks
+- `MiniArch.Core.CommandBuffer` records structural and hierarchy changes without mutating the world immediately
+- `CommandBuffer.Playback()` compiles one frame of commands and `World.Replay(in FrameCommands)` applies them in fixed order `create -> link/unlink -> add -> set -> remove -> destroy`
+- `CommandBuffer.Play()` applies the same compiled semantics directly to the owning world without materializing `FrameCommands`, which is the lower-allocation hot path when cross-world replay is not needed
+- command buffer `Create()` reserves a real entity handle during recording; same-frame `create + destroy` pairs are released during replay without ever materializing into an archetype
+- preserved `FrameCommands` can be replayed into another world that starts from the same state and advances with the same frame order
+- concurrent support is limited to command recording; world mutation still happens on one thread during replay
 
 ## API Layers
 
