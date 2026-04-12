@@ -63,6 +63,22 @@ public sealed class ChunkTests
     }
 
     [Fact]
+    public void Removing_the_last_row_returns_default_entity_as_no_move_marker()
+    {
+        var chunk = new Chunk(Signature.Empty, capacity: 4);
+        var only = new Entity(1, 1);
+
+        chunk.Add(only);
+
+        var moved = chunk.RemoveAt(0, out var movedEntity);
+
+        Assert.False(moved);
+        Assert.Equal(default, movedEntity);
+        Assert.False(movedEntity.IsValid);
+        Assert.Equal(0, chunk.Count);
+    }
+
+    [Fact]
     public void Setting_a_component_only_mutates_the_targeted_row()
     {
         var registry = new ComponentRegistry();

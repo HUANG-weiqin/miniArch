@@ -291,7 +291,7 @@ public sealed class Chunk
         }
         else
         {
-            movedEntity = new Entity(-1, -1);
+            movedEntity = default;
             ClearRemovedTail(last);
         }
 

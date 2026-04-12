@@ -2,7 +2,7 @@ namespace MiniArch.Core;
 
 internal sealed class HierarchyTable
 {
-    private static readonly Entity NoEntity = new(-1, -1);
+    private static readonly Entity NoEntity = default;
     private Entity[] _parentByChild = [];
     private HashSet<Entity>?[] _childrenByParent = [];
 
