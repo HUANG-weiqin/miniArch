@@ -55,12 +55,15 @@ public sealed class Chunk
 
     public int Count { get; private set; }
 
-    internal Array[] Columns => _columns;
-
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpan<Entity> GetEntities()
     {
         return _entities.AsSpan(0, Count);
     }
+
+    internal Array[] Columns => _columns;
+
+    internal Entity[] GetEntityStorage() => _entities;
 
     public Entity GetEntity(int row)
     {
@@ -141,6 +144,13 @@ public sealed class Chunk
         return GetComponentAt<T>(columnIndex, row);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ReadOnlySpan<T> GetComponentSpan<T>(ComponentType component)
+    {
+        var columnIndex = GetComponentIndex(component);
+        return GetComponentSpanAt<T>(columnIndex);
+    }
+
     public void SetComponent(ComponentType component, int row, object? value)
     {
         ValidateRow(row);
@@ -179,6 +189,37 @@ public sealed class Chunk
         }
 
         return ((T[])_columns[columnIndex])[row];
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal ReadOnlySpan<T> GetComponentSpanAt<T>(int columnIndex)
+    {
+        if (!_typedColumns)
+        {
+            throw new InvalidOperationException("Component spans require typed columns.");
+        }
+
+        if (_columns[columnIndex] is not T[] typedColumn)
+        {
+            throw new InvalidOperationException($"Component column {columnIndex} cannot be read as {typeof(T).Name}.");
+        }
+
+        return typedColumn.AsSpan(0, Count);
+    }
+
+    internal T[] GetTypedColumnStorageAt<T>(int columnIndex)
+    {
+        if (!_typedColumns)
+        {
+            throw new InvalidOperationException("Typed column storage requires typed columns.");
+        }
+
+        if (_columns[columnIndex] is not T[] typedColumn)
+        {
+            throw new InvalidOperationException($"Component column {columnIndex} cannot be read as {typeof(T).Name}.");
+        }
+
+        return typedColumn;
     }
 
     internal bool TryGetComponentIndex(ComponentType component, out int columnIndex)

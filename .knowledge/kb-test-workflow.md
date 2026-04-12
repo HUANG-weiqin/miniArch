@@ -16,6 +16,7 @@ updated: 2026-04-12
   - 为 `CreateMany` 单独区分 append-only、recycled ids、mixed ids 三类场景
   - 单独保留 query 相关的性能对比口径
   - 提供 query 采样 profiling 的独立入口，便于外部 CPU sampler 定位热点函数
+  - 提供固定时长 throughput runner，便于对比 `MiniArch vs Arch` 的真实 `ops/s`
   - 用复杂 archetype 分布覆盖 query filter + traversal 的热路径
   - 提供 snapshot save/load、snapshot bytes 和 `Bytes/entity` 的 benchmark 口径
   - 为 future agent 提供回归判断
@@ -45,7 +46,8 @@ updated: 2026-04-12
   - snapshot benchmark 预先构造“每 entity 10 个 unmanaged 组件”的 world，只测 `WorldSnapshot.Save` / `WorldSnapshot.Load` 本体，并单独导出 `SnapshotBytes`
   - benchmark 只比较同构输入下的 Arch / MiniArch 热路径，不承担正确性证明
   - setup、world 构建和脚本生成都放在测量区外
-  - complex query benchmark 用固定 archetype 配比生成同一类 world 布局，并在测量区内执行 query + 命中 entity 遍历
+- complex query benchmark 用固定 archetype 配比生成同一类 world 布局，并在测量区内执行 query + 命中 entity 遍历
+  - 当前 `EntityCount` 档位覆盖 `128 / 256 / 512 / 1024 / 2048 / 10k / 50k / 100k`，用来同时观察小规模固定成本和大规模 steady-state 吞吐
   - query profiling 复用同一套 complex query world，但在 BenchmarkDotNet 之外跑固定时长循环，给 PerfView/Visual Studio CPU Usage 这类采样器一个干净窗口
   - `scripts\verify.ps1` 统一跑 build + test
 - 和其他模块的交互方式：
@@ -64,6 +66,7 @@ updated: 2026-04-12
 - `WorldLifecycleTests` 还要覆盖 `CreateMany` 的跨 chunk 顺序和二次批量追加语义，否则批量 reservation 很容易只保住“能跑”而丢掉位置正确性。
 - `WorldLifecycleTests` 还要覆盖 `CreateMany` 的 recycled/mixed id 语义，否则 fresh-path 优化很容易掩盖 free-list 路径的行为回退。
 - `WorldLifecycleTests` 还要覆盖带组件的 `Create<T...>` 直接进入最终 archetype，并锁定当前高性能重载上限 `16`；否则实现很容易退回 `Create + Add` 链路，或者在扩重载时静默漏掉目标 arity。
+- `WorldLifecycleTests` 还要锁定默认 world 的 dense archetype 会放大 chunk，而显式 `chunkCapacity` 仍保持固定边界；否则 query 吞吐优化很容易在后续重构中被悄悄回退，或者反过来破坏依赖小 chunk 的测试。
 - `ArchetypeEdges` 的 direct-index 化是性能目标本身，可以用一条小范围的结构测试锁定，避免静默退回字典实现。
 - `ChunkTests` 需要同时覆盖“引用类型列会清尾槽位”和“含引用字段的 struct 也会清尾槽位”；否则删除路径很容易被错误地简化成 `IsValueType` 判断。
 - mixed structural-change benchmark 默认使用 `20/20/20/20/20` 的均衡分布，并用固定种子生成同一条随机脚本。
@@ -77,8 +80,10 @@ updated: 2026-04-12
 - complex query benchmark 的命中组件要放在最终 archetype 的后半段构建，避免 `MiniArch` 的迁移中间态空 archetype 混入结果。
 - query benchmark 需要同时保留 mixed 口径和 warmed 口径：mixed 反映 public query API 的整体成本，warmed 反映 steady-state traversal；两者不能互相替代。
 - 如果目标是看 entity-only 遍历热路径，benchmark 应优先用 chunk 的实体 span 视图，而不是在热循环里重复调用 `GetEntity(row)`；否则结果会掺入 accessor 固定成本。
+- 如果目标是看 component-consuming query，benchmark 应同时保留 `row-wise` 和 `span` 两条口径；对 typed chunk，`GetComponentSpan<T>()` 往往比逐 row `GetComponent<T>()` 快一个量级，适合先做 A/B 再决定是否推广到系统层遍历。
 - 如果 query benchmark 把 builder 和执行放在同一个测量区，就要额外准备一条 steady-state benchmark：预热 query cache，只测 refresh 后的 chunk/entity 遍历。否则固定 build 分配会掩盖真正的读路径差距。
 - 如果 warmed query benchmark 的 short job 方差过大，尤其是 `50k/100k` 档位，不要只看一份 BenchmarkDotNet 均值；再用 `profile-query --temperature hot` 跑固定时长热循环，比较 `Completed iterations` 作为 traversal-only 的二次验证。
+- 如果目标是回答“MiniArch 和 Arch 的真实吞吐差多少”，优先补一条 throughput runner，而不是继续放大 short job 次数；`ops/s` 对这类问题更直接。
 - query 采样入口默认应走独立 runner，而不是直接采样 BenchmarkDotNet 子进程；前者更容易把样本集中在 `Query` 热路径上。
 - query 采样需要区分 `hot` 和 `cold`：`hot` 看 chunk traversal，`cold` 通过 fresh query 实例把 `RefreshIfNeeded / BuildMatchingArchetypes / Matches` 拉回样本。
 
@@ -139,6 +144,7 @@ updated: 2026-04-12
   - 如果 warmed query state 没有在 setup 阶段先 materialize 匹配 archetype，benchmark 名字虽然写着 warmed，实际测到的仍会掺入冷 refresh 成本。
   - 直接采样 BenchmarkDotNet 子进程时，样本里会混入 harness、warmup 和 fork 开销；定位 query 热点时优先跑 `scripts\profile-query.ps1`
   - 如果想看 archetype 匹配热点，不要只跑 `hot` 模式；热缓存会把刷新成本藏掉
+  - 如果 throughput/profiling 显示 query steady-state 慢，但 matched chunk 数又远高于 Arch，优先怀疑 archetype chunk 粒度，而不是继续在 query matching 上做微调。
 - 容易误判的地方：
   - 认为 query 结果对了，chunk 顺序就一定对了
   - 认为 entity 还活着，version 也一定没错

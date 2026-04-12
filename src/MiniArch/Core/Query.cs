@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Threading;
 
 namespace MiniArch.Core;
@@ -68,8 +69,7 @@ public sealed class Query
     {
         get
         {
-            RefreshIfNeeded();
-            return Volatile.Read(ref _matching).Archetypes;
+            return EnsureMatchingArchetypes();
         }
     }
 
@@ -77,49 +77,61 @@ public sealed class Query
     {
         get
         {
-            RefreshIfNeeded();
-            return Volatile.Read(ref _matching).Chunks;
+            return EnsureMatchingChunks();
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpan<Chunk> GetChunkSpan()
     {
-        RefreshIfNeeded();
-        return Volatile.Read(ref _matching).Chunks;
+        return EnsureMatchingSnapshot().Chunks;
     }
 
     public ChunkEnumerable Chunks => new(this);
 
     internal Archetype[] EnsureMatchingArchetypes()
     {
-        RefreshIfNeeded();
-        return Volatile.Read(ref _matching).Archetypes;
+        return EnsureMatchingSnapshot().Archetypes;
     }
 
     internal Chunk[] EnsureMatchingChunks()
     {
-        RefreshIfNeeded();
-        return Volatile.Read(ref _matching).Chunks;
+        return EnsureMatchingSnapshot().Chunks;
     }
 
-    private void RefreshIfNeeded()
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private MatchingSnapshot EnsureMatchingSnapshot()
     {
+        var snapshot = Volatile.Read(ref _matching);
         var archetypeGeneration = _world.ArchetypeGeneration;
         var layoutGeneration = _world.QueryLayoutGeneration;
+        if (snapshot.ArchetypeGeneration == archetypeGeneration
+            && snapshot.LayoutGeneration == layoutGeneration)
+        {
+            return snapshot;
+        }
+
+        return RefreshSlow(archetypeGeneration, layoutGeneration, snapshot);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private MatchingSnapshot RefreshSlow(int archetypeGeneration, int layoutGeneration, MatchingSnapshot snapshot)
+    {
         while (true)
         {
-            var snapshot = Volatile.Read(ref _matching);
+            var refreshed = BuildMatchingSnapshot(archetypeGeneration, layoutGeneration);
+            var observed = Interlocked.CompareExchange(ref _matching, refreshed, snapshot);
+            if (ReferenceEquals(observed, snapshot))
+            {
+                Interlocked.Increment(ref _refreshCount);
+                return refreshed;
+            }
+
+            snapshot = observed;
             if (snapshot.ArchetypeGeneration == archetypeGeneration
                 && snapshot.LayoutGeneration == layoutGeneration)
             {
-                return;
-            }
-
-            var refreshed = BuildMatchingSnapshot(archetypeGeneration, layoutGeneration);
-            if (ReferenceEquals(Interlocked.CompareExchange(ref _matching, refreshed, snapshot), snapshot))
-            {
-                Interlocked.Increment(ref _refreshCount);
-                return;
+                return snapshot;
             }
         }
     }
