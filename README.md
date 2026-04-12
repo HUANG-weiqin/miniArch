@@ -1,16 +1,23 @@
 # MiniArch
 
-MiniArch is a small C# ECS learning project inspired by Arch.
+MiniArch 是一个聚焦于简单、完整 archetype ECS runtime 的 C# 项目。
 
-## What Lives Here
+## 先看这里
 
-- `src/MiniArch`: ECS runtime code
-- `tests/MiniArch.Tests`: xUnit coverage for the runtime
-- `docs/plans`: design and implementation notes
-- `.knowledge`: reusable project knowledge for future agents
-- `scripts`: one-command wrappers for build and test
+- 完整 API 手册：`src/MiniArch/README.md`
+- 项目知识索引：`.knowledge/INDEX.md`
+- 协作约束：`AGENTS.md`
 
-## Quick Start
+## 仓库结构
+
+- `src/MiniArch`：运行时代码与详细 API README
+- `tests/MiniArch.Tests`：运行时行为测试
+- `benchmarks/MiniArch.Benchmarks`：BenchmarkDotNet 基准
+- `docs/plans`：设计与实现记录
+- `.knowledge`：可复用项目知识
+- `scripts`：build、test、benchmark、verify 脚本入口
+
+## 常用命令
 
 ```powershell
 .\scripts\build.ps1
@@ -18,17 +25,16 @@ MiniArch is a small C# ECS learning project inspired by Arch.
 .\scripts\verify.ps1
 ```
 
-## Agent Workflow
+## API 分层
 
-1. Read `AGENTS.md`.
-2. Read `.knowledge/INDEX.md`.
-3. Open the most relevant `kb-*.md` page.
-4. Use `scripts\verify.ps1` before claiming a change is done.
+- `MiniArch.Ecs`：普通游戏逻辑默认入口，心智负担更低，默认支持直接 `foreach` 查询。
+- `MiniArch.Core`：面向 query 控制、chunk 级访问、command buffer、snapshot、profiling 等 advanced 用法。
 
-## Current ECS Shape
+完整 API 参考见 `src/MiniArch/README.md`。
 
-- `World` owns entity lifecycle, archetype lookup, and query caching.
-- `Archetype` owns chunk lists and transition edges.
-- `Chunk` stores entities and component columns in a dense layout.
-- `Signature` identifies archetypes by component set.
-- `Query` filters archetypes first, then iterates chunks.
+## Agent 入口
+
+1. 读取 `AGENTS.md`。
+2. 读取 `.knowledge/INDEX.md`。
+3. 打开最相关的 `kb-*.md`。
+4. 在宣称完成前运行 `scripts\verify.ps1`。
