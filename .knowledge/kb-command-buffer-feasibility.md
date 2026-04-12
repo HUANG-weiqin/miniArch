@@ -39,12 +39,14 @@ updated: 2026-04-12
   - 依赖 `World` 的 entity version / free-list / archetype mutation 基础设施
   - hierarchy 仍由 `HierarchyTable` side-table 持有，command buffer 只决定 replay 顺序
   - query 仍依赖 `World.QueryLayoutGeneration`，只是 replay 期间改为 batch publish
-  - 验证依赖 `tests/MiniArch.Tests/Core/CommandBufferTests.cs`，并辅以 lifecycle / structural-change / query 回归测试
+- 验证依赖 `tests/MiniArch.Tests/Core/CommandBufferTests.cs`，并辅以 lifecycle / structural-change / query 回归测试
+- 与 `Arch` 的对比 benchmark 当前依赖 `CommandBufferSharedScenarios` 先验证共享结构命令场景的 parity，再跑 `record + play`
 
 ## 决策
 
 - 当前已落地的方向是“多线程 `recording` + 单线程 `replay`”；`World` 本身仍不是并发写安全。
 - 当不需要保留 frame 或跨 world replay 时，应优先用 `Play()`；它复用同样语义，但省掉 `FrameCommands` 物化分配。
+- 当前与 `Arch.Buffer.CommandBuffer` 的公共可比子集是 `Create / Add / Set / Remove / Destroy`；`Link / Unlink` 不参与跨引擎达标判定
 - `Play()` 当前的主要优化点是：
   - compile 阶段移除了 shard 扁平化中间桶
   - owning-world replay 复用 compile 批次里的 internal created/component 表示
@@ -81,9 +83,11 @@ updated: 2026-04-12
   - `src/MiniArch/Core/FrameCommands.cs`：compiled frame IR、跨 world replay 的数据边界
   - `src/MiniArch/Core/World.cs`：`ReserveDeferredEntity` / `ReleaseReservedEntity` / `Replay()` 的挂接点
 - 如果是修 bug，先看：
-  - `tests/MiniArch.Tests/Core/CommandBufferTests.cs`：playback/replay 契约、created final state、free-list reuse、并发 recording
+- `tests/MiniArch.Tests/Core/CommandBufferTests.cs`：playback/replay 契约、created final state、free-list reuse、并发 recording
+- `tests/MiniArch.Tests/Core/CommandBufferParityTests.cs`：共享 `MiniArch vs Arch` benchmark 场景的最终结构摘要是否一致
   - `tests/MiniArch.Tests/Core/WorldStructuralChangeTests.cs`：existing entity 的 structural semantics 是否仍与立即生效 API 对齐
   - `tests/MiniArch.Tests/Core/QueryTests.cs`：batch replay 后 query 可见性和快照失效
+- `benchmarks/MiniArch.Benchmarks/CommandBufferSharedScenarios.cs`：共享结构命令脚本和跨引擎 parity helper
 - 如果是加功能，先看：
   - `tests/MiniArch.Tests/Core/WorldLifecycleTests.cs`：entity id/version/free-list/hierarchy 的底层契约
   - `benchmarks/MiniArch.Benchmarks/CommandBufferBenchmarks.cs`：record/playback/replay 的性能入口
@@ -111,4 +115,4 @@ updated: 2026-04-12
 - `tests/MiniArch.Tests/Core/WorldLifecycleTests.cs`：实体生命周期、id/version、chunk 顺序
 - `tests/MiniArch.Tests/Core/WorldStructuralChangeTests.cs`：`Add/Set/Remove` 当前契约
 - `benchmarks/MiniArch.Benchmarks/CommandBufferBenchmarks.cs`：record/playback/replay benchmark 入口
-- `benchmarks/MiniArch.Benchmarks/CommandBufferBenchmarks.cs`：record/play/playback/replay benchmark 入口
+- `benchmarks/MiniArch.Benchmarks/CommandBufferSharedScenarios.cs`：共享结构命令 benchmark 场景与 parity helper

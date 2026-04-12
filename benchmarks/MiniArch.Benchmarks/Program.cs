@@ -28,6 +28,16 @@ public static class Program
             return;
         }
 
+        if (args.Length > 0 && string.Equals(args[0], "command-buffer", StringComparison.OrdinalIgnoreCase))
+        {
+            BenchmarkSwitcher.FromTypes(
+            [
+                typeof(CommandBufferBenchmarks),
+                typeof(CommandBufferHierarchyBenchmarks),
+            ]).Run(args[1..], MiniArchBenchmarkConfig.CreateCommandBufferConfig());
+            return;
+        }
+
         BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly)
             .Run(args, MiniArchBenchmarkConfig.Create());
     }

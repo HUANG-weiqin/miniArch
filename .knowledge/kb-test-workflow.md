@@ -49,6 +49,9 @@ updated: 2026-04-12
 - benchmark 只比较同构输入下的 Arch / MiniArch 热路径，不承担正确性证明
 - setup、world 构建和脚本生成都放在测量区外
 - command buffer benchmark 应优先区分 `record`、`playback only`、`replay only`、`play only`、`end-to-end`，避免把 setup/录制/目标阶段混在同一个测量区
+- `MiniArch vs Arch` command buffer 主对比现已落成，当前主口径是共享结构命令子集上的 `record + play`
+- 共享子集只覆盖 `Create / Add / Set / Remove / Destroy`；`Link / Unlink` 只放在 `MiniArch-only` 扩展 benchmark
+- 共享 command buffer 场景先通过 parity tests 锁定最终结构摘要一致，再进入 benchmark；不能跳过这一步直接比较均值
 - complex query benchmark 用固定 archetype 配比生成同一类 world 布局，并在测量区内执行 query + 命中 entity 遍历
   - 当前 `EntityCount` 档位覆盖 `128 / 256 / 512 / 1024 / 2048 / 10k / 50k / 100k`，用来同时观察小规模固定成本和大规模 steady-state 吞吐
   - query profiling 复用同一套 complex query world，但在 BenchmarkDotNet 之外跑固定时长循环，给 PerfView/Visual Studio CPU Usage 这类采样器一个干净窗口
@@ -80,11 +83,13 @@ updated: 2026-04-12
 - `CreateMany` benchmark 不能只测 fresh append-only；必须把 recycled ids 和 mixed ids 分开跑，否则无法判断优化是否只对 `_freeIds.Count == 0` 的快路径有效。
 - benchmark 必须同时看时间和分配，不能只看平均耗时。
 - command buffer benchmark 至少要覆盖一个小档位和一个大档位，否则很难区分固定分配与规模放大效应。
+- command buffer `MiniArch vs Arch` 的验收门禁是：所有共享场景、所有档位上，`MiniArch` 的时间和分配都不能慢于 `Arch` 超过 `1.5x`
 - snapshot benchmark 的大小指标必须和时间分开导出，不能靠日志打印混进计时结果。
 - mixed `CreateMany` benchmark 看到巨大离群值时，要先排除 metadata 扩容边界；必要时结合单次调用诊断看 `Capacity` 变化、分配字节和 GC 代际计数，再判断是不是 free-list 热点本身。
 - `QueryTests` 需要覆盖“热缓存后的同一 query 并发枚举”和“冷缓存首次并发 materialize”两类只读场景；否则 query 的 copy-on-write 发布容易退回共享可变缓存。
 - `CommandBufferTests` 需要同时覆盖 existing entity replay、created entity final-state、same-frame create+destroy 消除和并发 recording；否则很难看出 replay 顺序和 entity reservation 是否被悄悄改坏。
 - `CommandBufferTests` 里的 `Play()` 不应只跑手写 happy-path，还要覆盖复杂/随机脚本，避免短路径在 hierarchy 或 created/destroyed 混合帧上回退。
+- 对会直接 mutate world 的 `record + play` 基准，必须避免让同一个 iteration 内的多次 workload 复用同一份 world state；当前仓库通过 `command-buffer` 专用 benchmark 子命令隔离这组口径
 - complex query benchmark world 应该优先用 direct-create 先落 `Position/Velocity/Team` 这类 query 核心组件，再补剩余组件；否则 `Create + Add + Add + ...` 会留下过多历史空 archetype，污染 query benchmark。
 - complex query benchmark 不能只测 query builder 创建；必须测实际 query 执行。
 - complex query benchmark 的命中组件要放在最终 archetype 的后半段构建，避免 `MiniArch` 的迁移中间态空 archetype 混入结果。
@@ -122,7 +127,8 @@ updated: 2026-04-12
   - `CommandBufferTests.cs`：command buffer 专属语义、跨 world replay 和并发 recording
   - `WorldStructuralChangeTests.cs`：结构迁移的关键行为
   - `StructuralChangeBenchmarks.cs`：`Create / CreateMany / Add / Set / Remove / Destroy` 与 Arch 的时间和分配对照
-  - `CommandBufferBenchmarks.cs`：`record / playback only / replay only / play only / end-to-end` 口径
+- `CommandBufferBenchmarks.cs`：`record / playback only / replay only / play only / end-to-end` 口径
+  - `CommandBufferSharedScenarios.cs`：共享脚本模型、MiniArch/Arch parity 执行器和结构摘要 helper
   - `QueryBenchmarks.cs`：复杂 query 场景下的 Arch / MiniArch 执行对照
   - `SnapshotBenchmarks.cs`：`WorldSnapshot.Save` / `Load` 的时间、分配、`SnapshotBytes` 和 `Bytes/entity`
   - `scripts\profile-query.ps1`：query 采样入口，适合定位热点函数
@@ -189,4 +195,6 @@ updated: 2026-04-12
 - `benchmarks/MiniArch.Benchmarks/QueryBenchmarks.cs`：复杂 query benchmark
 - `benchmarks/MiniArch.Benchmarks/SnapshotBenchmarks.cs`：snapshot save/load、snapshot bytes 与 bytes/entity benchmark
 - `benchmarks/MiniArch.Benchmarks/CommandBufferBenchmarks.cs`：command buffer 性能入口
+- `benchmarks/MiniArch.Benchmarks/CommandBufferSharedScenarios.cs`：command buffer 共享场景与 parity helper
+- `tests/MiniArch.Tests/Core/CommandBufferParityTests.cs`：共享 benchmark 场景的跨引擎 parity tests
 - `scripts/profile-query.ps1`：复杂 query 采样 profiling 入口

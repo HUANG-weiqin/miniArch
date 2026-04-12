@@ -3,6 +3,7 @@ using BenchmarkDotNet.Configs;
 using BenchmarkDotNet.Diagnosers;
 using BenchmarkDotNet.Environments;
 using BenchmarkDotNet.Exporters;
+using BenchmarkDotNet.Engines;
 using BenchmarkDotNet.Jobs;
 using BenchmarkDotNet.Loggers;
 using BenchmarkDotNet.Order;
@@ -26,6 +27,28 @@ public sealed class MiniArchBenchmarkConfig : ManualConfig
     }
 
     public static IConfig Create() => new MiniArchBenchmarkConfig();
+
+    public static IConfig CreateCommandBufferConfig()
+    {
+        var config = new ManualConfig();
+        config.AddDiagnoser(MemoryDiagnoser.Default);
+        config.AddColumnProvider(DefaultColumnProviders.Instance);
+        config.AddColumnProvider(new SnapshotSizeColumnProvider());
+        config.AddExporter(MarkdownExporter.GitHub);
+        config.AddLogger(ConsoleLogger.Default);
+        config.Orderer = new DefaultOrderer(SummaryOrderPolicy.FastestToSlowest);
+        config.AddJob(
+            Job.Dry
+                .WithRuntime(CoreRuntime.Core80)
+                .WithStrategy(RunStrategy.ColdStart)
+                .WithLaunchCount(1)
+                .WithWarmupCount(0)
+                .WithIterationCount(6)
+                .WithInvocationCount(1)
+                .WithUnrollFactor(1)
+                .WithId("net8-cold-command-buffer"));
+        return config;
+    }
 
     private sealed class SnapshotSizeColumnProvider : IColumnProvider
     {
