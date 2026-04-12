@@ -26,6 +26,7 @@ public sealed class World
     private readonly HierarchyTable _hierarchy = new();
     private readonly List<int> _versions;
     private readonly List<EntityLocation> _locations;
+    private Dictionary<QueryDescription, QueryFilter> _queryFiltersByDescription = new();
     private Dictionary<QueryFilter, Query> _queries = new();
     private Archetype[] _archetypeSnapshot = Array.Empty<Archetype>();
     private readonly int _chunkCapacity;
@@ -83,6 +84,7 @@ public sealed class World
 
         _archetypes.Clear();
         _archetypeSnapshot = Array.Empty<Archetype>();
+        _queryFiltersByDescription = new Dictionary<QueryDescription, QueryFilter>();
         _queries = new Dictionary<QueryFilter, Query>();
         _archetypeGeneration = 0;
         _queryLayoutGeneration = 0;
@@ -700,6 +702,11 @@ public sealed class World
         return GetOrCreateQuery(QueryFilter.CreateRequired(componentType1, componentType2, componentType3));
     }
 
+    public Query Query(in QueryDescription description)
+    {
+        return GetOrCreateQuery(GetOrCreateQueryFilter(description));
+    }
+
     public bool TryGetLocation(Entity entity, out EntityInfo info)
     {
         if (entity.Id < 0 || entity.Id >= _locations.Count)
@@ -906,6 +913,43 @@ public sealed class World
                 return candidate;
             }
         }
+    }
+
+    private QueryFilter GetOrCreateQueryFilter(in QueryDescription description)
+    {
+        while (true)
+        {
+            var snapshot = Volatile.Read(ref _queryFiltersByDescription);
+            if (snapshot.TryGetValue(description, out var filter))
+            {
+                return filter;
+            }
+
+            var candidate = new QueryFilter(
+                CreateQueryComponentSet(description.GetRequiredTypes()),
+                CreateQueryComponentSet(description.GetExcludedTypes()),
+                CreateQueryComponentSet(description.GetAnyTypes()));
+            var updated = new Dictionary<QueryDescription, QueryFilter>(snapshot)
+            {
+                [description] = candidate
+            };
+
+            if (ReferenceEquals(Interlocked.CompareExchange(ref _queryFiltersByDescription, updated, snapshot), snapshot))
+            {
+                return candidate;
+            }
+        }
+    }
+
+    private QueryComponentSet CreateQueryComponentSet(ReadOnlySpan<Type> types)
+    {
+        var components = QueryComponentSet.Empty;
+        for (var i = 0; i < types.Length; i++)
+        {
+            components = components.Add(_components.GetOrCreate(types[i]));
+        }
+
+        return components;
     }
 
     private void PublishArchetypeSnapshot(Archetype archetype)

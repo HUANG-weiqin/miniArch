@@ -181,6 +181,97 @@ public sealed class QueryTests
         Assert.Equal(1, GetCachedQueryCount(world));
     }
 
+    [Fact]
+    public async Task Equivalent_description_queries_can_be_materialized_concurrently_before_the_cache_is_warmed()
+    {
+        var description = new QueryDescription().With<Position>();
+        var expected = CaptureEnumeratedEntities(CreateWorldWithMatchingEntities().Query(in description));
+        var world = CreateWorldWithMatchingEntities();
+        var start = new Barrier(9);
+        var tasks = Enumerable.Range(0, 8)
+            .Select(_ => Task.Run(() =>
+            {
+                start.SignalAndWait();
+                return CaptureEnumeratedEntities(world.Query(in description));
+            }))
+            .ToArray();
+
+        start.SignalAndWait();
+        var results = await Task.WhenAll(tasks);
+
+        Assert.All(results, actual => Assert.Equal(expected, actual));
+        Assert.Equal(1, GetCachedQueryCount(world));
+    }
+
+    [Fact]
+    public void Description_query_entrypoint_matches_generic_and_chain_queries()
+    {
+        var world = new World();
+        var description = new QueryDescription().With<Position>();
+
+        Assert.Same(world.Query<Position>(), world.Query(in description));
+        Assert.Same(world.Query().With<Position>().Build(), world.Query(in description));
+    }
+
+    [Fact]
+    public void Repeated_queries_with_same_description_reuse_cached_query()
+    {
+        var world = new World();
+        var description = new QueryDescription().With<Position>();
+
+        Assert.Same(world.Query(in description), world.Query(in description));
+    }
+
+    [Fact]
+    public void Same_query_description_can_be_reused_across_worlds()
+    {
+        var description = new QueryDescription()
+            .With<Position>()
+            .Without<Velocity>();
+
+        var firstWorld = new World();
+        var firstMatched = firstWorld.Create(new Position(1, 1));
+        _ = firstWorld.Create(new Position(2, 2), new Velocity(3, 3));
+
+        var secondWorld = new World();
+        var secondMatched = secondWorld.Create(new Position(4, 4));
+        _ = secondWorld.Create(new Position(5, 5), new Velocity(6, 6));
+
+        var firstQuery = firstWorld.Query(in description);
+        var secondQuery = secondWorld.Query(in description);
+
+        Assert.Same(firstQuery, firstWorld.Query(in description));
+        Assert.Same(secondQuery, secondWorld.Query(in description));
+        Assert.NotSame(firstQuery, secondQuery);
+        Assert.Equal(new[] { firstMatched }, CaptureEnumeratedEntities(firstQuery));
+        Assert.Equal(new[] { secondMatched }, CaptureEnumeratedEntities(secondQuery));
+    }
+
+    [Fact]
+    public void Warmed_description_query_does_not_allocate_on_steady_state_path()
+    {
+        var world = CreateWorldWithMatchingEntities();
+        var description = new QueryDescription()
+            .With<Position>()
+            .Without<Velocity>();
+
+        Assert.Equal(6, CountEntities(world.Query(in description)));
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        var total = 0;
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 100; i++)
+        {
+            total += CountEntities(world.Query(in description));
+        }
+
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(600, total);
+        Assert.Equal(0, allocated);
+    }
+
     private static World CreateWorldWithMatchingEntities()
     {
         var world = new World(chunkCapacity: 4);
@@ -248,6 +339,17 @@ public sealed class QueryTests
         }
 
         return entities.ToArray();
+    }
+
+    private static int CountEntities(Query query)
+    {
+        var total = 0;
+        foreach (ref readonly var chunk in query.GetChunkSpan())
+        {
+            total += chunk.GetEntities().Length;
+        }
+
+        return total;
     }
 
     private static int GetCachedQueryCount(World world)

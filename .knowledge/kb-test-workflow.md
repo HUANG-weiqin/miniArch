@@ -34,7 +34,7 @@ updated: 2026-04-12
   - `ArchetypeTests.cs`
   - `WorldLifecycleTests.cs`
   - `CommandBufferTests.cs`
-  - `QueryTests.cs`
+- `QueryTests.cs`
   - `QueryFilterTests.cs`
   - `IntegrationTests.cs`
   - `StructuralChangeBenchmarks.cs`
@@ -87,6 +87,7 @@ updated: 2026-04-12
 - snapshot benchmark 的大小指标必须和时间分开导出，不能靠日志打印混进计时结果。
 - mixed `CreateMany` benchmark 看到巨大离群值时，要先排除 metadata 扩容边界；必要时结合单次调用诊断看 `Capacity` 变化、分配字节和 GC 代际计数，再判断是不是 free-list 热点本身。
 - `QueryTests` 需要覆盖“热缓存后的同一 query 并发枚举”和“冷缓存首次并发 materialize”两类只读场景；否则 query 的 copy-on-write 发布容易退回共享可变缓存。
+- `QueryDescription` 新增后，`QueryTests` / `QueryFilterTests` 还要覆盖 description 与 generic/builder 查询等价、同一 description 跨 world 复用、description 冷路径并发 materialize，以及公开类型视图不会暴露可变内部数组；否则“可复用描述 + 缓存 key”这层契约很容易被悄悄打破。
 - `CommandBufferTests` 需要同时覆盖 existing entity replay、created entity final-state、same-frame create+destroy 消除和并发 recording；否则很难看出 replay 顺序和 entity reservation 是否被悄悄改坏。
 - `CommandBufferTests` 里的 `Play()` 不应只跑手写 happy-path，还要覆盖复杂/随机脚本，避免短路径在 hierarchy 或 created/destroyed 混合帧上回退。
 - 对会直接 mutate world 的 `record + play` 基准，必须避免让同一个 iteration 内的多次 workload 复用同一份 world state；当前仓库通过 `command-buffer` 专用 benchmark 子命令隔离这组口径

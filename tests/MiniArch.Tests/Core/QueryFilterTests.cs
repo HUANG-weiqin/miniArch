@@ -49,6 +49,60 @@ public sealed class QueryFilterTests
     }
 
     [Fact]
+    public void Query_description_builds_expected_required_excluded_and_any_sets()
+    {
+        var description = new QueryDescription()
+            .With<Position>()
+            .Without<Velocity>()
+            .WithAny<TagA>()
+            .Or<TagB>();
+
+        Assert.Equal(new[] { typeof(Position) }, description.RequiredTypes);
+        Assert.Equal(new[] { typeof(Velocity) }, description.ExcludedTypes);
+        Assert.Equal(new[] { typeof(TagA), typeof(TagB) }, description.AnyTypes);
+    }
+
+    [Fact]
+    public void Semantically_equivalent_query_descriptions_compare_equal()
+    {
+        var first = new QueryDescription()
+            .With<Position>()
+            .Without<Velocity>()
+            .WithAny<TagA>()
+            .Or<TagB>();
+
+        var second = new QueryDescription()
+            .Or<TagB>()
+            .WithAny<TagA>()
+            .Without<Velocity>()
+            .With<Position>();
+
+        Assert.Equal(first, second);
+        Assert.Equal(first.GetHashCode(), second.GetHashCode());
+    }
+
+    [Fact]
+    public void Query_description_public_type_views_do_not_expose_mutable_internal_storage()
+    {
+        var description = new QueryDescription()
+            .With<Position>()
+            .Without<Velocity>()
+            .WithAny<TagA>();
+
+        var required = Assert.IsType<Type[]>(description.RequiredTypes);
+        var excluded = Assert.IsType<Type[]>(description.ExcludedTypes);
+        var any = Assert.IsType<Type[]>(description.AnyTypes);
+
+        required[0] = typeof(TagB);
+        excluded[0] = typeof(TagA);
+        any[0] = typeof(Velocity);
+
+        Assert.Equal(new[] { typeof(Position) }, description.RequiredTypes);
+        Assert.Equal(new[] { typeof(Velocity) }, description.ExcludedTypes);
+        Assert.Equal(new[] { typeof(TagA) }, description.AnyTypes);
+    }
+
+    [Fact]
     public void Generic_query_entrypoint_remains_compatible_with_chain_query()
     {
         var world = new World();

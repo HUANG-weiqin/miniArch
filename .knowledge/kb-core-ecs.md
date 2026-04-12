@@ -29,6 +29,7 @@ updated: 2026-04-12
   - `Chunk.cs`：实体列和 typed component columns 的密集存储
   - `Signature.cs`：组件集合键
   - `QueryFilter.cs` / `QueryBuilder.cs`：链式 query filter 构造
+  - `QueryDescription.cs`：可跨 world 复用的 query 描述，负责把用户想要的 `with/without/any` 组合保存成 world-agnostic 的类型集合
   - `Query.cs` / `QueryIterators.cs`：archetype 过滤和 chunk 遍历
   - `ArchetypeEdges.cs`：增删组件迁移缓存
 - 数据流 / 控制流：
@@ -46,7 +47,8 @@ updated: 2026-04-12
 - `Chunk` 负责 dense row 的单个/批量插入、读取、swap-remove 和 direct-index 写入
 - `Chunk` 也应该暴露当前有效 entity 行的 span 视图，给 query / benchmark 这类纯读热路径直接扫 `_entities[0..Count)`，避免逐行 `GetEntity(row)` 的重复边界检查和调用成本
   - `QueryBuilder` 负责累积 `With/Without/Any/Or` 过滤条件
-  - `Query` 先缓存匹配 archetype，再暴露 chunk 枚举和 `GetChunkSpan()` 这类 span-first 读入口
+- `Query` 先缓存匹配 archetype，再暴露 chunk 枚举和 `GetChunkSpan()` 这类 span-first 读入口
+- `QueryDescription` 只保存 `Type` 集合，不直接保存 `ComponentType`；真正进入执行时由 `World.Query(in QueryDescription)` 把它翻译成当前 world 的 `QueryFilter`，再复用现有 `Query` 缓存
   - query 读路径使用 world 发布的 archetype 数组快照和 query 自身发布的 matched-archetype 数组快照，避免共享可变列表
 - 和其他模块的交互方式：
   - `World` 通过 `ComponentRegistry` 把类型映射成 `ComponentType`
@@ -65,6 +67,8 @@ updated: 2026-04-12
 - `World` 侧可以对泛型组件类型做按 `T` 的注册缓存，减少热路径里的重复 registry 查找。
 - command buffer 对运行时的扩展应该尽量复用 world 现有的 free-list、version 和迁移能力，而不是再维护一套平行实体生命周期。
 - query builder / query 链式 API 也应该复用 world 侧的按 `T` component cache；如果它们绕开缓存直接打 `ComponentRegistry`，query build 的固定 CPU 成本会比必要值更高。
+- `QueryDescription` 要保持 world-agnostic，内部应存 `Type` 而不是 `ComponentType`；否则无法安全跨 world 持久复用。
+- `QueryDescription` 作为值对象参与缓存 key 时，不能把内部 `Type[]` 直接暴露给外部；公开视图必须防止调用方篡改内部存储。
 - `World` 的 entity metadata 需要显式容量管理；如果只依赖 `List<T>` 的自然扩容，`Create` 的分配会长期高于合理水平。
 - deferred entity reservation 不能直接把 reserved entity 视作 alive；只有 replay materialize 后 `_locations[id]` 才能变成可见实体。
 - `default(Entity)` 不应该是合法句柄；如果把 `(0,0)` 当成活体 entity，所有 optional/out/default 初始化场景都会变成隐性 bug 源。
@@ -145,6 +149,8 @@ updated: 2026-04-12
 - edge cache 继续用字典，导致热路径风格和 direct-index 存储体系脱节
 - query 把匹配 archetype 缓存在共享 `List<Archetype>` 上并原地清空/重建，会在并发只读时制造竞态
 - query builder / query fluent API 如果直接调用 `ComponentRegistry.GetOrCreate<T>()`，会绕过 `World` 已经存在的泛型缓存；这不会破坏功能，但会把 query build 的固定成本抬高。
+- `QueryDescription` 新增后，`World` 如果额外维护 `QueryDescription -> QueryFilter` 缓存，也要沿用 copy-on-write 发布，不要在共享字典上原地写入。
+- `QueryDescription` 的公开类型视图如果把内部数组直接返回出去，会把“值语义 + 缓存 key”契约打穿；这类问题在功能测试里不容易显形，但会在复用或并发共享 description 时变成非确定行为。
 - `QueryComponentSet.Add` / `Signature.Add` 这种“每次链式调用都复制一份小数组”的设计在 query build 不频繁时可以接受，但如果 benchmark 把 build 放进测量区，分配会稳定体现在结果里。
 - `Chunk.RemoveAt` 对所有列都做 `Array.Clear`，即使列元素不含引用也照样清空；这会在 remove/destroy 高频场景里制造纯写带宽开销，而不是必要的 GC 保护。
 - 判断 typed 列尾槽位是否需要清空时，不能只看 `Type.IsValueType`；带引用字段的 struct 同样需要 clear，运行时判定应以 `RuntimeHelpers.IsReferenceOrContainsReferences<T>()` 为准。

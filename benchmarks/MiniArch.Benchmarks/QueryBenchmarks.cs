@@ -4,6 +4,7 @@ using MiniArch.Core;
 
 namespace MiniArch.Benchmarks;
 
+using ArchQueryDescription = Arch.Core.QueryDescription;
 using MiniQuery = MiniArch.Core.Query;
 using MiniComponentType = MiniArch.Core.ComponentType;
 
@@ -31,7 +32,7 @@ public class QueryBenchmarks
     [Benchmark(Description = "Arch complex query WithAll execute")]
     public int Arch_WithAll_Execute()
     {
-        var description = new QueryDescription()
+        var description = new ArchQueryDescription()
             .WithAll<Position, Velocity, Health, Team>();
 
         return ExecuteArchQuery(description);
@@ -83,7 +84,7 @@ public class QueryBenchmarks
     [Benchmark(Description = "Arch complex query WithAll+Without execute")]
     public int Arch_WithAll_Without_Execute()
     {
-        var description = new QueryDescription()
+        var description = new ArchQueryDescription()
             .WithAll<Position, Velocity, Health, Team>()
             .WithNone<ExcludedTag>();
 
@@ -119,7 +120,7 @@ public class QueryBenchmarks
     [Benchmark(Description = "Arch complex query WithAll+Any execute")]
     public int Arch_WithAll_Any_Execute()
     {
-        var description = new QueryDescription()
+        var description = new ArchQueryDescription()
             .WithAll<Position, Velocity, Health, Team>()
             .WithAny<AnyTagA, AnyTagB>();
 
@@ -206,7 +207,7 @@ public class QueryBenchmarks
         return checksum;
     }
 
-    private int ExecuteArchQuery(QueryDescription description)
+    private int ExecuteArchQuery(ArchQueryDescription description)
     {
         var checksum = 0;
         var query = _archState.World.Query(in description);
@@ -221,7 +222,7 @@ public class QueryBenchmarks
         return checksum;
     }
 
-    private int ExecuteArchComponentQuerySpan(QueryDescription description)
+    private int ExecuteArchComponentQuerySpan(ArchQueryDescription description)
     {
         var checksum = 0;
         var query = _archState.World.Query(in description);

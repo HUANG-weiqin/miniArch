@@ -4,6 +4,7 @@ using MiniArch.Core;
 
 namespace MiniArch.Benchmarks;
 
+using ArchQueryDescription = Arch.Core.QueryDescription;
 using MiniQuery = MiniArch.Core.Query;
 using MiniComponentType = MiniArch.Core.ComponentType;
 using ArchWorld = Arch.Core.World;
@@ -504,7 +505,7 @@ internal static class ThroughputCaseFactory
         return checksum;
     }
 
-    private static int ExecuteArchEntityQuery(ArchWorld world, QueryDescription description)
+    private static int ExecuteArchEntityQuery(ArchWorld world, ArchQueryDescription description)
     {
         var checksum = 0;
         var query = world.Query(in description);
@@ -537,7 +538,7 @@ internal static class ThroughputCaseFactory
         return checksum;
     }
 
-    private static int ExecuteArchComponentSpanQuery(ArchWorld world, QueryDescription description)
+    private static int ExecuteArchComponentSpanQuery(ArchWorld world, ArchQueryDescription description)
     {
         var checksum = 0;
         var query = world.Query(in description);

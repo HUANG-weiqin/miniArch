@@ -7,6 +7,7 @@ using MiniEntity = MiniArch.Core.Entity;
 using MiniQuery = MiniArch.Core.Query;
 using MiniWorld = MiniArch.Core.World;
 using MiniComponentType = MiniArch.Core.ComponentType;
+using ArchQueryDescription = Arch.Core.QueryDescription;
 using ArchEntity = Arch.Core.Entity;
 using ArchWorld = Arch.Core.World;
 
@@ -463,9 +464,9 @@ public sealed class ArchComplexQueryWorldState : IDisposable
 
     public ArchWorld World;
     public ArchEntity[] Entities;
-    public QueryDescription WithAllDescription;
-    public QueryDescription WithAllWithoutDescription;
-    public QueryDescription WithAllAnyDescription;
+    public ArchQueryDescription WithAllDescription;
+    public ArchQueryDescription WithAllWithoutDescription;
+    public ArchQueryDescription WithAllAnyDescription;
 
     public void Dispose()
     {
@@ -508,22 +509,22 @@ public static partial class BenchmarkWorldFactory
             .Build();
     }
 
-    internal static QueryDescription BuildArchWithAllDescription()
+    internal static ArchQueryDescription BuildArchWithAllDescription()
     {
-        return new QueryDescription()
+        return new ArchQueryDescription()
             .WithAll<Position, Velocity, Health, Team>();
     }
 
-    internal static QueryDescription BuildArchWithAllWithoutDescription()
+    internal static ArchQueryDescription BuildArchWithAllWithoutDescription()
     {
-        return new QueryDescription()
+        return new ArchQueryDescription()
             .WithAll<Position, Velocity, Health, Team>()
             .WithNone<ExcludedTag>();
     }
 
-    internal static QueryDescription BuildArchWithAllAnyDescription()
+    internal static ArchQueryDescription BuildArchWithAllAnyDescription()
     {
-        return new QueryDescription()
+        return new ArchQueryDescription()
             .WithAll<Position, Velocity, Health, Team>()
             .WithAny<AnyTagA, AnyTagB>();
     }
