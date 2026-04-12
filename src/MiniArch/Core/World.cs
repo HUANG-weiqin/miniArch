@@ -1157,6 +1157,7 @@ public sealed class World
     public void Replay(in FrameCommands frameCommands)
     {
         var state = frameCommands.State;
+        var componentTypeCache = new Dictionary<Type, ComponentType>();
         BeginDeferredLayoutUpdates();
         try
         {
@@ -1172,7 +1173,7 @@ public sealed class World
 
             foreach (var created in state.CreatedEntities)
             {
-                MaterializeReservedEntity(created.Entity, created.Components);
+                MaterializeReservedEntity(created.Entity, created.Components, componentTypeCache, reservationChecked: true);
             }
 
             foreach (var link in state.LinkCommands)
@@ -1187,17 +1188,17 @@ public sealed class World
 
             foreach (var add in state.AddCommands)
             {
-                AddBoxed(add.Entity, add.ComponentType, add.Value);
+                AddBoxed(add.Entity, ResolveReplayComponentType(add.ComponentType, componentTypeCache), add.Value);
             }
 
             foreach (var set in state.SetCommands)
             {
-                SetBoxed(set.Entity, set.ComponentType, set.Value);
+                SetBoxed(set.Entity, ResolveReplayComponentType(set.ComponentType, componentTypeCache), set.Value);
             }
 
             foreach (var remove in state.RemoveCommands)
             {
-                RemoveBoxed(remove.Entity, remove.ComponentType);
+                RemoveBoxed(remove.Entity, ResolveReplayComponentType(remove.ComponentType, componentTypeCache));
             }
 
             foreach (var entity in state.DestroyedEntities)
@@ -1218,6 +1219,7 @@ public sealed class World
     {
         ArgumentNullException.ThrowIfNull(compiledCommands);
 
+        var componentTypeCache = new Dictionary<Type, ComponentType>();
         BeginDeferredLayoutUpdates();
         try
         {
@@ -1233,7 +1235,7 @@ public sealed class World
 
             foreach (var created in compiledCommands.CreatedEntities)
             {
-                MaterializeReservedEntity(created.Entity, created.Components);
+                MaterializeReservedEntity(created.Entity, created.Signature, created.Components, componentTypeCache, reservationChecked: true);
             }
 
             foreach (var link in compiledCommands.LinkCommands)
@@ -1248,17 +1250,17 @@ public sealed class World
 
             foreach (var add in compiledCommands.AddCommands)
             {
-                AddBoxed(add.Entity, add.ComponentType, add.Value);
+                AddBoxed(add.Entity, ResolveCompiledComponentType(add.RuntimeType, add.ComponentType, componentTypeCache), add.Value);
             }
 
             foreach (var set in compiledCommands.SetCommands)
             {
-                SetBoxed(set.Entity, set.ComponentType, set.Value);
+                SetBoxed(set.Entity, ResolveCompiledComponentType(set.RuntimeType, set.ComponentType, componentTypeCache), set.Value);
             }
 
             foreach (var remove in compiledCommands.RemoveCommands)
             {
-                RemoveBoxed(remove.Entity, remove.ComponentType);
+                RemoveBoxed(remove.Entity, ResolveCompiledComponentType(remove.RuntimeType, remove.ComponentType, componentTypeCache));
             }
 
             foreach (var entity in compiledCommands.DestroyedEntities)
@@ -1275,10 +1277,18 @@ public sealed class World
         }
     }
 
-    internal void MaterializeReservedEntity(Entity entity, IReadOnlyList<FrameComponentValue> components)
+    internal void MaterializeReservedEntity(
+        Entity entity,
+        IReadOnlyList<FrameComponentValue> components,
+        Dictionary<Type, ComponentType>? componentTypeCache = null,
+        bool reservationChecked = false)
     {
-        EnsureReplayReservation(entity);
-        var signature = BuildReplaySignature(components);
+        if (!reservationChecked)
+        {
+            EnsureReplayReservation(entity);
+        }
+
+        var signature = BuildReplaySignature(components, componentTypeCache);
         var archetype = GetOrCreateArchetype(signature);
         var chunk = archetype.ReserveEntity(entity, out var chunkIndex, out var rowIndex);
         _locations[entity.Id] = new EntityLocation(archetype, chunkIndex, rowIndex);
@@ -1286,7 +1296,33 @@ public sealed class World
         for (var index = 0; index < components.Count; index++)
         {
             var component = components[index];
-            chunk.SetComponent(GetComponentType(component.ComponentType), rowIndex, component.Value);
+            chunk.SetComponent(ResolveReplayComponentType(component.ComponentType, componentTypeCache), rowIndex, component.Value);
+        }
+
+        TouchQueryLayout();
+    }
+
+    internal void MaterializeReservedEntity(
+        Entity entity,
+        Signature? signature,
+        IReadOnlyList<CommandBuffer.CompiledComponentValue> components,
+        Dictionary<Type, ComponentType>? componentTypeCache = null,
+        bool reservationChecked = false)
+    {
+        if (!reservationChecked)
+        {
+            EnsureReplayReservation(entity);
+        }
+
+        signature ??= BuildReplaySignature(components, componentTypeCache);
+        var archetype = GetOrCreateArchetype(signature);
+        var chunk = archetype.ReserveEntity(entity, out var chunkIndex, out var rowIndex);
+        _locations[entity.Id] = new EntityLocation(archetype, chunkIndex, rowIndex);
+
+        for (var index = 0; index < components.Count; index++)
+        {
+            var component = components[index];
+            chunk.SetComponent(ResolveCompiledComponentType(component.RuntimeType, component.ComponentType, componentTypeCache), rowIndex, component.Value);
         }
 
         TouchQueryLayout();
@@ -1412,7 +1448,9 @@ public sealed class World
         return false;
     }
 
-    private Signature BuildReplaySignature(IReadOnlyList<FrameComponentValue> components)
+    private Signature BuildReplaySignature(
+        IReadOnlyList<FrameComponentValue> components,
+        Dictionary<Type, ComponentType>? componentTypeCache = null)
     {
         if (components.Count == 0)
         {
@@ -1422,10 +1460,54 @@ public sealed class World
         var componentTypes = new ComponentType[components.Count];
         for (var index = 0; index < components.Count; index++)
         {
-            componentTypes[index] = GetComponentType(components[index].ComponentType);
+            componentTypes[index] = ResolveReplayComponentType(components[index].ComponentType, componentTypeCache);
         }
 
         return new Signature(componentTypes);
+    }
+
+    private Signature BuildReplaySignature(
+        IReadOnlyList<CommandBuffer.CompiledComponentValue> components,
+        Dictionary<Type, ComponentType>? componentTypeCache = null)
+    {
+        if (components.Count == 0)
+        {
+            return Signature.Empty;
+        }
+
+        var componentTypes = new ComponentType[components.Count];
+        for (var index = 0; index < components.Count; index++)
+        {
+            var component = components[index];
+            componentTypes[index] = ResolveCompiledComponentType(component.RuntimeType, component.ComponentType, componentTypeCache);
+        }
+
+        return new Signature(componentTypes);
+    }
+
+    private ComponentType ResolveReplayComponentType(Type componentType, Dictionary<Type, ComponentType>? cache)
+    {
+        if (cache is not null && cache.TryGetValue(componentType, out var resolved))
+        {
+            return resolved;
+        }
+
+        resolved = GetComponentType(componentType);
+        cache?.Add(componentType, resolved);
+        return resolved;
+    }
+
+    private ComponentType ResolveCompiledComponentType(
+        Type runtimeType,
+        ComponentType componentType,
+        Dictionary<Type, ComponentType>? cache)
+    {
+        if (componentType.IsValid)
+        {
+            return componentType;
+        }
+
+        return ResolveReplayComponentType(runtimeType, cache);
     }
 
     private ComponentType GetComponentType(Type componentType)

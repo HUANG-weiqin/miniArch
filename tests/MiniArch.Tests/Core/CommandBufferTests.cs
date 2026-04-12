@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using MiniArch.Core;
 
 namespace MiniArch.Tests.Core;
@@ -370,142 +371,7 @@ public sealed class CommandBufferTests
         for (var frameIndex = 0; frameIndex < frameCount; frameIndex++)
         {
             var buffer = new CommandBuffer(source);
-            var createdThisFrame = new List<Entity>();
-            var pendingParents = new Dictionary<Entity, Entity?>();
-            var operations = 8 + rng.Next(8);
-
-            for (var createIndex = 0; createIndex < maxCreatesPerFrame; createIndex++)
-            {
-                if (rng.NextDouble() >= 0.45d)
-                {
-                    continue;
-                }
-
-                var entity = buffer.Create();
-                createdThisFrame.Add(entity);
-                knownEntities.Add(entity);
-
-                if (rng.NextDouble() < 0.70d)
-                {
-                    buffer.Add(entity, new Position(frameIndex * 10 + createIndex, frameIndex + createIndex));
-                }
-
-                if (rng.NextDouble() < 0.45d)
-                {
-                    buffer.Add(entity, new Velocity(frameIndex + createIndex, frameIndex * 2 + createIndex));
-                }
-
-                if (rng.NextDouble() < 0.40d)
-                {
-                    buffer.Add(entity, new Health(frameIndex + 100 + createIndex));
-                }
-            }
-
-            for (var operationIndex = 0; operationIndex < operations; operationIndex++)
-            {
-                var living = knownEntities.Where(source.IsAlive).ToArray();
-                var candidates = living.Concat(createdThisFrame).Distinct().ToArray();
-                if (candidates.Length == 0)
-                {
-                    continue;
-                }
-
-                var roll = rng.Next(12);
-                switch (roll)
-                {
-                    case 0:
-                    case 1:
-                    {
-                        var entity = candidates[rng.Next(candidates.Length)];
-                        buffer.Add(entity, new Position(rng.Next(1000), rng.Next(1000)));
-                        break;
-                    }
-                    case 2:
-                    {
-                        var entity = candidates[rng.Next(candidates.Length)];
-                        buffer.Add(entity, new Velocity(rng.Next(1000), rng.Next(1000)));
-                        break;
-                    }
-                    case 3:
-                    {
-                        var entity = candidates[rng.Next(candidates.Length)];
-                        buffer.Add(entity, new Health(rng.Next(1, 500)));
-                        break;
-                    }
-                    case 4:
-                    {
-                        var entity = candidates[rng.Next(candidates.Length)];
-                        buffer.Set(entity, new Position(rng.Next(1000), rng.Next(1000)));
-                        break;
-                    }
-                    case 5:
-                    {
-                        var entity = candidates[rng.Next(candidates.Length)];
-                        buffer.Set(entity, new Velocity(rng.Next(1000), rng.Next(1000)));
-                        break;
-                    }
-                    case 6:
-                    {
-                        var entity = candidates[rng.Next(candidates.Length)];
-                        buffer.Set(entity, new Health(rng.Next(1, 500)));
-                        break;
-                    }
-                    case 7:
-                    {
-                        var entity = candidates[rng.Next(candidates.Length)];
-                        switch (rng.Next(3))
-                        {
-                            case 0:
-                                buffer.Remove<Position>(entity);
-                                break;
-                            case 1:
-                                buffer.Remove<Velocity>(entity);
-                                break;
-                            default:
-                                buffer.Remove<Health>(entity);
-                                break;
-                        }
-
-                        break;
-                    }
-                    case 8:
-                    {
-                        if (candidates.Length < 2)
-                        {
-                            break;
-                        }
-
-                        var parent = candidates[rng.Next(candidates.Length)];
-                        var child = candidates[rng.Next(candidates.Length)];
-                        if (parent == child)
-                        {
-                            break;
-                        }
-
-                        if (CanScheduleLink(source, pendingParents, parent, child))
-                        {
-                            buffer.Link(parent, child);
-                            pendingParents[child] = parent;
-                        }
-
-                        break;
-                    }
-                    case 9:
-                    {
-                        var entity = candidates[rng.Next(candidates.Length)];
-                        buffer.Unlink(entity);
-                        pendingParents[entity] = null;
-                        break;
-                    }
-                    case 10:
-                    case 11:
-                    {
-                        var entity = candidates[rng.Next(candidates.Length)];
-                        buffer.Destroy(entity);
-                        break;
-                    }
-                }
-            }
+            RecordRandomizedFrame(source, buffer, knownEntities, rng, frameIndex, maxCreatesPerFrame);
 
             var frame = buffer.Playback();
             source.Replay(in frame);
@@ -517,35 +383,83 @@ public sealed class CommandBufferTests
     }
 
     [Fact]
-    public void Play_matches_playback_and_replay_for_the_same_recorded_commands()
+    public void Play_matches_playback_and_replay_for_randomized_frames()
     {
-        var playbackWorld = new World();
-        var playWorld = new World();
+        RunOnDedicatedThread(() =>
+        {
+            const int frameCount = 300;
+            const int maxCreatesPerFrame = 3;
+            const int seed = 0x5A17;
 
-        var playbackBuffer = new CommandBuffer(playbackWorld);
-        var playBuffer = new CommandBuffer(playWorld);
+            var playbackWorld = new World();
+            var playWorld = new World();
+            var playbackRng = new Random(seed);
+            var playRng = new Random(seed);
+            var playbackKnownEntities = new List<Entity>();
+            var playKnownEntities = new List<Entity>();
 
-        var playbackRoot = playbackBuffer.Create();
-        var playRoot = playBuffer.Create();
-        var playbackChild = playbackBuffer.Create();
-        var playChild = playBuffer.Create();
-        var playbackTransient = playbackBuffer.Create();
-        var playTransient = playBuffer.Create();
+            for (var frameIndex = 0; frameIndex < frameCount; frameIndex++)
+            {
+                var playbackBuffer = new CommandBuffer(playbackWorld);
+                RecordRandomizedFrame(playbackWorld, playbackBuffer, playbackKnownEntities, playbackRng, frameIndex, maxCreatesPerFrame);
 
-        RecordPlayScenario(playbackBuffer, playbackRoot, playbackChild, playbackTransient);
-        RecordPlayScenario(playBuffer, playRoot, playChild, playTransient);
+                var playBuffer = new CommandBuffer(playWorld);
+                RecordRandomizedFrame(playWorld, playBuffer, playKnownEntities, playRng, frameIndex, maxCreatesPerFrame);
 
-        var frame = playbackBuffer.Playback();
-        playbackWorld.Replay(in frame);
-        playBuffer.Play();
+                var frame = playbackBuffer.Playback();
+                playbackWorld.Replay(in frame);
+                playBuffer.Play();
+            }
 
-        AssertWorldStatesMatch(
-            playbackWorld,
-            playWorld,
-            playbackRoot,
-            playbackChild,
-            playbackTransient);
-        Assert.Equal(GetLiveLinks(playbackWorld), GetLiveLinks(playWorld));
+            AssertWorldStatesMatch(
+                playbackWorld,
+                playWorld,
+                playbackKnownEntities.Concat(playKnownEntities).Distinct().ToArray());
+            Assert.Equal(GetLiveLinks(playbackWorld), GetLiveLinks(playWorld));
+        });
+    }
+
+    [Fact]
+    public void Play_allocates_less_than_playback_plus_replay_for_the_same_script()
+    {
+        RunOnDedicatedThread(() =>
+        {
+            const int batchSize = 32;
+
+            WarmupPlayAllocations();
+
+            var playbackWorlds = new World[batchSize];
+            var playbackBuffers = new CommandBuffer[batchSize];
+            var playWorlds = new World[batchSize];
+            var playBuffers = new CommandBuffer[batchSize];
+
+            for (var i = 0; i < batchSize; i++)
+            {
+                playbackWorlds[i] = new World();
+                var playbackExisting = CreateEntities(playbackWorlds[i], 32);
+                playbackBuffers[i] = new CommandBuffer(playbackWorlds[i]);
+                RecordPlayScenario(playbackBuffers[i], playbackExisting);
+
+                playWorlds[i] = new World();
+                var playExisting = CreateEntities(playWorlds[i], 32);
+                playBuffers[i] = new CommandBuffer(playWorlds[i]);
+                RecordPlayScenario(playBuffers[i], playExisting);
+            }
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            var playbackReplayAllocatedBytes = MeasurePlaybackReplayAllocatedBytes(playbackWorlds, playbackBuffers);
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            var playAllocatedBytes = MeasurePlayAllocatedBytes(playBuffers);
+
+            Assert.True(playAllocatedBytes < playbackReplayAllocatedBytes, $"Play allocated {playAllocatedBytes} bytes, but Playback()+Replay() allocated {playbackReplayAllocatedBytes} bytes.");
+        });
     }
 
     [Fact]
@@ -588,6 +502,209 @@ public sealed class CommandBufferTests
         if ((index & 3) == 0)
         {
             buffer.Unlink(child);
+        }
+    }
+
+    private static void RecordRandomizedFrame(World world, CommandBuffer buffer, List<Entity> knownEntities, Random rng, int frameIndex, int maxCreatesPerFrame)
+    {
+        var createdThisFrame = new List<Entity>();
+        var pendingParents = new Dictionary<Entity, Entity?>();
+        var operations = 8 + rng.Next(8);
+
+        for (var createIndex = 0; createIndex < maxCreatesPerFrame; createIndex++)
+        {
+            if (rng.NextDouble() >= 0.45d)
+            {
+                continue;
+            }
+
+            var entity = buffer.Create();
+            createdThisFrame.Add(entity);
+            knownEntities.Add(entity);
+
+            if (rng.NextDouble() < 0.70d)
+            {
+                buffer.Add(entity, new Position(frameIndex * 10 + createIndex, frameIndex + createIndex));
+            }
+
+            if (rng.NextDouble() < 0.45d)
+            {
+                buffer.Add(entity, new Velocity(frameIndex + createIndex, frameIndex * 2 + createIndex));
+            }
+
+            if (rng.NextDouble() < 0.40d)
+            {
+                buffer.Add(entity, new Health(frameIndex + 100 + createIndex));
+            }
+        }
+
+        for (var operationIndex = 0; operationIndex < operations; operationIndex++)
+        {
+            var living = knownEntities.Where(world.IsAlive).ToArray();
+            var candidates = living.Concat(createdThisFrame).Distinct().ToArray();
+            if (candidates.Length == 0)
+            {
+                continue;
+            }
+
+            var roll = rng.Next(12);
+            switch (roll)
+            {
+                case 0:
+                case 1:
+                {
+                    var entity = candidates[rng.Next(candidates.Length)];
+                    buffer.Add(entity, new Position(rng.Next(1000), rng.Next(1000)));
+                    break;
+                }
+                case 2:
+                {
+                    var entity = candidates[rng.Next(candidates.Length)];
+                    buffer.Add(entity, new Velocity(rng.Next(1000), rng.Next(1000)));
+                    break;
+                }
+                case 3:
+                {
+                    var entity = candidates[rng.Next(candidates.Length)];
+                    buffer.Add(entity, new Health(rng.Next(1, 500)));
+                    break;
+                }
+                case 4:
+                {
+                    var entity = candidates[rng.Next(candidates.Length)];
+                    buffer.Set(entity, new Position(rng.Next(1000), rng.Next(1000)));
+                    break;
+                }
+                case 5:
+                {
+                    var entity = candidates[rng.Next(candidates.Length)];
+                    buffer.Set(entity, new Velocity(rng.Next(1000), rng.Next(1000)));
+                    break;
+                }
+                case 6:
+                {
+                    var entity = candidates[rng.Next(candidates.Length)];
+                    buffer.Set(entity, new Health(rng.Next(1, 500)));
+                    break;
+                }
+                case 7:
+                {
+                    var entity = candidates[rng.Next(candidates.Length)];
+                    switch (rng.Next(3))
+                    {
+                        case 0:
+                            buffer.Remove<Position>(entity);
+                            break;
+                        case 1:
+                            buffer.Remove<Velocity>(entity);
+                            break;
+                        default:
+                            buffer.Remove<Health>(entity);
+                            break;
+                    }
+
+                    break;
+                }
+                case 8:
+                {
+                    if (candidates.Length < 2)
+                    {
+                        break;
+                    }
+
+                    var parent = candidates[rng.Next(candidates.Length)];
+                    var child = candidates[rng.Next(candidates.Length)];
+                    if (parent == child)
+                    {
+                        break;
+                    }
+
+                    if (CanScheduleLink(world, pendingParents, parent, child))
+                    {
+                        buffer.Link(parent, child);
+                        pendingParents[child] = parent;
+                    }
+
+                    break;
+                }
+                case 9:
+                {
+                    var entity = candidates[rng.Next(candidates.Length)];
+                    buffer.Unlink(entity);
+                    pendingParents[entity] = null;
+                    break;
+                }
+                case 10:
+                case 11:
+                {
+                    var entity = candidates[rng.Next(candidates.Length)];
+                    buffer.Destroy(entity);
+                    break;
+                }
+            }
+        }
+    }
+
+    private static long MeasurePlaybackReplayAllocatedBytes(World[] worlds, CommandBuffer[] buffers)
+    {
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < buffers.Length; i++)
+        {
+            var frame = buffers[i].Playback();
+            worlds[i].Replay(in frame);
+        }
+
+        return GC.GetAllocatedBytesForCurrentThread() - before;
+    }
+
+    private static long MeasurePlayAllocatedBytes(CommandBuffer[] buffers)
+    {
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < buffers.Length; i++)
+        {
+            buffers[i].Play();
+        }
+
+        return GC.GetAllocatedBytesForCurrentThread() - before;
+    }
+
+    private static void WarmupPlayAllocations()
+    {
+        var playbackWorld = new World();
+        var playbackBuffer = new CommandBuffer(playbackWorld);
+        var playbackExisting = CreateEntities(playbackWorld, 8);
+        RecordPlayScenario(playbackBuffer, playbackExisting);
+        var frame = playbackBuffer.Playback();
+        playbackWorld.Replay(in frame);
+
+        var playWorld = new World();
+        var playBuffer = new CommandBuffer(playWorld);
+        var playExisting = CreateEntities(playWorld, 8);
+        RecordPlayScenario(playBuffer, playExisting);
+        playBuffer.Play();
+    }
+
+    private static void RunOnDedicatedThread(Action action)
+    {
+        Exception? capturedException = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception exception)
+            {
+                capturedException = exception;
+            }
+        });
+
+        thread.Start();
+        thread.Join();
+
+        if (capturedException is not null)
+        {
+            ExceptionDispatchInfo.Capture(capturedException).Throw();
         }
     }
 
@@ -665,6 +782,37 @@ public sealed class CommandBufferTests
         buffer.Link(root, child);
         buffer.Add(transient, new Position(80, 90));
         buffer.Destroy(transient);
+    }
+
+    private static void RecordPlayScenario(CommandBuffer buffer, Entity[] existing)
+    {
+        var root = existing[0];
+        var child = existing[1];
+        var transient = existing[2];
+
+        RecordPlayScenario(buffer, root, child, transient);
+
+        for (var index = 3; index < existing.Length; index++)
+        {
+            var entity = existing[index];
+            buffer.Add(entity, new Position(index * 10, index * 10 + 1));
+            buffer.Set(entity, new Position(index * 10 + 2, index * 10 + 3));
+
+            if ((index & 1) == 0)
+            {
+                buffer.Add(entity, new Velocity(index * 10 + 4, index * 10 + 5));
+            }
+
+            if ((index & 3) == 0)
+            {
+                buffer.Remove<Position>(entity);
+            }
+
+            if ((index & 7) == 0)
+            {
+                buffer.Link(root, entity);
+            }
+        }
     }
 
     private static bool CanScheduleLink(World world, Dictionary<Entity, Entity?> pendingParents, Entity parent, Entity child)

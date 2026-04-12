@@ -29,9 +29,10 @@ updated: 2026-04-12
   - `src/MiniArch/Core/World.cs`：`ReserveDeferredEntity`、`ReleaseReservedEntity`、`Replay(in FrameCommands)`、boxed structural mutation
 - 数据流 / 控制流：
   - 工作线程通过 `CommandBuffer` 只记录命令；`Create()` 会立刻从 world 预留真实 `Entity`
-  - `Playback()` 和 `Play()` 共享同一套合并/归约逻辑，先收集 created entities，再把 hierarchy / add / set / remove / destroy 编译成固定桶
+  - `Playback()` 和 `Play()` 共享同一套合并/归约逻辑，但 compile 现在改成“按 shard 直接归约到最终批次”，不再先把所有 shard 扁平化成中间大 `List`
   - 对同帧 newly-created entity，`Playback()` 直接预计算 final signature 和 final component payload
   - 同帧 `create + destroy` 不会 materialize 到 world，而是放进 `ReleasedEntities`，在 replay 时回收到 free-list 并提升 version
+  - `Play()` 走 owning-world 专用 compiled batch，不再先物化 `FrameCommands`；created entity 的 internal batch 会尽量复用 compile 阶段结果，减少 `ToArray` / `ToList` / LINQ 分配
   - `Replay()` 先 materialize surviving creates，再执行 `link/unlink -> add -> set -> remove -> destroy`
   - `Replay()` 期间抑制逐条 query layout 发布，整批结束后只发布一次
 - 和其他模块的交互方式：
@@ -44,6 +45,10 @@ updated: 2026-04-12
 
 - 当前已落地的方向是“多线程 `recording` + 单线程 `replay`”；`World` 本身仍不是并发写安全。
 - 当不需要保留 frame 或跨 world replay 时，应优先用 `Play()`；它复用同样语义，但省掉 `FrameCommands` 物化分配。
+- `Play()` 当前的主要优化点是：
+  - compile 阶段移除了 shard 扁平化中间桶
+  - owning-world replay 复用 compile 批次里的 internal created/component 表示
+  - replay 期间对 `Type -> ComponentType` 做批次级缓存，并去掉 created materialize 的重复 reservation 校验
 - 记录期直接返回真实 `Entity`，但它只是 reserved handle：
   - fresh id 会扩展 `_versions/_locations`
   - recycled id 会先从 free-list 取出
@@ -89,6 +94,7 @@ updated: 2026-04-12
   - 把 `add/set/remove` 当成完全可交换操作；existing entity 和 created entity 的归约规则并不相同
   - 忘记释放同帧 `create + destroy` 的 reserved entity，导致 id 被永远占用
   - replay 期间逐条触发 query layout 失效，导致额外开销和观察窗口不稳定
+  - 为了优化 `Play()` 而在 `Playback()` compile 阶段提前污染 source world 的组件注册；这会破坏“`Playback()` 不改 world”的边界
 - 容易误判的地方：
   - 以为 `destroy` 放最后就足够，实际上 created entity 的 final-state 预计算同样关键
   - 以为 recording 并发问题只在 shard merge；实际上 entity reservation 和 component registration 也需要保护

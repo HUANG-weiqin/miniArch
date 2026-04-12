@@ -5,58 +5,134 @@ namespace MiniArch.Benchmarks;
 
 public class CommandBufferBenchmarks
 {
-    [Params(1000)]
+    [Params(128, 1000, 10000)]
     public int EntityCount { get; set; }
+
+    private World? _recordWorld;
+    private CommandBuffer? _recordBuffer;
+    private Entity[]? _recordExisting;
+
+    private World? _playbackWorld;
+    private CommandBuffer? _playbackBuffer;
+
+    private World? _replayWorld;
+    private FrameCommands _replayFrame;
+
+    private World? _playWorld;
+    private CommandBuffer? _playBuffer;
+
+    private World? _endToEndWorld;
+    private CommandBuffer? _endToEndBuffer;
+
+    [IterationSetup(Target = nameof(MiniArch_CommandBuffer_Record))]
+    public void SetupRecord()
+    {
+        _recordWorld = new World();
+        _recordExisting = CreateEntities(_recordWorld, EntityCount);
+        _recordBuffer = new CommandBuffer(_recordWorld);
+    }
+
+    [IterationCleanup(Target = nameof(MiniArch_CommandBuffer_Record))]
+    public void CleanupRecord()
+    {
+        _recordWorld = null;
+        _recordBuffer = null;
+        _recordExisting = null;
+    }
+
+    [IterationSetup(Target = nameof(MiniArch_CommandBuffer_Playback_Only))]
+    public void SetupPlayback()
+    {
+        (_playbackWorld, _playbackBuffer) = CreateRecordedScenario(EntityCount);
+    }
+
+    [IterationCleanup(Target = nameof(MiniArch_CommandBuffer_Playback_Only))]
+    public void CleanupPlayback()
+    {
+        _playbackWorld = null;
+        _playbackBuffer = null;
+    }
+
+    [IterationSetup(Target = nameof(MiniArch_CommandBuffer_Replay_Only))]
+    public void SetupReplay()
+    {
+        var (_, sourceBuffer) = CreateRecordedScenario(EntityCount);
+        _replayFrame = sourceBuffer.Playback();
+        _replayWorld = new World();
+        CreateEntities(_replayWorld, EntityCount);
+    }
+
+    [IterationCleanup(Target = nameof(MiniArch_CommandBuffer_Replay_Only))]
+    public void CleanupReplay()
+    {
+        _replayWorld = null;
+        _replayFrame = default;
+    }
+
+    [IterationSetup(Target = nameof(MiniArch_CommandBuffer_Play_Only))]
+    public void SetupPlay()
+    {
+        (_playWorld, _playBuffer) = CreateRecordedScenario(EntityCount);
+    }
+
+    [IterationCleanup(Target = nameof(MiniArch_CommandBuffer_Play_Only))]
+    public void CleanupPlay()
+    {
+        _playWorld = null;
+        _playBuffer = null;
+    }
+
+    [IterationSetup(Target = nameof(MiniArch_CommandBuffer_EndToEnd))]
+    public void SetupEndToEnd()
+    {
+        (_endToEndWorld, _endToEndBuffer) = CreateRecordedScenario(EntityCount);
+    }
+
+    [IterationCleanup(Target = nameof(MiniArch_CommandBuffer_EndToEnd))]
+    public void CleanupEndToEnd()
+    {
+        _endToEndWorld = null;
+        _endToEndBuffer = null;
+    }
 
     [Benchmark(Description = "MiniArch command buffer record")]
     public void MiniArch_CommandBuffer_Record()
     {
-        var world = new World();
-        var existing = CreateEntities(world, EntityCount);
-        var buffer = new CommandBuffer(world);
-        RecordScript(buffer, existing);
+        RecordScript(_recordBuffer!, _recordExisting!);
     }
 
-    [Benchmark(Description = "MiniArch command buffer playback")]
-    public FrameCommands MiniArch_CommandBuffer_Playback()
+    [Benchmark(Description = "MiniArch command buffer playback only")]
+    public FrameCommands MiniArch_CommandBuffer_Playback_Only()
     {
-        var world = new World();
-        var existing = CreateEntities(world, EntityCount);
-        var buffer = new CommandBuffer(world);
-        RecordScript(buffer, existing);
-        return buffer.Playback();
+        return _playbackBuffer!.Playback();
     }
 
-    [Benchmark(Description = "MiniArch command buffer replay")]
-    public void MiniArch_CommandBuffer_Replay()
+    [Benchmark(Description = "MiniArch command buffer replay only")]
+    public void MiniArch_CommandBuffer_Replay_Only()
     {
-        var world = new World();
-        var existing = CreateEntities(world, EntityCount);
-        var buffer = new CommandBuffer(world);
-        RecordScript(buffer, existing);
-        var frame = buffer.Playback();
-        world.Replay(in frame);
+        _replayWorld!.Replay(in _replayFrame);
     }
 
-    [Benchmark(Description = "MiniArch command buffer play")]
-    public void MiniArch_CommandBuffer_Play()
+    [Benchmark(Description = "MiniArch command buffer play only")]
+    public void MiniArch_CommandBuffer_Play_Only()
     {
-        var world = new World();
-        var existing = CreateEntities(world, EntityCount);
-        var buffer = new CommandBuffer(world);
-        RecordScript(buffer, existing);
-        buffer.Play();
+        _playBuffer!.Play();
     }
 
-    [Benchmark(Description = "MiniArch command buffer record+playback+replay")]
+    [Benchmark(Description = "MiniArch command buffer end-to-end")]
     public void MiniArch_CommandBuffer_EndToEnd()
     {
+        var frame = _endToEndBuffer!.Playback();
+        _endToEndWorld!.Replay(in frame);
+    }
+
+    private static (World World, CommandBuffer Buffer) CreateRecordedScenario(int entityCount)
+    {
         var world = new World();
-        var existing = CreateEntities(world, EntityCount);
+        var existing = CreateEntities(world, entityCount);
         var buffer = new CommandBuffer(world);
         RecordScript(buffer, existing);
-        var frame = buffer.Playback();
-        world.Replay(in frame);
+        return (world, buffer);
     }
 
     private static Entity[] CreateEntities(World world, int count)

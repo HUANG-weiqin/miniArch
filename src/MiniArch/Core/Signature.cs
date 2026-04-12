@@ -28,6 +28,12 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
         _hashCode = ComputeHashCode(_components);
     }
 
+    internal static Signature CreateNormalized(ComponentType[] components)
+    {
+        ArgumentNullException.ThrowIfNull(components);
+        return components.Length == 0 ? Empty : new Signature(components, isNormalized: true);
+    }
+
     public int Count => _components.Length;
 
     public ReadOnlySpan<ComponentType> AsSpan() => _components;
