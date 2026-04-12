@@ -2,7 +2,7 @@ using System.Diagnostics;
 using Arch.Core;
 using MiniArch.Core;
 
-namespace MiniArch.Benchmarks;
+namespace MiniArchBenchmarks;
 
 using ArchQueryDescription = Arch.Core.QueryDescription;
 using MiniQuery = MiniArch.Core.Query;

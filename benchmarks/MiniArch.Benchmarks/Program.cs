@@ -1,6 +1,6 @@
 using BenchmarkDotNet.Running;
 
-namespace MiniArch.Benchmarks;
+namespace MiniArchBenchmarks;
 
 public static class Program
 {

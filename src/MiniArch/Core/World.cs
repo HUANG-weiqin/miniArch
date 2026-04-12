@@ -5,7 +5,9 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace MiniArch.Core;
+using MiniArch.Core;
+
+namespace MiniArch;
 
 /// <summary>
 /// Owns entity storage and queries.
@@ -30,7 +32,7 @@ public sealed class World
     private readonly List<int> _versions;
     private readonly List<EntityLocation> _locations;
     private Dictionary<QueryDescription, QueryFilter> _queryFiltersByDescription = new();
-    private Dictionary<QueryFilter, Query> _queries = new();
+    private Dictionary<QueryFilter, MiniArch.Core.Query> _queries = new();
     private Archetype[] _archetypeSnapshot = Array.Empty<Archetype>();
     private readonly int _chunkCapacity;
     private readonly bool _adaptiveChunkCapacity;
@@ -97,7 +99,7 @@ public sealed class World
         _archetypes.Clear();
         _archetypeSnapshot = Array.Empty<Archetype>();
         _queryFiltersByDescription = new Dictionary<QueryDescription, QueryFilter>();
-        _queries = new Dictionary<QueryFilter, Query>();
+        _queries = new Dictionary<QueryFilter, MiniArch.Core.Query>();
         _archetypeGeneration = 0;
         _queryLayoutGeneration = 0;
         _freeIdCount = 0;
@@ -770,49 +772,35 @@ public sealed class World
     }
 
     /// <summary>
-    /// Starts a query builder.
+    /// Tries to read a component directly from an entity.
     /// </summary>
-    public QueryBuilder Query()
+    public bool TryGet<T>(Entity entity, out T component)
     {
-        return new QueryBuilder(this, QueryFilter.Empty);
+        if (!TryGetLocation(entity, out var info))
+        {
+            component = default!;
+            return false;
+        }
+
+        var componentType = GetComponentType<T>();
+        if (!info.Archetype.TryGetComponentIndex(componentType, out var componentIndex))
+        {
+            component = default!;
+            return false;
+        }
+
+        component = info.Archetype
+            .GetChunk(info.ChunkIndex)
+            .GetComponentAt<T>(componentIndex, info.RowIndex);
+        return true;
     }
 
     /// <summary>
-    /// Gets a single-component query.
-    /// </summary>
-    public Query Query<T1>()
-    {
-        var componentType = GetComponentType<T1>();
-        return GetOrCreateQuery(QueryFilter.CreateRequired(componentType));
-    }
-
-    /// <summary>
-    /// Gets a two-component query.
-    /// </summary>
-    public Query Query<T1, T2>()
-    {
-        var componentType1 = GetComponentType<T1>();
-        var componentType2 = GetComponentType<T2>();
-        return GetOrCreateQuery(QueryFilter.CreateRequired(componentType1, componentType2));
-    }
-
-    /// <summary>
-    /// Gets a three-component query.
-    /// </summary>
-    public Query Query<T1, T2, T3>()
-    {
-        var componentType1 = GetComponentType<T1>();
-        var componentType2 = GetComponentType<T2>();
-        var componentType3 = GetComponentType<T3>();
-        return GetOrCreateQuery(QueryFilter.CreateRequired(componentType1, componentType2, componentType3));
-    }
-
-    /// <summary>
-    /// Gets a query from a description.
+    /// Gets an entity-only query from a description.
     /// </summary>
     public Query Query(in QueryDescription description)
     {
-        return GetOrCreateQuery(GetOrCreateQueryFilter(description));
+        return new Query(GetAdvancedQuery(in description));
     }
 
     /// <summary>
@@ -1006,7 +994,12 @@ public sealed class World
         return types;
     }
 
-    internal Query GetOrCreateQuery(QueryFilter filter)
+    internal MiniArch.Core.Query GetAdvancedQuery(in QueryDescription description)
+    {
+        return GetOrCreateQuery(GetOrCreateQueryFilter(description));
+    }
+
+    internal MiniArch.Core.Query GetOrCreateQuery(QueryFilter filter)
     {
         while (true)
         {
@@ -1016,8 +1009,8 @@ public sealed class World
                 return query;
             }
 
-            var candidate = new Query(this, filter);
-            var updated = new Dictionary<QueryFilter, Query>(snapshot)
+            var candidate = new MiniArch.Core.Query(this, filter);
+            var updated = new Dictionary<QueryFilter, MiniArch.Core.Query>(snapshot)
             {
                 [filter] = candidate
             };

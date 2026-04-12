@@ -1,6 +1,7 @@
 using MiniArch.Core;
+using MiniQuery = MiniArch.Core.Query;
 
-namespace MiniArch.Tests.Core;
+namespace MiniArchTests.Core;
 
 public sealed class WorldStructuralChangeTests
 {
@@ -136,7 +137,7 @@ public sealed class WorldStructuralChangeTests
         var reverse = world.ReplayWithReverse(in frame);
 
         Assert.False(world.IsAlive(entity));
-        Assert.Equal(0, CountQueryEntities(world.Query<Position>()));
+        Assert.Equal(0, CountQueryEntities(CreateQuery<Position>(world)));
 
         world.Rewind(in reverse);
 
@@ -144,7 +145,7 @@ public sealed class WorldStructuralChangeTests
         Assert.Contains(world.Components.GetOrCreate<Position>(), info.Archetype.Signature);
         Assert.Contains(world.Components.GetOrCreate<Velocity>(), info.Archetype.Signature);
         Assert.Contains(world.Components.GetOrCreate<Health>(), info.Archetype.Signature);
-        Assert.Equal(1, CountQueryEntities(world.Query<Position>()));
+        Assert.Equal(1, CountQueryEntities(CreateQuery<Position>(world)));
         Assert.Equal(new Position(1, 2), info.Archetype.GetChunk(info.ChunkIndex).GetComponent<Position>(world.Components.GetOrCreate<Position>(), info.RowIndex));
     }
 
@@ -234,15 +235,15 @@ public sealed class WorldStructuralChangeTests
             $"position={(HasComponent<Position>(world, entity) ? GetComponentValue(world, entity).ToString() : "none")}",
             $"velocity={(HasComponent<Velocity>(world, entity) ? info.Archetype.GetChunk(info.ChunkIndex).GetComponent<Velocity>(world.Components.GetOrCreate<Velocity>(), info.RowIndex).ToString() : "none")}",
             $"health={(HasComponent<Health>(world, entity) ? info.Archetype.GetChunk(info.ChunkIndex).GetComponent<Health>(world.Components.GetOrCreate<Health>(), info.RowIndex).ToString() : "none")}",
-            $"query:Position={CountQueryEntities(world.Query<Position>())}",
-            $"query:Velocity={CountQueryEntities(world.Query<Velocity>())}",
-            $"query:Health={CountQueryEntities(world.Query<Health>())}"
+            $"query:Position={CountQueryEntities(CreateQuery<Position>(world))}",
+            $"query:Velocity={CountQueryEntities(CreateQuery<Velocity>(world))}",
+            $"query:Health={CountQueryEntities(CreateQuery<Health>(world))}"
         };
 
         return string.Join("|", parts);
     }
 
-    private static int CountQueryEntities(Query query)
+    private static int CountQueryEntities(MiniArch.Core.Query query)
     {
         var total = 0;
         foreach (ref readonly var chunk in query.GetChunkSpan())
@@ -251,5 +252,11 @@ public sealed class WorldStructuralChangeTests
         }
 
         return total;
+    }
+
+    private static MiniQuery CreateQuery<T>(World world)
+    {
+        var description = new QueryDescription().With<T>();
+        return MiniQuery.Create(world, in description);
     }
 }

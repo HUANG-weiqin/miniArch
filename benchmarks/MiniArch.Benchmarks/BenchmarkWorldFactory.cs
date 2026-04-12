@@ -1,11 +1,12 @@
 using Arch.Core;
 using MiniArch.Core;
 
-namespace MiniArch.Benchmarks;
+namespace MiniArchBenchmarks;
 
-using MiniEntity = MiniArch.Core.Entity;
+using MiniEntity = MiniArch.Entity;
 using MiniQuery = MiniArch.Core.Query;
-using MiniWorld = MiniArch.Core.World;
+using MiniQueryDescription = MiniArch.QueryDescription;
+using MiniWorld = MiniArch.World;
 using MiniComponentType = MiniArch.Core.ComponentType;
 using ArchQueryDescription = Arch.Core.QueryDescription;
 using ArchEntity = Arch.Core.Entity;
@@ -478,35 +479,38 @@ public static partial class BenchmarkWorldFactory
 {
     internal static MiniQuery BuildMiniWithAllQuery(MiniWorld world)
     {
-        return world.Query()
+        var description = new MiniQueryDescription()
             .With<Position>()
             .With<Velocity>()
             .With<Health>()
-            .With<Team>()
-            .Build();
+            .With<Team>();
+
+        return MiniQuery.Create(world, in description);
     }
 
     internal static MiniQuery BuildMiniWithAllWithoutQuery(MiniWorld world)
     {
-        return world.Query()
+        var description = new MiniQueryDescription()
             .With<Position>()
             .With<Velocity>()
             .With<Health>()
             .With<Team>()
-            .Without<ExcludedTag>()
-            .Build();
+            .Without<ExcludedTag>();
+
+        return MiniQuery.Create(world, in description);
     }
 
     internal static MiniQuery BuildMiniWithAllAnyQuery(MiniWorld world)
     {
-        return world.Query()
+        var description = new MiniQueryDescription()
             .With<Position>()
             .With<Velocity>()
             .With<Health>()
             .With<Team>()
-            .Any<AnyTagA>()
-            .Or<AnyTagB>()
-            .Build();
+            .WithAny<AnyTagA>()
+            .Or<AnyTagB>();
+
+        return MiniQuery.Create(world, in description);
     }
 
     internal static ArchQueryDescription BuildArchWithAllDescription()

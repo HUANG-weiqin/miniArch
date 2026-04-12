@@ -2,10 +2,10 @@ using System.Diagnostics;
 using System.Reflection;
 using MiniArch.Core;
 
-namespace MiniArch.Benchmarks;
+namespace MiniArchBenchmarks;
 
 using MiniQuery = MiniArch.Core.Query;
-using MiniWorld = MiniArch.Core.World;
+using MiniWorld = MiniArch.World;
 
 public enum QueryProfilingScenario
 {
@@ -250,7 +250,7 @@ public static class QueryProfilingRunner
 
     private static MiniQuery BuildQuery(MiniWorld world, QueryProfilingScenario scenario)
     {
-        var builder = world.Query()
+        var description = new QueryDescription()
             .With<Position>()
             .With<Velocity>()
             .With<Health>()
@@ -258,11 +258,23 @@ public static class QueryProfilingRunner
 
         return scenario switch
         {
-            QueryProfilingScenario.WithAll => builder.Build(),
-            QueryProfilingScenario.WithAllWithout => builder.Without<ExcludedTag>().Build(),
-            QueryProfilingScenario.WithAllAny => builder.Any<AnyTagA>().Or<AnyTagB>().Build(),
+            QueryProfilingScenario.WithAll => MiniQuery.Create(world, in description),
+            QueryProfilingScenario.WithAllWithout => BuildWithoutQuery(world, description),
+            QueryProfilingScenario.WithAllAny => BuildAnyQuery(world, description),
             _ => throw new ArgumentOutOfRangeException(nameof(scenario))
         };
+    }
+
+    private static MiniQuery BuildWithoutQuery(MiniWorld world, QueryDescription description)
+    {
+        var filtered = description.Without<ExcludedTag>();
+        return MiniQuery.Create(world, in filtered);
+    }
+
+    private static MiniQuery BuildAnyQuery(MiniWorld world, QueryDescription description)
+    {
+        var filtered = description.WithAny<AnyTagA>().Or<AnyTagB>();
+        return MiniQuery.Create(world, in filtered);
     }
 
     private static int Execute(MiniQuery query)

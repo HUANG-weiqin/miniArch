@@ -28,7 +28,7 @@ updated: 2026-04-12
   - `Archetype.cs`：chunk 列表、实体计数、结构变化入口
   - `Chunk.cs`：实体列和 typed component columns 的密集存储
   - `Signature.cs`：组件集合键
-  - `QueryFilter.cs` / `QueryBuilder.cs`：链式 query filter 构造
+  - `QueryFilter.cs`：query filter 的内部执行形状
   - `QueryDescription.cs`：可跨 world 复用的 query 描述，负责把用户想要的 `with/without/any` 组合保存成 world-agnostic 的类型集合
   - `Query.cs` / `QueryIterators.cs`：archetype 过滤和 chunk 遍历
   - `ArchetypeEdges.cs`：增删组件迁移缓存
@@ -46,9 +46,8 @@ updated: 2026-04-12
   - `Archetype` 负责把实体放进可写 chunk，并优先复用已有空位的 chunk，而不是盲目只往最后一个 chunk 追加
 - `Chunk` 负责 dense row 的单个/批量插入、读取、swap-remove 和 direct-index 写入
 - `Chunk` 也应该暴露当前有效 entity 行的 span 视图，给 query / benchmark 这类纯读热路径直接扫 `_entities[0..Count)`，避免逐行 `GetEntity(row)` 的重复边界检查和调用成本
-  - `QueryBuilder` 负责累积 `With/Without/Any/Or` 过滤条件
 - `Query` 先缓存匹配 archetype，再暴露 chunk 枚举和 `GetChunkSpan()` 这类 span-first 读入口
-- `QueryDescription` 只保存 `Type` 集合，不直接保存 `ComponentType`；真正进入执行时由 `World.Query(in QueryDescription)` 把它翻译成当前 world 的 `QueryFilter`，再复用现有 `Query` 缓存
+- `QueryDescription` 只保存 `Type` 集合，不直接保存 `ComponentType`；真正进入执行时由 `MiniArch.Core.Query.Create(world, in description)` 或 `World.Query(in description)` 把它翻译成当前 world 的 `QueryFilter`，再复用现有 `Query` 缓存
   - query 读路径使用 world 发布的 archetype 数组快照和 query 自身发布的 matched-archetype 数组快照，避免共享可变列表
 - 和其他模块的交互方式：
   - `World` 通过 `ComponentRegistry` 把类型映射成 `ComponentType`

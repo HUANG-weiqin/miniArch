@@ -1,7 +1,7 @@
 using MiniArch.Core;
 using MiniChunk = MiniArch.Core.Chunk;
-using MiniEntity = MiniArch.Core.Entity;
-using MiniWorld = MiniArch.Core.World;
+using MiniEntity = MiniArch.Entity;
+using MiniWorld = MiniArch.World;
 using MiniCommandBuffer = MiniArch.Core.CommandBuffer;
 using ArchEntity = Arch.Core.Entity;
 using ArchWorld = Arch.Core.World;
@@ -9,7 +9,7 @@ using ArchCommandBuffer = Arch.Buffer.CommandBuffer;
 using ArchComponentType = Arch.Core.ComponentType;
 using ArchQueryDescription = Arch.Core.QueryDescription;
 
-namespace MiniArch.Benchmarks;
+namespace MiniArchBenchmarks;
 
 public sealed record CommandBufferSharedScenario(
     string Name,
@@ -293,7 +293,8 @@ public static class CommandBufferSharedScenarios
     {
         var seen = new HashSet<(int Id, int Version)>();
         var snapshots = new List<string>();
-        var query = world.Query().Build();
+        var description = new QueryDescription();
+        var query = MiniArch.Core.Query.Create(world, in description);
         var chunks = query.GetChunkSpan();
 
         for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)

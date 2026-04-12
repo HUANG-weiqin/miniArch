@@ -1,6 +1,6 @@
 using MiniArch.Core;
 
-namespace MiniArch.Benchmarks;
+namespace MiniArchBenchmarks;
 
 public enum CommandBufferReplayScenarioKind
 {
@@ -151,7 +151,8 @@ public static class CommandBufferReplayScenarios
     public static CommandBufferWorldSummary SummarizeWorld(string scenarioName, World world)
     {
         var snapshots = new List<string>();
-        var query = world.Query().Build();
+        var description = new QueryDescription();
+        var query = MiniArch.Core.Query.Create(world, in description);
         var chunks = query.GetChunkSpan();
 
         for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)

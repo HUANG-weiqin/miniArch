@@ -1,7 +1,7 @@
 using System.IO;
 using MiniArch.Core;
 
-namespace MiniArch.Tests.Persistence;
+namespace MiniArchTests.Persistence;
 
 public sealed class WorldSnapshotTests
 {

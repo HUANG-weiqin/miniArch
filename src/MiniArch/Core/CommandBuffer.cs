@@ -93,10 +93,17 @@ public sealed class CommandBuffer
     /// <summary>
     /// Compiles and replays the buffered commands.
     /// </summary>
-    public void Play()
+    /// <returns><c>true</c> if at least one command was replayed; otherwise, <c>false</c>.</returns>
+    public bool Play()
     {
         var compiled = Compile();
+        if (compiled.IsEmpty)
+        {
+            return false;
+        }
+
         _world.Replay(compiled);
+        return true;
     }
 
     /// <summary>
@@ -498,6 +505,17 @@ public sealed class CommandBuffer
         public List<Entity> DestroyedEntities { get; }
 
         public List<Entity> ReleasedEntities { get; }
+
+        public bool IsEmpty =>
+            ReservedEntities.Count == 0 &&
+            CreatedEntities.Count == 0 &&
+            LinkCommands.Count == 0 &&
+            UnlinkCommands.Count == 0 &&
+            AddCommands.Count == 0 &&
+            SetCommands.Count == 0 &&
+            RemoveCommands.Count == 0 &&
+            DestroyedEntities.Count == 0 &&
+            ReleasedEntities.Count == 0;
 
         public FrameCommands ToFrameCommands()
         {

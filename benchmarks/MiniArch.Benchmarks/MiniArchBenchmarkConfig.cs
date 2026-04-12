@@ -11,7 +11,7 @@ using BenchmarkDotNet.Reports;
 using BenchmarkDotNet.Running;
 using System.Globalization;
 
-namespace MiniArch.Benchmarks;
+namespace MiniArchBenchmarks;
 
 public sealed class MiniArchBenchmarkConfig : ManualConfig
 {

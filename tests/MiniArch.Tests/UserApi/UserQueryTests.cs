@@ -1,6 +1,6 @@
-using MiniArch.Ecs;
+using MiniArch;
 
-namespace MiniArch.Tests.UserApi;
+namespace MiniArchTests.UserApi;
 
 public sealed class UserQueryTests
 {
@@ -8,17 +8,19 @@ public sealed class UserQueryTests
     private readonly record struct Velocity(int X, int Y);
 
     [Fact]
-    public void Single_component_query_can_be_enumerated_directly_with_foreach()
+    public void Description_based_single_component_query_can_be_enumerated_directly_with_foreach()
     {
         var world = new World();
+        var description = new QueryDescription().With<Position>();
         var first = world.Create(new Position(1, 2));
         world.Create();
         var second = world.Create(new Position(3, 4));
 
         var seen = new List<(Entity Entity, Position Position)>();
-        foreach (var item in world.Query<Position>())
+        foreach (var entity in world.Query(in description))
         {
-            seen.Add((item.Entity, item.Component));
+            Assert.True(world.TryGet(entity, out Position position));
+            seen.Add((entity, position));
         }
 
         Assert.Equal(
@@ -31,17 +33,20 @@ public sealed class UserQueryTests
     }
 
     [Fact]
-    public void Dual_component_query_can_be_enumerated_directly_with_foreach()
+    public void Description_based_dual_component_query_can_be_enumerated_directly_with_foreach()
     {
         var world = new World();
+        var description = new QueryDescription().With<Position>().With<Velocity>();
         var first = world.Create(new Position(1, 2), new Velocity(3, 4));
         world.Create(new Position(7, 8));
         var second = world.Create(new Position(5, 6), new Velocity(7, 8));
 
         var seen = new List<(Entity Entity, Position Position, Velocity Velocity)>();
-        foreach (var item in world.Query<Position, Velocity>())
+        foreach (var entity in world.Query(in description))
         {
-            seen.Add((item.Entity, item.First, item.Second));
+            Assert.True(world.TryGet(entity, out Position position));
+            Assert.True(world.TryGet(entity, out Velocity velocity));
+            seen.Add((entity, position, velocity));
         }
 
         Assert.Equal(
@@ -104,13 +109,14 @@ public sealed class UserQueryTests
     public void Warming_query_then_repeating_foreach_does_not_allocate()
     {
         var world = new World();
+        var description = new QueryDescription().With<Position>().With<Velocity>();
         for (var i = 0; i < 128; i++)
         {
             world.Create(new Position(i, i + 1), new Velocity(i + 2, i + 3));
         }
 
-        var query = world.Query<Position, Velocity>();
-        var warmupChecksum = Sum(query);
+        var query = world.Query(in description);
+        var warmupChecksum = Sum(world, query);
         Assert.NotEqual(0, warmupChecksum);
 
         GC.Collect();
@@ -121,7 +127,7 @@ public sealed class UserQueryTests
         var checksum = 0;
         for (var iteration = 0; iteration < 200; iteration++)
         {
-            checksum += Sum(query);
+            checksum += Sum(world, query);
         }
 
         var after = GC.GetAllocatedBytesForCurrentThread();
@@ -130,14 +136,21 @@ public sealed class UserQueryTests
         Assert.Equal(0, after - before);
     }
 
-    private static int Sum(Query<Position, Velocity> query)
+    private static int Sum(World world, Query query)
     {
         var total = 0;
-        foreach (var item in query)
+        foreach (var entity in query)
         {
-            total += item.Entity.Id;
-            total += item.First.X;
-            total += item.Second.Y;
+            total += entity.Id;
+            if (world.TryGet(entity, out Position position))
+            {
+                total += position.X;
+            }
+
+            if (world.TryGet(entity, out Velocity velocity))
+            {
+                total += velocity.Y;
+            }
         }
 
         return total;

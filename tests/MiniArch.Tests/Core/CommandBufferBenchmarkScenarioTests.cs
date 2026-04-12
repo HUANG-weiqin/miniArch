@@ -1,5 +1,5 @@
-using MiniArch.Benchmarks;
-namespace MiniArch.Tests.Core;
+using MiniArchBenchmarks;
+namespace MiniArchTests.Core;
 
 public sealed class CommandBufferBenchmarkScenarioTests
 {

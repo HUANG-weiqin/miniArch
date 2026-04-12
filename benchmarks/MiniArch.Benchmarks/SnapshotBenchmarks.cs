@@ -3,7 +3,7 @@ using System.Globalization;
 using BenchmarkDotNet.Attributes;
 using MiniArch.Core;
 
-namespace MiniArch.Benchmarks;
+namespace MiniArchBenchmarks;
 
 public class SnapshotBenchmarks
 {

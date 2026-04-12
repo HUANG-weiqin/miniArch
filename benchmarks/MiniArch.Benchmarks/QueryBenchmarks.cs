@@ -2,11 +2,12 @@ using Arch.Core;
 using BenchmarkDotNet.Attributes;
 using MiniArch.Core;
 
-namespace MiniArch.Benchmarks;
+namespace MiniArchBenchmarks;
 
 using ArchQueryDescription = Arch.Core.QueryDescription;
 using MiniQuery = MiniArch.Core.Query;
 using MiniComponentType = MiniArch.Core.ComponentType;
+using MiniQueryDescription = MiniArch.QueryDescription;
 
 public class QueryBenchmarks
 {
@@ -41,12 +42,12 @@ public class QueryBenchmarks
     [Benchmark(Description = "MiniArch complex query WithAll execute")]
     public int MiniArch_WithAll_Execute()
     {
-        var query = _miniState.World.Query()
+        var description = new MiniQueryDescription()
             .With<Position>()
             .With<Velocity>()
             .With<Health>()
-            .With<Team>()
-            .Build();
+            .With<Team>();
+        var query = MiniQuery.Create(_miniState.World, in description);
 
         return ExecuteMiniQuery(query);
     }
@@ -94,13 +95,13 @@ public class QueryBenchmarks
     [Benchmark(Description = "MiniArch complex query WithAll+Without execute")]
     public int MiniArch_WithAll_Without_Execute()
     {
-        var query = _miniState.World.Query()
+        var description = new MiniQueryDescription()
             .With<Position>()
             .With<Velocity>()
             .With<Health>()
             .With<Team>()
-            .Without<ExcludedTag>()
-            .Build();
+            .Without<ExcludedTag>();
+        var query = MiniQuery.Create(_miniState.World, in description);
 
         return ExecuteMiniQuery(query);
     }
@@ -130,14 +131,14 @@ public class QueryBenchmarks
     [Benchmark(Description = "MiniArch complex query WithAll+Any execute")]
     public int MiniArch_WithAll_Any_Execute()
     {
-        var query = _miniState.World.Query()
+        var description = new MiniQueryDescription()
             .With<Position>()
             .With<Velocity>()
             .With<Health>()
             .With<Team>()
-            .Any<AnyTagA>()
-            .Or<AnyTagB>()
-            .Build();
+            .WithAny<AnyTagA>()
+            .Or<AnyTagB>();
+        var query = MiniQuery.Create(_miniState.World, in description);
 
         return ExecuteMiniQuery(query);
     }

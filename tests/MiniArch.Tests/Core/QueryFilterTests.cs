@@ -1,8 +1,9 @@
 using System.Collections;
 using System.Reflection;
 using MiniArch.Core;
+using MiniQuery = MiniArch.Core.Query;
 
-namespace MiniArch.Tests.Core;
+namespace MiniArchTests.Core;
 
 public sealed class QueryFilterTests
 {
@@ -12,16 +13,16 @@ public sealed class QueryFilterTests
     private readonly record struct TagB;
 
     [Fact]
-    public void Chain_query_builds_expected_required_excluded_and_any_sets()
+    public void Description_query_materialization_builds_expected_required_excluded_and_any_sets()
     {
         var world = new World();
-
-        var query = world.Query()
+        var description = new QueryDescription()
             .With<Position>()
             .Without<Velocity>()
-            .Any<TagA>()
-            .Or<TagB>()
-            .Build();
+            .WithAny<TagA>()
+            .Or<TagB>();
+
+        var query = MiniQuery.Create(world, in description);
 
         var position = world.Components.GetOrCreate<Position>();
         var velocity = world.Components.GetOrCreate<Velocity>();
@@ -41,9 +42,11 @@ public sealed class QueryFilterTests
     public void Any_and_or_share_same_any_set()
     {
         var world = new World();
+        var firstDescription = new QueryDescription().WithAny<TagA>().Or<TagB>();
+        var secondDescription = new QueryDescription().Or<TagB>().WithAny<TagA>();
 
-        var first = world.Query().Any<TagA>().Or<TagB>().Build();
-        var second = world.Query().Or<TagB>().Any<TagA>().Build();
+        var first = MiniQuery.Create(world, in firstDescription);
+        var second = MiniQuery.Create(world, in secondDescription);
 
         Assert.Same(first, second);
     }
@@ -103,42 +106,43 @@ public sealed class QueryFilterTests
     }
 
     [Fact]
-    public void Generic_query_entrypoint_remains_compatible_with_chain_query()
+    public void Equivalent_descriptions_reuse_same_query()
     {
         var world = new World();
+        var firstDescription = new QueryDescription().With<Position>();
+        var secondDescription = new QueryDescription().With<Position>();
 
-        var generic = world.Query<Position>();
-        var chained = world.Query().With<Position>().Build();
+        var first = MiniQuery.Create(world, in firstDescription);
+        var second = MiniQuery.Create(world, in secondDescription);
 
-        Assert.Same(generic, chained);
+        Assert.Same(first, second);
     }
 
     [Fact]
-    public void Query_builder_does_not_mutate_source_builder_state()
+    public void Query_description_does_not_mutate_source_description_state()
     {
-        var world = new World();
+        var root = new QueryDescription();
+        var withA = root.With<TagA>();
+        var withB = root.With<TagB>();
 
-        var root = world.Query();
-        var withA = root.With<TagA>().Build();
-        var withB = root.With<TagB>().Build();
-
-        var tagA = world.Components.GetOrCreate<TagA>();
-        var tagB = world.Components.GetOrCreate<TagB>();
-        Assert.Contains(tagA, withA.RequiredSignature);
-        Assert.DoesNotContain(tagB, withA.RequiredSignature);
-        Assert.Contains(tagB, withB.RequiredSignature);
-        Assert.DoesNotContain(tagA, withB.RequiredSignature);
+        Assert.Empty(root.RequiredTypes);
+        Assert.Equal(new[] { typeof(TagA) }, withA.RequiredTypes);
+        Assert.Equal(new[] { typeof(TagB) }, withB.RequiredTypes);
     }
 
     [Fact]
-    public void Chain_query_is_materialized_only_when_built_or_enumerated()
+    public void Description_query_is_materialized_only_when_requested()
     {
         var world = new World();
+        var description = new QueryDescription()
+            .With<Position>()
+            .Without<Velocity>()
+            .WithAny<TagA>()
+            .Or<TagB>();
 
-        var builder = world.Query().With<Position>().Without<Velocity>().Any<TagA>().Or<TagB>();
         Assert.Equal(0, GetCachedQueryCount(world));
 
-        _ = builder.Build();
+        _ = MiniQuery.Create(world, in description);
         Assert.Equal(1, GetCachedQueryCount(world));
     }
 

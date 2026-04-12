@@ -1,10 +1,10 @@
 using BenchmarkDotNet.Attributes;
 using ArchEntity = Arch.Core.Entity;
 using ArchWorld = Arch.Core.World;
-using MiniEntity = MiniArch.Core.Entity;
-using MiniWorld = MiniArch.Core.World;
+using MiniEntity = MiniArch.Entity;
+using MiniWorld = MiniArch.World;
 
-namespace MiniArch.Benchmarks;
+namespace MiniArchBenchmarks;
 
 // Keep the benchmark focused on create/destroy and structural-change hot paths.
 // Memory diagnostics are enabled in the shared BenchmarkDotNet config.
@@ -98,7 +98,7 @@ public class StructuralChangeBenchmarks
     [Benchmark(Description = "MiniArch create empty entities")]
     public void MiniArch_Create_Entity()
     {
-        var world = new MiniArch.Core.World();
+        var world = new MiniArch.World();
         for (var i = 0; i < EntityCount; i++)
         {
             world.Create();
@@ -116,7 +116,7 @@ public class StructuralChangeBenchmarks
     [Benchmark(Description = "MiniArch create empty entities in bulk")]
     public void MiniArch_CreateMany_Entity()
     {
-        var world = new MiniArch.Core.World();
+        var world = new MiniArch.World();
         var entities = new MiniEntity[EntityCount];
         world.CreateMany(entities);
     }

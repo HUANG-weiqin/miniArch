@@ -1,4 +1,4 @@
-namespace MiniArch.Core;
+namespace MiniArch;
 
 /// <summary>
 /// Runtime entity handle.

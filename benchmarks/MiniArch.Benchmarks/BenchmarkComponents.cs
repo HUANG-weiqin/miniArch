@@ -1,4 +1,4 @@
-namespace MiniArch.Benchmarks;
+namespace MiniArchBenchmarks;
 
 public struct Position
 {

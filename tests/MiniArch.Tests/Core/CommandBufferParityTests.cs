@@ -1,6 +1,6 @@
-using MiniArch.Benchmarks;
+using MiniArchBenchmarks;
 
-namespace MiniArch.Tests.Core;
+namespace MiniArchTests.Core;
 
 public sealed class CommandBufferParityTests
 {

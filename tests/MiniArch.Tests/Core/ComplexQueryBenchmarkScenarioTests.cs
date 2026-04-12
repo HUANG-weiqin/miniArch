@@ -1,8 +1,9 @@
-using MiniArch.Benchmarks;
+using MiniArchBenchmarks;
 using MiniArch.Core;
 using System.Reflection;
+using MiniQuery = MiniArch.Core.Query;
 
-namespace MiniArch.Tests.Core;
+namespace MiniArchTests.Core;
 
 public sealed class ComplexQueryBenchmarkScenarioTests
 {
@@ -29,29 +30,29 @@ public sealed class ComplexQueryBenchmarkScenarioTests
     {
         var state = BenchmarkWorldFactory.CreateMiniComplexQueryWorld(100);
 
-        var withAll = state.World.Query()
+        var withAllDescription = new QueryDescription()
             .With<Position>()
             .With<Velocity>()
             .With<Health>()
-            .With<Team>()
-            .Build();
+            .With<Team>();
+        var withAll = MiniQuery.Create(state.World, in withAllDescription);
 
-        var withWithout = state.World.Query()
+        var withWithoutDescription = new QueryDescription()
             .With<Position>()
             .With<Velocity>()
             .With<Health>()
             .With<Team>()
-            .Without<ExcludedTag>()
-            .Build();
+            .Without<ExcludedTag>();
+        var withWithout = MiniQuery.Create(state.World, in withWithoutDescription);
 
-        var withAny = state.World.Query()
+        var withAnyDescription = new QueryDescription()
             .With<Position>()
             .With<Velocity>()
             .With<Health>()
             .With<Team>()
-            .Any<AnyTagA>()
-            .Or<AnyTagB>()
-            .Build();
+            .WithAny<AnyTagA>()
+            .Or<AnyTagB>();
+        var withAny = MiniQuery.Create(state.World, in withAnyDescription);
 
         Assert.Equal(90, CountEntities(withAll));
         Assert.Equal(70, CountEntities(withWithout));
@@ -63,12 +64,12 @@ public sealed class ComplexQueryBenchmarkScenarioTests
     {
         var state = BenchmarkWorldFactory.CreateMiniComplexQueryWorld(100);
 
-        var query = state.World.Query()
+        var description = new QueryDescription()
             .With<Position>()
             .With<Velocity>()
             .With<Health>()
-            .With<Team>()
-            .Build();
+            .With<Team>();
+        var query = MiniQuery.Create(state.World, in description);
 
         var inspectedChunkCount = 0;
         foreach (var chunk in query.Chunks)
@@ -112,7 +113,7 @@ public sealed class ComplexQueryBenchmarkScenarioTests
         Assert.Equal(55, CountEntities(state.WithAllAnyQuery));
     }
 
-    private static int CountEntities(Query query)
+    private static int CountEntities(MiniQuery query)
     {
         var total = 0;
         foreach (var chunk in query.Chunks)

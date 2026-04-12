@@ -23,6 +23,15 @@ public sealed class Query
     }
 
     /// <summary>
+    /// Creates or reuses an advanced query for a world and description.
+    /// </summary>
+    public static Query Create(World world, in QueryDescription description)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        return world.GetAdvancedQuery(in description);
+    }
+
+    /// <summary>
     /// Gets the required signature.
     /// </summary>
     public Signature RequiredSignature => _requiredSignature ??= _filter.Required.ToSignature();
@@ -36,56 +45,6 @@ public sealed class Query
     /// Gets the any-match signature.
     /// </summary>
     public Signature AnySignature => _anySignature ??= _filter.Any.ToSignature();
-
-    /// <summary>
-    /// Adds a required type.
-    /// </summary>
-    public Query With<T>()
-    {
-        var componentType = _world.Components.GetOrCreate<T>();
-        var required = _filter.Required.Add(componentType);
-        if (required.Equals(_filter.Required))
-        {
-            return this;
-        }
-
-        return _world.GetOrCreateQuery(new QueryFilter(required, _filter.Excluded, _filter.Any));
-    }
-
-    /// <summary>
-    /// Adds an excluded type.
-    /// </summary>
-    public Query Without<T>()
-    {
-        var componentType = _world.Components.GetOrCreate<T>();
-        var excluded = _filter.Excluded.Add(componentType);
-        if (excluded.Equals(_filter.Excluded))
-        {
-            return this;
-        }
-
-        return _world.GetOrCreateQuery(new QueryFilter(_filter.Required, excluded, _filter.Any));
-    }
-
-    /// <summary>
-    /// Adds an any-match type.
-    /// </summary>
-    public Query Any<T>()
-    {
-        var componentType = _world.Components.GetOrCreate<T>();
-        var any = _filter.Any.Add(componentType);
-        if (any.Equals(_filter.Any))
-        {
-            return this;
-        }
-
-        return _world.GetOrCreateQuery(new QueryFilter(_filter.Required, _filter.Excluded, any));
-    }
-
-    /// <summary>
-    /// Alias for <see cref="Any{T}()" />.
-    /// </summary>
-    public Query Or<T>() => Any<T>();
 
     /// <summary>
     /// Gets the refresh count.

@@ -1,6 +1,7 @@
 using MiniArch.Core;
+using MiniQuery = MiniArch.Core.Query;
 
-namespace MiniArch.Tests.Core;
+namespace MiniArchTests.Core;
 
 public sealed class WorldLifecycleTests
 {
@@ -109,7 +110,7 @@ public sealed class WorldLifecycleTests
         Assert.Equal(new Position(1, 2), chunk.GetComponent<Position>(positionId, info.RowIndex));
         Assert.Equal(new Velocity(3, 4), chunk.GetComponent<Velocity>(velocityId, info.RowIndex));
 
-        var positionQuery = world.Query<Position>();
+        var positionQuery = CreateQuery<Position>(world);
         var matchedArchetypes = positionQuery.MatchedArchetypes;
         Assert.Single(matchedArchetypes);
         Assert.Same(info.Archetype, matchedArchetypes[0]);
@@ -134,7 +135,7 @@ public sealed class WorldLifecycleTests
         Assert.Equal(new C1(1), chunk.GetComponent<C1>(c1, info.RowIndex));
         Assert.Equal(new C16(16), chunk.GetComponent<C16>(c16, info.RowIndex));
 
-        var matchedArchetypes = world.Query<C1>().MatchedArchetypes;
+        var matchedArchetypes = CreateQuery<C1>(world).MatchedArchetypes;
         Assert.Single(matchedArchetypes);
         Assert.Same(info.Archetype, matchedArchetypes[0]);
     }
@@ -347,7 +348,7 @@ public sealed class WorldLifecycleTests
             world.Create(new Position(i, i + 1), new Velocity(i + 2, i + 3));
         }
 
-        var query = world.Query<Position, Velocity>();
+        var query = CreateQuery<Position, Velocity>(world);
 
         Assert.Single(query.MatchedArchetypes);
         Assert.Equal(1, query.GetChunkSpan().Length);
@@ -363,7 +364,7 @@ public sealed class WorldLifecycleTests
             world.Create(new Position(i, i + 1), new Velocity(i + 2, i + 3));
         }
 
-        var query = world.Query<Position, Velocity>();
+        var query = CreateQuery<Position, Velocity>(world);
 
         Assert.Single(query.MatchedArchetypes);
         Assert.Equal(2, query.GetChunkSpan().Length);
@@ -386,6 +387,18 @@ public sealed class WorldLifecycleTests
         var children = world.GetChildren(parent);
         Assert.Equal(2, children.Count);
         Assert.Equal([firstChild, secondChild], children.OrderBy(entity => entity.Id).ToArray());
+    }
+
+    private static MiniQuery CreateQuery<T>(World world)
+    {
+        var description = new QueryDescription().With<T>();
+        return MiniQuery.Create(world, in description);
+    }
+
+    private static MiniQuery CreateQuery<T1, T2>(World world)
+    {
+        var description = new QueryDescription().With<T1>().With<T2>();
+        return MiniQuery.Create(world, in description);
     }
 
     [Fact]

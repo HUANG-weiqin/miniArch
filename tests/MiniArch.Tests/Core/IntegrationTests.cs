@@ -1,7 +1,8 @@
 using System.Linq;
 using MiniArch.Core;
+using MiniQuery = MiniArch.Core.Query;
 
-namespace MiniArch.Tests.Core;
+namespace MiniArchTests.Core;
 
 public sealed class IntegrationTests
 {
@@ -20,7 +21,8 @@ public sealed class IntegrationTests
         world.Remove<Velocity>(entity);
 
         var positionId = world.Components.GetOrCreate<Position>();
-        var query = world.Query<Position>();
+        var description = new QueryDescription().With<Position>();
+        var query = MiniQuery.Create(world, in description);
 
         Assert.True(world.TryGetLocation(entity, out var location));
         Assert.Equal(1, location.Archetype.Signature.Count);

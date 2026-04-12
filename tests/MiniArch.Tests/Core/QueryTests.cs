@@ -1,8 +1,9 @@
 using System.Threading;
 using System.Threading.Tasks;
 using MiniArch.Core;
+using MiniQuery = MiniArch.Core.Query;
 
-namespace MiniArch.Tests.Core;
+namespace MiniArchTests.Core;
 
 public sealed class QueryTests
 {
@@ -13,6 +14,7 @@ public sealed class QueryTests
     public void Query_returns_only_matching_archetypes()
     {
         var world = new World();
+        var description = new QueryDescription().With<Position>();
 
         var first = world.Create();
         world.Add(first, new Position(1, 1));
@@ -24,7 +26,7 @@ public sealed class QueryTests
         world.Add(third, new Position(3, 3));
         world.Add(third, new Velocity(4, 4));
 
-        var query = world.Query<Position>();
+        var query = MiniQuery.Create(world, in description);
         var matched = query.MatchedArchetypes;
 
         Assert.Equal(2, matched.Count);
@@ -37,9 +39,10 @@ public sealed class QueryTests
         var world = new World();
         var entity = world.Create();
         world.Add(entity, new Position(1, 1));
+        var description = new QueryDescription().With<Position>();
 
-        var first = world.Query<Position>();
-        var second = world.Query<Position>();
+        var first = MiniQuery.Create(world, in description);
+        var second = MiniQuery.Create(world, in description);
 
         Assert.Same(first, second);
         _ = first.MatchedArchetypes;
@@ -54,6 +57,7 @@ public sealed class QueryTests
     public void Chunk_iteration_visits_each_matching_chunk_exactly_once()
     {
         var world = new World(chunkCapacity: 1);
+        var description = new QueryDescription().With<Position>();
         var first = world.Create();
         var second = world.Create();
         var third = world.Create();
@@ -62,7 +66,7 @@ public sealed class QueryTests
         world.Add(second, new Position(2, 2));
         world.Add(third, new Position(3, 3));
 
-        var query = world.Query<Position>();
+        var query = MiniQuery.Create(world, in description);
         var chunks = new List<Chunk>();
 
         foreach (var chunk in query.Chunks)
@@ -78,13 +82,14 @@ public sealed class QueryTests
     public void Query_exposes_the_same_matching_chunks_as_chunk_enumeration()
     {
         var world = new World(chunkCapacity: 1);
+        var description = new QueryDescription().With<Position>();
         for (var i = 0; i < 3; i++)
         {
             var entity = world.Create();
             world.Add(entity, new Position(i, i));
         }
 
-        var query = world.Query<Position>();
+        var query = MiniQuery.Create(world, in description);
 
         var enumeratedChunks = new List<Chunk>();
         foreach (var chunk in query.Chunks)
@@ -103,8 +108,9 @@ public sealed class QueryTests
         var world = new World(chunkCapacity: 1);
         var first = world.Create();
         world.Add(first, new Position(1, 1));
+        var description = new QueryDescription().With<Position>();
 
-        var query = world.Query<Position>();
+        var query = MiniQuery.Create(world, in description);
         Assert.Single(query.MatchedChunks);
         Assert.Equal(1, query.RefreshCount);
 
@@ -120,7 +126,7 @@ public sealed class QueryTests
     public async Task Same_query_can_be_enumerated_concurrently_by_multiple_tasks()
     {
         var world = CreateWorldWithMatchingEntities();
-        var query = world.Query<Position>();
+        var query = CreatePositionQuery(world);
         var expected = CaptureEnumeratedEntities(query);
 
         var results = await RunConcurrentReaders(
@@ -136,8 +142,8 @@ public sealed class QueryTests
     public async Task Materialized_and_enumerated_equivalent_queries_return_the_same_entities_concurrently()
     {
         var world = CreateWorldWithMatchingEntities();
-        var materializedQuery = world.Query<Position>();
-        var enumeratedQuery = world.Query().With<Position>().Build();
+        var materializedQuery = CreatePositionQuery(world);
+        var enumeratedQuery = CreatePositionQuery(world);
 
         Assert.Same(materializedQuery, enumeratedQuery);
 
@@ -163,14 +169,15 @@ public sealed class QueryTests
     [Fact]
     public async Task Equivalent_queries_can_be_materialized_concurrently_before_the_cache_is_warmed()
     {
-        var expected = CaptureEnumeratedEntities(CreateWorldWithMatchingEntities().Query<Position>());
+        var expected = CaptureEnumeratedEntities(CreatePositionQuery(CreateWorldWithMatchingEntities()));
         var world = CreateWorldWithMatchingEntities();
+        var description = new QueryDescription().With<Position>();
         var start = new Barrier(9);
         var tasks = Enumerable.Range(0, 8)
             .Select(_ => Task.Run(() =>
             {
                 start.SignalAndWait();
-                return CaptureEnumeratedEntities(world.Query<Position>());
+                return CaptureEnumeratedEntities(MiniQuery.Create(world, in description));
             }))
             .ToArray();
 
@@ -185,14 +192,14 @@ public sealed class QueryTests
     public async Task Equivalent_description_queries_can_be_materialized_concurrently_before_the_cache_is_warmed()
     {
         var description = new QueryDescription().With<Position>();
-        var expected = CaptureEnumeratedEntities(CreateWorldWithMatchingEntities().Query(in description));
+        var expected = CaptureEnumeratedEntities(MiniQuery.Create(CreateWorldWithMatchingEntities(), in description));
         var world = CreateWorldWithMatchingEntities();
         var start = new Barrier(9);
         var tasks = Enumerable.Range(0, 8)
             .Select(_ => Task.Run(() =>
             {
                 start.SignalAndWait();
-                return CaptureEnumeratedEntities(world.Query(in description));
+                return CaptureEnumeratedEntities(MiniQuery.Create(world, in description));
             }))
             .ToArray();
 
@@ -204,13 +211,12 @@ public sealed class QueryTests
     }
 
     [Fact]
-    public void Description_query_entrypoint_matches_generic_and_chain_queries()
+    public void Description_query_entrypoint_matches_advanced_query_factory()
     {
         var world = new World();
         var description = new QueryDescription().With<Position>();
 
-        Assert.Same(world.Query<Position>(), world.Query(in description));
-        Assert.Same(world.Query().With<Position>().Build(), world.Query(in description));
+        Assert.Same(MiniQuery.Create(world, in description), MiniQuery.Create(world, in description));
     }
 
     [Fact]
@@ -219,7 +225,7 @@ public sealed class QueryTests
         var world = new World();
         var description = new QueryDescription().With<Position>();
 
-        Assert.Same(world.Query(in description), world.Query(in description));
+        Assert.Same(MiniQuery.Create(world, in description), MiniQuery.Create(world, in description));
     }
 
     [Fact]
@@ -237,11 +243,9 @@ public sealed class QueryTests
         var secondMatched = secondWorld.Create(new Position(4, 4));
         _ = secondWorld.Create(new Position(5, 5), new Velocity(6, 6));
 
-        var firstQuery = firstWorld.Query(in description);
-        var secondQuery = secondWorld.Query(in description);
+        var firstQuery = MiniQuery.Create(firstWorld, in description);
+        var secondQuery = MiniQuery.Create(secondWorld, in description);
 
-        Assert.Same(firstQuery, firstWorld.Query(in description));
-        Assert.Same(secondQuery, secondWorld.Query(in description));
         Assert.NotSame(firstQuery, secondQuery);
         Assert.Equal(new[] { firstMatched }, CaptureEnumeratedEntities(firstQuery));
         Assert.Equal(new[] { secondMatched }, CaptureEnumeratedEntities(secondQuery));
@@ -255,7 +259,7 @@ public sealed class QueryTests
             .With<Position>()
             .Without<Velocity>();
 
-        Assert.Equal(6, CountEntities(world.Query(in description)));
+        Assert.Equal(6, CountEntities(MiniQuery.Create(world, in description)));
         GC.Collect();
         GC.WaitForPendingFinalizers();
         GC.Collect();
@@ -264,7 +268,7 @@ public sealed class QueryTests
         var before = GC.GetAllocatedBytesForCurrentThread();
         for (var i = 0; i < 100; i++)
         {
-            total += CountEntities(world.Query(in description));
+            total += CountEntities(MiniQuery.Create(world, in description));
         }
 
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
@@ -287,7 +291,7 @@ public sealed class QueryTests
         world.Link(root, child);
         world.Link(child, grandChild);
 
-        var initialQuery = CaptureEnumeratedEntities(world.Query<Position>());
+        var initialQuery = CaptureEnumeratedEntities(CreatePositionQuery(world));
 
         var frame1 = new CommandBuffer(world);
         var branch = frame1.Create();
@@ -296,7 +300,7 @@ public sealed class QueryTests
         var compiledFrame1 = frame1.Playback();
         var reverse1 = world.ReplayWithReverse(in compiledFrame1);
 
-        var frame1Query = CaptureEnumeratedEntities(world.Query<Position>());
+        var frame1Query = CaptureEnumeratedEntities(CreatePositionQuery(world));
         Assert.Equal(new[] { root, child, grandChild, sibling, branch }, frame1Query.OrderBy(static entity => entity.Id).ToArray());
 
         var frame2 = new CommandBuffer(world);
@@ -307,15 +311,15 @@ public sealed class QueryTests
         var compiledFrame2 = frame2.Playback();
         var reverse2 = world.ReplayWithReverse(in compiledFrame2);
 
-        Assert.Equal(new[] { sibling }, CaptureEnumeratedEntities(world.Query<Position>()));
+        Assert.Equal(new[] { sibling }, CaptureEnumeratedEntities(CreatePositionQuery(world)));
 
         world.Rewind(in reverse2);
 
-        Assert.Equal(frame1Query.OrderBy(static entity => entity.Id).ToArray(), CaptureEnumeratedEntities(world.Query<Position>()).OrderBy(static entity => entity.Id).ToArray());
+        Assert.Equal(frame1Query.OrderBy(static entity => entity.Id).ToArray(), CaptureEnumeratedEntities(CreatePositionQuery(world)).OrderBy(static entity => entity.Id).ToArray());
 
         world.Rewind(in reverse1);
 
-        Assert.Equal(initialQuery.OrderBy(static entity => entity.Id).ToArray(), CaptureEnumeratedEntities(world.Query<Position>()).OrderBy(static entity => entity.Id).ToArray());
+        Assert.Equal(initialQuery.OrderBy(static entity => entity.Id).ToArray(), CaptureEnumeratedEntities(CreatePositionQuery(world)).OrderBy(static entity => entity.Id).ToArray());
         Assert.False(world.IsAlive(branch));
         Assert.False(world.IsAlive(transient));
     }
@@ -340,10 +344,16 @@ public sealed class QueryTests
         return world;
     }
 
+    private static MiniQuery CreatePositionQuery(World world)
+    {
+        var description = new QueryDescription().With<Position>();
+        return MiniQuery.Create(world, in description);
+    }
+
     private static async Task<Entity[][]> RunConcurrentReaders(
         int taskCount,
-        Query query,
-        Func<Query, Entity[]> capture)
+        MiniQuery query,
+        Func<MiniQuery, Entity[]> capture)
     {
         var start = new Barrier(taskCount + 1);
         var tasks = Enumerable.Range(0, taskCount)
@@ -358,7 +368,7 @@ public sealed class QueryTests
         return await Task.WhenAll(tasks);
     }
 
-    private static Entity[] CaptureEnumeratedEntities(Query query)
+    private static Entity[] CaptureEnumeratedEntities(MiniQuery query)
     {
         var entities = new List<Entity>();
         foreach (var chunk in query.Chunks)
@@ -372,7 +382,7 @@ public sealed class QueryTests
         return entities.ToArray();
     }
 
-    private static Entity[] CaptureMaterializedEntities(Query query)
+    private static Entity[] CaptureMaterializedEntities(MiniQuery query)
     {
         var entities = new List<Entity>();
         foreach (var archetype in query.MatchedArchetypes)
@@ -389,7 +399,7 @@ public sealed class QueryTests
         return entities.ToArray();
     }
 
-    private static int CountEntities(Query query)
+    private static int CountEntities(MiniQuery query)
     {
         var total = 0;
         foreach (ref readonly var chunk in query.GetChunkSpan())

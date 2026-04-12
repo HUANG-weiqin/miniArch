@@ -1,7 +1,8 @@
 using System.Runtime.ExceptionServices;
 using MiniArch.Core;
+using MiniQuery = MiniArch.Core.Query;
 
-namespace MiniArch.Tests.Core;
+namespace MiniArchTests.Core;
 
 public sealed class CommandBufferTests
 {
@@ -22,17 +23,17 @@ public sealed class CommandBufferTests
         var frame = buffer.Playback();
 
         Assert.False(world.IsAlive(entity));
-        Assert.Equal(0, world.Query<Position>().GetChunkSpan().Length);
+        Assert.Equal(0, CreateQuery<Position>(world).GetChunkSpan().Length);
         Assert.Single(frame.CreatedEntities);
 
         world.Replay(in frame);
 
         Assert.True(world.IsAlive(entity));
-        Assert.Equal(1, world.Query<Position>().GetChunkSpan().Length);
+        Assert.Equal(1, CreateQuery<Position>(world).GetChunkSpan().Length);
 
         replica.Replay(in frame);
         Assert.True(replica.IsAlive(entity));
-        Assert.Equal(1, replica.Query<Position>().GetChunkSpan().Length);
+        Assert.Equal(1, CreateQuery<Position>(replica).GetChunkSpan().Length);
     }
 
     [Fact]
@@ -156,12 +157,12 @@ public sealed class CommandBufferTests
         var reverse = world.ReplayWithReverse(in frame);
 
         Assert.True(world.IsAlive(entity));
-        Assert.Equal(1, CountQueryEntities(world.Query<Position>()));
+        Assert.Equal(1, CountQueryEntities(CreateQuery<Position>(world)));
 
         world.Rewind(in reverse);
 
         Assert.False(world.IsAlive(entity));
-        Assert.Equal(0, CountQueryEntities(world.Query<Position>()));
+        Assert.Equal(0, CountQueryEntities(CreateQuery<Position>(world)));
     }
 
     [Fact]
@@ -1100,6 +1101,17 @@ public sealed class CommandBufferTests
         Assert.Throws<InvalidOperationException>(() => buffer.Playback());
     }
 
+    [Fact]
+    public void Play_returns_false_when_buffer_is_empty()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+
+        var played = buffer.Play();
+
+        Assert.False(played);
+    }
+
     private static Entity[] CreateEntities(World world, int count)
     {
         var entities = new Entity[count];
@@ -1167,7 +1179,7 @@ public sealed class CommandBufferTests
     private static string CaptureQueryMembers<T>(World world)
     {
         var entities = new List<string>();
-        foreach (ref readonly var chunk in world.Query<T>().GetChunkSpan())
+        foreach (ref readonly var chunk in CreateQuery<T>(world).GetChunkSpan())
         {
             foreach (var entity in chunk.GetEntities())
             {
@@ -1179,7 +1191,7 @@ public sealed class CommandBufferTests
         return string.Join(",", entities);
     }
 
-    private static int CountQueryEntities(Query query)
+    private static int CountQueryEntities(MiniArch.Core.Query query)
     {
         var total = 0;
         foreach (ref readonly var chunk in query.GetChunkSpan())
@@ -1188,6 +1200,12 @@ public sealed class CommandBufferTests
         }
 
         return total;
+    }
+
+    private static MiniQuery CreateQuery<T>(World world)
+    {
+        var description = new QueryDescription().With<T>();
+        return MiniQuery.Create(world, in description);
     }
 
     private static void RecordReference(CommandBuffer buffer, Entity parent, Entity child, int index)

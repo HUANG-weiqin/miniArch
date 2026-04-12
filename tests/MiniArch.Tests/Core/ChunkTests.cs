@@ -1,7 +1,7 @@
 using System.Reflection;
 using MiniArch.Core;
 
-namespace MiniArch.Tests.Core;
+namespace MiniArchTests.Core;
 
 public sealed class ChunkTests
 {

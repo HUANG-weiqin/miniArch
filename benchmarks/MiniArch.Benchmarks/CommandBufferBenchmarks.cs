@@ -2,15 +2,15 @@ using Arch.Core;
 using BenchmarkDotNet.Attributes;
 using MiniArch.Core;
 
-namespace MiniArch.Benchmarks;
+namespace MiniArchBenchmarks;
 
 using ArchComponentType = Arch.Core.ComponentType;
 using ArchCommandBuffer = Arch.Buffer.CommandBuffer;
 using ArchEntity = Arch.Core.Entity;
 using ArchWorld = Arch.Core.World;
 using MiniCommandBuffer = MiniArch.Core.CommandBuffer;
-using MiniEntity = MiniArch.Core.Entity;
-using MiniWorld = MiniArch.Core.World;
+using MiniEntity = MiniArch.Entity;
+using MiniWorld = MiniArch.World;
 
 public enum CommandBufferBenchmarkScenario
 {
