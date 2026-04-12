@@ -37,6 +37,30 @@ public sealed class CommandBufferTests
     }
 
     [Fact]
+    public void Playback_clears_the_buffer_and_allows_reuse()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+        var entity = buffer.Create();
+        buffer.Add(entity, new Position(1, 2));
+
+        var frame = buffer.Playback();
+
+        Assert.Single(frame.CreatedEntities);
+        Assert.Empty(buffer.Playback().CreatedEntities);
+
+        var secondEntity = buffer.Create();
+        buffer.Add(secondEntity, new Position(3, 4));
+
+        var secondFrame = buffer.Playback();
+
+        Assert.Single(secondFrame.CreatedEntities);
+        Assert.Equal(secondEntity, secondFrame.CreatedEntities[0].Entity);
+        Assert.Empty(secondFrame.AddCommands);
+        Assert.False(buffer.Play());
+    }
+
+    [Fact]
     public void Playback_does_not_mutate_world_and_replay_with_reverse_can_restore_the_previous_public_state()
     {
         var world = new World();
@@ -80,6 +104,7 @@ public sealed class CommandBufferTests
 
         Assert.Equal(new Position(9, 9), GetComponentValue<Position>(playbackWorld, playbackEntity));
         Assert.Equal(new Position(9, 9), GetComponentValue<Position>(playWorld, playEntity));
+        Assert.False(playBuffer.Play());
 
         playbackWorld.Rewind(in playbackReverse);
         playWorld.Rewind(in playReverse);
@@ -1088,17 +1113,27 @@ public sealed class CommandBufferTests
     }
 
     [Fact]
-    public void Play_consumes_the_buffer()
+    public void Play_clears_the_buffer_and_allows_reuse()
     {
         var world = new World();
         var buffer = new CommandBuffer(world);
         var entity = buffer.Create();
         buffer.Add(entity, new Position(1, 2));
 
-        buffer.Play();
+        Assert.True(buffer.Play());
 
-        Assert.Throws<InvalidOperationException>(() => buffer.Play());
-        Assert.Throws<InvalidOperationException>(() => buffer.Playback());
+        Assert.False(buffer.Play());
+        Assert.Empty(buffer.Playback().CreatedEntities);
+
+        var secondEntity = buffer.Create();
+        buffer.Add(secondEntity, new Position(3, 4));
+
+        Assert.True(buffer.Play());
+
+        Assert.True(world.IsAlive(entity));
+        Assert.True(world.IsAlive(secondEntity));
+        Assert.Equal(new Position(1, 2), GetComponentValue<Position>(world, entity));
+        Assert.Equal(new Position(3, 4), GetComponentValue<Position>(world, secondEntity));
     }
 
     [Fact]

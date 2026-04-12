@@ -12,7 +12,6 @@ public sealed class CommandBuffer
     private readonly CommandBufferEntityAllocator _allocator;
     private readonly ConcurrentDictionary<int, CommandBufferShard> _shards = new();
     private int _nextShardOrder;
-    private int _playedBack;
 
     /// <summary>
     /// Creates a buffer for a world.
@@ -87,7 +86,9 @@ public sealed class CommandBuffer
     public FrameCommands Playback()
     {
         var compiled = Compile();
-        return compiled.ToFrameCommands();
+        var frame = compiled.ToFrameCommands();
+        Clear();
+        return frame;
     }
 
     /// <summary>
@@ -102,8 +103,15 @@ public sealed class CommandBuffer
             return false;
         }
 
-        _world.Replay(compiled);
-        return true;
+        try
+        {
+            _world.Replay(compiled);
+            return true;
+        }
+        finally
+        {
+            Clear();
+        }
     }
 
     /// <summary>
@@ -111,17 +119,21 @@ public sealed class CommandBuffer
     /// </summary>
     public ReverseFrameCommands PlayWithReverse()
     {
-        var frame = Playback();
-        return _world.ReplayWithReverse(in frame);
+        var compiled = Compile();
+        var frame = compiled.ToFrameCommands();
+
+        try
+        {
+            return _world.ReplayWithReverse(in frame);
+        }
+        finally
+        {
+            Clear();
+        }
     }
 
     private CompiledCommandBatch Compile()
     {
-        if (Interlocked.Exchange(ref _playedBack, 1) != 0)
-        {
-            throw new InvalidOperationException("CommandBuffer can only be consumed once.");
-        }
-
         var shards = GetOrderedShards();
         var counts = CountCommands(shards);
 
@@ -303,6 +315,19 @@ public sealed class CommandBuffer
             removeCommands,
             destroyedEntityList,
             releasedEntities);
+    }
+
+    private void Clear()
+    {
+        foreach (var shard in _shards.Values)
+        {
+            shard.Creates.Clear();
+            shard.HierarchyCommands.Clear();
+            shard.Adds.Clear();
+            shard.Sets.Clear();
+            shard.Removes.Clear();
+            shard.Destroys.Clear();
+        }
     }
 
     private CommandBufferShard[] GetOrderedShards()

@@ -10,6 +10,7 @@ updated: 2026-04-12
 
 - 这个模块负责：
   - 提供 `CommandBuffer` 录制层，把结构变化和 hierarchy 变化先记成延迟命令
+  - `CommandBuffer` 本体可以长期持有；`Playback()` / `Play()` / `PlayWithReverse()` 在消费当前批次后会自动清空记录，允许下一帧复用同一个实例，避免每帧新建 buffer
   - 说明 `Playback()` 编译后的固定顺序：`create -> link/unlink -> add -> set -> remove -> destroy`
   - 提供 `Play()` 短路径，在不物化 `FrameCommands` 的情况下直接把同样的编译结果提交给 owning world
   - 说明 `World.Replay(in FrameCommands)` 的 batch mutation 与 query 可见性边界
@@ -89,6 +90,7 @@ updated: 2026-04-12
 - 常见误解：
   - 以为 `command buffer` 等于 world 从此支持多线程写
   - 以为 `Playback()` 已经把 world 改了；实际上真正 mutation 发生在 `Replay()`
+  - 以为 `CommandBuffer` 只能消费一次；当前实现是“消费当前批次后清空，随后可继续复用同一个实例”
   - 以为 `Set<T>` 永远只是值更新；当前实现里组件不存在时它仍会退化成结构变更
   - 以为 rewind 会恢复所有内部实现细节；当前契约只覆盖公开可观察状态，不覆盖 query cache 这类内部中间态
 
