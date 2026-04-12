@@ -84,6 +84,94 @@ public class CommandBufferHierarchyBenchmarks
     }
 }
 
+public class CommandBufferReplayRewindBenchmarks
+{
+    [Params(128, 1000, 10000)]
+    public int EntityCount { get; set; }
+
+    [Params(
+        CommandBufferReplayScenarioKind.ExistingHeavy,
+        CommandBufferReplayScenarioKind.MixedHeavy)]
+    public CommandBufferReplayScenarioKind Scenario { get; set; }
+
+    private CommandBufferReplayPlaybackState _playbackState = null!;
+    private CommandBufferReplayExecution _replayState = null!;
+    private CommandBufferReplayExecution _rewindState = null!;
+    private CommandBufferReplayExecution _cycleState = null!;
+
+    [IterationSetup(Target = nameof(PlaybackOnly))]
+    public void SetupPlaybackOnly()
+    {
+        _playbackState = CommandBufferReplayScenarios.PreparePlayback(CreateScenario());
+    }
+
+    [IterationSetup(Target = nameof(ReplayWithReverse))]
+    public void SetupReplayWithReverse()
+    {
+        _replayState = CommandBufferReplayScenarios.PrepareReplay(CreateScenario());
+    }
+
+    [IterationSetup(Target = nameof(RewindOnly))]
+    public void SetupRewindOnly()
+    {
+        _rewindState = CommandBufferReplayScenarios.PrepareReplay(CreateScenario());
+        var frame = _rewindState.Frame;
+        var reverse = _rewindState.CurrentWorld.ReplayWithReverse(in frame);
+        _rewindState.StoreReverse(reverse);
+    }
+
+    [IterationSetup(Target = nameof(ReplayWithReverseAndRewind))]
+    public void SetupReplayWithReverseAndRewind()
+    {
+        _cycleState = CommandBufferReplayScenarios.PrepareReplay(CreateScenario());
+    }
+
+    [Benchmark(Description = "MiniArch command buffer playback only")]
+    public FrameCommands PlaybackOnly()
+    {
+        return _playbackState.Buffer.Playback();
+    }
+
+    [Benchmark(Description = "MiniArch command buffer replay with reverse")]
+    public void ReplayWithReverse()
+    {
+        var frame = _replayState.Frame;
+        var reverse = _replayState.CurrentWorld.ReplayWithReverse(in frame);
+        _replayState.StoreReverse(reverse);
+    }
+
+    [Benchmark(Description = "MiniArch command buffer rewind only")]
+    public void RewindOnly()
+    {
+        var reverse = _rewindState.Reverse;
+        _rewindState.CurrentWorld.Rewind(in reverse);
+        _rewindState.ClearReverse();
+    }
+
+    [Benchmark(Description = "MiniArch command buffer replay with reverse plus rewind")]
+    public void ReplayWithReverseAndRewind()
+    {
+        var frame = _cycleState.Frame;
+        var reverse = _cycleState.CurrentWorld.ReplayWithReverse(in frame);
+        _cycleState.CurrentWorld.Rewind(in reverse);
+    }
+
+    private CommandBufferReplayScenarioDefinition CreateScenario()
+    {
+        return new CommandBufferReplayScenarioDefinition(GetScenarioName(), Scenario, EntityCount);
+    }
+
+    private string GetScenarioName()
+    {
+        return Scenario switch
+        {
+            CommandBufferReplayScenarioKind.ExistingHeavy => "existing-heavy",
+            CommandBufferReplayScenarioKind.MixedHeavy => "mixed-heavy",
+            _ => throw new ArgumentOutOfRangeException(nameof(Scenario))
+        };
+    }
+}
+
 internal static class CommandBufferBenchmarkScenarioFactory
 {
     public static MiniSharedCommandBufferState CreateMiniSharedState(CommandBufferBenchmarkScenario scenario, int entityCount)

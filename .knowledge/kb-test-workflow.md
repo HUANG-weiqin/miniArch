@@ -51,6 +51,10 @@ updated: 2026-04-12
 - setup、world 构建和脚本生成都放在测量区外
 - command buffer benchmark 应优先区分 `record`、`playback only`、`replay only`、`play only`、`end-to-end`，避免把 setup/录制/目标阶段混在同一个测量区
 - `MiniArch vs Arch` command buffer 主对比现已落成，当前主口径是共享结构命令子集上的 `record + play`
+- replay/rewind benchmark 现在单独放在 `CommandBufferReplayRewindBenchmarks`，口径固定为 `Playback only`、`ReplayWithReverse`、`Rewind only`、`ReplayWithReverse+Rewind`
+- replay/rewind benchmark 当前是 `MiniArch-only`：`Arch` 没有公开等价的 `ReplayWithReverse(...)` / `PlayWithReverse()` / `Rewind(...)` 契约；如果硬用 snapshot 或自制 undo 模拟，会把额外机制成本混进结果，失去与 MiniArch runtime API 的可解释对应
+- replay/rewind benchmark 当前只保留 `ExistingHeavy` / `MixedHeavy` 两类场景，分别看 existing-world reverse capture 与 mixed create/destroy/reservation rollback 成本
+- replay/rewind benchmark 的测量区直接调用真实 `Playback()` / `ReplayWithReverse(...)` / `Rewind(...)` API；snapshot 只允许出现在 setup/reset 外围，用来恢复 iteration 初始态，不能混进 benchmark 主体
 - 共享子集只覆盖 `Create / Add / Set / Remove / Destroy`；`Link / Unlink` 只放在 `MiniArch-only` 扩展 benchmark
 - 共享 command buffer 场景先通过 parity tests 锁定最终结构摘要一致，再进入 benchmark；不能跳过这一步直接比较均值
 - complex query benchmark 用固定 archetype 配比生成同一类 world 布局，并在测量区内执行 query + 命中 entity 遍历
@@ -91,6 +95,8 @@ updated: 2026-04-12
 - benchmark 必须同时看时间和分配，不能只看平均耗时。
 - command buffer benchmark 至少要覆盖一个小档位和一个大档位，否则很难区分固定分配与规模放大效应。
 - command buffer `MiniArch vs Arch` 的验收门禁是：所有共享场景、所有档位上，`MiniArch` 的时间和分配都不能慢于 `Arch` 超过 `1.5x`
+- replay/rewind benchmark 的分段口径要直接映射到真实 API：`Playback only` 只测 `buffer.Playback()`；`ReplayWithReverse` 只测 `world.ReplayWithReverse(in frame)`；`Rewind only` 只测 `world.Rewind(in reverse)`；`ReplayWithReverse+Rewind` 在测量区内顺序执行一次真实 replay 再 rewind
+- `Rewind only` 的 `ReverseFrameCommands` 必须在 iteration setup 里先由一次真实 `ReplayWithReverse(...)` 产出，再把测量区收窄到单次 `Rewind(...)`；不能在 benchmark 主体里顺手重建 reverse 输入
 - snapshot benchmark 的大小指标必须和时间分开导出，不能靠日志打印混进计时结果。
 - mixed `CreateMany` benchmark 看到巨大离群值时，要先排除 metadata 扩容边界；必要时结合单次调用诊断看 `Capacity` 变化、分配字节和 GC 代际计数，再判断是不是 free-list 热点本身。
 - `QueryTests` 需要覆盖“热缓存后的同一 query 并发枚举”和“冷缓存首次并发 materialize”两类只读场景；否则 query 的 copy-on-write 发布容易退回共享可变缓存。
@@ -102,6 +108,7 @@ updated: 2026-04-12
 - `CommandBufferTests` 现在还覆盖更强的历史回放路径：先 rewind 到中间历史点，再按原后续 frame 序列 replay，最终 world 状态必须与未回退前的终局一致。
 - `QueryTests` 现在覆盖多帧 rewind 后 query 结果恢复，避免只看 entity/component 状态而漏掉 query 可见性回退。
 - `WorldStructuralChangeTests` 现在覆盖 `ReplayWithReverse(...)` 后 restore destroyed entity 的 archetype/component/query 可见性，避免 destroy 回退只恢复活性不恢复结构。
+- `CommandBufferReplayRewindBenchmarks` 现在补齐 replay/rewind 性能观察口径：`ExistingHeavy` 更偏 existing entity 反向捕获与恢复，`MixedHeavy` 同时压 create/destroy、reserved entity 对齐和 rewind 回退路径
 - 对会直接 mutate world 的 `record + play` 基准，必须避免让同一个 iteration 内的多次 workload 复用同一份 world state；当前仓库通过 `command-buffer` 专用 benchmark 子命令隔离这组口径
 - complex query benchmark world 应该优先用 direct-create 先落 `Position/Velocity/Team` 这类 query 核心组件，再补剩余组件；否则 `Create + Add + Add + ...` 会留下过多历史空 archetype，污染 query benchmark。
 - complex query benchmark 不能只测 query builder 创建；必须测实际 query 执行。
@@ -141,7 +148,7 @@ updated: 2026-04-12
   - `WorldStructuralChangeTests.cs`：结构迁移的关键行为，以及 destroy 后 reverse restore 的结构恢复
   - `QueryTests.cs`：query 可见性、快照刷新，以及多帧 rewind 后的查询恢复
   - `StructuralChangeBenchmarks.cs`：`Create / CreateMany / Add / Set / Remove / Destroy` 与 Arch 的时间和分配对照
-- `CommandBufferBenchmarks.cs`：`record / playback only / replay only / play only / end-to-end` 口径
+- `CommandBufferBenchmarks.cs`：`record + play`、hierarchy，以及 `CommandBufferReplayRewindBenchmarks` 的 `Playback only / ReplayWithReverse / Rewind only / ReplayWithReverse+Rewind` 口径
   - `CommandBufferSharedScenarios.cs`：共享脚本模型、MiniArch/Arch parity 执行器和结构摘要 helper
   - `QueryBenchmarks.cs`：复杂 query 场景下的 Arch / MiniArch 执行对照
   - `SnapshotBenchmarks.cs`：`WorldSnapshot.Save` / `Load` 的时间、分配、`SnapshotBytes` 和 `Bytes/entity`
@@ -150,6 +157,9 @@ updated: 2026-04-12
   - 对应功能的测试文件
   - `scripts\test.ps1`
   - `scripts\benchmark.ps1`：benchmark 入口，必要时配合 `--filter`
+  - replay/rewind benchmark 命令示例：`powershell -ExecutionPolicy Bypass -File .\scripts\benchmark.ps1 -Filter *ReplayRewind* -ExtraArgs command-buffer`
+  - replay/rewind 单口径命令示例：`powershell -ExecutionPolicy Bypass -File .\scripts\benchmark.ps1 -Filter *ReplayWithReverse* -ExtraArgs command-buffer`
+  - 也可以直接运行：`dotnet run --project .\benchmarks\MiniArch.Benchmarks\MiniArch.Benchmarks.csproj -c Release -- command-buffer --filter *ReplayRewind*`
   - `scripts\profile-query.ps1`：如果问题是 query 热点分布，而不是均值回归
 - 如果是加功能，先看：
   - `QueryTests.cs`：query 行为约束
@@ -181,6 +191,8 @@ updated: 2026-04-12
   - 带组件 `Create<T...>` 只断言组件值正确，却没检查 query 看到的 archetype 集合，容易漏掉“功能正确但留下空中间 archetype”的回退
   - 混合 benchmark 没有固定种子，导致 MiniArch 和 Arch 的输入不一致
   - snapshot benchmark 把 world 构建或 byte[] 预生成算进了 save/load 时间，导致结果失真
+  - replay/rewind benchmark 如果把 snapshot save/load 或 world reset 放进测量区，结果会变成“API + 还原机制”的混合值，不能再解释成 `ReplayWithReverse(...)` / `Rewind(...)` 本体成本
+  - `Rewind only` 如果在测量区里先做一次 `ReplayWithReverse(...)` 才拿 reverse frame，会把 capture 成本错误算进 rewind 结果
   - query 并发测试只覆盖“缓存已热”的读取，而没压到“第一次并发建 query / 刷新快照”的冷路径
   - complex query benchmark 如果从空实体一路逐组件 `Add` 到终态，最终 world 会残留大量空 archetype，导致 query benchmark 测到的不是“最终 world 上的 query”，而是“历史迁移残留 + query”的混合成本
   - query benchmark 只测 builder 创建，误把 API 组装成本当成 query 热路径

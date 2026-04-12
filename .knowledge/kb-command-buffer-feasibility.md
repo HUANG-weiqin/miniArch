@@ -46,6 +46,7 @@ updated: 2026-04-12
   - query 仍依赖 `World.QueryLayoutGeneration`，只是 replay 期间改为 batch publish
 - 验证依赖 `tests/MiniArch.Tests/Core/CommandBufferTests.cs`，并辅以 lifecycle / structural-change / query 回归测试
 - 与 `Arch` 的对比 benchmark 当前依赖 `CommandBufferSharedScenarios` 先验证共享结构命令场景的 parity，再跑 `record + play`
+- replay/rewind 性能验证现在另起 `CommandBufferReplayRewindBenchmarks`，场景只保留 `ExistingHeavy` / `MixedHeavy`，并把口径拆成 `Playback only` / `ReplayWithReverse` / `Rewind only` / `ReplayWithReverse+Rewind`
 
 ## 决策
 
@@ -55,6 +56,7 @@ updated: 2026-04-12
 - rewind 的使用模型是相邻帧、栈式 `LIFO` 回退；测试覆盖的是连续 `ReplayWithReverse(...)` 后按压栈逆序 `Rewind(...)`，不把它当成任意乱序撤销系统。
 - 端到端测试现在还覆盖“回到中间历史点后，按原后续 frame 序列重新 replay，最终公开可观察状态一致”；这锁定了 rewind 不只要能回去，还要能沿原历史重新走回同一个结果。
 - 当前与 `Arch.Buffer.CommandBuffer` 的公共可比子集是 `Create / Add / Set / Remove / Destroy`；`Link / Unlink` 不参与跨引擎达标判定
+- replay/rewind benchmark 当前故意不做 `MiniArch vs Arch`：`Arch` 没有公开等价的 `ReplayWithReverse(...)` / `PlayWithReverse()` / `Rewind(...)` API；如果拿 snapshot restore、手写 undo 或额外镜像 world 去凑，会把非同构机制成本混进 benchmark，无法回答 MiniArch 自身 replay/reverse/rewind runtime 的真实分段开销
 - `Play()` 当前的主要优化点是：
   - compile 阶段移除了 shard 扁平化中间桶
   - owning-world replay 复用 compile 批次里的 internal created/component 表示
@@ -72,6 +74,9 @@ updated: 2026-04-12
 - hierarchy destroy 的回退语义已经落地为：销毁旧子树时会捕获整个 existing subtree 的组件和 parent；如果同一帧里挂到该子树上的新建节点随后随级联销毁一起消失，`Rewind(...)` 不会把这些新建节点恢复出来。
 - query layout generation 在 replay 期间被抑制，整批 replay 结束后只递增一次。
 - 组件类型注册仍不是自由并发写安全；当前 `CommandBuffer` 通过内部锁串行调用 `ComponentRegistry.GetOrCreate<T>()`，把并发风险限制在 recording 层内部。
+- replay/rewind benchmark 的测量区必须直接调用真实 runtime API：`Playback only` 测 `buffer.Playback()`，`ReplayWithReverse` 测 `world.ReplayWithReverse(in frame)`，`Rewind only` 测 `world.Rewind(in reverse)`，`ReplayWithReverse+Rewind` 测一次真实 replay 后紧接一次真实 rewind
+- snapshot 只允许放在 replay/rewind benchmark 的 setup/reset 外围，用来恢复 iteration 初始态；不能代替测量区里的 `ReplayWithReverse(...)` / `Rewind(...)`，否则结果不再对应 command buffer runtime 本体
+- 当前 replay/rewind benchmark 的场景意图是：`ExistingHeavy` 主要放大 existing entity 上的 reverse capture / restore 成本，`MixedHeavy` 同时覆盖 create/destroy、destroyed subtree/旧组件恢复，以及 reserved entity rollback 对 rewind 的压力
 
 ## 认知模型
 
@@ -103,7 +108,9 @@ updated: 2026-04-12
 - `benchmarks/MiniArch.Benchmarks/CommandBufferSharedScenarios.cs`：共享结构命令脚本和跨引擎 parity helper
 - 如果是加功能，先看：
   - `tests/MiniArch.Tests/Core/WorldLifecycleTests.cs`：entity id/version/free-list/hierarchy 的底层契约
-  - `benchmarks/MiniArch.Benchmarks/CommandBufferBenchmarks.cs`：record/playback/replay 的性能入口
+  - `benchmarks/MiniArch.Benchmarks/CommandBufferBenchmarks.cs`：`record + play` 与 `CommandBufferReplayRewindBenchmarks` 的 replay/reverse/rewind 性能入口
+  - 运行命令示例：`powershell -ExecutionPolicy Bypass -File .\scripts\benchmark.ps1 -Filter *ReplayRewind* -ExtraArgs command-buffer`
+  - 单口径命令示例：`dotnet run --project .\benchmarks\MiniArch.Benchmarks\MiniArch.Benchmarks.csproj -c Release -- command-buffer --filter *ReplayWithReverse*`
 
 ## 坑点
 
@@ -112,6 +119,8 @@ updated: 2026-04-12
   - 忘记释放同帧 `create + destroy` 的 reserved entity，导致 id 被永远占用
   - replay 期间逐条触发 query layout 失效，导致额外开销和观察窗口不稳定
   - 为了优化 `Play()` 而在 `Playback()` compile 阶段提前污染 source world 的组件注册；这会破坏“`Playback()` 不改 world”的边界
+  - replay/rewind benchmark 如果在测量区里通过 snapshot restore 或重建 world 来“顺手 reset”，会把外层恢复成本混进 `ReplayWithReverse(...)` / `Rewind(...)` 结果
+  - `Rewind only` benchmark 如果不是先在 setup 里用真实 `ReplayWithReverse(...)` 产出 `ReverseFrameCommands`，而是用人工拼装或测量区内现抓 reverse，结果就不能代表真实 rewind API 的独立成本
   - 把 rewind 当成通用 undo；当前 reverse frame 是按一次 replay 捕获并按 LIFO 使用的，乱序回退不在契约内
   - 以为只恢复公开组件状态就足够；created/transient frame 还需要恢复 reserved entity 轨迹，否则第二次 `ReplayWithReverse(...)` 会在 reservation 对齐时失败
   - 在 `Rewind(...)` 里先销毁 replay 期间新建的实体，再恢复旧 hierarchy；如果这些新实体里有临时父节点，级联销毁可能误删刚恢复出来的旧实体

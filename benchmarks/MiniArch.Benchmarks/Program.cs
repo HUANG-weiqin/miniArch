@@ -34,6 +34,7 @@ public static class Program
             [
                 typeof(CommandBufferBenchmarks),
                 typeof(CommandBufferHierarchyBenchmarks),
+                typeof(CommandBufferReplayRewindBenchmarks),
             ]).Run(args[1..], MiniArchBenchmarkConfig.CreateCommandBufferConfig());
             return;
         }
