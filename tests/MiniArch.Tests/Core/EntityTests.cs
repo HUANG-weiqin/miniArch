@@ -17,9 +17,17 @@ public sealed class EntityTests
     [Fact]
     public void Valid_entity_has_non_negative_id_and_version()
     {
-        var entity = new Entity(0, 0);
+        var entity = new Entity(0, 1);
 
         Assert.True(entity.IsValid);
+    }
+
+    [Fact]
+    public void Default_entity_is_invalid()
+    {
+        var entity = default(Entity);
+
+        Assert.False(entity.IsValid);
     }
 
     [Fact]

@@ -35,7 +35,8 @@ updated: 2026-04-12
   - `World.Create<T...>` 当前为 `1..16` 个组件提供固定重载；它会先算目标签名，再把 entity 和组件直接写入最终 archetype，不经过 `Create -> Add -> Add` 的迁移链
   - `World.EnsureCapacity` 负责提前扩好 entity metadata 存储，避免 `Create` 只靠 `List<T>` 被动增长
   - `World.CreateMany` 先批量准备 entity id，再用 `Archetype` 的 chunk-batched reservation 一次性把一批实体落入空签名 archetype
-  - `World` 内部把 entity version 和 entity location 分开存储：`_versions` 管版本校验，`_locations` 只保留 archetype/chunk/row，避免 metadata 热路径重复写 version
+- `World` 内部把 entity version 和 entity location 分开存储：`_versions` 管版本校验，`_locations` 只保留 archetype/chunk/row，避免 metadata 热路径重复写 version
+  - `Entity` 句柄契约里，`default(Entity)` 必须视为非法；真实实体从 `Version = 1` 起步，避免空值和第一个真实句柄混淆
   - `World.IsAlive(Entity)` 复用 `TryGetLocation` 的同一套校验，只有在 `id` 在范围内、`_locations[id]` 非空且 `_versions[id] == entity.Version` 时才返回 `true`
   - `Add/Remove` 先算目标签名，再复用 edge cache
   - `Set` 在组件已存在时直接定位到 typed column 的 row，原地写回，不触发迁移
@@ -62,6 +63,7 @@ updated: 2026-04-12
 - `World` 侧可以对泛型组件类型做按 `T` 的注册缓存，减少热路径里的重复 registry 查找。
 - query builder / query 链式 API 也应该复用 world 侧的按 `T` component cache；如果它们绕开缓存直接打 `ComponentRegistry`，query build 的固定 CPU 成本会比必要值更高。
 - `World` 的 entity metadata 需要显式容量管理；如果只依赖 `List<T>` 的自然扩容，`Create` 的分配会长期高于合理水平。
+- `default(Entity)` 不应该是合法句柄；如果把 `(0,0)` 当成活体 entity，所有 optional/out/default 初始化场景都会变成隐性 bug 源。
 - 单实体带组件创建也应该直接落到目标签名 archetype；如果退回到 `Create` 后链式 `Add`，会制造只服务于迁移的中间 archetype 和空 chunk。
 - 由于 C# 没有 variadic generics，带组件 `Create` 的高性能主路径需要采用固定 arity 重载；当前上限定在 `16`，在保持 typed-column 直写的前提下足够覆盖常见 archetype 初始化。
 - `CreateMany` 应该复用一次空 archetype 查找和一次 upfront 容量保证；它不是“外面循环调用很多次 `Create`”的语法糖。
@@ -152,6 +154,7 @@ updated: 2026-04-12
 - 改这里时要特别小心：
   - `Chunk` 的列必须和 `Signature` 完全一致
   - `World` 的 entity version 不能和 location 脱钩
+  - `Entity` 的“无效句柄”不能再依赖 `default(Entity)` 之外的隐式约定；当前契约是 `Version > 0` 才算有效
   - `IsAlive` 不应该单独再维护一份“活着”状态；它必须和 `TryGetLocation` 共用同一条 version/location 校验链，避免 destroy/recycle 后出现双重真值来源
   - 性能验证必须看 `Arch` 对照数据，不能只看自己变快
   - 当前代码库里这页描述的是目标态，不是旧版 `Dictionary<ComponentType, object?>` 实现

@@ -65,6 +65,7 @@ updated: 2026-04-12
 - `WorldLifecycleTests` 需要覆盖 `EnsureCapacity` 和 `CreateMany`，否则 `Create` 的分配优化和批量语义很容易在重构时被回退。
 - `WorldLifecycleTests` 还要覆盖 `CreateMany` 的跨 chunk 顺序和二次批量追加语义，否则批量 reservation 很容易只保住“能跑”而丢掉位置正确性。
 - `WorldLifecycleTests` 还要覆盖 `CreateMany` 的 recycled/mixed id 语义，否则 fresh-path 优化很容易掩盖 free-list 路径的行为回退。
+- `EntityTests` 和 `WorldLifecycleTests` 需要锁定 entity 句柄契约：`default(Entity)` 非法、fresh entity 从 `Version = 1` 起步、recycled entity 再次创建后版本继续递增。
 - `WorldLifecycleTests` 还要覆盖带组件的 `Create<T...>` 直接进入最终 archetype，并锁定当前高性能重载上限 `16`；否则实现很容易退回 `Create + Add` 链路，或者在扩重载时静默漏掉目标 arity。
 - `WorldLifecycleTests` 还要锁定默认 world 的 dense archetype 会放大 chunk，而显式 `chunkCapacity` 仍保持固定边界；否则 query 吞吐优化很容易在后续重构中被悄悄回退，或者反过来破坏依赖小 chunk 的测试。
 - `ArchetypeEdges` 的 direct-index 化是性能目标本身，可以用一条小范围的结构测试锁定，避免静默退回字典实现。
@@ -86,6 +87,13 @@ updated: 2026-04-12
 - 如果目标是回答“MiniArch 和 Arch 的真实吞吐差多少”，优先补一条 throughput runner，而不是继续放大 short job 次数；`ops/s` 对这类问题更直接。
 - query 采样入口默认应走独立 runner，而不是直接采样 BenchmarkDotNet 子进程；前者更容易把样本集中在 `Query` 热路径上。
 - query 采样需要区分 `hot` 和 `cold`：`hot` 看 chunk traversal，`cold` 通过 fresh query 实例把 `RefreshIfNeeded / BuildMatchingArchetypes / Matches` 拉回样本。
+
+## 当前已验证的 benchmark 结论
+
+- `StructuralChangeBenchmarks` 里，`MiniArch` 在 `Create / CreateMany / Set / Destroy / Remove` 上整体优于 `Arch`；`Add Position` 这一项当前仍偏慢，且波动较大，需要单独盯住
+- `MixedStructuralChangeBenchmarks` 里，`MiniArch` 在 `100 / 1000 / 10000` 三个档位都稳定快于 `Arch`，大致领先 `42%~48%`
+- `QueryBenchmarks` 里，`MiniArch` 在 `WithAll+Without`、`WithAll+Any` 这类过滤更重的 warmed 查询上领先，但在 `100000` 档位的纯 warmed entity/span traversal 上落后 `Arch`
+- `QueryBenchmarks` 的 `row-wise` 口径明显慢于 `span` 口径，说明对 typed chunk，span 读取仍然是更优的系统层遍历方式
 
 ## 认知模型
 

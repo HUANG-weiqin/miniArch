@@ -31,6 +31,7 @@ public sealed class WorldLifecycleTests
         var entity = world.Create();
 
         Assert.True(entity.IsValid);
+        Assert.Equal(1, entity.Version);
         Assert.True(world.IsAlive(entity));
         Assert.True(world.TryGetLocation(entity, out var info));
         Assert.Equal(entity.Version, info.Version);
@@ -266,7 +267,7 @@ public sealed class WorldLifecycleTests
 
         foreach (var entity in recycledBatch)
         {
-            Assert.Equal(1, entity.Version);
+            Assert.Equal(2, entity.Version);
             Assert.True(world.TryGetLocation(entity, out var info));
             Assert.Equal(entity.Version, info.Version);
         }
@@ -290,13 +291,13 @@ public sealed class WorldLifecycleTests
 
         foreach (var entity in secondBatch.Where(entity => entity.Id is 1 or 4))
         {
-            Assert.Equal(1, entity.Version);
+            Assert.Equal(2, entity.Version);
             Assert.True(world.TryGetLocation(entity, out _));
         }
 
         foreach (var entity in secondBatch.Where(entity => entity.Id >= 6))
         {
-            Assert.Equal(0, entity.Version);
+            Assert.Equal(1, entity.Version);
             Assert.True(world.TryGetLocation(entity, out _));
         }
     }

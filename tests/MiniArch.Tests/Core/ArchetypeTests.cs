@@ -27,9 +27,9 @@ public sealed class ArchetypeTests
         var position = registry.GetOrCreate<Position>();
         var archetype = new Archetype(new Signature(position), chunkCapacity: 2);
 
-        archetype.AddEntity(new Entity(1, 0), Components(position, new Position(1, 1)), out _, out _);
-        archetype.AddEntity(new Entity(2, 0), Components(position, new Position(2, 2)), out _, out _);
-        archetype.AddEntity(new Entity(3, 0), Components(position, new Position(3, 3)), out _, out _);
+        archetype.AddEntity(new Entity(1, 1), Components(position, new Position(1, 1)), out _, out _);
+        archetype.AddEntity(new Entity(2, 1), Components(position, new Position(2, 2)), out _, out _);
+        archetype.AddEntity(new Entity(3, 1), Components(position, new Position(3, 3)), out _, out _);
 
         Assert.Equal(2, archetype.Chunks.Count);
         Assert.Equal(2, archetype.Chunks[0].Count);
@@ -43,9 +43,9 @@ public sealed class ArchetypeTests
         var position = registry.GetOrCreate<Position>();
         var archetype = new Archetype(new Signature(position));
 
-        var first = new Entity(1, 0);
-        var second = new Entity(2, 0);
-        var third = new Entity(3, 0);
+        var first = new Entity(1, 1);
+        var second = new Entity(2, 1);
+        var third = new Entity(3, 1);
 
         archetype.AddEntity(first, Components(position, new Position(1, 1)), out var chunkIndex, out _);
         archetype.AddEntity(second, Components(position, new Position(2, 2)), out _, out _);
@@ -64,10 +64,10 @@ public sealed class ArchetypeTests
     {
         var archetype = new Archetype(Signature.Empty, chunkCapacity: 2);
 
-        archetype.ReserveEntity(new Entity(1, 0), out _, out _);
-        archetype.ReserveEntity(new Entity(2, 0), out _, out _);
-        archetype.ReserveEntity(new Entity(3, 0), out _, out _);
-        archetype.ReserveEntity(new Entity(4, 0), out _, out _);
+        archetype.ReserveEntity(new Entity(1, 1), out _, out _);
+        archetype.ReserveEntity(new Entity(2, 1), out _, out _);
+        archetype.ReserveEntity(new Entity(3, 1), out _, out _);
+        archetype.ReserveEntity(new Entity(4, 1), out _, out _);
 
         Assert.Equal(2, archetype.Chunks.Count);
 
@@ -79,10 +79,10 @@ public sealed class ArchetypeTests
         Assert.Equal(0, archetype.Chunks[0].Count);
         Assert.Equal(0, archetype.Chunks[1].Count);
 
-        archetype.ReserveEntity(new Entity(5, 0), out _, out _);
-        archetype.ReserveEntity(new Entity(6, 0), out _, out _);
-        archetype.ReserveEntity(new Entity(7, 0), out _, out _);
-        archetype.ReserveEntity(new Entity(8, 0), out _, out _);
+        archetype.ReserveEntity(new Entity(5, 1), out _, out _);
+        archetype.ReserveEntity(new Entity(6, 1), out _, out _);
+        archetype.ReserveEntity(new Entity(7, 1), out _, out _);
+        archetype.ReserveEntity(new Entity(8, 1), out _, out _);
 
         Assert.Equal(2, archetype.Chunks.Count);
         Assert.Equal(2, archetype.Chunks[0].Count);

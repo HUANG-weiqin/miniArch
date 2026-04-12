@@ -16,8 +16,8 @@ public sealed class ChunkTests
         var velocity = registry.GetOrCreate<Velocity>();
         var chunk = new Chunk(new Signature(position, velocity), capacity: 4);
 
-        var first = new Entity(1, 0);
-        var second = new Entity(2, 0);
+        var first = new Entity(1, 1);
+        var second = new Entity(2, 1);
 
         var firstRow = chunk.Add(first, new Dictionary<ComponentType, object?>
         {
@@ -45,9 +45,9 @@ public sealed class ChunkTests
         var velocity = registry.GetOrCreate<Velocity>();
         var chunk = new Chunk(new Signature(position, velocity), capacity: 4);
 
-        var first = new Entity(1, 0);
-        var second = new Entity(2, 0);
-        var third = new Entity(3, 0);
+        var first = new Entity(1, 1);
+        var second = new Entity(2, 1);
+        var third = new Entity(3, 1);
 
         chunk.Add(first, Components(position, velocity, new Position(1, 1), new Velocity(1, 1)));
         chunk.Add(second, Components(position, velocity, new Position(2, 2), new Velocity(2, 2)));
@@ -70,8 +70,8 @@ public sealed class ChunkTests
         var velocity = registry.GetOrCreate<Velocity>();
         var chunk = new Chunk(new Signature(position, velocity), capacity: 4);
 
-        var first = new Entity(1, 0);
-        var second = new Entity(2, 0);
+        var first = new Entity(1, 1);
+        var second = new Entity(2, 1);
 
         chunk.Add(first, Components(position, velocity, new Position(1, 1), new Velocity(1, 1)));
         chunk.Add(second, Components(position, velocity, new Position(2, 2), new Velocity(2, 2)));
@@ -86,8 +86,8 @@ public sealed class ChunkTests
     public void Chunk_exposes_a_read_only_span_over_its_live_entities()
     {
         var chunk = new Chunk(Signature.Empty, capacity: 4);
-        var first = new Entity(1, 0);
-        var second = new Entity(2, 0);
+        var first = new Entity(1, 1);
+        var second = new Entity(2, 1);
 
         chunk.Add(first);
         chunk.Add(second);
@@ -108,8 +108,8 @@ public sealed class ChunkTests
         var signature = new Signature(position, velocity);
         var chunk = CreateTypedChunk(signature, new[] { typeof(Position), typeof(Velocity) }, capacity: 4);
 
-        chunk.Add(new Entity(1, 0), Components(position, velocity, new Position(1, 2), new Velocity(3, 4)));
-        chunk.Add(new Entity(2, 0), Components(position, velocity, new Position(5, 6), new Velocity(7, 8)));
+        chunk.Add(new Entity(1, 1), Components(position, velocity, new Position(1, 2), new Velocity(3, 4)));
+        chunk.Add(new Entity(2, 1), Components(position, velocity, new Position(5, 6), new Velocity(7, 8)));
 
         var positions = chunk.GetComponentSpan<Position>(position);
 
@@ -127,8 +127,8 @@ public sealed class ChunkTests
         var signature = new Signature(position, label);
         var chunk = CreateTypedChunk(signature, new[] { typeof(Position), typeof(Label) }, capacity: 4);
 
-        var first = new Entity(1, 0);
-        var second = new Entity(2, 0);
+        var first = new Entity(1, 1);
+        var second = new Entity(2, 1);
         var firstPosition = new Position(1, 2);
         var secondPosition = new Position(3, 4);
         var firstLabel = new Label("first");
@@ -160,8 +160,8 @@ public sealed class ChunkTests
         var signature = new Signature(position, labelStruct);
         var chunk = CreateTypedChunk(signature, new[] { typeof(Position), typeof(LabelStruct) }, capacity: 4);
 
-        var first = new Entity(1, 0);
-        var second = new Entity(2, 0);
+        var first = new Entity(1, 1);
+        var second = new Entity(2, 1);
         var firstPosition = new Position(1, 2);
         var secondPosition = new Position(3, 4);
         var firstLabel = new LabelStruct("first");

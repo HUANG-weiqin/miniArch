@@ -976,6 +976,7 @@ public sealed class World
         EnsureBatchCapacity(requiredCount, newEntityCount);
         CollectionsMarshal.SetCount(_versions, requiredCount);
         CollectionsMarshal.SetCount(_locations, requiredCount);
+        CollectionsMarshal.AsSpan(_versions)[startId..requiredCount].Fill(1);
         return startId;
     }
 
@@ -1047,7 +1048,7 @@ public sealed class World
 
             for (; rowOffset < range.Count; rowOffset++)
             {
-                var entity = new Entity(nextId++, 0);
+                var entity = new Entity(nextId++, 1);
                 entities[entityIndex++] = entity;
                 chunkEntities[rowOffset] = entity;
                 locations[entity.Id] = new EntityLocation(archetype, range.ChunkIndex, range.StartRow + rowOffset);
@@ -1067,9 +1068,9 @@ public sealed class World
         }
 
         var id = _versions.Count;
-        _versions.Add(0);
+        _versions.Add(1);
         _locations.Add(default);
-        version = 0;
+        version = 1;
         return id;
     }
 

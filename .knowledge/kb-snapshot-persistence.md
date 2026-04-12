@@ -2,7 +2,7 @@
 title: Snapshot Persistence
 module: MiniArch.Core Snapshot
 description: First-version full-world snapshot save/load design for unmanaged components
-updated: 2026-04-11
+updated: 2026-04-12
 ---
 # Snapshot Persistence
 
@@ -40,6 +40,7 @@ updated: 2026-04-11
 - 第一版只支持 `unmanaged` 组件；遇到托管引用字段直接 fail fast，避免伪正确的字节落盘。
 - 存档里不写 `ComponentType.Value`，而写组件类型的稳定字符串标识；`ComponentType` 仍然只用于运行时热路径。
 - 存档里必须写 entity slot versions，而不只写活体 entity version；否则空闲 id 在读档后会丢失版本递增语义。
+- 当前 entity 句柄契约要求 `default(Entity)` 非法、活体 entity `Version > 0`；snapshot 恢复时也必须保持这一点，不能把 fresh/live entity 读回成 `v0`。
 - load 不能通过 `Add/Set/Remove` 回放世界；那会破坏 chunk 边界并把读档退化成结构迁移流程。
 
 ## 认知模型

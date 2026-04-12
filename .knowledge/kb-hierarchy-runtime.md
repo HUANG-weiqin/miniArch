@@ -38,7 +38,7 @@ updated: 2026-04-12
 
 - hierarchy 保持为 `World` 持有的 runtime side table，而不是 ECS component；这样不会污染 archetype 迁移、query 和 chunk 布局。
 - destroy 语义固定为 cascade destroy，而不是“父死子孤儿”；这样 snapshot 恢复后行为保持一致，也更接近参考实现。
-- 当前没有修改 `Entity` 的默认值契约；optional parent 语义通过显式无效哨兵处理，而不是依赖 `default(Entity)`。
+- hierarchy 仍然使用显式无效哨兵，但底层 `Entity` 契约本身也要求 `default(Entity)` 非法、真实实体从 `Version = 1` 起步。
 
 ## 认知模型
 
@@ -74,7 +74,7 @@ updated: 2026-04-12
   - 以为 hierarchy 改动需要递增 archetype generation；实际上它不影响 query 匹配
 - 改这里时要特别小心：
   - parent 存储必须带完整 `Entity` 句柄，不能只存 `Id`
-  - 如果后面要调整 `Entity` 默认值契约，hierarchy 的无效哨兵策略也要一起更新
+  - hierarchy 当前用 `(-1, -1)` 作为无效哨兵；不要再把 `default(Entity)` 当成“无 parent”
 
 ## 关联模块
 
