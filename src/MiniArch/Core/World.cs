@@ -701,6 +701,11 @@ public sealed class World
         return true;
     }
 
+    public bool IsAlive(Entity entity)
+    {
+        return TryGetLocation(entity, out _);
+    }
+
     private void MoveEntity(Entity entity, EntityLocation sourceInfo, Archetype destination)
     {
         var sourceChunk = sourceInfo.Archetype.GetChunk(sourceInfo.ChunkIndex);

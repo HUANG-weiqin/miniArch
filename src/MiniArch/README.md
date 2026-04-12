@@ -25,6 +25,7 @@ Minimal ECS learning project inspired by Arch.
   - user-facing API for game logic
   - `World`, `Entity`, `Query<T>`, `Query<T1, T2>`
   - default queries support direct `foreach`
+  - `World.IsAlive(entity)` is the common lifecycle check for a handle against the current world state
   - `World.Advanced` is the escape hatch back to `MiniArch.Core`
 - `MiniArch.Core`
   - advanced API for storage-aware access and profiling
@@ -41,6 +42,11 @@ var entity = world.Create(new Position(1, 2), new Velocity(3, 4));
 if (world.TryGet(entity, out Position position))
 {
     Console.WriteLine(position);
+}
+
+if (world.IsAlive(entity))
+{
+    Console.WriteLine("entity is still alive");
 }
 
 foreach (var item in world.Query<Position, Velocity>())

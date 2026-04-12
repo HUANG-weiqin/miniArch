@@ -66,6 +66,24 @@ public sealed class UserQueryTests
     }
 
     [Fact]
+    public void IsAlive_forwards_lifecycle_state_through_the_user_facing_world()
+    {
+        var world = new World();
+        var entity = world.Create(new Position(1, 2));
+
+        Assert.True(world.IsAlive(entity));
+
+        world.Destroy(entity);
+
+        Assert.False(world.IsAlive(entity));
+
+        var recycled = world.Create(new Position(3, 4));
+
+        Assert.True(world.IsAlive(recycled));
+        Assert.False(world.IsAlive(entity));
+    }
+
+    [Fact]
     public void Warming_query_then_repeating_foreach_does_not_allocate()
     {
         var world = new World();

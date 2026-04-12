@@ -31,6 +31,7 @@ public sealed class WorldLifecycleTests
         var entity = world.Create();
 
         Assert.True(entity.IsValid);
+        Assert.True(world.IsAlive(entity));
         Assert.True(world.TryGetLocation(entity, out var info));
         Assert.Equal(entity.Version, info.Version);
     }
@@ -49,6 +50,17 @@ public sealed class WorldLifecycleTests
     }
 
     [Fact]
+    public void Destroy_marks_the_entity_not_alive()
+    {
+        var world = new World();
+        var entity = world.Create();
+
+        world.Destroy(entity);
+
+        Assert.False(world.IsAlive(entity));
+    }
+
+    [Fact]
     public void Version_mismatch_makes_stale_entities_invalid()
     {
         var world = new World();
@@ -57,7 +69,9 @@ public sealed class WorldLifecycleTests
         world.Destroy(first);
         var second = world.Create();
 
+        Assert.False(world.IsAlive(first));
         Assert.False(world.TryGetLocation(first, out _));
+        Assert.True(world.IsAlive(second));
         Assert.True(world.TryGetLocation(second, out _));
     }
 

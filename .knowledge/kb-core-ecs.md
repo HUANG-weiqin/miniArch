@@ -36,6 +36,7 @@ updated: 2026-04-12
   - `World.EnsureCapacity` 负责提前扩好 entity metadata 存储，避免 `Create` 只靠 `List<T>` 被动增长
   - `World.CreateMany` 先批量准备 entity id，再用 `Archetype` 的 chunk-batched reservation 一次性把一批实体落入空签名 archetype
   - `World` 内部把 entity version 和 entity location 分开存储：`_versions` 管版本校验，`_locations` 只保留 archetype/chunk/row，避免 metadata 热路径重复写 version
+  - `World.IsAlive(Entity)` 复用 `TryGetLocation` 的同一套校验，只有在 `id` 在范围内、`_locations[id]` 非空且 `_versions[id] == entity.Version` 时才返回 `true`
   - `Add/Remove` 先算目标签名，再复用 edge cache
   - `Set` 在组件已存在时直接定位到 typed column 的 row，原地写回，不触发迁移
   - `Archetype` 负责把实体放进可写 chunk，并优先复用已有空位的 chunk，而不是盲目只往最后一个 chunk 追加
@@ -151,6 +152,7 @@ updated: 2026-04-12
 - 改这里时要特别小心：
   - `Chunk` 的列必须和 `Signature` 完全一致
   - `World` 的 entity version 不能和 location 脱钩
+  - `IsAlive` 不应该单独再维护一份“活着”状态；它必须和 `TryGetLocation` 共用同一条 version/location 校验链，避免 destroy/recycle 后出现双重真值来源
   - 性能验证必须看 `Arch` 对照数据，不能只看自己变快
   - 当前代码库里这页描述的是目标态，不是旧版 `Dictionary<ComponentType, object?>` 实现
   - 当前并发保证只覆盖“world 无写入时的 query 并发只读”；不要误把它扩展理解成读写并发安全

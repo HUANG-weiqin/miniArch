@@ -31,6 +31,7 @@ updated: 2026-04-12
   - `World.Query<T>()` / `World.Query<T1, T2>()` 先复用底层 `MiniArch.Core.Query` 缓存
   - facade 枚举器直接扫 matched chunks 和 typed column arrays
   - 每次迭代返回轻量 item，不创建中间集合，不走接口枚举
+  - `World.IsAlive(Entity)` 直接转发到底层 `MiniArch.Core.World.IsAlive(Entity)`，让普通用户用同一个入口判断句柄是否仍然和当前 world 匹配
 - 和其他模块的交互方式：
   - 依赖 `MiniArch.Core.World` / `Query` / `Chunk`
   - 由 `tests/MiniArch.Tests/UserApi/UserQueryTests.cs` 做用户入口回归验证
@@ -42,6 +43,7 @@ updated: 2026-04-12
 - 这样做不是审美选择，而是为避免 `MiniArch.Tests.*` 这类嵌套命名空间里的 `World` / `Entity` 名称解析被根命名空间 façade 劫持。
 - 普通查询新增 facade，而不是直接改写 `MiniArch.Core.Query` 的 public 形状；底层 query 仍然服务 advanced 遍历、benchmark 和 profiling。
 - 双组件查询默认返回 item 而不是单纯 `Entity`，因为目标就是避免普通逻辑再退回 “query entity -> 再手动找组件”。
+- `IsAlive` 也属于普通入口层该提供的常用句柄检查，不应该要求普通用户先切到 `Advanced` 再做版本/位置校验。
 
 ## 认知模型
 

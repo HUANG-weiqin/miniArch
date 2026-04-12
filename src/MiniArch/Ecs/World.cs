@@ -32,6 +32,8 @@ public sealed class World
 
     public void Destroy(Entity entity) => _world.Destroy(entity.AsCore());
 
+    public bool IsAlive(Entity entity) => _world.IsAlive(entity.AsCore());
+
     public bool TryGet<T>(Entity entity, out T component)
     {
         if (!_world.TryGetLocation(entity.AsCore(), out var info))
