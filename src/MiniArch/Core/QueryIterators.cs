@@ -2,6 +2,9 @@ using System.Collections;
 
 namespace MiniArch.Core;
 
+/// <summary>
+/// Enumerable view over matching chunks.
+/// </summary>
 public readonly struct ChunkEnumerable : IEnumerable<Chunk>
 {
     private readonly Query _query;
@@ -11,6 +14,9 @@ public readonly struct ChunkEnumerable : IEnumerable<Chunk>
         _query = query;
     }
 
+    /// <summary>
+    /// Returns a chunk enumerator.
+    /// </summary>
     public ChunkEnumerator GetEnumerator() => new(_query);
 
     IEnumerator<Chunk> IEnumerable<Chunk>.GetEnumerator() => new ChunkEnumeratorAdapter(this);
@@ -40,11 +46,17 @@ public readonly struct ChunkEnumerable : IEnumerable<Chunk>
     }
 }
 
+/// <summary>
+/// Chunk enumerator.
+/// </summary>
 public struct ChunkEnumerator
 {
     private readonly Chunk[] _chunks;
     private int _chunkIndex;
 
+    /// <summary>
+    /// Creates an enumerator for a query.
+    /// </summary>
     public ChunkEnumerator(Query query)
     {
         _chunks = query.EnsureMatchingChunks();
@@ -52,8 +64,14 @@ public struct ChunkEnumerator
         Current = default!;
     }
 
+    /// <summary>
+    /// Gets the current chunk.
+    /// </summary>
     public Chunk Current { get; private set; }
 
+    /// <summary>
+    /// Advances to the next chunk.
+    /// </summary>
     public bool MoveNext()
     {
         _chunkIndex++;

@@ -3,6 +3,9 @@ using System.Collections.Concurrent;
 
 namespace MiniArch.Core;
 
+/// <summary>
+/// Dense component storage for one signature.
+/// </summary>
 public sealed class Chunk
 {
     private static readonly ConcurrentDictionary<Type, bool> ColumnClearRequirementCache = new();
@@ -15,6 +18,9 @@ public sealed class Chunk
     private readonly int[] _componentIdToColumnIndex;
     private readonly bool _typedColumns;
 
+    /// <summary>
+    /// Creates a chunk for a signature.
+    /// </summary>
     public Chunk(Signature signature, int capacity = 4)
         : this(signature, null, BuildComponentIdToColumnIndex(signature), capacity, false)
     {
@@ -49,12 +55,24 @@ public sealed class Chunk
         _columnClearMode = GetColumnClearMode(_columnRequiresClear);
     }
 
+    /// <summary>
+    /// Gets the chunk signature.
+    /// </summary>
     public Signature Signature => _signature;
 
+    /// <summary>
+    /// Gets the chunk capacity.
+    /// </summary>
     public int Capacity => _entities.Length;
 
+    /// <summary>
+    /// Gets the live row count.
+    /// </summary>
     public int Count { get; private set; }
 
+    /// <summary>
+    /// Gets live entities as a span.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpan<Entity> GetEntities()
     {
@@ -65,12 +83,18 @@ public sealed class Chunk
 
     internal Entity[] GetEntityStorage() => _entities;
 
+    /// <summary>
+    /// Gets the entity at a row.
+    /// </summary>
     public Entity GetEntity(int row)
     {
         ValidateRow(row);
         return _entities[row];
     }
 
+    /// <summary>
+    /// Adds an entity and writes its components.
+    /// </summary>
     public int Add(Entity entity, IReadOnlyDictionary<ComponentType, object?> components)
     {
         var row = Add(entity);
@@ -90,6 +114,9 @@ public sealed class Chunk
         return row;
     }
 
+    /// <summary>
+    /// Adds an entity.
+    /// </summary>
     public int Add(Entity entity)
     {
         if (Count == Capacity)
@@ -130,6 +157,9 @@ public sealed class Chunk
         return _entities.AsSpan(startRow, count);
     }
 
+    /// <summary>
+    /// Gets a boxed component value.
+    /// </summary>
     public object? GetComponent(ComponentType component, int row)
     {
         ValidateRow(row);
@@ -137,6 +167,9 @@ public sealed class Chunk
         return _columns[columnIndex].GetValue(row);
     }
 
+    /// <summary>
+    /// Gets a component value by type.
+    /// </summary>
     public T GetComponent<T>(ComponentType component, int row)
     {
         ValidateRow(row);
@@ -144,6 +177,9 @@ public sealed class Chunk
         return GetComponentAt<T>(columnIndex, row);
     }
 
+    /// <summary>
+    /// Gets a typed component span.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpan<T> GetComponentSpan<T>(ComponentType component)
     {
@@ -151,6 +187,9 @@ public sealed class Chunk
         return GetComponentSpanAt<T>(columnIndex);
     }
 
+    /// <summary>
+    /// Sets a boxed component value.
+    /// </summary>
     public void SetComponent(ComponentType component, int row, object? value)
     {
         ValidateRow(row);
@@ -158,6 +197,9 @@ public sealed class Chunk
         _columns[columnIndex].SetValue(value, row);
     }
 
+    /// <summary>
+    /// Sets a typed component value.
+    /// </summary>
     public void SetComponent<T>(ComponentType component, int row, in T value)
     {
         ValidateRow(row);
@@ -264,6 +306,9 @@ public sealed class Chunk
         }
     }
 
+    /// <summary>
+    /// Captures a row into a dictionary.
+    /// </summary>
     public IReadOnlyDictionary<ComponentType, object?> CaptureRow(int row)
     {
         ValidateRow(row);
@@ -278,6 +323,9 @@ public sealed class Chunk
         return values;
     }
 
+    /// <summary>
+    /// Removes a row with swap-remove.
+    /// </summary>
     public bool RemoveAt(int row, out Entity movedEntity)
     {
         ValidateRow(row);

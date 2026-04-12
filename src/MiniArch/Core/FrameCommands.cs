@@ -1,5 +1,8 @@
 namespace MiniArch.Core;
 
+/// <summary>
+/// Compiled frame commands.
+/// </summary>
 public readonly struct FrameCommands
 {
     private static readonly IReadOnlyList<FrameCreatedEntity> EmptyCreates = Array.Empty<FrameCreatedEntity>();
@@ -16,20 +19,44 @@ public readonly struct FrameCommands
         _state = state;
     }
 
+    /// <summary>
+    /// Gets created entities.
+    /// </summary>
     public IReadOnlyList<FrameCreatedEntity> CreatedEntities => _state?.CreatedEntities ?? EmptyCreates;
 
+    /// <summary>
+    /// Gets link commands.
+    /// </summary>
     public IReadOnlyList<FrameLinkCommand> LinkCommands => _state?.LinkCommands ?? EmptyLinks;
 
+    /// <summary>
+    /// Gets unlink commands.
+    /// </summary>
     public IReadOnlyList<FrameUnlinkCommand> UnlinkCommands => _state?.UnlinkCommands ?? EmptyUnlinks;
 
+    /// <summary>
+    /// Gets add commands.
+    /// </summary>
     public IReadOnlyList<FrameEntityComponentCommand> AddCommands => _state?.AddCommands ?? EmptyComponentCommands;
 
+    /// <summary>
+    /// Gets set commands.
+    /// </summary>
     public IReadOnlyList<FrameEntityComponentCommand> SetCommands => _state?.SetCommands ?? EmptyComponentCommands;
 
+    /// <summary>
+    /// Gets remove commands.
+    /// </summary>
     public IReadOnlyList<FrameEntityRemoveCommand> RemoveCommands => _state?.RemoveCommands ?? EmptyRemoves;
 
+    /// <summary>
+    /// Gets destroyed entities.
+    /// </summary>
     public IReadOnlyList<Entity> DestroyedEntities => _state?.DestroyedEntities ?? EmptyEntities;
 
+    /// <summary>
+    /// Gets released entities.
+    /// </summary>
     public IReadOnlyList<Entity> ReleasedEntities => _state?.ReleasedEntities ?? EmptyEntities;
 
     internal IReadOnlyList<Entity> ReservedEntities => _state?.ReservedEntities ?? EmptyEntities;
@@ -37,7 +64,10 @@ public readonly struct FrameCommands
     internal FrameCommandsState State => _state ?? throw new InvalidOperationException("Frame commands are not initialized.");
 }
 
-public readonly struct ReverseFrameCommands
+    /// <summary>
+    /// Compiled reverse frame commands.
+    /// </summary>
+    public readonly struct ReverseFrameCommands
 {
     private static readonly IReadOnlyList<ReverseFrameEntity> EmptyRestoredEntities = Array.Empty<ReverseFrameEntity>();
     private static readonly IReadOnlyList<Entity> EmptyEntities = Array.Empty<Entity>();
@@ -53,18 +83,39 @@ public readonly struct ReverseFrameCommands
         _state = state;
     }
 
+    /// <summary>
+    /// Gets restored entities.
+    /// </summary>
     public IReadOnlyList<ReverseFrameEntity> RestoredEntities => _state?.RestoredEntities ?? EmptyRestoredEntities;
 
+    /// <summary>
+    /// Gets destroyed entities.
+    /// </summary>
     public IReadOnlyList<Entity> DestroyedEntities => _state?.DestroyedEntities ?? EmptyEntities;
 
+    /// <summary>
+    /// Gets link commands.
+    /// </summary>
     public IReadOnlyList<FrameLinkCommand> LinkCommands => _state?.LinkCommands ?? EmptyLinks;
 
+    /// <summary>
+    /// Gets unlink commands.
+    /// </summary>
     public IReadOnlyList<FrameUnlinkCommand> UnlinkCommands => _state?.UnlinkCommands ?? EmptyUnlinks;
 
+    /// <summary>
+    /// Gets add commands.
+    /// </summary>
     public IReadOnlyList<FrameEntityComponentCommand> AddCommands => _state?.AddCommands ?? EmptyComponentCommands;
 
+    /// <summary>
+    /// Gets set commands.
+    /// </summary>
     public IReadOnlyList<FrameEntityComponentCommand> SetCommands => _state?.SetCommands ?? EmptyComponentCommands;
 
+    /// <summary>
+    /// Gets remove commands.
+    /// </summary>
     public IReadOnlyList<FrameEntityRemoveCommand> RemoveCommands => _state?.RemoveCommands ?? EmptyRemoves;
 
     internal IReadOnlyList<Entity> ReservedEntities => _state?.ReservedEntities ?? EmptyEntities;
@@ -72,18 +123,54 @@ public readonly struct ReverseFrameCommands
     internal ReverseFrameCommandsState State => _state ?? throw new InvalidOperationException("Reverse frame commands are not initialized.");
 }
 
+/// <summary>
+/// Created entity payload.
+/// </summary>
+/// <param name="Entity">The entity handle.</param>
+/// <param name="Components">The created components.</param>
 public readonly record struct FrameCreatedEntity(Entity Entity, IReadOnlyList<FrameComponentValue> Components);
 
+/// <summary>
+/// Component payload value.
+/// </summary>
+/// <param name="ComponentType">The component type.</param>
+/// <param name="Value">The component value.</param>
 public readonly record struct FrameComponentValue(Type ComponentType, object? Value);
 
+/// <summary>
+/// Restored entity payload.
+/// </summary>
+/// <param name="Entity">The entity handle.</param>
+/// <param name="Components">The restored components.</param>
+/// <param name="Parent">The restored parent.</param>
 public readonly record struct ReverseFrameEntity(Entity Entity, IReadOnlyList<FrameComponentValue> Components, Entity Parent);
 
+/// <summary>
+/// Link command.
+/// </summary>
+/// <param name="Parent">The parent entity.</param>
+/// <param name="Child">The child entity.</param>
 public readonly record struct FrameLinkCommand(Entity Parent, Entity Child);
 
+/// <summary>
+/// Unlink command.
+/// </summary>
+/// <param name="Child">The child entity.</param>
 public readonly record struct FrameUnlinkCommand(Entity Child);
 
+/// <summary>
+/// Entity component command.
+/// </summary>
+/// <param name="Entity">The entity handle.</param>
+/// <param name="ComponentType">The component type.</param>
+/// <param name="Value">The component value.</param>
 public readonly record struct FrameEntityComponentCommand(Entity Entity, Type ComponentType, object? Value);
 
+/// <summary>
+/// Entity remove command.
+/// </summary>
+/// <param name="Entity">The entity handle.</param>
+/// <param name="ComponentType">The component type.</param>
 public readonly record struct FrameEntityRemoveCommand(Entity Entity, Type ComponentType);
 
 internal sealed class FrameCommandsState

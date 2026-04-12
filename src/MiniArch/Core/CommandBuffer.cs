@@ -3,6 +3,9 @@ using System.Threading;
 
 namespace MiniArch.Core;
 
+/// <summary>
+/// Records deferred world commands.
+/// </summary>
 public sealed class CommandBuffer
 {
     private readonly World _world;
@@ -11,12 +14,18 @@ public sealed class CommandBuffer
     private int _nextShardOrder;
     private int _playedBack;
 
+    /// <summary>
+    /// Creates a buffer for a world.
+    /// </summary>
     public CommandBuffer(World world)
     {
         _world = world ?? throw new ArgumentNullException(nameof(world));
         _allocator = new CommandBufferEntityAllocator(world);
     }
 
+    /// <summary>
+    /// Records an entity creation.
+    /// </summary>
     public Entity Create()
     {
         var entity = _allocator.ReserveEntity();
@@ -24,48 +33,75 @@ public sealed class CommandBuffer
         return entity;
     }
 
+    /// <summary>
+    /// Records an add command.
+    /// </summary>
     public void Add<T>(Entity entity, T component)
     {
         GetShard().Adds.Add(new RecordedComponentCommand(entity, typeof(T), component));
     }
 
+    /// <summary>
+    /// Records a set command.
+    /// </summary>
     public void Set<T>(Entity entity, T component)
     {
         GetShard().Sets.Add(new RecordedComponentCommand(entity, typeof(T), component));
     }
 
+    /// <summary>
+    /// Records a remove command.
+    /// </summary>
     public void Remove<T>(Entity entity)
     {
         GetShard().Removes.Add(new RecordedRemoveCommand(entity, typeof(T)));
     }
 
+    /// <summary>
+    /// Records a destroy command.
+    /// </summary>
     public void Destroy(Entity entity)
     {
         GetShard().Destroys.Add(entity);
     }
 
+    /// <summary>
+    /// Records a parent link.
+    /// </summary>
     public void Link(Entity parent, Entity child)
     {
         GetShard().HierarchyCommands.Add(new RecordedHierarchyCommand(child, parent, true));
     }
 
+    /// <summary>
+    /// Records a parent unlink.
+    /// </summary>
     public void Unlink(Entity child)
     {
         GetShard().HierarchyCommands.Add(new RecordedHierarchyCommand(child, default, false));
     }
 
+    /// <summary>
+    /// Compiles the buffered commands.
+    /// </summary>
     public FrameCommands Playback()
     {
         var compiled = Compile();
         return compiled.ToFrameCommands();
     }
 
+    /// <summary>
+    /// Compiles and replays the buffered commands.
+    /// </summary>
     public void Play()
     {
         var compiled = Compile();
         _world.Replay(compiled);
     }
 
+    /// <summary>
+    /// Replays the buffer and captures reverse commands.
+    /// </summary>
     public ReverseFrameCommands PlayWithReverse()
     {
         var frame = Playback();

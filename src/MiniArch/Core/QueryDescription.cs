@@ -1,37 +1,64 @@
 namespace MiniArch.Core;
 
+/// <summary>
+/// Reusable query filter description.
+/// </summary>
 public readonly struct QueryDescription : IEquatable<QueryDescription>
 {
     private readonly QueryDescriptionTypeSet _required;
     private readonly QueryDescriptionTypeSet _excluded;
     private readonly QueryDescriptionTypeSet _any;
 
+    /// <summary>
+    /// Gets required component types.
+    /// </summary>
     public IReadOnlyList<Type> RequiredTypes => _required.ToArray();
 
+    /// <summary>
+    /// Gets excluded component types.
+    /// </summary>
     public IReadOnlyList<Type> ExcludedTypes => _excluded.ToArray();
 
+    /// <summary>
+    /// Gets any-match component types.
+    /// </summary>
     public IReadOnlyList<Type> AnyTypes => _any.ToArray();
 
+    /// <summary>
+    /// Adds a required type.
+    /// </summary>
     public QueryDescription With<T>()
     {
         var required = _required.Add(typeof(T));
         return required.Equals(_required) ? this : new QueryDescription(required, _excluded, _any);
     }
 
+    /// <summary>
+    /// Adds an excluded type.
+    /// </summary>
     public QueryDescription Without<T>()
     {
         var excluded = _excluded.Add(typeof(T));
         return excluded.Equals(_excluded) ? this : new QueryDescription(_required, excluded, _any);
     }
 
+    /// <summary>
+    /// Adds an any-match type.
+    /// </summary>
     public QueryDescription WithAny<T>()
     {
         var any = _any.Add(typeof(T));
         return any.Equals(_any) ? this : new QueryDescription(_required, _excluded, any);
     }
 
+    /// <summary>
+    /// Alias for <see cref="WithAny{T}()" />.
+    /// </summary>
     public QueryDescription Or<T>() => WithAny<T>();
 
+    /// <summary>
+    /// Compares two descriptions by value.
+    /// </summary>
     public bool Equals(QueryDescription other)
     {
         return _required.Equals(other._required)
@@ -39,8 +66,14 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
             && _any.Equals(other._any);
     }
 
+    /// <summary>
+    /// Compares against an object.
+    /// </summary>
     public override bool Equals(object? obj) => obj is QueryDescription other && Equals(other);
 
+    /// <summary>
+    /// Gets the cached hash code.
+    /// </summary>
     public override int GetHashCode() => HashCode.Combine(_required, _excluded, _any);
 
     internal ReadOnlySpan<Type> GetRequiredTypes() => _required.AsSpan();

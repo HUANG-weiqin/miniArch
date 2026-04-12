@@ -3,13 +3,22 @@ using System.Text;
 
 namespace MiniArch.Core;
 
+/// <summary>
+/// Sorted set of component ids.
+/// </summary>
 public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType>
 {
     private readonly ComponentType[] _components;
     private readonly int _hashCode;
 
+    /// <summary>
+    /// Gets the empty signature.
+    /// </summary>
     public static Signature Empty { get; } = new(Array.Empty<ComponentType>(), isNormalized: true);
 
+    /// <summary>
+    /// Creates a normalized signature from a sequence.
+    /// </summary>
     public Signature(IEnumerable<ComponentType> components)
     {
         ArgumentNullException.ThrowIfNull(components);
@@ -17,6 +26,9 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
         _hashCode = ComputeHashCode(_components);
     }
 
+    /// <summary>
+    /// Creates a normalized signature from components.
+    /// </summary>
     public Signature(params ComponentType[] components)
         : this((IEnumerable<ComponentType>)components)
     {
@@ -34,12 +46,24 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
         return components.Length == 0 ? Empty : new Signature(components, isNormalized: true);
     }
 
+    /// <summary>
+    /// Gets the component count.
+    /// </summary>
     public int Count => _components.Length;
 
+    /// <summary>
+    /// Gets the component span.
+    /// </summary>
     public ReadOnlySpan<ComponentType> AsSpan() => _components;
 
+    /// <summary>
+    /// Returns whether the signature contains a component.
+    /// </summary>
     public bool Contains(ComponentType component) => Array.BinarySearch(_components, component) >= 0;
 
+    /// <summary>
+    /// Returns a signature with one component added.
+    /// </summary>
     public Signature Add(ComponentType component)
     {
         var index = Array.BinarySearch(_components, component);
@@ -56,6 +80,9 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
         return new Signature(next, isNormalized: true);
     }
 
+    /// <summary>
+    /// Returns a signature with one component removed.
+    /// </summary>
     public Signature Remove(ComponentType component)
     {
         var index = Array.BinarySearch(_components, component);
@@ -70,10 +97,16 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
         return new Signature(next, isNormalized: true);
     }
 
+    /// <summary>
+    /// Returns an enumerator over the components.
+    /// </summary>
     public IEnumerator<ComponentType> GetEnumerator() => ((IEnumerable<ComponentType>)_components).GetEnumerator();
 
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
+    /// <summary>
+    /// Compares two signatures by value.
+    /// </summary>
     public bool Equals(Signature? other)
     {
         if (ReferenceEquals(this, other))
@@ -97,10 +130,19 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
         return true;
     }
 
+    /// <summary>
+    /// Compares against an object.
+    /// </summary>
     public override bool Equals(object? obj) => obj is Signature other && Equals(other);
 
+    /// <summary>
+    /// Gets the cached hash code.
+    /// </summary>
     public override int GetHashCode() => _hashCode;
 
+    /// <summary>
+    /// Returns a display string.
+    /// </summary>
     public override string ToString()
     {
         if (_components.Length == 0)

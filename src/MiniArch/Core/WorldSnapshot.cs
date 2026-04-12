@@ -5,6 +5,9 @@ using System.Text;
 
 namespace MiniArch.Core;
 
+/// <summary>
+/// Saves and loads world snapshots.
+/// </summary>
 public static class WorldSnapshot
 {
     private const int Magic = 0x4D415243;
@@ -12,6 +15,9 @@ public static class WorldSnapshot
 
     private static readonly ConcurrentDictionary<Type, ColumnCodec> ColumnCodecs = new();
 
+    /// <summary>
+    /// Writes a world snapshot.
+    /// </summary>
     public static void Save(Stream stream, World world)
     {
         ArgumentNullException.ThrowIfNull(stream);
@@ -56,6 +62,9 @@ public static class WorldSnapshot
         }
     }
 
+    /// <summary>
+    /// Reads a world snapshot.
+    /// </summary>
     public static World Load(Stream stream)
     {
         ArgumentNullException.ThrowIfNull(stream);

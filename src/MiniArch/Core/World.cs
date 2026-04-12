@@ -7,6 +7,9 @@ using System.Runtime.InteropServices;
 
 namespace MiniArch.Core;
 
+/// <summary>
+/// Owns entity storage and queries.
+/// </summary>
 public sealed class World
 {
     private const int DefaultChunkCapacity = 128;
@@ -38,6 +41,9 @@ public sealed class World
     private int _queryLayoutSuppressionCount;
     private bool _queryLayoutDirty;
 
+    /// <summary>
+    /// Creates a world.
+    /// </summary>
     public World(int chunkCapacity = DefaultChunkCapacity, int entityCapacity = 64)
     {
         if (chunkCapacity <= 0)
@@ -57,8 +63,14 @@ public sealed class World
         _freeIds = entityCapacity == 0 ? Array.Empty<RecycledEntity>() : new RecycledEntity[entityCapacity];
     }
 
+    /// <summary>
+    /// Gets the component registry.
+    /// </summary>
     public ComponentRegistry Components => _components;
 
+    /// <summary>
+    /// Gets the entity metadata capacity.
+    /// </summary>
     public int EntityCapacity => _versions.Capacity;
 
     internal int ChunkCapacity => _chunkCapacity;
@@ -140,12 +152,18 @@ public sealed class World
         }
     }
 
+    /// <summary>
+    /// Creates an empty entity.
+    /// </summary>
     public Entity Create()
     {
         var archetype = GetOrCreateArchetype(Signature.Empty);
         return CreateInArchetype(archetype, out _, out _);
     }
 
+    /// <summary>
+    /// Creates an entity with one component.
+    /// </summary>
     public Entity Create<T1>(T1 component1)
     {
         var componentType1 = GetComponentType<T1>();
@@ -155,6 +173,9 @@ public sealed class World
         return entity;
     }
 
+    /// <summary>
+    /// Creates an entity with two components.
+    /// </summary>
     public Entity Create<T1, T2>(T1 component1, T2 component2)
     {
         var componentType1 = GetComponentType<T1>();
@@ -166,6 +187,9 @@ public sealed class World
         return entity;
     }
 
+    /// <summary>
+    /// Creates an entity with three components.
+    /// </summary>
     public Entity Create<T1, T2, T3>(T1 component1, T2 component2, T3 component3)
     {
         var componentType1 = GetComponentType<T1>();
@@ -179,6 +203,9 @@ public sealed class World
         return entity;
     }
 
+    /// <summary>
+    /// Creates an entity with four components.
+    /// </summary>
     public Entity Create<T1, T2, T3, T4>(T1 component1, T2 component2, T3 component3, T4 component4)
     {
         var componentType1 = GetComponentType<T1>();
@@ -194,6 +221,9 @@ public sealed class World
         return entity;
     }
 
+    /// <summary>
+    /// Creates an entity with five components.
+    /// </summary>
     public Entity Create<T1, T2, T3, T4, T5>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5)
     {
         var componentType1 = GetComponentType<T1>();
@@ -211,6 +241,9 @@ public sealed class World
         return entity;
     }
 
+    /// <summary>
+    /// Creates an entity with six components.
+    /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6)
     {
         var componentType1 = GetComponentType<T1>();
@@ -230,6 +263,9 @@ public sealed class World
         return entity;
     }
 
+    /// <summary>
+    /// Creates an entity with seven components.
+    /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7)
     {
         var componentType1 = GetComponentType<T1>();
@@ -251,6 +287,9 @@ public sealed class World
         return entity;
     }
 
+    /// <summary>
+    /// Creates an entity with eight components.
+    /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8)
     {
         var componentType1 = GetComponentType<T1>();
@@ -274,6 +313,9 @@ public sealed class World
         return entity;
     }
 
+    /// <summary>
+    /// Creates an entity with nine components.
+    /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9)
     {
         var componentType1 = GetComponentType<T1>();
@@ -299,6 +341,9 @@ public sealed class World
         return entity;
     }
 
+    /// <summary>
+    /// Creates an entity with ten components.
+    /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10)
     {
         var componentType1 = GetComponentType<T1>();
@@ -326,6 +371,9 @@ public sealed class World
         return entity;
     }
 
+    /// <summary>
+    /// Creates an entity with eleven components.
+    /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11)
     {
         var componentType1 = GetComponentType<T1>();
@@ -355,6 +403,9 @@ public sealed class World
         return entity;
     }
 
+    /// <summary>
+    /// Creates an entity with twelve components.
+    /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12)
     {
         var componentType1 = GetComponentType<T1>();
@@ -386,6 +437,9 @@ public sealed class World
         return entity;
     }
 
+    /// <summary>
+    /// Creates an entity with thirteen components.
+    /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13)
     {
         var componentType1 = GetComponentType<T1>();
@@ -419,6 +473,9 @@ public sealed class World
         return entity;
     }
 
+    /// <summary>
+    /// Creates an entity with fourteen components.
+    /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13, T14 component14)
     {
         var componentType1 = GetComponentType<T1>();
@@ -454,6 +511,9 @@ public sealed class World
         return entity;
     }
 
+    /// <summary>
+    /// Creates an entity with fifteen components.
+    /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13, T14 component14, T15 component15)
     {
         var componentType1 = GetComponentType<T1>();
@@ -491,6 +551,9 @@ public sealed class World
         return entity;
     }
 
+    /// <summary>
+    /// Creates an entity with sixteen components.
+    /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13, T14 component14, T15 component15, T16 component16)
     {
         var componentType1 = GetComponentType<T1>();
@@ -530,6 +593,9 @@ public sealed class World
         return entity;
     }
 
+    /// <summary>
+    /// Creates many empty entities.
+    /// </summary>
     public void CreateMany(Span<Entity> entities)
     {
         if (entities.Length == 0)
@@ -574,6 +640,9 @@ public sealed class World
         TouchQueryLayout();
     }
 
+    /// <summary>
+    /// Ensures entity metadata capacity.
+    /// </summary>
     public void EnsureCapacity(int entityCapacity)
     {
         if (entityCapacity < 0)
@@ -592,6 +661,9 @@ public sealed class World
         }
     }
 
+    /// <summary>
+    /// Destroys an entity.
+    /// </summary>
     public void Destroy(Entity entity)
     {
         var destroyOrder = new List<Entity>();
@@ -609,27 +681,42 @@ public sealed class World
         TouchQueryLayout();
     }
 
+    /// <summary>
+    /// Links a child to a parent.
+    /// </summary>
     public void Link(Entity parent, Entity child)
     {
         _hierarchy.Link(this, parent, child);
     }
 
+    /// <summary>
+    /// Unlinks a child.
+    /// </summary>
     public void Unlink(Entity child)
     {
         GetRequiredLocation(child);
         _hierarchy.Unlink(child);
     }
 
+    /// <summary>
+    /// Tries to get a parent entity.
+    /// </summary>
     public bool TryGetParent(Entity child, out Entity parent)
     {
         return _hierarchy.TryGetParent(this, child, out parent);
     }
 
+    /// <summary>
+    /// Gets the direct children of an entity.
+    /// </summary>
     public List<Entity> GetChildren(Entity parent)
     {
         return _hierarchy.GetChildren(this, parent);
     }
 
+    /// <summary>
+    /// Adds a component to an entity.
+    /// </summary>
     public void Add<T>(Entity entity, T component)
     {
         var componentType = GetComponentType<T>();
@@ -653,6 +740,9 @@ public sealed class World
         MoveEntity(entity, info, destination, componentType, in component);
     }
 
+    /// <summary>
+    /// Sets a component on an entity.
+    /// </summary>
     public void Set<T>(Entity entity, T component)
     {
         var componentType = GetComponentType<T>();
@@ -670,23 +760,35 @@ public sealed class World
         MoveEntity(entity, info, destination, componentType, in component);
     }
 
+    /// <summary>
+    /// Removes a component from an entity.
+    /// </summary>
     public void Remove<T>(Entity entity)
     {
         var componentType = GetComponentType<T>();
         RemoveBoxed(entity, componentType);
     }
 
+    /// <summary>
+    /// Starts a query builder.
+    /// </summary>
     public QueryBuilder Query()
     {
         return new QueryBuilder(this, QueryFilter.Empty);
     }
 
+    /// <summary>
+    /// Gets a single-component query.
+    /// </summary>
     public Query Query<T1>()
     {
         var componentType = GetComponentType<T1>();
         return GetOrCreateQuery(QueryFilter.CreateRequired(componentType));
     }
 
+    /// <summary>
+    /// Gets a two-component query.
+    /// </summary>
     public Query Query<T1, T2>()
     {
         var componentType1 = GetComponentType<T1>();
@@ -694,6 +796,9 @@ public sealed class World
         return GetOrCreateQuery(QueryFilter.CreateRequired(componentType1, componentType2));
     }
 
+    /// <summary>
+    /// Gets a three-component query.
+    /// </summary>
     public Query Query<T1, T2, T3>()
     {
         var componentType1 = GetComponentType<T1>();
@@ -702,11 +807,17 @@ public sealed class World
         return GetOrCreateQuery(QueryFilter.CreateRequired(componentType1, componentType2, componentType3));
     }
 
+    /// <summary>
+    /// Gets a query from a description.
+    /// </summary>
     public Query Query(in QueryDescription description)
     {
         return GetOrCreateQuery(GetOrCreateQueryFilter(description));
     }
 
+    /// <summary>
+    /// Tries to get an entity location.
+    /// </summary>
     public bool TryGetLocation(Entity entity, out EntityInfo info)
     {
         if (entity.Id < 0 || entity.Id >= _locations.Count)
@@ -726,6 +837,9 @@ public sealed class World
         return true;
     }
 
+    /// <summary>
+    /// Returns whether an entity is alive.
+    /// </summary>
     public bool IsAlive(Entity entity)
     {
         return TryGetLocation(entity, out _);
@@ -1198,6 +1312,9 @@ public sealed class World
         PushFreeId(entity.Id, nextVersion);
     }
 
+    /// <summary>
+    /// Replays compiled frame commands.
+    /// </summary>
     public void Replay(in FrameCommands frameCommands)
     {
         var state = frameCommands.State;
@@ -1259,6 +1376,9 @@ public sealed class World
         }
     }
 
+    /// <summary>
+    /// Replays frame commands and captures reverse commands.
+    /// </summary>
     public ReverseFrameCommands ReplayWithReverse(in FrameCommands frameCommands)
     {
         var componentTypeCache = new Dictionary<Type, ComponentType>();
@@ -1267,6 +1387,9 @@ public sealed class World
         return reverseFrameCommands;
     }
 
+    /// <summary>
+    /// Rewinds a reversed frame.
+    /// </summary>
     public void Rewind(in ReverseFrameCommands reverseFrameCommands)
     {
         var state = reverseFrameCommands.State;

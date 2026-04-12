@@ -1,9 +1,25 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageId>MiniArch</PackageId>
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <Authors>HUANG-weiqin</Authors>
+    <Company>MiniArch</Company>
+    <Description>A compact archetype ECS runtime for C#.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageOutputPath>$(MSBuildProjectDirectory)\..\..\artifacts\nuget</PackageOutputPath>
+    <RepositoryUrl>https://github.com/HUANG-weiqin/miniArch</RepositoryUrl>
+    <PackageTags>ecs;archetype;game-development;dotnet</PackageTags>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
 
 </Project>

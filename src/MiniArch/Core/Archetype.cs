@@ -1,5 +1,8 @@
 namespace MiniArch.Core;
 
+/// <summary>
+/// Stores entities for one signature.
+/// </summary>
 public sealed class Archetype
 {
     private readonly List<Chunk> _chunks = new();
@@ -7,6 +10,9 @@ public sealed class Archetype
     private readonly Type[]? _componentTypes;
     private readonly int[] _componentIdToColumnIndex;
 
+    /// <summary>
+    /// Creates an archetype for a signature.
+    /// </summary>
     public Archetype(Signature signature, int chunkCapacity = 4)
         : this(signature, null, chunkCapacity, false)
     {
@@ -38,14 +44,29 @@ public sealed class Archetype
         _chunks.Add(CreateChunk(typedColumns));
     }
 
+    /// <summary>
+    /// Gets the archetype signature.
+    /// </summary>
     public Signature Signature { get; }
 
+    /// <summary>
+    /// Gets the entity count.
+    /// </summary>
     public int EntityCount { get; private set; }
 
+    /// <summary>
+    /// Gets the chunk list.
+    /// </summary>
     public IReadOnlyList<Chunk> Chunks => _chunks;
 
+    /// <summary>
+    /// Gets the cached edges.
+    /// </summary>
     public ArchetypeEdges Edges { get; } = new();
 
+    /// <summary>
+    /// Adds an entity with components.
+    /// </summary>
     public void AddEntity(Entity entity, IReadOnlyDictionary<ComponentType, object?> components, out int chunkIndex, out int rowIndex)
     {
         var chunk = GetWritableChunk(out chunkIndex);
@@ -53,6 +74,9 @@ public sealed class Archetype
         EntityCount++;
     }
 
+    /// <summary>
+    /// Reserves a row for an entity.
+    /// </summary>
     public Chunk ReserveEntity(Entity entity, out int chunkIndex, out int rowIndex)
     {
         var chunk = GetWritableChunk(out chunkIndex);
@@ -141,6 +165,9 @@ public sealed class Archetype
         return rangeCount;
     }
 
+    /// <summary>
+    /// Removes an entity by location.
+    /// </summary>
     public bool RemoveEntity(int chunkIndex, int rowIndex, out Entity movedEntity)
     {
         var moved = _chunks[chunkIndex].RemoveAt(rowIndex, out movedEntity);
@@ -148,6 +175,9 @@ public sealed class Archetype
         return moved;
     }
 
+    /// <summary>
+    /// Gets a chunk by index.
+    /// </summary>
     public Chunk GetChunk(int chunkIndex) => _chunks[chunkIndex];
 
     internal bool TryGetComponentIndex(ComponentType component, out int columnIndex)

@@ -3,6 +3,9 @@ using System.Threading;
 
 namespace MiniArch.Core;
 
+/// <summary>
+/// Cached archetype and chunk query.
+/// </summary>
 public sealed class Query
 {
     private readonly World _world;
@@ -19,12 +22,24 @@ public sealed class Query
         _filter = filter;
     }
 
+    /// <summary>
+    /// Gets the required signature.
+    /// </summary>
     public Signature RequiredSignature => _requiredSignature ??= _filter.Required.ToSignature();
 
+    /// <summary>
+    /// Gets the excluded signature.
+    /// </summary>
     public Signature ExcludedSignature => _excludedSignature ??= _filter.Excluded.ToSignature();
 
+    /// <summary>
+    /// Gets the any-match signature.
+    /// </summary>
     public Signature AnySignature => _anySignature ??= _filter.Any.ToSignature();
 
+    /// <summary>
+    /// Adds a required type.
+    /// </summary>
     public Query With<T>()
     {
         var componentType = _world.Components.GetOrCreate<T>();
@@ -37,6 +52,9 @@ public sealed class Query
         return _world.GetOrCreateQuery(new QueryFilter(required, _filter.Excluded, _filter.Any));
     }
 
+    /// <summary>
+    /// Adds an excluded type.
+    /// </summary>
     public Query Without<T>()
     {
         var componentType = _world.Components.GetOrCreate<T>();
@@ -49,6 +67,9 @@ public sealed class Query
         return _world.GetOrCreateQuery(new QueryFilter(_filter.Required, excluded, _filter.Any));
     }
 
+    /// <summary>
+    /// Adds an any-match type.
+    /// </summary>
     public Query Any<T>()
     {
         var componentType = _world.Components.GetOrCreate<T>();
@@ -61,10 +82,19 @@ public sealed class Query
         return _world.GetOrCreateQuery(new QueryFilter(_filter.Required, _filter.Excluded, any));
     }
 
+    /// <summary>
+    /// Alias for <see cref="Any{T}()" />.
+    /// </summary>
     public Query Or<T>() => Any<T>();
 
+    /// <summary>
+    /// Gets the refresh count.
+    /// </summary>
     public int RefreshCount => Volatile.Read(ref _refreshCount);
 
+    /// <summary>
+    /// Gets the matched archetypes.
+    /// </summary>
     public IReadOnlyList<Archetype> MatchedArchetypes
     {
         get
@@ -73,6 +103,9 @@ public sealed class Query
         }
     }
 
+    /// <summary>
+    /// Gets the matched chunks.
+    /// </summary>
     public IReadOnlyList<Chunk> MatchedChunks
     {
         get
@@ -81,12 +114,18 @@ public sealed class Query
         }
     }
 
+    /// <summary>
+    /// Gets the matched chunks as a span.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpan<Chunk> GetChunkSpan()
     {
         return EnsureMatchingSnapshot().Chunks;
     }
 
+    /// <summary>
+    /// Gets a chunk enumerable.
+    /// </summary>
     public ChunkEnumerable Chunks => new(this);
 
     internal Archetype[] EnsureMatchingArchetypes()

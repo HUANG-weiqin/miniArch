@@ -12,3 +12,4 @@ TestResults/
 *.nettrace
 *.etlx
 *.trx
+artifacts/

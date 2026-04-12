@@ -1,5 +1,8 @@
 namespace MiniArch.Ecs;
 
+/// <summary>
+/// Entity-only query facade that supports direct foreach enumeration.
+/// </summary>
 public readonly struct Query
 {
     private readonly MiniArch.Core.Query _query;
@@ -9,11 +12,20 @@ public readonly struct Query
         _query = query;
     }
 
+    /// <summary>
+    /// Gets the underlying advanced query.
+    /// </summary>
     public MiniArch.Core.Query Advanced => _query;
 
+    /// <summary>
+    /// Returns the struct enumerator used by foreach.
+    /// </summary>
     public QueryEnumerator GetEnumerator() => new(_query);
 }
 
+/// <summary>
+/// Struct enumerator over entities.
+/// </summary>
 public struct QueryEnumerator
 {
     private readonly MiniArch.Core.Chunk[] _chunks;
@@ -33,8 +45,14 @@ public struct QueryEnumerator
         _current = default;
     }
 
+    /// <summary>
+    /// Gets the current entity.
+    /// </summary>
     public Entity Current => _current;
 
+    /// <summary>
+    /// Advances to the next entity.
+    /// </summary>
     public bool MoveNext()
     {
         while (true)
@@ -69,6 +87,9 @@ public struct QueryEnumerator
     }
 }
 
+/// <summary>
+/// Single-component query facade.
+/// </summary>
 public readonly struct Query<T>
 {
     private readonly MiniArch.Core.Query _query;
@@ -80,11 +101,20 @@ public readonly struct Query<T>
         _componentType = componentType;
     }
 
+    /// <summary>
+    /// Gets the underlying advanced query.
+    /// </summary>
     public MiniArch.Core.Query Advanced => _query;
 
+    /// <summary>
+    /// Returns the struct enumerator used by foreach.
+    /// </summary>
     public QueryEnumerator<T> GetEnumerator() => new(_query, _componentType);
 }
 
+/// <summary>
+/// Two-component query facade.
+/// </summary>
 public readonly struct Query<T1, T2>
 {
     private readonly MiniArch.Core.Query _query;
@@ -101,11 +131,20 @@ public readonly struct Query<T1, T2>
         _componentType2 = componentType2;
     }
 
+    /// <summary>
+    /// Gets the underlying advanced query.
+    /// </summary>
     public MiniArch.Core.Query Advanced => _query;
 
+    /// <summary>
+    /// Returns the struct enumerator used by foreach.
+    /// </summary>
     public QueryEnumerator<T1, T2> GetEnumerator() => new(_query, _componentType1, _componentType2);
 }
 
+/// <summary>
+/// Row view for a single-component query.
+/// </summary>
 public readonly struct QueryItem<T>
 {
     private readonly T[]? _components;
@@ -118,8 +157,14 @@ public readonly struct QueryItem<T>
         _rowIndex = rowIndex;
     }
 
+    /// <summary>
+    /// Gets the current entity.
+    /// </summary>
     public Entity Entity { get; }
 
+    /// <summary>
+    /// Gets the current component by reference.
+    /// </summary>
     public ref readonly T Component
     {
         get
@@ -130,6 +175,9 @@ public readonly struct QueryItem<T>
     }
 }
 
+/// <summary>
+/// Row view for a two-component query.
+/// </summary>
 public readonly struct QueryItem<T1, T2>
 {
     private readonly T1[]? _first;
@@ -144,8 +192,14 @@ public readonly struct QueryItem<T1, T2>
         _rowIndex = rowIndex;
     }
 
+    /// <summary>
+    /// Gets the current entity.
+    /// </summary>
     public Entity Entity { get; }
 
+    /// <summary>
+    /// Gets the first component by reference.
+    /// </summary>
     public ref readonly T1 First
     {
         get
@@ -155,6 +209,9 @@ public readonly struct QueryItem<T1, T2>
         }
     }
 
+    /// <summary>
+    /// Gets the second component by reference.
+    /// </summary>
     public ref readonly T2 Second
     {
         get
@@ -165,6 +222,9 @@ public readonly struct QueryItem<T1, T2>
     }
 }
 
+/// <summary>
+/// Struct enumerator for single-component queries.
+/// </summary>
 public struct QueryEnumerator<T>
 {
     private readonly MiniArch.Core.Chunk[] _chunks;
@@ -188,8 +248,14 @@ public struct QueryEnumerator<T>
         _current = default;
     }
 
+    /// <summary>
+    /// Gets the current row view.
+    /// </summary>
     public QueryItem<T> Current => _current;
 
+    /// <summary>
+    /// Advances to the next matching row.
+    /// </summary>
     public bool MoveNext()
     {
         while (true)
@@ -225,6 +291,9 @@ public struct QueryEnumerator<T>
     }
 }
 
+/// <summary>
+/// Struct enumerator for two-component queries.
+/// </summary>
 public struct QueryEnumerator<T1, T2>
 {
     private readonly MiniArch.Core.Chunk[] _chunks;
@@ -255,8 +324,14 @@ public struct QueryEnumerator<T1, T2>
         _current = default;
     }
 
+    /// <summary>
+    /// Gets the current row view.
+    /// </summary>
     public QueryItem<T1, T2> Current => _current;
 
+    /// <summary>
+    /// Advances to the next matching row.
+    /// </summary>
     public bool MoveNext()
     {
         while (true)
