@@ -40,6 +40,12 @@ updated: 2026-04-12
 - throughput runner 只输出 `ops/s` 和相对差距，不承担采样定位职责；热点定位仍然交给 sampling profiler。
 - 首版先接 query workload，但 runner 结构必须允许后续挂接 `CreateMany`、`Remove`、`Destroy` 等热点。
 
+## 当前已验证的 throughput 结论
+
+- `query-with-all-entity`，`EntityCount=100000`，`Duration=10s`，`Repeat=5` 下，`MiniArch` 平均 `30881.78 ops/s`，`Arch` 平均 `27132.58 ops/s`，`MiniArch` 领先 `13.82%`
+- `query-with-all-component-span`，同样参数下，`MiniArch` 平均 `9630.12 ops/s`，`Arch` 平均 `17619.97 ops/s`，`MiniArch` 落后 `45.35%`
+- 这说明 steady-state 口径不能只看单一 query 形态；实体遍历与组件 span 读取的结论方向并不一致
+
 ## 认知模型
 
 - 理解这个模块时，应该把它看成：
