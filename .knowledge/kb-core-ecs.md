@@ -170,8 +170,8 @@ updated: 2026-04-12
   - `IsAlive` 不应该单独再维护一份“活着”状态；它必须和 `TryGetLocation` 共用同一条 version/location 校验链，避免 destroy/recycle 后出现双重真值来源
   - 性能验证必须看 `Arch` 对照数据，不能只看自己变快
   - 当前代码库里这页描述的是目标态，不是旧版 `Dictionary<ComponentType, object?>` 实现
-  - 当前并发保证只覆盖“world 无写入时的 query 并发只读”；不要误把它扩展理解成读写并发安全
-  - 如果并发读阶段第一次查询一个从未注册过的组件类型，`ComponentRegistry.GetOrCreate<T>()` 仍然会触发 registry 写入；这不属于当前保证范围
+- 当前并发保证只覆盖“world 无写入时的 query 并发只读”；不要误把它扩展理解成读写并发安全
+- `ComponentRegistry.GetOrCreate<T>()` 现在对并发懒注册是安全的，读路径无锁，写路径只在首次注册新类型时加小锁
 
 ## 关联模块
 

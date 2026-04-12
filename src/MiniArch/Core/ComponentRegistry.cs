@@ -1,5 +1,3 @@
-using System.Collections.ObjectModel;
-
 namespace MiniArch.Core;
 
 /// <summary>
@@ -7,8 +5,8 @@ namespace MiniArch.Core;
 /// </summary>
 public sealed class ComponentRegistry
 {
-    private readonly Dictionary<Type, ComponentType> _typeToId = new();
-    private readonly List<Type> _idToType = new();
+    private readonly object _writeLock = new();
+    private RegistrySnapshot _snapshot = new(new Dictionary<Type, ComponentType>(), Array.Empty<Type>());
 
     /// <summary>
     /// Gets or creates the id for <typeparamref name="T" />.
@@ -22,34 +20,52 @@ public sealed class ComponentRegistry
     {
         ArgumentNullException.ThrowIfNull(type);
 
-        if (_typeToId.TryGetValue(type, out var existing))
+        var snapshot = Volatile.Read(ref _snapshot);
+        if (snapshot.TypeToId.TryGetValue(type, out var existing))
         {
             return existing;
         }
 
-        var id = new ComponentType(_idToType.Count);
-        _typeToId[type] = id;
-        _idToType.Add(type);
-        return id;
+        lock (_writeLock)
+        {
+            snapshot = _snapshot;
+            if (snapshot.TypeToId.TryGetValue(type, out existing))
+            {
+                return existing;
+            }
+
+            var id = new ComponentType(snapshot.IdToType.Length);
+            var updatedTypeToId = new Dictionary<Type, ComponentType>(snapshot.TypeToId)
+            {
+                [type] = id,
+            };
+            var updatedIdToType = new Type[snapshot.IdToType.Length + 1];
+            Array.Copy(snapshot.IdToType, updatedIdToType, snapshot.IdToType.Length);
+            updatedIdToType[^1] = type;
+
+            Volatile.Write(ref _snapshot, new RegistrySnapshot(updatedTypeToId, updatedIdToType));
+            return id;
+        }
     }
 
     /// <summary>
     /// Tries to get the id for a type.
     /// </summary>
-    public bool TryGetId(Type type, out ComponentType id) => _typeToId.TryGetValue(type, out id);
+    public bool TryGetId(Type type, out ComponentType id) => Volatile.Read(ref _snapshot).TypeToId.TryGetValue(type, out id);
 
     /// <summary>
     /// Tries to get the type for an id.
     /// </summary>
     public bool TryGetType(ComponentType id, out Type type)
     {
-        if (!id.IsValid || id.Value >= _idToType.Count)
+        var snapshot = Volatile.Read(ref _snapshot);
+        if (!id.IsValid || id.Value >= snapshot.IdToType.Length)
         {
             type = null!;
             return false;
         }
 
-        type = _idToType[id.Value];
+        type = snapshot.IdToType[id.Value];
         return true;
     }
 
@@ -69,5 +85,7 @@ public sealed class ComponentRegistry
     /// <summary>
     /// Gets the registered type map.
     /// </summary>
-    public IReadOnlyDictionary<Type, ComponentType> RegisteredTypes => new ReadOnlyDictionary<Type, ComponentType>(_typeToId);
+    public IReadOnlyDictionary<Type, ComponentType> RegisteredTypes => Volatile.Read(ref _snapshot).TypeToId;
+
+    private sealed record RegistrySnapshot(IReadOnlyDictionary<Type, ComponentType> TypeToId, Type[] IdToType);
 }

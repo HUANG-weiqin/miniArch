@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using MiniArch.Core;
 
 namespace MiniArchTests.Core;
@@ -41,6 +42,30 @@ public sealed class ComponentRegistryTests
 
         var id = registry.GetOrCreate<Position>();
 
+        Assert.True(registry.TryGetType(id, out var resolved));
+        Assert.Equal(typeof(Position), resolved);
+    }
+
+    [Fact]
+    public async Task Concurrent_get_or_create_for_same_type_returns_same_id()
+    {
+        var registry = new ComponentRegistry();
+        var start = new Barrier(9);
+        var ids = new ConcurrentBag<ComponentType>();
+        var tasks = Enumerable.Range(0, 8)
+            .Select(_ => Task.Run(() =>
+            {
+                start.SignalAndWait();
+                ids.Add(registry.GetOrCreate<Position>());
+            }))
+            .ToArray();
+
+        start.SignalAndWait();
+        await Task.WhenAll(tasks);
+
+        Assert.Single(ids.Distinct());
+
+        var id = ids.First();
         Assert.True(registry.TryGetType(id, out var resolved));
         Assert.Equal(typeof(Position), resolved);
     }
