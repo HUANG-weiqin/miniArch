@@ -1,5 +1,74 @@
 namespace MiniArch.Ecs;
 
+public readonly struct Query
+{
+    private readonly MiniArch.Core.Query _query;
+
+    internal Query(MiniArch.Core.Query query)
+    {
+        _query = query;
+    }
+
+    public MiniArch.Core.Query Advanced => _query;
+
+    public QueryEnumerator GetEnumerator() => new(_query);
+}
+
+public struct QueryEnumerator
+{
+    private readonly MiniArch.Core.Chunk[] _chunks;
+    private int _chunkIndex;
+    private int _rowIndex;
+    private MiniArch.Core.Entity[]? _entities;
+    private int _count;
+    private Entity _current;
+
+    internal QueryEnumerator(MiniArch.Core.Query query)
+    {
+        _chunks = query.EnsureMatchingChunks();
+        _chunkIndex = -1;
+        _rowIndex = -1;
+        _entities = null;
+        _count = 0;
+        _current = default;
+    }
+
+    public Entity Current => _current;
+
+    public bool MoveNext()
+    {
+        while (true)
+        {
+            if (_entities is not null)
+            {
+                _rowIndex++;
+                if (_rowIndex < _count)
+                {
+                    _current = Entity.FromCore(_entities[_rowIndex]);
+                    return true;
+                }
+            }
+
+            _chunkIndex++;
+            if (_chunkIndex >= _chunks.Length)
+            {
+                return false;
+            }
+
+            var chunk = _chunks[_chunkIndex];
+            if (chunk.Count == 0)
+            {
+                _entities = null;
+                continue;
+            }
+
+            _entities = chunk.GetEntityStorage();
+            _count = chunk.Count;
+            _rowIndex = -1;
+        }
+    }
+}
+
 public readonly struct Query<T>
 {
     private readonly MiniArch.Core.Query _query;

@@ -85,4 +85,10 @@ public sealed class World
             _world.Components.GetOrCreate<T1>(),
             _world.Components.GetOrCreate<T2>());
     }
+
+    public Query Query(in QueryDescription description)
+    {
+        var coreDescription = description.ToCore();
+        return new Query(_world.Query(in coreDescription));
+    }
 }

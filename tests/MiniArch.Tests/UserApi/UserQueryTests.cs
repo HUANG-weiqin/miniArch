@@ -54,6 +54,23 @@ public sealed class UserQueryTests
     }
 
     [Fact]
+    public void Description_based_query_can_be_enumerated_directly_with_foreach()
+    {
+        var world = new World();
+        var description = new QueryDescription().With<Position>().Without<Velocity>();
+        var first = world.Create(new Position(11, 12));
+        world.Create(new Position(13, 14), new Velocity(15, 16));
+
+        var seen = new List<Entity>();
+        foreach (var entity in world.Query(in description))
+        {
+            seen.Add(entity);
+        }
+
+        Assert.Equal(new[] { first }, seen);
+    }
+
+    [Fact]
     public void TryGet_reads_existing_component_without_has_check()
     {
         var world = new World();
