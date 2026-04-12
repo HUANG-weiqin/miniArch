@@ -37,9 +37,46 @@ public readonly struct FrameCommands
     internal FrameCommandsState State => _state ?? throw new InvalidOperationException("Frame commands are not initialized.");
 }
 
+public readonly struct ReverseFrameCommands
+{
+    private static readonly IReadOnlyList<ReverseFrameEntity> EmptyRestoredEntities = Array.Empty<ReverseFrameEntity>();
+    private static readonly IReadOnlyList<Entity> EmptyEntities = Array.Empty<Entity>();
+    private static readonly IReadOnlyList<FrameLinkCommand> EmptyLinks = Array.Empty<FrameLinkCommand>();
+    private static readonly IReadOnlyList<FrameUnlinkCommand> EmptyUnlinks = Array.Empty<FrameUnlinkCommand>();
+    private static readonly IReadOnlyList<FrameEntityComponentCommand> EmptyComponentCommands = Array.Empty<FrameEntityComponentCommand>();
+    private static readonly IReadOnlyList<FrameEntityRemoveCommand> EmptyRemoves = Array.Empty<FrameEntityRemoveCommand>();
+
+    private readonly ReverseFrameCommandsState? _state;
+
+    internal ReverseFrameCommands(ReverseFrameCommandsState state)
+    {
+        _state = state;
+    }
+
+    public IReadOnlyList<ReverseFrameEntity> RestoredEntities => _state?.RestoredEntities ?? EmptyRestoredEntities;
+
+    public IReadOnlyList<Entity> DestroyedEntities => _state?.DestroyedEntities ?? EmptyEntities;
+
+    public IReadOnlyList<FrameLinkCommand> LinkCommands => _state?.LinkCommands ?? EmptyLinks;
+
+    public IReadOnlyList<FrameUnlinkCommand> UnlinkCommands => _state?.UnlinkCommands ?? EmptyUnlinks;
+
+    public IReadOnlyList<FrameEntityComponentCommand> AddCommands => _state?.AddCommands ?? EmptyComponentCommands;
+
+    public IReadOnlyList<FrameEntityComponentCommand> SetCommands => _state?.SetCommands ?? EmptyComponentCommands;
+
+    public IReadOnlyList<FrameEntityRemoveCommand> RemoveCommands => _state?.RemoveCommands ?? EmptyRemoves;
+
+    internal IReadOnlyList<Entity> ReservedEntities => _state?.ReservedEntities ?? EmptyEntities;
+
+    internal ReverseFrameCommandsState State => _state ?? throw new InvalidOperationException("Reverse frame commands are not initialized.");
+}
+
 public readonly record struct FrameCreatedEntity(Entity Entity, IReadOnlyList<FrameComponentValue> Components);
 
 public readonly record struct FrameComponentValue(Type ComponentType, object? Value);
+
+public readonly record struct ReverseFrameEntity(Entity Entity, IReadOnlyList<FrameComponentValue> Components, Entity Parent);
 
 public readonly record struct FrameLinkCommand(Entity Parent, Entity Child);
 
@@ -90,6 +127,45 @@ internal sealed class FrameCommandsState
     public Entity[] DestroyedEntities { get; }
 
     public Entity[] ReleasedEntities { get; }
+}
+
+internal sealed class ReverseFrameCommandsState
+{
+    public ReverseFrameCommandsState(
+        ReverseFrameEntity[] restoredEntities,
+        Entity[] destroyedEntities,
+        FrameLinkCommand[] linkCommands,
+        FrameUnlinkCommand[] unlinkCommands,
+        FrameEntityComponentCommand[] addCommands,
+        FrameEntityComponentCommand[] setCommands,
+        FrameEntityRemoveCommand[] removeCommands,
+        Entity[] reservedEntities)
+    {
+        RestoredEntities = restoredEntities;
+        DestroyedEntities = destroyedEntities;
+        LinkCommands = linkCommands;
+        UnlinkCommands = unlinkCommands;
+        AddCommands = addCommands;
+        SetCommands = setCommands;
+        RemoveCommands = removeCommands;
+        ReservedEntities = reservedEntities;
+    }
+
+    public ReverseFrameEntity[] RestoredEntities { get; }
+
+    public Entity[] DestroyedEntities { get; }
+
+    public FrameLinkCommand[] LinkCommands { get; }
+
+    public FrameUnlinkCommand[] UnlinkCommands { get; }
+
+    public FrameEntityComponentCommand[] AddCommands { get; }
+
+    public FrameEntityComponentCommand[] SetCommands { get; }
+
+    public FrameEntityRemoveCommand[] RemoveCommands { get; }
+
+    public Entity[] ReservedEntities { get; }
 }
 
 internal readonly record struct RecordedHierarchyCommand(Entity Child, Entity Parent, bool IsLink);

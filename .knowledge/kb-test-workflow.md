@@ -12,6 +12,7 @@ updated: 2026-04-12
   - 验证 ECS core 的行为
   - 覆盖实体生命周期、chunk 存储、结构迁移和 query
   - 作为 typed-column / direct-index 重构后的行为回归网
+  - 覆盖 rewind 路径对公开可观察 world 状态的回退：实体存活、组件值、hierarchy 关系和 query 结果
   - 提供 `Create / CreateMany / Add / Set / Remove / Destroy` 的 benchmark 口径
   - 为 `CreateMany` 单独区分 append-only、recycled ids、mixed ids 三类场景
   - 单独保留 query 相关的性能对比口径
@@ -55,11 +56,12 @@ updated: 2026-04-12
 - complex query benchmark 用固定 archetype 配比生成同一类 world 布局，并在测量区内执行 query + 命中 entity 遍历
   - 当前 `EntityCount` 档位覆盖 `128 / 256 / 512 / 1024 / 2048 / 10k / 50k / 100k`，用来同时观察小规模固定成本和大规模 steady-state 吞吐
   - query profiling 复用同一套 complex query world，但在 BenchmarkDotNet 之外跑固定时长循环，给 PerfView/Visual Studio CPU Usage 这类采样器一个干净窗口
-  - `scripts\verify.ps1` 统一跑 build + test
+- `scripts\verify.ps1` 统一跑 build + test
 - 和其他模块的交互方式：
   - 直接依赖 `MiniArch.Core`
   - 通过 `World` 和 `Query` 验证外部可见行为
   - 不直接测试私有实现细节
+  - rewind 相关入口主要分布在：`CommandBufferTests` 验证正反向命令行为与 reservation rollback，`QueryTests` 验证回退后的 query 可见性，`WorldStructuralChangeTests` 验证 destroy/restore 后的结构与查询恢复
 
 ## 决策
 
@@ -69,6 +71,11 @@ updated: 2026-04-12
 - 结构变化相关测试必须保留 `Set` 的 in-place 语义断言，因为这是 typed-column / direct-index 重构的核心安全网。
 - command buffer 需要单独锁定 `Playback()` 不改 world、跨 world `Replay()`、created final archetype 和 free-list/version 语义；这些不能靠立即生效 API 测试替代。
 - command buffer 新增 `Play()` 后，还需要锁定 `Play()` 与 `Playback()+Replay()` 的结果等价，并用 benchmark 对比它们的分配差异。
+- rewind 相关测试当前已经锁定 `World.ReplayWithReverse(...)` / `CommandBuffer.PlayWithReverse()` / `World.Rewind(...)` 的组合语义，并明确以“回到 replay 前公开可观察状态”为验收口径。
+- rewind 语义仍然不是“完全 internal state 镜像回滚”；测试只把 reserved entity 轨迹当作 replay reservation 对齐的必要条件，不把 query cache 等内部细节纳入镜像恢复范围。
+- 多帧 rewind 当前按栈式 `LIFO` 验证；测试不是任意顺序撤销，而是连续 capture reverse 后逆序回退到上一帧、再回到初始帧。
+- 端到端 rewind 覆盖已增强到“回到中间历史点后，按原后续 frame 序列重新 replay，最终状态一致”；验收仍只看公开可观察状态一致，不宣称完全 internal mirror rollback。
+- hierarchy 回退当前需要锁定 destroy subtree 语义：旧子树会恢复，当前帧中新建并随级联销毁一起消失的节点不会被恢复。
 - 如果目标是优化 command buffer 的 GC，还应补一条 allocation smoke test，至少断言 `Play()` 分配严格小于 `Playback()+Replay()`。
 - `ArchetypeTests` 需要覆盖“复用前面空掉的 chunk”这一行为；否则 `Remove` benchmark 的分配回退很难在功能测试里暴露出来。
 - `WorldLifecycleTests` 需要覆盖 `EnsureCapacity` 和 `CreateMany`，否则 `Create` 的分配优化和批量语义很容易在重构时被回退。
@@ -90,6 +97,11 @@ updated: 2026-04-12
 - `QueryDescription` 新增后，`QueryTests` / `QueryFilterTests` 还要覆盖 description 与 generic/builder 查询等价、同一 description 跨 world 复用、description 冷路径并发 materialize，以及公开类型视图不会暴露可变内部数组；否则“可复用描述 + 缓存 key”这层契约很容易被悄悄打破。
 - `CommandBufferTests` 需要同时覆盖 existing entity replay、created entity final-state、same-frame create+destroy 消除和并发 recording；否则很难看出 replay 顺序和 entity reservation 是否被悄悄改坏。
 - `CommandBufferTests` 里的 `Play()` 不应只跑手写 happy-path，还要覆盖复杂/随机脚本，避免短路径在 hierarchy 或 created/destroyed 混合帧上回退。
+- `CommandBufferTests` 现在还承担 rewind 主入口验证：existing entity 的 add/set/remove/destroy 回退、link/unlink 回退、destroy subtree 回退、随机多帧 LIFO 回退，以及 `PlayWithReverse()` 与 `Playback()+ReplayWithReverse(...)` 等价。
+- `CommandBufferTests` 还明确覆盖 replay-after-rewind 入口：`Same_frame_create_destroy_frame_can_replay_after_rewind_and_keeps_the_same_result` 与 `Create_survivor_frame_can_replay_after_rewind_and_keeps_the_same_result`，用来锁定 `ReverseFrameCommands` 会随公开状态一起带回 reserved entity 轨迹。
+- `CommandBufferTests` 现在还覆盖更强的历史回放路径：先 rewind 到中间历史点，再按原后续 frame 序列 replay，最终 world 状态必须与未回退前的终局一致。
+- `QueryTests` 现在覆盖多帧 rewind 后 query 结果恢复，避免只看 entity/component 状态而漏掉 query 可见性回退。
+- `WorldStructuralChangeTests` 现在覆盖 `ReplayWithReverse(...)` 后 restore destroyed entity 的 archetype/component/query 可见性，避免 destroy 回退只恢复活性不恢复结构。
 - 对会直接 mutate world 的 `record + play` 基准，必须避免让同一个 iteration 内的多次 workload 复用同一份 world state；当前仓库通过 `command-buffer` 专用 benchmark 子命令隔离这组口径
 - complex query benchmark world 应该优先用 direct-create 先落 `Position/Velocity/Team` 这类 query 核心组件，再补剩余组件；否则 `Create + Add + Add + ...` 会留下过多历史空 archetype，污染 query benchmark。
 - complex query benchmark 不能只测 query builder 创建；必须测实际 query 执行。
@@ -125,8 +137,9 @@ updated: 2026-04-12
 
 - 如果是第一次读这个模块，先看：
   - `IntegrationTests.cs`：最完整的端到端例子
-  - `CommandBufferTests.cs`：command buffer 专属语义、跨 world replay 和并发 recording
-  - `WorldStructuralChangeTests.cs`：结构迁移的关键行为
+  - `CommandBufferTests.cs`：command buffer 专属语义、`ReplayWithReverse(...)` / `PlayWithReverse()` / `Rewind(...)`、跨 world replay、并发 recording，以及 replay-after-rewind 的 `same-frame create+destroy` / `create-survivor` 入口
+  - `WorldStructuralChangeTests.cs`：结构迁移的关键行为，以及 destroy 后 reverse restore 的结构恢复
+  - `QueryTests.cs`：query 可见性、快照刷新，以及多帧 rewind 后的查询恢复
   - `StructuralChangeBenchmarks.cs`：`Create / CreateMany / Add / Set / Remove / Destroy` 与 Arch 的时间和分配对照
 - `CommandBufferBenchmarks.cs`：`record / playback only / replay only / play only / end-to-end` 口径
   - `CommandBufferSharedScenarios.cs`：共享脚本模型、MiniArch/Arch parity 执行器和结构摘要 helper
@@ -153,6 +166,11 @@ updated: 2026-04-12
 - 历史上容易出问题的地方：
   - 只跑局部测试，没看整体迁移是否破坏
   - 只跑 `CommandBufferTests`，却没回归 lifecycle / structural-change / query，容易漏掉对 world 基础契约的破坏
+  - 只断言 rewind 后实体又“活了”，却没检查 parent-child 和 query 结果是否也回到旧状态
+  - 只验证 rewind 后公开状态恢复，却没验证 created/transient frame 在 rewind 后还能再次 replay；reservation 轨迹丢失会让第二次 `ReplayWithReverse(...)` 失败
+  - 只验证“回退后能重放当前帧”，却没验证“从中间历史点继续按原后续 frame 序列 replay 后终局仍一致”；这样会漏掉跨多帧历史衔接问题
+  - 没覆盖 `Rewind(...)` 的 hierarchy 安全顺序：必须先恢复旧实体/旧 hierarchy，再销毁 replay 期间新建实体，否则新父节点的级联销毁会把已恢复旧实体误删
+  - 把多帧 rewind 当成任意顺序撤销来测，导致测试和当前 LIFO 契约不一致
   - 断言太宽泛，漏掉 chunk 级行为
   - 只看运行时，不看分配和 GC
   - `Remove` 只看时间变快，却没发现 archetype 没复用已有空 chunk，导致分配被隐藏放大
@@ -198,4 +216,7 @@ updated: 2026-04-12
 - `benchmarks/MiniArch.Benchmarks/CommandBufferBenchmarks.cs`：command buffer 性能入口
 - `benchmarks/MiniArch.Benchmarks/CommandBufferSharedScenarios.cs`：command buffer 共享场景与 parity helper
 - `tests/MiniArch.Tests/Core/CommandBufferParityTests.cs`：共享 benchmark 场景的跨引擎 parity tests
+- `tests/MiniArch.Tests/Core/CommandBufferTests.cs`：replay/reverse/rewind 主行为入口
+- `tests/MiniArch.Tests/Core/QueryTests.cs`：rewind 后 query 可见性恢复
+- `tests/MiniArch.Tests/Core/WorldStructuralChangeTests.cs`：destroy/restore 结构恢复
 - `scripts/profile-query.ps1`：复杂 query 采样 profiling 入口

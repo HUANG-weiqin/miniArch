@@ -1259,6 +1259,76 @@ public sealed class World
         }
     }
 
+    public ReverseFrameCommands ReplayWithReverse(in FrameCommands frameCommands)
+    {
+        var componentTypeCache = new Dictionary<Type, ComponentType>();
+        var reverseFrameCommands = CaptureReverseFrameCommands(in frameCommands, componentTypeCache);
+        Replay(in frameCommands);
+        return reverseFrameCommands;
+    }
+
+    public void Rewind(in ReverseFrameCommands reverseFrameCommands)
+    {
+        var state = reverseFrameCommands.State;
+        var componentTypeCache = new Dictionary<Type, ComponentType>();
+        BeginDeferredLayoutUpdates();
+        try
+        {
+            foreach (var restored in state.RestoredEntities)
+            {
+                RestoreDestroyedEntity(restored, componentTypeCache);
+            }
+
+            foreach (var link in state.LinkCommands)
+            {
+                Link(link.Parent, link.Child);
+            }
+
+            foreach (var unlink in state.UnlinkCommands)
+            {
+                if (IsAlive(unlink.Child))
+                {
+                    Unlink(unlink.Child);
+                }
+            }
+
+            foreach (var entity in state.DestroyedEntities)
+            {
+                if (IsAlive(entity))
+                {
+                    Destroy(entity);
+                }
+            }
+
+            foreach (var add in state.AddCommands)
+            {
+                AddBoxed(add.Entity, ResolveReplayComponentType(add.ComponentType, componentTypeCache), add.Value);
+            }
+
+            foreach (var set in state.SetCommands)
+            {
+                SetBoxed(set.Entity, ResolveReplayComponentType(set.ComponentType, componentTypeCache), set.Value);
+            }
+
+            foreach (var remove in state.RemoveCommands)
+            {
+                if (IsAlive(remove.Entity))
+                {
+                    RemoveBoxed(remove.Entity, ResolveReplayComponentType(remove.ComponentType, componentTypeCache));
+                }
+            }
+
+            foreach (var reserved in state.ReservedEntities)
+            {
+                RestoreReservedEntity(reserved);
+            }
+        }
+        finally
+        {
+            EndDeferredLayoutUpdates();
+        }
+    }
+
     internal void Replay(CommandBuffer.CompiledCommandBatch compiledCommands)
     {
         ArgumentNullException.ThrowIfNull(compiledCommands);
@@ -1321,6 +1391,94 @@ public sealed class World
         }
     }
 
+    private ReverseFrameCommands CaptureReverseFrameCommands(in FrameCommands frameCommands, Dictionary<Type, ComponentType> componentTypeCache)
+    {
+        var state = frameCommands.State;
+        var restoredEntities = new List<ReverseFrameEntity>();
+        var restoredEntitySet = new HashSet<Entity>();
+        var destroyedEntities = new List<Entity>(state.CreatedEntities.Length);
+        var linkCommands = new List<FrameLinkCommand>();
+        var unlinkCommands = new List<FrameUnlinkCommand>();
+        var addCommands = new List<FrameEntityComponentCommand>();
+        var setCommands = new List<FrameEntityComponentCommand>();
+        var removeCommands = new List<FrameEntityRemoveCommand>();
+        var destroyOrder = new List<Entity>();
+
+        foreach (var created in state.CreatedEntities)
+        {
+            destroyedEntities.Add(created.Entity);
+        }
+
+        foreach (var entity in state.DestroyedEntities)
+        {
+            if (IsAlive(entity))
+            {
+                destroyOrder.Clear();
+                _hierarchy.CollectDestroySubtree(this, entity, new HashSet<Entity>(), destroyOrder);
+
+                for (var index = 0; index < destroyOrder.Count; index++)
+                {
+                    var destroyedEntity = destroyOrder[index];
+                    if (restoredEntitySet.Add(destroyedEntity))
+                    {
+                        restoredEntities.Add(CaptureDestroyedEntity(destroyedEntity));
+                    }
+                }
+            }
+        }
+
+        restoredEntities.Sort((left, right) =>
+        {
+            var depthComparison = GetHierarchyDepth(left.Entity).CompareTo(GetHierarchyDepth(right.Entity));
+            if (depthComparison != 0)
+            {
+                return depthComparison;
+            }
+
+            var idComparison = left.Entity.Id.CompareTo(right.Entity.Id);
+            return idComparison != 0
+                ? idComparison
+                : left.Entity.Version.CompareTo(right.Entity.Version);
+        });
+
+        foreach (var link in state.LinkCommands)
+        {
+            CaptureReverseLink(link.Child, linkCommands, unlinkCommands);
+        }
+
+        foreach (var unlink in state.UnlinkCommands)
+        {
+            CaptureReverseUnlink(unlink.Child, linkCommands);
+        }
+
+        foreach (var add in state.AddCommands)
+        {
+            CaptureReverseComponentMutation(add.Entity, add.ComponentType, setCommands, removeCommands, componentTypeCache);
+        }
+
+        foreach (var set in state.SetCommands)
+        {
+            CaptureReverseComponentMutation(set.Entity, set.ComponentType, setCommands, removeCommands, componentTypeCache);
+        }
+
+        foreach (var remove in state.RemoveCommands)
+        {
+            CaptureReverseRemove(remove.Entity, remove.ComponentType, addCommands, componentTypeCache);
+        }
+
+        var reverseState = new ReverseFrameCommandsState(
+            restoredEntities.ToArray(),
+            destroyedEntities.ToArray(),
+            linkCommands.ToArray(),
+            unlinkCommands.ToArray(),
+            addCommands.ToArray(),
+            setCommands.ToArray(),
+            removeCommands.ToArray(),
+            state.ReservedEntities.ToArray());
+
+        return new ReverseFrameCommands(reverseState);
+    }
+
     internal void MaterializeReservedEntity(
         Entity entity,
         IReadOnlyList<FrameComponentValue> components,
@@ -1344,6 +1502,160 @@ public sealed class World
         }
 
         TouchQueryLayout();
+    }
+
+    private void CaptureReverseComponentMutation(
+        Entity entity,
+        Type runtimeType,
+        List<FrameEntityComponentCommand> setCommands,
+        List<FrameEntityRemoveCommand> removeCommands,
+        Dictionary<Type, ComponentType> componentTypeCache)
+    {
+        if (!TryGetLocation(entity, out var info))
+        {
+            return;
+        }
+
+        var componentType = ResolveReplayComponentType(runtimeType, componentTypeCache);
+        if (!info.Archetype.Signature.Contains(componentType))
+        {
+            removeCommands.Add(new FrameEntityRemoveCommand(entity, runtimeType));
+            return;
+        }
+
+        var existingValue = info.Archetype.GetChunk(info.ChunkIndex).GetComponent(componentType, info.RowIndex);
+        setCommands.Add(new FrameEntityComponentCommand(entity, runtimeType, existingValue));
+    }
+
+    private void CaptureReverseRemove(
+        Entity entity,
+        Type runtimeType,
+        List<FrameEntityComponentCommand> addCommands,
+        Dictionary<Type, ComponentType> componentTypeCache)
+    {
+        if (!TryGetLocation(entity, out var info))
+        {
+            return;
+        }
+
+        var componentType = ResolveReplayComponentType(runtimeType, componentTypeCache);
+        if (!info.Archetype.Signature.Contains(componentType))
+        {
+            return;
+        }
+
+        var existingValue = info.Archetype.GetChunk(info.ChunkIndex).GetComponent(componentType, info.RowIndex);
+        addCommands.Add(new FrameEntityComponentCommand(entity, runtimeType, existingValue));
+    }
+
+    private ReverseFrameEntity CaptureDestroyedEntity(Entity entity)
+    {
+        var info = GetRequiredLocation(entity);
+        var chunk = info.Archetype.GetChunk(info.ChunkIndex);
+        var components = info.Archetype.Signature.AsSpan();
+        var values = new FrameComponentValue[components.Length];
+        for (var index = 0; index < components.Length; index++)
+        {
+            var componentType = components[index];
+            values[index] = new FrameComponentValue(_components.GetType(componentType), chunk.GetComponent(componentType, info.RowIndex));
+        }
+
+        var parent = TryGetParent(entity, out var resolvedParent) ? resolvedParent : default;
+        return new ReverseFrameEntity(entity, values, parent);
+    }
+
+    private int GetHierarchyDepth(Entity entity)
+    {
+        var depth = 0;
+        var current = entity;
+        while (TryGetParent(current, out current))
+        {
+            depth++;
+        }
+
+        return depth;
+    }
+
+    private void CaptureReverseLink(
+        Entity child,
+        List<FrameLinkCommand> linkCommands,
+        List<FrameUnlinkCommand> unlinkCommands)
+    {
+        if (!TryGetLocation(child, out _))
+        {
+            return;
+        }
+
+        if (TryGetParent(child, out var parent))
+        {
+            linkCommands.Add(new FrameLinkCommand(parent, child));
+            return;
+        }
+
+        unlinkCommands.Add(new FrameUnlinkCommand(child));
+    }
+
+    private void CaptureReverseUnlink(Entity child, List<FrameLinkCommand> linkCommands)
+    {
+        if (TryGetParent(child, out var parent))
+        {
+            linkCommands.Add(new FrameLinkCommand(parent, child));
+        }
+    }
+
+    private void RestoreDestroyedEntity(ReverseFrameEntity restored, Dictionary<Type, ComponentType> componentTypeCache)
+    {
+        RemoveFreeId(restored.Entity.Id, restored.Entity.Version + 1);
+        _versions[restored.Entity.Id] = restored.Entity.Version;
+
+        var signature = BuildReplaySignature(restored.Components, componentTypeCache);
+        var archetype = GetOrCreateArchetype(signature);
+        var chunk = archetype.ReserveEntity(restored.Entity, out var chunkIndex, out var rowIndex);
+        _locations[restored.Entity.Id] = new EntityLocation(archetype, chunkIndex, rowIndex);
+
+        for (var index = 0; index < restored.Components.Count; index++)
+        {
+            var component = restored.Components[index];
+            chunk.SetComponent(ResolveReplayComponentType(component.ComponentType, componentTypeCache), rowIndex, component.Value);
+        }
+
+        if (restored.Parent.IsValid)
+        {
+            Link(restored.Parent, restored.Entity);
+        }
+
+        TouchQueryLayout();
+    }
+
+    private void RestoreReservedEntity(Entity entity)
+    {
+        if (entity.Id < 0 || entity.Id >= _locations.Count)
+        {
+            throw new InvalidOperationException($"Entity {entity} is stale or unknown.");
+        }
+
+        if (_locations[entity.Id].Archetype is not null)
+        {
+            throw new InvalidOperationException($"Entity {entity} is still materialized and cannot be restored as reserved.");
+        }
+
+        RemoveFreeId(entity.Id, entity.Version + 1);
+        _versions[entity.Id] = entity.Version;
+        _locations[entity.Id] = default;
+    }
+
+    private void RemoveFreeId(int id, int version)
+    {
+        for (var index = _freeIdCount - 1; index >= 0; index--)
+        {
+            if (_freeIds[index].Id != id || _freeIds[index].Version != version)
+            {
+                continue;
+            }
+
+            _freeIds[index] = _freeIds[--_freeIdCount];
+            return;
+        }
     }
 
     internal void MaterializeReservedEntity(

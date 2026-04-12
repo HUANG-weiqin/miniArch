@@ -66,6 +66,12 @@ public sealed class CommandBuffer
         _world.Replay(compiled);
     }
 
+    public ReverseFrameCommands PlayWithReverse()
+    {
+        var frame = Playback();
+        return _world.ReplayWithReverse(in frame);
+    }
+
     private CompiledCommandBatch Compile()
     {
         if (Interlocked.Exchange(ref _playedBack, 1) != 0)

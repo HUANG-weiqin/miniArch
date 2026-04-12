@@ -272,6 +272,54 @@ public sealed class QueryTests
         Assert.Equal(0, allocated);
     }
 
+    [Fact]
+    public void Query_results_restore_after_multi_frame_rewind_with_cascade_destroy()
+    {
+        var world = new World();
+        var root = world.Create();
+        var child = world.Create();
+        var grandChild = world.Create();
+        var sibling = world.Create();
+        world.Add(root, new Position(1, 1));
+        world.Add(child, new Position(2, 2));
+        world.Add(grandChild, new Position(3, 3));
+        world.Add(sibling, new Position(4, 4));
+        world.Link(root, child);
+        world.Link(child, grandChild);
+
+        var initialQuery = CaptureEnumeratedEntities(world.Query<Position>());
+
+        var frame1 = new CommandBuffer(world);
+        var branch = frame1.Create();
+        frame1.Add(branch, new Position(5, 5));
+        frame1.Link(child, branch);
+        var compiledFrame1 = frame1.Playback();
+        var reverse1 = world.ReplayWithReverse(in compiledFrame1);
+
+        var frame1Query = CaptureEnumeratedEntities(world.Query<Position>());
+        Assert.Equal(new[] { root, child, grandChild, sibling, branch }, frame1Query.OrderBy(static entity => entity.Id).ToArray());
+
+        var frame2 = new CommandBuffer(world);
+        var transient = frame2.Create();
+        frame2.Add(transient, new Position(6, 6));
+        frame2.Link(root, transient);
+        frame2.Destroy(root);
+        var compiledFrame2 = frame2.Playback();
+        var reverse2 = world.ReplayWithReverse(in compiledFrame2);
+
+        Assert.Equal(new[] { sibling }, CaptureEnumeratedEntities(world.Query<Position>()));
+
+        world.Rewind(in reverse2);
+
+        Assert.Equal(frame1Query.OrderBy(static entity => entity.Id).ToArray(), CaptureEnumeratedEntities(world.Query<Position>()).OrderBy(static entity => entity.Id).ToArray());
+
+        world.Rewind(in reverse1);
+
+        Assert.Equal(initialQuery.OrderBy(static entity => entity.Id).ToArray(), CaptureEnumeratedEntities(world.Query<Position>()).OrderBy(static entity => entity.Id).ToArray());
+        Assert.False(world.IsAlive(branch));
+        Assert.False(world.IsAlive(transient));
+    }
+
     private static World CreateWorldWithMatchingEntities()
     {
         var world = new World(chunkCapacity: 4);
