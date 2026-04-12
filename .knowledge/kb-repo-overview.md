@@ -2,7 +2,7 @@
 title: Repository Overview
 module: Workspace
 description: How to navigate the repo and where to start
-updated: 2026-04-11
+updated: 2026-04-12
 ---
 # Repository Overview
 
@@ -72,6 +72,7 @@ updated: 2026-04-11
 - 改这里时要特别小心：
   - 知识页改名后必须同步更新 `INDEX.md`
   - 脚本命令变化后必须同步更新 README
+  - 新增可复用脚本后，必须同步补到知识页入口里
 
 ## 关联模块
 

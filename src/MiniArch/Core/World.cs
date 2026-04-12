@@ -1,14 +1,25 @@
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Threading;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace MiniArch.Core;
 
 public sealed class World
 {
+    private const int DefaultChunkCapacity = 128;
     private const int EmptyArchetypeChunkCapacity = 1024;
     private const int EmptyArchetypeChunkCapacityThreshold = 128;
+    private const int AdaptiveChunkTargetBytes = 16 * 1024;
+    private const int AdaptiveMaxChunkCapacity = 1024;
     private const int StackAllocatedBatchRangeLimit = 128;
+    private static readonly ConcurrentDictionary<Type, int> ManagedTypeSizeCache = new();
+    private static readonly MethodInfo GetManagedTypeSizeMethod = typeof(World)
+        .GetMethod(nameof(GetManagedTypeSizeGeneric), BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("Unable to find managed type size helper.");
+    private static readonly int EntitySizeInBytes = GetManagedTypeSizeGeneric<Entity>();
 
     private readonly ComponentRegistry _components = new();
     private readonly Dictionary<Signature, Archetype> _archetypes = new();
@@ -17,12 +28,13 @@ public sealed class World
     private Dictionary<QueryFilter, Query> _queries = new();
     private Archetype[] _archetypeSnapshot = Array.Empty<Archetype>();
     private readonly int _chunkCapacity;
+    private readonly bool _adaptiveChunkCapacity;
     private RecycledEntity[] _freeIds;
     private int _freeIdCount;
     private int _archetypeGeneration;
     private int _queryLayoutGeneration;
 
-    public World(int chunkCapacity = 128, int entityCapacity = 64)
+    public World(int chunkCapacity = DefaultChunkCapacity, int entityCapacity = 64)
     {
         if (chunkCapacity <= 0)
         {
@@ -35,6 +47,7 @@ public sealed class World
         }
 
         _chunkCapacity = chunkCapacity;
+        _adaptiveChunkCapacity = chunkCapacity == DefaultChunkCapacity;
         _versions = new List<int>(entityCapacity);
         _locations = new List<EntityLocation>(entityCapacity);
         _freeIds = entityCapacity == 0 ? Array.Empty<RecycledEntity>() : new RecycledEntity[entityCapacity];
@@ -701,7 +714,51 @@ public sealed class World
             return Math.Max(_chunkCapacity, EmptyArchetypeChunkCapacity);
         }
 
-        return _chunkCapacity;
+        if (!_adaptiveChunkCapacity)
+        {
+            return _chunkCapacity;
+        }
+
+        var approximateBytesPerEntity = GetApproximateBytesPerEntity(signature);
+        if (approximateBytesPerEntity <= 0)
+        {
+            return _chunkCapacity;
+        }
+
+        var adaptiveChunkCapacity = AdaptiveChunkTargetBytes / approximateBytesPerEntity;
+        if (adaptiveChunkCapacity <= _chunkCapacity)
+        {
+            return _chunkCapacity;
+        }
+
+        return Math.Min(adaptiveChunkCapacity, AdaptiveMaxChunkCapacity);
+    }
+
+    private int GetApproximateBytesPerEntity(Signature signature)
+    {
+        var bytesPerEntity = EntitySizeInBytes;
+        var components = signature.AsSpan();
+        for (var index = 0; index < components.Length; index++)
+        {
+            bytesPerEntity += GetManagedTypeSize(_components.GetType(components[index]));
+        }
+
+        return bytesPerEntity;
+    }
+
+    private static int GetManagedTypeSize(Type componentType)
+    {
+        return ManagedTypeSizeCache.GetOrAdd(componentType, static type =>
+        {
+            return (int)GetManagedTypeSizeMethod
+                .MakeGenericMethod(type)
+                .Invoke(null, null)!;
+        });
+    }
+
+    private static int GetManagedTypeSizeGeneric<T>()
+    {
+        return Unsafe.SizeOf<T>();
     }
 
     private Type[] ResolveComponentTypes(Signature signature)

@@ -9,7 +9,7 @@ using MiniComponentType = MiniArch.Core.ComponentType;
 
 public class QueryBenchmarks
 {
-    [Params(10_000, 50_000, 100_000)]
+    [Params(128, 256, 512, 1024, 2048, 10_000, 50_000, 100_000)]
     public int EntityCount { get; set; }
 
     private MiniComplexQueryWorldState _miniState = null!;

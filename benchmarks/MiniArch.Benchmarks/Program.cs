@@ -17,6 +17,17 @@ public static class Program
             return;
         }
 
+        if (args.Length > 0 && string.Equals(args[0], "throughput", StringComparison.OrdinalIgnoreCase))
+        {
+            var exitCode = ThroughputRunner.RunFromCommandLine(
+                args[1..],
+                Console.Out,
+                Console.Error,
+                CancellationToken.None);
+            Environment.ExitCode = exitCode;
+            return;
+        }
+
         BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly)
             .Run(args, MiniArchBenchmarkConfig.Create());
     }

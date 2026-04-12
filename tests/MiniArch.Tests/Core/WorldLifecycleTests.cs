@@ -321,4 +321,36 @@ public sealed class WorldLifecycleTests
         Assert.Equal(0, secondFresh.ChunkIndex);
         Assert.Equal(3, secondFresh.RowIndex);
     }
+
+    [Fact]
+    public void Default_world_scales_chunk_capacity_for_dense_component_archetypes()
+    {
+        var world = new World();
+
+        for (var i = 0; i < 256; i++)
+        {
+            world.Create(new Position(i, i + 1), new Velocity(i + 2, i + 3));
+        }
+
+        var query = world.Query<Position, Velocity>();
+
+        Assert.Single(query.MatchedArchetypes);
+        Assert.Equal(1, query.GetChunkSpan().Length);
+    }
+
+    [Fact]
+    public void Explicit_chunk_capacity_keeps_fixed_chunk_boundaries()
+    {
+        var world = new World(chunkCapacity: 4);
+
+        for (var i = 0; i < 5; i++)
+        {
+            world.Create(new Position(i, i + 1), new Velocity(i + 2, i + 3));
+        }
+
+        var query = world.Query<Position, Velocity>();
+
+        Assert.Single(query.MatchedArchetypes);
+        Assert.Equal(2, query.GetChunkSpan().Length);
+    }
 }

@@ -70,6 +70,8 @@ updated: 2026-04-12
 - location metadata 不应该重复保存 version；version 已经由 world 级 metadata 持有，再在 location 里留一份会增加 mixed/free-list 路径的写放大与扩容成本。
 - 空签名 archetype 只存 entity 列，默认 chunk size 可以比普通 archetype 更大；这样能减少 empty-world `CreateMany` 的 chunk/range 数量，而不会把组件列内存一并放大。
 - `World` 默认 chunk 容量不能太小；过小的默认值会在结构迁移时制造大量微型 chunk，把分配和 GC 放大到不合理的程度。
+- 默认 `World()` 的非空 archetype 也不应一律固定在 `128 entities/chunk`；更合理的是按每实体近似字节数把 chunk 调到接近固定目标字节数，这样 query world 不会因为“小 chunk 过碎”被额外的 chunk 遍历次数拖慢。
+- 但显式传入的非默认 `chunkCapacity` 仍应被视为调用方的确定性约束，尤其是测试和调试场景；不要把它静默改写成自适应值。
 - `Archetype` 不能只把写入目标锁死在最后一个 chunk；结构迁移把实体移走后，前面空掉的 chunk 必须可复用，否则 `Remove -> 空 archetype` 会无意义地重新分配 chunk。
 - 但“可复用前面空 chunk”不等于“每次插入都线性扫所有 chunk”；remove-heavy / fragmented 场景最终还是要有 non-full chunk 的显式索引，否则 chunk 数一多，插入和 batch reserve 都会退化成扫描成本。
 - `ArchetypeEdges` 应该和其他热路径一样使用 component id 直索引，而不是继续停留在 `Dictionary<ComponentType, Archetype>`。
@@ -139,6 +141,8 @@ updated: 2026-04-12
 - query benchmark 里如果 world shape 仍通过多次 `Add` 逐步长成，会残留一批历史空 archetype；它们不一定代表 steady-state query 的真实读取成本。
 - query profiling 里如果 top1 看起来只是某个外层 `Execute` 包装函数，不要直接把锅甩给 wrapper；常见原因是 `Chunk.GetEntity(row)`、chunk 枚举等小函数被 JIT inline 后折叠进调用者。
 - 扁平 chunk snapshot 如果仍然只绑定 `ArchetypeGeneration`，会在“同 archetype 内追加到新 chunk”时静默读到过期 chunk 列表；这种 bug 只有在 chunk 容量很小或 world 很大时才容易暴露。
+- 如果默认 world 的 query 吞吐落后明显，而 profiling 又显示 refresh 不是热点，先检查“匹配 chunk 数是否显著多于 Arch”；这通常说明问题在 chunk 粒度，而不是 query matching 本身。
+- 自适应 chunk 容量只应覆盖默认 world；如果把显式 `chunkCapacity: 4` 这类测试配置也自动放大，会直接破坏很多依赖固定 chunk 边界的行为测试和诊断场景。
 - 容易误判的地方：
   - 以为 `Set<T>` 永远只是原地写入
   - 以为 `Remove<T>` 不存在时应该报错，而不是直接返回
