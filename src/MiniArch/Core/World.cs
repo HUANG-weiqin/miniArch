@@ -721,25 +721,7 @@ public sealed class World
     /// </summary>
     public void Add<T>(Entity entity, T component)
     {
-        var componentType = GetComponentType<T>();
-        var info = GetRequiredLocation(entity);
-        var archetype = info.Archetype;
-
-        if (archetype.TryGetComponentIndex(componentType, out var componentIndex))
-        {
-            archetype.GetChunk(info.ChunkIndex).SetComponentAtTyped(componentIndex, info.RowIndex, in component);
-            return;
-        }
-
-        if (archetype.Edges.TryGetAdd(componentType, out var cached) && cached is not null)
-        {
-            MoveEntity(entity, info, cached, componentType, in component);
-            return;
-        }
-
-        var destinationSignature = archetype.Signature.Add(componentType);
-        var destination = GetOrCreateDestinationArchetype(archetype, componentType, destinationSignature, isAdd: true);
-        MoveEntity(entity, info, destination, componentType, in component);
+        ApplyTypedAddOrSet(entity, GetComponentType<T>(), in component);
     }
 
     /// <summary>
@@ -747,19 +729,7 @@ public sealed class World
     /// </summary>
     public void Set<T>(Entity entity, T component)
     {
-        var componentType = GetComponentType<T>();
-        var info = GetRequiredLocation(entity);
-        var archetype = info.Archetype;
-
-        if (archetype.TryGetComponentIndex(componentType, out var componentIndex))
-        {
-            archetype.GetChunk(info.ChunkIndex).SetComponentAtTyped(componentIndex, info.RowIndex, in component);
-            return;
-        }
-
-        var destinationSignature = archetype.Signature.Add(componentType);
-        var destination = GetOrCreateDestinationArchetype(archetype, componentType, destinationSignature, isAdd: true);
-        MoveEntity(entity, info, destination, componentType, in component);
+        ApplyTypedAddOrSet(entity, GetComponentType<T>(), in component);
     }
 
     /// <summary>
@@ -888,6 +858,47 @@ public sealed class World
 
         _locations[entity.Id] = new EntityLocation(destination, destinationChunkIndex, destinationRowIndex);
         TouchQueryLayout();
+    }
+
+    private void ApplyTypedAddOrSet<T>(Entity entity, ComponentType componentType, in T component)
+    {
+        var info = GetRequiredLocation(entity);
+        var archetype = info.Archetype;
+
+        if (archetype.TryGetComponentIndex(componentType, out var componentIndex))
+        {
+            archetype.GetChunk(info.ChunkIndex).SetComponentAtTyped(componentIndex, info.RowIndex, in component);
+            return;
+        }
+
+        var destination = GetOrCreateAddDestinationArchetype(archetype, componentType);
+        MoveEntity(entity, info, destination, componentType, in component);
+    }
+
+    private void ApplyBoxedAddOrSet(Entity entity, ComponentType componentType, object? component)
+    {
+        var info = GetRequiredLocation(entity);
+        var archetype = info.Archetype;
+
+        if (archetype.TryGetComponentIndex(componentType, out _))
+        {
+            archetype.GetChunk(info.ChunkIndex).SetComponent(componentType, info.RowIndex, component);
+            return;
+        }
+
+        var destination = GetOrCreateAddDestinationArchetype(archetype, componentType);
+        MoveEntityBoxed(entity, info, destination, componentType, component);
+    }
+
+    private Archetype GetOrCreateAddDestinationArchetype(Archetype source, ComponentType componentType)
+    {
+        if (source.Edges.TryGetAdd(componentType, out var cached) && cached is not null)
+        {
+            return cached;
+        }
+
+        var destinationSignature = source.Signature.Add(componentType);
+        return GetOrCreateDestinationArchetype(source, componentType, destinationSignature, isAdd: true);
     }
 
     private Archetype GetOrCreateDestinationArchetype(Archetype source, ComponentType componentType, Signature destinationSignature, bool isAdd)
@@ -2305,24 +2316,7 @@ public sealed class World
 
     internal void AddBoxed(Entity entity, ComponentType componentType, object? component)
     {
-        var info = GetRequiredLocation(entity);
-        var archetype = info.Archetype;
-
-        if (archetype.TryGetComponentIndex(componentType, out _))
-        {
-            archetype.GetChunk(info.ChunkIndex).SetComponent(componentType, info.RowIndex, component);
-            return;
-        }
-
-        if (archetype.Edges.TryGetAdd(componentType, out var cached) && cached is not null)
-        {
-            MoveEntityBoxed(entity, info, cached, componentType, component);
-            return;
-        }
-
-        var destinationSignature = archetype.Signature.Add(componentType);
-        var destination = GetOrCreateDestinationArchetype(archetype, componentType, destinationSignature, isAdd: true);
-        MoveEntityBoxed(entity, info, destination, componentType, component);
+        ApplyBoxedAddOrSet(entity, componentType, component);
     }
 
     internal void SetBoxed(Entity entity, Type componentType, object? component)
@@ -2332,18 +2326,7 @@ public sealed class World
 
     internal void SetBoxed(Entity entity, ComponentType componentType, object? component)
     {
-        var info = GetRequiredLocation(entity);
-        var archetype = info.Archetype;
-
-        if (archetype.TryGetComponentIndex(componentType, out _))
-        {
-            archetype.GetChunk(info.ChunkIndex).SetComponent(componentType, info.RowIndex, component);
-            return;
-        }
-
-        var destinationSignature = archetype.Signature.Add(componentType);
-        var destination = GetOrCreateDestinationArchetype(archetype, componentType, destinationSignature, isAdd: true);
-        MoveEntityBoxed(entity, info, destination, componentType, component);
+        ApplyBoxedAddOrSet(entity, componentType, component);
     }
 
     internal void RemoveBoxed(Entity entity, Type componentType)

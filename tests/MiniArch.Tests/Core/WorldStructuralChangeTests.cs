@@ -190,6 +190,62 @@ public sealed class WorldStructuralChangeTests
     }
 
     [Fact]
+    public void Set_missing_component_adds_component()
+    {
+        var world = new World();
+        var entity = world.Create();
+
+        world.Set(entity, new Position(9, 9));
+
+        Assert.True(HasComponent<Position>(world, entity));
+        Assert.Equal(new Position(9, 9), GetComponentValue(world, entity));
+    }
+
+    [Fact]
+    public void Set_missing_component_preserves_existing_components()
+    {
+        var world = new World();
+        var entity = world.Create();
+
+        world.Add(entity, new Position(1, 2));
+        world.Set(entity, new Velocity(3, 4));
+
+        Assert.True(HasComponent<Position>(world, entity));
+        Assert.True(HasComponent<Velocity>(world, entity));
+        Assert.Equal(new Position(1, 2), GetComponentValue(world, entity));
+        Assert.Equal(new Velocity(3, 4), world.TryGetLocation(entity, out var info)
+            ? info.Archetype.GetChunk(info.ChunkIndex).GetComponent<Velocity>(world.Components.GetOrCreate<Velocity>(), info.RowIndex) 
+            : default);
+    }
+
+    [Fact]
+    public void Replay_set_missing_component_preserves_existing_components_and_rewind_restores_previous_shape()
+    {
+        var world = new World();
+        var entity = world.Create();
+        world.Add(entity, new Position(1, 2));
+
+        var buffer = new CommandBuffer(world);
+        buffer.Set(entity, new Velocity(3, 4));
+        var frame = buffer.Playback();
+
+        var reverse = world.ReplayWithReverse(in frame);
+
+        Assert.True(HasComponent<Position>(world, entity));
+        Assert.True(HasComponent<Velocity>(world, entity));
+        Assert.Equal(new Position(1, 2), GetComponentValue(world, entity));
+        Assert.Equal(new Velocity(3, 4), world.TryGetLocation(entity, out var info)
+            ? info.Archetype.GetChunk(info.ChunkIndex).GetComponent<Velocity>(world.Components.GetOrCreate<Velocity>(), info.RowIndex)
+            : default);
+
+        world.Rewind(in reverse);
+
+        Assert.True(HasComponent<Position>(world, entity));
+        Assert.False(HasComponent<Velocity>(world, entity));
+        Assert.Equal(new Position(1, 2), GetComponentValue(world, entity));
+    }
+
+    [Fact]
     public void Remove_missing_component_is_noop_and_rewind_keeps_world_unchanged()
     {
         var world = new World();
