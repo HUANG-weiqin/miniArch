@@ -92,6 +92,18 @@ public sealed class CommandBuffer
     }
 
     /// <summary>
+    /// Compiles the buffered commands into a bidirectional world delta.
+    /// </summary>
+    public WorldDelta PlaybackDelta()
+    {
+        var compiled = Compile();
+        var frame = compiled.ToFrameCommands();
+        var delta = _world.CaptureDelta(in frame);
+        Clear();
+        return delta;
+    }
+
+    /// <summary>
     /// Compiles and replays the buffered commands.
     /// </summary>
     /// <returns><c>true</c> if at least one command was replayed; otherwise, <c>false</c>.</returns>

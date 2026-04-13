@@ -1,8 +1,8 @@
 ---
 title: Command Buffer Runtime
 module: MiniArch.Core CommandBuffer
-description: Implemented command buffer model, fixed replay order, recording concurrency scope, and validation notes
-updated: 2026-04-12
+description: Implemented command buffer model, fixed replay order, world delta capture/apply, recording concurrency scope, and validation notes
+updated: 2026-04-13
 ---
 # Command Buffer Runtime
 
@@ -11,9 +11,11 @@ updated: 2026-04-12
 - 这个模块负责：
   - 提供 `CommandBuffer` 录制层，把结构变化和 hierarchy 变化先记成延迟命令
   - `CommandBuffer` 本体可以长期持有；`Playback()` / `Play()` / `PlayWithReverse()` 在消费当前批次后会自动清空记录，允许下一帧复用同一个实例，避免每帧新建 buffer
+  - 提供 `PlaybackDelta()`，把当前批次编译成双向 `WorldDelta`，用于跨实例顺序同步和同实例正反 apply
   - 说明 `Playback()` 编译后的固定顺序：`create -> link/unlink -> add -> set -> remove -> destroy`
   - 提供 `Play()` 短路径，在不物化 `FrameCommands` 的情况下直接把同样的编译结果提交给 owning world
   - 说明 `World.Replay(in FrameCommands)` 的 batch mutation 与 query 可见性边界
+  - 提供 `World.ApplyDeltaForward(...)` / `World.ApplyDeltaBackward(...)`，按 entity 级 `Before/After` 公开状态快照推进或回退 world
   - 提供 rewind 配套入口：`World.ReplayWithReverse(...)` 在 replay 前捕获回退信息，`CommandBuffer.PlayWithReverse()` 把 `Playback()+ReplayWithReverse(...)` 串成一步，`World.Rewind(...)` 按 reverse frame 回退
   - 说明 `ReverseFrameCommands` 的定位：它记录的是把 world 从“当前 frame 已提交后的状态”退回到“提交前公开可观察状态”所需的最小反向命令集，并额外携带 reserved entity 轨迹信息，让 rewind 后同一帧可以再次成功 replay
   - 约束并发只覆盖 recording，不把 `World` 变成并发写安全对象
@@ -29,14 +31,18 @@ updated: 2026-04-12
   - `src/MiniArch/Core/CommandBufferShard.cs`：线程本地 shard，避免 recording 热路径共享锁
   - `src/MiniArch/Core/CommandBufferEntityAllocator.cs`：线程安全地从 `World` 预留真实 entity handle
   - `src/MiniArch/Core/FrameCommands.cs`：编译后的 frame IR，可保留并重放到同步 world
+  - `src/MiniArch/Core/WorldDelta.cs`：双向 entity-level public-state delta，公开保存 `Before/After` 两端快照，内部额外带 `ReservedEntities/ReleasedEntities` 以对齐 replay 的句柄轨迹
   - `src/MiniArch/Core/World.cs`：`ReserveDeferredEntity`、`ReleaseReservedEntity`、`Replay(in FrameCommands)`、boxed structural mutation
 - 数据流 / 控制流：
   - 工作线程通过 `CommandBuffer` 只记录命令；`Create()` 会立刻从 world 预留真实 `Entity`
   - `Playback()` 和 `Play()` 共享同一套合并/归约逻辑，但 compile 现在改成“按 shard 直接归约到最终批次”，不再先把所有 shard 扁平化成中间大 `List`
+  - `PlaybackDelta()` 复用 `Compile() -> ToFrameCommands()`，然后从当前 world 读取候选 entity 的 `Before` 公开状态，再在内存中的 shadow public state 上按 `create -> link/unlink -> add -> set -> remove -> destroy` 推导 `After`；同时保留 frame 的 `ReservedEntities/ReleasedEntities`，让 delta-forward 与 replay 在 transient frame 后的下一次 `Create()` 句柄轨迹保持一致
   - 对同帧 newly-created entity，`Playback()` 直接预计算 final signature 和 final component payload
   - 同帧 `create + destroy` 不会 materialize 到 world，而是放进 `ReleasedEntities`，在 replay 时回收到 free-list 并提升 version
+  - `WorldDelta` 的 destroy 不是显式 destroy root 列表，而是最终公开效果；生成阶段会在 shadow hierarchy 上展开 destroy 闭包，并把 same-frame transient entity 折叠掉
   - `Play()` 走 owning-world 专用 compiled batch，不再先物化 `FrameCommands`；created entity 的 internal batch 会尽量复用 compile 阶段结果，减少 `ToArray` / `ToList` / LINQ 分配
   - `Replay()` 先 materialize surviving creates，再执行 `link/unlink -> add -> set -> remove -> destroy`
+  - `ApplyDeltaForward()` 会先按 replay 语义对齐 `ReservedEntities/ReleasedEntities`，再 materialize 目标态为 alive 的 entity、同步全量组件、同步 parent，最后销毁目标态为 `null` 的 entity；`ApplyDeltaBackward()` 末尾会恢复本帧 reserved entity 轨迹，保证 created/transient frame backward 后仍可再次 forward 到同一结果
   - `ReplayWithReverse(...)` 先根据 replay 前的 live world 捕获 `ReverseFrameCommands`，再执行正常 `Replay(...)`
   - reverse capture 除了旧组件值、旧 parent-child 和 destroyed subtree，还会把本帧 `FrameCommands.ReservedEntities` 一并带进 reverse frame；`Rewind(...)` 末尾会恢复这些 reserved handles 的 reservation 轨迹，而不是只恢复公开组件状态
   - `Rewind(...)` 的安全顺序是：先恢复被 destroy 的旧实体、旧组件值和旧 hierarchy，再销毁本次 replay 期间新建且当前仍存活的实体，最后恢复 link/unlink、add/set/remove 带来的公开状态；这样可避免 replay 期间新建的父节点在销毁时级联误删刚恢复出来的旧实体
@@ -53,6 +59,11 @@ updated: 2026-04-12
 
 - 当前已落地的方向是“多线程 `recording` + 单线程 `replay`”；`World` 本身仍不是并发写安全。
 - 当不需要保留 frame 或跨 world replay 时，应优先用 `Play()`；它复用同样语义，但省掉 `FrameCommands` 物化分配。
+- `WorldDelta` 的定位是“可逆的公开状态差异”，不是 `FrameCommands` 的重命名；第一版与 `FrameCommands` / `ReverseFrameCommands` 并存，不立即替代底层 replay IR。
+- `WorldDelta` 只承诺公开状态同态：`IsAlive`、组件值、parent 关系和派生 query 可见性一致；不承诺 free-list、version 历史、chunk 布局等内部状态一致。
+- 但为了让 delta-forward 的后续 `Create()` 轨迹不偏离 replay，`WorldDelta` 内部仍会保留 `ReservedEntities/ReleasedEntities`；这些不是公开 API 主语义的一部分，但属于 apply 阶段必须执行的 runtime 对齐信息。
+- `WorldDelta` 可以用于不同 `World` 实例之间的顺序同步，但前提是同类 runtime、同步基线和 entity 身份对齐；第一版不解决 entity remap。
+- `WorldDelta` 采用 entity 级双向 `Before/After` 全量快照，而不是稀疏 patch；`Parent` 直接视作 entity 公开状态的一部分。
 - `ReverseFrameCommands` 不是通用快照，也不承诺恢复内部缓存或历史中间态；它只保证 `IsAlive`、组件值、hierarchy parent-child、以及 query 枚举结果这类公开可观察 world 状态回到 replay 前，并只额外恢复 replay reservation 对齐所需的 reserved entity 轨迹，不扩展成“完全 internal state 镜像回滚”。
 - rewind 的使用模型是相邻帧、栈式 `LIFO` 回退；测试覆盖的是连续 `ReplayWithReverse(...)` 后按压栈逆序 `Rewind(...)`，不把它当成任意乱序撤销系统。
 - 端到端测试现在还覆盖“回到中间历史点后，按原后续 frame 序列重新 replay，最终公开可观察状态一致”；这锁定了 rewind 不只要能回去，还要能沿原历史重新走回同一个结果。
@@ -87,9 +98,11 @@ updated: 2026-04-12
   - `reserved entity handle`
   - `operation bucket`
   - `FrameCommands`
+  - `WorldDelta`
 - 常见误解：
   - 以为 `command buffer` 等于 world 从此支持多线程写
   - 以为 `Playback()` 已经把 world 改了；实际上真正 mutation 发生在 `Replay()`
+  - 以为 `WorldDelta` 只是把 `FrameCommands` 改了个名字；实际上它是 entity 级双向公开状态快照，不再直接暴露命令桶
   - 以为 `CommandBuffer` 只能消费一次；当前实现是“消费当前批次后清空，随后可继续复用同一个实例”
   - 以为 `Set<T>` 永远只是值更新；当前实现里组件不存在时它仍会退化成结构变更
   - 以为 rewind 会恢复所有内部实现细节；当前契约只覆盖公开可观察状态，不覆盖 query cache 这类内部中间态
@@ -100,10 +113,13 @@ updated: 2026-04-12
   - `src/MiniArch/Core/CommandBuffer.cs`：recording API、bucket compile、created-entity final-state 预计算
   - `src/MiniArch/Core/CommandBuffer.cs` 里的 `Play()`：短路径提交入口
   - `src/MiniArch/Core/FrameCommands.cs`：compiled frame IR、跨 world replay 的数据边界
+  - `src/MiniArch/Core/WorldDelta.cs`：双向 delta 的公开数据结构
   - `src/MiniArch/Core/World.cs`：`ReserveDeferredEntity` / `ReleaseReservedEntity` / `Replay()` 的挂接点
 - 如果是修 bug，先看：
 - `tests/MiniArch.Tests/Core/CommandBufferTests.cs`：playback/replay 契约、created final state、free-list reuse、并发 recording
 - `tests/MiniArch.Tests/Core/CommandBufferParityTests.cs`：共享 `MiniArch vs Arch` benchmark 场景的最终结构摘要是否一致
+  - `tests/MiniArch.Tests/Core/CommandBufferTests.cs`：`PlaybackDelta()` / `ApplyDeltaForward()` / `ApplyDeltaBackward()`、跨实例 delta apply、cascade destroy 与 transient 折叠
+  - `tests/MiniArch.Tests/Core/CommandBufferTests.cs`：`Delta_forward_matches_replay_for_next_create_after_same_frame_transient_destroy`，验证 delta-forward 与 replay 在 transient frame 后的下一次 `Create()` 句柄轨迹一致
   - `tests/MiniArch.Tests/Core/CommandBufferTests.cs`：`ReplayWithReverse(...)` / `PlayWithReverse()` / `Rewind(...)`、LIFO 多帧回退、destroy subtree 回退，以及 `same-frame create+destroy replay-after-rewind` / `create-survivor replay-after-rewind`
   - `tests/MiniArch.Tests/Core/WorldStructuralChangeTests.cs`：existing entity 的 structural semantics 是否仍与立即生效 API 对齐
   - `tests/MiniArch.Tests/Core/QueryTests.cs`：batch replay 后 query 可见性和快照失效
@@ -119,8 +135,11 @@ updated: 2026-04-12
 - 历史上容易出问题的地方：
   - 把 `add/set/remove` 当成完全可交换操作；existing entity 和 created entity 的归约规则并不相同
   - 忘记释放同帧 `create + destroy` 的 reserved entity，导致 id 被永远占用
+  - 误把 `WorldDelta` 的 destroy 当成显式 destroy root 列表；它记录的是最终公开效果，生成时必须在 shadow hierarchy 上展开 destroy 闭包
+  - 误把 same-frame `create + destroy` 或“create 后挂到 doomed subtree 再同帧消失”的临时实体留进 `WorldDelta`；这会把净变化为 `0` 的 transient entity 错误暴露出去
   - replay 期间逐条触发 query layout 失效，导致额外开销和观察窗口不稳定
   - 为了优化 `Play()` 而在 `Playback()` compile 阶段提前污染 source world 的组件注册；这会破坏“`Playback()` 不改 world”的边界
+  - 在 `ApplyDeltaForward/Backward()` 中如果先 destroy 再同步存活 entity 的组件或 parent，容易破坏同一 delta 内其他 entity 的目标状态；当前顺序是 materialize -> components -> parent -> destroy
   - replay/rewind benchmark 如果在测量区里通过 snapshot restore 或重建 world 来“顺手 reset”，会把外层恢复成本混进 `ReplayWithReverse(...)` / `Rewind(...)` 结果
   - `Rewind only` benchmark 如果不是先在 setup 里用真实 `ReplayWithReverse(...)` 产出 `ReverseFrameCommands`，而是用人工拼装或测量区内现抓 reverse，结果就不能代表真实 rewind API 的独立成本
   - 把 rewind 当成通用 undo；当前 reverse frame 是按一次 replay 捕获并按 LIFO 使用的，乱序回退不在契约内

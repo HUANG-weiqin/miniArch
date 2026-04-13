@@ -61,6 +61,283 @@ public sealed class CommandBufferTests
     }
 
     [Fact]
+    public void Playback_delta_does_not_mutate_world_and_can_be_applied_to_another_world()
+    {
+        var source = new World();
+        var replica = new World();
+
+        var sourceEntity = source.Create();
+        source.Add(sourceEntity, new Position(1, 2));
+        source.Add(sourceEntity, new Health(3));
+
+        var replicaEntity = replica.Create();
+        replica.Add(replicaEntity, new Position(1, 2));
+        replica.Add(replicaEntity, new Health(3));
+
+        var buffer = new CommandBuffer(source);
+        buffer.Set(sourceEntity, new Position(9, 9));
+        buffer.Add(sourceEntity, new Velocity(4, 5));
+        buffer.Remove<Health>(sourceEntity);
+
+        var before = CapturePublicState(source, [sourceEntity]);
+
+        var delta = buffer.PlaybackDelta();
+
+        Assert.Equal(before, CapturePublicState(source, [sourceEntity]));
+
+        source.ApplyDeltaForward(in delta);
+        replica.ApplyDeltaForward(in delta);
+
+        AssertWorldStatesMatch(source, replica, sourceEntity);
+        Assert.Equal(new Position(9, 9), GetComponentValue<Position>(source, sourceEntity));
+        Assert.True(HasComponent<Velocity>(source, sourceEntity));
+        Assert.False(HasComponent<Health>(source, sourceEntity));
+    }
+
+    [Fact]
+    public void Playback_delta_can_be_applied_backward_to_restore_the_previous_public_state()
+    {
+        var world = new World();
+        var entity = world.Create();
+        world.Add(entity, new Position(1, 2));
+        world.Add(entity, new Health(10));
+
+        var before = CapturePublicState(world, [entity]);
+
+        var buffer = new CommandBuffer(world);
+        buffer.Set(entity, new Position(7, 8));
+        buffer.Add(entity, new Velocity(3, 4));
+        buffer.Remove<Health>(entity);
+
+        var delta = buffer.PlaybackDelta();
+
+        world.ApplyDeltaForward(in delta);
+        Assert.NotEqual(before, CapturePublicState(world, [entity]));
+
+        world.ApplyDeltaBackward(in delta);
+
+        Assert.Equal(before, CapturePublicState(world, [entity]));
+    }
+
+    [Fact]
+    public void Playback_delta_handles_link_unlink_and_cascade_destroy()
+    {
+        var world = new World();
+        var root = world.Create();
+        var child = world.Create();
+        var grandChild = world.Create();
+        var outside = world.Create();
+        world.Add(root, new Health(10));
+        world.Add(child, new Position(1, 1));
+        world.Add(grandChild, new Velocity(2, 2));
+        world.Add(outside, new Position(3, 3));
+        world.Link(root, child);
+        world.Link(child, grandChild);
+
+        var before = CapturePublicState(world, [root, child, grandChild, outside]);
+
+        var buffer = new CommandBuffer(world);
+        buffer.Unlink(child);
+        buffer.Link(outside, child);
+        buffer.Destroy(root);
+
+        var delta = buffer.PlaybackDelta();
+
+        world.ApplyDeltaForward(in delta);
+
+        Assert.False(world.IsAlive(root));
+        Assert.True(world.IsAlive(child));
+        Assert.True(world.IsAlive(grandChild));
+        Assert.True(world.TryGetParent(child, out var movedParent));
+        Assert.Equal(outside, movedParent);
+        Assert.True(world.TryGetParent(grandChild, out var restoredChildParent));
+        Assert.Equal(child, restoredChildParent);
+
+        world.ApplyDeltaBackward(in delta);
+
+        Assert.Equal(before, CapturePublicState(world, [root, child, grandChild, outside]));
+    }
+
+    [Fact]
+    public void Playback_delta_restores_an_existing_subtree_after_cascade_destroy()
+    {
+        var world = new World();
+        var root = world.Create();
+        var child = world.Create();
+        var grandChild = world.Create();
+        world.Add(root, new Health(10));
+        world.Add(child, new Position(1, 1));
+        world.Add(grandChild, new Velocity(2, 2));
+        world.Link(root, child);
+        world.Link(child, grandChild);
+
+        var before = CapturePublicState(world, [root, child, grandChild]);
+
+        var buffer = new CommandBuffer(world);
+        buffer.Destroy(root);
+
+        var delta = buffer.PlaybackDelta();
+
+        world.ApplyDeltaForward(in delta);
+        Assert.False(world.IsAlive(root));
+        Assert.False(world.IsAlive(child));
+        Assert.False(world.IsAlive(grandChild));
+
+        world.ApplyDeltaBackward(in delta);
+
+        Assert.Equal(before, CapturePublicState(world, [root, child, grandChild]));
+    }
+
+    [Fact]
+    public void Playback_delta_omits_same_frame_transient_entities_that_never_become_publicly_alive()
+    {
+        var world = new World();
+        var doomedRoot = world.Create();
+        world.Add(doomedRoot, new Health(10));
+
+        var buffer = new CommandBuffer(world);
+        var transient = buffer.Create();
+        buffer.Add(transient, new Position(5, 5));
+        buffer.Link(doomedRoot, transient);
+        buffer.Destroy(doomedRoot);
+
+        var delta = buffer.PlaybackDelta();
+
+        Assert.DoesNotContain(delta.Entries, entry => entry.Entity == transient);
+
+        world.ApplyDeltaForward(in delta);
+        Assert.False(world.IsAlive(doomedRoot));
+        Assert.False(world.IsAlive(transient));
+
+        world.ApplyDeltaBackward(in delta);
+        Assert.True(world.IsAlive(doomedRoot));
+        Assert.False(world.IsAlive(transient));
+    }
+
+    [Fact]
+    public void Delta_frames_can_be_applied_tick_by_tick_to_another_world()
+    {
+        var source = new World();
+        var replica = new World();
+
+        var tick1 = new CommandBuffer(source);
+        var parent = tick1.Create();
+        var child = tick1.Create();
+        tick1.Add(parent, new Health(10));
+        tick1.Add(child, new Position(1, 2));
+        tick1.Link(parent, child);
+        var delta1 = tick1.PlaybackDelta();
+
+        source.ApplyDeltaForward(in delta1);
+        replica.ApplyDeltaForward(in delta1);
+        AssertWorldStatesMatch(source, replica, parent, child);
+
+        var tick2 = new CommandBuffer(source);
+        tick2.Set(parent, new Health(20));
+        tick2.Set(child, new Position(7, 8));
+        tick2.Add(child, new Velocity(3, 4));
+        var delta2 = tick2.PlaybackDelta();
+
+        source.ApplyDeltaForward(in delta2);
+        replica.ApplyDeltaForward(in delta2);
+        AssertWorldStatesMatch(source, replica, parent, child);
+
+        var tick3 = new CommandBuffer(source);
+        tick3.Destroy(child);
+        var replacement = tick3.Create();
+        tick3.Add(replacement, new Position(9, 9));
+        var delta3 = tick3.PlaybackDelta();
+
+        source.ApplyDeltaForward(in delta3);
+        replica.ApplyDeltaForward(in delta3);
+        AssertWorldStatesMatch(source, replica, parent, child, replacement);
+    }
+
+    [Fact]
+    public void Same_frame_create_destroy_delta_can_reapply_after_backward_and_keep_the_same_result()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+        var transient = buffer.Create();
+        buffer.Add(transient, new Position(3, 3));
+        buffer.Destroy(transient);
+        var delta = buffer.PlaybackDelta();
+        var emptyState = CapturePublicState(world, [transient]);
+
+        world.ApplyDeltaForward(in delta);
+        var firstState = CapturePublicState(world, [transient]);
+
+        world.ApplyDeltaBackward(in delta);
+
+        Assert.Equal(emptyState, CapturePublicState(world, [transient]));
+
+        world.ApplyDeltaForward(in delta);
+        var secondState = CapturePublicState(world, [transient]);
+
+        Assert.Equal(firstState, secondState);
+
+        world.ApplyDeltaBackward(in delta);
+        Assert.False(world.IsAlive(transient));
+    }
+
+    [Fact]
+    public void Create_survivor_delta_can_reapply_after_backward_and_keep_the_same_result()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+        var survivor = buffer.Create();
+        buffer.Add(survivor, new Position(7, 8));
+        buffer.Add(survivor, new Health(10));
+        var delta = buffer.PlaybackDelta();
+
+        world.ApplyDeltaForward(in delta);
+        var firstState = CapturePublicState(world, [survivor]);
+
+        world.ApplyDeltaBackward(in delta);
+
+        Assert.False(world.IsAlive(survivor));
+
+        world.ApplyDeltaForward(in delta);
+        var secondState = CapturePublicState(world, [survivor]);
+
+        Assert.Equal(firstState, secondState);
+        Assert.True(world.IsAlive(survivor));
+        Assert.Equal(new Position(7, 8), GetComponentValue<Position>(world, survivor));
+        Assert.Equal(new Health(10), GetComponentValue<Health>(world, survivor));
+
+        world.ApplyDeltaBackward(in delta);
+        Assert.False(world.IsAlive(survivor));
+    }
+
+    [Fact]
+    public void Delta_forward_matches_replay_for_next_create_after_same_frame_transient_destroy()
+    {
+        var replayWorld = new World();
+        var deltaWorld = new World();
+
+        var replayBuffer = new CommandBuffer(replayWorld);
+        var replayTransient = replayBuffer.Create();
+        replayBuffer.Add(replayTransient, new Position(3, 3));
+        replayBuffer.Destroy(replayTransient);
+        var frame = replayBuffer.Playback();
+        replayWorld.Replay(in frame);
+
+        var deltaBuffer = new CommandBuffer(deltaWorld);
+        var deltaTransient = deltaBuffer.Create();
+        deltaBuffer.Add(deltaTransient, new Position(3, 3));
+        deltaBuffer.Destroy(deltaTransient);
+        var delta = deltaBuffer.PlaybackDelta();
+        deltaWorld.ApplyDeltaForward(in delta);
+
+        var replayNextBuffer = new CommandBuffer(replayWorld);
+        var replayNext = replayNextBuffer.Create();
+        var deltaNextBuffer = new CommandBuffer(deltaWorld);
+        var deltaNext = deltaNextBuffer.Create();
+
+        Assert.Equal(replayNext, deltaNext);
+    }
+
+    [Fact]
     public void Playback_does_not_mutate_world_and_replay_with_reverse_can_restore_the_previous_public_state()
     {
         var world = new World();

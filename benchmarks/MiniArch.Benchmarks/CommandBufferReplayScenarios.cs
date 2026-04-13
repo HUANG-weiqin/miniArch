@@ -119,6 +119,56 @@ public sealed class CommandBufferReplayExecution : IDisposable
     }
 }
 
+public sealed class CommandBufferDeltaExecution : IDisposable
+{
+    private readonly byte[] _baselineSnapshot;
+
+    internal CommandBufferDeltaExecution(
+        CommandBufferReplayScenarioDefinition scenario,
+        World world,
+        WorldDelta delta,
+        byte[] baselineSnapshot)
+    {
+        Scenario = scenario;
+        CurrentWorld = world;
+        Delta = delta;
+        _baselineSnapshot = baselineSnapshot;
+    }
+
+    public CommandBufferReplayScenarioDefinition Scenario { get; }
+
+    public World CurrentWorld { get; private set; }
+
+    public WorldDelta Delta { get; }
+
+    public void ApplyForward()
+    {
+        var delta = Delta;
+        CurrentWorld.ApplyDeltaForward(in delta);
+    }
+
+    public void ApplyBackward()
+    {
+        var delta = Delta;
+        CurrentWorld.ApplyDeltaBackward(in delta);
+    }
+
+    public void ResetToBaseline()
+    {
+        CurrentWorld = LoadBaselineSnapshot(_baselineSnapshot);
+    }
+
+    public void Dispose()
+    {
+    }
+
+    private static World LoadBaselineSnapshot(byte[] snapshot)
+    {
+        using var stream = new MemoryStream(snapshot, writable: false);
+        return WorldSnapshot.Load(stream);
+    }
+}
+
 public static class CommandBufferReplayScenarios
 {
     public static IEnumerable<CommandBufferReplayScenarioDefinition> CreateBenchmarkedScenarios(int entityCount)
@@ -146,6 +196,16 @@ public static class CommandBufferReplayScenarios
         var world = LoadSnapshot(baselineSnapshot);
 
         return new CommandBufferReplayExecution(scenario, world, frame, baselineSnapshot, baselineSummary, replayedSummary);
+    }
+
+    public static CommandBufferDeltaExecution PrepareDelta(CommandBufferReplayScenarioDefinition scenario)
+    {
+        using var playback = PreparePlayback(scenario);
+
+        var baselineSnapshot = SaveSnapshot(playback.World);
+        var delta = playback.Buffer.PlaybackDelta();
+        var world = LoadSnapshot(baselineSnapshot);
+        return new CommandBufferDeltaExecution(scenario, world, delta, baselineSnapshot);
     }
 
     public static CommandBufferWorldSummary SummarizeWorld(string scenarioName, World world)

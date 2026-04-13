@@ -47,6 +47,31 @@ public sealed class ThroughputRunnerTests
     }
 
     [Fact]
+    public void TryParse_accepts_world_delta_workload()
+    {
+        var args = new[]
+        {
+            "--workload", "world-delta",
+            "--engine", "miniarch",
+            "--entity-count", "50000",
+            "--duration", "3",
+            "--warmup", "2",
+            "--repeat", "4",
+        };
+
+        var parsed = ThroughputOptions.TryParse(args, out var options, out var error);
+
+        Assert.True(parsed);
+        Assert.Null(error);
+        Assert.Equal(ThroughputWorkload.WorldDelta, options.Workload);
+        Assert.Equal(ThroughputEngine.MiniArch, options.Engine);
+        Assert.Equal(50000, options.EntityCount);
+        Assert.Equal(TimeSpan.FromSeconds(3), options.Duration);
+        Assert.Equal(2, options.WarmupIterations);
+        Assert.Equal(4, options.RepeatCount);
+    }
+
+    [Fact]
     public void Run_executes_workload_for_each_requested_engine()
     {
         var options = new ThroughputOptions(
@@ -70,6 +95,28 @@ public sealed class ThroughputRunnerTests
             Assert.True(summary.MedianOpsPerSecond > 0);
         });
         Assert.NotNull(report.Comparison);
+    }
+
+    [Fact]
+    public void Run_executes_world_delta_workload_for_miniarch()
+    {
+        var options = new ThroughputOptions(
+            ThroughputWorkload.WorldDelta,
+            ThroughputEngine.MiniArch,
+            EntityCount: 10_000,
+            Duration: TimeSpan.FromMilliseconds(50),
+            WarmupIterations: 1,
+            RepeatCount: 2);
+
+        var report = ThroughputRunner.Run(options, TextWriter.Null, CancellationToken.None);
+
+        var summary = Assert.Single(report.EngineSummaries);
+        Assert.Equal(ThroughputEngine.MiniArch, summary.Engine);
+        Assert.Equal(2, summary.Runs.Count);
+        Assert.True(summary.AverageOpsPerSecond > 0);
+        Assert.True(summary.MedianOpsPerSecond > 0);
+        Assert.True(summary.BestOpsPerSecond > 0);
+        Assert.Null(report.Comparison);
     }
 
     [Fact]

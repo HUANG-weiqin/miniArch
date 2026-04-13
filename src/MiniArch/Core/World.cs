@@ -1381,6 +1381,22 @@ public sealed class World
     }
 
     /// <summary>
+    /// Applies a world delta forward.
+    /// </summary>
+    public void ApplyDeltaForward(in WorldDelta delta)
+    {
+        ApplyDelta(in delta, forward: true);
+    }
+
+    /// <summary>
+    /// Applies a world delta backward.
+    /// </summary>
+    public void ApplyDeltaBackward(in WorldDelta delta)
+    {
+        ApplyDelta(in delta, forward: false);
+    }
+
+    /// <summary>
     /// Rewinds a reversed frame.
     /// </summary>
     public void Rewind(in ReverseFrameCommands reverseFrameCommands)
@@ -1504,6 +1520,488 @@ public sealed class World
         finally
         {
             EndDeferredLayoutUpdates();
+        }
+    }
+
+    internal WorldDelta CaptureDelta(in FrameCommands frameCommands)
+    {
+        var state = frameCommands.State;
+        var candidateEntities = new HashSet<Entity>();
+
+        foreach (var created in state.CreatedEntities)
+        {
+            candidateEntities.Add(created.Entity);
+        }
+
+        foreach (var add in state.AddCommands)
+        {
+            candidateEntities.Add(add.Entity);
+        }
+
+        foreach (var set in state.SetCommands)
+        {
+            candidateEntities.Add(set.Entity);
+        }
+
+        foreach (var remove in state.RemoveCommands)
+        {
+            candidateEntities.Add(remove.Entity);
+        }
+
+        foreach (var link in state.LinkCommands)
+        {
+            candidateEntities.Add(link.Child);
+        }
+
+        foreach (var unlink in state.UnlinkCommands)
+        {
+            candidateEntities.Add(unlink.Child);
+        }
+
+        foreach (var entity in state.DestroyedEntities)
+        {
+            CollectCurrentDestroyClosure(entity, candidateEntities);
+        }
+
+        var beforeStates = new Dictionary<Entity, WorldEntityPublicState>();
+        var shadowStates = new Dictionary<Entity, DeltaEntityState>();
+        foreach (var entity in candidateEntities)
+        {
+            if (!TryCaptureEntityPublicState(entity, out var publicState))
+            {
+                continue;
+            }
+
+            beforeStates.Add(entity, publicState);
+            shadowStates.Add(entity, DeltaEntityState.FromPublicState(publicState));
+        }
+
+        foreach (var created in state.CreatedEntities)
+        {
+            shadowStates[created.Entity] = DeltaEntityState.FromCreatedComponents(created.Components);
+        }
+
+        foreach (var link in state.LinkCommands)
+        {
+            if (shadowStates.TryGetValue(link.Child, out var childState) && childState.Exists)
+            {
+                childState.Parent = link.Parent;
+            }
+        }
+
+        foreach (var unlink in state.UnlinkCommands)
+        {
+            if (shadowStates.TryGetValue(unlink.Child, out var childState) && childState.Exists)
+            {
+                childState.Parent = default;
+            }
+        }
+
+        foreach (var add in state.AddCommands)
+        {
+            if (shadowStates.TryGetValue(add.Entity, out var entityState) && entityState.Exists)
+            {
+                entityState.Components[add.ComponentType] = add.Value;
+            }
+        }
+
+        foreach (var set in state.SetCommands)
+        {
+            if (shadowStates.TryGetValue(set.Entity, out var entityState) && entityState.Exists)
+            {
+                entityState.Components[set.ComponentType] = set.Value;
+            }
+        }
+
+        foreach (var remove in state.RemoveCommands)
+        {
+            if (shadowStates.TryGetValue(remove.Entity, out var entityState) && entityState.Exists)
+            {
+                entityState.Components.Remove(remove.ComponentType);
+            }
+        }
+
+        foreach (var entity in state.DestroyedEntities)
+        {
+            var destroyClosure = CollectShadowDestroyClosure(entity, shadowStates);
+            for (var index = 0; index < destroyClosure.Count; index++)
+            {
+                if (shadowStates.TryGetValue(destroyClosure[index], out var entityState))
+                {
+                    entityState.Exists = false;
+                    entityState.Parent = default;
+                    entityState.Components.Clear();
+                }
+            }
+        }
+
+        var orderedEntities = new List<Entity>(candidateEntities);
+        orderedEntities.Sort(static (left, right) =>
+        {
+            var idComparison = left.Id.CompareTo(right.Id);
+            return idComparison != 0 ? idComparison : left.Version.CompareTo(right.Version);
+        });
+
+        var entries = new List<WorldDeltaEntry>(orderedEntities.Count);
+        for (var index = 0; index < orderedEntities.Count; index++)
+        {
+            var entity = orderedEntities[index];
+            var before = beforeStates.TryGetValue(entity, out var beforeState) ? beforeState : (WorldEntityPublicState?)null;
+            var after = shadowStates.TryGetValue(entity, out var afterState) && afterState.Exists
+                ? afterState.ToPublicState()
+                : (WorldEntityPublicState?)null;
+
+            if (PublicStatesEqual(before, after))
+            {
+                continue;
+            }
+
+            entries.Add(new WorldDeltaEntry(entity, before, after));
+        }
+
+        return new WorldDelta(new WorldDeltaState(entries.ToArray(), state.ReservedEntities.ToArray(), state.ReleasedEntities.ToArray()));
+    }
+
+    private void ApplyDelta(in WorldDelta delta, bool forward)
+    {
+        var entries = delta.Entries;
+        var componentTypeCache = new Dictionary<Type, ComponentType>();
+        BeginDeferredLayoutUpdates();
+        try
+        {
+            if (forward)
+            {
+                for (var index = 0; index < delta.ReservedEntities.Count; index++)
+                {
+                    EnsureReplayReservation(delta.ReservedEntities[index]);
+                }
+
+                for (var index = 0; index < delta.ReleasedEntities.Count; index++)
+                {
+                    ReleaseReservedEntity(delta.ReleasedEntities[index]);
+                }
+            }
+
+            for (var index = 0; index < entries.Count; index++)
+            {
+                var targetState = forward ? entries[index].After : entries[index].Before;
+                if (!targetState.HasValue || IsAlive(entries[index].Entity))
+                {
+                    continue;
+                }
+
+                MaterializeDeltaEntity(entries[index].Entity, targetState.Value, componentTypeCache);
+            }
+
+            for (var index = 0; index < entries.Count; index++)
+            {
+                var targetState = forward ? entries[index].After : entries[index].Before;
+                if (!targetState.HasValue)
+                {
+                    continue;
+                }
+
+                SynchronizeEntityComponents(entries[index].Entity, targetState.Value, componentTypeCache);
+            }
+
+            for (var index = 0; index < entries.Count; index++)
+            {
+                var targetState = forward ? entries[index].After : entries[index].Before;
+                if (!targetState.HasValue || !IsAlive(entries[index].Entity))
+                {
+                    continue;
+                }
+
+                if (targetState.Value.Parent.IsValid)
+                {
+                    Link(targetState.Value.Parent, entries[index].Entity);
+                }
+                else
+                {
+                    Unlink(entries[index].Entity);
+                }
+            }
+
+            for (var index = 0; index < entries.Count; index++)
+            {
+                var targetState = forward ? entries[index].After : entries[index].Before;
+                if (targetState.HasValue || !IsAlive(entries[index].Entity))
+                {
+                    continue;
+                }
+
+                Destroy(entries[index].Entity);
+            }
+
+            if (!forward)
+            {
+                for (var index = 0; index < delta.ReservedEntities.Count; index++)
+                {
+                    RestoreReservedEntity(delta.ReservedEntities[index]);
+                }
+            }
+        }
+        finally
+        {
+            EndDeferredLayoutUpdates();
+        }
+    }
+
+    private void CollectCurrentDestroyClosure(Entity root, HashSet<Entity> entities)
+    {
+        if (!IsAlive(root))
+        {
+            return;
+        }
+
+        var destroyOrder = new List<Entity>();
+        _hierarchy.CollectDestroySubtree(this, root, new HashSet<Entity>(), destroyOrder);
+        for (var index = 0; index < destroyOrder.Count; index++)
+        {
+            entities.Add(destroyOrder[index]);
+        }
+    }
+
+    private bool TryCaptureEntityPublicState(Entity entity, out WorldEntityPublicState publicState)
+    {
+        if (!TryGetLocation(entity, out var info))
+        {
+            publicState = default;
+            return false;
+        }
+
+        var chunk = info.Archetype.GetChunk(info.ChunkIndex);
+        var signature = info.Archetype.Signature.AsSpan();
+        var components = new FrameComponentValue[signature.Length];
+        for (var index = 0; index < signature.Length; index++)
+        {
+            var componentType = signature[index];
+            components[index] = new FrameComponentValue(_components.GetType(componentType), chunk.GetComponent(componentType, info.RowIndex));
+        }
+
+        NormalizeComponentValues(components);
+        publicState = new WorldEntityPublicState(TryGetParent(entity, out var parent) ? parent : default, components);
+        return true;
+    }
+
+    private static List<Entity> CollectShadowDestroyClosure(Entity root, Dictionary<Entity, DeltaEntityState> shadowStates)
+    {
+        var closure = new List<Entity>();
+        if (!shadowStates.TryGetValue(root, out var rootState) || !rootState.Exists)
+        {
+            return closure;
+        }
+
+        var stack = new Stack<Entity>();
+        var seen = new HashSet<Entity>();
+        stack.Push(root);
+        seen.Add(root);
+
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+            closure.Add(current);
+
+            foreach (var pair in shadowStates)
+            {
+                if (!pair.Value.Exists || pair.Value.Parent != current || !seen.Add(pair.Key))
+                {
+                    continue;
+                }
+
+                stack.Push(pair.Key);
+            }
+        }
+
+        return closure;
+    }
+
+    private static bool PublicStatesEqual(WorldEntityPublicState? left, WorldEntityPublicState? right)
+    {
+        if (!left.HasValue || !right.HasValue)
+        {
+            return left.HasValue == right.HasValue;
+        }
+
+        if (left.Value.Parent != right.Value.Parent)
+        {
+            return false;
+        }
+
+        var leftComponents = left.Value.Components;
+        var rightComponents = right.Value.Components;
+        if (leftComponents.Count != rightComponents.Count)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < leftComponents.Count; index++)
+        {
+            if (leftComponents[index].ComponentType != rightComponents[index].ComponentType ||
+                !Equals(leftComponents[index].Value, rightComponents[index].Value))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private void MaterializeDeltaEntity(Entity entity, WorldEntityPublicState publicState, Dictionary<Type, ComponentType> componentTypeCache)
+    {
+        EnsureDeltaEntitySlot(entity);
+        RemoveFreeIdById(entity.Id);
+        _versions[entity.Id] = entity.Version;
+
+        var signature = BuildReplaySignature(publicState.Components, componentTypeCache);
+        var archetype = GetOrCreateArchetype(signature);
+        var chunk = archetype.ReserveEntity(entity, out var chunkIndex, out var rowIndex);
+        _locations[entity.Id] = new EntityLocation(archetype, chunkIndex, rowIndex);
+
+        for (var index = 0; index < publicState.Components.Count; index++)
+        {
+            var component = publicState.Components[index];
+            chunk.SetComponent(ResolveReplayComponentType(component.ComponentType, componentTypeCache), rowIndex, component.Value);
+        }
+
+        TouchQueryLayout();
+    }
+
+    private void SynchronizeEntityComponents(Entity entity, WorldEntityPublicState publicState, Dictionary<Type, ComponentType> componentTypeCache)
+    {
+        var targetTypes = new HashSet<Type>();
+        for (var index = 0; index < publicState.Components.Count; index++)
+        {
+            targetTypes.Add(publicState.Components[index].ComponentType);
+        }
+
+        var info = GetRequiredLocation(entity);
+        var existingSignature = info.Archetype.Signature.AsSpan();
+        var removableTypes = new List<Type>(existingSignature.Length);
+        for (var index = 0; index < existingSignature.Length; index++)
+        {
+            var runtimeType = _components.GetType(existingSignature[index]);
+            if (!targetTypes.Contains(runtimeType))
+            {
+                removableTypes.Add(runtimeType);
+            }
+        }
+
+        for (var index = 0; index < removableTypes.Count; index++)
+        {
+            RemoveBoxed(entity, removableTypes[index]);
+        }
+
+        for (var index = 0; index < publicState.Components.Count; index++)
+        {
+            var component = publicState.Components[index];
+            var componentType = ResolveReplayComponentType(component.ComponentType, componentTypeCache);
+            if (TryGetLocation(entity, out var entityInfo) && entityInfo.Archetype.Signature.Contains(componentType))
+            {
+                SetBoxed(entity, componentType, component.Value);
+            }
+            else
+            {
+                AddBoxed(entity, componentType, component.Value);
+            }
+        }
+    }
+
+    private void EnsureDeltaEntitySlot(Entity entity)
+    {
+        var requiredCount = entity.Id + 1;
+        if (requiredCount <= _versions.Count)
+        {
+            if (_locations[entity.Id].Archetype is not null && _versions[entity.Id] != entity.Version)
+            {
+                throw new InvalidOperationException($"Entity slot {entity.Id} is occupied by a different live entity.");
+            }
+
+            return;
+        }
+
+        EnsureCapacity(requiredCount);
+        var previousCount = _versions.Count;
+        CollectionsMarshal.SetCount(_versions, requiredCount);
+        CollectionsMarshal.SetCount(_locations, requiredCount);
+        CollectionsMarshal.AsSpan(_versions)[previousCount..requiredCount].Clear();
+        CollectionsMarshal.AsSpan(_locations)[previousCount..requiredCount].Clear();
+
+        if (_freeIds.Length < requiredCount)
+        {
+            Array.Resize(ref _freeIds, requiredCount);
+        }
+    }
+
+    private void RemoveFreeIdById(int id)
+    {
+        for (var index = _freeIdCount - 1; index >= 0; index--)
+        {
+            if (_freeIds[index].Id != id)
+            {
+                continue;
+            }
+
+            _freeIds[index] = _freeIds[--_freeIdCount];
+        }
+    }
+
+    private static void NormalizeComponentValues(FrameComponentValue[] components)
+    {
+        Array.Sort(components, static (left, right) => StringComparer.Ordinal.Compare(GetComponentSortKey(left.ComponentType), GetComponentSortKey(right.ComponentType)));
+    }
+
+    private static string GetComponentSortKey(Type componentType)
+    {
+        return componentType.FullName ?? componentType.Name;
+    }
+
+    private sealed class DeltaEntityState
+    {
+        public bool Exists { get; set; } = true;
+
+        public Entity Parent { get; set; }
+
+        public Dictionary<Type, object?> Components { get; } = new();
+
+        public static DeltaEntityState FromPublicState(WorldEntityPublicState publicState)
+        {
+            var state = new DeltaEntityState
+            {
+                Parent = publicState.Parent,
+            };
+
+            for (var index = 0; index < publicState.Components.Count; index++)
+            {
+                var component = publicState.Components[index];
+                state.Components[component.ComponentType] = component.Value;
+            }
+
+            return state;
+        }
+
+        public static DeltaEntityState FromCreatedComponents(IReadOnlyList<FrameComponentValue> components)
+        {
+            var state = new DeltaEntityState();
+            for (var index = 0; index < components.Count; index++)
+            {
+                state.Components[components[index].ComponentType] = components[index].Value;
+            }
+
+            return state;
+        }
+
+        public WorldEntityPublicState ToPublicState()
+        {
+            var components = new FrameComponentValue[Components.Count];
+            var index = 0;
+            foreach (var pair in Components)
+            {
+                components[index++] = new FrameComponentValue(pair.Key, pair.Value);
+            }
+
+            NormalizeComponentValues(components);
+            return new WorldEntityPublicState(Parent, components);
         }
     }
 

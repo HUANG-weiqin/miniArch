@@ -172,6 +172,87 @@ public class CommandBufferReplayRewindBenchmarks
     }
 }
 
+public class CommandBufferWorldDeltaBenchmarks
+{
+    [Params(10_000, 100_000)]
+    public int EntityCount { get; set; }
+
+    [Params(
+        CommandBufferReplayScenarioKind.ExistingHeavy,
+        CommandBufferReplayScenarioKind.MixedHeavy)]
+    public CommandBufferReplayScenarioKind Scenario { get; set; }
+
+    private CommandBufferReplayPlaybackState _playbackState = null!;
+    private CommandBufferDeltaExecution _forwardState = null!;
+    private CommandBufferDeltaExecution _backwardState = null!;
+    private CommandBufferDeltaExecution _cycleState = null!;
+
+    [IterationSetup(Target = nameof(PlaybackDeltaOnly))]
+    public void SetupPlaybackDeltaOnly()
+    {
+        _playbackState = CommandBufferReplayScenarios.PreparePlayback(CreateScenario());
+    }
+
+    [IterationSetup(Target = nameof(ApplyDeltaForwardOnly))]
+    public void SetupApplyDeltaForwardOnly()
+    {
+        _forwardState = CommandBufferReplayScenarios.PrepareDelta(CreateScenario());
+    }
+
+    [IterationSetup(Target = nameof(ApplyDeltaBackwardOnly))]
+    public void SetupApplyDeltaBackwardOnly()
+    {
+        _backwardState = CommandBufferReplayScenarios.PrepareDelta(CreateScenario());
+        _backwardState.ApplyForward();
+    }
+
+    [IterationSetup(Target = nameof(ApplyDeltaForwardAndBackward))]
+    public void SetupApplyDeltaForwardAndBackward()
+    {
+        _cycleState = CommandBufferReplayScenarios.PrepareDelta(CreateScenario());
+    }
+
+    [Benchmark(Description = "MiniArch world delta playback only")]
+    public WorldDelta PlaybackDeltaOnly()
+    {
+        return _playbackState.Buffer.PlaybackDelta();
+    }
+
+    [Benchmark(Description = "MiniArch world delta apply forward only")]
+    public void ApplyDeltaForwardOnly()
+    {
+        _forwardState.ApplyForward();
+    }
+
+    [Benchmark(Description = "MiniArch world delta apply backward only")]
+    public void ApplyDeltaBackwardOnly()
+    {
+        _backwardState.ApplyBackward();
+    }
+
+    [Benchmark(Description = "MiniArch world delta apply forward plus backward")]
+    public void ApplyDeltaForwardAndBackward()
+    {
+        _cycleState.ApplyForward();
+        _cycleState.ApplyBackward();
+    }
+
+    private CommandBufferReplayScenarioDefinition CreateScenario()
+    {
+        return new CommandBufferReplayScenarioDefinition(GetScenarioName(), Scenario, EntityCount);
+    }
+
+    private string GetScenarioName()
+    {
+        return Scenario switch
+        {
+            CommandBufferReplayScenarioKind.ExistingHeavy => "world-delta-existing-heavy",
+            CommandBufferReplayScenarioKind.MixedHeavy => "world-delta-mixed-heavy",
+            _ => throw new ArgumentOutOfRangeException(nameof(Scenario))
+        };
+    }
+}
+
 internal static class CommandBufferBenchmarkScenarioFactory
 {
     public static MiniSharedCommandBufferState CreateMiniSharedState(CommandBufferBenchmarkScenario scenario, int entityCount)
