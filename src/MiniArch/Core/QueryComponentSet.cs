@@ -32,6 +32,36 @@ internal readonly struct QueryComponentSet : IEquatable<QueryComponentSet>
         return new QueryComponentSet(next);
     }
 
+    internal static QueryComponentSet CreateFrom(ComponentType[] components)
+    {
+        if (components.Length == 0)
+        {
+            return Empty;
+        }
+
+        if (components.Length > 1)
+        {
+            Array.Sort(components);
+
+            var uniqueCount = 1;
+            for (var i = 1; i < components.Length; i++)
+            {
+                if (components[i] != components[uniqueCount - 1])
+                {
+                    components[uniqueCount] = components[i];
+                    uniqueCount++;
+                }
+            }
+
+            if (uniqueCount != components.Length)
+            {
+                Array.Resize(ref components, uniqueCount);
+            }
+        }
+
+        return new QueryComponentSet(components);
+    }
+
     public Signature ToSignature()
     {
         if (Components.Length == 0)

@@ -1057,13 +1057,18 @@ public sealed class World
 
     private QueryComponentSet CreateQueryComponentSet(ReadOnlySpan<Type> types)
     {
-        var components = QueryComponentSet.Empty;
-        for (var i = 0; i < types.Length; i++)
+        if (types.Length == 0)
         {
-            components = components.Add(_components.GetOrCreate(types[i]));
+            return QueryComponentSet.Empty;
         }
 
-        return components;
+        var componentTypes = new ComponentType[types.Length];
+        for (var i = 0; i < types.Length; i++)
+        {
+            componentTypes[i] = _components.GetOrCreate(types[i]);
+        }
+
+        return QueryComponentSet.CreateFrom(componentTypes);
     }
 
     private void PublishArchetypeSnapshot(Archetype archetype)
@@ -2478,3 +2483,4 @@ public sealed class World
 
     private readonly record struct RecycledEntity(int Id, int Version);
 }
+

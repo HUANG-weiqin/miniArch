@@ -50,6 +50,7 @@ updated: 2026-04-14
 - `QueryDescription` 只保存 `Type` 集合，不直接保存 `ComponentType`；真正进入执行时由 `MiniArch.Core.Query.Create(world, in description)` 或 `World.Query(in description)` 把它翻译成当前 world 的 `QueryFilter`，再复用现有 `Query` 缓存
   - query 读路径使用 world 发布的 archetype 数组快照和 query 自身发布的 matched-archetype 数组快照，避免共享可变列表
   - query cache 失效判定应该以 world 统一的 query generation 为准；archetype publish、query layout 变化、deferred layout flush 都只推进这一份 generation，warmed 读路径才能维持最小固定成本
+  - query filter materialization 的内部实现应一次性收集 `ComponentType[]`，再交给 `QueryComponentSet.CreateFrom(...)` 原地排序/去重；不要在这条热路径上继续用链式 `Add()` 反复复制小数组
 - 和其他模块的交互方式：
   - `World` 通过 `ComponentRegistry` 把类型映射成 `ComponentType`
   - `World` 通过 `Signature` 定位 archetype
@@ -152,6 +153,7 @@ updated: 2026-04-14
 - `QueryDescription` 新增后，`World` 如果额外维护 `QueryDescription -> QueryFilter` 缓存，也要沿用 copy-on-write 发布，不要在共享字典上原地写入。
 - `QueryDescription` 的公开类型视图如果把内部数组直接返回出去，会把“值语义 + 缓存 key”契约打穿；这类问题在功能测试里不容易显形，但会在复用或并发共享 description 时变成非确定行为。
 - `QueryComponentSet.Add` / `Signature.Add` 这种“每次链式调用都复制一份小数组”的设计在 query build 不频繁时可以接受，但如果 benchmark 把 build 放进测量区，分配会稳定体现在结果里。
+- `QueryComponentSet.CreateFrom(ComponentType[])` 是内部热路径的批量入口；它应优先用于 `World.CreateQueryComponentSet` 这种一次性 materialization，而不是继续在循环里调用 `Add()`。
 - `Chunk.RemoveAt` 对所有列都做 `Array.Clear`，即使列元素不含引用也照样清空；这会在 remove/destroy 高频场景里制造纯写带宽开销，而不是必要的 GC 保护。
 - 判断 typed 列尾槽位是否需要清空时，不能只看 `Type.IsValueType`；带引用字段的 struct 同样需要 clear，运行时判定应以 `RuntimeHelpers.IsReferenceOrContainsReferences<T>()` 为准。
 - query benchmark 里如果 world shape 仍通过多次 `Add` 逐步长成，会残留一批历史空 archetype；它们不一定代表 steady-state query 的真实读取成本。
