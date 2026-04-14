@@ -2,7 +2,7 @@
 title: Command Buffer Runtime
 module: MiniArch.Core CommandBuffer
 description: Implemented command buffer model, fixed replay order, world delta capture/apply, recording concurrency scope, and validation notes
-updated: 2026-04-13
+updated: 2026-04-14
 ---
 # Command Buffer Runtime
 
@@ -10,8 +10,8 @@ updated: 2026-04-13
 
 - 这个模块负责：
   - 提供 `CommandBuffer` 录制层，把结构变化和 hierarchy 变化先记成延迟命令
-  - `CommandBuffer` 本体可以长期持有；`Playback()` / `Play()` / `PlayWithReverse()` 在消费当前批次后会自动清空记录，允许下一帧复用同一个实例，避免每帧新建 buffer
-  - 提供 `PlaybackDelta()`，把当前批次编译成双向 `WorldDelta`，用于跨实例顺序同步和同实例正反 apply
+- `CommandBuffer` 本体可以长期持有；`Playback()` / `Play()` / `PlayWithReverse()` 在消费当前批次后会自动清空记录，允许下一帧复用同一个实例，避免每帧新建 buffer
+- 提供 `PlaybackDelta()`，把当前批次编译成双向 `WorldDelta`，用于跨实例顺序同步和同实例正反 apply
   - 说明 `Playback()` 编译后的固定顺序：`create -> link/unlink -> add -> set -> remove -> destroy`
   - 提供 `Play()` 短路径，在不物化 `FrameCommands` 的情况下直接把同样的编译结果提交给 owning world
   - 说明 `World.Replay(in FrameCommands)` 的 batch mutation 与 query 可见性边界
@@ -35,9 +35,10 @@ updated: 2026-04-13
   - `src/MiniArch/Core/World.cs`：`ReserveDeferredEntity`、`ReleaseReservedEntity`、`Replay(in FrameCommands)`、boxed structural mutation
 - 数据流 / 控制流：
   - 工作线程通过 `CommandBuffer` 只记录命令；`Create()` 会立刻从 world 预留真实 `Entity`
-  - `Playback()` 和 `Play()` 共享同一套合并/归约逻辑，但 compile 现在改成“按 shard 直接归约到最终批次”，不再先把所有 shard 扁平化成中间大 `List`
-  - `PlaybackDelta()` 复用 `Compile() -> ToFrameCommands()`，然后从当前 world 读取候选 entity 的 `Before` 公开状态，再在内存中的 shadow public state 上按 `create -> link/unlink -> add -> set -> remove -> destroy` 推导 `After`；同时保留 frame 的 `ReservedEntities/ReleasedEntities`，让 delta-forward 与 replay 在 transient frame 后的下一次 `Create()` 句柄轨迹保持一致
-  - 对同帧 newly-created entity，`Playback()` 直接预计算 final signature 和 final component payload
+- `Playback()` 和 `Play()` 共享同一套合并/归约逻辑，但 compile 现在改成“按 shard 直接归约到最终批次”，不再先把所有 shard 扁平化成中间大 `List`
+- `CommandBuffer` 的 compile 现在复用 buffer-local scratch `Dictionary` / `HashSet` / `List`，把 command 去重、created-state materialize 和 component type cache 的临时分配压到单次 buffer 生命周期内部
+- `PlaybackDelta()` 复用 `Compile() -> ToFrameCommands()`，然后从当前 world 读取候选 entity 的 `Before` 公开状态，再在内存中的 shadow public state 上按 `create -> link/unlink -> add -> set -> remove -> destroy` 推导 `After`；同时保留 frame 的 `ReservedEntities/ReleasedEntities`，让 delta-forward 与 replay 在 transient frame 后的下一次 `Create()` 句柄轨迹保持一致
+- 对同帧 newly-created entity，`Playback()` 直接预计算 final signature 和 final component payload
   - 同帧 `create + destroy` 不会 materialize 到 world，而是放进 `ReleasedEntities`，在 replay 时回收到 free-list 并提升 version
   - `WorldDelta` 的 destroy 不是显式 destroy root 列表，而是最终公开效果；生成阶段会在 shadow hierarchy 上展开 destroy 闭包，并把 same-frame transient entity 折叠掉
   - `Play()` 走 owning-world 专用 compiled batch，不再先物化 `FrameCommands`；created entity 的 internal batch 会尽量复用 compile 阶段结果，减少 `ToArray` / `ToList` / LINQ 分配
@@ -59,6 +60,8 @@ updated: 2026-04-13
 
 - 当前已落地的方向是“多线程 `recording` + 单线程 `replay`”；`World` 本身仍不是并发写安全。
 - 当不需要保留 frame 或跨 world replay 时，应优先用 `Play()`；它复用同样语义，但省掉 `FrameCommands` 物化分配。
+- `Play()` 当前的 GC 目标是明显低于 `Playback()+Replay()`，而不是靠录制期预热把 steady-state 强压到 `0` 分配；录制阶段仍应保持“只记录命令，不提前发布 world layout 变化”的边界。
+- benchmark CLI 的 `command-buffer` 默认入口现在偏向快速 smoke 输出；完整 BenchmarkDotNet 套件需要显式 `--full`，避免本地验证卡在大矩阵上。
 - `WorldDelta` 的定位是“可逆的公开状态差异”，不是 `FrameCommands` 的重命名；第一版与 `FrameCommands` / `ReverseFrameCommands` 并存，不立即替代底层 replay IR。
 - `WorldDelta` 只承诺公开状态同态：`IsAlive`、组件值、parent 关系和派生 query 可见性一致；不承诺 free-list、version 历史、chunk 布局等内部状态一致。
 - 但为了让 delta-forward 的后续 `Create()` 轨迹不偏离 replay，`WorldDelta` 内部仍会保留 `ReservedEntities/ReleasedEntities`；这些不是公开 API 主语义的一部分，但属于 apply 阶段必须执行的 runtime 对齐信息。

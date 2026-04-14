@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using MiniArch.Core;
 using MiniQuery = MiniArch.Core.Query;
 
@@ -438,6 +439,36 @@ public sealed class WorldLifecycleTests
     }
 
     [Fact]
+    public void Warmed_destroy_cascade_path_does_not_allocate()
+    {
+        RunOnDedicatedThread(() =>
+        {
+            WarmupDestroyCascadeAllocations();
+
+            var world = new World();
+            var root = world.Create();
+            var child = world.Create();
+            var grandChild = world.Create();
+
+            world.Link(root, child);
+            world.Link(child, grandChild);
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            world.Destroy(root);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.False(world.IsAlive(root));
+            Assert.False(world.IsAlive(child));
+            Assert.False(world.IsAlive(grandChild));
+            Assert.Equal(0, allocated);
+        });
+    }
+
+    [Fact]
     public void Reused_entity_slot_does_not_inherit_destroyed_relationship()
     {
         var world = new World();
@@ -453,5 +484,41 @@ public sealed class WorldLifecycleTests
         Assert.NotEqual(child.Version, replacement.Version);
         Assert.False(world.TryGetParent(replacement, out _));
         Assert.Empty(world.GetChildren(parent));
+    }
+
+    private static void WarmupDestroyCascadeAllocations()
+    {
+        var world = new World();
+        var root = world.Create();
+        var child = world.Create();
+        var grandChild = world.Create();
+
+        world.Link(root, child);
+        world.Link(child, grandChild);
+        world.Destroy(root);
+    }
+
+    private static void RunOnDedicatedThread(Action action)
+    {
+        Exception? capturedException = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception exception)
+            {
+                capturedException = exception;
+            }
+        });
+
+        thread.Start();
+        thread.Join();
+
+        if (capturedException is not null)
+        {
+            ExceptionDispatchInfo.Capture(capturedException).Throw();
+        }
     }
 }

@@ -5,6 +5,7 @@ internal sealed class HierarchyTable
     private static readonly Entity NoEntity = default;
     private Entity[] _parentByChild = [];
     private HashSet<Entity>?[] _childrenByParent = [];
+    private readonly List<(Entity Entity, bool Expanded)> _destroyTraversalStack = new(4);
 
     public void Reset()
     {
@@ -21,7 +22,7 @@ internal sealed class HierarchyTable
         Unlink(child);
 
         _parentByChild[child.Id] = parent;
-        var children = _childrenByParent[parent.Id] ??= [];
+        var children = _childrenByParent[parent.Id] ??= new HashSet<Entity>(4);
         children.Add(child);
     }
 
@@ -31,7 +32,7 @@ internal sealed class HierarchyTable
         EnsureCapacity(child.Id);
 
         _parentByChild[child.Id] = parent;
-        var children = _childrenByParent[parent.Id] ??= [];
+        var children = _childrenByParent[parent.Id] ??= new HashSet<Entity>(4);
         children.Add(child);
     }
 
@@ -107,37 +108,46 @@ internal sealed class HierarchyTable
             return;
         }
 
-        var stack = new Stack<(Entity Entity, bool Expanded)>();
-        stack.Push((root, false));
+        _destroyTraversalStack.Clear();
+        _destroyTraversalStack.Add((root, false));
 
-        while (stack.Count > 0)
+        try
         {
-            var (entity, expanded) = stack.Pop();
-            if (expanded)
+            while (_destroyTraversalStack.Count > 0)
             {
-                destroyOrder.Add(entity);
-                continue;
-            }
-
-            stack.Push((entity, true));
-            if (entity.Id < 0 || entity.Id >= _childrenByParent.Length)
-            {
-                continue;
-            }
-
-            var children = _childrenByParent[entity.Id];
-            if (children is null)
-            {
-                continue;
-            }
-
-            foreach (var child in children)
-            {
-                if (world.IsAlive(child) && visited.Add(child))
+                var lastIndex = _destroyTraversalStack.Count - 1;
+                var (entity, expanded) = _destroyTraversalStack[lastIndex];
+                _destroyTraversalStack.RemoveAt(lastIndex);
+                if (expanded)
                 {
-                    stack.Push((child, false));
+                    destroyOrder.Add(entity);
+                    continue;
+                }
+
+                _destroyTraversalStack.Add((entity, true));
+                if (entity.Id < 0 || entity.Id >= _childrenByParent.Length)
+                {
+                    continue;
+                }
+
+                var children = _childrenByParent[entity.Id];
+                if (children is null)
+                {
+                    continue;
+                }
+
+                foreach (var child in children)
+                {
+                    if (world.IsAlive(child) && visited.Add(child))
+                    {
+                        _destroyTraversalStack.Add((child, false));
+                    }
                 }
             }
+        }
+        finally
+        {
+            _destroyTraversalStack.Clear();
         }
     }
 
@@ -258,5 +268,6 @@ internal sealed class HierarchyTable
         Array.Resize(ref _parentByChild, newLength);
         Array.Resize(ref _childrenByParent, newLength);
         Array.Fill(_parentByChild, NoEntity, previousLength, newLength - previousLength);
+        _destroyTraversalStack.EnsureCapacity(newLength);
     }
 }

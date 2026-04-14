@@ -41,6 +41,12 @@ public sealed class World
     private int _queryLayoutSuppressionCount;
     private bool _queryLayoutDirty;
     private int _queryGeneration;
+    private readonly List<Entity> _destroyOrderScratch = new(4);
+    private readonly HashSet<Entity> _destroyVisitedScratch = new(4);
+    private readonly List<Entity> _shadowDestroyOrderScratch = new(4);
+    private readonly List<Entity> _shadowDestroyStackScratch = new(4);
+    private readonly HashSet<Entity> _shadowDestroyVisitedScratch = new(4);
+    private readonly Dictionary<Type, ComponentType> _compiledReplayComponentTypeScratch = new(4);
 
     /// <summary>
     /// Creates a world.
@@ -657,6 +663,8 @@ public sealed class World
         {
             _locations.Capacity = entityCapacity;
         }
+
+        EnsureDestroyScratchCapacity(entityCapacity);
     }
 
     /// <summary>
@@ -664,19 +672,29 @@ public sealed class World
     /// </summary>
     public void Destroy(Entity entity)
     {
-        var destroyOrder = new List<Entity>();
-        _hierarchy.CollectDestroySubtree(this, entity, new HashSet<Entity>(), destroyOrder);
-        if (destroyOrder.Count == 0)
-        {
-            throw new InvalidOperationException($"Entity {entity} is stale or unknown.");
-        }
+        _destroyOrderScratch.Clear();
+        _destroyVisitedScratch.Clear();
 
-        foreach (var target in destroyOrder)
+        try
         {
-            DestroySingle(target);
-        }
+            _hierarchy.CollectDestroySubtree(this, entity, _destroyVisitedScratch, _destroyOrderScratch);
+            if (_destroyOrderScratch.Count == 0)
+            {
+                throw new InvalidOperationException($"Entity {entity} is stale or unknown.");
+            }
 
-        TouchQueryLayout();
+            for (var index = 0; index < _destroyOrderScratch.Count; index++)
+            {
+                DestroySingle(_destroyOrderScratch[index]);
+            }
+
+            TouchQueryLayout();
+        }
+        finally
+        {
+            _destroyVisitedScratch.Clear();
+            _destroyOrderScratch.Clear();
+        }
     }
 
     /// <summary>
@@ -1239,6 +1257,7 @@ public sealed class World
         var id = _versions.Count;
         _versions.Add(1);
         _locations.Add(default);
+        EnsureDestroyScratchCapacity(_versions.Count);
         version = 1;
         return id;
     }
@@ -1483,7 +1502,8 @@ public sealed class World
     {
         ArgumentNullException.ThrowIfNull(compiledCommands);
 
-        var componentTypeCache = new Dictionary<Type, ComponentType>();
+        var componentTypeCache = _compiledReplayComponentTypeScratch;
+        componentTypeCache.Clear();
         BeginDeferredLayoutUpdates();
         try
         {
@@ -1537,6 +1557,7 @@ public sealed class World
         }
         finally
         {
+            componentTypeCache.Clear();
             EndDeferredLayoutUpdates();
         }
     }
@@ -1772,11 +1793,21 @@ public sealed class World
             return;
         }
 
-        var destroyOrder = new List<Entity>();
-        _hierarchy.CollectDestroySubtree(this, root, new HashSet<Entity>(), destroyOrder);
-        for (var index = 0; index < destroyOrder.Count; index++)
+        _destroyOrderScratch.Clear();
+        _destroyVisitedScratch.Clear();
+
+        try
         {
-            entities.Add(destroyOrder[index]);
+            _hierarchy.CollectDestroySubtree(this, root, _destroyVisitedScratch, _destroyOrderScratch);
+            for (var index = 0; index < _destroyOrderScratch.Count; index++)
+            {
+                entities.Add(_destroyOrderScratch[index]);
+            }
+        }
+        finally
+        {
+            _destroyVisitedScratch.Clear();
+            _destroyOrderScratch.Clear();
         }
     }
 
@@ -1802,33 +1833,47 @@ public sealed class World
         return true;
     }
 
-    private static List<Entity> CollectShadowDestroyClosure(Entity root, Dictionary<Entity, DeltaEntityState> shadowStates)
+    private List<Entity> CollectShadowDestroyClosure(Entity root, Dictionary<Entity, DeltaEntityState> shadowStates)
     {
-        var closure = new List<Entity>();
+        var closure = _shadowDestroyOrderScratch;
+        closure.Clear();
         if (!shadowStates.TryGetValue(root, out var rootState) || !rootState.Exists)
         {
             return closure;
         }
 
-        var stack = new Stack<Entity>();
-        var seen = new HashSet<Entity>();
-        stack.Push(root);
-        seen.Add(root);
+        var stack = _shadowDestroyStackScratch;
+        var seen = _shadowDestroyVisitedScratch;
+        stack.Clear();
+        seen.Clear();
 
-        while (stack.Count > 0)
+        try
         {
-            var current = stack.Pop();
-            closure.Add(current);
+            stack.Add(root);
+            seen.Add(root);
 
-            foreach (var pair in shadowStates)
+            while (stack.Count > 0)
             {
-                if (!pair.Value.Exists || pair.Value.Parent != current || !seen.Add(pair.Key))
-                {
-                    continue;
-                }
+                var lastIndex = stack.Count - 1;
+                var current = stack[lastIndex];
+                stack.RemoveAt(lastIndex);
+                closure.Add(current);
 
-                stack.Push(pair.Key);
+                foreach (var pair in shadowStates)
+                {
+                    if (!pair.Value.Exists || pair.Value.Parent != current || !seen.Add(pair.Key))
+                    {
+                        continue;
+                    }
+
+                    stack.Add(pair.Key);
+                }
             }
+        }
+        finally
+        {
+            stack.Clear();
+            seen.Clear();
         }
 
         return closure;
@@ -2034,81 +2079,94 @@ public sealed class World
         var addCommands = new List<FrameEntityComponentCommand>();
         var setCommands = new List<FrameEntityComponentCommand>();
         var removeCommands = new List<FrameEntityRemoveCommand>();
-        var destroyOrder = new List<Entity>();
+        var destroyOrder = _destroyOrderScratch;
+        var visited = _destroyVisitedScratch;
+        destroyOrder.Clear();
+        visited.Clear();
 
-        foreach (var created in state.CreatedEntities)
+        try
         {
-            destroyedEntities.Add(created.Entity);
-        }
-
-        foreach (var entity in state.DestroyedEntities)
-        {
-            if (IsAlive(entity))
+            foreach (var created in state.CreatedEntities)
             {
-                destroyOrder.Clear();
-                _hierarchy.CollectDestroySubtree(this, entity, new HashSet<Entity>(), destroyOrder);
+                destroyedEntities.Add(created.Entity);
+            }
 
-                for (var index = 0; index < destroyOrder.Count; index++)
+            foreach (var entity in state.DestroyedEntities)
+            {
+                if (IsAlive(entity))
                 {
-                    var destroyedEntity = destroyOrder[index];
-                    if (restoredEntitySet.Add(destroyedEntity))
+                    destroyOrder.Clear();
+                    visited.Clear();
+                    _hierarchy.CollectDestroySubtree(this, entity, visited, destroyOrder);
+
+                    for (var index = 0; index < destroyOrder.Count; index++)
                     {
-                        restoredEntities.Add(CaptureDestroyedEntity(destroyedEntity));
+                        var destroyedEntity = destroyOrder[index];
+                        if (restoredEntitySet.Add(destroyedEntity))
+                        {
+                            restoredEntities.Add(CaptureDestroyedEntity(destroyedEntity));
+                        }
                     }
                 }
             }
-        }
 
-        restoredEntities.Sort((left, right) =>
-        {
-            var depthComparison = GetHierarchyDepth(left.Entity).CompareTo(GetHierarchyDepth(right.Entity));
-            if (depthComparison != 0)
+            restoredEntities.Sort((left, right) =>
             {
-                return depthComparison;
+                var depthComparison = GetHierarchyDepth(left.Entity).CompareTo(GetHierarchyDepth(right.Entity));
+                if (depthComparison != 0)
+                {
+                    return depthComparison;
+                }
+
+                var idComparison = left.Entity.Id.CompareTo(right.Entity.Id);
+                return idComparison != 0
+                    ? idComparison
+                    : left.Entity.Version.CompareTo(right.Entity.Version);
+            });
+
+            foreach (var link in state.LinkCommands)
+            {
+                CaptureReverseLink(link.Child, linkCommands, unlinkCommands);
             }
 
-            var idComparison = left.Entity.Id.CompareTo(right.Entity.Id);
-            return idComparison != 0
-                ? idComparison
-                : left.Entity.Version.CompareTo(right.Entity.Version);
-        });
+            foreach (var unlink in state.UnlinkCommands)
+            {
+                CaptureReverseUnlink(unlink.Child, linkCommands);
+            }
 
-        foreach (var link in state.LinkCommands)
-        {
-            CaptureReverseLink(link.Child, linkCommands, unlinkCommands);
+            foreach (var add in state.AddCommands)
+            {
+                CaptureReverseComponentMutation(add.Entity, add.ComponentType, setCommands, removeCommands, componentTypeCache);
+            }
+
+            foreach (var set in state.SetCommands)
+            {
+                CaptureReverseComponentMutation(set.Entity, set.ComponentType, setCommands, removeCommands, componentTypeCache);
+            }
+
+            foreach (var remove in state.RemoveCommands)
+            {
+                CaptureReverseRemove(remove.Entity, remove.ComponentType, addCommands, componentTypeCache);
+            }
+
+            var reverseState = new ReverseFrameCommandsState(
+                restoredEntities.ToArray(),
+                destroyedEntities.ToArray(),
+                linkCommands.ToArray(),
+                unlinkCommands.ToArray(),
+                addCommands.ToArray(),
+                setCommands.ToArray(),
+                removeCommands.ToArray(),
+                state.ReservedEntities.ToArray());
+
+            return new ReverseFrameCommands(reverseState);
         }
-
-        foreach (var unlink in state.UnlinkCommands)
+        finally
         {
-            CaptureReverseUnlink(unlink.Child, linkCommands);
+            visited.Clear();
+            destroyOrder.Clear();
+            componentTypeCache.Clear();
         }
-
-        foreach (var add in state.AddCommands)
-        {
-            CaptureReverseComponentMutation(add.Entity, add.ComponentType, setCommands, removeCommands, componentTypeCache);
-        }
-
-        foreach (var set in state.SetCommands)
-        {
-            CaptureReverseComponentMutation(set.Entity, set.ComponentType, setCommands, removeCommands, componentTypeCache);
-        }
-
-        foreach (var remove in state.RemoveCommands)
-        {
-            CaptureReverseRemove(remove.Entity, remove.ComponentType, addCommands, componentTypeCache);
-        }
-
-        var reverseState = new ReverseFrameCommandsState(
-            restoredEntities.ToArray(),
-            destroyedEntities.ToArray(),
-            linkCommands.ToArray(),
-            unlinkCommands.ToArray(),
-            addCommands.ToArray(),
-            setCommands.ToArray(),
-            removeCommands.ToArray(),
-            state.ReservedEntities.ToArray());
-
-        return new ReverseFrameCommands(reverseState);
     }
 
     internal void MaterializeReservedEntity(
@@ -2365,6 +2423,17 @@ public sealed class World
     private void BeginDeferredLayoutUpdates()
     {
         _queryLayoutSuppressionCount++;
+    }
+
+    private void EnsureDestroyScratchCapacity(int entityCount)
+    {
+        if (entityCount <= 0)
+        {
+            return;
+        }
+
+        _destroyOrderScratch.EnsureCapacity(entityCount);
+        _destroyVisitedScratch.EnsureCapacity(entityCount);
     }
 
     private void EndDeferredLayoutUpdates()

@@ -2,7 +2,7 @@
 title: Hierarchy Runtime
 module: MiniArch.Core Hierarchy
 description: Runtime-owned parent-child relations, cascade destroy semantics, and snapshot restore behavior
-updated: 2026-04-12
+updated: 2026-04-14
 ---
 # Hierarchy Runtime
 
@@ -27,8 +27,9 @@ updated: 2026-04-12
 - 数据流 / 控制流：
   - `World.Link(parent, child)` 先做存活校验、拒绝自环和成环，再写入关系表
   - `World.GetChildren(parent)` 返回当前 direct children 的排序快照 `List<Entity>`
-  - `World.Destroy(parent)` 先从 hierarchy 表收集整棵子树，再按 child-first 顺序逐个销毁
-  - `World.ReplayWithReverse(...)` 在捕获 reverse frame 时，会先按当前 hierarchy 收集待 destroy 的 existing subtree，并把每个实体的组件快照和原 parent 一起记入 `ReverseFrameCommands.RestoredEntities`
+- `World.Destroy(parent)` 先从 hierarchy 表收集整棵子树，再按 child-first 顺序逐个销毁
+- `World.Destroy(parent)` 现在复用 world 内部 scratch 容器收集 destroy closure，不再每次临时分配 traversal stack / visited set
+- `World.ReplayWithReverse(...)` 在捕获 reverse frame 时，会先按当前 hierarchy 收集待 destroy 的 existing subtree，并把每个实体的组件快照和原 parent 一起记入 `ReverseFrameCommands.RestoredEntities`
   - `World.Rewind(...)` 的 hierarchy 安全顺序是先重建旧实体和组件、再按记录下来的 parent 恢复旧 hierarchy，之后才销毁 replay 期间新建且当前仍存活的实体；这样可避免新父节点的级联销毁误删刚恢复的旧实体
   - `WorldSnapshot.Save` 在 archetype/component 数据后写入 live hierarchy links
   - `WorldSnapshot.Load` 在实体和 chunk 恢复后重建 hierarchy links

@@ -53,8 +53,10 @@ updated: 2026-04-14
   - query filter materialization 的内部实现应一次性收集 `ComponentType[]`，再交给 `QueryComponentSet.CreateFrom(...)` 原地排序/去重；不要在这条热路径上继续用链式 `Add()` 反复复制小数组
 - 和其他模块的交互方式：
   - `World` 通过 `ComponentRegistry` 把类型映射成 `ComponentType`
-  - `World` 通过 `Signature` 定位 archetype
-  - `Archetype` 通过 component-to-column 索引把 `Set` 路径压成一次定位 + 一次写入
+- `World` 通过 `Signature` 定位 archetype
+- `Archetype` 通过 component-to-column 索引把 `Set` 路径压成一次定位 + 一次写入
+- `World.Destroy(...)`、`CollectCurrentDestroyClosure(...)` 和 `ReplayWithReverse(...)` 的 destroy 预处理会复用 world 内部 scratch，而不是每次临时 new `List` / `HashSet`
+- `HierarchyTable.CollectDestroySubtree(...)` 现在接受 caller-owned visited / order 容器，避免在 subtree 收集时额外分配 traversal stack
 - `Query` 的 warmed 热路径应该尽量只比较一份 world 侧统一 query generation；不要在热循环里同时读取 `ArchetypeGeneration` 和 `QueryLayoutGeneration` 两份状态。
 
 ## 决策

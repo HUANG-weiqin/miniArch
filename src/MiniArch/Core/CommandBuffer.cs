@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace MiniArch.Core;
@@ -11,6 +12,15 @@ public sealed class CommandBuffer
     private readonly World _world;
     private readonly CommandBufferEntityAllocator _allocator;
     private readonly ConcurrentDictionary<int, CommandBufferShard> _shards = new();
+    private readonly List<CommandBufferShard> _orderedShardsScratch = new(1);
+    private readonly Dictionary<Entity, CreatedEntityState> _createdStatesScratch = new(4);
+    private readonly Dictionary<EntityComponentKey, CompiledComponentCommand> _compiledAddsScratch = new(4);
+    private readonly Dictionary<EntityComponentKey, CompiledComponentCommand> _compiledSetsScratch = new(4);
+    private readonly Dictionary<EntityComponentKey, CompiledRemoveCommand> _compiledRemovesScratch = new(4);
+    private readonly Dictionary<Type, ComponentType> _componentTypeCacheScratch = new(4);
+    private readonly HashSet<Entity> _destroyedEntitiesScratch = new(4);
+    private readonly Dictionary<Entity, HierarchyIntent> _hierarchyByChildScratch = new(4);
+    private readonly CompiledCommandBatch _compiledBatch = new();
     private int _nextShardOrder;
 
     /// <summary>
@@ -147,10 +157,51 @@ public sealed class CommandBuffer
     private CompiledCommandBatch Compile()
     {
         var shards = GetOrderedShards();
-        var counts = CountCommands(shards);
+        var counts = CountCommands(CollectionsMarshal.AsSpan(shards));
 
-        var reservedEntities = new List<Entity>(counts.Creates);
-        var createdStates = new Dictionary<Entity, CreatedEntityState>(counts.Creates);
+        var compiledBatch = _compiledBatch;
+        compiledBatch.Clear();
+        compiledBatch.ReservedEntities.EnsureCapacity(counts.Creates);
+        compiledBatch.CreatedEntities.EnsureCapacity(counts.Creates);
+        compiledBatch.LinkCommands.EnsureCapacity(counts.HierarchyCommands);
+        compiledBatch.UnlinkCommands.EnsureCapacity(counts.HierarchyCommands);
+        compiledBatch.AddCommands.EnsureCapacity(counts.Adds);
+        compiledBatch.SetCommands.EnsureCapacity(counts.Sets);
+        compiledBatch.RemoveCommands.EnsureCapacity(counts.Removes);
+        compiledBatch.DestroyedEntities.EnsureCapacity(counts.Destroys);
+        compiledBatch.ReleasedEntities.EnsureCapacity(counts.Destroys);
+
+        var reservedEntities = compiledBatch.ReservedEntities;
+        var createdEntities = compiledBatch.CreatedEntities;
+        var linkCommands = compiledBatch.LinkCommands;
+        var unlinkCommands = compiledBatch.UnlinkCommands;
+        var addCommands = compiledBatch.AddCommands;
+        var setCommands = compiledBatch.SetCommands;
+        var removeCommands = compiledBatch.RemoveCommands;
+        var destroyedEntityList = compiledBatch.DestroyedEntities;
+        var releasedEntities = compiledBatch.ReleasedEntities;
+
+        var createdStates = _createdStatesScratch;
+        createdStates.Clear();
+        createdStates.EnsureCapacity(counts.Creates);
+        var compiledAdds = _compiledAddsScratch;
+        compiledAdds.Clear();
+        compiledAdds.EnsureCapacity(counts.Adds);
+        var compiledSets = _compiledSetsScratch;
+        compiledSets.Clear();
+        compiledSets.EnsureCapacity(counts.Sets);
+        var compiledRemoves = _compiledRemovesScratch;
+        compiledRemoves.Clear();
+        compiledRemoves.EnsureCapacity(counts.Removes);
+        var componentTypeCache = _componentTypeCacheScratch;
+        componentTypeCache.Clear();
+        componentTypeCache.EnsureCapacity(counts.Adds + counts.Sets + counts.Removes);
+        var destroyedEntities = _destroyedEntitiesScratch;
+        destroyedEntities.Clear();
+        destroyedEntities.EnsureCapacity(counts.Destroys);
+        var hierarchyByChild = _hierarchyByChildScratch;
+        hierarchyByChild.Clear();
+        hierarchyByChild.EnsureCapacity(counts.HierarchyCommands);
 
         foreach (var shard in shards)
         {
@@ -162,11 +213,6 @@ public sealed class CommandBuffer
                 createdStates.Add(entity, new CreatedEntityState(entity));
             }
         }
-
-        var compiledAdds = new Dictionary<EntityComponentKey, CompiledComponentCommand>(counts.Adds);
-        var compiledSets = new Dictionary<EntityComponentKey, CompiledComponentCommand>(counts.Sets);
-        var compiledRemoves = new HashSet<EntityComponentKey>(counts.Removes);
-        var componentTypeCache = new Dictionary<Type, ComponentType>();
 
         foreach (var shard in shards)
         {
@@ -216,12 +262,11 @@ public sealed class CommandBuffer
                     continue;
                 }
 
-                compiledRemoves.Add(new EntityComponentKey(command.Entity, command.ComponentType));
+                compiledRemoves[new EntityComponentKey(command.Entity, command.ComponentType)] =
+                    new CompiledRemoveCommand(command.Entity, command.ComponentType, ResolveComponentType(command.ComponentType, componentTypeCache));
             }
         }
 
-        var releasedEntities = new List<Entity>(counts.Destroys);
-        var destroyedEntities = new HashSet<Entity>();
         foreach (var shard in shards)
         {
             var destroys = shard.Destroys;
@@ -243,7 +288,6 @@ public sealed class CommandBuffer
             }
         }
 
-        var hierarchyByChild = new Dictionary<Entity, HierarchyIntent>(counts.HierarchyCommands);
         foreach (var shard in shards)
         {
             var hierarchyCommands = shard.HierarchyCommands;
@@ -268,7 +312,6 @@ public sealed class CommandBuffer
             }
         }
 
-        var createdEntities = new List<CompiledCreatedEntity>(reservedEntities.Count - releasedEntities.Count);
         for (var index = 0; index < reservedEntities.Count; index++)
         {
             var entity = reservedEntities[index];
@@ -280,8 +323,6 @@ public sealed class CommandBuffer
             createdEntities.Add(state.ToCompiledEntity());
         }
 
-        var linkCommands = new List<FrameLinkCommand>(hierarchyByChild.Count);
-        var unlinkCommands = new List<FrameUnlinkCommand>(hierarchyByChild.Count);
         foreach (var pair in hierarchyByChild)
         {
             if (pair.Value.IsLinked)
@@ -293,59 +334,65 @@ public sealed class CommandBuffer
             unlinkCommands.Add(new FrameUnlinkCommand(pair.Key));
         }
 
-        var addCommands = new List<CompiledComponentCommand>(compiledAdds.Count);
-        foreach (var command in compiledAdds.Values)
+        foreach (var pair in compiledAdds)
         {
-            addCommands.Add(command);
+            addCommands.Add(pair.Value);
         }
 
-        var setCommands = new List<CompiledComponentCommand>(compiledSets.Count);
-        foreach (var command in compiledSets.Values)
+        foreach (var pair in compiledSets)
         {
-            setCommands.Add(command);
+            setCommands.Add(pair.Value);
         }
 
-        var removeCommands = new List<CompiledRemoveCommand>(compiledRemoves.Count);
-        foreach (var key in compiledRemoves)
+        foreach (var pair in compiledRemoves)
         {
-            removeCommands.Add(new CompiledRemoveCommand(key.Entity, key.ComponentType, ResolveComponentType(key.ComponentType, componentTypeCache)));
+            removeCommands.Add(pair.Value);
         }
 
-        var destroyedEntityList = new List<Entity>(destroyedEntities.Count);
         foreach (var entity in destroyedEntities)
         {
             destroyedEntityList.Add(entity);
         }
 
-        return new CompiledCommandBatch(
-            reservedEntities,
-            createdEntities,
-            linkCommands,
-            unlinkCommands,
-            addCommands,
-            setCommands,
-            removeCommands,
-            destroyedEntityList,
-            releasedEntities);
+        createdStates.Clear();
+        compiledAdds.Clear();
+        compiledSets.Clear();
+        compiledRemoves.Clear();
+        componentTypeCache.Clear();
+        destroyedEntities.Clear();
+        hierarchyByChild.Clear();
+        return compiledBatch;
     }
 
     private void Clear()
     {
         foreach (var shard in _shards.Values)
         {
-            shard.Creates.Clear();
-            shard.HierarchyCommands.Clear();
-            shard.Adds.Clear();
-            shard.Sets.Clear();
-            shard.Removes.Clear();
-            shard.Destroys.Clear();
+            ClearShard(shard);
         }
     }
 
-    private CommandBufferShard[] GetOrderedShards()
+    private static void ClearShard(CommandBufferShard shard)
     {
-        var shards = _shards.Values.ToArray();
-        Array.Sort(shards, static (left, right) => left.Order.CompareTo(right.Order));
+        shard.Creates.Clear();
+        shard.HierarchyCommands.Clear();
+        shard.Adds.Clear();
+        shard.Sets.Clear();
+        shard.Removes.Clear();
+        shard.Destroys.Clear();
+    }
+
+    private List<CommandBufferShard> GetOrderedShards()
+    {
+        var shards = _orderedShardsScratch;
+        shards.Clear();
+
+        foreach (var shard in _shards.Values)
+        {
+            shards.Add(shard);
+        }
+
+        shards.Sort(static (left, right) => left.Order.CompareTo(right.Order));
         return shards;
     }
 
@@ -503,45 +550,36 @@ public sealed class CommandBuffer
 
     internal sealed class CompiledCommandBatch
     {
-        public CompiledCommandBatch(
-            List<Entity> reservedEntities,
-            List<CompiledCreatedEntity> createdEntities,
-            List<FrameLinkCommand> linkCommands,
-            List<FrameUnlinkCommand> unlinkCommands,
-            List<CompiledComponentCommand> addCommands,
-            List<CompiledComponentCommand> setCommands,
-            List<CompiledRemoveCommand> removeCommands,
-            List<Entity> destroyedEntities,
-            List<Entity> releasedEntities)
+        public List<Entity> ReservedEntities { get; } = new(4);
+
+        public List<CompiledCreatedEntity> CreatedEntities { get; } = new(4);
+
+        public List<FrameLinkCommand> LinkCommands { get; } = new(4);
+
+        public List<FrameUnlinkCommand> UnlinkCommands { get; } = new(4);
+
+        public List<CompiledComponentCommand> AddCommands { get; } = new(4);
+
+        public List<CompiledComponentCommand> SetCommands { get; } = new(4);
+
+        public List<CompiledRemoveCommand> RemoveCommands { get; } = new(4);
+
+        public List<Entity> DestroyedEntities { get; } = new(4);
+
+        public List<Entity> ReleasedEntities { get; } = new(4);
+
+        public void Clear()
         {
-            ReservedEntities = reservedEntities;
-            CreatedEntities = createdEntities;
-            LinkCommands = linkCommands;
-            UnlinkCommands = unlinkCommands;
-            AddCommands = addCommands;
-            SetCommands = setCommands;
-            RemoveCommands = removeCommands;
-            DestroyedEntities = destroyedEntities;
-            ReleasedEntities = releasedEntities;
+            ReservedEntities.Clear();
+            CreatedEntities.Clear();
+            LinkCommands.Clear();
+            UnlinkCommands.Clear();
+            AddCommands.Clear();
+            SetCommands.Clear();
+            RemoveCommands.Clear();
+            DestroyedEntities.Clear();
+            ReleasedEntities.Clear();
         }
-
-        public List<Entity> ReservedEntities { get; }
-
-        public List<CompiledCreatedEntity> CreatedEntities { get; }
-
-        public List<FrameLinkCommand> LinkCommands { get; }
-
-        public List<FrameUnlinkCommand> UnlinkCommands { get; }
-
-        public List<CompiledComponentCommand> AddCommands { get; }
-
-        public List<CompiledComponentCommand> SetCommands { get; }
-
-        public List<CompiledRemoveCommand> RemoveCommands { get; }
-
-        public List<Entity> DestroyedEntities { get; }
-
-        public List<Entity> ReleasedEntities { get; }
 
         public bool IsEmpty =>
             ReservedEntities.Count == 0 &&

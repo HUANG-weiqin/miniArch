@@ -2,7 +2,7 @@
 title: Test Workflow
 module: MiniArch.Tests
 description: How the test suite, query profiling, snapshot benchmarks, and structural-change benchmarks are organized and how to run them
-updated: 2026-04-12
+updated: 2026-04-14
 ---
 # Test Workflow
 
@@ -74,6 +74,7 @@ updated: 2026-04-12
 - 验证脚本和测试项目分离，方便 agent 在需要时只跑局部测试。
 - 结构变化相关测试必须保留 `Set` 的 in-place 语义断言，因为这是 typed-column / direct-index 重构的核心安全网。
 - command buffer 需要单独锁定 `Playback()` 不改 world、跨 world `Replay()`、created final archetype 和 free-list/version 语义；这些不能靠立即生效 API 测试替代。
+- command buffer 还要单独锁定“recording 不提前发布 world layout 变化”：录制 `Add/Set/Remove/Link` 时，不应先把 archetype / query generation 这类内部布局状态改掉。
 - command buffer 新增 `Play()` 后，还需要锁定 `Play()` 与 `Playback()+Replay()` 的结果等价，并用 benchmark 对比它们的分配差异。
 - rewind 相关测试当前已经锁定 `World.ReplayWithReverse(...)` / `CommandBuffer.PlayWithReverse()` / `World.Rewind(...)` 的组合语义，并明确以“回到 replay 前公开可观察状态”为验收口径。
 - rewind 语义仍然不是“完全 internal state 镜像回滚”；测试只把 reserved entity 轨迹当作 replay reservation 对齐的必要条件，不把 query cache 等内部细节纳入镜像恢复范围。
@@ -103,6 +104,8 @@ updated: 2026-04-12
 - `QueryDescription` 新增后，`QueryTests` / `QueryFilterTests` 还要覆盖 description 与 generic/builder 查询等价、同一 description 跨 world 复用、description 冷路径并发 materialize，以及公开类型视图不会暴露可变内部数组；否则“可复用描述 + 缓存 key”这层契约很容易被悄悄打破。
 - `CommandBufferTests` 需要同时覆盖 existing entity replay、created entity final-state、same-frame create+destroy 消除和并发 recording；否则很难看出 replay 顺序和 entity reservation 是否被悄悄改坏。
 - `CommandBufferTests` 里的 `Play()` 不应只跑手写 happy-path，还要覆盖复杂/随机脚本，避免短路径在 hierarchy 或 created/destroyed 混合帧上回退。
+- 如果目标是优化 command buffer 的 GC，除了行为测试，还要加 warmed allocation smoke test，至少锁定 `World.Destroy(...)` 和 `CommandBuffer.Play()` 的 steady-state 分配回退。
+- benchmark 入口如果默认会跑完整 `command-buffer` 矩阵，容易在本地验证时卡死；更稳妥的是默认 smoke、完整 BenchmarkDotNet 用显式 `--full`。
 - `CommandBufferTests` 现在还承担 rewind 主入口验证：existing entity 的 add/set/remove/destroy 回退、link/unlink 回退、destroy subtree 回退、随机多帧 LIFO 回退，以及 `PlayWithReverse()` 与 `Playback()+ReplayWithReverse(...)` 等价。
 - `CommandBufferTests` 还明确覆盖 replay-after-rewind 入口：`Same_frame_create_destroy_frame_can_replay_after_rewind_and_keeps_the_same_result` 与 `Create_survivor_frame_can_replay_after_rewind_and_keeps_the_same_result`，用来锁定 `ReverseFrameCommands` 会随公开状态一起带回 reserved entity 轨迹。
 - `CommandBufferTests` 现在还覆盖更强的历史回放路径：先 rewind 到中间历史点，再按原后续 frame 序列 replay，最终 world 状态必须与未回退前的终局一致。

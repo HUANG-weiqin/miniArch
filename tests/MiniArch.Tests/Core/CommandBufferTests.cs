@@ -360,6 +360,22 @@ public sealed class CommandBufferTests
     }
 
     [Fact]
+    public void Recording_structural_change_does_not_publish_layout_changes_before_playback()
+    {
+        var world = new World();
+        var entity = world.Create();
+        world.Components.GetOrCreate<Position>();
+        var buffer = new CommandBuffer(world);
+        var queryGenerationBefore = GetQueryGeneration(world);
+        var archetypeCountBefore = GetArchetypeCount(world);
+
+        buffer.Add(entity, new Position(9, 9));
+
+        Assert.Equal(queryGenerationBefore, GetQueryGeneration(world));
+        Assert.Equal(archetypeCountBefore, GetArchetypeCount(world));
+    }
+
+    [Fact]
     public void Play_with_reverse_matches_playback_plus_replay_with_reverse_and_both_worlds_can_be_rewound()
     {
         var playbackWorld = new World();
@@ -1739,6 +1755,20 @@ public sealed class CommandBufferTests
         {
             ExceptionDispatchInfo.Capture(capturedException).Throw();
         }
+    }
+
+    private static int GetQueryGeneration(World world)
+    {
+        var field = typeof(World).GetField("_queryGeneration", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Unable to find World._queryGeneration.");
+        return (int)field.GetValue(world)!;
+    }
+
+    private static int GetArchetypeCount(World world)
+    {
+        var field = typeof(World).GetField("_archetypes", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Unable to find World._archetypes.");
+        return ((System.Collections.IDictionary)field.GetValue(world)!).Count;
     }
 
     private static void AssertWorldStatesMatch(World expected, World actual, params Entity[] entities)
