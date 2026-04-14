@@ -101,23 +101,21 @@ public sealed class Query
     private MatchingSnapshot EnsureMatchingSnapshot()
     {
         var snapshot = Volatile.Read(ref _matching);
-        var archetypeGeneration = _world.ArchetypeGeneration;
-        var layoutGeneration = _world.QueryLayoutGeneration;
-        if (snapshot.ArchetypeGeneration == archetypeGeneration
-            && snapshot.LayoutGeneration == layoutGeneration)
+        var worldQueryGeneration = _world.QueryGeneration;
+        if (snapshot.QueryGeneration == worldQueryGeneration)
         {
             return snapshot;
         }
 
-        return RefreshSlow(archetypeGeneration, layoutGeneration, snapshot);
+        return RefreshSlow(worldQueryGeneration, snapshot);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private MatchingSnapshot RefreshSlow(int archetypeGeneration, int layoutGeneration, MatchingSnapshot snapshot)
+    private MatchingSnapshot RefreshSlow(int worldQueryGeneration, MatchingSnapshot snapshot)
     {
         while (true)
         {
-            var refreshed = BuildMatchingSnapshot(archetypeGeneration, layoutGeneration);
+            var refreshed = BuildMatchingSnapshot(worldQueryGeneration);
             var observed = Interlocked.CompareExchange(ref _matching, refreshed, snapshot);
             if (ReferenceEquals(observed, snapshot))
             {
@@ -126,20 +124,19 @@ public sealed class Query
             }
 
             snapshot = observed;
-            if (snapshot.ArchetypeGeneration == archetypeGeneration
-                && snapshot.LayoutGeneration == layoutGeneration)
+            if (snapshot.QueryGeneration == worldQueryGeneration)
             {
                 return snapshot;
             }
         }
     }
 
-    private MatchingSnapshot BuildMatchingSnapshot(int archetypeGeneration, int layoutGeneration)
+    private MatchingSnapshot BuildMatchingSnapshot(int worldQueryGeneration)
     {
         var archetypes = _world.Archetypes;
         if (archetypes.Length == 0)
         {
-            return new MatchingSnapshot(archetypeGeneration, layoutGeneration, Array.Empty<Archetype>(), Array.Empty<Chunk>());
+            return new MatchingSnapshot(worldQueryGeneration, Array.Empty<Archetype>(), Array.Empty<Chunk>());
         }
 
         var matchingArchetypes = new Archetype[archetypes.Length];
@@ -156,7 +153,7 @@ public sealed class Query
 
         if (matchedArchetypeCount == 0)
         {
-            return new MatchingSnapshot(archetypeGeneration, layoutGeneration, Array.Empty<Archetype>(), Array.Empty<Chunk>());
+            return new MatchingSnapshot(worldQueryGeneration, Array.Empty<Archetype>(), Array.Empty<Chunk>());
         }
 
         Archetype[] trimmedArchetypes;
@@ -172,7 +169,7 @@ public sealed class Query
 
         if (matchedChunkCount == 0)
         {
-            return new MatchingSnapshot(archetypeGeneration, layoutGeneration, trimmedArchetypes, Array.Empty<Chunk>());
+            return new MatchingSnapshot(worldQueryGeneration, trimmedArchetypes, Array.Empty<Chunk>());
         }
 
         var matchingChunks = new Chunk[matchedChunkCount];
@@ -186,7 +183,7 @@ public sealed class Query
             }
         }
 
-        return new MatchingSnapshot(archetypeGeneration, layoutGeneration, trimmedArchetypes, matchingChunks);
+        return new MatchingSnapshot(worldQueryGeneration, trimmedArchetypes, matchingChunks);
     }
 
     private bool Matches(Archetype archetype)
@@ -228,19 +225,16 @@ public sealed class Query
 
     private sealed class MatchingSnapshot
     {
-        public static MatchingSnapshot Empty { get; } = new(-1, -1, Array.Empty<Archetype>(), Array.Empty<Chunk>());
+        public static MatchingSnapshot Empty { get; } = new(-1, Array.Empty<Archetype>(), Array.Empty<Chunk>());
 
-        public MatchingSnapshot(int archetypeGeneration, int layoutGeneration, Archetype[] archetypes, Chunk[] chunks)
+        public MatchingSnapshot(int queryGeneration, Archetype[] archetypes, Chunk[] chunks)
         {
-            ArchetypeGeneration = archetypeGeneration;
-            LayoutGeneration = layoutGeneration;
+            QueryGeneration = queryGeneration;
             Archetypes = archetypes;
             Chunks = chunks;
         }
 
-        public int ArchetypeGeneration { get; }
-
-        public int LayoutGeneration { get; }
+        public int QueryGeneration { get; }
 
         public Archetype[] Archetypes { get; }
 

@@ -418,4 +418,37 @@ public sealed class QueryTests
         var dictionary = Assert.IsAssignableFrom<System.Collections.IDictionary>(value);
         return dictionary.Count;
     }
+
+    [Fact]
+    public void World_has_unified_query_generation_and_warmed_query_refreshes_only_when_it_advances()
+    {
+        var world = new World();
+        var generationField = typeof(World).GetField("_queryGeneration", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(generationField);
+        Assert.Null(typeof(World).GetField("_archetypeGeneration", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic));
+        Assert.Null(typeof(World).GetField("_queryLayoutGeneration", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic));
+
+        var description = new QueryDescription().With<Velocity>();
+        var query = MiniQuery.Create(world, in description);
+
+        Assert.Empty(query.MatchedArchetypes);
+        Assert.Equal(1, query.RefreshCount);
+
+        var warmedGeneration = (int)generationField.GetValue(world)!;
+
+        _ = query.MatchedArchetypes;
+
+        Assert.Equal(warmedGeneration, (int)generationField.GetValue(world)!);
+        Assert.Equal(1, query.RefreshCount);
+
+        _ = world.Create(new Velocity(2, 2));
+
+        var advancedGeneration = (int)generationField.GetValue(world)!;
+        Assert.True(advancedGeneration > warmedGeneration);
+
+        var matched = query.MatchedArchetypes;
+
+        Assert.Single(matched);
+        Assert.Equal(2, query.RefreshCount);
+    }
 }

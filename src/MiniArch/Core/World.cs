@@ -38,10 +38,9 @@ public sealed class World
     private readonly bool _adaptiveChunkCapacity;
     private RecycledEntity[] _freeIds;
     private int _freeIdCount;
-    private int _archetypeGeneration;
-    private int _queryLayoutGeneration;
     private int _queryLayoutSuppressionCount;
     private bool _queryLayoutDirty;
+    private int _queryGeneration;
 
     /// <summary>
     /// Creates a world.
@@ -85,9 +84,7 @@ public sealed class World
 
     internal HierarchyTable Hierarchy => _hierarchy;
 
-    internal int ArchetypeGeneration => _archetypeGeneration;
-
-    internal int QueryLayoutGeneration => _queryLayoutGeneration;
+    internal int QueryGeneration => _queryGeneration;
 
     internal void ResetSnapshotState(int entitySlotCount)
     {
@@ -100,8 +97,7 @@ public sealed class World
         _archetypeSnapshot = Array.Empty<Archetype>();
         _queryFiltersByDescription = new Dictionary<QueryDescription, QueryFilter>();
         _queries = new Dictionary<QueryFilter, MiniArch.Core.Query>();
-        _archetypeGeneration = 0;
-        _queryLayoutGeneration = 0;
+        _queryGeneration = 0;
         _freeIdCount = 0;
         _hierarchy.Reset();
 
@@ -929,7 +925,7 @@ public sealed class World
         archetype = new Archetype(signature, ResolveComponentTypes(signature), chunkCapacity);
         _archetypes.Add(signature, archetype);
         PublishArchetypeSnapshot(archetype);
-        _archetypeGeneration++;
+        AdvanceQueryGeneration();
         return archetype;
     }
 
@@ -1266,7 +1262,13 @@ public sealed class World
             return;
         }
 
-        _queryLayoutGeneration++;
+        AdvanceQueryGeneration();
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void AdvanceQueryGeneration()
+    {
+        _queryGeneration++;
     }
 
     private ComponentType GetComponentType<T>()
@@ -2366,7 +2368,7 @@ public sealed class World
         if (_queryLayoutSuppressionCount == 0 && _queryLayoutDirty)
         {
             _queryLayoutDirty = false;
-            _queryLayoutGeneration++;
+            AdvanceQueryGeneration();
         }
     }
 

@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, typed columns, direct-index writes, signatures, and queries
-updated: 2026-04-12
+updated: 2026-04-14
 ---
 # MiniArch Core ECS
 
@@ -49,11 +49,12 @@ updated: 2026-04-12
 - `Query` 先缓存匹配 archetype，再暴露 chunk 枚举和 `GetChunkSpan()` 这类 span-first 读入口
 - `QueryDescription` 只保存 `Type` 集合，不直接保存 `ComponentType`；真正进入执行时由 `MiniArch.Core.Query.Create(world, in description)` 或 `World.Query(in description)` 把它翻译成当前 world 的 `QueryFilter`，再复用现有 `Query` 缓存
   - query 读路径使用 world 发布的 archetype 数组快照和 query 自身发布的 matched-archetype 数组快照，避免共享可变列表
+  - query cache 失效判定应该以 world 统一的 query generation 为准；archetype publish、query layout 变化、deferred layout flush 都只推进这一份 generation，warmed 读路径才能维持最小固定成本
 - 和其他模块的交互方式：
   - `World` 通过 `ComponentRegistry` 把类型映射成 `ComponentType`
   - `World` 通过 `Signature` 定位 archetype
   - `Archetype` 通过 component-to-column 索引把 `Set` 路径压成一次定位 + 一次写入
-  - `Query` 依赖 `World.ArchetypeGeneration` 判断是否需要刷新缓存
+- `Query` 的 warmed 热路径应该尽量只比较一份 world 侧统一 query generation；不要在热循环里同时读取 `ArchetypeGeneration` 和 `QueryLayoutGeneration` 两份状态。
 
 ## 决策
 
