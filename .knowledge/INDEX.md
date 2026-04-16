@@ -8,7 +8,7 @@
 - `kb-profiling-workflow.md`：可复用的 CPU sampling / profiling 方法和命令模板
 - `kb-throughput-workflow.md`：可复用的固定时长吞吐量对比方法和命令模板
 - `kb-core-ecs.md`：`MiniArch.Core` 的运行时架构说明
-- `kb-command-buffer-feasibility.md`：command buffer 的已实现模型、回放顺序、并发 recording 边界和验证入口
+- `kb-command-buffer-feasibility.md`：command buffer 的已实现模型、回放顺序、并发 recording 边界、0-GC 优化结果和验证入口
 - `kb-user-api-layering.md`：`MiniArch` 共享 `World/Entity/QueryDescription`、默认 `foreach` 查询，以及 `MiniArch.Core` advanced 边界
 - `kb-snapshot-persistence.md`：snapshot 存档格式、运行时桥接点和 load/save 边界
 - `kb-hierarchy-runtime.md`：runtime-owned parent-child、级联销毁和 hierarchy snapshot 恢复

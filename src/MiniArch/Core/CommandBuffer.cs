@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
 
@@ -17,7 +19,7 @@ public sealed class CommandBuffer
     private readonly Dictionary<EntityComponentKey, CompiledComponentCommand> _compiledAddsScratch = new(4);
     private readonly Dictionary<EntityComponentKey, CompiledComponentCommand> _compiledSetsScratch = new(4);
     private readonly Dictionary<EntityComponentKey, CompiledRemoveCommand> _compiledRemovesScratch = new(4);
-    private readonly Dictionary<Type, ComponentType> _componentTypeCacheScratch = new(4);
+    private readonly Dictionary<int, (Type RuntimeType, ComponentType ComponentType)> _componentTypeInfoCacheScratch = new(4);
     private readonly HashSet<Entity> _destroyedEntitiesScratch = new(4);
     private readonly Dictionary<Entity, HierarchyIntent> _hierarchyByChildScratch = new(4);
     private readonly CompiledCommandBatch _compiledBatch = new();
@@ -47,7 +49,8 @@ public sealed class CommandBuffer
     /// </summary>
     public void Add<T>(Entity entity, T component)
     {
-        GetShard().Adds.Add(new RecordedComponentCommand(entity, typeof(T), component));
+        var componentTypeId = GetComponentTypeId<T>();
+        GetShard().Adds.Add(new RecordedComponentCommand(entity, componentTypeId, component));
     }
 
     /// <summary>
@@ -55,7 +58,8 @@ public sealed class CommandBuffer
     /// </summary>
     public void Set<T>(Entity entity, T component)
     {
-        GetShard().Sets.Add(new RecordedComponentCommand(entity, typeof(T), component));
+        var componentTypeId = GetComponentTypeId<T>();
+        GetShard().Sets.Add(new RecordedComponentCommand(entity, componentTypeId, component));
     }
 
     /// <summary>
@@ -63,7 +67,8 @@ public sealed class CommandBuffer
     /// </summary>
     public void Remove<T>(Entity entity)
     {
-        GetShard().Removes.Add(new RecordedRemoveCommand(entity, typeof(T)));
+        var componentTypeId = GetComponentTypeId<T>();
+        GetShard().Removes.Add(new RecordedRemoveCommand(entity, componentTypeId));
     }
 
     /// <summary>
@@ -192,10 +197,10 @@ public sealed class CommandBuffer
         compiledSets.EnsureCapacity(counts.Sets);
         var compiledRemoves = _compiledRemovesScratch;
         compiledRemoves.Clear();
-        compiledRemoves.EnsureCapacity(counts.Removes);
-        var componentTypeCache = _componentTypeCacheScratch;
-        componentTypeCache.Clear();
-        componentTypeCache.EnsureCapacity(counts.Adds + counts.Sets + counts.Removes);
+         compiledRemoves.EnsureCapacity(counts.Removes);
+        var componentTypeInfoCache = _componentTypeInfoCacheScratch;
+        componentTypeInfoCache.Clear();
+        componentTypeInfoCache.EnsureCapacity(counts.Adds + counts.Sets + counts.Removes);
         var destroyedEntities = _destroyedEntitiesScratch;
         destroyedEntities.Clear();
         destroyedEntities.EnsureCapacity(counts.Destroys);
@@ -220,15 +225,15 @@ public sealed class CommandBuffer
             for (var index = 0; index < adds.Count; index++)
             {
                 var command = adds[index];
-                var componentType = ResolveComponentType(command.ComponentType, componentTypeCache);
+                var (runtimeType, componentType) = ResolveComponentTypeInfo(command.ComponentTypeId, componentTypeInfoCache);
                 if (createdStates.TryGetValue(command.Entity, out var created))
                 {
-                    created.Add(command.ComponentType, componentType, command.Value);
+                    created.Add(command.ComponentTypeId, runtimeType, componentType, command.Value);
                     continue;
                 }
 
-                compiledAdds[new EntityComponentKey(command.Entity, command.ComponentType)] =
-                    new CompiledComponentCommand(command.Entity, command.ComponentType, componentType, command.Value);
+                compiledAdds[new EntityComponentKey(command.Entity, command.ComponentTypeId)] =
+                    new CompiledComponentCommand(command.Entity, command.ComponentTypeId, runtimeType, componentType, command.Value);
             }
         }
 
@@ -238,15 +243,15 @@ public sealed class CommandBuffer
             for (var index = 0; index < sets.Count; index++)
             {
                 var command = sets[index];
-                var componentType = ResolveComponentType(command.ComponentType, componentTypeCache);
+                var (runtimeType, componentType) = ResolveComponentTypeInfo(command.ComponentTypeId, componentTypeInfoCache);
                 if (createdStates.TryGetValue(command.Entity, out var created))
                 {
-                    created.Set(command.ComponentType, componentType, command.Value);
+                    created.Set(command.ComponentTypeId, runtimeType, componentType, command.Value);
                     continue;
                 }
 
-                compiledSets[new EntityComponentKey(command.Entity, command.ComponentType)] =
-                    new CompiledComponentCommand(command.Entity, command.ComponentType, componentType, command.Value);
+                compiledSets[new EntityComponentKey(command.Entity, command.ComponentTypeId)] =
+                    new CompiledComponentCommand(command.Entity, command.ComponentTypeId, runtimeType, componentType, command.Value);
             }
         }
 
@@ -258,12 +263,13 @@ public sealed class CommandBuffer
                 var command = removes[index];
                 if (createdStates.TryGetValue(command.Entity, out var created))
                 {
-                    created.Remove(command.ComponentType);
+                    created.Remove(command.ComponentTypeId);
                     continue;
                 }
 
-                compiledRemoves[new EntityComponentKey(command.Entity, command.ComponentType)] =
-                    new CompiledRemoveCommand(command.Entity, command.ComponentType, ResolveComponentType(command.ComponentType, componentTypeCache));
+                var (runtimeType, componentType) = ResolveComponentTypeInfo(command.ComponentTypeId, componentTypeInfoCache);
+                compiledRemoves[new EntityComponentKey(command.Entity, command.ComponentTypeId)] =
+                    new CompiledRemoveCommand(command.Entity, command.ComponentTypeId, runtimeType, componentType);
             }
         }
 
@@ -358,7 +364,7 @@ public sealed class CommandBuffer
         compiledAdds.Clear();
         compiledSets.Clear();
         compiledRemoves.Clear();
-        componentTypeCache.Clear();
+        componentTypeInfoCache.Clear();
         destroyedEntities.Clear();
         hierarchyByChild.Clear();
         return compiledBatch;
@@ -413,18 +419,37 @@ public sealed class CommandBuffer
         return counts;
     }
 
-    private ComponentType ResolveComponentType(Type runtimeType, Dictionary<Type, ComponentType> cache)
+    private (Type RuntimeType, ComponentType ComponentType) ResolveComponentTypeInfo(int componentTypeId, Dictionary<int, (Type RuntimeType, ComponentType ComponentType)> cache)
     {
-        if (cache.TryGetValue(runtimeType, out var componentType))
+        if (cache.TryGetValue(componentTypeId, out var info))
         {
-            return componentType;
+            return info;
         }
 
-        componentType = _world.Components.TryGetId(runtimeType, out var resolved)
-            ? resolved
-            : (ComponentType)(-1);
-        cache.Add(runtimeType, componentType);
-        return componentType;
+        // componentTypeId comes from GetOrCreate<T>().Value which equals ComponentType.Value,
+        // so we can reconstruct ComponentType directly and only look up the runtime Type.
+        var componentType = (ComponentType)componentTypeId;
+        if (!_world.Components.TryGetType(componentType, out var runtimeType))
+        {
+            runtimeType = typeof(object);
+            componentType = default;
+        }
+
+        info = (runtimeType, componentType);
+        cache.Add(componentTypeId, info);
+        return info;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int GetComponentTypeId<T>()
+    {
+        if (ComponentTypeCache<T>.Registry != _world.Components)
+        {
+            ComponentTypeCache<T>.Registry = _world.Components;
+            ComponentTypeCache<T>.ComponentTypeId = _world.Components.GetOrCreate<T>().Value;
+        }
+
+        return ComponentTypeCache<T>.ComponentTypeId;
     }
 
     private CommandBufferShard GetShard()
@@ -437,7 +462,7 @@ public sealed class CommandBuffer
 
     private sealed class CreatedEntityState
     {
-        private Dictionary<Type, CompiledComponentValue>? _components;
+        private Dictionary<int, CompiledComponentValue>? _components;
 
         public CreatedEntityState(Entity entity)
         {
@@ -448,19 +473,19 @@ public sealed class CommandBuffer
 
         public bool Destroyed { get; set; }
 
-        public void Add(Type runtimeType, ComponentType componentType, object? value)
+        public void Add(int componentTypeId, Type runtimeType, ComponentType componentType, object? value)
         {
-            (_components ??= [])[runtimeType] = new CompiledComponentValue(runtimeType, componentType, value);
+            (_components ??= [])[componentTypeId] = new CompiledComponentValue(componentTypeId, runtimeType, componentType, value);
         }
 
-        public void Set(Type runtimeType, ComponentType componentType, object? value)
+        public void Set(int componentTypeId, Type runtimeType, ComponentType componentType, object? value)
         {
-            (_components ??= [])[runtimeType] = new CompiledComponentValue(runtimeType, componentType, value);
+            (_components ??= [])[componentTypeId] = new CompiledComponentValue(componentTypeId, runtimeType, componentType, value);
         }
 
-        public void Remove(Type runtimeType)
+        public void Remove(int componentTypeId)
         {
-            _components?.Remove(runtimeType);
+            _components?.Remove(componentTypeId);
         }
 
         public CompiledCreatedEntity ToCompiledEntity()
@@ -470,30 +495,49 @@ public sealed class CommandBuffer
                 return new CompiledCreatedEntity(Entity, Signature.Empty, Array.Empty<CompiledComponentValue>());
             }
 
-            var components = new CompiledComponentValue[_components.Count];
-            var componentTypes = new ComponentType[_components.Count];
-            var index = 0;
-            var allComponentTypesResolved = true;
-            foreach (var pair in _components)
+            var count = _components.Count;
+            var components = ArrayPool<CompiledComponentValue>.Shared.Rent(count);
+            var componentTypes = ArrayPool<ComponentType>.Shared.Rent(count);
+            try
             {
-                componentTypes[index] = pair.Value.ComponentType;
-                components[index] = pair.Value;
-                allComponentTypesResolved &= pair.Value.ComponentType.IsValid;
-                index++;
-            }
+                var index = 0;
+                var allComponentTypesResolved = true;
+                foreach (var pair in _components)
+                {
+                    componentTypes[index] = pair.Value.ComponentType;
+                    components[index] = pair.Value;
+                    allComponentTypesResolved &= pair.Value.ComponentType.IsValid;
+                    index++;
+                }
 
-            Signature? signature = null;
-            if (allComponentTypesResolved)
+                Signature? signature = null;
+                if (allComponentTypesResolved)
+                {
+                    // Sort the rented arrays in-place (only first `count` elements matter).
+                    Array.Sort(componentTypes, components, 0, count);
+
+                    // Signature.CreateNormalized takes ownership of the array,
+                    // so we must provide a correctly-sized one (not a pooled oversized one).
+                    var signatureTypes = new ComponentType[count];
+                    Array.Copy(componentTypes, signatureTypes, count);
+                    signature = Signature.CreateNormalized(signatureTypes);
+                }
+
+                // Copy pooled data into an exactly-sized array for the entity.
+                var entityComponents = new CompiledComponentValue[count];
+                Array.Copy(components, entityComponents, count);
+
+                return new CompiledCreatedEntity(Entity, signature, entityComponents);
+            }
+            finally
             {
-                Array.Sort(componentTypes, components);
-                signature = Signature.CreateNormalized(componentTypes);
+                ArrayPool<CompiledComponentValue>.Shared.Return(components);
+                ArrayPool<ComponentType>.Shared.Return(componentTypes);
             }
-
-            return new CompiledCreatedEntity(Entity, signature, components);
         }
     }
 
-    private readonly record struct EntityComponentKey(Entity Entity, Type ComponentType);
+    private readonly record struct EntityComponentKey(Entity Entity, int ComponentTypeId);
 
     private readonly record struct HierarchyIntent(bool IsLinked, Entity Parent);
 
@@ -507,7 +551,7 @@ public sealed class CommandBuffer
         public int Destroys;
     }
 
-    internal readonly record struct CompiledComponentValue(Type RuntimeType, ComponentType ComponentType, object? Value);
+    internal readonly record struct CompiledComponentValue(int ComponentTypeId, Type RuntimeType, ComponentType ComponentType, object? Value);
 
     internal readonly record struct CompiledCreatedEntity(Entity Entity, Signature? Signature, CompiledComponentValue[] Components)
     {
@@ -532,7 +576,7 @@ public sealed class CommandBuffer
         }
     }
 
-    internal readonly record struct CompiledComponentCommand(Entity Entity, Type RuntimeType, ComponentType ComponentType, object? Value)
+    internal readonly record struct CompiledComponentCommand(Entity Entity, int ComponentTypeId, Type RuntimeType, ComponentType ComponentType, object? Value)
     {
         public FrameEntityComponentCommand ToFrame()
         {
@@ -540,7 +584,7 @@ public sealed class CommandBuffer
         }
     }
 
-    internal readonly record struct CompiledRemoveCommand(Entity Entity, Type RuntimeType, ComponentType ComponentType)
+    internal readonly record struct CompiledRemoveCommand(Entity Entity, int ComponentTypeId, Type RuntimeType, ComponentType ComponentType)
     {
         public FrameEntityRemoveCommand ToFrame()
         {
@@ -631,5 +675,14 @@ public sealed class CommandBuffer
 
             return new FrameCommands(state);
         }
+    }
+
+    /// <summary>
+    /// Per-type cache for component type id resolution, avoiding concurrent dictionary lookups after warmup.
+    /// </summary>
+    private static class ComponentTypeCache<T>
+    {
+        public static ComponentRegistry? Registry;
+        public static int ComponentTypeId;
     }
 }

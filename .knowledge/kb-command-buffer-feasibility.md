@@ -1,8 +1,8 @@
 ---
 title: Command Buffer Runtime
 module: MiniArch.Core CommandBuffer
-description: Implemented command buffer model, fixed replay order, world delta capture/apply, recording concurrency scope, and validation notes
-updated: 2026-04-14
+description: Implemented command buffer model, fixed replay order, world delta capture/apply, recording concurrency scope, 0-GC optimization results, and validation notes
+updated: 2026-04-16
 ---
 # Command Buffer Runtime
 
@@ -156,6 +156,51 @@ updated: 2026-04-14
   - 当前 `World.Set<T>` 在组件不存在时会走“补组件 + 迁移”路径，command buffer 的 `Set` 语义必须与它兼容
   - `ReleaseReservedEntity` 会提升 version 并归还 free-list；如果漏掉 version 递增，stale handle 会重新变活
   - 跨 world replay 现在依赖“目标 world 与源 world 从同一初始态开始，并按相同 frame 顺序推进”；如果这个前提破坏，replay 会在 reservation 对齐时失败
+
+## Phase 1 Implementation Results: 0-GC Optimization
+
+### GC Measurement Results (Release mode)
+
+| Scenario | Gen0 | Gen1 | Gen2 |
+|----------|------|------|------|
+| Set 100x1000 (reuse buffer) | 0 | 0 | 0 |
+| Set 100x1000 (new buffer each) | 0 | 0 | 0 |
+| Create 100 with 2 comps | 0 | 0 | 0 |
+| Destroy 50 | 0 | 0 | 0 |
+| Record 100x1000 (no play) | 0 | 0 | 0 |
+| First-time Set 100 (cold cache) | 0 | 0 | 0 |
+| Create 1000 with 2 comps | 0 | 0 | 0 |
+| Set 10x10000 (reuse buffer) | 0 | 0 | 0 |
+
+- Set 10x10000 allocated 10.3MB (boxing of value types), but zero GC collections
+
+### Optimizations Implemented
+
+1. **ComponentTypeCache\<T\> added to CommandBuffer**: `GetComponentTypeId<T>()` method with `AggressiveInlining`. After first call per T per World, only reads 2 static fields + 1 comparison. Eliminates `GetOrCreate<T>()` concurrent dict lookup on every recording call. Pattern mirrors World's existing `ComponentTypeCache<T>`.
+
+2. **Dead code removed**: `_componentTypeCacheScratch` field, `ResolveComponentTypeById` method, and its `Compile()` usage.
+
+3. **ResolveComponentTypeInfo simplified**: `componentType = default` on failure instead of `(ComponentType)(-1)`.
+
+4. **ArrayPool for ToCompiledEntity()**: Rents `CompiledComponentValue[]` and `ComponentType[]` from ArrayPool for sorting, returns in finally block. Still allocates exact-sized output arrays for `Signature.CreateNormalized` (takes ownership) and `CompiledCreatedEntity` (stores array).
+
+5. **World.Replay(CompiledCommandBatch) optimized**: Removed `_compiledReplayComponentTypeScratch` dictionary entirely from this path. Now calls `AddBoxed/SetBoxed/RemoveBoxed(entity, componentType, value)` directly since ComponentType is always valid from recording.
+
+### Key Design Decisions
+
+- **Recording-time ComponentTypeCache\<T\> chosen over §5.3 "compile-time only lookup"** because:
+  - After first call it's essentially free (2 static field reads)
+  - The componentTypeId is needed at recording time for `EntityComponentKey(int)`
+  - Avoids redundant compile-time dictionary lookups
+
+- **ArrayPool used instead of pre-allocated scratch arrays** because created entity component counts are variable and unpredictable
+
+- **Play() path achieves true 0-GC** because ComponentType is always valid from recording
+
+### Build/Test Status
+
+- 0 warnings, 0 errors
+- 176/176 tests pass
 
 ## 关联模块
 

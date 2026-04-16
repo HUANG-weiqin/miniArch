@@ -1502,8 +1502,8 @@ public sealed class World
     {
         ArgumentNullException.ThrowIfNull(compiledCommands);
 
-        var componentTypeCache = _compiledReplayComponentTypeScratch;
-        componentTypeCache.Clear();
+        // CompiledCommandBatch always carries valid ComponentType values (resolved at recording time),
+        // so no dictionary lookup is needed in this path.
         BeginDeferredLayoutUpdates();
         try
         {
@@ -1519,7 +1519,7 @@ public sealed class World
 
             foreach (var created in compiledCommands.CreatedEntities)
             {
-                MaterializeReservedEntity(created.Entity, created.Signature, created.Components, componentTypeCache, reservationChecked: true);
+                MaterializeReservedEntity(created.Entity, created.Signature, created.Components, null, reservationChecked: true);
             }
 
             foreach (var link in compiledCommands.LinkCommands)
@@ -1534,17 +1534,17 @@ public sealed class World
 
             foreach (var add in compiledCommands.AddCommands)
             {
-                AddBoxed(add.Entity, ResolveCompiledComponentType(add.RuntimeType, add.ComponentType, componentTypeCache), add.Value);
+                AddBoxed(add.Entity, add.ComponentType, add.Value);
             }
 
             foreach (var set in compiledCommands.SetCommands)
             {
-                SetBoxed(set.Entity, ResolveCompiledComponentType(set.RuntimeType, set.ComponentType, componentTypeCache), set.Value);
+                SetBoxed(set.Entity, set.ComponentType, set.Value);
             }
 
             foreach (var remove in compiledCommands.RemoveCommands)
             {
-                RemoveBoxed(remove.Entity, ResolveCompiledComponentType(remove.RuntimeType, remove.ComponentType, componentTypeCache));
+                RemoveBoxed(remove.Entity, remove.ComponentType);
             }
 
             foreach (var entity in compiledCommands.DestroyedEntities)
@@ -1557,7 +1557,6 @@ public sealed class World
         }
         finally
         {
-            componentTypeCache.Clear();
             EndDeferredLayoutUpdates();
         }
     }

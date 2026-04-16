@@ -257,6 +257,6 @@ internal sealed class ReverseFrameCommandsState
 
 internal readonly record struct RecordedHierarchyCommand(Entity Child, Entity Parent, bool IsLink);
 
-internal readonly record struct RecordedComponentCommand(Entity Entity, Type ComponentType, object? Value);
+internal readonly record struct RecordedComponentCommand(Entity Entity, int ComponentTypeId, object? Value);
 
-internal readonly record struct RecordedRemoveCommand(Entity Entity, Type ComponentType);
+internal readonly record struct RecordedRemoveCommand(Entity Entity, int ComponentTypeId);
