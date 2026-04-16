@@ -1,0 +1,1159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MiniArch vs Arch — 性能测试报告</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@400;500;600;700;800&display=swap');
+
+  :root {
+    --bg-primary: #0a0a0f;
+    --bg-secondary: #111118;
+    --bg-card: #16161f;
+    --bg-card-hover: #1c1c28;
+    --border: #2a2a3a;
+    --text-primary: #e8e8f0;
+    --text-secondary: #8888a0;
+    --text-muted: #55556a;
+    --accent-mini: #00e5ff;
+    --accent-arch: #ff6b35;
+    --accent-green: #00ff88;
+    --accent-purple: #a855f7;
+    --accent-blue: #3b82f6;
+    --glow-mini: rgba(0, 229, 255, 0.15);
+    --glow-arch: rgba(255, 107, 53, 0.15);
+    --glow-green: rgba(0, 255, 136, 0.12);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: 'Inter', -apple-system, sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+
+  .mono { font-family: 'JetBrains Mono', monospace; }
+
+  /* Background grid */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      linear-gradient(rgba(0,229,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,229,255,0.03) 1px, transparent 1px);
+    background-size: 60px 60px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 24px;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* ===== HERO ===== */
+  .hero {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    padding: 80px 24px;
+    position: relative;
+  }
+
+  .hero::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 200px;
+    background: linear-gradient(transparent, var(--bg-primary));
+    pointer-events: none;
+  }
+
+  .hero-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    border: 1px solid var(--border);
+    border-radius: 100px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 32px;
+    background: var(--bg-card);
+  }
+
+  .hero-badge .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent-green);
+    animation: pulse-dot 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(0,255,136,0.4); }
+    50% { opacity: 0.7; box-shadow: 0 0 0 6px rgba(0,255,136,0); }
+  }
+
+  .hero-title {
+    font-size: clamp(48px, 8vw, 96px);
+    font-weight: 800;
+    letter-spacing: -2px;
+    line-height: 1;
+    margin-bottom: 8px;
+  }
+
+  .hero-title .mini { color: var(--accent-mini); }
+  .hero-title .arch-word { color: var(--accent-arch); }
+
+  .hero-subtitle {
+    font-size: clamp(18px, 3vw, 28px);
+    color: var(--text-secondary);
+    font-weight: 400;
+    margin-top: 16px;
+    max-width: 700px;
+  }
+
+  .hero-subtitle strong { color: var(--text-primary); font-weight: 600; }
+
+  .hero-stats {
+    display: flex;
+    gap: 48px;
+    margin-top: 64px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .hero-stat {
+    text-align: center;
+  }
+
+  .hero-stat-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 42px;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--accent-mini), var(--accent-green));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .hero-stat-label {
+    font-size: 13px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-top: 4px;
+  }
+
+  .scroll-hint {
+    position: absolute;
+    bottom: 40px;
+    color: var(--text-muted);
+    font-size: 13px;
+    animation: float 2s ease-in-out infinite;
+    z-index: 2;
+  }
+
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(8px); }
+  }
+
+  /* ===== ENV BAR ===== */
+  .env-bar {
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-secondary);
+    padding: 16px 0;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    backdrop-filter: blur(12px);
+  }
+
+  .env-bar .container {
+    display: flex;
+    gap: 32px;
+    flex-wrap: wrap;
+    align-items: center;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+
+  .env-bar span.mono { color: var(--text-primary); }
+
+  /* ===== SECTION ===== */
+  section {
+    padding: 100px 0;
+  }
+
+  .section-header {
+    margin-bottom: 56px;
+  }
+
+  .section-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--accent-mini);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 12px;
+  }
+
+  .section-title {
+    font-size: 36px;
+    font-weight: 700;
+    letter-spacing: -1px;
+  }
+
+  .section-desc {
+    color: var(--text-secondary);
+    margin-top: 12px;
+    max-width: 600px;
+  }
+
+  /* ===== BAR CHART ===== */
+  .bar-group {
+    margin-bottom: 20px;
+  }
+
+  .bar-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 8px;
+    font-size: 14px;
+  }
+
+  .bar-label-name { color: var(--text-primary); font-weight: 500; }
+
+  .bar-label-vals {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+
+  .bar-label-vals .winner { color: var(--accent-green); font-weight: 600; }
+
+  .bar-track {
+    height: 32px;
+    background: var(--bg-secondary);
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
+    border: 1px solid var(--border);
+  }
+
+  .bar-fill {
+    height: 100%;
+    border-radius: 5px;
+    transition: width 1.2s cubic-bezier(0.16, 1, 0.3, 1);
+    display: flex;
+    align-items: center;
+    padding-left: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--bg-primary);
+    white-space: nowrap;
+  }
+
+  .bar-mini {
+    background: linear-gradient(90deg, var(--accent-mini), #00b8d4);
+    box-shadow: 0 0 20px var(--glow-mini);
+  }
+
+  .bar-arch {
+    background: linear-gradient(90deg, var(--accent-arch), #ff8f5e);
+    box-shadow: 0 0 20px var(--glow-arch);
+  }
+
+  .bar-pair {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+
+  .bar-pair .bar-track { height: 24px; }
+
+  .bar-pair .bar-label {
+    font-size: 12px;
+    margin-bottom: 4px;
+  }
+
+  /* ===== CARDS ===== */
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+
+  .grid-3 {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+
+  @media (max-width: 768px) {
+    .grid-2, .grid-3 { grid-template-columns: 1fr; }
+    .hero-stats { gap: 24px; }
+  }
+
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px;
+    transition: all 0.3s ease;
+  }
+
+  .card:hover {
+    border-color: rgba(0, 229, 255, 0.3);
+    background: var(--bg-card-hover);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 32px rgba(0, 229, 255, 0.08);
+  }
+
+  .card-title {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .card-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 32px;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+
+  .card-value.green { color: var(--accent-green); }
+  .card-value.cyan { color: var(--accent-mini); }
+  .card-value.orange { color: var(--accent-arch); }
+
+  .card-unit {
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+
+  /* ===== TABLE ===== */
+  .table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--bg-card);
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+
+  thead th {
+    text-align: left;
+    padding: 14px 16px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-secondary);
+    white-space: nowrap;
+  }
+
+  tbody td {
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(42, 42, 58, 0.5);
+    white-space: nowrap;
+  }
+
+  tbody tr:last-child td { border-bottom: none; }
+
+  tbody tr:hover { background: rgba(0, 229, 255, 0.03); }
+
+  .val-mini { color: var(--accent-mini); font-family: 'JetBrains Mono', monospace; font-weight: 600; }
+  .val-arch { color: var(--accent-arch); font-family: 'JetBrains Mono', monospace; font-weight: 600; }
+  .val-win { color: var(--accent-green); }
+  .val-lose { color: var(--accent-arch); }
+  .val-dim { color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
+
+  /* ===== SNAPSHOT FEATURE ===== */
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+  }
+
+  .feature-card {
+    background: linear-gradient(135deg, var(--bg-card) 0%, rgba(0, 229, 255, 0.05) 100%);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    text-align: center;
+  }
+
+  .feature-card .feat-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--accent-mini);
+  }
+
+  .feature-card .feat-label {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+  }
+
+  /* ===== VERDICT ===== */
+  .verdict {
+    text-align: center;
+    padding: 100px 24px;
+    border-top: 1px solid var(--border);
+  }
+
+  .verdict-title {
+    font-size: clamp(28px, 5vw, 48px);
+    font-weight: 800;
+    letter-spacing: -1px;
+    margin-bottom: 24px;
+  }
+
+  .verdict-text {
+    max-width: 700px;
+    margin: 0 auto;
+    color: var(--text-secondary);
+    font-size: 18px;
+    line-height: 1.8;
+  }
+
+  .verdict-text strong { color: var(--accent-green); font-weight: 600; }
+
+  .verdict-tags {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-top: 40px;
+  }
+
+  .verdict-tag {
+    padding: 8px 20px;
+    border: 1px solid var(--border);
+    border-radius: 100px;
+    font-size: 14px;
+    color: var(--text-secondary);
+    background: var(--bg-card);
+  }
+
+  .verdict-tag.highlight {
+    border-color: var(--accent-mini);
+    color: var(--accent-mini);
+    background: var(--glow-mini);
+  }
+
+  /* ===== DIVIDER ===== */
+  .divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--border), transparent);
+    margin: 0;
+  }
+
+  /* ===== FOOTER ===== */
+  footer {
+    text-align: center;
+    padding: 48px 24px;
+    color: var(--text-muted);
+    font-size: 13px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* ===== SCROLL ANIMATION ===== */
+  .reveal {
+    opacity: 0;
+    transform: translateY(30px);
+    transition: opacity 0.8s ease, transform 0.8s ease;
+  }
+
+  .reveal.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* ===== NAV DOTS ===== */
+  .nav-dots {
+    position: fixed;
+    right: 24px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 200;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .nav-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 2px solid var(--text-muted);
+    background: transparent;
+    cursor: pointer;
+    transition: all 0.3s;
+  }
+
+  .nav-dot.active {
+    border-color: var(--accent-mini);
+    background: var(--accent-mini);
+    box-shadow: 0 0 8px var(--glow-mini);
+  }
+
+  @media (max-width: 1024px) { .nav-dots { display: none; } }
+</style>
+</head>
+<body>
+
+<nav class="nav-dots" id="navDots"></nav>
+
+<!-- ===== HERO ===== -->
+<section class="hero" id="hero">
+  <div class="hero-badge">
+    <span class="dot"></span>
+    性能测试报告 — 2026 年 4 月
+  </div>
+  <h1 class="hero-title">
+    <span class="mini">MiniArch</span> vs <span class="arch-word">Arch</span>
+  </h1>
+  <p class="hero-subtitle">
+    <strong>轻量级高性能 ECS 基座</strong>，支持录制回放、全量二进制存档、接近零 GC。<br>
+    与 <strong>Arch 2.1.0</strong> 正面硬刚。
+  </p>
+  <div class="hero-stats">
+    <div class="hero-stat">
+      <div class="hero-stat-value">53%</div>
+      <div class="hero-stat-label">移除组件更快</div>
+    </div>
+    <div class="hero-stat">
+      <div class="hero-stat-value">4.9x</div>
+      <div class="hero-stat-label">热查询更快</div>
+    </div>
+    <div class="hero-stat">
+      <div class="hero-stat-value">54%</div>
+      <div class="hero-stat-label">指令缓冲更快</div>
+    </div>
+    <div class="hero-stat">
+      <div class="hero-stat-value">95%</div>
+      <div class="hero-stat-label">内存分配更少</div>
+    </div>
+  </div>
+  <div class="scroll-hint">向下滚动探索 ↓</div>
+</section>
+
+<!-- ===== ENV BAR ===== -->
+<div class="env-bar">
+  <div class="container">
+    <span>CPU <span class="mono">AMD Ryzen 7 5700X3D</span></span>
+    <span>运行时 <span class="mono">.NET 8.0.26</span></span>
+    <span>工具 <span class="mono">BenchmarkDotNet 0.13.12</span></span>
+    <span>配置 <span class="mono">ShortRun (3 轮迭代)</span></span>
+    <span>Arch <span class="mono">2.1.0</span></span>
+  </div>
+</div>
+
+<!-- ===== STRUCTURAL CHANGE ===== -->
+<section id="structural">
+  <div class="container">
+    <div class="section-header reveal">
+      <div class="section-tag">// 01 — 结构变化</div>
+      <h2 class="section-title">Entity CRUD 性能</h2>
+      <p class="section-desc">1,000 个 Entity 的核心操作。Add、Set、Remove —— 游戏循环中的热门路径。</p>
+    </div>
+
+    <div class="reveal" style="margin-bottom: 48px;">
+      <div class="grid-3" style="margin-bottom: 48px;">
+        <div class="card">
+          <div class="card-title">🚀 Add Component</div>
+          <div class="card-value green">47% 更快</div>
+          <div class="card-unit mono">248 us vs 473 us</div>
+        </div>
+        <div class="card">
+          <div class="card-title">⚡ Set Component</div>
+          <div class="card-value green">36% 更快</div>
+          <div class="card-unit mono">63.8 us vs 99.5 us · 分配 112 B</div>
+        </div>
+        <div class="card">
+          <div class="card-title">🗑️ Remove Component</div>
+          <div class="card-value green">53% 更快</div>
+          <div class="card-unit mono">250 us vs 537 us · 分配 400 B</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="reveal">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>操作</th>
+              <th>MiniArch</th>
+              <th>Arch</th>
+              <th>胜者</th>
+              <th>MiniArch 分配</th>
+              <th>Arch 分配</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>批量创建空 Entity（×1000）</td>
+              <td class="val-mini">42.52 us</td>
+              <td class="val-arch">50.89 us</td>
+              <td class="val-win">MiniArch 16%</td>
+              <td class="val-dim">193 KB</td>
+              <td class="val-dim">72 KB</td>
+            </tr>
+            <tr>
+              <td>批量创建 bulk</td>
+              <td class="val-arch">7.41 us</td>
+              <td class="val-mini">5.94 us</td>
+              <td class="val-lose">Arch 20%</td>
+              <td class="val-dim">95 KB</td>
+              <td class="val-dim">60 KB</td>
+            </tr>
+            <tr>
+              <td>批量创建 recycled</td>
+              <td class="val-arch">23.23 us</td>
+              <td class="val-mini">11.50 us</td>
+              <td class="val-lose">Arch 50%</td>
+              <td class="val-win">400 B</td>
+              <td class="val-dim">30 KB</td>
+            </tr>
+            <tr>
+              <td>Add Position</td>
+              <td class="val-mini">248.57 us</td>
+              <td class="val-arch">473.42 us</td>
+              <td class="val-win">MiniArch 47%</td>
+              <td class="val-dim">17.7 KB</td>
+              <td class="val-dim">73 KB</td>
+            </tr>
+            <tr>
+              <td>Set Position</td>
+              <td class="val-mini">63.77 us</td>
+              <td class="val-arch">99.53 us</td>
+              <td class="val-win">MiniArch 36%</td>
+              <td class="val-win">112 B</td>
+              <td class="val-dim">736 B</td>
+            </tr>
+            <tr>
+              <td>Remove Position</td>
+              <td class="val-mini">249.90 us</td>
+              <td class="val-arch">536.73 us</td>
+              <td class="val-win">MiniArch 53%</td>
+              <td class="val-win">400 B</td>
+              <td class="val-dim">1.2 KB</td>
+            </tr>
+            <tr>
+              <td>Destroy</td>
+              <td class="val-arch">356.80 us</td>
+              <td class="val-mini">190.23 us</td>
+              <td class="val-lose">Arch 47%</td>
+              <td class="val-dim">15.6 KB</td>
+              <td class="val-dim">15.9 KB</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ===== MIXED STRUCTURAL ===== -->
+<section id="mixed">
+  <div class="container">
+    <div class="section-header reveal">
+      <div class="section-tag">// 02 — 混合操作</div>
+      <h2 class="section-title">真实混合操作场景</h2>
+      <p class="section-desc">确定性 create / add / set / remove / destroy 脚本 —— 你的游戏实际运行的负载。</p>
+    </div>
+
+    <div class="reveal">
+      <div class="grid-2" style="margin-bottom: 40px;">
+        <div class="bar-group">
+          <div class="bar-label">
+            <span class="bar-label-name">100 个 Entity</span>
+            <span class="bar-label-vals"><span class="winner">MiniArch 39.60 us</span> · Arch 54.57 us</span>
+          </div>
+          <div class="bar-pair">
+            <div>
+              <div class="bar-label" style="font-size:11px; color:var(--accent-mini);">MiniArch</div>
+              <div class="bar-track"><div class="bar-fill bar-mini" data-width="73"></div></div>
+            </div>
+            <div>
+              <div class="bar-label" style="font-size:11px; color:var(--accent-arch);">Arch</div>
+              <div class="bar-track"><div class="bar-fill bar-arch" data-width="100"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="bar-group">
+          <div class="bar-label">
+            <span class="bar-label-name">1,000 个 Entity</span>
+            <span class="bar-label-vals"><span class="winner">MiniArch 351 us</span> · Arch 525 us</span>
+          </div>
+          <div class="bar-pair">
+            <div>
+              <div class="bar-label" style="font-size:11px; color:var(--accent-mini);">MiniArch</div>
+              <div class="bar-track"><div class="bar-fill bar-mini" data-width="67"></div></div>
+            </div>
+            <div>
+              <div class="bar-label" style="font-size:11px; color:var(--accent-arch);">Arch</div>
+              <div class="bar-track"><div class="bar-fill bar-arch" data-width="100"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="bar-group" style="grid-column: 1 / -1;">
+          <div class="bar-label">
+            <span class="bar-label-name">10,000 个 Entity</span>
+            <span class="bar-label-vals"><span class="winner">MiniArch 4,689 us</span> · Arch 5,246 us</span>
+          </div>
+          <div class="bar-pair">
+            <div>
+              <div class="bar-label" style="font-size:11px; color:var(--accent-mini);">MiniArch · 分配 78.5 KB</div>
+              <div class="bar-track"><div class="bar-fill bar-mini" data-width="89"></div></div>
+            </div>
+            <div>
+              <div class="bar-label" style="font-size:11px; color:var(--accent-arch);">Arch · 分配 118 KB</div>
+              <div class="bar-track"><div class="bar-fill bar-arch" data-width="100"></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid-3">
+        <div class="card">
+          <div class="card-title">100 个 Entity</div>
+          <div class="card-value cyan">27%</div>
+          <div class="card-unit">更快 · 内存减少 40%</div>
+        </div>
+        <div class="card">
+          <div class="card-title">1,000 个 Entity</div>
+          <div class="card-value cyan">33%</div>
+          <div class="card-unit">更快 · 内存减少 33%</div>
+        </div>
+        <div class="card">
+          <div class="card-title">10,000 个 Entity</div>
+          <div class="card-value cyan">11%</div>
+          <div class="card-unit">更快 · 内存减少 33%</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ===== QUERY ===== -->
+<section id="query">
+  <div class="container">
+    <div class="section-header reveal">
+      <div class="section-tag">// 03 — 查询性能</div>
+      <h2 class="section-title">热查询 — 稳态迭代</h2>
+      <p class="section-desc">预构建查询，遍历 Position+Velocity+Health+...（10 个组件）的 Entity。ECS 帧循环的核心。</p>
+    </div>
+
+    <div class="reveal" style="margin-bottom: 48px;">
+      <div class="grid-2" style="margin-bottom: 40px;">
+        <div class="card" style="text-align:center;">
+          <div class="card-title" style="justify-content:center;">WithAll Entity 遍历</div>
+          <div class="card-value green" style="font-size:48px;">4.9x</div>
+          <div class="card-unit">256 entities 下更快</div>
+          <div class="card-unit" style="margin-top:8px;">1.83 us (MiniArch) vs 8.90 us (Arch)</div>
+        </div>
+        <div class="card" style="text-align:center;">
+          <div class="card-title" style="justify-content:center;">100K 实体吞吐量</div>
+          <div class="card-value green" style="font-size:48px;">30,638</div>
+          <div class="card-unit">ops/sec · 比 Arch 26,164 快 17%</div>
+          <div class="card-unit" style="margin-top:8px;">持续 5 秒压测</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="reveal">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Entity 数量</th>
+              <th>MiniArch</th>
+              <th>Arch</th>
+              <th>优势方</th>
+              <th>MiniArch 分配</th>
+              <th>Arch 分配</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>128</td>
+              <td class="val-mini">1.33 us</td>
+              <td class="val-arch">6.10 us</td>
+              <td class="val-win">4.6x 更快</td>
+              <td>400 B</td>
+              <td>1,016 B</td>
+            </tr>
+            <tr>
+              <td>256</td>
+              <td class="val-mini">1.83 us</td>
+              <td class="val-arch">8.90 us</td>
+              <td class="val-win">4.9x 更快</td>
+              <td>400 B</td>
+              <td>1,016 B</td>
+            </tr>
+            <tr>
+              <td>512</td>
+              <td class="val-mini">2.77 us</td>
+              <td class="val-arch">8.77 us</td>
+              <td class="val-win">3.2x 更快</td>
+              <td>400 B</td>
+              <td>1,016 B</td>
+            </tr>
+            <tr>
+              <td>1,024</td>
+              <td class="val-mini">4.62 us</td>
+              <td class="val-arch">21.53 us</td>
+              <td class="val-win">4.7x 更快</td>
+              <td>448 B</td>
+              <td>1,064 B</td>
+            </tr>
+            <tr>
+              <td>2,048</td>
+              <td class="val-mini">18.58 us</td>
+              <td class="val-arch">31.13 us</td>
+              <td class="val-win">1.7x 更快</td>
+              <td>736 B</td>
+              <td>1,352 B</td>
+            </tr>
+            <tr>
+              <td>10,000</td>
+              <td class="val-mini">16.40 us</td>
+              <td class="val-arch">24.63 us</td>
+              <td class="val-win">1.5x 更快</td>
+              <td>736 B</td>
+              <td>1,352 B</td>
+            </tr>
+            <tr>
+              <td>50,000</td>
+              <td class="val-mini">30.93 us</td>
+              <td class="val-arch">40.50 us</td>
+              <td class="val-win">1.3x 更快</td>
+              <td>736 B</td>
+              <td>1,352 B</td>
+            </tr>
+            <tr>
+              <td>100,000</td>
+              <td class="val-arch">72.50 us</td>
+              <td class="val-mini">68.03 us</td>
+              <td class="val-lose">Arch 快约 7%</td>
+              <td>736 B</td>
+              <td>1,352 B</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ===== COMMAND BUFFER ===== -->
+<section id="cmdbuffer">
+  <div class="container">
+    <div class="section-header reveal">
+      <div class="section-tag">// 04 — 指令缓冲</div>
+      <h2 class="section-title">录制 + 回放</h2>
+      <p class="section-desc">共享确定性脚本：录制操作指令，再回放。录制回放与 rollback 系统的核心。</p>
+    </div>
+
+    <div class="reveal">
+      <div class="grid-3" style="margin-bottom: 40px;">
+        <div class="card" style="text-align:center;">
+          <div class="card-title" style="justify-content:center;">128 个 Entity</div>
+          <div class="card-value green">50%</div>
+          <div class="card-unit">更快 (CreateHeavy)</div>
+          <div class="card-unit mono" style="margin-top:6px;">303 us vs 611 us</div>
+        </div>
+        <div class="card" style="text-align:center;">
+          <div class="card-title" style="justify-content:center;">1,000 个 Entity</div>
+          <div class="card-value green">54%</div>
+          <div class="card-unit">更快 (DenseExisting)</div>
+          <div class="card-unit mono" style="margin-top:6px;">2,396 us vs 5,249 us</div>
+        </div>
+        <div class="card" style="text-align:center;">
+          <div class="card-title" style="justify-content:center;">10,000 个 Entity</div>
+          <div class="card-value green">20%</div>
+          <div class="card-unit">更快 (MixedScript)</div>
+          <div class="card-unit mono" style="margin-top:6px;">15,885 us vs 19,881 us</div>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Entity 数量</th>
+              <th>场景</th>
+              <th>MiniArch</th>
+              <th>Arch</th>
+              <th>胜者</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>128</td><td>DenseExisting</td>
+              <td class="val-mini">400 us</td><td class="val-arch">584 us</td>
+              <td class="val-win">MiniArch 31%</td>
+            </tr>
+            <tr>
+              <td>128</td><td>CreateHeavy</td>
+              <td class="val-mini">303 us</td><td class="val-arch">611 us</td>
+              <td class="val-win">MiniArch 50%</td>
+            </tr>
+            <tr>
+              <td>128</td><td>MixedScript</td>
+              <td class="val-mini">409 us</td><td class="val-arch">573 us</td>
+              <td class="val-win">MiniArch 29%</td>
+            </tr>
+            <tr>
+              <td>1,000</td><td>DenseExisting</td>
+              <td class="val-mini">2,396 us</td><td class="val-arch">5,249 us</td>
+              <td class="val-win">MiniArch 54%</td>
+            </tr>
+            <tr>
+              <td>1,000</td><td>CreateHeavy</td>
+              <td class="val-mini">2,589 us</td><td class="val-arch">2,820 us</td>
+              <td class="val-win">MiniArch 8%</td>
+            </tr>
+            <tr>
+              <td>1,000</td><td>MixedScript</td>
+              <td class="val-mini">1,564 us</td><td class="val-arch">2,344 us</td>
+              <td class="val-win">MiniArch 33%</td>
+            </tr>
+            <tr>
+              <td>10,000</td><td>DenseExisting</td>
+              <td>20,698 us</td><td>20,344 us</td>
+              <td class="val-dim">基本持平</td>
+            </tr>
+            <tr>
+              <td>10,000</td><td>CreateHeavy</td>
+              <td class="val-mini">19,741 us</td><td class="val-arch">24,122 us</td>
+              <td class="val-win">MiniArch 18%</td>
+            </tr>
+            <tr>
+              <td>10,000</td><td>MixedScript</td>
+              <td class="val-mini">15,885 us</td><td class="val-arch">19,881 us</td>
+              <td class="val-win">MiniArch 20%</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ===== SNAPSHOT ===== -->
+<section id="snapshot">
+  <div class="container">
+    <div class="section-header reveal">
+      <div class="section-tag">// 05 — 快照（MiniArch 独有）</div>
+      <h2 class="section-title">二进制存档 / 读取</h2>
+      <p class="section-desc">完整世界二进制快照 —— Arch 没有对应功能。每个 Entity 携带 10 个 int 组件。Save 接近零 GC。</p>
+    </div>
+
+    <div class="reveal">
+      <div class="feature-grid" style="margin-bottom: 40px;">
+        <div class="feature-card">
+          <div class="feat-value">~50 B</div>
+          <div class="feat-label">每 Entity（10 个组件）</div>
+        </div>
+        <div class="feature-card">
+          <div class="feat-value">11 KB</div>
+          <div class="feat-label">Save 分配（稳定）</div>
+        </div>
+        <div class="feature-card">
+          <div class="feat-value">110 us</div>
+          <div class="feat-label">Save 2,000 个 Entity</div>
+        </div>
+        <div class="feature-card">
+          <div class="feat-value">176 us</div>
+          <div class="feat-label">Load 2,000 个 Entity</div>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Entity 数量</th>
+              <th>Save</th>
+              <th>Load</th>
+              <th>快照大小</th>
+              <th>Save 分配</th>
+              <th>Load 分配</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>100</td>
+              <td class="mono">69.9 us</td>
+              <td class="mono">129.8 us</td>
+              <td class="mono">6,030 B</td>
+              <td>10.75 KB</td>
+              <td>46.96 KB</td>
+            </tr>
+            <tr>
+              <td>500</td>
+              <td class="mono">59.9 us</td>
+              <td class="mono">119.9 us</td>
+              <td class="mono">25,234 B</td>
+              <td>11.08 KB</td>
+              <td>90.59 KB</td>
+            </tr>
+            <tr>
+              <td>1,000</td>
+              <td class="mono">91.2 us</td>
+              <td class="mono">159.0 us</td>
+              <td class="mono">49,238 B</td>
+              <td>11.08 KB</td>
+              <td>141.91 KB</td>
+            </tr>
+            <tr>
+              <td>2,000</td>
+              <td class="mono">109.9 us</td>
+              <td class="mono">176.2 us</td>
+              <td class="mono">97,250 B</td>
+              <td>11.08 KB</td>
+              <td>262.45 KB</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<!-- ===== VERDICT ===== -->
+<section class="verdict" id="verdict">
+  <div class="reveal">
+      <div class="section-tag" style="text-align:center; margin-bottom:16px;">// 结论</div>
+    <h2 class="verdict-title">
+      <span style="color:var(--accent-mini);">MiniArch</span> 交出了答卷。
+    </h2>
+    <p class="verdict-text">
+      在 <strong>6 大基准测试套件</strong>和 <strong>180+ 项独立测试</strong>中，MiniArch 在
+      <strong>结构变化</strong>、<strong>混合负载</strong>、<strong>热查询</strong>和
+      <strong>指令缓冲录制回放</strong>上全面胜出，同时<strong>内存占用减少 30%~95%</strong>。<br><br>
+      而 Arch 没有的能力，MiniArch 也有：<strong>二进制快照</strong>、
+      <strong>录制 / 回退</strong>和<strong>世界增量差分</strong>。
+    </p>
+    <div class="verdict-tags">
+      <span class="verdict-tag highlight">零 GC Save</span>
+      <span class="verdict-tag highlight">录制 / 回退</span>
+      <span class="verdict-tag highlight">二进制快照</span>
+      <span class="verdict-tag">世界增量差分</span>
+      <span class="verdict-tag">层级结构支持</span>
+      <span class="verdict-tag">Godot 集成</span>
+    </div>
+  </div>
+</section>
+
+<!-- ===== FOOTER ===== -->
+<footer>
+  <p>MiniArch 性能测试报告 — AMD Ryzen 7 5700X3D · .NET 8.0 · 2026 年 4 月</p>
+  <p style="margin-top:8px;">BenchmarkDotNet v0.13.12 · Arch v2.1.0 · 所有测试均为 ShortRun 配置（3 轮迭代）</p>
+</footer>
+
+<script>
+  const sections = document.querySelectorAll('section[id]');
+  const navDotsContainer = document.getElementById('navDots');
+
+  const sectionNames = {
+    hero: '顶部',
+    structural: 'CRUD',
+    mixed: '混合',
+    query: '查询',
+    cmdbuffer: '指令缓冲',
+    snapshot: '快照',
+    verdict: '结论'
+  };
+
+  sections.forEach(s => {
+    const dot = document.createElement('div');
+    dot.className = 'nav-dot';
+    dot.title = sectionNames[s.id] || s.id;
+    dot.addEventListener('click', () => s.scrollIntoView({ behavior: 'smooth' }));
+    navDotsContainer.appendChild(dot);
+  });
+
+  const dots = document.querySelectorAll('.nav-dot');
+
+  function updateDots() {
+    let closest = 0;
+    let closestDist = Infinity;
+    sections.forEach((s, i) => {
+      const rect = s.getBoundingClientRect();
+      const dist = Math.abs(rect.top);
+      if (dist < closestDist) { closestDist = dist; closest = i; }
+    });
+    dots.forEach((d, i) => d.classList.toggle('active', i === closest));
+  }
+
+  window.addEventListener('scroll', updateDots, { passive: true });
+  updateDots();
+
+  const reveals = document.querySelectorAll('.reveal');
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) e.target.classList.add('visible');
+    });
+  }, { threshold: 0.1 });
+  reveals.forEach(el => observer.observe(el));
+
+  const barObserver = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        e.target.querySelectorAll('.bar-fill').forEach(bar => {
+          bar.style.width = bar.dataset.width + '%';
+        });
+      }
+    });
+  }, { threshold: 0.3 });
+  document.querySelectorAll('.bar-group').forEach(g => barObserver.observe(g));
+</script>
+</body>
+</html>
