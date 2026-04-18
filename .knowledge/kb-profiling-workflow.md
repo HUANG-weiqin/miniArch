@@ -2,7 +2,7 @@
 title: Profiling Workflow
 module: Workspace
 description: Reusable CPU sampling workflow for locating MiniArch hotspots without instrumenting runtime hot paths
-updated: 2026-04-12
+updated: 2026-04-16
 ---
 # Profiling Workflow
 
@@ -87,11 +87,26 @@ updated: 2026-04-12
   - 读 stdout 里的 `PID`
   - 再用 `dotnet-trace collect --profile dotnet-sampled-thread-time --duration 00:00:05 -p <PID> -o profiles\\attach.nettrace`
 
+## 工作负载维度
+
+`profile-query` 支持三种工作负载，用于定位不同层级的查询热点：
+
+- `entity`：仅遍历 entity ID，用于定位 chunk 遍历和 outer loop 热点
+- `component-row-wise`：逐行访问组件，适合定位 `GetComponent<T>()` 的热点
+- `component-span`：批量 span 访问，适合定位 `GetComponentSpan<T>()` 和向量化机会
+
+推荐命令：
+
+- entity 热点：`powershell -ExecutionPolicy Bypass -File scripts/profile-query.ps1 -Workload entity -Scenario with-all -Temperature hot -DurationSeconds 5 -WarmupIterations 2`
+- component-row-wise 热点：`powershell -ExecutionPolicy Bypass -File scripts/profile-query.ps1 -Workload component-row-wise -Scenario with-all -Temperature hot -DurationSeconds 5 -WarmupIterations 2`
+- component-span 热点：`powershell -ExecutionPolicy Bypass -File scripts/profile-query.ps1 -Workload component-span -Scenario with-all -Temperature hot -DurationSeconds 5 -WarmupIterations 2`
+
 ## 结果解读规则
 
 - 先分清 workload：
   - `hot` 主要回答 chunk/row steady-state 遍历谁最慢
   - `cold` 主要回答 refresh、matching、query build 谁最慢
+  - `entity` vs `component-span` 的样本差异可以揭示 component accessor 的相对成本
 - 再分清统计口径：
   - `inclusive` 适合看一整段调用链哪块最重
   - `exclusive` 适合看函数自身消耗

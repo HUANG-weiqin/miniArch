@@ -2,7 +2,7 @@
 title: Test Workflow
 module: MiniArch.Tests
 description: How the test suite, query profiling, snapshot benchmarks, and structural-change benchmarks are organized and how to run them
-updated: 2026-04-14
+updated: 2026-04-16
 ---
 # Test Workflow
 
@@ -155,7 +155,7 @@ updated: 2026-04-14
   - `CommandBufferSharedScenarios.cs`：共享脚本模型、MiniArch/Arch parity 执行器和结构摘要 helper
   - `QueryBenchmarks.cs`：复杂 query 场景下的 Arch / MiniArch 执行对照
   - `SnapshotBenchmarks.cs`：`WorldSnapshot.Save` / `Load` 的时间、分配、`SnapshotBytes` 和 `Bytes/entity`
-  - `scripts\profile-query.ps1`：query 采样入口，适合定位热点函数
+  - `scripts\profile-query.ps1`：query 采样入口，适合定位热点函数，支持 `--workload entity|component-row-wise|component-span`
 - 如果是修 bug，先看：
   - 对应功能的测试文件
   - `scripts\test.ps1`
@@ -163,7 +163,7 @@ updated: 2026-04-14
   - replay/rewind benchmark 命令示例：`powershell -ExecutionPolicy Bypass -File .\scripts\benchmark.ps1 -Filter *ReplayRewind* -ExtraArgs command-buffer`
   - replay/rewind 单口径命令示例：`powershell -ExecutionPolicy Bypass -File .\scripts\benchmark.ps1 -Filter *ReplayWithReverse* -ExtraArgs command-buffer`
   - 也可以直接运行：`dotnet run --project .\benchmarks\MiniArch.Benchmarks\MiniArch.Benchmarks.csproj -c Release -- command-buffer --filter *ReplayRewind*`
-  - `scripts\profile-query.ps1`：如果问题是 query 热点分布，而不是均值回归
+  - `scripts\profile-query.ps1`：如果问题是 query 热点分布，而不是均值回归，支持 `--workload entity|component-row-wise|component-span`
 - 如果是加功能，先看：
   - `QueryTests.cs`：query 行为约束
   - `QueryFilterTests.cs`：链式 filter 和 builder 契约

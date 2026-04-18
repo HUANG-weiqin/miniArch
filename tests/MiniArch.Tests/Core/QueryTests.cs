@@ -451,4 +451,102 @@ public sealed class QueryTests
         Assert.Single(matched);
         Assert.Equal(2, query.RefreshCount);
     }
+
+    [Fact]
+    public void Component_row_wise_and_span_checksums_are_equivalent()
+    {
+        var world = new World(chunkCapacity: 4);
+        for (var i = 0; i < 6; i++)
+        {
+            var entity = world.Create();
+            world.Add(entity, new Position(i, i + 1));
+            world.Add(entity, new Velocity(i + 2, i + 3));
+        }
+
+        var description = new QueryDescription().With<Position>().With<Velocity>();
+        var query = MiniQuery.Create(world, in description);
+        var positionType = world.Components.GetOrCreate<Position>();
+        var velocityType = world.Components.GetOrCreate<Velocity>();
+
+        var rowWiseChecksum = ComputeRowWiseChecksum(query, positionType, velocityType);
+        var spanChecksum = ComputeSpanChecksum(query, positionType, velocityType);
+
+        Assert.Equal(rowWiseChecksum, spanChecksum);
+    }
+
+    [Fact]
+    public void Component_row_wise_checksum_is_stable_across_iterations()
+    {
+        var world = new World(chunkCapacity: 4);
+        for (var i = 0; i < 6; i++)
+        {
+            var entity = world.Create();
+            world.Add(entity, new Position(i, i + 1));
+            world.Add(entity, new Velocity(i + 2, i + 3));
+        }
+
+        var description = new QueryDescription().With<Position>().With<Velocity>();
+        var query = MiniQuery.Create(world, in description);
+        var positionType = world.Components.GetOrCreate<Position>();
+        var velocityType = world.Components.GetOrCreate<Velocity>();
+
+        var firstRun = ComputeRowWiseChecksum(query, positionType, velocityType);
+        var secondRun = ComputeRowWiseChecksum(query, positionType, velocityType);
+
+        Assert.Equal(firstRun, secondRun);
+    }
+
+    [Fact]
+    public void Component_span_checksum_is_stable_across_iterations()
+    {
+        var world = new World(chunkCapacity: 4);
+        for (var i = 0; i < 6; i++)
+        {
+            var entity = world.Create();
+            world.Add(entity, new Position(i, i + 1));
+            world.Add(entity, new Velocity(i + 2, i + 3));
+        }
+
+        var description = new QueryDescription().With<Position>().With<Velocity>();
+        var query = MiniQuery.Create(world, in description);
+        var positionType = world.Components.GetOrCreate<Position>();
+        var velocityType = world.Components.GetOrCreate<Velocity>();
+
+        var firstRun = ComputeSpanChecksum(query, positionType, velocityType);
+        var secondRun = ComputeSpanChecksum(query, positionType, velocityType);
+
+        Assert.Equal(firstRun, secondRun);
+    }
+
+    private static int ComputeRowWiseChecksum(MiniQuery query, ComponentType positionType, ComponentType velocityType)
+    {
+        var checksum = 0;
+        foreach (ref readonly var chunk in query.GetChunkSpan())
+        {
+            for (var row = 0; row < chunk.Count; row++)
+            {
+                var position = chunk.GetComponent<Position>(positionType, row);
+                var velocity = chunk.GetComponent<Velocity>(velocityType, row);
+                checksum += position.X + velocity.Y;
+            }
+        }
+
+        return checksum;
+    }
+
+    private static int ComputeSpanChecksum(MiniQuery query, ComponentType positionType, ComponentType velocityType)
+    {
+        var checksum = 0;
+        foreach (ref readonly var chunk in query.GetChunkSpan())
+        {
+            var positions = chunk.GetComponentSpan<Position>(positionType);
+            var velocities = chunk.GetComponentSpan<Velocity>(velocityType);
+            for (var row = 0; row < positions.Length; row++)
+            {
+                checksum += positions[row].X + velocities[row].Y;
+            }
+        }
+
+        return checksum;
+    }
 }

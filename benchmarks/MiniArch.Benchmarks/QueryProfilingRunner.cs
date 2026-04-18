@@ -6,6 +6,7 @@ namespace MiniArchBenchmarks;
 
 using MiniQuery = MiniArch.Core.Query;
 using MiniWorld = MiniArch.World;
+using MiniComponentType = MiniArch.Core.ComponentType;
 
 public enum QueryProfilingScenario
 {
@@ -20,7 +21,15 @@ public enum QueryProfilingTemperature
     Cold
 }
 
+public enum QueryProfilingWorkload
+{
+    Entity,
+    ComponentRowWise,
+    ComponentSpan
+}
+
 public sealed record QueryProfilingOptions(
+    QueryProfilingWorkload Workload,
     QueryProfilingScenario Scenario,
     QueryProfilingTemperature Temperature,
     int EntityCount,
@@ -29,6 +38,7 @@ public sealed record QueryProfilingOptions(
     TimeSpan StartupDelay)
 {
     public static QueryProfilingOptions Default { get; } = new(
+        QueryProfilingWorkload.Entity,
         QueryProfilingScenario.WithAll,
         QueryProfilingTemperature.Cold,
         100_000,
@@ -41,6 +51,7 @@ public sealed record QueryProfilingOptions(
         options = Default;
         error = null;
 
+        var workload = options.Workload;
         var scenario = options.Scenario;
         var temperature = options.Temperature;
         var entityCount = options.EntityCount;
@@ -60,6 +71,14 @@ public sealed record QueryProfilingOptions(
             var value = args[++i];
             switch (arg)
             {
+                case "--workload":
+                    if (!TryParseWorkload(value, out workload))
+                    {
+                        error = $"Unsupported workload '{value}'.";
+                        return false;
+                    }
+
+                    break;
                 case "--scenario":
                     if (!TryParseScenario(value, out scenario))
                     {
@@ -116,8 +135,21 @@ public sealed record QueryProfilingOptions(
             }
         }
 
-        options = new QueryProfilingOptions(scenario, temperature, entityCount, duration, warmupIterations, startupDelay);
+        options = new QueryProfilingOptions(workload, scenario, temperature, entityCount, duration, warmupIterations, startupDelay);
         return true;
+    }
+
+    private static bool TryParseWorkload(string value, out QueryProfilingWorkload workload)
+    {
+        workload = value.ToLowerInvariant() switch
+        {
+            "entity" => QueryProfilingWorkload.Entity,
+            "component-row-wise" => QueryProfilingWorkload.ComponentRowWise,
+            "component-span" => QueryProfilingWorkload.ComponentSpan,
+            _ => default
+        };
+
+        return value is "entity" or "component-row-wise" or "component-span";
     }
 
     private static bool TryParseScenario(string value, out QueryProfilingScenario scenario)
@@ -167,7 +199,7 @@ public static class QueryProfilingRunner
         if (!QueryProfilingOptions.TryParse(args, out var options, out var error))
         {
             stderr.WriteLine(error);
-            stderr.WriteLine("Usage: profile-query [--scenario with-all|with-all-without|with-all-any] [--temperature hot|cold] [--entity-count N] [--duration seconds] [--warmup count] [--startup-delay seconds]");
+            stderr.WriteLine("Usage: profile-query [--workload entity|component-row-wise|component-span] [--scenario with-all|with-all-without|with-all-any] [--temperature hot|cold] [--entity-count N] [--duration seconds] [--warmup count] [--startup-delay seconds]");
             return 1;
         }
 
@@ -189,6 +221,7 @@ public static class QueryProfilingRunner
 
         output.WriteLine("MiniArch query profiling workload");
         output.WriteLine($"PID: {Environment.ProcessId}");
+        output.WriteLine($"Workload: {FormatWorkload(options.Workload)}");
         output.WriteLine($"Scenario: {FormatScenario(options.Scenario)}");
         output.WriteLine($"Temperature: {options.Temperature}");
         output.WriteLine($"EntityCount: {options.EntityCount}");
@@ -214,7 +247,7 @@ public static class QueryProfilingRunner
 
             var query = CreateQueryForIteration(template, state.World, options.Temperature);
             var refreshBefore = query.RefreshCount;
-            totalChecksum += Execute(query);
+            totalChecksum += ExecuteWorkload(query, state, options.Workload);
             refreshCount += query.RefreshCount - refreshBefore;
             iterations++;
         }
@@ -293,6 +326,69 @@ public static class QueryProfilingRunner
         return checksum;
     }
 
+    private static int ExecuteWorkload(MiniQuery query, MiniComplexQueryWorldState state, QueryProfilingWorkload workload)
+    {
+        return workload switch
+        {
+            QueryProfilingWorkload.Entity => ExecuteEntityChecksum(query),
+            QueryProfilingWorkload.ComponentRowWise => ExecuteComponentRowWiseChecksum(query, state.PositionType, state.VelocityType),
+            QueryProfilingWorkload.ComponentSpan => ExecuteComponentSpanChecksum(query, state.PositionType, state.VelocityType),
+            _ => throw new ArgumentOutOfRangeException(nameof(workload))
+        };
+    }
+
+    private static int ExecuteEntityChecksum(MiniQuery query)
+    {
+        var checksum = 0;
+        var chunks = query.GetChunkSpan();
+        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        {
+            var entities = chunks[chunkIndex].GetEntities();
+            for (var row = 0; row < entities.Length; row++)
+            {
+                checksum += entities[row].Id;
+            }
+        }
+
+        return checksum;
+    }
+
+    private static int ExecuteComponentRowWiseChecksum(MiniQuery query, MiniComponentType positionType, MiniComponentType velocityType)
+    {
+        var checksum = 0;
+        var chunks = query.GetChunkSpan();
+        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        {
+            var chunk = chunks[chunkIndex];
+            for (var row = 0; row < chunk.Count; row++)
+            {
+                var position = chunk.GetComponent<Position>(positionType, row);
+                var velocity = chunk.GetComponent<Velocity>(velocityType, row);
+                checksum += position.X + velocity.Y;
+            }
+        }
+
+        return checksum;
+    }
+
+    private static int ExecuteComponentSpanChecksum(MiniQuery query, MiniComponentType positionType, MiniComponentType velocityType)
+    {
+        var checksum = 0;
+        var chunks = query.GetChunkSpan();
+        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        {
+            var chunk = chunks[chunkIndex];
+            var positions = chunk.GetComponentSpan<Position>(positionType);
+            var velocities = chunk.GetComponentSpan<Velocity>(velocityType);
+            for (var row = 0; row < positions.Length; row++)
+            {
+                checksum += positions[row].X + velocities[row].Y;
+            }
+        }
+
+        return checksum;
+    }
+
     private static string FormatScenario(QueryProfilingScenario scenario)
     {
         return scenario switch
@@ -301,6 +397,17 @@ public static class QueryProfilingRunner
             QueryProfilingScenario.WithAllWithout => "with-all-without",
             QueryProfilingScenario.WithAllAny => "with-all-any",
             _ => throw new ArgumentOutOfRangeException(nameof(scenario))
+        };
+    }
+
+    private static string FormatWorkload(QueryProfilingWorkload workload)
+    {
+        return workload switch
+        {
+            QueryProfilingWorkload.Entity => "entity",
+            QueryProfilingWorkload.ComponentRowWise => "component-row-wise",
+            QueryProfilingWorkload.ComponentSpan => "component-span",
+            _ => throw new ArgumentOutOfRangeException(nameof(workload))
         };
     }
 

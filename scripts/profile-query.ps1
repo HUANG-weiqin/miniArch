@@ -1,5 +1,6 @@
 param(
     [string]$Configuration = "Release",
+    [string]$Workload = "entity",
     [string]$Scenario = "with-all",
     [string]$Temperature = "cold",
     [int]$EntityCount = 100000,
@@ -22,6 +23,8 @@ $args = @(
     $Configuration,
     "--",
     "profile-query",
+    "--workload",
+    $Workload,
     "--scenario",
     $Scenario,
     "--temperature",
