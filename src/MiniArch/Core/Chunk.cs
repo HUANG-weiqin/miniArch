@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Collections.Concurrent;
 
@@ -346,7 +347,9 @@ public sealed class Chunk
         ValidateRow(row);
 
         var last = Count - 1;
-        if (row != last)
+        var swapped = row != last;
+
+        if (swapped)
         {
             movedEntity = _entities[last];
             _entities[row] = movedEntity;
@@ -360,7 +363,7 @@ public sealed class Chunk
 
         _entities[last] = default;
         Count--;
-        return row != last;
+        return swapped;
     }
 
     private static Array[] CreateColumns(Signature signature, Type[]? componentTypes, int capacity, bool typedColumns)
@@ -425,7 +428,7 @@ public sealed class Chunk
         return ColumnClearRequirementCache.GetOrAdd(type, static componentType =>
         {
             return (bool)typeof(Chunk)
-                .GetMethod(nameof(RequiresClearGeneric), System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
+                .GetMethod(nameof(RequiresClearGeneric), BindingFlags.Static | BindingFlags.NonPublic)!
                 .MakeGenericMethod(componentType)
                 .Invoke(null, null)!;
         });
@@ -550,14 +553,9 @@ public sealed class Chunk
     private static int[] BuildComponentIdToColumnIndex(Signature signature)
     {
         var maxComponentId = -1;
-        var components = signature.AsSpan();
-        for (var index = 0; index < components.Length; index++)
+        foreach (var component in signature.AsSpan())
         {
-            var componentId = components[index].Value;
-            if (componentId > maxComponentId)
-            {
-                maxComponentId = componentId;
-            }
+            maxComponentId = Math.Max(maxComponentId, component.Value);
         }
 
         if (maxComponentId < 0)
@@ -568,9 +566,10 @@ public sealed class Chunk
         var lookup = new int[maxComponentId + 1];
         Array.Fill(lookup, -1);
 
-        for (var index = 0; index < components.Length; index++)
+        var span = signature.AsSpan();
+        for (var index = 0; index < span.Length; index++)
         {
-            lookup[components[index].Value] = index;
+            lookup[span[index].Value] = index;
         }
 
         return lookup;

@@ -278,11 +278,10 @@ public static class WorldSnapshot
 
             var chunk = archetype.ImportSnapshotChunk(entities, out var chunkIndex);
 
-            for (var fileColumnIndex = 0; fileColumnIndex < fileOrderedComponentTypes.Length; fileColumnIndex++)
+            foreach (var fileComponentType in fileOrderedComponentTypes)
             {
-                var runtimeComponentType = fileOrderedComponentTypes[fileColumnIndex];
-                var runtimeColumnIndex = archetype.GetComponentIndex(runtimeComponentType);
-                var runtimeType = world.Components.GetType(runtimeComponentType);
+                var runtimeColumnIndex = archetype.GetComponentIndex(fileComponentType);
+                var runtimeType = world.Components.GetType(fileComponentType);
                 GetColumnCodec(runtimeType).Read(reader, chunk.Columns[runtimeColumnIndex], rowCount);
             }
 

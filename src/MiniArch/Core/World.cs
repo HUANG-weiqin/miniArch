@@ -751,8 +751,7 @@ public sealed class World
     /// </summary>
     public void Remove<T>(Entity entity)
     {
-        var componentType = GetComponentType<T>();
-        RemoveBoxed(entity, componentType);
+        RemoveBoxed(entity, GetComponentType<T>());
     }
 
     /// <summary>
@@ -2408,9 +2407,9 @@ public sealed class World
             return;
         }
 
-        if (archetype.Edges.TryGetRemove(componentType, out var cached) && cached is not null)
+        if (archetype.Edges.TryGetRemove(componentType, out var cached))
         {
-            MoveEntity(entity, info, cached);
+            MoveEntity(entity, info, cached!);
             return;
         }
 
@@ -2551,4 +2550,3 @@ public sealed class World
 
     private readonly record struct RecycledEntity(int Id, int Version);
 }
-

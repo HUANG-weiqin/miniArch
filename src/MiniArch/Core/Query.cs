@@ -54,24 +54,12 @@ public sealed class Query
     /// <summary>
     /// Gets the matched archetypes.
     /// </summary>
-    public IReadOnlyList<Archetype> MatchedArchetypes
-    {
-        get
-        {
-            return EnsureMatchingArchetypes();
-        }
-    }
+    public IReadOnlyList<Archetype> MatchedArchetypes => EnsureMatchingArchetypes();
 
     /// <summary>
     /// Gets the matched chunks.
     /// </summary>
-    public IReadOnlyList<Chunk> MatchedChunks
-    {
-        get
-        {
-            return EnsureMatchingChunks();
-        }
-    }
+    public IReadOnlyList<Chunk> MatchedChunks => EnsureMatchingChunks();
 
     /// <summary>
     /// Gets the matched chunks as a span.

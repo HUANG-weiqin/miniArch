@@ -64,10 +64,10 @@ public readonly struct FrameCommands
     internal FrameCommandsState State => _state ?? throw new InvalidOperationException("Frame commands are not initialized.");
 }
 
-    /// <summary>
-    /// Compiled reverse frame commands.
-    /// </summary>
-    public readonly struct ReverseFrameCommands
+/// <summary>
+/// Compiled reverse frame commands.
+/// </summary>
+public readonly struct ReverseFrameCommands
 {
     private static readonly IReadOnlyList<ReverseFrameEntity> EmptyRestoredEntities = Array.Empty<ReverseFrameEntity>();
     private static readonly IReadOnlyList<Entity> EmptyEntities = Array.Empty<Entity>();
