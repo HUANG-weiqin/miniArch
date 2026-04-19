@@ -340,10 +340,25 @@ public sealed class CommandBuffer
             unlinkCommands.Add(new FrameUnlinkCommand(pair.Key));
         }
 
-        addCommands.AddRange(compiledAdds.Values);
-        setCommands.AddRange(compiledSets.Values);
-        removeCommands.AddRange(compiledRemoves.Values);
-        destroyedEntityList.AddRange(destroyedEntities);
+        foreach (var pair in compiledAdds)
+        {
+            addCommands.Add(pair.Value);
+        }
+
+        foreach (var pair in compiledSets)
+        {
+            setCommands.Add(pair.Value);
+        }
+
+        foreach (var pair in compiledRemoves)
+        {
+            removeCommands.Add(pair.Value);
+        }
+
+        foreach (var entity in destroyedEntities)
+        {
+            destroyedEntityList.Add(entity);
+        }
 
         createdStates.Clear();
         compiledAdds.Clear();

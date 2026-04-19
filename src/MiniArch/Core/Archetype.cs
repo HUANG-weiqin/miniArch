@@ -235,9 +235,13 @@ public sealed class Archetype
     {
         var components = signature.AsSpan();
         var maxComponentId = -1;
-        foreach (var component in components)
+        for (var index = 0; index < components.Length; index++)
         {
-            maxComponentId = Math.Max(maxComponentId, component.Value);
+            var componentId = components[index].Value;
+            if (componentId > maxComponentId)
+            {
+                maxComponentId = componentId;
+            }
         }
 
         if (maxComponentId < 0)

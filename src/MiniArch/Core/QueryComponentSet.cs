@@ -71,7 +71,7 @@ internal readonly struct QueryComponentSet : IEquatable<QueryComponentSet>
 
         var copied = new ComponentType[Components.Length];
         Array.Copy(Components, copied, Components.Length);
-        return Signature.CreateNormalized(copied);
+        return new Signature(copied);
     }
 
     public bool Equals(QueryComponentSet other)
