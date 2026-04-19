@@ -2,7 +2,7 @@
 title: Test Workflow
 module: MiniArch.Tests
 description: How the test suite, query profiling, snapshot benchmarks, and structural-change benchmarks are organized and how to run them
-updated: 2026-04-16
+updated: 2026-04-19
 ---
 # Test Workflow
 
@@ -61,6 +61,7 @@ updated: 2026-04-16
   - 当前 `EntityCount` 档位覆盖 `128 / 256 / 512 / 1024 / 2048 / 10k / 50k / 100k`，用来同时观察小规模固定成本和大规模 steady-state 吞吐
   - query profiling 复用同一套 complex query world，但在 BenchmarkDotNet 之外跑固定时长循环，给 PerfView/Visual Studio CPU Usage 这类采样器一个干净窗口
 - `scripts\verify.ps1` 统一跑 build + test
+- `scripts\env.ps1` 负责补齐本机测试 / restore 所需的 Windows 标准目录变量，`build/test/verify` 都应先加载它再调用 `dotnet`
 - 和其他模块的交互方式：
   - 直接依赖 `MiniArch.Core`
   - 通过 `World` 和 `Query` 验证外部可见行为
@@ -72,6 +73,7 @@ updated: 2026-04-16
 - 每个核心概念一个测试文件，便于按模块定位问题。
 - 集成测试只保留一条完整迁移路径，避免重复覆盖。
 - 验证脚本和测试项目分离，方便 agent 在需要时只跑局部测试。
+- 当前仓库脚本会先加载 `scripts\env.ps1`，补齐 `ProgramFiles`、`ProgramData`、`SystemRoot` 等变量；如果这些缺失，NuGet restore 可能在 `path1` 处失败。
 - 结构变化相关测试必须保留 `Set` 的 in-place 语义断言，因为这是 typed-column / direct-index 重构的核心安全网。
 - command buffer 需要单独锁定 `Playback()` 不改 world、跨 world `Replay()`、created final archetype 和 free-list/version 语义；这些不能靠立即生效 API 测试替代。
 - command buffer 还要单独锁定“recording 不提前发布 world layout 变化”：录制 `Add/Set/Remove/Link` 时，不应先把 archetype / query generation 这类内部布局状态改掉。
@@ -224,7 +226,8 @@ updated: 2026-04-16
 - `kb-snapshot-persistence.md`：snapshot 存档语义和约束
 - `kb-repo-overview.md`：如何启动验证流程
 - `kb-profiling-workflow.md`：如何做无侵入 CPU sampling
-- `scripts/test.ps1`：测试入口
+- `scripts\test.ps1`：测试入口
+- `scripts\env.ps1`：测试 / restore 前置环境补丁
 - `benchmarks/MiniArch.Benchmarks/StructuralChangeBenchmarks.cs`：分项 structural-change benchmark 与 mixed structural-change benchmark
 - `benchmarks/MiniArch.Benchmarks/QueryBenchmarks.cs`：复杂 query benchmark
 - `benchmarks/MiniArch.Benchmarks/SnapshotBenchmarks.cs`：snapshot save/load、snapshot bytes 与 bytes/entity benchmark

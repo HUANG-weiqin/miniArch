@@ -5,6 +5,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+. $PSScriptRoot\env.ps1
+Initialize-MiniArchScriptEnvironment
+
 & $PSScriptRoot\build.ps1 -Configuration $Configuration
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE

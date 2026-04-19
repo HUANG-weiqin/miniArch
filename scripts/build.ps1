@@ -4,7 +4,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
-$solution = Join-Path $repoRoot "miniArch.sln"
+. $PSScriptRoot\env.ps1
+Initialize-MiniArchScriptEnvironment
 
-& dotnet build $solution -c $Configuration -v minimal
+$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$project = Join-Path $repoRoot "src\MiniArch\MiniArch.csproj"
+
+& dotnet build $project -c $Configuration -v minimal
