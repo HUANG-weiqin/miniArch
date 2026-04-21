@@ -1,3 +1,6 @@
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Arch.Core;
 using BenchmarkDotNet.Attributes;
 using MiniArch.Core;
@@ -74,6 +77,12 @@ public class QueryBenchmarks
     public int MiniArch_WithAll_Components_Execute_Warmed_Span()
     {
         return ExecuteMiniComponentQuerySpan(_miniState.WithAllQuery, _miniState.PositionType, _miniState.VelocityType);
+    }
+
+    [Benchmark(Description = "MiniArch complex query WithAll components execute warmed span direct")]
+    public int MiniArch_WithAll_Components_Execute_Warmed_Span_Direct()
+    {
+        return ExecuteMiniComponentQuerySpanDirect(_miniState.WithAllQuery, _miniState.PositionType, _miniState.VelocityType);
     }
 
     [Benchmark(Description = "Arch complex query WithAll components execute warmed span")]
@@ -172,6 +181,96 @@ public class QueryBenchmarks
         return checksum;
     }
 
+    [Benchmark(Description = "MiniArch complex query WithAll execute warmed SIMD")]
+    public int MiniArch_WithAll_Execute_Warmed_SIMD()
+    {
+        return ExecuteMiniQuerySimd(_miniState.WithAllQuery);
+    }
+
+    private static int ExecuteMiniQuerySimd(MiniQuery query)
+    {
+        var checksum = 0;
+        var chunks = query.GetChunkSpan();
+        var vecSize = Vector<int>.Count;
+        Span<int> gatherBuf = stackalloc int[vecSize];
+        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        {
+            var chunk = chunks[chunkIndex];
+            var entities = chunk.GetEntities();
+            var ids = MemoryMarshal.Cast<MiniArch.Entity, int>(entities);
+            var count = entities.Length;
+
+            var acc = Vector<int>.Zero;
+            var i = 0;
+            var batchLimit = count - (count % vecSize);
+            for (; i < batchLimit; i += vecSize)
+            {
+                for (var j = 0; j < vecSize; j++)
+                {
+                    gatherBuf[j] = ids[(i + j) * 2];
+                }
+                acc += new Vector<int>(gatherBuf);
+            }
+            checksum += Vector.Dot(acc, Vector<int>.One);
+
+            for (; i < count; i++)
+            {
+                checksum += ids[i * 2];
+            }
+        }
+
+        return checksum;
+    }
+
+    [Benchmark(Description = "MiniArch complex query WithAll components execute warmed span SIMD")]
+    public int MiniArch_WithAll_Components_Execute_Warmed_Span_SIMD()
+    {
+        return ExecuteMiniComponentQuerySpanSimd(_miniState.WithAllQuery, _miniState.PositionType, _miniState.VelocityType);
+    }
+
+    private static int ExecuteMiniComponentQuerySpanSimd(MiniQuery query, MiniComponentType positionType, MiniComponentType velocityType)
+    {
+        var checksum = 0;
+        var chunks = query.GetChunkSpan();
+        var vecSize = Vector<int>.Count;
+        Span<int> gatherBuf = stackalloc int[vecSize];
+        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        {
+            var chunk = chunks[chunkIndex];
+            var positions = chunk.GetComponentSpan<Position>(positionType);
+            var velocities = chunk.GetComponentSpan<Velocity>(velocityType);
+            var posData = MemoryMarshal.Cast<Position, int>(positions);
+            var velData = MemoryMarshal.Cast<Velocity, int>(velocities);
+            var count = positions.Length;
+
+            var accX = Vector<int>.Zero;
+            var accY = Vector<int>.Zero;
+            var i = 0;
+            var batchLimit = count - (count % vecSize);
+            for (; i < batchLimit; i += vecSize)
+            {
+                for (var j = 0; j < vecSize; j++)
+                {
+                    gatherBuf[j] = posData[(i + j) * 2];
+                }
+                accX += new Vector<int>(gatherBuf);
+                for (var j = 0; j < vecSize; j++)
+                {
+                    gatherBuf[j] = velData[(i + j) * 2 + 1];
+                }
+                accY += new Vector<int>(gatherBuf);
+            }
+            checksum += Vector.Dot(accX, Vector<int>.One) + Vector.Dot(accY, Vector<int>.One);
+
+            for (; i < count; i++)
+            {
+                checksum += posData[i * 2] + velData[i * 2 + 1];
+            }
+        }
+
+        return checksum;
+    }
+
     private static int ExecuteMiniComponentQueryRowWise(MiniQuery query, MiniComponentType positionType, MiniComponentType velocityType)
     {
         var checksum = 0;
@@ -210,6 +309,23 @@ public class QueryBenchmarks
             var chunk = chunks[chunkIndex];
             var positions = chunk.GetComponentSpan<Position>(positionType);
             var velocities = chunk.GetComponentSpan<Velocity>(velocityType);
+            for (var row = 0; row < positions.Length; row++)
+            {
+                checksum += positions[row].X + velocities[row].Y;
+            }
+        }
+
+        return checksum;
+    }
+
+    private static int ExecuteMiniComponentQuerySpanDirect(MiniQuery query, MiniComponentType positionType, MiniComponentType velocityType)
+    {
+        var checksum = 0;
+        var chunks = query.GetChunkSpan();
+        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        {
+            var chunk = chunks[chunkIndex];
+            chunk.GetComponentSpans<Position, Velocity>(positionType, velocityType, out var positions, out var velocities);
             for (var row = 0; row < positions.Length; row++)
             {
                 checksum += positions[row].X + velocities[row].Y;

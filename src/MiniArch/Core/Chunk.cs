@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
 
 namespace MiniArch.Core;
 
@@ -86,6 +87,7 @@ public sealed class Chunk
 
     internal Array[] Columns => _columns;
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal Entity[] GetEntityStorage() => _entities;
 
     /// <summary>
@@ -192,6 +194,26 @@ public sealed class Chunk
         return GetComponentSpanAt<T>(columnIndex);
     }
 
+    public void GetComponentSpans<T1, T2>(
+        ComponentType component1, ComponentType component2,
+        out ReadOnlySpan<T1> span1, out ReadOnlySpan<T2> span2)
+    {
+        var id1 = component1.Value;
+        var id2 = component2.Value;
+        var map = _componentIdToColumnIndex;
+        span1 = ((T1[])_columns[map[id1]]).AsSpan(0, Count);
+        span2 = ((T2[])_columns[map[id2]]).AsSpan(0, Count);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal ref T GetComponentRef<T>(int columnIndex)
+    {
+        return ref Unsafe.As<T[]>(_columns[columnIndex])[0];
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal int[] GetComponentIdToColumnMap() => _componentIdToColumnIndex;
+
     /// <summary>
     /// Sets a boxed component value.
     /// </summary>
@@ -212,11 +234,13 @@ public sealed class Chunk
         SetComponentAt(columnIndex, row, in value);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void SetComponentAtTyped<T>(int columnIndex, int row, in T value)
     {
         ((T[])_columns[columnIndex])[row] = value;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void SetComponentAt<T>(int columnIndex, int row, in T value)
     {
         if (!_typedColumns)
@@ -228,6 +252,7 @@ public sealed class Chunk
         SetComponentAtTyped(columnIndex, row, in value);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal T GetComponentAt<T>(int columnIndex, int row)
     {
         if (!_typedColumns)
@@ -246,12 +271,7 @@ public sealed class Chunk
             throw new InvalidOperationException("Component spans require typed columns.");
         }
 
-        if (_columns[columnIndex] is not T[] typedColumn)
-        {
-            throw new InvalidOperationException($"Component column {columnIndex} cannot be read as {typeof(T).Name}.");
-        }
-
-        return typedColumn.AsSpan(0, Count);
+        return ((T[])_columns[columnIndex]).AsSpan(0, Count);
     }
 
     internal T[] GetTypedColumnStorageAt<T>(int columnIndex)
@@ -306,6 +326,7 @@ public sealed class Chunk
         return true;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal int GetComponentIndex(ComponentType component)
     {
         var componentId = component.Value;
