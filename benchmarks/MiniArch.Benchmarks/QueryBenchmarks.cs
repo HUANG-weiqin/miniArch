@@ -325,7 +325,8 @@ public class QueryBenchmarks
         for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
         {
             var chunk = chunks[chunkIndex];
-            chunk.GetComponentSpans<Position, Velocity>(positionType, velocityType, out var positions, out var velocities);
+            var positions = chunk.GetComponentSpan<Position>(positionType);
+            var velocities = chunk.GetComponentSpan<Velocity>(velocityType);
             for (var row = 0; row < positions.Length; row++)
             {
                 checksum += positions[row].X + velocities[row].Y;

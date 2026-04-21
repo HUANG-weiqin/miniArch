@@ -13,7 +13,7 @@ public sealed class Archetype
     /// <summary>
     /// Creates an archetype for a signature.
     /// </summary>
-    public Archetype(Signature signature, int chunkCapacity = 4)
+    internal Archetype(Signature signature, int chunkCapacity = 4)
         : this(signature, null, chunkCapacity, false)
     {
     }
@@ -67,7 +67,7 @@ public sealed class Archetype
     /// <summary>
     /// Adds an entity with components.
     /// </summary>
-    public void AddEntity(Entity entity, IReadOnlyDictionary<ComponentType, object?> components, out int chunkIndex, out int rowIndex)
+    internal void AddEntity(Entity entity, IReadOnlyDictionary<ComponentType, object?> components, out int chunkIndex, out int rowIndex)
     {
         var chunk = GetWritableChunk(out chunkIndex);
         rowIndex = chunk.Add(entity, components);
@@ -77,7 +77,7 @@ public sealed class Archetype
     /// <summary>
     /// Reserves a row for an entity.
     /// </summary>
-    public Chunk ReserveEntity(Entity entity, out int chunkIndex, out int rowIndex)
+    internal Chunk ReserveEntity(Entity entity, out int chunkIndex, out int rowIndex)
     {
         var chunk = GetWritableChunk(out chunkIndex);
         rowIndex = chunk.Add(entity);
@@ -168,7 +168,7 @@ public sealed class Archetype
     /// <summary>
     /// Removes an entity by location.
     /// </summary>
-    public bool RemoveEntity(int chunkIndex, int rowIndex, out Entity movedEntity)
+    internal bool RemoveEntity(int chunkIndex, int rowIndex, out Entity movedEntity)
     {
         var moved = _chunks[chunkIndex].RemoveAt(rowIndex, out movedEntity);
         EntityCount--;

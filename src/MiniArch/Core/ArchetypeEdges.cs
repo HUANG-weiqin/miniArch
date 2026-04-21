@@ -11,22 +11,22 @@ public sealed class ArchetypeEdges
     /// <summary>
     /// Tries to get the add edge for a component.
     /// </summary>
-    public bool TryGetAdd(ComponentType component, out Archetype? archetype) => TryGet(_addEdges, component, out archetype);
+    internal bool TryGetAdd(ComponentType component, out Archetype? archetype) => TryGet(_addEdges, component, out archetype);
 
     /// <summary>
     /// Tries to get the remove edge for a component.
     /// </summary>
-    public bool TryGetRemove(ComponentType component, out Archetype? archetype) => TryGet(_removeEdges, component, out archetype);
+    internal bool TryGetRemove(ComponentType component, out Archetype? archetype) => TryGet(_removeEdges, component, out archetype);
 
     /// <summary>
     /// Caches an add edge.
     /// </summary>
-    public void CacheAdd(ComponentType component, Archetype archetype) => Cache(ref _addEdges, component, archetype);
+    internal void CacheAdd(ComponentType component, Archetype archetype) => Cache(ref _addEdges, component, archetype);
 
     /// <summary>
     /// Caches a remove edge.
     /// </summary>
-    public void CacheRemove(ComponentType component, Archetype archetype) => Cache(ref _removeEdges, component, archetype);
+    internal void CacheRemove(ComponentType component, Archetype archetype) => Cache(ref _removeEdges, component, archetype);
 
     private static bool TryGet(Archetype?[] edges, ComponentType component, out Archetype? archetype)
     {

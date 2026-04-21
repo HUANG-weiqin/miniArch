@@ -27,7 +27,7 @@ public sealed class Chunk
     /// <summary>
     /// Creates a chunk for a signature.
     /// </summary>
-    public Chunk(Signature signature, int capacity = 4)
+    internal Chunk(Signature signature, int capacity = 4)
         : this(signature, null, BuildComponentIdToColumnIndex(signature), capacity, false)
     {
     }
@@ -102,7 +102,7 @@ public sealed class Chunk
     /// <summary>
     /// Adds an entity and writes its components.
     /// </summary>
-    public int Add(Entity entity, IReadOnlyDictionary<ComponentType, object?> components)
+    internal int Add(Entity entity, IReadOnlyDictionary<ComponentType, object?> components)
     {
         var row = Add(entity);
         var signature = _signature.AsSpan();
@@ -124,7 +124,7 @@ public sealed class Chunk
     /// <summary>
     /// Adds an entity.
     /// </summary>
-    public int Add(Entity entity)
+    internal int Add(Entity entity)
     {
         if (Count == Capacity)
         {
@@ -167,7 +167,7 @@ public sealed class Chunk
     /// <summary>
     /// Gets a boxed component value.
     /// </summary>
-    public object? GetComponent(ComponentType component, int row)
+    internal object? GetComponent(ComponentType component, int row)
     {
         ValidateRow(row);
         var columnIndex = GetComponentIndex(component);
@@ -194,17 +194,6 @@ public sealed class Chunk
         return GetComponentSpanAt<T>(columnIndex);
     }
 
-    public void GetComponentSpans<T1, T2>(
-        ComponentType component1, ComponentType component2,
-        out ReadOnlySpan<T1> span1, out ReadOnlySpan<T2> span2)
-    {
-        var id1 = component1.Value;
-        var id2 = component2.Value;
-        var map = _componentIdToColumnIndex;
-        span1 = ((T1[])_columns[map[id1]]).AsSpan(0, Count);
-        span2 = ((T2[])_columns[map[id2]]).AsSpan(0, Count);
-    }
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ref T GetComponentRef<T>(int columnIndex)
     {
@@ -217,7 +206,7 @@ public sealed class Chunk
     /// <summary>
     /// Sets a boxed component value.
     /// </summary>
-    public void SetComponent(ComponentType component, int row, object? value)
+    internal void SetComponent(ComponentType component, int row, object? value)
     {
         ValidateRow(row);
         var columnIndex = GetComponentIndex(component);
@@ -227,7 +216,7 @@ public sealed class Chunk
     /// <summary>
     /// Sets a typed component value.
     /// </summary>
-    public void SetComponent<T>(ComponentType component, int row, in T value)
+    internal void SetComponent<T>(ComponentType component, int row, in T value)
     {
         ValidateRow(row);
         var columnIndex = GetComponentIndex(component);
@@ -369,7 +358,7 @@ public sealed class Chunk
     /// <summary>
     /// Captures a row into a dictionary.
     /// </summary>
-    public IReadOnlyDictionary<ComponentType, object?> CaptureRow(int row)
+    internal IReadOnlyDictionary<ComponentType, object?> CaptureRow(int row)
     {
         ValidateRow(row);
 
@@ -386,7 +375,7 @@ public sealed class Chunk
     /// <summary>
     /// Removes a row with swap-remove.
     /// </summary>
-    public bool RemoveAt(int row, out Entity movedEntity)
+    internal bool RemoveAt(int row, out Entity movedEntity)
     {
         ValidateRow(row);
 
