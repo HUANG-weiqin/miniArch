@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, typed columns, direct-index writes, signatures, and queries
-updated: 2026-04-14
+updated: 2026-04-21
 ---
 # MiniArch Core ECS
 
@@ -99,6 +99,7 @@ updated: 2026-04-14
 - 对 component-consuming query，优先走 typed chunk 的 `Chunk.GetComponentSpan<T>()`，不要在热循环里逐 row 调 `GetComponent<T>(..., row)`；后者会把列查找、边界检查和方法调用成本重复放大。
 - `Chunk.GetComponentSpan<T>()` 只适用于 world/archetype 创建出的 typed chunk；直接 `new Chunk(Signature, ...)` 得到的是兼容用 untyped chunk，这条 API 在那种实例上应视为不可用。
 - 结合当前 query sampling，warmed query 的第一优先优化点应放在 traversal / accessor 路径，而不是优先重写 `BuildMatchingArchetypes`；matching 目前只是小头。
+- row-wise 组件访问热路径中，`GetComponentIndex()` 已被 `TryGetColumnIndices(...)` 批量 hoist 出 row loop；benchmark 和 profiling runner 的 row-wise 路径已切换到预解析列索引 + `GetComponentAt<T>(columnIndex, row)`，不再逐行调用 `GetComponent<T>(componentType, row)`。
 - 如果 query 不只缓存 `Archetype[]`，还缓存了扁平 `Chunk[]`，失效条件就不能只看 archetype 集合变化；同 archetype 内新增或复用 chunk 也必须触发 query snapshot 刷新。
 - typed column 的收益会被 `Array` 抽象层吃掉一部分；如果迁移/删除路径仍长期停留在 `Array.Copy` / `Array.Clear` 的逐列调用上，结构变化 benchmark 的 CPU 还会继续偏高。
 - typed chunk 的删除路径不应该无差别清空所有列尾槽位；值类型列可以直接保留旧位模式，只有引用类型或“包含引用字段的 struct”才需要清尾，避免无意义的写带宽和 GC 压力。

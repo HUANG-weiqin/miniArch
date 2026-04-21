@@ -176,13 +176,24 @@ public class QueryBenchmarks
     {
         var checksum = 0;
         var chunks = query.GetChunkSpan();
+        Span<MiniComponentType> componentTypes = stackalloc MiniComponentType[2] { positionType, velocityType };
+        Span<int> columnIndices = stackalloc int[2];
+
         for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
         {
             var chunk = chunks[chunkIndex];
+            if (!chunk.TryGetColumnIndices(componentTypes, columnIndices))
+            {
+                continue;
+            }
+
+            var positionColumnIndex = columnIndices[0];
+            var velocityColumnIndex = columnIndices[1];
+
             for (var row = 0; row < chunk.Count; row++)
             {
-                var position = chunk.GetComponent<Position>(positionType, row);
-                var velocity = chunk.GetComponent<Velocity>(velocityType, row);
+                var position = chunk.GetComponentAt<Position>(positionColumnIndex, row);
+                var velocity = chunk.GetComponentAt<Velocity>(velocityColumnIndex, row);
                 checksum += position.X + velocity.Y;
             }
         }

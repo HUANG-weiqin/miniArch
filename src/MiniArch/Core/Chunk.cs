@@ -282,6 +282,30 @@ public sealed class Chunk
         return columnIndex >= 0;
     }
 
+    /// <summary>
+    /// Resolves column indices for a batch of component types in a single call.
+    /// Hoists per-row column lookups out of the row loop.
+    /// </summary>
+    internal bool TryGetColumnIndices(ReadOnlySpan<ComponentType> components, Span<int> outIndices)
+    {
+        if (components.Length != outIndices.Length)
+        {
+            throw new ArgumentException("Output span length must match component count.", nameof(outIndices));
+        }
+
+        for (var i = 0; i < components.Length; i++)
+        {
+            if (!TryGetComponentIndex(components[i], out var columnIndex))
+            {
+                return false;
+            }
+
+            outIndices[i] = columnIndex;
+        }
+
+        return true;
+    }
+
     internal int GetComponentIndex(ComponentType component)
     {
         var componentId = component.Value;
