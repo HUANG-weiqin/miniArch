@@ -1677,6 +1677,66 @@ public sealed class World : IDisposable
         }
     }
 
+    internal void ReplayTrusted(FrameDelta delta)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(delta);
+
+        BeginDeferredLayoutUpdates();
+        try
+        {
+            foreach (var released in delta.ReleasedEntities)
+            {
+                ReleaseReservedEntity(released);
+            }
+
+            foreach (var created in delta.CreatedEntities)
+            {
+                MaterializeReservedEntityTrusted(created.Entity, created.Signature, created.Components);
+            }
+
+            foreach (var link in delta.LinkCommands)
+            {
+                Link(link.Parent, link.Child);
+            }
+
+            foreach (var unlink in delta.UnlinkCommands)
+            {
+                Unlink(unlink.Child);
+            }
+
+            unsafe
+            {
+                foreach (var add in delta.AddCommands)
+                {
+                    ApplyRawAddOrSet(add.Entity, add.ComponentType, add.RuntimeType, add.Data, add.DataOffset, add.ColumnWriter);
+                }
+
+                foreach (var set in delta.SetCommands)
+                {
+                    ApplyRawAddOrSet(set.Entity, set.ComponentType, set.RuntimeType, set.Data, set.DataOffset, set.ColumnWriter);
+                }
+            }
+
+            foreach (var remove in delta.RemoveCommands)
+            {
+                RemoveBoxed(remove.Entity, remove.ComponentType);
+            }
+
+            foreach (var entity in delta.DestroyedEntities)
+            {
+                if (IsAlive(entity))
+                {
+                    Destroy(entity);
+                }
+            }
+        }
+        finally
+        {
+            EndDeferredLayoutUpdates();
+        }
+    }
+
     private void RemoveFreeId(int id, int version)
     {
         for (var index = _freeIdCount - 1; index >= 0; index--)
@@ -1703,6 +1763,21 @@ public sealed class World : IDisposable
         }
 
         var signature = BuildReplaySignature(components, componentTypeCache);
+        MaterializeReservedEntityCore(entity, signature, components, componentTypeCache, trustCompiledComponentTypes: false);
+    }
+
+    internal void MaterializeReservedEntityTrusted(Entity entity, Signature signature, IReadOnlyList<RawComponentValue> components)
+    {
+        MaterializeReservedEntityCore(entity, signature, components, componentTypeCache: null, trustCompiledComponentTypes: true);
+    }
+
+    private void MaterializeReservedEntityCore(
+        Entity entity,
+        Signature signature,
+        IReadOnlyList<RawComponentValue> components,
+        Dictionary<Type, ComponentType>? componentTypeCache,
+        bool trustCompiledComponentTypes)
+    {
         var archetype = GetOrCreateArchetype(signature);
         var chunk = archetype.ReserveEntity(entity, out var chunkIndex, out var rowIndex);
         _locations[entity.Id] = new EntityLocation(archetype, chunkIndex, rowIndex);
@@ -1712,7 +1787,9 @@ public sealed class World : IDisposable
             for (var index = 0; index < components.Count; index++)
             {
                 var component = components[index];
-                var resolvedType = ResolveCompiledComponentType(component.RuntimeType, component.ComponentType, componentTypeCache);
+                var resolvedType = trustCompiledComponentTypes
+                    ? component.ComponentType
+                    : ResolveCompiledComponentType(component.RuntimeType, component.ComponentType, componentTypeCache);
                 fixed (byte* ptr = component.Data)
                 {
                     WriteComponentFromBytes(chunk, resolvedType, component.RuntimeType, rowIndex, ptr + component.DataOffset);

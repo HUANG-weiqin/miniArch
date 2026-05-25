@@ -173,6 +173,36 @@ public sealed class CommandBufferTests
     }
 
     [Fact]
+    public void Compile_carries_final_created_entity_signature_for_retained_replay()
+    {
+        var world = new World();
+        var replica = new World();
+        var buffer = new CommandBuffer(world);
+
+        var entity = buffer.Create();
+        buffer.Add(entity, new Position(1, 2));
+        buffer.Set(entity, new Health(10));
+        buffer.Remove<Position>(entity);
+
+        var frame = buffer.Compile();
+
+        Assert.Single(frame.CreatedEntities);
+        var signatureProperty = typeof(RawCreatedEntity).GetProperty(nameof(Signature));
+        Assert.NotNull(signatureProperty);
+
+        var signature = (Signature)signatureProperty!.GetValue(frame.CreatedEntities[0])!;
+        Assert.DoesNotContain(world.Components.GetOrCreate<Position>(), signature);
+        Assert.Contains(world.Components.GetOrCreate<Health>(), signature);
+
+        replica.Replay(frame);
+
+        Assert.True(replica.IsAlive(entity));
+        Assert.False(HasComponent<Position>(replica, entity));
+        Assert.True(HasComponent<Health>(replica, entity));
+        Assert.Equal(new Health(10), GetComponentValue<Health>(replica, entity));
+    }
+
+    [Fact]
     public void Recycled_ids_are_reused_across_frames_but_not_inside_the_same_frame()
     {
         var world = new World();
@@ -470,6 +500,50 @@ public sealed class CommandBufferTests
                 playbackKnownEntities.Concat(playKnownEntities).Distinct().ToArray());
             Assert.Equal(GetLiveLinks(playbackWorld), GetLiveLinks(playWorld));
         });
+    }
+
+    [Fact]
+    public void Play_matches_compile_plus_replay_for_create_heavy_frame()
+    {
+        var playbackWorld = new World();
+        var playWorld = new World();
+        var playbackBuffer = new CommandBuffer(playbackWorld);
+        var playBuffer = new CommandBuffer(playWorld);
+        var trackedEntities = new List<Entity>();
+
+        for (var i = 0; i < 64; i++)
+        {
+            var playbackEntity = playbackBuffer.Create();
+            var playEntity = playBuffer.Create();
+            trackedEntities.Add(playbackEntity);
+
+            playbackBuffer.Add(playbackEntity, new Position(i, i + 1));
+            playBuffer.Add(playEntity, new Position(i, i + 1));
+
+            if ((i & 1) == 0)
+            {
+                playbackBuffer.Set(playbackEntity, new Health(i + 10));
+                playBuffer.Set(playEntity, new Health(i + 10));
+            }
+
+            if ((i % 3) == 0)
+            {
+                playbackBuffer.Add(playbackEntity, new Velocity(i + 2, i + 3));
+                playBuffer.Add(playEntity, new Velocity(i + 2, i + 3));
+            }
+
+            if ((i % 5) == 0)
+            {
+                playbackBuffer.Remove<Position>(playbackEntity);
+                playBuffer.Remove<Position>(playEntity);
+            }
+        }
+
+        var frame = playbackBuffer.Compile();
+        playbackWorld.Replay(frame);
+        playBuffer.CompileAndReplay();
+
+        AssertWorldStatesMatch(playbackWorld, playWorld, trackedEntities.ToArray());
     }
 
     [Fact]

@@ -12,7 +12,7 @@ updated: 2026-05-25
   - 提供 `CommandBuffer` 录制层，把结构变化和 hierarchy 变化先记成延迟命令
 - `CommandBuffer` 本体可以长期持有；当前源码公开入口是 `Compile()` / `CompileAndReplay()`，消费当前批次后会自动清空记录，允许下一帧复用同一个实例，避免每帧新建 buffer
   - 说明 `Compile()` 编译后的固定顺序：`create -> link/unlink -> add -> set -> remove -> destroy`
-  - 当前 `CompileAndReplay()` 会调用 `Compile()` 产出自包含 `FrameDelta`，再提交给 owning world；这保证语义统一，但不是 0-GC direct play 短路径
+  - `CompileAndReplay()` 现在走 owning-world trusted replay 短路径：复用 internal compiled batch，但不改变 `Compile()` / `World.Replay(FrameDelta)` 的 retained / cross-world 语义
   - 说明 `World.Replay(FrameDelta)` 的 batch mutation 与 query 可见性边界
   - 约束并发只覆盖 recording，不把 `World` 变成并发写安全对象
 - 这个模块不负责：
@@ -34,12 +34,12 @@ updated: 2026-05-25
 - `Compile()` 和 `CompileAndReplay()` 共享同一套合并/归约逻辑，但 compile 现在改成"按 shard 直接归约到最终批次"，不再先把所有 shard 扁平化成中间大 `List`
 - `CommandBuffer` 的 compile 现在复用 buffer-local scratch `Dictionary` / `HashSet` / `List`，把 command 去重、created-state materialize 和 component type cache 的临时分配压到单次 buffer 生命周期内部
   - `Compile()` 返回自包含 `FrameDelta`，可以保留并跨 world replay
-  - 对同帧 newly-created entity，`Compile()` 直接预计算 final signature 和 final component payload
+  - 对同帧 newly-created entity，compile 会直接预计算 final signature 和 final component payload，并写进 `RawCreatedEntity`
   - 同帧 `create + destroy` 不会 materialize 到 world，而是放进 `ReleasedEntities`，在 replay 时回收到 free-list 并提升 version
-  - `CompileAndReplay()` 走 owning-world 专用 reusable batch，不再先物化可保留 `FrameDelta`；created entity 的 internal batch 会尽量复用 compile 阶段结果，减少 `ToArray` / `ToList` / LINQ 分配
+  - `CompileAndReplay()` 走 owning-world 专用 reusable batch + trusted replay：跳过 reservation revalidation、created-entity signature 重建，以及 same-world add/set/remove 的 component-type re-resolution
   - `Replay(FrameDelta)` 先 materialize surviving creates，再执行 `link/unlink -> add -> set -> remove -> destroy`
   - `Replay()` 期间抑制逐条 query layout 发布，整批结束后只发布一次
-  - 跨 world replay 时 `ResolveCompiledComponentType` 会验证 component type 对目标 world 的 registry 有效
+  - 跨 world replay 时 `ResolveCompiledComponentType` 会验证 component type 对目标 world 的 registry 有效；trusted replay 只给 owning world 的 `CompileAndReplay()` 使用
 - 和其他模块的交互方式：
   - 依赖 `World` 的 entity version / free-list / archetype mutation 基础设施
   - hierarchy 仍由 `HierarchyTable` side-table 持有，command buffer 只决定 replay 顺序
@@ -50,15 +50,17 @@ updated: 2026-05-25
 ## 决策
 
 - 当前已落地的方向是"多线程 `recording` + 单线程 `replay`"；`World` 本身仍不是并发写安全。
-- 当不需要保留 frame 或跨 world replay 时，应优先用 `CompileAndReplay()`；它复用同样语义，但省掉可保留 `FrameDelta` 的物化分配。
+- 当不需要保留 frame 或跨 world replay 时，应优先用 `CompileAndReplay()`；它复用同样语义，但省掉 retained frame 物化，并复用 same-world trusted replay 元数据。
 - benchmark CLI 的 `command-buffer` 默认入口现在偏向快速 smoke 输出；完整 BenchmarkDotNet 套件需要显式 `--full`，避免本地验证卡在大矩阵上。
 - `FrameDelta` 是可保留的 frame 数据；只要目标 world 和源 world 保持同步初始态与同步回放顺序，就可以顺序 replay 到另一个 world。
 - 跨 world replay 时 `ResolveCompiledComponentType` 会验证 component type 对目标 world 的 registry 有效，保证跨实例安全。
 - 当前与 `Arch.Buffer.CommandBuffer` 的公共可比子集是 `Create / Add / Set / Remove / Destroy`；`Link / Unlink` 不参与跨引擎达标判定
 - `CompileAndReplay()` 当前的主要优化点是：
   - compile 阶段移除了 shard 扁平化中间桶
+  - created entity 在 compile 阶段直接产出最终 `Signature`
   - owning-world replay 复用 compile 批次里的 internal created/component 表示
-  - replay 期间对 `Type -> ComponentType` 做批次级缓存，并去掉 created materialize 的重复 reservation 校验
+  - trusted replay 跳过 reservation revalidation、created signature 重建、same-world component-type re-resolution
+  - `Replay(FrameDelta)` 仍保留跨 world 所需的验证和回退逻辑
 - 记录期直接返回真实 `Entity`，但它只是 reserved handle：
   - fresh id 会扩展 `_versions/_locations`
   - recycled id 会先从 free-list 取出
@@ -87,9 +89,9 @@ updated: 2026-05-25
 
 - 如果是第一次读这个模块，先看：
   - `src/MiniArch/Core/CommandBuffer.cs`：recording API、bucket compile、created-entity final-state 预计算
-  - `src/MiniArch/Core/CommandBuffer.cs` 里的 `CompileAndReplay()`：当前提交入口，内部仍会 materialize `FrameDelta`
-  - `src/MiniArch/Core/FrameDelta.cs`：compiled frame IR、跨 world replay 的数据边界
-  - `src/MiniArch/Core/World.cs`：`ReserveDeferredEntity` / `ReleaseReservedEntity` / `Replay(FrameDelta)` 的挂接点
+  - `src/MiniArch/Core/CommandBuffer.cs` 里的 `CompileAndReplay()`：same-world trusted replay 提交入口
+  - `src/MiniArch/Core/FrameDelta.cs`：compiled frame IR、`RawCreatedEntity.Signature` 和跨 world replay 的数据边界
+  - `src/MiniArch/Core/World.cs`：`ReserveDeferredEntity` / `ReleaseReservedEntity` / `Replay(FrameDelta)` / `ReplayTrusted(FrameDelta)` 的挂接点
 - 如果是修 bug，先看：
 - `tests/MiniArch.Tests/Core/CommandBufferTests.cs`：playback/replay 契约、created final state、free-list reuse、并发 recording
 - `tests/MiniArch.Tests/Core/CommandBufferParityTests.cs`：共享 `MiniArch vs Arch` benchmark 场景的最终结构摘要是否一致
@@ -219,6 +221,20 @@ updated: 2026-05-25
 - `CompileAndReplay()` 已改为 direct replay：复用 `_compiledBatch` 编译结果，立即 `World.Replay(...)`，replay 完再清理，不做 owned data deep copy。`Compile()` 仍保留自包含 frame 语义。
 - `World.Replay(FrameDelta)` 复用 world 级 component-type scratch；warmed empty replay 已锁定 0 allocation。
 - `FrameDelta` 的 raw command lists / raw command record 已收口为 internal；公开面保留 `DeltaCount`、`IsEmpty`、`HasEntity` 和 `Merge`。
+
+### 2026-05-25 审计补充：same-world trusted replay 快路径
+
+- `RawCreatedEntity` 现在携带 compile 阶段预计算好的最终 `Signature`；retained `Compile()+Replay()` 与 same-world `CompileAndReplay()` 都能直接复用它。
+- `World.ReplayTrusted(FrameDelta)` 只给 owning-world `CompileAndReplay()` 用：
+  - 不重跑 `EnsureReplayReservation(...)`
+  - 不再为 created entity 重建 `BuildReplaySignature(...)`
+  - add/set/remove 直接使用 compiled `ComponentType`
+- public `World.Replay(FrameDelta)` 没改语义，仍保留 cross-world 安全检查。
+- 2026-05-25 本地 BDN 对 `*MiniArch_CommandBuffer_RecordPlay*` 的实测中位数相对之前基线继续下降，典型值：
+  - `1000 / CreateHeavy`: `2.412 ms -> 1.915 ms`
+  - `10000 / CreateHeavy`: `20.039 ms -> 17.663 ms`
+  - `10000 / DenseExisting`: `17.997 ms -> 16.729 ms`
+  - `10000 / MixedScript`: `15.156 ms -> 15.964 ms` 本轮略慢，但 1000 mixed 仍有明显方差，不适合据此下结论
 
 ### DeltaCount / HasEntity
 

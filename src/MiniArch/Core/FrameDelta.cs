@@ -280,7 +280,7 @@ public sealed class FrameDelta
                     ? System.Linq.Enumerable.ToArray(st.CreatedComponents.Values)
                     : [];
 
-                target.CreatedEntities.Add(new RawCreatedEntity(entity, compArray));
+                target.CreatedEntities.Add(new RawCreatedEntity(entity, BuildCreatedEntitySignature(compArray), compArray));
             }
             else
             {
@@ -372,6 +372,22 @@ public sealed class FrameDelta
         }
     }
 
+    private static Signature BuildCreatedEntitySignature(IReadOnlyList<RawComponentValue> components)
+    {
+        if (components.Count == 0)
+        {
+            return Signature.Empty;
+        }
+
+        var componentTypes = new ComponentType[components.Count];
+        for (var index = 0; index < components.Count; index++)
+        {
+            componentTypes[index] = components[index].ComponentType;
+        }
+
+        return new Signature(componentTypes);
+    }
+
     private enum ComponentNetKind : byte { None = 0, Add, Set, Remove }
 
     private struct ComponentNetAction
@@ -404,7 +420,7 @@ internal readonly record struct RawComponentValue(
     int DataOffset,
     int DataSize);
 
-internal readonly record struct RawCreatedEntity(Entity Entity, RawComponentValue[] Components);
+internal readonly record struct RawCreatedEntity(Entity Entity, Signature Signature, RawComponentValue[] Components);
 
 internal readonly record struct RawComponentCommand(
     Entity Entity,

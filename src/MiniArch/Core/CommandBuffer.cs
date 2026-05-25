@@ -117,7 +117,7 @@ public sealed class CommandBuffer
                 return false;
             }
 
-            _world.Replay(compiled);
+            _world.ReplayTrusted(compiled);
             return true;
         }
         finally
@@ -483,7 +483,7 @@ public sealed class CommandBuffer
         {
             if (_components is null || _components.Count == 0)
             {
-                return new RawCreatedEntity(Entity, Array.Empty<RawComponentValue>());
+                return new RawCreatedEntity(Entity, Signature.Empty, Array.Empty<RawComponentValue>());
             }
 
             var count = _components.Count;
@@ -502,9 +502,11 @@ public sealed class CommandBuffer
                 Array.Sort(componentTypes, components, 0, count);
 
                 var entityComponents = new RawComponentValue[count];
+                var signatureComponents = new ComponentType[count];
                 Array.Copy(components, entityComponents, count);
+                Array.Copy(componentTypes, signatureComponents, count);
 
-                return new RawCreatedEntity(Entity, entityComponents);
+                return new RawCreatedEntity(Entity, Signature.CreateNormalized(signatureComponents), entityComponents);
             }
             finally
             {
