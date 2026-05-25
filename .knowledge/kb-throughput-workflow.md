@@ -47,6 +47,8 @@ updated: 2026-05-25
 - 这说明 steady-state 口径不能只看单一 query 形态；实体遍历与组件 span 读取的结论方向并不一致
 - 2026-05-25 的 5s/3 repeats smoke 跑法里，`query-with-all-entity` 下 `MiniArch` 平均 `31336.49 ops/s`，`Arch` 平均 `27103.77 ops/s`，`MiniArch` 领先 `15.62%`
 - 同一轮 `query-with-all-component-span` 下，`MiniArch` 平均 `17552.83 ops/s`，`Arch` 平均 `17402.50 ops/s`，两者几乎打平，`MiniArch` 仅领先 `0.86%`
+- 2026-05-25 的 3s/3 repeats smoke 复测里，`query-with-all-entity` 下 `MiniArch` 平均 `32022.49 ops/s`，`Arch` 平均 `27909.87 ops/s`，`MiniArch` 领先 `14.74%`
+- 同一轮 `query-with-all-component-span` 下，`MiniArch` 平均 `17640.26 ops/s`，`Arch` 平均 `17632.91 ops/s`，两者几乎完全持平，`MiniArch` 仅领先 `0.04%`
 
 ## 认知模型
 

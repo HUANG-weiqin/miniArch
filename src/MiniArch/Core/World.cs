@@ -46,6 +46,7 @@ public sealed class World : IDisposable
     private int _createArchetypeCacheGeneration;
     private readonly List<Entity> _destroyOrderScratch = new(4);
     private readonly HashSet<Entity> _destroyVisitedScratch = new(4);
+    private readonly Dictionary<Type, ComponentType> _replayComponentTypeScratch = new(4);
 
     private bool _disposed;
 
@@ -71,6 +72,9 @@ public sealed class World : IDisposable
         _freeIds = entityCapacity == 0 ? Array.Empty<RecycledEntity>() : new RecycledEntity[entityCapacity];
     }
 
+    /// <summary>
+    /// Releases owned runtime state.
+    /// </summary>
     public void Dispose()
     {
         if (_disposed) return;
@@ -893,6 +897,9 @@ public sealed class World : IDisposable
         return TryGetLocation(entity, out _);
     }
 
+    /// <summary>
+    /// Creates a snapshot-equivalent clone of this world.
+    /// </summary>
     public World Clone()
     {
         return WorldClone.Clone(this);
@@ -1595,12 +1602,16 @@ public sealed class World : IDisposable
         PushFreeId(entity.Id, nextVersion);
     }
 
+    /// <summary>
+    /// Applies a compiled frame delta to this world.
+    /// </summary>
     public void Replay(FrameDelta delta)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(delta);
 
-        var componentTypeCache = new Dictionary<Type, ComponentType>();
+        var componentTypeCache = _replayComponentTypeScratch;
+        componentTypeCache.Clear();
 
         BeginDeferredLayoutUpdates();
         try
@@ -1661,6 +1672,7 @@ public sealed class World : IDisposable
         }
         finally
         {
+            componentTypeCache.Clear();
             EndDeferredLayoutUpdates();
         }
     }

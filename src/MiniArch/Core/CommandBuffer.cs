@@ -109,20 +109,53 @@ public sealed class CommandBuffer
     /// <returns><c>true</c> if at least one command was replayed; otherwise, <c>false</c>.</returns>
     public bool CompileAndReplay()
     {
-        var compiled = Compile();
-        if (compiled.IsEmpty)
+        var compiled = CompileReusableBatch();
+        try
         {
-            return false;
-        }
+            if (compiled.IsEmpty)
+            {
+                return false;
+            }
 
-        _world.Replay(compiled);
-        return true;
+            _world.Replay(compiled);
+            return true;
+        }
+        finally
+        {
+            compiled.Clear();
+            Clear();
+        }
     }
 
     /// <summary>
     /// Compiles the buffered commands into a FrameDelta and clears the buffer.
     /// </summary>
     public FrameDelta Compile()
+    {
+        var compiledBatch = CompileReusableBatch();
+        try
+        {
+            var result = new FrameDelta();
+            result.ReservedEntities.AddRange(compiledBatch.ReservedEntities);
+            result.CreatedEntities.AddRange(compiledBatch.CreatedEntities);
+            result.LinkCommands.AddRange(compiledBatch.LinkCommands);
+            result.UnlinkCommands.AddRange(compiledBatch.UnlinkCommands);
+            result.AddCommands.AddRange(compiledBatch.AddCommands);
+            result.SetCommands.AddRange(compiledBatch.SetCommands);
+            result.RemoveCommands.AddRange(compiledBatch.RemoveCommands);
+            result.DestroyedEntities.AddRange(compiledBatch.DestroyedEntities);
+            result.ReleasedEntities.AddRange(compiledBatch.ReleasedEntities);
+            result.DeepCopyOwnedData();
+            return result;
+        }
+        finally
+        {
+            compiledBatch.Clear();
+            Clear();
+        }
+    }
+
+    private FrameDelta CompileReusableBatch()
     {
         var shards = GetOrderedShards();
         var counts = CountCommands(CollectionsMarshal.AsSpan(shards));
@@ -332,21 +365,7 @@ public sealed class CommandBuffer
         componentTypeInfoCache.Clear();
         destroyedEntities.Clear();
         hierarchyByChild.Clear();
-        Clear();
-
-        var result = new FrameDelta();
-        result.ReservedEntities.AddRange(compiledBatch.ReservedEntities);
-        result.CreatedEntities.AddRange(compiledBatch.CreatedEntities);
-        result.LinkCommands.AddRange(compiledBatch.LinkCommands);
-        result.UnlinkCommands.AddRange(compiledBatch.UnlinkCommands);
-        result.AddCommands.AddRange(compiledBatch.AddCommands);
-        result.SetCommands.AddRange(compiledBatch.SetCommands);
-        result.RemoveCommands.AddRange(compiledBatch.RemoveCommands);
-        result.DestroyedEntities.AddRange(compiledBatch.DestroyedEntities);
-        result.ReleasedEntities.AddRange(compiledBatch.ReleasedEntities);
-        compiledBatch.Clear();
-        result.DeepCopyOwnedData();
-        return result;
+        return compiledBatch;
     }
 
     private void Clear()

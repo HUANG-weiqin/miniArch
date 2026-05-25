@@ -2,19 +2,22 @@ using System.Runtime.InteropServices;
 
 namespace MiniArch.Core;
 
+/// <summary>
+/// Stores a compiled set of deferred world changes that can be replayed or merged.
+/// </summary>
 public sealed class FrameDelta
 {
-    public List<Entity> ReservedEntities { get; } = new(4);
-    public List<RawCreatedEntity> CreatedEntities { get; } = new(4);
-    public List<LinkCommand> LinkCommands { get; } = new(4);
-    public List<UnlinkCommand> UnlinkCommands { get; } = new(4);
-    public List<RawComponentCommand> AddCommands { get; } = new(4);
-    public List<RawComponentCommand> SetCommands { get; } = new(4);
-    public List<RawRemoveCommand> RemoveCommands { get; } = new(4);
-    public List<Entity> DestroyedEntities { get; } = new(4);
-    public List<Entity> ReleasedEntities { get; } = new(4);
+    internal List<Entity> ReservedEntities { get; } = new(4);
+    internal List<RawCreatedEntity> CreatedEntities { get; } = new(4);
+    internal List<LinkCommand> LinkCommands { get; } = new(4);
+    internal List<UnlinkCommand> UnlinkCommands { get; } = new(4);
+    internal List<RawComponentCommand> AddCommands { get; } = new(4);
+    internal List<RawComponentCommand> SetCommands { get; } = new(4);
+    internal List<RawRemoveCommand> RemoveCommands { get; } = new(4);
+    internal List<Entity> DestroyedEntities { get; } = new(4);
+    internal List<Entity> ReleasedEntities { get; } = new(4);
 
-    public void Clear()
+    internal void Clear()
     {
         ReservedEntities.Clear();
         CreatedEntities.Clear();
@@ -27,6 +30,9 @@ public sealed class FrameDelta
         ReleasedEntities.Clear();
     }
 
+    /// <summary>
+    /// Gets the total number of recorded delta entries.
+    /// </summary>
     public int DeltaCount =>
         ReservedEntities.Count +
         CreatedEntities.Count +
@@ -38,8 +44,14 @@ public sealed class FrameDelta
         DestroyedEntities.Count +
         ReleasedEntities.Count;
 
+    /// <summary>
+    /// Gets whether this delta has no entries.
+    /// </summary>
     public bool IsEmpty => DeltaCount == 0;
 
+    /// <summary>
+    /// Returns whether this delta references an entity.
+    /// </summary>
     public bool HasEntity(Entity entity)
     {
         for (var i = 0; i < ReservedEntities.Count; i++)
@@ -117,6 +129,9 @@ public sealed class FrameDelta
         }
     }
 
+    /// <summary>
+    /// Merges two deltas in sequence and returns a new self-contained delta.
+    /// </summary>
     public static FrameDelta Merge(FrameDelta a, FrameDelta b)
     {
         ArgumentNullException.ThrowIfNull(a);
@@ -381,7 +396,7 @@ public sealed class FrameDelta
     }
 }
 
-public readonly record struct RawComponentValue(
+internal readonly record struct RawComponentValue(
     int ComponentTypeId,
     Type RuntimeType,
     ComponentType ComponentType,
@@ -389,9 +404,9 @@ public readonly record struct RawComponentValue(
     int DataOffset,
     int DataSize);
 
-public readonly record struct RawCreatedEntity(Entity Entity, RawComponentValue[] Components);
+internal readonly record struct RawCreatedEntity(Entity Entity, RawComponentValue[] Components);
 
-public readonly record struct RawComponentCommand(
+internal readonly record struct RawComponentCommand(
     Entity Entity,
     int ComponentTypeId,
     Type RuntimeType,
@@ -401,11 +416,11 @@ public readonly record struct RawComponentCommand(
     ComponentWriterCache.ColumnWriterDelegate? ColumnWriter,
     byte[] Data);
 
-public readonly record struct RawRemoveCommand(Entity Entity, int ComponentTypeId, Type RuntimeType, ComponentType ComponentType);
+internal readonly record struct RawRemoveCommand(Entity Entity, int ComponentTypeId, Type RuntimeType, ComponentType ComponentType);
 
-public readonly record struct LinkCommand(Entity Parent, Entity Child);
+internal readonly record struct LinkCommand(Entity Parent, Entity Child);
 
-public readonly record struct UnlinkCommand(Entity Child);
+internal readonly record struct UnlinkCommand(Entity Child);
 
 internal readonly record struct RecordedHierarchyCommand(Entity Child, Entity Parent, bool IsLink);
 

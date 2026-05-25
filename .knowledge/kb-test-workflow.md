@@ -67,10 +67,10 @@ updated: 2026-05-25
 - 集成测试只保留一条完整迁移路径，避免重复覆盖。
 - 验证脚本和测试项目分离，方便 agent 在需要时只跑局部测试。
 - 结构变化相关测试必须保留 `Set` 的 in-place 语义断言，因为这是 typed-column / direct-index 重构的核心安全网。
-- command buffer 需要单独锁定 `Playback()` 不改 world、跨 world `Replay()`、created final archetype 和 free-list/version 语义；这些不能靠立即生效 API 测试替代。
+- command buffer 需要单独锁定 `Compile()` 不改 world、跨 world `Replay()`、created final archetype 和 free-list/version 语义；这些不能靠立即生效 API 测试替代。
 - command buffer 还要单独锁定"recording 不提前发布 world layout 变化"：录制 `Add/Set/Remove/Link` 时，不应先把 archetype / query generation 这类内部布局状态改掉。
-- command buffer 新增 `Play()` 后，还需要锁定 `Play()` 与 `Playback()+Replay()` 的结果等价，并用 benchmark 对比它们的分配差异。
-- 如果目标是优化 command buffer 的 GC，还应补一条 allocation smoke test，确认 `Play()` 和 `Playback()+Replay()` 分配水平相当（两者都走 raw bytes 路径）。
+- command buffer 的 `CompileAndReplay()` 需要锁定与 `Compile()+Replay()` 的结果等价，并用 allocation smoke test 确认 direct replay 少于 retained frame 路径。
+- 如果目标是优化 command buffer 的 GC，还应补 allocation smoke test，确认 `CompileAndReplay()` 不为可保留 `FrameDelta` 做额外物化。
 - `ArchetypeTests` 需要覆盖"复用前面空掉的 chunk"这一行为；否则 `Remove` benchmark 的分配回退很难在功能测试里暴露出来。
 - `WorldLifecycleTests` 需要覆盖 `EnsureCapacity` 和 `CreateMany`，否则 `Create` 的分配优化和批量语义很容易在重构时被回退。
 - `WorldLifecycleTests` 还要覆盖 `CreateMany` 的跨 chunk 顺序和二次批量追加语义，否则批量 reservation 很容易只保住"能跑"而丢掉位置正确性。
@@ -94,8 +94,8 @@ updated: 2026-05-25
 - `QueryTests` 需要覆盖"热缓存后的同一 query 并发枚举"和"冷缓存首次并发 materialize"两类只读场景；否则 query 的 copy-on-write 发布容易退回共享可变缓存。
 - `QueryDescription` 新增后，`QueryTests` / `QueryFilterTests` 还要覆盖 description 与 generic/builder 查询等价、同一 description 跨 world 复用、description 冷路径并发 materialize，以及公开类型视图不会暴露可变内部数组；否则"可复用描述 + 缓存 key"这层契约很容易被悄悄打破。
 - `CommandBufferTests` 需要同时覆盖 existing entity replay、created entity final-state、same-frame create+destroy 消除和并发 recording；否则很难看出 replay 顺序和 entity reservation 是否被悄悄改坏。
-- `CommandBufferTests` 里的 `Play()` 不应只跑手写 happy-path，还要覆盖复杂/随机脚本，避免短路径在 hierarchy 或 created/destroyed 混合帧上回退。
-- 如果目标是优化 command buffer 的 GC，除了行为测试，还要加 warmed allocation smoke test，至少锁定 `World.Destroy(...)` 和 `CommandBuffer.Play()` 的 steady-state 分配回退。
+- `CommandBufferTests` 里的 `CompileAndReplay()` 不应只跑手写 happy-path，还要覆盖复杂/随机脚本，避免短路径在 hierarchy 或 created/destroyed 混合帧上回退。
+- 如果目标是优化 command buffer 的 GC，除了行为测试，还要加 warmed allocation smoke test，至少锁定 `World.Destroy(...)`、`World.Replay(FrameDelta)` 和 `CommandBuffer.CompileAndReplay()` 的 steady-state 分配回退。
 - benchmark 入口如果默认会跑完整 `command-buffer` 矩阵，容易在本地验证时卡死；更稳妥的是默认 smoke、完整 BenchmarkDotNet 用显式 `--full`。
 - 对会直接 mutate world 的 `record + play` 基准，必须避免让同一个 iteration 内的多次 workload 复用同一份 world state；当前仓库通过 `command-buffer` 专用 benchmark 子命令隔离这组口径
 - complex query benchmark world 应该优先用 direct-create 先落 `Position/Velocity/Team` 这类 query 核心组件，再补剩余组件；否则 `Create + Add + Add + ...` 会留下过多历史空 archetype，污染 query benchmark。

@@ -473,7 +473,7 @@ public sealed class CommandBufferTests
     }
 
     [Fact]
-    public void Play_and_playback_plus_replay_allocate_similarly()
+    public void Play_allocates_less_than_retained_compile_plus_replay()
     {
         RunOnDedicatedThread(() =>
         {
@@ -511,8 +511,9 @@ public sealed class CommandBufferTests
 
             var playAllocatedBytes = MeasurePlayAllocatedBytes(playBuffers);
 
-            var ratio = (double)playAllocatedBytes / compileReplayAllocatedBytes;
-            Assert.True(ratio is >= 0.5 and <= 2.0, $"Play allocated {playAllocatedBytes} bytes, Compile()+Replay() allocated {compileReplayAllocatedBytes} bytes (ratio {ratio:F2}).");
+            Assert.True(
+                playAllocatedBytes < compileReplayAllocatedBytes,
+                $"Play allocated {playAllocatedBytes} bytes, Compile()+Replay() allocated {compileReplayAllocatedBytes} bytes.");
         });
     }
 
@@ -549,6 +550,20 @@ public sealed class CommandBufferTests
         var played = buffer.CompileAndReplay();
 
         Assert.False(played);
+    }
+
+    [Fact]
+    public void FrameDelta_public_api_does_not_expose_mutable_command_storage()
+    {
+        var publicProperties = typeof(FrameDelta)
+            .GetProperties(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
+
+        Assert.DoesNotContain(publicProperties, property =>
+            property.PropertyType.IsGenericType &&
+            property.PropertyType.GetGenericTypeDefinition() == typeof(List<>));
+
+        Assert.DoesNotContain(typeof(FrameDelta).Assembly.GetExportedTypes(), type =>
+            type.Name is nameof(RawComponentValue) or nameof(RawCreatedEntity) or nameof(RawComponentCommand) or nameof(RawRemoveCommand));
     }
 
     private static Entity[] CreateEntities(World world, int count)

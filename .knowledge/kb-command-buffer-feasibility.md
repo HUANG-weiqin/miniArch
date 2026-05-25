@@ -10,9 +10,9 @@ updated: 2026-05-25
 
 - 这个模块负责：
   - 提供 `CommandBuffer` 录制层，把结构变化和 hierarchy 变化先记成延迟命令
-- `CommandBuffer` 本体可以长期持有；`Playback()` / `Play()` 在消费当前批次后会自动清空记录，允许下一帧复用同一个实例，避免每帧新建 buffer
-  - 说明 `Playback()` 编译后的固定顺序：`create -> link/unlink -> add -> set -> remove -> destroy`
-  - 提供 `Play()` 短路径，在不物化 `FrameDelta` 的情况下直接把同样的编译结果提交给 owning world
+- `CommandBuffer` 本体可以长期持有；当前源码公开入口是 `Compile()` / `CompileAndReplay()`，消费当前批次后会自动清空记录，允许下一帧复用同一个实例，避免每帧新建 buffer
+  - 说明 `Compile()` 编译后的固定顺序：`create -> link/unlink -> add -> set -> remove -> destroy`
+  - 当前 `CompileAndReplay()` 会调用 `Compile()` 产出自包含 `FrameDelta`，再提交给 owning world；这保证语义统一，但不是 0-GC direct play 短路径
   - 说明 `World.Replay(FrameDelta)` 的 batch mutation 与 query 可见性边界
   - 约束并发只覆盖 recording，不把 `World` 变成并发写安全对象
 - 这个模块不负责：
@@ -31,12 +31,12 @@ updated: 2026-05-25
   - `src/MiniArch/Core/World.cs`：`ReserveDeferredEntity`、`ReleaseReservedEntity`、`Replay(FrameDelta)`、structural mutation
 - 数据流 / 控制流：
   - 工作线程通过 `CommandBuffer` 只记录命令；`Create()` 会立刻从 world 预留真实 `Entity`
-- `Playback()` 和 `Play()` 共享同一套合并/归约逻辑，但 compile 现在改成"按 shard 直接归约到最终批次"，不再先把所有 shard 扁平化成中间大 `List`
+- `Compile()` 和 `CompileAndReplay()` 共享同一套合并/归约逻辑，但 compile 现在改成"按 shard 直接归约到最终批次"，不再先把所有 shard 扁平化成中间大 `List`
 - `CommandBuffer` 的 compile 现在复用 buffer-local scratch `Dictionary` / `HashSet` / `List`，把 command 去重、created-state materialize 和 component type cache 的临时分配压到单次 buffer 生命周期内部
-  - `Playback()` 返回 `FrameDelta`，可以保留并跨 world replay
-  - 对同帧 newly-created entity，`Playback()` 直接预计算 final signature 和 final component payload
+  - `Compile()` 返回自包含 `FrameDelta`，可以保留并跨 world replay
+  - 对同帧 newly-created entity，`Compile()` 直接预计算 final signature 和 final component payload
   - 同帧 `create + destroy` 不会 materialize 到 world，而是放进 `ReleasedEntities`，在 replay 时回收到 free-list 并提升 version
-  - `Play()` 走 owning-world 专用 compiled batch，不再先物化 `FrameDelta`；created entity 的 internal batch 会尽量复用 compile 阶段结果，减少 `ToArray` / `ToList` / LINQ 分配
+  - `CompileAndReplay()` 走 owning-world 专用 reusable batch，不再先物化可保留 `FrameDelta`；created entity 的 internal batch 会尽量复用 compile 阶段结果，减少 `ToArray` / `ToList` / LINQ 分配
   - `Replay(FrameDelta)` 先 materialize surviving creates，再执行 `link/unlink -> add -> set -> remove -> destroy`
   - `Replay()` 期间抑制逐条 query layout 发布，整批结束后只发布一次
   - 跨 world replay 时 `ResolveCompiledComponentType` 会验证 component type 对目标 world 的 registry 有效
@@ -50,12 +50,12 @@ updated: 2026-05-25
 ## 决策
 
 - 当前已落地的方向是"多线程 `recording` + 单线程 `replay`"；`World` 本身仍不是并发写安全。
-- 当不需要保留 frame 或跨 world replay 时，应优先用 `Play()`；它复用同样语义，但省掉 `FrameDelta` 物化分配。
+- 当不需要保留 frame 或跨 world replay 时，应优先用 `CompileAndReplay()`；它复用同样语义，但省掉可保留 `FrameDelta` 的物化分配。
 - benchmark CLI 的 `command-buffer` 默认入口现在偏向快速 smoke 输出；完整 BenchmarkDotNet 套件需要显式 `--full`，避免本地验证卡在大矩阵上。
 - `FrameDelta` 是可保留的 frame 数据；只要目标 world 和源 world 保持同步初始态与同步回放顺序，就可以顺序 replay 到另一个 world。
 - 跨 world replay 时 `ResolveCompiledComponentType` 会验证 component type 对目标 world 的 registry 有效，保证跨实例安全。
 - 当前与 `Arch.Buffer.CommandBuffer` 的公共可比子集是 `Create / Add / Set / Remove / Destroy`；`Link / Unlink` 不参与跨引擎达标判定
-- `Play()` 当前的主要优化点是：
+- `CompileAndReplay()` 当前的主要优化点是：
   - compile 阶段移除了 shard 扁平化中间桶
   - owning-world replay 复用 compile 批次里的 internal created/component 表示
   - replay 期间对 `Type -> ComponentType` 做批次级缓存，并去掉 created materialize 的重复 reservation 校验
@@ -63,7 +63,7 @@ updated: 2026-05-25
   - fresh id 会扩展 `_versions/_locations`
   - recycled id 会先从 free-list 取出
   - 直到 replay materialize 前，`world.IsAlive(entity)` 仍为 `false`
-- `Playback()` 使用固定桶顺序，而不是用户调用顺序；当前实现的同实体冲突归约规则是：
+- `Compile()` 使用固定桶顺序，而不是用户调用顺序；当前实现的同实体冲突归约规则是：
   - existing entity：`add` / `set` 同 bucket 采用最后一次写入值；`remove` 独立保留到 remove phase
   - created entity：直接以 `add -> set -> remove` 计算 final component map 和 final signature
 - query layout generation 在 replay 期间被抑制，整批 replay 结束后只递增一次。
@@ -79,7 +79,7 @@ updated: 2026-05-25
   - `FrameDelta`
 - 常见误解：
   - 以为 `command buffer` 等于 world 从此支持多线程写
-  - 以为 `Playback()` 已经把 world 改了；实际上真正 mutation 发生在 `Replay()`
+  - 以为 `Compile()` 已经把 world 改了；实际上真正 mutation 发生在 `Replay()` 或 `CompileAndReplay()`
   - 以为 `CommandBuffer` 只能消费一次；当前实现是"消费当前批次后清空，随后可继续复用同一个实例"
   - 以为 `Set<T>` 永远只是值更新；当前实现里组件不存在时它仍会退化成结构变更
 
@@ -87,7 +87,7 @@ updated: 2026-05-25
 
 - 如果是第一次读这个模块，先看：
   - `src/MiniArch/Core/CommandBuffer.cs`：recording API、bucket compile、created-entity final-state 预计算
-  - `src/MiniArch/Core/CommandBuffer.cs` 里的 `Play()`：短路径提交入口
+  - `src/MiniArch/Core/CommandBuffer.cs` 里的 `CompileAndReplay()`：当前提交入口，内部仍会 materialize `FrameDelta`
   - `src/MiniArch/Core/FrameDelta.cs`：compiled frame IR、跨 world replay 的数据边界
   - `src/MiniArch/Core/World.cs`：`ReserveDeferredEntity` / `ReleaseReservedEntity` / `Replay(FrameDelta)` 的挂接点
 - 如果是修 bug，先看：
@@ -106,7 +106,7 @@ updated: 2026-05-25
   - 把 `add/set/remove` 当成完全可交换操作；existing entity 和 created entity 的归约规则并不相同
   - 忘记释放同帧 `create + destroy` 的 reserved entity，导致 id 被永远占用
   - replay 期间逐条触发 query layout 失效，导致额外开销和观察窗口不稳定
-  - 为了优化 `Play()` 而在 `Playback()` compile 阶段提前污染 source world 的组件注册；这会破坏"编译阶段不改 world"的边界
+  - 为了优化 `CompileAndReplay()` 而在 `Compile()` 阶段提前污染 source world 的组件注册；这会破坏"编译阶段不改 world"的边界
 - 容易误判的地方：
   - 以为 `destroy` 放最后就足够，实际上 created entity 的 final-state 预计算同样关键
   - 以为 recording 并发问题只在 shard merge；实际上 entity reservation 和 component registration 也需要保护
@@ -153,7 +153,7 @@ updated: 2026-05-25
 
 - **ArrayPool used instead of pre-allocated scratch arrays** because created entity component counts are variable and unpredictable
 
-- **Play() path achieves true 0-GC** because ComponentType is always valid from recording
+- **CompileAndReplay() path avoids retained frame materialization** because ComponentType is always valid from recording
 
 ### Build/Test Status
 
@@ -193,7 +193,7 @@ updated: 2026-05-25
 
 - `CommandBuffer records → FrameDelta (raw bytes) → World.Replay(FrameDelta)`
 - `Add<T>` → `Unsafe.WriteUnaligned` 写入 shard byte[] → `RecordedRawCommand(entity, id, offset, size)` → compile 合并 bytes → replay 通过 typed delegate 写入 chunk column
-- `Play()` 和 `Playback()+Replay()` 现在分配相似：两者都走 raw bytes 路径，不再有装箱差异
+- `CompileAndReplay()` 和 `Compile()+Replay()` 都走 raw bytes 路径，不再有装箱差异；`CompileAndReplay()` 额外避免 retained frame deep copy
 
 ### 验证状态
 
@@ -213,6 +213,12 @@ updated: 2026-05-25
 - 代价：每次 `Compile()` 分配一个 byte[] + 一个 FrameDelta（含 9 个 List）
 
 验证入口：`CommandBufferTests.cs` 中 `Compile_returns_distinct_instances_each_call`、`Held_frame_survives_second_compile`、`Held_frame_survives_recording_after_compile`、`Merged_frame_survives_source_buffer_reuse`、`Compile_ownership_set_commands`
+
+### 2026-05-25 审计补充：已落地优化
+
+- `CompileAndReplay()` 已改为 direct replay：复用 `_compiledBatch` 编译结果，立即 `World.Replay(...)`，replay 完再清理，不做 owned data deep copy。`Compile()` 仍保留自包含 frame 语义。
+- `World.Replay(FrameDelta)` 复用 world 级 component-type scratch；warmed empty replay 已锁定 0 allocation。
+- `FrameDelta` 的 raw command lists / raw command record 已收口为 internal；公开面保留 `DeltaCount`、`IsEmpty`、`HasEntity` 和 `Merge`。
 
 ### DeltaCount / HasEntity
 

@@ -494,6 +494,27 @@ public sealed class WorldLifecycleTests
     }
 
     [Fact]
+    public void Warmed_empty_replay_does_not_allocate()
+    {
+        RunOnDedicatedThread(() =>
+        {
+            var world = new World();
+            var delta = new FrameDelta();
+            world.Replay(delta);
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            world.Replay(delta);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.Equal(0, allocated);
+        });
+    }
+
+    [Fact]
     public void Generic_component_type_cache_does_not_store_registry_and_component_type_as_separate_fields()
     {
         var cache = typeof(World)

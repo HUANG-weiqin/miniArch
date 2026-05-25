@@ -4,12 +4,18 @@ using System.Runtime.InteropServices;
 
 namespace MiniArch.Core;
 
+/// <summary>
+/// Caches typed byte-to-column writers used by raw command replay.
+/// </summary>
 public static unsafe class ComponentWriterCache
 {
     private static readonly ConcurrentDictionary<Type, ColumnWriterDelegate> ColumnWriters = new();
     private static readonly ConcurrentDictionary<Type, ComponentReaderDelegate> Readers = new();
     private static readonly ConcurrentDictionary<Type, int> Sizes = new();
 
+    /// <summary>
+    /// Writes a component value from raw bytes into a typed component column.
+    /// </summary>
     public delegate void ColumnWriterDelegate(Array column, int row, byte* source);
 
     internal delegate void ComponentReaderDelegate(void* destination, byte* source);
