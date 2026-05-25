@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, typed columns, direct-index writes, signatures, and queries
-updated: 2026-04-22
+updated: 2026-05-25
 ---
 # MiniArch Core ECS
 
@@ -35,6 +35,7 @@ updated: 2026-04-22
 - 数据流 / 控制流：
   - `World` 创建实体后放入空签名 archetype
   - `World.Create<T...>` 当前为 `1..16` 个组件提供固定重载；它会先算目标签名，再把 entity 和组件直接写入最终 archetype，不经过 `Create -> Add -> Add` 的迁移链
+  - 带组件 `Create<T...>` 的 warmed 路径会缓存目标 archetype，避免每次创建实体都临时分配 `Signature` / 组件数组；`Create<T1>` 和 `Create<T1,T2>` 走泛型静态 direct cache，`Create<T3...T16>` 走 world 内部 normalized component-key cache
   - `World.EnsureCapacity` 负责提前扩好 entity metadata 存储，避免 `Create` 只靠 `List<T>` 被动增长
   - `World.CreateMany` 先批量准备 entity id，再用 `Archetype` 的 chunk-batched reservation 一次性把一批实体落入空签名 archetype
 - `World` 内部把 entity version 和 entity location 分开存储：`_versions` 管版本校验，`_locations` 只保留 archetype/chunk/row，避免 metadata 热路径重复写 version
@@ -77,6 +78,7 @@ updated: 2026-04-22
 - `default(Entity)` 不应该是合法句柄；如果把 `(0,0)` 当成活体 entity，所有 optional/out/default 初始化场景都会变成隐性 bug 源。
 - 单实体带组件创建也应该直接落到目标签名 archetype；如果退回到 `Create` 后链式 `Add`，会制造只服务于迁移的中间 archetype 和空 chunk。
 - 由于 C# 没有 variadic generics，带组件 `Create` 的高性能主路径需要采用固定 arity 重载；当前上限定在 `16`，在保持 typed-column 直写的前提下足够覆盖常见 archetype 初始化。
+- 带组件 `Create` 的 archetype cache 不是并发写安全机制；目标是减少 warmed create 的 `Signature` / 数组分配和 key 构造成本。静态 direct cache 必须绑定 `World` 和 create-cache generation，且不能强引用 cached world/archetype，避免 `ResetSnapshotState` 后复用旧 archetype 或让旧 world 被静态缓存延寿。
 - `CreateMany` 应该复用一次空 archetype 查找和一次 upfront 容量保证；它不是“外面循环调用很多次 `Create`”的语法糖。
 - `CreateMany` 的快路径还需要把“新 id 生成”和“chunk 落位”都批量化；如果仍然逐实体 `List.Add` 或逐实体 `ReserveEntity`，时间会显著落后于 Arch。
 - free-list 场景的 `CreateMany` 也应该走 reserve-then-fill：先批量 reserve rows，再在同一轮里写 buffer、chunk entities 和 location metadata；先把 buffer 填满再复制进 chunk 会制造明显的双写。
@@ -104,6 +106,7 @@ updated: 2026-04-22
 - entity query 热路径用 `GetEntityStorage()` 返回 `Entity[]` 直接数组访问（避免 span 边界检查），entity query throughput 已超过 Arch 12%。
 - `GetComponentRef<T>(columnIndex)` 返回 `ref T` 指向 typed column 数组首元素，配合 `Unsafe.Add` 实现 0-bounds-check 迭代。
 - Chunk 热路径方法（`SetComponentAtTyped`, `SetComponentAt`, `GetComponentAt`, `GetComponentIndex`, `GetEntityStorage`）已标记 `AggressiveInlining`。
+- `Chunk.GetComponentIndex(...)` 不能在 chunk 实例上维护 last-component / last-column 这类共享可变读缓存；同一 chunk 被并发只读、且不同线程读不同组件时，普通字段 pair 可能被观察成不一致组合。读路径应直接使用不可变的 `_componentIdToColumnIndex` direct map，或由调用方 hoist 到局部 column index。
 - 如果 query 不只缓存 `Archetype[]`，还缓存了扁平 `Chunk[]`，失效条件就不能只看 archetype 集合变化；同 archetype 内新增或复用 chunk 也必须触发 query snapshot 刷新。
 - typed column 的收益会被 `Array` 抽象层吃掉一部分；如果迁移/删除路径仍长期停留在 `Array.Copy` / `Array.Clear` 的逐列调用上，结构变化 benchmark 的 CPU 还会继续偏高。
 - typed chunk 的删除路径不应该无差别清空所有列尾槽位；值类型列可以直接保留旧位模式，只有引用类型或“包含引用字段的 struct”才需要清尾，避免无意义的写带宽和 GC 压力。
@@ -148,6 +151,7 @@ updated: 2026-04-22
   - archetype 只复用最后一个 chunk，导致前面已经空掉的 chunk 永远闲置，`Remove` 分配和 GC 被错误放大
   - `Create` 没有 upfront capacity 管理，导致 entity metadata 在批量创建时不断扩容
   - `Create<T...>` 如果内部复用 `Add` 迁移路径，会重新留下中间态 archetype 和空 chunk
+  - `Create<T...>` 如果每次都 new `Signature(...)`，即使 archetype 已经存在，warmed create 仍会按实体数分配数组/key；应通过 target-archetype cache 保持热路径低分配
   - `CreateMany` 退化成外部循环调用 `Create`，导致空 archetype 查找和容量检查无法摊平
   - `CreateMany` 只做了 upfront capacity，但仍逐实体 `ReserveEntity` 或逐实体扩展 metadata，bulk create 时间仍会明显慢于 Arch
 - `CreateMany` 的 free-list 路径如果先生成完整 entity span 再复制进 chunk，会在 recycled/mixed benchmark 里形成额外的双写/三遍历热点
@@ -182,6 +186,7 @@ updated: 2026-04-22
   - 当前代码库里这页描述的是目标态，不是旧版 `Dictionary<ComponentType, object?>` 实现
 - 当前并发保证只覆盖“world 无写入时的 query 并发只读”；不要误把它扩展理解成读写并发安全
 - `ComponentRegistry.GetOrCreate<T>()` 现在对并发懒注册是安全的，读路径无锁，写路径只在首次注册新类型时加小锁
+- query 并发只读依赖 chunk 读路径不写共享 mutable cache；如果为了热路径加缓存，优先用不可变 direct-index map、局部变量或调用方 workspace，不要把“上一次 lookup”存在 `Chunk` 实例字段上。
 
 ## 关联模块
 

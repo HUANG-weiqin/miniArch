@@ -135,6 +135,13 @@ public sealed class ChunkTests
     }
 
     [Fact]
+    public void Component_lookup_does_not_store_mutable_last_lookup_cache_state()
+    {
+        Assert.Null(typeof(Chunk).GetField("_lastComponentId", BindingFlags.Instance | BindingFlags.NonPublic));
+        Assert.Null(typeof(Chunk).GetField("_lastColumnIndex", BindingFlags.Instance | BindingFlags.NonPublic));
+    }
+
+    [Fact]
     public void Removing_from_a_typed_chunk_only_clears_reference_columns()
     {
         var registry = new ComponentRegistry();

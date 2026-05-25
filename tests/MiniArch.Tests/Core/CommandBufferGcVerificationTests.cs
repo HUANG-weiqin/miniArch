@@ -6,6 +6,7 @@ using Xunit;
 internal readonly record struct GcTestComponentA(int Value);
 internal readonly record struct GcTestComponentB(int Value);
 
+[Collection("GC-sensitive")]
 public class CommandBufferGcVerificationTests
 {
     [Fact]
@@ -222,3 +223,8 @@ public class CommandBufferGcVerificationTests
 }
 
 internal readonly record struct GcMeasurement(int Gen0Collections, int Gen1Collections, int Gen2Collections);
+
+[CollectionDefinition("GC-sensitive", DisableParallelization = true)]
+public sealed class GcSensitiveCollection
+{
+}

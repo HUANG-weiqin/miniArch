@@ -19,11 +19,6 @@ public sealed class Chunk
     private readonly int[] _componentIdToColumnIndex;
     private readonly bool _typedColumns;
 
-    // Caches the last component ID and its resolved column index to avoid repeated lookups
-    // in the row-wise hot path where the same component is accessed consecutively.
-    private int _lastComponentId = -1;
-    private int _lastColumnIndex = -1;
-
     /// <summary>
     /// Creates a chunk for a signature.
     /// </summary>
@@ -318,18 +313,8 @@ public sealed class Chunk
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal int GetComponentIndex(ComponentType component)
     {
-        var componentId = component.Value;
-
-        // Fast path: check if this is the same component as the last lookup
-        if (componentId == _lastComponentId)
-        {
-            return _lastColumnIndex;
-        }
-
         if (TryGetComponentIndex(component, out var columnIndex))
         {
-            _lastComponentId = componentId;
-            _lastColumnIndex = columnIndex;
             return columnIndex;
         }
 

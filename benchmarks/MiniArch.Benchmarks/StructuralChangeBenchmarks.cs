@@ -105,6 +105,16 @@ public class StructuralChangeBenchmarks
         }
     }
 
+    [Benchmark(Description = "MiniArch create entities with Position+Velocity")]
+    public void MiniArch_Create_PositionVelocity()
+    {
+        var world = new MiniArch.World(entityCapacity: EntityCount);
+        for (var i = 0; i < EntityCount; i++)
+        {
+            world.Create(new Position(i, i), new Velocity(i + 1, i + 1));
+        }
+    }
+
     [Benchmark(Description = "Arch create empty entities in bulk")]
     public void Arch_CreateMany_Entity()
     {

@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -28,6 +29,7 @@ public sealed class World
 
     private readonly ComponentRegistry _components = new();
     private readonly Dictionary<Signature, Archetype> _archetypes = new();
+    private readonly Dictionary<CreateArchetypeKey, Archetype> _createArchetypeCache = new();
     private readonly HierarchyTable _hierarchy = new();
     private readonly List<int> _versions;
     private readonly List<EntityLocation> _locations;
@@ -41,6 +43,7 @@ public sealed class World
     private int _queryLayoutSuppressionCount;
     private bool _queryLayoutDirty;
     private int _queryGeneration;
+    private int _createArchetypeCacheGeneration;
     private readonly List<Entity> _destroyOrderScratch = new(4);
     private readonly HashSet<Entity> _destroyVisitedScratch = new(4);
     private readonly List<Entity> _shadowDestroyOrderScratch = new(4);
@@ -100,10 +103,12 @@ public sealed class World
         }
 
         _archetypes.Clear();
+        _createArchetypeCache.Clear();
         _archetypeSnapshot = Array.Empty<Archetype>();
         _queryFiltersByDescription = new Dictionary<QueryDescription, QueryFilter>();
         _queries = new Dictionary<QueryFilter, MiniArch.Core.Query>();
         _queryGeneration = 0;
+        _createArchetypeCacheGeneration++;
         _freeIdCount = 0;
         _hierarchy.Reset();
 
@@ -171,7 +176,7 @@ public sealed class World
     public Entity Create<T1>(T1 component1)
     {
         var componentType1 = GetComponentType<T1>();
-        var archetype = GetOrCreateArchetype(new Signature(componentType1));
+        var archetype = GetOrCreateCreateArchetype<T1>(componentType1);
         var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
         chunk.SetComponentAtTyped(archetype.GetComponentIndex(componentType1), rowIndex, in component1);
         return entity;
@@ -184,7 +189,7 @@ public sealed class World
     {
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
-        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2));
+        var archetype = GetOrCreateCreateArchetype<T1, T2>(componentType1, componentType2);
         var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
         chunk.SetComponentAtTyped(archetype.GetComponentIndex(componentType1), rowIndex, in component1);
         chunk.SetComponentAtTyped(archetype.GetComponentIndex(componentType2), rowIndex, in component2);
@@ -199,7 +204,8 @@ public sealed class World
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
-        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3));
+        Span<ComponentType> components = stackalloc ComponentType[3] { componentType1, componentType2, componentType3 };
+        var archetype = GetOrCreateCreateArchetype(components);
         var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
@@ -216,7 +222,8 @@ public sealed class World
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
         var componentType4 = GetComponentType<T4>();
-        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4));
+        Span<ComponentType> components = stackalloc ComponentType[4] { componentType1, componentType2, componentType3, componentType4 };
+        var archetype = GetOrCreateCreateArchetype(components);
         var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
@@ -235,7 +242,8 @@ public sealed class World
         var componentType3 = GetComponentType<T3>();
         var componentType4 = GetComponentType<T4>();
         var componentType5 = GetComponentType<T5>();
-        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5));
+        Span<ComponentType> components = stackalloc ComponentType[5] { componentType1, componentType2, componentType3, componentType4, componentType5 };
+        var archetype = GetOrCreateCreateArchetype(components);
         var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
@@ -256,7 +264,8 @@ public sealed class World
         var componentType4 = GetComponentType<T4>();
         var componentType5 = GetComponentType<T5>();
         var componentType6 = GetComponentType<T6>();
-        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6));
+        Span<ComponentType> components = stackalloc ComponentType[6] { componentType1, componentType2, componentType3, componentType4, componentType5, componentType6 };
+        var archetype = GetOrCreateCreateArchetype(components);
         var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
@@ -279,7 +288,8 @@ public sealed class World
         var componentType5 = GetComponentType<T5>();
         var componentType6 = GetComponentType<T6>();
         var componentType7 = GetComponentType<T7>();
-        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7));
+        Span<ComponentType> components = stackalloc ComponentType[7] { componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7 };
+        var archetype = GetOrCreateCreateArchetype(components);
         var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
@@ -304,7 +314,8 @@ public sealed class World
         var componentType6 = GetComponentType<T6>();
         var componentType7 = GetComponentType<T7>();
         var componentType8 = GetComponentType<T8>();
-        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8));
+        Span<ComponentType> components = stackalloc ComponentType[8] { componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8 };
+        var archetype = GetOrCreateCreateArchetype(components);
         var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
@@ -331,7 +342,8 @@ public sealed class World
         var componentType7 = GetComponentType<T7>();
         var componentType8 = GetComponentType<T8>();
         var componentType9 = GetComponentType<T9>();
-        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9));
+        Span<ComponentType> components = stackalloc ComponentType[9] { componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9 };
+        var archetype = GetOrCreateCreateArchetype(components);
         var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
@@ -360,7 +372,8 @@ public sealed class World
         var componentType8 = GetComponentType<T8>();
         var componentType9 = GetComponentType<T9>();
         var componentType10 = GetComponentType<T10>();
-        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10));
+        Span<ComponentType> components = stackalloc ComponentType[10] { componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10 };
+        var archetype = GetOrCreateCreateArchetype(components);
         var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
@@ -391,7 +404,8 @@ public sealed class World
         var componentType9 = GetComponentType<T9>();
         var componentType10 = GetComponentType<T10>();
         var componentType11 = GetComponentType<T11>();
-        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11));
+        Span<ComponentType> components = stackalloc ComponentType[11] { componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11 };
+        var archetype = GetOrCreateCreateArchetype(components);
         var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
@@ -424,7 +438,8 @@ public sealed class World
         var componentType10 = GetComponentType<T10>();
         var componentType11 = GetComponentType<T11>();
         var componentType12 = GetComponentType<T12>();
-        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12));
+        Span<ComponentType> components = stackalloc ComponentType[12] { componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12 };
+        var archetype = GetOrCreateCreateArchetype(components);
         var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
@@ -459,7 +474,8 @@ public sealed class World
         var componentType11 = GetComponentType<T11>();
         var componentType12 = GetComponentType<T12>();
         var componentType13 = GetComponentType<T13>();
-        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12, componentType13));
+        Span<ComponentType> components = stackalloc ComponentType[13] { componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12, componentType13 };
+        var archetype = GetOrCreateCreateArchetype(components);
         var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
@@ -496,7 +512,8 @@ public sealed class World
         var componentType12 = GetComponentType<T12>();
         var componentType13 = GetComponentType<T13>();
         var componentType14 = GetComponentType<T14>();
-        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12, componentType13, componentType14));
+        Span<ComponentType> components = stackalloc ComponentType[14] { componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12, componentType13, componentType14 };
+        var archetype = GetOrCreateCreateArchetype(components);
         var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
@@ -535,7 +552,8 @@ public sealed class World
         var componentType13 = GetComponentType<T13>();
         var componentType14 = GetComponentType<T14>();
         var componentType15 = GetComponentType<T15>();
-        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12, componentType13, componentType14, componentType15));
+        Span<ComponentType> components = stackalloc ComponentType[15] { componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12, componentType13, componentType14, componentType15 };
+        var archetype = GetOrCreateCreateArchetype(components);
         var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
@@ -576,7 +594,8 @@ public sealed class World
         var componentType14 = GetComponentType<T14>();
         var componentType15 = GetComponentType<T15>();
         var componentType16 = GetComponentType<T16>();
-        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12, componentType13, componentType14, componentType15, componentType16));
+        Span<ComponentType> components = stackalloc ComponentType[16] { componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12, componentType13, componentType14, componentType15, componentType16 };
+        var archetype = GetOrCreateCreateArchetype(components);
         var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
         SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
@@ -944,6 +963,63 @@ public sealed class World
         _archetypes.Add(signature, archetype);
         PublishArchetypeSnapshot(archetype);
         AdvanceQueryGeneration();
+        return archetype;
+    }
+
+    private Archetype GetOrCreateCreateArchetype(Span<ComponentType> components)
+    {
+        if (components.Length == 0)
+        {
+            return GetOrCreateArchetype(Signature.Empty);
+        }
+
+        components.Sort();
+        var uniqueCount = 1;
+        for (var index = 1; index < components.Length; index++)
+        {
+            if (components[index] == components[uniqueCount - 1])
+            {
+                continue;
+            }
+
+            components[uniqueCount++] = components[index];
+        }
+
+        var normalized = components[..uniqueCount];
+        var key = new CreateArchetypeKey(normalized);
+        if (_createArchetypeCache.TryGetValue(key, out var archetype))
+        {
+            return archetype;
+        }
+
+        archetype = GetOrCreateArchetype(Signature.CreateNormalized(key.ToComponentArray()));
+        _createArchetypeCache.Add(key, archetype);
+        return archetype;
+    }
+
+    private Archetype GetOrCreateCreateArchetype<T1>(ComponentType componentType1)
+    {
+        var entry = CreateArchetypeCache<T1>.Entry;
+        if (entry is not null && entry.TryGetArchetype(this, _createArchetypeCacheGeneration, out var cachedArchetype))
+        {
+            return cachedArchetype;
+        }
+
+        var archetype = GetOrCreateArchetype(new Signature(componentType1));
+        CreateArchetypeCache<T1>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
+        return archetype;
+    }
+
+    private Archetype GetOrCreateCreateArchetype<T1, T2>(ComponentType componentType1, ComponentType componentType2)
+    {
+        var entry = CreateArchetypeCache<T1, T2>.Entry;
+        if (entry is not null && entry.TryGetArchetype(this, _createArchetypeCacheGeneration, out var cachedArchetype))
+        {
+            return cachedArchetype;
+        }
+
+        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2));
+        CreateArchetypeCache<T1, T2>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
         return archetype;
     }
 
@@ -2547,6 +2623,165 @@ public sealed class World
     {
         public static ComponentRegistry? Registry;
         public static ComponentType ComponentType;
+    }
+
+    private static class CreateArchetypeCache<T1>
+    {
+        public static CachedCreateArchetype? Entry;
+    }
+
+    private static class CreateArchetypeCache<T1, T2>
+    {
+        public static CachedCreateArchetype? Entry;
+    }
+
+    private sealed class CachedCreateArchetype
+    {
+        private readonly WeakReference<World> _world;
+        private readonly WeakReference<Archetype> _archetype;
+
+        public CachedCreateArchetype(World world, int generation, Archetype archetype)
+        {
+            _world = new WeakReference<World>(world);
+            _archetype = new WeakReference<Archetype>(archetype);
+            Generation = generation;
+        }
+
+        public int Generation { get; }
+
+        public bool TryGetArchetype(World world, int generation, [NotNullWhen(true)] out Archetype? archetype)
+        {
+            archetype = null;
+            if (generation != Generation ||
+                !_world.TryGetTarget(out var cachedWorld) ||
+                !ReferenceEquals(cachedWorld, world))
+            {
+                return false;
+            }
+
+            return _archetype.TryGetTarget(out archetype);
+        }
+    }
+
+    private readonly struct CreateArchetypeKey : IEquatable<CreateArchetypeKey>
+    {
+        private readonly int _count;
+        private readonly int _c1;
+        private readonly int _c2;
+        private readonly int _c3;
+        private readonly int _c4;
+        private readonly int _c5;
+        private readonly int _c6;
+        private readonly int _c7;
+        private readonly int _c8;
+        private readonly int _c9;
+        private readonly int _c10;
+        private readonly int _c11;
+        private readonly int _c12;
+        private readonly int _c13;
+        private readonly int _c14;
+        private readonly int _c15;
+        private readonly int _c16;
+
+        public CreateArchetypeKey(ReadOnlySpan<ComponentType> components)
+        {
+            if (components.Length is < 1 or > 16)
+            {
+                throw new ArgumentOutOfRangeException(nameof(components));
+            }
+
+            _count = components.Length;
+            _c1 = GetComponentValue(components, 0);
+            _c2 = GetComponentValue(components, 1);
+            _c3 = GetComponentValue(components, 2);
+            _c4 = GetComponentValue(components, 3);
+            _c5 = GetComponentValue(components, 4);
+            _c6 = GetComponentValue(components, 5);
+            _c7 = GetComponentValue(components, 6);
+            _c8 = GetComponentValue(components, 7);
+            _c9 = GetComponentValue(components, 8);
+            _c10 = GetComponentValue(components, 9);
+            _c11 = GetComponentValue(components, 10);
+            _c12 = GetComponentValue(components, 11);
+            _c13 = GetComponentValue(components, 12);
+            _c14 = GetComponentValue(components, 13);
+            _c15 = GetComponentValue(components, 14);
+            _c16 = GetComponentValue(components, 15);
+        }
+
+        public ComponentType[] ToComponentArray()
+        {
+            var components = new ComponentType[_count];
+            for (var index = 0; index < components.Length; index++)
+            {
+                components[index] = new ComponentType(GetComponentValue(index));
+            }
+
+            return components;
+        }
+
+        public bool Equals(CreateArchetypeKey other)
+        {
+            if (_count != other._count)
+            {
+                return false;
+            }
+
+            for (var index = 0; index < _count; index++)
+            {
+                if (GetComponentValue(index) != other.GetComponentValue(index))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        public override bool Equals(object? obj)
+        {
+            return obj is CreateArchetypeKey other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            var hash = _count;
+            for (var index = 0; index < _count; index++)
+            {
+                hash = unchecked((hash * 31) + GetComponentValue(index));
+            }
+
+            return hash;
+        }
+
+        private int GetComponentValue(int index)
+        {
+            return index switch
+            {
+                0 => _c1,
+                1 => _c2,
+                2 => _c3,
+                3 => _c4,
+                4 => _c5,
+                5 => _c6,
+                6 => _c7,
+                7 => _c8,
+                8 => _c9,
+                9 => _c10,
+                10 => _c11,
+                11 => _c12,
+                12 => _c13,
+                13 => _c14,
+                14 => _c15,
+                15 => _c16,
+                _ => throw new ArgumentOutOfRangeException(nameof(index)),
+            };
+        }
+
+        private static int GetComponentValue(ReadOnlySpan<ComponentType> components, int index)
+        {
+            return index < components.Length ? components[index].Value : -1;
+        }
     }
 
     private readonly record struct RecycledEntity(int Id, int Version);

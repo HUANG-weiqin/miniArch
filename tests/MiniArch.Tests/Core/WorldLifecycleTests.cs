@@ -469,6 +469,31 @@ public sealed class WorldLifecycleTests
     }
 
     [Fact]
+    public void Warmed_create_with_components_does_not_allocate_for_archetype_lookup()
+    {
+        RunOnDedicatedThread(() =>
+        {
+            const int EntityCount = 256;
+            var world = new World(chunkCapacity: EntityCount + 1, entityCapacity: EntityCount + 1);
+            world.EnsureCapacity(EntityCount + 1);
+            world.Create(new Position(-1, -1), new Velocity(-2, -2));
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < EntityCount; i++)
+            {
+                world.Create(new Position(i, i + 1), new Velocity(i + 2, i + 3));
+            }
+
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.True(allocated < 1024, $"Expected no per-entity archetype lookup allocations, but allocated {allocated} bytes.");
+        });
+    }
+
+    [Fact]
     public void Reused_entity_slot_does_not_inherit_destroyed_relationship()
     {
         var world = new World();

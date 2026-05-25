@@ -2,7 +2,7 @@
 title: Test Workflow
 module: MiniArch.Tests
 description: How the test suite, query profiling, snapshot benchmarks, and structural-change benchmarks are organized and how to run them
-updated: 2026-04-16
+updated: 2026-05-25
 ---
 # Test Workflow
 
@@ -88,9 +88,11 @@ updated: 2026-04-16
 - `WorldLifecycleTests` 还要覆盖 `CreateMany` 的 recycled/mixed id 语义，否则 fresh-path 优化很容易掩盖 free-list 路径的行为回退。
 - `EntityTests` 和 `WorldLifecycleTests` 需要锁定 entity 句柄契约：`default(Entity)` 非法、fresh entity 从 `Version = 1` 起步、recycled entity 再次创建后版本继续递增。
 - `WorldLifecycleTests` 还要覆盖带组件的 `Create<T...>` 直接进入最终 archetype，并锁定当前高性能重载上限 `16`；否则实现很容易退回 `Create + Add` 链路，或者在扩重载时静默漏掉目标 arity。
+- `WorldLifecycleTests` 还要覆盖带组件 `Create<T...>` 的 warmed allocation；测试前需 `EnsureCapacity`，否则会把 entity metadata / destroy scratch 增长误判成 archetype lookup 分配。
 - `WorldLifecycleTests` 还要锁定默认 world 的 dense archetype 会放大 chunk，而显式 `chunkCapacity` 仍保持固定边界；否则 query 吞吐优化很容易在后续重构中被悄悄回退，或者反过来破坏依赖小 chunk 的测试。
 - `ArchetypeEdges` 的 direct-index 化是性能目标本身，可以用一条小范围的结构测试锁定，避免静默退回字典实现。
 - `ChunkTests` 需要同时覆盖“引用类型列会清尾槽位”和“含引用字段的 struct 也会清尾槽位”；否则删除路径很容易被错误地简化成 `IsValueType` 判断。
+- `ChunkTests` 需要锁定 component lookup 读路径不保存 `_lastComponentId/_lastColumnIndex` 这类共享可变 last-lookup cache；这类优化会破坏同一 chunk 的并发只读契约。
 - mixed structural-change benchmark 默认使用 `20/20/20/20/20` 的均衡分布，并用固定种子生成同一条随机脚本。
 - `CreateMany` benchmark 不能只测 fresh append-only；必须把 recycled ids 和 mixed ids 分开跑，否则无法判断优化是否只对 `_freeIds.Count == 0` 的快路径有效。
 - benchmark 必须同时看时间和分配，不能只看平均耗时。
@@ -128,6 +130,7 @@ updated: 2026-04-16
 ## 当前已验证的 benchmark 结论
 
 - `StructuralChangeBenchmarks` 里，`MiniArch` 在 `Create / CreateMany / Set / Destroy / Remove` 上整体优于 `Arch`；`Add Position` 这一项当前仍偏慢，且波动较大，需要单独盯住
+- `StructuralChangeBenchmarks` 现在包含 `MiniArch_Create_PositionVelocity`，用于单独观察 typed `Create<T1,T2>` 的时间和分配回归
 - `MixedStructuralChangeBenchmarks` 里，`MiniArch` 在 `100 / 1000 / 10000` 三个档位都稳定快于 `Arch`，大致领先 `42%~48%`
 - `QueryBenchmarks` 里，`MiniArch` 在 `WithAll+Without`、`WithAll+Any` 这类过滤更重的 warmed 查询上领先，但在 `100000` 档位的纯 warmed entity/span traversal 上落后 `Arch`
 - `QueryBenchmarks` 的 `row-wise` 口径明显慢于 `span` 口径，说明对 typed chunk，span 读取仍然是更优的系统层遍历方式
@@ -197,6 +200,7 @@ updated: 2026-04-16
   - replay/rewind benchmark 如果把 snapshot save/load 或 world reset 放进测量区，结果会变成“API + 还原机制”的混合值，不能再解释成 `ReplayWithReverse(...)` / `Rewind(...)` 本体成本
   - `Rewind only` 如果在测量区里先做一次 `ReplayWithReverse(...)` 才拿 reverse frame，会把 capture 成本错误算进 rewind 结果
   - query 并发测试只覆盖“缓存已热”的读取，而没压到“第一次并发建 query / 刷新快照”的冷路径
+  - chunk 读路径上普通字段组成的 cache pair 即使每个字段都是 `int`，也不能视为并发安全；两个字段之间没有原子一致性，另一个线程可能看到新 component id 和旧 column index
   - complex query benchmark 如果从空实体一路逐组件 `Add` 到终态，最终 world 会残留大量空 archetype，导致 query benchmark 测到的不是“最终 world 上的 query”，而是“历史迁移残留 + query”的混合成本
   - query benchmark 只测 builder 创建，误把 API 组装成本当成 query 热路径
   - query benchmark 在 MiniArch 里把命中组件加得太早，导致中间态空 archetype 也被扫进结果
