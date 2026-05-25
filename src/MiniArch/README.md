@@ -145,15 +145,20 @@ foreach (var chunk in query.Chunks)
 默认层 entity-only 查询结果：
 
 - `GetEnumerator()`
+- `OrderBy(IComparer<Entity>)`
+- `OrderBy(Comparison<Entity>)`
 - `Advanced`
 
 `Advanced` 会暴露对应的 `MiniArch.Core.Query`，用于必要时下沉到 chunk 级遍历。
+
+`OrderBy(...)` 会在每次枚举时用内部池化 buffer materialize 当前 query 结果并排序。它不改变 `QueryDescription`，也不缓存排序结果；同一个 ordered query 可以并发枚举，但 comparer 自身也必须只做并发安全的读取。
 
 ## 并发总结
 
 | API | 并发语义 | 说明 |
 | --- | --- | --- |
 | `MiniArch.Query` | `MT-Read` | 仅限 world 无 mutation，且相关组件类型已注册 |
+| `MiniArch.OrderedQuery` | `MT-Read` | 每次枚举独立租用内部 buffer；comparer 必须可并发读 |
 | `MiniArch.Core.Query` | `MT-Read` | 覆盖冷 materialize / cache publish，不覆盖首次类型注册 |
 | `CommandBuffer` recording | `MT-Record` | 多线程可同时录制到同一个 buffer |
 | `Playback()` / `Play()` / `PlayWithReverse()` | 否 | 必须在 recording 结束后单线程消费 |

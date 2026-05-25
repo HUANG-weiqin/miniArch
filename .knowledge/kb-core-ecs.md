@@ -28,10 +28,12 @@ updated: 2026-05-25
   - `Archetype.cs`：chunk 列表、实体计数、结构变化入口
   - `Chunk.cs`：实体列和 typed component columns 的密集存储
   - `Signature.cs`：组件集合键
-  - `QueryFilter.cs`：query filter 的内部执行形状
+  - `QueryFilter.cs`：query filter 的内部执行形状（仅构造器 + Required/Excluded/Any，旧 `CreateRequired` 已删除）
+  - `QueryComponentSet.cs`：排序组件集合（仅 `CreateFrom` 批量入口，旧 `Add`/`Create(1..3)` 已删除）
   - `QueryDescription.cs`：可跨 world 复用的 query 描述，负责把用户想要的 `with/without/any` 组合保存成 world-agnostic 的类型集合
   - `Query.cs` / `QueryIterators.cs`：archetype 过滤和 chunk 遍历
   - `ArchetypeEdges.cs`：增删组件迁移缓存
+  - `ComponentColumnMap.cs`：`component id -> column index` 映射构建的共享 helper（`Archetype`/`Chunk` 共用）
 - 数据流 / 控制流：
   - `World` 创建实体后放入空签名 archetype
   - `World.Create<T...>` 当前为 `1..16` 个组件提供固定重载；它会先算目标签名，再把 entity 和组件直接写入最终 archetype，不经过 `Create -> Add -> Add` 的迁移链
@@ -55,7 +57,7 @@ updated: 2026-05-25
 - 和其他模块的交互方式：
   - `World` 通过 `ComponentRegistry` 把类型映射成 `ComponentType`
 - `World` 通过 `Signature` 定位 archetype
-- `Archetype` 通过 component-to-column 索引把 `Set` 路径压成一次定位 + 一次写入
+- `Archetype` / `Chunk` 通过共享 `ComponentColumnMap.Build(Signature)` 构建 component-to-column 索引，把 `Set` 路径压成一次定位 + 一次写入
 - `World.Destroy(...)`、`CollectCurrentDestroyClosure(...)` 和 `ReplayWithReverse(...)` 的 destroy 预处理会复用 world 内部 scratch，而不是每次临时 new `List` / `HashSet`
 - `HierarchyTable.CollectDestroySubtree(...)` 现在接受 caller-owned visited / order 容器，避免在 subtree 收集时额外分配 traversal stack
 - `Query` 的 warmed 热路径应该尽量只比较一份 world 侧统一 query generation；不要在热循环里同时读取 `ArchetypeGeneration` 和 `QueryLayoutGeneration` 两份状态。
@@ -98,6 +100,7 @@ updated: 2026-05-25
 - 对大命中 query，读路径真正昂贵的通常不是 filter builder，而是逐 row 的 accessor 开销；如果 chunk 读 API 只能通过 `GetEntity(row)` / `GetComponent(row)` 这种逐元素方法走，边界检查和调用成本会在 `100k+` 档位开始放大。
 - 对 entity-only 的 query 消费，`ReadOnlySpan<Entity>` 这类批量读接口通常能立刻降低 CPU，且不会引入额外分配；它是比重构 query cache 更低风险的第一步优化。
 - 对 steady-state query 遍历，优先走 `Query.GetChunkSpan()` + `Chunk.GetEntities()` 这类批量读路径；保留 `Chunks` 枚举器作为兼容 API，但不要把它当作 benchmark / profiling 的首选消费方式。
+- 默认层 `OrderedQuery` 应作为消费层 materialization + sort，不进入 core query cache，也不改变 `QueryDescription`；每次枚举独立租用内部 buffer 才能支持同一 ordered query 的并发读取。
 - 对 component-consuming query，优先走 typed chunk 的 `Chunk.GetComponentSpan<T>()`，不要在热循环里逐 row 调 `GetComponent<T>(..., row)`；后者会把列查找、边界检查和方法调用成本重复放大。
 - `Chunk.GetComponentSpan<T>()` 只适用于 world/archetype 创建出的 typed chunk；直接 `new Chunk(Signature, ...)` 得到的是兼容用 untyped chunk，这条 API 在那种实例上应视为不可用。
 - 结合当前 query sampling，warmed query 的第一优先优化点应放在 traversal / accessor 路径，而不是优先重写 `BuildMatchingArchetypes`；matching 目前只是小头。
@@ -107,6 +110,7 @@ updated: 2026-05-25
 - `GetComponentRef<T>(columnIndex)` 返回 `ref T` 指向 typed column 数组首元素，配合 `Unsafe.Add` 实现 0-bounds-check 迭代。
 - Chunk 热路径方法（`SetComponentAtTyped`, `SetComponentAt`, `GetComponentAt`, `GetComponentIndex`, `GetEntityStorage`）已标记 `AggressiveInlining`。
 - `Chunk.GetComponentIndex(...)` 不能在 chunk 实例上维护 last-component / last-column 这类共享可变读缓存；同一 chunk 被并发只读、且不同线程读不同组件时，普通字段 pair 可能被观察成不一致组合。读路径应直接使用不可变的 `_componentIdToColumnIndex` direct map，或由调用方 hoist 到局部 column index。
+- `World` / `CommandBuffer` 的泛型 component-type cache 也不能用 registry + id 两个 static 字段表示同一条 cache entry；跨 world 或并发首次缓存时可能形成错配。应发布单个 immutable entry 引用，并从本地 entry 读取 registry/id。
 - 如果 query 不只缓存 `Archetype[]`，还缓存了扁平 `Chunk[]`，失效条件就不能只看 archetype 集合变化；同 archetype 内新增或复用 chunk 也必须触发 query snapshot 刷新。
 - typed column 的收益会被 `Array` 抽象层吃掉一部分；如果迁移/删除路径仍长期停留在 `Array.Copy` / `Array.Clear` 的逐列调用上，结构变化 benchmark 的 CPU 还会继续偏高。
 - typed chunk 的删除路径不应该无差别清空所有列尾槽位；值类型列可以直接保留旧位模式，只有引用类型或“包含引用字段的 struct”才需要清尾，避免无意义的写带宽和 GC 压力。
@@ -163,8 +167,7 @@ updated: 2026-05-25
 - query builder / query fluent API 如果直接调用 `ComponentRegistry.GetOrCreate<T>()`，会绕过 `World` 已经存在的泛型缓存；这不会破坏功能，但会把 query build 的固定成本抬高。
 - `QueryDescription` 新增后，`World` 如果额外维护 `QueryDescription -> QueryFilter` 缓存，也要沿用 copy-on-write 发布，不要在共享字典上原地写入。
 - `QueryDescription` 的公开类型视图如果把内部数组直接返回出去，会把“值语义 + 缓存 key”契约打穿；这类问题在功能测试里不容易显形，但会在复用或并发共享 description 时变成非确定行为。
-- `QueryComponentSet.Add` / `Signature.Add` 这种“每次链式调用都复制一份小数组”的设计在 query build 不频繁时可以接受，但如果 benchmark 把 build 放进测量区，分配会稳定体现在结果里。
-- `QueryComponentSet.CreateFrom(ComponentType[])` 是内部热路径的批量入口；它应优先用于 `World.CreateQueryComponentSet` 这种一次性 materialization，而不是继续在循环里调用 `Add()`。
+- `QueryComponentSet` 的生产路径只走 `CreateFrom(ComponentType[])` 批量入口；旧的 `Add()` 链式和 `Create(1..3)` 固定重载已删除，不要重新引入。`CreateFrom` 是内部热路径的一次性 materialization 入口。
 - `Chunk.RemoveAt` 对所有列都做 `Array.Clear`，即使列元素不含引用也照样清空；这会在 remove/destroy 高频场景里制造纯写带宽开销，而不是必要的 GC 保护。
 - 判断 typed 列尾槽位是否需要清空时，不能只看 `Type.IsValueType`；带引用字段的 struct 同样需要 clear，运行时判定应以 `RuntimeHelpers.IsReferenceOrContainsReferences<T>()` 为准。
 - query benchmark 里如果 world shape 仍通过多次 `Add` 逐步长成，会残留一批历史空 archetype；它们不一定代表 steady-state query 的真实读取成本。
@@ -187,6 +190,7 @@ updated: 2026-05-25
 - 当前并发保证只覆盖“world 无写入时的 query 并发只读”；不要误把它扩展理解成读写并发安全
 - `ComponentRegistry.GetOrCreate<T>()` 现在对并发懒注册是安全的，读路径无锁，写路径只在首次注册新类型时加小锁
 - query 并发只读依赖 chunk 读路径不写共享 mutable cache；如果为了热路径加缓存，优先用不可变 direct-index map、局部变量或调用方 workspace，不要把“上一次 lookup”存在 `Chunk` 实例字段上。
+- 并发读审计时要把“多个字段共同表达一个 cache entry”的形态当作高风险信号；即使单字段写入是原子的，字段组合也没有一致性保证。
 
 ## 关联模块
 

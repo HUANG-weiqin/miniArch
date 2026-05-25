@@ -40,7 +40,7 @@ public sealed class Archetype
         Signature = signature;
         _chunkCapacity = chunkCapacity;
         _componentTypes = componentTypes;
-        _componentIdToColumnIndex = BuildComponentIdToColumnIndex(signature);
+        _componentIdToColumnIndex = ComponentColumnMap.Build(signature);
         _chunks.Add(CreateChunk(typedColumns));
     }
 
@@ -231,32 +231,4 @@ public sealed class Archetype
         return chunk;
     }
 
-    private static int[] BuildComponentIdToColumnIndex(Signature signature)
-    {
-        var components = signature.AsSpan();
-        var maxComponentId = -1;
-        for (var index = 0; index < components.Length; index++)
-        {
-            var componentId = components[index].Value;
-            if (componentId > maxComponentId)
-            {
-                maxComponentId = componentId;
-            }
-        }
-
-        if (maxComponentId < 0)
-        {
-            return Array.Empty<int>();
-        }
-
-        var lookup = new int[maxComponentId + 1];
-        Array.Fill(lookup, -1);
-
-        for (var index = 0; index < components.Length; index++)
-        {
-            lookup[components[index].Value] = index;
-        }
-
-        return lookup;
-    }
 }

@@ -494,6 +494,18 @@ public sealed class WorldLifecycleTests
     }
 
     [Fact]
+    public void Generic_component_type_cache_does_not_store_registry_and_component_type_as_separate_fields()
+    {
+        var cache = typeof(World)
+            .GetNestedType("ComponentTypeCache`1", System.Reflection.BindingFlags.NonPublic)!
+            .MakeGenericType(typeof(Position));
+
+        Assert.Null(cache.GetField("Registry", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public));
+        Assert.Null(cache.GetField("ComponentType", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public));
+        Assert.NotNull(cache.GetField("Entry", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public));
+    }
+
+    [Fact]
     public void Reused_entity_slot_does_not_inherit_destroyed_relationship()
     {
         var world = new World();

@@ -1,4 +1,6 @@
 using MiniArch;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace MiniArchTests.UserApi;
 
@@ -136,6 +138,88 @@ public sealed class UserQueryTests
         Assert.Equal(0, after - before);
     }
 
+    [Fact]
+    public void Query_can_order_entities_with_comparison()
+    {
+        var world = new World();
+        var description = new QueryDescription().With<Position>();
+        var middle = world.Create(new Position(2, 0));
+        var first = world.Create(new Position(1, 0));
+        var last = world.Create(new Position(3, 0));
+
+        var seen = new List<Entity>();
+        foreach (var entity in world.Query(in description).OrderBy((left, right) =>
+        {
+            Assert.True(world.TryGet(left, out Position leftPosition));
+            Assert.True(world.TryGet(right, out Position rightPosition));
+            return leftPosition.X.CompareTo(rightPosition.X);
+        }))
+        {
+            seen.Add(entity);
+        }
+
+        Assert.Equal(new[] { first, middle, last }, seen);
+    }
+
+    [Fact]
+    public void Query_can_order_entities_with_comparer()
+    {
+        var world = new World();
+        var description = new QueryDescription().With<Position>();
+        var last = world.Create(new Position(3, 0));
+        var first = world.Create(new Position(1, 0));
+        var middle = world.Create(new Position(2, 0));
+
+        var ordered = world.Query(in description).OrderBy(Comparer<Entity>.Create((left, right) =>
+        {
+            Assert.True(world.TryGet(left, out Position leftPosition));
+            Assert.True(world.TryGet(right, out Position rightPosition));
+            return leftPosition.X.CompareTo(rightPosition.X);
+        }));
+
+        Assert.Equal(new[] { first, middle, last }, Capture(ordered));
+    }
+
+    [Fact]
+    public async Task Ordered_query_can_be_enumerated_concurrently()
+    {
+        var world = new World();
+        var description = new QueryDescription().With<Position>();
+        var expected = new List<Entity>();
+        for (var i = 63; i >= 0; i--)
+        {
+            expected.Add(world.Create(new Position(i, 0)));
+        }
+
+        expected.Sort((left, right) =>
+        {
+            Assert.True(world.TryGet(left, out Position leftPosition));
+            Assert.True(world.TryGet(right, out Position rightPosition));
+            return leftPosition.X.CompareTo(rightPosition.X);
+        });
+
+        var ordered = world.Query(in description).OrderBy((left, right) =>
+        {
+            Assert.True(world.TryGet(left, out Position leftPosition));
+            Assert.True(world.TryGet(right, out Position rightPosition));
+            return leftPosition.X.CompareTo(rightPosition.X);
+        });
+
+        var start = new Barrier(9);
+        var tasks = Enumerable.Range(0, 8)
+            .Select(_ => Task.Run(() =>
+            {
+                start.SignalAndWait();
+                return Capture(ordered);
+            }))
+            .ToArray();
+
+        start.SignalAndWait();
+        var results = await Task.WhenAll(tasks);
+
+        Assert.All(results, actual => Assert.Equal(expected, actual));
+    }
+
     private static int Sum(World world, Query query)
     {
         var total = 0;
@@ -154,5 +238,16 @@ public sealed class UserQueryTests
         }
 
         return total;
+    }
+
+    private static Entity[] Capture(OrderedQuery query)
+    {
+        var entities = new List<Entity>();
+        foreach (var entity in query)
+        {
+            entities.Add(entity);
+        }
+
+        return entities.ToArray();
     }
 }

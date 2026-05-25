@@ -2,7 +2,7 @@
 title: Command Buffer Runtime
 module: MiniArch.Core CommandBuffer
 description: Implemented command buffer model, fixed replay order, world delta capture/apply, recording concurrency scope, 0-GC optimization results, and validation notes
-updated: 2026-04-16
+updated: 2026-05-25
 ---
 # Command Buffer Runtime
 
@@ -176,7 +176,7 @@ updated: 2026-04-16
 
 ### Optimizations Implemented
 
-1. **ComponentTypeCache\<T\> added to CommandBuffer**: `GetComponentTypeId<T>()` method with `AggressiveInlining`. After first call per T per World, only reads 2 static fields + 1 comparison. Eliminates `GetOrCreate<T>()` concurrent dict lookup on every recording call. Pattern mirrors World's existing `ComponentTypeCache<T>`.
+1. **ComponentTypeCache\<T\> added to CommandBuffer**: `GetComponentTypeId<T>()` method with `AggressiveInlining`. After first call per T per World, reads one published immutable cache entry and compares its registry. Eliminates `GetOrCreate<T>()` concurrent dict lookup on every recording call while avoiding registry/id split-field cache races.
 
 2. **Dead code removed**: `_componentTypeCacheScratch` field, `ResolveComponentTypeById` method, and its `Compile()` usage.
 
@@ -201,6 +201,25 @@ updated: 2026-04-16
 
 - 0 warnings, 0 errors
 - 176/176 tests pass
+
+## Phase 2 候选：Recording 热路径装箱消除
+
+### 已识别问题
+
+- `RecordedComponentCommand.Value` 是 `object?`（`FrameCommands.cs:260`），值类型组件在 `Add<T>`/`Set<T>` 录制时逐条装箱
+- Phase 1 数据：10 万次 `Set` 产生 ~10.3 MB heap allocation（GC collection 已为 0，但 allocation 仍在）
+- 影响范围：`CommandBuffer.cs:53`（Add）、`CommandBuffer.cs:62`（Set）
+
+### 短期：量化收益
+
+- 添加 record-only allocation benchmark，确认装箱开销占 recording 总开销的比例
+- 确认当前 `object?` 路径在实际负载下的 allocation profile
+
+### 中长期：typed/per-type recording storage
+
+- 方案方向：per-component-type 泛型 shard 或 `RecordedComponentCommand<T>` 特化列表
+- 代价：API 复杂度、shard 管理成本、compile 阶段归约逻辑变化
+- 前置条件：record-only benchmark 数据证明收益显著
 
 ## 关联模块
 

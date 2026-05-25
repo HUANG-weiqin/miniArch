@@ -2,7 +2,7 @@
 title: User API Layering
 module: MiniArch
 description: Single-source public API around MiniArch.World/Entity/QueryDescription, description-based foreach query, and the remaining MiniArch.Core advanced boundary
-updated: 2026-04-12
+updated: 2026-05-25
 ---
 # User API Layering
 
@@ -33,6 +33,7 @@ updated: 2026-04-12
 - 数据流 / 控制流：
   - 普通用户从 `MiniArch.World` 进入
   - `World.Query(in QueryDescription)` 返回默认层 entity-only `MiniArch.Query`
+  - `MiniArch.Query.OrderBy(...)` 返回默认层 entity-only `OrderedQuery`，每次枚举时用内部池化 buffer 收集 entity 并排序
   - `MiniArch.Query.Advanced` 暴露对应的 `MiniArch.Core.Query`
   - advanced 用户也可以直接走 `MiniArch.Core.Query.Create(world, in description)`
   - `TryGet<T>` 走 `World` 上的 direct read 路径
@@ -51,6 +52,8 @@ updated: 2026-04-12
   - `QueryItem<...>`
   - `QueryEnumerator<...>`
 - 默认查询统一只保留 `QueryDescription` 入口，避免 “按 1~2 个组件特判” 把公开 API 撑大。
+- `OrderBy(...)` 是默认层消费方式，不属于 `QueryDescription`，因为排序 comparer 往往捕获 world 或业务状态，不能安全参与 description value equality/cache key。
+- `OrderBy(...)` 不缓存排序结果；它每次枚举独立租用内部 buffer，因此同一个 ordered query 可以并发枚举，但 comparer 自身必须只做并发安全读取。
 - builder 风格 `World.Query()...Build()` 也被移除；advanced 查询统一显式写成 `MiniArch.Core.Query.Create(world, in description)`。
 - 因为根命名空间会真实暴露 `World` / `Entity`，仓库内部测试与 benchmark 命名空间同步改成 `MiniArchTests.*` / `MiniArchBenchmarks`，避免名字解析被外层命名空间劫持。
 
@@ -62,6 +65,7 @@ updated: 2026-04-12
   - `MiniArch.World`
   - `MiniArch.QueryDescription`
   - `MiniArch.Query`
+  - `MiniArch.OrderedQuery`
   - `MiniArch.Core.Query`
 - 常见误解：
   - 以为“只有一份 QueryDescription”就等于也只能有一份查询结果形状
@@ -92,6 +96,7 @@ updated: 2026-04-12
   - 以为默认层只剩 entity 枚举后，`MiniArch.Core.Query` 就应该删除；实际上 advanced query 仍然承担 chunk 快照与 profiling 入口
 - 改这里时要特别小心：
   - `MiniArch.Query` 是 struct wrapper，不能再拿它做 identity 断言
+  - `OrderedQuery` 的内部池化只覆盖枚举 buffer；如果 comparer 捕获可变状态或写 world，不属于 query 并发读契约
   - `MiniArch.Core.Query.Create(world, in description)` 现在是 advanced 唯一入口；改这里要同步 tests/benchmarks
   - 如果未来再扩查询能力，优先扩 `QueryDescription` 或 advanced query 消费方式，不要重新引入 typed query 家族
 

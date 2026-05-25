@@ -443,13 +443,16 @@ public sealed class CommandBuffer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private int GetComponentTypeId<T>()
     {
-        if (ComponentTypeCache<T>.Registry != _world.Components)
+        var registry = _world.Components;
+        var entry = Volatile.Read(ref ComponentTypeCache<T>.Entry);
+        if (entry is not null && ReferenceEquals(entry.Registry, registry))
         {
-            ComponentTypeCache<T>.Registry = _world.Components;
-            ComponentTypeCache<T>.ComponentTypeId = _world.Components.GetOrCreate<T>().Value;
+            return entry.ComponentTypeId;
         }
 
-        return ComponentTypeCache<T>.ComponentTypeId;
+        var componentTypeId = registry.GetOrCreate<T>().Value;
+        Volatile.Write(ref ComponentTypeCache<T>.Entry, new ComponentTypeIdCacheEntry(registry, componentTypeId));
+        return componentTypeId;
     }
 
     private CommandBufferShard GetShard()
@@ -682,7 +685,8 @@ public sealed class CommandBuffer
     /// </summary>
     private static class ComponentTypeCache<T>
     {
-        public static ComponentRegistry? Registry;
-        public static int ComponentTypeId;
+        public static ComponentTypeIdCacheEntry? Entry;
     }
+
+    private sealed record ComponentTypeIdCacheEntry(ComponentRegistry Registry, int ComponentTypeId);
 }

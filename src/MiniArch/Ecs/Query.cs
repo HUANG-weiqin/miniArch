@@ -1,3 +1,5 @@
+using System.Buffers;
+
 namespace MiniArch;
 
 /// <summary>
@@ -21,6 +23,24 @@ public readonly struct Query
     /// Returns the struct enumerator used by foreach.
     /// </summary>
     public QueryEnumerator GetEnumerator() => new(_query);
+
+    /// <summary>
+    /// Returns an ordered entity enumerable using an internally pooled buffer per enumeration.
+    /// </summary>
+    public OrderedQuery OrderBy(IComparer<Entity> comparer)
+    {
+        ArgumentNullException.ThrowIfNull(comparer);
+        return new OrderedQuery(_query, comparer);
+    }
+
+    /// <summary>
+    /// Returns an ordered entity enumerable using an internally pooled buffer per enumeration.
+    /// </summary>
+    public OrderedQuery OrderBy(Comparison<Entity> comparison)
+    {
+        ArgumentNullException.ThrowIfNull(comparison);
+        return OrderBy(Comparer<Entity>.Create(comparison));
+    }
 }
 
 /// <summary>
@@ -84,5 +104,124 @@ public struct QueryEnumerator
             _count = chunk.Count;
             _rowIndex = -1;
         }
+    }
+}
+
+/// <summary>
+/// Entity-only ordered query facade that materializes and sorts results per enumeration.
+/// </summary>
+public readonly struct OrderedQuery
+{
+    private readonly MiniArch.Core.Query _query;
+    private readonly IComparer<Entity> _comparer;
+
+    internal OrderedQuery(MiniArch.Core.Query query, IComparer<Entity> comparer)
+    {
+        _query = query;
+        _comparer = comparer;
+    }
+
+    /// <summary>
+    /// Returns the struct enumerator used by foreach.
+    /// </summary>
+    public OrderedQueryEnumerator GetEnumerator() => new(_query, _comparer);
+}
+
+/// <summary>
+/// Struct enumerator over sorted entities.
+/// </summary>
+public struct OrderedQueryEnumerator : IDisposable
+{
+    private readonly MiniArch.Core.Query _query;
+    private readonly IComparer<Entity> _comparer;
+    private Entity[]? _entities;
+    private int _count;
+    private int _index;
+    private bool _initialized;
+    private Entity _current;
+
+    internal OrderedQueryEnumerator(MiniArch.Core.Query query, IComparer<Entity> comparer)
+    {
+        _query = query;
+        _comparer = comparer;
+        _entities = null;
+        _count = 0;
+        _index = -1;
+        _initialized = false;
+        _current = default;
+    }
+
+    /// <summary>
+    /// Gets the current entity.
+    /// </summary>
+    public Entity Current => _current;
+
+    /// <summary>
+    /// Advances to the next sorted entity.
+    /// </summary>
+    public bool MoveNext()
+    {
+        if (!_initialized)
+        {
+            Initialize();
+        }
+
+        _index++;
+        if (_index >= _count)
+        {
+            return false;
+        }
+
+        _current = _entities![_index];
+        return true;
+    }
+
+    /// <summary>
+    /// Returns the rented sort buffer.
+    /// </summary>
+    public void Dispose()
+    {
+        var entities = _entities;
+        if (entities is null)
+        {
+            return;
+        }
+
+        _entities = null;
+        _count = 0;
+        ArrayPool<Entity>.Shared.Return(entities);
+    }
+
+    private void Initialize()
+    {
+        _initialized = true;
+
+        var chunks = _query.EnsureMatchingChunks();
+        var count = 0;
+        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        {
+            count += chunks[chunkIndex].Count;
+        }
+
+        if (count == 0)
+        {
+            return;
+        }
+
+        var entities = ArrayPool<Entity>.Shared.Rent(count);
+        _entities = entities;
+        _count = count;
+
+        var entityIndex = 0;
+        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        {
+            var chunk = chunks[chunkIndex];
+            var storage = chunk.GetEntityStorage();
+            var chunkCount = chunk.Count;
+            Array.Copy(storage, 0, entities, entityIndex, chunkCount);
+            entityIndex += chunkCount;
+        }
+
+        Array.Sort(entities, 0, count, _comparer);
     }
 }

@@ -61,6 +61,18 @@ public sealed class CommandBufferTests
     }
 
     [Fact]
+    public void Generic_component_type_id_cache_does_not_store_registry_and_component_id_as_separate_fields()
+    {
+        var cache = typeof(CommandBuffer)
+            .GetNestedType("ComponentTypeCache`1", System.Reflection.BindingFlags.NonPublic)!
+            .MakeGenericType(typeof(Position));
+
+        Assert.Null(cache.GetField("Registry", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public));
+        Assert.Null(cache.GetField("ComponentTypeId", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public));
+        Assert.NotNull(cache.GetField("Entry", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public));
+    }
+
+    [Fact]
     public void Playback_delta_does_not_mutate_world_and_can_be_applied_to_another_world()
     {
         var source = new World();

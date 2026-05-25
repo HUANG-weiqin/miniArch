@@ -1373,13 +1373,15 @@ public sealed class World
 
     private ComponentType GetComponentType<T>()
     {
-        if (ComponentTypeCache<T>.Registry != _components)
+        var entry = Volatile.Read(ref ComponentTypeCache<T>.Entry);
+        if (entry is not null && ReferenceEquals(entry.Registry, _components))
         {
-            ComponentTypeCache<T>.Registry = _components;
-            ComponentTypeCache<T>.ComponentType = _components.GetOrCreate<T>();
+            return entry.ComponentType;
         }
 
-        return ComponentTypeCache<T>.ComponentType;
+        var componentType = _components.GetOrCreate<T>();
+        Volatile.Write(ref ComponentTypeCache<T>.Entry, new ComponentTypeCacheEntry(_components, componentType));
+        return componentType;
     }
 
     private void ValidateSnapshotEntitySlot(int entityId)
@@ -2621,9 +2623,10 @@ public sealed class World
 
     private static class ComponentTypeCache<T>
     {
-        public static ComponentRegistry? Registry;
-        public static ComponentType ComponentType;
+        public static ComponentTypeCacheEntry? Entry;
     }
+
+    private sealed record ComponentTypeCacheEntry(ComponentRegistry Registry, ComponentType ComponentType);
 
     private static class CreateArchetypeCache<T1>
     {

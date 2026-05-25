@@ -93,6 +93,8 @@ updated: 2026-05-25
 - `ArchetypeEdges` 的 direct-index 化是性能目标本身，可以用一条小范围的结构测试锁定，避免静默退回字典实现。
 - `ChunkTests` 需要同时覆盖“引用类型列会清尾槽位”和“含引用字段的 struct 也会清尾槽位”；否则删除路径很容易被错误地简化成 `IsValueType` 判断。
 - `ChunkTests` 需要锁定 component lookup 读路径不保存 `_lastComponentId/_lastColumnIndex` 这类共享可变 last-lookup cache；这类优化会破坏同一 chunk 的并发只读契约。
+- `UserQueryTests` 需要覆盖 `OrderBy(Comparison<Entity>)`、`OrderBy(IComparer<Entity>)` 和同一 ordered query 的并发枚举；排序 comparer 可捕获 world 做只读组件访问，但不能写 world。
+- `WorldLifecycleTests` / `CommandBufferTests` 需要锁定泛型 component-type cache 不再以 registry + id 两个 static 字段表达，避免跨 world 或并发首次缓存时形成错配。
 - mixed structural-change benchmark 默认使用 `20/20/20/20/20` 的均衡分布，并用固定种子生成同一条随机脚本。
 - `CreateMany` benchmark 不能只测 fresh append-only；必须把 recycled ids 和 mixed ids 分开跑，否则无法判断优化是否只对 `_freeIds.Count == 0` 的快路径有效。
 - benchmark 必须同时看时间和分配，不能只看平均耗时。
@@ -202,6 +204,7 @@ updated: 2026-05-25
   - `Rewind only` 如果在测量区里先做一次 `ReplayWithReverse(...)` 才拿 reverse frame，会把 capture 成本错误算进 rewind 结果
   - query 并发测试只覆盖“缓存已热”的读取，而没压到“第一次并发建 query / 刷新快照”的冷路径
   - chunk 读路径上普通字段组成的 cache pair 即使每个字段都是 `int`，也不能视为并发安全；两个字段之间没有原子一致性，另一个线程可能看到新 component id 和旧 column index
+  - 泛型静态 cache 如果用两个字段共同表达“这个 world/registry 下的 component id”，也会有同类错配风险；测试应锁定单 entry 发布形态
   - complex query benchmark 如果从空实体一路逐组件 `Add` 到终态，最终 world 会残留大量空 archetype，导致 query benchmark 测到的不是“最终 world 上的 query”，而是“历史迁移残留 + query”的混合成本
   - query benchmark 只测 builder 创建，误把 API 组装成本当成 query 热路径
   - query benchmark 在 MiniArch 里把命中组件加得太早，导致中间态空 archetype 也被扫进结果

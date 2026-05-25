@@ -17,21 +17,6 @@ internal readonly struct QueryFilter : IEquatable<QueryFilter>
 
     public QueryComponentSet Any { get; }
 
-    public static QueryFilter CreateRequired(ComponentType component1)
-    {
-        return new QueryFilter(QueryComponentSet.Create(component1), QueryComponentSet.Empty, QueryComponentSet.Empty);
-    }
-
-    public static QueryFilter CreateRequired(ComponentType component1, ComponentType component2)
-    {
-        return new QueryFilter(QueryComponentSet.Create(component1, component2), QueryComponentSet.Empty, QueryComponentSet.Empty);
-    }
-
-    public static QueryFilter CreateRequired(ComponentType component1, ComponentType component2, ComponentType component3)
-    {
-        return new QueryFilter(QueryComponentSet.Create(component1, component2, component3), QueryComponentSet.Empty, QueryComponentSet.Empty);
-    }
-
     public bool Equals(QueryFilter other)
     {
         return Required.Equals(other.Required)
