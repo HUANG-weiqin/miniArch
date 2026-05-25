@@ -130,6 +130,7 @@ updated: 2026-05-25
 ## 当前已验证的 benchmark 结论
 
 - `StructuralChangeBenchmarks` 里，`MiniArch` 在 `Create / CreateMany / Set / Destroy / Remove` 上整体优于 `Arch`；`Add Position` 这一项当前仍偏慢，且波动较大，需要单独盯住
+- `StructuralChangeBenchmarks` 里的 `Create(Position, Velocity)` 现在已经补齐 Arch 同构基准，最新短跑结果里 `MiniArch` 约 `33.74 us`，`Arch` 约 `39.81 us`，MiniArch 仍领先
 - `StructuralChangeBenchmarks` 现在包含 `MiniArch_Create_PositionVelocity`，用于单独观察 typed `Create<T1,T2>` 的时间和分配回归
 - `MixedStructuralChangeBenchmarks` 里，`MiniArch` 在 `100 / 1000 / 10000` 三个档位都稳定快于 `Arch`，大致领先 `42%~48%`
 - `QueryBenchmarks` 里，`MiniArch` 在 `WithAll+Without`、`WithAll+Any` 这类过滤更重的 warmed 查询上领先，但在 `100000` 档位的纯 warmed entity/span traversal 上落后 `Arch`

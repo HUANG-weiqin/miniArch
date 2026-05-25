@@ -2,7 +2,7 @@
 title: Throughput Workflow
 module: Workspace
 description: Reusable fixed-duration throughput comparison workflow for MiniArch and Arch workloads
-updated: 2026-04-12
+updated: 2026-05-25
 ---
 # Throughput Workflow
 
@@ -45,6 +45,8 @@ updated: 2026-04-12
 - `query-with-all-entity`，`EntityCount=100000`，`Duration=10s`，`Repeat=5` 下，`MiniArch` 平均 `30978.89 ops/s`，`Arch` 平均 `27509.40 ops/s`，`MiniArch` 领先 `12.61%`
 - `query-with-all-component-span`，同样参数下，`MiniArch` 平均 `9615.78 ops/s`，`Arch` 平均 `17691.85 ops/s`，`MiniArch` 落后 `45.65%`
 - 这说明 steady-state 口径不能只看单一 query 形态；实体遍历与组件 span 读取的结论方向并不一致
+- 2026-05-25 的 5s/3 repeats smoke 跑法里，`query-with-all-entity` 下 `MiniArch` 平均 `31336.49 ops/s`，`Arch` 平均 `27103.77 ops/s`，`MiniArch` 领先 `15.62%`
+- 同一轮 `query-with-all-component-span` 下，`MiniArch` 平均 `17552.83 ops/s`，`Arch` 平均 `17402.50 ops/s`，两者几乎打平，`MiniArch` 仅领先 `0.86%`
 
 ## 认知模型
 

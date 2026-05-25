@@ -115,6 +115,16 @@ public class StructuralChangeBenchmarks
         }
     }
 
+    [Benchmark(Description = "Arch create entities with Position+Velocity")]
+    public void Arch_Create_PositionVelocity()
+    {
+        using var world = Arch.Core.World.Create();
+        for (var i = 0; i < EntityCount; i++)
+        {
+            world.Create(new Position(i, i), new Velocity(i + 1, i + 1));
+        }
+    }
+
     [Benchmark(Description = "Arch create empty entities in bulk")]
     public void Arch_CreateMany_Entity()
     {
