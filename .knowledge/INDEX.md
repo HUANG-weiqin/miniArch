@@ -13,6 +13,7 @@
 - `kb-snapshot-persistence.md`：snapshot 存档格式、运行时桥接点和 load/save 边界
 - `kb-hierarchy-runtime.md`：runtime-owned parent-child、级联销毁和 hierarchy snapshot 恢复
 - `kb-test-workflow.md`：测试组织、验证方式、性能基准和常见回归点
+- `kb-hero-pipeline-benchmarks.md`：Hero 项目 pipeline benchmark 移植到 miniArch 的架构和结果
 
 ## 模块地图
 
@@ -26,6 +27,7 @@
 - `MiniArch.Core Hierarchy` -> `kb-hierarchy-runtime.md`
 - `MiniArch.Tests` -> `kb-test-workflow.md`
 - `MiniArch.Benchmarks` -> `kb-test-workflow.md`
+- `HeroPipeline.Tests` -> `kb-hero-pipeline-benchmarks.md`
 
 ## 快速入口
 
