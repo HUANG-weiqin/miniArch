@@ -56,7 +56,7 @@ public static class CommandBufferSharedScenarios
                 throw new ArgumentOutOfRangeException(nameof(scenario));
         }
 
-        buffer.Play();
+        buffer.CompileAndReplay();
         return SummarizeMiniWorld(scenario.Name, world);
     }
 

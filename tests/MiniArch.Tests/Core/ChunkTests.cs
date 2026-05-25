@@ -14,7 +14,8 @@ public sealed class ChunkTests
         var registry = new ComponentRegistry();
         var position = registry.GetOrCreate<Position>();
         var velocity = registry.GetOrCreate<Velocity>();
-        var chunk = new Chunk(new Signature(position, velocity), capacity: 4);
+        var signature = new Signature(position, velocity);
+        var chunk = CreateChunk(signature, typeof(Position), typeof(Velocity), capacity: 4);
 
         var first = new Entity(1, 1);
         var second = new Entity(2, 1);
@@ -43,7 +44,8 @@ public sealed class ChunkTests
         var registry = new ComponentRegistry();
         var position = registry.GetOrCreate<Position>();
         var velocity = registry.GetOrCreate<Velocity>();
-        var chunk = new Chunk(new Signature(position, velocity), capacity: 4);
+        var signature = new Signature(position, velocity);
+        var chunk = CreateChunk(signature, typeof(Position), typeof(Velocity), capacity: 4);
 
         var first = new Entity(1, 1);
         var second = new Entity(2, 1);
@@ -65,7 +67,7 @@ public sealed class ChunkTests
     [Fact]
     public void Removing_the_last_row_returns_default_entity_as_no_move_marker()
     {
-        var chunk = new Chunk(Signature.Empty, capacity: 4);
+        var chunk = CreateEmptyChunk(capacity: 4);
         var only = new Entity(1, 1);
 
         chunk.Add(only);
@@ -84,7 +86,8 @@ public sealed class ChunkTests
         var registry = new ComponentRegistry();
         var position = registry.GetOrCreate<Position>();
         var velocity = registry.GetOrCreate<Velocity>();
-        var chunk = new Chunk(new Signature(position, velocity), capacity: 4);
+        var signature = new Signature(position, velocity);
+        var chunk = CreateChunk(signature, typeof(Position), typeof(Velocity), capacity: 4);
 
         var first = new Entity(1, 1);
         var second = new Entity(2, 1);
@@ -101,7 +104,7 @@ public sealed class ChunkTests
     [Fact]
     public void Chunk_exposes_a_read_only_span_over_its_live_entities()
     {
-        var chunk = new Chunk(Signature.Empty, capacity: 4);
+        var chunk = CreateEmptyChunk(capacity: 4);
         var first = new Entity(1, 1);
         var second = new Entity(2, 1);
 
@@ -122,7 +125,7 @@ public sealed class ChunkTests
         var position = registry.GetOrCreate<Position>();
         var velocity = registry.GetOrCreate<Velocity>();
         var signature = new Signature(position, velocity);
-        var chunk = CreateTypedChunk(signature, new[] { typeof(Position), typeof(Velocity) }, capacity: 4);
+        var chunk = CreateChunk(signature, typeof(Position), typeof(Velocity), capacity: 4);
 
         chunk.Add(new Entity(1, 1), Components(position, velocity, new Position(1, 2), new Velocity(3, 4)));
         chunk.Add(new Entity(2, 1), Components(position, velocity, new Position(5, 6), new Velocity(7, 8)));
@@ -148,7 +151,7 @@ public sealed class ChunkTests
         var position = registry.GetOrCreate<Position>();
         var label = registry.GetOrCreate<Label>();
         var signature = new Signature(position, label);
-        var chunk = CreateTypedChunk(signature, new[] { typeof(Position), typeof(Label) }, capacity: 4);
+        var chunk = CreateChunk(signature, typeof(Position), typeof(Label), capacity: 4);
 
         var first = new Entity(1, 1);
         var second = new Entity(2, 1);
@@ -181,7 +184,7 @@ public sealed class ChunkTests
         var position = registry.GetOrCreate<Position>();
         var labelStruct = registry.GetOrCreate<LabelStruct>();
         var signature = new Signature(position, labelStruct);
-        var chunk = CreateTypedChunk(signature, new[] { typeof(Position), typeof(LabelStruct) }, capacity: 4);
+        var chunk = CreateChunk(signature, typeof(Position), typeof(LabelStruct), capacity: 4);
 
         var first = new Entity(1, 1);
         var second = new Entity(2, 1);
@@ -203,6 +206,23 @@ public sealed class ChunkTests
         Assert.Equal(secondLabel, labelColumn[0]);
         Assert.Equal(secondPosition, positionColumn[1]);
         Assert.Equal(default, labelColumn[1]);
+    }
+
+    private static Chunk CreateEmptyChunk(int capacity)
+    {
+        return new Chunk(Signature.Empty, Type.EmptyTypes, Array.Empty<int>(), capacity);
+    }
+
+    private static Chunk CreateChunk(Signature signature, Type t1, Type t2, int capacity)
+    {
+        var componentIdToColumnIndex = new int[2];
+        var components = signature.AsSpan();
+        for (var i = 0; i < components.Length; i++)
+        {
+            componentIdToColumnIndex[components[i].Value] = i;
+        }
+
+        return new Chunk(signature, [t1, t2], componentIdToColumnIndex, capacity);
     }
 
     private static Dictionary<ComponentType, object?> Components(ComponentType position, ComponentType velocity, Position p, Velocity v)
@@ -230,24 +250,6 @@ public sealed class ChunkTests
             [position] = p,
             [label] = value,
         };
-    }
-
-    private static Chunk CreateTypedChunk(Signature signature, Type[] componentTypes, int capacity)
-    {
-        var componentIdToColumnIndex = new int[componentTypes.Length];
-        for (var index = 0; index < componentIdToColumnIndex.Length; index++)
-        {
-            componentIdToColumnIndex[index] = index;
-        }
-
-        var constructor = typeof(Chunk).GetConstructor(
-            BindingFlags.Instance | BindingFlags.NonPublic,
-            binder: null,
-            new[] { typeof(Signature), typeof(Type[]), typeof(int[]), typeof(int) },
-            modifiers: null);
-
-        Assert.NotNull(constructor);
-        return (Chunk)constructor!.Invoke(new object?[] { signature, componentTypes, componentIdToColumnIndex, capacity });
     }
 
     private static Array[] GetColumns(Chunk chunk)

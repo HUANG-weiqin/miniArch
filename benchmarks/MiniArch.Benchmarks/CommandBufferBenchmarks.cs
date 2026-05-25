@@ -191,7 +191,7 @@ internal static class CommandBufferBenchmarkScenarioFactory
             }
         }
 
-        buffer.Play();
+        buffer.CompileAndReplay();
     }
 
     private static void RunMiniDenseExisting(MiniSharedCommandBufferState state)
@@ -219,7 +219,7 @@ internal static class CommandBufferBenchmarkScenarioFactory
             }
         }
 
-        buffer.Play();
+        buffer.CompileAndReplay();
     }
 
     private static void RunMiniCreateHeavy(MiniSharedCommandBufferState state)
@@ -243,7 +243,7 @@ internal static class CommandBufferBenchmarkScenarioFactory
             }
         }
 
-        buffer.Play();
+        buffer.CompileAndReplay();
     }
 
     private static void RunMiniMixedScript(MiniSharedCommandBufferState state)
@@ -290,7 +290,7 @@ internal static class CommandBufferBenchmarkScenarioFactory
             }
         }
 
-        buffer.Play();
+        buffer.CompileAndReplay();
     }
 
     private static void RunArchDenseExisting(ArchSharedCommandBufferState state)

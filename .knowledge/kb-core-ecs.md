@@ -93,7 +93,7 @@ updated: 2026-05-25
 - `Archetype` 不能只把写入目标锁死在最后一个 chunk；结构迁移把实体移走后，前面空掉的 chunk 必须可复用，否则 `Remove -> 空 archetype` 会无意义地重新分配 chunk。
 - 但“可复用前面空 chunk”不等于“每次插入都线性扫所有 chunk”；remove-heavy / fragmented 场景最终还是要有 non-full chunk 的显式索引，否则 chunk 数一多，插入和 batch reserve 都会退化成扫描成本。
 - `ArchetypeEdges` 应该和其他热路径一样使用 component id 直索引，而不是继续停留在 `Dictionary<ComponentType, Archetype>`。
-- 兼容构造仍然保留给直接 `new Archetype(...)` / `new Chunk(...)` 的测试和低频调用，但热路径不要依赖它。
+- `Archetype` 和 `Chunk` 只保留 typed 构造路径（必须传入 `Type[]`）；不再有 untyped `object?[]` 列路径。
 - `Set` 的热路径应该是 direct-index 原地写，不应该为了更新一个已存在组件去做结构迁移。
 - 在“world 不并发写入”的前提下，query 并发读优先用 copy-on-write 快照发布，而不是加锁；读路径保持数组遍历，写路径承担快照复制成本。
 - query cache 应该发布整个 `Dictionary<QueryFilter, Query>` 快照，而不是在共享字典上做并发写入。
@@ -102,7 +102,7 @@ updated: 2026-05-25
 - 对 steady-state query 遍历，优先走 `Query.GetChunkSpan()` + `Chunk.GetEntities()` 这类批量读路径；保留 `Chunks` 枚举器作为兼容 API，但不要把它当作 benchmark / profiling 的首选消费方式。
 - 默认层 `OrderedQuery` 应作为消费层 materialization + sort，不进入 core query cache，也不改变 `QueryDescription`；每次枚举独立租用内部 buffer 才能支持同一 ordered query 的并发读取。
 - 对 component-consuming query，优先走 typed chunk 的 `Chunk.GetComponentSpan<T>()`，不要在热循环里逐 row 调 `GetComponent<T>(..., row)`；后者会把列查找、边界检查和方法调用成本重复放大。
-- `Chunk.GetComponentSpan<T>()` 只适用于 world/archetype 创建出的 typed chunk；直接 `new Chunk(Signature, ...)` 得到的是兼容用 untyped chunk，这条 API 在那种实例上应视为不可用。
+- `Chunk.GetComponentSpan<T>()` 适用于所有 chunk（所有 chunk 都是 typed）。
 - 结合当前 query sampling，warmed query 的第一优先优化点应放在 traversal / accessor 路径，而不是优先重写 `BuildMatchingArchetypes`；matching 目前只是小头。
 - row-wise 组件访问热路径中，`GetComponentIndex()` 已被 `TryGetColumnIndices(...)` 批量 hoist 出 row loop；benchmark 和 profiling runner 的 row-wise 路径已切换到预解析列索引 + `GetComponentAt<T>(columnIndex, row)`，不再逐行调用 `GetComponent<T>(componentType, row)`。
 - component span 热路径优化关键：用 `Unsafe.As<T[]>()` + `ref T` 返回 + `Unsafe.Add(ref base, row)` 跳过 span 边界检查；直接通过 `_componentIdToColumnIndex` map 查列索引，绕过 LRU cache。这把 component span throughput 从落后 Arch 45% 缩小到仅 2.7%。

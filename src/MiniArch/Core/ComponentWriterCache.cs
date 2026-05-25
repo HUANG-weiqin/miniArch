@@ -47,27 +47,6 @@ public static unsafe class ComponentWriterCache
         });
     }
 
-    internal static unsafe object ReadBoxed(Type type, byte[] data, int offset)
-    {
-        var boxed = RuntimeHelpers.GetUninitializedObject(type);
-        var reader = GetReader(type);
-
-        fixed (byte* ptr = data)
-        {
-            var handle = GCHandle.Alloc(boxed, GCHandleType.Pinned);
-            try
-            {
-                reader((void*)handle.AddrOfPinnedObject(), ptr + offset);
-            }
-            finally
-            {
-                handle.Free();
-            }
-        }
-
-        return boxed;
-    }
-
     private static ColumnWriterDelegate CreateColumnWriter<T>()
     {
         return (Array column, int row, byte* source) =>

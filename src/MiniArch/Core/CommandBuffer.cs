@@ -107,7 +107,7 @@ public sealed class CommandBuffer
     /// Compiles and replays the buffered commands.
     /// </summary>
     /// <returns><c>true</c> if at least one command was replayed; otherwise, <c>false</c>.</returns>
-    public bool Play()
+    public bool CompileAndReplay()
     {
         var compiled = Compile();
         if (compiled.IsEmpty)
@@ -434,12 +434,12 @@ public sealed class CommandBuffer
 
         public void Add(int componentTypeId, Type runtimeType, ComponentType componentType, int size, byte[] sourceData, int sourceOffset, int sourceSize)
         {
-            (_components ??= [])[componentTypeId] = new RawComponentValue(componentTypeId, runtimeType, componentType, size, sourceData, sourceOffset, sourceSize);
+            (_components ??= [])[componentTypeId] = new RawComponentValue(componentTypeId, runtimeType, componentType, sourceData, sourceOffset, sourceSize);
         }
 
         public void Set(int componentTypeId, Type runtimeType, ComponentType componentType, int size, byte[] sourceData, int sourceOffset, int sourceSize)
         {
-            (_components ??= [])[componentTypeId] = new RawComponentValue(componentTypeId, runtimeType, componentType, size, sourceData, sourceOffset, sourceSize);
+            (_components ??= [])[componentTypeId] = new RawComponentValue(componentTypeId, runtimeType, componentType, sourceData, sourceOffset, sourceSize);
         }
 
         public void Remove(int componentTypeId)
@@ -451,7 +451,7 @@ public sealed class CommandBuffer
         {
             if (_components is null || _components.Count == 0)
             {
-                return new RawCreatedEntity(Entity, Signature.Empty, Array.Empty<RawComponentValue>());
+                return new RawCreatedEntity(Entity, Array.Empty<RawComponentValue>());
             }
 
             var count = _components.Count;
@@ -460,30 +460,19 @@ public sealed class CommandBuffer
             try
             {
                 var index = 0;
-                var allComponentTypesResolved = true;
                 foreach (var pair in _components)
                 {
-                    var value = pair.Value;
-                    components[index] = value;
-                    componentTypes[index] = value.ComponentType;
-                    allComponentTypesResolved &= value.ComponentType.IsValid;
+                    components[index] = pair.Value;
+                    componentTypes[index] = pair.Value.ComponentType;
                     index++;
                 }
 
-                Signature? signature = null;
-                if (allComponentTypesResolved)
-                {
-                    Array.Sort(componentTypes, components, 0, count);
-
-                    var signatureTypes = new ComponentType[count];
-                    Array.Copy(componentTypes, signatureTypes, count);
-                    signature = Signature.CreateNormalized(signatureTypes);
-                }
+                Array.Sort(componentTypes, components, 0, count);
 
                 var entityComponents = new RawComponentValue[count];
                 Array.Copy(components, entityComponents, count);
 
-                return new RawCreatedEntity(Entity, signature, entityComponents);
+                return new RawCreatedEntity(Entity, entityComponents);
             }
             finally
             {

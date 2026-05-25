@@ -170,7 +170,6 @@ public sealed class FrameDelta
                                     action.Command.ComponentTypeId,
                                     action.Command.RuntimeType,
                                     action.Command.ComponentType,
-                                    ComponentWriterCache.GetSize(action.Command.RuntimeType),
                                     action.Command.Data,
                                     action.Command.DataOffset,
                                     action.Command.DataSize);
@@ -186,7 +185,7 @@ public sealed class FrameDelta
                     ? System.Linq.Enumerable.ToArray(st.CreatedComponents.Values)
                     : [];
 
-                target.CreatedEntities.Add(new RawCreatedEntity(entity, null, compArray));
+                target.CreatedEntities.Add(new RawCreatedEntity(entity, compArray));
             }
             else
             {
@@ -306,12 +305,11 @@ public readonly record struct RawComponentValue(
     int ComponentTypeId,
     Type RuntimeType,
     ComponentType ComponentType,
-    int ComponentSize,
     byte[] Data,
     int DataOffset,
     int DataSize);
 
-public readonly record struct RawCreatedEntity(Entity Entity, Signature? Signature, RawComponentValue[] Components);
+public readonly record struct RawCreatedEntity(Entity Entity, RawComponentValue[] Components);
 
 public readonly record struct RawComponentCommand(
     Entity Entity,

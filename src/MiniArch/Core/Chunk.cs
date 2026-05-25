@@ -15,31 +15,12 @@ public sealed class Chunk
     private readonly Entity[] _entities;
     private readonly Array[] _columns;
     private readonly bool[] _columnRequiresClear;
-    private readonly ColumnClearMode _columnClearMode;
     private readonly int[] _componentIdToColumnIndex;
-    private readonly bool _typedColumns;
-
-    /// <summary>
-    /// Creates a chunk for a signature.
-    /// </summary>
-    internal Chunk(Signature signature, int capacity = 4)
-        : this(signature, null, ComponentColumnMap.Build(signature), capacity, false)
-    {
-    }
-
-    internal Chunk(Signature signature, int[] componentIdToColumnIndex, int capacity = 4)
-        : this(signature, null, componentIdToColumnIndex, capacity, false)
-    {
-    }
 
     internal Chunk(Signature signature, Type[] componentTypes, int[] componentIdToColumnIndex, int capacity = 4)
-        : this(signature, componentTypes, componentIdToColumnIndex, capacity, true)
-    {
-    }
-
-    private Chunk(Signature signature, Type[]? componentTypes, int[] componentIdToColumnIndex, int capacity, bool hasTypedColumns)
     {
         ArgumentNullException.ThrowIfNull(signature);
+        ArgumentNullException.ThrowIfNull(componentTypes);
         ArgumentNullException.ThrowIfNull(componentIdToColumnIndex);
 
         if (capacity <= 0)
@@ -48,12 +29,10 @@ public sealed class Chunk
         }
 
         _signature = signature;
-        _typedColumns = hasTypedColumns;
         _componentIdToColumnIndex = componentIdToColumnIndex;
         _entities = new Entity[capacity];
-        _columns = CreateColumns(signature, componentTypes, capacity, hasTypedColumns);
-        _columnRequiresClear = CreateColumnClearMap(_columns, componentTypes, hasTypedColumns);
-        _columnClearMode = GetColumnClearMode(_columnRequiresClear);
+        _columns = CreateColumns(signature, componentTypes, capacity);
+        _columnRequiresClear = CreateColumnClearMap(componentTypes);
     }
 
     /// <summary>
@@ -81,8 +60,6 @@ public sealed class Chunk
     }
 
     internal Array[] Columns => _columns;
-
-    internal bool HasTypedColumns => _typedColumns;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal Entity[] GetEntityStorage() => _entities;
@@ -178,7 +155,7 @@ public sealed class Chunk
     {
         ValidateRow(row);
         var columnIndex = GetComponentIndex(component);
-        return GetComponentAt<T>(columnIndex, row);
+        return ((T[])_columns[columnIndex])[row];
     }
 
     /// <summary>
@@ -188,7 +165,7 @@ public sealed class Chunk
     public ReadOnlySpan<T> GetComponentSpan<T>(ComponentType component)
     {
         var columnIndex = GetComponentIndex(component);
-        return GetComponentSpanAt<T>(columnIndex);
+        return ((T[])_columns[columnIndex]).AsSpan(0, Count);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -217,7 +194,7 @@ public sealed class Chunk
     {
         ValidateRow(row);
         var columnIndex = GetComponentIndex(component);
-        SetComponentAt(columnIndex, row, in value);
+        SetComponentAtTyped(columnIndex, row, in value);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -227,52 +204,15 @@ public sealed class Chunk
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void SetComponentAt<T>(int columnIndex, int row, in T value)
-    {
-        if (!_typedColumns)
-        {
-            _columns[columnIndex].SetValue(value, row);
-            return;
-        }
-
-        SetComponentAtTyped(columnIndex, row, in value);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal T GetComponentAt<T>(int columnIndex, int row)
     {
-        if (!_typedColumns)
-        {
-            return (T)_columns[columnIndex].GetValue(row)!;
-        }
-
         return ((T[])_columns[columnIndex])[row];
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ReadOnlySpan<T> GetComponentSpanAt<T>(int columnIndex)
     {
-        if (!_typedColumns)
-        {
-            throw new InvalidOperationException("Component spans require typed columns.");
-        }
-
         return ((T[])_columns[columnIndex]).AsSpan(0, Count);
-    }
-
-    internal T[] GetTypedColumnStorageAt<T>(int columnIndex)
-    {
-        if (!_typedColumns)
-        {
-            throw new InvalidOperationException("Typed column storage requires typed columns.");
-        }
-
-        if (_columns[columnIndex] is not T[] typedColumn)
-        {
-            throw new InvalidOperationException($"Component column {columnIndex} cannot be read as {typeof(T).Name}.");
-        }
-
-        return typedColumn;
     }
 
     internal bool TryGetComponentIndex(ComponentType component, out int columnIndex)
@@ -343,23 +283,6 @@ public sealed class Chunk
     }
 
     /// <summary>
-    /// Captures a row into a dictionary.
-    /// </summary>
-    internal IReadOnlyDictionary<ComponentType, object?> CaptureRow(int row)
-    {
-        ValidateRow(row);
-
-        var values = new Dictionary<ComponentType, object?>(_signature.Count);
-        var components = _signature.AsSpan();
-        for (var index = 0; index < components.Length; index++)
-        {
-            values[components[index]] = _columns[index].GetValue(row);
-        }
-
-        return values;
-    }
-
-    /// <summary>
     /// Removes a row with swap-remove.
     /// </summary>
     internal bool RemoveAt(int row, out Entity movedEntity)
@@ -384,7 +307,7 @@ public sealed class Chunk
         return row != last;
     }
 
-    private static Array[] CreateColumns(Signature signature, Type[]? componentTypes, int capacity, bool typedColumns)
+    private static Array[] CreateColumns(Signature signature, Type[] componentTypes, int capacity)
     {
         var componentCount = signature.Count;
         var columns = new Array[componentCount];
@@ -394,17 +317,6 @@ public sealed class Chunk
             return columns;
         }
 
-        if (!typedColumns)
-        {
-            for (var index = 0; index < componentCount; index++)
-            {
-                columns[index] = new object?[capacity];
-            }
-
-            return columns;
-        }
-
-        ArgumentNullException.ThrowIfNull(componentTypes);
         if (componentTypes.Length != componentCount)
         {
             throw new ArgumentException("Component type count must match signature count.", nameof(componentTypes));
@@ -418,21 +330,9 @@ public sealed class Chunk
         return columns;
     }
 
-    private static bool[] CreateColumnClearMap(Array[] columns, Type[]? componentTypes, bool typedColumns)
+    private static bool[] CreateColumnClearMap(Type[] componentTypes)
     {
-        var clearMap = new bool[columns.Length];
-        if (columns.Length == 0)
-        {
-            return clearMap;
-        }
-
-        if (!typedColumns)
-        {
-            Array.Fill(clearMap, true);
-            return clearMap;
-        }
-
-        ArgumentNullException.ThrowIfNull(componentTypes);
+        var clearMap = new bool[componentTypes.Length];
         for (var index = 0; index < componentTypes.Length; index++)
         {
             clearMap[index] = RequiresClear(componentTypes[index]);
@@ -457,86 +357,8 @@ public sealed class Chunk
         return RuntimeHelpers.IsReferenceOrContainsReferences<T>();
     }
 
-    private static ColumnClearMode GetColumnClearMode(bool[] clearMap)
-    {
-        if (clearMap.Length == 0)
-        {
-            return ColumnClearMode.None;
-        }
-
-        var requiresClear = 0;
-        for (var index = 0; index < clearMap.Length; index++)
-        {
-            if (clearMap[index])
-            {
-                requiresClear++;
-            }
-        }
-
-        if (requiresClear == 0)
-        {
-            return ColumnClearMode.None;
-        }
-
-        if (requiresClear == clearMap.Length)
-        {
-            return ColumnClearMode.All;
-        }
-
-        return ColumnClearMode.Mixed;
-    }
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void CopyRemovedRow(int row, int last)
-    {
-        switch (_columnClearMode)
-        {
-            case ColumnClearMode.None:
-                CopyColumnsWithoutClearing(row, last);
-                break;
-            case ColumnClearMode.All:
-                CopyColumnsAndClearAll(row, last);
-                break;
-            default:
-                CopyColumnsAndClearMixed(row, last);
-                break;
-        }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ClearRemovedTail(int last)
-    {
-        switch (_columnClearMode)
-        {
-            case ColumnClearMode.All:
-                ClearAllColumns(last);
-                break;
-            case ColumnClearMode.Mixed:
-                ClearMixedColumns(last);
-                break;
-        }
-    }
-
-    private void CopyColumnsWithoutClearing(int row, int last)
-    {
-        for (var index = 0; index < _columns.Length; index++)
-        {
-            var column = _columns[index];
-            Array.Copy(column, last, column, row, 1);
-        }
-    }
-
-    private void CopyColumnsAndClearAll(int row, int last)
-    {
-        for (var index = 0; index < _columns.Length; index++)
-        {
-            var column = _columns[index];
-            Array.Copy(column, last, column, row, 1);
-            Array.Clear(column, last, 1);
-        }
-    }
-
-    private void CopyColumnsAndClearMixed(int row, int last)
     {
         for (var index = 0; index < _columns.Length; index++)
         {
@@ -549,15 +371,8 @@ public sealed class Chunk
         }
     }
 
-    private void ClearAllColumns(int last)
-    {
-        for (var index = 0; index < _columns.Length; index++)
-        {
-            Array.Clear(_columns[index], last, 1);
-        }
-    }
-
-    private void ClearMixedColumns(int last)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ClearRemovedTail(int last)
     {
         for (var index = 0; index < _columns.Length; index++)
         {
@@ -574,12 +389,5 @@ public sealed class Chunk
         {
             throw new ArgumentOutOfRangeException(nameof(row));
         }
-    }
-
-    private enum ColumnClearMode
-    {
-        None,
-        All,
-        Mixed,
     }
 }

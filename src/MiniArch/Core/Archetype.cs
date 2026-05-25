@@ -7,23 +7,10 @@ public sealed class Archetype
 {
     private readonly List<Chunk> _chunks = new();
     private readonly int _chunkCapacity;
-    private readonly Type[]? _componentTypes;
+    private readonly Type[] _componentTypes;
     private readonly int[] _componentIdToColumnIndex;
 
-    /// <summary>
-    /// Creates an archetype for a signature.
-    /// </summary>
-    internal Archetype(Signature signature, int chunkCapacity = 4)
-        : this(signature, null, chunkCapacity, false)
-    {
-    }
-
     internal Archetype(Signature signature, Type[] componentTypes, int chunkCapacity = 4)
-        : this(signature, componentTypes, chunkCapacity, true)
-    {
-    }
-
-    private Archetype(Signature signature, Type[]? componentTypes, int chunkCapacity, bool typedColumns)
     {
         ArgumentNullException.ThrowIfNull(signature);
 
@@ -32,7 +19,7 @@ public sealed class Archetype
             throw new ArgumentOutOfRangeException(nameof(chunkCapacity));
         }
 
-        if (componentTypes is not null && componentTypes.Length != signature.Count)
+        if (componentTypes.Length != signature.Count)
         {
             throw new ArgumentException("Component type count must match signature count.", nameof(componentTypes));
         }
@@ -41,7 +28,7 @@ public sealed class Archetype
         _chunkCapacity = chunkCapacity;
         _componentTypes = componentTypes;
         _componentIdToColumnIndex = ComponentColumnMap.Build(signature);
-        _chunks.Add(CreateChunk(typedColumns));
+        _chunks.Add(CreateChunk());
     }
 
     /// <summary>
@@ -91,7 +78,7 @@ public sealed class Archetype
         {
             if (_chunks.Count == 0)
             {
-                var emptyChunk = CreateChunk(_componentTypes is not null);
+                var emptyChunk = CreateChunk();
                 _chunks.Add(emptyChunk);
                 chunkIndex = 0;
                 return emptyChunk;
@@ -109,7 +96,7 @@ public sealed class Archetype
         }
         else
         {
-            chunk = CreateChunk(_componentTypes is not null);
+            chunk = CreateChunk();
             _chunks.Add(chunk);
             chunkIndex = _chunks.Count - 1;
         }
@@ -152,7 +139,7 @@ public sealed class Archetype
 
         while (remaining > 0)
         {
-            var chunk = CreateChunk(_componentTypes is not null);
+            var chunk = CreateChunk();
             _chunks.Add(chunk);
 
             var fillCount = Math.Min(chunk.Capacity, remaining);
@@ -203,14 +190,8 @@ public sealed class Archetype
         throw new ArgumentException($"Archetype does not contain component {component.Value}.", nameof(component));
     }
 
-    private Chunk CreateChunk(bool typedColumns)
+    private Chunk CreateChunk()
     {
-        if (!typedColumns)
-        {
-            return new Chunk(Signature, _componentIdToColumnIndex, _chunkCapacity);
-        }
-
-        ArgumentNullException.ThrowIfNull(_componentTypes);
         return new Chunk(Signature, _componentTypes, _componentIdToColumnIndex, _chunkCapacity);
     }
 
@@ -225,7 +206,7 @@ public sealed class Archetype
             }
         }
 
-        var chunk = CreateChunk(_componentTypes is not null);
+        var chunk = CreateChunk();
         _chunks.Add(chunk);
         chunkIndex = _chunks.Count - 1;
         return chunk;

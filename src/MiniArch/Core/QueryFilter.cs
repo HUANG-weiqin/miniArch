@@ -2,8 +2,6 @@ namespace MiniArch.Core;
 
 internal readonly struct QueryFilter : IEquatable<QueryFilter>
 {
-    public static QueryFilter Empty { get; } = new(QueryComponentSet.Empty, QueryComponentSet.Empty, QueryComponentSet.Empty);
-
     public QueryFilter(QueryComponentSet required, QueryComponentSet excluded, QueryComponentSet any)
     {
         Required = required;

@@ -8,7 +8,9 @@ namespace MiniArch;
 public readonly record struct Entity(int Id, int Version)
 {
     /// <summary>
-    /// Gets whether the handle shape is valid.
+    /// Gets whether the handle has a non-default shape (Id >= 0 and Version > 0).
+    /// This does NOT check whether the entity is alive in any world.
+    /// Use <c>world.IsAlive(entity)</c> for liveness checks.
     /// </summary>
     public bool IsValid => Id >= 0 && Version > 0;
 

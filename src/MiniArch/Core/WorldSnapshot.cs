@@ -100,7 +100,7 @@ public static class WorldSnapshot
         }
 
         var world = new World(chunkCapacity, entitySlotCount);
-        world.ResetSnapshotState(entitySlotCount);
+        world.Reset(entitySlotCount);
 
         for (var index = 0; index < slotVersions.Length; index++)
         {

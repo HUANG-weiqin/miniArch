@@ -57,7 +57,7 @@ public sealed class CommandBufferTests
         Assert.Single(secondFrame.CreatedEntities);
         Assert.Equal(secondEntity, secondFrame.CreatedEntities[0].Entity);
         Assert.Empty(secondFrame.AddCommands);
-        Assert.False(buffer.Play());
+        Assert.False(buffer.CompileAndReplay());
     }
 
     [Fact]
@@ -461,7 +461,7 @@ public sealed class CommandBufferTests
 
                 var frame = playbackBuffer.Compile();
                 playbackWorld.Replay(frame);
-                playBuffer.Play();
+                playBuffer.CompileAndReplay();
             }
 
             AssertWorldStatesMatch(
@@ -524,15 +524,15 @@ public sealed class CommandBufferTests
         var entity = buffer.Create();
         buffer.Add(entity, new Position(1, 2));
 
-        Assert.True(buffer.Play());
+        Assert.True(buffer.CompileAndReplay());
 
-        Assert.False(buffer.Play());
+        Assert.False(buffer.CompileAndReplay());
         Assert.Empty(buffer.Compile().CreatedEntities);
 
         var secondEntity = buffer.Create();
         buffer.Add(secondEntity, new Position(3, 4));
 
-        Assert.True(buffer.Play());
+        Assert.True(buffer.CompileAndReplay());
 
         Assert.True(world.IsAlive(entity));
         Assert.True(world.IsAlive(secondEntity));
@@ -546,7 +546,7 @@ public sealed class CommandBufferTests
         var world = new World();
         var buffer = new CommandBuffer(world);
 
-        var played = buffer.Play();
+        var played = buffer.CompileAndReplay();
 
         Assert.False(played);
     }
@@ -822,7 +822,7 @@ public sealed class CommandBufferTests
         var before = GC.GetAllocatedBytesForCurrentThread();
         for (var i = 0; i < buffers.Length; i++)
         {
-            buffers[i].Play();
+            buffers[i].CompileAndReplay();
         }
 
         return GC.GetAllocatedBytesForCurrentThread() - before;
@@ -841,7 +841,7 @@ public sealed class CommandBufferTests
         var playBuffer = new CommandBuffer(playWorld);
         var playExisting = CreateEntities(playWorld, 8);
         RecordPlayScenario(playBuffer, playExisting);
-        playBuffer.Play();
+        playBuffer.CompileAndReplay();
     }
 
     private static void RunOnDedicatedThread(Action action)

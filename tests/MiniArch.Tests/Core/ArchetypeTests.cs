@@ -14,7 +14,7 @@ public sealed class ArchetypeTests
         var registry = new ComponentRegistry();
         var position = registry.GetOrCreate<Position>();
 
-        var archetype = new Archetype(new Signature(position));
+        var archetype = new Archetype(new Signature(position), [typeof(Position)]);
 
         Assert.Single(archetype.Chunks);
         Assert.Equal(0, archetype.Chunks[0].Count);
@@ -25,7 +25,7 @@ public sealed class ArchetypeTests
     {
         var registry = new ComponentRegistry();
         var position = registry.GetOrCreate<Position>();
-        var archetype = new Archetype(new Signature(position), chunkCapacity: 2);
+        var archetype = new Archetype(new Signature(position), [typeof(Position)], chunkCapacity: 2);
 
         archetype.AddEntity(new Entity(1, 1), Components(position, new Position(1, 1)), out _, out _);
         archetype.AddEntity(new Entity(2, 1), Components(position, new Position(2, 2)), out _, out _);
@@ -41,7 +41,7 @@ public sealed class ArchetypeTests
     {
         var registry = new ComponentRegistry();
         var position = registry.GetOrCreate<Position>();
-        var archetype = new Archetype(new Signature(position));
+        var archetype = new Archetype(new Signature(position), [typeof(Position)]);
 
         var first = new Entity(1, 1);
         var second = new Entity(2, 1);
@@ -62,7 +62,7 @@ public sealed class ArchetypeTests
     [Fact]
     public void Reserving_entities_reuses_earlier_chunks_with_free_space()
     {
-        var archetype = new Archetype(Signature.Empty, chunkCapacity: 2);
+        var archetype = new Archetype(Signature.Empty, Type.EmptyTypes, chunkCapacity: 2);
 
         archetype.ReserveEntity(new Entity(1, 1), out _, out _);
         archetype.ReserveEntity(new Entity(2, 1), out _, out _);

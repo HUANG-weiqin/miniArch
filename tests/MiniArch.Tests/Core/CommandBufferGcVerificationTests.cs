@@ -31,7 +31,7 @@ public class CommandBufferGcVerificationTests
 
             var gcInfo = MeasureGc(() =>
             {
-                buffer.Play();
+                buffer.CompileAndReplay();
             });
 
             Assert.True(gcInfo.Gen0Collections < 10, $"Expected Gen0 < 10 but got {gcInfo.Gen0Collections}");
@@ -71,7 +71,7 @@ public class CommandBufferGcVerificationTests
             {
                 for (var iteration = 0; iteration < 1000; iteration++)
                 {
-                    buffers[iteration].Play();
+                    buffers[iteration].CompileAndReplay();
                 }
             });
 
@@ -106,7 +106,7 @@ public class CommandBufferGcVerificationTests
 
             var gcInfo = MeasureGc(() =>
             {
-                buffer.Play();
+                buffer.CompileAndReplay();
             });
 
             Assert.True(gcInfo.Gen0Collections < 15, $"Expected Gen0 < 15 but got {gcInfo.Gen0Collections}");
@@ -140,7 +140,7 @@ public class CommandBufferGcVerificationTests
 
             var gcInfo = MeasureGc(() =>
             {
-                buffer.Play();
+                buffer.CompileAndReplay();
             });
 
             Assert.True(gcInfo.Gen0Collections < 10, $"Expected Gen0 < 10 but got {gcInfo.Gen0Collections}");
@@ -172,7 +172,7 @@ public class CommandBufferGcVerificationTests
 
             var gcInfo = MeasureGc(() =>
             {
-                buffer.Play();
+                buffer.CompileAndReplay();
             });
 
             Assert.True(gcInfo.Gen0Collections < 10, $"Expected Gen0 < 10 but got {gcInfo.Gen0Collections}");

@@ -46,7 +46,7 @@ public sealed class World : IDisposable
     private int _createArchetypeCacheGeneration;
     private readonly List<Entity> _destroyOrderScratch = new(4);
     private readonly HashSet<Entity> _destroyVisitedScratch = new(4);
-    private readonly Dictionary<Type, ComponentType> _compiledReplayComponentTypeScratch = new(4);
+
     private bool _disposed;
 
     /// <summary>
@@ -121,7 +121,7 @@ public sealed class World : IDisposable
 
     internal int QueryGeneration => _queryGeneration;
 
-    internal void ResetSnapshotState(int entitySlotCount)
+    internal void Reset(int entitySlotCount)
     {
         if (entitySlotCount < 0)
         {
@@ -1028,7 +1028,7 @@ public sealed class World : IDisposable
     private static unsafe void WriteComponentFromBytes(Chunk chunk, ComponentType componentType, Type runtimeType, int row, byte* source, ComponentWriterCache.ColumnWriterDelegate? columnWriter)
     {
         var columnIndex = chunk.GetComponentIndex(componentType);
-        if (chunk.HasTypedColumns && columnWriter is not null)
+        if (columnWriter is not null)
         {
             columnWriter(chunk.Columns[columnIndex], row, source);
         }
@@ -1052,26 +1052,8 @@ public sealed class World : IDisposable
     private static unsafe void WriteComponentFromBytes(Chunk chunk, ComponentType componentType, Type runtimeType, int row, byte* source)
     {
         var columnIndex = chunk.GetComponentIndex(componentType);
-        if (chunk.HasTypedColumns)
-        {
-            var writer = ComponentWriterCache.GetColumnWriter(runtimeType);
-            writer(chunk.Columns[columnIndex], row, source);
-        }
-        else
-        {
-            var boxed = RuntimeHelpers.GetUninitializedObject(runtimeType);
-            var handle = System.Runtime.InteropServices.GCHandle.Alloc(boxed, System.Runtime.InteropServices.GCHandleType.Pinned);
-            try
-            {
-                ComponentWriterCache.GetReader(runtimeType)((void*)handle.AddrOfPinnedObject(), source);
-            }
-            finally
-            {
-                handle.Free();
-            }
-
-            chunk.SetComponent(componentType, row, boxed);
-        }
+        var writer = ComponentWriterCache.GetColumnWriter(runtimeType);
+        writer(chunk.Columns[columnIndex], row, source);
     }
 
     private unsafe void MoveEntityFromBytes(
@@ -1635,7 +1617,7 @@ public sealed class World : IDisposable
 
             foreach (var created in delta.CreatedEntities)
             {
-                MaterializeReservedEntity(created.Entity, null, created.Components, componentTypeCache, reservationChecked: true);
+                MaterializeReservedEntity(created.Entity, created.Components, componentTypeCache, reservationChecked: true);
             }
 
             foreach (var link in delta.LinkCommands)
@@ -1699,7 +1681,6 @@ public sealed class World : IDisposable
 
     internal void MaterializeReservedEntity(
         Entity entity,
-        Signature? signature,
         IReadOnlyList<RawComponentValue> components,
         Dictionary<Type, ComponentType>? componentTypeCache = null,
         bool reservationChecked = false)
@@ -1709,7 +1690,7 @@ public sealed class World : IDisposable
             EnsureReplayReservation(entity);
         }
 
-        signature ??= BuildReplaySignature(components, componentTypeCache);
+        var signature = BuildReplaySignature(components, componentTypeCache);
         var archetype = GetOrCreateArchetype(signature);
         var chunk = archetype.ReserveEntity(entity, out var chunkIndex, out var rowIndex);
         _locations[entity.Id] = new EntityLocation(archetype, chunkIndex, rowIndex);

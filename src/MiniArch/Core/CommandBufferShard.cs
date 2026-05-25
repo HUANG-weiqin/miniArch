@@ -29,8 +29,6 @@ internal sealed class CommandBufferShard
 
     public byte[] Data => _data;
 
-    public int DataLength => _dataLength;
-
     public int AllocateData(int size)
     {
         if (_dataLength + size > _data.Length)
