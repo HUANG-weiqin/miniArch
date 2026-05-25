@@ -82,6 +82,8 @@ public sealed class Chunk
 
     internal Array[] Columns => _columns;
 
+    internal bool HasTypedColumns => _typedColumns;
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal Entity[] GetEntityStorage() => _entities;
 

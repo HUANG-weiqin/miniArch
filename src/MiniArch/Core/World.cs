@@ -923,6 +923,137 @@ public sealed class World
         MoveEntityBoxed(entity, info, destination, componentType, component);
     }
 
+    private unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, Type runtimeType, byte[] data, int offset, int size)
+    {
+        fixed (byte* ptr = data)
+        {
+            ApplyRawAddOrSet(entity, componentType, runtimeType, ptr + offset, null);
+        }
+    }
+
+    private unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, Type runtimeType, byte[] data, int offset, ComponentWriterCache.ColumnWriterDelegate? columnWriter)
+    {
+        fixed (byte* ptr = data)
+        {
+            ApplyRawAddOrSet(entity, componentType, runtimeType, ptr + offset, columnWriter);
+        }
+    }
+
+    private unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, Type runtimeType, byte* source, ComponentWriterCache.ColumnWriterDelegate? columnWriter)
+    {
+        var info = GetRequiredLocation(entity);
+        var archetype = info.Archetype;
+
+        if (archetype.TryGetComponentIndex(componentType, out var componentIndex))
+        {
+            var chunk = archetype.GetChunk(info.ChunkIndex);
+            WriteComponentFromBytes(chunk, componentType, runtimeType, info.RowIndex, source, columnWriter);
+            return;
+        }
+
+        var destination = GetOrCreateAddDestinationArchetype(archetype, componentType);
+        MoveEntityFromBytes(entity, info, destination, componentType, runtimeType, source, columnWriter);
+    }
+
+    private static unsafe void WriteComponentFromBytes(Chunk chunk, ComponentType componentType, Type runtimeType, int row, byte[] data, int offset, int size)
+    {
+        fixed (byte* ptr = data)
+        {
+            WriteComponentFromBytes(chunk, componentType, runtimeType, row, ptr + offset);
+        }
+    }
+
+    private static unsafe void WriteComponentFromBytes(Chunk chunk, ComponentType componentType, Type runtimeType, int row, byte* source, ComponentWriterCache.ColumnWriterDelegate? columnWriter)
+    {
+        var columnIndex = chunk.GetComponentIndex(componentType);
+        if (chunk.HasTypedColumns && columnWriter is not null)
+        {
+            columnWriter(chunk.Columns[columnIndex], row, source);
+        }
+        else
+        {
+            var boxed = RuntimeHelpers.GetUninitializedObject(runtimeType);
+            var handle = System.Runtime.InteropServices.GCHandle.Alloc(boxed, System.Runtime.InteropServices.GCHandleType.Pinned);
+            try
+            {
+                ComponentWriterCache.GetReader(runtimeType)((void*)handle.AddrOfPinnedObject(), source);
+            }
+            finally
+            {
+                handle.Free();
+            }
+
+            chunk.SetComponent(componentType, row, boxed);
+        }
+    }
+
+    private static unsafe void WriteComponentFromBytes(Chunk chunk, ComponentType componentType, Type runtimeType, int row, byte* source)
+    {
+        var columnIndex = chunk.GetComponentIndex(componentType);
+        if (chunk.HasTypedColumns)
+        {
+            var writer = ComponentWriterCache.GetColumnWriter(runtimeType);
+            writer(chunk.Columns[columnIndex], row, source);
+        }
+        else
+        {
+            var boxed = RuntimeHelpers.GetUninitializedObject(runtimeType);
+            var handle = System.Runtime.InteropServices.GCHandle.Alloc(boxed, System.Runtime.InteropServices.GCHandleType.Pinned);
+            try
+            {
+                ComponentWriterCache.GetReader(runtimeType)((void*)handle.AddrOfPinnedObject(), source);
+            }
+            finally
+            {
+                handle.Free();
+            }
+
+            chunk.SetComponent(componentType, row, boxed);
+        }
+    }
+
+    private unsafe void MoveEntityFromBytes(
+        Entity entity,
+        EntityLocation sourceInfo,
+        Archetype destination,
+        ComponentType componentType,
+        Type runtimeType,
+        byte[] data,
+        int offset,
+        int size)
+    {
+        fixed (byte* ptr = data)
+        {
+            MoveEntityFromBytes(entity, sourceInfo, destination, componentType, runtimeType, ptr + offset, null);
+        }
+    }
+
+    private unsafe void MoveEntityFromBytes(
+        Entity entity,
+        EntityLocation sourceInfo,
+        Archetype destination,
+        ComponentType componentType,
+        Type runtimeType,
+        byte* source,
+        ComponentWriterCache.ColumnWriterDelegate? columnWriter)
+    {
+        var sourceChunk = sourceInfo.Archetype.GetChunk(sourceInfo.ChunkIndex);
+        var destinationChunk = destination.ReserveEntity(entity, out var destinationChunkIndex, out var destinationRowIndex);
+        destinationChunk.CopySharedComponentsFrom(sourceChunk, sourceInfo.RowIndex, destinationRowIndex);
+
+        WriteComponentFromBytes(destinationChunk, componentType, runtimeType, destinationRowIndex, source, columnWriter);
+
+        sourceInfo.Archetype.RemoveEntity(sourceInfo.ChunkIndex, sourceInfo.RowIndex, out var movedEntity);
+
+        if (movedEntity.IsValid)
+        {
+            _locations[movedEntity.Id] = sourceInfo;
+        }
+
+        _locations[entity.Id] = new EntityLocation(destination, destinationChunkIndex, destinationRowIndex);
+        TouchQueryLayout();
+    }
+
     private Archetype GetOrCreateAddDestinationArchetype(Archetype source, ComponentType componentType)
     {
         if (source.Edges.TryGetAdd(componentType, out var cached) && cached is not null)
@@ -1580,8 +1711,6 @@ public sealed class World
     {
         ArgumentNullException.ThrowIfNull(compiledCommands);
 
-        // CompiledCommandBatch always carries valid ComponentType values (resolved at recording time),
-        // so no dictionary lookup is needed in this path.
         BeginDeferredLayoutUpdates();
         try
         {
@@ -1610,14 +1739,17 @@ public sealed class World
                 Unlink(unlink.Child);
             }
 
-            foreach (var add in compiledCommands.AddCommands)
+            unsafe
             {
-                AddBoxed(add.Entity, add.ComponentType, add.Value);
-            }
+                foreach (var add in compiledCommands.AddCommands)
+                {
+                    ApplyRawAddOrSet(add.Entity, add.ComponentType, add.RuntimeType, add.Data, add.DataOffset, add.ColumnWriter);
+                }
 
-            foreach (var set in compiledCommands.SetCommands)
-            {
-                SetBoxed(set.Entity, set.ComponentType, set.Value);
+                foreach (var set in compiledCommands.SetCommands)
+                {
+                    ApplyRawAddOrSet(set.Entity, set.ComponentType, set.RuntimeType, set.Data, set.DataOffset, set.ColumnWriter);
+                }
             }
 
             foreach (var remove in compiledCommands.RemoveCommands)
@@ -2428,7 +2560,7 @@ public sealed class World
     internal void MaterializeReservedEntity(
         Entity entity,
         Signature? signature,
-        IReadOnlyList<CommandBuffer.CompiledComponentValue> components,
+        IReadOnlyList<CommandBuffer.CompiledRawComponentValue> components,
         Dictionary<Type, ComponentType>? componentTypeCache = null,
         bool reservationChecked = false)
     {
@@ -2442,10 +2574,17 @@ public sealed class World
         var chunk = archetype.ReserveEntity(entity, out var chunkIndex, out var rowIndex);
         _locations[entity.Id] = new EntityLocation(archetype, chunkIndex, rowIndex);
 
-        for (var index = 0; index < components.Count; index++)
+        unsafe
         {
-            var component = components[index];
-            chunk.SetComponent(ResolveCompiledComponentType(component.RuntimeType, component.ComponentType, componentTypeCache), rowIndex, component.Value);
+            for (var index = 0; index < components.Count; index++)
+            {
+                var component = components[index];
+                var resolvedType = ResolveCompiledComponentType(component.RuntimeType, component.ComponentType, componentTypeCache);
+                fixed (byte* ptr = component.Data)
+                {
+                    WriteComponentFromBytes(chunk, resolvedType, component.RuntimeType, rowIndex, ptr + component.DataOffset);
+                }
+            }
         }
 
         TouchQueryLayout();
@@ -2573,7 +2712,7 @@ public sealed class World
     }
 
     private Signature BuildReplaySignature(
-        IReadOnlyList<CommandBuffer.CompiledComponentValue> components,
+        IReadOnlyList<CommandBuffer.CompiledRawComponentValue> components,
         Dictionary<Type, ComponentType>? componentTypeCache = null)
     {
         if (components.Count == 0)

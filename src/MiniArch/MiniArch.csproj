@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PackageId>MiniArch</PackageId>
     <VersionPrefix>0.2.0</VersionPrefix>
     <Authors>HUANG-weiqin</Authors>

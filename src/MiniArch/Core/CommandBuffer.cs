@@ -16,10 +16,10 @@ public sealed class CommandBuffer
     private readonly ConcurrentDictionary<int, CommandBufferShard> _shards = new();
     private readonly List<CommandBufferShard> _orderedShardsScratch = new(1);
     private readonly Dictionary<Entity, CreatedEntityState> _createdStatesScratch = new(4);
-    private readonly Dictionary<EntityComponentKey, CompiledComponentCommand> _compiledAddsScratch = new(4);
-    private readonly Dictionary<EntityComponentKey, CompiledComponentCommand> _compiledSetsScratch = new(4);
+    private readonly Dictionary<EntityComponentKey, CompiledRawComponentCommand> _compiledAddsScratch = new(4);
+    private readonly Dictionary<EntityComponentKey, CompiledRawComponentCommand> _compiledSetsScratch = new(4);
     private readonly Dictionary<EntityComponentKey, CompiledRemoveCommand> _compiledRemovesScratch = new(4);
-    private readonly Dictionary<int, (Type RuntimeType, ComponentType ComponentType)> _componentTypeInfoCacheScratch = new(4);
+    private readonly Dictionary<int, (Type RuntimeType, ComponentType ComponentType, int Size)> _componentTypeInfoCacheScratch = new(4);
     private readonly HashSet<Entity> _destroyedEntitiesScratch = new(4);
     private readonly Dictionary<Entity, HierarchyIntent> _hierarchyByChildScratch = new(4);
     private readonly CompiledCommandBatch _compiledBatch = new();
@@ -50,7 +50,11 @@ public sealed class CommandBuffer
     public void Add<T>(Entity entity, T component)
     {
         var componentTypeId = GetComponentTypeId<T>();
-        GetShard().Adds.Add(new RecordedComponentCommand(entity, componentTypeId, component));
+        var size = Unsafe.SizeOf<T>();
+        var shard = GetShard();
+        var offset = shard.AllocateData(size);
+        Unsafe.WriteUnaligned(ref shard.Data[offset], component);
+        shard.Adds.Add(new RecordedRawCommand(entity, componentTypeId, offset, size));
     }
 
     /// <summary>
@@ -59,7 +63,11 @@ public sealed class CommandBuffer
     public void Set<T>(Entity entity, T component)
     {
         var componentTypeId = GetComponentTypeId<T>();
-        GetShard().Sets.Add(new RecordedComponentCommand(entity, componentTypeId, component));
+        var size = Unsafe.SizeOf<T>();
+        var shard = GetShard();
+        var offset = shard.AllocateData(size);
+        Unsafe.WriteUnaligned(ref shard.Data[offset], component);
+        shard.Sets.Add(new RecordedRawCommand(entity, componentTypeId, offset, size));
     }
 
     /// <summary>
@@ -197,7 +205,7 @@ public sealed class CommandBuffer
         compiledSets.EnsureCapacity(counts.Sets);
         var compiledRemoves = _compiledRemovesScratch;
         compiledRemoves.Clear();
-         compiledRemoves.EnsureCapacity(counts.Removes);
+        compiledRemoves.EnsureCapacity(counts.Removes);
         var componentTypeInfoCache = _componentTypeInfoCacheScratch;
         componentTypeInfoCache.Clear();
         componentTypeInfoCache.EnsureCapacity(counts.Adds + counts.Sets + counts.Removes);
@@ -222,36 +230,38 @@ public sealed class CommandBuffer
         foreach (var shard in shards)
         {
             var adds = shard.Adds;
+            var shardData = shard.Data;
             for (var index = 0; index < adds.Count; index++)
             {
                 var command = adds[index];
-                var (runtimeType, componentType) = ResolveComponentTypeInfo(command.ComponentTypeId, componentTypeInfoCache);
+                var (runtimeType, componentType, componentSize) = ResolveComponentTypeInfo(command.ComponentTypeId, componentTypeInfoCache);
                 if (createdStates.TryGetValue(command.Entity, out var created))
                 {
-                    created.Add(command.ComponentTypeId, runtimeType, componentType, command.Value);
+                    created.Add(command.ComponentTypeId, runtimeType, componentType, componentSize, shardData, command.DataOffset, command.DataSize);
                     continue;
                 }
 
                 compiledAdds[new EntityComponentKey(command.Entity, command.ComponentTypeId)] =
-                    new CompiledComponentCommand(command.Entity, command.ComponentTypeId, runtimeType, componentType, command.Value);
+                    new CompiledRawComponentCommand(command.Entity, command.ComponentTypeId, runtimeType, componentType, command.DataOffset, command.DataSize, ComponentWriterCache.GetColumnWriter(runtimeType), shardData);
             }
         }
 
         foreach (var shard in shards)
         {
             var sets = shard.Sets;
+            var shardData = shard.Data;
             for (var index = 0; index < sets.Count; index++)
             {
                 var command = sets[index];
-                var (runtimeType, componentType) = ResolveComponentTypeInfo(command.ComponentTypeId, componentTypeInfoCache);
+                var (runtimeType, componentType, componentSize) = ResolveComponentTypeInfo(command.ComponentTypeId, componentTypeInfoCache);
                 if (createdStates.TryGetValue(command.Entity, out var created))
                 {
-                    created.Set(command.ComponentTypeId, runtimeType, componentType, command.Value);
+                    created.Set(command.ComponentTypeId, runtimeType, componentType, componentSize, shardData, command.DataOffset, command.DataSize);
                     continue;
                 }
 
                 compiledSets[new EntityComponentKey(command.Entity, command.ComponentTypeId)] =
-                    new CompiledComponentCommand(command.Entity, command.ComponentTypeId, runtimeType, componentType, command.Value);
+                    new CompiledRawComponentCommand(command.Entity, command.ComponentTypeId, runtimeType, componentType, command.DataOffset, command.DataSize, ComponentWriterCache.GetColumnWriter(runtimeType), shardData);
             }
         }
 
@@ -267,7 +277,7 @@ public sealed class CommandBuffer
                     continue;
                 }
 
-                var (runtimeType, componentType) = ResolveComponentTypeInfo(command.ComponentTypeId, componentTypeInfoCache);
+                var (runtimeType, componentType, _) = ResolveComponentTypeInfo(command.ComponentTypeId, componentTypeInfoCache);
                 compiledRemoves[new EntityComponentKey(command.Entity, command.ComponentTypeId)] =
                     new CompiledRemoveCommand(command.Entity, command.ComponentTypeId, runtimeType, componentType);
             }
@@ -374,18 +384,8 @@ public sealed class CommandBuffer
     {
         foreach (var shard in _shards.Values)
         {
-            ClearShard(shard);
+            shard.Clear();
         }
-    }
-
-    private static void ClearShard(CommandBufferShard shard)
-    {
-        shard.Creates.Clear();
-        shard.HierarchyCommands.Clear();
-        shard.Adds.Clear();
-        shard.Sets.Clear();
-        shard.Removes.Clear();
-        shard.Destroys.Clear();
     }
 
     private List<CommandBufferShard> GetOrderedShards()
@@ -419,15 +419,14 @@ public sealed class CommandBuffer
         return counts;
     }
 
-    private (Type RuntimeType, ComponentType ComponentType) ResolveComponentTypeInfo(int componentTypeId, Dictionary<int, (Type RuntimeType, ComponentType ComponentType)> cache)
+    private (Type RuntimeType, ComponentType ComponentType, int Size) ResolveComponentTypeInfo(
+        int componentTypeId, Dictionary<int, (Type RuntimeType, ComponentType ComponentType, int Size)> cache)
     {
         if (cache.TryGetValue(componentTypeId, out var info))
         {
             return info;
         }
 
-        // componentTypeId comes from GetOrCreate<T>().Value which equals ComponentType.Value,
-        // so we can reconstruct ComponentType directly and only look up the runtime Type.
         var componentType = (ComponentType)componentTypeId;
         if (!_world.Components.TryGetType(componentType, out var runtimeType))
         {
@@ -435,7 +434,8 @@ public sealed class CommandBuffer
             componentType = default;
         }
 
-        info = (runtimeType, componentType);
+        var size = runtimeType == typeof(object) ? 0 : ComponentWriterCache.GetSize(runtimeType);
+        info = (runtimeType, componentType, size);
         cache.Add(componentTypeId, info);
         return info;
     }
@@ -465,7 +465,7 @@ public sealed class CommandBuffer
 
     private sealed class CreatedEntityState
     {
-        private Dictionary<int, CompiledComponentValue>? _components;
+        private Dictionary<int, CompiledRawComponentValue>? _components;
 
         public CreatedEntityState(Entity entity)
         {
@@ -476,14 +476,14 @@ public sealed class CommandBuffer
 
         public bool Destroyed { get; set; }
 
-        public void Add(int componentTypeId, Type runtimeType, ComponentType componentType, object? value)
+        public void Add(int componentTypeId, Type runtimeType, ComponentType componentType, int size, byte[] sourceData, int sourceOffset, int sourceSize)
         {
-            (_components ??= [])[componentTypeId] = new CompiledComponentValue(componentTypeId, runtimeType, componentType, value);
+            (_components ??= [])[componentTypeId] = new CompiledRawComponentValue(componentTypeId, runtimeType, componentType, size, sourceData, sourceOffset, sourceSize);
         }
 
-        public void Set(int componentTypeId, Type runtimeType, ComponentType componentType, object? value)
+        public void Set(int componentTypeId, Type runtimeType, ComponentType componentType, int size, byte[] sourceData, int sourceOffset, int sourceSize)
         {
-            (_components ??= [])[componentTypeId] = new CompiledComponentValue(componentTypeId, runtimeType, componentType, value);
+            (_components ??= [])[componentTypeId] = new CompiledRawComponentValue(componentTypeId, runtimeType, componentType, size, sourceData, sourceOffset, sourceSize);
         }
 
         public void Remove(int componentTypeId)
@@ -491,15 +491,15 @@ public sealed class CommandBuffer
             _components?.Remove(componentTypeId);
         }
 
-        public CompiledCreatedEntity ToCompiledEntity()
+        public CompiledRawCreatedEntity ToCompiledEntity()
         {
             if (_components is null || _components.Count == 0)
             {
-                return new CompiledCreatedEntity(Entity, Signature.Empty, Array.Empty<CompiledComponentValue>());
+                return new CompiledRawCreatedEntity(Entity, Signature.Empty, Array.Empty<CompiledRawComponentValue>());
             }
 
             var count = _components.Count;
-            var components = ArrayPool<CompiledComponentValue>.Shared.Rent(count);
+            var components = ArrayPool<CompiledRawComponentValue>.Shared.Rent(count);
             var componentTypes = ArrayPool<ComponentType>.Shared.Rent(count);
             try
             {
@@ -507,34 +507,31 @@ public sealed class CommandBuffer
                 var allComponentTypesResolved = true;
                 foreach (var pair in _components)
                 {
-                    componentTypes[index] = pair.Value.ComponentType;
-                    components[index] = pair.Value;
-                    allComponentTypesResolved &= pair.Value.ComponentType.IsValid;
+                    var value = pair.Value;
+                    components[index] = value;
+                    componentTypes[index] = value.ComponentType;
+                    allComponentTypesResolved &= value.ComponentType.IsValid;
                     index++;
                 }
 
                 Signature? signature = null;
                 if (allComponentTypesResolved)
                 {
-                    // Sort the rented arrays in-place (only first `count` elements matter).
                     Array.Sort(componentTypes, components, 0, count);
 
-                    // Signature.CreateNormalized takes ownership of the array,
-                    // so we must provide a correctly-sized one (not a pooled oversized one).
                     var signatureTypes = new ComponentType[count];
                     Array.Copy(componentTypes, signatureTypes, count);
                     signature = Signature.CreateNormalized(signatureTypes);
                 }
 
-                // Copy pooled data into an exactly-sized array for the entity.
-                var entityComponents = new CompiledComponentValue[count];
+                var entityComponents = new CompiledRawComponentValue[count];
                 Array.Copy(components, entityComponents, count);
 
-                return new CompiledCreatedEntity(Entity, signature, entityComponents);
+                return new CompiledRawCreatedEntity(Entity, signature, entityComponents);
             }
             finally
             {
-                ArrayPool<CompiledComponentValue>.Shared.Return(components);
+                ArrayPool<CompiledRawComponentValue>.Shared.Return(components);
                 ArrayPool<ComponentType>.Shared.Return(componentTypes);
             }
         }
@@ -554,9 +551,22 @@ public sealed class CommandBuffer
         public int Destroys;
     }
 
-    internal readonly record struct CompiledComponentValue(int ComponentTypeId, Type RuntimeType, ComponentType ComponentType, object? Value);
+    internal readonly record struct CompiledRawComponentValue(
+        int ComponentTypeId,
+        Type RuntimeType,
+        ComponentType ComponentType,
+        int ComponentSize,
+        byte[] Data,
+        int DataOffset,
+        int DataSize)
+    {
+        public object? ReadBoxed()
+        {
+            return ComponentWriterCache.ReadBoxed(RuntimeType, Data, DataOffset);
+        }
+    }
 
-    internal readonly record struct CompiledCreatedEntity(Entity Entity, Signature? Signature, CompiledComponentValue[] Components)
+    internal readonly record struct CompiledRawCreatedEntity(Entity Entity, Signature? Signature, CompiledRawComponentValue[] Components)
     {
         public FrameCreatedEntity ToFrame()
         {
@@ -569,7 +579,7 @@ public sealed class CommandBuffer
             for (var index = 0; index < Components.Length; index++)
             {
                 var component = Components[index];
-                components[index] = new FrameComponentValue(component.RuntimeType, component.Value);
+                components[index] = new FrameComponentValue(component.RuntimeType, component.ReadBoxed());
             }
 
             Array.Sort(components, static (left, right) =>
@@ -579,11 +589,20 @@ public sealed class CommandBuffer
         }
     }
 
-    internal readonly record struct CompiledComponentCommand(Entity Entity, int ComponentTypeId, Type RuntimeType, ComponentType ComponentType, object? Value)
+    internal readonly record struct CompiledRawComponentCommand(
+        Entity Entity,
+        int ComponentTypeId,
+        Type RuntimeType,
+        ComponentType ComponentType,
+        int DataOffset,
+        int DataSize,
+        ComponentWriterCache.ColumnWriterDelegate? ColumnWriter,
+        byte[] Data)
     {
         public FrameEntityComponentCommand ToFrame()
         {
-            return new FrameEntityComponentCommand(Entity, RuntimeType, Value);
+            var value = ComponentWriterCache.ReadBoxed(RuntimeType, Data, DataOffset);
+            return new FrameEntityComponentCommand(Entity, RuntimeType, value);
         }
     }
 
@@ -599,15 +618,15 @@ public sealed class CommandBuffer
     {
         public List<Entity> ReservedEntities { get; } = new(4);
 
-        public List<CompiledCreatedEntity> CreatedEntities { get; } = new(4);
+        public List<CompiledRawCreatedEntity> CreatedEntities { get; } = new(4);
 
         public List<FrameLinkCommand> LinkCommands { get; } = new(4);
 
         public List<FrameUnlinkCommand> UnlinkCommands { get; } = new(4);
 
-        public List<CompiledComponentCommand> AddCommands { get; } = new(4);
+        public List<CompiledRawComponentCommand> AddCommands { get; } = new(4);
 
-        public List<CompiledComponentCommand> SetCommands { get; } = new(4);
+        public List<CompiledRawComponentCommand> SetCommands { get; } = new(4);
 
         public List<CompiledRemoveCommand> RemoveCommands { get; } = new(4);
 
@@ -680,9 +699,6 @@ public sealed class CommandBuffer
         }
     }
 
-    /// <summary>
-    /// Per-type cache for component type id resolution, avoiding concurrent dictionary lookups after warmup.
-    /// </summary>
     private static class ComponentTypeCache<T>
     {
         public static ComponentTypeIdCacheEntry? Entry;

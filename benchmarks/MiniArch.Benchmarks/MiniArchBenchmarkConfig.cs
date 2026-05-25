@@ -38,15 +38,9 @@ public sealed class MiniArchBenchmarkConfig : ManualConfig
         config.AddLogger(ConsoleLogger.Default);
         config.Orderer = new DefaultOrderer(SummaryOrderPolicy.FastestToSlowest);
         config.AddJob(
-            Job.Dry
+            Job.ShortRun
                 .WithRuntime(CoreRuntime.Core80)
-                .WithStrategy(RunStrategy.ColdStart)
-                .WithLaunchCount(1)
-                .WithWarmupCount(0)
-                .WithIterationCount(6)
-                .WithInvocationCount(1)
-                .WithUnrollFactor(1)
-                .WithId("net8-cold-command-buffer"));
+                .WithId("net8-short-command-buffer"));
         return config;
     }
 

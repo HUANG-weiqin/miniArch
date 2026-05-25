@@ -1,8 +1,8 @@
 ---
 title: Command Buffer Runtime
 module: MiniArch.Core CommandBuffer
-description: Implemented command buffer model, fixed replay order, world delta capture/apply, recording concurrency scope, 0-GC optimization results, and validation notes
-updated: 2026-05-25
+description: Implemented command buffer model, fixed replay order, world delta capture/apply, recording concurrency scope, 0-GC optimization results, byte-based boxing elimination (Phase 2), and validation notes
+updated: 2026-05-26
 ---
 # Command Buffer Runtime
 
@@ -204,22 +204,47 @@ updated: 2026-05-25
 
 ## Phase 2 候选：Recording 热路径装箱消除
 
-### 已识别问题
+### 已实施：byte-based untyped storage（Approach B）
 
-- `RecordedComponentCommand.Value` 是 `object?`（`FrameCommands.cs:260`），值类型组件在 `Add<T>`/`Set<T>` 录制时逐条装箱
-- Phase 1 数据：10 万次 `Set` 产生 ~10.3 MB heap allocation（GC collection 已为 0，但 allocation 仍在）
-- 影响范围：`CommandBuffer.cs:53`（Add）、`CommandBuffer.cs:62`（Set）
+用 `byte[]` + `Unsafe.WriteUnaligned` 替代 `object?` 装箱，在录制和 replay 热路径上消除所有值类型装箱。
 
-### 短期：量化收益
+### 架构变化
 
-- 添加 record-only allocation benchmark，确认装箱开销占 recording 总开销的比例
-- 确认当前 `object?` 路径在实际负载下的 allocation profile
+- **新增 `ComponentWriterCache`**（`src/MiniArch/Core/ComponentWriterCache.cs`）：
+  - `ColumnWriterDelegate(Array column, int row, byte* source)` — per-type 缓存 delegate，执行 `((T[])column)[row] = Unsafe.Read<T>(source)`
+  - `ComponentReaderDelegate(void* destination, byte* source)` — per-type 缓存 delegate
+  - `ReadBoxed(Type, byte[], int)` — 冷路径：用 `RuntimeHelpers.GetUninitializedObject` + `GCHandle.Alloc(pinned)` + reader 从 bytes 反序列化 boxed object
+  - `GetSize(Type)` / `GetColumnWriter(Type)` / `GetReader(Type)` — 均通过 `ConcurrentDictionary` + `MakeGenericMethod` 缓存
 
-### 中长期：typed/per-type recording storage
+- **`RecordedComponentCommand(Entity, int, object?)` → `RecordedRawCommand(Entity, int, int, int)`**（`FrameCommands.cs`）：
+  - 不再存 `object? Value`，改为存 `DataOffset` + `DataSize`
 
-- 方案方向：per-component-type 泛型 shard 或 `RecordedComponentCommand<T>` 特化列表
-- 代价：API 复杂度、shard 管理成本、compile 阶段归约逻辑变化
-- 前置条件：record-only benchmark 数据证明收益显著
+- **`CommandBufferShard`**（`CommandBufferShard.cs`）：
+  - 新增 `byte[] _data` + `_dataLength` + `AllocateData(int size)` 方法
+  - `Adds/Sets` 类型从 `List<RecordedComponentCommand>` 改为 `List<RecordedRawCommand>`
+
+- **`CommandBuffer` 录制**（`CommandBuffer.cs`）：
+  - `Add<T>/Set<T>` 通过 `Unsafe.WriteUnaligned(ref shard.Data[offset], component)` 直接写入 shard byte buffer — 零装箱
+  - `Compile()` 中 shard data 合并到 `CompiledCommandBatch.Data`，offset 重映射
+  - `CompiledComponentValue` → `CompiledRawComponentValue(Data, DataOffset, DataSize)` — 携带 byte[] 引用
+
+- **`World.Replay(CompiledCommandBatch)`**（`World.cs`）：
+  - 新增 `ApplyRawAddOrSet` / `WriteComponentFromBytes` / `MoveEntityFromBytes` — 从 bytes 通过 `ComponentWriterCache.ColumnWriterDelegate` 直接写入 chunk typed column
+  - `MaterializeReservedEntity` 接受 `CompiledRawComponentValue[]` + `byte[] batchData`
+  - 冷路径（`Playback()/PlayWithReverse()`）通过 `CompiledCommandBatch.ToFrameCommands()` → `ComponentWriterCache.ReadBoxed()` 反序列化
+
+- **项目配置**：`MiniArch.csproj` 添加 `<AllowUnsafeBlocks>true</AllowUnsafeBlocks>`
+
+### 数据流变化
+
+- **Before**: `Add<T>` → `new RecordedComponentCommand(entity, id, (object?)component)` → 装箱 → `object?` 贯穿 compile/replay
+- **After**: `Add<T>` → `Unsafe.WriteUnaligned` 写入 shard byte[] → `RecordedRawCommand(entity, id, offset, size)` → compile 合并 bytes → replay 通过 typed delegate 写入 chunk column
+
+### 验证状态
+
+- 0 warnings, 0 errors
+- 199/199 tests pass（含 CommandBuffer、Parity、GC Verification、Replay/Rewind、Delta 测试）
+- 热路径（`Play()`）不再装箱；冷路径（`Playback()/PlayWithReverse()`）按需反序列化
 
 ## 关联模块
 
