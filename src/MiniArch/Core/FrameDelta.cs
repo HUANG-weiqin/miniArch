@@ -6,8 +6,8 @@ public sealed class FrameDelta
 {
     public List<Entity> ReservedEntities { get; } = new(4);
     public List<RawCreatedEntity> CreatedEntities { get; } = new(4);
-    public List<FrameLinkCommand> LinkCommands { get; } = new(4);
-    public List<FrameUnlinkCommand> UnlinkCommands { get; } = new(4);
+    public List<LinkCommand> LinkCommands { get; } = new(4);
+    public List<UnlinkCommand> UnlinkCommands { get; } = new(4);
     public List<RawComponentCommand> AddCommands { get; } = new(4);
     public List<RawComponentCommand> SetCommands { get; } = new(4);
     public List<RawRemoveCommand> RemoveCommands { get; } = new(4);
@@ -27,25 +27,6 @@ public sealed class FrameDelta
         ReleasedEntities.Clear();
     }
 
-    public void Append(FrameDelta other)
-    {
-        ArgumentNullException.ThrowIfNull(other);
-        if (ReferenceEquals(this, other))
-        {
-            throw new ArgumentException("Cannot append a FrameDelta to itself.", nameof(other));
-        }
-
-        ReservedEntities.AddRange(other.ReservedEntities);
-        CreatedEntities.AddRange(other.CreatedEntities);
-        LinkCommands.AddRange(other.LinkCommands);
-        UnlinkCommands.AddRange(other.UnlinkCommands);
-        AddCommands.AddRange(other.AddCommands);
-        SetCommands.AddRange(other.SetCommands);
-        RemoveCommands.AddRange(other.RemoveCommands);
-        DestroyedEntities.AddRange(other.DestroyedEntities);
-        ReleasedEntities.AddRange(other.ReleasedEntities);
-    }
-
     public bool IsEmpty =>
         ReservedEntities.Count == 0 &&
         CreatedEntities.Count == 0 &&
@@ -57,33 +38,23 @@ public sealed class FrameDelta
         DestroyedEntities.Count == 0 &&
         ReleasedEntities.Count == 0;
 
-    public void Squash()
+    public static FrameDelta Merge(FrameDelta a, FrameDelta b)
     {
-        if (IsEmpty)
-            return;
-
-        var entityStates = new Dictionary<Entity, SquashEntityState>();
-        var appearanceOrder = new List<Entity>();
-        ProcessCommandsInto(entityStates, appearanceOrder, this);
-        RebuildFromState(entityStates, appearanceOrder);
-    }
-
-    public void Merge(FrameDelta other)
-    {
-        ArgumentNullException.ThrowIfNull(other);
-        if (ReferenceEquals(this, other))
-            throw new ArgumentException("Cannot merge a FrameDelta with itself.", nameof(other));
+        ArgumentNullException.ThrowIfNull(a);
+        ArgumentNullException.ThrowIfNull(b);
 
         var entityStates = new Dictionary<Entity, SquashEntityState>();
         var appearanceOrder = new List<Entity>();
 
-        ProcessCommandsInto(entityStates, appearanceOrder, this);
-        ProcessCommandsInto(entityStates, appearanceOrder, other);
+        ProcessCommandsInto(entityStates, appearanceOrder, a);
+        ProcessCommandsInto(entityStates, appearanceOrder, b);
 
-        RebuildFromState(entityStates, appearanceOrder);
+        var result = new FrameDelta();
+        RebuildFromState(result, entityStates, appearanceOrder);
+        return result;
     }
 
-    private void ProcessCommandsInto(
+    private static void ProcessCommandsInto(
         Dictionary<Entity, SquashEntityState> entityStates,
         List<Entity> appearanceOrder,
         FrameDelta source)
@@ -166,9 +137,9 @@ public sealed class FrameDelta
         }
     }
 
-    private void RebuildFromState(Dictionary<Entity, SquashEntityState> entityStates, List<Entity> appearanceOrder)
+    private static void RebuildFromState(FrameDelta target, Dictionary<Entity, SquashEntityState> entityStates, List<Entity> appearanceOrder)
     {
-        Clear();
+        target.Clear();
 
         foreach (var entity in appearanceOrder)
         {
@@ -176,8 +147,8 @@ public sealed class FrameDelta
 
             if (st.IsCreated && st.IsDestroyed)
             {
-                ReservedEntities.Add(entity);
-                ReleasedEntities.Add(entity);
+                target.ReservedEntities.Add(entity);
+                target.ReleasedEntities.Add(entity);
                 continue;
             }
 
@@ -215,12 +186,12 @@ public sealed class FrameDelta
                     ? System.Linq.Enumerable.ToArray(st.CreatedComponents.Values)
                     : [];
 
-                CreatedEntities.Add(new RawCreatedEntity(entity, null, compArray));
+                target.CreatedEntities.Add(new RawCreatedEntity(entity, null, compArray));
             }
             else
             {
                 if (st.IsReserved)
-                    ReservedEntities.Add(entity);
+                    target.ReservedEntities.Add(entity);
 
                 if (st.ComponentActions is not null)
                 {
@@ -229,13 +200,13 @@ public sealed class FrameDelta
                         switch (action.Kind)
                         {
                             case ComponentNetKind.Add:
-                                AddCommands.Add(action.Command);
+                                target.AddCommands.Add(action.Command);
                                 break;
                             case ComponentNetKind.Set:
-                                SetCommands.Add(action.Command);
+                                target.SetCommands.Add(action.Command);
                                 break;
                             case ComponentNetKind.Remove:
-                                RemoveCommands.Add(action.RemoveCmd);
+                                target.RemoveCommands.Add(action.RemoveCmd);
                                 break;
                         }
                     }
@@ -245,15 +216,15 @@ public sealed class FrameDelta
             if (st.HasHierarchyChange)
             {
                 if (st.NetIsLinked)
-                    LinkCommands.Add(new FrameLinkCommand(st.NetLinkParent, entity));
+                    target.LinkCommands.Add(new LinkCommand(st.NetLinkParent, entity));
                 else
-                    UnlinkCommands.Add(new FrameUnlinkCommand(entity));
+                    target.UnlinkCommands.Add(new UnlinkCommand(entity));
             }
 
             if (st.IsDestroyed)
-                DestroyedEntities.Add(entity);
+                target.DestroyedEntities.Add(entity);
             if (st.IsReleased)
-                ReleasedEntities.Add(entity);
+                target.ReleasedEntities.Add(entity);
         }
     }
 
@@ -354,9 +325,9 @@ public readonly record struct RawComponentCommand(
 
 public readonly record struct RawRemoveCommand(Entity Entity, int ComponentTypeId, Type RuntimeType, ComponentType ComponentType);
 
-public readonly record struct FrameLinkCommand(Entity Parent, Entity Child);
+public readonly record struct LinkCommand(Entity Parent, Entity Child);
 
-public readonly record struct FrameUnlinkCommand(Entity Child);
+public readonly record struct UnlinkCommand(Entity Child);
 
 internal readonly record struct RecordedHierarchyCommand(Entity Child, Entity Parent, bool IsLink);
 

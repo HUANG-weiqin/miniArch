@@ -1032,16 +1032,16 @@ public sealed class CommandBufferTests
     }
 
     [Fact]
-    public void Append_two_empty_deltas_produces_empty()
+    public void StaticMerge_two_empty_deltas_produces_empty()
     {
         var a = new FrameDelta();
         var b = new FrameDelta();
-        a.Append(b);
-        Assert.True(a.IsEmpty);
+        var merged = FrameDelta.Merge(a, b);
+        Assert.True(merged.IsEmpty);
     }
 
     [Fact]
-    public void Append_preserves_commands_from_both_deltas()
+    public void StaticMerge_preserves_commands_for_distinct_entities()
     {
         var world = new World();
         var buffer1 = new CommandBuffer(world);
@@ -1054,10 +1054,10 @@ public sealed class CommandBufferTests
         buffer2.Add(e2, new Velocity(3, 4));
         var delta2 = buffer2.Compile();
 
-        delta1.Append(delta2);
+        var merged = FrameDelta.Merge(delta1, delta2);
 
-        Assert.Equal(2, delta1.CreatedEntities.Count);
-        world.Replay(delta1);
+        Assert.Equal(2, merged.CreatedEntities.Count);
+        world.Replay(merged);
 
         Assert.True(world.IsAlive(e1));
         Assert.True(world.IsAlive(e2));
@@ -1068,7 +1068,7 @@ public sealed class CommandBufferTests
     }
 
     [Fact]
-    public void Append_then_replay_is_equivalent_to_sequential_replay()
+    public void StaticMerge_then_replay_is_equivalent_to_sequential_replay()
     {
         var world = new World();
         var entity = world.Create(new Position(10, 20));
@@ -1083,9 +1083,7 @@ public sealed class CommandBufferTests
         buffer2.Remove<Velocity>(entity);
         var delta2 = buffer2.Compile();
 
-        var merged = new FrameDelta();
-        merged.Append(delta1);
-        merged.Append(delta2);
+        var merged = FrameDelta.Merge(delta1, delta2);
 
         var mergedWorld = new World();
         var mergedEntity = mergedWorld.Create(new Position(10, 20));
@@ -1096,85 +1094,10 @@ public sealed class CommandBufferTests
         Assert.False(mergedWorld.TryGet<Velocity>(mergedEntity, out _));
     }
 
-    [Fact]
-    public void Append_does_not_modify_the_appended_delta()
-    {
-        var world = new World();
-        var buffer1 = new CommandBuffer(world);
-        var e = buffer1.Create();
-        buffer1.Add(e, new Position(1, 2));
-        var delta = buffer1.Compile();
 
-        var buffer2 = new CommandBuffer(world);
-        var e2 = buffer2.Create();
-        buffer2.Add(e2, new Velocity(3, 4));
-        var otherDelta = buffer2.Compile();
-
-        var target = new FrameDelta();
-        target.Append(delta);
-        target.Append(otherDelta);
-
-        Assert.Single(delta.CreatedEntities);
-        Assert.Single(otherDelta.CreatedEntities);
-        Assert.Equal(2, target.CreatedEntities.Count);
-    }
 
     [Fact]
-    public void Append_handles_hierarchy_commands()
-    {
-        var world = new World();
-        var parent = world.Create(new Position(0, 0));
-        var child = world.Create(new Velocity(1, 1));
-
-        var buffer1 = new CommandBuffer(world);
-        buffer1.Link(parent, child);
-        var delta1 = buffer1.Compile();
-
-        var buffer2 = new CommandBuffer(world);
-        buffer2.Unlink(child);
-        var delta2 = buffer2.Compile();
-
-        var merged = new FrameDelta();
-        merged.Append(delta1);
-        merged.Append(delta2);
-
-        Assert.Single(merged.LinkCommands);
-        Assert.Single(merged.UnlinkCommands);
-    }
-
-    [Fact]
-    public void Append_create_then_destroy_is_wasteful_but_correct()
-    {
-        var world = new World();
-        var buffer = new CommandBuffer(world);
-
-        var e = buffer.Create();
-        buffer.Add(e, new Position(1, 2));
-        var delta1 = buffer.Compile();
-
-        var buffer2 = new CommandBuffer(world);
-        buffer2.Destroy(e);
-        var delta2 = buffer2.Compile();
-
-        delta1.Append(delta2);
-
-        Assert.Single(delta1.CreatedEntities);
-        Assert.Single(delta1.DestroyedEntities);
-
-        world.Replay(delta1);
-        Assert.False(world.IsAlive(e));
-    }
-
-    [Fact]
-    public void Squash_empty_delta_remains_empty()
-    {
-        var delta = new FrameDelta();
-        delta.Squash();
-        Assert.True(delta.IsEmpty);
-    }
-
-    [Fact]
-    public void Squash_Set_then_Set_same_component_keeps_last()
+    public void StaticMerge_Set_then_Set_same_component_keeps_last()
     {
         var world = new World();
         var entity = world.Create(new Position(10, 20));
@@ -1187,10 +1110,7 @@ public sealed class CommandBufferTests
         buffer2.Set(entity, new Position(50, 60));
         var delta2 = buffer2.Compile();
 
-        var merged = new FrameDelta();
-        merged.Append(delta1);
-        merged.Append(delta2);
-        merged.Squash();
+        var merged = FrameDelta.Merge(delta1, delta2);
 
         Assert.Empty(merged.AddCommands);
         Assert.Single(merged.SetCommands);
@@ -1202,7 +1122,7 @@ public sealed class CommandBufferTests
     }
 
     [Fact]
-    public void Squash_Add_then_Remove_same_component_cancels()
+    public void StaticMerge_Add_then_Remove_same_component_cancels()
     {
         var world = new World();
         var entity = world.Create();
@@ -1215,10 +1135,7 @@ public sealed class CommandBufferTests
         buffer2.Remove<Position>(entity);
         var delta2 = buffer2.Compile();
 
-        var merged = new FrameDelta();
-        merged.Append(delta1);
-        merged.Append(delta2);
-        merged.Squash();
+        var merged = FrameDelta.Merge(delta1, delta2);
 
         Assert.Empty(merged.AddCommands);
         Assert.Empty(merged.SetCommands);
@@ -1229,7 +1146,7 @@ public sealed class CommandBufferTests
     }
 
     [Fact]
-    public void Squash_Set_then_Remove_keeps_Remove()
+    public void StaticMerge_Set_then_Remove_keeps_Remove()
     {
         var world = new World();
         var entity = world.Create(new Position(10, 20));
@@ -1242,10 +1159,7 @@ public sealed class CommandBufferTests
         buffer2.Remove<Position>(entity);
         var delta2 = buffer2.Compile();
 
-        var merged = new FrameDelta();
-        merged.Append(delta1);
-        merged.Append(delta2);
-        merged.Squash();
+        var merged = FrameDelta.Merge(delta1, delta2);
 
         Assert.Empty(merged.AddCommands);
         Assert.Empty(merged.SetCommands);
@@ -1256,7 +1170,7 @@ public sealed class CommandBufferTests
     }
 
     [Fact]
-    public void Merge_Remove_then_Add_becomes_Set()
+    public void StaticMerge_Remove_then_Add_becomes_Set()
     {
         var world = new World();
         var entity = world.Create(new Position(10, 20));
@@ -1269,9 +1183,7 @@ public sealed class CommandBufferTests
         buffer2.Add(entity, new Position(30, 40));
         var delta2 = buffer2.Compile();
 
-        var merged = new FrameDelta();
-        merged.Append(delta1);
-        merged.Merge(delta2);
+        var merged = FrameDelta.Merge(delta1, delta2);
 
         Assert.Empty(merged.AddCommands);
         Assert.Single(merged.SetCommands);
@@ -1283,7 +1195,7 @@ public sealed class CommandBufferTests
     }
 
     [Fact]
-    public void Squash_Add_then_Set_same_component_keeps_Add_with_latest_data()
+    public void StaticMerge_Add_then_Set_same_component_keeps_Add_with_latest_data()
     {
         var world = new World();
         var entity = world.Create();
@@ -1296,10 +1208,7 @@ public sealed class CommandBufferTests
         buffer2.Set(entity, new Position(3, 4));
         var delta2 = buffer2.Compile();
 
-        var merged = new FrameDelta();
-        merged.Append(delta1);
-        merged.Append(delta2);
-        merged.Squash();
+        var merged = FrameDelta.Merge(delta1, delta2);
 
         Assert.Single(merged.AddCommands);
         Assert.Empty(merged.SetCommands);
@@ -1311,7 +1220,7 @@ public sealed class CommandBufferTests
     }
 
     [Fact]
-    public void Squash_Create_then_Destroy_becomes_Release()
+    public void StaticMerge_Create_then_Destroy_becomes_Release()
     {
         var world = new World();
         var buffer = new CommandBuffer(world);
@@ -1323,10 +1232,7 @@ public sealed class CommandBufferTests
         buffer2.Destroy(e);
         var delta2 = buffer2.Compile();
 
-        var merged = new FrameDelta();
-        merged.Append(delta1);
-        merged.Append(delta2);
-        merged.Squash();
+        var merged = FrameDelta.Merge(delta1, delta2);
 
         Assert.Empty(merged.CreatedEntities);
         Assert.Empty(merged.DestroyedEntities);
@@ -1338,7 +1244,7 @@ public sealed class CommandBufferTests
     }
 
     [Fact]
-    public void Squash_Link_then_Unlink_same_child_keeps_Unlink()
+    public void StaticMerge_Link_then_Unlink_same_child_keeps_Unlink()
     {
         var world = new World();
         var parent = world.Create();
@@ -1352,17 +1258,14 @@ public sealed class CommandBufferTests
         buffer2.Unlink(child);
         var delta2 = buffer2.Compile();
 
-        var merged = new FrameDelta();
-        merged.Append(delta1);
-        merged.Append(delta2);
-        merged.Squash();
+        var merged = FrameDelta.Merge(delta1, delta2);
 
         Assert.Empty(merged.LinkCommands);
         Assert.Single(merged.UnlinkCommands);
     }
 
     [Fact]
-    public void Squash_folds_component_commands_into_CreatedEntity()
+    public void StaticMerge_folds_component_commands_into_CreatedEntity()
     {
         var world = new World();
         var buffer1 = new CommandBuffer(world);
@@ -1377,10 +1280,7 @@ public sealed class CommandBufferTests
         buffer2.Add(e, new Health(100));
         var delta2 = buffer2.Compile();
 
-        var merged = new FrameDelta();
-        merged.Append(delta1);
-        merged.Append(delta2);
-        merged.Squash();
+        var merged = FrameDelta.Merge(delta1, delta2);
 
         Assert.Single(merged.CreatedEntities);
         Assert.Empty(merged.AddCommands);
@@ -1397,7 +1297,7 @@ public sealed class CommandBufferTests
     }
 
     [Fact]
-    public void Squash_multiple_entities_independent()
+    public void StaticMerge_multiple_entities_independent()
     {
         var world = new World();
         var e1 = world.Create(new Position(1, 1));
@@ -1413,10 +1313,7 @@ public sealed class CommandBufferTests
         buffer2.Remove<Velocity>(e2);
         var delta2 = buffer2.Compile();
 
-        var merged = new FrameDelta();
-        merged.Append(delta1);
-        merged.Append(delta2);
-        merged.Squash();
+        var merged = FrameDelta.Merge(delta1, delta2);
 
         Assert.Single(merged.SetCommands);
         Assert.Empty(merged.AddCommands);
@@ -1429,7 +1326,7 @@ public sealed class CommandBufferTests
     }
 
     [Fact]
-    public void Merge_produces_correct_replay_result()
+    public void StaticMerge_produces_correct_replay_result()
     {
         var world = new World();
         var entity = world.Create(new Position(10, 20));
@@ -1444,9 +1341,7 @@ public sealed class CommandBufferTests
         buffer2.Remove<Velocity>(entity);
         var delta2 = buffer2.Compile();
 
-        var merged = new FrameDelta();
-        merged.Append(delta1);
-        merged.Merge(delta2);
+        var merged = FrameDelta.Merge(delta1, delta2);
 
         Assert.Empty(merged.AddCommands);
         Assert.Single(merged.SetCommands);

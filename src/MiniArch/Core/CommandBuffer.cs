@@ -298,11 +298,11 @@ public sealed class CommandBuffer
         {
             if (pair.Value.IsLinked)
             {
-                linkCommands.Add(new FrameLinkCommand(pair.Value.Parent, pair.Key));
+                linkCommands.Add(new LinkCommand(pair.Value.Parent, pair.Key));
                 continue;
             }
 
-            unlinkCommands.Add(new FrameUnlinkCommand(pair.Key));
+            unlinkCommands.Add(new UnlinkCommand(pair.Key));
         }
 
         foreach (var pair in compiledAdds)

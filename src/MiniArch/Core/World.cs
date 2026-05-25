@@ -13,7 +13,7 @@ namespace MiniArch;
 /// <summary>
 /// Owns entity storage and queries.
 /// </summary>
-public sealed class World
+public sealed class World : IDisposable
 {
     private const int DefaultChunkCapacity = 128;
     private const int EmptyArchetypeChunkCapacity = 1024;
@@ -47,6 +47,7 @@ public sealed class World
     private readonly List<Entity> _destroyOrderScratch = new(4);
     private readonly HashSet<Entity> _destroyVisitedScratch = new(4);
     private readonly Dictionary<Type, ComponentType> _compiledReplayComponentTypeScratch = new(4);
+    private bool _disposed;
 
     /// <summary>
     /// Creates a world.
@@ -60,7 +61,7 @@ public sealed class World
 
         if (entityCapacity < 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(entityCapacity));
+            throw new ArgumentOutOfRangeException(nameof(entityCapacity), "Entity capacity must be non-negative.");
         }
 
         _chunkCapacity = chunkCapacity;
@@ -70,10 +71,38 @@ public sealed class World
         _freeIds = entityCapacity == 0 ? Array.Empty<RecycledEntity>() : new RecycledEntity[entityCapacity];
     }
 
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _archetypes.Clear();
+        _createArchetypeCache.Clear();
+        _queryFiltersByDescription.Clear();
+        _queries.Clear();
+        _archetypeSnapshot = Array.Empty<Archetype>();
+        _versions.Clear();
+        _locations.Clear();
+        _freeIdCount = 0;
+        _hierarchy.Reset();
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ThrowIfDisposed()
+    {
+        if (_disposed) throw new ObjectDisposedException(nameof(World));
+    }
+
     /// <summary>
     /// Gets the component registry.
     /// </summary>
-    public ComponentRegistry Components => _components;
+    public ComponentRegistry Components
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _components;
+        }
+    }
 
     /// <summary>
     /// Gets the entity metadata capacity.
@@ -163,6 +192,7 @@ public sealed class World
     /// </summary>
     public Entity Create()
     {
+        ThrowIfDisposed();
         var archetype = GetOrCreateArchetype(Signature.Empty);
         return CreateInArchetype(archetype, out _, out _);
     }
@@ -172,6 +202,7 @@ public sealed class World
     /// </summary>
     public Entity Create<T1>(T1 component1)
     {
+        ThrowIfDisposed();
         var componentType1 = GetComponentType<T1>();
         var archetype = GetOrCreateCreateArchetype<T1>(componentType1);
         var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
@@ -184,6 +215,7 @@ public sealed class World
     /// </summary>
     public Entity Create<T1, T2>(T1 component1, T2 component2)
     {
+        ThrowIfDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var archetype = GetOrCreateCreateArchetype<T1, T2>(componentType1, componentType2);
@@ -198,6 +230,7 @@ public sealed class World
     /// </summary>
     public Entity Create<T1, T2, T3>(T1 component1, T2 component2, T3 component3)
     {
+        ThrowIfDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -215,6 +248,7 @@ public sealed class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4>(T1 component1, T2 component2, T3 component3, T4 component4)
     {
+        ThrowIfDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -234,6 +268,7 @@ public sealed class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5)
     {
+        ThrowIfDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -255,6 +290,7 @@ public sealed class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6)
     {
+        ThrowIfDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -278,6 +314,7 @@ public sealed class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7)
     {
+        ThrowIfDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -303,6 +340,7 @@ public sealed class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8)
     {
+        ThrowIfDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -330,6 +368,7 @@ public sealed class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9)
     {
+        ThrowIfDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -359,6 +398,7 @@ public sealed class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10)
     {
+        ThrowIfDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -390,6 +430,7 @@ public sealed class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11)
     {
+        ThrowIfDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -423,6 +464,7 @@ public sealed class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12)
     {
+        ThrowIfDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -458,6 +500,7 @@ public sealed class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13)
     {
+        ThrowIfDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -495,6 +538,7 @@ public sealed class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13, T14 component14)
     {
+        ThrowIfDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -534,6 +578,7 @@ public sealed class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13, T14 component14, T15 component15)
     {
+        ThrowIfDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -575,6 +620,7 @@ public sealed class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13, T14 component14, T15 component15, T16 component16)
     {
+        ThrowIfDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -618,6 +664,7 @@ public sealed class World
     /// </summary>
     public void CreateMany(Span<Entity> entities)
     {
+        ThrowIfDisposed();
         if (entities.Length == 0)
         {
             return;
@@ -665,6 +712,7 @@ public sealed class World
     /// </summary>
     public void EnsureCapacity(int entityCapacity)
     {
+        ThrowIfDisposed();
         if (entityCapacity < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(entityCapacity));
@@ -688,6 +736,7 @@ public sealed class World
     /// </summary>
     public void Destroy(Entity entity)
     {
+        ThrowIfDisposed();
         _destroyOrderScratch.Clear();
         _destroyVisitedScratch.Clear();
 
@@ -718,6 +767,7 @@ public sealed class World
     /// </summary>
     public void Link(Entity parent, Entity child)
     {
+        ThrowIfDisposed();
         _hierarchy.Link(this, parent, child);
     }
 
@@ -726,6 +776,7 @@ public sealed class World
     /// </summary>
     public void Unlink(Entity child)
     {
+        ThrowIfDisposed();
         GetRequiredLocation(child);
         _hierarchy.Unlink(child);
     }
@@ -735,6 +786,7 @@ public sealed class World
     /// </summary>
     public bool TryGetParent(Entity child, out Entity parent)
     {
+        ThrowIfDisposed();
         return _hierarchy.TryGetParent(this, child, out parent);
     }
 
@@ -743,6 +795,7 @@ public sealed class World
     /// </summary>
     public List<Entity> GetChildren(Entity parent)
     {
+        ThrowIfDisposed();
         return _hierarchy.GetChildren(this, parent);
     }
 
@@ -751,6 +804,7 @@ public sealed class World
     /// </summary>
     public void Add<T>(Entity entity, T component)
     {
+        ThrowIfDisposed();
         ApplyTypedAddOrSet(entity, GetComponentType<T>(), in component);
     }
 
@@ -759,6 +813,7 @@ public sealed class World
     /// </summary>
     public void Set<T>(Entity entity, T component)
     {
+        ThrowIfDisposed();
         ApplyTypedAddOrSet(entity, GetComponentType<T>(), in component);
     }
 
@@ -767,6 +822,7 @@ public sealed class World
     /// </summary>
     public void Remove<T>(Entity entity)
     {
+        ThrowIfDisposed();
         var componentType = GetComponentType<T>();
         RemoveBoxed(entity, componentType);
     }
@@ -776,6 +832,7 @@ public sealed class World
     /// </summary>
     public bool TryGet<T>(Entity entity, out T component)
     {
+        ThrowIfDisposed();
         if (!TryGetLocation(entity, out var info))
         {
             component = default!;
@@ -800,6 +857,7 @@ public sealed class World
     /// </summary>
     public Query Query(in QueryDescription description)
     {
+        ThrowIfDisposed();
         return new Query(GetAdvancedQuery(in description));
     }
 
@@ -808,6 +866,7 @@ public sealed class World
     /// </summary>
     public bool TryGetLocation(Entity entity, out EntityInfo info)
     {
+        ThrowIfDisposed();
         if (entity.Id < 0 || entity.Id >= _locations.Count)
         {
             info = default;
@@ -830,6 +889,7 @@ public sealed class World
     /// </summary>
     public bool IsAlive(Entity entity)
     {
+        ThrowIfDisposed();
         return TryGetLocation(entity, out _);
     }
 
@@ -1555,6 +1615,7 @@ public sealed class World
 
     public void Replay(FrameDelta delta)
     {
+        ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(delta);
 
         var componentTypeCache = new Dictionary<Type, ComponentType>();
