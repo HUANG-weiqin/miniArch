@@ -71,7 +71,7 @@ updated: 2026-05-25
 - command buffer 还要单独锁定"recording 不提前发布 world layout 变化"：录制 `Add/Set/Remove/Link` 时，不应先把 archetype / query generation 这类内部布局状态改掉。
 - command buffer 的 `CompileAndReplay()` 需要锁定与 `Compile()+Replay()` 的结果等价，并用 allocation smoke test 确认 direct replay 少于 retained frame 路径。
 - 如果目标是优化 command buffer 的 GC，还应补 allocation smoke test，确认 `CompileAndReplay()` 不为可保留 `FrameDelta` 做额外物化。
-- `ArchetypeTests` 需要覆盖"复用前面空掉的 chunk"这一行为；否则 `Remove` benchmark 的分配回退很难在功能测试里暴露出来。
+- `ArchetypeTests` 需要覆盖"复用前面空掉的 chunk"这一行为，并用结构性测试锁定 `Archetype` 有显式 non-full chunk tracking；否则 `Remove` benchmark 的分配回退和 remove-heavy 后插入扫描大量满 chunk 的退化很难在功能测试里暴露出来。
 - `WorldLifecycleTests` 需要覆盖 `EnsureCapacity` 和 `CreateMany`，否则 `Create` 的分配优化和批量语义很容易在重构时被回退。
 - `WorldLifecycleTests` 还要覆盖 `CreateMany` 的跨 chunk 顺序和二次批量追加语义，否则批量 reservation 很容易只保住"能跑"而丢掉位置正确性。
 - `WorldLifecycleTests` 还要覆盖 `CreateMany` 的 recycled/mixed id 语义，否则 fresh-path 优化很容易掩盖 free-list 路径的行为回退。

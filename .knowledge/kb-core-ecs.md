@@ -46,7 +46,7 @@ updated: 2026-05-25
   - `World.IsAlive(Entity)` 复用 `TryGetLocation` 的同一套校验，只有在 `id` 在范围内、`_locations[id]` 非空且 `_versions[id] == entity.Version` 时才返回 `true`
   - `Add/Remove` 先算目标签名，再复用 edge cache
   - `Set` 在组件已存在时直接定位到 typed column 的 row，原地写回，不触发迁移
-  - `Archetype` 负责把实体放进可写 chunk，并优先复用已有空位的 chunk，而不是盲目只往最后一个 chunk 追加
+  - `Archetype` 负责把实体放进可写 chunk，并通过显式 non-full chunk 索引优先复用已有空位的 chunk，而不是盲目只往最后一个 chunk 追加
 - `Chunk` 负责 dense row 的单个/批量插入、读取、swap-remove 和 direct-index 写入
 - `Chunk` 也应该暴露当前有效 entity 行的 span 视图，给 query / benchmark 这类纯读热路径直接扫 `_entities[0..Count)`，避免逐行 `GetEntity(row)` 的重复边界检查和调用成本
 - `Query` 先缓存匹配 archetype，再暴露 chunk 枚举和 `GetChunkSpan()` 这类 span-first 读入口
@@ -91,7 +91,7 @@ updated: 2026-05-25
 - 默认 `World()` 的非空 archetype 也不应一律固定在 `128 entities/chunk`；更合理的是按每实体近似字节数把 chunk 调到接近固定目标字节数，这样 query world 不会因为“小 chunk 过碎”被额外的 chunk 遍历次数拖慢。
 - 但显式传入的非默认 `chunkCapacity` 仍应被视为调用方的确定性约束，尤其是测试和调试场景；不要把它静默改写成自适应值。
 - `Archetype` 不能只把写入目标锁死在最后一个 chunk；结构迁移把实体移走后，前面空掉的 chunk 必须可复用，否则 `Remove -> 空 archetype` 会无意义地重新分配 chunk。
-- 但“可复用前面空 chunk”不等于“每次插入都线性扫所有 chunk”；remove-heavy / fragmented 场景最终还是要有 non-full chunk 的显式索引，否则 chunk 数一多，插入和 batch reserve 都会退化成扫描成本。
+- 但“可复用前面空 chunk”不等于“每次插入都线性扫所有 chunk”；`Archetype` 现在维护按 chunk index 排序的 non-full chunk 索引，`GetWritableChunk()` / `ReserveEntityRanges()` 从索引里取最高可写 chunk，保留旧的反向扫描分配顺序，同时避免穿过大量满 chunk。
 - `ArchetypeEdges` 应该和其他热路径一样使用 component id 直索引，而不是继续停留在 `Dictionary<ComponentType, Archetype>`。
 - `Archetype` 和 `Chunk` 只保留 typed 构造路径（必须传入 `Type[]`）；不再有 untyped `object?[]` 列路径。
 - `Set` 的热路径应该是 direct-index 原地写，不应该为了更新一个已存在组件去做结构迁移。
@@ -112,7 +112,7 @@ updated: 2026-05-25
 - `Chunk.GetComponentIndex(...)` 不能在 chunk 实例上维护 last-component / last-column 这类共享可变读缓存；同一 chunk 被并发只读、且不同线程读不同组件时，普通字段 pair 可能被观察成不一致组合。读路径应直接使用不可变的 `_componentIdToColumnIndex` direct map，或由调用方 hoist 到局部 column index。
 - `World` / `CommandBuffer` 的泛型 component-type cache 也不能用 registry + id 两个 static 字段表示同一条 cache entry；跨 world 或并发首次缓存时可能形成错配。应发布单个 immutable entry 引用，并从本地 entry 读取 registry/id。
 - 如果 query 不只缓存 `Archetype[]`，还缓存了扁平 `Chunk[]`，失效条件就不能只看 archetype 集合变化；同 archetype 内新增或复用 chunk 也必须触发 query snapshot 刷新。
-- typed column 的收益会被 `Array` 抽象层吃掉一部分；如果迁移/删除路径仍长期停留在 `Array.Copy` / `Array.Clear` 的逐列调用上，结构变化 benchmark 的 CPU 还会继续偏高。
+- typed column 的收益会被 `Array` 抽象层吃掉一部分；如果迁移/删除路径仍长期停留在 `Array.Copy` / `Array.Clear` 的逐列调用上，结构变化 benchmark 的 CPU 还会继续偏高。但 per-type mover delegate 属于第二阶段优化，只有 profiling / benchmark 继续证明这里是热点时再实现，避免用 delegate indirection 换来不确定收益。
 - typed chunk 的删除路径不应该无差别清空所有列尾槽位；值类型列可以直接保留旧位模式，只有引用类型或“包含引用字段的 struct”才需要清尾，避免无意义的写带宽和 GC 压力。
 - 对照 `Arch` 源码时不要假设它会自动消除 `Create -> Add -> Add` 留下的中间 archetype；它同样保留这些 archetype，query 也是按 world archetype 列表全量匹配，空 archetype 只会在显式 `TrimExcess()` 后被移除。
 

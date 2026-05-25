@@ -6,6 +6,8 @@ namespace MiniArch.Core;
 public sealed class Archetype
 {
     private readonly List<Chunk> _chunks = new();
+    private readonly List<int> _nonFullChunkIndexes = new();
+    private readonly List<bool> _chunkHasNonFullEntry = new();
     private readonly int _chunkCapacity;
     private readonly Type[] _componentTypes;
     private readonly int[] _componentIdToColumnIndex;
@@ -28,7 +30,8 @@ public sealed class Archetype
         _chunkCapacity = chunkCapacity;
         _componentTypes = componentTypes;
         _componentIdToColumnIndex = ComponentColumnMap.Build(signature);
-        _chunks.Add(CreateChunk());
+        AddChunk();
+        MarkChunkNonFull(0);
     }
 
     /// <summary>
@@ -58,6 +61,7 @@ public sealed class Archetype
     {
         var chunk = GetWritableChunk(out chunkIndex);
         rowIndex = chunk.Add(entity, components);
+        MarkChunkNonFull(chunkIndex);
         EntityCount++;
     }
 
@@ -68,6 +72,7 @@ public sealed class Archetype
     {
         var chunk = GetWritableChunk(out chunkIndex);
         rowIndex = chunk.Add(entity);
+        MarkChunkNonFull(chunkIndex);
         EntityCount++;
         return chunk;
     }
@@ -78,8 +83,8 @@ public sealed class Archetype
         {
             if (_chunks.Count == 0)
             {
-                var emptyChunk = CreateChunk();
-                _chunks.Add(emptyChunk);
+                var emptyChunk = AddChunk();
+                MarkChunkNonFull(0);
                 chunkIndex = 0;
                 return emptyChunk;
             }
@@ -96,12 +101,12 @@ public sealed class Archetype
         }
         else
         {
-            chunk = CreateChunk();
-            _chunks.Add(chunk);
+            chunk = AddChunk();
             chunkIndex = _chunks.Count - 1;
         }
 
         var startRow = chunk.ReserveRows(entities.Length);
+        MarkChunkNonFull(chunkIndex);
         entities.CopyTo(chunk.GetReservedEntities(startRow, entities.Length));
         EntityCount += entities.Length;
         return chunk;
@@ -122,29 +127,25 @@ public sealed class Archetype
         var remaining = entityCount;
         var rangeCount = 0;
 
-        for (var chunkIndex = _chunks.Count - 1; chunkIndex >= 0 && remaining > 0; chunkIndex--)
+        while (remaining > 0 && TryTakeNonFullChunk(out var chunkIndex, out var chunk))
         {
-            var chunk = _chunks[chunkIndex];
             var available = chunk.Capacity - chunk.Count;
-            if (available <= 0)
-            {
-                continue;
-            }
-
             var fillCount = Math.Min(available, remaining);
             var startRow = chunk.ReserveRows(fillCount);
+            MarkChunkNonFull(chunkIndex);
             ranges[rangeCount++] = new EntityBatchRange(chunkIndex, startRow, fillCount);
             remaining -= fillCount;
         }
 
         while (remaining > 0)
         {
-            var chunk = CreateChunk();
-            _chunks.Add(chunk);
+            var chunk = AddChunk();
+            var chunkIndex = _chunks.Count - 1;
 
             var fillCount = Math.Min(chunk.Capacity, remaining);
             chunk.ReserveRows(fillCount);
-            ranges[rangeCount++] = new EntityBatchRange(_chunks.Count - 1, 0, fillCount);
+            MarkChunkNonFull(chunkIndex);
+            ranges[rangeCount++] = new EntityBatchRange(chunkIndex, 0, fillCount);
             remaining -= fillCount;
         }
 
@@ -158,6 +159,7 @@ public sealed class Archetype
     internal bool RemoveEntity(int chunkIndex, int rowIndex, out Entity movedEntity)
     {
         var moved = _chunks[chunkIndex].RemoveAt(rowIndex, out movedEntity);
+        MarkChunkNonFull(chunkIndex);
         EntityCount--;
         return moved;
     }
@@ -195,21 +197,62 @@ public sealed class Archetype
         return new Chunk(Signature, _componentTypes, _componentIdToColumnIndex, _chunkCapacity);
     }
 
+    private Chunk AddChunk()
+    {
+        var chunk = CreateChunk();
+        _chunks.Add(chunk);
+        _chunkHasNonFullEntry.Add(false);
+        return chunk;
+    }
+
     private Chunk GetWritableChunk(out int chunkIndex)
     {
-        for (chunkIndex = _chunks.Count - 1; chunkIndex >= 0; chunkIndex--)
+        if (TryTakeNonFullChunk(out chunkIndex, out var existingChunk))
         {
-            var existingChunk = _chunks[chunkIndex];
-            if (existingChunk.Count < existingChunk.Capacity)
+            return existingChunk;
+        }
+
+        var chunk = AddChunk();
+        chunkIndex = _chunks.Count - 1;
+        return chunk;
+    }
+
+    private bool TryTakeNonFullChunk(out int chunkIndex, out Chunk chunk)
+    {
+        while (_nonFullChunkIndexes.Count > 0)
+        {
+            var lastIndex = _nonFullChunkIndexes.Count - 1;
+            chunkIndex = _nonFullChunkIndexes[lastIndex];
+            _nonFullChunkIndexes.RemoveAt(lastIndex);
+            _chunkHasNonFullEntry[chunkIndex] = false;
+
+            chunk = _chunks[chunkIndex];
+            if (chunk.Count < chunk.Capacity)
             {
-                return existingChunk;
+                return true;
             }
         }
 
-        var chunk = CreateChunk();
-        _chunks.Add(chunk);
-        chunkIndex = _chunks.Count - 1;
-        return chunk;
+        chunkIndex = -1;
+        chunk = null!;
+        return false;
+    }
+
+    private void MarkChunkNonFull(int chunkIndex)
+    {
+        var chunk = _chunks[chunkIndex];
+        if (chunk.Count >= chunk.Capacity || _chunkHasNonFullEntry[chunkIndex])
+        {
+            return;
+        }
+
+        var insertIndex = _nonFullChunkIndexes.BinarySearch(chunkIndex);
+        if (insertIndex < 0)
+        {
+            _nonFullChunkIndexes.Insert(~insertIndex, chunkIndex);
+        }
+
+        _chunkHasNonFullEntry[chunkIndex] = true;
     }
 
 }

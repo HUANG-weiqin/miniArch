@@ -90,6 +90,15 @@ public sealed class ArchetypeTests
     }
 
     [Fact]
+    public void Archetype_tracks_non_full_chunks_explicitly()
+    {
+        var fields = typeof(Archetype)
+            .GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+        Assert.Contains(fields, field => field.Name.Contains("nonFull", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void Add_and_remove_transition_edges_are_cached_and_reused()
     {
         var world = new World();
