@@ -201,6 +201,30 @@ updated: 2026-05-25
 - 160/160 tests pass
 - 所有热路径不再装箱
 
+## FrameDelta Squash & Merge
+
+### FrameDelta.Squash()
+
+对单个 delta 内的冗余命令做 per-entity per-component-type 状态机折叠，消除无效操作：
+
+- **Component 命令折叠规则**：Add+Set→Add(latest), Add+Remove→cancel, Set+Set→Set(latest), Set+Remove→Remove, Remove+Add→Set, Remove+Set→Set
+- **Entity 生命周期折叠**：Create+Destroy→Release, Reserve+Release→cancel
+- **Created entity 内联折叠**：后续 Add/Set/Remove 直接折入 `RawCreatedEntity.Components`
+- **复杂度**：O(N)，N = 总命令数
+
+### FrameDelta.Merge(FrameDelta other)
+
+合并两个 delta，保留跨 delta 的时序正确的命令折叠：
+
+- 先处理 self 的命令，再处理 other 的（时序正确）
+- 内部使用与 Squash 相同的状态机，但能处理跨 delta 边界的折叠
+- **不等价于 Append+Squash**：Append 会丢失跨类型时序（先排所有 Add，再排所有 Set，再排所有 Remove），导致 Remove(delta1)+Add(delta2) 被错误归约
+
+### 已知限制
+
+- **Link+Unlink 不互消**：同一 child 的 Link+Unlink 不做取消，因为原始 link 状态需要 World 上下文才能确定
+- **Append 不保时序**：当跨 delta 的操作顺序重要时（如 Remove→Add），必须用 Merge 而非 Append+Squash
+
 ## 关联模块
 
 - `kb-core-ecs.md`：当前 world / archetype / chunk / query 的运行时边界

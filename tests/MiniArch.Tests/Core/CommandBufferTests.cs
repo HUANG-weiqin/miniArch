@@ -1030,4 +1030,432 @@ public sealed class CommandBufferTests
 
         return default;
     }
+
+    [Fact]
+    public void Append_two_empty_deltas_produces_empty()
+    {
+        var a = new FrameDelta();
+        var b = new FrameDelta();
+        a.Append(b);
+        Assert.True(a.IsEmpty);
+    }
+
+    [Fact]
+    public void Append_preserves_commands_from_both_deltas()
+    {
+        var world = new World();
+        var buffer1 = new CommandBuffer(world);
+        var e1 = buffer1.Create();
+        buffer1.Add(e1, new Position(1, 2));
+        var delta1 = buffer1.Compile();
+
+        var buffer2 = new CommandBuffer(world);
+        var e2 = buffer2.Create();
+        buffer2.Add(e2, new Velocity(3, 4));
+        var delta2 = buffer2.Compile();
+
+        delta1.Append(delta2);
+
+        Assert.Equal(2, delta1.CreatedEntities.Count);
+        world.Replay(delta1);
+
+        Assert.True(world.IsAlive(e1));
+        Assert.True(world.IsAlive(e2));
+        Assert.True(world.TryGet(e1, out Position p1));
+        Assert.Equal(new Position(1, 2), p1);
+        Assert.True(world.TryGet(e2, out Velocity v2));
+        Assert.Equal(new Velocity(3, 4), v2);
+    }
+
+    [Fact]
+    public void Append_then_replay_is_equivalent_to_sequential_replay()
+    {
+        var world = new World();
+        var entity = world.Create(new Position(10, 20));
+
+        var buffer1 = new CommandBuffer(world);
+        buffer1.Set(entity, new Position(30, 40));
+        buffer1.Add(entity, new Velocity(5, 6));
+        var delta1 = buffer1.Compile();
+
+        var buffer2 = new CommandBuffer(world);
+        buffer2.Set(entity, new Position(50, 60));
+        buffer2.Remove<Velocity>(entity);
+        var delta2 = buffer2.Compile();
+
+        var merged = new FrameDelta();
+        merged.Append(delta1);
+        merged.Append(delta2);
+
+        var mergedWorld = new World();
+        var mergedEntity = mergedWorld.Create(new Position(10, 20));
+        mergedWorld.Replay(merged);
+
+        Assert.True(mergedWorld.TryGet(mergedEntity, out Position p));
+        Assert.Equal(new Position(50, 60), p);
+        Assert.False(mergedWorld.TryGet<Velocity>(mergedEntity, out _));
+    }
+
+    [Fact]
+    public void Append_does_not_modify_the_appended_delta()
+    {
+        var world = new World();
+        var buffer1 = new CommandBuffer(world);
+        var e = buffer1.Create();
+        buffer1.Add(e, new Position(1, 2));
+        var delta = buffer1.Compile();
+
+        var buffer2 = new CommandBuffer(world);
+        var e2 = buffer2.Create();
+        buffer2.Add(e2, new Velocity(3, 4));
+        var otherDelta = buffer2.Compile();
+
+        var target = new FrameDelta();
+        target.Append(delta);
+        target.Append(otherDelta);
+
+        Assert.Single(delta.CreatedEntities);
+        Assert.Single(otherDelta.CreatedEntities);
+        Assert.Equal(2, target.CreatedEntities.Count);
+    }
+
+    [Fact]
+    public void Append_handles_hierarchy_commands()
+    {
+        var world = new World();
+        var parent = world.Create(new Position(0, 0));
+        var child = world.Create(new Velocity(1, 1));
+
+        var buffer1 = new CommandBuffer(world);
+        buffer1.Link(parent, child);
+        var delta1 = buffer1.Compile();
+
+        var buffer2 = new CommandBuffer(world);
+        buffer2.Unlink(child);
+        var delta2 = buffer2.Compile();
+
+        var merged = new FrameDelta();
+        merged.Append(delta1);
+        merged.Append(delta2);
+
+        Assert.Single(merged.LinkCommands);
+        Assert.Single(merged.UnlinkCommands);
+    }
+
+    [Fact]
+    public void Append_create_then_destroy_is_wasteful_but_correct()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+
+        var e = buffer.Create();
+        buffer.Add(e, new Position(1, 2));
+        var delta1 = buffer.Compile();
+
+        var buffer2 = new CommandBuffer(world);
+        buffer2.Destroy(e);
+        var delta2 = buffer2.Compile();
+
+        delta1.Append(delta2);
+
+        Assert.Single(delta1.CreatedEntities);
+        Assert.Single(delta1.DestroyedEntities);
+
+        world.Replay(delta1);
+        Assert.False(world.IsAlive(e));
+    }
+
+    [Fact]
+    public void Squash_empty_delta_remains_empty()
+    {
+        var delta = new FrameDelta();
+        delta.Squash();
+        Assert.True(delta.IsEmpty);
+    }
+
+    [Fact]
+    public void Squash_Set_then_Set_same_component_keeps_last()
+    {
+        var world = new World();
+        var entity = world.Create(new Position(10, 20));
+
+        var buffer1 = new CommandBuffer(world);
+        buffer1.Set(entity, new Position(30, 40));
+        var delta1 = buffer1.Compile();
+
+        var buffer2 = new CommandBuffer(world);
+        buffer2.Set(entity, new Position(50, 60));
+        var delta2 = buffer2.Compile();
+
+        var merged = new FrameDelta();
+        merged.Append(delta1);
+        merged.Append(delta2);
+        merged.Squash();
+
+        Assert.Empty(merged.AddCommands);
+        Assert.Single(merged.SetCommands);
+        Assert.Empty(merged.RemoveCommands);
+
+        world.Replay(merged);
+        Assert.True(world.TryGet(entity, out Position p));
+        Assert.Equal(new Position(50, 60), p);
+    }
+
+    [Fact]
+    public void Squash_Add_then_Remove_same_component_cancels()
+    {
+        var world = new World();
+        var entity = world.Create();
+
+        var buffer1 = new CommandBuffer(world);
+        buffer1.Add(entity, new Position(1, 2));
+        var delta1 = buffer1.Compile();
+
+        var buffer2 = new CommandBuffer(world);
+        buffer2.Remove<Position>(entity);
+        var delta2 = buffer2.Compile();
+
+        var merged = new FrameDelta();
+        merged.Append(delta1);
+        merged.Append(delta2);
+        merged.Squash();
+
+        Assert.Empty(merged.AddCommands);
+        Assert.Empty(merged.SetCommands);
+        Assert.Empty(merged.RemoveCommands);
+
+        world.Replay(merged);
+        Assert.False(world.TryGet<Position>(entity, out _));
+    }
+
+    [Fact]
+    public void Squash_Set_then_Remove_keeps_Remove()
+    {
+        var world = new World();
+        var entity = world.Create(new Position(10, 20));
+
+        var buffer1 = new CommandBuffer(world);
+        buffer1.Set(entity, new Position(30, 40));
+        var delta1 = buffer1.Compile();
+
+        var buffer2 = new CommandBuffer(world);
+        buffer2.Remove<Position>(entity);
+        var delta2 = buffer2.Compile();
+
+        var merged = new FrameDelta();
+        merged.Append(delta1);
+        merged.Append(delta2);
+        merged.Squash();
+
+        Assert.Empty(merged.AddCommands);
+        Assert.Empty(merged.SetCommands);
+        Assert.Single(merged.RemoveCommands);
+
+        world.Replay(merged);
+        Assert.False(world.TryGet<Position>(entity, out _));
+    }
+
+    [Fact]
+    public void Merge_Remove_then_Add_becomes_Set()
+    {
+        var world = new World();
+        var entity = world.Create(new Position(10, 20));
+
+        var buffer1 = new CommandBuffer(world);
+        buffer1.Remove<Position>(entity);
+        var delta1 = buffer1.Compile();
+
+        var buffer2 = new CommandBuffer(world);
+        buffer2.Add(entity, new Position(30, 40));
+        var delta2 = buffer2.Compile();
+
+        var merged = new FrameDelta();
+        merged.Append(delta1);
+        merged.Merge(delta2);
+
+        Assert.Empty(merged.AddCommands);
+        Assert.Single(merged.SetCommands);
+        Assert.Empty(merged.RemoveCommands);
+
+        world.Replay(merged);
+        Assert.True(world.TryGet(entity, out Position p));
+        Assert.Equal(new Position(30, 40), p);
+    }
+
+    [Fact]
+    public void Squash_Add_then_Set_same_component_keeps_Add_with_latest_data()
+    {
+        var world = new World();
+        var entity = world.Create();
+
+        var buffer1 = new CommandBuffer(world);
+        buffer1.Add(entity, new Position(1, 2));
+        var delta1 = buffer1.Compile();
+
+        var buffer2 = new CommandBuffer(world);
+        buffer2.Set(entity, new Position(3, 4));
+        var delta2 = buffer2.Compile();
+
+        var merged = new FrameDelta();
+        merged.Append(delta1);
+        merged.Append(delta2);
+        merged.Squash();
+
+        Assert.Single(merged.AddCommands);
+        Assert.Empty(merged.SetCommands);
+        Assert.Empty(merged.RemoveCommands);
+
+        world.Replay(merged);
+        Assert.True(world.TryGet(entity, out Position p));
+        Assert.Equal(new Position(3, 4), p);
+    }
+
+    [Fact]
+    public void Squash_Create_then_Destroy_becomes_Release()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+        var e = buffer.Create();
+        buffer.Add(e, new Position(1, 2));
+        var delta1 = buffer.Compile();
+
+        var buffer2 = new CommandBuffer(world);
+        buffer2.Destroy(e);
+        var delta2 = buffer2.Compile();
+
+        var merged = new FrameDelta();
+        merged.Append(delta1);
+        merged.Append(delta2);
+        merged.Squash();
+
+        Assert.Empty(merged.CreatedEntities);
+        Assert.Empty(merged.DestroyedEntities);
+        Assert.Empty(merged.AddCommands);
+        Assert.Single(merged.ReleasedEntities);
+
+        world.Replay(merged);
+        Assert.False(world.IsAlive(e));
+    }
+
+    [Fact]
+    public void Squash_Link_then_Unlink_same_child_keeps_Unlink()
+    {
+        var world = new World();
+        var parent = world.Create();
+        var child = world.Create();
+
+        var buffer1 = new CommandBuffer(world);
+        buffer1.Link(parent, child);
+        var delta1 = buffer1.Compile();
+
+        var buffer2 = new CommandBuffer(world);
+        buffer2.Unlink(child);
+        var delta2 = buffer2.Compile();
+
+        var merged = new FrameDelta();
+        merged.Append(delta1);
+        merged.Append(delta2);
+        merged.Squash();
+
+        Assert.Empty(merged.LinkCommands);
+        Assert.Single(merged.UnlinkCommands);
+    }
+
+    [Fact]
+    public void Squash_folds_component_commands_into_CreatedEntity()
+    {
+        var world = new World();
+        var buffer1 = new CommandBuffer(world);
+        var e = buffer1.Create();
+        buffer1.Add(e, new Position(1, 2));
+        buffer1.Add(e, new Velocity(3, 4));
+        var delta1 = buffer1.Compile();
+
+        var buffer2 = new CommandBuffer(world);
+        buffer2.Set(e, new Position(5, 6));
+        buffer2.Remove<Velocity>(e);
+        buffer2.Add(e, new Health(100));
+        var delta2 = buffer2.Compile();
+
+        var merged = new FrameDelta();
+        merged.Append(delta1);
+        merged.Append(delta2);
+        merged.Squash();
+
+        Assert.Single(merged.CreatedEntities);
+        Assert.Empty(merged.AddCommands);
+        Assert.Empty(merged.SetCommands);
+        Assert.Empty(merged.RemoveCommands);
+
+        world.Replay(merged);
+        Assert.True(world.IsAlive(e));
+        Assert.True(world.TryGet(e, out Position p));
+        Assert.Equal(new Position(5, 6), p);
+        Assert.False(world.TryGet<Velocity>(e, out _));
+        Assert.True(world.TryGet(e, out Health h));
+        Assert.Equal(new Health(100), h);
+    }
+
+    [Fact]
+    public void Squash_multiple_entities_independent()
+    {
+        var world = new World();
+        var e1 = world.Create(new Position(1, 1));
+        var e2 = world.Create(new Position(2, 2));
+
+        var buffer1 = new CommandBuffer(world);
+        buffer1.Set(e1, new Position(10, 10));
+        buffer1.Add(e2, new Velocity(5, 5));
+        var delta1 = buffer1.Compile();
+
+        var buffer2 = new CommandBuffer(world);
+        buffer2.Set(e1, new Position(20, 20));
+        buffer2.Remove<Velocity>(e2);
+        var delta2 = buffer2.Compile();
+
+        var merged = new FrameDelta();
+        merged.Append(delta1);
+        merged.Append(delta2);
+        merged.Squash();
+
+        Assert.Single(merged.SetCommands);
+        Assert.Empty(merged.AddCommands);
+        Assert.Empty(merged.RemoveCommands);
+
+        world.Replay(merged);
+        Assert.True(world.TryGet(e1, out Position p1));
+        Assert.Equal(new Position(20, 20), p1);
+        Assert.False(world.TryGet<Velocity>(e2, out _));
+    }
+
+    [Fact]
+    public void Merge_produces_correct_replay_result()
+    {
+        var world = new World();
+        var entity = world.Create(new Position(10, 20));
+
+        var buffer1 = new CommandBuffer(world);
+        buffer1.Set(entity, new Position(30, 40));
+        buffer1.Add(entity, new Velocity(5, 6));
+        var delta1 = buffer1.Compile();
+
+        var buffer2 = new CommandBuffer(world);
+        buffer2.Set(entity, new Position(50, 60));
+        buffer2.Remove<Velocity>(entity);
+        var delta2 = buffer2.Compile();
+
+        var merged = new FrameDelta();
+        merged.Append(delta1);
+        merged.Merge(delta2);
+
+        Assert.Empty(merged.AddCommands);
+        Assert.Single(merged.SetCommands);
+        Assert.Empty(merged.RemoveCommands);
+
+        var replayWorld = new World();
+        var replayEntity = replayWorld.Create(new Position(10, 20));
+        replayWorld.Replay(merged);
+        Assert.True(replayWorld.TryGet(replayEntity, out Position p));
+        Assert.Equal(new Position(50, 60), p);
+    }
 }

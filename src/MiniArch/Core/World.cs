@@ -55,7 +55,7 @@ public sealed class World
     {
         if (chunkCapacity <= 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(chunkCapacity));
+            throw new ArgumentOutOfRangeException(nameof(chunkCapacity), "Chunk capacity must be positive.");
         }
 
         if (entityCapacity < 0)
@@ -696,7 +696,7 @@ public sealed class World
             _hierarchy.CollectDestroySubtree(this, entity, _destroyVisitedScratch, _destroyOrderScratch);
             if (_destroyOrderScratch.Count == 0)
             {
-                throw new InvalidOperationException($"Entity {entity} is stale or unknown.");
+                throw new InvalidOperationException($"Cannot destroy entity {entity}: it is no longer alive. The entity may have already been destroyed.");
             }
 
             for (var index = 0; index < _destroyOrderScratch.Count; index++)
@@ -831,6 +831,11 @@ public sealed class World
     public bool IsAlive(Entity entity)
     {
         return TryGetLocation(entity, out _);
+    }
+
+    public World Clone()
+    {
+        return WorldClone.Clone(this);
     }
 
     private void MoveEntity(Entity entity, EntityLocation sourceInfo, Archetype destination)
@@ -1313,13 +1318,13 @@ public sealed class World
     {
         if (entity.Id < 0 || entity.Id >= _locations.Count)
         {
-            throw new InvalidOperationException($"Entity {entity} is stale or unknown.");
+            throw new InvalidOperationException($"Entity {entity} does not exist. The entity may have never been created, or its id is invalid.");
         }
 
         var info = _locations[entity.Id];
         if (info.Archetype is null || _versions[entity.Id] != entity.Version)
         {
-            throw new InvalidOperationException($"Entity {entity} is stale or unknown.");
+            throw new InvalidOperationException($"Entity {entity} is no longer alive. It may have been destroyed in a previous frame or the handle is stale.");
         }
 
         return info;
@@ -1535,12 +1540,12 @@ public sealed class World
     {
         if (entity.Id < 0 || entity.Id >= _locations.Count)
         {
-            throw new InvalidOperationException($"Entity {entity} is stale or unknown.");
+            throw new InvalidOperationException($"Entity {entity} is not a valid deferred entity. The entity handle may be invalid or already materialized.");
         }
 
         if (_locations[entity.Id].Archetype is not null || _versions[entity.Id] != entity.Version)
         {
-            throw new InvalidOperationException($"Entity {entity} is not a deferred reserved entity.");
+            throw new InvalidOperationException($"Entity {entity} is not a deferred reserved entity. It may have already been materialized or was never reserved via CommandBuffer.");
         }
 
         var nextVersion = entity.Version + 1;
@@ -1749,7 +1754,7 @@ public sealed class World
         var reserved = ReserveDeferredEntity();
         if (reserved != entity)
         {
-            throw new InvalidOperationException($"Replay target diverged while reserving {entity}; got {reserved} instead.");
+            throw new InvalidOperationException($"Replay failed: expected to reserve entity {entity} but got {reserved} instead. The source and target worlds may be out of sync.");
         }
     }
 

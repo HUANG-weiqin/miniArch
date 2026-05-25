@@ -24,7 +24,7 @@ public sealed class WorldCloneTests
         world.Add(third, new Velocity(9, 10));
         world.Set(third, new Position(11, 12));
 
-        var cloned = WorldClone.Clone(world);
+        var cloned = world.Clone();
 
         Assert.True(cloned.TryGetLocation(first, out var firstLocation));
         Assert.Equal(first.Version, firstLocation.Version);
@@ -72,7 +72,7 @@ public sealed class WorldCloneTests
             world.Add(living[i], new Health(i + 200));
         }
 
-        var cloned = WorldClone.Clone(world);
+        var cloned = world.Clone();
 
         foreach (var entity in positionOnly)
         {
@@ -116,7 +116,7 @@ public sealed class WorldCloneTests
 
         world.Destroy(original);
 
-        var cloned = WorldClone.Clone(world);
+        var cloned = world.Clone();
         var recreated = cloned.Create();
 
         Assert.Equal(original.Id, recreated.Id);
@@ -136,7 +136,7 @@ public sealed class WorldCloneTests
         world.Link(parent, firstChild);
         world.Link(parent, secondChild);
 
-        var cloned = WorldClone.Clone(world);
+        var cloned = world.Clone();
 
         Assert.True(cloned.TryGetParent(firstChild, out var resolvedParent));
         Assert.Equal(parent, resolvedParent);
@@ -156,7 +156,7 @@ public sealed class WorldCloneTests
         world.Link(root, child);
         world.Link(child, grandChild);
 
-        var cloned = WorldClone.Clone(world);
+        var cloned = world.Clone();
         cloned.Destroy(root);
 
         Assert.False(cloned.IsAlive(root));
@@ -171,7 +171,7 @@ public sealed class WorldCloneTests
         var entity = world.Create();
         world.Add(entity, new Position(1, 2));
 
-        var cloned = WorldClone.Clone(world);
+        var cloned = world.Clone();
 
         world.Set(entity, new Position(99, 99));
 
@@ -183,7 +183,7 @@ public sealed class WorldCloneTests
     public void Clone_empty_world()
     {
         var world = new World();
-        var cloned = WorldClone.Clone(world);
+        var cloned = world.Clone();
 
         Assert.NotNull(cloned);
     }

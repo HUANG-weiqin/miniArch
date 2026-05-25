@@ -1,6 +1,6 @@
 namespace MiniArch.Core;
 
-public static class WorldClone
+internal static class WorldClone
 {
     public static World Clone(World source)
     {

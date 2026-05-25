@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 namespace MiniArch.Core;
 
 public sealed class FrameDelta
@@ -25,6 +27,25 @@ public sealed class FrameDelta
         ReleasedEntities.Clear();
     }
 
+    public void Append(FrameDelta other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+        if (ReferenceEquals(this, other))
+        {
+            throw new ArgumentException("Cannot append a FrameDelta to itself.", nameof(other));
+        }
+
+        ReservedEntities.AddRange(other.ReservedEntities);
+        CreatedEntities.AddRange(other.CreatedEntities);
+        LinkCommands.AddRange(other.LinkCommands);
+        UnlinkCommands.AddRange(other.UnlinkCommands);
+        AddCommands.AddRange(other.AddCommands);
+        SetCommands.AddRange(other.SetCommands);
+        RemoveCommands.AddRange(other.RemoveCommands);
+        DestroyedEntities.AddRange(other.DestroyedEntities);
+        ReleasedEntities.AddRange(other.ReleasedEntities);
+    }
+
     public bool IsEmpty =>
         ReservedEntities.Count == 0 &&
         CreatedEntities.Count == 0 &&
@@ -35,6 +56,279 @@ public sealed class FrameDelta
         RemoveCommands.Count == 0 &&
         DestroyedEntities.Count == 0 &&
         ReleasedEntities.Count == 0;
+
+    public void Squash()
+    {
+        if (IsEmpty)
+            return;
+
+        var entityStates = new Dictionary<Entity, SquashEntityState>();
+        var appearanceOrder = new List<Entity>();
+        ProcessCommandsInto(entityStates, appearanceOrder, this);
+        RebuildFromState(entityStates, appearanceOrder);
+    }
+
+    public void Merge(FrameDelta other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+        if (ReferenceEquals(this, other))
+            throw new ArgumentException("Cannot merge a FrameDelta with itself.", nameof(other));
+
+        var entityStates = new Dictionary<Entity, SquashEntityState>();
+        var appearanceOrder = new List<Entity>();
+
+        ProcessCommandsInto(entityStates, appearanceOrder, this);
+        ProcessCommandsInto(entityStates, appearanceOrder, other);
+
+        RebuildFromState(entityStates, appearanceOrder);
+    }
+
+    private void ProcessCommandsInto(
+        Dictionary<Entity, SquashEntityState> entityStates,
+        List<Entity> appearanceOrder,
+        FrameDelta source)
+    {
+        void Ensure(Entity e)
+        {
+            ref var state = ref CollectionsMarshal.GetValueRefOrAddDefault(entityStates, e, out bool exists);
+            if (!exists)
+            {
+                state = new SquashEntityState();
+                appearanceOrder.Add(e);
+            }
+        }
+
+        foreach (var e in source.ReservedEntities)
+        {
+            Ensure(e);
+            entityStates[e].IsReserved = true;
+        }
+
+        foreach (var e in source.ReleasedEntities)
+        {
+            Ensure(e);
+            entityStates[e].IsReleased = true;
+        }
+
+        foreach (var ce in source.CreatedEntities)
+        {
+            Ensure(ce.Entity);
+            ref var state = ref CollectionsMarshal.GetValueRefOrNullRef(entityStates, ce.Entity);
+            state.IsCreated = true;
+            state.CreatedEntity = ce;
+            if (ce.Components is { Length: > 0 })
+            {
+                state.CreatedComponents ??= new Dictionary<int, RawComponentValue>(ce.Components.Length);
+                foreach (var c in ce.Components)
+                    state.CreatedComponents[c.ComponentTypeId] = c;
+            }
+        }
+
+        foreach (var lc in source.LinkCommands)
+        {
+            Ensure(lc.Child);
+            ref var state = ref CollectionsMarshal.GetValueRefOrNullRef(entityStates, lc.Child);
+            state.HasHierarchyChange = true;
+            state.NetIsLinked = true;
+            state.NetLinkParent = lc.Parent;
+        }
+
+        foreach (var uc in source.UnlinkCommands)
+        {
+            Ensure(uc.Child);
+            ref var state = ref CollectionsMarshal.GetValueRefOrNullRef(entityStates, uc.Child);
+            state.HasHierarchyChange = true;
+            state.NetIsLinked = false;
+        }
+
+        foreach (var cmd in source.AddCommands)
+        {
+            Ensure(cmd.Entity);
+            FoldComponent(ref CollectionsMarshal.GetValueRefOrNullRef(entityStates, cmd.Entity), ComponentNetKind.Add, cmd, default);
+        }
+
+        foreach (var cmd in source.SetCommands)
+        {
+            Ensure(cmd.Entity);
+            FoldComponent(ref CollectionsMarshal.GetValueRefOrNullRef(entityStates, cmd.Entity), ComponentNetKind.Set, cmd, default);
+        }
+
+        foreach (var cmd in source.RemoveCommands)
+        {
+            Ensure(cmd.Entity);
+            FoldComponent(ref CollectionsMarshal.GetValueRefOrNullRef(entityStates, cmd.Entity), ComponentNetKind.Remove, default, cmd);
+        }
+
+        foreach (var e in source.DestroyedEntities)
+        {
+            Ensure(e);
+            entityStates[e].IsDestroyed = true;
+        }
+    }
+
+    private void RebuildFromState(Dictionary<Entity, SquashEntityState> entityStates, List<Entity> appearanceOrder)
+    {
+        Clear();
+
+        foreach (var entity in appearanceOrder)
+        {
+            ref readonly var st = ref CollectionsMarshal.GetValueRefOrNullRef(entityStates, entity);
+
+            if (st.IsCreated && st.IsDestroyed)
+            {
+                ReservedEntities.Add(entity);
+                ReleasedEntities.Add(entity);
+                continue;
+            }
+
+            if (st.IsReserved && st.IsReleased && !st.IsCreated && !st.IsDestroyed)
+                continue;
+
+            if (st.IsCreated)
+            {
+                if (st.ComponentActions is not null)
+                {
+                    foreach (var (typeId, action) in st.ComponentActions)
+                    {
+                        ref var comps = ref st.CreatedComponents;
+                        switch (action.Kind)
+                        {
+                            case ComponentNetKind.Add or ComponentNetKind.Set:
+                                comps ??= new Dictionary<int, RawComponentValue>();
+                                comps[typeId] = new RawComponentValue(
+                                    action.Command.ComponentTypeId,
+                                    action.Command.RuntimeType,
+                                    action.Command.ComponentType,
+                                    ComponentWriterCache.GetSize(action.Command.RuntimeType),
+                                    action.Command.Data,
+                                    action.Command.DataOffset,
+                                    action.Command.DataSize);
+                                break;
+                            case ComponentNetKind.Remove:
+                                comps?.Remove(typeId);
+                                break;
+                        }
+                    }
+                }
+
+                var compArray = st.CreatedComponents is { Count: > 0 }
+                    ? System.Linq.Enumerable.ToArray(st.CreatedComponents.Values)
+                    : [];
+
+                CreatedEntities.Add(new RawCreatedEntity(entity, null, compArray));
+            }
+            else
+            {
+                if (st.IsReserved)
+                    ReservedEntities.Add(entity);
+
+                if (st.ComponentActions is not null)
+                {
+                    foreach (var (typeId, action) in st.ComponentActions)
+                    {
+                        switch (action.Kind)
+                        {
+                            case ComponentNetKind.Add:
+                                AddCommands.Add(action.Command);
+                                break;
+                            case ComponentNetKind.Set:
+                                SetCommands.Add(action.Command);
+                                break;
+                            case ComponentNetKind.Remove:
+                                RemoveCommands.Add(action.RemoveCmd);
+                                break;
+                        }
+                    }
+                }
+            }
+
+            if (st.HasHierarchyChange)
+            {
+                if (st.NetIsLinked)
+                    LinkCommands.Add(new FrameLinkCommand(st.NetLinkParent, entity));
+                else
+                    UnlinkCommands.Add(new FrameUnlinkCommand(entity));
+            }
+
+            if (st.IsDestroyed)
+                DestroyedEntities.Add(entity);
+            if (st.IsReleased)
+                ReleasedEntities.Add(entity);
+        }
+    }
+
+    private static void FoldComponent(ref SquashEntityState state, ComponentNetKind newKind, RawComponentCommand cmd, RawRemoveCommand removeCmd)
+    {
+        int typeId = newKind == ComponentNetKind.Remove ? removeCmd.ComponentTypeId : cmd.ComponentTypeId;
+        state.ComponentActions ??= new Dictionary<int, ComponentNetAction>();
+
+        ref var action = ref CollectionsMarshal.GetValueRefOrAddDefault(state.ComponentActions, typeId, out bool exists);
+        if (!exists)
+        {
+            action.Kind = newKind;
+            if (newKind == ComponentNetKind.Remove)
+                action.RemoveCmd = removeCmd;
+            else
+                action.Command = cmd;
+            return;
+        }
+
+        switch (action.Kind, newKind)
+        {
+            case (ComponentNetKind.Add, ComponentNetKind.Set):
+                action.Command = cmd;
+                action.Kind = ComponentNetKind.Add;
+                break;
+            case (ComponentNetKind.Add, ComponentNetKind.Remove):
+                state.ComponentActions!.Remove(typeId);
+                break;
+            case (ComponentNetKind.Set, ComponentNetKind.Set):
+                action.Command = cmd;
+                break;
+            case (ComponentNetKind.Set, ComponentNetKind.Remove):
+                action.Kind = ComponentNetKind.Remove;
+                action.RemoveCmd = removeCmd;
+                break;
+            case (ComponentNetKind.Remove, ComponentNetKind.Add):
+                action.Kind = ComponentNetKind.Set;
+                action.Command = cmd;
+                break;
+            case (ComponentNetKind.Remove, ComponentNetKind.Set):
+                action.Kind = ComponentNetKind.Set;
+                action.Command = cmd;
+                break;
+            default:
+                action.Kind = newKind;
+                if (newKind == ComponentNetKind.Remove)
+                    action.RemoveCmd = removeCmd;
+                else
+                    action.Command = cmd;
+                break;
+        }
+    }
+
+    private enum ComponentNetKind : byte { None = 0, Add, Set, Remove }
+
+    private struct ComponentNetAction
+    {
+        public ComponentNetKind Kind;
+        public RawComponentCommand Command;
+        public RawRemoveCommand RemoveCmd;
+    }
+
+    private class SquashEntityState
+    {
+        public bool IsReserved;
+        public bool IsReleased;
+        public bool IsCreated;
+        public bool IsDestroyed;
+        public bool HasHierarchyChange;
+        public bool NetIsLinked;
+        public Entity NetLinkParent;
+        public RawCreatedEntity CreatedEntity;
+        public Dictionary<int, RawComponentValue>? CreatedComponents;
+        public Dictionary<int, ComponentNetAction>? ComponentActions;
+    }
 }
 
 public readonly record struct RawComponentValue(
