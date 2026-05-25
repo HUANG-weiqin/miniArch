@@ -1326,6 +1326,205 @@ public sealed class CommandBufferTests
     }
 
     [Fact]
+    public void DeltaCount_returns_sum_of_all_lists()
+    {
+        var world = new World();
+        var cb = new CommandBuffer(world);
+        var e = cb.Create();
+        cb.Add(e, new Position(1, 2));
+        cb.Add(e, new Velocity(3, 4));
+        var delta = cb.Compile();
+
+        Assert.Equal(2, delta.DeltaCount);
+        Assert.False(delta.IsEmpty);
+    }
+
+    [Fact]
+    public void HasEntity_returns_true_for_created_entity()
+    {
+        var world = new World();
+        var cb = new CommandBuffer(world);
+        var e = cb.Create();
+        cb.Add(e, new Position(1, 2));
+        var delta = cb.Compile();
+
+        Assert.True(delta.HasEntity(e));
+    }
+
+    [Fact]
+    public void HasEntity_returns_true_for_set_target()
+    {
+        var world = new World();
+        var e = world.Create(new Position(1, 2));
+        var cb = new CommandBuffer(world);
+        cb.Set(e, new Position(3, 4));
+        var delta = cb.Compile();
+
+        Assert.True(delta.HasEntity(e));
+    }
+
+    [Fact]
+    public void HasEntity_returns_true_for_destroyed_entity()
+    {
+        var world = new World();
+        var e = world.Create();
+        var cb = new CommandBuffer(world);
+        cb.Destroy(e);
+        var delta = cb.Compile();
+
+        Assert.True(delta.HasEntity(e));
+    }
+
+    [Fact]
+    public void HasEntity_returns_false_for_unknown_entity()
+    {
+        var world = new World();
+        var cb = new CommandBuffer(world);
+        var e = cb.Create();
+        var delta = cb.Compile();
+
+        Assert.False(delta.HasEntity(new Entity(9999, 1)));
+    }
+
+    [Fact]
+    public void MergeOfMerge_created_then_destroy_then_recreate()
+    {
+        var world = new World();
+        var cb1 = new CommandBuffer(world);
+        var e = cb1.Create();
+        cb1.Add(e, new Position(1, 2));
+        var delta1 = cb1.Compile();
+
+        var cb2 = new CommandBuffer(world);
+        cb2.Destroy(e);
+        var delta2 = cb2.Compile();
+
+        var firstMerge = FrameDelta.Merge(delta1, delta2);
+
+        Assert.Empty(firstMerge.CreatedEntities);
+        Assert.Empty(firstMerge.DestroyedEntities);
+        Assert.Single(firstMerge.ReservedEntities);
+        Assert.Single(firstMerge.ReleasedEntities);
+
+        var cb3 = new CommandBuffer(world);
+        var e2 = cb3.Create();
+        cb3.Add(e2, new Velocity(10, 20));
+        var delta3 = cb3.Compile();
+
+        var secondMerge = FrameDelta.Merge(firstMerge, delta3);
+
+        Assert.Empty(secondMerge.ReleasedEntities);
+        Assert.Empty(secondMerge.ReservedEntities);
+        Assert.Single(secondMerge.CreatedEntities);
+        Assert.True(secondMerge.HasEntity(e2));
+
+        world.Replay(secondMerge);
+        Assert.False(world.IsAlive(e));
+        Assert.True(world.IsAlive(e2));
+        Assert.True(world.TryGet(e2, out Velocity v));
+        Assert.Equal(new Velocity(10, 20), v);
+    }
+
+    [Fact]
+    public void MergeOfMerge_set_folded_across_three_deltas()
+    {
+        var world = new World();
+        var e = world.Create(new Position(1, 1));
+
+        var cb1 = new CommandBuffer(world);
+        cb1.Set(e, new Position(10, 10));
+        var delta1 = cb1.Compile();
+
+        var cb2 = new CommandBuffer(world);
+        cb2.Set(e, new Position(20, 20));
+        var delta2 = cb2.Compile();
+
+        var firstMerge = FrameDelta.Merge(delta1, delta2);
+
+        var cb3 = new CommandBuffer(world);
+        cb3.Set(e, new Position(30, 30));
+        var delta3 = cb3.Compile();
+
+        var secondMerge = FrameDelta.Merge(firstMerge, delta3);
+
+        Assert.Single(secondMerge.SetCommands);
+        Assert.Equal(1, secondMerge.DeltaCount);
+
+        world.Replay(secondMerge);
+        Assert.True(world.TryGet(e, out Position p));
+        Assert.Equal(new Position(30, 30), p);
+    }
+
+    [Fact]
+    public void MergeOfMerge_add_then_remove_then_add_becomes_set()
+    {
+        var world = new World();
+        var e = world.Create();
+
+        var cb1 = new CommandBuffer(world);
+        cb1.Add(e, new Position(1, 2));
+        var delta1 = cb1.Compile();
+
+        var cb2 = new CommandBuffer(world);
+        cb2.Remove<Position>(e);
+        var delta2 = cb2.Compile();
+
+        var firstMerge = FrameDelta.Merge(delta1, delta2);
+        Assert.Empty(firstMerge.AddCommands);
+        Assert.Empty(firstMerge.SetCommands);
+        Assert.Empty(firstMerge.RemoveCommands);
+        Assert.True(firstMerge.IsEmpty);
+
+        var cb3 = new CommandBuffer(world);
+        cb3.Add(e, new Position(5, 6));
+        var delta3 = cb3.Compile();
+
+        var secondMerge = FrameDelta.Merge(firstMerge, delta3);
+        Assert.Single(secondMerge.AddCommands);
+        Assert.Empty(secondMerge.SetCommands);
+
+        world.Replay(secondMerge);
+        Assert.True(world.TryGet(e, out Position p));
+        Assert.Equal(new Position(5, 6), p);
+    }
+
+    [Fact]
+    public void MergeOfMerge_created_entity_gets_component_removed_by_third_delta()
+    {
+        var world = new World();
+        var cb1 = new CommandBuffer(world);
+        var e = cb1.Create();
+        cb1.Add(e, new Position(1, 2));
+        cb1.Add(e, new Velocity(3, 4));
+        cb1.Add(e, new Health(100));
+        var delta1 = cb1.Compile();
+
+        var cb2 = new CommandBuffer(world);
+        cb2.Set(e, new Position(5, 6));
+        var delta2 = cb2.Compile();
+
+        var firstMerge = FrameDelta.Merge(delta1, delta2);
+
+        var cb3 = new CommandBuffer(world);
+        cb3.Remove<Velocity>(e);
+        var delta3 = cb3.Compile();
+
+        var secondMerge = FrameDelta.Merge(firstMerge, delta3);
+
+        Assert.Single(secondMerge.CreatedEntities);
+        var created = secondMerge.CreatedEntities[0];
+        Assert.Equal(e, created.Entity);
+
+        world.Replay(secondMerge);
+        Assert.True(world.IsAlive(e));
+        Assert.True(world.TryGet(e, out Position p));
+        Assert.Equal(new Position(5, 6), p);
+        Assert.False(world.TryGet<Velocity>(e, out _));
+        Assert.True(world.TryGet(e, out Health h));
+        Assert.Equal(new Health(100), h);
+    }
+
+    [Fact]
     public void StaticMerge_produces_correct_replay_result()
     {
         var world = new World();

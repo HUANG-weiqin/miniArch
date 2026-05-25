@@ -27,16 +27,41 @@ public sealed class FrameDelta
         ReleasedEntities.Clear();
     }
 
-    public bool IsEmpty =>
-        ReservedEntities.Count == 0 &&
-        CreatedEntities.Count == 0 &&
-        LinkCommands.Count == 0 &&
-        UnlinkCommands.Count == 0 &&
-        AddCommands.Count == 0 &&
-        SetCommands.Count == 0 &&
-        RemoveCommands.Count == 0 &&
-        DestroyedEntities.Count == 0 &&
-        ReleasedEntities.Count == 0;
+    public int DeltaCount =>
+        ReservedEntities.Count +
+        CreatedEntities.Count +
+        LinkCommands.Count +
+        UnlinkCommands.Count +
+        AddCommands.Count +
+        SetCommands.Count +
+        RemoveCommands.Count +
+        DestroyedEntities.Count +
+        ReleasedEntities.Count;
+
+    public bool IsEmpty => DeltaCount == 0;
+
+    public bool HasEntity(Entity entity)
+    {
+        for (var i = 0; i < ReservedEntities.Count; i++)
+            if (ReservedEntities[i].Equals(entity)) return true;
+        for (var i = 0; i < CreatedEntities.Count; i++)
+            if (CreatedEntities[i].Entity.Equals(entity)) return true;
+        for (var i = 0; i < AddCommands.Count; i++)
+            if (AddCommands[i].Entity.Equals(entity)) return true;
+        for (var i = 0; i < SetCommands.Count; i++)
+            if (SetCommands[i].Entity.Equals(entity)) return true;
+        for (var i = 0; i < RemoveCommands.Count; i++)
+            if (RemoveCommands[i].Entity.Equals(entity)) return true;
+        for (var i = 0; i < DestroyedEntities.Count; i++)
+            if (DestroyedEntities[i].Equals(entity)) return true;
+        for (var i = 0; i < ReleasedEntities.Count; i++)
+            if (ReleasedEntities[i].Equals(entity)) return true;
+        for (var i = 0; i < LinkCommands.Count; i++)
+            if (LinkCommands[i].Child.Equals(entity)) return true;
+        for (var i = 0; i < UnlinkCommands.Count; i++)
+            if (UnlinkCommands[i].Child.Equals(entity)) return true;
+        return false;
+    }
 
     public static FrameDelta Merge(FrameDelta a, FrameDelta b)
     {
