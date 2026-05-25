@@ -13,9 +13,9 @@ public sealed record CommandBufferReplayScenarioDefinition(
     CommandBufferReplayScenarioKind Kind,
     int EntityCount);
 
-public sealed class CommandBufferReplayPlaybackState : IDisposable
+public sealed class CommandBufferReplayCompileState : IDisposable
 {
-    internal CommandBufferReplayPlaybackState(CommandBufferReplayScenarioDefinition scenario, World world, CommandBuffer buffer)
+    internal CommandBufferReplayCompileState(CommandBufferReplayScenarioDefinition scenario, World world, CommandBuffer buffer)
     {
         Scenario = scenario;
         World = world;
@@ -36,13 +36,11 @@ public sealed class CommandBufferReplayPlaybackState : IDisposable
 public sealed class CommandBufferReplayExecution : IDisposable
 {
     private readonly byte[] _baselineSnapshot;
-    private ReverseFrameCommands _reverse;
-    private bool _hasReverse;
 
     internal CommandBufferReplayExecution(
         CommandBufferReplayScenarioDefinition scenario,
         World world,
-        FrameCommands frame,
+        FrameDelta frame,
         byte[] baselineSnapshot,
         CommandBufferWorldSummary baselineSummary,
         CommandBufferWorldSummary replayedSummary)
@@ -57,7 +55,7 @@ public sealed class CommandBufferReplayExecution : IDisposable
 
     public CommandBufferReplayScenarioDefinition Scenario { get; }
 
-    public FrameCommands Frame { get; }
+    public FrameDelta Frame { get; }
 
     public CommandBufferWorldSummary BaselineSummary { get; }
 
@@ -65,41 +63,8 @@ public sealed class CommandBufferReplayExecution : IDisposable
 
     public World CurrentWorld { get; private set; }
 
-    public ReverseFrameCommands Reverse => _hasReverse
-        ? _reverse
-        : throw new InvalidOperationException("ReplayWithReverse must be called before accessing Reverse.");
-
-    public void StoreReverse(ReverseFrameCommands reverse)
-    {
-        _reverse = reverse;
-        _hasReverse = true;
-    }
-
-    public void ClearReverse()
-    {
-        _hasReverse = false;
-    }
-
-    public void ReplayWithReverse()
-    {
-        var frame = Frame;
-        StoreReverse(CurrentWorld.ReplayWithReverse(in frame));
-    }
-
-    public void Rewind()
-    {
-        if (!_hasReverse)
-        {
-            throw new InvalidOperationException("ReplayWithReverse must be called before Rewind.");
-        }
-
-        CurrentWorld.Rewind(in _reverse);
-        ClearReverse();
-    }
-
     public void ResetToBaseline()
     {
-        _hasReverse = false;
         CurrentWorld = LoadSnapshot(_baselineSnapshot);
     }
 
@@ -119,56 +84,6 @@ public sealed class CommandBufferReplayExecution : IDisposable
     }
 }
 
-public sealed class CommandBufferDeltaExecution : IDisposable
-{
-    private readonly byte[] _baselineSnapshot;
-
-    internal CommandBufferDeltaExecution(
-        CommandBufferReplayScenarioDefinition scenario,
-        World world,
-        WorldDelta delta,
-        byte[] baselineSnapshot)
-    {
-        Scenario = scenario;
-        CurrentWorld = world;
-        Delta = delta;
-        _baselineSnapshot = baselineSnapshot;
-    }
-
-    public CommandBufferReplayScenarioDefinition Scenario { get; }
-
-    public World CurrentWorld { get; private set; }
-
-    public WorldDelta Delta { get; }
-
-    public void ApplyForward()
-    {
-        var delta = Delta;
-        CurrentWorld.ApplyDeltaForward(in delta);
-    }
-
-    public void ApplyBackward()
-    {
-        var delta = Delta;
-        CurrentWorld.ApplyDeltaBackward(in delta);
-    }
-
-    public void ResetToBaseline()
-    {
-        CurrentWorld = LoadBaselineSnapshot(_baselineSnapshot);
-    }
-
-    public void Dispose()
-    {
-    }
-
-    private static World LoadBaselineSnapshot(byte[] snapshot)
-    {
-        using var stream = new MemoryStream(snapshot, writable: false);
-        return WorldSnapshot.Load(stream);
-    }
-}
-
 public static class CommandBufferReplayScenarios
 {
     public static IEnumerable<CommandBufferReplayScenarioDefinition> CreateBenchmarkedScenarios(int entityCount)
@@ -177,35 +92,25 @@ public static class CommandBufferReplayScenarios
         yield return new CommandBufferReplayScenarioDefinition("mixed-heavy", CommandBufferReplayScenarioKind.MixedHeavy, entityCount);
     }
 
-    public static CommandBufferReplayPlaybackState PreparePlayback(CommandBufferReplayScenarioDefinition scenario)
+    public static CommandBufferReplayCompileState PrepareCompile(CommandBufferReplayScenarioDefinition scenario)
     {
         var world = CreateBaselineWorld(scenario, out var existingEntities);
         var buffer = new CommandBuffer(world);
         RecordScenario(buffer, existingEntities, scenario);
-        return new CommandBufferReplayPlaybackState(scenario, world, buffer);
+        return new CommandBufferReplayCompileState(scenario, world, buffer);
     }
 
     public static CommandBufferReplayExecution PrepareReplay(CommandBufferReplayScenarioDefinition scenario)
     {
-        using var playback = PreparePlayback(scenario);
+        using var playback = PrepareCompile(scenario);
 
-        var frame = playback.Buffer.Playback();
+        var frame = playback.Buffer.Compile();
         var baselineSnapshot = SaveSnapshot(playback.World);
         var baselineSummary = SummarizeWorld(scenario.Name, playback.World);
         var replayedSummary = SummarizeReplay(scenario.Name, baselineSnapshot, frame);
         var world = LoadSnapshot(baselineSnapshot);
 
         return new CommandBufferReplayExecution(scenario, world, frame, baselineSnapshot, baselineSummary, replayedSummary);
-    }
-
-    public static CommandBufferDeltaExecution PrepareDelta(CommandBufferReplayScenarioDefinition scenario)
-    {
-        using var playback = PreparePlayback(scenario);
-
-        var baselineSnapshot = SaveSnapshot(playback.World);
-        var delta = playback.Buffer.PlaybackDelta();
-        var world = LoadSnapshot(baselineSnapshot);
-        return new CommandBufferDeltaExecution(scenario, world, delta, baselineSnapshot);
     }
 
     public static CommandBufferWorldSummary SummarizeWorld(string scenarioName, World world)
@@ -349,11 +254,11 @@ public static class CommandBufferReplayScenarios
         }
     }
 
-    private static CommandBufferWorldSummary SummarizeReplay(string scenarioName, byte[] baselineSnapshot, FrameCommands frame)
+    private static CommandBufferWorldSummary SummarizeReplay(string scenarioName, byte[] baselineSnapshot, FrameDelta frame)
     {
         using var stream = new MemoryStream(baselineSnapshot, writable: false);
         var world = WorldSnapshot.Load(stream);
-        world.Replay(in frame);
+        world.Replay(frame);
         return SummarizeWorld(scenarioName, world);
     }
 

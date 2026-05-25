@@ -16,13 +16,13 @@ public sealed class CommandBuffer
     private readonly ConcurrentDictionary<int, CommandBufferShard> _shards = new();
     private readonly List<CommandBufferShard> _orderedShardsScratch = new(1);
     private readonly Dictionary<Entity, CreatedEntityState> _createdStatesScratch = new(4);
-    private readonly Dictionary<EntityComponentKey, CompiledRawComponentCommand> _compiledAddsScratch = new(4);
-    private readonly Dictionary<EntityComponentKey, CompiledRawComponentCommand> _compiledSetsScratch = new(4);
-    private readonly Dictionary<EntityComponentKey, CompiledRemoveCommand> _compiledRemovesScratch = new(4);
+    private readonly Dictionary<EntityComponentKey, RawComponentCommand> _compiledAddsScratch = new(4);
+    private readonly Dictionary<EntityComponentKey, RawComponentCommand> _compiledSetsScratch = new(4);
+    private readonly Dictionary<EntityComponentKey, RawRemoveCommand> _compiledRemovesScratch = new(4);
     private readonly Dictionary<int, (Type RuntimeType, ComponentType ComponentType, int Size)> _componentTypeInfoCacheScratch = new(4);
     private readonly HashSet<Entity> _destroyedEntitiesScratch = new(4);
     private readonly Dictionary<Entity, HierarchyIntent> _hierarchyByChildScratch = new(4);
-    private readonly CompiledCommandBatch _compiledBatch = new();
+    private readonly FrameDelta _compiledBatch = new();
     private int _nextShardOrder;
 
     /// <summary>
@@ -104,29 +104,6 @@ public sealed class CommandBuffer
     }
 
     /// <summary>
-    /// Compiles the buffered commands.
-    /// </summary>
-    public FrameCommands Playback()
-    {
-        var compiled = Compile();
-        var frame = compiled.ToFrameCommands();
-        Clear();
-        return frame;
-    }
-
-    /// <summary>
-    /// Compiles the buffered commands into a bidirectional world delta.
-    /// </summary>
-    public WorldDelta PlaybackDelta()
-    {
-        var compiled = Compile();
-        var frame = compiled.ToFrameCommands();
-        var delta = _world.CaptureDelta(in frame);
-        Clear();
-        return delta;
-    }
-
-    /// <summary>
     /// Compiles and replays the buffered commands.
     /// </summary>
     /// <returns><c>true</c> if at least one command was replayed; otherwise, <c>false</c>.</returns>
@@ -138,36 +115,14 @@ public sealed class CommandBuffer
             return false;
         }
 
-        try
-        {
-            _world.Replay(compiled);
-            return true;
-        }
-        finally
-        {
-            Clear();
-        }
+        _world.Replay(compiled);
+        return true;
     }
 
     /// <summary>
-    /// Replays the buffer and captures reverse commands.
+    /// Compiles the buffered commands into a FrameDelta and clears the buffer.
     /// </summary>
-    public ReverseFrameCommands PlayWithReverse()
-    {
-        var compiled = Compile();
-        var frame = compiled.ToFrameCommands();
-
-        try
-        {
-            return _world.ReplayWithReverse(in frame);
-        }
-        finally
-        {
-            Clear();
-        }
-    }
-
-    private CompiledCommandBatch Compile()
+    public FrameDelta Compile()
     {
         var shards = GetOrderedShards();
         var counts = CountCommands(CollectionsMarshal.AsSpan(shards));
@@ -242,7 +197,7 @@ public sealed class CommandBuffer
                 }
 
                 compiledAdds[new EntityComponentKey(command.Entity, command.ComponentTypeId)] =
-                    new CompiledRawComponentCommand(command.Entity, command.ComponentTypeId, runtimeType, componentType, command.DataOffset, command.DataSize, ComponentWriterCache.GetColumnWriter(runtimeType), shardData);
+                    new RawComponentCommand(command.Entity, command.ComponentTypeId, runtimeType, componentType, command.DataOffset, command.DataSize, ComponentWriterCache.GetColumnWriter(runtimeType), shardData);
             }
         }
 
@@ -261,7 +216,7 @@ public sealed class CommandBuffer
                 }
 
                 compiledSets[new EntityComponentKey(command.Entity, command.ComponentTypeId)] =
-                    new CompiledRawComponentCommand(command.Entity, command.ComponentTypeId, runtimeType, componentType, command.DataOffset, command.DataSize, ComponentWriterCache.GetColumnWriter(runtimeType), shardData);
+                    new RawComponentCommand(command.Entity, command.ComponentTypeId, runtimeType, componentType, command.DataOffset, command.DataSize, ComponentWriterCache.GetColumnWriter(runtimeType), shardData);
             }
         }
 
@@ -279,7 +234,7 @@ public sealed class CommandBuffer
 
                 var (runtimeType, componentType, _) = ResolveComponentTypeInfo(command.ComponentTypeId, componentTypeInfoCache);
                 compiledRemoves[new EntityComponentKey(command.Entity, command.ComponentTypeId)] =
-                    new CompiledRemoveCommand(command.Entity, command.ComponentTypeId, runtimeType, componentType);
+                    new RawRemoveCommand(command.Entity, command.ComponentTypeId, runtimeType, componentType);
             }
         }
 
@@ -377,6 +332,7 @@ public sealed class CommandBuffer
         componentTypeInfoCache.Clear();
         destroyedEntities.Clear();
         hierarchyByChild.Clear();
+        Clear();
         return compiledBatch;
     }
 
@@ -465,7 +421,7 @@ public sealed class CommandBuffer
 
     private sealed class CreatedEntityState
     {
-        private Dictionary<int, CompiledRawComponentValue>? _components;
+        private Dictionary<int, RawComponentValue>? _components;
 
         public CreatedEntityState(Entity entity)
         {
@@ -478,12 +434,12 @@ public sealed class CommandBuffer
 
         public void Add(int componentTypeId, Type runtimeType, ComponentType componentType, int size, byte[] sourceData, int sourceOffset, int sourceSize)
         {
-            (_components ??= [])[componentTypeId] = new CompiledRawComponentValue(componentTypeId, runtimeType, componentType, size, sourceData, sourceOffset, sourceSize);
+            (_components ??= [])[componentTypeId] = new RawComponentValue(componentTypeId, runtimeType, componentType, size, sourceData, sourceOffset, sourceSize);
         }
 
         public void Set(int componentTypeId, Type runtimeType, ComponentType componentType, int size, byte[] sourceData, int sourceOffset, int sourceSize)
         {
-            (_components ??= [])[componentTypeId] = new CompiledRawComponentValue(componentTypeId, runtimeType, componentType, size, sourceData, sourceOffset, sourceSize);
+            (_components ??= [])[componentTypeId] = new RawComponentValue(componentTypeId, runtimeType, componentType, size, sourceData, sourceOffset, sourceSize);
         }
 
         public void Remove(int componentTypeId)
@@ -491,15 +447,15 @@ public sealed class CommandBuffer
             _components?.Remove(componentTypeId);
         }
 
-        public CompiledRawCreatedEntity ToCompiledEntity()
+        public RawCreatedEntity ToCompiledEntity()
         {
             if (_components is null || _components.Count == 0)
             {
-                return new CompiledRawCreatedEntity(Entity, Signature.Empty, Array.Empty<CompiledRawComponentValue>());
+                return new RawCreatedEntity(Entity, Signature.Empty, Array.Empty<RawComponentValue>());
             }
 
             var count = _components.Count;
-            var components = ArrayPool<CompiledRawComponentValue>.Shared.Rent(count);
+            var components = ArrayPool<RawComponentValue>.Shared.Rent(count);
             var componentTypes = ArrayPool<ComponentType>.Shared.Rent(count);
             try
             {
@@ -524,14 +480,14 @@ public sealed class CommandBuffer
                     signature = Signature.CreateNormalized(signatureTypes);
                 }
 
-                var entityComponents = new CompiledRawComponentValue[count];
+                var entityComponents = new RawComponentValue[count];
                 Array.Copy(components, entityComponents, count);
 
-                return new CompiledRawCreatedEntity(Entity, signature, entityComponents);
+                return new RawCreatedEntity(Entity, signature, entityComponents);
             }
             finally
             {
-                ArrayPool<CompiledRawComponentValue>.Shared.Return(components);
+                ArrayPool<RawComponentValue>.Shared.Return(components);
                 ArrayPool<ComponentType>.Shared.Return(componentTypes);
             }
         }
@@ -549,154 +505,6 @@ public sealed class CommandBuffer
         public int Sets;
         public int Removes;
         public int Destroys;
-    }
-
-    internal readonly record struct CompiledRawComponentValue(
-        int ComponentTypeId,
-        Type RuntimeType,
-        ComponentType ComponentType,
-        int ComponentSize,
-        byte[] Data,
-        int DataOffset,
-        int DataSize)
-    {
-        public object? ReadBoxed()
-        {
-            return ComponentWriterCache.ReadBoxed(RuntimeType, Data, DataOffset);
-        }
-    }
-
-    internal readonly record struct CompiledRawCreatedEntity(Entity Entity, Signature? Signature, CompiledRawComponentValue[] Components)
-    {
-        public FrameCreatedEntity ToFrame()
-        {
-            if (Components.Length == 0)
-            {
-                return new FrameCreatedEntity(Entity, Array.Empty<FrameComponentValue>());
-            }
-
-            var components = new FrameComponentValue[Components.Length];
-            for (var index = 0; index < Components.Length; index++)
-            {
-                var component = Components[index];
-                components[index] = new FrameComponentValue(component.RuntimeType, component.ReadBoxed());
-            }
-
-            Array.Sort(components, static (left, right) =>
-                StringComparer.Ordinal.Compare(left.ComponentType.FullName, right.ComponentType.FullName));
-
-            return new FrameCreatedEntity(Entity, components);
-        }
-    }
-
-    internal readonly record struct CompiledRawComponentCommand(
-        Entity Entity,
-        int ComponentTypeId,
-        Type RuntimeType,
-        ComponentType ComponentType,
-        int DataOffset,
-        int DataSize,
-        ComponentWriterCache.ColumnWriterDelegate? ColumnWriter,
-        byte[] Data)
-    {
-        public FrameEntityComponentCommand ToFrame()
-        {
-            var value = ComponentWriterCache.ReadBoxed(RuntimeType, Data, DataOffset);
-            return new FrameEntityComponentCommand(Entity, RuntimeType, value);
-        }
-    }
-
-    internal readonly record struct CompiledRemoveCommand(Entity Entity, int ComponentTypeId, Type RuntimeType, ComponentType ComponentType)
-    {
-        public FrameEntityRemoveCommand ToFrame()
-        {
-            return new FrameEntityRemoveCommand(Entity, RuntimeType);
-        }
-    }
-
-    internal sealed class CompiledCommandBatch
-    {
-        public List<Entity> ReservedEntities { get; } = new(4);
-
-        public List<CompiledRawCreatedEntity> CreatedEntities { get; } = new(4);
-
-        public List<FrameLinkCommand> LinkCommands { get; } = new(4);
-
-        public List<FrameUnlinkCommand> UnlinkCommands { get; } = new(4);
-
-        public List<CompiledRawComponentCommand> AddCommands { get; } = new(4);
-
-        public List<CompiledRawComponentCommand> SetCommands { get; } = new(4);
-
-        public List<CompiledRemoveCommand> RemoveCommands { get; } = new(4);
-
-        public List<Entity> DestroyedEntities { get; } = new(4);
-
-        public List<Entity> ReleasedEntities { get; } = new(4);
-
-        public void Clear()
-        {
-            ReservedEntities.Clear();
-            CreatedEntities.Clear();
-            LinkCommands.Clear();
-            UnlinkCommands.Clear();
-            AddCommands.Clear();
-            SetCommands.Clear();
-            RemoveCommands.Clear();
-            DestroyedEntities.Clear();
-            ReleasedEntities.Clear();
-        }
-
-        public bool IsEmpty =>
-            ReservedEntities.Count == 0 &&
-            CreatedEntities.Count == 0 &&
-            LinkCommands.Count == 0 &&
-            UnlinkCommands.Count == 0 &&
-            AddCommands.Count == 0 &&
-            SetCommands.Count == 0 &&
-            RemoveCommands.Count == 0 &&
-            DestroyedEntities.Count == 0 &&
-            ReleasedEntities.Count == 0;
-
-        public FrameCommands ToFrameCommands()
-        {
-            var createdEntities = new FrameCreatedEntity[CreatedEntities.Count];
-            for (var index = 0; index < CreatedEntities.Count; index++)
-            {
-                createdEntities[index] = CreatedEntities[index].ToFrame();
-            }
-
-            var addCommands = new FrameEntityComponentCommand[AddCommands.Count];
-            for (var index = 0; index < AddCommands.Count; index++)
-            {
-                addCommands[index] = AddCommands[index].ToFrame();
-            }
-
-            var setCommands = new FrameEntityComponentCommand[SetCommands.Count];
-            for (var index = 0; index < SetCommands.Count; index++)
-            {
-                setCommands[index] = SetCommands[index].ToFrame();
-            }
-
-            var removeCommands = new FrameEntityRemoveCommand[RemoveCommands.Count];
-            for (var index = 0; index < RemoveCommands.Count; index++)
-            {
-                removeCommands[index] = RemoveCommands[index].ToFrame();
-            }
-
-            var state = new FrameCommandsState(
-                ReservedEntities.ToArray(),
-                createdEntities,
-                LinkCommands.ToArray(),
-                UnlinkCommands.ToArray(),
-                addCommands,
-                setCommands,
-                removeCommands,
-                DestroyedEntities.ToArray(),
-                ReleasedEntities.ToArray());
-
-            return new FrameCommands(state);
-        }
     }
 
     private static class ComponentTypeCache<T>

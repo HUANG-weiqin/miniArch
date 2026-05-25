@@ -15,7 +15,6 @@ public enum ThroughputWorkload
 {
     QueryWithAllEntity,
     QueryWithAllComponentSpan,
-    WorldDelta,
 }
 
 public enum ThroughputEngine
@@ -130,11 +129,10 @@ public sealed record ThroughputOptions(
         {
             "query-with-all-entity" => ThroughputWorkload.QueryWithAllEntity,
             "query-with-all-component-span" => ThroughputWorkload.QueryWithAllComponentSpan,
-            "world-delta" => ThroughputWorkload.WorldDelta,
             _ => default
         };
 
-        return value is "query-with-all-entity" or "query-with-all-component-span" or "world-delta";
+        return value is "query-with-all-entity" or "query-with-all-component-span";
     }
 
     private static bool TryParseEngine(string value, out ThroughputEngine engine)
@@ -330,7 +328,6 @@ public static class ThroughputRunner
         {
             ThroughputWorkload.QueryWithAllEntity => "query-with-all-entity",
             ThroughputWorkload.QueryWithAllComponentSpan => "query-with-all-component-span",
-            ThroughputWorkload.WorldDelta => "world-delta",
             _ => throw new ArgumentOutOfRangeException(nameof(workload))
         };
     }
@@ -367,11 +364,6 @@ public static class ThroughputRunner
         {
             throw new ArgumentOutOfRangeException(nameof(options), "RepeatCount must be positive.");
         }
-
-        if (options.Workload == ThroughputWorkload.WorldDelta && options.Engine != ThroughputEngine.MiniArch)
-        {
-            throw new ArgumentOutOfRangeException(nameof(options), "WorldDelta throughput currently supports MiniArch only.");
-        }
     }
 }
 
@@ -392,44 +384,9 @@ internal static class ThroughputCaseFactory
             (ThroughputWorkload.QueryWithAllEntity, ThroughputEngine.Arch) => new ArchQueryEntityThroughputCase(entityCount),
             (ThroughputWorkload.QueryWithAllComponentSpan, ThroughputEngine.MiniArch) => new MiniQueryComponentSpanThroughputCase(entityCount),
             (ThroughputWorkload.QueryWithAllComponentSpan, ThroughputEngine.Arch) => new ArchQueryComponentSpanThroughputCase(entityCount),
-            (ThroughputWorkload.WorldDelta, ThroughputEngine.MiniArch) => new MiniWorldDeltaThroughputCase(entityCount),
             (_, ThroughputEngine.Both) => throw new InvalidOperationException("Throughput case factory expects a concrete engine."),
             _ => throw new ArgumentOutOfRangeException(nameof(workload))
         };
-    }
-
-    private sealed class MiniWorldDeltaThroughputCase : IThroughputCase
-    {
-        private readonly CommandBufferDeltaExecution _execution;
-
-        public MiniWorldDeltaThroughputCase(int entityCount)
-        {
-            _execution = CommandBufferReplayScenarios.PrepareDelta(new CommandBufferReplayScenarioDefinition(
-                "throughput-world-delta-mixed-heavy",
-                CommandBufferReplayScenarioKind.MixedHeavy,
-                entityCount));
-        }
-
-        public void WarmUp(int count, CancellationToken cancellationToken)
-        {
-            for (var i = 0; i < count; i++)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                _ = RunIteration();
-            }
-        }
-
-        public long RunIteration()
-        {
-            _execution.ApplyForward();
-            var checksum = CountLiveEntities(_execution.CurrentWorld);
-            _execution.ApplyBackward();
-            return checksum;
-        }
-
-        public void Dispose()
-        {
-        }
     }
 
     private sealed class MiniQueryEntityThroughputCase : IThroughputCase
@@ -604,19 +561,5 @@ internal static class ThroughputCaseFactory
         }
 
         return checksum;
-    }
-
-    private static int CountLiveEntities(MiniWorld world)
-    {
-        var total = 0;
-        var description = new MiniArch.QueryDescription();
-        var query = MiniQuery.Create(world, in description);
-        var chunks = query.GetChunkSpan();
-        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
-        {
-            total += chunks[chunkIndex].GetEntities().Length;
-        }
-
-        return total;
     }
 }

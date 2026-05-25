@@ -4,13 +4,13 @@ using System.Runtime.InteropServices;
 
 namespace MiniArch.Core;
 
-internal static unsafe class ComponentWriterCache
+public static unsafe class ComponentWriterCache
 {
     private static readonly ConcurrentDictionary<Type, ColumnWriterDelegate> ColumnWriters = new();
     private static readonly ConcurrentDictionary<Type, ComponentReaderDelegate> Readers = new();
     private static readonly ConcurrentDictionary<Type, int> Sizes = new();
 
-    internal delegate void ColumnWriterDelegate(Array column, int row, byte* source);
+    public delegate void ColumnWriterDelegate(Array column, int row, byte* source);
 
     internal delegate void ComponentReaderDelegate(void* destination, byte* source);
 

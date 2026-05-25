@@ -50,8 +50,6 @@ public static class Program
             [
                 typeof(CommandBufferBenchmarks),
                 typeof(CommandBufferHierarchyBenchmarks),
-                typeof(CommandBufferReplayRewindBenchmarks),
-                typeof(CommandBufferWorldDeltaBenchmarks),
             ]).Run(filteredArgs, MiniArchBenchmarkConfig.CreateCommandBufferConfig());
             return;
         }
@@ -66,14 +64,14 @@ public static class Program
             CommandBufferReplayScenarioKind.ExistingHeavy,
             128);
 
-        using var playback = CommandBufferReplayScenarios.PreparePlayback(scenario);
+        using var playback = CommandBufferReplayScenarios.PrepareCompile(scenario);
         GC.Collect();
         GC.WaitForPendingFinalizers();
         GC.Collect();
 
         var beforeAllocated = GC.GetAllocatedBytesForCurrentThread();
         var stopwatch = Stopwatch.StartNew();
-        var frame = playback.Buffer.Playback();
+        var frame = playback.Buffer.Compile();
         stopwatch.Stop();
         var allocated = GC.GetAllocatedBytesForCurrentThread() - beforeAllocated;
 

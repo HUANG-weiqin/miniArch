@@ -59,7 +59,7 @@ foreach (var entity in world.Query(in description))
 - `ComponentRegistry`
 - `ComponentType`
 - `CommandBuffer`
-- `FrameCommands`
+- `FrameDelta`
 - `WorldSnapshot`
 
 advanced query 统一显式创建：
@@ -99,8 +99,8 @@ foreach (var chunk in query.Chunks)
 - `Destroy()` 会级联销毁 runtime hierarchy 子树。
 - `Set<T>()` 在组件缺失时可能走“补组件 + 迁移”路径。
 - query 的并发保证覆盖：world 无写入，且相关组件类型已注册后的并发只读。
-- `CommandBuffer` 支持并发 recording，但 `Playback()`、`Play()`、`PlayWithReverse()` 只能在 recording 结束后单线程消费。
-- `Play()` 与 `Playback()+Replay()` 语义一致；没有任何命令执行时返回 `false`。
+- `CommandBuffer` 支持并发 recording，但 `Compile()`、`Play()` 只能在 recording 结束后单线程消费。
+- `Play()` 与 `Compile()+Replay()` 语义一致；没有任何命令执行时返回 `false`。
 - `WorldSnapshot` 只支持 snapshot-safe 组件类型；带托管引用的组件会被拒绝。
 
 ## 常用类型
@@ -125,8 +125,6 @@ foreach (var chunk in query.Chunks)
 - `TryGetLocation`
 - `Query(in QueryDescription)`
 - `Replay`
-- `ReplayWithReverse`
-- `Rewind`
 
 ### `MiniArch.QueryDescription`
 
@@ -161,7 +159,7 @@ foreach (var chunk in query.Chunks)
 | `MiniArch.OrderedQuery` | `MT-Read` | 每次枚举独立租用内部 buffer；comparer 必须可并发读 |
 | `MiniArch.Core.Query` | `MT-Read` | 覆盖冷 materialize / cache publish，不覆盖首次类型注册 |
 | `CommandBuffer` recording | `MT-Record` | 多线程可同时录制到同一个 buffer |
-| `Playback()` / `Play()` / `PlayWithReverse()` | 否 | 必须在 recording 结束后单线程消费 |
+| `Compile()` / `Play()` | 否 | 必须在 recording 结束后单线程消费 |
 | `World` mutation API | 否 | 不支持并发写 |
 
 ## 迁移提示

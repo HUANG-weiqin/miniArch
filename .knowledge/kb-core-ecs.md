@@ -11,7 +11,7 @@ updated: 2026-05-25
 - 这个模块负责：
   - 创建、销毁和迁移实体
   - 管理 entity metadata 容量和批量创建
-  - 给 command buffer 提供 deferred entity reservation、boxed structural mutation 和 batch replay 挂接点
+  - 给 command buffer 提供 deferred entity reservation、structural mutation 和 batch replay 挂接点
   - 维护签名到 archetype 的映射
   - 用 chunk 做 dense SoA 存储
   - 让 `Set` 走 typed-column / direct-index 的原地写入路径
@@ -41,7 +41,7 @@ updated: 2026-05-25
   - `World.EnsureCapacity` 负责提前扩好 entity metadata 存储，避免 `Create` 只靠 `List<T>` 被动增长
   - `World.CreateMany` 先批量准备 entity id，再用 `Archetype` 的 chunk-batched reservation 一次性把一批实体落入空签名 archetype
 - `World` 内部把 entity version 和 entity location 分开存储：`_versions` 管版本校验，`_locations` 只保留 archetype/chunk/row，避免 metadata 热路径重复写 version
-  - `World.Replay(in FrameCommands)` 会在 batch 模式下 materialize created entities、应用 link/unlink 和结构变化，并把 query layout publish 合并为一次
+  - `World.Replay(FrameDelta)` 会在 batch 模式下 materialize created entities、应用 link/unlink 和结构变化，并把 query layout publish 合并为一次
   - `Entity` 句柄契约里，`default(Entity)` 必须视为非法；真实实体从 `Version = 1` 起步，避免空值和第一个真实句柄混淆
   - `World.IsAlive(Entity)` 复用 `TryGetLocation` 的同一套校验，只有在 `id` 在范围内、`_locations[id]` 非空且 `_versions[id] == entity.Version` 时才返回 `true`
   - `Add/Remove` 先算目标签名，再复用 edge cache
@@ -58,7 +58,7 @@ updated: 2026-05-25
   - `World` 通过 `ComponentRegistry` 把类型映射成 `ComponentType`
 - `World` 通过 `Signature` 定位 archetype
 - `Archetype` / `Chunk` 通过共享 `ComponentColumnMap.Build(Signature)` 构建 component-to-column 索引，把 `Set` 路径压成一次定位 + 一次写入
-- `World.Destroy(...)`、`CollectCurrentDestroyClosure(...)` 和 `ReplayWithReverse(...)` 的 destroy 预处理会复用 world 内部 scratch，而不是每次临时 new `List` / `HashSet`
+- `World.Destroy(...)` 和 `CollectCurrentDestroyClosure(...)` 的 destroy 预处理会复用 world 内部 scratch，而不是每次临时 new `List` / `HashSet`
 - `HierarchyTable.CollectDestroySubtree(...)` 现在接受 caller-owned visited / order 容器，避免在 subtree 收集时额外分配 traversal stack
 - `Query` 的 warmed 热路径应该尽量只比较一份 world 侧统一 query generation；不要在热循环里同时读取 `ArchetypeGeneration` 和 `QueryLayoutGeneration` 两份状态。
 

@@ -122,74 +122,6 @@ public sealed class WorldStructuralChangeTests
     }
 
     [Fact]
-    public void Replay_with_reverse_restores_destroyed_entity_components_and_query_visibility()
-    {
-        var world = new World();
-        var entity = world.Create();
-        world.Add(entity, new Position(1, 2));
-        world.Add(entity, new Velocity(3, 4));
-        world.Add(entity, new Health(5));
-
-        var buffer = new CommandBuffer(world);
-        buffer.Destroy(entity);
-        var frame = buffer.Playback();
-
-        var reverse = world.ReplayWithReverse(in frame);
-
-        Assert.False(world.IsAlive(entity));
-        Assert.Equal(0, CountQueryEntities(CreateQuery<Position>(world)));
-
-        world.Rewind(in reverse);
-
-        Assert.True(world.TryGetLocation(entity, out var info));
-        Assert.Contains(world.Components.GetOrCreate<Position>(), info.Archetype.Signature);
-        Assert.Contains(world.Components.GetOrCreate<Velocity>(), info.Archetype.Signature);
-        Assert.Contains(world.Components.GetOrCreate<Health>(), info.Archetype.Signature);
-        Assert.Equal(1, CountQueryEntities(CreateQuery<Position>(world)));
-        Assert.Equal(new Position(1, 2), info.Archetype.GetChunk(info.ChunkIndex).GetComponent<Position>(world.Components.GetOrCreate<Position>(), info.RowIndex));
-    }
-
-    [Fact]
-    public void Add_existing_component_overwrites_and_rewind_restores_previous_value()
-    {
-        var world = new World();
-        var entity = world.Create();
-        world.Add(entity, new Position(1, 2));
-
-        var buffer = new CommandBuffer(world);
-        buffer.Add(entity, new Position(9, 9));
-        var frame = buffer.Playback();
-
-        var reverse = world.ReplayWithReverse(in frame);
-
-        Assert.Equal(new Position(9, 9), GetComponentValue(world, entity));
-
-        world.Rewind(in reverse);
-
-        Assert.Equal(new Position(1, 2), GetComponentValue(world, entity));
-    }
-
-    [Fact]
-    public void Set_missing_component_adds_component_and_rewind_removes_it()
-    {
-        var world = new World();
-        var entity = world.Create();
-
-        var buffer = new CommandBuffer(world);
-        buffer.Set(entity, new Position(9, 9));
-        var frame = buffer.Playback();
-
-        var reverse = world.ReplayWithReverse(in frame);
-
-        Assert.True(HasComponent<Position>(world, entity));
-        Assert.Equal(new Position(9, 9), GetComponentValue(world, entity));
-
-        world.Rewind(in reverse);
-
-        Assert.False(HasComponent<Position>(world, entity));
-    }
-
-    [Fact]
     public void Set_missing_component_adds_component()
     {
         var world = new World();
@@ -214,57 +146,8 @@ public sealed class WorldStructuralChangeTests
         Assert.True(HasComponent<Velocity>(world, entity));
         Assert.Equal(new Position(1, 2), GetComponentValue(world, entity));
         Assert.Equal(new Velocity(3, 4), world.TryGetLocation(entity, out var info)
-            ? info.Archetype.GetChunk(info.ChunkIndex).GetComponent<Velocity>(world.Components.GetOrCreate<Velocity>(), info.RowIndex) 
-            : default);
-    }
-
-    [Fact]
-    public void Replay_set_missing_component_preserves_existing_components_and_rewind_restores_previous_shape()
-    {
-        var world = new World();
-        var entity = world.Create();
-        world.Add(entity, new Position(1, 2));
-
-        var buffer = new CommandBuffer(world);
-        buffer.Set(entity, new Velocity(3, 4));
-        var frame = buffer.Playback();
-
-        var reverse = world.ReplayWithReverse(in frame);
-
-        Assert.True(HasComponent<Position>(world, entity));
-        Assert.True(HasComponent<Velocity>(world, entity));
-        Assert.Equal(new Position(1, 2), GetComponentValue(world, entity));
-        Assert.Equal(new Velocity(3, 4), world.TryGetLocation(entity, out var info)
             ? info.Archetype.GetChunk(info.ChunkIndex).GetComponent<Velocity>(world.Components.GetOrCreate<Velocity>(), info.RowIndex)
             : default);
-
-        world.Rewind(in reverse);
-
-        Assert.True(HasComponent<Position>(world, entity));
-        Assert.False(HasComponent<Velocity>(world, entity));
-        Assert.Equal(new Position(1, 2), GetComponentValue(world, entity));
-    }
-
-    [Fact]
-    public void Remove_missing_component_is_noop_and_rewind_keeps_world_unchanged()
-    {
-        var world = new World();
-        var entity = world.Create();
-        world.Add(entity, new Velocity(3, 4));
-        var before = CaptureEntityState(world, entity);
-
-        var buffer = new CommandBuffer(world);
-        buffer.Remove<Position>(entity);
-        var frame = buffer.Playback();
-
-        var reverse = world.ReplayWithReverse(in frame);
-        var afterReplay = CaptureEntityState(world, entity);
-
-        Assert.Equal(before, afterReplay);
-
-        world.Rewind(in reverse);
-
-        Assert.Equal(before, CaptureEntityState(world, entity));
     }
 
     private static Position GetComponentValue(World world, Entity entity)
@@ -276,27 +159,6 @@ public sealed class WorldStructuralChangeTests
     private static bool HasComponent<T>(World world, Entity entity)
     {
         return world.TryGetLocation(entity, out var info) && info.Archetype.Signature.Contains(world.Components.GetOrCreate<T>());
-    }
-
-    private static string CaptureEntityState(World world, Entity entity)
-    {
-        if (!world.TryGetLocation(entity, out var info))
-        {
-            return $"{entity}:dead";
-        }
-
-        var parts = new List<string>
-        {
-            $"signature={info.Archetype.Signature}",
-            $"position={(HasComponent<Position>(world, entity) ? GetComponentValue(world, entity).ToString() : "none")}",
-            $"velocity={(HasComponent<Velocity>(world, entity) ? info.Archetype.GetChunk(info.ChunkIndex).GetComponent<Velocity>(world.Components.GetOrCreate<Velocity>(), info.RowIndex).ToString() : "none")}",
-            $"health={(HasComponent<Health>(world, entity) ? info.Archetype.GetChunk(info.ChunkIndex).GetComponent<Health>(world.Components.GetOrCreate<Health>(), info.RowIndex).ToString() : "none")}",
-            $"query:Position={CountQueryEntities(CreateQuery<Position>(world))}",
-            $"query:Velocity={CountQueryEntities(CreateQuery<Velocity>(world))}",
-            $"query:Health={CountQueryEntities(CreateQuery<Health>(world))}"
-        };
-
-        return string.Join("|", parts);
     }
 
     private static int CountQueryEntities(MiniArch.Core.Query query)
