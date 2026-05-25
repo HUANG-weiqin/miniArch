@@ -2,7 +2,7 @@
 title: Snapshot Persistence
 module: MiniArch.Core Snapshot
 description: First-version full-world snapshot save/load design for unmanaged components
-updated: 2026-04-12
+updated: 2026-05-25
 ---
 # Snapshot Persistence
 
@@ -22,9 +22,10 @@ updated: 2026-04-12
 
 - 核心组成：
   - `src/MiniArch/Core/WorldSnapshot.cs`：snapshot 二进制读写入口
+  - `src/MiniArch/Core/WorldClone.cs`：内存直拷 World 克隆（零序列化）
   - `src/MiniArch/Core/World.cs`：slot version、location、free id 重建桥接点
   - `src/MiniArch/Core/Archetype.cs`：按快照 chunk 精确导入实体批次
-  - `src/MiniArch/Core/Chunk.cs`：暴露有效 entities 和列数组给 snapshot 层批量读写
+  - `src/MiniArch/Core/Chunk.cs`：暴露有效 entities 和列数组给 snapshot/clone 层批量读写
 - 数据流 / 控制流：
   - save 先枚举非空 archetype，再顺序写 header、entity slot versions、schema 表、archetype/chunk 记录和列原始字节块
   - load 先验证 header，再注册 schema 对应的 runtime `ComponentType`
@@ -32,7 +33,14 @@ updated: 2026-04-12
 - 和其他模块的交互方式：
   - 依赖 `ComponentRegistry` 把存档里的稳定类型名映射回运行时组件 id
   - 依赖 `World/Archetype/Chunk` 的 internal 桥接能力重建 world
-  - 由 `tests/MiniArch.Tests/Persistence/WorldSnapshotTests.cs` 提供行为回归覆盖
+  - 由 `tests/MiniArch.Tests/Persistence/WorldSnapshotTests.cs` 和 `WorldCloneTests.cs` 提供行为回归覆盖
+
+## WorldClone vs WorldSnapshot
+
+- `WorldSnapshot.Save/Load`：走二进制序列化，支持跨进程/跨机器传输
+- `WorldClone.Clone`：纯内存直拷，跳过全部编解码，预估 5-20× 快于 Snapshot 往返
+- 两者共享同一套 internal 重建 API（ResetSnapshotState、ImportSnapshotChunk、SetSnapshotLocation 等）
+- Clone 的关键优化：逐列 `Array.Copy`（底层 memcpy）替代 per-row 读写；零 Stream 分配
 
 ## 决策
 
