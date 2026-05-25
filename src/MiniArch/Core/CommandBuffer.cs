@@ -333,7 +333,20 @@ public sealed class CommandBuffer
         destroyedEntities.Clear();
         hierarchyByChild.Clear();
         Clear();
-        return compiledBatch;
+
+        var result = new FrameDelta();
+        result.ReservedEntities.AddRange(compiledBatch.ReservedEntities);
+        result.CreatedEntities.AddRange(compiledBatch.CreatedEntities);
+        result.LinkCommands.AddRange(compiledBatch.LinkCommands);
+        result.UnlinkCommands.AddRange(compiledBatch.UnlinkCommands);
+        result.AddCommands.AddRange(compiledBatch.AddCommands);
+        result.SetCommands.AddRange(compiledBatch.SetCommands);
+        result.RemoveCommands.AddRange(compiledBatch.RemoveCommands);
+        result.DestroyedEntities.AddRange(compiledBatch.DestroyedEntities);
+        result.ReleasedEntities.AddRange(compiledBatch.ReleasedEntities);
+        compiledBatch.Clear();
+        result.DeepCopyOwnedData();
+        return result;
     }
 
     private void Clear()

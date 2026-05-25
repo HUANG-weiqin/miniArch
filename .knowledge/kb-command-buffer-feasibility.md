@@ -158,7 +158,7 @@ updated: 2026-05-25
 ### Build/Test Status
 
 - 0 warnings, 0 errors
-- 160/160 tests pass
+- 189/189 tests pass
 
 ## Phase 2: Byte-based Boxing Elimination
 
@@ -198,10 +198,26 @@ updated: 2026-05-25
 ### 验证状态
 
 - 0 warnings, 0 errors
-- 160/160 tests pass
+- 189/189 tests pass
 - 所有热路径不再装箱
 
-## FrameDelta Merge
+## FrameDelta
+
+### 自包含所有权模型
+
+`Compile()` 每次返回一个**新的、自包含的** `FrameDelta` 实例：
+
+- **byte[] 独立**：`DeepCopyOwnedData()` 将所有 `RawComponentCommand.Data` / `RawComponentValue.Data` 引用的 shard 内部 byte 切片合并到一个新分配的 owned `byte[]`，并重映射 `DataOffset`
+- **实例独立**：不再复用 `_compiledBatch` 单例；每次 `Compile()` 创建新 `FrameDelta` 对象
+- **Merge 安全**：`Merge(a, b)` 的结果引用源 delta 的 owned byte 数组；即使源 buffer 被 GC 回收，merged 结果通过引用保持 byte 数组存活
+- 代价：每次 `Compile()` 分配一个 byte[] + 一个 FrameDelta（含 9 个 List）
+
+验证入口：`CommandBufferTests.cs` 中 `Compile_returns_distinct_instances_each_call`、`Held_frame_survives_second_compile`、`Held_frame_survives_recording_after_compile`、`Merged_frame_survives_source_buffer_reuse`、`Compile_ownership_set_commands`
+
+### DeltaCount / HasEntity
+
+- `DeltaCount`（int）：返回所有 command 列表的总条目数。`IsEmpty` 已改为 `DeltaCount == 0`
+- `HasEntity(Entity)`：检查实体是否出现在任意 command 列表中（Created/Set/Removed/Destroyed/Linked/Unlinked 等），适用于增量查询与调试
 
 ### static FrameDelta.Merge(FrameDelta a, FrameDelta b)
 
@@ -213,6 +229,17 @@ updated: 2026-05-25
 - **Entity 生命周期折叠**：Create+Destroy→Release, Reserve+Release→cancel
 - **Created entity 内联折叠**：后续 Add/Set/Remove 直接折入 `RawCreatedEntity.Components`
 - **复杂度**：O(N)，N = a 与 b 的总命令数
+
+### Merge 序列稳定性（merge-of-merge）
+
+`Merge` 可安全地在已合并结果上继续叠加新 delta，已验证的常见序列：
+
+- **Create→Destroy→Recreate**：首次 merge 输出 Reserve+Release/cancel，再次 merge 新 Create 后变为纯 Create，Release/Reserve 抵消
+- **三层 Set 折叠**：Set(x3) → 首次 merge Set(latest)，再次 merge 后仍为单条 Set
+- **Add→Remove→Add**：首次 merge 抵消为空，再次 merge 新 Add 后恢复为单条 Add（不误升格为 Set）
+- **Created entity 的 Set→Remove**：首次 merge 保留 CreatedEntity 及其剩余组件，再次 merge Remove 后正确折叠到 CreatedEntity.Components 中
+
+验证入口：`CommandBufferTests.cs` 中 `MergeOfMerge_*` 系列测试。
 
 ### 已知限制
 

@@ -63,6 +63,60 @@ public sealed class FrameDelta
         return false;
     }
 
+    internal void DeepCopyOwnedData()
+    {
+        int totalBytes = 0;
+        for (var i = 0; i < AddCommands.Count; i++)
+            totalBytes += AddCommands[i].DataSize;
+        for (var i = 0; i < SetCommands.Count; i++)
+            totalBytes += SetCommands[i].DataSize;
+        for (var i = 0; i < CreatedEntities.Count; i++)
+        {
+            var components = CreatedEntities[i].Components;
+            for (var j = 0; j < components.Length; j++)
+                totalBytes += components[j].DataSize;
+        }
+
+        if (totalBytes == 0) return;
+
+        var owned = new byte[totalBytes];
+        int pos = 0;
+
+        for (var i = 0; i < AddCommands.Count; i++)
+        {
+            var cmd = AddCommands[i];
+            if (cmd.DataSize > 0)
+                Buffer.BlockCopy(cmd.Data, cmd.DataOffset, owned, pos, cmd.DataSize);
+            AddCommands[i] = cmd with { Data = owned, DataOffset = pos };
+            pos += cmd.DataSize;
+        }
+
+        for (var i = 0; i < SetCommands.Count; i++)
+        {
+            var cmd = SetCommands[i];
+            if (cmd.DataSize > 0)
+                Buffer.BlockCopy(cmd.Data, cmd.DataOffset, owned, pos, cmd.DataSize);
+            SetCommands[i] = cmd with { Data = owned, DataOffset = pos };
+            pos += cmd.DataSize;
+        }
+
+        for (var i = 0; i < CreatedEntities.Count; i++)
+        {
+            var ce = CreatedEntities[i];
+            var src = ce.Components;
+            var dst = new RawComponentValue[src.Length];
+            for (var j = 0; j < src.Length; j++)
+            {
+                var c = src[j];
+                if (c.DataSize > 0)
+                    Buffer.BlockCopy(c.Data, c.DataOffset, owned, pos, c.DataSize);
+                dst[j] = c with { Data = owned, DataOffset = pos };
+                pos += c.DataSize;
+            }
+            CreatedEntities[i] = ce with { Components = dst };
+        }
+    }
+
     public static FrameDelta Merge(FrameDelta a, FrameDelta b)
     {
         ArgumentNullException.ThrowIfNull(a);
@@ -76,6 +130,7 @@ public sealed class FrameDelta
 
         var result = new FrameDelta();
         RebuildFromState(result, entityStates, appearanceOrder);
+        result.DeepCopyOwnedData();
         return result;
     }
 

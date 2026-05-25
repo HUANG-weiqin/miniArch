@@ -59,7 +59,7 @@ foreach (var entity in world.Query(in description))
 - `ComponentRegistry`
 - `ComponentType`
 - `CommandBuffer`
-- `FrameDelta`
+- `FrameDelta` — `DeltaCount`（增量总量）、`HasEntity`（实体查询）、`Merge`（支持序列叠加）
 - `WorldSnapshot`
 
 advanced query 统一显式创建：

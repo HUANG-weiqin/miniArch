@@ -1552,4 +1552,119 @@ public sealed class CommandBufferTests
         Assert.True(replayWorld.TryGet(replayEntity, out Position p));
         Assert.Equal(new Position(50, 60), p);
     }
+
+    [Fact]
+    public void Compile_returns_distinct_instances_each_call()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+
+        var e1 = buffer.Create();
+        buffer.Add(e1, new Position(1, 2));
+        var frame1 = buffer.Compile();
+
+        var e2 = buffer.Create();
+        buffer.Add(e2, new Position(3, 4));
+        var frame2 = buffer.Compile();
+
+        Assert.NotSame(frame1, frame2);
+        Assert.Single(frame1.CreatedEntities);
+        Assert.Single(frame2.CreatedEntities);
+        Assert.Equal(e1, frame1.CreatedEntities[0].Entity);
+        Assert.Equal(e2, frame2.CreatedEntities[0].Entity);
+    }
+
+    [Fact]
+    public void Held_frame_survives_second_compile()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+
+        var e1 = buffer.Create();
+        buffer.Add(e1, new Position(10, 20));
+        var frame1 = buffer.Compile();
+
+        var e2 = buffer.Create();
+        buffer.Add(e2, new Position(30, 40));
+        buffer.Compile();
+
+        world.Replay(frame1);
+        Assert.True(world.IsAlive(e1));
+        Assert.True(world.TryGet(e1, out Position p));
+        Assert.Equal(new Position(10, 20), p);
+    }
+
+    [Fact]
+    public void Held_frame_survives_recording_after_compile()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+
+        var e = buffer.Create();
+        buffer.Add(e, new Position(1, 2));
+        buffer.Add(e, new Velocity(3, 4));
+        var frame = buffer.Compile();
+
+        buffer.Add(e, new Health(100));
+        buffer.Compile();
+
+        var replica = new World();
+        replica.Replay(frame);
+        Assert.True(replica.IsAlive(e));
+        Assert.True(replica.TryGet(e, out Position p));
+        Assert.Equal(new Position(1, 2), p);
+        Assert.True(replica.TryGet(e, out Velocity v));
+        Assert.Equal(new Velocity(3, 4), v);
+        Assert.False(replica.TryGet<Health>(e, out _));
+    }
+
+    [Fact]
+    public void Merged_frame_survives_source_buffer_reuse()
+    {
+        var world = new World();
+        var entity = world.Create(new Position(0, 0));
+        var buffer1 = new CommandBuffer(world);
+        var buffer2 = new CommandBuffer(world);
+
+        buffer1.Set(entity, new Position(1, 2));
+        var delta1 = buffer1.Compile();
+
+        buffer2.Add(entity, new Velocity(5, 6));
+        var delta2 = buffer2.Compile();
+
+        var merged = FrameDelta.Merge(delta1, delta2);
+
+        buffer1.Set(entity, new Position(999, 999));
+        buffer1.Compile();
+        buffer2.Add(entity, new Health(999));
+        buffer2.Compile();
+
+        var replica = new World();
+        var replicaEntity = replica.Create(new Position(0, 0));
+        replica.Replay(merged);
+        Assert.True(replica.TryGet(replicaEntity, out Position p));
+        Assert.Equal(new Position(1, 2), p);
+        Assert.True(replica.TryGet(replicaEntity, out Velocity v));
+        Assert.Equal(new Velocity(5, 6), v);
+    }
+
+    [Fact]
+    public void Compile_ownership_set_commands()
+    {
+        var world = new World();
+        var entity = world.Create(new Position(0, 0));
+        var buffer = new CommandBuffer(world);
+
+        buffer.Set(entity, new Position(42, 84));
+        var frame = buffer.Compile();
+
+        buffer.Set(entity, new Position(999, 999));
+        buffer.Compile();
+
+        var replica = new World();
+        var replicaEntity = replica.Create(new Position(0, 0));
+        replica.Replay(frame);
+        Assert.True(replica.TryGet(replicaEntity, out Position p));
+        Assert.Equal(new Position(42, 84), p);
+    }
 }
