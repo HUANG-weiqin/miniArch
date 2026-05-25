@@ -13,3 +13,4 @@ TestResults/
 *.etlx
 *.trx
 artifacts/
+.worktrees/
