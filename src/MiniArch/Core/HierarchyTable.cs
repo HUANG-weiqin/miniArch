@@ -112,11 +112,21 @@ internal sealed class HierarchyTable
         return children is not null && children.Count > 0;
     }
 
-    public void CollectDestroySubtree(World world, Entity root, HashSet<Entity> visited, List<Entity> destroyOrder)
+    public void CollectDestroySubtree(World world, Entity root, int[] visitedGen, int currentGen, List<Entity> destroyOrder)
     {
-        if (!world.IsAlive(root) || !visited.Add(root))
+        if (!world.IsAlive(root))
         {
             return;
+        }
+
+        if (root.Id >= 0 && root.Id < visitedGen.Length && visitedGen[root.Id] == currentGen)
+        {
+            return;
+        }
+
+        if (root.Id >= 0 && root.Id < visitedGen.Length)
+        {
+            visitedGen[root.Id] = currentGen;
         }
 
         _destroyTraversalStack.Clear();
@@ -149,10 +159,22 @@ internal sealed class HierarchyTable
 
                 foreach (var child in children)
                 {
-                    if (world.IsAlive(child) && visited.Add(child))
+                    if (!world.IsAlive(child))
                     {
-                        _destroyTraversalStack.Add((child, false));
+                        continue;
                     }
+
+                    if (child.Id >= 0 && child.Id < visitedGen.Length)
+                    {
+                        if (visitedGen[child.Id] == currentGen)
+                        {
+                            continue;
+                        }
+
+                        visitedGen[child.Id] = currentGen;
+                    }
+
+                    _destroyTraversalStack.Add((child, false));
                 }
             }
         }

@@ -43,9 +43,10 @@ public sealed class World : IDisposable
     private bool _queryLayoutDirty;
     private int _queryGeneration;
     private int _createArchetypeCacheGeneration;
-    private readonly List<Entity> _destroyOrderScratch = new(4);
-    private readonly HashSet<Entity> _destroyVisitedScratch = new(4);
-    private readonly Dictionary<Type, ComponentType> _replayComponentTypeScratch = new(4);
+    private readonly List<Entity> _destroyOrderScratch = new(8);
+    private int[] _destroyVisitedGen = [];
+    private int _destroyCurrentGen;
+    private readonly Dictionary<Type, ComponentType> _replayComponentTypeScratch = new(16);
 
     private bool _disposed;
 
@@ -69,6 +70,8 @@ public sealed class World : IDisposable
         _versions = new List<int>(entityCapacity);
         _locations = new List<EntityLocation>(entityCapacity);
         _freeIds = entityCapacity == 0 ? Array.Empty<RecycledEntity>() : new RecycledEntity[entityCapacity];
+        _destroyVisitedGen = entityCapacity == 0 ? [] : new int[entityCapacity];
+        _destroyOrderScratch = new List<Entity>(entityCapacity);
     }
 
     /// <summary>
@@ -86,6 +89,8 @@ public sealed class World : IDisposable
         _versions.Clear();
         _locations.Clear();
         _freeIdCount = 0;
+        _destroyVisitedGen = [];
+        _destroyCurrentGen = 0;
         _hierarchy.Reset();
     }
 
@@ -141,6 +146,8 @@ public sealed class World : IDisposable
         _queryGeneration = 0;
         _createArchetypeCacheGeneration++;
         _freeIdCount = 0;
+        _destroyVisitedGen = [];
+        _destroyCurrentGen = 0;
         _hierarchy.Reset();
 
         _versions.Clear();
@@ -751,11 +758,15 @@ public sealed class World : IDisposable
         }
 
         _destroyOrderScratch.Clear();
-        _destroyVisitedScratch.Clear();
+        if (++_destroyCurrentGen == 0)
+        {
+            Array.Clear(_destroyVisitedGen);
+            _destroyCurrentGen = 1;
+        }
 
         try
         {
-            _hierarchy.CollectDestroySubtree(this, entity, _destroyVisitedScratch, _destroyOrderScratch);
+            _hierarchy.CollectDestroySubtree(this, entity, _destroyVisitedGen, _destroyCurrentGen, _destroyOrderScratch);
             if (_destroyOrderScratch.Count == 0)
             {
                 throw new InvalidOperationException($"Cannot destroy entity {entity}: it is no longer alive. The entity may have already been destroyed.");
@@ -770,7 +781,6 @@ public sealed class World : IDisposable
         }
         finally
         {
-            _destroyVisitedScratch.Clear();
             _destroyOrderScratch.Clear();
         }
     }
@@ -1833,7 +1843,10 @@ public sealed class World : IDisposable
         }
 
         _destroyOrderScratch.EnsureCapacity(entityCount);
-        _destroyVisitedScratch.EnsureCapacity(entityCount);
+        if (_destroyVisitedGen.Length < entityCount)
+        {
+            Array.Resize(ref _destroyVisitedGen, Math.Max(entityCount, _destroyVisitedGen.Length * 2));
+        }
     }
 
     internal void EndDeferredLayoutUpdates()
