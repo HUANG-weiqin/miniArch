@@ -8,8 +8,9 @@ namespace MiniArch.Core;
 public sealed class Archetype
 {
     private readonly List<Chunk> _chunks = new();
-    private readonly List<int> _nonFullChunkIndexes = new();
-    private readonly List<bool> _chunkHasNonFullEntry = new();
+    private int[] _nonFullChunkIndexes = [];
+    private int _nonFullCount;
+    private bool[] _chunkHasNonFullEntry = [];
     private readonly int _chunkCapacity;
     private readonly Type[] _componentTypes;
     private readonly int[] _componentIdToColumnIndex;
@@ -202,7 +203,11 @@ public sealed class Archetype
     {
         var chunk = CreateChunk();
         _chunks.Add(chunk);
-        _chunkHasNonFullEntry.Add(false);
+        if (_chunks.Count > _chunkHasNonFullEntry.Length)
+        {
+            Array.Resize(ref _chunkHasNonFullEntry, _chunks.Count * 2);
+        }
+        _chunkHasNonFullEntry[_chunks.Count - 1] = false;
         return chunk;
     }
 
@@ -220,11 +225,11 @@ public sealed class Archetype
 
     private bool TryTakeNonFullChunk(out int chunkIndex, out Chunk chunk)
     {
-        while (_nonFullChunkIndexes.Count > 0)
+        while (_nonFullCount > 0)
         {
-            var lastIndex = _nonFullChunkIndexes.Count - 1;
+            var lastIndex = _nonFullCount - 1;
             chunkIndex = _nonFullChunkIndexes[lastIndex];
-            _nonFullChunkIndexes.RemoveAt(lastIndex);
+            _nonFullCount--;
             _chunkHasNonFullEntry[chunkIndex] = false;
 
             chunk = _chunks[chunkIndex];
@@ -247,13 +252,29 @@ public sealed class Archetype
             return;
         }
 
-        var insertIndex = _nonFullChunkIndexes.BinarySearch(chunkIndex);
+        var insertIndex = Array.BinarySearch(_nonFullChunkIndexes, 0, _nonFullCount, chunkIndex);
         if (insertIndex < 0)
         {
-            _nonFullChunkIndexes.Insert(~insertIndex, chunkIndex);
+            NonFullInsert(~insertIndex, chunkIndex);
         }
 
         _chunkHasNonFullEntry[chunkIndex] = true;
+    }
+
+    private void EnsureNonFullCapacity()
+    {
+        if (_nonFullCount < _nonFullChunkIndexes.Length) return;
+        var newCapacity = _nonFullChunkIndexes.Length == 0 ? 4 : _nonFullChunkIndexes.Length * 2;
+        Array.Resize(ref _nonFullChunkIndexes, newCapacity);
+    }
+
+    private void NonFullInsert(int index, int value)
+    {
+        EnsureNonFullCapacity();
+        if (index < _nonFullCount)
+            Array.Copy(_nonFullChunkIndexes, index, _nonFullChunkIndexes, index + 1, _nonFullCount - index);
+        _nonFullChunkIndexes[index] = value;
+        _nonFullCount++;
     }
 
 }

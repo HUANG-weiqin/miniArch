@@ -63,6 +63,7 @@ updated: 2026-05-26
   - 直到 `Submit()` 或 `Replay()` 前，`world.IsAlive(entity)` 仍为 `false`
 - query layout generation 在 replay 期间被抑制，整批 replay 结束后只递增一次。
 - 多线程 recording：每个线程有独立 `CommandBuffer` 实例，`ReserveDeferredEntity` 通过 `World._entityIdLock` 串行化（无竞争时 ~10ns 开销）。
+- existing entity 的 `Destroy(Entity)` 必须保留录制时完整 `(Id, Version)`；`Submit()`、`Snapshot()`、`SubmitAndSnapshotAsync()` 都不能按 id 重新读取 world 当前 version，否则 stale handle 会误杀 recycled entity。
 
 ## 认知模型
 
@@ -101,6 +102,7 @@ updated: 2026-05-26
 - 容易误判的地方：
   - 以为 `destroy` 放最后就足够，实际上 created entity 的录时去重同样关键
   - 以为 recording 并发问题只在字典去重；实际上 entity reservation 也需要保护
+  - 以为 existing destroy 只需要存 entity id；`Entity` 身份包含 version，hierarchy skip 和 delta 输出也必须按完整 `Entity` 比较
 - 改这里时要特别小心：
   - 当前 `World.Set<T>` 在组件不存在时会走"补组件 + 迁移"路径，command buffer 的 `Set` 语义必须与它兼容
   - `ReleaseReservedEntity` 会提升 version 并归还 free-list；如果漏掉 version 递增，stale handle 会重新变活

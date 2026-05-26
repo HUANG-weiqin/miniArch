@@ -4,7 +4,6 @@ using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 
 using MiniArch.Core;
 
@@ -30,8 +29,9 @@ public sealed class World : IDisposable
     private readonly Dictionary<Signature, Archetype> _archetypes = new();
     private readonly Dictionary<CreateArchetypeKey, Archetype> _createArchetypeCache = new();
     private readonly HierarchyTable _hierarchy = new();
-    private readonly List<int> _versions;
-    private readonly List<EntityLocation> _locations;
+    private int[] _versions;
+    private EntityLocation[] _locations;
+    private int _entitySlotCount;
     private Dictionary<QueryDescription, QueryFilter> _queryFiltersByDescription = new();
     private Dictionary<QueryFilter, MiniArch.Core.Query> _queries = new();
     private Archetype[] _archetypeSnapshot = Array.Empty<Archetype>();
@@ -67,8 +67,9 @@ public sealed class World : IDisposable
 
         _chunkCapacity = chunkCapacity;
         _adaptiveChunkCapacity = chunkCapacity == DefaultChunkCapacity;
-        _versions = new List<int>(entityCapacity);
-        _locations = new List<EntityLocation>(entityCapacity);
+        _versions = new int[entityCapacity];
+        _locations = new EntityLocation[entityCapacity];
+        _entitySlotCount = 0;
         _freeIds = entityCapacity == 0 ? Array.Empty<RecycledEntity>() : new RecycledEntity[entityCapacity];
         _destroyVisitedGen = entityCapacity == 0 ? [] : new int[entityCapacity];
         _destroyOrderScratch = new List<Entity>(entityCapacity);
@@ -86,8 +87,9 @@ public sealed class World : IDisposable
         _queryFiltersByDescription.Clear();
         _queries.Clear();
         _archetypeSnapshot = Array.Empty<Archetype>();
-        _versions.Clear();
-        _locations.Clear();
+        _entitySlotCount = 0;
+        _versions = Array.Empty<int>();
+        _locations = Array.Empty<EntityLocation>();
         _freeIdCount = 0;
         _destroyVisitedGen = [];
         _destroyCurrentGen = 0;
@@ -117,13 +119,13 @@ public sealed class World : IDisposable
     /// <summary>
     /// Gets the entity metadata capacity.
     /// </summary>
-    public int EntityCapacity => _versions.Capacity;
+    public int EntityCapacity => _versions.Length;
 
     internal int ChunkCapacity => _chunkCapacity;
 
-    internal int EntitySlotCount => _versions.Count;
+    internal int EntitySlotCount => _entitySlotCount;
 
-    internal ReadOnlySpan<int> EntityVersions => CollectionsMarshal.AsSpan(_versions);
+    internal ReadOnlySpan<int> EntityVersions => _versions.AsSpan(0, _entitySlotCount);
 
     internal Archetype[] Archetypes => Volatile.Read(ref _archetypeSnapshot);
 
@@ -150,13 +152,12 @@ public sealed class World : IDisposable
         _destroyCurrentGen = 0;
         _hierarchy.Reset();
 
-        _versions.Clear();
-        _locations.Clear();
+        _entitySlotCount = 0;
         EnsureCapacity(entitySlotCount);
-        CollectionsMarshal.SetCount(_versions, entitySlotCount);
-        CollectionsMarshal.SetCount(_locations, entitySlotCount);
-        CollectionsMarshal.AsSpan(_versions).Clear();
-        CollectionsMarshal.AsSpan(_locations).Clear();
+        EnsureEntityCapacity(entitySlotCount);
+        _entitySlotCount = entitySlotCount;
+        _versions.AsSpan(0, entitySlotCount).Clear();
+        _locations.AsSpan(0, entitySlotCount).Clear();
 
         if (_freeIds.Length < entitySlotCount)
         {
@@ -184,13 +185,13 @@ public sealed class World : IDisposable
 
     internal void RebuildFreeIdStack()
     {
-        if (_freeIds.Length < _locations.Count)
+        if (_freeIds.Length < _entitySlotCount)
         {
-            Array.Resize(ref _freeIds, _locations.Count);
+            Array.Resize(ref _freeIds, _entitySlotCount);
         }
 
         _freeIdCount = 0;
-        for (var id = _locations.Count - 1; id >= 0; id--)
+        for (var id = _entitySlotCount - 1; id >= 0; id--)
         {
             if (_locations[id].Archetype is null)
             {
@@ -730,17 +731,26 @@ public sealed class World : IDisposable
             throw new ArgumentOutOfRangeException(nameof(entityCapacity));
         }
 
-        if (_versions.Capacity < entityCapacity)
+        if (_versions.Length < entityCapacity)
         {
-            _versions.Capacity = entityCapacity;
+            Array.Resize(ref _versions, entityCapacity);
         }
 
-        if (_locations.Capacity < entityCapacity)
+        if (_locations.Length < entityCapacity)
         {
-            _locations.Capacity = entityCapacity;
+            Array.Resize(ref _locations, entityCapacity);
         }
 
         EnsureDestroyScratchCapacity(entityCapacity);
+    }
+
+
+    private void EnsureEntityCapacity(int requiredCount)
+    {
+        if (requiredCount <= _versions.Length) return;
+        var newLength = Math.Max(requiredCount, _versions.Length * 2);
+        Array.Resize(ref _versions, newLength);
+        Array.Resize(ref _locations, newLength);
     }
 
     /// <summary>
@@ -890,7 +900,7 @@ public sealed class World : IDisposable
     public bool TryGetLocation(Entity entity, out EntityInfo info)
     {
         ThrowIfDisposed();
-        if (entity.Id < 0 || entity.Id >= _locations.Count)
+        if (entity.Id < 0 || entity.Id >= _entitySlotCount)
         {
             info = default;
             return false;
@@ -1345,7 +1355,7 @@ public sealed class World : IDisposable
     private EntityLocation GetRequiredLocation(Entity entity)
     {
         var id = entity.Id;
-        if ((uint)id >= (uint)_locations.Count)
+        if ((uint)id >= (uint)_entitySlotCount)
         {
             ThrowInvalidEntity(entity);
         }
@@ -1407,7 +1417,7 @@ public sealed class World : IDisposable
 
     private int AppendEntitySlots(int newEntityCount)
     {
-        var startId = _versions.Count;
+        var startId = _entitySlotCount;
         if (newEntityCount == 0)
         {
             return startId;
@@ -1415,15 +1425,15 @@ public sealed class World : IDisposable
 
         var requiredCount = startId + newEntityCount;
         EnsureBatchCapacity(requiredCount, newEntityCount);
-        CollectionsMarshal.SetCount(_versions, requiredCount);
-        CollectionsMarshal.SetCount(_locations, requiredCount);
-        CollectionsMarshal.AsSpan(_versions)[startId..requiredCount].Fill(1);
+        EnsureEntityCapacity(requiredCount);
+        _entitySlotCount = requiredCount;
+        _versions.AsSpan(startId..requiredCount).Fill(1);
         return startId;
     }
 
     private void EnsureBatchCapacity(int requiredCount, int batchCount)
     {
-        if (_versions.Capacity >= requiredCount && _locations.Capacity >= requiredCount)
+        if (_versions.Length >= requiredCount && _locations.Length >= requiredCount)
         {
             return;
         }
@@ -1467,7 +1477,7 @@ public sealed class World : IDisposable
 
     private void WriteCreatedEntitiesAndLocations(Archetype archetype, Span<Entity> entities, ReadOnlySpan<EntityBatchRange> ranges, int reusedCount, int startId)
     {
-        var locations = CollectionsMarshal.AsSpan(_locations);
+        var locations = _locations.AsSpan(0, _entitySlotCount);
         var freeIds = _freeIds;
         var freeIndex = _freeIdCount;
         var entityIndex = 0;
@@ -1512,10 +1522,12 @@ public sealed class World : IDisposable
                 return recycled.Id;
             }
 
-            var id = _versions.Count;
-            _versions.Add(1);
-            _locations.Add(default);
-            EnsureDestroyScratchCapacity(_versions.Count);
+            var id = _entitySlotCount;
+            EnsureEntityCapacity(_entitySlotCount + 1);
+            _versions[_entitySlotCount] = 1;
+            _locations[_entitySlotCount] = default;
+            _entitySlotCount++;
+            EnsureDestroyScratchCapacity(_entitySlotCount);
             version = 1;
             return id;
         }
@@ -1565,7 +1577,7 @@ public sealed class World : IDisposable
 
     private void ValidateSnapshotEntitySlot(int entityId)
     {
-        if (entityId < 0 || entityId >= _versions.Count)
+        if (entityId < 0 || entityId >= _entitySlotCount)
         {
             throw new ArgumentOutOfRangeException(nameof(entityId));
         }
@@ -1584,7 +1596,7 @@ public sealed class World : IDisposable
 
     internal void ReleaseReservedEntity(Entity entity)
     {
-        if (entity.Id < 0 || entity.Id >= _locations.Count)
+        if (entity.Id < 0 || entity.Id >= _entitySlotCount)
         {
             throw new InvalidOperationException($"Entity {entity} is not a valid deferred entity. The entity handle may be invalid or already materialized.");
         }
@@ -1861,7 +1873,7 @@ public sealed class World : IDisposable
 
     private void EnsureReplayReservation(Entity entity)
     {
-        if (entity.Id < _locations.Count &&
+        if (entity.Id < _entitySlotCount &&
             _locations[entity.Id].Archetype is null &&
             _versions[entity.Id] == entity.Version &&
             !IsEntityAvailableInFreeList(entity))

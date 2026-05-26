@@ -83,6 +83,46 @@ public sealed class CommandBufferTests
     }
 
     [Fact]
+    public void Submit_destroy_uses_recorded_entity_version()
+    {
+        var world = new World();
+        var stale = world.Create(new Position(1, 2));
+        var buffer = new CommandBuffer(world);
+
+        buffer.Destroy(stale);
+        world.Destroy(stale);
+        var recycled = world.Create(new Position(3, 4));
+
+        Assert.Equal(stale.Id, recycled.Id);
+        Assert.NotEqual(stale.Version, recycled.Version);
+        buffer.Submit();
+
+        Assert.True(world.IsAlive(recycled));
+        Assert.False(world.IsAlive(stale));
+    }
+
+    [Fact]
+    public void Submit_destroy_does_not_skip_hierarchy_for_recycled_child()
+    {
+        var world = new World();
+        var staleChild = world.Create();
+        var buffer = new CommandBuffer(world);
+
+        buffer.Destroy(staleChild);
+        world.Destroy(staleChild);
+        var recycledChild = world.Create();
+        var parent = world.Create();
+        buffer.Link(parent, recycledChild);
+
+        Assert.Equal(staleChild.Id, recycledChild.Id);
+        Assert.NotEqual(staleChild.Version, recycledChild.Version);
+        buffer.Submit();
+
+        Assert.True(world.TryGetParent(recycledChild, out var actualParent));
+        Assert.Equal(parent, actualParent);
+    }
+
+    [Fact]
     public void Submit_clears_the_buffer_and_allows_reuse()
     {
         var world = new World();
@@ -519,6 +559,35 @@ public sealed class CommandBufferTests
     }
 
     [Fact]
+    public void Snapshot_destroy_uses_recorded_entity_version()
+    {
+        var world = new World();
+        var stale = world.Create();
+        var cb = new CommandBuffer(world);
+
+        cb.Destroy(stale);
+        world.Destroy(stale);
+        var recycled = world.Create();
+        var delta = cb.Snapshot();
+
+        Assert.Contains(stale, delta.DestroyedEntities);
+        Assert.DoesNotContain(recycled, delta.DestroyedEntities);
+    }
+
+    [Fact]
+    public void Snapshot_destroy_preserves_unknown_entity_handle()
+    {
+        var world = new World();
+        var unknown = new Entity(9999, 1);
+        var cb = new CommandBuffer(world);
+
+        cb.Destroy(unknown);
+        var delta = cb.Snapshot();
+
+        Assert.Contains(unknown, delta.DestroyedEntities);
+    }
+
+    [Fact]
     public void HasEntity_returns_false_for_unknown_entity()
     {
         var world = new World();
@@ -817,6 +886,25 @@ public sealed class CommandBufferTests
 
         var delta = await task;
         Assert.Single(delta.DestroyedEntities);
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotAsync_destroy_uses_recorded_entity_version()
+    {
+        var world = new World();
+        var stale = world.Create(new Position(1, 2));
+        var buffer = new CommandBuffer(world);
+
+        buffer.Destroy(stale);
+        world.Destroy(stale);
+        var recycled = world.Create(new Position(3, 4));
+
+        var task = buffer.SubmitAndSnapshotAsync();
+        Assert.True(world.IsAlive(recycled));
+
+        var delta = await task;
+        Assert.Contains(stale, delta.DestroyedEntities);
+        Assert.DoesNotContain(recycled, delta.DestroyedEntities);
     }
 
     [Fact]

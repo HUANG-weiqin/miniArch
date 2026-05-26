@@ -21,7 +21,8 @@ public sealed class CommandBuffer : ICommandRecorder
     private int _opsPoolCount;
     private int[] _opsLookup = Array.Empty<int>();
     private int _maxOpsEntityId;
-    private HashSet<Entity> _existingDestroys = new();
+    private Entity[] _existingDestroyEntities = [];
+    private int _existingDestroyCount;
     private CreatedState[] _createdStatePool = Array.Empty<CreatedState>();
     private Entity[] _createdEntityByPoolIndex = Array.Empty<Entity>();
     private int _createdStatePoolCount;
@@ -186,7 +187,61 @@ public sealed class CommandBuffer : ICommandRecorder
             }
         }
 
-        _existingDestroys.Add(entity);
+        AddExistingDestroy(entity);
+    }
+
+    private void AddExistingDestroy(Entity entity)
+    {
+        var index = FindExistingDestroy(entity);
+        if (index >= 0) return;
+        var insertIndex = ~index;
+        if (_existingDestroyCount == _existingDestroyEntities.Length)
+        {
+            var newCapacity = _existingDestroyEntities.Length == 0 ? 4 : _existingDestroyEntities.Length * 2;
+            Array.Resize(ref _existingDestroyEntities, newCapacity);
+        }
+        if (insertIndex < _existingDestroyCount)
+            Array.Copy(_existingDestroyEntities, insertIndex, _existingDestroyEntities, insertIndex + 1, _existingDestroyCount - insertIndex);
+        _existingDestroyEntities[insertIndex] = entity;
+        _existingDestroyCount++;
+    }
+
+    private int FindExistingDestroy(Entity entity)
+    {
+        var low = 0;
+        var high = _existingDestroyCount - 1;
+        while (low <= high)
+        {
+            var mid = low + ((high - low) >> 1);
+            var comparison = CompareEntity(_existingDestroyEntities[mid], entity);
+            if (comparison == 0) return mid;
+            if (comparison < 0) low = mid + 1;
+            else high = mid - 1;
+        }
+
+        return ~low;
+    }
+
+    private static int FindExistingDestroy(Entity[] entities, int count, Entity entity)
+    {
+        var low = 0;
+        var high = count - 1;
+        while (low <= high)
+        {
+            var mid = low + ((high - low) >> 1);
+            var comparison = CompareEntity(entities[mid], entity);
+            if (comparison == 0) return mid;
+            if (comparison < 0) low = mid + 1;
+            else high = mid - 1;
+        }
+
+        return ~low;
+    }
+
+    private static int CompareEntity(Entity left, Entity right)
+    {
+        var idComparison = left.Id.CompareTo(right.Id);
+        return idComparison != 0 ? idComparison : left.Version.CompareTo(right.Version);
     }
 
     /// <summary>
@@ -211,7 +266,7 @@ public sealed class CommandBuffer : ICommandRecorder
     public bool Submit()
     {
         if (_opsPoolCount == 0 &&
-            _existingDestroys.Count == 0 && _createdStatePoolCount == 0 &&
+            _existingDestroyCount == 0 && _createdStatePoolCount == 0 &&
             _hierarchyByChild.Count == 0)
         {
             return false;
@@ -258,7 +313,7 @@ public sealed class CommandBuffer : ICommandRecorder
 
             foreach (var (child, intent) in _hierarchyByChild)
             {
-                if (_existingDestroys.Contains(child)) continue;
+                if (FindExistingDestroy(child) >= 0) continue;
                 if (_hasCreatedEntities)
                 {
                     var csIdx = GetCreatedStateIndex(child);
@@ -271,8 +326,9 @@ public sealed class CommandBuffer : ICommandRecorder
                     _world.Unlink(child);
             }
 
-            foreach (var entity in _existingDestroys)
+            for (var i = 0; i < _existingDestroyCount; i++)
             {
+                var entity = _existingDestroyEntities[i];
                 if (_world.IsAlive(entity))
                     _world.Destroy(entity);
             }
@@ -306,7 +362,7 @@ public sealed class CommandBuffer : ICommandRecorder
     public Task<FrameDelta> SubmitAndSnapshotAsync()
     {
         if (_opsPoolCount == 0 &&
-            _existingDestroys.Count == 0 && _createdStatePoolCount == 0 &&
+            _existingDestroyCount == 0 && _createdStatePoolCount == 0 &&
             _hierarchyByChild.Count == 0)
         {
             return Task.FromResult(new FrameDelta());
@@ -334,7 +390,8 @@ public sealed class CommandBuffer : ICommandRecorder
             OpsEntityByPoolIndex = _opsEntityByPoolIndex,
             OpsLookup = _opsLookup,
             MaxOpsEntityId = _maxOpsEntityId,
-            ExistingDestroys = _existingDestroys,
+            ExistingDestroyEntities = _existingDestroyEntities,
+            ExistingDestroyCount = _existingDestroyCount,
             HierarchyByChild = _hierarchyByChild,
             Slabs = _slabs,
             HasCreatedEntities = _hasCreatedEntities,
@@ -351,7 +408,8 @@ public sealed class CommandBuffer : ICommandRecorder
         _opsEntityByPoolIndex = Array.Empty<Entity>();
         _opsLookup = Array.Empty<int>();
         _maxOpsEntityId = 0;
-        _existingDestroys = new HashSet<Entity>();
+        _existingDestroyCount = 0;
+        _existingDestroyEntities = [];
         _hierarchyByChild = new Dictionary<Entity, HierarchyIntent>();
         _slabs = new List<byte[]>();
         _hasCreatedEntities = false;
@@ -435,7 +493,7 @@ public sealed class CommandBuffer : ICommandRecorder
 
             foreach (var (child, intent) in frozen.HierarchyByChild)
             {
-                if (frozen.ExistingDestroys.Contains(child)) continue;
+                if (FindExistingDestroy(frozen.ExistingDestroyEntities, frozen.ExistingDestroyCount, child) >= 0) continue;
                 if (frozen.HasCreatedEntities)
                 {
                     var id = child.Id;
@@ -452,8 +510,9 @@ public sealed class CommandBuffer : ICommandRecorder
                     _world.Unlink(child);
             }
 
-            foreach (var entity in frozen.ExistingDestroys)
+            for (var i = 0; i < frozen.ExistingDestroyCount; i++)
             {
+                var entity = frozen.ExistingDestroyEntities[i];
                 if (_world.IsAlive(entity))
                     _world.Destroy(entity);
             }
@@ -485,7 +544,7 @@ public sealed class CommandBuffer : ICommandRecorder
         delta.AddCommands.EnsureCapacity(frozen.OpsPoolCount);
         delta.SetCommands.EnsureCapacity(frozen.OpsPoolCount);
         delta.RemoveCommands.EnsureCapacity(frozen.OpsPoolCount);
-        delta.DestroyedEntities.EnsureCapacity(frozen.ExistingDestroys.Count);
+        delta.DestroyedEntities.EnsureCapacity(frozen.ExistingDestroyCount);
 
         for (var poolIdx = 0; poolIdx < frozen.CreatedStatePoolCount; poolIdx++)
         {
@@ -509,7 +568,7 @@ public sealed class CommandBuffer : ICommandRecorder
 
         foreach (var (child, intent) in frozen.HierarchyByChild)
         {
-            if (frozen.ExistingDestroys.Contains(child)) continue;
+            if (FindExistingDestroy(frozen.ExistingDestroyEntities, frozen.ExistingDestroyCount, child) >= 0) continue;
             if (frozen.HasCreatedEntities)
             {
                 var id = child.Id;
@@ -546,9 +605,9 @@ public sealed class CommandBuffer : ICommandRecorder
             }
         }
 
-        foreach (var entity in frozen.ExistingDestroys)
+        for (var i = 0; i < frozen.ExistingDestroyCount; i++)
         {
-            delta.DestroyedEntities.Add(entity);
+            delta.DestroyedEntities.Add(frozen.ExistingDestroyEntities[i]);
         }
 
         delta.DeepCopyOwnedData();
@@ -706,7 +765,7 @@ public sealed class CommandBuffer : ICommandRecorder
         delta.AddCommands.EnsureCapacity(_opsPoolCount);
         delta.SetCommands.EnsureCapacity(_opsPoolCount);
         delta.RemoveCommands.EnsureCapacity(_opsPoolCount);
-        delta.DestroyedEntities.EnsureCapacity(_existingDestroys.Count);
+        delta.DestroyedEntities.EnsureCapacity(_existingDestroyCount);
 
         for (var poolIdx = 0; poolIdx < _createdStatePoolCount; poolIdx++)
         {
@@ -730,7 +789,7 @@ public sealed class CommandBuffer : ICommandRecorder
 
         foreach (var (child, intent) in _hierarchyByChild)
         {
-            if (_existingDestroys.Contains(child))
+            if (FindExistingDestroy(child) >= 0)
             {
                 continue;
             }
@@ -774,15 +833,15 @@ public sealed class CommandBuffer : ICommandRecorder
             }
         }
 
-        foreach (var entity in _existingDestroys)
+        for (var i = 0; i < _existingDestroyCount; i++)
         {
-            delta.DestroyedEntities.Add(entity);
+            delta.DestroyedEntities.Add(_existingDestroyEntities[i]);
         }
     }
 
     private void Clear()
     {
-        _existingDestroys.Clear();
+        _existingDestroyCount = 0;
         for (int i = 0; i < _opsPoolCount; i++)
         {
             _opsPool[i].Overflow?.Clear();
@@ -1173,7 +1232,8 @@ public sealed class CommandBuffer : ICommandRecorder
         public int[] OpsLookup = null!;
         public int MaxOpsEntityId;
 
-        public HashSet<Entity> ExistingDestroys = null!;
+        public Entity[] ExistingDestroyEntities = null!;
+        public int ExistingDestroyCount;
         public Dictionary<Entity, HierarchyIntent> HierarchyByChild = null!;
         public List<byte[]> Slabs = null!;
         public bool HasCreatedEntities;
