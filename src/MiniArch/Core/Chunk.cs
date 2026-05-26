@@ -177,7 +177,9 @@ public sealed class Chunk
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ref T GetComponentRef<T>(int columnIndex)
     {
+#if DEBUG
         ValidateElementSize<T>(columnIndex);
+#endif
         return ref Unsafe.As<byte, T>(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), _columnByteOffsets[columnIndex]));
     }
 
@@ -207,7 +209,9 @@ public sealed class Chunk
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void SetComponentAtTyped<T>(int columnIndex, int row, in T value)
     {
+#if DEBUG
         ValidateElementSize<T>(columnIndex);
+#endif
         ref var target = ref GetComponentRefAt<T>(columnIndex, row);
         target = value;
     }
@@ -215,14 +219,18 @@ public sealed class Chunk
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal T GetComponentAt<T>(int columnIndex, int row)
     {
+#if DEBUG
         ValidateElementSize<T>(columnIndex);
+#endif
         return GetComponentRefAt<T>(columnIndex, row);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ReadOnlySpan<T> GetComponentSpanAt<T>(int columnIndex)
     {
+#if DEBUG
         ValidateElementSize<T>(columnIndex);
+#endif
         return MemoryMarshal.CreateReadOnlySpan(ref GetComponentRefAt<T>(columnIndex, 0), Count);
     }
 
@@ -498,6 +506,7 @@ public sealed class Chunk
         }
     }
 
+#if DEBUG
     private void ValidateElementSize<T>(int columnIndex)
     {
         if (_componentTypes[columnIndex] != typeof(T) || _elementSizes[columnIndex] != Unsafe.SizeOf<T>())
@@ -505,6 +514,7 @@ public sealed class Chunk
             throw new InvalidCastException("Component type does not match column element type.");
         }
     }
+#endif
 
     private static BoxedReaderDelegate GetBoxedReader(Type type)
     {

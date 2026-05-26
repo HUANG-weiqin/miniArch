@@ -741,6 +741,14 @@ public sealed class World : IDisposable
     public void Destroy(Entity entity)
     {
         ThrowIfDisposed();
+
+        if (!_hierarchy.HasChildren(entity))
+        {
+            DestroySingle(entity);
+            TouchQueryLayout();
+            return;
+        }
+
         _destroyOrderScratch.Clear();
         _destroyVisitedScratch.Clear();
 
@@ -962,6 +970,7 @@ public sealed class World : IDisposable
         TouchQueryLayout();
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ApplyTypedAddOrSet<T>(Entity entity, ComponentType componentType, in T component)
     {
         var info = GetRequiredLocation(entity);
@@ -1352,20 +1361,34 @@ public sealed class World : IDisposable
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private EntityLocation GetRequiredLocation(Entity entity)
     {
-        if (entity.Id < 0 || entity.Id >= _locations.Count)
+        var id = entity.Id;
+        if ((uint)id >= (uint)_locations.Count)
         {
-            throw new InvalidOperationException($"Entity {entity} does not exist. The entity may have never been created, or its id is invalid.");
+            ThrowInvalidEntity(entity);
         }
 
-        var info = _locations[entity.Id];
-        if (info.Archetype is null || _versions[entity.Id] != entity.Version)
+        var info = _locations[id];
+        if (info.Archetype is null || _versions[id] != entity.Version)
         {
-            throw new InvalidOperationException($"Entity {entity} is no longer alive. It may have been destroyed in a previous frame or the handle is stale.");
+            ThrowStaleEntity(entity);
         }
 
         return info;
+    }
+
+    [DoesNotReturn]
+    private void ThrowInvalidEntity(Entity entity)
+    {
+        throw new InvalidOperationException($"Entity {entity} does not exist. The entity may have never been created, or its id is invalid.");
+    }
+
+    [DoesNotReturn]
+    private void ThrowStaleEntity(Entity entity)
+    {
+        throw new InvalidOperationException($"Entity {entity} is no longer alive. It may have been destroyed in a previous frame or the handle is stale.");
     }
 
     private void DestroySingle(Entity entity)
@@ -1550,14 +1573,21 @@ public sealed class World : IDisposable
         _queryGeneration++;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private ComponentType GetComponentType<T>()
     {
-        var entry = Volatile.Read(ref ComponentTypeCache<T>.Entry);
+        var entry = ComponentTypeCache<T>.Entry;
         if (entry is not null && ReferenceEquals(entry.Registry, _components))
         {
             return entry.ComponentType;
         }
 
+        return GetComponentTypeSlow<T>();
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private ComponentType GetComponentTypeSlow<T>()
+    {
         var componentType = _components.GetOrCreate<T>();
         Volatile.Write(ref ComponentTypeCache<T>.Entry, new ComponentTypeCacheEntry(_components, componentType));
         return componentType;

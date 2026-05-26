@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace MiniArch.Core;
 
 /// <summary>
@@ -167,8 +169,10 @@ public sealed class Archetype
     /// <summary>
     /// Gets a chunk by index.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Chunk GetChunk(int chunkIndex) => _chunks[chunkIndex];
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool TryGetComponentIndex(ComponentType component, out int columnIndex)
     {
         var componentId = component.Value;

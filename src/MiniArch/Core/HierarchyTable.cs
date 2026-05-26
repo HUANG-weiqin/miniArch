@@ -101,6 +101,17 @@ internal sealed class HierarchyTable
         return result;
     }
 
+    public bool HasChildren(Entity entity)
+    {
+        if (entity.Id < 0 || entity.Id >= _childrenByParent.Length)
+        {
+            return false;
+        }
+
+        var children = _childrenByParent[entity.Id];
+        return children is not null && children.Count > 0;
+    }
+
     public void CollectDestroySubtree(World world, Entity root, HashSet<Entity> visited, List<Entity> destroyOrder)
     {
         if (!world.IsAlive(root) || !visited.Add(root))
