@@ -27,7 +27,6 @@ public sealed class World : IDisposable
         ?? throw new InvalidOperationException("Unable to find managed type size helper.");
     private static readonly int EntitySizeInBytes = GetManagedTypeSizeGeneric<Entity>();
 
-    private readonly ComponentRegistry _components = new();
     private readonly Dictionary<Signature, Archetype> _archetypes = new();
     private readonly Dictionary<CreateArchetypeKey, Archetype> _createArchetypeCache = new();
     private readonly HierarchyTable _hierarchy = new();
@@ -93,7 +92,9 @@ public sealed class World : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ThrowIfDisposed()
     {
+#if DEBUG
         if (_disposed) throw new ObjectDisposedException(nameof(World));
+#endif
     }
 
     /// <summary>
@@ -104,7 +105,7 @@ public sealed class World : IDisposable
         get
         {
             ThrowIfDisposed();
-            return _components;
+            return ComponentRegistry.Shared;
         }
     }
 
@@ -1236,7 +1237,7 @@ public sealed class World : IDisposable
         var components = signature.AsSpan();
         for (var index = 0; index < components.Length; index++)
         {
-            bytesPerEntity += GetManagedTypeSize(_components.GetType(components[index]));
+            bytesPerEntity += GetManagedTypeSize(ComponentRegistry.Shared.GetType(components[index]));
         }
 
         return bytesPerEntity;
@@ -1269,7 +1270,7 @@ public sealed class World : IDisposable
         var components = signature.AsSpan();
         for (var index = 0; index < componentCount; index++)
         {
-            types[index] = _components.GetType(components[index]);
+            types[index] = ComponentRegistry.Shared.GetType(components[index]);
         }
 
         return types;
@@ -1339,7 +1340,7 @@ public sealed class World : IDisposable
         var componentTypes = new ComponentType[types.Length];
         for (var i = 0; i < types.Length; i++)
         {
-            componentTypes[i] = _components.GetOrCreate(types[i]);
+            componentTypes[i] = ComponentRegistry.Shared.GetOrCreate(types[i]);
         }
 
         return QueryComponentSet.CreateFrom(componentTypes);
@@ -1370,6 +1371,7 @@ public sealed class World : IDisposable
             ThrowInvalidEntity(entity);
         }
 
+#if DEBUG
         var info = _locations[id];
         if (info.Archetype is null || _versions[id] != entity.Version)
         {
@@ -1377,6 +1379,9 @@ public sealed class World : IDisposable
         }
 
         return info;
+#else
+        return _locations[id];
+#endif
     }
 
     [DoesNotReturn]
@@ -1576,21 +1581,7 @@ public sealed class World : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private ComponentType GetComponentType<T>()
     {
-        var entry = ComponentTypeCache<T>.Entry;
-        if (entry is not null && ReferenceEquals(entry.Registry, _components))
-        {
-            return entry.ComponentType;
-        }
-
-        return GetComponentTypeSlow<T>();
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private ComponentType GetComponentTypeSlow<T>()
-    {
-        var componentType = _components.GetOrCreate<T>();
-        Volatile.Write(ref ComponentTypeCache<T>.Entry, new ComponentTypeCacheEntry(_components, componentType));
-        return componentType;
+        return Component<T>.ComponentType;
     }
 
     private void ValidateSnapshotEntitySlot(int entityId)
@@ -1966,7 +1957,7 @@ public sealed class World : IDisposable
         ComponentType componentType,
         Dictionary<Type, ComponentType>? cache)
     {
-        if (componentType.IsValid && _components.TryGetType(componentType, out var existing) && existing == runtimeType)
+        if (componentType.IsValid && ComponentRegistry.Shared.TryGetType(componentType, out var existing) && existing == runtimeType)
         {
             return componentType;
         }
@@ -1976,15 +1967,8 @@ public sealed class World : IDisposable
 
     private ComponentType GetComponentType(Type componentType)
     {
-        return _components.GetOrCreate(componentType);
+        return ComponentRegistry.Shared.GetOrCreate(componentType);
     }
-
-    private static class ComponentTypeCache<T>
-    {
-        public static ComponentTypeCacheEntry? Entry;
-    }
-
-    private sealed record ComponentTypeCacheEntry(ComponentRegistry Registry, ComponentType ComponentType);
 
     private static class CreateArchetypeCache<T1>
     {

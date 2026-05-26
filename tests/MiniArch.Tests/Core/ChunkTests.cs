@@ -14,7 +14,7 @@ public sealed class ChunkTests
     [Fact]
     public void Chunk_stores_entities_densely()
     {
-        var registry = new ComponentRegistry();
+        var registry = ComponentRegistry.Shared;
         var position = registry.GetOrCreate<Position>();
         var velocity = registry.GetOrCreate<Velocity>();
         var signature = new Signature(position, velocity);
@@ -44,7 +44,7 @@ public sealed class ChunkTests
     [Fact]
     public void Removing_a_row_swaps_last_row_into_the_gap()
     {
-        var registry = new ComponentRegistry();
+        var registry = ComponentRegistry.Shared;
         var position = registry.GetOrCreate<Position>();
         var velocity = registry.GetOrCreate<Velocity>();
         var signature = new Signature(position, velocity);
@@ -86,7 +86,7 @@ public sealed class ChunkTests
     [Fact]
     public void Setting_a_component_only_mutates_the_targeted_row()
     {
-        var registry = new ComponentRegistry();
+        var registry = ComponentRegistry.Shared;
         var position = registry.GetOrCreate<Position>();
         var velocity = registry.GetOrCreate<Velocity>();
         var signature = new Signature(position, velocity);
@@ -124,7 +124,7 @@ public sealed class ChunkTests
     [Fact]
     public void Typed_chunk_exposes_a_read_only_span_over_a_component_column()
     {
-        var registry = new ComponentRegistry();
+        var registry = ComponentRegistry.Shared;
         var position = registry.GetOrCreate<Position>();
         var velocity = registry.GetOrCreate<Velocity>();
         var signature = new Signature(position, velocity);
@@ -159,7 +159,7 @@ public sealed class ChunkTests
     [Fact]
     public void Removing_a_row_preserves_moved_values_through_typed_apis()
     {
-        var registry = new ComponentRegistry();
+        var registry = ComponentRegistry.Shared;
         var position = registry.GetOrCreate<Position>();
         var velocity = registry.GetOrCreate<Velocity>();
         var signature = new Signature(position, velocity);
@@ -191,7 +191,7 @@ public sealed class ChunkTests
     [Fact]
     public void Flat_storage_preserves_mixed_size_component_columns()
     {
-        var registry = new ComponentRegistry();
+        var registry = ComponentRegistry.Shared;
         var small = registry.GetOrCreate<Small>();
         var large = registry.GetOrCreate<Large>();
         var signature = new Signature(small, large);
@@ -212,7 +212,7 @@ public sealed class ChunkTests
     [Fact]
     public void Flat_storage_rejects_managed_reference_components()
     {
-        var registry = new ComponentRegistry();
+        var registry = ComponentRegistry.Shared;
         var label = registry.GetOrCreate<Label>();
         var signature = new Signature(label);
 
@@ -229,13 +229,7 @@ public sealed class ChunkTests
 
     private static Chunk CreateChunk(Signature signature, Type t1, Type t2, int capacity)
     {
-        var componentIdToColumnIndex = new int[2];
-        var components = signature.AsSpan();
-        for (var i = 0; i < components.Length; i++)
-        {
-            componentIdToColumnIndex[components[i].Value] = i;
-        }
-
+        var componentIdToColumnIndex = ComponentColumnMap.Build(signature);
         return new Chunk(signature, [t1, t2], componentIdToColumnIndex, capacity);
     }
 

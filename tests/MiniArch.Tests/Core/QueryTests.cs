@@ -30,7 +30,8 @@ public sealed class QueryTests
         var matched = query.MatchedArchetypes;
 
         Assert.Equal(2, matched.Count);
-        Assert.All(matched, archetype => Assert.Contains(new ComponentType(0), archetype.Signature));
+        var positionId = ComponentRegistry.Shared.GetOrCreate<Position>();
+        Assert.All(matched, archetype => Assert.Contains(positionId, archetype.Signature));
     }
 
     [Fact]

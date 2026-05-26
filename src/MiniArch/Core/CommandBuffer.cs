@@ -866,16 +866,7 @@ public sealed class CommandBuffer : ICommandRecorder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private int GetComponentTypeId<T>()
     {
-        var registry = _world.Components;
-        var entry = Volatile.Read(ref ComponentTypeCache<T>.Entry);
-        if (entry is not null && ReferenceEquals(entry.Registry, registry))
-        {
-            return entry.ComponentTypeId;
-        }
-
-        var componentTypeId = registry.GetOrCreate<T>().Value;
-        Volatile.Write(ref ComponentTypeCache<T>.Entry, new ComponentTypeIdCacheEntry(registry, componentTypeId));
-        return componentTypeId;
+        return Component<T>.ComponentType.Value;
     }
 
     private int ComponentsTypeToId(ComponentType componentType)
@@ -1167,13 +1158,6 @@ public sealed class CommandBuffer : ICommandRecorder
     }
 
     private readonly record struct CreatedComponent(Type RuntimeType, ComponentType ComponentType, int SlabIndex, int DataOffset, int DataSize);
-
-    private static class ComponentTypeCache<T>
-    {
-        public static ComponentTypeIdCacheEntry? Entry;
-    }
-
-    private sealed record ComponentTypeIdCacheEntry(ComponentRegistry Registry, int ComponentTypeId);
 
     private sealed class FrozenBufferState
     {

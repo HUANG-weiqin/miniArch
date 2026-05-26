@@ -16,8 +16,6 @@ internal static class WorldClone
             target.SetSnapshotEntityVersion(i, sourceVersions[i]);
         }
 
-        RegisterComponentTypesInOrder(source, target);
-
         foreach (var srcArch in source.Archetypes)
         {
             if (srcArch.EntityCount == 0)
@@ -55,26 +53,4 @@ internal static class WorldClone
         return target;
     }
 
-    private static void RegisterComponentTypesInOrder(World source, World target)
-    {
-        var registered = source.Components.RegisteredTypes;
-        if (registered.Count == 0)
-        {
-            return;
-        }
-
-        var sorted = new KeyValuePair<Type, ComponentType>[registered.Count];
-        var i = 0;
-        foreach (var kvp in registered)
-        {
-            sorted[i++] = kvp;
-        }
-
-        Array.Sort(sorted, static (a, b) => a.Value.Value.CompareTo(b.Value.Value));
-
-        for (var index = 0; index < sorted.Length; index++)
-        {
-            target.Components.GetOrCreate(sorted[index].Key);
-        }
-    }
 }

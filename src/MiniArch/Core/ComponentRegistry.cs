@@ -5,6 +5,8 @@ namespace MiniArch.Core;
 /// </summary>
 public sealed class ComponentRegistry
 {
+    public static ComponentRegistry Shared { get; } = new();
+
     private readonly object _writeLock = new();
     private RegistrySnapshot _snapshot = new(new Dictionary<Type, ComponentType>(), Array.Empty<Type>());
 
@@ -88,4 +90,9 @@ public sealed class ComponentRegistry
     public IReadOnlyDictionary<Type, ComponentType> RegisteredTypes => Volatile.Read(ref _snapshot).TypeToId;
 
     private sealed record RegistrySnapshot(IReadOnlyDictionary<Type, ComponentType> TypeToId, Type[] IdToType);
+}
+
+public static class Component<T>
+{
+    public static readonly ComponentType ComponentType = ComponentRegistry.Shared.GetOrCreate<T>();
 }

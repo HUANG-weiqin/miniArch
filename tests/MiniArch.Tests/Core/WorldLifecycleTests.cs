@@ -88,8 +88,10 @@ public sealed class WorldLifecycleTests
         world.Add(entity, new Velocity(3, 4));
 
         Assert.True(world.TryGetLocation(entity, out var info));
-        Assert.Contains(new ComponentType(0), info.Archetype.Signature);
-        Assert.Contains(new ComponentType(1), info.Archetype.Signature);
+        var positionId = ComponentRegistry.Shared.GetOrCreate<Position>();
+        var velocityId = ComponentRegistry.Shared.GetOrCreate<Velocity>();
+        Assert.Contains(positionId, info.Archetype.Signature);
+        Assert.Contains(velocityId, info.Archetype.Signature);
         Assert.Equal(0, info.ChunkIndex);
         Assert.Equal(0, info.RowIndex);
     }
@@ -515,15 +517,14 @@ public sealed class WorldLifecycleTests
     }
 
     [Fact]
-    public void Generic_component_type_cache_does_not_store_registry_and_component_type_as_separate_fields()
+    public void Component_type_is_resolved_via_global_static_cache()
     {
-        var cache = typeof(World)
-            .GetNestedType("ComponentTypeCache`1", System.Reflection.BindingFlags.NonPublic)!
-            .MakeGenericType(typeof(Position));
+        var ct = Component<Position>.ComponentType;
+        Assert.True(ct.IsValid);
 
-        Assert.Null(cache.GetField("Registry", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public));
-        Assert.Null(cache.GetField("ComponentType", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public));
-        Assert.NotNull(cache.GetField("Entry", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public));
+        var world = new World();
+        var entity = world.Create(new Position(1, 2));
+        Assert.True(world.IsAlive(entity));
     }
 
     [Fact]

@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-05-26
+updated: 2026-05-27
 ---
 # MiniArch Core ECS
 
@@ -115,6 +115,19 @@ updated: 2026-05-26
 - flat byte chunk 删除和迁移路径应按 byte block 复制组件元素，避免回到 `Array.Copy` / `Array.Clear` 的逐列虚调用和类型检查成本。
 - MiniArch 当前约束是不把对象引用组件存入 chunk；flat byte storage 只面向无托管引用的组件位模式，chunk 创建时应对含托管引用组件 fail fast，不能为了兼容引用组件重新引入 parallel typed array 表示。
 - 对照 `Arch` 源码时不要假设它会自动消除 `Create -> Add -> Add` 留下的中间 archetype；它同样保留这些 archetype，query 也是按 world archetype 列表全量匹配，空 archetype 只会在显式 `TrimExcess()` 后被移除。
+- `ValidateElementSize<T>()` 在 Release 编译下被 `#if DEBUG` 包裹；它是类型安全守卫，不是热路径必需品，Release 下应完全消除。
+- `ThrowIfDisposed()` 在 Release 编译下被 `#if DEBUG` 包裹；释放后访问是编程错误，Release 下信任调用方。
+- `GetRequiredLocation()` 的版本检查（`_versions[id] != entity.Version`）在 Release 编译下被 `#if DEBUG` 包裹；Release 下信任 entity handle 不过期，直接返回 `_locations[id]`。
+- `ComponentTypeCacheEntry` 是 `readonly record struct`（非引用类型），`GetComponentType<T>()` 用 `ReferenceEquals(entry.Registry, _components)` 判断缓存是否命中；不能用 `entry is not null` 替代，因为多 World 实例并行测试时静态缓存会跨 World 污染。
+- `ApplyTypedAddOrSet<T>` 已标记 `AggressiveInlining`；`Archetype.TryGetComponentIndex` / `GetChunk` 也已标记。
+- Destroy 热路径有 leaf-entity 快速路径：`HierarchyTable.HasChildren(entity)` 返回 false 时，跳过 `CollectDestroySubtree`、scratch list 管理和 try/finally 开销。
+- Set 热路径 vs Arch 的剩余差距（约 -21%）主要来源：（1）`GetComponentType<T>()` 的 `ReferenceEquals` 分支（Arch 用纯 static readonly 零分支）；（2）byte[] 偏移计算需要两次数组读取 + 乘法（Arch 用 typed T[] 只需一次数组读取 + 指针算术）；（3）`GetRequiredLocation` 返回值类型 struct 的字段拆解。其中 (1) 受多 World 设计约束无法消除，(3) 影响极小，(2) 是 byte[] 统一存储架构的固有代价。
+- 基准结果快照（commit fdb3649 + Set-2 优化，Release, 5s×3）：
+  - SetSingleComponent (100k): MiniArch -21.6% vs Arch
+  - SetTwoComponents (10k): MiniArch -22.0% vs Arch
+  - CreateDestroyPairwise (10k): MiniArch -9.9% vs Arch
+  - CreateDestroyBatch (10k): MiniArch +5.9% vs Arch
+  - QueryWithAllEntity: MiniArch +15.1% vs Arch
 
 ## 认知模型
 
