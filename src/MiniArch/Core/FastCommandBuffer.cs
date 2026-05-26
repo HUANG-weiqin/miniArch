@@ -16,9 +16,11 @@ public sealed class FastCommandBuffer : ICommandRecorder
 
     private readonly World _world;
     private readonly CommandBufferEntityAllocator _allocator;
-    private readonly Dictionary<EntityComponentKey, AddSetEntry> _adds = new();
-    private readonly Dictionary<EntityComponentKey, AddSetEntry> _sets = new();
-    private readonly Dictionary<EntityComponentKey, RemoveEntry> _removes = new();
+    private readonly Dictionary<long, AddSetEntry> _adds = new();
+    private readonly Dictionary<long, AddSetEntry> _sets = new();
+    private readonly Dictionary<long, RemoveEntry> _removes = new();
+    private Entity[] _opsEntityLookup = Array.Empty<Entity>();
+    private int _maxOpsEntityId;
     private readonly HashSet<Entity> _existingDestroys = new();
     private CreatedState[] _createdStatePool = Array.Empty<CreatedState>();
     private Entity[] _createdEntityByPoolIndex = Array.Empty<Entity>();
@@ -112,7 +114,9 @@ public sealed class FastCommandBuffer : ICommandRecorder
             }
         }
 
-        var key = new EntityComponentKey(entity, componentTypeId);
+        var key = MakeKey(entity.Id, componentTypeId);
+        EnsureOpsEntityLookup(entity.Id);
+        _opsEntityLookup[entity.Id] = entity;
         _removes.Remove(key);
         _adds[key] = new AddSetEntry(info.ComponentType, info.RuntimeType, slabIndex, offset, info.Size, info.Writer);
     }
@@ -137,7 +141,10 @@ public sealed class FastCommandBuffer : ICommandRecorder
             }
         }
 
-        _sets[new EntityComponentKey(entity, componentTypeId)] = new AddSetEntry(info.ComponentType, info.RuntimeType, slabIndex, offset, info.Size, info.Writer);
+        var key = MakeKey(entity.Id, componentTypeId);
+        EnsureOpsEntityLookup(entity.Id);
+        _opsEntityLookup[entity.Id] = entity;
+        _sets[key] = new AddSetEntry(info.ComponentType, info.RuntimeType, slabIndex, offset, info.Size, info.Writer);
     }
 
     /// <summary>
@@ -158,7 +165,9 @@ public sealed class FastCommandBuffer : ICommandRecorder
             }
         }
 
-        var key = new EntityComponentKey(entity, componentTypeId);
+        var key = MakeKey(entity.Id, componentTypeId);
+        EnsureOpsEntityLookup(entity.Id);
+        _opsEntityLookup[entity.Id] = entity;
         _adds.Remove(key);
         _sets.Remove(key);
         var info = ResolveTypeInfo(componentTypeId);
@@ -321,17 +330,26 @@ public sealed class FastCommandBuffer : ICommandRecorder
 
         foreach (var (key, entry) in _adds)
         {
-            delta.AddCommands.Add(new RawComponentCommand(key.Entity, key.ComponentTypeId, entry.RuntimeType, entry.ComponentType, entry.DataOffset, entry.DataSize, entry.Writer, _slabs[entry.SlabIndex]));
+            var entityId = (int)(key >> 32);
+            var componentTypeId = (int)(key & 0xFFFFFFFF);
+            var entity = _opsEntityLookup[entityId];
+            delta.AddCommands.Add(new RawComponentCommand(entity, componentTypeId, entry.RuntimeType, entry.ComponentType, entry.DataOffset, entry.DataSize, entry.Writer, _slabs[entry.SlabIndex]));
         }
 
         foreach (var (key, entry) in _sets)
         {
-            delta.SetCommands.Add(new RawComponentCommand(key.Entity, key.ComponentTypeId, entry.RuntimeType, entry.ComponentType, entry.DataOffset, entry.DataSize, entry.Writer, _slabs[entry.SlabIndex]));
+            var entityId = (int)(key >> 32);
+            var componentTypeId = (int)(key & 0xFFFFFFFF);
+            var entity = _opsEntityLookup[entityId];
+            delta.SetCommands.Add(new RawComponentCommand(entity, componentTypeId, entry.RuntimeType, entry.ComponentType, entry.DataOffset, entry.DataSize, entry.Writer, _slabs[entry.SlabIndex]));
         }
 
         foreach (var (key, entry) in _removes)
         {
-            delta.RemoveCommands.Add(new RawRemoveCommand(key.Entity, key.ComponentTypeId, entry.RuntimeType, entry.ComponentType));
+            var entityId = (int)(key >> 32);
+            var componentTypeId = (int)(key & 0xFFFFFFFF);
+            var entity = _opsEntityLookup[entityId];
+            delta.RemoveCommands.Add(new RawRemoveCommand(entity, componentTypeId, entry.RuntimeType, entry.ComponentType));
         }
 
         foreach (var entity in _existingDestroys)
@@ -346,6 +364,11 @@ public sealed class FastCommandBuffer : ICommandRecorder
         _sets.Clear();
         _removes.Clear();
         _existingDestroys.Clear();
+        if (_maxOpsEntityId > 0 && _opsEntityLookup.Length > 0)
+        {
+            Array.Clear(_opsEntityLookup, 0, _maxOpsEntityId);
+        }
+        _maxOpsEntityId = 0;
         for (int i = 0; i < _createdStatePoolCount; i++)
         {
             _createdStatePool[i].Overflow?.Clear();
@@ -435,7 +458,27 @@ public sealed class FastCommandBuffer : ICommandRecorder
         return componentType.Value;
     }
 
-    private readonly record struct EntityComponentKey(Entity Entity, int ComponentTypeId);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static long MakeKey(int entityId, int componentTypeId)
+    {
+        return ((long)entityId << 32) | (uint)componentTypeId;
+    }
+
+    private void EnsureOpsEntityLookup(int entityId)
+    {
+        if (entityId < _opsEntityLookup.Length)
+        {
+            if (entityId >= _maxOpsEntityId) _maxOpsEntityId = entityId + 1;
+            return;
+        }
+        var newLen = _opsEntityLookup.Length == 0 ? 64 : _opsEntityLookup.Length;
+        while (newLen <= entityId) newLen *= 2;
+        var newArr = new Entity[newLen];
+        if (_opsEntityLookup.Length > 0)
+            Array.Copy(_opsEntityLookup, newArr, _opsEntityLookup.Length);
+        _opsEntityLookup = newArr;
+        if (entityId >= _maxOpsEntityId) _maxOpsEntityId = entityId + 1;
+    }
 
     private readonly record struct HierarchyIntent(bool IsLinked, Entity Parent);
 
