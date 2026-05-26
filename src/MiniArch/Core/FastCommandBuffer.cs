@@ -231,6 +231,18 @@ public sealed class FastCommandBuffer : ICommandRecorder
         return true;
     }
 
+    /// <summary>
+    /// Builds and returns a self-contained FrameDelta without replaying.
+    /// The returned delta owns its own data and is independent of this buffer.
+    /// </summary>
+    public FrameDelta Snapshot()
+    {
+        var delta = new FrameDelta();
+        BuildDelta(delta);
+        delta.DeepCopyOwnedData();
+        return delta;
+    }
+
     private void BuildDelta(FrameDelta delta)
     {
         var releasedCount = 0;

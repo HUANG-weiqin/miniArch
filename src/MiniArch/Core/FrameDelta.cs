@@ -7,15 +7,15 @@ namespace MiniArch.Core;
 /// </summary>
 public sealed class FrameDelta
 {
-    internal List<Entity> ReservedEntities { get; } = new(4);
-    internal List<RawCreatedEntity> CreatedEntities { get; } = new(4);
-    internal List<LinkCommand> LinkCommands { get; } = new(4);
-    internal List<UnlinkCommand> UnlinkCommands { get; } = new(4);
-    internal List<RawComponentCommand> AddCommands { get; } = new(4);
-    internal List<RawComponentCommand> SetCommands { get; } = new(4);
-    internal List<RawRemoveCommand> RemoveCommands { get; } = new(4);
-    internal List<Entity> DestroyedEntities { get; } = new(4);
-    internal List<Entity> ReleasedEntities { get; } = new(4);
+    internal List<Entity> ReservedEntities { get; } = new(16);
+    internal List<RawCreatedEntity> CreatedEntities { get; } = new(16);
+    internal List<LinkCommand> LinkCommands { get; } = new(16);
+    internal List<UnlinkCommand> UnlinkCommands { get; } = new(16);
+    internal List<RawComponentCommand> AddCommands { get; } = new(16);
+    internal List<RawComponentCommand> SetCommands { get; } = new(16);
+    internal List<RawRemoveCommand> RemoveCommands { get; } = new(16);
+    internal List<Entity> DestroyedEntities { get; } = new(16);
+    internal List<Entity> ReleasedEntities { get; } = new(16);
 
     internal void Clear()
     {
