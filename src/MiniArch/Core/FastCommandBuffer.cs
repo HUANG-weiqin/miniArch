@@ -20,7 +20,11 @@ public sealed class FastCommandBuffer : ICommandRecorder
     private readonly Dictionary<EntityComponentKey, AddSetEntry> _sets = new();
     private readonly Dictionary<EntityComponentKey, RemoveEntry> _removes = new();
     private readonly HashSet<Entity> _existingDestroys = new();
-    private readonly Dictionary<Entity, CreatedState> _createdStates = new();
+    private CreatedState[] _createdStatePool = Array.Empty<CreatedState>();
+    private Entity[] _createdEntityByPoolIndex = Array.Empty<Entity>();
+    private int _createdStatePoolCount;
+    private int[] _createdStateLookup = Array.Empty<int>();
+    private int _maxCreatedEntityId;
     private readonly Dictionary<Entity, HierarchyIntent> _hierarchyByChild = new();
     private readonly Dictionary<int, (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)> _typeInfoCache = new();
     private readonly List<byte[]> _slabs = new();
@@ -45,12 +49,50 @@ public sealed class FastCommandBuffer : ICommandRecorder
     public Entity Create()
     {
         var entity = _allocator.ReserveEntity();
-        _createdStates[entity] = new CreatedState();
+
+        if (_createdStatePoolCount >= _createdStatePool.Length)
+        {
+            var newSize = _createdStatePool.Length == 0 ? 64 : _createdStatePool.Length * 2;
+            var newPool = new CreatedState[newSize];
+            var newEntities = new Entity[newSize];
+            if (_createdStatePoolCount > 0)
+            {
+                Array.Copy(_createdStatePool, newPool, _createdStatePoolCount);
+                Array.Copy(_createdEntityByPoolIndex, newEntities, _createdStatePoolCount);
+            }
+            _createdStatePool = newPool;
+            _createdEntityByPoolIndex = newEntities;
+        }
+
+        var index = _createdStatePoolCount++;
+        _createdStatePool[index] = default;
+        _createdEntityByPoolIndex[index] = entity;
+
+        if (entity.Id >= _createdStateLookup.Length)
+        {
+            var newLen = _createdStateLookup.Length == 0 ? 64 : _createdStateLookup.Length;
+            while (newLen <= entity.Id) newLen *= 2;
+            var newLookup = new int[newLen];
+            Array.Fill(newLookup, -1);
+            if (_createdStateLookup.Length > 0)
+                Array.Copy(_createdStateLookup, newLookup, _createdStateLookup.Length);
+            _createdStateLookup = newLookup;
+        }
+
+        _createdStateLookup[entity.Id] = index;
+        if (entity.Id >= _maxCreatedEntityId) _maxCreatedEntityId = entity.Id + 1;
         _hasCreatedEntities = true;
         return entity;
     }
 
     /// <summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int GetCreatedStateIndex(Entity entity)
+    {
+        var id = entity.Id;
+        return (uint)id < (uint)_createdStateLookup.Length ? _createdStateLookup[id] : -1;
+    }
+
     /// Records an add command.
     /// </summary>
     public void Add<T>(Entity entity, T component)
@@ -59,10 +101,15 @@ public sealed class FastCommandBuffer : ICommandRecorder
         var info = ResolveTypeInfo(componentTypeId);
         CopyData(component, info.Size, out var slabIndex, out var offset);
 
-        if (_hasCreatedEntities && _createdStates.TryGetValue(entity, out var state))
+        if (_hasCreatedEntities)
         {
-            state.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size));
-            return;
+            var createdIdx = GetCreatedStateIndex(entity);
+            if (createdIdx >= 0)
+            {
+                ref var state = ref _createdStatePool[createdIdx];
+                state.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size));
+                return;
+            }
         }
 
         var key = new EntityComponentKey(entity, componentTypeId);
@@ -79,10 +126,15 @@ public sealed class FastCommandBuffer : ICommandRecorder
         var info = ResolveTypeInfo(componentTypeId);
         CopyData(component, info.Size, out var slabIndex, out var offset);
 
-        if (_hasCreatedEntities && _createdStates.TryGetValue(entity, out var state))
+        if (_hasCreatedEntities)
         {
-            state.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size));
-            return;
+            var createdIdx = GetCreatedStateIndex(entity);
+            if (createdIdx >= 0)
+            {
+                ref var state = ref _createdStatePool[createdIdx];
+                state.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size));
+                return;
+            }
         }
 
         _sets[new EntityComponentKey(entity, componentTypeId)] = new AddSetEntry(info.ComponentType, info.RuntimeType, slabIndex, offset, info.Size, info.Writer);
@@ -95,10 +147,15 @@ public sealed class FastCommandBuffer : ICommandRecorder
     {
         var componentTypeId = GetComponentTypeId<T>();
 
-        if (_hasCreatedEntities && _createdStates.TryGetValue(entity, out var state))
+        if (_hasCreatedEntities)
         {
-            state.Remove(componentTypeId);
-            return;
+            var createdIdx = GetCreatedStateIndex(entity);
+            if (createdIdx >= 0)
+            {
+                ref var state = ref _createdStatePool[createdIdx];
+                state.Remove(componentTypeId);
+                return;
+            }
         }
 
         var key = new EntityComponentKey(entity, componentTypeId);
@@ -113,10 +170,14 @@ public sealed class FastCommandBuffer : ICommandRecorder
     /// </summary>
     public void Destroy(Entity entity)
     {
-        if (_hasCreatedEntities && _createdStates.TryGetValue(entity, out var state))
+        if (_hasCreatedEntities)
         {
-            state.Destroyed = true;
-            return;
+            var createdIdx = GetCreatedStateIndex(entity);
+            if (createdIdx >= 0)
+            {
+                _createdStatePool[createdIdx].Destroyed = true;
+                return;
+            }
         }
 
         _existingDestroys.Add(entity);
@@ -144,7 +205,7 @@ public sealed class FastCommandBuffer : ICommandRecorder
     public bool Submit()
     {
         if (_adds.Count == 0 && _sets.Count == 0 && _removes.Count == 0 &&
-            _existingDestroys.Count == 0 && _createdStates.Count == 0 &&
+            _existingDestroys.Count == 0 && _createdStatePoolCount == 0 &&
             _hierarchyByChild.Count == 0)
         {
             return false;
@@ -167,16 +228,11 @@ public sealed class FastCommandBuffer : ICommandRecorder
     {
         var releasedCount = 0;
         var createdCount = 0;
-        foreach (var (entity, state) in _createdStates)
+        for (var i = 0; i < _createdStatePoolCount; i++)
         {
-            if (state.Destroyed)
-            {
-                releasedCount++;
-            }
-            else
-            {
-                createdCount++;
-            }
+            ref readonly var s = ref _createdStatePool[i];
+            if (s.Destroyed) releasedCount++;
+            else createdCount++;
         }
 
         delta.ReleasedEntities.EnsureCapacity(releasedCount);
@@ -188,8 +244,10 @@ public sealed class FastCommandBuffer : ICommandRecorder
         delta.RemoveCommands.EnsureCapacity(_removes.Count);
         delta.DestroyedEntities.EnsureCapacity(_existingDestroys.Count);
 
-        foreach (var (entity, state) in _createdStates)
+        for (var poolIdx = 0; poolIdx < _createdStatePoolCount; poolIdx++)
         {
+            ref readonly var state = ref _createdStatePool[poolIdx];
+            var entity = _createdEntityByPoolIndex[poolIdx];
             if (state.Destroyed)
             {
                 delta.ReleasedEntities.Add(entity);
@@ -242,9 +300,13 @@ public sealed class FastCommandBuffer : ICommandRecorder
                 continue;
             }
 
-            if (_createdStates.TryGetValue(child, out var cs) && cs.Destroyed)
+            if (_hasCreatedEntities)
             {
-                continue;
+                var csIdx = GetCreatedStateIndex(child);
+                if (csIdx >= 0 && _createdStatePool[csIdx].Destroyed)
+                {
+                    continue;
+                }
             }
 
             if (intent.IsLinked)
@@ -284,7 +346,19 @@ public sealed class FastCommandBuffer : ICommandRecorder
         _sets.Clear();
         _removes.Clear();
         _existingDestroys.Clear();
-        _createdStates.Clear();
+        for (int i = 0; i < _createdStatePoolCount; i++)
+        {
+            _createdStatePool[i].Overflow?.Clear();
+            _createdStatePool[i] = default;
+        }
+
+        for (int i = 0; i < _maxCreatedEntityId; i++)
+        {
+            if (i < _createdStateLookup.Length) _createdStateLookup[i] = -1;
+        }
+
+        _createdStatePoolCount = 0;
+        _maxCreatedEntityId = 0;
         _hierarchyByChild.Clear();
         _hasCreatedEntities = false;
 
@@ -397,7 +471,7 @@ public sealed class FastCommandBuffer : ICommandRecorder
         }
     }
 
-    private sealed class CreatedState
+    private struct CreatedState
     {
         public int Count;
         public int ComponentTypeId0;
@@ -411,7 +485,7 @@ public sealed class FastCommandBuffer : ICommandRecorder
         public Dictionary<int, CreatedComponent>? Overflow;
         public bool Destroyed;
 
-        public void Set(int componentTypeId, in CreatedComponent component)
+        public void Set(int componentTypeId, CreatedComponent component)
         {
             switch (Count)
             {
