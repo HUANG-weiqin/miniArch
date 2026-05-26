@@ -1360,7 +1360,6 @@ public sealed class World : IDisposable
             ThrowInvalidEntity(entity);
         }
 
-#if DEBUG
         var info = _locations[id];
         if (info.Archetype is null || _versions[id] != entity.Version)
         {
@@ -1368,9 +1367,6 @@ public sealed class World : IDisposable
         }
 
         return info;
-#else
-        return _locations[id];
-#endif
     }
 
     [DoesNotReturn]

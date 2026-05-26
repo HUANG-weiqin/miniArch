@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-05-27
+updated: 2026-05-28
 ---
 # MiniArch Core ECS
 
@@ -117,17 +117,35 @@ updated: 2026-05-27
 - 对照 `Arch` 源码时不要假设它会自动消除 `Create -> Add -> Add` 留下的中间 archetype；它同样保留这些 archetype，query 也是按 world archetype 列表全量匹配，空 archetype 只会在显式 `TrimExcess()` 后被移除。
 - `ValidateElementSize<T>()` 在 Release 编译下被 `#if DEBUG` 包裹；它是类型安全守卫，不是热路径必需品，Release 下应完全消除。
 - `ThrowIfDisposed()` 在 Release 编译下被 `#if DEBUG` 包裹；释放后访问是编程错误，Release 下信任调用方。
-- `GetRequiredLocation()` 的版本检查（`_versions[id] != entity.Version`）在 Release 编译下被 `#if DEBUG` 包裹；Release 下信任 entity handle 不过期，直接返回 `_locations[id]`。
+- `GetRequiredLocation()` 的版本检查（`_versions[id] != entity.Version`）始终生效（不在 `#if DEBUG` 内）；过期句柄在 Release 下也会抛出 `InvalidOperationException`。性能代价可忽略：一次 int[] 读取 + 一次比较 + 一个 JIT 可完美预测的分支。
 - `ComponentTypeCacheEntry` 是 `readonly record struct`（非引用类型），`GetComponentType<T>()` 用 `ReferenceEquals(entry.Registry, _components)` 判断缓存是否命中；不能用 `entry is not null` 替代，因为多 World 实例并行测试时静态缓存会跨 World 污染。
 - `ApplyTypedAddOrSet<T>` 已标记 `AggressiveInlining`；`Archetype.TryGetComponentIndex` / `GetChunk` 也已标记。
 - Destroy 热路径有 leaf-entity 快速路径：`HierarchyTable.HasChildren(entity)` 返回 false 时，跳过 `CollectDestroySubtree`、scratch list 管理和 try/finally 开销。
-- Set 热路径 vs Arch 的剩余差距（约 -21%）主要来源：（1）`GetComponentType<T>()` 的 `ReferenceEquals` 分支（Arch 用纯 static readonly 零分支）；（2）byte[] 偏移计算需要两次数组读取 + 乘法（Arch 用 typed T[] 只需一次数组读取 + 指针算术）；（3）`GetRequiredLocation` 返回值类型 struct 的字段拆解。其中 (1) 受多 World 设计约束无法消除，(3) 影响极小，(2) 是 byte[] 统一存储架构的固有代价。
-- 基准结果快照（commit fdb3649 + Set-2 优化，Release, 5s×3）：
-  - SetSingleComponent (100k): MiniArch -21.6% vs Arch
-  - SetTwoComponents (10k): MiniArch -22.0% vs Arch
-  - CreateDestroyPairwise (10k): MiniArch -9.9% vs Arch
-  - CreateDestroyBatch (10k): MiniArch +5.9% vs Arch
-  - QueryWithAllEntity: MiniArch +15.1% vs Arch
+- 基准结果快照（2026-05-28，Release，BDN default job，1k entities 除非标注）：
+
+  **结构变更：**
+  - Set Position: MiniArch 48.8us vs Arch 100.3us → MiniArch +105%
+  - Remove Position: MiniArch 218.9us vs Arch 481.4us → MiniArch +120%
+  - Add Position: MiniArch 325.8us vs Arch 567.5us → MiniArch +74%
+  - Destroy: MiniArch 114.9us vs Arch 201.9us → MiniArch +76%
+  - Create empty: MiniArch 34.7us vs Arch 38.8us → MiniArch +12%
+  - Create Pos+Vel: MiniArch 42.5us vs Arch 40.2us → 持平
+  - Mixed ops (Create+Add+Set+Remove+Destroy, 10k entities): MiniArch 3.19ms vs Arch 5.00ms → MiniArch +57%
+
+  **Query (10k entities, warmed)：**
+  - WithAll+Without: MiniArch 15.5us vs Arch 24.8us → MiniArch +60%
+  - WithAll+Any: MiniArch 15.9us vs Arch 26.6us → MiniArch +67%
+  - WithAll: MiniArch 17.7us vs Arch 27.1us → MiniArch +53%
+
+  **Query (100k entities, warmed)：**
+  - WithAll+Without: MiniArch 41.8us vs Arch 53.3us → MiniArch +28%
+  - WithAll+Any: MiniArch 41.8us vs Arch 45.0us → MiniArch +7.7%
+  - WithAll: MiniArch 53.1us vs Arch 60.6us → MiniArch +14%
+
+  **CommandBuffer (throughput, 3s×3)：**
+  - MiniArch 在所有 workload 上领先 Arch +52%~+144%
+
+  - 说明：(1) flat byte[] 统一存储在结构变更场景中表现出众——Add/Remove/Set/Destroy 均因 swap-remove、direct-index 路径和 chunk 复用策略领先 Arch；(2) query 在所有形态下均快于 Arch，Warmed Query 的 generation 失效机制和 MatchedChunks 快照工作良好；(3) component span 读取是唯一仍轻微落后 Arch 的场景（throughput -5.9%），但差距已从早期的 -45% 大幅缩小，属于 flat byte[] vs typed T[] 的剩余架构取舍；(4) 之前的 "Set -21%" 数据已是过期结论。
 
 ## 认知模型
 
@@ -192,7 +210,7 @@ updated: 2026-05-27
   - 以为 `Set<T>` 永远只是原地写入
   - 以为 `Remove<T>` 不存在时应该报错，而不是直接返回
   - 以为“query 是读操作”就天然线程安全；如果底层缓存仍在共享可变集合上原地刷新，一样会出问题
-  - 以为 Arch 的 query benchmark 更快，是因为它在逐个 `Add` 时“不会留下空 archetype”；源码和实测都说明它也会留下，差别更多来自匹配缓存、位集判断和 query 遍历实现成本
+  - 以为 Arch 的 query benchmark 更快——实测 MiniArch 在所有 warmed query 形态下均领先 Arch（+7.7%~+67%）；Arch 的贡献更多在于证明了 archetype ECS 范式在 C# 中的可行性
 - 改这里时要特别小心：
   - `Chunk` 的逻辑列、`_columnByteOffsets`、`_elementSizes` 必须和 `Signature` / `Type[]` 完全一致
   - `World` 的 entity version 不能和 location 脱钩
