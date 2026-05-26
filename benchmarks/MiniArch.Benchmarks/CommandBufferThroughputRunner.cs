@@ -75,6 +75,18 @@ public static class CommandBufferThroughputRunner
             return 0;
         }
 
+        if (Array.Exists(args, a => string.Equals(a, "--diag-compare", StringComparison.OrdinalIgnoreCase)))
+        {
+            RunGcComparisonDiagnostic(stdout, cancellationToken);
+            return 0;
+        }
+
+        if (Array.Exists(args, a => string.Equals(a, "--diag-cont-compare", StringComparison.OrdinalIgnoreCase)))
+        {
+            RunContinuousGcComparison(stdout, cancellationToken);
+            return 0;
+        }
+
         if (Array.Exists(args, a => string.Equals(a, "--diag-snapshot", StringComparison.OrdinalIgnoreCase)))
         {
             RunSnapshotDiagnostic(stdout, cancellationToken);
@@ -713,6 +725,201 @@ public static class CommandBufferThroughputRunner
 
         for (var t = 0; t < threadCount; t++)
             threads[t].Join();
+    }
+
+    private static void RunGcComparisonDiagnostic(TextWriter output, CancellationToken ct)
+    {
+        const int entityCount = 10000;
+        const int batchSize = 30;
+        const int warmupCount = 5;
+
+        var scenarios = new[] { CommandBufferBenchmarkScenario.DenseExisting, CommandBufferBenchmarkScenario.MixedScript, CommandBufferBenchmarkScenario.CreateHeavy };
+
+        output.WriteLine("=== GC Comparison: Mini vs Arch (10000 entities) ===");
+        output.WriteLine($"Warmup: {warmupCount}, Batch: {batchSize}");
+        output.WriteLine();
+
+        foreach (var scenario in scenarios)
+        {
+            output.WriteLine($"--- {scenario} ---");
+            output.WriteLine($"{"",-22} {"Mini",14} {"Arch",14} {"Mini vs Arch",14}");
+            output.WriteLine(new string('-', 66));
+
+            for (var w = 0; w < warmupCount; w++)
+            {
+                var ws = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
+                CommandBufferBenchmarkScenarioFactory.RunMiniSharedScenario(ws, scenario);
+
+                var archWs = CommandBufferBenchmarkScenarioFactory.CreateArchSharedState(scenario, entityCount);
+                try { CommandBufferBenchmarkScenarioFactory.RunArchSharedScenario(archWs, scenario); }
+                finally { archWs.Dispose(); }
+            }
+
+            double miniTotalMs = 0, archTotalMs = 0;
+            long miniTotalAlloc = 0, archTotalAlloc = 0;
+            int miniGen0 = 0, miniGen1 = 0, miniGen2 = 0;
+            int archGen0 = 0, archGen1 = 0, archGen2 = 0;
+
+            for (var i = 0; i < batchSize; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                // Mini
+                {
+                    GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+                    GC.WaitForPendingFinalizers();
+
+                    var state = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
+                    var gen0Before = GC.CollectionCount(0);
+                    var gen1Before = GC.CollectionCount(1);
+                    var gen2Before = GC.CollectionCount(2);
+                    var allocBefore = GC.GetTotalAllocatedBytes(true);
+
+                    var sw = Stopwatch.StartNew();
+                    CommandBufferBenchmarkScenarioFactory.RunMiniSharedScenario(state, scenario);
+                    sw.Stop();
+
+                    miniTotalMs += sw.Elapsed.TotalMilliseconds;
+                    miniTotalAlloc += GC.GetTotalAllocatedBytes(true) - allocBefore;
+                    miniGen0 += GC.CollectionCount(0) - gen0Before;
+                    miniGen1 += GC.CollectionCount(1) - gen1Before;
+                    miniGen2 += GC.CollectionCount(2) - gen2Before;
+                }
+
+                // Arch
+                {
+                    GC.Collect(2, GCCollectionMode.Aggressive, true, true);
+                    GC.WaitForPendingFinalizers();
+
+                    var archState = CommandBufferBenchmarkScenarioFactory.CreateArchSharedState(scenario, entityCount);
+                    var gen0Before = GC.CollectionCount(0);
+                    var gen1Before = GC.CollectionCount(1);
+                    var gen2Before = GC.CollectionCount(2);
+                    var allocBefore = GC.GetTotalAllocatedBytes(true);
+
+                    var sw = Stopwatch.StartNew();
+                    CommandBufferBenchmarkScenarioFactory.RunArchSharedScenario(archState, scenario);
+                    sw.Stop();
+                    archState.Dispose();
+
+                    archTotalMs += sw.Elapsed.TotalMilliseconds;
+                    archTotalAlloc += GC.GetTotalAllocatedBytes(true) - allocBefore;
+                    archGen0 += GC.CollectionCount(0) - gen0Before;
+                    archGen1 += GC.CollectionCount(1) - gen1Before;
+                    archGen2 += GC.CollectionCount(2) - gen2Before;
+                }
+            }
+
+            var miniTimePerIter = miniTotalMs / batchSize;
+            var archTimePerIter = archTotalMs / batchSize;
+            var timeRatio = (miniTimePerIter / archTimePerIter - 1) * 100;
+
+            var miniKbPerIter = miniTotalAlloc / (double)batchSize / 1024;
+            var archKbPerIter = archTotalAlloc / (double)batchSize / 1024;
+            var allocRatio = (miniKbPerIter / archKbPerIter - 1) * 100;
+
+            output.WriteLine($"{"Time (ms/iter)",-22} {miniTimePerIter,14:F3} {archTimePerIter,14:F3} {timeRatio,+13:F1}%");
+            output.WriteLine($"{"Alloc (KB/iter)",-22} {miniKbPerIter,14:F0} {archKbPerIter,14:F0} {allocRatio,+13:F1}%");
+            output.WriteLine($"{"Gen0/iter",-22} {(double)miniGen0 / batchSize,14:F2} {(double)archGen0 / batchSize,14:F2}");
+            output.WriteLine($"{"Gen1/iter",-22} {(double)miniGen1 / batchSize,14:F2} {(double)archGen1 / batchSize,14:F2}");
+            output.WriteLine($"{"Gen2/iter",-22} {(double)miniGen2 / batchSize,14:F2} {(double)archGen2 / batchSize,14:F2}");
+            output.WriteLine();
+        }
+    }
+
+    private static void RunContinuousGcComparison(TextWriter output, CancellationToken ct)
+    {
+        const int entityCount = 10000;
+        const int batchSize = 100;
+        const int warmupCount = 10;
+
+        var scenarios = new[] { CommandBufferBenchmarkScenario.DenseExisting, CommandBufferBenchmarkScenario.MixedScript, CommandBufferBenchmarkScenario.CreateHeavy };
+
+        output.WriteLine("=== Continuous GC Comparison: Mini vs Arch (no forced GC between iterations) ===");
+        output.WriteLine($"EntityCount: {entityCount}, Warmup: {warmupCount}, Batch: {batchSize}");
+        output.WriteLine();
+
+        foreach (var scenario in scenarios)
+        {
+            output.WriteLine($"--- {scenario} ---");
+            output.WriteLine($"{"",-18} {"Mini",12} {"Arch",12} {"Ratio",10}");
+            output.WriteLine(new string('-', 54));
+
+            // warmup both
+            for (var w = 0; w < warmupCount; w++)
+            {
+                var ws = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
+                CommandBufferBenchmarkScenarioFactory.RunMiniSharedScenario(ws, scenario);
+                var archWs = CommandBufferBenchmarkScenarioFactory.CreateArchSharedState(scenario, entityCount);
+                try { CommandBufferBenchmarkScenarioFactory.RunArchSharedScenario(archWs, scenario); }
+                finally { archWs.Dispose(); }
+            }
+
+            // Interleave Mini/Arch to avoid order bias: run half batches alternating
+            long miniGen0 = 0, miniGen1 = 0, miniGen2 = 0, archGen0 = 0, archGen1 = 0, archGen2 = 0;
+            long miniAlloc = 0, archAlloc = 0;
+            double miniTimeMs = 0, archTimeMs = 0;
+            var halfSize = batchSize / 2;
+
+            for (var batch = 0; batch < 2; batch++)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                // Mini
+                var g0 = GC.CollectionCount(0);
+                var g1 = GC.CollectionCount(1);
+                var g2 = GC.CollectionCount(2);
+                var alloc = GC.GetTotalAllocatedBytes(true);
+                var sw = Stopwatch.StartNew();
+                for (var i = 0; i < halfSize; i++)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var s = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
+                    CommandBufferBenchmarkScenarioFactory.RunMiniSharedScenario(s, scenario);
+                }
+                sw.Stop();
+                miniTimeMs += sw.Elapsed.TotalMilliseconds;
+                miniAlloc += GC.GetTotalAllocatedBytes(true) - alloc;
+                miniGen0 += GC.CollectionCount(0) - g0;
+                miniGen1 += GC.CollectionCount(1) - g1;
+                miniGen2 += GC.CollectionCount(2) - g2;
+
+                // Arch
+                g0 = GC.CollectionCount(0);
+                g1 = GC.CollectionCount(1);
+                g2 = GC.CollectionCount(2);
+                alloc = GC.GetTotalAllocatedBytes(true);
+                sw = Stopwatch.StartNew();
+                for (var i = 0; i < halfSize; i++)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var s = CommandBufferBenchmarkScenarioFactory.CreateArchSharedState(scenario, entityCount);
+                    CommandBufferBenchmarkScenarioFactory.RunArchSharedScenario(s, scenario);
+                    s.Dispose();
+                }
+                sw.Stop();
+                archTimeMs += sw.Elapsed.TotalMilliseconds;
+                archAlloc += GC.GetTotalAllocatedBytes(true) - alloc;
+                archGen0 += GC.CollectionCount(0) - g0;
+                archGen1 += GC.CollectionCount(1) - g1;
+                archGen2 += GC.CollectionCount(2) - g2;
+            }
+
+            var miniTime = miniTimeMs / batchSize;
+            var archTime = archTimeMs / batchSize;
+            var miniKb = miniAlloc / (double)batchSize / 1024;
+            var archKb = archAlloc / (double)batchSize / 1024;
+            var timeRatio = (miniTime / archTime - 1) * 100;
+            var allocRatio = (miniKb / archKb - 1) * 100;
+
+            output.WriteLine($"{"Time (ms)",-18} {miniTime,12:F3} {archTime,12:F3} {timeRatio,+9:F1}%");
+            output.WriteLine($"{"Alloc (KB)",-18} {miniKb,12:F0} {archKb,12:F0} {allocRatio,+9:F1}%");
+            output.WriteLine($"{"Ops/s",-18} {batchSize / (miniTimeMs / 1000d),12:F0} {batchSize / (archTimeMs / 1000d),12:F0}");
+            output.WriteLine($"{"Gen0/iter",-18} {(double)miniGen0 / batchSize,12:F2} {(double)archGen0 / batchSize,12:F2}");
+            output.WriteLine($"{"Gen1/iter",-18} {(double)miniGen1 / batchSize,12:F2} {(double)archGen1 / batchSize,12:F2}");
+            output.WriteLine($"{"Gen2/iter",-18} {(double)miniGen2 / batchSize,12:F2} {(double)archGen2 / batchSize,12:F2}");
+            output.WriteLine();
+        }
     }
 
     private static void RunContinuousDiagnostic(TextWriter output, CancellationToken ct)
