@@ -289,8 +289,15 @@ public sealed class CommandBuffer : ICommandRecorder
                 }
                 else
                 {
-                    var (signature, components) = BuildCreatedEntityComponents(in state);
-                    _world.MaterializeReservedEntityTrusted(entity, signature, components);
+                    var (archetype, components, count) = BuildCreatedEntityComponents(in state);
+                    try
+                    {
+                        _world.MaterializeReservedEntityDirect(entity, archetype, components.AsSpan(0, count));
+                    }
+                    finally
+                    {
+                        ArrayPool<RawComponentValue>.Shared.Return(components);
+                    }
                 }
             }
 
@@ -445,6 +452,7 @@ public sealed class CommandBuffer : ICommandRecorder
 
                     var components = ArrayPool<ComponentType>.Shared.Rent(componentCount);
                     var sourceComponents = ArrayPool<CreatedComponent>.Shared.Rent(componentCount);
+                    var rawComponents = ArrayPool<RawComponentValue>.Shared.Rent(componentCount);
                     try
                     {
                         for (var j = 0; j < componentCount; j++)
@@ -455,19 +463,20 @@ public sealed class CommandBuffer : ICommandRecorder
 
                         Array.Sort(components, sourceComponents, 0, componentCount);
 
-                        var rawComponents = new RawComponentValue[componentCount];
-                        var signatureComponents = new ComponentType[componentCount];
+                        var key = new World.CreateArchetypeKey(components.AsSpan(0, componentCount));
+                        var archetype = _world.GetOrCreateArchetype(key);
+
                         for (var j = 0; j < componentCount; j++)
                         {
                             var sc = sourceComponents[j];
                             rawComponents[j] = new RawComponentValue(sc.ComponentType.Value, sc.RuntimeType, sc.ComponentType, frozen.Slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
-                            signatureComponents[j] = sc.ComponentType;
                         }
 
-                        _world.MaterializeReservedEntityTrusted(entity, Signature.CreateNormalized(signatureComponents), rawComponents);
+                        _world.MaterializeReservedEntityDirect(entity, archetype, rawComponents.AsSpan(0, componentCount));
                     }
                     finally
                     {
+                        ArrayPool<RawComponentValue>.Shared.Return(rawComponents);
                         ArrayPool<CreatedComponent>.Shared.Return(sourceComponents);
                         ArrayPool<ComponentType>.Shared.Return(components);
                     }
@@ -710,7 +719,44 @@ public sealed class CommandBuffer : ICommandRecorder
         }
     }
 
-    private (Signature Signature, RawComponentValue[] Components) BuildCreatedEntityComponents(in CreatedState state)
+    private (Archetype Archetype, RawComponentValue[] Components, int Count) BuildCreatedEntityComponents(in CreatedState state)
+    {
+        _tempComponents.Clear();
+        state.CopyTo(_tempComponents);
+        var componentCount = _tempComponents.Count;
+
+        var components = ArrayPool<ComponentType>.Shared.Rent(componentCount);
+        var sourceComponents = ArrayPool<CreatedComponent>.Shared.Rent(componentCount);
+        var rawComponents = ArrayPool<RawComponentValue>.Shared.Rent(componentCount);
+        try
+        {
+            for (var i = 0; i < componentCount; i++)
+            {
+                sourceComponents[i] = _tempComponents[i].Component;
+                components[i] = _tempComponents[i].Component.ComponentType;
+            }
+
+            Array.Sort(components, sourceComponents, 0, componentCount);
+
+            var key = new World.CreateArchetypeKey(components.AsSpan(0, componentCount));
+            var archetype = _world.GetOrCreateArchetype(key);
+
+            for (var i = 0; i < componentCount; i++)
+            {
+                var sc = sourceComponents[i];
+                rawComponents[i] = new RawComponentValue(ComponentsTypeToId(sc.ComponentType), sc.RuntimeType, sc.ComponentType, _slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
+            }
+
+            return (archetype, rawComponents, componentCount);
+        }
+        finally
+        {
+            ArrayPool<CreatedComponent>.Shared.Return(sourceComponents);
+            ArrayPool<ComponentType>.Shared.Return(components);
+        }
+    }
+
+    private (Signature Signature, RawComponentValue[] Components) BuildCreatedEntityComponentsForDelta(in CreatedState state)
     {
         _tempComponents.Clear();
         state.CopyTo(_tempComponents);
@@ -782,7 +828,7 @@ public sealed class CommandBuffer : ICommandRecorder
             }
             else
             {
-                var (signature, components) = BuildCreatedEntityComponents(in state);
+                var (signature, components) = BuildCreatedEntityComponentsForDelta(in state);
                 delta.CreatedEntities.Add(new RawCreatedEntity(entity, signature, components));
             }
         }

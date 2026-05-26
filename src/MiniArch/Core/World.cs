@@ -1136,6 +1136,18 @@ public sealed class World : IDisposable
         return archetype;
     }
 
+    internal Archetype GetOrCreateArchetype(CreateArchetypeKey key)
+    {
+        if (_createArchetypeCache.TryGetValue(key, out var archetype))
+        {
+            return archetype;
+        }
+
+        archetype = GetOrCreateArchetype(Signature.CreateNormalized(key.ToComponentArray()));
+        _createArchetypeCache.TryAdd(key, archetype);
+        return archetype;
+    }
+
     private Archetype GetOrCreateCreateArchetype(Span<ComponentType> components)
     {
         if (components.Length == 0)
@@ -1762,6 +1774,27 @@ public sealed class World : IDisposable
         MaterializeReservedEntityCore(entity, signature, components, componentTypeCache: null, trustCompiledComponentTypes: true);
     }
 
+    internal void MaterializeReservedEntityDirect(Entity entity, Archetype archetype, ReadOnlySpan<RawComponentValue> components)
+    {
+        var chunk = archetype.ReserveEntity(entity, out var chunkIndex, out var rowIndex);
+        _locations[entity.Id] = new EntityLocation(archetype, chunkIndex, rowIndex);
+
+        unsafe
+        {
+            for (var index = 0; index < components.Length; index++)
+            {
+                ref readonly var component = ref components[index];
+                var writer = ComponentWriterCache.GetColumnWriter(component.RuntimeType);
+                fixed (byte* ptr = component.Data)
+                {
+                    WriteComponentFromBytes(chunk, component.ComponentType, rowIndex, ptr + component.DataOffset, writer);
+                }
+            }
+        }
+
+        TouchQueryLayout();
+    }
+
     private void MaterializeReservedEntityCore(
         Entity entity,
         Signature signature,
@@ -1985,7 +2018,7 @@ public sealed class World : IDisposable
         }
     }
 
-    private readonly struct CreateArchetypeKey : IEquatable<CreateArchetypeKey>
+    internal readonly struct CreateArchetypeKey : IEquatable<CreateArchetypeKey>
     {
         private readonly int _count;
         private readonly int _c1;
