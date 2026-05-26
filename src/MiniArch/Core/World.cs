@@ -1000,7 +1000,7 @@ public sealed class World : IDisposable
         }
     }
 
-    private unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, Type runtimeType, byte[] data, int offset, ComponentWriterCache.ColumnWriterDelegate? columnWriter)
+    internal unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, Type runtimeType, byte[] data, int offset, ComponentWriterCache.ColumnWriterDelegate? columnWriter)
     {
         fixed (byte* ptr = data)
         {
@@ -1846,7 +1846,7 @@ public sealed class World : IDisposable
         MoveEntity(entity, info, destination);
     }
 
-    private void BeginDeferredLayoutUpdates()
+    internal void BeginDeferredLayoutUpdates()
     {
         _queryLayoutSuppressionCount++;
     }
@@ -1862,7 +1862,7 @@ public sealed class World : IDisposable
         _destroyVisitedScratch.EnsureCapacity(entityCount);
     }
 
-    private void EndDeferredLayoutUpdates()
+    internal void EndDeferredLayoutUpdates()
     {
         _queryLayoutSuppressionCount--;
         if (_queryLayoutSuppressionCount == 0 && _queryLayoutDirty)

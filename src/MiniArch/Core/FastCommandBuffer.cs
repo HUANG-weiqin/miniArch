@@ -30,7 +30,6 @@ public sealed class FastCommandBuffer : ICommandRecorder
     private readonly Dictionary<Entity, HierarchyIntent> _hierarchyByChild = new();
     private readonly Dictionary<int, (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)> _typeInfoCache = new();
     private readonly List<byte[]> _slabs = new();
-    private readonly FrameDelta _reusableDelta = new();
     private readonly List<(int ComponentTypeId, CreatedComponent Component)> _tempComponents = new();
     private bool _hasCreatedEntities;
     private int _currentSlabIndex = -1;
@@ -218,15 +217,71 @@ public sealed class FastCommandBuffer : ICommandRecorder
             return false;
         }
 
-        BuildDelta(_reusableDelta);
-        if (_reusableDelta.IsEmpty)
+        _world.BeginDeferredLayoutUpdates();
+        try
         {
-            Clear();
-            return false;
+            for (var i = 0; i < _createdStatePoolCount; i++)
+            {
+                ref readonly var state = ref _createdStatePool[i];
+                var entity = _createdEntityByPoolIndex[i];
+                if (state.Destroyed)
+                {
+                    _world.ReleaseReservedEntity(entity);
+                }
+                else if (state.Count == 0 && state.Overflow is null)
+                {
+                    _world.MaterializeReservedEntityTrusted(entity, Signature.Empty, Array.Empty<RawComponentValue>());
+                }
+                else
+                {
+                    var (signature, components) = BuildCreatedEntityComponents(in state);
+                    _world.MaterializeReservedEntityTrusted(entity, signature, components);
+                }
+            }
+
+            for (var i = 0; i < _opsPoolCount; i++)
+            {
+                ref var existingOps = ref _opsPool[i];
+                if (existingOps.Count == 0 && existingOps.Overflow is null) continue;
+                var entity = _opsEntityByPoolIndex[i];
+
+                if (existingOps.Count >= 1) ApplyOpDirect(existingOps.Slot0, entity);
+                if (existingOps.Count >= 2) ApplyOpDirect(existingOps.Slot1, entity);
+                if (existingOps.Count >= 3) ApplyOpDirect(existingOps.Slot2, entity);
+                if (existingOps.Count >= 4) ApplyOpDirect(existingOps.Slot3, entity);
+                if (existingOps.Overflow is not null)
+                {
+                    foreach (var kv in existingOps.Overflow)
+                        ApplyOpDirect(kv.Value, entity);
+                }
+            }
+
+            foreach (var (child, intent) in _hierarchyByChild)
+            {
+                if (_existingDestroys.Contains(child)) continue;
+                if (_hasCreatedEntities)
+                {
+                    var csIdx = GetCreatedStateIndex(child);
+                    if (csIdx >= 0 && _createdStatePool[csIdx].Destroyed) continue;
+                }
+
+                if (intent.IsLinked)
+                    _world.Link(intent.Parent, child);
+                else
+                    _world.Unlink(child);
+            }
+
+            foreach (var entity in _existingDestroys)
+            {
+                if (_world.IsAlive(entity))
+                    _world.Destroy(entity);
+            }
+        }
+        finally
+        {
+            _world.EndDeferredLayoutUpdates();
         }
 
-        _world.ReplayTrusted(_reusableDelta);
-        _reusableDelta.Clear();
         Clear();
         return true;
     }
@@ -241,6 +296,42 @@ public sealed class FastCommandBuffer : ICommandRecorder
         BuildDelta(delta);
         delta.DeepCopyOwnedData();
         return delta;
+    }
+
+    private (Signature Signature, RawComponentValue[] Components) BuildCreatedEntityComponents(in CreatedState state)
+    {
+        _tempComponents.Clear();
+        state.CopyTo(_tempComponents);
+        var componentCount = _tempComponents.Count;
+
+        var components = ArrayPool<ComponentType>.Shared.Rent(componentCount);
+        var sourceComponents = ArrayPool<CreatedComponent>.Shared.Rent(componentCount);
+        try
+        {
+            for (var i = 0; i < componentCount; i++)
+            {
+                sourceComponents[i] = _tempComponents[i].Component;
+                components[i] = _tempComponents[i].Component.ComponentType;
+            }
+
+            Array.Sort(components, sourceComponents, 0, componentCount);
+
+            var rawComponents = new RawComponentValue[componentCount];
+            var signatureComponents = new ComponentType[componentCount];
+            for (var i = 0; i < componentCount; i++)
+            {
+                var sc = sourceComponents[i];
+                rawComponents[i] = new RawComponentValue(ComponentsTypeToId(sc.ComponentType), sc.RuntimeType, sc.ComponentType, _slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
+                signatureComponents[i] = sc.ComponentType;
+            }
+
+            return (Signature.CreateNormalized(signatureComponents), rawComponents);
+        }
+        finally
+        {
+            ArrayPool<CreatedComponent>.Shared.Return(sourceComponents);
+            ArrayPool<ComponentType>.Shared.Return(components);
+        }
     }
 
     private void BuildDelta(FrameDelta delta)
@@ -277,38 +368,8 @@ public sealed class FastCommandBuffer : ICommandRecorder
             }
             else
             {
-                _tempComponents.Clear();
-                state.CopyTo(_tempComponents);
-                var componentCount = _tempComponents.Count;
-
-                var components = ArrayPool<ComponentType>.Shared.Rent(componentCount);
-                var sourceComponents = ArrayPool<CreatedComponent>.Shared.Rent(componentCount);
-                try
-                {
-                    for (var i = 0; i < componentCount; i++)
-                    {
-                        sourceComponents[i] = _tempComponents[i].Component;
-                        components[i] = _tempComponents[i].Component.ComponentType;
-                    }
-
-                    Array.Sort(components, sourceComponents, 0, componentCount);
-
-                    var rawComponents = new RawComponentValue[componentCount];
-                    var signatureComponents = new ComponentType[componentCount];
-                    for (var i = 0; i < componentCount; i++)
-                    {
-                        var sc = sourceComponents[i];
-                        rawComponents[i] = new RawComponentValue(ComponentsTypeToId(sc.ComponentType), sc.RuntimeType, sc.ComponentType, _slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
-                        signatureComponents[i] = sc.ComponentType;
-                    }
-
-                    delta.CreatedEntities.Add(new RawCreatedEntity(entity, Signature.CreateNormalized(signatureComponents), rawComponents));
-                }
-                finally
-                {
-                    ArrayPool<CreatedComponent>.Shared.Return(sourceComponents);
-                    ArrayPool<ComponentType>.Shared.Return(components);
-                }
+                var (signature, components) = BuildCreatedEntityComponents(in state);
+                delta.CreatedEntities.Add(new RawCreatedEntity(entity, signature, components));
             }
         }
 
@@ -485,6 +546,24 @@ public sealed class FastCommandBuffer : ICommandRecorder
                 break;
             case OpKindRemove:
                 delta.RemoveCommands.Add(new RawRemoveCommand(entity, slot.ComponentTypeId, typeof(object), slot.RemoveComponentType));
+                break;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ApplyOpDirect(EntityOpSlot slot, Entity entity)
+    {
+        switch (slot.Kind)
+        {
+            case OpKindAdd:
+            case OpKindSet:
+            {
+                var d = slot.AddSetData;
+                _world.ApplyRawAddOrSet(entity, d.ComponentType, d.RuntimeType, _slabs[d.SlabIndex], d.DataOffset, d.Writer);
+                break;
+            }
+            case OpKindRemove:
+                _world.RemoveBoxed(entity, slot.RemoveComponentType);
                 break;
         }
     }
