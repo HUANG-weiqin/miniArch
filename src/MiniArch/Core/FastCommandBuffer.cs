@@ -16,10 +16,10 @@ public sealed class FastCommandBuffer : ICommandRecorder
 
     private readonly World _world;
     private readonly CommandBufferEntityAllocator _allocator;
-    private readonly Dictionary<long, AddSetEntry> _adds = new();
-    private readonly Dictionary<long, AddSetEntry> _sets = new();
-    private readonly Dictionary<long, RemoveEntry> _removes = new();
-    private Entity[] _opsEntityLookup = Array.Empty<Entity>();
+    private ExistingEntityOps[] _opsPool = Array.Empty<ExistingEntityOps>();
+    private Entity[] _opsEntityByPoolIndex = Array.Empty<Entity>();
+    private int _opsPoolCount;
+    private int[] _opsLookup = Array.Empty<int>();
     private int _maxOpsEntityId;
     private readonly HashSet<Entity> _existingDestroys = new();
     private CreatedState[] _createdStatePool = Array.Empty<CreatedState>();
@@ -87,7 +87,6 @@ public sealed class FastCommandBuffer : ICommandRecorder
         return entity;
     }
 
-    /// <summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private int GetCreatedStateIndex(Entity entity)
     {
@@ -95,6 +94,7 @@ public sealed class FastCommandBuffer : ICommandRecorder
         return (uint)id < (uint)_createdStateLookup.Length ? _createdStateLookup[id] : -1;
     }
 
+    /// <summary>
     /// Records an add command.
     /// </summary>
     public void Add<T>(Entity entity, T component)
@@ -114,11 +114,10 @@ public sealed class FastCommandBuffer : ICommandRecorder
             }
         }
 
-        var key = MakeKey(entity.Id, componentTypeId);
-        EnsureOpsEntityLookup(entity.Id);
-        _opsEntityLookup[entity.Id] = entity;
-        _removes.Remove(key);
-        _adds[key] = new AddSetEntry(info.ComponentType, info.RuntimeType, slabIndex, offset, info.Size, info.Writer);
+        var opsIdx = GetOrCreateOpsIndex(entity);
+        ref var ops = ref _opsPool[opsIdx];
+        var slot = new EntityOpSlot { ComponentTypeId = componentTypeId, Kind = OpKindAdd, AddSetData = new AddSetEntry(info.ComponentType, info.RuntimeType, slabIndex, offset, info.Size, info.Writer) };
+        ops.SetOp(componentTypeId, slot);
     }
 
     /// <summary>
@@ -141,10 +140,10 @@ public sealed class FastCommandBuffer : ICommandRecorder
             }
         }
 
-        var key = MakeKey(entity.Id, componentTypeId);
-        EnsureOpsEntityLookup(entity.Id);
-        _opsEntityLookup[entity.Id] = entity;
-        _sets[key] = new AddSetEntry(info.ComponentType, info.RuntimeType, slabIndex, offset, info.Size, info.Writer);
+        var opsIdx = GetOrCreateOpsIndex(entity);
+        ref var ops = ref _opsPool[opsIdx];
+        var slot = new EntityOpSlot { ComponentTypeId = componentTypeId, Kind = OpKindSet, AddSetData = new AddSetEntry(info.ComponentType, info.RuntimeType, slabIndex, offset, info.Size, info.Writer) };
+        ops.SetOp(componentTypeId, slot);
     }
 
     /// <summary>
@@ -165,13 +164,12 @@ public sealed class FastCommandBuffer : ICommandRecorder
             }
         }
 
-        var key = MakeKey(entity.Id, componentTypeId);
-        EnsureOpsEntityLookup(entity.Id);
-        _opsEntityLookup[entity.Id] = entity;
-        _adds.Remove(key);
-        _sets.Remove(key);
+        var opsIdx = GetOrCreateOpsIndex(entity);
+        ref var ops = ref _opsPool[opsIdx];
+        ops.RemoveOp(componentTypeId);
         var info = ResolveTypeInfo(componentTypeId);
-        _removes[key] = new RemoveEntry(info.ComponentType);
+        var slot = new EntityOpSlot { ComponentTypeId = componentTypeId, Kind = OpKindRemove, RemoveComponentType = info.ComponentType };
+        ops.SetOp(componentTypeId, slot);
     }
 
     /// <summary>
@@ -213,7 +211,7 @@ public sealed class FastCommandBuffer : ICommandRecorder
     /// </summary>
     public bool Submit()
     {
-        if (_adds.Count == 0 && _sets.Count == 0 && _removes.Count == 0 &&
+        if (_opsPoolCount == 0 &&
             _existingDestroys.Count == 0 && _createdStatePoolCount == 0 &&
             _hierarchyByChild.Count == 0)
         {
@@ -248,9 +246,9 @@ public sealed class FastCommandBuffer : ICommandRecorder
         delta.CreatedEntities.EnsureCapacity(createdCount);
         delta.LinkCommands.EnsureCapacity(_hierarchyByChild.Count);
         delta.UnlinkCommands.EnsureCapacity(_hierarchyByChild.Count);
-        delta.AddCommands.EnsureCapacity(_adds.Count);
-        delta.SetCommands.EnsureCapacity(_sets.Count);
-        delta.RemoveCommands.EnsureCapacity(_removes.Count);
+        delta.AddCommands.EnsureCapacity(_opsPoolCount);
+        delta.SetCommands.EnsureCapacity(_opsPoolCount);
+        delta.RemoveCommands.EnsureCapacity(_opsPoolCount);
         delta.DestroyedEntities.EnsureCapacity(_existingDestroys.Count);
 
         for (var poolIdx = 0; poolIdx < _createdStatePoolCount; poolIdx++)
@@ -328,28 +326,24 @@ public sealed class FastCommandBuffer : ICommandRecorder
             }
         }
 
-        foreach (var (key, entry) in _adds)
+        for (var i = 0; i < _opsPoolCount; i++)
         {
-            var entityId = (int)(key >> 32);
-            var componentTypeId = (int)(key & 0xFFFFFFFF);
-            var entity = _opsEntityLookup[entityId];
-            delta.AddCommands.Add(new RawComponentCommand(entity, componentTypeId, entry.RuntimeType, entry.ComponentType, entry.DataOffset, entry.DataSize, entry.Writer, _slabs[entry.SlabIndex]));
-        }
+            ref var existingOps = ref _opsPool[i];
+            if (existingOps.Count == 0 && existingOps.Overflow is null) continue;
+            var entity = _opsEntityByPoolIndex[i];
 
-        foreach (var (key, entry) in _sets)
-        {
-            var entityId = (int)(key >> 32);
-            var componentTypeId = (int)(key & 0xFFFFFFFF);
-            var entity = _opsEntityLookup[entityId];
-            delta.SetCommands.Add(new RawComponentCommand(entity, componentTypeId, entry.RuntimeType, entry.ComponentType, entry.DataOffset, entry.DataSize, entry.Writer, _slabs[entry.SlabIndex]));
-        }
-
-        foreach (var (key, entry) in _removes)
-        {
-            var entityId = (int)(key >> 32);
-            var componentTypeId = (int)(key & 0xFFFFFFFF);
-            var entity = _opsEntityLookup[entityId];
-            delta.RemoveCommands.Add(new RawRemoveCommand(entity, componentTypeId, entry.RuntimeType, entry.ComponentType));
+            if (existingOps.Count >= 1) EmitOp(in existingOps.Slot0, entity, delta);
+            if (existingOps.Count >= 2) EmitOp(in existingOps.Slot1, entity, delta);
+            if (existingOps.Count >= 3) EmitOp(in existingOps.Slot2, entity, delta);
+            if (existingOps.Count >= 4) EmitOp(in existingOps.Slot3, entity, delta);
+            if (existingOps.Overflow is not null)
+            {
+                foreach (var kv in existingOps.Overflow)
+                {
+                    var overflowSlot = kv.Value;
+                    EmitOp(in overflowSlot, entity, delta);
+                }
+            }
         }
 
         foreach (var entity in _existingDestroys)
@@ -360,14 +354,17 @@ public sealed class FastCommandBuffer : ICommandRecorder
 
     private void Clear()
     {
-        _adds.Clear();
-        _sets.Clear();
-        _removes.Clear();
         _existingDestroys.Clear();
-        if (_maxOpsEntityId > 0 && _opsEntityLookup.Length > 0)
+        for (int i = 0; i < _opsPoolCount; i++)
         {
-            Array.Clear(_opsEntityLookup, 0, _maxOpsEntityId);
+            _opsPool[i].Overflow?.Clear();
+            _opsPool[i] = default;
         }
+        for (int i = 0; i < _maxOpsEntityId; i++)
+        {
+            if (i < _opsLookup.Length) _opsLookup[i] = -1;
+        }
+        _opsPoolCount = 0;
         _maxOpsEntityId = 0;
         for (int i = 0; i < _createdStatePoolCount; i++)
         {
@@ -432,7 +429,7 @@ public sealed class FastCommandBuffer : ICommandRecorder
         }
 
         var size = runtimeType == typeof(object) ? 0 : ComponentWriterCache.GetSize(runtimeType);
-        var writer = runtimeType == typeof(object) ? null : ComponentWriterCache.GetColumnWriter(runtimeType);
+        var writer = runtimeType == typeof(object) ? null! : ComponentWriterCache.GetColumnWriter(runtimeType);
         info = (runtimeType, componentType, size, writer);
         _typeInfoCache.Add(componentTypeId, info);
         return info;
@@ -458,26 +455,143 @@ public sealed class FastCommandBuffer : ICommandRecorder
         return componentType.Value;
     }
 
+    private const byte OpKindNone = 0;
+    private const byte OpKindAdd = 1;
+    private const byte OpKindSet = 2;
+    private const byte OpKindRemove = 3;
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static long MakeKey(int entityId, int componentTypeId)
+    private void EmitOp(in EntityOpSlot slot, Entity entity, FrameDelta delta)
     {
-        return ((long)entityId << 32) | (uint)componentTypeId;
+        switch (slot.Kind)
+        {
+            case OpKindAdd:
+                delta.AddCommands.Add(new RawComponentCommand(entity, slot.ComponentTypeId, slot.AddSetData.RuntimeType, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, slot.AddSetData.Writer, _slabs[slot.AddSetData.SlabIndex]));
+                break;
+            case OpKindSet:
+                delta.SetCommands.Add(new RawComponentCommand(entity, slot.ComponentTypeId, slot.AddSetData.RuntimeType, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, slot.AddSetData.Writer, _slabs[slot.AddSetData.SlabIndex]));
+                break;
+            case OpKindRemove:
+                delta.RemoveCommands.Add(new RawRemoveCommand(entity, slot.ComponentTypeId, typeof(object), slot.RemoveComponentType));
+                break;
+        }
     }
 
-    private void EnsureOpsEntityLookup(int entityId)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int GetOrCreateOpsIndex(Entity entity)
     {
-        if (entityId < _opsEntityLookup.Length)
+        var id = entity.Id;
+        if ((uint)id < (uint)_opsLookup.Length)
         {
-            if (entityId >= _maxOpsEntityId) _maxOpsEntityId = entityId + 1;
-            return;
+            var idx = _opsLookup[id];
+            if (idx >= 0) return idx;
         }
-        var newLen = _opsEntityLookup.Length == 0 ? 64 : _opsEntityLookup.Length;
-        while (newLen <= entityId) newLen *= 2;
-        var newArr = new Entity[newLen];
-        if (_opsEntityLookup.Length > 0)
-            Array.Copy(_opsEntityLookup, newArr, _opsEntityLookup.Length);
-        _opsEntityLookup = newArr;
-        if (entityId >= _maxOpsEntityId) _maxOpsEntityId = entityId + 1;
+        return AllocateOpsIndex(entity);
+    }
+
+    private int AllocateOpsIndex(Entity entity)
+    {
+        var id = entity.Id;
+
+        if (id >= _opsLookup.Length)
+        {
+            var newLen = _opsLookup.Length == 0 ? 64 : _opsLookup.Length;
+            while (newLen <= id) newLen *= 2;
+            var newLookup = new int[newLen];
+            Array.Fill(newLookup, -1);
+            if (_opsLookup.Length > 0)
+                Array.Copy(_opsLookup, newLookup, _opsLookup.Length);
+            _opsLookup = newLookup;
+        }
+
+        if (_opsPoolCount >= _opsPool.Length)
+        {
+            var newSize = _opsPool.Length == 0 ? 64 : _opsPool.Length * 2;
+            var newPool = new ExistingEntityOps[newSize];
+            var newEntities = new Entity[newSize];
+            if (_opsPoolCount > 0)
+            {
+                Array.Copy(_opsPool, newPool, _opsPoolCount);
+                Array.Copy(_opsEntityByPoolIndex, newEntities, _opsPoolCount);
+            }
+            _opsPool = newPool;
+            _opsEntityByPoolIndex = newEntities;
+        }
+
+        var index = _opsPoolCount++;
+        _opsEntityByPoolIndex[index] = entity;
+        _opsLookup[id] = index;
+        if (id >= _maxOpsEntityId) _maxOpsEntityId = id + 1;
+        return index;
+    }
+
+    private struct EntityOpSlot
+    {
+        public int ComponentTypeId;
+        public byte Kind;
+        public AddSetEntry AddSetData;
+        public ComponentType RemoveComponentType;
+    }
+
+    private struct ExistingEntityOps
+    {
+        public int Count;
+        public EntityOpSlot Slot0;
+        public EntityOpSlot Slot1;
+        public EntityOpSlot Slot2;
+        public EntityOpSlot Slot3;
+        public Dictionary<int, EntityOpSlot>? Overflow;
+
+        public void SetOp(int componentTypeId, EntityOpSlot slot)
+        {
+            if (Count >= 1 && Slot0.ComponentTypeId == componentTypeId) { Slot0 = slot; return; }
+            if (Count >= 2 && Slot1.ComponentTypeId == componentTypeId) { Slot1 = slot; return; }
+            if (Count >= 3 && Slot2.ComponentTypeId == componentTypeId) { Slot2 = slot; return; }
+            if (Count >= 4 && Slot3.ComponentTypeId == componentTypeId) { Slot3 = slot; return; }
+
+            switch (Count)
+            {
+                case 0: Slot0 = slot; Count = 1; return;
+                case 1: Slot1 = slot; Count = 2; return;
+                case 2: Slot2 = slot; Count = 3; return;
+                case 3: Slot3 = slot; Count = 4; return;
+                default:
+                    Overflow ??= new Dictionary<int, EntityOpSlot>(4);
+                    Overflow[componentTypeId] = slot;
+                    return;
+            }
+        }
+
+        public bool RemoveOp(int componentTypeId)
+        {
+            if (Count >= 1 && Slot0.ComponentTypeId == componentTypeId) { RemoveOpAt(0); return true; }
+            if (Count >= 2 && Slot1.ComponentTypeId == componentTypeId) { RemoveOpAt(1); return true; }
+            if (Count >= 3 && Slot2.ComponentTypeId == componentTypeId) { RemoveOpAt(2); return true; }
+            if (Count >= 4 && Slot3.ComponentTypeId == componentTypeId) { RemoveOpAt(3); return true; }
+            if (Overflow is not null) return Overflow.Remove(componentTypeId);
+            return false;
+        }
+
+        private void RemoveOpAt(int index)
+        {
+            var last = Count - 1;
+            switch (index)
+            {
+                case 0:
+                    if (last >= 1) { Slot0 = Slot1; }
+                    if (last >= 2) { Slot1 = Slot2; }
+                    if (last >= 3) { Slot2 = Slot3; }
+                    break;
+                case 1:
+                    if (last >= 2) { Slot1 = Slot2; }
+                    if (last >= 3) { Slot2 = Slot3; }
+                    break;
+                case 2:
+                    if (last >= 3) { Slot2 = Slot3; }
+                    break;
+            }
+            Count = last;
+        }
     }
 
     private readonly record struct HierarchyIntent(bool IsLinked, Entity Parent);
@@ -499,18 +613,6 @@ public sealed class FastCommandBuffer : ICommandRecorder
             DataOffset = dataOffset;
             DataSize = dataSize;
             Writer = writer;
-        }
-    }
-
-    private struct RemoveEntry
-    {
-        public ComponentType ComponentType;
-        public Type RuntimeType;
-
-        public RemoveEntry(ComponentType componentType)
-        {
-            ComponentType = componentType;
-            RuntimeType = typeof(object);
         }
     }
 
