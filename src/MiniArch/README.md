@@ -99,8 +99,8 @@ foreach (var chunk in query.Chunks)
 - `Destroy()` 会级联销毁 runtime hierarchy 子树。
 - `Set<T>()` 在组件缺失时可能走“补组件 + 迁移”路径。
 - query 的并发保证覆盖：world 无写入，且相关组件类型已注册后的并发只读。
-- `CommandBuffer` 支持并发 recording，但 `Compile()`、`CompileAndReplay()` 只能在 recording 结束后单线程消费。
-- `CompileAndReplay()` 与 `Compile()+Replay()` 语义一致；没有任何命令执行时返回 `false`，且不会为可保留 `FrameDelta` 做额外物化。
+- `CommandBuffer` 支持并发 recording，但 `Submit()` 只能在 recording 结束后单线程消费。
+- `SubmitAndSnapshotAsync()` 换出 buffer 状态后，主线程 Submit 与后台线程 BuildDelta 并行执行，返回 `Task<FrameDelta>`。
 - `WorldSnapshot` 只支持 snapshot-safe 组件类型；带托管引用的组件会被拒绝。
 
 ## 常用类型
@@ -151,6 +151,27 @@ foreach (var chunk in query.Chunks)
 
 `OrderBy(...)` 会在每次枚举时用内部池化 buffer materialize 当前 query 结果并排序。它不改变 `QueryDescription`，也不缓存排序结果；同一个 ordered query 可以并发枚举，但 comparer 自身也必须只做并发安全的读取。
 
+### `MiniArch.Core.CommandBuffer`
+
+延迟录制 + 批量提交器，per-entity per-component-type 去重：
+
+- `Create` — 预留 entity handle
+- `Add` / `Set` / `Remove` — 组件操作（录时去重）
+- `Destroy` — 销毁实体
+- `Link` / `Unlink` — hierarchy 操作
+- `Submit()` — 同步提交到 world，清空 buffer
+- `Snapshot()` — 生成自包含 `FrameDelta`（不影响 world）
+- `SubmitAndSnapshotAsync()` — 换出 buffer 状态，主线程 Submit 与后台线程构建 FrameDelta 并行执行；返回 `Task<FrameDelta>`，调用返回时 Submit 已完成
+
+### `MiniArch.Core.FrameDelta`
+
+帧快照 IR，可跨 world replay：
+
+- `DeltaCount` — 增量总量
+- `HasEntity` — 实体查询
+- `Merge` — 两个 delta 合并为一个
+- `IsEmpty` — 是否为空
+
 ## 并发总结
 
 | API | 并发语义 | 说明 |
@@ -158,8 +179,9 @@ foreach (var chunk in query.Chunks)
 | `MiniArch.Query` | `MT-Read` | 仅限 world 无 mutation，且相关组件类型已注册 |
 | `MiniArch.OrderedQuery` | `MT-Read` | 每次枚举独立租用内部 buffer；comparer 必须可并发读 |
 | `MiniArch.Core.Query` | `MT-Read` | 覆盖冷 materialize / cache publish，不覆盖首次类型注册 |
-| `CommandBuffer` recording | `MT-Record` | 多线程可同时录制到同一个 buffer |
-| `Compile()` / `CompileAndReplay()` | 否 | 必须在 recording 结束后单线程消费 |
+| `CommandBuffer` recording | `MT-Record` | 多线程可同时录制到独立 buffer 实例 |
+| `CommandBuffer.Submit()` | 否 | 单线程消费 |
+| `CommandBuffer.SubmitAndSnapshotAsync()` | 否（主线程）| 主线程 Submit，后台线程构建 FrameDelta，两者并行读同一份换出状态 |
 | `World` mutation API | 否 | 不支持并发写 |
 
 ## 迁移提示

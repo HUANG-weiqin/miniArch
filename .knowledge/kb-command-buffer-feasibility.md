@@ -145,14 +145,16 @@ updated: 2026-05-26
 - **不换出的字段**：`_world`、`_allocator`（buffer 始终持有）；`_tempComponents`（后台线程自建 scratch list）
 - 设计稿：`docs/plans/2026-05-26-async-snapshot-design.md`
 
-### 性能数据（Release, 30 次平均, 10000 entities）
+### 性能数据（Release, 全帧 record+submit, 3s×5 repeats）
 
-| Scenario | Submit only | Submit+Snapshot | Async sync path | Async total (await) |
+| Case | Mini Submit | Mini Async+Snp | Arch | Async vs Submit |
 |---|---|---|---|---|
-| DenseExisting | 3.286 ms | 4.320 ms (+1.034) | 3.135 ms (-0.151) | 3.156 ms |
-| MixedScript | 2.658 ms | 5.890 ms (+3.231) | 4.332 ms (+1.674) | 6.299 ms |
+| 1000/CreateHeavy | 3213 | 2715 | 1381 | -15.5% |
+| 10000/CreateHeavy | 308 | 260 | 153 | -15.5% |
+| 10000/DenseExisting | 220 | 231 | 193 | +4.8% |
+| 10000/MixedScript | 246 | 205 | 183 | -16.6% |
 
-关键结论：DenseExisting 场景下 async sync path 比 Submit only 还快（可能是热缓存效应），比同步 Submit+Snapshot 节省 ~1.2ms。
+关键结论：Async 路径（含 snapshot）在所有场景下相比纯 Submit（不含 snapshot）开销约 15-16%。DenseExisting 场景下反而略快（swap-out 省了 Clear 开销）。
 
 ## FrameDelta
 
