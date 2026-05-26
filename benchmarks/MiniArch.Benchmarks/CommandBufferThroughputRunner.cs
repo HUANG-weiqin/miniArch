@@ -394,7 +394,7 @@ public static class CommandBufferThroughputRunner
                 var allocBefore = GC.GetTotalAllocatedBytes(true);
 
                 var sw = Stopwatch.StartNew();
-                CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(buffer, state, CommandBufferBenchmarkScenario.DenseExisting);
+                CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(buffer, state, scenario);
                 sw.Stop();
                 var recordMs = sw.Elapsed.TotalMilliseconds;
 

@@ -7,7 +7,7 @@ namespace MiniArch.Core;
 /// <summary>
 /// Caches typed byte-to-column writers used by raw command replay.
 /// </summary>
-public static unsafe class ComponentWriterCache
+internal static unsafe class ComponentWriterCache
 {
     private static readonly ConcurrentDictionary<Type, ColumnWriterDelegate> ColumnWriters = new();
     private static readonly ConcurrentDictionary<Type, int> Sizes = new();
@@ -15,7 +15,7 @@ public static unsafe class ComponentWriterCache
     /// <summary>
     /// Writes a component value from raw bytes into flat chunk storage.
     /// </summary>
-    public delegate void ColumnWriterDelegate(Chunk chunk, int columnIndex, int row, byte* source);
+    internal delegate void ColumnWriterDelegate(Chunk chunk, int columnIndex, int row, byte* source);
 
     internal static ColumnWriterDelegate GetColumnWriter(Type type)
     {

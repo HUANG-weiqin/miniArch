@@ -3,7 +3,7 @@ namespace MiniArch.Core;
 /// <summary>
 /// Caches adjacent archetypes.
 /// </summary>
-public sealed class ArchetypeEdges
+internal sealed class ArchetypeEdges
 {
     private Archetype?[] _addEdges = Array.Empty<Archetype?>();
     private Archetype?[] _removeEdges = Array.Empty<Archetype?>();

@@ -10,7 +10,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="BenchmarkDotNet" Version="0.13.12" />
     <PackageReference Include="coverlet.collector" Version="6.0.0" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
     <PackageReference Include="xunit" Version="2.5.3" />
@@ -23,7 +22,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\MiniArch\MiniArch.csproj" />
-    <ProjectReference Include="..\..\benchmarks\MiniArch.Benchmarks\MiniArch.Benchmarks.csproj" />
+    <ProjectReference Include="..\..\shared\MiniArch.SharedInfrastructure\MiniArch.SharedInfrastructure.csproj" />
   </ItemGroup>
 
 </Project>

@@ -438,8 +438,3 @@ internal readonly record struct LinkCommand(Entity Parent, Entity Child);
 
 internal readonly record struct UnlinkCommand(Entity Child);
 
-internal readonly record struct RecordedHierarchyCommand(Entity Child, Entity Parent, bool IsLink);
-
-internal readonly record struct RecordedRawCommand(Entity Entity, int ComponentTypeId, int DataOffset, int DataSize);
-
-internal readonly record struct RecordedRemoveCommand(Entity Entity, int ComponentTypeId);

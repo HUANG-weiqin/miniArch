@@ -51,10 +51,7 @@ public sealed class Archetype
     /// </summary>
     public IReadOnlyList<Chunk> Chunks => _chunks;
 
-    /// <summary>
-    /// Gets the cached edges.
-    /// </summary>
-    public ArchetypeEdges Edges { get; } = new();
+    internal ArchetypeEdges Edges { get; } = new();
 
     /// <summary>
     /// Adds an entity with components.
