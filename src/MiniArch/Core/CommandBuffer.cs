@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace MiniArch.Core;
 
@@ -20,15 +21,15 @@ public sealed class CommandBuffer : ICommandRecorder
     private int _opsPoolCount;
     private int[] _opsLookup = Array.Empty<int>();
     private int _maxOpsEntityId;
-    private readonly HashSet<Entity> _existingDestroys = new();
+    private HashSet<Entity> _existingDestroys = new();
     private CreatedState[] _createdStatePool = Array.Empty<CreatedState>();
     private Entity[] _createdEntityByPoolIndex = Array.Empty<Entity>();
     private int _createdStatePoolCount;
     private int[] _createdStateLookup = Array.Empty<int>();
     private int _maxCreatedEntityId;
-    private readonly Dictionary<Entity, HierarchyIntent> _hierarchyByChild = new();
-    private readonly Dictionary<int, (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)> _typeInfoCache = new();
-    private readonly List<byte[]> _slabs = new();
+    private Dictionary<Entity, HierarchyIntent> _hierarchyByChild = new();
+    private Dictionary<int, (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)> _typeInfoCache = new();
+    private List<byte[]> _slabs = new();
     private readonly List<(int ComponentTypeId, CreatedComponent Component)> _tempComponents = new();
     private bool _hasCreatedEntities;
     private int _currentSlabIndex = -1;
@@ -295,6 +296,359 @@ public sealed class CommandBuffer : ICommandRecorder
         BuildDelta(delta);
         delta.DeepCopyOwnedData();
         return delta;
+    }
+
+    /// <summary>
+    /// Swaps out internal state, submits to world on the calling thread,
+    /// and builds a self-contained FrameDelta on a background thread.
+    /// The returned delta owns its own data and is independent of this buffer.
+    /// </summary>
+    public Task<FrameDelta> SubmitAndSnapshotAsync()
+    {
+        if (_opsPoolCount == 0 &&
+            _existingDestroys.Count == 0 && _createdStatePoolCount == 0 &&
+            _hierarchyByChild.Count == 0)
+        {
+            return Task.FromResult(new FrameDelta());
+        }
+
+        var frozen = SwapOutState();
+        var task = Task.Run(() => BuildFromFrozen(frozen));
+
+        SubmitFromFrozen(frozen);
+
+        return task;
+    }
+
+    private FrozenBufferState SwapOutState()
+    {
+        var frozen = new FrozenBufferState
+        {
+            CreatedStatePool = _createdStatePool,
+            CreatedStatePoolCount = _createdStatePoolCount,
+            CreatedEntityByPoolIndex = _createdEntityByPoolIndex,
+            CreatedStateLookup = _createdStateLookup,
+            MaxCreatedEntityId = _maxCreatedEntityId,
+            OpsPool = _opsPool,
+            OpsPoolCount = _opsPoolCount,
+            OpsEntityByPoolIndex = _opsEntityByPoolIndex,
+            OpsLookup = _opsLookup,
+            MaxOpsEntityId = _maxOpsEntityId,
+            ExistingDestroys = _existingDestroys,
+            HierarchyByChild = _hierarchyByChild,
+            Slabs = _slabs,
+            HasCreatedEntities = _hasCreatedEntities,
+            TypeInfoCache = _typeInfoCache,
+        };
+
+        _createdStatePool = Array.Empty<CreatedState>();
+        _createdStatePoolCount = 0;
+        _createdEntityByPoolIndex = Array.Empty<Entity>();
+        _createdStateLookup = Array.Empty<int>();
+        _maxCreatedEntityId = 0;
+        _opsPool = Array.Empty<ExistingEntityOps>();
+        _opsPoolCount = 0;
+        _opsEntityByPoolIndex = Array.Empty<Entity>();
+        _opsLookup = Array.Empty<int>();
+        _maxOpsEntityId = 0;
+        _existingDestroys = new HashSet<Entity>();
+        _hierarchyByChild = new Dictionary<Entity, HierarchyIntent>();
+        _slabs = new List<byte[]>();
+        _hasCreatedEntities = false;
+        _typeInfoCache = new Dictionary<int, (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)>();
+        _currentSlabIndex = -1;
+        _currentSlabOffset = 0;
+
+        return frozen;
+    }
+
+    private void SubmitFromFrozen(FrozenBufferState frozen)
+    {
+        _world.BeginDeferredLayoutUpdates();
+        try
+        {
+            for (var i = 0; i < frozen.CreatedStatePoolCount; i++)
+            {
+                ref readonly var state = ref frozen.CreatedStatePool[i];
+                var entity = frozen.CreatedEntityByPoolIndex[i];
+                if (state.Destroyed)
+                {
+                    _world.ReleaseReservedEntity(entity);
+                }
+                else if (state.Count == 0 && state.Overflow is null)
+                {
+                    _world.MaterializeReservedEntityTrusted(entity, Signature.Empty, Array.Empty<RawComponentValue>());
+                }
+                else
+                {
+                    _tempComponents.Clear();
+                    state.CopyTo(_tempComponents);
+                    var componentCount = _tempComponents.Count;
+
+                    var components = ArrayPool<ComponentType>.Shared.Rent(componentCount);
+                    var sourceComponents = ArrayPool<CreatedComponent>.Shared.Rent(componentCount);
+                    try
+                    {
+                        for (var j = 0; j < componentCount; j++)
+                        {
+                            sourceComponents[j] = _tempComponents[j].Component;
+                            components[j] = _tempComponents[j].Component.ComponentType;
+                        }
+
+                        Array.Sort(components, sourceComponents, 0, componentCount);
+
+                        var rawComponents = new RawComponentValue[componentCount];
+                        var signatureComponents = new ComponentType[componentCount];
+                        for (var j = 0; j < componentCount; j++)
+                        {
+                            var sc = sourceComponents[j];
+                            rawComponents[j] = new RawComponentValue(sc.ComponentType.Value, sc.RuntimeType, sc.ComponentType, frozen.Slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
+                            signatureComponents[j] = sc.ComponentType;
+                        }
+
+                        _world.MaterializeReservedEntityTrusted(entity, Signature.CreateNormalized(signatureComponents), rawComponents);
+                    }
+                    finally
+                    {
+                        ArrayPool<CreatedComponent>.Shared.Return(sourceComponents);
+                        ArrayPool<ComponentType>.Shared.Return(components);
+                    }
+                }
+            }
+
+            for (var i = 0; i < frozen.OpsPoolCount; i++)
+            {
+                ref var existingOps = ref frozen.OpsPool[i];
+                if (existingOps.Count == 0 && existingOps.Overflow is null) continue;
+                var entity = frozen.OpsEntityByPoolIndex[i];
+
+                ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Slot0, entity);
+                if (existingOps.Count >= 2) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Slot1, entity);
+                if (existingOps.Count >= 3) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Slot2, entity);
+                if (existingOps.Count >= 4) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Slot3, entity);
+                if (existingOps.Overflow is not null)
+                {
+                    foreach (var kv in existingOps.Overflow)
+                        ApplyOpDirectFromFrozen(_world, frozen.Slabs, kv.Value, entity);
+                }
+            }
+
+            foreach (var (child, intent) in frozen.HierarchyByChild)
+            {
+                if (frozen.ExistingDestroys.Contains(child)) continue;
+                if (frozen.HasCreatedEntities)
+                {
+                    var id = child.Id;
+                    if ((uint)id < (uint)frozen.CreatedStateLookup.Length)
+                    {
+                        var csIdx = frozen.CreatedStateLookup[id];
+                        if (csIdx >= 0 && frozen.CreatedStatePool[csIdx].Destroyed) continue;
+                    }
+                }
+
+                if (intent.IsLinked)
+                    _world.Link(intent.Parent, child);
+                else
+                    _world.Unlink(child);
+            }
+
+            foreach (var entity in frozen.ExistingDestroys)
+            {
+                if (_world.IsAlive(entity))
+                    _world.Destroy(entity);
+            }
+        }
+        finally
+        {
+            _world.EndDeferredLayoutUpdates();
+        }
+    }
+
+    private static FrameDelta BuildFromFrozen(FrozenBufferState frozen)
+    {
+        var delta = new FrameDelta();
+
+        var releasedCount = 0;
+        var createdCount = 0;
+        for (var i = 0; i < frozen.CreatedStatePoolCount; i++)
+        {
+            ref readonly var s = ref frozen.CreatedStatePool[i];
+            if (s.Destroyed) releasedCount++;
+            else createdCount++;
+        }
+
+        delta.ReservedEntities.EnsureCapacity(frozen.CreatedStatePoolCount);
+        delta.ReleasedEntities.EnsureCapacity(releasedCount);
+        delta.CreatedEntities.EnsureCapacity(createdCount);
+        delta.LinkCommands.EnsureCapacity(frozen.HierarchyByChild.Count);
+        delta.UnlinkCommands.EnsureCapacity(frozen.HierarchyByChild.Count);
+        delta.AddCommands.EnsureCapacity(frozen.OpsPoolCount);
+        delta.SetCommands.EnsureCapacity(frozen.OpsPoolCount);
+        delta.RemoveCommands.EnsureCapacity(frozen.OpsPoolCount);
+        delta.DestroyedEntities.EnsureCapacity(frozen.ExistingDestroys.Count);
+
+        for (var poolIdx = 0; poolIdx < frozen.CreatedStatePoolCount; poolIdx++)
+        {
+            ref readonly var state = ref frozen.CreatedStatePool[poolIdx];
+            var entity = frozen.CreatedEntityByPoolIndex[poolIdx];
+            delta.ReservedEntities.Add(entity);
+            if (state.Destroyed)
+            {
+                delta.ReleasedEntities.Add(entity);
+            }
+            else if (state.Count == 0 && state.Overflow is null)
+            {
+                delta.CreatedEntities.Add(new RawCreatedEntity(entity, Signature.Empty, Array.Empty<RawComponentValue>()));
+            }
+            else
+            {
+                var (signature, components) = BuildCreatedEntityComponentsFromFrozen(in state, frozen.Slabs);
+                delta.CreatedEntities.Add(new RawCreatedEntity(entity, signature, components));
+            }
+        }
+
+        foreach (var (child, intent) in frozen.HierarchyByChild)
+        {
+            if (frozen.ExistingDestroys.Contains(child)) continue;
+            if (frozen.HasCreatedEntities)
+            {
+                var id = child.Id;
+                if ((uint)id < (uint)frozen.CreatedStateLookup.Length)
+                {
+                    var csIdx = frozen.CreatedStateLookup[id];
+                    if (csIdx >= 0 && frozen.CreatedStatePool[csIdx].Destroyed) continue;
+                }
+            }
+
+            if (intent.IsLinked)
+                delta.LinkCommands.Add(new LinkCommand(intent.Parent, child));
+            else
+                delta.UnlinkCommands.Add(new UnlinkCommand(child));
+        }
+
+        for (var i = 0; i < frozen.OpsPoolCount; i++)
+        {
+            ref var existingOps = ref frozen.OpsPool[i];
+            if (existingOps.Count == 0 && existingOps.Overflow is null) continue;
+            var entity = frozen.OpsEntityByPoolIndex[i];
+
+            EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in existingOps.Slot0, entity, delta);
+            if (existingOps.Count >= 2) EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in existingOps.Slot1, entity, delta);
+            if (existingOps.Count >= 3) EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in existingOps.Slot2, entity, delta);
+            if (existingOps.Count >= 4) EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in existingOps.Slot3, entity, delta);
+            if (existingOps.Overflow is not null)
+            {
+                foreach (var kv in existingOps.Overflow)
+                {
+                    var overflowSlot = kv.Value;
+                    EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in overflowSlot, entity, delta);
+                }
+            }
+        }
+
+        foreach (var entity in frozen.ExistingDestroys)
+        {
+            delta.DestroyedEntities.Add(entity);
+        }
+
+        delta.DeepCopyOwnedData();
+
+        foreach (var slab in frozen.Slabs)
+        {
+            ArrayPool<byte>.Shared.Return(slab);
+        }
+
+        return delta;
+    }
+
+    private static (Signature Signature, RawComponentValue[] Components) BuildCreatedEntityComponentsFromFrozen(
+        in CreatedState state, List<byte[]> slabs)
+    {
+        var componentCount = state.Count;
+        if (state.Overflow is not null) componentCount += state.Overflow.Count;
+
+        var types = ArrayPool<ComponentType>.Shared.Rent(componentCount);
+        var sources = ArrayPool<CreatedComponent>.Shared.Rent(componentCount);
+        var typeIdAndComp = ArrayPool<(int ComponentTypeId, CreatedComponent Component)>.Shared.Rent(componentCount);
+        try
+        {
+            var idx = 0;
+            if (state.Count >= 1) typeIdAndComp[idx++] = (state.ComponentTypeId0, state.Component0);
+            if (state.Count >= 2) typeIdAndComp[idx++] = (state.ComponentTypeId1, state.Component1);
+            if (state.Count >= 3) typeIdAndComp[idx++] = (state.ComponentTypeId2, state.Component2);
+            if (state.Count >= 4) typeIdAndComp[idx++] = (state.ComponentTypeId3, state.Component3);
+            if (state.Overflow is not null)
+            {
+                foreach (var kv in state.Overflow)
+                    typeIdAndComp[idx++] = (kv.Key, kv.Value);
+            }
+
+            for (var i = 0; i < idx; i++)
+            {
+                sources[i] = typeIdAndComp[i].Component;
+                types[i] = typeIdAndComp[i].Component.ComponentType;
+            }
+
+            Array.Sort(types, sources, 0, idx);
+
+            var rawComponents = new RawComponentValue[idx];
+            var signatureComponents = new ComponentType[idx];
+            for (var i = 0; i < idx; i++)
+            {
+                var sc = sources[i];
+                rawComponents[i] = new RawComponentValue(sc.ComponentType.Value, sc.RuntimeType, sc.ComponentType, slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
+                signatureComponents[i] = sc.ComponentType;
+            }
+
+            return (Signature.CreateNormalized(signatureComponents), rawComponents);
+        }
+        finally
+        {
+            ArrayPool<(int, CreatedComponent)>.Shared.Return(typeIdAndComp);
+            ArrayPool<CreatedComponent>.Shared.Return(sources);
+            ArrayPool<ComponentType>.Shared.Return(types);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void ApplyOpDirectFromFrozen(World world, List<byte[]> slabs, EntityOpSlot slot, Entity entity)
+    {
+        switch (slot.Kind)
+        {
+            case OpKindAdd:
+            case OpKindSet:
+            {
+                var d = slot.AddSetData;
+                world.ApplyRawAddOrSet(entity, d.ComponentType, d.RuntimeType, slabs[d.SlabIndex], d.DataOffset, d.Writer);
+                break;
+            }
+            case OpKindRemove:
+                world.RemoveBoxed(entity, slot.RemoveComponentType);
+                break;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void EmitOpFromFrozen(
+        List<byte[]> slabs,
+        Dictionary<int, (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)> typeInfoCache,
+        in EntityOpSlot slot, Entity entity, FrameDelta delta)
+    {
+        switch (slot.Kind)
+        {
+            case OpKindAdd:
+                delta.AddCommands.Add(new RawComponentCommand(entity, slot.ComponentTypeId, slot.AddSetData.RuntimeType, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, slot.AddSetData.Writer, slabs[slot.AddSetData.SlabIndex]));
+                break;
+            case OpKindSet:
+                delta.SetCommands.Add(new RawComponentCommand(entity, slot.ComponentTypeId, slot.AddSetData.RuntimeType, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, slot.AddSetData.Writer, slabs[slot.AddSetData.SlabIndex]));
+                break;
+            case OpKindRemove:
+            {
+                var info = typeInfoCache[slot.ComponentTypeId];
+                delta.RemoveCommands.Add(new RawRemoveCommand(entity, slot.ComponentTypeId, info.RuntimeType, slot.RemoveComponentType));
+                break;
+            }
+        }
     }
 
     private (Signature Signature, RawComponentValue[] Components) BuildCreatedEntityComponents(in CreatedState state)
@@ -820,4 +1174,25 @@ public sealed class CommandBuffer : ICommandRecorder
     }
 
     private sealed record ComponentTypeIdCacheEntry(ComponentRegistry Registry, int ComponentTypeId);
+
+    private sealed class FrozenBufferState
+    {
+        public CreatedState[] CreatedStatePool = null!;
+        public int CreatedStatePoolCount;
+        public Entity[] CreatedEntityByPoolIndex = null!;
+        public int[] CreatedStateLookup = null!;
+        public int MaxCreatedEntityId;
+
+        public ExistingEntityOps[] OpsPool = null!;
+        public int OpsPoolCount;
+        public Entity[] OpsEntityByPoolIndex = null!;
+        public int[] OpsLookup = null!;
+        public int MaxOpsEntityId;
+
+        public HashSet<Entity> ExistingDestroys = null!;
+        public Dictionary<Entity, HierarchyIntent> HierarchyByChild = null!;
+        public List<byte[]> Slabs = null!;
+        public bool HasCreatedEntities;
+        public Dictionary<int, (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)> TypeInfoCache = null!;
+    }
 }

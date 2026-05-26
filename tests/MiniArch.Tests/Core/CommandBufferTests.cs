@@ -1032,4 +1032,164 @@ public sealed class CommandBufferTests
         links.Sort(StringComparer.Ordinal);
         return string.Join("|", links);
     }
+
+    [Fact]
+    public async Task SubmitAndSnapshotAsync_submits_and_returns_delta()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+
+        var e = buffer.Create();
+        buffer.Add(e, new Position(1, 2));
+        buffer.Add(e, new Velocity(3, 4));
+
+        var task = buffer.SubmitAndSnapshotAsync();
+        Assert.True(world.IsAlive(e));
+        Assert.True(world.TryGet(e, out Position p));
+        Assert.Equal(new Position(1, 2), p);
+
+        var delta = await task;
+        Assert.Single(delta.CreatedEntities);
+        Assert.Equal(2, delta.CreatedEntities[0].Components.Length);
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotAsync_with_existing_entity_ops()
+    {
+        var world = new World();
+        var e = world.Create(new Position(10, 20), new Velocity(5, 6));
+        var buffer = new CommandBuffer(world);
+
+        buffer.Set(e, new Position(30, 40));
+        buffer.Remove<Velocity>(e);
+
+        var task = buffer.SubmitAndSnapshotAsync();
+        Assert.True(world.TryGet(e, out Position p));
+        Assert.Equal(new Position(30, 40), p);
+        Assert.False(world.TryGet<Velocity>(e, out _));
+
+        var delta = await task;
+        Assert.Single(delta.SetCommands);
+        Assert.Single(delta.RemoveCommands);
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotAsync_with_hierarchy()
+    {
+        var world = new World();
+        var parent = world.Create();
+        var child = world.Create();
+        var buffer = new CommandBuffer(world);
+
+        buffer.Link(parent, child);
+
+        var task = buffer.SubmitAndSnapshotAsync();
+        Assert.True(world.TryGetParent(child, out var p));
+        Assert.Equal(parent, p);
+
+        var delta = await task;
+        Assert.Single(delta.LinkCommands);
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotAsync_with_destroy()
+    {
+        var world = new World();
+        var e = world.Create(new Position(1, 2));
+        var buffer = new CommandBuffer(world);
+
+        buffer.Destroy(e);
+
+        var task = buffer.SubmitAndSnapshotAsync();
+        Assert.False(world.IsAlive(e));
+
+        var delta = await task;
+        Assert.Single(delta.DestroyedEntities);
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotAsync_returns_empty_delta_for_empty_buffer()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+
+        var delta = await buffer.SubmitAndSnapshotAsync();
+        Assert.True(delta.IsEmpty);
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotAsync_buffer_reusable_after_call()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+
+        var e1 = buffer.Create();
+        buffer.Add(e1, new Position(1, 2));
+        var task1 = buffer.SubmitAndSnapshotAsync();
+        Assert.True(world.IsAlive(e1));
+        await task1;
+
+        var e2 = buffer.Create();
+        buffer.Add(e2, new Position(3, 4));
+        var task2 = buffer.SubmitAndSnapshotAsync();
+        Assert.True(world.IsAlive(e2));
+        var delta2 = await task2;
+        Assert.Single(delta2.CreatedEntities);
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotAsync_delta_can_be_replayed_in_another_world()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+
+        var e = buffer.Create();
+        buffer.Add(e, new Position(1, 2));
+        buffer.Add(e, new Velocity(3, 4));
+
+        var delta = await buffer.SubmitAndSnapshotAsync();
+
+        var replica = new World();
+        replica.Replay(delta);
+        Assert.True(replica.IsAlive(e));
+        Assert.True(replica.TryGet(e, out Position p));
+        Assert.Equal(new Position(1, 2), p);
+        Assert.True(replica.TryGet(e, out Velocity v));
+        Assert.Equal(new Velocity(3, 4), v);
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotAsync_mixed_script_scenario()
+    {
+        var world = new World();
+        var entities = new Entity[100];
+        for (int i = 0; i < 100; i++)
+            entities[i] = world.Create(new Position(i, i + 1));
+
+        var buffer = new CommandBuffer(world);
+
+        for (int i = 0; i < 100; i++)
+        {
+            if ((i & 1) == 0)
+            {
+                buffer.Set(entities[i], new Position(i + 10, i + 20));
+                if ((i & 3) == 0) buffer.Remove<Velocity>(entities[i]);
+                if ((i & 7) == 0) buffer.Destroy(entities[i]);
+            }
+            else
+            {
+                var e = buffer.Create();
+                buffer.Add(e, new Position(i + 30, i + 40));
+                if ((i & 3) == 1) buffer.Remove<Position>(e);
+                if ((i & 7) == 1) buffer.Destroy(e);
+            }
+        }
+
+        var delta = await buffer.SubmitAndSnapshotAsync();
+
+        Assert.False(world.IsAlive(entities[0]));
+        Assert.Equal(new Position(12, 22), world.TryGet(entities[2], out Position p2) ? p2 : default);
+
+        Assert.True(delta.DeltaCount > 0);
+    }
 }

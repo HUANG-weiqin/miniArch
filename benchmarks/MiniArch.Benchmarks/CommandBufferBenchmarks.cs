@@ -148,6 +148,9 @@ internal static class CommandBufferBenchmarkScenarioFactory
             case CommandBufferBenchmarkScenario.DenseExisting:
                 RecordMiniDenseExisting(buffer, state);
                 return;
+            case CommandBufferBenchmarkScenario.CreateHeavy:
+                RecordMiniCreateHeavy(buffer, state);
+                return;
             case CommandBufferBenchmarkScenario.MixedScript:
                 RecordMiniMixedScript(buffer, state);
                 return;
@@ -270,6 +273,27 @@ internal static class CommandBufferBenchmarkScenarioFactory
             }
         }
 
+    }
+
+    private static void RecordMiniCreateHeavy(CommandBuffer buffer, MiniSharedCommandBufferState state)
+    {
+        for (var i = 0; i < state.EntityCount; i++)
+        {
+            var entity = buffer.Create();
+            buffer.Add(entity, new BenchmarkPosition(i + 1, i + 2));
+            buffer.Add(entity, new BenchmarkVelocity(i + 3, i + 4));
+            buffer.Add(entity, new BenchmarkHealth(200 + i));
+
+            if ((i & 1) == 0)
+            {
+                buffer.Remove<BenchmarkVelocity>(entity);
+            }
+
+            if ((i & 3) == 0)
+            {
+                buffer.Destroy(entity);
+            }
+        }
     }
 
     private static void RecordMiniMixedScript(CommandBuffer buffer, MiniSharedCommandBufferState state)

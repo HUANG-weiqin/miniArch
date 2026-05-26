@@ -1,7 +1,7 @@
 ---
 title: Command Buffer Runtime
 module: MiniArch.Core CommandBuffer
-description: Single-threaded per-entity-deduplicating command buffer with arena slab allocator, inline CreatedState/ExistingEntityOps, direct Submit() path, Snapshot() for cross-world replay, and FrameDelta merge
+description: Single-threaded per-entity-deduplicating command buffer with arena slab allocator, inline CreatedState/ExistingEntityOps, direct Submit() path, Snapshot() for cross-world replay, FrameDelta merge, and SubmitAndSnapshotAsync() for parallel submit+snapshot
 updated: 2026-05-26
 ---
 
@@ -31,9 +31,10 @@ updated: 2026-05-26
   - `src/MiniArch/Core/World.cs`：`ReserveDeferredEntity`、`ReleaseReservedEntity`、`Replay(FrameDelta)`、structural mutation
 - 数据流 / 控制流：
   - 工作线程通过 `CommandBuffer` 只记录命令；`Create()` 会立刻从 world 预留真实 `Entity`
-  - recording 完成后可选两条路径：
-    - `Submit()`：直接执行到 world，不清空 recording API 缓冲，适合"录完就生效"
+  - recording 完成后可选三条路径：
+    - `Submit()`：直接执行到 world，清空录制缓冲，适合"录完就生效"
     - `Snapshot()`：生成自包含 `FrameDelta` 但不影响 world，可保留、merge、或跨 world replay
+    - `SubmitAndSnapshotAsync()`：换出内部状态后主线程 Submit 与后台线程 BuildDelta 并行执行；适合"需要同时 submit + snapshot"的帧同步场景
 - 与其他模块的交互方式：
   - 依赖 `World` 的 entity version / free-list / archetype mutation 基础设施
   - hierarchy 仍由 `HierarchyTable` side-table 持有，command buffer 只决定 replay 顺序
@@ -53,6 +54,7 @@ updated: 2026-05-26
 - 旧 `CommandBuffer`（多线程 shard + Compile + FrameDelta）已移除，`FastCommandBuffer` 重命名为 `CommandBuffer` 成为唯一实现。
 - 当不需要保留 frame 或跨 world replay 时，应优先用 `Submit()`。
 - `Snapshot()` 用于需要跨 world 同步或延迟回放的场景。
+- `SubmitAndSnapshotAsync()` 用于同时需要 submit 和 snapshot 的帧同步场景：换出 buffer 状态后，主线程 SubmitFromFrozen 与后台线程 BuildFromFrozen + DeepCopy 并行执行。返回 `Task<FrameDelta>`，调用返回时 Submit 已完成，await 只等 delta。
 - `FrameDelta` 是可保留的 frame 数据；只要目标 world 和源 world 保持同步初始态与同步回放顺序，就可以顺序 replay 到另一个 world。
 - 跨 world replay 时 `ResolveCompiledComponentType` 会验证 component type 对目标 world 的 registry 有效，保证跨实例安全。
 - 记录期直接返回真实 `Entity`，但它只是 reserved handle：
@@ -131,6 +133,26 @@ updated: 2026-05-26
 - `CreatedState` inline 4 字段 + overflow 字典
 - `ExistingEntityOps` inline 4 槽 + overflow 字典
 - Arena `ArrayPool<byte>` slab
+
+### SubmitAndSnapshotAsync 并行路径
+
+核心洞察：`BuildDelta` 和 `Submit()` 对 buffer 内部状态都是只读的。换出后，同一份 frozen state 可以被两个线程同时读。
+
+- **换出模型**：`FrozenBufferState`（private nested class）抓走 buffer 所有内部字段的引用，buffer 重置为空状态
+- **并行执行**：`Task.Run` 启动后台 BuildFromFrozen；主线程同步执行 SubmitFromFrozen
+- **结果所有权**：后台线程完成 `DeepCopyOwnedData` 后 slab 归还 ArrayPool，delta 完全独立
+- **换出后 buffer 为空**：可立即开始下一帧录制
+- **不换出的字段**：`_world`、`_allocator`（buffer 始终持有）；`_tempComponents`（后台线程自建 scratch list）
+- 设计稿：`docs/plans/2026-05-26-async-snapshot-design.md`
+
+### 性能数据（Release, 30 次平均, 10000 entities）
+
+| Scenario | Submit only | Submit+Snapshot | Async sync path | Async total (await) |
+|---|---|---|---|---|
+| DenseExisting | 3.286 ms | 4.320 ms (+1.034) | 3.135 ms (-0.151) | 3.156 ms |
+| MixedScript | 2.658 ms | 5.890 ms (+3.231) | 4.332 ms (+1.674) | 6.299 ms |
+
+关键结论：DenseExisting 场景下 async sync path 比 Submit only 还快（可能是热缓存效应），比同步 Submit+Snapshot 节省 ~1.2ms。
 
 ## FrameDelta
 

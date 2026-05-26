@@ -14,6 +14,7 @@ using MiniWorld = MiniArch.World;
 public enum CommandBufferEngine
 {
     MiniCommandBuffer,
+    MiniAsyncSubmitSnapshot,
     Arch,
 }
 
@@ -74,6 +75,12 @@ public static class CommandBufferThroughputRunner
             return 0;
         }
 
+        if (Array.Exists(args, a => string.Equals(a, "--diag-snapshot", StringComparison.OrdinalIgnoreCase)))
+        {
+            RunSnapshotDiagnostic(stdout, cancellationToken);
+            return 0;
+        }
+
         var durationSeconds = 3;
         var warmupCount = 3;
         var repeatCount = 5;
@@ -115,11 +122,11 @@ public static class CommandBufferThroughputRunner
         TextWriter output,
         CancellationToken cancellationToken)
     {
-        output.WriteLine("Command-buffer throughput comparison (record+submit only, setup excluded)");
+        output.WriteLine("Command-buffer throughput comparison (full frame: record+submit/playback, setup excluded)");
         output.WriteLine($"DurationSeconds: {duration.TotalSeconds:F0}, Warmup: {warmupCount}, Repeat: {repeatCount}");
         output.WriteLine();
 
-        var engines = new[] { CommandBufferEngine.MiniCommandBuffer, CommandBufferEngine.Arch };
+        var engines = new[] { CommandBufferEngine.MiniCommandBuffer, CommandBufferEngine.MiniAsyncSubmitSnapshot, CommandBufferEngine.Arch };
 
         output.WriteLine($"{"Case",-28} {"Engine",-22} {"Median ops/s",14} {"Best ops/s",14}");
         output.WriteLine(new string('-', 80));
@@ -147,11 +154,18 @@ public static class CommandBufferThroughputRunner
 
             var mini = results.FirstOrDefault(r => r.Engine == CommandBufferEngine.MiniCommandBuffer);
             var arch = results.FirstOrDefault(r => r.Engine == CommandBufferEngine.Arch);
+            var miniAsync = results.FirstOrDefault(r => r.Engine == CommandBufferEngine.MiniAsyncSubmitSnapshot);
 
             if (mini.Detail is not null && arch.Detail is not null)
             {
                 var miniVsArch = ((mini.Median - arch.Median) / arch.Median) * 100d;
                 output.WriteLine($"  Mini vs Arch: {miniVsArch:+0.0;-0.0;0.0}%");
+            }
+
+            if (mini.Detail is not null && miniAsync.Detail is not null)
+            {
+                var asyncVsMini = ((miniAsync.Median - mini.Median) / mini.Median) * 100d;
+                output.WriteLine($"  Async vs Mini Submit: {asyncVsMini:+0.0;-0.0;0.0}%");
             }
 
             output.WriteLine();
@@ -251,9 +265,40 @@ public static class CommandBufferThroughputRunner
         return engine switch
         {
             CommandBufferEngine.MiniCommandBuffer => ExecuteMini(scenario, entityCount, duration, warmupCount, cancellationToken),
+            CommandBufferEngine.MiniAsyncSubmitSnapshot => ExecuteMiniAsync(scenario, entityCount, duration, warmupCount, cancellationToken),
             CommandBufferEngine.Arch => ExecuteArch(scenario, entityCount, duration, warmupCount, cancellationToken),
             _ => throw new ArgumentOutOfRangeException(nameof(engine))
         };
+    }
+
+    private static CommandBufferRunResult ExecuteMiniAsync(
+        CommandBufferBenchmarkScenario scenario, int entityCount, TimeSpan duration, int warmupCount, CancellationToken cancellationToken)
+    {
+        for (var w = 0; w < warmupCount; w++)
+        {
+            var warmupState = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
+            var buffer = new CommandBuffer(warmupState.World);
+            CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(buffer, warmupState, scenario);
+            buffer.SubmitAndSnapshotAsync().Wait();
+        }
+
+        var iterations = 0L;
+        var totalElapsed = TimeSpan.Zero;
+
+        while (totalElapsed < duration)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var state = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
+            var buffer = new CommandBuffer(state.World);
+            var sw = Stopwatch.StartNew();
+            CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(buffer, state, scenario);
+            buffer.SubmitAndSnapshotAsync().Wait();
+            sw.Stop();
+            totalElapsed += sw.Elapsed;
+            iterations++;
+        }
+
+        return new CommandBufferRunResult(CommandBufferEngine.MiniAsyncSubmitSnapshot, iterations, totalElapsed);
     }
 
     private static CommandBufferRunResult ExecuteArch(
@@ -299,7 +344,8 @@ public static class CommandBufferThroughputRunner
 
     private static string FormatEngine(CommandBufferEngine engine) => engine switch
     {
-        CommandBufferEngine.MiniCommandBuffer => "Mini CommandBuffer",
+        CommandBufferEngine.MiniCommandBuffer => "Mini Submit",
+        CommandBufferEngine.MiniAsyncSubmitSnapshot => "Mini Async+Snp",
         CommandBufferEngine.Arch => "Arch CommandBuffer",
         _ => engine.ToString()
     };
@@ -384,6 +430,96 @@ public static class CommandBufferThroughputRunner
             output.WriteLine($"  Gen1 collections: {totalGen1} total, {(double)totalGen1 / batchSize:F1} per iter");
             output.WriteLine($"  Gen2 collections: {totalGen2} total, {(double)totalGen2 / batchSize:F1} per iter");
             output.WriteLine($"  Allocated: {totalAllocatedBytes / batchSize:N0} bytes per iter ({totalAllocatedBytes / (double)batchSize / 1024:F0} KB)");
+            output.WriteLine();
+        }
+    }
+
+    private static void RunSnapshotDiagnostic(TextWriter output, CancellationToken ct)
+    {
+        const int entityCount = 10000;
+        const int warmupCount = 5;
+        const int batchSize = 30;
+        var scenarios = new[] { CommandBufferBenchmarkScenario.DenseExisting, CommandBufferBenchmarkScenario.MixedScript };
+
+        output.WriteLine("=== Snapshot Diagnostic: Submit vs Submit+Snapshot vs SubmitAndSnapshotAsync ===");
+        output.WriteLine($"EntityCount: {entityCount}, Warmup: {warmupCount}, Batch: {batchSize}");
+        output.WriteLine();
+
+        foreach (var scenario in scenarios)
+        {
+            output.WriteLine($"--- {scenario} ---");
+
+            for (var w = 0; w < warmupCount; w++)
+            {
+                ct.ThrowIfCancellationRequested();
+                var ws = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
+                var cb = new CommandBuffer(ws.World);
+                CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(cb, ws, scenario);
+                cb.Submit();
+
+                ws = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
+                cb = new CommandBuffer(ws.World);
+                CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(cb, ws, scenario);
+                cb.Snapshot();
+                cb.Submit();
+
+                ws = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
+                cb = new CommandBuffer(ws.World);
+                CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(cb, ws, scenario);
+                cb.SubmitAndSnapshotAsync().Wait();
+            }
+
+            double submitOnlyMs = 0;
+            double submitSnapshotMs = 0;
+            double asyncSyncMs = 0;
+            double asyncTotalMs = 0;
+
+            for (var i = 0; i < batchSize; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                {
+                    var state = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
+                    var buffer = new CommandBuffer(state.World);
+                    CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(buffer, state, scenario);
+                    var sw = Stopwatch.StartNew();
+                    buffer.Submit();
+                    sw.Stop();
+                    submitOnlyMs += sw.Elapsed.TotalMilliseconds;
+                }
+
+                {
+                    var state = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
+                    var buffer = new CommandBuffer(state.World);
+                    CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(buffer, state, scenario);
+                    var sw = Stopwatch.StartNew();
+                    buffer.Snapshot();
+                    buffer.Submit();
+                    sw.Stop();
+                    submitSnapshotMs += sw.Elapsed.TotalMilliseconds;
+                }
+
+                {
+                    var state = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
+                    var buffer = new CommandBuffer(state.World);
+                    CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(buffer, state, scenario);
+                    var sw = Stopwatch.StartNew();
+                    var task = buffer.SubmitAndSnapshotAsync();
+                    var syncMs = sw.Elapsed.TotalMilliseconds;
+                    task.Wait();
+                    sw.Stop();
+                    asyncSyncMs += syncMs;
+                    asyncTotalMs += sw.Elapsed.TotalMilliseconds;
+                }
+            }
+
+            var snapshotOverhead = submitSnapshotMs - submitOnlyMs;
+            var asyncOverhead = asyncSyncMs - submitOnlyMs;
+
+            output.WriteLine($"  Submit only:        {submitOnlyMs / batchSize:F3} ms avg");
+            output.WriteLine($"  Submit + Snapshot:  {submitSnapshotMs / batchSize:F3} ms avg  (snapshot overhead: +{snapshotOverhead / batchSize:F3} ms)");
+            output.WriteLine($"  Async sync path:    {asyncSyncMs / batchSize:F3} ms avg  (async overhead: +{asyncOverhead / batchSize:F3} ms)");
+            output.WriteLine($"  Async total (await):{asyncTotalMs / batchSize:F3} ms avg");
             output.WriteLine();
         }
     }
