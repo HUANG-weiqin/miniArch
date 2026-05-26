@@ -2,7 +2,6 @@ using MiniArch.Core;
 using MiniChunk = MiniArch.Core.Chunk;
 using MiniEntity = MiniArch.Entity;
 using MiniWorld = MiniArch.World;
-using MiniCommandBuffer = MiniArch.Core.CommandBuffer;
 using ArchEntity = Arch.Core.Entity;
 using ArchWorld = Arch.Core.World;
 using ArchCommandBuffer = Arch.Buffer.CommandBuffer;
@@ -39,7 +38,7 @@ public static class CommandBufferSharedScenarios
         var existing = scenario.Scenario is CommandBufferBenchmarkScenario.CreateHeavy
             ? Array.Empty<MiniEntity>()
             : CreateMiniBaselineEntities(world, scenario.EntityCount);
-        var buffer = new MiniCommandBuffer(world);
+        var buffer = new CommandBuffer(world);
 
         switch (scenario.Scenario)
         {
@@ -56,7 +55,7 @@ public static class CommandBufferSharedScenarios
                 throw new ArgumentOutOfRangeException(nameof(scenario));
         }
 
-        buffer.CompileAndReplay();
+        buffer.Submit();
         return SummarizeMiniWorld(scenario.Name, world);
     }
 
@@ -109,7 +108,7 @@ public static class CommandBufferSharedScenarios
         return entities;
     }
 
-    private static void RecordMiniDenseExisting(MiniCommandBuffer buffer, MiniEntity[] existing)
+    private static void RecordMiniDenseExisting(CommandBuffer buffer, MiniEntity[] existing)
     {
         for (var i = 0; i < existing.Length; i++)
         {
@@ -159,7 +158,7 @@ public static class CommandBufferSharedScenarios
         }
     }
 
-    private static void RecordMiniCreateHeavy(MiniCommandBuffer buffer, int entityCount)
+    private static void RecordMiniCreateHeavy(CommandBuffer buffer, int entityCount)
     {
         for (var i = 0; i < entityCount; i++)
         {
@@ -201,7 +200,7 @@ public static class CommandBufferSharedScenarios
         }
     }
 
-    private static void RecordMiniMixedScript(MiniCommandBuffer buffer, MiniEntity[] existing, int entityCount)
+    private static void RecordMiniMixedScript(CommandBuffer buffer, MiniEntity[] existing, int entityCount)
     {
         for (var i = 0; i < entityCount; i++)
         {

@@ -20,31 +20,22 @@ public sealed class MiniArchRuntime
 
     private readonly List<ISystem> _systems = [];
 
-    private MiniArchRuntime(MiniArch.World world, bool useFastCommandBuffer)
+    private MiniArchRuntime(MiniArch.World world)
     {
         World = world;
         PreRegisterComponentTypes();
-        if (useFastCommandBuffer)
-        {
-            _fastCommands = new FastCommandBuffer(world);
-            Recorder = _fastCommands;
-        }
-        else
-        {
-            _commands = new CommandBuffer(world);
-            Recorder = _commands;
-        }
+        Commands = new CommandBuffer(world);
+        Recorder = Commands;
         CurrentFrame = new FrameView(World);
     }
 
-    public MiniArchRuntime() : this(new MiniArch.World(), false) { }
+    public MiniArchRuntime() : this(new MiniArch.World()) { }
 
-    public static MiniArchRuntime WithFastCommandBuffer() => new(new MiniArch.World(), true);
+    public static MiniArchRuntime Create() => new(new MiniArch.World());
 
     public MiniArch.World World { get; }
 
-    private readonly CommandBuffer? _commands;
-    private readonly FastCommandBuffer? _fastCommands;
+    public CommandBuffer Commands { get; }
     public ICommandRecorder Recorder { get; }
 
     public FrameView CurrentFrame { get; private set; }
@@ -75,11 +66,7 @@ public sealed class MiniArchRuntime
 
     private bool FlushPendingCommands()
     {
-        if (_fastCommands is not null)
-        {
-            return _fastCommands.Submit();
-        }
-        return _commands!.CompileAndReplay();
+        return Commands.Submit();
     }
 
     private void RunSystems(FrameContext context)
@@ -98,5 +85,3 @@ public sealed class MiniArchRuntime
         }
     }
 }
-
-

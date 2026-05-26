@@ -70,26 +70,36 @@ public static class Program
 
     private static void RunCommandBufferSmoke()
     {
-        var scenario = new CommandBufferReplayScenarioDefinition(
-            "existing-heavy-smoke",
-            CommandBufferReplayScenarioKind.ExistingHeavy,
-            128);
+        var world = new MiniArch.World();
+        var existing = new MiniArch.Entity[128];
+        for (var i = 0; i < existing.Length; i++)
+        {
+            existing[i] = world.Create(new BenchmarkPosition(i, i + 1), new BenchmarkVelocity(i + 2, i + 3), new BenchmarkHealth(100 + i));
+        }
 
-        using var playback = CommandBufferReplayScenarios.PrepareCompile(scenario);
         GC.Collect();
         GC.WaitForPendingFinalizers();
         GC.Collect();
 
-        var beforeAllocated = GC.GetAllocatedBytesForCurrentThread();
         var stopwatch = Stopwatch.StartNew();
-        var frame = playback.Buffer.Compile();
+        var beforeAllocated = GC.GetAllocatedBytesForCurrentThread();
+
+        var buffer = new MiniArch.Core.CommandBuffer(world);
+        for (var i = 0; i < existing.Length; i++)
+        {
+            buffer.Set(existing[i], new BenchmarkPosition(i + 10, i + 11));
+            buffer.Set(existing[i], new BenchmarkVelocity(i + 12, i + 13));
+            if ((i & 1) == 0) buffer.Remove<BenchmarkHealth>(existing[i]);
+            if ((i & 7) == 0) buffer.Destroy(existing[i]);
+        }
+        buffer.Submit();
+
         stopwatch.Stop();
         var allocated = GC.GetAllocatedBytesForCurrentThread() - beforeAllocated;
 
-        Console.WriteLine($"Command-buffer smoke: {scenario.Name}");
+        Console.WriteLine($"Command-buffer smoke: existing-heavy (128 entities)");
         Console.WriteLine($"Elapsed: {stopwatch.ElapsedMilliseconds} ms");
         Console.WriteLine($"Allocated: {allocated} bytes");
-        Console.WriteLine($"Frame commands: {frame.CreatedEntities.Count} created, {frame.AddCommands.Count} adds, {frame.SetCommands.Count} sets, {frame.RemoveCommands.Count} removes, {frame.DestroyedEntities.Count} destroys");
     }
 
     private static bool HasSwitch(IEnumerable<string> args, string switchName)
