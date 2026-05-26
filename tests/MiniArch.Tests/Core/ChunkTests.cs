@@ -5,8 +5,11 @@ namespace MiniArchTests.Core;
 
 public sealed class ChunkTests
 {
+    private readonly record struct Small(byte Value);
     private readonly record struct Position(int X, int Y);
     private readonly record struct Velocity(int X, int Y);
+    private readonly record struct Large(long A, int B, byte C);
+    private sealed record class Label(string Value);
 
     [Fact]
     public void Chunk_stores_entities_densely()
@@ -145,67 +148,78 @@ public sealed class ChunkTests
     }
 
     [Fact]
-    public void Removing_from_a_typed_chunk_only_clears_reference_columns()
+    public void Chunk_uses_flat_byte_storage_for_component_columns()
     {
-        var registry = new ComponentRegistry();
-        var position = registry.GetOrCreate<Position>();
-        var label = registry.GetOrCreate<Label>();
-        var signature = new Signature(position, label);
-        var chunk = CreateChunk(signature, typeof(Position), typeof(Label), capacity: 4);
-
-        var first = new Entity(1, 1);
-        var second = new Entity(2, 1);
-        var firstPosition = new Position(1, 2);
-        var secondPosition = new Position(3, 4);
-        var firstLabel = new Label("first");
-        var secondLabel = new Label("second");
-
-        chunk.Add(first, Components(position, label, firstPosition, firstLabel));
-        chunk.Add(second, Components(position, label, secondPosition, secondLabel));
-
-        var moved = chunk.RemoveAt(0, out var movedEntity);
-
-        var columns = GetColumns(chunk);
-        var positionColumn = (Position[])columns[0];
-        var labelColumn = (Label?[])columns[1];
-
-        Assert.True(moved);
-        Assert.Equal(second, movedEntity);
-        Assert.Equal(secondPosition, positionColumn[0]);
-        Assert.Equal(secondLabel, labelColumn[0]);
-        Assert.Equal(secondPosition, positionColumn[1]);
-        Assert.Null(labelColumn[1]);
+        Assert.Null(typeof(Chunk).GetField("_columns", BindingFlags.Instance | BindingFlags.NonPublic));
+        Assert.NotNull(typeof(Chunk).GetField("_data", BindingFlags.Instance | BindingFlags.NonPublic));
+        Assert.NotNull(typeof(Chunk).GetField("_columnByteOffsets", BindingFlags.Instance | BindingFlags.NonPublic));
+        Assert.NotNull(typeof(Chunk).GetField("_elementSizes", BindingFlags.Instance | BindingFlags.NonPublic));
     }
 
     [Fact]
-    public void Removing_from_a_typed_chunk_clears_struct_columns_that_contain_references()
+    public void Removing_a_row_preserves_moved_values_through_typed_apis()
     {
         var registry = new ComponentRegistry();
         var position = registry.GetOrCreate<Position>();
-        var labelStruct = registry.GetOrCreate<LabelStruct>();
-        var signature = new Signature(position, labelStruct);
-        var chunk = CreateChunk(signature, typeof(Position), typeof(LabelStruct), capacity: 4);
+        var velocity = registry.GetOrCreate<Velocity>();
+        var signature = new Signature(position, velocity);
+        var chunk = CreateChunk(signature, typeof(Position), typeof(Velocity), capacity: 4);
 
         var first = new Entity(1, 1);
         var second = new Entity(2, 1);
         var firstPosition = new Position(1, 2);
         var secondPosition = new Position(3, 4);
-        var firstLabel = new LabelStruct("first");
-        var secondLabel = new LabelStruct("second");
+        var firstVelocity = new Velocity(5, 6);
+        var secondVelocity = new Velocity(7, 8);
 
-        chunk.Add(first, Components(position, labelStruct, firstPosition, firstLabel));
-        chunk.Add(second, Components(position, labelStruct, secondPosition, secondLabel));
+        chunk.Add(first, Components(position, velocity, firstPosition, firstVelocity));
+        chunk.Add(second, Components(position, velocity, secondPosition, secondVelocity));
 
-        _ = chunk.RemoveAt(0, out _);
+        var moved = chunk.RemoveAt(0, out var movedEntity);
 
-        var columns = GetColumns(chunk);
-        var positionColumn = (Position[])columns[0];
-        var labelColumn = (LabelStruct[])columns[1];
+        var positions = chunk.GetComponentSpan<Position>(position);
+        var velocities = chunk.GetComponentSpan<Velocity>(velocity);
 
-        Assert.Equal(secondPosition, positionColumn[0]);
-        Assert.Equal(secondLabel, labelColumn[0]);
-        Assert.Equal(secondPosition, positionColumn[1]);
-        Assert.Equal(default, labelColumn[1]);
+        Assert.True(moved);
+        Assert.Equal(second, movedEntity);
+        Assert.Equal(secondPosition, chunk.GetComponent<Position>(position, 0));
+        Assert.Equal(secondVelocity, chunk.GetComponent<Velocity>(velocity, 0));
+        Assert.Equal(secondPosition, positions[0]);
+        Assert.Equal(secondVelocity, velocities[0]);
+    }
+
+    [Fact]
+    public void Flat_storage_preserves_mixed_size_component_columns()
+    {
+        var registry = new ComponentRegistry();
+        var small = registry.GetOrCreate<Small>();
+        var large = registry.GetOrCreate<Large>();
+        var signature = new Signature(small, large);
+        var chunk = CreateChunk(signature, typeof(Small), typeof(Large), capacity: 4);
+
+        chunk.Add(new Entity(1, 1), Components(small, large, new Small(1), new Large(2, 3, 4)));
+        chunk.Add(new Entity(2, 1), Components(small, large, new Small(5), new Large(6, 7, 8)));
+
+        chunk.SetComponent(small, 0, new Small(9));
+        chunk.RemoveAt(0, out _);
+
+        Assert.Equal(new Small(5), chunk.GetComponent<Small>(small, 0));
+        Assert.Equal(new Large(6, 7, 8), chunk.GetComponent<Large>(large, 0));
+        Assert.Equal(new Small(5), chunk.GetComponentSpan<Small>(small)[0]);
+        Assert.Equal(new Large(6, 7, 8), chunk.GetComponentSpan<Large>(large)[0]);
+    }
+
+    [Fact]
+    public void Flat_storage_rejects_managed_reference_components()
+    {
+        var registry = new ComponentRegistry();
+        var label = registry.GetOrCreate<Label>();
+        var signature = new Signature(label);
+
+        var exception = Assert.Throws<NotSupportedException>(() =>
+            new Chunk(signature, [typeof(Label)], new[] { 0 }, capacity: 4));
+
+        Assert.Contains(nameof(Label), exception.Message);
     }
 
     private static Chunk CreateEmptyChunk(int capacity)
@@ -234,31 +248,13 @@ public sealed class ChunkTests
         };
     }
 
-    private static Dictionary<ComponentType, object?> Components(ComponentType position, ComponentType label, Position p, Label value)
+    private static Dictionary<ComponentType, object?> Components(ComponentType small, ComponentType large, Small s, Large l)
     {
         return new Dictionary<ComponentType, object?>
         {
-            [position] = p,
-            [label] = value,
+            [small] = s,
+            [large] = l,
         };
     }
 
-    private static Dictionary<ComponentType, object?> Components(ComponentType position, ComponentType label, Position p, LabelStruct value)
-    {
-        return new Dictionary<ComponentType, object?>
-        {
-            [position] = p,
-            [label] = value,
-        };
-    }
-
-    private static Array[] GetColumns(Chunk chunk)
-    {
-        var field = typeof(Chunk).GetField("_columns", BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.NotNull(field);
-        return (Array[])field!.GetValue(chunk)!;
-    }
-
-    private sealed record class Label(string Value);
-    private readonly record struct LabelStruct(string Value);
 }

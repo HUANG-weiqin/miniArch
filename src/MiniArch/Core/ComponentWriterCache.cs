@@ -14,9 +14,9 @@ public static unsafe class ComponentWriterCache
     private static readonly ConcurrentDictionary<Type, int> Sizes = new();
 
     /// <summary>
-    /// Writes a component value from raw bytes into a typed component column.
+    /// Writes a component value from raw bytes into flat chunk storage.
     /// </summary>
-    public delegate void ColumnWriterDelegate(Array column, int row, byte* source);
+    public delegate void ColumnWriterDelegate(Chunk chunk, int columnIndex, int row, byte* source);
 
     internal delegate void ComponentReaderDelegate(void* destination, byte* source);
 
@@ -55,9 +55,10 @@ public static unsafe class ComponentWriterCache
 
     private static ColumnWriterDelegate CreateColumnWriter<T>()
     {
-        return (Array column, int row, byte* source) =>
+        return (Chunk chunk, int columnIndex, int row, byte* source) =>
         {
-            Unsafe.As<T[]>(column)[row] = Unsafe.Read<T>(source);
+            var value = Unsafe.Read<T>(source);
+            chunk.SetComponentAtTyped(columnIndex, row, in value);
         };
     }
 

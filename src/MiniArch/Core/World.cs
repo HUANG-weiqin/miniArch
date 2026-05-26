@@ -1037,22 +1037,11 @@ public sealed class World : IDisposable
         var columnIndex = chunk.GetComponentIndex(componentType);
         if (columnWriter is not null)
         {
-            columnWriter(chunk.Columns[columnIndex], row, source);
+            columnWriter(chunk, columnIndex, row, source);
         }
         else
         {
-            var boxed = RuntimeHelpers.GetUninitializedObject(runtimeType);
-            var handle = System.Runtime.InteropServices.GCHandle.Alloc(boxed, System.Runtime.InteropServices.GCHandleType.Pinned);
-            try
-            {
-                ComponentWriterCache.GetReader(runtimeType)((void*)handle.AddrOfPinnedObject(), source);
-            }
-            finally
-            {
-                handle.Free();
-            }
-
-            chunk.SetComponent(componentType, row, boxed);
+            chunk.WriteComponentRaw(columnIndex, row, source);
         }
     }
 
@@ -1060,7 +1049,7 @@ public sealed class World : IDisposable
     {
         var columnIndex = chunk.GetComponentIndex(componentType);
         var writer = ComponentWriterCache.GetColumnWriter(runtimeType);
-        writer(chunk.Columns[columnIndex], row, source);
+        writer(chunk, columnIndex, row, source);
     }
 
     private unsafe void MoveEntityFromBytes(

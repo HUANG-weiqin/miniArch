@@ -9,12 +9,18 @@ namespace MiniArch.Core;
 /// </summary>
 public sealed class Chunk
 {
-    private static readonly ConcurrentDictionary<Type, bool> ColumnClearRequirementCache = new();
+    private static readonly ConcurrentDictionary<Type, bool> ManagedReferenceCache = new();
+    private static readonly ConcurrentDictionary<Type, BoxedReaderDelegate> BoxedReaders = new();
+    private static readonly ConcurrentDictionary<Type, BoxedWriterDelegate> BoxedWriters = new();
 
     private readonly Signature _signature;
     private readonly Entity[] _entities;
-    private readonly Array[] _columns;
-    private readonly bool[] _columnRequiresClear;
+    private readonly byte[] _data;
+    private readonly Type[] _componentTypes;
+    private readonly int[] _columnByteOffsets;
+    private readonly int[] _elementSizes;
+    private readonly BoxedReaderDelegate[] _boxedReaders;
+    private readonly BoxedWriterDelegate[] _boxedWriters;
     private readonly int[] _componentIdToColumnIndex;
 
     internal Chunk(Signature signature, Type[] componentTypes, int[] componentIdToColumnIndex, int capacity = 4)
@@ -31,8 +37,10 @@ public sealed class Chunk
         _signature = signature;
         _componentIdToColumnIndex = componentIdToColumnIndex;
         _entities = new Entity[capacity];
-        _columns = CreateColumns(signature, componentTypes, capacity);
-        _columnRequiresClear = CreateColumnClearMap(componentTypes);
+        _componentTypes = componentTypes;
+        (_data, _columnByteOffsets, _elementSizes) = CreateStorage(signature, componentTypes, capacity);
+        _boxedReaders = CreateBoxedReaders(componentTypes);
+        _boxedWriters = CreateBoxedWriters(componentTypes);
     }
 
     /// <summary>
@@ -58,8 +66,6 @@ public sealed class Chunk
     {
         return _entities.AsSpan(0, Count);
     }
-
-    internal Array[] Columns => _columns;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal Entity[] GetEntityStorage() => _entities;
@@ -89,7 +95,7 @@ public sealed class Chunk
             }
 
             var columnIndex = GetComponentIndex(component);
-            _columns[columnIndex].SetValue(value, row);
+            _boxedWriters[columnIndex](this, columnIndex, row, value);
         }
 
         return row;
@@ -145,7 +151,7 @@ public sealed class Chunk
     {
         ValidateRow(row);
         var columnIndex = GetComponentIndex(component);
-        return _columns[columnIndex].GetValue(row);
+        return _boxedReaders[columnIndex](this, columnIndex, row);
     }
 
     /// <summary>
@@ -155,7 +161,7 @@ public sealed class Chunk
     {
         ValidateRow(row);
         var columnIndex = GetComponentIndex(component);
-        return ((T[])_columns[columnIndex])[row];
+        return GetComponentAt<T>(columnIndex, row);
     }
 
     /// <summary>
@@ -165,13 +171,14 @@ public sealed class Chunk
     public ReadOnlySpan<T> GetComponentSpan<T>(ComponentType component)
     {
         var columnIndex = GetComponentIndex(component);
-        return ((T[])_columns[columnIndex]).AsSpan(0, Count);
+        return GetComponentSpanAt<T>(columnIndex);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ref T GetComponentRef<T>(int columnIndex)
     {
-        return ref Unsafe.As<T[]>(_columns[columnIndex])[0];
+        ValidateElementSize<T>(columnIndex);
+        return ref Unsafe.As<byte, T>(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), _columnByteOffsets[columnIndex]));
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -184,7 +191,7 @@ public sealed class Chunk
     {
         ValidateRow(row);
         var columnIndex = GetComponentIndex(component);
-        _columns[columnIndex].SetValue(value, row);
+        _boxedWriters[columnIndex](this, columnIndex, row, value);
     }
 
     /// <summary>
@@ -200,19 +207,23 @@ public sealed class Chunk
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void SetComponentAtTyped<T>(int columnIndex, int row, in T value)
     {
-        ((T[])_columns[columnIndex])[row] = value;
+        ValidateElementSize<T>(columnIndex);
+        ref var target = ref GetComponentRefAt<T>(columnIndex, row);
+        target = value;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal T GetComponentAt<T>(int columnIndex, int row)
     {
-        return ((T[])_columns[columnIndex])[row];
+        ValidateElementSize<T>(columnIndex);
+        return GetComponentRefAt<T>(columnIndex, row);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ReadOnlySpan<T> GetComponentSpanAt<T>(int columnIndex)
     {
-        return ((T[])_columns[columnIndex]).AsSpan(0, Count);
+        ValidateElementSize<T>(columnIndex);
+        return MemoryMarshal.CreateReadOnlySpan(ref GetComponentRefAt<T>(columnIndex, 0), Count);
     }
 
     internal bool TryGetComponentIndex(ComponentType component, out int columnIndex)
@@ -278,7 +289,54 @@ public sealed class Chunk
                 continue;
             }
 
-            Array.Copy(source._columns[sourceColumnIndex], sourceRow, _columns[index], destinationRow, 1);
+            CopyComponent(source, sourceColumnIndex, sourceRow, index, destinationRow);
+        }
+    }
+
+    internal unsafe void WriteComponentRaw(int columnIndex, int row, byte* source)
+    {
+        ValidateRow(row);
+        ref var target = ref _data[GetByteOffset(columnIndex, row)];
+        Unsafe.CopyBlockUnaligned(ref target, ref *source, (uint)_elementSizes[columnIndex]);
+    }
+
+    internal void WriteColumnTo<T>(BinaryWriter writer, int columnIndex, int count)
+        where T : unmanaged
+    {
+        ValidateColumnCount(columnIndex, count);
+        writer.Write(GetColumnBytes(columnIndex, count));
+    }
+
+    internal void ReadColumnFrom<T>(BinaryReader reader, int columnIndex, int count)
+        where T : unmanaged
+    {
+        ValidateColumnCount(columnIndex, count);
+        reader.BaseStream.ReadExactly(GetColumnBytes(columnIndex, count));
+    }
+
+    internal void CopyColumnsFrom(Chunk source, int count)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        if (!_signature.Equals(source._signature))
+        {
+            throw new ArgumentException("Source chunk signature must match.", nameof(source));
+        }
+
+        if (count < 0 || count > Count || count > source.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(count));
+        }
+
+        var componentCount = _signature.Count;
+        if (componentCount == 0)
+        {
+            return;
+        }
+
+        for (var columnIndex = 0; columnIndex < componentCount; columnIndex++)
+        {
+            CopyColumnFrom(source, columnIndex, count);
         }
     }
 
@@ -299,7 +357,6 @@ public sealed class Chunk
         else
         {
             movedEntity = default;
-            ClearRemovedTail(last);
         }
 
         _entities[last] = default;
@@ -307,14 +364,15 @@ public sealed class Chunk
         return row != last;
     }
 
-    private static Array[] CreateColumns(Signature signature, Type[] componentTypes, int capacity)
+    private static (byte[] Data, int[] ColumnByteOffsets, int[] ElementSizes) CreateStorage(Signature signature, Type[] componentTypes, int capacity)
     {
         var componentCount = signature.Count;
-        var columns = new Array[componentCount];
+        var columnByteOffsets = new int[componentCount];
+        var elementSizes = new int[componentCount];
 
         if (componentCount == 0)
         {
-            return columns;
+            return (Array.Empty<byte>(), columnByteOffsets, elementSizes);
         }
 
         if (componentTypes.Length != componentCount)
@@ -322,37 +380,59 @@ public sealed class Chunk
             throw new ArgumentException("Component type count must match signature count.", nameof(componentTypes));
         }
 
+        var totalBytes = 0;
         for (var index = 0; index < componentCount; index++)
         {
-            columns[index] = Array.CreateInstance(componentTypes[index], capacity);
+            ThrowIfManagedComponent(componentTypes[index]);
+            var elementSize = ComponentWriterCache.GetSize(componentTypes[index]);
+            totalBytes = AlignUp(totalBytes, Math.Min(elementSize, 8));
+            columnByteOffsets[index] = totalBytes;
+            elementSizes[index] = elementSize;
+            totalBytes += elementSize * capacity;
         }
 
-        return columns;
+        return (new byte[totalBytes], columnByteOffsets, elementSizes);
     }
 
-    private static bool[] CreateColumnClearMap(Type[] componentTypes)
+    private static BoxedReaderDelegate[] CreateBoxedReaders(Type[] componentTypes)
     {
-        var clearMap = new bool[componentTypes.Length];
+        var readers = new BoxedReaderDelegate[componentTypes.Length];
         for (var index = 0; index < componentTypes.Length; index++)
         {
-            clearMap[index] = RequiresClear(componentTypes[index]);
+            readers[index] = GetBoxedReader(componentTypes[index]);
         }
 
-        return clearMap;
+        return readers;
     }
 
-    private static bool RequiresClear(Type type)
+    private static BoxedWriterDelegate[] CreateBoxedWriters(Type[] componentTypes)
     {
-        return ColumnClearRequirementCache.GetOrAdd(type, static componentType =>
+        var writers = new BoxedWriterDelegate[componentTypes.Length];
+        for (var index = 0; index < componentTypes.Length; index++)
+        {
+            writers[index] = GetBoxedWriter(componentTypes[index]);
+        }
+
+        return writers;
+    }
+
+    private static void ThrowIfManagedComponent(Type type)
+    {
+        if (!ManagedReferenceCache.GetOrAdd(type, static componentType =>
         {
             return (bool)typeof(Chunk)
-                .GetMethod(nameof(RequiresClearGeneric), System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
+                .GetMethod(nameof(ContainsManagedReferences), System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
                 .MakeGenericMethod(componentType)
                 .Invoke(null, null)!;
-        });
+        }))
+        {
+            return;
+        }
+
+        throw new NotSupportedException($"Component {type.FullName ?? type.Name} contains managed references and cannot be stored in flat byte chunks.");
     }
 
-    private static bool RequiresClearGeneric<T>()
+    private static bool ContainsManagedReferences<T>()
     {
         return RuntimeHelpers.IsReferenceOrContainsReferences<T>();
     }
@@ -360,27 +440,117 @@ public sealed class Chunk
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void CopyRemovedRow(int row, int last)
     {
-        for (var index = 0; index < _columns.Length; index++)
+        for (var index = 0; index < _elementSizes.Length; index++)
         {
-            var column = _columns[index];
-            Array.Copy(column, last, column, row, 1);
-            if (_columnRequiresClear[index])
-            {
-                Array.Clear(column, last, 1);
-            }
+            CopyComponent(this, index, last, index, row);
         }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ClearRemovedTail(int last)
+    private Span<byte> GetColumnBytes(int columnIndex, int count)
     {
-        for (var index = 0; index < _columns.Length; index++)
+        return _data.AsSpan(_columnByteOffsets[columnIndex], count * _elementSizes[columnIndex]);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int GetByteOffset(int columnIndex, int row)
+    {
+        return _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex];
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private ref T GetComponentRefAt<T>(int columnIndex, int row)
+    {
+        return ref Unsafe.As<byte, T>(ref _data[GetByteOffset(columnIndex, row)]);
+    }
+
+    private unsafe void CopyComponent(Chunk source, int sourceColumnIndex, int sourceRow, int destinationColumnIndex, int destinationRow)
+    {
+        var size = _elementSizes[destinationColumnIndex];
+        if (source._elementSizes[sourceColumnIndex] != size)
         {
-            if (_columnRequiresClear[index])
-            {
-                Array.Clear(_columns[index], last, 1);
-            }
+            throw new InvalidOperationException("Component size mismatch.");
         }
+
+        ref var sourceRef = ref source._data[source.GetByteOffset(sourceColumnIndex, sourceRow)];
+        ref var destinationRef = ref _data[GetByteOffset(destinationColumnIndex, destinationRow)];
+        Unsafe.CopyBlockUnaligned(ref destinationRef, ref sourceRef, (uint)size);
+    }
+
+    private unsafe void CopyColumnFrom(Chunk source, int columnIndex, int count)
+    {
+        var byteCount = checked((uint)(count * _elementSizes[columnIndex]));
+        ref var sourceRef = ref source._data[source._columnByteOffsets[columnIndex]];
+        ref var destinationRef = ref _data[_columnByteOffsets[columnIndex]];
+        Unsafe.CopyBlockUnaligned(ref destinationRef, ref sourceRef, byteCount);
+    }
+
+    private void ValidateColumnCount(int columnIndex, int count)
+    {
+        if ((uint)columnIndex >= (uint)_elementSizes.Length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(columnIndex));
+        }
+
+        if (count < 0 || count > Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(count));
+        }
+    }
+
+    private void ValidateElementSize<T>(int columnIndex)
+    {
+        if (_componentTypes[columnIndex] != typeof(T) || _elementSizes[columnIndex] != Unsafe.SizeOf<T>())
+        {
+            throw new InvalidCastException("Component type does not match column element type.");
+        }
+    }
+
+    private static BoxedReaderDelegate GetBoxedReader(Type type)
+    {
+        return BoxedReaders.GetOrAdd(type, static t =>
+        {
+            var method = typeof(Chunk)
+                .GetMethod(nameof(CreateBoxedReader), System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
+                .MakeGenericMethod(t);
+            return (BoxedReaderDelegate)method.Invoke(null, null)!;
+        });
+    }
+
+    private static BoxedWriterDelegate GetBoxedWriter(Type type)
+    {
+        return BoxedWriters.GetOrAdd(type, static t =>
+        {
+            var method = typeof(Chunk)
+                .GetMethod(nameof(CreateBoxedWriter), System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
+                .MakeGenericMethod(t);
+            return (BoxedWriterDelegate)method.Invoke(null, null)!;
+        });
+    }
+
+    private static BoxedReaderDelegate CreateBoxedReader<T>()
+    {
+        return static (chunk, columnIndex, row) => chunk.GetComponentAt<T>(columnIndex, row);
+    }
+
+    private static BoxedWriterDelegate CreateBoxedWriter<T>()
+    {
+        return static (chunk, columnIndex, row, value) =>
+        {
+            var typed = (T)value!;
+            chunk.SetComponentAtTyped(columnIndex, row, in typed);
+        };
+    }
+
+    private static int AlignUp(int value, int alignment)
+    {
+        if (alignment <= 1)
+        {
+            return value;
+        }
+
+        var remainder = value % alignment;
+        return remainder == 0 ? value : checked(value + alignment - remainder);
     }
 
     private void ValidateRow(int row)
@@ -390,4 +560,8 @@ public sealed class Chunk
             throw new ArgumentOutOfRangeException(nameof(row));
         }
     }
+
+    private delegate object? BoxedReaderDelegate(Chunk chunk, int columnIndex, int row);
+
+    private delegate void BoxedWriterDelegate(Chunk chunk, int columnIndex, int row, object? value);
 }

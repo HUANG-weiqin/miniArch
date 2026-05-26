@@ -1,8 +1,8 @@
 ---
 title: MiniArch Core ECS
 module: MiniArch.Core
-description: Target ECS architecture for entities, archetypes, typed columns, direct-index writes, signatures, and queries
-updated: 2026-05-25
+description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
+updated: 2026-05-26
 ---
 # MiniArch Core ECS
 
@@ -26,7 +26,7 @@ updated: 2026-05-25
 - 核心组成：
   - `World.cs`：实体生命周期、archetype 生成、query 缓存
   - `Archetype.cs`：chunk 列表、实体计数、结构变化入口
-  - `Chunk.cs`：实体列和 typed component columns 的密集存储
+  - `Chunk.cs`：实体列和 flat byte-backed component columns 的密集存储
   - `Signature.cs`：组件集合键
   - `QueryFilter.cs`：query filter 的内部执行形状（仅构造器 + Required/Excluded/Any，旧 `CreateRequired` 已删除）
   - `QueryComponentSet.cs`：排序组件集合（仅 `CreateFrom` 批量入口，旧 `Add`/`Create(1..3)` 已删除）
@@ -47,7 +47,7 @@ updated: 2026-05-25
   - `Add/Remove` 先算目标签名，再复用 edge cache
   - `Set` 在组件已存在时直接定位到 typed column 的 row，原地写回，不触发迁移
   - `Archetype` 负责把实体放进可写 chunk，并通过显式 non-full chunk 索引优先复用已有空位的 chunk，而不是盲目只往最后一个 chunk 追加
-- `Chunk` 负责 dense row 的单个/批量插入、读取、swap-remove 和 direct-index 写入
+- `Chunk` 负责 dense row 的单个/批量插入、读取、swap-remove 和 direct-index 写入；组件列存储为一块 `_data: byte[]`，通过 `_columnByteOffsets[column] + row * _elementSizes[column]` 定位元素
 - `Chunk` 也应该暴露当前有效 entity 行的 span 视图，给 query / benchmark 这类纯读热路径直接扫 `_entities[0..Count)`，避免逐行 `GetEntity(row)` 的重复边界检查和调用成本
 - `Query` 先缓存匹配 archetype，再暴露 chunk 枚举和 `GetChunkSpan()` 这类 span-first 读入口
 - `QueryDescription` 只保存 `Type` 集合，不直接保存 `ComponentType`；真正进入执行时由 `MiniArch.Core.Query.Create(world, in description)` 或 `World.Query(in description)` 把它翻译成当前 world 的 `QueryFilter`，再复用现有 `Query` 缓存
@@ -69,7 +69,7 @@ updated: 2026-05-25
 - 用 `Signature` 作为 archetype key，保证等价组件集合始终落在同一个 storage family。
 - query filter 也统一用 `Signature` 表达，避免额外的 query-only 组件集合结构。
 - 用 chunk 级迭代而不是 entity 级全表扫描，保留局部性和后续优化空间。
-- `Set<T>` / `Add<T>` 的原地写入路径要优先走 typed columns + 组件 id -> 列索引表，避免 `object` 盒化和 chunk 字典查找。
+- `Set<T>` / `Add<T>` 的原地写入路径要优先走 flat byte storage + 组件 id -> 列索引表，避免 `object` 盒化和 chunk 字典查找。
 - `World` 侧可以对泛型组件类型做按 `T` 的注册缓存，减少热路径里的重复 registry 查找。
 - command buffer 对运行时的扩展应该尽量复用 world 现有的 free-list、version 和迁移能力，而不是再维护一套平行实体生命周期。
 - query builder / query 链式 API 也应该复用 world 侧的按 `T` component cache；如果它们绕开缓存直接打 `ComponentRegistry`，query build 的固定 CPU 成本会比必要值更高。
@@ -101,19 +101,19 @@ updated: 2026-05-25
 - 对 entity-only 的 query 消费，`ReadOnlySpan<Entity>` 这类批量读接口通常能立刻降低 CPU，且不会引入额外分配；它是比重构 query cache 更低风险的第一步优化。
 - 对 steady-state query 遍历，优先走 `Query.GetChunkSpan()` + `Chunk.GetEntities()` 这类批量读路径；保留 `Chunks` 枚举器作为兼容 API，但不要把它当作 benchmark / profiling 的首选消费方式。
 - 默认层 `OrderedQuery` 应作为消费层 materialization + sort，不进入 core query cache，也不改变 `QueryDescription`；每次枚举独立租用内部 buffer 才能支持同一 ordered query 的并发读取。
-- 对 component-consuming query，优先走 typed chunk 的 `Chunk.GetComponentSpan<T>()`，不要在热循环里逐 row 调 `GetComponent<T>(..., row)`；后者会把列查找、边界检查和方法调用成本重复放大。
-- `Chunk.GetComponentSpan<T>()` 适用于所有 chunk（所有 chunk 都是 typed）。
+- 对 component-consuming query，优先走 flat chunk 暴露的 `Chunk.GetComponentSpan<T>()`，不要在热循环里逐 row 调 `GetComponent<T>(..., row)`；后者会把列查找、边界检查和方法调用成本重复放大。
+- `Chunk.GetComponentSpan<T>()` 适用于所有 chunk；span 由 flat byte storage 的列起点按元素类型重解释得到。
 - 结合当前 query sampling，warmed query 的第一优先优化点应放在 traversal / accessor 路径，而不是优先重写 `BuildMatchingArchetypes`；matching 目前只是小头。
 - row-wise 组件访问热路径中，`GetComponentIndex()` 已被 `TryGetColumnIndices(...)` 批量 hoist 出 row loop；benchmark 和 profiling runner 的 row-wise 路径已切换到预解析列索引 + `GetComponentAt<T>(columnIndex, row)`，不再逐行调用 `GetComponent<T>(componentType, row)`。
-- component span 热路径优化关键：用 `Unsafe.As<T[]>()` + `ref T` 返回 + `Unsafe.Add(ref base, row)` 跳过 span 边界检查；直接通过 `_componentIdToColumnIndex` map 查列索引，绕过 LRU cache。这把 component span throughput 从落后 Arch 45% 缩小到仅 2.7%。
+- component span 热路径优化关键：用 `Unsafe.As<byte, T>` 从 `_data` 的列起点得到 `ref T`，再创建 typed span；直接通过 `_componentIdToColumnIndex` map 查列索引，绕过 LRU cache。
 - entity query 热路径用 `GetEntityStorage()` 返回 `Entity[]` 直接数组访问（避免 span 边界检查），entity query throughput 已超过 Arch 12%。
-- `GetComponentRef<T>(columnIndex)` 返回 `ref T` 指向 typed column 数组首元素，配合 `Unsafe.Add` 实现 0-bounds-check 迭代。
+- `GetComponentRef<T>(columnIndex)` 返回 `ref T` 指向 flat byte storage 中该列首元素，配合 `Unsafe.Add` 实现 0-bounds-check 迭代。
 - Chunk 热路径方法（`SetComponentAtTyped`, `SetComponentAt`, `GetComponentAt`, `GetComponentIndex`, `GetEntityStorage`）已标记 `AggressiveInlining`。
 - `Chunk.GetComponentIndex(...)` 不能在 chunk 实例上维护 last-component / last-column 这类共享可变读缓存；同一 chunk 被并发只读、且不同线程读不同组件时，普通字段 pair 可能被观察成不一致组合。读路径应直接使用不可变的 `_componentIdToColumnIndex` direct map，或由调用方 hoist 到局部 column index。
 - `World` / `CommandBuffer` 的泛型 component-type cache 也不能用 registry + id 两个 static 字段表示同一条 cache entry；跨 world 或并发首次缓存时可能形成错配。应发布单个 immutable entry 引用，并从本地 entry 读取 registry/id。
 - 如果 query 不只缓存 `Archetype[]`，还缓存了扁平 `Chunk[]`，失效条件就不能只看 archetype 集合变化；同 archetype 内新增或复用 chunk 也必须触发 query snapshot 刷新。
-- typed column 的收益会被 `Array` 抽象层吃掉一部分；如果迁移/删除路径仍长期停留在 `Array.Copy` / `Array.Clear` 的逐列调用上，结构变化 benchmark 的 CPU 还会继续偏高。但 per-type mover delegate 属于第二阶段优化，只有 profiling / benchmark 继续证明这里是热点时再实现，避免用 delegate indirection 换来不确定收益。
-- typed chunk 的删除路径不应该无差别清空所有列尾槽位；值类型列可以直接保留旧位模式，只有引用类型或“包含引用字段的 struct”才需要清尾，避免无意义的写带宽和 GC 压力。
+- flat byte chunk 删除和迁移路径应按 byte block 复制组件元素，避免回到 `Array.Copy` / `Array.Clear` 的逐列虚调用和类型检查成本。
+- MiniArch 当前约束是不把对象引用组件存入 chunk；flat byte storage 只面向无托管引用的组件位模式，chunk 创建时应对含托管引用组件 fail fast，不能为了兼容引用组件重新引入 parallel typed array 表示。
 - 对照 `Arch` 源码时不要假设它会自动消除 `Create -> Add -> Add` 留下的中间 archetype；它同样保留这些 archetype，query 也是按 world archetype 列表全量匹配，空 archetype 只会在显式 `TrimExcess()` 后被移除。
 
 ## 认知模型
@@ -168,8 +168,8 @@ updated: 2026-05-25
 - `QueryDescription` 新增后，`World` 如果额外维护 `QueryDescription -> QueryFilter` 缓存，也要沿用 copy-on-write 发布，不要在共享字典上原地写入。
 - `QueryDescription` 的公开类型视图如果把内部数组直接返回出去，会把“值语义 + 缓存 key”契约打穿；这类问题在功能测试里不容易显形，但会在复用或并发共享 description 时变成非确定行为。
 - `QueryComponentSet` 的生产路径只走 `CreateFrom(ComponentType[])` 批量入口；旧的 `Add()` 链式和 `Create(1..3)` 固定重载已删除，不要重新引入。`CreateFrom` 是内部热路径的一次性 materialization 入口。
-- `Chunk.RemoveAt` 对所有列都做 `Array.Clear`，即使列元素不含引用也照样清空；这会在 remove/destroy 高频场景里制造纯写带宽开销，而不是必要的 GC 保护。
-- 判断 typed 列尾槽位是否需要清空时，不能只看 `Type.IsValueType`；带引用字段的 struct 同样需要 clear，运行时判定应以 `RuntimeHelpers.IsReferenceOrContainsReferences<T>()` 为准。
+- flat byte chunk 的 `RemoveAt` 必须同时移动 entity 和每个组件列的对应 byte block；只移动 entity 会让 row/location 和组件值错位。
+- `Chunk.CopyColumnsFrom(...)` 这类 raw column copy helper 只能在 source/destination signature 完全一致时使用；同列数但列序或组件类型不同会造成静默错列。
 - query benchmark 里如果 world shape 仍通过多次 `Add` 逐步长成，会残留一批历史空 archetype；它们不一定代表 steady-state query 的真实读取成本。
 - query profiling 里如果 top1 看起来只是某个外层 `Execute` 包装函数，不要直接把锅甩给 wrapper；常见原因是 `Chunk.GetEntity(row)`、chunk 枚举等小函数被 JIT inline 后折叠进调用者。
 - 扁平 chunk snapshot 如果仍然只绑定 `ArchetypeGeneration`，会在“同 archetype 内追加到新 chunk”时静默读到过期 chunk 列表；这种 bug 只有在 chunk 容量很小或 world 很大时才容易暴露。
@@ -181,7 +181,7 @@ updated: 2026-05-25
   - 以为“query 是读操作”就天然线程安全；如果底层缓存仍在共享可变集合上原地刷新，一样会出问题
   - 以为 Arch 的 query benchmark 更快，是因为它在逐个 `Add` 时“不会留下空 archetype”；源码和实测都说明它也会留下，差别更多来自匹配缓存、位集判断和 query 遍历实现成本
 - 改这里时要特别小心：
-  - `Chunk` 的列必须和 `Signature` 完全一致
+  - `Chunk` 的逻辑列、`_columnByteOffsets`、`_elementSizes` 必须和 `Signature` / `Type[]` 完全一致
   - `World` 的 entity version 不能和 location 脱钩
   - `Entity` 的“无效句柄”不能再依赖 `default(Entity)` 之外的隐式约定；当前契约是 `Version > 0` 才算有效
   - `IsAlive` 不应该单独再维护一份“活着”状态；它必须和 `TryGetLocation` 共用同一条 version/location 校验链，避免 destroy/recycle 后出现双重真值来源

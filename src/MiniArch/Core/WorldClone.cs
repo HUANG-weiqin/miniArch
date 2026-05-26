@@ -37,12 +37,7 @@ internal static class WorldClone
                 var entities = srcChunk.GetEntities();
                 var dstChunk = dstArch.ImportSnapshotChunk(entities, out var dstChunkIdx);
 
-                var srcCols = srcChunk.Columns;
-                var dstCols = dstChunk.Columns;
-                for (var col = 0; col < srcCols.Length; col++)
-                {
-                    Array.Copy(srcCols[col], dstCols[col], srcChunk.Count);
-                }
+                dstChunk.CopyColumnsFrom(srcChunk, srcChunk.Count);
 
                 for (var row = 0; row < entities.Length; row++)
                 {
