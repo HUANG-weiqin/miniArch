@@ -5,6 +5,9 @@ namespace MiniArch.Core;
 /// </summary>
 public sealed class ComponentRegistry
 {
+    /// <summary>
+    /// Global shared registry instance.
+    /// </summary>
     public static ComponentRegistry Shared { get; } = new();
 
     private readonly object _writeLock = new();
@@ -92,7 +95,13 @@ public sealed class ComponentRegistry
     private sealed record RegistrySnapshot(IReadOnlyDictionary<Type, ComponentType> TypeToId, Type[] IdToType);
 }
 
+/// <summary>
+/// Provides cached component type id for <typeparamref name="T" />.
+/// </summary>
 public static class Component<T>
 {
+    /// <summary>
+    /// The registered component type id.
+    /// </summary>
     public static readonly ComponentType ComponentType = ComponentRegistry.Shared.GetOrCreate<T>();
 }

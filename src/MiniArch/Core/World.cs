@@ -1026,7 +1026,7 @@ public sealed class World : IDisposable
         if (archetype.TryGetComponentIndex(componentType, out var componentIndex))
         {
             var chunk = archetype.GetChunk(info.ChunkIndex);
-            WriteComponentFromBytes(chunk, componentType, runtimeType, info.RowIndex, source, columnWriter);
+            WriteComponentFromBytes(chunk, componentType, info.RowIndex, source, columnWriter);
             return;
         }
 
@@ -1034,15 +1034,7 @@ public sealed class World : IDisposable
         MoveEntityFromBytes(entity, info, destination, componentType, runtimeType, source, columnWriter);
     }
 
-    private static unsafe void WriteComponentFromBytes(Chunk chunk, ComponentType componentType, Type runtimeType, int row, byte[] data, int offset, int size)
-    {
-        fixed (byte* ptr = data)
-        {
-            WriteComponentFromBytes(chunk, componentType, runtimeType, row, ptr + offset);
-        }
-    }
-
-    private static unsafe void WriteComponentFromBytes(Chunk chunk, ComponentType componentType, Type runtimeType, int row, byte* source, ComponentWriterCache.ColumnWriterDelegate? columnWriter)
+    private static unsafe void WriteComponentFromBytes(Chunk chunk, ComponentType componentType, int row, byte* source, ComponentWriterCache.ColumnWriterDelegate? columnWriter)
     {
         var columnIndex = chunk.GetComponentIndex(componentType);
         if (columnWriter is not null)
@@ -1052,29 +1044,6 @@ public sealed class World : IDisposable
         else
         {
             chunk.WriteComponentRaw(columnIndex, row, source);
-        }
-    }
-
-    private static unsafe void WriteComponentFromBytes(Chunk chunk, ComponentType componentType, Type runtimeType, int row, byte* source)
-    {
-        var columnIndex = chunk.GetComponentIndex(componentType);
-        var writer = ComponentWriterCache.GetColumnWriter(runtimeType);
-        writer(chunk, columnIndex, row, source);
-    }
-
-    private unsafe void MoveEntityFromBytes(
-        Entity entity,
-        EntityLocation sourceInfo,
-        Archetype destination,
-        ComponentType componentType,
-        Type runtimeType,
-        byte[] data,
-        int offset,
-        int size)
-    {
-        fixed (byte* ptr = data)
-        {
-            MoveEntityFromBytes(entity, sourceInfo, destination, componentType, runtimeType, ptr + offset, null);
         }
     }
 
@@ -1091,7 +1060,7 @@ public sealed class World : IDisposable
         var destinationChunk = destination.ReserveEntity(entity, out var destinationChunkIndex, out var destinationRowIndex);
         destinationChunk.CopySharedComponentsFrom(sourceChunk, sourceInfo.RowIndex, destinationRowIndex);
 
-        WriteComponentFromBytes(destinationChunk, componentType, runtimeType, destinationRowIndex, source, columnWriter);
+        WriteComponentFromBytes(destinationChunk, componentType, destinationRowIndex, source, columnWriter);
 
         sourceInfo.Archetype.RemoveEntity(sourceInfo.ChunkIndex, sourceInfo.RowIndex, out var movedEntity);
 
@@ -1755,20 +1724,6 @@ public sealed class World : IDisposable
         }
     }
 
-    private void RemoveFreeId(int id, int version)
-    {
-        for (var index = _freeIdCount - 1; index >= 0; index--)
-        {
-            if (_freeIds[index].Id != id || _freeIds[index].Version != version)
-            {
-                continue;
-            }
-
-            _freeIds[index] = _freeIds[--_freeIdCount];
-            return;
-        }
-    }
-
     internal void MaterializeReservedEntity(
         Entity entity,
         IReadOnlyList<RawComponentValue> components,
@@ -1808,9 +1763,10 @@ public sealed class World : IDisposable
                 var resolvedType = trustCompiledComponentTypes
                     ? component.ComponentType
                     : ResolveCompiledComponentType(component.RuntimeType, component.ComponentType, componentTypeCache);
+                var writer = ComponentWriterCache.GetColumnWriter(component.RuntimeType);
                 fixed (byte* ptr = component.Data)
                 {
-                    WriteComponentFromBytes(chunk, resolvedType, component.RuntimeType, rowIndex, ptr + component.DataOffset);
+                    WriteComponentFromBytes(chunk, resolvedType, rowIndex, ptr + component.DataOffset, writer);
                 }
             }
         }
