@@ -1503,32 +1503,40 @@ public sealed class World : IDisposable
         _freeIdCount = freeIndex;
     }
 
+    private readonly object _entityIdLock = new();
+
     private int AcquireEntityId(out int version)
     {
-        if (_freeIdCount > 0)
+        lock (_entityIdLock)
         {
-            var recycled = PopFreeId();
-            version = recycled.Version;
-            return recycled.Id;
-        }
+            if (_freeIdCount > 0)
+            {
+                var recycled = PopFreeId();
+                version = recycled.Version;
+                return recycled.Id;
+            }
 
-        var id = _versions.Count;
-        _versions.Add(1);
-        _locations.Add(default);
-        EnsureDestroyScratchCapacity(_versions.Count);
-        version = 1;
-        return id;
+            var id = _versions.Count;
+            _versions.Add(1);
+            _locations.Add(default);
+            EnsureDestroyScratchCapacity(_versions.Count);
+            version = 1;
+            return id;
+        }
     }
 
     private void PushFreeId(int id, int version)
     {
-        if (_freeIdCount == _freeIds.Length)
+        lock (_entityIdLock)
         {
-            var newCapacity = _freeIds.Length == 0 ? 4 : _freeIds.Length * 2;
-            Array.Resize(ref _freeIds, newCapacity);
-        }
+            if (_freeIdCount == _freeIds.Length)
+            {
+                var newCapacity = _freeIds.Length == 0 ? 4 : _freeIds.Length * 2;
+                Array.Resize(ref _freeIds, newCapacity);
+            }
 
-        _freeIds[_freeIdCount++] = new RecycledEntity(id, version);
+            _freeIds[_freeIdCount++] = new RecycledEntity(id, version);
+        }
     }
 
     private RecycledEntity PopFreeId()
