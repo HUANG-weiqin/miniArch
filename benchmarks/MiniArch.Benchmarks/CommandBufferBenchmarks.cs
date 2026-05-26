@@ -160,6 +160,39 @@ internal static class CommandBufferBenchmarkScenarioFactory
         }
     }
 
+    public static void RunFastMiniSharedScenario(MiniSharedCommandBufferState state, CommandBufferBenchmarkScenario scenario)
+    {
+        switch (scenario)
+        {
+            case CommandBufferBenchmarkScenario.DenseExisting:
+                RunFastMiniDenseExisting(state);
+                return;
+            case CommandBufferBenchmarkScenario.CreateHeavy:
+                RunFastMiniCreateHeavy(state);
+                return;
+            case CommandBufferBenchmarkScenario.MixedScript:
+                RunFastMiniMixedScript(state);
+                return;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(scenario));
+        }
+    }
+
+    public static FastCommandBuffer RecordFastMiniSharedScenario(FastCommandBuffer buffer, MiniSharedCommandBufferState state, CommandBufferBenchmarkScenario scenario)
+    {
+        switch (scenario)
+        {
+            case CommandBufferBenchmarkScenario.DenseExisting:
+                RecordFastMiniDenseExisting(buffer, state);
+                return buffer;
+            case CommandBufferBenchmarkScenario.MixedScript:
+                RecordFastMiniMixedScript(buffer, state);
+                return buffer;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(scenario));
+        }
+    }
+
     public static void RunMiniHierarchyScenario(MiniHierarchyCommandBufferState state)
     {
         var buffer = new MiniCommandBuffer(state.World);
@@ -291,6 +324,114 @@ internal static class CommandBufferBenchmarkScenarioFactory
         }
 
         buffer.CompileAndReplay();
+    }
+
+    private static void RunFastMiniDenseExisting(MiniSharedCommandBufferState state)
+    {
+        var buffer = new FastCommandBuffer(state.World);
+        RecordFastMiniDenseExisting(buffer, state);
+        buffer.Submit();
+    }
+
+    private static void RecordFastMiniDenseExisting(FastCommandBuffer buffer, MiniSharedCommandBufferState state)
+    {
+        for (var i = 0; i < state.ExistingEntities.Length; i++)
+        {
+            var entity = state.ExistingEntities[i];
+            buffer.Set(entity, new BenchmarkPosition(i + 1, i + 2));
+            buffer.Set(entity, new BenchmarkVelocity(i + 3, i + 4));
+            buffer.Set(entity, new BenchmarkHealth(200 + i));
+
+            if ((i & 1) == 0)
+            {
+                buffer.Remove<BenchmarkHealth>(entity);
+            }
+            else
+            {
+                buffer.Add(entity, new BenchmarkArmor(300 + i));
+            }
+
+            if ((i & 7) == 0)
+            {
+                buffer.Destroy(entity);
+            }
+        }
+
+    }
+
+    private static void RunFastMiniCreateHeavy(MiniSharedCommandBufferState state)
+    {
+        var buffer = new FastCommandBuffer(state.World);
+        for (var i = 0; i < state.EntityCount; i++)
+        {
+            var entity = buffer.Create();
+            buffer.Add(entity, new BenchmarkPosition(i + 1, i + 2));
+            buffer.Add(entity, new BenchmarkVelocity(i + 3, i + 4));
+            buffer.Add(entity, new BenchmarkHealth(200 + i));
+
+            if ((i & 1) == 0)
+            {
+                buffer.Remove<BenchmarkVelocity>(entity);
+            }
+
+            if ((i & 3) == 0)
+            {
+                buffer.Destroy(entity);
+            }
+        }
+
+        buffer.Submit();
+    }
+
+    private static void RunFastMiniMixedScript(MiniSharedCommandBufferState state)
+    {
+        var buffer = new FastCommandBuffer(state.World);
+        RecordFastMiniMixedScript(buffer, state);
+        buffer.Submit();
+    }
+
+    private static void RecordFastMiniMixedScript(FastCommandBuffer buffer, MiniSharedCommandBufferState state)
+    {
+        for (var i = 0; i < state.EntityCount; i++)
+        {
+            if ((i & 1) == 0)
+            {
+                var entity = state.ExistingEntities[i];
+                buffer.Set(entity, new BenchmarkPosition(i + 1, i + 2));
+                buffer.Set(entity, new BenchmarkVelocity(i + 3, i + 4));
+
+                if ((i & 3) == 0)
+                {
+                    buffer.Remove<BenchmarkHealth>(entity);
+                }
+                else
+                {
+                    buffer.Set(entity, new BenchmarkHealth(300 + i));
+                }
+
+                if ((i & 7) == 0)
+                {
+                    buffer.Destroy(entity);
+                }
+            }
+            else
+            {
+                var entity = buffer.Create();
+                buffer.Add(entity, new BenchmarkPosition(i + 11, i + 12));
+                buffer.Add(entity, new BenchmarkVelocity(i + 13, i + 14));
+                buffer.Add(entity, new BenchmarkHealth(400 + i));
+
+                if ((i & 3) == 1)
+                {
+                    buffer.Remove<BenchmarkVelocity>(entity);
+                }
+
+                if ((i & 7) == 1)
+                {
+                    buffer.Destroy(entity);
+                }
+            }
+        }
     }
 
     private static void RunArchDenseExisting(ArchSharedCommandBufferState state)

@@ -1,8 +1,8 @@
 ---
 title: Command Buffer Runtime
 module: MiniArch.Core CommandBuffer
-description: Implemented command buffer model, fixed replay order, 0-GC byte-based recording/replay, cross-world FrameDelta replay, and validation notes
-updated: 2026-05-25
+description: Implemented command buffer model, fixed replay order, 0-GC byte-based recording/replay, cross-world FrameDelta replay, FastCommandBuffer arena optimization, and validation notes
+updated: 2026-05-26
 ---
 # Command Buffer Runtime
 
@@ -24,6 +24,7 @@ updated: 2026-05-25
 
 - 核心组成：
   - `src/MiniArch/Core/CommandBuffer.cs`：public recording API、固定桶编译、created-entity final-state 预计算
+  - `src/MiniArch/Core/FastCommandBuffer.cs`：单线程录制时去重 command buffer，无 compile 步骤，arena slab allocator，inline CreatedState
   - `src/MiniArch/Core/CommandBufferShard.cs`：线程本地 shard，避免 recording 热路径共享锁
   - `src/MiniArch/Core/CommandBufferEntityAllocator.cs`：线程安全地从 `World` 预留真实 entity handle
   - `src/MiniArch/Core/FrameDelta.cs`：编译后的 frame IR（原 `CompiledCommandBatch`），可保留并重放到同步 world
@@ -46,6 +47,17 @@ updated: 2026-05-25
   - query 仍依赖 `World.QueryLayoutGeneration`，只是 replay 期间改为 batch publish
 - 验证依赖 `tests/MiniArch.Tests/Core/CommandBufferTests.cs`，并辅以 lifecycle / structural-change / query 回归测试
 - 与 `Arch` 的对比 benchmark 当前依赖 `CommandBufferSharedScenarios` 先验证共享结构命令场景的 parity，再跑 `record + play`
+
+## 2026-05-25 CommandBuffer vs Arch 性能诊断
+
+- 结论：当前 `CommandBufferBenchmarks` 里 MiniArch 比 `Arch.Buffer.CommandBuffer` 慢，主要不是 recording 热路径慢，而是 MiniArch 的 `CompileAndReplay()` 在 play 阶段承担了 raw log -> `FrameDelta` 的归约/物化成本。
+- 临时 segment harness（Release、`EntityCount=10000`、每个 scenario 多次取 median）显示：
+  - `DenseExisting`：MiniArch record `1.295 ms`、play `14.564 ms`；Arch record `4.291 ms`、play `2.726 ms`
+  - `CreateHeavy`：MiniArch record `2.361 ms`、play `14.129 ms`；Arch record `4.537 ms`、play `3.222 ms`
+  - `MixedScript`：MiniArch record `1.402 ms`、play `12.495 ms`；Arch record `3.669 ms`、play `2.793 ms`
+- 这说明 MiniArch 的 recording 已经比 Arch 快，但总耗时被 compile/replay 合并阶段支配。
+- 结构性原因：MiniArch 先记录轻量 raw command，再在 compile 阶段做 shard 排序、计数、scratch 字典/集合归约、created entity final-state materialize、reserved entity release、destroy closure 等；Arch 的 buffer recording 数据结构更接近 playback-ready，并且 benchmark 给 Arch 传入了 `entityCount * 8` 初始容量。
+- 评估优化时不要只看 `record + play` 总数；应分段确认 record、compile、replay 谁是瓶颈，否则容易误把 recording API 当成问题。
 
 ## 决策
 
@@ -266,6 +278,60 @@ updated: 2026-05-25
 ### 已知限制
 
 - **Link+Unlink 不互消**：同一 child 的 Link+Unlink 不做取消，因为原始 link 状态需要 World 上下文才能确定
+
+## FastCommandBuffer（2026-05-26）
+
+### 概述
+
+`FastCommandBuffer` 是单线程录制时去重的 command buffer，消除 `Compile()` 步骤。适合不需要保留 frame、不需要跨 world replay 的单线程场景。
+
+### 架构
+
+- 录制时直接去重：`Set<T>` / `Add<T>` 用字典 upsert 替代 list append，避免 compile 阶段
+- Arena slab allocator：`CopyData<T>` 写入 `ArrayPool<byte>.Shared.Rent` 租来的 4KB slab，消除 per-command `new byte[]`
+- Inline `CreatedState`：内部组件存储用 4 个 inline 字段替代 `Dictionary<int, CreatedComponent>`，典型 2-4 组件的 entity 零字典分配
+- `Submit()` 直接 `BuildDelta` → `World.ReplayTrusted`，无需 compile
+- 复用 `FrameDelta` 跨帧，避免每帧分配 9 个 List
+
+### 优化历史与关键教训
+
+1. **Arena slab allocator**：对 MixedScript 有显著帮助（+200%），对 DenseExisting 无效
+   - 原因：DenseExisting 是 ReplayTrusted-bound（~90% 时间在世界变更），Record+Compile 优化被吞没
+   - MixedScript 的老 Compile 路径特别重（5000 个 CreatedEntityState + 5000 个内部字典 + 4375 个 ToCompiledEntity），FastCB 的录制时去重直接消灭了这些开销
+
+2. **6 项同时优化导致 MixedScript 回退**（已回退）：CollectionsMarshal + reusable delta + hasCreatedEntities + Writer 缓存 + pre-size dict + typeInfoCache clear
+   - 根因：`_typeInfoCache.Clear()` + `TrimExcess()` 销毁了跨帧缓存
+   - 教训：不要同时做多于 2-3 项优化；每次改动后必须跑所有场景的基准测试
+
+3. **最终安全优化组合**（成功）：
+   - 保留 `_typeInfoCache` 跨帧（不 Clear）
+   - 复用 `FrameDelta`（`_reusableDelta` 字段）
+   - `_hasCreatedEntities` flag 跳过空字典查找
+   - Writer 缓存到 `_typeInfoCache` 元组中（避免每次 `ConcurrentDictionary.GetOrAdd`）
+   - `CreatedState.Components` 改为 inline 4 字段 + overflow 字典（消除 10000 个 Dictionary 分配）
+
+### 性能对比（Release, 3s×5 repeats）
+
+| Case | Mini CB | FastCB | Arch | Fast vs Arch |
+|---|---:|---:|---:|---|
+| 1000/CreateHeavy | 1668 | 3127 | 1396 | +124% |
+| 10000/CreateHeavy | 65 | 291 | 155 | +88% |
+| 10000/DenseExisting | 156 | 183 | 192 | -4.7% |
+| 10000/MixedScript | 68 | 219 | — | N/A |
+
+### DenseExisting 诊断（batch=20）
+
+| Engine | Record (ms) | Submit (ms) | Total (ms) |
+|---|---:|---:|---:|
+| Mini CB | 1.9 | 10.9 | 12.8 |
+| FastCB | 6.9 | 5.6 | 12.5 |
+| Arch | 4.4 | 8.1 | 12.5 |
+
+### 为什么 MixedScript 从 arena 获益 +200% 而 DenseExisting 获益 0%
+
+- DenseExisting: 36250 次 ReplayTrusted 操作（11250 次结构变更），占总时间 ~90%。Record+Compile 只占 ~10%，优化它对总时间影响微乎其微
+- MixedScript: 21250 次 ReplayTrusted 操作，但老 Compile 路径特别重（5000 个 CreatedEntityState + 5000 个内部字典 + 4375 个 ToCompiledEntity + ArrayPool 操作）。FastCB 的录制时去重消灭了整个 compile 阶段，节省的比例大
+- Arena buffer 本身对两个场景的帮助相似；真正的差异在于 compile 阶段的权重
 
 ## 关联模块
 

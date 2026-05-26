@@ -10,14 +10,14 @@ public static class CharacterAttackBootstrap
     {
         ArgumentNullException.ThrowIfNull(runtime);
 
-        MiniArch.Entity request = runtime.Commands.Create();
-        runtime.Commands.Add(request, new Request());
-        runtime.Commands.Add(request, new RequestTarget(actionEntity));
-        runtime.Commands.Add(request, CharacterActionIds.DispatchRule);
-        runtime.Commands.Add(request, RuleTier.Normal);
-        runtime.Commands.Add(request, new AttackIntent());
-        runtime.Commands.Add(request, new AttackTargetQValue(q));
-        runtime.Commands.Add(request, new AttackTargetRValue(r));
+        MiniArch.Entity request = runtime.Recorder.Create();
+        runtime.Recorder.Add(request, new Request());
+        runtime.Recorder.Add(request, new RequestTarget(actionEntity));
+        runtime.Recorder.Add(request, CharacterActionIds.DispatchRule);
+        runtime.Recorder.Add(request, RuleTier.Normal);
+        runtime.Recorder.Add(request, new AttackIntent());
+        runtime.Recorder.Add(request, new AttackTargetQValue(q));
+        runtime.Recorder.Add(request, new AttackTargetRValue(r));
         return request;
     }
 }

@@ -1,18 +1,18 @@
-using CoreCommandBuffer = MiniArch.Core.CommandBuffer;
+using MiniArch.Core;
 
 namespace Hero.Ecs;
 
 public readonly struct FrameContext
 {
     internal FrameContext(
-        CoreCommandBuffer commands,
+        ICommandRecorder commands,
         FrameView frame)
     {
         Commands = commands;
         Frame = frame;
     }
 
-    public CoreCommandBuffer Commands { get; }
+    public ICommandRecorder Commands { get; }
 
     public FrameView Frame { get; }
 }

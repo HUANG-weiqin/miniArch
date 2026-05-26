@@ -261,13 +261,234 @@ public sealed class PipelineBenchmarkTests
         Report("Full Card Play (play card → attack → trigger → armor)", sw, ticks);
     }
 
+    [Fact]
+    [Trait("Category", "Benchmark")]
+    public void Benchmark_Fast_Movement_20Seconds()
+    {
+        CoreTestFixture core = new(MiniArchRuntime.WithFastCommandBuffer());
+        _ = new CharacterTestFixture(core);
+
+        core.AddCoreSystems();
+        core.AddSpawnSystem();
+
+        MiniArchRuntime runtime = core.Runtime;
+
+        MiniArch.Entity player = CharacterSpawnBootstrap.CreatePlayerAt(runtime, 0, 0);
+        core.StepUntilStable();
+
+        ExecuteMoveCycle(runtime, core, player);
+
+        long ticks = 0;
+        Stopwatch sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < 20000)
+        {
+            ExecuteMoveCycle(runtime, core, player);
+            ticks++;
+        }
+        sw.Stop();
+
+        Report("Movement [FastCommandBuffer]", sw, ticks);
+    }
+
+    [Fact]
+    [Trait("Category", "Benchmark")]
+    public void Benchmark_Fast_SimpleAttack_20Seconds()
+    {
+        CoreTestFixture core = new(MiniArchRuntime.WithFastCommandBuffer());
+        _ = new CharacterTestFixture(core);
+
+        core.AddCoreSystems();
+        core.AddSpawnSystem();
+
+        MiniArchRuntime runtime = core.Runtime;
+
+        MiniArch.Entity player = CharacterSpawnBootstrap.CreatePlayerAt(runtime, 5, 8);
+        core.StepUntilStable();
+
+        MiniArch.Entity enemy = TestEntities.Create(runtime.World,
+            new PositionQValue(7), new PositionRValue(8), new CurrentHpValue(10));
+        core.StepUntilStable();
+
+        FrameView frame = runtime.CurrentFrame;
+        MiniArch.Entity action = FindActionChild(runtime, frame, player, CharacterActionKinds.Attack);
+
+        ExecuteSimpleAttackCycle(runtime, core, action, enemy);
+
+        long ticks = 0;
+        Stopwatch sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < 20000)
+        {
+            ExecuteSimpleAttackCycle(runtime, core, action, enemy);
+            ticks++;
+        }
+        sw.Stop();
+
+        Report("Simple Attack [FastCommandBuffer]", sw, ticks);
+    }
+
+    [Fact]
+    [Trait("Category", "Benchmark")]
+    public void Benchmark_Fast_AttackWithTrigger_20Seconds()
+    {
+        CoreTestFixture core = new(MiniArchRuntime.WithFastCommandBuffer());
+        CharacterTestFixture charFixture = new(core);
+        TriggerTestFixture triggerFixture = new(core);
+
+        core.AddCoreSystems();
+        core.AddSpawnSystem();
+        triggerFixture.AddTriggerSystem();
+
+        MiniArchRuntime runtime = core.Runtime;
+
+        MiniArch.Entity player = CharacterSpawnBootstrap.CreatePlayerAt(runtime, 5, 8);
+        core.StepUntilStable();
+
+        MiniArch.Entity enemy = TestEntities.Create(runtime.World,
+            new PositionQValue(7), new PositionRValue(8), new CurrentHpValue(10));
+        core.StepUntilStable();
+
+        MiniArch.Entity triggerCard = TestEntities.Create(runtime.World,
+            new ActionEntity(),
+            CardActionKinds.Attack,
+            new ActionRuleId(CharacterAttackIds.AttackRule),
+            new ActionPointCostValue(1),
+            new CardZone(CardZoneKind.Hand),
+            new CardOrderValue(0),
+            new TriggerCondition(TriggerIds.DamageDealtBySelf),
+            new TriggerAction(TriggerIds.GainArmorFromDamage));
+        runtime.World.Link(player, triggerCard);
+
+        FrameView frame = runtime.CurrentFrame;
+        MiniArch.Entity action = FindActionChild(runtime, frame, player, CharacterActionKinds.Attack);
+
+        ExecuteAttackWithTriggerCycle(runtime, core, action, enemy, player);
+
+        long ticks = 0;
+        Stopwatch sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < 20000)
+        {
+            ExecuteAttackWithTriggerCycle(runtime, core, action, enemy, player);
+            ticks++;
+        }
+        sw.Stop();
+
+        Report("Attack + Trigger [FastCommandBuffer]", sw, ticks);
+    }
+
+    [Fact]
+    [Trait("Category", "Benchmark")]
+    public void Benchmark_Fast_FullCardPlayWithCollision_20Seconds()
+    {
+        CoreTestFixture core = new(MiniArchRuntime.WithFastCommandBuffer(), CreateMergedSlotPorts());
+        CharacterTestFixture charFixture = new(core);
+        CardTestFixture cardFixture = new(core);
+        TriggerTestFixture triggerFixture = new(core);
+
+        core.AddCoreSystems();
+        core.AddSpawnSystem();
+        triggerFixture.AddTriggerSystem();
+
+        MiniArchRuntime runtime = core.Runtime;
+
+        MiniArch.Entity player = CharacterSpawnBootstrap.CreatePlayerAt(runtime, 5, 8);
+        core.StepUntilStable();
+
+        MiniArch.Entity enemy = TestEntities.Create(runtime.World,
+            new PositionQValue(7), new PositionRValue(8), new CurrentHpValue(10));
+        core.StepUntilStable();
+
+        for (int i = 0; i < 10; i++)
+        {
+            TestEntities.Create(runtime.World,
+                new PositionQValue(i * 10 + 100),
+                new PositionRValue(i * 10 + 100),
+                new CurrentHpValue(10));
+        }
+        core.StepUntilStable();
+
+        MiniArch.Entity triggerCard = TestEntities.Create(runtime.World,
+            new ActionEntity(),
+            CardActionKinds.Attack,
+            new ActionRuleId(CharacterAttackIds.AttackRule),
+            new ActionPointCostValue(1),
+            new CardZone(CardZoneKind.Hand),
+            new CardOrderValue(0),
+            new TriggerCondition(TriggerIds.DamageDealtBySelf),
+            new TriggerAction(TriggerIds.GainArmorFromDamage));
+        runtime.World.Link(player, triggerCard);
+        MiniArch.Entity context = TurnSerialBootstrap.CreateContext(runtime);
+        TurnSerialBootstrap.Activate(runtime, context, player);
+
+        ExecuteFullPlayCardWithCollisionCycle(runtime, core, triggerCard, enemy, player);
+
+        long ticks = 0;
+        Stopwatch sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < 20000)
+        {
+            ExecuteFullPlayCardWithCollisionCycle(runtime, core, triggerCard, enemy, player);
+            ticks++;
+        }
+        sw.Stop();
+
+        Report("Full Card Play with Collision [FastCommandBuffer]", sw, ticks);
+    }
+
+    [Fact]
+    [Trait("Category", "Benchmark")]
+    public void Benchmark_Fast_FullCardPlayToArmor_20Seconds()
+    {
+        CoreTestFixture core = new(MiniArchRuntime.WithFastCommandBuffer(), CreateMergedSlotPorts());
+        CharacterTestFixture charFixture = new(core);
+        CardTestFixture cardFixture = new(core);
+        TriggerTestFixture triggerFixture = new(core);
+
+        core.AddCoreSystems();
+        core.AddSpawnSystem();
+        triggerFixture.AddTriggerSystem();
+
+        MiniArchRuntime runtime = core.Runtime;
+
+        MiniArch.Entity player = CharacterSpawnBootstrap.CreatePlayerAt(runtime, 5, 8);
+        core.StepUntilStable();
+
+        MiniArch.Entity enemy = TestEntities.Create(runtime.World,
+            new PositionQValue(7), new PositionRValue(8), new CurrentHpValue(10));
+        core.StepUntilStable();
+
+        MiniArch.Entity triggerCard = TestEntities.Create(runtime.World,
+            new ActionEntity(),
+            CardActionKinds.Attack,
+            new ActionRuleId(CharacterAttackIds.AttackRule),
+            new ActionPointCostValue(1),
+            new CardZone(CardZoneKind.Hand),
+            new CardOrderValue(0),
+            new TriggerCondition(TriggerIds.DamageDealtBySelf),
+            new TriggerAction(TriggerIds.GainArmorFromDamage));
+        runtime.World.Link(player, triggerCard);
+        MiniArch.Entity context = TurnSerialBootstrap.CreateContext(runtime);
+        TurnSerialBootstrap.Activate(runtime, context, player);
+
+        ExecuteFullPlayCardWithCollisionCycle(runtime, core, triggerCard, enemy, player);
+
+        long ticks = 0;
+        Stopwatch sw = Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < 20000)
+        {
+            ExecuteFullPlayCardWithCollisionCycle(runtime, core, triggerCard, enemy, player);
+            ticks++;
+        }
+        sw.Stop();
+
+        Report("Full Card Play [FastCommandBuffer]", sw, ticks);
+    }
+
     private static void ExecuteMoveCycle(
         MiniArchRuntime runtime, CoreTestFixture core,
         MiniArch.Entity player)
     {
         // Reset position
-        runtime.Commands.Set(player, new PositionQValue(0));
-        runtime.Commands.Set(player, new PositionRValue(0));
+        runtime.Recorder.Set(player, new PositionQValue(0));
+        runtime.Recorder.Set(player, new PositionRValue(0));
 
         // Create move request: move +1, +2
         CharacterMovementBootstrap.CreateMoveRequest(runtime, player, 1, 2);
@@ -278,7 +499,7 @@ public sealed class PipelineBenchmarkTests
         MiniArchRuntime runtime, CoreTestFixture core,
         MiniArch.Entity action, MiniArch.Entity enemy)
     {
-        runtime.Commands.Set(enemy, new CurrentHpValue(10));
+        runtime.Recorder.Set(enemy, new CurrentHpValue(10));
         FrameView frame = runtime.CurrentFrame;
         CharacterAttackBootstrap.CreateAttackRequest(runtime, action,
             frame.Get<PositionQValue>(enemy).Value,
@@ -290,9 +511,9 @@ public sealed class PipelineBenchmarkTests
         MiniArchRuntime runtime, CoreTestFixture core,
         MiniArch.Entity action, MiniArch.Entity enemy, MiniArch.Entity player)
     {
-        runtime.Commands.Set(enemy, new CurrentHpValue(10));
+        runtime.Recorder.Set(enemy, new CurrentHpValue(10));
         // Reset armor to 0 (do not remove component; ModifierApplySystem needs current value)
-        runtime.Commands.Set(player, new CurrentArmorValue(0));
+        runtime.Recorder.Set(player, new CurrentArmorValue(0));
 
         FrameView frame = runtime.CurrentFrame;
         CharacterAttackBootstrap.CreateAttackRequest(runtime, action,
@@ -305,15 +526,15 @@ public sealed class PipelineBenchmarkTests
         MiniArchRuntime runtime, CoreTestFixture core,
         MiniArch.Entity attackCard, MiniArch.Entity enemy, MiniArch.Entity player)
     {
-        runtime.Commands.Set(enemy, new CurrentHpValue(10));
-        runtime.Commands.Set(player, new CurrentArmorValue(0));
+        runtime.Recorder.Set(enemy, new CurrentHpValue(10));
+        runtime.Recorder.Set(player, new CurrentArmorValue(0));
 
         FrameView frame = runtime.CurrentFrame;
 
         // Reset card back to hand
-        runtime.Commands.Set(player, new CurrentApValue(3));
-        runtime.Commands.Set(attackCard, new CardZone(CardZoneKind.Hand));
-        runtime.Commands.Set(attackCard, new CardOrderValue(0));
+        runtime.Recorder.Set(player, new CurrentApValue(3));
+        runtime.Recorder.Set(attackCard, new CardZone(CardZoneKind.Hand));
+        runtime.Recorder.Set(attackCard, new CardOrderValue(0));
         int targetQ = frame.Get<PositionQValue>(enemy).Value;
         int targetR = frame.Get<PositionRValue>(enemy).Value;
 

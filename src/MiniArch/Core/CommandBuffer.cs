@@ -7,9 +7,23 @@ using System.Threading;
 namespace MiniArch.Core;
 
 /// <summary>
+/// Recording-only interface shared by command buffer implementations.
+/// </summary>
+public interface ICommandRecorder
+{
+    Entity Create();
+    void Add<T>(Entity entity, T component);
+    void Set<T>(Entity entity, T component);
+    void Remove<T>(Entity entity);
+    void Destroy(Entity entity);
+    void Link(Entity parent, Entity child);
+    void Unlink(Entity child);
+}
+
+/// <summary>
 /// Records deferred world commands.
 /// </summary>
-public sealed class CommandBuffer
+public sealed class CommandBuffer : ICommandRecorder
 {
     private readonly World _world;
     private readonly CommandBufferEntityAllocator _allocator;

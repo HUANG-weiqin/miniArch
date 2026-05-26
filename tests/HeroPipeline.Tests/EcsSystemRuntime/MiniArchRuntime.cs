@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using CoreCommandBuffer = MiniArch.Core.CommandBuffer;
+using MiniArch.Core;
 
 namespace Hero.Ecs;
 
@@ -20,22 +20,32 @@ public sealed class MiniArchRuntime
 
     private readonly List<ISystem> _systems = [];
 
-    public MiniArchRuntime()
-        : this(new MiniArch.World())
-    {
-    }
-
-    private MiniArchRuntime(MiniArch.World world)
+    private MiniArchRuntime(MiniArch.World world, bool useFastCommandBuffer)
     {
         World = world;
         PreRegisterComponentTypes();
-        Commands = new CoreCommandBuffer(world);
+        if (useFastCommandBuffer)
+        {
+            _fastCommands = new FastCommandBuffer(world);
+            Recorder = _fastCommands;
+        }
+        else
+        {
+            _commands = new CommandBuffer(world);
+            Recorder = _commands;
+        }
         CurrentFrame = new FrameView(World);
     }
 
+    public MiniArchRuntime() : this(new MiniArch.World(), false) { }
+
+    public static MiniArchRuntime WithFastCommandBuffer() => new(new MiniArch.World(), true);
+
     public MiniArch.World World { get; }
 
-    public CoreCommandBuffer Commands { get; }
+    private readonly CommandBuffer? _commands;
+    private readonly FastCommandBuffer? _fastCommands;
+    public ICommandRecorder Recorder { get; }
 
     public FrameView CurrentFrame { get; private set; }
 
@@ -49,18 +59,27 @@ public sealed class MiniArchRuntime
 
     public void Tick()
     {
-        Commands.CompileAndReplay();
+        FlushPendingCommands();
         CurrentFrame = new FrameView(World);
 
-        FrameContext context = new(Commands, CurrentFrame);
+        FrameContext context = new(Recorder, CurrentFrame);
 
         if (_systems.Count > 0)
         {
             RunSystems(context);
         }
 
-        IsStable = !Commands.CompileAndReplay();
+        IsStable = !FlushPendingCommands();
         CurrentFrame = new FrameView(World);
+    }
+
+    private bool FlushPendingCommands()
+    {
+        if (_fastCommands is not null)
+        {
+            return _fastCommands.Submit();
+        }
+        return _commands!.CompileAndReplay();
     }
 
     private void RunSystems(FrameContext context)

@@ -12,14 +12,20 @@ namespace Hero.Tests.Fixtures;
 /// </summary>
 public sealed class CoreTestFixture
 {
-    public MiniArchRuntime Runtime { get; } = new();
+    public MiniArchRuntime Runtime { get; }
     public IReadOnlyDictionary<SlotKey, IIntSlotPort> Ports { get; }
     public RuleTable RuleTable { get; } = new();
     public EffectTable EffectTable { get; } = new();
     public SpawnTable SpawnTable { get; } = GameplaySpawnTable.Create();
 
     public CoreTestFixture(IReadOnlyDictionary<SlotKey, IIntSlotPort>? ports = null)
+        : this(new MiniArchRuntime(), ports)
     {
+    }
+
+    public CoreTestFixture(MiniArchRuntime runtime, IReadOnlyDictionary<SlotKey, IIntSlotPort>? ports = null)
+    {
+        Runtime = runtime;
         Ports = ports ?? CharacterSlotPorts.Create();
     }
 

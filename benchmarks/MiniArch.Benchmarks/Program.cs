@@ -29,6 +29,17 @@ public static class Program
             return;
         }
 
+        if (args.Length > 0 && string.Equals(args[0], "throughput-cb", StringComparison.OrdinalIgnoreCase))
+        {
+            var exitCode = CommandBufferThroughputRunner.RunFromCommandLine(
+                args[1..],
+                Console.Out,
+                Console.Error,
+                CancellationToken.None);
+            Environment.ExitCode = exitCode;
+            return;
+        }
+
         if (args.Length > 0 && string.Equals(args[0], "command-buffer", StringComparison.OrdinalIgnoreCase))
         {
             RunCommandBufferBenchmarks(args[1..]);

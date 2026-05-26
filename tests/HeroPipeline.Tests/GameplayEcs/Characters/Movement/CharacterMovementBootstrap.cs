@@ -9,14 +9,14 @@ public static class CharacterMovementBootstrap
     {
         ArgumentNullException.ThrowIfNull(runtime);
 
-        MiniArch.Entity request = runtime.Commands.Create();
-        runtime.Commands.Add(request, new Request());
-        runtime.Commands.Add(request, new RequestTarget(target));
-        runtime.Commands.Add(request, CharacterMovementIds.MoveRule);
-        runtime.Commands.Add(request, RuleTier.Normal);
-        runtime.Commands.Add(request, new MoveIntent());
-        runtime.Commands.Add(request, new MoveDqValue(dq));
-        runtime.Commands.Add(request, new MoveDrValue(dr));
+        MiniArch.Entity request = runtime.Recorder.Create();
+        runtime.Recorder.Add(request, new Request());
+        runtime.Recorder.Add(request, new RequestTarget(target));
+        runtime.Recorder.Add(request, CharacterMovementIds.MoveRule);
+        runtime.Recorder.Add(request, RuleTier.Normal);
+        runtime.Recorder.Add(request, new MoveIntent());
+        runtime.Recorder.Add(request, new MoveDqValue(dq));
+        runtime.Recorder.Add(request, new MoveDrValue(dr));
         return request;
     }
 }

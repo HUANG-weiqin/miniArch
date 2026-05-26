@@ -51,6 +51,12 @@
 - 代码与注释：
   - 源码标识符与代码注释使用英文。
 
+## 性能基准测试铁律
+
+- **永远用 `-c Release`**：NuGet 依赖（如 Arch）是 Release 编译的预编译包。用 Debug 编译的自有代码对比 Release 编译的第三方包，会产生完全误导的结果。所有 `dotnet run`/`dotnet build` 涉及性能测量时，必须加 `-c Release`。
+- **测量范围要对齐**：确保对比的是同一阶段（如仅 record+submit，不含 world 创建/setup）。
+- **分段测量找瓶颈**：发现性能差异时，先拆分 record vs submit 分段计时，定位瓶颈再优化。
+
 ## 工具偏好
 
 - 查找文件优先使用 `fd`。
