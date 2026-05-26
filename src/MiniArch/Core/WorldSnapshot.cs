@@ -228,7 +228,7 @@ public static class WorldSnapshot
             for (var columnIndex = 0; columnIndex < components.Length; columnIndex++)
             {
                 var componentType = world.Components.GetType(components[columnIndex]);
-                GetColumnCodec(componentType).Write(writer, chunk.Columns[columnIndex], chunk.Count);
+                GetColumnCodec(componentType).Write(writer, chunk, columnIndex, chunk.Count);
             }
         }
     }
@@ -283,7 +283,7 @@ public static class WorldSnapshot
                 var runtimeComponentType = fileOrderedComponentTypes[fileColumnIndex];
                 var runtimeColumnIndex = archetype.GetComponentIndex(runtimeComponentType);
                 var runtimeType = world.Components.GetType(runtimeComponentType);
-                GetColumnCodec(runtimeType).Read(reader, chunk.Columns[runtimeColumnIndex], rowCount);
+                GetColumnCodec(runtimeType).Read(reader, chunk, runtimeColumnIndex, rowCount);
             }
 
             for (var row = 0; row < entities.Length; row++)
@@ -310,18 +310,16 @@ public static class WorldSnapshot
         });
     }
 
-    private static void WriteColumnPayload<T>(BinaryWriter writer, Array column, int count)
+    private static void WriteColumnPayload<T>(BinaryWriter writer, Chunk chunk, int columnIndex, int count)
         where T : unmanaged
     {
-        var values = (T[])column;
-        writer.Write(MemoryMarshal.AsBytes(values.AsSpan(0, count)));
+        chunk.WriteColumnTo<T>(writer, columnIndex, count);
     }
 
-    private static void ReadColumnPayload<T>(BinaryReader reader, Array column, int count)
+    private static void ReadColumnPayload<T>(BinaryReader reader, Chunk chunk, int columnIndex, int count)
         where T : unmanaged
     {
-        var values = (T[])column;
-        reader.BaseStream.ReadExactly(MemoryMarshal.AsBytes(values.AsSpan(0, count)));
+        chunk.ReadColumnFrom<T>(reader, columnIndex, count);
     }
 
     private static string GetSchemaName(Type componentType)
@@ -373,9 +371,9 @@ public static class WorldSnapshot
         return false;
     }
 
-    private delegate void ColumnWriter(BinaryWriter writer, Array column, int count);
+    private delegate void ColumnWriter(BinaryWriter writer, Chunk chunk, int columnIndex, int count);
 
-    private delegate void ColumnReader(BinaryReader reader, Array column, int count);
+    private delegate void ColumnReader(BinaryReader reader, Chunk chunk, int columnIndex, int count);
 
     private sealed record ColumnCodec(ColumnWriter Write, ColumnReader Read);
 

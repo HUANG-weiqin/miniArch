@@ -2,7 +2,7 @@
 title: Snapshot Persistence
 module: MiniArch.Core Snapshot
 description: First-version full-world snapshot save/load design for unmanaged components
-updated: 2026-05-25
+updated: 2026-05-26
 ---
 # Snapshot Persistence
 
@@ -25,7 +25,7 @@ updated: 2026-05-25
   - `src/MiniArch/Core/WorldClone.cs`：内存直拷 World 克隆（零序列化）
   - `src/MiniArch/Core/World.cs`：slot version、location、free id 重建桥接点
   - `src/MiniArch/Core/Archetype.cs`：按快照 chunk 精确导入实体批次
-  - `src/MiniArch/Core/Chunk.cs`：暴露有效 entities 和列数组给 snapshot/clone 层批量读写
+  - `src/MiniArch/Core/Chunk.cs`：暴露有效 entities 和逻辑列字节块给 snapshot/clone 层批量读写
 - 数据流 / 控制流：
   - save 先枚举非空 archetype，再顺序写 header、entity slot versions、schema 表、archetype/chunk 记录和列原始字节块
   - load 先验证 header，再注册 schema 对应的 runtime `ComponentType`
@@ -40,16 +40,17 @@ updated: 2026-05-25
 - `WorldSnapshot.Save/Load`：走二进制序列化，支持跨进程/跨机器传输
 - `WorldClone.Clone`：纯内存直拷，跳过全部编解码，预估 5-20× 快于 Snapshot 往返
 - 两者共享同一套 internal 重建 API（ResetSnapshotState、ImportSnapshotChunk、SetSnapshotLocation 等）
-- Clone 的关键优化：逐列 `Array.Copy`（底层 memcpy）替代 per-row 读写；零 Stream 分配
+- Clone 的关键优化：按逻辑列直接 raw byte copy，替代 per-row 读写；零 Stream 分配
 
 ## 决策
 
-- 不直接复制 `Chunk` 对象图，因为当前 chunk 是托管对象图，不是稳定单块裸内存。
-- 第一版只支持 `unmanaged` 组件；遇到托管引用字段直接 fail fast，避免伪正确的字节落盘。
+- 不直接把 `Chunk` 的运行时 `_data` 当作持久化格式；snapshot 格式仍按逻辑 archetype/chunk/column 顺序写入，避免把运行时 padding 或内部布局固化成协议。
+- 第一版只支持 `unmanaged` 组件；flat chunk 存储层会先对托管引用组件 fail fast，snapshot 层也不能把托管引用字段伪装成可落盘字节。
 - 存档里不写 `ComponentType.Value`，而写组件类型的稳定字符串标识；`ComponentType` 仍然只用于运行时热路径。
 - 存档里必须写 entity slot versions，而不只写活体 entity version；否则空闲 id 在读档后会丢失版本递增语义。
 - 当前 entity 句柄契约要求 `default(Entity)` 非法、活体 entity `Version > 0`；snapshot 恢复时也必须保持这一点，不能把 fresh/live entity 读回成 `v0`。
 - load 不能通过 `Add/Set/Remove` 回放世界；那会破坏 chunk 边界并把读档退化成结构迁移流程。
+- flat byte chunk 不改变 snapshot 的外部语义：save/load 仍保存每个逻辑列的有效 `rowCount` 个元素，clone 也只通过 `Chunk` 的 internal column byte API 复制相同 signature 的列。
 
 ## 认知模型
 
@@ -88,6 +89,7 @@ updated: 2026-05-25
 - 改这里时要特别小心：
   - 组件类型解析当前只保证同版本读写；跨版本类型名变化会直接失配
   - 当前存档不压缩、不做校验和；如果后面要加，需要保持列块和 rowCount 的读取顺序不变
+  - runtime chunk 内部可能有列对齐 padding；snapshot/clone 只能通过 `Chunk.WriteColumnTo` / `ReadColumnFrom` / `CopyColumnsFrom` 这类逻辑列 API 访问，不能直接落盘或复制整块 `_data`
 
 ## 关联模块
 

@@ -119,21 +119,15 @@ public sealed class WorldSnapshotTests
     }
 
     [Fact]
-    public void Saving_a_world_with_non_unmanaged_components_fails_with_a_clear_exception()
+    public void Adding_a_component_with_managed_references_fails_with_a_clear_exception()
     {
         var world = new World();
         var entity = world.Create();
 
-        world.Add(entity, new Name("npc-01"));
-
-        var ex = Assert.Throws<NotSupportedException>(() =>
-        {
-            using var stream = new MemoryStream();
-            WorldSnapshot.Save(stream, world);
-        });
+        var ex = Assert.Throws<NotSupportedException>(() => world.Add(entity, new Name("npc-01")));
 
         Assert.Contains(nameof(Name), ex.Message);
-        Assert.Contains("string", ex.Message);
+        Assert.Contains("managed references", ex.Message);
     }
 
     [Fact]
