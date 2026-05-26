@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Threading;
 using Arch.Core;
 using MiniArch.Core;
 
@@ -66,6 +67,12 @@ public static class CommandBufferThroughputRunner
         if (Array.Exists(args, a => string.Equals(a, "--diag-cont", StringComparison.OrdinalIgnoreCase)))
         {
             RunContinuousDiagnostic(stdout, cancellationToken);
+            return 0;
+        }
+
+        if (Array.Exists(args, a => string.Equals(a, "--diag-mt", StringComparison.OrdinalIgnoreCase)))
+        {
+            RunMultiThreadedDiagnostic(stdout, cancellationToken);
             return 0;
         }
 
@@ -498,6 +505,196 @@ public static class CommandBufferThroughputRunner
             output.WriteLine($"  Allocated: {totalAllocatedBytes / batchSize:N0} bytes per iter ({totalAllocatedBytes / (double)batchSize / 1024:F0} KB)");
             output.WriteLine();
         }
+    }
+
+    private static void RunMultiThreadedDiagnostic(TextWriter output, CancellationToken ct)
+    {
+        const int entityCount = 10000;
+        const int warmupCount = 3;
+        const int durationSeconds = 3;
+        var threadCounts = new[] { 1, 2, 4 };
+        var scenarios = new[] { CommandBufferBenchmarkScenario.CreateHeavy, CommandBufferBenchmarkScenario.DenseExisting, CommandBufferBenchmarkScenario.MixedScript };
+        var duration = TimeSpan.FromSeconds(durationSeconds);
+
+        output.WriteLine("=== Multi-threaded FastCB throughput (fixed duration) ===");
+        output.WriteLine($"EntityCount: {entityCount}, Warmup: {warmupCount}, Duration: {durationSeconds}s");
+        output.WriteLine();
+
+        foreach (var scenario in scenarios)
+        {
+            output.WriteLine($"--- {scenario} ---");
+            output.WriteLine($"{"Threads",-8} {"iterations",12} {"total ms",12} {"ops/s",12} {"speedup",10}");
+            output.WriteLine(new string('-', 56));
+
+            double singleThreadOps = 0;
+
+            foreach (var threadCount in threadCounts)
+            {
+                for (var w = 0; w < warmupCount; w++)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var state = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
+                    RunMultiThreadedIteration(state, scenario, threadCount);
+                }
+
+                var iterations = 0L;
+                var totalElapsed = TimeSpan.Zero;
+
+                while (totalElapsed < duration)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var state = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
+                    var sw = Stopwatch.StartNew();
+                    RunMultiThreadedIteration(state, scenario, threadCount);
+                    sw.Stop();
+                    totalElapsed += sw.Elapsed;
+                    iterations++;
+                }
+
+                var totalMs = totalElapsed.TotalMilliseconds;
+                var opsPerSec = iterations / totalElapsed.TotalSeconds;
+
+                if (threadCount == 1) singleThreadOps = opsPerSec;
+                var speedup = opsPerSec / singleThreadOps;
+
+                output.WriteLine($"{threadCount,-8} {iterations,12} {totalMs,12:F1} {opsPerSec,12:F0} {speedup,10:F2}x");
+            }
+
+            output.WriteLine();
+        }
+    }
+
+    private static void RunMultiThreadedIteration(MiniSharedCommandBufferState state, CommandBufferBenchmarkScenario scenario, int threadCount)
+    {
+        var buffers = new FastCommandBuffer[threadCount];
+        for (var t = 0; t < threadCount; t++)
+            buffers[t] = new FastCommandBuffer(state.World);
+
+        switch (scenario)
+        {
+            case CommandBufferBenchmarkScenario.DenseExisting:
+                RunMultiThreadedDenseExisting(buffers, state);
+                break;
+            case CommandBufferBenchmarkScenario.CreateHeavy:
+                RunMultiThreadedCreateHeavy(buffers, state);
+                break;
+            case CommandBufferBenchmarkScenario.MixedScript:
+                RunMultiThreadedMixedScript(buffers, state);
+                break;
+        }
+
+        foreach (var buffer in buffers)
+            buffer.Submit();
+    }
+
+    private static void RunMultiThreadedDenseExisting(FastCommandBuffer[] buffers, MiniSharedCommandBufferState state)
+    {
+        var entities = state.ExistingEntities;
+        var threadCount = buffers.Length;
+        var perThread = entities.Length / threadCount;
+        var threads = new Thread[threadCount];
+
+        for (var t = 0; t < threadCount; t++)
+        {
+            var start = t * perThread;
+            var count = t == threadCount - 1 ? entities.Length - start : perThread;
+            var buffer = buffers[t];
+            threads[t] = new Thread(() =>
+            {
+                for (var i = 0; i < count; i++)
+                {
+                    var idx = start + i;
+                    var entity = entities[idx];
+                    buffer.Set(entity, new BenchmarkPosition(idx + 1, idx + 2));
+                    buffer.Set(entity, new BenchmarkVelocity(idx + 3, idx + 4));
+                    buffer.Set(entity, new BenchmarkHealth(200 + idx));
+                    if ((idx & 1) == 0) buffer.Remove<BenchmarkHealth>(entity);
+                    else buffer.Add(entity, new BenchmarkArmor(300 + idx));
+                    if ((idx & 7) == 0) buffer.Destroy(entity);
+                }
+            });
+            threads[t].Start();
+        }
+
+        for (var t = 0; t < threadCount; t++)
+            threads[t].Join();
+    }
+
+    private static void RunMultiThreadedCreateHeavy(FastCommandBuffer[] buffers, MiniSharedCommandBufferState state)
+    {
+        var entityCount = state.EntityCount;
+        var threadCount = buffers.Length;
+        var perThread = entityCount / threadCount;
+        var threads = new Thread[threadCount];
+
+        for (var t = 0; t < threadCount; t++)
+        {
+            var start = t * perThread;
+            var count = t == threadCount - 1 ? entityCount - start : perThread;
+            var buffer = buffers[t];
+            threads[t] = new Thread(() =>
+            {
+                for (var i = 0; i < count; i++)
+                {
+                    var idx = start + i;
+                    var entity = buffer.Create();
+                    buffer.Add(entity, new BenchmarkPosition(idx + 1, idx + 2));
+                    buffer.Add(entity, new BenchmarkVelocity(idx + 3, idx + 4));
+                    buffer.Add(entity, new BenchmarkHealth(200 + idx));
+                    if ((idx & 1) == 0) buffer.Remove<BenchmarkVelocity>(entity);
+                    if ((idx & 3) == 0) buffer.Destroy(entity);
+                }
+            });
+            threads[t].Start();
+        }
+
+        for (var t = 0; t < threadCount; t++)
+            threads[t].Join();
+    }
+
+    private static void RunMultiThreadedMixedScript(FastCommandBuffer[] buffers, MiniSharedCommandBufferState state)
+    {
+        var entityCount = state.EntityCount;
+        var entities = state.ExistingEntities;
+        var threadCount = buffers.Length;
+        var perThread = entityCount / threadCount;
+        var threads = new Thread[threadCount];
+
+        for (var t = 0; t < threadCount; t++)
+        {
+            var start = t * perThread;
+            var count = t == threadCount - 1 ? entityCount - start : perThread;
+            var buffer = buffers[t];
+            threads[t] = new Thread(() =>
+            {
+                for (var i = 0; i < count; i++)
+                {
+                    var idx = start + i;
+                    if ((idx & 1) == 0)
+                    {
+                        var entity = entities[idx];
+                        buffer.Set(entity, new BenchmarkPosition(idx + 1, idx + 2));
+                        buffer.Set(entity, new BenchmarkVelocity(idx + 3, idx + 4));
+                        if ((idx & 3) == 0) buffer.Remove<BenchmarkHealth>(entity);
+                        else buffer.Set(entity, new BenchmarkHealth(300 + idx));
+                        if ((idx & 7) == 0) buffer.Destroy(entity);
+                    }
+                    else
+                    {
+                        var entity = buffer.Create();
+                        buffer.Add(entity, new BenchmarkPosition(idx + 11, idx + 12));
+                        buffer.Add(entity, new BenchmarkVelocity(idx + 13, idx + 14));
+                        buffer.Add(entity, new BenchmarkHealth(400 + idx));
+                        if ((idx & 3) == 1) buffer.Remove<BenchmarkVelocity>(entity);
+                        if ((idx & 7) == 1) buffer.Destroy(entity);
+                    }
+                }
+            });
+            threads[t].Start();
+        }
+
+        for (var t = 0; t < threadCount; t++)
+            threads[t].Join();
     }
 
     private static void RunContinuousDiagnostic(TextWriter output, CancellationToken ct)
