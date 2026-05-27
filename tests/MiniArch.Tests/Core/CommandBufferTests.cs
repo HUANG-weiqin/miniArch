@@ -959,6 +959,275 @@ public sealed class CommandBufferTests
     }
 
     [Fact]
+    public void CrossWorld_replay_created_entity_with_multiple_components()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+
+        var e = buffer.Create();
+        buffer.Add(e, new Position(1, 2));
+        buffer.Add(e, new Velocity(3, 4));
+        buffer.Add(e, new Health(100));
+        var delta = buffer.Snapshot();
+
+        var replica = new World();
+        replica.Replay(delta);
+        Assert.True(replica.IsAlive(e));
+        Assert.True(replica.TryGet(e, out Position p));
+        Assert.Equal(new Position(1, 2), p);
+        Assert.True(replica.TryGet(e, out Velocity v));
+        Assert.Equal(new Velocity(3, 4), v);
+        Assert.True(replica.TryGet(e, out Health h));
+        Assert.Equal(new Health(100), h);
+    }
+
+    [Fact]
+    public void CrossWorld_replay_existing_entity_set()
+    {
+        var source = new World();
+        var e = source.Create(new Position(10, 20));
+        var buffer = new CommandBuffer(source);
+        buffer.Set(e, new Position(30, 40));
+        var delta = buffer.Snapshot();
+
+        var replica = new World();
+        var replicaE = replica.Create(new Position(10, 20));
+        replica.Replay(delta);
+
+        Assert.True(replica.TryGet(replicaE, out Position p));
+        Assert.Equal(new Position(30, 40), p);
+    }
+
+    [Fact]
+    public void CrossWorld_replay_existing_entity_add_and_remove()
+    {
+        var source = new World();
+        var e = source.Create(new Position(1, 1));
+        var buffer = new CommandBuffer(source);
+        buffer.Add(e, new Velocity(5, 6));
+        buffer.Remove<Position>(e);
+        var delta = buffer.Snapshot();
+
+        var replica = new World();
+        var replicaE = replica.Create(new Position(1, 1));
+        replica.Replay(delta);
+
+        Assert.False(replica.TryGet<Position>(replicaE, out _));
+        Assert.True(replica.TryGet(replicaE, out Velocity v));
+        Assert.Equal(new Velocity(5, 6), v);
+    }
+
+    [Fact]
+    public void CrossWorld_replay_destroy_existing_entity()
+    {
+        var source = new World();
+        var e = source.Create(new Position(1, 2));
+        var buffer = new CommandBuffer(source);
+        buffer.Destroy(e);
+        var delta = buffer.Snapshot();
+
+        var replica = new World();
+        var replicaE = replica.Create(new Position(1, 2));
+        replica.Replay(delta);
+
+        Assert.False(replica.IsAlive(replicaE));
+    }
+
+    [Fact]
+    public void CrossWorld_replay_link_and_unlink()
+    {
+        var source = new World();
+        var parent = source.Create();
+        var child = source.Create();
+        var buffer = new CommandBuffer(source);
+        buffer.Link(parent, child);
+        var delta = buffer.Snapshot();
+
+        var replica = new World();
+        var replicaParent = replica.Create();
+        var replicaChild = replica.Create();
+        replica.Replay(delta);
+
+        Assert.True(replica.TryGetParent(replicaChild, out var p));
+        Assert.Equal(replicaParent, p);
+
+        var buffer2 = new CommandBuffer(source);
+        buffer2.Unlink(child);
+        var delta2 = buffer2.Snapshot();
+
+        replica.Replay(delta2);
+        Assert.False(replica.TryGetParent(replicaChild, out _));
+    }
+
+    [Fact]
+    public void CrossWorld_replay_mixed_created_and_existing()
+    {
+        var source = new World();
+        var existing = source.Create(new Position(10, 20));
+        var buffer = new CommandBuffer(source);
+
+        var created = buffer.Create();
+        buffer.Add(created, new Position(100, 200));
+        buffer.Set(existing, new Position(30, 40));
+        buffer.Add(existing, new Velocity(5, 6));
+        var delta = buffer.Snapshot();
+
+        var replica = new World();
+        var replicaExisting = replica.Create(new Position(10, 20));
+        replica.Replay(delta);
+
+        Assert.True(replica.IsAlive(created));
+        Assert.True(replica.TryGet(created, out Position cp));
+        Assert.Equal(new Position(100, 200), cp);
+
+        Assert.True(replica.TryGet(replicaExisting, out Position ep));
+        Assert.Equal(new Position(30, 40), ep);
+        Assert.True(replica.TryGet(replicaExisting, out Velocity ev));
+        Assert.Equal(new Velocity(5, 6), ev);
+    }
+
+    [Fact]
+    public void CrossWorld_replay_destroy_then_reuse_id_does_not_ressurect()
+    {
+        var source = new World();
+        var e = source.Create(new Position(1, 2));
+        var buffer = new CommandBuffer(source);
+        buffer.Destroy(e);
+        var delta = buffer.Snapshot();
+
+        source.Destroy(e);
+        var recycled = source.Create(new Position(99, 99));
+
+        var replica = new World();
+        var replicaE = replica.Create(new Position(1, 2));
+        replica.Replay(delta);
+        Assert.False(replica.IsAlive(replicaE));
+    }
+
+    [Fact]
+    public void CrossWorld_replay_batch_created_entities_query_visible()
+    {
+        const int N = 200;
+        var source = new World();
+        var buffer = new CommandBuffer(source);
+        var entities = new Entity[N];
+
+        for (int i = 0; i < N; i++)
+        {
+            entities[i] = buffer.Create();
+            buffer.Add(entities[i], new Position(i, i + 1));
+            if ((i & 1) == 0)
+                buffer.Add(entities[i], new Velocity(i * 10, i * 20));
+        }
+        var delta = buffer.Snapshot();
+
+        var replica = new World();
+        replica.Replay(delta);
+
+        var query = replica.Query(new QueryDescription().With<Position>()).Advanced;
+        int count = 0;
+        foreach (ref readonly var chunk in query.GetChunkSpan())
+            count += chunk.Count;
+        Assert.Equal(N, count);
+
+        var posVelQuery = replica.Query(new QueryDescription().With<Position>().With<Velocity>()).Advanced;
+        int posVelCount = 0;
+        foreach (ref readonly var chunk in posVelQuery.GetChunkSpan())
+            posVelCount += chunk.Count;
+        Assert.Equal(N / 2, posVelCount);
+    }
+
+    [Fact]
+    public async Task CrossWorld_replay_submit_delta_not_snapshot()
+    {
+        var source = new World();
+        var existing = source.Create(new Position(10, 20));
+        var buffer = new CommandBuffer(source);
+
+        var created = buffer.Create();
+        buffer.Add(created, new Velocity(1, 2));
+        buffer.Set(existing, new Position(30, 40));
+        buffer.Remove<Position>(existing);
+
+        var delta = await buffer.SubmitAndSnapshotAsync();
+
+        var replica = new World();
+        var replicaExisting = replica.Create(new Position(10, 20));
+        replica.Replay(delta!);
+
+        Assert.True(replica.IsAlive(created));
+        Assert.True(replica.TryGet(created, out Velocity cv));
+        Assert.Equal(new Velocity(1, 2), cv);
+
+        Assert.False(replica.TryGet<Position>(replicaExisting, out _));
+    }
+
+    [Fact]
+    public void CrossWorld_replay_create_empty_entity()
+    {
+        var source = new World();
+        var buffer = new CommandBuffer(source);
+        var e = buffer.Create();
+        var delta = buffer.Snapshot();
+
+        var replica = new World();
+        replica.Replay(delta);
+        Assert.True(replica.IsAlive(e));
+        Assert.False(replica.TryGet<Position>(e, out _));
+    }
+
+    [Fact]
+    public void CrossWorld_replay_create_then_destroy_becomes_release()
+    {
+        var source = new World();
+        var buffer = new CommandBuffer(source);
+        var e = buffer.Create();
+        buffer.Add(e, new Position(1, 2));
+        buffer.Destroy(e);
+        var delta = buffer.Snapshot();
+
+        var replica = new World();
+        replica.Replay(delta);
+        Assert.False(replica.IsAlive(e));
+    }
+
+    [Fact]
+    public void CrossWorld_replay_submit_path_produces_same_result_as_source()
+    {
+        var source = new World();
+        var existing = source.Create(new Position(10, 20), new Velocity(5, 6));
+        var buffer = new CommandBuffer(source);
+
+        var created1 = buffer.Create();
+        buffer.Add(created1, new Position(100, 200));
+        buffer.Add(created1, new Velocity(10, 20));
+
+        var created2 = buffer.Create();
+        buffer.Add(created2, new Health(50));
+
+        buffer.Set(existing, new Position(30, 40));
+        buffer.Remove<Velocity>(existing);
+
+        var delta = buffer.Snapshot();
+        buffer.Submit();
+
+        var replica = new World();
+        var replicaExisting = replica.Create(new Position(10, 20), new Velocity(5, 6));
+        replica.Replay(delta);
+
+        Assert.True(replica.IsAlive(created1));
+        Assert.Equal(source.TryGet(created1, out Position _), replica.TryGet(created1, out Position _));
+
+        Assert.True(replica.IsAlive(created2));
+        Assert.True(replica.TryGet(created2, out Health rh));
+        Assert.Equal(new Health(50), rh);
+
+        Assert.True(replica.TryGet(replicaExisting, out Position rep));
+        Assert.Equal(new Position(30, 40), rep);
+        Assert.False(replica.TryGet<Velocity>(replicaExisting, out _));
+    }
+
+    [Fact]
     public async Task SubmitAndSnapshotAsync_mixed_script_scenario()
     {
         var world = new World();
@@ -991,5 +1260,314 @@ public sealed class CommandBufferTests
         Assert.Equal(new Position(12, 22), world.TryGet(entities[2], out Position p2) ? p2 : default);
 
         Assert.True(delta.DeltaCount > 0);
+    }
+
+    private static void AssertEntityStateEquals(World expected, World actual, Entity entity)
+    {
+        Assert.Equal(expected.IsAlive(entity), actual.IsAlive(entity));
+        if (!expected.IsAlive(entity)) return;
+
+        Assert.Equal(expected.TryGet(entity, out Position sp), actual.TryGet(entity, out Position rp));
+        if (expected.TryGet(entity, out sp)) Assert.Equal(sp, rp);
+
+        Assert.Equal(expected.TryGet(entity, out Velocity sv), actual.TryGet(entity, out Velocity rv));
+        if (expected.TryGet(entity, out sv)) Assert.Equal(sv, rv);
+
+        Assert.Equal(expected.TryGet(entity, out Health sh), actual.TryGet(entity, out Health rh));
+        if (expected.TryGet(entity, out sh)) Assert.Equal(sh, rh);
+
+        Assert.Equal(expected.TryGetParent(entity, out var sp2), actual.TryGetParent(entity, out var rp2));
+    }
+
+    [Fact]
+    public void CrossWorld_multi_frame_ordered_replay_produces_identical_world()
+    {
+        var source = new World();
+        var deltas = new List<FrameDelta>();
+        var cb = new CommandBuffer(source);
+        var tracked = new List<Entity>();
+
+        // === Frame 1: seed world with diverse entities ===
+        var a = cb.Create(); cb.Add(a, new Position(1, 2));
+        var b = cb.Create(); cb.Add(b, new Position(3, 4)); cb.Add(b, new Velocity(5, 6));
+        var c = cb.Create();
+        var d = cb.Create(); cb.Add(d, new Health(100));
+        var e = cb.Create(); cb.Add(e, new Position(10, 20)); cb.Add(e, new Velocity(30, 40)); cb.Add(e, new Health(50));
+        cb.Link(a, b);
+        cb.Link(a, c);
+        tracked.AddRange([a, b, c, d, e]);
+        deltas.Add(cb.Snapshot());
+        cb.Submit();
+
+        // === Frame 2: modify existing + create + destroy + link/unlink ===
+        cb.Set(a, new Position(100, 200));
+        cb.Add(a, new Velocity(7, 8));
+        cb.Set(b, new Position(30, 40));
+        cb.Remove<Velocity>(b);
+        cb.Destroy(c);
+        var f = cb.Create(); cb.Add(f, new Position(50, 60));
+        cb.Link(a, f);
+        cb.Unlink(b);
+        tracked.Add(f);
+        deltas.Add(cb.Snapshot());
+        cb.Submit();
+
+        // === Frame 3: create+destroy same frame, re-add component, complex hierarchy ===
+        var ghost = cb.Create(); cb.Add(ghost, new Position(999, 999)); cb.Destroy(ghost);
+        cb.Remove<Health>(e);
+        cb.Add(d, new Position(55, 66));
+        cb.Add(e, new Health(77));
+        cb.Set(f, new Velocity(1, 1));
+        var g = cb.Create();
+        cb.Add(g, new Velocity(9, 10));
+        cb.Link(f, g);
+        tracked.Add(g);
+        deltas.Add(cb.Snapshot());
+        cb.Submit();
+
+        // === Frame 4: component cycling, overwrite via add, destroy leaf ===
+        cb.Remove<Position>(d);
+        cb.Add(d, new Position(88, 99));
+        cb.Set(a, new Velocity(200, 300));
+        cb.Remove<Velocity>(f);
+        cb.Set(e, new Position(111, 222));
+        cb.Add(e, new Velocity(333, 444));
+        cb.Destroy(b);
+        cb.Unlink(g);
+        deltas.Add(cb.Snapshot());
+        cb.Submit();
+
+        // === Frame 5: recycled ID, modify survivors, re-link ===
+        var h = cb.Create(); cb.Add(h, new Position(42, 42)); cb.Add(h, new Health(1));
+        cb.Set(d, new Position(1, 1));
+        cb.Remove<Health>(e);
+        cb.Set(g, new Velocity(100, 200));
+        cb.Link(a, h);
+        cb.Link(a, g);
+        tracked.Add(h);
+        deltas.Add(cb.Snapshot());
+        cb.Submit();
+
+        // === Replay all frames into empty world ===
+        var replica = new World();
+        foreach (var delta in deltas)
+            replica.Replay(delta);
+
+        foreach (var entity in tracked)
+            AssertEntityStateEquals(source, replica, entity);
+
+        // ghost was create+destroy same frame - never alive in either world
+        Assert.False(source.IsAlive(ghost));
+        Assert.False(replica.IsAlive(ghost));
+
+        // entity count parity: count alive entities via query
+        var srcAll = source.Query(new QueryDescription());
+        int srcCount = 0;
+        foreach (ref readonly var chunk in srcAll.Advanced.GetChunkSpan())
+            srcCount += chunk.Count;
+
+        var repAll = replica.Query(new QueryDescription());
+        int repCount = 0;
+        foreach (ref readonly var chunk in repAll.Advanced.GetChunkSpan())
+            repCount += chunk.Count;
+
+        Assert.Equal(srcCount, repCount);
+    }
+
+    [Fact]
+    public void CrossWorld_multi_frame_replay_with_recycled_id_mutation()
+    {
+        var source = new World();
+        var deltas = new List<FrameDelta>();
+        var cb = new CommandBuffer(source);
+
+        // Frame 1: create and immediately destroy
+        var victim = cb.Create(); cb.Add(victim, new Position(1, 2)); cb.Add(victim, new Velocity(3, 4));
+        deltas.Add(cb.Snapshot());
+        cb.Submit();
+
+        // Frame 2: destroy victim, ID goes to free list
+        cb.Destroy(victim);
+        deltas.Add(cb.Snapshot());
+        cb.Submit();
+
+        // Frame 3: new entity reuses victim's ID (different version)
+        var recycled = cb.Create(); cb.Add(recycled, new Health(100));
+        deltas.Add(cb.Snapshot());
+        cb.Submit();
+
+        // Frame 4: mutate recycled entity
+        cb.Add(recycled, new Position(50, 60));
+        cb.Set(recycled, new Health(200));
+        deltas.Add(cb.Snapshot());
+        cb.Submit();
+
+        var replica = new World();
+        foreach (var delta in deltas)
+            replica.Replay(delta);
+
+        Assert.False(replica.IsAlive(victim));
+        Assert.True(replica.IsAlive(recycled));
+        Assert.True(replica.TryGet(recycled, out Health h));
+        Assert.Equal(new Health(200), h);
+        Assert.True(replica.TryGet(recycled, out Position p));
+        Assert.Equal(new Position(50, 60), p);
+        Assert.False(replica.TryGet<Velocity>(recycled, out _));
+    }
+
+    [Fact]
+    public void CrossWorld_multi_frame_replay_hierarchy_evolution()
+    {
+        var source = new World();
+        var deltas = new List<FrameDelta>();
+        var cb = new CommandBuffer(source);
+
+        // Frame 1: create tree A->B->C
+        var a = cb.Create(); cb.Add(a, new Position(1, 1));
+        var b = cb.Create(); cb.Add(b, new Position(2, 2));
+        var c = cb.Create(); cb.Add(c, new Position(3, 3));
+        cb.Link(a, b);
+        cb.Link(b, c);
+        deltas.Add(cb.Snapshot());
+        cb.Submit();
+
+        // Frame 2: unlink B from A, link C directly to A, add D as child of A
+        var d = cb.Create(); cb.Add(d, new Position(4, 4));
+        cb.Unlink(b);
+        cb.Unlink(c);
+        cb.Link(a, c);
+        cb.Link(a, d);
+        deltas.Add(cb.Snapshot());
+        cb.Submit();
+
+        // Frame 3: destroy B (leaf now), verify others survive
+        cb.Destroy(b);
+        deltas.Add(cb.Snapshot());
+        cb.Submit();
+
+        // Frame 4: destroy A (should cascade to C, D)
+        cb.Destroy(a);
+        deltas.Add(cb.Snapshot());
+        cb.Submit();
+
+        var replica = new World();
+        foreach (var delta in deltas)
+            replica.Replay(delta);
+
+        Assert.False(replica.IsAlive(a));
+        Assert.False(replica.IsAlive(b));
+        Assert.False(replica.IsAlive(c));
+        Assert.False(replica.IsAlive(d));
+    }
+
+    [Fact]
+    public void CrossWorld_1000_frame_fuzz_replay_produces_identical_world()
+    {
+        const int Frames = 1000;
+        var seed = (int)DateTime.UtcNow.Ticks;
+        var rng = new Random(seed);
+        try
+        {
+
+        var source = new World();
+        var cb = new CommandBuffer(source);
+        var deltas = new List<FrameDelta>(Frames);
+        var alive = new List<Entity>();
+        var created = new List<Entity>();
+
+        void PruneDead()
+        {
+            for (int i = alive.Count - 1; i >= 0; i--)
+                if (!source.IsAlive(alive[i]))
+                    alive.RemoveAt(i);
+        }
+
+        Entity PickAlive()
+        {
+            return alive[rng.Next(alive.Count)];
+        }
+
+        for (int frame = 0; frame < Frames; frame++)
+        {
+            PruneDead();
+            var opsThisFrame = rng.Next(1, 8);
+
+            for (int op = 0; op < opsThisFrame; op++)
+            {
+                var kind = alive.Count == 0 ? 0 : rng.Next(100);
+                if (kind < 30 || alive.Count == 0)
+                {
+                    var e = cb.Create();
+                    var compCount = rng.Next(4);
+                    if (compCount > 0) cb.Add(e, new Position(rng.Next(), rng.Next()));
+                    if (compCount > 1) cb.Add(e, new Velocity(rng.Next(), rng.Next()));
+                    if (compCount > 2) cb.Add(e, new Health(rng.Next()));
+                    alive.Add(e);
+                    created.Add(e);
+                }
+                else if (kind < 45)
+                {
+                    var e = PickAlive();
+                    cb.Destroy(e);
+                    alive.Remove(e);
+                }
+                else if (kind < 58)
+                {
+                    cb.Set(PickAlive(), new Position(rng.Next(), rng.Next()));
+                }
+                else if (kind < 70)
+                {
+                    cb.Add(PickAlive(), new Velocity(rng.Next(), rng.Next()));
+                }
+                else if (kind < 80)
+                {
+                    cb.Add(PickAlive(), new Health(rng.Next()));
+                }
+                else if (kind < 88)
+                {
+                    cb.Remove<Position>(PickAlive());
+                }
+                else if (kind < 94)
+                {
+                    cb.Remove<Velocity>(PickAlive());
+                }
+                else if (kind < 97 && alive.Count > 1)
+                {
+                    var parent = PickAlive();
+                    var child = PickAlive();
+                    if (parent != child) cb.Link(parent, child);
+                }
+                else
+                {
+                    cb.Unlink(PickAlive());
+                }
+            }
+
+            deltas.Add(cb.Snapshot());
+            cb.Submit();
+        }
+
+        var replica = new World();
+        foreach (var delta in deltas)
+            replica.Replay(delta);
+
+        foreach (var entity in created)
+            AssertEntityStateEquals(source, replica, entity);
+
+        Assert.Equal(CountAllEntities(source), CountAllEntities(replica));
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"Fuzz test failed with seed={seed}. Use this seed to reproduce.", ex);
+        }
+    }
+
+    private static int CountAllEntities(World world)
+    {
+        var q = world.Query(new QueryDescription()).Advanced;
+        int count = 0;
+        foreach (ref readonly var chunk in q.GetChunkSpan())
+            count += chunk.Count;
+        return count;
     }
 }
