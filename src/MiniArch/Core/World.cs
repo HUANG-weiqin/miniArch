@@ -148,7 +148,6 @@ public sealed class World : IDisposable
 
         _entitySlotCount = 0;
         EnsureCapacity(entitySlotCount);
-        EnsureEntityCapacity(entitySlotCount);
         _entitySlotCount = entitySlotCount;
         _versions.AsSpan(0, entitySlotCount).Clear();
         _locations.AsSpan(0, entitySlotCount).Clear();
@@ -1206,15 +1205,10 @@ public sealed class World : IDisposable
         var components = signature.AsSpan();
         for (var index = 0; index < components.Length; index++)
         {
-            bytesPerEntity += GetManagedTypeSize(ComponentRegistry.Shared.GetType(components[index]));
+            bytesPerEntity += ComponentSizeCache.GetSize(ComponentRegistry.Shared.GetType(components[index]));
         }
 
         return bytesPerEntity;
-    }
-
-    private static int GetManagedTypeSize(Type componentType)
-    {
-        return ComponentSizeCache.GetSize(componentType);
     }
 
     private Type[] ResolveComponentTypes(Signature signature)
@@ -1727,29 +1721,14 @@ public sealed class World : IDisposable
         TouchQueryLayout();
     }
 
-    internal void AddBoxed(Entity entity, Type componentType, object? component)
-    {
-        AddBoxed(entity, GetComponentType(componentType), component);
-    }
-
     internal void AddBoxed(Entity entity, ComponentType componentType, object? component)
     {
         ApplyBoxedAddOrSet(entity, componentType, component);
     }
 
-    internal void SetBoxed(Entity entity, Type componentType, object? component)
-    {
-        SetBoxed(entity, GetComponentType(componentType), component);
-    }
-
     internal void SetBoxed(Entity entity, ComponentType componentType, object? component)
     {
         ApplyBoxedAddOrSet(entity, componentType, component);
-    }
-
-    internal void RemoveBoxed(Entity entity, Type componentType)
-    {
-        RemoveBoxed(entity, GetComponentType(componentType));
     }
 
     internal void RemoveBoxed(Entity entity, ComponentType componentType)

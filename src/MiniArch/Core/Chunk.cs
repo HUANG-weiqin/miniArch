@@ -203,16 +203,6 @@ public sealed class Chunk
         _boxedWriters[columnIndex](this, columnIndex, row, value);
     }
 
-    /// <summary>
-    /// Sets a typed component value.
-    /// </summary>
-    internal void SetComponent<T>(ComponentType component, int row, in T value)
-    {
-        ValidateRow(row);
-        var columnIndex = GetComponentIndex(component);
-        SetComponentAtTyped(columnIndex, row, in value);
-    }
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void SetComponentAtTyped<T>(int columnIndex, int row, in T value)
     {
@@ -399,7 +389,7 @@ public sealed class Chunk
         for (var index = 0; index < componentCount; index++)
         {
             ThrowIfManagedComponent(componentTypes[index]);
-            var elementSize = ComponentWriterCache.GetSize(componentTypes[index]);
+            var elementSize = ComponentSizeCache.GetSize(componentTypes[index]);
             totalBytes = AlignUp(totalBytes, Math.Min(elementSize, 8));
             columnByteOffsets[index] = totalBytes;
             elementSizes[index] = elementSize;

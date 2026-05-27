@@ -79,12 +79,6 @@ public class QueryBenchmarks
         return ExecuteMiniComponentQuerySpan(_miniState.WithAllQuery, _miniState.PositionType, _miniState.VelocityType);
     }
 
-    [Benchmark(Description = "MiniArch complex query WithAll components execute warmed span direct")]
-    public int MiniArch_WithAll_Components_Execute_Warmed_Span_Direct()
-    {
-        return ExecuteMiniComponentQuerySpanDirect(_miniState.WithAllQuery, _miniState.PositionType, _miniState.VelocityType);
-    }
-
     [Benchmark(Description = "Arch complex query WithAll components execute warmed span")]
     public int Arch_WithAll_Components_Execute_Warmed_Span()
     {
@@ -301,24 +295,6 @@ public class QueryBenchmarks
     }
 
     private static int ExecuteMiniComponentQuerySpan(MiniQuery query, MiniComponentType positionType, MiniComponentType velocityType)
-    {
-        var checksum = 0;
-        var chunks = query.GetChunkSpan();
-        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
-        {
-            var chunk = chunks[chunkIndex];
-            var positions = chunk.GetComponentSpan<Position>(positionType);
-            var velocities = chunk.GetComponentSpan<Velocity>(velocityType);
-            for (var row = 0; row < positions.Length; row++)
-            {
-                checksum += positions[row].X + velocities[row].Y;
-            }
-        }
-
-        return checksum;
-    }
-
-    private static int ExecuteMiniComponentQuerySpanDirect(MiniQuery query, MiniComponentType positionType, MiniComponentType velocityType)
     {
         var checksum = 0;
         var chunks = query.GetChunkSpan();

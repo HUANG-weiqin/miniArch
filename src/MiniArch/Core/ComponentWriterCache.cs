@@ -24,11 +24,6 @@ internal static unsafe class ComponentWriterCache
         return GenericMethodCache.GetOrInvoke(ColumnWriters, type, CreateColumnWriterMethod);
     }
 
-    internal static int GetSize(Type type)
-    {
-        return ComponentSizeCache.GetSize(type);
-    }
-
     private static ColumnWriterDelegate CreateColumnWriter<T>()
     {
         return (Chunk chunk, int columnIndex, int row, byte* source) =>

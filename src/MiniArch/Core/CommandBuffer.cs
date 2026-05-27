@@ -934,7 +934,7 @@ public sealed class CommandBuffer : ICommandRecorder
             componentType = default;
         }
 
-        var size = runtimeType == typeof(object) ? 0 : ComponentWriterCache.GetSize(runtimeType);
+        var size = runtimeType == typeof(object) ? 0 : ComponentSizeCache.GetSize(runtimeType);
         var writer = runtimeType == typeof(object) ? null! : ComponentWriterCache.GetColumnWriter(runtimeType);
         info = (runtimeType, componentType, size, writer);
         _typeInfoCache.Add(componentTypeId, info);

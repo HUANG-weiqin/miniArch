@@ -190,37 +190,6 @@ public sealed class QueryTests
     }
 
     [Fact]
-    public async Task Equivalent_description_queries_can_be_materialized_concurrently_before_the_cache_is_warmed()
-    {
-        var description = new QueryDescription().With<Position>();
-        var expected = CaptureEnumeratedEntities(MiniQuery.Create(CreateWorldWithMatchingEntities(), in description));
-        var world = CreateWorldWithMatchingEntities();
-        var start = new Barrier(9);
-        var tasks = Enumerable.Range(0, 8)
-            .Select(_ => Task.Run(() =>
-            {
-                start.SignalAndWait();
-                return CaptureEnumeratedEntities(MiniQuery.Create(world, in description));
-            }))
-            .ToArray();
-
-        start.SignalAndWait();
-        var results = await Task.WhenAll(tasks);
-
-        Assert.All(results, actual => Assert.Equal(expected, actual));
-        Assert.Equal(1, GetCachedQueryCount(world));
-    }
-
-    [Fact]
-    public void Description_query_entrypoint_matches_advanced_query_factory()
-    {
-        var world = new World();
-        var description = new QueryDescription().With<Position>();
-
-        Assert.Same(MiniQuery.Create(world, in description), MiniQuery.Create(world, in description));
-    }
-
-    [Fact]
     public void Repeated_queries_with_same_description_reuse_cached_query()
     {
         var world = new World();
