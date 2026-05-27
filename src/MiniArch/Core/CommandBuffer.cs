@@ -15,8 +15,7 @@ public sealed class CommandBuffer : ICommandRecorder
     private const int DefaultSlabSize = 4096;
 
     private readonly World _world;
-    private readonly CommandBufferEntityAllocator _allocator;
-    private ExistingEntityOps[] _opsPool = Array.Empty<ExistingEntityOps>();
+    private InlineMap<int, EntityOpSlot>[] _opsPool = Array.Empty<InlineMap<int, EntityOpSlot>>();
     private Entity[] _opsEntityByPoolIndex = Array.Empty<Entity>();
     private int _opsPoolCount;
     private int[] _opsLookup = Array.Empty<int>();
@@ -42,7 +41,6 @@ public sealed class CommandBuffer : ICommandRecorder
     public CommandBuffer(World world)
     {
         _world = world ?? throw new ArgumentNullException(nameof(world));
-        _allocator = new CommandBufferEntityAllocator(world);
     }
 
     /// <summary>
@@ -50,7 +48,7 @@ public sealed class CommandBuffer : ICommandRecorder
     /// </summary>
     public Entity Create()
     {
-        var entity = _allocator.ReserveEntity();
+        var entity = _world.ReserveDeferredEntity();
 
         if (_createdStatePoolCount >= _createdStatePool.Length)
         {
@@ -109,7 +107,7 @@ public sealed class CommandBuffer : ICommandRecorder
             if (createdIdx >= 0)
             {
                 ref var state = ref _createdStatePool[createdIdx];
-                state.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size));
+                state.Map.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size));
                 return;
             }
         }
@@ -117,7 +115,7 @@ public sealed class CommandBuffer : ICommandRecorder
         var opsIdx = GetOrCreateOpsIndex(entity);
         ref var ops = ref _opsPool[opsIdx];
         var slot = new EntityOpSlot { ComponentTypeId = componentTypeId, Kind = OpKindAdd, AddSetData = new AddSetEntry(info.ComponentType, info.RuntimeType, slabIndex, offset, info.Size, info.Writer) };
-        ops.SetOp(componentTypeId, slot);
+        ops.Set(componentTypeId, slot);
     }
 
     /// <summary>
@@ -135,7 +133,7 @@ public sealed class CommandBuffer : ICommandRecorder
             if (createdIdx >= 0)
             {
                 ref var state = ref _createdStatePool[createdIdx];
-                state.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size));
+                state.Map.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size));
                 return;
             }
         }
@@ -143,7 +141,7 @@ public sealed class CommandBuffer : ICommandRecorder
         var opsIdx = GetOrCreateOpsIndex(entity);
         ref var ops = ref _opsPool[opsIdx];
         var slot = new EntityOpSlot { ComponentTypeId = componentTypeId, Kind = OpKindSet, AddSetData = new AddSetEntry(info.ComponentType, info.RuntimeType, slabIndex, offset, info.Size, info.Writer) };
-        ops.SetOp(componentTypeId, slot);
+        ops.Set(componentTypeId, slot);
     }
 
     /// <summary>
@@ -159,17 +157,17 @@ public sealed class CommandBuffer : ICommandRecorder
             if (createdIdx >= 0)
             {
                 ref var state = ref _createdStatePool[createdIdx];
-                state.Remove(componentTypeId);
+                state.Map.Remove(componentTypeId);
                 return;
             }
         }
 
         var opsIdx = GetOrCreateOpsIndex(entity);
         ref var ops = ref _opsPool[opsIdx];
-        ops.RemoveOp(componentTypeId);
+        ops.Remove(componentTypeId);
         var info = ResolveTypeInfo(componentTypeId);
         var slot = new EntityOpSlot { ComponentTypeId = componentTypeId, Kind = OpKindRemove, RemoveComponentType = info.ComponentType };
-        ops.SetOp(componentTypeId, slot);
+        ops.Set(componentTypeId, slot);
     }
 
     /// <summary>
@@ -283,7 +281,7 @@ public sealed class CommandBuffer : ICommandRecorder
                 {
                     _world.ReleaseReservedEntity(entity);
                 }
-                else if (state.Count == 0 && state.Overflow is null)
+                else if (state.Map.Count == 0 && state.Map.Overflow is null)
                 {
                     _world.MaterializeReservedEntityTrusted(entity, Signature.Empty, Array.Empty<RawComponentValue>());
                 }
@@ -307,10 +305,10 @@ public sealed class CommandBuffer : ICommandRecorder
                 if (existingOps.Count == 0 && existingOps.Overflow is null) continue;
                 var entity = _opsEntityByPoolIndex[i];
 
-                if (existingOps.Count >= 1) ApplyOpDirect(existingOps.Slot0, entity);
-                if (existingOps.Count >= 2) ApplyOpDirect(existingOps.Slot1, entity);
-                if (existingOps.Count >= 3) ApplyOpDirect(existingOps.Slot2, entity);
-                if (existingOps.Count >= 4) ApplyOpDirect(existingOps.Slot3, entity);
+                if (existingOps.Count >= 1) ApplyOpDirect(existingOps.Value0, entity);
+                if (existingOps.Count >= 2) ApplyOpDirect(existingOps.Value1, entity);
+                if (existingOps.Count >= 3) ApplyOpDirect(existingOps.Value2, entity);
+                if (existingOps.Count >= 4) ApplyOpDirect(existingOps.Value3, entity);
                 if (existingOps.Overflow is not null)
                 {
                     foreach (var kv in existingOps.Overflow)
@@ -410,7 +408,7 @@ public sealed class CommandBuffer : ICommandRecorder
         _createdEntityByPoolIndex = Array.Empty<Entity>();
         _createdStateLookup = Array.Empty<int>();
         _maxCreatedEntityId = 0;
-        _opsPool = Array.Empty<ExistingEntityOps>();
+        _opsPool = Array.Empty<InlineMap<int, EntityOpSlot>>();
         _opsPoolCount = 0;
         _opsEntityByPoolIndex = Array.Empty<Entity>();
         _opsLookup = Array.Empty<int>();
@@ -440,14 +438,14 @@ public sealed class CommandBuffer : ICommandRecorder
                 {
                     _world.ReleaseReservedEntity(entity);
                 }
-                else if (state.Count == 0 && state.Overflow is null)
+                else if (state.Map.Count == 0 && state.Map.Overflow is null)
                 {
                     _world.MaterializeReservedEntityTrusted(entity, Signature.Empty, Array.Empty<RawComponentValue>());
                 }
                 else
                 {
                     _tempComponents.Clear();
-                    state.CopyTo(_tempComponents);
+                    state.Map.CopyTo(_tempComponents);
                     var componentCount = _tempComponents.Count;
 
                     var components = ArrayPool<ComponentType>.Shared.Rent(componentCount);
@@ -489,10 +487,10 @@ public sealed class CommandBuffer : ICommandRecorder
                 if (existingOps.Count == 0 && existingOps.Overflow is null) continue;
                 var entity = frozen.OpsEntityByPoolIndex[i];
 
-                ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Slot0, entity);
-                if (existingOps.Count >= 2) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Slot1, entity);
-                if (existingOps.Count >= 3) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Slot2, entity);
-                if (existingOps.Count >= 4) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Slot3, entity);
+                if (existingOps.Count >= 1) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value0, entity);
+                if (existingOps.Count >= 2) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value1, entity);
+                if (existingOps.Count >= 3) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value2, entity);
+                if (existingOps.Count >= 4) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value3, entity);
                 if (existingOps.Overflow is not null)
                 {
                     foreach (var kv in existingOps.Overflow)
@@ -564,7 +562,7 @@ public sealed class CommandBuffer : ICommandRecorder
             {
                 delta.ReleasedEntities.Add(entity);
             }
-            else if (state.Count == 0 && state.Overflow is null)
+            else if (state.Map.Count == 0 && state.Map.Overflow is null)
             {
                 delta.CreatedEntities.Add(new RawCreatedEntity(entity, Signature.Empty, Array.Empty<RawComponentValue>()));
             }
@@ -600,10 +598,10 @@ public sealed class CommandBuffer : ICommandRecorder
             if (existingOps.Count == 0 && existingOps.Overflow is null) continue;
             var entity = frozen.OpsEntityByPoolIndex[i];
 
-            EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in existingOps.Slot0, entity, delta);
-            if (existingOps.Count >= 2) EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in existingOps.Slot1, entity, delta);
-            if (existingOps.Count >= 3) EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in existingOps.Slot2, entity, delta);
-            if (existingOps.Count >= 4) EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in existingOps.Slot3, entity, delta);
+            EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in existingOps.Value0, entity, delta);
+            if (existingOps.Count >= 2) EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in existingOps.Value1, entity, delta);
+            if (existingOps.Count >= 3) EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in existingOps.Value2, entity, delta);
+            if (existingOps.Count >= 4) EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in existingOps.Value3, entity, delta);
             if (existingOps.Overflow is not null)
             {
                 foreach (var kv in existingOps.Overflow)
@@ -629,52 +627,59 @@ public sealed class CommandBuffer : ICommandRecorder
         return delta;
     }
 
+    private static (ComponentType[] Types, CreatedComponent[] Sources, int Count) ExtractAndSortComponents(
+        in CreatedState state)
+    {
+        var count = state.Map.Count;
+        if (state.Map.Overflow is not null) count += state.Map.Overflow.Count;
+
+        var types = ArrayPool<ComponentType>.Shared.Rent(count);
+        var sources = ArrayPool<CreatedComponent>.Shared.Rent(count);
+
+        var idx = 0;
+        if (state.Map.Count >= 1) { sources[idx] = state.Map.Value0; types[idx] = state.Map.Value0.ComponentType; idx++; }
+        if (state.Map.Count >= 2) { sources[idx] = state.Map.Value1; types[idx] = state.Map.Value1.ComponentType; idx++; }
+        if (state.Map.Count >= 3) { sources[idx] = state.Map.Value2; types[idx] = state.Map.Value2.ComponentType; idx++; }
+        if (state.Map.Count >= 4) { sources[idx] = state.Map.Value3; types[idx] = state.Map.Value3.ComponentType; idx++; }
+        if (state.Map.Overflow is not null)
+        {
+            foreach (var kv in state.Map.Overflow)
+            {
+                sources[idx] = kv.Value;
+                types[idx] = kv.Value.ComponentType;
+                idx++;
+            }
+        }
+
+        Array.Sort(types, sources, 0, idx);
+        return (types, sources, idx);
+    }
+
+    private static void ReturnExtracted(ComponentType[] types, CreatedComponent[] sources)
+    {
+        ArrayPool<CreatedComponent>.Shared.Return(sources);
+        ArrayPool<ComponentType>.Shared.Return(types);
+    }
+
     private static (Signature Signature, RawComponentValue[] Components) BuildCreatedEntityComponentsFromFrozen(
         in CreatedState state, List<byte[]> slabs)
     {
-        var componentCount = state.Count;
-        if (state.Overflow is not null) componentCount += state.Overflow.Count;
-
-        var types = ArrayPool<ComponentType>.Shared.Rent(componentCount);
-        var sources = ArrayPool<CreatedComponent>.Shared.Rent(componentCount);
-        var typeIdAndComp = ArrayPool<(int ComponentTypeId, CreatedComponent Component)>.Shared.Rent(componentCount);
+        var (types, sources, count) = ExtractAndSortComponents(in state);
         try
         {
-            var idx = 0;
-            if (state.Count >= 1) typeIdAndComp[idx++] = (state.ComponentTypeId0, state.Component0);
-            if (state.Count >= 2) typeIdAndComp[idx++] = (state.ComponentTypeId1, state.Component1);
-            if (state.Count >= 3) typeIdAndComp[idx++] = (state.ComponentTypeId2, state.Component2);
-            if (state.Count >= 4) typeIdAndComp[idx++] = (state.ComponentTypeId3, state.Component3);
-            if (state.Overflow is not null)
-            {
-                foreach (var kv in state.Overflow)
-                    typeIdAndComp[idx++] = (kv.Key, kv.Value);
-            }
-
-            for (var i = 0; i < idx; i++)
-            {
-                sources[i] = typeIdAndComp[i].Component;
-                types[i] = typeIdAndComp[i].Component.ComponentType;
-            }
-
-            Array.Sort(types, sources, 0, idx);
-
-            var rawComponents = new RawComponentValue[idx];
-            var signatureComponents = new ComponentType[idx];
-            for (var i = 0; i < idx; i++)
+            var rawComponents = new RawComponentValue[count];
+            var signatureComponents = new ComponentType[count];
+            for (var i = 0; i < count; i++)
             {
                 var sc = sources[i];
                 rawComponents[i] = new RawComponentValue(sc.ComponentType.Value, sc.RuntimeType, sc.ComponentType, slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
                 signatureComponents[i] = sc.ComponentType;
             }
-
             return (Signature.CreateNormalized(signatureComponents), rawComponents);
         }
         finally
         {
-            ArrayPool<(int, CreatedComponent)>.Shared.Return(typeIdAndComp);
-            ArrayPool<CreatedComponent>.Shared.Return(sources);
-            ArrayPool<ComponentType>.Shared.Return(types);
+            ReturnExtracted(types, sources);
         }
     }
 
@@ -721,74 +726,44 @@ public sealed class CommandBuffer : ICommandRecorder
 
     private (Archetype Archetype, RawComponentValue[] Components, int Count) BuildCreatedEntityComponents(in CreatedState state)
     {
-        _tempComponents.Clear();
-        state.CopyTo(_tempComponents);
-        var componentCount = _tempComponents.Count;
-
-        var components = ArrayPool<ComponentType>.Shared.Rent(componentCount);
-        var sourceComponents = ArrayPool<CreatedComponent>.Shared.Rent(componentCount);
-        var rawComponents = ArrayPool<RawComponentValue>.Shared.Rent(componentCount);
+        var (types, sources, count) = ExtractAndSortComponents(in state);
         try
         {
-            for (var i = 0; i < componentCount; i++)
-            {
-                sourceComponents[i] = _tempComponents[i].Component;
-                components[i] = _tempComponents[i].Component.ComponentType;
-            }
-
-            Array.Sort(components, sourceComponents, 0, componentCount);
-
-            var key = new World.CreateArchetypeKey(components.AsSpan(0, componentCount));
+            var key = new World.CreateArchetypeKey(types.AsSpan(0, count));
             var archetype = _world.GetOrCreateArchetype(key);
 
-            for (var i = 0; i < componentCount; i++)
+            var rawComponents = ArrayPool<RawComponentValue>.Shared.Rent(count);
+            for (var i = 0; i < count; i++)
             {
-                var sc = sourceComponents[i];
-                rawComponents[i] = new RawComponentValue(ComponentsTypeToId(sc.ComponentType), sc.RuntimeType, sc.ComponentType, _slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
+                var sc = sources[i];
+                rawComponents[i] = new RawComponentValue(sc.ComponentType.Value, sc.RuntimeType, sc.ComponentType, _slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
             }
-
-            return (archetype, rawComponents, componentCount);
+            return (archetype, rawComponents, count);
         }
         finally
         {
-            ArrayPool<CreatedComponent>.Shared.Return(sourceComponents);
-            ArrayPool<ComponentType>.Shared.Return(components);
+            ReturnExtracted(types, sources);
         }
     }
 
     private (Signature Signature, RawComponentValue[] Components) BuildCreatedEntityComponentsForDelta(in CreatedState state)
     {
-        _tempComponents.Clear();
-        state.CopyTo(_tempComponents);
-        var componentCount = _tempComponents.Count;
-
-        var components = ArrayPool<ComponentType>.Shared.Rent(componentCount);
-        var sourceComponents = ArrayPool<CreatedComponent>.Shared.Rent(componentCount);
+        var (types, sources, count) = ExtractAndSortComponents(in state);
         try
         {
-            for (var i = 0; i < componentCount; i++)
+            var rawComponents = new RawComponentValue[count];
+            var signatureComponents = new ComponentType[count];
+            for (var i = 0; i < count; i++)
             {
-                sourceComponents[i] = _tempComponents[i].Component;
-                components[i] = _tempComponents[i].Component.ComponentType;
-            }
-
-            Array.Sort(components, sourceComponents, 0, componentCount);
-
-            var rawComponents = new RawComponentValue[componentCount];
-            var signatureComponents = new ComponentType[componentCount];
-            for (var i = 0; i < componentCount; i++)
-            {
-                var sc = sourceComponents[i];
-                rawComponents[i] = new RawComponentValue(ComponentsTypeToId(sc.ComponentType), sc.RuntimeType, sc.ComponentType, _slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
+                var sc = sources[i];
+                rawComponents[i] = new RawComponentValue(sc.ComponentType.Value, sc.RuntimeType, sc.ComponentType, _slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
                 signatureComponents[i] = sc.ComponentType;
             }
-
             return (Signature.CreateNormalized(signatureComponents), rawComponents);
         }
         finally
         {
-            ArrayPool<CreatedComponent>.Shared.Return(sourceComponents);
-            ArrayPool<ComponentType>.Shared.Return(components);
+            ReturnExtracted(types, sources);
         }
     }
 
@@ -822,7 +797,7 @@ public sealed class CommandBuffer : ICommandRecorder
             {
                 delta.ReleasedEntities.Add(entity);
             }
-            else if (state.Count == 0 && state.Overflow is null)
+            else if (state.Map.Count == 0 && state.Map.Overflow is null)
             {
                 delta.CreatedEntities.Add(new RawCreatedEntity(entity, Signature.Empty, Array.Empty<RawComponentValue>()));
             }
@@ -865,10 +840,10 @@ public sealed class CommandBuffer : ICommandRecorder
             if (existingOps.Count == 0 && existingOps.Overflow is null) continue;
             var entity = _opsEntityByPoolIndex[i];
 
-            if (existingOps.Count >= 1) EmitOp(in existingOps.Slot0, entity, delta);
-            if (existingOps.Count >= 2) EmitOp(in existingOps.Slot1, entity, delta);
-            if (existingOps.Count >= 3) EmitOp(in existingOps.Slot2, entity, delta);
-            if (existingOps.Count >= 4) EmitOp(in existingOps.Slot3, entity, delta);
+            if (existingOps.Count >= 1) EmitOp(in existingOps.Value0, entity, delta);
+            if (existingOps.Count >= 2) EmitOp(in existingOps.Value1, entity, delta);
+            if (existingOps.Count >= 3) EmitOp(in existingOps.Value2, entity, delta);
+            if (existingOps.Count >= 4) EmitOp(in existingOps.Value3, entity, delta);
             if (existingOps.Overflow is not null)
             {
                 foreach (var kv in existingOps.Overflow)
@@ -890,8 +865,7 @@ public sealed class CommandBuffer : ICommandRecorder
         _existingDestroyCount = 0;
         for (int i = 0; i < _opsPoolCount; i++)
         {
-            _opsPool[i].Overflow?.Clear();
-            _opsPool[i] = default;
+            _opsPool[i].Clear();
         }
         for (int i = 0; i < _maxOpsEntityId; i++)
         {
@@ -901,8 +875,7 @@ public sealed class CommandBuffer : ICommandRecorder
         _maxOpsEntityId = 0;
         for (int i = 0; i < _createdStatePoolCount; i++)
         {
-            _createdStatePool[i].Overflow?.Clear();
-            _createdStatePool[i] = default;
+            _createdStatePool[i].Map.Clear();
         }
 
         for (int i = 0; i < _maxCreatedEntityId; i++)
@@ -974,12 +947,6 @@ public sealed class CommandBuffer : ICommandRecorder
         return Component<T>.ComponentType.Value;
     }
 
-    private int ComponentsTypeToId(ComponentType componentType)
-    {
-        return componentType.Value;
-    }
-
-    private const byte OpKindNone = 0;
     private const byte OpKindAdd = 1;
     private const byte OpKindSet = 2;
     private const byte OpKindRemove = 3;
@@ -1052,7 +1019,7 @@ public sealed class CommandBuffer : ICommandRecorder
         if (_opsPoolCount >= _opsPool.Length)
         {
             var newSize = _opsPool.Length == 0 ? 64 : _opsPool.Length * 2;
-            var newPool = new ExistingEntityOps[newSize];
+            var newPool = new InlineMap<int, EntityOpSlot>[newSize];
             var newEntities = new Entity[newSize];
             if (_opsPoolCount > 0)
             {
@@ -1076,67 +1043,6 @@ public sealed class CommandBuffer : ICommandRecorder
         public byte Kind;
         public AddSetEntry AddSetData;
         public ComponentType RemoveComponentType;
-    }
-
-    private struct ExistingEntityOps
-    {
-        public int Count;
-        public EntityOpSlot Slot0;
-        public EntityOpSlot Slot1;
-        public EntityOpSlot Slot2;
-        public EntityOpSlot Slot3;
-        public Dictionary<int, EntityOpSlot>? Overflow;
-
-        public void SetOp(int componentTypeId, EntityOpSlot slot)
-        {
-            if (Count >= 1 && Slot0.ComponentTypeId == componentTypeId) { Slot0 = slot; return; }
-            if (Count >= 2 && Slot1.ComponentTypeId == componentTypeId) { Slot1 = slot; return; }
-            if (Count >= 3 && Slot2.ComponentTypeId == componentTypeId) { Slot2 = slot; return; }
-            if (Count >= 4 && Slot3.ComponentTypeId == componentTypeId) { Slot3 = slot; return; }
-
-            switch (Count)
-            {
-                case 0: Slot0 = slot; Count = 1; return;
-                case 1: Slot1 = slot; Count = 2; return;
-                case 2: Slot2 = slot; Count = 3; return;
-                case 3: Slot3 = slot; Count = 4; return;
-                default:
-                    Overflow ??= new Dictionary<int, EntityOpSlot>(4);
-                    Overflow[componentTypeId] = slot;
-                    return;
-            }
-        }
-
-        public bool RemoveOp(int componentTypeId)
-        {
-            if (Count >= 1 && Slot0.ComponentTypeId == componentTypeId) { RemoveOpAt(0); return true; }
-            if (Count >= 2 && Slot1.ComponentTypeId == componentTypeId) { RemoveOpAt(1); return true; }
-            if (Count >= 3 && Slot2.ComponentTypeId == componentTypeId) { RemoveOpAt(2); return true; }
-            if (Count >= 4 && Slot3.ComponentTypeId == componentTypeId) { RemoveOpAt(3); return true; }
-            if (Overflow is not null) return Overflow.Remove(componentTypeId);
-            return false;
-        }
-
-        private void RemoveOpAt(int index)
-        {
-            var last = Count - 1;
-            switch (index)
-            {
-                case 0:
-                    if (last >= 1) { Slot0 = Slot1; }
-                    if (last >= 2) { Slot1 = Slot2; }
-                    if (last >= 3) { Slot2 = Slot3; }
-                    break;
-                case 1:
-                    if (last >= 2) { Slot1 = Slot2; }
-                    if (last >= 3) { Slot2 = Slot3; }
-                    break;
-                case 2:
-                    if (last >= 3) { Slot2 = Slot3; }
-                    break;
-            }
-            Count = last;
-        }
     }
 
     private readonly record struct HierarchyIntent(bool IsLinked, Entity Parent);
@@ -1163,103 +1069,8 @@ public sealed class CommandBuffer : ICommandRecorder
 
     private struct CreatedState
     {
-        public int Count;
-        public int ComponentTypeId0;
-        public CreatedComponent Component0;
-        public int ComponentTypeId1;
-        public CreatedComponent Component1;
-        public int ComponentTypeId2;
-        public CreatedComponent Component2;
-        public int ComponentTypeId3;
-        public CreatedComponent Component3;
-        public Dictionary<int, CreatedComponent>? Overflow;
+        public InlineMap<int, CreatedComponent> Map;
         public bool Destroyed;
-
-        public void Set(int componentTypeId, CreatedComponent component)
-        {
-            switch (Count)
-            {
-                case 0: ComponentTypeId0 = componentTypeId; Component0 = component; Count = 1; return;
-                case 1 when ComponentTypeId0 == componentTypeId: Component0 = component; return;
-                case 1: ComponentTypeId1 = componentTypeId; Component1 = component; Count = 2; return;
-                case 2 when ComponentTypeId0 == componentTypeId: Component0 = component; return;
-                case 2 when ComponentTypeId1 == componentTypeId: Component1 = component; return;
-                case 2: ComponentTypeId2 = componentTypeId; Component2 = component; Count = 3; return;
-                case 3 when ComponentTypeId0 == componentTypeId: Component0 = component; return;
-                case 3 when ComponentTypeId1 == componentTypeId: Component1 = component; return;
-                case 3 when ComponentTypeId2 == componentTypeId: Component2 = component; return;
-                case 3: ComponentTypeId3 = componentTypeId; Component3 = component; Count = 4; return;
-                default:
-                    if (Count <= 4)
-                    {
-                        if (ComponentTypeId0 == componentTypeId) { Component0 = component; return; }
-                        if (ComponentTypeId1 == componentTypeId) { Component1 = component; return; }
-                        if (ComponentTypeId2 == componentTypeId) { Component2 = component; return; }
-                        if (ComponentTypeId3 == componentTypeId) { Component3 = component; return; }
-                        Count = 5;
-                    }
-
-                    Overflow ??= new Dictionary<int, CreatedComponent>(4);
-                    Overflow[componentTypeId] = component;
-                    return;
-            }
-        }
-
-        public bool TryGetValue(int componentTypeId, out CreatedComponent component)
-        {
-            if (Count >= 1 && ComponentTypeId0 == componentTypeId) { component = Component0; return true; }
-            if (Count >= 2 && ComponentTypeId1 == componentTypeId) { component = Component1; return true; }
-            if (Count >= 3 && ComponentTypeId2 == componentTypeId) { component = Component2; return true; }
-            if (Count >= 4 && ComponentTypeId3 == componentTypeId) { component = Component3; return true; }
-            if (Overflow is not null) return Overflow.TryGetValue(componentTypeId, out component);
-            component = default;
-            return false;
-        }
-
-        public bool Remove(int componentTypeId)
-        {
-            if (Count >= 1 && ComponentTypeId0 == componentTypeId) { RemoveAt(0); return true; }
-            if (Count >= 2 && ComponentTypeId1 == componentTypeId) { RemoveAt(1); return true; }
-            if (Count >= 3 && ComponentTypeId2 == componentTypeId) { RemoveAt(2); return true; }
-            if (Count >= 4 && ComponentTypeId3 == componentTypeId) { RemoveAt(3); return true; }
-            if (Overflow is not null) return Overflow.Remove(componentTypeId);
-            return false;
-        }
-
-        private void RemoveAt(int index)
-        {
-            var last = Count - 1;
-            switch (index)
-            {
-                case 0:
-                    if (last >= 1) { ComponentTypeId0 = ComponentTypeId1; Component0 = Component1; }
-                    if (last >= 2) { ComponentTypeId1 = ComponentTypeId2; Component1 = Component2; }
-                    if (last >= 3) { ComponentTypeId2 = ComponentTypeId3; Component2 = Component3; }
-                    break;
-                case 1:
-                    if (last >= 2) { ComponentTypeId1 = ComponentTypeId2; Component1 = Component2; }
-                    if (last >= 3) { ComponentTypeId2 = ComponentTypeId3; Component2 = Component3; }
-                    break;
-                case 2:
-                    if (last >= 3) { ComponentTypeId2 = ComponentTypeId3; Component2 = Component3; }
-                    break;
-            }
-
-            Count = last;
-        }
-
-        public void CopyTo(List<(int ComponentTypeId, CreatedComponent Component)> target)
-        {
-            if (Count >= 1) target.Add((ComponentTypeId0, Component0));
-            if (Count >= 2) target.Add((ComponentTypeId1, Component1));
-            if (Count >= 3) target.Add((ComponentTypeId2, Component2));
-            if (Count >= 4) target.Add((ComponentTypeId3, Component3));
-            if (Overflow is not null)
-            {
-                foreach (var kv in Overflow)
-                    target.Add((kv.Key, kv.Value));
-            }
-        }
     }
 
     private readonly record struct CreatedComponent(Type RuntimeType, ComponentType ComponentType, int SlabIndex, int DataOffset, int DataSize);
@@ -1272,7 +1083,7 @@ public sealed class CommandBuffer : ICommandRecorder
         public int[] CreatedStateLookup = null!;
         public int MaxCreatedEntityId;
 
-        public ExistingEntityOps[] OpsPool = null!;
+        public InlineMap<int, EntityOpSlot>[] OpsPool = null!;
         public int OpsPoolCount;
         public Entity[] OpsEntityByPoolIndex = null!;
         public int[] OpsLookup = null!;

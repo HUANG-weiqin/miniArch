@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
@@ -12,6 +13,12 @@ public sealed class Chunk
     private static readonly ConcurrentDictionary<Type, bool> ManagedReferenceCache = new();
     private static readonly ConcurrentDictionary<Type, BoxedReaderDelegate> BoxedReaders = new();
     private static readonly ConcurrentDictionary<Type, BoxedWriterDelegate> BoxedWriters = new();
+    private static readonly MethodInfo ContainsManagedMethod = typeof(Chunk)
+        .GetMethod(nameof(ContainsManagedReferences), BindingFlags.Static | BindingFlags.NonPublic)!;
+    private static readonly MethodInfo CreateBoxedReaderMethod = typeof(Chunk)
+        .GetMethod(nameof(CreateBoxedReader), BindingFlags.Static | BindingFlags.NonPublic)!;
+    private static readonly MethodInfo CreateBoxedWriterMethod = typeof(Chunk)
+        .GetMethod(nameof(CreateBoxedWriter), BindingFlags.Static | BindingFlags.NonPublic)!;
 
     private readonly Signature _signature;
     private readonly Entity[] _entities;
@@ -426,13 +433,7 @@ public sealed class Chunk
 
     private static void ThrowIfManagedComponent(Type type)
     {
-        if (!ManagedReferenceCache.GetOrAdd(type, static componentType =>
-        {
-            return (bool)typeof(Chunk)
-                .GetMethod(nameof(ContainsManagedReferences), System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
-                .MakeGenericMethod(componentType)
-                .Invoke(null, null)!;
-        }))
+        if (!GenericMethodCache.GetOrInvoke(ManagedReferenceCache, type, ContainsManagedMethod))
         {
             return;
         }
@@ -518,24 +519,12 @@ public sealed class Chunk
 
     private static BoxedReaderDelegate GetBoxedReader(Type type)
     {
-        return BoxedReaders.GetOrAdd(type, static t =>
-        {
-            var method = typeof(Chunk)
-                .GetMethod(nameof(CreateBoxedReader), System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
-                .MakeGenericMethod(t);
-            return (BoxedReaderDelegate)method.Invoke(null, null)!;
-        });
+        return GenericMethodCache.GetOrInvoke(BoxedReaders, type, CreateBoxedReaderMethod);
     }
 
     private static BoxedWriterDelegate GetBoxedWriter(Type type)
     {
-        return BoxedWriters.GetOrAdd(type, static t =>
-        {
-            var method = typeof(Chunk)
-                .GetMethod(nameof(CreateBoxedWriter), System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
-                .MakeGenericMethod(t);
-            return (BoxedWriterDelegate)method.Invoke(null, null)!;
-        });
+        return GenericMethodCache.GetOrInvoke(BoxedWriters, type, CreateBoxedWriterMethod);
     }
 
     private static BoxedReaderDelegate CreateBoxedReader<T>()

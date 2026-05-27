@@ -1,8 +1,6 @@
 using System.Buffers;
-using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.Threading;
-using System.Reflection;
 using System.Runtime.CompilerServices;
 
 using MiniArch.Core;
@@ -20,11 +18,7 @@ public sealed class World : IDisposable
     private const int AdaptiveChunkTargetBytes = 16 * 1024;
     private const int AdaptiveMaxChunkCapacity = 1024;
     private const int StackAllocatedBatchRangeLimit = 128;
-    private static readonly ConcurrentDictionary<Type, int> ManagedTypeSizeCache = new();
-    private static readonly MethodInfo GetManagedTypeSizeMethod = typeof(World)
-        .GetMethod(nameof(GetManagedTypeSizeGeneric), BindingFlags.Static | BindingFlags.NonPublic)
-        ?? throw new InvalidOperationException("Unable to find managed type size helper.");
-    private static readonly int EntitySizeInBytes = GetManagedTypeSizeGeneric<Entity>();
+    private static readonly int EntitySizeInBytes = Unsafe.SizeOf<Entity>();
 
     private readonly Dictionary<Signature, Archetype> _archetypes = new();
     private readonly Dictionary<CreateArchetypeKey, Archetype> _createArchetypeCache = new();
@@ -934,12 +928,28 @@ public sealed class World : IDisposable
         return WorldClone.Clone(this);
     }
 
-    private void MoveEntity(Entity entity, EntityLocation sourceInfo, Archetype destination)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void MoveEntityCore(
+        Entity entity,
+        EntityLocation sourceInfo,
+        Archetype destination,
+        out Chunk destinationChunk,
+        out int destinationChunkIndex,
+        out int destinationRowIndex)
     {
         var sourceChunk = sourceInfo.Archetype.GetChunk(sourceInfo.ChunkIndex);
-        var destinationChunk = destination.ReserveEntity(entity, out var destinationChunkIndex, out var destinationRowIndex);
+        destinationChunk = destination.ReserveEntity(entity, out destinationChunkIndex, out destinationRowIndex);
         destinationChunk.CopySharedComponentsFrom(sourceChunk, sourceInfo.RowIndex, destinationRowIndex);
+    }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void FinishMoveEntity(
+        Entity entity,
+        EntityLocation sourceInfo,
+        Archetype destination,
+        int destinationChunkIndex,
+        int destinationRowIndex)
+    {
         sourceInfo.Archetype.RemoveEntity(sourceInfo.ChunkIndex, sourceInfo.RowIndex, out var movedEntity);
 
         if (movedEntity.IsValid)
@@ -949,46 +959,26 @@ public sealed class World : IDisposable
 
         _locations[entity.Id] = new EntityLocation(destination, destinationChunkIndex, destinationRowIndex);
         TouchQueryLayout();
+    }
+
+    private void MoveEntity(Entity entity, EntityLocation sourceInfo, Archetype destination)
+    {
+        MoveEntityCore(entity, sourceInfo, destination, out _, out var chunkIdx, out var rowIdx);
+        FinishMoveEntity(entity, sourceInfo, destination, chunkIdx, rowIdx);
     }
 
     private void MoveEntity<T>(Entity entity, EntityLocation sourceInfo, Archetype destination, ComponentType componentType, in T componentValue)
     {
-        var sourceChunk = sourceInfo.Archetype.GetChunk(sourceInfo.ChunkIndex);
-        var destinationChunk = destination.ReserveEntity(entity, out var destinationChunkIndex, out var destinationRowIndex);
-        destinationChunk.CopySharedComponentsFrom(sourceChunk, sourceInfo.RowIndex, destinationRowIndex);
-
-        var destinationColumnIndex = destination.GetComponentIndex(componentType);
-        destinationChunk.SetComponentAtTyped(destinationColumnIndex, destinationRowIndex, in componentValue);
-
-        sourceInfo.Archetype.RemoveEntity(sourceInfo.ChunkIndex, sourceInfo.RowIndex, out var movedEntity);
-
-        if (movedEntity.IsValid)
-        {
-            _locations[movedEntity.Id] = sourceInfo;
-        }
-
-        _locations[entity.Id] = new EntityLocation(destination, destinationChunkIndex, destinationRowIndex);
-        TouchQueryLayout();
+        MoveEntityCore(entity, sourceInfo, destination, out var destChunk, out var chunkIdx, out var rowIdx);
+        destChunk.SetComponentAtTyped(destination.GetComponentIndex(componentType), rowIdx, in componentValue);
+        FinishMoveEntity(entity, sourceInfo, destination, chunkIdx, rowIdx);
     }
 
     private void MoveEntityBoxed(Entity entity, EntityLocation sourceInfo, Archetype destination, ComponentType componentType, object? componentValue)
     {
-        var sourceChunk = sourceInfo.Archetype.GetChunk(sourceInfo.ChunkIndex);
-        var destinationChunk = destination.ReserveEntity(entity, out var destinationChunkIndex, out var destinationRowIndex);
-        destinationChunk.CopySharedComponentsFrom(sourceChunk, sourceInfo.RowIndex, destinationRowIndex);
-
-        var destinationColumnIndex = destination.GetComponentIndex(componentType);
-        destinationChunk.SetComponent(componentType, destinationRowIndex, componentValue);
-
-        sourceInfo.Archetype.RemoveEntity(sourceInfo.ChunkIndex, sourceInfo.RowIndex, out var movedEntity);
-
-        if (movedEntity.IsValid)
-        {
-            _locations[movedEntity.Id] = sourceInfo;
-        }
-
-        _locations[entity.Id] = new EntityLocation(destination, destinationChunkIndex, destinationRowIndex);
-        TouchQueryLayout();
+        MoveEntityCore(entity, sourceInfo, destination, out var destChunk, out var chunkIdx, out var rowIdx);
+        destChunk.SetComponent(componentType, rowIdx, componentValue);
+        FinishMoveEntity(entity, sourceInfo, destination, chunkIdx, rowIdx);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1076,21 +1066,9 @@ public sealed class World : IDisposable
         byte* source,
         ComponentWriterCache.ColumnWriterDelegate? columnWriter)
     {
-        var sourceChunk = sourceInfo.Archetype.GetChunk(sourceInfo.ChunkIndex);
-        var destinationChunk = destination.ReserveEntity(entity, out var destinationChunkIndex, out var destinationRowIndex);
-        destinationChunk.CopySharedComponentsFrom(sourceChunk, sourceInfo.RowIndex, destinationRowIndex);
-
-        WriteComponentFromBytes(destinationChunk, componentType, destinationRowIndex, source, columnWriter);
-
-        sourceInfo.Archetype.RemoveEntity(sourceInfo.ChunkIndex, sourceInfo.RowIndex, out var movedEntity);
-
-        if (movedEntity.IsValid)
-        {
-            _locations[movedEntity.Id] = sourceInfo;
-        }
-
-        _locations[entity.Id] = new EntityLocation(destination, destinationChunkIndex, destinationRowIndex);
-        TouchQueryLayout();
+        MoveEntityCore(entity, sourceInfo, destination, out var destChunk, out var chunkIdx, out var rowIdx);
+        WriteComponentFromBytes(destChunk, componentType, rowIdx, source, columnWriter);
+        FinishMoveEntity(entity, sourceInfo, destination, chunkIdx, rowIdx);
     }
 
     private Archetype GetOrCreateAddDestinationArchetype(Archetype source, ComponentType componentType)
@@ -1155,17 +1133,7 @@ public sealed class World : IDisposable
             return GetOrCreateArchetype(Signature.Empty);
         }
 
-        components.Sort();
-        var uniqueCount = 1;
-        for (var index = 1; index < components.Length; index++)
-        {
-            if (components[index] == components[uniqueCount - 1])
-            {
-                continue;
-            }
-
-            components[uniqueCount++] = components[index];
-        }
+        var uniqueCount = SpanHelper.SortAndDeduplicate(components);
 
         var normalized = components[..uniqueCount];
         var key = new CreateArchetypeKey(normalized);
@@ -1246,17 +1214,7 @@ public sealed class World : IDisposable
 
     private static int GetManagedTypeSize(Type componentType)
     {
-        return ManagedTypeSizeCache.GetOrAdd(componentType, static type =>
-        {
-            return (int)GetManagedTypeSizeMethod
-                .MakeGenericMethod(type)
-                .Invoke(null, null)!;
-        });
-    }
-
-    private static int GetManagedTypeSizeGeneric<T>()
-    {
-        return Unsafe.SizeOf<T>();
+        return ComponentSizeCache.GetSize(componentType);
     }
 
     private Type[] ResolveComponentTypes(Signature signature)
@@ -1619,137 +1577,81 @@ public sealed class World : IDisposable
         PushFreeId(entity.Id, nextVersion);
     }
 
-    /// <summary>
-    /// Applies a compiled frame delta to this world.
-    /// </summary>
-    public void Replay(FrameDelta delta)
+    public void Replay(FrameDelta delta) => ReplayCore(delta, trusted: false);
+
+    internal void ReplayTrusted(FrameDelta delta) => ReplayCore(delta, trusted: true);
+
+    private void ReplayCore(FrameDelta delta, bool trusted)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(delta);
 
-        var componentTypeCache = _replayComponentTypeScratch;
-        componentTypeCache.Clear();
-
-        BeginDeferredLayoutUpdates();
-        try
+        Dictionary<Type, ComponentType>? componentTypeCache = null;
+        if (!trusted)
         {
-            foreach (var reserved in delta.ReservedEntities)
-            {
-                EnsureReplayReservation(reserved);
-            }
-
-            foreach (var released in delta.ReleasedEntities)
-            {
-                ReleaseReservedEntity(released);
-            }
-
-            foreach (var created in delta.CreatedEntities)
-            {
-                MaterializeReservedEntity(created.Entity, created.Components, componentTypeCache, reservationChecked: true);
-            }
-
-            foreach (var link in delta.LinkCommands)
-            {
-                Link(link.Parent, link.Child);
-            }
-
-            foreach (var unlink in delta.UnlinkCommands)
-            {
-                Unlink(unlink.Child);
-            }
-
-            unsafe
-            {
-                foreach (var add in delta.AddCommands)
-                {
-                    var resolved = ResolveCompiledComponentType(add.RuntimeType, add.ComponentType, componentTypeCache);
-                    ApplyRawAddOrSet(add.Entity, resolved, add.RuntimeType, add.Data, add.DataOffset, add.ColumnWriter);
-                }
-
-                foreach (var set in delta.SetCommands)
-                {
-                    var resolved = ResolveCompiledComponentType(set.RuntimeType, set.ComponentType, componentTypeCache);
-                    ApplyRawAddOrSet(set.Entity, resolved, set.RuntimeType, set.Data, set.DataOffset, set.ColumnWriter);
-                }
-            }
-
-            foreach (var remove in delta.RemoveCommands)
-            {
-                var resolved = ResolveCompiledComponentType(remove.RuntimeType, remove.ComponentType, componentTypeCache);
-                RemoveBoxed(remove.Entity, resolved);
-            }
-
-            foreach (var entity in delta.DestroyedEntities)
-            {
-                if (IsAlive(entity))
-                {
-                    Destroy(entity);
-                }
-            }
-        }
-        finally
-        {
+            componentTypeCache = _replayComponentTypeScratch;
             componentTypeCache.Clear();
-            EndDeferredLayoutUpdates();
         }
-    }
-
-    internal void ReplayTrusted(FrameDelta delta)
-    {
-        ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(delta);
 
         BeginDeferredLayoutUpdates();
         try
         {
-            foreach (var released in delta.ReleasedEntities)
+            if (!trusted)
             {
-                ReleaseReservedEntity(released);
+                foreach (var reserved in delta.ReservedEntities)
+                    EnsureReplayReservation(reserved);
             }
+
+            foreach (var released in delta.ReleasedEntities)
+                ReleaseReservedEntity(released);
 
             foreach (var created in delta.CreatedEntities)
             {
-                MaterializeReservedEntityTrusted(created.Entity, created.Signature, created.Components);
+                if (trusted)
+                    MaterializeReservedEntityTrusted(created.Entity, created.Signature, created.Components);
+                else
+                    MaterializeReservedEntity(created.Entity, created.Components, componentTypeCache, reservationChecked: true);
             }
 
             foreach (var link in delta.LinkCommands)
-            {
                 Link(link.Parent, link.Child);
-            }
 
             foreach (var unlink in delta.UnlinkCommands)
-            {
                 Unlink(unlink.Child);
-            }
 
             unsafe
             {
                 foreach (var add in delta.AddCommands)
                 {
-                    ApplyRawAddOrSet(add.Entity, add.ComponentType, add.RuntimeType, add.Data, add.DataOffset, add.ColumnWriter);
+                    var componentType = trusted
+                        ? add.ComponentType
+                        : ResolveCompiledComponentType(add.RuntimeType, add.ComponentType, componentTypeCache);
+                    ApplyRawAddOrSet(add.Entity, componentType, add.RuntimeType, add.Data, add.DataOffset, add.ColumnWriter);
                 }
 
                 foreach (var set in delta.SetCommands)
                 {
-                    ApplyRawAddOrSet(set.Entity, set.ComponentType, set.RuntimeType, set.Data, set.DataOffset, set.ColumnWriter);
+                    var componentType = trusted
+                        ? set.ComponentType
+                        : ResolveCompiledComponentType(set.RuntimeType, set.ComponentType, componentTypeCache);
+                    ApplyRawAddOrSet(set.Entity, componentType, set.RuntimeType, set.Data, set.DataOffset, set.ColumnWriter);
                 }
             }
 
             foreach (var remove in delta.RemoveCommands)
             {
-                RemoveBoxed(remove.Entity, remove.ComponentType);
+                var componentType = trusted
+                    ? remove.ComponentType
+                    : ResolveCompiledComponentType(remove.RuntimeType, remove.ComponentType, componentTypeCache);
+                RemoveBoxed(remove.Entity, componentType);
             }
 
             foreach (var entity in delta.DestroyedEntities)
-            {
-                if (IsAlive(entity))
-                {
-                    Destroy(entity);
-                }
-            }
+                if (IsAlive(entity)) Destroy(entity);
         }
         finally
         {
+            componentTypeCache?.Clear();
             EndDeferredLayoutUpdates();
         }
     }
@@ -1950,18 +1852,6 @@ public sealed class World : IDisposable
         return new Signature(componentTypes);
     }
 
-    private ComponentType ResolveReplayComponentType(Type componentType, Dictionary<Type, ComponentType>? cache)
-    {
-        if (cache is not null && cache.TryGetValue(componentType, out var resolved))
-        {
-            return resolved;
-        }
-
-        resolved = GetComponentType(componentType);
-        cache?.Add(componentType, resolved);
-        return resolved;
-    }
-
     private ComponentType ResolveCompiledComponentType(
         Type runtimeType,
         ComponentType componentType,
@@ -1972,7 +1862,14 @@ public sealed class World : IDisposable
             return componentType;
         }
 
-        return ResolveReplayComponentType(runtimeType, cache);
+        if (cache is not null && cache.TryGetValue(runtimeType, out var resolved))
+        {
+            return resolved;
+        }
+
+        resolved = GetComponentType(runtimeType);
+        cache?.Add(runtimeType, resolved);
+        return resolved;
     }
 
     private ComponentType GetComponentType(Type componentType)

@@ -24,18 +24,7 @@ internal readonly struct QueryComponentSet : IEquatable<QueryComponentSet>
 
         if (components.Length > 1)
         {
-            Array.Sort(components);
-
-            var uniqueCount = 1;
-            for (var i = 1; i < components.Length; i++)
-            {
-                if (components[i] != components[uniqueCount - 1])
-                {
-                    components[uniqueCount] = components[i];
-                    uniqueCount++;
-                }
-            }
-
+            var uniqueCount = SpanHelper.SortAndDeduplicate(components.AsSpan());
             if (uniqueCount != components.Length)
             {
                 Array.Resize(ref components, uniqueCount);
@@ -79,16 +68,7 @@ internal readonly struct QueryComponentSet : IEquatable<QueryComponentSet>
 
     public override bool Equals(object? obj) => obj is QueryComponentSet other && Equals(other);
 
-    public override int GetHashCode()
-    {
-        var hash = 17;
-        for (var i = 0; i < Components.Length; i++)
-        {
-            hash = unchecked(hash * 31 + Components[i].Value);
-        }
-
-        return hash;
-    }
+    public override int GetHashCode() => SpanHelper.CombineHashCodes(Components);
 
     private ComponentType[] Components => _components ?? Array.Empty<ComponentType>();
 }

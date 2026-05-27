@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -10,7 +11,8 @@ namespace MiniArch.Core;
 internal static unsafe class ComponentWriterCache
 {
     private static readonly ConcurrentDictionary<Type, ColumnWriterDelegate> ColumnWriters = new();
-    private static readonly ConcurrentDictionary<Type, int> Sizes = new();
+    private static readonly MethodInfo CreateColumnWriterMethod = typeof(ComponentWriterCache)
+        .GetMethod(nameof(CreateColumnWriter), BindingFlags.Static | BindingFlags.NonPublic)!;
 
     /// <summary>
     /// Writes a component value from raw bytes into flat chunk storage.
@@ -19,24 +21,12 @@ internal static unsafe class ComponentWriterCache
 
     internal static ColumnWriterDelegate GetColumnWriter(Type type)
     {
-        return ColumnWriters.GetOrAdd(type, static t =>
-        {
-            var method = typeof(ComponentWriterCache)
-                .GetMethod(nameof(CreateColumnWriter), System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
-                .MakeGenericMethod(t);
-            return (ColumnWriterDelegate)method.Invoke(null, null)!;
-        });
+        return GenericMethodCache.GetOrInvoke(ColumnWriters, type, CreateColumnWriterMethod);
     }
 
     internal static int GetSize(Type type)
     {
-        return Sizes.GetOrAdd(type, static t =>
-        {
-            var method = typeof(ComponentWriterCache)
-                .GetMethod(nameof(GetSizeGeneric), System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
-                .MakeGenericMethod(t);
-            return (int)method.Invoke(null, null)!;
-        });
+        return ComponentSizeCache.GetSize(type);
     }
 
     private static ColumnWriterDelegate CreateColumnWriter<T>()
@@ -46,10 +36,5 @@ internal static unsafe class ComponentWriterCache
             var value = Unsafe.Read<T>(source);
             chunk.SetComponentAtTyped(columnIndex, row, in value);
         };
-    }
-
-    private static int GetSizeGeneric<T>()
-    {
-        return Unsafe.SizeOf<T>();
     }
 }

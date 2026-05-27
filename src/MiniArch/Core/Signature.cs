@@ -171,19 +171,7 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
             return normalized.Length == 0 ? Array.Empty<ComponentType>() : normalized;
         }
 
-        Array.Sort(normalized);
-
-        var uniqueCount = 1;
-        for (var i = 1; i < normalized.Length; i++)
-        {
-            if (normalized[i] == normalized[uniqueCount - 1])
-            {
-                continue;
-            }
-
-            normalized[uniqueCount] = normalized[i];
-            uniqueCount++;
-        }
+        var uniqueCount = SpanHelper.SortAndDeduplicate(normalized);
 
         if (uniqueCount == normalized.Length)
         {
@@ -251,14 +239,6 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
         return trimmed;
     }
 
-    private static int ComputeHashCode(ReadOnlySpan<ComponentType> components)
-    {
-        var hash = 17;
-        for (var i = 0; i < components.Length; i++)
-        {
-            hash = unchecked(hash * 31 + components[i].Value);
-        }
-
-        return hash;
-    }
+    private static int ComputeHashCode(ReadOnlySpan<ComponentType> components) =>
+        SpanHelper.CombineHashCodes(components);
 }

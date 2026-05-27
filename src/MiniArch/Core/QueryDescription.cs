@@ -1,3 +1,5 @@
+using MiniArch.Core;
+
 namespace MiniArch;
 
 /// <summary>
@@ -137,16 +139,7 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
 
         public override bool Equals(object? obj) => obj is QueryDescriptionTypeSet other && Equals(other);
 
-        public override int GetHashCode()
-        {
-            var hash = 17;
-            foreach (var type in AsSpan())
-            {
-                hash = unchecked(hash * 31 + type.TypeHandle.GetHashCode());
-            }
-
-            return hash;
-        }
+        public override int GetHashCode() => SpanHelper.CombineHashCodes(AsSpan());
 
         private QueryDescriptionTypeSet(Type[] types)
         {
