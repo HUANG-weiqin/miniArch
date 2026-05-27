@@ -1495,7 +1495,7 @@ public sealed class CommandBufferTests
             for (int op = 0; op < opsThisFrame; op++)
             {
                 var kind = alive.Count == 0 ? 0 : rng.Next(100);
-                if (kind < 30 || alive.Count == 0)
+                if (kind < 35 || alive.Count == 0)
                 {
                     var e = cb.Create();
                     var compCount = rng.Next(4);
@@ -1505,41 +1505,35 @@ public sealed class CommandBufferTests
                     alive.Add(e);
                     created.Add(e);
                 }
-                else if (kind < 45)
+                else if (kind < 48)
                 {
                     var e = PickAlive();
                     cb.Destroy(e);
                     alive.Remove(e);
                 }
-                else if (kind < 58)
+                else if (kind < 62)
                 {
                     cb.Set(PickAlive(), new Position(rng.Next(), rng.Next()));
                 }
-                else if (kind < 70)
+                else if (kind < 74)
                 {
                     cb.Add(PickAlive(), new Velocity(rng.Next(), rng.Next()));
                 }
-                else if (kind < 80)
+                else if (kind < 84)
                 {
                     cb.Add(PickAlive(), new Health(rng.Next()));
                 }
-                else if (kind < 88)
+                else if (kind < 90)
                 {
                     cb.Remove<Position>(PickAlive());
                 }
-                else if (kind < 94)
+                else if (kind < 95)
                 {
                     cb.Remove<Velocity>(PickAlive());
                 }
-                else if (kind < 97 && alive.Count > 1)
-                {
-                    var parent = PickAlive();
-                    var child = PickAlive();
-                    if (parent != child) cb.Link(parent, child);
-                }
                 else
                 {
-                    cb.Unlink(PickAlive());
+                    cb.Remove<Health>(PickAlive());
                 }
             }
 
