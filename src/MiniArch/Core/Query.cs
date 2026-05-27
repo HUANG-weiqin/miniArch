@@ -10,11 +10,17 @@ public sealed class Query
 {
     private readonly World _world;
     private readonly QueryFilter _filter;
-    private MatchingSnapshot _matching = MatchingSnapshot.Empty;
+    private readonly object _refreshLock = new();
     private Signature? _requiredSignature;
     private Signature? _excludedSignature;
     private Signature? _anySignature;
     private int _refreshCount;
+
+    private volatile int _snapshotGeneration = -1;
+    private Archetype[] _snapshotArchetypes = Array.Empty<Archetype>();
+    private Chunk[] _snapshotChunks = Array.Empty<Chunk>();
+    private Archetype[] _scratchArchetypes = Array.Empty<Archetype>();
+    private Chunk[] _scratchChunks = Array.Empty<Chunk>();
 
     internal Query(World world, QueryFilter filter)
     {
@@ -58,7 +64,8 @@ public sealed class Query
     {
         get
         {
-            return EnsureMatchingArchetypes();
+            EnsureMatchingSnapshot();
+            return Volatile.Read(ref _snapshotArchetypes);
         }
     }
 
@@ -69,7 +76,8 @@ public sealed class Query
     {
         get
         {
-            return EnsureMatchingChunks();
+            EnsureMatchingSnapshot();
+            return Volatile.Read(ref _snapshotChunks);
         }
     }
 
@@ -79,7 +87,8 @@ public sealed class Query
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpan<Chunk> GetChunkSpan()
     {
-        return EnsureMatchingSnapshot().Chunks;
+        EnsureMatchingSnapshot();
+        return Volatile.Read(ref _snapshotChunks);
     }
 
     /// <summary>
@@ -89,101 +98,126 @@ public sealed class Query
 
     internal Archetype[] EnsureMatchingArchetypes()
     {
-        return EnsureMatchingSnapshot().Archetypes;
+        EnsureMatchingSnapshot();
+        return Volatile.Read(ref _snapshotArchetypes);
     }
 
     internal Chunk[] EnsureMatchingChunks()
     {
-        return EnsureMatchingSnapshot().Chunks;
+        EnsureMatchingSnapshot();
+        return Volatile.Read(ref _snapshotChunks);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private MatchingSnapshot EnsureMatchingSnapshot()
+    private void EnsureMatchingSnapshot()
     {
-        var snapshot = Volatile.Read(ref _matching);
-        var worldQueryGeneration = _world.QueryGeneration;
-        if (snapshot.QueryGeneration == worldQueryGeneration)
+        if (_snapshotGeneration == _world.QueryGeneration)
         {
-            return snapshot;
+            return;
         }
 
-        return RefreshSlow(worldQueryGeneration, snapshot);
+        RefreshSlow();
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private MatchingSnapshot RefreshSlow(int worldQueryGeneration, MatchingSnapshot snapshot)
+    private void RefreshSlow()
     {
-        while (true)
+        lock (_refreshLock)
         {
-            var refreshed = BuildMatchingSnapshot(worldQueryGeneration);
-            var observed = Interlocked.CompareExchange(ref _matching, refreshed, snapshot);
-            if (ReferenceEquals(observed, snapshot))
+            var worldGen = _world.QueryGeneration;
+            if (_snapshotGeneration == worldGen)
             {
-                Interlocked.Increment(ref _refreshCount);
-                return refreshed;
+                return;
             }
 
-            snapshot = observed;
-            if (snapshot.QueryGeneration == worldQueryGeneration)
-            {
-                return snapshot;
-            }
+            BuildMatchingSnapshot(worldGen);
+            _snapshotGeneration = worldGen;
+            Interlocked.Increment(ref _refreshCount);
         }
     }
 
-    private MatchingSnapshot BuildMatchingSnapshot(int worldQueryGeneration)
+    private void BuildMatchingSnapshot(int worldQueryGeneration)
     {
         var archetypes = _world.Archetypes;
         if (archetypes.Length == 0)
         {
-            return new MatchingSnapshot(worldQueryGeneration, Array.Empty<Archetype>(), Array.Empty<Chunk>());
+            SwapSnapshotToEmpty();
+            return;
         }
 
-        var matchingArchetypes = new Archetype[archetypes.Length];
+        if (_scratchArchetypes.Length < archetypes.Length)
+        {
+            _scratchArchetypes = new Archetype[archetypes.Length];
+        }
+
         var matchedArchetypeCount = 0;
         var matchedChunkCount = 0;
         foreach (var archetype in archetypes)
         {
             if (Matches(archetype))
             {
-                matchingArchetypes[matchedArchetypeCount++] = archetype;
+                _scratchArchetypes[matchedArchetypeCount++] = archetype;
                 matchedChunkCount += archetype.Chunks.Count;
             }
         }
 
         if (matchedArchetypeCount == 0)
         {
-            return new MatchingSnapshot(worldQueryGeneration, Array.Empty<Archetype>(), Array.Empty<Chunk>());
+            SwapSnapshotToEmpty();
+            return;
         }
 
-        Archetype[] trimmedArchetypes;
-        if (matchedArchetypeCount == matchingArchetypes.Length)
+        if (_scratchArchetypes.Length != matchedArchetypeCount)
         {
-            trimmedArchetypes = matchingArchetypes;
-        }
-        else
-        {
-            trimmedArchetypes = new Archetype[matchedArchetypeCount];
-            Array.Copy(matchingArchetypes, trimmedArchetypes, matchedArchetypeCount);
+            var trimmed = new Archetype[matchedArchetypeCount];
+            Array.Copy(_scratchArchetypes, trimmed, matchedArchetypeCount);
+            _scratchArchetypes = trimmed;
         }
 
         if (matchedChunkCount == 0)
         {
-            return new MatchingSnapshot(worldQueryGeneration, trimmedArchetypes, Array.Empty<Chunk>());
+            _scratchChunks = Array.Empty<Chunk>();
+            SwapSnapshot();
+            return;
         }
 
-        var matchingChunks = new Chunk[matchedChunkCount];
-        var chunkIndex = 0;
-        for (var archetypeIndex = 0; archetypeIndex < trimmedArchetypes.Length; archetypeIndex++)
+        if (_scratchChunks.Length < matchedChunkCount)
         {
-            var chunks = trimmedArchetypes[archetypeIndex].Chunks;
+            _scratchChunks = new Chunk[matchedChunkCount];
+        }
+
+        var chunkIndex = 0;
+        for (var archetypeIndex = 0; archetypeIndex < matchedArchetypeCount; archetypeIndex++)
+        {
+            var chunks = _scratchArchetypes[archetypeIndex].Chunks;
             for (var i = 0; i < chunks.Count; i++)
             {
-                matchingChunks[chunkIndex++] = chunks[i];
+                _scratchChunks[chunkIndex++] = chunks[i];
             }
         }
 
-        return new MatchingSnapshot(worldQueryGeneration, trimmedArchetypes, matchingChunks);
+        SwapSnapshot();
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SwapSnapshotToEmpty()
+    {
+        _scratchArchetypes = Array.Empty<Archetype>();
+        _scratchChunks = Array.Empty<Chunk>();
+        SwapSnapshot();
+    }
+
+    // Not atomic: readers may see new archetypes + old chunks (or vice versa)
+    // across the two Volatile.Write calls. Safe under "no concurrent world writes" precondition.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SwapSnapshot()
+    {
+        var oldA = _snapshotArchetypes;
+        var oldC = _snapshotChunks;
+        Volatile.Write(ref _snapshotArchetypes, _scratchArchetypes);
+        Volatile.Write(ref _snapshotChunks, _scratchChunks);
+        _scratchArchetypes = oldA;
+        _scratchChunks = oldC;
     }
 
     private bool Matches(Archetype archetype)
@@ -221,23 +255,5 @@ public sealed class Query
         }
 
         return false;
-    }
-
-    private sealed class MatchingSnapshot
-    {
-        public static MatchingSnapshot Empty { get; } = new(-1, Array.Empty<Archetype>(), Array.Empty<Chunk>());
-
-        public MatchingSnapshot(int queryGeneration, Archetype[] archetypes, Chunk[] chunks)
-        {
-            QueryGeneration = queryGeneration;
-            Archetypes = archetypes;
-            Chunks = chunks;
-        }
-
-        public int QueryGeneration { get; }
-
-        public Archetype[] Archetypes { get; }
-
-        public Chunk[] Chunks { get; }
     }
 }

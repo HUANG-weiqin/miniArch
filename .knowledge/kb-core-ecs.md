@@ -95,7 +95,9 @@ updated: 2026-05-28
 - `ArchetypeEdges` 应该和其他热路径一样使用 component id 直索引，而不是继续停留在 `Dictionary<ComponentType, Archetype>`。
 - `Archetype` 和 `Chunk` 只保留 typed 构造路径（必须传入 `Type[]`）；不再有 untyped `object?[]` 列路径。
 - `Set` 的热路径应该是 direct-index 原地写，不应该为了更新一个已存在组件去做结构迁移。
-- 在“world 不并发写入”的前提下，query 并发读优先用 copy-on-write 快照发布，而不是加锁；读路径保持数组遍历，写路径承担快照复制成本。
+- 在"world 不并发写入"的前提下，query 并发读优先用 copy-on-write 快照发布，而不是加锁；读路径保持数组遍历，写路径承担快照复制成本。
+- Query snapshot 已优化为零 GC 稳态路径：`MatchingSnapshot` class 已消除，snapshot 字段（`_snapshotArchetypes`、`_snapshotChunks`、`_snapshotGeneration`）直接内联在 `Query` 上；scratch buffer `_scratchArchetypes` 跨 refresh 复用；archetype/chunk 数组在 size 匹配时原地覆写（不分配新数组）；refresh 用 `lock` 保护（fast-path 仍为 lock-free volatile generation check）。
+- `BeginDeferredLayoutUpdates()` / `EndDeferredLayoutUpdates()` 为 internal API，供 `CommandBuffer.Submit` 和 `World.Replay` 内部批量操作时延迟 query generation 递增。不暴露给用户。
 - query cache 应该发布整个 `Dictionary<QueryFilter, Query>` 快照，而不是在共享字典上做并发写入。
 - 对大命中 query，读路径真正昂贵的通常不是 filter builder，而是逐 row 的 accessor 开销；如果 chunk 读 API 只能通过 `GetEntity(row)` / `GetComponent(row)` 这种逐元素方法走，边界检查和调用成本会在 `100k+` 档位开始放大。
 - 对 entity-only 的 query 消费，`ReadOnlySpan<Entity>` 这类批量读接口通常能立刻降低 CPU，且不会引入额外分配；它是比重构 query cache 更低风险的第一步优化。

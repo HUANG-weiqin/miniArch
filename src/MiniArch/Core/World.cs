@@ -1794,6 +1794,11 @@ public sealed class World : IDisposable
 
     internal void EndDeferredLayoutUpdates()
     {
+        if (_queryLayoutSuppressionCount == 0)
+        {
+            throw new InvalidOperationException("Unbalanced DeferQueryLayoutUpdates/Dispose call.");
+        }
+
         _queryLayoutSuppressionCount--;
         if (_queryLayoutSuppressionCount == 0 && _queryLayoutDirty)
         {
