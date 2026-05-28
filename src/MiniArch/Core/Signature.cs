@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace MiniArch.Core;
@@ -10,6 +11,7 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
 {
     private readonly ComponentType[] _components;
     private readonly int _hashCode;
+    private readonly long _componentMask;
 
     /// <summary>
     /// Gets the empty signature.
@@ -24,6 +26,7 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
         ArgumentNullException.ThrowIfNull(components);
         _components = Normalize(components);
         _hashCode = ComputeHashCode(_components);
+        _componentMask = ComputeMask(_components);
     }
 
     /// <summary>
@@ -38,6 +41,7 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
     {
         _components = components.Length == 0 ? Array.Empty<ComponentType>() : components;
         _hashCode = ComputeHashCode(_components);
+        _componentMask = ComputeMask(_components);
     }
 
     internal static Signature CreateNormalized(ComponentType[] components)
@@ -57,9 +61,44 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
     public ReadOnlySpan<ComponentType> AsSpan() => _components;
 
     /// <summary>
+    /// Gets a bitmask where bit i is set if component with id i is present.
+    /// Only accurate for component ids 0..63; always 0 for ids >= 64.
+    /// </summary>
+    public long ComponentMask => _componentMask;
+
+    /// <summary>
     /// Returns whether the signature contains a component.
     /// </summary>
-    public bool Contains(ComponentType component) => Array.BinarySearch(_components, component) >= 0;
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool Contains(ComponentType component)
+    {
+        if ((uint)component.Value < 64 && (_componentMask & (1L << component.Value)) == 0)
+        {
+            return false;
+        }
+
+        return ContainsSlow(component);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private bool ContainsSlow(ComponentType component)
+    {
+        var c = _components;
+        if (c.Length <= 4)
+        {
+            for (var i = 0; i < c.Length; i++)
+            {
+                if (c[i] == component)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        return Array.BinarySearch(c, component) >= 0;
+    }
 
     /// <summary>
     /// Returns a signature with one component added.
@@ -241,4 +280,19 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
 
     private static int ComputeHashCode(ReadOnlySpan<ComponentType> components) =>
         SpanHelper.CombineHashCodes(components);
+
+    private static long ComputeMask(ReadOnlySpan<ComponentType> components)
+    {
+        long mask = 0;
+        for (var i = 0; i < components.Length; i++)
+        {
+            var id = components[i].Value;
+            if ((uint)id < 64)
+            {
+                mask |= 1L << id;
+            }
+        }
+
+        return mask;
+    }
 }

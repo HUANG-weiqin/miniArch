@@ -181,6 +181,7 @@ public sealed class Chunk
         return GetComponentSpanAt<T>(columnIndex);
     }
 
+    [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ref T GetComponentRef<T>(int columnIndex)
     {
@@ -203,6 +204,7 @@ public sealed class Chunk
         _boxedWriters[columnIndex](this, columnIndex, row, value);
     }
 
+    [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void SetComponentAtTyped<T>(int columnIndex, int row, in T value)
     {
@@ -213,6 +215,7 @@ public sealed class Chunk
         target = value;
     }
 
+    [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal T GetComponentAt<T>(int columnIndex, int row)
     {
@@ -222,6 +225,7 @@ public sealed class Chunk
         return GetComponentRefAt<T>(columnIndex, row);
     }
 
+    [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ReadOnlySpan<T> GetComponentSpanAt<T>(int columnIndex)
     {
@@ -285,6 +289,12 @@ public sealed class Chunk
         source.ValidateRow(sourceRow);
         ValidateRow(destinationRow);
 
+        if (_signature == source._signature)
+        {
+            CopyAllColumnsFrom(source, sourceRow, destinationRow);
+            return;
+        }
+
         var components = _signature.AsSpan();
         for (var index = 0; index < components.Length; index++)
         {
@@ -295,6 +305,16 @@ public sealed class Chunk
             }
 
             CopyComponent(source, sourceColumnIndex, sourceRow, index, destinationRow);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private unsafe void CopyAllColumnsFrom(Chunk source, int sourceRow, int destinationRow)
+    {
+        var columnCount = _elementSizes.Length;
+        for (var index = 0; index < columnCount; index++)
+        {
+            CopyComponent(source, index, sourceRow, index, destinationRow);
         }
     }
 
@@ -457,12 +477,14 @@ public sealed class Chunk
         return _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex];
     }
 
+    [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private ref T GetComponentRefAt<T>(int columnIndex, int row)
     {
-        return ref Unsafe.As<byte, T>(ref _data[GetByteOffset(columnIndex, row)]);
+        return ref Unsafe.As<byte, T>(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex]));
     }
 
+    [SkipLocalsInit]
     private unsafe void CopyComponent(Chunk source, int sourceColumnIndex, int sourceRow, int destinationColumnIndex, int destinationRow)
     {
         var size = _elementSizes[destinationColumnIndex];

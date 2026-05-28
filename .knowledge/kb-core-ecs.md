@@ -105,10 +105,14 @@ updated: 2026-05-28
 - 默认层 `OrderedQuery` 应作为消费层 materialization + sort，不进入 core query cache，也不改变 `QueryDescription`；每次枚举独立租用内部 buffer 才能支持同一 ordered query 的并发读取。
 - 对 component-consuming query，优先走 flat chunk 暴露的 `Chunk.GetComponentSpan<T>()`，不要在热循环里逐 row 调 `GetComponent<T>(..., row)`；后者会把列查找、边界检查和方法调用成本重复放大。
 - `Chunk.GetComponentSpan<T>()` 适用于所有 chunk；span 由 flat byte storage 的列起点按元素类型重解释得到。
+- `GetComponentRefAt<T>` 的 bounds check 消除是 component span 吞吐的关键优化：`_data[offset]` 改用 `Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), offset)` 绕过 JIT 数组边界检查，与 Arch 的 `DangerousGetReference` 等效。
+- 热路径方法应标记 `[SkipLocalsInit]`（从 Arch 学到的 trick），跳过 JIT 对局部变量的零初始化，减少方法入口的 memset 开销。当前已应用于 `GetComponentRefAt<T>`、`GetComponentRef<T>`、`SetComponentAtTyped<T>`、`GetComponentAt<T>`、`GetComponentSpanAt<T>`、`CopyComponent`。
 - 结合当前 query sampling，warmed query 的第一优先优化点应放在 traversal / accessor 路径，而不是优先重写 `BuildMatchingArchetypes`；matching 目前只是小头。
 - row-wise 组件访问热路径中，`GetComponentIndex()` 已被 `TryGetColumnIndices(...)` 批量 hoist 出 row loop；benchmark 和 profiling runner 的 row-wise 路径已切换到预解析列索引 + `GetComponentAt<T>(columnIndex, row)`，不再逐行调用 `GetComponent<T>(componentType, row)`。
 - component span 热路径优化关键：用 `Unsafe.As<byte, T>` 从 `_data` 的列起点得到 `ref T`，再创建 typed span；直接通过 `_componentIdToColumnIndex` map 查列索引，绕过 LRU cache。
 - entity query 热路径用 `GetEntityStorage()` 返回 `Entity[]` 直接数组访问（避免 span 边界检查），entity query throughput 已超过 Arch 12%。
+- `Signature` 增加了 `ComponentMask`（`long` 类型 bitmask），对 component id < 64 的组件做快速 contains 预判。`Query.Matches` 先用 bitmask 快速 reject，避免逐组件 `Contains` 调用。`Signature.Contains` 内部对 ≤4 组件走线性扫描，>4 组件走 `Array.BinarySearch`。
+- `Chunk.CopySharedComponentsFrom` 增加了同签名快速路径：`_signature == source._signature` 时直接按列索引复制，跳过逐组件 `TryGetComponentIndex` 查找。
 - `GetComponentRef<T>(columnIndex)` 返回 `ref T` 指向 flat byte storage 中该列首元素，配合 `Unsafe.Add` 实现 0-bounds-check 迭代。
 - Chunk 热路径方法（`SetComponentAtTyped`, `SetComponentAt`, `GetComponentAt`, `GetComponentIndex`, `GetEntityStorage`）已标记 `AggressiveInlining`。
 - `Chunk.GetComponentIndex(...)` 不能在 chunk 实例上维护 last-component / last-column 这类共享可变读缓存；同一 chunk 被并发只读、且不同线程读不同组件时，普通字段 pair 可能被观察成不一致组合。读路径应直接使用不可变的 `_componentIdToColumnIndex` direct map，或由调用方 hoist 到局部 column index。
@@ -140,14 +144,19 @@ updated: 2026-05-28
   - WithAll: MiniArch 17.7us vs Arch 27.1us → MiniArch +53%
 
   **Query (100k entities, warmed)：**
-  - WithAll+Without: MiniArch 41.8us vs Arch 53.3us → MiniArch +28%
-  - WithAll+Any: MiniArch 41.8us vs Arch 45.0us → MiniArch +7.7%
-  - WithAll: MiniArch 53.1us vs Arch 60.6us → MiniArch +14%
+  - WithAll+Without: MiniArch 37.0us vs Arch 46.0us → MiniArch +19.7%
+  - WithAll+Any: MiniArch 33.0us vs Arch 42.0us → MiniArch +21.3%
+  - WithAll: MiniArch 47.7us vs Arch 54.0us → MiniArch +11.6%
+
+  **Component Span (100k entities, warmed)：**
+  - Component Span: MiniArch 68.2us vs Arch 77.0us → MiniArch +11.4%
+  - Component Row-wise: MiniArch 177.3us (无 Arch 对照)
 
   **CommandBuffer (throughput, 3s×3)：**
   - MiniArch 在所有 workload 上领先 Arch +52%~+144%
 
-  - 说明：(1) flat byte[] 统一存储在结构变更场景中表现出众——Add/Remove/Set/Destroy 均因 swap-remove、direct-index 路径和 chunk 复用策略领先 Arch；(2) query 在所有形态下均快于 Arch，Warmed Query 的 generation 失效机制和 MatchedChunks 快照工作良好；(3) component span 读取是唯一仍轻微落后 Arch 的场景（throughput -5.9%），但差距已从早期的 -45% 大幅缩小，属于 flat byte[] vs typed T[] 的剩余架构取舍；(4) 之前的 "Set -21%" 数据已是过期结论。
+  - 说明：(1) flat byte[] 统一存储在结构变更场景中表现出众——Add/Remove/Set/Destroy 均因 swap-remove、direct-index 路径和 chunk 复用策略领先 Arch；(2) query 在所有形态下均快于 Arch，Warmed Query 的 generation 失效机制和 MatchedChunks 快照工作良好；(3) component span 读取已从早期 -45% 和优化前 -4.4% 翻转为 +11.4%，关键优化是 `GetComponentRefAt<T>` 消除 bounds check（改用 `Unsafe.Add + MemoryMarshal.GetArrayDataReference`）和热路径方法加 `[SkipLocalsInit]`；(4) 之前的 "Set -21%" 数据已是过期结论。
+  - 优化过程中对比 Arch 源码学到的关键 tricks：`DangerousGetReference`（bounds check 消除）、`[SkipLocalsInit]`（跳过局部变量零初始化）、`Unsafe.As<T[]>(array)`（绕过数组协变类型检查）、反向迭代（`--index >= 0`，单 CPU 标志位比较）、多类型 codegen overloads（批量解析列索引）。
 
 ## 认知模型
 

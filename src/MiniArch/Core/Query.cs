@@ -14,6 +14,10 @@ public sealed class Query
     private Signature? _requiredSignature;
     private Signature? _excludedSignature;
     private Signature? _anySignature;
+    private long _requiredMask;
+    private long _excludedMask;
+    private long _anyMask;
+    private bool _masksInitialized;
     private int _refreshCount;
 
     private volatile int _snapshotGeneration = -1;
@@ -220,7 +224,61 @@ public sealed class Query
         _scratchChunks = oldC;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void EnsureMasksInitialized()
+    {
+        if (!_masksInitialized)
+        {
+            InitializeMasks();
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void InitializeMasks()
+    {
+        _requiredMask = ComputeFilterMask(_filter.Required.AsSpan());
+        _excludedMask = ComputeFilterMask(_filter.Excluded.AsSpan());
+        _anyMask = ComputeFilterMask(_filter.Any.AsSpan());
+        _masksInitialized = true;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static long ComputeFilterMask(ReadOnlySpan<ComponentType> components)
+    {
+        long mask = 0;
+        for (var i = 0; i < components.Length; i++)
+        {
+            var id = components[i].Value;
+            if ((uint)id < 64)
+            {
+                mask |= 1L << id;
+            }
+        }
+
+        return mask;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool Matches(Archetype archetype)
+    {
+        EnsureMasksInitialized();
+        var archMask = archetype.Signature.ComponentMask;
+
+        if (_requiredMask != 0 && (archMask & _requiredMask) != _requiredMask)
+        {
+            return false;
+        }
+
+        if (_excludedMask != 0 && (archMask & _excludedMask) != 0)
+        {
+            return false;
+        }
+
+        return MatchesSlow(archetype, archMask);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private bool MatchesSlow(Archetype archetype, long archMask)
     {
         var required = _filter.Required.AsSpan();
         for (var i = 0; i < required.Length; i++)
@@ -242,6 +300,11 @@ public sealed class Query
 
         var any = _filter.Any.AsSpan();
         if (any.Length == 0)
+        {
+            return true;
+        }
+
+        if (_anyMask != 0 && (archMask & _anyMask) != 0)
         {
             return true;
         }
