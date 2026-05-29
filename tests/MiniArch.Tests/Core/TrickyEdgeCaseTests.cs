@@ -791,4 +791,55 @@ public sealed class TrickyEdgeCaseTests
     {
         return world.TryGetLocation(entity, out var info) && info.Archetype.Signature.Contains(type);
     }
+
+#if DEBUG
+    // ═══════════════════════════════════════════════════════
+    // Category: Debug-only safety checks
+    // ═══════════════════════════════════════════════════════
+
+    [Fact]
+    public void Set_with_negative_entity_id_throws_in_debug()
+    {
+        var world = new World();
+        var badEntity = new Entity(-1, 1);
+
+        Assert.Throws<InvalidOperationException>(() => world.Set(badEntity, new Position(1, 2)));
+    }
+
+    [Fact]
+    public void Set_with_out_of_range_entity_id_throws_in_debug()
+    {
+        var world = new World();
+        var badEntity = new Entity(9999, 1);
+
+        Assert.Throws<InvalidOperationException>(() => world.Set(badEntity, new Position(1, 2)));
+    }
+
+    [Fact]
+    public void Add_with_out_of_range_entity_id_throws_in_debug()
+    {
+        var world = new World();
+        var badEntity = new Entity(9999, 1);
+
+        Assert.Throws<InvalidOperationException>(() => world.Add(badEntity, new Position(1, 2)));
+    }
+
+    [Fact]
+    public void Destroy_with_out_of_range_entity_id_throws_in_debug()
+    {
+        var world = new World();
+        var badEntity = new Entity(9999, 1);
+
+        Assert.Throws<InvalidOperationException>(() => world.Destroy(badEntity));
+    }
+#endif
+
+    [Fact]
+    public void TryGet_with_out_of_range_entity_id_returns_false()
+    {
+        var world = new World();
+        var badEntity = new Entity(9999, 1);
+
+        Assert.False(world.TryGet(badEntity, out Position _));
+    }
 }

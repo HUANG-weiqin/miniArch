@@ -2,7 +2,7 @@
 title: Hero Pipeline Benchmarks
 module: HeroPipeline.Tests
 description: Hero project pipeline benchmarks ported to miniArch for performance profiling
-updated: 2026-05-25
+updated: 2026-05-29
 ---
 # Hero Pipeline Benchmarks
 
@@ -67,15 +67,33 @@ updated: 2026-05-25
   - 以为需要 GameplayEcs 全部 57 个文件，实际只需要 52 个
   - 以为 csproj 需要显式 Compile Include，实际上 SDK 默认自动包含所有 .cs
 
-## 当前 benchmark 结果（2026-05-25）
+## 当前 benchmark 结果（2026-05-29）
+
+### Release 配置（推荐用于性能对比）
 
 | Benchmark | Cycles/sec | Avg/cycle |
 |---|---|---|
-| Movement | 4,819 | 0.21 ms |
-| Simple Attack | 2,396 | 0.42 ms |
-| Attack + Trigger | 1,524 | 0.66 ms |
-| Full Card Play + Collision | 1,229 | 0.81 ms |
-| Full Card Play to Armor | 1,194 | 0.84 ms |
+| Movement | 48,883 | 0.0205 ms |
+| Simple Attack | 25,946 | 0.0385 ms |
+| Attack + Trigger | 17,320 | 0.0577 ms |
+| Full Card Play + Collision | 13,678 | 0.0731 ms |
+| Full Card Play to Armor | 13,685 | 0.0731 ms |
+
+### Debug 配置（用于开发调试）
+
+| Benchmark | Cycles/sec | Avg/cycle |
+|---|---|---|
+| Movement | 6,878 | 0.1454 ms |
+| Simple Attack | 3,662 | 0.2730 ms |
+| Attack + Trigger | 2,515 | 0.3976 ms |
+| Full Card Play + Collision | 1,994 | 0.5014 ms |
+| Full Card Play to Armor | 2,028 | 0.4930 ms |
+
+### 性能对比说明
+
+- Release 比 Debug 快约 7 倍（符合预期，因 NuGet 依赖是 Release 预编译包）
+- 历史数据（2026-05-25）是在 Debug 配置下运行的
+- 当前代码在 Debug 配置下比历史数据提升约 43%-70%
 
 ## 关联模块
 

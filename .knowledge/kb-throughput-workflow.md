@@ -2,7 +2,7 @@
 title: Throughput Workflow
 module: Workspace
 description: Reusable fixed-duration throughput comparison workflow for MiniArch and Arch workloads
-updated: 2026-05-28
+updated: 2026-05-29
 ---
 # Throughput Workflow
 
@@ -25,6 +25,7 @@ updated: 2026-05-28
   - `benchmarks/MiniArch.Benchmarks/BenchmarkWorldFactory.cs`
 - 数据流 / 控制流：
   - 先根据 `workload + engine + entityCount` 构造固定 case
+  - `ThroughputCaseFactory.CreateAndRun` 创建具体 case 并调用 `WarmupAndMeasure<T>`（泛型约束，消除 interface dispatch 开销）
   - 每轮先 warmup，再跑固定时长循环
   - 每次循环累计 iteration count 和 checksum
   - 每个 engine 汇总 `avg/median/best ops/s`
@@ -39,6 +40,8 @@ updated: 2026-05-28
 - 当 benchmark short job 方差偏大时，优先补一条 fixed-duration throughput 对比，而不是继续堆 iteration count 盲猜均值。
 - throughput runner 只输出 `ops/s` 和相对差距，不承担采样定位职责；热点定位仍然交给 sampling profiler。
 - 首版先接 query workload，但 runner 结构必须允许后续挂接 `CreateMany`、`Remove`、`Destroy` 等热点。
+- Execute 方法必须加 `[MethodImpl(NoOptimization)]`，防止 .NET 8 PGO 把 Set/Create/Destroy 调用当死存储消除。
+- Execute 方法的 checksum 必须依赖 workload 的实际结果（Set 后读回值加入 checksum），不能只累加循环索引。
 
 ## 当前已验证的 throughput 结论
 
@@ -46,6 +49,9 @@ updated: 2026-05-28
 - `query-with-all-component-span`，同样参数下，`MiniArch` 平均 `16382 ops/s`，`Arch` 平均 `17408 ops/s`，`MiniArch` 落后 `-5.90%`
 - component span 差距已从早期的 `-45.65%` 大幅缩小至 `-5.90%`，entity query 领先幅度持续稳定在 `+15~+20%`
 - command-buffer 吞吐在所有 workload 上 MiniArch 均大幅领先 Arch（`+52%~+144%`）
+- `set-single-component`（`EntityCount=1000`，`Duration=3s`，`Repeat=3`，NoOptimization + read-back）：`MiniArch` 98,783 vs `Arch` 60,058 → `MiniArch +64.5%`
+- `set-two-components`（同上）：`MiniArch` 39,697 vs `Arch` 35,779 → `MiniArch +11.0%`
+- `create-destroy-pairwise`（同上）：`MiniArch` 15,761 vs `Arch` 14,551 → `MiniArch +8.3%`
 
 ## 认知模型
 
@@ -76,12 +82,15 @@ updated: 2026-05-28
   - MiniArch 和 Arch 没用同一个 world shape，导致吞吐对比失真
   - warmup 不一致，把 JIT/首次 materialize 混入 steady-state 吞吐
   - repeat 太少，只看单次 ops/s 就下结论
+  - Execute 方法的 checksum 不依赖 Set 结果，导致 .NET 8 PGO 在 warmup 后把 Set 调用当死存储消除（MiniArch 受影响更大因为 Set 路径更短更易被 JIT 分析）
 - 容易误判的地方：
   - `ops/s` 变快不代表分配也更好，仍要结合 benchmark/MemoryDiagnoser
   - 两边 checksum 都非零不代表 workload 等价，shape 和执行逻辑也必须一致
+  - 如果 throughput 结果和 BDN 矛盾，先检查 Execute 方法是否被 JIT 死存储消除
 - 改这里时要特别小心：
   - 新 workload 必须同时给 `MiniArch` 和 `Arch` 实现，避免 runner 只测一边
   - 对 component-consuming workload，要明确是 `row-wise` 还是 `span` 口径，不能混用
+  - 所有 Execute 方法必须加 `[MethodImpl(NoOptimization)]`，且 checksum 必须依赖 Set/Create/Destroy 的实际结果（读回值加入 checksum），否则 .NET 8 PGO 会优化掉核心 workload
 
 ## 标准流程
 
@@ -96,4 +105,5 @@ updated: 2026-05-28
 
 - `kb-test-workflow.md`：benchmark 与 throughput 的配合方式
 - `kb-profiling-workflow.md`：热点定位方法
+- `kb-core-ecs.md`：BDN 结果快照和热路径优化决策
 - `scripts/throughput.ps1`：当前可直接复用的吞吐入口

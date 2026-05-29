@@ -113,10 +113,12 @@ public sealed class Chunk
     /// </summary>
     internal int Add(Entity entity)
     {
+#if DEBUG
         if (Count == Capacity)
         {
             throw new InvalidOperationException("Chunk is full.");
         }
+#endif
 
         var row = Count;
         _entities[row] = entity;
@@ -285,9 +287,11 @@ public sealed class Chunk
 
     internal void CopySharedComponentsFrom(Chunk source, int sourceRow, int destinationRow)
     {
+#if DEBUG
         ArgumentNullException.ThrowIfNull(source);
         source.ValidateRow(sourceRow);
         ValidateRow(destinationRow);
+#endif
 
         if (_signature == source._signature)
         {
@@ -320,7 +324,9 @@ public sealed class Chunk
 
     internal unsafe void WriteComponentRaw(int columnIndex, int row, byte* source)
     {
+#if DEBUG
         ValidateRow(row);
+#endif
         ref var target = ref _data[GetByteOffset(columnIndex, row)];
         Unsafe.CopyBlockUnaligned(ref target, ref *source, (uint)_elementSizes[columnIndex]);
     }
@@ -370,7 +376,9 @@ public sealed class Chunk
     /// </summary>
     internal bool RemoveAt(int row, out Entity movedEntity)
     {
+#if DEBUG
         ValidateRow(row);
+#endif
 
         var last = Count - 1;
         if (row != last)
@@ -488,10 +496,12 @@ public sealed class Chunk
     private unsafe void CopyComponent(Chunk source, int sourceColumnIndex, int sourceRow, int destinationColumnIndex, int destinationRow)
     {
         var size = _elementSizes[destinationColumnIndex];
+#if DEBUG
         if (source._elementSizes[sourceColumnIndex] != size)
         {
             throw new InvalidOperationException("Component size mismatch.");
         }
+#endif
 
         ref var sourceRef = ref source._data[source.GetByteOffset(sourceColumnIndex, sourceRow)];
         ref var destinationRef = ref _data[GetByteOffset(destinationColumnIndex, destinationRow)];

@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-05-28
+updated: 2026-05-29
 ---
 # MiniArch Core ECS
 
@@ -123,19 +123,20 @@ updated: 2026-05-28
 - 对照 `Arch` 源码时不要假设它会自动消除 `Create -> Add -> Add` 留下的中间 archetype；它同样保留这些 archetype，query 也是按 world archetype 列表全量匹配，空 archetype 只会在显式 `TrimExcess()` 后被移除。
 - `ValidateElementSize<T>()` 在 Release 编译下被 `#if DEBUG` 包裹；它是类型安全守卫，不是热路径必需品，Release 下应完全消除。
 - `ThrowIfDisposed()` 在 Release 编译下被 `#if DEBUG` 包裹；释放后访问是编程错误，Release 下信任调用方。
-- `GetRequiredLocation()` 的版本检查（`_versions[id] != entity.Version`）始终生效（不在 `#if DEBUG` 内）；过期句柄在 Release 下也会抛出 `InvalidOperationException`。性能代价可忽略：一次 int[] 读取 + 一次比较 + 一个 JIT 可完美预测的分支。
+- `GetRequiredLocation()` 的 entity ID 边界检查在 `#if DEBUG` 内；版本检查（`_versions[id] != entity.Version`）始终生效（不在 `#if DEBUG` 内）。过期句柄在 Release 下也会抛出 `InvalidOperationException`。性能代价可忽略：一次 int[] 读取 + 一次比较 + 一个 JIT 可完美预测的分支。
+- 热路径安全检查一律包裹 `#if DEBUG`（和 `ThrowIfDisposed` / `ValidateElementSize<T>` 同策略）：`GetRequiredLocation` bounds check、`Chunk.Add` capacity check、`CopySharedComponentsFrom` null+row checks、`RemoveAt` ValidateRow、`CopyComponent` size mismatch、`WriteComponentRaw` ValidateRow。这些检查在正确代码中永远为 true，Release 下零开销。
 - `ComponentTypeCacheEntry` 是 `readonly record struct`（非引用类型），`GetComponentType<T>()` 用 `ReferenceEquals(entry.Registry, _components)` 判断缓存是否命中；不能用 `entry is not null` 替代，因为多 World 实例并行测试时静态缓存会跨 World 污染。
 - `ApplyTypedAddOrSet<T>` 已标记 `AggressiveInlining`；`Archetype.TryGetComponentIndex` / `GetChunk` 也已标记。
 - Destroy 热路径有 leaf-entity 快速路径：`HierarchyTable.HasChildren(entity)` 返回 false 时，跳过 `CollectDestroySubtree`、scratch list 管理和 try/finally 开销。
-- 基准结果快照（2026-05-28，Release，BDN default job，1k entities 除非标注）：
+- 基准结果快照（2026-05-29，Release，BDN ShortRun，1k entities 除非标注）：
 
   **结构变更：**
-  - Set Position: MiniArch 48.8us vs Arch 100.3us → MiniArch +105%
-  - Remove Position: MiniArch 218.9us vs Arch 481.4us → MiniArch +120%
-  - Add Position: MiniArch 325.8us vs Arch 567.5us → MiniArch +74%
-  - Destroy: MiniArch 114.9us vs Arch 201.9us → MiniArch +76%
-  - Create empty: MiniArch 34.7us vs Arch 38.8us → MiniArch +12%
-  - Create Pos+Vel: MiniArch 42.5us vs Arch 40.2us → 持平
+  - Set Position: MiniArch 47.0us vs Arch 92.2us → MiniArch +96%
+  - Remove Position: MiniArch 235.8us vs Arch 464.2us → MiniArch +97%
+  - Add Position: MiniArch 289.0us vs Arch 479.6us → MiniArch +66%
+  - Destroy: MiniArch 99.5us vs Arch 206.1us → MiniArch +107%
+  - Create empty: MiniArch 36.6us vs Arch 38.0us → MiniArch +4%
+  - Create Pos+Vel: MiniArch 41.6us vs Arch 41.6us → 持平
   - Mixed ops (Create+Add+Set+Remove+Destroy, 10k entities): MiniArch 3.19ms vs Arch 5.00ms → MiniArch +57%
 
   **Query (10k entities, warmed)：**
@@ -155,7 +156,12 @@ updated: 2026-05-28
   **CommandBuffer (throughput, 3s×3)：**
   - MiniArch 在所有 workload 上领先 Arch +52%~+144%
 
-  - 说明：(1) flat byte[] 统一存储在结构变更场景中表现出众——Add/Remove/Set/Destroy 均因 swap-remove、direct-index 路径和 chunk 复用策略领先 Arch；(2) query 在所有形态下均快于 Arch，Warmed Query 的 generation 失效机制和 MatchedChunks 快照工作良好；(3) component span 读取已从早期 -45% 和优化前 -4.4% 翻转为 +11.4%，关键优化是 `GetComponentRefAt<T>` 消除 bounds check（改用 `Unsafe.Add + MemoryMarshal.GetArrayDataReference`）和热路径方法加 `[SkipLocalsInit]`；(4) 之前的 "Set -21%" 数据已是过期结论。
+  **Throughput Runner (3s×3, 1k entities, NoOptimization + read-back)：**
+  - SetSingleComponent: MiniArch 98,783 vs Arch 60,058 → MiniArch +64.5%
+  - SetTwoComponents: MiniArch 39,697 vs Arch 35,779 → MiniArch +11.0%
+  - CreateDestroyPairwise: MiniArch 15,761 vs Arch 14,551 → MiniArch +8.3%
+
+  - 说明：(1) flat byte[] 统一存储在结构变更场景中表现出众——Add/Remove/Set/Destroy 均因 swap-remove、direct-index 路径和 chunk 复用策略领先 Arch；(2) query 在所有形态下均快于 Arch，Warmed Query 的 generation 失效机制和 MatchedChunks 快照工作良好；(3) component span 读取已从早期 -45% 和优化前 -4.4% 翻转为 +11.4%，关键优化是 `GetComponentRefAt<T>` 消除 bounds check（改用 `Unsafe.Add + MemoryMarshal.GetArrayDataReference`）和热路径方法加 `[SkipLocalsInit]`；(4) 热路径安全检查（`GetRequiredLocation` bounds check、`Chunk.Add` capacity check、`CopySharedComponentsFrom` null+row checks、`RemoveAt` ValidateRow、`CopyComponent` size mismatch、`WriteComponentRaw` ValidateRow）已包裹进 `#if DEBUG`，Release 下零开销；(5) throughput runner 的 Execute 方法必须加 `[MethodImpl(NoOptimization)]` + Set 后读回值加入 checksum，否则 .NET 8 PGO 会在 warmup 后把 Set 调用当死存储消除（MiniArch 受影响更大因为 Set 路径更短更易被 JIT 分析）。
   - 优化过程中对比 Arch 源码学到的关键 tricks：`DangerousGetReference`（bounds check 消除）、`[SkipLocalsInit]`（跳过局部变量零初始化）、`Unsafe.As<T[]>(array)`（绕过数组协变类型检查）、反向迭代（`--index >= 0`，单 CPU 标志位比较）、多类型 codegen overloads（批量解析列索引）。
 
 ## 认知模型

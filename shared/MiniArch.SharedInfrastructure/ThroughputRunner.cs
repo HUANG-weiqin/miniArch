@@ -280,9 +280,9 @@ public static class ThroughputRunner
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                using var throughputCase = ThroughputCaseFactory.Create(options.Workload, engine, options.EntityCount);
-                throughputCase.WarmUp(options.WarmupIterations, cancellationToken);
-                var result = ExecuteCase(engine, throughputCase, options.Duration, cancellationToken);
+                var result = ThroughputCaseFactory.CreateAndRun(
+                    options.Workload, engine, options.EntityCount,
+                    options.WarmupIterations, options.Duration, cancellationToken);
                 runs.Add(result);
 
                 output.WriteLine($"{FormatEngine(engine)} repeat {repeat + 1}/{options.RepeatCount}: iterations={result.IterationCount}, elapsedMs={result.Elapsed.TotalMilliseconds:F0}, opsPerSecond={result.OpsPerSecond:F2}, checksum={result.TotalChecksum}");
@@ -302,8 +302,20 @@ public static class ThroughputRunner
         return new ThroughputReport(options.Workload, summaries, comparison);
     }
 
-    private static ThroughputRunResult ExecuteCase(ThroughputEngine engine, IThroughputCase throughputCase, TimeSpan duration, CancellationToken cancellationToken)
+    internal static ThroughputRunResult WarmupAndMeasure<T>(
+        ThroughputEngine engine,
+        T throughputCase,
+        int warmupIterations,
+        TimeSpan duration,
+        CancellationToken cancellationToken)
+        where T : IThroughputCase, IDisposable
     {
+        for (var i = 0; i < warmupIterations; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _ = throughputCase.RunIteration();
+        }
+
         var stopwatch = Stopwatch.StartNew();
         long iterations = 0;
         long checksum = 0;
@@ -417,6 +429,59 @@ internal static class ThroughputCaseFactory
         };
     }
 
+    public static ThroughputRunResult CreateAndRun(
+        ThroughputWorkload workload,
+        ThroughputEngine engine,
+        int entityCount,
+        int warmupIterations,
+        TimeSpan duration,
+        CancellationToken cancellationToken)
+    {
+        switch ((workload, engine))
+        {
+            case (ThroughputWorkload.QueryWithAllEntity, ThroughputEngine.MiniArch):
+                using (var c = new MiniQueryEntityThroughputCase(entityCount))
+                    return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
+            case (ThroughputWorkload.QueryWithAllEntity, ThroughputEngine.Arch):
+                using (var c = new ArchQueryEntityThroughputCase(entityCount))
+                    return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
+            case (ThroughputWorkload.QueryWithAllComponentSpan, ThroughputEngine.MiniArch):
+                using (var c = new MiniQueryComponentSpanThroughputCase(entityCount))
+                    return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
+            case (ThroughputWorkload.QueryWithAllComponentSpan, ThroughputEngine.Arch):
+                using (var c = new ArchQueryComponentSpanThroughputCase(entityCount))
+                    return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
+            case (ThroughputWorkload.SetSingleComponent, ThroughputEngine.MiniArch):
+                using (var c = new MiniSetSingleComponentThroughputCase(entityCount))
+                    return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
+            case (ThroughputWorkload.SetSingleComponent, ThroughputEngine.Arch):
+                using (var c = new ArchSetSingleComponentThroughputCase(entityCount))
+                    return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
+            case (ThroughputWorkload.SetTwoComponents, ThroughputEngine.MiniArch):
+                using (var c = new MiniSetTwoComponentsThroughputCase(entityCount))
+                    return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
+            case (ThroughputWorkload.SetTwoComponents, ThroughputEngine.Arch):
+                using (var c = new ArchSetTwoComponentsThroughputCase(entityCount))
+                    return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
+            case (ThroughputWorkload.CreateDestroyPairwise, ThroughputEngine.MiniArch):
+                using (var c = new MiniCreateDestroyPairwiseThroughputCase(entityCount))
+                    return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
+            case (ThroughputWorkload.CreateDestroyPairwise, ThroughputEngine.Arch):
+                using (var c = new ArchCreateDestroyPairwiseThroughputCase(entityCount))
+                    return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
+            case (ThroughputWorkload.CreateDestroyBatch, ThroughputEngine.MiniArch):
+                using (var c = new MiniCreateDestroyBatchThroughputCase(entityCount))
+                    return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
+            case (ThroughputWorkload.CreateDestroyBatch, ThroughputEngine.Arch):
+                using (var c = new ArchCreateDestroyBatchThroughputCase(entityCount))
+                    return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
+            case (_, ThroughputEngine.Both):
+                throw new InvalidOperationException("Throughput case factory expects a concrete engine.");
+            default:
+                throw new ArgumentOutOfRangeException(nameof(workload));
+        }
+    }
+
     private sealed class MiniQueryEntityThroughputCase : IThroughputCase
     {
         private readonly MiniComplexQueryWorldState _state;
@@ -519,6 +584,7 @@ internal static class ThroughputCaseFactory
         }
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static int ExecuteMiniEntityQuery(MiniQuery query)
     {
         var checksum = 0;
@@ -537,6 +603,7 @@ internal static class ThroughputCaseFactory
         return checksum;
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static int ExecuteArchEntityQuery(ArchWorld world, ArchQueryDescription description)
     {
         var checksum = 0;
@@ -552,6 +619,7 @@ internal static class ThroughputCaseFactory
         return checksum;
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static int ExecuteMiniComponentSpanQuery(MiniQuery query, MiniComponentType positionType, MiniComponentType velocityType)
     {
         var checksum = 0;
@@ -574,6 +642,7 @@ internal static class ThroughputCaseFactory
         return checksum;
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static int ExecuteArchComponentSpanQuery(ArchWorld world, ArchQueryDescription description)
     {
         var checksum = 0;
@@ -609,7 +678,11 @@ internal static class ThroughputCaseFactory
             }
         }
 
-        public long RunIteration() => ExecuteMiniSetSingle(_state.World, _state.Entities);
+        public long RunIteration()
+        {
+            ExecuteMiniSetSingle(_state.World, _state.Entities);
+            return (long)GetMiniSetSingle(_state.World, _state.Entities);
+        }
 
         public void Dispose() { }
     }
@@ -632,7 +705,11 @@ internal static class ThroughputCaseFactory
             }
         }
 
-        public long RunIteration() => ExecuteArchSetSingle(_state.World, _state.Entities);
+        public long RunIteration()
+        {
+            ExecuteArchSetSingle(_state.World, _state.Entities);
+            return (long)GetArchSetSingle(_state.World, _state.Entities);
+        }
 
         public void Dispose() => _state.Dispose();
     }
@@ -655,7 +732,11 @@ internal static class ThroughputCaseFactory
             }
         }
 
-        public long RunIteration() => ExecuteMiniSetTwo(_state.World, _state.Entities);
+        public long RunIteration()
+        {
+            ExecuteMiniSetTwo(_state.World, _state.Entities);
+            return (long)GetMiniSetTwo(_state.World, _state.Entities);
+        }
 
         public void Dispose() { }
     }
@@ -678,7 +759,11 @@ internal static class ThroughputCaseFactory
             }
         }
 
-        public long RunIteration() => ExecuteArchSetTwo(_state.World, _state.Entities);
+        public long RunIteration()
+        {
+            ExecuteArchSetTwo(_state.World, _state.Entities);
+            return (long)GetArchSetTwo(_state.World, _state.Entities);
+        }
 
         public void Dispose() => _state.Dispose();
     }
@@ -789,30 +874,51 @@ internal static class ThroughputCaseFactory
         public void Dispose() { }
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static int ExecuteMiniSetSingle(MiniWorld world, MiniEntity[] entities)
     {
         var checksum = 0;
         for (var i = 0; i < entities.Length; i++)
         {
             world.Set(entities[i], new Position(i + 1, i + 1));
-            checksum += i;
+            checksum += 1;
         }
 
         return checksum;
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static float GetMiniSetSingle(MiniWorld world, MiniEntity[] entities)
+    {
+        float sum = 0;
+        for (var i = 0; i < entities.Length; i++)
+            sum += world.Get<Position>(entities[i]).X;
+        return sum;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static int ExecuteArchSetSingle(ArchWorld world, ArchEntity[] entities)
     {
         var checksum = 0;
         for (var i = 0; i < entities.Length; i++)
         {
             world.Set(entities[i], new Position(i + 1, i + 1));
-            checksum += i;
+            checksum += 1;
         }
 
         return checksum;
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static float GetArchSetSingle(ArchWorld world, ArchEntity[] entities)
+    {
+        float sum = 0;
+        for (var i = 0; i < entities.Length; i++)
+            sum += world.Get<Position>(entities[i]).X;
+        return sum;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static int ExecuteMiniSetTwo(MiniWorld world, MiniEntity[] entities)
     {
         var checksum = 0;
@@ -820,12 +926,22 @@ internal static class ThroughputCaseFactory
         {
             world.Set(entities[i], new Position(i + 1, i + 1));
             world.Set(entities[i], new Velocity(i + 2, i + 2));
-            checksum += i;
+            checksum += 1;
         }
 
         return checksum;
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static float GetMiniSetTwo(MiniWorld world, MiniEntity[] entities)
+    {
+        float sum = 0;
+        for (var i = 0; i < entities.Length; i++)
+            sum += world.Get<Position>(entities[i]).X;
+        return sum;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static int ExecuteArchSetTwo(ArchWorld world, ArchEntity[] entities)
     {
         var checksum = 0;
@@ -833,12 +949,22 @@ internal static class ThroughputCaseFactory
         {
             world.Set(entities[i], new Position(i + 1, i + 1));
             world.Set(entities[i], new Velocity(i + 2, i + 2));
-            checksum += i;
+            checksum += 1;
         }
 
         return checksum;
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static float GetArchSetTwo(ArchWorld world, ArchEntity[] entities)
+    {
+        float sum = 0;
+        for (var i = 0; i < entities.Length; i++)
+            sum += world.Get<Position>(entities[i]).X;
+        return sum;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static int ExecuteMiniCreateDestroyPairwise(MiniWorld world, int count)
     {
         var checksum = 0;
@@ -846,12 +972,13 @@ internal static class ThroughputCaseFactory
         {
             var entity = world.Create(new Position(i, i));
             world.Destroy(entity);
-            checksum += i;
+            checksum += entity.Id;
         }
 
         return checksum;
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static int ExecuteArchCreateDestroyPairwise(ArchWorld world, int count)
     {
         var checksum = 0;
@@ -859,18 +986,21 @@ internal static class ThroughputCaseFactory
         {
             var entity = world.Create<Position>(new Position(i, i));
             world.Destroy(entity);
-            checksum += i;
+            checksum += entity.Id;
         }
 
         return checksum;
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static int ExecuteMiniCreateDestroyBatch(MiniWorld world, int count)
     {
         var entities = new MiniEntity[count];
+        var checksum = 0;
         for (var i = 0; i < count; i++)
         {
             entities[i] = world.Create();
+            checksum += entities[i].Id;
         }
 
         for (var i = 0; i < count; i++)
@@ -878,15 +1008,18 @@ internal static class ThroughputCaseFactory
             world.Destroy(entities[i]);
         }
 
-        return count;
+        return checksum;
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static int ExecuteArchCreateDestroyBatch(ArchWorld world, int count)
     {
         var entities = new ArchEntity[count];
+        var checksum = 0;
         for (var i = 0; i < count; i++)
         {
             entities[i] = world.Create();
+            checksum += entities[i].Id;
         }
 
         for (var i = 0; i < count; i++)
@@ -894,6 +1027,6 @@ internal static class ThroughputCaseFactory
             world.Destroy(entities[i]);
         }
 
-        return count;
+        return checksum;
     }
 }

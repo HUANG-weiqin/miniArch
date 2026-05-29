@@ -283,7 +283,8 @@ public sealed class Query
         var required = _filter.Required.AsSpan();
         for (var i = 0; i < required.Length; i++)
         {
-            if (!archetype.Signature.Contains(required[i]))
+            var component = required[i];
+            if ((uint)component.Value >= 64 && !archetype.Signature.Contains(component))
             {
                 return false;
             }
@@ -292,7 +293,8 @@ public sealed class Query
         var excluded = _filter.Excluded.AsSpan();
         for (var i = 0; i < excluded.Length; i++)
         {
-            if (archetype.Signature.Contains(excluded[i]))
+            var component = excluded[i];
+            if ((uint)component.Value >= 64 && archetype.Signature.Contains(component))
             {
                 return false;
             }

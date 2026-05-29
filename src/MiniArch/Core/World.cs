@@ -879,6 +879,20 @@ public sealed class World : IDisposable
     }
 
     /// <summary>
+    /// Gets a component directly without version or bounds checks.
+    /// Use only when the entity is known to be alive and the component is known to exist.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public T Get<T>(Entity entity)
+    {
+        var stored = _locations[entity.Id];
+        var componentType = GetComponentType<T>();
+        return stored.Archetype
+            .GetChunk(stored.ChunkIndex)
+            .GetComponentAt<T>(stored.Archetype.GetComponentIndexFast(componentType), stored.RowIndex);
+    }
+
+    /// <summary>
     /// Gets an entity-only query from a description.
     /// </summary>
     public Query Query(in QueryDescription description)
@@ -1319,10 +1333,12 @@ public sealed class World : IDisposable
     private EntityLocation GetRequiredLocation(Entity entity)
     {
         var id = entity.Id;
+#if DEBUG
         if ((uint)id >= (uint)_entitySlotCount)
         {
             ThrowInvalidEntity(entity);
         }
+#endif
 
         var info = _locations[id];
         if (info.Archetype is null || _versions[id] != entity.Version)

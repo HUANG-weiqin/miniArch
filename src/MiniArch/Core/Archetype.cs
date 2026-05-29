@@ -194,6 +194,10 @@ public sealed class Archetype
         throw new ArgumentException($"Archetype does not contain component {component.Value}.", nameof(component));
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal int GetComponentIndexFast(ComponentType component) => _componentIdToColumnIndex[component.Value];
+
+
     private Chunk CreateChunk()
     {
         return new Chunk(Signature, _componentTypes, _componentIdToColumnIndex, _chunkCapacity);
