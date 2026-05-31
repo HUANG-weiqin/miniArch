@@ -21,11 +21,11 @@ public sealed class Query
     private int _refreshCount;
 
     private Archetype[] _snapshotArchetypes = Array.Empty<Archetype>();
-    private int[] _snapshotGenerations = Array.Empty<int>();
+    private long[] _snapshotGenerations = Array.Empty<long>();
     private Chunk[] _snapshotChunks = Array.Empty<Chunk>();
     private Archetype[] _scratchArchetypes = Array.Empty<Archetype>();
     private Chunk[] _scratchChunks = Array.Empty<Chunk>();
-    private int[] _scratchGenerations = Array.Empty<int>();
+    private long[] _scratchGenerations = Array.Empty<long>();
     private bool _initialized;
     private int _snapshotArchetypeVersion;
 
@@ -183,7 +183,7 @@ public sealed class Query
         if (_scratchArchetypes.Length < archetypes.Length)
         {
             _scratchArchetypes = new Archetype[archetypes.Length];
-            _scratchGenerations = new int[archetypes.Length];
+            _scratchGenerations = new long[archetypes.Length];
         }
 
         var matchedArchetypeCount = 0;
@@ -209,7 +209,7 @@ public sealed class Query
         if (_scratchArchetypes.Length != matchedArchetypeCount)
         {
             var trimmedA = new Archetype[matchedArchetypeCount];
-            var trimmedG = new int[matchedArchetypeCount];
+            var trimmedG = new long[matchedArchetypeCount];
             Array.Copy(_scratchArchetypes, trimmedA, matchedArchetypeCount);
             Array.Copy(_scratchGenerations, trimmedG, matchedArchetypeCount);
             _scratchArchetypes = trimmedA;
@@ -248,7 +248,7 @@ public sealed class Query
     {
         _scratchArchetypes = Array.Empty<Archetype>();
         _scratchChunks = Array.Empty<Chunk>();
-        _scratchGenerations = Array.Empty<int>();
+        _scratchGenerations = Array.Empty<long>();
         SwapSnapshot();
     }
 

@@ -14,7 +14,7 @@ public sealed class Archetype
     private readonly int _chunkCapacity;
     private readonly Type[] _componentTypes;
     private readonly int[] _componentIdToColumnIndex;
-    private int _generation;
+    private long _generation;
 
     internal Archetype(Signature signature, Type[] componentTypes, int chunkCapacity = 4)
     {
@@ -51,7 +51,7 @@ public sealed class Archetype
     /// <summary>
     /// Gets the archetype generation (incremented on structural changes).
     /// </summary>
-    internal int Generation => _generation;
+    internal long Generation => _generation;
 
     /// <summary>
     /// Gets the chunk list.
