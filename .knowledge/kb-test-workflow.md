@@ -2,7 +2,7 @@
 title: Test Workflow
 module: MiniArch.Tests
 description: How the test suite, query profiling, snapshot benchmarks, and structural-change benchmarks are organized and how to run them
-updated: 2026-05-25
+updated: 2026-05-31
 ---
 # Test Workflow
 
@@ -181,6 +181,7 @@ updated: 2026-05-25
   - query benchmark 只测 builder 创建，误把 API 组装成本当成 query 热路径
   - query benchmark 在 MiniArch 里把命中组件加得太早，导致中间态空 archetype 也被扫进结果
   - query benchmark 只保留 builder+execute 的混合口径时，很难分清"固定分配来自 fluent builder"还是"规模退化来自 chunk/row 遍历"；要至少保留一条 warmed-query 口径。
+  - **零分配测试的 warmup 必须循环多次（≥10），不能只调一次**。.NET 8 JIT tiered compilation 会在 warmup 后的首次调用时把方法从 Tier 0 升级到 Tier 1，这个升级过程会分配 JIT 内部数据结构。单次 warmup 不足以触发升级，导致测量循环的第一次调用出现 264 bytes 的假分配。经验值：warmup 循环 10 次后再 GC.Collect，可确保 JIT 完成升级。
   - 如果 warmed query state 没有在 setup 阶段先 materialize 匹配 archetype，benchmark 名字虽然写着 warmed，实际测到的仍会掺入冷 refresh 成本。
   - 直接采样 BenchmarkDotNet 子进程时，样本里会混入 harness、warmup 和 fork 开销；定位 query 热点时优先跑 `scripts\profile-query.ps1`
   - 如果想看 archetype 匹配热点，不要只跑 `hot` 模式；热缓存会把刷新成本藏掉

@@ -229,7 +229,13 @@ public sealed class QueryTests
             .With<Position>()
             .Without<Velocity>();
 
-        Assert.Equal(6, CountEntities(MiniQuery.Create(world, in description)));
+        var warmTotal = 0;
+        for (var w = 0; w < 10; w++)
+        {
+            warmTotal += CountEntities(MiniQuery.Create(world, in description));
+        }
+
+        Assert.Equal(60, warmTotal);
         GC.Collect();
         GC.WaitForPendingFinalizers();
         GC.Collect();
