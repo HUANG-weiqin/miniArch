@@ -564,7 +564,7 @@ public sealed class CommandBuffer : ICommandRecorder
                 {
                     _world.ReleaseReservedEntity(entity);
                 }
-                else if (state.Map.Count == 0 && state.Map.Overflow is null)
+                else if (state.Map.IsEmpty)
                 {
                     _world.MaterializeReservedEntityTrusted(entity, Signature.Empty, Array.Empty<RawComponentValue>());
                 }
@@ -585,18 +585,15 @@ public sealed class CommandBuffer : ICommandRecorder
             for (var i = 0; i < _opsPoolCount; i++)
             {
                 ref var existingOps = ref _opsPool[i];
-                if (existingOps.Count == 0 && existingOps.Overflow is null) continue;
+                if (existingOps.IsEmpty) continue;
                 var entity = _opsEntityByPoolIndex[i];
 
                 if (existingOps.Count >= 1) ApplyOpDirect(existingOps.Value0, entity);
                 if (existingOps.Count >= 2) ApplyOpDirect(existingOps.Value1, entity);
                 if (existingOps.Count >= 3) ApplyOpDirect(existingOps.Value2, entity);
                 if (existingOps.Count >= 4) ApplyOpDirect(existingOps.Value3, entity);
-                if (existingOps.Overflow is not null)
-                {
-                    foreach (var kv in existingOps.Overflow)
-                        ApplyOpDirect(kv.Value, entity);
-                }
+                for (var j = 0; j < existingOps.OverflowCount; j++)
+                    ApplyOpDirect(existingOps.Overflow![j].Value, entity);
             }
 
             foreach (var (child, intent) in _hierarchyByChild)
@@ -739,7 +736,7 @@ public sealed class CommandBuffer : ICommandRecorder
                 {
                     _world.ReleaseReservedEntity(entity);
                 }
-                else if (state.Map.Count == 0 && state.Map.Overflow is null)
+                else if (state.Map.IsEmpty)
                 {
                     _world.MaterializeReservedEntityTrusted(entity, Signature.Empty, Array.Empty<RawComponentValue>());
                 }
@@ -785,18 +782,15 @@ public sealed class CommandBuffer : ICommandRecorder
             for (var i = 0; i < frozen.OpsPoolCount; i++)
             {
                 ref var existingOps = ref frozen.OpsPool[i];
-                if (existingOps.Count == 0 && existingOps.Overflow is null) continue;
+                if (existingOps.IsEmpty) continue;
                 var entity = frozen.OpsEntityByPoolIndex[i];
 
                 if (existingOps.Count >= 1) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value0, entity);
                 if (existingOps.Count >= 2) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value1, entity);
                 if (existingOps.Count >= 3) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value2, entity);
                 if (existingOps.Count >= 4) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value3, entity);
-                if (existingOps.Overflow is not null)
-                {
-                    foreach (var kv in existingOps.Overflow)
-                        ApplyOpDirectFromFrozen(_world, frozen.Slabs, kv.Value, entity);
-                }
+                for (var j = 0; j < existingOps.OverflowCount; j++)
+                    ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Overflow![j].Value, entity);
             }
 
             foreach (var (child, intent) in frozen.HierarchyByChild)
@@ -859,7 +853,7 @@ public sealed class CommandBuffer : ICommandRecorder
             {
                 delta.ReleasedEntities.Add(entity);
             }
-            else if (state.Map.Count == 0 && state.Map.Overflow is null)
+            else if (state.Map.IsEmpty)
             {
                 delta.CreatedEntities.Add(new RawCreatedEntity(entity, Signature.Empty, Array.Empty<RawComponentValue>()));
             }
@@ -888,20 +882,17 @@ public sealed class CommandBuffer : ICommandRecorder
         for (var i = 0; i < frozen.OpsPoolCount; i++)
         {
             ref var existingOps = ref frozen.OpsPool[i];
-            if (existingOps.Count == 0 && existingOps.Overflow is null) continue;
+            if (existingOps.IsEmpty) continue;
             var entity = frozen.OpsEntityByPoolIndex[i];
 
             EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in existingOps.Value0, entity, delta);
             if (existingOps.Count >= 2) EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in existingOps.Value1, entity, delta);
             if (existingOps.Count >= 3) EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in existingOps.Value2, entity, delta);
             if (existingOps.Count >= 4) EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in existingOps.Value3, entity, delta);
-            if (existingOps.Overflow is not null)
+            for (var j = 0; j < existingOps.OverflowCount; j++)
             {
-                foreach (var kv in existingOps.Overflow)
-                {
-                    var overflowSlot = kv.Value;
-                    EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in overflowSlot, entity, delta);
-                }
+                var overflowSlot = existingOps.Overflow![j].Value;
+                EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in overflowSlot, entity, delta);
             }
         }
 
@@ -918,8 +909,7 @@ public sealed class CommandBuffer : ICommandRecorder
     private static (ComponentType[] Types, CreatedComponent[] Sources, int Count) ExtractAndSortComponents(
         in CreatedState state)
     {
-        var count = state.Map.Count;
-        if (state.Map.Overflow is not null) count += state.Map.Overflow.Count;
+        var count = state.Map.Count + state.Map.OverflowCount;
 
         var types = ArrayPool<ComponentType>.Shared.Rent(count);
         var sources = ArrayPool<CreatedComponent>.Shared.Rent(count);
@@ -929,14 +919,11 @@ public sealed class CommandBuffer : ICommandRecorder
         if (state.Map.Count >= 2) { sources[idx] = state.Map.Value1; types[idx] = state.Map.Value1.ComponentType; idx++; }
         if (state.Map.Count >= 3) { sources[idx] = state.Map.Value2; types[idx] = state.Map.Value2.ComponentType; idx++; }
         if (state.Map.Count >= 4) { sources[idx] = state.Map.Value3; types[idx] = state.Map.Value3.ComponentType; idx++; }
-        if (state.Map.Overflow is not null)
+        for (var j = 0; j < state.Map.OverflowCount; j++)
         {
-            foreach (var kv in state.Map.Overflow)
-            {
-                sources[idx] = kv.Value;
-                types[idx] = kv.Value.ComponentType;
-                idx++;
-            }
+            sources[idx] = state.Map.Overflow![j].Value;
+            types[idx] = state.Map.Overflow[j].Value.ComponentType;
+            idx++;
         }
 
         Array.Sort(types, sources, 0, idx);
@@ -1113,7 +1100,7 @@ public sealed class CommandBuffer : ICommandRecorder
             {
                 delta.ReleasedEntities.Add(entity);
             }
-            else if (state.Map.Count == 0 && state.Map.Overflow is null)
+            else if (state.Map.IsEmpty)
             {
                 delta.CreatedEntities.Add(new RawCreatedEntity(entity, Signature.Empty, Array.Empty<RawComponentValue>()));
             }
@@ -1162,20 +1149,17 @@ public sealed class CommandBuffer : ICommandRecorder
         for (var i = 0; i < _opsPoolCount; i++)
         {
             ref var existingOps = ref _opsPool[i];
-            if (existingOps.Count == 0 && existingOps.Overflow is null) continue;
+            if (existingOps.IsEmpty) continue;
             var entity = _opsEntityByPoolIndex[i];
 
             if (existingOps.Count >= 1) EmitOp(in existingOps.Value0, entity, delta);
             if (existingOps.Count >= 2) EmitOp(in existingOps.Value1, entity, delta);
             if (existingOps.Count >= 3) EmitOp(in existingOps.Value2, entity, delta);
             if (existingOps.Count >= 4) EmitOp(in existingOps.Value3, entity, delta);
-            if (existingOps.Overflow is not null)
+            for (var j = 0; j < existingOps.OverflowCount; j++)
             {
-                foreach (var kv in existingOps.Overflow)
-                {
-                    var overflowSlot = kv.Value;
-                    EmitOp(in overflowSlot, entity, delta);
-                }
+                var overflowSlot = existingOps.Overflow![j].Value;
+                EmitOp(in overflowSlot, entity, delta);
             }
         }
 

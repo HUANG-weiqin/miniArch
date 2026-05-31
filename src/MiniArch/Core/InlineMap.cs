@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace MiniArch.Core;
@@ -10,7 +11,11 @@ internal struct InlineMap<TKey, TValue>
     public TKey Key1; public TValue Value1;
     public TKey Key2; public TValue Value2;
     public TKey Key3; public TValue Value3;
-    public Dictionary<TKey, TValue>? Overflow;
+
+    public (TKey Key, TValue Value)[]? Overflow;
+    public int OverflowCount;
+
+    public bool IsEmpty => Count == 0 && OverflowCount == 0;
 
     public bool Set(TKey key, TValue value)
     {
@@ -19,6 +24,18 @@ internal struct InlineMap<TKey, TValue>
         if (Count >= 3 && EqualityComparer<TKey>.Default.Equals(Key2, key)) { Value2 = value; return false; }
         if (Count >= 4 && EqualityComparer<TKey>.Default.Equals(Key3, key)) { Value3 = value; return false; }
 
+        if (Overflow is not null)
+        {
+            for (var i = 0; i < OverflowCount; i++)
+            {
+                if (EqualityComparer<TKey>.Default.Equals(Overflow[i].Key, key))
+                {
+                    Overflow[i].Value = value;
+                    return false;
+                }
+            }
+        }
+
         switch (Count)
         {
             case 0: Key0 = key; Value0 = value; Count = 1; return false;
@@ -26,11 +43,24 @@ internal struct InlineMap<TKey, TValue>
             case 2: Key2 = key; Value2 = value; Count = 3; return false;
             case 3: Key3 = key; Value3 = value; Count = 4; return false;
             default:
-                var allocated = Overflow is null;
-                Overflow ??= new Dictionary<TKey, TValue>(4);
-                Overflow[key] = value;
-                return allocated;
+                return OverflowAdd(key, value);
         }
+    }
+
+    private bool OverflowAdd(TKey key, TValue value)
+    {
+        var allocated = false;
+        if (Overflow is null)
+        {
+            Overflow = new (TKey, TValue)[4];
+            allocated = true;
+        }
+        else if (OverflowCount == Overflow.Length)
+        {
+            Array.Resize(ref Overflow, Overflow.Length * 2);
+        }
+        Overflow[OverflowCount++] = (key, value);
+        return allocated;
     }
 
     public bool TryGetValue(TKey key, out TValue value)
@@ -39,7 +69,17 @@ internal struct InlineMap<TKey, TValue>
         if (Count >= 2 && EqualityComparer<TKey>.Default.Equals(Key1, key)) { value = Value1; return true; }
         if (Count >= 3 && EqualityComparer<TKey>.Default.Equals(Key2, key)) { value = Value2; return true; }
         if (Count >= 4 && EqualityComparer<TKey>.Default.Equals(Key3, key)) { value = Value3; return true; }
-        if (Overflow is not null) return Overflow.TryGetValue(key, out value!);
+        if (Overflow is not null)
+        {
+            for (var i = 0; i < OverflowCount; i++)
+            {
+                if (EqualityComparer<TKey>.Default.Equals(Overflow[i].Key, key))
+                {
+                    value = Overflow[i].Value;
+                    return true;
+                }
+            }
+        }
         value = default!;
         return false;
     }
@@ -50,7 +90,20 @@ internal struct InlineMap<TKey, TValue>
         if (Count >= 2 && EqualityComparer<TKey>.Default.Equals(Key1, key)) { RemoveAt(1); return true; }
         if (Count >= 3 && EqualityComparer<TKey>.Default.Equals(Key2, key)) { RemoveAt(2); return true; }
         if (Count >= 4 && EqualityComparer<TKey>.Default.Equals(Key3, key)) { RemoveAt(3); return true; }
-        if (Overflow is not null) return Overflow.Remove(key);
+        if (Overflow is not null)
+        {
+            for (var i = 0; i < OverflowCount; i++)
+            {
+                if (EqualityComparer<TKey>.Default.Equals(Overflow[i].Key, key))
+                {
+                    var last = OverflowCount - 1;
+                    Overflow[i] = Overflow[last];
+                    Overflow[last] = default;
+                    OverflowCount = last;
+                    return true;
+                }
+            }
+        }
         return false;
     }
 
@@ -81,16 +134,13 @@ internal struct InlineMap<TKey, TValue>
         if (Count >= 2) target.Add((Key1, Value1));
         if (Count >= 3) target.Add((Key2, Value2));
         if (Count >= 4) target.Add((Key3, Value3));
-        if (Overflow is not null)
-        {
-            foreach (var kv in Overflow)
-                target.Add((kv.Key, kv.Value));
-        }
+        for (var i = 0; i < OverflowCount; i++)
+            target.Add((Overflow![i].Key, Overflow[i].Value));
     }
 
     public void Clear()
     {
         Count = 0;
-        Overflow?.Clear();
+        OverflowCount = 0;
     }
 }

@@ -9,6 +9,18 @@ public sealed class DebugMetricsTests
     private readonly record struct C3(int Value);
     private readonly record struct C4(int Value);
     private readonly record struct C5(int Value);
+    private readonly record struct C6(int Value);
+    private readonly record struct C7(int Value);
+    private readonly record struct C8(int Value);
+    private readonly record struct C9(int Value);
+    private readonly record struct C10(int Value);
+    private readonly record struct C11(int Value);
+    private readonly record struct C12(int Value);
+    private readonly record struct C13(int Value);
+    private readonly record struct C14(int Value);
+    private readonly record struct C15(int Value);
+    private readonly record struct C16(int Value);
+    private readonly record struct C17(int Value);
 
     [Fact]
     public void CommandBuffer_debug_report_identifies_overflow_grow_slab_and_snapshot_pressure()
@@ -29,6 +41,18 @@ public sealed class DebugMetricsTests
         buffer.Add(created, new C3(3));
         buffer.Add(created, new C4(4));
         buffer.Add(created, new C5(5));
+        buffer.Add(created, new C6(6));
+        buffer.Add(created, new C7(7));
+        buffer.Add(created, new C8(8));
+        buffer.Add(created, new C9(9));
+        buffer.Add(created, new C10(10));
+        buffer.Add(created, new C11(11));
+        buffer.Add(created, new C12(12));
+        buffer.Add(created, new C13(13));
+        buffer.Add(created, new C14(14));
+        buffer.Add(created, new C15(15));
+        buffer.Add(created, new C16(16));
+        buffer.Add(created, new C17(17));
 
         _ = buffer.Snapshot();
 
@@ -39,7 +63,7 @@ public sealed class DebugMetricsTests
         Assert.True(metrics.IsEnabled);
         Assert.Equal(70, metrics.RecordedSetCount);
         Assert.Equal(1, metrics.RecordedCreateCount);
-        Assert.Equal(5, metrics.RecordedAddCount);
+        Assert.Equal(17, metrics.RecordedAddCount);
         Assert.True(metrics.CreatedInlineOverflowAllocationCount >= 1);
         Assert.True(metrics.OpsPoolGrowCount >= 2);
         Assert.True(metrics.OpsLookupGrowCount >= 2);
