@@ -17,12 +17,15 @@ internal struct InlineMap<TKey, TValue>
 
     public bool IsEmpty => Count == 0 && OverflowCount == 0;
 
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    private static bool KeyEquals(TKey a, TKey b) => a.Equals(b);
+
     public void Set(TKey key, TValue value, ref OverflowPool<TKey, TValue> pool)
     {
-        if (Count >= 1 && EqualityComparer<TKey>.Default.Equals(Key0, key)) { Value0 = value; return; }
-        if (Count >= 2 && EqualityComparer<TKey>.Default.Equals(Key1, key)) { Value1 = value; return; }
-        if (Count >= 3 && EqualityComparer<TKey>.Default.Equals(Key2, key)) { Value2 = value; return; }
-        if (Count >= 4 && EqualityComparer<TKey>.Default.Equals(Key3, key)) { Value3 = value; return; }
+        if (Count >= 1 && KeyEquals(Key0, key)) { Value0 = value; return; }
+        if (Count >= 2 && KeyEquals(Key1, key)) { Value1 = value; return; }
+        if (Count >= 3 && KeyEquals(Key2, key)) { Value2 = value; return; }
+        if (Count >= 4 && KeyEquals(Key3, key)) { Value3 = value; return; }
 
         if (OverflowCount > 0)
         {
@@ -49,10 +52,10 @@ internal struct InlineMap<TKey, TValue>
 
     public bool TryGetValue(TKey key, out TValue value, ref OverflowPool<TKey, TValue> pool)
     {
-        if (Count >= 1 && EqualityComparer<TKey>.Default.Equals(Key0, key)) { value = Value0; return true; }
-        if (Count >= 2 && EqualityComparer<TKey>.Default.Equals(Key1, key)) { value = Value1; return true; }
-        if (Count >= 3 && EqualityComparer<TKey>.Default.Equals(Key2, key)) { value = Value2; return true; }
-        if (Count >= 4 && EqualityComparer<TKey>.Default.Equals(Key3, key)) { value = Value3; return true; }
+        if (Count >= 1 && KeyEquals(Key0, key)) { value = Value0; return true; }
+        if (Count >= 2 && KeyEquals(Key1, key)) { value = Value1; return true; }
+        if (Count >= 3 && KeyEquals(Key2, key)) { value = Value2; return true; }
+        if (Count >= 4 && KeyEquals(Key3, key)) { value = Value3; return true; }
         if (OverflowCount > 0)
         {
             var idx = pool.FindIndex(OverflowHead, key);
@@ -68,10 +71,10 @@ internal struct InlineMap<TKey, TValue>
 
     public bool Remove(TKey key, ref OverflowPool<TKey, TValue> pool)
     {
-        if (Count >= 1 && EqualityComparer<TKey>.Default.Equals(Key0, key)) { RemoveAt(0); return true; }
-        if (Count >= 2 && EqualityComparer<TKey>.Default.Equals(Key1, key)) { RemoveAt(1); return true; }
-        if (Count >= 3 && EqualityComparer<TKey>.Default.Equals(Key2, key)) { RemoveAt(2); return true; }
-        if (Count >= 4 && EqualityComparer<TKey>.Default.Equals(Key3, key)) { RemoveAt(3); return true; }
+        if (Count >= 1 && KeyEquals(Key0, key)) { RemoveAt(0); return true; }
+        if (Count >= 2 && KeyEquals(Key1, key)) { RemoveAt(1); return true; }
+        if (Count >= 3 && KeyEquals(Key2, key)) { RemoveAt(2); return true; }
+        if (Count >= 4 && KeyEquals(Key3, key)) { RemoveAt(3); return true; }
         if (OverflowCount > 0 && pool.Remove(ref OverflowHead, key))
         {
             OverflowCount--;
