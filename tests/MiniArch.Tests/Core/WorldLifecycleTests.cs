@@ -325,19 +325,19 @@ public sealed class WorldLifecycleTests
         Assert.Equal(7, secondBatch[3].Id);
 
         Assert.True(world.TryGetLocation(secondBatch[0], out var firstReused));
-        Assert.Equal(1, firstReused.ChunkIndex);
-        Assert.Equal(1, firstReused.RowIndex);
+        Assert.Equal(0, firstReused.ChunkIndex);
+        Assert.Equal(3, firstReused.RowIndex);
 
         Assert.True(world.TryGetLocation(secondBatch[1], out var secondReused));
         Assert.Equal(1, secondReused.ChunkIndex);
-        Assert.Equal(2, secondReused.RowIndex);
+        Assert.Equal(1, secondReused.RowIndex);
 
         Assert.True(world.TryGetLocation(secondBatch[2], out var firstFresh));
         Assert.Equal(1, firstFresh.ChunkIndex);
-        Assert.Equal(3, firstFresh.RowIndex);
+        Assert.Equal(2, firstFresh.RowIndex);
 
         Assert.True(world.TryGetLocation(secondBatch[3], out var secondFresh));
-        Assert.Equal(0, secondFresh.ChunkIndex);
+        Assert.Equal(1, secondFresh.ChunkIndex);
         Assert.Equal(3, secondFresh.RowIndex);
     }
 

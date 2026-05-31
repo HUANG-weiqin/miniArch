@@ -266,12 +266,8 @@ public sealed class Archetype
             return;
         }
 
-        var insertIndex = Array.BinarySearch(_nonFullChunkIndexes, 0, _nonFullCount, chunkIndex);
-        if (insertIndex < 0)
-        {
-            NonFullInsert(~insertIndex, chunkIndex);
-        }
-
+        EnsureNonFullCapacity();
+        _nonFullChunkIndexes[_nonFullCount++] = chunkIndex;
         _chunkHasNonFullEntry[chunkIndex] = true;
     }
 
@@ -280,15 +276,6 @@ public sealed class Archetype
         if (_nonFullCount < _nonFullChunkIndexes.Length) return;
         var newCapacity = _nonFullChunkIndexes.Length == 0 ? 4 : _nonFullChunkIndexes.Length * 2;
         Array.Resize(ref _nonFullChunkIndexes, newCapacity);
-    }
-
-    private void NonFullInsert(int index, int value)
-    {
-        EnsureNonFullCapacity();
-        if (index < _nonFullCount)
-            Array.Copy(_nonFullChunkIndexes, index, _nonFullChunkIndexes, index + 1, _nonFullCount - index);
-        _nonFullChunkIndexes[index] = value;
-        _nonFullCount++;
     }
 
 }
