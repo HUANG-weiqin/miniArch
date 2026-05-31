@@ -115,6 +115,11 @@ public sealed class World : IDisposable
     /// </summary>
     public int EntityCapacity => _versions.Length;
 
+    /// <summary>
+    /// Gets the number of currently alive entities.
+    /// </summary>
+    public int EntityCount => _entitySlotCount - _freeIdCount;
+
     internal int ChunkCapacity => _chunkCapacity;
 
     internal int EntitySlotCount => _entitySlotCount;
@@ -789,6 +794,15 @@ public sealed class World : IDisposable
     }
 
     /// <summary>
+    /// Destroys all entities and clears all archetypes, query caches, and hierarchy.
+    /// </summary>
+    public void DestroyAll()
+    {
+        ThrowIfDisposed();
+        Reset(0);
+    }
+
+    /// <summary>
     /// Links a child to a parent.
     /// </summary>
     public void Link(Entity parent, Entity child)
@@ -879,6 +893,18 @@ public sealed class World : IDisposable
     }
 
     /// <summary>
+    /// Checks whether an entity has a specific component.
+    /// </summary>
+    public bool Has<T>(Entity entity)
+    {
+        ThrowIfDisposed();
+        if (!TryGetLocation(entity, out var info))
+            return false;
+
+        return info.Archetype.Signature.Contains(GetComponentType<T>());
+    }
+
+    /// <summary>
     /// Gets a component directly without version or bounds checks.
     /// Use only when the entity is known to be alive and the component is known to exist.
     /// </summary>
@@ -890,6 +916,20 @@ public sealed class World : IDisposable
         return stored.Archetype
             .GetChunk(stored.ChunkIndex)
             .GetComponentAt<T>(stored.Archetype.GetComponentIndexFast(componentType), stored.RowIndex);
+    }
+
+    /// <summary>
+    /// Gets a mutable reference to a component directly without version or bounds checks.
+    /// Use only when the entity is known to be alive and the component is known to exist.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ref T GetRef<T>(Entity entity)
+    {
+        var stored = _locations[entity.Id];
+        var componentType = GetComponentType<T>();
+        return ref stored.Archetype
+            .GetChunk(stored.ChunkIndex)
+            .GetComponentRefAt<T>(stored.Archetype.GetComponentIndexFast(componentType), stored.RowIndex);
     }
 
     /// <summary>

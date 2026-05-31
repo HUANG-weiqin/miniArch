@@ -487,7 +487,7 @@ public sealed class Chunk
 
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private ref T GetComponentRefAt<T>(int columnIndex, int row)
+    internal ref T GetComponentRefAt<T>(int columnIndex, int row)
     {
         return ref Unsafe.As<byte, T>(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex]));
     }
