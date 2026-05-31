@@ -1001,22 +1001,49 @@ public sealed class World : IDisposable
 
     private void DeepCloneChildren(Entity sourceRoot, Entity cloneRoot)
     {
-        var stack = new List<(Entity Source, Entity Clone)>(4);
-        stack.Add((sourceRoot, cloneRoot));
-        while (stack.Count > 0)
+        if (!_hierarchy.HasChildren(sourceRoot)) return;
+
+        var stack = ArrayPool<CloneWork>.Shared.Rent(16);
+        var stackCount = 0;
+        try
         {
-            var last = stack.Count - 1;
-            var (srcParent, cloneParent) = stack[last];
-            stack.RemoveAt(last);
-            var children = _hierarchy.GetChildren(this, srcParent);
-            for (var i = 0; i < children.Count; i++)
+            PushPooled(ref stack, ref stackCount, new CloneWork(sourceRoot, cloneRoot));
+            while (stackCount > 0)
             {
-                var cloneChild = CloneSingle(children[i]);
-                _hierarchy.Link(this, cloneParent, cloneChild);
-                stack.Add((children[i], cloneChild));
+                var work = stack[--stackCount];
+                foreach (var child in _hierarchy.EnumerateChildren(this, work.Source))
+                {
+                    var cloneChild = CloneSingle(child);
+                    _hierarchy.Link(this, work.CloneEntity, cloneChild);
+                    PushPooled(ref stack, ref stackCount, new CloneWork(child, cloneChild));
+                }
             }
         }
+        finally
+        {
+            ArrayPool<CloneWork>.Shared.Return(stack);
+        }
+
         TouchQueryLayout();
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void PushPooled<T>(ref T[] array, ref int count, T value)
+    {
+        if ((uint)count >= (uint)array.Length)
+        {
+            GrowPooled(ref array);
+        }
+
+        array[count++] = value;
+    }
+
+    private static void GrowPooled<T>(ref T[] array)
+    {
+        var next = ArrayPool<T>.Shared.Rent(array.Length * 2);
+        Array.Copy(array, next, array.Length);
+        ArrayPool<T>.Shared.Return(array);
+        array = next;
     }
 
     /// <summary>
@@ -2121,6 +2148,8 @@ public sealed class World : IDisposable
             return index < components.Length ? components[index].Value : -1;
         }
     }
+
+    private readonly record struct CloneWork(Entity Source, Entity CloneEntity);
 
     private readonly record struct RecycledEntity(int Id, int Version);
 }

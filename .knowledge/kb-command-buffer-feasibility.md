@@ -31,7 +31,7 @@ updated: 2026-05-31
   - `src/MiniArch/Core/World.cs`：`ReserveDeferredEntity`、`ReleaseReservedEntity`、`Replay(FrameDelta)`、structural mutation
 - 数据流 / 控制流：
   - 工作线程通过 `CommandBuffer` 只记录命令；`Create()` 会立刻从 world 预留真实 `Entity`
-  - `Clone(source)` 录制时校验 source 存活、分配 deferred entity、记录到 `_cloneCommands`；commit 时 `ExpandCloneCommands` DFS 遍历 source subtree，快照组件数据到 CreatedState slab、记录 hierarchy link 到 `_hierarchyByChild`；语义等价于 deep clone
+  - `Clone(source)` 在录制时校验 source 存活并立即 DFS 遍历 source subtree：为 root/children 分配 deferred entity、把组件数据快照到 CreatedState slab、把 subtree 内部 hierarchy link 写入 `_hierarchyByChild`；clone root 不继承 source parent
   - recording 完成后可选三条路径：
     - `Submit()`：直接执行到 world，清空录制缓冲，适合"录完就生效"
     - `Snapshot()`：生成自包含 `FrameDelta` 但不影响 world，可保留、merge、或跨 world replay
@@ -65,6 +65,8 @@ updated: 2026-05-31
 - query layout generation 在 replay 期间被抑制，整批 replay 结束后只递增一次。
 - 多线程 recording：每个线程有独立 `CommandBuffer` 实例，`ReserveDeferredEntity` 通过 `World._entityIdLock` 串行化（无竞争时 ~10ns 开销）。
 - existing entity 的 `Destroy(Entity)` 必须保留录制时完整 `(Id, Version)`；`Submit()`、`Snapshot()`、`SubmitAndSnapshotAsync()` 都不能按 id 重新读取 world 当前 version，否则 stale handle 会误杀 recycled entity。
+- `CommandBuffer.Clone(source)` 读取 source 的录制时 world 状态，不观察同一个 buffer 里之前/之后尚未 Submit 的 existing entity `Add/Set/Remove`，也不观察 Clone 调用后到 Submit 前的 world 外部变化；这样 clone 返回的 deferred entity 从录制完成后就与 `Create(...)` 一样可被 `Set/Remove/Destroy` 正常归约。
+- clone 录制遍历 source children 时先走 `HierarchyTable.HasChildren(...)` leaf 快速路径；有 children 时再走 `HierarchyTable.EnumerateChildren(...)` 的 internal struct enumerator，不走公开 `GetChildren()` 的 list 快照；DFS traversal stack 使用 `ArrayPool`，支持超过常见 8-child 的 subtree 且稳态无 GC。
 
 ## 认知模型
 
@@ -104,6 +106,8 @@ updated: 2026-05-31
   - 以为 `destroy` 放最后就足够，实际上 created entity 的录时去重同样关键
   - 以为 recording 并发问题只在字典去重；实际上 entity reservation 也需要保护
   - 以为 existing destroy 只需要存 entity id；`Entity` 身份包含 version，hierarchy skip 和 delta 输出也必须按完整 `Entity` 比较
+  - 以为 `CommandBuffer.Clone(source)` 会读取 Submit 时 source 的最终状态；当前语义是录制时快照，pending source ops 不参与 clone
+  - 以为 destroy cloned subtree 需要 visited 防环；hierarchy 契约是单父无环，内部只需要 traversal stack
 - 改这里时要特别小心：
   - 当前 `World.Set<T>` 在组件不存在时会走"补组件 + 迁移"路径，command buffer 的 `Set` 语义必须与它兼容
   - `ReleaseReservedEntity` 会提升 version 并归还 free-list；如果漏掉 version 递增，stale handle 会重新变活

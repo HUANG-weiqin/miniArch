@@ -2,7 +2,7 @@
 title: Hierarchy Runtime
 module: MiniArch.Core Hierarchy
 description: Runtime-owned parent-child relations, cascade destroy semantics, and snapshot restore behavior
-updated: 2026-05-25
+updated: 2026-05-31
 ---
 # Hierarchy Runtime
 
@@ -25,7 +25,8 @@ updated: 2026-05-25
   - `src/MiniArch/Core/WorldSnapshot.cs`：hierarchy link 的持久化读写
 - 数据流 / 控制流：
   - `World.Link(parent, child)` 先做存活校验、拒绝自环和成环，再写入关系表
-  - `World.GetChildren(parent)` 返回当前 direct children 的排序快照 `List<Entity>`
+  - `World.GetChildren(parent)` 返回当前 direct children 的快照 `List<Entity>`，内部复用 `EnumerateChildren`；不承诺排序
+  - `HierarchyTable.EnumerateChildren(world, parent)` 是 internal struct enumerator，沿 `_childNext` 链直接遍历 live children，不分配 `List`，供 clone 等内部路径使用
 - `World.Destroy(parent)` 先从 hierarchy 表收集整棵子树，再按 child-first 顺序逐个销毁
 - `World.Destroy(parent)` 现在复用 world 内部 scratch 容器收集 destroy closure，不再每次临时分配 traversal stack / visited set
   - `WorldSnapshot.Save` 在 archetype/component 数据后写入 live hierarchy links
@@ -72,7 +73,8 @@ updated: 2026-05-25
   - destroy 时先删 parent 再清 children，导致旧关系残留或 slot reuse 串关系
   - snapshot 只恢复组件，不恢复 hierarchy links
 - 容易误判的地方：
-  - 以为 `GetChildren()` 应该返回 live view；当前契约是排序后的快照 list
+  - 以为 `GetChildren()` 应该返回 live view；当前契约是 snapshot list，但不保证排序
+  - 以为内部遍历也必须走 `GetChildren()`；性能敏感内部路径应走 `EnumerateChildren()`，避免每个节点分配 children list
   - 以为 hierarchy 改动需要递增 archetype generation；实际上它不影响 query 匹配
 - 改这里时要特别小心：
   - parent 存储必须带完整 `Entity` 句柄，不能只存 `Id`

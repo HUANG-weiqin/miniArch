@@ -38,6 +38,7 @@ updated: 2026-05-31
   - `MiniArch.Query.Advanced` 暴露对应的 `MiniArch.Core.Query`
   - advanced 用户也可以直接走 `MiniArch.Core.Query.Create(world, in description)`
   - `TryGet<T>` 走 `World` 上的 direct read 路径
+  - `CommandBuffer.Clone(Entity)` 在录制时快照 source 当前 world 状态；clone 返回的 deferred entity 后续可按普通 created entity 执行 `Set/Remove/Destroy`
 - 和其他模块的交互方式：
   - 依赖 `MiniArch.Core.Query` / `Chunk` / `CommandBuffer` / `WorldSnapshot`
   - 由 `tests/MiniArch.Tests/UserApi/UserQueryTests.cs` 做普通入口回归验证

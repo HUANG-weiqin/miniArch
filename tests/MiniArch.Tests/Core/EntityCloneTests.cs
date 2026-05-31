@@ -1,4 +1,5 @@
 using MiniArch.Core;
+using MiniQuery = MiniArch.Core.Query;
 
 namespace MiniArchTests.Core;
 
@@ -148,8 +149,8 @@ public sealed class EntityCloneTests
 
         var cloneChildren = world.GetChildren(clone);
         Assert.Equal(2, cloneChildren.Count);
-        Assert.True(world.TryGet(cloneChildren[0], out Velocity _));
-        Assert.True(world.TryGet(cloneChildren[1], out Health _));
+        Assert.Contains(cloneChildren, child => world.TryGet(child, out Velocity _));
+        Assert.Contains(cloneChildren, child => world.TryGet(child, out Health _));
     }
 
     [Fact]
@@ -216,7 +217,7 @@ public sealed class EntityCloneTests
         world.Destroy(parent);
 
         Assert.True(world.IsAlive(clone));
-        Assert.Equal(1, world.GetChildren(clone).Count);
+        Assert.Single(world.GetChildren(clone));
     }
 
     [Fact]
@@ -458,7 +459,60 @@ public sealed class CommandBufferCloneTests
 
         Assert.True(world.TryGet(clone, out Position pos));
         Assert.Equal(new Position(99, 99), pos);
-        Assert.Equal(1, world.GetChildren(clone).Count);
+        Assert.Single(world.GetChildren(clone));
+    }
+
+    [Fact]
+    public void Deep_clone_with_remove_on_root()
+    {
+        var world = new World();
+        var parent = world.Create(new Position(1, 2), new Velocity(3, 4));
+        var child = world.Create(new Health(100));
+        world.Link(parent, child);
+        var buffer = new CommandBuffer(world);
+
+        var clone = buffer.Clone(parent);
+        buffer.Remove<Position>(clone);
+        buffer.Submit();
+
+        Assert.False(world.TryGet<Position>(clone, out _));
+        Assert.True(world.TryGet(clone, out Velocity vel));
+        Assert.Equal(new Velocity(3, 4), vel);
+        Assert.Single(world.GetChildren(clone));
+    }
+
+    [Fact]
+    public void Clone_snapshots_source_at_record_time_before_world_changes()
+    {
+        var world = new World();
+        var source = world.Create(new Position(1, 2));
+        var buffer = new CommandBuffer(world);
+
+        var clone = buffer.Clone(source);
+        world.Set(source, new Position(9, 9));
+        buffer.Submit();
+
+        Assert.True(world.TryGet(clone, out Position clonePos));
+        Assert.Equal(new Position(1, 2), clonePos);
+        Assert.True(world.TryGet(source, out Position sourcePos));
+        Assert.Equal(new Position(9, 9), sourcePos);
+    }
+
+    [Fact]
+    public void Clone_ignores_pending_source_remove_in_same_buffer()
+    {
+        var world = new World();
+        var source = world.Create(new Position(1, 2), new Velocity(3, 4));
+        var buffer = new CommandBuffer(world);
+
+        buffer.Remove<Position>(source);
+        var clone = buffer.Clone(source);
+        buffer.Submit();
+
+        Assert.False(world.TryGet<Position>(source, out _));
+        Assert.True(world.TryGet(clone, out Position clonePos));
+        Assert.Equal(new Position(1, 2), clonePos);
+        Assert.True(world.TryGet(clone, out Velocity _));
     }
 
     [Fact]
@@ -473,5 +527,34 @@ public sealed class CommandBufferCloneTests
         buffer.Submit();
 
         Assert.False(world.IsAlive(clone));
+    }
+
+    [Fact]
+    public void Deep_clone_destroy_cloned_subtree_in_buffer_does_not_materialize_children()
+    {
+        var world = new World();
+        var source = world.Create(new Position(1, 2));
+        var child = world.Create(new Health(100));
+        world.Link(source, child);
+        var buffer = new CommandBuffer(world);
+
+        var clone = buffer.Clone(source);
+        buffer.Destroy(clone);
+        buffer.Submit();
+
+        Assert.False(world.IsAlive(clone));
+        var description = new QueryDescription().With<Health>();
+        Assert.Equal(1, CountEntities(MiniQuery.Create(world, in description)));
+    }
+
+    private static int CountEntities(MiniQuery query)
+    {
+        var total = 0;
+        foreach (ref readonly var chunk in query.GetChunkSpan())
+        {
+            total += chunk.GetEntities().Length;
+        }
+
+        return total;
     }
 }

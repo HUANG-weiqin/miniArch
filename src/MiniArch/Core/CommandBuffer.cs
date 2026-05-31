@@ -31,7 +31,6 @@ public sealed class CommandBuffer : ICommandRecorder
     private Dictionary<int, (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)> _typeInfoCache = new();
     private List<byte[]> _slabs = new();
     private readonly List<(int ComponentTypeId, CreatedComponent Component)> _tempComponents = new();
-    private List<(Entity Deferred, Entity Source)> _cloneCommands = new(4);
     private bool _hasCreatedEntities;
     private int _currentSlabIndex = -1;
     private int _currentSlabOffset;
@@ -180,31 +179,13 @@ public sealed class CommandBuffer : ICommandRecorder
     /// </summary>
     public void Destroy(Entity entity)
     {
-        for (var i = _cloneCommands.Count - 1; i >= 0; i--)
-        {
-            if (_cloneCommands[i].Deferred == entity)
-            {
-                _cloneCommands.RemoveAt(i);
-                if (_hasCreatedEntities)
-                {
-                    var createdIdx = GetCreatedStateIndex(entity);
-                    if (createdIdx >= 0)
-                    {
-                        _createdStatePool[createdIdx].Destroyed = true;
-                        return;
-                    }
-                }
-                _world.ReleaseReservedEntity(entity);
-                return;
-            }
-        }
-
         if (_hasCreatedEntities)
         {
             var createdIdx = GetCreatedStateIndex(entity);
             if (createdIdx >= 0)
             {
                 _createdStatePool[createdIdx].Destroyed = true;
+                MarkCreatedDescendantsDestroyed(entity);
                 return;
             }
         }
@@ -214,76 +195,68 @@ public sealed class CommandBuffer : ICommandRecorder
 
     /// <summary>
     /// Records a deep clone of an entity and its entire child subtree.
-    /// Component data is read at commit time, not at record time.
-    /// The clone root gets a new deferred entity handle; children are allocated at commit time.
+    /// Component data and child links are snapshotted at record time.
+    /// Pending commands in this buffer and later world changes are not observed by the clone.
+    /// Parent-child links within the subtree are preserved; the clone root does not inherit the source parent.
     /// </summary>
     /// <param name="source">The entity to clone. Must be alive at record time.</param>
     /// <returns>A deferred entity handle that becomes alive after <see cref="Submit"/>.</returns>
     /// <exception cref="InvalidOperationException">Thrown when <paramref name="source"/> is no longer alive.</exception>
     public Entity Clone(Entity source)
     {
-        if (!_world.IsAlive(source))
+        if (!_world.TryGetLocation(source, out var location))
         {
             throw new InvalidOperationException($"Cannot clone entity {source}: it is no longer alive.");
         }
 
         var deferred = _world.ReserveDeferredEntity();
         RegisterInCreatedState(deferred);
-        _cloneCommands.Add((deferred, source));
+        SnapshotEntityToCreatedState(deferred, location);
+        CloneChildrenAtRecordTime(source, deferred);
         return deferred;
     }
 
-    private void ExpandCloneCommands()
+    private void CloneChildrenAtRecordTime(Entity sourceRoot, Entity cloneRoot)
     {
-        if (_cloneCommands.Count == 0) return;
+        if (!_world.Hierarchy.HasChildren(sourceRoot)) return;
 
-        for (var i = 0; i < _cloneCommands.Count; i++)
+        var stack = ArrayPool<CloneChildWork>.Shared.Rent(16);
+        var stackCount = 0;
+        try
         {
-            var (deferred, source) = _cloneCommands[i];
-            ExpandCloneSubtree(deferred, source);
+            PushCloneChildren(sourceRoot, cloneRoot, ref stack, ref stackCount);
+
+            while (stackCount > 0)
+            {
+                var work = stack[--stackCount];
+                var cloneParent = work.CloneParent;
+                var srcChild = work.SourceChild;
+
+                if (!_world.TryGetLocation(srcChild, out var childLocation)) continue;
+
+                var cloneChild = _world.ReserveDeferredEntity();
+                RegisterInCreatedState(cloneChild);
+                SnapshotEntityToCreatedState(cloneChild, childLocation);
+                _hierarchyByChild[cloneChild] = new HierarchyIntent(true, cloneParent);
+
+                PushCloneChildren(srcChild, cloneChild, ref stack, ref stackCount);
+            }
         }
-        _cloneCommands.Clear();
+        finally
+        {
+            ArrayPool<CloneChildWork>.Shared.Return(stack);
+        }
     }
 
-    private void ExpandCloneSubtree(Entity deferredRoot, Entity source)
+    private void PushCloneChildren(
+        Entity sourceParent,
+        Entity cloneParent,
+        ref CloneChildWork[] stack,
+        ref int stackCount)
     {
-        if (!_world.TryGetLocation(source, out var location))
+        foreach (var child in _world.Hierarchy.EnumerateChildren(_world, sourceParent))
         {
-            throw new InvalidOperationException($"Cannot clone entity {source}: it is no longer alive.");
-        }
-
-        SnapshotEntityToCreatedState(deferredRoot, location);
-
-        var stack = new List<(Entity SourceParent, Entity CloneParent, Entity SourceChild)>(4);
-        var children = _world.GetChildren(source);
-        for (var i = children.Count - 1; i >= 0; i--)
-        {
-            stack.Add((source, deferredRoot, children[i]));
-        }
-
-        while (stack.Count > 0)
-        {
-            var last = stack.Count - 1;
-            var (srcParent, cloneParent, srcChild) = stack[last];
-            stack.RemoveAt(last);
-
-            if (!_world.IsAlive(srcChild)) continue;
-
-            var cloneChild = _world.ReserveDeferredEntity();
-            RegisterInCreatedState(cloneChild);
-
-            if (_world.TryGetLocation(srcChild, out var childLocation))
-            {
-                SnapshotEntityToCreatedState(cloneChild, childLocation);
-            }
-
-            _hierarchyByChild[cloneChild] = new HierarchyIntent(true, cloneParent);
-
-            var grandChildren = _world.GetChildren(srcChild);
-            for (var i = grandChildren.Count - 1; i >= 0; i--)
-            {
-                stack.Add((srcChild, cloneChild, grandChildren[i]));
-            }
+            PushPooled(ref stack, ref stackCount, new CloneChildWork(cloneParent, child));
         }
     }
 
@@ -302,11 +275,41 @@ public sealed class CommandBuffer : ICommandRecorder
             var componentType = components[i];
             var componentTypeId = componentType.Value;
             ref var state = ref _createdStatePool[createdIdx];
-            if (state.Map.TryGetValue(componentTypeId, out _))
-                continue;
             var info = ResolveTypeInfo(componentTypeId);
             CopyComponentFromChunk(chunk, i, sourceRow, info.Size, out var slabIndex, out var offset);
             state.Map.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size));
+        }
+    }
+
+    private void MarkCreatedDescendantsDestroyed(Entity root)
+    {
+        if (_hierarchyByChild.Count == 0) return;
+
+        var stack = ArrayPool<Entity>.Shared.Rent(16);
+        var stackCount = 0;
+        try
+        {
+            PushPooled(ref stack, ref stackCount, root);
+
+            while (stackCount > 0)
+            {
+                var parent = stack[--stackCount];
+
+                foreach (var (child, intent) in _hierarchyByChild)
+                {
+                    if (!intent.IsLinked || intent.Parent != parent) continue;
+
+                    var createdIdx = GetCreatedStateIndex(child);
+                    if (createdIdx < 0) continue;
+
+                    _createdStatePool[createdIdx].Destroyed = true;
+                    PushPooled(ref stack, ref stackCount, child);
+                }
+            }
+        }
+        finally
+        {
+            ArrayPool<Entity>.Shared.Return(stack);
         }
     }
 
@@ -385,7 +388,6 @@ public sealed class CommandBuffer : ICommandRecorder
     /// </summary>
     public bool Submit()
     {
-        ExpandCloneCommands();
         if (_opsPoolCount == 0 &&
             _existingDestroyCount == 0 && _createdStatePoolCount == 0 &&
             _hierarchyByChild.Count == 0)
@@ -446,6 +448,11 @@ public sealed class CommandBuffer : ICommandRecorder
                 {
                     var csIdx = GetCreatedStateIndex(child);
                     if (csIdx >= 0 && _createdStatePool[csIdx].Destroyed) continue;
+                    if (intent.IsLinked)
+                    {
+                        var parentIdx = GetCreatedStateIndex(intent.Parent);
+                        if (parentIdx >= 0 && _createdStatePool[parentIdx].Destroyed) continue;
+                    }
                 }
 
                 if (intent.IsLinked)
@@ -476,7 +483,6 @@ public sealed class CommandBuffer : ICommandRecorder
     /// </summary>
     public FrameDelta Snapshot()
     {
-        ExpandCloneCommands();
         var delta = new FrameDelta();
         BuildDelta(delta);
         delta.DeepCopyOwnedData();
@@ -490,7 +496,6 @@ public sealed class CommandBuffer : ICommandRecorder
     /// </summary>
     public Task<FrameDelta> SubmitAndSnapshotAsync()
     {
-        ExpandCloneCommands();
         if (_opsPoolCount == 0 &&
             _existingDestroyCount == 0 && _createdStatePoolCount == 0 &&
             _hierarchyByChild.Count == 0)
@@ -633,12 +638,8 @@ public sealed class CommandBuffer : ICommandRecorder
                 if (FindExistingDestroy(frozen.ExistingDestroyEntities, frozen.ExistingDestroyCount, child) >= 0) continue;
                 if (frozen.HasCreatedEntities)
                 {
-                    var id = child.Id;
-                    if ((uint)id < (uint)frozen.CreatedStateLookup.Length)
-                    {
-                        var csIdx = frozen.CreatedStateLookup[id];
-                        if (csIdx >= 0 && frozen.CreatedStatePool[csIdx].Destroyed) continue;
-                    }
+                    if (IsFrozenCreatedDestroyed(frozen, child)) continue;
+                    if (intent.IsLinked && IsFrozenCreatedDestroyed(frozen, intent.Parent)) continue;
                 }
 
                 if (intent.IsLinked)
@@ -708,12 +709,8 @@ public sealed class CommandBuffer : ICommandRecorder
             if (FindExistingDestroy(frozen.ExistingDestroyEntities, frozen.ExistingDestroyCount, child) >= 0) continue;
             if (frozen.HasCreatedEntities)
             {
-                var id = child.Id;
-                if ((uint)id < (uint)frozen.CreatedStateLookup.Length)
-                {
-                    var csIdx = frozen.CreatedStateLookup[id];
-                    if (csIdx >= 0 && frozen.CreatedStatePool[csIdx].Destroyed) continue;
-                }
+                if (IsFrozenCreatedDestroyed(frozen, child)) continue;
+                if (intent.IsLinked && IsFrozenCreatedDestroyed(frozen, intent.Parent)) continue;
             }
 
             if (intent.IsLinked)
@@ -778,6 +775,34 @@ public sealed class CommandBuffer : ICommandRecorder
 
         Array.Sort(types, sources, 0, idx);
         return (types, sources, idx);
+    }
+
+    private static bool IsFrozenCreatedDestroyed(FrozenBufferState frozen, Entity entity)
+    {
+        var id = entity.Id;
+        if ((uint)id >= (uint)frozen.CreatedStateLookup.Length) return false;
+
+        var csIdx = frozen.CreatedStateLookup[id];
+        return csIdx >= 0 && frozen.CreatedStatePool[csIdx].Destroyed;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void PushPooled<T>(ref T[] array, ref int count, T value)
+    {
+        if ((uint)count >= (uint)array.Length)
+        {
+            GrowPooled(ref array);
+        }
+
+        array[count++] = value;
+    }
+
+    private static void GrowPooled<T>(ref T[] array)
+    {
+        var next = ArrayPool<T>.Shared.Rent(array.Length * 2);
+        Array.Copy(array, next, array.Length);
+        ArrayPool<T>.Shared.Return(array);
+        array = next;
     }
 
     private static void ReturnExtracted(ComponentType[] types, CreatedComponent[] sources)
@@ -947,6 +972,15 @@ public sealed class CommandBuffer : ICommandRecorder
                 {
                     continue;
                 }
+
+                if (intent.IsLinked)
+                {
+                    var parentIdx = GetCreatedStateIndex(intent.Parent);
+                    if (parentIdx >= 0 && _createdStatePool[parentIdx].Destroyed)
+                    {
+                        continue;
+                    }
+                }
             }
 
             if (intent.IsLinked)
@@ -987,7 +1021,6 @@ public sealed class CommandBuffer : ICommandRecorder
 
     private void Clear()
     {
-        _cloneCommands.Clear();
         _existingDestroyCount = 0;
         for (int i = 0; i < _opsPoolCount; i++)
         {
@@ -1194,6 +1227,8 @@ public sealed class CommandBuffer : ICommandRecorder
     }
 
     private readonly record struct HierarchyIntent(bool IsLinked, Entity Parent);
+
+    private readonly record struct CloneChildWork(Entity CloneParent, Entity SourceChild);
 
     private struct AddSetEntry
     {

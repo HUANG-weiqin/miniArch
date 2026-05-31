@@ -83,31 +83,69 @@ internal sealed class HierarchyTable
 
     public List<Entity> GetChildren(World world, Entity parent)
     {
-        if (!world.IsAlive(parent) || parent.Id < 0 || parent.Id >= _firstChild.Length)
-        {
-            return [];
-        }
-
-        var slot = _firstChild[parent.Id];
-        if (slot < 0)
-        {
-            return [];
-        }
-
         var result = new List<Entity>();
-        while (slot >= 0)
+        foreach (var child in EnumerateChildren(world, parent))
         {
-            var child = _childEntity[slot];
-            if (world.IsAlive(child))
+            result.Add(child);
+        }
+
+        return result;
+    }
+
+    internal ChildrenEnumerable EnumerateChildren(World world, Entity parent)
+    {
+        return new ChildrenEnumerable(this, world, parent);
+    }
+
+    internal readonly struct ChildrenEnumerable
+    {
+        private readonly HierarchyTable _table;
+        private readonly World _world;
+        private readonly int _firstSlot;
+
+        internal ChildrenEnumerable(HierarchyTable table, World world, Entity parent)
+        {
+            _table = table;
+            _world = world;
+            _firstSlot = world.IsAlive(parent) && parent.Id >= 0 && parent.Id < table._firstChild.Length
+                ? table._firstChild[parent.Id]
+                : NoSlot;
+        }
+
+        public ChildrenEnumerator GetEnumerator() => new(_table, _world, _firstSlot);
+    }
+
+    internal struct ChildrenEnumerator
+    {
+        private readonly HierarchyTable _table;
+        private readonly World _world;
+        private int _slot;
+
+        internal ChildrenEnumerator(HierarchyTable table, World world, int firstSlot)
+        {
+            _table = table;
+            _world = world;
+            _slot = firstSlot;
+            Current = default;
+        }
+
+        public Entity Current { get; private set; }
+
+        public bool MoveNext()
+        {
+            while (_slot >= 0)
             {
-                result.Add(child);
+                var slot = _slot;
+                _slot = _table._childNext[slot];
+                var child = _table._childEntity[slot];
+                if (!_world.IsAlive(child)) continue;
+
+                Current = child;
+                return true;
             }
 
-            slot = _childNext[slot];
+            return false;
         }
-
-        result.Sort(static (left, right) => left.Id.CompareTo(right.Id));
-        return result;
     }
 
     public bool HasChildren(Entity entity)
