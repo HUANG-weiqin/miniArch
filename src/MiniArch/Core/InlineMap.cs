@@ -4,7 +4,7 @@ using System.Collections.Generic;
 namespace MiniArch.Core;
 
 internal struct InlineMap<TKey, TValue>
-    where TKey : unmanaged
+    where TKey : unmanaged, IEquatable<TKey>
 {
     public int Count;
     public TKey Key0; public TValue Value0;
