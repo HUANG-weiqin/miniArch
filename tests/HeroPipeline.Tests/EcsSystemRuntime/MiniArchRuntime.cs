@@ -51,7 +51,6 @@ public sealed class MiniArchRuntime
     public void Tick()
     {
         FlushPendingCommands();
-        CurrentFrame = new FrameView(World);
 
         FrameContext context = new(Recorder, CurrentFrame);
 
@@ -61,7 +60,6 @@ public sealed class MiniArchRuntime
         }
 
         IsStable = !FlushPendingCommands();
-        CurrentFrame = new FrameView(World);
     }
 
     private bool FlushPendingCommands()

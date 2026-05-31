@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using CoreCommandBuffer = MiniArch.Core.ICommandRecorder;
 
 namespace Hero.Ecs;
@@ -40,11 +41,12 @@ public sealed class ModifierApplySystem : ISystem
             }
 
             ModifierBucketKey bucketKey = new(requestTarget.Target, modifierSlot.Slot);
-            if (!buckets.TryGetValue(bucketKey, out ModifierBucket? bucket))
+            if (!buckets.ContainsKey(bucketKey))
             {
-                bucket = new ModifierBucket(requestTarget.Target, port);
-                buckets[bucketKey] = bucket;
+                buckets[bucketKey] = new ModifierBucket(requestTarget.Target, port);
             }
+
+            ref ModifierBucket bucket = ref CollectionsMarshal.GetValueRefOrAddDefault(buckets, bucketKey, out _);
 
             if (frame.TryGet(entity, out SetModifier setModifier))
             {
@@ -59,8 +61,9 @@ public sealed class ModifierApplySystem : ISystem
             commands.Destroy(entity);
         }
 
-        foreach (ModifierBucket bucket in buckets.Values)
+        foreach (var kvp in buckets)
         {
+            ModifierBucket bucket = kvp.Value;
             int current = 0;
             bool hasCurrent = bucket.Port.TryRead(frame, bucket.Target, out current);
             if (!hasCurrent && !bucket.HasSet)
@@ -76,7 +79,7 @@ public sealed class ModifierApplySystem : ISystem
 
     private readonly record struct ModifierBucketKey(MiniArch.Entity Target, SlotKey Slot);
 
-    private sealed class ModifierBucket
+    private struct ModifierBucket
     {
         public ModifierBucket(MiniArch.Entity target, IIntSlotPort port)
         {
