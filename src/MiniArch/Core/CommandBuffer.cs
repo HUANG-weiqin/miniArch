@@ -378,7 +378,12 @@ public sealed class CommandBuffer : ICommandRecorder
 
         SubmitFromFrozen(frozen);
 
-        return task;
+        return task.ContinueWith(t =>
+        {
+            foreach (var slab in frozen.Slabs)
+                ArrayPool<byte>.Shared.Return(slab);
+            return t.Result;
+        }, TaskContinuationOptions.ExecuteSynchronously);
     }
 
     private FrozenBufferState SwapOutState()
@@ -618,11 +623,6 @@ public sealed class CommandBuffer : ICommandRecorder
         }
 
         delta.DeepCopyOwnedData();
-
-        foreach (var slab in frozen.Slabs)
-        {
-            ArrayPool<byte>.Shared.Return(slab);
-        }
 
         return delta;
     }

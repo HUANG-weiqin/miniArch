@@ -14,6 +14,7 @@ using MiniWorld = MiniArch.World;
 public enum CommandBufferEngine
 {
     MiniCommandBuffer,
+    MiniSyncSnapshot,
     MiniAsyncSubmitSnapshot,
     Arch,
 }
@@ -138,7 +139,7 @@ public static class CommandBufferThroughputRunner
         output.WriteLine($"DurationSeconds: {duration.TotalSeconds:F0}, Warmup: {warmupCount}, Repeat: {repeatCount}");
         output.WriteLine();
 
-        var engines = new[] { CommandBufferEngine.MiniCommandBuffer, CommandBufferEngine.MiniAsyncSubmitSnapshot, CommandBufferEngine.Arch };
+        var engines = new[] { CommandBufferEngine.MiniCommandBuffer, CommandBufferEngine.MiniSyncSnapshot, CommandBufferEngine.MiniAsyncSubmitSnapshot, CommandBufferEngine.Arch };
 
         output.WriteLine($"{"Case",-28} {"Engine",-22} {"Median ops/s",14} {"Best ops/s",14}");
         output.WriteLine(new string('-', 80));
@@ -167,6 +168,7 @@ public static class CommandBufferThroughputRunner
             var mini = results.FirstOrDefault(r => r.Engine == CommandBufferEngine.MiniCommandBuffer);
             var arch = results.FirstOrDefault(r => r.Engine == CommandBufferEngine.Arch);
             var miniAsync = results.FirstOrDefault(r => r.Engine == CommandBufferEngine.MiniAsyncSubmitSnapshot);
+            var miniSync = results.FirstOrDefault(r => r.Engine == CommandBufferEngine.MiniSyncSnapshot);
 
             if (mini.Detail is not null && arch.Detail is not null)
             {
@@ -174,10 +176,16 @@ public static class CommandBufferThroughputRunner
                 output.WriteLine($"  Mini vs Arch: {miniVsArch:+0.0;-0.0;0.0}%");
             }
 
-            if (mini.Detail is not null && miniAsync.Detail is not null)
+            if (miniSync.Detail is not null && mini.Detail is not null)
             {
-                var asyncVsMini = ((miniAsync.Median - mini.Median) / mini.Median) * 100d;
-                output.WriteLine($"  Async vs Mini Submit: {asyncVsMini:+0.0;-0.0;0.0}%");
+                var syncVsMini = ((miniSync.Median - mini.Median) / mini.Median) * 100d;
+                output.WriteLine($"  Sync+Snp vs Mini Submit: {syncVsMini:+0.0;-0.0;0.0}%");
+            }
+
+            if (miniAsync.Detail is not null && miniSync.Detail is not null)
+            {
+                var asyncVsSync = ((miniAsync.Median - miniSync.Median) / miniSync.Median) * 100d;
+                output.WriteLine($"  Async vs Sync+Snp: {asyncVsSync:+0.0;-0.0;0.0}%");
             }
 
             output.WriteLine();
@@ -277,10 +285,43 @@ public static class CommandBufferThroughputRunner
         return engine switch
         {
             CommandBufferEngine.MiniCommandBuffer => ExecuteMini(scenario, entityCount, duration, warmupCount, cancellationToken),
+            CommandBufferEngine.MiniSyncSnapshot => ExecuteMiniSyncSnapshot(scenario, entityCount, duration, warmupCount, cancellationToken),
             CommandBufferEngine.MiniAsyncSubmitSnapshot => ExecuteMiniAsync(scenario, entityCount, duration, warmupCount, cancellationToken),
             CommandBufferEngine.Arch => ExecuteArch(scenario, entityCount, duration, warmupCount, cancellationToken),
             _ => throw new ArgumentOutOfRangeException(nameof(engine))
         };
+    }
+
+    private static CommandBufferRunResult ExecuteMiniSyncSnapshot(
+        CommandBufferBenchmarkScenario scenario, int entityCount, TimeSpan duration, int warmupCount, CancellationToken cancellationToken)
+    {
+        for (var w = 0; w < warmupCount; w++)
+        {
+            var warmupState = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
+            var buffer = new CommandBuffer(warmupState.World);
+            CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(buffer, warmupState, scenario);
+            buffer.Snapshot();
+            buffer.Submit();
+        }
+
+        var iterations = 0L;
+        var totalElapsed = TimeSpan.Zero;
+
+        while (totalElapsed < duration)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var state = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
+            var buffer = new CommandBuffer(state.World);
+            var sw = Stopwatch.StartNew();
+            CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(buffer, state, scenario);
+            buffer.Snapshot();
+            buffer.Submit();
+            sw.Stop();
+            totalElapsed += sw.Elapsed;
+            iterations++;
+        }
+
+        return new CommandBufferRunResult(CommandBufferEngine.MiniSyncSnapshot, iterations, totalElapsed);
     }
 
     private static CommandBufferRunResult ExecuteMiniAsync(
@@ -357,6 +398,7 @@ public static class CommandBufferThroughputRunner
     private static string FormatEngine(CommandBufferEngine engine) => engine switch
     {
         CommandBufferEngine.MiniCommandBuffer => "Mini Submit",
+        CommandBufferEngine.MiniSyncSnapshot => "Mini Sync+Snp",
         CommandBufferEngine.MiniAsyncSubmitSnapshot => "Mini Async+Snp",
         CommandBufferEngine.Arch => "Arch CommandBuffer",
         _ => engine.ToString()
