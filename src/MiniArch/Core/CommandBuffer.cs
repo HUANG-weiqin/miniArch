@@ -28,7 +28,7 @@ public sealed class CommandBuffer : ICommandRecorder
     private int[] _createdStateLookup = Array.Empty<int>();
     private int _maxCreatedEntityId;
     private Dictionary<Entity, HierarchyIntent> _hierarchyByChild = new();
-    private Dictionary<int, (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)> _typeInfoCache = new();
+    private (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)[] _typeInfoCache = [];
     private List<byte[]> _slabs = new();
     private readonly List<(int ComponentTypeId, CreatedComponent Component)> _tempComponents = new();
     private OverflowPool<int, EntityOpSlot> _opsOverflow;
@@ -666,7 +666,7 @@ public sealed class CommandBuffer : ICommandRecorder
         _hierarchyByChild = new Dictionary<Entity, HierarchyIntent>();
         _slabs = new List<byte[]>();
         _hasCreatedEntities = false;
-        _typeInfoCache = new Dictionary<int, (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)>();
+        _typeInfoCache = [];
         _opsOverflow = default;
         _createdOverflow = default;
         _currentSlabIndex = -1;
@@ -952,7 +952,7 @@ public sealed class CommandBuffer : ICommandRecorder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void EmitOpFromFrozen(
         List<byte[]> slabs,
-        Dictionary<int, (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)> typeInfoCache,
+        (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)[] typeInfoCache,
         in EntityOpSlot slot, Entity entity, FrameDelta delta)
     {
         switch (slot.Kind)
@@ -1203,9 +1203,13 @@ public sealed class CommandBuffer : ICommandRecorder
 
     private (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer) ResolveTypeInfo(int componentTypeId)
     {
-        if (_typeInfoCache.TryGetValue(componentTypeId, out var info))
+        if ((uint)componentTypeId < (uint)_typeInfoCache.Length)
         {
-            return info;
+            var cached = _typeInfoCache[componentTypeId];
+            if (cached.RuntimeType != null)
+            {
+                return cached;
+            }
         }
 
         var componentType = (ComponentType)componentTypeId;
@@ -1217,8 +1221,17 @@ public sealed class CommandBuffer : ICommandRecorder
 
         var size = runtimeType == typeof(object) ? 0 : ComponentSizeCache.GetSize(runtimeType);
         var writer = runtimeType == typeof(object) ? null! : ComponentWriterCache.GetColumnWriter(runtimeType);
-        info = (runtimeType, componentType, size, writer);
-        _typeInfoCache.Add(componentTypeId, info);
+        var info = (runtimeType, componentType, size, writer);
+
+        if (componentTypeId >= _typeInfoCache.Length)
+        {
+            var newCache = new (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)[componentTypeId + 1];
+            if (_typeInfoCache.Length > 0)
+                Array.Copy(_typeInfoCache, newCache, _typeInfoCache.Length);
+            _typeInfoCache = newCache;
+        }
+
+        _typeInfoCache[componentTypeId] = info;
         return info;
     }
 
@@ -1384,7 +1397,7 @@ public sealed class CommandBuffer : ICommandRecorder
         public Dictionary<Entity, HierarchyIntent> HierarchyByChild = null!;
         public List<byte[]> Slabs = null!;
         public bool HasCreatedEntities;
-        public Dictionary<int, (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)> TypeInfoCache = null!;
+        public (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)[] TypeInfoCache = [];
         public OverflowPool<int, EntityOpSlot> OpsOverflow;
         public OverflowPool<int, CreatedComponent> CreatedOverflow;
     }
