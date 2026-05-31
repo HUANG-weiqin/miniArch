@@ -39,10 +39,7 @@ updated: 2026-05-31
   - advanced 用户也可以直接走 `MiniArch.Core.Query.Create(world, in description)`
   - `TryGet<T>` 走 `World` 上的 direct read 路径
   - `CommandBuffer.Clone(Entity)` 在录制时快照 source 当前 world 状态；clone 返回的 deferred entity 后续可按普通 created entity 执行 `Set/Remove/Destroy`
-- 和其他模块的交互方式：
-  - 依赖 `MiniArch.Core.Query` / `Chunk` / `CommandBuffer` / `WorldSnapshot`
-  - 由 `tests/MiniArch.Tests/UserApi/UserQueryTests.cs` 做普通入口回归验证
-  - 由 `tests/MiniArch.Tests/Core/*.cs` 验证 advanced query 和 runtime 语义
+
 
 ## 决策
 
@@ -75,17 +72,14 @@ updated: 2026-05-31
 
 ## 入口
 
-- 如果是第一次读这个模块，先看：
+- 第一次读或加功能，先看：
   - `src/MiniArch/Core/World.cs`：唯一 `World`
   - `src/MiniArch/Core/QueryDescription.cs`：唯一查询描述
   - `src/MiniArch/Ecs/Query.cs`：默认层 entity-only 查询
   - `src/MiniArch/Core/Query.cs`：advanced query factory 与 chunk 级消费
-- 如果是修 bug，先看：
+- 修 bug，先看：
   - `tests/MiniArch.Tests/UserApi/UserQueryTests.cs`：普通 API 契约
   - `tests/MiniArch.Tests/Core/QueryTests.cs`：advanced query 缓存与并发读取契约
-- 如果是加功能，先看：
-  - `src/MiniArch/Core/World.cs`：是否应属于共享 `World`
-  - `src/MiniArch/Core/Query.cs`：是否应属于 advanced query，而不是再引入第二套描述语言
 
 ## 坑点
 
@@ -102,8 +96,3 @@ updated: 2026-05-31
   - `MiniArch.Core.Query.Create(world, in description)` 现在是 advanced 唯一入口；改这里要同步 tests/benchmarks
   - 如果未来再扩查询能力，优先扩 `QueryDescription` 或 advanced query 消费方式，不要重新引入 typed query 家族
 
-## 关联模块
-
-- `kb-core-ecs.md`：底层 runtime 架构与 query 缓存来源
-- `kb-test-workflow.md`：普通 API 与 core API 的验证入口
-- `src/MiniArch/README.md`：对外说明当前 API 分层

@@ -15,6 +15,7 @@
 - `kb-hierarchy-runtime.md`：runtime-owned parent-child、级联销毁和 hierarchy snapshot 恢复
 - `kb-test-workflow.md`：测试组织、验证方式、性能基准和常见回归点
 - `kb-hero-pipeline-benchmarks.md`：Hero 项目 pipeline benchmark 移植到 miniArch 的架构和结果
+- `kb-architecture-review.md`：全库机械化拆解（10 模块一句话真相 + 核心循环 + 状态模型 + 数据流）、5 个已知问题、4 个优化方向、3 个设计张力
 
 ## 模块地图
 
@@ -30,6 +31,7 @@
 - `MiniArch.Tests` -> `kb-test-workflow.md`
 - `MiniArch.Benchmarks` -> `kb-test-workflow.md`
 - `HeroPipeline.Tests` -> `kb-hero-pipeline-benchmarks.md`
+- `MiniArch.Core ArchitectureReview` -> `kb-architecture-review.md`
 
 ## 快速入口
 
@@ -44,6 +46,7 @@
 - 想理解 parent-child 为什么不做成组件、destroy 为什么会级联，以及读档后关系怎么恢复，先看 `kb-hierarchy-runtime.md`。
 - 想理解测试覆盖、验证方式和性能基准，先看 `kb-test-workflow.md`。
 - 想理解“为什么边界这么划”，先看各模块页里的 `决策`。
-- 想理解“怎么读这个模块”，先看各模块页里的 `入口`。
+- 想理解"怎么读这个模块"，先看各模块页里的 `入口`。
+- 想从整体上理解 miniArch 的运行机制、已知问题和优化方向，先看 `kb-architecture-review.md`。
 - 想排查行为偏差，先看各模块页里的 `坑点` 和对应测试文件。
 - 新增知识页时，先把它挂到这里，再写模块正文。

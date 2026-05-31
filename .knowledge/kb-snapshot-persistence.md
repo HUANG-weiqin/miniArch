@@ -30,10 +30,6 @@ updated: 2026-05-26
   - save 先枚举非空 archetype，再顺序写 header、entity slot versions、schema 表、archetype/chunk 记录和列原始字节块
   - load 先验证 header，再注册 schema 对应的 runtime `ComponentType`
   - load 通过专用 import 路径 materialize archetype/chunk，并最终重建 `_locations` 和 `_freeIds`
-- 和其他模块的交互方式：
-  - 依赖 `ComponentRegistry` 把存档里的稳定类型名映射回运行时组件 id
-  - 依赖 `World/Archetype/Chunk` 的 internal 桥接能力重建 world
-  - 由 `tests/MiniArch.Tests/Persistence/WorldSnapshotTests.cs` 和 `WorldCloneTests.cs` 提供行为回归覆盖
 
 ## WorldClone vs WorldSnapshot
 
@@ -67,15 +63,14 @@ updated: 2026-05-26
 
 ## 入口
 
-- 如果是第一次读这个模块，先看：
+- 第一次读或加功能，先看：
   - `src/MiniArch/Core/WorldSnapshot.cs`：完整的 snapshot 格式和读写流程
   - `tests/MiniArch.Tests/Persistence/WorldSnapshotTests.cs`：round-trip、free slot version 和 unsupported component 的外部契约
-- 如果是修 bug，先看：
-  - `src/MiniArch/Core/WorldSnapshot.cs`：schema/type 解析、列块读写和 header 校验
-  - `src/MiniArch/Core/World.cs`：slot version、location、free id 重建是否一致
-- 如果是加功能，先看：
   - `src/MiniArch/Core/Archetype.cs`：是否需要新的 chunk 导入策略
   - `src/MiniArch/Core/Chunk.cs`：列视图是否还能满足更复杂的持久化需求
+- 修 bug，先看：
+  - `src/MiniArch/Core/WorldSnapshot.cs`：schema/type 解析、列块读写和 header 校验
+  - `src/MiniArch/Core/World.cs`：slot version、location、free id 重建是否一致
 
 ## 坑点
 
@@ -91,8 +86,3 @@ updated: 2026-05-26
   - 当前存档不压缩、不做校验和；如果后面要加，需要保持列块和 rowCount 的读取顺序不变
   - runtime chunk 内部可能有列对齐 padding；snapshot/clone 只能通过 `Chunk.WriteColumnTo` / `ReadColumnFrom` / `CopyColumnsFrom` 这类逻辑列 API 访问，不能直接落盘或复制整块 `_data`
 
-## 关联模块
-
-- `kb-core-ecs.md`：snapshot 依赖的 runtime storage 结构
-- `kb-test-workflow.md`：snapshot 回归测试入口和全量验证方式
-- `src/MiniArch/Core/WorldSnapshot.cs`：当前第一版实现入口

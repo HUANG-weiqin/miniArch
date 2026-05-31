@@ -85,17 +85,16 @@ updated: 2026-06-01
 
 ## 入口
 
-- 如果是第一次读这个模块，先看：
+- 第一次读或加功能，先看：
   - `src/MiniArch/Core/CommandBuffer.cs`：recording API、`Submit()`、`Snapshot()`
   - `src/MiniArch/Core/FrameDelta.cs`：帧快照 IR 与 `Merge` 静态方法
   - `src/MiniArch/Core/World.cs`：`ReserveDeferredEntity` / `ReleaseReservedEntity` / `Replay(FrameDelta)`
-- 如果是修 bug，先看：
+  - `tests/MiniArch.Tests/Core/WorldLifecycleTests.cs`：entity id/version/free-list/hierarchy 的底层契约
+  - `benchmarks/MiniArch.Benchmarks/CommandBufferBenchmarks.cs`：`record + submit` 性能入口
+- 修 bug，先看：
   - `tests/MiniArch.Tests/Core/CommandBufferTests.cs`：submit/snapshot/merge 契约
   - `tests/MiniArch.Tests/Core/WorldStructuralChangeTests.cs`：existing entity 的 structural semantics 是否仍与立即生效 API 对齐
   - `tests/MiniArch.Tests/Core/QueryTests.cs`：batch replay 后 query 可见性和快照失效
-- 如果是加功能，先看：
-  - `tests/MiniArch.Tests/Core/WorldLifecycleTests.cs`：entity id/version/free-list/hierarchy 的底层契约
-  - `benchmarks/MiniArch.Benchmarks/CommandBufferBenchmarks.cs`：`record + submit` 性能入口
 
 ## 坑点
 
@@ -204,12 +203,3 @@ updated: 2026-06-01
 
 - **Link+Unlink 不互消**：同一 child 的 Link+Unlink 不做取消，因为原始 link 状态需要 World 上下文才能确定
 
-## 关联模块
-
-- `kb-core-ecs.md`：当前 world / archetype / chunk / query 的运行时边界
-- `kb-test-workflow.md`：后续该怎么补行为测试和 benchmark
-- `tests/MiniArch.Tests/Core/CommandBufferTests.cs`：command buffer 专属行为网
-- `tests/MiniArch.Tests/Core/WorldLifecycleTests.cs`：实体生命周期、id/version、chunk 顺序
-- `tests/MiniArch.Tests/Core/WorldStructuralChangeTests.cs`：`Add/Set/Remove` 当前契约
-- `benchmarks/MiniArch.Benchmarks/CommandBufferBenchmarks.cs`：record/submit 性能入口
-- `benchmarks/MiniArch.Benchmarks/CommandBufferSharedScenarios.cs`：共享结构命令 benchmark 场景与 parity helper

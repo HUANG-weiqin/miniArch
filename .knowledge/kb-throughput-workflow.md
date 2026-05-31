@@ -30,8 +30,6 @@ updated: 2026-05-29
   - 每次循环累计 iteration count 和 checksum
   - 每个 engine 汇总 `avg/median/best ops/s`
   - 如果同时跑 `MiniArch` 和 `Arch`，再输出平均吞吐差距
-- 和其他模块的交互方式：
-  - 依赖 `BenchmarkWorldFactory` 提供同构 world shape
   - 依赖 `MiniArch.Core` / `Arch` 提供真实热路径
   - 和 `kb-test-workflow.md` 互补：那页讲 benchmark 口径，这页讲固定时长吞吐口径
 
@@ -67,14 +65,13 @@ updated: 2026-05-29
 
 ## 入口
 
-- 如果是第一次读这个模块，先看：
+- 第一次读或加 workload，先看：
   - `scripts/throughput.ps1`：仓库内直接可跑的吞吐入口
   - `benchmarks/MiniArch.Benchmarks/ThroughputRunner.cs`：runner 如何组织 repeat / warmup / compare
-- 如果是修 bug，先看：
-  - `tests/MiniArch.Tests/Core/ThroughputRunnerTests.cs`：参数解析和汇总契约
-- 如果是加 workload，先看：
   - `ThroughputCaseFactory`：新增 workload 的分发点
   - `BenchmarkWorldFactory.cs`：如何复用已有 world shape
+- 修 bug，先看：
+  - `tests/MiniArch.Tests/Core/ThroughputRunnerTests.cs`：参数解析和汇总契约
 
 ## 坑点
 
@@ -101,9 +98,3 @@ updated: 2026-05-29
 - 缩短单轮时间做快速 smoke：
   - `powershell -ExecutionPolicy Bypass -File scripts\\throughput.ps1 -DurationSeconds 3 -RepeatCount 3`
 
-## 关联模块
-
-- `kb-test-workflow.md`：benchmark 与 throughput 的配合方式
-- `kb-profiling-workflow.md`：热点定位方法
-- `kb-core-ecs.md`：BDN 结果快照和热路径优化决策
-- `scripts/throughput.ps1`：当前可直接复用的吞吐入口

@@ -29,10 +29,6 @@ updated: 2026-05-31
   - workload 触发内部路径，例如 `InlineMap.Set` overflow、ops pool/lookup 扩容、ArrayPool slab rent、`FrameDelta.DeepCopyOwnedData()`。
   - 对象本地累积计数器。
   - 用户调用 `GetDebugReport()` 拿稳定多行文本并提交给维护者。
-- 和其他模块的交互方式：
-  - 依赖 `CommandBuffer` 的 record/snapshot 路径。
-  - 依赖 `World.EnsureCapacity` / entity storage growth / destroy scratch capacity。
-  - 由 `tests/MiniArch.Tests/Core/DebugMetricsTests.cs` 覆盖 Debug 与 Release 行为。
 
 ## 决策
 
@@ -62,16 +58,15 @@ updated: 2026-05-31
 
 ## 入口
 
-- 如果是第一次读这个模块，先看：
+- 第一次读或加功能，先看：
   - `src/MiniArch/Core/DebugMetrics.cs`：所有公开字段。
   - `src/MiniArch/Core/CommandBuffer.cs` 的 `GetDebugReport()`：CommandBuffer 报告格式。
   - `src/MiniArch/Core/World.cs` 的 `GetDebugReport()`：World 报告格式。
-- 如果是修 bug，先看：
-  - `tests/MiniArch.Tests/Core/DebugMetricsTests.cs`：API 契约与 Release disabled 契约。
-- 如果是加功能，先看：
   - `CommandBuffer.CopyData` / `CopyComponentFromChunk`：slab rent 计数。
   - `CommandBuffer.Snapshot` / `SubmitAndSnapshotAsync`：snapshot deep copy 计数。
   - `World.EnsureCapacity` / `EnsureEntityCapacity` / `EnsureDestroyScratchCapacity`：world grow 计数。
+- 修 bug，先看：
+  - `tests/MiniArch.Tests/Core/DebugMetricsTests.cs`：API 契约与 Release disabled 契约。
 
 ## 坑点
 
@@ -88,8 +83,3 @@ updated: 2026-05-31
   - 不要让指标改变 `Submit()` / `Snapshot()` / `Replay()` 的语义或对象所有权。
   - 报告 label 要稳定，用户会把文本粘贴回来用于定位。
 
-## 关联模块
-
-- `kb-core-ecs.md`：world storage 与 Release 热路径约束。
-- `kb-command-buffer-feasibility.md`：CommandBuffer recording、slab arena 和 snapshot 路径。
-- `kb-snapshot-persistence.md`：`FrameDelta` owned data 与 replay 边界。

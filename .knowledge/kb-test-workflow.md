@@ -26,21 +26,7 @@ updated: 2026-05-31
 
 ## 架构
 
-- 核心组成：
-  - `ComponentRegistryTests.cs`
-  - `EntityTests.cs`
-  - `SignatureTests.cs`
-  - `ChunkTests.cs`
-  - `ArchetypeTests.cs`
-  - `WorldLifecycleTests.cs`
-  - `CommandBufferTests.cs`
-- `QueryTests.cs`
-  - `QueryFilterTests.cs`
-  - `IntegrationTests.cs`
-  - `StructuralChangeBenchmarks.cs`
-  - `CommandBufferBenchmarks.cs`
-  - `QueryBenchmarks.cs`
-  - `SnapshotBenchmarks.cs`
+- 核心组成：单元测试锁定局部行为，集成测试验证迁移链路，benchmark 对比 Arch / MiniArch 热路径。
 - 数据流 / 控制流：
   - 单元测试先锁定局部行为
   - 集成测试再验证迁移链路
@@ -56,9 +42,6 @@ updated: 2026-05-31
   - 当前 `EntityCount` 档位覆盖 `128 / 256 / 512 / 1024 / 2048 / 10k / 50k / 100k`，用来同时观察小规模固定成本和大规模 steady-state 吞吐
   - query profiling 复用同一套 complex query world，但在 BenchmarkDotNet 之外跑固定时长循环，给 PerfView/Visual Studio CPU Usage 这类采样器一个干净窗口
 - `scripts\verify.ps1` 统一跑 build + test
-- 和其他模块的交互方式：
-  - 直接依赖 `MiniArch.Core`
-  - 通过 `World` 和 `Query` 验证外部可见行为
   - 不直接测试私有实现细节
 
 ## 决策
@@ -132,32 +115,27 @@ updated: 2026-05-31
 
 ## 入口
 
-- 如果是第一次读这个模块，先看：
+- 第一次读或加功能，先看：
   - `IntegrationTests.cs`：最完整的端到端例子
   - `CommandBufferTests.cs`：command buffer 专属语义、跨 world replay、并发 recording
   - `WorldStructuralChangeTests.cs`：结构迁移的关键行为
-  - `QueryTests.cs`：query 可见性、快照刷新
+  - `QueryTests.cs`：query 行为约束与可见性
+  - `QueryFilterTests.cs`：链式 filter 和 builder 契约
+  - `ChunkTests.cs`：存储密度约束
+  - `ArchetypeTests.cs`：chunk 复用和可写 chunk 选择策略
   - `StructuralChangeBenchmarks.cs`：`Create / CreateMany / Add / Set / Remove / Destroy` 与 Arch 的时间和分配对照
-- `CommandBufferBenchmarks.cs`：`record + play`、hierarchy 性能入口
+  - `CommandBufferBenchmarks.cs`：`record + play`、hierarchy 性能入口
   - `CommandBufferSharedScenarios.cs`：共享脚本模型、MiniArch/Arch parity 执行器和结构摘要 helper
   - `QueryBenchmarks.cs`：复杂 query 场景下的 Arch / MiniArch 执行对照
   - `SnapshotBenchmarks.cs`：`WorldSnapshot.Save` / `Load` 的时间、分配、`SnapshotBytes` 和 `Bytes/entity`
+  - `ComplexQueryBenchmarkScenarioTests.cs`：benchmark world shape、命中比例和 `>= 8 component` 契约
   - `scripts\profile-query.ps1`：query 采样入口，适合定位热点函数，支持 `--workload entity|component-row-wise|component-span`
-- 如果是修 bug，先看：
+- 修 bug，先看：
   - 对应功能的测试文件
   - `scripts\test.ps1`
   - `scripts\benchmark.ps1`：benchmark 入口，必要时配合 `--filter`
   - 也可以直接运行：`dotnet run --project .\benchmarks\MiniArch.Benchmarks\MiniArch.Benchmarks.csproj -c Release -- command-buffer`
   - `scripts\profile-query.ps1`：如果问题是 query 热点分布，而不是均值回归，支持 `--workload entity|component-row-wise|component-span`
-- 如果是加功能，先看：
-  - `QueryTests.cs`：query 行为约束
-  - `QueryFilterTests.cs`：链式 filter 和 builder 契约
-  - `ChunkTests.cs`：存储密度约束
-  - `ArchetypeTests.cs`：chunk 复用和可写 chunk 选择策略
-  - `WorldStructuralChangeTests.cs`：`Set` / `Add` / `Remove` 的结构变化边界
-  - `StructuralChangeBenchmarks.cs`：性能回归口径
-  - `ComplexQueryBenchmarkScenarioTests.cs`：benchmark world shape、命中比例和 `>= 8 component` 契约
-  - `SnapshotBenchmarks.cs`：snapshot 性能口径
 
 ## 坑点
 
@@ -199,19 +177,3 @@ updated: 2026-05-31
   - 当前仓库里如果 benchmark 场景测试本身编译失败，必须先把它和本次功能验证分开说明，不要把 query 回归结果和现有编译阻塞混为一谈
   - `FrameDelta` 当前可以保留后重放，但跨 world replay 仍要求双方从同一初始态按相同 frame 顺序推进；benchmark 不应把"偏离同步前提后的失败"误判成功能回归
 
-## 关联模块
-
-- `kb-core-ecs.md`：被测试的运行时模块
-- `kb-snapshot-persistence.md`：snapshot 存档语义和约束
-- `kb-repo-overview.md`：如何启动验证流程
-- `kb-profiling-workflow.md`：如何做无侵入 CPU sampling
-- `scripts/test.ps1`：测试入口
-- `benchmarks/MiniArch.Benchmarks/StructuralChangeBenchmarks.cs`：分项 structural-change benchmark 与 mixed structural-change benchmark
-- `benchmarks/MiniArch.Benchmarks/QueryBenchmarks.cs`：复杂 query benchmark
-- `benchmarks/MiniArch.Benchmarks/SnapshotBenchmarks.cs`：snapshot save/load、snapshot bytes 与 bytes/entity benchmark
-- `benchmarks/MiniArch.Benchmarks/CommandBufferBenchmarks.cs`：command buffer 性能入口
-- `benchmarks/MiniArch.Benchmarks/CommandBufferSharedScenarios.cs`：command buffer 共享场景与 parity helper
-- `tests/MiniArch.Tests/Core/CommandBufferParityTests.cs`：共享 benchmark 场景的跨引擎 parity tests
-- `tests/MiniArch.Tests/Core/CommandBufferTests.cs`：replay 主行为入口
-- `tests/MiniArch.Tests/Core/WorldStructuralChangeTests.cs`：structural change 行为验证
-- `scripts/profile-query.ps1`：复杂 query 采样 profiling 入口

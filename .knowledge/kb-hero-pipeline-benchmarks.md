@@ -27,9 +27,6 @@ updated: 2026-05-29
 - 数据流 / 控制流：
   - Validation → RuleDispatch → EffectDispatch → Trigger → ModifierApply → Spawn
   - 所有 5 个 benchmark 共享同一套 runtime 和 fixture 体系
-- 和其他模块的交互方式：
-  - 依赖 `MiniArch.Core`（通过 ProjectReference）
-  - 源码保留 `Hero.*` 命名空间，不修改原始命名空间
 
 ## 决策
 
@@ -95,7 +92,3 @@ updated: 2026-05-29
 - 历史数据（2026-05-25）是在 Debug 配置下运行的
 - 当前代码在 Debug 配置下比历史数据提升约 43%-70%
 
-## 关联模块
-
-- `kb-test-workflow.md`：MiniArch 测试和 benchmark 的通用方法论
-- `kb-core-ecs.md`：被 benchmark 使用的 ECS 运行时

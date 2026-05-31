@@ -27,9 +27,6 @@ updated: 2026-04-16
   - runner 预热后打印目标进程 `PID`
   - 外部采样器附加到该进程，在固定时间窗内抓调用栈样本
   - 采样结束后再用 `dotnet-trace report ... topN` 看热点函数
-- 和其他模块的交互方式：
-  - 依赖 `MiniArch.Benchmarks` 提供固定 workload
-  - 依赖 `MiniArch.Core` 暴露真实热路径
   - 和 `.knowledge/kb-test-workflow.md` 互补：前者讲验证口径，这页讲采样方法
 
 ## 决策
@@ -51,13 +48,11 @@ updated: 2026-04-16
 
 ## 入口
 
-- 如果是第一次读这个模块，先看：
-  - `scripts/profile-query.ps1`：仓库内现成的 profiling 入口
+- 第一次读或加功能，先看：
+  - `scripts/profile-query.ps1`：仓库内现成的 profiling 入口，也可照这个模式为别的热点路径加独立 runner
   - `benchmarks/MiniArch.Benchmarks/QueryProfilingRunner.cs`：runner 如何构造 workload 和控制采样窗口
-- 如果是修 bug，先看：
+- 修 bug，先看：
   - `dotnet-trace list-profiles`：确认当前工具支持的 profile 名称
-- 如果是加功能，先看：
-  - `scripts/profile-query.ps1`：照这个模式为别的热点路径加独立 runner
 
 ## 坑点
 
@@ -121,8 +116,3 @@ updated: 2026-04-16
 - `BuildMatchingArchetypes` 在采样中只占很小比例，说明 query 目前的主要瓶颈不在 archetype matching
 - 这类结果后续要和 benchmark 结果一起看：sample profiling 负责找热点位置，benchmark 负责看修改前后是否真的更快
 
-## 关联模块
-
-- `kb-repo-overview.md`：仓库入口和脚本组织
-- `kb-test-workflow.md`：benchmark / verify / profiling 在验证流程里的位置
-- `scripts/profile-query.ps1`：当前可直接复用的采样入口

@@ -29,10 +29,6 @@ updated: 2026-04-12
   - 再读 `.knowledge/INDEX.md`
   - 然后进入最贴近任务的 `kb-*.md`
   - 最后用 `scripts/verify.ps1` 复核改动
-- 和其他模块的交互方式：
-  - 依赖 `MiniArch.Core` 的架构说明页
-  - 依赖 `MiniArch.Tests` 的测试说明页
-  - 通过 markdown 链接把入口连起来
 
 ## 决策
 
@@ -53,13 +49,12 @@ updated: 2026-04-12
 
 ## 入口
 
-- 如果是第一次读这个模块，先看：
+- 第一次读或加知识页，先看：
   - `README.md`：仓库级快速入口
   - `.knowledge/INDEX.md`：知识页目录
-- 如果是修协作入口，先看：
-  - `scripts/verify.ps1`：统一验证命令
-- 如果是加知识页，先看：
   - `.knowledge/_template.md`：知识页模板
+- 修协作入口，先看：
+  - `scripts/verify.ps1`：统一验证命令
 
 ## 坑点
 
@@ -74,8 +69,3 @@ updated: 2026-04-12
   - 脚本命令变化后必须同步更新 README
   - 新增可复用脚本后，必须同步补到知识页入口里
 
-## 关联模块
-
-- `kb-core-ecs.md`：核心 ECS 运行时说明
-- `kb-test-workflow.md`：测试组织和验证方式
-- `README.md`：仓库级快速入口

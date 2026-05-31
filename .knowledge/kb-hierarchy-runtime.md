@@ -31,10 +31,7 @@ updated: 2026-05-31
 - `World.Destroy(parent)` 现在复用 world 内部 scratch 容器收集 destroy closure，不再每次临时分配 traversal stack / visited set
   - `WorldSnapshot.Save` 在 archetype/component 数据后写入 live hierarchy links
   - `WorldSnapshot.Load` 在实体和 chunk 恢复后重建 hierarchy links
-- 和其他模块的交互方式：
-  - 依赖 `World` 的 version/location 校验判断句柄是否仍然活着
-  - 被 snapshot 模块读取和恢复
-  - 不参与 archetype/signature/chunk 的结构变化
+- hierarchy 不参与 archetype/signature/chunk 的结构变化
 
 ## 决策
 
@@ -55,16 +52,15 @@ updated: 2026-05-31
 
 ## 入口
 
-- 如果是第一次读这个模块，先看：
+- 第一次读或加功能，先看：
   - `src/MiniArch/Core/HierarchyTable.cs`：关系表结构、校验逻辑和子树收集
   - `src/MiniArch/Core/World.cs`：hierarchy API 和 destroy 集成点
   - `src/MiniArch/Core/WorldSnapshot.cs`：save/load 时 hierarchy 如何持久化
-- 如果是修 bug，先看：
+  - `src/MiniArch/Ecs/World.cs`：user-facing façade 是否也要暴露对应 API
+- 修 bug，先看：
   - `tests/MiniArch.Tests/Core/WorldLifecycleTests.cs`：级联销毁、reparent 和 slot reuse 行为
   - `tests/MiniArch.Tests/Core/CommandBufferTests.cs`：link/unlink 与 destroy subtree 行为
   - `tests/MiniArch.Tests/Persistence/WorldSnapshotTests.cs`：存档恢复后的 hierarchy 契约
-- 如果是加功能，先看：
-  - `src/MiniArch/Ecs/World.cs`：user-facing façade 是否也要暴露对应 API
 
 ## 坑点
 
@@ -80,8 +76,3 @@ updated: 2026-05-31
   - parent 存储必须带完整 `Entity` 句柄，不能只存 `Id`
   - hierarchy 当前直接用 `default(Entity)` 表示"无 parent"；如果后面再次调整 entity 契约，这里的空值语义要一起复核
 
-## 关联模块
-
-- `kb-core-ecs.md`：hierarchy 依附的 entity lifecycle 和 location 校验
-- `kb-snapshot-persistence.md`：hierarchy link 的 save/load 边界
-- `kb-test-workflow.md`：对应的 lifecycle / persistence 验证入口

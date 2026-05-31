@@ -183,17 +183,15 @@ updated: 2026-05-31
 
 ## 入口
 
-- 如果是第一次读这个模块，先看：
-  - `World.cs`：完整控制流入口
+- 第一次读或加功能，先看：
+  - `World.cs`：完整控制流入口，也是 deferred reservation / replay / batch query invalidation 的挂接点
   - `Signature.cs`：archetype 的 key 规则
   - `Chunk.cs`：底层存储布局和 direct-index 写入点
-- 如果是修 bug，先看：
-  - `World.cs`：实体迁移和版本校验
-  - `QueryIterators.cs`：chunk 枚举是否漏项
-- 如果是加功能，先看：
   - `Archetype.cs`：chunk 扩展点
   - `ArchetypeEdges.cs`：迁移缓存扩展点
-  - `World.cs`：deferred reservation / replay / batch query invalidation 挂接点
+- 修 bug，先看：
+  - `World.cs`：实体迁移和版本校验
+  - `QueryIterators.cs`：chunk 枚举是否漏项
 
 ## 坑点
 
@@ -242,10 +240,3 @@ updated: 2026-05-31
 - query 并发只读依赖 chunk 读路径不写共享 mutable cache；如果为了热路径加缓存，优先用不可变 direct-index map、局部变量或调用方 workspace，不要把“上一次 lookup”存在 `Chunk` 实例字段上。
 - 并发读审计时要把“多个字段共同表达一个 cache entry”的形态当作高风险信号；即使单字段写入是原子的，字段组合也没有一致性保证。
 
-## 关联模块
-
-- `kb-repo-overview.md`：仓库导航入口
-- `kb-snapshot-persistence.md`：运行时 layout 和 snapshot format 的分层边界
-- `kb-test-workflow.md`：对应行为覆盖和 benchmark 口径
-- `tests/MiniArch.Tests/Core/*.cs`：行为验证
-- `benchmarks/MiniArch.Benchmarks/StructuralChangeBenchmarks.cs`：`Create / CreateMany / Add / Set / Remove / Destroy` 热路径对比
