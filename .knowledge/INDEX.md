@@ -31,6 +31,7 @@
 - `MiniArch.Tests` -> `kb-test-workflow.md`
 - `MiniArch.Benchmarks` -> `kb-test-workflow.md`
 - `HeroPipeline.Tests` -> `kb-hero-pipeline-benchmarks.md`
+- `HeroComing.Perf` -> `kb-hero-pipeline-regression.md`
 - `MiniArch.Core ArchitectureReview` -> `kb-architecture-review.md`
 
 ## 快速入口

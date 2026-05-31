@@ -78,3 +78,24 @@
 2. 已查阅相关 `.knowledge` 页。
 3. 新学习（如有）已按模板规则写回知识库。
 4. `updated` 已更新，且 `.knowledge/INDEX.md` 仍然准确。
+
+## 5) 架构变更回归门禁（强制）
+
+任何改动 `src/MiniArch/` 或 `tests/HeroPipeline.Tests/` 的架构变更，提交前必须执行：
+
+```bash
+dotnet run -c Release --project perf/HeroComing.Perf
+```
+
+检查输出：
+- 吞吐量低于阈值（Movement ≥496 rounds/s, Attack ≥32 rounds/s）→ **回退改动**
+- 内存持续增长 → **回退改动**
+- 崩溃或异常 → **回退改动**
+
+回退流程：
+- `git stash` 或 `git checkout .` 恢复到改动前状态
+- 分析失败原因，修复后重新测试
+
+测试会自动更新 `.knowledge/kb-hero-pipeline-regression.md` 中的 baseline 数据。
+
+详细说明见 `.knowledge/kb-hero-pipeline-regression.md`。

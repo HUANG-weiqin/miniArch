@@ -13,6 +13,10 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "shared", "shared", "{E3AC92
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MiniArch.SharedInfrastructure", "shared\MiniArch.SharedInfrastructure\MiniArch.SharedInfrastructure.csproj", "{60B37132-C349-4E04-A392-888A67D04EB8}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "perf", "perf", "{A989F849-EE38-4F2D-BAF5-DFC5F396D6CD}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HeroComing.Perf", "perf\HeroComing.Perf\HeroComing.Perf.csproj", "{F9E30B84-63BA-4107-B020-598A8BFEA792}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -35,11 +39,16 @@ Global
 		{60B37132-C349-4E04-A392-888A67D04EB8}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{60B37132-C349-4E04-A392-888A67D04EB8}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{60B37132-C349-4E04-A392-888A67D04EB8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F9E30B84-63BA-4107-B020-598A8BFEA792}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F9E30B84-63BA-4107-B020-598A8BFEA792}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F9E30B84-63BA-4107-B020-598A8BFEA792}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F9E30B84-63BA-4107-B020-598A8BFEA792}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{60B37132-C349-4E04-A392-888A67D04EB8} = {E3AC927E-9C6C-4BA4-95B6-8C8C5AB2E456}
+		{F9E30B84-63BA-4107-B020-598A8BFEA792} = {A989F849-EE38-4F2D-BAF5-DFC5F396D6CD}
 	EndGlobalSection
 EndGlobal

@@ -1,0 +1,263 @@
+using System.Diagnostics;
+using System.Text;
+using System.Text.RegularExpressions;
+using Hero.Ecs;
+using Hero.GameplayEcs.Bootstrap;
+using Hero.GameplayEcs.Characters.Actions;
+using Hero.GameplayEcs.Characters.Attack;
+using Hero.GameplayEcs.Characters.Movement;
+using Hero.GameplayEcs.Characters.Spawn;
+using Hero.Tests.Fixtures;
+using MiniArch;
+
+const int CharacterCount = 1000;
+const int GridWidth = 100;
+const int GridHeight = 100;
+const int DurationSeconds = 30;
+const int ReportInterval = 100;
+const int WarmupRounds = 50;
+
+Console.WriteLine("=== HeroComing ECS Performance Test ===");
+Console.WriteLine($"Characters: {CharacterCount}");
+Console.WriteLine($"Grid:       {GridWidth}x{GridHeight}");
+Console.WriteLine($"Duration:   {DurationSeconds}s per scenario");
+Console.WriteLine();
+
+var results = new List<(string name, double throughput, double avgMs, int totalRounds, double heapDeltaKB, bool memoryStable)>();
+
+results.Add(RunScenario("Movement", CreateMoveRequests));
+results.Add(RunScenario("Attack", CreateAttackRequests));
+
+Console.WriteLine();
+Console.WriteLine("=== Final Summary ===");
+Console.WriteLine();
+Console.WriteLine($"{"Scenario",12} | {"Rounds/s",10} | {"ms/round",10} | {"Rounds",8} | {"Heap Δ KB",10} | {"Memory",8}");
+Console.WriteLine(new string('-', 70));
+foreach (var (name, throughput, avgMs, totalRounds, heapDeltaKB, memoryStable) in results)
+{
+    Console.WriteLine($"{name,12} | {throughput,10:F1} | {avgMs,10:F3} | {totalRounds,8} | {heapDeltaKB,10:F1} | {(memoryStable ? "OK" : "WARN"),8}");
+}
+
+UpdateKnowledgePage(results);
+
+Console.WriteLine();
+Console.WriteLine("Baseline updated in .knowledge/kb-hero-pipeline-regression.md");
+
+// --- Scenario runner ---
+
+(string name, double throughput, double avgMs, int totalRounds, double heapDeltaKB, bool memoryStable) RunScenario(
+    string name, Action<MiniArchRuntime, List<Entity>> createRequests)
+{
+    Console.WriteLine($"--- {name} ---");
+
+    var fixture = new CharacterTestFixture();
+    fixture.AddCoreSystems();
+    fixture.Core.AddSpawnSystem();
+
+    var runtime = fixture.Runtime;
+
+    int playersPerRow = GridWidth / 2;
+    int playerCount = CharacterCount / 2;
+    int enemyCount = CharacterCount / 2;
+
+    for (int i = 0; i < playerCount; i++)
+        CharacterSpawnBootstrap.CreatePlayerAt(runtime, i % playersPerRow, i / playersPerRow);
+
+    for (int i = 0; i < enemyCount; i++)
+        CharacterSpawnBootstrap.CreateSandbagEnemyAt(runtime, i % playersPerRow, i / playersPerRow + GridHeight / 2);
+
+    fixture.StepUntilStable();
+
+    var players = new List<Entity>();
+    var frame = runtime.CurrentFrame;
+    var spawnQuery = new QueryDescription().With<SpawnKind>();
+    foreach (var entity in frame.Each(spawnQuery))
+    {
+        if (frame.TryGet(entity, out SpawnKind kind) && kind == CharacterSpawnKinds.Player)
+            players.Add(entity);
+    }
+    Console.WriteLine($"Spawned {CharacterCount} characters, found {players.Count} players.");
+
+    // Warmup
+    for (int i = 0; i < WarmupRounds; i++)
+    {
+        createRequests(runtime, players);
+        fixture.StepUntilStable();
+    }
+
+    GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+    GC.WaitForPendingFinalizers();
+    long baselineHeap = GC.GetTotalMemory(true);
+
+    int gen0Base = GC.CollectionCount(0);
+    int gen1Base = GC.CollectionCount(1);
+    int gen2Base = GC.CollectionCount(2);
+
+    Console.WriteLine($"{"Round",7} | {"Rounds/s",10} | {"Heap MB",9} | {"dHeap KB",10} | {"WS MB",8} | {"Gen0",5} | {"Gen1",5} | {"Gen2",5}");
+    Console.WriteLine(new string('-', 75));
+
+    var sw = Stopwatch.StartNew();
+    int totalRounds = 0;
+    long lastReportTime = sw.ElapsedMilliseconds;
+    long lastReportRounds = 0;
+
+    while (sw.ElapsedMilliseconds < DurationSeconds * 1000L)
+    {
+        createRequests(runtime, players);
+        fixture.StepUntilStable();
+        totalRounds++;
+
+        if (totalRounds % ReportInterval == 0)
+        {
+            long now = sw.ElapsedMilliseconds;
+            double elapsed = (now - lastReportTime) / 1000.0;
+            double roundsPerSec = (totalRounds - lastReportRounds) / elapsed;
+
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+            long currentHeap = GC.GetTotalMemory(true);
+            double heapMB = currentHeap / (1024.0 * 1024.0);
+            double deltaHeapKB = (currentHeap - baselineHeap) / 1024.0;
+
+            var process = Process.GetCurrentProcess();
+            double wsMB = process.WorkingSet64 / (1024.0 * 1024.0);
+
+            int gen0 = GC.CollectionCount(0) - gen0Base;
+            int gen1 = GC.CollectionCount(1) - gen1Base;
+            int gen2 = GC.CollectionCount(2) - gen2Base;
+
+            Console.WriteLine(
+                $"{totalRounds,7} | {roundsPerSec,10:F1} | {heapMB,9:F2} | {deltaHeapKB,10:F1} | {wsMB,8:F1} | {gen0,5} | {gen1,5} | {gen2,5}");
+
+            lastReportTime = now;
+            lastReportRounds = totalRounds;
+        }
+    }
+
+    sw.Stop();
+    double totalElapsed = sw.ElapsedMilliseconds / 1000.0;
+    double avgThroughput = totalRounds / totalElapsed;
+    double avgTimePerRound = totalElapsed / totalRounds * 1000.0;
+
+    GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+    GC.WaitForPendingFinalizers();
+    long finalHeap = GC.GetTotalMemory(true);
+    double heapDeltaKB = (finalHeap - baselineHeap) / 1024.0;
+    bool memoryStable = heapDeltaKB < 1024;
+
+    int finalGen0 = GC.CollectionCount(0) - gen0Base;
+    int finalGen1 = GC.CollectionCount(1) - gen1Base;
+    int finalGen2 = GC.CollectionCount(2) - gen2Base;
+
+    Console.WriteLine();
+    Console.WriteLine($"  Total rounds:   {totalRounds}");
+    Console.WriteLine($"  Avg throughput: {avgThroughput:F1} rounds/s");
+    Console.WriteLine($"  Avg time/round: {avgTimePerRound:F3}ms");
+    Console.WriteLine($"  Heap delta:     {heapDeltaKB:F1} KB");
+    Console.WriteLine($"  GC Gen0/1/2:    {finalGen0}/{finalGen1}/{finalGen2}");
+    Console.WriteLine(memoryStable ? "  OK: Memory stable" : "  WARN: Memory growing");
+    Console.WriteLine();
+
+    return (name, avgThroughput, avgTimePerRound, totalRounds, heapDeltaKB, memoryStable);
+}
+
+// --- Request creators ---
+
+void CreateMoveRequests(MiniArchRuntime runtime, List<Entity> players)
+{
+    foreach (var player in players)
+        CharacterMovementBootstrap.CreateMoveRequest(runtime, player, 1, 0);
+}
+
+void CreateAttackRequests(MiniArchRuntime runtime, List<Entity> players)
+{
+    var frame = runtime.CurrentFrame;
+    var actionQuery = new QueryDescription().With<ActionEntity>().With<ActionKind>();
+    var playerSet = new HashSet<Entity>(players);
+    foreach (var entity in frame.Each(actionQuery))
+    {
+        if (frame.TryGet(entity, out ActionKind kind) && kind == CharacterActionKinds.Attack &&
+            frame.TryGetParent(entity, out Entity parent) && playerSet.Contains(parent))
+        {
+            CharacterAttackBootstrap.CreateAttackRequest(runtime, entity, 0, GridHeight / 2);
+        }
+    }
+}
+
+// --- Knowledge page updater ---
+
+void UpdateKnowledgePage(List<(string name, double throughput, double avgMs, int totalRounds, double heapDeltaKB, bool memoryStable)> results)
+{
+    string kbPath = FindKnowledgePage();
+    if (kbPath is null)
+    {
+        Console.Error.WriteLine("WARN: Could not find kb-hero-pipeline-regression.md, skipping baseline update.");
+        return;
+    }
+
+    string content = File.ReadAllText(kbPath);
+    string date = DateTime.Now.ToString("yyyy-MM-dd");
+
+    // Update the date in front matter
+    content = Regex.Replace(content, @"updated: \d{4}-\d{2}-\d{2}", $"updated: {date}");
+
+    // Build new baseline table
+    var sb = new StringBuilder();
+    sb.AppendLine($"## 当前 baseline（{date}）");
+    sb.AppendLine();
+    sb.AppendLine("| 链路 | 吞吐量 rounds/s | 平均耗时 ms/round | 总轮数 | 内存稳定性 |");
+    sb.AppendLine("|---|---|---|---|---|");
+    foreach (var (name, throughput, avgMs, totalRounds, heapDeltaKB, memoryStable) in results)
+    {
+        string desc = name == "Movement" ? "无 collision" : "含 collision";
+        sb.AppendLine($"| {name}（{desc}） | {throughput:F1} | {avgMs:F1} | {totalRounds} | {(memoryStable ? "稳定" : "增长")} |");
+    }
+
+    // Update regression thresholds (80% of actual)
+    var movResult = results.First(r => r.name == "Movement");
+    var atkResult = results.First(r => r.name == "Attack");
+    sb.AppendLine();
+    sb.AppendLine("### 回归阈值");
+    sb.AppendLine();
+    sb.AppendLine($"- Movement 吞吐量：≥{(int)(movResult.throughput * 0.8)} rounds/s（baseline 的 80%）");
+    sb.AppendLine($"- Attack 吞吐量：≥{(int)(atkResult.throughput * 0.8)} rounds/s（baseline 的 80%）");
+    sb.AppendLine("- 内存：heap delta 不能持续增长（允许 ±10% 波动）");
+
+    // Replace everything from "## 当前 baseline" to end of file
+    int baselineStart = content.IndexOf("## 当前 baseline");
+    if (baselineStart >= 0)
+    {
+        content = content[..baselineStart] + sb.ToString();
+    }
+    else
+    {
+        content += Environment.NewLine + sb.ToString();
+    }
+
+    File.WriteAllText(kbPath, content);
+    Console.WriteLine($"Updated: {kbPath}");
+}
+
+string? FindKnowledgePage()
+{
+    // Try relative to working directory
+    string[] candidates = [
+        ".knowledge/kb-hero-pipeline-regression.md",
+        "../.knowledge/kb-hero-pipeline-regression.md",
+        "../../.knowledge/kb-hero-pipeline-regression.md",
+    ];
+    foreach (var c in candidates)
+    {
+        if (File.Exists(c)) return Path.GetFullPath(c);
+    }
+
+    // Walk up from assembly location
+    string? dir = AppContext.BaseDirectory;
+    while (dir != null)
+    {
+        string path = Path.Combine(dir, ".knowledge", "kb-hero-pipeline-regression.md");
+        if (File.Exists(path)) return path;
+        dir = Path.GetDirectoryName(dir);
+    }
+    return null;
+}
