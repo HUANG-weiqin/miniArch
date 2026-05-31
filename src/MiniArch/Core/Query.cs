@@ -100,12 +100,6 @@ public sealed class Query
     /// </summary>
     public ChunkEnumerable Chunks => new(this);
 
-    internal Archetype[] EnsureMatchingArchetypes()
-    {
-        EnsureMatchingSnapshot();
-        return Volatile.Read(ref _snapshotArchetypes);
-    }
-
     internal Chunk[] EnsureMatchingChunks()
     {
         EnsureMatchingSnapshot();

@@ -63,7 +63,6 @@ internal struct OverflowPool<TKey, TValue> where TKey : unmanaged
 
     public ref TValue GetValue(int index) => ref _values[index];
     public ref readonly TValue GetValueReadonly(int index) => ref _values[index];
-    public TKey GetKey(int index) => _keys[index];
     public ref readonly TKey GetKeyReadonly(int index) => ref _keys[index];
     public int GetNext(int index) => _next[index];
 

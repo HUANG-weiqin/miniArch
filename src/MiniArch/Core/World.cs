@@ -1791,8 +1791,6 @@ public sealed class World : IDisposable
     /// </summary>
     public void Replay(FrameDelta delta) => ReplayCore(delta, trusted: false);
 
-    internal void ReplayTrusted(FrameDelta delta) => ReplayCore(delta, trusted: true);
-
     private void ReplayCore(FrameDelta delta, bool trusted)
     {
         ThrowIfDisposed();
@@ -1937,16 +1935,6 @@ public sealed class World : IDisposable
         }
 
         TouchQueryLayout();
-    }
-
-    internal void AddBoxed(Entity entity, ComponentType componentType, object? component)
-    {
-        ApplyBoxedAddOrSet(entity, componentType, component);
-    }
-
-    internal void SetBoxed(Entity entity, ComponentType componentType, object? component)
-    {
-        ApplyBoxedAddOrSet(entity, componentType, component);
     }
 
     internal void RemoveBoxed(Entity entity, ComponentType componentType)

@@ -51,11 +51,6 @@ public sealed class Chunk
     }
 
     /// <summary>
-    /// Gets the chunk signature.
-    /// </summary>
-    public Signature Signature => _signature;
-
-    /// <summary>
     /// Gets the chunk capacity.
     /// </summary>
     public int Capacity => _entities.Length;
@@ -151,16 +146,6 @@ public sealed class Chunk
         }
 
         return _entities.AsSpan(startRow, count);
-    }
-
-    /// <summary>
-    /// Gets a boxed component value.
-    /// </summary>
-    internal object? GetComponent(ComponentType component, int row)
-    {
-        ValidateRow(row);
-        var columnIndex = GetComponentIndex(component);
-        return _boxedReaders[columnIndex](this, columnIndex, row);
     }
 
     /// <summary>
