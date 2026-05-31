@@ -73,9 +73,9 @@ internal struct OverflowPool<TKey, TValue> where TKey : unmanaged
     {
         if (_keys is not null)
         {
-            ArrayPool<TKey>.Shared.Return(_keys);
-            ArrayPool<TValue>.Shared.Return(_values);
-            ArrayPool<int>.Shared.Return(_next);
+            ArrayPool<TKey>.Shared.Return(_keys, true);
+            ArrayPool<TValue>.Shared.Return(_values, true);
+            ArrayPool<int>.Shared.Return(_next, true);
             _keys = null!;
             _values = null!;
             _next = null!;

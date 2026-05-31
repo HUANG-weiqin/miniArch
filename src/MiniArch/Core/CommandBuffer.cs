@@ -1172,7 +1172,7 @@ public sealed class CommandBuffer : ICommandRecorder
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private unsafe void CopyData<T>(T component, int size, out int slabIndex, out int offset)
+    private void EnsureSlabSpace(int size)
     {
         if (_currentSlabIndex < 0 || _currentSlabOffset + size > _slabs[_currentSlabIndex].Length)
         {
@@ -1186,6 +1186,12 @@ public sealed class CommandBuffer : ICommandRecorder
             _debugSlabRentBytes += newSlab.Length;
 #endif
         }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private unsafe void CopyData<T>(T component, int size, out int slabIndex, out int offset)
+    {
+        EnsureSlabSpace(size);
 
         slabIndex = _currentSlabIndex;
         offset = _currentSlabOffset;
@@ -1200,18 +1206,7 @@ public sealed class CommandBuffer : ICommandRecorder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private unsafe void CopyComponentFromChunk(Chunk chunk, int columnIndex, int row, int size, out int slabIndex, out int offset)
     {
-        if (_currentSlabIndex < 0 || _currentSlabOffset + size > _slabs[_currentSlabIndex].Length)
-        {
-            var slabSize = size > DefaultSlabSize ? size : DefaultSlabSize;
-            var newSlab = ArrayPool<byte>.Shared.Rent(slabSize);
-            _slabs.Add(newSlab);
-            _currentSlabIndex = _slabs.Count - 1;
-            _currentSlabOffset = 0;
-#if DEBUG
-            _debugSlabRentCount++;
-            _debugSlabRentBytes += newSlab.Length;
-#endif
-        }
+        EnsureSlabSpace(size);
 
         slabIndex = _currentSlabIndex;
         offset = _currentSlabOffset;
