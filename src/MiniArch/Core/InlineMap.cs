@@ -12,97 +12,70 @@ internal struct InlineMap<TKey, TValue>
     public TKey Key2; public TValue Value2;
     public TKey Key3; public TValue Value3;
 
-    public (TKey Key, TValue Value)[]? Overflow;
+    public int OverflowHead;
     public int OverflowCount;
 
     public bool IsEmpty => Count == 0 && OverflowCount == 0;
 
-    public bool Set(TKey key, TValue value)
+    public void Set(TKey key, TValue value, ref OverflowPool<TKey, TValue> pool)
     {
-        if (Count >= 1 && EqualityComparer<TKey>.Default.Equals(Key0, key)) { Value0 = value; return false; }
-        if (Count >= 2 && EqualityComparer<TKey>.Default.Equals(Key1, key)) { Value1 = value; return false; }
-        if (Count >= 3 && EqualityComparer<TKey>.Default.Equals(Key2, key)) { Value2 = value; return false; }
-        if (Count >= 4 && EqualityComparer<TKey>.Default.Equals(Key3, key)) { Value3 = value; return false; }
+        if (Count >= 1 && EqualityComparer<TKey>.Default.Equals(Key0, key)) { Value0 = value; return; }
+        if (Count >= 2 && EqualityComparer<TKey>.Default.Equals(Key1, key)) { Value1 = value; return; }
+        if (Count >= 3 && EqualityComparer<TKey>.Default.Equals(Key2, key)) { Value2 = value; return; }
+        if (Count >= 4 && EqualityComparer<TKey>.Default.Equals(Key3, key)) { Value3 = value; return; }
 
-        if (Overflow is not null)
+        if (OverflowCount > 0)
         {
-            for (var i = 0; i < OverflowCount; i++)
+            var idx = pool.FindIndex(OverflowHead, key);
+            if (idx >= 0)
             {
-                if (EqualityComparer<TKey>.Default.Equals(Overflow[i].Key, key))
-                {
-                    Overflow[i].Value = value;
-                    return false;
-                }
+                pool.GetValue(idx) = value;
+                return;
             }
         }
 
         switch (Count)
         {
-            case 0: Key0 = key; Value0 = value; Count = 1; return false;
-            case 1: Key1 = key; Value1 = value; Count = 2; return false;
-            case 2: Key2 = key; Value2 = value; Count = 3; return false;
-            case 3: Key3 = key; Value3 = value; Count = 4; return false;
+            case 0: Key0 = key; Value0 = value; Count = 1; return;
+            case 1: Key1 = key; Value1 = value; Count = 2; return;
+            case 2: Key2 = key; Value2 = value; Count = 3; return;
+            case 3: Key3 = key; Value3 = value; Count = 4; return;
             default:
-                return OverflowAdd(key, value);
+                OverflowHead = pool.Add(key, value, OverflowCount > 0 ? OverflowHead : -1);
+                OverflowCount++;
+                return;
         }
     }
 
-    private bool OverflowAdd(TKey key, TValue value)
-    {
-        var allocated = false;
-        if (Overflow is null)
-        {
-            Overflow = new (TKey, TValue)[4];
-            allocated = true;
-        }
-        else if (OverflowCount == Overflow.Length)
-        {
-            Array.Resize(ref Overflow, Overflow.Length * 2);
-        }
-        Overflow[OverflowCount++] = (key, value);
-        return allocated;
-    }
-
-    public bool TryGetValue(TKey key, out TValue value)
+    public bool TryGetValue(TKey key, out TValue value, ref OverflowPool<TKey, TValue> pool)
     {
         if (Count >= 1 && EqualityComparer<TKey>.Default.Equals(Key0, key)) { value = Value0; return true; }
         if (Count >= 2 && EqualityComparer<TKey>.Default.Equals(Key1, key)) { value = Value1; return true; }
         if (Count >= 3 && EqualityComparer<TKey>.Default.Equals(Key2, key)) { value = Value2; return true; }
         if (Count >= 4 && EqualityComparer<TKey>.Default.Equals(Key3, key)) { value = Value3; return true; }
-        if (Overflow is not null)
+        if (OverflowCount > 0)
         {
-            for (var i = 0; i < OverflowCount; i++)
+            var idx = pool.FindIndex(OverflowHead, key);
+            if (idx >= 0)
             {
-                if (EqualityComparer<TKey>.Default.Equals(Overflow[i].Key, key))
-                {
-                    value = Overflow[i].Value;
-                    return true;
-                }
+                value = pool.GetValueReadonly(idx);
+                return true;
             }
         }
         value = default!;
         return false;
     }
 
-    public bool Remove(TKey key)
+    public bool Remove(TKey key, ref OverflowPool<TKey, TValue> pool)
     {
         if (Count >= 1 && EqualityComparer<TKey>.Default.Equals(Key0, key)) { RemoveAt(0); return true; }
         if (Count >= 2 && EqualityComparer<TKey>.Default.Equals(Key1, key)) { RemoveAt(1); return true; }
         if (Count >= 3 && EqualityComparer<TKey>.Default.Equals(Key2, key)) { RemoveAt(2); return true; }
         if (Count >= 4 && EqualityComparer<TKey>.Default.Equals(Key3, key)) { RemoveAt(3); return true; }
-        if (Overflow is not null)
+        if (OverflowCount > 0 && pool.Remove(ref OverflowHead, key))
         {
-            for (var i = 0; i < OverflowCount; i++)
-            {
-                if (EqualityComparer<TKey>.Default.Equals(Overflow[i].Key, key))
-                {
-                    var last = OverflowCount - 1;
-                    Overflow[i] = Overflow[last];
-                    Overflow[last] = default;
-                    OverflowCount = last;
-                    return true;
-                }
-            }
+            OverflowCount--;
+            return true;
         }
         return false;
     }
@@ -128,19 +101,25 @@ internal struct InlineMap<TKey, TValue>
         Count = last;
     }
 
-    public void CopyTo(List<(TKey, TValue)> target)
+    public void CopyTo(List<(TKey, TValue)> target, ref OverflowPool<TKey, TValue> pool)
     {
         if (Count >= 1) target.Add((Key0, Value0));
         if (Count >= 2) target.Add((Key1, Value1));
         if (Count >= 3) target.Add((Key2, Value2));
         if (Count >= 4) target.Add((Key3, Value3));
-        for (var i = 0; i < OverflowCount; i++)
-            target.Add((Overflow![i].Key, Overflow[i].Value));
+        if (OverflowCount > 0)
+        {
+            for (var nodeIdx = OverflowHead; nodeIdx >= 0; nodeIdx = pool.GetNext(nodeIdx))
+            {
+                target.Add((pool.GetKeyReadonly(nodeIdx), pool.GetValueReadonly(nodeIdx)));
+            }
+        }
     }
 
     public void Clear()
     {
         Count = 0;
+        OverflowHead = -1;
         OverflowCount = 0;
     }
 }

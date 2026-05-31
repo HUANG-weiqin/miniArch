@@ -64,13 +64,11 @@ public sealed class DebugMetricsTests
         Assert.Equal(70, metrics.RecordedSetCount);
         Assert.Equal(1, metrics.RecordedCreateCount);
         Assert.Equal(17, metrics.RecordedAddCount);
-        Assert.True(metrics.CreatedInlineOverflowAllocationCount >= 1);
         Assert.True(metrics.OpsPoolGrowCount >= 2);
         Assert.True(metrics.OpsLookupGrowCount >= 2);
         Assert.True(metrics.SlabRentCount >= 1);
         Assert.True(metrics.SnapshotDeepCopyBytes > 0);
         Assert.Contains("MiniArch CommandBuffer Debug Metrics", report);
-        Assert.Contains("created_inline_overflow_allocations", report);
         Assert.Contains("ops_pool_grow_count", report);
         Assert.Contains("slab_rent_count", report);
         Assert.Contains("snapshot_deep_copy_bytes", report);

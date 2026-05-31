@@ -31,6 +31,8 @@ public sealed class CommandBuffer : ICommandRecorder
     private Dictionary<int, (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)> _typeInfoCache = new();
     private List<byte[]> _slabs = new();
     private readonly List<(int ComponentTypeId, CreatedComponent Component)> _tempComponents = new();
+    private OverflowPool<int, EntityOpSlot> _opsOverflow;
+    private OverflowPool<int, CreatedComponent> _createdOverflow;
     private bool _hasCreatedEntities;
     private int _currentSlabIndex = -1;
     private int _currentSlabOffset;
@@ -41,8 +43,6 @@ public sealed class CommandBuffer : ICommandRecorder
     private int _debugRecordedAddCount;
     private int _debugRecordedRemoveCount;
     private int _debugRecordedDestroyCount;
-    private int _debugCreatedInlineOverflowAllocationCount;
-    private int _debugExistingOpsInlineOverflowAllocationCount;
     private int _debugOpsPoolGrowCount;
     private int _debugOpsLookupGrowCount;
     private int _debugCreatedStatePoolGrowCount;
@@ -75,8 +75,6 @@ public sealed class CommandBuffer : ICommandRecorder
             _debugRecordedAddCount,
             _debugRecordedRemoveCount,
             _debugRecordedDestroyCount,
-            _debugCreatedInlineOverflowAllocationCount,
-            _debugExistingOpsInlineOverflowAllocationCount,
             _debugOpsPoolGrowCount,
             _debugOpsLookupGrowCount,
             _debugCreatedStatePoolGrowCount,
@@ -112,8 +110,6 @@ public sealed class CommandBuffer : ICommandRecorder
             $"recorded_add_count: {metrics.RecordedAddCount}\n" +
             $"recorded_remove_count: {metrics.RecordedRemoveCount}\n" +
             $"recorded_destroy_count: {metrics.RecordedDestroyCount}\n" +
-            $"created_inline_overflow_allocations: {metrics.CreatedInlineOverflowAllocationCount}\n" +
-            $"existing_ops_inline_overflow_allocations: {metrics.ExistingOpsInlineOverflowAllocationCount}\n" +
             $"ops_pool_grow_count: {metrics.OpsPoolGrowCount}\n" +
             $"ops_lookup_grow_count: {metrics.OpsLookupGrowCount}\n" +
             $"created_state_pool_grow_count: {metrics.CreatedStatePoolGrowCount}\n" +
@@ -169,6 +165,7 @@ public sealed class CommandBuffer : ICommandRecorder
 
         var index = _createdStatePoolCount++;
         _createdStatePool[index] = default;
+        _createdStatePool[index].Map.OverflowHead = -1;
         _createdEntityByPoolIndex[index] = entity;
 
         if (entity.Id >= _createdStateLookup.Length)
@@ -215,14 +212,7 @@ public sealed class CommandBuffer : ICommandRecorder
             if (createdIdx >= 0)
             {
                 ref var state = ref _createdStatePool[createdIdx];
-#if DEBUG
-                if (state.Map.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size)))
-                {
-                    _debugCreatedInlineOverflowAllocationCount++;
-                }
-#else
-                state.Map.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size));
-#endif
+                state.Map.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size), ref _createdOverflow);
                 return;
             }
         }
@@ -230,14 +220,7 @@ public sealed class CommandBuffer : ICommandRecorder
         var opsIdx = GetOrCreateOpsIndex(entity);
         ref var ops = ref _opsPool[opsIdx];
         var slot = new EntityOpSlot { ComponentTypeId = componentTypeId, Kind = OpKindAdd, AddSetData = new AddSetEntry(info.ComponentType, info.RuntimeType, slabIndex, offset, info.Size, info.Writer) };
-#if DEBUG
-        if (ops.Set(componentTypeId, slot))
-        {
-            _debugExistingOpsInlineOverflowAllocationCount++;
-        }
-#else
-        ops.Set(componentTypeId, slot);
-#endif
+        ops.Set(componentTypeId, slot, ref _opsOverflow);
     }
 
     /// <summary>
@@ -258,14 +241,7 @@ public sealed class CommandBuffer : ICommandRecorder
             if (createdIdx >= 0)
             {
                 ref var state = ref _createdStatePool[createdIdx];
-#if DEBUG
-                if (state.Map.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size)))
-                {
-                    _debugCreatedInlineOverflowAllocationCount++;
-                }
-#else
-                state.Map.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size));
-#endif
+                state.Map.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size), ref _createdOverflow);
                 return;
             }
         }
@@ -273,14 +249,7 @@ public sealed class CommandBuffer : ICommandRecorder
         var opsIdx = GetOrCreateOpsIndex(entity);
         ref var ops = ref _opsPool[opsIdx];
         var slot = new EntityOpSlot { ComponentTypeId = componentTypeId, Kind = OpKindSet, AddSetData = new AddSetEntry(info.ComponentType, info.RuntimeType, slabIndex, offset, info.Size, info.Writer) };
-#if DEBUG
-        if (ops.Set(componentTypeId, slot))
-        {
-            _debugExistingOpsInlineOverflowAllocationCount++;
-        }
-#else
-        ops.Set(componentTypeId, slot);
-#endif
+        ops.Set(componentTypeId, slot, ref _opsOverflow);
     }
 
     /// <summary>
@@ -299,24 +268,17 @@ public sealed class CommandBuffer : ICommandRecorder
             if (createdIdx >= 0)
             {
                 ref var state = ref _createdStatePool[createdIdx];
-                state.Map.Remove(componentTypeId);
+                state.Map.Remove(componentTypeId, ref _createdOverflow);
                 return;
             }
         }
 
         var opsIdx = GetOrCreateOpsIndex(entity);
         ref var ops = ref _opsPool[opsIdx];
-        ops.Remove(componentTypeId);
+        ops.Remove(componentTypeId, ref _opsOverflow);
         var info = ResolveTypeInfo(componentTypeId);
         var slot = new EntityOpSlot { ComponentTypeId = componentTypeId, Kind = OpKindRemove, RemoveComponentType = info.ComponentType };
-#if DEBUG
-        if (ops.Set(componentTypeId, slot))
-        {
-            _debugExistingOpsInlineOverflowAllocationCount++;
-        }
-#else
-        ops.Set(componentTypeId, slot);
-#endif
+        ops.Set(componentTypeId, slot, ref _opsOverflow);
     }
 
     /// <summary>
@@ -425,14 +387,7 @@ public sealed class CommandBuffer : ICommandRecorder
             ref var state = ref _createdStatePool[createdIdx];
             var info = ResolveTypeInfo(componentTypeId);
             CopyComponentFromChunk(chunk, i, sourceRow, info.Size, out var slabIndex, out var offset);
-#if DEBUG
-            if (state.Map.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size)))
-            {
-                _debugCreatedInlineOverflowAllocationCount++;
-            }
-#else
-            state.Map.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size));
-#endif
+            state.Map.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size), ref _createdOverflow);
         }
     }
 
@@ -592,8 +547,8 @@ public sealed class CommandBuffer : ICommandRecorder
                 if (existingOps.Count >= 2) ApplyOpDirect(existingOps.Value1, entity);
                 if (existingOps.Count >= 3) ApplyOpDirect(existingOps.Value2, entity);
                 if (existingOps.Count >= 4) ApplyOpDirect(existingOps.Value3, entity);
-                for (var j = 0; j < existingOps.OverflowCount; j++)
-                    ApplyOpDirect(existingOps.Overflow![j].Value, entity);
+                for (var nodeIdx = existingOps.OverflowHead; nodeIdx >= 0; nodeIdx = _opsOverflow.GetNext(nodeIdx))
+                    ApplyOpDirect(_opsOverflow.GetValueReadonly(nodeIdx), entity);
             }
 
             foreach (var (child, intent) in _hierarchyByChild)
@@ -671,6 +626,8 @@ public sealed class CommandBuffer : ICommandRecorder
         {
             foreach (var slab in frozen.Slabs)
                 ArrayPool<byte>.Shared.Return(slab);
+            frozen.OpsOverflow.ReturnArrays();
+            frozen.CreatedOverflow.ReturnArrays();
 #if DEBUG
             _debugSnapshotDeepCopyCount++;
             _debugSnapshotDeepCopyBytes += t.Result.CopiedBytes;
@@ -699,6 +656,8 @@ public sealed class CommandBuffer : ICommandRecorder
             Slabs = _slabs,
             HasCreatedEntities = _hasCreatedEntities,
             TypeInfoCache = _typeInfoCache,
+            OpsOverflow = _opsOverflow,
+            CreatedOverflow = _createdOverflow,
         };
 
         _createdStatePool = Array.Empty<CreatedState>();
@@ -717,6 +676,8 @@ public sealed class CommandBuffer : ICommandRecorder
         _slabs = new List<byte[]>();
         _hasCreatedEntities = false;
         _typeInfoCache = new Dictionary<int, (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)>();
+        _opsOverflow = default;
+        _createdOverflow = default;
         _currentSlabIndex = -1;
         _currentSlabOffset = 0;
 
@@ -743,7 +704,7 @@ public sealed class CommandBuffer : ICommandRecorder
                 else
                 {
                     _tempComponents.Clear();
-                    state.Map.CopyTo(_tempComponents);
+                    state.Map.CopyTo(_tempComponents, ref frozen.CreatedOverflow);
                     var componentCount = _tempComponents.Count;
 
                     var components = ArrayPool<ComponentType>.Shared.Rent(componentCount);
@@ -789,8 +750,8 @@ public sealed class CommandBuffer : ICommandRecorder
                 if (existingOps.Count >= 2) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value1, entity);
                 if (existingOps.Count >= 3) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value2, entity);
                 if (existingOps.Count >= 4) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value3, entity);
-                for (var j = 0; j < existingOps.OverflowCount; j++)
-                    ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Overflow![j].Value, entity);
+                for (var nodeIdx = existingOps.OverflowHead; nodeIdx >= 0; nodeIdx = frozen.OpsOverflow.GetNext(nodeIdx))
+                    ApplyOpDirectFromFrozen(_world, frozen.Slabs, frozen.OpsOverflow.GetValueReadonly(nodeIdx), entity);
             }
 
             foreach (var (child, intent) in frozen.HierarchyByChild)
@@ -859,7 +820,7 @@ public sealed class CommandBuffer : ICommandRecorder
             }
             else
             {
-                var (signature, components) = BuildCreatedEntityComponentsFromFrozen(in state, frozen.Slabs);
+                var (signature, components) = BuildCreatedEntityComponentsFromFrozen(in state, frozen.Slabs, ref frozen.CreatedOverflow);
                 delta.CreatedEntities.Add(new RawCreatedEntity(entity, signature, components));
             }
         }
@@ -889,9 +850,9 @@ public sealed class CommandBuffer : ICommandRecorder
             if (existingOps.Count >= 2) EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in existingOps.Value1, entity, delta);
             if (existingOps.Count >= 3) EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in existingOps.Value2, entity, delta);
             if (existingOps.Count >= 4) EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in existingOps.Value3, entity, delta);
-            for (var j = 0; j < existingOps.OverflowCount; j++)
+            for (var nodeIdx = existingOps.OverflowHead; nodeIdx >= 0; nodeIdx = frozen.OpsOverflow.GetNext(nodeIdx))
             {
-                var overflowSlot = existingOps.Overflow![j].Value;
+                var overflowSlot = frozen.OpsOverflow.GetValueReadonly(nodeIdx);
                 EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in overflowSlot, entity, delta);
             }
         }
@@ -907,7 +868,7 @@ public sealed class CommandBuffer : ICommandRecorder
     }
 
     private static (ComponentType[] Types, CreatedComponent[] Sources, int Count) ExtractAndSortComponents(
-        in CreatedState state)
+        in CreatedState state, ref OverflowPool<int, CreatedComponent> pool)
     {
         var count = state.Map.Count + state.Map.OverflowCount;
 
@@ -919,10 +880,11 @@ public sealed class CommandBuffer : ICommandRecorder
         if (state.Map.Count >= 2) { sources[idx] = state.Map.Value1; types[idx] = state.Map.Value1.ComponentType; idx++; }
         if (state.Map.Count >= 3) { sources[idx] = state.Map.Value2; types[idx] = state.Map.Value2.ComponentType; idx++; }
         if (state.Map.Count >= 4) { sources[idx] = state.Map.Value3; types[idx] = state.Map.Value3.ComponentType; idx++; }
-        for (var j = 0; j < state.Map.OverflowCount; j++)
+        for (var nodeIdx = state.Map.OverflowHead; nodeIdx >= 0; nodeIdx = pool.GetNext(nodeIdx))
         {
-            sources[idx] = state.Map.Overflow![j].Value;
-            types[idx] = state.Map.Overflow[j].Value.ComponentType;
+            var val = pool.GetValueReadonly(nodeIdx);
+            sources[idx] = val;
+            types[idx] = val.ComponentType;
             idx++;
         }
 
@@ -965,9 +927,9 @@ public sealed class CommandBuffer : ICommandRecorder
     }
 
     private static (Signature Signature, RawComponentValue[] Components) BuildCreatedEntityComponentsFromFrozen(
-        in CreatedState state, List<byte[]> slabs)
+        in CreatedState state, List<byte[]> slabs, ref OverflowPool<int, CreatedComponent> pool)
     {
-        var (types, sources, count) = ExtractAndSortComponents(in state);
+        var (types, sources, count) = ExtractAndSortComponents(in state, ref pool);
         try
         {
             var rawComponents = new RawComponentValue[count];
@@ -1029,7 +991,7 @@ public sealed class CommandBuffer : ICommandRecorder
 
     private (Archetype Archetype, RawComponentValue[] Components, int Count) BuildCreatedEntityComponents(in CreatedState state)
     {
-        var (types, sources, count) = ExtractAndSortComponents(in state);
+        var (types, sources, count) = ExtractAndSortComponents(in state, ref _createdOverflow);
         try
         {
             var key = new World.CreateArchetypeKey(types.AsSpan(0, count));
@@ -1051,7 +1013,7 @@ public sealed class CommandBuffer : ICommandRecorder
 
     private (Signature Signature, RawComponentValue[] Components) BuildCreatedEntityComponentsForDelta(in CreatedState state)
     {
-        var (types, sources, count) = ExtractAndSortComponents(in state);
+        var (types, sources, count) = ExtractAndSortComponents(in state, ref _createdOverflow);
         try
         {
             var rawComponents = new RawComponentValue[count];
@@ -1156,9 +1118,9 @@ public sealed class CommandBuffer : ICommandRecorder
             if (existingOps.Count >= 2) EmitOp(in existingOps.Value1, entity, delta);
             if (existingOps.Count >= 3) EmitOp(in existingOps.Value2, entity, delta);
             if (existingOps.Count >= 4) EmitOp(in existingOps.Value3, entity, delta);
-            for (var j = 0; j < existingOps.OverflowCount; j++)
+            for (var nodeIdx = existingOps.OverflowHead; nodeIdx >= 0; nodeIdx = _opsOverflow.GetNext(nodeIdx))
             {
-                var overflowSlot = existingOps.Overflow![j].Value;
+                var overflowSlot = _opsOverflow.GetValueReadonly(nodeIdx);
                 EmitOp(in overflowSlot, entity, delta);
             }
         }
@@ -1196,6 +1158,8 @@ public sealed class CommandBuffer : ICommandRecorder
         _maxCreatedEntityId = 0;
         _hierarchyByChild.Clear();
         _hasCreatedEntities = false;
+        _opsOverflow.Clear();
+        _createdOverflow.Clear();
 
         foreach (var slab in _slabs)
         {
@@ -1376,6 +1340,7 @@ public sealed class CommandBuffer : ICommandRecorder
         }
 
         var index = _opsPoolCount++;
+        _opsPool[index].OverflowHead = -1;
         _opsEntityByPoolIndex[index] = entity;
         _opsLookup[id] = index;
         if (id >= _maxOpsEntityId) _maxOpsEntityId = id + 1;
@@ -1442,5 +1407,7 @@ public sealed class CommandBuffer : ICommandRecorder
         public List<byte[]> Slabs = null!;
         public bool HasCreatedEntities;
         public Dictionary<int, (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)> TypeInfoCache = null!;
+        public OverflowPool<int, EntityOpSlot> OpsOverflow;
+        public OverflowPool<int, CreatedComponent> CreatedOverflow;
     }
 }

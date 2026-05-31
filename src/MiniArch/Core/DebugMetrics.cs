@@ -32,8 +32,6 @@ namespace MiniArch.Core
         int RecordedAddCount,
         int RecordedRemoveCount,
         int RecordedDestroyCount,
-        int CreatedInlineOverflowAllocationCount,
-        int ExistingOpsInlineOverflowAllocationCount,
         int OpsPoolGrowCount,
         int OpsLookupGrowCount,
         int CreatedStatePoolGrowCount,

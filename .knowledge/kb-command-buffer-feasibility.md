@@ -2,7 +2,7 @@
 title: Command Buffer Runtime
 module: MiniArch.Core CommandBuffer
 description: Single-threaded per-entity-deduplicating command buffer with arena slab allocator, inline CreatedState/ExistingEntityOps, direct Submit() path, Snapshot() for cross-world replay, FrameDelta merge, SubmitAndSnapshotAsync() for parallel submit+snapshot, and Clone support
-updated: 2026-05-31
+updated: 2026-06-01
 ---
 
 # Command Buffer Runtime
@@ -45,9 +45,10 @@ updated: 2026-05-31
 
 ## 录制时去重模型
 
-- 每个实体维护 O(1) 的 `ExistingEntityOps`（4 个 inline slot + overflow dict）
+- 每个实体维护 O(1) 的 `ExistingEntityOps`（4 个 inline slot + overflow linked-list node）
 - 同实体同组件类型的后续操作替换而非追加：`Set` 覆盖前面的 `Set` 或 `Add`，`Remove` 覆盖前面的操作
-- `CreatedState` 同样用 4 个 inline 槽位 + overflow，对 2-4 组件的典型 entity 零字典分配
+- `CreatedState` 同样用 4 个 inline 槽位 + overflow pool，对 2-4 组件的典型 entity 零分配
+- Overflow 节点由 `CommandBuffer` 共享的 `OverflowPool<TKey, TValue>` 管理：三个并行数组（keys, values, next pointers）构成单链表， backed by `ArrayPool<T>`，消除逐 map 的堆分配
 - Arena slab allocator：`CopyData<T>` 写入 `ArrayPool<byte>.Shared.Rent` 租来的 slab，消除 per-command `new byte[]`
 
 ## 决策
@@ -112,6 +113,7 @@ updated: 2026-05-31
   - 当前 `World.Set<T>` 在组件不存在时会走"补组件 + 迁移"路径，command buffer 的 `Set` 语义必须与它兼容
   - `ReleaseReservedEntity` 会提升 version 并归还 free-list；如果漏掉 version 递增，stale handle 会重新变活
   - 跨 world replay 现在依赖"目标 world 与源 world 从同一初始态开始，并按相同 frame 顺序推进"；如果这个前提破坏，replay 会在 reservation 对齐时失败
+  - `InlineMap` 的 `OverflowHead` 默认值是 0（struct default），但 `Clear()` 只重置 `Count` 和 `OverflowCount`；如果外部循环直接用 `OverflowHead` 做链表遍历条件（而不先判断 `OverflowCount > 0`），默认值 0 会导致遍历空 pool 并可能 NRE。`AllocateOpsIndex` / `RegisterInCreatedState` 中新分配的 map 必须显式初始化 `OverflowHead = -1`
 
 ## 优化历史
 
@@ -137,31 +139,38 @@ updated: 2026-05-31
 - 保留 `_typeInfoCache` 跨帧（不 Clear）
 - `_hasCreatedEntities` flag 跳过空字典查找
 - Writer 缓存到 `_typeInfoCache` 元组中（避免每次 `ConcurrentDictionary.GetOrAdd`）
-- `CreatedState` inline 4 字段 + overflow 字典
-- `ExistingEntityOps` inline 4 槽 + overflow 字典
+- `CreatedState` inline 4 字段 + overflow pool（`OverflowPool<int, CreatedComponent>`）
+- `ExistingEntityOps` inline 4 槽 + overflow pool（`OverflowPool<int, EntityOpSlot>`）
 - Arena `ArrayPool<byte>` slab
 
 ### SubmitAndSnapshotAsync 并行路径
 
 核心洞察：`BuildDelta` 和 `Submit()` 对 buffer 内部状态都是只读的。换出后，同一份 frozen state 可以被两个线程同时读。
 
-- **换出模型**：`FrozenBufferState`（private nested class）抓走 buffer 所有内部字段的引用，buffer 重置为空状态
+- **换出模型**：`FrozenBufferState`（private nested class）抓走 buffer 所有内部字段的引用，包括两个 `OverflowPool`，buffer 重置为空状态（pool 也设为 default，由 frozen state 持有旧 pool）
 - **并行执行**：`Task.Run` 启动后台 BuildFromFrozen；主线程同步执行 SubmitFromFrozen
-- **结果所有权**：后台线程完成 `DeepCopyOwnedData` 后 slab 归还 ArrayPool，delta 完全独立
+- **结果所有权**：后台线程完成 `DeepCopyOwnedData` 后 slab 归还 ArrayPool，两个 OverflowPool 也分别 `ReturnArrays()`，delta 完全独立
 - **换出后 buffer 为空**：可立即开始下一帧录制
 - **不换出的字段**：`_world`、`_allocator`（buffer 始终持有）；`_tempComponents`（后台线程自建 scratch list）
 - 设计稿：`docs/plans/2026-05-26-async-snapshot-design.md`
 
-### 性能数据（Release, 全帧 record+submit, 3s×5 repeats）
+### OverflowPool 零分配（2026-05-31）
+
+- **动机**：`InlineMap` 的 overflow 从逐实例 `(TKey, TValue)[]` 数组改为 `CommandBuffer` 共享的 `OverflowPool<TKey, TValue>` 单链表节点池，消除每帧 per-map 的堆分配
+- **实现**：三个并行数组（`TKey[] keys`、`TValue[] values`、`int[] next`） backed by `ArrayPool<T>`；`FrozenBufferState` 捕获换出时的 pool，后台线程 `ContinueWith` 中归还数组
+- **坑点**：`InlineMap` 作为 struct，新分配元素的 `OverflowHead` 默认值为 0；如果遍历循环以 `nodeIdx >= 0` 为条件且未先检查 `OverflowCount > 0`，会错误遍历并访问空 pool。修复：`AllocateOpsIndex` 和 `RegisterInCreatedState` 中显式设置 `OverflowHead = -1`
+- **DEBUG metrics 调整**：移除 `CreatedInlineOverflowAllocationCount` 和 `ExistingOpsInlineOverflowAllocationCount`（不再逐实例分配）
+
+### 性能数据（Release, 全帧 record+submit, 3s×1 repeat, 2026-05-31）
 
 | Case | Mini Submit | Mini Async+Snp | Arch | Async vs Submit |
-|---|---|---|---|---|
-| 1000/CreateHeavy | 3213 | 2715 | 1381 | -15.5% |
-| 10000/CreateHeavy | 308 | 260 | 153 | -15.5% |
-| 10000/DenseExisting | 220 | 231 | 193 | +4.8% |
-| 10000/MixedScript | 246 | 205 | 183 | -16.6% |
+|---|---|---|---|---:|
+| 1000/CreateHeavy | 3217 | 2847 | 1343 | -11.5% |
+| 10000/CreateHeavy | 331 | 277 | 154 | -16.3% |
+| 10000/DenseExisting | 285 | 284 | 189 | -0.4% |
+| 10000/MixedScript | 357 | 282 | 182 | -21.0% |
 
-关键结论：Async 路径（含 snapshot）在所有场景下相比纯 Submit（不含 snapshot）开销约 15-16%。DenseExisting 场景下反而略快（swap-out 省了 Clear 开销）。
+关键结论：OverflowPool 替换后 Submit 路径性能与之前持平或微升；Async 路径开销维持在 0-21% 区间，DenseExisting 几乎无损耗。所有测试通过（292 + 5 HeroPipeline）。
 
 ## FrameDelta
 
