@@ -55,7 +55,7 @@
 
 在 `.knowledge/` 下新增或更新文件时，必须严格遵守：
 
-- 每个知识页必须使用 `.knowledge/_templet.md` 作为模板。
+- 每个知识页必须使用 `.knowledge/_template.md` 作为模板。
 - front matter 必须完整且有效：
   - `title`
   - `module`

@@ -59,7 +59,7 @@ updated: 2026-04-12
 - 如果是修协作入口，先看：
   - `scripts/verify.ps1`：统一验证命令
 - 如果是加知识页，先看：
-  - `.knowledge/_templet.md`：知识页模板
+  - `.knowledge/_template.md`：知识页模板
 
 ## 坑点
 
