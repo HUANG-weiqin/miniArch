@@ -1700,6 +1700,10 @@ public sealed class World : IDisposable
         PushFreeId(entity.Id, nextVersion);
     }
 
+    /// <summary>
+    /// Replays a frame delta into this world: reserves entities, materializes created entities,
+    /// applies hierarchy link/unlink, add/set/remove components, and destroys entities in standard order.
+    /// </summary>
     public void Replay(FrameDelta delta) => ReplayCore(delta, trusted: false);
 
     internal void ReplayTrusted(FrameDelta delta) => ReplayCore(delta, trusted: true);
