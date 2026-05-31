@@ -48,7 +48,7 @@ updated: 2026-05-31
   - `Set` 在组件已存在时直接定位到 typed column 的 row，原地写回，不触发迁移
   - `Clone` 执行 deep clone：先 `CloneSingle` 复制 root 实体（同 archetype memcpy），leaf source 直接返回；有 children 时 `DeepCloneChildren` 用 hierarchy struct enumerator DFS 遍历 subtree，逐个 `CloneSingle` + `_hierarchy.Link`，clone root 没有父节点
   - `CommandBuffer.Clone` 也执行 deep clone，但在录制时快照 source 当前 world 状态到 CreatedState；后续对 clone deferred entity 的 `Set/Remove/Destroy` 与普通 `Create(...)` 一样归约
-  - `Archetype` 负责把实体放进可写 chunk，并通过显式 non-full chunk 索引优先复用已有空位的 chunk，而不是盲目只往最后一个 chunk 追加
+  - `Archetype` 负责把实体放进可写 chunk，并通过显式 non-full chunk 索引优先复用已有空位的 chunk，而不是盲目只往最后一个 chunk 追加；non-full 索引使用简单 append 栈（LIFO），不再维护排序数组
 - `Chunk` 负责 dense row 的单个/批量插入、读取、swap-remove 和 direct-index 写入；组件列存储为一块 `_data: byte[]`，通过 `_columnByteOffsets[column] + row * _elementSizes[column]` 定位元素
 - `Chunk` 也应该暴露当前有效 entity 行的 span 视图，给 query / benchmark 这类纯读热路径直接扫 `_entities[0..Count)`，避免逐行 `GetEntity(row)` 的重复边界检查和调用成本
 - `Query` 先缓存匹配 archetype，再暴露 chunk 枚举和 `GetChunkSpan()` 这类 span-first 读入口
@@ -93,7 +93,7 @@ updated: 2026-05-31
 - 默认 `World()` 的非空 archetype 也不应一律固定在 `128 entities/chunk`；更合理的是按每实体近似字节数把 chunk 调到接近固定目标字节数，这样 query world 不会因为“小 chunk 过碎”被额外的 chunk 遍历次数拖慢。
 - 但显式传入的非默认 `chunkCapacity` 仍应被视为调用方的确定性约束，尤其是测试和调试场景；不要把它静默改写成自适应值。
 - `Archetype` 不能只把写入目标锁死在最后一个 chunk；结构迁移把实体移走后，前面空掉的 chunk 必须可复用，否则 `Remove -> 空 archetype` 会无意义地重新分配 chunk。
-- 但“可复用前面空 chunk”不等于“每次插入都线性扫所有 chunk”；`Archetype` 现在维护按 chunk index 排序的 non-full chunk 索引，`GetWritableChunk()` / `ReserveEntityRanges()` 从索引里取最高可写 chunk，保留旧的反向扫描分配顺序，同时避免穿过大量满 chunk。
+- 但“可复用前面空 chunk”不等于“每次插入都线性扫所有 chunk”；`Archetype` 维护 non-full chunk 栈（LIFO），`GetWritableChunk()` / `ReserveEntityRanges()` 从栈顶取可写 chunk；O(1) append/pop，不再需要 BinarySearch + Array.Copy 的有序插入。
 - `ArchetypeEdges` 应该和其他热路径一样使用 component id 直索引，而不是继续停留在 `Dictionary<ComponentType, Archetype>`。
 - `Archetype` 和 `Chunk` 只保留 typed 构造路径（必须传入 `Type[]`）；不再有 untyped `object?[]` 列路径。
 - `Set` 的热路径应该是 direct-index 原地写，不应该为了更新一个已存在组件去做结构迁移。
@@ -221,6 +221,10 @@ updated: 2026-05-31
 - query benchmark 里如果 world shape 仍通过多次 `Add` 逐步长成，会残留一批历史空 archetype；它们不一定代表 steady-state query 的真实读取成本。
 - query profiling 里如果 top1 看起来只是某个外层 `Execute` 包装函数，不要直接把锅甩给 wrapper；常见原因是 `Chunk.GetEntity(row)`、chunk 枚举等小函数被 JIT inline 后折叠进调用者。
 - 扁平 chunk snapshot 如果仍然只绑定 `ArchetypeGeneration`，会在“同 archetype 内追加到新 chunk”时静默读到过期 chunk 列表；这种 bug 只有在 chunk 容量很小或 world 很大时才容易暴露。
+- Query “_scratchChunks” 只增不减，当匹配 chunk 数下降时会包含过期条目；必须用独立 _snapshotChunkCount 字段追踪真实数量。
+- Chunk.CopyRemovedRow 已内联：MemoryMarshal.GetArrayDataReference + Unsafe.Add 直接操作 byte 存储。
+- InlineMap key 比较从 EqualityComparer 虚调度改为 TKey.Equals，消除热路径虚调度。
+- CommandBuffer.ResolveTypeInfo 从 Dictionary 改为 componentTypeId 直索引数组。
 - 如果默认 world 的 query 吞吐落后明显，而 profiling 又显示 refresh 不是热点，先检查“匹配 chunk 数是否显著多于 Arch”；这通常说明问题在 chunk 粒度，而不是 query matching 本身。
 - 自适应 chunk 容量只应覆盖默认 world；如果把显式 `chunkCapacity: 4` 这类测试配置也自动放大，会直接破坏很多依赖固定 chunk 边界的行为测试和诊断场景。
 - 容易误判的地方：
