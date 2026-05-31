@@ -184,22 +184,6 @@ public sealed class CommandBufferTests
     }
 
     [Fact]
-    public void Recording_structural_change_does_not_publish_layout_changes_before_submit()
-    {
-        var world = new World();
-        var entity = world.Create();
-        world.Components.GetOrCreate<Position>();
-        var buffer = new CommandBuffer(world);
-        var queryGenerationBefore = GetQueryGeneration(world);
-        var archetypeCountBefore = GetArchetypeCount(world);
-
-        buffer.Add(entity, new Position(9, 9));
-
-        Assert.Equal(queryGenerationBefore, GetQueryGeneration(world));
-        Assert.Equal(archetypeCountBefore, GetArchetypeCount(world));
-    }
-
-    [Fact]
     public void Submit_session_applies_all_commands_together()
     {
         var world = new World();
@@ -798,13 +782,6 @@ public sealed class CommandBufferTests
         Assert.Equal(new Position(1, 2), p);
         Assert.True(replica.TryGet(replicaEntity, out Velocity v));
         Assert.Equal(new Velocity(5, 6), v);
-    }
-
-    private static int GetQueryGeneration(World world)
-    {
-        var field = typeof(World).GetField("_queryGeneration", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
-            ?? throw new InvalidOperationException("Unable to find World._queryGeneration.");
-        return (int)field.GetValue(world)!;
     }
 
     private static int GetArchetypeCount(World world)

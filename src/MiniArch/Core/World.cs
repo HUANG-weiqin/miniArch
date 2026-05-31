@@ -33,9 +33,7 @@ public sealed class World : IDisposable
     private readonly bool _adaptiveChunkCapacity;
     private RecycledEntity[] _freeIds;
     private int _freeIdCount;
-    private int _queryLayoutSuppressionCount;
-    private bool _queryLayoutDirty;
-    private int _queryGeneration;
+
     private int _createArchetypeCacheGeneration;
     private int _archetypeVersion;
     private readonly List<Entity> _destroyOrderScratch = new(8);
@@ -193,8 +191,6 @@ public sealed class World : IDisposable
 
     internal HierarchyTable Hierarchy => _hierarchy;
 
-    internal int QueryGeneration => _queryGeneration;
-
     internal int ArchetypeVersion => _archetypeVersion;
 
     internal void Reset(int entitySlotCount)
@@ -209,7 +205,6 @@ public sealed class World : IDisposable
         _archetypeSnapshot = Array.Empty<Archetype>();
         _queryFiltersByDescription = new Dictionary<QueryDescription, QueryFilter>();
         _queries = new Dictionary<QueryFilter, MiniArch.Core.Query>();
-        _queryGeneration = 0;
         _createArchetypeCacheGeneration++;
         _freeIdCount = 0;
         _destroyVisitedGen = [];
@@ -749,7 +744,6 @@ public sealed class World : IDisposable
         if (_freeIdCount == 0)
         {
             CreateManyFresh(entities);
-            TouchQueryLayout();
             return;
         }
 
@@ -764,7 +758,6 @@ public sealed class World : IDisposable
             Span<EntityBatchRange> ranges = stackalloc EntityBatchRange[StackAllocatedBatchRangeLimit];
             var rangeCount = archetype.ReserveEntityRanges(entities.Length, ranges);
             WriteCreatedEntitiesAndLocations(archetype, entities, ranges[..rangeCount], reusedCount, startId);
-            TouchQueryLayout();
             return;
         }
 
@@ -779,8 +772,6 @@ public sealed class World : IDisposable
         {
             ArrayPool<EntityBatchRange>.Shared.Return(rentedRanges);
         }
-
-        TouchQueryLayout();
     }
 
     /// <summary>
@@ -849,7 +840,6 @@ public sealed class World : IDisposable
         if (!_hierarchy.HasChildren(entity))
         {
             DestroySingle(entity);
-            TouchQueryLayout();
             return;
         }
 
@@ -872,8 +862,6 @@ public sealed class World : IDisposable
             {
                 DestroySingle(_destroyOrderScratch[index]);
             }
-
-            TouchQueryLayout();
         }
         finally
         {
@@ -1111,8 +1099,6 @@ public sealed class World : IDisposable
         {
             ArrayPool<CloneWork>.Shared.Return(stack);
         }
-
-        TouchQueryLayout();
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1172,7 +1158,6 @@ public sealed class World : IDisposable
         }
 
         _locations[entity.Id] = new EntityLocation(destination, destinationChunkIndex, destinationRowIndex);
-        TouchQueryLayout();
     }
 
     private void MoveEntity(Entity entity, EntityLocation sourceInfo, Archetype destination)
@@ -1325,7 +1310,6 @@ public sealed class World : IDisposable
         _archetypes.Add(signature, archetype);
         PublishArchetypeSnapshot(archetype);
         _archetypeVersion++;
-        AdvanceQueryGeneration();
         return archetype;
     }
 
@@ -1584,7 +1568,6 @@ public sealed class World : IDisposable
         var entity = new Entity(id, version);
         chunk = archetype.ReserveEntity(entity, out var chunkIndex, out rowIndex);
         _locations[id] = new EntityLocation(archetype, chunkIndex, rowIndex);
-        TouchQueryLayout();
         return entity;
     }
 
@@ -1730,23 +1713,6 @@ public sealed class World : IDisposable
         return _freeIds[--_freeIdCount];
     }
 
-    private void TouchQueryLayout()
-    {
-        if (_queryLayoutSuppressionCount > 0)
-        {
-            _queryLayoutDirty = true;
-            return;
-        }
-
-        AdvanceQueryGeneration();
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void AdvanceQueryGeneration()
-    {
-        _queryGeneration++;
-    }
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private ComponentType GetComponentType<T>()
     {
@@ -1807,67 +1773,60 @@ public sealed class World : IDisposable
             componentTypeCache.Clear();
         }
 
-        BeginDeferredLayoutUpdates();
-        try
+        if (!trusted)
         {
-            if (!trusted)
-            {
-                foreach (var reserved in delta.ReservedEntities)
-                    EnsureReplayReservation(reserved);
-            }
+            foreach (var reserved in delta.ReservedEntities)
+                EnsureReplayReservation(reserved);
+        }
 
-            foreach (var released in delta.ReleasedEntities)
-                ReleaseReservedEntity(released);
+        foreach (var released in delta.ReleasedEntities)
+            ReleaseReservedEntity(released);
 
-            foreach (var created in delta.CreatedEntities)
-            {
-                if (trusted)
-                    MaterializeReservedEntityTrusted(created.Entity, created.Signature, created.Components);
-                else
-                    MaterializeReservedEntity(created.Entity, created.Components, componentTypeCache, reservationChecked: true);
-            }
+        foreach (var created in delta.CreatedEntities)
+        {
+            if (trusted)
+                MaterializeReservedEntityTrusted(created.Entity, created.Signature, created.Components);
+            else
+                MaterializeReservedEntity(created.Entity, created.Components, componentTypeCache, reservationChecked: true);
+        }
 
-            foreach (var link in delta.LinkCommands)
-                Link(link.Parent, link.Child);
+        foreach (var link in delta.LinkCommands)
+            Link(link.Parent, link.Child);
 
-            foreach (var unlink in delta.UnlinkCommands)
-                Unlink(unlink.Child);
+        foreach (var unlink in delta.UnlinkCommands)
+            Unlink(unlink.Child);
 
-            unsafe
-            {
-                foreach (var add in delta.AddCommands)
-                {
-                    var componentType = trusted
-                        ? add.ComponentType
-                        : ResolveCompiledComponentType(add.RuntimeType, add.ComponentType, componentTypeCache);
-                    ApplyRawAddOrSet(add.Entity, componentType, add.RuntimeType, add.Data, add.DataOffset, add.ColumnWriter);
-                }
-
-                foreach (var set in delta.SetCommands)
-                {
-                    var componentType = trusted
-                        ? set.ComponentType
-                        : ResolveCompiledComponentType(set.RuntimeType, set.ComponentType, componentTypeCache);
-                    ApplyRawAddOrSet(set.Entity, componentType, set.RuntimeType, set.Data, set.DataOffset, set.ColumnWriter);
-                }
-            }
-
-            foreach (var remove in delta.RemoveCommands)
+        unsafe
+        {
+            foreach (var add in delta.AddCommands)
             {
                 var componentType = trusted
-                    ? remove.ComponentType
-                    : ResolveCompiledComponentType(remove.RuntimeType, remove.ComponentType, componentTypeCache);
-                RemoveBoxed(remove.Entity, componentType);
+                    ? add.ComponentType
+                    : ResolveCompiledComponentType(add.RuntimeType, add.ComponentType, componentTypeCache);
+                ApplyRawAddOrSet(add.Entity, componentType, add.RuntimeType, add.Data, add.DataOffset, add.ColumnWriter);
             }
 
-            foreach (var entity in delta.DestroyedEntities)
-                if (IsAlive(entity)) Destroy(entity);
+            foreach (var set in delta.SetCommands)
+            {
+                var componentType = trusted
+                    ? set.ComponentType
+                    : ResolveCompiledComponentType(set.RuntimeType, set.ComponentType, componentTypeCache);
+                ApplyRawAddOrSet(set.Entity, componentType, set.RuntimeType, set.Data, set.DataOffset, set.ColumnWriter);
+            }
         }
-        finally
+
+        foreach (var remove in delta.RemoveCommands)
         {
-            componentTypeCache?.Clear();
-            EndDeferredLayoutUpdates();
+            var componentType = trusted
+                ? remove.ComponentType
+                : ResolveCompiledComponentType(remove.RuntimeType, remove.ComponentType, componentTypeCache);
+            RemoveBoxed(remove.Entity, componentType);
         }
+
+        foreach (var entity in delta.DestroyedEntities)
+            if (IsAlive(entity)) Destroy(entity);
+
+        componentTypeCache?.Clear();
     }
 
     internal void MaterializeReservedEntity(
@@ -1907,8 +1866,6 @@ public sealed class World : IDisposable
                 }
             }
         }
-
-        TouchQueryLayout();
     }
 
     private void MaterializeReservedEntityCore(
@@ -1937,8 +1894,6 @@ public sealed class World : IDisposable
                 }
             }
         }
-
-        TouchQueryLayout();
     }
 
     internal void RemoveBoxed(Entity entity, ComponentType componentType)
@@ -1960,11 +1915,6 @@ public sealed class World : IDisposable
         var destinationSignature = archetype.Signature.Remove(componentType);
         var destination = GetOrCreateDestinationArchetype(archetype, componentType, destinationSignature, isAdd: false);
         MoveEntity(entity, info, destination);
-    }
-
-    internal void BeginDeferredLayoutUpdates()
-    {
-        _queryLayoutSuppressionCount++;
     }
 
     private void EnsureDestroyScratchCapacity(int entityCount)
@@ -1993,21 +1943,6 @@ public sealed class World : IDisposable
             _debugLastDestroyVisitedScratchCapacityAfter = _destroyVisitedGen.Length;
         }
 #endif
-    }
-
-    internal void EndDeferredLayoutUpdates()
-    {
-        if (_queryLayoutSuppressionCount == 0)
-        {
-            throw new InvalidOperationException("Unbalanced DeferQueryLayoutUpdates/Dispose call.");
-        }
-
-        _queryLayoutSuppressionCount--;
-        if (_queryLayoutSuppressionCount == 0 && _queryLayoutDirty)
-        {
-            _queryLayoutDirty = false;
-            AdvanceQueryGeneration();
-        }
     }
 
     private void EnsureReplayReservation(Entity entity)

@@ -508,79 +508,71 @@ public sealed class CommandBuffer : ICommandRecorder
             return false;
         }
 
-        _world.BeginDeferredLayoutUpdates();
-        try
+        for (var i = 0; i < _createdStatePoolCount; i++)
         {
-            for (var i = 0; i < _createdStatePoolCount; i++)
+            ref readonly var state = ref _createdStatePool[i];
+            var entity = _createdEntityByPoolIndex[i];
+            if (state.Destroyed)
             {
-                ref readonly var state = ref _createdStatePool[i];
-                var entity = _createdEntityByPoolIndex[i];
-                if (state.Destroyed)
-                {
-                    _world.ReleaseReservedEntity(entity);
-                }
-                else if (state.Map.IsEmpty)
-                {
-                    _world.MaterializeReservedEntityTrusted(entity, Signature.Empty, Array.Empty<RawComponentValue>());
-                }
-                else
-                {
-                    var (archetype, components, count) = BuildCreatedEntityComponents(in state);
-                    try
-                    {
-                        _world.MaterializeReservedEntityDirect(entity, archetype, components.AsSpan(0, count));
-                    }
-                    finally
-                    {
-                        ArrayPool<RawComponentValue>.Shared.Return(components);
-                    }
-                }
+                _world.ReleaseReservedEntity(entity);
             }
-
-            for (var i = 0; i < _opsPoolCount; i++)
+            else if (state.Map.IsEmpty)
             {
-                ref var existingOps = ref _opsPool[i];
-                if (existingOps.IsEmpty) continue;
-                var entity = _opsEntityByPoolIndex[i];
-
-                if (existingOps.Count >= 1) ApplyOpDirect(existingOps.Value0, entity);
-                if (existingOps.Count >= 2) ApplyOpDirect(existingOps.Value1, entity);
-                if (existingOps.Count >= 3) ApplyOpDirect(existingOps.Value2, entity);
-                if (existingOps.Count >= 4) ApplyOpDirect(existingOps.Value3, entity);
-                for (var nodeIdx = existingOps.OverflowHead; nodeIdx >= 0; nodeIdx = _opsOverflow.GetNext(nodeIdx))
-                    ApplyOpDirect(_opsOverflow.GetValueReadonly(nodeIdx), entity);
+                _world.MaterializeReservedEntityTrusted(entity, Signature.Empty, Array.Empty<RawComponentValue>());
             }
-
-            foreach (var (child, intent) in _hierarchyByChild)
+            else
             {
-                if (FindExistingDestroy(child) >= 0) continue;
-                if (_hasCreatedEntities)
+                var (archetype, components, count) = BuildCreatedEntityComponents(in state);
+                try
                 {
-                    var csIdx = GetCreatedStateIndex(child);
-                    if (csIdx >= 0 && _createdStatePool[csIdx].Destroyed) continue;
-                    if (intent.IsLinked)
-                    {
-                        var parentIdx = GetCreatedStateIndex(intent.Parent);
-                        if (parentIdx >= 0 && _createdStatePool[parentIdx].Destroyed) continue;
-                    }
+                    _world.MaterializeReservedEntityDirect(entity, archetype, components.AsSpan(0, count));
                 }
-
-                if (intent.IsLinked)
-                    _world.Link(intent.Parent, child);
-                else
-                    _world.Unlink(child);
-            }
-
-            for (var i = 0; i < _existingDestroyCount; i++)
-            {
-                var entity = _existingDestroyEntities[i];
-                if (_world.IsAlive(entity))
-                    _world.Destroy(entity);
+                finally
+                {
+                    ArrayPool<RawComponentValue>.Shared.Return(components);
+                }
             }
         }
-        finally
+
+        for (var i = 0; i < _opsPoolCount; i++)
         {
-            _world.EndDeferredLayoutUpdates();
+            ref var existingOps = ref _opsPool[i];
+            if (existingOps.IsEmpty) continue;
+            var entity = _opsEntityByPoolIndex[i];
+
+            if (existingOps.Count >= 1) ApplyOpDirect(existingOps.Value0, entity);
+            if (existingOps.Count >= 2) ApplyOpDirect(existingOps.Value1, entity);
+            if (existingOps.Count >= 3) ApplyOpDirect(existingOps.Value2, entity);
+            if (existingOps.Count >= 4) ApplyOpDirect(existingOps.Value3, entity);
+            for (var nodeIdx = existingOps.OverflowHead; nodeIdx >= 0; nodeIdx = _opsOverflow.GetNext(nodeIdx))
+                ApplyOpDirect(_opsOverflow.GetValueReadonly(nodeIdx), entity);
+        }
+
+        foreach (var (child, intent) in _hierarchyByChild)
+        {
+            if (FindExistingDestroy(child) >= 0) continue;
+            if (_hasCreatedEntities)
+            {
+                var csIdx = GetCreatedStateIndex(child);
+                if (csIdx >= 0 && _createdStatePool[csIdx].Destroyed) continue;
+                if (intent.IsLinked)
+                {
+                    var parentIdx = GetCreatedStateIndex(intent.Parent);
+                    if (parentIdx >= 0 && _createdStatePool[parentIdx].Destroyed) continue;
+                }
+            }
+
+            if (intent.IsLinked)
+                _world.Link(intent.Parent, child);
+            else
+                _world.Unlink(child);
+        }
+
+        for (var i = 0; i < _existingDestroyCount; i++)
+        {
+            var entity = _existingDestroyEntities[i];
+            if (_world.IsAlive(entity))
+                _world.Destroy(entity);
         }
 
         Clear();
@@ -686,99 +678,91 @@ public sealed class CommandBuffer : ICommandRecorder
 
     private void SubmitFromFrozen(FrozenBufferState frozen)
     {
-        _world.BeginDeferredLayoutUpdates();
-        try
+        for (var i = 0; i < frozen.CreatedStatePoolCount; i++)
         {
-            for (var i = 0; i < frozen.CreatedStatePoolCount; i++)
+            ref readonly var state = ref frozen.CreatedStatePool[i];
+            var entity = frozen.CreatedEntityByPoolIndex[i];
+            if (state.Destroyed)
             {
-                ref readonly var state = ref frozen.CreatedStatePool[i];
-                var entity = frozen.CreatedEntityByPoolIndex[i];
-                if (state.Destroyed)
-                {
-                    _world.ReleaseReservedEntity(entity);
-                }
-                else if (state.Map.IsEmpty)
-                {
-                    _world.MaterializeReservedEntityTrusted(entity, Signature.Empty, Array.Empty<RawComponentValue>());
-                }
-                else
-                {
-                    _tempComponents.Clear();
-                    state.Map.CopyTo(_tempComponents, ref frozen.CreatedOverflow);
-                    var componentCount = _tempComponents.Count;
+                _world.ReleaseReservedEntity(entity);
+            }
+            else if (state.Map.IsEmpty)
+            {
+                _world.MaterializeReservedEntityTrusted(entity, Signature.Empty, Array.Empty<RawComponentValue>());
+            }
+            else
+            {
+                _tempComponents.Clear();
+                state.Map.CopyTo(_tempComponents, ref frozen.CreatedOverflow);
+                var componentCount = _tempComponents.Count;
 
-                    var components = ArrayPool<ComponentType>.Shared.Rent(componentCount);
-                    var sourceComponents = ArrayPool<CreatedComponent>.Shared.Rent(componentCount);
-                    var rawComponents = ArrayPool<RawComponentValue>.Shared.Rent(componentCount);
-                    try
+                var components = ArrayPool<ComponentType>.Shared.Rent(componentCount);
+                var sourceComponents = ArrayPool<CreatedComponent>.Shared.Rent(componentCount);
+                var rawComponents = ArrayPool<RawComponentValue>.Shared.Rent(componentCount);
+                try
+                {
+                    for (var j = 0; j < componentCount; j++)
                     {
-                        for (var j = 0; j < componentCount; j++)
-                        {
-                            sourceComponents[j] = _tempComponents[j].Component;
-                            components[j] = _tempComponents[j].Component.ComponentType;
-                        }
-
-                        Array.Sort(components, sourceComponents, 0, componentCount);
-
-                        var key = new World.CreateArchetypeKey(components.AsSpan(0, componentCount));
-                        var archetype = _world.GetOrCreateArchetype(key);
-
-                        for (var j = 0; j < componentCount; j++)
-                        {
-                            var sc = sourceComponents[j];
-                            rawComponents[j] = new RawComponentValue(sc.ComponentType.Value, sc.RuntimeType, sc.ComponentType, frozen.Slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
-                        }
-
-                        _world.MaterializeReservedEntityDirect(entity, archetype, rawComponents.AsSpan(0, componentCount));
+                        sourceComponents[j] = _tempComponents[j].Component;
+                        components[j] = _tempComponents[j].Component.ComponentType;
                     }
-                    finally
+
+                    Array.Sort(components, sourceComponents, 0, componentCount);
+
+                    var key = new World.CreateArchetypeKey(components.AsSpan(0, componentCount));
+                    var archetype = _world.GetOrCreateArchetype(key);
+
+                    for (var j = 0; j < componentCount; j++)
                     {
-                        ArrayPool<RawComponentValue>.Shared.Return(rawComponents);
-                        ArrayPool<CreatedComponent>.Shared.Return(sourceComponents);
-                        ArrayPool<ComponentType>.Shared.Return(components);
+                        var sc = sourceComponents[j];
+                        rawComponents[j] = new RawComponentValue(sc.ComponentType.Value, sc.RuntimeType, sc.ComponentType, frozen.Slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
                     }
+
+                    _world.MaterializeReservedEntityDirect(entity, archetype, rawComponents.AsSpan(0, componentCount));
                 }
-            }
-
-            for (var i = 0; i < frozen.OpsPoolCount; i++)
-            {
-                ref var existingOps = ref frozen.OpsPool[i];
-                if (existingOps.IsEmpty) continue;
-                var entity = frozen.OpsEntityByPoolIndex[i];
-
-                if (existingOps.Count >= 1) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value0, entity);
-                if (existingOps.Count >= 2) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value1, entity);
-                if (existingOps.Count >= 3) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value2, entity);
-                if (existingOps.Count >= 4) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value3, entity);
-                for (var nodeIdx = existingOps.OverflowHead; nodeIdx >= 0; nodeIdx = frozen.OpsOverflow.GetNext(nodeIdx))
-                    ApplyOpDirectFromFrozen(_world, frozen.Slabs, frozen.OpsOverflow.GetValueReadonly(nodeIdx), entity);
-            }
-
-            foreach (var (child, intent) in frozen.HierarchyByChild)
-            {
-                if (FindExistingDestroy(frozen.ExistingDestroyEntities, frozen.ExistingDestroyCount, child) >= 0) continue;
-                if (frozen.HasCreatedEntities)
+                finally
                 {
-                    if (IsFrozenCreatedDestroyed(frozen, child)) continue;
-                    if (intent.IsLinked && IsFrozenCreatedDestroyed(frozen, intent.Parent)) continue;
+                    ArrayPool<RawComponentValue>.Shared.Return(rawComponents);
+                    ArrayPool<CreatedComponent>.Shared.Return(sourceComponents);
+                    ArrayPool<ComponentType>.Shared.Return(components);
                 }
-
-                if (intent.IsLinked)
-                    _world.Link(intent.Parent, child);
-                else
-                    _world.Unlink(child);
-            }
-
-            for (var i = 0; i < frozen.ExistingDestroyCount; i++)
-            {
-                var entity = frozen.ExistingDestroyEntities[i];
-                if (_world.IsAlive(entity))
-                    _world.Destroy(entity);
             }
         }
-        finally
+
+        for (var i = 0; i < frozen.OpsPoolCount; i++)
         {
-            _world.EndDeferredLayoutUpdates();
+            ref var existingOps = ref frozen.OpsPool[i];
+            if (existingOps.IsEmpty) continue;
+            var entity = frozen.OpsEntityByPoolIndex[i];
+
+            if (existingOps.Count >= 1) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value0, entity);
+            if (existingOps.Count >= 2) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value1, entity);
+            if (existingOps.Count >= 3) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value2, entity);
+            if (existingOps.Count >= 4) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value3, entity);
+            for (var nodeIdx = existingOps.OverflowHead; nodeIdx >= 0; nodeIdx = frozen.OpsOverflow.GetNext(nodeIdx))
+                ApplyOpDirectFromFrozen(_world, frozen.Slabs, frozen.OpsOverflow.GetValueReadonly(nodeIdx), entity);
+        }
+
+        foreach (var (child, intent) in frozen.HierarchyByChild)
+        {
+            if (FindExistingDestroy(frozen.ExistingDestroyEntities, frozen.ExistingDestroyCount, child) >= 0) continue;
+            if (frozen.HasCreatedEntities)
+            {
+                if (IsFrozenCreatedDestroyed(frozen, child)) continue;
+                if (intent.IsLinked && IsFrozenCreatedDestroyed(frozen, intent.Parent)) continue;
+            }
+
+            if (intent.IsLinked)
+                _world.Link(intent.Parent, child);
+            else
+                _world.Unlink(child);
+        }
+
+        for (var i = 0; i < frozen.ExistingDestroyCount; i++)
+        {
+            var entity = frozen.ExistingDestroyEntities[i];
+            if (_world.IsAlive(entity))
+                _world.Destroy(entity);
         }
     }
 
