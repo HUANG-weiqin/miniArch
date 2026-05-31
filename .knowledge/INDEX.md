@@ -9,6 +9,7 @@
 - `kb-throughput-workflow.md`：可复用的固定时长吞吐量对比方法和命令模板
 - `kb-core-ecs.md`：`MiniArch.Core` 的运行时架构说明
 - `kb-command-buffer-feasibility.md`：command buffer 的已实现模型、回放顺序、并发 recording 边界、0-GC 优化、FastCommandBuffer arena 优化结果和验证入口
+- `kb-debug-metrics.md`：DEBUG-only 内部指标与用户可粘贴诊断报告 API
 - `kb-user-api-layering.md`：`MiniArch` 共享 `World/Entity/QueryDescription`、默认 `foreach` 查询，以及 `MiniArch.Core` advanced 边界
 - `kb-snapshot-persistence.md`：snapshot 存档格式、运行时桥接点和 load/save 边界
 - `kb-hierarchy-runtime.md`：runtime-owned parent-child、级联销毁和 hierarchy snapshot 恢复
@@ -22,6 +23,7 @@
 - `Workspace` -> `kb-throughput-workflow.md`
 - `MiniArch.Core` -> `kb-core-ecs.md`
 - `MiniArch.Core CommandBuffer` -> `kb-command-buffer-feasibility.md`
+- `MiniArch.DebugMetrics` -> `kb-debug-metrics.md`
 - `MiniArch` -> `kb-user-api-layering.md`
 - `MiniArch.Core Snapshot` -> `kb-snapshot-persistence.md`
 - `MiniArch.Core Hierarchy` -> `kb-hierarchy-runtime.md`
@@ -36,6 +38,7 @@
 - 想复用固定时长吞吐量对比的方法，先看 `kb-throughput-workflow.md`。
 - 想理解 ECS 运行时，先看 `kb-core-ecs.md`。
 - 想理解 command buffer 现在已经实现到什么程度、playback/replay 顺序是什么、并发 recording 边界在哪，先看 `kb-command-buffer-feasibility.md`。
+- 想定位 overflow、array grow、slab rent、snapshot copy 或 world metadata grow，先看 `kb-debug-metrics.md`。
 - 想理解为什么现在只保留一份 `World/Entity/QueryDescription`、默认查询为什么只走 `QueryDescription`，先看 `kb-user-api-layering.md`。
 - 想理解存档为什么不能直接复制 chunk 对象，以及 snapshot 怎么重建 world，先看 `kb-snapshot-persistence.md`。
 - 想理解 parent-child 为什么不做成组件、destroy 为什么会级联，以及读档后关系怎么恢复，先看 `kb-hierarchy-runtime.md`。

@@ -12,23 +12,24 @@ internal struct InlineMap<TKey, TValue>
     public TKey Key3; public TValue Value3;
     public Dictionary<TKey, TValue>? Overflow;
 
-    public void Set(TKey key, TValue value)
+    public bool Set(TKey key, TValue value)
     {
-        if (Count >= 1 && EqualityComparer<TKey>.Default.Equals(Key0, key)) { Value0 = value; return; }
-        if (Count >= 2 && EqualityComparer<TKey>.Default.Equals(Key1, key)) { Value1 = value; return; }
-        if (Count >= 3 && EqualityComparer<TKey>.Default.Equals(Key2, key)) { Value2 = value; return; }
-        if (Count >= 4 && EqualityComparer<TKey>.Default.Equals(Key3, key)) { Value3 = value; return; }
+        if (Count >= 1 && EqualityComparer<TKey>.Default.Equals(Key0, key)) { Value0 = value; return false; }
+        if (Count >= 2 && EqualityComparer<TKey>.Default.Equals(Key1, key)) { Value1 = value; return false; }
+        if (Count >= 3 && EqualityComparer<TKey>.Default.Equals(Key2, key)) { Value2 = value; return false; }
+        if (Count >= 4 && EqualityComparer<TKey>.Default.Equals(Key3, key)) { Value3 = value; return false; }
 
         switch (Count)
         {
-            case 0: Key0 = key; Value0 = value; Count = 1; return;
-            case 1: Key1 = key; Value1 = value; Count = 2; return;
-            case 2: Key2 = key; Value2 = value; Count = 3; return;
-            case 3: Key3 = key; Value3 = value; Count = 4; return;
+            case 0: Key0 = key; Value0 = value; Count = 1; return false;
+            case 1: Key1 = key; Value1 = value; Count = 2; return false;
+            case 2: Key2 = key; Value2 = value; Count = 3; return false;
+            case 3: Key3 = key; Value3 = value; Count = 4; return false;
             default:
+                var allocated = Overflow is null;
                 Overflow ??= new Dictionary<TKey, TValue>(4);
                 Overflow[key] = value;
-                return;
+                return allocated;
         }
     }
 

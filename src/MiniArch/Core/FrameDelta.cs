@@ -75,7 +75,7 @@ public sealed class FrameDelta
         return false;
     }
 
-    internal void DeepCopyOwnedData()
+    internal int DeepCopyOwnedData()
     {
         int totalBytes = 0;
         for (var i = 0; i < AddCommands.Count; i++)
@@ -89,7 +89,7 @@ public sealed class FrameDelta
                 totalBytes += components[j].DataSize;
         }
 
-        if (totalBytes == 0) return;
+        if (totalBytes == 0) return 0;
 
         var owned = new byte[totalBytes];
         int pos = 0;
@@ -127,6 +127,8 @@ public sealed class FrameDelta
             }
             CreatedEntities[i] = ce with { Components = dst };
         }
+
+        return totalBytes;
     }
 
     /// <summary>
