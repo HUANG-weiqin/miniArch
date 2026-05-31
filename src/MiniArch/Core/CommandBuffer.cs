@@ -275,7 +275,6 @@ public sealed class CommandBuffer : ICommandRecorder
 
         var opsIdx = GetOrCreateOpsIndex(entity);
         ref var ops = ref _opsPool[opsIdx];
-        ops.Remove(componentTypeId, ref _opsOverflow);
         var info = ResolveTypeInfo(componentTypeId);
         var slot = new EntityOpSlot { ComponentTypeId = componentTypeId, Kind = OpKindRemove, RemoveComponentType = info.ComponentType };
         ops.Set(componentTypeId, slot, ref _opsOverflow);
