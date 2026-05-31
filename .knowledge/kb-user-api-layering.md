@@ -2,7 +2,7 @@
 title: User API Layering
 module: MiniArch
 description: Single-source public API around MiniArch.World/Entity/QueryDescription, description-based foreach query, and the remaining MiniArch.Core advanced boundary
-updated: 2026-05-25
+updated: 2026-05-31
 ---
 # User API Layering
 
@@ -16,6 +16,7 @@ updated: 2026-05-25
     - `MiniArch.QueryDescription`
   - 把默认查询收敛成唯一的 description-based `foreach`
   - 让常见读取通过 `TryGet<T>` 完成
+  - 让运行时动态复制实体（含子树）通过 `Clone(Entity)` 完成（一等公民，与 Create/Add/Set/Remove/Destroy 并列；deep clone：递归复制所有子实体并维持 hierarchy）
   - 明确 `MiniArch` 与 `MiniArch.Core` 的分层边界
 - 这个模块不负责：
   - 替代底层 runtime storage

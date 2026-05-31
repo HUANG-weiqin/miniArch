@@ -13,6 +13,8 @@ public interface ICommandRecorder
     void Remove<T>(Entity entity);
     /// <summary>Records a destroy command.</summary>
     void Destroy(Entity entity);
+    /// <summary>Records a deep clone of an entity and its entire child subtree. The source must be alive at record time.</summary>
+    Entity Clone(Entity source);
     /// <summary>Records a parent link.</summary>
     void Link(Entity parent, Entity child);
     /// <summary>Records a parent unlink.</summary>

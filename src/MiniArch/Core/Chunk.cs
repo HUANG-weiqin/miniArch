@@ -322,6 +322,15 @@ public sealed class Chunk
         }
     }
 
+    internal unsafe void ReadComponentRaw(int columnIndex, int row, byte* destination)
+    {
+#if DEBUG
+        ValidateRow(row);
+#endif
+        ref var source = ref _data[GetByteOffset(columnIndex, row)];
+        Unsafe.CopyBlockUnaligned(ref *destination, ref source, (uint)_elementSizes[columnIndex]);
+    }
+
     internal unsafe void WriteComponentRaw(int columnIndex, int row, byte* source)
     {
 #if DEBUG

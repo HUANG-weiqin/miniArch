@@ -974,6 +974,52 @@ public sealed class World : IDisposable
     }
 
     /// <summary>
+    /// Deep-clones an entity and its entire child subtree.
+    /// All component data is copied into new entities in the same archetypes.
+    /// Parent-child links within the subtree are preserved; the clone root has no parent.
+    /// </summary>
+    /// <param name="source">The entity to clone. Must be alive.</param>
+    /// <returns>A new entity that is the root of the cloned subtree.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when <paramref name="source"/> is no longer alive.</exception>
+    public Entity Clone(Entity source)
+    {
+        ThrowIfDisposed();
+        var root = CloneSingle(source);
+        DeepCloneChildren(source, root);
+        return root;
+    }
+
+    private Entity CloneSingle(Entity source)
+    {
+        var sourceInfo = GetRequiredLocation(source);
+        var archetype = sourceInfo.Archetype;
+        var sourceChunk = archetype.GetChunk(sourceInfo.ChunkIndex);
+        var entity = CreateInArchetype(archetype, out var destChunk, out var destRow);
+        destChunk.CopySharedComponentsFrom(sourceChunk, sourceInfo.RowIndex, destRow);
+        return entity;
+    }
+
+    private void DeepCloneChildren(Entity sourceRoot, Entity cloneRoot)
+    {
+        var stack = new List<(Entity Source, Entity Clone)>(4);
+        stack.Add((sourceRoot, cloneRoot));
+        while (stack.Count > 0)
+        {
+            var last = stack.Count - 1;
+            var (srcParent, cloneParent) = stack[last];
+            stack.RemoveAt(last);
+            var children = _hierarchy.GetChildren(this, srcParent);
+            for (var i = 0; i < children.Count; i++)
+            {
+                var cloneChild = CloneSingle(children[i]);
+                _hierarchy.Link(this, cloneParent, cloneChild);
+                stack.Add((children[i], cloneChild));
+            }
+        }
+        TouchQueryLayout();
+    }
+
+    /// <summary>
     /// Creates a snapshot-equivalent clone of this world.
     /// </summary>
     public World Clone()

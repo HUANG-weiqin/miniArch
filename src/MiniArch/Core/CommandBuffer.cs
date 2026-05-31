@@ -31,6 +31,7 @@ public sealed class CommandBuffer : ICommandRecorder
     private Dictionary<int, (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)> _typeInfoCache = new();
     private List<byte[]> _slabs = new();
     private readonly List<(int ComponentTypeId, CreatedComponent Component)> _tempComponents = new();
+    private List<(Entity Deferred, Entity Source)> _cloneCommands = new(4);
     private bool _hasCreatedEntities;
     private int _currentSlabIndex = -1;
     private int _currentSlabOffset;
@@ -49,7 +50,12 @@ public sealed class CommandBuffer : ICommandRecorder
     public Entity Create()
     {
         var entity = _world.ReserveDeferredEntity();
+        RegisterInCreatedState(entity);
+        return entity;
+    }
 
+    private void RegisterInCreatedState(Entity entity)
+    {
         if (_createdStatePoolCount >= _createdStatePool.Length)
         {
             var newSize = _createdStatePool.Length == 0 ? 64 : _createdStatePool.Length * 2;
@@ -82,7 +88,6 @@ public sealed class CommandBuffer : ICommandRecorder
         _createdStateLookup[entity.Id] = index;
         if (entity.Id >= _maxCreatedEntityId) _maxCreatedEntityId = entity.Id + 1;
         _hasCreatedEntities = true;
-        return entity;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -175,6 +180,25 @@ public sealed class CommandBuffer : ICommandRecorder
     /// </summary>
     public void Destroy(Entity entity)
     {
+        for (var i = _cloneCommands.Count - 1; i >= 0; i--)
+        {
+            if (_cloneCommands[i].Deferred == entity)
+            {
+                _cloneCommands.RemoveAt(i);
+                if (_hasCreatedEntities)
+                {
+                    var createdIdx = GetCreatedStateIndex(entity);
+                    if (createdIdx >= 0)
+                    {
+                        _createdStatePool[createdIdx].Destroyed = true;
+                        return;
+                    }
+                }
+                _world.ReleaseReservedEntity(entity);
+                return;
+            }
+        }
+
         if (_hasCreatedEntities)
         {
             var createdIdx = GetCreatedStateIndex(entity);
@@ -186,6 +210,104 @@ public sealed class CommandBuffer : ICommandRecorder
         }
 
         AddExistingDestroy(entity);
+    }
+
+    /// <summary>
+    /// Records a deep clone of an entity and its entire child subtree.
+    /// Component data is read at commit time, not at record time.
+    /// The clone root gets a new deferred entity handle; children are allocated at commit time.
+    /// </summary>
+    /// <param name="source">The entity to clone. Must be alive at record time.</param>
+    /// <returns>A deferred entity handle that becomes alive after <see cref="Submit"/>.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when <paramref name="source"/> is no longer alive.</exception>
+    public Entity Clone(Entity source)
+    {
+        if (!_world.IsAlive(source))
+        {
+            throw new InvalidOperationException($"Cannot clone entity {source}: it is no longer alive.");
+        }
+
+        var deferred = _world.ReserveDeferredEntity();
+        RegisterInCreatedState(deferred);
+        _cloneCommands.Add((deferred, source));
+        return deferred;
+    }
+
+    private void ExpandCloneCommands()
+    {
+        if (_cloneCommands.Count == 0) return;
+
+        for (var i = 0; i < _cloneCommands.Count; i++)
+        {
+            var (deferred, source) = _cloneCommands[i];
+            ExpandCloneSubtree(deferred, source);
+        }
+        _cloneCommands.Clear();
+    }
+
+    private void ExpandCloneSubtree(Entity deferredRoot, Entity source)
+    {
+        if (!_world.TryGetLocation(source, out var location))
+        {
+            throw new InvalidOperationException($"Cannot clone entity {source}: it is no longer alive.");
+        }
+
+        SnapshotEntityToCreatedState(deferredRoot, location);
+
+        var stack = new List<(Entity SourceParent, Entity CloneParent, Entity SourceChild)>(4);
+        var children = _world.GetChildren(source);
+        for (var i = children.Count - 1; i >= 0; i--)
+        {
+            stack.Add((source, deferredRoot, children[i]));
+        }
+
+        while (stack.Count > 0)
+        {
+            var last = stack.Count - 1;
+            var (srcParent, cloneParent, srcChild) = stack[last];
+            stack.RemoveAt(last);
+
+            if (!_world.IsAlive(srcChild)) continue;
+
+            var cloneChild = _world.ReserveDeferredEntity();
+            RegisterInCreatedState(cloneChild);
+
+            if (_world.TryGetLocation(srcChild, out var childLocation))
+            {
+                SnapshotEntityToCreatedState(cloneChild, childLocation);
+            }
+
+            _hierarchyByChild[cloneChild] = new HierarchyIntent(true, cloneParent);
+
+            var grandChildren = _world.GetChildren(srcChild);
+            for (var i = grandChildren.Count - 1; i >= 0; i--)
+            {
+                stack.Add((srcChild, cloneChild, grandChildren[i]));
+            }
+        }
+    }
+
+    private void SnapshotEntityToCreatedState(Entity deferred, EntityInfo location)
+    {
+        var createdIdx = GetCreatedStateIndex(deferred);
+        if (createdIdx < 0) return;
+
+        var archetype = location.Archetype;
+        var chunk = archetype.GetChunk(location.ChunkIndex);
+        var sourceRow = location.RowIndex;
+
+        var components = archetype.Signature.AsSpan();
+        for (var i = 0; i < components.Length; i++)
+        {
+            var componentType = components[i];
+            var componentTypeId = componentType.Value;
+            ref var state = ref _createdStatePool[createdIdx];
+            if (state.Map.TryGetValue(componentTypeId, out _))
+                continue;
+            var info = ResolveTypeInfo(componentTypeId);
+            CopyComponentFromChunk(chunk, i, sourceRow, info.Size, out var slabIndex, out var offset);
+            state.Map.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size));
+        }
     }
 
     private void AddExistingDestroy(Entity entity)
@@ -263,6 +385,7 @@ public sealed class CommandBuffer : ICommandRecorder
     /// </summary>
     public bool Submit()
     {
+        ExpandCloneCommands();
         if (_opsPoolCount == 0 &&
             _existingDestroyCount == 0 && _createdStatePoolCount == 0 &&
             _hierarchyByChild.Count == 0)
@@ -353,6 +476,7 @@ public sealed class CommandBuffer : ICommandRecorder
     /// </summary>
     public FrameDelta Snapshot()
     {
+        ExpandCloneCommands();
         var delta = new FrameDelta();
         BuildDelta(delta);
         delta.DeepCopyOwnedData();
@@ -366,6 +490,7 @@ public sealed class CommandBuffer : ICommandRecorder
     /// </summary>
     public Task<FrameDelta> SubmitAndSnapshotAsync()
     {
+        ExpandCloneCommands();
         if (_opsPoolCount == 0 &&
             _existingDestroyCount == 0 && _createdStatePoolCount == 0 &&
             _hierarchyByChild.Count == 0)
@@ -862,6 +987,7 @@ public sealed class CommandBuffer : ICommandRecorder
 
     private void Clear()
     {
+        _cloneCommands.Clear();
         _existingDestroyCount = 0;
         for (int i = 0; i < _opsPoolCount; i++)
         {
@@ -917,6 +1043,28 @@ public sealed class CommandBuffer : ICommandRecorder
         fixed (byte* ptr = &_slabs[slabIndex][offset])
         {
             Unsafe.Write(ptr, component);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private unsafe void CopyComponentFromChunk(Chunk chunk, int columnIndex, int row, int size, out int slabIndex, out int offset)
+    {
+        if (_currentSlabIndex < 0 || _currentSlabOffset + size > _slabs[_currentSlabIndex].Length)
+        {
+            var slabSize = size > DefaultSlabSize ? size : DefaultSlabSize;
+            var newSlab = ArrayPool<byte>.Shared.Rent(slabSize);
+            _slabs.Add(newSlab);
+            _currentSlabIndex = _slabs.Count - 1;
+            _currentSlabOffset = 0;
+        }
+
+        slabIndex = _currentSlabIndex;
+        offset = _currentSlabOffset;
+        _currentSlabOffset += size;
+
+        fixed (byte* ptr = &_slabs[slabIndex][offset])
+        {
+            chunk.ReadComponentRaw(columnIndex, row, ptr);
         }
     }
 

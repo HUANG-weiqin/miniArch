@@ -46,6 +46,7 @@ updated: 2026-05-29
   - `World.IsAlive(Entity)` 复用 `TryGetLocation` 的同一套校验，只有在 `id` 在范围内、`_locations[id]` 非空且 `_versions[id] == entity.Version` 时才返回 `true`
   - `Add/Remove` 先算目标签名，再复用 edge cache
   - `Set` 在组件已存在时直接定位到 typed column 的 row，原地写回，不触发迁移
+  - `Clone` 执行 deep clone：先 `CloneSingle` 复制 root 实体（同 archetype memcpy），再 `DeepCloneChildren` DFS 遍历 subtree 逐个 `CloneSingle` + `_hierarchy.Link`，clone root 没有父节点
   - `Archetype` 负责把实体放进可写 chunk，并通过显式 non-full chunk 索引优先复用已有空位的 chunk，而不是盲目只往最后一个 chunk 追加
 - `Chunk` 负责 dense row 的单个/批量插入、读取、swap-remove 和 direct-index 写入；组件列存储为一块 `_data: byte[]`，通过 `_columnByteOffsets[column] + row * _elementSizes[column]` 定位元素
 - `Chunk` 也应该暴露当前有效 entity 行的 span 视图，给 query / benchmark 这类纯读热路径直接扫 `_entities[0..Count)`，避免逐行 `GetEntity(row)` 的重复边界检查和调用成本

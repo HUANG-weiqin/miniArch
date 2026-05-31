@@ -1,8 +1,8 @@
 ---
 title: Command Buffer Runtime
 module: MiniArch.Core CommandBuffer
-description: Single-threaded per-entity-deduplicating command buffer with arena slab allocator, inline CreatedState/ExistingEntityOps, direct Submit() path, Snapshot() for cross-world replay, FrameDelta merge, and SubmitAndSnapshotAsync() for parallel submit+snapshot
-updated: 2026-05-26
+description: Single-threaded per-entity-deduplicating command buffer with arena slab allocator, inline CreatedState/ExistingEntityOps, direct Submit() path, Snapshot() for cross-world replay, FrameDelta merge, SubmitAndSnapshotAsync() for parallel submit+snapshot, and Clone support
+updated: 2026-05-31
 ---
 
 # Command Buffer Runtime
@@ -31,6 +31,7 @@ updated: 2026-05-26
   - `src/MiniArch/Core/World.cs`：`ReserveDeferredEntity`、`ReleaseReservedEntity`、`Replay(FrameDelta)`、structural mutation
 - 数据流 / 控制流：
   - 工作线程通过 `CommandBuffer` 只记录命令；`Create()` 会立刻从 world 预留真实 `Entity`
+  - `Clone(source)` 录制时校验 source 存活、分配 deferred entity、记录到 `_cloneCommands`；commit 时 `ExpandCloneCommands` DFS 遍历 source subtree，快照组件数据到 CreatedState slab、记录 hierarchy link 到 `_hierarchyByChild`；语义等价于 deep clone
   - recording 完成后可选三条路径：
     - `Submit()`：直接执行到 world，清空录制缓冲，适合"录完就生效"
     - `Snapshot()`：生成自包含 `FrameDelta` 但不影响 world，可保留、merge、或跨 world replay
