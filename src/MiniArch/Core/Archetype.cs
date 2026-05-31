@@ -14,6 +14,7 @@ public sealed class Archetype
     private readonly int _chunkCapacity;
     private readonly Type[] _componentTypes;
     private readonly int[] _componentIdToColumnIndex;
+    private int _generation;
 
     internal Archetype(Signature signature, Type[] componentTypes, int chunkCapacity = 4)
     {
@@ -48,6 +49,11 @@ public sealed class Archetype
     public int EntityCount { get; private set; }
 
     /// <summary>
+    /// Gets the archetype generation (incremented on structural changes).
+    /// </summary>
+    internal int Generation => _generation;
+
+    /// <summary>
     /// Gets the chunk list.
     /// </summary>
     public IReadOnlyList<Chunk> Chunks => _chunks;
@@ -74,6 +80,7 @@ public sealed class Archetype
         rowIndex = chunk.Add(entity);
         MarkChunkNonFull(chunkIndex);
         EntityCount++;
+        _generation++;
         return chunk;
     }
 
@@ -109,6 +116,7 @@ public sealed class Archetype
         MarkChunkNonFull(chunkIndex);
         entities.CopyTo(chunk.GetReservedEntities(startRow, entities.Length));
         EntityCount += entities.Length;
+        _generation++;
         return chunk;
     }
 
@@ -150,6 +158,7 @@ public sealed class Archetype
         }
 
         EntityCount += entityCount;
+        _generation++;
         return rangeCount;
     }
 
@@ -161,6 +170,7 @@ public sealed class Archetype
         var moved = _chunks[chunkIndex].RemoveAt(rowIndex, out movedEntity);
         MarkChunkNonFull(chunkIndex);
         EntityCount--;
+        _generation++;
         return moved;
     }
 

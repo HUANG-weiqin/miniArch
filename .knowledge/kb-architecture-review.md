@@ -334,13 +334,13 @@ Deferred Suppression:
 
 ## 发现的真实问题
 
-### P1. Query 失效粒度太粗
+### P1. Query 失效粒度太粗 ✅ 已实现
 
 当前任何结构变更 → `_queryGeneration++` → 所有 Query 快照失效。
 
 给实体添加 Velocity 会让 `With<Position>` 和 `With<Health>` 两个不相关的 Query 都失效。高频结构变更下 Query 反复重建但匹配结果可能完全没变。
 
-**候选方案**：per-archetype generation。每个 Archetype 维护自己的 generation，Query 记录每个匹配 archetype 的 generation。只有被修改的 archetype 对应的 Query 条目需要刷新。代价是 Query 检查 N 个 generation 而不是 1 个，但比全量重建便宜。
+**已实施方案**：per-archetype generation。每个 Archetype 维护自己的 generation，Query 记录每个匹配 archetype 的 generation。只有被修改的 archetype 对应的 Query 条目需要刷新。详见 `kb-query-invalidation.md`。
 
 ### P2. Edge Cache 稀疏数组膨胀
 
@@ -415,13 +415,13 @@ side-table 享受不到 archetype 查询优化。但做成组件引入"组件存
 
 ## 如果只做一件事
 
-最值得做的是 **per-archetype query invalidation**。当前粗粒度失效在结构变更密集场景下是最大的性能瓶颈来源，改进方案清晰、风险可控。
+~~最值得做的是 **per-archetype query invalidation**。当前粗粒度失效在结构变更密集场景下是最大的性能瓶颈来源，改进方案清晰、风险可控。~~ ✅ 已实现
 
 ## 决策
 
 - 本文档作为架构审视的长期记录，与 `kb-core-ecs.md` 互补：后者记录"怎么实现"，本文档记录"怎么理解"和"哪里可以更好"
 - 问题描述不含具体修复方案代码，只记录方向和候选方案
-- 发现的优先级排序：P1 > P3 > P2 > P5 > P4（按影响面 × 修复成本排序）
+- 发现的优先级排序：P3 > P2 > P5 > P4（P1 已实现，按影响面 × 修复成本排序）
 
 ## 认知模型
 

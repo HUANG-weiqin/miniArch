@@ -37,6 +37,7 @@ public sealed class World : IDisposable
     private bool _queryLayoutDirty;
     private int _queryGeneration;
     private int _createArchetypeCacheGeneration;
+    private int _archetypeVersion;
     private readonly List<Entity> _destroyOrderScratch = new(8);
     private int[] _destroyVisitedGen = [];
     private int _destroyCurrentGen;
@@ -193,6 +194,8 @@ public sealed class World : IDisposable
     internal HierarchyTable Hierarchy => _hierarchy;
 
     internal int QueryGeneration => _queryGeneration;
+
+    internal int ArchetypeVersion => _archetypeVersion;
 
     internal void Reset(int entitySlotCount)
     {
@@ -1321,6 +1324,7 @@ public sealed class World : IDisposable
         archetype = new Archetype(signature, ResolveComponentTypes(signature), chunkCapacity);
         _archetypes.Add(signature, archetype);
         PublishArchetypeSnapshot(archetype);
+        _archetypeVersion++;
         AdvanceQueryGeneration();
         return archetype;
     }
