@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using CoreCommandBuffer = MiniArch.Core.ICommandRecorder;
 
 namespace Hero.Ecs;
@@ -35,7 +34,7 @@ public sealed class ValidationSystem : ISystem
         AddValidated(commands, context.Frame.Each(EffectQueryDescription));
     }
 
-    private static void AddValidated(CoreCommandBuffer commands, IEnumerable<MiniArch.Entity> entities)
+    private static void AddValidated(CoreCommandBuffer commands, MiniArch.Query entities)
     {
         foreach (MiniArch.Entity entity in entities)
         {

@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using MiniArchQuery = MiniArch.Query;
 using MiniArchQueryDescription = MiniArch.QueryDescription;
 using CoreWorld = MiniArch.World;
@@ -20,14 +19,8 @@ public sealed class FrameView
     public bool TryGetParent(MiniArch.Entity entity, out MiniArch.Entity parent) =>
         _world.TryGetParent(entity, out parent);
 
-    public IEnumerable<MiniArch.Entity> Each(MiniArchQueryDescription description)
-    {
-        MiniArchQuery query = _world.Query(in description);
-        foreach (MiniArch.Entity entity in query)
-        {
-            yield return entity;
-        }
-    }
+    public MiniArchQuery Each(MiniArchQueryDescription description) =>
+        _world.Query(in description);
 
     public T Get<T>(MiniArch.Entity entity)
     {
