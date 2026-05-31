@@ -461,9 +461,15 @@ public sealed class Chunk
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void CopyRemovedRow(int row, int last)
     {
-        for (var index = 0; index < _elementSizes.Length; index++)
+        ref var dataRef = ref MemoryMarshal.GetArrayDataReference(_data);
+        var offsets = _columnByteOffsets;
+        var sizes = _elementSizes;
+        for (var index = 0; index < sizes.Length; index++)
         {
-            CopyComponent(this, index, last, index, row);
+            var size = sizes[index];
+            ref var sourceRef = ref Unsafe.Add(ref dataRef, offsets[index] + last * size);
+            ref var destRef = ref Unsafe.Add(ref dataRef, offsets[index] + row * size);
+            Unsafe.CopyBlockUnaligned(ref destRef, ref sourceRef, (uint)size);
         }
     }
 
