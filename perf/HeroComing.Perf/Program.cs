@@ -113,9 +113,7 @@ Console.WriteLine("Baseline updated in .knowledge/kb-hero-pipeline-regression.md
             double elapsed = (now - lastReportTime) / 1000.0;
             double roundsPerSec = (totalRounds - lastReportRounds) / elapsed;
 
-            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
-            GC.WaitForPendingFinalizers();
-            long currentHeap = GC.GetTotalMemory(true);
+            long currentHeap = GC.GetTotalMemory(false);
             double heapMB = currentHeap / (1024.0 * 1024.0);
             double deltaHeapKB = (currentHeap - baselineHeap) / 1024.0;
 
