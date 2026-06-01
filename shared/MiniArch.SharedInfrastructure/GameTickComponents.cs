@@ -63,3 +63,6 @@ public record struct DamageEvent { public int Amount; }
 public record struct Debuff { public float Timer; }
 public record struct BossTag;
 public record struct Lifetime { public float Value; }
+public record struct BurningTag;
+public record struct PoisonedTag;
+public record struct StatusTimer { public float Remaining; }
