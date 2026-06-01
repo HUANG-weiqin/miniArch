@@ -104,6 +104,38 @@ public sealed class QueryTests
     }
 
     [Fact]
+    public void Query_exposes_the_same_matching_archetypes_as_span()
+    {
+        var world = new World(chunkCapacity: 1);
+        var description = new QueryDescription().With<Position>();
+
+        var first = world.Create(new Position(1, 1));
+        world.Add(first, new Velocity(1, 1));
+        _ = world.Create(new Position(2, 2));
+        _ = world.Create(new Velocity(3, 3));
+
+        var query = MiniQuery.Create(world, in description);
+        var matched = query.MatchedArchetypes.ToArray();
+
+        Assert.Equal(matched, query.GetArchetypeSpan().ToArray());
+        Assert.Equal(1, query.RefreshCount);
+    }
+
+    [Fact]
+    public void Archetype_exposes_the_same_chunks_as_span()
+    {
+        var world = new World(chunkCapacity: 1);
+        _ = world.Create(new Position(1, 1));
+        _ = world.Create(new Position(2, 2));
+        var description = new QueryDescription().With<Position>();
+
+        var query = MiniQuery.Create(world, in description);
+        var archetype = Assert.Single(query.GetArchetypeSpan().ToArray());
+
+        Assert.Equal(archetype.Chunks, archetype.GetChunkSpan().ToArray());
+    }
+
+    [Fact]
     public void Matching_chunks_refresh_when_world_changes()
     {
         var world = new World(chunkCapacity: 1);

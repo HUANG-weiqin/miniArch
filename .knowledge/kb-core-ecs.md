@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-05-31
+updated: 2026-06-01
 ---
 # MiniArch Core ECS
 
@@ -99,6 +99,8 @@ updated: 2026-05-31
 - `Set` 的热路径应该是 direct-index 原地写，不应该为了更新一个已存在组件去做结构迁移。
 - 在"world 不并发写入"的前提下，query 并发读优先用 copy-on-write 快照发布，而不是加锁；读路径保持数组遍历，写路径承担快照复制成本。
 - Query snapshot 已优化为零 GC 稳态路径：`MatchingSnapshot` class 已消除，snapshot 字段（`_snapshotArchetypes`、`_snapshotChunks`、`_snapshotGeneration`）直接内联在 `Query` 上；scratch buffer `_scratchArchetypes` 跨 refresh 复用；archetype/chunk 数组在 size 匹配时原地覆写（不分配新数组）；refresh 用 `lock` 保护（fast-path 仍为 lock-free volatile generation check）。
+- `Query.GetArchetypeSpan()` 是 internal 热路径入口：当消费方需要同一 archetype 内重复扫描 chunks 时，先按 matched archetype 遍历，再对每个 archetype 解析一次 column index，比在 flattened chunk span 中每 chunk 重复查 component-id map 更稳。
+- `Archetype.GetChunkSpan()` 用 `CollectionsMarshal.AsSpan(_chunks)` 暴露 internal chunk span，避免热路径从 `IReadOnlyList<Chunk>` 取 `Count`/索引时走接口路径。
 - `BeginDeferredLayoutUpdates()` / `EndDeferredLayoutUpdates()` 为 internal API，供 `CommandBuffer.Submit` 和 `World.Replay` 内部批量操作时延迟 query generation 递增。不暴露给用户。
 - query cache 应该发布整个 `Dictionary<QueryFilter, Query>` 快照，而不是在共享字典上做并发写入。
 - 对大命中 query，读路径真正昂贵的通常不是 filter builder，而是逐 row 的 accessor 开销；如果 chunk 读 API 只能通过 `GetEntity(row)` / `GetComponent(row)` 这种逐元素方法走，边界检查和调用成本会在 `100k+` 档位开始放大。
@@ -111,12 +113,12 @@ updated: 2026-05-31
 - 热路径方法应标记 `[SkipLocalsInit]`（从 Arch 学到的 trick），跳过 JIT 对局部变量的零初始化，减少方法入口的 memset 开销。当前已应用于 `GetComponentRefAt<T>`、`GetComponentRef<T>`、`SetComponentAtTyped<T>`、`GetComponentAt<T>`、`GetComponentSpanAt<T>`、`CopyComponent`。
 - 结合当前 query sampling，warmed query 的第一优先优化点应放在 traversal / accessor 路径，而不是优先重写 `BuildMatchingArchetypes`；matching 目前只是小头。
 - row-wise 组件访问热路径中，`GetComponentIndex()` 已被 `TryGetColumnIndices(...)` 批量 hoist 出 row loop；benchmark 和 profiling runner 的 row-wise 路径已切换到预解析列索引 + `GetComponentAt<T>(columnIndex, row)`，不再逐行调用 `GetComponent<T>(componentType, row)`。
-- component span 热路径优化关键：用 `Unsafe.As<byte, T>` 从 `_data` 的列起点得到 `ref T`，再创建 typed span；直接通过 `_componentIdToColumnIndex` map 查列索引，绕过 LRU cache。
+- component span 热路径优化关键：用 `Unsafe.As<byte, T>` 从 `_data` 的列起点得到 `ref T`，再创建 typed span；直接通过 `_componentIdToColumnIndex` map 查列索引，绕过 LRU cache；在跨多个 chunk 扫同一 archetype 时，应把列索引 hoist 到 archetype 外层循环。
 - entity query 热路径用 `GetEntityStorage()` 返回 `Entity[]` 直接数组访问（避免 span 边界检查），entity query throughput 已超过 Arch 12%。
 - `Signature` 增加了 `ComponentMask`（`long` 类型 bitmask），对 component id < 64 的组件做快速 contains 预判。`Query.Matches` 先用 bitmask 快速 reject，避免逐组件 `Contains` 调用。`Signature.Contains` 内部对 ≤4 组件走线性扫描，>4 组件走 `Array.BinarySearch`。
 - `Chunk.CopySharedComponentsFrom` 增加了同签名快速路径：`_signature == source._signature` 时直接按列索引复制，跳过逐组件 `TryGetComponentIndex` 查找。
 - `GetComponentRef<T>(columnIndex)` 返回 `ref T` 指向 flat byte storage 中该列首元素，配合 `Unsafe.Add` 实现 0-bounds-check 迭代。
-- Chunk 热路径方法（`SetComponentAtTyped`, `SetComponentAt`, `GetComponentAt`, `GetComponentIndex`, `GetEntityStorage`）已标记 `AggressiveInlining`。
+- Chunk / Query / Archetype 热路径方法（`SetComponentAtTyped`, `SetComponentAt`, `GetComponentAt`, `GetComponentIndex`, `GetEntityStorage`, `GetArchetypeSpan`, `GetChunkSpan`）已标记 `AggressiveInlining`。
 - `Chunk.GetComponentIndex(...)` 不能在 chunk 实例上维护 last-component / last-column 这类共享可变读缓存；同一 chunk 被并发只读、且不同线程读不同组件时，普通字段 pair 可能被观察成不一致组合。读路径应直接使用不可变的 `_componentIdToColumnIndex` direct map，或由调用方 hoist 到局部 column index。
 - `World` / `CommandBuffer` 的泛型 component-type cache 也不能用 registry + id 两个 static 字段表示同一条 cache entry；跨 world 或并发首次缓存时可能形成错配。应发布单个 immutable entry 引用，并从本地 entry 读取 registry/id。
 - 如果 query 不只缓存 `Archetype[]`，还缓存了扁平 `Chunk[]`，失效条件就不能只看 archetype 集合变化；同 archetype 内新增或复用 chunk 也必须触发 query snapshot 刷新。
@@ -152,7 +154,8 @@ updated: 2026-05-31
   - WithAll: MiniArch 47.7us vs Arch 54.0us → MiniArch +11.6%
 
   **Component Span (100k entities, warmed)：**
-  - Component Span: MiniArch 68.2us vs Arch 77.0us → MiniArch +11.4%
+  - Component Span BDN: MiniArch 68.2us vs Arch 77.0us → MiniArch +11.4%
+  - Component Span throughput（2026-06-01，100k entities，10s×5）：MiniArch 16,783 ops/s vs Arch 17,060 ops/s → MiniArch -1.62%（fixed-duration gap 已从约 -6% 收窄）
   - Component Row-wise: MiniArch 177.3us (无 Arch 对照)
 
   **CommandBuffer (throughput, 3s×3)：**
@@ -163,7 +166,7 @@ updated: 2026-05-31
   - SetTwoComponents: MiniArch 39,697 vs Arch 35,779 → MiniArch +11.0%
   - CreateDestroyPairwise: MiniArch 15,761 vs Arch 14,551 → MiniArch +8.3%
 
-  - 说明：(1) flat byte[] 统一存储在结构变更场景中表现出众——Add/Remove/Set/Destroy 均因 swap-remove、direct-index 路径和 chunk 复用策略领先 Arch；(2) query 在所有形态下均快于 Arch，Warmed Query 的 generation 失效机制和 MatchedChunks 快照工作良好；(3) component span 读取已从早期 -45% 和优化前 -4.4% 翻转为 +11.4%，关键优化是 `GetComponentRefAt<T>` 消除 bounds check（改用 `Unsafe.Add + MemoryMarshal.GetArrayDataReference`）和热路径方法加 `[SkipLocalsInit]`；(4) 热路径安全检查（`GetRequiredLocation` bounds check、`Chunk.Add` capacity check、`CopySharedComponentsFrom` null+row checks、`RemoveAt` ValidateRow、`CopyComponent` size mismatch、`WriteComponentRaw` ValidateRow）已包裹进 `#if DEBUG`，Release 下零开销；(5) throughput runner 的 Execute 方法必须加 `[MethodImpl(NoOptimization)]` + Set 后读回值加入 checksum，否则 .NET 8 PGO 会在 warmup 后把 Set 调用当死存储消除（MiniArch 受影响更大因为 Set 路径更短更易被 JIT 分析）。
+  - 说明：(1) flat byte[] 统一存储在结构变更场景中表现出众——Add/Remove/Set/Destroy 均因 swap-remove、direct-index 路径和 chunk 复用策略领先 Arch；(2) query 在所有形态下均快于 Arch，Warmed Query 的 generation 失效机制和 MatchedChunks 快照工作良好；(3) component span BDN 读取已从早期 -45% 和优化前 -4.4% 翻转为 +11.4%，关键优化是 `GetComponentRefAt<T>` 消除 bounds check（改用 `Unsafe.Add + MemoryMarshal.GetArrayDataReference`）和热路径方法加 `[SkipLocalsInit]`；fixed-duration span 差距通过 archetype-level column hoist、internal chunk span、反向 row loop 收窄到 -1.62%；(4) 热路径安全检查（`GetRequiredLocation` bounds check、`Chunk.Add` capacity check、`CopySharedComponentsFrom` null+row checks、`RemoveAt` ValidateRow、`CopyComponent` size mismatch、`WriteComponentRaw` ValidateRow）已包裹进 `#if DEBUG`，Release 下零开销；(5) throughput runner 的 Execute 方法必须加 `[MethodImpl(NoOptimization)]` + Set 后读回值加入 checksum，否则 .NET 8 PGO 会在 warmup 后把 Set 调用当死存储消除（MiniArch 受影响更大因为 Set 路径更短更易被 JIT 分析）。
   - 优化过程中对比 Arch 源码学到的关键 tricks：`DangerousGetReference`（bounds check 消除）、`[SkipLocalsInit]`（跳过局部变量零初始化）、`Unsafe.As<T[]>(array)`（绕过数组协变类型检查）、反向迭代（`--index >= 0`，单 CPU 标志位比较）、多类型 codegen overloads（批量解析列索引）。
 
 ## 认知模型

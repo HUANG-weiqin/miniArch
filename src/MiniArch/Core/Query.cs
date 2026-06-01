@@ -98,6 +98,13 @@ public sealed class Query
         return Volatile.Read(ref _snapshotChunks);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal ReadOnlySpan<Archetype> GetArchetypeSpan()
+    {
+        EnsureMatchingSnapshot();
+        return Volatile.Read(ref _snapshotArchetypes);
+    }
+
     /// <summary>
     /// Gets a chunk enumerable.
     /// </summary>

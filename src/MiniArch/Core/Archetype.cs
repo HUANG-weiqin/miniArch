@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace MiniArch.Core;
 
@@ -179,6 +180,9 @@ public sealed class Archetype
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Chunk GetChunk(int chunkIndex) => _chunks[chunkIndex];
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal ReadOnlySpan<Chunk> GetChunkSpan() => CollectionsMarshal.AsSpan(_chunks);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool TryGetComponentIndex(ComponentType component, out int columnIndex)
