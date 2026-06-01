@@ -15,7 +15,7 @@ public sealed class World : IDisposable
     private const int DefaultChunkCapacity = 128;
     private const int EmptyArchetypeChunkCapacity = 1024;
     private const int EmptyArchetypeChunkCapacityThreshold = 128;
-    private const int AdaptiveChunkTargetBytes = 16 * 1024;
+    private const int AdaptiveChunkTargetBytes = 32 * 1024;
     private const int AdaptiveMaxChunkCapacity = 1024;
     private const int StackAllocatedBatchRangeLimit = 128;
     private static readonly int EntitySizeInBytes = Unsafe.SizeOf<Entity>();

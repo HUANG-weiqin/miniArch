@@ -4,7 +4,7 @@ using GameTickSim;
 
 if (args.Length > 0 && args[0] == "--scenarios")
 {
-    ScenarioBenchmark.RunAll();
+    ScenarioBenchmark.RunAll(args.Length > 1 ? args[1] : null);
     return;
 }
 

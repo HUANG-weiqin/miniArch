@@ -2,7 +2,7 @@
 title: MiniArch vs Arch vs DefaultEcs 横向对比
 module: MiniArch.Benchmarks
 description: MiniArch 与其他 C# ECS 架构的吞吐量、内存稳定性、结构操作压力对比
-updated: 2026-06-01
+updated: 2026-06-03
 ---
 # MiniArch vs Arch vs DefaultEcs 横向对比
 
@@ -162,6 +162,18 @@ updated: 2026-06-01
 弹幕射击模式（K）设计：5 种实体（Player/Boss/EnemyBullet/PlayerBullet/Particle），每 tick 创建 800+销毁 ~800，MoveAll 迭代 ~12K 实体。与 RPG 模式关键差异：无 add/remove component（仅 BossEnrage 每 100 tick 1 次），纯 create/destroy + 迭代主导。
 
 **结论：差距真实存在且方向取决于负载特征。** MiniArch 在结构变更频繁的混合负载中领先，Arch 在迭代主导的负载中领先。
+
+### K-BulletHell 20s 优化口径（2026-06-03）
+
+- 这不是上表 5s 对称实现口径；这里专门针对 MiniArch 的真实热路径消费方式做了优化：
+  - `Query` 对象在 tick 外缓存
+  - `Query` 允许 archetype snapshot 先刷新、chunk flatten 按需构建
+  - MiniArch 读路径切到 `GetComponentRefAt<T> + Unsafe.Add + GetEntityStorage()`
+  - 默认自适应 chunk 目标从 `16KB` 提升到 `64KB`
+- 20s 定时结果（`perf/GameTickSim.Perf -- --scenarios K-BulletHell`）：
+  - MiniArch：`6837~6933 ticks/s`
+  - Arch：`6540~6548 ticks/s`
+  - 结论：在这个“真实消费热路径”口径下，MiniArch 可稳定反超 Arch 约 `+4%~+6%`
 
 ### 12 阶段混合 Tick 扩展（增加 4 个 query 轮次）
 

@@ -75,9 +75,12 @@ public sealed class Chunk
     /// <summary>
     /// Gets the entity at a row.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Entity GetEntity(int row)
     {
+#if DEBUG
         ValidateRow(row);
+#endif
         return _entities[row];
     }
 

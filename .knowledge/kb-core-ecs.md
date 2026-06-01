@@ -106,6 +106,7 @@ updated: 2026-06-03
 - 对大命中 query，读路径真正昂贵的通常不是 filter builder，而是逐 row 的 accessor 开销；如果 chunk 读 API 只能通过 `GetEntity(row)` / `GetComponent(row)` 这种逐元素方法走，边界检查和调用成本会在 `100k+` 档位开始放大。
 - 对 entity-only 的 query 消费，`ReadOnlySpan<Entity>` 这类批量读接口通常能立刻降低 CPU，且不会引入额外分配；它是比重构 query cache 更低风险的第一步优化。
 - 对 steady-state query 遍历，优先走 `Query.GetChunkSpan()` + `Chunk.GetEntities()` 这类批量读路径；保留 `Chunks` 枚举器作为兼容 API，但不要把它当作 benchmark / profiling 的首选消费方式。
+- 对高 churn query（同 archetype 的 chunk 数每 tick 都在变）不要强迫所有消费者都走扁平 `Chunk[]` 快照；`Query` 应允许 archetype snapshot 先刷新、chunk flatten 按需懒构建，否则 BulletHell 这类 create/destroy 场景会把刷新成本放大到每 tick 多次重复支付。
 - 默认层 `OrderedQuery` 应作为消费层 materialization + sort，不进入 core query cache，也不改变 `QueryDescription`；每次枚举独立租用内部 buffer 才能支持同一 ordered query 的并发读取。
 - 对 component-consuming query，优先走 flat chunk 暴露的 `Chunk.GetComponentSpan<T>()`，不要在热循环里逐 row 调 `GetComponent<T>(..., row)`；后者会把列查找、边界检查和方法调用成本重复放大。
 - `Chunk.GetComponentSpan<T>()` 适用于所有 chunk；span 由 flat byte storage 的列起点按元素类型重解释得到。
@@ -119,6 +120,7 @@ updated: 2026-06-03
 - `Chunk.CopySharedComponentsFrom` 增加了同签名快速路径：`_signature == source._signature` 时直接按列索引复制，跳过逐组件 `TryGetComponentIndex` 查找。
 - `GetComponentRef<T>(columnIndex)` 返回 `ref T` 指向 flat byte storage 中该列首元素，配合 `Unsafe.Add` 实现 0-bounds-check 迭代。
 - Chunk / Query / Archetype 热路径方法（`SetComponentAtTyped`, `SetComponentAt`, `GetComponentAt`, `GetComponentIndex`, `GetEntityStorage`, `GetArchetypeSpan`, `GetChunkSpan`）已标记 `AggressiveInlining`。
+- 对真实游戏热循环（如 BulletHell 的 collision scan），`Query` 对象应在循环外缓存，并直接使用 `GetComponentRefAt<T>(columnIndex, 0)` + `Unsafe.Add` + `GetEntityStorage()` 这条最低层读路径；它比每 tick 重新取 query facade 再走 span indexer 稳定快一个可观档位，足以把 MiniArch 从略输 Arch 翻成稳定领先。
 - `Chunk.GetComponentIndex(...)` 不能在 chunk 实例上维护 last-component / last-column 这类共享可变读缓存；同一 chunk 被并发只读、且不同线程读不同组件时，普通字段 pair 可能被观察成不一致组合。读路径应直接使用不可变的 `_componentIdToColumnIndex` direct map，或由调用方 hoist 到局部 column index。
 - `World` / `CommandBuffer` 的泛型 component-type cache 也不能用 registry + id 两个 static 字段表示同一条 cache entry；跨 world 或并发首次缓存时可能形成错配。应发布单个 immutable entry 引用，并从本地 entry 读取 registry/id。
 - 如果 query 不只缓存 `Archetype[]`，还缓存了扁平 `Chunk[]`，失效条件就不能只看 archetype 集合变化；同 archetype 内新增或复用 chunk 也必须触发 query snapshot 刷新。
@@ -160,6 +162,7 @@ updated: 2026-06-03
   - Component Span BDN: MiniArch 68.2us vs Arch 77.0us → MiniArch +11.4%
   - Component Span throughput（2026-06-01，100k entities，10s×5）：MiniArch 16,783 ops/s vs Arch 17,060 ops/s → MiniArch -1.62%（fixed-duration gap 已从约 -6% 收窄）
   - Component Row-wise: MiniArch 177.3us (无 Arch 对照)
+  - GameTickSim K-BulletHell（2026-06-03，20s timed，cached query + lazy archetype snapshot + direct-ref row loop）：MiniArch 6.84k~6.93k ticks/s vs Arch 6.54k~6.55k → MiniArch +4%~+6%
 
   **CommandBuffer (throughput, 3s×3)：**
   - MiniArch 在所有 workload 上领先 Arch +52%~+144%
