@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Runtime.CompilerServices;
 using DefaultEcs;
 using MiniArch.Core;
 using MiniArchBenchmarks.GameTick;
@@ -513,10 +512,7 @@ public static class ScenarioBenchmark
         // MiniArch
         {
             using var w = new MiniWorld();
-            var posType = Component<Position>.ComponentType;
-            var velType = Component<Velocity>.ComponentType;
-            var dmgType = Component<Damage>.ComponentType;
-            var ltType = Component<Lifetime>.ComponentType;
+
 
             var player = w.Create(new PlayerTag(), new Position(), new Velocity(), new Health { Current = 10000, Max = 10000 }, new Speed(0));
             var boss = w.Create(new BossTag(), new Position { X = bossX, Z = bossZ }, new Velocity(), new Health { Current = 100000, Max = 100000 }, new AiState());
@@ -542,28 +538,11 @@ public static class ScenarioBenchmark
                 // 1. MoveAll (iterate)
                 t0 = Stopwatch.GetTimestamp();
                 {
-                    var archetypes = moveQuery.GetArchetypeSpan();
-                    for (var archetypeIndex = 0; archetypeIndex < archetypes.Length; archetypeIndex++)
+                    foreach (var row in moveQuery.EachSpan<Position, Velocity>())
                     {
-                        var archetype = archetypes[archetypeIndex];
-                        var posColumn = archetype.GetComponentIndexFast(posType);
-                        var velColumn = archetype.GetComponentIndexFast(velType);
-                        var chunks = archetype.GetChunkSpan();
-                        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
-                        {
-                            var c = chunks[chunkIndex];
-                            if (c.Count == 0) continue;
-                            ref var pos0 = ref c.GetComponentRefAt<Position>(posColumn, 0);
-                            ref var vel0 = ref c.GetComponentRefAt<Velocity>(velColumn, 0);
-                            for (var row = 0; row < c.Count; row++)
-                            {
-                                ref var pos = ref Unsafe.Add(ref pos0, row);
-                                ref var vel = ref Unsafe.Add(ref vel0, row);
-                                pos.X += vel.X;
-                                pos.Y += vel.Y;
-                                pos.Z += vel.Z;
-                            }
-                        }
+                        row.Get0().X += row.Get1().X;
+                        row.Get0().Y += row.Get1().Y;
+                        row.Get0().Z += row.Get1().Z;
                     }
                 }
                 t1 = Stopwatch.GetTimestamp();
@@ -607,28 +586,22 @@ public static class ScenarioBenchmark
                 {
                     t0 = Stopwatch.GetTimestamp();
                     var d = 0;
-                    var archetypes = ebQuery.GetArchetypeSpan();
-                    for (var archetypeIndex = 0; archetypeIndex < archetypes.Length; archetypeIndex++)
+                    var posComp = Component<Position>.ComponentType;
+                    var chunks = ebQuery.GetChunkSpan();
+                    for (var ci = 0; ci < chunks.Length; ci++)
                     {
-                        var archetype = archetypes[archetypeIndex];
-                        var posColumn = archetype.GetComponentIndexFast(posType);
-                        var chunks = archetype.GetChunkSpan();
-                        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+                        var c = chunks[ci];
+                        var posSpan = c.GetComponentSpan<Position>(posComp);
+                        var en = c.GetEntities();
+                        for (var row = 0; row < c.Count; row++)
                         {
-                            var c = chunks[chunkIndex];
-                            if (c.Count == 0) continue;
-                            ref var pos0 = ref c.GetComponentRefAt<Position>(posColumn, 0);
-                            var entities = c.GetEntityStorage();
-                            for (var row = 0; row < c.Count; row++)
+                            ref var pos = ref posSpan[row];
+                            var dx = pos.X - playerX;
+                            var dz = pos.Z - playerZ;
+                            if (dx * dx + dz * dz < hitRadiusSqPlayer ||
+                                Math.Abs(pos.X) > screenBound || Math.Abs(pos.Z) > screenBound)
                             {
-                                ref var pos = ref Unsafe.Add(ref pos0, row);
-                                var dx = pos.X - playerX;
-                                var dz = pos.Z - playerZ;
-                                if (dx * dx + dz * dz < hitRadiusSqPlayer ||
-                                    Math.Abs(pos.X) > screenBound || Math.Abs(pos.Z) > screenBound)
-                                {
-                                    if (d < scratch.Length) scratch[d++] = entities[row];
-                                }
+                                if (d < scratch.Length) scratch[d++] = en[row];
                             }
                         }
                     }
@@ -644,28 +617,22 @@ public static class ScenarioBenchmark
                 {
                     t0 = Stopwatch.GetTimestamp();
                     var d = 0;
-                    var archetypes = pbQuery.GetArchetypeSpan();
-                    for (var archetypeIndex = 0; archetypeIndex < archetypes.Length; archetypeIndex++)
+                    var posComp = Component<Position>.ComponentType;
+                    var chunks = pbQuery.GetChunkSpan();
+                    for (var ci = 0; ci < chunks.Length; ci++)
                     {
-                        var archetype = archetypes[archetypeIndex];
-                        var posColumn = archetype.GetComponentIndexFast(posType);
-                        var chunks = archetype.GetChunkSpan();
-                        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+                        var c = chunks[ci];
+                        var posSpan = c.GetComponentSpan<Position>(posComp);
+                        var en = c.GetEntities();
+                        for (var row = 0; row < c.Count; row++)
                         {
-                            var c = chunks[chunkIndex];
-                            if (c.Count == 0) continue;
-                            ref var pos0 = ref c.GetComponentRefAt<Position>(posColumn, 0);
-                            var entities = c.GetEntityStorage();
-                            for (var row = 0; row < c.Count; row++)
+                            ref var pos = ref posSpan[row];
+                            var dx = pos.X - bossX;
+                            var dz = pos.Z - bossZ;
+                            if (dx * dx + dz * dz < hitRadiusSqBoss ||
+                                Math.Abs(pos.X) > screenBound || Math.Abs(pos.Z) > screenBound)
                             {
-                                ref var pos = ref Unsafe.Add(ref pos0, row);
-                                var dx = pos.X - bossX;
-                                var dz = pos.Z - bossZ;
-                                if (dx * dx + dz * dz < hitRadiusSqBoss ||
-                                    Math.Abs(pos.X) > screenBound || Math.Abs(pos.Z) > screenBound)
-                                {
-                                    if (d < scratch.Length) scratch[d++] = entities[row];
-                                }
+                                if (d < scratch.Length) scratch[d++] = en[row];
                             }
                         }
                     }
@@ -681,25 +648,18 @@ public static class ScenarioBenchmark
                 {
                     t0 = Stopwatch.GetTimestamp();
                     var d = 0;
-                    var archetypes = ptQuery.GetArchetypeSpan();
-                    for (var archetypeIndex = 0; archetypeIndex < archetypes.Length; archetypeIndex++)
+                    var ltComp = Component<Lifetime>.ComponentType;
+                    var chunks = ptQuery.GetChunkSpan();
+                    for (var ci = 0; ci < chunks.Length; ci++)
                     {
-                        var archetype = archetypes[archetypeIndex];
-                        var lifetimeColumn = archetype.GetComponentIndexFast(ltType);
-                        var chunks = archetype.GetChunkSpan();
-                        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+                        var c = chunks[ci];
+                        var ltSpan = c.GetComponentSpan<Lifetime>(ltComp);
+                        for (var row = 0; row < c.Count; row++)
                         {
-                            var c = chunks[chunkIndex];
-                            if (c.Count == 0) continue;
-                            ref var lt0 = ref c.GetComponentRefAt<Lifetime>(lifetimeColumn, 0);
-                            var entities = c.GetEntityStorage();
-                            for (var row = 0; row < c.Count; row++)
-                            {
-                                ref var lt = ref Unsafe.Add(ref lt0, row);
-                                lt.Value -= 1f;
-                                if (lt.Value <= 0 && d < scratch.Length)
-                                    scratch[d++] = entities[row];
-                            }
+                            ref var lt = ref ltSpan[row];
+                            lt.Value -= 1f;
+                            if (lt.Value <= 0 && d < scratch.Length)
+                                scratch[d++] = c.GetEntity(row);
                         }
                     }
                     t1 = Stopwatch.GetTimestamp();
