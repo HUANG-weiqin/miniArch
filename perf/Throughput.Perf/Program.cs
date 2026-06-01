@@ -65,6 +65,33 @@ static int MiniWideWrite(MiniQuery q)
     return s;
 }
 
+static int MiniWideWriteManual(MiniQuery q,
+    MiniArch.Core.ComponentType pt, MiniArch.Core.ComponentType vt,
+    MiniArch.Core.ComponentType ht, MiniArch.Core.ComponentType tt,
+    MiniArch.Core.ComponentType at, MiniArch.Core.ComponentType mt)
+{
+    var s = 0;
+    var chunks = q.GetChunkSpan();
+    for (var ci = 0; ci < chunks.Length; ci++)
+    {
+        var c = chunks[ci];
+        var pos = c.GetComponentSpan<Position>(pt);
+        var vel = c.GetComponentSpan<Velocity>(vt);
+        var hp = c.GetComponentSpan<Health>(ht);
+        var tm = c.GetComponentSpan<Team>(tt);
+        var acc = c.GetComponentSpan<Acceleration>(at);
+        var mana = c.GetComponentSpan<Mana>(mt);
+        for (var ri = 0; ri < c.Count; ri++)
+        {
+            pos[ri].X += vel[ri].Y;
+            hp[ri].Value -= 1;
+            mana[ri].Value += 2;
+            s += pos[ri].X + hp[ri].Value + mana[ri].Value;
+        }
+    }
+    return s;
+}
+
 static int ArchWideWrite(World w, QueryDescription d)
 {
     var s = 0;
@@ -119,6 +146,10 @@ Console.WriteLine();
 var wm2 = BenchmarkWorldFactory.CreateMiniWideQueryWorld(entityCount);
 var wa2 = BenchmarkWorldFactory.CreateArchWideQueryWorld(entityCount);
 Run("  MiniArch EachSpan write", () => MiniWideWrite(wm2.WideQuery));
+Run("  MiniArch manual chunk write", () => MiniWideWriteManual(wm2.WideQuery,
+    MiniArch.Core.Component<Position>.ComponentType, MiniArch.Core.Component<Velocity>.ComponentType,
+    MiniArch.Core.Component<Health>.ComponentType, MiniArch.Core.Component<Team>.ComponentType,
+    MiniArch.Core.Component<Acceleration>.ComponentType, MiniArch.Core.Component<Mana>.ComponentType));
 Run("  Arch GetSpan write",      () => ArchWideWrite(wa2.World, wa2.WideDescription));
 
 na.Dispose();

@@ -170,6 +170,14 @@ public sealed class Chunk
 
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal ref T GetComponentRef<T>(ComponentType component)
+    {
+        var columnIndex = GetComponentIndex(component);
+        return ref GetComponentRefAt<T>(columnIndex, 0);
+    }
+
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ref T GetComponentRef<T>(int columnIndex)
     {
 #if DEBUG

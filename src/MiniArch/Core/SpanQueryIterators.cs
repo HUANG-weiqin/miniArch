@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace MiniArch.Core;
 
@@ -148,20 +149,22 @@ public ref struct SpanEach<T1>
 {
     private ReadOnlySpan<Chunk> _chunks;
     private int _chunkIdx;
-    private int _rowIdx;
     private int _rowCount;
+    private int _remaining;
+    private int _entityIdx;
     private ReadOnlySpan<Entity> _entities;
-    private Span<T1> _s0;
+    private ref T1 _r0;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal SpanEach(ReadOnlySpan<Chunk> chunks)
     {
         _chunks = chunks;
         _chunkIdx = -1;
-        _rowIdx = -1;
         _rowCount = 0;
+        _remaining = 0;
+        _entityIdx = 0;
         _entities = default;
-        _s0 = default;
+        _r0 = ref Unsafe.NullRef<T1>();
     }
 
     /// <summary>Returns this instance as the enumerator.</summary>
@@ -172,8 +175,12 @@ public ref struct SpanEach<T1>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MoveNext()
     {
-        _rowIdx++;
-        if (_rowIdx < _rowCount) return true;
+        if (--_remaining >= 0)
+        {
+            _r0 = ref Unsafe.Add(ref _r0, 1);
+            _entityIdx++;
+            return true;
+        }
 
         while (true)
         {
@@ -183,10 +190,11 @@ public ref struct SpanEach<T1>
             var chunk = _chunks[_chunkIdx];
             if (chunk.Count == 0) continue;
 
-            _rowIdx = 0;
             _rowCount = chunk.Count;
+            _remaining = _rowCount - 1;
+            _entityIdx = 0;
             _entities = chunk.GetEntities();
-            _s0 = chunk.GetComponentSpan<T1>(Component<T1>.ComponentType);
+            _r0 = ref chunk.GetComponentRef<T1>(Component<T1>.ComponentType);
             return true;
         }
     }
@@ -195,11 +203,11 @@ public ref struct SpanEach<T1>
     public SpanEach<T1> Current => this;
 
     /// <summary>The current entity.</summary>
-    public Entity Entity => _entities[_rowIdx];
+    public Entity Entity => _entities[_entityIdx];
 
     /// <summary>Gets the first component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T1 Get0() => ref _s0[_rowIdx];
+    public ref T1 Get0() => ref _r0;
 }
 
 /// <summary>
@@ -211,22 +219,22 @@ public ref struct SpanEach<T1, T2>
 {
     private ReadOnlySpan<Chunk> _chunks;
     private int _chunkIdx;
-    private int _rowIdx;
     private int _rowCount;
+    private int _remaining;
     private ReadOnlySpan<Entity> _entities;
-    private Span<T1> _s0;
-    private Span<T2> _s1;
+    private ref T1 _r0;
+    private ref T2 _r1;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal SpanEach(ReadOnlySpan<Chunk> chunks)
     {
         _chunks = chunks;
         _chunkIdx = -1;
-        _rowIdx = -1;
         _rowCount = 0;
+        _remaining = 0;
         _entities = default;
-        _s0 = default;
-        _s1 = default;
+        _r0 = ref Unsafe.NullRef<T1>();
+        _r1 = ref Unsafe.NullRef<T2>();
     }
 
     /// <summary>Returns this instance as the enumerator.</summary>
@@ -237,8 +245,12 @@ public ref struct SpanEach<T1, T2>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MoveNext()
     {
-        _rowIdx++;
-        if (_rowIdx < _rowCount) return true;
+        if (--_remaining >= 0)
+        {
+            _r0 = ref Unsafe.Add(ref _r0, 1);
+            _r1 = ref Unsafe.Add(ref _r1, 1);
+            return true;
+        }
 
         while (true)
         {
@@ -248,11 +260,11 @@ public ref struct SpanEach<T1, T2>
             var chunk = _chunks[_chunkIdx];
             if (chunk.Count == 0) continue;
 
-            _rowIdx = 0;
             _rowCount = chunk.Count;
+            _remaining = _rowCount - 1;
             _entities = chunk.GetEntities();
-            _s0 = chunk.GetComponentSpan<T1>(Component<T1>.ComponentType);
-            _s1 = chunk.GetComponentSpan<T2>(Component<T2>.ComponentType);
+            _r0 = ref chunk.GetComponentRef<T1>(Component<T1>.ComponentType);
+            _r1 = ref chunk.GetComponentRef<T2>(Component<T2>.ComponentType);
             return true;
         }
     }
@@ -261,15 +273,15 @@ public ref struct SpanEach<T1, T2>
     public SpanEach<T1, T2> Current => this;
 
     /// <summary>The current entity.</summary>
-    public Entity Entity => _entities[_rowIdx];
+    public Entity Entity => _entities[_rowCount - 1 - _remaining];
 
     /// <summary>Gets the first component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T1 Get0() => ref _s0[_rowIdx];
+    public ref T1 Get0() => ref _r0;
 
     /// <summary>Gets the second component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T2 Get1() => ref _s1[_rowIdx];
+    public ref T2 Get1() => ref _r1;
 }
 
 /// <summary>
@@ -282,24 +294,24 @@ public ref struct SpanEach<T1, T2, T3>
 {
     private ReadOnlySpan<Chunk> _chunks;
     private int _chunkIdx;
-    private int _rowIdx;
     private int _rowCount;
+    private int _remaining;
     private ReadOnlySpan<Entity> _entities;
-    private Span<T1> _s0;
-    private Span<T2> _s1;
-    private Span<T3> _s2;
+    private ref T1 _r0;
+    private ref T2 _r1;
+    private ref T3 _r2;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal SpanEach(ReadOnlySpan<Chunk> chunks)
     {
         _chunks = chunks;
         _chunkIdx = -1;
-        _rowIdx = -1;
         _rowCount = 0;
+        _remaining = 0;
         _entities = default;
-        _s0 = default;
-        _s1 = default;
-        _s2 = default;
+        _r0 = ref Unsafe.NullRef<T1>();
+        _r1 = ref Unsafe.NullRef<T2>();
+        _r2 = ref Unsafe.NullRef<T3>();
     }
 
     /// <summary>Returns this instance as the enumerator.</summary>
@@ -310,8 +322,13 @@ public ref struct SpanEach<T1, T2, T3>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MoveNext()
     {
-        _rowIdx++;
-        if (_rowIdx < _rowCount) return true;
+        if (--_remaining >= 0)
+        {
+            _r0 = ref Unsafe.Add(ref _r0, 1);
+            _r1 = ref Unsafe.Add(ref _r1, 1);
+            _r2 = ref Unsafe.Add(ref _r2, 1);
+            return true;
+        }
 
         while (true)
         {
@@ -321,12 +338,12 @@ public ref struct SpanEach<T1, T2, T3>
             var chunk = _chunks[_chunkIdx];
             if (chunk.Count == 0) continue;
 
-            _rowIdx = 0;
             _rowCount = chunk.Count;
+            _remaining = _rowCount - 1;
             _entities = chunk.GetEntities();
-            _s0 = chunk.GetComponentSpan<T1>(Component<T1>.ComponentType);
-            _s1 = chunk.GetComponentSpan<T2>(Component<T2>.ComponentType);
-            _s2 = chunk.GetComponentSpan<T3>(Component<T3>.ComponentType);
+            _r0 = ref chunk.GetComponentRef<T1>(Component<T1>.ComponentType);
+            _r1 = ref chunk.GetComponentRef<T2>(Component<T2>.ComponentType);
+            _r2 = ref chunk.GetComponentRef<T3>(Component<T3>.ComponentType);
             return true;
         }
     }
@@ -335,19 +352,19 @@ public ref struct SpanEach<T1, T2, T3>
     public SpanEach<T1, T2, T3> Current => this;
 
     /// <summary>The current entity.</summary>
-    public Entity Entity => _entities[_rowIdx];
+    public Entity Entity => _entities[_rowCount - 1 - _remaining];
 
     /// <summary>Gets the first component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T1 Get0() => ref _s0[_rowIdx];
+    public ref T1 Get0() => ref _r0;
 
     /// <summary>Gets the second component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T2 Get1() => ref _s1[_rowIdx];
+    public ref T2 Get1() => ref _r1;
 
     /// <summary>Gets the third component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T3 Get2() => ref _s2[_rowIdx];
+    public ref T3 Get2() => ref _r2;
 }
 
 /// <summary>
@@ -361,26 +378,26 @@ public ref struct SpanEach<T1, T2, T3, T4>
 {
     private ReadOnlySpan<Chunk> _chunks;
     private int _chunkIdx;
-    private int _rowIdx;
     private int _rowCount;
+    private int _remaining;
     private ReadOnlySpan<Entity> _entities;
-    private Span<T1> _s0;
-    private Span<T2> _s1;
-    private Span<T3> _s2;
-    private Span<T4> _s3;
+    private ref T1 _r0;
+    private ref T2 _r1;
+    private ref T3 _r2;
+    private ref T4 _r3;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal SpanEach(ReadOnlySpan<Chunk> chunks)
     {
         _chunks = chunks;
         _chunkIdx = -1;
-        _rowIdx = -1;
         _rowCount = 0;
+        _remaining = 0;
         _entities = default;
-        _s0 = default;
-        _s1 = default;
-        _s2 = default;
-        _s3 = default;
+        _r0 = ref Unsafe.NullRef<T1>();
+        _r1 = ref Unsafe.NullRef<T2>();
+        _r2 = ref Unsafe.NullRef<T3>();
+        _r3 = ref Unsafe.NullRef<T4>();
     }
 
     /// <summary>Returns this instance as the enumerator.</summary>
@@ -391,8 +408,14 @@ public ref struct SpanEach<T1, T2, T3, T4>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MoveNext()
     {
-        _rowIdx++;
-        if (_rowIdx < _rowCount) return true;
+        if (--_remaining >= 0)
+        {
+            _r0 = ref Unsafe.Add(ref _r0, 1);
+            _r1 = ref Unsafe.Add(ref _r1, 1);
+            _r2 = ref Unsafe.Add(ref _r2, 1);
+            _r3 = ref Unsafe.Add(ref _r3, 1);
+            return true;
+        }
 
         while (true)
         {
@@ -402,13 +425,13 @@ public ref struct SpanEach<T1, T2, T3, T4>
             var chunk = _chunks[_chunkIdx];
             if (chunk.Count == 0) continue;
 
-            _rowIdx = 0;
             _rowCount = chunk.Count;
+            _remaining = _rowCount - 1;
             _entities = chunk.GetEntities();
-            _s0 = chunk.GetComponentSpan<T1>(Component<T1>.ComponentType);
-            _s1 = chunk.GetComponentSpan<T2>(Component<T2>.ComponentType);
-            _s2 = chunk.GetComponentSpan<T3>(Component<T3>.ComponentType);
-            _s3 = chunk.GetComponentSpan<T4>(Component<T4>.ComponentType);
+            _r0 = ref chunk.GetComponentRef<T1>(Component<T1>.ComponentType);
+            _r1 = ref chunk.GetComponentRef<T2>(Component<T2>.ComponentType);
+            _r2 = ref chunk.GetComponentRef<T3>(Component<T3>.ComponentType);
+            _r3 = ref chunk.GetComponentRef<T4>(Component<T4>.ComponentType);
             return true;
         }
     }
@@ -417,23 +440,23 @@ public ref struct SpanEach<T1, T2, T3, T4>
     public SpanEach<T1, T2, T3, T4> Current => this;
 
     /// <summary>The current entity.</summary>
-    public Entity Entity => _entities[_rowIdx];
+    public Entity Entity => _entities[_rowCount - 1 - _remaining];
 
     /// <summary>Gets the first component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T1 Get0() => ref _s0[_rowIdx];
+    public ref T1 Get0() => ref _r0;
 
     /// <summary>Gets the second component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T2 Get1() => ref _s1[_rowIdx];
+    public ref T2 Get1() => ref _r1;
 
     /// <summary>Gets the third component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T3 Get2() => ref _s2[_rowIdx];
+    public ref T3 Get2() => ref _r2;
 
     /// <summary>Gets the fourth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T4 Get3() => ref _s3[_rowIdx];
+    public ref T4 Get3() => ref _r3;
 }
 
 /// <summary>
@@ -448,28 +471,28 @@ public ref struct SpanEach<T1, T2, T3, T4, T5>
 {
     private ReadOnlySpan<Chunk> _chunks;
     private int _chunkIdx;
-    private int _rowIdx;
     private int _rowCount;
+    private int _remaining;
     private ReadOnlySpan<Entity> _entities;
-    private Span<T1> _s0;
-    private Span<T2> _s1;
-    private Span<T3> _s2;
-    private Span<T4> _s3;
-    private Span<T5> _s4;
+    private ref T1 _r0;
+    private ref T2 _r1;
+    private ref T3 _r2;
+    private ref T4 _r3;
+    private ref T5 _r4;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal SpanEach(ReadOnlySpan<Chunk> chunks)
     {
         _chunks = chunks;
         _chunkIdx = -1;
-        _rowIdx = -1;
         _rowCount = 0;
+        _remaining = 0;
         _entities = default;
-        _s0 = default;
-        _s1 = default;
-        _s2 = default;
-        _s3 = default;
-        _s4 = default;
+        _r0 = ref Unsafe.NullRef<T1>();
+        _r1 = ref Unsafe.NullRef<T2>();
+        _r2 = ref Unsafe.NullRef<T3>();
+        _r3 = ref Unsafe.NullRef<T4>();
+        _r4 = ref Unsafe.NullRef<T5>();
     }
 
     /// <summary>Returns this instance as the enumerator.</summary>
@@ -480,8 +503,15 @@ public ref struct SpanEach<T1, T2, T3, T4, T5>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MoveNext()
     {
-        _rowIdx++;
-        if (_rowIdx < _rowCount) return true;
+        if (--_remaining >= 0)
+        {
+            _r0 = ref Unsafe.Add(ref _r0, 1);
+            _r1 = ref Unsafe.Add(ref _r1, 1);
+            _r2 = ref Unsafe.Add(ref _r2, 1);
+            _r3 = ref Unsafe.Add(ref _r3, 1);
+            _r4 = ref Unsafe.Add(ref _r4, 1);
+            return true;
+        }
 
         while (true)
         {
@@ -491,14 +521,14 @@ public ref struct SpanEach<T1, T2, T3, T4, T5>
             var chunk = _chunks[_chunkIdx];
             if (chunk.Count == 0) continue;
 
-            _rowIdx = 0;
             _rowCount = chunk.Count;
+            _remaining = _rowCount - 1;
             _entities = chunk.GetEntities();
-            _s0 = chunk.GetComponentSpan<T1>(Component<T1>.ComponentType);
-            _s1 = chunk.GetComponentSpan<T2>(Component<T2>.ComponentType);
-            _s2 = chunk.GetComponentSpan<T3>(Component<T3>.ComponentType);
-            _s3 = chunk.GetComponentSpan<T4>(Component<T4>.ComponentType);
-            _s4 = chunk.GetComponentSpan<T5>(Component<T5>.ComponentType);
+            _r0 = ref chunk.GetComponentRef<T1>(Component<T1>.ComponentType);
+            _r1 = ref chunk.GetComponentRef<T2>(Component<T2>.ComponentType);
+            _r2 = ref chunk.GetComponentRef<T3>(Component<T3>.ComponentType);
+            _r3 = ref chunk.GetComponentRef<T4>(Component<T4>.ComponentType);
+            _r4 = ref chunk.GetComponentRef<T5>(Component<T5>.ComponentType);
             return true;
         }
     }
@@ -507,27 +537,27 @@ public ref struct SpanEach<T1, T2, T3, T4, T5>
     public SpanEach<T1, T2, T3, T4, T5> Current => this;
 
     /// <summary>The current entity.</summary>
-    public Entity Entity => _entities[_rowIdx];
+    public Entity Entity => _entities[_rowCount - 1 - _remaining];
 
     /// <summary>Gets the first component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T1 Get0() => ref _s0[_rowIdx];
+    public ref T1 Get0() => ref _r0;
 
     /// <summary>Gets the second component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T2 Get1() => ref _s1[_rowIdx];
+    public ref T2 Get1() => ref _r1;
 
     /// <summary>Gets the third component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T3 Get2() => ref _s2[_rowIdx];
+    public ref T3 Get2() => ref _r2;
 
     /// <summary>Gets the fourth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T4 Get3() => ref _s3[_rowIdx];
+    public ref T4 Get3() => ref _r3;
 
     /// <summary>Gets the fifth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T5 Get4() => ref _s4[_rowIdx];
+    public ref T5 Get4() => ref _r4;
 }
 
 /// <summary>
@@ -543,42 +573,48 @@ public ref struct SpanEach<T1, T2, T3, T4, T5, T6>
 {
     private ReadOnlySpan<Chunk> _chunks;
     private int _chunkIdx;
-    private int _rowIdx;
     private int _rowCount;
+    private int _remaining;
     private ReadOnlySpan<Entity> _entities;
-    private Span<T1> _s0;
-    private Span<T2> _s1;
-    private Span<T3> _s2;
-    private Span<T4> _s3;
-    private Span<T5> _s4;
-    private Span<T6> _s5;
+    private ref T1 _r0;
+    private ref T2 _r1;
+    private ref T3 _r2;
+    private ref T4 _r3;
+    private ref T5 _r4;
+    private ref T6 _r5;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal SpanEach(ReadOnlySpan<Chunk> chunks)
     {
         _chunks = chunks;
         _chunkIdx = -1;
-        _rowIdx = -1;
         _rowCount = 0;
+        _remaining = 0;
         _entities = default;
-        _s0 = default;
-        _s1 = default;
-        _s2 = default;
-        _s3 = default;
-        _s4 = default;
-        _s5 = default;
+        _r0 = ref Unsafe.NullRef<T1>();
+        _r1 = ref Unsafe.NullRef<T2>();
+        _r2 = ref Unsafe.NullRef<T3>();
+        _r3 = ref Unsafe.NullRef<T4>();
+        _r4 = ref Unsafe.NullRef<T5>();
+        _r5 = ref Unsafe.NullRef<T6>();
     }
 
-    /// <summary>Returns this instance as the enumerator.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public SpanEach<T1, T2, T3, T4, T5, T6> GetEnumerator() => this;
 
-    /// <summary>Advances to the next row. Returns false when exhausted.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MoveNext()
     {
-        _rowIdx++;
-        if (_rowIdx < _rowCount) return true;
+        if (--_remaining >= 0)
+        {
+            _r0 = ref Unsafe.Add(ref _r0, 1);
+            _r1 = ref Unsafe.Add(ref _r1, 1);
+            _r2 = ref Unsafe.Add(ref _r2, 1);
+            _r3 = ref Unsafe.Add(ref _r3, 1);
+            _r4 = ref Unsafe.Add(ref _r4, 1);
+            _r5 = ref Unsafe.Add(ref _r5, 1);
+            return true;
+        }
 
         while (true)
         {
@@ -588,48 +624,40 @@ public ref struct SpanEach<T1, T2, T3, T4, T5, T6>
             var chunk = _chunks[_chunkIdx];
             if (chunk.Count == 0) continue;
 
-            _rowIdx = 0;
             _rowCount = chunk.Count;
+            _remaining = _rowCount - 1;
             _entities = chunk.GetEntities();
-            _s0 = chunk.GetComponentSpan<T1>(Component<T1>.ComponentType);
-            _s1 = chunk.GetComponentSpan<T2>(Component<T2>.ComponentType);
-            _s2 = chunk.GetComponentSpan<T3>(Component<T3>.ComponentType);
-            _s3 = chunk.GetComponentSpan<T4>(Component<T4>.ComponentType);
-            _s4 = chunk.GetComponentSpan<T5>(Component<T5>.ComponentType);
-            _s5 = chunk.GetComponentSpan<T6>(Component<T6>.ComponentType);
+            _r0 = ref chunk.GetComponentRef<T1>(Component<T1>.ComponentType);
+            _r1 = ref chunk.GetComponentRef<T2>(Component<T2>.ComponentType);
+            _r2 = ref chunk.GetComponentRef<T3>(Component<T3>.ComponentType);
+            _r3 = ref chunk.GetComponentRef<T4>(Component<T4>.ComponentType);
+            _r4 = ref chunk.GetComponentRef<T5>(Component<T5>.ComponentType);
+            _r5 = ref chunk.GetComponentRef<T6>(Component<T6>.ComponentType);
             return true;
         }
     }
 
-    /// <summary>The current row state.</summary>
     public SpanEach<T1, T2, T3, T4, T5, T6> Current => this;
 
-    /// <summary>The current entity.</summary>
-    public Entity Entity => _entities[_rowIdx];
+    public Entity Entity => _entities[_rowCount - 1 - _remaining];
 
-    /// <summary>Gets the first component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T1 Get0() => ref _s0[_rowIdx];
+    public ref T1 Get0() => ref _r0;
 
-    /// <summary>Gets the second component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T2 Get1() => ref _s1[_rowIdx];
+    public ref T2 Get1() => ref _r1;
 
-    /// <summary>Gets the third component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T3 Get2() => ref _s2[_rowIdx];
+    public ref T3 Get2() => ref _r2;
 
-    /// <summary>Gets the fourth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T4 Get3() => ref _s3[_rowIdx];
+    public ref T4 Get3() => ref _r3;
 
-    /// <summary>Gets the fifth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T5 Get4() => ref _s4[_rowIdx];
+    public ref T5 Get4() => ref _r4;
 
-    /// <summary>Gets the sixth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T6 Get5() => ref _s5[_rowIdx];
+    public ref T6 Get5() => ref _r5;
 }
 
 /// <summary>
@@ -646,32 +674,32 @@ public ref struct SpanEach<T1, T2, T3, T4, T5, T6, T7>
 {
     private ReadOnlySpan<Chunk> _chunks;
     private int _chunkIdx;
-    private int _rowIdx;
     private int _rowCount;
+    private int _remaining;
     private ReadOnlySpan<Entity> _entities;
-    private Span<T1> _s0;
-    private Span<T2> _s1;
-    private Span<T3> _s2;
-    private Span<T4> _s3;
-    private Span<T5> _s4;
-    private Span<T6> _s5;
-    private Span<T7> _s6;
+    private ref T1 _r0;
+    private ref T2 _r1;
+    private ref T3 _r2;
+    private ref T4 _r3;
+    private ref T5 _r4;
+    private ref T6 _r5;
+    private ref T7 _r6;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal SpanEach(ReadOnlySpan<Chunk> chunks)
     {
         _chunks = chunks;
         _chunkIdx = -1;
-        _rowIdx = -1;
         _rowCount = 0;
+        _remaining = 0;
         _entities = default;
-        _s0 = default;
-        _s1 = default;
-        _s2 = default;
-        _s3 = default;
-        _s4 = default;
-        _s5 = default;
-        _s6 = default;
+        _r0 = ref Unsafe.NullRef<T1>();
+        _r1 = ref Unsafe.NullRef<T2>();
+        _r2 = ref Unsafe.NullRef<T3>();
+        _r3 = ref Unsafe.NullRef<T4>();
+        _r4 = ref Unsafe.NullRef<T5>();
+        _r5 = ref Unsafe.NullRef<T6>();
+        _r6 = ref Unsafe.NullRef<T7>();
     }
 
     /// <summary>Returns this instance as the enumerator.</summary>
@@ -682,8 +710,17 @@ public ref struct SpanEach<T1, T2, T3, T4, T5, T6, T7>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MoveNext()
     {
-        _rowIdx++;
-        if (_rowIdx < _rowCount) return true;
+        if (--_remaining >= 0)
+        {
+            _r0 = ref Unsafe.Add(ref _r0, 1);
+            _r1 = ref Unsafe.Add(ref _r1, 1);
+            _r2 = ref Unsafe.Add(ref _r2, 1);
+            _r3 = ref Unsafe.Add(ref _r3, 1);
+            _r4 = ref Unsafe.Add(ref _r4, 1);
+            _r5 = ref Unsafe.Add(ref _r5, 1);
+            _r6 = ref Unsafe.Add(ref _r6, 1);
+            return true;
+        }
 
         while (true)
         {
@@ -693,16 +730,16 @@ public ref struct SpanEach<T1, T2, T3, T4, T5, T6, T7>
             var chunk = _chunks[_chunkIdx];
             if (chunk.Count == 0) continue;
 
-            _rowIdx = 0;
             _rowCount = chunk.Count;
+            _remaining = _rowCount - 1;
             _entities = chunk.GetEntities();
-            _s0 = chunk.GetComponentSpan<T1>(Component<T1>.ComponentType);
-            _s1 = chunk.GetComponentSpan<T2>(Component<T2>.ComponentType);
-            _s2 = chunk.GetComponentSpan<T3>(Component<T3>.ComponentType);
-            _s3 = chunk.GetComponentSpan<T4>(Component<T4>.ComponentType);
-            _s4 = chunk.GetComponentSpan<T5>(Component<T5>.ComponentType);
-            _s5 = chunk.GetComponentSpan<T6>(Component<T6>.ComponentType);
-            _s6 = chunk.GetComponentSpan<T7>(Component<T7>.ComponentType);
+            _r0 = ref chunk.GetComponentRef<T1>(Component<T1>.ComponentType);
+            _r1 = ref chunk.GetComponentRef<T2>(Component<T2>.ComponentType);
+            _r2 = ref chunk.GetComponentRef<T3>(Component<T3>.ComponentType);
+            _r3 = ref chunk.GetComponentRef<T4>(Component<T4>.ComponentType);
+            _r4 = ref chunk.GetComponentRef<T5>(Component<T5>.ComponentType);
+            _r5 = ref chunk.GetComponentRef<T6>(Component<T6>.ComponentType);
+            _r6 = ref chunk.GetComponentRef<T7>(Component<T7>.ComponentType);
             return true;
         }
     }
@@ -711,35 +748,35 @@ public ref struct SpanEach<T1, T2, T3, T4, T5, T6, T7>
     public SpanEach<T1, T2, T3, T4, T5, T6, T7> Current => this;
 
     /// <summary>The current entity.</summary>
-    public Entity Entity => _entities[_rowIdx];
+    public Entity Entity => _entities[_rowCount - 1 - _remaining];
 
     /// <summary>Gets the first component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T1 Get0() => ref _s0[_rowIdx];
+    public ref T1 Get0() => ref _r0;
 
     /// <summary>Gets the second component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T2 Get1() => ref _s1[_rowIdx];
+    public ref T2 Get1() => ref _r1;
 
     /// <summary>Gets the third component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T3 Get2() => ref _s2[_rowIdx];
+    public ref T3 Get2() => ref _r2;
 
     /// <summary>Gets the fourth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T4 Get3() => ref _s3[_rowIdx];
+    public ref T4 Get3() => ref _r3;
 
     /// <summary>Gets the fifth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T5 Get4() => ref _s4[_rowIdx];
+    public ref T5 Get4() => ref _r4;
 
     /// <summary>Gets the sixth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T6 Get5() => ref _s5[_rowIdx];
+    public ref T6 Get5() => ref _r5;
 
     /// <summary>Gets the seventh component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T7 Get6() => ref _s6[_rowIdx];
+    public ref T7 Get6() => ref _r6;
 }
 
 /// <summary>
@@ -757,34 +794,34 @@ public ref struct SpanEach<T1, T2, T3, T4, T5, T6, T7, T8>
 {
     private ReadOnlySpan<Chunk> _chunks;
     private int _chunkIdx;
-    private int _rowIdx;
     private int _rowCount;
+    private int _remaining;
     private ReadOnlySpan<Entity> _entities;
-    private Span<T1> _s0;
-    private Span<T2> _s1;
-    private Span<T3> _s2;
-    private Span<T4> _s3;
-    private Span<T5> _s4;
-    private Span<T6> _s5;
-    private Span<T7> _s6;
-    private Span<T8> _s7;
+    private ref T1 _r0;
+    private ref T2 _r1;
+    private ref T3 _r2;
+    private ref T4 _r3;
+    private ref T5 _r4;
+    private ref T6 _r5;
+    private ref T7 _r6;
+    private ref T8 _r7;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal SpanEach(ReadOnlySpan<Chunk> chunks)
     {
         _chunks = chunks;
         _chunkIdx = -1;
-        _rowIdx = -1;
         _rowCount = 0;
+        _remaining = 0;
         _entities = default;
-        _s0 = default;
-        _s1 = default;
-        _s2 = default;
-        _s3 = default;
-        _s4 = default;
-        _s5 = default;
-        _s6 = default;
-        _s7 = default;
+        _r0 = ref Unsafe.NullRef<T1>();
+        _r1 = ref Unsafe.NullRef<T2>();
+        _r2 = ref Unsafe.NullRef<T3>();
+        _r3 = ref Unsafe.NullRef<T4>();
+        _r4 = ref Unsafe.NullRef<T5>();
+        _r5 = ref Unsafe.NullRef<T6>();
+        _r6 = ref Unsafe.NullRef<T7>();
+        _r7 = ref Unsafe.NullRef<T8>();
     }
 
     /// <summary>Returns this instance as the enumerator.</summary>
@@ -795,8 +832,18 @@ public ref struct SpanEach<T1, T2, T3, T4, T5, T6, T7, T8>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MoveNext()
     {
-        _rowIdx++;
-        if (_rowIdx < _rowCount) return true;
+        if (--_remaining >= 0)
+        {
+            _r0 = ref Unsafe.Add(ref _r0, 1);
+            _r1 = ref Unsafe.Add(ref _r1, 1);
+            _r2 = ref Unsafe.Add(ref _r2, 1);
+            _r3 = ref Unsafe.Add(ref _r3, 1);
+            _r4 = ref Unsafe.Add(ref _r4, 1);
+            _r5 = ref Unsafe.Add(ref _r5, 1);
+            _r6 = ref Unsafe.Add(ref _r6, 1);
+            _r7 = ref Unsafe.Add(ref _r7, 1);
+            return true;
+        }
 
         while (true)
         {
@@ -806,17 +853,17 @@ public ref struct SpanEach<T1, T2, T3, T4, T5, T6, T7, T8>
             var chunk = _chunks[_chunkIdx];
             if (chunk.Count == 0) continue;
 
-            _rowIdx = 0;
             _rowCount = chunk.Count;
+            _remaining = _rowCount - 1;
             _entities = chunk.GetEntities();
-            _s0 = chunk.GetComponentSpan<T1>(Component<T1>.ComponentType);
-            _s1 = chunk.GetComponentSpan<T2>(Component<T2>.ComponentType);
-            _s2 = chunk.GetComponentSpan<T3>(Component<T3>.ComponentType);
-            _s3 = chunk.GetComponentSpan<T4>(Component<T4>.ComponentType);
-            _s4 = chunk.GetComponentSpan<T5>(Component<T5>.ComponentType);
-            _s5 = chunk.GetComponentSpan<T6>(Component<T6>.ComponentType);
-            _s6 = chunk.GetComponentSpan<T7>(Component<T7>.ComponentType);
-            _s7 = chunk.GetComponentSpan<T8>(Component<T8>.ComponentType);
+            _r0 = ref chunk.GetComponentRef<T1>(Component<T1>.ComponentType);
+            _r1 = ref chunk.GetComponentRef<T2>(Component<T2>.ComponentType);
+            _r2 = ref chunk.GetComponentRef<T3>(Component<T3>.ComponentType);
+            _r3 = ref chunk.GetComponentRef<T4>(Component<T4>.ComponentType);
+            _r4 = ref chunk.GetComponentRef<T5>(Component<T5>.ComponentType);
+            _r5 = ref chunk.GetComponentRef<T6>(Component<T6>.ComponentType);
+            _r6 = ref chunk.GetComponentRef<T7>(Component<T7>.ComponentType);
+            _r7 = ref chunk.GetComponentRef<T8>(Component<T8>.ComponentType);
             return true;
         }
     }
@@ -825,37 +872,37 @@ public ref struct SpanEach<T1, T2, T3, T4, T5, T6, T7, T8>
     public SpanEach<T1, T2, T3, T4, T5, T6, T7, T8> Current => this;
 
     /// <summary>The current entity.</summary>
-    public Entity Entity => _entities[_rowIdx];
+    public Entity Entity => _entities[_rowCount - 1 - _remaining];
 
     /// <summary>Gets the first component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T1 Get0() => ref _s0[_rowIdx];
+    public ref T1 Get0() => ref _r0;
 
     /// <summary>Gets the second component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T2 Get1() => ref _s1[_rowIdx];
+    public ref T2 Get1() => ref _r1;
 
     /// <summary>Gets the third component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T3 Get2() => ref _s2[_rowIdx];
+    public ref T3 Get2() => ref _r2;
 
     /// <summary>Gets the fourth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T4 Get3() => ref _s3[_rowIdx];
+    public ref T4 Get3() => ref _r3;
 
     /// <summary>Gets the fifth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T5 Get4() => ref _s4[_rowIdx];
+    public ref T5 Get4() => ref _r4;
 
     /// <summary>Gets the sixth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T6 Get5() => ref _s5[_rowIdx];
+    public ref T6 Get5() => ref _r5;
 
     /// <summary>Gets the seventh component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T7 Get6() => ref _s6[_rowIdx];
+    public ref T7 Get6() => ref _r6;
 
     /// <summary>Gets the eighth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T8 Get7() => ref _s7[_rowIdx];
+    public ref T8 Get7() => ref _r7;
 }
