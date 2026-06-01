@@ -61,3 +61,5 @@ public record struct Equipment(int V0, int V1, int V2, int V3, int V4, int V5);
 public record struct DamageEvent { public int Amount; }
 
 public record struct Debuff { public float Timer; }
+public record struct BossTag;
+public record struct Lifetime { public float Value; }

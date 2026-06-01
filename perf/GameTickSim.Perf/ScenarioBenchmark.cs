@@ -25,6 +25,7 @@ public static class ScenarioBenchmark
             ("J-EntityCreationBurst", RunEntityCreationBurst),
             ("D-MassCreateDestroy", RunMassCreateDestroy),
             ("E-MixedFullTick", RunMixedFullTick),
+            ("K-BulletHell", RunBulletHell),
         };
 
         Console.WriteLine("=== Isolated Scenario Benchmark ===");
@@ -478,6 +479,404 @@ public static class ScenarioBenchmark
         }
     }
 
+    static void RunBulletHell()
+    {
+        const int ticksToRun = 1000;
+        const int enemyBulletsPerTick = 500;
+        const int playerBulletsPerTick = 200;
+        const int particlesPerTick = 100;
+        const float screenBound = 1000f;
+        const int enrageInterval = 100;
+        const float playerX = 0f, playerZ = 0f;
+        const float bossX = 500f, bossZ = 500f;
+        const float hitRadiusSqPlayer = 100f;
+        const float hitRadiusSqBoss = 900f;
+        const float bulletDirX = 0.7071f, bulletDirZ = 0.7071f;
+
+        // MiniArch
+        {
+            using var w = new MiniWorld();
+            var posType = Component<Position>.ComponentType;
+            var velType = Component<Velocity>.ComponentType;
+            var dmgType = Component<Damage>.ComponentType;
+            var ltType = Component<Lifetime>.ComponentType;
+
+            var player = w.Create(new PlayerTag(), new Position(), new Velocity(), new Health { Current = 10000, Max = 10000 }, new Speed(0));
+            var boss = w.Create(new BossTag(), new Position { X = bossX, Z = bossZ }, new Velocity(), new Health { Current = 100000, Max = 100000 }, new AiState());
+
+            var moveDesc = new MiniArch.QueryDescription().With<Position>().With<Velocity>();
+            var ebDesc = new MiniArch.QueryDescription().With<Position>().With<Damage>();
+            var pbDesc = new MiniArch.QueryDescription().With<Position>().With<ProjectileTag>();
+            var ptDesc = new MiniArch.QueryDescription().With<Position>().With<Lifetime>();
+            var scratch = new MiniArch.Entity[8192];
+            var rng = new Random(42);
+            var tickCount = 0;
+
+            int Tick()
+            {
+                tickCount++;
+                // 1. MoveAll
+                {
+                    var q = w.Query(moveDesc).Advanced;
+                    var chunks = q.GetChunkSpan();
+                    for (var i = 0; i < chunks.Length; i++)
+                    {
+                        var c = chunks[i];
+                        var pos = c.GetComponentSpan<Position>(posType);
+                        var vel = c.GetComponentSpan<Velocity>(velType);
+                        for (var row = 0; row < c.Count; row++)
+                        {
+                            pos[row].X += vel[row].X;
+                            pos[row].Y += vel[row].Y;
+                            pos[row].Z += vel[row].Z;
+                        }
+                    }
+                }
+                // 2. Spawn enemy bullets from boss
+                for (var i = 0; i < enemyBulletsPerTick; i++)
+                {
+                    var angle = rng.NextSingle() * 6.2832f;
+                    var speed = 30f + rng.NextSingle() * 20f;
+                    w.Create(
+                        new Position { X = bossX, Z = bossZ },
+                        new Velocity { X = MathF.Cos(angle) * speed, Z = MathF.Sin(angle) * speed },
+                        new Damage { Base = 1 + (i & 3) });
+                }
+                // 3. Spawn player bullets toward boss
+                for (var i = 0; i < playerBulletsPerTick; i++)
+                {
+                    var spread = (rng.NextSingle() - 0.5f) * 0.6f;
+                    w.Create(
+                        new ProjectileTag(),
+                        new Position(),
+                        new Velocity { X = (bulletDirX + spread) * 40f, Z = (bulletDirZ + spread) * 40f });
+                }
+                // 4. Collide + cleanup enemy bullets
+                {
+                    var q = w.Query(ebDesc).Advanced;
+                    var chunks = q.GetChunkSpan();
+                    var d = 0;
+                    for (var i = 0; i < chunks.Length; i++)
+                    {
+                        var c = chunks[i];
+                        var pos = c.GetComponentSpan<Position>(posType);
+                        for (var row = 0; row < c.Count; row++)
+                        {
+                            var dx = pos[row].X - playerX;
+                            var dz = pos[row].Z - playerZ;
+                            if (dx * dx + dz * dz < hitRadiusSqPlayer ||
+                                Math.Abs(pos[row].X) > screenBound || Math.Abs(pos[row].Z) > screenBound)
+                            {
+                                if (d < scratch.Length) scratch[d++] = c.GetEntity(row);
+                            }
+                        }
+                    }
+                    for (var i = 0; i < d; i++) w.Destroy(scratch[i]);
+                }
+                // 5. Collide + cleanup player bullets
+                {
+                    var q = w.Query(pbDesc).Advanced;
+                    var chunks = q.GetChunkSpan();
+                    var d = 0;
+                    for (var i = 0; i < chunks.Length; i++)
+                    {
+                        var c = chunks[i];
+                        var pos = c.GetComponentSpan<Position>(posType);
+                        for (var row = 0; row < c.Count; row++)
+                        {
+                            var dx = pos[row].X - bossX;
+                            var dz = pos[row].Z - bossZ;
+                            if (dx * dx + dz * dz < hitRadiusSqBoss ||
+                                Math.Abs(pos[row].X) > screenBound || Math.Abs(pos[row].Z) > screenBound)
+                            {
+                                if (d < scratch.Length) scratch[d++] = c.GetEntity(row);
+                            }
+                        }
+                    }
+                    for (var i = 0; i < d; i++) w.Destroy(scratch[i]);
+                }
+                // 6. Process particles
+                {
+                    var q = w.Query(ptDesc).Advanced;
+                    var chunks = q.GetChunkSpan();
+                    var d = 0;
+                    for (var i = 0; i < chunks.Length; i++)
+                    {
+                        var c = chunks[i];
+                        var lt = c.GetComponentSpan<Lifetime>(ltType);
+                        for (var row = 0; row < c.Count; row++)
+                        {
+                            lt[row].Value -= 1f;
+                            if (lt[row].Value <= 0 && d < scratch.Length)
+                                scratch[d++] = c.GetEntity(row);
+                        }
+                    }
+                    for (var i = 0; i < d; i++) w.Destroy(scratch[i]);
+                }
+                // 7. Spawn particles
+                for (var i = 0; i < particlesPerTick; i++)
+                {
+                    var angle = rng.NextSingle() * 6.2832f;
+                    w.Create(
+                        new Position { X = rng.NextSingle() * 10 - 5, Z = rng.NextSingle() * 10 - 5 },
+                        new Velocity { X = MathF.Cos(angle) * 5, Z = MathF.Sin(angle) * 5 },
+                        new Lifetime { Value = 20f });
+                }
+                // 8. BossEnrage
+                if (tickCount % enrageInterval == 0)
+                    w.Add(boss, new Debuff { Timer = 5f });
+
+                return tickCount;
+            }
+
+            _results.Add(Measure("MiniArch", Tick, ticksToRun));
+        }
+
+        // DefaultEcs
+        {
+            using var w = new DefaultEcs.World();
+            var player = w.CreateEntity();
+            player.Set(new PlayerTag());
+            player.Set(new Position());
+            player.Set(new Velocity());
+            player.Set(new Health { Current = 10000, Max = 10000 });
+
+            var boss = w.CreateEntity();
+            boss.Set(new BossTag());
+            boss.Set(new Position { X = bossX, Z = bossZ });
+            boss.Set(new Velocity());
+            boss.Set(new Health { Current = 100000, Max = 100000 });
+            boss.Set(new AiState());
+
+            var moveSet = w.GetEntities().With<Position>().With<Velocity>().AsSet();
+            var ebSet = w.GetEntities().With<Position>().With<Damage>().AsSet();
+            var pbSet = w.GetEntities().With<Position>().With<ProjectileTag>().AsSet();
+            var ptSet = w.GetEntities().With<Position>().With<Lifetime>().AsSet();
+            var scratch = new DefaultEcs.Entity[8192];
+            var rng = new Random(42);
+            var tickCount = 0;
+
+            int Tick()
+            {
+                tickCount++;
+                // 1. MoveAll
+                {
+                    var entities = moveSet.GetEntities();
+                    for (var i = 0; i < entities.Length; i++)
+                    {
+                        ref var p = ref entities[i].Get<Position>();
+                        ref var v = ref entities[i].Get<Velocity>();
+                        p.X += v.X; p.Y += v.Y; p.Z += v.Z;
+                    }
+                }
+                // 2. Spawn enemy bullets
+                for (var i = 0; i < enemyBulletsPerTick; i++)
+                {
+                    var angle = rng.NextSingle() * 6.2832f;
+                    var speed = 30f + rng.NextSingle() * 20f;
+                    var e = w.CreateEntity();
+                    e.Set(new Position { X = bossX, Z = bossZ });
+                    e.Set(new Velocity { X = MathF.Cos(angle) * speed, Z = MathF.Sin(angle) * speed });
+                    e.Set(new Damage { Base = 1 + (i & 3) });
+                }
+                // 3. Spawn player bullets
+                for (var i = 0; i < playerBulletsPerTick; i++)
+                {
+                    var spread = (rng.NextSingle() - 0.5f) * 0.6f;
+                    var e = w.CreateEntity();
+                    e.Set(new ProjectileTag());
+                    e.Set(new Position());
+                    e.Set(new Velocity { X = (bulletDirX + spread) * 40f, Z = (bulletDirZ + spread) * 40f });
+                }
+                // 4. Collide + cleanup enemy bullets
+                {
+                    var entities = ebSet.GetEntities();
+                    var d = 0;
+                    for (var i = 0; i < entities.Length; i++)
+                    {
+                        ref var p = ref entities[i].Get<Position>();
+                        var dx = p.X - playerX;
+                        var dz = p.Z - playerZ;
+                        if (dx * dx + dz * dz < hitRadiusSqPlayer ||
+                            Math.Abs(p.X) > screenBound || Math.Abs(p.Z) > screenBound)
+                        {
+                            if (d < scratch.Length) scratch[d++] = entities[i];
+                        }
+                    }
+                    for (var i = 0; i < d; i++) scratch[i].Dispose();
+                }
+                // 5. Collide + cleanup player bullets
+                {
+                    var entities = pbSet.GetEntities();
+                    var d = 0;
+                    for (var i = 0; i < entities.Length; i++)
+                    {
+                        ref var p = ref entities[i].Get<Position>();
+                        var dx = p.X - bossX;
+                        var dz = p.Z - bossZ;
+                        if (dx * dx + dz * dz < hitRadiusSqBoss ||
+                            Math.Abs(p.X) > screenBound || Math.Abs(p.Z) > screenBound)
+                        {
+                            if (d < scratch.Length) scratch[d++] = entities[i];
+                        }
+                    }
+                    for (var i = 0; i < d; i++) scratch[i].Dispose();
+                }
+                // 6. Process particles
+                {
+                    var entities = ptSet.GetEntities();
+                    var d = 0;
+                    for (var i = 0; i < entities.Length; i++)
+                    {
+                        ref var lt = ref entities[i].Get<Lifetime>();
+                        lt.Value -= 1f;
+                        if (lt.Value <= 0 && d < scratch.Length)
+                            scratch[d++] = entities[i];
+                    }
+                    for (var i = 0; i < d; i++) scratch[i].Dispose();
+                }
+                // 7. Spawn particles
+                for (var i = 0; i < particlesPerTick; i++)
+                {
+                    var angle = rng.NextSingle() * 6.2832f;
+                    var e = w.CreateEntity();
+                    e.Set(new Position { X = rng.NextSingle() * 10 - 5, Z = rng.NextSingle() * 10 - 5 });
+                    e.Set(new Velocity { X = MathF.Cos(angle) * 5, Z = MathF.Sin(angle) * 5 });
+                    e.Set(new Lifetime { Value = 20f });
+                }
+                // 8. BossEnrage
+                if (tickCount % enrageInterval == 0)
+                    boss.Set(new Debuff { Timer = 5f });
+
+                return tickCount;
+            }
+
+            _results.Add(Measure("DefaultEcs", Tick, ticksToRun));
+        }
+
+        // Arch
+        {
+            using var w = Arch.Core.World.Create();
+            var player = w.Create(new PlayerTag(), new Position(), new Velocity(), new Health { Current = 10000, Max = 10000 }, new Speed(0));
+            var boss = w.Create(new BossTag(), new Position { X = bossX, Z = bossZ }, new Velocity(), new Health { Current = 100000, Max = 100000 }, new AiState());
+
+            var moveDesc = new Arch.Core.QueryDescription().WithAll<Position, Velocity>();
+            var ebDesc = new Arch.Core.QueryDescription().WithAll<Position, Damage>();
+            var pbDesc = new Arch.Core.QueryDescription().WithAll<Position, ProjectileTag>();
+            var ptDesc = new Arch.Core.QueryDescription().WithAll<Position, Lifetime>();
+            var scratch = new Arch.Core.Entity[8192];
+            var rng = new Random(42);
+            var tickCount = 0;
+
+            int Tick()
+            {
+                tickCount++;
+                // 1. MoveAll
+                {
+                    foreach (var chunk in w.Query(in moveDesc))
+                    {
+                        var pos = chunk.GetSpan<Position>();
+                        var vel = chunk.GetSpan<Velocity>();
+                        for (var row = 0; row < chunk.Count; row++)
+                        {
+                            pos[row].X += vel[row].X;
+                            pos[row].Y += vel[row].Y;
+                            pos[row].Z += vel[row].Z;
+                        }
+                    }
+                }
+                // 2. Spawn enemy bullets
+                for (var i = 0; i < enemyBulletsPerTick; i++)
+                {
+                    var angle = rng.NextSingle() * 6.2832f;
+                    var speed = 30f + rng.NextSingle() * 20f;
+                    w.Create(
+                        new Position { X = bossX, Z = bossZ },
+                        new Velocity { X = MathF.Cos(angle) * speed, Z = MathF.Sin(angle) * speed },
+                        new Damage { Base = 1 + (i & 3) });
+                }
+                // 3. Spawn player bullets
+                for (var i = 0; i < playerBulletsPerTick; i++)
+                {
+                    var spread = (rng.NextSingle() - 0.5f) * 0.6f;
+                    w.Create(
+                        new ProjectileTag(),
+                        new Position(),
+                        new Velocity { X = (bulletDirX + spread) * 40f, Z = (bulletDirZ + spread) * 40f });
+                }
+                // 4. Collide + cleanup enemy bullets
+                {
+                    var d = 0;
+                    foreach (var chunk in w.Query(in ebDesc))
+                    {
+                        var pos = chunk.GetSpan<Position>();
+                        for (var row = 0; row < chunk.Count; row++)
+                        {
+                            var dx = pos[row].X - playerX;
+                            var dz = pos[row].Z - playerZ;
+                            if (dx * dx + dz * dz < hitRadiusSqPlayer ||
+                                Math.Abs(pos[row].X) > screenBound || Math.Abs(pos[row].Z) > screenBound)
+                            {
+                                if (d < scratch.Length) scratch[d++] = chunk.Entity(row);
+                            }
+                        }
+                    }
+                    for (var i = 0; i < d; i++) w.Destroy(scratch[i]);
+                }
+                // 5. Collide + cleanup player bullets
+                {
+                    var d = 0;
+                    foreach (var chunk in w.Query(in pbDesc))
+                    {
+                        var pos = chunk.GetSpan<Position>();
+                        for (var row = 0; row < chunk.Count; row++)
+                        {
+                            var dx = pos[row].X - bossX;
+                            var dz = pos[row].Z - bossZ;
+                            if (dx * dx + dz * dz < hitRadiusSqBoss ||
+                                Math.Abs(pos[row].X) > screenBound || Math.Abs(pos[row].Z) > screenBound)
+                            {
+                                if (d < scratch.Length) scratch[d++] = chunk.Entity(row);
+                            }
+                        }
+                    }
+                    for (var i = 0; i < d; i++) w.Destroy(scratch[i]);
+                }
+                // 6. Process particles
+                {
+                    var d = 0;
+                    foreach (var chunk in w.Query(in ptDesc))
+                    {
+                        var lt = chunk.GetSpan<Lifetime>();
+                        for (var row = 0; row < chunk.Count; row++)
+                        {
+                            lt[row].Value -= 1f;
+                            if (lt[row].Value <= 0 && d < scratch.Length)
+                                scratch[d++] = chunk.Entity(row);
+                        }
+                    }
+                    for (var i = 0; i < d; i++) w.Destroy(scratch[i]);
+                }
+                // 7. Spawn particles
+                for (var i = 0; i < particlesPerTick; i++)
+                {
+                    var angle = rng.NextSingle() * 6.2832f;
+                    w.Create(
+                        new Position { X = rng.NextSingle() * 10 - 5, Z = rng.NextSingle() * 10 - 5 },
+                        new Velocity { X = MathF.Cos(angle) * 5, Z = MathF.Sin(angle) * 5 },
+                        new Lifetime { Value = 20f });
+                }
+                // 8. BossEnrage
+                if (tickCount % enrageInterval == 0)
+                    w.Add(boss, new Debuff { Timer = 5f });
+
+                return tickCount;
+            }
+
+            _results.Add(Measure("Arch", Tick, ticksToRun));
+        }
+    }
+
     static ScenarioResult Measure(string engine, Func<int> tickFunc, int ticksToRun)
     {
         // Warmup
@@ -528,7 +927,7 @@ public static class ScenarioBenchmark
             "F-MultiArchetypeIteration", "G1-FragBaseline", "G2-FragAftermath",
             "H-MultiComponentJoin", "I-SparseQuery",
             "C-StructuralAddRemove", "J-EntityCreationBurst",
-            "D-MassCreateDestroy", "E-MixedFullTick"
+            "D-MassCreateDestroy", "E-MixedFullTick", "K-BulletHell"
         };
         var engines = new[] { "MiniArch", "DefaultEcs", "Arch" };
         for (var s = 0; s < scenarioNames.Length; s++)
