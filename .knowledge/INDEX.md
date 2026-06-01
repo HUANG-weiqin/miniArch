@@ -52,5 +52,6 @@
 - 想理解"怎么读这个模块"，先看各模块页里的 `入口`。
 - 想从整体上理解 miniArch 的运行机制、已知问题和优化方向，先看 `kb-architecture-review.md`。
 - 想理解 Query 失效机制和 per-archetype generation 优化，先看 `kb-query-invalidation.md`。
+- 想理解 span-based chunk 迭代器（EachSpan），见 `kb-user-api-layering.md` 的数据流部分。
 - 想排查行为偏差，先看各模块页里的 `坑点` 和对应测试文件。
 - 新增知识页时，先把它挂到这里，再写模块正文。

@@ -1,3 +1,5 @@
+using System;
+using MiniArch.Core;
 using CoreCommandBuffer = MiniArch.Core.ICommandRecorder;
 
 namespace Hero.Ecs;
@@ -28,19 +30,18 @@ public sealed class ValidationSystem : ISystem
     public void Execute(in FrameContext context)
     {
         CoreCommandBuffer commands = context.Commands;
+        FrameView frame = context.Frame;
 
-        AddValidated(commands, context.Frame.Each(RequestQueryDescription));
-        AddValidated(commands, context.Frame.Each(SpawnQueryDescription));
-        AddValidated(commands, context.Frame.Each(EffectQueryDescription));
+        AddValidated(commands, frame, RequestQueryDescription);
+        AddValidated(commands, frame, SpawnQueryDescription);
+        AddValidated(commands, frame, EffectQueryDescription);
     }
 
-    private static void AddValidated(CoreCommandBuffer commands, MiniArch.Query entities)
+    private static void AddValidated(CoreCommandBuffer commands, FrameView frame, MiniArch.QueryDescription query)
     {
-        foreach (MiniArch.Entity entity in entities)
+        foreach (MiniArch.Entity entity in frame.ChunkQuery(query).EachSpan())
         {
             commands.Add(entity, new Validated());
         }
     }
 }
-
-

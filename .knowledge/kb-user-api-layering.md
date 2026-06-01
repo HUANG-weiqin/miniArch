@@ -2,7 +2,7 @@
 title: User API Layering
 module: MiniArch
 description: Single-source public API around MiniArch.World/Entity/QueryDescription, description-based foreach query, and the remaining MiniArch.Core advanced boundary
-updated: 2026-05-31
+updated: 2026-06-01
 ---
 # User API Layering
 
@@ -31,6 +31,7 @@ updated: 2026-05-31
   - `src/MiniArch/Core/QueryDescription.cs`：唯一公开 `QueryDescription`
   - `src/MiniArch/Ecs/Query.cs`：默认层 entity-only `foreach` 查询包装
   - `src/MiniArch/Core/Query.cs`：advanced query 对象与 `Query.Create(...)`
+  - `src/MiniArch/Core/SpanQueryIterators.cs`：`EachSpan<T1..T8>()` 零分配 ref struct 迭代器
 - 数据流 / 控制流：
   - 普通用户从 `MiniArch.World` 进入
   - `World.Query(in QueryDescription)` 返回默认层 entity-only `MiniArch.Query`
@@ -39,6 +40,7 @@ updated: 2026-05-31
   - advanced 用户也可以直接走 `MiniArch.Core.Query.Create(world, in description)`
   - `TryGet<T>` 走 `World` 上的 direct read 路径
   - `CommandBuffer.Clone(Entity)` 在录制时快照 source 当前 world 状态；clone 返回的 deferred entity 后续可按普通 created entity 执行 `Set/Remove/Destroy`
+  - `MiniArch.Core.Query` 提供 `EachSpan()` / `EachSpan<T1,...T8>()` 零分配 span 迭代器；用法接近 entity 枚举但底层走 chunk 连续内存。T9+ 或可选组件场景退回原始 chunk API
 
 
 ## 决策

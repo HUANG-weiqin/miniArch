@@ -16,6 +16,9 @@ public sealed class ModifierApplySystem : ISystem
         .With<ModifierSlot>()
         .Without<Rejected>();
 
+    private static readonly MiniArch.Core.ComponentType SetModifierType = MiniArch.Core.Component<SetModifier>.ComponentType;
+    private static readonly MiniArch.Core.ComponentType DeltaModifierType = MiniArch.Core.Component<DeltaModifier>.ComponentType;
+
     public ModifierApplySystem(IReadOnlyDictionary<SlotKey, IIntSlotPort> ports)
     {
         _ports = ports ?? throw new ArgumentNullException(nameof(ports));
@@ -29,36 +32,54 @@ public sealed class ModifierApplySystem : ISystem
 
         buckets.Clear();
 
-        foreach (MiniArch.Entity entity in frame.Each(RequestQueryDescription))
+        MiniArch.Core.Query coreQuery = frame.ChunkQuery(RequestQueryDescription);
+
+        foreach (MiniArch.Core.Chunk chunk in coreQuery.Chunks)
         {
-            RequestTarget requestTarget = frame.Get<RequestTarget>(entity);
-            ModifierSlot modifierSlot = frame.Get<ModifierSlot>(entity);
+            ReadOnlySpan<MiniArch.Entity> entities = chunk.GetEntities();
+            ReadOnlySpan<RequestTarget> targets = chunk.GetComponentSpan<RequestTarget>(MiniArch.Core.Component<RequestTarget>.ComponentType);
+            ReadOnlySpan<ModifierSlot> slots = chunk.GetComponentSpan<ModifierSlot>(MiniArch.Core.Component<ModifierSlot>.ComponentType);
 
-            if (!_ports.TryGetValue(modifierSlot.Slot, out IIntSlotPort? port))
+            bool hasSet = chunk.TryGetComponentIndex(SetModifierType, out int setColumn);
+            bool hasDelta = chunk.TryGetComponentIndex(DeltaModifierType, out int deltaColumn);
+
+            ReadOnlySpan<SetModifier> setSpan = hasSet
+                ? chunk.GetComponentSpanAt<SetModifier>(setColumn)
+                : default;
+            ReadOnlySpan<DeltaModifier> deltaSpan = hasDelta
+                ? chunk.GetComponentSpanAt<DeltaModifier>(deltaColumn)
+                : default;
+
+            for (int i = 0; i < entities.Length; i++)
             {
-                throw new InvalidOperationException(
-                    $"No slot port is registered for slot '{modifierSlot.Slot.Value}'.");
+                ModifierSlot modifierSlot = slots[i];
+
+                if (!_ports.TryGetValue(modifierSlot.Slot, out IIntSlotPort? port))
+                {
+                    throw new InvalidOperationException(
+                        $"No slot port is registered for slot '{modifierSlot.Slot.Value}'.");
+                }
+
+                ModifierBucketKey bucketKey = new(targets[i].Target, modifierSlot.Slot);
+                if (!buckets.ContainsKey(bucketKey))
+                {
+                    buckets[bucketKey] = new ModifierBucket(targets[i].Target, port);
+                }
+
+                ref ModifierBucket bucket = ref CollectionsMarshal.GetValueRefOrAddDefault(buckets, bucketKey, out _);
+
+                if (hasSet)
+                {
+                    bucket.AddSet(setSpan[i].Value);
+                }
+
+                if (hasDelta)
+                {
+                    bucket.AddDelta(deltaSpan[i].Value);
+                }
+
+                commands.Destroy(entities[i]);
             }
-
-            ModifierBucketKey bucketKey = new(requestTarget.Target, modifierSlot.Slot);
-            if (!buckets.ContainsKey(bucketKey))
-            {
-                buckets[bucketKey] = new ModifierBucket(requestTarget.Target, port);
-            }
-
-            ref ModifierBucket bucket = ref CollectionsMarshal.GetValueRefOrAddDefault(buckets, bucketKey, out _);
-
-            if (frame.TryGet(entity, out SetModifier setModifier))
-            {
-                bucket.AddSet(setModifier.Value);
-            }
-
-            if (frame.TryGet(entity, out DeltaModifier deltaModifier))
-            {
-                bucket.AddDelta(deltaModifier.Value);
-            }
-
-            commands.Destroy(entity);
         }
 
         foreach (var kvp in buckets)
@@ -111,5 +132,3 @@ public sealed class ModifierApplySystem : ISystem
         public void AddDelta(int value) => TotalDelta += value;
     }
 }
-
-

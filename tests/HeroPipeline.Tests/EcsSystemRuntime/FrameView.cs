@@ -22,6 +22,9 @@ public sealed class FrameView
     public MiniArchQuery Each(MiniArchQueryDescription description) =>
         _world.Query(in description);
 
+    public MiniArch.Core.Query ChunkQuery(MiniArchQueryDescription description) =>
+        MiniArch.Core.Query.Create(_world, in description);
+
     public T Get<T>(MiniArch.Entity entity)
     {
         if (!TryGet(entity, out T component))
