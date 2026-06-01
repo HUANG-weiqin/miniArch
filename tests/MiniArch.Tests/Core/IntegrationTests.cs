@@ -30,7 +30,7 @@ public sealed class IntegrationTests
 
         var chunks = query.Chunks.ToList();
         Assert.Equal(2, query.MatchedArchetypes.Count);
-        Assert.Equal(2, chunks.Count);
+        Assert.Single(chunks);
         Assert.Contains(chunks, chunk => chunk.Count == 1);
 
         var chunk = location.Archetype.GetChunk(location.ChunkIndex);

@@ -105,7 +105,7 @@ public sealed class ThroughputRunnerTests
             Assert.True(summary.BestOpsPerSecond > 0);
             Assert.True(summary.MedianOpsPerSecond > 0);
         });
-        Assert.NotEmpty(report.Comparisons);
+        Assert.NotNull(report.Comparison);
     }
 
     [Fact]
@@ -129,8 +129,8 @@ public sealed class ThroughputRunnerTests
         var comparison = ThroughputComparisonSummary.Create(mini, arch);
 
         Assert.NotNull(comparison);
-        Assert.Equal(110d, comparison.FirstOpsPerSecond);
-        Assert.Equal(90d, comparison.SecondOpsPerSecond);
+        Assert.Equal(110d, comparison.MiniArchAverageOpsPerSecond);
+        Assert.Equal(90d, comparison.ArchAverageOpsPerSecond);
         Assert.InRange(comparison.RelativeDifferencePercent, 22.2d, 22.3d);
     }
 }

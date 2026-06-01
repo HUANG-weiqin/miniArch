@@ -355,7 +355,7 @@ public sealed class TrickyEdgeCaseTests
         foreach (var entity in entities) world.Destroy(entity);
 
         Assert.Equal(0, CountEntities(query));
-        Assert.NotEmpty(query.MatchedChunks);
+        Assert.Empty(query.MatchedChunks);
     }
 
     [Fact]
