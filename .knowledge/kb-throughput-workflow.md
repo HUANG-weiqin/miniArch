@@ -2,7 +2,7 @@
 title: Throughput Workflow
 module: Workspace
 description: Reusable fixed-duration throughput comparison workflow for MiniArch and Arch workloads
-updated: 2026-06-01
+updated: 2026-06-02
 ---
 # Throughput Workflow
 
@@ -45,6 +45,7 @@ updated: 2026-06-01
 
 - `query-with-all-entity`，`EntityCount=100000`，`Duration=5s`，`Repeat=5` 下，`MiniArch` 平均 `31181 ops/s`，`Arch` 平均 `25993 ops/s`，`MiniArch` 领先 `+19.96%`
 - `query-with-all-component-span`，`EntityCount=100000`，`Duration=10s`，`Repeat=5` 下，`MiniArch` 平均 `16783 ops/s`，`Arch` 平均 `17060 ops/s`，`MiniArch` 落后 `-1.62%`
+- `query-with-all-eachspan-wide`，`EntityCount=100000`，`Duration=10s`，`Repeat=1` 下，`MiniArch` 平均 `6650 ops/s`，`Arch` 平均 `5826 ops/s`，`MiniArch` 领先 `+14%`
 - component span 差距已从早期的 `-45.65%` 大幅缩小至 `-1.62%`；当前有效优化是按 matched archetype 外循环 hoist component column index、通过 internal chunk span 避免 `IReadOnlyList<Chunk>` 索引路径，并保留 row loop 的 `Unsafe.Add(ref base, row)` ref arithmetic。
 - 解释 component span 差距时必须先区分测量口径：BDN 历史数据曾显示 MiniArch span 领先，但 fixed-duration throughput 显示落后；这通常说明要先隔离 harness / hot-loop / JIT codegen 差异，而不是直接归因到 query matching。
 - command-buffer 吞吐在所有 workload 上 MiniArch 均大幅领先 Arch（`+52%~+144%`）
@@ -71,6 +72,9 @@ updated: 2026-06-01
   - `benchmarks/MiniArch.Benchmarks/ThroughputRunner.cs`：runner 如何组织 repeat / warmup / compare
   - `ThroughputCaseFactory`：新增 workload 的分发点
   - `BenchmarkWorldFactory.cs`：如何复用已有 world shape
+- 跑自定义吞吐对比（如一次性诊断）：
+  - `perf/Throughput.Perf`：自包含的 Release 控制台项目，可快速添加临时 benchmark 方法而不影响正式 runner
+  - 支持自定义 entityCount、warmup、measurement duration
 - 修 bug，先看：
   - `tests/MiniArch.Tests/Core/ThroughputRunnerTests.cs`：参数解析和汇总契约
 
@@ -99,6 +103,8 @@ updated: 2026-06-01
   - `powershell -ExecutionPolicy Bypass -File scripts\\throughput.ps1`
 - 运行 component span 吞吐对比：
   - `powershell -ExecutionPolicy Bypass -File scripts\\throughput.ps1 -Workload query-with-all-component-span`
+- 运行宽查询（6 组件）EachSpan 吞吐对比：
+  - `dotnet run -c Release --project perf\\Throughput.Perf`
 - 缩短单轮时间做快速 smoke：
   - `powershell -ExecutionPolicy Bypass -File scripts\\throughput.ps1 -DurationSeconds 3 -RepeatCount 3`
 

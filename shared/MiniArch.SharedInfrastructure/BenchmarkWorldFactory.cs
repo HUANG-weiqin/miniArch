@@ -219,6 +219,54 @@ public static partial class BenchmarkWorldFactory
         return entities;
     }
 
+    private static MiniEntity[] PopulateMiniWideQueryWorld(MiniWorld world, int entityCount)
+    {
+        var entities = new MiniEntity[entityCount];
+        for (var i = 0; i < entityCount; i++)
+        {
+            entities[i] = CreateMiniWideEntity(world, i);
+        }
+
+        return entities;
+    }
+
+    private static ArchEntity[] PopulateArchWideQueryWorld(ArchWorld world, int entityCount)
+    {
+        var entities = new ArchEntity[entityCount];
+        for (var i = 0; i < entityCount; i++)
+        {
+            entities[i] = CreateArchWideEntity(world, i);
+        }
+
+        return entities;
+    }
+
+    private static MiniEntity CreateMiniWideEntity(MiniWorld world, int i)
+    {
+        return world.Create(
+            new Position(i, i + 1),
+            new Velocity(i + 2, i + 3),
+            new Health(100 + (i % 50)),
+            new Team(i % 4),
+            new Acceleration(i + 4, i + 5),
+            new Mana(i % 100),
+            new Shield(50 + (i % 10)),
+            new Damage(10 + (i % 5)));
+    }
+
+    private static ArchEntity CreateArchWideEntity(ArchWorld world, int i)
+    {
+        return world.Create(
+            new Position(i, i + 1),
+            new Velocity(i + 2, i + 3),
+            new Health(100 + (i % 50)),
+            new Team(i % 4),
+            new Acceleration(i + 4, i + 5),
+            new Mana(i % 100),
+            new Shield(50 + (i % 10)),
+            new Damage(10 + (i % 5)));
+    }
+
     private static int[] GetComplexQueryArchetypeCounts(int entityCount)
     {
         if (entityCount < 0)
@@ -475,8 +523,69 @@ public sealed class ArchComplexQueryWorldState : IDisposable
     }
 }
 
+public sealed class MiniWideQueryWorldState
+{
+    public MiniWideQueryWorldState(MiniWorld world, MiniEntity[] entities)
+    {
+        World = world;
+        Entities = entities;
+        PositionType = world.Components.GetOrCreate<Position>();
+        VelocityType = world.Components.GetOrCreate<Velocity>();
+        HealthType = world.Components.GetOrCreate<Health>();
+        TeamType = world.Components.GetOrCreate<Team>();
+        AccelerationType = world.Components.GetOrCreate<Acceleration>();
+        ManaType = world.Components.GetOrCreate<Mana>();
+        WideQuery = BenchmarkWorldFactory.BuildMiniWideQuery(world);
+
+        _ = WideQuery.MatchedArchetypes;
+    }
+
+    public MiniWorld World;
+    public MiniEntity[] Entities;
+    public MiniComponentType PositionType;
+    public MiniComponentType VelocityType;
+    public MiniComponentType HealthType;
+    public MiniComponentType TeamType;
+    public MiniComponentType AccelerationType;
+    public MiniComponentType ManaType;
+    public MiniQuery WideQuery;
+}
+
+public sealed class ArchWideQueryWorldState : IDisposable
+{
+    public ArchWideQueryWorldState(ArchWorld world, ArchEntity[] entities)
+    {
+        World = world;
+        Entities = entities;
+        WideDescription = BenchmarkWorldFactory.BuildArchWideDescription();
+    }
+
+    public ArchWorld World;
+    public ArchEntity[] Entities;
+    public ArchQueryDescription WideDescription;
+
+    public void Dispose()
+    {
+        World.Dispose();
+    }
+}
+
 public static partial class BenchmarkWorldFactory
 {
+    public static MiniWideQueryWorldState CreateMiniWideQueryWorld(int entityCount)
+    {
+        var world = new MiniWorld();
+        var entities = PopulateMiniWideQueryWorld(world, entityCount);
+        return new MiniWideQueryWorldState(world, entities);
+    }
+
+    public static ArchWideQueryWorldState CreateArchWideQueryWorld(int entityCount)
+    {
+        var world = ArchWorld.Create();
+        var entities = PopulateArchWideQueryWorld(world, entityCount);
+        return new ArchWideQueryWorldState(world, entities);
+    }
+
     internal static MiniQuery BuildMiniWithAllQuery(MiniWorld world)
     {
         var description = new MiniQueryDescription()
@@ -486,6 +595,25 @@ public static partial class BenchmarkWorldFactory
             .With<Team>();
 
         return MiniQuery.Create(world, in description);
+    }
+
+    internal static MiniQuery BuildMiniWideQuery(MiniWorld world)
+    {
+        var description = new MiniQueryDescription()
+            .With<Position>()
+            .With<Velocity>()
+            .With<Health>()
+            .With<Team>()
+            .With<Acceleration>()
+            .With<Mana>();
+
+        return MiniQuery.Create(world, in description);
+    }
+
+    internal static ArchQueryDescription BuildArchWideDescription()
+    {
+        return new ArchQueryDescription()
+            .WithAll<Position, Velocity, Health, Team, Acceleration, Mana>();
     }
 
     internal static MiniQuery BuildMiniWithAllWithoutQuery(MiniWorld world)

@@ -46,6 +46,42 @@ public sealed class ThroughputRunnerTests
         Assert.Equal(7, options.RepeatCount);
     }
 
+    [Theory]
+    [InlineData(ThroughputWorkload.QueryWithAllComponentSpanWide)]
+    [InlineData(ThroughputWorkload.QueryWithAllEachSpanWide)]
+    public void Run_wide_workload_executes_without_error(ThroughputWorkload workload)
+    {
+        var options = new ThroughputOptions(
+            workload,
+            ThroughputEngine.Both,
+            EntityCount: 500,
+            Duration: TimeSpan.FromMilliseconds(100),
+            WarmupIterations: 1,
+            RepeatCount: 1);
+
+        var report = ThroughputRunner.Run(options, TextWriter.Null, CancellationToken.None);
+
+        Assert.Equal(2, report.EngineSummaries.Count);
+        Assert.All(report.EngineSummaries, summary =>
+        {
+            Assert.Single(summary.Runs);
+            Assert.True(summary.AverageOpsPerSecond > 0);
+        });
+        Assert.NotNull(report.Comparison);
+    }
+
+    [Fact]
+    public void TryParse_accepts_wide_workload_names()
+    {
+        Assert.True(ThroughputOptions.TryParse(
+            ["--workload", "query-with-all-component-span-wide"], out var opts1, out _));
+        Assert.Equal(ThroughputWorkload.QueryWithAllComponentSpanWide, opts1.Workload);
+
+        Assert.True(ThroughputOptions.TryParse(
+            ["--workload", "query-with-all-eachspan-wide"], out var opts2, out _));
+        Assert.Equal(ThroughputWorkload.QueryWithAllEachSpanWide, opts2.Workload);
+    }
+
     [Fact]
     public void Run_executes_workload_for_each_requested_engine()
     {

@@ -37,6 +37,7 @@
 - `MiniArch.Core ArchitectureReview` -> `kb-architecture-review.md`
 - `MiniArch.Core Query` -> `kb-query-invalidation.md`
 - `MiniArch.Benchmarks Comparison` -> `kb-ecs-comparison.md`
+- `perf/Throughput.Perf` -> `kb-throughput-workflow.md`
 
 ## 快速入口
 

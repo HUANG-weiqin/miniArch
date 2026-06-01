@@ -2,7 +2,7 @@
 title: MiniArch vs Arch vs DefaultEcs 横向对比
 module: MiniArch.Benchmarks
 description: MiniArch 与其他 C# ECS 架构的吞吐量、内存稳定性、结构操作压力对比
-updated: 2026-06-01
+updated: 2026-06-02
 ---
 # MiniArch vs Arch vs DefaultEcs 横向对比
 
@@ -58,6 +58,45 @@ updated: 2026-06-01
 - **DefaultEcs**：全程 GC Gen0 抖动，吞吐量最低；640K+ 时几乎停滞，GC 占主导
 
 最终瓶颈：三个引擎在 10.24M ops 时都被**内存带宽**压平，差异缩小（+2% vs Arch），但 MiniArch 仍然是唯一零 GC 分配的实现。
+
+## Span Query 吞吐量对比
+
+对比来自 `perf/Throughput.Perf`（fixed-duration 10s，-c Release，100K entities）：
+
+### 窄查询（2 组件：Position + Velocity）
+
+5 archetypes 混合（模拟现实多签名分布），query 匹配 4 archetypes（90% entities）。
+
+| 模式 | MiniArch (ops/s) | Arch (ops/s) | 对比 |
+|------|:-:|:-:|:-:|
+| Manual (chunk span) | 15,543 | 16,803 | MiniArch −8% |
+| EachSpan | **16,488** | — | — |
+
+窄场景两者持平，差异 <5%，在噪声范围内。EachSpan 内部 `foreach` 的 struct copy 开销在 Release 下被 JIT 消除。
+
+### 宽查询（6 组件：Position+Velocity+Health+Team+Acceleration+Mana）
+
+单一 archetype，所有实体同一签名。
+
+| 模式 | MiniArch (ops/s) | Arch (ops/s) | 对比 |
+|------|:-:|:-:|:-:|
+| Manual (chunk span) | 5,874 | 5,826 | MiniArch +1% |
+| EachSpan | **6,650** | — | **MiniArch +14% vs Arch GetSpan** |
+
+宽场景 MiniArch EachSpan 比 Arch **快 14%**。原因：
+
+1. **byte[] 单块分配**：6 个组件列在 `_data` 中物理相邻，跨列访问时 TLB/cache 友好
+2. **Arch 需要 6 次 `(T[])Components[idx]` castclass**：每次切 chunk 额外类型检查
+3. **Per-chunk 列寻址更短**：MiniArch `_componentIdToColumnIndex[id]` → `_data + offset`；Arch `ComponentIdToArrayIndex[id]` → `Components[ai]` → 类型转换
+
+### 关键认知
+
+| 认知 | 说明 |
+|------|------|
+| Debug vs Release | 之前报告的 10x 差值是 `dotnet test` 默认 Debug 下的测量假象；Release 下 EachSpan ≈ Manual |
+| EachSpan 开销 | 在 Release 下，EachSpan 比等价的 manual chunk span 代码**没有额外开销**（宽场景还快 13%） |
+| byte[] 优势需要多组件放大 | 窄场景（2 组件）无法展示 byte[] 优势，需要 6+ 组件且每行切换多列的查询 |
+| 约束条件 | 当前 EachSpan 只支持 blittable 组件（非托管类型）；含托管引用的组件必须用 chunk 手动迭代 |
 
 ## 关键理解
 

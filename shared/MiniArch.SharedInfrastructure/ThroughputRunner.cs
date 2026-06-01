@@ -22,6 +22,8 @@ public enum ThroughputWorkload
     CreateDestroyPairwise,
     CreateDestroyBatch,
     QueryWithAllEachSpan,
+    QueryWithAllComponentSpanWide,
+    QueryWithAllEachSpanWide,
 }
 
 public enum ThroughputEngine
@@ -141,6 +143,8 @@ public sealed record ThroughputOptions(
             "create-destroy-pairwise" => ThroughputWorkload.CreateDestroyPairwise,
             "create-destroy-batch" => ThroughputWorkload.CreateDestroyBatch,
             "query-with-all-eachspan" => ThroughputWorkload.QueryWithAllEachSpan,
+            "query-with-all-component-span-wide" => ThroughputWorkload.QueryWithAllComponentSpanWide,
+            "query-with-all-eachspan-wide" => ThroughputWorkload.QueryWithAllEachSpanWide,
             _ => default
         };
 
@@ -148,6 +152,8 @@ public sealed record ThroughputOptions(
             "query-with-all-entity" or
             "query-with-all-component-span" or
             "query-with-all-eachspan" or
+            "query-with-all-component-span-wide" or
+            "query-with-all-eachspan-wide" or
             "set-single-component" or
             "set-two-components" or
             "create-destroy-pairwise" or
@@ -254,7 +260,7 @@ public static class ThroughputRunner
         if (!ThroughputOptions.TryParse(args, out var options, out var error))
         {
             stderr.WriteLine(error);
-            stderr.WriteLine("Usage: throughput [--workload query-with-all-entity|query-with-all-component-span|set-single-component|set-two-components|create-destroy-pairwise|create-destroy-batch] [--engine miniarch|arch|both] [--entity-count N] [--duration seconds] [--warmup count] [--repeat count]");
+            stderr.WriteLine("Usage: throughput [--workload query-with-all-entity|query-with-all-component-span|query-with-all-eachspan|query-with-all-component-span-wide|query-with-all-eachspan-wide|set-single-component|set-two-components|create-destroy-pairwise|create-destroy-batch] [--engine miniarch|arch|both] [--entity-count N] [--duration seconds] [--warmup count] [--repeat count]");
             return 1;
         }
 
@@ -364,6 +370,8 @@ public static class ThroughputRunner
             ThroughputWorkload.CreateDestroyPairwise => "create-destroy-pairwise",
             ThroughputWorkload.CreateDestroyBatch => "create-destroy-batch",
             ThroughputWorkload.QueryWithAllEachSpan => "query-with-all-eachspan",
+            ThroughputWorkload.QueryWithAllComponentSpanWide => "query-with-all-component-span-wide",
+            ThroughputWorkload.QueryWithAllEachSpanWide => "query-with-all-eachspan-wide",
             _ => throw new ArgumentOutOfRangeException(nameof(workload))
         };
     }
@@ -430,6 +438,10 @@ internal static class ThroughputCaseFactory
             (ThroughputWorkload.CreateDestroyBatch, ThroughputEngine.Arch) => new ArchCreateDestroyBatchThroughputCase(entityCount),
             (ThroughputWorkload.QueryWithAllEachSpan, ThroughputEngine.MiniArch) => new MiniQueryEachSpanThroughputCase(entityCount),
             (ThroughputWorkload.QueryWithAllEachSpan, ThroughputEngine.Arch) => new ArchQueryEachSpanThroughputCase(entityCount),
+            (ThroughputWorkload.QueryWithAllEachSpanWide, ThroughputEngine.MiniArch) => new MiniWideQueryEachSpanThroughputCase(entityCount),
+            (ThroughputWorkload.QueryWithAllEachSpanWide, ThroughputEngine.Arch) => new ArchWideQueryEachSpanThroughputCase(entityCount),
+            (ThroughputWorkload.QueryWithAllComponentSpanWide, ThroughputEngine.MiniArch) => new MiniWideQueryComponentSpanThroughputCase(entityCount),
+            (ThroughputWorkload.QueryWithAllComponentSpanWide, ThroughputEngine.Arch) => new ArchWideQueryComponentSpanThroughputCase(entityCount),
             (_, ThroughputEngine.Both) => throw new InvalidOperationException("Throughput case factory expects a concrete engine."),
             _ => throw new ArgumentOutOfRangeException(nameof(workload))
         };
@@ -486,6 +498,18 @@ internal static class ThroughputCaseFactory
                     return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
             case (ThroughputWorkload.QueryWithAllEachSpan, ThroughputEngine.Arch):
                 using (var c = new ArchQueryEachSpanThroughputCase(entityCount))
+                    return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
+            case (ThroughputWorkload.QueryWithAllEachSpanWide, ThroughputEngine.MiniArch):
+                using (var c = new MiniWideQueryEachSpanThroughputCase(entityCount))
+                    return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
+            case (ThroughputWorkload.QueryWithAllEachSpanWide, ThroughputEngine.Arch):
+                using (var c = new ArchWideQueryEachSpanThroughputCase(entityCount))
+                    return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
+            case (ThroughputWorkload.QueryWithAllComponentSpanWide, ThroughputEngine.MiniArch):
+                using (var c = new MiniWideQueryComponentSpanThroughputCase(entityCount))
+                    return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
+            case (ThroughputWorkload.QueryWithAllComponentSpanWide, ThroughputEngine.Arch):
+                using (var c = new ArchWideQueryComponentSpanThroughputCase(entityCount))
                     return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
             case (_, ThroughputEngine.Both):
                 throw new InvalidOperationException("Throughput case factory expects a concrete engine.");
@@ -758,6 +782,151 @@ internal static class ThroughputCaseFactory
         return checksum;
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int ExecuteMiniWideEachSpanQuery(MiniQuery query)
+    {
+        var checksum = 0;
+        foreach (var row in query.EachSpan<Position, Velocity, Health, Team, Acceleration, Mana>())
+        {
+            checksum += row.Get0().X
+                      + row.Get1().Y
+                      + row.Get2().Value
+                      + row.Get3().Value
+                      + row.Get4().X
+                      + row.Get5().Value;
+        }
+
+        return checksum;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int ExecuteArchWideEachSpanQuery(ArchWorld world, ArchQueryDescription description)
+    {
+        var checksum = 0;
+        var query = world.Query(in description);
+        foreach (var chunk in query)
+        {
+            chunk.GetSpan<Position, Velocity, Health, Team, Acceleration, Mana>(
+                out var positions, out var velocities, out var healths,
+                out var teams, out var accelerations, out var manas);
+            for (var row = 0; row < chunk.Count; row++)
+            {
+                checksum += positions[row].X
+                          + velocities[row].Y
+                          + healths[row].Value
+                          + teams[row].Value
+                          + accelerations[row].X
+                          + manas[row].Value;
+            }
+        }
+
+        return checksum;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int ExecuteMiniWideComponentSpanQuery(MiniQuery query,
+        MiniComponentType posType, MiniComponentType velType,
+        MiniComponentType healthType, MiniComponentType teamType,
+        MiniComponentType accelType, MiniComponentType manaType)
+    {
+        var checksum = 0;
+        var chunks = query.GetChunkSpan();
+        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        {
+            var chunk = chunks[chunkIndex];
+            var positions = chunk.GetComponentSpan<Position>(posType);
+            var velocities = chunk.GetComponentSpan<Velocity>(velType);
+            var healths = chunk.GetComponentSpan<Health>(healthType);
+            var teams = chunk.GetComponentSpan<Team>(teamType);
+            var accelerations = chunk.GetComponentSpan<Acceleration>(accelType);
+            var manas = chunk.GetComponentSpan<Mana>(manaType);
+            var count = chunk.Count;
+            for (var row = 0; row < count; row++)
+            {
+                checksum += positions[row].X
+                          + velocities[row].Y
+                          + healths[row].Value
+                          + teams[row].Value
+                          + accelerations[row].X
+                          + manas[row].Value;
+            }
+        }
+
+        return checksum;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int ExecuteArchWideComponentSpanQuery(ArchWorld world, ArchQueryDescription description)
+    {
+        var checksum = 0;
+        var query = world.Query(in description);
+        foreach (var chunk in query)
+        {
+            chunk.GetSpan<Position, Velocity, Health, Team, Acceleration, Mana>(
+                out var positions, out var velocities, out var healths,
+                out var teams, out var accelerations, out var manas);
+            for (var row = 0; row < chunk.Count; row++)
+            {
+                checksum += positions[row].X
+                          + velocities[row].Y
+                          + healths[row].Value
+                          + teams[row].Value
+                          + accelerations[row].X
+                          + manas[row].Value;
+            }
+        }
+
+        return checksum;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal static int ExecuteMiniEachSpanDirectNarrow(MiniQuery query)
+    {
+        var checksum = 0;
+        var e = query.EachSpan<Position, Velocity>();
+        while (e.MoveNext())
+        {
+            checksum += e.Get0().X + e.Get1().Y;
+        }
+        return checksum;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal static int ExecuteMiniEachSpanDirectWide(MiniQuery query)
+    {
+        var checksum = 0;
+        var e = query.EachSpan<Position, Velocity, Health, Team, Acceleration, Mana>();
+        while (e.MoveNext())
+        {
+            checksum += e.Get0().X + e.Get1().Y + e.Get2().Value
+                      + e.Get3().Value + e.Get4().X + e.Get5().Value;
+        }
+        return checksum;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal static int ExecuteMiniEachSpanForeachNarrow(MiniQuery query)
+    {
+        var checksum = 0;
+        foreach (var row in query.EachSpan<Position, Velocity>())
+        {
+            checksum += row.Get0().X + row.Get1().Y;
+        }
+        return checksum;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    internal static int ExecuteMiniEachSpanForeachWide(MiniQuery query)
+    {
+        var checksum = 0;
+        foreach (var row in query.EachSpan<Position, Velocity, Health, Team, Acceleration, Mana>())
+        {
+            checksum += row.Get0().X + row.Get1().Y + row.Get2().Value
+                      + row.Get3().Value + row.Get4().X + row.Get5().Value;
+        }
+        return checksum;
+    }
+
     private sealed class MiniSetSingleComponentThroughputCase : IThroughputCase
     {
         private readonly MiniWorldState _state;
@@ -970,6 +1139,106 @@ internal static class ThroughputCaseFactory
         }
 
         public void Dispose() { }
+    }
+
+    private sealed class MiniWideQueryEachSpanThroughputCase : IThroughputCase
+    {
+        private readonly MiniWideQueryWorldState _state;
+
+        public MiniWideQueryEachSpanThroughputCase(int entityCount)
+        {
+            _state = BenchmarkWorldFactory.CreateMiniWideQueryWorld(entityCount);
+        }
+
+        public void WarmUp(int count, CancellationToken cancellationToken)
+        {
+            for (var i = 0; i < count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _ = ExecuteMiniWideEachSpanQuery(_state.WideQuery);
+            }
+        }
+
+        public long RunIteration() => ExecuteMiniWideEachSpanQuery(_state.WideQuery);
+
+        public void Dispose() { }
+    }
+
+    private sealed class ArchWideQueryEachSpanThroughputCase : IThroughputCase
+    {
+        private readonly ArchWideQueryWorldState _state;
+
+        public ArchWideQueryEachSpanThroughputCase(int entityCount)
+        {
+            _state = BenchmarkWorldFactory.CreateArchWideQueryWorld(entityCount);
+        }
+
+        public void WarmUp(int count, CancellationToken cancellationToken)
+        {
+            for (var i = 0; i < count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _ = ExecuteArchWideEachSpanQuery(_state.World, _state.WideDescription);
+            }
+        }
+
+        public long RunIteration() => ExecuteArchWideEachSpanQuery(_state.World, _state.WideDescription);
+
+        public void Dispose() => _state.Dispose();
+    }
+
+    private sealed class MiniWideQueryComponentSpanThroughputCase : IThroughputCase
+    {
+        private readonly MiniWideQueryWorldState _state;
+
+        public MiniWideQueryComponentSpanThroughputCase(int entityCount)
+        {
+            _state = BenchmarkWorldFactory.CreateMiniWideQueryWorld(entityCount);
+        }
+
+        public void WarmUp(int count, CancellationToken cancellationToken)
+        {
+            for (var i = 0; i < count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _ = ExecuteMiniWideComponentSpanQuery(
+                    _state.WideQuery,
+                    _state.PositionType, _state.VelocityType,
+                    _state.HealthType, _state.TeamType,
+                    _state.AccelerationType, _state.ManaType);
+            }
+        }
+
+        public long RunIteration() => ExecuteMiniWideComponentSpanQuery(
+            _state.WideQuery,
+            _state.PositionType, _state.VelocityType,
+            _state.HealthType, _state.TeamType,
+            _state.AccelerationType, _state.ManaType);
+
+        public void Dispose() { }
+    }
+
+    private sealed class ArchWideQueryComponentSpanThroughputCase : IThroughputCase
+    {
+        private readonly ArchWideQueryWorldState _state;
+
+        public ArchWideQueryComponentSpanThroughputCase(int entityCount)
+        {
+            _state = BenchmarkWorldFactory.CreateArchWideQueryWorld(entityCount);
+        }
+
+        public void WarmUp(int count, CancellationToken cancellationToken)
+        {
+            for (var i = 0; i < count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _ = ExecuteArchWideComponentSpanQuery(_state.World, _state.WideDescription);
+            }
+        }
+
+        public long RunIteration() => ExecuteArchWideComponentSpanQuery(_state.World, _state.WideDescription);
+
+        public void Dispose() => _state.Dispose();
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
