@@ -17,6 +17,7 @@
 - `kb-hero-pipeline-benchmarks.md`：Hero 项目 pipeline benchmark 移植到 miniArch 的架构和结果
 - `kb-architecture-review.md`：全库机械化拆解（10 模块一句话真相 + 核心循环 + 状态模型 + 数据流）、5 个已知问题、4 个优化方向、3 个设计张力
 - `kb-query-invalidation.md`：per-archetype generation 基于版本号的 Query 缓存失效机制
+- `kb-ecs-comparison.md`：MiniArch vs Arch vs DefaultEcs 三方性能与内存稳定性对比报告
 
 ## 模块地图
 
@@ -35,6 +36,7 @@
 - `HeroComing.Perf` -> `kb-hero-pipeline-regression.md`
 - `MiniArch.Core ArchitectureReview` -> `kb-architecture-review.md`
 - `MiniArch.Core Query` -> `kb-query-invalidation.md`
+- `MiniArch.Benchmarks Comparison` -> `kb-ecs-comparison.md`
 
 ## 快速入口
 
