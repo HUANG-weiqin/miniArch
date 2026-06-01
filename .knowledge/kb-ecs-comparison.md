@@ -121,18 +121,99 @@ updated: 2026-06-01
 | 写方向被 YAGNI 否决 | 没有稳定需求前，不为 `EachSpan` / `Chunk` 保留额外 writable span surface |
 | 约束条件 | 当前 EachSpan 只支持 blittable 组件（非托管类型）；含托管引用的组件必须用 chunk 手动迭代 |
 
+## GameTickSim 11 场景隔离测试
+
+来源：`perf/GameTickSim.Perf/ScenarioBenchmark.cs`，50K 实体，5s 固定计时，`-c Release`。
+
+| 场景 | 测试内容 | MiniArch | DefaultEcs | Arch | 胜者 |
+|------|----------|:-:|:-:|:-:|:----:|
+| A-PureIteration | 50K, Position+=Velocity, 5-comp | ~9793 | ~4844 | ~9892 | Mini/Arch 持平 |
+| B-WideSingleComp | 50K, Health.Current-=1, 3-comp | ~18375 | ~9277 | ~20302 | **Arch** |
+| F-MultiArchetype | 6 archetype, iterate Health | ~18712 | ~9389 | ~19598 | **Arch** |
+| G1-FragBaseline | 单 archetype 迭代基线 | ~9523 | ~4906 | ~8751 | **MiniArch** |
+| G2-FragAftermath | 碎片化后（5 tag） | ~8815 | ~4609 | ~8461 | **MiniArch** |
+| H-5ComponentJoin | 5 组件联合查询 | ~6454 | ~2807 | ~6641 | Arch/Mini 持平 |
+| I-SparseQuery | 1% 实体有 BuffRemaining | ~315K | ~135K | ~309K | **MiniArch** |
+| C-StructuralAddRemove | 9K add + 9K remove Debuff | ~874 | ~2082 | ~643 | **DefaultEcs** |
+| J-CreationBurst | 10K create + 10K destroy | ~1666 | ~1372 | ~1419 | **MiniArch** |
+| D-MassCreateDestroy | 4.5K create + 4.5K destroy | ~1665 | ~1196 | ~1776 | **Arch** |
+| E-MixedFullTick | 8 阶段混合负载 | ~580 | ~220 | ~484 | **MiniArch** |
+
+### 场景关键发现
+
+| 发现 | 说明 |
+|------|------|
+| 跨 archetype 迭代零开销 | F vs B 差异 <4%，archetype 数量不影响迭代性能 |
+| 碎片化退化差异 | MiniArch ~8%, DefaultEcs ~5%, **Arch 12-17% 且方差大** |
+| 组件越多 chunk 优势越大 | 2 组件 DefaultEcs 落后 2x → 5 组件落后 2.3x |
+| DefaultEcs 独赢结构变更 | per-entity sparse set 无需 archetype migration，2.4x 快于 MiniArch |
+| EntitySet 重建是 DefaultEcs 致命伤 | 隔离赢结构变更 2.4x，但混合场景输 2.5x（每次变更后必须重建缓存） |
+| Arch 有内存泄漏 | 混合场景 +1822KB 持续增长 heap（固定量，不累积但也不回收） |
+| MiniArch 稀疏查询无显著优势 | post-rebase 后 vs Arch 仅 ~2-6% 差距，两者都有 query cache |
+
+### 12 阶段混合 Tick 扩展（增加 4 个 query 轮次）
+
+在 E-MixedFullTick 基础上增加 ManaRegen/RangeCheck/StaminaRegen/UpdateTransforms 四个查询阶段，交替插入结构变更之间：
+
+| ticks | MiniArch | DefaultEcs | Arch |
+|-------|:-:|:-:|:-:|
+| 1000 | **600** | 215 | 505 |
+| 2000 | **564** | 217 | 463 |
+| 4000 | **569** | 215 | 462 |
+
+MiniArch 稳定领先 Arch ~19%。DefaultEcs GC 随时间增长（Gen0 1K→5, 4K→18）。
+
+## 源码级机制对比（MiniArch vs Arch）
+
+### Query 缓存
+
+| 方面 | MiniArch | Arch |
+|------|----------|------|
+| 缓存粒度 | 预计算 `Chunk[]` 快照 | `Archetype[]` 列表 |
+| 失效机制 | per-archetype `Generation` (long) | 全局 `Archetypes.GetHashCode()` (recompute all) |
+| 迭代开销 | 已缓存时零开销（数组遍历） | 每次 archetype→chunk 两层遍历 |
+| 构建开销 | 仅 rebuild 变更 archetype 的 chunk | hash 变了就全量 rescan |
+
+MiniArch `EnsureMatchingSnapshot()`: 先检查 `_world.ArchetypeVersion`（int 比较），再逐 archetype 检查 `Generation`。Arch `Match()`: 每次重新计算 `_allArchetypes.GetHashCode()`（遍历所有 archetype）。
+
+**这是 MiniArch 混合场景赢的关键**：结构变更后，MiniArch 只重建受影响 archetype 的 chunk 列表，Arch 每次 query 都可能触发全量 archetype 扫描。
+
+### 实体迁移（Add/Remove component）
+
+| 方面 | MiniArch | Arch |
+|------|----------|------|
+| 组件拷贝 | `CopySharedComponentsFrom`（仅重叠组件） | `CopyComponents`（全量拷贝） |
+| Set 快路径 | `ApplyTypedAddOrSet` 检测已存在 → in-place set | 无，总是迁移 |
+| Edge 缓存 | `ArchetypeEdges.TryGetAdd/Remove` | `SparseJaggedArray` add/remove edges |
+| 代际追踪 | `_generation++` on ReserveEntity + RemoveEntity | 无 per-archetype generation |
+
+MiniArch 的 `ApplyTypedAddOrSet` 快路径避免了不必要的 archetype migration——当 `world.Add<T>()` 时如果实体已有 T，直接 in-place 修改。Arch 总是执行完整的 Move 流程。
+
+### 性能优势的因果链
+
+```
+混合场景中结构变更频繁 → 多个 archetype 的 generation 变化
+  → MiniArch: 只重建变更 archetype 的 chunk 快照（O(changed)）
+  → Arch: GetHashCode() 全量重算 + 全量 archetype 扫描（O(all)）
+  → MiniArch 查询开销更低 → 12 阶段 tick 中累积 ~19% 优势
+```
+
 ## 关键理解
 
 - MiniArch 的性能优势在**结构操作适中时最大**（+34% vs Arch），因为此时分配/GC 开销占比最大
 - 极端负载下差异被带宽压平，但 MiniArch 的**内存确定性**依然成立——这是 Arch 和 DefaultEcs 无法提供的
 - 对游戏服务器和帧率敏感场景，MiniArch = **同性能 + 零 GC 暂停**，不是二选一
+- **混合场景赢的原因是 query 缓存失效机制**：generation-based partial rebuild vs hash-based full rescan
 
 ## 为什么 MiniArch 胜出
 
 - **激进 YAGNI**：不需要托管内存就不分配，不需要快照就不复制，不需要事件就不建队列
 - **结构操作只操作元数据数组**，不产生临时对象
-- Arch 的 `AddComponents` 在 archetype 间搬移实体时分配大量临时数组
-- DefaultEcs 的组件存储依赖 `object[]`，导致 GC 压力无法消除
+- **Query 缓存用 generation-based partial rebuild**：结构变更后只重建受影响 archetype 的 chunk 列表
+- **实体迁移只拷贝重叠组件**（`CopySharedComponentsFrom`），Arch 全量拷贝
+- **Set 快路径**：`Add<T>()` 已有 T 时直接 in-place 修改，避免迁移
+- Arch 的 `CopyComponents` 全量拷贝 + 全量 archetype hash rescan 是混合场景的瓶颈
+- DefaultEcs 的 EntitySet 重建 + `object[]` 组件存储导致 GC 压力不可消除
 
 ## 合适场景
 
@@ -140,5 +221,6 @@ updated: 2026-06-01
 - 游戏服务器、帧率敏感的动作游戏、实时仿真
 - 结构操作频繁（大量 Spawn/Destroy/AddComponent）的工作负载
 - 读密集查询，尤其是多组件宽查询
+- 混合工作负载（查询+结构变更交替），MiniArch 优势最大
 
 如果项目能容忍偶尔 GC 暂停和内存抖动，Arch 已经是很好的选择。如果目标是在极端结构操作下仍然可预测——MiniArch 是当前唯一答案。
