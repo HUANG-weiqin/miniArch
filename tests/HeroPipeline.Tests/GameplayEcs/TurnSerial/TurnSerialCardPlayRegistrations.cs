@@ -4,6 +4,7 @@ using Hero.GameplayEcs.Cards;
 using Hero.GameplayEcs.Characters.Actions;
 using Hero.GameplayEcs.Characters.Attack;
 using Hero.GameplayEcs.Characters.Movement;
+using MiniArch.Core;
 
 namespace Hero.GameplayEcs.TurnSerial;
 
@@ -74,9 +75,9 @@ public static class TurnSerialCardPlayRegistrations
     private static void ThrowIfMultipleCardPlayRequests(FrameView frame)
     {
         int count = 0;
-        foreach (MiniArch.Entity entity in frame.Each(CardPlayRequestDescription))
+        foreach (var row in frame.ChunkQuery(CardPlayRequestDescription).EachSpan<RuleId>())
         {
-            if (frame.Get<RuleId>(entity) != TurnSerialIds.CardPlayRule)
+            if (row.Get0() != TurnSerialIds.CardPlayRule)
             {
                 continue;
             }
@@ -106,9 +107,9 @@ public static class TurnSerialCardPlayRegistrations
 
     private static bool IsActiveCharacter(FrameView frame, MiniArch.Entity character)
     {
-        foreach (MiniArch.Entity context in frame.Each(ContextDescription))
+        foreach (var row in frame.ChunkQuery(ContextDescription).EachSpan<ActiveTurnCharacter>())
         {
-            if (frame.Get<ActiveTurnCharacter>(context).Value == character)
+            if (row.Get0().Value == character)
             {
                 return true;
             }

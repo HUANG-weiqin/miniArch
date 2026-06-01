@@ -9,6 +9,7 @@ using Hero.GameplayEcs.Characters.Movement;
 using Hero.GameplayEcs.Characters.Spawn;
 using Hero.Tests.Fixtures;
 using MiniArch;
+using MiniArch.Core;
 
 const int CharacterCount = 1000;
 const int GridWidth = 100;
@@ -71,10 +72,10 @@ Console.WriteLine("Baseline updated in .knowledge/kb-hero-pipeline-regression.md
     var players = new List<Entity>();
     var frame = runtime.CurrentFrame;
     var spawnQuery = new QueryDescription().With<SpawnKind>();
-    foreach (var entity in frame.Each(spawnQuery))
+    foreach (var row in frame.ChunkQuery(spawnQuery).EachSpan<SpawnKind>())
     {
-        if (frame.TryGet(entity, out SpawnKind kind) && kind == CharacterSpawnKinds.Player)
-            players.Add(entity);
+        if (row.Get0() == CharacterSpawnKinds.Player)
+            players.Add(row.Entity);
     }
     Console.WriteLine($"Spawned {CharacterCount} characters, found {players.Count} players.");
 
@@ -172,12 +173,12 @@ void CreateAttackRequests(MiniArchRuntime runtime, List<Entity> players)
     var frame = runtime.CurrentFrame;
     var actionQuery = new QueryDescription().With<ActionEntity>().With<ActionKind>();
     var playerSet = new HashSet<Entity>(players);
-    foreach (var entity in frame.Each(actionQuery))
+    foreach (var row in frame.ChunkQuery(actionQuery).EachSpan<ActionKind>())
     {
-        if (frame.TryGet(entity, out ActionKind kind) && kind == CharacterActionKinds.Attack &&
-            frame.TryGetParent(entity, out Entity parent) && playerSet.Contains(parent))
+        if (row.Get0() == CharacterActionKinds.Attack &&
+            frame.TryGetParent(row.Entity, out Entity parent) && playerSet.Contains(parent))
         {
-            CharacterAttackBootstrap.CreateAttackRequest(runtime, entity, 0, GridHeight / 2);
+            CharacterAttackBootstrap.CreateAttackRequest(runtime, row.Entity, 0, GridHeight / 2);
         }
     }
 }

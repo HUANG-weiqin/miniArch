@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Hero.Ecs;
 using Hero.GameplayEcs.Characters.Actions;
+using MiniArch.Core;
 
 namespace Hero.GameplayEcs.Cards;
 
@@ -15,19 +16,19 @@ public static class CardCollector
     {
         List<(MiniArch.Entity Card, int Order)> cards = [];
 
-        foreach (MiniArch.Entity card in frame.Each(CardQuery))
+        foreach (var row in frame.ChunkQuery(CardQuery).EachSpan<CardZone, CardOrderValue>())
         {
-            if (frame.Get<CardZone>(card).Value != zone)
+            if (row.Get0().Value != zone)
             {
                 continue;
             }
 
-            if (!frame.TryGetParent(card, out MiniArch.Entity parent) || parent != owner)
+            if (!frame.TryGetParent(row.Entity, out MiniArch.Entity parent) || parent != owner)
             {
                 continue;
             }
 
-            cards.Add((card, frame.Get<CardOrderValue>(card).Value));
+            cards.Add((row.Entity, row.Get1().Value));
         }
 
         return cards;
@@ -37,12 +38,14 @@ public static class CardCollector
     {
         Dictionary<MiniArch.Entity, List<(MiniArch.Entity Card, int Order)>> result = [];
 
-        foreach (MiniArch.Entity card in frame.Each(CardQuery))
+        foreach (var row in frame.ChunkQuery(CardQuery).EachSpan<CardZone, CardOrderValue>())
         {
-            if (frame.Get<CardZone>(card).Value != zone)
+            if (row.Get0().Value != zone)
             {
                 continue;
             }
+
+            MiniArch.Entity card = row.Entity;
 
             if (!frame.TryGetParent(card, out MiniArch.Entity owner))
             {
@@ -55,7 +58,7 @@ public static class CardCollector
                 result[owner] = list;
             }
 
-            list.Add((card, frame.Get<CardOrderValue>(card).Value));
+            list.Add((card, row.Get1().Value));
         }
 
         return result;

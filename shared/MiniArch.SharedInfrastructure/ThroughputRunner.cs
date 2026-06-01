@@ -21,6 +21,7 @@ public enum ThroughputWorkload
     SetTwoComponents,
     CreateDestroyPairwise,
     CreateDestroyBatch,
+    QueryWithAllEachSpan,
 }
 
 public enum ThroughputEngine
@@ -139,12 +140,14 @@ public sealed record ThroughputOptions(
             "set-two-components" => ThroughputWorkload.SetTwoComponents,
             "create-destroy-pairwise" => ThroughputWorkload.CreateDestroyPairwise,
             "create-destroy-batch" => ThroughputWorkload.CreateDestroyBatch,
+            "query-with-all-eachspan" => ThroughputWorkload.QueryWithAllEachSpan,
             _ => default
         };
 
         return value is
             "query-with-all-entity" or
             "query-with-all-component-span" or
+            "query-with-all-eachspan" or
             "set-single-component" or
             "set-two-components" or
             "create-destroy-pairwise" or
@@ -360,6 +363,7 @@ public static class ThroughputRunner
             ThroughputWorkload.SetTwoComponents => "set-two-components",
             ThroughputWorkload.CreateDestroyPairwise => "create-destroy-pairwise",
             ThroughputWorkload.CreateDestroyBatch => "create-destroy-batch",
+            ThroughputWorkload.QueryWithAllEachSpan => "query-with-all-eachspan",
             _ => throw new ArgumentOutOfRangeException(nameof(workload))
         };
     }
@@ -424,6 +428,8 @@ internal static class ThroughputCaseFactory
             (ThroughputWorkload.CreateDestroyPairwise, ThroughputEngine.Arch) => new ArchCreateDestroyPairwiseThroughputCase(entityCount),
             (ThroughputWorkload.CreateDestroyBatch, ThroughputEngine.MiniArch) => new MiniCreateDestroyBatchThroughputCase(entityCount),
             (ThroughputWorkload.CreateDestroyBatch, ThroughputEngine.Arch) => new ArchCreateDestroyBatchThroughputCase(entityCount),
+            (ThroughputWorkload.QueryWithAllEachSpan, ThroughputEngine.MiniArch) => new MiniQueryEachSpanThroughputCase(entityCount),
+            (ThroughputWorkload.QueryWithAllEachSpan, ThroughputEngine.Arch) => new ArchQueryEachSpanThroughputCase(entityCount),
             (_, ThroughputEngine.Both) => throw new InvalidOperationException("Throughput case factory expects a concrete engine."),
             _ => throw new ArgumentOutOfRangeException(nameof(workload))
         };
@@ -474,6 +480,12 @@ internal static class ThroughputCaseFactory
                     return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
             case (ThroughputWorkload.CreateDestroyBatch, ThroughputEngine.Arch):
                 using (var c = new ArchCreateDestroyBatchThroughputCase(entityCount))
+                    return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
+            case (ThroughputWorkload.QueryWithAllEachSpan, ThroughputEngine.MiniArch):
+                using (var c = new MiniQueryEachSpanThroughputCase(entityCount))
+                    return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
+            case (ThroughputWorkload.QueryWithAllEachSpan, ThroughputEngine.Arch):
+                using (var c = new ArchQueryEachSpanThroughputCase(entityCount))
                     return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
             case (_, ThroughputEngine.Both):
                 throw new InvalidOperationException("Throughput case factory expects a concrete engine.");
@@ -584,6 +596,57 @@ internal static class ThroughputCaseFactory
         }
     }
 
+    private sealed class MiniQueryEachSpanThroughputCase : IThroughputCase
+    {
+        private readonly MiniComplexQueryWorldState _state;
+
+        public MiniQueryEachSpanThroughputCase(int entityCount)
+        {
+            _state = BenchmarkWorldFactory.CreateMiniComplexQueryWorld(entityCount);
+        }
+
+        public void WarmUp(int count, CancellationToken cancellationToken)
+        {
+            for (var i = 0; i < count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _ = ExecuteMiniEachSpanQuery(_state.WithAllQuery);
+            }
+        }
+
+        public long RunIteration() => ExecuteMiniEachSpanQuery(_state.WithAllQuery);
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class ArchQueryEachSpanThroughputCase : IThroughputCase
+    {
+        private readonly ArchComplexQueryWorldState _state;
+
+        public ArchQueryEachSpanThroughputCase(int entityCount)
+        {
+            _state = BenchmarkWorldFactory.CreateArchComplexQueryWorld(entityCount);
+        }
+
+        public void WarmUp(int count, CancellationToken cancellationToken)
+        {
+            for (var i = 0; i < count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _ = ExecuteArchEachSpanQuery(_state.World, _state.WithAllDescription);
+            }
+        }
+
+        public long RunIteration() => ExecuteArchEachSpanQuery(_state.World, _state.WithAllDescription);
+
+        public void Dispose()
+        {
+            _state.Dispose();
+        }
+    }
+
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static int ExecuteMiniEntityQuery(MiniQuery query)
     {
@@ -649,6 +712,36 @@ internal static class ThroughputCaseFactory
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static int ExecuteArchComponentSpanQuery(ArchWorld world, ArchQueryDescription description)
+    {
+        var checksum = 0;
+        var query = world.Query(in description);
+        foreach (var chunk in query)
+        {
+            var positions = chunk.GetSpan<Position>();
+            var velocities = chunk.GetSpan<Velocity>();
+            for (var row = 0; row < positions.Length; row++)
+            {
+                checksum += positions[row].X + velocities[row].Y;
+            }
+        }
+
+        return checksum;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int ExecuteMiniEachSpanQuery(MiniQuery query)
+    {
+        var checksum = 0;
+        foreach (var row in query.EachSpan<Position, Velocity>())
+        {
+            checksum += row.Get0().X + row.Get1().Y;
+        }
+
+        return checksum;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int ExecuteArchEachSpanQuery(ArchWorld world, ArchQueryDescription description)
     {
         var checksum = 0;
         var query = world.Query(in description);

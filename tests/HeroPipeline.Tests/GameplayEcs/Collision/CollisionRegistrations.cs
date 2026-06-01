@@ -1,6 +1,7 @@
 using System;
 using Hero.Ecs;
 using Hero.GameplayEcs.Characters.Components;
+using MiniArch.Core;
 
 namespace Hero.GameplayEcs.Collision;
 
@@ -28,15 +29,14 @@ public static class CollisionRegistrations
         CollisionFilter filter = frame.Get<CollisionFilter>(request);
         HitConsequenceRuleId consequenceRuleId = frame.Get<HitConsequenceRuleId>(request);
 
-        foreach (MiniArch.Entity candidate in frame.Each(CollisionTargetDescription))
+        foreach (var row in frame.ChunkQuery(CollisionTargetDescription).EachSpan<PositionQValue, PositionRValue>())
         {
-            PositionQValue positionQ = frame.Get<PositionQValue>(candidate);
-            PositionRValue positionR = frame.Get<PositionRValue>(candidate);
-
-            if (!MatchesShape(shape, targetQ.Value, targetR.Value, range.Value, positionQ.Value, positionR.Value))
+            if (!MatchesShape(shape, targetQ.Value, targetR.Value, range.Value, row.Get0().Value, row.Get1().Value))
             {
                 continue;
             }
+
+            MiniArch.Entity candidate = row.Entity;
 
             if (!MatchesFilter(frame, candidate, filter))
             {

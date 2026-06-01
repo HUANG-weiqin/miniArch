@@ -3,6 +3,7 @@ using Hero.GameplayEcs.Characters.Actions;
 using Hero.GameplayEcs.Characters.Attack;
 using Hero.GameplayEcs.Characters.Components;
 using Hero.GameplayEcs.Characters.Slots;
+using MiniArch.Core;
 
 namespace Hero.Tests;
 
@@ -48,19 +49,17 @@ internal static class TestPipelineQueries
     {
         MiniArch.Entity action = default;
 
-        foreach (MiniArch.Entity candidate in frame.Each(ActionDescription))
+        foreach (var row in frame.ChunkQuery(ActionDescription).EachSpan<ActionKind>())
         {
-            ActionKind actionKind = frame.Get<ActionKind>(candidate);
-
-            if (actionKind != expectedKind)
+            if (row.Get0() != expectedKind)
             {
                 continue;
             }
 
-            if (runtime.World.TryGetParent(candidate, out MiniArch.Entity candidateParentCore) &&
+            if (runtime.World.TryGetParent(row.Entity, out MiniArch.Entity candidateParentCore) &&
                 candidateParentCore == parent)
             {
-                action = candidate;
+                action = row.Entity;
             }
         }
 
@@ -76,16 +75,14 @@ internal static class TestPipelineQueries
     {
         int count = 0;
 
-        foreach (MiniArch.Entity entity in frame.Each(RuleRequestDescription))
+        foreach (var row in frame.ChunkQuery(RuleRequestDescription).EachSpan<RequestTarget, RuleId>())
         {
-            RequestTarget requestTarget = frame.Get<RequestTarget>(entity);
-
-            if (requestTarget.Target != target)
+            if (row.Get0().Target != target)
             {
                 continue;
             }
 
-            if (frame.Get<RuleId>(entity) != ruleId)
+            if (row.Get1() != ruleId)
             {
                 continue;
             }
@@ -100,17 +97,15 @@ internal static class TestPipelineQueries
     {
         int count = 0;
 
-        foreach (MiniArch.Entity entity in frame.Each(EffectDescription))
+        foreach (var row in frame.ChunkQuery(EffectDescription).EachSpan<EffectId, EffectTarget>())
         {
-            EffectId effectId = frame.Get<EffectId>(entity);
-
-            if (effectId != CharacterAttackIds.DamageEffect)
+            if (row.Get0() != CharacterAttackIds.DamageEffect)
             {
                 continue;
             }
 
-            MiniArch.Entity target = frame.Get<EffectTarget>(entity).Target;
-            if (target != firstTarget && target != secondTarget)
+            MiniArch.Entity effectTarget = row.Get1().Target;
+            if (effectTarget != firstTarget && effectTarget != secondTarget)
             {
                 continue;
             }
@@ -125,16 +120,14 @@ internal static class TestPipelineQueries
     {
         int count = 0;
 
-        foreach (MiniArch.Entity entity in frame.Each(ModifierRequestDescription))
+        foreach (var row in frame.ChunkQuery(ModifierRequestDescription).EachSpan<RequestTarget, ModifierSlot>())
         {
-            RequestTarget requestTarget = frame.Get<RequestTarget>(entity);
-
-            if (requestTarget.Target != firstTarget && requestTarget.Target != secondTarget)
+            if (row.Get0().Target != firstTarget && row.Get0().Target != secondTarget)
             {
                 continue;
             }
 
-            if (frame.Get<ModifierSlot>(entity).Slot != CharacterSlotKeys.CurrentHp)
+            if (row.Get1().Slot != CharacterSlotKeys.CurrentHp)
             {
                 continue;
             }

@@ -4,6 +4,7 @@ using Hero.GameplayEcs.Cards;
 using Hero.GameplayEcs.Characters.Attack;
 using Hero.GameplayEcs.Characters.Defense;
 using Hero.GameplayEcs.Characters.Heal;
+using MiniArch.Core;
 using MiniArchQueryDescription = MiniArch.QueryDescription;
 
 namespace Hero.GameplayEcs.Trigger;
@@ -52,18 +53,16 @@ public static class TriggerRegistrations
             return;
         }
 
-        foreach (MiniArch.Entity effectEntity in frame.Each(DamageEffectQuery))
+        foreach (var row in frame.ChunkQuery(DamageEffectQuery).EachSpan<EffectId, EffectSource>())
         {
-            EffectId effectId = frame.Get<EffectId>(effectEntity);
-            if (effectId != CharacterAttackIds.DamageEffect)
+            if (row.Get0() != CharacterAttackIds.DamageEffect)
             {
                 continue;
             }
 
-            EffectSource source = frame.Get<EffectSource>(effectEntity);
-            if (source.Source == owner)
+            if (row.Get1().Source == owner)
             {
-                onMatch(effectEntity);
+                onMatch(row.Entity);
             }
         }
     }
@@ -73,18 +72,16 @@ public static class TriggerRegistrations
         // observerEntity is the card that was drawn (has TriggerCondition marker)
         // We need to find the CardDrawnEffect where target == observerEntity
 
-        foreach (MiniArch.Entity effectEntity in frame.Each(CardDrawnEffectQuery))
+        foreach (var row in frame.ChunkQuery(CardDrawnEffectQuery).EachSpan<EffectId, EffectTarget>())
         {
-            EffectId effectId = frame.Get<EffectId>(effectEntity);
-            if (effectId != CardIds.CardDrawnEffect)
+            if (row.Get0() != CardIds.CardDrawnEffect)
             {
                 continue;
             }
 
-            EffectTarget target = frame.Get<EffectTarget>(effectEntity);
-            if (target.Target == observerEntity)
+            if (row.Get1().Target == observerEntity)
             {
-                onMatch(effectEntity);
+                onMatch(row.Entity);
             }
         }
     }
