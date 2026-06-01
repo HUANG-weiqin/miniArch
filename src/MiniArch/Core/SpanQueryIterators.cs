@@ -151,7 +151,7 @@ public ref struct SpanEach<T1>
     private int _rowIdx;
     private int _rowCount;
     private ReadOnlySpan<Entity> _entities;
-    private ReadOnlySpan<T1> _s0;
+    private Span<T1> _s0;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal SpanEach(ReadOnlySpan<Chunk> chunks)
@@ -199,7 +199,7 @@ public ref struct SpanEach<T1>
 
     /// <summary>Gets the first component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T1 Get0() => ref _s0[_rowIdx];
+    public ref T1 Get0() => ref _s0[_rowIdx];
 }
 
 /// <summary>
@@ -214,8 +214,8 @@ public ref struct SpanEach<T1, T2>
     private int _rowIdx;
     private int _rowCount;
     private ReadOnlySpan<Entity> _entities;
-    private ReadOnlySpan<T1> _s0;
-    private ReadOnlySpan<T2> _s1;
+    private Span<T1> _s0;
+    private Span<T2> _s1;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal SpanEach(ReadOnlySpan<Chunk> chunks)
@@ -265,11 +265,11 @@ public ref struct SpanEach<T1, T2>
 
     /// <summary>Gets the first component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T1 Get0() => ref _s0[_rowIdx];
+    public ref T1 Get0() => ref _s0[_rowIdx];
 
     /// <summary>Gets the second component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T2 Get1() => ref _s1[_rowIdx];
+    public ref T2 Get1() => ref _s1[_rowIdx];
 }
 
 /// <summary>
@@ -285,9 +285,9 @@ public ref struct SpanEach<T1, T2, T3>
     private int _rowIdx;
     private int _rowCount;
     private ReadOnlySpan<Entity> _entities;
-    private ReadOnlySpan<T1> _s0;
-    private ReadOnlySpan<T2> _s1;
-    private ReadOnlySpan<T3> _s2;
+    private Span<T1> _s0;
+    private Span<T2> _s1;
+    private Span<T3> _s2;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal SpanEach(ReadOnlySpan<Chunk> chunks)
@@ -339,15 +339,15 @@ public ref struct SpanEach<T1, T2, T3>
 
     /// <summary>Gets the first component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T1 Get0() => ref _s0[_rowIdx];
+    public ref T1 Get0() => ref _s0[_rowIdx];
 
     /// <summary>Gets the second component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T2 Get1() => ref _s1[_rowIdx];
+    public ref T2 Get1() => ref _s1[_rowIdx];
 
     /// <summary>Gets the third component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T3 Get2() => ref _s2[_rowIdx];
+    public ref T3 Get2() => ref _s2[_rowIdx];
 }
 
 /// <summary>
@@ -364,10 +364,10 @@ public ref struct SpanEach<T1, T2, T3, T4>
     private int _rowIdx;
     private int _rowCount;
     private ReadOnlySpan<Entity> _entities;
-    private ReadOnlySpan<T1> _s0;
-    private ReadOnlySpan<T2> _s1;
-    private ReadOnlySpan<T3> _s2;
-    private ReadOnlySpan<T4> _s3;
+    private Span<T1> _s0;
+    private Span<T2> _s1;
+    private Span<T3> _s2;
+    private Span<T4> _s3;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal SpanEach(ReadOnlySpan<Chunk> chunks)
@@ -421,19 +421,19 @@ public ref struct SpanEach<T1, T2, T3, T4>
 
     /// <summary>Gets the first component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T1 Get0() => ref _s0[_rowIdx];
+    public ref T1 Get0() => ref _s0[_rowIdx];
 
     /// <summary>Gets the second component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T2 Get1() => ref _s1[_rowIdx];
+    public ref T2 Get1() => ref _s1[_rowIdx];
 
     /// <summary>Gets the third component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T3 Get2() => ref _s2[_rowIdx];
+    public ref T3 Get2() => ref _s2[_rowIdx];
 
     /// <summary>Gets the fourth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T4 Get3() => ref _s3[_rowIdx];
+    public ref T4 Get3() => ref _s3[_rowIdx];
 }
 
 /// <summary>
@@ -451,11 +451,11 @@ public ref struct SpanEach<T1, T2, T3, T4, T5>
     private int _rowIdx;
     private int _rowCount;
     private ReadOnlySpan<Entity> _entities;
-    private ReadOnlySpan<T1> _s0;
-    private ReadOnlySpan<T2> _s1;
-    private ReadOnlySpan<T3> _s2;
-    private ReadOnlySpan<T4> _s3;
-    private ReadOnlySpan<T5> _s4;
+    private Span<T1> _s0;
+    private Span<T2> _s1;
+    private Span<T3> _s2;
+    private Span<T4> _s3;
+    private Span<T5> _s4;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal SpanEach(ReadOnlySpan<Chunk> chunks)
@@ -511,23 +511,23 @@ public ref struct SpanEach<T1, T2, T3, T4, T5>
 
     /// <summary>Gets the first component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T1 Get0() => ref _s0[_rowIdx];
+    public ref T1 Get0() => ref _s0[_rowIdx];
 
     /// <summary>Gets the second component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T2 Get1() => ref _s1[_rowIdx];
+    public ref T2 Get1() => ref _s1[_rowIdx];
 
     /// <summary>Gets the third component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T3 Get2() => ref _s2[_rowIdx];
+    public ref T3 Get2() => ref _s2[_rowIdx];
 
     /// <summary>Gets the fourth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T4 Get3() => ref _s3[_rowIdx];
+    public ref T4 Get3() => ref _s3[_rowIdx];
 
     /// <summary>Gets the fifth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T5 Get4() => ref _s4[_rowIdx];
+    public ref T5 Get4() => ref _s4[_rowIdx];
 }
 
 /// <summary>
@@ -546,12 +546,12 @@ public ref struct SpanEach<T1, T2, T3, T4, T5, T6>
     private int _rowIdx;
     private int _rowCount;
     private ReadOnlySpan<Entity> _entities;
-    private ReadOnlySpan<T1> _s0;
-    private ReadOnlySpan<T2> _s1;
-    private ReadOnlySpan<T3> _s2;
-    private ReadOnlySpan<T4> _s3;
-    private ReadOnlySpan<T5> _s4;
-    private ReadOnlySpan<T6> _s5;
+    private Span<T1> _s0;
+    private Span<T2> _s1;
+    private Span<T3> _s2;
+    private Span<T4> _s3;
+    private Span<T5> _s4;
+    private Span<T6> _s5;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal SpanEach(ReadOnlySpan<Chunk> chunks)
@@ -609,27 +609,27 @@ public ref struct SpanEach<T1, T2, T3, T4, T5, T6>
 
     /// <summary>Gets the first component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T1 Get0() => ref _s0[_rowIdx];
+    public ref T1 Get0() => ref _s0[_rowIdx];
 
     /// <summary>Gets the second component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T2 Get1() => ref _s1[_rowIdx];
+    public ref T2 Get1() => ref _s1[_rowIdx];
 
     /// <summary>Gets the third component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T3 Get2() => ref _s2[_rowIdx];
+    public ref T3 Get2() => ref _s2[_rowIdx];
 
     /// <summary>Gets the fourth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T4 Get3() => ref _s3[_rowIdx];
+    public ref T4 Get3() => ref _s3[_rowIdx];
 
     /// <summary>Gets the fifth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T5 Get4() => ref _s4[_rowIdx];
+    public ref T5 Get4() => ref _s4[_rowIdx];
 
     /// <summary>Gets the sixth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T6 Get5() => ref _s5[_rowIdx];
+    public ref T6 Get5() => ref _s5[_rowIdx];
 }
 
 /// <summary>
@@ -649,13 +649,13 @@ public ref struct SpanEach<T1, T2, T3, T4, T5, T6, T7>
     private int _rowIdx;
     private int _rowCount;
     private ReadOnlySpan<Entity> _entities;
-    private ReadOnlySpan<T1> _s0;
-    private ReadOnlySpan<T2> _s1;
-    private ReadOnlySpan<T3> _s2;
-    private ReadOnlySpan<T4> _s3;
-    private ReadOnlySpan<T5> _s4;
-    private ReadOnlySpan<T6> _s5;
-    private ReadOnlySpan<T7> _s6;
+    private Span<T1> _s0;
+    private Span<T2> _s1;
+    private Span<T3> _s2;
+    private Span<T4> _s3;
+    private Span<T5> _s4;
+    private Span<T6> _s5;
+    private Span<T7> _s6;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal SpanEach(ReadOnlySpan<Chunk> chunks)
@@ -715,31 +715,31 @@ public ref struct SpanEach<T1, T2, T3, T4, T5, T6, T7>
 
     /// <summary>Gets the first component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T1 Get0() => ref _s0[_rowIdx];
+    public ref T1 Get0() => ref _s0[_rowIdx];
 
     /// <summary>Gets the second component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T2 Get1() => ref _s1[_rowIdx];
+    public ref T2 Get1() => ref _s1[_rowIdx];
 
     /// <summary>Gets the third component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T3 Get2() => ref _s2[_rowIdx];
+    public ref T3 Get2() => ref _s2[_rowIdx];
 
     /// <summary>Gets the fourth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T4 Get3() => ref _s3[_rowIdx];
+    public ref T4 Get3() => ref _s3[_rowIdx];
 
     /// <summary>Gets the fifth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T5 Get4() => ref _s4[_rowIdx];
+    public ref T5 Get4() => ref _s4[_rowIdx];
 
     /// <summary>Gets the sixth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T6 Get5() => ref _s5[_rowIdx];
+    public ref T6 Get5() => ref _s5[_rowIdx];
 
     /// <summary>Gets the seventh component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T7 Get6() => ref _s6[_rowIdx];
+    public ref T7 Get6() => ref _s6[_rowIdx];
 }
 
 /// <summary>
@@ -760,14 +760,14 @@ public ref struct SpanEach<T1, T2, T3, T4, T5, T6, T7, T8>
     private int _rowIdx;
     private int _rowCount;
     private ReadOnlySpan<Entity> _entities;
-    private ReadOnlySpan<T1> _s0;
-    private ReadOnlySpan<T2> _s1;
-    private ReadOnlySpan<T3> _s2;
-    private ReadOnlySpan<T4> _s3;
-    private ReadOnlySpan<T5> _s4;
-    private ReadOnlySpan<T6> _s5;
-    private ReadOnlySpan<T7> _s6;
-    private ReadOnlySpan<T8> _s7;
+    private Span<T1> _s0;
+    private Span<T2> _s1;
+    private Span<T3> _s2;
+    private Span<T4> _s3;
+    private Span<T5> _s4;
+    private Span<T6> _s5;
+    private Span<T7> _s6;
+    private Span<T8> _s7;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal SpanEach(ReadOnlySpan<Chunk> chunks)
@@ -829,33 +829,33 @@ public ref struct SpanEach<T1, T2, T3, T4, T5, T6, T7, T8>
 
     /// <summary>Gets the first component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T1 Get0() => ref _s0[_rowIdx];
+    public ref T1 Get0() => ref _s0[_rowIdx];
 
     /// <summary>Gets the second component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T2 Get1() => ref _s1[_rowIdx];
+    public ref T2 Get1() => ref _s1[_rowIdx];
 
     /// <summary>Gets the third component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T3 Get2() => ref _s2[_rowIdx];
+    public ref T3 Get2() => ref _s2[_rowIdx];
 
     /// <summary>Gets the fourth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T4 Get3() => ref _s3[_rowIdx];
+    public ref T4 Get3() => ref _s3[_rowIdx];
 
     /// <summary>Gets the fifth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T5 Get4() => ref _s4[_rowIdx];
+    public ref T5 Get4() => ref _s4[_rowIdx];
 
     /// <summary>Gets the sixth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T6 Get5() => ref _s5[_rowIdx];
+    public ref T6 Get5() => ref _s5[_rowIdx];
 
     /// <summary>Gets the seventh component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T7 Get6() => ref _s6[_rowIdx];
+    public ref T7 Get6() => ref _s6[_rowIdx];
 
     /// <summary>Gets the eighth component of the current row.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly T8 Get7() => ref _s7[_rowIdx];
+    public ref T8 Get7() => ref _s7[_rowIdx];
 }

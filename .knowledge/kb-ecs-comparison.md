@@ -2,7 +2,7 @@
 title: MiniArch vs Arch vs DefaultEcs 横向对比
 module: MiniArch.Benchmarks
 description: MiniArch 与其他 C# ECS 架构的吞吐量、内存稳定性、结构操作压力对比
-updated: 2026-06-02
+updated: 2026-06-01
 ---
 # MiniArch vs Arch vs DefaultEcs 横向对比
 
@@ -89,21 +89,19 @@ updated: 2026-06-02
 2. **Arch 需要 6 次 `(T[])Components[idx]` castclass**：每次切 chunk 额外类型检查
 3. **Per-chunk 列寻址更短**：MiniArch `_componentIdToColumnIndex[id]` → `_data + offset`；Arch `ComponentIdToArrayIndex[id]` → `Components[ai]` → 类型转换
 
-### 写回（Write-back）场景对比
+### 被否决的方向：为写而扩展 EachSpan
 
-在查询循环内对组件进行写回操作（对每个字段 `++`，读后即写再累加 checksum）：
+曾短暂探索过为 flat `byte[]` chunk 暴露 writable span，并用临时诊断比较多列写回性能。结论不是“继续补一个可写版 EachSpan”，而是相反：
 
-| 场景 | MiniArch (ops/s) | Arch (ops/s) | MiniArch vs Arch |
-|------|:-:|:-:|:-:|
-| 窄写回（2 组件） | 7,408 | 7,949 | **−7%** |
-| 宽写回（6 组件） | 2,440 | 2,854 | **−14%** |
+1. **EachSpan 的产品目标是读路径**。
+2. **写热路径不是当前要解决的问题**。
+3. **为了保留一次性诊断而扩 runtime/API surface 不符合 YAGNI**。
 
-写回场景 MiniArch 落后 Arch 7−14%。原因是 **`Span<T>` 的 JIT 优化差异**：
+因此当前仓库的结论是：
 
-- **Arch**：`GetSpan<T>()` 返回 `Span<T>` 由 `T[]`（typed array）支持 → JIT 能利用 fast path 直接发出带写屏障的数组写入指令
-- **MiniArch**：`GetWritableComponentSpan<T>()` 返回 `Span<T>` 由 `byte[]`（通过 `MemoryMarshal.CreateSpan` 别名化）支持 → JIT 无法证明类型安全，使用慢速通用路径
-
-**这意味着 `byte[]` 布局有一个已知的写代价。** 读越密集，MiniArch 优势越大；写越密集，Arch 优势越大。
+- `EachSpan` 保持只读语义。
+- 不保留 writable span API。
+- 如果未来真有稳定、明确的多列写需求，再单独设计专门的写迭代器或 chunk/ref API，而不是把读 API 强行扩成读写两用。
 
 | 场景 | 读写比 | 推荐引擎 |
 |------|:------:|:--------:|
@@ -119,7 +117,8 @@ updated: 2026-06-02
 | Debug vs Release | 之前报告的 10x 差值是 `dotnet test` 默认 Debug 下的测量假象；Release 下 EachSpan ≈ Manual |
 | EachSpan 开销 | 在 Release 下，EachSpan 比等价的 manual chunk span 代码**没有额外开销**（宽场景还快 13%） |
 | byte[] 优势需要多组件放大 | 窄场景（2 组件）无法展示 byte[] 优势，需要 6+ 组件且每行切换多列的查询 |
-| 写操作有代价 | `Span<T>` over `byte[]` 的 JIT 优化不如 `Span<T>` over `T[]`；纯写场景 Arch 领先 7−14% |
+| EachSpan 是读 API | 当前只保留 `ref readonly` 读语义，不把一次性写诊断沉淀成正式 API |
+| 写方向被 YAGNI 否决 | 没有稳定需求前，不为 `EachSpan` / `Chunk` 保留额外 writable span surface |
 | 约束条件 | 当前 EachSpan 只支持 blittable 组件（非托管类型）；含托管引用的组件必须用 chunk 手动迭代 |
 
 ## 关键理解
@@ -140,5 +139,6 @@ updated: 2026-06-02
 - 需要高确定性、零 GC 暂停、长时间稳定运行
 - 游戏服务器、帧率敏感的动作游戏、实时仿真
 - 结构操作频繁（大量 Spawn/Destroy/AddComponent）的工作负载
+- 读密集查询，尤其是多组件宽查询
 
 如果项目能容忍偶尔 GC 暂停和内存抖动，Arch 已经是很好的选择。如果目标是在极端结构操作下仍然可预测——MiniArch 是当前唯一答案。

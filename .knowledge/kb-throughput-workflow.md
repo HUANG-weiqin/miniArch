@@ -2,7 +2,7 @@
 title: Throughput Workflow
 module: Workspace
 description: Reusable fixed-duration throughput comparison workflow for MiniArch and Arch workloads
-updated: 2026-06-02
+updated: 2026-06-01
 ---
 # Throughput Workflow
 
@@ -48,6 +48,7 @@ updated: 2026-06-02
 - `query-with-all-eachspan-wide`，`EntityCount=100000`，`Duration=10s`，`Repeat=1` 下，`MiniArch` 平均 `6650 ops/s`，`Arch` 平均 `5826 ops/s`，`MiniArch` 领先 `+14%`
 - component span 差距已从早期的 `-45.65%` 大幅缩小至 `-1.62%`；当前有效优化是按 matched archetype 外循环 hoist component column index、通过 internal chunk span 避免 `IReadOnlyList<Chunk>` 索引路径，并保留 row loop 的 `Unsafe.Add(ref base, row)` ref arithmetic。
 - 解释 component span 差距时必须先区分测量口径：BDN 历史数据曾显示 MiniArch span 领先，但 fixed-duration throughput 显示落后；这通常说明要先隔离 harness / hot-loop / JIT codegen 差异，而不是直接归因到 query matching。
+- `EachSpan` 当前只服务读路径；曾做过一次性写诊断来判断是否值得产品化 writable span API，结论是 **不值得**，因此诊断代码和 writable span API 都已删除。
 - command-buffer 吞吐在所有 workload 上 MiniArch 均大幅领先 Arch（`+52%~+144%`）
 - `set-single-component`（`EntityCount=1000`，`Duration=3s`，`Repeat=3`，NoOptimization + read-back）：`MiniArch` 98,783 vs `Arch` 60,058 → `MiniArch +64.5%`
 - `set-two-components`（同上）：`MiniArch` 39,697 vs `Arch` 35,779 → `MiniArch +11.0%`
@@ -73,7 +74,7 @@ updated: 2026-06-02
   - `ThroughputCaseFactory`：新增 workload 的分发点
   - `BenchmarkWorldFactory.cs`：如何复用已有 world shape
 - 跑自定义吞吐对比（如一次性诊断）：
-  - `perf/Throughput.Perf`：自包含的 Release 控制台项目，可快速添加临时 benchmark 方法而不影响正式 runner
+  - `perf/Throughput.Perf`：自包含的 Release 控制台项目，可快速添加临时 **读路径** benchmark 方法而不影响正式 runner
   - 支持自定义 entityCount、warmup、measurement duration
 - 修 bug，先看：
   - `tests/MiniArch.Tests/Core/ThroughputRunnerTests.cs`：参数解析和汇总契约
@@ -89,7 +90,7 @@ updated: 2026-06-02
   - `ops/s` 变快不代表分配也更好，仍要结合 benchmark/MemoryDiagnoser
   - 两边 checksum 都非零不代表 workload 等价，shape 和执行逻辑也必须一致
   - 如果 throughput 结果和 BDN 矛盾，先检查 Execute 方法是否被 JIT 死存储消除
-  - 不要简单把 MiniArch span 落后归因于“Position/Velocity 中间隔着其他组件列”：签名按 component id 归一化后，Position/Velocity 很可能是相邻列；更优先检查 typed array vs flat byte[] 的 JIT codegen、per-chunk class indirection、query snapshot invalidation fast-path、column lookup 是否能按 archetype hoist，以及 Arch `GetSpan<T>()` 返回 `Capacity` 而不是 `Count` 的口径差异。
+  - 不要因为临时诊断能测到写行为，就把 writable span 当成正式能力保留；如果没有稳定需求，优先删掉诊断代码和 API，保持 `EachSpan` 只覆盖读路径。
   - 对 span 热路径追加 unsafe 前必须先看频率：row loop 每行执行，`Unsafe.Add(ref base, row)` 有价值；component-id lookup 如果已经 hoist 到每个 archetype 一次，额外把数组索引改成 unchecked unsafe 通常不值得保留。
   - Arch 的 `chunk.GetSpan<T>()` 返回 capacity 长度；如果 benchmark 用 `positions.Length` 循环，会读到最后 chunk 的 unused default slots。这个口径偏向增加 Arch 工作量，不是 MiniArch 落后的原因，但会影响绝对吞吐和 checksum 解释。
 - 改这里时要特别小心：

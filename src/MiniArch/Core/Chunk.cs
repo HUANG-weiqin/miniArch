@@ -162,7 +162,7 @@ public sealed class Chunk
     /// Gets a typed component span.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ReadOnlySpan<T> GetComponentSpan<T>(ComponentType component)
+    public Span<T> GetComponentSpan<T>(ComponentType component)
     {
         var columnIndex = GetComponentIndex(component);
         return GetComponentSpanAt<T>(columnIndex);
@@ -212,30 +212,10 @@ public sealed class Chunk
         return GetComponentRefAt<T>(columnIndex, row);
     }
 
-    /// <summary>Gets a read-only span of component <typeparamref name="T"/> at the given column index.</summary>
+    /// <summary>Gets a span of component <typeparamref name="T"/> at the given column index.</summary>
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ReadOnlySpan<T> GetComponentSpanAt<T>(int columnIndex)
-    {
-#if DEBUG
-        ValidateElementSize<T>(columnIndex);
-#endif
-        return MemoryMarshal.CreateReadOnlySpan(ref GetComponentRefAt<T>(columnIndex, 0), Count);
-    }
-
-    /// <summary>Gets a writable span of component <typeparamref name="T"/> by component type.</summary>
-    [SkipLocalsInit]
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public Span<T> GetWritableComponentSpan<T>(ComponentType component)
-    {
-        var columnIndex = GetComponentIndex(component);
-        return GetWritableComponentSpanAt<T>(columnIndex);
-    }
-
-    /// <summary>Gets a writable span of component <typeparamref name="T"/> at the given column index.</summary>
-    [SkipLocalsInit]
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal Span<T> GetWritableComponentSpanAt<T>(int columnIndex)
+    public Span<T> GetComponentSpanAt<T>(int columnIndex)
     {
 #if DEBUG
         ValidateElementSize<T>(columnIndex);
