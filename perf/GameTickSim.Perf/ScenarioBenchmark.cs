@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using DefaultEcs;
 using MiniArch.Core;
 using MiniArchBenchmarks.GameTick;
@@ -585,26 +586,7 @@ public static class ScenarioBenchmark
                 // 4. Collide + cleanup enemy bullets
                 {
                     t0 = Stopwatch.GetTimestamp();
-                    var d = 0;
-                    var posComp = Component<Position>.ComponentType;
-                    var chunks = ebQuery.GetChunkSpan();
-                    for (var ci = 0; ci < chunks.Length; ci++)
-                    {
-                        var c = chunks[ci];
-                        var posSpan = c.GetComponentSpan<Position>(posComp);
-                        var en = c.GetEntities();
-                        for (var row = 0; row < c.Count; row++)
-                        {
-                            ref var pos = ref posSpan[row];
-                            var dx = pos.X - playerX;
-                            var dz = pos.Z - playerZ;
-                            if (dx * dx + dz * dz < hitRadiusSqPlayer ||
-                                Math.Abs(pos.X) > screenBound || Math.Abs(pos.Z) > screenBound)
-                            {
-                                if (d < scratch.Length) scratch[d++] = en[row];
-                            }
-                        }
-                    }
+                    var d = ScanPositionEachSpan(ebQuery, scratch, playerX, playerZ, hitRadiusSqPlayer, screenBound);
                     t1 = Stopwatch.GetTimestamp();
                     destroyScanNs += t1 - t0;
 
@@ -616,26 +598,7 @@ public static class ScenarioBenchmark
                 // 5. Collide + cleanup player bullets
                 {
                     t0 = Stopwatch.GetTimestamp();
-                    var d = 0;
-                    var posComp = Component<Position>.ComponentType;
-                    var chunks = pbQuery.GetChunkSpan();
-                    for (var ci = 0; ci < chunks.Length; ci++)
-                    {
-                        var c = chunks[ci];
-                        var posSpan = c.GetComponentSpan<Position>(posComp);
-                        var en = c.GetEntities();
-                        for (var row = 0; row < c.Count; row++)
-                        {
-                            ref var pos = ref posSpan[row];
-                            var dx = pos.X - bossX;
-                            var dz = pos.Z - bossZ;
-                            if (dx * dx + dz * dz < hitRadiusSqBoss ||
-                                Math.Abs(pos.X) > screenBound || Math.Abs(pos.Z) > screenBound)
-                            {
-                                if (d < scratch.Length) scratch[d++] = en[row];
-                            }
-                        }
-                    }
+                    var d = ScanPositionEachSpan(pbQuery, scratch, bossX, bossZ, hitRadiusSqBoss, screenBound);
                     t1 = Stopwatch.GetTimestamp();
                     destroyScanNs += t1 - t0;
 
@@ -647,21 +610,7 @@ public static class ScenarioBenchmark
                 // 6. Process particles
                 {
                     t0 = Stopwatch.GetTimestamp();
-                    var d = 0;
-                    var ltComp = Component<Lifetime>.ComponentType;
-                    var chunks = ptQuery.GetChunkSpan();
-                    for (var ci = 0; ci < chunks.Length; ci++)
-                    {
-                        var c = chunks[ci];
-                        var ltSpan = c.GetComponentSpan<Lifetime>(ltComp);
-                        for (var row = 0; row < c.Count; row++)
-                        {
-                            ref var lt = ref ltSpan[row];
-                            lt.Value -= 1f;
-                            if (lt.Value <= 0 && d < scratch.Length)
-                                scratch[d++] = c.GetEntity(row);
-                        }
-                    }
+                    var d = ScanLifetimeEachSpan(ptQuery, scratch);
                     t1 = Stopwatch.GetTimestamp();
                     destroyScanNs += t1 - t0;
 
@@ -1046,6 +995,44 @@ public static class ScenarioBenchmark
         var result = new ScenarioResult("", engine, opsPerSec, avgMs, heapDeltaKB, memoryStable, gen0, gen1, gen2);
         Console.WriteLine($"  {engine,12}: {opsPerSec,10:F1} ops/s | {avgMs,8:F3}ms/op | heap {heapDeltaKB,8:F1}KB {(memoryStable ? "OK" : "WARN")} | GC {gen0}/{gen1}/{gen2} | {totalTicks} ticks in {durationSeconds}s");
         return result;
+    }
+
+    // Keep span scans out of the large BulletHell Tick method. Inlining these loops
+    // causes poor JIT codegen from register pressure around the row ref struct.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static int ScanPositionEachSpan(MiniArch.Core.Query query, MiniArch.Entity[] scratch, float targetX, float targetZ, float hitRadiusSq, float screenBound)
+    {
+        var d = 0;
+        foreach (var row in query.EachSpan<Position>())
+        {
+            ref var pos = ref row.Get0();
+            var dx = pos.X - targetX;
+            var dz = pos.Z - targetZ;
+            if (dx * dx + dz * dz < hitRadiusSq ||
+                Math.Abs(pos.X) > screenBound || Math.Abs(pos.Z) > screenBound)
+            {
+                if (d < scratch.Length) scratch[d++] = row.Entity;
+            }
+        }
+
+        return d;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static int ScanLifetimeEachSpan(MiniArch.Core.Query query, MiniArch.Entity[] scratch)
+    {
+        var d = 0;
+        foreach (var row in query.EachSpan<Lifetime>())
+        {
+            ref var lt = ref row.Get0();
+            lt.Value -= 1f;
+            if (lt.Value <= 0 && d < scratch.Length)
+            {
+                scratch[d++] = row.Entity;
+            }
+        }
+
+        return d;
     }
 
     static void PrintSummary()

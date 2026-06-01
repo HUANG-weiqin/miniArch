@@ -2,7 +2,7 @@
 title: MiniArch vs Arch vs DefaultEcs 横向对比
 module: MiniArch.Benchmarks
 description: MiniArch 与其他 C# ECS 架构的吞吐量、内存稳定性、结构操作压力对比
-updated: 2026-06-03
+updated: 2026-06-01
 ---
 # MiniArch vs Arch vs DefaultEcs 横向对比
 
@@ -116,6 +116,7 @@ updated: 2026-06-03
 |------|------|
 | Debug vs Release | 之前报告的 10x 差值是 `dotnet test` 默认 Debug 下的测量假象；Release 下 EachSpan ≈ Manual |
 | EachSpan 开销 | 在 Release 下，EachSpan 比等价的 manual chunk span 代码**没有额外开销**（宽场景还快 13%） |
+| EachSpan JIT 坑点 | `EachSpan` 循环如果直接写进局部变量很多的大型 tick 方法，`ref struct` row copy 可能触发 register pressure / spilling，K-BulletHell 曾从 ~6.6k ops/s 掉到 ~2.3k；把 span scan 抽成小的 `[NoInlining]` helper 后恢复到 ~6.9k ops/s |
 | byte[] 优势需要多组件放大 | 窄场景（2 组件）无法展示 byte[] 优势，需要 6+ 组件且每行切换多列的查询 |
 | EachSpan 是读 API | 当前只保留 `ref readonly` 读语义，不把一次性写诊断沉淀成正式 API |
 | 写方向被 YAGNI 否决 | 没有稳定需求前，不为 `EachSpan` / `Chunk` 保留额外 writable span surface |
