@@ -1,5 +1,6 @@
 using Arch.Core;
 using MiniArch.Core;
+using DefaultEcs;
 
 namespace MiniArchBenchmarks;
 
@@ -11,6 +12,8 @@ using MiniComponentType = MiniArch.Core.ComponentType;
 using ArchQueryDescription = Arch.Core.QueryDescription;
 using ArchEntity = Arch.Core.Entity;
 using ArchWorld = Arch.Core.World;
+using DefaultEntity = DefaultEcs.Entity;
+using DefaultWorld = DefaultEcs.World;
 
 public static partial class BenchmarkWorldFactory
 {
@@ -659,5 +662,136 @@ public static partial class BenchmarkWorldFactory
         return new ArchQueryDescription()
             .WithAll<Position, Velocity, Health, Team>()
             .WithAny<AnyTagA, AnyTagB>();
+    }
+
+    public static DefaultWorldState CreateDefaultWorldWithPosition(int entityCount)
+    {
+        var world = new DefaultWorld();
+        var entities = new DefaultEntity[entityCount];
+        for (var i = 0; i < entityCount; i++)
+        {
+            entities[i] = world.CreateEntity();
+            entities[i].Set(new Position(i, i));
+        }
+
+        return new DefaultWorldState(world, entities);
+    }
+
+    public static DefaultWorldState CreateDefaultWorldWithPositionAndVelocity(int entityCount)
+    {
+        var world = new DefaultWorld();
+        var entities = new DefaultEntity[entityCount];
+        for (var i = 0; i < entityCount; i++)
+        {
+            entities[i] = world.CreateEntity();
+            entities[i].Set(new Position(i, i));
+            entities[i].Set(new Velocity(i, i));
+        }
+
+        return new DefaultWorldState(world, entities);
+    }
+
+    public static DefaultEntityQueryWorldState CreateDefaultComplexQueryWorld(int entityCount)
+    {
+        var world = new DefaultWorld();
+        var entities = CreateDefaultComplexQueryEntities(world, entityCount);
+        var entitySet = BuildDefaultWithAllQuery(world);
+        return new DefaultEntityQueryWorldState(world, entities, entitySet);
+    }
+
+    internal static EntitySet BuildDefaultWithAllQuery(DefaultWorld world)
+    {
+        return world.GetEntities()
+            .With<Position>()
+            .With<Velocity>()
+            .With<Health>()
+            .With<Team>()
+            .AsSet();
+    }
+
+    private static DefaultEntity[] CreateDefaultComplexQueryEntities(DefaultWorld world, int entityCount)
+    {
+        var archetypeCounts = GetComplexQueryArchetypeCounts(entityCount);
+        var entities = new DefaultEntity[entityCount];
+        var entityIndex = 0;
+
+        for (var group = 0; group < archetypeCounts.Length; group++)
+        {
+            for (var i = 0; i < archetypeCounts[group]; i++)
+            {
+                entities[entityIndex] = CreateDefaultComplexEntity(world, group, entityIndex);
+                entityIndex++;
+            }
+        }
+
+        return entities;
+    }
+
+    private static DefaultEntity CreateDefaultComplexEntity(DefaultWorld world, int group, int entityIndex)
+    {
+        var entity = world.CreateEntity();
+        entity.Set(new Position(entityIndex, entityIndex + 1));
+        entity.Set(new Velocity(entityIndex + 2, entityIndex + 3));
+        entity.Set(new Team(entityIndex % 4));
+        entity.Set(new Health(100 + (entityIndex % 50)));
+        entity.Set(new Acceleration(entityIndex + 4, entityIndex + 5));
+        entity.Set(new Mana(entityIndex % 100));
+        entity.Set(new Mass(1 + (entityIndex % 8)));
+        entity.Set(new Rotation(entityIndex % 360));
+
+        switch (group)
+        {
+            case 0:
+                entity.Set(new AnyTagA(entityIndex));
+                break;
+            case 1:
+                entity.Set(new ExcludedTag(entityIndex));
+                break;
+            case 2:
+                entity.Set(new Shield(50 + (entityIndex % 10)));
+                entity.Set(new AnyTagB(entityIndex));
+                break;
+            case 3:
+                entity.Set(new Shield(80 + (entityIndex % 10)));
+                entity.Set(new Damage(10 + (entityIndex % 5)));
+                break;
+            case 4:
+                entity.Set(new Damage(20 + (entityIndex % 7)));
+                entity.Set(new ExcludedTag(entityIndex));
+                break;
+        }
+
+        return entity;
+    }
+}
+
+public sealed class DefaultWorldState
+{
+    public DefaultWorldState(DefaultWorld world, DefaultEntity[] entities)
+    {
+        World = world;
+        Entities = entities;
+    }
+
+    public DefaultWorld World;
+    public DefaultEntity[] Entities;
+}
+
+public sealed class DefaultEntityQueryWorldState : IDisposable
+{
+    public DefaultEntityQueryWorldState(DefaultWorld world, DefaultEntity[] entities, EntitySet entitySet)
+    {
+        World = world;
+        Entities = entities;
+        EntitySet = entitySet;
+    }
+
+    public DefaultWorld World;
+    public DefaultEntity[] Entities;
+    public EntitySet EntitySet;
+
+    public void Dispose()
+    {
+        World.Dispose();
     }
 }

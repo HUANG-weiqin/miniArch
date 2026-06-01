@@ -1,5 +1,6 @@
 using Arch.Core;
 using MiniArch.Core;
+using DefaultEcs;
 
 namespace MiniArchBenchmarks;
 
@@ -9,6 +10,8 @@ using ArchEntity = Arch.Core.Entity;
 using ArchWorld = Arch.Core.World;
 using MiniEntity = MiniArch.Entity;
 using MiniWorld = MiniArch.World;
+using DefaultEntity = DefaultEcs.Entity;
+using DefaultWorld = DefaultEcs.World;
 
 public enum CommandBufferBenchmarkScenario
 {
@@ -392,6 +395,116 @@ public static class CommandBufferBenchmarkScenarioFactory
 
         return entities;
     }
+
+    public static DefaultSharedCommandBufferState CreateDefaultSharedState(CommandBufferBenchmarkScenario scenario, int entityCount)
+    {
+        var world = new DefaultWorld();
+        var existingEntities = scenario is CommandBufferBenchmarkScenario.CreateHeavy
+            ? Array.Empty<DefaultEntity>()
+            : CreateDefaultBaselineEntities(world, entityCount);
+        return new DefaultSharedCommandBufferState(world, existingEntities, entityCount);
+    }
+
+    public static void RunDefaultSharedScenario(DefaultSharedCommandBufferState state, CommandBufferBenchmarkScenario scenario)
+    {
+        switch (scenario)
+        {
+            case CommandBufferBenchmarkScenario.DenseExisting:
+                RunDefaultDenseExisting(state);
+                return;
+            case CommandBufferBenchmarkScenario.CreateHeavy:
+                RunDefaultCreateHeavy(state);
+                return;
+            case CommandBufferBenchmarkScenario.MixedScript:
+                RunDefaultMixedScript(state);
+                return;
+        }
+    }
+
+    private static DefaultEntity[] CreateDefaultBaselineEntities(DefaultWorld world, int entityCount)
+    {
+        var entities = new DefaultEntity[entityCount];
+        for (var i = 0; i < entityCount; i++)
+        {
+            var entity = world.CreateEntity();
+            entity.Set(new BenchmarkPosition(i, i + 1));
+            entity.Set(new BenchmarkVelocity(i + 2, i + 3));
+            entity.Set(new BenchmarkHealth(100 + i));
+            entities[i] = entity;
+        }
+
+        return entities;
+    }
+
+    private static void RunDefaultDenseExisting(DefaultSharedCommandBufferState state)
+    {
+        for (var i = 0; i < state.ExistingEntities.Length; i++)
+        {
+            var entity = state.ExistingEntities[i];
+            entity.Set(new BenchmarkPosition(i + 1, i + 2));
+            entity.Set(new BenchmarkVelocity(i + 3, i + 4));
+            entity.Set(new BenchmarkHealth(200 + i));
+
+            if ((i & 1) == 0)
+                entity.Remove<BenchmarkHealth>();
+            else
+                entity.Set(new BenchmarkArmor(300 + i));
+
+            if ((i & 7) == 0)
+                entity.Dispose();
+        }
+    }
+
+    private static void RunDefaultCreateHeavy(DefaultSharedCommandBufferState state)
+    {
+        for (var i = 0; i < state.EntityCount; i++)
+        {
+            var entity = state.World.CreateEntity();
+            entity.Set(new BenchmarkPosition(i + 1, i + 2));
+            entity.Set(new BenchmarkVelocity(i + 3, i + 4));
+            entity.Set(new BenchmarkHealth(200 + i));
+
+            if ((i & 1) == 0)
+                entity.Remove<BenchmarkVelocity>();
+
+            if ((i & 3) == 0)
+                entity.Dispose();
+        }
+    }
+
+    private static void RunDefaultMixedScript(DefaultSharedCommandBufferState state)
+    {
+        for (var i = 0; i < state.EntityCount; i++)
+        {
+            if ((i & 1) == 0)
+            {
+                var entity = state.ExistingEntities[i];
+                entity.Set(new BenchmarkPosition(i + 1, i + 2));
+                entity.Set(new BenchmarkVelocity(i + 3, i + 4));
+
+                if ((i & 3) == 0)
+                    entity.Remove<BenchmarkHealth>();
+                else
+                    entity.Set(new BenchmarkHealth(300 + i));
+
+                if ((i & 7) == 0)
+                    entity.Dispose();
+            }
+            else
+            {
+                var entity = state.World.CreateEntity();
+                entity.Set(new BenchmarkPosition(i + 11, i + 12));
+                entity.Set(new BenchmarkVelocity(i + 13, i + 14));
+                entity.Set(new BenchmarkHealth(400 + i));
+
+                if ((i & 3) == 1)
+                    entity.Remove<BenchmarkVelocity>();
+
+                if ((i & 7) == 1)
+                    entity.Dispose();
+            }
+        }
+    }
 }
 
 public sealed class MiniSharedCommandBufferState
@@ -454,6 +567,27 @@ public sealed class MiniHierarchyCommandBufferState
     public MiniEntity[] Children { get; }
 
     public int Capacity { get; }
+}
+
+public sealed class DefaultSharedCommandBufferState : IDisposable
+{
+    public DefaultSharedCommandBufferState(DefaultWorld world, DefaultEntity[] existingEntities, int entityCount)
+    {
+        World = world;
+        ExistingEntities = existingEntities;
+        EntityCount = entityCount;
+    }
+
+    public DefaultWorld World { get; }
+
+    public DefaultEntity[] ExistingEntities { get; }
+
+    public int EntityCount { get; }
+
+    public void Dispose()
+    {
+        World.Dispose();
+    }
 }
 
 public readonly record struct BenchmarkPosition(int X, int Y);
