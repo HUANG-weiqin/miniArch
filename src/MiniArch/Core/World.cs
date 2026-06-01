@@ -277,7 +277,7 @@ public sealed class World : IDisposable
         var componentType1 = GetComponentType<T1>();
         var archetype = GetOrCreateCreateArchetype<T1>(componentType1);
         var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
-        chunk.SetComponentAtTyped(archetype.GetComponentIndex(componentType1), rowIndex, in component1);
+        chunk.SetComponentAtTyped(0, rowIndex, in component1);
         return entity;
     }
 
@@ -837,9 +837,15 @@ public sealed class World : IDisposable
     {
         ThrowIfDisposed();
 
+        if (!_hierarchy.HasLinks)
+        {
+            DestroySingle(entity, removeHierarchy: false);
+            return;
+        }
+
         if (!_hierarchy.HasChildren(entity))
         {
-            DestroySingle(entity);
+            DestroySingle(entity, removeHierarchy: true);
             return;
         }
 
@@ -860,7 +866,7 @@ public sealed class World : IDisposable
 
             for (var index = 0; index < _destroyOrderScratch.Count; index++)
             {
-                DestroySingle(_destroyOrderScratch[index]);
+                DestroySingle(_destroyOrderScratch[index], removeHierarchy: true);
             }
         }
         finally
@@ -1547,14 +1553,17 @@ public sealed class World : IDisposable
         throw new InvalidOperationException($"Entity {entity} is no longer alive. It may have been destroyed in a previous frame or the handle is stale.");
     }
 
-    private void DestroySingle(Entity entity)
+    private void DestroySingle(Entity entity, bool removeHierarchy)
     {
         var info = GetRequiredLocation(entity);
         info.Archetype.RemoveEntity(info.ChunkIndex, info.RowIndex, out var movedEntity);
-        _hierarchy.RemoveDestroyed(entity);
+        if (removeHierarchy)
+        {
+            _hierarchy.RemoveDestroyed(entity);
+        }
         _locations[entity.Id] = default;
         _versions[entity.Id] = entity.Version + 1;
-        PushFreeId(entity.Id, entity.Version + 1);
+        PushFreeIdUnsafe(entity.Id, entity.Version + 1);
 
         if (movedEntity.IsValid)
         {
@@ -1564,7 +1573,7 @@ public sealed class World : IDisposable
 
     private Entity CreateInArchetype(Archetype archetype, out Chunk chunk, out int rowIndex)
     {
-        var id = AcquireEntityId(out var version);
+        var id = AcquireEntityIdUnsafe(out var version);
         var entity = new Entity(id, version);
         chunk = archetype.ReserveEntity(entity, out var chunkIndex, out rowIndex);
         _locations[id] = new EntityLocation(archetype, chunkIndex, rowIndex);
@@ -1672,43 +1681,37 @@ public sealed class World : IDisposable
 
     private readonly object _entityIdLock = new();
 
-    private int AcquireEntityId(out int version)
+    private int AcquireEntityIdUnsafe(out int version)
     {
-        lock (_entityIdLock)
+        if (_freeIdCount > 0)
         {
-            if (_freeIdCount > 0)
-            {
-                var recycled = PopFreeId();
-                version = recycled.Version;
-                return recycled.Id;
-            }
-
-            var id = _entitySlotCount;
-            EnsureEntityCapacity(_entitySlotCount + 1);
-            _versions[_entitySlotCount] = 1;
-            _locations[_entitySlotCount] = default;
-            _entitySlotCount++;
-            EnsureDestroyScratchCapacity(_entitySlotCount);
-            version = 1;
-            return id;
+            var recycled = PopFreeIdUnsafe();
+            version = recycled.Version;
+            return recycled.Id;
         }
+
+        var id = _entitySlotCount;
+        EnsureEntityCapacity(_entitySlotCount + 1);
+        _versions[_entitySlotCount] = 1;
+        _locations[_entitySlotCount] = default;
+        _entitySlotCount++;
+        EnsureDestroyScratchCapacity(_entitySlotCount);
+        version = 1;
+        return id;
     }
 
-    private void PushFreeId(int id, int version)
+    private void PushFreeIdUnsafe(int id, int version)
     {
-        lock (_entityIdLock)
+        if (_freeIdCount == _freeIds.Length)
         {
-            if (_freeIdCount == _freeIds.Length)
-            {
-                var newCapacity = _freeIds.Length == 0 ? 4 : _freeIds.Length * 2;
-                Array.Resize(ref _freeIds, newCapacity);
-            }
-
-            _freeIds[_freeIdCount++] = new RecycledEntity(id, version);
+            var newCapacity = _freeIds.Length == 0 ? 4 : _freeIds.Length * 2;
+            Array.Resize(ref _freeIds, newCapacity);
         }
+
+        _freeIds[_freeIdCount++] = new RecycledEntity(id, version);
     }
 
-    private RecycledEntity PopFreeId()
+    private RecycledEntity PopFreeIdUnsafe()
     {
         return _freeIds[--_freeIdCount];
     }
@@ -1734,8 +1737,11 @@ public sealed class World : IDisposable
 
     internal Entity ReserveDeferredEntity()
     {
-        var id = AcquireEntityId(out var version);
-        return new Entity(id, version);
+        lock (_entityIdLock)
+        {
+            var id = AcquireEntityIdUnsafe(out var version);
+            return new Entity(id, version);
+        }
     }
 
     internal void ReleaseReservedEntity(Entity entity)
@@ -1752,7 +1758,7 @@ public sealed class World : IDisposable
 
         var nextVersion = entity.Version + 1;
         _versions[entity.Id] = nextVersion;
-        PushFreeId(entity.Id, nextVersion);
+        PushFreeIdUnsafe(entity.Id, nextVersion);
     }
 
     /// <summary>

@@ -11,7 +11,10 @@ internal sealed class HierarchyTable
     private int[] _childNext = [];
     private int _childSlotCount;
     private int _childFreeList = NoSlot;
+    private int _linkCount;
     private readonly List<(Entity Entity, bool Expanded)> _destroyTraversalStack = new(4);
+
+    public bool HasLinks => _linkCount > 0;
 
     public void Reset()
     {
@@ -19,6 +22,7 @@ internal sealed class HierarchyTable
         Array.Fill(_firstChild, NoSlot);
         _childSlotCount = 0;
         _childFreeList = NoSlot;
+        _linkCount = 0;
     }
 
     public void Link(World world, Entity parent, Entity child)
@@ -31,6 +35,7 @@ internal sealed class HierarchyTable
 
         _parentByChild[child.Id] = parent;
         AddChildToParent(parent.Id, child);
+        _linkCount++;
     }
 
     public void LinkRestored(Entity parent, Entity child)
@@ -40,6 +45,7 @@ internal sealed class HierarchyTable
 
         _parentByChild[child.Id] = parent;
         AddChildToParent(parent.Id, child);
+        _linkCount++;
     }
 
     public void Unlink(Entity child)
@@ -61,6 +67,7 @@ internal sealed class HierarchyTable
         }
 
         _parentByChild[child.Id] = NoEntity;
+        _linkCount--;
     }
 
     public bool TryGetParent(World world, Entity child, out Entity parent)
@@ -236,9 +243,14 @@ internal sealed class HierarchyTable
         }
 
         var parent = _parentByChild[entity.Id];
-        if (parent != NoEntity && parent.Id >= 0 && parent.Id < _firstChild.Length)
+        if (parent != NoEntity)
         {
-            RemoveChildFromParent(parent.Id, entity);
+            if (parent.Id >= 0 && parent.Id < _firstChild.Length)
+            {
+                RemoveChildFromParent(parent.Id, entity);
+            }
+
+            _linkCount--;
         }
 
         _parentByChild[entity.Id] = NoEntity;
@@ -257,6 +269,7 @@ internal sealed class HierarchyTable
             }
 
             FreeChildSlot(slot);
+            _linkCount--;
             slot = next;
         }
     }

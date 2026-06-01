@@ -76,6 +76,8 @@ Entity 是 `(id, version)` 二元组；World 维护两张并行数组 `_versions
   freeIds.Push(id, newVersion)
 ```
 
+直接 `World.Create/Destroy` 走无锁 `_freeIds` 热路径；只有 `CommandBuffer` recording 的 deferred reservation 通过 `ReserveDeferredEntity` 内部锁串行化，因为并发保证只覆盖多 buffer 录制，不覆盖 world 并发写。
+
 ### 状态模型
 
 - `_versions[id]`：版本号，销毁+1，防止悬空句柄复用
@@ -252,9 +254,11 @@ QueryDescription（用户层 Type 集合）→ QueryFilter（运行时 Component
 
 ```
 Link(parent, child):
-  验证无环 → Unlink(child) → AllocateSlot → 头插法
+  验证无环 → Unlink(child) → AllocateSlot → 头插法 → linkCount++
 
 Destroy 子树:
+  if linkCount == 0: 完全跳过 hierarchy side-table
+  if root 无 children: 只清自身 parent/slot
   DFS 后序遍历（visited generation 防重）→ 逐个 DestroySingle
 ```
 
@@ -262,6 +266,7 @@ Destroy 子树:
 
 - Hierarchy 是 side-table，不参与 archetype 签名，不能用 Query 查询。
 - Children 枚举跳过已死 entity（`world.IsAlive`），链表里可以有脏条目。
+- 没有任何 hierarchy link 时，Destroy 不应该查 `HasChildren` / `RemoveDestroyed`；否则纯 ECS create/destroy 会为可选 side-table 付 8-12% 级别固定成本。
 
 ---
 
