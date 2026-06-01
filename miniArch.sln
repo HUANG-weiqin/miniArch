@@ -17,6 +17,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HeroComing.Perf", "perf\Her
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QueryInvalidation.Perf", "perf\QueryInvalidation.Perf\QueryInvalidation.Perf.csproj", "{F2FC2665-6A9C-482A-96E1-3E599B5BF8F8}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "benchmarks", "benchmarks", "{76B560ED-609C-4D21-9ADC-145D72556178}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MiniArch.Benchmarks", "benchmarks\MiniArch.Benchmarks\MiniArch.Benchmarks.csproj", "{91F501BE-0354-4036-BB50-515C7393BC97}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -43,6 +47,10 @@ Global
 		{F2FC2665-6A9C-482A-96E1-3E599B5BF8F8}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F2FC2665-6A9C-482A-96E1-3E599B5BF8F8}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F2FC2665-6A9C-482A-96E1-3E599B5BF8F8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{91F501BE-0354-4036-BB50-515C7393BC97}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{91F501BE-0354-4036-BB50-515C7393BC97}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{91F501BE-0354-4036-BB50-515C7393BC97}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{91F501BE-0354-4036-BB50-515C7393BC97}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -51,5 +59,6 @@ Global
 		{60B37132-C349-4E04-A392-888A67D04EB8} = {E3AC927E-9C6C-4BA4-95B6-8C8C5AB2E456}
 		{F9E30B84-63BA-4107-B020-598A8BFEA792} = {A989F849-EE38-4F2D-BAF5-DFC5F396D6CD}
 		{F2FC2665-6A9C-482A-96E1-3E599B5BF8F8} = {A989F849-EE38-4F2D-BAF5-DFC5F396D6CD}
+		{91F501BE-0354-4036-BB50-515C7393BC97} = {76B560ED-609C-4D21-9ADC-145D72556178}
 	EndGlobalSection
 EndGlobal
