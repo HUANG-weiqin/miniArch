@@ -1737,11 +1737,8 @@ public sealed class World : IDisposable
 
     internal Entity ReserveDeferredEntity()
     {
-        lock (_entityIdLock)
-        {
-            var id = AcquireEntityIdUnsafe(out var version);
-            return new Entity(id, version);
-        }
+        var id = AcquireEntityIdUnsafe(out var version);
+        return new Entity(id, version);
     }
 
     internal void ReleaseReservedEntity(Entity entity)
