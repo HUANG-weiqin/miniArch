@@ -13,6 +13,7 @@ using Hero.GameplayEcs.Characters.Spawn;
 using Hero.GameplayEcs.Trigger;
 using Hero.GameplayEcs.TurnSerial;
 using Hero.Tests.Fixtures;
+using MiniArch.Core;
 
 namespace Hero.Tests;
 
@@ -42,7 +43,7 @@ public sealed class PipelineBenchmarkTests
 
         long ticks = 0;
         Stopwatch sw = Stopwatch.StartNew();
-        while (sw.ElapsedMilliseconds < 20000)
+        while (sw.ElapsedMilliseconds < 3000)
         {
             ExecuteMoveCycle(runtime, core, player);
             ticks++;
@@ -80,7 +81,7 @@ public sealed class PipelineBenchmarkTests
 
         long ticks = 0;
         Stopwatch sw = Stopwatch.StartNew();
-        while (sw.ElapsedMilliseconds < 20000)
+        while (sw.ElapsedMilliseconds < 3000)
         {
             ExecuteSimpleAttackCycle(runtime, core, action, enemy);
             ticks++;
@@ -134,7 +135,7 @@ public sealed class PipelineBenchmarkTests
 
         long ticks = 0;
         Stopwatch sw = Stopwatch.StartNew();
-        while (sw.ElapsedMilliseconds < 20000)
+        while (sw.ElapsedMilliseconds < 3000)
         {
             ExecuteAttackWithTriggerCycle(runtime, core, action, enemy, player);
             ticks++;
@@ -198,7 +199,7 @@ public sealed class PipelineBenchmarkTests
 
         long ticks = 0;
         Stopwatch sw = Stopwatch.StartNew();
-        while (sw.ElapsedMilliseconds < 20000)
+        while (sw.ElapsedMilliseconds < 3000)
         {
             ExecuteFullPlayCardWithCollisionCycle(runtime, core, triggerCard, enemy, player);
             ticks++;
@@ -251,7 +252,7 @@ public sealed class PipelineBenchmarkTests
 
         long ticks = 0;
         Stopwatch sw = Stopwatch.StartNew();
-        while (sw.ElapsedMilliseconds < 20000)
+        while (sw.ElapsedMilliseconds < 3000)
         {
             ExecuteFullPlayCardWithCollisionCycle(runtime, core, triggerCard, enemy, player);
             ticks++;
@@ -345,13 +346,13 @@ public sealed class PipelineBenchmarkTests
     private static MiniArch.Entity FindActionChild(
         MiniArchRuntime runtime, FrameView frame, MiniArch.Entity parent, ActionKind kind)
     {
-        foreach (MiniArch.Entity entity in frame.Each(
-            new MiniArch.QueryDescription().With<ActionEntity>().With<ActionKind>()))
+        foreach (var row in frame.ChunkQuery(
+            new MiniArch.QueryDescription().With<ActionEntity>().With<ActionKind>()).EachSpan<ActionKind>())
         {
-            if (runtime.World.TryGetParent(entity, out MiniArch.Entity p) && p == parent
-                && frame.Get<ActionKind>(entity).Value == kind.Value)
+            if (runtime.World.TryGetParent(row.Entity, out MiniArch.Entity p) && p == parent
+                && row.Get0().Value == kind.Value)
             {
-                return entity;
+                return row.Entity;
             }
         }
         throw new InvalidOperationException($"No action child of kind {kind.Value} found.");
