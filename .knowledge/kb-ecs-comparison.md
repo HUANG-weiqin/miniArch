@@ -137,7 +137,8 @@ updated: 2026-06-01
 | C-StructuralAddRemove | 9K add + 9K remove Debuff | ~874 | ~2082 | ~643 | **DefaultEcs** |
 | J-CreationBurst | 10K create + 10K destroy | ~1666 | ~1372 | ~1419 | **MiniArch** |
 | D-MassCreateDestroy | 4.5K create + 4.5K destroy | ~1665 | ~1196 | ~1776 | **Arch** |
-| E-MixedFullTick | 8 阶段混合负载 | ~580 | ~220 | ~484 | **MiniArch** |
+| E-MixedFullTick | 12 阶段 RPG 混合负载 | ~607 | ~217 | ~499 | **MiniArch** |
+| K-BulletHell | 8 阶段弹幕射击混合负载 | ~4470 | ~1866 | ~5103 | **Arch** |
 
 ### 场景关键发现
 
@@ -148,8 +149,19 @@ updated: 2026-06-01
 | 组件越多 chunk 优势越大 | 2 组件 DefaultEcs 落后 2x → 5 组件落后 2.3x |
 | DefaultEcs 独赢结构变更 | per-entity sparse set 无需 archetype migration，2.4x 快于 MiniArch |
 | EntitySet 重建是 DefaultEcs 致命伤 | 隔离赢结构变更 2.4x，但混合场景输 2.5x（每次变更后必须重建缓存） |
-| Arch 有内存泄漏 | 混合场景 +1822KB 持续增长 heap（固定量，不累积但也不回收） |
+| Arch 有内存泄漏（仅 add/remove 时） | RPG 混合 +1822KB；弹幕模式（仅 create/destroy）无泄漏 |
 | MiniArch 稀疏查询无显著优势 | post-rebase 后 vs Arch 仅 ~2-6% 差距，两者都有 query cache |
+
+### 负载模式决定胜者
+
+| 游戏模式 | 负载特征 | 胜者 | 差距 |
+|----------|----------|:----:|------|
+| E-MixedFullTick (RPG) | 重结构变更 + 8+查询交替 | **MiniArch** | +22% vs Arch |
+| K-BulletHell (弹幕射击) | 重迭代 + 轻结构变更 | **Arch** | +14% vs MiniArch |
+
+弹幕射击模式（K）设计：5 种实体（Player/Boss/EnemyBullet/PlayerBullet/Particle），每 tick 创建 800+销毁 ~800，MoveAll 迭代 ~12K 实体。与 RPG 模式关键差异：无 add/remove component（仅 BossEnrage 每 100 tick 1 次），纯 create/destroy + 迭代主导。
+
+**结论：差距真实存在且方向取决于负载特征。** MiniArch 在结构变更频繁的混合负载中领先，Arch 在迭代主导的负载中领先。
 
 ### 12 阶段混合 Tick 扩展（增加 4 个 query 轮次）
 
