@@ -14,39 +14,34 @@ public sealed class ChunkTests
     [Fact]
     public void Chunk_stores_entities_densely()
     {
-        var registry = ComponentRegistry.Shared;
-        var position = registry.GetOrCreate<Position>();
-        var velocity = registry.GetOrCreate<Velocity>();
+        var position = MiniArch.Core.Component<Position>.ComponentType;
+        var velocity = MiniArch.Core.Component<Velocity>.ComponentType;
         var signature = new Signature(position, velocity);
         var chunk = CreateChunk(signature, typeof(Position), typeof(Velocity), capacity: 4);
 
         var first = new Entity(1, 1);
         var second = new Entity(2, 1);
 
-        var firstRow = chunk.Add(first, new Dictionary<ComponentType, object?>
-        {
-            [position] = new Position(1, 2),
-            [velocity] = new Velocity(3, 4),
-        });
-        var secondRow = chunk.Add(second, new Dictionary<ComponentType, object?>
-        {
-            [position] = new Position(5, 6),
-            [velocity] = new Velocity(7, 8),
-        });
+        var firstRow = chunk.Add(first);
+        chunk.SetComponentAtTyped(chunk.GetComponentIndex(position), firstRow, new Position(1, 2));
+        chunk.SetComponentAtTyped(chunk.GetComponentIndex(velocity), firstRow, new Velocity(3, 4));
+
+        var secondRow = chunk.Add(second);
+        chunk.SetComponentAtTyped(chunk.GetComponentIndex(position), secondRow, new Position(5, 6));
+        chunk.SetComponentAtTyped(chunk.GetComponentIndex(velocity), secondRow, new Velocity(7, 8));
 
         Assert.Equal(0, firstRow);
         Assert.Equal(1, secondRow);
         Assert.Equal(first, chunk.GetEntity(0));
         Assert.Equal(second, chunk.GetEntity(1));
-        Assert.Equal(new Position(5, 6), chunk.GetComponent<Position>(position, 1));
+        Assert.Equal(new Position(5, 6), chunk.GetComponentSpan<Position>(position)[1]);
     }
 
     [Fact]
     public void Removing_a_row_swaps_last_row_into_the_gap()
     {
-        var registry = ComponentRegistry.Shared;
-        var position = registry.GetOrCreate<Position>();
-        var velocity = registry.GetOrCreate<Velocity>();
+        var position = MiniArch.Core.Component<Position>.ComponentType;
+        var velocity = MiniArch.Core.Component<Velocity>.ComponentType;
         var signature = new Signature(position, velocity);
         var chunk = CreateChunk(signature, typeof(Position), typeof(Velocity), capacity: 4);
 
@@ -54,16 +49,16 @@ public sealed class ChunkTests
         var second = new Entity(2, 1);
         var third = new Entity(3, 1);
 
-        chunk.Add(first, Components(position, velocity, new Position(1, 1), new Velocity(1, 1)));
-        chunk.Add(second, Components(position, velocity, new Position(2, 2), new Velocity(2, 2)));
-        chunk.Add(third, Components(position, velocity, new Position(3, 3), new Velocity(3, 3)));
+        AddEntity(chunk, first, new Position(1, 1), new Velocity(1, 1));
+        AddEntity(chunk, second, new Position(2, 2), new Velocity(2, 2));
+        AddEntity(chunk, third, new Position(3, 3), new Velocity(3, 3));
 
         var moved = chunk.RemoveAt(1, out var movedEntity);
 
         Assert.True(moved);
         Assert.Equal(third, movedEntity);
         Assert.Equal(third, chunk.GetEntity(1));
-        Assert.Equal(new Position(3, 3), chunk.GetComponent<Position>(position, 1));
+        Assert.Equal(new Position(3, 3), chunk.GetComponentSpan<Position>(position)[1]);
         Assert.Equal(2, chunk.Count);
     }
 
@@ -86,22 +81,21 @@ public sealed class ChunkTests
     [Fact]
     public void Setting_a_component_only_mutates_the_targeted_row()
     {
-        var registry = ComponentRegistry.Shared;
-        var position = registry.GetOrCreate<Position>();
-        var velocity = registry.GetOrCreate<Velocity>();
+        var position = MiniArch.Core.Component<Position>.ComponentType;
+        var velocity = MiniArch.Core.Component<Velocity>.ComponentType;
         var signature = new Signature(position, velocity);
         var chunk = CreateChunk(signature, typeof(Position), typeof(Velocity), capacity: 4);
 
         var first = new Entity(1, 1);
         var second = new Entity(2, 1);
 
-        chunk.Add(first, Components(position, velocity, new Position(1, 1), new Velocity(1, 1)));
-        chunk.Add(second, Components(position, velocity, new Position(2, 2), new Velocity(2, 2)));
+        AddEntity(chunk, first, new Position(1, 1), new Velocity(1, 1));
+        AddEntity(chunk, second, new Position(2, 2), new Velocity(2, 2));
 
-        chunk.SetComponent(position, 1, new Position(9, 9));
+        chunk.SetComponentAtTyped(chunk.GetComponentIndex(position), 1, new Position(9, 9));
 
-        Assert.Equal(new Position(1, 1), chunk.GetComponent<Position>(position, 0));
-        Assert.Equal(new Position(9, 9), chunk.GetComponent<Position>(position, 1));
+        Assert.Equal(new Position(1, 1), chunk.GetComponentSpan<Position>(position)[0]);
+        Assert.Equal(new Position(9, 9), chunk.GetComponentSpan<Position>(position)[1]);
     }
 
     [Fact]
@@ -124,14 +118,13 @@ public sealed class ChunkTests
     [Fact]
     public void Typed_chunk_exposes_a_read_only_span_over_a_component_column()
     {
-        var registry = ComponentRegistry.Shared;
-        var position = registry.GetOrCreate<Position>();
-        var velocity = registry.GetOrCreate<Velocity>();
+        var position = MiniArch.Core.Component<Position>.ComponentType;
+        var velocity = MiniArch.Core.Component<Velocity>.ComponentType;
         var signature = new Signature(position, velocity);
         var chunk = CreateChunk(signature, typeof(Position), typeof(Velocity), capacity: 4);
 
-        chunk.Add(new Entity(1, 1), Components(position, velocity, new Position(1, 2), new Velocity(3, 4)));
-        chunk.Add(new Entity(2, 1), Components(position, velocity, new Position(5, 6), new Velocity(7, 8)));
+        AddEntity(chunk, new Entity(1, 1), new Position(1, 2), new Velocity(3, 4));
+        AddEntity(chunk, new Entity(2, 1), new Position(5, 6), new Velocity(7, 8));
 
         var positions = chunk.GetComponentSpan<Position>(position);
 
@@ -159,9 +152,8 @@ public sealed class ChunkTests
     [Fact]
     public void Removing_a_row_preserves_moved_values_through_typed_apis()
     {
-        var registry = ComponentRegistry.Shared;
-        var position = registry.GetOrCreate<Position>();
-        var velocity = registry.GetOrCreate<Velocity>();
+        var position = MiniArch.Core.Component<Position>.ComponentType;
+        var velocity = MiniArch.Core.Component<Velocity>.ComponentType;
         var signature = new Signature(position, velocity);
         var chunk = CreateChunk(signature, typeof(Position), typeof(Velocity), capacity: 4);
 
@@ -172,8 +164,8 @@ public sealed class ChunkTests
         var firstVelocity = new Velocity(5, 6);
         var secondVelocity = new Velocity(7, 8);
 
-        chunk.Add(first, Components(position, velocity, firstPosition, firstVelocity));
-        chunk.Add(second, Components(position, velocity, secondPosition, secondVelocity));
+        AddEntity(chunk, first, firstPosition, firstVelocity);
+        AddEntity(chunk, second, secondPosition, secondVelocity);
 
         var moved = chunk.RemoveAt(0, out var movedEntity);
 
@@ -182,8 +174,8 @@ public sealed class ChunkTests
 
         Assert.True(moved);
         Assert.Equal(second, movedEntity);
-        Assert.Equal(secondPosition, chunk.GetComponent<Position>(position, 0));
-        Assert.Equal(secondVelocity, chunk.GetComponent<Velocity>(velocity, 0));
+        Assert.Equal(secondPosition, chunk.GetComponentSpan<Position>(position)[0]);
+        Assert.Equal(secondVelocity, chunk.GetComponentSpan<Velocity>(velocity)[0]);
         Assert.Equal(secondPosition, positions[0]);
         Assert.Equal(secondVelocity, velocities[0]);
     }
@@ -191,20 +183,19 @@ public sealed class ChunkTests
     [Fact]
     public void Flat_storage_preserves_mixed_size_component_columns()
     {
-        var registry = ComponentRegistry.Shared;
-        var small = registry.GetOrCreate<Small>();
-        var large = registry.GetOrCreate<Large>();
+        var small = MiniArch.Core.Component<Small>.ComponentType;
+        var large = MiniArch.Core.Component<Large>.ComponentType;
         var signature = new Signature(small, large);
         var chunk = CreateChunk(signature, typeof(Small), typeof(Large), capacity: 4);
 
-        chunk.Add(new Entity(1, 1), Components(small, large, new Small(1), new Large(2, 3, 4)));
-        chunk.Add(new Entity(2, 1), Components(small, large, new Small(5), new Large(6, 7, 8)));
+        AddEntityMixed(chunk, new Entity(1, 1), new Small(1), new Large(2, 3, 4));
+        AddEntityMixed(chunk, new Entity(2, 1), new Small(5), new Large(6, 7, 8));
 
-        chunk.SetComponent(small, 0, new Small(9));
+        chunk.SetComponentAtTyped(chunk.GetComponentIndex(small), 0, new Small(9));
         chunk.RemoveAt(0, out _);
 
-        Assert.Equal(new Small(5), chunk.GetComponent<Small>(small, 0));
-        Assert.Equal(new Large(6, 7, 8), chunk.GetComponent<Large>(large, 0));
+        Assert.Equal(new Small(5), chunk.GetComponentSpan<Small>(small)[0]);
+        Assert.Equal(new Large(6, 7, 8), chunk.GetComponentSpan<Large>(large)[0]);
         Assert.Equal(new Small(5), chunk.GetComponentSpan<Small>(small)[0]);
         Assert.Equal(new Large(6, 7, 8), chunk.GetComponentSpan<Large>(large)[0]);
     }
@@ -222,6 +213,20 @@ public sealed class ChunkTests
         Assert.Contains(nameof(Label), exception.Message);
     }
 
+    private static void AddEntity(Chunk chunk, Entity entity, Position position, Velocity velocity)
+    {
+        var row = chunk.Add(entity);
+        chunk.SetComponentAtTyped(chunk.GetComponentIndex(MiniArch.Core.Component<Position>.ComponentType), row, position);
+        chunk.SetComponentAtTyped(chunk.GetComponentIndex(MiniArch.Core.Component<Velocity>.ComponentType), row, velocity);
+    }
+
+    private static void AddEntityMixed(Chunk chunk, Entity entity, Small small, Large large)
+    {
+        var row = chunk.Add(entity);
+        chunk.SetComponentAtTyped(chunk.GetComponentIndex(MiniArch.Core.Component<Small>.ComponentType), row, small);
+        chunk.SetComponentAtTyped(chunk.GetComponentIndex(MiniArch.Core.Component<Large>.ComponentType), row, large);
+    }
+
     private static Chunk CreateEmptyChunk(int capacity)
     {
         return new Chunk(Signature.Empty, Type.EmptyTypes, Array.Empty<int>(), capacity);
@@ -232,23 +237,4 @@ public sealed class ChunkTests
         var componentIdToColumnIndex = ComponentColumnMap.Build(signature);
         return new Chunk(signature, [t1, t2], componentIdToColumnIndex, capacity);
     }
-
-    private static Dictionary<ComponentType, object?> Components(ComponentType position, ComponentType velocity, Position p, Velocity v)
-    {
-        return new Dictionary<ComponentType, object?>
-        {
-            [position] = p,
-            [velocity] = v,
-        };
-    }
-
-    private static Dictionary<ComponentType, object?> Components(ComponentType small, ComponentType large, Small s, Large l)
-    {
-        return new Dictionary<ComponentType, object?>
-        {
-            [small] = s,
-            [large] = l,
-        };
-    }
-
 }

@@ -866,14 +866,6 @@ public sealed class World : IDisposable
         }
     }
 
-    /// <summary>
-    /// Destroys all entities and clears all archetypes, query caches, and hierarchy.
-    /// </summary>
-    public void DestroyAll()
-    {
-        ThrowIfDisposed();
-        Reset(0);
-    }
 
     /// <summary>
     /// Links a child to a parent.
@@ -989,20 +981,6 @@ public sealed class World : IDisposable
         return stored.Archetype
             .GetChunk(stored.ChunkIndex)
             .GetComponentAt<T>(stored.Archetype.GetComponentIndexFast(componentType), stored.RowIndex);
-    }
-
-    /// <summary>
-    /// Gets a mutable reference to a component directly without version or bounds checks.
-    /// Use only when the entity is known to be alive and the component is known to exist.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T GetRef<T>(Entity entity)
-    {
-        var stored = _locations[entity.Id];
-        var componentType = GetComponentType<T>();
-        return ref stored.Archetype
-            .GetChunk(stored.ChunkIndex)
-            .GetComponentRefAt<T>(stored.Archetype.GetComponentIndexFast(componentType), stored.RowIndex);
     }
 
     /// <summary>
@@ -1170,13 +1148,6 @@ public sealed class World : IDisposable
         FinishMoveEntity(entity, sourceInfo, destination, chunkIdx, rowIdx);
     }
 
-    private void MoveEntityBoxed(Entity entity, EntityLocation sourceInfo, Archetype destination, ComponentType componentType, object? componentValue)
-    {
-        MoveEntityCore(entity, sourceInfo, destination, out var destChunk, out var chunkIdx, out var rowIdx);
-        destChunk.SetComponent(componentType, rowIdx, componentValue);
-        FinishMoveEntity(entity, sourceInfo, destination, chunkIdx, rowIdx);
-    }
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ApplyTypedAddOrSet<T>(Entity entity, ComponentType componentType, in T component)
     {
@@ -1191,29 +1162,6 @@ public sealed class World : IDisposable
 
         var destination = GetOrCreateAddDestinationArchetype(archetype, componentType);
         MoveEntity(entity, info, destination, componentType, in component);
-    }
-
-    private void ApplyBoxedAddOrSet(Entity entity, ComponentType componentType, object? component)
-    {
-        var info = GetRequiredLocation(entity);
-        var archetype = info.Archetype;
-
-        if (archetype.TryGetComponentIndex(componentType, out _))
-        {
-            archetype.GetChunk(info.ChunkIndex).SetComponent(componentType, info.RowIndex, component);
-            return;
-        }
-
-        var destination = GetOrCreateAddDestinationArchetype(archetype, componentType);
-        MoveEntityBoxed(entity, info, destination, componentType, component);
-    }
-
-    private unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, Type runtimeType, byte[] data, int offset, int size)
-    {
-        fixed (byte* ptr = data)
-        {
-            ApplyRawAddOrSet(entity, componentType, runtimeType, ptr + offset, null);
-        }
     }
 
     internal unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, Type runtimeType, byte[] data, int offset, ComponentWriterCache.ColumnWriterDelegate? columnWriter)

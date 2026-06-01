@@ -27,9 +27,12 @@ public sealed class ArchetypeTests
         var position = registry.GetOrCreate<Position>();
         var archetype = new Archetype(new Signature(position), [typeof(Position)], chunkCapacity: 2);
 
-        archetype.AddEntity(new Entity(1, 1), Components(position, new Position(1, 1)), out _, out _);
-        archetype.AddEntity(new Entity(2, 1), Components(position, new Position(2, 2)), out _, out _);
-        archetype.AddEntity(new Entity(3, 1), Components(position, new Position(3, 3)), out _, out _);
+        var chunk1 = archetype.ReserveEntity(new Entity(1, 1), out _, out var row1);
+        chunk1.SetComponentAtTyped(0, row1, new Position(1, 1));
+        var chunk2 = archetype.ReserveEntity(new Entity(2, 1), out _, out var row2);
+        chunk2.SetComponentAtTyped(0, row2, new Position(2, 2));
+        var chunk3 = archetype.ReserveEntity(new Entity(3, 1), out _, out var row3);
+        chunk3.SetComponentAtTyped(0, row3, new Position(3, 3));
 
         Assert.Equal(2, archetype.Chunks.Count);
         Assert.Equal(2, archetype.Chunks[0].Count);
@@ -47,16 +50,17 @@ public sealed class ArchetypeTests
         var second = new Entity(2, 1);
         var third = new Entity(3, 1);
 
-        archetype.AddEntity(first, Components(position, new Position(1, 1)), out var chunkIndex, out _);
-        archetype.AddEntity(second, Components(position, new Position(2, 2)), out _, out _);
-        archetype.AddEntity(third, Components(position, new Position(3, 3)), out _, out _);
+        var chunk = archetype.ReserveEntity(first, out var chunkIndex, out var row);
+        chunk.SetComponentAtTyped(0, row, new Position(1, 1));
+        archetype.ReserveEntity(second, out _, out var row2).SetComponentAtTyped(0, row2, new Position(2, 2));
+        archetype.ReserveEntity(third, out _, out var row3).SetComponentAtTyped(0, row3, new Position(3, 3));
 
         var moved = archetype.RemoveEntity(chunkIndex, 1, out var movedEntity);
 
         Assert.True(moved);
         Assert.Equal(third, movedEntity);
         Assert.Equal(third, archetype.GetChunk(0).GetEntity(1));
-        Assert.Equal(new Position(3, 3), archetype.GetChunk(0).GetComponent<Position>(position, 1));
+        Assert.Equal(new Position(3, 3), archetype.GetChunk(0).GetComponentSpan<Position>(position)[1]);
     }
 
     [Fact]
@@ -140,13 +144,5 @@ public sealed class ArchetypeTests
 
         Assert.DoesNotContain(fields, field => field.FieldType.IsGenericType &&
             field.FieldType.GetGenericTypeDefinition() == typeof(Dictionary<,>));
-    }
-
-    private static Dictionary<ComponentType, object?> Components(ComponentType position, Position value)
-    {
-        return new Dictionary<ComponentType, object?>
-        {
-            [position] = value,
-        };
     }
 }

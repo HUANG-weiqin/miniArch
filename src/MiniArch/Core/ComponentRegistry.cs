@@ -54,11 +54,6 @@ public sealed class ComponentRegistry
     }
 
     /// <summary>
-    /// Tries to get the id for a type.
-    /// </summary>
-    public bool TryGetId(Type type, out ComponentType id) => Volatile.Read(ref _snapshot).TypeToId.TryGetValue(type, out id);
-
-    /// <summary>
     /// Tries to get the type for an id.
     /// </summary>
     public bool TryGetType(ComponentType id, out Type type)
@@ -86,11 +81,6 @@ public sealed class ComponentRegistry
 
         return type;
     }
-
-    /// <summary>
-    /// Gets the registered type map.
-    /// </summary>
-    public IReadOnlyDictionary<Type, ComponentType> RegisteredTypes => Volatile.Read(ref _snapshot).TypeToId;
 
     private sealed record RegistrySnapshot(IReadOnlyDictionary<Type, ComponentType> TypeToId, Type[] IdToType);
 }

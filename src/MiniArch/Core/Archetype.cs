@@ -62,17 +62,6 @@ public sealed class Archetype
     internal ArchetypeEdges Edges { get; } = new();
 
     /// <summary>
-    /// Adds an entity with components.
-    /// </summary>
-    internal void AddEntity(Entity entity, IReadOnlyDictionary<ComponentType, object?> components, out int chunkIndex, out int rowIndex)
-    {
-        var chunk = GetWritableChunk(out chunkIndex);
-        rowIndex = chunk.Add(entity, components);
-        MarkChunkNonFull(chunkIndex);
-        EntityCount++;
-    }
-
-    /// <summary>
     /// Reserves a row for an entity.
     /// </summary>
     internal Chunk ReserveEntity(Entity entity, out int chunkIndex, out int rowIndex)

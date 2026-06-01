@@ -11,14 +11,8 @@ namespace MiniArch.Core;
 public sealed class Chunk
 {
     private static readonly ConcurrentDictionary<Type, bool> ManagedReferenceCache = new();
-    private static readonly ConcurrentDictionary<Type, BoxedReaderDelegate> BoxedReaders = new();
-    private static readonly ConcurrentDictionary<Type, BoxedWriterDelegate> BoxedWriters = new();
     private static readonly MethodInfo ContainsManagedMethod = typeof(Chunk)
         .GetMethod(nameof(ContainsManagedReferences), BindingFlags.Static | BindingFlags.NonPublic)!;
-    private static readonly MethodInfo CreateBoxedReaderMethod = typeof(Chunk)
-        .GetMethod(nameof(CreateBoxedReader), BindingFlags.Static | BindingFlags.NonPublic)!;
-    private static readonly MethodInfo CreateBoxedWriterMethod = typeof(Chunk)
-        .GetMethod(nameof(CreateBoxedWriter), BindingFlags.Static | BindingFlags.NonPublic)!;
 
     private readonly Signature _signature;
     private readonly Entity[] _entities;
@@ -26,8 +20,6 @@ public sealed class Chunk
     private readonly Type[] _componentTypes;
     private readonly int[] _columnByteOffsets;
     private readonly int[] _elementSizes;
-    private readonly BoxedReaderDelegate[] _boxedReaders;
-    private readonly BoxedWriterDelegate[] _boxedWriters;
     private readonly int[] _componentIdToColumnIndex;
 
     internal Chunk(Signature signature, Type[] componentTypes, int[] componentIdToColumnIndex, int capacity = 4)
@@ -46,8 +38,6 @@ public sealed class Chunk
         _entities = new Entity[capacity];
         _componentTypes = componentTypes;
         (_data, _columnByteOffsets, _elementSizes) = CreateStorage(signature, componentTypes, capacity);
-        _boxedReaders = CreateBoxedReaders(componentTypes);
-        _boxedWriters = CreateBoxedWriters(componentTypes);
     }
 
     /// <summary>
@@ -87,25 +77,6 @@ public sealed class Chunk
     /// <summary>
     /// Adds an entity and writes its components.
     /// </summary>
-    internal int Add(Entity entity, IReadOnlyDictionary<ComponentType, object?> components)
-    {
-        var row = Add(entity);
-        var signature = _signature.AsSpan();
-        for (var index = 0; index < signature.Length; index++)
-        {
-            var component = signature[index];
-            if (!components.TryGetValue(component, out var value))
-            {
-                throw new InvalidOperationException($"Missing component {component.Value}.");
-            }
-
-            var columnIndex = GetComponentIndex(component);
-            _boxedWriters[columnIndex](this, columnIndex, row, value);
-        }
-
-        return row;
-    }
-
     /// <summary>
     /// Adds an entity.
     /// </summary>
@@ -187,19 +158,6 @@ public sealed class Chunk
         ValidateElementSize<T>(columnIndex);
 #endif
         return ref Unsafe.As<byte, T>(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), _columnByteOffsets[columnIndex]));
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal int[] GetComponentIdToColumnMap() => _componentIdToColumnIndex;
-
-    /// <summary>
-    /// Sets a boxed component value.
-    /// </summary>
-    internal void SetComponent(ComponentType component, int row, object? value)
-    {
-        ValidateRow(row);
-        var columnIndex = GetComponentIndex(component);
-        _boxedWriters[columnIndex](this, columnIndex, row, value);
     }
 
     [SkipLocalsInit]
@@ -434,28 +392,6 @@ public sealed class Chunk
         return (new byte[totalBytes], columnByteOffsets, elementSizes);
     }
 
-    private static BoxedReaderDelegate[] CreateBoxedReaders(Type[] componentTypes)
-    {
-        var readers = new BoxedReaderDelegate[componentTypes.Length];
-        for (var index = 0; index < componentTypes.Length; index++)
-        {
-            readers[index] = GetBoxedReader(componentTypes[index]);
-        }
-
-        return readers;
-    }
-
-    private static BoxedWriterDelegate[] CreateBoxedWriters(Type[] componentTypes)
-    {
-        var writers = new BoxedWriterDelegate[componentTypes.Length];
-        for (var index = 0; index < componentTypes.Length; index++)
-        {
-            writers[index] = GetBoxedWriter(componentTypes[index]);
-        }
-
-        return writers;
-    }
-
     private static void ThrowIfManagedComponent(Type type)
     {
         if (!GenericMethodCache.GetOrInvoke(ManagedReferenceCache, type, ContainsManagedMethod))
@@ -552,30 +488,6 @@ public sealed class Chunk
     }
 #endif
 
-    private static BoxedReaderDelegate GetBoxedReader(Type type)
-    {
-        return GenericMethodCache.GetOrInvoke(BoxedReaders, type, CreateBoxedReaderMethod);
-    }
-
-    private static BoxedWriterDelegate GetBoxedWriter(Type type)
-    {
-        return GenericMethodCache.GetOrInvoke(BoxedWriters, type, CreateBoxedWriterMethod);
-    }
-
-    private static BoxedReaderDelegate CreateBoxedReader<T>()
-    {
-        return static (chunk, columnIndex, row) => chunk.GetComponentAt<T>(columnIndex, row);
-    }
-
-    private static BoxedWriterDelegate CreateBoxedWriter<T>()
-    {
-        return static (chunk, columnIndex, row, value) =>
-        {
-            var typed = (T)value!;
-            chunk.SetComponentAtTyped(columnIndex, row, in typed);
-        };
-    }
-
     private static int AlignUp(int value, int alignment)
     {
         if (alignment <= 1)
@@ -594,8 +506,4 @@ public sealed class Chunk
             throw new ArgumentOutOfRangeException(nameof(row));
         }
     }
-
-    private delegate object? BoxedReaderDelegate(Chunk chunk, int columnIndex, int row);
-
-    private delegate void BoxedWriterDelegate(Chunk chunk, int columnIndex, int row, object? value);
 }

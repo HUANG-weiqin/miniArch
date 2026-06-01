@@ -50,25 +50,6 @@ internal struct InlineMap<TKey, TValue>
         }
     }
 
-    public bool TryGetValue(TKey key, out TValue value, ref OverflowPool<TKey, TValue> pool)
-    {
-        if (Count >= 1 && KeyEquals(Key0, key)) { value = Value0; return true; }
-        if (Count >= 2 && KeyEquals(Key1, key)) { value = Value1; return true; }
-        if (Count >= 3 && KeyEquals(Key2, key)) { value = Value2; return true; }
-        if (Count >= 4 && KeyEquals(Key3, key)) { value = Value3; return true; }
-        if (OverflowCount > 0)
-        {
-            var idx = pool.FindIndex(OverflowHead, key);
-            if (idx >= 0)
-            {
-                value = pool.GetValueReadonly(idx);
-                return true;
-            }
-        }
-        value = default!;
-        return false;
-    }
-
     public bool Remove(TKey key, ref OverflowPool<TKey, TValue> pool)
     {
         if (Count >= 1 && KeyEquals(Key0, key)) { RemoveAt(0); return true; }
