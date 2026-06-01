@@ -1,4 +1,5 @@
 using System;
+using MiniArch.Core;
 using CoreCommandBuffer = MiniArch.Core.ICommandRecorder;
 
 namespace Hero.Ecs;
@@ -21,21 +22,17 @@ public sealed class SpawnSystem : ISystem
     {
         CoreCommandBuffer commands = context.Commands;
 
-        foreach (MiniArch.Entity entity in context.Frame.Each(SpawnQueryDescription))
+        foreach (var row in context.Frame.ChunkQuery(SpawnQueryDescription).EachSpan<SpawnKind>())
         {
-            SpawnKind kind = context.Frame.Get<SpawnKind>(entity);
-
-            if (!_spawnTable.TryGet(kind, out SpawnHandler handler))
+            if (!_spawnTable.TryGet(row.Get0(), out SpawnHandler handler))
             {
                 throw new InvalidOperationException(
-                    $"No spawn handler is registered for spawn kind '{kind.Value}'.");
+                    $"No spawn handler is registered for spawn kind '{row.Get0().Value}'.");
             }
 
-            handler(context, entity);
-            commands.Remove<SpawnPending>(entity);
-            commands.Remove<Validated>(entity);
+            handler(context, row.Entity);
+            commands.Remove<SpawnPending>(row.Entity);
+            commands.Remove<Validated>(row.Entity);
         }
     }
 }
-
-

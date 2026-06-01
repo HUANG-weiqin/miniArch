@@ -214,7 +214,7 @@ public sealed class Chunk
 
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ReadOnlySpan<T> GetComponentSpanAt<T>(int columnIndex)
+    public ReadOnlySpan<T> GetComponentSpanAt<T>(int columnIndex)
     {
 #if DEBUG
         ValidateElementSize<T>(columnIndex);
@@ -222,7 +222,7 @@ public sealed class Chunk
         return MemoryMarshal.CreateReadOnlySpan(ref GetComponentRefAt<T>(columnIndex, 0), Count);
     }
 
-    internal bool TryGetComponentIndex(ComponentType component, out int columnIndex)
+    public bool TryGetComponentIndex(ComponentType component, out int columnIndex)
     {
         var componentId = component.Value;
         if ((uint)componentId >= (uint)_componentIdToColumnIndex.Length)

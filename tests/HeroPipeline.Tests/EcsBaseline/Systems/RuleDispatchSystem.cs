@@ -14,6 +14,8 @@ public sealed class RuleDispatchSystem : ISystem
         .Without<PendingRequest>()
         .Without<Rejected>();
 
+    private static readonly MiniArch.Core.ComponentType RequestComponentType = MiniArch.Core.Component<Request>.ComponentType;
+
     public RuleDispatchSystem(RuleTable ruleTable)
     {
         _ruleTable = ruleTable ?? throw new ArgumentNullException(nameof(ruleTable));
@@ -29,31 +31,36 @@ public sealed class RuleDispatchSystem : ISystem
     private void DispatchTier(FrameContext context, RuleTier tier)
     {
         CoreCommandBuffer commands = context.Commands;
+        MiniArch.Core.Query coreQuery = context.Frame.ChunkQuery(RuleQueryDescription);
 
-        foreach (MiniArch.Entity entity in context.Frame.Each(RuleQueryDescription))
+        foreach (MiniArch.Core.Chunk chunk in coreQuery.Chunks)
         {
-            RuleId ruleId = context.Frame.Get<RuleId>(entity);
-            RuleTier rowTier = context.Frame.Get<RuleTier>(entity);
+            ReadOnlySpan<MiniArch.Entity> entities = chunk.GetEntities();
+            ReadOnlySpan<RuleId> ruleIds = chunk.GetComponentSpan<RuleId>(MiniArch.Core.Component<RuleId>.ComponentType);
+            ReadOnlySpan<RuleTier> tiers = chunk.GetComponentSpan<RuleTier>(MiniArch.Core.Component<RuleTier>.ComponentType);
+            bool hasRequest = chunk.TryGetComponentIndex(RequestComponentType, out int requestColumn);
 
-            if (rowTier != tier)
+            for (int i = 0; i < entities.Length; i++)
             {
-                continue;
-            }
+                if (tiers[i] != tier)
+                {
+                    continue;
+                }
 
-            if (!_ruleTable.TryGet(ruleId, out RuleHandler handler))
-            {
-                throw new InvalidOperationException(
-                    $"No rule handler is registered for rule '{ruleId.Value}'.");
-            }
+                if (!_ruleTable.TryGet(ruleIds[i], out RuleHandler handler))
+                {
+                    throw new InvalidOperationException(
+                        $"No rule handler is registered for rule '{ruleIds[i].Value}'.");
+                }
 
-            handler(context, entity);
+                MiniArch.Entity entity = entities[i];
+                handler(context, entity);
 
-            if (context.Frame.TryGet(entity, out Request _))
-            {
-                commands.Destroy(entity);
+                if (hasRequest)
+                {
+                    commands.Destroy(entity);
+                }
             }
         }
     }
 }
-
-

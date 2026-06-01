@@ -2,27 +2,6 @@ using System;
 
 namespace Hero.Ecs;
 
-/// <summary>
-/// Scans all entities with <see cref="TriggerCondition"/> + <see cref="TriggerAction"/>
-/// and invokes the matching action once with all targets discovered by the condition.
-/// </summary>
-/// <remarks>
-/// Runs in parallel with other systems against the same frame snapshot.
-/// Condition scans read the current <see cref="FrameView"/>; action writes go to
-/// the shared command buffer and are not visible to other systems until the next tick.
-///
-/// <para>Buffer reuse semantics:</para>
-/// A single pre-allocated array (<c>_matchBuffer</c>) is reused across all observers
-/// in the same frame. <c>_matchCount</c> is reset to 0 for each observer, so
-/// <see cref="TriggerTargets"/> only ever sees the targets written for the current
-/// observer. There is no cross-observer or cross-frame contamination.
-///
-/// <para>Overflow behavior:</para>
-/// The buffer capacity is fixed at 64. If an observer matches more than 64 targets,
-/// an <see cref="InvalidOperationException"/> is thrown with the current capacity
-/// and overflow reason. This is a fail-fast defense; the current game scale
-/// (&lt;20 entities) makes overflow practically impossible.
-/// </remarks>
 public sealed class TriggerSystem : ISystem
 {
     private readonly TriggerConditionTable _conditionTable;
@@ -35,6 +14,9 @@ public sealed class TriggerSystem : ISystem
         new MiniArch.QueryDescription()
             .With<TriggerCondition>()
             .With<TriggerAction>();
+
+    private static readonly MiniArch.Core.ComponentType TriggerGuardType = MiniArch.Core.Component<TriggerGuard>.ComponentType;
+    private static readonly MiniArch.Core.ComponentType TriggerPostActionType = MiniArch.Core.Component<TriggerPostAction>.ComponentType;
 
     public TriggerSystem(TriggerConditionTable conditionTable, TriggerActionTable actionTable)
     {
@@ -56,45 +38,64 @@ public sealed class TriggerSystem : ISystem
 
     public void Execute(in FrameContext context)
     {
-        foreach (MiniArch.Entity observerEntity in context.Frame.Each(TriggerQueryDescription))
+        MiniArch.Core.Query coreQuery = context.Frame.ChunkQuery(TriggerQueryDescription);
+
+        foreach (MiniArch.Core.Chunk chunk in coreQuery.Chunks)
         {
-            TriggerCondition condition = context.Frame.Get<TriggerCondition>(observerEntity);
-            TriggerAction action = context.Frame.Get<TriggerAction>(observerEntity);
+            ReadOnlySpan<MiniArch.Entity> entities = chunk.GetEntities();
+            ReadOnlySpan<TriggerCondition> conditions = chunk.GetComponentSpan<TriggerCondition>(MiniArch.Core.Component<TriggerCondition>.ComponentType);
+            ReadOnlySpan<TriggerAction> actions = chunk.GetComponentSpan<TriggerAction>(MiniArch.Core.Component<TriggerAction>.ComponentType);
 
-            if (!_conditionTable.TryGet(condition.Id, out ConditionDelegate conditionHandler))
-            {
-                throw new InvalidOperationException(
-                    $"No trigger condition handler is registered for condition '{condition.Id.Value}'.");
-            }
+            bool hasGuard = chunk.TryGetComponentIndex(TriggerGuardType, out int guardColumn);
+            ReadOnlySpan<TriggerGuard> guards = hasGuard
+                ? chunk.GetComponentSpanAt<TriggerGuard>(guardColumn)
+                : default;
 
-            if (!_actionTable.TryGet(action.Id, out ActionDelegate actionHandler))
-            {
-                throw new InvalidOperationException(
-                    $"No trigger action handler is registered for action '{action.Id.Value}'.");
-            }
+            bool hasPostAction = chunk.TryGetComponentIndex(TriggerPostActionType, out int postActionColumn);
+            ReadOnlySpan<TriggerPostAction> postActions = hasPostAction
+                ? chunk.GetComponentSpanAt<TriggerPostAction>(postActionColumn)
+                : default;
 
-            if (context.Frame.TryGet<TriggerGuard>(observerEntity, out TriggerGuard guard))
+            for (int i = 0; i < entities.Length; i++)
             {
-                if (!guard.Condition(context.Frame, observerEntity))
+                TriggerCondition condition = conditions[i];
+                TriggerAction action = actions[i];
+
+                if (!_conditionTable.TryGet(condition.Id, out ConditionDelegate conditionHandler))
+                {
+                    throw new InvalidOperationException(
+                        $"No trigger condition handler is registered for condition '{condition.Id.Value}'.");
+                }
+
+                if (!_actionTable.TryGet(action.Id, out ActionDelegate actionHandler))
+                {
+                    throw new InvalidOperationException(
+                        $"No trigger action handler is registered for action '{action.Id.Value}'.");
+                }
+
+                if (hasGuard)
+                {
+                    if (!guards[i].Condition(context.Frame, entities[i]))
+                    {
+                        continue;
+                    }
+                }
+
+                _matchCount = 0;
+                conditionHandler(context.Frame, entities[i], _cachedOnMatch);
+
+                if (_matchCount == 0)
                 {
                     continue;
                 }
-            }
 
-            _matchCount = 0;
-            conditionHandler(context.Frame, observerEntity, _cachedOnMatch);
+                TriggerTargets targets = new(_matchBuffer, _matchCount);
+                actionHandler(context, entities[i], targets);
 
-            if (_matchCount == 0)
-            {
-                continue;
-            }
-
-            TriggerTargets targets = new(_matchBuffer, _matchCount);
-            actionHandler(context, observerEntity, targets);
-
-            if (context.Frame.TryGet<TriggerPostAction>(observerEntity, out TriggerPostAction postAction))
-            {
-                postAction.Handler(context, observerEntity, targets);
+                if (hasPostAction)
+                {
+                    postActions[i].Handler(context, entities[i], targets);
+                }
             }
         }
     }

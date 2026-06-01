@@ -1,4 +1,5 @@
 using System;
+using MiniArch.Core;
 using CoreCommandBuffer = MiniArch.Core.ICommandRecorder;
 
 namespace Hero.Ecs;
@@ -21,9 +22,9 @@ public sealed class EffectDispatchSystem : ISystem
     {
         CoreCommandBuffer commands = context.Commands;
 
-        foreach (MiniArch.Entity entity in context.Frame.Each(EffectQueryDescription))
+        foreach (var row in context.Frame.ChunkQuery(EffectQueryDescription).EachSpan<EffectId>())
         {
-            EffectId effectId = context.Frame.Get<EffectId>(entity);
+            EffectId effectId = row.Get0();
 
             if (!_effectTable.TryGet(effectId, out EffectHandler handler))
             {
@@ -33,12 +34,10 @@ public sealed class EffectDispatchSystem : ISystem
 
             if (handler is not null)
             {
-                handler(context, entity);
+                handler(context, row.Entity);
             }
 
-            commands.Destroy(entity);
+            commands.Destroy(row.Entity);
         }
     }
 }
-
-
