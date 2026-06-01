@@ -89,6 +89,29 @@ updated: 2026-06-02
 2. **Arch 需要 6 次 `(T[])Components[idx]` castclass**：每次切 chunk 额外类型检查
 3. **Per-chunk 列寻址更短**：MiniArch `_componentIdToColumnIndex[id]` → `_data + offset`；Arch `ComponentIdToArrayIndex[id]` → `Components[ai]` → 类型转换
 
+### 写回（Write-back）场景对比
+
+在查询循环内对组件进行写回操作（对每个字段 `++`，读后即写再累加 checksum）：
+
+| 场景 | MiniArch (ops/s) | Arch (ops/s) | MiniArch vs Arch |
+|------|:-:|:-:|:-:|
+| 窄写回（2 组件） | 7,408 | 7,949 | **−7%** |
+| 宽写回（6 组件） | 2,440 | 2,854 | **−14%** |
+
+写回场景 MiniArch 落后 Arch 7−14%。原因是 **`Span<T>` 的 JIT 优化差异**：
+
+- **Arch**：`GetSpan<T>()` 返回 `Span<T>` 由 `T[]`（typed array）支持 → JIT 能利用 fast path 直接发出带写屏障的数组写入指令
+- **MiniArch**：`GetWritableComponentSpan<T>()` 返回 `Span<T>` 由 `byte[]`（通过 `MemoryMarshal.CreateSpan` 别名化）支持 → JIT 无法证明类型安全，使用慢速通用路径
+
+**这意味着 `byte[]` 布局有一个已知的写代价。** 读越密集，MiniArch 优势越大；写越密集，Arch 优势越大。
+
+| 场景 | 读写比 | 推荐引擎 |
+|------|:------:|:--------:|
+| Movement（读 Vel，写 Pos） | 1R:1W | 取决于计算量 |
+| AI（读多因素，写少量状态） | 5R+:1W | MiniArch 更佳 |
+| Physics（读 Pos, Vel → 写 Pos, Vel） | 1R:1W | 窄≈持平，宽 Arch 略优 |
+| Networking（读全量状态序列化） | 纯读 | MiniArch 更佳 |
+
 ### 关键认知
 
 | 认知 | 说明 |
@@ -96,6 +119,7 @@ updated: 2026-06-02
 | Debug vs Release | 之前报告的 10x 差值是 `dotnet test` 默认 Debug 下的测量假象；Release 下 EachSpan ≈ Manual |
 | EachSpan 开销 | 在 Release 下，EachSpan 比等价的 manual chunk span 代码**没有额外开销**（宽场景还快 13%） |
 | byte[] 优势需要多组件放大 | 窄场景（2 组件）无法展示 byte[] 优势，需要 6+ 组件且每行切换多列的查询 |
+| 写操作有代价 | `Span<T>` over `byte[]` 的 JIT 优化不如 `Span<T>` over `T[]`；纯写场景 Arch 领先 7−14% |
 | 约束条件 | 当前 EachSpan 只支持 blittable 组件（非托管类型）；含托管引用的组件必须用 chunk 手动迭代 |
 
 ## 关键理解

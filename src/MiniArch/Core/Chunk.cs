@@ -223,6 +223,26 @@ public sealed class Chunk
         return MemoryMarshal.CreateReadOnlySpan(ref GetComponentRefAt<T>(columnIndex, 0), Count);
     }
 
+    /// <summary>Gets a writable span of component <typeparamref name="T"/> by component type.</summary>
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public Span<T> GetWritableComponentSpan<T>(ComponentType component)
+    {
+        var columnIndex = GetComponentIndex(component);
+        return GetWritableComponentSpanAt<T>(columnIndex);
+    }
+
+    /// <summary>Gets a writable span of component <typeparamref name="T"/> at the given column index.</summary>
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal Span<T> GetWritableComponentSpanAt<T>(int columnIndex)
+    {
+#if DEBUG
+        ValidateElementSize<T>(columnIndex);
+#endif
+        return MemoryMarshal.CreateSpan(ref GetComponentRefAt<T>(columnIndex, 0), Count);
+    }
+
     /// <summary>Tries to get the column index for a component type. Returns false if not present in this chunk.</summary>
     public bool TryGetComponentIndex(ComponentType component, out int columnIndex)
     {
