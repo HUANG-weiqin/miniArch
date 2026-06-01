@@ -212,6 +212,7 @@ public sealed class Chunk
         return GetComponentRefAt<T>(columnIndex, row);
     }
 
+    /// <summary>Gets a read-only span of component <typeparamref name="T"/> at the given column index.</summary>
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpan<T> GetComponentSpanAt<T>(int columnIndex)
@@ -222,6 +223,7 @@ public sealed class Chunk
         return MemoryMarshal.CreateReadOnlySpan(ref GetComponentRefAt<T>(columnIndex, 0), Count);
     }
 
+    /// <summary>Tries to get the column index for a component type. Returns false if not present in this chunk.</summary>
     public bool TryGetComponentIndex(ComponentType component, out int columnIndex)
     {
         var componentId = component.Value;
