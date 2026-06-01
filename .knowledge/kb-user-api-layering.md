@@ -8,93 +8,39 @@ updated: 2026-06-01
 
 ## 这个模块是干什么的
 
-- 这个模块负责：
-  - 给普通游戏逻辑提供低心智负担的 ECS 入口
-  - 把核心概念收敛到一份公开定义：
-    - `MiniArch.World`
-    - `MiniArch.Entity`
-    - `MiniArch.QueryDescription`
-  - 把默认查询收敛成唯一的 description-based `foreach`
-  - 让常见读取通过 `TryGet<T>` 完成
-  - 让运行时动态复制实体（含子树）通过 `Clone(Entity)` 完成（一等公民，与 Create/Add/Set/Remove/Destroy 并列；deep clone：递归复制所有子实体并维持 hierarchy）
-  - 明确 `MiniArch` 与 `MiniArch.Core` 的分层边界
-- 这个模块不负责：
-  - 替代底层 runtime storage
-  - 隐藏所有 advanced API
-  - 改写 `MiniArch.Core.Query` 的 chunk 缓存与快照布局
+- 给普通游戏逻辑提供低心智负担的 ECS 入口
+- 把核心概念收敛到一份公开定义：`MiniArch.World`、`MiniArch.Entity`、`MiniArch.QueryDescription`
+- 默认查询收敛成唯一的 description-based `foreach`
+- 明确 `MiniArch` 与 `MiniArch.Core` 的分层边界
 
 ## 架构
 
 - 核心组成：
-  - `src/MiniArch/Core/World.cs`：唯一公开 `World`
-  - `src/MiniArch/Core/Entity.cs`：唯一公开 `Entity`
-  - `src/MiniArch/Core/QueryDescription.cs`：唯一公开 `QueryDescription`
-  - `src/MiniArch/Ecs/Query.cs`：默认层 entity-only `foreach` 查询包装
-  - `src/MiniArch/Core/Query.cs`：advanced query 对象与 `Query.Create(...)`
+  - `src/MiniArch/Core/World.cs` + `Core/Entity.cs` + `Core/QueryDescription.cs`：唯一公开定义
+  - `src/MiniArch/Ecs/Query.cs`：默认层 entity-only `foreach` 查询
+  - `src/MiniArch/Core/Query.cs`：advanced query 对象 (`MiniArch.Core.Query.Create(...)`)
   - `src/MiniArch/Core/SpanQueryIterators.cs`：`EachSpan<T1..T8>()` 零分配 ref struct 迭代器
-- 数据流 / 控制流：
-  - 普通用户从 `MiniArch.World` 进入
-  - `World.Query(in QueryDescription)` 返回默认层 entity-only `MiniArch.Query`
-  - `MiniArch.Query.OrderBy(...)` 返回默认层 entity-only `OrderedQuery`，每次枚举时用内部池化 buffer 收集 entity 并排序
-  - `MiniArch.Query.Advanced` 暴露对应的 `MiniArch.Core.Query`
-  - advanced 用户也可以直接走 `MiniArch.Core.Query.Create(world, in description)`
-  - `TryGet<T>` 走 `World` 上的 direct read 路径
-  - `CommandBuffer.Clone(Entity)` 在录制时快照 source 当前 world 状态；clone 返回的 deferred entity 后续可按普通 created entity 执行 `Set/Remove/Destroy`
-  - `MiniArch.Core.Query` 提供 `EachSpan()` / `EachSpan<T1,...T8>()` 零分配 span 迭代器；用法接近 entity 枚举但底层走 chunk 连续内存。T9+ 或可选组件场景退回原始 chunk API
-
+- 数据流：普通用户从 `MiniArch.World` 进入 → `World.Query(in QueryDescription)` 返回 entity-only `MiniArch.Query` → `MiniArch.Query.Advanced` 暴露 `MiniArch.Core.Query`
 
 ## 决策
 
-- `World`、`Entity`、`QueryDescription` 只保留一份，统一放在 `MiniArch` 根命名空间。
-- 这些类型属于 ECS 的基础语言，不应在默认层和 advanced 层重复定义。
-- typed query 家族被移除：
-  - `Query<T>`
-  - `Query<T1, T2>`
-  - `QueryItem<...>`
-  - `QueryEnumerator<...>`
-- 默认查询统一只保留 `QueryDescription` 入口，避免 “按 1~2 个组件特判” 把公开 API 撑大。
-- `OrderBy(...)` 是默认层消费方式，不属于 `QueryDescription`，因为排序 comparer 往往捕获 world 或业务状态，不能安全参与 description value equality/cache key。
-- `OrderBy(...)` 不缓存排序结果；它每次枚举独立租用内部 buffer，因此同一个 ordered query 可以并发枚举，但 comparer 自身必须只做并发安全读取。
-- builder 风格 `World.Query()...Build()` 也被移除；advanced 查询统一显式写成 `MiniArch.Core.Query.Create(world, in description)`。
-- 因为根命名空间会真实暴露 `World` / `Entity`，仓库内部测试与 benchmark 命名空间同步改成 `MiniArchTests.*` / `MiniArchBenchmarks`，避免名字解析被外层命名空间劫持。
+- `World`、`Entity`、`QueryDescription` 只保留一份，统一放在 `MiniArch` 根命名空间
+- typed query 家族（`Query<T>`、`Query<T1,T2>`、`QueryItem<>`、`QueryEnumerator<>`）已移除
+- builder 风格 `World.Query()...Build()` 已移除
+- `OrderBy(...)` 是默认层消费方式，不缓存排序结果（每次枚举独立租用内部 buffer）
+- `EachSpan` 当前只服务读路径；writable span 因 YAGNI 已否决，诊断代码已删除
 
 ## 认知模型
 
-- 理解这个模块时，应该把它看成：
-  - 一套共享核心概念 + 一层 advanced 类型集合
-- 这个模块里最重要的抽象是：
-  - `MiniArch.World`
-  - `MiniArch.QueryDescription`
-  - `MiniArch.Query`
-  - `MiniArch.OrderedQuery`
-  - `MiniArch.Core.Query`
-- 常见误解：
-  - 以为“只有一份 QueryDescription”就等于也只能有一份查询结果形状
-  - 以为去掉 typed query façade 就意味着不能再下沉到 chunk 级遍历
+- 一套共享核心概念 + 一层 advanced 类型集合
 
 ## 入口
 
-- 第一次读或加功能，先看：
-  - `src/MiniArch/Core/World.cs`：唯一 `World`
-  - `src/MiniArch/Core/QueryDescription.cs`：唯一查询描述
-  - `src/MiniArch/Ecs/Query.cs`：默认层 entity-only 查询
-  - `src/MiniArch/Core/Query.cs`：advanced query factory 与 chunk 级消费
-- 修 bug，先看：
-  - `tests/MiniArch.Tests/UserApi/UserQueryTests.cs`：普通 API 契约
-  - `tests/MiniArch.Tests/Core/QueryTests.cs`：advanced query 缓存与并发读取契约
+- `src/MiniArch/Core/World.cs` + `Core/QueryDescription.cs` + `Ecs/Query.cs` + `Core/Query.cs`
+- 修 bug：`tests/MiniArch.Tests/UserApi/UserQueryTests.cs` + `Core/QueryTests.cs`
 
 ## 坑点
 
-- 历史上容易出问题的地方：
-  - 让 `World` / `Entity` / `QueryDescription` 在两层重复出现，迫使用户先判断“这次该 new 哪一份”
-  - 用 builder/generic query 快捷入口继续扩张公开 API，导致 `QueryDescription` 不是唯一查询语言
-  - 仓库内部仍使用 `MiniArch.Tests.*` / `MiniArch.Benchmarks` 命名空间，导致根命名空间类型解析冲突
-- 容易误判的地方：
-  - 以为删除 typed query 就等于必须放弃 advanced query
-  - 以为默认层只剩 entity 枚举后，`MiniArch.Core.Query` 就应该删除；实际上 advanced query 仍然承担 chunk 快照与 profiling 入口
-- 改这里时要特别小心：
-  - `MiniArch.Query` 是 struct wrapper，不能再拿它做 identity 断言
-  - `OrderedQuery` 的内部池化只覆盖枚举 buffer；如果 comparer 捕获可变状态或写 world，不属于 query 并发读契约
-  - `MiniArch.Core.Query.Create(world, in description)` 现在是 advanced 唯一入口；改这里要同步 tests/benchmarks
-  - 如果未来再扩查询能力，优先扩 `QueryDescription` 或 advanced query 消费方式，不要重新引入 typed query 家族
-
+- `MiniArch.Query` 是 struct wrapper，不能拿它做 identity 断言
+- `MiniArch.Core.Query.Create(world, in description)` 现在是 advanced 唯一入口
+- `EachSpan` 只支持 blittable 组件；含托管引用的组件必须用 chunk 手动迭代
