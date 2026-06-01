@@ -291,8 +291,8 @@ public sealed class World : IDisposable
         var componentType2 = GetComponentType<T2>();
         var archetype = GetOrCreateCreateArchetype<T1, T2>(componentType1, componentType2);
         var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
-        chunk.SetComponentAtTyped(archetype.GetComponentIndex(componentType1), rowIndex, in component1);
-        chunk.SetComponentAtTyped(archetype.GetComponentIndex(componentType2), rowIndex, in component2);
+        chunk.SetComponentAtTyped(archetype.GetComponentIndexFast(componentType1), rowIndex, in component1);
+        chunk.SetComponentAtTyped(archetype.GetComponentIndexFast(componentType2), rowIndex, in component2);
         return entity;
     }
 
@@ -837,15 +837,9 @@ public sealed class World : IDisposable
     {
         ThrowIfDisposed();
 
-        if (!_hierarchy.HasLinks)
-        {
-            DestroySingle(entity, removeHierarchy: false);
-            return;
-        }
-
         if (!_hierarchy.HasChildren(entity))
         {
-            DestroySingle(entity, removeHierarchy: true);
+            DestroySingle(entity);
             return;
         }
 
@@ -866,7 +860,7 @@ public sealed class World : IDisposable
 
             for (var index = 0; index < _destroyOrderScratch.Count; index++)
             {
-                DestroySingle(_destroyOrderScratch[index], removeHierarchy: true);
+                DestroySingle(_destroyOrderScratch[index]);
             }
         }
         finally
@@ -1553,14 +1547,15 @@ public sealed class World : IDisposable
         throw new InvalidOperationException($"Entity {entity} is no longer alive. It may have been destroyed in a previous frame or the handle is stale.");
     }
 
-    private void DestroySingle(Entity entity, bool removeHierarchy)
+    private void DestroySingle(Entity entity)
     {
         var info = GetRequiredLocation(entity);
         info.Archetype.RemoveEntity(info.ChunkIndex, info.RowIndex, out var movedEntity);
-        if (removeHierarchy)
+        if (_hierarchy.HasAnyLinks(entity))
         {
             _hierarchy.RemoveDestroyed(entity);
         }
+
         _locations[entity.Id] = default;
         _versions[entity.Id] = entity.Version + 1;
         PushFreeIdUnsafe(entity.Id, entity.Version + 1);
@@ -1582,7 +1577,7 @@ public sealed class World : IDisposable
 
     private static void SetCreatedComponent<T>(Archetype archetype, Chunk chunk, int rowIndex, ComponentType componentType, in T component)
     {
-        chunk.SetComponentAtTyped(archetype.GetComponentIndex(componentType), rowIndex, in component);
+        chunk.SetComponentAtTyped(archetype.GetComponentIndexFast(componentType), rowIndex, in component);
     }
 
     private int AppendEntitySlots(int newEntityCount)
@@ -1737,8 +1732,11 @@ public sealed class World : IDisposable
 
     internal Entity ReserveDeferredEntity()
     {
-        var id = AcquireEntityIdUnsafe(out var version);
-        return new Entity(id, version);
+        lock (_entityIdLock)
+        {
+            var id = AcquireEntityIdUnsafe(out var version);
+            return new Entity(id, version);
+        }
     }
 
     internal void ReleaseReservedEntity(Entity entity)

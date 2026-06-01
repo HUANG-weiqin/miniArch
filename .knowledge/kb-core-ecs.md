@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-06-01
+updated: 2026-06-02
 ---
 # MiniArch Core ECS
 
@@ -62,7 +62,6 @@ updated: 2026-06-01
 - `Archetype` / `Chunk` 通过共享 `ComponentColumnMap.Build(Signature)` 构建 component-to-column 索引，把 `Set` 路径压成一次定位 + 一次写入
 - `World.Destroy(...)` 和 `CollectCurrentDestroyClosure(...)` 的 destroy 预处理会复用 world 内部 scratch，而不是每次临时 new `List` / `HashSet`
 - `HierarchyTable.CollectDestroySubtree(...)` 现在接受 caller-owned visited / order 容器，避免在 subtree 收集时额外分配 traversal stack
-- `HierarchyTable` 维护 `_linkCount` / `HasLinks`：无任何层级链接的 world 在 `Destroy` 热路径上跳过 `HasChildren` 和 `RemoveDestroyed`，避免纯 ECS 场景为 hierarchy side-table 付固定成本
 - `Query` 的 warmed 热路径应该尽量只比较一份 world 侧统一 query generation；不要在热循环里同时读取 `ArchetypeGeneration` 和 `QueryLayoutGeneration` 两份状态。
 
 ## 决策
@@ -122,7 +121,6 @@ updated: 2026-06-01
 - Chunk / Query / Archetype 热路径方法（`SetComponentAtTyped`, `SetComponentAt`, `GetComponentAt`, `GetComponentIndex`, `GetEntityStorage`, `GetArchetypeSpan`, `GetChunkSpan`）已标记 `AggressiveInlining`。
 - `Chunk.GetComponentIndex(...)` 不能在 chunk 实例上维护 last-component / last-column 这类共享可变读缓存；同一 chunk 被并发只读、且不同线程读不同组件时，普通字段 pair 可能被观察成不一致组合。读路径应直接使用不可变的 `_componentIdToColumnIndex` direct map，或由调用方 hoist 到局部 column index。
 - `World` / `CommandBuffer` 的泛型 component-type cache 也不能用 registry + id 两个 static 字段表示同一条 cache entry；跨 world 或并发首次缓存时可能形成错配。应发布单个 immutable entry 引用，并从本地 entry 读取 registry/id。
-- `World` mutation API 不支持并发写，因此直接 `World.Create/Destroy` 不应为每个 entity id/free-list 操作加锁；`CommandBuffer` recording 的 deferred entity reservation 仍通过 `ReserveDeferredEntity` 内部锁串行化，保留多 buffer recording 的 entity handle 唯一性。
 - 如果 query 不只缓存 `Archetype[]`，还缓存了扁平 `Chunk[]`，失效条件就不能只看 archetype 集合变化；同 archetype 内新增或复用 chunk 也必须触发 query snapshot 刷新。
 - flat byte chunk 删除和迁移路径应按 byte block 复制组件元素，避免回到 `Array.Copy` / `Array.Clear` 的逐列虚调用和类型检查成本。
 - MiniArch 当前约束是不把对象引用组件存入 chunk；flat byte storage 只面向无托管引用的组件位模式，chunk 创建时应对含托管引用组件 fail fast，不能为了兼容引用组件重新引入 parallel typed array 表示。
@@ -133,7 +131,10 @@ updated: 2026-06-01
 - 热路径安全检查一律包裹 `#if DEBUG`（和 `ThrowIfDisposed` / `ValidateElementSize<T>` 同策略）：`GetRequiredLocation` bounds check、`Chunk.Add` capacity check、`CopySharedComponentsFrom` null+row checks、`RemoveAt` ValidateRow、`CopyComponent` size mismatch、`WriteComponentRaw` ValidateRow。这些检查在正确代码中永远为 true，Release 下零开销。
 - `ComponentTypeCacheEntry` 是 `readonly record struct`（非引用类型），`GetComponentType<T>()` 用 `ReferenceEquals(entry.Registry, _components)` 判断缓存是否命中；不能用 `entry is not null` 替代，因为多 World 实例并行测试时静态缓存会跨 World 污染。
 - `ApplyTypedAddOrSet<T>` 已标记 `AggressiveInlining`；`Archetype.TryGetComponentIndex` / `GetChunk` 也已标记。
-- Destroy 热路径有两级 hierarchy 快速路径：`HierarchyTable.HasLinks == false` 时完全跳过 hierarchy side-table；有链接但当前 entity 无 children 时，`HasChildren(entity)` 返回 false 并跳过 `CollectDestroySubtree`、scratch list 管理和 try/finally 开销。
+- Destroy 热路径有 leaf-entity 快速路径：`HierarchyTable.HasChildren(entity)` 返回 false 时，跳过 `CollectDestroySubtree`、scratch list 管理和 try/finally 开销。
+- Destroy 热路径有无 hierarchy 跳过路径：`HierarchyTable.HasAnyLinks(entity)` 返回 false 时，跳过 `RemoveDestroyed` 调用，避免对无 hierarchy 参与的实体执行冗余的 `_parentByChild[id]=NoEntity` 和 `_firstChild[id]=NoSlot` 写入。
+- `World.Create/Destroy` 热路径不再加锁：`AcquireEntityId` / `PushFreeId` 拆成 Unsafe 版本（无锁，单线程 world mutation 前提）和 deferred 版本（保留锁，给 `CommandBuffer` 多 buffer 并发 recording 用）。`ReserveDeferredEntity` 仍在 `_entityIdLock` 内调 Unsafe 版本。
+- `Create<T1>` 直接用 column index 0 写组件（单组件 archetype 只有 1 列），跳过 `GetComponentIndex` 查找。`Create<T1,T2>` 和 `SetCreatedComponent`（T3..T16 路径）改用 `GetComponentIndexFast` 去掉 bounds check。
 - 基准结果快照（2026-05-29，Release，BDN ShortRun，1k entities 除非标注）：
 
   **结构变更：**
@@ -166,11 +167,11 @@ updated: 2026-06-01
   **Throughput Runner (3s×3, 1k entities, NoOptimization + read-back)：**
   - SetSingleComponent: MiniArch 98,783 vs Arch 60,058 → MiniArch +64.5%
   - SetTwoComponents: MiniArch 39,697 vs Arch 35,779 → MiniArch +11.0%
-  - CreateDestroyPairwise（2026-06-01 优化前快照）: MiniArch 15,761 vs Arch 14,551 → MiniArch +8.3%
-  - CreateDestroyPairwise（2026-06-01，direct World create/destroy 去 entity-id/free-list lock + hierarchy HasLinks gate）: MiniArch 30,765 vs Arch 15,598 → MiniArch +97.2%
-  - CreateDestroyBatch（2026-06-01，同上）: MiniArch 29,898 vs Arch 16,422 → MiniArch +82.1%
+  - CreateDestroyPairwise (single archetype): MiniArch 30,200 vs Arch 15,200 → MiniArch +99%
+  - CreateDestroyPairwiseMulti (4 archetype): MiniArch 17,000 vs Arch 12,100 → MiniArch +41%
+  - CreateDestroyBatch: MiniArch 26,453 vs Arch 15,635 → MiniArch +69%
 
-  - 说明：(1) flat byte[] 统一存储在结构变更场景中表现出众——Add/Remove/Set/Destroy 均因 swap-remove、direct-index 路径和 chunk 复用策略领先 Arch；(2) query 在所有形态下均快于 Arch，Warmed Query 的 generation 失效机制和 MatchedChunks 快照工作良好；(3) component span BDN 读取已从早期 -45% 和优化前 -4.4% 翻转为 +11.4%，关键优化是 `GetComponentRefAt<T>` 消除 bounds check（改用 `Unsafe.Add + MemoryMarshal.GetArrayDataReference`）和热路径方法加 `[SkipLocalsInit]`；fixed-duration span 差距通过 archetype-level column hoist、internal chunk span、反向 row loop 收窄到 -1.62%；(4) 热路径安全检查（`GetRequiredLocation` bounds check、`Chunk.Add` capacity check、`CopySharedComponentsFrom` null+row checks、`RemoveAt` ValidateRow、`CopyComponent` size mismatch、`WriteComponentRaw` ValidateRow）已包裹进 `#if DEBUG`，Release 下零开销；(5) throughput runner 的 Execute 方法必须加 `[MethodImpl(NoOptimization)]` + Set 后读回值加入 checksum，否则 .NET 8 PGO 会在 warmup 后把 Set 调用当死存储消除（MiniArch 受影响更大因为 Set 路径更短更易被 JIT 分析）。
+  - 说明：(1) flat byte[] 统一存储在结构变更场景中表现出众——Add/Remove/Set/Destroy 均因 swap-remove、direct-index 路径和 chunk 复用策略领先 Arch；(2) query 在所有形态下均快于 Arch，Warmed Query 的 generation 失效机制和 MatchedChunks 快照工作良好；(3) component span BDN 读取已从早期 -45% 和优化前 -4.4% 翻转为 +11.4%，关键优化是 `GetComponentRefAt<T>` 消除 bounds check（改用 `Unsafe.Add + MemoryMarshal.GetArrayDataReference`）和热路径方法加 `[SkipLocalsInit]`；fixed-duration span 差距通过 archetype-level column hoist、internal chunk span、反向 row loop 收窄到 -1.62%；(4) 热路径安全检查（`GetRequiredLocation` bounds check、`Chunk.Add` capacity check、`CopySharedComponentsFrom` null+row checks、`RemoveAt` ValidateRow、`CopyComponent` size mismatch、`WriteComponentRaw` ValidateRow）已包裹进 `#if DEBUG`，Release 下零开销；(5) throughput runner 的 Execute 方法必须加 `[MethodImpl(NoOptimization)]` + Set 后读回值加入 checksum，否则 .NET 8 PGO 会在 warmup 后把 Set 调用当死存储消除（MiniArch 受影响更大因为 Set 路径更短更易被 JIT 分析）；(6) create/destroy 热路径锁已移除——直接 `World.Create/Destroy` 走无锁 `AcquireEntityIdUnsafe/PushFreeIdUnsafe`，`CommandBuffer` deferred reservation 保留锁保证多 buffer 并发 recording 语义；此改动将单 archetype pairwise 从约 18.5k 提升到约 27k（+46%）；(7) `DestroySingle` 现在通过 `HierarchyTable.HasAnyLinks(entity)` 条件跳过 hierarchy 调用——无 hierarchy 参与的实体不再执行 `RemoveDestroyed` 的冗余数组写；(8) `Create<T1>` 组件写 hardcoded column index 0（单组件 archetype 只有 1 列），`Create<T1,T2>` 和 `SetCreatedComponent` 改用 `GetComponentIndexFast` 去掉 bounds check；(9) 多 archetype pairwise 场景（4 种签名交替）下降 44%（30.2k→17.0k），主因是 T3 `Create` 走 span 路径（stackalloc + SortAndDeduplicate + CreateArchetypeKey + 字典查找）overhead 比 T1/T2 大得多。
   - 优化过程中对比 Arch 源码学到的关键 tricks：`DangerousGetReference`（bounds check 消除）、`[SkipLocalsInit]`（跳过局部变量零初始化）、`Unsafe.As<T[]>(array)`（绕过数组协变类型检查）、反向迭代（`--index >= 0`，单 CPU 标志位比较）、多类型 codegen overloads（批量解析列索引）。
 
 ## 认知模型

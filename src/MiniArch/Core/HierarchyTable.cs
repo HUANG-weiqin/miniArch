@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+
 namespace MiniArch.Core;
 
 internal sealed class HierarchyTable
@@ -11,10 +13,7 @@ internal sealed class HierarchyTable
     private int[] _childNext = [];
     private int _childSlotCount;
     private int _childFreeList = NoSlot;
-    private int _linkCount;
     private readonly List<(Entity Entity, bool Expanded)> _destroyTraversalStack = new(4);
-
-    public bool HasLinks => _linkCount > 0;
 
     public void Reset()
     {
@@ -22,7 +21,6 @@ internal sealed class HierarchyTable
         Array.Fill(_firstChild, NoSlot);
         _childSlotCount = 0;
         _childFreeList = NoSlot;
-        _linkCount = 0;
     }
 
     public void Link(World world, Entity parent, Entity child)
@@ -35,7 +33,6 @@ internal sealed class HierarchyTable
 
         _parentByChild[child.Id] = parent;
         AddChildToParent(parent.Id, child);
-        _linkCount++;
     }
 
     public void LinkRestored(Entity parent, Entity child)
@@ -45,7 +42,6 @@ internal sealed class HierarchyTable
 
         _parentByChild[child.Id] = parent;
         AddChildToParent(parent.Id, child);
-        _linkCount++;
     }
 
     public void Unlink(Entity child)
@@ -67,7 +63,6 @@ internal sealed class HierarchyTable
         }
 
         _parentByChild[child.Id] = NoEntity;
-        _linkCount--;
     }
 
     public bool TryGetParent(World world, Entity child, out Entity parent)
@@ -165,6 +160,17 @@ internal sealed class HierarchyTable
         return _firstChild[entity.Id] >= 0;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool HasAnyLinks(Entity entity)
+    {
+        if ((uint)entity.Id >= (uint)_parentByChild.Length)
+        {
+            return false;
+        }
+
+        return _parentByChild[entity.Id] != NoEntity || _firstChild[entity.Id] != NoSlot;
+    }
+
     public void CollectDestroySubtree(World world, Entity root, int[] visitedGen, int currentGen, List<Entity> destroyOrder)
     {
         if (!world.IsAlive(root))
@@ -243,14 +249,9 @@ internal sealed class HierarchyTable
         }
 
         var parent = _parentByChild[entity.Id];
-        if (parent != NoEntity)
+        if (parent != NoEntity && parent.Id >= 0 && parent.Id < _firstChild.Length)
         {
-            if (parent.Id >= 0 && parent.Id < _firstChild.Length)
-            {
-                RemoveChildFromParent(parent.Id, entity);
-            }
-
-            _linkCount--;
+            RemoveChildFromParent(parent.Id, entity);
         }
 
         _parentByChild[entity.Id] = NoEntity;
@@ -269,7 +270,6 @@ internal sealed class HierarchyTable
             }
 
             FreeChildSlot(slot);
-            _linkCount--;
             slot = next;
         }
     }

@@ -21,6 +21,7 @@ public enum ThroughputWorkload
     SetTwoComponents,
     CreateDestroyPairwise,
     CreateDestroyBatch,
+    CreateDestroyPairwiseMulti,
     QueryWithAllEachSpan,
     QueryWithAllComponentSpanWide,
     QueryWithAllEachSpanWide,
@@ -142,6 +143,7 @@ public sealed record ThroughputOptions(
             "set-two-components" => ThroughputWorkload.SetTwoComponents,
             "create-destroy-pairwise" => ThroughputWorkload.CreateDestroyPairwise,
             "create-destroy-batch" => ThroughputWorkload.CreateDestroyBatch,
+            "create-destroy-pairwise-multi" => ThroughputWorkload.CreateDestroyPairwiseMulti,
             "query-with-all-eachspan" => ThroughputWorkload.QueryWithAllEachSpan,
             "query-with-all-component-span-wide" => ThroughputWorkload.QueryWithAllComponentSpanWide,
             "query-with-all-eachspan-wide" => ThroughputWorkload.QueryWithAllEachSpanWide,
@@ -157,6 +159,7 @@ public sealed record ThroughputOptions(
             "set-single-component" or
             "set-two-components" or
             "create-destroy-pairwise" or
+            "create-destroy-pairwise-multi" or
             "create-destroy-batch";
     }
 
@@ -369,6 +372,7 @@ public static class ThroughputRunner
             ThroughputWorkload.SetTwoComponents => "set-two-components",
             ThroughputWorkload.CreateDestroyPairwise => "create-destroy-pairwise",
             ThroughputWorkload.CreateDestroyBatch => "create-destroy-batch",
+            ThroughputWorkload.CreateDestroyPairwiseMulti => "create-destroy-pairwise-multi",
             ThroughputWorkload.QueryWithAllEachSpan => "query-with-all-eachspan",
             ThroughputWorkload.QueryWithAllComponentSpanWide => "query-with-all-component-span-wide",
             ThroughputWorkload.QueryWithAllEachSpanWide => "query-with-all-eachspan-wide",
@@ -436,6 +440,8 @@ internal static class ThroughputCaseFactory
             (ThroughputWorkload.CreateDestroyPairwise, ThroughputEngine.Arch) => new ArchCreateDestroyPairwiseThroughputCase(entityCount),
             (ThroughputWorkload.CreateDestroyBatch, ThroughputEngine.MiniArch) => new MiniCreateDestroyBatchThroughputCase(entityCount),
             (ThroughputWorkload.CreateDestroyBatch, ThroughputEngine.Arch) => new ArchCreateDestroyBatchThroughputCase(entityCount),
+            (ThroughputWorkload.CreateDestroyPairwiseMulti, ThroughputEngine.MiniArch) => new MiniCreateDestroyPairwiseMultiThroughputCase(entityCount),
+            (ThroughputWorkload.CreateDestroyPairwiseMulti, ThroughputEngine.Arch) => new ArchCreateDestroyPairwiseMultiThroughputCase(entityCount),
             (ThroughputWorkload.QueryWithAllEachSpan, ThroughputEngine.MiniArch) => new MiniQueryEachSpanThroughputCase(entityCount),
             (ThroughputWorkload.QueryWithAllEachSpan, ThroughputEngine.Arch) => new ArchQueryEachSpanThroughputCase(entityCount),
             (ThroughputWorkload.QueryWithAllEachSpanWide, ThroughputEngine.MiniArch) => new MiniWideQueryEachSpanThroughputCase(entityCount),
@@ -492,6 +498,12 @@ internal static class ThroughputCaseFactory
                     return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
             case (ThroughputWorkload.CreateDestroyBatch, ThroughputEngine.Arch):
                 using (var c = new ArchCreateDestroyBatchThroughputCase(entityCount))
+                    return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
+            case (ThroughputWorkload.CreateDestroyPairwiseMulti, ThroughputEngine.MiniArch):
+                using (var c = new MiniCreateDestroyPairwiseMultiThroughputCase(entityCount))
+                    return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
+            case (ThroughputWorkload.CreateDestroyPairwiseMulti, ThroughputEngine.Arch):
+                using (var c = new ArchCreateDestroyPairwiseMultiThroughputCase(entityCount))
                     return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
             case (ThroughputWorkload.QueryWithAllEachSpan, ThroughputEngine.MiniArch):
                 using (var c = new MiniQueryEachSpanThroughputCase(entityCount))
@@ -1088,6 +1100,59 @@ internal static class ThroughputCaseFactory
         public void Dispose() { }
     }
 
+    private sealed class MiniCreateDestroyPairwiseMultiThroughputCase : IThroughputCase
+    {
+        private readonly int _entityCount;
+        private MiniWorld _world;
+
+        public MiniCreateDestroyPairwiseMultiThroughputCase(int entityCount)
+        {
+            _entityCount = entityCount;
+            _world = new MiniWorld(entityCapacity: entityCount);
+        }
+
+        public void WarmUp(int count, CancellationToken cancellationToken)
+        {
+            for (var i = 0; i < count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _ = ExecuteMiniCreateDestroyPairwiseMulti(_world, _entityCount);
+            }
+        }
+
+        public long RunIteration() => ExecuteMiniCreateDestroyPairwiseMulti(_world, _entityCount);
+
+        public void Dispose() { }
+    }
+
+    private sealed class ArchCreateDestroyPairwiseMultiThroughputCase : IThroughputCase
+    {
+        private readonly int _entityCount;
+
+        public ArchCreateDestroyPairwiseMultiThroughputCase(int entityCount)
+        {
+            _entityCount = entityCount;
+        }
+
+        public void WarmUp(int count, CancellationToken cancellationToken)
+        {
+            for (var i = 0; i < count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                using var world = ArchWorld.Create();
+                _ = ExecuteArchCreateDestroyPairwiseMulti(world, _entityCount);
+            }
+        }
+
+        public long RunIteration()
+        {
+            using var world = ArchWorld.Create();
+            return ExecuteArchCreateDestroyPairwiseMulti(world, _entityCount);
+        }
+
+        public void Dispose() { }
+    }
+
     private sealed class MiniCreateDestroyBatchThroughputCase : IThroughputCase
     {
         private readonly int _entityCount;
@@ -1352,6 +1417,68 @@ internal static class ThroughputCaseFactory
         for (var i = 0; i < count; i++)
         {
             var entity = world.Create<Position>(new Position(i, i));
+            world.Destroy(entity);
+            checksum += entity.Id;
+        }
+
+        return checksum;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int ExecuteMiniCreateDestroyPairwiseMulti(MiniWorld world, int count)
+    {
+        var checksum = 0;
+        for (var i = 0; i < count; i++)
+        {
+            var phase = i & 3;
+            MiniEntity entity;
+            switch (phase)
+            {
+                case 0:
+                    entity = world.Create(new Position(i, i));
+                    break;
+                case 1:
+                    entity = world.Create(new Position(i, i), new Velocity(i, i));
+                    break;
+                case 2:
+                    entity = world.Create(new Position(i, i), new Health(i));
+                    break;
+                default:
+                    entity = world.Create(new Position(i, i), new Velocity(i, i), new Health(i));
+                    break;
+            }
+
+            world.Destroy(entity);
+            checksum += entity.Id;
+        }
+
+        return checksum;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int ExecuteArchCreateDestroyPairwiseMulti(ArchWorld world, int count)
+    {
+        var checksum = 0;
+        for (var i = 0; i < count; i++)
+        {
+            var phase = i & 3;
+            ArchEntity entity;
+            switch (phase)
+            {
+                case 0:
+                    entity = world.Create<Position>(new Position(i, i));
+                    break;
+                case 1:
+                    entity = world.Create<Position, Velocity>(new Position(i, i), new Velocity(i, i));
+                    break;
+                case 2:
+                    entity = world.Create<Position, Health>(new Position(i, i), new Health(i));
+                    break;
+                default:
+                    entity = world.Create<Position, Velocity, Health>(new Position(i, i), new Velocity(i, i), new Health(i));
+                    break;
+            }
+
             world.Destroy(entity);
             checksum += entity.Id;
         }

@@ -63,11 +63,11 @@ updated: 2026-06-01
 
 | 链路 | 吞吐量 rounds/s | 平均耗时 ms/round | 总轮数 | 内存稳定性 |
 |---|---|---|---|---|
-| Movement（无 collision） | 674.5 | 1.5 | 20236 | 稳定 |
-| Attack（含 collision） | 211.7 | 4.7 | 6350 | 稳定 |
+| Movement（无 collision） | 691.6 | 1.4 | 20748 | 稳定 |
+| Attack（含 collision） | 203.0 | 4.9 | 6091 | 稳定 |
 
 ### 回归阈值
 
-- Movement 吞吐量：≥539 rounds/s（baseline 的 80%）
-- Attack 吞吐量：≥169 rounds/s（baseline 的 80%）
+- Movement 吞吐量：≥553 rounds/s（baseline 的 80%）
+- Attack 吞吐量：≥162 rounds/s（baseline 的 80%）
 - 内存：heap delta 不能持续增长（允许 ±10% 波动）
