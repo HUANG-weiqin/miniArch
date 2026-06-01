@@ -18,6 +18,12 @@ const int DurationSeconds = 30;
 const int ReportInterval = 100;
 const int WarmupRounds = 50;
 
+if (args.Length > 0 && args[0] == "--bullethell-timed")
+{
+    BulletHell.Benchmark.Run();
+    return;
+}
+
 Console.WriteLine("=== HeroComing ECS Performance Test ===");
 Console.WriteLine($"Characters: {CharacterCount}");
 Console.WriteLine($"Grid:       {GridWidth}x{GridHeight}");
