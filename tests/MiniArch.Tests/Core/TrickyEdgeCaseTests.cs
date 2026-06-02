@@ -654,7 +654,7 @@ public sealed class TrickyEdgeCaseTests
 
         var description = new QueryDescription().With<Position>();
         var query = MiniQuery.Create(world, in description);
-        Assert.Equal(entities.Length, query.GetChunkSpan().Length);
+        Assert.Equal(1, query.GetChunkSpan().Length);
     }
 
     // ═══════════════════════════════════════════════════════

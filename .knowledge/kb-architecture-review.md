@@ -13,7 +13,7 @@ updated: 2026-06-01
 
 ## 全局一句话
 
-miniArch = 一张 entity→location 表 + 按组件集合分组的密集 byte 存储 + 一套延迟命令录制器。所有功能都是这三个原语的组合。
+miniArch = 一张 entity→location 表 + 按组件集合分组的**可增长**密集 byte 存储 + 一套延迟命令录制器。所有功能都是这三个原语的组合。
 
 ## 全局依赖图
 

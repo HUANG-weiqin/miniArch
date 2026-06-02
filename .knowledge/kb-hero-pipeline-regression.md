@@ -2,7 +2,7 @@
 title: Hero Pipeline Regression Test
 module: HeroComing.Perf
 description: First-class regression gate for architecture changes - 30s timed throughput test
-updated: 2026-06-01
+updated: 2026-06-02
 ---
 # Hero Pipeline Regression Test
 
@@ -18,23 +18,15 @@ updated: 2026-06-01
 - 引用 `tests/HeroPipeline.Tests/HeroPipeline.Tests.csproj` 获取 pipeline 代码
 - 500 players + 500 enemies on 100x100 grid
 
-## 当前 baseline（2026-06-01）
+## 当前 baseline（2026-06-02）
 
-| 链路 | rounds/s | Avg ms/round | 总轮数 | 内存稳定性 |
+| 链路 | 吞吐量 rounds/s | 平均耗时 ms/round | 总轮数 | 内存稳定性 |
 |---|---|---|---|---|
-| Movement | 692.6 | 1.4 | 20778 | 稳定 |
-| Attack | 191.4 | 5.2 | 5741 | 稳定 |
+| Movement（无 collision） | 694.2 | 1.4 | 20826 | 稳定 |
+| Attack（含 collision） | 179.9 | 5.6 | 5397 | 稳定 |
 
-- Movement 阈值：≥554 rounds/s（baseline 80%）
-- Attack 阈值：≥153 rounds/s（baseline 80%）
+### 回归阈值
 
-## 入口
-
-- 运行：`dotnet run -c Release --project perf/HeroComing.Perf`
-- 修改：`perf/HeroComing.Perf/Program.cs`
-
-## 坑点
-
-- 必须用 `-c Release`（Debug 慢 7 倍）
-- 30s 固定时长而非固定轮数（不受单轮波动影响）
-- 测试会自动更新 baseline 数据（见 AGENTS.md 架构变更回归门禁）
+- Movement 吞吐量：≥555 rounds/s（baseline 的 80%）
+- Attack 吞吐量：≥143 rounds/s（baseline 的 80%）
+- 内存：heap delta 不能持续增长（允许 ±10% 波动）

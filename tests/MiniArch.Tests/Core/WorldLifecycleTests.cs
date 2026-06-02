@@ -215,8 +215,8 @@ public sealed class WorldLifecycleTests
         for (var i = 0; i < entities.Length; i++)
         {
             Assert.True(world.TryGetLocation(entities[i], out var info));
-            Assert.Equal(i / 4, info.ChunkIndex);
-            Assert.Equal(i % 4, info.RowIndex);
+            Assert.Equal(0, info.ChunkIndex);
+            Assert.Equal(i, info.RowIndex);
         }
     }
 
@@ -233,16 +233,16 @@ public sealed class WorldLifecycleTests
         for (var i = 0; i < firstBatch.Length; i++)
         {
             Assert.True(world.TryGetLocation(firstBatch[i], out var info));
-            Assert.Equal(i / 4, info.ChunkIndex);
-            Assert.Equal(i % 4, info.RowIndex);
+            Assert.Equal(0, info.ChunkIndex);
+            Assert.Equal(i, info.RowIndex);
         }
 
         for (var i = 0; i < secondBatch.Length; i++)
         {
             Assert.True(world.TryGetLocation(secondBatch[i], out var info));
             var absoluteIndex = firstBatch.Length + i;
-            Assert.Equal(absoluteIndex / 4, info.ChunkIndex);
-            Assert.Equal(absoluteIndex % 4, info.RowIndex);
+            Assert.Equal(0, info.ChunkIndex);
+            Assert.Equal(absoluteIndex, info.RowIndex);
         }
     }
 
@@ -326,19 +326,19 @@ public sealed class WorldLifecycleTests
 
         Assert.True(world.TryGetLocation(secondBatch[0], out var firstReused));
         Assert.Equal(0, firstReused.ChunkIndex);
-        Assert.Equal(3, firstReused.RowIndex);
+        Assert.Equal(4, firstReused.RowIndex);
 
         Assert.True(world.TryGetLocation(secondBatch[1], out var secondReused));
-        Assert.Equal(1, secondReused.ChunkIndex);
-        Assert.Equal(1, secondReused.RowIndex);
+        Assert.Equal(0, secondReused.ChunkIndex);
+        Assert.Equal(5, secondReused.RowIndex);
 
         Assert.True(world.TryGetLocation(secondBatch[2], out var firstFresh));
-        Assert.Equal(1, firstFresh.ChunkIndex);
-        Assert.Equal(2, firstFresh.RowIndex);
+        Assert.Equal(0, firstFresh.ChunkIndex);
+        Assert.Equal(6, firstFresh.RowIndex);
 
         Assert.True(world.TryGetLocation(secondBatch[3], out var secondFresh));
-        Assert.Equal(1, secondFresh.ChunkIndex);
-        Assert.Equal(3, secondFresh.RowIndex);
+        Assert.Equal(0, secondFresh.ChunkIndex);
+        Assert.Equal(7, secondFresh.RowIndex);
     }
 
     [Fact]
@@ -370,7 +370,7 @@ public sealed class WorldLifecycleTests
         var query = CreateQuery<Position, Velocity>(world);
 
         Assert.Single(query.MatchedArchetypes);
-        Assert.Equal(2, query.GetChunkSpan().Length);
+        Assert.Equal(1, query.GetChunkSpan().Length);
     }
 
     [Fact]

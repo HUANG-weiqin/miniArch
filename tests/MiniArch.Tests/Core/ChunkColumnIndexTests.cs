@@ -153,11 +153,11 @@ public sealed class ChunkColumnIndexTests
         var constructor = typeof(Chunk).GetConstructor(
             BindingFlags.Instance | BindingFlags.NonPublic,
             binder: null,
-            new[] { typeof(Signature), typeof(Type[]), typeof(int[]), typeof(int) },
+            new[] { typeof(Signature), typeof(Type[]), typeof(int[]), typeof(int), typeof(int) },
             modifiers: null);
 
         Assert.NotNull(constructor);
-        return (Chunk)constructor!.Invoke(new object?[] { signature, componentTypes, componentIdToColumnIndex, capacity });
+        return (Chunk)constructor!.Invoke(new object?[] { signature, componentTypes, componentIdToColumnIndex, capacity, capacity });
     }
 
     private readonly record struct NonExistentComponent(int Value);

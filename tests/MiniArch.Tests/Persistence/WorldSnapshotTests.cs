@@ -109,13 +109,13 @@ public sealed class WorldSnapshotTests
         }
 
         Assert.True(loaded.TryGetLocation(positionOnly[2], out var thirdPositionOnlyLocation));
-        Assert.Equal(1, thirdPositionOnlyLocation.ChunkIndex);
+        Assert.Equal(0, thirdPositionOnlyLocation.ChunkIndex);
 
         Assert.True(loaded.TryGetLocation(moving[2], out var thirdMovingLocation));
-        Assert.Equal(1, thirdMovingLocation.ChunkIndex);
+        Assert.Equal(0, thirdMovingLocation.ChunkIndex);
 
         Assert.True(loaded.TryGetLocation(living[2], out var thirdLivingLocation));
-        Assert.Equal(1, thirdLivingLocation.ChunkIndex);
+        Assert.Equal(0, thirdLivingLocation.ChunkIndex);
     }
 
     [Fact]

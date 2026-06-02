@@ -13,11 +13,13 @@ public sealed class Archetype
     private int _nonFullCount;
     private bool[] _chunkHasNonFullEntry = [];
     private readonly int _chunkCapacity;
+    private readonly int _maxChunkCapacity;
     private readonly Type[] _componentTypes;
     private readonly int[] _componentIdToColumnIndex;
     private long _generation;
 
-    internal Archetype(Signature signature, Type[] componentTypes, int chunkCapacity = 4)
+    internal Archetype(Signature signature, Type[] componentTypes, int chunkCapacity = 4,
+        int maxChunkCapacity = -1)
     {
         ArgumentNullException.ThrowIfNull(signature);
 
@@ -33,6 +35,7 @@ public sealed class Archetype
 
         Signature = signature;
         _chunkCapacity = chunkCapacity;
+        _maxChunkCapacity = maxChunkCapacity < 0 ? chunkCapacity : Math.Max(chunkCapacity, maxChunkCapacity);
         _componentTypes = componentTypes;
         _componentIdToColumnIndex = ComponentColumnMap.Build(signature);
         AddChunk();
@@ -203,7 +206,7 @@ public sealed class Archetype
 
     private Chunk CreateChunk()
     {
-        return new Chunk(Signature, _componentTypes, _componentIdToColumnIndex, _chunkCapacity);
+        return new Chunk(Signature, _componentTypes, _componentIdToColumnIndex, _chunkCapacity, _maxChunkCapacity);
     }
 
     private Chunk AddChunk()

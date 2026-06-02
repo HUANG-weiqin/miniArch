@@ -15,7 +15,8 @@ public sealed class World : IDisposable
     private const int DefaultChunkCapacity = 128;
     private const int EmptyArchetypeChunkCapacity = 1024;
     private const int EmptyArchetypeChunkCapacityThreshold = 128;
-    private const int AdaptiveChunkTargetBytes = 32 * 1024;
+    private const int AdaptiveChunkTargetBytes = 16 * 1024;
+    private const int AdaptiveMaxChunkTargetBytes = 512 * 1024;
     private const int AdaptiveMaxChunkCapacity = 1024;
     private const int StackAllocatedBatchRangeLimit = 128;
     private static readonly int EntitySizeInBytes = Unsafe.SizeOf<Entity>();
@@ -1251,7 +1252,8 @@ public sealed class World : IDisposable
         }
 
         var chunkCapacity = GetArchetypeChunkCapacity(signature);
-        archetype = new Archetype(signature, ResolveComponentTypes(signature), chunkCapacity);
+        archetype = new Archetype(signature, ResolveComponentTypes(signature), chunkCapacity,
+            GetMaxChunkCapacity(signature, chunkCapacity));
         _archetypes.Add(signature, archetype);
         PublishArchetypeSnapshot(archetype);
         _archetypeVersion++;
@@ -1499,6 +1501,24 @@ public sealed class World : IDisposable
         return archetype;
     }
 
+    private static int GetBytesPerEntity(Signature signature)
+    {
+        var bytesPerEntity = EntitySizeInBytes;
+        var components = signature.AsSpan();
+        for (var index = 0; index < components.Length; index++)
+            bytesPerEntity += ComponentSizeCache.GetSize(ComponentRegistry.Shared.GetType(components[index]));
+        return bytesPerEntity;
+    }
+
+    private static int GetMaxChunkCapacity(Signature signature, int minCapacity)
+    {
+        var bytesPerEntity = GetBytesPerEntity(signature);
+        if (bytesPerEntity <= 0) return minCapacity;
+
+        var maxByBytes = AdaptiveMaxChunkTargetBytes / bytesPerEntity;
+        return Math.Max(minCapacity, maxByBytes);
+    }
+
     private int GetArchetypeChunkCapacity(Signature signature)
     {
         if (signature.Count == 0 && _chunkCapacity >= EmptyArchetypeChunkCapacityThreshold)
@@ -1511,31 +1531,19 @@ public sealed class World : IDisposable
             return _chunkCapacity;
         }
 
-        var approximateBytesPerEntity = GetApproximateBytesPerEntity(signature);
-        if (approximateBytesPerEntity <= 0)
+        var bytesPerEntity = GetBytesPerEntity(signature);
+        if (bytesPerEntity <= 0)
         {
             return _chunkCapacity;
         }
 
-        var adaptiveChunkCapacity = AdaptiveChunkTargetBytes / approximateBytesPerEntity;
+        var adaptiveChunkCapacity = AdaptiveChunkTargetBytes / bytesPerEntity;
         if (adaptiveChunkCapacity <= _chunkCapacity)
         {
             return _chunkCapacity;
         }
 
         return Math.Min(adaptiveChunkCapacity, AdaptiveMaxChunkCapacity);
-    }
-
-    private int GetApproximateBytesPerEntity(Signature signature)
-    {
-        var bytesPerEntity = EntitySizeInBytes;
-        var components = signature.AsSpan();
-        for (var index = 0; index < components.Length; index++)
-        {
-            bytesPerEntity += ComponentSizeCache.GetSize(ComponentRegistry.Shared.GetType(components[index]));
-        }
-
-        return bytesPerEntity;
     }
 
     private Type[] ResolveComponentTypes(Signature signature)

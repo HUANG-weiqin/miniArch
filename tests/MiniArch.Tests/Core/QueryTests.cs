@@ -75,8 +75,8 @@ public sealed class QueryTests
             chunks.Add(chunk);
         }
 
-        Assert.Equal(3, chunks.Count);
-        Assert.Equal(3, chunks.Distinct().Count());
+        Assert.Single(chunks);
+        Assert.Single(chunks.Distinct());
     }
 
     [Fact]
@@ -150,8 +150,8 @@ public sealed class QueryTests
         var second = world.Create();
         world.Add(second, new Position(2, 2));
 
-        Assert.Equal(2, query.MatchedChunks.Count);
-        Assert.Equal(2, query.GetChunkSpan().Length);
+        Assert.Single(query.MatchedChunks);
+        Assert.Equal(1, query.GetChunkSpan().Length);
         Assert.Equal(2, query.RefreshCount);
     }
 

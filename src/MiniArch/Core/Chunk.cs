@@ -15,14 +15,16 @@ public sealed class Chunk
         .GetMethod(nameof(ContainsManagedReferences), BindingFlags.Static | BindingFlags.NonPublic)!;
 
     private readonly Signature _signature;
-    private readonly Entity[] _entities;
-    private readonly byte[] _data;
+    private Entity[] _entities;
+    private byte[] _data;
     private readonly Type[] _componentTypes;
-    private readonly int[] _columnByteOffsets;
+    private int[] _columnByteOffsets;
     private readonly int[] _elementSizes;
     private readonly int[] _componentIdToColumnIndex;
+    private readonly int _maxCapacity;
 
-    internal Chunk(Signature signature, Type[] componentTypes, int[] componentIdToColumnIndex, int capacity = 4)
+    internal Chunk(Signature signature, Type[] componentTypes, int[] componentIdToColumnIndex,
+        int capacity = 4, int maxCapacity = -1)
     {
         ArgumentNullException.ThrowIfNull(signature);
         ArgumentNullException.ThrowIfNull(componentTypes);
@@ -38,12 +40,13 @@ public sealed class Chunk
         _entities = new Entity[capacity];
         _componentTypes = componentTypes;
         (_data, _columnByteOffsets, _elementSizes) = CreateStorage(signature, componentTypes, capacity);
+        _maxCapacity = maxCapacity < 0 ? capacity : Math.Max(capacity, maxCapacity);
     }
 
     /// <summary>
-    /// Gets the chunk capacity.
+    /// Gets the chunk max capacity (logical entity limit before full).
     /// </summary>
-    public int Capacity => _entities.Length;
+    public int Capacity => _maxCapacity;
 
     /// <summary>
     /// Gets the live row count.
@@ -75,20 +78,43 @@ public sealed class Chunk
     }
 
     /// <summary>
-    /// Adds an entity and writes its components.
+    /// Grows storage to guarantee capacity for at least <paramref name="requiredCapacity"/> rows.
+    /// Only grows up to <see cref="Capacity"/> (max logical capacity).
     /// </summary>
+    internal void EnsureCapacity(int requiredCapacity)
+    {
+        if (requiredCapacity <= _entities.Length) return;
+
+        var newCapacity = Math.Min(Math.Max(requiredCapacity, _entities.Length * 2), _maxCapacity);
+        if (newCapacity <= _entities.Length) return;
+
+        var newEntities = new Entity[newCapacity];
+        Array.Copy(_entities, newEntities, Count);
+
+        var (newData, newOffsets, _) = CreateStorage(_signature, _componentTypes, newCapacity);
+
+        for (var col = 0; col < _elementSizes.Length; col++)
+        {
+            var elemSize = _elementSizes[col];
+            var columnBytes = Count * elemSize;
+            if (columnBytes <= 0) continue;
+
+            ref var srcRef = ref _data[_columnByteOffsets[col]];
+            ref var dstRef = ref newData[newOffsets[col]];
+            Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, (uint)columnBytes);
+        }
+
+        _entities = newEntities;
+        _data = newData;
+        _columnByteOffsets = newOffsets;
+    }
+
     /// <summary>
     /// Adds an entity.
     /// </summary>
     internal int Add(Entity entity)
     {
-#if DEBUG
-        if (Count == Capacity)
-        {
-            throw new InvalidOperationException("Chunk is full.");
-        }
-#endif
-
+        EnsureCapacity(Count + 1);
         var row = Count;
         _entities[row] = entity;
         Count++;
@@ -102,11 +128,12 @@ public sealed class Chunk
             throw new ArgumentOutOfRangeException(nameof(count));
         }
 
-        if (Count + count > Capacity)
+        if (Count + count > _maxCapacity)
         {
             throw new InvalidOperationException("Chunk is full.");
         }
 
+        EnsureCapacity(Count + count);
         var row = Count;
         Count += count;
         return row;
