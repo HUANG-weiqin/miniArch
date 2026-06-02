@@ -7,7 +7,7 @@
 | 模块 | 知识页 |
 |---|---|
 | Workspace（仓库导航/脚本/流程） | `kb-repo-overview.md`、`kb-profiling-workflow.md`、`kb-throughput-workflow.md` |
-| MiniArch.Core（ECS 运行时） | `kb-core-ecs.md`、`kb-architecture-review.md` |
+| MiniArch.Core（ECS 运行时） | `kb-core-ecs.md`、`kb-architecture-review.md`、`kb-chunk-storage.md` |
 | MiniArch.Core CommandBuffer | `kb-command-buffer-feasibility.md` |
 | MiniArch.Core Query | `kb-query-invalidation.md` |
 | MiniArch.Core Snapshot | `kb-snapshot-persistence.md` |
@@ -24,6 +24,7 @@
 - **仓库入口** → `kb-repo-overview.md`
 - **CPU 采样定位热点** → `kb-profiling-workflow.md`
 - **固定时长吞吐量对比** → `kb-throughput-workflow.md`
+- **Chunk 存储** → `kb-chunk-storage.md`
 - **ECS 运行时** → `kb-core-ecs.md`
 - **整体架构理解** → `kb-architecture-review.md`
 - **Query 失效机制** → `kb-query-invalidation.md`
