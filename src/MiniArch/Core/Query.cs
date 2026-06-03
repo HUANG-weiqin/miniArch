@@ -14,9 +14,9 @@ public sealed class Query
     private Signature? _requiredSignature;
     private Signature? _excludedSignature;
     private Signature? _anySignature;
-    private Mask128 _requiredMask;
-    private Mask128 _excludedMask;
-    private Mask128 _anyMask;
+    private ComponentMask _requiredMask;
+    private ComponentMask _excludedMask;
+    private ComponentMask _anyMask;
     private bool _masksInitialized;
     private int _refreshCount;
 
@@ -381,24 +381,31 @@ public sealed class Query
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static Mask128 ComputeFilterMask(ReadOnlySpan<ComponentType> components)
+    private static ComponentMask ComputeFilterMask(ReadOnlySpan<ComponentType> components)
     {
-        ulong low = 0;
-        ulong high = 0;
+        ulong b0 = 0, b1 = 0, b2 = 0, b3 = 0;
         for (var i = 0; i < components.Length; i++)
         {
             var id = components[i].Value;
             if ((uint)id < 64)
             {
-                low |= 1UL << id;
+                b0 |= 1UL << id;
             }
             else if ((uint)id < 128)
             {
-                high |= 1UL << (id - 64);
+                b1 |= 1UL << (id - 64);
+            }
+            else if ((uint)id < 192)
+            {
+                b2 |= 1UL << (id - 128);
+            }
+            else if ((uint)id < 256)
+            {
+                b3 |= 1UL << (id - 192);
             }
         }
 
-        return new Mask128(low, high);
+        return new ComponentMask(b0, b1, b2, b3);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -409,17 +416,25 @@ public sealed class Query
 
             if (!_requiredMask.IsZero())
             {
-                if ((archMask.Low & _requiredMask.Low) != _requiredMask.Low)
+                if ((archMask.B0 & _requiredMask.B0) != _requiredMask.B0)
                     return false;
-                if (_requiredMask.HasHighBits && (archMask.High & _requiredMask.High) != _requiredMask.High)
+                if (_requiredMask.HasB1 && (archMask.B1 & _requiredMask.B1) != _requiredMask.B1)
+                    return false;
+                if (_requiredMask.HasB2 && (archMask.B2 & _requiredMask.B2) != _requiredMask.B2)
+                    return false;
+                if (_requiredMask.HasB3 && (archMask.B3 & _requiredMask.B3) != _requiredMask.B3)
                     return false;
             }
 
             if (!_excludedMask.IsZero())
             {
-                if ((archMask.Low & _excludedMask.Low) != 0)
+                if ((archMask.B0 & _excludedMask.B0) != 0)
                     return false;
-                if (_excludedMask.HasHighBits && (archMask.High & _excludedMask.High) != 0)
+                if (_excludedMask.HasB1 && (archMask.B1 & _excludedMask.B1) != 0)
+                    return false;
+                if (_excludedMask.HasB2 && (archMask.B2 & _excludedMask.B2) != 0)
+                    return false;
+                if (_excludedMask.HasB3 && (archMask.B3 & _excludedMask.B3) != 0)
                     return false;
             }
 
@@ -427,14 +442,14 @@ public sealed class Query
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private bool MatchesSlow(Archetype archetype, Mask128 archMask)
+    private bool MatchesSlow(Archetype archetype, ComponentMask archMask)
     {
-        // Only check component ids >= 128 (not covered by mask)
+        // Only check component ids >= 256 (not covered by mask)
         var required = _filter.Required.AsSpan();
         for (var i = 0; i < required.Length; i++)
         {
             var component = required[i];
-            if ((uint)component.Value >= 128 && !archetype.Signature.Contains(component))
+            if ((uint)component.Value >= 256 && !archetype.Signature.Contains(component))
             {
                 return false;
             }
@@ -444,7 +459,7 @@ public sealed class Query
         for (var i = 0; i < excluded.Length; i++)
         {
             var component = excluded[i];
-            if ((uint)component.Value >= 128 && archetype.Signature.Contains(component))
+            if ((uint)component.Value >= 256 && archetype.Signature.Contains(component))
             {
                 return false;
             }
@@ -456,16 +471,20 @@ public sealed class Query
             return true;
         }
 
-        // Fast any-check via 128-bit mask
+        // Fast any-check via 256-bit mask
             if (!_anyMask.IsZero())
             {
-                if ((archMask.Low & _anyMask.Low) != 0)
+                if ((archMask.B0 & _anyMask.B0) != 0)
                     return true;
-                if (_anyMask.HasHighBits && (archMask.High & _anyMask.High) != 0)
+                if (_anyMask.HasB1 && (archMask.B1 & _anyMask.B1) != 0)
+                    return true;
+                if (_anyMask.HasB2 && (archMask.B2 & _anyMask.B2) != 0)
+                    return true;
+                if (_anyMask.HasB3 && (archMask.B3 & _anyMask.B3) != 0)
                     return true;
             }
 
-        // Slow any-check for ids >= 128
+        // Slow any-check for ids >= 256
         for (var i = 0; i < any.Length; i++)
         {
             if (archetype.Signature.Contains(any[i]))

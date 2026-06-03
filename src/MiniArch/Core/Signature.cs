@@ -11,7 +11,7 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
 {
     private readonly ComponentType[] _components;
     private readonly int _hashCode;
-    private readonly Mask128 _componentMask;
+    private readonly ComponentMask _componentMask;
 
     /// <summary>
     /// Gets the empty signature.
@@ -61,14 +61,14 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
     public ReadOnlySpan<ComponentType> AsSpan() => _components;
 
     /// <summary>
-    /// Gets a 128-bit bitmask where bit i is set if component with id i is present.
-    /// Only accurate for component ids 0..127; always 0 for ids >= 128.
+    /// Gets a 256-bit bitmask where bit i is set if component with id i is present.
+    /// Only accurate for component ids 0..255; always 0 for ids &gt;= 256.
     /// </summary>
-    public Mask128 ComponentMask => _componentMask;
+    public ComponentMask ComponentMask => _componentMask;
 
     /// <summary>
     /// Returns whether the signature contains a component.
-    /// Uses 128-bit mask for ids 0..127; falls back to array search for ids >= 128.
+    /// Uses 256-bit mask for ids 0..255; falls back to array search for ids &gt;= 256.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Contains(ComponentType component)
@@ -76,12 +76,22 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
         var id = component.Value;
         if ((uint)id < 64)
         {
-            if ((_componentMask.Low & (1UL << id)) == 0)
+            if ((_componentMask.B0 & (1UL << id)) == 0)
                 return false;
         }
         else if ((uint)id < 128)
         {
-            if ((_componentMask.High & (1UL << (id - 64))) == 0)
+            if ((_componentMask.B1 & (1UL << (id - 64))) == 0)
+                return false;
+        }
+        else if ((uint)id < 192)
+        {
+            if ((_componentMask.B2 & (1UL << (id - 128))) == 0)
+                return false;
+        }
+        else if ((uint)id < 256)
+        {
+            if ((_componentMask.B3 & (1UL << (id - 192))) == 0)
                 return false;
         }
 
@@ -289,23 +299,30 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
     private static int ComputeHashCode(ReadOnlySpan<ComponentType> components) =>
         SpanHelper.CombineHashCodes(components);
 
-    private static Mask128 ComputeMask(ReadOnlySpan<ComponentType> components)
+    private static ComponentMask ComputeMask(ReadOnlySpan<ComponentType> components)
     {
-        ulong low = 0;
-        ulong high = 0;
+        ulong b0 = 0, b1 = 0, b2 = 0, b3 = 0;
         for (var i = 0; i < components.Length; i++)
         {
             var id = components[i].Value;
             if ((uint)id < 64)
             {
-                low |= 1UL << id;
+                b0 |= 1UL << id;
             }
             else if ((uint)id < 128)
             {
-                high |= 1UL << (id - 64);
+                b1 |= 1UL << (id - 64);
+            }
+            else if ((uint)id < 192)
+            {
+                b2 |= 1UL << (id - 128);
+            }
+            else if ((uint)id < 256)
+            {
+                b3 |= 1UL << (id - 192);
             }
         }
 
-        return new Mask128(low, high);
+        return new ComponentMask(b0, b1, b2, b3);
     }
 }
