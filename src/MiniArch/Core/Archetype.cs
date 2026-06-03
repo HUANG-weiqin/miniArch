@@ -203,6 +203,15 @@ public sealed class Archetype
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal int GetComponentIndexFast(ComponentType component) => _componentIdToColumnIndex[component.Value];
 
+    /// <summary>
+    /// Returns the element size in bytes for the given column index.
+    /// Used by MigrationPlan during edge creation.
+    /// </summary>
+    internal int GetElementSize(int columnIndex)
+    {
+        return ComponentSizeCache.GetSize(_componentTypes[columnIndex]);
+    }
+
 
     private Chunk CreateChunk()
     {

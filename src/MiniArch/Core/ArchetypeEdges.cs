@@ -1,47 +1,47 @@
 namespace MiniArch.Core;
 
 /// <summary>
-/// Caches adjacent archetypes.
+/// Caches adjacent archetypes with pre-computed migration plans.
 /// </summary>
 internal sealed class ArchetypeEdges
 {
-    private Archetype?[] _addEdges = Array.Empty<Archetype?>();
-    private Archetype?[] _removeEdges = Array.Empty<Archetype?>();
+    private MigrationPlan?[] _addEdges = Array.Empty<MigrationPlan?>();
+    private MigrationPlan?[] _removeEdges = Array.Empty<MigrationPlan?>();
 
     /// <summary>
-    /// Tries to get the add edge for a component.
+    /// Tries to get the add edge plan for a component.
     /// </summary>
-    internal bool TryGetAdd(ComponentType component, out Archetype? archetype) => TryGet(_addEdges, component, out archetype);
+    internal bool TryGetAdd(ComponentType component, out MigrationPlan? plan) => TryGet(_addEdges, component, out plan);
 
     /// <summary>
-    /// Tries to get the remove edge for a component.
+    /// Tries to get the remove edge plan for a component.
     /// </summary>
-    internal bool TryGetRemove(ComponentType component, out Archetype? archetype) => TryGet(_removeEdges, component, out archetype);
+    internal bool TryGetRemove(ComponentType component, out MigrationPlan? plan) => TryGet(_removeEdges, component, out plan);
 
     /// <summary>
-    /// Caches an add edge.
+    /// Caches an add edge with its migration plan.
     /// </summary>
-    internal void CacheAdd(ComponentType component, Archetype archetype) => Cache(ref _addEdges, component, archetype);
+    internal void CacheAdd(ComponentType component, MigrationPlan plan) => Cache(ref _addEdges, component, plan);
 
     /// <summary>
-    /// Caches a remove edge.
+    /// Caches a remove edge with its migration plan.
     /// </summary>
-    internal void CacheRemove(ComponentType component, Archetype archetype) => Cache(ref _removeEdges, component, archetype);
+    internal void CacheRemove(ComponentType component, MigrationPlan plan) => Cache(ref _removeEdges, component, plan);
 
-    private static bool TryGet(Archetype?[] edges, ComponentType component, out Archetype? archetype)
+    private static bool TryGet(MigrationPlan?[] edges, ComponentType component, out MigrationPlan? plan)
     {
         var componentId = component.Value;
         if ((uint)componentId >= (uint)edges.Length)
         {
-            archetype = null;
+            plan = null;
             return false;
         }
 
-        archetype = edges[componentId];
-        return archetype is not null;
+        plan = edges[componentId];
+        return plan is not null;
     }
 
-    private static void Cache(ref Archetype?[] edges, ComponentType component, Archetype archetype)
+    private static void Cache(ref MigrationPlan?[] edges, ComponentType component, MigrationPlan plan)
     {
         var componentId = component.Value;
         if ((uint)componentId >= (uint)edges.Length)
@@ -49,6 +49,6 @@ internal sealed class ArchetypeEdges
             Array.Resize(ref edges, componentId + 1);
         }
 
-        edges[componentId] = archetype;
+        edges[componentId] = plan;
     }
 }

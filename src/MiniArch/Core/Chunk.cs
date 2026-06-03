@@ -468,6 +468,18 @@ public sealed class Chunk
         return ref Unsafe.As<byte, T>(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex]));
     }
 
+    /// <summary>Returns a byte pointer to a component slot. Used by MigrationPlan for fast copy.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal unsafe byte* GetComponentBytePtr(int columnIndex, int row)
+    {
+        fixed (byte* ptr = &_data[GetByteOffset(columnIndex, row)])
+            return ptr;
+    }
+
+    /// <summary>Returns the element size in bytes for a given column index.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal int GetElementSize(int columnIndex) => _elementSizes[columnIndex];
+
     [SkipLocalsInit]
     private unsafe void CopyComponent(Chunk source, int sourceColumnIndex, int sourceRow, int destinationColumnIndex, int destinationRow)
     {
