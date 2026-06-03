@@ -9,7 +9,7 @@ namespace MiniArch.Core;
 /// <see cref="HasB1"/>/<see cref="HasB2"/>/<see cref="HasB3"/> is true,
 /// so zero cost when fewer than 64/128/192 component types are registered.
 /// </summary>
-public readonly struct ComponentMask
+internal readonly struct ComponentMask
 {
     /// <summary>Bits 0..63.</summary>
     public readonly ulong B0;
@@ -29,6 +29,9 @@ public readonly struct ComponentMask
     /// </summary>
     internal ulong High => B1;
 
+    /// <summary>
+    /// Initializes a 256-bit mask from four 64-bit blocks.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ComponentMask(ulong b0, ulong b1, ulong b2, ulong b3)
     {
@@ -38,6 +41,9 @@ public readonly struct ComponentMask
         B3 = b3;
     }
 
+    /// <summary>
+    /// Returns true when all 256 bits are zero (no component ids registered).
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool IsZero() => B0 == 0 && B1 == 0 && B2 == 0 && B3 == 0;
 
@@ -78,5 +84,6 @@ public readonly struct ComponentMask
         get => B1 != 0;
     }
 
+    /// <summary>Returns the hex representation of all 256 bits.</summary>
     public override string ToString() => $"0x{B3:X16}{B2:X16}{B1:X16}{B0:X16}";
 }

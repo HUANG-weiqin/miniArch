@@ -48,12 +48,12 @@ public sealed class Chunk
     /// <summary>
     /// Gets the chunk max capacity (logical entity limit before full).
     /// </summary>
-    public int Capacity => _maxCapacity;
+    internal int Capacity => _maxCapacity;
 
     /// <summary>
     /// Gets the live row count.
     /// </summary>
-    public int Count { get; private set; }
+    internal int Count { get; private set; }
 
     /// <summary>
     /// Gets live entities as a span.
@@ -71,7 +71,7 @@ public sealed class Chunk
     /// Gets the entity at a row.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public Entity GetEntity(int row)
+    internal Entity GetEntity(int row)
     {
 #if DEBUG
         ValidateRow(row);
@@ -154,7 +154,7 @@ public sealed class Chunk
     /// <summary>
     /// Gets a component value by type.
     /// </summary>
-    public T GetComponent<T>(ComponentType component, int row)
+    internal T GetComponent<T>(ComponentType component, int row)
     {
         ValidateRow(row);
         var columnIndex = GetComponentIndex(component);
@@ -162,7 +162,14 @@ public sealed class Chunk
     }
 
     /// <summary>
-    /// Gets a typed component span.
+    /// Gets a span of component <typeparamref name="T"/> for all rows in the chunk.
+    /// Has no type-parameter count limit — use this to access any number of distinct
+    /// component types, unlike <c>EachSpan&lt;T1..T8&gt;</c> which caps at 8 types.
+    /// <para/>
+    /// Slower than the typed <c>EachSpan</c> iterators: looks up the column index
+    /// by <see cref="ComponentType"/> on every call. For hot paths with few component
+    /// types, prefer the statically typed <c>query.EachSpan&lt;T1, T2, ...&gt;( )</c>
+    /// which resolves column offsets at JIT time with zero lookup overhead.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Span<T> GetComponentSpan<T>(ComponentType component)
@@ -210,7 +217,12 @@ public sealed class Chunk
         return GetComponentRefAt<T>(columnIndex, row);
     }
 
-    /// <summary>Gets a span of component <typeparamref name="T"/> at the given column index.</summary>
+    /// <summary>
+    /// Gets a span of component <typeparamref name="T"/> at a pre-resolved column index.
+    /// No type-parameter limit. Faster than <see cref="GetComponentSpan{T}"/> because it
+    /// skips the internal column lookup — use when you fetch multiple component types from
+    /// the same chunk and cache the column index via <see cref="TryGetComponentIndex"/>.
+    /// </summary>
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Span<T> GetComponentSpanAt<T>(int columnIndex)
@@ -221,7 +233,15 @@ public sealed class Chunk
         return MemoryMarshal.CreateSpan(ref GetComponentRefAt<T>(columnIndex, 0), Count);
     }
 
-    /// <summary>Tries to get the column index for a component type. Returns false if not present in this chunk.</summary>
+    /// <summary>
+    /// Tries to get the column index for a component type in this chunk.
+    /// Returns false if the component type is not present (which can happen when
+    /// the chunk belongs to an archetype that doesn't have that component).
+    /// <para/>
+    /// Combine with <see cref="GetComponentSpanAt{T}"/> to avoid repeated lookups
+    /// when accessing multiple component types per chunk — call TryGetComponentIndex
+    /// once per type, then use the cached column index in the inner loop.
+    /// </summary>
     public bool TryGetComponentIndex(ComponentType component, out int columnIndex)
     {
         var componentId = component.Value;

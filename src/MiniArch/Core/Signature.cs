@@ -64,7 +64,7 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
     /// Gets a 256-bit bitmask where bit i is set if component with id i is present.
     /// Only accurate for component ids 0..255; always 0 for ids &gt;= 256.
     /// </summary>
-    public ComponentMask ComponentMask => _componentMask;
+    internal ComponentMask ComponentMask => _componentMask;
 
     /// <summary>
     /// Returns whether the signature contains a component.

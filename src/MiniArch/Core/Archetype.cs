@@ -45,12 +45,12 @@ public sealed class Archetype
     /// <summary>
     /// Gets the archetype signature.
     /// </summary>
-    public Signature Signature { get; }
+    internal Signature Signature { get; }
 
     /// <summary>
     /// Gets the entity count.
     /// </summary>
-    public int EntityCount { get; private set; }
+    internal int EntityCount { get; private set; }
 
     /// <summary>
     /// Gets the archetype generation (incremented on structural changes).
@@ -60,7 +60,7 @@ public sealed class Archetype
     /// <summary>
     /// Gets the chunk list.
     /// </summary>
-    public IReadOnlyList<Chunk> Chunks => _chunks;
+    internal IReadOnlyList<Chunk> Chunks => _chunks;
 
     internal ArchetypeEdges Edges { get; } = new();
 
@@ -171,7 +171,7 @@ public sealed class Archetype
     /// Gets a chunk by index.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public Chunk GetChunk(int chunkIndex) => _chunks[chunkIndex];
+    internal Chunk GetChunk(int chunkIndex) => _chunks[chunkIndex];
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ReadOnlySpan<Chunk> GetChunkSpan() => CollectionsMarshal.AsSpan(_chunks);

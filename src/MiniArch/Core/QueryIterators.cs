@@ -3,7 +3,11 @@ using System.Collections;
 namespace MiniArch.Core;
 
 /// <summary>
-/// Enumerable view over matching chunks.
+/// Enumerable over matching chunks. Zero per-row overhead — iterate chunks then
+/// use <see cref="Chunk.GetComponentSpan{T}"/> to access component data directly.
+/// Slower than <c>EachSpan</c> for setup (resolves column index each call),
+/// but faster per entity when many components are needed, and supports
+/// unlimited component types with no wrapper allocation.
 /// </summary>
 public readonly struct ChunkEnumerable : IEnumerable<Chunk>
 {
