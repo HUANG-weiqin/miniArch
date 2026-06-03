@@ -11,7 +11,7 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
 {
     private readonly ComponentType[] _components;
     private readonly int _hashCode;
-    private readonly long _componentMask;
+    private readonly Mask128 _componentMask;
 
     /// <summary>
     /// Gets the empty signature.
@@ -61,22 +61,32 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
     public ReadOnlySpan<ComponentType> AsSpan() => _components;
 
     /// <summary>
-    /// Gets a bitmask where bit i is set if component with id i is present.
-    /// Only accurate for component ids 0..63; always 0 for ids >= 64.
+    /// Gets a 128-bit bitmask where bit i is set if component with id i is present.
+    /// Only accurate for component ids 0..127; always 0 for ids >= 128.
     /// </summary>
-    public long ComponentMask => _componentMask;
+    public Mask128 ComponentMask => _componentMask;
 
     /// <summary>
     /// Returns whether the signature contains a component.
-    /// Uses 64-bit mask for ids 0..63; falls back to array search for ids >= 64.
+    /// Uses 128-bit mask for ids 0..127; falls back to array search for ids >= 128.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Contains(ComponentType component)
     {
         var id = component.Value;
-        if ((uint)id < 64 && (_componentMask & (1L << id)) == 0)
+        if ((uint)id < 128)
         {
-            return false;
+            var bit = 1UL << (id & 63);
+            if ((id & 64) == 0)
+            {
+                if ((_componentMask.Low & bit) == 0)
+                    return false;
+            }
+            else
+            {
+                if ((_componentMask.High & bit) == 0)
+                    return false;
+            }
         }
 
         return ContainsSlow(component);
@@ -283,18 +293,23 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
     private static int ComputeHashCode(ReadOnlySpan<ComponentType> components) =>
         SpanHelper.CombineHashCodes(components);
 
-    private static long ComputeMask(ReadOnlySpan<ComponentType> components)
+    private static Mask128 ComputeMask(ReadOnlySpan<ComponentType> components)
     {
-        long mask = 0;
+        ulong low = 0;
+        ulong high = 0;
         for (var i = 0; i < components.Length; i++)
         {
             var id = components[i].Value;
             if ((uint)id < 64)
             {
-                mask |= 1L << id;
+                low |= 1UL << id;
+            }
+            else if ((uint)id < 128)
+            {
+                high |= 1UL << (id - 64);
             }
         }
 
-        return mask;
+        return new Mask128(low, high);
     }
 }
