@@ -74,19 +74,15 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
     public bool Contains(ComponentType component)
     {
         var id = component.Value;
-        if ((uint)id < 128)
+        if ((uint)id < 64)
         {
-            var bit = 1UL << (id & 63);
-            if ((id & 64) == 0)
-            {
-                if ((_componentMask.Low & bit) == 0)
-                    return false;
-            }
-            else
-            {
-                if ((_componentMask.High & bit) == 0)
-                    return false;
-            }
+            if ((_componentMask.Low & (1UL << id)) == 0)
+                return false;
+        }
+        else if ((uint)id < 128)
+        {
+            if ((_componentMask.High & (1UL << (id - 64))) == 0)
+                return false;
         }
 
         return ContainsSlow(component);

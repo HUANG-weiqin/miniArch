@@ -407,7 +407,7 @@ public sealed class Query
         EnsureMasksInitialized();
         var archMask = archetype.Signature.ComponentMask;
 
-        if (!_requiredMask.IsZero)
+        if (!_requiredMask.IsZero())
         {
             if ((archMask.Low & _requiredMask.Low) != _requiredMask.Low)
                 return false;
@@ -415,7 +415,7 @@ public sealed class Query
                 return false;
         }
 
-        if (!_excludedMask.IsZero)
+        if (!_excludedMask.IsZero())
         {
             if ((archMask.Low & _excludedMask.Low) != 0)
                 return false;
@@ -457,7 +457,7 @@ public sealed class Query
         }
 
         // Fast any-check via 128-bit mask
-        if (!_anyMask.IsZero)
+        if (!_anyMask.IsZero())
         {
             if ((archMask.Low & _anyMask.Low) != 0 || (archMask.High & _anyMask.High) != 0)
                 return true;
