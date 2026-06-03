@@ -14,9 +14,9 @@ public sealed class Query
     private Signature? _requiredSignature;
     private Signature? _excludedSignature;
     private Signature? _anySignature;
-    private ComponentMask256 _requiredMask;
-    private ComponentMask256 _excludedMask;
-    private ComponentMask256 _anyMask;
+    private long _requiredMask;
+    private long _excludedMask;
+    private long _anyMask;
     private bool _masksInitialized;
     private int _refreshCount;
 
@@ -374,42 +374,56 @@ public sealed class Query
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void InitializeMasks()
     {
-        _requiredMask = ComponentMask256.FromComponents(_filter.Required.AsSpan());
-        _excludedMask = ComponentMask256.FromComponents(_filter.Excluded.AsSpan());
-        _anyMask = ComponentMask256.FromComponents(_filter.Any.AsSpan());
+        _requiredMask = ComputeFilterMask(_filter.Required.AsSpan());
+        _excludedMask = ComputeFilterMask(_filter.Excluded.AsSpan());
+        _anyMask = ComputeFilterMask(_filter.Any.AsSpan());
         _masksInitialized = true;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static long ComputeFilterMask(ReadOnlySpan<ComponentType> components)
+    {
+        long mask = 0;
+        for (var i = 0; i < components.Length; i++)
+        {
+            var id = components[i].Value;
+            if ((uint)id < 64)
+            {
+                mask |= 1L << id;
+            }
+        }
+
+        return mask;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool Matches(Archetype archetype)
     {
         EnsureMasksInitialized();
-        var archMask = archetype.Signature.Mask;
+        var archMask = archetype.Signature.ComponentMask;
 
-        // Required: all bits must be set
-        if (!_requiredMask.IsZero && !archMask.HasAll(_requiredMask))
+        if (_requiredMask != 0 && (archMask & _requiredMask) != _requiredMask)
         {
             return false;
         }
 
-        // Excluded: no bits may be set
-        if (!_excludedMask.IsZero && !archMask.HasNone(_excludedMask))
+        if (_excludedMask != 0 && (archMask & _excludedMask) != 0)
         {
             return false;
         }
 
-        return MatchesSlow(archetype);
+        return MatchesSlow(archetype, archMask);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private bool MatchesSlow(Archetype archetype)
+    private bool MatchesSlow(Archetype archetype, long archMask)
     {
-        // Only check component ids >= 256 (not covered by mask)
+        // Only check component ids >= 64 (not covered by mask)
         var required = _filter.Required.AsSpan();
         for (var i = 0; i < required.Length; i++)
         {
-            var id = required[i].Value;
-            if ((uint)id >= 256 && !archetype.Signature.Contains(required[i]))
+            var component = required[i];
+            if ((uint)component.Value >= 64 && !archetype.Signature.Contains(component))
             {
                 return false;
             }
@@ -418,8 +432,8 @@ public sealed class Query
         var excluded = _filter.Excluded.AsSpan();
         for (var i = 0; i < excluded.Length; i++)
         {
-            var id = excluded[i].Value;
-            if ((uint)id >= 256 && archetype.Signature.Contains(excluded[i]))
+            var component = excluded[i];
+            if ((uint)component.Value >= 64 && archetype.Signature.Contains(component))
             {
                 return false;
             }
@@ -431,16 +445,16 @@ public sealed class Query
             return true;
         }
 
-        // Fast any-check via 256-bit mask
-        if (!_anyMask.IsZero && archetype.Signature.Mask.HasAny(_anyMask))
+        // Fast any-check via 64-bit mask
+        if (_anyMask != 0 && (archMask & _anyMask) != 0)
         {
             return true;
         }
 
-        // Slow any-check for ids >= 256
+        // Slow any-check for ids >= 64
         for (var i = 0; i < any.Length; i++)
         {
-            if ((uint)any[i].Value >= 256 && archetype.Signature.Contains(any[i]))
+            if (archetype.Signature.Contains(any[i]))
             {
                 return true;
             }

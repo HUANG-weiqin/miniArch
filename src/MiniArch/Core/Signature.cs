@@ -11,7 +11,7 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
 {
     private readonly ComponentType[] _components;
     private readonly int _hashCode;
-    internal readonly ComponentMask256 Mask;
+    private readonly long _componentMask;
 
     /// <summary>
     /// Gets the empty signature.
@@ -26,7 +26,7 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
         ArgumentNullException.ThrowIfNull(components);
         _components = Normalize(components);
         _hashCode = ComputeHashCode(_components);
-        Mask = ComponentMask256.FromComponents(_components);
+        _componentMask = ComputeMask(_components);
     }
 
     /// <summary>
@@ -41,7 +41,7 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
     {
         _components = components.Length == 0 ? Array.Empty<ComponentType>() : components;
         _hashCode = ComputeHashCode(_components);
-        Mask = ComponentMask256.FromComponents(_components);
+        _componentMask = ComputeMask(_components);
     }
 
     internal static Signature CreateNormalized(ComponentType[] components)
@@ -64,17 +64,17 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
     /// Gets a bitmask where bit i is set if component with id i is present.
     /// Only accurate for component ids 0..63; always 0 for ids >= 64.
     /// </summary>
-    public long ComponentMask => Mask.L0;
+    public long ComponentMask => _componentMask;
 
     /// <summary>
     /// Returns whether the signature contains a component.
-    /// Uses 256-bit mask for ids 0..255; falls back to array search for ids >= 256.
+    /// Uses 64-bit mask for ids 0..63; falls back to array search for ids >= 64.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Contains(ComponentType component)
     {
         var id = component.Value;
-        if ((uint)id < 256 && !Mask.IsBitSet(id))
+        if ((uint)id < 64 && (_componentMask & (1L << id)) == 0)
         {
             return false;
         }
@@ -282,4 +282,19 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
 
     private static int ComputeHashCode(ReadOnlySpan<ComponentType> components) =>
         SpanHelper.CombineHashCodes(components);
+
+    private static long ComputeMask(ReadOnlySpan<ComponentType> components)
+    {
+        long mask = 0;
+        for (var i = 0; i < components.Length; i++)
+        {
+            var id = components[i].Value;
+            if ((uint)id < 64)
+            {
+                mask |= 1L << id;
+            }
+        }
+
+        return mask;
+    }
 }
