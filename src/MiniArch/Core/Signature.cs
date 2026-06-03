@@ -12,6 +12,7 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
     private readonly ComponentType[] _components;
     private readonly int _hashCode;
     private readonly long _componentMask;
+    private readonly long _componentMaskHi; // bits 64..127
 
     /// <summary>
     /// Gets the empty signature.
@@ -26,7 +27,7 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
         ArgumentNullException.ThrowIfNull(components);
         _components = Normalize(components);
         _hashCode = ComputeHashCode(_components);
-        _componentMask = ComputeMask(_components);
+        (_componentMask, _componentMaskHi) = ComputeMask128(_components);
     }
 
     /// <summary>
@@ -41,7 +42,7 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
     {
         _components = components.Length == 0 ? Array.Empty<ComponentType>() : components;
         _hashCode = ComputeHashCode(_components);
-        _componentMask = ComputeMask(_components);
+        (_componentMask, _componentMaskHi) = ComputeMask128(_components);
     }
 
     internal static Signature CreateNormalized(ComponentType[] components)
@@ -61,22 +62,31 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
     public ReadOnlySpan<ComponentType> AsSpan() => _components;
 
     /// <summary>
-    /// Gets a bitmask where bit i is set if component with id i is present.
-    /// Only accurate for component ids 0..63; always 0 for ids >= 64.
+    /// Gets the low 64 bits of the component mask.
     /// </summary>
     public long ComponentMask => _componentMask;
 
     /// <summary>
+    /// Gets the high 64 bits (bits 64..127) of the component mask.
+    /// </summary>
+    internal long ComponentMaskHi => _componentMaskHi;
+
+    /// <summary>
     /// Returns whether the signature contains a component.
+    /// Uses 128-bit mask for ids 0..127; falls back to array search for ids >= 128.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Contains(ComponentType component)
     {
-        if ((uint)component.Value < 64 && (_componentMask & (1L << component.Value)) == 0)
+        var id = component.Value;
+        if ((uint)id < 64)
         {
-            return false;
+            return (_componentMask & (1L << id)) != 0;
         }
-
+        if ((uint)id < 128)
+        {
+            return (_componentMaskHi & (1L << (id - 64))) != 0;
+        }
         return ContainsSlow(component);
     }
 
@@ -281,18 +291,22 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
     private static int ComputeHashCode(ReadOnlySpan<ComponentType> components) =>
         SpanHelper.CombineHashCodes(components);
 
-    private static long ComputeMask(ReadOnlySpan<ComponentType> components)
+    private static (long lo, long hi) ComputeMask128(ReadOnlySpan<ComponentType> components)
     {
-        long mask = 0;
+        long lo = 0, hi = 0;
         for (var i = 0; i < components.Length; i++)
         {
             var id = components[i].Value;
             if ((uint)id < 64)
             {
-                mask |= 1L << id;
+                lo |= 1L << id;
+            }
+            else if ((uint)id < 128)
+            {
+                hi |= 1L << (id - 64);
             }
         }
 
-        return mask;
+        return (lo, hi);
     }
 }

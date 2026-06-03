@@ -14,3 +14,4 @@ TestResults/
 *.trx
 artifacts/
 .worktrees/
+friflo-benchmark/

@@ -20,18 +20,23 @@ using (var miniWorld = MiniGameTickWorldFactory.CreateWorld())
 using (var defaultWorld = DefaultGameTickWorldFactory.CreateWorld())
 using (var archWorld = ArchGameTickWorldFactory.CreateWorld())
 {
+    var frifloWorld = FrifloGameTickWorldFactory.CreateWorld();
+
     Console.WriteLine($"MiniArch  world created: {miniWorld.EntityCount} entities");
     Console.WriteLine($"DefaultEcs world created: {defaultWorld} entities");
     Console.WriteLine($"Arch      world created: {archWorld} entities");
+    Console.WriteLine($"Friflo    world created: {frifloWorld.Count} entities");
     Console.WriteLine();
 
     MiniGameTickRunner.Initialize(miniWorld);
     DefaultGameTickRunner.Initialize(defaultWorld);
     ArchGameTickRunner.Initialize(archWorld);
+    FrifloGameTickRunner.Initialize(frifloWorld);
 
     results.Add(Run("MiniArch", () => MiniGameTickRunner.ExecuteTick(miniWorld)));
     results.Add(Run("DefaultEcs", () => DefaultGameTickRunner.ExecuteTick(defaultWorld)));
     results.Add(Run("Arch", () => ArchGameTickRunner.ExecuteTick(archWorld)));
+    results.Add(Run("Friflo", () => FrifloGameTickRunner.ExecuteTick(frifloWorld)));
 }
 
 Console.WriteLine();

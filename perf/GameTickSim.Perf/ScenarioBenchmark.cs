@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using DefaultEcs;
+using Friflo.Engine.ECS;
+using Position = MiniArchBenchmarks.GameTick.Position;
 using MiniArch.Core;
 using MiniArchBenchmarks.GameTick;
 
@@ -27,6 +29,7 @@ public static class ScenarioBenchmark
             ("E-MixedFullTick", RunMixedFullTick),
             ("K-BulletHell", RunBulletHell),
             ("L-BulletHellBuffs", RunBulletHellBuffs),
+            ("M-BulletHellBuffsMultiArch", RunBulletHellBuffsMultiArch),
         };
 
         Console.WriteLine("=== Isolated Scenario Benchmark ===");
@@ -149,6 +152,32 @@ public static class ScenarioBenchmark
 
             _results.Add(Measure("Arch", Tick, ticksToRun));
         }
+
+        // Friflo
+        {
+            var store = CreateFrifloIterationWorld(entityCount);
+            var query = store.Query<FrifloPosition, FrifloVelocity>();
+
+            int Tick()
+            {
+                var checksum = 0;
+                foreach (var (posChunk, velChunk, _) in query.Chunks)
+                {
+                    var pos = posChunk.Span;
+                    var vel = velChunk.Span;
+                    for (var row = 0; row < pos.Length; row++)
+                    {
+                        pos[row].X += vel[row].X;
+                        pos[row].Y += vel[row].Y;
+                        pos[row].Z += vel[row].Z;
+                        checksum += (int)(pos[row].X + pos[row].Y + pos[row].Z);
+                    }
+                }
+                return checksum;
+            }
+
+            _results.Add(Measure("Friflo", Tick, ticksToRun));
+        }
     }
 
     static void RunWideSingleComponent()
@@ -228,6 +257,31 @@ public static class ScenarioBenchmark
             }
 
             _results.Add(Measure("Arch", Tick, ticksToRun));
+        }
+
+        // Friflo
+        {
+            var store = CreateFrifloHealthWorld(entityCount);
+            var query = store.Query<FrifloHealth>();
+
+            int Tick()
+            {
+                var checksum = 0;
+                foreach (var (components, _) in query.Chunks)
+                {
+                    var health = components.Span;
+                    for (var row = 0; row < health.Length; row++)
+                    {
+                        health[row].Current -= 1;
+                        if (health[row].Current < 0) health[row].Current = health[row].Max;
+                        checksum += (int)health[row].Current;
+                    }
+                }
+
+                return checksum;
+            }
+
+            _results.Add(Measure("Friflo", Tick, ticksToRun));
         }
     }
 
@@ -336,6 +390,38 @@ public static class ScenarioBenchmark
             }
 
             _results.Add(Measure("Arch", Tick, ticksToRun));
+        }
+
+        // Friflo
+        {
+            var store = CreateFrifloStructuralWorld(entityCount);
+            var pool = BuildFrifloEntityPool(store);
+            var debuffQuery = store.Query<FrifloDebuff>();
+            var scratch = new Friflo.Engine.ECS.Entity[opsPerTick * 2];
+            var debuffIdx = 0;
+
+            int Tick()
+            {
+                var total = 0;
+                foreach (var (compChunk, entitiesChunk) in debuffQuery.Chunks)
+                {
+                    for (var row = 0; row < compChunk.Span.Length; row++)
+                        scratch[total++] = store.GetEntityById(entitiesChunk[row]);
+                }
+                for (var i = 0; i < total; i++)
+                    scratch[i].RemoveComponent<FrifloDebuff>();
+
+                for (var i = 0; i < opsPerTick; i++)
+                {
+                    var idx = (debuffIdx + i) % pool.Length;
+                    pool[idx].AddComponent(new FrifloDebuff { Timer = 1.0f });
+                }
+                debuffIdx = (debuffIdx + opsPerTick) % pool.Length;
+
+                return total + opsPerTick;
+            }
+
+            _results.Add(Measure("Friflo", Tick, ticksToRun));
         }
     }
 
@@ -469,6 +555,41 @@ public static class ScenarioBenchmark
 
             _results.Add(Measure("Arch", Tick, ticksToRun));
         }
+
+        // Friflo
+        {
+            var store = new EntityStore();
+            for (var i = 0; i < entityCount; i++)
+                store.CreateEntity(new FrifloPosition { X = i }, new FrifloHealth { Current = 100, Max = 100 });
+
+            var rng = new Random(seed);
+            var pool = BuildFrifloEntityPool(store);
+            var count = pool.Length;
+            var allQuery = store.Query<FrifloPosition>();
+
+            int Tick()
+            {
+                var toDestroy = Math.Min(opsPerTick, count);
+                for (var i = 0; i < toDestroy; i++)
+                {
+                    var r = rng.Next(count);
+                    var entity = pool[r];
+                    count--;
+                    pool[r] = pool[count];
+                    entity.DeleteEntity();
+                }
+                if (pool.Length < count + opsPerTick)
+                    Array.Resize(ref pool, count + opsPerTick + 4096);
+                for (var i = 0; i < opsPerTick; i++)
+                {
+                    var e = store.CreateEntity(new FrifloPosition { X = i }, new FrifloHealth { Current = 100, Max = 100 });
+                    pool[count++] = e;
+                }
+                return opsPerTick * 2;
+            }
+
+            _results.Add(Measure("Friflo", Tick, ticksToRun));
+        }
     }
 
     static void RunMixedFullTick()
@@ -494,6 +615,13 @@ public static class ScenarioBenchmark
             using var w = ArchGameTickWorldFactory.CreateWorld();
             ArchGameTickRunner.Initialize(w);
             _results.Add(Measure("Arch", () => ArchGameTickRunner.ExecuteTick(w), ticksToRun));
+        }
+
+        // Friflo
+        {
+            var store = FrifloGameTickWorldFactory.CreateWorld();
+            FrifloGameTickRunner.Initialize(store);
+            _results.Add(Measure("Friflo", () => FrifloGameTickRunner.ExecuteTick(store), ticksToRun));
         }
     }
 
@@ -918,6 +1046,163 @@ public static class ScenarioBenchmark
             var archFreq = (double)Stopwatch.Frequency / 1_000_000_000;
             Console.WriteLine($"  [Arch phase breakdown] Iterate: {iterateNs / archFreq / 1_000_000:F1}ms ({100.0 * iterateNs / totalNs:F1}%) | Create: {createNs / archFreq / 1_000_000:F1}ms ({100.0 * createNs / totalNs:F1}%) | DestroyScan: {destroyScanNs / archFreq / 1_000_000:F1}ms ({100.0 * destroyScanNs / totalNs:F1}%) | DestroyApply: {destroyApplyNs / archFreq / 1_000_000:F1}ms ({100.0 * destroyApplyNs / totalNs:F1}%)");
         }
+
+        // Friflo
+        {
+            var store = new EntityStore();
+            var player = store.CreateEntity(new FrifloPlayerTag(), new FrifloPosition(), new FrifloVelocity(), new FrifloHealth { Current = 10000, Max = 10000 }, new FrifloSpeed(0));
+            var boss = store.CreateEntity(new FrifloBossTag(), new FrifloPosition { X = bossX, Z = bossZ }, new FrifloVelocity(), new FrifloHealth { Current = 100000, Max = 100000 }, new FrifloAiState());
+
+            var moveQuery = store.Query<FrifloPosition, FrifloVelocity>();
+            var ebQuery = store.Query<FrifloPosition, FrifloDamage>();
+            var pbQuery = store.Query<FrifloPosition, FrifloProjectileTag>();
+            var ptQuery = store.Query<FrifloPosition, FrifloLifetime>();
+            var scratch = new int[8192];
+            var rng = new Random(42);
+            var tickCount = 0;
+            long iterateNs = 0, createNs = 0, destroyScanNs = 0, destroyApplyNs = 0;
+
+            int Tick()
+            {
+                tickCount++;
+                long t0, t1;
+
+                // 1. MoveAll
+                t0 = Stopwatch.GetTimestamp();
+                foreach (var (posChunk, velChunk, _) in moveQuery.Chunks)
+                {
+                    var pos = posChunk.Span;
+                    var vel = velChunk.Span;
+                    for (var row = 0; row < pos.Length; row++)
+                    {
+                        pos[row].X += vel[row].X;
+                        pos[row].Y += vel[row].Y;
+                        pos[row].Z += vel[row].Z;
+                    }
+                }
+                t1 = Stopwatch.GetTimestamp();
+                iterateNs += t1 - t0;
+
+                // 2+3+7. Create
+                t0 = Stopwatch.GetTimestamp();
+                for (var i = 0; i < enemyBulletsPerTick; i++)
+                {
+                    var angle = rng.NextSingle() * 6.2832f;
+                    var speed = 30f + rng.NextSingle() * 20f;
+                    store.CreateEntity(
+                        new FrifloPosition { X = bossX, Z = bossZ },
+                        new FrifloVelocity { X = MathF.Cos(angle) * speed, Z = MathF.Sin(angle) * speed },
+                        new FrifloDamage { Base = 1 + (i & 3) });
+                }
+                for (var i = 0; i < playerBulletsPerTick; i++)
+                {
+                    var spread = (rng.NextSingle() - 0.5f) * 0.6f;
+                    store.CreateEntity(
+                        new FrifloProjectileTag(),
+                        new FrifloPosition(),
+                        new FrifloVelocity { X = (bulletDirX + spread) * 40f, Z = (bulletDirZ + spread) * 40f });
+                }
+                for (var i = 0; i < particlesPerTick; i++)
+                {
+                    var angle = rng.NextSingle() * 6.2832f;
+                    store.CreateEntity(
+                        new FrifloPosition { X = rng.NextSingle() * 10 - 5, Z = rng.NextSingle() * 10 - 5 },
+                        new FrifloVelocity { X = MathF.Cos(angle) * 5, Z = MathF.Sin(angle) * 5 },
+                        new FrifloLifetime { Value = 20f });
+                }
+                t1 = Stopwatch.GetTimestamp();
+                createNs += t1 - t0;
+
+                // 4+5+6. Destroy (scan + apply)
+                // 4. Collide + cleanup enemy bullets
+                {
+                    t0 = Stopwatch.GetTimestamp();
+                    var d = 0;
+                    foreach (var (posChunk, _, entitiesChunk) in ebQuery.Chunks)
+                    {
+                        var pos = posChunk.Span;
+                        for (int row = 0; row < pos.Length; row++)
+                        {
+                            var dx = pos[row].X - playerX;
+                            var dz = pos[row].Z - playerZ;
+                            if (dx * dx + dz * dz < hitRadiusSqPlayer ||
+                                Math.Abs(pos[row].X) > screenBound || Math.Abs(pos[row].Z) > screenBound)
+                            {
+                                if (d < scratch.Length) scratch[d++] = entitiesChunk[row];
+                            }
+                        }
+                    }
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyScanNs += t1 - t0;
+
+                    t0 = Stopwatch.GetTimestamp();
+                    for (var i = 0; i < d; i++) store.GetEntityById(scratch[i]).DeleteEntity();
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyApplyNs += t1 - t0;
+                }
+                // 5. Collide + cleanup player bullets
+                {
+                    t0 = Stopwatch.GetTimestamp();
+                    var d = 0;
+                    foreach (var (posChunk, _, entitiesChunk) in pbQuery.Chunks)
+                    {
+                        var pos = posChunk.Span;
+                        for (var row = 0; row < pos.Length; row++)
+                        {
+                            var dx = pos[row].X - bossX;
+                            var dz = pos[row].Z - bossZ;
+                            if (dx * dx + dz * dz < hitRadiusSqBoss ||
+                                Math.Abs(pos[row].X) > screenBound || Math.Abs(pos[row].Z) > screenBound)
+                            {
+                                if (d < scratch.Length) scratch[d++] = entitiesChunk[row];
+                            }
+                        }
+                    }
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyScanNs += t1 - t0;
+
+                    t0 = Stopwatch.GetTimestamp();
+                    for (var i = 0; i < d; i++) store.GetEntityById(scratch[i]).DeleteEntity();
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyApplyNs += t1 - t0;
+                }
+                // 6. Process particles
+                {
+                    t0 = Stopwatch.GetTimestamp();
+                    var d = 0;
+                    foreach (var (posChunk, ltChunk, entitiesChunk) in ptQuery.Chunks)
+                    {
+                        var pos = posChunk.Span;
+                        var lt = ltChunk.Span;
+                        for (var row = 0; row < pos.Length; row++)
+                        {
+                            lt[row].Value -= 1f;
+                            if (lt[row].Value <= 0 && d < scratch.Length)
+                                scratch[d++] = entitiesChunk[row];
+                        }
+                    }
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyScanNs += t1 - t0;
+
+                    t0 = Stopwatch.GetTimestamp();
+                    for (var i = 0; i < d; i++) store.GetEntityById(scratch[i]).DeleteEntity();
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyApplyNs += t1 - t0;
+                }
+
+                // 8. BossEnrage
+                if (tickCount % enrageInterval == 0 && !boss.HasComponent<FrifloDebuff>())
+                    boss.AddComponent(new FrifloDebuff { Timer = 5f });
+
+                return tickCount;
+            }
+
+            _results.Add(MeasureTimed("Friflo", Tick, durationSeconds));
+
+            var totalNs = iterateNs + createNs + destroyScanNs + destroyApplyNs;
+            var freq = (double)Stopwatch.Frequency / 1_000_000_000;
+            Console.WriteLine($"  [Friflo phase breakdown] Iterate: {iterateNs / freq / 1_000_000:F1}ms ({100.0 * iterateNs / totalNs:F1}%) | Create: {createNs / freq / 1_000_000:F1}ms ({100.0 * createNs / totalNs:F1}%) | DestroyScan: {destroyScanNs / freq / 1_000_000:F1}ms ({100.0 * destroyScanNs / totalNs:F1}%) | DestroyApply: {destroyApplyNs / freq / 1_000_000:F1}ms ({100.0 * destroyApplyNs / totalNs:F1}%)");
+        }
     }
 
     static ScenarioResult Measure(string engine, Func<int> tickFunc, int ticksToRun)
@@ -1052,24 +1337,26 @@ public static class ScenarioBenchmark
             "C-StructuralAddRemove", "J-EntityCreationBurst",
             "D-MassCreateDestroy", "E-MixedFullTick", "K-BulletHell", "L-BulletHellBuffs"
         };
-        var engines = new[] { "MiniArch", "DefaultEcs", "Arch" };
+        var engines = new[] { "MiniArch", "DefaultEcs", "Arch", "Friflo" };
+        const int engineCount = 4;
         for (var s = 0; s < scenarioNames.Length; s++)
         {
-            for (var e = 0; e < engines.Length; e++)
+            for (var e = 0; e < engineCount; e++)
             {
-                var r = _results[s * 3 + e];
+                var r = _results[s * engineCount + e];
                 var name = s == 0 ? scenarioNames[s] : "";
                 Console.WriteLine($"{(e == 0 ? scenarioNames[s] : ""),28} | {r.Engine,12} | {r.OpsPerSec,10:F1} | {r.AvgMs,8:F3} | {r.HeapDeltaKB,8:F1} | {r.Gen0}/{r.Gen1}/{r.Gen2}");
             }
             if (s < scenarioNames.Length - 1)
             {
-                // Speed comparison
-                var mini = _results[s * 3 + 0];
-                var def = _results[s * 3 + 1];
-                var arch = _results[s * 3 + 2];
-                var best = Math.Max(mini.OpsPerSec, Math.Max(def.OpsPerSec, arch.OpsPerSec));
-                var winner = best == mini.OpsPerSec ? "MiniArch" : best == def.OpsPerSec ? "DefaultEcs" : "Arch";
-                Console.WriteLine($"{new string(' ', 28)} | Winner: {winner} | Mini {mini.OpsPerSec / def.OpsPerSec:F2}x Def, {mini.OpsPerSec / arch.OpsPerSec:F2}x Arch");
+                // Speed comparison vs MiniArch
+                var mini = _results[s * engineCount + 0];
+                var fri = _results[s * engineCount + 3];
+                var def = _results[s * engineCount + 1];
+                var arch = _results[s * engineCount + 2];
+                var best = Math.Max(Math.Max(mini.OpsPerSec, def.OpsPerSec), Math.Max(arch.OpsPerSec, fri.OpsPerSec));
+                var winner = best == mini.OpsPerSec ? "MiniArch" : best == fri.OpsPerSec ? "Friflo" : best == arch.OpsPerSec ? "Arch" : "DefaultEcs";
+                Console.WriteLine($"{new string(' ', 28)} | Winner: {winner} | Mini {mini.OpsPerSec / arch.OpsPerSec:F2}x Arch, {mini.OpsPerSec / fri.OpsPerSec:F2}x Friflo");
             }
         }
 
@@ -1078,24 +1365,24 @@ public static class ScenarioBenchmark
         Console.WriteLine("=== Per-Scenario Winners ===");
         for (var s = 0; s < scenarioNames.Length; s++)
         {
-            var mini = _results[s * 3 + 0];
-            var def = _results[s * 3 + 1];
-            var arch = _results[s * 3 + 2];
-            var best = Math.Max(mini.OpsPerSec, Math.Max(def.OpsPerSec, arch.OpsPerSec));
-            var winner = best == mini.OpsPerSec ? "MiniArch" : best == def.OpsPerSec ? "DefaultEcs" : "Arch";
+            var mini = _results[s * engineCount + 0];
+            var def = _results[s * engineCount + 1];
+            var arch = _results[s * engineCount + 2];
+            var fri = _results[s * engineCount + 3];
+            var best = Math.Max(Math.Max(mini.OpsPerSec, def.OpsPerSec), Math.Max(arch.OpsPerSec, fri.OpsPerSec));
+            var winner = best == mini.OpsPerSec ? "MiniArch" : best == fri.OpsPerSec ? "Friflo" : best == arch.OpsPerSec ? "Arch" : "DefaultEcs";
             Console.WriteLine($"  {scenarioNames[s],-28} => {winner,-12} ({best:F1} ops/s)");
         }
 
         // Fragmentation impact: G1 vs G2
-        // G1 is at scenarioNames index 3 (A=0, B=1, F=2, G1=3), G2 at index 4
         Console.WriteLine();
         Console.WriteLine("=== Fragmentation Impact (G1 baseline vs G2 after fragmentation) ===");
         var g1Idx = Array.IndexOf(scenarioNames, "G1-FragBaseline");
         var g2Idx = Array.IndexOf(scenarioNames, "G2-FragAftermath");
-        for (var e = 0; e < 3; e++)
+        for (var e = 0; e < engineCount; e++)
         {
-            var baseline = _results[g1Idx * 3 + e];
-            var fragmented = _results[g2Idx * 3 + e];
+            var baseline = _results[g1Idx * engineCount + e];
+            var fragmented = _results[g2Idx * engineCount + e];
             var degradation = (1.0 - fragmented.OpsPerSec / baseline.OpsPerSec) * 100;
             Console.WriteLine($"  {baseline.Engine,12}: {baseline.OpsPerSec,8:F0} -> {fragmented.OpsPerSec,8:F0} ops/s  ({degradation:+0.0;-0.0}% degradation)");
         }
@@ -1105,10 +1392,10 @@ public static class ScenarioBenchmark
         Console.WriteLine("=== Multi-Archetype Overhead (B single-arch vs F 6-arch) ===");
         var bIdx = Array.IndexOf(scenarioNames, "B-WideSingleComponent");
         var fIdx = Array.IndexOf(scenarioNames, "F-MultiArchetypeIteration");
-        for (var e = 0; e < 3; e++)
+        for (var e = 0; e < engineCount; e++)
         {
-            var single = _results[bIdx * 3 + e];
-            var multi = _results[fIdx * 3 + e];
+            var single = _results[bIdx * engineCount + e];
+            var multi = _results[fIdx * engineCount + e];
             var overhead = (1.0 - multi.OpsPerSec / single.OpsPerSec) * 100;
             Console.WriteLine($"  {single.Engine,12}: {single.OpsPerSec,8:F0} -> {multi.OpsPerSec,8:F0} ops/s  ({overhead:+0.0;-0.0}% overhead)");
         }
@@ -1271,6 +1558,94 @@ public static class ScenarioBenchmark
         return pool;
     }
 
+    // Helper: Build Friflo entity pool from all entities with Position
+    static Friflo.Engine.ECS.Entity[] BuildFrifloEntityPool(EntityStore store)
+    {
+        var q = store.Query<FrifloPosition>();
+        var total = q.Count;
+        var pool = new Friflo.Engine.ECS.Entity[total];
+        var idx = 0;
+        foreach (var (compChunk, entitiesChunk) in q.Chunks)
+        {
+            for (var row = 0; row < compChunk.Span.Length; row++)
+                pool[idx++] = store.GetEntityById(entitiesChunk[row]);
+        }
+        return pool;
+    }
+
+    // Friflo world factory helpers for scenarios
+    static EntityStore CreateFrifloIterationWorld(int count)
+    {
+        var store = new EntityStore();
+        for (var i = 0; i < count; i++)
+        {
+            store.CreateEntity(
+                new FrifloPosition { X = i, Y = i + 1, Z = i + 2 },
+                new FrifloVelocity { X = 1, Y = 0.5f, Z = -0.5f },
+                new FrifloHealth { Current = 100, Max = 100 },
+                new FrifloMana { Current = 50, Max = 50 },
+                new FrifloScale { X = 1 });
+        }
+        return store;
+    }
+
+    static EntityStore CreateFrifloHealthWorld(int count)
+    {
+        var store = new EntityStore();
+        for (var i = 0; i < count; i++)
+        {
+            store.CreateEntity(
+                new FrifloHealth { Current = 100, Max = 100 },
+                new FrifloPosition { X = i },
+                new FrifloVelocity { X = 1 });
+        }
+        return store;
+    }
+
+    static EntityStore CreateFrifloStructuralWorld(int count)
+    {
+        var store = new EntityStore();
+        for (var i = 0; i < count; i++)
+        {
+            store.CreateEntity(
+                new FrifloPosition { X = i },
+                new FrifloHealth { Current = 100, Max = 100 },
+                new FrifloVelocity { X = 1 });
+        }
+        return store;
+    }
+
+    static void CreateFrifloMultiArchetypeWorld(EntityStore store, int perType)
+    {
+        for (var i = 0; i < perType; i++)
+            store.CreateEntity(new FrifloPosition { X = i }, new FrifloHealth { Current = 100, Max = 100 });
+        for (var i = 0; i < perType; i++)
+            store.CreateEntity(new FrifloPosition { X = i }, new FrifloHealth { Current = 100, Max = 100 }, new FrifloVelocity { X = 1 });
+        for (var i = 0; i < perType; i++)
+            store.CreateEntity(new FrifloPosition { X = i }, new FrifloHealth { Current = 100, Max = 100 }, new FrifloVelocity { X = 1 }, new FrifloMana { Current = 50, Max = 50 });
+        for (var i = 0; i < perType; i++)
+            store.CreateEntity(new FrifloPosition { X = i }, new FrifloHealth { Current = 100, Max = 100 }, new FrifloVelocity { X = 1 }, new FrifloMana { Current = 50, Max = 50 }, new FrifloStamina { Current = 100, Max = 100 });
+        for (var i = 0; i < perType; i++)
+            store.CreateEntity(new FrifloPosition { X = i }, new FrifloHealth { Current = 100, Max = 100 }, new FrifloScale { X = 1 });
+        for (var i = 0; i < perType; i++)
+            store.CreateEntity(new FrifloPosition { X = i }, new FrifloHealth { Current = 100, Max = 100 }, new FrifloScale { X = 1 }, new FrifloColor(1, 1, 1, 1));
+    }
+
+    static EntityStore CreateFrifloMultiComponentWorld(int count)
+    {
+        var store = new EntityStore();
+        for (var i = 0; i < count; i++)
+        {
+            store.CreateEntity(
+                new FrifloPosition { X = i },
+                new FrifloVelocity { X = 1 },
+                new FrifloHealth { Current = 100, Max = 100 },
+                new FrifloMana { Current = 50, Max = 50 },
+                new FrifloStamina { Current = 100, Max = 100 });
+        }
+        return store;
+    }
+
     // === Round 2 Scenarios ===
 
     static void RunMultiArchetypeIteration()
@@ -1354,6 +1729,31 @@ public static class ScenarioBenchmark
 
             _results.Add(Measure("Arch", Tick, ticksToRun));
         }
+
+        // Friflo
+        {
+            var store = new EntityStore();
+            CreateFrifloMultiArchetypeWorld(store, perType);
+            var query = store.Query<FrifloHealth>();
+
+            int Tick()
+            {
+                var checksum = 0;
+                foreach (var (components, _) in query.Chunks)
+                {
+                    var health = components.Span;
+                    for (var row = 0; row < health.Length; row++)
+                    {
+                        health[row].Current -= 1;
+                        if (health[row].Current < 0) health[row].Current = health[row].Max;
+                        checksum += (int)health[row].Current;
+                    }
+                }
+                return checksum;
+            }
+
+            _results.Add(Measure("Friflo", Tick, ticksToRun));
+        }
     }
 
     static void RunFragBaseline()
@@ -1431,6 +1831,30 @@ public static class ScenarioBenchmark
             }
 
             _results.Add(Measure("Arch", Tick, ticksToRun));
+        }
+
+        // Friflo
+        {
+            var store = CreateFrifloIterationWorld(entityCount);
+            var query = store.Query<FrifloPosition, FrifloVelocity>();
+
+            int Tick()
+            {
+                var checksum = 0;
+                foreach (var (posChunk, velChunk, _) in query.Chunks)
+                {
+                    var pos = posChunk.Span;
+                    var vel = velChunk.Span;
+                    for (var row = 0; row < pos.Length; row++)
+                    {
+                        pos[row].X += vel[row].X; pos[row].Y += vel[row].Y; pos[row].Z += vel[row].Z;
+                        checksum += (int)(pos[row].X + pos[row].Y + pos[row].Z);
+                    }
+                }
+                return checksum;
+            }
+
+            _results.Add(Measure("Friflo", Tick, ticksToRun));
         }
     }
 
@@ -1549,6 +1973,42 @@ public static class ScenarioBenchmark
             }
 
             _results.Add(Measure("Arch", Tick, ticksToRun));
+        }
+
+        // Friflo
+        {
+            var store = CreateFrifloIterationWorld(entityCount);
+            var pool = BuildFrifloEntityPool(store);
+            for (var i = 0; i < pool.Length; i++)
+            {
+                switch (i % 5)
+                {
+                    case 0: pool[i].AddComponent(new FrifloPlayerTag()); break;
+                    case 1: pool[i].AddComponent(new FrifloEnemyTag()); break;
+                    case 2: pool[i].AddComponent(new FrifloNpcTag()); break;
+                    case 3: pool[i].AddComponent(new FrifloProjectileTag()); break;
+                    case 4: pool[i].AddComponent(new FrifloDeadTag()); break;
+                }
+            }
+            var query = store.Query<FrifloPosition, FrifloVelocity>();
+
+            int Tick()
+            {
+                var checksum = 0;
+                foreach (var (posChunk, velChunk, _) in query.Chunks)
+                {
+                    var pos = posChunk.Span;
+                    var vel = velChunk.Span;
+                    for (var row = 0; row < pos.Length; row++)
+                    {
+                        pos[row].X += vel[row].X; pos[row].Y += vel[row].Y; pos[row].Z += vel[row].Z;
+                        checksum += (int)(pos[row].X + pos[row].Y + pos[row].Z);
+                    }
+                }
+                return checksum;
+            }
+
+            _results.Add(Measure("Friflo", Tick, ticksToRun));
         }
     }
 
@@ -1677,6 +2137,28 @@ public static class ScenarioBenchmark
 
             _results.Add(Measure("Arch", Tick, ticksToRun));
         }
+
+        // Friflo
+        {
+            var store = CreateFrifloMultiComponentWorld(entityCount);
+            var query = store.Query<FrifloPosition, FrifloVelocity, FrifloHealth, FrifloMana, FrifloStamina>();
+
+            int Tick()
+            {
+                var checksum = 0;
+                query.ForEachEntity((ref FrifloPosition pos, ref FrifloVelocity vel, ref FrifloHealth health, ref FrifloMana mana, ref FrifloStamina stamina, Friflo.Engine.ECS.Entity _) =>
+                {
+                    pos.X += vel.X;
+                    health.Current -= 1;
+                    mana.Current -= 1;
+                    stamina.Current -= 1;
+                    checksum += (int)(pos.X + health.Current + mana.Current + stamina.Current);
+                });
+                return checksum;
+            }
+
+            _results.Add(Measure("Friflo", Tick, ticksToRun));
+        }
     }
 
     static void RunSparseQuery()
@@ -1781,6 +2263,36 @@ public static class ScenarioBenchmark
 
             _results.Add(Measure("Arch", Tick, ticksToRun));
         }
+
+        // Friflo
+        {
+            var store = new EntityStore();
+            var entityArr = new Friflo.Engine.ECS.Entity[entityCount];
+            for (var i = 0; i < entityCount; i++)
+                entityArr[i] = store.CreateEntity(new FrifloPosition { X = i });
+            var rng = new Random(42);
+            for (var i = 0; i < sparseCount; i++)
+                entityArr[rng.Next(entityCount)].AddComponent(new FrifloBuffRemaining { Value = 10.0f });
+            var query = store.Query<FrifloBuffRemaining>();
+
+            int Tick()
+            {
+                var checksum = 0;
+                foreach (var (components, _) in query.Chunks)
+                {
+                    var buff = components.Span;
+                    for (var row = 0; row < buff.Length; row++)
+                    {
+                        buff[row].Value -= 0.1f;
+                        if (buff[row].Value < 0) buff[row].Value = 10.0f;
+                        checksum += (int)buff[row].Value;
+                    }
+                }
+                return checksum;
+            }
+
+            _results.Add(Measure("Friflo", Tick, ticksToRun));
+        }
     }
 
     static void RunEntityCreationBurst()
@@ -1841,6 +2353,23 @@ public static class ScenarioBenchmark
             }
 
             _results.Add(Measure("Arch", Tick, ticksToRun));
+        }
+
+        // Friflo
+        {
+            var store = new EntityStore();
+            var scratch = new Friflo.Engine.ECS.Entity[burstSize];
+
+            int Tick()
+            {
+                for (var i = 0; i < burstSize; i++)
+                    scratch[i] = store.CreateEntity(new FrifloDamageEvent { Amount = i });
+                for (var i = 0; i < burstSize; i++)
+                    scratch[i].DeleteEntity();
+                return burstSize * 2;
+            }
+
+            _results.Add(Measure("Friflo", Tick, ticksToRun));
         }
     }
 
@@ -1922,13 +2451,19 @@ public static class ScenarioBenchmark
             var ebDesc = new MiniArch.QueryDescription().With<Position>().With<Damage>();
             var pbDesc = new MiniArch.QueryDescription().With<Position>().With<ProjectileTag>();
             var ptDesc = new MiniArch.QueryDescription().With<Position>().With<Lifetime>();
-            var burningDesc = new MiniArch.QueryDescription().With<BurningTag>().With<StatusTimer>();
-            var poisonedDesc = new MiniArch.QueryDescription().With<PoisonedTag>().With<StatusTimer>();
+            var buffDesc = new MiniArch.QueryDescription().With<BuffEffect>();
+            var ebBuffTargetDesc = new MiniArch.QueryDescription().With<Position>().With<Damage>().Without<BuffEffect>();
+            var pbBuffTargetDesc = new MiniArch.QueryDescription().With<Position>().With<ProjectileTag>().Without<BuffEffect>();
             var moveQuery = w.Query(moveDesc).Advanced;
             var ebQuery = w.Query(ebDesc).Advanced;
             var pbQuery = w.Query(pbDesc).Advanced;
             var ptQuery = w.Query(ptDesc).Advanced;
+            var buffQuery = w.Query(buffDesc).Advanced;
+            var ebBuffTargetQuery = w.Query(ebBuffTargetDesc).Advanced;
+            var pbBuffTargetQuery = w.Query(pbBuffTargetDesc).Advanced;
             var scratch = new MiniArch.Entity[8192];
+            var buffCandidates = new MiniArch.Entity[buffApplyCount];
+            var poisonCandidates = new MiniArch.Entity[buffApplyCount / 2];
             var rng = new Random(42);
             var tickCount = 0;
             long iterateNs = 0, createNs = 0, destroyScanNs = 0, destroyApplyNs = 0, buffNs = 0;
@@ -2011,85 +2546,51 @@ public static class ScenarioBenchmark
                     destroyApplyNs += t1 - t0;
                 }
 
-                // 9. Buff system: apply random buffs + tick down + remove expired
+                // 9. Buff system: collect -> apply (outside query loop)
                 t0 = Stopwatch.GetTimestamp();
                 {
-                    // Apply buffs to random surviving enemy bullets
-                    var ebEntities = ebQuery.GetChunkSpan();
-                    var candidateIdx = 0;
-                    foreach (var chunk in ebEntities)
+                    // Collect burning candidates (only entities WITHOUT BuffEffect)
+                    var burnCount = 0;
+                    foreach (var chunk in ebBuffTargetQuery.GetChunkSpan())
                     {
-                        for (var row = 0; row < chunk.Count && candidateIdx < buffApplyCount; row++)
+                        for (var row = 0; row < chunk.Count && burnCount < buffApplyCount; row++)
                         {
                             if (rng.NextSingle() < 0.5f)
-                            {
-                                var e = chunk.GetEntity(row);
-                                if (!w.Has<BurningTag>(e))
-                                {
-                                    w.Add(e, new BurningTag());
-                                    w.Add(e, new StatusTimer { Remaining = statusDuration });
-                                    candidateIdx++;
-                                }
-                            }
+                                buffCandidates[burnCount++] = chunk.GetEntity(row);
                         }
                     }
-                    // Apply poison to some player bullets
-                    var pbEntities = pbQuery.GetChunkSpan();
-                    candidateIdx = 0;
-                    foreach (var chunk in pbEntities)
-                    {
-                        for (var row = 0; row < chunk.Count && candidateIdx < buffApplyCount / 2; row++)
-                        {
-                            if (rng.NextSingle() < 0.5f)
-                            {
-                                var e = chunk.GetEntity(row);
-                                if (!w.Has<PoisonedTag>(e))
-                                {
-                                    w.Add(e, new PoisonedTag());
-                                    w.Add(e, new StatusTimer { Remaining = statusDuration });
-                                    candidateIdx++;
-                                }
-                            }
-                        }
-                    }
+                    // Apply burning outside query loop
+                    for (var i = 0; i < burnCount; i++)
+                        w.Add(buffCandidates[i], new BuffEffect(0, statusDuration));
 
-                    // Tick down burning timers, remove expired
+                    // Collect poison candidates
+                    var poisonCount = 0;
+                    foreach (var chunk in pbBuffTargetQuery.GetChunkSpan())
+                    {
+                        for (var row = 0; row < chunk.Count && poisonCount < buffApplyCount / 2; row++)
+                        {
+                            if (rng.NextSingle() < 0.5f)
+                                poisonCandidates[poisonCount++] = chunk.GetEntity(row);
+                        }
+                    }
+                    // Apply poison outside query loop
+                    for (var i = 0; i < poisonCount; i++)
+                        w.Add(poisonCandidates[i], new BuffEffect(1, statusDuration));
+
+                    // Tick down buff timers, remove expired
                     var removeCount = 0;
-                    var burnQuery = w.Query(burningDesc).Advanced;
-                    foreach (var chunk in burnQuery.GetChunkSpan())
+                    foreach (var chunk in buffQuery.GetChunkSpan())
                     {
-                        var timers = chunk.GetComponentSpan<StatusTimer>(Component<StatusTimer>.ComponentType);
+                        var buffs = chunk.GetComponentSpan<BuffEffect>(Component<BuffEffect>.ComponentType);
                         for (var row = 0; row < chunk.Count; row++)
                         {
-                            timers[row].Remaining -= 1f;
-                            if (timers[row].Remaining <= 0 && removeCount < scratch.Length)
+                            buffs[row].Remaining -= 1f;
+                            if (buffs[row].Remaining <= 0 && removeCount < scratch.Length)
                                 scratch[removeCount++] = chunk.GetEntity(row);
                         }
                     }
                     for (var i = 0; i < removeCount; i++)
-                    {
-                        w.Remove<BurningTag>(scratch[i]);
-                        w.Remove<StatusTimer>(scratch[i]);
-                    }
-
-                    // Tick down poisoned timers, remove expired
-                    removeCount = 0;
-                    var poisonQuery = w.Query(poisonedDesc).Advanced;
-                    foreach (var chunk in poisonQuery.GetChunkSpan())
-                    {
-                        var timers = chunk.GetComponentSpan<StatusTimer>(Component<StatusTimer>.ComponentType);
-                        for (var row = 0; row < chunk.Count; row++)
-                        {
-                            timers[row].Remaining -= 1f;
-                            if (timers[row].Remaining <= 0 && removeCount < scratch.Length)
-                                scratch[removeCount++] = chunk.GetEntity(row);
-                        }
-                    }
-                    for (var i = 0; i < removeCount; i++)
-                    {
-                        w.Remove<PoisonedTag>(scratch[i]);
-                        w.Remove<StatusTimer>(scratch[i]);
-                    }
+                        w.Remove<BuffEffect>(scratch[i]);
                 }
                 t1 = Stopwatch.GetTimestamp();
                 buffNs += t1 - t0;
@@ -2129,8 +2630,7 @@ public static class ScenarioBenchmark
             var ebSet = w.GetEntities().With<Position>().With<Damage>().AsSet();
             var pbSet = w.GetEntities().With<Position>().With<ProjectileTag>().AsSet();
             var ptSet = w.GetEntities().With<Position>().With<Lifetime>().AsSet();
-            var burningSet = w.GetEntities().With<BurningTag>().With<StatusTimer>().AsSet();
-            var poisonedSet = w.GetEntities().With<PoisonedTag>().With<StatusTimer>().AsSet();
+            var buffSet = w.GetEntities().With<BuffEffect>().AsSet();
             var scratch = new DefaultEcs.Entity[8192];
             var rng = new Random(42);
             var tickCount = 0;
@@ -2231,10 +2731,9 @@ public static class ScenarioBenchmark
                     var applied = 0;
                     for (var i = 0; i < ebEntities.Length && applied < buffApplyCount; i++)
                     {
-                        if (rng.NextSingle() < 0.5f && !ebEntities[i].Has<BurningTag>())
+                        if (rng.NextSingle() < 0.5f && !ebEntities[i].Has<BuffEffect>())
                         {
-                            ebEntities[i].Set(new BurningTag());
-                            ebEntities[i].Set(new StatusTimer { Remaining = statusDuration });
+                            ebEntities[i].Set(new BuffEffect(0, statusDuration)); // type 0 = Burning
                             applied++;
                         }
                     }
@@ -2243,45 +2742,25 @@ public static class ScenarioBenchmark
                     applied = 0;
                     for (var i = 0; i < pbEntities.Length && applied < buffApplyCount / 2; i++)
                     {
-                        if (rng.NextSingle() < 0.5f && !pbEntities[i].Has<PoisonedTag>())
+                        if (rng.NextSingle() < 0.5f && !pbEntities[i].Has<BuffEffect>())
                         {
-                            pbEntities[i].Set(new PoisonedTag());
-                            pbEntities[i].Set(new StatusTimer { Remaining = statusDuration });
+                            pbEntities[i].Set(new BuffEffect(1, statusDuration)); // type 1 = Poisoned
                             applied++;
                         }
                     }
 
-                    // Tick down burning, remove expired
-                    var burnEntities = burningSet.GetEntities();
+                    // Tick down buffs, remove expired
+                    var buffEntities = buffSet.GetEntities();
                     var d = 0;
-                    for (var i = 0; i < burnEntities.Length; i++)
+                    for (var i = 0; i < buffEntities.Length; i++)
                     {
-                        ref var timer = ref burnEntities[i].Get<StatusTimer>();
-                        timer.Remaining -= 1f;
-                        if (timer.Remaining <= 0 && d < scratch.Length)
-                            scratch[d++] = burnEntities[i];
+                        ref var buff = ref buffEntities[i].Get<BuffEffect>();
+                        buff.Remaining -= 1f;
+                        if (buff.Remaining <= 0 && d < scratch.Length)
+                            scratch[d++] = buffEntities[i];
                     }
                     for (var i = 0; i < d; i++)
-                    {
-                        scratch[i].Remove<BurningTag>();
-                        scratch[i].Remove<StatusTimer>();
-                    }
-
-                    // Tick down poisoned, remove expired
-                    var poisonEntities = poisonedSet.GetEntities();
-                    d = 0;
-                    for (var i = 0; i < poisonEntities.Length; i++)
-                    {
-                        ref var timer = ref poisonEntities[i].Get<StatusTimer>();
-                        timer.Remaining -= 1f;
-                        if (timer.Remaining <= 0 && d < scratch.Length)
-                            scratch[d++] = poisonEntities[i];
-                    }
-                    for (var i = 0; i < d; i++)
-                    {
-                        scratch[i].Remove<PoisonedTag>();
-                        scratch[i].Remove<StatusTimer>();
-                    }
+                        scratch[i].Remove<BuffEffect>();
                 }
 
                 // 8. BossEnrage
@@ -2304,8 +2783,7 @@ public static class ScenarioBenchmark
             var ebDesc = new Arch.Core.QueryDescription().WithAll<Position, Damage>();
             var pbDesc = new Arch.Core.QueryDescription().WithAll<Position, ProjectileTag>();
             var ptDesc = new Arch.Core.QueryDescription().WithAll<Position, Lifetime>();
-            var burningDesc = new Arch.Core.QueryDescription().WithAll<BurningTag, StatusTimer>();
-            var poisonedDesc = new Arch.Core.QueryDescription().WithAll<PoisonedTag, StatusTimer>();
+            var buffDesc = new Arch.Core.QueryDescription().WithAll<BuffEffect>();
             var scratch = new Arch.Core.Entity[8192];
             var rng = new Random(42);
             var tickCount = 0;
@@ -2444,10 +2922,9 @@ public static class ScenarioBenchmark
                             if (rng.NextSingle() < 0.5f)
                             {
                                 var e = chunk.Entity(row);
-                                if (!w.Has<BurningTag>(e))
+                                if (!w.Has<BuffEffect>(e))
                                 {
-                                    w.Add(e, new BurningTag());
-                                    w.Add(e, new StatusTimer { Remaining = statusDuration });
+                                    w.Add(e, new BuffEffect(0, statusDuration)); // type 0 = Burning
                                     applied++;
                                 }
                             }
@@ -2462,51 +2939,29 @@ public static class ScenarioBenchmark
                             if (rng.NextSingle() < 0.5f)
                             {
                                 var e = chunk.Entity(row);
-                                if (!w.Has<PoisonedTag>(e))
+                                if (!w.Has<BuffEffect>(e))
                                 {
-                                    w.Add(e, new PoisonedTag());
-                                    w.Add(e, new StatusTimer { Remaining = statusDuration });
+                                    w.Add(e, new BuffEffect(1, statusDuration)); // type 1 = Poisoned
                                     applied++;
                                 }
                             }
                         }
                     }
 
-                    // Tick down burning, remove expired
+                    // Tick down buffs, remove expired
                     var removeCount = 0;
-                    foreach (var chunk in w.Query(in burningDesc))
+                    foreach (var chunk in w.Query(in buffDesc))
                     {
-                        var timers = chunk.GetSpan<StatusTimer>();
+                        var buffs = chunk.GetSpan<BuffEffect>();
                         for (var row = 0; row < chunk.Count; row++)
                         {
-                            timers[row].Remaining -= 1f;
-                            if (timers[row].Remaining <= 0 && removeCount < scratch.Length)
+                            buffs[row].Remaining -= 1f;
+                            if (buffs[row].Remaining <= 0 && removeCount < scratch.Length)
                                 scratch[removeCount++] = chunk.Entity(row);
                         }
                     }
                     for (var i = 0; i < removeCount; i++)
-                    {
-                        w.Remove<BurningTag>(scratch[i]);
-                        w.Remove<StatusTimer>(scratch[i]);
-                    }
-
-                    // Tick down poisoned, remove expired
-                    removeCount = 0;
-                    foreach (var chunk in w.Query(in poisonedDesc))
-                    {
-                        var timers = chunk.GetSpan<StatusTimer>();
-                        for (var row = 0; row < chunk.Count; row++)
-                        {
-                            timers[row].Remaining -= 1f;
-                            if (timers[row].Remaining <= 0 && removeCount < scratch.Length)
-                                scratch[removeCount++] = chunk.Entity(row);
-                        }
-                    }
-                    for (var i = 0; i < removeCount; i++)
-                    {
-                        w.Remove<PoisonedTag>(scratch[i]);
-                        w.Remove<StatusTimer>(scratch[i]);
-                    }
+                        w.Remove<BuffEffect>(scratch[i]);
                 }
                 t1 = Stopwatch.GetTimestamp();
                 buffNs += t1 - t0;
@@ -2523,6 +2978,1009 @@ public static class ScenarioBenchmark
             var totalNs = iterateNs + createNs + destroyScanNs + destroyApplyNs + buffNs;
             var archFreq = (double)Stopwatch.Frequency / 1_000_000_000;
             Console.WriteLine($"  [Arch phase breakdown] Iterate: {iterateNs / archFreq / 1_000_000:F1}ms ({100.0 * iterateNs / totalNs:F1}%) | Create: {createNs / archFreq / 1_000_000:F1}ms ({100.0 * createNs / totalNs:F1}%) | DestroyScan: {destroyScanNs / archFreq / 1_000_000:F1}ms ({100.0 * destroyScanNs / totalNs:F1}%) | DestroyApply: {destroyApplyNs / archFreq / 1_000_000:F1}ms ({100.0 * destroyApplyNs / totalNs:F1}%) | Buff: {buffNs / archFreq / 1_000_000:F1}ms ({100.0 * buffNs / totalNs:F1}%)");
+        }
+
+        // Friflo
+        {
+            var store = new EntityStore();
+            var player = store.CreateEntity(new FrifloPlayerTag(), new FrifloPosition(), new FrifloVelocity(), new FrifloHealth { Current = 10000, Max = 10000 }, new FrifloSpeed(0));
+            var boss = store.CreateEntity(new FrifloBossTag(), new FrifloPosition { X = bossX, Z = bossZ }, new FrifloVelocity(), new FrifloHealth { Current = 100000, Max = 100000 }, new FrifloAiState());
+
+            var moveQuery = store.Query<FrifloPosition, FrifloVelocity>();
+            var ebQuery = store.Query<FrifloPosition, FrifloDamage>();
+            var pbQuery = store.Query<FrifloPosition, FrifloProjectileTag>();
+            var ptQuery = store.Query<FrifloPosition, FrifloLifetime>();
+            var buffQuery = store.Query<FrifloBuffEffect>();
+            var scratch = new int[8192];
+            var rng = new Random(42);
+            var tickCount = 0;
+            long iterateNs = 0, createNs = 0, destroyScanNs = 0, destroyApplyNs = 0, buffNs = 0;
+
+            int Tick()
+            {
+                tickCount++;
+                long t0, t1;
+
+                // 1. MoveAll
+                t0 = Stopwatch.GetTimestamp();
+                foreach (var (posChunk, velChunk, _) in moveQuery.Chunks)
+                {
+                    var pos = posChunk.Span;
+                    var vel = velChunk.Span;
+                    for (var row = 0; row < pos.Length; row++)
+                    {
+                        pos[row].X += vel[row].X;
+                        pos[row].Y += vel[row].Y;
+                        pos[row].Z += vel[row].Z;
+                    }
+                }
+                t1 = Stopwatch.GetTimestamp();
+                iterateNs += t1 - t0;
+
+                // 2+3+7. Create
+                t0 = Stopwatch.GetTimestamp();
+                for (var i = 0; i < enemyBulletsPerTick; i++)
+                {
+                    var angle = rng.NextSingle() * 6.2832f;
+                    var speed = 30f + rng.NextSingle() * 20f;
+                    store.CreateEntity(
+                        new FrifloPosition { X = bossX, Z = bossZ },
+                        new FrifloVelocity { X = MathF.Cos(angle) * speed, Z = MathF.Sin(angle) * speed },
+                        new FrifloDamage { Base = 1 + (i & 3) });
+                }
+                for (var i = 0; i < playerBulletsPerTick; i++)
+                {
+                    var spread = (rng.NextSingle() - 0.5f) * 0.6f;
+                    store.CreateEntity(
+                        new FrifloProjectileTag(),
+                        new FrifloPosition(),
+                        new FrifloVelocity { X = (bulletDirX + spread) * 40f, Z = (bulletDirZ + spread) * 40f });
+                }
+                for (var i = 0; i < particlesPerTick; i++)
+                {
+                    var angle = rng.NextSingle() * 6.2832f;
+                    store.CreateEntity(
+                        new FrifloPosition { X = rng.NextSingle() * 10 - 5, Z = rng.NextSingle() * 10 - 5 },
+                        new FrifloVelocity { X = MathF.Cos(angle) * 5, Z = MathF.Sin(angle) * 5 },
+                        new FrifloLifetime { Value = 20f });
+                }
+                t1 = Stopwatch.GetTimestamp();
+                createNs += t1 - t0;
+
+                // 4+5+6. Destroy (scan + apply)
+                {
+                    t0 = Stopwatch.GetTimestamp();
+                    var d = 0;
+                    foreach (var (posChunk, _, entitiesChunk) in ebQuery.Chunks)
+                    {
+                        var pos = posChunk.Span;
+                        for (var row = 0; row < pos.Length; row++)
+                        {
+                            var dx = pos[row].X - playerX;
+                            var dz = pos[row].Z - playerZ;
+                            if (dx * dx + dz * dz < hitRadiusSqPlayer ||
+                                Math.Abs(pos[row].X) > screenBound || Math.Abs(pos[row].Z) > screenBound)
+                            {
+                                if (d < scratch.Length) scratch[d++] = entitiesChunk[row];
+                            }
+                        }
+                    }
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyScanNs += t1 - t0;
+                    t0 = Stopwatch.GetTimestamp();
+                    for (var i = 0; i < d; i++) store.GetEntityById(scratch[i]).DeleteEntity();
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyApplyNs += t1 - t0;
+                }
+                {
+                    t0 = Stopwatch.GetTimestamp();
+                    var d = 0;
+                    foreach (var (posChunk, _, entitiesChunk) in pbQuery.Chunks)
+                    {
+                        var pos = posChunk.Span;
+                        for (var row = 0; row < pos.Length; row++)
+                        {
+                            var dx = pos[row].X - bossX;
+                            var dz = pos[row].Z - bossZ;
+                            if (dx * dx + dz * dz < hitRadiusSqBoss ||
+                                Math.Abs(pos[row].X) > screenBound || Math.Abs(pos[row].Z) > screenBound)
+                            {
+                                if (d < scratch.Length) scratch[d++] = entitiesChunk[row];
+                            }
+                        }
+                    }
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyScanNs += t1 - t0;
+                    t0 = Stopwatch.GetTimestamp();
+                    for (var i = 0; i < d; i++) store.GetEntityById(scratch[i]).DeleteEntity();
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyApplyNs += t1 - t0;
+                }
+                {
+                    t0 = Stopwatch.GetTimestamp();
+                    var d = 0;
+                    foreach (var (posChunk, ltChunk, entitiesChunk) in ptQuery.Chunks)
+                    {
+                        var lt = ltChunk.Span;
+                        for (var row = 0; row < lt.Length; row++)
+                        {
+                            lt[row].Value -= 1f;
+                            if (lt[row].Value <= 0 && d < scratch.Length)
+                                scratch[d++] = entitiesChunk[row];
+                        }
+                    }
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyScanNs += t1 - t0;
+                    t0 = Stopwatch.GetTimestamp();
+                    for (var i = 0; i < d; i++) store.GetEntityById(scratch[i]).DeleteEntity();
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyApplyNs += t1 - t0;
+                }
+
+                // 9. Buff system
+                t0 = Stopwatch.GetTimestamp();
+                {
+                    // Apply burning to random enemy bullets (collect first, apply outside query)
+                    var applyCount = 0;
+                    var toBuff = new int[buffApplyCount];
+                    foreach (var (posChunk, _, entitiesChunk) in ebQuery.Chunks)
+                    {
+                        var pos = posChunk.Span;
+                        for (var row = 0; row < pos.Length && applyCount < buffApplyCount; row++)
+                        {
+                            if (rng.NextSingle() < 0.5f)
+                            {
+                                var e = store.GetEntityById(entitiesChunk[row]);
+                                if (!e.HasComponent<FrifloBuffEffect>())
+                                    toBuff[applyCount++] = entitiesChunk[row];
+                            }
+                        }
+                    }
+                    for (var bi = 0; bi < applyCount; bi++)
+                    {
+                        var e = store.GetEntityById(toBuff[bi]);
+                        e.AddComponent(new FrifloBuffEffect { Type = 0, Remaining = statusDuration }); // type 0 = Burning
+                    }
+                    // Apply poison to random player bullets (collect first, apply outside query)
+                    var toPoison = new int[buffApplyCount / 2];
+                    applyCount = 0;
+                    foreach (var (posChunk, _, entitiesChunk) in pbQuery.Chunks)
+                    {
+                        var pos = posChunk.Span;
+                        for (var row = 0; row < pos.Length && applyCount < buffApplyCount / 2; row++)
+                        {
+                            if (rng.NextSingle() < 0.5f)
+                            {
+                                var e = store.GetEntityById(entitiesChunk[row]);
+                                if (!e.HasComponent<FrifloBuffEffect>())
+                                    toPoison[applyCount++] = entitiesChunk[row];
+                            }
+                        }
+                    }
+                    for (var bi = 0; bi < applyCount; bi++)
+                    {
+                        var e = store.GetEntityById(toPoison[bi]);
+                        e.AddComponent(new FrifloBuffEffect { Type = 1, Remaining = statusDuration }); // type 1 = Poisoned
+                    }
+
+                    // Tick down buffs, remove expired
+                    var removeCount = 0;
+                    foreach (var (buffChunk, entitiesChunk) in buffQuery.Chunks)
+                    {
+                        var buffs = buffChunk.Span;
+                        for (var row = 0; row < buffs.Length; row++)
+                        {
+                            buffs[row].Remaining -= 1f;
+                            if (buffs[row].Remaining <= 0 && removeCount < scratch.Length)
+                                scratch[removeCount++] = entitiesChunk[row];
+                        }
+                    }
+                    for (var i = 0; i < removeCount; i++)
+                    {
+                        var e = store.GetEntityById(scratch[i]);
+                        e.RemoveComponent<FrifloBuffEffect>();
+                    }
+                }
+                t1 = Stopwatch.GetTimestamp();
+                buffNs += t1 - t0;
+
+                // 8. BossEnrage
+                if (tickCount % enrageInterval == 0 && !boss.HasComponent<FrifloDebuff>())
+                    boss.AddComponent(new FrifloDebuff { Timer = 5f });
+
+                return tickCount;
+            }
+
+            _results.Add(MeasureTimed("Friflo", Tick, durationSeconds));
+
+            var totalNs = iterateNs + createNs + destroyScanNs + destroyApplyNs + buffNs;
+            var freq = (double)Stopwatch.Frequency / 1_000_000_000;
+            Console.WriteLine($"  [Friflo phase breakdown] Iterate: {iterateNs / freq / 1_000_000:F1}ms ({100.0 * iterateNs / totalNs:F1}%) | Create: {createNs / freq / 1_000_000:F1}ms ({100.0 * createNs / totalNs:F1}%) | DestroyScan: {destroyScanNs / freq / 1_000_000:F1}ms ({100.0 * destroyScanNs / totalNs:F1}%) | DestroyApply: {destroyApplyNs / freq / 1_000_000:F1}ms ({100.0 * destroyApplyNs / totalNs:F1}%) | Buff: {buffNs / freq / 1_000_000:F1}ms ({100.0 * buffNs / totalNs:F1}%)");
+        }
+    }
+
+    // M-BulletHellBuffsMultiArch: same as L-BulletHellBuffs but with random Faction(0-7)
+    // splitting each archetype into 8 sub-archetypes (3 x 8 = 24 archetypes for main queries)
+    static void RunBulletHellBuffsMultiArch()
+    {
+        const int durationSeconds = 20;
+        const int enemyBulletsPerTick = 300;
+        const int playerBulletsPerTick = 150;
+        const int particlesPerTick = 100;
+        const int buffApplyCount = 200;
+        const float screenBound = 1000f;
+        const float playerX = 0f, playerZ = 0f;
+        const float bossX = 500f, bossZ = 500f;
+        const float hitRadiusSqPlayer = 100f;
+        const float hitRadiusSqBoss = 900f;
+        const float bulletDirX = 0.7071f, bulletDirZ = 0.7071f;
+        const int enrageInterval = 100;
+        const float statusDuration = 3f;
+        const int factionCount = 8;
+
+        // MiniArch
+        {
+            using var w = new MiniWorld();
+
+            var player = w.Create(new PlayerTag(), new Position(), new Velocity(), new Health { Current = 10000, Max = 10000 }, new Speed(0));
+            var boss = w.Create(new BossTag(), new Position { X = bossX, Z = bossZ }, new Velocity(), new Health { Current = 100000, Max = 100000 }, new AiState());
+
+            var moveDesc = new MiniArch.QueryDescription().With<Position>().With<Velocity>();
+            var ebDesc = new MiniArch.QueryDescription().With<Position>().With<Damage>();
+            var pbDesc = new MiniArch.QueryDescription().With<Position>().With<ProjectileTag>();
+            var ptDesc = new MiniArch.QueryDescription().With<Position>().With<Lifetime>();
+            var buffDesc = new MiniArch.QueryDescription().With<BuffEffect>();
+            var ebBuffTargetDesc = new MiniArch.QueryDescription().With<Position>().With<Damage>().Without<BuffEffect>();
+            var pbBuffTargetDesc = new MiniArch.QueryDescription().With<Position>().With<ProjectileTag>().Without<BuffEffect>();
+            var moveQuery = w.Query(moveDesc).Advanced;
+            var ebQuery = w.Query(ebDesc).Advanced;
+            var pbQuery = w.Query(pbDesc).Advanced;
+            var ptQuery = w.Query(ptDesc).Advanced;
+            var buffQuery = w.Query(buffDesc).Advanced;
+            var ebBuffTargetQuery = w.Query(ebBuffTargetDesc).Advanced;
+            var pbBuffTargetQuery = w.Query(pbBuffTargetDesc).Advanced;
+            var scratch = new MiniArch.Entity[8192];
+            var buffCandidates = new MiniArch.Entity[buffApplyCount];
+            var poisonCandidates = new MiniArch.Entity[buffApplyCount / 2];
+            var rng = new Random(42);
+            var tickCount = 0;
+            long iterateNs = 0, createNs = 0, destroyScanNs = 0, destroyApplyNs = 0, buffNs = 0;
+
+            int Tick()
+            {
+                tickCount++;
+                long t0, t1;
+
+                // 1. MoveAll
+                t0 = Stopwatch.GetTimestamp();
+                foreach (var row in moveQuery.EachSpan<Position, Velocity>())
+                {
+                    row.Get0().X += row.Get1().X;
+                    row.Get0().Y += row.Get1().Y;
+                    row.Get0().Z += row.Get1().Z;
+                }
+                t1 = Stopwatch.GetTimestamp();
+                iterateNs += t1 - t0;
+
+                // 2+3+7. Create (with random Faction to split archetypes)
+                t0 = Stopwatch.GetTimestamp();
+                for (var i = 0; i < enemyBulletsPerTick; i++)
+                {
+                    var angle = rng.NextSingle() * 6.2832f;
+                    var speed = 30f + rng.NextSingle() * 20f;
+                    w.Create(
+                        new Faction(rng.Next(factionCount)),
+                        new Position { X = bossX, Z = bossZ },
+                        new Velocity { X = MathF.Cos(angle) * speed, Z = MathF.Sin(angle) * speed },
+                        new Damage { Base = 1 + (i & 3) });
+                }
+                for (var i = 0; i < playerBulletsPerTick; i++)
+                {
+                    var spread = (rng.NextSingle() - 0.5f) * 0.6f;
+                    w.Create(
+                        new Faction(rng.Next(factionCount)),
+                        new ProjectileTag(),
+                        new Position(),
+                        new Velocity { X = (bulletDirX + spread) * 40f, Z = (bulletDirZ + spread) * 40f });
+                }
+                for (var i = 0; i < particlesPerTick; i++)
+                {
+                    var angle = rng.NextSingle() * 6.2832f;
+                    w.Create(
+                        new Faction(rng.Next(factionCount)),
+                        new Position { X = rng.NextSingle() * 10 - 5, Z = rng.NextSingle() * 10 - 5 },
+                        new Velocity { X = MathF.Cos(angle) * 5, Z = MathF.Sin(angle) * 5 },
+                        new Lifetime { Value = 20f });
+                }
+                t1 = Stopwatch.GetTimestamp();
+                createNs += t1 - t0;
+
+                // 4+5+6. Destroy (scan + apply)
+                {
+                    t0 = Stopwatch.GetTimestamp();
+                    var d = ScanPositionEachSpan(ebQuery, scratch, playerX, playerZ, hitRadiusSqPlayer, screenBound);
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyScanNs += t1 - t0;
+                    t0 = Stopwatch.GetTimestamp();
+                    for (var i = 0; i < d; i++) w.Destroy(scratch[i]);
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyApplyNs += t1 - t0;
+                }
+                {
+                    t0 = Stopwatch.GetTimestamp();
+                    var d = ScanPositionEachSpan(pbQuery, scratch, bossX, bossZ, hitRadiusSqBoss, screenBound);
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyScanNs += t1 - t0;
+                    t0 = Stopwatch.GetTimestamp();
+                    for (var i = 0; i < d; i++) w.Destroy(scratch[i]);
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyApplyNs += t1 - t0;
+                }
+                {
+                    t0 = Stopwatch.GetTimestamp();
+                    var d = ScanLifetimeEachSpan(ptQuery, scratch);
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyScanNs += t1 - t0;
+                    t0 = Stopwatch.GetTimestamp();
+                    for (var i = 0; i < d; i++) w.Destroy(scratch[i]);
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyApplyNs += t1 - t0;
+                }
+
+                // 9. Buff system: collect -> apply (outside query loop)
+                t0 = Stopwatch.GetTimestamp();
+                {
+                    // Collect burning candidates (only entities WITHOUT BuffEffect)
+                    var burnCount = 0;
+                    foreach (var chunk in ebBuffTargetQuery.GetChunkSpan())
+                    {
+                        for (var row = 0; row < chunk.Count && burnCount < buffApplyCount; row++)
+                        {
+                            if (rng.NextSingle() < 0.5f)
+                                buffCandidates[burnCount++] = chunk.GetEntity(row);
+                        }
+                    }
+                    // Apply burning outside query loop
+                    for (var i = 0; i < burnCount; i++)
+                        w.Add(buffCandidates[i], new BuffEffect(0, statusDuration));
+
+                    // Collect poison candidates
+                    var poisonCount = 0;
+                    foreach (var chunk in pbBuffTargetQuery.GetChunkSpan())
+                    {
+                        for (var row = 0; row < chunk.Count && poisonCount < buffApplyCount / 2; row++)
+                        {
+                            if (rng.NextSingle() < 0.5f)
+                                poisonCandidates[poisonCount++] = chunk.GetEntity(row);
+                        }
+                    }
+                    // Apply poison outside query loop
+                    for (var i = 0; i < poisonCount; i++)
+                        w.Add(poisonCandidates[i], new BuffEffect(1, statusDuration));
+
+                    // Tick down buff timers, remove expired
+                    var removeCount = 0;
+                    foreach (var chunk in buffQuery.GetChunkSpan())
+                    {
+                        var buffs = chunk.GetComponentSpan<BuffEffect>(Component<BuffEffect>.ComponentType);
+                        for (var row = 0; row < chunk.Count; row++)
+                        {
+                            buffs[row].Remaining -= 1f;
+                            if (buffs[row].Remaining <= 0 && removeCount < scratch.Length)
+                                scratch[removeCount++] = chunk.GetEntity(row);
+                        }
+                    }
+                    for (var i = 0; i < removeCount; i++)
+                        w.Remove<BuffEffect>(scratch[i]);
+                }
+                t1 = Stopwatch.GetTimestamp();
+                buffNs += t1 - t0;
+
+                // 8. BossEnrage
+                if (tickCount % enrageInterval == 0 && !w.Has<Debuff>(boss))
+                    w.Add(boss, new Debuff { Timer = 5f });
+
+                return tickCount;
+            }
+
+            _results.Add(MeasureTimed("MiniArch", Tick, durationSeconds));
+
+            var totalNs = iterateNs + createNs + destroyScanNs + destroyApplyNs + buffNs;
+            var freq = (double)Stopwatch.Frequency / 1_000_000_000;
+            Console.WriteLine($"  [MiniArch phase breakdown] Iterate: {iterateNs / freq / 1_000_000:F1}ms ({100.0 * iterateNs / totalNs:F1}%) | Create: {createNs / freq / 1_000_000:F1}ms ({100.0 * createNs / totalNs:F1}%) | DestroyScan: {destroyScanNs / freq / 1_000_000:F1}ms ({100.0 * destroyScanNs / totalNs:F1}%) | DestroyApply: {destroyApplyNs / freq / 1_000_000:F1}ms ({100.0 * destroyApplyNs / totalNs:F1}%) | Buff: {buffNs / freq / 1_000_000:F1}ms ({100.0 * buffNs / totalNs:F1}%)");
+        }
+
+        // DefaultEcs
+        {
+            using var w = new DefaultEcs.World();
+            var player = w.CreateEntity();
+            player.Set(new PlayerTag());
+            player.Set(new Position());
+            player.Set(new Velocity());
+            player.Set(new Health { Current = 10000, Max = 10000 });
+            player.Set(new Speed(0));
+
+            var boss = w.CreateEntity();
+            boss.Set(new BossTag());
+            boss.Set(new Position { X = bossX, Z = bossZ });
+            boss.Set(new Velocity());
+            boss.Set(new Health { Current = 100000, Max = 100000 });
+            boss.Set(new AiState());
+
+            var moveSet = w.GetEntities().With<Position>().With<Velocity>().AsSet();
+            var ebSet = w.GetEntities().With<Position>().With<Damage>().AsSet();
+            var pbSet = w.GetEntities().With<Position>().With<ProjectileTag>().AsSet();
+            var ptSet = w.GetEntities().With<Position>().With<Lifetime>().AsSet();
+            var buffSet = w.GetEntities().With<BuffEffect>().AsSet();
+            var scratch = new DefaultEcs.Entity[8192];
+            var rng = new Random(42);
+            var tickCount = 0;
+
+            int Tick()
+            {
+                tickCount++;
+                // 1. MoveAll
+                {
+                    var entities = moveSet.GetEntities();
+                    for (var i = 0; i < entities.Length; i++)
+                    {
+                        ref var p = ref entities[i].Get<Position>();
+                        ref var v = ref entities[i].Get<Velocity>();
+                        p.X += v.X; p.Y += v.Y; p.Z += v.Z;
+                    }
+                }
+                // 2. Spawn enemy bullets (with Faction)
+                for (var i = 0; i < enemyBulletsPerTick; i++)
+                {
+                    var angle = rng.NextSingle() * 6.2832f;
+                    var speed = 30f + rng.NextSingle() * 20f;
+                    var e = w.CreateEntity();
+                    e.Set(new Faction(rng.Next(factionCount)));
+                    e.Set(new Position { X = bossX, Z = bossZ });
+                    e.Set(new Velocity { X = MathF.Cos(angle) * speed, Z = MathF.Sin(angle) * speed });
+                    e.Set(new Damage { Base = 1 + (i & 3) });
+                }
+                // 3. Spawn player bullets (with Faction)
+                for (var i = 0; i < playerBulletsPerTick; i++)
+                {
+                    var spread = (rng.NextSingle() - 0.5f) * 0.6f;
+                    var e = w.CreateEntity();
+                    e.Set(new Faction(rng.Next(factionCount)));
+                    e.Set(new ProjectileTag());
+                    e.Set(new Position());
+                    e.Set(new Velocity { X = (bulletDirX + spread) * 40f, Z = (bulletDirZ + spread) * 40f });
+                }
+                // 7. Spawn particles (with Faction)
+                for (var i = 0; i < particlesPerTick; i++)
+                {
+                    var angle = rng.NextSingle() * 6.2832f;
+                    var e = w.CreateEntity();
+                    e.Set(new Faction(rng.Next(factionCount)));
+                    e.Set(new Position { X = rng.NextSingle() * 10 - 5, Z = rng.NextSingle() * 10 - 5 });
+                    e.Set(new Velocity { X = MathF.Cos(angle) * 5, Z = MathF.Sin(angle) * 5 });
+                    e.Set(new Lifetime { Value = 20f });
+                }
+                // 4. Collide + cleanup enemy bullets
+                {
+                    var entities = ebSet.GetEntities();
+                    var d = 0;
+                    for (var i = 0; i < entities.Length; i++)
+                    {
+                        ref var p = ref entities[i].Get<Position>();
+                        var dx = p.X - playerX;
+                        var dz = p.Z - playerZ;
+                        if (dx * dx + dz * dz < hitRadiusSqPlayer ||
+                            Math.Abs(p.X) > screenBound || Math.Abs(p.Z) > screenBound)
+                        {
+                            if (d < scratch.Length) scratch[d++] = entities[i];
+                        }
+                    }
+                    for (var i = 0; i < d; i++) scratch[i].Dispose();
+                }
+                // 5. Collide + cleanup player bullets
+                {
+                    var entities = pbSet.GetEntities();
+                    var d = 0;
+                    for (var i = 0; i < entities.Length; i++)
+                    {
+                        ref var p = ref entities[i].Get<Position>();
+                        var dx = p.X - bossX;
+                        var dz = p.Z - bossZ;
+                        if (dx * dx + dz * dz < hitRadiusSqBoss ||
+                            Math.Abs(p.X) > screenBound || Math.Abs(p.Z) > screenBound)
+                        {
+                            if (d < scratch.Length) scratch[d++] = entities[i];
+                        }
+                    }
+                    for (var i = 0; i < d; i++) scratch[i].Dispose();
+                }
+                // 6. Process particles
+                {
+                    var entities = ptSet.GetEntities();
+                    var d = 0;
+                    for (var i = 0; i < entities.Length; i++)
+                    {
+                        ref var lt = ref entities[i].Get<Lifetime>();
+                        lt.Value -= 1f;
+                        if (lt.Value <= 0 && d < scratch.Length)
+                            scratch[d++] = entities[i];
+                    }
+                    for (var i = 0; i < d; i++) scratch[i].Dispose();
+                }
+
+                // 9. Buff system
+                {
+                    // Apply burning
+                    var entities = ebSet.GetEntities();
+                    var applied = 0;
+                    for (var i = 0; i < entities.Length && applied < buffApplyCount; i++)
+                    {
+                        if (rng.NextSingle() < 0.5f && !entities[i].Has<BuffEffect>())
+                        {
+                            entities[i].Set(new BuffEffect(0, statusDuration));
+                            applied++;
+                        }
+                    }
+                    // Apply poison
+                    entities = pbSet.GetEntities();
+                    applied = 0;
+                    for (var i = 0; i < entities.Length && applied < buffApplyCount / 2; i++)
+                    {
+                        if (rng.NextSingle() < 0.5f && !entities[i].Has<BuffEffect>())
+                        {
+                            entities[i].Set(new BuffEffect(1, statusDuration));
+                            applied++;
+                        }
+                    }
+                    // Tick down buffs, remove expired
+                    entities = buffSet.GetEntities();
+                    for (var i = 0; i < entities.Length; i++)
+                    {
+                        ref var buff = ref entities[i].Get<BuffEffect>();
+                        buff.Remaining -= 1f;
+                        if (buff.Remaining <= 0)
+                        {
+                            entities[i].Remove<BuffEffect>();
+                        }
+                    }
+                }
+
+                // 8. BossEnrage
+                if (tickCount % enrageInterval == 0 && !boss.Has<Debuff>())
+                    boss.Set(new Debuff { Timer = 5f });
+
+                return tickCount;
+            }
+
+            _results.Add(MeasureTimed("DefaultEcs", Tick, durationSeconds));
+        }
+
+        // Arch
+        {
+            using var w = Arch.Core.World.Create();
+            var player = w.Create(new PlayerTag(), new Position(), new Velocity(), new Health { Current = 10000, Max = 10000 }, new Speed(0));
+            var boss = w.Create(new BossTag(), new Position { X = bossX, Z = bossZ }, new Velocity(), new Health { Current = 100000, Max = 100000 }, new AiState());
+
+            var moveDesc = new Arch.Core.QueryDescription().WithAll<Position, Velocity>();
+            var ebDesc = new Arch.Core.QueryDescription().WithAll<Position, Damage>();
+            var pbDesc = new Arch.Core.QueryDescription().WithAll<Position, ProjectileTag>();
+            var ptDesc = new Arch.Core.QueryDescription().WithAll<Position, Lifetime>();
+            var buffDesc = new Arch.Core.QueryDescription().WithAll<BuffEffect>();
+            var scratch = new Arch.Core.Entity[8192];
+            var rng = new Random(42);
+            var tickCount = 0;
+            long iterateNs = 0, createNs = 0, destroyScanNs = 0, destroyApplyNs = 0, buffNs = 0;
+
+            int Tick()
+            {
+                tickCount++;
+                long t0, t1;
+
+                // 1. MoveAll
+                t0 = Stopwatch.GetTimestamp();
+                foreach (var chunk in w.Query(in moveDesc))
+                {
+                    var pos = chunk.GetSpan<Position>();
+                    var vel = chunk.GetSpan<Velocity>();
+                    for (var row = 0; row < chunk.Count; row++)
+                    {
+                        pos[row].X += vel[row].X;
+                        pos[row].Y += vel[row].Y;
+                        pos[row].Z += vel[row].Z;
+                    }
+                }
+                t1 = Stopwatch.GetTimestamp();
+                iterateNs += t1 - t0;
+
+                // 2+3+7. Create (with Faction)
+                t0 = Stopwatch.GetTimestamp();
+                for (var i = 0; i < enemyBulletsPerTick; i++)
+                {
+                    var angle = rng.NextSingle() * 6.2832f;
+                    var speed = 30f + rng.NextSingle() * 20f;
+                    w.Create(new Faction(rng.Next(factionCount)),
+                        new Position { X = bossX, Z = bossZ },
+                        new Velocity { X = MathF.Cos(angle) * speed, Z = MathF.Sin(angle) * speed },
+                        new Damage { Base = 1 + (i & 3) });
+                }
+                for (var i = 0; i < playerBulletsPerTick; i++)
+                {
+                    var spread = (rng.NextSingle() - 0.5f) * 0.6f;
+                    w.Create(new Faction(rng.Next(factionCount)),
+                        new ProjectileTag(),
+                        new Position(),
+                        new Velocity { X = (bulletDirX + spread) * 40f, Z = (bulletDirZ + spread) * 40f });
+                }
+                for (var i = 0; i < particlesPerTick; i++)
+                {
+                    var angle = rng.NextSingle() * 6.2832f;
+                    w.Create(new Faction(rng.Next(factionCount)),
+                        new Position { X = rng.NextSingle() * 10 - 5, Z = rng.NextSingle() * 10 - 5 },
+                        new Velocity { X = MathF.Cos(angle) * 5, Z = MathF.Sin(angle) * 5 },
+                        new Lifetime { Value = 20f });
+                }
+                t1 = Stopwatch.GetTimestamp();
+                createNs += t1 - t0;
+
+                // 4+5+6. Destroy
+                {
+                    t0 = Stopwatch.GetTimestamp();
+                    var d = 0;
+                    foreach (var chunk in w.Query(in ebDesc))
+                    {
+                        var pos = chunk.GetSpan<Position>();
+                        for (var row = 0; row < chunk.Count; row++)
+                        {
+                            var dx = pos[row].X - playerX;
+                            var dz = pos[row].Z - playerZ;
+                            if (dx * dx + dz * dz < hitRadiusSqPlayer ||
+                                Math.Abs(pos[row].X) > screenBound || Math.Abs(pos[row].Z) > screenBound)
+                            {
+                                if (d < scratch.Length) scratch[d++] = chunk.Entity(row);
+                            }
+                        }
+                    }
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyScanNs += t1 - t0;
+                    t0 = Stopwatch.GetTimestamp();
+                    for (var i = 0; i < d; i++) w.Destroy(scratch[i]);
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyApplyNs += t1 - t0;
+                }
+                {
+                    t0 = Stopwatch.GetTimestamp();
+                    var d = 0;
+                    foreach (var chunk in w.Query(in pbDesc))
+                    {
+                        var pos = chunk.GetSpan<Position>();
+                        for (var row = 0; row < chunk.Count; row++)
+                        {
+                            var dx = pos[row].X - bossX;
+                            var dz = pos[row].Z - bossZ;
+                            if (dx * dx + dz * dz < hitRadiusSqBoss ||
+                                Math.Abs(pos[row].X) > screenBound || Math.Abs(pos[row].Z) > screenBound)
+                            {
+                                if (d < scratch.Length) scratch[d++] = chunk.Entity(row);
+                            }
+                        }
+                    }
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyScanNs += t1 - t0;
+                    t0 = Stopwatch.GetTimestamp();
+                    for (var i = 0; i < d; i++) w.Destroy(scratch[i]);
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyApplyNs += t1 - t0;
+                }
+                {
+                    t0 = Stopwatch.GetTimestamp();
+                    var d = 0;
+                    foreach (var chunk in w.Query(in ptDesc))
+                    {
+                        var lt = chunk.GetSpan<Lifetime>();
+                        for (var row = 0; row < chunk.Count; row++)
+                        {
+                            lt[row].Value -= 1f;
+                            if (lt[row].Value <= 0 && d < scratch.Length)
+                                scratch[d++] = chunk.Entity(row);
+                        }
+                    }
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyScanNs += t1 - t0;
+                    t0 = Stopwatch.GetTimestamp();
+                    for (var i = 0; i < d; i++) w.Destroy(scratch[i]);
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyApplyNs += t1 - t0;
+                }
+
+                // 9. Buff system
+                t0 = Stopwatch.GetTimestamp();
+                {
+                    // Apply burning to random enemy bullets (collect first, apply outside query)
+                    var applied = 0;
+                    foreach (var chunk in w.Query(in ebDesc))
+                    {
+                        for (var row = 0; row < chunk.Count && applied < buffApplyCount; row++)
+                        {
+                            if (rng.NextSingle() < 0.5f)
+                            {
+                                var e = chunk.Entity(row);
+                                if (!w.Has<BuffEffect>(e))
+                                {
+                                    w.Add(e, new BuffEffect(0, statusDuration));
+                                    applied++;
+                                }
+                            }
+                        }
+                    }
+                    // Apply poison to random player bullets (collect first, apply outside query)
+                    applied = 0;
+                    foreach (var chunk in w.Query(in pbDesc))
+                    {
+                        for (var row = 0; row < chunk.Count && applied < buffApplyCount / 2; row++)
+                        {
+                            if (rng.NextSingle() < 0.5f)
+                            {
+                                var e = chunk.Entity(row);
+                                if (!w.Has<BuffEffect>(e))
+                                {
+                                    w.Add(e, new BuffEffect(1, statusDuration));
+                                    applied++;
+                                }
+                            }
+                        }
+                    }
+
+                    // Tick down buffs, remove expired
+                    var removeCount = 0;
+                    foreach (var chunk in w.Query(in buffDesc))
+                    {
+                        var buffs = chunk.GetSpan<BuffEffect>();
+                        for (var row = 0; row < chunk.Count; row++)
+                        {
+                            buffs[row].Remaining -= 1f;
+                            if (buffs[row].Remaining <= 0 && removeCount < scratch.Length)
+                                scratch[removeCount++] = chunk.Entity(row);
+                        }
+                    }
+                    for (var i = 0; i < removeCount; i++)
+                        w.Remove<BuffEffect>(scratch[i]);
+                }
+                t1 = Stopwatch.GetTimestamp();
+                buffNs += t1 - t0;
+
+                // 8. BossEnrage
+                if (tickCount % enrageInterval == 0 && !w.Has<Debuff>(boss))
+                    w.Add(boss, new Debuff { Timer = 5f });
+
+                return tickCount;
+            }
+
+            _results.Add(MeasureTimed("Arch", Tick, durationSeconds));
+
+            var totalNs = iterateNs + createNs + destroyScanNs + destroyApplyNs + buffNs;
+            var freq = (double)Stopwatch.Frequency / 1_000_000_000;
+            Console.WriteLine($"  [Arch phase breakdown] Iterate: {iterateNs / freq / 1_000_000:F1}ms ({100.0 * iterateNs / totalNs:F1}%) | Create: {createNs / freq / 1_000_000:F1}ms ({100.0 * createNs / totalNs:F1}%) | DestroyScan: {destroyScanNs / freq / 1_000_000:F1}ms ({100.0 * destroyScanNs / totalNs:F1}%) | DestroyApply: {destroyApplyNs / freq / 1_000_000:F1}ms ({100.0 * destroyApplyNs / totalNs:F1}%) | Buff: {buffNs / freq / 1_000_000:F1}ms ({100.0 * buffNs / totalNs:F1}%)");
+        }
+
+        // Friflo
+        {
+            var store = new EntityStore();
+            var player = store.CreateEntity(new FrifloPlayerTag(), new FrifloPosition(), new FrifloVelocity(), new FrifloHealth { Current = 10000, Max = 10000 }, new FrifloSpeed(0));
+            var boss = store.CreateEntity(new FrifloBossTag(), new FrifloPosition { X = bossX, Z = bossZ }, new FrifloVelocity(), new FrifloHealth { Current = 100000, Max = 100000 }, new FrifloAiState());
+
+            var moveQuery = store.Query<FrifloPosition, FrifloVelocity>();
+            var ebQuery = store.Query<FrifloPosition, FrifloDamage>();
+            var pbQuery = store.Query<FrifloPosition, FrifloProjectileTag>();
+            var ptQuery = store.Query<FrifloPosition, FrifloLifetime>();
+            var buffQuery = store.Query<FrifloBuffEffect>();
+            var scratch = new int[8192];
+            var rng = new Random(42);
+            var tickCount = 0;
+            long iterateNs = 0, createNs = 0, destroyScanNs = 0, destroyApplyNs = 0, buffNs = 0;
+
+            int Tick()
+            {
+                tickCount++;
+                long t0, t1;
+
+                // 1. MoveAll
+                t0 = Stopwatch.GetTimestamp();
+                foreach (var (posChunk, velChunk, _) in moveQuery.Chunks)
+                {
+                    var pos = posChunk.Span;
+                    var vel = velChunk.Span;
+                    for (var row = 0; row < pos.Length; row++)
+                    {
+                        pos[row].X += vel[row].X;
+                        pos[row].Y += vel[row].Y;
+                        pos[row].Z += vel[row].Z;
+                    }
+                }
+                t1 = Stopwatch.GetTimestamp();
+                iterateNs += t1 - t0;
+
+                // 2+3+7. Create (with random Faction to split archetypes)
+                t0 = Stopwatch.GetTimestamp();
+                for (var i = 0; i < enemyBulletsPerTick; i++)
+                {
+                    var angle = rng.NextSingle() * 6.2832f;
+                    var speed = 30f + rng.NextSingle() * 20f;
+                    store.CreateEntity(
+                        new FrifloFaction(rng.Next(factionCount)),
+                        new FrifloPosition { X = bossX, Z = bossZ },
+                        new FrifloVelocity { X = MathF.Cos(angle) * speed, Z = MathF.Sin(angle) * speed },
+                        new FrifloDamage { Base = 1 + (i & 3) });
+                }
+                for (var i = 0; i < playerBulletsPerTick; i++)
+                {
+                    var spread = (rng.NextSingle() - 0.5f) * 0.6f;
+                    store.CreateEntity(
+                        new FrifloFaction(rng.Next(factionCount)),
+                        new FrifloProjectileTag(),
+                        new FrifloPosition(),
+                        new FrifloVelocity { X = (bulletDirX + spread) * 40f, Z = (bulletDirZ + spread) * 40f });
+                }
+                for (var i = 0; i < particlesPerTick; i++)
+                {
+                    var angle = rng.NextSingle() * 6.2832f;
+                    store.CreateEntity(
+                        new FrifloFaction(rng.Next(factionCount)),
+                        new FrifloPosition { X = rng.NextSingle() * 10 - 5, Z = rng.NextSingle() * 10 - 5 },
+                        new FrifloVelocity { X = MathF.Cos(angle) * 5, Z = MathF.Sin(angle) * 5 },
+                        new FrifloLifetime { Value = 20f });
+                }
+                t1 = Stopwatch.GetTimestamp();
+                createNs += t1 - t0;
+
+                // 4+5+6. Destroy (scan + apply)
+                {
+                    t0 = Stopwatch.GetTimestamp();
+                    var d = 0;
+                    foreach (var (posChunk, _, entitiesChunk) in ebQuery.Chunks)
+                    {
+                        var pos = posChunk.Span;
+                        for (var row = 0; row < pos.Length; row++)
+                        {
+                            var dx = pos[row].X - playerX;
+                            var dz = pos[row].Z - playerZ;
+                            if (dx * dx + dz * dz < hitRadiusSqPlayer ||
+                                Math.Abs(pos[row].X) > screenBound || Math.Abs(pos[row].Z) > screenBound)
+                            {
+                                if (d < scratch.Length) scratch[d++] = entitiesChunk[row];
+                            }
+                        }
+                    }
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyScanNs += t1 - t0;
+                    t0 = Stopwatch.GetTimestamp();
+                    for (var i = 0; i < d; i++) store.GetEntityById(scratch[i]).DeleteEntity();
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyApplyNs += t1 - t0;
+                }
+                {
+                    t0 = Stopwatch.GetTimestamp();
+                    var d = 0;
+                    foreach (var (posChunk, _, entitiesChunk) in pbQuery.Chunks)
+                    {
+                        var pos = posChunk.Span;
+                        for (var row = 0; row < pos.Length; row++)
+                        {
+                            var dx = pos[row].X - bossX;
+                            var dz = pos[row].Z - bossZ;
+                            if (dx * dx + dz * dz < hitRadiusSqBoss ||
+                                Math.Abs(pos[row].X) > screenBound || Math.Abs(pos[row].Z) > screenBound)
+                            {
+                                if (d < scratch.Length) scratch[d++] = entitiesChunk[row];
+                            }
+                        }
+                    }
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyScanNs += t1 - t0;
+                    t0 = Stopwatch.GetTimestamp();
+                    for (var i = 0; i < d; i++) store.GetEntityById(scratch[i]).DeleteEntity();
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyApplyNs += t1 - t0;
+                }
+                {
+                    t0 = Stopwatch.GetTimestamp();
+                    var d = 0;
+                    foreach (var (posChunk, ltChunk, entitiesChunk) in ptQuery.Chunks)
+                    {
+                        var lt = ltChunk.Span;
+                        for (var row = 0; row < lt.Length; row++)
+                        {
+                            lt[row].Value -= 1f;
+                            if (lt[row].Value <= 0 && d < scratch.Length)
+                                scratch[d++] = entitiesChunk[row];
+                        }
+                    }
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyScanNs += t1 - t0;
+                    t0 = Stopwatch.GetTimestamp();
+                    for (var i = 0; i < d; i++) store.GetEntityById(scratch[i]).DeleteEntity();
+                    t1 = Stopwatch.GetTimestamp();
+                    destroyApplyNs += t1 - t0;
+                }
+
+                // 9. Buff system
+                t0 = Stopwatch.GetTimestamp();
+                {
+                    // Apply burning to random enemy bullets (collect first, apply outside query)
+                    var applyCount = 0;
+                    var toBuff = new int[buffApplyCount];
+                    foreach (var (posChunk, _, entitiesChunk) in ebQuery.Chunks)
+                    {
+                        var pos = posChunk.Span;
+                        for (var row = 0; row < pos.Length && applyCount < buffApplyCount; row++)
+                        {
+                            if (rng.NextSingle() < 0.5f)
+                            {
+                                var e = store.GetEntityById(entitiesChunk[row]);
+                                if (!e.HasComponent<FrifloBuffEffect>())
+                                    toBuff[applyCount++] = entitiesChunk[row];
+                            }
+                        }
+                    }
+                    for (var bi = 0; bi < applyCount; bi++)
+                    {
+                        var e = store.GetEntityById(toBuff[bi]);
+                        e.AddComponent(new FrifloBuffEffect { Type = 0, Remaining = statusDuration });
+                    }
+                    // Apply poison to random player bullets (collect first, apply outside query)
+                    var toPoison = new int[buffApplyCount / 2];
+                    applyCount = 0;
+                    foreach (var (posChunk, _, entitiesChunk) in pbQuery.Chunks)
+                    {
+                        var pos = posChunk.Span;
+                        for (var row = 0; row < pos.Length && applyCount < buffApplyCount / 2; row++)
+                        {
+                            if (rng.NextSingle() < 0.5f)
+                            {
+                                var e = store.GetEntityById(entitiesChunk[row]);
+                                if (!e.HasComponent<FrifloBuffEffect>())
+                                    toPoison[applyCount++] = entitiesChunk[row];
+                            }
+                        }
+                    }
+                    for (var bi = 0; bi < applyCount; bi++)
+                    {
+                        var e = store.GetEntityById(toPoison[bi]);
+                        e.AddComponent(new FrifloBuffEffect { Type = 1, Remaining = statusDuration });
+                    }
+
+                    // Tick down buffs, remove expired
+                    var removeCount = 0;
+                    foreach (var (buffChunk, entitiesChunk) in buffQuery.Chunks)
+                    {
+                        var buffs = buffChunk.Span;
+                        for (var row = 0; row < buffs.Length; row++)
+                        {
+                            buffs[row].Remaining -= 1f;
+                            if (buffs[row].Remaining <= 0 && removeCount < scratch.Length)
+                                scratch[removeCount++] = entitiesChunk[row];
+                        }
+                    }
+                    for (var i = 0; i < removeCount; i++)
+                    {
+                        var e = store.GetEntityById(scratch[i]);
+                        e.RemoveComponent<FrifloBuffEffect>();
+                    }
+                }
+                t1 = Stopwatch.GetTimestamp();
+                buffNs += t1 - t0;
+
+                // 8. BossEnrage
+                if (tickCount % enrageInterval == 0 && !boss.HasComponent<FrifloDebuff>())
+                    boss.AddComponent(new FrifloDebuff { Timer = 5f });
+
+                return tickCount;
+            }
+
+            _results.Add(MeasureTimed("Friflo", Tick, durationSeconds));
+
+            var totalNs = iterateNs + createNs + destroyScanNs + destroyApplyNs + buffNs;
+            var freq = (double)Stopwatch.Frequency / 1_000_000_000;
+            Console.WriteLine($"  [Friflo phase breakdown] Iterate: {iterateNs / freq / 1_000_000:F1}ms ({100.0 * iterateNs / totalNs:F1}%) | Create: {createNs / freq / 1_000_000:F1}ms ({100.0 * createNs / totalNs:F1}%) | DestroyScan: {destroyScanNs / freq / 1_000_000:F1}ms ({100.0 * destroyScanNs / totalNs:F1}%) | DestroyApply: {destroyApplyNs / freq / 1_000_000:F1}ms ({100.0 * destroyApplyNs / totalNs:F1}%) | Buff: {buffNs / freq / 1_000_000:F1}ms ({100.0 * buffNs / totalNs:F1}%)");
         }
     }
 }

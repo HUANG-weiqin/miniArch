@@ -14,9 +14,9 @@ public sealed class Query
     private Signature? _requiredSignature;
     private Signature? _excludedSignature;
     private Signature? _anySignature;
-    private long _requiredMask;
-    private long _excludedMask;
-    private long _anyMask;
+    private long _requiredMaskLo, _requiredMaskHi;
+    private long _excludedMaskLo, _excludedMaskHi;
+    private long _anyMaskLo, _anyMaskHi;
     private bool _masksInitialized;
     private int _refreshCount;
 
@@ -30,6 +30,7 @@ public sealed class Query
     private int _chunksDirty = 1;
     private bool _initialized;
     private int _snapshotArchetypeVersion;
+    private int _lastCheckedArchetypeCount;
 
     internal Query(World world, QueryFilter filter)
     {
@@ -149,7 +150,7 @@ public sealed class Query
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureChunkSnapshot()
     {
-        if (Volatile.Read(ref _chunksDirty) == 0)
+        if (Volatile.Read(ref _chunksDirty) == 0 && !HasChunkGenerationChanged())
         {
             return;
         }
@@ -165,25 +166,34 @@ public sealed class Query
             return true;
         }
 
-        // Check if new archetypes were created
+        // Check if new archetypes were created (new type combinations added)
         if (_world.ArchetypeVersion != _snapshotArchetypeVersion)
         {
             return true;
         }
 
-        var snapshot = ReadArchetypeSnapshot();
-        var snapshotArchetypes = snapshot.Items;
-        var snapshotGenerations = Volatile.Read(ref _snapshotGenerations);
-        var snapshotArchetypeCount = snapshot.Count;
+        // Note: per-archetype generation changes are NOT checked here.
+        // They only affect chunk layout, not archetype matching.
+        // Chunk refresh handles generation changes separately.
+        return false;
+    }
 
-        if (snapshotGenerations.Length < snapshotArchetypeCount)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool HasChunkGenerationChanged()
+    {
+        var snapshot = ReadArchetypeSnapshot();
+        var items = snapshot.Items;
+        var generations = Volatile.Read(ref _snapshotGenerations);
+        var count = snapshot.Count;
+
+        if (generations.Length < count)
         {
             return true;
         }
 
-        for (var i = 0; i < snapshotArchetypeCount; i++)
+        for (var i = 0; i < count; i++)
         {
-            if (snapshotArchetypes[i].Generation != snapshotGenerations[i])
+            if (items[i].Generation != generations[i])
             {
                 return true;
             }
@@ -233,33 +243,84 @@ public sealed class Query
             return;
         }
 
-        if (_scratchArchetypes.Length < archetypes.Length)
+        // First-time init or resizing: start from scratch
+        if (!_initialized)
         {
-            _scratchArchetypes = new Archetype[archetypes.Length];
-            _scratchGenerations = new long[archetypes.Length];
-        }
-
-        var matchedArchetypeCount = 0;
-        foreach (var archetype in archetypes)
-        {
-            if (Matches(archetype))
+            if (_scratchArchetypes.Length < archetypes.Length)
             {
-                _scratchArchetypes[matchedArchetypeCount] = archetype;
-                _scratchGenerations[matchedArchetypeCount] = archetype.Generation;
-                matchedArchetypeCount++;
+                _scratchArchetypes = new Archetype[archetypes.Length];
+                _scratchGenerations = new long[archetypes.Length];
             }
-        }
 
-        if (matchedArchetypeCount == 0)
-        {
-            SwapSnapshotToEmpty();
+            var matchedArchetypeCount = 0;
+            foreach (var archetype in archetypes)
+            {
+                if (Matches(archetype))
+                {
+                    _scratchArchetypes[matchedArchetypeCount] = archetype;
+                    _scratchGenerations[matchedArchetypeCount] = archetype.Generation;
+                    matchedArchetypeCount++;
+                }
+            }
+
+            _lastCheckedArchetypeCount = archetypes.Length;
+
+            if (matchedArchetypeCount == 0)
+            {
+                SwapSnapshotToEmpty();
+                _initialized = true;
+                return;
+            }
+
+            SwapArchetypeSnapshot(matchedArchetypeCount);
+            Volatile.Write(ref _chunksDirty, 1);
             _initialized = true;
             return;
         }
 
-        SwapArchetypeSnapshot(matchedArchetypeCount);
+        // Incremental: only check newly added archetypes
+        var newCount = archetypes.Length;
+        if (newCount <= _lastCheckedArchetypeCount)
+        {
+            // No new archetypes - nothing to update
+            return;
+        }
+
+        // Ensure scratch arrays are large enough
+        var totalPossible = _snapshotArchetypeCount + (newCount - _lastCheckedArchetypeCount);
+        if (_scratchArchetypes.Length < totalPossible)
+        {
+            _scratchArchetypes = new Archetype[totalPossible];
+            _scratchGenerations = new long[totalPossible];
+        }
+
+        // Copy existing matches to scratch
+        var snapshot = ReadArchetypeSnapshot();
+        Array.Copy(snapshot.Items, _scratchArchetypes, _snapshotArchetypeCount);
+        Array.Copy(Volatile.Read(ref _snapshotGenerations), _scratchGenerations, _snapshotArchetypeCount);
+
+        var matchedCount = _snapshotArchetypeCount;
+        for (var i = _lastCheckedArchetypeCount; i < newCount; i++)
+        {
+            var archetype = archetypes[i];
+            if (Matches(archetype))
+            {
+                _scratchArchetypes[matchedCount] = archetype;
+                _scratchGenerations[matchedCount] = archetype.Generation;
+                matchedCount++;
+            }
+        }
+
+        _lastCheckedArchetypeCount = newCount;
+
+        if (matchedCount == 0)
+        {
+            SwapSnapshotToEmpty();
+            return;
+        }
+
+        SwapArchetypeSnapshot(matchedCount);
         Volatile.Write(ref _chunksDirty, 1);
-        _initialized = true;
     }
 
     private void BuildChunkSnapshot()
@@ -323,6 +384,16 @@ public sealed class Query
         Volatile.Write(ref _snapshotChunks, _scratchChunks);
         _scratchChunks = old;
         Volatile.Write(ref _chunksDirty, 0);
+
+        // Update stored generations after chunk rebuild
+        var generations = Volatile.Read(ref _snapshotGenerations);
+        for (var i = 0; i < snapshotArchetypeCount; i++)
+        {
+            if (i < generations.Length)
+            {
+                generations[i] = snapshotArchetypes[i].Generation;
+            }
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -359,55 +430,66 @@ public sealed class Query
     [MethodImpl(MethodImplOptions.NoInlining)]
     private void InitializeMasks()
     {
-        _requiredMask = ComputeFilterMask(_filter.Required.AsSpan());
-        _excludedMask = ComputeFilterMask(_filter.Excluded.AsSpan());
-        _anyMask = ComputeFilterMask(_filter.Any.AsSpan());
+        (_requiredMaskLo, _requiredMaskHi) = ComputeFilterMask128(_filter.Required.AsSpan());
+        (_excludedMaskLo, _excludedMaskHi) = ComputeFilterMask128(_filter.Excluded.AsSpan());
+        (_anyMaskLo, _anyMaskHi) = ComputeFilterMask128(_filter.Any.AsSpan());
         _masksInitialized = true;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static long ComputeFilterMask(ReadOnlySpan<ComponentType> components)
+    private static (long lo, long hi) ComputeFilterMask128(ReadOnlySpan<ComponentType> components)
     {
-        long mask = 0;
+        long lo = 0, hi = 0;
         for (var i = 0; i < components.Length; i++)
         {
             var id = components[i].Value;
             if ((uint)id < 64)
             {
-                mask |= 1L << id;
+                lo |= 1L << id;
+            }
+            else if ((uint)id < 128)
+            {
+                hi |= 1L << (id - 64);
             }
         }
 
-        return mask;
+        return (lo, hi);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool Matches(Archetype archetype)
     {
         EnsureMasksInitialized();
-        var archMask = archetype.Signature.ComponentMask;
+        var archLo = archetype.Signature.ComponentMask;
+        var archHi = archetype.Signature.ComponentMaskHi;
 
-        if (_requiredMask != 0 && (archMask & _requiredMask) != _requiredMask)
+        // Required: all bits must be set
+        if ((_requiredMaskLo != 0 || _requiredMaskHi != 0) &&
+            ((archLo & _requiredMaskLo) != _requiredMaskLo ||
+             (archHi & _requiredMaskHi) != _requiredMaskHi))
         {
             return false;
         }
 
-        if (_excludedMask != 0 && (archMask & _excludedMask) != 0)
+        // Excluded: no bits may be set
+        if ((_excludedMaskLo != 0 || _excludedMaskHi != 0) &&
+            ((archLo & _excludedMaskLo) != 0 ||
+             (archHi & _excludedMaskHi) != 0))
         {
             return false;
         }
 
-        return MatchesSlow(archetype, archMask);
+        return MatchesSlow(archetype, archLo, archHi);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private bool MatchesSlow(Archetype archetype, long archMask)
+    private bool MatchesSlow(Archetype archetype, long archLo, long archHi)
     {
         var required = _filter.Required.AsSpan();
         for (var i = 0; i < required.Length; i++)
         {
-            var component = required[i];
-            if ((uint)component.Value >= 64 && !archetype.Signature.Contains(component))
+            var id = required[i].Value;
+            if ((uint)id >= 128 && !archetype.Signature.Contains(required[i]))
             {
                 return false;
             }
@@ -416,8 +498,8 @@ public sealed class Query
         var excluded = _filter.Excluded.AsSpan();
         for (var i = 0; i < excluded.Length; i++)
         {
-            var component = excluded[i];
-            if ((uint)component.Value >= 64 && archetype.Signature.Contains(component))
+            var id = excluded[i].Value;
+            if ((uint)id >= 128 && archetype.Signature.Contains(excluded[i]))
             {
                 return false;
             }
@@ -429,14 +511,17 @@ public sealed class Query
             return true;
         }
 
-        if (_anyMask != 0 && (archMask & _anyMask) != 0)
+        // Fast any-check via 128-bit mask
+        if ((_anyMaskLo != 0 && (archLo & _anyMaskLo) != 0) ||
+            (_anyMaskHi != 0 && (archHi & _anyMaskHi) != 0))
         {
             return true;
         }
 
+        // Slow any-check for ids >= 128
         for (var i = 0; i < any.Length; i++)
         {
-            if (archetype.Signature.Contains(any[i]))
+            if ((uint)any[i].Value >= 128 && archetype.Signature.Contains(any[i]))
             {
                 return true;
             }

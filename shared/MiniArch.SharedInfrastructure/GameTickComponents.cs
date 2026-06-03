@@ -66,3 +66,4 @@ public record struct Lifetime { public float Value; }
 public record struct BurningTag;
 public record struct PoisonedTag;
 public record struct StatusTimer { public float Remaining; }
+public record struct BuffEffect(int Type, float Remaining);

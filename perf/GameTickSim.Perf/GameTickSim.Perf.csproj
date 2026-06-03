@@ -11,4 +11,8 @@
     <ProjectReference Include="..\..\shared\MiniArch.SharedInfrastructure\MiniArch.SharedInfrastructure.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Friflo.Engine.ECS" Version="3.6.0" />
+  </ItemGroup>
+
 </Project>
