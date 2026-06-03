@@ -161,20 +161,4 @@ public sealed class WorldStructuralChangeTests
         return world.TryGetLocation(entity, out var info) && info.Archetype.Signature.Contains(world.Components.GetOrCreate<T>());
     }
 
-    private static int CountQueryEntities(MiniArch.Core.Query query)
-    {
-        var total = 0;
-        foreach (ref readonly var chunk in query.GetChunkSpan())
-        {
-            total += chunk.GetEntities().Length;
-        }
-
-        return total;
-    }
-
-    private static MiniQuery CreateQuery<T>(World world)
-    {
-        var description = new QueryDescription().With<T>();
-        return MiniQuery.Create(world, in description);
-    }
 }

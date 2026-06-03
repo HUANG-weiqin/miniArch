@@ -784,13 +784,6 @@ public sealed class CommandBufferTests
         Assert.Equal(new Velocity(5, 6), v);
     }
 
-    private static int GetArchetypeCount(World world)
-    {
-        var field = typeof(World).GetField("_archetypes", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
-            ?? throw new InvalidOperationException("Unable to find World._archetypes.");
-        return ((System.Collections.IDictionary)field.GetValue(world)!).Count;
-    }
-
     [Fact]
     public async Task SubmitAndSnapshotAsync_submits_and_returns_delta()
     {
