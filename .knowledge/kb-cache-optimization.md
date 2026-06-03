@@ -3,6 +3,7 @@ title: Cache & Memory Optimization Review
 module: MiniArch.Core
 description: Memory layout and cache behavior analysis of the ECS runtime, with optimization opportunities
 updated: 2026-06-03
+review: 2026-06-03 — P0 已实施（合并 EntityRecord[]）；新增 P5-P8 优化点
 ---
 # Cache & Memory Optimization Review
 
@@ -59,29 +60,23 @@ Chunk
 
 ### 实际可优化的点
 
-## P0: World._versions 和 _locations 分离
+## P0: World._versions 和 _locations 分离 ✅ 已修复 (2026-06-03)
 
 **问题**：`_versions: int[]` 和 `_locations: EntityLocation[]` 是两个独立数组。每次实体操作（Create/Destroy/Get/Move）都要访问两个数组，造成 **2 次 cache miss**（索引相同但数组不同）。
 
-**热路径影响**：
-- `GetRequiredLocation`：读 `_locations[id]` → 读 `_versions[id]` = 2 次随机访问
-- `DestroySingle`：读 `_locations[id]` + 写 `_locations[id]` + 读 `_versions[id]` + 写 `_versions[id]` = 4 次跨数组访问
-- `FinishMoveEntity`：写 `_locations` × 2 = 跨数组写
-
-**方案**：合并为 `EntityRecord[]`：
+**已实施**：合并为 `EntityRecord[] _records`：
 ```csharp
 struct EntityRecord {
     int Version;        // 4 bytes
     Archetype Arch;     // 8 bytes (ref)
     int ChunkIndex;     // 4 bytes
     int RowIndex;       // 4 bytes
-}  // 20 bytes → padding to 24 bytes
+}  // 20 bytes → padded to 24 bytes
 ```
 
-**Trade-off**：
-- 优点：任何实体操作只需 1 次 cache miss 而非 2 次
-- 缺点：每个 entity 从 4+16=20 bytes 变为 24 bytes（+20% 内存），因为 struct padding
-- 判断：entity 数量通常 < 1M（24MB vs 20MB），内存增幅可接受。cache 命中率提升对频繁随机访问的价值更大
+- 回退测试：HeroComing.Perf Movement 698.1 rounds/s（baseline 690），Attack 203.6（baseline 179），性能无退化
+- 影响文件：`World.cs`（50+ 处引用点）、`WorldSnapshot.cs`、`WorldClone.cs`、新增 `EntityRecord.cs`
+- `EntityLocation.cs` 仍然保留但不再被 World 内部使用
 
 ## P1: Chunk._data 列对齐不够
 
@@ -120,6 +115,40 @@ struct EntityRecord {
 **热路径影响**：这是冷路径（只在结构变更时查找 migration plan），内存浪费不影响迭代。
 
 **判断**：**不做**。O(1) 查找比 Dictionary 的 hash 查找更可预测。除非 component ID 超过几千且有大量空洞，否则不值得改。
+
+## P5: MigrationPlan.Build O(n*m) 线性搜索
+
+**问题**：`MigrationPlan.Build()` 对每个 destination component 都线性扫描 source components（O(n*m)）。虽然 n 通常很小（<20），但 source 已有 `_componentIdToColumnIndex` 可以直接 O(1) 查找。
+
+**热路径影响**：冷路径（只在 edge cache miss 时调用），影响微小。
+
+**Fix**：用 `source.GetComponentIndexFast(componentType)` 替代内层循环。
+
+**判断**：**值得做**，改动极小（~5 行），收益虽小但无成本。
+
+## P6: Chunk.CopySmall 缺少 case 2
+
+**问题**：`CopySmall` 支持 1/4/8/12/16 字节，缺少 2 字节 case。2 字节组件（`Half`、`short`、`ushort`、`char`）走 fallback `Unsafe.CopyBlockUnaligned`。
+
+**Fix**：增加 `case 2: Unsafe.WriteUnaligned(ref dst, Unsafe.ReadUnaligned<short>(ref src));`
+
+**判断**：**低优先级但成本为零**，建议补上。
+
+## P7: CommandBuffer.ExtractAndSortComponents 在 Submit 时排序
+
+**问题**：`CommandBuffer.Submit()` 处理每个 created entity 时调用 `ExtractAndSortComponents` 做 `Array.Sort`（O(n log n)）。批量创建大量 entity 时排序开销可累积。
+
+**Fix**：在 Record 时维护组件列表的排序顺序（二分插入），避免 Submit 时排序。
+
+**判断**：**低优先级**。游戏场景中 Create 频率远低于迭代。但如果 profiling 显示 Create 路径是瓶颈，优先修复。
+
+## P8: HierarchyTable.EnsureCapacity 用 Array.Fill 初始化
+
+**问题**：`EnsureCapacity` 对 `_parentByChild`（Entity 类型）也使用 `Array.Fill` 填充 `NoEntity = default(Entity) = (0,0)`。全零初始化可以用更快的 `Array.Clear`。
+
+**Fix**：对 `_parentByChild` 改用 `Array.Clear`，对 `_firstChild` 保留 Fill（因为 NoSlot = -1 不是零）。
+
+**判断**：**微小优化**，优先级低。
 
 ## 认知模型
 

@@ -10,10 +10,10 @@ internal static class WorldClone
         var target = new World(source.ChunkCapacity, entitySlotCount);
         target.Reset(entitySlotCount);
 
-        var sourceVersions = source.EntityVersions;
-        for (var i = 0; i < sourceVersions.Length; i++)
+        var sourceRecords = source.EntityRecords;
+        for (var i = 0; i < sourceRecords.Length; i++)
         {
-            target.SetSnapshotEntityVersion(i, sourceVersions[i]);
+            target.SetSnapshotEntityVersion(i, sourceRecords[i].Version);
         }
 
         foreach (var srcArch in source.Archetypes)

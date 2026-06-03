@@ -40,9 +40,9 @@ public static class WorldSnapshot
         writer.Write(persistedArchetypes.Count);
         writer.Write(world.Hierarchy.CountLiveLinks(world));
 
-        foreach (var version in world.EntityVersions)
+        foreach (var record in world.EntityRecords)
         {
-            writer.Write(version);
+            writer.Write(record.Version);
         }
 
         foreach (var schemaEntry in schemaEntries)

@@ -2,7 +2,7 @@
 title: Architecture Mechanistic Review
 module: MiniArch.Core
 description: Mechanistic insight of the entire miniArch ECS library — one-line truths, minimal loops, state models, data flows, known issues, and optimization opportunities
-updated: 2026-06-01
+updated: 2026-06-03 (P2-P4 仍待处理；P0 cache miss 分离已修复)
 ---
 # Architecture Mechanistic Review
 
