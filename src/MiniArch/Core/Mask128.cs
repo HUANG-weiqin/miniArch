@@ -21,5 +21,15 @@ public readonly struct Mask128
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool IsZero() => Low == 0 && High == 0;
 
+    /// <summary>
+    /// Returns true when the high 64 bits are non-zero,
+    /// i.e. when component ids &gt;= 64 are present.
+    /// </summary>
+    public bool HasHighBits
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => High != 0;
+    }
+
     public override string ToString() => $"0x{High:X16}{Low:X16}";
 }

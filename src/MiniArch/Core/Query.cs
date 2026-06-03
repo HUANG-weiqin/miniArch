@@ -407,21 +407,21 @@ public sealed class Query
         EnsureMasksInitialized();
         var archMask = archetype.Signature.ComponentMask;
 
-        if (!_requiredMask.IsZero())
-        {
-            if ((archMask.Low & _requiredMask.Low) != _requiredMask.Low)
-                return false;
-            if ((archMask.High & _requiredMask.High) != _requiredMask.High)
-                return false;
-        }
+            if (!_requiredMask.IsZero())
+            {
+                if ((archMask.Low & _requiredMask.Low) != _requiredMask.Low)
+                    return false;
+                if (_requiredMask.HasHighBits && (archMask.High & _requiredMask.High) != _requiredMask.High)
+                    return false;
+            }
 
-        if (!_excludedMask.IsZero())
-        {
-            if ((archMask.Low & _excludedMask.Low) != 0)
-                return false;
-            if ((archMask.High & _excludedMask.High) != 0)
-                return false;
-        }
+            if (!_excludedMask.IsZero())
+            {
+                if ((archMask.Low & _excludedMask.Low) != 0)
+                    return false;
+                if (_excludedMask.HasHighBits && (archMask.High & _excludedMask.High) != 0)
+                    return false;
+            }
 
         return MatchesSlow(archetype, archMask);
     }
@@ -457,11 +457,13 @@ public sealed class Query
         }
 
         // Fast any-check via 128-bit mask
-        if (!_anyMask.IsZero())
-        {
-            if ((archMask.Low & _anyMask.Low) != 0 || (archMask.High & _anyMask.High) != 0)
-                return true;
-        }
+            if (!_anyMask.IsZero())
+            {
+                if ((archMask.Low & _anyMask.Low) != 0)
+                    return true;
+                if (_anyMask.HasHighBits && (archMask.High & _anyMask.High) != 0)
+                    return true;
+            }
 
         // Slow any-check for ids >= 128
         for (var i = 0; i < any.Length; i++)
