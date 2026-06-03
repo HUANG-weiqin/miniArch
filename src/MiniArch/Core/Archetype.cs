@@ -215,13 +215,16 @@ public sealed class Archetype
 
     private Chunk CreateChunk()
     {
-        return new Chunk(Signature, _componentTypes, _componentIdToColumnIndex, _chunkCapacity, _maxChunkCapacity);
+        var chunk = new Chunk(Signature, _componentTypes, _componentIdToColumnIndex, _chunkCapacity, _maxChunkCapacity);
+        chunk.Archetype = this;
+        return chunk;
     }
 
     private Chunk AddChunk()
     {
         var chunk = CreateChunk();
         _chunks.Add(chunk);
+        chunk.ChunkIndex = _chunks.Count - 1;
         if (_chunks.Count > _chunkHasNonFullEntry.Length)
         {
             Array.Resize(ref _chunkHasNonFullEntry, _chunks.Count * 2);

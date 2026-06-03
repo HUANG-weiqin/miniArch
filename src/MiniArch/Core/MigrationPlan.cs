@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace MiniArch.Core;
 
@@ -86,35 +87,54 @@ internal sealed class MigrationPlan
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static unsafe void CopyComponentSlot(
+    private static void CopyComponentSlot(
         Chunk sourceChunk, int sourceRow,
         Chunk destChunk, int destRow,
         in CopyEntry entry)
     {
-        var sourcePtr = sourceChunk.GetComponentBytePtr(entry.SourceColumnIndex, sourceRow);
-        var destPtr = destChunk.GetComponentBytePtr(entry.DestinationColumnIndex, destRow);
+        // Use ref-based access to avoid fixed/pin overhead of GetComponentBytePtr.
+        ref var srcData = ref MemoryMarshal.GetArrayDataReference(sourceChunk.GetDataArray());
+        ref var dstData = ref MemoryMarshal.GetArrayDataReference(destChunk.GetDataArray());
 
-        // Small copy specialization: use typed copy for common component sizes.
-        // Avoids the overhead of Unsafe.CopyBlockUnaligned for typical structs.
-        switch (entry.ByteSize)
+        var srcOffsets = sourceChunk.GetColumnByteOffsets();
+        var dstOffsets = destChunk.GetColumnByteOffsets();
+        var size = entry.ByteSize;
+
+        ref var src = ref Unsafe.Add(ref srcData, srcOffsets[entry.SourceColumnIndex] + sourceRow * size);
+        ref var dst = ref Unsafe.Add(ref dstData, dstOffsets[entry.DestinationColumnIndex] + destRow * size);
+
+        CopySmall(ref dst, ref src, size);
+    }
+
+    /// <summary>
+    /// Copies a small number of bytes using the fastest available method.
+    /// Avoids Unsafe.CopyBlockUnaligned for tiny sizes; uses direct typed reads/writes.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void CopySmall(ref byte dst, ref byte src, int size)
+    {
+        switch (size)
         {
+            case 1:
+                dst = src;
+                return;
             case 4:
-                *(int*)destPtr = *(int*)sourcePtr;
-                break;
+                Unsafe.WriteUnaligned(ref dst, Unsafe.ReadUnaligned<int>(ref src));
+                return;
             case 8:
-                *(long*)destPtr = *(long*)sourcePtr;
-                break;
+                Unsafe.WriteUnaligned(ref dst, Unsafe.ReadUnaligned<long>(ref src));
+                return;
             case 12:
-                *(long*)destPtr = *(long*)sourcePtr;
-                *(int*)(destPtr + 8) = *(int*)(sourcePtr + 8);
-                break;
+                Unsafe.WriteUnaligned(ref dst, Unsafe.ReadUnaligned<long>(ref src));
+                Unsafe.WriteUnaligned(ref Unsafe.Add(ref dst, 8), Unsafe.ReadUnaligned<int>(ref Unsafe.Add(ref src, 8)));
+                return;
             case 16:
-                *(long*)destPtr = *(long*)sourcePtr;
-                *(long*)(destPtr + 8) = *(long*)(sourcePtr + 8);
-                break;
+                Unsafe.WriteUnaligned(ref dst, Unsafe.ReadUnaligned<long>(ref src));
+                Unsafe.WriteUnaligned(ref Unsafe.Add(ref dst, 8), Unsafe.ReadUnaligned<long>(ref Unsafe.Add(ref src, 8)));
+                return;
             default:
-                Unsafe.CopyBlockUnaligned(destPtr, sourcePtr, (uint)entry.ByteSize);
-                break;
+                Unsafe.CopyBlockUnaligned(ref dst, ref src, (uint)size);
+                return;
         }
     }
 }

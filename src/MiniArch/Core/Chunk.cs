@@ -20,6 +20,16 @@ public sealed class Chunk
     private readonly Type[] _componentTypes;
     private int[] _columnByteOffsets;
     private readonly int[] _elementSizes;
+
+    internal byte[] GetDataArray() => _data;
+    internal int[] GetColumnByteOffsets() => _columnByteOffsets;
+    internal int GetColumnByteOffset(int columnIndex) => _columnByteOffsets[columnIndex];
+
+    /// <summary>Back-reference to owning archetype. Set by Archetype.CreateChunk().</summary>
+    internal Archetype Archetype { get; set; } = null!;
+
+    /// <summary>Index in owning archetype's _chunks list. Set on add.</summary>
+    internal int ChunkIndex { get; set; } = -1;
     private readonly int[] _componentIdToColumnIndex;
     private readonly int _maxCapacity;
 
@@ -445,7 +455,24 @@ public sealed class Chunk
             var size = sizes[index];
             ref var sourceRef = ref Unsafe.Add(ref dataRef, offsets[index] + last * size);
             ref var destRef = ref Unsafe.Add(ref dataRef, offsets[index] + row * size);
-            Unsafe.CopyBlockUnaligned(ref destRef, ref sourceRef, (uint)size);
+            // Use inline switch for small copies instead of CopyBlockUnaligned
+            switch (size)
+            {
+                case 1: destRef = sourceRef; break;
+                case 4: Unsafe.WriteUnaligned(ref destRef, Unsafe.ReadUnaligned<int>(ref sourceRef)); break;
+                case 8: Unsafe.WriteUnaligned(ref destRef, Unsafe.ReadUnaligned<long>(ref sourceRef)); break;
+                case 12:
+                    Unsafe.WriteUnaligned(ref destRef, Unsafe.ReadUnaligned<long>(ref sourceRef));
+                    Unsafe.WriteUnaligned(ref Unsafe.Add(ref destRef, 8), Unsafe.ReadUnaligned<int>(ref Unsafe.Add(ref sourceRef, 8)));
+                    break;
+                case 16:
+                    Unsafe.WriteUnaligned(ref destRef, Unsafe.ReadUnaligned<long>(ref sourceRef));
+                    Unsafe.WriteUnaligned(ref Unsafe.Add(ref destRef, 8), Unsafe.ReadUnaligned<long>(ref Unsafe.Add(ref sourceRef, 8)));
+                    break;
+                default:
+                    Unsafe.CopyBlockUnaligned(ref destRef, ref sourceRef, (uint)size);
+                    break;
+            }
         }
     }
 

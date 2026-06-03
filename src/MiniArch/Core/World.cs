@@ -915,6 +915,53 @@ public sealed class World : IDisposable
     }
 
     /// <summary>
+    /// Adds a component at a known chunk/row location, skipping the entity→location lookup.
+    /// Use when the caller already knows the chunk and row (e.g., during query iteration),
+    /// saving ~20ns of GetRequiredLocation overhead.
+    /// </summary>
+    public void AddAt<T>(Chunk chunk, int row, Entity entity, T component)
+    {
+        ThrowIfDisposed();
+        var componentType = GetComponentType<T>();
+        var archetype = chunk.Archetype;
+
+        if (archetype.TryGetComponentIndex(componentType, out var componentIndex))
+        {
+            chunk.SetComponentAtTyped(componentIndex, row, in component);
+            return;
+        }
+
+        var plan = GetOrCreateAddDestinationPlan(archetype, componentType);
+        var sourceInfo = new EntityLocation(archetype, chunk.ChunkIndex, row);
+        MoveEntityWithPlan(entity, sourceInfo, plan, componentType, in component);
+    }
+
+    /// <summary>
+    /// Removes a component at a known chunk/row location, skipping the entity→location lookup.
+    /// </summary>
+    public void RemoveAt<T>(Chunk chunk, int row, Entity entity)
+    {
+        ThrowIfDisposed();
+        var componentType = GetComponentType<T>();
+        var archetype = chunk.Archetype;
+
+        if (!archetype.TryGetComponentIndex(componentType, out _))
+            return;
+
+        var sourceInfo = new EntityLocation(archetype, chunk.ChunkIndex, row);
+
+        if (archetype.Edges.TryGetRemove(componentType, out var cached) && cached is not null)
+        {
+            MoveEntity(entity, sourceInfo, cached);
+            return;
+        }
+
+        var destinationSignature = archetype.Signature.Remove(componentType);
+        var plan = GetOrCreateDestinationArchetype(archetype, componentType, destinationSignature, isAdd: false);
+        MoveEntity(entity, sourceInfo, plan);
+    }
+
+    /// <summary>
     /// Adds the same component value to multiple entities in batch.
     /// Uses cached migration plans: if consecutive entities share the same source archetype,
     /// the plan lookup is reused. This is a simple optimization over calling Add() in a loop.
