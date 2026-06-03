@@ -1119,6 +1119,20 @@ public sealed class World : IDisposable
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void MoveEntityCoreWithPlan(
+        Entity entity,
+        EntityLocation sourceInfo,
+        MigrationPlan plan,
+        out Chunk destinationChunk,
+        out int destinationChunkIndex,
+        out int destinationRowIndex)
+    {
+        var sourceChunk = sourceInfo.Archetype.GetChunk(sourceInfo.ChunkIndex);
+        destinationChunk = plan.Destination.ReserveEntity(entity, out destinationChunkIndex, out destinationRowIndex);
+        plan.CopySharedData(sourceChunk, sourceInfo.RowIndex, destinationChunk, destinationRowIndex);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void FinishMoveEntity(
         Entity entity,
         EntityLocation sourceInfo,
@@ -1142,11 +1156,24 @@ public sealed class World : IDisposable
         FinishMoveEntity(entity, sourceInfo, destination, chunkIdx, rowIdx);
     }
 
+    private void MoveEntity(Entity entity, EntityLocation sourceInfo, MigrationPlan plan)
+    {
+        MoveEntityCoreWithPlan(entity, sourceInfo, plan, out _, out var chunkIdx, out var rowIdx);
+        FinishMoveEntity(entity, sourceInfo, plan.Destination, chunkIdx, rowIdx);
+    }
+
     private void MoveEntity<T>(Entity entity, EntityLocation sourceInfo, Archetype destination, ComponentType componentType, in T componentValue)
     {
         MoveEntityCore(entity, sourceInfo, destination, out var destChunk, out var chunkIdx, out var rowIdx);
         destChunk.SetComponentAtTyped(destination.GetComponentIndex(componentType), rowIdx, in componentValue);
         FinishMoveEntity(entity, sourceInfo, destination, chunkIdx, rowIdx);
+    }
+
+    private void MoveEntityWithPlan<T>(Entity entity, EntityLocation sourceInfo, MigrationPlan plan, in T componentValue)
+    {
+        MoveEntityCoreWithPlan(entity, sourceInfo, plan, out var destChunk, out var chunkIdx, out var rowIdx);
+        destChunk.SetComponentAtTyped(plan.AddedComponentColumnIndex!.Value, rowIdx, in componentValue);
+        FinishMoveEntity(entity, sourceInfo, plan.Destination, chunkIdx, rowIdx);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1161,8 +1188,8 @@ public sealed class World : IDisposable
             return;
         }
 
-        var destination = GetOrCreateAddDestinationArchetype(archetype, componentType);
-        MoveEntity(entity, info, destination, componentType, in component);
+        var plan = GetOrCreateAddDestinationPlan(archetype, componentType);
+        MoveEntityWithPlan(entity, info, plan, in component);
     }
 
     internal unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, Type runtimeType, byte[] data, int offset, ComponentWriterCache.ColumnWriterDelegate? columnWriter)
@@ -1216,7 +1243,7 @@ public sealed class World : IDisposable
         FinishMoveEntity(entity, sourceInfo, destination, chunkIdx, rowIdx);
     }
 
-    private Archetype GetOrCreateAddDestinationArchetype(Archetype source, ComponentType componentType)
+    private MigrationPlan GetOrCreateAddDestinationPlan(Archetype source, ComponentType componentType)
     {
         if (source.Edges.TryGetAdd(componentType, out var cached) && cached is not null)
         {
@@ -1227,21 +1254,26 @@ public sealed class World : IDisposable
         return GetOrCreateDestinationArchetype(source, componentType, destinationSignature, isAdd: true);
     }
 
-    private Archetype GetOrCreateDestinationArchetype(Archetype source, ComponentType componentType, Signature destinationSignature, bool isAdd)
+    private Archetype GetOrCreateAddDestinationArchetype(Archetype source, ComponentType componentType)
+    {
+        return GetOrCreateAddDestinationPlan(source, componentType).Destination;
+    }
+
+    private MigrationPlan GetOrCreateDestinationArchetype(Archetype source, ComponentType componentType, Signature destinationSignature, bool isAdd)
     {
         var destination = GetOrCreateArchetype(destinationSignature);
         if (isAdd)
         {
-            source.Edges.CacheAdd(componentType, destination);
-            destination.Edges.CacheRemove(componentType, source);
-        }
-        else
-        {
-            source.Edges.CacheRemove(componentType, destination);
-            destination.Edges.CacheAdd(componentType, source);
+            var plan = MigrationPlan.Build(source, destination, componentType, isAdd: true);
+            source.Edges.CacheAdd(componentType, plan);
+            destination.Edges.CacheRemove(componentType, MigrationPlan.Build(destination, source, componentType, isAdd: false));
+            return plan;
         }
 
-        return destination;
+        var removePlan = MigrationPlan.Build(source, destination, componentType, isAdd: false);
+        source.Edges.CacheRemove(componentType, removePlan);
+        destination.Edges.CacheAdd(componentType, MigrationPlan.Build(destination, source, componentType, isAdd: true));
+        return removePlan;
     }
 
     internal Archetype GetOrCreateArchetype(Signature signature)
@@ -2049,8 +2081,8 @@ public sealed class World : IDisposable
         }
 
         var destinationSignature = archetype.Signature.Remove(componentType);
-        var destination = GetOrCreateDestinationArchetype(archetype, componentType, destinationSignature, isAdd: false);
-        MoveEntity(entity, info, destination);
+        var plan = GetOrCreateDestinationArchetype(archetype, componentType, destinationSignature, isAdd: false);
+        MoveEntity(entity, info, plan);
     }
 
     private void EnsureDestroyScratchCapacity(int entityCount)

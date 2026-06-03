@@ -20,6 +20,8 @@ public sealed class Chunk
     private readonly Type[] _componentTypes;
     private int[] _columnByteOffsets;
     private readonly int[] _elementSizes;
+    internal byte[] GetDataArray() => _data;
+    internal int[] GetColumnByteOffsets() => _columnByteOffsets;
     private readonly int[] _componentIdToColumnIndex;
     private readonly int _maxCapacity;
 
@@ -445,7 +447,7 @@ public sealed class Chunk
             var size = sizes[index];
             ref var sourceRef = ref Unsafe.Add(ref dataRef, offsets[index] + last * size);
             ref var destRef = ref Unsafe.Add(ref dataRef, offsets[index] + row * size);
-            Unsafe.CopyBlockUnaligned(ref destRef, ref sourceRef, (uint)size);
+            CopySmall(ref destRef, ref sourceRef, size);
         }
     }
 
@@ -479,9 +481,39 @@ public sealed class Chunk
         }
 #endif
 
-        ref var sourceRef = ref source._data[source.GetByteOffset(sourceColumnIndex, sourceRow)];
-        ref var destinationRef = ref _data[GetByteOffset(destinationColumnIndex, destinationRow)];
-        Unsafe.CopyBlockUnaligned(ref destinationRef, ref sourceRef, (uint)size);
+        ref var sourceData = ref MemoryMarshal.GetArrayDataReference(source._data);
+        ref var destinationData = ref MemoryMarshal.GetArrayDataReference(_data);
+        ref var sourceRef = ref Unsafe.Add(ref sourceData, source._columnByteOffsets[sourceColumnIndex] + sourceRow * size);
+        ref var destinationRef = ref Unsafe.Add(ref destinationData, _columnByteOffsets[destinationColumnIndex] + destinationRow * size);
+        CopySmall(ref destinationRef, ref sourceRef, size);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void CopySmall(ref byte destination, ref byte source, int size)
+    {
+        switch (size)
+        {
+            case 1:
+                destination = source;
+                return;
+            case 4:
+                Unsafe.WriteUnaligned(ref destination, Unsafe.ReadUnaligned<int>(ref source));
+                return;
+            case 8:
+                Unsafe.WriteUnaligned(ref destination, Unsafe.ReadUnaligned<long>(ref source));
+                return;
+            case 12:
+                Unsafe.WriteUnaligned(ref destination, Unsafe.ReadUnaligned<long>(ref source));
+                Unsafe.WriteUnaligned(ref Unsafe.Add(ref destination, 8), Unsafe.ReadUnaligned<int>(ref Unsafe.Add(ref source, 8)));
+                return;
+            case 16:
+                Unsafe.WriteUnaligned(ref destination, Unsafe.ReadUnaligned<long>(ref source));
+                Unsafe.WriteUnaligned(ref Unsafe.Add(ref destination, 8), Unsafe.ReadUnaligned<long>(ref Unsafe.Add(ref source, 8)));
+                return;
+            default:
+                Unsafe.CopyBlockUnaligned(ref destination, ref source, (uint)size);
+                return;
+        }
     }
 
     private unsafe void CopyColumnFrom(Chunk source, int columnIndex, int count)

@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-06-01
+updated: 2026-06-03
 ---
 # MiniArch Core ECS
 
@@ -26,7 +26,8 @@ updated: 2026-06-01
   - `QueryComponentSet.cs`：排序组件集合（仅 `CreateFrom` 批量入口）
   - `QueryDescription.cs`：可跨 world 复用的 query 描述，保存 world-agnostic 的 `Type` 集合
   - `Query.cs` / `QueryIterators.cs`：archetype 过滤和 chunk 遍历
-  - `ArchetypeEdges.cs`：增删组件迁移缓存（componentId 直索引稀疏数组）
+  - `ArchetypeEdges.cs`：增删组件迁移计划缓存（componentId 直索引稀疏数组）
+  - `MigrationPlan.cs`：缓存 archetype 迁移的目标 archetype、共享组件列映射和 Add 新组件列索引
   - `ComponentColumnMap.cs`：`component id -> column index` 映射的共享 helper
   - `ComponentRegistry.cs`：全局 `Type ↔ ComponentType` 双向映射（copy-on-write）
   - `ComponentType.cs`：`int` wrapper
@@ -39,7 +40,7 @@ updated: 2026-06-01
   - `World.Create<T...>` 当前为 `1..16` 个组件提供固定重载；warmed 路径缓存在泛型 static cache（`CreateArchetypeCache<T...>`），O(1) 无分配
   - `World.EnsureCapacity` 负责提前扩好 entity metadata 存储
   - `World.CreateMany` 先批量准备 entity id，再用 chunk-batched reservation 一次性落入空签名 archetype
-  - `Add/Remove` 先算目标签名，再复用 edge cache
+  - `Add/Remove` 先算目标签名，再复用 edge-cached `MigrationPlan` 搬迁共享组件
   - `Set` 在组件已存在时直接定位到 typed column 的 row，原地写回，不触发迁移
   - `Destroy` 走 leaf-entity 快速路径：无 children 时跳过 `CollectDestroySubtree`
   - `Clone` 执行 deep clone：先 `CloneSingle` 复制 root 实体（同 archetype memcpy），有 children 时 DFS 遍历 subtree
@@ -63,6 +64,7 @@ updated: 2026-06-01
 - Query snapshot 已内联在 `Query` 上（`_snapshotArchetypes`、`_snapshotChunks`、`_snapshotGeneration`），`MatchingSnapshot` class 已消除
 - 热路径安全检查（bounds check、capacity check 等）包裹 `#if DEBUG`，Release 下零开销
 - `[SkipLocalsInit]` + `AggressiveInlining` + `Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), offset)` 消除 JIT 边界检查
+- 高频结构迁移缓存 `MigrationPlan`，避免每次 Add/Remove 都重新匹配共享组件列；小组件搬迁用 1/4/8/12/16-byte 专门 copy 分支
 - Entity version 和 location 分开存储：`_versions[]` 管版本校验，`_locations[]` 只保留位置，避免热路径重复写 version
 - flat byte chunk 只面向 unmanaged 组件；含托管引用组件在 chunk 构造时 fail fast
 
@@ -83,7 +85,7 @@ updated: 2026-06-01
 - Archetype 不能只复用最后一个 chunk——non-full chunk 栈防止 `Remove` 分配被放大
 - `Create<T...>` 如果复用 `Add` 迁移路径，会留下中间态 archetype
 - `CreateMany` 不能退化成外部循环调 `Create`
-- Edge cache 用 `Archetype?[]` 按 componentId 直索引，当组件 ID 稀疏时数组可能膨胀
+- Edge cache 用 `MigrationPlan?[]` 按 componentId 直索引，当组件 ID 稀疏时数组可能膨胀
 - `Set` 和 `Add` 在内部调用同一个 `ApplyTypedAddOrSet`——组件不存在时 `Set` 会静默添加
 - Query 快照是非原子的（archetype 和 chunk 数组分开写入），安全性依赖"world 无并发写"前提
 - `IsAlive` 必须和 `TryGetLocation` 共用同一条 version/location 校验链，不能有独立状态

@@ -203,6 +203,9 @@ public sealed class Archetype
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal int GetComponentIndexFast(ComponentType component) => _componentIdToColumnIndex[component.Value];
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal int GetElementSize(int columnIndex) => ComponentSizeCache.GetSize(_componentTypes[columnIndex]);
+
 
     private Chunk CreateChunk()
     {
