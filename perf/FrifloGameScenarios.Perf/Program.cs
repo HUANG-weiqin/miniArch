@@ -253,21 +253,21 @@ public sealed class FrifloTeamAlternation : IGameScenario
 }
 
 // ============================================================================
-// S10: MixedLoad — create + modify + destroy combined
+// S10: MixedLoad — create + query + destroy combined
 // ============================================================================
 public sealed class MiniMixedLoad : IGameScenario
 {
-    readonly World _w; readonly List<MiniEntity> _a=new(); readonly MiniQuery _hq,_pq; readonly Random _r=new(42); int _n=15000;
-    public MiniMixedLoad(){_w=new World(128,20000);for(int i=0;i<15000;i++)_a.Add(_w.Create(new Position(i,i),new Health(100),new Damage(5),new Team(i%4)));_hq=MiniQuery.Create(_w,new QueryDescription().With<Health>().With<Team>());_pq=MiniQuery.Create(_w,new QueryDescription().With<Position>());}
+    readonly World _w; readonly Queue<MiniEntity> _q=new(); readonly MiniQuery _hq,_pq; readonly Random _r=new(42); int _n=15000;
+    public MiniMixedLoad(){_w=new World(128,20000);for(int i=0;i<15000;i++)_q.Enqueue(_w.Create(new Position(i,i),new Health(100),new Damage(5),new Team(i%4)));_hq=MiniQuery.Create(_w,new QueryDescription().With<Health>().With<Team>());_pq=MiniQuery.Create(_w,new QueryDescription().With<Position>());}
     public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
-    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;for(int i=0;i<200;i++){var e=_w.Create(new Position(_n,_n),new Health(50+_r.Next(50)),new Damage(3+_r.Next(7)),new Team(_r.Next(4)));_a.Add(e);_n++;s+=e.Id;}int mc=Math.Min(5000,_a.Count);for(int i=0;i<mc;i++)s+=_a[_r.Next(_a.Count)].Id;foreach(var c in _hq.ChunksOf<Health,Team>()){var sh=c.Span0;var st=c.Span1;for(int i=0;i<c.Count;i++)s+=sh[i].Value+st[i].Value;}foreach(var c in _pq.ChunksOf<Position>()){var sp=c.Span0;for(int i=0;i<c.Count;i++)s+=sp[i].X;}int dc=Math.Min(200,_a.Count-10000);for(int i=0;i<dc&&_a.Count>0;i++){var e=_a[0];_a.RemoveAt(0);_w.Destroy(e);s+=e.Id;}return s;}
+    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;for(int i=0;i<200;i++){var e=_w.Create(new Position(_n,_n),new Health(50+_r.Next(50)),new Damage(3+_r.Next(7)),new Team(_r.Next(4)));_q.Enqueue(e);_n++;s+=e.Id;}foreach(var c in _hq.ChunksOf<Health,Team>()){var sh=c.Span0;var st=c.Span1;for(int i=0;i<c.Count;i++)s+=sh[i].Value+st[i].Value;}foreach(var c in _pq.ChunksOf<Position>()){var sp=c.Span0;for(int i=0;i<c.Count;i++)s+=sp[i].X;}int dc=Math.Min(200,_q.Count-10000);for(int i=0;i<dc&&_q.Count>0;i++){var e=_q.Dequeue();_w.Destroy(e);s+=e.Id;}return s;}
 }
 public sealed class FrifloMixedLoad : IGameScenario
 {
-    readonly EntityStore _s; readonly List<FrifloEntity> _a=new(); readonly ArchetypeQuery<Health,Team> _hq; readonly ArchetypeQuery<Position> _pq; readonly Random _r=new(42); int _n=15000;
-    public FrifloMixedLoad(){_s=new EntityStore();for(int i=0;i<15000;i++)_a.Add(_s.CreateEntity(new Position(i,i),new Health(100),new Damage(5),new Team(i%4)));_hq=_s.Query<Health,Team>();_pq=_s.Query<Position>();}
+    readonly EntityStore _s; readonly Queue<FrifloEntity> _q=new(); readonly ArchetypeQuery<Health,Team> _hq; readonly ArchetypeQuery<Position> _pq; readonly Random _r=new(42); int _n=15000;
+    public FrifloMixedLoad(){_s=new EntityStore();for(int i=0;i<15000;i++)_q.Enqueue(_s.CreateEntity(new Position(i,i),new Health(100),new Damage(5),new Team(i%4)));_hq=_s.Query<Health,Team>();_pq=_s.Query<Position>();}
     public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
-    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;for(int i=0;i<200;i++){var e=_s.CreateEntity(new Position(_n,_n),new Health(50+_r.Next(50)),new Damage(3+_r.Next(7)),new Team(_r.Next(4)));_a.Add(e);_n++;s+=e.Id;}int mc=Math.Min(5000,_a.Count);for(int i=0;i<mc;i++)s+=_a[_r.Next(_a.Count)].Id;foreach(var(h,t,e)in _hq.Chunks){var sh=h.Span;var st=t.Span;for(int n=0;n<e.Length;n++)s+=sh[n].Value+st[n].Value;}foreach(var(p,e)in _pq.Chunks){var sp=p.Span;for(int n=0;n<e.Length;n++)s+=sp[n].X;}int dc=Math.Min(200,_a.Count-10000);for(int i=0;i<dc&&_a.Count>0;i++){var e=_a[0];_a.RemoveAt(0);e.DeleteEntity();s+=e.Id;}return s;}
+    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;for(int i=0;i<200;i++){var e=_s.CreateEntity(new Position(_n,_n),new Health(50+_r.Next(50)),new Damage(3+_r.Next(7)),new Team(_r.Next(4)));_q.Enqueue(e);_n++;s+=e.Id;}foreach(var(h,t,e)in _hq.Chunks){var sh=h.Span;var st=t.Span;for(int n=0;n<e.Length;n++)s+=sh[n].Value+st[n].Value;}foreach(var(p,e)in _pq.Chunks){var sp=p.Span;for(int n=0;n<e.Length;n++)s+=sp[n].X;}int dc=Math.Min(200,_q.Count-10000);for(int i=0;i<dc&&_q.Count>0;i++){var e=_q.Dequeue();e.DeleteEntity();s+=e.Id;}return s;}
 }
 
 // ============================================================================

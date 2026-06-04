@@ -127,19 +127,18 @@ public sealed class ArchTeamAlternation : IGameScenario
 }
 
 // ============================================================================
-// S10: MixedLoad — create + modify + destroy combined
+// S10: MixedLoad — create + query + destroy combined
 // ============================================================================
 public sealed class ArchMixedLoad : IGameScenario
 {
-    readonly World _w; readonly List<Entity> _a=new(); readonly QueryDescription _hDesc,_pDesc; readonly Random _r=new(42); int _n=15000;
-    public ArchMixedLoad() { _w=World.Create(); for(int i=0;i<15000;i++)_a.Add(_w.Create<Position,Health,Damage,Team>(new Position(i,i),new Health(100),new Damage(5),new Team(i%4))); _hDesc=new QueryDescription().WithAll<Health,Team>(); _pDesc=new QueryDescription().WithAll<Position>(); }
+    readonly World _w; readonly Queue<Entity> _q=new(); readonly QueryDescription _hDesc,_pDesc; readonly Random _r=new(42); int _n=15000;
+    public ArchMixedLoad() { _w=World.Create(); for(int i=0;i<15000;i++)_q.Enqueue(_w.Create<Position,Health,Damage,Team>(new Position(i,i),new Health(100),new Damage(5),new Team(i%4))); _hDesc=new QueryDescription().WithAll<Health,Team>(); _pDesc=new QueryDescription().WithAll<Position>(); }
     public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();} public void Dispose()=>_w.Dispose();
     [MethodImpl(MethodImplOptions.NoInlining)] public long RunIteration(){long s=0;
-        for(int i=0;i<200;i++){var e=_w.Create<Position,Health,Damage,Team>(new Position(_n,_n),new Health(50+_r.Next(50)),new Damage(3+_r.Next(7)),new Team(_r.Next(4)));_a.Add(e);_n++;s+=e.Id;}
-        int mc=Math.Min(5000,_a.Count); for(int i=0;i<mc;i++)s+=_a[_r.Next(_a.Count)].Id;
+        for(int i=0;i<200;i++){var e=_w.Create<Position,Health,Damage,Team>(new Position(_n,_n),new Health(50+_r.Next(50)),new Damage(3+_r.Next(7)),new Team(_r.Next(4)));_q.Enqueue(e);_n++;s+=e.Id;}
         {var q=_w.Query(in _hDesc); foreach(var c in q){var sh=c.GetSpan<Health>();var st=c.GetSpan<Team>();for(int i=0;i<c.Count;i++)s+=sh[i].Value+st[i].Value;}}
         {var q=_w.Query(in _pDesc); foreach(var c in q){var sp=c.GetSpan<Position>();for(int i=0;i<c.Count;i++)s+=sp[i].X;}}
-        int dc=Math.Min(200,_a.Count-10000); for(int i=0;i<dc&&_a.Count>0;i++){var e=_a[0];_a.RemoveAt(0);_w.Destroy(e);s+=e.Id;} return s;}
+        int dc=Math.Min(200,_q.Count-10000); for(int i=0;i<dc&&_q.Count>0;i++){var e=_q.Dequeue();_w.Destroy(e);s+=e.Id;} return s;}
 }
 
 // ============================================================================
