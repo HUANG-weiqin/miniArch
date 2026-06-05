@@ -2085,7 +2085,6 @@ public sealed class World : IDisposable
         Entity entity,
         Archetype archetype,
         ReadOnlySpan<CommandBuffer.CreatedComponent> components,
-        ReadOnlySpan<ComponentWriterCache.ColumnWriterDelegate> writers,
         List<byte[]> slabs)
     {
         var chunk = archetype.ReserveEntity(entity, out var chunkIndex, out var rowIndex);
@@ -2097,11 +2096,10 @@ public sealed class World : IDisposable
         for (var index = 0; index < components.Length; index++)
         {
             ref readonly var cc = ref components[index];
-            var writer = writers[index];
             var data = slabs[cc.SlabIndex];
             fixed (byte* ptr = data)
             {
-                WriteComponentFromBytes(chunk, cc.ComponentType, rowIndex, ptr + cc.DataOffset, writer);
+                WriteComponentFromBytes(chunk, cc.ComponentType, rowIndex, ptr + cc.DataOffset, cc.Writer!);
             }
         }
     }
