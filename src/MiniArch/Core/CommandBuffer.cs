@@ -40,6 +40,10 @@ public sealed class CommandBuffer : ICommandRecorder
     [ThreadStatic] private static ComponentType[]? _tsExtractTypes;
     [ThreadStatic] private static CreatedComponent[]? _tsExtractSources;
     [ThreadStatic] private static RawComponentValue[]? _tsRawComponents;
+    // Last-archetype cache: avoids repeated Dictionary lookups for same component set
+    private Archetype? _cachedArchetype;
+    private int _cachedArchetypeCount;
+    private int _cachedArchetypeHash;
 
 #if PERF_DIAG
     private long _diagCreatedTicks;
@@ -55,15 +59,17 @@ public sealed class CommandBuffer : ICommandRecorder
     private int _diagHierarchyCount;
     private int _diagDestroyCount;
     private int _diagSortCount;
+    private long _diagArchetypeLookupTicks;
     [ThreadStatic] private static long _diagSortTicksStatic;
     [ThreadStatic] private static int _diagSortCountStatic;
+    [ThreadStatic] private static long _diagArchetypeLookupTicksStatic;
 
     public (long CreatedTicks, long BuildTicks, long MaterializeTicks,
-        long OpsTicks, long HierarchyTicks, long DestroyTicks, long ClearTicks, long SortTicks,
+        long OpsTicks, long HierarchyTicks, long DestroyTicks, long ClearTicks, long SortTicks, long ArchetypeLookupTicks,
         int CreatedCount, int OpsCount, int HierarchyCount, int DestroyCount, int SortCount) GetPhaseMetrics()
     {
         return (_diagCreatedTicks, _diagBuildTicks, _diagMaterializeTicks,
-            _diagOpsTicks, _diagHierarchyTicks, _diagDestroyTicks, _diagClearTicks, _diagSortTicks,
+            _diagOpsTicks, _diagHierarchyTicks, _diagDestroyTicks, _diagClearTicks, _diagSortTicks, _diagArchetypeLookupTicks,
             _diagCreatedCount, _diagOpsCount, _diagHierarchyCount, _diagDestroyCount, _diagSortCount);
     }
 
@@ -71,8 +77,18 @@ public sealed class CommandBuffer : ICommandRecorder
     {
         _diagSortTicks += _diagSortTicksStatic;
         _diagSortCount += _diagSortCountStatic;
+        _diagArchetypeLookupTicks += _diagArchetypeLookupTicksStatic;
         _diagSortTicksStatic = 0;
         _diagSortCountStatic = 0;
+        _diagArchetypeLookupTicksStatic = 0;
+    }
+
+    internal void ResetDiag()
+    {
+        _diagCreatedTicks = _diagBuildTicks = _diagMaterializeTicks = _diagOpsTicks =
+        _diagHierarchyTicks = _diagDestroyTicks = _diagClearTicks = _diagSortTicks =
+        _diagArchetypeLookupTicks = 0;
+        _diagCreatedCount = _diagOpsCount = _diagHierarchyCount = _diagDestroyCount = _diagSortCount = 0;
     }
 #endif
 
@@ -1109,8 +1125,40 @@ public sealed class CommandBuffer : ICommandRecorder
         _diagSortCountStatic++;
 #endif
 
-        var key = new World.CreateArchetypeKey(types.AsSpan(0, count));
-        var archetype = _world.GetOrCreateArchetype(key);
+        // Archetype lookup with last-value cache
+        Archetype archetype;
+        if (idx == _cachedArchetypeCount)
+        {
+            // Same component count → compute hash to check cache
+            var typeHash = idx;
+            for (var h = 0; h < idx; h++)
+                typeHash = unchecked((typeHash * 31) + types[h].Value);
+            if (typeHash == _cachedArchetypeHash)
+            {
+                archetype = _cachedArchetype!;
+                goto ArchetypeResolved;
+            }
+        }
+
+        // Cache miss → full Dictionary lookup
+        {
+            var key = new World.CreateArchetypeKey(types.AsSpan(0, idx));
+#if PERF_DIAG
+            var archSw = System.Diagnostics.Stopwatch.StartNew();
+#endif
+            archetype = _world.GetOrCreateArchetype(key);
+#if PERF_DIAG
+            _diagArchetypeLookupTicksStatic += archSw.ElapsedTicks;
+#endif
+            _cachedArchetype = archetype;
+            _cachedArchetypeCount = idx;
+            // Compute hash for cache
+            var cacheHash = idx;
+            for (var h = 0; h < idx; h++)
+                cacheHash = unchecked((cacheHash * 31) + types[h].Value);
+            _cachedArchetypeHash = cacheHash;
+        }
+    ArchetypeResolved:
 
         var rawComponents = _tsRawComponents;
         if (rawComponents == null || rawComponents.Length < count)
