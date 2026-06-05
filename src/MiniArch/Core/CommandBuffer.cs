@@ -40,6 +40,7 @@ public sealed class CommandBuffer : ICommandRecorder
     [ThreadStatic] private static ComponentType[]? _tsExtractTypes;
     [ThreadStatic] private static CreatedComponent[]? _tsExtractSources;
     [ThreadStatic] private static RawComponentValue[]? _tsRawComponents;
+    [ThreadStatic] private static ComponentWriterCache.ColumnWriterDelegate[]? _tsWriters;
     // Last-archetype cache: avoids repeated Dictionary lookups for same component set
     private Archetype? _cachedArchetype;
     private int _cachedArchetypeCount;
@@ -597,19 +598,15 @@ public sealed class CommandBuffer : ICommandRecorder
 #if PERF_DIAG
                 _diagSubSw.Restart();
 #endif
-                var (archetype, components, count) = BuildCreatedEntityComponents(in state);
+                var (archetype, count) = BuildCreatedEntityComponents(in state, out var sources, out var writers);
 #if PERF_DIAG
                 _diagBuildTicksLocal += _diagSubSw.ElapsedTicks;
                 _diagSubSw.Restart();
 #endif
-                try
-                {
-                    _world.MaterializeReservedEntityDirect(entity, archetype, components.AsSpan(0, count));
-                }
-                finally
-                {
-                    // ThreadStatic buffer: no need to return to pool
-                }
+                _world.MaterializeReservedEntityFast(entity, archetype,
+                    new ReadOnlySpan<CreatedComponent>(sources, 0, count),
+                    new ReadOnlySpan<ComponentWriterCache.ColumnWriterDelegate>(writers, 0, count),
+                    _slabs);
 #if PERF_DIAG
                 _diagMaterializeTicksLocal += _diagSubSw.ElapsedTicks;
 #endif
@@ -1088,13 +1085,13 @@ public sealed class CommandBuffer : ICommandRecorder
         }
     }
 
-    private (Archetype Archetype, RawComponentValue[] Components, int Count) BuildCreatedEntityComponents(in CreatedState state)
+    private (Archetype Archetype, int Count) BuildCreatedEntityComponents(in CreatedState state, out CreatedComponent[] sources, out ComponentWriterCache.ColumnWriterDelegate[] writers)
     {
         var count = state.Map.Count + state.Map.OverflowCount;
 
-        // ThreadStatic buffers to avoid per-entity ArrayPool rent/return
+        // ThreadStatic buffers
         var types = _tsExtractTypes;
-        var sources = _tsExtractSources;
+        sources = _tsExtractSources;
         if (types == null || types.Length < count)
         {
             types = new ComponentType[Math.Max(count, 16)];
@@ -1129,7 +1126,6 @@ public sealed class CommandBuffer : ICommandRecorder
         Archetype archetype;
         if (idx == _cachedArchetypeCount)
         {
-            // Same component count → compute hash to check cache
             var typeHash = idx;
             for (var h = 0; h < idx; h++)
                 typeHash = unchecked((typeHash * 31) + types[h].Value);
@@ -1140,7 +1136,6 @@ public sealed class CommandBuffer : ICommandRecorder
             }
         }
 
-        // Cache miss → full Dictionary lookup
         {
             var key = new World.CreateArchetypeKey(types.AsSpan(0, idx));
 #if PERF_DIAG
@@ -1152,7 +1147,6 @@ public sealed class CommandBuffer : ICommandRecorder
 #endif
             _cachedArchetype = archetype;
             _cachedArchetypeCount = idx;
-            // Compute hash for cache
             var cacheHash = idx;
             for (var h = 0; h < idx; h++)
                 cacheHash = unchecked((cacheHash * 31) + types[h].Value);
@@ -1160,19 +1154,20 @@ public sealed class CommandBuffer : ICommandRecorder
         }
     ArchetypeResolved:
 
-        var rawComponents = _tsRawComponents;
-        if (rawComponents == null || rawComponents.Length < count)
+        // Build writers array from type cache (avoids ComponentWriterCache lookup in World)
+        writers = _tsWriters;
+        if (writers == null || writers.Length < count)
         {
-            rawComponents = new RawComponentValue[Math.Max(count, 16)];
-            _tsRawComponents = rawComponents;
+            writers = new ComponentWriterCache.ColumnWriterDelegate[Math.Max(count, 16)];
+            _tsWriters = writers;
+        }
+        for (var i = 0; i < idx; i++)
+        {
+            var typeId = sources[i].ComponentType.Value;
+            writers[i] = _typeInfoCache[typeId].Writer;
         }
 
-        for (var i = 0; i < count; i++)
-        {
-            var sc = sources[i];
-            rawComponents[i] = new RawComponentValue(sc.ComponentType.Value, sc.RuntimeType, sc.ComponentType, _slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
-        }
-        return (archetype, rawComponents, count);
+        return (archetype, idx);
     }
 
     private (Signature Signature, RawComponentValue[] Components) BuildCreatedEntityComponentsForDelta(in CreatedState state)
@@ -1557,7 +1552,7 @@ public sealed class CommandBuffer : ICommandRecorder
         public bool Destroyed;
     }
 
-    private readonly record struct CreatedComponent(Type RuntimeType, ComponentType ComponentType, int SlabIndex, int DataOffset, int DataSize);
+    internal readonly record struct CreatedComponent(Type RuntimeType, ComponentType ComponentType, int SlabIndex, int DataOffset, int DataSize);
 
     private sealed class FrozenBufferState
     {

@@ -2077,6 +2077,35 @@ public sealed class World : IDisposable
         }
     }
 
+    /// <summary>
+    /// Fast-path materialization for CommandBuffer: skips RawComponentValue construction
+    /// and ComponentWriterCache lookup by accepting pre-resolved writers directly.
+    /// </summary>
+    internal unsafe void MaterializeReservedEntityFast(
+        Entity entity,
+        Archetype archetype,
+        ReadOnlySpan<CommandBuffer.CreatedComponent> components,
+        ReadOnlySpan<ComponentWriterCache.ColumnWriterDelegate> writers,
+        List<byte[]> slabs)
+    {
+        var chunk = archetype.ReserveEntity(entity, out var chunkIndex, out var rowIndex);
+        ref var record = ref _records[entity.Id];
+        record.Archetype = archetype;
+        record.ChunkIndex = chunkIndex;
+        record.RowIndex = rowIndex;
+
+        for (var index = 0; index < components.Length; index++)
+        {
+            ref readonly var cc = ref components[index];
+            var writer = writers[index];
+            var data = slabs[cc.SlabIndex];
+            fixed (byte* ptr = data)
+            {
+                WriteComponentFromBytes(chunk, cc.ComponentType, rowIndex, ptr + cc.DataOffset, writer);
+            }
+        }
+    }
+
     private void MaterializeReservedEntityCore(
         Entity entity,
         Signature signature,
