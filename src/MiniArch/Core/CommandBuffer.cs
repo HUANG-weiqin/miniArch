@@ -45,53 +45,6 @@ public sealed class CommandBuffer : ICommandRecorder
     private int _cachedArchetypeHash;
     [ThreadStatic] private static ComponentType[]? _cachedArchetypeTypes;
 
-#if PERF_DIAG
-    private long _diagCreatedTicks;
-    private long _diagBuildTicks;
-    private long _diagMaterializeTicks;
-    private long _diagOpsTicks;
-    private long _diagHierarchyTicks;
-    private long _diagDestroyTicks;
-    private long _diagClearTicks;
-    private long _diagSortTicks;
-    private int _diagCreatedCount;
-    private int _diagOpsCount;
-    private int _diagHierarchyCount;
-    private int _diagDestroyCount;
-    private int _diagSortCount;
-    private long _diagArchetypeLookupTicks;
-    [ThreadStatic] private static long _diagSortTicksStatic;
-    [ThreadStatic] private static int _diagSortCountStatic;
-    [ThreadStatic] private static long _diagArchetypeLookupTicksStatic;
-
-    public (long CreatedTicks, long BuildTicks, long MaterializeTicks,
-        long OpsTicks, long HierarchyTicks, long DestroyTicks, long ClearTicks, long SortTicks, long ArchetypeLookupTicks,
-        int CreatedCount, int OpsCount, int HierarchyCount, int DestroyCount, int SortCount) GetPhaseMetrics()
-    {
-        return (_diagCreatedTicks, _diagBuildTicks, _diagMaterializeTicks,
-            _diagOpsTicks, _diagHierarchyTicks, _diagDestroyTicks, _diagClearTicks, _diagSortTicks, _diagArchetypeLookupTicks,
-            _diagCreatedCount, _diagOpsCount, _diagHierarchyCount, _diagDestroyCount, _diagSortCount);
-    }
-
-    private void AccumulateSortDiag()
-    {
-        _diagSortTicks += _diagSortTicksStatic;
-        _diagSortCount += _diagSortCountStatic;
-        _diagArchetypeLookupTicks += _diagArchetypeLookupTicksStatic;
-        _diagSortTicksStatic = 0;
-        _diagSortCountStatic = 0;
-        _diagArchetypeLookupTicksStatic = 0;
-    }
-
-    internal void ResetDiag()
-    {
-        _diagCreatedTicks = _diagBuildTicks = _diagMaterializeTicks = _diagOpsTicks =
-        _diagHierarchyTicks = _diagDestroyTicks = _diagClearTicks = _diagSortTicks =
-        _diagArchetypeLookupTicks = 0;
-        _diagCreatedCount = _diagOpsCount = _diagHierarchyCount = _diagDestroyCount = _diagSortCount = 0;
-    }
-#endif
-
 #if DEBUG
     private int _debugRecordedSetCount;
     private int _debugRecordedCreateCount;
@@ -574,12 +527,6 @@ public sealed class CommandBuffer : ICommandRecorder
             return false;
         }
 
-#if PERF_DIAG
-        var _diagSw = System.Diagnostics.Stopwatch.StartNew();
-        long _diagBuildTicksLocal = 0;
-        long _diagMaterializeTicksLocal = 0;
-        var _diagSubSw = new System.Diagnostics.Stopwatch();
-#endif
         for (var i = 0; i < _createdStatePoolCount; i++)
         {
             ref readonly var state = ref _createdStatePool[i];
@@ -594,30 +541,12 @@ public sealed class CommandBuffer : ICommandRecorder
             }
             else
             {
-#if PERF_DIAG
-                _diagSubSw.Restart();
-#endif
                 var (archetype, count) = BuildCreatedEntityComponents(in state, out var sources);
-#if PERF_DIAG
-                _diagBuildTicksLocal += _diagSubSw.ElapsedTicks;
-                _diagSubSw.Restart();
-#endif
                 _world.MaterializeReservedEntityFast(entity, archetype,
                     new ReadOnlySpan<CreatedComponent>(sources, 0, count),
                     _slabs);
-#if PERF_DIAG
-                _diagMaterializeTicksLocal += _diagSubSw.ElapsedTicks;
-#endif
             }
         }
-#if PERF_DIAG
-        _diagCreatedTicks += _diagSw.ElapsedTicks;
-        _diagBuildTicks += _diagBuildTicksLocal;
-        _diagMaterializeTicks += _diagMaterializeTicksLocal;
-        _diagCreatedCount += _createdStatePoolCount;
-        AccumulateSortDiag();
-        _diagSw.Restart();
-#endif
 
         for (var i = 0; i < _opsPoolCount; i++)
         {
@@ -632,11 +561,6 @@ public sealed class CommandBuffer : ICommandRecorder
             for (var nodeIdx = existingOps.OverflowHead; nodeIdx >= 0; nodeIdx = _opsOverflow.GetNext(nodeIdx))
                 ApplyOpDirect(_opsOverflow.GetValueReadonly(nodeIdx), entity);
         }
-#if PERF_DIAG
-        _diagOpsTicks += _diagSw.ElapsedTicks;
-        _diagOpsCount += _opsPoolCount;
-        _diagSw.Restart();
-#endif
 
         foreach (var (child, intent) in _hierarchyByChild)
         {
@@ -657,11 +581,6 @@ public sealed class CommandBuffer : ICommandRecorder
             else
                 _world.Unlink(child);
         }
-#if PERF_DIAG
-        _diagHierarchyTicks += _diagSw.ElapsedTicks;
-        _diagHierarchyCount += _hierarchyByChild.Count;
-        _diagSw.Restart();
-#endif
 
         for (var i = 0; i < _existingDestroyCount; i++)
         {
@@ -669,16 +588,8 @@ public sealed class CommandBuffer : ICommandRecorder
             if (_world.IsAlive(entity))
                 _world.Destroy(entity);
         }
-#if PERF_DIAG
-        _diagDestroyTicks += _diagSw.ElapsedTicks;
-        _diagDestroyCount += _existingDestroyCount;
-        _diagSw.Restart();
-#endif
 
         Clear();
-#if PERF_DIAG
-        _diagClearTicks += _diagSw.ElapsedTicks;
-#endif
         return true;
     }
 
@@ -977,14 +888,7 @@ public sealed class CommandBuffer : ICommandRecorder
             idx++;
         }
 
-#if PERF_DIAG
-        var sortSw = System.Diagnostics.Stopwatch.StartNew();
-#endif
         Array.Sort(types, sources, 0, idx);
-#if PERF_DIAG
-        _diagSortTicksStatic += sortSw.ElapsedTicks;
-        _diagSortCountStatic++;
-#endif
         return (types, sources, idx);
     }
 
@@ -1113,14 +1017,7 @@ public sealed class CommandBuffer : ICommandRecorder
             idx++;
         }
 
-#if PERF_DIAG
-        var sortSw = System.Diagnostics.Stopwatch.StartNew();
-#endif
         Array.Sort(types, sources, 0, idx);
-#if PERF_DIAG
-        _diagSortTicksStatic += sortSw.ElapsedTicks;
-        _diagSortCountStatic++;
-#endif
 
         // Archetype lookup with last-value cache
         Archetype archetype;
@@ -1152,13 +1049,7 @@ public sealed class CommandBuffer : ICommandRecorder
 
         {
             var key = new World.CreateArchetypeKey(types.AsSpan(0, idx));
-#if PERF_DIAG
-            var archSw = System.Diagnostics.Stopwatch.StartNew();
-#endif
             archetype = _world.GetOrCreateArchetype(key);
-#if PERF_DIAG
-            _diagArchetypeLookupTicksStatic += archSw.ElapsedTicks;
-#endif
             _cachedArchetype = archetype;
             _cachedArchetypeCount = idx;
             // Cache the component types for exact comparison on next lookup
