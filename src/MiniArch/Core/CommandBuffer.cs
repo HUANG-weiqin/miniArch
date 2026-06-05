@@ -43,6 +43,7 @@ public sealed class CommandBuffer : ICommandRecorder
     private Archetype? _cachedArchetype;
     private int _cachedArchetypeCount;
     private int _cachedArchetypeHash;
+    [ThreadStatic] private static ComponentType[]? _cachedArchetypeTypes;
 
 #if PERF_DIAG
     private long _diagCreatedTicks;
@@ -774,6 +775,8 @@ public sealed class CommandBuffer : ICommandRecorder
         _createdOverflow = default;
         _currentSlabIndex = -1;
         _currentSlabOffset = 0;
+        _cachedArchetype = null;
+        _cachedArchetypeCount = 0;
 
         return frozen;
     }
@@ -1123,13 +1126,27 @@ public sealed class CommandBuffer : ICommandRecorder
         Archetype archetype;
         if (idx == _cachedArchetypeCount)
         {
+            // Fast check: same count → compute hash
             var typeHash = idx;
             for (var h = 0; h < idx; h++)
                 typeHash = unchecked((typeHash * 31) + types[h].Value);
             if (typeHash == _cachedArchetypeHash)
             {
-                archetype = _cachedArchetype!;
-                goto ArchetypeResolved;
+                // Hash match → verify with exact component comparison
+                var cachedTypes = _cachedArchetypeTypes;
+                var match = cachedTypes != null;
+                if (match)
+                {
+                    for (var h = 0; h < idx; h++)
+                    {
+                        if (types[h].Value != cachedTypes[h].Value) { match = false; break; }
+                    }
+                }
+                if (match)
+                {
+                    archetype = _cachedArchetype!;
+                    goto ArchetypeResolved;
+                }
             }
         }
 
@@ -1144,6 +1161,15 @@ public sealed class CommandBuffer : ICommandRecorder
 #endif
             _cachedArchetype = archetype;
             _cachedArchetypeCount = idx;
+            // Cache the component types for exact comparison on next lookup
+            var cachedTypes = _cachedArchetypeTypes;
+            if (cachedTypes == null || cachedTypes.Length < idx)
+            {
+                cachedTypes = new ComponentType[Math.Max(idx, 16)];
+                _cachedArchetypeTypes = cachedTypes;
+            }
+            Array.Copy(types, cachedTypes, idx);
+            // Compute hash for quick rejection
             var cacheHash = idx;
             for (var h = 0; h < idx; h++)
                 cacheHash = unchecked((cacheHash * 31) + types[h].Value);
@@ -1312,6 +1338,8 @@ public sealed class CommandBuffer : ICommandRecorder
         _slabs.Clear();
         _currentSlabIndex = -1;
         _currentSlabOffset = 0;
+        _cachedArchetype = null;
+        _cachedArchetypeCount = 0;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
