@@ -37,6 +37,45 @@ public sealed class CommandBuffer : ICommandRecorder
     private int _currentSlabIndex = -1;
     private int _currentSlabOffset;
 
+    [ThreadStatic] private static ComponentType[]? _tsExtractTypes;
+    [ThreadStatic] private static CreatedComponent[]? _tsExtractSources;
+    [ThreadStatic] private static RawComponentValue[]? _tsRawComponents;
+
+#if PERF_DIAG
+    private long _diagCreatedTicks;
+    private long _diagBuildTicks;
+    private long _diagMaterializeTicks;
+    private long _diagOpsTicks;
+    private long _diagHierarchyTicks;
+    private long _diagDestroyTicks;
+    private long _diagClearTicks;
+    private long _diagSortTicks;
+    private int _diagCreatedCount;
+    private int _diagOpsCount;
+    private int _diagHierarchyCount;
+    private int _diagDestroyCount;
+    private int _diagSortCount;
+    [ThreadStatic] private static long _diagSortTicksStatic;
+    [ThreadStatic] private static int _diagSortCountStatic;
+
+    public (long CreatedTicks, long BuildTicks, long MaterializeTicks,
+        long OpsTicks, long HierarchyTicks, long DestroyTicks, long ClearTicks, long SortTicks,
+        int CreatedCount, int OpsCount, int HierarchyCount, int DestroyCount, int SortCount) GetPhaseMetrics()
+    {
+        return (_diagCreatedTicks, _diagBuildTicks, _diagMaterializeTicks,
+            _diagOpsTicks, _diagHierarchyTicks, _diagDestroyTicks, _diagClearTicks, _diagSortTicks,
+            _diagCreatedCount, _diagOpsCount, _diagHierarchyCount, _diagDestroyCount, _diagSortCount);
+    }
+
+    private void AccumulateSortDiag()
+    {
+        _diagSortTicks += _diagSortTicksStatic;
+        _diagSortCount += _diagSortCountStatic;
+        _diagSortTicksStatic = 0;
+        _diagSortCountStatic = 0;
+    }
+#endif
+
 #if DEBUG
     private int _debugRecordedSetCount;
     private int _debugRecordedCreateCount;
@@ -519,6 +558,12 @@ public sealed class CommandBuffer : ICommandRecorder
             return false;
         }
 
+#if PERF_DIAG
+        var _diagSw = System.Diagnostics.Stopwatch.StartNew();
+        long _diagBuildTicksLocal = 0;
+        long _diagMaterializeTicksLocal = 0;
+        var _diagSubSw = new System.Diagnostics.Stopwatch();
+#endif
         for (var i = 0; i < _createdStatePoolCount; i++)
         {
             ref readonly var state = ref _createdStatePool[i];
@@ -533,17 +578,35 @@ public sealed class CommandBuffer : ICommandRecorder
             }
             else
             {
+#if PERF_DIAG
+                _diagSubSw.Restart();
+#endif
                 var (archetype, components, count) = BuildCreatedEntityComponents(in state);
+#if PERF_DIAG
+                _diagBuildTicksLocal += _diagSubSw.ElapsedTicks;
+                _diagSubSw.Restart();
+#endif
                 try
                 {
                     _world.MaterializeReservedEntityDirect(entity, archetype, components.AsSpan(0, count));
                 }
                 finally
                 {
-                    ArrayPool<RawComponentValue>.Shared.Return(components);
+                    // ThreadStatic buffer: no need to return to pool
                 }
+#if PERF_DIAG
+                _diagMaterializeTicksLocal += _diagSubSw.ElapsedTicks;
+#endif
             }
         }
+#if PERF_DIAG
+        _diagCreatedTicks += _diagSw.ElapsedTicks;
+        _diagBuildTicks += _diagBuildTicksLocal;
+        _diagMaterializeTicks += _diagMaterializeTicksLocal;
+        _diagCreatedCount += _createdStatePoolCount;
+        AccumulateSortDiag();
+        _diagSw.Restart();
+#endif
 
         for (var i = 0; i < _opsPoolCount; i++)
         {
@@ -558,6 +621,11 @@ public sealed class CommandBuffer : ICommandRecorder
             for (var nodeIdx = existingOps.OverflowHead; nodeIdx >= 0; nodeIdx = _opsOverflow.GetNext(nodeIdx))
                 ApplyOpDirect(_opsOverflow.GetValueReadonly(nodeIdx), entity);
         }
+#if PERF_DIAG
+        _diagOpsTicks += _diagSw.ElapsedTicks;
+        _diagOpsCount += _opsPoolCount;
+        _diagSw.Restart();
+#endif
 
         foreach (var (child, intent) in _hierarchyByChild)
         {
@@ -578,6 +646,11 @@ public sealed class CommandBuffer : ICommandRecorder
             else
                 _world.Unlink(child);
         }
+#if PERF_DIAG
+        _diagHierarchyTicks += _diagSw.ElapsedTicks;
+        _diagHierarchyCount += _hierarchyByChild.Count;
+        _diagSw.Restart();
+#endif
 
         for (var i = 0; i < _existingDestroyCount; i++)
         {
@@ -585,8 +658,16 @@ public sealed class CommandBuffer : ICommandRecorder
             if (_world.IsAlive(entity))
                 _world.Destroy(entity);
         }
+#if PERF_DIAG
+        _diagDestroyTicks += _diagSw.ElapsedTicks;
+        _diagDestroyCount += _existingDestroyCount;
+        _diagSw.Restart();
+#endif
 
         Clear();
+#if PERF_DIAG
+        _diagClearTicks += _diagSw.ElapsedTicks;
+#endif
         return true;
     }
 
@@ -883,7 +964,14 @@ public sealed class CommandBuffer : ICommandRecorder
             idx++;
         }
 
+#if PERF_DIAG
+        var sortSw = System.Diagnostics.Stopwatch.StartNew();
+#endif
         Array.Sort(types, sources, 0, idx);
+#if PERF_DIAG
+        _diagSortTicksStatic += sortSw.ElapsedTicks;
+        _diagSortCountStatic++;
+#endif
         return (types, sources, idx);
     }
 
@@ -986,24 +1074,57 @@ public sealed class CommandBuffer : ICommandRecorder
 
     private (Archetype Archetype, RawComponentValue[] Components, int Count) BuildCreatedEntityComponents(in CreatedState state)
     {
-        var (types, sources, count) = ExtractAndSortComponents(in state, ref _createdOverflow);
-        try
-        {
-            var key = new World.CreateArchetypeKey(types.AsSpan(0, count));
-            var archetype = _world.GetOrCreateArchetype(key);
+        var count = state.Map.Count + state.Map.OverflowCount;
 
-            var rawComponents = ArrayPool<RawComponentValue>.Shared.Rent(count);
-            for (var i = 0; i < count; i++)
-            {
-                var sc = sources[i];
-                rawComponents[i] = new RawComponentValue(sc.ComponentType.Value, sc.RuntimeType, sc.ComponentType, _slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
-            }
-            return (archetype, rawComponents, count);
-        }
-        finally
+        // ThreadStatic buffers to avoid per-entity ArrayPool rent/return
+        var types = _tsExtractTypes;
+        var sources = _tsExtractSources;
+        if (types == null || types.Length < count)
         {
-            ReturnExtracted(types, sources);
+            types = new ComponentType[Math.Max(count, 16)];
+            sources = new CreatedComponent[Math.Max(count, 16)];
+            _tsExtractTypes = types;
+            _tsExtractSources = sources;
         }
+
+        var idx = 0;
+        if (state.Map.Count >= 1) { sources[idx] = state.Map.Value0; types[idx] = state.Map.Value0.ComponentType; idx++; }
+        if (state.Map.Count >= 2) { sources[idx] = state.Map.Value1; types[idx] = state.Map.Value1.ComponentType; idx++; }
+        if (state.Map.Count >= 3) { sources[idx] = state.Map.Value2; types[idx] = state.Map.Value2.ComponentType; idx++; }
+        if (state.Map.Count >= 4) { sources[idx] = state.Map.Value3; types[idx] = state.Map.Value3.ComponentType; idx++; }
+        for (var nodeIdx = state.Map.OverflowHead; nodeIdx >= 0; nodeIdx = _createdOverflow.GetNext(nodeIdx))
+        {
+            var val = _createdOverflow.GetValueReadonly(nodeIdx);
+            sources[idx] = val;
+            types[idx] = val.ComponentType;
+            idx++;
+        }
+
+#if PERF_DIAG
+        var sortSw = System.Diagnostics.Stopwatch.StartNew();
+#endif
+        Array.Sort(types, sources, 0, idx);
+#if PERF_DIAG
+        _diagSortTicksStatic += sortSw.ElapsedTicks;
+        _diagSortCountStatic++;
+#endif
+
+        var key = new World.CreateArchetypeKey(types.AsSpan(0, count));
+        var archetype = _world.GetOrCreateArchetype(key);
+
+        var rawComponents = _tsRawComponents;
+        if (rawComponents == null || rawComponents.Length < count)
+        {
+            rawComponents = new RawComponentValue[Math.Max(count, 16)];
+            _tsRawComponents = rawComponents;
+        }
+
+        for (var i = 0; i < count; i++)
+        {
+            var sc = sources[i];
+            rawComponents[i] = new RawComponentValue(sc.ComponentType.Value, sc.RuntimeType, sc.ComponentType, _slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
+        }
+        return (archetype, rawComponents, count);
     }
 
     private (Signature Signature, RawComponentValue[] Components) BuildCreatedEntityComponentsForDelta(in CreatedState state)
