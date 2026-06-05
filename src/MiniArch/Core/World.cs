@@ -986,6 +986,29 @@ public sealed class World : IDisposable
     }
 
     /// <summary>
+    /// Creates a cached <see cref="EntityAccessor"/> for multiple component
+    /// reads/writes on the same entity. The entity→(archetype,chunk,row) lookup
+    /// is performed once; subsequent <see cref="EntityAccessor.Get{T}"/>,
+    /// <see cref="EntityAccessor.Set{T}"/>, and <see cref="EntityAccessor.Has{T}"/>
+    /// calls on the returned accessor skip the entity lookup entirely.
+    /// </summary>
+    /// <remarks>
+    /// Discard the accessor before any structural change (Add/Remove) that may
+    /// move the entity to a different archetype.
+    /// </remarks>
+    public EntityAccessor Access(Entity entity)
+    {
+        ThrowIfDisposed();
+        if (!TryGetLocation(entity, out var info))
+        {
+            throw new InvalidOperationException(
+                $"Entity '{entity}' is not alive.");
+        }
+
+        return new EntityAccessor(info.Archetype, info.Archetype.GetChunk(info.ChunkIndex), info.RowIndex);
+    }
+
+    /// <summary>
     /// Tries to get an entity location.
     /// </summary>
     public bool TryGetLocation(Entity entity, out EntityInfo info)

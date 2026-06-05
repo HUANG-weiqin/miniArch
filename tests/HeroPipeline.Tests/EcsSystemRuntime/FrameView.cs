@@ -1,4 +1,5 @@
 using System;
+using MiniArch.Core;
 using MiniArchQuery = MiniArch.Query;
 using MiniArchQueryDescription = MiniArch.QueryDescription;
 using CoreWorld = MiniArch.World;
@@ -25,6 +26,9 @@ public sealed class FrameView
     public MiniArch.Core.Query ChunkQuery(MiniArchQueryDescription description) =>
         MiniArch.Core.Query.Create(_world, in description);
 
+    public EntityAccessor Access(MiniArch.Entity entity) =>
+        _world.Access(entity);
+
     public T Get<T>(MiniArch.Entity entity)
     {
         if (!TryGet(entity, out T component))
@@ -38,6 +42,9 @@ public sealed class FrameView
 
     public bool TryGet<T>(MiniArch.Entity entity, out T component) =>
         _world.TryGet(entity, out component);
+
+    public void Set<T>(MiniArch.Entity entity, T value) =>
+        _world.Set(entity, value);
 }
 
 

@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-06-03
+updated: 2026-06-05
 ---
 # MiniArch Core ECS
 
@@ -33,6 +33,7 @@ updated: 2026-06-03
   - `ComponentType.cs`：`int` wrapper
   - `Entity.cs`：`(id, version)` 二元组
   - `EntityLocation.cs`：`(archetype, chunkIdx, row)`
+  - `EntityAccessor.cs`：ref struct，一次 entity 定位后直读/直写多个组件（跳过重复的 `_records` 查找）
   - `HierarchyTable.cs`：`World` 持有的 runtime side-table parent-child 关系
 
 - 数据流 / 控制流：
@@ -42,6 +43,7 @@ updated: 2026-06-03
   - `World.CreateMany` 先批量准备 entity id，再用 chunk-batched reservation 一次性落入空签名 archetype
   - `Add/Remove` 先算目标签名，再复用 edge-cached `MigrationPlan` 搬迁共享组件
   - `Set` 在组件已存在时直接定位到 typed column 的 row，原地写回，不触发迁移
+  - `EntityAccessor` 缓存 `(Archetype, Chunk, RowIndex)`，后续 `Get<T>` / `Set<T>` / `Has<T>` 跳过 `_records` 查找和 version check，直接通过 `GetComponentIndexFast` + `GetComponentRefAt` 定位数据
   - `Destroy` 走 leaf-entity 快速路径：无 children 时跳过 `CollectDestroySubtree`
   - `Clone` 执行 deep clone：先 `CloneSingle` 复制 root 实体（同 archetype memcpy），有 children 时 DFS 遍历 subtree
   - Query 读路径使用 world 发布的 archetype 数组快照和 query 自身发布的 matched-archetype 数组快照
@@ -76,6 +78,7 @@ updated: 2026-06-03
 ## 入口
 
 - 第一次读：`World.cs`（完整控制流入口）→ `Signature.cs`（archetype key 规则）→ `Chunk.cs`（底层存储布局）→ `Archetype.cs`（chunk 扩展点）
+- EntityAccessor：`EntityAccessor.cs`（ref struct，单实体多组件直读）
 - 修 bug：`World.cs`（实体迁移和版本校验）→ `QueryIterators.cs`（chunk 枚举）
 
 ## 坑点
@@ -90,4 +93,6 @@ updated: 2026-06-03
 - Query 快照是非原子的（archetype 和 chunk 数组分开写入），安全性依赖"world 无并发写"前提
 - `IsAlive` 必须和 `TryGetLocation` 共用同一条 version/location 校验链，不能有独立状态
 - 性能验证必须看 Arch 对照数据，不能只看自己变快
+- `EntityAccessor` 是 ref struct，不可装箱、不可存字段、不可捕获在 lambda 中
+- 结构变更（Add/Remove）后 entity 可能换 archetype，此时已获取的 accessor 指向旧位置，必须丢弃
 - 本页描述的是当前实现，不是旧版 `Dictionary<ComponentType, object?>` 实现

@@ -1,0 +1,61 @@
+using System.Runtime.CompilerServices;
+
+namespace MiniArch.Core;
+
+/// <summary>
+/// Cached entity accessor for multiple component reads/writes on the same entity.
+/// Performs the entity→(archetype,chunk,row) lookup once, then all subsequent
+/// <see cref="Get{T}"/>, <see cref="Set{T}"/>, and <see cref="Has{T}"/> calls
+/// operate directly on the cached location.
+/// </summary>
+/// <remarks>
+/// This is a <c>ref struct</c> — stack-only, cannot be boxed, stored in fields,
+/// captured in lambdas, or used with async. Discard it before any structural
+/// change (Add/Remove) that may move the entity to a different archetype.
+/// </remarks>
+public ref struct EntityAccessor
+{
+    private readonly Archetype _archetype;
+    private readonly Chunk _chunk;
+    private readonly int _row;
+
+    internal EntityAccessor(Archetype archetype, Chunk chunk, int row)
+    {
+        _archetype = archetype;
+        _chunk = chunk;
+        _row = row;
+    }
+
+    /// <summary>
+    /// Gets a reference to the component <typeparamref name="T"/> on the accessed entity.
+    /// Assumes the component exists; behaviour is undefined if it does not.
+    /// Use <see cref="Has{T}"/> to check existence first if uncertain.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ref T Get<T>()
+    {
+        var columnIndex = _archetype.GetComponentIndexFast(Component<T>.ComponentType);
+        return ref _chunk.GetComponentRefAt<T>(columnIndex, _row);
+    }
+
+    /// <summary>
+    /// Writes a component value directly to the accessed entity.
+    /// Assumes the component already exists on the entity (i.e. is part of the
+    /// entity's archetype). For adding new components, use <c>Commands.Add</c>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void Set<T>(in T value)
+    {
+        var columnIndex = _archetype.GetComponentIndexFast(Component<T>.ComponentType);
+        _chunk.SetComponentAtTyped(columnIndex, _row, in value);
+    }
+
+    /// <summary>
+    /// Returns whether the accessed entity has the component <typeparamref name="T"/>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool Has<T>()
+    {
+        return _archetype.TryGetComponentIndex(Component<T>.ComponentType, out _);
+    }
+}

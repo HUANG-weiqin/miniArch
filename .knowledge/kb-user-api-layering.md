@@ -2,7 +2,7 @@
 title: User API Layering
 module: MiniArch
 description: Single-source public API around MiniArch.World/Entity/QueryDescription, description-based foreach query, and the remaining MiniArch.Core advanced boundary
-updated: 2026-06-01
+updated: 2026-06-05
 ---
 # User API Layering
 
