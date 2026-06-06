@@ -123,6 +123,7 @@ public sealed class Chunk
     /// <summary>
     /// Adds an entity.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal int Add(Entity entity)
     {
         EnsureCapacity(Count + 1);
@@ -401,6 +402,7 @@ public sealed class Chunk
     /// <summary>
     /// Removes a row with swap-remove.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool RemoveAt(int row, out Entity movedEntity)
     {
 #if DEBUG

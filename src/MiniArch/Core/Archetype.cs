@@ -17,6 +17,7 @@ public sealed class Archetype
     private readonly Type[] _componentTypes;
     private readonly int[] _componentIdToColumnIndex;
     private long _generation;
+    private int _lastWriteChunkIndex = -1;
 
     internal Archetype(Signature signature, Type[] componentTypes, int chunkCapacity = 4,
         int maxChunkCapacity = -1)
@@ -65,16 +66,34 @@ public sealed class Archetype
     internal ArchetypeEdges Edges { get; } = new();
 
     /// <summary>
-    /// Reserves a row for an entity.
+    /// Reserves a row for an entity, using a cached "warm" chunk if available
+    /// to avoid the non-full chunk LIFO push/pop cycle.
     /// </summary>
     internal Chunk ReserveEntity(Entity entity, out int chunkIndex, out int rowIndex)
     {
-        var chunk = GetWritableChunk(out chunkIndex);
-        rowIndex = chunk.Add(entity);
-        MarkChunkNonFull(chunkIndex);
+        if (_lastWriteChunkIndex >= 0)
+        {
+            var chunk = _chunks[_lastWriteChunkIndex];
+            if (chunk.Count < chunk.Capacity)
+            {
+                rowIndex = chunk.Add(entity);
+                chunkIndex = _lastWriteChunkIndex;
+                if (chunk.Count >= chunk.Capacity)
+                    _lastWriteChunkIndex = -1; // now full, clear cache
+                EntityCount++;
+                _generation++;
+                return chunk;
+            }
+
+            _lastWriteChunkIndex = -1; // stale cache
+        }
+
+        var newChunk = GetWritableChunk(out chunkIndex);
+        rowIndex = newChunk.Add(entity);
+        _lastWriteChunkIndex = chunkIndex;
         EntityCount++;
         _generation++;
-        return chunk;
+        return newChunk;
     }
 
     internal Chunk ImportSnapshotChunk(ReadOnlySpan<Entity> entities, out int chunkIndex)
@@ -240,6 +259,7 @@ public sealed class Archetype
         return chunk;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool TryTakeNonFullChunk(out int chunkIndex, out Chunk chunk)
     {
         while (_nonFullCount > 0)
@@ -263,6 +283,10 @@ public sealed class Archetype
 
     private void MarkChunkNonFull(int chunkIndex)
     {
+        // Warm chunk is tracked directly; don't double-add to the non-full list.
+        if (chunkIndex == _lastWriteChunkIndex)
+            return;
+
         var chunk = _chunks[chunkIndex];
         if (chunk.Count >= chunk.Capacity || _chunkHasNonFullEntry[chunkIndex])
         {
