@@ -99,13 +99,13 @@ public sealed class WorldCloneTests
         }
 
         Assert.True(cloned.TryGetLocation(positionOnly[2], out var thirdPositionOnlyLocation));
-        Assert.Equal(0, thirdPositionOnlyLocation.ChunkIndex);
+        Assert.NotNull(thirdPositionOnlyLocation.Chunk);
 
         Assert.True(cloned.TryGetLocation(moving[2], out var thirdMovingLocation));
-        Assert.Equal(0, thirdMovingLocation.ChunkIndex);
+        Assert.NotNull(thirdMovingLocation.Chunk);
 
         Assert.True(cloned.TryGetLocation(living[2], out var thirdLivingLocation));
-        Assert.Equal(0, thirdLivingLocation.ChunkIndex);
+        Assert.NotNull(thirdLivingLocation.Chunk);
     }
 
     [Fact]
@@ -193,7 +193,7 @@ public sealed class WorldCloneTests
         Assert.True(world.TryGetLocation(entity, out var location));
 
         var componentType = world.Components.GetOrCreate<T>();
-        var chunk = location.Archetype.GetChunk(location.ChunkIndex);
+        var chunk = location.Chunk!;
         return chunk.GetComponent<T>(componentType, location.RowIndex);
     }
 }

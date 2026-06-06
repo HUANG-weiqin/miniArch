@@ -352,7 +352,7 @@ public static class CommandBufferSharedScenarios
 
     private static string DescribeMiniEntity(MiniWorld world, EntityInfo location)
     {
-        var chunk = location.Archetype.GetChunk(location.ChunkIndex);
+        var chunk = location.Chunk!;
         var parts = new List<string>(4);
 
         if (TryGetComponent(world, location, chunk, world.Components.GetOrCreate<BenchmarkPosition>(), out BenchmarkPosition position))

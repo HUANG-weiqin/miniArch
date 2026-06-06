@@ -128,7 +128,7 @@ public sealed class TrickyEdgeCaseTests
         Assert.Equal(new Position(0, 0), p);
 
         Assert.True(world.TryGetLocation(entity, out var info));
-        var chunk = info.Archetype.GetChunk(info.ChunkIndex);
+        var chunk = info.Chunk!;
         Assert.Equal(new Position(0, 0), chunk.GetComponent<Position>(positionId, info.RowIndex));
     }
 
@@ -144,8 +144,8 @@ public sealed class TrickyEdgeCaseTests
 
         Assert.True(world.TryGetLocation(entity, out var info));
         Assert.Single(info.Archetype.Signature);
-        var chunk = info.Archetype.GetChunk(info.ChunkIndex);
-        Assert.Equal(new Position(99, 99), chunk.GetComponent<Position>(positionId, info.RowIndex));
+        var chunk2 = info.Chunk!;
+        Assert.Equal(new Position(99, 99), chunk2.GetComponent<Position>(positionId, info.RowIndex));
     }
 
     [Fact]
@@ -227,7 +227,7 @@ public sealed class TrickyEdgeCaseTests
         world.Set(entity, new Health(200));
 
         Assert.True(world.TryGetLocation(entity, out var info));
-        var chunk = info.Archetype.GetChunk(info.ChunkIndex);
+        var chunk = info.Chunk!;
         Assert.Equal(new Position(10, 20), chunk.GetComponent<Position>(positionId, info.RowIndex));
         Assert.Equal(new Velocity(3, 4), chunk.GetComponent<Velocity>(velocityId, info.RowIndex));
         Assert.Equal(new Health(200), chunk.GetComponent<Health>(healthId, info.RowIndex));
@@ -248,7 +248,7 @@ public sealed class TrickyEdgeCaseTests
 
         Assert.True(world.TryGetLocation(entity, out var after));
         Assert.Same(before.Archetype, after.Archetype);
-        Assert.Equal(before.ChunkIndex, after.ChunkIndex);
+        Assert.Same(before.Chunk, after.Chunk);
         Assert.Equal(before.RowIndex, after.RowIndex);
         Assert.True(world.TryGet(entity, out Position p));
         Assert.Equal(new Position(42, 42), p);

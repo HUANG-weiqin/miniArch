@@ -55,7 +55,7 @@ public sealed class ArchetypeTests
         archetype.ReserveEntity(second, out _, out var row2).SetComponentAtTyped(0, row2, new Position(2, 2));
         archetype.ReserveEntity(third, out _, out var row3).SetComponentAtTyped(0, row3, new Position(3, 3));
 
-        var moved = archetype.RemoveEntity(chunkIndex, 1, out var movedEntity);
+        var moved = archetype.RemoveEntity(chunk, 1, out var movedEntity);
 
         Assert.True(moved);
         Assert.Equal(third, movedEntity);
@@ -75,10 +75,10 @@ public sealed class ArchetypeTests
 
         Assert.Equal(2, archetype.Chunks.Count);
 
-        archetype.RemoveEntity(0, 0, out _);
-        archetype.RemoveEntity(0, 0, out _);
-        archetype.RemoveEntity(1, 0, out _);
-        archetype.RemoveEntity(1, 0, out _);
+        archetype.RemoveEntity(archetype.Chunks[0], 0, out _);
+        archetype.RemoveEntity(archetype.Chunks[0], 0, out _);
+        archetype.RemoveEntity(archetype.Chunks[1], 0, out _);
+        archetype.RemoveEntity(archetype.Chunks[1], 0, out _);
 
         Assert.Equal(0, archetype.Chunks[0].Count);
         Assert.Equal(0, archetype.Chunks[1].Count);
