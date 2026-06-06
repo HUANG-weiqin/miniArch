@@ -25,8 +25,6 @@ public sealed class World : IDisposable
     private readonly Dictionary<CreateArchetypeKey, Archetype> _createArchetypeCache = new();
     private readonly HierarchyTable _hierarchy = new();
     private EntityRecord[] _records;
-    private Archetype[] _archetypesByIndex = [];
-    private int _archetypeCount;
     private int _entitySlotCount;
     private Dictionary<QueryDescription, QueryFilter> _queryFiltersByDescription = new();
     private Dictionary<QueryFilter, MiniArch.Core.Query> _queries = new();
@@ -93,8 +91,6 @@ public sealed class World : IDisposable
         _queryFiltersByDescription.Clear();
         _queries.Clear();
         _archetypeSnapshot = Array.Empty<Archetype>();
-        _archetypesByIndex = [];
-        _archetypeCount = 0;
         _entitySlotCount = 0;
         _records = Array.Empty<EntityRecord>();
         _freeIdCount = 0;
@@ -205,8 +201,6 @@ public sealed class World : IDisposable
         _archetypes.Clear();
         _createArchetypeCache.Clear();
         _archetypeSnapshot = Array.Empty<Archetype>();
-        _archetypesByIndex = [];
-        _archetypeCount = 0;
         _queryFiltersByDescription = new Dictionary<QueryDescription, QueryFilter>();
         _queries = new Dictionary<QueryFilter, MiniArch.Core.Query>();
         _createArchetypeCacheGeneration++;
@@ -241,8 +235,7 @@ public sealed class World : IDisposable
     internal void SetSnapshotLocation(Entity entity, Archetype archetype, int chunkIndex, int rowIndex)
     {
         ValidateSnapshotEntitySlot(entity.Id);
-        _records[entity.Id].ArchetypeIndexPlusOne = GetArchetypeIndexPlusOne(archetype);
-        _records[entity.Id].ChunkIndex = chunkIndex;
+        _records[entity.Id].Chunk = archetype.GetChunk(chunkIndex);
         _records[entity.Id].RowIndex = rowIndex;
     }
 
@@ -950,8 +943,7 @@ public sealed class World : IDisposable
             return false;
         }
 
-        component = info.Archetype
-            .GetChunk(info.ChunkIndex)
+        component = info.Chunk!
             .GetComponentAt<T>(componentIndex, info.RowIndex);
         return true;
     }
@@ -976,11 +968,8 @@ public sealed class World : IDisposable
     public T Get<T>(Entity entity)
     {
         ref var record = ref _records[entity.Id];
-        var componentType = GetComponentType<T>();
-        var arch = GetRecordArchetype(record);
-        return arch
-            .GetChunk(record.ChunkIndex)
-            .GetComponentAt<T>(arch.GetComponentIndexFast(componentType), record.RowIndex);
+        var chunk = record.Chunk!;
+        return chunk.GetComponentAt<T>(chunk.GetComponentIndexFast(GetComponentType<T>()), record.RowIndex);
     }
 
     /// <summary>
@@ -1012,19 +1001,11 @@ public sealed class World : IDisposable
                 $"Entity '{entity}' is not alive.");
         }
 
-        return new EntityAccessor(info.Archetype, info.Archetype.GetChunk(info.ChunkIndex), info.RowIndex);
+        return new EntityAccessor(info.Chunk!, info.RowIndex);
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private Archetype GetRecordArchetype(in EntityRecord record)
-        => _archetypesByIndex[record.ArchetypeIndexPlusOne - 1];
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private int GetArchetypeIndexPlusOne(Archetype archetype)
-        => archetype.StorageIndex + 1;
-
     /// <summary>
-    /// Returns the entity location without version or bounds checks.
+    /// Tries to get an entity location.
     /// </summary>
     public bool TryGetLocation(Entity entity, out EntityInfo info)
     {
@@ -1042,7 +1023,7 @@ public sealed class World : IDisposable
             return false;
         }
 
-        info = new EntityInfo(record.Version, GetRecordArchetype(record), record.ChunkIndex, record.RowIndex);
+        info = new EntityInfo(record.Version, record.Chunk, record.RowIndex);
         return true;
     }
 
@@ -1074,8 +1055,8 @@ public sealed class World : IDisposable
     private Entity CloneSingle(Entity source)
     {
         var sourceInfo = GetRequiredLocation(source);
-        var archetype = GetRecordArchetype(sourceInfo);
-        var sourceChunk = archetype.GetChunk(sourceInfo.ChunkIndex);
+        var archetype = sourceInfo.Chunk!.Owner!;
+        var sourceChunk = sourceInfo.Chunk;
         var entity = CreateInArchetype(archetype, out var destChunk, out var destRow);
         destChunk.CopySharedComponentsFrom(sourceChunk, sourceInfo.RowIndex, destRow);
         return entity;
@@ -1143,8 +1124,7 @@ public sealed class World : IDisposable
         out int destinationChunkIndex,
         out int destinationRowIndex)
     {
-        var sourceArch = GetRecordArchetype(sourceInfo);
-        var sourceChunk = sourceArch.GetChunk(sourceInfo.ChunkIndex);
+        var sourceChunk = sourceInfo.Chunk!;
         destinationChunk = destination.ReserveEntity(entity, out destinationChunkIndex, out destinationRowIndex);
         destinationChunk.CopySharedComponentsFrom(sourceChunk, sourceInfo.RowIndex, destinationRowIndex);
     }
@@ -1158,8 +1138,7 @@ public sealed class World : IDisposable
         out int destinationChunkIndex,
         out int destinationRowIndex)
     {
-        var sourceArch = GetRecordArchetype(sourceInfo);
-        var sourceChunk = sourceArch.GetChunk(sourceInfo.ChunkIndex);
+        var sourceChunk = sourceInfo.Chunk!;
         destinationChunk = plan.Destination.ReserveEntity(entity, out destinationChunkIndex, out destinationRowIndex);
         plan.CopySharedData(sourceChunk, sourceInfo.RowIndex, destinationChunk, destinationRowIndex);
     }
@@ -1172,20 +1151,18 @@ public sealed class World : IDisposable
         int destinationChunkIndex,
         int destinationRowIndex)
     {
-        var sourceArch = GetRecordArchetype(sourceInfo);
-        sourceArch.RemoveEntity(sourceInfo.ChunkIndex, sourceInfo.RowIndex, out var movedEntity);
+        var sourceChunk = sourceInfo.Chunk!;
+        sourceChunk.Owner!.RemoveEntity(sourceChunk, sourceInfo.RowIndex, out var movedEntity);
 
         if (movedEntity.IsValid)
         {
             ref var movedRecord = ref _records[movedEntity.Id];
-            movedRecord.ArchetypeIndexPlusOne = sourceInfo.ArchetypeIndexPlusOne;
-            movedRecord.ChunkIndex = sourceInfo.ChunkIndex;
+            movedRecord.Chunk = sourceChunk;
             movedRecord.RowIndex = sourceInfo.RowIndex;
         }
 
         ref var record = ref _records[entity.Id];
-        record.ArchetypeIndexPlusOne = GetArchetypeIndexPlusOne(destination);
-        record.ChunkIndex = destinationChunkIndex;
+        record.Chunk = destination.GetChunk(destinationChunkIndex);
         record.RowIndex = destinationRowIndex;
     }
 
@@ -1219,11 +1196,12 @@ public sealed class World : IDisposable
     private void ApplyTypedAddOrSet<T>(Entity entity, ComponentType componentType, in T component)
     {
         var info = GetRequiredLocation(entity);
-        var archetype = GetRecordArchetype(info);
+        var chunk = info.Chunk!;
+        var archetype = chunk.Owner!;
 
         if (archetype.TryGetComponentIndex(componentType, out var componentIndex))
         {
-            archetype.GetChunk(info.ChunkIndex).SetComponentAtTyped(componentIndex, info.RowIndex, in component);
+            chunk.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
             return;
         }
 
@@ -1242,11 +1220,11 @@ public sealed class World : IDisposable
     private unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, Type runtimeType, byte* source, ComponentWriterCache.ColumnWriterDelegate? columnWriter)
     {
         var info = GetRequiredLocation(entity);
-        var archetype = GetRecordArchetype(info);
+        var chunk = info.Chunk!;
+        var archetype = chunk.Owner!;
 
         if (archetype.TryGetComponentIndex(componentType, out var componentIndex))
         {
-            var chunk = archetype.GetChunk(info.ChunkIndex);
             WriteComponentFromBytes(chunk, componentType, info.RowIndex, source, columnWriter);
             return;
         }
@@ -1325,16 +1303,6 @@ public sealed class World : IDisposable
         var chunkCapacity = GetArchetypeChunkCapacity(signature);
         archetype = new Archetype(signature, ResolveComponentTypes(signature), chunkCapacity,
             GetMaxChunkCapacity(signature, chunkCapacity));
-
-        // Assign stable storage index
-        if (_archetypesByIndex.Length <= _archetypeCount)
-        {
-            var newLen = _archetypesByIndex.Length == 0 ? 8 : _archetypesByIndex.Length * 2;
-            Array.Resize(ref _archetypesByIndex, newLen);
-        }
-        archetype.StorageIndex = _archetypeCount;
-        _archetypesByIndex[_archetypeCount++] = archetype;
-
         _archetypes.Add(signature, archetype);
         PublishArchetypeSnapshot(archetype);
         _archetypeVersion++;
@@ -1766,8 +1734,8 @@ public sealed class World : IDisposable
     private void DestroySingle(Entity entity)
     {
         var info = GetRequiredLocation(entity);
-        var arch = GetRecordArchetype(info);
-        arch.RemoveEntity(info.ChunkIndex, info.RowIndex, out var movedEntity);
+        var chunk = info.Chunk!;
+        chunk.Owner!.RemoveEntity(chunk, info.RowIndex, out var movedEntity);
         if (_hierarchy.HasAnyLinks(entity))
         {
             _hierarchy.RemoveDestroyed(entity);
@@ -1781,8 +1749,7 @@ public sealed class World : IDisposable
         if (movedEntity.IsValid)
         {
             ref var movedRecord = ref _records[movedEntity.Id];
-            movedRecord.ArchetypeIndexPlusOne = info.ArchetypeIndexPlusOne;
-            movedRecord.ChunkIndex = info.ChunkIndex;
+            movedRecord.Chunk = chunk;
             movedRecord.RowIndex = info.RowIndex;
         }
     }
@@ -1791,10 +1758,9 @@ public sealed class World : IDisposable
     {
         var id = AcquireEntityIdUnsafe(out var version);
         var entity = new Entity(id, version);
-        chunk = archetype.ReserveEntity(entity, out var chunkIndex, out rowIndex);
+        chunk = archetype.ReserveEntity(entity, out _, out rowIndex);
         ref var record = ref _records[id];
-        record.ArchetypeIndexPlusOne = GetArchetypeIndexPlusOne(archetype);
-        record.ChunkIndex = chunkIndex;
+        record.Chunk = chunk;
         record.RowIndex = rowIndex;
         return entity;
     }
@@ -1878,7 +1844,8 @@ public sealed class World : IDisposable
 
         foreach (var range in ranges)
         {
-            var chunkEntities = archetype.GetChunk(range.ChunkIndex).GetReservedEntities(range.StartRow, range.Count);
+            var chunk = archetype.GetChunk(range.ChunkIndex);
+            var chunkEntities = chunk.GetReservedEntities(range.StartRow, range.Count);
             var rowOffset = 0;
 
             for (; rowOffset < range.Count && entityIndex < reusedCount; rowOffset++)
@@ -1888,8 +1855,7 @@ public sealed class World : IDisposable
                 entities[entityIndex++] = entity;
                 chunkEntities[rowOffset] = entity;
                 ref var record = ref _records[entity.Id];
-                record.ArchetypeIndexPlusOne = GetArchetypeIndexPlusOne(archetype);
-                record.ChunkIndex = range.ChunkIndex;
+                record.Chunk = chunk;
                 record.RowIndex = range.StartRow + rowOffset;
             }
 
@@ -1899,8 +1865,7 @@ public sealed class World : IDisposable
                 entities[entityIndex++] = entity;
                 chunkEntities[rowOffset] = entity;
                 ref var record = ref _records[entity.Id];
-                record.ArchetypeIndexPlusOne = GetArchetypeIndexPlusOne(archetype);
-                record.ChunkIndex = range.ChunkIndex;
+                record.Chunk = chunk;
                 record.RowIndex = range.StartRow + rowOffset;
             }
         }
@@ -2088,8 +2053,7 @@ public sealed class World : IDisposable
     {
         var chunk = archetype.ReserveEntity(entity, out var chunkIndex, out var rowIndex);
         ref var record = ref _records[entity.Id];
-        record.ArchetypeIndexPlusOne = GetArchetypeIndexPlusOne(archetype);
-        record.ChunkIndex = chunkIndex;
+        record.Chunk = chunk;
         record.RowIndex = rowIndex;
 
         unsafe
@@ -2118,8 +2082,7 @@ public sealed class World : IDisposable
     {
         var chunk = archetype.ReserveEntity(entity, out var chunkIndex, out var rowIndex);
         ref var record = ref _records[entity.Id];
-        record.ArchetypeIndexPlusOne = GetArchetypeIndexPlusOne(archetype);
-        record.ChunkIndex = chunkIndex;
+        record.Chunk = chunk;
         record.RowIndex = rowIndex;
 
         for (var index = 0; index < components.Length; index++)
@@ -2141,10 +2104,9 @@ public sealed class World : IDisposable
         bool trustCompiledComponentTypes)
     {
         var archetype = GetOrCreateArchetype(signature);
-        var chunk = archetype.ReserveEntity(entity, out var chunkIndex, out var rowIndex);
+        var chunk = archetype.ReserveEntity(entity, out _, out var rowIndex);
         ref var record = ref _records[entity.Id];
-        record.ArchetypeIndexPlusOne = GetArchetypeIndexPlusOne(archetype);
-        record.ChunkIndex = chunkIndex;
+        record.Chunk = chunk;
         record.RowIndex = rowIndex;
 
         unsafe
@@ -2167,7 +2129,7 @@ public sealed class World : IDisposable
     internal void RemoveBoxed(Entity entity, ComponentType componentType)
     {
         var info = GetRequiredLocation(entity);
-        var archetype = GetRecordArchetype(info);
+        var archetype = info.Chunk!.Owner!;
 
         if (!archetype.TryGetComponentIndex(componentType, out _))
         {

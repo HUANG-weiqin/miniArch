@@ -14,6 +14,8 @@ public sealed class Chunk
     private static readonly MethodInfo ContainsManagedMethod = typeof(Chunk)
         .GetMethod(nameof(ContainsManagedReferences), BindingFlags.Static | BindingFlags.NonPublic)!;
 
+    internal Archetype? Owner { get; set; }
+
     private readonly Signature _signature;
     private Entity[] _entities;
     private byte[] _data;
@@ -289,6 +291,10 @@ public sealed class Chunk
 
         throw new ArgumentException($"Chunk does not contain component {component.Value}.", nameof(component));
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal int GetComponentIndexFast(ComponentType component)
+        => _componentIdToColumnIndex[component.Value];
 
     internal void CopySharedComponentsFrom(Chunk source, int sourceRow, int destinationRow)
     {

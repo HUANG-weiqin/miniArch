@@ -2,19 +2,15 @@ namespace MiniArch.Core;
 
 /// <summary>
 /// Merged entity metadata: version + location in one cache line.
-/// Replaces the separate _versions[] and _locations[] arrays to reduce
-/// random-access cache misses from 2 to 1.
-///
-/// ArchetypeIndexPlusOne uses 0 as the sentinel for unoccupied/default,
-/// matching the natural default value of arrays. This avoids the need to
-/// initialize records with a non-zero sentinel.
+/// Stores Chunk reference directly to skip the Archetype→chunks[chunkIndex] indirection
+/// on every entity access. Fields are ordered for natural 16-byte Sequential layout:
+/// Chunk(8) + RowIndex(4) + Version(4) = 16 bytes.
 /// </summary>
 internal struct EntityRecord
 {
-    public int Version;
-    public int ArchetypeIndexPlusOne; // 0 = unoccupied, 1+ = index into World._archetypesByIndex
-    public int ChunkIndex;
-    public int RowIndex;
+    public Chunk? Chunk;       // offset 0, 8 bytes; null = unoccupied
+    public int RowIndex;       // offset 8, 4 bytes
+    public int Version;        // offset 12, 4 bytes
 
-    public readonly bool IsOccupied => ArchetypeIndexPlusOne != 0;
+    public readonly bool IsOccupied => Chunk is not null;
 }

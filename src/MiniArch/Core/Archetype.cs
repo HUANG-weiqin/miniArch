@@ -17,13 +17,6 @@ public sealed class Archetype
     private readonly Type[] _componentTypes;
     private readonly int[] _componentIdToColumnIndex;
     private long _generation;
-    private long _nonEmptyChunkVersion;
-
-    /// <summary>
-    /// Stable index assigned by World when this archetype is first registered.
-    /// -1 indicates not yet registered (e.g., standalone test archetypes).
-    /// </summary>
-    internal int StorageIndex { get; set; } = -1;
 
     internal Archetype(Signature signature, Type[] componentTypes, int chunkCapacity = 4,
         int maxChunkCapacity = -1)
@@ -65,12 +58,6 @@ public sealed class Archetype
     internal long Generation => _generation;
 
     /// <summary>
-    /// Gets the non-empty chunk version (incremented only when a chunk goes from empty→non-empty or non-empty→empty).
-    /// Used by Query to avoid rebuilding chunk snapshots on ordinary entity add/remove within already-non-empty chunks.
-    /// </summary>
-    internal long NonEmptyChunkVersion => _nonEmptyChunkVersion;
-
-    /// <summary>
     /// Gets the chunk list.
     /// </summary>
     internal IReadOnlyList<Chunk> Chunks => _chunks;
@@ -83,13 +70,10 @@ public sealed class Archetype
     internal Chunk ReserveEntity(Entity entity, out int chunkIndex, out int rowIndex)
     {
         var chunk = GetWritableChunk(out chunkIndex);
-        var beforeCount = chunk.Count;
         rowIndex = chunk.Add(entity);
         MarkChunkNonFull(chunkIndex);
         EntityCount++;
         _generation++;
-        if (beforeCount == 0)
-            _nonEmptyChunkVersion++;
         return chunk;
     }
 
@@ -148,13 +132,10 @@ public sealed class Archetype
         {
             var available = chunk.Capacity - chunk.Count;
             var fillCount = Math.Min(available, remaining);
-            var beforeCount = chunk.Count;
             var startRow = chunk.ReserveRows(fillCount);
             MarkChunkNonFull(chunkIndex);
             ranges[rangeCount++] = new EntityBatchRange(chunkIndex, startRow, fillCount);
             remaining -= fillCount;
-            if (beforeCount == 0 && fillCount > 0)
-                _nonEmptyChunkVersion++;
         }
 
         while (remaining > 0)
@@ -163,13 +144,10 @@ public sealed class Archetype
             var chunkIndex = _chunks.Count - 1;
 
             var fillCount = Math.Min(chunk.Capacity, remaining);
-            var beforeCount = chunk.Count; // always 0 for new chunk
             chunk.ReserveRows(fillCount);
             MarkChunkNonFull(chunkIndex);
             ranges[rangeCount++] = new EntityBatchRange(chunkIndex, 0, fillCount);
             remaining -= fillCount;
-            if (beforeCount == 0 && fillCount > 0)
-                _nonEmptyChunkVersion++;
         }
 
         EntityCount += entityCount;
@@ -180,16 +158,13 @@ public sealed class Archetype
     /// <summary>
     /// Removes an entity by location.
     /// </summary>
-    internal bool RemoveEntity(int chunkIndex, int rowIndex, out Entity movedEntity)
+    internal bool RemoveEntity(Chunk chunk, int rowIndex, out Entity movedEntity)
     {
-        var chunk = _chunks[chunkIndex];
-        var beforeCount = chunk.Count;
+        var chunkIndex = _chunks.IndexOf(chunk);
         var moved = chunk.RemoveAt(rowIndex, out movedEntity);
         MarkChunkNonFull(chunkIndex);
         EntityCount--;
         _generation++;
-        if (beforeCount == 1)
-            _nonEmptyChunkVersion++;
         return moved;
     }
 
@@ -235,7 +210,9 @@ public sealed class Archetype
 
     private Chunk CreateChunk()
     {
-        return new Chunk(Signature, _componentTypes, _componentIdToColumnIndex, _chunkCapacity, _maxChunkCapacity);
+        var chunk = new Chunk(Signature, _componentTypes, _componentIdToColumnIndex, _chunkCapacity, _maxChunkCapacity);
+        chunk.Owner = this;
+        return chunk;
     }
 
     private Chunk AddChunk()
