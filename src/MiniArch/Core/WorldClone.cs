@@ -25,22 +25,14 @@ internal static class WorldClone
 
             var dstArch = target.GetOrCreateArchetype(srcArch.Signature);
 
-            foreach (var srcChunk in srcArch.Chunks)
+            var entities = srcArch.GetEntities();
+            var startRow = dstArch.ReserveRows(entities.Length);
+            entities.CopyTo(dstArch.GetReservedEntities(startRow, entities.Length));
+            dstArch.CopyColumnsFrom(srcArch, entities.Length);
+
+            for (var row = 0; row < entities.Length; row++)
             {
-                if (srcChunk.Count == 0)
-                {
-                    continue;
-                }
-
-                var entities = srcChunk.GetEntities();
-                var dstChunk = dstArch.ImportSnapshotChunk(entities, out var dstChunkIdx);
-
-                dstChunk.CopyColumnsFrom(srcChunk, srcChunk.Count);
-
-                for (var row = 0; row < entities.Length; row++)
-                {
-                    target.SetSnapshotLocation(entities[row], dstArch, dstChunkIdx, row);
-                }
+                target.SetSnapshotLocation(entities[row], dstArch, row);
             }
         }
 
@@ -52,5 +44,4 @@ internal static class WorldClone
         target.RebuildFreeIdStack();
         return target;
     }
-
 }

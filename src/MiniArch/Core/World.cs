@@ -232,11 +232,10 @@ public sealed class World : IDisposable
         return _records[entityId].Version;
     }
 
-    internal void SetSnapshotLocation(Entity entity, Archetype archetype, int chunkIndex, int rowIndex)
+    internal void SetSnapshotLocation(Entity entity, Archetype archetype, int rowIndex)
     {
         ValidateSnapshotEntitySlot(entity.Id);
         _records[entity.Id].Archetype = archetype;
-        _records[entity.Id].Chunk = archetype.GetChunk(chunkIndex);
         _records[entity.Id].RowIndex = rowIndex;
     }
 
@@ -264,7 +263,7 @@ public sealed class World : IDisposable
     {
         ThrowIfDisposed();
         var archetype = GetOrCreateArchetype(Signature.Empty);
-        return CreateInArchetype(archetype, out _, out _);
+        return CreateInArchetype(archetype, out _);
     }
 
     /// <summary>
@@ -275,8 +274,8 @@ public sealed class World : IDisposable
         ThrowIfDisposed();
         var componentType1 = GetComponentType<T1>();
         var archetype = GetOrCreateCreateArchetype<T1>(componentType1);
-        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
-        chunk.SetComponentAtTyped(0, rowIndex, in component1);
+        var entity = CreateInArchetype(archetype, out var rowIndex);
+        archetype.SetComponentAtTyped(0, rowIndex, in component1);
         return entity;
     }
 
@@ -289,9 +288,9 @@ public sealed class World : IDisposable
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var archetype = GetOrCreateCreateArchetype<T1, T2>(componentType1, componentType2);
-        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
-        chunk.SetComponentAtTyped(archetype.GetComponentIndexFast(componentType1), rowIndex, in component1);
-        chunk.SetComponentAtTyped(archetype.GetComponentIndexFast(componentType2), rowIndex, in component2);
+        var entity = CreateInArchetype(archetype, out var rowIndex);
+        archetype.SetComponentAtTyped(archetype.GetComponentIndexFast(componentType1), rowIndex, in component1);
+        archetype.SetComponentAtTyped(archetype.GetComponentIndexFast(componentType2), rowIndex, in component2);
         return entity;
     }
 
@@ -305,10 +304,10 @@ public sealed class World : IDisposable
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
         var archetype = GetOrCreateCreateArchetype<T1, T2, T3>(componentType1, componentType2, componentType3);
-        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
+        var entity = CreateInArchetype(archetype, out var rowIndex);
+        SetCreatedComponent(archetype, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, rowIndex, componentType3, in component3);
         return entity;
     }
 
@@ -323,11 +322,11 @@ public sealed class World : IDisposable
         var componentType3 = GetComponentType<T3>();
         var componentType4 = GetComponentType<T4>();
         var archetype = GetOrCreateCreateArchetype<T1, T2, T3, T4>(componentType1, componentType2, componentType3, componentType4);
-        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
+        var entity = CreateInArchetype(archetype, out var rowIndex);
+        SetCreatedComponent(archetype, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, rowIndex, componentType4, in component4);
         return entity;
     }
 
@@ -344,12 +343,12 @@ public sealed class World : IDisposable
         var componentType5 = GetComponentType<T5>();
         var archetype = GetOrCreateCreateArchetype<T1, T2, T3, T4, T5>(componentType1, componentType2, componentType3, componentType4, componentType5);
 
-        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
+        var entity = CreateInArchetype(archetype, out var rowIndex);
+        SetCreatedComponent(archetype, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, rowIndex, componentType5, in component5);
         return entity;
     }
 
@@ -367,13 +366,13 @@ public sealed class World : IDisposable
         var componentType6 = GetComponentType<T6>();
         var archetype = GetOrCreateCreateArchetype<T1, T2, T3, T4, T5, T6>(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6);
 
-        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
+        var entity = CreateInArchetype(archetype, out var rowIndex);
+        SetCreatedComponent(archetype, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, rowIndex, componentType6, in component6);
         return entity;
     }
 
@@ -392,14 +391,14 @@ public sealed class World : IDisposable
         var componentType7 = GetComponentType<T7>();
         var archetype = GetOrCreateCreateArchetype<T1, T2, T3, T4, T5, T6, T7>(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7);
 
-        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
+        var entity = CreateInArchetype(archetype, out var rowIndex);
+        SetCreatedComponent(archetype, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, rowIndex, componentType7, in component7);
         return entity;
     }
 
@@ -419,15 +418,15 @@ public sealed class World : IDisposable
         var componentType8 = GetComponentType<T8>();
         var archetype = GetOrCreateCreateArchetype<T1, T2, T3, T4, T5, T6, T7, T8>(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8);
 
-        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
+        var entity = CreateInArchetype(archetype, out var rowIndex);
+        SetCreatedComponent(archetype, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, rowIndex, componentType8, in component8);
         return entity;
     }
 
@@ -448,16 +447,16 @@ public sealed class World : IDisposable
         var componentType9 = GetComponentType<T9>();
         var archetype = GetOrCreateCreateArchetype<T1, T2, T3, T4, T5, T6, T7, T8, T9>(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9);
 
-        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
+        var entity = CreateInArchetype(archetype, out var rowIndex);
+        SetCreatedComponent(archetype, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, rowIndex, componentType9, in component9);
         return entity;
     }
 
@@ -479,17 +478,17 @@ public sealed class World : IDisposable
         var componentType10 = GetComponentType<T10>();
         var archetype = GetOrCreateCreateArchetype<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10);
 
-        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType10, in component10);
+        var entity = CreateInArchetype(archetype, out var rowIndex);
+        SetCreatedComponent(archetype, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, rowIndex, componentType9, in component9);
+        SetCreatedComponent(archetype, rowIndex, componentType10, in component10);
         return entity;
     }
 
@@ -512,18 +511,18 @@ public sealed class World : IDisposable
         var componentType11 = GetComponentType<T11>();
         var archetype = GetOrCreateCreateArchetype<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11>(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11);
 
-        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType10, in component10);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType11, in component11);
+        var entity = CreateInArchetype(archetype, out var rowIndex);
+        SetCreatedComponent(archetype, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, rowIndex, componentType9, in component9);
+        SetCreatedComponent(archetype, rowIndex, componentType10, in component10);
+        SetCreatedComponent(archetype, rowIndex, componentType11, in component11);
         return entity;
     }
 
@@ -547,19 +546,19 @@ public sealed class World : IDisposable
         var componentType12 = GetComponentType<T12>();
         var archetype = GetOrCreateCreateArchetype<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12>(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12);
 
-        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType10, in component10);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType11, in component11);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType12, in component12);
+        var entity = CreateInArchetype(archetype, out var rowIndex);
+        SetCreatedComponent(archetype, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, rowIndex, componentType9, in component9);
+        SetCreatedComponent(archetype, rowIndex, componentType10, in component10);
+        SetCreatedComponent(archetype, rowIndex, componentType11, in component11);
+        SetCreatedComponent(archetype, rowIndex, componentType12, in component12);
         return entity;
     }
 
@@ -584,20 +583,20 @@ public sealed class World : IDisposable
         var componentType13 = GetComponentType<T13>();
         var archetype = GetOrCreateCreateArchetype<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13>(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12, componentType13);
 
-        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType10, in component10);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType11, in component11);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType12, in component12);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType13, in component13);
+        var entity = CreateInArchetype(archetype, out var rowIndex);
+        SetCreatedComponent(archetype, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, rowIndex, componentType9, in component9);
+        SetCreatedComponent(archetype, rowIndex, componentType10, in component10);
+        SetCreatedComponent(archetype, rowIndex, componentType11, in component11);
+        SetCreatedComponent(archetype, rowIndex, componentType12, in component12);
+        SetCreatedComponent(archetype, rowIndex, componentType13, in component13);
         return entity;
     }
 
@@ -623,21 +622,21 @@ public sealed class World : IDisposable
         var componentType14 = GetComponentType<T14>();
         var archetype = GetOrCreateCreateArchetype<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14>(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12, componentType13, componentType14);
 
-        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType10, in component10);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType11, in component11);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType12, in component12);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType13, in component13);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType14, in component14);
+        var entity = CreateInArchetype(archetype, out var rowIndex);
+        SetCreatedComponent(archetype, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, rowIndex, componentType9, in component9);
+        SetCreatedComponent(archetype, rowIndex, componentType10, in component10);
+        SetCreatedComponent(archetype, rowIndex, componentType11, in component11);
+        SetCreatedComponent(archetype, rowIndex, componentType12, in component12);
+        SetCreatedComponent(archetype, rowIndex, componentType13, in component13);
+        SetCreatedComponent(archetype, rowIndex, componentType14, in component14);
         return entity;
     }
 
@@ -664,22 +663,22 @@ public sealed class World : IDisposable
         var componentType15 = GetComponentType<T15>();
         var archetype = GetOrCreateCreateArchetype<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15>(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12, componentType13, componentType14, componentType15);
 
-        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType10, in component10);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType11, in component11);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType12, in component12);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType13, in component13);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType14, in component14);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType15, in component15);
+        var entity = CreateInArchetype(archetype, out var rowIndex);
+        SetCreatedComponent(archetype, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, rowIndex, componentType9, in component9);
+        SetCreatedComponent(archetype, rowIndex, componentType10, in component10);
+        SetCreatedComponent(archetype, rowIndex, componentType11, in component11);
+        SetCreatedComponent(archetype, rowIndex, componentType12, in component12);
+        SetCreatedComponent(archetype, rowIndex, componentType13, in component13);
+        SetCreatedComponent(archetype, rowIndex, componentType14, in component14);
+        SetCreatedComponent(archetype, rowIndex, componentType15, in component15);
         return entity;
     }
 
@@ -707,23 +706,23 @@ public sealed class World : IDisposable
         var componentType16 = GetComponentType<T16>();
         var archetype = GetOrCreateCreateArchetype<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16>(componentType1, componentType2, componentType3, componentType4, componentType5, componentType6, componentType7, componentType8, componentType9, componentType10, componentType11, componentType12, componentType13, componentType14, componentType15, componentType16);
 
-        var entity = CreateInArchetype(archetype, out var chunk, out var rowIndex);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType1, in component1);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType2, in component2);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType3, in component3);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType4, in component4);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType5, in component5);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType6, in component6);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType7, in component7);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType8, in component8);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType9, in component9);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType10, in component10);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType11, in component11);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType12, in component12);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType13, in component13);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType14, in component14);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType15, in component15);
-        SetCreatedComponent(archetype, chunk, rowIndex, componentType16, in component16);
+        var entity = CreateInArchetype(archetype, out var rowIndex);
+        SetCreatedComponent(archetype, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, rowIndex, componentType2, in component2);
+        SetCreatedComponent(archetype, rowIndex, componentType3, in component3);
+        SetCreatedComponent(archetype, rowIndex, componentType4, in component4);
+        SetCreatedComponent(archetype, rowIndex, componentType5, in component5);
+        SetCreatedComponent(archetype, rowIndex, componentType6, in component6);
+        SetCreatedComponent(archetype, rowIndex, componentType7, in component7);
+        SetCreatedComponent(archetype, rowIndex, componentType8, in component8);
+        SetCreatedComponent(archetype, rowIndex, componentType9, in component9);
+        SetCreatedComponent(archetype, rowIndex, componentType10, in component10);
+        SetCreatedComponent(archetype, rowIndex, componentType11, in component11);
+        SetCreatedComponent(archetype, rowIndex, componentType12, in component12);
+        SetCreatedComponent(archetype, rowIndex, componentType13, in component13);
+        SetCreatedComponent(archetype, rowIndex, componentType14, in component14);
+        SetCreatedComponent(archetype, rowIndex, componentType15, in component15);
+        SetCreatedComponent(archetype, rowIndex, componentType16, in component16);
         return entity;
     }
 
@@ -748,27 +747,10 @@ public sealed class World : IDisposable
         var startId = AppendEntitySlots(entities.Length - reusedCount);
 
         var archetype = GetOrCreateArchetype(Signature.Empty);
-        var maxRangeCount = EstimateMaxRangeCount(archetype, entities.Length);
-
-        if (maxRangeCount <= StackAllocatedBatchRangeLimit)
-        {
-            Span<EntityBatchRange> ranges = stackalloc EntityBatchRange[StackAllocatedBatchRangeLimit];
-            var rangeCount = archetype.ReserveEntityRanges(entities.Length, ranges);
-            WriteCreatedEntitiesAndLocations(archetype, entities, ranges[..rangeCount], reusedCount, startId);
-            return;
-        }
-
-        var rentedRanges = ArrayPool<EntityBatchRange>.Shared.Rent(maxRangeCount);
-        try
-        {
-            var ranges = rentedRanges.AsSpan(0, maxRangeCount);
-            var rangeCount = archetype.ReserveEntityRanges(entities.Length, ranges);
-            WriteCreatedEntitiesAndLocations(archetype, entities, ranges[..rangeCount], reusedCount, startId);
-        }
-        finally
-        {
-            ArrayPool<EntityBatchRange>.Shared.Return(rentedRanges);
-        }
+        var startRow = archetype.ReserveRows(entities.Length);
+        Span<EntityBatchRange> ranges = stackalloc EntityBatchRange[1];
+        ranges[0] = new EntityBatchRange(0, startRow, entities.Length);
+        WriteCreatedEntitiesAndLocations(archetype, entities, ranges, reusedCount, startId);
     }
 
     /// <summary>
@@ -944,7 +926,7 @@ public sealed class World : IDisposable
             return false;
         }
 
-        component = info.Chunk!
+        component = info.Archetype
             .GetComponentAt<T>(componentIndex, info.RowIndex);
         return true;
     }
@@ -972,8 +954,8 @@ public sealed class World : IDisposable
     public T Get<T>(Entity entity)
     {
         ref var record = ref _records[entity.Id];
-        var chunk = record.Chunk!;
-        return chunk.GetComponentAt<T>(chunk.GetComponentIndexFast(GetComponentType<T>()), record.RowIndex);
+        var arch = record.Archetype!;
+        return arch.GetComponentAt<T>(arch.GetComponentIndexFast(GetComponentType<T>()), record.RowIndex);
     }
 
     /// <summary>
@@ -984,8 +966,8 @@ public sealed class World : IDisposable
     public ref T GetRef<T>(Entity entity)
     {
         ref var record = ref _records[entity.Id];
-        var chunk = record.Chunk!;
-        return ref chunk.GetComponentRefAt<T>(chunk.GetComponentIndexFast(GetComponentType<T>()), record.RowIndex);
+        var arch = record.Archetype!;
+        return ref arch.GetComponentRefAt<T>(arch.GetComponentIndexFast(GetComponentType<T>()), record.RowIndex);
     }
 
     /// <summary>
@@ -1017,7 +999,7 @@ public sealed class World : IDisposable
                 $"Entity '{entity}' is not alive.");
         }
 
-        return new EntityAccessor(info.Chunk!, info.RowIndex);
+        return new EntityAccessor(info.Archetype, info.RowIndex);
     }
 
     /// <summary>
@@ -1039,7 +1021,7 @@ public sealed class World : IDisposable
             return false;
         }
 
-        info = new EntityInfo(record.Version, record.Archetype, record.Chunk, record.RowIndex);
+        info = new EntityInfo(record.Version, record.Archetype, record.RowIndex);
         return true;
     }
 
@@ -1072,9 +1054,8 @@ public sealed class World : IDisposable
     {
         var sourceInfo = GetRequiredLocation(source);
         var archetype = sourceInfo.Archetype!;
-        var sourceChunk = sourceInfo.Chunk;
-        var entity = CreateInArchetype(archetype, out var destChunk, out var destRow);
-        destChunk.CopySharedComponentsFrom(sourceChunk, sourceInfo.RowIndex, destRow);
+        var entity = CreateInArchetype(archetype, out var destRow);
+        archetype.CopySharedComponentsFrom(sourceInfo.Archetype!, sourceInfo.RowIndex, destRow);
         return entity;
     }
 
@@ -1136,13 +1117,10 @@ public sealed class World : IDisposable
         Entity entity,
         EntityRecord sourceInfo,
         Archetype destination,
-        out Chunk destinationChunk,
-        out int destinationChunkIndex,
         out int destinationRowIndex)
     {
-        var sourceChunk = sourceInfo.Chunk!;
-        destinationChunk = destination.ReserveEntity(entity, out destinationChunkIndex, out destinationRowIndex);
-        destinationChunk.CopySharedComponentsFrom(sourceChunk, sourceInfo.RowIndex, destinationRowIndex);
+        destinationRowIndex = destination.AddEntity(entity);
+        destination.CopySharedComponentsFrom(sourceInfo.Archetype!, sourceInfo.RowIndex, destinationRowIndex);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1150,13 +1128,10 @@ public sealed class World : IDisposable
         Entity entity,
         EntityRecord sourceInfo,
         MigrationPlan plan,
-        out Chunk destinationChunk,
-        out int destinationChunkIndex,
         out int destinationRowIndex)
     {
-        var sourceChunk = sourceInfo.Chunk!;
-        destinationChunk = plan.Destination.ReserveEntity(entity, out destinationChunkIndex, out destinationRowIndex);
-        plan.CopySharedData(sourceChunk, sourceInfo.RowIndex, destinationChunk, destinationRowIndex);
+        destinationRowIndex = plan.Destination.AddEntity(entity);
+        plan.CopySharedData(sourceInfo.Archetype!, sourceInfo.RowIndex, plan.Destination, destinationRowIndex);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1164,63 +1139,58 @@ public sealed class World : IDisposable
         Entity entity,
         EntityRecord sourceInfo,
         Archetype destination,
-        int destinationChunkIndex,
         int destinationRowIndex)
     {
         var sourceArchetype = sourceInfo.Archetype!;
-        var sourceChunk = sourceInfo.Chunk!;
-        sourceArchetype.RemoveEntity(sourceChunk, sourceInfo.RowIndex, out var movedEntity);
+        sourceArchetype.RemoveAt(sourceInfo.RowIndex, out var movedEntity);
 
         if (movedEntity.IsValid)
         {
             ref var movedRecord = ref _records[movedEntity.Id];
             movedRecord.Archetype = sourceArchetype;
-            movedRecord.Chunk = sourceChunk;
             movedRecord.RowIndex = sourceInfo.RowIndex;
         }
 
         ref var record = ref _records[entity.Id];
         record.Archetype = destination;
-        record.Chunk = destination.GetChunk(destinationChunkIndex);
         record.RowIndex = destinationRowIndex;
     }
 
     private void MoveEntity(Entity entity, EntityRecord sourceInfo, Archetype destination)
     {
-        MoveEntityCore(entity, sourceInfo, destination, out _, out var chunkIdx, out var rowIdx);
-        FinishMoveEntity(entity, sourceInfo, destination, chunkIdx, rowIdx);
+        MoveEntityCore(entity, sourceInfo, destination, out var rowIdx);
+        FinishMoveEntity(entity, sourceInfo, destination, rowIdx);
     }
 
     private void MoveEntity(Entity entity, EntityRecord sourceInfo, MigrationPlan plan)
     {
-        MoveEntityCoreWithPlan(entity, sourceInfo, plan, out _, out var chunkIdx, out var rowIdx);
-        FinishMoveEntity(entity, sourceInfo, plan.Destination, chunkIdx, rowIdx);
+        MoveEntityCoreWithPlan(entity, sourceInfo, plan, out var rowIdx);
+        FinishMoveEntity(entity, sourceInfo, plan.Destination, rowIdx);
     }
 
     private void MoveEntity<T>(Entity entity, EntityRecord sourceInfo, Archetype destination, ComponentType componentType, in T componentValue)
     {
-        MoveEntityCore(entity, sourceInfo, destination, out var destChunk, out var chunkIdx, out var rowIdx);
-        destChunk.SetComponentAtTyped(destination.GetComponentIndex(componentType), rowIdx, in componentValue);
-        FinishMoveEntity(entity, sourceInfo, destination, chunkIdx, rowIdx);
+        MoveEntityCore(entity, sourceInfo, destination, out var rowIdx);
+        destination.SetComponentAtTyped(destination.GetComponentIndex(componentType), rowIdx, in componentValue);
+        FinishMoveEntity(entity, sourceInfo, destination, rowIdx);
     }
 
     private void MoveEntityWithPlan<T>(Entity entity, EntityRecord sourceInfo, MigrationPlan plan, in T componentValue)
     {
-        MoveEntityCoreWithPlan(entity, sourceInfo, plan, out var destChunk, out var chunkIdx, out var rowIdx);
-        destChunk.SetComponentAtTyped(plan.AddedComponentColumnIndex!.Value, rowIdx, in componentValue);
-        FinishMoveEntity(entity, sourceInfo, plan.Destination, chunkIdx, rowIdx);
+        MoveEntityCoreWithPlan(entity, sourceInfo, plan, out var rowIdx);
+        plan.Destination.SetComponentAtTyped(plan.AddedComponentColumnIndex!.Value, rowIdx, in componentValue);
+        FinishMoveEntity(entity, sourceInfo, plan.Destination, rowIdx);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ApplyTypedAddOrSet<T>(Entity entity, ComponentType componentType, in T component)
     {
         var info = GetRequiredLocation(entity);
-        var chunk = info.Chunk!;
-        var archetype = chunk.Owner!;
+        var archetype = info.Archetype;
 
         if (archetype.TryGetComponentIndex(componentType, out var componentIndex))
         {
-            chunk.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
+            archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
             return;
         }
 
@@ -1239,12 +1209,11 @@ public sealed class World : IDisposable
     private unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, Type runtimeType, byte* source, ComponentWriterCache.ColumnWriterDelegate? columnWriter)
     {
         var info = GetRequiredLocation(entity);
-        var chunk = info.Chunk!;
-        var archetype = chunk.Owner!;
+        var archetype = info.Archetype;
 
         if (archetype.TryGetComponentIndex(componentType, out var componentIndex))
         {
-            WriteComponentFromBytes(chunk, componentType, info.RowIndex, source, columnWriter);
+            WriteComponentFromBytes(archetype, componentType, info.RowIndex, source, columnWriter);
             return;
         }
 
@@ -1252,16 +1221,16 @@ public sealed class World : IDisposable
         MoveEntityFromBytes(entity, info, destination, componentType, runtimeType, source, columnWriter);
     }
 
-    private static unsafe void WriteComponentFromBytes(Chunk chunk, ComponentType componentType, int row, byte* source, ComponentWriterCache.ColumnWriterDelegate? columnWriter)
+    private static unsafe void WriteComponentFromBytes(Archetype archetype, ComponentType componentType, int row, byte* source, ComponentWriterCache.ColumnWriterDelegate? columnWriter)
     {
-        var columnIndex = chunk.GetComponentIndex(componentType);
+        var columnIndex = archetype.GetComponentIndex(componentType);
         if (columnWriter is not null)
         {
-            columnWriter(chunk, columnIndex, row, source);
+            columnWriter(new Chunk(archetype), columnIndex, row, source);
         }
         else
         {
-            chunk.WriteComponentRaw(columnIndex, row, source);
+            archetype.WriteComponentRaw(columnIndex, row, source);
         }
     }
 
@@ -1274,9 +1243,9 @@ public sealed class World : IDisposable
         byte* source,
         ComponentWriterCache.ColumnWriterDelegate? columnWriter)
     {
-        MoveEntityCore(entity, sourceInfo, destination, out var destChunk, out var chunkIdx, out var rowIdx);
-        WriteComponentFromBytes(destChunk, componentType, rowIdx, source, columnWriter);
-        FinishMoveEntity(entity, sourceInfo, destination, chunkIdx, rowIdx);
+        MoveEntityCore(entity, sourceInfo, destination, out var rowIdx);
+        WriteComponentFromBytes(destination, componentType, rowIdx, source, columnWriter);
+        FinishMoveEntity(entity, sourceInfo, destination, rowIdx);
     }
 
     private MigrationPlan GetOrCreateAddDestinationPlan(Archetype source, ComponentType componentType)
@@ -1589,8 +1558,8 @@ public sealed class World : IDisposable
 
     private static int EstimateMaxRangeCount(Archetype archetype, int entityCount)
     {
-        var chunkCapacity = archetype.Chunks.Count > 0 ? archetype.Chunks[0].Capacity : 1;
-        return Math.Min(entityCount, archetype.Chunks.Count + ((entityCount + chunkCapacity - 1) / chunkCapacity));
+        var chunkCapacity = archetype.Capacity > 0 ? archetype.Capacity : 1;
+        return Math.Min(entityCount, 1 + ((entityCount + chunkCapacity - 1) / chunkCapacity));
     }
 
     private int GetArchetypeChunkCapacity(Signature signature)
@@ -1759,8 +1728,8 @@ public sealed class World : IDisposable
     private void DestroySingle(Entity entity)
     {
         var info = GetRequiredLocation(entity);
-        var chunk = info.Chunk!;
-        chunk.Owner!.RemoveEntity(chunk, info.RowIndex, out var movedEntity);
+        var arch = info.Archetype!;
+        arch.RemoveAt(info.RowIndex, out var movedEntity);
         if (_hierarchy.HasAnyLinks(entity))
         {
             _hierarchy.RemoveDestroyed(entity);
@@ -1775,26 +1744,24 @@ public sealed class World : IDisposable
         {
             ref var movedRecord = ref _records[movedEntity.Id];
             movedRecord.Archetype = info.Archetype;
-            movedRecord.Chunk = chunk;
             movedRecord.RowIndex = info.RowIndex;
         }
     }
 
-    private Entity CreateInArchetype(Archetype archetype, out Chunk chunk, out int rowIndex)
+    private Entity CreateInArchetype(Archetype archetype, out int rowIndex)
     {
         var id = AcquireEntityIdUnsafe(out var version);
         var entity = new Entity(id, version);
-        chunk = archetype.ReserveEntity(entity, out _, out rowIndex);
+        rowIndex = archetype.AddEntity(entity);
         ref var record = ref _records[id];
         record.Archetype = archetype;
-        record.Chunk = chunk;
         record.RowIndex = rowIndex;
         return entity;
     }
 
-    private static void SetCreatedComponent<T>(Archetype archetype, Chunk chunk, int rowIndex, ComponentType componentType, in T component)
+    private static void SetCreatedComponent<T>(Archetype archetype, int rowIndex, ComponentType componentType, in T component)
     {
-        chunk.SetComponentAtTyped(archetype.GetComponentIndexFast(componentType), rowIndex, in component);
+        archetype.SetComponentAtTyped(archetype.GetComponentIndexFast(componentType), rowIndex, in component);
     }
 
     private int AppendEntitySlots(int newEntityCount)
@@ -1839,27 +1806,10 @@ public sealed class World : IDisposable
         var startId = AppendEntitySlots(entities.Length);
 
         var archetype = GetOrCreateArchetype(Signature.Empty);
-        var maxRangeCount = EstimateMaxRangeCount(archetype, entities.Length);
-
-        if (maxRangeCount <= StackAllocatedBatchRangeLimit)
-        {
-            Span<EntityBatchRange> ranges = stackalloc EntityBatchRange[StackAllocatedBatchRangeLimit];
-            var rangeCount = archetype.ReserveEntityRanges(entities.Length, ranges);
-            WriteCreatedEntitiesAndLocations(archetype, entities, ranges[..rangeCount], 0, startId);
-            return;
-        }
-
-        var rentedRanges = ArrayPool<EntityBatchRange>.Shared.Rent(maxRangeCount);
-        try
-        {
-            var ranges = rentedRanges.AsSpan(0, maxRangeCount);
-            var rangeCount = archetype.ReserveEntityRanges(entities.Length, ranges);
-            WriteCreatedEntitiesAndLocations(archetype, entities, ranges[..rangeCount], 0, startId);
-        }
-        finally
-        {
-            ArrayPool<EntityBatchRange>.Shared.Return(rentedRanges);
-        }
+        var startRow = archetype.ReserveRows(entities.Length);
+        Span<EntityBatchRange> ranges = stackalloc EntityBatchRange[1];
+        ranges[0] = new EntityBatchRange(0, startRow, entities.Length);
+        WriteCreatedEntitiesAndLocations(archetype, entities, ranges, 0, startId);
     }
 
     private void WriteCreatedEntitiesAndLocations(Archetype archetype, Span<Entity> entities, ReadOnlySpan<EntityBatchRange> ranges, int reusedCount, int startId)
@@ -1871,8 +1821,7 @@ public sealed class World : IDisposable
 
         foreach (var range in ranges)
         {
-            var chunk = archetype.GetChunk(range.ChunkIndex);
-            var chunkEntities = chunk.GetReservedEntities(range.StartRow, range.Count);
+            var chunkEntities = archetype.GetReservedEntities(range.StartRow, range.Count);
             var rowOffset = 0;
 
             for (; rowOffset < range.Count && entityIndex < reusedCount; rowOffset++)
@@ -1883,7 +1832,6 @@ public sealed class World : IDisposable
                 chunkEntities[rowOffset] = entity;
                 ref var record = ref _records[entity.Id];
                 record.Archetype = archetype;
-                record.Chunk = chunk;
                 record.RowIndex = range.StartRow + rowOffset;
             }
 
@@ -1894,7 +1842,6 @@ public sealed class World : IDisposable
                 chunkEntities[rowOffset] = entity;
                 ref var record = ref _records[entity.Id];
                 record.Archetype = archetype;
-                record.Chunk = chunk;
                 record.RowIndex = range.StartRow + rowOffset;
             }
         }
@@ -2080,10 +2027,9 @@ public sealed class World : IDisposable
 
     internal void MaterializeReservedEntityDirect(Entity entity, Archetype archetype, ReadOnlySpan<RawComponentValue> components)
     {
-        var chunk = archetype.ReserveEntity(entity, out var chunkIndex, out var rowIndex);
+        var rowIndex = archetype.AddEntity(entity);
         ref var record = ref _records[entity.Id];
         record.Archetype = archetype;
-        record.Chunk = chunk;
         record.RowIndex = rowIndex;
 
         unsafe
@@ -2094,7 +2040,7 @@ public sealed class World : IDisposable
                 var writer = ComponentWriterCache.GetColumnWriter(component.RuntimeType);
                 fixed (byte* ptr = component.Data)
                 {
-                    WriteComponentFromBytes(chunk, component.ComponentType, rowIndex, ptr + component.DataOffset, writer);
+                    WriteComponentFromBytes(archetype, component.ComponentType, rowIndex, ptr + component.DataOffset, writer);
                 }
             }
         }
@@ -2110,10 +2056,9 @@ public sealed class World : IDisposable
         ReadOnlySpan<CommandBuffer.CreatedComponent> components,
         List<byte[]> slabs)
     {
-        var chunk = archetype.ReserveEntity(entity, out var chunkIndex, out var rowIndex);
+        var rowIndex = archetype.AddEntity(entity);
         ref var record = ref _records[entity.Id];
         record.Archetype = archetype;
-        record.Chunk = chunk;
         record.RowIndex = rowIndex;
 
         for (var index = 0; index < components.Length; index++)
@@ -2122,7 +2067,7 @@ public sealed class World : IDisposable
             var data = slabs[cc.SlabIndex];
             fixed (byte* ptr = data)
             {
-                WriteComponentFromBytes(chunk, cc.ComponentType, rowIndex, ptr + cc.DataOffset, cc.Writer!);
+                WriteComponentFromBytes(archetype, cc.ComponentType, rowIndex, ptr + cc.DataOffset, cc.Writer!);
             }
         }
     }
@@ -2135,10 +2080,9 @@ public sealed class World : IDisposable
         bool trustCompiledComponentTypes)
     {
         var archetype = GetOrCreateArchetype(signature);
-        var chunk = archetype.ReserveEntity(entity, out _, out var rowIndex);
+        var rowIndex = archetype.AddEntity(entity);
         ref var record = ref _records[entity.Id];
         record.Archetype = archetype;
-        record.Chunk = chunk;
         record.RowIndex = rowIndex;
 
         unsafe
@@ -2152,7 +2096,7 @@ public sealed class World : IDisposable
                 var writer = ComponentWriterCache.GetColumnWriter(component.RuntimeType);
                 fixed (byte* ptr = component.Data)
                 {
-                    WriteComponentFromBytes(chunk, resolvedType, rowIndex, ptr + component.DataOffset, writer);
+                    WriteComponentFromBytes(archetype, resolvedType, rowIndex, ptr + component.DataOffset, writer);
                 }
             }
         }

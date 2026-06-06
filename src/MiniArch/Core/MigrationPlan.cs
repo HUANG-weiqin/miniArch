@@ -29,9 +29,8 @@ internal sealed class MigrationPlan
         var destinationComponents = destination.Signature.AsSpan();
         var sharedCopies = new CopyEntry[sourceComponents.Length - (isAdd ? 0 : 1)];
 
-        // All chunks in an archetype share the same column byte offsets (same component layout).
-        var sourceOffsets = source.GetChunk(0).GetColumnByteOffsets();
-        var destOffsets = destination.GetChunk(0).GetColumnByteOffsets();
+        var sourceOffsets = source.GetColumnByteOffsets();
+        var destOffsets = destination.GetColumnByteOffsets();
 
         int? addedColumnIndex = null;
         var copyCount = 0;
@@ -71,17 +70,17 @@ internal sealed class MigrationPlan
     /// chunk data array references are hoisted once outside the loop.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void CopySharedData(Chunk sourceChunk, int sourceRow, Chunk destinationChunk, int destinationRow)
+    internal void CopySharedData(Archetype source, int sourceRow, Archetype destination, int destinationRow)
     {
-        ref var sourceBase = ref MemoryMarshal.GetArrayDataReference(sourceChunk.GetDataArray());
-        ref var destBase = ref MemoryMarshal.GetArrayDataReference(destinationChunk.GetDataArray());
+        ref var sourceBase = ref MemoryMarshal.GetArrayDataReference(source.GetDataArray());
+        ref var destBase = ref MemoryMarshal.GetArrayDataReference(destination.GetDataArray());
         var copies = SharedCopies;
 
         for (var i = 0; i < copies.Length; i++)
         {
             ref readonly var entry = ref copies[i];
             var size = entry.ByteSize;
-            Chunk.CopySmall(
+            Archetype.CopySmall(
                 ref Unsafe.Add(ref destBase, entry.DestColumnByteOffset + destinationRow * size),
                 ref Unsafe.Add(ref sourceBase, entry.SourceColumnByteOffset + sourceRow * size),
                 size);
