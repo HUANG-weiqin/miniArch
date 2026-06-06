@@ -951,14 +951,16 @@ public sealed class World : IDisposable
 
     /// <summary>
     /// Checks whether an entity has a specific component.
+    /// Inlined hot path: no EntityInfo allocation, no disposed check.
     /// </summary>
-    public bool Has<T>(Entity entity)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool Has<T>(Entity entity) where T : struct
     {
-        ThrowIfDisposed();
-        if (!TryGetLocation(entity, out var info))
+        ref var record = ref _records[entity.Id];
+        if (!record.IsOccupied || record.Version != entity.Version)
             return false;
 
-        return info.Archetype.Signature.Contains(GetComponentType<T>());
+        return record.Archetype!.TryGetComponentIndex(Component<T>.ComponentType, out _);
     }
 
     /// <summary>
