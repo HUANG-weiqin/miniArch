@@ -281,7 +281,7 @@ public sealed class MiniRandomEntityAccess : IGameScenario
     public MiniRandomEntityAccess(){_w=new World(128,30000);_es=new MiniEntity[30000];for(int i=0;i<30000;i++)_es[i]=_w.Create(new Position(i,i),new Health(100+i%50));_q=MiniQuery.Create(_w,new QueryDescription().With<Position>().With<Health>());}
     public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
     [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;
-        for(int i=0;i<2000;i++){ref var e=ref _es[_r.Next(30000)];ref var h=ref _w.GetRef<Health>(e);s+=h.Value;h.Value--;ref var p=ref _w.GetRef<Position>(e);s+=p.X+p.Y;p.X++;p.Y++;};
+        for(int i=0;i<2000;i++){var e=_es[_r.Next(30000)];var acc=_w.Access(e);ref var h=ref acc.Get<Health>();s+=h.Value;h.Value--;ref var p=ref acc.Get<Position>();s+=p.X+p.Y;p.X++;p.Y++;};
         foreach(var c in _q.ChunksOf<Position,Health>()){int n=c.Count;var sp=c.Span0;var sh=c.Span1;for(int i=0;i<n;i++)s+=sp[i].X+sh[i].Value;}return s;}
 }
 public sealed class FrifloRandomEntityAccess : IGameScenario
@@ -301,15 +301,15 @@ public sealed class FrifloRandomEntityAccess : IGameScenario
 // ============================================================================
 public sealed class MiniFollowTheLeader : IGameScenario
 {
-    readonly World _w; readonly MiniEntity[] _ld; readonly MiniQuery _fq,_lq; readonly ComponentLookup<Position> _posLookup;
+    readonly World _w; readonly MiniEntity[] _ld; readonly MiniQuery _fq,_lq;
     public MiniFollowTheLeader(){_w=new World(128,20100);_ld=new MiniEntity[100];
         for(int i=0;i<100;i++)_ld[i]=_w.Create(new Position(i*10,i*10),new Velocity(1,1));
         for(int i=0;i<20000;i++)_w.Create(new Position(i,i+1),new LeaderIdx(i%100));
         _fq=MiniQuery.Create(_w,new QueryDescription().With<Position>().With<LeaderIdx>());
-        _lq=MiniQuery.Create(_w,new QueryDescription().With<Position>().With<Velocity>());_posLookup=_w.Lookup<Position>();}
+        _lq=MiniQuery.Create(_w,new QueryDescription().With<Position>().With<Velocity>());}
     public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
     [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;
-        foreach(var c in _fq.ChunksOf<Position,LeaderIdx>()){int n=c.Count;var sp=c.Span0;var sl=c.Span1;for(int i=0;i<n;i++){ref var lp=ref _posLookup.GetRef(_ld[sl[i].Value]);s+=sp[i].X+lp.X+sp[i].Y+lp.Y;}}
+        foreach(var c in _fq.ChunksOf<Position,LeaderIdx>()){int n=c.Count;var sp=c.Span0;var sl=c.Span1;for(int i=0;i<n;i++){var lacc=_w.Access(_ld[sl[i].Value]);ref var lp=ref lacc.Get<Position>();s+=sp[i].X+lp.X+sp[i].Y+lp.Y;}}
         foreach(var c in _lq.ChunksOf<Position,Velocity>()){int n=c.Count;var sp=c.Span0;var sv=c.Span1;for(int i=0;i<n;i++)s+=sp[i].X+sv[i].VX;}return s;}
 }
 public sealed class FrifloFollowTheLeader : IGameScenario
