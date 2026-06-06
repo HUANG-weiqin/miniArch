@@ -132,7 +132,7 @@ public sealed class QueryTests
         var query = MiniQuery.Create(world, in description);
         var archetype = Assert.Single(query.GetArchetypeSpan().ToArray());
 
-        Assert.Equal(archetype.Chunks, archetype.GetChunkSpan().ToArray());
+        Assert.Equal(1, archetype.GetChunkSpan().Length);
     }
 
     [Fact]
@@ -349,7 +349,7 @@ public sealed class QueryTests
         var entities = new List<Entity>();
         foreach (var archetype in query.MatchedArchetypes)
         {
-            foreach (var chunk in archetype.Chunks)
+            foreach (ref readonly var chunk in archetype.GetChunkSpan())
             {
                 for (var row = 0; row < chunk.Count; row++)
                 {

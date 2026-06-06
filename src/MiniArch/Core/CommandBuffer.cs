@@ -383,7 +383,6 @@ public sealed class CommandBuffer : ICommandRecorder
         if (createdIdx < 0) return;
 
         var archetype = location.Archetype;
-        var chunk = location.Chunk!;
         var sourceRow = location.RowIndex;
 
         var components = archetype.Signature.AsSpan();
@@ -393,7 +392,7 @@ public sealed class CommandBuffer : ICommandRecorder
             var componentTypeId = componentType.Value;
             ref var state = ref _createdStatePool[createdIdx];
             var info = ResolveTypeInfo(componentTypeId);
-            CopyComponentFromChunk(chunk, i, sourceRow, info.Size, out var slabIndex, out var offset);
+            CopyComponentFromArchetype(archetype, i, sourceRow, info.Size, out var slabIndex, out var offset);
             state.Map.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size, info.Writer), ref _createdOverflow);
         }
     }
@@ -1266,7 +1265,7 @@ public sealed class CommandBuffer : ICommandRecorder
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private unsafe void CopyComponentFromChunk(Chunk chunk, int columnIndex, int row, int size, out int slabIndex, out int offset)
+    private unsafe void CopyComponentFromArchetype(Archetype archetype, int columnIndex, int row, int size, out int slabIndex, out int offset)
     {
         EnsureSlabSpace(size);
 
@@ -1276,7 +1275,7 @@ public sealed class CommandBuffer : ICommandRecorder
 
         fixed (byte* ptr = &_slabs[slabIndex][offset])
         {
-            chunk.ReadComponentRaw(columnIndex, row, ptr);
+            archetype.ReadComponentRaw(columnIndex, row, ptr);
         }
     }
 

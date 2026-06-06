@@ -1,18 +1,17 @@
 namespace MiniArch.Core;
 
 /// <summary>
-/// Merged entity metadata: version + location in one cache line.
-/// Stores both Archetype and Chunk references to avoid the Chunk→Owner
-/// indirection on every entity metadata access. Fields are ordered for
-/// natural 24-byte Sequential layout:
-/// Archetype(8) + Chunk(8) + RowIndex(4) + Version(4) = 24 bytes.
+/// Entity metadata: version + location in one cache line.
+/// Archetype is the sole storage unit (no multi-chunk splitting),
+/// so Chunk is removed — Archetype alone identifies the storage block.
+/// Fields ordered for natural 16-byte Sequential layout:
+/// Archetype(8) + RowIndex(4) + Version(4) = 16 bytes.
 /// </summary>
 internal struct EntityRecord
 {
-    public Archetype? Archetype; // offset 0, 8 bytes; null = unoccupied
-    public Chunk? Chunk;         // offset 8, 8 bytes
-    public int RowIndex;         // offset 16, 4 bytes
-    public int Version;          // offset 20, 4 bytes
+    public Archetype? Archetype; // null = unoccupied
+    public int RowIndex;
+    public int Version;
 
-    public readonly bool IsOccupied => Chunk is not null;
+    public readonly bool IsOccupied => Archetype is not null;
 }

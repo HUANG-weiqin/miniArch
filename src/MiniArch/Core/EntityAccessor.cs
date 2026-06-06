@@ -4,7 +4,7 @@ namespace MiniArch.Core;
 
 /// <summary>
 /// Cached entity accessor for multiple component reads/writes on the same entity.
-/// Performs the entity→(chunk,row) lookup once, then all subsequent
+/// Performs the entity→(archetype,row) lookup once, then all subsequent
 /// <see cref="Get{T}"/>, <see cref="Set{T}"/>, and <see cref="Has{T}"/> calls
 /// operate directly on the cached location.
 /// </summary>
@@ -15,12 +15,12 @@ namespace MiniArch.Core;
 /// </remarks>
 public ref struct EntityAccessor
 {
-    private readonly Chunk _chunk;
+    private readonly Archetype _archetype;
     private readonly int _row;
 
-    internal EntityAccessor(Chunk chunk, int row)
+    internal EntityAccessor(Archetype archetype, int row)
     {
-        _chunk = chunk;
+        _archetype = archetype;
         _row = row;
     }
 
@@ -32,8 +32,8 @@ public ref struct EntityAccessor
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ref T Get<T>()
     {
-        var columnIndex = _chunk.GetComponentIndexFast(Component<T>.ComponentType);
-        return ref _chunk.GetComponentRefAt<T>(columnIndex, _row);
+        var columnIndex = _archetype.GetComponentIndexFast(Component<T>.ComponentType);
+        return ref _archetype.GetComponentRefAt<T>(columnIndex, _row);
     }
 
     /// <summary>
@@ -44,8 +44,8 @@ public ref struct EntityAccessor
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Set<T>(in T value)
     {
-        var columnIndex = _chunk.GetComponentIndexFast(Component<T>.ComponentType);
-        _chunk.SetComponentAtTyped(columnIndex, _row, in value);
+        var columnIndex = _archetype.GetComponentIndexFast(Component<T>.ComponentType);
+        _archetype.SetComponentAtTyped(columnIndex, _row, in value);
     }
 
     /// <summary>
@@ -54,6 +54,6 @@ public ref struct EntityAccessor
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Has<T>()
     {
-        return _chunk.TryGetComponentIndex(Component<T>.ComponentType, out _);
+        return _archetype.TryGetComponentIndex(Component<T>.ComponentType, out _);
     }
 }

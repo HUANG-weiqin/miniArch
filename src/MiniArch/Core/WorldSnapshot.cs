@@ -208,43 +208,24 @@ public static class WorldSnapshot
             writer.Write(schemaIndexByType[runtimeType]);
         }
 
-        var persistedChunks = CountPersistedChunks(archetype);
-        writer.Write(persistedChunks);
+        var entityCount = archetype.EntityCount;
+        writer.Write(entityCount);
 
-        foreach (var chunk in archetype.Chunks)
+        foreach (var entity in archetype.GetEntities())
         {
-            if (chunk.Count == 0)
-            {
-                continue;
-            }
+            writer.Write(entity.Id);
+        }
 
-            writer.Write(chunk.Count);
-
-            foreach (var entity in chunk.GetEntities())
-            {
-                writer.Write(entity.Id);
-            }
-
-            for (var columnIndex = 0; columnIndex < components.Length; columnIndex++)
-            {
-                var componentType = world.Components.GetType(components[columnIndex]);
-                GetColumnCodec(componentType).Write(writer, chunk, columnIndex, chunk.Count);
-            }
+        for (var columnIndex = 0; columnIndex < components.Length; columnIndex++)
+        {
+            var componentType = world.Components.GetType(components[columnIndex]);
+            GetColumnCodec(componentType).Write(writer, archetype, columnIndex, entityCount);
         }
     }
 
     private static int CountPersistedChunks(Archetype archetype)
     {
-        var count = 0;
-        foreach (var chunk in archetype.Chunks)
-        {
-            if (chunk.Count > 0)
-            {
-                count++;
-            }
-        }
-
-        return count;
+        return archetype.EntityCount > 0 ? 1 : 0;
     }
 
     private static void ReadArchetype(
@@ -263,33 +244,30 @@ public static class WorldSnapshot
         }
 
         var archetype = world.GetOrCreateArchetype(new Signature(fileOrderedComponentTypes));
-        var chunkCount = reader.ReadInt32();
+        var rowCount = reader.ReadInt32();
 
-        for (var chunkOrdinal = 0; chunkOrdinal < chunkCount; chunkOrdinal++)
+        var entities = new Entity[rowCount];
+
+        for (var row = 0; row < rowCount; row++)
         {
-            var rowCount = reader.ReadInt32();
-            var entities = new Entity[rowCount];
+            var entityId = reader.ReadInt32();
+            entities[row] = new Entity(entityId, slotVersions[entityId]);
+        }
 
-            for (var row = 0; row < rowCount; row++)
-            {
-                var entityId = reader.ReadInt32();
-                entities[row] = new Entity(entityId, slotVersions[entityId]);
-            }
+        var startRow = archetype.ReserveRows(rowCount);
+        entities.CopyTo(archetype.GetReservedEntities(startRow, rowCount));
 
-            var chunk = archetype.ImportSnapshotChunk(entities, out var chunkIndex);
+        for (var fileColumnIndex = 0; fileColumnIndex < fileOrderedComponentTypes.Length; fileColumnIndex++)
+        {
+            var runtimeComponentType = fileOrderedComponentTypes[fileColumnIndex];
+            var runtimeColumnIndex = archetype.GetComponentIndex(runtimeComponentType);
+            var runtimeType = world.Components.GetType(runtimeComponentType);
+            GetColumnCodec(runtimeType).Read(reader, archetype, runtimeColumnIndex, rowCount);
+        }
 
-            for (var fileColumnIndex = 0; fileColumnIndex < fileOrderedComponentTypes.Length; fileColumnIndex++)
-            {
-                var runtimeComponentType = fileOrderedComponentTypes[fileColumnIndex];
-                var runtimeColumnIndex = archetype.GetComponentIndex(runtimeComponentType);
-                var runtimeType = world.Components.GetType(runtimeComponentType);
-                GetColumnCodec(runtimeType).Read(reader, chunk, runtimeColumnIndex, rowCount);
-            }
-
-            for (var row = 0; row < entities.Length; row++)
-            {
-                world.SetSnapshotLocation(entities[row], archetype, chunkIndex, row);
-            }
+        for (var row = 0; row < entities.Length; row++)
+        {
+            world.SetSnapshotLocation(entities[row], archetype, row);
         }
     }
 
@@ -310,16 +288,16 @@ public static class WorldSnapshot
         });
     }
 
-    private static void WriteColumnPayload<T>(BinaryWriter writer, Chunk chunk, int columnIndex, int count)
+    private static void WriteColumnPayload<T>(BinaryWriter writer, Archetype archetype, int columnIndex, int count)
         where T : unmanaged
     {
-        chunk.WriteColumnTo<T>(writer, columnIndex, count);
+        archetype.WriteColumnTo<T>(writer, columnIndex, count);
     }
 
-    private static void ReadColumnPayload<T>(BinaryReader reader, Chunk chunk, int columnIndex, int count)
+    private static void ReadColumnPayload<T>(BinaryReader reader, Archetype archetype, int columnIndex, int count)
         where T : unmanaged
     {
-        chunk.ReadColumnFrom<T>(reader, columnIndex, count);
+        archetype.ReadColumnFrom<T>(reader, columnIndex, count);
     }
 
     private static string GetSchemaName(Type componentType)
@@ -371,9 +349,9 @@ public static class WorldSnapshot
         return false;
     }
 
-    private delegate void ColumnWriter(BinaryWriter writer, Chunk chunk, int columnIndex, int count);
+    private delegate void ColumnWriter(BinaryWriter writer, Archetype archetype, int columnIndex, int count);
 
-    private delegate void ColumnReader(BinaryReader reader, Chunk chunk, int columnIndex, int count);
+    private delegate void ColumnReader(BinaryReader reader, Archetype archetype, int columnIndex, int count);
 
     private sealed record ColumnCodec(ColumnWriter Write, ColumnReader Read);
 

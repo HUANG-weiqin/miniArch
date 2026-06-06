@@ -301,21 +301,16 @@ public sealed class Query
         var matchedChunkCount = 0;
         for (var archetypeIndex = 0; archetypeIndex < snapshotArchetypeCount; archetypeIndex++)
         {
-            var chunks = snapshotArchetypes[archetypeIndex].Chunks;
-            for (var chunkListIndex = 0; chunkListIndex < chunks.Count; chunkListIndex++)
+            var arch = snapshotArchetypes[archetypeIndex];
+            if (arch.EntityCount > 0)
             {
-                if (chunks[chunkListIndex].Count > 0)
-                {
-                    matchedChunkCount++;
-                }
+                matchedChunkCount++;
             }
         }
 
         if (matchedChunkCount == 0)
         {
             Volatile.Write(ref _snapshotChunks, Array.Empty<Chunk>());
-            // Still update generations so HasAnyArchetypeGenerationChanged doesn't
-            // keep returning true, causing constant empty rebuilds.
             UpdateStoredGenerations(snapshotArchetypes, snapshotArchetypeCount);
             Volatile.Write(ref _chunksDirty, 0);
             return;
@@ -329,25 +324,22 @@ public sealed class Query
         var chunkIndex = 0;
         for (var archetypeIndex = 0; archetypeIndex < snapshotArchetypeCount; archetypeIndex++)
         {
-            var chunks = snapshotArchetypes[archetypeIndex].Chunks;
-            for (var i = 0; i < chunks.Count; i++)
+            var arch = snapshotArchetypes[archetypeIndex];
+            if (arch.EntityCount > 0)
             {
-                if (chunks[i].Count > 0)
-                {
-                    _scratchChunks[chunkIndex++] = chunks[i];
-                }
+                _scratchChunks[chunkIndex++] = arch.GetChunkSpan()[0];
             }
         }
 
-        if (_scratchChunks.Length != matchedChunkCount)
+        // Publish exact-length chunk array to avoid stale entries.
+        var exact = _scratchChunks;
+        if (exact.Length != matchedChunkCount)
         {
-            var trimmed = new Chunk[matchedChunkCount];
-            Array.Copy(_scratchChunks, trimmed, matchedChunkCount);
-            _scratchChunks = trimmed;
+            exact = new Chunk[matchedChunkCount];
+            Array.Copy(_scratchChunks, exact, matchedChunkCount);
         }
-
         var old = _snapshotChunks;
-        Volatile.Write(ref _snapshotChunks, _scratchChunks);
+        Volatile.Write(ref _snapshotChunks, exact);
         _scratchChunks = old;
 
         // Update stored generations so HasAnyArchetypeGenerationChanged doesn't keep

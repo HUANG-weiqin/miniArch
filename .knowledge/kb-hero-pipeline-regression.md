@@ -22,6 +22,7 @@ updated: 2026-06-06
 
 | 链路 | 吞吐量 rounds/s | 平均耗时 ms/round | 总轮数 | 内存稳定性 |
 |---|---|---|---|---|
+<<<<<<< HEAD
 | Movement（无 collision） | 844.0 | 1.2 | 25320 | 稳定 |
 | Attack（含 collision） | 229.6 | 4.4 | 6889 | 稳定 |
 
@@ -29,4 +30,13 @@ updated: 2026-06-06
 
 - Movement 吞吐量：≥675 rounds/s（baseline 的 80%）
 - Attack 吞吐量：≥183 rounds/s（baseline 的 80%）
+=======
+| Movement（无 collision） | 1000.6 | 1.0 | 30018 | 稳定 |
+| Attack（含 collision） | 238.6 | 4.2 | 7157 | 稳定 |
+
+### 回归阈值
+
+- Movement 吞吐量：≥800 rounds/s（baseline 的 80%）
+- Attack 吞吐量：≥190 rounds/s（baseline 的 80%）
+>>>>>>> feature/friflo-game-scenario-bench
 - 内存：heap delta 不能持续增长（允许 ±10% 波动）

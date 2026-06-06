@@ -109,13 +109,13 @@ public sealed class WorldSnapshotTests
         }
 
         Assert.True(loaded.TryGetLocation(positionOnly[2], out var thirdPositionOnlyLocation));
-        Assert.NotNull(thirdPositionOnlyLocation.Chunk);
+        Assert.NotNull(thirdPositionOnlyLocation.Archetype);
 
         Assert.True(loaded.TryGetLocation(moving[2], out var thirdMovingLocation));
-        Assert.NotNull(thirdMovingLocation.Chunk);
+        Assert.NotNull(thirdMovingLocation.Archetype);
 
         Assert.True(loaded.TryGetLocation(living[2], out var thirdLivingLocation));
-        Assert.NotNull(thirdLivingLocation.Chunk);
+        Assert.NotNull(thirdLivingLocation.Archetype);
     }
 
     [Fact]
@@ -203,7 +203,6 @@ public sealed class WorldSnapshotTests
         Assert.True(world.TryGetLocation(entity, out var location));
 
         var componentType = world.Components.GetOrCreate<T>();
-        var chunk = location.Chunk!;
-        return chunk.GetComponent<T>(componentType, location.RowIndex);
+        return location.Archetype.GetComponent<T>(componentType, location.RowIndex);
     }
 }

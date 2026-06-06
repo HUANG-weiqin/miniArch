@@ -1,5 +1,4 @@
 using MiniArch.Core;
-using MiniChunk = MiniArch.Core.Chunk;
 using MiniEntity = MiniArch.Entity;
 using MiniWorld = MiniArch.World;
 using ArchEntity = Arch.Core.Entity;
@@ -352,25 +351,25 @@ public static class CommandBufferSharedScenarios
 
     private static string DescribeMiniEntity(MiniWorld world, EntityInfo location)
     {
-        var chunk = location.Chunk!;
+        var arch = location.Archetype;
         var parts = new List<string>(4);
 
-        if (TryGetComponent(world, location, chunk, world.Components.GetOrCreate<BenchmarkPosition>(), out BenchmarkPosition position))
+        if (TryGetComponent(world, location, arch, world.Components.GetOrCreate<BenchmarkPosition>(), out BenchmarkPosition position))
         {
             parts.Add($"Position({position.X},{position.Y})");
         }
 
-        if (TryGetComponent(world, location, chunk, world.Components.GetOrCreate<BenchmarkVelocity>(), out BenchmarkVelocity velocity))
+        if (TryGetComponent(world, location, arch, world.Components.GetOrCreate<BenchmarkVelocity>(), out BenchmarkVelocity velocity))
         {
             parts.Add($"Velocity({velocity.X},{velocity.Y})");
         }
 
-        if (TryGetComponent(world, location, chunk, world.Components.GetOrCreate<BenchmarkHealth>(), out BenchmarkHealth health))
+        if (TryGetComponent(world, location, arch, world.Components.GetOrCreate<BenchmarkHealth>(), out BenchmarkHealth health))
         {
             parts.Add($"Health({health.Value})");
         }
 
-        if (TryGetComponent(world, location, chunk, world.Components.GetOrCreate<BenchmarkArmor>(), out BenchmarkArmor armor))
+        if (TryGetComponent(world, location, arch, world.Components.GetOrCreate<BenchmarkArmor>(), out BenchmarkArmor armor))
         {
             parts.Add($"Armor({armor.Value})");
         }
@@ -409,7 +408,7 @@ public static class CommandBufferSharedScenarios
         return string.Join("|", parts.Count == 0 ? ["empty"] : parts);
     }
 
-    private static bool TryGetComponent<T>(MiniWorld world, EntityInfo location, MiniChunk chunk, ComponentType componentType, out T component)
+    private static bool TryGetComponent<T>(MiniWorld world, EntityInfo location, Archetype archetype, ComponentType componentType, out T component)
     {
         if (!location.Archetype.Signature.Contains(componentType))
         {
@@ -417,7 +416,7 @@ public static class CommandBufferSharedScenarios
             return false;
         }
 
-        component = chunk.GetComponent<T>(componentType, location.RowIndex);
+        component = archetype.GetComponent<T>(componentType, location.RowIndex);
         return true;
     }
 }

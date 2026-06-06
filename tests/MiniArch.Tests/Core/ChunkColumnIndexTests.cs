@@ -144,20 +144,7 @@ public sealed class ChunkColumnIndexTests
 
     private static Chunk CreateTypedChunk(Signature signature, Type[] componentTypes, int capacity)
     {
-        var componentIdToColumnIndex = new int[componentTypes.Length];
-        for (var index = 0; index < componentIdToColumnIndex.Length; index++)
-        {
-            componentIdToColumnIndex[index] = index;
-        }
-
-        var constructor = typeof(Chunk).GetConstructor(
-            BindingFlags.Instance | BindingFlags.NonPublic,
-            binder: null,
-            new[] { typeof(Signature), typeof(Type[]), typeof(int[]), typeof(int), typeof(int) },
-            modifiers: null);
-
-        Assert.NotNull(constructor);
-        return (Chunk)constructor!.Invoke(new object?[] { signature, componentTypes, componentIdToColumnIndex, capacity, capacity });
+        return new Archetype(signature, componentTypes, capacity: capacity).GetChunkSpan()[0];
     }
 
     private readonly record struct NonExistentComponent(int Value);

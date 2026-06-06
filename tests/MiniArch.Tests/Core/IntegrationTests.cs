@@ -33,8 +33,7 @@ public sealed class IntegrationTests
         Assert.Single(chunks);
         Assert.Contains(chunks, chunk => chunk.Count == 1);
 
-        var chunk = location.Chunk!;
-        Assert.Equal(entity, chunk.GetEntity(location.RowIndex));
-        Assert.Equal(new Position(9, 9), chunk.GetComponent<Position>(positionId, location.RowIndex));
+        Assert.Equal(entity, location.Archetype.GetEntity(location.RowIndex));
+        Assert.Equal(new Position(9, 9), location.Archetype.GetComponent<Position>(positionId, location.RowIndex));
     }
 }
