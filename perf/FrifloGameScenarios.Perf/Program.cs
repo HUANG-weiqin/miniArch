@@ -188,7 +188,7 @@ public sealed class MiniRPGStats : IGameScenario
     readonly World _w; readonly MiniQuery _q;
     public MiniRPGStats(){_w=new World(128,40000);for(int i=0;i<40000;i++)_w.Create(new Position(i,i+1),new Velocity(i%5,i%5),new Health(100+i%50),new Mana(50+i%30),new Armor(10+i%20));_q=MiniQuery.Create(_w,new QueryDescription().With<Position>().With<Velocity>().With<Health>().With<Mana>().With<Armor>());}
     public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
-    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;foreach(var c in _q.Chunks){var sp=c.GetComponentSpan<Position>(Component<Position>.ComponentType);var sv=c.GetComponentSpan<Velocity>(Component<Velocity>.ComponentType);var sh=c.GetComponentSpan<Health>(Component<Health>.ComponentType);var sm=c.GetComponentSpan<Mana>(Component<Mana>.ComponentType);var sa=c.GetComponentSpan<Armor>(Component<Armor>.ComponentType);for(int i=0;i<c.Count;i++)s+=sp[i].X+sv[i].VY+sh[i].Value+sm[i].Value+sa[i].Value;}return s;}
+    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;var chunks=_q.GetChunkSpan();for(int ci=0;ci<chunks.Length;ci++){var c=chunks[ci];int n=c.GetEntities().Length;var sp=c.GetComponentSpan<Position>(Component<Position>.ComponentType);var sv=c.GetComponentSpan<Velocity>(Component<Velocity>.ComponentType);var sh=c.GetComponentSpan<Health>(Component<Health>.ComponentType);var sm=c.GetComponentSpan<Mana>(Component<Mana>.ComponentType);var sa=c.GetComponentSpan<Armor>(Component<Armor>.ComponentType);for(int i=0;i<n;i++)s+=sp[i].X+sv[i].VY+sh[i].Value+sm[i].Value+sa[i].Value;}return s;}
 }
 public sealed class FrifloRPGStats : IGameScenario
 {
@@ -309,7 +309,7 @@ public sealed class MiniFollowTheLeader : IGameScenario
         _lq=MiniQuery.Create(_w,new QueryDescription().With<Position>().With<Velocity>());}
     public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
     [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;
-        foreach(var c in _fq.ChunksOf<Position,LeaderIdx>()){int n=c.Count;var sp=c.Span0;var sl=c.Span1;for(int i=0;i<n;i++){var lacc=_w.Access(_ld[sl[i].Value]);ref var lp=ref lacc.Get<Position>();s+=sp[i].X+lp.X+sp[i].Y+lp.Y;}}
+        foreach(var c in _fq.ChunksOf<Position,LeaderIdx>()){int n=c.Count;var sp=c.Span0;var sl=c.Span1;for(int i=0;i<n;i++){var lp=_w.Get<Position>(_ld[sl[i].Value]);s+=sp[i].X+lp.X+sp[i].Y+lp.Y;}}
         foreach(var c in _lq.ChunksOf<Position,Velocity>()){int n=c.Count;var sp=c.Span0;var sv=c.Span1;for(int i=0;i<n;i++)s+=sp[i].X+sv[i].VX;}return s;}
 }
 public sealed class FrifloFollowTheLeader : IGameScenario
