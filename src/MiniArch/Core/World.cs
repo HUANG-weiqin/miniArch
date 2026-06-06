@@ -973,6 +973,18 @@ public sealed class World : IDisposable
     }
 
     /// <summary>
+    /// Gets a component by reference directly without version or bounds checks.
+    /// Use only when the entity is known to be alive and the component is known to exist.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ref T GetRef<T>(Entity entity)
+    {
+        ref var record = ref _records[entity.Id];
+        var chunk = record.Chunk!;
+        return ref chunk.GetComponentRefAt<T>(chunk.GetComponentIndexFast(GetComponentType<T>()), record.RowIndex);
+    }
+
+    /// <summary>
     /// Gets an entity-only query from a description.
     /// </summary>
     public Query Query(in QueryDescription description)
