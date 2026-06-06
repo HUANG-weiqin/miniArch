@@ -20,7 +20,6 @@ public sealed class World : IDisposable
     private const int AdaptiveMaxChunkCapacity = 1024;
     private const int StackAllocatedBatchRangeLimit = 128;
     private static readonly int EntitySizeInBytes = Unsafe.SizeOf<Entity>();
-    [ThreadStatic] private static EntityBatchRange[]? _tsBatchRanges;
 
     private readonly Dictionary<Signature, Archetype> _archetypes = new();
     private readonly Dictionary<CreateArchetypeKey, Archetype> _createArchetypeCache = new();
@@ -2130,71 +2129,6 @@ public sealed class World : IDisposable
             fixed (byte* ptr = data)
             {
                 WriteComponentFromBytes(chunk, cc.ComponentType, rowIndex, ptr + cc.DataOffset, cc.Writer!);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Batch materialization for entities sharing the same archetype and component layout.
-    /// componentsByEntity is flat: entity 0 components [0..componentCount-1], entity 1 [componentCount..2*componentCount-1], etc.
-    /// </summary>
-    internal unsafe void MaterializeReservedEntitiesFastSameLayout(
-        ReadOnlySpan<Entity> entities,
-        Archetype archetype,
-        ReadOnlySpan<CommandBuffer.CreatedComponent> componentsByEntity,
-        int componentCount,
-        List<byte[]> slabs)
-    {
-        if (entities.Length == 0) return;
-
-        Span<EntityBatchRange> ranges;
-        if (entities.Length <= StackAllocatedBatchRangeLimit)
-        {
-            ranges = stackalloc EntityBatchRange[StackAllocatedBatchRangeLimit];
-        }
-        else
-        {
-            var buf = _tsBatchRanges;
-            if (buf == null || buf.Length < entities.Length)
-            {
-                buf = new EntityBatchRange[entities.Length];
-                _tsBatchRanges = buf;
-            }
-            ranges = buf;
-        }
-
-        var rangeCount = archetype.ReserveEntityRanges(entities.Length, ranges);
-        var entityIdx = 0;
-
-        for (var r = 0; r < rangeCount; r++)
-        {
-            ref readonly var range = ref ranges[r];
-            var chunk = archetype.GetChunk(range.ChunkIndex);
-            var entitiesSpan = chunk.GetReservedEntities(range.StartRow, range.Count);
-
-            for (var i = 0; i < range.Count; i++)
-            {
-                var entity = entities[entityIdx];
-                entitiesSpan[i] = entity;
-                var rowIndex = range.StartRow + i;
-
-                ref var record = ref _records[entity.Id];
-                record.ArchetypeIndexPlusOne = GetArchetypeIndexPlusOne(archetype);
-                record.ChunkIndex = range.ChunkIndex;
-                record.RowIndex = rowIndex;
-
-                var compStart = entityIdx * componentCount;
-                for (var c = 0; c < componentCount; c++)
-                {
-                    ref readonly var cc = ref componentsByEntity[compStart + c];
-                    var data = slabs[cc.SlabIndex];
-                    fixed (byte* ptr = data)
-                    {
-                        WriteComponentFromBytes(chunk, cc.ComponentType, rowIndex, ptr + cc.DataOffset, cc.Writer!);
-                    }
-                }
-
-                entityIdx++;
             }
         }
     }
