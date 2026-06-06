@@ -49,7 +49,7 @@ public readonly struct Chunk
     //  Internal API
     // ================================================================
 
-    internal int Capacity => _archetype.MaxCapacity;
+    internal int Capacity => _archetype.Capacity;
     internal Entity[] GetEntityStorage() => _archetype.GetEntityStorage();
     internal int Add(Entity entity) => _archetype.AddEntity(entity);
     internal int ReserveRows(int count) => _archetype.ReserveRows(count);

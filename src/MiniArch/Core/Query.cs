@@ -331,8 +331,15 @@ public sealed class Query
             }
         }
 
+        // Publish exact-length chunk array to avoid stale entries.
+        var exact = _scratchChunks;
+        if (exact.Length != matchedChunkCount)
+        {
+            exact = new Chunk[matchedChunkCount];
+            Array.Copy(_scratchChunks, exact, matchedChunkCount);
+        }
         var old = _snapshotChunks;
-        Volatile.Write(ref _snapshotChunks, _scratchChunks);
+        Volatile.Write(ref _snapshotChunks, exact);
         _scratchChunks = old;
 
         // Update stored generations so HasAnyArchetypeGenerationChanged doesn't keep

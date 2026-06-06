@@ -17,7 +17,6 @@ public sealed class Archetype
     private int[] _elementSizes;
     private int _count;
     private int _capacity;
-    private readonly int _maxCapacity;
     private Chunk _chunkView;
 
     // --- Archetype metadata ---
@@ -26,8 +25,7 @@ public sealed class Archetype
     private readonly int[] _componentIdToColumnIndex;
     private long _generation;
 
-    internal Archetype(Signature signature, Type[] componentTypes, int capacity = 4,
-        int maxCapacity = -1)
+    internal Archetype(Signature signature, Type[] componentTypes, int capacity = 4)
     {
         ArgumentNullException.ThrowIfNull(signature);
 
@@ -39,7 +37,6 @@ public sealed class Archetype
 
         _signature = signature;
         _capacity = capacity;
-        _maxCapacity = maxCapacity < 0 ? capacity : Math.Max(capacity, maxCapacity);
         _componentTypes = componentTypes;
         _componentIdToColumnIndex = ComponentColumnMap.Build(signature);
         _entities = new Entity[capacity];
@@ -70,8 +67,6 @@ public sealed class Archetype
     /// <summary>
     /// Gets the maximum logical capacity (growth ceiling).
     /// </summary>
-    internal int MaxCapacity => _maxCapacity;
-
     /// <summary>
     /// Returns a single-element span wrapping this archetype as a <see cref="Chunk"/>.
     /// Maintains compatibility with query iterators that work over chunks.
@@ -94,9 +89,9 @@ public sealed class Archetype
     {
         if (requiredCapacity <= _capacity) return;
 
-        // Safe growth: cap doubling at int.MaxValue/2 to avoid overflow.
-        var newCapacity = Math.Min(Math.Max(requiredCapacity, Math.Min(_capacity * 2, int.MaxValue / 2)), _maxCapacity);
-        if (newCapacity <= _capacity) return;
+        // Unbounded growth by doubling, capped at max array element count to avoid overflow.
+        var doubleCapacity = Math.Min(_capacity * 2, ArrayMaxLength);
+        var newCapacity = Math.Max(requiredCapacity, doubleCapacity);
 
         var newEntities = new Entity[newCapacity];
         Array.Copy(_entities, newEntities, _count);
@@ -119,6 +114,9 @@ public sealed class Archetype
         _columnByteOffsets = newOffsets;
         _capacity = newCapacity;
     }
+
+    // .NET maximum array element count; avoids overflow in _capacity * 2.
+    private const int ArrayMaxLength = 0x7FFFFFC7; // Array.MaxLength
 
     // ================================================================
     //  Entity operations
@@ -145,12 +143,13 @@ public sealed class Archetype
         if (count < 0)
             throw new ArgumentOutOfRangeException(nameof(count));
 
-        if (_count + count > _maxCapacity)
-            throw new InvalidOperationException("Archetype storage is full.");
+        if (count == 0)
+            return _count;
 
         EnsureCapacity(_count + count);
         var row = _count;
         _count += count;
+        _generation++;
         return row;
     }
 

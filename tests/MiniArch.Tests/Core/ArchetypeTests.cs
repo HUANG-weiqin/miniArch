@@ -25,7 +25,7 @@ public sealed class ArchetypeTests
     {
         var registry = new ComponentRegistry();
         var position = registry.GetOrCreate<Position>();
-        var archetype = new Archetype(new Signature(position), [typeof(Position)], capacity: 2, maxCapacity: 4);
+        var archetype = new Archetype(new Signature(position), [typeof(Position)], capacity: 2);
 
         var row1 = archetype.AddEntity(new Entity(1, 1));
         archetype.SetComponentAtTyped(0, row1, new Position(1, 1));
@@ -73,7 +73,7 @@ public sealed class ArchetypeTests
     [Fact]
     public void Entities_use_a_single_storage_block_that_grows_and_shrinks()
     {
-        var archetype = new Archetype(Signature.Empty, Type.EmptyTypes, capacity: 2, maxCapacity: 4);
+        var archetype = new Archetype(Signature.Empty, Type.EmptyTypes, capacity: 2);
 
         archetype.AddEntity(new Entity(1, 1));
         archetype.AddEntity(new Entity(2, 1));

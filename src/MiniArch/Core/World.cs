@@ -16,7 +16,6 @@ public sealed class World : IDisposable
     private const int EmptyArchetypeChunkCapacity = 256;
     private const int EmptyArchetypeChunkCapacityThreshold = 128;
     private const int AdaptiveChunkTargetBytes = 4 * 1024;
-    private const int AdaptiveMaxChunkTargetBytes = 512 * 1024;
     private const int AdaptiveMaxChunkCapacity = 1024;
     private const int StackAllocatedBatchRangeLimit = 128;
     private static readonly int EntitySizeInBytes = Unsafe.SizeOf<Entity>();
@@ -1289,8 +1288,7 @@ public sealed class World : IDisposable
         }
 
         var chunkCapacity = GetArchetypeChunkCapacity(signature);
-        archetype = new Archetype(signature, ResolveComponentTypes(signature), chunkCapacity,
-            GetMaxChunkCapacity(signature, chunkCapacity));
+        archetype = new Archetype(signature, ResolveComponentTypes(signature), chunkCapacity);
         _archetypes.Add(signature, archetype);
         PublishArchetypeSnapshot(archetype);
         _archetypeVersion++;
@@ -1545,22 +1543,6 @@ public sealed class World : IDisposable
         for (var index = 0; index < components.Length; index++)
             bytesPerEntity += ComponentSizeCache.GetSize(ComponentRegistry.Shared.GetType(components[index]));
         return bytesPerEntity;
-    }
-
-    private static int GetMaxChunkCapacity(Signature signature, int minCapacity)
-    {
-        // Flattened design: each Archetype is its own storage block that grows
-        // unboundedly (no chunk splitting). Return int.MaxValue so EnsureCapacity
-        // never hits a cap.
-        _ = signature;
-        _ = minCapacity;
-        return int.MaxValue;
-    }
-
-    private static int EstimateMaxRangeCount(Archetype archetype, int entityCount)
-    {
-        var chunkCapacity = archetype.Capacity > 0 ? archetype.Capacity : 1;
-        return Math.Min(entityCount, 1 + ((entityCount + chunkCapacity - 1) / chunkCapacity));
     }
 
     private int GetArchetypeChunkCapacity(Signature signature)
