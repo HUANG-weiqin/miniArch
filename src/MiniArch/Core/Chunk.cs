@@ -16,6 +16,13 @@ public sealed class Chunk
 
     internal Archetype? Owner { get; set; }
 
+    /// <summary>
+    /// Index of this chunk within its owning archetype's <c>_chunks</c> list.
+    /// Set once when the chunk is added to the list; stable for the chunk's lifetime.
+    /// <c>-1</c> before the chunk is attached to an archetype.
+    /// </summary>
+    internal int ChunkIndex { get; set; } = -1;
+
     private readonly Signature _signature;
     private Entity[] _entities;
     private byte[] _data;
