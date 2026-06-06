@@ -383,7 +383,7 @@ public sealed class CommandBuffer : ICommandRecorder
         if (createdIdx < 0) return;
 
         var archetype = location.Archetype;
-        var chunk = archetype.GetChunk(location.ChunkIndex);
+        var chunk = location.Chunk!;
         var sourceRow = location.RowIndex;
 
         var components = archetype.Signature.AsSpan();

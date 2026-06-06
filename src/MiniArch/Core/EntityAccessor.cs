@@ -4,7 +4,7 @@ namespace MiniArch.Core;
 
 /// <summary>
 /// Cached entity accessor for multiple component reads/writes on the same entity.
-/// Performs the entity→(archetype,chunk,row) lookup once, then all subsequent
+/// Performs the entity→(chunk,row) lookup once, then all subsequent
 /// <see cref="Get{T}"/>, <see cref="Set{T}"/>, and <see cref="Has{T}"/> calls
 /// operate directly on the cached location.
 /// </summary>
@@ -15,13 +15,11 @@ namespace MiniArch.Core;
 /// </remarks>
 public ref struct EntityAccessor
 {
-    private readonly Archetype _archetype;
     private readonly Chunk _chunk;
     private readonly int _row;
 
-    internal EntityAccessor(Archetype archetype, Chunk chunk, int row)
+    internal EntityAccessor(Chunk chunk, int row)
     {
-        _archetype = archetype;
         _chunk = chunk;
         _row = row;
     }
@@ -34,7 +32,7 @@ public ref struct EntityAccessor
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ref T Get<T>()
     {
-        var columnIndex = _archetype.GetComponentIndexFast(Component<T>.ComponentType);
+        var columnIndex = _chunk.GetComponentIndexFast(Component<T>.ComponentType);
         return ref _chunk.GetComponentRefAt<T>(columnIndex, _row);
     }
 
@@ -46,7 +44,7 @@ public ref struct EntityAccessor
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Set<T>(in T value)
     {
-        var columnIndex = _archetype.GetComponentIndexFast(Component<T>.ComponentType);
+        var columnIndex = _chunk.GetComponentIndexFast(Component<T>.ComponentType);
         _chunk.SetComponentAtTyped(columnIndex, _row, in value);
     }
 
@@ -56,6 +54,6 @@ public ref struct EntityAccessor
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Has<T>()
     {
-        return _archetype.TryGetComponentIndex(Component<T>.ComponentType, out _);
+        return _chunk.TryGetComponentIndex(Component<T>.ComponentType, out _);
     }
 }
