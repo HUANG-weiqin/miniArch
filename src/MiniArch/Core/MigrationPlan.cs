@@ -29,6 +29,10 @@ internal sealed class MigrationPlan
         var destinationComponents = destination.Signature.AsSpan();
         var sharedCopies = new CopyEntry[sourceComponents.Length - (isAdd ? 0 : 1)];
 
+        // All chunks in an archetype share the same column byte offsets (same component layout).
+        var sourceOffsets = source.GetChunk(0).GetColumnByteOffsets();
+        var destOffsets = destination.GetChunk(0).GetColumnByteOffsets();
+
         int? addedColumnIndex = null;
         var copyCount = 0;
 
@@ -48,9 +52,11 @@ internal sealed class MigrationPlan
                     continue;
                 }
 
+                var sourceCol = source.GetComponentIndex(sourceComponents[sourceIndex]);
+                var destCol = destination.GetComponentIndex(destinationComponent);
                 sharedCopies[copyCount++] = new CopyEntry(
-                    source.GetComponentIndex(sourceComponents[sourceIndex]),
-                    destination.GetComponentIndex(destinationComponent),
+                    sourceOffsets[sourceCol],
+                    destOffsets[destCol],
                     destination.GetElementSize(destinationIndex));
                 break;
             }
@@ -59,47 +65,42 @@ internal sealed class MigrationPlan
         return new MigrationPlan(destination, sharedCopies, addedColumnIndex);
     }
 
+    /// <summary>
+    /// Copies all shared component data from the source row to the destination row.
+    /// Column byte offsets are pre-computed in <see cref="CopyEntry"/>;
+    /// chunk data array references are hoisted once outside the loop.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void CopySharedData(Chunk sourceChunk, int sourceRow, Chunk destinationChunk, int destinationRow)
     {
+        ref var sourceBase = ref MemoryMarshal.GetArrayDataReference(sourceChunk.GetDataArray());
+        ref var destBase = ref MemoryMarshal.GetArrayDataReference(destinationChunk.GetDataArray());
         var copies = SharedCopies;
+
         for (var i = 0; i < copies.Length; i++)
         {
             ref readonly var entry = ref copies[i];
-            CopyComponentSlot(sourceChunk, sourceRow, destinationChunk, destinationRow, in entry);
+            var size = entry.ByteSize;
+            Chunk.CopySmall(
+                ref Unsafe.Add(ref destBase, entry.DestColumnByteOffset + destinationRow * size),
+                ref Unsafe.Add(ref sourceBase, entry.SourceColumnByteOffset + sourceRow * size),
+                size);
         }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void CopyComponentSlot(
-        Chunk sourceChunk,
-        int sourceRow,
-        Chunk destinationChunk,
-        int destinationRow,
-        in CopyEntry entry)
-    {
-        ref var sourceData = ref MemoryMarshal.GetArrayDataReference(sourceChunk.GetDataArray());
-        ref var destinationData = ref MemoryMarshal.GetArrayDataReference(destinationChunk.GetDataArray());
-        var sourceOffsets = sourceChunk.GetColumnByteOffsets();
-        var destinationOffsets = destinationChunk.GetColumnByteOffsets();
-        var size = entry.ByteSize;
-
-        ref var source = ref Unsafe.Add(ref sourceData, sourceOffsets[entry.SourceColumnIndex] + sourceRow * size);
-        ref var destination = ref Unsafe.Add(ref destinationData, destinationOffsets[entry.DestinationColumnIndex] + destinationRow * size);
-        Chunk.CopySmall(ref destination, ref source, size);
     }
 }
 
 internal readonly struct CopyEntry
 {
-    internal readonly int SourceColumnIndex;
-    internal readonly int DestinationColumnIndex;
+    /// <summary>Pre-computed byte offset of the source column within the chunk data buffer.</summary>
+    internal readonly int SourceColumnByteOffset;
+    /// <summary>Pre-computed byte offset of the destination column within the chunk data buffer.</summary>
+    internal readonly int DestColumnByteOffset;
     internal readonly int ByteSize;
 
-    internal CopyEntry(int sourceColumnIndex, int destinationColumnIndex, int byteSize)
+    internal CopyEntry(int sourceColumnByteOffset, int destColumnByteOffset, int byteSize)
     {
-        SourceColumnIndex = sourceColumnIndex;
-        DestinationColumnIndex = destinationColumnIndex;
+        SourceColumnByteOffset = sourceColumnByteOffset;
+        DestColumnByteOffset = destColumnByteOffset;
         ByteSize = byteSize;
     }
 }
