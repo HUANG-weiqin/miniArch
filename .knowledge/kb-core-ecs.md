@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-06-05
+updated: 2026-06-06
 ---
 # MiniArch Core ECS
 
@@ -67,7 +67,7 @@ updated: 2026-06-05
 - 热路径安全检查（bounds check、capacity check 等）包裹 `#if DEBUG`，Release 下零开销
 - `[SkipLocalsInit]` + `AggressiveInlining` + `Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), offset)` 消除 JIT 边界检查
 - 高频结构迁移缓存 `MigrationPlan`，避免每次 Add/Remove 都重新匹配共享组件列；小组件搬迁用 1/4/8/12/16-byte 专门 copy 分支
-- Entity version 和 location 分开存储：`_versions[]` 管版本校验，`_locations[]` 只保留位置，避免热路径重复写 version
+- Entity version 和 location 合并存储在 `EntityRecord[] _records`：一次随机访问拿到版本与位置，减少实体随机访问 cache miss
 - flat byte chunk 只面向 unmanaged 组件；含托管引用组件在 chunk 构造时 fail fast
 
 ## 认知模型

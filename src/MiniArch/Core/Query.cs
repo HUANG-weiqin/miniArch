@@ -162,10 +162,8 @@ public sealed class Query
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureMatchingArchetypes()
     {
-        if (!HasAnyArchetypeGenerationChanged())
-        {
+        if (_initialized && _world.ArchetypeVersion == _snapshotArchetypeVersion)
             return;
-        }
 
         RefreshArchetypesSlow();
     }
@@ -173,44 +171,29 @@ public sealed class Query
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureChunkSnapshot()
     {
-        if (Volatile.Read(ref _chunksDirty) == 0)
-        {
+        if (Volatile.Read(ref _chunksDirty) == 0 && !HasAnyNonEmptyChunkVersionChanged())
             return;
-        }
 
         RefreshChunksSlow();
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool HasAnyArchetypeGenerationChanged()
+    private bool HasAnyNonEmptyChunkVersionChanged()
     {
         if (!_initialized)
-        {
             return true;
-        }
-
-        // Check if new archetypes were created
-        if (_world.ArchetypeVersion != _snapshotArchetypeVersion)
-        {
-            return true;
-        }
 
         var snapshot = ReadArchetypeSnapshot();
-        var snapshotArchetypes = snapshot.Items;
-        var snapshotGenerations = Volatile.Read(ref _snapshotGenerations);
-        var snapshotArchetypeCount = snapshot.Count;
+        var gens = Volatile.Read(ref _snapshotGenerations);
+        var count = snapshot.Count;
 
-        if (snapshotGenerations.Length < snapshotArchetypeCount)
-        {
+        if (gens.Length < count)
             return true;
-        }
 
-        for (var i = 0; i < snapshotArchetypeCount; i++)
+        for (var i = 0; i < count; i++)
         {
-            if (snapshotArchetypes[i].Generation != snapshotGenerations[i])
-            {
+            if (snapshot.Items[i].NonEmptyChunkVersion != gens[i])
                 return true;
-            }
         }
 
         return false;
@@ -221,10 +204,8 @@ public sealed class Query
     {
         lock (_refreshLock)
         {
-            if (!HasAnyArchetypeGenerationChanged())
-            {
+            if (_initialized && _world.ArchetypeVersion == _snapshotArchetypeVersion)
                 return;
-            }
 
             BuildMatchingArchetypeSnapshot();
             Interlocked.Increment(ref _refreshCount);
@@ -236,12 +217,15 @@ public sealed class Query
     {
         lock (_refreshLock)
         {
-            if (Volatile.Read(ref _chunksDirty) == 0)
-            {
+            var wasDirty = Volatile.Read(ref _chunksDirty) != 0;
+            if (!wasDirty && !HasAnyNonEmptyChunkVersionChanged())
                 return;
-            }
 
             BuildChunkSnapshot();
+
+            // Increment refresh count for chunk-only rebuilds (archetype rebuilds already counted).
+            if (!wasDirty)
+                Interlocked.Increment(ref _refreshCount);
         }
     }
 
@@ -269,7 +253,7 @@ public sealed class Query
             if (Matches(archetype))
             {
                 _scratchArchetypes[matchedArchetypeCount] = archetype;
-                _scratchGenerations[matchedArchetypeCount] = archetype.Generation;
+                _scratchGenerations[matchedArchetypeCount] = archetype.NonEmptyChunkVersion;
                 matchedArchetypeCount++;
             }
         }
@@ -361,7 +345,7 @@ public sealed class Query
     {
         var gens = Volatile.Read(ref _snapshotGenerations);
         for (var i = 0; i < count && i < gens.Length; i++)
-            gens[i] = archetypes[i].Generation;
+            gens[i] = archetypes[i].NonEmptyChunkVersion;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

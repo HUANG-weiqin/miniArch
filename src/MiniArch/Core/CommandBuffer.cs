@@ -39,6 +39,11 @@ public sealed class CommandBuffer : ICommandRecorder
 
     [ThreadStatic] private static ComponentType[]? _tsExtractTypes;
     [ThreadStatic] private static CreatedComponent[]? _tsExtractSources;
+    // Batch state: groups consecutive same-archetype created entities during Submit
+    private readonly List<Entity> _batchEntities = new();
+    private readonly List<CreatedComponent> _batchComponents = new();
+    private Archetype? _batchArchetype;
+    private int _batchComponentCount;
     // Last-archetype cache: avoids repeated Dictionary lookups for same component set
     private Archetype? _cachedArchetype;
     private int _cachedArchetypeCount;
@@ -533,20 +538,37 @@ public sealed class CommandBuffer : ICommandRecorder
             var entity = _createdEntityByPoolIndex[i];
             if (state.Destroyed)
             {
+                FlushCreatedBatch();
                 _world.ReleaseReservedEntity(entity);
             }
             else if (state.Map.IsEmpty)
             {
+                FlushCreatedBatch();
                 _world.MaterializeReservedEntityTrusted(entity, Signature.Empty, Array.Empty<RawComponentValue>());
             }
             else
             {
                 var (archetype, count) = BuildCreatedEntityComponents(in state, out var sources);
-                _world.MaterializeReservedEntityFast(entity, archetype,
-                    new ReadOnlySpan<CreatedComponent>(sources, 0, count),
-                    _slabs);
+
+                // Check if this entity can join the current batch
+                if (_batchArchetype != null && _batchArchetype == archetype && _batchComponentCount == count)
+                {
+                    // Same layout: append to batch
+                }
+                else
+                {
+                    FlushCreatedBatch();
+                    _batchArchetype = archetype;
+                    _batchComponentCount = count;
+                }
+
+                _batchEntities.Add(entity);
+                for (var j = 0; j < count; j++)
+                    _batchComponents.Add(sources[j]);
             }
         }
+
+        FlushCreatedBatch();
 
         for (var i = 0; i < _opsPoolCount; i++)
         {
@@ -591,6 +613,31 @@ public sealed class CommandBuffer : ICommandRecorder
 
         Clear();
         return true;
+    }
+
+    private void FlushCreatedBatch()
+    {
+        if (_batchEntities.Count == 0) return;
+
+        if (_batchEntities.Count == 1)
+        {
+            _world.MaterializeReservedEntityFast(
+                _batchEntities[0], _batchArchetype!,
+                CollectionsMarshal.AsSpan(_batchComponents),
+                _slabs);
+        }
+        else
+        {
+            _world.MaterializeReservedEntitiesFastSameLayout(
+                CollectionsMarshal.AsSpan(_batchEntities), _batchArchetype!,
+                CollectionsMarshal.AsSpan(_batchComponents), _batchComponentCount,
+                _slabs);
+        }
+
+        _batchEntities.Clear();
+        _batchComponents.Clear();
+        _batchArchetype = null;
+        _batchComponentCount = 0;
     }
 
     /// <summary>
@@ -1231,6 +1278,10 @@ public sealed class CommandBuffer : ICommandRecorder
         _currentSlabOffset = 0;
         _cachedArchetype = null;
         _cachedArchetypeCount = 0;
+        _batchEntities.Clear();
+        _batchComponents.Clear();
+        _batchArchetype = null;
+        _batchComponentCount = 0;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -1534,4 +1534,155 @@ public sealed class CommandBufferTests
             count += chunk.Count;
         return count;
     }
+
+    // === Batch materialize tests ===
+
+    [Fact]
+    public void Batch_same_archetype_entities_are_alive_with_correct_components()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+
+        const int N = 5;
+        var entities = new Entity[N];
+        for (int i = 0; i < N; i++)
+        {
+            entities[i] = buffer.Create();
+            buffer.Add(entities[i], new Position(i, i + 1));
+            buffer.Add(entities[i], new Velocity(i * 10, i * 20));
+        }
+
+        buffer.Submit();
+
+        for (int i = 0; i < N; i++)
+        {
+            Assert.True(world.IsAlive(entities[i]));
+            Assert.True(world.TryGet(entities[i], out Position p));
+            Assert.Equal(new Position(i, i + 1), p);
+            Assert.True(world.TryGet(entities[i], out Velocity v));
+            Assert.Equal(new Velocity(i * 10, i * 20), v);
+        }
+    }
+
+    [Fact]
+    public void Batch_mixed_archetypes_each_have_correct_components()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+
+        // Archetype A: Position only
+        var a1 = buffer.Create();
+        buffer.Add(a1, new Position(1, 2));
+        var a2 = buffer.Create();
+        buffer.Add(a2, new Position(3, 4));
+
+        // Archetype B: Position + Velocity
+        var b1 = buffer.Create();
+        buffer.Add(b1, new Position(5, 6));
+        buffer.Add(b1, new Velocity(7, 8));
+
+        // Archetype A again
+        var a3 = buffer.Create();
+        buffer.Add(a3, new Position(9, 10));
+
+        buffer.Submit();
+
+        // Check Archetype A entities
+        Assert.True(world.TryGet(a1, out Position p1));
+        Assert.Equal(new Position(1, 2), p1);
+        Assert.False(world.TryGet<Velocity>(a1, out _));
+
+        Assert.True(world.TryGet(a2, out Position p2));
+        Assert.Equal(new Position(3, 4), p2);
+
+        Assert.True(world.TryGet(a3, out Position p3));
+        Assert.Equal(new Position(9, 10), p3);
+
+        // Check Archetype B entity
+        Assert.True(world.TryGet(b1, out Position pb));
+        Assert.Equal(new Position(5, 6), pb);
+        Assert.True(world.TryGet(b1, out Velocity vb));
+        Assert.Equal(new Velocity(7, 8), vb);
+    }
+
+    [Fact]
+    public void Batch_created_then_destroyed_is_not_materialized()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+
+        var alive = buffer.Create();
+        buffer.Add(alive, new Position(1, 2));
+
+        var dead = buffer.Create();
+        buffer.Add(dead, new Position(3, 4));
+        buffer.Destroy(dead);
+
+        var alsoAlive = buffer.Create();
+        buffer.Add(alsoAlive, new Position(5, 6));
+
+        buffer.Submit();
+
+        Assert.True(world.IsAlive(alive));
+        Assert.False(world.IsAlive(dead));
+        Assert.True(world.IsAlive(alsoAlive));
+
+        Assert.True(world.TryGet(alive, out Position pa));
+        Assert.Equal(new Position(1, 2), pa);
+        Assert.True(world.TryGet(alsoAlive, out Position pc));
+        Assert.Equal(new Position(5, 6), pc);
+    }
+
+    [Fact]
+    public void Batch_created_with_link_and_unlink_preserves_semantics()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+
+        var parent = buffer.Create();
+        buffer.Add(parent, new Position(0, 0));
+
+        var child1 = buffer.Create();
+        buffer.Add(child1, new Position(1, 1));
+        buffer.Link(parent, child1);
+
+        var child2 = buffer.Create();
+        buffer.Add(child2, new Position(2, 2));
+        buffer.Link(parent, child2);
+
+        buffer.Unlink(child1);
+
+        buffer.Submit();
+
+        Assert.True(world.IsAlive(parent));
+        Assert.True(world.IsAlive(child1));
+        Assert.True(world.IsAlive(child2));
+
+        Assert.False(world.TryGetParent(child1, out _));
+        Assert.True(world.TryGetParent(child2, out var p));
+        Assert.Equal(parent, p);
+    }
+
+    [Fact]
+    public void Batch_many_same_archetype_entities_query_visible()
+    {
+        var world = new World();
+        var buffer = new CommandBuffer(world);
+
+        const int N = 500;
+        for (int i = 0; i < N; i++)
+        {
+            var e = buffer.Create();
+            buffer.Add(e, new Position(i, i + 1));
+            buffer.Add(e, new Velocity(i * 2, i * 3));
+        }
+
+        buffer.Submit();
+
+        var query = world.Query(new QueryDescription().With<Position>().With<Velocity>()).Advanced;
+        int count = 0;
+        foreach (ref readonly var chunk in query.GetChunkSpan())
+            count += chunk.Count;
+        Assert.Equal(N, count);
+    }
 }

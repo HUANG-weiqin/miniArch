@@ -2,14 +2,24 @@
 title: Cache & Memory Optimization Review
 module: MiniArch.Core
 description: Memory layout and cache behavior analysis of the ECS runtime, with optimization opportunities
-updated: 2026-06-03
-review: 2026-06-03 — P0 已实施（合并 EntityRecord[]）；新增 P5-P8 优化点
+updated: 2026-06-06
+review: 2026-06-06 — 新增 World 数据结构优化实验顺序；P9 已实施（ThreadStatic buffer）；P10 已实施（archetype cache）
 ---
 # Cache & Memory Optimization Review
 
 ## 结论
 
-MiniArch 的迭代热路径已经高度优化（pointer-bump、SoA、自适应 chunk 容量、无 bounds check），迭代本身几乎没有 cache 浪费。可优化空间集中在两个方向：**实体随机访问的 cache miss** 和 **结构变更时的批量拷贝开销**。
+MiniArch 的迭代热路径已经高度优化（pointer-bump、SoA、自适应 chunk 容量、无 bounds check），迭代本身几乎没有 cache 浪费。可优化空间集中在三个方向：**结构变更/批量创建少做小操作**、**实体随机访问减少 record cache miss**、**query 只在 chunk membership 变化时刷新快照**。
+
+当前实验优先级：
+1. CommandBuffer 按 archetype 批量 materialize（最可能收益）
+2. Query 快照失效拆分
+3. `EntityRecord` 压缩为无引用 metadata
+4. NativeMemory + 64B alignment（高天花板，但单独替换 `byte[]` 不保证收益）
+5. MigrationPlan 小优化
+6. Empty chunk active list（条件执行）
+
+完整实验计划见 `docs/plans/2026-06-06-world-data-structure-optimization-experiments.md`。
 
 ## 架构
 
@@ -138,9 +148,58 @@ struct EntityRecord {
 
 **问题**：`CommandBuffer.Submit()` 处理每个 created entity 时调用 `ExtractAndSortComponents` 做 `Array.Sort`（O(n log n)）。批量创建大量 entity 时排序开销可累积。
 
+**实测数据（2026-06-05，HeroComing.Perf Movement, 1000 chars）**：
+- Submit 内部阶段分解：Created entities 占 75.4%，Existing ops 占 15.2%，Hierarchy <1%，Destroy 4.8%，Clear 4.6%
+- 在 Created entities 阶段内：Array.Sort 仅占 Submit 总时间的 ~10%，不是主要瓶颈
+- Slab scatter 假说已验证并否定：用单一大块连续 buffer 替代分散 byte[] slab，仅改善 ~2%
+
 **Fix**：在 Record 时维护组件列表的排序顺序（二分插入），避免 Submit 时排序。
 
-**判断**：**低优先级**。游戏场景中 Create 频率远低于迭代。但如果 profiling 显示 Create 路径是瓶颈，优先修复。
+**判断**：**低优先级**。实测显示 Array.Sort 仅占 Submit 的 10%，即使完全消除也只能提升 ~10%。
+
+## P9: CommandBuffer.BuildCreatedEntityComponents 每 entity 重复 ArrayPool rent/return ✅ 已修复 (2026-06-05)
+
+**问题**：`BuildCreatedEntityComponents` 在每个 created entity 上做 3 次 ArrayPool rent + 3 次 return：
+1. `ArrayPool<ComponentType>.Shared.Rent(count)` — ExtractAndSortComponents
+2. `ArrayPool<CreatedComponent>.Shared.Rent(count)` — ExtractAndSortComponents
+3. `ArrayPool<RawComponentValue>.Shared.Rent(count)` — BuildCreatedEntityComponents
+
+加上 return 共 6 次 ArrayPool 操作/entity。HeroComing.Perf Movement 场景创建 ~3.9M entities/30s，即 ~23M ArrayPool 操作。
+
+**实测影响**：
+- 替换为 `[ThreadStatic]` 预分配 buffer 复用后：
+  - Movement 吞吐量：669.5 → 818.3 rounds/s（+22.2%）
+  - Attack 吞吐量：189.6 → 220.4 rounds/s（+16.2%）
+  - GC Gen0：35 → 3（-91%）
+- 同时将 ExtractAndSortComponents 的逻辑内联到 BuildCreatedEntityComponents，消除了一次跨方法调用和 ReturnExtracted 的开销
+
+**已实施**：
+- 新增 3 个 `[ThreadStatic]` 字段：`_tsExtractTypes`、`_tsExtractSources`、`_tsRawComponents`
+- `BuildCreatedEntityComponents` 不再调用 `ExtractAndSortComponents`，改为内联提取 + 排序
+- 不再 return buffer 到 ArrayPool，由 ThreadStatic 字段跨 Submit 复用
+- Submit 循环的 finally 块不再调用 `ArrayPool<RawComponentValue>.Shared.Return`
+- 原有 `ExtractAndSortComponents` 保留不动（仍被 frozen/snapshot 路径使用）
+
+**影响文件**：`src/MiniArch/Core/CommandBuffer.cs` — BuildCreatedEntityComponents 重写
+
+## P10: CommandBuffer.GetOrCreateArchetype 重复 Dictionary 查找 ✅ 已修复 (2026-06-05)
+
+**问题**：`BuildCreatedEntityComponents` 在每个 created entity 上调用 `_world.GetOrCreateArchetype(key)`（Dictionary 查找）。即使 entity 共享同一个 component set，每次仍要创建 68 字节 `CreateArchetypeKey` struct、计算 7 值 hash、做 Dictionary bucket 遍历。
+
+Pipeline 工作负载中，同批次 entity 几乎都是同一 archetype（如 500 个 MoveRequest 都一样）。
+
+**实测数据**：
+- PERF_DIAG 测量：`GetOrCreateArchetype` 占 Submit 总时间的 12.1%
+- 添加 last-value cache（按 componentCount + typeHash 缓存）后降为 0.1%
+- 净吞吐量提升：Movement 818.3 → ~842 rounds/s（+3%）
+
+**已实施**：
+- 新增 3 个字段：`_cachedArchetype`、`_cachedArchetypeCount`、`_cachedArchetypeHash`
+- 在 BuildCreatedEntityComponents 中先检查 count 匹配 → 计算 typeHash 匹配 → 命中则跳过 Dictionary 查找
+- 仅在 count 匹配时计算 hash（不同 count 直接走 Dictionary，避免双倍 hash 开销）
+- Hash 算法与 `CreateArchetypeKey.GetHashCode()` 一致：`hash = count; for each id: hash = hash*31 + id`
+
+**影响文件**：`src/MiniArch/Core/CommandBuffer.cs` — BuildCreatedEntityComponents 中的 archetype 查找逻辑
 
 ## P8: HierarchyTable.EnsureCapacity 用 Array.Fill 初始化
 
