@@ -17,6 +17,13 @@ public static class Program
 
     public static void Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--profile")
+        {
+            Console.OutputEncoding = System.Text.Encoding.UTF8;
+            S8Profile.Run();
+            return;
+        }
+
         Console.OutputEncoding = System.Text.Encoding.UTF8;
         Console.WriteLine("=== MiniArch vs Friflo vs Arch: High-Pressure Game Scenario Benchmarks ===");
         Console.WriteLine($"Warmup: {WarmupSeconds}s, Measure: {MeasureSeconds}s per engine per scenario");
