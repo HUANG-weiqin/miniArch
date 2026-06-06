@@ -748,7 +748,7 @@ public sealed class World : IDisposable
         var startId = AppendEntitySlots(entities.Length - reusedCount);
 
         var archetype = GetOrCreateArchetype(Signature.Empty);
-        var maxRangeCount = Math.Min(entities.Length, archetype.Chunks.Count + ((entities.Length + _chunkCapacity - 1) / _chunkCapacity));
+        var maxRangeCount = EstimateMaxRangeCount(archetype, entities.Length);
 
         if (maxRangeCount <= StackAllocatedBatchRangeLimit)
         {
@@ -1587,6 +1587,12 @@ public sealed class World : IDisposable
         return Math.Max(minCapacity, maxByBytes);
     }
 
+    private static int EstimateMaxRangeCount(Archetype archetype, int entityCount)
+    {
+        var chunkCapacity = archetype.Chunks.Count > 0 ? archetype.Chunks[0].Capacity : 1;
+        return Math.Min(entityCount, archetype.Chunks.Count + ((entityCount + chunkCapacity - 1) / chunkCapacity));
+    }
+
     private int GetArchetypeChunkCapacity(Signature signature)
     {
         if (signature.Count == 0 && _chunkCapacity >= EmptyArchetypeChunkCapacityThreshold)
@@ -1833,7 +1839,7 @@ public sealed class World : IDisposable
         var startId = AppendEntitySlots(entities.Length);
 
         var archetype = GetOrCreateArchetype(Signature.Empty);
-        var maxRangeCount = Math.Min(entities.Length, archetype.Chunks.Count + ((entities.Length + _chunkCapacity - 1) / _chunkCapacity));
+        var maxRangeCount = EstimateMaxRangeCount(archetype, entities.Length);
 
         if (maxRangeCount <= StackAllocatedBatchRangeLimit)
         {
