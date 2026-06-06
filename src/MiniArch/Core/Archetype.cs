@@ -160,7 +160,7 @@ public sealed class Archetype
     /// </summary>
     internal bool RemoveEntity(Chunk chunk, int rowIndex, out Entity movedEntity)
     {
-        var chunkIndex = _chunks.IndexOf(chunk);
+        var chunkIndex = chunk.ChunkIndex;
         var moved = chunk.RemoveAt(rowIndex, out movedEntity);
         MarkChunkNonFull(chunkIndex);
         EntityCount--;
@@ -219,6 +219,7 @@ public sealed class Archetype
     {
         var chunk = CreateChunk();
         _chunks.Add(chunk);
+        chunk.ChunkIndex = _chunks.Count - 1;
         if (_chunks.Count > _chunkHasNonFullEntry.Length)
         {
             Array.Resize(ref _chunkHasNonFullEntry, _chunks.Count * 2);
