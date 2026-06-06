@@ -11,9 +11,9 @@ public readonly struct EntityInfo
     public int Version { get; }
 
     /// <summary>
-    /// Gets the owning archetype (computed from chunk owner).
+    /// Gets the owning archetype.
     /// </summary>
-    public Archetype Archetype => Chunk!.Owner!;
+    public Archetype Archetype { get; }
 
     /// <summary>
     /// Gets the chunk directly. Null if the entity is not alive.
@@ -25,9 +25,10 @@ public readonly struct EntityInfo
     /// </summary>
     public int RowIndex { get; }
 
-    internal EntityInfo(int version, Chunk? chunk, int rowIndex)
+    internal EntityInfo(int version, Archetype? archetype, Chunk? chunk, int rowIndex)
     {
         Version = version;
+        Archetype = archetype!;
         Chunk = chunk;
         RowIndex = rowIndex;
     }
