@@ -13,9 +13,9 @@ namespace MiniArch;
 public sealed class World : IDisposable
 {
     private const int DefaultChunkCapacity = 128;
-    private const int EmptyArchetypeChunkCapacity = 1024;
+    private const int EmptyArchetypeChunkCapacity = 256;
     private const int EmptyArchetypeChunkCapacityThreshold = 128;
-    private const int AdaptiveChunkTargetBytes = 16 * 1024;
+    private const int AdaptiveChunkTargetBytes = 4 * 1024;
     private const int AdaptiveMaxChunkTargetBytes = 512 * 1024;
     private const int AdaptiveMaxChunkCapacity = 1024;
     private const int StackAllocatedBatchRangeLimit = 128;
