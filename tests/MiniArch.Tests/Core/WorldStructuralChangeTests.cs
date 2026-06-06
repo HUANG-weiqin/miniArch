@@ -35,9 +35,8 @@ public sealed class WorldStructuralChangeTests
 
         Assert.True(world.TryGetLocation(entity, out var after));
         Assert.Same(before.Archetype, after.Archetype);
-        Assert.Equal(before.ChunkIndex, after.ChunkIndex);
         Assert.Equal(before.RowIndex, after.RowIndex);
-        Assert.Equal(new Position(9, 9), after.Archetype.GetChunk(after.ChunkIndex).GetComponent<Position>(world.Components.GetOrCreate<Position>(), after.RowIndex));
+        Assert.Equal(new Position(9, 9), after.Archetype.GetComponent<Position>(world.Components.GetOrCreate<Position>(), after.RowIndex));
     }
 
     [Fact]
@@ -57,12 +56,10 @@ public sealed class WorldStructuralChangeTests
 
         Assert.True(world.TryGetLocation(entity, out var after));
         Assert.Same(before.Archetype, after.Archetype);
-        Assert.Equal(before.ChunkIndex, after.ChunkIndex);
         Assert.Equal(before.RowIndex, after.RowIndex);
 
-        var chunk = after.Archetype.GetChunk(after.ChunkIndex);
-        Assert.Equal(new Position(9, 9), chunk.GetComponent<Position>(positionId, after.RowIndex));
-        Assert.Equal(new Velocity(3, 4), chunk.GetComponent<Velocity>(velocityId, after.RowIndex));
+        Assert.Equal(new Position(9, 9), after.Archetype.GetComponent<Position>(positionId, after.RowIndex));
+        Assert.Equal(new Velocity(3, 4), after.Archetype.GetComponent<Velocity>(velocityId, after.RowIndex));
     }
 
     [Fact]
@@ -116,7 +113,6 @@ public sealed class WorldStructuralChangeTests
             }
             Assert.True(world.TryGetLocation(entity, out var after));
             Assert.Same(before.Archetype, after.Archetype);
-            Assert.Equal(before.ChunkIndex, after.ChunkIndex);
             Assert.Equal(before.RowIndex, after.RowIndex);
         }
     }
@@ -146,14 +142,14 @@ public sealed class WorldStructuralChangeTests
         Assert.True(HasComponent<Velocity>(world, entity));
         Assert.Equal(new Position(1, 2), GetComponentValue(world, entity));
         Assert.Equal(new Velocity(3, 4), world.TryGetLocation(entity, out var info)
-            ? info.Archetype.GetChunk(info.ChunkIndex).GetComponent<Velocity>(world.Components.GetOrCreate<Velocity>(), info.RowIndex)
+            ? info.Archetype.GetComponent<Velocity>(world.Components.GetOrCreate<Velocity>(), info.RowIndex)
             : default);
     }
 
     private static Position GetComponentValue(World world, Entity entity)
     {
         Assert.True(world.TryGetLocation(entity, out var info));
-        return info.Archetype.GetChunk(info.ChunkIndex).GetComponent<Position>(world.Components.GetOrCreate<Position>(), info.RowIndex);
+        return info.Archetype.GetComponent<Position>(world.Components.GetOrCreate<Position>(), info.RowIndex);
     }
 
     private static bool HasComponent<T>(World world, Entity entity)

@@ -16,27 +16,32 @@ public sealed class ArchetypeTests
 
         var archetype = new Archetype(new Signature(position), [typeof(Position)]);
 
-        Assert.Single(archetype.Chunks);
-        Assert.Equal(0, archetype.Chunks[0].Count);
+        Assert.Equal(1, archetype.GetChunkSpan().Length);
+        Assert.Equal(0, archetype.GetChunkSpan()[0].Count);
     }
 
     [Fact]
-    public void Adding_entities_fills_the_current_chunk_before_allocating_a_new_one()
+    public void Entities_are_stored_in_a_single_growing_storage_block()
     {
         var registry = new ComponentRegistry();
         var position = registry.GetOrCreate<Position>();
-        var archetype = new Archetype(new Signature(position), [typeof(Position)], chunkCapacity: 2);
+        var archetype = new Archetype(new Signature(position), [typeof(Position)], capacity: 2, maxCapacity: 4);
 
-        var chunk1 = archetype.ReserveEntity(new Entity(1, 1), out _, out var row1);
-        chunk1.SetComponentAtTyped(0, row1, new Position(1, 1));
-        var chunk2 = archetype.ReserveEntity(new Entity(2, 1), out _, out var row2);
-        chunk2.SetComponentAtTyped(0, row2, new Position(2, 2));
-        var chunk3 = archetype.ReserveEntity(new Entity(3, 1), out _, out var row3);
-        chunk3.SetComponentAtTyped(0, row3, new Position(3, 3));
+        var row1 = archetype.AddEntity(new Entity(1, 1));
+        archetype.SetComponentAtTyped(0, row1, new Position(1, 1));
+        var row2 = archetype.AddEntity(new Entity(2, 1));
+        archetype.SetComponentAtTyped(0, row2, new Position(2, 2));
 
-        Assert.Equal(2, archetype.Chunks.Count);
-        Assert.Equal(2, archetype.Chunks[0].Count);
-        Assert.Equal(1, archetype.Chunks[1].Count);
+        // Single chunk grows via EnsureCapacity; after initial fill it doubles.
+        Assert.Equal(1, archetype.GetChunkSpan().Length);
+        Assert.Equal(2, archetype.GetChunkSpan()[0].Count);
+
+        var row3 = archetype.AddEntity(new Entity(3, 1));
+        archetype.SetComponentAtTyped(0, row3, new Position(3, 3));
+
+        Assert.Equal(1, archetype.GetChunkSpan().Length);
+        Assert.Equal(3, archetype.GetChunkSpan()[0].Count);
+        Assert.True(archetype.Capacity >= 3);
     }
 
     [Fact]
@@ -50,56 +55,56 @@ public sealed class ArchetypeTests
         var second = new Entity(2, 1);
         var third = new Entity(3, 1);
 
-        var chunk = archetype.ReserveEntity(first, out var chunkIndex, out var row);
-        chunk.SetComponentAtTyped(0, row, new Position(1, 1));
-        archetype.ReserveEntity(second, out _, out var row2).SetComponentAtTyped(0, row2, new Position(2, 2));
-        archetype.ReserveEntity(third, out _, out var row3).SetComponentAtTyped(0, row3, new Position(3, 3));
+        var row = archetype.AddEntity(first);
+        archetype.SetComponentAtTyped(0, row, new Position(1, 1));
+        var row2 = archetype.AddEntity(second);
+        archetype.SetComponentAtTyped(0, row2, new Position(2, 2));
+        var row3 = archetype.AddEntity(third);
+        archetype.SetComponentAtTyped(0, row3, new Position(3, 3));
 
-        var moved = archetype.RemoveEntity(chunkIndex, 1, out var movedEntity);
+        var moved = archetype.RemoveAt(1, out var movedEntity);
 
         Assert.True(moved);
         Assert.Equal(third, movedEntity);
-        Assert.Equal(third, archetype.GetChunk(0).GetEntity(1));
-        Assert.Equal(new Position(3, 3), archetype.GetChunk(0).GetComponentSpan<Position>(position)[1]);
+        Assert.Equal(third, archetype.GetEntity(1));
+        Assert.Equal(new Position(3, 3), archetype.GetComponentSpan<Position>(position)[1]);
     }
 
     [Fact]
-    public void Reserving_entities_reuses_earlier_chunks_with_free_space()
+    public void Entities_use_a_single_storage_block_that_grows_and_shrinks()
     {
-        var archetype = new Archetype(Signature.Empty, Type.EmptyTypes, chunkCapacity: 2);
+        var archetype = new Archetype(Signature.Empty, Type.EmptyTypes, capacity: 2, maxCapacity: 4);
 
-        archetype.ReserveEntity(new Entity(1, 1), out _, out _);
-        archetype.ReserveEntity(new Entity(2, 1), out _, out _);
-        archetype.ReserveEntity(new Entity(3, 1), out _, out _);
-        archetype.ReserveEntity(new Entity(4, 1), out _, out _);
+        archetype.AddEntity(new Entity(1, 1));
+        archetype.AddEntity(new Entity(2, 1));
+        archetype.AddEntity(new Entity(3, 1));
+        archetype.AddEntity(new Entity(4, 1));
 
-        Assert.Equal(2, archetype.Chunks.Count);
+        Assert.Equal(1, archetype.GetChunkSpan().Length);
 
-        archetype.RemoveEntity(0, 0, out _);
-        archetype.RemoveEntity(0, 0, out _);
-        archetype.RemoveEntity(1, 0, out _);
-        archetype.RemoveEntity(1, 0, out _);
+        archetype.RemoveAt(0, out _);
+        archetype.RemoveAt(0, out _);
+        archetype.RemoveAt(0, out _);
+        archetype.RemoveAt(0, out _);
 
-        Assert.Equal(0, archetype.Chunks[0].Count);
-        Assert.Equal(0, archetype.Chunks[1].Count);
+        Assert.Equal(0, archetype.GetChunkSpan()[0].Count);
 
-        archetype.ReserveEntity(new Entity(5, 1), out _, out _);
-        archetype.ReserveEntity(new Entity(6, 1), out _, out _);
-        archetype.ReserveEntity(new Entity(7, 1), out _, out _);
-        archetype.ReserveEntity(new Entity(8, 1), out _, out _);
+        archetype.AddEntity(new Entity(5, 1));
+        archetype.AddEntity(new Entity(6, 1));
+        archetype.AddEntity(new Entity(7, 1));
+        archetype.AddEntity(new Entity(8, 1));
 
-        Assert.Equal(2, archetype.Chunks.Count);
-        Assert.Equal(2, archetype.Chunks[0].Count);
-        Assert.Equal(2, archetype.Chunks[1].Count);
+        Assert.Equal(1, archetype.GetChunkSpan().Length);
+        Assert.Equal(4, archetype.GetChunkSpan()[0].Count);
     }
 
     [Fact]
-    public void Archetype_tracks_non_full_chunks_explicitly()
+    public void Archetype_is_a_single_storage_block()
     {
-        var fields = typeof(Archetype)
-            .GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-
-        Assert.Contains(fields, field => field.Name.Contains("nonFull", StringComparison.OrdinalIgnoreCase));
+        // With the flattened design, each Archetype is its own storage block.
+        // No multi-chunk infrastructure exists.
+        var archetype = new Archetype(Signature.Empty, Type.EmptyTypes);
+        Assert.Equal(1, archetype.GetChunkSpan().Length);
     }
 
     [Fact]

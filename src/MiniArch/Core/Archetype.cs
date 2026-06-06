@@ -94,7 +94,8 @@ public sealed class Archetype
     {
         if (requiredCapacity <= _capacity) return;
 
-        var newCapacity = Math.Min(Math.Max(requiredCapacity, _capacity * 2), _maxCapacity);
+        // Safe growth: cap doubling at int.MaxValue/2 to avoid overflow.
+        var newCapacity = Math.Min(Math.Max(requiredCapacity, Math.Min(_capacity * 2, int.MaxValue / 2)), _maxCapacity);
         if (newCapacity <= _capacity) return;
 
         var newEntities = new Entity[newCapacity];

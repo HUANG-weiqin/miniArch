@@ -1549,11 +1549,12 @@ public sealed class World : IDisposable
 
     private static int GetMaxChunkCapacity(Signature signature, int minCapacity)
     {
-        var bytesPerEntity = GetBytesPerEntity(signature);
-        if (bytesPerEntity <= 0) return minCapacity;
-
-        var maxByBytes = AdaptiveMaxChunkTargetBytes / bytesPerEntity;
-        return Math.Max(minCapacity, maxByBytes);
+        // Flattened design: each Archetype is its own storage block that grows
+        // unboundedly (no chunk splitting). Return int.MaxValue so EnsureCapacity
+        // never hits a cap.
+        _ = signature;
+        _ = minCapacity;
+        return int.MaxValue;
     }
 
     private static int EstimateMaxRangeCount(Archetype archetype, int entityCount)

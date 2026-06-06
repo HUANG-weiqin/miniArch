@@ -144,9 +144,9 @@ public sealed class ChunkTests
     public void Chunk_uses_flat_byte_storage_for_component_columns()
     {
         Assert.Null(typeof(Chunk).GetField("_columns", BindingFlags.Instance | BindingFlags.NonPublic));
-        Assert.NotNull(typeof(Chunk).GetField("_data", BindingFlags.Instance | BindingFlags.NonPublic));
-        Assert.NotNull(typeof(Chunk).GetField("_columnByteOffsets", BindingFlags.Instance | BindingFlags.NonPublic));
-        Assert.NotNull(typeof(Chunk).GetField("_elementSizes", BindingFlags.Instance | BindingFlags.NonPublic));
+        Assert.NotNull(typeof(Archetype).GetField("_data", BindingFlags.Instance | BindingFlags.NonPublic));
+        Assert.NotNull(typeof(Archetype).GetField("_columnByteOffsets", BindingFlags.Instance | BindingFlags.NonPublic));
+        Assert.NotNull(typeof(Archetype).GetField("_elementSizes", BindingFlags.Instance | BindingFlags.NonPublic));
     }
 
     [Fact]
@@ -208,7 +208,7 @@ public sealed class ChunkTests
         var signature = new Signature(label);
 
         var exception = Assert.Throws<NotSupportedException>(() =>
-            new Chunk(signature, [typeof(Label)], new[] { 0 }, capacity: 4));
+            new Archetype(signature, [typeof(Label)], capacity: 4));
 
         Assert.Contains(nameof(Label), exception.Message);
     }
@@ -229,12 +229,11 @@ public sealed class ChunkTests
 
     private static Chunk CreateEmptyChunk(int capacity)
     {
-        return new Chunk(Signature.Empty, Type.EmptyTypes, Array.Empty<int>(), capacity);
+        return new Archetype(Signature.Empty, Type.EmptyTypes, capacity: capacity).GetChunkSpan()[0];
     }
 
     private static Chunk CreateChunk(Signature signature, Type t1, Type t2, int capacity)
     {
-        var componentIdToColumnIndex = ComponentColumnMap.Build(signature);
-        return new Chunk(signature, [t1, t2], componentIdToColumnIndex, capacity);
+        return new Archetype(signature, [t1, t2], capacity: capacity).GetChunkSpan()[0];
     }
 }
