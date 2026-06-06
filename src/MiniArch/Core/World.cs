@@ -35,6 +35,7 @@ public sealed class World : IDisposable
 
     private int _createArchetypeCacheGeneration;
     private int _archetypeVersion;
+    private int _nonEmptyArchetypeVersion;
     private readonly List<Entity> _destroyOrderScratch = new(8);
     private int[] _destroyVisitedGen = [];
     private int _destroyCurrentGen;
@@ -190,6 +191,8 @@ public sealed class World : IDisposable
 
     internal int ArchetypeVersion => _archetypeVersion;
 
+    internal int NonEmptyArchetypeVersion => _nonEmptyArchetypeVersion;
+
     internal void Reset(int entitySlotCount)
     {
         if (entitySlotCount < 0)
@@ -200,6 +203,7 @@ public sealed class World : IDisposable
         _archetypes.Clear();
         _createArchetypeCache.Clear();
         _archetypeSnapshot = Array.Empty<Archetype>();
+        _nonEmptyArchetypeVersion = 0;
         _queryFiltersByDescription = new Dictionary<QueryDescription, QueryFilter>();
         _queries = new Dictionary<QueryFilter, MiniArch.Core.Query>();
         _createArchetypeCacheGeneration++;
@@ -1289,6 +1293,7 @@ public sealed class World : IDisposable
 
         var chunkCapacity = GetArchetypeChunkCapacity(signature);
         archetype = new Archetype(signature, ResolveComponentTypes(signature), chunkCapacity);
+        archetype.OnOccupancyTransition = () => _nonEmptyArchetypeVersion++;
         _archetypes.Add(signature, archetype);
         PublishArchetypeSnapshot(archetype);
         _archetypeVersion++;

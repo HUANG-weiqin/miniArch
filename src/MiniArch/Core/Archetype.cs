@@ -25,6 +25,11 @@ public sealed class Archetype
     private readonly int[] _componentIdToColumnIndex;
     private long _generation;
 
+    /// <summary>
+    /// Fired when EntityCount transitions between 0 and non-0.
+    /// </summary>
+    internal Action? OnOccupancyTransition;
+
     internal Archetype(Signature signature, Type[] componentTypes, int capacity = 4)
     {
         ArgumentNullException.ThrowIfNull(signature);
@@ -127,11 +132,13 @@ public sealed class Archetype
     /// </summary>
     internal int AddEntity(Entity entity)
     {
+        var wasEmpty = _count == 0;
         EnsureCapacity(_count + 1);
         var row = _count;
         _entities[row] = entity;
         _count++;
         _generation++;
+        if (wasEmpty) OnOccupancyTransition?.Invoke();
         return row;
     }
 
@@ -146,10 +153,12 @@ public sealed class Archetype
         if (count == 0)
             return _count;
 
+        var wasEmpty = _count == 0;
         EnsureCapacity(_count + count);
         var row = _count;
         _count += count;
         _generation++;
+        if (wasEmpty) OnOccupancyTransition?.Invoke();
         return row;
     }
 
@@ -158,6 +167,7 @@ public sealed class Archetype
     /// </summary>
     internal bool RemoveAt(int row, out Entity movedEntity)
     {
+        var wasSingle = _count == 1;
         var last = _count - 1;
         if (row != last)
         {
@@ -173,6 +183,7 @@ public sealed class Archetype
         _entities[last] = default;
         _count--;
         _generation++;
+        if (wasSingle) OnOccupancyTransition?.Invoke();
         return row != last;
     }
 

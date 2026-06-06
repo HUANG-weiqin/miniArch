@@ -2,7 +2,7 @@
 title: Hero Pipeline Regression Test
 module: HeroComing.Perf
 description: First-class regression gate for architecture changes - 30s timed throughput test
-updated: 2026-06-06
+updated: 2026-06-07
 ---
 # Hero Pipeline Regression Test
 
@@ -18,25 +18,15 @@ updated: 2026-06-06
 - 引用 `tests/HeroPipeline.Tests/HeroPipeline.Tests.csproj` 获取 pipeline 代码
 - 500 players + 500 enemies on 100x100 grid
 
-## 当前 baseline（2026-06-06）
+## 当前 baseline（2026-06-07）
 
 | 链路 | 吞吐量 rounds/s | 平均耗时 ms/round | 总轮数 | 内存稳定性 |
 |---|---|---|---|---|
-<<<<<<< HEAD
-| Movement（无 collision） | 844.0 | 1.2 | 25320 | 稳定 |
-| Attack（含 collision） | 229.6 | 4.4 | 6889 | 稳定 |
+| Movement（无 collision） | 979.5 | 1.0 | 29386 | 稳定 |
+| Attack（含 collision） | 230.4 | 4.3 | 6913 | 稳定 |
 
 ### 回归阈值
 
-- Movement 吞吐量：≥675 rounds/s（baseline 的 80%）
-- Attack 吞吐量：≥183 rounds/s（baseline 的 80%）
-=======
-| Movement（无 collision） | 1000.6 | 1.0 | 30018 | 稳定 |
-| Attack（含 collision） | 238.6 | 4.2 | 7157 | 稳定 |
-
-### 回归阈值
-
-- Movement 吞吐量：≥800 rounds/s（baseline 的 80%）
-- Attack 吞吐量：≥190 rounds/s（baseline 的 80%）
->>>>>>> feature/friflo-game-scenario-bench
+- Movement 吞吐量：≥783 rounds/s（baseline 的 80%）
+- Attack 吞吐量：≥184 rounds/s（baseline 的 80%）
 - 内存：heap delta 不能持续增长（允许 ±10% 波动）

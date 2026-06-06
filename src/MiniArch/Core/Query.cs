@@ -21,15 +21,14 @@ public sealed class Query
     private int _refreshCount;
 
     private Archetype[] _snapshotArchetypes = Array.Empty<Archetype>();
-    private long[] _snapshotGenerations = Array.Empty<long>();
     private Chunk[] _snapshotChunks = Array.Empty<Chunk>();
     private Archetype[] _scratchArchetypes = Array.Empty<Archetype>();
     private Chunk[] _scratchChunks = Array.Empty<Chunk>();
-    private long[] _scratchGenerations = Array.Empty<long>();
     private int _snapshotArchetypeCount;
     private int _chunksDirty = 1;
     private bool _initialized;
     private int _snapshotArchetypeVersion;
+    private int _snapshotNonEmptyArchetypeVersion;
 
     internal Query(World world, QueryFilter filter)
     {
@@ -189,31 +188,10 @@ public sealed class Query
             return true;
         }
 
-        // Check if new archetypes were created
-        if (_world.ArchetypeVersion != _snapshotArchetypeVersion)
-        {
-            return true;
-        }
-
-        var snapshot = ReadArchetypeSnapshot();
-        var snapshotArchetypes = snapshot.Items;
-        var snapshotGenerations = Volatile.Read(ref _snapshotGenerations);
-        var snapshotArchetypeCount = snapshot.Count;
-
-        if (snapshotGenerations.Length < snapshotArchetypeCount)
-        {
-            return true;
-        }
-
-        for (var i = 0; i < snapshotArchetypeCount; i++)
-        {
-            if (snapshotArchetypes[i].Generation != snapshotGenerations[i])
-            {
-                return true;
-            }
-        }
-
-        return false;
+        // Only rebuild when new archetypes are created or occupancy transitions (0↔non-0) occur.
+        // Per-entity operations within already-non-empty archetypes do NOT invalidate the cache.
+        return _world.ArchetypeVersion != _snapshotArchetypeVersion ||
+               _world.NonEmptyArchetypeVersion != _snapshotNonEmptyArchetypeVersion;
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -249,6 +227,7 @@ public sealed class Query
     {
         var archetypes = _world.Archetypes;
         _snapshotArchetypeVersion = _world.ArchetypeVersion;
+        _snapshotNonEmptyArchetypeVersion = _world.NonEmptyArchetypeVersion;
 
         if (archetypes.Length == 0)
         {
@@ -260,7 +239,6 @@ public sealed class Query
         if (_scratchArchetypes.Length < archetypes.Length)
         {
             _scratchArchetypes = new Archetype[archetypes.Length];
-            _scratchGenerations = new long[archetypes.Length];
         }
 
         var matchedArchetypeCount = 0;
@@ -269,7 +247,6 @@ public sealed class Query
             if (Matches(archetype))
             {
                 _scratchArchetypes[matchedArchetypeCount] = archetype;
-                _scratchGenerations[matchedArchetypeCount] = archetype.Generation;
                 matchedArchetypeCount++;
             }
         }
@@ -311,7 +288,6 @@ public sealed class Query
         if (matchedChunkCount == 0)
         {
             Volatile.Write(ref _snapshotChunks, Array.Empty<Chunk>());
-            UpdateStoredGenerations(snapshotArchetypes, snapshotArchetypeCount);
             Volatile.Write(ref _chunksDirty, 0);
             return;
         }
@@ -342,25 +318,13 @@ public sealed class Query
         Volatile.Write(ref _snapshotChunks, exact);
         _scratchChunks = old;
 
-        // Update stored generations so HasAnyArchetypeGenerationChanged doesn't keep
-        // returning true (which would cause constant chunk rebuilds every frame).
-        UpdateStoredGenerations(snapshotArchetypes, snapshotArchetypeCount);
-
         Volatile.Write(ref _chunksDirty, 0);
-    }
-
-    private void UpdateStoredGenerations(Archetype[] archetypes, int count)
-    {
-        var gens = Volatile.Read(ref _snapshotGenerations);
-        for (var i = 0; i < count && i < gens.Length; i++)
-            gens[i] = archetypes[i].Generation;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void SwapSnapshotToEmpty()
     {
         _scratchArchetypes = Array.Empty<Archetype>();
-        _scratchGenerations = Array.Empty<long>();
         SwapArchetypeSnapshot(0);
         Volatile.Write(ref _snapshotChunks, Array.Empty<Chunk>());
         Volatile.Write(ref _chunksDirty, 0);
@@ -370,12 +334,9 @@ public sealed class Query
     private void SwapArchetypeSnapshot(int count)
     {
         var oldA = _snapshotArchetypes;
-        var oldG = _snapshotGenerations;
         Volatile.Write(ref _snapshotArchetypes, _scratchArchetypes);
-        Volatile.Write(ref _snapshotGenerations, _scratchGenerations);
         Volatile.Write(ref _snapshotArchetypeCount, count);
         _scratchArchetypes = oldA;
-        _scratchGenerations = oldG;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

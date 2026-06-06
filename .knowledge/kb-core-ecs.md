@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-06-06
+updated: 2026-06-07
 ---
 # MiniArch Core ECS
 
@@ -90,6 +90,7 @@ updated: 2026-06-06
 - `CreateMany` 不能退化成外部循环调 `Create`
 - Edge cache 用 `MigrationPlan?[]` 按 componentId 直索引，当组件 ID 稀疏时数组可能膨胀
 - `Set` 和 `Add` 在内部调用同一个 `ApplyTypedAddOrSet`——组件不存在时 `Set` 会静默添加
+- **`MigrationPlan` 缓存 byte offset 而非 column index**：`Archetype.EnsureCapacity()` 扩容后 `_columnByteOffsets` 会重新计算；预缓存的 byte offset 指向旧内存位置，导致迁移时组件数据写到错误位置。修复：`CopyEntry` 存 column index，拷贝时动态解析到当前 offset。
 - Query 快照是非原子的（archetype 和 chunk 数组分开写入），安全性依赖"world 无并发写"前提
 - `IsAlive` 必须和 `TryGetLocation` 共用同一条 version/location 校验链，不能有独立状态
 - 性能验证必须看 Arch 对照数据，不能只看自己变快

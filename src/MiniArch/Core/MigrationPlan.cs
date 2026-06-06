@@ -29,9 +29,6 @@ internal sealed class MigrationPlan
         var destinationComponents = destination.Signature.AsSpan();
         var sharedCopies = new CopyEntry[sourceComponents.Length - (isAdd ? 0 : 1)];
 
-        var sourceOffsets = source.GetColumnByteOffsets();
-        var destOffsets = destination.GetColumnByteOffsets();
-
         int? addedColumnIndex = null;
         var copyCount = 0;
 
@@ -54,8 +51,8 @@ internal sealed class MigrationPlan
                 var sourceCol = source.GetComponentIndex(sourceComponents[sourceIndex]);
                 var destCol = destination.GetComponentIndex(destinationComponent);
                 sharedCopies[copyCount++] = new CopyEntry(
-                    sourceOffsets[sourceCol],
-                    destOffsets[destCol],
+                    sourceCol,
+                    destCol,
                     destination.GetElementSize(destinationIndex));
                 break;
             }
@@ -66,14 +63,16 @@ internal sealed class MigrationPlan
 
     /// <summary>
     /// Copies all shared component data from the source row to the destination row.
-    /// Column byte offsets are pre-computed in <see cref="CopyEntry"/>;
-    /// chunk data array references are hoisted once outside the loop.
+    /// Column indices are resolved to byte offsets at copy time to handle
+    /// <see cref="Archetype.EnsureCapacity"/> reallocation that changes column offsets.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void CopySharedData(Archetype source, int sourceRow, Archetype destination, int destinationRow)
     {
         ref var sourceBase = ref MemoryMarshal.GetArrayDataReference(source.GetDataArray());
         ref var destBase = ref MemoryMarshal.GetArrayDataReference(destination.GetDataArray());
+        var sourceOffsets = source.GetColumnByteOffsets();
+        var destOffsets = destination.GetColumnByteOffsets();
         var copies = SharedCopies;
 
         for (var i = 0; i < copies.Length; i++)
@@ -81,8 +80,8 @@ internal sealed class MigrationPlan
             ref readonly var entry = ref copies[i];
             var size = entry.ByteSize;
             Archetype.CopySmall(
-                ref Unsafe.Add(ref destBase, entry.DestColumnByteOffset + destinationRow * size),
-                ref Unsafe.Add(ref sourceBase, entry.SourceColumnByteOffset + sourceRow * size),
+                ref Unsafe.Add(ref destBase, destOffsets[entry.DestColumnIndex] + destinationRow * size),
+                ref Unsafe.Add(ref sourceBase, sourceOffsets[entry.SourceColumnIndex] + sourceRow * size),
                 size);
         }
     }
@@ -90,16 +89,16 @@ internal sealed class MigrationPlan
 
 internal readonly struct CopyEntry
 {
-    /// <summary>Pre-computed byte offset of the source column within the chunk data buffer.</summary>
-    internal readonly int SourceColumnByteOffset;
-    /// <summary>Pre-computed byte offset of the destination column within the chunk data buffer.</summary>
-    internal readonly int DestColumnByteOffset;
+    /// <summary>Column index in the source archetype. Resolved to byte offset at copy time.</summary>
+    internal readonly int SourceColumnIndex;
+    /// <summary>Column index in the destination archetype. Resolved to byte offset at copy time.</summary>
+    internal readonly int DestColumnIndex;
     internal readonly int ByteSize;
 
-    internal CopyEntry(int sourceColumnByteOffset, int destColumnByteOffset, int byteSize)
+    internal CopyEntry(int sourceColumnIndex, int destColumnIndex, int byteSize)
     {
-        SourceColumnByteOffset = sourceColumnByteOffset;
-        DestColumnByteOffset = destColumnByteOffset;
+        SourceColumnIndex = sourceColumnIndex;
+        DestColumnIndex = destColumnIndex;
         ByteSize = byteSize;
     }
 }
