@@ -1,7 +1,7 @@
 using System.Buffers;
 using System.Diagnostics.CodeAnalysis;
-using System.Threading;
 using System.Runtime.CompilerServices;
+using System.Threading;
 
 using MiniArch.Core;
 
@@ -13,13 +13,7 @@ namespace MiniArch;
 public sealed class World : IDisposable
 {
     private const int DefaultChunkCapacity = 128;
-    private const int EmptyArchetypeChunkCapacity = 256;
-    private const int EmptyArchetypeChunkCapacityThreshold = 128;
-    private const int AdaptiveChunkTargetBytes = 4 * 1024;
-    private const int AdaptiveMaxChunkCapacity = 1024;
     private const int StackAllocatedBatchRangeLimit = 128;
-    private static readonly int EntitySizeInBytes = Unsafe.SizeOf<Entity>();
-
     private readonly Dictionary<Signature, Archetype> _archetypes = new();
     private readonly Dictionary<CreateArchetypeKey, Archetype> _createArchetypeCache = new();
     private readonly HierarchyTable _hierarchy = new();
@@ -29,7 +23,6 @@ public sealed class World : IDisposable
     private Dictionary<QueryFilter, MiniArch.Core.Query> _queries = new();
     private Archetype[] _archetypeSnapshot = Array.Empty<Archetype>();
     private readonly int _chunkCapacity;
-    private readonly bool _adaptiveChunkCapacity;
     private RecycledEntity[] _freeIds;
     private int _freeIdCount;
 
@@ -70,7 +63,6 @@ public sealed class World : IDisposable
         }
 
         _chunkCapacity = chunkCapacity;
-        _adaptiveChunkCapacity = chunkCapacity == DefaultChunkCapacity;
         _records = new EntityRecord[entityCapacity];
         _entitySlotCount = 0;
         _freeIds = entityCapacity == 0 ? Array.Empty<RecycledEntity>() : new RecycledEntity[entityCapacity];
@@ -1239,8 +1231,7 @@ public sealed class World : IDisposable
             return archetype;
         }
 
-        var chunkCapacity = GetArchetypeChunkCapacity(signature);
-        archetype = new Archetype(signature, ResolveComponentTypes(signature), chunkCapacity);
+        archetype = new Archetype(signature, ResolveComponentTypes(signature), _chunkCapacity);
         _archetypes.Add(signature, archetype);
         PublishArchetypeSnapshot(archetype);
         _archetypeVersion++;
@@ -1486,42 +1477,6 @@ public sealed class World : IDisposable
         var archetype = GetOrCreateArchetype(new Signature(ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9, ct10, ct11, ct12, ct13, ct14, ct15, ct16));
         CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
         return archetype;
-    }
-
-    private static int GetBytesPerEntity(Signature signature)
-    {
-        var bytesPerEntity = EntitySizeInBytes;
-        var components = signature.AsSpan();
-        for (var index = 0; index < components.Length; index++)
-            bytesPerEntity += ComponentSizeCache.GetSize(ComponentRegistry.Shared.GetType(components[index]));
-        return bytesPerEntity;
-    }
-
-    private int GetArchetypeChunkCapacity(Signature signature)
-    {
-        if (signature.Count == 0 && _chunkCapacity >= EmptyArchetypeChunkCapacityThreshold)
-        {
-            return Math.Max(_chunkCapacity, EmptyArchetypeChunkCapacity);
-        }
-
-        if (!_adaptiveChunkCapacity)
-        {
-            return _chunkCapacity;
-        }
-
-        var bytesPerEntity = GetBytesPerEntity(signature);
-        if (bytesPerEntity <= 0)
-        {
-            return _chunkCapacity;
-        }
-
-        var adaptiveChunkCapacity = AdaptiveChunkTargetBytes / bytesPerEntity;
-        if (adaptiveChunkCapacity <= _chunkCapacity)
-        {
-            return _chunkCapacity;
-        }
-
-        return Math.Min(adaptiveChunkCapacity, AdaptiveMaxChunkCapacity);
     }
 
     private Type[] ResolveComponentTypes(Signature signature)
