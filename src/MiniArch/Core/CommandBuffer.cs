@@ -28,7 +28,7 @@ public sealed class CommandBuffer : ICommandRecorder
     private int[] _createdStateLookup = Array.Empty<int>();
     private int _maxCreatedEntityId;
     private Dictionary<Entity, HierarchyIntent> _hierarchyByChild = new();
-    private (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)[] _typeInfoCache = [];
+    private (Type RuntimeType, ComponentType ComponentType, int Size)[] _typeInfoCache = [];
     private List<byte[]> _slabs = new();
     private readonly List<(int ComponentTypeId, CreatedComponent Component)> _tempComponents = new();
     private OverflowPool<int, EntityOpSlot> _opsOverflow;
@@ -220,14 +220,14 @@ public sealed class CommandBuffer : ICommandRecorder
             if (createdIdx >= 0)
             {
                 ref var state = ref _createdStatePool[createdIdx];
-                state.Map.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size, info.Writer), ref _createdOverflow);
+                state.Map.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size), ref _createdOverflow);
                 return;
             }
         }
 
         var opsIdx = GetOrCreateOpsIndex(entity);
         ref var ops = ref _opsPool[opsIdx];
-        var slot = new EntityOpSlot { ComponentTypeId = componentTypeId, Kind = OpKindAdd, AddSetData = new AddSetEntry(info.ComponentType, info.RuntimeType, slabIndex, offset, info.Size, info.Writer) };
+        var slot = new EntityOpSlot { ComponentTypeId = componentTypeId, Kind = OpKindAdd, AddSetData = new AddSetEntry(info.ComponentType, info.RuntimeType, slabIndex, offset, info.Size) };
         ops.Set(componentTypeId, slot, ref _opsOverflow);
     }
 
@@ -249,14 +249,14 @@ public sealed class CommandBuffer : ICommandRecorder
             if (createdIdx >= 0)
             {
                 ref var state = ref _createdStatePool[createdIdx];
-                state.Map.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size, info.Writer), ref _createdOverflow);
+                state.Map.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size), ref _createdOverflow);
                 return;
             }
         }
 
         var opsIdx = GetOrCreateOpsIndex(entity);
         ref var ops = ref _opsPool[opsIdx];
-        var slot = new EntityOpSlot { ComponentTypeId = componentTypeId, Kind = OpKindSet, AddSetData = new AddSetEntry(info.ComponentType, info.RuntimeType, slabIndex, offset, info.Size, info.Writer) };
+        var slot = new EntityOpSlot { ComponentTypeId = componentTypeId, Kind = OpKindSet, AddSetData = new AddSetEntry(info.ComponentType, info.RuntimeType, slabIndex, offset, info.Size) };
         ops.Set(componentTypeId, slot, ref _opsOverflow);
     }
 
@@ -393,7 +393,7 @@ public sealed class CommandBuffer : ICommandRecorder
             ref var state = ref _createdStatePool[createdIdx];
             var info = ResolveTypeInfo(componentTypeId);
             CopyComponentFromArchetype(archetype, i, sourceRow, info.Size, out var slabIndex, out var offset);
-            state.Map.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size, info.Writer), ref _createdOverflow);
+            state.Map.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size), ref _createdOverflow);
         }
     }
 
@@ -956,7 +956,7 @@ public sealed class CommandBuffer : ICommandRecorder
             case OpKindSet:
             {
                 var d = slot.AddSetData;
-                world.ApplyRawAddOrSet(entity, d.ComponentType, d.RuntimeType, slabs[d.SlabIndex], d.DataOffset, d.Writer);
+                world.ApplyRawAddOrSet(entity, d.ComponentType, d.RuntimeType, slabs[d.SlabIndex], d.DataOffset);
                 break;
             }
             case OpKindRemove:
@@ -968,16 +968,16 @@ public sealed class CommandBuffer : ICommandRecorder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void EmitOpFromFrozen(
         List<byte[]> slabs,
-        (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)[] typeInfoCache,
+        (Type RuntimeType, ComponentType ComponentType, int Size)[] typeInfoCache,
         in EntityOpSlot slot, Entity entity, FrameDelta delta)
     {
         switch (slot.Kind)
         {
             case OpKindAdd:
-                delta.AddCommands.Add(new RawComponentCommand(entity, slot.ComponentTypeId, slot.AddSetData.RuntimeType, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, slot.AddSetData.Writer, slabs[slot.AddSetData.SlabIndex]));
+                delta.AddCommands.Add(new RawComponentCommand(entity, slot.ComponentTypeId, slot.AddSetData.RuntimeType, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, slabs[slot.AddSetData.SlabIndex]));
                 break;
             case OpKindSet:
-                delta.SetCommands.Add(new RawComponentCommand(entity, slot.ComponentTypeId, slot.AddSetData.RuntimeType, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, slot.AddSetData.Writer, slabs[slot.AddSetData.SlabIndex]));
+                delta.SetCommands.Add(new RawComponentCommand(entity, slot.ComponentTypeId, slot.AddSetData.RuntimeType, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, slabs[slot.AddSetData.SlabIndex]));
                 break;
             case OpKindRemove:
             {
@@ -1279,7 +1279,7 @@ public sealed class CommandBuffer : ICommandRecorder
         }
     }
 
-    private (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer) ResolveTypeInfo(int componentTypeId)
+    private (Type RuntimeType, ComponentType ComponentType, int Size) ResolveTypeInfo(int componentTypeId)
     {
         if ((uint)componentTypeId < (uint)_typeInfoCache.Length)
         {
@@ -1298,12 +1298,11 @@ public sealed class CommandBuffer : ICommandRecorder
         }
 
         var size = runtimeType == typeof(object) ? 0 : ComponentSizeCache.GetSize(runtimeType);
-        var writer = runtimeType == typeof(object) ? null! : ComponentWriterCache.GetColumnWriter(runtimeType);
-        var info = (runtimeType, componentType, size, writer);
+        var info = (runtimeType, componentType, size);
 
         if (componentTypeId >= _typeInfoCache.Length)
         {
-            var newCache = new (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)[componentTypeId + 1];
+            var newCache = new (Type RuntimeType, ComponentType ComponentType, int Size)[componentTypeId + 1];
             if (_typeInfoCache.Length > 0)
                 Array.Copy(_typeInfoCache, newCache, _typeInfoCache.Length);
             _typeInfoCache = newCache;
@@ -1329,10 +1328,10 @@ public sealed class CommandBuffer : ICommandRecorder
         switch (slot.Kind)
         {
             case OpKindAdd:
-                delta.AddCommands.Add(new RawComponentCommand(entity, slot.ComponentTypeId, slot.AddSetData.RuntimeType, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, slot.AddSetData.Writer, _slabs[slot.AddSetData.SlabIndex]));
+                delta.AddCommands.Add(new RawComponentCommand(entity, slot.ComponentTypeId, slot.AddSetData.RuntimeType, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, _slabs[slot.AddSetData.SlabIndex]));
                 break;
             case OpKindSet:
-                delta.SetCommands.Add(new RawComponentCommand(entity, slot.ComponentTypeId, slot.AddSetData.RuntimeType, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, slot.AddSetData.Writer, _slabs[slot.AddSetData.SlabIndex]));
+                delta.SetCommands.Add(new RawComponentCommand(entity, slot.ComponentTypeId, slot.AddSetData.RuntimeType, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, _slabs[slot.AddSetData.SlabIndex]));
                 break;
             case OpKindRemove:
             {
@@ -1352,7 +1351,7 @@ public sealed class CommandBuffer : ICommandRecorder
             case OpKindSet:
             {
                 var d = slot.AddSetData;
-                _world.ApplyRawAddOrSet(entity, d.ComponentType, d.RuntimeType, _slabs[d.SlabIndex], d.DataOffset, d.Writer);
+                _world.ApplyRawAddOrSet(entity, d.ComponentType, d.RuntimeType, _slabs[d.SlabIndex], d.DataOffset);
                 break;
             }
             case OpKindRemove:
@@ -1435,16 +1434,14 @@ public sealed class CommandBuffer : ICommandRecorder
         public int SlabIndex;
         public int DataOffset;
         public int DataSize;
-        public ComponentWriterCache.ColumnWriterDelegate Writer;
 
-        public AddSetEntry(ComponentType componentType, Type runtimeType, int slabIndex, int dataOffset, int dataSize, ComponentWriterCache.ColumnWriterDelegate writer)
+        public AddSetEntry(ComponentType componentType, Type runtimeType, int slabIndex, int dataOffset, int dataSize)
         {
             ComponentType = componentType;
             RuntimeType = runtimeType;
             SlabIndex = slabIndex;
             DataOffset = dataOffset;
             DataSize = dataSize;
-            Writer = writer;
         }
     }
 
@@ -1454,7 +1451,7 @@ public sealed class CommandBuffer : ICommandRecorder
         public bool Destroyed;
     }
 
-    internal readonly record struct CreatedComponent(Type RuntimeType, ComponentType ComponentType, int SlabIndex, int DataOffset, int DataSize, ComponentWriterCache.ColumnWriterDelegate? Writer);
+    internal readonly record struct CreatedComponent(Type RuntimeType, ComponentType ComponentType, int SlabIndex, int DataOffset, int DataSize);
 
     private sealed class FrozenBufferState
     {
@@ -1475,7 +1472,7 @@ public sealed class CommandBuffer : ICommandRecorder
         public Dictionary<Entity, HierarchyIntent> HierarchyByChild = null!;
         public List<byte[]> Slabs = null!;
         public bool HasCreatedEntities;
-        public (Type RuntimeType, ComponentType ComponentType, int Size, ComponentWriterCache.ColumnWriterDelegate Writer)[] TypeInfoCache = [];
+        public (Type RuntimeType, ComponentType ComponentType, int Size)[] TypeInfoCache = [];
         public OverflowPool<int, EntityOpSlot> OpsOverflow;
         public OverflowPool<int, CreatedComponent> CreatedOverflow;
     }

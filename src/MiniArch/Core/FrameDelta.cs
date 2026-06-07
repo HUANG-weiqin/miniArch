@@ -431,7 +431,6 @@ internal readonly record struct RawComponentCommand(
     ComponentType ComponentType,
     int DataOffset,
     int DataSize,
-    ComponentWriterCache.ColumnWriterDelegate? ColumnWriter,
     byte[] Data);
 
 internal readonly record struct RawRemoveCommand(Entity Entity, int ComponentTypeId, Type RuntimeType, ComponentType ComponentType);

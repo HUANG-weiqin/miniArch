@@ -3,7 +3,7 @@ title: Cache & Memory Optimization Review
 module: MiniArch.Core
 description: Memory layout and cache behavior analysis of the ECS runtime, with optimization opportunities
 updated: 2026-06-07
-review: 2026-06-07 — 移除 OnOccupancyTransition delegate + _nonEmptyArchetypeVersion（YAGNI：flatten 后不需要 occupancy 跟踪）
+review: 2026-06-07 — 移除 ComponentWriterCache + ColumnWriterDelegate（冗余的内部优化，对 blittable struct 与 WriteComponentRaw 等效）
 ---
 # Cache & Memory Optimization Review
 

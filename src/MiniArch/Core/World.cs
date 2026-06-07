@@ -1197,40 +1197,27 @@ public sealed class World : IDisposable
         MoveEntityWithPlan(entity, info, plan, in component);
     }
 
-    internal unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, Type runtimeType, byte[] data, int offset, ComponentWriterCache.ColumnWriterDelegate? columnWriter)
+    internal unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, Type runtimeType, byte[] data, int offset)
     {
         fixed (byte* ptr = data)
         {
-            ApplyRawAddOrSet(entity, componentType, runtimeType, ptr + offset, columnWriter);
+            ApplyRawAddOrSet(entity, componentType, runtimeType, ptr + offset);
         }
     }
 
-    private unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, Type runtimeType, byte* source, ComponentWriterCache.ColumnWriterDelegate? columnWriter)
+    private unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, Type runtimeType, byte* source)
     {
         var info = GetRequiredLocation(entity);
         var archetype = info.Archetype;
 
         if (archetype.TryGetComponentIndex(componentType, out var componentIndex))
         {
-            WriteComponentFromBytes(archetype, componentType, info.RowIndex, source, columnWriter);
+            archetype.WriteComponentRaw(componentIndex, info.RowIndex, source);
             return;
         }
 
         var destination = GetOrCreateAddDestinationArchetype(archetype, componentType);
-        MoveEntityFromBytes(entity, info, destination, componentType, runtimeType, source, columnWriter);
-    }
-
-    private static unsafe void WriteComponentFromBytes(Archetype archetype, ComponentType componentType, int row, byte* source, ComponentWriterCache.ColumnWriterDelegate? columnWriter)
-    {
-        var columnIndex = archetype.GetComponentIndex(componentType);
-        if (columnWriter is not null)
-        {
-            columnWriter(new Chunk(archetype), columnIndex, row, source);
-        }
-        else
-        {
-            archetype.WriteComponentRaw(columnIndex, row, source);
-        }
+        MoveEntityFromBytes(entity, info, destination, componentType, runtimeType, source);
     }
 
     private unsafe void MoveEntityFromBytes(
@@ -1239,11 +1226,11 @@ public sealed class World : IDisposable
         Archetype destination,
         ComponentType componentType,
         Type runtimeType,
-        byte* source,
-        ComponentWriterCache.ColumnWriterDelegate? columnWriter)
+        byte* source)
     {
         MoveEntityCore(entity, sourceInfo, destination, out var rowIdx);
-        WriteComponentFromBytes(destination, componentType, rowIdx, source, columnWriter);
+        var columnIndex = destination.GetComponentIndex(componentType);
+        destination.WriteComponentRaw(columnIndex, rowIdx, source);
         FinishMoveEntity(entity, sourceInfo, destination, rowIdx);
     }
 
@@ -1962,7 +1949,7 @@ public sealed class World : IDisposable
                 var componentType = trusted
                     ? add.ComponentType
                     : ResolveCompiledComponentType(add.RuntimeType, add.ComponentType, componentTypeCache);
-                ApplyRawAddOrSet(add.Entity, componentType, add.RuntimeType, add.Data, add.DataOffset, add.ColumnWriter);
+                ApplyRawAddOrSet(add.Entity, componentType, add.RuntimeType, add.Data, add.DataOffset);
             }
 
             foreach (var set in delta.SetCommands)
@@ -1970,7 +1957,7 @@ public sealed class World : IDisposable
                 var componentType = trusted
                     ? set.ComponentType
                     : ResolveCompiledComponentType(set.RuntimeType, set.ComponentType, componentTypeCache);
-                ApplyRawAddOrSet(set.Entity, componentType, set.RuntimeType, set.Data, set.DataOffset, set.ColumnWriter);
+                ApplyRawAddOrSet(set.Entity, componentType, set.RuntimeType, set.Data, set.DataOffset);
             }
         }
 
@@ -2008,31 +1995,24 @@ public sealed class World : IDisposable
         MaterializeReservedEntityCore(entity, signature, components, componentTypeCache: null, trustCompiledComponentTypes: true);
     }
 
-    internal void MaterializeReservedEntityDirect(Entity entity, Archetype archetype, ReadOnlySpan<RawComponentValue> components)
+    internal unsafe void MaterializeReservedEntityDirect(Entity entity, Archetype archetype, ReadOnlySpan<RawComponentValue> components)
     {
         var rowIndex = archetype.AddEntity(entity);
         ref var record = ref _records[entity.Id];
         record.Archetype = archetype;
         record.RowIndex = rowIndex;
 
-        unsafe
+        for (var index = 0; index < components.Length; index++)
         {
-            for (var index = 0; index < components.Length; index++)
+            ref readonly var component = ref components[index];
+            var columnIndex = archetype.GetComponentIndex(component.ComponentType);
+            fixed (byte* ptr = component.Data)
             {
-                ref readonly var component = ref components[index];
-                var writer = ComponentWriterCache.GetColumnWriter(component.RuntimeType);
-                fixed (byte* ptr = component.Data)
-                {
-                    WriteComponentFromBytes(archetype, component.ComponentType, rowIndex, ptr + component.DataOffset, writer);
-                }
+                archetype.WriteComponentRaw(columnIndex, rowIndex, ptr + component.DataOffset);
             }
         }
     }
 
-    /// <summary>
-    /// Fast-path materialization for CommandBuffer: skips RawComponentValue construction
-    /// and ComponentWriterCache lookup by accepting pre-resolved writers directly.
-    /// </summary>
     internal unsafe void MaterializeReservedEntityFast(
         Entity entity,
         Archetype archetype,
@@ -2047,10 +2027,11 @@ public sealed class World : IDisposable
         for (var index = 0; index < components.Length; index++)
         {
             ref readonly var cc = ref components[index];
+            var columnIndex = archetype.GetComponentIndex(cc.ComponentType);
             var data = slabs[cc.SlabIndex];
             fixed (byte* ptr = data)
             {
-                WriteComponentFromBytes(archetype, cc.ComponentType, rowIndex, ptr + cc.DataOffset, cc.Writer!);
+                archetype.WriteComponentRaw(columnIndex, rowIndex, ptr + cc.DataOffset);
             }
         }
     }
@@ -2068,18 +2049,18 @@ public sealed class World : IDisposable
         record.Archetype = archetype;
         record.RowIndex = rowIndex;
 
-        unsafe
+        for (var index = 0; index < components.Count; index++)
         {
-            for (var index = 0; index < components.Count; index++)
+            var component = components[index];
+            var resolvedType = trustCompiledComponentTypes
+                ? component.ComponentType
+                : ResolveCompiledComponentType(component.RuntimeType, component.ComponentType, componentTypeCache);
+            var columnIndex = archetype.GetComponentIndex(resolvedType);
+            unsafe
             {
-                var component = components[index];
-                var resolvedType = trustCompiledComponentTypes
-                    ? component.ComponentType
-                    : ResolveCompiledComponentType(component.RuntimeType, component.ComponentType, componentTypeCache);
-                var writer = ComponentWriterCache.GetColumnWriter(component.RuntimeType);
                 fixed (byte* ptr = component.Data)
                 {
-                    WriteComponentFromBytes(archetype, resolvedType, rowIndex, ptr + component.DataOffset, writer);
+                    archetype.WriteComponentRaw(columnIndex, rowIndex, ptr + component.DataOffset);
                 }
             }
         }
