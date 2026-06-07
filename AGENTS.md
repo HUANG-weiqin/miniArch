@@ -88,7 +88,7 @@ dotnet run -c Release --project perf/HeroComing.Perf
 ```
 
 检查输出：
-- 吞吐量低于阈值（Movement ≥496 rounds/s, Attack ≥32 rounds/s）→ **回退改动**
+- 吞吐量低于阈值（Movement ≥866 rounds/s, Attack ≥200 rounds/s）→ **回退改动**
 - 内存持续增长 → **回退改动**
 - 崩溃或异常 → **回退改动**
 

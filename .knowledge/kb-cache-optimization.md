@@ -2,8 +2,8 @@
 title: Cache & Memory Optimization Review
 module: MiniArch.Core
 description: Memory layout and cache behavior analysis of the ECS runtime, with optimization opportunities
-updated: 2026-06-07 (修正：EntityRecord 16 字节布局、Chunk 为视图、ComponentMask 结构体、删除 EntityLocation 遗留类型)
-review: 2026-06-07 — 移除 ComponentWriterCache + ColumnWriterDelegate（冗余的内部优化，对 blittable struct 与 WriteComponentRaw 等效）
+updated: 2026-06-07 (修正：P3/P4/P5 MigrationPlan→CopySharedComponentsFrom/Edge Cache，P6 CopySmall 2-byte 已修复，AdaptiveChunkTargetBytes→DefaultChunkCapacity，_tsRawComponents→_cachedArchetypeTypes)
+review: 2026-06-07 — P3/P4/P5 重写为当前架构，P6 标记已修复
 ---
 # Cache & Memory Optimization Review
 
@@ -104,43 +104,41 @@ struct EntityRecord {
 
 **判断**：**测量后决定**。如果迭代是瓶颈，可以考虑 inline callback 模式（`SpanEach<T>(ref T1 r1, ref T2 r2, Entity e)` delegate 或 function pointer），避免 struct 复制。
 
-## P3: MigrationPlan.CopySharedData 的 copy 散布
+## P3: Archetype.CopySharedComponentsFrom 的 copy 散布
 
-**问题**：组件迁移时，`CopySharedData` 对每个 CopyEntry 分别访问 source chunk 和 dest chunk 的 `_data` 数组。N 个组件 = N 次 source↔dest 交叉访问。
+**问题**：组件迁移时，`CopySharedComponentsFrom` 对每个共享组件分别访问 source 和 dest 的 `_data` 数组。N 个组件 = N 次 source↔dest 交叉访问。
 
-**热路径影响**：这是结构变更的热路径（Add/Set/Remove component）。每次迁移都要把所有共享组件从旧 chunk 复制到新 chunk。
+**热路径影响**：这是结构变更的热路径（Add/Set/Remove component）。每次迁移都要把所有共享组件从旧 archetype 复制到新 archetype。
 
-**方案 A**（简单）：将 `CopyEntry[]` 按 SourceColumnIndex 排序，使 source 侧访问从顺序变为局部顺序。
+**方案 A**（简单）：将列按 source column index 排序，使 source 侧访问从顺序变为局部顺序。
 
 **方案 B**（激进）：对于小组件（≤16 bytes × ≤4 components），展开为内联拷贝循环，减少方法调用开销。
 
 **判断**：**方案 A 值得做**（排序开销极小，copy 时 cache 更友好）。方案 B 等 profiling 数据。
 
-## P4: ArchetypeEdges 稀疏数组
+## P4: Edge Cache 稀疏数组
 
-**问题**：`MigrationPlan?[]` 按 component ID 索引，如果 component ID 分配不连续（有空洞），浪费内存。例如只有 component ID 0 和 100，数组长度为 101，99 个 null。
+**问题**：`_addDestinationCache: Archetype?[]` 按 component ID 索引，如果 component ID 分配不连续（有空洞），浪费内存。例如只有 component ID 0 和 100，数组长度为 101，99 个 null。
 
-**热路径影响**：这是冷路径（只在结构变更时查找 migration plan），内存浪费不影响迭代。
+**热路径影响**：这是冷路径（只在结构变更时查找 edge cache），内存浪费不影响迭代。
 
 **判断**：**不做**。O(1) 查找比 Dictionary 的 hash 查找更可预测。除非 component ID 超过几千且有大量空洞，否则不值得改。
 
-## P5: MigrationPlan.Build O(n*m) 线性搜索
+## P5: CopySharedComponentsFrom O(n*m) 查找
 
-**问题**：`MigrationPlan.Build()` 对每个 destination component 都线性扫描 source components（O(n*m)）。虽然 n 通常很小（<20），但 source 已有 `_componentIdToColumnIndex` 可以直接 O(1) 查找。
+**问题**：`CopySharedComponentsFrom` 对每个 destination component 都调用 `source.GetComponentIndexFast`（O(1)），遍历 destination signature 查找 source 也有的组件。总体 O(n) 其中 n = destination component count。
 
-**热路径影响**：冷路径（只在 edge cache miss 时调用），影响微小。
+**热路径影响**：冷路径（只在 edge cache miss + 实际迁移时调用），影响微小。
 
-**Fix**：用 `source.GetComponentIndexFast(componentType)` 替代内层循环。
+**判断**：**当前已足够优**，`GetComponentIndexFast` 是 O(1) direct map 查找。
 
-**判断**：**值得做**，改动极小（~5 行），收益虽小但无成本。
+## P6: Archetype.CopySmall 2-byte fast path ✅ 已修复 (2026-06-07)
 
-## P6: Archetype.CopySmall 缺少 case 2
-
-**问题**：`Archetype.CopySmall` 支持 1/4/8/12/16 字节，缺少 2 字节 case。2 字节组件（`Half`、`short`、`ushort`、`char`）走 fallback `Unsafe.CopyBlockUnaligned`。
+**问题**：`CopySmall` 支持 1/4/8/12/16 字节，缺少 2 字节 case。2 字节组件（`Half`、`short`、`ushort`、`char`）走 fallback `Unsafe.CopyBlockUnaligned`。
 
 **Fix**：增加 `case 2: Unsafe.WriteUnaligned(ref dst, Unsafe.ReadUnaligned<short>(ref src));`
 
-**判断**：**低优先级但成本为零**，建议补上。
+**状态**：已补上 2-byte fast path。
 
 ## P7: CommandBuffer.ExtractAndSortComponents 在 Submit 时排序
 
@@ -172,7 +170,7 @@ struct EntityRecord {
 - 同时将 ExtractAndSortComponents 的逻辑内联到 BuildCreatedEntityComponents，消除了一次跨方法调用和 ReturnExtracted 的开销
 
 **已实施**：
-- 新增 3 个 `[ThreadStatic]` 字段：`_tsExtractTypes`、`_tsExtractSources`、`_tsRawComponents`
+- 新增 3 个 `[ThreadStatic]` 字段：`_tsExtractTypes`、`_tsExtractSources`、`_cachedArchetypeTypes`
 - `BuildCreatedEntityComponents` 不再调用 `ExtractAndSortComponents`，改为内联提取 + 排序
 - 不再 return buffer 到 ArrayPool，由 ThreadStatic 字段跨 Submit 复用
 - Submit 循环的 finally 块不再调用 `ArrayPool<RawComponentValue>.Shared.Return`
@@ -218,7 +216,7 @@ Pipeline 工作负载中，同批次 entity 几乎都是同一 archetype（如 5
 
 ### 最重要的一条数据
 
-**AdaptiveChunkTargetBytes = 16KB** 是整个 cache 策略的核心数字。它决定了每个 chunk 能装多少行，间接决定了：
+**DefaultChunkCapacity = 128** 决定 Archetype 初始容量（行数），间接决定了：
 - 迭代切换 chunk 的频率
 - 每次 chunk transition 的开销摊销
 - L1 cache 中能同时放几个 chunk 的数据
@@ -232,5 +230,5 @@ Pipeline 工作负载中，同批次 entity 几乎都是同一 archetype（如 5
 
 - **看迭代热路径**：`SpanQueryIterators.cs` 的 `MoveNext()` 方法
 - **看实体随机访问**：`World.cs` 的 `TryGetLocation()`、`FinishMoveEntity()`
-- **看 storage 布局**：`Archetype.cs` 的 `CreateStorage()`、`GetComponentRefAt<T>()`
+- **看 storage 布局**：`Archetype.cs` 的 `EnsureCapacity()`、`GetComponentRefAt<T>()`
 - **看迁移拷贝**：`Archetype.cs` 的 `CopySharedComponentsFrom()`、`CopySmall()`

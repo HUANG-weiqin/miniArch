@@ -44,7 +44,7 @@ updated: 2026-06-07 (修正：Archetype 扁平化后 Chunk 改为不再持存储
 ## 入口
 
 - 第一次读或加功能，先看：
-  - `Chunk.cs`：93 行，全部是 Archetype 的委托方法
+  - `Chunk.cs`：95 行，全部是 Archetype 的委托方法
   - `Archetype.cs`：真正的存储和实体操作
 - 修 bug，先看：
   - `Archetype.EnsureCapacity()`：扩容搬运是否正确处理了每列偏移的变化

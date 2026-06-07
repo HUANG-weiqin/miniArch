@@ -64,7 +64,7 @@ WorldSnapshot / WorldClone
 - 快照重建：遍历 `world.Archetypes`，用 256-bit ComponentMask 做 required/excluded/any 匹配
 - `OrderedQuery` 是消费层 materialization + sort
 - `ChunkView<T1..T4>` 提供每个 chunk 的 typed 列访问（`ChunksOf<T>()`）
-- `EachSpan<T1..T8>()` 提供零分配 per-row ref struct 迭代器
+- `EachSpan<T1..T4>()` 提供零分配 per-row ref struct 迭代器
 
 ### 7. Hierarchy
 - 邻接链表：`_parentByChild[id]` + `_firstChild[id]` + 链表 slot 管理子节点
@@ -122,4 +122,4 @@ WorldSnapshot / WorldClone
 
 ## 做得好的地方
 
-- flat byte storage (Archetype 直持) + single-chunk-per-archetype (消除 multi-chunk 复杂度) + 全局 `_archetypeVersion` 版本号失效 + ComponentMask 256-bit bitmask 匹配 + InlineMap 4-slot + overflow + edge cache 内联直索引 + `[SkipLocalsInit]`/`AggressiveInlining`/`Unsafe.As<byte,T>` 消除 bounds check
+- flat byte storage + single-chunk-per-archetype + 全局版本号失效 + ComponentMask 256-bit + InlineMap + edge cache 内联 + `[SkipLocalsInit]`/`AggressiveInlining`/`Unsafe.As<byte,T>` ——详见 `kb-core-ecs.md` 决策和 `kb-chunk-storage.md`
