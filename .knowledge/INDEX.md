@@ -18,6 +18,7 @@
 | MiniArch.Benchmarks（对比数据） | `kb-ecs-comparison.md` |
 | HeroPipeline.Tests | `kb-hero-pipeline-benchmarks.md` |
 | HeroComing.Perf（回归门禁） | `kb-hero-pipeline-regression.md` |
+| GameTickSim.Perf（场景基准） | `kb-gameticksim-scenarios.md` |
 
 ## 快速入口
 
@@ -34,7 +35,7 @@
 - **Hierarchy** → `kb-hierarchy-runtime.md`
 - **Debug 指标** → `kb-debug-metrics.md`
 - **用户 API 分层** → `kb-user-api-layering.md`
-- **测试/基准** → `kb-test-workflow.md`、`kb-hero-pipeline-benchmarks.md`、`kb-ecs-comparison.md`
+- **测试/基准** → `kb-test-workflow.md`、`kb-hero-pipeline-benchmarks.md`、`kb-ecs-comparison.md`、`kb-gameticksim-scenarios.md`
 - **回归门禁** → `kb-hero-pipeline-regression.md`
 - **排查行为偏差** → 各模块页的 `坑点` + 对应测试文件
 - **理解"为什么边界这么划"** → 各模块页的 `决策`

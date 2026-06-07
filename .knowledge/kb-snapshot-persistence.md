@@ -2,7 +2,7 @@
 title: Snapshot Persistence
 module: MiniArch.Core Snapshot
 description: Full-world snapshot save/load design for unmanaged components, plus WorldClone for zero-serialization in-memory copy
-updated: 2026-06-01
+updated: 2026-06-07 (修正：internal 重建 API 名称已更新)
 ---
 # Snapshot Persistence
 
@@ -24,7 +24,7 @@ updated: 2026-06-01
 
 - `WorldSnapshot.Save/Load`：走二进制序列化，支持跨进程传输
 - `WorldClone.Clone`：纯内存直拷，跳过全部编解码，5-20× 快于 Snapshot 往返
-- 两者共享同一套 internal 重建 API（ResetSnapshotState、ImportSnapshotChunk、SetSnapshotLocation）
+- 两者共享同一套 internal 重建 API（`world.Reset(slotCount)`, `SetSnapshotEntityVersion()`, `SetSnapshotLocation()`, `RebuildFreeIdStack()`）
 
 ## 决策
 

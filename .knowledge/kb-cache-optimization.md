@@ -2,7 +2,7 @@
 title: Cache & Memory Optimization Review
 module: MiniArch.Core
 description: Memory layout and cache behavior analysis of the ECS runtime, with optimization opportunities
-updated: 2026-06-07
+updated: 2026-06-07 (修正：EntityRecord 16 字节布局、Chunk 为视图、ComponentMask 结构体)
 review: 2026-06-07 — 移除 ComponentWriterCache + ColumnWriterDelegate（冗余的内部优化，对 blittable struct 与 WriteComponentRaw 等效）
 ---
 # Cache & Memory Optimization Review
@@ -27,24 +27,21 @@ MiniArch 的迭代热路径已经高度优化（pointer-bump、SoA、自适应 c
 
 ```
 World
-├── _versions: int[]           // 4B/entity, 独立数组
-├── _locations: EntityLocation[] // 16B/entity, 独立数组
-│   = (Archetype ref, ChunkIndex, RowIndex)
+├── _records: EntityRecord[]   // 16B/entity: (Archetype ref, RowIndex, Version)
 ├── _archetypes: Dictionary<Signature, Archetype>
-└── _freeIds: RecycledEntity[]
+├── _freeIds: RecycledEntity[]
+└── _archetypeVersion: int     // 全局版本号
 
 Archetype
-├── _chunks: List<Chunk>       // Chunk ref 数组
-├── _componentIdToColumnIndex: int[]  // shared with all Chunks
-├── Edges: ArchetypeEdges      // MigrationPlan?[] per component ID
-└── _generation: int
-
-Chunk
 ├── _data: byte[]              // SoA packed, all columns in ONE array
 ├── _entities: Entity[]        // 8B/row, parallel to data
 ├── _columnByteOffsets: int[]  // per-column byte offset into _data
 ├── _elementSizes: int[]       // per-column element size
-└── _componentIdToColumnIndex: int[]  // same ref as Archetype's
+├── _componentIdToColumnIndex: int[]  // component id → column index
+├── _addDestinationCache: Archetype?[]  // edge cache (Add)
+└── _removeDestinationCache: Archetype?[]  // edge cache (Remove)
+         ↓
+Chunk (readonly struct view over Archetype)
 ```
 
 ### 热路径分析
@@ -64,7 +61,7 @@ Chunk
 
 1. **迭代热路径几乎完美**：per-row = `Unsafe.Add(ref, 1)` × N，没有间接寻址
 2. **自适应 chunk 容量（16KB）** 正好瞄准 L1 cache，一次迭代不换 cache
-3. **ComponentMask256** 用 bitmask 做 signature 匹配，O(1) 无分支
+3. **ComponentMask**（256-bit bitmask, 4× `ulong`）用 bitmask 做 signature 匹配，O(1) 无分支
 4. **CopySmall 特化路径**（1/4/8/12/16 字节）覆盖了常见组件大小
 5. **`SkipLocalsInit`** + **`MemoryMarshal.GetArrayDataReference`** 消除了运行时开销
 
@@ -77,13 +74,14 @@ Chunk
 **已实施**：合并为 `EntityRecord[] _records`：
 ```csharp
 struct EntityRecord {
-    int Version;        // 4 bytes
-    Archetype Arch;     // 8 bytes (ref)
-    int ChunkIndex;     // 4 bytes
-    int RowIndex;       // 4 bytes
-}  // 20 bytes → padded to 24 bytes
+    Archetype? Archetype;  // 8 bytes (null = unoccupied)
+    int RowIndex;          // 4 bytes
+    int Version;           // 4 bytes
+}  // 16 bytes — 自然 8 字节对齐
 ```
 
+- **无 ChunkIndex**：Archetype 扁平化后，每个 Archetype 只有一个 Chunk，Archetype ref 已唯一标识存储位置
+- 字段顺序优化为 `(Archetype, RowIndex, Version)` 以获得自然的 16 字节 Sequential 布局
 - 回退测试：HeroComing.Perf Movement 698.1 rounds/s（baseline 690），Attack 203.6（baseline 179），性能无退化
 - 影响文件：`World.cs`（50+ 处引用点）、`WorldSnapshot.cs`、`WorldClone.cs`、新增 `EntityRecord.cs`
 - `EntityLocation.cs` 仍然保留但不再被 World 内部使用
@@ -136,9 +134,9 @@ struct EntityRecord {
 
 **判断**：**值得做**，改动极小（~5 行），收益虽小但无成本。
 
-## P6: Chunk.CopySmall 缺少 case 2
+## P6: Archetype.CopySmall 缺少 case 2
 
-**问题**：`CopySmall` 支持 1/4/8/12/16 字节，缺少 2 字节 case。2 字节组件（`Half`、`short`、`ushort`、`char`）走 fallback `Unsafe.CopyBlockUnaligned`。
+**问题**：`Archetype.CopySmall` 支持 1/4/8/12/16 字节，缺少 2 字节 case。2 字节组件（`Half`、`short`、`ushort`、`char`）走 fallback `Unsafe.CopyBlockUnaligned`。
 
 **Fix**：增加 `case 2: Unsafe.WriteUnaligned(ref dst, Unsafe.ReadUnaligned<short>(ref src));`
 
@@ -227,13 +225,12 @@ Pipeline 工作负载中，同批次 entity 几乎都是同一 archetype（如 5
 
 ## 坑点
 
-- **改 _locations 布局要同步改所有引用点**：World.cs 中至少 15+ 处直接访问 `_locations` 和 `_versions`，合并为 EntityRecord 后所有这些点都要更新
-- **Entity record padding**：合并后 24 bytes/entity，比 20 bytes 多 20%。如果 entity 数量极大（>5M），要评估内存增长
-- **Chunk._data 对齐改大后容量变化**：对齐从 8→64 会使每列浪费更多 padding，可能减少 chunk 内行数，影响迭代密度
+- **EntityRecord 布局已优化为 16 字节**：`(Archetype ref, RowIndex, Version)` 无 padding，字段顺序利用了引用类型的 8 字节对齐
+- **Archetype 的 `CreateStorage` 列对齐**：对齐从 8→64 会使每列浪费更多 padding，可能减少每个 Archetype 可存放的行数
 
 ## 入口
 
 - **看迭代热路径**：`SpanQueryIterators.cs` 的 `MoveNext()` 方法
-- **看实体随机访问**：`World.cs` 的 `GetRequiredLocation()`、`FinishMoveEntity()`
-- **看 chunk 布局**：`Chunk.cs` 的 `CreateStorage()`、`GetComponentRefAt<T>()`
-- **看迁移拷贝**：`MigrationPlan.cs` 的 `CopySharedData()`
+- **看实体随机访问**：`World.cs` 的 `TryGetLocation()`、`FinishMoveEntity()`
+- **看 storage 布局**：`Archetype.cs` 的 `CreateStorage()`、`GetComponentRefAt<T>()`
+- **看迁移拷贝**：`Archetype.cs` 的 `CopySharedComponentsFrom()`、`CopySmall()`

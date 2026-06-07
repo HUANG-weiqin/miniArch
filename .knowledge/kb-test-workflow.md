@@ -2,7 +2,7 @@
 title: Test Workflow
 module: MiniArch.Tests
 description: How the test suite, query profiling, snapshot benchmarks, and structural-change benchmarks are organized and how to run them
-updated: 2026-06-01
+updated: 2026-06-07 (修正：补充 EntityAccessorTests 条目)
 ---
 # Test Workflow
 
@@ -29,6 +29,7 @@ updated: 2026-06-01
 | `Core/QueryTests.cs` | 缓存与并发读取、冷热路径 |
 | `Core/QueryFilterTests.cs` | 链式 filter 和 builder 契约 |
 | `Core/QueryComponentSetTests.cs` | ComponentSet 创建/排序契约 |
+| `Core/EntityAccessorTests.cs` | EntityAccessor ref struct 契约 |
 | `Core/IntegrationTests.cs` | 最完整的端到端例子 |
 | `Core/DebugMetricsTests.cs` | API 契约与 Release disabled 契约 |
 | `Core/ThroughputRunnerTests.cs` | 参数解析和汇总契约 |

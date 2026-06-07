@@ -51,8 +51,8 @@ foreach (var entity in world.Query(in description))
 
 - `Query`
 - `Chunk`
-- `ChunkEnumerable`
-- `ChunkEnumerator`
+- `ChunkEnumerable` / `ChunkEnumerator`
+- `ChunkView<T1..T4>` / `ChunkViewEnumerable<T1..T4>` — typed chunk 列视图
 - `Archetype`
 - `Signature`
 - `EntityInfo`
@@ -159,7 +159,7 @@ foreach (var chunk in query.Chunks)
 - `Add` / `Set` / `Remove` — 组件操作（录时去重）
 - `Destroy` — 销毁实体
 - `Link` / `Unlink` — hierarchy 操作
-- `Submit()` — 同步提交到 world，清空 buffer
+- `Submit()` — 同步提交到 world，`true` if any ops were submitted
 - `Snapshot()` — 生成自包含 `FrameDelta`（不影响 world）
 - `SubmitAndSnapshotAsync()` — 换出 buffer 状态，主线程 Submit 与后台线程构建 FrameDelta 并行执行；返回 `Task<FrameDelta>`，调用返回时 Submit 已完成
 

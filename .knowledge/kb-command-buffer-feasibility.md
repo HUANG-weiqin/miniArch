@@ -2,7 +2,7 @@
 title: Command Buffer Runtime
 module: MiniArch.Core CommandBuffer
 description: Single-threaded per-entity-deduplicating command buffer with arena slab allocator, inline CreatedState/ExistingEntityOps, direct Submit() path, Snapshot() for cross-world replay, FrameDelta merge, SubmitAndSnapshotAsync()
-updated: 2026-06-05
+updated: 2026-06-07 (修正：移除已删除的 ComponentWriterCache 引用)
 ---
 # Command Buffer Runtime
 
@@ -19,7 +19,6 @@ updated: 2026-06-05
   - `src/MiniArch/Core/CommandBuffer.cs`：public recording API + `Submit()` + `Snapshot()`
   - `src/MiniArch/Core/ICommandRecorder.cs`：只录接口，供系统代码多态使用
   - `src/MiniArch/Core/FrameDelta.cs`：帧快照 IR，可保留并重放到同步 world
-  - `src/MiniArch/Core/ComponentWriterCache.cs`：per-type typed column writer/reader delegate 缓存
   - `src/MiniArch/Core/InlineMap.cs`：4 inline slot + overflow 的 per-entity map
   - `src/MiniArch/Core/OverflowPool.cs`：三个并行数组（keys, values, next）backed by `ArrayPool<T>` 的单链表节点池
   - `src/MiniArch/Core/World.cs`：`ReserveDeferredEntity`、`ReleaseReservedEntity`、`Replay(FrameDelta)`
