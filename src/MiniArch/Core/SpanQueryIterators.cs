@@ -8,7 +8,8 @@ namespace MiniArch.Core;
 /// over entity components using <c>foreach (ref var row in query.EachSpan&lt;T1&gt;())</c>.
 /// <para/>
 /// Supports up to 4 component types (<c>T1</c>–<c>T4</c>).
-/// For more components, use <see cref="ChunkViewEnumerable{T1}"/> with direct span access.
+/// For more components, iterate <c>query.Chunks</c> directly and access
+/// components via <see cref="Chunk.GetComponentSpan{T}(ComponentType)"/>.
 /// </summary>
 public static class SpanQueryExtensions
 {
