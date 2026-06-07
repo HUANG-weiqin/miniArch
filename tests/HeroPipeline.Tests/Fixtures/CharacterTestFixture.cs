@@ -31,8 +31,6 @@ public sealed class CharacterTestFixture
 
         _ = CharacterActionRegistrations.Register(Core.RuleTable);
 
-        _ = CollisionRegistrations.Register(Core.RuleTable);
-
         _ = CharacterAttackRegistrations.Register(Core.RuleTable);
         _ = CharacterAttackRegistrations.Register(Core.EffectTable);
 
@@ -46,10 +44,16 @@ public sealed class CharacterTestFixture
     }
 
     /// <summary>
-    /// Adds core pipeline systems (validation, rule, effect, modifier).
+    /// Adds core pipeline systems: validation → rule → collision → effect → modifier.
     /// </summary>
     public void AddCoreSystems()
-        => Core.AddCoreSystems();
+    {
+        Core.AddValidationSystem();
+        Core.AddRuleDispatchSystem();
+        Runtime.AddSystem(new CollisionSystem());
+        Core.AddEffectDispatchSystem();
+        Core.AddModifierApplySystem();
+    }
 
     public void StepUntilStable(int maxTicks = 20)
         => Core.StepUntilStable(maxTicks);

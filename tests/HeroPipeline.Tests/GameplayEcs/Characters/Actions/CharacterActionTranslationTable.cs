@@ -68,8 +68,6 @@ public sealed class CharacterActionTranslationTable
         MiniArch.Entity collisionRequest = context.Commands.Create();
         context.Commands.Add(collisionRequest, new Request());
         context.Commands.Add(collisionRequest, new RequestTarget(parent));
-        context.Commands.Add(collisionRequest, CollisionIds.ResolveRule);
-        context.Commands.Add(collisionRequest, RuleTier.Normal);
         context.Commands.Add(collisionRequest, new CollisionRequest());
         context.Commands.Add(collisionRequest, new CollisionOrigin(parent));
         context.Commands.Add(collisionRequest, new CollisionShape(CollisionShapeKind.Tile));
