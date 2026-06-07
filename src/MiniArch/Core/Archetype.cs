@@ -23,6 +23,8 @@ public sealed class Archetype
     private readonly Signature _signature;
     private readonly Type[] _componentTypes;
     private readonly int[] _componentIdToColumnIndex;
+    private Archetype?[] _addDestinationCache = Array.Empty<Archetype?>();
+    private Archetype?[] _removeDestinationCache = Array.Empty<Archetype?>();
     internal Archetype(Signature signature, Type[] componentTypes, int capacity = 4)
     {
         ArgumentNullException.ThrowIfNull(signature);
@@ -67,6 +69,30 @@ public sealed class Archetype
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ReadOnlySpan<Chunk> GetChunkSpan() =>
         MemoryMarshal.CreateSpan(ref _chunkView, 1);
+
+    internal bool TryGetAddDestination(ComponentType component, out Archetype? destination) =>
+        TryGetCached(_addDestinationCache, component, out destination);
+    internal bool TryGetRemoveDestination(ComponentType component, out Archetype? destination) =>
+        TryGetCached(_removeDestinationCache, component, out destination);
+    internal void CacheAddDestination(ComponentType component, Archetype destination) =>
+        CacheWrite(ref _addDestinationCache, component, destination);
+    internal void CacheRemoveDestination(ComponentType component, Archetype destination) =>
+        CacheWrite(ref _removeDestinationCache, component, destination);
+
+    private static bool TryGetCached(Archetype?[] cache, ComponentType component, out Archetype? destination)
+    {
+        var id = component.Value;
+        if ((uint)id >= (uint)cache.Length) { destination = null; return false; }
+        destination = cache[id];
+        return destination is not null;
+    }
+
+    private static void CacheWrite(ref Archetype?[] cache, ComponentType component, Archetype destination)
+    {
+        var id = component.Value;
+        if ((uint)id >= (uint)cache.Length) Array.Resize(ref cache, id + 1);
+        cache[id] = destination;
+    }
 
     // ================================================================
     //  Capacity management

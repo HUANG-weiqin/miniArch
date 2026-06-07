@@ -1169,8 +1169,14 @@ public sealed class World : IDisposable
             return;
         }
 
-        var destinationSignature = archetype.Signature.Add(componentType);
-        var destination = GetOrCreateArchetype(destinationSignature);
+        if (!archetype.TryGetAddDestination(componentType, out var destination))
+        {
+            var destinationSignature = archetype.Signature.Add(componentType);
+            destination = GetOrCreateArchetype(destinationSignature);
+            archetype.CacheAddDestination(componentType, destination);
+            destination.CacheRemoveDestination(componentType, archetype);
+        }
+
         var rowIdx = destination.AddEntity(entity);
         destination.CopySharedComponentsFrom(archetype, info.RowIndex, rowIdx);
         destination.SetComponentAtTyped(destination.GetComponentIndex(componentType), rowIdx, in component);
@@ -1216,8 +1222,14 @@ public sealed class World : IDisposable
 
     private Archetype GetOrCreateAddDestinationArchetype(Archetype source, ComponentType componentType)
     {
+        if (source.TryGetAddDestination(componentType, out var destination))
+            return destination;
+
         var destinationSignature = source.Signature.Add(componentType);
-        return GetOrCreateArchetype(destinationSignature);
+        destination = GetOrCreateArchetype(destinationSignature);
+        source.CacheAddDestination(componentType, destination);
+        destination.CacheRemoveDestination(componentType, source);
+        return destination;
     }
 
     internal Archetype GetOrCreateArchetype(Signature signature)
@@ -2029,8 +2041,14 @@ public sealed class World : IDisposable
             return;
         }
 
-        var destinationSignature = archetype.Signature.Remove(componentType);
-        var destination = GetOrCreateArchetype(destinationSignature);
+        if (!archetype.TryGetRemoveDestination(componentType, out var destination))
+        {
+            var destinationSignature = archetype.Signature.Remove(componentType);
+            destination = GetOrCreateArchetype(destinationSignature);
+            archetype.CacheRemoveDestination(componentType, destination);
+            destination.CacheAddDestination(componentType, archetype);
+        }
+
         MoveEntity(entity, info, destination);
     }
 
