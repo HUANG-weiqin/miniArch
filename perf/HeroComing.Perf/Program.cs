@@ -187,7 +187,7 @@ void CreateAttackRequests(MiniArchRuntime runtime, List<Entity> players)
 
 void UpdateKnowledgePage(List<(string name, double throughput, double avgMs, int totalRounds, double heapDeltaKB, bool memoryStable)> results)
 {
-    string kbPath = FindKnowledgePage();
+    string? kbPath = FindKnowledgePage();
     if (kbPath is null)
     {
         Console.Error.WriteLine("WARN: Could not find kb-hero-pipeline-regression.md, skipping baseline update.");

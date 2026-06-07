@@ -203,7 +203,6 @@ public static class CommandBufferThroughputRunner
         output.WriteLine();
 
         double miniRecordMs = 0, miniSubmitMs = 0;
-        double archRecordMs = 0, archSubmitMs = 0;
 
         for (var w = 0; w < warmupCount; w++)
         {

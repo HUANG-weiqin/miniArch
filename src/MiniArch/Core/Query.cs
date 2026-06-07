@@ -115,30 +115,6 @@ public sealed class Query
     /// </summary>
     public ChunkEnumerable Chunks => new(this);
 
-    /// <summary>
-    /// Typed chunk enumeration for a single component type. Pre-computes column
-    /// indices per archetype, eliminating per-chunk lookups.
-    /// </summary>
-    public ChunkViewEnumerable<T> ChunksOf<T>() where T : struct => new(this);
-
-    /// <summary>
-    /// Typed chunk enumeration for two component types.
-    /// </summary>
-    public ChunkViewEnumerable<T1, T2> ChunksOf<T1, T2>()
-        where T1 : struct where T2 : struct => new(this);
-
-    /// <summary>
-    /// Typed chunk enumeration for three component types.
-    /// </summary>
-    public ChunkViewEnumerable<T1, T2, T3> ChunksOf<T1, T2, T3>()
-        where T1 : struct where T2 : struct where T3 : struct => new(this);
-
-    /// <summary>
-    /// Typed chunk enumeration for four component types.
-    /// </summary>
-    public ChunkViewEnumerable<T1, T2, T3, T4> ChunksOf<T1, T2, T3, T4>()
-        where T1 : struct where T2 : struct where T3 : struct where T4 : struct => new(this);
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureRefreshed()
     {

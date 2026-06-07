@@ -5,6 +5,7 @@ using MiniArch.Core;
 using FrifloEntity = Friflo.Engine.ECS.Entity;
 using MiniEntity = MiniArch.Entity;
 using MiniQuery = MiniArch.Core.Query;
+using MiniComponentType = MiniArch.Core.ComponentType;
 
 namespace FrifloGameScenarios;
 
@@ -85,9 +86,9 @@ public static class S8Profile
 
             var t4 = Stopwatch.GetTimestamp();
             long s = 0;
-            foreach (var c in iq.ChunksOf<Position>()) { var sp = c.Span0; for (int i = 0; i < c.Count; i++) s += sp[i].X; }
-            foreach (var c in mq.ChunksOf<Position>()) { var sp = c.Span0; for (int i = 0; i < c.Count; i++) s += sp[i].X; }
-            foreach (var c in aq.ChunksOf<Position>()) { var sp = c.Span0; for (int i = 0; i < c.Count; i++) s += sp[i].X; }
+            foreach (var c in iq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X;}
+            foreach (var c in mq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X;}
+            foreach (var c in aq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X;}
             long queryTicks = Stopwatch.GetTimestamp() - t4;
 
             totalTicks += sw.ElapsedTicks;
@@ -222,9 +223,9 @@ public static class S8Profile
             }
         }
         long s = 0;
-        foreach (var c in iq.ChunksOf<Position>()) { var sp = c.Span0; for (int i = 0; i < c.Count; i++) s += sp[i].X; }
-        foreach (var c in mq.ChunksOf<Position>()) { var sp = c.Span0; for (int i = 0; i < c.Count; i++) s += sp[i].X; }
-        foreach (var c in aq.ChunksOf<Position>()) { var sp = c.Span0; for (int i = 0; i < c.Count; i++) s += sp[i].X; }
+        foreach (var c in iq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X;}
+        foreach (var c in mq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X;}
+        foreach (var c in aq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X;}
         return s;
     }
 
