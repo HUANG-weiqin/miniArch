@@ -1150,7 +1150,7 @@ public sealed class World : IDisposable
     private void ApplyTypedAddOrSet<T>(Entity entity, ComponentType componentType, in T component)
     {
         var info = GetRequiredLocation(entity);
-        var archetype = info.Archetype;
+        var archetype = info.Archetype!;
 
         if (archetype.TryGetComponentIndex(componentType, out var componentIndex))
         {
@@ -1163,10 +1163,10 @@ public sealed class World : IDisposable
             var destinationSignature = archetype.Signature.Add(componentType);
             destination = GetOrCreateArchetype(destinationSignature);
             archetype.CacheAddDestination(componentType, destination);
-            destination.CacheRemoveDestination(componentType, archetype);
+            destination!.CacheRemoveDestination(componentType, archetype);
         }
 
-        var rowIdx = destination.AddEntity(entity);
+        var rowIdx = destination!.AddEntity(entity);
         destination.CopySharedComponentsFrom(archetype, info.RowIndex, rowIdx);
         destination.SetComponentAtTyped(destination.GetComponentIndex(componentType), rowIdx, in component);
         FinishMoveEntity(entity, info, destination, rowIdx);
@@ -1183,7 +1183,7 @@ public sealed class World : IDisposable
     private unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, Type runtimeType, byte* source)
     {
         var info = GetRequiredLocation(entity);
-        var archetype = info.Archetype;
+        var archetype = info.Archetype!;
 
         if (archetype.TryGetComponentIndex(componentType, out var componentIndex))
         {
@@ -1212,7 +1212,7 @@ public sealed class World : IDisposable
     private Archetype GetOrCreateAddDestinationArchetype(Archetype source, ComponentType componentType)
     {
         if (source.TryGetAddDestination(componentType, out var destination))
-            return destination;
+            return destination!;
 
         var destinationSignature = source.Signature.Add(componentType);
         destination = GetOrCreateArchetype(destinationSignature);
@@ -1965,10 +1965,10 @@ public sealed class World : IDisposable
             var destinationSignature = archetype.Signature.Remove(componentType);
             destination = GetOrCreateArchetype(destinationSignature);
             archetype.CacheRemoveDestination(componentType, destination);
-            destination.CacheAddDestination(componentType, archetype);
+            destination!.CacheAddDestination(componentType, archetype);
         }
 
-        MoveEntity(entity, info, destination);
+        MoveEntity(entity, info, destination!);
     }
 
     private void EnsureDestroyScratchCapacity(int entityCount)

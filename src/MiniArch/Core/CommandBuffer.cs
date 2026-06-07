@@ -993,9 +993,9 @@ public sealed class CommandBuffer : ICommandRecorder
     {
         var count = state.Map.Count + state.Map.OverflowCount;
 
-        // ThreadStatic buffers
+        // ThreadStatic buffers — guaranteed non-null after the null-check block below
         var types = _tsExtractTypes;
-        sources = _tsExtractSources;
+        sources = _tsExtractSources!;
         if (types == null || types.Length < count)
         {
             types = new ComponentType[Math.Max(count, 16)];
@@ -1005,15 +1005,15 @@ public sealed class CommandBuffer : ICommandRecorder
         }
 
         var idx = 0;
-        if (state.Map.Count >= 1) { sources[idx] = state.Map.Value0; types[idx] = state.Map.Value0.ComponentType; idx++; }
+        if (state.Map.Count >= 1) { sources![idx] = state.Map.Value0; types![idx] = state.Map.Value0.ComponentType; idx++; }
         if (state.Map.Count >= 2) { sources[idx] = state.Map.Value1; types[idx] = state.Map.Value1.ComponentType; idx++; }
         if (state.Map.Count >= 3) { sources[idx] = state.Map.Value2; types[idx] = state.Map.Value2.ComponentType; idx++; }
         if (state.Map.Count >= 4) { sources[idx] = state.Map.Value3; types[idx] = state.Map.Value3.ComponentType; idx++; }
         for (var nodeIdx = state.Map.OverflowHead; nodeIdx >= 0; nodeIdx = _createdOverflow.GetNext(nodeIdx))
         {
             var val = _createdOverflow.GetValueReadonly(nodeIdx);
-            sources[idx] = val;
-            types[idx] = val.ComponentType;
+            sources![idx] = val;
+            types![idx] = val.ComponentType;
             idx++;
         }
 
@@ -1036,7 +1036,7 @@ public sealed class CommandBuffer : ICommandRecorder
                 {
                     for (var h = 0; h < idx; h++)
                     {
-                        if (types[h].Value != cachedTypes[h].Value) { match = false; break; }
+                        if (types[h].Value != cachedTypes![h].Value) { match = false; break; }
                     }
                 }
                 if (match)
