@@ -30,8 +30,9 @@ public sealed class IntegrationTests
 
         var chunks = query.Chunks.ToList();
         Assert.Equal(2, query.MatchedArchetypes.Count);
-        Assert.Single(chunks);
-        Assert.Contains(chunks, chunk => chunk.Count == 1);
+        // Both matching archetypes contribute a chunk (one empty, one with 1 entity).
+        Assert.Equal(2, chunks.Count);
+        Assert.Single(chunks.Where(c => c.Count == 1));
 
         Assert.Equal(entity, location.Archetype.GetEntity(location.RowIndex));
         Assert.Equal(new Position(9, 9), location.Archetype.GetComponent<Position>(positionId, location.RowIndex));

@@ -351,7 +351,10 @@ public sealed class TrickyEdgeCaseTests
         foreach (var entity in entities) world.Destroy(entity);
 
         Assert.Equal(0, CountEntities(query));
-        Assert.Empty(query.MatchedChunks);
+        // The matching archetype's chunk remains in the snapshot even when empty.
+        // This is harmless: all iterator paths skip Count == 0 chunks.
+        Assert.Single(query.MatchedChunks);
+        Assert.Equal(0, query.MatchedChunks[0].Count);
     }
 
     [Fact]

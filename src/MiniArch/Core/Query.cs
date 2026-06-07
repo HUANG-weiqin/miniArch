@@ -28,7 +28,6 @@ public sealed class Query
     private int _chunksDirty = 1;
     private bool _initialized;
     private int _snapshotArchetypeVersion;
-    private int _snapshotNonEmptyArchetypeVersion;
 
     internal Query(World world, QueryFilter filter)
     {
@@ -188,10 +187,8 @@ public sealed class Query
             return true;
         }
 
-        // Only rebuild when new archetypes are created or occupancy transitions (0↔non-0) occur.
-        // Per-entity operations within already-non-empty archetypes do NOT invalidate the cache.
-        return _world.ArchetypeVersion != _snapshotArchetypeVersion ||
-               _world.NonEmptyArchetypeVersion != _snapshotNonEmptyArchetypeVersion;
+        // Rebuild when a new archetype is created (may match this query).
+        return _world.ArchetypeVersion != _snapshotArchetypeVersion;
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -227,7 +224,6 @@ public sealed class Query
     {
         var archetypes = _world.Archetypes;
         _snapshotArchetypeVersion = _world.ArchetypeVersion;
-        _snapshotNonEmptyArchetypeVersion = _world.NonEmptyArchetypeVersion;
 
         if (archetypes.Length == 0)
         {
@@ -275,44 +271,22 @@ public sealed class Query
             return;
         }
 
-        var matchedChunkCount = 0;
+        if (_scratchChunks.Length < snapshotArchetypeCount)
+        {
+            _scratchChunks = new Chunk[snapshotArchetypeCount];
+        }
+
         for (var archetypeIndex = 0; archetypeIndex < snapshotArchetypeCount; archetypeIndex++)
         {
-            var arch = snapshotArchetypes[archetypeIndex];
-            if (arch.EntityCount > 0)
-            {
-                matchedChunkCount++;
-            }
-        }
-
-        if (matchedChunkCount == 0)
-        {
-            Volatile.Write(ref _snapshotChunks, Array.Empty<Chunk>());
-            Volatile.Write(ref _chunksDirty, 0);
-            return;
-        }
-
-        if (_scratchChunks.Length < matchedChunkCount)
-        {
-            _scratchChunks = new Chunk[matchedChunkCount];
-        }
-
-        var chunkIndex = 0;
-        for (var archetypeIndex = 0; archetypeIndex < snapshotArchetypeCount; archetypeIndex++)
-        {
-            var arch = snapshotArchetypes[archetypeIndex];
-            if (arch.EntityCount > 0)
-            {
-                _scratchChunks[chunkIndex++] = arch.GetChunkSpan()[0];
-            }
+            _scratchChunks[archetypeIndex] = snapshotArchetypes[archetypeIndex].GetChunkSpan()[0];
         }
 
         // Publish exact-length chunk array to avoid stale entries.
         var exact = _scratchChunks;
-        if (exact.Length != matchedChunkCount)
+        if (exact.Length != snapshotArchetypeCount)
         {
-            exact = new Chunk[matchedChunkCount];
-            Array.Copy(_scratchChunks, exact, matchedChunkCount);
+            exact = new Chunk[snapshotArchetypeCount];
+            Array.Copy(_scratchChunks, exact, snapshotArchetypeCount);
         }
         var old = _snapshotChunks;
         Volatile.Write(ref _snapshotChunks, exact);

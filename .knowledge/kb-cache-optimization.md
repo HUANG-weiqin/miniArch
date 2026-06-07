@@ -2,8 +2,8 @@
 title: Cache & Memory Optimization Review
 module: MiniArch.Core
 description: Memory layout and cache behavior analysis of the ECS runtime, with optimization opportunities
-updated: 2026-06-06
-review: 2026-06-06 — 新增 World 数据结构优化实验顺序；P9 已实施（ThreadStatic buffer）；P10 已实施（archetype cache）
+updated: 2026-06-07
+review: 2026-06-07 — 移除 OnOccupancyTransition delegate + _nonEmptyArchetypeVersion（YAGNI：flatten 后不需要 occupancy 跟踪）
 ---
 # Cache & Memory Optimization Review
 
