@@ -798,16 +798,18 @@ internal static class ThroughputCaseFactory
     private static int ExecuteMiniWideEachSpanQuery(MiniQuery query)
     {
         var checksum = 0;
-        foreach (var row in query.EachSpan<Position, Velocity, Health, Team, Acceleration, Mana>())
+        foreach (var chunk in query.GetChunkSpan())
         {
-            checksum += row.Get0().X
-                      + row.Get1().Y
-                      + row.Get2().Value
-                      + row.Get3().Value
-                      + row.Get4().X
-                      + row.Get5().Value;
+            var posSpan = chunk.GetComponentSpan<Position>(global::MiniArch.Core.Component<Position>.ComponentType);
+            var velSpan = chunk.GetComponentSpan<Velocity>(global::MiniArch.Core.Component<Velocity>.ComponentType);
+            var hpSpan  = chunk.GetComponentSpan<Health>(global::MiniArch.Core.Component<Health>.ComponentType);
+            var teamSpan = chunk.GetComponentSpan<Team>(global::MiniArch.Core.Component<Team>.ComponentType);
+            var accelSpan = chunk.GetComponentSpan<Acceleration>(global::MiniArch.Core.Component<Acceleration>.ComponentType);
+            var manaSpan = chunk.GetComponentSpan<Mana>(global::MiniArch.Core.Component<Mana>.ComponentType);
+            for (var i = 0; i < chunk.Count; i++)
+                checksum += posSpan[i].X + velSpan[i].Y + hpSpan[i].Value
+                          + teamSpan[i].Value + accelSpan[i].X + manaSpan[i].Value;
         }
-
         return checksum;
     }
 
@@ -907,11 +909,17 @@ internal static class ThroughputCaseFactory
     internal static int ExecuteMiniEachSpanDirectWide(MiniQuery query)
     {
         var checksum = 0;
-        var e = query.EachSpan<Position, Velocity, Health, Team, Acceleration, Mana>();
-        while (e.MoveNext())
+        foreach (var chunk in query.GetChunkSpan())
         {
-            checksum += e.Get0().X + e.Get1().Y + e.Get2().Value
-                      + e.Get3().Value + e.Get4().X + e.Get5().Value;
+            var posSpan = chunk.GetComponentSpan<Position>(global::MiniArch.Core.Component<Position>.ComponentType);
+            var velSpan = chunk.GetComponentSpan<Velocity>(global::MiniArch.Core.Component<Velocity>.ComponentType);
+            var hpSpan  = chunk.GetComponentSpan<Health>(global::MiniArch.Core.Component<Health>.ComponentType);
+            var teamSpan = chunk.GetComponentSpan<Team>(global::MiniArch.Core.Component<Team>.ComponentType);
+            var accelSpan = chunk.GetComponentSpan<Acceleration>(global::MiniArch.Core.Component<Acceleration>.ComponentType);
+            var manaSpan = chunk.GetComponentSpan<Mana>(global::MiniArch.Core.Component<Mana>.ComponentType);
+            for (var i = 0; i < chunk.Count; i++)
+                checksum += posSpan[i].X + velSpan[i].Y + hpSpan[i].Value
+                          + teamSpan[i].Value + accelSpan[i].X + manaSpan[i].Value;
         }
         return checksum;
     }
@@ -931,10 +939,17 @@ internal static class ThroughputCaseFactory
     internal static int ExecuteMiniEachSpanForeachWide(MiniQuery query)
     {
         var checksum = 0;
-        foreach (var row in query.EachSpan<Position, Velocity, Health, Team, Acceleration, Mana>())
+        foreach (var chunk in query.GetChunkSpan())
         {
-            checksum += row.Get0().X + row.Get1().Y + row.Get2().Value
-                      + row.Get3().Value + row.Get4().X + row.Get5().Value;
+            var posSpan = chunk.GetComponentSpan<Position>(global::MiniArch.Core.Component<Position>.ComponentType);
+            var velSpan = chunk.GetComponentSpan<Velocity>(global::MiniArch.Core.Component<Velocity>.ComponentType);
+            var hpSpan  = chunk.GetComponentSpan<Health>(global::MiniArch.Core.Component<Health>.ComponentType);
+            var teamSpan = chunk.GetComponentSpan<Team>(global::MiniArch.Core.Component<Team>.ComponentType);
+            var accelSpan = chunk.GetComponentSpan<Acceleration>(global::MiniArch.Core.Component<Acceleration>.ComponentType);
+            var manaSpan = chunk.GetComponentSpan<Mana>(global::MiniArch.Core.Component<Mana>.ComponentType);
+            for (var i = 0; i < chunk.Count; i++)
+                checksum += posSpan[i].X + velSpan[i].Y + hpSpan[i].Value
+                          + teamSpan[i].Value + accelSpan[i].X + manaSpan[i].Value;
         }
         return checksum;
     }

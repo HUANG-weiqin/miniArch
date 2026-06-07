@@ -29,6 +29,9 @@ public readonly struct Chunk
     /// <summary>
     /// Gets a span of component <typeparamref name="T"/> for all rows.
     /// </summary>
+    public Span<T> GetComponentSpan<T>() where T : struct =>
+        _archetype.GetComponentSpan<T>(Component<T>.ComponentType);
+
     public Span<T> GetComponentSpan<T>(ComponentType component) =>
         _archetype.GetComponentSpan<T>(component);
 
