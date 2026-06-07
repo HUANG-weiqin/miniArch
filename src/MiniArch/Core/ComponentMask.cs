@@ -24,12 +24,6 @@ internal readonly struct ComponentMask
     public readonly ulong B3;
 
     /// <summary>
-    /// Only used in HasHighBits and IsZero — maps B1 semantics for
-    /// callers that still reference .High.
-    /// </summary>
-    internal ulong High => B1;
-
-    /// <summary>
     /// Initializes a 256-bit mask from four 64-bit blocks.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -72,16 +66,6 @@ internal readonly struct ComponentMask
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => B3 != 0;
-    }
-
-    /// <summary>
-    /// Alias for <see cref="HasB1"/>, kept for external callers
-    /// that previously referenced .HasHighBits.
-    /// </summary>
-    public bool HasHighBits
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => B1 != 0;
     }
 
     /// <summary>Returns the hex representation of all 256 bits.</summary>

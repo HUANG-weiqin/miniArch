@@ -49,6 +49,7 @@ public readonly struct Query
 public struct QueryEnumerator
 {
     private readonly MiniArch.Core.Chunk[] _chunks;
+    private readonly int _chunkCount;
     private int _chunkIndex;
     private int _rowIndex;
     private Entity[]? _entities;
@@ -57,7 +58,8 @@ public struct QueryEnumerator
 
     internal QueryEnumerator(MiniArch.Core.Query query)
     {
-        _chunks = query.GetChunkArray();
+        _chunks = query.GetChunkArray(out var chunkCount);
+        _chunkCount = chunkCount;
         _chunkIndex = -1;
         _rowIndex = -1;
         _entities = null;
@@ -88,7 +90,7 @@ public struct QueryEnumerator
             }
 
             _chunkIndex++;
-            if (_chunkIndex >= _chunks.Length)
+            if (_chunkIndex >= _chunkCount)
             {
                 return false;
             }
@@ -196,9 +198,9 @@ public struct OrderedQueryEnumerator : IDisposable
     {
         _initialized = true;
 
-        var chunks = _query.GetChunkArray();
+        var chunks = _query.GetChunkArray(out var chunkCount);
         var count = 0;
-        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        for (var chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++)
         {
             count += chunks[chunkIndex].Count;
         }
@@ -213,13 +215,13 @@ public struct OrderedQueryEnumerator : IDisposable
         _count = count;
 
         var entityIndex = 0;
-        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        for (var chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++)
         {
             var chunk = chunks[chunkIndex];
             var storage = chunk.GetEntityStorage();
-            var chunkCount = chunk.Count;
-            Array.Copy(storage, 0, entities, entityIndex, chunkCount);
-            entityIndex += chunkCount;
+            var rowCount = chunk.Count;
+            Array.Copy(storage, 0, entities, entityIndex, rowCount);
+            entityIndex += rowCount;
         }
 
         Array.Sort(entities, 0, count, _comparer);

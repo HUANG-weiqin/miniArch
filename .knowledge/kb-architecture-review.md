@@ -2,7 +2,7 @@
 title: Architecture Mechanistic Review
 module: MiniArch.Core
 description: Mechanistic insight of the entire miniArch ECS library — one-line truths, minimal loops, state models, data flows, known issues, and optimization opportunities
-updated: 2026-06-07 (修正：Archetype 扁平化、Chunk 改为视图、Edge Cache/MigrationPlan 内联、全局单版本号)
+updated: 2026-06-07 (修正：Archetype 扁平化、Chunk 改为视图、Edge Cache/MigrationPlan 内联、全局单版本号、EntityRecord 单表)
 ---
 # Architecture Mechanistic Review
 
@@ -36,8 +36,8 @@ WorldSnapshot / WorldClone
 ## 10 个核心子系统
 
 ### 1. 实体身份 (Entity / Version / FreeList)
-- Entity = `(id, version)` 二元组；World 维护 `_versions[]` 和 `_locations[]` 并行数组 + free-list
-- 分配：free-list pop 或 slotCount++；销毁：version++ + 清空 location + free-list push
+- Entity = `(id, version)` 二元组；World 维护 `_records[]` 单表 + free-list
+- 分配：free-list pop 或 slotCount++；销毁：record.Version++ + 清空 Archetype/RowIndex + free-list push
 
 ### 2. 存储 (Archetype)
 - `byte[]` 按列排布所有组件数据，swap-remove 删除行

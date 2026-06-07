@@ -2,7 +2,7 @@
 title: Cache & Memory Optimization Review
 module: MiniArch.Core
 description: Memory layout and cache behavior analysis of the ECS runtime, with optimization opportunities
-updated: 2026-06-07 (修正：EntityRecord 16 字节布局、Chunk 为视图、ComponentMask 结构体)
+updated: 2026-06-07 (修正：EntityRecord 16 字节布局、Chunk 为视图、ComponentMask 结构体、删除 EntityLocation 遗留类型)
 review: 2026-06-07 — 移除 ComponentWriterCache + ColumnWriterDelegate（冗余的内部优化，对 blittable struct 与 WriteComponentRaw 等效）
 ---
 # Cache & Memory Optimization Review
@@ -50,9 +50,9 @@ Chunk (readonly struct view over Archetype)
 |------|----------|------------|
 | SpanEach.MoveNext (per row) | 数百万次 | ✅ Pointer bump，纯顺序 |
 | SpanEach chunk transition | 数千次 | ✅ 3-5 次数组查找，可忽略 |
-| Entity Get/Set/Has | 取决于游戏逻辑 | ⚠️ _locations[id] → 随机访问 |
+| Entity Get/Set/Has | 取决于游戏逻辑 | ⚠️ _records[id] → 随机访问 |
 | Entity Create/Destroy | 取决于游戏逻辑 | ⚠️ 2 数组 × 2-4 次随机访问 |
-| Add/Remove component | 少见 | ⚠️ MigrationPlan.CopySharedData |
+| Add/Remove component | 少见 | ⚠️ Archetype.CopySharedComponentsFrom |
 | Query.RefreshSnapshot | 每查询每帧 1 次 | ✅ 生成号比较 + 数组拷贝 |
 
 ## 决策
@@ -62,7 +62,7 @@ Chunk (readonly struct view over Archetype)
 1. **迭代热路径几乎完美**：per-row = `Unsafe.Add(ref, 1)` × N，没有间接寻址
 2. **自适应 chunk 容量（16KB）** 正好瞄准 L1 cache，一次迭代不换 cache
 3. **ComponentMask**（256-bit bitmask, 4× `ulong`）用 bitmask 做 signature 匹配，O(1) 无分支
-4. **CopySmall 特化路径**（1/4/8/12/16 字节）覆盖了常见组件大小
+4. **CopySmall 特化路径**（1/2/4/8/12/16 字节）覆盖了常见组件大小
 5. **`SkipLocalsInit`** + **`MemoryMarshal.GetArrayDataReference`** 消除了运行时开销
 
 ### 实际可优化的点
@@ -84,7 +84,7 @@ struct EntityRecord {
 - 字段顺序优化为 `(Archetype, RowIndex, Version)` 以获得自然的 16 字节 Sequential 布局
 - 回退测试：HeroComing.Perf Movement 698.1 rounds/s（baseline 690），Attack 203.6（baseline 179），性能无退化
 - 影响文件：`World.cs`（50+ 处引用点）、`WorldSnapshot.cs`、`WorldClone.cs`、新增 `EntityRecord.cs`
-- `EntityLocation.cs` 仍然保留但不再被 World 内部使用
+- `EntityLocation.cs` 遗留类型已删除，避免继续维护无用位置表示
 
 ## P1: Chunk._data 列对齐不够
 

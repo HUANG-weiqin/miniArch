@@ -60,9 +60,6 @@ public sealed class Archetype
     internal int Capacity => _capacity;
 
     /// <summary>
-    /// Gets the maximum logical capacity (growth ceiling).
-    /// </summary>
-    /// <summary>
     /// Returns a single-element span wrapping this archetype as a <see cref="Chunk"/>.
     /// Maintains compatibility with query iterators that work over chunks.
     /// </summary>
@@ -309,10 +306,6 @@ public sealed class Archetype
         _componentIdToColumnIndex[component.Value];
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal int GetElementSize(int columnIndex) =>
-        ComponentSizeCache.GetSize(_componentTypes[columnIndex]);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool TryGetColumnIndices(ReadOnlySpan<ComponentType> components, Span<int> outIndices)
     {
         if (components.Length != outIndices.Length)
@@ -451,6 +444,9 @@ public sealed class Archetype
         {
             case 1:
                 destination = source;
+                return;
+            case 2:
+                Unsafe.WriteUnaligned(ref destination, Unsafe.ReadUnaligned<short>(ref source));
                 return;
             case 4:
                 Unsafe.WriteUnaligned(ref destination, Unsafe.ReadUnaligned<int>(ref source));

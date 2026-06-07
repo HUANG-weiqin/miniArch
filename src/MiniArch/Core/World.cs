@@ -13,7 +13,6 @@ namespace MiniArch;
 public sealed class World : IDisposable
 {
     private const int DefaultChunkCapacity = 128;
-    private const int StackAllocatedBatchRangeLimit = 128;
     private readonly Dictionary<Signature, Archetype> _archetypes = new();
     private readonly HierarchyTable _hierarchy = new();
     private EntityRecord[] _records;
@@ -27,7 +26,7 @@ public sealed class World : IDisposable
 
     private int _archetypeVersion;
     private int _createArchetypeCacheGeneration;
-    private readonly List<Entity> _destroyOrderScratch = new(8);
+    private readonly List<Entity> _destroyOrderScratch;
     private int[] _destroyVisitedGen = [];
     private int _destroyCurrentGen;
     private readonly Dictionary<Type, ComponentType> _replayComponentTypeScratch = new(16);
@@ -737,7 +736,7 @@ public sealed class World : IDisposable
         var archetype = GetOrCreateArchetype(Signature.Empty);
         var startRow = archetype.ReserveRows(entities.Length);
         Span<EntityBatchRange> ranges = stackalloc EntityBatchRange[1];
-        ranges[0] = new EntityBatchRange(0, startRow, entities.Length);
+        ranges[0] = new EntityBatchRange(startRow, entities.Length);
         WriteCreatedEntitiesAndLocations(archetype, entities, ranges, reusedCount, startId);
     }
 
@@ -1139,13 +1138,6 @@ public sealed class World : IDisposable
         FinishMoveEntity(entity, sourceInfo, destination, rowIdx);
     }
 
-    private void MoveEntity<T>(Entity entity, EntityRecord sourceInfo, Archetype destination, ComponentType componentType, in T componentValue)
-    {
-        MoveEntityCore(entity, sourceInfo, destination, out var rowIdx);
-        destination.SetComponentAtTyped(destination.GetComponentIndex(componentType), rowIdx, in componentValue);
-        FinishMoveEntity(entity, sourceInfo, destination, rowIdx);
-    }
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ApplyTypedAddOrSet<T>(Entity entity, ComponentType componentType, in T component)
     {
@@ -1176,11 +1168,11 @@ public sealed class World : IDisposable
     {
         fixed (byte* ptr = data)
         {
-            ApplyRawAddOrSet(entity, componentType, runtimeType, ptr + offset);
+            ApplyRawAddOrSet(entity, componentType, ptr + offset);
         }
     }
 
-    private unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, Type runtimeType, byte* source)
+    private unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, byte* source)
     {
         var info = GetRequiredLocation(entity);
         var archetype = info.Archetype!;
@@ -1192,7 +1184,7 @@ public sealed class World : IDisposable
         }
 
         var destination = GetOrCreateAddDestinationArchetype(archetype, componentType);
-        MoveEntityFromBytes(entity, info, destination, componentType, runtimeType, source);
+        MoveEntityFromBytes(entity, info, destination, componentType, source);
     }
 
     private unsafe void MoveEntityFromBytes(
@@ -1200,7 +1192,6 @@ public sealed class World : IDisposable
         EntityRecord sourceInfo,
         Archetype destination,
         ComponentType componentType,
-        Type runtimeType,
         byte* source)
     {
         MoveEntityCore(entity, sourceInfo, destination, out var rowIdx);
@@ -1662,7 +1653,7 @@ public sealed class World : IDisposable
         var archetype = GetOrCreateArchetype(Signature.Empty);
         var startRow = archetype.ReserveRows(entities.Length);
         Span<EntityBatchRange> ranges = stackalloc EntityBatchRange[1];
-        ranges[0] = new EntityBatchRange(0, startRow, entities.Length);
+        ranges[0] = new EntityBatchRange(startRow, entities.Length);
         WriteCreatedEntitiesAndLocations(archetype, entities, ranges, 0, startId);
     }
 

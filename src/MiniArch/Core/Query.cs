@@ -93,12 +93,13 @@ public sealed class Query
     }
 
     /// <summary>
-    /// Gets the matched chunks as an array (zero allocation, returns cached array).
+    /// Gets the matched chunks as an array plus active count (zero allocation, returns cached array).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal Chunk[] GetChunkArray()
+    internal Chunk[] GetChunkArray(out int count)
     {
         EnsureRefreshed();
+        count = _snapshotCount;
         return _snapshotChunks;
     }
 

@@ -223,11 +223,6 @@ public static class WorldSnapshot
         }
     }
 
-    private static int CountPersistedChunks(Archetype archetype)
-    {
-        return archetype.EntityCount > 0 ? 1 : 0;
-    }
-
     private static void ReadArchetype(
         BinaryReader reader,
         World world,

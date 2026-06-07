@@ -34,10 +34,9 @@ public readonly ref struct ChunkView<T1> where T1 : struct
 public readonly struct ChunkViewEnumerable<T1> where T1 : struct
 {
     private readonly Query _query;
-    private readonly ComponentType _ct0;
-    internal ChunkViewEnumerable(Query query) { _query = query; _ct0 = Component<T1>.ComponentType; }
+    internal ChunkViewEnumerable(Query query) { _query = query; }
     /// <summary>Gets the chunk enumerator.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)] public ChunkViewEnumerator<T1> GetEnumerator() => new(_query, _ct0);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)] public ChunkViewEnumerator<T1> GetEnumerator() => new(_query);
 }
 
 /// <summary>
@@ -49,7 +48,7 @@ public ref struct ChunkViewEnumerator<T1> where T1 : struct
     private ReadOnlySpan<Chunk> _chunks;
     private int _chunkIdx;
 
-    internal ChunkViewEnumerator(Query query, ComponentType ct0)
+    internal ChunkViewEnumerator(Query query)
     {
         _chunks = query.GetChunkSpan();
         _chunkIdx = -1;
@@ -96,10 +95,9 @@ public readonly ref struct ChunkView<T1, T2> where T1 : struct where T2 : struct
 public readonly struct ChunkViewEnumerable<T1, T2> where T1 : struct where T2 : struct
 {
     private readonly Query _query;
-    private readonly ComponentType _ct0, _ct1;
-    internal ChunkViewEnumerable(Query query) { _query = query; _ct0 = Component<T1>.ComponentType; _ct1 = Component<T2>.ComponentType; }
+    internal ChunkViewEnumerable(Query query) { _query = query; }
     /// <summary>Gets the chunk enumerator.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)] public ChunkViewEnumerator<T1, T2> GetEnumerator() => new(_query, _ct0, _ct1);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)] public ChunkViewEnumerator<T1, T2> GetEnumerator() => new(_query);
 }
 
 /// <summary>Enumerator yielding <see cref="ChunkView{T1,T2}"/> per chunk.</summary>
@@ -108,7 +106,7 @@ public ref struct ChunkViewEnumerator<T1, T2> where T1 : struct where T2 : struc
     private ReadOnlySpan<Chunk> _chunks;
     private int _chunkIdx;
 
-    internal ChunkViewEnumerator(Query query, ComponentType ct0, ComponentType ct1)
+    internal ChunkViewEnumerator(Query query)
     {
         _chunks = query.GetChunkSpan();
         _chunkIdx = -1;
@@ -150,8 +148,8 @@ public readonly ref struct ChunkView<T1, T2, T3> where T1 : struct where T2 : st
 
 /// <summary>Enumerable for <see cref="ChunkViewEnumerator{T1,T2,T3}"/>.</summary>
 public readonly struct ChunkViewEnumerable<T1,T2,T3> where T1:struct where T2:struct where T3:struct
-{ readonly Query _q; readonly ComponentType _c0,_c1,_c2; internal ChunkViewEnumerable(Query q){_q=q;_c0=Component<T1>.ComponentType;_c1=Component<T2>.ComponentType;_c2=Component<T3>.ComponentType;}
-  [MethodImpl(MethodImplOptions.AggressiveInlining)]public ChunkViewEnumerator<T1,T2,T3> GetEnumerator()=>new(_q,_c0,_c1,_c2);}
+{ readonly Query _q; internal ChunkViewEnumerable(Query q){_q=q;}
+  [MethodImpl(MethodImplOptions.AggressiveInlining)]public ChunkViewEnumerator<T1,T2,T3> GetEnumerator()=>new(_q);}
 
 /// <summary>Enumerator yielding <see cref="ChunkView{T1,T2,T3}"/> per chunk.</summary>
 public ref struct ChunkViewEnumerator<T1,T2,T3> where T1:struct where T2:struct where T3:struct
@@ -159,7 +157,7 @@ public ref struct ChunkViewEnumerator<T1,T2,T3> where T1:struct where T2:struct 
     private ReadOnlySpan<Chunk> _chunks;
     private int _chunkIdx;
 
-    internal ChunkViewEnumerator(Query q,ComponentType t0,ComponentType t1,ComponentType t2)
+    internal ChunkViewEnumerator(Query q)
     {
         _chunks = q.GetChunkSpan();
         _chunkIdx = -1;
@@ -199,8 +197,8 @@ public readonly ref struct ChunkView<T1,T2,T3,T4> where T1:struct where T2:struc
 
 /// <summary>Enumerable for <see cref="ChunkViewEnumerator{T1,T2,T3,T4}"/>.</summary>
 public readonly struct ChunkViewEnumerable<T1,T2,T3,T4> where T1:struct where T2:struct where T3:struct where T4:struct
-{ readonly Query _q; readonly ComponentType _t0,_t1,_t2,_t3; internal ChunkViewEnumerable(Query q){_q=q;_t0=Component<T1>.ComponentType;_t1=Component<T2>.ComponentType;_t2=Component<T3>.ComponentType;_t3=Component<T4>.ComponentType;}
-  [MethodImpl(MethodImplOptions.AggressiveInlining)]public ChunkViewEnumerator<T1,T2,T3,T4> GetEnumerator()=>new(_q,_t0,_t1,_t2,_t3);}
+{ readonly Query _q; internal ChunkViewEnumerable(Query q){_q=q;}
+  [MethodImpl(MethodImplOptions.AggressiveInlining)]public ChunkViewEnumerator<T1,T2,T3,T4> GetEnumerator()=>new(_q);}
 
 /// <summary>Enumerator yielding <see cref="ChunkView{T1,T2,T3,T4}"/> per chunk.</summary>
 public ref struct ChunkViewEnumerator<T1,T2,T3,T4> where T1:struct where T2:struct where T3:struct where T4:struct
@@ -208,7 +206,7 @@ public ref struct ChunkViewEnumerator<T1,T2,T3,T4> where T1:struct where T2:stru
     private ReadOnlySpan<Chunk> _chunks;
     private int _chunkIdx;
 
-    internal ChunkViewEnumerator(Query q,ComponentType t0,ComponentType t1,ComponentType t2,ComponentType t3)
+    internal ChunkViewEnumerator(Query q)
     {
         _chunks = q.GetChunkSpan();
         _chunkIdx = -1;

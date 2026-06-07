@@ -183,7 +183,6 @@ public sealed class FrameDelta
             Ensure(ce.Entity);
             ref var state = ref CollectionsMarshal.GetValueRefOrNullRef(entityStates, ce.Entity);
             state.IsCreated = true;
-            state.CreatedEntity = ce;
             if (ce.Components is { Length: > 0 })
             {
                 state.CreatedComponents ??= new Dictionary<int, RawComponentValue>(ce.Components.Length);
@@ -390,7 +389,7 @@ public sealed class FrameDelta
         return new Signature(componentTypes);
     }
 
-    private enum ComponentNetKind : byte { None = 0, Add, Set, Remove }
+    private enum ComponentNetKind : byte { Add, Set, Remove }
 
     private struct ComponentNetAction
     {
@@ -408,7 +407,6 @@ public sealed class FrameDelta
         public bool HasHierarchyChange;
         public bool NetIsLinked;
         public Entity NetLinkParent;
-        public RawCreatedEntity CreatedEntity;
         public Dictionary<int, RawComponentValue>? CreatedComponents;
         public Dictionary<int, ComponentNetAction>? ComponentActions;
     }

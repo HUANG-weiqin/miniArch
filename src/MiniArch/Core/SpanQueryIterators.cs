@@ -219,7 +219,6 @@ public ref struct SpanEach<T1>
 {
     private ReadOnlySpan<Chunk> _chunks;
     private int _chunkIdx;
-    private int _rowCount;
     private int _remaining;
     private int _rowIdx;
     private ReadOnlySpan<Entity> _entities;
@@ -230,7 +229,6 @@ public ref struct SpanEach<T1>
     {
         _chunks = chunks;
         _chunkIdx = -1;
-        _rowCount = 0;
         _remaining = 0;
         _rowIdx = 0;
         _entities = default;
@@ -260,8 +258,7 @@ public ref struct SpanEach<T1>
             var chunk = _chunks[_chunkIdx];
             if (chunk.Count == 0) continue;
 
-            _rowCount = chunk.Count;
-            _remaining = _rowCount - 1;
+            _remaining = chunk.Count - 1;
             _entities = chunk.GetEntities();
             _rowIdx = 0;
             _r0 = ref chunk.GetComponentRef<T1>(Component<T1>.ComponentType);
@@ -285,7 +282,6 @@ public ref struct SpanEach<T1, T2>
 {
     private ReadOnlySpan<Chunk> _chunks;
     private int _chunkIdx;
-    private int _rowCount;
     private int _remaining;
     private int _rowIdx;
     private ReadOnlySpan<Entity> _entities;
@@ -297,7 +293,6 @@ public ref struct SpanEach<T1, T2>
     {
         _chunks = chunks;
         _chunkIdx = -1;
-        _rowCount = 0;
         _remaining = 0;
         _rowIdx = 0;
         _entities = default;
@@ -329,8 +324,7 @@ public ref struct SpanEach<T1, T2>
             var chunk = _chunks[_chunkIdx];
             if (chunk.Count == 0) continue;
 
-            _rowCount = chunk.Count;
-            _remaining = _rowCount - 1;
+            _remaining = chunk.Count - 1;
             _entities = chunk.GetEntities();
             _rowIdx = 0;
             _r0 = ref chunk.GetComponentRef<T1>(Component<T1>.ComponentType);
@@ -358,7 +352,6 @@ public ref struct SpanEach<T1, T2, T3>
 {
     private ReadOnlySpan<Chunk> _chunks;
     private int _chunkIdx;
-    private int _rowCount;
     private int _remaining;
     private int _rowIdx;
     private ReadOnlySpan<Entity> _entities;
@@ -371,7 +364,6 @@ public ref struct SpanEach<T1, T2, T3>
     {
         _chunks = chunks;
         _chunkIdx = -1;
-        _rowCount = 0;
         _remaining = 0;
         _rowIdx = 0;
         _entities = default;
@@ -405,8 +397,7 @@ public ref struct SpanEach<T1, T2, T3>
             var chunk = _chunks[_chunkIdx];
             if (chunk.Count == 0) continue;
 
-            _rowCount = chunk.Count;
-            _remaining = _rowCount - 1;
+            _remaining = chunk.Count - 1;
             _entities = chunk.GetEntities();
             _rowIdx = 0;
             _r0 = ref chunk.GetComponentRef<T1>(Component<T1>.ComponentType);
@@ -438,7 +429,6 @@ public ref struct SpanEach<T1, T2, T3, T4>
 {
     private ReadOnlySpan<Chunk> _chunks;
     private int _chunkIdx;
-    private int _rowCount;
     private int _remaining;
     private int _rowIdx;
     private ReadOnlySpan<Entity> _entities;
@@ -452,7 +442,6 @@ public ref struct SpanEach<T1, T2, T3, T4>
     {
         _chunks = chunks;
         _chunkIdx = -1;
-        _rowCount = 0;
         _remaining = 0;
         _rowIdx = 0;
         _entities = default;
@@ -488,8 +477,7 @@ public ref struct SpanEach<T1, T2, T3, T4>
             var chunk = _chunks[_chunkIdx];
             if (chunk.Count == 0) continue;
 
-            _rowCount = chunk.Count;
-            _remaining = _rowCount - 1;
+            _remaining = chunk.Count - 1;
             _entities = chunk.GetEntities();
             _rowIdx = 0;
             _r0 = ref chunk.GetComponentRef<T1>(Component<T1>.ComponentType);

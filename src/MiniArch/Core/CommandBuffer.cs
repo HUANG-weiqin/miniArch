@@ -1,7 +1,5 @@
 using System.Buffers;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using System.Threading;
 using System.Threading.Tasks;
 
 namespace MiniArch.Core;
@@ -649,12 +647,10 @@ public sealed class CommandBuffer : ICommandRecorder
             CreatedStatePoolCount = _createdStatePoolCount,
             CreatedEntityByPoolIndex = _createdEntityByPoolIndex,
             CreatedStateLookup = _createdStateLookup,
-            MaxCreatedEntityId = _maxCreatedEntityId,
             OpsPool = _opsPool,
             OpsPoolCount = _opsPoolCount,
             OpsEntityByPoolIndex = _opsEntityByPoolIndex,
             OpsLookup = _opsLookup,
-            MaxOpsEntityId = _maxOpsEntityId,
             ExistingDestroyEntities = _existingDestroyEntities,
             ExistingDestroyCount = _existingDestroyCount,
             HierarchyByChild = _hierarchyByChild,
@@ -1461,13 +1457,11 @@ public sealed class CommandBuffer : ICommandRecorder
         public int CreatedStatePoolCount;
         public Entity[] CreatedEntityByPoolIndex = null!;
         public int[] CreatedStateLookup = null!;
-        public int MaxCreatedEntityId;
 
         public InlineMap<int, EntityOpSlot>[] OpsPool = null!;
         public int OpsPoolCount;
         public Entity[] OpsEntityByPoolIndex = null!;
         public int[] OpsLookup = null!;
-        public int MaxOpsEntityId;
 
         public Entity[] ExistingDestroyEntities = null!;
         public int ExistingDestroyCount;

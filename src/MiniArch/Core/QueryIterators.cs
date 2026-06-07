@@ -56,6 +56,7 @@ public readonly struct ChunkEnumerable : IEnumerable<Chunk>
 public struct ChunkEnumerator
 {
     private readonly Chunk[] _chunks;
+    private readonly int _chunkCount;
     private int _chunkIndex;
 
     /// <summary>
@@ -63,7 +64,8 @@ public struct ChunkEnumerator
     /// </summary>
     public ChunkEnumerator(Query query)
     {
-        _chunks = query.GetChunkArray();
+        _chunks = query.GetChunkArray(out var chunkCount);
+        _chunkCount = chunkCount;
         _chunkIndex = -1;
         Current = default!;
     }
@@ -79,7 +81,7 @@ public struct ChunkEnumerator
     public bool MoveNext()
     {
         _chunkIndex++;
-        if (_chunkIndex < _chunks.Length)
+        if (_chunkIndex < _chunkCount)
         {
             Current = _chunks[_chunkIndex];
             return true;

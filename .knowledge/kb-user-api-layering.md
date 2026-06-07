@@ -2,7 +2,7 @@
 title: User API Layering
 module: MiniArch
 description: Single-source public API around MiniArch.World/Entity/QueryDescription, description-based foreach query, and the remaining MiniArch.Core advanced boundary
-updated: 2026-06-07 (修正：补充 ChunkViewTyped.cs 到核心组成)
+updated: 2026-06-07 (修正：EachSpan 实际支持 T1..T4)
 ---
 # User API Layering
 
@@ -19,7 +19,7 @@ updated: 2026-06-07 (修正：补充 ChunkViewTyped.cs 到核心组成)
   - `src/MiniArch/Core/World.cs` + `Core/Entity.cs` + `Core/QueryDescription.cs`：唯一公开定义
   - `src/MiniArch/Ecs/Query.cs`：默认层 entity-only `foreach` 查询
   - `src/MiniArch/Core/Query.cs`：advanced query 对象 (`MiniArch.Core.Query.Create(...)`)
-  - `src/MiniArch/Core/SpanQueryIterators.cs`：`EachSpan<T1..T8>()` 零分配 ref struct 迭代器
+  - `src/MiniArch/Core/SpanQueryIterators.cs`：`EachSpan<T1..T4>()` 零分配 ref struct 迭代器
   - `src/MiniArch/Core/ChunkViewTyped.cs`：`ChunkViews<T1..T4>()` typed chunk 视图枚举器（`Query.ChunksOf<T>()` 入口）
 - 数据流：普通用户从 `MiniArch.World` 进入 → `World.Query(in QueryDescription)` 返回 entity-only `MiniArch.Query` → `MiniArch.Query.Advanced` 暴露 `MiniArch.Core.Query`
 

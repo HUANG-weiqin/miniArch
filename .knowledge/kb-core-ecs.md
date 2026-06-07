@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-06-07 (修正：Archetype 扁平化、Chunk 改为 readonly struct 视图、移除 ArchetypeEdges/MigrationPlan 独立类引用)
+updated: 2026-06-07 (修正：删除 EntityLocation 遗留类型、EachSpan 实际支持 T1..T4、CopySmall 含 2-byte fast path)
 ---
 # MiniArch Core ECS
 
@@ -29,12 +29,11 @@ updated: 2026-06-07 (修正：Archetype 扁平化、Chunk 改为 readonly struct
   - `QueryDescription.cs`：可跨 world 复用的 query 描述，保存 world-agnostic 的 `Type` 集合
   - `Query.cs` / `QueryIterators.cs`：archetype 过滤和 chunk 遍历、单版本号全局快照失效
   - `ChunkViewTyped.cs`：`ChunkView<T1..T4>` + `ChunkViewEnumerable<T1..T4>` ref struct 族
-  - `SpanQueryIterators.cs`：`EachSpan<T1..T8>()` 零分配 ref struct 迭代器
+  - `SpanQueryIterators.cs`：`EachSpan<T1..T4>()` 零分配 ref struct 迭代器
   - `ComponentRegistry.cs`：全局 `Type ↔ ComponentType` 双向映射（copy-on-write）
   - `ComponentType.cs`：`int` wrapper
   - `ComponentSizeCache.cs`：`Type → size` 缓存
   - `Entity.cs`：`(id, version)` 二元组
-  - `EntityLocation.cs`：`(archetype, chunkIdx, row)` —— 保留但 World 内部不再使用（改用 `EntityRecord`）
   - `EntityRecord.cs`：`(Archetype, RowIndex, Version)` 16 字节，合并版本与位置
   - `EntityAccessor.cs`：ref struct，一次 entity 定位后直读/直写多个组件（跳过重复的 `_records` 查找）
   - `EntityInfo.cs`：只读快照，供外部查询 entity 状态
@@ -72,7 +71,7 @@ updated: 2026-06-07 (修正：Archetype 扁平化、Chunk 改为 readonly struct
 - `Chunk` 被扁平化为 Archetype 的 readonly struct 视图：每个 Archetype 有且仅有一个 Chunk，无 multi-chunk 分层
 - **Archetype 扁平化**：存储（`_data`, `_entities`, `_columnByteOffsets`, `_elementSizes`, `_count`, `_capacity`）全部直属于 Archetype；不再有独立的 Chunk class
 - **Edge cache 内联**：增删目标缓存 `_addDestinationCache`/`_removeDestinationCache` 直接挂在 Archetype 上（`Archetype?[]` 直索引），无需独立 ArchetypeEdges 对象
-- **迁移拷贝内联**：`CopySharedComponentsFrom` 直接在 Archetype 上实现，无需 MigrationPlan class —— 遍历 destination signature 查找 source 也有的组件，逐列 `CopySmall` 1/4/8/12/16-byte 分支拷贝
+- **迁移拷贝内联**：`CopySharedComponentsFrom` 直接在 Archetype 上实现，无需 MigrationPlan class —— 遍历 destination signature 查找 source 也有的组件，逐列 `CopySmall` 1/2/4/8/12/16-byte 分支拷贝
 - 热路径安全检查（bounds check、capacity check 等）包裹 `#if DEBUG`，Release 下零开销
 - `[SkipLocalsInit]` + `AggressiveInlining` + `Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), offset)` 消除 JIT 边界检查
 - Entity version 和 location 合并存储在 `EntityRecord[] _records`：`(Archetype, RowIndex, Version)` 16 字节紧凑布局，一次随机访问拿到版本与位置
