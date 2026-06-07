@@ -14,20 +14,14 @@ public sealed class Query
     private Signature? _requiredSignature;
     private Signature? _excludedSignature;
     private Signature? _anySignature;
-    private ComponentMask _requiredMask;
-    private ComponentMask _excludedMask;
-    private ComponentMask _anyMask;
-    private bool _masksInitialized;
     private int _refreshCount;
 
     private Archetype[] _snapshotArchetypes = Array.Empty<Archetype>();
     private Chunk[] _snapshotChunks = Array.Empty<Chunk>();
     private Archetype[] _scratchArchetypes = Array.Empty<Archetype>();
     private Chunk[] _scratchChunks = Array.Empty<Chunk>();
-    private int _snapshotArchetypeCount;
-    private int _chunksDirty = 1;
-    private bool _initialized;
-    private int _snapshotArchetypeVersion;
+    private int _snapshotCount;
+    private int _snapshotVersion = -1;
 
     internal Query(World world, QueryFilter filter)
     {
@@ -71,9 +65,8 @@ public sealed class Query
     {
         get
         {
-            EnsureMatchingArchetypes();
-            var snapshot = ReadArchetypeSnapshot();
-            return new ArraySegment<Archetype>(snapshot.Items, 0, snapshot.Count);
+            EnsureRefreshed();
+            return new ArraySegment<Archetype>(_snapshotArchetypes, 0, _snapshotCount);
         }
     }
 
@@ -84,8 +77,8 @@ public sealed class Query
     {
         get
         {
-            EnsureMatchingChunks();
-            return Volatile.Read(ref _snapshotChunks);
+            EnsureRefreshed();
+            return new ArraySegment<Chunk>(_snapshotChunks, 0, _snapshotCount);
         }
     }
 
@@ -95,16 +88,25 @@ public sealed class Query
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpan<Chunk> GetChunkSpan()
     {
-        EnsureMatchingChunks();
-        return Volatile.Read(ref _snapshotChunks);
+        EnsureRefreshed();
+        return _snapshotChunks.AsSpan(0, _snapshotCount);
+    }
+
+    /// <summary>
+    /// Gets the matched chunks as an array (zero allocation, returns cached array).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal Chunk[] GetChunkArray()
+    {
+        EnsureRefreshed();
+        return _snapshotChunks;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ReadOnlySpan<Archetype> GetArchetypeSpan()
     {
-        EnsureMatchingArchetypes();
-        var snapshot = ReadArchetypeSnapshot();
-        return snapshot.Items.AsSpan(0, snapshot.Count);
+        EnsureRefreshed();
+        return _snapshotArchetypes.AsSpan(0, _snapshotCount);
     }
 
     /// <summary>
@@ -136,199 +138,76 @@ public sealed class Query
     public ChunkViewEnumerable<T1, T2, T3, T4> ChunksOf<T1, T2, T3, T4>()
         where T1 : struct where T2 : struct where T3 : struct where T4 : struct => new(this);
 
-    internal Chunk[] EnsureMatchingChunks()
-    {
-        EnsureMatchingArchetypes();
-        EnsureChunkSnapshot();
-        return Volatile.Read(ref _snapshotChunks);
-    }
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private (Archetype[] Items, int Count) ReadArchetypeSnapshot()
+    private void EnsureRefreshed()
     {
-        while (true)
+        if (_world.ArchetypeVersion != _snapshotVersion)
         {
-            var items = Volatile.Read(ref _snapshotArchetypes);
-            var count = Volatile.Read(ref _snapshotArchetypeCount);
-            if ((uint)count <= (uint)items.Length)
-            {
-                return (items, count);
-            }
+            Refresh();
         }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void EnsureMatchingArchetypes()
-    {
-        if (!HasAnyArchetypeGenerationChanged())
-        {
-            return;
-        }
-
-        RefreshArchetypesSlow();
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void EnsureChunkSnapshot()
-    {
-        if (Volatile.Read(ref _chunksDirty) == 0)
-        {
-            return;
-        }
-
-        RefreshChunksSlow();
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool HasAnyArchetypeGenerationChanged()
-    {
-        if (!_initialized)
-        {
-            return true;
-        }
-
-        // Rebuild when a new archetype is created (may match this query).
-        return _world.ArchetypeVersion != _snapshotArchetypeVersion;
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private void RefreshArchetypesSlow()
+    private void Refresh()
     {
         lock (_refreshLock)
         {
-            if (!HasAnyArchetypeGenerationChanged())
+            if (_world.ArchetypeVersion == _snapshotVersion)
             {
                 return;
             }
 
-            BuildMatchingArchetypeSnapshot();
+            BuildSnapshot();
             Interlocked.Increment(ref _refreshCount);
         }
     }
 
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private void RefreshChunksSlow()
-    {
-        lock (_refreshLock)
-        {
-            if (Volatile.Read(ref _chunksDirty) == 0)
-            {
-                return;
-            }
-
-            BuildChunkSnapshot();
-        }
-    }
-
-    private void BuildMatchingArchetypeSnapshot()
+    private void BuildSnapshot()
     {
         var archetypes = _world.Archetypes;
-        _snapshotArchetypeVersion = _world.ArchetypeVersion;
+        var version = _world.ArchetypeVersion;
 
-        if (archetypes.Length == 0)
-        {
-            SwapSnapshotToEmpty();
-            _initialized = true;
-            return;
-        }
+        // Compute match masks once per refresh.
+        var requiredMask = ComputeFilterMask(_filter.Required.AsSpan());
+        var excludedMask = ComputeFilterMask(_filter.Excluded.AsSpan());
+        var anyMask = ComputeFilterMask(_filter.Any.AsSpan());
 
-        if (_scratchArchetypes.Length < archetypes.Length)
+        var count = 0;
+        for (var i = 0; i < archetypes.Length; i++)
         {
-            _scratchArchetypes = new Archetype[archetypes.Length];
-        }
-
-        var matchedArchetypeCount = 0;
-        foreach (var archetype in archetypes)
-        {
-            if (Matches(archetype))
+            if (Matches(archetypes[i], requiredMask, excludedMask, anyMask))
             {
-                _scratchArchetypes[matchedArchetypeCount] = archetype;
-                matchedArchetypeCount++;
+                count++;
             }
         }
 
-        if (matchedArchetypeCount == 0)
+        if (_scratchArchetypes.Length < count)
         {
-            SwapSnapshotToEmpty();
-            _initialized = true;
-            return;
+            _scratchArchetypes = new Archetype[count];
+            _scratchChunks = new Chunk[count];
         }
 
-        SwapArchetypeSnapshot(matchedArchetypeCount);
-        Volatile.Write(ref _chunksDirty, 1);
-        _initialized = true;
-    }
-
-    private void BuildChunkSnapshot()
-    {
-        var snapshot = ReadArchetypeSnapshot();
-        var snapshotArchetypes = snapshot.Items;
-        var snapshotArchetypeCount = snapshot.Count;
-        if (snapshotArchetypeCount == 0)
+        var idx = 0;
+        for (var i = 0; i < archetypes.Length; i++)
         {
-            Volatile.Write(ref _snapshotChunks, Array.Empty<Chunk>());
-            Volatile.Write(ref _chunksDirty, 0);
-            return;
+            var a = archetypes[i];
+            if (Matches(a, requiredMask, excludedMask, anyMask))
+            {
+                _scratchArchetypes[idx] = a;
+                _scratchChunks[idx] = a.GetChunkSpan()[0];
+                idx++;
+            }
         }
 
-        if (_scratchChunks.Length < snapshotArchetypeCount)
-        {
-            _scratchChunks = new Chunk[snapshotArchetypeCount];
-        }
-
-        for (var archetypeIndex = 0; archetypeIndex < snapshotArchetypeCount; archetypeIndex++)
-        {
-            _scratchChunks[archetypeIndex] = snapshotArchetypes[archetypeIndex].GetChunkSpan()[0];
-        }
-
-        // Publish exact-length chunk array to avoid stale entries.
-        var exact = _scratchChunks;
-        if (exact.Length != snapshotArchetypeCount)
-        {
-            exact = new Chunk[snapshotArchetypeCount];
-            Array.Copy(_scratchChunks, exact, snapshotArchetypeCount);
-        }
-        var old = _snapshotChunks;
-        Volatile.Write(ref _snapshotChunks, exact);
-        _scratchChunks = old;
-
-        Volatile.Write(ref _chunksDirty, 0);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void SwapSnapshotToEmpty()
-    {
-        _scratchArchetypes = Array.Empty<Archetype>();
-        SwapArchetypeSnapshot(0);
-        Volatile.Write(ref _snapshotChunks, Array.Empty<Chunk>());
-        Volatile.Write(ref _chunksDirty, 0);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void SwapArchetypeSnapshot(int count)
-    {
+        // Publish snapshot via swap (volatile ensures readers see consistent data).
         var oldA = _snapshotArchetypes;
+        var oldC = _snapshotChunks;
         Volatile.Write(ref _snapshotArchetypes, _scratchArchetypes);
-        Volatile.Write(ref _snapshotArchetypeCount, count);
+        Volatile.Write(ref _snapshotChunks, _scratchChunks);
+        Volatile.Write(ref _snapshotCount, count);
+        Volatile.Write(ref _snapshotVersion, version);
         _scratchArchetypes = oldA;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void EnsureMasksInitialized()
-    {
-        if (!_masksInitialized)
-        {
-            InitializeMasks();
-        }
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private void InitializeMasks()
-    {
-        _requiredMask = ComputeFilterMask(_filter.Required.AsSpan());
-        _excludedMask = ComputeFilterMask(_filter.Excluded.AsSpan());
-        _anyMask = ComputeFilterMask(_filter.Any.AsSpan());
-        _masksInitialized = true;
+        _scratchChunks = oldC;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -360,42 +239,39 @@ public sealed class Query
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool Matches(Archetype archetype)
+    private bool Matches(
+        Archetype archetype,
+        ComponentMask requiredMask,
+        ComponentMask excludedMask,
+        ComponentMask anyMask)
     {
-        EnsureMasksInitialized();
         var archMask = archetype.Signature.ComponentMask;
 
-            if (!_requiredMask.IsZero())
-            {
-                if ((archMask.B0 & _requiredMask.B0) != _requiredMask.B0)
-                    return false;
-                if (_requiredMask.HasB1 && (archMask.B1 & _requiredMask.B1) != _requiredMask.B1)
-                    return false;
-                if (_requiredMask.HasB2 && (archMask.B2 & _requiredMask.B2) != _requiredMask.B2)
-                    return false;
-                if (_requiredMask.HasB3 && (archMask.B3 & _requiredMask.B3) != _requiredMask.B3)
-                    return false;
-            }
+        if (!requiredMask.IsZero())
+        {
+            if ((archMask.B0 & requiredMask.B0) != requiredMask.B0)
+                return false;
+            if (requiredMask.HasB1 && (archMask.B1 & requiredMask.B1) != requiredMask.B1)
+                return false;
+            if (requiredMask.HasB2 && (archMask.B2 & requiredMask.B2) != requiredMask.B2)
+                return false;
+            if (requiredMask.HasB3 && (archMask.B3 & requiredMask.B3) != requiredMask.B3)
+                return false;
+        }
 
-            if (!_excludedMask.IsZero())
-            {
-                if ((archMask.B0 & _excludedMask.B0) != 0)
-                    return false;
-                if (_excludedMask.HasB1 && (archMask.B1 & _excludedMask.B1) != 0)
-                    return false;
-                if (_excludedMask.HasB2 && (archMask.B2 & _excludedMask.B2) != 0)
-                    return false;
-                if (_excludedMask.HasB3 && (archMask.B3 & _excludedMask.B3) != 0)
-                    return false;
-            }
+        if (!excludedMask.IsZero())
+        {
+            if ((archMask.B0 & excludedMask.B0) != 0)
+                return false;
+            if (excludedMask.HasB1 && (archMask.B1 & excludedMask.B1) != 0)
+                return false;
+            if (excludedMask.HasB2 && (archMask.B2 & excludedMask.B2) != 0)
+                return false;
+            if (excludedMask.HasB3 && (archMask.B3 & excludedMask.B3) != 0)
+                return false;
+        }
 
-        return MatchesSlow(archetype, archMask);
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private bool MatchesSlow(Archetype archetype, ComponentMask archMask)
-    {
-        // Only check component ids >= 256 (not covered by mask)
+        // Fallback: check components with IDs >= 256 (not covered by 256-bit mask)
         var required = _filter.Required.AsSpan();
         for (var i = 0; i < required.Length; i++)
         {
@@ -423,17 +299,17 @@ public sealed class Query
         }
 
         // Fast any-check via 256-bit mask
-            if (!_anyMask.IsZero())
-            {
-                if ((archMask.B0 & _anyMask.B0) != 0)
-                    return true;
-                if (_anyMask.HasB1 && (archMask.B1 & _anyMask.B1) != 0)
-                    return true;
-                if (_anyMask.HasB2 && (archMask.B2 & _anyMask.B2) != 0)
-                    return true;
-                if (_anyMask.HasB3 && (archMask.B3 & _anyMask.B3) != 0)
-                    return true;
-            }
+        if (!anyMask.IsZero())
+        {
+            if ((archMask.B0 & anyMask.B0) != 0)
+                return true;
+            if (anyMask.HasB1 && (archMask.B1 & anyMask.B1) != 0)
+                return true;
+            if (anyMask.HasB2 && (archMask.B2 & anyMask.B2) != 0)
+                return true;
+            if (anyMask.HasB3 && (archMask.B3 & anyMask.B3) != 0)
+                return true;
+        }
 
         // Slow any-check for ids >= 256
         for (var i = 0; i < any.Length; i++)

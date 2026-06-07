@@ -15,7 +15,6 @@ public sealed class World : IDisposable
     private const int DefaultChunkCapacity = 128;
     private const int StackAllocatedBatchRangeLimit = 128;
     private readonly Dictionary<Signature, Archetype> _archetypes = new();
-    private readonly Dictionary<CreateArchetypeKey, Archetype> _createArchetypeCache = new();
     private readonly HierarchyTable _hierarchy = new();
     private EntityRecord[] _records;
     private int _entitySlotCount;
@@ -26,8 +25,8 @@ public sealed class World : IDisposable
     private RecycledEntity[] _freeIds;
     private int _freeIdCount;
 
-    private int _createArchetypeCacheGeneration;
     private int _archetypeVersion;
+    private int _createArchetypeCacheGeneration;
     private readonly List<Entity> _destroyOrderScratch = new(8);
     private int[] _destroyVisitedGen = [];
     private int _destroyCurrentGen;
@@ -78,7 +77,6 @@ public sealed class World : IDisposable
         if (_disposed) return;
         _disposed = true;
         _archetypes.Clear();
-        _createArchetypeCache.Clear();
         _queryFiltersByDescription.Clear();
         _queries.Clear();
         _archetypeSnapshot = Array.Empty<Archetype>();
@@ -190,7 +188,6 @@ public sealed class World : IDisposable
         }
 
         _archetypes.Clear();
-        _createArchetypeCache.Clear();
         _archetypeSnapshot = Array.Empty<Archetype>();
         _queryFiltersByDescription = new Dictionary<QueryDescription, QueryFilter>();
         _queries = new Dictionary<QueryFilter, MiniArch.Core.Query>();
@@ -1238,39 +1235,6 @@ public sealed class World : IDisposable
         return archetype;
     }
 
-    internal Archetype GetOrCreateArchetype(CreateArchetypeKey key)
-    {
-        if (_createArchetypeCache.TryGetValue(key, out var archetype))
-        {
-            return archetype;
-        }
-
-        archetype = GetOrCreateArchetype(Signature.CreateNormalized(key.ToComponentArray()));
-        _createArchetypeCache.TryAdd(key, archetype);
-        return archetype;
-    }
-
-    private Archetype GetOrCreateCreateArchetype(Span<ComponentType> components)
-    {
-        if (components.Length == 0)
-        {
-            return GetOrCreateArchetype(Signature.Empty);
-        }
-
-        var uniqueCount = SpanHelper.SortAndDeduplicate(components);
-
-        var normalized = components[..uniqueCount];
-        var key = new CreateArchetypeKey(normalized);
-        if (_createArchetypeCache.TryGetValue(key, out var archetype))
-        {
-            return archetype;
-        }
-
-        archetype = GetOrCreateArchetype(Signature.CreateNormalized(key.ToComponentArray()));
-        _createArchetypeCache.Add(key, archetype);
-        return archetype;
-    }
-
     private Archetype GetOrCreateCreateArchetype<T1>(ComponentType componentType1)
     {
         var entry = CreateArchetypeCache<T1>.Entry;
@@ -2215,127 +2179,6 @@ public sealed class World : IDisposable
             }
 
             return _archetype.TryGetTarget(out archetype);
-        }
-    }
-
-    internal readonly struct CreateArchetypeKey : IEquatable<CreateArchetypeKey>
-    {
-        private readonly int _count;
-        private readonly int _c1;
-        private readonly int _c2;
-        private readonly int _c3;
-        private readonly int _c4;
-        private readonly int _c5;
-        private readonly int _c6;
-        private readonly int _c7;
-        private readonly int _c8;
-        private readonly int _c9;
-        private readonly int _c10;
-        private readonly int _c11;
-        private readonly int _c12;
-        private readonly int _c13;
-        private readonly int _c14;
-        private readonly int _c15;
-        private readonly int _c16;
-
-        public CreateArchetypeKey(ReadOnlySpan<ComponentType> components)
-        {
-            if (components.Length is < 1 or > 16)
-            {
-                throw new ArgumentOutOfRangeException(nameof(components));
-            }
-
-            _count = components.Length;
-            _c1 = GetComponentValue(components, 0);
-            _c2 = GetComponentValue(components, 1);
-            _c3 = GetComponentValue(components, 2);
-            _c4 = GetComponentValue(components, 3);
-            _c5 = GetComponentValue(components, 4);
-            _c6 = GetComponentValue(components, 5);
-            _c7 = GetComponentValue(components, 6);
-            _c8 = GetComponentValue(components, 7);
-            _c9 = GetComponentValue(components, 8);
-            _c10 = GetComponentValue(components, 9);
-            _c11 = GetComponentValue(components, 10);
-            _c12 = GetComponentValue(components, 11);
-            _c13 = GetComponentValue(components, 12);
-            _c14 = GetComponentValue(components, 13);
-            _c15 = GetComponentValue(components, 14);
-            _c16 = GetComponentValue(components, 15);
-        }
-
-        public ComponentType[] ToComponentArray()
-        {
-            var components = new ComponentType[_count];
-            for (var index = 0; index < components.Length; index++)
-            {
-                components[index] = new ComponentType(GetComponentValue(index));
-            }
-
-            return components;
-        }
-
-        public bool Equals(CreateArchetypeKey other)
-        {
-            if (_count != other._count)
-            {
-                return false;
-            }
-
-            for (var index = 0; index < _count; index++)
-            {
-                if (GetComponentValue(index) != other.GetComponentValue(index))
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        public override bool Equals(object? obj)
-        {
-            return obj is CreateArchetypeKey other && Equals(other);
-        }
-
-        public override int GetHashCode()
-        {
-            var hash = _count;
-            for (var index = 0; index < _count; index++)
-            {
-                hash = unchecked((hash * 31) + GetComponentValue(index));
-            }
-
-            return hash;
-        }
-
-        private int GetComponentValue(int index)
-        {
-            return index switch
-            {
-                0 => _c1,
-                1 => _c2,
-                2 => _c3,
-                3 => _c4,
-                4 => _c5,
-                5 => _c6,
-                6 => _c7,
-                7 => _c8,
-                8 => _c9,
-                9 => _c10,
-                10 => _c11,
-                11 => _c12,
-                12 => _c13,
-                13 => _c14,
-                14 => _c15,
-                15 => _c16,
-                _ => throw new ArgumentOutOfRangeException(nameof(index)),
-            };
-        }
-
-        private static int GetComponentValue(ReadOnlySpan<ComponentType> components, int index)
-        {
-            return index < components.Length ? components[index].Value : -1;
         }
     }
 

@@ -63,7 +63,7 @@ public struct ChunkEnumerator
     /// </summary>
     public ChunkEnumerator(Query query)
     {
-        _chunks = query.EnsureMatchingChunks();
+        _chunks = query.GetChunkArray();
         _chunkIndex = -1;
         Current = default!;
     }

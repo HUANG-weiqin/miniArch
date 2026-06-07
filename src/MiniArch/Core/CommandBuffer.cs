@@ -724,8 +724,9 @@ public sealed class CommandBuffer : ICommandRecorder
 
                     Array.Sort(components, sourceComponents, 0, componentCount);
 
-                    var key = new World.CreateArchetypeKey(components.AsSpan(0, componentCount));
-                    var archetype = _world.GetOrCreateArchetype(key);
+                    var comps = new ComponentType[componentCount];
+                    Array.Copy(components, comps, componentCount);
+                    var archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(comps));
 
                     for (var j = 0; j < componentCount; j++)
                     {
@@ -1047,8 +1048,9 @@ public sealed class CommandBuffer : ICommandRecorder
         }
 
         {
-            var key = new World.CreateArchetypeKey(types.AsSpan(0, idx));
-            archetype = _world.GetOrCreateArchetype(key);
+            var comps = new ComponentType[idx];
+            Array.Copy(types, comps, idx);
+            archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(comps));
             _cachedArchetype = archetype;
             _cachedArchetypeCount = idx;
             // Cache the component types for exact comparison on next lookup

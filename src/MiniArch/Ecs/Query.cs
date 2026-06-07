@@ -57,7 +57,7 @@ public struct QueryEnumerator
 
     internal QueryEnumerator(MiniArch.Core.Query query)
     {
-        _chunks = query.EnsureMatchingChunks();
+        _chunks = query.GetChunkArray();
         _chunkIndex = -1;
         _rowIndex = -1;
         _entities = null;
@@ -196,7 +196,7 @@ public struct OrderedQueryEnumerator : IDisposable
     {
         _initialized = true;
 
-        var chunks = _query.EnsureMatchingChunks();
+        var chunks = _query.GetChunkArray();
         var count = 0;
         for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
         {
