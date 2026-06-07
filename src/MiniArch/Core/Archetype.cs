@@ -68,8 +68,6 @@ public sealed class Archetype
     internal ReadOnlySpan<Chunk> GetChunkSpan() =>
         MemoryMarshal.CreateSpan(ref _chunkView, 1);
 
-    internal ArchetypeEdges Edges { get; } = new();
-
     // ================================================================
     //  Capacity management
     // ================================================================

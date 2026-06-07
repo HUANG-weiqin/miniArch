@@ -141,13 +141,4 @@ public sealed class ArchetypeTests
         Assert.Same(firstHealthLocation.Archetype, secondHealthLocation.Archetype);
     }
 
-    [Fact]
-    public void Archetype_edges_use_direct_index_storage_instead_of_dictionaries()
-    {
-        var fields = typeof(ArchetypeEdges)
-            .GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-
-        Assert.DoesNotContain(fields, field => field.FieldType.IsGenericType &&
-            field.FieldType.GetGenericTypeDefinition() == typeof(Dictionary<,>));
-    }
 }
