@@ -9,15 +9,14 @@ public sealed class ArchetypeTests
     private readonly record struct Health(int Value);
 
     [Fact]
-    public void Creating_an_archetype_allocates_an_initial_chunk()
+    public void Creating_an_archetype_starts_with_zero_entities()
     {
         var registry = new ComponentRegistry();
         var position = registry.GetOrCreate<Position>();
 
         var archetype = new Archetype(new Signature(position), [typeof(Position)]);
 
-        Assert.Equal(1, archetype.GetChunkSpan().Length);
-        Assert.Equal(0, archetype.GetChunkSpan()[0].Count);
+        Assert.Equal(0, archetype.EntityCount);
     }
 
     [Fact]
@@ -32,15 +31,12 @@ public sealed class ArchetypeTests
         var row2 = archetype.AddEntity(new Entity(2, 1));
         archetype.SetComponentAtTyped(0, row2, new Position(2, 2));
 
-        // Single chunk grows via EnsureCapacity; after initial fill it doubles.
-        Assert.Equal(1, archetype.GetChunkSpan().Length);
-        Assert.Equal(2, archetype.GetChunkSpan()[0].Count);
+        Assert.Equal(2, archetype.EntityCount);
 
         var row3 = archetype.AddEntity(new Entity(3, 1));
         archetype.SetComponentAtTyped(0, row3, new Position(3, 3));
 
-        Assert.Equal(1, archetype.GetChunkSpan().Length);
-        Assert.Equal(3, archetype.GetChunkSpan()[0].Count);
+        Assert.Equal(3, archetype.EntityCount);
         Assert.True(archetype.Capacity >= 3);
     }
 
@@ -80,31 +76,28 @@ public sealed class ArchetypeTests
         archetype.AddEntity(new Entity(3, 1));
         archetype.AddEntity(new Entity(4, 1));
 
-        Assert.Equal(1, archetype.GetChunkSpan().Length);
+        Assert.Equal(4, archetype.EntityCount);
 
         archetype.RemoveAt(0, out _);
         archetype.RemoveAt(0, out _);
         archetype.RemoveAt(0, out _);
         archetype.RemoveAt(0, out _);
 
-        Assert.Equal(0, archetype.GetChunkSpan()[0].Count);
+        Assert.Equal(0, archetype.EntityCount);
 
         archetype.AddEntity(new Entity(5, 1));
         archetype.AddEntity(new Entity(6, 1));
         archetype.AddEntity(new Entity(7, 1));
         archetype.AddEntity(new Entity(8, 1));
 
-        Assert.Equal(1, archetype.GetChunkSpan().Length);
-        Assert.Equal(4, archetype.GetChunkSpan()[0].Count);
+        Assert.Equal(4, archetype.EntityCount);
     }
 
     [Fact]
     public void Archetype_is_a_single_storage_block()
     {
-        // With the flattened design, each Archetype is its own storage block.
-        // No multi-chunk infrastructure exists.
         var archetype = new Archetype(Signature.Empty, Type.EmptyTypes);
-        Assert.Equal(1, archetype.GetChunkSpan().Length);
+        Assert.Equal(0, archetype.EntityCount);
     }
 
     [Fact]

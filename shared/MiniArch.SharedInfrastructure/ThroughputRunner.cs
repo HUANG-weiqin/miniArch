@@ -654,12 +654,12 @@ internal static class ThroughputCaseFactory
     private static int ExecuteMiniEntityQuery(MiniQuery query)
     {
         var checksum = 0;
-        var chunks = query.GetChunkSpan();
-        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        var archetypes = query.GetArchetypeSpan();
+        for (var archetypeIndex = 0; archetypeIndex < archetypes.Length; archetypeIndex++)
         {
-            var chunk = chunks[chunkIndex];
-            var count = chunk.Count;
-            var entities = chunk.GetEntityStorage();
+            var archetype = archetypes[archetypeIndex];
+            var count = archetype.EntityCount;
+            var entities = archetype.GetEntityStorage();
             for (var row = 0; row < count; row++)
             {
                 checksum += entities[row].Id;
@@ -695,18 +695,12 @@ internal static class ThroughputCaseFactory
             var archetype = archetypes[archetypeIndex];
             var posColIdx = archetype.GetComponentIndexFast(positionType);
             var velColIdx = archetype.GetComponentIndexFast(velocityType);
-            var chunks = archetype.GetChunkSpan();
-
-            for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+            ref var posBase = ref archetype.GetComponentRef<Position>(posColIdx);
+            ref var velBase = ref archetype.GetComponentRef<Velocity>(velColIdx);
+            var count = archetype.EntityCount;
+            for (var row = count - 1; row >= 0; row--)
             {
-                var chunk = chunks[chunkIndex];
-                ref var posBase = ref chunk.GetComponentRef<Position>(posColIdx);
-                ref var velBase = ref chunk.GetComponentRef<Velocity>(velColIdx);
-                var count = chunk.Count;
-                for (var row = count - 1; row >= 0; row--)
-                {
-                    checksum += Unsafe.Add(ref posBase, row).X + Unsafe.Add(ref velBase, row).Y;
-                }
+                checksum += Unsafe.Add(ref posBase, row).X + Unsafe.Add(ref velBase, row).Y;
             }
         }
 
@@ -780,17 +774,17 @@ internal static class ThroughputCaseFactory
         MiniComponentType accelType, MiniComponentType manaType)
     {
         var checksum = 0;
-        var chunks = query.GetChunkSpan();
-        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        var archetypes = query.GetArchetypeSpan();
+        for (var archetypeIndex = 0; archetypeIndex < archetypes.Length; archetypeIndex++)
         {
-            var chunk = chunks[chunkIndex];
-            var positions = chunk.GetComponentSpan<Position>(posType);
-            var velocities = chunk.GetComponentSpan<Velocity>(velType);
-            var healths = chunk.GetComponentSpan<Health>(healthType);
-            var teams = chunk.GetComponentSpan<Team>(teamType);
-            var accelerations = chunk.GetComponentSpan<Acceleration>(accelType);
-            var manas = chunk.GetComponentSpan<Mana>(manaType);
-            var count = chunk.Count;
+            var archetype = archetypes[archetypeIndex];
+            var positions = archetype.GetComponentSpan<Position>(posType);
+            var velocities = archetype.GetComponentSpan<Velocity>(velType);
+            var healths = archetype.GetComponentSpan<Health>(healthType);
+            var teams = archetype.GetComponentSpan<Team>(teamType);
+            var accelerations = archetype.GetComponentSpan<Acceleration>(accelType);
+            var manas = archetype.GetComponentSpan<Mana>(manaType);
+            var count = archetype.EntityCount;
             for (var row = 0; row < count; row++)
             {
                 checksum += positions[row].X

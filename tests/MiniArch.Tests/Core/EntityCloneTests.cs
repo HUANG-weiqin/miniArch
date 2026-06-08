@@ -550,9 +550,9 @@ public sealed class CommandBufferCloneTests
     private static int CountEntities(MiniQuery query)
     {
         var total = 0;
-        foreach (ref readonly var chunk in query.GetChunkSpan())
+        foreach (ref readonly var archetype in query.GetArchetypeSpan())
         {
-            total += chunk.GetEntities().Length;
+            total += archetype.GetEntities().Length;
         }
 
         return total;

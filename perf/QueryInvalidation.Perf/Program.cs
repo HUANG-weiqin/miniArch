@@ -9,7 +9,6 @@ using ArchWorld = Arch.Core.World;
 using ArchEntity = Arch.Core.Entity;
 using ArchQuery = Arch.Core.Query;
 using ArchQueryDescription = Arch.Core.QueryDescription;
-using Chunk = MiniArch.Core.Chunk;
 
 namespace QueryInvalidation.Perf;
 
@@ -74,7 +73,7 @@ static class Program
         PopulateMiniArch(world, entities);
 
         for (int i = 0; i < ArchetypeCount; i++)
-            _ = queries[i].GetChunkSpan();
+            _ = queries[i].GetArchetypeSpan();
 
         for (int w = 0; w < WarmupIterations; w++)
         {
@@ -167,12 +166,12 @@ static class Program
     static int IterateMiniEntity(MiniQuery query)
     {
         int checksum = 0;
-        var chunks = query.GetChunkSpan();
-        for (int ci = 0; ci < chunks.Length; ci++)
+        var archetypes = query.GetArchetypeSpan();
+        for (int ai = 0; ai < archetypes.Length; ai++)
         {
-            var chunk = chunks[ci];
-            int count = chunk.Count;
-            var ents = chunk.GetEntities();
+            var archetype = archetypes[ai];
+            int count = archetype.EntityCount;
+            var ents = archetype.GetEntityStorage();
             for (int r = 0; r < count; r++)
                 checksum += ents[r].Id;
         }

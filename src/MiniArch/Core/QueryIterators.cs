@@ -3,40 +3,40 @@ using System.Collections;
 namespace MiniArch.Core;
 
 /// <summary>
-/// Enumerable over matching chunks. Zero per-row overhead — iterate chunks then
-/// use <see cref="Chunk.GetComponentSpan{T}(MiniArch.Core.ComponentType)"/> to access component data directly.
+/// Enumerable over matching archetypes. Zero per-row overhead — iterate archetypes then
+/// use <see cref="Archetype.GetComponentSpan{T}(MiniArch.Core.ComponentType)"/> to access component data directly.
 /// Slower than <c>EachSpan</c> for setup (resolves column index each call),
 /// but faster per entity when many components are needed, and supports
 /// unlimited component types with no wrapper allocation.
 /// </summary>
-internal readonly struct ChunkEnumerable : IEnumerable<Chunk>
+internal readonly struct ArchetypeEnumerable : IEnumerable<Archetype>
 {
     private readonly Query _query;
 
-    internal ChunkEnumerable(Query query)
+    internal ArchetypeEnumerable(Query query)
     {
         _query = query;
     }
 
     /// <summary>
-    /// Returns a chunk enumerator.
+    /// Returns an archetype enumerator.
     /// </summary>
-    public ChunkEnumerator GetEnumerator() => new(_query);
+    public ArchetypeEnumerator GetEnumerator() => new(_query);
 
-    IEnumerator<Chunk> IEnumerable<Chunk>.GetEnumerator() => new ChunkEnumeratorAdapter(this);
+    IEnumerator<Archetype> IEnumerable<Archetype>.GetEnumerator() => new ArchetypeEnumeratorAdapter(this);
 
-    IEnumerator IEnumerable.GetEnumerator() => ((IEnumerable<Chunk>)this).GetEnumerator();
+    IEnumerator IEnumerable.GetEnumerator() => ((IEnumerable<Archetype>)this).GetEnumerator();
 
-    private sealed class ChunkEnumeratorAdapter : IEnumerator<Chunk>
+    private sealed class ArchetypeEnumeratorAdapter : IEnumerator<Archetype>
     {
-        private ChunkEnumerator _enumerator;
+        private ArchetypeEnumerator _enumerator;
 
-        public ChunkEnumeratorAdapter(ChunkEnumerable enumerable)
+        public ArchetypeEnumeratorAdapter(ArchetypeEnumerable enumerable)
         {
-            _enumerator = new ChunkEnumerator(enumerable._query);
+            _enumerator = new ArchetypeEnumerator(enumerable._query);
         }
 
-        public Chunk Current => _enumerator.Current;
+        public Archetype Current => _enumerator.Current;
 
         object IEnumerator.Current => Current;
 
@@ -51,39 +51,39 @@ internal readonly struct ChunkEnumerable : IEnumerable<Chunk>
 }
 
 /// <summary>
-/// Chunk enumerator.
+/// Archetype enumerator.
 /// </summary>
-internal struct ChunkEnumerator
+internal struct ArchetypeEnumerator
 {
-    private readonly Chunk[] _chunks;
-    private readonly int _chunkCount;
-    private int _chunkIndex;
+    private readonly Archetype[] _archetypes;
+    private readonly int _archetypeCount;
+    private int _archetypeIndex;
 
     /// <summary>
     /// Creates an enumerator for a query.
     /// </summary>
-    public ChunkEnumerator(Query query)
+    public ArchetypeEnumerator(Query query)
     {
-        _chunks = query.GetChunkArray(out var chunkCount);
-        _chunkCount = chunkCount;
-        _chunkIndex = -1;
+        _archetypes = query.GetArchetypeArray(out var archetypeCount);
+        _archetypeCount = archetypeCount;
+        _archetypeIndex = -1;
         Current = default!;
     }
 
     /// <summary>
-    /// Gets the current chunk.
+    /// Gets the current archetype.
     /// </summary>
-    public Chunk Current { get; private set; }
+    public Archetype Current { get; private set; }
 
     /// <summary>
-    /// Advances to the next chunk.
+    /// Advances to the next archetype.
     /// </summary>
     public bool MoveNext()
     {
-        _chunkIndex++;
-        if (_chunkIndex < _chunkCount)
+        _archetypeIndex++;
+        if (_archetypeIndex < _archetypeCount)
         {
-            Current = _chunks[_chunkIndex];
+            Current = _archetypes[_archetypeIndex];
             return true;
         }
 

@@ -108,8 +108,8 @@ public sealed class WorldLifecycleTests
         Assert.Contains(positionId, info.Archetype.Signature);
         Assert.Contains(velocityId, info.Archetype.Signature);
 
-        Assert.Equal(new Position(1, 2), info.Archetype.GetComponent<Position>(positionId, info.RowIndex));
-        Assert.Equal(new Velocity(3, 4), info.Archetype.GetComponent<Velocity>(velocityId, info.RowIndex));
+        Assert.Equal(new Position(1, 2), info.Archetype.GetComponentAt<Position>(info.Archetype.GetComponentIndex(positionId), info.RowIndex));
+        Assert.Equal(new Velocity(3, 4), info.Archetype.GetComponentAt<Velocity>(info.Archetype.GetComponentIndex(velocityId), info.RowIndex));
 
         var positionQuery = CreateQuery<Position>(world);
         var matchedArchetypes = positionQuery.MatchedArchetypes;
@@ -132,8 +132,8 @@ public sealed class WorldLifecycleTests
         Assert.True(world.TryGetLocation(entity, out var info));
         Assert.Equal(16, info.Archetype.Signature.Count);
 
-        Assert.Equal(new C1(1), info.Archetype.GetComponent<C1>(c1, info.RowIndex));
-        Assert.Equal(new C16(16), info.Archetype.GetComponent<C16>(c16, info.RowIndex));
+        Assert.Equal(new C1(1), info.Archetype.GetComponentAt<C1>(info.Archetype.GetComponentIndex(c1), info.RowIndex));
+        Assert.Equal(new C16(16), info.Archetype.GetComponentAt<C16>(info.Archetype.GetComponentIndex(c16), info.RowIndex));
 
         var matchedArchetypes = CreateQuery<C1>(world).MatchedArchetypes;
         Assert.Single(matchedArchetypes);
@@ -343,7 +343,7 @@ public sealed class WorldLifecycleTests
         var query = CreateQuery<Position, Velocity>(world);
 
         Assert.Single(query.MatchedArchetypes);
-        Assert.Equal(1, query.GetChunkSpan().Length);
+        Assert.Equal(1, query.GetArchetypeSpan().Length);
     }
 
     [Fact]
@@ -359,7 +359,7 @@ public sealed class WorldLifecycleTests
         var query = CreateQuery<Position, Velocity>(world);
 
         Assert.Single(query.MatchedArchetypes);
-        Assert.Equal(1, query.GetChunkSpan().Length);
+        Assert.Equal(1, query.GetArchetypeSpan().Length);
     }
 
     [Fact]

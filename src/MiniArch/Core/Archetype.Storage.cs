@@ -139,11 +139,16 @@ internal sealed partial class Archetype
         return GetComponentRefAt<T>(columnIndex, row);
     }
 
+    /// <summary>
+    /// Gets a reference to the first element of a component column.
+    /// </summary>
+    [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal T GetComponent<T>(ComponentType component, int row)
+    internal ref T GetComponentRef<T>(ComponentType component)
     {
-        var columnIndex = GetComponentIndex(component);
-        return GetComponentAt<T>(columnIndex, row);
+        return ref Unsafe.As<byte, T>(ref Unsafe.Add(
+            ref MemoryMarshal.GetArrayDataReference(_data),
+            _columnByteOffsets[GetComponentIndexFast(component)]));
     }
 
     /// <summary>

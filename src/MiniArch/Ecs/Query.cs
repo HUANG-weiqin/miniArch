@@ -67,9 +67,9 @@ public readonly struct Query
 /// </summary>
 public struct QueryEnumerator
 {
-    private readonly MiniArch.Core.Chunk[] _chunks;
-    private readonly int _chunkCount;
-    private int _chunkIndex;
+    private readonly MiniArch.Core.Archetype[] _archetypes;
+    private readonly int _archetypeCount;
+    private int _archetypeIndex;
     private int _rowIndex;
     private Entity[]? _entities;
     private int _count;
@@ -77,9 +77,9 @@ public struct QueryEnumerator
 
     internal QueryEnumerator(MiniArch.Core.Query query)
     {
-        _chunks = query.GetChunkArray(out var chunkCount);
-        _chunkCount = chunkCount;
-        _chunkIndex = -1;
+        _archetypes = query.GetArchetypeArray(out var archetypeCount);
+        _archetypeCount = archetypeCount;
+        _archetypeIndex = -1;
         _rowIndex = -1;
         _entities = null;
         _count = 0;
@@ -108,21 +108,21 @@ public struct QueryEnumerator
                 }
             }
 
-            _chunkIndex++;
-            if (_chunkIndex >= _chunkCount)
+            _archetypeIndex++;
+            if (_archetypeIndex >= _archetypeCount)
             {
                 return false;
             }
 
-            var chunk = _chunks[_chunkIndex];
-            if (chunk.Count == 0)
+            var archetype = _archetypes[_archetypeIndex];
+            if (archetype.EntityCount == 0)
             {
                 _entities = null;
                 continue;
             }
 
-            _entities = chunk.GetEntityStorage();
-            _count = chunk.Count;
+            _entities = archetype.GetEntityStorage();
+            _count = archetype.EntityCount;
             _rowIndex = -1;
         }
     }
@@ -217,11 +217,11 @@ public struct OrderedQueryEnumerator : IDisposable
     {
         _initialized = true;
 
-        var chunks = _query.GetChunkArray(out var chunkCount);
+        var archetypes = _query.GetArchetypeArray(out var archetypeCount);
         var count = 0;
-        for (var chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++)
+        for (var archetypeIndex = 0; archetypeIndex < archetypeCount; archetypeIndex++)
         {
-            count += chunks[chunkIndex].Count;
+            count += archetypes[archetypeIndex].EntityCount;
         }
 
         if (count == 0)
@@ -234,11 +234,11 @@ public struct OrderedQueryEnumerator : IDisposable
         _count = count;
 
         var entityIndex = 0;
-        for (var chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++)
+        for (var archetypeIndex = 0; archetypeIndex < archetypeCount; archetypeIndex++)
         {
-            var chunk = chunks[chunkIndex];
-            var storage = chunk.GetEntityStorage();
-            var rowCount = chunk.Count;
+            var archetype = archetypes[archetypeIndex];
+            var storage = archetype.GetEntityStorage();
+            var rowCount = archetype.EntityCount;
             Array.Copy(storage, 0, entities, entityIndex, rowCount);
             entityIndex += rowCount;
         }

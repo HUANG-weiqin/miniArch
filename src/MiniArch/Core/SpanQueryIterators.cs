@@ -8,28 +8,28 @@ namespace MiniArch.Core;
 /// over entity components using <c>foreach (ref var row in query.EachSpan&lt;T1&gt;())</c>.
 /// <para/>
 /// Supports up to 4 component types (<c>T1</c>–<c>T4</c>).
-/// For more components, iterate <c>query.Chunks</c> directly and access
-/// components via <see cref="Chunk.GetComponentSpan{T}(ComponentType)"/>.
+/// For more components, iterate the archetype span directly and access
+/// components via <see cref="Archetype.GetComponentSpan{T}(ComponentType)"/>.
 /// </summary>
 internal static class SpanQueryExtensions
 {
     /// <summary>Iterates entity ids only (no components).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static SpanEntities EachSpan(this Query query)
-        => new(query.GetChunkSpan());
+        => new(query.GetArchetypeSpan());
 
     /// <summary>Iterates entities with one component type.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static SpanEach<T1> EachSpan<T1>(this Query query)
         where T1 : struct
-        => new(query.GetChunkSpan());
+        => new(query.GetArchetypeSpan());
 
     /// <summary>Iterates entities with two component types.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static SpanEach<T1, T2> EachSpan<T1, T2>(this Query query)
         where T1 : struct
         where T2 : struct
-        => new(query.GetChunkSpan());
+        => new(query.GetArchetypeSpan());
 
     /// <summary>Iterates entities with three component types.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -37,7 +37,7 @@ internal static class SpanQueryExtensions
         where T1 : struct
         where T2 : struct
         where T3 : struct
-        => new(query.GetChunkSpan());
+        => new(query.GetArchetypeSpan());
 
     /// <summary>Iterates entities with four component types.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -46,7 +46,7 @@ internal static class SpanQueryExtensions
         where T2 : struct
         where T3 : struct
         where T4 : struct
-        => new(query.GetChunkSpan());
+        => new(query.GetArchetypeSpan());
 }
 
 /// <summary>
@@ -55,14 +55,14 @@ internal static class SpanQueryExtensions
 /// </summary>
 internal ref struct SpanEntities
 {
-    private ReadOnlySpan<Chunk> _chunks;
+    private ReadOnlySpan<Archetype> _chunks;
     private int _chunkIdx;
     private int _rowIdx;
     private int _rowCount;
     private ReadOnlySpan<Entity> _entities;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal SpanEntities(ReadOnlySpan<Chunk> chunks)
+    internal SpanEntities(ReadOnlySpan<Archetype> chunks)
     {
         _chunks = chunks;
         _chunkIdx = -1;
@@ -87,12 +87,12 @@ internal ref struct SpanEntities
             _chunkIdx++;
             if (_chunkIdx >= _chunks.Length) return false;
 
-            var chunk = _chunks[_chunkIdx];
-            if (chunk.Count == 0) continue;
+            var archetype = _chunks[_chunkIdx];
+            if (archetype.EntityCount == 0) continue;
 
             _rowIdx = 0;
-            _rowCount = chunk.Count;
-            _entities = chunk.GetEntities();
+            _rowCount = archetype.EntityCount;
+            _entities = archetype.GetEntities();
             return true;
         }
     }
@@ -218,7 +218,7 @@ internal ref struct SpanEachRow<T1, T2, T3, T4>
 internal ref struct SpanEach<T1>
     where T1 : struct
 {
-    private ReadOnlySpan<Chunk> _chunks;
+    private ReadOnlySpan<Archetype> _chunks;
     private int _chunkIdx;
     private int _remaining;
     private int _rowIdx;
@@ -226,7 +226,7 @@ internal ref struct SpanEach<T1>
     private ref T1 _r0;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal SpanEach(ReadOnlySpan<Chunk> chunks)
+    internal SpanEach(ReadOnlySpan<Archetype> chunks)
     {
         _chunks = chunks;
         _chunkIdx = -1;
@@ -256,13 +256,13 @@ internal ref struct SpanEach<T1>
             _chunkIdx++;
             if (_chunkIdx >= _chunks.Length) return false;
 
-            var chunk = _chunks[_chunkIdx];
-            if (chunk.Count == 0) continue;
+            var archetype = _chunks[_chunkIdx];
+            if (archetype.EntityCount == 0) continue;
 
-            _remaining = chunk.Count - 1;
-            _entities = chunk.GetEntities();
+            _remaining = archetype.EntityCount - 1;
+            _entities = archetype.GetEntities();
             _rowIdx = 0;
-            _r0 = ref chunk.GetComponentRef<T1>(Component<T1>.ComponentType);
+            _r0 = ref archetype.GetComponentRef<T1>(Component<T1>.ComponentType);
             return true;
         }
     }
@@ -281,7 +281,7 @@ internal ref struct SpanEach<T1, T2>
     where T1 : struct
     where T2 : struct
 {
-    private ReadOnlySpan<Chunk> _chunks;
+    private ReadOnlySpan<Archetype> _chunks;
     private int _chunkIdx;
     private int _remaining;
     private int _rowIdx;
@@ -290,7 +290,7 @@ internal ref struct SpanEach<T1, T2>
     private ref T2 _r1;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal SpanEach(ReadOnlySpan<Chunk> chunks)
+    internal SpanEach(ReadOnlySpan<Archetype> chunks)
     {
         _chunks = chunks;
         _chunkIdx = -1;
@@ -322,14 +322,14 @@ internal ref struct SpanEach<T1, T2>
             _chunkIdx++;
             if (_chunkIdx >= _chunks.Length) return false;
 
-            var chunk = _chunks[_chunkIdx];
-            if (chunk.Count == 0) continue;
+            var archetype = _chunks[_chunkIdx];
+            if (archetype.EntityCount == 0) continue;
 
-            _remaining = chunk.Count - 1;
-            _entities = chunk.GetEntities();
+            _remaining = archetype.EntityCount - 1;
+            _entities = archetype.GetEntities();
             _rowIdx = 0;
-            _r0 = ref chunk.GetComponentRef<T1>(Component<T1>.ComponentType);
-            _r1 = ref chunk.GetComponentRef<T2>(Component<T2>.ComponentType);
+            _r0 = ref archetype.GetComponentRef<T1>(Component<T1>.ComponentType);
+            _r1 = ref archetype.GetComponentRef<T2>(Component<T2>.ComponentType);
             return true;
         }
     }
@@ -351,7 +351,7 @@ internal ref struct SpanEach<T1, T2, T3>
     where T2 : struct
     where T3 : struct
 {
-    private ReadOnlySpan<Chunk> _chunks;
+    private ReadOnlySpan<Archetype> _chunks;
     private int _chunkIdx;
     private int _remaining;
     private int _rowIdx;
@@ -361,7 +361,7 @@ internal ref struct SpanEach<T1, T2, T3>
     private ref T3 _r2;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal SpanEach(ReadOnlySpan<Chunk> chunks)
+    internal SpanEach(ReadOnlySpan<Archetype> chunks)
     {
         _chunks = chunks;
         _chunkIdx = -1;
@@ -395,15 +395,15 @@ internal ref struct SpanEach<T1, T2, T3>
             _chunkIdx++;
             if (_chunkIdx >= _chunks.Length) return false;
 
-            var chunk = _chunks[_chunkIdx];
-            if (chunk.Count == 0) continue;
+            var archetype = _chunks[_chunkIdx];
+            if (archetype.EntityCount == 0) continue;
 
-            _remaining = chunk.Count - 1;
-            _entities = chunk.GetEntities();
+            _remaining = archetype.EntityCount - 1;
+            _entities = archetype.GetEntities();
             _rowIdx = 0;
-            _r0 = ref chunk.GetComponentRef<T1>(Component<T1>.ComponentType);
-            _r1 = ref chunk.GetComponentRef<T2>(Component<T2>.ComponentType);
-            _r2 = ref chunk.GetComponentRef<T3>(Component<T3>.ComponentType);
+            _r0 = ref archetype.GetComponentRef<T1>(Component<T1>.ComponentType);
+            _r1 = ref archetype.GetComponentRef<T2>(Component<T2>.ComponentType);
+            _r2 = ref archetype.GetComponentRef<T3>(Component<T3>.ComponentType);
             return true;
         }
     }
@@ -428,7 +428,7 @@ internal ref struct SpanEach<T1, T2, T3, T4>
     where T3 : struct
     where T4 : struct
 {
-    private ReadOnlySpan<Chunk> _chunks;
+    private ReadOnlySpan<Archetype> _chunks;
     private int _chunkIdx;
     private int _remaining;
     private int _rowIdx;
@@ -439,7 +439,7 @@ internal ref struct SpanEach<T1, T2, T3, T4>
     private ref T4 _r3;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal SpanEach(ReadOnlySpan<Chunk> chunks)
+    internal SpanEach(ReadOnlySpan<Archetype> chunks)
     {
         _chunks = chunks;
         _chunkIdx = -1;
@@ -475,16 +475,16 @@ internal ref struct SpanEach<T1, T2, T3, T4>
             _chunkIdx++;
             if (_chunkIdx >= _chunks.Length) return false;
 
-            var chunk = _chunks[_chunkIdx];
-            if (chunk.Count == 0) continue;
+            var archetype = _chunks[_chunkIdx];
+            if (archetype.EntityCount == 0) continue;
 
-            _remaining = chunk.Count - 1;
-            _entities = chunk.GetEntities();
+            _remaining = archetype.EntityCount - 1;
+            _entities = archetype.GetEntities();
             _rowIdx = 0;
-            _r0 = ref chunk.GetComponentRef<T1>(Component<T1>.ComponentType);
-            _r1 = ref chunk.GetComponentRef<T2>(Component<T2>.ComponentType);
-            _r2 = ref chunk.GetComponentRef<T3>(Component<T3>.ComponentType);
-            _r3 = ref chunk.GetComponentRef<T4>(Component<T4>.ComponentType);
+            _r0 = ref archetype.GetComponentRef<T1>(Component<T1>.ComponentType);
+            _r1 = ref archetype.GetComponentRef<T2>(Component<T2>.ComponentType);
+            _r2 = ref archetype.GetComponentRef<T3>(Component<T3>.ComponentType);
+            _r3 = ref archetype.GetComponentRef<T4>(Component<T4>.ComponentType);
             return true;
         }
     }

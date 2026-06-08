@@ -55,7 +55,7 @@ public sealed class QueryTests
     }
 
     [Fact]
-    public void Chunk_iteration_visits_each_matching_chunk_exactly_once()
+    public void Archetype_iteration_visits_each_matching_archetype_exactly_once()
     {
         var world = new World(chunkCapacity: 1);
         var description = new QueryDescription().With<Position>();
@@ -68,19 +68,19 @@ public sealed class QueryTests
         world.Add(third, new Position(3, 3));
 
         var query = MiniQuery.Create(world, in description);
-        var chunks = new List<Chunk>();
+        var archetypes = new List<Archetype>();
 
-        foreach (var chunk in query.Chunks)
+        foreach (var archetype in query.Chunks)
         {
-            chunks.Add(chunk);
+            archetypes.Add(archetype);
         }
 
-        Assert.Single(chunks);
-        Assert.Single(chunks.Distinct());
+        Assert.Single(archetypes);
+        Assert.Single(archetypes.Distinct());
     }
 
     [Fact]
-    public void Query_exposes_the_same_matching_chunks_as_chunk_enumeration()
+    public void Query_exposes_the_same_matching_archetypes_as_chunk_enumeration()
     {
         var world = new World(chunkCapacity: 1);
         var description = new QueryDescription().With<Position>();
@@ -92,14 +92,14 @@ public sealed class QueryTests
 
         var query = MiniQuery.Create(world, in description);
 
-        var enumeratedChunks = new List<Chunk>();
-        foreach (var chunk in query.Chunks)
+        var enumeratedArchetypes = new List<Archetype>();
+        foreach (var archetype in query.Chunks)
         {
-            enumeratedChunks.Add(chunk);
+            enumeratedArchetypes.Add(archetype);
         }
 
-        Assert.Equal(enumeratedChunks, query.MatchedChunks);
-        Assert.Equal(enumeratedChunks, query.GetChunkSpan().ToArray());
+        Assert.Equal(enumeratedArchetypes, query.MatchedChunks);
+        Assert.Equal(enumeratedArchetypes, query.GetArchetypeSpan().ToArray());
         Assert.Equal(1, query.RefreshCount);
     }
 
@@ -122,7 +122,7 @@ public sealed class QueryTests
     }
 
     [Fact]
-    public void Archetype_exposes_the_same_chunks_as_span()
+    public void Archetype_is_the_single_storage_block()
     {
         var world = new World(chunkCapacity: 1);
         _ = world.Create(new Position(1, 1));
@@ -132,11 +132,11 @@ public sealed class QueryTests
         var query = MiniQuery.Create(world, in description);
         var archetype = Assert.Single(query.GetArchetypeSpan().ToArray());
 
-        Assert.Equal(1, archetype.GetChunkSpan().Length);
+        Assert.Equal(2, archetype.EntityCount);
     }
 
     [Fact]
-    public void Matching_chunks_refresh_when_world_changes()
+    public void Matching_archetypes_refresh_when_world_changes()
     {
         var world = new World(chunkCapacity: 1);
         var first = world.Create();
@@ -150,10 +150,8 @@ public sealed class QueryTests
         var second = world.Create();
         world.Add(second, new Position(2, 2));
 
-        // Second entity triggers new chunk (0→1) with chunkCapacity=1,
-        // so chunk snapshot should rebuild and RefreshCount should increment.
         Assert.Single(query.MatchedChunks);
-        Assert.Equal(1, query.GetChunkSpan().Length);
+        Assert.Single(query.GetArchetypeSpan().ToArray());
         Assert.True(query.RefreshCount >= 1, "Chunk snapshot should be valid");
     }
 
@@ -333,11 +331,11 @@ public sealed class QueryTests
     private static Entity[] CaptureEnumeratedEntities(MiniQuery query)
     {
         var entities = new List<Entity>();
-        foreach (var chunk in query.Chunks)
+        foreach (var archetype in query.Chunks)
         {
-            for (var row = 0; row < chunk.Count; row++)
+            for (var row = 0; row < archetype.EntityCount; row++)
             {
-                entities.Add(chunk.GetEntity(row));
+                entities.Add(archetype.GetEntity(row));
             }
         }
 
@@ -349,12 +347,9 @@ public sealed class QueryTests
         var entities = new List<Entity>();
         foreach (var archetype in query.MatchedArchetypes)
         {
-            foreach (ref readonly var chunk in archetype.GetChunkSpan())
+            for (var row = 0; row < archetype.EntityCount; row++)
             {
-                for (var row = 0; row < chunk.Count; row++)
-                {
-                    entities.Add(chunk.GetEntity(row));
-                }
+                entities.Add(archetype.GetEntity(row));
             }
         }
 
@@ -364,9 +359,9 @@ public sealed class QueryTests
     private static int CountEntities(MiniQuery query)
     {
         var total = 0;
-        foreach (ref readonly var chunk in query.GetChunkSpan())
+        foreach (ref readonly var archetype in query.GetArchetypeSpan())
         {
-            total += chunk.GetEntities().Length;
+            total += archetype.GetEntities().Length;
         }
 
         return total;
@@ -473,12 +468,14 @@ public sealed class QueryTests
     private static int ComputeRowWiseChecksum(MiniQuery query, ComponentType positionType, ComponentType velocityType)
     {
         var checksum = 0;
-        foreach (ref readonly var chunk in query.GetChunkSpan())
+        foreach (ref readonly var archetype in query.GetArchetypeSpan())
         {
-            for (var row = 0; row < chunk.Count; row++)
+            var posColIdx = archetype.GetComponentIndex(positionType);
+            var velColIdx = archetype.GetComponentIndex(velocityType);
+            for (var row = 0; row < archetype.EntityCount; row++)
             {
-                var position = chunk.GetComponent<Position>(positionType, row);
-                var velocity = chunk.GetComponent<Velocity>(velocityType, row);
+                var position = archetype.GetComponentAt<Position>(posColIdx, row);
+                var velocity = archetype.GetComponentAt<Velocity>(velColIdx, row);
                 checksum += position.X + velocity.Y;
             }
         }
@@ -489,10 +486,10 @@ public sealed class QueryTests
     private static int ComputeSpanChecksum(MiniQuery query, ComponentType positionType, ComponentType velocityType)
     {
         var checksum = 0;
-        foreach (ref readonly var chunk in query.GetChunkSpan())
+        foreach (ref readonly var archetype in query.GetArchetypeSpan())
         {
-            var positions = chunk.GetComponentSpan<Position>(positionType);
-            var velocities = chunk.GetComponentSpan<Velocity>(velocityType);
+            var positions = archetype.GetComponentSpan<Position>(positionType);
+            var velocities = archetype.GetComponentSpan<Velocity>(velocityType);
             for (var row = 0; row < positions.Length; row++)
             {
                 checksum += positions[row].X + velocities[row].Y;
@@ -502,4 +499,3 @@ public sealed class QueryTests
         return checksum;
     }
 }
-

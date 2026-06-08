@@ -161,11 +161,11 @@ public class QueryBenchmarks
     private int ExecuteMiniQuery(MiniQuery query)
     {
         var checksum = 0;
-        var chunks = query.GetChunkSpan();
-        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        var archetypes = query.GetArchetypeSpan();
+        for (var archetypeIndex = 0; archetypeIndex < archetypes.Length; archetypeIndex++)
         {
-            var chunk = chunks[chunkIndex];
-            var entities = chunk.GetEntities();
+            var archetype = archetypes[archetypeIndex];
+            var entities = archetype.GetEntities();
             for (var row = 0; row < entities.Length; row++)
             {
                 checksum += entities[row].Id;
@@ -184,13 +184,13 @@ public class QueryBenchmarks
     private static int ExecuteMiniQuerySimd(MiniQuery query)
     {
         var checksum = 0;
-        var chunks = query.GetChunkSpan();
+        var archetypes = query.GetArchetypeSpan();
         var vecSize = Vector<int>.Count;
         Span<int> gatherBuf = stackalloc int[vecSize];
-        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        for (var archetypeIndex = 0; archetypeIndex < archetypes.Length; archetypeIndex++)
         {
-            var chunk = chunks[chunkIndex];
-            var entities = chunk.GetEntities();
+            var archetype = archetypes[archetypeIndex];
+            var entities = archetype.GetEntities();
             var ids = MemoryMarshal.Cast<MiniArch.Entity, int>(entities);
             var count = entities.Length;
 
@@ -225,14 +225,14 @@ public class QueryBenchmarks
     private static int ExecuteMiniComponentQuerySpanSimd(MiniQuery query, MiniComponentType positionType, MiniComponentType velocityType)
     {
         var checksum = 0;
-        var chunks = query.GetChunkSpan();
+        var archetypes = query.GetArchetypeSpan();
         var vecSize = Vector<int>.Count;
         Span<int> gatherBuf = stackalloc int[vecSize];
-        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        for (var archetypeIndex = 0; archetypeIndex < archetypes.Length; archetypeIndex++)
         {
-            var chunk = chunks[chunkIndex];
-            var positions = chunk.GetComponentSpan<Position>(positionType);
-            var velocities = chunk.GetComponentSpan<Velocity>(velocityType);
+            var archetype = archetypes[archetypeIndex];
+            var positions = archetype.GetComponentSpan<Position>(positionType);
+            var velocities = archetype.GetComponentSpan<Velocity>(velocityType);
             var posData = MemoryMarshal.Cast<Position, int>(positions);
             var velData = MemoryMarshal.Cast<Velocity, int>(velocities);
             var count = positions.Length;
@@ -268,25 +268,20 @@ public class QueryBenchmarks
     private static int ExecuteMiniComponentQueryRowWise(MiniQuery query, MiniComponentType positionType, MiniComponentType velocityType)
     {
         var checksum = 0;
-        var chunks = query.GetChunkSpan();
-        Span<MiniComponentType> componentTypes = stackalloc MiniComponentType[2] { positionType, velocityType };
-        Span<int> columnIndices = stackalloc int[2];
+        var archetypes = query.GetArchetypeSpan();
 
-        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        for (var archetypeIndex = 0; archetypeIndex < archetypes.Length; archetypeIndex++)
         {
-            var chunk = chunks[chunkIndex];
-            if (!chunk.TryGetColumnIndices(componentTypes, columnIndices))
-            {
+            var archetype = archetypes[archetypeIndex];
+            if (!archetype.TryGetComponentIndex(positionType, out var positionColumnIndex))
                 continue;
-            }
+            if (!archetype.TryGetComponentIndex(velocityType, out var velocityColumnIndex))
+                continue;
 
-            var positionColumnIndex = columnIndices[0];
-            var velocityColumnIndex = columnIndices[1];
-
-            for (var row = 0; row < chunk.Count; row++)
+            for (var row = 0; row < archetype.EntityCount; row++)
             {
-                var position = chunk.GetComponentAt<Position>(positionColumnIndex, row);
-                var velocity = chunk.GetComponentAt<Velocity>(velocityColumnIndex, row);
+                var position = archetype.GetComponentAt<Position>(positionColumnIndex, row);
+                var velocity = archetype.GetComponentAt<Velocity>(velocityColumnIndex, row);
                 checksum += position.X + velocity.Y;
             }
         }
@@ -297,12 +292,12 @@ public class QueryBenchmarks
     private static int ExecuteMiniComponentQuerySpan(MiniQuery query, MiniComponentType positionType, MiniComponentType velocityType)
     {
         var checksum = 0;
-        var chunks = query.GetChunkSpan();
-        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        var archetypes = query.GetArchetypeSpan();
+        for (var archetypeIndex = 0; archetypeIndex < archetypes.Length; archetypeIndex++)
         {
-            var chunk = chunks[chunkIndex];
-            var positions = chunk.GetComponentSpan<Position>(positionType);
-            var velocities = chunk.GetComponentSpan<Velocity>(velocityType);
+            var archetype = archetypes[archetypeIndex];
+            var positions = archetype.GetComponentSpan<Position>(positionType);
+            var velocities = archetype.GetComponentSpan<Velocity>(velocityType);
             for (var row = 0; row < positions.Length; row++)
             {
                 checksum += positions[row].X + velocities[row].Y;

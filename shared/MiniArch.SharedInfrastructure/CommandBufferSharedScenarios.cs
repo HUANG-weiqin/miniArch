@@ -293,7 +293,7 @@ public static class CommandBufferSharedScenarios
         var snapshots = new List<string>();
         var description = new QueryDescription();
         var query = MiniArch.Core.Query.Create(world, in description);
-        var chunks = query.GetChunkSpan();
+        var chunks = query.GetArchetypeSpan();
 
         for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
         {
@@ -416,7 +416,8 @@ public static class CommandBufferSharedScenarios
             return false;
         }
 
-        component = archetype.GetComponent<T>(componentType, location.RowIndex);
+        var columnIndex = archetype.GetComponentIndex(componentType);
+        component = archetype.GetComponentAt<T>(columnIndex, location.RowIndex);
         return true;
     }
 }

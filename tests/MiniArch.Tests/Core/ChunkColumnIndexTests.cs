@@ -1,6 +1,4 @@
 using MiniArch.Core;
-using System.Reflection;
-using Xunit.Abstractions;
 
 namespace MiniArchTests.Core;
 
@@ -10,53 +8,37 @@ public sealed class ChunkColumnIndexTests
     private readonly record struct Velocity(int X, int Y);
     private readonly record struct Health(int Value);
 
-    private readonly ITestOutputHelper _output;
-
-    public ChunkColumnIndexTests(ITestOutputHelper output)
-    {
-        _output = output;
-    }
-
     [Fact]
-    public void TryGetColumnIndices_SingleComponent_ReturnsSuccess()
+    public void TryGetComponentIndex_SingleComponent_ReturnsSuccess()
     {
         var registry = new ComponentRegistry();
         var position = registry.GetOrCreate<Position>();
 
         var signature = new Signature(position);
-        var typedChunk = CreateTypedChunk(signature, new[] { typeof(Position) }, capacity: 4);
+        var archetype = CreateArchetype(signature, new[] { typeof(Position) }, capacity: 4);
 
-        Span<int> indices = stackalloc int[1];
-        bool success = typedChunk.TryGetColumnIndices(
-            new ReadOnlySpan<ComponentType>(in position),
-            indices);
-
-        Assert.True(success);
-        Assert.Equal(0, indices[0]);
+        Assert.True(archetype.TryGetComponentIndex(position, out var index));
+        Assert.Equal(0, index);
     }
 
     [Fact]
-    public void TryGetColumnIndices_TwoComponents_ReturnsSuccess()
+    public void TryGetComponentIndex_TwoComponents_ReturnsSuccess()
     {
         var registry = new ComponentRegistry();
         var position = registry.GetOrCreate<Position>();
         var velocity = registry.GetOrCreate<Velocity>();
 
         var signature = new Signature(position, velocity);
-        var typedChunk = CreateTypedChunk(signature, new[] { typeof(Position), typeof(Velocity) }, capacity: 4);
+        var archetype = CreateArchetype(signature, new[] { typeof(Position), typeof(Velocity) }, capacity: 4);
 
-        Span<int> indices = stackalloc int[2];
-        bool success = typedChunk.TryGetColumnIndices(
-            new ComponentType[] { position, velocity },
-            indices);
-
-        Assert.True(success);
-        Assert.Equal(0, indices[0]);
-        Assert.Equal(1, indices[1]);
+        Assert.True(archetype.TryGetComponentIndex(position, out var idx0));
+        Assert.True(archetype.TryGetComponentIndex(velocity, out var idx1));
+        Assert.Equal(0, idx0);
+        Assert.Equal(1, idx1);
     }
 
     [Fact]
-    public void TryGetColumnIndices_ThreeComponents_ReturnsSuccess()
+    public void TryGetComponentIndex_ThreeComponents_ReturnsSuccess()
     {
         var registry = new ComponentRegistry();
         var position = registry.GetOrCreate<Position>();
@@ -64,87 +46,50 @@ public sealed class ChunkColumnIndexTests
         var health = registry.GetOrCreate<Health>();
 
         var signature = new Signature(position, velocity, health);
-        var typedChunk = CreateTypedChunk(signature, new[] { typeof(Position), typeof(Velocity), typeof(Health) }, capacity: 4);
+        var archetype = CreateArchetype(signature, new[] { typeof(Position), typeof(Velocity), typeof(Health) }, capacity: 4);
 
-        Span<int> indices = stackalloc int[3];
-        bool success = typedChunk.TryGetColumnIndices(
-            new ComponentType[] { position, velocity, health },
-            indices);
-
-        Assert.True(success);
-        Assert.Equal(0, indices[0]);
-        Assert.Equal(1, indices[1]);
-        Assert.Equal(2, indices[2]);
+        Assert.True(archetype.TryGetComponentIndex(position, out var idx0));
+        Assert.True(archetype.TryGetComponentIndex(velocity, out var idx1));
+        Assert.True(archetype.TryGetComponentIndex(health, out var idx2));
+        Assert.Equal(0, idx0);
+        Assert.Equal(1, idx1);
+        Assert.Equal(2, idx2);
     }
 
     [Fact]
-    public void TryGetColumnIndices_MissingComponent_ReturnsFailure()
+    public void TryGetComponentIndex_MissingComponent_ReturnsFailure()
     {
         var registry = new ComponentRegistry();
         var position = registry.GetOrCreate<Position>();
         var velocity = registry.GetOrCreate<Velocity>();
 
         var signature = new Signature(position, velocity);
-        var typedChunk = CreateTypedChunk(signature, new[] { typeof(Position), typeof(Velocity) }, capacity: 4);
+        var archetype = CreateArchetype(signature, new[] { typeof(Position), typeof(Velocity) }, capacity: 4);
 
         var nonExistent = new ComponentType(typeof(NonExistentComponent).GetHashCode());
-        Span<int> indices = stackalloc int[2];
-        bool success = typedChunk.TryGetColumnIndices(
-            new ComponentType[] { position, nonExistent },
-            indices);
-
-        Assert.False(success);
+        Assert.False(archetype.TryGetComponentIndex(nonExistent, out _));
     }
 
     [Fact]
-    public void TryGetColumnIndices_MismatchedLengths_ThrowsArgumentException()
+    public void TryGetComponentIndex_PartialLookupDoesNotAffectOtherResults()
     {
         var registry = new ComponentRegistry();
         var position = registry.GetOrCreate<Position>();
         var velocity = registry.GetOrCreate<Velocity>();
 
         var signature = new Signature(position, velocity);
-        var typedChunk = CreateTypedChunk(signature, new[] { typeof(Position), typeof(Velocity) }, capacity: 4);
-
-        Assert.Throws<ArgumentException>(() =>
-        {
-            var nonExistent = new ComponentType(typeof(NonExistentComponent).GetHashCode());
-            var componentTypes = new ComponentType[] { position, velocity, nonExistent };
-            Span<int> indices = stackalloc int[2];
-            typedChunk.TryGetColumnIndices(
-                componentTypes,
-                indices);
-        });
-    }
-
-    [Fact]
-    public void TryGetColumnIndices_PartialFailureDoesNotModifyOutput()
-    {
-        var registry = new ComponentRegistry();
-        var position = registry.GetOrCreate<Position>();
-        var velocity = registry.GetOrCreate<Velocity>();
-
-        var signature = new Signature(position, velocity);
-        var typedChunk = CreateTypedChunk(signature, new[] { typeof(Position), typeof(Velocity) }, capacity: 4);
+        var archetype = CreateArchetype(signature, new[] { typeof(Position), typeof(Velocity) }, capacity: 4);
 
         var nonExistent = new ComponentType(typeof(NonExistentComponent).GetHashCode());
-        Span<int> indices = stackalloc int[2];
-        
-        indices[0] = 99;
-        indices[1] = 88;
 
-        bool success = typedChunk.TryGetColumnIndices(
-            new ComponentType[] { position, nonExistent },
-            indices);
-
-        Assert.False(success);
-        Assert.Equal(0, indices[0]);
-        Assert.Equal(88, indices[1]);
+        Assert.True(archetype.TryGetComponentIndex(position, out var idx0));
+        Assert.False(archetype.TryGetComponentIndex(nonExistent, out _));
+        Assert.Equal(0, idx0);
     }
 
-    private static Chunk CreateTypedChunk(Signature signature, Type[] componentTypes, int capacity)
+    private static Archetype CreateArchetype(Signature signature, Type[] componentTypes, int capacity)
     {
-        return new Archetype(signature, componentTypes, capacity: capacity).GetChunkSpan()[0];
+        return new Archetype(signature, componentTypes, capacity: capacity);
     }
 
     private readonly record struct NonExistentComponent(int Value);

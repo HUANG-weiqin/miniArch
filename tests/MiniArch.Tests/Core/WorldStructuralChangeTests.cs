@@ -36,7 +36,7 @@ public sealed class WorldStructuralChangeTests
         Assert.True(world.TryGetLocation(entity, out var after));
         Assert.Same(before.Archetype, after.Archetype);
         Assert.Equal(before.RowIndex, after.RowIndex);
-        Assert.Equal(new Position(9, 9), after.Archetype.GetComponent<Position>(ComponentRegistry.Shared.GetOrCreate<Position>(), after.RowIndex));
+        Assert.Equal(new Position(9, 9), after.Archetype.GetComponentAt<Position>(after.Archetype.GetComponentIndex(ComponentRegistry.Shared.GetOrCreate<Position>()), after.RowIndex));
     }
 
     [Fact]
@@ -58,8 +58,8 @@ public sealed class WorldStructuralChangeTests
         Assert.Same(before.Archetype, after.Archetype);
         Assert.Equal(before.RowIndex, after.RowIndex);
 
-        Assert.Equal(new Position(9, 9), after.Archetype.GetComponent<Position>(positionId, after.RowIndex));
-        Assert.Equal(new Velocity(3, 4), after.Archetype.GetComponent<Velocity>(velocityId, after.RowIndex));
+        Assert.Equal(new Position(9, 9), after.Archetype.GetComponentAt<Position>(after.Archetype.GetComponentIndex(positionId), after.RowIndex));
+        Assert.Equal(new Velocity(3, 4), after.Archetype.GetComponentAt<Velocity>(after.Archetype.GetComponentIndex(velocityId), after.RowIndex));
     }
 
     [Fact]
@@ -142,14 +142,14 @@ public sealed class WorldStructuralChangeTests
         Assert.True(HasComponent<Velocity>(world, entity));
         Assert.Equal(new Position(1, 2), GetComponentValue(world, entity));
         Assert.Equal(new Velocity(3, 4), world.TryGetLocation(entity, out var info)
-            ? info.Archetype.GetComponent<Velocity>(ComponentRegistry.Shared.GetOrCreate<Velocity>(), info.RowIndex)
+            ? info.Archetype.GetComponentAt<Velocity>(info.Archetype.GetComponentIndex(ComponentRegistry.Shared.GetOrCreate<Velocity>()), info.RowIndex)
             : default);
     }
 
     private static Position GetComponentValue(World world, Entity entity)
     {
         Assert.True(world.TryGetLocation(entity, out var info));
-        return info.Archetype.GetComponent<Position>(ComponentRegistry.Shared.GetOrCreate<Position>(), info.RowIndex);
+        return info.Archetype.GetComponentAt<Position>(info.Archetype.GetComponentIndex(ComponentRegistry.Shared.GetOrCreate<Position>()), info.RowIndex);
     }
 
     private static bool HasComponent<T>(World world, Entity entity)

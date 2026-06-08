@@ -128,7 +128,7 @@ public sealed class TrickyEdgeCaseTests
         Assert.Equal(new Position(0, 0), p);
 
         Assert.True(world.TryGetLocation(entity, out var info));
-        Assert.Equal(new Position(0, 0), info.Archetype.GetComponent<Position>(positionId, info.RowIndex));
+        Assert.Equal(new Position(0, 0), info.Archetype.GetComponentAt<Position>(info.Archetype.GetComponentIndex(positionId), info.RowIndex));
     }
 
     [Fact]
@@ -143,7 +143,7 @@ public sealed class TrickyEdgeCaseTests
 
         Assert.True(world.TryGetLocation(entity, out var info));
         Assert.Single(info.Archetype.Signature);
-        Assert.Equal(new Position(99, 99), info.Archetype.GetComponent<Position>(positionId, info.RowIndex));
+        Assert.Equal(new Position(99, 99), info.Archetype.GetComponentAt<Position>(info.Archetype.GetComponentIndex(positionId), info.RowIndex));
     }
 
     [Fact]
@@ -225,9 +225,9 @@ public sealed class TrickyEdgeCaseTests
         world.Set(entity, new Health(200));
 
         Assert.True(world.TryGetLocation(entity, out var info));
-        Assert.Equal(new Position(10, 20), info.Archetype.GetComponent<Position>(positionId, info.RowIndex));
-        Assert.Equal(new Velocity(3, 4), info.Archetype.GetComponent<Velocity>(velocityId, info.RowIndex));
-        Assert.Equal(new Health(200), info.Archetype.GetComponent<Health>(healthId, info.RowIndex));
+        Assert.Equal(new Position(10, 20), info.Archetype.GetComponentAt<Position>(info.Archetype.GetComponentIndex(positionId), info.RowIndex));
+        Assert.Equal(new Velocity(3, 4), info.Archetype.GetComponentAt<Velocity>(info.Archetype.GetComponentIndex(velocityId), info.RowIndex));
+        Assert.Equal(new Health(200), info.Archetype.GetComponentAt<Health>(info.Archetype.GetComponentIndex(healthId), info.RowIndex));
     }
 
     [Fact]
@@ -354,7 +354,7 @@ public sealed class TrickyEdgeCaseTests
         // The matching archetype's chunk remains in the snapshot even when empty.
         // This is harmless: all iterator paths skip Count == 0 chunks.
         Assert.Single(query.MatchedChunks);
-        Assert.Equal(0, query.MatchedChunks[0].Count);
+        Assert.Equal(0, query.MatchedChunks[0].EntityCount);
     }
 
     [Fact]
@@ -373,11 +373,11 @@ public sealed class TrickyEdgeCaseTests
         Assert.Equal(entities.Length, CountEntities(query));
 
         var seen = new List<Entity>();
-        foreach (ref readonly var chunk in query.GetChunkSpan())
+        foreach (ref readonly var archetype in query.GetArchetypeSpan())
         {
-            for (var row = 0; row < chunk.Count; row++)
+            for (var row = 0; row < archetype.EntityCount; row++)
             {
-                seen.Add(chunk.GetEntity(row));
+                seen.Add(archetype.GetEntity(row));
             }
         }
 
@@ -533,12 +533,12 @@ public sealed class TrickyEdgeCaseTests
         world.Remove<Position>(entities[0]);
 
         var remaining = new List<Entity>();
-        foreach (ref readonly var chunk in query.GetChunkSpan())
+        foreach (ref readonly var archetype in query.GetArchetypeSpan())
         {
-            Assert.True(chunk.Count > 0);
-            for (var row = 0; row < chunk.Count; row++)
+            Assert.True(archetype.EntityCount > 0);
+            for (var row = 0; row < archetype.EntityCount; row++)
             {
-                remaining.Add(chunk.GetEntity(row));
+                remaining.Add(archetype.GetEntity(row));
             }
         }
 
@@ -653,7 +653,7 @@ public sealed class TrickyEdgeCaseTests
 
         var description = new QueryDescription().With<Position>();
         var query = MiniQuery.Create(world, in description);
-        Assert.Equal(1, query.GetChunkSpan().Length);
+        Assert.Equal(1, query.GetArchetypeSpan().Length);
     }
 
     // ═══════════════════════════════════════════════════════
@@ -775,9 +775,9 @@ public sealed class TrickyEdgeCaseTests
     private static int CountEntities(MiniQuery query)
     {
         var total = 0;
-        foreach (ref readonly var chunk in query.GetChunkSpan())
+        foreach (ref readonly var archetype in query.GetArchetypeSpan())
         {
-            total += chunk.Count;
+            total += archetype.EntityCount;
         }
 
         return total;

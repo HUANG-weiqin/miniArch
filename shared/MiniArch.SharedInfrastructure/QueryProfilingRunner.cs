@@ -313,10 +313,10 @@ public static class QueryProfilingRunner
     private static int Execute(MiniQuery query)
     {
         var checksum = 0;
-        var chunks = query.GetChunkSpan();
-        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        var archetypes = query.GetArchetypeSpan();
+        for (var archetypeIndex = 0; archetypeIndex < archetypes.Length; archetypeIndex++)
         {
-            var entities = chunks[chunkIndex].GetEntities();
+            var entities = archetypes[archetypeIndex].GetEntities();
             for (var row = 0; row < entities.Length; row++)
             {
                 checksum += entities[row].Id;
@@ -340,10 +340,10 @@ public static class QueryProfilingRunner
     private static int ExecuteEntityChecksum(MiniQuery query)
     {
         var checksum = 0;
-        var chunks = query.GetChunkSpan();
-        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        var archetypes = query.GetArchetypeSpan();
+        for (var archetypeIndex = 0; archetypeIndex < archetypes.Length; archetypeIndex++)
         {
-            var entities = chunks[chunkIndex].GetEntities();
+            var entities = archetypes[archetypeIndex].GetEntities();
             for (var row = 0; row < entities.Length; row++)
             {
                 checksum += entities[row].Id;
@@ -356,25 +356,20 @@ public static class QueryProfilingRunner
     private static int ExecuteComponentRowWiseChecksum(MiniQuery query, MiniComponentType positionType, MiniComponentType velocityType)
     {
         var checksum = 0;
-        var chunks = query.GetChunkSpan();
-        Span<MiniComponentType> componentTypes = stackalloc MiniComponentType[2] { positionType, velocityType };
-        Span<int> columnIndices = stackalloc int[2];
+        var archetypes = query.GetArchetypeSpan();
 
-        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        for (var archetypeIndex = 0; archetypeIndex < archetypes.Length; archetypeIndex++)
         {
-            var chunk = chunks[chunkIndex];
-            if (!chunk.TryGetColumnIndices(componentTypes, columnIndices))
-            {
+            var archetype = archetypes[archetypeIndex];
+            if (!archetype.TryGetComponentIndex(positionType, out var positionColumnIndex))
                 continue;
-            }
+            if (!archetype.TryGetComponentIndex(velocityType, out var velocityColumnIndex))
+                continue;
 
-            var positionColumnIndex = columnIndices[0];
-            var velocityColumnIndex = columnIndices[1];
-
-            for (var row = 0; row < chunk.Count; row++)
+            for (var row = 0; row < archetype.EntityCount; row++)
             {
-                var position = chunk.GetComponentAt<Position>(positionColumnIndex, row);
-                var velocity = chunk.GetComponentAt<Velocity>(velocityColumnIndex, row);
+                var position = archetype.GetComponentAt<Position>(positionColumnIndex, row);
+                var velocity = archetype.GetComponentAt<Velocity>(velocityColumnIndex, row);
                 checksum += position.X + velocity.Y;
             }
         }
@@ -385,12 +380,12 @@ public static class QueryProfilingRunner
     private static int ExecuteComponentSpanChecksum(MiniQuery query, MiniComponentType positionType, MiniComponentType velocityType)
     {
         var checksum = 0;
-        var chunks = query.GetChunkSpan();
-        for (var chunkIndex = 0; chunkIndex < chunks.Length; chunkIndex++)
+        var archetypes = query.GetArchetypeSpan();
+        for (var archetypeIndex = 0; archetypeIndex < archetypes.Length; archetypeIndex++)
         {
-            var chunk = chunks[chunkIndex];
-            var positions = chunk.GetComponentSpan<Position>(positionType);
-            var velocities = chunk.GetComponentSpan<Velocity>(velocityType);
+            var archetype = archetypes[archetypeIndex];
+            var positions = archetype.GetComponentSpan<Position>(positionType);
+            var velocities = archetype.GetComponentSpan<Velocity>(velocityType);
             for (var row = 0; row < positions.Length; row++)
             {
                 checksum += positions[row].X + velocities[row].Y;

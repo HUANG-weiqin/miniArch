@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using Friflo.Engine.ECS;
 using MiniArch;
-using MiniArch.Core;
 using FrifloEntity = Friflo.Engine.ECS.Entity;
 using MiniEntity = MiniArch.Entity;
 

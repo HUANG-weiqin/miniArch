@@ -193,7 +193,7 @@ public sealed class WorldCloneTests
         Assert.True(world.TryGetLocation(entity, out var location));
 
         var componentType = ComponentRegistry.Shared.GetOrCreate<T>();
-        return location.Archetype.GetComponent<T>(componentType, location.RowIndex);
+        return location.Archetype.GetComponentAt<T>(location.Archetype.GetComponentIndex(componentType), location.RowIndex);
     }
 }
 

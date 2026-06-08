@@ -72,15 +72,15 @@ public sealed class ComplexQueryBenchmarkScenarioTests
         var query = MiniQuery.Create(state.World, in description);
 
         var inspectedChunkCount = 0;
-        foreach (var chunk in query.Chunks)
+        foreach (var archetype in query.Chunks)
         {
-            if (chunk.Count == 0)
+            if (archetype.EntityCount == 0)
             {
                 continue;
             }
 
             inspectedChunkCount++;
-            var entity = chunk.GetEntity(0);
+            var entity = archetype.GetEntity(0);
             Assert.True(state.World.TryGetLocation(entity, out var info));
             Assert.True(info.Archetype.Signature.Count >= 8);
         }
@@ -116,9 +116,9 @@ public sealed class ComplexQueryBenchmarkScenarioTests
     private static int CountEntities(MiniQuery query)
     {
         var total = 0;
-        foreach (var chunk in query.Chunks)
+        foreach (var archetype in query.Chunks)
         {
-            total += chunk.Count;
+            total += archetype.EntityCount;
         }
 
         return total;

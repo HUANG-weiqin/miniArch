@@ -6,7 +6,7 @@ namespace MiniArch.Core;
 using MiniArch;
 
 /// <summary>
-/// Cached archetype and chunk query with incremental append-only invalidation.
+/// Cached archetype query with incremental append-only invalidation.
 /// Archetypes are never removed, so we only scan newly added ones.
 /// </summary>
 internal sealed class Query
@@ -22,7 +22,6 @@ internal sealed class Query
     private readonly ComponentMask _anyMask;
 
     private Archetype[] _snapshotArchetypes = [];
-    private Chunk[] _snapshotChunks = [];
     private ChunkView[] _snapshotChunkViews = [];
     private int _snapshotCount;
     private int _lastArchetypeCount = -1;
@@ -56,28 +55,24 @@ internal sealed class Query
         }
     }
 
-    internal IReadOnlyList<Chunk> MatchedChunks
-    {
-        get
-        {
-            EnsureRefreshed();
-            return new ArraySegment<Chunk>(_snapshotChunks, 0, _snapshotCount);
-        }
-    }
+    /// <summary>
+    /// Compatibility alias: returns matched archetypes as a read-only list.
+    /// </summary>
+    internal IReadOnlyList<Archetype> MatchedChunks => MatchedArchetypes;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ReadOnlySpan<Chunk> GetChunkSpan()
+    internal ReadOnlySpan<Archetype> GetArchetypeSpan()
     {
         EnsureRefreshed();
-        return _snapshotChunks.AsSpan(0, _snapshotCount);
+        return _snapshotArchetypes.AsSpan(0, _snapshotCount);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal Chunk[] GetChunkArray(out int count)
+    internal Archetype[] GetArchetypeArray(out int count)
     {
         EnsureRefreshed();
         count = _snapshotCount;
-        return _snapshotChunks;
+        return _snapshotArchetypes;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -87,17 +82,10 @@ internal sealed class Query
         return _snapshotChunkViews.AsSpan(0, _snapshotCount);
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ReadOnlySpan<Archetype> GetArchetypeSpan()
-    {
-        EnsureRefreshed();
-        return _snapshotArchetypes.AsSpan(0, _snapshotCount);
-    }
-
     /// <summary>
-    /// Gets a chunk enumerable.
+    /// Gets an archetype enumerable.
     /// </summary>
-    internal ChunkEnumerable Chunks => new(this);
+    internal ArchetypeEnumerable Chunks => new(this);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureRefreshed()
@@ -146,7 +134,6 @@ internal sealed class Query
         {
             var newLen = Math.Max(totalCount, _snapshotArchetypes.Length == 0 ? 4 : _snapshotArchetypes.Length * 2);
             Array.Resize(ref _snapshotArchetypes, newLen);
-            Array.Resize(ref _snapshotChunks, newLen);
             Array.Resize(ref _snapshotChunkViews, newLen);
         }
 
@@ -158,7 +145,6 @@ internal sealed class Query
             if (Matches(a))
             {
                 _snapshotArchetypes[idx] = a;
-                _snapshotChunks[idx] = a.GetChunkSpan()[0];
                 _snapshotChunkViews[idx] = new ChunkView(a);
                 idx++;
             }

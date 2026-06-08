@@ -1,5 +1,4 @@
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 
 namespace MiniArch.Core;
 
@@ -10,14 +9,13 @@ namespace MiniArch.Core;
 /// </summary>
 internal sealed partial class Archetype
 {
-    // --- Storage (was in Chunk) ---
+    // --- Storage ---
     private Entity[] _entities;
     private byte[] _data;
     private int[] _columnByteOffsets;
     private int[] _elementSizes;
     private int _count;
     private int _capacity;
-    private Chunk _chunkView;
 
     // --- Archetype metadata ---
     private readonly Signature _signature;
@@ -41,7 +39,6 @@ internal sealed partial class Archetype
         _componentIdToColumnIndex = ComponentColumnMap.Build(signature);
         _entities = new Entity[capacity];
         (_data, _columnByteOffsets, _elementSizes) = CreateStorage(signature, componentTypes, capacity);
-        _chunkView = new Chunk(this);
     }
 
     /// <summary>
@@ -63,14 +60,6 @@ internal sealed partial class Archetype
     /// Gets the component types that define this archetype's signature.
     /// </summary>
     internal IReadOnlyList<Type> ComponentTypes => _componentTypes;
-
-    /// <summary>
-    /// Returns a single-element span wrapping this archetype as a <see cref="Chunk"/>.
-    /// Maintains compatibility with query iterators that work over chunks.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ReadOnlySpan<Chunk> GetChunkSpan() =>
-        MemoryMarshal.CreateSpan(ref _chunkView, 1);
 
     internal bool TryGetAddDestination(ComponentType component, out Archetype? destination) =>
         TryGetCached(_addDestinationCache, component, out destination);
@@ -96,42 +85,8 @@ internal sealed partial class Archetype
         cache[id] = destination;
     }
 
-    // ================================================================
-    //  Capacity management
-    // ================================================================
-
-
     // .NET maximum array element count; avoids overflow in _capacity * 2.
     private const int ArrayMaxLength = 0x7FFFFFC7; // Array.MaxLength
-
-    // ================================================================
-    //  Entity operations
-    // ================================================================
-
-
-
-
-    // ================================================================
-    //  Entity access
-    // ================================================================
-
-
-
-
-    // ================================================================
-    //  Component access (column-based)
-    // ================================================================
-
-
-
-
-
-
-
-
-    // ================================================================
-    //  Component index resolution
-    // ================================================================
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool TryGetComponentIndex(ComponentType component, out int columnIndex)
@@ -147,7 +102,6 @@ internal sealed partial class Archetype
         return columnIndex >= 0;
     }
 
-
     internal int GetComponentIndex(ComponentType component)
     {
         if (TryGetComponentIndex(component, out var columnIndex))
@@ -159,50 +113,4 @@ internal sealed partial class Archetype
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal int GetComponentIndexFast(ComponentType component) =>
         _componentIdToColumnIndex[component.Value];
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal bool TryGetColumnIndices(ReadOnlySpan<ComponentType> components, Span<int> outIndices)
-    {
-        if (components.Length != outIndices.Length)
-            throw new ArgumentException("Output span length must match component count.", nameof(outIndices));
-
-        for (var i = 0; i < components.Length; i++)
-        {
-            if (!TryGetComponentIndex(components[i], out var columnIndex))
-                return false;
-
-            outIndices[i] = columnIndex;
-        }
-
-        return true;
-    }
-
-    // ================================================================
-    //  Cross-chunk (cross-archetype) copies
-    // ================================================================
-
-
-
-
-
-
-
-
-
-    // ================================================================
-    //  Row data copying
-    // ================================================================
-
-
-
-
-    // ================================================================
-    //  Private helpers
-    // ================================================================
-
-
-
-
-
-
 }
