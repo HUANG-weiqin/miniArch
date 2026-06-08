@@ -335,17 +335,16 @@ public static class MiniGameTickRunner
 
     public static void Initialize(MiniWorld world)
     {
-        var q = world.Query(AllEntitiesDesc).Advanced;
-        var chunks = q.GetChunkSpan();
         var total = 0;
-        foreach (var chunk in chunks)
+        foreach (var chunk in world.Query(AllEntitiesDesc).GetChunks())
             total += chunk.Count;
         _entityPool = new MiniArch.Entity[total];
         var idx = 0;
-        foreach (var chunk in chunks)
+        foreach (var chunk in world.Query(AllEntitiesDesc).GetChunks())
         {
+            var entities = chunk.GetEntities();
             for (var row = 0; row < chunk.Count; row++)
-                _entityPool[idx++] = chunk.GetEntity(row);
+                _entityPool[idx++] = entities[row];
         }
         _entityCount = total;
         _debuffIndex = 0;
@@ -373,15 +372,10 @@ public static class MiniGameTickRunner
     private static int Movement(MiniWorld world)
     {
         var checksum = 0;
-        var q = world.Query(MovementDesc).Advanced;
-        var posType = MiniArch.Core.Component<Position>.ComponentType;
-        var velType = MiniArch.Core.Component<Velocity>.ComponentType;
-        var chunks = q.GetChunkSpan();
-        for (var i = 0; i < chunks.Length; i++)
+        foreach (var chunk in world.Query(MovementDesc).GetChunks())
         {
-            var chunk = chunks[i];
-            var pos = chunk.GetComponentSpan<Position>(posType);
-            var vel = chunk.GetComponentSpan<Velocity>(velType);
+            var pos = chunk.GetSpan<Position>();
+            var vel = chunk.GetSpan<Velocity>();
             for (var row = 0; row < chunk.Count; row++)
             {
                 pos[row].X += vel[row].X; pos[row].Y += vel[row].Y; pos[row].Z += vel[row].Z;
@@ -395,13 +389,9 @@ public static class MiniGameTickRunner
     private static int ManaRegen(MiniWorld world)
     {
         var checksum = 0;
-        var q = world.Query(ManaDesc).Advanced;
-        var manaType = MiniArch.Core.Component<Mana>.ComponentType;
-        var chunks = q.GetChunkSpan();
-        for (var i = 0; i < chunks.Length; i++)
+        foreach (var chunk in world.Query(ManaDesc).GetChunks())
         {
-            var chunk = chunks[i];
-            var mana = chunk.GetComponentSpan<Mana>(manaType);
+            var mana = chunk.GetSpan<Mana>();
             for (var row = 0; row < chunk.Count; row++)
             {
                 if (mana[row].Current < mana[row].Max)
@@ -416,15 +406,10 @@ public static class MiniGameTickRunner
     private static int RangeCheck(MiniWorld world)
     {
         var checksum = 0;
-        var q = world.Query(AttackRangeDesc).Advanced;
-        var posType = MiniArch.Core.Component<Position>.ComponentType;
-        var rangeType = MiniArch.Core.Component<AttackRange>.ComponentType;
-        var chunks = q.GetChunkSpan();
-        for (var i = 0; i < chunks.Length; i++)
+        foreach (var chunk in world.Query(AttackRangeDesc).GetChunks())
         {
-            var chunk = chunks[i];
-            var pos = chunk.GetComponentSpan<Position>(posType);
-            var range = chunk.GetComponentSpan<AttackRange>(rangeType);
+            var pos = chunk.GetSpan<Position>();
+            var range = chunk.GetSpan<AttackRange>();
             for (var row = 0; row < chunk.Count; row++)
                 checksum += (int)(pos[row].X * pos[row].Z + range[row].Value);
         }
@@ -435,13 +420,9 @@ public static class MiniGameTickRunner
     private static int StaminaRegen(MiniWorld world)
     {
         var checksum = 0;
-        var q = world.Query(StaminaDesc).Advanced;
-        var stamType = MiniArch.Core.Component<Stamina>.ComponentType;
-        var chunks = q.GetChunkSpan();
-        for (var i = 0; i < chunks.Length; i++)
+        foreach (var chunk in world.Query(StaminaDesc).GetChunks())
         {
-            var chunk = chunks[i];
-            var stam = chunk.GetComponentSpan<Stamina>(stamType);
+            var stam = chunk.GetSpan<Stamina>();
             for (var row = 0; row < chunk.Count; row++)
             {
                 if (stam[row].Current < stam[row].Max)
@@ -456,17 +437,11 @@ public static class MiniGameTickRunner
     private static int UpdateTransforms(MiniWorld world)
     {
         var checksum = 0;
-        var q = world.Query(TransformDesc).Advanced;
-        var posType = MiniArch.Core.Component<Position>.ComponentType;
-        var rotType = MiniArch.Core.Component<Rotation>.ComponentType;
-        var scaleType = MiniArch.Core.Component<Scale>.ComponentType;
-        var chunks = q.GetChunkSpan();
-        for (var i = 0; i < chunks.Length; i++)
+        foreach (var chunk in world.Query(TransformDesc).GetChunks())
         {
-            var chunk = chunks[i];
-            var pos = chunk.GetComponentSpan<Position>(posType);
-            var rot = chunk.GetComponentSpan<Rotation>(rotType);
-            var scale = chunk.GetComponentSpan<Scale>(scaleType);
+            var pos = chunk.GetSpan<Position>();
+            var rot = chunk.GetSpan<Rotation>();
+            var scale = chunk.GetSpan<Scale>();
             for (var row = 0; row < chunk.Count; row++)
                 checksum += (int)(pos[row].X + rot[row].Yaw + scale[row].X);
         }
@@ -476,13 +451,12 @@ public static class MiniGameTickRunner
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static int RemoveDebuffs(MiniWorld world)
     {
-        var q = world.Query(DebuffDesc).Advanced;
-        var chunks = q.GetChunkSpan();
         var total = 0;
-        foreach (var chunk in chunks)
+        foreach (var chunk in world.Query(DebuffDesc).GetChunks())
         {
+            var entities = chunk.GetEntities();
             for (var row = 0; row < chunk.Count; row++)
-                DebuffScratch[total++] = chunk.GetEntity(row);
+                DebuffScratch[total++] = entities[row];
         }
         for (var i = 0; i < total; i++)
             world.Remove<Debuff>(DebuffScratch[i]);
@@ -537,13 +511,9 @@ public static class MiniGameTickRunner
     private static int ProcessDamageEvents(MiniWorld world)
     {
         var checksum = 0;
-        var q = world.Query(HealthDesc).Advanced;
-        var healthType = MiniArch.Core.Component<Health>.ComponentType;
-        var chunks = q.GetChunkSpan();
-        for (var i = 0; i < chunks.Length; i++)
+        foreach (var chunk in world.Query(HealthDesc).GetChunks())
         {
-            var chunk = chunks[i];
-            var health = chunk.GetComponentSpan<Health>(healthType);
+            var health = chunk.GetSpan<Health>();
             for (var row = 0; row < chunk.Count; row++)
             {
                 health[row].Current -= 1;
@@ -556,14 +526,12 @@ public static class MiniGameTickRunner
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static int CleanupDamageEvents(MiniWorld world)
     {
-        var q = world.Query(DamageEventDesc).Advanced;
-        var chunks = q.GetChunkSpan();
         var total = 0;
-        for (var i = 0; i < chunks.Length; i++)
+        foreach (var chunk in world.Query(DamageEventDesc).GetChunks())
         {
-            var chunk = chunks[i];
+            var entities = chunk.GetEntities();
             for (var row = 0; row < chunk.Count; row++)
-                DestroyScratch[total++] = chunk.GetEntity(row);
+                DestroyScratch[total++] = entities[row];
         }
         for (var i = 0; i < total; i++)
             world.Destroy(DestroyScratch[i]);
@@ -574,13 +542,9 @@ public static class MiniGameTickRunner
     private static int Regen(MiniWorld world)
     {
         var checksum = 0;
-        var q = world.Query(HealthDesc).Advanced;
-        var healthType = MiniArch.Core.Component<Health>.ComponentType;
-        var chunks = q.GetChunkSpan();
-        for (var i = 0; i < chunks.Length; i++)
+        foreach (var chunk in world.Query(HealthDesc).GetChunks())
         {
-            var chunk = chunks[i];
-            var health = chunk.GetComponentSpan<Health>(healthType);
+            var health = chunk.GetSpan<Health>();
             for (var row = 0; row < chunk.Count; row++)
             {
                 if (health[row].Current < health[row].Max)

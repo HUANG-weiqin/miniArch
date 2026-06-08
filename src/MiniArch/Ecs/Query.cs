@@ -3,7 +3,8 @@ using System.Buffers;
 namespace MiniArch;
 
 /// <summary>
-/// Entity-only query facade that supports direct foreach enumeration.
+/// Entity-only query facade that supports direct foreach enumeration
+/// and chunk-level batch access.
 /// </summary>
 public readonly struct Query
 {
@@ -17,7 +18,7 @@ public readonly struct Query
     /// <summary>
     /// Gets the underlying advanced query.
     /// </summary>
-    public MiniArch.Core.Query Advanced => _query;
+    internal MiniArch.Core.Query Advanced => _query;
 
     /// <summary>
     /// Returns the struct enumerator used by foreach.
@@ -41,6 +42,36 @@ public readonly struct Query
         ArgumentNullException.ThrowIfNull(comparison);
         return OrderBy(Comparer<Entity>.Create(comparison));
     }
+
+    // ================================================================
+    //  Batch / chunk-level API (replaces .Advanced access)
+    // ================================================================
+
+    /// <summary>
+    /// Gets a chunk enumerable for batch component access.
+    /// Use <c>foreach (var chunk in query.GetChunks())</c>.
+    /// </summary>
+    public ChunkViewEnumerable GetChunks() => new(_query);
+
+    /// <summary>
+    /// Gets the required signature.
+    /// </summary>
+    public MiniArch.Core.Signature RequiredSignature => _query.RequiredSignature;
+
+    /// <summary>
+    /// Gets the excluded signature.
+    /// </summary>
+    public MiniArch.Core.Signature ExcludedSignature => _query.ExcludedSignature;
+
+    /// <summary>
+    /// Gets the any-match signature.
+    /// </summary>
+    public MiniArch.Core.Signature AnySignature => _query.AnySignature;
+
+    /// <summary>
+    /// Gets the refresh count.
+    /// </summary>
+    public int RefreshCount => _query.RefreshCount;
 }
 
 /// <summary>

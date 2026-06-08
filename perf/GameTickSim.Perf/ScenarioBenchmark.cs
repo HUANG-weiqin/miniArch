@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using DefaultEcs;
-using MiniArch.Core;
 using MiniArchBenchmarks.GameTick;
 
 namespace GameTickSim;
@@ -74,20 +73,15 @@ public static class ScenarioBenchmark
         // MiniArch
         using (var w = CreateMiniIterationWorld(entityCount))
         {
-            var posType = Component<Position>.ComponentType;
-            var velType = Component<Velocity>.ComponentType;
             var desc = new MiniArch.QueryDescription().With<Position>().With<Velocity>();
 
             int Tick()
             {
                 var checksum = 0;
-                var q = w.Query(desc).Advanced;
-                var chunks = q.GetChunkSpan();
-                for (var i = 0; i < chunks.Length; i++)
+                foreach (var chunk in w.Query(desc).GetChunks())
                 {
-                    var chunk = chunks[i];
-                    var pos = chunk.GetComponentSpan<Position>(posType);
-                    var vel = chunk.GetComponentSpan<Velocity>(velType);
+                    var pos = chunk.GetSpan<Position>();
+                    var vel = chunk.GetSpan<Velocity>();
                     for (var row = 0; row < chunk.Count; row++)
                     {
                         pos[row].X += vel[row].X;
@@ -159,18 +153,14 @@ public static class ScenarioBenchmark
         // MiniArch
         using (var w = CreateMiniHealthWorld(entityCount))
         {
-            var healthType = Component<Health>.ComponentType;
             var desc = new MiniArch.QueryDescription().With<Health>();
 
             int Tick()
             {
                 var checksum = 0;
-                var q = w.Query(desc).Advanced;
-                var chunks = q.GetChunkSpan();
-                for (var i = 0; i < chunks.Length; i++)
+                foreach (var chunk in w.Query(desc).GetChunks())
                 {
-                    var chunk = chunks[i];
-                    var health = chunk.GetComponentSpan<Health>(healthType);
+                    var health = chunk.GetSpan<Health>();
                     for (var row = 0; row < chunk.Count; row++)
                     {
                         health[row].Current -= 1;
@@ -250,14 +240,11 @@ public static class ScenarioBenchmark
             int Tick()
             {
                 // Remove all Debuff entities
-                var q = w.Query(desc).Advanced;
-                var chunks = q.GetChunkSpan();
                 var removeCount = 0;
-                for (var i = 0; i < chunks.Length; i++)
+                foreach (var chunk in w.Query(desc).GetChunks())
                 {
-                    var chunk = chunks[i];
                     for (var row = 0; row < chunk.Count; row++)
-                        scratch[removeCount++] = chunk.GetEntity(row);
+                        scratch[removeCount++] = chunk.GetEntities()[row];
                 }
                 for (var i = 0; i < removeCount; i++)
                     w.Remove<Debuff>(scratch[i]);
@@ -356,11 +343,9 @@ public static class ScenarioBenchmark
             var pool = new MiniArch.Entity[entityCount + opsPerTick * 2];
             var allDesc = new MiniArch.QueryDescription().With<Position>();
             var idx = 0;
-            var q = w.Query(allDesc).Advanced;
-            var chunks = q.GetChunkSpan();
-            foreach (var chunk in chunks)
+            foreach (var chunk in w.Query(allDesc).GetChunks())
                 for (var row = 0; row < chunk.Count; row++)
-                    pool[idx++] = chunk.GetEntity(row);
+                    pool[idx++] = chunk.GetEntities()[row];
             var count = idx;
 
             int Tick()
@@ -523,10 +508,6 @@ public static class ScenarioBenchmark
             var ebDesc = new MiniArch.QueryDescription().With<Position>().With<Damage>();
             var pbDesc = new MiniArch.QueryDescription().With<Position>().With<ProjectileTag>();
             var ptDesc = new MiniArch.QueryDescription().With<Position>().With<Lifetime>();
-            var moveQuery = w.Query(moveDesc).Advanced;
-            var ebQuery = w.Query(ebDesc).Advanced;
-            var pbQuery = w.Query(pbDesc).Advanced;
-            var ptQuery = w.Query(ptDesc).Advanced;
             var scratch = new MiniArch.Entity[8192];
             var rng = new Random(42);
             var tickCount = 0;
@@ -540,11 +521,16 @@ public static class ScenarioBenchmark
                 // 1. MoveAll (iterate)
                 t0 = Stopwatch.GetTimestamp();
                 {
-                    foreach (var row in moveQuery.EachSpan<Position, Velocity>())
+                    foreach (var chunk in w.Query(moveDesc).GetChunks())
                     {
-                        row.Get0().X += row.Get1().X;
-                        row.Get0().Y += row.Get1().Y;
-                        row.Get0().Z += row.Get1().Z;
+                        var pos = chunk.GetSpan<Position>();
+                        var vel = chunk.GetSpan<Velocity>();
+                        for (var row = 0; row < chunk.Count; row++)
+                        {
+                            pos[row].X += vel[row].X;
+                            pos[row].Y += vel[row].Y;
+                            pos[row].Z += vel[row].Z;
+                        }
                     }
                 }
                 t1 = Stopwatch.GetTimestamp();
@@ -587,7 +573,7 @@ public static class ScenarioBenchmark
                 // 4. Collide + cleanup enemy bullets
                 {
                     t0 = Stopwatch.GetTimestamp();
-                    var d = ScanPositionEachSpan(ebQuery, scratch, playerX, playerZ, hitRadiusSqPlayer, screenBound);
+                    var d = ScanPositionEachSpan(w, ebDesc, scratch, playerX, playerZ, hitRadiusSqPlayer, screenBound);
                     t1 = Stopwatch.GetTimestamp();
                     destroyScanNs += t1 - t0;
 
@@ -599,7 +585,7 @@ public static class ScenarioBenchmark
                 // 5. Collide + cleanup player bullets
                 {
                     t0 = Stopwatch.GetTimestamp();
-                    var d = ScanPositionEachSpan(pbQuery, scratch, bossX, bossZ, hitRadiusSqBoss, screenBound);
+                    var d = ScanPositionEachSpan(w, pbDesc, scratch, bossX, bossZ, hitRadiusSqBoss, screenBound);
                     t1 = Stopwatch.GetTimestamp();
                     destroyScanNs += t1 - t0;
 
@@ -611,7 +597,7 @@ public static class ScenarioBenchmark
                 // 6. Process particles
                 {
                     t0 = Stopwatch.GetTimestamp();
-                    var d = ScanLifetimeEachSpan(ptQuery, scratch);
+                    var d = ScanLifetimeEachSpan(w, ptDesc, scratch);
                     t1 = Stopwatch.GetTimestamp();
                     destroyScanNs += t1 - t0;
 
@@ -1002,18 +988,21 @@ public static class ScenarioBenchmark
     // Keep span scans out of the large BulletHell Tick method. Inlining these loops
     // causes poor JIT codegen from register pressure around the row ref struct.
     [MethodImpl(MethodImplOptions.NoInlining)]
-    static int ScanPositionEachSpan(MiniArch.Core.Query query, MiniArch.Entity[] scratch, float targetX, float targetZ, float hitRadiusSq, float screenBound)
+    static int ScanPositionEachSpan(MiniWorld w, MiniArch.QueryDescription desc, MiniArch.Entity[] scratch, float targetX, float targetZ, float hitRadiusSq, float screenBound)
     {
         var d = 0;
-        foreach (var row in query.EachSpan<Position>())
+        foreach (var chunk in w.Query(desc).GetChunks())
         {
-            ref var pos = ref row.Get0();
-            var dx = pos.X - targetX;
-            var dz = pos.Z - targetZ;
-            if (dx * dx + dz * dz < hitRadiusSq ||
-                Math.Abs(pos.X) > screenBound || Math.Abs(pos.Z) > screenBound)
+            var pos = chunk.GetSpan<Position>();
+            for (var row = 0; row < chunk.Count; row++)
             {
-                if (d < scratch.Length) scratch[d++] = row.Entity;
+                var dx = pos[row].X - targetX;
+                var dz = pos[row].Z - targetZ;
+                if (dx * dx + dz * dz < hitRadiusSq ||
+                    Math.Abs(pos[row].X) > screenBound || Math.Abs(pos[row].Z) > screenBound)
+                {
+                    if (d < scratch.Length) scratch[d++] = chunk.GetEntities()[row];
+                }
             }
         }
 
@@ -1021,16 +1010,19 @@ public static class ScenarioBenchmark
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    static int ScanLifetimeEachSpan(MiniArch.Core.Query query, MiniArch.Entity[] scratch)
+    static int ScanLifetimeEachSpan(MiniWorld w, MiniArch.QueryDescription desc, MiniArch.Entity[] scratch)
     {
         var d = 0;
-        foreach (var row in query.EachSpan<Lifetime>())
+        foreach (var chunk in w.Query(desc).GetChunks())
         {
-            ref var lt = ref row.Get0();
-            lt.Value -= 1f;
-            if (lt.Value <= 0 && d < scratch.Length)
+            var lt = chunk.GetSpan<Lifetime>();
+            for (var row = 0; row < chunk.Count; row++)
             {
-                scratch[d++] = row.Entity;
+                lt[row].Value -= 1f;
+                if (lt[row].Value <= 0 && d < scratch.Length)
+                {
+                    scratch[d++] = chunk.GetEntities()[row];
+                }
             }
         }
 
@@ -1243,12 +1235,10 @@ public static class ScenarioBenchmark
     {
         var pool = new MiniArch.Entity[count];
         var desc = new MiniArch.QueryDescription().With<Position>();
-        var q = w.Query(desc).Advanced;
-        var chunks = q.GetChunkSpan();
         var idx = 0;
-        foreach (var chunk in chunks)
+        foreach (var chunk in w.Query(desc).GetChunks())
             for (var row = 0; row < chunk.Count; row++)
-                pool[idx++] = chunk.GetEntity(row);
+                pool[idx++] = chunk.GetEntities()[row];
         return pool;
     }
 
@@ -1282,18 +1272,14 @@ public static class ScenarioBenchmark
         using (var w = new MiniWorld())
         {
             CreateMultiArchetypeMini(w, perType);
-            var healthType = Component<Health>.ComponentType;
             var desc = new MiniArch.QueryDescription().With<Health>();
 
             int Tick()
             {
                 var checksum = 0;
-                var q = w.Query(desc).Advanced;
-                var chunks = q.GetChunkSpan();
-                for (var i = 0; i < chunks.Length; i++)
+                foreach (var chunk in w.Query(desc).GetChunks())
                 {
-                    var chunk = chunks[i];
-                    var health = chunk.GetComponentSpan<Health>(healthType);
+                    var health = chunk.GetSpan<Health>();
                     for (var row = 0; row < chunk.Count; row++)
                     {
                         health[row].Current -= 1;
@@ -1363,20 +1349,15 @@ public static class ScenarioBenchmark
 
         using (var w = CreateMiniIterationWorld(entityCount))
         {
-            var posType = Component<Position>.ComponentType;
-            var velType = Component<Velocity>.ComponentType;
             var desc = new MiniArch.QueryDescription().With<Position>().With<Velocity>();
 
             int Tick()
             {
                 var checksum = 0;
-                var q = w.Query(desc).Advanced;
-                var chunks = q.GetChunkSpan();
-                for (var i = 0; i < chunks.Length; i++)
+                foreach (var chunk in w.Query(desc).GetChunks())
                 {
-                    var chunk = chunks[i];
-                    var pos = chunk.GetComponentSpan<Position>(posType);
-                    var vel = chunk.GetComponentSpan<Velocity>(velType);
+                    var pos = chunk.GetSpan<Position>();
+                    var vel = chunk.GetSpan<Velocity>();
                     for (var row = 0; row < chunk.Count; row++)
                     {
                         pos[row].X += vel[row].X; pos[row].Y += vel[row].Y; pos[row].Z += vel[row].Z;
@@ -1455,20 +1436,15 @@ public static class ScenarioBenchmark
                 }
             }
 
-            var posType = Component<Position>.ComponentType;
-            var velType = Component<Velocity>.ComponentType;
             var desc = new MiniArch.QueryDescription().With<Position>().With<Velocity>();
 
             int Tick()
             {
                 var checksum = 0;
-                var q = w.Query(desc).Advanced;
-                var chunks = q.GetChunkSpan();
-                for (var i = 0; i < chunks.Length; i++)
+                foreach (var chunk in w.Query(desc).GetChunks())
                 {
-                    var chunk = chunks[i];
-                    var pos = chunk.GetComponentSpan<Position>(posType);
-                    var vel = chunk.GetComponentSpan<Velocity>(velType);
+                    var pos = chunk.GetSpan<Position>();
+                    var vel = chunk.GetSpan<Velocity>();
                     for (var row = 0; row < chunk.Count; row++)
                     {
                         pos[row].X += vel[row].X; pos[row].Y += vel[row].Y; pos[row].Z += vel[row].Z;
@@ -1568,27 +1544,19 @@ public static class ScenarioBenchmark
                     new Mana { Current = 50, Max = 50 },
                     new Stamina { Current = 100, Max = 100 });
 
-            var posType = Component<Position>.ComponentType;
-            var velType = Component<Velocity>.ComponentType;
-            var healthType = Component<Health>.ComponentType;
-            var manaType = Component<Mana>.ComponentType;
-            var staminaType = Component<Stamina>.ComponentType;
             var desc = new MiniArch.QueryDescription()
                 .With<Position>().With<Velocity>().With<Health>().With<Mana>().With<Stamina>();
 
             int Tick()
             {
                 var checksum = 0;
-                var q = w.Query(desc).Advanced;
-                var chunks = q.GetChunkSpan();
-                for (var i = 0; i < chunks.Length; i++)
+                foreach (var chunk in w.Query(desc).GetChunks())
                 {
-                    var chunk = chunks[i];
-                    var pos = chunk.GetComponentSpan<Position>(posType);
-                    var vel = chunk.GetComponentSpan<Velocity>(velType);
-                    var health = chunk.GetComponentSpan<Health>(healthType);
-                    var mana = chunk.GetComponentSpan<Mana>(manaType);
-                    var stamina = chunk.GetComponentSpan<Stamina>(staminaType);
+                    var pos = chunk.GetSpan<Position>();
+                    var vel = chunk.GetSpan<Velocity>();
+                    var health = chunk.GetSpan<Health>();
+                    var mana = chunk.GetSpan<Mana>();
+                    var stamina = chunk.GetSpan<Stamina>();
                     for (var row = 0; row < chunk.Count; row++)
                     {
                         pos[row].X += vel[row].X;
@@ -1695,18 +1663,14 @@ public static class ScenarioBenchmark
             for (var i = 0; i < sparseCount; i++)
                 w.Add(entities[rng.Next(entityCount)], new BuffRemaining { Value = 10.0f });
 
-            var buffType = Component<BuffRemaining>.ComponentType;
             var desc = new MiniArch.QueryDescription().With<BuffRemaining>();
 
             int Tick()
             {
                 var checksum = 0;
-                var q = w.Query(desc).Advanced;
-                var chunks = q.GetChunkSpan();
-                for (var i = 0; i < chunks.Length; i++)
+                foreach (var chunk in w.Query(desc).GetChunks())
                 {
-                    var chunk = chunks[i];
-                    var buff = chunk.GetComponentSpan<BuffRemaining>(buffType);
+                    var buff = chunk.GetSpan<BuffRemaining>();
                     for (var row = 0; row < chunk.Count; row++)
                     {
                         buff[row].Value -= 0.1f;
@@ -1924,10 +1888,6 @@ public static class ScenarioBenchmark
             var ptDesc = new MiniArch.QueryDescription().With<Position>().With<Lifetime>();
             var burningDesc = new MiniArch.QueryDescription().With<BurningTag>().With<StatusTimer>();
             var poisonedDesc = new MiniArch.QueryDescription().With<PoisonedTag>().With<StatusTimer>();
-            var moveQuery = w.Query(moveDesc).Advanced;
-            var ebQuery = w.Query(ebDesc).Advanced;
-            var pbQuery = w.Query(pbDesc).Advanced;
-            var ptQuery = w.Query(ptDesc).Advanced;
             var scratch = new MiniArch.Entity[8192];
             var rng = new Random(42);
             var tickCount = 0;
@@ -1940,11 +1900,16 @@ public static class ScenarioBenchmark
 
                 // 1. MoveAll
                 t0 = Stopwatch.GetTimestamp();
-                foreach (var row in moveQuery.EachSpan<Position, Velocity>())
+                foreach (var chunk in w.Query(moveDesc).GetChunks())
                 {
-                    row.Get0().X += row.Get1().X;
-                    row.Get0().Y += row.Get1().Y;
-                    row.Get0().Z += row.Get1().Z;
+                    var pos = chunk.GetSpan<Position>();
+                    var vel = chunk.GetSpan<Velocity>();
+                    for (var row = 0; row < chunk.Count; row++)
+                    {
+                        pos[row].X += vel[row].X;
+                        pos[row].Y += vel[row].Y;
+                        pos[row].Z += vel[row].Z;
+                    }
                 }
                 t1 = Stopwatch.GetTimestamp();
                 iterateNs += t1 - t0;
@@ -1982,7 +1947,7 @@ public static class ScenarioBenchmark
                 // 4+5+6. Destroy (scan + apply)
                 {
                     t0 = Stopwatch.GetTimestamp();
-                    var d = ScanPositionEachSpan(ebQuery, scratch, playerX, playerZ, hitRadiusSqPlayer, screenBound);
+                    var d = ScanPositionEachSpan(w, ebDesc, scratch, playerX, playerZ, hitRadiusSqPlayer, screenBound);
                     t1 = Stopwatch.GetTimestamp();
                     destroyScanNs += t1 - t0;
                     t0 = Stopwatch.GetTimestamp();
@@ -1992,7 +1957,7 @@ public static class ScenarioBenchmark
                 }
                 {
                     t0 = Stopwatch.GetTimestamp();
-                    var d = ScanPositionEachSpan(pbQuery, scratch, bossX, bossZ, hitRadiusSqBoss, screenBound);
+                    var d = ScanPositionEachSpan(w, pbDesc, scratch, bossX, bossZ, hitRadiusSqBoss, screenBound);
                     t1 = Stopwatch.GetTimestamp();
                     destroyScanNs += t1 - t0;
                     t0 = Stopwatch.GetTimestamp();
@@ -2002,7 +1967,7 @@ public static class ScenarioBenchmark
                 }
                 {
                     t0 = Stopwatch.GetTimestamp();
-                    var d = ScanLifetimeEachSpan(ptQuery, scratch);
+                    var d = ScanLifetimeEachSpan(w, ptDesc, scratch);
                     t1 = Stopwatch.GetTimestamp();
                     destroyScanNs += t1 - t0;
                     t0 = Stopwatch.GetTimestamp();
@@ -2015,15 +1980,14 @@ public static class ScenarioBenchmark
                 t0 = Stopwatch.GetTimestamp();
                 {
                     // Apply buffs to random surviving enemy bullets
-                    var ebEntities = ebQuery.GetChunkSpan();
                     var candidateIdx = 0;
-                    foreach (var chunk in ebEntities)
+                    foreach (var chunk in w.Query(ebDesc).GetChunks())
                     {
                         for (var row = 0; row < chunk.Count && candidateIdx < buffApplyCount; row++)
                         {
                             if (rng.NextSingle() < 0.5f)
                             {
-                                var e = chunk.GetEntity(row);
+                                var e = chunk.GetEntities()[row];
                                 if (!w.Has<BurningTag>(e))
                                 {
                                     w.Add(e, new BurningTag());
@@ -2034,15 +1998,14 @@ public static class ScenarioBenchmark
                         }
                     }
                     // Apply poison to some player bullets
-                    var pbEntities = pbQuery.GetChunkSpan();
                     candidateIdx = 0;
-                    foreach (var chunk in pbEntities)
+                    foreach (var chunk in w.Query(pbDesc).GetChunks())
                     {
                         for (var row = 0; row < chunk.Count && candidateIdx < buffApplyCount / 2; row++)
                         {
                             if (rng.NextSingle() < 0.5f)
                             {
-                                var e = chunk.GetEntity(row);
+                                var e = chunk.GetEntities()[row];
                                 if (!w.Has<PoisonedTag>(e))
                                 {
                                     w.Add(e, new PoisonedTag());
@@ -2055,15 +2018,14 @@ public static class ScenarioBenchmark
 
                     // Tick down burning timers, remove expired
                     var removeCount = 0;
-                    var burnQuery = w.Query(burningDesc).Advanced;
-                    foreach (var chunk in burnQuery.GetChunkSpan())
+                    foreach (var chunk in w.Query(burningDesc).GetChunks())
                     {
-                        var timers = chunk.GetComponentSpan<StatusTimer>(Component<StatusTimer>.ComponentType);
+                        var timers = chunk.GetSpan<StatusTimer>();
                         for (var row = 0; row < chunk.Count; row++)
                         {
                             timers[row].Remaining -= 1f;
                             if (timers[row].Remaining <= 0 && removeCount < scratch.Length)
-                                scratch[removeCount++] = chunk.GetEntity(row);
+                                scratch[removeCount++] = chunk.GetEntities()[row];
                         }
                     }
                     for (var i = 0; i < removeCount; i++)
@@ -2074,15 +2036,14 @@ public static class ScenarioBenchmark
 
                     // Tick down poisoned timers, remove expired
                     removeCount = 0;
-                    var poisonQuery = w.Query(poisonedDesc).Advanced;
-                    foreach (var chunk in poisonQuery.GetChunkSpan())
+                    foreach (var chunk in w.Query(poisonedDesc).GetChunks())
                     {
-                        var timers = chunk.GetComponentSpan<StatusTimer>(Component<StatusTimer>.ComponentType);
+                        var timers = chunk.GetSpan<StatusTimer>();
                         for (var row = 0; row < chunk.Count; row++)
                         {
                             timers[row].Remaining -= 1f;
                             if (timers[row].Remaining <= 0 && removeCount < scratch.Length)
-                                scratch[removeCount++] = chunk.GetEntity(row);
+                                scratch[removeCount++] = chunk.GetEntities()[row];
                         }
                     }
                     for (var i = 0; i < removeCount; i++)

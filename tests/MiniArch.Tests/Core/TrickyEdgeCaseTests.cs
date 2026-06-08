@@ -734,10 +734,7 @@ public sealed class TrickyEdgeCaseTests
         var description = new QueryDescription().With<Position>();
 
         var defaultQuery = world.Query(in description);
-        var advancedQuery = defaultQuery.Advanced;
-
-        Assert.NotNull(advancedQuery);
-        Assert.True(advancedQuery.MatchedChunks.Count > 0);
+        Assert.True(defaultQuery.GetChunks().GetEnumerator().MoveNext());
     }
 
     // ═══════════════════════════════════════════════════════

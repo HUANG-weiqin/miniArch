@@ -1094,15 +1094,15 @@ public sealed class CommandBufferTests
         var replica = new World();
         replica.Replay(delta);
 
-        var query = replica.Query(new QueryDescription().With<Position>()).Advanced;
+        var query = replica.Query(new QueryDescription().With<Position>());
         int count = 0;
-        foreach (ref readonly var chunk in query.GetChunkSpan())
+        foreach (var chunk in query.GetChunks())
             count += chunk.Count;
         Assert.Equal(N, count);
 
-        var posVelQuery = replica.Query(new QueryDescription().With<Position>().With<Velocity>()).Advanced;
+        var posVelQuery = replica.Query(new QueryDescription().With<Position>().With<Velocity>());
         int posVelCount = 0;
-        foreach (ref readonly var chunk in posVelQuery.GetChunkSpan())
+        foreach (var chunk in posVelQuery.GetChunks())
             posVelCount += chunk.Count;
         Assert.Equal(N / 2, posVelCount);
     }
@@ -1333,12 +1333,12 @@ public sealed class CommandBufferTests
         // entity count parity: count alive entities via query
         var srcAll = source.Query(new QueryDescription());
         int srcCount = 0;
-        foreach (ref readonly var chunk in srcAll.Advanced.GetChunkSpan())
+        foreach (var chunk in srcAll.GetChunks())
             srcCount += chunk.Count;
 
         var repAll = replica.Query(new QueryDescription());
         int repCount = 0;
-        foreach (ref readonly var chunk in repAll.Advanced.GetChunkSpan())
+        foreach (var chunk in repAll.GetChunks())
             repCount += chunk.Count;
 
         Assert.Equal(srcCount, repCount);
@@ -1528,9 +1528,8 @@ public sealed class CommandBufferTests
 
     private static int CountAllEntities(World world)
     {
-        var q = world.Query(new QueryDescription()).Advanced;
         int count = 0;
-        foreach (ref readonly var chunk in q.GetChunkSpan())
+        foreach (var chunk in world.Query(new QueryDescription()).GetChunks())
             count += chunk.Count;
         return count;
     }
