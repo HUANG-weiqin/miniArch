@@ -612,13 +612,13 @@ public sealed class CommandBuffer
                     Array.Sort(components, sourceComponents, 0, componentCount);
 
                     // Use multi-entry archetype cache to avoid allocating ComponentType[] + Signature
-                    var archetype = LookupArchetypeCache(components, componentCount);
+                    var archetype = LookupArchetypeCache(components, componentCount, out var hash);
                     if (archetype == null)
                     {
                         var comps = new ComponentType[componentCount];
                         Array.Copy(components, comps, componentCount);
                         archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(comps));
-                        InsertArchetypeCache(components, componentCount, archetype);
+                        InsertArchetypeCache(components, componentCount, archetype, hash);
                     }
 
                     for (var j = 0; j < componentCount; j++)
@@ -904,7 +904,7 @@ public sealed class CommandBuffer
         Array.Sort(types, sources, 0, idx);
 
         // Archetype lookup via bounded multi-entry cache
-        var archetype = LookupArchetypeCache(types, idx);
+        var archetype = LookupArchetypeCache(types, idx, out var hash);
         if (archetype != null)
             goto ArchetypeResolved;
 
@@ -913,7 +913,7 @@ public sealed class CommandBuffer
             var comps = new ComponentType[idx];
             Array.Copy(types, comps, idx);
             archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(comps));
-            InsertArchetypeCache(types, idx, archetype);
+            InsertArchetypeCache(types, idx, archetype, hash);
         }
     ArchetypeResolved:
 
@@ -922,12 +922,13 @@ public sealed class CommandBuffer
 
     /// <summary>
     /// Probes the bounded archetype cache for an exact match.
-    /// Returns null if no entry matches.
+    /// Returns null if no entry matches. Outputs the computed hash for reuse on miss.
     /// </summary>
-    private Archetype? LookupArchetypeCache(ComponentType[] types, int count)
+    private Archetype? LookupArchetypeCache(ComponentType[] types, int count, out int hash)
     {
         EnsureArchetypeCacheValid();
 
+        hash = ComputeComponentHash(types, count);
         var cache = _archetypeCache;
         for (var i = 0; i < _archetypeCacheCount; i++)
         {
@@ -936,7 +937,6 @@ public sealed class CommandBuffer
                 continue;
 
             // Quick hash reject
-            var hash = ComputeComponentHash(types, count);
             if (hash != entry.Hash)
                 continue;
 
@@ -956,14 +956,13 @@ public sealed class CommandBuffer
     /// <summary>
     /// Inserts an archetype into the bounded cache, evicting the oldest entry if full.
     /// </summary>
-    private void InsertArchetypeCache(ComponentType[] types, int count, Archetype archetype)
+    private void InsertArchetypeCache(ComponentType[] types, int count, Archetype archetype, int hash)
     {
         EnsureArchetypeCacheValid();
 
         if (_archetypeCache.Length == 0)
             _archetypeCache = new ArchetypeCacheEntry[ArchetypeCacheSize];
 
-        var hash = ComputeComponentHash(types, count);
         if (_archetypeCacheCount < _archetypeCache.Length)
         {
             _archetypeCache[_archetypeCacheCount++] = new ArchetypeCacheEntry(hash, count, archetype);

@@ -31,7 +31,6 @@ public sealed partial class World : IDisposable
 
     private bool _disposed;
 
-
     /// <summary>
     /// Creates a world.
     /// </summary>
@@ -82,12 +81,10 @@ public sealed partial class World : IDisposable
 #endif
     }
 
-
     /// <summary>
     /// Gets the entity metadata capacity.
     /// </summary>
     public int EntityCapacity => _records.Length;
-
 
     /// <summary>
     /// Gets the number of currently alive entities.
@@ -156,32 +153,6 @@ public sealed partial class World : IDisposable
         }
     }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     /// <summary>
     /// Links a child to a parent.
     /// </summary>
@@ -218,9 +189,6 @@ public sealed partial class World : IDisposable
         ThrowIfDisposed();
         return _hierarchy.GetChildren(this, parent);
     }
-
-
-
 
     /// <summary>
     /// Tries to read a component directly from an entity.
@@ -285,8 +253,6 @@ public sealed partial class World : IDisposable
         return ref arch.GetComponentRefAt<T>(arch.GetComponentIndexFast(GetComponentType<T>()), record.RowIndex);
     }
 
-
-
     /// <summary>
     /// Creates a cached <see cref="EntityAccessor"/> for multiple component
     /// reads/writes on the same entity. The entity→(archetype,chunk,row) lookup
@@ -309,8 +275,6 @@ public sealed partial class World : IDisposable
 
         return new EntityAccessor(info.Archetype, info.RowIndex);
     }
-
-
 
     /// <summary>
     /// Deep-clones an entity and its entire child subtree.
@@ -390,14 +354,6 @@ public sealed partial class World : IDisposable
         return WorldClone.Clone(this);
     }
 
-
-
-
-
-
-
-
-
     internal Archetype GetOrCreateArchetype(Signature signature)
     {
         if (_archetypes.TryGetValue(signature, out var archetype))
@@ -410,23 +366,6 @@ public sealed partial class World : IDisposable
         PublishArchetypeSnapshot(archetype);
         return archetype;
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     private Type[] ResolveComponentTypes(Signature signature)
     {
@@ -446,38 +385,16 @@ public sealed partial class World : IDisposable
         return types;
     }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private ComponentType GetComponentType<T>()
     {
         return Component<T>.ComponentType;
     }
 
-
     internal void LinkSnapshot(Entity parent, Entity child)
     {
         _hierarchy.LinkRestored(parent, child);
     }
-
-
 
     /// <summary>
     /// Replays a frame delta into this world: reserves entities, materializes created entities,
@@ -608,10 +525,6 @@ public sealed partial class World : IDisposable
         }
     }
 
-
-
-
-
     private static Signature BuildReplaySignature(IReadOnlyList<RawComponentValue> components)
     {
         if (components.Count == 0)
@@ -632,23 +545,6 @@ public sealed partial class World : IDisposable
     {
         return ComponentRegistry.Shared.GetOrCreate(componentType);
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     private readonly record struct CloneWork(Entity Source, Entity CloneEntity);
 

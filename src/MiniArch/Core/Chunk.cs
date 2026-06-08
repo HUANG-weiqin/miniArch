@@ -45,7 +45,7 @@ internal readonly struct Chunk
     /// Tries to get the column index for a component type.
     /// </summary>
     internal bool TryGetComponentIndex(ComponentType component, out int columnIndex) =>
-        _archetype.TryGetComponentIndexPublic(component, out columnIndex);
+        _archetype.TryGetComponentIndex(component, out columnIndex);
 
     // ================================================================
     //  Internal API

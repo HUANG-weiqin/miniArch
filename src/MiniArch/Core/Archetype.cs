@@ -147,11 +147,6 @@ internal sealed partial class Archetype
         return columnIndex >= 0;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryGetComponentIndexPublic(ComponentType component, out int columnIndex)
-    {
-        return TryGetComponentIndex(component, out columnIndex);
-    }
 
     internal int GetComponentIndex(ComponentType component)
     {

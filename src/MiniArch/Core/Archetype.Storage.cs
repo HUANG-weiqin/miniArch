@@ -168,7 +168,7 @@ internal sealed partial class Archetype
 
     internal void CopySharedComponentsFrom(Archetype source, int sourceRow, int destinationRow)
     {
-        if (_signature == source._signature)
+        if (ReferenceEquals(this, source))
         {
             CopyAllColumnsFrom(source, sourceRow, destinationRow);
             return;
