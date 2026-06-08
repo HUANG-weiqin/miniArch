@@ -86,10 +86,6 @@ internal readonly struct Chunk
         _archetype.ReadComponentRaw(columnIndex, row, destination);
     internal unsafe void WriteComponentRaw(int columnIndex, int row, byte* source) =>
         _archetype.WriteComponentRaw(columnIndex, row, source);
-    internal void WriteColumnTo<T>(BinaryWriter writer, int columnIndex, int count) where T : unmanaged =>
-        _archetype.WriteColumnTo<T>(writer, columnIndex, count);
-    internal void ReadColumnFrom<T>(BinaryReader reader, int columnIndex, int count) where T : unmanaged =>
-        _archetype.ReadColumnFrom<T>(reader, columnIndex, count);
     internal void CopyColumnsFrom(Chunk source, int count) =>
         _archetype.CopyColumnsFrom(source._archetype, count);
 }

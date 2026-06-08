@@ -411,9 +411,6 @@ public sealed class Archetype
     //  Row data copying
     // ================================================================
 
-    internal byte[] GetDataArray() => _data;
-    internal int[] GetColumnByteOffsets() => _columnByteOffsets;
-
     internal Span<Entity> GetReservedEntities(int startRow, int count)
     {
         if (startRow < 0 || count < 0 || startRow + count > _count)
