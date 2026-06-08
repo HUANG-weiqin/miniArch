@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Runtime.CompilerServices;
 
 namespace MiniArch;
 
@@ -52,25 +53,11 @@ public readonly struct Query
     /// Use <c>foreach (var chunk in query.GetChunks())</c>.
     /// Zero-copy, JIT-optimized span iteration.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpan<ChunkView> GetChunks() => _query.GetChunkViewSpan();
 
     /// <summary>
-    /// Gets the required signature.
-    /// </summary>
-    public MiniArch.Core.Signature RequiredSignature => _query.RequiredSignature;
-
-    /// <summary>
-    /// Gets the excluded signature.
-    /// </summary>
-    public MiniArch.Core.Signature ExcludedSignature => _query.ExcludedSignature;
-
-    /// <summary>
-    /// Gets the any-match signature.
-    /// </summary>
-    public MiniArch.Core.Signature AnySignature => _query.AnySignature;
-
-    /// <summary>
-    /// Gets the refresh count.
+    /// Gets the refresh count (diagnostic).
     /// </summary>
     public int RefreshCount => _query.RefreshCount;
 }

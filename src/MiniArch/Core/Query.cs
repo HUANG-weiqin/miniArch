@@ -8,14 +8,11 @@ using MiniArch;
 /// <summary>
 /// Cached archetype and chunk query.
 /// </summary>
-public sealed class Query
+internal sealed class Query
 {
     private readonly World _world;
     private readonly QueryFilter _filter;
     private readonly object _refreshLock = new();
-    private Signature? _requiredSignature;
-    private Signature? _excludedSignature;
-    private Signature? _anySignature;
     private int _refreshCount;
 
     private Archetype[] _snapshotArchetypes = Array.Empty<Archetype>();
@@ -33,39 +30,18 @@ public sealed class Query
         _filter = filter;
     }
 
-    /// <summary>
-    /// Creates or reuses an advanced query for a world and description.
-    /// </summary>
     internal static Query Create(World world, in QueryDescription description)
     {
         ArgumentNullException.ThrowIfNull(world);
         return world.GetAdvancedQuery(in description);
     }
 
-    /// <summary>
-    /// Gets the required signature.
-    /// </summary>
-    public Signature RequiredSignature => _requiredSignature ??= _filter.Required.ToSignature();
+    internal Signature RequiredSignature => _filter.Required.ToSignature();
+    internal Signature ExcludedSignature => _filter.Excluded.ToSignature();
+    internal Signature AnySignature => _filter.Any.ToSignature();
+    internal int RefreshCount => Volatile.Read(ref _refreshCount);
 
-    /// <summary>
-    /// Gets the excluded signature.
-    /// </summary>
-    public Signature ExcludedSignature => _excludedSignature ??= _filter.Excluded.ToSignature();
-
-    /// <summary>
-    /// Gets the any-match signature.
-    /// </summary>
-    public Signature AnySignature => _anySignature ??= _filter.Any.ToSignature();
-
-    /// <summary>
-    /// Gets the refresh count.
-    /// </summary>
-    public int RefreshCount => Volatile.Read(ref _refreshCount);
-
-    /// <summary>
-    /// Gets the matched archetypes.
-    /// </summary>
-    public IReadOnlyList<Archetype> MatchedArchetypes
+    internal IReadOnlyList<Archetype> MatchedArchetypes
     {
         get
         {
@@ -74,10 +50,7 @@ public sealed class Query
         }
     }
 
-    /// <summary>
-    /// Gets the matched chunks.
-    /// </summary>
-    public IReadOnlyList<Chunk> MatchedChunks
+    internal IReadOnlyList<Chunk> MatchedChunks
     {
         get
         {
@@ -86,9 +59,6 @@ public sealed class Query
         }
     }
 
-    /// <summary>
-    /// Gets the matched chunks as a span.
-    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ReadOnlySpan<Chunk> GetChunkSpan()
     {
@@ -96,9 +66,6 @@ public sealed class Query
         return _snapshotChunks.AsSpan(0, _snapshotCount);
     }
 
-    /// <summary>
-    /// Gets the matched chunks as an array plus active count (zero allocation, returns cached array).
-    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal Chunk[] GetChunkArray(out int count)
     {
@@ -107,20 +74,12 @@ public sealed class Query
         return _snapshotChunks;
     }
 
-    /// <summary>
-    /// Gets the matched chunk views as a span (zero-copy, JIT-friendly).
-    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ReadOnlySpan<ChunkView> GetChunkViewSpan()
+    internal ReadOnlySpan<ChunkView> GetChunkViewSpan()
     {
         EnsureRefreshed();
         return _snapshotChunkViews.AsSpan(0, _snapshotCount);
     }
-
-    /// <summary>
-    /// Gets matched chunks as a span for batch component access.
-    /// </summary>
-    public ReadOnlySpan<ChunkView> GetChunks() => GetChunkViewSpan();
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ReadOnlySpan<Archetype> GetArchetypeSpan()
@@ -132,7 +91,7 @@ public sealed class Query
     /// <summary>
     /// Gets a chunk enumerable.
     /// </summary>
-    public ChunkEnumerable Chunks => new(this);
+    internal ChunkEnumerable Chunks => new(this);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureRefreshed()

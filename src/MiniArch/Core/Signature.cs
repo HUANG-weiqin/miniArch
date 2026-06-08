@@ -7,7 +7,7 @@ namespace MiniArch.Core;
 /// <summary>
 /// Sorted set of component ids.
 /// </summary>
-public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType>
+internal sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType>
 {
     private readonly ComponentType[] _components;
     private readonly int _hashCode;

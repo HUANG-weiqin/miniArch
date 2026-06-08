@@ -88,10 +88,7 @@ public sealed class ComponentRegistry
 /// <summary>
 /// Provides cached component type id for <typeparamref name="T" />.
 /// </summary>
-public static class Component<T>
+internal static class Component<T>
 {
-    /// <summary>
-    /// The registered component type id.
-    /// </summary>
-    public static readonly ComponentType ComponentType = ComponentRegistry.Shared.GetOrCreate<T>();
+    internal static readonly ComponentType ComponentType = ComponentRegistry.Shared.GetOrCreate<T>();
 }

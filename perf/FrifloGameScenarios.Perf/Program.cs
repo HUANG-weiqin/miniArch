@@ -97,13 +97,10 @@ public readonly record struct ScenarioResult(double OpsPerSec, long Checksum, st
 // ============================================================================
 public sealed class MiniBulletHell : IGameScenario
 {
-    readonly World _w; readonly MiniArch.Query _q; readonly MiniArch.Core.Query _oldQ;
-    public MiniBulletHell(){_w=new World(128,100000);for(int i=0;i<100000;i++)_w.Create(new Position(i,i),new Velocity(1,1));_q=_w.Query(new QueryDescription().With<Position>().With<Velocity>());_oldQ=Core.Query.Create(_w,new QueryDescription().With<Position>().With<Velocity>());}
+    readonly World _w; readonly MiniArch.Query _q;
+    public MiniBulletHell(){_w=new World(128,100000);for(int i=0;i<100000;i++)_w.Create(new Position(i,i),new Velocity(1,1));_q=_w.Query(new QueryDescription().With<Position>().With<Velocity>());}
     public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
-    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;
-        // OLD path (Chunk via Core.Query) — diagnostic: comment out one path at a time
-        foreach(var c in _oldQ.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);var sv=c.GetComponentSpan<Velocity>(MiniArch.Core.Component<Velocity>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X+sv[i].VY;}
-        return s;}
+    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;foreach(var c in _q.GetChunks()){var sp=c.GetSpan<Position>();var sv=c.GetSpan<Velocity>();for(int i=0;i<sp.Length;i++)s+=sp[i].X+sv[i].VY;}return s;}
 }
 public sealed class FrifloBulletHell : IGameScenario
 {

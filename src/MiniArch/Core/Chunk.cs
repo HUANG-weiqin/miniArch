@@ -7,7 +7,7 @@ namespace MiniArch.Core;
 /// Provides public access to entity rows and component spans.
 /// Every archetype has exactly one chunk — this struct wraps it.
 /// </summary>
-public readonly struct Chunk
+internal readonly struct Chunk
 {
     private readonly Archetype _archetype;
 

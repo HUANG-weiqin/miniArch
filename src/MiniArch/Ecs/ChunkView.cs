@@ -17,11 +17,13 @@ public readonly struct ChunkView
     public int Count => _archetype.EntityCount;
 
     /// <summary>Gets live entities as a span.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpan<Entity> GetEntities() => _archetype.GetEntities();
 
     /// <summary>
     /// Gets a span of component <typeparamref name="T"/> for all rows.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Span<T> GetSpan<T>() where T : struct =>
         _archetype.GetComponentSpan<T>(Component<T>.ComponentType);
 

@@ -498,9 +498,9 @@ public sealed class MiniComplexQueryWorldState
     public MiniEntity[] Entities;
     public MiniComponentType PositionType;
     public MiniComponentType VelocityType;
-    public MiniQuery WithAllQuery;
-    public MiniQuery WithAllWithoutQuery;
-    public MiniQuery WithAllAnyQuery;
+    internal MiniQuery WithAllQuery;
+    internal MiniQuery WithAllWithoutQuery;
+    internal MiniQuery WithAllAnyQuery;
 }
 
 public sealed class ArchComplexQueryWorldState : IDisposable
@@ -551,7 +551,7 @@ public sealed class MiniWideQueryWorldState
     public MiniComponentType TeamType;
     public MiniComponentType AccelerationType;
     public MiniComponentType ManaType;
-    public MiniQuery WideQuery;
+    internal MiniQuery WideQuery;
 }
 
 public sealed class ArchWideQueryWorldState : IDisposable

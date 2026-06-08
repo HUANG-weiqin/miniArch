@@ -2,8 +2,8 @@
 title: Cache & Memory Optimization Review
 module: MiniArch.Core
 description: Memory layout and cache behavior analysis of the ECS runtime, with optimization opportunities
-updated: 2026-06-07 (修正：P3/P4/P5 MigrationPlan→CopySharedComponentsFrom/Edge Cache，P6 CopySmall 2-byte 已修复，AdaptiveChunkTargetBytes→DefaultChunkCapacity，_tsRawComponents→_cachedArchetypeTypes)
-review: 2026-06-07 — P3/P4/P5 重写为当前架构，P6 标记已修复
+updated: 2026-06-08 (补充：公共 API 薄转发方法 AggressiveInlining 规则)
+review: 2026-06-08 — 补充 P11: 公共 API AggressiveInlining
 ---
 # Cache & Memory Optimization Review
 
@@ -223,6 +223,7 @@ Pipeline 工作负载中，同批次 entity 几乎都是同一 archetype（如 5
 
 ## 坑点
 
+- **公共 API 薄转发方法必须加 `[MethodImpl(AggressiveInlining)]`**：D group YAGNI 重构把 `ChunkView.GetSpan<T>()`、`ChunkView.GetEntities()`、`Query.GetChunks()` 等公共 API 改为薄转发（单行 `=>` 体），但遗漏了 `AggressiveInlining`。JIT 不内联这些方法时，每次迭代多一次方法调用开销，纯迭代场景（S1-BulletHell 100K entities）退化 41%（18K→10K ops/s）。
 - **EntityRecord 布局已优化为 16 字节**：`(Archetype ref, RowIndex, Version)` 无 padding，字段顺序利用了引用类型的 8 字节对齐
 - **Archetype 的 `CreateStorage` 列对齐**：对齐从 8→64 会使每列浪费更多 padding，可能减少每个 Archetype 可存放的行数
 

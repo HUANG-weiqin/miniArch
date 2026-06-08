@@ -9,7 +9,7 @@ namespace MiniArch.Core;
 /// but faster per entity when many components are needed, and supports
 /// unlimited component types with no wrapper allocation.
 /// </summary>
-public readonly struct ChunkEnumerable : IEnumerable<Chunk>
+internal readonly struct ChunkEnumerable : IEnumerable<Chunk>
 {
     private readonly Query _query;
 
@@ -53,7 +53,7 @@ public readonly struct ChunkEnumerable : IEnumerable<Chunk>
 /// <summary>
 /// Chunk enumerator.
 /// </summary>
-public struct ChunkEnumerator
+internal struct ChunkEnumerator
 {
     private readonly Chunk[] _chunks;
     private readonly int _chunkCount;
