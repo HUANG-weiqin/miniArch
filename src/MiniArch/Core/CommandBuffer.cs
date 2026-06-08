@@ -37,19 +37,11 @@ public sealed class CommandBuffer : ICommandRecorder
 
     [ThreadStatic] private static ComponentType[]? _tsExtractTypes;
     [ThreadStatic] private static CreatedComponent[]? _tsExtractSources;
-
-    // Bounded multi-entry archetype cache: avoids repeated Dictionary lookups and
-    // temporary array/Signature allocations for the same component set.
-    // 8 slots cover the attack pipeline's 6+ alternating archetypes with room to spare.
-    private const int ArchetypeCacheSize = 8;
-    private int _archetypeCacheCount;
-    private readonly struct ArchetypeCacheEntry(int hash, int componentCount, Archetype archetype)
-    {
-        public readonly int Hash = hash;
-        public readonly int ComponentCount = componentCount;
-        public readonly Archetype Archetype = archetype;
-    }
-    private ArchetypeCacheEntry[] _archetypeCache = [];
+    // Last-archetype cache: avoids repeated Dictionary lookups for same component set
+    private Archetype? _cachedArchetype;
+    private int _cachedArchetypeCount;
+    private int _cachedArchetypeHash;
+    [ThreadStatic] private static ComponentType[]? _cachedArchetypeTypes;
 
 #if DEBUG
     private int _debugRecordedSetCount;
@@ -689,7 +681,8 @@ public sealed class CommandBuffer : ICommandRecorder
         _createdOverflow = default;
         _currentSlabIndex = -1;
         _currentSlabOffset = 0;
-        _archetypeCacheCount = 0;
+        _cachedArchetype = null;
+        _cachedArchetypeCount = 0;
 
         return frozen;
     }
@@ -727,15 +720,9 @@ public sealed class CommandBuffer : ICommandRecorder
 
                     Array.Sort(components, sourceComponents, 0, componentCount);
 
-                    // Use multi-entry archetype cache to avoid allocating ComponentType[] + Signature
-                    var archetype = LookupArchetypeCache(components, componentCount);
-                    if (archetype == null)
-                    {
-                        var comps = new ComponentType[componentCount];
-                        Array.Copy(components, comps, componentCount);
-                        archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(comps));
-                        InsertArchetypeCache(components, componentCount, archetype);
-                    }
+                    var comps = new ComponentType[componentCount];
+                    Array.Copy(components, comps, componentCount);
+                    var archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(comps));
 
                     for (var j = 0; j < componentCount; j++)
                     {
@@ -1028,82 +1015,57 @@ public sealed class CommandBuffer : ICommandRecorder
 
         Array.Sort(types, sources, 0, idx);
 
-        // Archetype lookup via bounded multi-entry cache
-        var archetype = LookupArchetypeCache(types, idx);
-        if (archetype != null)
-            goto ArchetypeResolved;
+        // Archetype lookup with last-value cache
+        Archetype archetype;
+        if (idx == _cachedArchetypeCount)
+        {
+            // Fast check: same count → compute hash
+            var typeHash = idx;
+            for (var h = 0; h < idx; h++)
+                typeHash = unchecked((typeHash * 31) + types[h].Value);
+            if (typeHash == _cachedArchetypeHash)
+            {
+                // Hash match → verify with exact component comparison
+                var cachedTypes = _cachedArchetypeTypes;
+                var match = cachedTypes != null;
+                if (match)
+                {
+                    for (var h = 0; h < idx; h++)
+                    {
+                        if (types[h].Value != cachedTypes![h].Value) { match = false; break; }
+                    }
+                }
+                if (match)
+                {
+                    archetype = _cachedArchetype!;
+                    goto ArchetypeResolved;
+                }
+            }
+        }
 
-        // True cache miss: allocate temporary array + Signature, look up in World
         {
             var comps = new ComponentType[idx];
             Array.Copy(types, comps, idx);
             archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(comps));
-            InsertArchetypeCache(types, idx, archetype);
+            _cachedArchetype = archetype;
+            _cachedArchetypeCount = idx;
+            // Cache the component types for exact comparison on next lookup
+            var cachedTypes = _cachedArchetypeTypes;
+            if (cachedTypes == null || cachedTypes.Length < idx)
+            {
+                cachedTypes = new ComponentType[Math.Max(idx, 16)];
+                _cachedArchetypeTypes = cachedTypes;
+            }
+            Array.Copy(types, cachedTypes, idx);
+            // Compute hash for quick rejection
+            var cacheHash = idx;
+            for (var h = 0; h < idx; h++)
+                cacheHash = unchecked((cacheHash * 31) + types[h].Value);
+            _cachedArchetypeHash = cacheHash;
         }
     ArchetypeResolved:
 
         return (archetype, idx);
-    }
-
-    /// <summary>
-    /// Probes the bounded archetype cache for an exact match.
-    /// Returns null if no entry matches.
-    /// </summary>
-    private Archetype? LookupArchetypeCache(ComponentType[] types, int count)
-    {
-        var cache = _archetypeCache;
-        for (var i = 0; i < _archetypeCacheCount; i++)
-        {
-            ref readonly var entry = ref cache[i];
-            if (entry.ComponentCount != count)
-                continue;
-
-            // Quick hash reject
-            var hash = ComputeComponentHash(types, count);
-            if (hash != entry.Hash)
-                continue;
-
-            // Exact compare against the archetype's signature
-            var sig = entry.Archetype.Signature.AsSpan();
-            for (var h = 0; h < count; h++)
-            {
-                if (types[h].Value != sig[h].Value)
-                    goto NextEntry;
-            }
-            return entry.Archetype;
-        NextEntry:;
-        }
-        return null;
-    }
-
-    /// <summary>
-    /// Inserts an archetype into the bounded cache, evicting the oldest entry if full.
-    /// </summary>
-    private void InsertArchetypeCache(ComponentType[] types, int count, Archetype archetype)
-    {
-        if (_archetypeCache.Length == 0)
-            _archetypeCache = new ArchetypeCacheEntry[ArchetypeCacheSize];
-
-        var hash = ComputeComponentHash(types, count);
-        if (_archetypeCacheCount < _archetypeCache.Length)
-        {
-            _archetypeCache[_archetypeCacheCount++] = new ArchetypeCacheEntry(hash, count, archetype);
-        }
-        else
-        {
-            // Evict oldest (index 0) by shifting left
-            Array.Copy(_archetypeCache, 1, _archetypeCache, 0, _archetypeCache.Length - 1);
-            _archetypeCache[_archetypeCache.Length - 1] = new ArchetypeCacheEntry(hash, count, archetype);
-        }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int ComputeComponentHash(ComponentType[] types, int count)
-    {
-        var hash = 17;
-        for (var i = 0; i < count; i++)
-            hash = unchecked((hash * 31) + types[i].Value);
-        return hash;
     }
 
     private (Signature Signature, RawComponentValue[] Components) BuildCreatedEntityComponentsForDelta(in CreatedState state)
@@ -1264,7 +1226,8 @@ public sealed class CommandBuffer : ICommandRecorder
         _slabs.Clear();
         _currentSlabIndex = -1;
         _currentSlabOffset = 0;
-        _archetypeCacheCount = 0;
+        _cachedArchetype = null;
+        _cachedArchetypeCount = 0;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
