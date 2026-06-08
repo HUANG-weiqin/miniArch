@@ -26,7 +26,7 @@ public sealed class CommandBuffer
     private int[] _createdStateLookup = Array.Empty<int>();
     private int _maxCreatedEntityId;
     private Dictionary<Entity, HierarchyIntent> _hierarchyByChild = new();
-    private (Type RuntimeType, ComponentType ComponentType, int Size)[] _typeInfoCache = [];
+    private (ComponentType ComponentType, int Size)[] _typeInfoCache = [];
     private List<byte[]> _slabs = new();
     private readonly List<(int ComponentTypeId, CreatedComponent Component)> _tempComponents = new();
     private OverflowPool<int, EntityOpSlot> _opsOverflow;
@@ -131,14 +131,14 @@ public sealed class CommandBuffer
             if (createdIdx >= 0)
             {
                 ref var state = ref _createdStatePool[createdIdx];
-                state.Map.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size), ref _createdOverflow);
+                state.Map.Set(componentTypeId, new CreatedComponent(info.ComponentType, slabIndex, offset, info.Size), ref _createdOverflow);
                 return;
             }
         }
 
         var opsIdx = GetOrCreateOpsIndex(entity);
         ref var ops = ref _opsPool[opsIdx];
-        var slot = new EntityOpSlot { ComponentTypeId = componentTypeId, Kind = OpKindAdd, AddSetData = new AddSetEntry(info.ComponentType, info.RuntimeType, slabIndex, offset, info.Size) };
+        var slot = new EntityOpSlot { ComponentTypeId = componentTypeId, Kind = OpKindAdd, AddSetData = new AddSetEntry(info.ComponentType, slabIndex, offset, info.Size) };
         ops.Set(componentTypeId, slot, ref _opsOverflow);
     }
 
@@ -157,14 +157,14 @@ public sealed class CommandBuffer
             if (createdIdx >= 0)
             {
                 ref var state = ref _createdStatePool[createdIdx];
-                state.Map.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size), ref _createdOverflow);
+                state.Map.Set(componentTypeId, new CreatedComponent(info.ComponentType, slabIndex, offset, info.Size), ref _createdOverflow);
                 return;
             }
         }
 
         var opsIdx = GetOrCreateOpsIndex(entity);
         ref var ops = ref _opsPool[opsIdx];
-        var slot = new EntityOpSlot { ComponentTypeId = componentTypeId, Kind = OpKindSet, AddSetData = new AddSetEntry(info.ComponentType, info.RuntimeType, slabIndex, offset, info.Size) };
+        var slot = new EntityOpSlot { ComponentTypeId = componentTypeId, Kind = OpKindSet, AddSetData = new AddSetEntry(info.ComponentType, slabIndex, offset, info.Size) };
         ops.Set(componentTypeId, slot, ref _opsOverflow);
     }
 
@@ -295,7 +295,7 @@ public sealed class CommandBuffer
             ref var state = ref _createdStatePool[createdIdx];
             var info = ResolveTypeInfo(componentTypeId);
             CopyComponentFromArchetype(archetype, i, sourceRow, info.Size, out var slabIndex, out var offset);
-            state.Map.Set(componentTypeId, new CreatedComponent(info.RuntimeType, info.ComponentType, slabIndex, offset, info.Size), ref _createdOverflow);
+            state.Map.Set(componentTypeId, new CreatedComponent(info.ComponentType, slabIndex, offset, info.Size), ref _createdOverflow);
         }
     }
 
@@ -435,7 +435,7 @@ public sealed class CommandBuffer
             }
             else if (state.Map.IsEmpty)
             {
-                _world.MaterializeReservedEntityTrusted(entity, Signature.Empty, Array.Empty<RawComponentValue>());
+                _world.MaterializeReservedEntity(entity, Array.Empty<RawComponentValue>(), reservationChecked: true);
             }
             else
             {
@@ -549,7 +549,6 @@ public sealed class CommandBuffer
             HierarchyByChild = _hierarchyByChild,
             Slabs = _slabs,
             HasCreatedEntities = _hasCreatedEntities,
-            TypeInfoCache = _typeInfoCache,
             OpsOverflow = _opsOverflow,
             CreatedOverflow = _createdOverflow,
         };
@@ -591,7 +590,7 @@ public sealed class CommandBuffer
             }
             else if (state.Map.IsEmpty)
             {
-                _world.MaterializeReservedEntityTrusted(entity, Signature.Empty, Array.Empty<RawComponentValue>());
+                _world.MaterializeReservedEntity(entity, Array.Empty<RawComponentValue>(), reservationChecked: true);
             }
             else
             {
@@ -625,7 +624,7 @@ public sealed class CommandBuffer
                     for (var j = 0; j < componentCount; j++)
                     {
                         var sc = sourceComponents[j];
-                        rawComponents[j] = new RawComponentValue(sc.ComponentType.Value, sc.RuntimeType, sc.ComponentType, frozen.Slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
+                        rawComponents[j] = new RawComponentValue(sc.ComponentType, frozen.Slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
                     }
 
                     _world.MaterializeReservedEntityDirect(entity, archetype, rawComponents.AsSpan(0, componentCount));
@@ -710,12 +709,12 @@ public sealed class CommandBuffer
             }
             else if (state.Map.IsEmpty)
             {
-                delta.CreatedEntities.Add(new RawCreatedEntity(entity, Signature.Empty, Array.Empty<RawComponentValue>()));
+                delta.CreatedEntities.Add(new RawCreatedEntity(entity, Array.Empty<RawComponentValue>()));
             }
             else
             {
-                var (signature, components) = BuildCreatedEntityComponentsFromFrozen(in state, frozen.Slabs, ref frozen.CreatedOverflow);
-                delta.CreatedEntities.Add(new RawCreatedEntity(entity, signature, components));
+                var components = BuildCreatedEntityComponentsFromFrozen(in state, frozen.Slabs, ref frozen.CreatedOverflow);
+                delta.CreatedEntities.Add(new RawCreatedEntity(entity, components));
             }
         }
 
@@ -740,14 +739,14 @@ public sealed class CommandBuffer
             if (existingOps.IsEmpty) continue;
             var entity = frozen.OpsEntityByPoolIndex[i];
 
-            EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in existingOps.Value0, entity, delta);
-            if (existingOps.Count >= 2) EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in existingOps.Value1, entity, delta);
-            if (existingOps.Count >= 3) EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in existingOps.Value2, entity, delta);
-            if (existingOps.Count >= 4) EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in existingOps.Value3, entity, delta);
+            EmitOpFromFrozen(frozen.Slabs, in existingOps.Value0, entity, delta);
+            if (existingOps.Count >= 2) EmitOpFromFrozen(frozen.Slabs, in existingOps.Value1, entity, delta);
+            if (existingOps.Count >= 3) EmitOpFromFrozen(frozen.Slabs, in existingOps.Value2, entity, delta);
+            if (existingOps.Count >= 4) EmitOpFromFrozen(frozen.Slabs, in existingOps.Value3, entity, delta);
             for (var nodeIdx = existingOps.OverflowHead; nodeIdx >= 0; nodeIdx = frozen.OpsOverflow.GetNext(nodeIdx))
             {
                 var overflowSlot = frozen.OpsOverflow.GetValueReadonly(nodeIdx);
-                EmitOpFromFrozen(frozen.Slabs, frozen.TypeInfoCache, in overflowSlot, entity, delta);
+                EmitOpFromFrozen(frozen.Slabs, in overflowSlot, entity, delta);
             }
         }
 
@@ -820,21 +819,19 @@ public sealed class CommandBuffer
         ArrayPool<ComponentType>.Shared.Return(types);
     }
 
-    private static (Signature Signature, RawComponentValue[] Components) BuildCreatedEntityComponentsFromFrozen(
+    private static RawComponentValue[] BuildCreatedEntityComponentsFromFrozen(
         in CreatedState state, List<byte[]> slabs, ref OverflowPool<int, CreatedComponent> pool)
     {
         var (types, sources, count) = ExtractAndSortComponents(in state, ref pool);
         try
         {
             var rawComponents = new RawComponentValue[count];
-            var signatureComponents = new ComponentType[count];
             for (var i = 0; i < count; i++)
             {
                 var sc = sources[i];
-                rawComponents[i] = new RawComponentValue(sc.ComponentType.Value, sc.RuntimeType, sc.ComponentType, slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
-                signatureComponents[i] = sc.ComponentType;
+                rawComponents[i] = new RawComponentValue(sc.ComponentType, slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
             }
-            return (Signature.CreateNormalized(signatureComponents), rawComponents);
+            return rawComponents;
         }
         finally
         {
@@ -851,7 +848,7 @@ public sealed class CommandBuffer
             case OpKindSet:
             {
                 var d = slot.AddSetData;
-                world.ApplyRawAddOrSet(entity, d.ComponentType, d.RuntimeType, slabs[d.SlabIndex], d.DataOffset);
+                world.ApplyRawAddOrSet(entity, d.ComponentType, slabs[d.SlabIndex], d.DataOffset);
                 break;
             }
             case OpKindRemove:
@@ -863,23 +860,19 @@ public sealed class CommandBuffer
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void EmitOpFromFrozen(
         List<byte[]> slabs,
-        (Type RuntimeType, ComponentType ComponentType, int Size)[] typeInfoCache,
         in EntityOpSlot slot, Entity entity, FrameDelta delta)
     {
         switch (slot.Kind)
         {
             case OpKindAdd:
-                delta.AddCommands.Add(new RawComponentCommand(entity, slot.ComponentTypeId, slot.AddSetData.RuntimeType, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, slabs[slot.AddSetData.SlabIndex]));
+                delta.AddCommands.Add(new RawComponentCommand(entity, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, slabs[slot.AddSetData.SlabIndex]));
                 break;
             case OpKindSet:
-                delta.SetCommands.Add(new RawComponentCommand(entity, slot.ComponentTypeId, slot.AddSetData.RuntimeType, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, slabs[slot.AddSetData.SlabIndex]));
+                delta.SetCommands.Add(new RawComponentCommand(entity, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, slabs[slot.AddSetData.SlabIndex]));
                 break;
             case OpKindRemove:
-            {
-                var info = typeInfoCache[slot.ComponentTypeId];
-                delta.RemoveCommands.Add(new RawRemoveCommand(entity, slot.ComponentTypeId, info.RuntimeType, slot.RemoveComponentType));
+                delta.RemoveCommands.Add(new RawRemoveCommand(entity, slot.RemoveComponentType));
                 break;
-            }
         }
     }
 
@@ -1008,20 +1001,18 @@ public sealed class CommandBuffer
         _archetypeCacheCount = 0;
     }
 
-    private (Signature Signature, RawComponentValue[] Components) BuildCreatedEntityComponentsForDelta(in CreatedState state)
+    private RawComponentValue[] BuildCreatedEntityComponentsForDelta(in CreatedState state)
     {
         var (types, sources, count) = ExtractAndSortComponents(in state, ref _createdOverflow);
         try
         {
             var rawComponents = new RawComponentValue[count];
-            var signatureComponents = new ComponentType[count];
             for (var i = 0; i < count; i++)
             {
                 var sc = sources[i];
-                rawComponents[i] = new RawComponentValue(sc.ComponentType.Value, sc.RuntimeType, sc.ComponentType, _slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
-                signatureComponents[i] = sc.ComponentType;
+                rawComponents[i] = new RawComponentValue(sc.ComponentType, _slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
             }
-            return (Signature.CreateNormalized(signatureComponents), rawComponents);
+            return rawComponents;
         }
         finally
         {
@@ -1061,12 +1052,12 @@ public sealed class CommandBuffer
             }
             else if (state.Map.IsEmpty)
             {
-                delta.CreatedEntities.Add(new RawCreatedEntity(entity, Signature.Empty, Array.Empty<RawComponentValue>()));
+                delta.CreatedEntities.Add(new RawCreatedEntity(entity, Array.Empty<RawComponentValue>()));
             }
             else
             {
-                var (signature, components) = BuildCreatedEntityComponentsForDelta(in state);
-                delta.CreatedEntities.Add(new RawCreatedEntity(entity, signature, components));
+                var components = BuildCreatedEntityComponentsForDelta(in state);
+                delta.CreatedEntities.Add(new RawCreatedEntity(entity, components));
             }
         }
 
@@ -1211,12 +1202,12 @@ public sealed class CommandBuffer
         }
     }
 
-    private (Type RuntimeType, ComponentType ComponentType, int Size) ResolveTypeInfo(int componentTypeId)
+    private (ComponentType ComponentType, int Size) ResolveTypeInfo(int componentTypeId)
     {
         if ((uint)componentTypeId < (uint)_typeInfoCache.Length)
         {
             var cached = _typeInfoCache[componentTypeId];
-            if (cached.RuntimeType != null)
+            if (cached.Size > 0)
             {
                 return cached;
             }
@@ -1225,16 +1216,15 @@ public sealed class CommandBuffer
         var componentType = (ComponentType)componentTypeId;
         if (!_world.Components.TryGetType(componentType, out var runtimeType))
         {
-            runtimeType = typeof(object);
             componentType = default;
         }
 
-        var size = runtimeType == typeof(object) ? 0 : ComponentSizeCache.GetSize(runtimeType);
-        var info = (runtimeType, componentType, size);
+        var size = runtimeType == null ? 0 : ComponentSizeCache.GetSize(runtimeType);
+        var info = (componentType, size);
 
         if (componentTypeId >= _typeInfoCache.Length)
         {
-            var newCache = new (Type RuntimeType, ComponentType ComponentType, int Size)[componentTypeId + 1];
+            var newCache = new (ComponentType ComponentType, int Size)[componentTypeId + 1];
             if (_typeInfoCache.Length > 0)
                 Array.Copy(_typeInfoCache, newCache, _typeInfoCache.Length);
             _typeInfoCache = newCache;
@@ -1260,17 +1250,14 @@ public sealed class CommandBuffer
         switch (slot.Kind)
         {
             case OpKindAdd:
-                delta.AddCommands.Add(new RawComponentCommand(entity, slot.ComponentTypeId, slot.AddSetData.RuntimeType, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, _slabs[slot.AddSetData.SlabIndex]));
+                delta.AddCommands.Add(new RawComponentCommand(entity, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, _slabs[slot.AddSetData.SlabIndex]));
                 break;
             case OpKindSet:
-                delta.SetCommands.Add(new RawComponentCommand(entity, slot.ComponentTypeId, slot.AddSetData.RuntimeType, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, _slabs[slot.AddSetData.SlabIndex]));
+                delta.SetCommands.Add(new RawComponentCommand(entity, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, _slabs[slot.AddSetData.SlabIndex]));
                 break;
             case OpKindRemove:
-            {
-                var info = ResolveTypeInfo(slot.ComponentTypeId);
-                delta.RemoveCommands.Add(new RawRemoveCommand(entity, slot.ComponentTypeId, info.RuntimeType, slot.RemoveComponentType));
+                delta.RemoveCommands.Add(new RawRemoveCommand(entity, slot.RemoveComponentType));
                 break;
-            }
         }
     }
 
@@ -1283,7 +1270,7 @@ public sealed class CommandBuffer
             case OpKindSet:
             {
                 var d = slot.AddSetData;
-                _world.ApplyRawAddOrSet(entity, d.ComponentType, d.RuntimeType, _slabs[d.SlabIndex], d.DataOffset);
+                _world.ApplyRawAddOrSet(entity, d.ComponentType, _slabs[d.SlabIndex], d.DataOffset);
                 break;
             }
             case OpKindRemove:
@@ -1356,15 +1343,13 @@ public sealed class CommandBuffer
     private struct AddSetEntry
     {
         public ComponentType ComponentType;
-        public Type RuntimeType;
         public int SlabIndex;
         public int DataOffset;
         public int DataSize;
 
-        public AddSetEntry(ComponentType componentType, Type runtimeType, int slabIndex, int dataOffset, int dataSize)
+        public AddSetEntry(ComponentType componentType, int slabIndex, int dataOffset, int dataSize)
         {
             ComponentType = componentType;
-            RuntimeType = runtimeType;
             SlabIndex = slabIndex;
             DataOffset = dataOffset;
             DataSize = dataSize;
@@ -1377,7 +1362,7 @@ public sealed class CommandBuffer
         public bool Destroyed;
     }
 
-    internal readonly record struct CreatedComponent(Type RuntimeType, ComponentType ComponentType, int SlabIndex, int DataOffset, int DataSize);
+    internal readonly record struct CreatedComponent(ComponentType ComponentType, int SlabIndex, int DataOffset, int DataSize);
 
     private sealed class FrozenBufferState
     {
@@ -1396,7 +1381,6 @@ public sealed class CommandBuffer
         public Dictionary<Entity, HierarchyIntent> HierarchyByChild = null!;
         public List<byte[]> Slabs = null!;
         public bool HasCreatedEntities;
-        public (Type RuntimeType, ComponentType ComponentType, int Size)[] TypeInfoCache = [];
         public OverflowPool<int, EntityOpSlot> OpsOverflow;
         public OverflowPool<int, CreatedComponent> CreatedOverflow;
     }

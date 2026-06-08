@@ -29,7 +29,6 @@ public sealed class World : IDisposable
     private readonly List<Entity> _destroyOrderScratch;
     private int[] _destroyVisitedGen = [];
     private int _destroyCurrentGen;
-    private readonly Dictionary<Type, ComponentType> _replayComponentTypeScratch = new(16);
 
     private bool _disposed;
 
@@ -1103,7 +1102,7 @@ public sealed class World : IDisposable
         FinishMoveEntity(entity, info, destination, rowIdx);
     }
 
-    internal unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, Type runtimeType, byte[] data, int offset)
+    internal unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, byte[] data, int offset)
     {
         fixed (byte* ptr = data)
         {
@@ -1744,13 +1743,6 @@ public sealed class World : IDisposable
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(delta);
 
-        Dictionary<Type, ComponentType>? componentTypeCache = null;
-        if (!trusted)
-        {
-            componentTypeCache = _replayComponentTypeScratch;
-            componentTypeCache.Clear();
-        }
-
         if (!trusted)
         {
             foreach (var reserved in delta.ReservedEntities)
@@ -1762,10 +1754,8 @@ public sealed class World : IDisposable
 
         foreach (var created in delta.CreatedEntities)
         {
-            if (trusted)
-                MaterializeReservedEntityTrusted(created.Entity, created.Signature, created.Components);
-            else
-                MaterializeReservedEntity(created.Entity, created.Components, componentTypeCache, reservationChecked: true);
+            var signature = BuildReplaySignature(created.Components);
+            MaterializeReservedEntityCore(created.Entity, signature, created.Components);
         }
 
         foreach (var link in delta.LinkCommands)
@@ -1777,40 +1767,22 @@ public sealed class World : IDisposable
         unsafe
         {
             foreach (var add in delta.AddCommands)
-            {
-                var componentType = trusted
-                    ? add.ComponentType
-                    : ResolveCompiledComponentType(add.RuntimeType, add.ComponentType, componentTypeCache);
-                ApplyRawAddOrSet(add.Entity, componentType, add.RuntimeType, add.Data, add.DataOffset);
-            }
+                ApplyRawAddOrSet(add.Entity, add.ComponentType, add.Data, add.DataOffset);
 
             foreach (var set in delta.SetCommands)
-            {
-                var componentType = trusted
-                    ? set.ComponentType
-                    : ResolveCompiledComponentType(set.RuntimeType, set.ComponentType, componentTypeCache);
-                ApplyRawAddOrSet(set.Entity, componentType, set.RuntimeType, set.Data, set.DataOffset);
-            }
+                ApplyRawAddOrSet(set.Entity, set.ComponentType, set.Data, set.DataOffset);
         }
 
         foreach (var remove in delta.RemoveCommands)
-        {
-            var componentType = trusted
-                ? remove.ComponentType
-                : ResolveCompiledComponentType(remove.RuntimeType, remove.ComponentType, componentTypeCache);
-            RemoveBoxed(remove.Entity, componentType);
-        }
+            RemoveBoxed(remove.Entity, remove.ComponentType);
 
         foreach (var entity in delta.DestroyedEntities)
             if (IsAlive(entity)) Destroy(entity);
-
-        componentTypeCache?.Clear();
     }
 
     internal void MaterializeReservedEntity(
         Entity entity,
         IReadOnlyList<RawComponentValue> components,
-        Dictionary<Type, ComponentType>? componentTypeCache = null,
         bool reservationChecked = false)
     {
         if (!reservationChecked)
@@ -1818,13 +1790,8 @@ public sealed class World : IDisposable
             EnsureReplayReservation(entity);
         }
 
-        var signature = BuildReplaySignature(components, componentTypeCache);
-        MaterializeReservedEntityCore(entity, signature, components, componentTypeCache, trustCompiledComponentTypes: false);
-    }
-
-    internal void MaterializeReservedEntityTrusted(Entity entity, Signature signature, IReadOnlyList<RawComponentValue> components)
-    {
-        MaterializeReservedEntityCore(entity, signature, components, componentTypeCache: null, trustCompiledComponentTypes: true);
+        var signature = BuildReplaySignature(components);
+        MaterializeReservedEntityCore(entity, signature, components);
     }
 
     internal unsafe void MaterializeReservedEntityDirect(Entity entity, Archetype archetype, ReadOnlySpan<RawComponentValue> components)
@@ -1871,9 +1838,7 @@ public sealed class World : IDisposable
     private void MaterializeReservedEntityCore(
         Entity entity,
         Signature signature,
-        IReadOnlyList<RawComponentValue> components,
-        Dictionary<Type, ComponentType>? componentTypeCache,
-        bool trustCompiledComponentTypes)
+        IReadOnlyList<RawComponentValue> components)
     {
         var archetype = GetOrCreateArchetype(signature);
         var rowIndex = archetype.AddEntity(entity);
@@ -1884,10 +1849,7 @@ public sealed class World : IDisposable
         for (var index = 0; index < components.Count; index++)
         {
             var component = components[index];
-            var resolvedType = trustCompiledComponentTypes
-                ? component.ComponentType
-                : ResolveCompiledComponentType(component.RuntimeType, component.ComponentType, componentTypeCache);
-            var columnIndex = archetype.GetComponentIndex(resolvedType);
+            var columnIndex = archetype.GetComponentIndex(component.ComponentType);
             unsafe
             {
                 fixed (byte* ptr = component.Data)
@@ -1964,9 +1926,7 @@ public sealed class World : IDisposable
         return false;
     }
 
-    private Signature BuildReplaySignature(
-        IReadOnlyList<RawComponentValue> components,
-        Dictionary<Type, ComponentType>? componentTypeCache = null)
+    private static Signature BuildReplaySignature(IReadOnlyList<RawComponentValue> components)
     {
         if (components.Count == 0)
         {
@@ -1976,31 +1936,10 @@ public sealed class World : IDisposable
         var componentTypes = new ComponentType[components.Count];
         for (var index = 0; index < components.Count; index++)
         {
-            var component = components[index];
-            componentTypes[index] = ResolveCompiledComponentType(component.RuntimeType, component.ComponentType, componentTypeCache);
+            componentTypes[index] = components[index].ComponentType;
         }
 
         return new Signature(componentTypes);
-    }
-
-    private ComponentType ResolveCompiledComponentType(
-        Type runtimeType,
-        ComponentType componentType,
-        Dictionary<Type, ComponentType>? cache)
-    {
-        if (componentType.IsValid && ComponentRegistry.Shared.TryGetType(componentType, out var existing) && existing == runtimeType)
-        {
-            return componentType;
-        }
-
-        if (cache is not null && cache.TryGetValue(runtimeType, out var resolved))
-        {
-            return resolved;
-        }
-
-        resolved = GetComponentType(runtimeType);
-        cache?.Add(runtimeType, resolved);
-        return resolved;
     }
 
     private ComponentType GetComponentType(Type componentType)

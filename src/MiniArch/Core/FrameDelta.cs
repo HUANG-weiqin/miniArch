@@ -187,7 +187,7 @@ public sealed class FrameDelta
             {
                 state.CreatedComponents ??= new Dictionary<int, RawComponentValue>(ce.Components.Length);
                 foreach (var c in ce.Components)
-                    state.CreatedComponents[c.ComponentTypeId] = c;
+                    state.CreatedComponents[c.ComponentType.Value] = c;
             }
         }
 
@@ -265,8 +265,6 @@ public sealed class FrameDelta
                             case ComponentNetKind.Add or ComponentNetKind.Set:
                                 comps ??= new Dictionary<int, RawComponentValue>();
                                 comps[typeId] = new RawComponentValue(
-                                    action.Command.ComponentTypeId,
-                                    action.Command.RuntimeType,
                                     action.Command.ComponentType,
                                     action.Command.Data,
                                     action.Command.DataOffset,
@@ -283,7 +281,7 @@ public sealed class FrameDelta
                     ? System.Linq.Enumerable.ToArray(st.CreatedComponents.Values)
                     : [];
 
-                target.CreatedEntities.Add(new RawCreatedEntity(entity, BuildCreatedEntitySignature(compArray), compArray));
+                target.CreatedEntities.Add(new RawCreatedEntity(entity, compArray));
             }
             else
             {
@@ -327,7 +325,7 @@ public sealed class FrameDelta
 
     private static void FoldComponent(ref SquashEntityState state, ComponentNetKind newKind, RawComponentCommand cmd, RawRemoveCommand removeCmd)
     {
-        int typeId = newKind == ComponentNetKind.Remove ? removeCmd.ComponentTypeId : cmd.ComponentTypeId;
+        int typeId = newKind == ComponentNetKind.Remove ? removeCmd.ComponentType.Value : cmd.ComponentType.Value;
         state.ComponentActions ??= new Dictionary<int, ComponentNetAction>();
 
         ref var action = ref CollectionsMarshal.GetValueRefOrAddDefault(state.ComponentActions, typeId, out bool exists);
@@ -375,22 +373,6 @@ public sealed class FrameDelta
         }
     }
 
-    private static Signature BuildCreatedEntitySignature(IReadOnlyList<RawComponentValue> components)
-    {
-        if (components.Count == 0)
-        {
-            return Signature.Empty;
-        }
-
-        var componentTypes = new ComponentType[components.Count];
-        for (var index = 0; index < components.Count; index++)
-        {
-            componentTypes[index] = components[index].ComponentType;
-        }
-
-        return new Signature(componentTypes);
-    }
-
     private enum ComponentNetKind : byte { Add, Set, Remove }
 
     private struct ComponentNetAction
@@ -415,25 +397,21 @@ public sealed class FrameDelta
 }
 
 internal readonly record struct RawComponentValue(
-    int ComponentTypeId,
-    Type RuntimeType,
     ComponentType ComponentType,
     byte[] Data,
     int DataOffset,
     int DataSize);
 
-internal readonly record struct RawCreatedEntity(Entity Entity, Signature Signature, RawComponentValue[] Components);
+internal readonly record struct RawCreatedEntity(Entity Entity, RawComponentValue[] Components);
 
 internal readonly record struct RawComponentCommand(
     Entity Entity,
-    int ComponentTypeId,
-    Type RuntimeType,
     ComponentType ComponentType,
     int DataOffset,
     int DataSize,
     byte[] Data);
 
-internal readonly record struct RawRemoveCommand(Entity Entity, int ComponentTypeId, Type RuntimeType, ComponentType ComponentType);
+internal readonly record struct RawRemoveCommand(Entity Entity, ComponentType ComponentType);
 
 internal readonly record struct LinkCommand(Entity Parent, Entity Child);
 
