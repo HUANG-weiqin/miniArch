@@ -610,7 +610,7 @@ public sealed class CommandBufferTests
         var secondMerge = FrameDelta.Merge(firstMerge, delta3);
 
         Assert.Empty(secondMerge.ReleasedEntities);
-        Assert.Empty(secondMerge.ReservedEntities);
+        Assert.Single(secondMerge.ReservedEntities);
         Assert.Single(secondMerge.CreatedEntities);
         Assert.True(secondMerge.HasEntity(e2));
 
@@ -1532,5 +1532,241 @@ public sealed class CommandBufferTests
         foreach (var chunk in world.Query(new QueryDescription()).GetChunks())
             count += chunk.Count;
         return count;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Clone → Snapshot → Replay cross-world tests
+    // ═══════════════════════════════════════════════════════════
+
+    [Fact]
+    public void Clone_snapshot_can_be_replayed_into_another_world()
+    {
+        var source = new World();
+        var entity = source.Create(new Position(1, 2), new Velocity(3, 4));
+        var buffer = new CommandBuffer(source);
+
+        var clone = buffer.Clone(entity);
+        var delta = buffer.Snapshot();
+
+        var replica = new World();
+        var replicaEntity = replica.Create(new Position(1, 2), new Velocity(3, 4));
+        replica.Replay(delta);
+
+        Assert.True(replica.IsAlive(clone));
+        Assert.True(replica.TryGet(clone, out Position p));
+        Assert.Equal(new Position(1, 2), p);
+        Assert.True(replica.TryGet(clone, out Velocity v));
+        Assert.Equal(new Velocity(3, 4), v);
+
+        // Source entity unchanged
+        Assert.True(replica.IsAlive(replicaEntity));
+        Assert.True(replica.TryGet(replicaEntity, out Position sp));
+        Assert.Equal(new Position(1, 2), sp);
+    }
+
+    [Fact]
+    public void Clone_deep_with_children_snapshot_replay()
+    {
+        var source = new World();
+        var parent = source.Create(new Position(1, 2));
+        var child1 = source.Create(new Velocity(3, 4));
+        var child2 = source.Create(new Health(100));
+        source.Link(parent, child1);
+        source.Link(parent, child2);
+        var buffer = new CommandBuffer(source);
+
+        var clone = buffer.Clone(parent);
+        var delta = buffer.Snapshot();
+
+        var replica = new World();
+        var rParent = replica.Create(new Position(1, 2));
+        var rChild1 = replica.Create(new Velocity(3, 4));
+        var rChild2 = replica.Create(new Health(100));
+        replica.Link(rParent, rChild1);
+        replica.Link(rParent, rChild2);
+        replica.Replay(delta);
+
+        Assert.True(replica.IsAlive(clone));
+        Assert.True(replica.TryGet(clone, out Position p));
+        Assert.Equal(new Position(1, 2), p);
+
+        var cloneChildren = replica.GetChildren(clone);
+        Assert.Equal(2, cloneChildren.Count);
+    }
+
+    [Fact]
+    public void Clone_mixed_with_other_commands_snapshot_replay()
+    {
+        var source = new World();
+        var existing = source.Create(new Position(10, 20));
+        var toClone = source.Create(new Velocity(5, 6), new Health(100));
+        var buffer = new CommandBuffer(source);
+
+        var clone = buffer.Clone(toClone);
+        var created = buffer.Create();
+        buffer.Add(created, new Position(100, 200));
+        buffer.Set(existing, new Position(30, 40));
+        var delta = buffer.Snapshot();
+
+        var replica = new World();
+        var rExisting = replica.Create(new Position(10, 20));
+        var rToClone = replica.Create(new Velocity(5, 6), new Health(100));
+        replica.Replay(delta);
+
+        // Clone is alive with correct components
+        Assert.True(replica.IsAlive(clone));
+        Assert.True(replica.TryGet(clone, out Velocity cv));
+        Assert.Equal(new Velocity(5, 6), cv);
+        Assert.True(replica.TryGet(clone, out Health ch));
+        Assert.Equal(new Health(100), ch);
+
+        // Created entity
+        Assert.True(replica.IsAlive(created));
+        Assert.True(replica.TryGet(created, out Position cp));
+        Assert.Equal(new Position(100, 200), cp);
+
+        // Existing entity was set
+        Assert.True(replica.TryGet(rExisting, out Position ep));
+        Assert.Equal(new Position(30, 40), ep);
+    }
+
+    [Fact]
+    public void Clone_then_destroy_in_same_buffer_replay_is_noop()
+    {
+        var source = new World();
+        var entity = source.Create(new Position(1, 2));
+        var buffer = new CommandBuffer(source);
+
+        var clone = buffer.Clone(entity);
+        buffer.Destroy(clone);
+        var delta = buffer.Snapshot();
+
+        Assert.Empty(delta.CreatedEntities);
+        Assert.Empty(delta.DestroyedEntities);
+        Assert.Single(delta.ReservedEntities);
+        Assert.Single(delta.ReleasedEntities);
+
+        var replica = new World();
+        var rEntity = replica.Create(new Position(1, 2));
+        replica.Replay(delta);
+
+        Assert.True(replica.IsAlive(rEntity));
+        Assert.False(replica.IsAlive(clone));
+    }
+
+    [Fact]
+    public void Clone_then_set_in_same_buffer_replays_correctly()
+    {
+        // Clone and then Set on the clone within the same buffer session.
+        // This tests that replay correctly materializes the clone with the final component values.
+        var source = new World();
+        var entity = source.Create(new Position(1, 2), new Velocity(3, 4));
+
+        var buffer = new CommandBuffer(source);
+        var clone = buffer.Clone(entity);
+        buffer.Set(clone, new Position(99, 99));
+        buffer.Add(clone, new Health(100));
+        var delta = buffer.Snapshot();
+
+        Assert.Single(delta.CreatedEntities);
+        // Set and Add on a deferred entity fold into CreatedState, not separate commands
+
+        var replica = new World();
+        var rEntity = replica.Create(new Position(1, 2), new Velocity(3, 4));
+        replica.Replay(delta);
+
+        Assert.True(replica.IsAlive(clone));
+        Assert.True(replica.TryGet(clone, out Position p));
+        Assert.Equal(new Position(99, 99), p);
+        Assert.True(replica.TryGet(clone, out Velocity v));
+        Assert.Equal(new Velocity(3, 4), v);
+        Assert.True(replica.TryGet(clone, out Health h));
+        Assert.Equal(new Health(100), h);
+    }
+
+    [Fact]
+    public void CrossWorld_multi_frame_clone_replay_produces_identical_world()
+    {
+        var source = new World();
+        var deltas = new List<FrameDelta>();
+        var cb = new CommandBuffer(source);
+        var tracked = new List<Entity>();
+
+        // Frame 1: seed world with linked entities
+        var a = cb.Create(); cb.Add(a, new Position(1, 2));
+        var b = cb.Create(); cb.Add(b, new Position(3, 4)); cb.Add(b, new Velocity(5, 6));
+        cb.Link(a, b);
+        tracked.AddRange([a, b]);
+        deltas.Add(cb.Snapshot());
+        cb.Submit();
+
+        // Frame 2: clone a (which has child b via link)
+        var cloneA = cb.Clone(a);
+        tracked.Add(cloneA);
+        deltas.Add(cb.Snapshot());
+        cb.Submit();
+
+        // Frame 3: modify clone, destroy original child
+        cb.Set(cloneA, new Position(99, 99));
+        cb.Add(cloneA, new Health(100));
+        cb.Destroy(b);
+        deltas.Add(cb.Snapshot());
+        cb.Submit();
+
+        // Frame 4: clone the clone (which now has Position+Health and a child)
+        var clone2 = cb.Clone(cloneA);
+        cb.Remove<Health>(clone2);
+        tracked.Add(clone2);
+        deltas.Add(cb.Snapshot());
+        cb.Submit();
+
+        // Replay all frames into empty world
+        var replica = new World();
+        foreach (var delta in deltas)
+            replica.Replay(delta);
+
+        foreach (var entity in tracked)
+            AssertEntityStateEquals(source, replica, entity);
+
+        Assert.Equal(CountAllEntities(source), CountAllEntities(replica));
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Merge CreatedEntity cross-world replay bug regression
+    // ═══════════════════════════════════════════════════════════
+
+    [Fact]
+    public void Merge_created_entity_cross_world_replay_sets_version_correctly()
+    {
+        // Bug: RebuildFromState skips ReservedEntities for IsCreated entities.
+        // When replaying merged deltas into a fresh world, MaterializeReservedEntity
+        // skips EnsureReplayReservation (reservationChecked:true), so _records[id].Version
+        // stays 0 while entity.Version is 1 → IsAlive returns false.
+        var source = new World();
+        var existing = source.Create(new Position(10, 20));
+        var b1 = new CommandBuffer(source);
+
+        var created = b1.Create();
+        b1.Add(created, new Position(1, 2));
+        var delta1 = b1.Snapshot();
+        b1.Submit();
+
+        var b2 = new CommandBuffer(source);
+        b2.Set(created, new Position(99, 99));
+        var delta2 = b2.Snapshot();
+
+        var merged = FrameDelta.Merge(delta1, delta2);
+
+        // Merge should fold the Set into CreatedEntity
+        Assert.Single(merged.CreatedEntities);
+        Assert.Empty(merged.SetCommands);
+
+        var replica = new World();
+        var rExisting = replica.Create(new Position(10, 20));
+        replica.Replay(merged);
+
+        Assert.True(replica.IsAlive(created));
+        Assert.True(replica.TryGet(created, out Position p));
+        Assert.Equal(new Position(99, 99), p);
     }
 }

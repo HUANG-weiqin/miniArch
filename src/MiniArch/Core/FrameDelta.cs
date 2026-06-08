@@ -253,6 +253,8 @@ public sealed class FrameDelta
 
             if (st.IsCreated)
             {
+                target.ReservedEntities.Add(entity);
+
                 if (st.ComponentActions is not null)
                 {
                     foreach (var (typeId, action) in st.ComponentActions)

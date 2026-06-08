@@ -2,7 +2,7 @@
 title: Command Buffer Runtime
 module: MiniArch.Core CommandBuffer
 description: Single-threaded per-entity-deduplicating command buffer with arena slab allocator, inline CreatedState/ExistingEntityOps, direct Submit() path, Snapshot() for cross-world replay, FrameDelta merge, SubmitAndSnapshotAsync()
-updated: 2026-06-07 (修正：移除已删除的 ComponentWriterCache 引用)
+updated: 2026-06-08 (修复 Merge CreatedEntity ReservedEntities bug + Clone replay 测试覆盖)
 ---
 # Command Buffer Runtime
 
@@ -65,3 +65,4 @@ updated: 2026-06-07 (修正：移除已删除的 ComponentWriterCache 引用)
 - replay 期间逐条触发 query layout 失效会增加额外开销
 - existing destroy 必须存完整 `Entity`（含 version），不能只存 id
 - `InlineMap` 的 `OverflowHead` 默认值 0 在 `Clear()` 后可能导致遍历空 pool；新分配 map 必须显式初始化 `OverflowHead = -1`
+- ~~**FrameDelta.Merge 对 CreatedEntity 不产出 ReservedEntities**~~（已修复 2026-06-08）：`RebuildFromState` 的 `IsCreated` 分支现在也会加 `ReservedEntities`，与 `BuildDelta` 正常路径保持一致。修复前跨 world replay 会因 Version 未设导致 `IsAlive` 返回 false。伴随此修复，`MergeOfMerge_created_then_destroy_then_recreate` 测试的 `Assert.Empty(ReservedEntities)` 也被修正为 `Assert.Single(ReservedEntities)`——因为 cancel-out 的 reserve+release 对被消除后，新 CreatedEntity 的 reserve 仍然存在。
