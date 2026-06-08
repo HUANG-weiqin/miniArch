@@ -181,7 +181,8 @@ public static class WorldSnapshot
             }
         }
 
-        entries.Sort(static (left, right) => StringComparer.Ordinal.Compare(left.SchemaName, right.SchemaName));
+        var reg = world.Components;
+        entries.Sort((left, right) => reg.GetOrCreate(left.ComponentType).Value.CompareTo(reg.GetOrCreate(right.ComponentType).Value));
 
         for (var index = 0; index < entries.Count; index++)
         {
