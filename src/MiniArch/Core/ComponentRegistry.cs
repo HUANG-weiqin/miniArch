@@ -3,12 +3,12 @@ namespace MiniArch.Core;
 /// <summary>
 /// Maps component types to runtime ids.
 /// </summary>
-public sealed class ComponentRegistry
+internal sealed class ComponentRegistry
 {
     /// <summary>
     /// Global shared registry instance.
     /// </summary>
-    public static ComponentRegistry Shared { get; } = new();
+    internal static ComponentRegistry Shared { get; } = new();
 
     private readonly object _writeLock = new();
     private RegistrySnapshot _snapshot = new(new Dictionary<Type, ComponentType>(), Array.Empty<Type>());

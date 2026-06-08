@@ -417,8 +417,8 @@ public sealed class QueryTests
 
         var description = new QueryDescription().With<Position>().With<Velocity>();
         var query = MiniQuery.Create(world, in description);
-        var positionType = world.Components.GetOrCreate<Position>();
-        var velocityType = world.Components.GetOrCreate<Velocity>();
+        var positionType = ComponentRegistry.Shared.GetOrCreate<Position>();
+        var velocityType = ComponentRegistry.Shared.GetOrCreate<Velocity>();
 
         var rowWiseChecksum = ComputeRowWiseChecksum(query, positionType, velocityType);
         var spanChecksum = ComputeSpanChecksum(query, positionType, velocityType);
@@ -439,8 +439,8 @@ public sealed class QueryTests
 
         var description = new QueryDescription().With<Position>().With<Velocity>();
         var query = MiniQuery.Create(world, in description);
-        var positionType = world.Components.GetOrCreate<Position>();
-        var velocityType = world.Components.GetOrCreate<Velocity>();
+        var positionType = ComponentRegistry.Shared.GetOrCreate<Position>();
+        var velocityType = ComponentRegistry.Shared.GetOrCreate<Velocity>();
 
         var firstRun = ComputeRowWiseChecksum(query, positionType, velocityType);
         var secondRun = ComputeRowWiseChecksum(query, positionType, velocityType);
@@ -461,8 +461,8 @@ public sealed class QueryTests
 
         var description = new QueryDescription().With<Position>().With<Velocity>();
         var query = MiniQuery.Create(world, in description);
-        var positionType = world.Components.GetOrCreate<Position>();
-        var velocityType = world.Components.GetOrCreate<Velocity>();
+        var positionType = ComponentRegistry.Shared.GetOrCreate<Position>();
+        var velocityType = ComponentRegistry.Shared.GetOrCreate<Velocity>();
 
         var firstRun = ComputeSpanChecksum(query, positionType, velocityType);
         var secondRun = ComputeSpanChecksum(query, positionType, velocityType);
@@ -502,3 +502,4 @@ public sealed class QueryTests
         return checksum;
     }
 }
+

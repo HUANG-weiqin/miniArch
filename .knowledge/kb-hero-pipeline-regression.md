@@ -2,7 +2,7 @@
 title: Hero Pipeline Regression Test
 module: HeroComing.Perf
 description: First-class regression gate for architecture changes - 30s timed throughput test
-updated: 2026-06-08
+updated: 2026-06-09
 ---
 # Hero Pipeline Regression Test
 
@@ -18,15 +18,15 @@ updated: 2026-06-08
 - 引用 `tests/HeroPipeline.Tests/HeroPipeline.Tests.csproj` 获取 pipeline 代码
 - 500 players + 500 enemies on 100x100 grid
 
-## 当前 baseline（2026-06-08）
+## 当前 baseline（2026-06-09）
 
 | 链路 | 吞吐量 rounds/s | 平均耗时 ms/round | 总轮数 | 内存稳定性 |
 |---|---|---|---|---|
-| Movement（无 collision） | 1289.0 | 0.8 | 38671 | 稳定 |
-| Attack（含 collision） | 806.7 | 1.2 | 24201 | 稳定 |
+| Movement（无 collision） | 1280.1 | 0.8 | 38403 | 稳定 |
+| Attack（含 collision） | 786.2 | 1.3 | 23588 | 稳定 |
 
 ### 回归阈值
 
-- Movement 吞吐量：≥1031 rounds/s（baseline 的 80%）
-- Attack 吞吐量：≥645 rounds/s（baseline 的 80%）
+- Movement 吞吐量：≥1024 rounds/s（baseline 的 80%）
+- Attack 吞吐量：≥628 rounds/s（baseline 的 80%）
 - 内存：heap delta 不能持续增长（允许 ±10% 波动）

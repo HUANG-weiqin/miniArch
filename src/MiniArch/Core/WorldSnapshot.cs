@@ -110,7 +110,7 @@ public static class WorldSnapshot
         var schemaComponentTypes = new ComponentType[schemaTypes.Length];
         for (var index = 0; index < schemaTypes.Length; index++)
         {
-            schemaComponentTypes[index] = world.Components.GetOrCreate(schemaTypes[index]);
+            schemaComponentTypes[index] = ComponentRegistry.Shared.GetOrCreate(schemaTypes[index]);
         }
 
         for (var archetypeIndex = 0; archetypeIndex < archetypeCount; archetypeIndex++)
@@ -170,7 +170,7 @@ public static class WorldSnapshot
             var components = archetype.Signature.AsSpan();
             for (var index = 0; index < components.Length; index++)
             {
-                var componentType = world.Components.GetType(components[index]);
+                var componentType = ComponentRegistry.Shared.GetType(components[index]);
                 if (!seenTypes.Add(componentType))
                 {
                     continue;
@@ -181,7 +181,7 @@ public static class WorldSnapshot
             }
         }
 
-        var reg = world.Components;
+        var reg = ComponentRegistry.Shared;
         entries.Sort((left, right) => reg.GetOrCreate(left.ComponentType).Value.CompareTo(reg.GetOrCreate(right.ComponentType).Value));
 
         for (var index = 0; index < entries.Count; index++)
@@ -205,7 +205,7 @@ public static class WorldSnapshot
 
         for (var index = 0; index < components.Length; index++)
         {
-            var runtimeType = world.Components.GetType(components[index]);
+            var runtimeType = ComponentRegistry.Shared.GetType(components[index]);
             writer.Write(schemaIndexByType[runtimeType]);
         }
 
@@ -219,7 +219,7 @@ public static class WorldSnapshot
 
         for (var columnIndex = 0; columnIndex < components.Length; columnIndex++)
         {
-            var componentType = world.Components.GetType(components[columnIndex]);
+            var componentType = ComponentRegistry.Shared.GetType(components[columnIndex]);
             GetColumnCodec(componentType).Write(writer, archetype, columnIndex, entityCount);
         }
     }
@@ -257,7 +257,7 @@ public static class WorldSnapshot
         {
             var runtimeComponentType = fileOrderedComponentTypes[fileColumnIndex];
             var runtimeColumnIndex = archetype.GetComponentIndex(runtimeComponentType);
-            var runtimeType = world.Components.GetType(runtimeComponentType);
+            var runtimeType = ComponentRegistry.Shared.GetType(runtimeComponentType);
             GetColumnCodec(runtimeType).Read(reader, archetype, runtimeColumnIndex, rowCount);
         }
 

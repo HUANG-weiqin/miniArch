@@ -354,22 +354,22 @@ public static class CommandBufferSharedScenarios
         var arch = location.Archetype;
         var parts = new List<string>(4);
 
-        if (TryGetComponent(world, location, arch, world.Components.GetOrCreate<BenchmarkPosition>(), out BenchmarkPosition position))
+        if (TryGetComponent(world, location, arch, ComponentRegistry.Shared.GetOrCreate<BenchmarkPosition>(), out BenchmarkPosition position))
         {
             parts.Add($"Position({position.X},{position.Y})");
         }
 
-        if (TryGetComponent(world, location, arch, world.Components.GetOrCreate<BenchmarkVelocity>(), out BenchmarkVelocity velocity))
+        if (TryGetComponent(world, location, arch, ComponentRegistry.Shared.GetOrCreate<BenchmarkVelocity>(), out BenchmarkVelocity velocity))
         {
             parts.Add($"Velocity({velocity.X},{velocity.Y})");
         }
 
-        if (TryGetComponent(world, location, arch, world.Components.GetOrCreate<BenchmarkHealth>(), out BenchmarkHealth health))
+        if (TryGetComponent(world, location, arch, ComponentRegistry.Shared.GetOrCreate<BenchmarkHealth>(), out BenchmarkHealth health))
         {
             parts.Add($"Health({health.Value})");
         }
 
-        if (TryGetComponent(world, location, arch, world.Components.GetOrCreate<BenchmarkArmor>(), out BenchmarkArmor armor))
+        if (TryGetComponent(world, location, arch, ComponentRegistry.Shared.GetOrCreate<BenchmarkArmor>(), out BenchmarkArmor armor))
         {
             parts.Add($"Armor({armor.Value})");
         }

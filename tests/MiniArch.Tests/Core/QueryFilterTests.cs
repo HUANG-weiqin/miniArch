@@ -24,10 +24,10 @@ public sealed class QueryFilterTests
 
         var query = MiniQuery.Create(world, in description);
 
-        var position = world.Components.GetOrCreate<Position>();
-        var velocity = world.Components.GetOrCreate<Velocity>();
-        var tagA = world.Components.GetOrCreate<TagA>();
-        var tagB = world.Components.GetOrCreate<TagB>();
+        var position = ComponentRegistry.Shared.GetOrCreate<Position>();
+        var velocity = ComponentRegistry.Shared.GetOrCreate<Velocity>();
+        var tagA = ComponentRegistry.Shared.GetOrCreate<TagA>();
+        var tagB = ComponentRegistry.Shared.GetOrCreate<TagB>();
 
         Assert.Equal(1, query.RequiredSignature.Count);
         Assert.Contains(position, query.RequiredSignature);
@@ -155,3 +155,4 @@ public sealed class QueryFilterTests
         return dictionary.Count;
     }
 }
+

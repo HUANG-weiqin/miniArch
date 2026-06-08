@@ -483,8 +483,8 @@ public sealed class MiniComplexQueryWorldState
     {
         World = world;
         Entities = entities;
-        PositionType = world.Components.GetOrCreate<Position>();
-        VelocityType = world.Components.GetOrCreate<Velocity>();
+        PositionType = MiniArch.Core.ComponentRegistry.Shared.GetOrCreate<Position>();
+        VelocityType = MiniArch.Core.ComponentRegistry.Shared.GetOrCreate<Velocity>();
         WithAllQuery = BenchmarkWorldFactory.BuildMiniWithAllQuery(world);
         WithAllWithoutQuery = BenchmarkWorldFactory.BuildMiniWithAllWithoutQuery(world);
         WithAllAnyQuery = BenchmarkWorldFactory.BuildMiniWithAllAnyQuery(world);
@@ -496,8 +496,8 @@ public sealed class MiniComplexQueryWorldState
 
     public MiniWorld World;
     public MiniEntity[] Entities;
-    public MiniComponentType PositionType;
-    public MiniComponentType VelocityType;
+    internal MiniComponentType PositionType;
+    internal MiniComponentType VelocityType;
     internal MiniQuery WithAllQuery;
     internal MiniQuery WithAllWithoutQuery;
     internal MiniQuery WithAllAnyQuery;
@@ -532,12 +532,12 @@ public sealed class MiniWideQueryWorldState
     {
         World = world;
         Entities = entities;
-        PositionType = world.Components.GetOrCreate<Position>();
-        VelocityType = world.Components.GetOrCreate<Velocity>();
-        HealthType = world.Components.GetOrCreate<Health>();
-        TeamType = world.Components.GetOrCreate<Team>();
-        AccelerationType = world.Components.GetOrCreate<Acceleration>();
-        ManaType = world.Components.GetOrCreate<Mana>();
+        PositionType = MiniArch.Core.ComponentRegistry.Shared.GetOrCreate<Position>();
+        VelocityType = MiniArch.Core.ComponentRegistry.Shared.GetOrCreate<Velocity>();
+        HealthType = MiniArch.Core.ComponentRegistry.Shared.GetOrCreate<Health>();
+        TeamType = MiniArch.Core.ComponentRegistry.Shared.GetOrCreate<Team>();
+        AccelerationType = MiniArch.Core.ComponentRegistry.Shared.GetOrCreate<Acceleration>();
+        ManaType = MiniArch.Core.ComponentRegistry.Shared.GetOrCreate<Mana>();
         WideQuery = BenchmarkWorldFactory.BuildMiniWideQuery(world);
 
         _ = WideQuery.MatchedArchetypes;
@@ -545,12 +545,12 @@ public sealed class MiniWideQueryWorldState
 
     public MiniWorld World;
     public MiniEntity[] Entities;
-    public MiniComponentType PositionType;
-    public MiniComponentType VelocityType;
-    public MiniComponentType HealthType;
-    public MiniComponentType TeamType;
-    public MiniComponentType AccelerationType;
-    public MiniComponentType ManaType;
+    internal MiniComponentType PositionType;
+    internal MiniComponentType VelocityType;
+    internal MiniComponentType HealthType;
+    internal MiniComponentType TeamType;
+    internal MiniComponentType AccelerationType;
+    internal MiniComponentType ManaType;
     internal MiniQuery WideQuery;
 }
 

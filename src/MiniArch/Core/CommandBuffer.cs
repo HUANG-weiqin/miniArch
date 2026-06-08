@@ -1209,7 +1209,7 @@ public sealed class CommandBuffer
         }
 
         var componentType = (ComponentType)componentTypeId;
-        if (!_world.Components.TryGetType(componentType, out var runtimeType))
+        if (!ComponentRegistry.Shared.TryGetType(componentType, out var runtimeType))
         {
             componentType = default;
         }

@@ -20,7 +20,7 @@ public sealed class IntegrationTests
         world.Set(entity, new Position(9, 9));
         world.Remove<Velocity>(entity);
 
-        var positionId = world.Components.GetOrCreate<Position>();
+        var positionId = ComponentRegistry.Shared.GetOrCreate<Position>();
         var description = new QueryDescription().With<Position>();
         var query = MiniQuery.Create(world, in description);
 
@@ -38,3 +38,4 @@ public sealed class IntegrationTests
         Assert.Equal(new Position(9, 9), location.Archetype.GetComponent<Position>(positionId, location.RowIndex));
     }
 }
+

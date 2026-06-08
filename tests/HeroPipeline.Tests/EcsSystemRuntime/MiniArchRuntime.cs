@@ -79,7 +79,7 @@ public sealed class MiniArchRuntime
     {
         foreach (Type type in ComponentTypes)
         {
-            World.Components.GetOrCreate(type);
+            ComponentRegistry.Shared.GetOrCreate(type);
         }
     }
 }

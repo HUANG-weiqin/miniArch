@@ -82,17 +82,6 @@ public sealed partial class World : IDisposable
 #endif
     }
 
-    /// <summary>
-    /// Gets the component registry.
-    /// </summary>
-    public ComponentRegistry Components
-    {
-        get
-        {
-            ThrowIfDisposed();
-            return ComponentRegistry.Shared;
-        }
-    }
 
     /// <summary>
     /// Gets the entity metadata capacity.

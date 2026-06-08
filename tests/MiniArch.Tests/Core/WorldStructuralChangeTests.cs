@@ -19,7 +19,7 @@ public sealed class WorldStructuralChangeTests
 
         Assert.True(world.TryGetLocation(entity, out var info));
         Assert.Single(info.Archetype.Signature);
-        Assert.Contains(world.Components.GetOrCreate<Position>(), info.Archetype.Signature);
+        Assert.Contains(ComponentRegistry.Shared.GetOrCreate<Position>(), info.Archetype.Signature);
     }
 
     [Fact]
@@ -36,7 +36,7 @@ public sealed class WorldStructuralChangeTests
         Assert.True(world.TryGetLocation(entity, out var after));
         Assert.Same(before.Archetype, after.Archetype);
         Assert.Equal(before.RowIndex, after.RowIndex);
-        Assert.Equal(new Position(9, 9), after.Archetype.GetComponent<Position>(world.Components.GetOrCreate<Position>(), after.RowIndex));
+        Assert.Equal(new Position(9, 9), after.Archetype.GetComponent<Position>(ComponentRegistry.Shared.GetOrCreate<Position>(), after.RowIndex));
     }
 
     [Fact]
@@ -45,8 +45,8 @@ public sealed class WorldStructuralChangeTests
         var world = new World();
         var entity = world.Create();
 
-        var positionId = world.Components.GetOrCreate<Position>();
-        var velocityId = world.Components.GetOrCreate<Velocity>();
+        var positionId = ComponentRegistry.Shared.GetOrCreate<Position>();
+        var velocityId = ComponentRegistry.Shared.GetOrCreate<Velocity>();
 
         world.Add(entity, new Position(1, 2));
         world.Add(entity, new Velocity(3, 4));
@@ -78,8 +78,8 @@ public sealed class WorldStructuralChangeTests
         Assert.True(world.TryGetLocation(entity, out var after));
         Assert.NotSame(before.Archetype, after.Archetype);
         Assert.Single(after.Archetype.Signature);
-        Assert.Contains(world.Components.GetOrCreate<Position>(), after.Archetype.Signature);
-        Assert.DoesNotContain(world.Components.GetOrCreate<Velocity>(), after.Archetype.Signature);
+        Assert.Contains(ComponentRegistry.Shared.GetOrCreate<Position>(), after.Archetype.Signature);
+        Assert.DoesNotContain(ComponentRegistry.Shared.GetOrCreate<Velocity>(), after.Archetype.Signature);
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public sealed class WorldStructuralChangeTests
     {
         var world = new World();
         var entities = new List<Entity>();
-        var positionId = world.Components.GetOrCreate<Position>();
+        var positionId = ComponentRegistry.Shared.GetOrCreate<Position>();
 
         for (var i = 0; i < 1000; i++)
         {
@@ -142,19 +142,20 @@ public sealed class WorldStructuralChangeTests
         Assert.True(HasComponent<Velocity>(world, entity));
         Assert.Equal(new Position(1, 2), GetComponentValue(world, entity));
         Assert.Equal(new Velocity(3, 4), world.TryGetLocation(entity, out var info)
-            ? info.Archetype.GetComponent<Velocity>(world.Components.GetOrCreate<Velocity>(), info.RowIndex)
+            ? info.Archetype.GetComponent<Velocity>(ComponentRegistry.Shared.GetOrCreate<Velocity>(), info.RowIndex)
             : default);
     }
 
     private static Position GetComponentValue(World world, Entity entity)
     {
         Assert.True(world.TryGetLocation(entity, out var info));
-        return info.Archetype.GetComponent<Position>(world.Components.GetOrCreate<Position>(), info.RowIndex);
+        return info.Archetype.GetComponent<Position>(ComponentRegistry.Shared.GetOrCreate<Position>(), info.RowIndex);
     }
 
     private static bool HasComponent<T>(World world, Entity entity)
     {
-        return world.TryGetLocation(entity, out var info) && info.Archetype.Signature.Contains(world.Components.GetOrCreate<T>());
+        return world.TryGetLocation(entity, out var info) && info.Archetype.Signature.Contains(ComponentRegistry.Shared.GetOrCreate<T>());
     }
 
 }
+

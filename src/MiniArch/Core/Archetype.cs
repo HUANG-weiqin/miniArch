@@ -8,7 +8,7 @@ namespace MiniArch.Core;
 /// Archetype is the sole storage unit — there is exactly one data block
 /// per archetype (no multi-chunk splitting).
 /// </summary>
-public sealed partial class Archetype
+internal sealed partial class Archetype
 {
     // --- Storage (was in Chunk) ---
     private Entity[] _entities;

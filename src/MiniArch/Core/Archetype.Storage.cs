@@ -5,7 +5,7 @@ using System.Runtime.InteropServices;
 namespace MiniArch.Core;
 
 [SkipLocalsInit]
-public sealed partial class Archetype
+internal sealed partial class Archetype
 {
     /// <summary>
     /// Grows storage to guarantee capacity for at least <paramref name="requiredCapacity"/> rows.

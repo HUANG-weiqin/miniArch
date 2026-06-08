@@ -120,7 +120,7 @@ public sealed class TrickyEdgeCaseTests
     {
         var world = new World();
         var entity = world.Create(new Position(1, 2));
-        var positionId = world.Components.GetOrCreate<Position>();
+        var positionId = ComponentRegistry.Shared.GetOrCreate<Position>();
 
         world.Set(entity, new Position(0, 0));
 
@@ -136,7 +136,7 @@ public sealed class TrickyEdgeCaseTests
     {
         var world = new World();
         var entity = world.Create();
-        var positionId = world.Components.GetOrCreate<Position>();
+        var positionId = ComponentRegistry.Shared.GetOrCreate<Position>();
 
         world.Add(entity, new Position(1, 2));
         world.Add(entity, new Position(99, 99));
@@ -166,9 +166,9 @@ public sealed class TrickyEdgeCaseTests
     {
         var world = new World();
         var entity = world.Create();
-        var positionId = world.Components.GetOrCreate<Position>();
-        var velocityId = world.Components.GetOrCreate<Velocity>();
-        var healthId = world.Components.GetOrCreate<Health>();
+        var positionId = ComponentRegistry.Shared.GetOrCreate<Position>();
+        var velocityId = ComponentRegistry.Shared.GetOrCreate<Velocity>();
+        var healthId = ComponentRegistry.Shared.GetOrCreate<Health>();
 
         for (var cycle = 0; cycle < 100; cycle++)
         {
@@ -217,9 +217,9 @@ public sealed class TrickyEdgeCaseTests
     {
         var world = new World();
         var entity = world.Create(new Position(1, 2), new Velocity(3, 4), new Health(100));
-        var positionId = world.Components.GetOrCreate<Position>();
-        var velocityId = world.Components.GetOrCreate<Velocity>();
-        var healthId = world.Components.GetOrCreate<Health>();
+        var positionId = ComponentRegistry.Shared.GetOrCreate<Position>();
+        var velocityId = ComponentRegistry.Shared.GetOrCreate<Velocity>();
+        var healthId = ComponentRegistry.Shared.GetOrCreate<Health>();
 
         world.Set(entity, new Position(10, 20));
         world.Set(entity, new Health(200));
@@ -759,8 +759,8 @@ public sealed class TrickyEdgeCaseTests
         var worldB = new World();
 
         var entityA = worldA.Create(new Position(1, 2));
-        var ctA = worldA.Components.GetOrCreate<Position>();
-        var ctB = worldB.Components.GetOrCreate<Position>();
+        var ctA = ComponentRegistry.Shared.GetOrCreate<Position>();
+        var ctB = ComponentRegistry.Shared.GetOrCreate<Position>();
 
         Assert.Equal(ctA, ctB);
 
@@ -839,3 +839,4 @@ public sealed class TrickyEdgeCaseTests
         Assert.False(world.TryGet(badEntity, out Position _));
     }
 }
+

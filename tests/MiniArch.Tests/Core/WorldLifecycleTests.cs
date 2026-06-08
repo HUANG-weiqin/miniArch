@@ -100,8 +100,8 @@ public sealed class WorldLifecycleTests
     {
         var world = new World();
         var entity = world.Create(new Position(1, 2), new Velocity(3, 4));
-        var positionId = world.Components.GetOrCreate<Position>();
-        var velocityId = world.Components.GetOrCreate<Velocity>();
+        var positionId = ComponentRegistry.Shared.GetOrCreate<Position>();
+        var velocityId = ComponentRegistry.Shared.GetOrCreate<Velocity>();
 
         Assert.True(world.TryGetLocation(entity, out var info));
         Assert.Equal(2, info.Archetype.Signature.Count);
@@ -126,8 +126,8 @@ public sealed class WorldLifecycleTests
             new C5(5), new C6(6), new C7(7), new C8(8),
             new C9(9), new C10(10), new C11(11), new C12(12),
             new C13(13), new C14(14), new C15(15), new C16(16));
-        var c1 = world.Components.GetOrCreate<C1>();
-        var c16 = world.Components.GetOrCreate<C16>();
+        var c1 = ComponentRegistry.Shared.GetOrCreate<C1>();
+        var c16 = ComponentRegistry.Shared.GetOrCreate<C16>();
 
         Assert.True(world.TryGetLocation(entity, out var info));
         Assert.Equal(16, info.Archetype.Signature.Count);
@@ -600,3 +600,4 @@ public sealed class WorldLifecycleTests
         }
     }
 }
+

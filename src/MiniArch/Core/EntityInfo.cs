@@ -13,7 +13,7 @@ public readonly struct EntityInfo
     /// <summary>
     /// Gets the owning archetype.
     /// </summary>
-    public Archetype Archetype { get; }
+    internal Archetype Archetype { get; }
 
     /// <summary>
     /// Gets the row index within the archetype storage.

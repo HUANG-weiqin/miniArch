@@ -4,7 +4,7 @@ namespace MiniArch.Core;
 /// Runtime component id.
 /// </summary>
 /// <param name="Value">The component id value.</param>
-public readonly record struct ComponentType(int Value) : IComparable<ComponentType>
+internal readonly record struct ComponentType(int Value) : IComparable<ComponentType>
 {
     /// <summary>
     /// Compares ids by value.
