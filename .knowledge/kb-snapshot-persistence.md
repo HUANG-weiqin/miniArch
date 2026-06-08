@@ -2,7 +2,7 @@
 title: Snapshot Persistence
 module: MiniArch.Core Snapshot
 description: Full-world snapshot save/load design for unmanaged components, plus WorldClone for zero-serialization in-memory copy
-updated: 2026-06-07 (修正：internal 重建 API 名称已更新)
+updated: 2026-06-08 (internal 重建 API 在 World partial 文件中)
 ---
 # Snapshot Persistence
 
@@ -17,8 +17,8 @@ updated: 2026-06-07 (修正：internal 重建 API 名称已更新)
 - 核心组成：
   - `src/MiniArch/Core/WorldSnapshot.cs`：snapshot 二进制读写入口
   - `src/MiniArch/Core/WorldClone.cs`：内存直拷 World 克隆（零序列化）
-  - `src/MiniArch/Core/World.cs`：slot version、location、free id 重建桥接点
-  - `src/MiniArch/Core/Archetype.cs` + `Chunk.cs`：按快照 chunk 精确导入实体批次
+  - `src/MiniArch/Core/World.cs`（+ partial 文件）：slot version、location、free id 重建桥接点
+  - `src/MiniArch/Core/Archetype.cs` + `Archetype.Storage.cs`：按快照 chunk 精确导入实体批次
 
 ## WorldClone vs WorldSnapshot
 
@@ -50,3 +50,4 @@ updated: 2026-06-07 (修正：internal 重建 API 名称已更新)
 - 读档复用 `GetWritableChunk` 会挤压重排快照 chunk 边界
 - `struct` 不一定是 `unmanaged`
 - 跨版本类型名变化直接失配（当前不压缩、无校验和）
+- internal 重建 API 分布在 World 的多个 partial 文件中，修改时需确认编译范围

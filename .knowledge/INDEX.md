@@ -12,7 +12,7 @@
 | MiniArch.Core Query | `kb-query-invalidation.md` |
 | MiniArch.Core Snapshot | `kb-snapshot-persistence.md` |
 | MiniArch.Core Hierarchy | `kb-hierarchy-runtime.md` |
-| MiniArch.DebugMetrics | `kb-debug-metrics.md` |
+| MiniArch.Core DebugMetrics | `kb-debug-metrics.md`（已删除，保留页作为历史记录） |
 | MiniArch（用户 API 分层） | `kb-user-api-layering.md` |
 | MiniArch.Tests（测试组织） | `kb-test-workflow.md` |
 | MiniArch.Benchmarks（对比数据） | `kb-ecs-comparison.md` |
@@ -33,10 +33,19 @@
 - **CommandBuffer** → `kb-command-buffer-feasibility.md`
 - **Archive/Snapshot** → `kb-snapshot-persistence.md`
 - **Hierarchy** → `kb-hierarchy-runtime.md`
-- **Debug 指标** → `kb-debug-metrics.md`
 - **用户 API 分层** → `kb-user-api-layering.md`
 - **测试/基准** → `kb-test-workflow.md`、`kb-hero-pipeline-benchmarks.md`、`kb-ecs-comparison.md`、`kb-gameticksim-scenarios.md`
 - **回归门禁** → `kb-hero-pipeline-regression.md`
 - **排查行为偏差** → 各模块页的 `坑点` + 对应测试文件
 - **理解"为什么边界这么划"** → 各模块页的 `决策`
 - **新增知识页** → 先挂到这里，再写模块正文
+
+## 重大变更摘要（2026-06-08 大重构）
+
+- **World 拆分为 partial 文件**：World.cs + World.EntityLifecycle.cs + World.Create.Generated.cs + World.QueryCache.cs + World.StructuralChange.cs
+- **Archetype 拆分为 partial 文件**：Archetype.cs（字段/metadata）+ Archetype.Storage.cs（存储操作）
+- **Edge cache 从直索引数组改为 bounded 4-slot LRU**
+- **DebugMetrics 整个子系统已删除**（kb-debug-metrics.md 保留作为历史记录）
+- **ICommandRecorder 接口已删除**
+- **FrameDelta 热路径 struct 大幅缩小**（Movement +50% / Attack +29%）
+- **新增 ChunkView public API** + `Query.GetChunks()` + `World.GetFirst<T>()` + `CommandBuffer.Clone()`

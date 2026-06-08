@@ -1,38 +1,27 @@
 ---
 title: Debug Metrics
-module: MiniArch.DebugMetrics
-description: DEBUG-only metrics snapshots and pasteable diagnostic reports for MiniArch World and CommandBuffer allocation pressure
-updated: 2026-06-01
+module: MiniArch.Core
+description: 已删除 — DebugMetrics 子系统在 YAGNI 重构中被完全移除
+updated: 2026-06-08 (全量删除确认)
 ---
 # Debug Metrics
 
-## 这个模块是干什么的
+## 状态：已删除
 
-- 在 DEBUG 构建里记录内部扩容和拷贝压力
-- 给用户提供可直接粘贴的文本报告
+`DebugMetrics.cs` 整个文件已在 YAGNI 重构中被删除。以下内容也一并移除：
+- `WorldDebugMetrics` struct
+- `CommandBufferDebugMetrics` struct
+- `World` 和 `CommandBuffer` 中的 `#if DEBUG` 计数器累加语句
+- API：`World.GetDebugMetrics()` / `World.GetDebugReport()` / `CommandBuffer.GetDebugMetrics()` / `CommandBuffer.GetDebugReport()`
+- 测试文件 `tests/MiniArch.Tests/Core/DebugMetricsTests.cs`
 
-## 架构
+## 替代方案
 
-- 核心组成：`src/MiniArch/Core/DebugMetrics.cs`（`WorldDebugMetrics` + `CommandBufferDebugMetrics` 快照类型）
-- API：`World.GetDebugMetrics()` / `World.GetDebugReport()`、`CommandBuffer.GetDebugMetrics()` / `CommandBuffer.GetDebugReport()`
-- 数据流：用户跑 workload → 内部路径积累计数器 → 调用 `GetDebugReport()` 拿稳定多行文本
+如果未来需要 debug 计数器，建议：
+- 使用 `dotnet-trace` / `EventSource` 外部采样
+- 在 benchmark 中用 `PERF_DIAG` 条件编译临时埋点（不在 Release 中保留）
 
-## 决策
+## 历史
 
-- pull-style snapshot API，不引入 callback/event/session
-- API 在 Release 中仍存在但返回 disabled 值；计数字段和累加语句在 `#if DEBUG` 内
-- 报告 attached to owner（World 只报告 world-owned，CommandBuffer 只报告 buffer-owned），不新增全局状态
-
-## 认知模型
-
-- 每个对象自己的 DEBUG 黑匣子飞行记录仪
-
-## 入口
-
-- `src/MiniArch/Core/DebugMetrics.cs`：所有公开字段
-- `tests/MiniArch.Tests/Core/DebugMetricsTests.cs`：API 契约与 Release disabled 契约
-
-## 坑点
-
-- 新增计数器时，字段和累加都必须在 `#if DEBUG` 内，Release 只保留默认快照
-- 报告 label 要稳定——用户会把文本粘贴回来定位
+- 删除原因：YAGNI — 计数器从未在 Release 中使用，维护成本 > 收益
+- 删除 commit：v1.1.8 YAGNI cleanup 系列

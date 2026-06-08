@@ -2,7 +2,7 @@
 title: Hierarchy Runtime
 module: MiniArch.Core Hierarchy
 description: Runtime-owned parent-child relations, cascade destroy semantics, and snapshot restore behavior
-updated: 2026-06-01
+updated: 2026-06-08 (hierarchy API 在 World.cs 主文件中)
 ---
 # Hierarchy Runtime
 
@@ -17,7 +17,7 @@ updated: 2026-06-01
 
 - 核心组成：
   - `src/MiniArch/Core/HierarchyTable.cs`：runtime-owned 关系表（邻接链表：`_parentByChild[id]` + `_firstChild[id]` + free-list 复用 slot）
-  - `src/MiniArch/Core/World.cs`：对外 API（`Link`、`GetChildren`、`Destroy` 级联）、destroy 集成
+  - `src/MiniArch/Core/World.cs`（主文件）：对外 API（`Link`、`GetChildren`、`Destroy` 级联）、destroy 集成
   - `src/MiniArch/Core/WorldSnapshot.cs`：hierarchy link 的持久化读写
 
 ## 决策

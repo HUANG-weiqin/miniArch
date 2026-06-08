@@ -2,7 +2,7 @@
 title: Test Workflow
 module: MiniArch.Tests
 description: How the test suite, query profiling, snapshot benchmarks, and structural-change benchmarks are organized and how to run them
-updated: 2026-06-07 (修正：补充 EntityAccessorTests 条目)
+updated: 2026-06-08 (DebugMetricsTests 已删除、CommandBufferTests 大幅扩展、ThroughputRunner 已移除)
 ---
 # Test Workflow
 
@@ -18,20 +18,20 @@ updated: 2026-06-07 (修正：补充 EntityAccessorTests 条目)
 
 | 测试文件 | 覆盖范围 |
 |---|---|
-| `Core/WorldLifecycleTests.cs` | 实体生命周期、version、free-list、EnsureCapacity、CreateMany、带组件 Create<T...> |
+| `Core/WorldLifecycleTests.cs` | 实体生命周期、version、free-list、EnsureCapacity、CreateMany、带组件 Create<T...>、GetFirst<T>() |
 | `Core/WorldStructuralChangeTests.cs` | Add/Set/Remove/Destroy 的 structural semantics |
 | `Core/EntityTests.cs` | Entity 句柄契约 |
 | `Core/ChunkTests.cs` | 存储密度、并发只读、引用类型列清尾槽位 |
 | `Core/ChunkColumnIndexTests.cs` | Column index 查找正确性 |
 | `Core/ArchetypeTests.cs` | chunk 复用、non-full chunk tracking |
-| `Core/CommandBufferTests.cs` | Submit/Snapshot/Merge、cross-world replay、concurrent recording |
+| `Core/CommandBufferTests.cs` | Submit/Snapshot/Merge、cross-world replay、concurrent recording、Clone、struct 缩小后的正确性 |
 | `Core/CommandBufferParityTests.cs` | MiniArch/Arch 共享结构命令 parity |
 | `Core/QueryTests.cs` | 缓存与并发读取、冷热路径 |
 | `Core/QueryFilterTests.cs` | 链式 filter 和 builder 契约 |
 | `Core/QueryComponentSetTests.cs` | ComponentSet 创建/排序契约 |
 | `Core/EntityAccessorTests.cs` | EntityAccessor ref struct 契约 |
 | `Core/IntegrationTests.cs` | 最完整的端到端例子 |
-| `Core/DebugMetricsTests.cs` | API 契约与 Release disabled 契约 |
+| ~~`Core/DebugMetricsTests.cs`~~ | **已删除** — DebugMetrics 子系统已移除 |
 | `Core/ThroughputRunnerTests.cs` | 参数解析和汇总契约 |
 | `Core/QueryProfilingRunnerTests.cs` | Profiling runner 构造契约 |
 | `Core/ComplexQueryBenchmarkScenarioTests.cs` | Benchmark world shape 和命中比例 |
@@ -76,3 +76,4 @@ updated: 2026-06-07 (修正：补充 EntityAccessorTests 条目)
 - warmed query benchmark 需要 setup 阶段先 materialize 匹配 archetype
 - `FrameDelta` 跨 world replay 要求双方从同一初始态按相同 frame 顺序推进
 - 测试名要稳定，方便 agent 用 `--filter` 定位
+- DebugMetrics 相关测试已全部删除，不应再引用

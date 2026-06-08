@@ -2,13 +2,13 @@
 title: Architecture Mechanistic Review
 module: MiniArch.Core
 description: Mechanistic insight of the entire miniArch ECS library — one-line truths, minimal loops, state models, data flows, known issues, and optimization opportunities
-updated: 2026-06-07 (修正：Archetype 扁平化、Chunk 改为视图、Edge Cache/MigrationPlan 内联、全局单版本号、EntityRecord 单表)
+updated: 2026-06-08 (World/Archetype 拆分 partial、DebugMetrics/ICommandRecorder 已删除、新增 GetFirst/ChunkView public API、CommandBuffer Clone、FrameDelta 缩小)
 ---
 # Architecture Mechanistic Review
 
 ## 这个模块是干什么的
 
-- 整体架构审视记录：10 个核心子系统的机械化拆解、真实问题、可优化点、设计张力
+- 整体架构审视记录：核心子系统的机械化拆解、真实问题、可优化点、设计张力
 - 不替代各 `kb-*.md` 页的详细实现记录
 
 ## 全局一句话
@@ -22,37 +22,40 @@ ComponentRegistry.Shared (全局 Type↔id)
   ↓
 ComponentType (int wrapper) → Signature (排序 ComponentType[] + ComponentMask 256-bit)
   ↓
-Archetype (byte[] 存储 + Entity[] + edge cache 内联) → Chunk (readonly struct 视图)
-  ↓
+Archetype (byte[] 存储 + Entity[] + edge cache 内联) → Chunk (internal readonly struct 视图)
+  ↓                                                    → ChunkView (public readonly struct 视图)
 Query (archetype 快照 + 全局 _snapshotVersion)
   ↓
-World (编排一切)
+World (拆分为 partial 文件，编排一切)
   ↓
 CommandBuffer → FrameDelta → World.Replay
 HierarchyTable (side-table)
 WorldSnapshot / WorldClone
 ```
 
-## 10 个核心子系统
+## 核心子系统
 
 ### 1. 实体身份 (Entity / Version / FreeList)
 - Entity = `(id, version)` 二元组；World 维护 `_records[]` 单表 + free-list
 - 分配：free-list pop 或 slotCount++；销毁：record.Version++ + 清空 Archetype/RowIndex + free-list push
+- 代码位置：`World.EntityLifecycle.cs`
 
 ### 2. 存储 (Archetype)
 - `byte[]` 按列排布所有组件数据，swap-remove 删除行
 - 读取/写入：`Unsafe.As<byte, T>(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), columnOffset + row * elementSize))`
 - `_componentIdToColumnIndex[]`：component id → 列索引 direct map
-- 每个 Archetype 有且仅有一个 Chunk（readonly struct 视图），无 multi-chunk
+- 每个 Archetype 有且仅有一个 Chunk（internal readonly struct 视图）和一个 ChunkView（public readonly struct 视图），无 multi-chunk
+- 代码位置：`Archetype.cs`（字段/构造/metadata）+ `Archetype.Storage.cs`（存储操作）
 
 ### 3. Archetype
 - 存储持有者：`_data: byte[]`、`_entities: Entity[]`、`_columnByteOffsets`、`_elementSizes`、`_count`、`_capacity`
 - `_addDestinationCache` / `_removeDestinationCache`：`Archetype?[]` 内联直索引 edge cache
 - `CopySharedComponentsFrom`：遍历 destination signature，只复制 source 也有的组件
+- Edge cache 最近改为 bounded 4-slot（`_addEdgeCacheSlots`/`_removeEdgeCacheSlots`），LRU 淘汰
 
 ### 4. Signature & ComponentMask
 - Signature：排序 `ComponentType[]` + `ComponentMask`（256-bit，4 × `ulong`，id < 256 时快速匹配）
-- Edge Cache：`Archetype?[]` 按 componentId 直索引，直接挂在 Archetype 上（`_addDestinationCache`/`_removeDestinationCache`）
+- Edge Cache：从直索引数组改为 bounded 4-slot LRU cache
 
 ### 5. 组件类型系统
 - `ComponentType` = int；`ComponentRegistry.Shared` 全局 copy-on-write
@@ -65,6 +68,7 @@ WorldSnapshot / WorldClone
 - `OrderedQuery` 是消费层 materialization + sort
 - `ChunkView<T1..T4>` 提供每个 chunk 的 typed 列访问（`ChunksOf<T>()`）
 - `EachSpan<T1..T4>()` 提供零分配 per-row ref struct 迭代器
+- 代码位置：`World.QueryCache.cs`（缓存管理）
 
 ### 7. Hierarchy
 - 邻接链表：`_parentByChild[id]` + `_firstChild[id]` + 链表 slot 管理子节点
@@ -73,14 +77,26 @@ WorldSnapshot / WorldClone
 ### 8. CommandBuffer
 - InlineMap(4 内联 + 链表 overflow) 按 entity×componentType 去重录制
 - Arena slab 存组件数据（`ArrayPool<byte>.Shared.Rent`），Submit 直接回放
+- `[ThreadStatic]` 预分配 buffer 复用（替代 per-entity ArrayPool rent/return）
+- bounded archetype cache（componentCount + typeHash 缓存，跳过重复 Dictionary 查找）
+- 新增 `Clone()` 方法：深拷贝整个 CommandBuffer，用于 snapshot/replay 场景
+- CreatedComponent struct 缩小：从 16B → 12B（移除冗余字段）
 
 ### 9. FrameDelta
-- 命令 IR（9 个 typed 列表），Merge 用 per-entity 状态机折叠两个 delta 为一个
-- `DeepCopyOwnedData()` 是 O(totalBytes) 深拷贝，独立于 buffer
+- 命令 IR（typed 列表），Merge 用 per-entity 状态机折叠两个 delta 为一个
+- FrameDelta struct 已缩小：移除冗余字段（如 `_recorder`）
+- `ICommandRecorder` 接口已删除（YAGNI），FrameDelta 直接与 CommandBuffer 交互
 
 ### 10. World（编排者）
+- **拆分为 5 个 partial 文件**：World.cs（字段+读写+hierarchy+clone+replay）、World.EntityLifecycle.cs（Create/Destroy）、World.Create.Generated.cs（泛型重载+GetFirst）、World.QueryCache.cs（Query 缓存）、World.StructuralChange.cs（Add/Set/Remove）
 - 拥有身份表（`EntityRecord[]`）、archetype 字典、query 缓存、hierarchy
 - 结构变更：查 `EntityRecord` → 算目标签名 → edge cache → `CopySharedComponentsFrom` → 修 `EntityRecord` → `_archetypeVersion++`
+- 新增 `GetFirst<T>()`：O(1) 按 component type 查找首个 entity（复用 `CreateArchetypeCache<T>` 泛型静态缓存）
+
+### 已删除的子系统
+- **DebugMetrics**：整个子系统已删除（`DebugMetrics.cs`、`WorldDebugMetrics`、`CommandBufferDebugMetrics`、对应测试 `DebugMetricsTests.cs`）
+- **ICommandRecorder**：接口已删除，CommandBuffer 直接使用
+- **GenericMethodCache**：已删除，改用泛型静态缓存方案
 
 ## 已知问题
 
@@ -89,9 +105,10 @@ WorldSnapshot / WorldClone
 - 这是"够用的简单方案"：由于每个 Archetype 只有 1 个 Chunk，重建代价低（仅遍历 archetype 数组算 bitmask match）
 - 如果将来 archetype 数量极大（>1000），可考虑改为按 query filter 分组失效或 per-archetype 版本
 
-### P2. Edge Cache 稀疏数组膨胀
-- `_addDestinationCache: Archetype?[]` / `_removeDestinationCache` 可能因组件 ID 稀疏分布而膨胀（当前 Hero 场景 < 20 组件，问题未显现）
-- 候补方案：compact sorted array + binary search（推荐），或阈值混合
+### P2. Edge Cache 改为 bounded 4-slot LRU
+- 原来的 `Archetype?[]` 直索引已改为 bounded 4-slot cache（`_addEdgeCacheSlots`/`_removeEdgeCacheSlots`）
+- 解决了稀疏数组膨胀问题，但引入 LRU miss 的 trade-off
+- 当前 Hero 场景 < 20 组件，4 slot 足够
 
 ### P3. Add/Set 语义合并的隐患
 - 当前实现中 `Set` 在组件不存在时会静默添加（`Set` 已与 `Add` 合并路径）
@@ -119,7 +136,9 @@ WorldSnapshot / WorldClone
 | 全局 Registry vs World 隔离 | 全局简单性 | 游戏场景正确 |
 | 单线程写入 vs 并行读取 | 单线程写 | archetype ECS 经典约束 |
 | Hierarchy 一等公民 vs 组件 | side-table | 正确性 > 表达力 |
+| 大文件 vs partial 拆分 | partial 拆分 | 按职责分组，保持编译单元聚焦 |
+| 直索引 edge cache vs bounded cache | bounded 4-slot LRU | 消除稀疏膨胀，场景验证足够 |
 
 ## 做得好的地方
 
-- flat byte storage + single-chunk-per-archetype + 全局版本号失效 + ComponentMask 256-bit + InlineMap + edge cache 内联 + `[SkipLocalsInit]`/`AggressiveInlining`/`Unsafe.As<byte,T>` ——详见 `kb-core-ecs.md` 决策和 `kb-chunk-storage.md`
+- flat byte storage + single-chunk-per-archetype + 全局版本号失效 + ComponentMask 256-bit + InlineMap + bounded edge cache + `[SkipLocalsInit]`/`AggressiveInlining`/`Unsafe.As<byte,T>` ——详见 `kb-core-ecs.md` 决策和 `kb-chunk-storage.md`

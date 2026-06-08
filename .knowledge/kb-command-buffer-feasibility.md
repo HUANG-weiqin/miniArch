@@ -1,8 +1,8 @@
 ---
 title: Command Buffer Runtime
 module: MiniArch.Core CommandBuffer
-description: Single-threaded per-entity-deduplicating command buffer with arena slab allocator, inline CreatedState/ExistingEntityOps, direct Submit() path, Snapshot() for cross-world replay, FrameDelta merge, SubmitAndSnapshotAsync()
-updated: 2026-06-08 (YAGNI 清理 FrameDelta 冗余字段，struct 缩小带来 Movement +50% / Attack +29% 涨幅)
+description: Single-threaded per-entity-deduplicating command buffer with arena slab allocator, inline CreatedState/ExistingEntityOps, direct Submit() path, Snapshot() for cross-world replay, FrameDelta merge, SubmitAndSnapshotAsync(), Clone()
+updated: 2026-06-08 (YAGNI 清理：删除 ICommandRecorder、FrameDelta 冗余字段缩小、struct 缩小带来 Movement +50% / Attack +29% 涨幅、新增 Clone())
 ---
 # Command Buffer Runtime
 
@@ -16,15 +16,17 @@ updated: 2026-06-08 (YAGNI 清理 FrameDelta 冗余字段，struct 缩小带来 
 ## 架构
 
 - 核心组成：
-  - `src/MiniArch/Core/CommandBuffer.cs`：public recording API + `Submit()` + `Snapshot()`
-  - `src/MiniArch/Core/ICommandRecorder.cs`：只录接口，供系统代码多态使用
+  - `src/MiniArch/Core/CommandBuffer.cs`：public recording API + `Submit()` + `Snapshot()` + `Clone()`
   - `src/MiniArch/Core/FrameDelta.cs`：帧快照 IR，可保留并重放到同步 world
   - `src/MiniArch/Core/InlineMap.cs`：4 inline slot + overflow 的 per-entity map
   - `src/MiniArch/Core/OverflowPool.cs`：三个并行数组（keys, values, next）backed by `ArrayPool<T>` 的单链表节点池
-  - `src/MiniArch/Core/World.cs`：`ReserveDeferredEntity`、`ReleaseReservedEntity`、`Replay(FrameDelta)`
+  - `src/MiniArch/Core/World.cs`（+ partial 文件）：`ReserveDeferredEntity`、`ReleaseReservedEntity`、`Replay(FrameDelta)`
+- **已删除**：
+  - `ICommandRecorder.cs`：接口已删除（YAGNI），CommandBuffer 直接使用
 - 数据流 / 控制流：
   - 工作线程通过 `CommandBuffer` 只记录命令；`Create()` 立刻从 world 预留真实 `Entity`
   - recording 完成后可选：`Submit()`（直接执行到 world）→ `Snapshot()`（生成自包含 `FrameDelta`）→ `SubmitAndSnapshotAsync()`（并行执行 Submit + BuildDelta）
+  - `Clone()`：深拷贝整个 CommandBuffer 状态（含所有 slab 数据），用于 snapshot/replay 场景
 
 ## 录制时去重模型
 
@@ -39,6 +41,8 @@ updated: 2026-06-08 (YAGNI 清理 FrameDelta 冗余字段，struct 缩小带来 
 - `SubmitAndSnapshotAsync()`：换出 buffer 状态后，主线程 Submit 与后台线程 BuildDelta 并行执行
 - 记录期返回真实 `Entity`，但只是 reserved handle（`world.IsAlive(entity)` 仍为 false）
 - query layout generation 在 replay 期间被抑制，整批结束后只递增一次
+- `ICommandRecorder` 已删除：接口只有 CommandBuffer 一个实现者，YAGNI 原则下直接使用具体类型
+- `Clone()` 新增：完整深拷贝，用于需要保留录制状态的场景
 
 ## 性能数据（Release, 全帧 record+submit, 3s×1）
 
@@ -93,5 +97,5 @@ HeroPipeline 回归测试涨幅：
 - replay 期间逐条触发 query layout 失效会增加额外开销
 - existing destroy 必须存完整 `Entity`（含 version），不能只存 id
 - `InlineMap` 的 `OverflowHead` 默认值 0 在 `Clear()` 后可能导致遍历空 pool；新分配 map 必须显式初始化 `OverflowHead = -1`
-- ~~**FrameDelta.Merge 对 CreatedEntity 不产出 ReservedEntities**~~（已修复 2026-06-08）：`RebuildFromState` 的 `IsCreated` 分支现在也会加 `ReservedEntities`，与 `BuildDelta` 正常路径保持一致。修复前跨 world replay 会因 Version 未设导致 `IsAlive` 返回 false。伴随此修复，`MergeOfMerge_created_then_destroy_then_recreate` 测试的 `Assert.Empty(ReservedEntities)` 也被修正为 `Assert.Single(ReservedEntities)`——因为 cancel-out 的 reserve+release 对被消除后，新 CreatedEntity 的 reserve 仍然存在。
-- **`ResolveTypeInfo` 缓存哨兵值不能用 `IsValid`**（已修复 2026-06-08）：删除 `RuntimeType` 后缓存元组从 `(Type, ComponentType, int)` 变为 `(ComponentType, int)`，用 `ComponentType.IsValid`（`Value >= 0`）判断命中。但 `Position` 的 ComponentTypeId 恰好是 0，未初始化的 slot 也 `IsValid == true`，导致返回 `Size=0`，数据未被拷贝。改为 `cached.Size > 0` 判断。**教训：缓存哨兵不能依赖值域内的合法值，必须有不属于值域的非法状态（或显式 bool flag）。**
+- **`ResolveTypeInfo` 缓存哨兵值不能用 `IsValid`**（已修复 2026-06-08）：删除 `RuntimeType` 后缓存元组变为 `(ComponentType, int)`，用 `cached.Size > 0` 判断命中。**教训：缓存哨兵不能依赖值域内的合法值。**
+- `Clone()` 是完整深拷贝，包含所有 slab 数据，大 buffer 克隆成本高

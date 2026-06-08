@@ -2,8 +2,7 @@
 title: Cache & Memory Optimization Review
 module: MiniArch.Core
 description: Memory layout and cache behavior analysis of the ECS runtime, with optimization opportunities
-updated: 2026-06-08 (补充：公共 API 薄转发方法 AggressiveInlining 规则)
-review: 2026-06-08 — 补充 P11: 公共 API AggressiveInlining
+updated: 2026-06-08 (Edge cache 改为 bounded 4-slot LRU、补充 P12: Edge Cache bounded 优化、public API AggressiveInlining)
 ---
 # Cache & Memory Optimization Review
 
@@ -26,22 +25,22 @@ MiniArch 的迭代热路径已经高度优化（pointer-bump、SoA、自适应 c
 ### 内存布局总览
 
 ```
-World
+World (partial files)
 ├── _records: EntityRecord[]   // 16B/entity: (Archetype ref, RowIndex, Version)
 ├── _archetypes: Dictionary<Signature, Archetype>
 ├── _freeIds: RecycledEntity[]
 └── _archetypeVersion: int     // 全局版本号
 
-Archetype
+Archetype (partial files: Archetype.cs + Archetype.Storage.cs)
 ├── _data: byte[]              // SoA packed, all columns in ONE array
 ├── _entities: Entity[]        // 8B/row, parallel to data
 ├── _columnByteOffsets: int[]  // per-column byte offset into _data
 ├── _elementSizes: int[]       // per-column element size
 ├── _componentIdToColumnIndex: int[]  // component id → column index
-├── _addDestinationCache: Archetype?[]  // edge cache (Add)
-└── _removeDestinationCache: Archetype?[]  // edge cache (Remove)
-         ↓
-Chunk (readonly struct view over Archetype)
+├── _addEdgeCacheSlots: (ComponentType, Archetype)[]  // bounded 4-slot LRU
+└── _removeEdgeCacheSlots: (ComponentType, Archetype)[]  // bounded 4-slot LRU
+          ↓
+Chunk (internal readonly struct view) / ChunkView (public readonly struct view)
 ```
 
 ### 热路径分析
@@ -69,8 +68,6 @@ Chunk (readonly struct view over Archetype)
 
 ## P0: World._versions 和 _locations 分离 ✅ 已修复 (2026-06-03)
 
-**问题**：`_versions: int[]` 和 `_locations: EntityLocation[]` 是两个独立数组。每次实体操作（Create/Destroy/Get/Move）都要访问两个数组，造成 **2 次 cache miss**（索引相同但数组不同）。
-
 **已实施**：合并为 `EntityRecord[] _records`：
 ```csharp
 struct EntityRecord {
@@ -80,130 +77,65 @@ struct EntityRecord {
 }  // 16 bytes — 自然 8 字节对齐
 ```
 
-- **无 ChunkIndex**：Archetype 扁平化后，每个 Archetype 只有一个 Chunk，Archetype ref 已唯一标识存储位置
-- 字段顺序优化为 `(Archetype, RowIndex, Version)` 以获得自然的 16 字节 Sequential 布局
-- 回退测试：HeroComing.Perf Movement 698.1 rounds/s（baseline 690），Attack 203.6（baseline 179），性能无退化
-- 影响文件：`World.cs`（50+ 处引用点）、`WorldSnapshot.cs`、`WorldClone.cs`、新增 `EntityRecord.cs`
-- `EntityLocation.cs` 遗留类型已删除，避免继续维护无用位置表示
+- 影响文件：World partial 文件族、`WorldSnapshot.cs`、`WorldClone.cs`、`EntityRecord.cs`
 
 ## P1: Chunk._data 列对齐不够
 
-**问题**：`CreateStorage` 对齐到 `Min(elementSize, 8)` 字节。对于 4 字节组件（int/float），列起始地址只保证 4 字节对齐。AVX2 要求 32 字节对齐，AVX-512 要求 64 字节对齐。
-
-**当前状态**：热路径不用 SIMD，所以目前不是问题。但如果未来想用 `Vector256<T>` 或 `Vector512<T>` 批量处理组件数据，对齐不足会触发跨 cache line 的未对齐加载。
-
-**方案**：将 `AlignUp(totalBytes, Min(elementSize, 8))` 改为 `AlignUp(totalBytes, 64)`（cache line 对齐）。代价：每个组件列平均浪费 ~32 bytes padding（16KB chunk 内可忽略）。
+**当前状态**：热路径不用 SIMD，所以目前不是问题。
 
 **判断**：**现在不做，但记住**。等有 SIMD 需求时再改，改动极小（一行）。
 
 ## P2: SpanEach.Current 每行分配
 
-**问题**：`Current` 属性每次返回 `new SpanEachRow<T...>(...)`，这是一个 struct 包含 N 个 `ref T` 字段 + Entity。虽然 struct 不堆分配，但每个 row 都要复制这些字段到调用方的变量。
+**当前状态**：C# struct 返回是值拷贝，编译器通常优化为寄存器传递。
 
-**当前状态**：C# struct 返回是值拷贝，编译器通常优化为寄存器传递。对于 2-3 个组件 + Entity，总计约 32-40 bytes 的 struct，编译器可能通过寄存器或栈传递。实际测量后才知道是否有开销。
-
-**判断**：**测量后决定**。如果迭代是瓶颈，可以考虑 inline callback 模式（`SpanEach<T>(ref T1 r1, ref T2 r2, Entity e)` delegate 或 function pointer），避免 struct 复制。
+**判断**：**测量后决定**。
 
 ## P3: Archetype.CopySharedComponentsFrom 的 copy 散布
 
-**问题**：组件迁移时，`CopySharedComponentsFrom` 对每个共享组件分别访问 source 和 dest 的 `_data` 数组。N 个组件 = N 次 source↔dest 交叉访问。
-
-**热路径影响**：这是结构变更的热路径（Add/Set/Remove component）。每次迁移都要把所有共享组件从旧 archetype 复制到新 archetype。
-
-**方案 A**（简单）：将列按 source column index 排序，使 source 侧访问从顺序变为局部顺序。
-
-**方案 B**（激进）：对于小组件（≤16 bytes × ≤4 components），展开为内联拷贝循环，减少方法调用开销。
-
 **判断**：**方案 A 值得做**（排序开销极小，copy 时 cache 更友好）。方案 B 等 profiling 数据。
 
-## P4: Edge Cache 稀疏数组
+## P4: Edge Cache 改为 bounded 4-slot LRU ✅ 已修复 (2026-06-08)
 
-**问题**：`_addDestinationCache: Archetype?[]` 按 component ID 索引，如果 component ID 分配不连续（有空洞），浪费内存。例如只有 component ID 0 和 100，数组长度为 101，99 个 null。
+**问题**：原来的 `_addDestinationCache: Archetype?[]` 按 component ID 直索引，如果 component ID 分配不连续（有空洞），浪费内存。
 
-**热路径影响**：这是冷路径（只在结构变更时查找 edge cache），内存浪费不影响迭代。
+**Fix**：改为 bounded 4-slot LRU cache（`_addEdgeCacheSlots` / `_removeEdgeCacheSlots`）。4 slot 足够覆盖当前 Hero 场景（< 20 组件），LRU 淘汰最近最少使用的 edge。
 
-**判断**：**不做**。O(1) 查找比 Dictionary 的 hash 查找更可预测。除非 component ID 超过几千且有大量空洞，否则不值得改。
+**状态**：已实施。消除了稀疏数组膨胀问题。
 
 ## P5: CopySharedComponentsFrom O(n*m) 查找
-
-**问题**：`CopySharedComponentsFrom` 对每个 destination component 都调用 `source.GetComponentIndexFast`（O(1)），遍历 destination signature 查找 source 也有的组件。总体 O(n) 其中 n = destination component count。
-
-**热路径影响**：冷路径（只在 edge cache miss + 实际迁移时调用），影响微小。
 
 **判断**：**当前已足够优**，`GetComponentIndexFast` 是 O(1) direct map 查找。
 
 ## P6: Archetype.CopySmall 2-byte fast path ✅ 已修复 (2026-06-07)
 
-**问题**：`CopySmall` 支持 1/4/8/12/16 字节，缺少 2 字节 case。2 字节组件（`Half`、`short`、`ushort`、`char`）走 fallback `Unsafe.CopyBlockUnaligned`。
-
 **Fix**：增加 `case 2: Unsafe.WriteUnaligned(ref dst, Unsafe.ReadUnaligned<short>(ref src));`
-
-**状态**：已补上 2-byte fast path。
 
 ## P7: CommandBuffer.ExtractAndSortComponents 在 Submit 时排序
 
-**问题**：`CommandBuffer.Submit()` 处理每个 created entity 时调用 `ExtractAndSortComponents` 做 `Array.Sort`（O(n log n)）。批量创建大量 entity 时排序开销可累积。
-
-**实测数据（2026-06-05，HeroComing.Perf Movement, 1000 chars）**：
-- Submit 内部阶段分解：Created entities 占 75.4%，Existing ops 占 15.2%，Hierarchy <1%，Destroy 4.8%，Clear 4.6%
-- 在 Created entities 阶段内：Array.Sort 仅占 Submit 总时间的 ~10%，不是主要瓶颈
-- Slab scatter 假说已验证并否定：用单一大块连续 buffer 替代分散 byte[] slab，仅改善 ~2%
-
-**Fix**：在 Record 时维护组件列表的排序顺序（二分插入），避免 Submit 时排序。
-
-**判断**：**低优先级**。实测显示 Array.Sort 仅占 Submit 的 10%，即使完全消除也只能提升 ~10%。
+**判断**：**低优先级**。实测显示 Array.Sort 仅占 Submit 的 10%。
 
 ## P9: CommandBuffer.BuildCreatedEntityComponents 每 entity 重复 ArrayPool rent/return ✅ 已修复 (2026-06-05)
 
-**问题**：`BuildCreatedEntityComponents` 在每个 created entity 上做 3 次 ArrayPool rent + 3 次 return：
-1. `ArrayPool<ComponentType>.Shared.Rent(count)` — ExtractAndSortComponents
-2. `ArrayPool<CreatedComponent>.Shared.Rent(count)` — ExtractAndSortComponents
-3. `ArrayPool<RawComponentValue>.Shared.Rent(count)` — BuildCreatedEntityComponents
-
-加上 return 共 6 次 ArrayPool 操作/entity。HeroComing.Perf Movement 场景创建 ~3.9M entities/30s，即 ~23M ArrayPool 操作。
-
-**实测影响**：
-- 替换为 `[ThreadStatic]` 预分配 buffer 复用后：
-  - Movement 吞吐量：669.5 → 818.3 rounds/s（+22.2%）
-  - Attack 吞吐量：189.6 → 220.4 rounds/s（+16.2%）
-  - GC Gen0：35 → 3（-91%）
-- 同时将 ExtractAndSortComponents 的逻辑内联到 BuildCreatedEntityComponents，消除了一次跨方法调用和 ReturnExtracted 的开销
-
-**已实施**：
-- 新增 3 个 `[ThreadStatic]` 字段：`_tsExtractTypes`、`_tsExtractSources`、`_cachedArchetypeTypes`
-- `BuildCreatedEntityComponents` 不再调用 `ExtractAndSortComponents`，改为内联提取 + 排序
-- 不再 return buffer 到 ArrayPool，由 ThreadStatic 字段跨 Submit 复用
-- Submit 循环的 finally 块不再调用 `ArrayPool<RawComponentValue>.Shared.Return`
-- 原有 `ExtractAndSortComponents` 保留不动（仍被 frozen/snapshot 路径使用）
-
-**影响文件**：`src/MiniArch/Core/CommandBuffer.cs` — BuildCreatedEntityComponents 重写
+**已实施**：替换为 `[ThreadStatic]` 预分配 buffer 复用。
 
 ## P10: CommandBuffer.GetOrCreateArchetype 重复 Dictionary 查找 ✅ 已修复 (2026-06-05)
 
-**问题**：`BuildCreatedEntityComponents` 在每个 created entity 上调用 `_world.GetOrCreateArchetype(key)`（Dictionary 查找）。即使 entity 共享同一个 component set，每次仍要创建 68 字节 `CreateArchetypeKey` struct、计算 7 值 hash、做 Dictionary bucket 遍历。
-
-Pipeline 工作负载中，同批次 entity 几乎都是同一 archetype（如 500 个 MoveRequest 都一样）。
-
-**实测数据**：
-- PERF_DIAG 测量：`GetOrCreateArchetype` 占 Submit 总时间的 12.1%
-- 添加 last-value cache（按 componentCount + typeHash 缓存）后降为 0.1%
-- 净吞吐量提升：Movement 818.3 → ~842 rounds/s（+3%）
-
-**已实施**：
-- 新增 3 个字段：`_cachedArchetype`、`_cachedArchetypeCount`、`_cachedArchetypeHash`
-- 在 BuildCreatedEntityComponents 中先检查 count 匹配 → 计算 typeHash 匹配 → 命中则跳过 Dictionary 查找
-- 仅在 count 匹配时计算 hash（不同 count 直接走 Dictionary，避免双倍 hash 开销）
-- Hash 算法与 `CreateArchetypeKey.GetHashCode()` 一致：`hash = count; for each id: hash = hash*31 + id`
-
-**影响文件**：`src/MiniArch/Core/CommandBuffer.cs` — BuildCreatedEntityComponents 中的 archetype 查找逻辑
+**已实施**：last-value cache（按 componentCount + typeHash 缓存）。
 
 ## P8: HierarchyTable.EnsureCapacity 用 Array.Fill 初始化
 
-**问题**：`EnsureCapacity` 对 `_parentByChild`（Entity 类型）也使用 `Array.Fill` 填充 `NoEntity = default(Entity) = (0,0)`。全零初始化可以用更快的 `Array.Clear`。
-
-**Fix**：对 `_parentByChild` 改用 `Array.Clear`，对 `_firstChild` 保留 Fill（因为 NoSlot = -1 不是零）。
-
 **判断**：**微小优化**，优先级低。
+
+## P11: 公共 API 薄转发方法 AggressiveInlining ✅ 已修复
+
+**问题**：`ChunkView.GetSpan<T>()`、`ChunkView.GetEntities()`、`Query.GetChunks()` 等公共 API 改为薄转发后遗漏了 `AggressiveInlining`。JIT 不内联时纯迭代场景退化 41%。
+
+**Fix**：所有 public 薄转发方法加 `[MethodImpl(AggressiveInlining)]`。
+
+## P12: Edge Cache 从直索引改为 bounded LRU ✅ 已修复 (2026-06-08)
+
+同 P4，已实施。
 
 ## 认知模型
 
@@ -212,24 +144,23 @@ Pipeline 工作负载中，同批次 entity 几乎都是同一 archetype（如 5
 把 MiniArch 的 cache 模型理解为 **"chunk 是 cache 友好的孤岛，entity lookup 是桥"**：
 - chunk 内部：纯顺序访问，完美利用 prefetcher
 - 跨 chunk：通过 archetype 的 chunk 数组顺序跳转，可预测
-- 跨 entity：`_locations[id]` 是完全随机的，这是唯一不能被 prefetcher 帮助的地方
+- 跨 entity：`_records[id]` 是完全随机的，这是唯一不能被 prefetcher 帮助的地方
 
 ### 最重要的一条数据
 
-**DefaultChunkCapacity = 128** 决定 Archetype 初始容量（行数），间接决定了：
-- 迭代切换 chunk 的频率
-- 每次 chunk transition 的开销摊销
-- L1 cache 中能同时放几个 chunk 的数据
+**DefaultChunkCapacity = 128** 决定 Archetype 初始容量（行数），间接决定了迭代切换 chunk 的频率。
 
 ## 坑点
 
-- **公共 API 薄转发方法必须加 `[MethodImpl(AggressiveInlining)]`**：D group YAGNI 重构把 `ChunkView.GetSpan<T>()`、`ChunkView.GetEntities()`、`Query.GetChunks()` 等公共 API 改为薄转发（单行 `=>` 体），但遗漏了 `AggressiveInlining`。JIT 不内联这些方法时，每次迭代多一次方法调用开销，纯迭代场景（S1-BulletHell 100K entities）退化 41%（18K→10K ops/s）。
-- **EntityRecord 布局已优化为 16 字节**：`(Archetype ref, RowIndex, Version)` 无 padding，字段顺序利用了引用类型的 8 字节对齐
-- **Archetype 的 `CreateStorage` 列对齐**：对齐从 8→64 会使每列浪费更多 padding，可能减少每个 Archetype 可存放的行数
+- **EntityRecord 布局已优化为 16 字节**：`(Archetype ref, RowIndex, Version)` 无 padding
+- **Edge cache 已改为 bounded 4-slot LRU**：不再使用 `Archetype?[]` 直索引，miss 时需要重新计算目标 archetype
+- **公共 API 薄转发方法必须加 `[MethodImpl(AggressiveInlining)]`**：遗漏会导致迭代退化
+- **Archetype 的 `CreateStorage` 列对齐**：对齐从 8→64 会使每列浪费更多 padding
 
 ## 入口
 
 - **看迭代热路径**：`SpanQueryIterators.cs` 的 `MoveNext()` 方法
-- **看实体随机访问**：`World.cs` 的 `TryGetLocation()`、`FinishMoveEntity()`
-- **看 storage 布局**：`Archetype.cs` 的 `EnsureCapacity()`、`GetComponentRefAt<T>()`
-- **看迁移拷贝**：`Archetype.cs` 的 `CopySharedComponentsFrom()`、`CopySmall()`
+- **看实体随机访问**：`World.cs` 的 `TryGetLocation()`、`World.StructuralChange.cs` 的 `FinishMoveEntity()`
+- **看 storage 布局**：`Archetype.Storage.cs` 的 `EnsureCapacity()`、`GetComponentRefAt<T>()`
+- **看迁移拷贝**：`Archetype.Storage.cs` 的 `CopySharedComponentsFrom()`、`CopySmall()`
+- **看 edge cache**：`Archetype.cs` 的 `_addEdgeCacheSlots` / `_removeEdgeCacheSlots`

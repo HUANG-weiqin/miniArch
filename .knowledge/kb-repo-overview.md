@@ -2,7 +2,7 @@
 title: Repository Overview
 module: Workspace
 description: How to navigate the repo and where to start
-updated: 2026-06-01
+updated: 2026-06-08 (World/Archetype 拆分 partial、shared infrastructure 仍存在、脚本和 perf 入口不变)
 ---
 # Repository Overview
 
@@ -48,3 +48,4 @@ updated: 2026-06-01
 - 知识页改名后必须同步更新 `INDEX.md`
 - 脚本命令变化后必须同步更新 README
 - 新增共享基础设施后，必须同步更新对应的知识页路径
+- World 和 Archetype 现在是 partial 类，修改时注意 partial 文件的编译范围

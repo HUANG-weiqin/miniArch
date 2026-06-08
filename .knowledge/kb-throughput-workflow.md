@@ -2,7 +2,7 @@
 title: Throughput Workflow
 module: Workspace
 description: Reusable fixed-duration throughput comparison workflow for MiniArch and Arch workloads
-updated: 2026-06-01
+updated: 2026-06-08 (MiniArch EachSpan throughput case 已移除、保留 ComponentSpan 和 Wide 变体)
 ---
 # Throughput Workflow
 
@@ -25,6 +25,7 @@ updated: 2026-06-01
 - 当 benchmark short job 方差偏大时，优先补 fixed-duration throughput 对比
 - throughput runner 只输出 `ops/s` 和相对差距，不承担采样定位职责
 - Execute 方法必须加 `[MethodImpl(NoOptimization)]` + checksum 依赖实际结果，防止 .NET 8 PGO 死存储消除
+- MiniArch 的 `EachSpan` throughput case 已移除（API 层级变更为 ChunkView batch API），保留 `ComponentSpan` 和 `Wide ComponentSpan` 变体
 
 ## 认知模型
 
@@ -46,3 +47,4 @@ updated: 2026-06-01
 - `ops/s` 变快不代表分配也更好，仍需结合 MemoryDiagnoser
 - Arch 的 `chunk.GetSpan<T>()` 返回 capacity 长度（含 unused default slots），会影响绝对吞吐和 checksum 解释
 - 新 workload 必须同时给 MiniArch 和 Arch 实现
+- MiniArch 的 EachSpan workload 已从 ThroughputRunner 移除，不要引用

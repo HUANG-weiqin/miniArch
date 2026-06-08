@@ -2,7 +2,7 @@
 title: Query Invalidation System
 module: MiniArch.Core Query
 description: Global-version query invalidation — single int version, full rebuild on any archetype creation
-updated: 2026-06-07 (修正：全局单版本号 _archetypeVersion vs _snapshotVersion，无 per-archetype generation)
+updated: 2026-06-08 (Query 缓存代码迁移到 World.QueryCache.cs partial 文件)
 ---
 # Query Invalidation System
 
@@ -18,9 +18,10 @@ updated: 2026-06-07 (修正：全局单版本号 _archetypeVersion vs _snapshotV
   - **World._archetypeVersion**：每次创建新 Archetype 时递增（全局版本号）
   - **Query._snapshotVersion**：记录快照时的 world archetype 版本
   - **Query._refreshLock**：double-check locking 用于并发只读场景
+  - 代码位置：缓存管理逻辑在 `World.QueryCache.cs` partial 文件中
 
 - 数据流：
-  1. 新 Archetype 创建时 `World._archetypeVersion++`
+  1. 新 Archetype 创建时 `World._archetypeVersion++`（在 `World.QueryCache.cs` 或 `World.Create.Generated.cs` 中）
   2. Query 访问 `MatchedArchetypes`/`GetChunkSpan()` 时调用 `EnsureRefreshed()`
   3. `if (_world.ArchetypeVersion != _snapshotVersion)` 不匹配则进入 `Refresh()`
   4. `Refresh()` 下用 lock double-check → `BuildSnapshot()` 全量重建
@@ -33,7 +34,7 @@ updated: 2026-06-07 (修正：全局单版本号 _archetypeVersion vs _snapshotV
 - **全局单版本号而非 per-archetype generation**：每个 archetype 只有一个 chunk，重建代价极低（仅遍历 archetype 数组算 bitmask match）。无需 per-archetype 粒度。
 - **`Archetype.Generation` 和 `Archetype.OnOccupancyTransition` 均已移除**：全局 `_archetypeVersion` 是唯一版本来源。
 - **不再过滤空 archetype**：flatten 后每个 archetype 只有一个 chunk，包含空的 chunk 不会造成迭代开销（`Count == 0` 的 chunk 在所有迭代器路径中跳过）。
-- **256-bit ComponentMask 匹配**：`requiredMask`/`excludedMask`/`anyMask` 在 BuildSnapshot 开始时一次性计算，匹配时用位运算 O(1) 拒绝，仅大于 256 的 component id 走 fallback 数组搜索。
+- **256-bit ComponentMask 匹配**：`requiredMask`/`excludedMask`/`anyMask` 在 BuildSnapshot 开始时一次性计算，匹配时用位运算 O(1) 拒绝。
 
 ## 认知模型
 
@@ -42,10 +43,11 @@ updated: 2026-06-07 (修正：全局单版本号 _archetypeVersion vs _snapshotV
 ## 入口
 
 - `src/MiniArch/Core/Query.cs`：`EnsureRefreshed()`、`Refresh()` 和 `BuildSnapshot()`
-- `src/MiniArch/Core/World.cs`：`_archetypeVersion`，`GetOrCreateArchetype()` 中递增
+- `src/MiniArch/Core/World.QueryCache.cs`：Query 缓存管理、archetype snapshot 发布
+- `src/MiniArch/Core/World.cs`：`_archetypeVersion` 字段声明
 
 ## 坑点
 
 - 全局版本号导致**任何新 archetype 都触发所有 query 全量重建**；当 archetype 数量极大（>1000）时可能需要更细粒度的失效
-- `BuildSnapshot()` 使用 volatile write 发布快照（`_snapshotArchetypes`、`_snapshotChunks`、`_snapshotCount`、`_snapshotVersion`），并发只读场景安全
-- `_snapshotVersion` 在 `BuildSnapshot()` 末尾写入（volatile），`EnsureRefreshed()` 通过非 volatile 读取——这在单线程写入、多线程只读场景下安全
+- `BuildSnapshot()` 使用 volatile write 发布快照，并发只读场景安全
+- Query 缓存代码现在在 `World.QueryCache.cs` partial 文件中，修改时要注意 partial 类的编译范围
