@@ -47,7 +47,7 @@ Console.WriteLine("Baseline updated in .knowledge/kb-hero-pipeline-regression.md
 // --- Scenario runner ---
 
 (string name, double throughput, double avgMs, int totalRounds, double heapDeltaKB, bool memoryStable) RunScenario(
-    string name, Action<MiniArchRuntime, List<Entity>> createRequests)
+    string name, Action<MiniArchRuntime, List<Entity>, bool[]> createRequests)
 {
     Console.WriteLine($"--- {name} ---");
 
@@ -79,10 +79,12 @@ Console.WriteLine("Baseline updated in .knowledge/kb-hero-pipeline-regression.md
     }
     Console.WriteLine($"Spawned {CharacterCount} characters, found {players.Count} players.");
 
+    var playerMembership = BuildPlayerMembership(players);
+
     // Warmup
     for (int i = 0; i < WarmupRounds; i++)
     {
-        createRequests(runtime, players);
+        createRequests(runtime, players, playerMembership);
         fixture.StepUntilStable();
     }
 
@@ -104,7 +106,7 @@ Console.WriteLine("Baseline updated in .knowledge/kb-hero-pipeline-regression.md
 
     while (sw.ElapsedMilliseconds < DurationSeconds * 1000L)
     {
-        createRequests(runtime, players);
+        createRequests(runtime, players, playerMembership);
         fixture.StepUntilStable();
         totalRounds++;
 
@@ -162,25 +164,41 @@ Console.WriteLine("Baseline updated in .knowledge/kb-hero-pipeline-regression.md
 
 // --- Request creators ---
 
-void CreateMoveRequests(MiniArchRuntime runtime, List<Entity> players)
+void CreateMoveRequests(MiniArchRuntime runtime, List<Entity> players, bool[] _)
 {
     foreach (var player in players)
         CharacterMovementBootstrap.CreateMoveRequest(runtime, player, 1, 0);
 }
 
-void CreateAttackRequests(MiniArchRuntime runtime, List<Entity> players)
+void CreateAttackRequests(MiniArchRuntime runtime, List<Entity> players, bool[] playerMembership)
 {
     var frame = runtime.CurrentFrame;
     var actionQuery = new QueryDescription().With<ActionEntity>().With<ActionKind>();
-    var playerSet = new HashSet<Entity>(players);
     foreach (var row in frame.ChunkQuery(actionQuery).EachSpan<ActionKind>())
     {
         if (row.Get0() == CharacterActionKinds.Attack &&
-            frame.TryGetParent(row.Entity, out Entity parent) && playerSet.Contains(parent))
+            frame.TryGetParent(row.Entity, out Entity parent) &&
+            (uint)parent.Id < (uint)playerMembership.Length && playerMembership[parent.Id])
         {
             CharacterAttackBootstrap.CreateAttackRequest(runtime, row.Entity, 0, GridHeight / 2);
         }
     }
+}
+
+bool[] BuildPlayerMembership(List<Entity> players)
+{
+    int maxId = 0;
+    foreach (var player in players)
+    {
+        if (player.Id > maxId)
+            maxId = player.Id;
+    }
+
+    var membership = new bool[maxId + 1];
+    foreach (var player in players)
+        membership[player.Id] = true;
+
+    return membership;
 }
 
 // --- Knowledge page updater ---

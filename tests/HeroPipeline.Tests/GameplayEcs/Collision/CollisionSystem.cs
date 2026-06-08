@@ -21,16 +21,19 @@ public sealed class CollisionSystem : ISystem
         .With<PositionQValue>()
         .With<PositionRValue>();
 
+    private readonly Dictionary<GroupKey, List<CollisionRequestData>> _groups = new(4);
+    private readonly List<List<CollisionRequestData>> _groupListPool = new(4);
+
     public void Execute(in FrameContext context)
     {
         FrameView frame = context.Frame;
         ICommandRecorder commands = context.Commands;
 
-        // Pass 1: collect all collision requests, grouped by dedup key.
-        Dictionary<GroupKey, List<CollisionRequestData>> groups = CollectGroups(frame);
+        ResetGroups();
+        CollectGroups(frame);
 
         // Pass 2: scan candidates once per group, create hit requests.
-        foreach (var (key, requests) in groups)
+        foreach (var (key, requests) in _groups)
         {
             ProcessGroup(frame, commands, in key, requests);
         }
@@ -39,10 +42,8 @@ public sealed class CollisionSystem : ISystem
         DestroyAll(frame, commands);
     }
 
-    private static Dictionary<GroupKey, List<CollisionRequestData>> CollectGroups(FrameView frame)
+    private void CollectGroups(FrameView frame)
     {
-        var groups = new Dictionary<GroupKey, List<CollisionRequestData>>();
-
         foreach (Chunk chunk in frame.ChunkQuery(CollisionRequestDescription).Chunks)
         {
             ReadOnlySpan<Entity> entities = chunk.GetEntities();
@@ -67,16 +68,36 @@ public sealed class CollisionSystem : ISystem
                     consequenceIds[i]);
 
                 var key = new GroupKey(data.TargetQ.Value, data.TargetR.Value, data.Shape.Value, data.Range.Value, data.Filter.Value);
-                if (!groups.TryGetValue(key, out var list))
+                if (!_groups.TryGetValue(key, out var list))
                 {
-                    list = new List<CollisionRequestData>();
-                    groups[key] = list;
+                    list = RentGroupList();
+                    _groups[key] = list;
                 }
                 list.Add(data);
             }
         }
+    }
 
-        return groups;
+    private void ResetGroups()
+    {
+        foreach (var list in _groups.Values)
+        {
+            list.Clear();
+            _groupListPool.Add(list);
+        }
+
+        _groups.Clear();
+    }
+
+    private List<CollisionRequestData> RentGroupList()
+    {
+        int count = _groupListPool.Count;
+        if (count == 0)
+            return new List<CollisionRequestData>(16);
+
+        var list = _groupListPool[count - 1];
+        _groupListPool.RemoveAt(count - 1);
+        return list;
     }
 
     private static void ProcessGroup(FrameView frame, ICommandRecorder commands, in GroupKey key, List<CollisionRequestData> requests)
