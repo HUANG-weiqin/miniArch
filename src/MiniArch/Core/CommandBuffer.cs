@@ -43,6 +43,7 @@ public sealed class CommandBuffer : ICommandRecorder
     // 8 slots cover the attack pipeline's 6+ alternating archetypes with room to spare.
     private const int ArchetypeCacheSize = 4;
     private int _archetypeCacheCount;
+    private int _archetypeCacheGeneration = -1;
     private readonly struct ArchetypeCacheEntry(int hash, int componentCount, Archetype archetype)
     {
         public readonly int Hash = hash;
@@ -1000,6 +1001,8 @@ public sealed class CommandBuffer : ICommandRecorder
 
     private (Archetype Archetype, int Count) BuildCreatedEntityComponents(in CreatedState state, out CreatedComponent[] sources)
     {
+        EnsureArchetypeCacheValid();
+
         var count = state.Map.Count + state.Map.OverflowCount;
 
         // ThreadStatic buffers — guaranteed non-null after the null-check block below
@@ -1051,6 +1054,8 @@ public sealed class CommandBuffer : ICommandRecorder
     /// </summary>
     private Archetype? LookupArchetypeCache(ComponentType[] types, int count)
     {
+        EnsureArchetypeCacheValid();
+
         var cache = _archetypeCache;
         for (var i = 0; i < _archetypeCacheCount; i++)
         {
@@ -1081,6 +1086,8 @@ public sealed class CommandBuffer : ICommandRecorder
     /// </summary>
     private void InsertArchetypeCache(ComponentType[] types, int count, Archetype archetype)
     {
+        EnsureArchetypeCacheValid();
+
         if (_archetypeCache.Length == 0)
             _archetypeCache = new ArchetypeCacheEntry[ArchetypeCacheSize];
 
@@ -1104,6 +1111,17 @@ public sealed class CommandBuffer : ICommandRecorder
         for (var i = 0; i < count; i++)
             hash = unchecked((hash * 31) + types[i].Value);
         return hash;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void EnsureArchetypeCacheValid()
+    {
+        var generation = _world.CreateArchetypeCacheGeneration;
+        if (_archetypeCacheGeneration == generation)
+            return;
+
+        _archetypeCacheGeneration = generation;
+        _archetypeCacheCount = 0;
     }
 
     private (Signature Signature, RawComponentValue[] Components) BuildCreatedEntityComponentsForDelta(in CreatedState state)
@@ -1264,7 +1282,6 @@ public sealed class CommandBuffer : ICommandRecorder
         _slabs.Clear();
         _currentSlabIndex = -1;
         _currentSlabOffset = 0;
-        _archetypeCacheCount = 0;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

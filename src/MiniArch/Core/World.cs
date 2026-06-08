@@ -179,6 +179,8 @@ public sealed class World : IDisposable
 
     internal int ArchetypeVersion => _archetypeVersion;
 
+    internal int CreateArchetypeCacheGeneration => _createArchetypeCacheGeneration;
+
     internal void Reset(int entitySlotCount)
     {
         if (entitySlotCount < 0)
