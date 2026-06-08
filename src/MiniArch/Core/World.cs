@@ -106,6 +106,26 @@ public sealed partial class World : IDisposable
     /// </summary>
     public int EntityCount => _entitySlotCount - _freeIdCount;
 
+    /// <summary>
+    /// Gets a snapshot of world-level statistics.
+    /// </summary>
+    public WorldStats GetStats() => new(EntityCount, _records.Length, _freeIdCount, _archetypes.Count);
+
+    /// <summary>
+    /// Gets archetype-level statistics for all archetypes.
+    /// </summary>
+    public ArchetypeStats[] GetArchetypeStats()
+    {
+        var result = new ArchetypeStats[_archetypes.Count];
+        var i = 0;
+        foreach (var arch in _archetypes.Values)
+        {
+            result[i++] = new ArchetypeStats(arch.EntityCount, arch.Capacity, arch.ComponentTypes);
+        }
+
+        return result;
+    }
+
     internal int ChunkCapacity => _chunkCapacity;
 
     internal int EntitySlotCount => _entitySlotCount;

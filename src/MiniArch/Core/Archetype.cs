@@ -60,6 +60,11 @@ public sealed partial class Archetype
     internal int Capacity => _capacity;
 
     /// <summary>
+    /// Gets the component types that define this archetype's signature.
+    /// </summary>
+    internal IReadOnlyList<Type> ComponentTypes => _componentTypes;
+
+    /// <summary>
     /// Returns a single-element span wrapping this archetype as a <see cref="Chunk"/>.
     /// Maintains compatibility with query iterators that work over chunks.
     /// </summary>

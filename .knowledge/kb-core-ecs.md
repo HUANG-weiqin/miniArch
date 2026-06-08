@@ -19,13 +19,13 @@ updated: 2026-06-08 (World/Archetype 拆分为 partial 文件、DebugMetrics 已
 
 - 核心组成（文件拆分为 partial 类）：
   - **World partial 文件族**：
-    - `World.cs`：构造/Dispose、字段声明、component 读写（TryGet/Get/GetRef/Has/Access）、Clone、Replay、hierarchy API、GetOrCreateArchetype、helper 方法
+    - `World.cs`：构造/Dispose、字段声明、component 读写（TryGet/Get/GetRef/Has/Access）、Clone、Replay、hierarchy API、GetOrCreateArchetype、诊断 API（GetStats/GetArchetypeStats）、helper 方法
     - `World.EntityLifecycle.cs`：实体创建/销毁/生命周期（Create、CreateMany、Destroy、TryGetLocation、IsAlive、free-list 管理、deferred entity reservation）
     - `World.Create.Generated.cs`：`Create<T1>..Create<T16>` 泛型重载 + `CachedCreateArchetype` 泛型 static cache + `GetFirst<T>()`
     - `World.QueryCache.cs`：Query 缓存（QueryDescription→QueryFilter→Query 链路）、archetype snapshot 发布、`GetFirst<T>()` O(1) entity lookup
     - `World.StructuralChange.cs`：Add/Set/Remove 组件、entity 迁移（MoveEntity/ApplyTypedAddOrSet/ApplyRawAddOrSet/RemoveBoxed）
   - **Archetype partial 文件族**：
-    - `Archetype.cs`：字段声明、构造函数、metadata 属性、edge cache（add/remove destination）、component index resolution
+    - `Archetype.cs`：字段声明、构造函数、metadata 属性（EntityCount/Capacity/ComponentTypes）、edge cache（add/remove destination）、component index resolution
     - `Archetype.Storage.cs`：存储操作（EnsureCapacity、AddEntity、ReserveRows、RemoveAt、component read/write span、CopySharedComponentsFrom、CreateStorage、CopySmall）
   - `Chunk.cs`：**internal** readonly struct 视图，包裹 Archetype 暴露查询接口（给 Query 内部迭代器用）
   - `Ecs/ChunkView.cs`：**public** readonly struct 视图，直接包裹 Archetype（给用户 batch API 用）
@@ -45,6 +45,7 @@ updated: 2026-06-08 (World/Archetype 拆分为 partial 文件、DebugMetrics 已
   - `EntityRecord.cs`：`(Archetype, RowIndex, Version)` 16 字节，合并版本与位置
   - `EntityAccessor.cs`：ref struct，一次 entity 定位后直读/直写多个组件（跳过重复的 `_records` 查找）
   - `EntityInfo.cs`：只读快照，供外部查询 entity 状态
+  - `WorldStats.cs`：`WorldStats`（全局诊断快照）+ `ArchetypeStats`（单 archetype 快照），纯按需推算、零新增状态
   - `EntityBatchRange.cs`：批量创建/克隆的连续范围记录
   - `ManagedReferenceCheck.cs`：托管引用检测
   - `SpanHelper.cs`：排序+去重、hash 合并等 span 工具
@@ -84,7 +85,7 @@ updated: 2026-06-08 (World/Archetype 拆分为 partial 文件、DebugMetrics 已
 - `Chunk` 被扁平化为 Archetype 的 readonly struct 视图：每个 Archetype 有且仅有一个 Chunk，无 multi-chunk 分层
 - **World 拆分为 partial 文件**（按职责分组）：EntityLifecycle、Create.Generated、QueryCache、StructuralChange。主文件保留字段声明、component 读写、Clone、Replay、hierarchy
 - **Archetype 拆分为 partial 文件**：主文件保留字段/构造/metadata/edge cache/component index；Storage 文件负责所有存储操作
-- **DebugMetrics 已删除**：YAGNI 清理，不再维护 debug 计数器和报告 API
+- **DebugMetrics 已删除**：YAGNI 清理，不再维护 debug 计数器和报告 API。替代方案：`WorldStats`/`ArchetypeStats` 纯快照式诊断（`World.GetStats()`/`World.GetArchetypeStats()`），零新增状态、零热路径开销
 - **ICommandRecorder 已删除**：CommandBuffer 直接使用，不再需要独立录制接口
 - **Edge cache 内联**：增删目标缓存直接挂在 Archetype 上（`Archetype?[]` 直索引），无需独立 ArchetypeEdges 对象
 - **迁移拷贝内联**：`CopySharedComponentsFrom` 直接在 Archetype 上实现，无需 MigrationPlan class

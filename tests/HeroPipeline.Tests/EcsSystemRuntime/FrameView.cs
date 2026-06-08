@@ -45,6 +45,16 @@ public sealed class FrameView
 
     public void Set<T>(MiniArch.Entity entity, T value) =>
         _world.Set(entity, value);
+
+    /// <summary>
+    /// Gets a snapshot of world-level statistics.
+    /// </summary>
+    public MiniArch.WorldStats GetStats() => _world.GetStats();
+
+    /// <summary>
+    /// Gets archetype-level statistics for all archetypes.
+    /// </summary>
+    public MiniArch.ArchetypeStats[] GetArchetypeStats() => _world.GetArchetypeStats();
 }
 
 
