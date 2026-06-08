@@ -24,7 +24,6 @@ public sealed partial class World : IDisposable
     private RecycledEntity[] _freeIds;
     private int _freeIdCount;
 
-    private int _archetypeVersion;
     private int _createArchetypeCacheGeneration;
     private readonly List<Entity> _destroyOrderScratch;
     private int[] _destroyVisitedGen = [];
@@ -136,7 +135,7 @@ public sealed partial class World : IDisposable
 
     internal HierarchyTable Hierarchy => _hierarchy;
 
-    internal int ArchetypeVersion => _archetypeVersion;
+    internal int ArchetypeCount => Volatile.Read(ref _archetypeSnapshot).Length;
 
     internal int CreateArchetypeCacheGeneration => _createArchetypeCacheGeneration;
 
@@ -420,7 +419,6 @@ public sealed partial class World : IDisposable
         archetype = new Archetype(signature, ResolveComponentTypes(signature), _chunkCapacity);
         _archetypes.Add(signature, archetype);
         PublishArchetypeSnapshot(archetype);
-        _archetypeVersion++;
         return archetype;
     }
 

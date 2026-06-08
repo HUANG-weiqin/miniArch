@@ -6,7 +6,8 @@ namespace MiniArch.Core;
 using MiniArch;
 
 /// <summary>
-/// Cached archetype and chunk query.
+/// Cached archetype and chunk query with incremental append-only invalidation.
+/// Archetypes are never removed, so we only scan newly added ones.
 /// </summary>
 internal sealed class Query
 {
@@ -15,19 +16,24 @@ internal sealed class Query
     private readonly object _refreshLock = new();
     private int _refreshCount;
 
-    private Archetype[] _snapshotArchetypes = Array.Empty<Archetype>();
-    private Chunk[] _snapshotChunks = Array.Empty<Chunk>();
+    // Pre-computed filter masks (immutable after construction).
+    private readonly ComponentMask _requiredMask;
+    private readonly ComponentMask _excludedMask;
+    private readonly ComponentMask _anyMask;
+
+    private Archetype[] _snapshotArchetypes = [];
+    private Chunk[] _snapshotChunks = [];
     private ChunkView[] _snapshotChunkViews = [];
-    private Archetype[] _scratchArchetypes = Array.Empty<Archetype>();
-    private Chunk[] _scratchChunks = Array.Empty<Chunk>();
-    private ChunkView[] _scratchChunkViews = [];
     private int _snapshotCount;
-    private int _snapshotVersion = -1;
+    private int _lastArchetypeCount = -1;
 
     internal Query(World world, QueryFilter filter)
     {
         _world = world;
         _filter = filter;
+        _requiredMask = ComputeFilterMask(filter.Required.AsSpan());
+        _excludedMask = ComputeFilterMask(filter.Excluded.AsSpan());
+        _anyMask = ComputeFilterMask(filter.Any.AsSpan());
     }
 
     internal static Query Create(World world, in QueryDescription description)
@@ -96,7 +102,7 @@ internal sealed class Query
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureRefreshed()
     {
-        if (_world.ArchetypeVersion != _snapshotVersion)
+        if (_world.ArchetypeCount != _lastArchetypeCount)
         {
             Refresh();
         }
@@ -107,67 +113,133 @@ internal sealed class Query
     {
         lock (_refreshLock)
         {
-            if (_world.ArchetypeVersion == _snapshotVersion)
+            var currentCount = _world.ArchetypeCount;
+            if (currentCount == _lastArchetypeCount)
             {
                 return;
             }
 
-            BuildSnapshot();
+            AppendNewArchetypes(currentCount);
             Interlocked.Increment(ref _refreshCount);
         }
     }
 
-    private void BuildSnapshot()
+    private void AppendNewArchetypes(int currentArchetypeCount)
     {
         var archetypes = _world.Archetypes;
-        var version = _world.ArchetypeVersion;
+        var start = _lastArchetypeCount < 0 ? 0 : _lastArchetypeCount;
 
-        // Compute match masks once per refresh.
-        var requiredMask = ComputeFilterMask(_filter.Required.AsSpan());
-        var excludedMask = ComputeFilterMask(_filter.Excluded.AsSpan());
-        var anyMask = ComputeFilterMask(_filter.Any.AsSpan());
-
-        var count = 0;
-        for (var i = 0; i < archetypes.Length; i++)
+        // Count new matches to size the arrays correctly.
+        var newMatchCount = 0;
+        for (var i = start; i < currentArchetypeCount; i++)
         {
-            if (Matches(archetypes[i], requiredMask, excludedMask, anyMask))
+            if (Matches(archetypes[i]))
             {
-                count++;
+                newMatchCount++;
             }
         }
 
-        if (_scratchArchetypes.Length < count)
+        var totalCount = _snapshotCount + newMatchCount;
+
+        // Grow arrays if needed.
+        if (_snapshotArchetypes.Length < totalCount)
         {
-            _scratchArchetypes = new Archetype[count];
-            _scratchChunks = new Chunk[count];
-            _scratchChunkViews = new ChunkView[count];
+            var newLen = Math.Max(totalCount, _snapshotArchetypes.Length == 0 ? 4 : _snapshotArchetypes.Length * 2);
+            Array.Resize(ref _snapshotArchetypes, newLen);
+            Array.Resize(ref _snapshotChunks, newLen);
+            Array.Resize(ref _snapshotChunkViews, newLen);
         }
 
-        var idx = 0;
-        for (var i = 0; i < archetypes.Length; i++)
+        // Append new matches.
+        var idx = _snapshotCount;
+        for (var i = start; i < currentArchetypeCount; i++)
         {
             var a = archetypes[i];
-            if (Matches(a, requiredMask, excludedMask, anyMask))
+            if (Matches(a))
             {
-                _scratchArchetypes[idx] = a;
-                _scratchChunks[idx] = a.GetChunkSpan()[0];
-                _scratchChunkViews[idx] = new ChunkView(a);
+                _snapshotArchetypes[idx] = a;
+                _snapshotChunks[idx] = a.GetChunkSpan()[0];
+                _snapshotChunkViews[idx] = new ChunkView(a);
                 idx++;
             }
         }
 
-        // Publish snapshot via swap (volatile ensures readers see consistent data).
-        var oldA = _snapshotArchetypes;
-        var oldC = _snapshotChunks;
-        var oldCV = _snapshotChunkViews;
-        Volatile.Write(ref _snapshotArchetypes, _scratchArchetypes);
-        Volatile.Write(ref _snapshotChunks, _scratchChunks);
-        Volatile.Write(ref _snapshotChunkViews, _scratchChunkViews);
-        Volatile.Write(ref _snapshotCount, count);
-        Volatile.Write(ref _snapshotVersion, version);
-        _scratchArchetypes = oldA;
-        _scratchChunks = oldC;
-        _scratchChunkViews = oldCV;
+        Volatile.Write(ref _snapshotCount, idx);
+        Volatile.Write(ref _lastArchetypeCount, currentArchetypeCount);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool Matches(Archetype archetype)
+    {
+        var archMask = archetype.Signature.ComponentMask;
+
+        // Required: archetype must have all required components.
+        if (!_requiredMask.IsZero())
+        {
+            if ((archMask.B0 & _requiredMask.B0) != _requiredMask.B0)
+                return false;
+            if (_requiredMask.HasB1 && (archMask.B1 & _requiredMask.B1) != _requiredMask.B1)
+                return false;
+            if (_requiredMask.HasB2 && (archMask.B2 & _requiredMask.B2) != _requiredMask.B2)
+                return false;
+            if (_requiredMask.HasB3 && (archMask.B3 & _requiredMask.B3) != _requiredMask.B3)
+                return false;
+        }
+
+        // Excluded: archetype must have none of the excluded components.
+        if (!_excludedMask.IsZero())
+        {
+            if ((archMask.B0 & _excludedMask.B0) != 0)
+                return false;
+            if (_excludedMask.HasB1 && (archMask.B1 & _excludedMask.B1) != 0)
+                return false;
+            if (_excludedMask.HasB2 && (archMask.B2 & _excludedMask.B2) != 0)
+                return false;
+            if (_excludedMask.HasB3 && (archMask.B3 & _excludedMask.B3) != 0)
+                return false;
+        }
+
+        // Fallback: check components with IDs >= 256 (not covered by 256-bit mask).
+        var required = _filter.Required.AsSpan();
+        for (var i = 0; i < required.Length; i++)
+        {
+            if ((uint)required[i].Value >= 256 && !archetype.Signature.Contains(required[i]))
+                return false;
+        }
+
+        var excluded = _filter.Excluded.AsSpan();
+        for (var i = 0; i < excluded.Length; i++)
+        {
+            if ((uint)excluded[i].Value >= 256 && archetype.Signature.Contains(excluded[i]))
+                return false;
+        }
+
+        // Any: if no "any" filter, it's a match.
+        var any = _filter.Any.AsSpan();
+        if (any.Length == 0)
+            return true;
+
+        // Fast any-check via 256-bit mask.
+        if (!_anyMask.IsZero())
+        {
+            if ((archMask.B0 & _anyMask.B0) != 0)
+                return true;
+            if (_anyMask.HasB1 && (archMask.B1 & _anyMask.B1) != 0)
+                return true;
+            if (_anyMask.HasB2 && (archMask.B2 & _anyMask.B2) != 0)
+                return true;
+            if (_anyMask.HasB3 && (archMask.B3 & _anyMask.B3) != 0)
+                return true;
+        }
+
+        // Slow any-check for ids >= 256.
+        for (var i = 0; i < any.Length; i++)
+        {
+            if (archetype.Signature.Contains(any[i]))
+                return true;
+        }
+
+        return false;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -196,90 +268,5 @@ internal sealed class Query
         }
 
         return new ComponentMask(b0, b1, b2, b3);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool Matches(
-        Archetype archetype,
-        ComponentMask requiredMask,
-        ComponentMask excludedMask,
-        ComponentMask anyMask)
-    {
-        var archMask = archetype.Signature.ComponentMask;
-
-        if (!requiredMask.IsZero())
-        {
-            if ((archMask.B0 & requiredMask.B0) != requiredMask.B0)
-                return false;
-            if (requiredMask.HasB1 && (archMask.B1 & requiredMask.B1) != requiredMask.B1)
-                return false;
-            if (requiredMask.HasB2 && (archMask.B2 & requiredMask.B2) != requiredMask.B2)
-                return false;
-            if (requiredMask.HasB3 && (archMask.B3 & requiredMask.B3) != requiredMask.B3)
-                return false;
-        }
-
-        if (!excludedMask.IsZero())
-        {
-            if ((archMask.B0 & excludedMask.B0) != 0)
-                return false;
-            if (excludedMask.HasB1 && (archMask.B1 & excludedMask.B1) != 0)
-                return false;
-            if (excludedMask.HasB2 && (archMask.B2 & excludedMask.B2) != 0)
-                return false;
-            if (excludedMask.HasB3 && (archMask.B3 & excludedMask.B3) != 0)
-                return false;
-        }
-
-        // Fallback: check components with IDs >= 256 (not covered by 256-bit mask)
-        var required = _filter.Required.AsSpan();
-        for (var i = 0; i < required.Length; i++)
-        {
-            var component = required[i];
-            if ((uint)component.Value >= 256 && !archetype.Signature.Contains(component))
-            {
-                return false;
-            }
-        }
-
-        var excluded = _filter.Excluded.AsSpan();
-        for (var i = 0; i < excluded.Length; i++)
-        {
-            var component = excluded[i];
-            if ((uint)component.Value >= 256 && archetype.Signature.Contains(component))
-            {
-                return false;
-            }
-        }
-
-        var any = _filter.Any.AsSpan();
-        if (any.Length == 0)
-        {
-            return true;
-        }
-
-        // Fast any-check via 256-bit mask
-        if (!anyMask.IsZero())
-        {
-            if ((archMask.B0 & anyMask.B0) != 0)
-                return true;
-            if (anyMask.HasB1 && (archMask.B1 & anyMask.B1) != 0)
-                return true;
-            if (anyMask.HasB2 && (archMask.B2 & anyMask.B2) != 0)
-                return true;
-            if (anyMask.HasB3 && (archMask.B3 & anyMask.B3) != 0)
-                return true;
-        }
-
-        // Slow any-check for ids >= 256
-        for (var i = 0; i < any.Length; i++)
-        {
-            if (archetype.Signature.Contains(any[i]))
-            {
-                return true;
-            }
-        }
-
-        return false;
     }
 }
