@@ -546,6 +546,36 @@ public sealed class WorldLifecycleTests
         world.Destroy(root);
     }
 
+    [Fact]
+    public void GetFirst_returns_first_entity_with_component()
+    {
+        var world = new World();
+        var created = world.Create(new Position(1, 2));
+
+        var first = world.GetFirst<Position>();
+
+        Assert.Equal(created, first);
+        Assert.Equal(1, world.Get<Position>(first).X);
+    }
+
+    [Fact]
+    public void GetFirst_throws_when_no_entity_with_component()
+    {
+        var world = new World();
+
+        Assert.Throws<InvalidOperationException>(() => world.GetFirst<Position>());
+    }
+
+    [Fact]
+    public void GetFirst_throws_when_entity_destroyed()
+    {
+        var world = new World();
+        var entity = world.Create(new Position(1, 2));
+        world.Destroy(entity);
+
+        Assert.Throws<InvalidOperationException>(() => world.GetFirst<Position>());
+    }
+
     private static void RunOnDedicatedThread(Action action)
     {
         Exception? capturedException = null;

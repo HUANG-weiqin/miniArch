@@ -886,6 +886,26 @@ public sealed class World : IDisposable
     }
 
     /// <summary>
+    /// Gets the first entity in the archetype that stores component
+    /// <typeparamref name="T" />.
+    /// Uses the same generic archetype cache as <see cref="Create{T}" />,
+    /// so the hot path is O(1) with no allocation and no dictionary lookup.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// No entity with component <typeparamref name="T" /> exists.
+    /// </exception>
+    public Entity GetFirst<T>() where T : struct
+    {
+        ThrowIfDisposed();
+        if (!TryGetCreateArchetype<T>(out var archetype) || archetype.EntityCount == 0)
+        {
+            throw new InvalidOperationException(
+                $"No entity with component '{typeof(T).Name}' exists.");
+        }
+        return archetype.GetEntity(0);
+    }
+
+    /// <summary>
     /// Creates a cached <see cref="EntityAccessor"/> for multiple component
     /// reads/writes on the same entity. The entity→(archetype,chunk,row) lookup
     /// is performed once; subsequent <see cref="EntityAccessor.Get{T}"/>,
@@ -1143,6 +1163,24 @@ public sealed class World : IDisposable
         PublishArchetypeSnapshot(archetype);
         _archetypeVersion++;
         return archetype;
+    }
+
+    private bool TryGetCreateArchetype<T>([NotNullWhen(true)] out Archetype? archetype) where T : struct
+    {
+        var entry = CreateArchetypeCache<T>.Entry;
+        if (entry is not null && entry.TryGetArchetype(this, _createArchetypeCacheGeneration, out archetype))
+        {
+            return true;
+        }
+
+        var ct = Component<T>.ComponentType;
+        if (!_archetypes.TryGetValue(new Signature(ct), out archetype))
+        {
+            return false;
+        }
+
+        CreateArchetypeCache<T>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
+        return true;
     }
 
     private Archetype GetOrCreateCreateArchetype<T1>(ComponentType componentType1)
