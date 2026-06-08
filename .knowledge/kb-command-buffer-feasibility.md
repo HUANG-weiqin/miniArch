@@ -2,7 +2,7 @@
 title: Command Buffer Runtime
 module: MiniArch.Core CommandBuffer
 description: Single-threaded per-entity-deduplicating command buffer with arena slab allocator, inline CreatedState/ExistingEntityOps, direct Submit() path, Snapshot() for cross-world replay, FrameDelta merge, SubmitAndSnapshotAsync()
-updated: 2026-06-08 (修复 Merge CreatedEntity ReservedEntities bug + Clone replay 测试覆盖)
+updated: 2026-06-08 (YAGNI 清理 FrameDelta 冗余字段，struct 缩小带来 Movement +50% / Attack +29% 涨幅)
 ---
 # Command Buffer Runtime
 
@@ -49,6 +49,34 @@ updated: 2026-06-08 (修复 Merge CreatedEntity ReservedEntities bug + Clone rep
 | 10000/DenseExisting | 285 | 284 | 189 | -0.4% |
 | 10000/MixedScript | 357 | 282 | 182 | -21.0% |
 
+### Struct 缩小带来显著性能提升（2026-06-08）
+
+从 FrameDelta 热路径 struct 中删除 `Type RuntimeType`（8B 引用指针）、冗余 `int ComponentTypeId`、`Signature` 字段后：
+
+| 结构体 | 改前 | 改后 | 缩小 |
+|---|---|---|---|
+| `AddSetEntry` | 24B | 16B | -33% |
+| `CreatedComponent` | 24B | 16B | -33% |
+| `TypeInfoCache` tuple | 16B | 8B | -50% |
+| `RawComponentValue` | 32B | 20B | -38% |
+| `RawComponentCommand` | 40B | 28B | -30% |
+| `RawRemoveCommand` | 24B | 12B | -50% |
+
+HeroPipeline 回归测试涨幅：
+
+| 链路 | 改前 | 改后 | 涨幅 |
+|---|---|---|---|
+| Movement | 858.7 rounds/s | 1284.3 rounds/s | **+49.6%** |
+| Attack | 626.7 rounds/s | 809.2 rounds/s | **+29.1%** |
+
+**根因分析（三个因素叠加）：**
+
+1. **GC write barrier 消除**（最大因素）：`Type` 是引用类型，每次构造包含它的 struct 时 JIT 必须插入 write barrier 更新 GC card table。删除后热路径零 write barrier。
+2. **Cache line 利用率提升**：struct 缩小 30-50%，同样 cache line（64B）装更多条目，InlineMap 遍历时的 cache miss 大幅减少。
+3. **内存带宽减少**：高频复制（List.Add、InlineMap.Set、DeepCopyOwnedData）的 per-copy 数据量减少。
+
+**教训：在热路径 struct 中避免持有引用类型字段（即使只是缓存），代价远比看起来大。**
+
 ## 认知模型
 
 - 对 world 的"延迟结构变更 + 录制时去重 + 直接批量提交器"
@@ -66,3 +94,4 @@ updated: 2026-06-08 (修复 Merge CreatedEntity ReservedEntities bug + Clone rep
 - existing destroy 必须存完整 `Entity`（含 version），不能只存 id
 - `InlineMap` 的 `OverflowHead` 默认值 0 在 `Clear()` 后可能导致遍历空 pool；新分配 map 必须显式初始化 `OverflowHead = -1`
 - ~~**FrameDelta.Merge 对 CreatedEntity 不产出 ReservedEntities**~~（已修复 2026-06-08）：`RebuildFromState` 的 `IsCreated` 分支现在也会加 `ReservedEntities`，与 `BuildDelta` 正常路径保持一致。修复前跨 world replay 会因 Version 未设导致 `IsAlive` 返回 false。伴随此修复，`MergeOfMerge_created_then_destroy_then_recreate` 测试的 `Assert.Empty(ReservedEntities)` 也被修正为 `Assert.Single(ReservedEntities)`——因为 cancel-out 的 reserve+release 对被消除后，新 CreatedEntity 的 reserve 仍然存在。
+- **`ResolveTypeInfo` 缓存哨兵值不能用 `IsValid`**（已修复 2026-06-08）：删除 `RuntimeType` 后缓存元组从 `(Type, ComponentType, int)` 变为 `(ComponentType, int)`，用 `ComponentType.IsValid`（`Value >= 0`）判断命中。但 `Position` 的 ComponentTypeId 恰好是 0，未初始化的 slot 也 `IsValid == true`，导致返回 `Size=0`，数据未被拷贝。改为 `cached.Size > 0` 判断。**教训：缓存哨兵不能依赖值域内的合法值，必须有不属于值域的非法状态（或显式 bool flag）。**
