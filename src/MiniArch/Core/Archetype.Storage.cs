@@ -153,7 +153,7 @@ public sealed partial class Archetype
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Span<T> GetComponentSpanAt<T>(int columnIndex)
     {
-        return MemoryMarshal.CreateSpan(ref GetComponentRefAt<T>(columnIndex, 0), _count);
+        return MemoryMarshal.CreateSpan(ref GetComponentRef<T>(columnIndex), _count);
     }
 
     /// <summary>
@@ -210,13 +210,15 @@ public sealed partial class Archetype
 
     internal unsafe void ReadComponentRaw(int columnIndex, int row, byte* destination)
     {
-        ref var source = ref _data[GetByteOffset(columnIndex, row)];
+        var offset = _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex];
+        ref var source = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), offset);
         Unsafe.CopyBlockUnaligned(ref *destination, ref source, (uint)_elementSizes[columnIndex]);
     }
 
     internal unsafe void WriteComponentRaw(int columnIndex, int row, byte* source)
     {
-        ref var target = ref _data[GetByteOffset(columnIndex, row)];
+        var offset = _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex];
+        ref var target = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), offset);
         Unsafe.CopyBlockUnaligned(ref target, ref *source, (uint)_elementSizes[columnIndex]);
     }
 
@@ -314,8 +316,8 @@ public sealed partial class Archetype
     private unsafe void CopyColumnFrom(Archetype source, int columnIndex, int count)
     {
         var byteCount = checked((uint)(count * _elementSizes[columnIndex]));
-        ref var sourceRef = ref source._data[source._columnByteOffsets[columnIndex]];
-        ref var destinationRef = ref _data[_columnByteOffsets[columnIndex]];
+        ref var sourceRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(source._data), source._columnByteOffsets[columnIndex]);
+        ref var destinationRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), _columnByteOffsets[columnIndex]);
         Unsafe.CopyBlockUnaligned(ref destinationRef, ref sourceRef, byteCount);
     }
 
