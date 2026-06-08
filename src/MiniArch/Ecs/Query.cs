@@ -48,10 +48,11 @@ public readonly struct Query
     // ================================================================
 
     /// <summary>
-    /// Gets a chunk enumerable for batch component access.
+    /// Gets matched chunks as a span for batch component access.
     /// Use <c>foreach (var chunk in query.GetChunks())</c>.
+    /// Zero-copy, JIT-optimized span iteration.
     /// </summary>
-    public ChunkViewEnumerable GetChunks() => new(_query);
+    public ReadOnlySpan<ChunkView> GetChunks() => _query.GetChunkViewSpan();
 
     /// <summary>
     /// Gets the required signature.

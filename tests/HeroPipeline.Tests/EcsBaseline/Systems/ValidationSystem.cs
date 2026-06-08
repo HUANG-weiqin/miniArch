@@ -39,7 +39,7 @@ public sealed class ValidationSystem : ISystem
 
     private static void AddValidated(CoreCommandBuffer commands, FrameView frame, MiniArch.QueryDescription query)
     {
-        foreach (MiniArch.Entity entity in frame.ChunkQuery(query).EachSpan())
+        foreach (MiniArch.Entity entity in frame.ChunkQuery(query))
         {
             commands.Add(entity, new Validated());
         }

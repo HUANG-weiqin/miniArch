@@ -16,19 +16,25 @@ public static class CardCollector
     {
         List<(MiniArch.Entity Card, int Order)> cards = [];
 
-        foreach (var row in frame.ChunkQuery(CardQuery).EachSpan<CardZone, CardOrderValue>())
+        foreach (var chunk in frame.ChunkQuery(CardQuery).GetChunks())
         {
-            if (row.Get0().Value != zone)
+            var zones = chunk.GetSpan<CardZone>();
+            var orders = chunk.GetSpan<CardOrderValue>();
+            var entities = chunk.GetEntities();
+            for (int i = 0; i < chunk.Count; i++)
             {
-                continue;
-            }
+                if (zones[i].Value != zone)
+                {
+                    continue;
+                }
 
-            if (!frame.TryGetParent(row.Entity, out MiniArch.Entity parent) || parent != owner)
-            {
-                continue;
-            }
+                if (!frame.TryGetParent(entities[i], out MiniArch.Entity parent) || parent != owner)
+                {
+                    continue;
+                }
 
-            cards.Add((row.Entity, row.Get1().Value));
+                cards.Add((entities[i], orders[i].Value));
+            }
         }
 
         return cards;
@@ -38,27 +44,33 @@ public static class CardCollector
     {
         Dictionary<MiniArch.Entity, List<(MiniArch.Entity Card, int Order)>> result = [];
 
-        foreach (var row in frame.ChunkQuery(CardQuery).EachSpan<CardZone, CardOrderValue>())
+        foreach (var chunk in frame.ChunkQuery(CardQuery).GetChunks())
         {
-            if (row.Get0().Value != zone)
+            var zones = chunk.GetSpan<CardZone>();
+            var orders = chunk.GetSpan<CardOrderValue>();
+            var entities = chunk.GetEntities();
+            for (int i = 0; i < chunk.Count; i++)
             {
-                continue;
+                if (zones[i].Value != zone)
+                {
+                    continue;
+                }
+
+                MiniArch.Entity card = entities[i];
+
+                if (!frame.TryGetParent(card, out MiniArch.Entity owner))
+                {
+                    continue;
+                }
+
+                if (!result.TryGetValue(owner, out List<(MiniArch.Entity Card, int Order)>? list))
+                {
+                    list = [];
+                    result[owner] = list;
+                }
+
+                list.Add((card, orders[i].Value));
             }
-
-            MiniArch.Entity card = row.Entity;
-
-            if (!frame.TryGetParent(card, out MiniArch.Entity owner))
-            {
-                continue;
-            }
-
-            if (!result.TryGetValue(owner, out List<(MiniArch.Entity Card, int Order)>? list))
-            {
-                list = [];
-                result[owner] = list;
-            }
-
-            list.Add((card, row.Get1().Value));
         }
 
         return result;

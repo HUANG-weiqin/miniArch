@@ -49,17 +49,22 @@ internal static class TestPipelineQueries
     {
         MiniArch.Entity action = default;
 
-        foreach (var row in frame.ChunkQuery(ActionDescription).EachSpan<ActionKind>())
+        foreach (var chunk in frame.ChunkQuery(ActionDescription).GetChunks())
         {
-            if (row.Get0() != expectedKind)
+            var kinds = chunk.GetSpan<ActionKind>();
+            var entities = chunk.GetEntities();
+            for (int i = 0; i < chunk.Count; i++)
             {
-                continue;
-            }
+                if (kinds[i] != expectedKind)
+                {
+                    continue;
+                }
 
-            if (runtime.World.TryGetParent(row.Entity, out MiniArch.Entity candidateParentCore) &&
-                candidateParentCore == parent)
-            {
-                action = row.Entity;
+                if (runtime.World.TryGetParent(entities[i], out MiniArch.Entity candidateParentCore) &&
+                    candidateParentCore == parent)
+                {
+                    action = entities[i];
+                }
             }
         }
 
@@ -75,19 +80,24 @@ internal static class TestPipelineQueries
     {
         int count = 0;
 
-        foreach (var row in frame.ChunkQuery(RuleRequestDescription).EachSpan<RequestTarget, RuleId>())
+        foreach (var chunk in frame.ChunkQuery(RuleRequestDescription).GetChunks())
         {
-            if (row.Get0().Target != target)
+            var targets = chunk.GetSpan<RequestTarget>();
+            var ruleIds = chunk.GetSpan<RuleId>();
+            for (int i = 0; i < chunk.Count; i++)
             {
-                continue;
-            }
+                if (targets[i].Target != target)
+                {
+                    continue;
+                }
 
-            if (row.Get1() != ruleId)
-            {
-                continue;
-            }
+                if (ruleIds[i] != ruleId)
+                {
+                    continue;
+                }
 
-            count++;
+                count++;
+            }
         }
 
         return count;
@@ -97,20 +107,25 @@ internal static class TestPipelineQueries
     {
         int count = 0;
 
-        foreach (var row in frame.ChunkQuery(EffectDescription).EachSpan<EffectId, EffectTarget>())
+        foreach (var chunk in frame.ChunkQuery(EffectDescription).GetChunks())
         {
-            if (row.Get0() != CharacterAttackIds.DamageEffect)
+            var effectIds = chunk.GetSpan<EffectId>();
+            var effectTargets = chunk.GetSpan<EffectTarget>();
+            for (int i = 0; i < chunk.Count; i++)
             {
-                continue;
-            }
+                if (effectIds[i] != CharacterAttackIds.DamageEffect)
+                {
+                    continue;
+                }
 
-            MiniArch.Entity effectTarget = row.Get1().Target;
-            if (effectTarget != firstTarget && effectTarget != secondTarget)
-            {
-                continue;
-            }
+                MiniArch.Entity effectTarget = effectTargets[i].Target;
+                if (effectTarget != firstTarget && effectTarget != secondTarget)
+                {
+                    continue;
+                }
 
-            count++;
+                count++;
+            }
         }
 
         return count;
@@ -120,19 +135,24 @@ internal static class TestPipelineQueries
     {
         int count = 0;
 
-        foreach (var row in frame.ChunkQuery(ModifierRequestDescription).EachSpan<RequestTarget, ModifierSlot>())
+        foreach (var chunk in frame.ChunkQuery(ModifierRequestDescription).GetChunks())
         {
-            if (row.Get0().Target != firstTarget && row.Get0().Target != secondTarget)
+            var targets = chunk.GetSpan<RequestTarget>();
+            var slots = chunk.GetSpan<ModifierSlot>();
+            for (int i = 0; i < chunk.Count; i++)
             {
-                continue;
-            }
+                if (targets[i].Target != firstTarget && targets[i].Target != secondTarget)
+                {
+                    continue;
+                }
 
-            if (row.Get1().Slot != CharacterSlotKeys.CurrentHp)
-            {
-                continue;
-            }
+                if (slots[i].Slot != CharacterSlotKeys.CurrentHp)
+                {
+                    continue;
+                }
 
-            count++;
+                count++;
+            }
         }
 
         return count;

@@ -22,17 +22,22 @@ public sealed class SpawnSystem : ISystem
     {
         CoreCommandBuffer commands = context.Commands;
 
-        foreach (var row in context.Frame.ChunkQuery(SpawnQueryDescription).EachSpan<SpawnKind>())
+        foreach (var chunk in context.Frame.ChunkQuery(SpawnQueryDescription).GetChunks())
         {
-            if (!_spawnTable.TryGet(row.Get0(), out SpawnHandler handler))
+            var kinds = chunk.GetSpan<SpawnKind>();
+            var entities = chunk.GetEntities();
+            for (int i = 0; i < chunk.Count; i++)
             {
-                throw new InvalidOperationException(
-                    $"No spawn handler is registered for spawn kind '{row.Get0().Value}'.");
-            }
+                if (!_spawnTable.TryGet(kinds[i], out SpawnHandler handler))
+                {
+                    throw new InvalidOperationException(
+                        $"No spawn handler is registered for spawn kind '{kinds[i].Value}'.");
+                }
 
-            handler(context, row.Entity);
-            commands.Remove<SpawnPending>(row.Entity);
-            commands.Remove<Validated>(row.Entity);
+                handler(context, entities[i]);
+                commands.Remove<SpawnPending>(entities[i]);
+                commands.Remove<Validated>(entities[i]);
+            }
         }
     }
 }

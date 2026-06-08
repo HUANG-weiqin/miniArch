@@ -20,31 +20,31 @@ public readonly struct Chunk
     // ================================================================
 
     /// <summary>Gets the number of live rows.</summary>
-    public int Count => _archetype.EntityCount;
+    internal int Count => _archetype.EntityCount;
 
     /// <summary>Gets live entities as a span.</summary>
-    public ReadOnlySpan<Entity> GetEntities() => _archetype.GetEntities();
+    internal ReadOnlySpan<Entity> GetEntities() => _archetype.GetEntities();
 
     /// <summary>
     /// Gets a span of component <typeparamref name="T"/> for all rows.
     /// </summary>
-    public Span<T> GetComponentSpan<T>() where T : struct =>
+    internal Span<T> GetComponentSpan<T>() where T : struct =>
         _archetype.GetComponentSpan<T>(Component<T>.ComponentType);
 
-    public Span<T> GetComponentSpan<T>(ComponentType component) =>
+    internal Span<T> GetComponentSpan<T>(ComponentType component) =>
         _archetype.GetComponentSpan<T>(component);
 
     /// <summary>
     /// Gets a span of component <typeparamref name="T"/> at a pre-resolved column index.
     /// </summary>
     [SkipLocalsInit]
-    public Span<T> GetComponentSpanAt<T>(int columnIndex) =>
+    internal Span<T> GetComponentSpanAt<T>(int columnIndex) =>
         _archetype.GetComponentSpanAt<T>(columnIndex);
 
     /// <summary>
     /// Tries to get the column index for a component type.
     /// </summary>
-    public bool TryGetComponentIndex(ComponentType component, out int columnIndex) =>
+    internal bool TryGetComponentIndex(ComponentType component, out int columnIndex) =>
         _archetype.TryGetComponentIndexPublic(component, out columnIndex);
 
     // ================================================================

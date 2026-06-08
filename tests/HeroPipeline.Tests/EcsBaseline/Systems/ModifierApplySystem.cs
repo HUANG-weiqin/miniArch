@@ -16,8 +16,6 @@ public sealed class ModifierApplySystem : ISystem
         .With<ModifierSlot>()
         .Without<Rejected>();
 
-    private static readonly MiniArch.Core.ComponentType SetModifierType = MiniArch.Core.Component<SetModifier>.ComponentType;
-    private static readonly MiniArch.Core.ComponentType DeltaModifierType = MiniArch.Core.Component<DeltaModifier>.ComponentType;
 
     public ModifierApplySystem(IReadOnlyDictionary<SlotKey, IIntSlotPort> ports)
     {
@@ -32,16 +30,14 @@ public sealed class ModifierApplySystem : ISystem
 
         buckets.Clear();
 
-        MiniArch.Core.Query coreQuery = frame.ChunkQuery(RequestQueryDescription);
-
-        foreach (MiniArch.Core.Chunk chunk in coreQuery.Chunks)
+        foreach (var chunk in frame.ChunkQuery(RequestQueryDescription).GetChunks())
         {
             ReadOnlySpan<MiniArch.Entity> entities = chunk.GetEntities();
-            ReadOnlySpan<RequestTarget> targets = chunk.GetComponentSpan<RequestTarget>(MiniArch.Core.Component<RequestTarget>.ComponentType);
-            ReadOnlySpan<ModifierSlot> slots = chunk.GetComponentSpan<ModifierSlot>(MiniArch.Core.Component<ModifierSlot>.ComponentType);
+            ReadOnlySpan<RequestTarget> targets = chunk.GetSpan<RequestTarget>();
+            ReadOnlySpan<ModifierSlot> slots = chunk.GetSpan<ModifierSlot>();
 
-            bool hasSet = chunk.TryGetComponentIndex(SetModifierType, out int setColumn);
-            bool hasDelta = chunk.TryGetComponentIndex(DeltaModifierType, out int deltaColumn);
+            bool hasSet = chunk.TryGetComponentIndex<SetModifier>(out int setColumn);
+            bool hasDelta = chunk.TryGetComponentIndex<DeltaModifier>(out int deltaColumn);
 
             ReadOnlySpan<SetModifier> setSpan = hasSet
                 ? chunk.GetComponentSpanAt<SetModifier>(setColumn)
@@ -50,7 +46,7 @@ public sealed class ModifierApplySystem : ISystem
                 ? chunk.GetComponentSpanAt<DeltaModifier>(deltaColumn)
                 : default;
 
-            for (int i = 0; i < entities.Length; i++)
+            for (int i = 0; i < chunk.Count; i++)
             {
                 ModifierSlot modifierSlot = slots[i];
 

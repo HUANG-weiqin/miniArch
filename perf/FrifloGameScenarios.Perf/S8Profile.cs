@@ -4,8 +4,6 @@ using MiniArch;
 using MiniArch.Core;
 using FrifloEntity = Friflo.Engine.ECS.Entity;
 using MiniEntity = MiniArch.Entity;
-using MiniQuery = MiniArch.Core.Query;
-using MiniComponentType = MiniArch.Core.ComponentType;
 
 namespace FrifloGameScenarios;
 
@@ -33,9 +31,9 @@ public static class S8Profile
         for (int i = 0; i < es.Length; i++)
             es[i] = w.Create(new Position(i, i), new StateIdle(0));
 
-        var iq = MiniQuery.Create(w, new QueryDescription().With<StateIdle>().With<Position>());
-        var mq = MiniQuery.Create(w, new QueryDescription().With<StateMove>().With<Position>());
-        var aq = MiniQuery.Create(w, new QueryDescription().With<StateAttack>().With<Position>());
+        var iq = w.Query(new QueryDescription().With<StateIdle>().With<Position>());
+        var mq = w.Query(new QueryDescription().With<StateMove>().With<Position>());
+        var aq = w.Query(new QueryDescription().With<StateAttack>().With<Position>());
 
         var r = new Random(42);
 
@@ -86,9 +84,9 @@ public static class S8Profile
 
             var t4 = Stopwatch.GetTimestamp();
             long s = 0;
-            foreach (var c in iq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X;}
-            foreach (var c in mq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X;}
-            foreach (var c in aq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X;}
+            foreach (var c in iq.GetChunks()){var sp=c.GetSpan<Position>();for(int i=0;i<sp.Length;i++)s+=sp[i].X;}
+            foreach (var c in mq.GetChunks()){var sp=c.GetSpan<Position>();for(int i=0;i<sp.Length;i++)s+=sp[i].X;}
+            foreach (var c in aq.GetChunks()){var sp=c.GetSpan<Position>();for(int i=0;i<sp.Length;i++)s+=sp[i].X;}
             long queryTicks = Stopwatch.GetTimestamp() - t4;
 
             totalTicks += sw.ElapsedTicks;
@@ -205,7 +203,7 @@ public static class S8Profile
         Console.WriteLine($"    Structural   : {hasUs + removeUs + addUs,8:F2} us  ({(hasUs + removeUs + addUs) / iterUs * 100,5:F1}%)");
     }
 
-    static long RunMiniIteration(MiniEntity[] es, World w, MiniQuery iq, MiniQuery mq, MiniQuery aq, Random r)
+    static long RunMiniIteration(MiniEntity[] es, World w, MiniArch.Query iq, MiniArch.Query mq, MiniArch.Query aq, Random r)
     {
         for (int i = 0; i < es.Length / 5; i++)
         {
@@ -223,9 +221,9 @@ public static class S8Profile
             }
         }
         long s = 0;
-        foreach (var c in iq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X;}
-        foreach (var c in mq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X;}
-        foreach (var c in aq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X;}
+        foreach (var c in iq.GetChunks()){var sp=c.GetSpan<Position>();for(int i=0;i<sp.Length;i++)s+=sp[i].X;}
+        foreach (var c in mq.GetChunks()){var sp=c.GetSpan<Position>();for(int i=0;i<sp.Length;i++)s+=sp[i].X;}
+        foreach (var c in aq.GetChunks()){var sp=c.GetSpan<Position>();for(int i=0;i<sp.Length;i++)s+=sp[i].X;}
         return s;
     }
 

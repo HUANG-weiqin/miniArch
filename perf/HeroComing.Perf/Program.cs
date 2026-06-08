@@ -72,10 +72,15 @@ Console.WriteLine("Baseline updated in .knowledge/kb-hero-pipeline-regression.md
     var players = new List<Entity>();
     var frame = runtime.CurrentFrame;
     var spawnQuery = new QueryDescription().With<SpawnKind>();
-    foreach (var row in frame.ChunkQuery(spawnQuery).EachSpan<SpawnKind>())
+    foreach (var chunk in frame.ChunkQuery(spawnQuery).GetChunks())
     {
-        if (row.Get0() == CharacterSpawnKinds.Player)
-            players.Add(row.Entity);
+        var kinds = chunk.GetSpan<SpawnKind>();
+        var entities = chunk.GetEntities();
+        for (int i = 0; i < chunk.Count; i++)
+        {
+            if (kinds[i] == CharacterSpawnKinds.Player)
+                players.Add(entities[i]);
+        }
     }
     Console.WriteLine($"Spawned {CharacterCount} characters, found {players.Count} players.");
 
@@ -174,13 +179,18 @@ void CreateAttackRequests(MiniArchRuntime runtime, List<Entity> players, bool[] 
 {
     var frame = runtime.CurrentFrame;
     var actionQuery = new QueryDescription().With<ActionEntity>().With<ActionKind>();
-    foreach (var row in frame.ChunkQuery(actionQuery).EachSpan<ActionKind>())
+    foreach (var chunk in frame.ChunkQuery(actionQuery).GetChunks())
     {
-        if (row.Get0() == CharacterActionKinds.Attack &&
-            frame.TryGetParent(row.Entity, out Entity parent) &&
-            (uint)parent.Id < (uint)playerMembership.Length && playerMembership[parent.Id])
+        var kinds = chunk.GetSpan<ActionKind>();
+        var entities = chunk.GetEntities();
+        for (int i = 0; i < chunk.Count; i++)
         {
-            CharacterAttackBootstrap.CreateAttackRequest(runtime, row.Entity, 0, GridHeight / 2);
+            if (kinds[i] == CharacterActionKinds.Attack &&
+                frame.TryGetParent(entities[i], out Entity parent) &&
+                (uint)parent.Id < (uint)playerMembership.Length && playerMembership[parent.Id])
+            {
+                CharacterAttackBootstrap.CreateAttackRequest(runtime, entities[i], 0, GridHeight / 2);
+            }
         }
     }
 }

@@ -53,16 +53,22 @@ public static class TriggerRegistrations
             return;
         }
 
-        foreach (var row in frame.ChunkQuery(DamageEffectQuery).EachSpan<EffectId, EffectSource>())
+        foreach (var chunk in frame.ChunkQuery(DamageEffectQuery).GetChunks())
         {
-            if (row.Get0() != CharacterAttackIds.DamageEffect)
+            var effectIds = chunk.GetSpan<EffectId>();
+            var sources = chunk.GetSpan<EffectSource>();
+            var entities = chunk.GetEntities();
+            for (int i = 0; i < chunk.Count; i++)
             {
-                continue;
-            }
+                if (effectIds[i] != CharacterAttackIds.DamageEffect)
+                {
+                    continue;
+                }
 
-            if (row.Get1().Source == owner)
-            {
-                onMatch(row.Entity);
+                if (sources[i].Source == owner)
+                {
+                    onMatch(entities[i]);
+                }
             }
         }
     }
@@ -72,16 +78,22 @@ public static class TriggerRegistrations
         // observerEntity is the card that was drawn (has TriggerCondition marker)
         // We need to find the CardDrawnEffect where target == observerEntity
 
-        foreach (var row in frame.ChunkQuery(CardDrawnEffectQuery).EachSpan<EffectId, EffectTarget>())
+        foreach (var chunk in frame.ChunkQuery(CardDrawnEffectQuery).GetChunks())
         {
-            if (row.Get0() != CardIds.CardDrawnEffect)
+            var effectIds = chunk.GetSpan<EffectId>();
+            var targets = chunk.GetSpan<EffectTarget>();
+            var entities = chunk.GetEntities();
+            for (int i = 0; i < chunk.Count; i++)
             {
-                continue;
-            }
+                if (effectIds[i] != CardIds.CardDrawnEffect)
+                {
+                    continue;
+                }
 
-            if (row.Get1().Target == observerEntity)
-            {
-                onMatch(row.Entity);
+                if (targets[i].Target == observerEntity)
+                {
+                    onMatch(entities[i]);
+                }
             }
         }
     }

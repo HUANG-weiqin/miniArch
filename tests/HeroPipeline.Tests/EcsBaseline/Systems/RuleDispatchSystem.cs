@@ -14,8 +14,6 @@ public sealed class RuleDispatchSystem : ISystem
         .Without<PendingRequest>()
         .Without<Rejected>();
 
-    private static readonly MiniArch.Core.ComponentType RequestComponentType = MiniArch.Core.Component<Request>.ComponentType;
-
     public RuleDispatchSystem(RuleTable ruleTable)
     {
         _ruleTable = ruleTable ?? throw new ArgumentNullException(nameof(ruleTable));
@@ -31,16 +29,15 @@ public sealed class RuleDispatchSystem : ISystem
     private void DispatchTier(FrameContext context, RuleTier tier)
     {
         CoreCommandBuffer commands = context.Commands;
-        MiniArch.Core.Query coreQuery = context.Frame.ChunkQuery(RuleQueryDescription);
 
-        foreach (MiniArch.Core.Chunk chunk in coreQuery.Chunks)
+        foreach (var chunk in context.Frame.ChunkQuery(RuleQueryDescription).GetChunks())
         {
             ReadOnlySpan<MiniArch.Entity> entities = chunk.GetEntities();
-            ReadOnlySpan<RuleId> ruleIds = chunk.GetComponentSpan<RuleId>(MiniArch.Core.Component<RuleId>.ComponentType);
-            ReadOnlySpan<RuleTier> tiers = chunk.GetComponentSpan<RuleTier>(MiniArch.Core.Component<RuleTier>.ComponentType);
-            bool hasRequest = chunk.TryGetComponentIndex(RequestComponentType, out int requestColumn);
+            ReadOnlySpan<RuleId> ruleIds = chunk.GetSpan<RuleId>();
+            ReadOnlySpan<RuleTier> tiers = chunk.GetSpan<RuleTier>();
+            bool hasRequest = chunk.TryGetComponentIndex<Request>(out int _);
 
-            for (int i = 0; i < entities.Length; i++)
+            for (int i = 0; i < chunk.Count; i++)
             {
                 if (tiers[i] != tier)
                 {

@@ -8,3 +8,4 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Throughput.Perf")]
 [assembly: InternalsVisibleTo("QueryInvalidation.Perf")]
 [assembly: InternalsVisibleTo("HeroPipeline.Tests")]
+[assembly: InternalsVisibleTo("FrifloGameScenarios.Perf")]

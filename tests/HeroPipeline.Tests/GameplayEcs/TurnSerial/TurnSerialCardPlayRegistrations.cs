@@ -75,17 +75,21 @@ public static class TurnSerialCardPlayRegistrations
     private static void ThrowIfMultipleCardPlayRequests(FrameView frame)
     {
         int count = 0;
-        foreach (var row in frame.ChunkQuery(CardPlayRequestDescription).EachSpan<RuleId>())
+        foreach (var chunk in frame.ChunkQuery(CardPlayRequestDescription).GetChunks())
         {
-            if (row.Get0() != TurnSerialIds.CardPlayRule)
+            var ruleIds = chunk.GetSpan<RuleId>();
+            for (int i = 0; i < chunk.Count; i++)
             {
-                continue;
-            }
+                if (ruleIds[i] != TurnSerialIds.CardPlayRule)
+                {
+                    continue;
+                }
 
-            count++;
-            if (count > 1)
-            {
-                throw new InvalidOperationException("Serial card play only supports one play request per frame.");
+                count++;
+                if (count > 1)
+                {
+                    throw new InvalidOperationException("Serial card play only supports one play request per frame.");
+                }
             }
         }
     }
@@ -107,11 +111,15 @@ public static class TurnSerialCardPlayRegistrations
 
     private static bool IsActiveCharacter(FrameView frame, MiniArch.Entity character)
     {
-        foreach (var row in frame.ChunkQuery(ContextDescription).EachSpan<ActiveTurnCharacter>())
+        foreach (var chunk in frame.ChunkQuery(ContextDescription).GetChunks())
         {
-            if (row.Get0().Value == character)
+            var activeChars = chunk.GetSpan<ActiveTurnCharacter>();
+            for (int i = 0; i < chunk.Count; i++)
             {
-                return true;
+                if (activeChars[i].Value == character)
+                {
+                    return true;
+                }
             }
         }
 

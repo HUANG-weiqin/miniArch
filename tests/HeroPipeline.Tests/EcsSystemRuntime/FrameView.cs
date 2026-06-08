@@ -23,8 +23,8 @@ public sealed class FrameView
     public MiniArchQuery Each(MiniArchQueryDescription description) =>
         _world.Query(in description);
 
-    public MiniArch.Core.Query ChunkQuery(MiniArchQueryDescription description) =>
-        MiniArch.Core.Query.Create(_world, in description);
+    public MiniArchQuery ChunkQuery(MiniArchQueryDescription description) =>
+        _world.Query(in description);
 
     public EntityAccessor Access(MiniArch.Entity entity) =>
         _world.Access(entity);

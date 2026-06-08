@@ -1,10 +1,8 @@
 using System.Diagnostics;
 using Friflo.Engine.ECS;
 using MiniArch;
-using MiniArch.Core;
 using MiniEntity = MiniArch.Entity;
-using MiniQuery = MiniArch.Core.Query;
-using MiniComponentType = MiniArch.Core.ComponentType;
+using MiniQuery = MiniArch.Query;
 
 namespace FrifloGameScenarios;
 
@@ -33,9 +31,9 @@ public static class S5Profile
         for (int i = 0; i < 20000; i++)
             w.Create(new Position(i % 500, i / 500), new Velocity(r.Next(3) - 1, r.Next(3) - 1),
                 new Health(50 + r.Next(50)), new Team(i % 4), new Damage(5 + r.Next(10)));
-        var mq = MiniQuery.Create(w, new QueryDescription().With<Position>().With<Velocity>());
-        var cq = MiniQuery.Create(w, new QueryDescription().With<Position>().With<Health>().With<Damage>().With<Team>());
-        var hq = MiniQuery.Create(w, new QueryDescription().With<Health>());
+        var mq = w.Query(new QueryDescription().With<Position>().With<Velocity>());
+        var cq = w.Query(new QueryDescription().With<Position>().With<Health>().With<Damage>().With<Team>());
+        var hq = w.Query(new QueryDescription().With<Health>());
         return (mq, cq, hq);
     }
 
@@ -62,15 +60,15 @@ public static class S5Profile
             long s = 0;
 
             var t0 = Stopwatch.GetTimestamp();
-            foreach (var c in mq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);var sv=c.GetComponentSpan<Velocity>(MiniArch.Core.Component<Velocity>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X+sv[i].VX;}
+            foreach (var c in mq.GetChunks()){var sp=c.GetSpan<Position>();var sv=c.GetSpan<Velocity>();for(int i=0;i<sp.Length;i++)s+=sp[i].X+sv[i].VX;}
             q1Ticks += Stopwatch.GetTimestamp() - t0;
 
             t0 = Stopwatch.GetTimestamp();
-            foreach (var c in cq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);var sh=c.GetComponentSpan<Health>(MiniArch.Core.Component<Health>.ComponentType);var sd=c.GetComponentSpan<Damage>(MiniArch.Core.Component<Damage>.ComponentType);var st=c.GetComponentSpan<Team>(MiniArch.Core.Component<Team>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X+sh[i].Value+sd[i].Value+st[i].Value;}
+            foreach (var c in cq.GetChunks()){var sp=c.GetSpan<Position>();var sh=c.GetSpan<Health>();var sd=c.GetSpan<Damage>();var st=c.GetSpan<Team>();for(int i=0;i<sp.Length;i++)s+=sp[i].X+sh[i].Value+sd[i].Value+st[i].Value;}
             q2Ticks += Stopwatch.GetTimestamp() - t0;
 
             t0 = Stopwatch.GetTimestamp();
-            foreach (var c in hq.GetChunkSpan()){var sh=c.GetComponentSpan<Health>(MiniArch.Core.Component<Health>.ComponentType);for(int i=0;i<sh.Length;i++)s+=sh[i].Value;}
+            foreach (var c in hq.GetChunks()){var sh=c.GetSpan<Health>();for(int i=0;i<sh.Length;i++)s+=sh[i].Value;}
             q3Ticks += Stopwatch.GetTimestamp() - t0;
 
             measureIters++;
@@ -161,9 +159,9 @@ public static class S5Profile
     static long MiniIter(MiniQuery mq, MiniQuery cq, MiniQuery hq)
     {
         long s = 0;
-        foreach (var c in mq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);var sv=c.GetComponentSpan<Velocity>(MiniArch.Core.Component<Velocity>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X+sv[i].VX;}
-        foreach (var c in cq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);var sh=c.GetComponentSpan<Health>(MiniArch.Core.Component<Health>.ComponentType);var sd=c.GetComponentSpan<Damage>(MiniArch.Core.Component<Damage>.ComponentType);var st=c.GetComponentSpan<Team>(MiniArch.Core.Component<Team>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X+sh[i].Value+sd[i].Value+st[i].Value;}
-        foreach (var c in hq.GetChunkSpan()){var sh=c.GetComponentSpan<Health>(MiniArch.Core.Component<Health>.ComponentType);for(int i=0;i<sh.Length;i++)s+=sh[i].Value;}
+        foreach (var c in mq.GetChunks()){var sp=c.GetSpan<Position>();var sv=c.GetSpan<Velocity>();for(int i=0;i<sp.Length;i++)s+=sp[i].X+sv[i].VX;}
+        foreach (var c in cq.GetChunks()){var sp=c.GetSpan<Position>();var sh=c.GetSpan<Health>();var sd=c.GetSpan<Damage>();var st=c.GetSpan<Team>();for(int i=0;i<sp.Length;i++)s+=sp[i].X+sh[i].Value+sd[i].Value+st[i].Value;}
+        foreach (var c in hq.GetChunks()){var sh=c.GetSpan<Health>();for(int i=0;i<sh.Length;i++)s+=sh[i].Value;}
         return s;
     }
 

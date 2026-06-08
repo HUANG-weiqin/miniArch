@@ -22,22 +22,27 @@ public sealed class EffectDispatchSystem : ISystem
     {
         CoreCommandBuffer commands = context.Commands;
 
-        foreach (var row in context.Frame.ChunkQuery(EffectQueryDescription).EachSpan<EffectId>())
+        foreach (var chunk in context.Frame.ChunkQuery(EffectQueryDescription).GetChunks())
         {
-            EffectId effectId = row.Get0();
-
-            if (!_effectTable.TryGet(effectId, out EffectHandler handler))
+            var effectIds = chunk.GetSpan<EffectId>();
+            var entities = chunk.GetEntities();
+            for (int i = 0; i < chunk.Count; i++)
             {
-                throw new InvalidOperationException(
-                    $"No effect handler is registered for effect '{effectId.Value}'.");
-            }
+                EffectId effectId = effectIds[i];
 
-            if (handler is not null)
-            {
-                handler(context, row.Entity);
-            }
+                if (!_effectTable.TryGet(effectId, out EffectHandler handler))
+                {
+                    throw new InvalidOperationException(
+                        $"No effect handler is registered for effect '{effectId.Value}'.");
+                }
 
-            commands.Destroy(row.Entity);
+                if (handler is not null)
+                {
+                    handler(context, entities[i]);
+                }
+
+                commands.Destroy(entities[i]);
+            }
         }
     }
 }

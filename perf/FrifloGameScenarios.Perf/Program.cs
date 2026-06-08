@@ -2,11 +2,8 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Friflo.Engine.ECS;
 using MiniArch;
-using MiniArch.Core;
 
 using MiniEntity = MiniArch.Entity;
-using MiniQuery = MiniArch.Core.Query;
-using MiniComponentType = MiniArch.Core.ComponentType;
 using FrifloEntity = Friflo.Engine.ECS.Entity;
 
 namespace FrifloGameScenarios;
@@ -100,10 +97,13 @@ public readonly record struct ScenarioResult(double OpsPerSec, long Checksum, st
 // ============================================================================
 public sealed class MiniBulletHell : IGameScenario
 {
-    readonly World _w; readonly MiniQuery _q;
-    public MiniBulletHell(){_w=new World(128,100000);for(int i=0;i<100000;i++)_w.Create(new Position(i,i),new Velocity(1,1));_q=MiniQuery.Create(_w,new QueryDescription().With<Position>().With<Velocity>());}
+    readonly World _w; readonly MiniArch.Query _q; readonly MiniArch.Core.Query _oldQ;
+    public MiniBulletHell(){_w=new World(128,100000);for(int i=0;i<100000;i++)_w.Create(new Position(i,i),new Velocity(1,1));_q=_w.Query(new QueryDescription().With<Position>().With<Velocity>());_oldQ=Core.Query.Create(_w,new QueryDescription().With<Position>().With<Velocity>());}
     public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
-    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;foreach(var c in _q.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);var sv=c.GetComponentSpan<Velocity>(MiniArch.Core.Component<Velocity>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X+sv[i].VY;}return s;}
+    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;
+        // OLD path (Chunk via Core.Query) — diagnostic: comment out one path at a time
+        foreach(var c in _oldQ.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);var sv=c.GetComponentSpan<Velocity>(MiniArch.Core.Component<Velocity>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X+sv[i].VY;}
+        return s;}
 }
 public sealed class FrifloBulletHell : IGameScenario
 {
@@ -118,10 +118,10 @@ public sealed class FrifloBulletHell : IGameScenario
 // ============================================================================
 public sealed class MiniMMOZone : IGameScenario
 {
-    readonly World _w; readonly MiniQuery _q;
-    public MiniMMOZone(){_w=new World(128,30000);int per=30000/8,idx=0;for(int a=0;a<8&&idx<30000;a++)for(int i=0;i<per&&idx<30000;i++,idx++){var e=_w.Create(new Position(idx,idx),new Health(100+idx%50),new Team(idx%4));switch(a){case 0:_w.Add(e,new Armor(10));break;case 1:_w.Add(e,new Mana(50));break;case 2:_w.Add(e,new Damage(5));_w.Add(e,new Shield(20));break;case 3:_w.Add(e,new Cooldown(0));_w.Add(e,new Stamina(30));break;case 4:_w.Add(e,new Velocity(0,0));break;case 5:_w.Add(e,new Velocity(0,0));_w.Add(e,new Armor(15));break;case 6:_w.Add(e,new Mana(30));_w.Add(e,new Damage(8));break;case 7:_w.Add(e,new Shield(10));_w.Add(e,new Stamina(20));_w.Add(e,new XP(0));break;}}_q=MiniQuery.Create(_w,new QueryDescription().With<Position>().With<Health>());}
+    readonly World _w; readonly MiniArch.Query _q;
+    public MiniMMOZone(){_w=new World(128,30000);int per=30000/8,idx=0;for(int a=0;a<8&&idx<30000;a++)for(int i=0;i<per&&idx<30000;i++,idx++){var e=_w.Create(new Position(idx,idx),new Health(100+idx%50),new Team(idx%4));switch(a){case 0:_w.Add(e,new Armor(10));break;case 1:_w.Add(e,new Mana(50));break;case 2:_w.Add(e,new Damage(5));_w.Add(e,new Shield(20));break;case 3:_w.Add(e,new Cooldown(0));_w.Add(e,new Stamina(30));break;case 4:_w.Add(e,new Velocity(0,0));break;case 5:_w.Add(e,new Velocity(0,0));_w.Add(e,new Armor(15));break;case 6:_w.Add(e,new Mana(30));_w.Add(e,new Damage(8));break;case 7:_w.Add(e,new Shield(10));_w.Add(e,new Stamina(20));_w.Add(e,new XP(0));break;}}_q=_w.Query(new QueryDescription().With<Position>().With<Health>());}
     public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
-    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;foreach(var c in _q.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);var sh=c.GetComponentSpan<Health>(MiniArch.Core.Component<Health>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X+sh[i].Value;}return s;}
+    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;foreach(var c in _q.GetChunks()){var sp=c.GetSpan<Position>();var sh=c.GetSpan<Health>();for(int i=0;i<sp.Length;i++)s+=sp[i].X+sh[i].Value;}return s;}
 }
 public sealed class FrifloMMOZone : IGameScenario
 {
@@ -136,10 +136,10 @@ public sealed class FrifloMMOZone : IGameScenario
 // ============================================================================
 public sealed class MiniWaveSpawner : IGameScenario
 {
-    readonly World _w; readonly Queue<MiniEntity> _a=new(); readonly MiniQuery _q; readonly Random _r=new(42);
-    public MiniWaveSpawner(){_w=new World(128,50000);for(int i=0;i<30000;i++){var e=_w.Create(new Position(i,i),new Velocity(i%5,i%5),new Lifetime(_r.Next(60,180)));_a.Enqueue(e);}_q=MiniQuery.Create(_w,new QueryDescription().With<Lifetime>());}
+    readonly World _w; readonly Queue<MiniEntity> _a=new(); readonly MiniArch.Query _q; readonly Random _r=new(42);
+    public MiniWaveSpawner(){_w=new World(128,50000);for(int i=0;i<30000;i++){var e=_w.Create(new Position(i,i),new Velocity(i%5,i%5),new Lifetime(_r.Next(60,180)));_a.Enqueue(e);}_q=_w.Query(new QueryDescription().With<Lifetime>());}
     public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
-    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;int sc=_r.Next(500,1500);for(int i=0;i<sc;i++){var e=_w.Create(new Position(_r.Next(1000),_r.Next(1000)),new Velocity(_r.Next(5),_r.Next(5)),new Lifetime(_r.Next(30,120)));_a.Enqueue(e);s+=e.Id;}foreach(var c in _q.GetChunkSpan()){var sl=c.GetComponentSpan<Lifetime>(MiniArch.Core.Component<Lifetime>.ComponentType);for(int i=0;i<sl.Length;i++)s+=sl[i].Ticks;}int d=Math.Min(_a.Count-20000,2000);for(int i=0;i<d&&_a.Count>0;i++){var e=_a.Dequeue();_w.Destroy(e);s+=e.Id;}return s;}
+    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;int sc=_r.Next(500,1500);for(int i=0;i<sc;i++){var e=_w.Create(new Position(_r.Next(1000),_r.Next(1000)),new Velocity(_r.Next(5),_r.Next(5)),new Lifetime(_r.Next(30,120)));_a.Enqueue(e);s+=e.Id;}foreach(var c in _q.GetChunks()){var sl=c.GetSpan<Lifetime>();for(int i=0;i<sl.Length;i++)s+=sl[i].Ticks;}int d=Math.Min(_a.Count-20000,2000);for(int i=0;i<d&&_a.Count>0;i++){var e=_a.Dequeue();_w.Destroy(e);s+=e.Id;}return s;}
 }
 public sealed class FrifloWaveSpawner : IGameScenario
 {
@@ -154,12 +154,10 @@ public sealed class FrifloWaveSpawner : IGameScenario
 // ============================================================================
 public sealed class MiniBuffSystem : IGameScenario
 {
-    readonly World _w; readonly MiniEntity[] _es; readonly MiniQuery _bq,_fq; readonly Random _r=new(42);
-    static readonly MiniComponentType CHealth = MiniArch.Core.Component<Health>.ComponentType;
-    static readonly MiniComponentType CPos = MiniArch.Core.Component<Position>.ComponentType;
-    public MiniBuffSystem(){_w=new World(128,30000);_es=new MiniEntity[30000];for(int i=0;i<_es.Length;i++){_es[i]=_w.Create(new Position(i,i),new Health(100));if(_r.Next(2)==0)_w.Add(_es[i],new Burning(0));if(_r.Next(3)==0)_w.Add(_es[i],new Frozen(0));}_bq=MiniQuery.Create(_w,new QueryDescription().With<Burning>().With<Health>());_fq=MiniQuery.Create(_w,new QueryDescription().With<Frozen>().With<Position>());}
+    readonly World _w; readonly MiniEntity[] _es; readonly MiniArch.Query _bq,_fq; readonly Random _r=new(42);
+    public MiniBuffSystem(){_w=new World(128,30000);_es=new MiniEntity[30000];for(int i=0;i<_es.Length;i++){_es[i]=_w.Create(new Position(i,i),new Health(100));if(_r.Next(2)==0)_w.Add(_es[i],new Burning(0));if(_r.Next(3)==0)_w.Add(_es[i],new Frozen(0));}_bq=_w.Query(new QueryDescription().With<Burning>().With<Health>());_fq=_w.Query(new QueryDescription().With<Frozen>().With<Position>());}
     public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
-    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;for(int i=0;i<1500;i++){var e=_es[_r.Next(_es.Length)];if(_r.Next(2)==0){if(_w.Has<Burning>(e))_w.Remove<Burning>(e);else _w.Add(e,new Burning(0));}else{if(_w.Has<Frozen>(e))_w.Remove<Frozen>(e);else _w.Add(e,new Frozen(0));}s+=e.Id;}foreach(var c in _bq.GetChunkSpan()){var sh=c.GetComponentSpan<Health>(CHealth);for(int i=0;i<sh.Length;i++)s+=sh[i].Value;}foreach(var c in _fq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(CPos);for(int i=0;i<sp.Length;i++)s+=sp[i].X;}return s;}
+    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;for(int i=0;i<1500;i++){var e=_es[_r.Next(_es.Length)];if(_r.Next(2)==0){if(_w.Has<Burning>(e))_w.Remove<Burning>(e);else _w.Add(e,new Burning(0));}else{if(_w.Has<Frozen>(e))_w.Remove<Frozen>(e);else _w.Add(e,new Frozen(0));}s+=e.Id;}foreach(var c in _bq.GetChunks()){var sh=c.GetSpan<Health>();for(int i=0;i<sh.Length;i++)s+=sh[i].Value;}foreach(var c in _fq.GetChunks()){var sp=c.GetSpan<Position>();for(int i=0;i<sp.Length;i++)s+=sp[i].X;}return s;}
 }
 public sealed class FrifloBuffSystem : IGameScenario
 {
@@ -174,18 +172,13 @@ public sealed class FrifloBuffSystem : IGameScenario
 // ============================================================================
 public sealed class MiniFullGameLoop : IGameScenario
 {
-    readonly World _w; readonly MiniQuery _mq,_cq,_hq; readonly Random _r=new(42);
-    static readonly MiniComponentType CPos = MiniArch.Core.Component<Position>.ComponentType;
-    static readonly MiniComponentType CVel = MiniArch.Core.Component<Velocity>.ComponentType;
-    static readonly MiniComponentType CHealth = MiniArch.Core.Component<Health>.ComponentType;
-    static readonly MiniComponentType CDamage = MiniArch.Core.Component<Damage>.ComponentType;
-    static readonly MiniComponentType CTeam = MiniArch.Core.Component<Team>.ComponentType;
-    public MiniFullGameLoop(){_w=new World(128,20000);for(int i=0;i<20000;i++)_w.Create(new Position(i%500,i/500),new Velocity(_r.Next(3)-1,_r.Next(3)-1),new Health(50+_r.Next(50)),new Team(i%4),new Damage(5+_r.Next(10)));_mq=MiniQuery.Create(_w,new QueryDescription().With<Position>().With<Velocity>());_cq=MiniQuery.Create(_w,new QueryDescription().With<Position>().With<Health>().With<Damage>().With<Team>());_hq=MiniQuery.Create(_w,new QueryDescription().With<Health>());}
+    readonly World _w; readonly MiniArch.Query _mq,_cq,_hq; readonly Random _r=new(42);
+    public MiniFullGameLoop(){_w=new World(128,20000);for(int i=0;i<20000;i++)_w.Create(new Position(i%500,i/500),new Velocity(_r.Next(3)-1,_r.Next(3)-1),new Health(50+_r.Next(50)),new Team(i%4),new Damage(5+_r.Next(10)));_mq=_w.Query(new QueryDescription().With<Position>().With<Velocity>());_cq=_w.Query(new QueryDescription().With<Position>().With<Health>().With<Damage>().With<Team>());_hq=_w.Query(new QueryDescription().With<Health>());}
     public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
     [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;
-        foreach(var c in _mq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(CPos);var sv=c.GetComponentSpan<Velocity>(CVel);for(int i=0;i<sp.Length;i++)s+=sp[i].X+sv[i].VX;}
-        foreach(var c in _cq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(CPos);var sh=c.GetComponentSpan<Health>(CHealth);var sd=c.GetComponentSpan<Damage>(CDamage);var st=c.GetComponentSpan<Team>(CTeam);for(int i=0;i<sp.Length;i++)s+=sp[i].X+sh[i].Value+sd[i].Value+st[i].Value;}
-        foreach(var c in _hq.GetChunkSpan()){var sh=c.GetComponentSpan<Health>(CHealth);for(int i=0;i<sh.Length;i++)s+=sh[i].Value;}return s;}
+        foreach(var c in _mq.GetChunks()){var sp=c.GetSpan<Position>();var sv=c.GetSpan<Velocity>();for(int i=0;i<sp.Length;i++)s+=sp[i].X+sv[i].VX;}
+        foreach(var c in _cq.GetChunks()){var sp=c.GetSpan<Position>();var sh=c.GetSpan<Health>();var sd=c.GetSpan<Damage>();var st=c.GetSpan<Team>();for(int i=0;i<sp.Length;i++)s+=sp[i].X+sh[i].Value+sd[i].Value+st[i].Value;}
+        foreach(var c in _hq.GetChunks()){var sh=c.GetSpan<Health>();for(int i=0;i<sh.Length;i++)s+=sh[i].Value;}return s;}
 }
 public sealed class FrifloFullGameLoop : IGameScenario
 {
@@ -200,10 +193,10 @@ public sealed class FrifloFullGameLoop : IGameScenario
 // ============================================================================
 public sealed class MiniRPGStats : IGameScenario
 {
-    readonly World _w; readonly MiniQuery _q;
-    public MiniRPGStats(){_w=new World(128,40000);for(int i=0;i<40000;i++)_w.Create(new Position(i,i+1),new Velocity(i%5,i%5),new Health(100+i%50),new Mana(50+i%30),new Armor(10+i%20));_q=MiniQuery.Create(_w,new QueryDescription().With<Position>().With<Velocity>().With<Health>().With<Mana>().With<Armor>());}
+    readonly World _w; readonly MiniArch.Query _q;
+    public MiniRPGStats(){_w=new World(128,40000);for(int i=0;i<40000;i++)_w.Create(new Position(i,i+1),new Velocity(i%5,i%5),new Health(100+i%50),new Mana(50+i%30),new Armor(10+i%20));_q=_w.Query(new QueryDescription().With<Position>().With<Velocity>().With<Health>().With<Mana>().With<Armor>());}
     public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
-    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;var chunks=_q.GetChunkSpan();for(int ci=0;ci<chunks.Length;ci++){var c=chunks[ci];var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);var sv=c.GetComponentSpan<Velocity>(MiniArch.Core.Component<Velocity>.ComponentType);var sh=c.GetComponentSpan<Health>(MiniArch.Core.Component<Health>.ComponentType);var sm=c.GetComponentSpan<Mana>(MiniArch.Core.Component<Mana>.ComponentType);var sa=c.GetComponentSpan<Armor>(MiniArch.Core.Component<Armor>.ComponentType);int n=sp.Length;for(int i=0;i<n;i++)s+=sp[i].X+sv[i].VY+sh[i].Value+sm[i].Value+sa[i].Value;}return s;}
+    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;foreach(var c in _q.GetChunks()){var sp=c.GetSpan<Position>();var sv=c.GetSpan<Velocity>();var sh=c.GetSpan<Health>();var sm=c.GetSpan<Mana>();var sa=c.GetSpan<Armor>();int n=sp.Length;for(int i=0;i<n;i++)s+=sp[i].X+sv[i].VY+sh[i].Value+sm[i].Value+sa[i].Value;}return s;}
 }
 public sealed class FrifloRPGStats : IGameScenario
 {
@@ -218,10 +211,10 @@ public sealed class FrifloRPGStats : IGameScenario
 // ============================================================================
 public sealed class MiniConditionalEffects : IGameScenario
 {
-    readonly World _w; readonly MiniQuery _pq,_bq;
-    public MiniConditionalEffects(){_w=new World(128,50000);var r=new Random(42);for(int i=0;i<50000;i++){var e=_w.Create(new Position(i,i),new Health(100));if(r.Next(100)<40)_w.Add(e,new Poisoned(0));if(r.Next(100)<30)_w.Add(e,new Burning(0));if(r.Next(100)<5)_w.Add(e,new ImmuneToPoison(0));if(r.Next(100)<5)_w.Add(e,new FireResist(0));}_pq=MiniQuery.Create(_w,new QueryDescription().With<Poisoned>().With<Health>().Without<ImmuneToPoison>());_bq=MiniQuery.Create(_w,new QueryDescription().With<Burning>().With<Health>().Without<FireResist>());}
+    readonly World _w; readonly MiniArch.Query _pq,_bq;
+    public MiniConditionalEffects(){_w=new World(128,50000);var r=new Random(42);for(int i=0;i<50000;i++){var e=_w.Create(new Position(i,i),new Health(100));if(r.Next(100)<40)_w.Add(e,new Poisoned(0));if(r.Next(100)<30)_w.Add(e,new Burning(0));if(r.Next(100)<5)_w.Add(e,new ImmuneToPoison(0));if(r.Next(100)<5)_w.Add(e,new FireResist(0));}_pq=_w.Query(new QueryDescription().With<Poisoned>().With<Health>().Without<ImmuneToPoison>());_bq=_w.Query(new QueryDescription().With<Burning>().With<Health>().Without<FireResist>());}
     public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
-    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;foreach(var c in _pq.GetChunkSpan()){var sh=c.GetComponentSpan<Health>(MiniArch.Core.Component<Health>.ComponentType);for(int i=0;i<sh.Length;i++)s+=sh[i].Value;}foreach(var c in _bq.GetChunkSpan()){var sh=c.GetComponentSpan<Health>(MiniArch.Core.Component<Health>.ComponentType);for(int i=0;i<sh.Length;i++)s+=sh[i].Value;}return s;}
+    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;foreach(var c in _pq.GetChunks()){var sh=c.GetSpan<Health>();for(int i=0;i<sh.Length;i++)s+=sh[i].Value;}foreach(var c in _bq.GetChunks()){var sh=c.GetSpan<Health>();for(int i=0;i<sh.Length;i++)s+=sh[i].Value;}return s;}
 }
 public sealed class FrifloConditionalEffects : IGameScenario
 {
@@ -236,10 +229,10 @@ public sealed class FrifloConditionalEffects : IGameScenario
 // ============================================================================
 public sealed class MiniAIStateMachine : IGameScenario
 {
-    readonly World _w; readonly MiniEntity[] _es; readonly MiniQuery _iq,_mq,_aq; readonly Random _r=new(42);
-    public MiniAIStateMachine(){_w=new World(128,30000);_es=new MiniEntity[30000];for(int i=0;i<_es.Length;i++)_es[i]=_w.Create(new Position(i,i),new StateIdle(0));_iq=MiniQuery.Create(_w,new QueryDescription().With<StateIdle>().With<Position>());_mq=MiniQuery.Create(_w,new QueryDescription().With<StateMove>().With<Position>());_aq=MiniQuery.Create(_w,new QueryDescription().With<StateAttack>().With<Position>());}
+    readonly World _w; readonly MiniEntity[] _es; readonly MiniArch.Query _iq,_mq,_aq; readonly Random _r=new(42);
+    public MiniAIStateMachine(){_w=new World(128,30000);_es=new MiniEntity[30000];for(int i=0;i<_es.Length;i++)_es[i]=_w.Create(new Position(i,i),new StateIdle(0));_iq=_w.Query(new QueryDescription().With<StateIdle>().With<Position>());_mq=_w.Query(new QueryDescription().With<StateMove>().With<Position>());_aq=_w.Query(new QueryDescription().With<StateAttack>().With<Position>());}
     public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
-    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;for(int i=0;i<_es.Length/5;i++){var e=_es[_r.Next(_es.Length)];if(_w.Has<StateIdle>(e))_w.Remove<StateIdle>(e);if(_w.Has<StateMove>(e))_w.Remove<StateMove>(e);if(_w.Has<StateAttack>(e))_w.Remove<StateAttack>(e);if(_w.Has<StateDead>(e))_w.Remove<StateDead>(e);switch(_r.Next(4)){case 0:_w.Add(e,new StateIdle(0));break;case 1:_w.Add(e,new StateMove(0));break;case 2:_w.Add(e,new StateAttack(0));break;case 3:_w.Add(e,new StateDead(0));break;}s+=e.Id;}foreach(var c in _iq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X;}foreach(var c in _mq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X;}foreach(var c in _aq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X;}return s;}
+    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;for(int i=0;i<_es.Length/5;i++){var e=_es[_r.Next(_es.Length)];if(_w.Has<StateIdle>(e))_w.Remove<StateIdle>(e);if(_w.Has<StateMove>(e))_w.Remove<StateMove>(e);if(_w.Has<StateAttack>(e))_w.Remove<StateAttack>(e);if(_w.Has<StateDead>(e))_w.Remove<StateDead>(e);switch(_r.Next(4)){case 0:_w.Add(e,new StateIdle(0));break;case 1:_w.Add(e,new StateMove(0));break;case 2:_w.Add(e,new StateAttack(0));break;case 3:_w.Add(e,new StateDead(0));break;}s+=e.Id;}foreach(var c in _iq.GetChunks()){var sp=c.GetSpan<Position>();for(int i=0;i<sp.Length;i++)s+=sp[i].X;}foreach(var c in _mq.GetChunks()){var sp=c.GetSpan<Position>();for(int i=0;i<sp.Length;i++)s+=sp[i].X;}foreach(var c in _aq.GetChunks()){var sp=c.GetSpan<Position>();for(int i=0;i<sp.Length;i++)s+=sp[i].X;}return s;}
 }
 public sealed class FrifloAIStateMachine : IGameScenario
 {
@@ -254,10 +247,10 @@ public sealed class FrifloAIStateMachine : IGameScenario
 // ============================================================================
 public sealed class MiniTeamAlternation : IGameScenario
 {
-    readonly World _w; readonly MiniQuery _aq,_bq; int _t;
-    public MiniTeamAlternation(){_w=new World(128,60000);for(int i=0;i<60000;i++){var e=_w.Create(new Position(i,i),new Health(100));if(i%2==0)_w.Add(e,new TagTeamA(0));else _w.Add(e,new TagTeamB(0));}_aq=MiniQuery.Create(_w,new QueryDescription().With<TagTeamA>().With<Position>().With<Health>());_bq=MiniQuery.Create(_w,new QueryDescription().With<TagTeamB>().With<Position>().With<Health>());}
+    readonly World _w; readonly MiniArch.Query _aq,_bq; int _t;
+    public MiniTeamAlternation(){_w=new World(128,60000);for(int i=0;i<60000;i++){var e=_w.Create(new Position(i,i),new Health(100));if(i%2==0)_w.Add(e,new TagTeamA(0));else _w.Add(e,new TagTeamB(0));}_aq=_w.Query(new QueryDescription().With<TagTeamA>().With<Position>().With<Health>());_bq=_w.Query(new QueryDescription().With<TagTeamB>().With<Position>().With<Health>());}
     public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
-    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){_t++;long s=0;var q=_t%2==1?_aq:_bq;foreach(var c in q.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);var sh=c.GetComponentSpan<Health>(MiniArch.Core.Component<Health>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X+sh[i].Value;}return s;}
+    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){_t++;long s=0;var q=_t%2==1?_aq:_bq;foreach(var c in q.GetChunks()){var sp=c.GetSpan<Position>();var sh=c.GetSpan<Health>();for(int i=0;i<sp.Length;i++)s+=sp[i].X+sh[i].Value;}return s;}
 }
 public sealed class FrifloTeamAlternation : IGameScenario
 {
@@ -272,10 +265,10 @@ public sealed class FrifloTeamAlternation : IGameScenario
 // ============================================================================
 public sealed class MiniMixedLoad : IGameScenario
 {
-    readonly World _w; readonly Queue<MiniEntity> _q=new(); readonly MiniQuery _hq,_pq; readonly Random _r=new(42); int _n=15000;
-    public MiniMixedLoad(){_w=new World(128,20000);for(int i=0;i<15000;i++)_q.Enqueue(_w.Create(new Position(i,i),new Health(100),new Damage(5),new Team(i%4)));_hq=MiniQuery.Create(_w,new QueryDescription().With<Health>().With<Team>());_pq=MiniQuery.Create(_w,new QueryDescription().With<Position>());}
+    readonly World _w; readonly Queue<MiniEntity> _q=new(); readonly MiniArch.Query _hq,_pq; readonly Random _r=new(42); int _n=15000;
+    public MiniMixedLoad(){_w=new World(128,20000);for(int i=0;i<15000;i++)_q.Enqueue(_w.Create(new Position(i,i),new Health(100),new Damage(5),new Team(i%4)));_hq=_w.Query(new QueryDescription().With<Health>().With<Team>());_pq=_w.Query(new QueryDescription().With<Position>());}
     public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
-    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;for(int i=0;i<200;i++){var e=_w.Create(new Position(_n,_n),new Health(50+_r.Next(50)),new Damage(3+_r.Next(7)),new Team(_r.Next(4)));_q.Enqueue(e);_n++;s+=e.Id;}foreach(var c in _hq.GetChunkSpan()){var sh=c.GetComponentSpan<Health>(MiniArch.Core.Component<Health>.ComponentType);var st=c.GetComponentSpan<Team>(MiniArch.Core.Component<Team>.ComponentType);for(int i=0;i<sh.Length;i++)s+=sh[i].Value+st[i].Value;}foreach(var c in _pq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X;}int dc=Math.Min(200,_q.Count-10000);for(int i=0;i<dc&&_q.Count>0;i++){var e=_q.Dequeue();_w.Destroy(e);s+=e.Id;}return s;}
+    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;for(int i=0;i<200;i++){var e=_w.Create(new Position(_n,_n),new Health(50+_r.Next(50)),new Damage(3+_r.Next(7)),new Team(_r.Next(4)));_q.Enqueue(e);_n++;s+=e.Id;}foreach(var c in _hq.GetChunks()){var sh=c.GetSpan<Health>();var st=c.GetSpan<Team>();for(int i=0;i<sh.Length;i++)s+=sh[i].Value+st[i].Value;}foreach(var c in _pq.GetChunks()){var sp=c.GetSpan<Position>();for(int i=0;i<sp.Length;i++)s+=sp[i].X;}int dc=Math.Min(200,_q.Count-10000);for(int i=0;i<dc&&_q.Count>0;i++){var e=_q.Dequeue();_w.Destroy(e);s+=e.Id;}return s;}
 }
 public sealed class FrifloMixedLoad : IGameScenario
 {
@@ -290,12 +283,12 @@ public sealed class FrifloMixedLoad : IGameScenario
 // ============================================================================
 public sealed class MiniRandomEntityAccess : IGameScenario
 {
-    readonly World _w; readonly MiniEntity[] _es; readonly MiniQuery _q; readonly Random _r=new(42);
-    public MiniRandomEntityAccess(){_w=new World(128,30000);_es=new MiniEntity[30000];for(int i=0;i<30000;i++)_es[i]=_w.Create(new Position(i,i),new Health(100+i%50));_q=MiniQuery.Create(_w,new QueryDescription().With<Position>().With<Health>());}
+    readonly World _w; readonly MiniEntity[] _es; readonly MiniArch.Query _q; readonly Random _r=new(42);
+    public MiniRandomEntityAccess(){_w=new World(128,30000);_es=new MiniEntity[30000];for(int i=0;i<30000;i++)_es[i]=_w.Create(new Position(i,i),new Health(100+i%50));_q=_w.Query(new QueryDescription().With<Position>().With<Health>());}
     public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
     [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;
         for(int i=0;i<2000;i++){var e=_es[_r.Next(30000)];ref var h=ref _w.GetRef<Health>(e);s+=h.Value;h.Value--;ref var p=ref _w.GetRef<Position>(e);s+=p.X+p.Y;p.X++;p.Y++;}
-        foreach(var c in _q.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);var sh=c.GetComponentSpan<Health>(MiniArch.Core.Component<Health>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X+sh[i].Value;}return s;}
+        foreach(var c in _q.GetChunks()){var sp=c.GetSpan<Position>();var sh=c.GetSpan<Health>();for(int i=0;i<sp.Length;i++)s+=sp[i].X+sh[i].Value;}return s;}
 }
 public sealed class FrifloRandomEntityAccess : IGameScenario
 {
@@ -312,16 +305,16 @@ public sealed class FrifloRandomEntityAccess : IGameScenario
 // ============================================================================
 public sealed class MiniFollowTheLeader : IGameScenario
 {
-    readonly World _w; readonly MiniEntity[] _ld; readonly MiniQuery _fq,_lq;
+    readonly World _w; readonly MiniEntity[] _ld; readonly MiniArch.Query _fq,_lq;
     public MiniFollowTheLeader(){_w=new World(128,20100);_ld=new MiniEntity[100];
         for(int i=0;i<100;i++)_ld[i]=_w.Create(new Position(i*10,i*10),new Velocity(1,1));
         for(int i=0;i<20000;i++)_w.Create(new Position(i,i+1),new LeaderIdx(i%100));
-        _fq=MiniQuery.Create(_w,new QueryDescription().With<Position>().With<LeaderIdx>());
-        _lq=MiniQuery.Create(_w,new QueryDescription().With<Position>().With<Velocity>());}
+        _fq=_w.Query(new QueryDescription().With<Position>().With<LeaderIdx>());
+        _lq=_w.Query(new QueryDescription().With<Position>().With<Velocity>());}
     public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
     [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;
-        foreach(var c in _fq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);var sl=c.GetComponentSpan<LeaderIdx>(MiniArch.Core.Component<LeaderIdx>.ComponentType);for(int i=0;i<sp.Length;i++){ref var lp=ref _w.GetRef<Position>(_ld[sl[i].Value]);s+=sp[i].X+lp.X+sp[i].Y+lp.Y;}}
-        foreach(var c in _lq.GetChunkSpan()){var sp=c.GetComponentSpan<Position>(MiniArch.Core.Component<Position>.ComponentType);var sv=c.GetComponentSpan<Velocity>(MiniArch.Core.Component<Velocity>.ComponentType);for(int i=0;i<sp.Length;i++)s+=sp[i].X+sv[i].VX;}return s;}
+        foreach(var c in _fq.GetChunks()){var sp=c.GetSpan<Position>();var sl=c.GetSpan<LeaderIdx>();for(int i=0;i<sp.Length;i++){ref var lp=ref _w.GetRef<Position>(_ld[sl[i].Value]);s+=sp[i].X+lp.X+sp[i].Y+lp.Y;}}
+        foreach(var c in _lq.GetChunks()){var sp=c.GetSpan<Position>();var sv=c.GetSpan<Velocity>();for(int i=0;i<sp.Length;i++)s+=sp[i].X+sv[i].VX;}return s;}
 }
 public sealed class FrifloFollowTheLeader : IGameScenario
 {

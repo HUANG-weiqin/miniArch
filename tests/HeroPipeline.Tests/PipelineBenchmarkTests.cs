@@ -346,13 +346,18 @@ public sealed class PipelineBenchmarkTests
     private static MiniArch.Entity FindActionChild(
         MiniArchRuntime runtime, FrameView frame, MiniArch.Entity parent, ActionKind kind)
     {
-        foreach (var row in frame.ChunkQuery(
-            new MiniArch.QueryDescription().With<ActionEntity>().With<ActionKind>()).EachSpan<ActionKind>())
+        foreach (var chunk in frame.ChunkQuery(
+            new MiniArch.QueryDescription().With<ActionEntity>().With<ActionKind>()).GetChunks())
         {
-            if (runtime.World.TryGetParent(row.Entity, out MiniArch.Entity p) && p == parent
-                && row.Get0().Value == kind.Value)
+            var kinds = chunk.GetSpan<ActionKind>();
+            var entities = chunk.GetEntities();
+            for (int i = 0; i < chunk.Count; i++)
             {
-                return row.Entity;
+                if (runtime.World.TryGetParent(entities[i], out MiniArch.Entity p) && p == parent
+                    && kinds[i].Value == kind.Value)
+                {
+                    return entities[i];
+                }
             }
         }
         throw new InvalidOperationException($"No action child of kind {kind.Value} found.");

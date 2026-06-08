@@ -48,7 +48,6 @@ public sealed class ThroughputRunnerTests
 
     [Theory]
     [InlineData(ThroughputWorkload.QueryWithAllComponentSpanWide)]
-    [InlineData(ThroughputWorkload.QueryWithAllEachSpanWide)]
     public void Run_wide_workload_executes_without_error(ThroughputWorkload workload)
     {
         var options = new ThroughputOptions(

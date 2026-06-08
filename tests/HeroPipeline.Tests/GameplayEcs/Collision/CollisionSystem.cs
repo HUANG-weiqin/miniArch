@@ -44,18 +44,18 @@ public sealed class CollisionSystem : ISystem
 
     private void CollectGroups(FrameView frame)
     {
-        foreach (Chunk chunk in frame.ChunkQuery(CollisionRequestDescription).Chunks)
+        foreach (var chunk in frame.ChunkQuery(CollisionRequestDescription).GetChunks())
         {
             ReadOnlySpan<Entity> entities = chunk.GetEntities();
-            ReadOnlySpan<RequestTarget> targets = chunk.GetComponentSpan<RequestTarget>(Component<RequestTarget>.ComponentType);
-            ReadOnlySpan<CollisionShape> shapes = chunk.GetComponentSpan<CollisionShape>(Component<CollisionShape>.ComponentType);
-            ReadOnlySpan<CollisionTargetQValue> targetQs = chunk.GetComponentSpan<CollisionTargetQValue>(Component<CollisionTargetQValue>.ComponentType);
-            ReadOnlySpan<CollisionTargetRValue> targetRs = chunk.GetComponentSpan<CollisionTargetRValue>(Component<CollisionTargetRValue>.ComponentType);
-            ReadOnlySpan<CollisionRange> ranges = chunk.GetComponentSpan<CollisionRange>(Component<CollisionRange>.ComponentType);
-            ReadOnlySpan<CollisionFilter> filters = chunk.GetComponentSpan<CollisionFilter>(Component<CollisionFilter>.ComponentType);
-            ReadOnlySpan<HitConsequenceRuleId> consequenceIds = chunk.GetComponentSpan<HitConsequenceRuleId>(Component<HitConsequenceRuleId>.ComponentType);
+            ReadOnlySpan<RequestTarget> targets = chunk.GetSpan<RequestTarget>();
+            ReadOnlySpan<CollisionShape> shapes = chunk.GetSpan<CollisionShape>();
+            ReadOnlySpan<CollisionTargetQValue> targetQs = chunk.GetSpan<CollisionTargetQValue>();
+            ReadOnlySpan<CollisionTargetRValue> targetRs = chunk.GetSpan<CollisionTargetRValue>();
+            ReadOnlySpan<CollisionRange> ranges = chunk.GetSpan<CollisionRange>();
+            ReadOnlySpan<CollisionFilter> filters = chunk.GetSpan<CollisionFilter>();
+            ReadOnlySpan<HitConsequenceRuleId> consequenceIds = chunk.GetSpan<HitConsequenceRuleId>();
 
-            for (int i = 0; i < entities.Length; i++)
+            for (int i = 0; i < chunk.Count; i++)
             {
                 var data = new CollisionRequestData(
                     entities[i],
@@ -102,13 +102,13 @@ public sealed class CollisionSystem : ISystem
 
     private static void ProcessGroup(FrameView frame, CommandBuffer commands, in GroupKey key, List<CollisionRequestData> requests)
     {
-        foreach (Chunk chunk in frame.ChunkQuery(CollisionTargetDescription).Chunks)
+        foreach (var chunk in frame.ChunkQuery(CollisionTargetDescription).GetChunks())
         {
             ReadOnlySpan<Entity> candidates = chunk.GetEntities();
-            ReadOnlySpan<PositionQValue> qs = chunk.GetComponentSpan<PositionQValue>(Component<PositionQValue>.ComponentType);
-            ReadOnlySpan<PositionRValue> rs = chunk.GetComponentSpan<PositionRValue>(Component<PositionRValue>.ComponentType);
+            ReadOnlySpan<PositionQValue> qs = chunk.GetSpan<PositionQValue>();
+            ReadOnlySpan<PositionRValue> rs = chunk.GetSpan<PositionRValue>();
 
-            for (int i = 0; i < candidates.Length; i++)
+            for (int i = 0; i < chunk.Count; i++)
             {
                 if (!MatchesShape(key.Shape, key.TargetQ, key.TargetR, key.Range, qs[i].Value, rs[i].Value))
                     continue;
@@ -128,10 +128,10 @@ public sealed class CollisionSystem : ISystem
 
     private static void DestroyAll(FrameView frame, CommandBuffer commands)
     {
-        foreach (Chunk chunk in frame.ChunkQuery(CollisionRequestDescription).Chunks)
+        foreach (var chunk in frame.ChunkQuery(CollisionRequestDescription).GetChunks())
         {
             ReadOnlySpan<Entity> entities = chunk.GetEntities();
-            for (int i = 0; i < entities.Length; i++)
+            for (int i = 0; i < chunk.Count; i++)
             {
                 commands.Destroy(entities[i]);
             }

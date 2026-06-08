@@ -3,6 +3,8 @@ using System.Threading;
 
 namespace MiniArch.Core;
 
+using MiniArch;
+
 /// <summary>
 /// Cached archetype and chunk query.
 /// </summary>
@@ -18,8 +20,10 @@ public sealed class Query
 
     private Archetype[] _snapshotArchetypes = Array.Empty<Archetype>();
     private Chunk[] _snapshotChunks = Array.Empty<Chunk>();
+    private ChunkView[] _snapshotChunkViews = [];
     private Archetype[] _scratchArchetypes = Array.Empty<Archetype>();
     private Chunk[] _scratchChunks = Array.Empty<Chunk>();
+    private ChunkView[] _scratchChunkViews = [];
     private int _snapshotCount;
     private int _snapshotVersion = -1;
 
@@ -32,7 +36,7 @@ public sealed class Query
     /// <summary>
     /// Creates or reuses an advanced query for a world and description.
     /// </summary>
-    public static Query Create(World world, in QueryDescription description)
+    internal static Query Create(World world, in QueryDescription description)
     {
         ArgumentNullException.ThrowIfNull(world);
         return world.GetAdvancedQuery(in description);
@@ -86,7 +90,7 @@ public sealed class Query
     /// Gets the matched chunks as a span.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ReadOnlySpan<Chunk> GetChunkSpan()
+    internal ReadOnlySpan<Chunk> GetChunkSpan()
     {
         EnsureRefreshed();
         return _snapshotChunks.AsSpan(0, _snapshotCount);
@@ -102,6 +106,21 @@ public sealed class Query
         count = _snapshotCount;
         return _snapshotChunks;
     }
+
+    /// <summary>
+    /// Gets the matched chunk views as a span (zero-copy, JIT-friendly).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ReadOnlySpan<ChunkView> GetChunkViewSpan()
+    {
+        EnsureRefreshed();
+        return _snapshotChunkViews.AsSpan(0, _snapshotCount);
+    }
+
+    /// <summary>
+    /// Gets matched chunks as a span for batch component access.
+    /// </summary>
+    public ReadOnlySpan<ChunkView> GetChunks() => GetChunkViewSpan();
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ReadOnlySpan<Archetype> GetArchetypeSpan()
@@ -162,6 +181,7 @@ public sealed class Query
         {
             _scratchArchetypes = new Archetype[count];
             _scratchChunks = new Chunk[count];
+            _scratchChunkViews = new ChunkView[count];
         }
 
         var idx = 0;
@@ -172,6 +192,7 @@ public sealed class Query
             {
                 _scratchArchetypes[idx] = a;
                 _scratchChunks[idx] = a.GetChunkSpan()[0];
+                _scratchChunkViews[idx] = new ChunkView(a);
                 idx++;
             }
         }
@@ -179,12 +200,15 @@ public sealed class Query
         // Publish snapshot via swap (volatile ensures readers see consistent data).
         var oldA = _snapshotArchetypes;
         var oldC = _snapshotChunks;
+        var oldCV = _snapshotChunkViews;
         Volatile.Write(ref _snapshotArchetypes, _scratchArchetypes);
         Volatile.Write(ref _snapshotChunks, _scratchChunks);
+        Volatile.Write(ref _snapshotChunkViews, _scratchChunkViews);
         Volatile.Write(ref _snapshotCount, count);
         Volatile.Write(ref _snapshotVersion, version);
         _scratchArchetypes = oldA;
         _scratchChunks = oldC;
+        _scratchChunkViews = oldCV;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

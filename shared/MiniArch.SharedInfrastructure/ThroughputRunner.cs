@@ -442,9 +442,7 @@ internal static class ThroughputCaseFactory
             (ThroughputWorkload.CreateDestroyBatch, ThroughputEngine.Arch) => new ArchCreateDestroyBatchThroughputCase(entityCount),
             (ThroughputWorkload.CreateDestroyPairwiseMulti, ThroughputEngine.MiniArch) => new MiniCreateDestroyPairwiseMultiThroughputCase(entityCount),
             (ThroughputWorkload.CreateDestroyPairwiseMulti, ThroughputEngine.Arch) => new ArchCreateDestroyPairwiseMultiThroughputCase(entityCount),
-            (ThroughputWorkload.QueryWithAllEachSpan, ThroughputEngine.MiniArch) => new MiniQueryEachSpanThroughputCase(entityCount),
             (ThroughputWorkload.QueryWithAllEachSpan, ThroughputEngine.Arch) => new ArchQueryEachSpanThroughputCase(entityCount),
-            (ThroughputWorkload.QueryWithAllEachSpanWide, ThroughputEngine.MiniArch) => new MiniWideQueryEachSpanThroughputCase(entityCount),
             (ThroughputWorkload.QueryWithAllEachSpanWide, ThroughputEngine.Arch) => new ArchWideQueryEachSpanThroughputCase(entityCount),
             (ThroughputWorkload.QueryWithAllComponentSpanWide, ThroughputEngine.MiniArch) => new MiniWideQueryComponentSpanThroughputCase(entityCount),
             (ThroughputWorkload.QueryWithAllComponentSpanWide, ThroughputEngine.Arch) => new ArchWideQueryComponentSpanThroughputCase(entityCount),
@@ -505,14 +503,8 @@ internal static class ThroughputCaseFactory
             case (ThroughputWorkload.CreateDestroyPairwiseMulti, ThroughputEngine.Arch):
                 using (var c = new ArchCreateDestroyPairwiseMultiThroughputCase(entityCount))
                     return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
-            case (ThroughputWorkload.QueryWithAllEachSpan, ThroughputEngine.MiniArch):
-                using (var c = new MiniQueryEachSpanThroughputCase(entityCount))
-                    return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
             case (ThroughputWorkload.QueryWithAllEachSpan, ThroughputEngine.Arch):
                 using (var c = new ArchQueryEachSpanThroughputCase(entityCount))
-                    return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
-            case (ThroughputWorkload.QueryWithAllEachSpanWide, ThroughputEngine.MiniArch):
-                using (var c = new MiniWideQueryEachSpanThroughputCase(entityCount))
                     return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
             case (ThroughputWorkload.QueryWithAllEachSpanWide, ThroughputEngine.Arch):
                 using (var c = new ArchWideQueryEachSpanThroughputCase(entityCount))
@@ -632,31 +624,6 @@ internal static class ThroughputCaseFactory
         }
     }
 
-    private sealed class MiniQueryEachSpanThroughputCase : IThroughputCase
-    {
-        private readonly MiniComplexQueryWorldState _state;
-
-        public MiniQueryEachSpanThroughputCase(int entityCount)
-        {
-            _state = BenchmarkWorldFactory.CreateMiniComplexQueryWorld(entityCount);
-        }
-
-        public void WarmUp(int count, CancellationToken cancellationToken)
-        {
-            for (var i = 0; i < count; i++)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                _ = ExecuteMiniEachSpanQuery(_state.WithAllQuery);
-            }
-        }
-
-        public long RunIteration() => ExecuteMiniEachSpanQuery(_state.WithAllQuery);
-
-        public void Dispose()
-        {
-        }
-    }
-
     private sealed class ArchQueryEachSpanThroughputCase : IThroughputCase
     {
         private readonly ArchComplexQueryWorldState _state;
@@ -765,18 +732,6 @@ internal static class ThroughputCaseFactory
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static int ExecuteMiniEachSpanQuery(MiniQuery query)
-    {
-        var checksum = 0;
-        foreach (var row in query.EachSpan<Position, Velocity>())
-        {
-            checksum += row.Get0().X + row.Get1().Y;
-        }
-
-        return checksum;
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static int ExecuteArchEachSpanQuery(ArchWorld world, ArchQueryDescription description)
     {
         var checksum = 0;
@@ -791,25 +746,6 @@ internal static class ThroughputCaseFactory
             }
         }
 
-        return checksum;
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private static int ExecuteMiniWideEachSpanQuery(MiniQuery query)
-    {
-        var checksum = 0;
-        foreach (var chunk in query.GetChunkSpan())
-        {
-            var posSpan = chunk.GetComponentSpan<Position>(global::MiniArch.Core.Component<Position>.ComponentType);
-            var velSpan = chunk.GetComponentSpan<Velocity>(global::MiniArch.Core.Component<Velocity>.ComponentType);
-            var hpSpan  = chunk.GetComponentSpan<Health>(global::MiniArch.Core.Component<Health>.ComponentType);
-            var teamSpan = chunk.GetComponentSpan<Team>(global::MiniArch.Core.Component<Team>.ComponentType);
-            var accelSpan = chunk.GetComponentSpan<Acceleration>(global::MiniArch.Core.Component<Acceleration>.ComponentType);
-            var manaSpan = chunk.GetComponentSpan<Mana>(global::MiniArch.Core.Component<Mana>.ComponentType);
-            for (var i = 0; i < chunk.Count; i++)
-                checksum += posSpan[i].X + velSpan[i].Y + hpSpan[i].Value
-                          + teamSpan[i].Value + accelSpan[i].X + manaSpan[i].Value;
-        }
         return checksum;
     }
 
@@ -890,67 +826,6 @@ internal static class ThroughputCaseFactory
             }
         }
 
-        return checksum;
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    internal static int ExecuteMiniEachSpanDirectNarrow(MiniQuery query)
-    {
-        var checksum = 0;
-        var e = query.EachSpan<Position, Velocity>();
-        while (e.MoveNext())
-        {
-            checksum += e.Get0().X + e.Get1().Y;
-        }
-        return checksum;
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    internal static int ExecuteMiniEachSpanDirectWide(MiniQuery query)
-    {
-        var checksum = 0;
-        foreach (var chunk in query.GetChunkSpan())
-        {
-            var posSpan = chunk.GetComponentSpan<Position>(global::MiniArch.Core.Component<Position>.ComponentType);
-            var velSpan = chunk.GetComponentSpan<Velocity>(global::MiniArch.Core.Component<Velocity>.ComponentType);
-            var hpSpan  = chunk.GetComponentSpan<Health>(global::MiniArch.Core.Component<Health>.ComponentType);
-            var teamSpan = chunk.GetComponentSpan<Team>(global::MiniArch.Core.Component<Team>.ComponentType);
-            var accelSpan = chunk.GetComponentSpan<Acceleration>(global::MiniArch.Core.Component<Acceleration>.ComponentType);
-            var manaSpan = chunk.GetComponentSpan<Mana>(global::MiniArch.Core.Component<Mana>.ComponentType);
-            for (var i = 0; i < chunk.Count; i++)
-                checksum += posSpan[i].X + velSpan[i].Y + hpSpan[i].Value
-                          + teamSpan[i].Value + accelSpan[i].X + manaSpan[i].Value;
-        }
-        return checksum;
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    internal static int ExecuteMiniEachSpanForeachNarrow(MiniQuery query)
-    {
-        var checksum = 0;
-        foreach (var row in query.EachSpan<Position, Velocity>())
-        {
-            checksum += row.Get0().X + row.Get1().Y;
-        }
-        return checksum;
-    }
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    internal static int ExecuteMiniEachSpanForeachWide(MiniQuery query)
-    {
-        var checksum = 0;
-        foreach (var chunk in query.GetChunkSpan())
-        {
-            var posSpan = chunk.GetComponentSpan<Position>(global::MiniArch.Core.Component<Position>.ComponentType);
-            var velSpan = chunk.GetComponentSpan<Velocity>(global::MiniArch.Core.Component<Velocity>.ComponentType);
-            var hpSpan  = chunk.GetComponentSpan<Health>(global::MiniArch.Core.Component<Health>.ComponentType);
-            var teamSpan = chunk.GetComponentSpan<Team>(global::MiniArch.Core.Component<Team>.ComponentType);
-            var accelSpan = chunk.GetComponentSpan<Acceleration>(global::MiniArch.Core.Component<Acceleration>.ComponentType);
-            var manaSpan = chunk.GetComponentSpan<Mana>(global::MiniArch.Core.Component<Mana>.ComponentType);
-            for (var i = 0; i < chunk.Count; i++)
-                checksum += posSpan[i].X + velSpan[i].Y + hpSpan[i].Value
-                          + teamSpan[i].Value + accelSpan[i].X + manaSpan[i].Value;
-        }
         return checksum;
     }
 
@@ -1217,29 +1092,6 @@ internal static class ThroughputCaseFactory
             using var world = ArchWorld.Create();
             return ExecuteArchCreateDestroyBatch(world, _entityCount);
         }
-
-        public void Dispose() { }
-    }
-
-    private sealed class MiniWideQueryEachSpanThroughputCase : IThroughputCase
-    {
-        private readonly MiniWideQueryWorldState _state;
-
-        public MiniWideQueryEachSpanThroughputCase(int entityCount)
-        {
-            _state = BenchmarkWorldFactory.CreateMiniWideQueryWorld(entityCount);
-        }
-
-        public void WarmUp(int count, CancellationToken cancellationToken)
-        {
-            for (var i = 0; i < count; i++)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                _ = ExecuteMiniWideEachSpanQuery(_state.WideQuery);
-            }
-        }
-
-        public long RunIteration() => ExecuteMiniWideEachSpanQuery(_state.WideQuery);
 
         public void Dispose() { }
     }

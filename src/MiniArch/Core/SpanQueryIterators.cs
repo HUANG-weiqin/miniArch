@@ -11,7 +11,7 @@ namespace MiniArch.Core;
 /// For more components, iterate <c>query.Chunks</c> directly and access
 /// components via <see cref="Chunk.GetComponentSpan{T}(ComponentType)"/>.
 /// </summary>
-public static class SpanQueryExtensions
+internal static class SpanQueryExtensions
 {
     /// <summary>Iterates entity ids only (no components).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -53,7 +53,7 @@ public static class SpanQueryExtensions
 /// Span-based iterator over entity ids (no component data).
 /// Use via <c>foreach (var entity in query.EachSpan())</c>.
 /// </summary>
-public ref struct SpanEntities
+internal ref struct SpanEntities
 {
     private ReadOnlySpan<Chunk> _chunks;
     private int _chunkIdx;
@@ -102,7 +102,7 @@ public ref struct SpanEntities
 }
 
 /// <summary>Row yielded by <see cref="SpanEach{T1}"/> with one component reference.</summary>
-public ref struct SpanEachRow<T1>
+internal ref struct SpanEachRow<T1>
     where T1 : struct
 {
     private ref T1 _r0;
@@ -122,7 +122,7 @@ public ref struct SpanEachRow<T1>
 }
 
 /// <summary>Row yielded by <see cref="SpanEach{T1,T2}"/> with two component references.</summary>
-public ref struct SpanEachRow<T1, T2>
+internal ref struct SpanEachRow<T1, T2>
     where T1 : struct
     where T2 : struct
 {
@@ -147,7 +147,7 @@ public ref struct SpanEachRow<T1, T2>
 }
 
 /// <summary>Row yielded by <see cref="SpanEach{T1,T2,T3}"/> with three component references.</summary>
-public ref struct SpanEachRow<T1, T2, T3>
+internal ref struct SpanEachRow<T1, T2, T3>
     where T1 : struct
     where T2 : struct
     where T3 : struct
@@ -177,7 +177,7 @@ public ref struct SpanEachRow<T1, T2, T3>
 }
 
 /// <summary>Row yielded by <see cref="SpanEach{T1,T2,T3,T4}"/> with four component references.</summary>
-public ref struct SpanEachRow<T1, T2, T3, T4>
+internal ref struct SpanEachRow<T1, T2, T3, T4>
     where T1 : struct
     where T2 : struct
     where T3 : struct
@@ -215,7 +215,7 @@ public ref struct SpanEachRow<T1, T2, T3, T4>
 /// Span-based iterator yielding <see cref="SpanEachRow{T1}"/> for each
 /// entity matching the query. Use via <c>foreach (ref var row in query.EachSpan&lt;T1&gt;())</c>.
 /// </summary>
-public ref struct SpanEach<T1>
+internal ref struct SpanEach<T1>
     where T1 : struct
 {
     private ReadOnlySpan<Chunk> _chunks;
@@ -277,7 +277,7 @@ public ref struct SpanEach<T1>
 }
 
 /// <summary>Span-based iterator for two-component queries.</summary>
-public ref struct SpanEach<T1, T2>
+internal ref struct SpanEach<T1, T2>
     where T1 : struct
     where T2 : struct
 {
@@ -346,7 +346,7 @@ public ref struct SpanEach<T1, T2>
 }
 
 /// <summary>Span-based iterator for three-component queries.</summary>
-public ref struct SpanEach<T1, T2, T3>
+internal ref struct SpanEach<T1, T2, T3>
     where T1 : struct
     where T2 : struct
     where T3 : struct
@@ -422,7 +422,7 @@ public ref struct SpanEach<T1, T2, T3>
 }
 
 /// <summary>Span-based iterator for four-component queries.</summary>
-public ref struct SpanEach<T1, T2, T3, T4>
+internal ref struct SpanEach<T1, T2, T3, T4>
     where T1 : struct
     where T2 : struct
     where T3 : struct

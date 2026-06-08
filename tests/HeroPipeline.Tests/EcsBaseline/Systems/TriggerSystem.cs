@@ -15,8 +15,6 @@ public sealed class TriggerSystem : ISystem
             .With<TriggerCondition>()
             .With<TriggerAction>();
 
-    private static readonly MiniArch.Core.ComponentType TriggerGuardType = MiniArch.Core.Component<TriggerGuard>.ComponentType;
-    private static readonly MiniArch.Core.ComponentType TriggerPostActionType = MiniArch.Core.Component<TriggerPostAction>.ComponentType;
 
     public TriggerSystem(TriggerConditionTable conditionTable, TriggerActionTable actionTable)
     {
@@ -38,25 +36,23 @@ public sealed class TriggerSystem : ISystem
 
     public void Execute(in FrameContext context)
     {
-        MiniArch.Core.Query coreQuery = context.Frame.ChunkQuery(TriggerQueryDescription);
-
-        foreach (MiniArch.Core.Chunk chunk in coreQuery.Chunks)
+        foreach (var chunk in context.Frame.ChunkQuery(TriggerQueryDescription).GetChunks())
         {
             ReadOnlySpan<MiniArch.Entity> entities = chunk.GetEntities();
-            ReadOnlySpan<TriggerCondition> conditions = chunk.GetComponentSpan<TriggerCondition>(MiniArch.Core.Component<TriggerCondition>.ComponentType);
-            ReadOnlySpan<TriggerAction> actions = chunk.GetComponentSpan<TriggerAction>(MiniArch.Core.Component<TriggerAction>.ComponentType);
+            ReadOnlySpan<TriggerCondition> conditions = chunk.GetSpan<TriggerCondition>();
+            ReadOnlySpan<TriggerAction> actions = chunk.GetSpan<TriggerAction>();
 
-            bool hasGuard = chunk.TryGetComponentIndex(TriggerGuardType, out int guardColumn);
+            bool hasGuard = chunk.TryGetComponentIndex<TriggerGuard>(out int guardColumn);
             ReadOnlySpan<TriggerGuard> guards = hasGuard
                 ? chunk.GetComponentSpanAt<TriggerGuard>(guardColumn)
                 : default;
 
-            bool hasPostAction = chunk.TryGetComponentIndex(TriggerPostActionType, out int postActionColumn);
+            bool hasPostAction = chunk.TryGetComponentIndex<TriggerPostAction>(out int postActionColumn);
             ReadOnlySpan<TriggerPostAction> postActions = hasPostAction
                 ? chunk.GetComponentSpanAt<TriggerPostAction>(postActionColumn)
                 : default;
 
-            for (int i = 0; i < entities.Length; i++)
+            for (int i = 0; i < chunk.Count; i++)
             {
                 TriggerCondition condition = conditions[i];
                 TriggerAction action = actions[i];
