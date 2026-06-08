@@ -10,7 +10,7 @@ namespace MiniArch;
 /// <summary>
 /// Owns entity storage and queries.
 /// </summary>
-public sealed class World : IDisposable
+public sealed partial class World : IDisposable
 {
     private const int DefaultChunkCapacity = 128;
     private readonly Dictionary<Signature, Archetype> _archetypes = new();
