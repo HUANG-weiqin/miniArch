@@ -639,7 +639,7 @@ public static partial class BenchmarkWorldFactory
             .With<Health>()
             .With<Team>()
             .WithAny<AnyTagA>()
-            .Or<AnyTagB>();
+            .WithAny<AnyTagB>();
 
         return MiniQuery.Create(world, in description);
     }

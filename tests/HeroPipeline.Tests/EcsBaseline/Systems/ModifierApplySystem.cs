@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
-using CoreCommandBuffer = MiniArch.Core.ICommandRecorder;
+using CoreCommandBuffer = MiniArch.Core.CommandBuffer;
 
 namespace Hero.Ecs;
 

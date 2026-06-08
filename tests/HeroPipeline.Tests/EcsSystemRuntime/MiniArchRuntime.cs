@@ -36,7 +36,7 @@ public sealed class MiniArchRuntime
     public MiniArch.World World { get; }
 
     public CommandBuffer Commands { get; }
-    public ICommandRecorder Recorder { get; }
+    public CommandBuffer Recorder { get; }
 
     public FrameView CurrentFrame { get; private set; }
 

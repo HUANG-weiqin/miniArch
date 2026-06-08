@@ -51,7 +51,7 @@ public sealed class ComplexQueryBenchmarkScenarioTests
             .With<Health>()
             .With<Team>()
             .WithAny<AnyTagA>()
-            .Or<AnyTagB>();
+            .WithAny<AnyTagB>();
         var withAny = MiniQuery.Create(state.World, in withAnyDescription);
 
         Assert.Equal(90, CountEntities(withAll));

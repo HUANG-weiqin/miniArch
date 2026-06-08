@@ -20,7 +20,7 @@ public sealed class QueryFilterTests
             .With<Position>()
             .Without<Velocity>()
             .WithAny<TagA>()
-            .Or<TagB>();
+            .WithAny<TagB>();
 
         var query = MiniQuery.Create(world, in description);
 
@@ -42,8 +42,8 @@ public sealed class QueryFilterTests
     public void Any_and_or_share_same_any_set()
     {
         var world = new World();
-        var firstDescription = new QueryDescription().WithAny<TagA>().Or<TagB>();
-        var secondDescription = new QueryDescription().Or<TagB>().WithAny<TagA>();
+        var firstDescription = new QueryDescription().WithAny<TagA>().WithAny<TagB>();
+        var secondDescription = new QueryDescription().WithAny<TagB>().WithAny<TagA>();
 
         var first = MiniQuery.Create(world, in firstDescription);
         var second = MiniQuery.Create(world, in secondDescription);
@@ -58,7 +58,7 @@ public sealed class QueryFilterTests
             .With<Position>()
             .Without<Velocity>()
             .WithAny<TagA>()
-            .Or<TagB>();
+            .WithAny<TagB>();
 
         Assert.Equal(new[] { typeof(Position) }, description.RequiredTypes);
         Assert.Equal(new[] { typeof(Velocity) }, description.ExcludedTypes);
@@ -72,10 +72,10 @@ public sealed class QueryFilterTests
             .With<Position>()
             .Without<Velocity>()
             .WithAny<TagA>()
-            .Or<TagB>();
+            .WithAny<TagB>();
 
         var second = new QueryDescription()
-            .Or<TagB>()
+            .WithAny<TagB>()
             .WithAny<TagA>()
             .Without<Velocity>()
             .With<Position>();
@@ -138,7 +138,7 @@ public sealed class QueryFilterTests
             .With<Position>()
             .Without<Velocity>()
             .WithAny<TagA>()
-            .Or<TagB>();
+            .WithAny<TagB>();
 
         Assert.Equal(0, GetCachedQueryCount(world));
 

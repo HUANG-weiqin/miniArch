@@ -54,11 +54,6 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
     }
 
     /// <summary>
-    /// Alias for <see cref="WithAny{T}()" />.
-    /// </summary>
-    public QueryDescription Or<T>() => WithAny<T>();
-
-    /// <summary>
     /// Compares two descriptions by value.
     /// </summary>
     public bool Equals(QueryDescription other)

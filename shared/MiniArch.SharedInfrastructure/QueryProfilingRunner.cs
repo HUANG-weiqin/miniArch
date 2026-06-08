@@ -306,7 +306,7 @@ public static class QueryProfilingRunner
 
     private static MiniQuery BuildAnyQuery(MiniWorld world, QueryDescription description)
     {
-        var filtered = description.WithAny<AnyTagA>().Or<AnyTagB>();
+        var filtered = description.WithAny<AnyTagA>().WithAny<AnyTagB>();
         return MiniQuery.Create(world, in filtered);
     }
 

@@ -19,22 +19,14 @@ public sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentType
     public static Signature Empty { get; } = new(Array.Empty<ComponentType>(), isNormalized: true);
 
     /// <summary>
-    /// Creates a normalized signature from a sequence.
+    /// Creates a normalized signature from components.
     /// </summary>
-    public Signature(IEnumerable<ComponentType> components)
+    public Signature(params ComponentType[] components)
     {
         ArgumentNullException.ThrowIfNull(components);
         _components = Normalize(components);
         _hashCode = ComputeHashCode(_components);
         _componentMask = ComputeMask(_components);
-    }
-
-    /// <summary>
-    /// Creates a normalized signature from components.
-    /// </summary>
-    public Signature(params ComponentType[] components)
-        : this((IEnumerable<ComponentType>)components)
-    {
     }
 
     private Signature(ComponentType[] components, bool isNormalized)

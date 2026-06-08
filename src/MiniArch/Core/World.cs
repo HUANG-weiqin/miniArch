@@ -33,17 +33,6 @@ public sealed class World : IDisposable
 
     private bool _disposed;
 
-#if DEBUG
-    private int _debugEntityCapacityGrowCount;
-    private int _debugDestroyScratchGrowCount;
-    private int _debugMaxEntityCapacity;
-    private int _debugLastEntityCapacityBefore;
-    private int _debugLastEntityCapacityAfter;
-    private int _debugLastDestroyOrderScratchCapacityBefore;
-    private int _debugLastDestroyOrderScratchCapacityAfter;
-    private int _debugLastDestroyVisitedScratchCapacityBefore;
-    private int _debugLastDestroyVisitedScratchCapacityAfter;
-#endif
 
     /// <summary>
     /// Creates a world.
@@ -112,55 +101,6 @@ public sealed class World : IDisposable
     /// </summary>
     public int EntityCapacity => _records.Length;
 
-    /// <summary>
-    /// Returns a snapshot of debug-only world metrics.
-    /// </summary>
-    public WorldDebugMetrics GetDebugMetrics()
-    {
-#if DEBUG
-        return new WorldDebugMetrics(
-            true,
-            _debugEntityCapacityGrowCount,
-            _debugDestroyScratchGrowCount,
-            _records.Length,
-            Math.Max(_debugMaxEntityCapacity, _records.Length),
-            _debugLastEntityCapacityBefore,
-            _debugLastEntityCapacityAfter,
-            _entitySlotCount,
-            _destroyOrderScratch.Capacity,
-            _destroyVisitedGen.Length,
-            _debugLastDestroyOrderScratchCapacityBefore,
-            _debugLastDestroyOrderScratchCapacityAfter,
-            _debugLastDestroyVisitedScratchCapacityBefore,
-            _debugLastDestroyVisitedScratchCapacityAfter);
-#else
-        return default;
-#endif
-    }
-
-    /// <summary>
-    /// Returns a stable text report for debug-only world metrics.
-    /// </summary>
-    public string GetDebugReport()
-    {
-#if DEBUG
-        var metrics = GetDebugMetrics();
-        return $"MiniArch World Debug Metrics\n" +
-            $"enabled: {metrics.IsEnabled}\n" +
-            $"entity_capacity_grow_count: {metrics.EntityCapacityGrowCount}\n" +
-            $"destroy_scratch_grow_count: {metrics.DestroyScratchGrowCount}\n" +
-            $"entity_capacity: {metrics.EntityCapacity}\n" +
-            $"max_entity_capacity: {metrics.MaxEntityCapacity}\n" +
-            $"last_entity_capacity: {metrics.LastEntityCapacityBefore}->{metrics.LastEntityCapacityAfter}\n" +
-            $"entity_slot_count: {metrics.EntitySlotCount}\n" +
-            $"destroy_order_scratch_capacity: {metrics.DestroyOrderScratchCapacity}\n" +
-            $"destroy_visited_scratch_capacity: {metrics.DestroyVisitedScratchCapacity}\n" +
-            $"last_destroy_order_scratch_capacity: {metrics.LastDestroyOrderScratchCapacityBefore}->{metrics.LastDestroyOrderScratchCapacityAfter}\n" +
-            $"last_destroy_visited_scratch_capacity: {metrics.LastDestroyVisitedScratchCapacityBefore}->{metrics.LastDestroyVisitedScratchCapacityAfter}";
-#else
-        return "MiniArch World Debug Metrics\ndisabled";
-#endif
-    }
 
     /// <summary>
     /// Gets the number of currently alive entities.
@@ -753,24 +693,10 @@ public sealed class World : IDisposable
             throw new ArgumentOutOfRangeException(nameof(entityCapacity));
         }
 
-#if DEBUG
-        var beforeCapacity = _records.Length;
-#endif
         if (_records.Length < entityCapacity)
         {
             Array.Resize(ref _records, entityCapacity);
         }
-
-#if DEBUG
-        var afterCapacity = _records.Length;
-        if (afterCapacity > beforeCapacity)
-        {
-            _debugEntityCapacityGrowCount++;
-            _debugLastEntityCapacityBefore = beforeCapacity;
-            _debugLastEntityCapacityAfter = afterCapacity;
-            _debugMaxEntityCapacity = Math.Max(_debugMaxEntityCapacity, afterCapacity);
-        }
-#endif
 
         EnsureDestroyScratchCapacity(entityCapacity);
     }
@@ -778,17 +704,8 @@ public sealed class World : IDisposable
     private void EnsureEntityCapacity(int requiredCount)
     {
         if (requiredCount <= _records.Length) return;
-#if DEBUG
-        var beforeCapacity = _records.Length;
-#endif
         var newLength = Math.Max(requiredCount, _records.Length * 2);
         Array.Resize(ref _records, newLength);
-#if DEBUG
-        _debugEntityCapacityGrowCount++;
-        _debugLastEntityCapacityBefore = beforeCapacity;
-        _debugLastEntityCapacityAfter = newLength;
-        _debugMaxEntityCapacity = Math.Max(_debugMaxEntityCapacity, newLength);
-#endif
     }
 
     /// <summary>
@@ -1971,25 +1888,11 @@ public sealed class World : IDisposable
             return;
         }
 
-#if DEBUG
-        var beforeOrderCapacity = _destroyOrderScratch.Capacity;
-        var beforeVisitedCapacity = _destroyVisitedGen.Length;
-#endif
         _destroyOrderScratch.EnsureCapacity(entityCount);
         if (_destroyVisitedGen.Length < entityCount)
         {
             Array.Resize(ref _destroyVisitedGen, Math.Max(entityCount, _destroyVisitedGen.Length * 2));
         }
-#if DEBUG
-        if (_destroyOrderScratch.Capacity > beforeOrderCapacity || _destroyVisitedGen.Length > beforeVisitedCapacity)
-        {
-            _debugDestroyScratchGrowCount++;
-            _debugLastDestroyOrderScratchCapacityBefore = beforeOrderCapacity;
-            _debugLastDestroyOrderScratchCapacityAfter = _destroyOrderScratch.Capacity;
-            _debugLastDestroyVisitedScratchCapacityBefore = beforeVisitedCapacity;
-            _debugLastDestroyVisitedScratchCapacityAfter = _destroyVisitedGen.Length;
-        }
-#endif
     }
 
     private void EnsureReplayReservation(Entity entity)

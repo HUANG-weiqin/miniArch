@@ -11,7 +11,7 @@ public sealed class EntityTests
         var recycledEntity = new Entity(7, 2);
 
         Assert.NotEqual(oldEntity, recycledEntity);
-        Assert.False(oldEntity.MatchesVersion(recycledEntity.Version));
+        Assert.False(oldEntity.Version == recycledEntity.Version);
     }
 
     [Fact]

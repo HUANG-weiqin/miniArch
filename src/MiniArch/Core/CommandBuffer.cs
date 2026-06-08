@@ -8,7 +8,7 @@ namespace MiniArch.Core;
 /// Records deferred world commands with per-entity deduplication.
 /// Single-threaded: records directly into World without a compile pass.
 /// </summary>
-public sealed class CommandBuffer : ICommandRecorder
+public sealed class CommandBuffer
 {
     private const int DefaultSlabSize = 4096;
 
@@ -52,22 +52,6 @@ public sealed class CommandBuffer : ICommandRecorder
     }
     private ArchetypeCacheEntry[] _archetypeCache = [];
 
-#if DEBUG
-    private int _debugRecordedSetCount;
-    private int _debugRecordedCreateCount;
-    private int _debugRecordedAddCount;
-    private int _debugRecordedRemoveCount;
-    private int _debugRecordedDestroyCount;
-    private int _debugOpsPoolGrowCount;
-    private int _debugOpsLookupGrowCount;
-    private int _debugCreatedStatePoolGrowCount;
-    private int _debugCreatedStateLookupGrowCount;
-    private int _debugExistingDestroyGrowCount;
-    private int _debugSlabRentCount;
-    private long _debugSlabRentBytes;
-    private int _debugSnapshotDeepCopyCount;
-    private long _debugSnapshotDeepCopyBytes;
-#endif
 
     /// <summary>
     /// Creates a buffer for a world.
@@ -77,83 +61,12 @@ public sealed class CommandBuffer : ICommandRecorder
         _world = world ?? throw new ArgumentNullException(nameof(world));
     }
 
-    /// <summary>
-    /// Returns a snapshot of debug-only command buffer metrics.
-    /// </summary>
-    public CommandBufferDebugMetrics GetDebugMetrics()
-    {
-#if DEBUG
-        return new CommandBufferDebugMetrics(
-            true,
-            _debugRecordedSetCount,
-            _debugRecordedCreateCount,
-            _debugRecordedAddCount,
-            _debugRecordedRemoveCount,
-            _debugRecordedDestroyCount,
-            _debugOpsPoolGrowCount,
-            _debugOpsLookupGrowCount,
-            _debugCreatedStatePoolGrowCount,
-            _debugCreatedStateLookupGrowCount,
-            _debugExistingDestroyGrowCount,
-            _debugSlabRentCount,
-            _debugSlabRentBytes,
-            _debugSnapshotDeepCopyCount,
-            _debugSnapshotDeepCopyBytes,
-            _opsPool.Length,
-            _opsLookup.Length,
-            _createdStatePool.Length,
-            _createdStateLookup.Length,
-            _existingDestroyEntities.Length,
-            _slabs.Count,
-            _currentSlabOffset);
-#else
-        return default;
-#endif
-    }
-
-    /// <summary>
-    /// Returns a stable text report for debug-only command buffer metrics.
-    /// </summary>
-    public string GetDebugReport()
-    {
-#if DEBUG
-        var metrics = GetDebugMetrics();
-        return $"MiniArch CommandBuffer Debug Metrics\n" +
-            $"enabled: {metrics.IsEnabled}\n" +
-            $"recorded_set_count: {metrics.RecordedSetCount}\n" +
-            $"recorded_create_count: {metrics.RecordedCreateCount}\n" +
-            $"recorded_add_count: {metrics.RecordedAddCount}\n" +
-            $"recorded_remove_count: {metrics.RecordedRemoveCount}\n" +
-            $"recorded_destroy_count: {metrics.RecordedDestroyCount}\n" +
-            $"ops_pool_grow_count: {metrics.OpsPoolGrowCount}\n" +
-            $"ops_lookup_grow_count: {metrics.OpsLookupGrowCount}\n" +
-            $"created_state_pool_grow_count: {metrics.CreatedStatePoolGrowCount}\n" +
-            $"created_state_lookup_grow_count: {metrics.CreatedStateLookupGrowCount}\n" +
-            $"existing_destroy_grow_count: {metrics.ExistingDestroyGrowCount}\n" +
-            $"slab_rent_count: {metrics.SlabRentCount}\n" +
-            $"slab_rent_bytes: {metrics.SlabRentBytes}\n" +
-            $"snapshot_deep_copy_count: {metrics.SnapshotDeepCopyCount}\n" +
-            $"snapshot_deep_copy_bytes: {metrics.SnapshotDeepCopyBytes}\n" +
-            $"ops_pool_capacity: {metrics.OpsPoolCapacity}\n" +
-            $"ops_lookup_capacity: {metrics.OpsLookupCapacity}\n" +
-            $"created_state_pool_capacity: {metrics.CreatedStatePoolCapacity}\n" +
-            $"created_state_lookup_capacity: {metrics.CreatedStateLookupCapacity}\n" +
-            $"existing_destroy_capacity: {metrics.ExistingDestroyCapacity}\n" +
-            $"slab_count: {metrics.SlabCount}\n" +
-            $"current_slab_offset: {metrics.CurrentSlabOffset}";
-#else
-        return "MiniArch CommandBuffer Debug Metrics\ndisabled";
-#endif
-    }
 
     /// <summary>
     /// Records an entity creation.
     /// </summary>
     public Entity Create()
     {
-#if DEBUG
-        _debugRecordedCreateCount++;
-#endif
         var entity = _world.ReserveDeferredEntity();
         RegisterInCreatedState(entity);
         return entity;
@@ -173,9 +86,6 @@ public sealed class CommandBuffer : ICommandRecorder
             }
             _createdStatePool = newPool;
             _createdEntityByPoolIndex = newEntities;
-#if DEBUG
-            _debugCreatedStatePoolGrowCount++;
-#endif
         }
 
         var index = _createdStatePoolCount++;
@@ -192,9 +102,6 @@ public sealed class CommandBuffer : ICommandRecorder
             if (_createdStateLookup.Length > 0)
                 Array.Copy(_createdStateLookup, newLookup, _createdStateLookup.Length);
             _createdStateLookup = newLookup;
-#if DEBUG
-            _debugCreatedStateLookupGrowCount++;
-#endif
         }
 
         _createdStateLookup[entity.Id] = index;
@@ -214,9 +121,6 @@ public sealed class CommandBuffer : ICommandRecorder
     /// </summary>
     public void Add<T>(Entity entity, T component)
     {
-#if DEBUG
-        _debugRecordedAddCount++;
-#endif
         var componentTypeId = GetComponentTypeId<T>();
         var info = ResolveTypeInfo(componentTypeId);
         CopyData(component, info.Size, out var slabIndex, out var offset);
@@ -243,9 +147,6 @@ public sealed class CommandBuffer : ICommandRecorder
     /// </summary>
     public void Set<T>(Entity entity, T component)
     {
-#if DEBUG
-        _debugRecordedSetCount++;
-#endif
         var componentTypeId = GetComponentTypeId<T>();
         var info = ResolveTypeInfo(componentTypeId);
         CopyData(component, info.Size, out var slabIndex, out var offset);
@@ -272,9 +173,6 @@ public sealed class CommandBuffer : ICommandRecorder
     /// </summary>
     public void Remove<T>(Entity entity)
     {
-#if DEBUG
-        _debugRecordedRemoveCount++;
-#endif
         var componentTypeId = GetComponentTypeId<T>();
 
         if (_hasCreatedEntities)
@@ -300,9 +198,6 @@ public sealed class CommandBuffer : ICommandRecorder
     /// </summary>
     public void Destroy(Entity entity)
     {
-#if DEBUG
-        _debugRecordedDestroyCount++;
-#endif
         if (_hasCreatedEntities)
         {
             var createdIdx = GetCreatedStateIndex(entity);
@@ -457,9 +352,6 @@ public sealed class CommandBuffer : ICommandRecorder
         {
             var newCapacity = _existingDestroyEntities.Length == 0 ? 4 : _existingDestroyEntities.Length * 2;
             Array.Resize(ref _existingDestroyEntities, newCapacity);
-#if DEBUG
-            _debugExistingDestroyGrowCount++;
-#endif
         }
         if (insertIndex < _existingDestroyCount)
             Array.Copy(_existingDestroyEntities, insertIndex, _existingDestroyEntities, insertIndex + 1, _existingDestroyCount - insertIndex);
@@ -608,10 +500,6 @@ public sealed class CommandBuffer : ICommandRecorder
         var delta = new FrameDelta();
         BuildDelta(delta);
         var copiedBytes = delta.DeepCopyOwnedData();
-#if DEBUG
-        _debugSnapshotDeepCopyCount++;
-        _debugSnapshotDeepCopyBytes += copiedBytes;
-#endif
         return delta;
     }
 
@@ -640,10 +528,6 @@ public sealed class CommandBuffer : ICommandRecorder
                 ArrayPool<byte>.Shared.Return(slab);
             frozen.OpsOverflow.ReturnArrays();
             frozen.CreatedOverflow.ReturnArrays();
-#if DEBUG
-            _debugSnapshotDeepCopyCount++;
-            _debugSnapshotDeepCopyBytes += t.Result.CopiedBytes;
-#endif
             return t.Result.Delta;
         }, TaskContinuationOptions.ExecuteSynchronously);
     }
@@ -1294,10 +1178,6 @@ public sealed class CommandBuffer : ICommandRecorder
             _slabs.Add(newSlab);
             _currentSlabIndex = _slabs.Count - 1;
             _currentSlabOffset = 0;
-#if DEBUG
-            _debugSlabRentCount++;
-            _debugSlabRentBytes += newSlab.Length;
-#endif
         }
     }
 
@@ -1437,9 +1317,6 @@ public sealed class CommandBuffer : ICommandRecorder
             if (_opsLookup.Length > 0)
                 Array.Copy(_opsLookup, newLookup, _opsLookup.Length);
             _opsLookup = newLookup;
-#if DEBUG
-            _debugOpsLookupGrowCount++;
-#endif
         }
 
         if (_opsPoolCount >= _opsPool.Length)
@@ -1454,9 +1331,6 @@ public sealed class CommandBuffer : ICommandRecorder
             }
             _opsPool = newPool;
             _opsEntityByPoolIndex = newEntities;
-#if DEBUG
-            _debugOpsPoolGrowCount++;
-#endif
         }
 
         var index = _opsPoolCount++;

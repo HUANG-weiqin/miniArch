@@ -140,7 +140,7 @@ public class QueryBenchmarks
             .With<Health>()
             .With<Team>()
             .WithAny<AnyTagA>()
-            .Or<AnyTagB>();
+            .WithAny<AnyTagB>();
         var query = MiniQuery.Create(_miniState.World, in description);
 
         return ExecuteMiniQuery(query);
