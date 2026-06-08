@@ -134,8 +134,8 @@ public sealed partial class World : IDisposable
 
         _archetypes.Clear();
         _archetypeSnapshot = Array.Empty<Archetype>();
-        _queryFiltersByDescription = new Dictionary<QueryDescription, QueryFilter>();
-        _queries = new Dictionary<QueryFilter, MiniArch.Core.Query>();
+        _queryFiltersByDescription.Clear();
+        _queries.Clear();
         _createArchetypeCacheGeneration++;
         _freeIdCount = 0;
         _destroyVisitedGen = [];

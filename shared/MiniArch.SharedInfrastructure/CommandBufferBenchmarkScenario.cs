@@ -96,16 +96,23 @@ public static class CommandBufferBenchmarkScenarioFactory
 
     public static void RunArchSharedScenario(ArchSharedCommandBufferState state, CommandBufferBenchmarkScenario scenario)
     {
+        var buffer = new ArchCommandBuffer(state.Capacity);
+        RecordArchSharedScenario(buffer, state, scenario);
+        buffer.Playback(state.World, true);
+    }
+
+    public static void RecordArchSharedScenario(ArchCommandBuffer buffer, ArchSharedCommandBufferState state, CommandBufferBenchmarkScenario scenario)
+    {
         switch (scenario)
         {
             case CommandBufferBenchmarkScenario.DenseExisting:
-                RunArchDenseExisting(state);
+                RecordArchDenseExisting(buffer, state);
                 return;
             case CommandBufferBenchmarkScenario.CreateHeavy:
-                RunArchCreateHeavy(state);
+                RecordArchCreateHeavy(buffer, state);
                 return;
             case CommandBufferBenchmarkScenario.MixedScript:
-                RunArchMixedScript(state);
+                RecordArchMixedScript(buffer, state);
                 return;
             default:
                 throw new ArgumentOutOfRangeException(nameof(scenario));
@@ -275,9 +282,8 @@ public static class CommandBufferBenchmarkScenarioFactory
         }
     }
 
-    private static void RunArchDenseExisting(ArchSharedCommandBufferState state)
+    private static void RecordArchDenseExisting(ArchCommandBuffer buffer, ArchSharedCommandBufferState state)
     {
-        var buffer = new ArchCommandBuffer(state.Capacity);
         for (var i = 0; i < state.ExistingEntities.Length; i++)
         {
             var entity = state.ExistingEntities[i];
@@ -299,13 +305,10 @@ public static class CommandBufferBenchmarkScenarioFactory
                 buffer.Destroy(entity);
             }
         }
-
-        buffer.Playback(state.World, true);
     }
 
-    private static void RunArchCreateHeavy(ArchSharedCommandBufferState state)
+    private static void RecordArchCreateHeavy(ArchCommandBuffer buffer, ArchSharedCommandBufferState state)
     {
-        var buffer = new ArchCommandBuffer(state.Capacity);
         for (var i = 0; i < state.EntityCount; i++)
         {
             var entity = buffer.Create(Array.Empty<ArchComponentType>());
@@ -323,13 +326,10 @@ public static class CommandBufferBenchmarkScenarioFactory
                 buffer.Destroy(entity);
             }
         }
-
-        buffer.Playback(state.World, true);
     }
 
-    private static void RunArchMixedScript(ArchSharedCommandBufferState state)
+    private static void RecordArchMixedScript(ArchCommandBuffer buffer, ArchSharedCommandBufferState state)
     {
-        var buffer = new ArchCommandBuffer(state.Capacity);
         for (var i = 0; i < state.EntityCount; i++)
         {
             if ((i & 1) == 0)
@@ -370,8 +370,27 @@ public static class CommandBufferBenchmarkScenarioFactory
                 }
             }
         }
+    }
 
-        buffer.Playback(state.World, true);
+    /// <summary>
+    /// Resets the world to empty state and repopulates baseline entities.
+    /// Used to reuse World + CommandBuffer across benchmark iterations.
+    /// </summary>
+    public static void ResetMiniSharedState(MiniSharedCommandBufferState state, CommandBufferBenchmarkScenario scenario)
+    {
+        state.World.Reset(0);
+        if (scenario is not CommandBufferBenchmarkScenario.CreateHeavy)
+        {
+            CreateMiniBaselineEntities(state.World, state.ExistingEntities);
+        }
+    }
+
+    private static void CreateMiniBaselineEntities(MiniWorld world, MiniEntity[] entities)
+    {
+        for (var i = 0; i < entities.Length; i++)
+        {
+            entities[i] = world.Create(new BenchmarkPosition(i, i + 1), new BenchmarkVelocity(i + 2, i + 3), new BenchmarkHealth(100 + i));
+        }
     }
 
     private static MiniEntity[] CreateMiniBaselineEntities(MiniWorld world, int entityCount)

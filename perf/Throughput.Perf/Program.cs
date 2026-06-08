@@ -1,8 +1,9 @@
 using System.Diagnostics;
-using Arch.Core;
-using MiniArch.Core;
+using ArchWorld = Arch.Core.World;
+using ArchQueryDescription = Arch.Core.QueryDescription;
+using MiniArch;
 using MiniArchBenchmarks;
-using MiniQuery = MiniArch.Core.Query;
+using MiniQuery = MiniArch.Query;
 
 const int entityCount = 100_000;
 const int warmup = 3;
@@ -23,7 +24,7 @@ static int MiniNarrowEach(MiniQuery q)
     return s;
 }
 
-static int ArchNarrowRead(World w, QueryDescription d)
+static int ArchNarrowRead(ArchWorld w, ArchQueryDescription d)
 {
     var s = 0;
     var q = w.Query(in d);
@@ -50,7 +51,7 @@ static int MiniWideEach(MiniQuery q)
     return s;
 }
 
-static int ArchWideRead(World w, QueryDescription d)
+static int ArchWideRead(ArchWorld w, ArchQueryDescription d)
 {
     var s = 0;
     var q = w.Query(in d);
@@ -104,7 +105,7 @@ static int MiniWideWriteManual(MiniQuery q)
     return s;
 }
 
-static int ArchWideWrite(World w, QueryDescription d)
+static int ArchWideWrite(ArchWorld w, ArchQueryDescription d)
 {
     var s = 0;
     var q = w.Query(in d);
@@ -141,7 +142,8 @@ Console.WriteLine("\n--- Narrow read (Position + Velocity) ---");
 Console.WriteLine();
 var nm = BenchmarkWorldFactory.CreateMiniComplexQueryWorld(entityCount);
 var na = BenchmarkWorldFactory.CreateArchComplexQueryWorld(entityCount);
-Run("  MiniArch EachSpan",  () => MiniNarrowEach(nm.WithAllQuery));
+var nmQ = nm.World.Query(new QueryDescription().With<Position>().With<Velocity>());
+Run("  MiniArch EachSpan",  () => MiniNarrowEach(nmQ));
 Run("  Arch GetSpan",       () => ArchNarrowRead(na.World, na.WithAllDescription));
 
 Console.WriteLine();
@@ -149,7 +151,8 @@ Console.WriteLine("--- Wide read (Position+Velocity+Health+Team+Acceleration+Man
 Console.WriteLine();
 var wm = BenchmarkWorldFactory.CreateMiniWideQueryWorld(entityCount);
 var wa = BenchmarkWorldFactory.CreateArchWideQueryWorld(entityCount);
-Run("  MiniArch EachSpan read",  () => MiniWideEach(wm.WideQuery));
+var wmQ = wm.World.Query(new QueryDescription().With<Position>().With<Velocity>().With<Health>().With<Team>().With<Acceleration>().With<Mana>());
+Run("  MiniArch EachSpan read",  () => MiniWideEach(wmQ));
 Run("  Arch GetSpan read",       () => ArchWideRead(wa.World, wa.WideDescription));
 
 Console.WriteLine();
@@ -157,8 +160,9 @@ Console.WriteLine("--- Wide write (Position.X += Vel.Y, Health -= 1, Mana += 2) 
 Console.WriteLine();
 var wm2 = BenchmarkWorldFactory.CreateMiniWideQueryWorld(entityCount);
 var wa2 = BenchmarkWorldFactory.CreateArchWideQueryWorld(entityCount);
-Run("  MiniArch EachSpan write", () => MiniWideWrite(wm2.WideQuery));
-Run("  MiniArch manual chunk write", () => MiniWideWriteManual(wm2.WideQuery));
+var wm2Q = wm2.World.Query(new QueryDescription().With<Position>().With<Velocity>().With<Health>().With<Team>().With<Acceleration>().With<Mana>());
+Run("  MiniArch EachSpan write", () => MiniWideWrite(wm2Q));
+Run("  MiniArch manual chunk write", () => MiniWideWriteManual(wm2Q));
 Run("  Arch GetSpan write",      () => ArchWideWrite(wa2.World, wa2.WideDescription));
 
 na.Dispose();
