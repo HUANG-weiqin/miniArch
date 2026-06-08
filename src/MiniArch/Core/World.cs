@@ -1815,6 +1815,7 @@ public sealed class World : IDisposable
     internal unsafe void MaterializeReservedEntityFast(
         Entity entity,
         Archetype archetype,
+        ComponentType[] componentTypes,
         ReadOnlySpan<CommandBuffer.CreatedComponent> components,
         List<byte[]> slabs)
     {
@@ -1826,7 +1827,7 @@ public sealed class World : IDisposable
         for (var index = 0; index < components.Length; index++)
         {
             ref readonly var cc = ref components[index];
-            var columnIndex = archetype.GetComponentIndex(cc.ComponentType);
+            var columnIndex = archetype.GetComponentIndex(componentTypes[index]);
             var data = slabs[cc.SlabIndex];
             fixed (byte* ptr = data)
             {

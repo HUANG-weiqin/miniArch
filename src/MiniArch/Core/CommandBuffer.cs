@@ -131,14 +131,14 @@ public sealed class CommandBuffer
             if (createdIdx >= 0)
             {
                 ref var state = ref _createdStatePool[createdIdx];
-                state.Map.Set(componentTypeId, new CreatedComponent(info.ComponentType, slabIndex, offset, info.Size), ref _createdOverflow);
+                state.Map.Set(componentTypeId, new CreatedComponent(slabIndex, offset, info.Size), ref _createdOverflow);
                 return;
             }
         }
 
         var opsIdx = GetOrCreateOpsIndex(entity);
         ref var ops = ref _opsPool[opsIdx];
-        var slot = new EntityOpSlot { ComponentTypeId = componentTypeId, Kind = OpKindAdd, AddSetData = new AddSetEntry(info.ComponentType, slabIndex, offset, info.Size) };
+        var slot = new EntityOpSlot { Kind = OpKindAdd, ComponentType = info.ComponentType, SlabIndex = slabIndex, DataOffset = offset, DataSize = info.Size };
         ops.Set(componentTypeId, slot, ref _opsOverflow);
     }
 
@@ -157,14 +157,14 @@ public sealed class CommandBuffer
             if (createdIdx >= 0)
             {
                 ref var state = ref _createdStatePool[createdIdx];
-                state.Map.Set(componentTypeId, new CreatedComponent(info.ComponentType, slabIndex, offset, info.Size), ref _createdOverflow);
+                state.Map.Set(componentTypeId, new CreatedComponent(slabIndex, offset, info.Size), ref _createdOverflow);
                 return;
             }
         }
 
         var opsIdx = GetOrCreateOpsIndex(entity);
         ref var ops = ref _opsPool[opsIdx];
-        var slot = new EntityOpSlot { ComponentTypeId = componentTypeId, Kind = OpKindSet, AddSetData = new AddSetEntry(info.ComponentType, slabIndex, offset, info.Size) };
+        var slot = new EntityOpSlot { Kind = OpKindSet, ComponentType = info.ComponentType, SlabIndex = slabIndex, DataOffset = offset, DataSize = info.Size };
         ops.Set(componentTypeId, slot, ref _opsOverflow);
     }
 
@@ -189,7 +189,7 @@ public sealed class CommandBuffer
         var opsIdx = GetOrCreateOpsIndex(entity);
         ref var ops = ref _opsPool[opsIdx];
         var info = ResolveTypeInfo(componentTypeId);
-        var slot = new EntityOpSlot { ComponentTypeId = componentTypeId, Kind = OpKindRemove, RemoveComponentType = info.ComponentType };
+        var slot = new EntityOpSlot { Kind = OpKindRemove, ComponentType = info.ComponentType };
         ops.Set(componentTypeId, slot, ref _opsOverflow);
     }
 
@@ -295,7 +295,7 @@ public sealed class CommandBuffer
             ref var state = ref _createdStatePool[createdIdx];
             var info = ResolveTypeInfo(componentTypeId);
             CopyComponentFromArchetype(archetype, i, sourceRow, info.Size, out var slabIndex, out var offset);
-            state.Map.Set(componentTypeId, new CreatedComponent(info.ComponentType, slabIndex, offset, info.Size), ref _createdOverflow);
+            state.Map.Set(componentTypeId, new CreatedComponent(slabIndex, offset, info.Size), ref _createdOverflow);
         }
     }
 
@@ -439,8 +439,8 @@ public sealed class CommandBuffer
             }
             else
             {
-                var (archetype, count) = BuildCreatedEntityComponents(in state, out var sources);
-                _world.MaterializeReservedEntityFast(entity, archetype,
+                var (archetype, count, types) = BuildCreatedEntityComponents(in state, out var sources);
+                _world.MaterializeReservedEntityFast(entity, archetype, types,
                     new ReadOnlySpan<CreatedComponent>(sources, 0, count),
                     _slabs);
             }
@@ -606,7 +606,7 @@ public sealed class CommandBuffer
                     for (var j = 0; j < componentCount; j++)
                     {
                         sourceComponents[j] = _tempComponents[j].Component;
-                        components[j] = _tempComponents[j].Component.ComponentType;
+                        components[j] = (ComponentType)_tempComponents[j].ComponentTypeId;
                     }
 
                     Array.Sort(components, sourceComponents, 0, componentCount);
@@ -624,7 +624,7 @@ public sealed class CommandBuffer
                     for (var j = 0; j < componentCount; j++)
                     {
                         var sc = sourceComponents[j];
-                        rawComponents[j] = new RawComponentValue(sc.ComponentType, frozen.Slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
+                        rawComponents[j] = new RawComponentValue(components[j], frozen.Slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
                     }
 
                     _world.MaterializeReservedEntityDirect(entity, archetype, rawComponents.AsSpan(0, componentCount));
@@ -769,15 +769,14 @@ public sealed class CommandBuffer
         var sources = ArrayPool<CreatedComponent>.Shared.Rent(count);
 
         var idx = 0;
-        if (state.Map.Count >= 1) { sources[idx] = state.Map.Value0; types[idx] = state.Map.Value0.ComponentType; idx++; }
-        if (state.Map.Count >= 2) { sources[idx] = state.Map.Value1; types[idx] = state.Map.Value1.ComponentType; idx++; }
-        if (state.Map.Count >= 3) { sources[idx] = state.Map.Value2; types[idx] = state.Map.Value2.ComponentType; idx++; }
-        if (state.Map.Count >= 4) { sources[idx] = state.Map.Value3; types[idx] = state.Map.Value3.ComponentType; idx++; }
+        if (state.Map.Count >= 1) { sources[idx] = state.Map.Value0; types[idx] = (ComponentType)state.Map.Key0; idx++; }
+        if (state.Map.Count >= 2) { sources[idx] = state.Map.Value1; types[idx] = (ComponentType)state.Map.Key1; idx++; }
+        if (state.Map.Count >= 3) { sources[idx] = state.Map.Value2; types[idx] = (ComponentType)state.Map.Key2; idx++; }
+        if (state.Map.Count >= 4) { sources[idx] = state.Map.Value3; types[idx] = (ComponentType)state.Map.Key3; idx++; }
         for (var nodeIdx = state.Map.OverflowHead; nodeIdx >= 0; nodeIdx = pool.GetNext(nodeIdx))
         {
-            var val = pool.GetValueReadonly(nodeIdx);
-            sources[idx] = val;
-            types[idx] = val.ComponentType;
+            sources[idx] = pool.GetValueReadonly(nodeIdx);
+            types[idx] = (ComponentType)pool.GetKeyReadonly(nodeIdx);
             idx++;
         }
 
@@ -829,7 +828,7 @@ public sealed class CommandBuffer
             for (var i = 0; i < count; i++)
             {
                 var sc = sources[i];
-                rawComponents[i] = new RawComponentValue(sc.ComponentType, slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
+                rawComponents[i] = new RawComponentValue(types[i], slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
             }
             return rawComponents;
         }
@@ -846,13 +845,10 @@ public sealed class CommandBuffer
         {
             case OpKindAdd:
             case OpKindSet:
-            {
-                var d = slot.AddSetData;
-                world.ApplyRawAddOrSet(entity, d.ComponentType, slabs[d.SlabIndex], d.DataOffset);
+                world.ApplyRawAddOrSet(entity, slot.ComponentType, slabs[slot.SlabIndex], slot.DataOffset);
                 break;
-            }
             case OpKindRemove:
-                world.RemoveBoxed(entity, slot.RemoveComponentType);
+                world.RemoveBoxed(entity, slot.ComponentType);
                 break;
         }
     }
@@ -865,18 +861,18 @@ public sealed class CommandBuffer
         switch (slot.Kind)
         {
             case OpKindAdd:
-                delta.AddCommands.Add(new RawComponentCommand(entity, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, slabs[slot.AddSetData.SlabIndex]));
+                delta.AddCommands.Add(new RawComponentCommand(entity, slot.ComponentType, slot.DataOffset, slot.DataSize, slabs[slot.SlabIndex]));
                 break;
             case OpKindSet:
-                delta.SetCommands.Add(new RawComponentCommand(entity, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, slabs[slot.AddSetData.SlabIndex]));
+                delta.SetCommands.Add(new RawComponentCommand(entity, slot.ComponentType, slot.DataOffset, slot.DataSize, slabs[slot.SlabIndex]));
                 break;
             case OpKindRemove:
-                delta.RemoveCommands.Add(new RawRemoveCommand(entity, slot.RemoveComponentType));
+                delta.RemoveCommands.Add(new RawRemoveCommand(entity, slot.ComponentType));
                 break;
         }
     }
 
-    private (Archetype Archetype, int Count) BuildCreatedEntityComponents(in CreatedState state, out CreatedComponent[] sources)
+    private (Archetype Archetype, int Count, ComponentType[] Types) BuildCreatedEntityComponents(in CreatedState state, out CreatedComponent[] sources)
     {
         EnsureArchetypeCacheValid();
 
@@ -894,15 +890,14 @@ public sealed class CommandBuffer
         }
 
         var idx = 0;
-        if (state.Map.Count >= 1) { sources![idx] = state.Map.Value0; types![idx] = state.Map.Value0.ComponentType; idx++; }
-        if (state.Map.Count >= 2) { sources[idx] = state.Map.Value1; types[idx] = state.Map.Value1.ComponentType; idx++; }
-        if (state.Map.Count >= 3) { sources[idx] = state.Map.Value2; types[idx] = state.Map.Value2.ComponentType; idx++; }
-        if (state.Map.Count >= 4) { sources[idx] = state.Map.Value3; types[idx] = state.Map.Value3.ComponentType; idx++; }
+        if (state.Map.Count >= 1) { sources![idx] = state.Map.Value0; types![idx] = (ComponentType)state.Map.Key0; idx++; }
+        if (state.Map.Count >= 2) { sources[idx] = state.Map.Value1; types[idx] = (ComponentType)state.Map.Key1; idx++; }
+        if (state.Map.Count >= 3) { sources[idx] = state.Map.Value2; types[idx] = (ComponentType)state.Map.Key2; idx++; }
+        if (state.Map.Count >= 4) { sources[idx] = state.Map.Value3; types[idx] = (ComponentType)state.Map.Key3; idx++; }
         for (var nodeIdx = state.Map.OverflowHead; nodeIdx >= 0; nodeIdx = _createdOverflow.GetNext(nodeIdx))
         {
-            var val = _createdOverflow.GetValueReadonly(nodeIdx);
-            sources![idx] = val;
-            types![idx] = val.ComponentType;
+            sources![idx] = _createdOverflow.GetValueReadonly(nodeIdx);
+            types![idx] = (ComponentType)_createdOverflow.GetKeyReadonly(nodeIdx);
             idx++;
         }
 
@@ -922,7 +917,7 @@ public sealed class CommandBuffer
         }
     ArchetypeResolved:
 
-        return (archetype, idx);
+        return (archetype, idx, types!);
     }
 
     /// <summary>
@@ -1010,7 +1005,7 @@ public sealed class CommandBuffer
             for (var i = 0; i < count; i++)
             {
                 var sc = sources[i];
-                rawComponents[i] = new RawComponentValue(sc.ComponentType, _slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
+                rawComponents[i] = new RawComponentValue(types[i], _slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
             }
             return rawComponents;
         }
@@ -1250,13 +1245,13 @@ public sealed class CommandBuffer
         switch (slot.Kind)
         {
             case OpKindAdd:
-                delta.AddCommands.Add(new RawComponentCommand(entity, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, _slabs[slot.AddSetData.SlabIndex]));
+                delta.AddCommands.Add(new RawComponentCommand(entity, slot.ComponentType, slot.DataOffset, slot.DataSize, _slabs[slot.SlabIndex]));
                 break;
             case OpKindSet:
-                delta.SetCommands.Add(new RawComponentCommand(entity, slot.AddSetData.ComponentType, slot.AddSetData.DataOffset, slot.AddSetData.DataSize, _slabs[slot.AddSetData.SlabIndex]));
+                delta.SetCommands.Add(new RawComponentCommand(entity, slot.ComponentType, slot.DataOffset, slot.DataSize, _slabs[slot.SlabIndex]));
                 break;
             case OpKindRemove:
-                delta.RemoveCommands.Add(new RawRemoveCommand(entity, slot.RemoveComponentType));
+                delta.RemoveCommands.Add(new RawRemoveCommand(entity, slot.ComponentType));
                 break;
         }
     }
@@ -1268,13 +1263,10 @@ public sealed class CommandBuffer
         {
             case OpKindAdd:
             case OpKindSet:
-            {
-                var d = slot.AddSetData;
-                _world.ApplyRawAddOrSet(entity, d.ComponentType, _slabs[d.SlabIndex], d.DataOffset);
+                _world.ApplyRawAddOrSet(entity, slot.ComponentType, _slabs[slot.SlabIndex], slot.DataOffset);
                 break;
-            }
             case OpKindRemove:
-                _world.RemoveBoxed(entity, slot.RemoveComponentType);
+                _world.RemoveBoxed(entity, slot.ComponentType);
                 break;
         }
     }
@@ -1330,31 +1322,16 @@ public sealed class CommandBuffer
 
     private struct EntityOpSlot
     {
-        public int ComponentTypeId;
         public byte Kind;
-        public AddSetEntry AddSetData;
-        public ComponentType RemoveComponentType;
+        public ComponentType ComponentType;
+        public int SlabIndex;
+        public int DataOffset;
+        public int DataSize;
     }
 
     private readonly record struct HierarchyIntent(bool IsLinked, Entity Parent);
 
     private readonly record struct CloneChildWork(Entity CloneParent, Entity SourceChild);
-
-    private struct AddSetEntry
-    {
-        public ComponentType ComponentType;
-        public int SlabIndex;
-        public int DataOffset;
-        public int DataSize;
-
-        public AddSetEntry(ComponentType componentType, int slabIndex, int dataOffset, int dataSize)
-        {
-            ComponentType = componentType;
-            SlabIndex = slabIndex;
-            DataOffset = dataOffset;
-            DataSize = dataSize;
-        }
-    }
 
     private struct CreatedState
     {
@@ -1362,7 +1339,7 @@ public sealed class CommandBuffer
         public bool Destroyed;
     }
 
-    internal readonly record struct CreatedComponent(ComponentType ComponentType, int SlabIndex, int DataOffset, int DataSize);
+    internal readonly record struct CreatedComponent(int SlabIndex, int DataOffset, int DataSize);
 
     private sealed class FrozenBufferState
     {
