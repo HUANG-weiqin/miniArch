@@ -41,7 +41,7 @@ public sealed class CommandBuffer : ICommandRecorder
     // Bounded multi-entry archetype cache: avoids repeated Dictionary lookups and
     // temporary array/Signature allocations for the same component set.
     // 8 slots cover the attack pipeline's 6+ alternating archetypes with room to spare.
-    private const int ArchetypeCacheSize = 8;
+    private const int ArchetypeCacheSize = 4;
     private int _archetypeCacheCount;
     private readonly struct ArchetypeCacheEntry(int hash, int componentCount, Archetype archetype)
     {
