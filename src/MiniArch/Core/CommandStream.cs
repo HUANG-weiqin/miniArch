@@ -24,7 +24,7 @@ public sealed class CommandStream
     private int _lastCreatedIndex = -1;
     private readonly record struct HierarchyIntent(bool IsLinked, Entity Parent);
     private Dictionary<Entity, HierarchyIntent> _hierarchyByChild = new();
-    private const int ArchetypeCacheSize = 4;
+    private const int ArchetypeCacheSize = 16;
     private int _archetypeCacheCount;
     private int _archetypeCacheGeneration = -1;
     private ArchetypeCacheEntry[] _archetypeCache = [];

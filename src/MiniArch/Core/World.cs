@@ -13,6 +13,7 @@ namespace MiniArch;
 public sealed partial class World : IDisposable
 {
     private const int DefaultChunkCapacity = 128;
+
     private readonly Dictionary<Signature, Archetype> _archetypes = new();
     private readonly HierarchyTable _hierarchy = new();
     private EntityRecord[] _records;
