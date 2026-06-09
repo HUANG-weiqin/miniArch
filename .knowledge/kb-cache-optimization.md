@@ -2,7 +2,7 @@
 title: Cache & Memory Optimization Review
 module: MiniArch.Core
 description: Memory layout and cache behavior analysis of the ECS runtime, with optimization opportunities
-updated: 2026-06-09 (P13: CommandBuffer Entity IComparable 去重排序零分配、P14: CommandStream ArchetypeCacheSize 4→16)
+updated: 2026-06-10 (P15: 删除 CommandBuffer/CommandStream 本地 archetype 缓存, World.TryGetArchetype 零分配集合查找)
 ---
 # Cache & Memory Optimization Review
 
@@ -17,6 +17,8 @@ MiniArch 的迭代热路径已经高度优化（pointer-bump、SoA、自适应 c
 4. NativeMemory + 64B alignment（高天花板，但单独替换 `byte[]` 不保证收益）
 5. MigrationPlan 小优化
 6. Empty chunk active list（条件执行）
+
+已完成的优化（P0-P15）涵盖：EntityRecord 合并、edge cache 改 bounded LRU、CopySmall 2-byte fast path、ThreadStatic buffer 复用、公共 API AggressiveInlining、Entity IComparable 去重、**本地 archetype 缓存删除**。
 
 完整实验计划见 `docs/plans/2026-06-06-world-data-structure-optimization-experiments.md`。
 
@@ -154,6 +156,20 @@ struct EntityRecord {
 **Fix**：`ArchetypeCacheSize` 4 → 16。16 槽足够容纳所有稳态原型组合（实际 <10 种），cache miss 归零。
 
 **影响文件**：`CommandStream.cs`
+
+## P15: 删除本地 archetype 缓存，改用 World.TryGetArchetype ✅ 已修复 (2026-06-10)
+
+**问题**：P14 扩大缓存只是补丁——CommandBuffer 和 CommandStream 各自维护本地 LRU 缓存，镜像了 World 中已经存在的 archetype 状态。缓存 miss 时仍然走 `new ComponentType[n]` 分配。
+
+**Fix**：
+- `World.TryGetArchetype(ReadOnlySpan<ComponentType>)`：零分配线性扫描，用 `Signature.Contains` 做顺序无关的集合比较。archetype 总数始终很小（< 50），扫描成本可忽略。
+- `CommandStream.ResolveArchetypeForSpan`：`stackalloc` 类型到栈上，调用 `TryGetArchetype`，消除 `new ComponentType[]` 分配。
+- `CommandBuffer.BuildCreatedEntityComponents`：复用 ThreadStatic buffer，调用 `TryGetArchetype`。
+- **删除**：多槽缓存字段、`ArchetypeCacheEntry`、`ComputeComponentHash`、`LookupArchetypeCache`、`InsertArchetypeCache`、`EnsureArchetypeCacheValid`、`World.CreateArchetypeCacheGeneration` 属性。
+
+**影响文件**：`World.cs`, `CommandStream.cs`, `CommandBuffer.cs`（净 -107 行）
+
+**注意**：不要对 archetype 快照排序——Query 的 `AppendNewArchetypes` 依赖追加式语义。
 
 ## 认知模型
 
