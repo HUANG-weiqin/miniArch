@@ -17,13 +17,18 @@ public sealed class CommandBuffer
     private Entity[] _opsEntityByPoolIndex = Array.Empty<Entity>();
     private int _opsPoolCount;
     private int[] _opsLookup = Array.Empty<int>();
+    private int[] _opsTouchedIds = Array.Empty<int>();
+    private int _opsTouchedIdCount;
     private int _maxOpsEntityId;
     private Entity[] _existingDestroyEntities = [];
     private int _existingDestroyCount;
+    private bool _existingDestroySorted = true;
     private CreatedState[] _createdStatePool = Array.Empty<CreatedState>();
     private Entity[] _createdEntityByPoolIndex = Array.Empty<Entity>();
     private int _createdStatePoolCount;
     private int[] _createdStateLookup = Array.Empty<int>();
+    private int[] _createdStateTouchedIds = Array.Empty<int>();
+    private int _createdStateTouchedIdCount;
     private int _maxCreatedEntityId;
     private Dictionary<Entity, HierarchyIntent> _hierarchyByChild = new();
     private (ComponentType ComponentType, int Size)[] _typeInfoCache = [];
@@ -105,6 +110,7 @@ public sealed class CommandBuffer
         }
 
         _createdStateLookup[entity.Id] = index;
+        AddTouchedId(ref _createdStateTouchedIds, ref _createdStateTouchedIdCount, entity.Id);
         if (entity.Id >= _maxCreatedEntityId) _maxCreatedEntityId = entity.Id + 1;
         _hasCreatedEntities = true;
     }
@@ -121,9 +127,8 @@ public sealed class CommandBuffer
     /// </summary>
     public void Add<T>(Entity entity, T component)
     {
-        var componentTypeId = GetComponentTypeId<T>();
-        var info = ResolveTypeInfo(componentTypeId);
-        CopyData(component, info.Size, out var slabIndex, out var offset);
+        var componentTypeId = CommandTypeInfo<T>.Id;
+        CopyData(component, CommandTypeInfo<T>.Size, out var slabIndex, out var offset);
 
         if (_hasCreatedEntities)
         {
@@ -131,14 +136,14 @@ public sealed class CommandBuffer
             if (createdIdx >= 0)
             {
                 ref var state = ref _createdStatePool[createdIdx];
-                state.Map.Set(componentTypeId, new CreatedComponent(slabIndex, offset, info.Size), ref _createdOverflow);
+                state.Map.Set(componentTypeId, new CreatedComponent(slabIndex, offset, CommandTypeInfo<T>.Size), ref _createdOverflow);
                 return;
             }
         }
 
         var opsIdx = GetOrCreateOpsIndex(entity);
         ref var ops = ref _opsPool[opsIdx];
-        var slot = new EntityOpSlot { Kind = OpKindAdd, ComponentType = info.ComponentType, SlabIndex = slabIndex, DataOffset = offset, DataSize = info.Size };
+        var slot = new EntityOpSlot { Kind = OpKindAdd, ComponentType = CommandTypeInfo<T>.Type, SlabIndex = slabIndex, DataOffset = offset, DataSize = CommandTypeInfo<T>.Size };
         ops.Set(componentTypeId, slot, ref _opsOverflow);
     }
 
@@ -147,9 +152,8 @@ public sealed class CommandBuffer
     /// </summary>
     public void Set<T>(Entity entity, T component)
     {
-        var componentTypeId = GetComponentTypeId<T>();
-        var info = ResolveTypeInfo(componentTypeId);
-        CopyData(component, info.Size, out var slabIndex, out var offset);
+        var componentTypeId = CommandTypeInfo<T>.Id;
+        CopyData(component, CommandTypeInfo<T>.Size, out var slabIndex, out var offset);
 
         if (_hasCreatedEntities)
         {
@@ -157,14 +161,14 @@ public sealed class CommandBuffer
             if (createdIdx >= 0)
             {
                 ref var state = ref _createdStatePool[createdIdx];
-                state.Map.Set(componentTypeId, new CreatedComponent(slabIndex, offset, info.Size), ref _createdOverflow);
+                state.Map.Set(componentTypeId, new CreatedComponent(slabIndex, offset, CommandTypeInfo<T>.Size), ref _createdOverflow);
                 return;
             }
         }
 
         var opsIdx = GetOrCreateOpsIndex(entity);
         ref var ops = ref _opsPool[opsIdx];
-        var slot = new EntityOpSlot { Kind = OpKindSet, ComponentType = info.ComponentType, SlabIndex = slabIndex, DataOffset = offset, DataSize = info.Size };
+        var slot = new EntityOpSlot { Kind = OpKindSet, ComponentType = CommandTypeInfo<T>.Type, SlabIndex = slabIndex, DataOffset = offset, DataSize = CommandTypeInfo<T>.Size };
         ops.Set(componentTypeId, slot, ref _opsOverflow);
     }
 
@@ -173,7 +177,7 @@ public sealed class CommandBuffer
     /// </summary>
     public void Remove<T>(Entity entity)
     {
-        var componentTypeId = GetComponentTypeId<T>();
+        var componentTypeId = CommandTypeInfo<T>.Id;
 
         if (_hasCreatedEntities)
         {
@@ -188,8 +192,7 @@ public sealed class CommandBuffer
 
         var opsIdx = GetOrCreateOpsIndex(entity);
         ref var ops = ref _opsPool[opsIdx];
-        var info = ResolveTypeInfo(componentTypeId);
-        var slot = new EntityOpSlot { Kind = OpKindRemove, ComponentType = info.ComponentType };
+        var slot = new EntityOpSlot { Kind = OpKindRemove, ComponentType = CommandTypeInfo<T>.Type };
         ops.Set(componentTypeId, slot, ref _opsOverflow);
     }
 
@@ -345,18 +348,14 @@ public sealed class CommandBuffer
 
     private void AddExistingDestroy(Entity entity)
     {
-        var index = FindExistingDestroy(entity);
-        if (index >= 0) return;
-        var insertIndex = ~index;
         if (_existingDestroyCount == _existingDestroyEntities.Length)
         {
             var newCapacity = _existingDestroyEntities.Length == 0 ? 4 : _existingDestroyEntities.Length * 2;
             Array.Resize(ref _existingDestroyEntities, newCapacity);
         }
-        if (insertIndex < _existingDestroyCount)
-            Array.Copy(_existingDestroyEntities, insertIndex, _existingDestroyEntities, insertIndex + 1, _existingDestroyCount - insertIndex);
-        _existingDestroyEntities[insertIndex] = entity;
+        _existingDestroyEntities[_existingDestroyCount] = entity;
         _existingDestroyCount++;
+        _existingDestroySorted = false;
     }
 
     private int FindExistingDestroy(Entity entity)
@@ -391,10 +390,56 @@ public sealed class CommandBuffer
         return ~low;
     }
 
+    private void DeduplicateExistingDestroyEntities()
+    {
+        _existingDestroyCount = SortAndDeduplicateExistingDestroyEntities(
+            _existingDestroyEntities,
+            _existingDestroyCount,
+            ref _existingDestroySorted);
+    }
+
+    private static int SortAndDeduplicateExistingDestroyEntities(Entity[] entities, int count, ref bool sorted)
+    {
+        if (count <= 1)
+        {
+            sorted = true;
+            return count;
+        }
+
+        if (!sorted)
+        {
+            Array.Sort(entities, 0, count, EntityDestroyComparer.Instance);
+            sorted = true;
+        }
+
+        var write = 1;
+        var previous = entities[0];
+        for (var read = 1; read < count; read++)
+        {
+            var current = entities[read];
+            if (CompareEntity(previous, current) == 0)
+            {
+                continue;
+            }
+
+            entities[write++] = current;
+            previous = current;
+        }
+
+        return write;
+    }
+
     private static int CompareEntity(Entity left, Entity right)
     {
         var idComparison = left.Id.CompareTo(right.Id);
         return idComparison != 0 ? idComparison : left.Version.CompareTo(right.Version);
+    }
+
+    private sealed class EntityDestroyComparer : IComparer<Entity>
+    {
+        public static readonly EntityDestroyComparer Instance = new();
+
+        public int Compare(Entity x, Entity y) => CompareEntity(x, y);
     }
 
     /// <summary>
@@ -459,6 +504,8 @@ public sealed class CommandBuffer
             for (var nodeIdx = existingOps.OverflowHead; nodeIdx >= 0; nodeIdx = _opsOverflow.GetNext(nodeIdx))
                 ApplyOpDirect(_opsOverflow.GetValueReadonly(nodeIdx), entity);
         }
+
+        DeduplicateExistingDestroyEntities();
 
         foreach (var (child, intent) in _hierarchyByChild)
         {
@@ -534,6 +581,8 @@ public sealed class CommandBuffer
 
     private FrozenBufferState SwapOutState()
     {
+        DeduplicateExistingDestroyEntities();
+
         var frozen = new FrozenBufferState
         {
             CreatedStatePool = _createdStatePool,
@@ -557,14 +606,19 @@ public sealed class CommandBuffer
         _createdStatePoolCount = 0;
         _createdEntityByPoolIndex = Array.Empty<Entity>();
         _createdStateLookup = Array.Empty<int>();
+        _createdStateTouchedIds = Array.Empty<int>();
+        _createdStateTouchedIdCount = 0;
         _maxCreatedEntityId = 0;
         _opsPool = Array.Empty<InlineMap<int, EntityOpSlot>>();
         _opsPoolCount = 0;
         _opsEntityByPoolIndex = Array.Empty<Entity>();
         _opsLookup = Array.Empty<int>();
+        _opsTouchedIds = Array.Empty<int>();
+        _opsTouchedIdCount = 0;
         _maxOpsEntityId = 0;
         _existingDestroyCount = 0;
         _existingDestroyEntities = [];
+        _existingDestroySorted = true;
         _hierarchyByChild = new Dictionary<Entity, HierarchyIntent>();
         _slabs = new List<byte[]>();
         _hasCreatedEntities = false;
@@ -1016,6 +1070,8 @@ public sealed class CommandBuffer
 
     private void BuildDelta(FrameDelta delta)
     {
+        DeduplicateExistingDestroyEntities();
+
         var releasedCount = 0;
         var createdCount = 0;
         for (var i = 0; i < _createdStatePoolCount; i++)
@@ -1120,36 +1176,33 @@ public sealed class CommandBuffer
         {
             _opsPool[i].Clear();
         }
-        for (int i = 0; i < _maxOpsEntityId; i++)
+        for (int i = 0; i < _opsTouchedIdCount; i++)
         {
-            if (i < _opsLookup.Length) _opsLookup[i] = -1;
+            _opsLookup[_opsTouchedIds[i]] = -1;
         }
         _opsPoolCount = 0;
+        _opsTouchedIdCount = 0;
         _maxOpsEntityId = 0;
         for (int i = 0; i < _createdStatePoolCount; i++)
         {
             _createdStatePool[i].Map.Clear();
         }
 
-        for (int i = 0; i < _maxCreatedEntityId; i++)
+        for (int i = 0; i < _createdStateTouchedIdCount; i++)
         {
-            if (i < _createdStateLookup.Length) _createdStateLookup[i] = -1;
+            _createdStateLookup[_createdStateTouchedIds[i]] = -1;
         }
 
         _createdStatePoolCount = 0;
+        _createdStateTouchedIdCount = 0;
         _maxCreatedEntityId = 0;
         _hierarchyByChild.Clear();
         _hasCreatedEntities = false;
         _opsOverflow.Clear();
         _createdOverflow.Clear();
+        _existingDestroySorted = true;
 
-        foreach (var slab in _slabs)
-        {
-            ArrayPool<byte>.Shared.Return(slab);
-        }
-
-        _slabs.Clear();
-        _currentSlabIndex = -1;
+        _currentSlabIndex = _slabs.Count == 0 ? -1 : 0;
         _currentSlabOffset = 0;
     }
 
@@ -1158,10 +1211,18 @@ public sealed class CommandBuffer
     {
         if (_currentSlabIndex < 0 || _currentSlabOffset + size > _slabs[_currentSlabIndex].Length)
         {
-            var slabSize = size > DefaultSlabSize ? size : DefaultSlabSize;
-            var newSlab = ArrayPool<byte>.Shared.Rent(slabSize);
-            _slabs.Add(newSlab);
-            _currentSlabIndex = _slabs.Count - 1;
+            var nextIndex = _currentSlabIndex + 1;
+            if ((uint)nextIndex < (uint)_slabs.Count && _slabs[nextIndex].Length >= size)
+            {
+                _currentSlabIndex = nextIndex;
+            }
+            else
+            {
+                var slabSize = size > DefaultSlabSize ? size : DefaultSlabSize;
+                var newSlab = ArrayPool<byte>.Shared.Rent(slabSize);
+                _slabs.Add(newSlab);
+                _currentSlabIndex = _slabs.Count - 1;
+            }
             _currentSlabOffset = 0;
         }
     }
@@ -1228,10 +1289,22 @@ public sealed class CommandBuffer
         return info;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private int GetComponentTypeId<T>()
+    private static class CommandTypeInfo<T>
     {
-        return Component<T>.ComponentType.Value;
+        public static readonly ComponentType Type = Component<T>.ComponentType;
+        public static readonly int Id = Type.Value;
+        public static readonly int Size = Unsafe.SizeOf<T>();
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void AddTouchedId(ref int[] ids, ref int count, int id)
+    {
+        if ((uint)count >= (uint)ids.Length)
+        {
+            Array.Resize(ref ids, ids.Length == 0 ? 64 : ids.Length * 2);
+        }
+
+        ids[count++] = id;
     }
 
     private const byte OpKindAdd = 1;
@@ -1315,6 +1388,7 @@ public sealed class CommandBuffer
         _opsPool[index].OverflowHead = -1;
         _opsEntityByPoolIndex[index] = entity;
         _opsLookup[id] = index;
+        AddTouchedId(ref _opsTouchedIds, ref _opsTouchedIdCount, id);
         if (id >= _maxOpsEntityId) _maxOpsEntityId = id + 1;
         return index;
     }

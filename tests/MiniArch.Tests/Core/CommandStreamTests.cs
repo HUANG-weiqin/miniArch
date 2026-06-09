@@ -103,4 +103,190 @@ public sealed class CommandStreamTests
 
         Assert.False(stream.Submit());
     }
+
+    [Fact]
+    public void Link_and_Unlink_apply_hierarchy_changes()
+    {
+        var world = new World();
+        var parent = world.Create();
+        var child = world.Create();
+        var stream = new CommandStream(world);
+
+        stream.Link(parent, child);
+        Assert.True(stream.Submit());
+
+        Assert.True(world.TryGetParent(child, out var p));
+        Assert.Equal(parent, p);
+
+        stream.Unlink(child);
+        Assert.True(stream.Submit());
+        Assert.False(world.TryGetParent(child, out _));
+    }
+
+    [Fact]
+    public void Link_skipped_for_destroyed_existing_entity()
+    {
+        var world = new World();
+        var parent = world.Create();
+        var child = world.Create(new Position(1, 2));
+        var stream = new CommandStream(world);
+
+        stream.Link(parent, child);
+        stream.Destroy(child);
+        Assert.True(stream.Submit());
+
+        Assert.False(world.IsAlive(child));
+        // Parent should have no children since child was destroyed before link applied
+    }
+
+    [Fact]
+    public void Clone_copies_all_components_to_created_entity()
+    {
+        var world = new World();
+        var entity = world.Create(new Position(1, 2), new Velocity(3, 4));
+        var stream = new CommandStream(world);
+
+        var clone = stream.Clone(entity);
+        Assert.True(stream.Submit());
+
+        Assert.True(world.IsAlive(clone));
+        Assert.True(world.TryGet(clone, out Position p));
+        Assert.Equal(new Position(1, 2), p);
+        Assert.True(world.TryGet(clone, out Velocity v));
+        Assert.Equal(new Velocity(3, 4), v);
+
+        // Source unchanged
+        Assert.True(world.TryGet(entity, out Position sp));
+        Assert.Equal(new Position(1, 2), sp);
+    }
+
+    [Fact]
+    public void Clone_deep_copies_children_hierarchy()
+    {
+        var world = new World();
+        var parent = world.Create(new Position(1, 2));
+        var child1 = world.Create(new Velocity(3, 4));
+        var child2 = world.Create(new Health(100));
+        world.Link(parent, child1);
+        world.Link(parent, child2);
+
+        var stream = new CommandStream(world);
+        var clone = stream.Clone(parent);
+        Assert.True(stream.Submit());
+
+        Assert.True(world.IsAlive(clone));
+        Assert.True(world.TryGet(clone, out Position p));
+        Assert.Equal(new Position(1, 2), p);
+
+        // Clone should have children
+        var cloneChildren = new List<Entity>();
+        foreach (var c in world.Hierarchy.EnumerateChildren(world, clone))
+        {
+            cloneChildren.Add(c);
+        }
+        Assert.Equal(2, cloneChildren.Count);
+    }
+
+    [Fact]
+    public void Clone_snapshot_builds_replayable_delta()
+    {
+        var world = new World();
+        var entity = world.Create(new Position(1, 2), new Velocity(3, 4));
+        var stream = new CommandStream(world);
+
+        var clone = stream.Clone(entity);
+        var delta = stream.Snapshot();
+
+        // Clone not yet materialized
+        Assert.False(world.IsAlive(clone));
+
+        // Replay into replica
+        var replica = new World();
+        var replicaEntity = replica.Create(new Position(1, 2), new Velocity(3, 4));
+        replica.Replay(delta);
+
+        Assert.True(replica.IsAlive(clone));
+        Assert.True(replica.TryGet(clone, out Position p));
+        Assert.Equal(new Position(1, 2), p);
+        Assert.True(replica.TryGet(clone, out Velocity v));
+        Assert.Equal(new Velocity(3, 4), v);
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotAsync_submits_and_returns_delta()
+    {
+        var world = new World();
+        var existing = world.Create(new Position(0, 0));
+        var stream = new CommandStream(world);
+
+        var created = stream.Create();
+        stream.Add(created, new Position(1, 2));
+        stream.Set(existing, new Position(3, 4));
+
+        var delta = await stream.SubmitAndSnapshotAsync();
+
+        // Changes applied to world
+        Assert.True(world.IsAlive(created));
+        Assert.True(world.TryGet(created, out Position p1));
+        Assert.Equal(new Position(1, 2), p1);
+        Assert.True(world.TryGet(existing, out Position p2));
+        Assert.Equal(new Position(3, 4), p2);
+
+        // Delta is replayable
+        var replica = new World();
+        var replicaExisting = replica.Create(new Position(0, 0));
+        replica.Replay(delta);
+
+        Assert.True(replica.IsAlive(created));
+        Assert.True(replica.TryGet(existing, out Position rp));
+        Assert.Equal(new Position(3, 4), rp);
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotAsync_returns_empty_for_empty_stream()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+
+        var delta = await stream.SubmitAndSnapshotAsync();
+        Assert.Empty(delta.CreatedEntities);
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotAsync_stream_reusable_after_call()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+
+        stream.Create();
+        await stream.SubmitAndSnapshotAsync();
+
+        // Should be able to use stream again
+        var e = stream.Create();
+        stream.Add(e, new Position(5, 6));
+        await stream.SubmitAndSnapshotAsync();
+
+        Assert.True(world.IsAlive(e));
+        Assert.True(world.TryGet(e, out Position p));
+        Assert.Equal(new Position(5, 6), p);
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotAsync_includes_hierarchy_in_delta()
+    {
+        var world = new World();
+        var parent = world.Create();
+        var child = world.Create();
+        var stream = new CommandStream(world);
+
+        stream.Link(parent, child);
+        var delta = await stream.SubmitAndSnapshotAsync();
+
+        // Verify link was applied
+        Assert.True(world.TryGetParent(child, out var p));
+        Assert.Equal(parent, p);
+
+        // Verify delta contains link command (need to check internal structure)
+        Assert.NotEmpty(delta.LinkCommands);
+    }
 }

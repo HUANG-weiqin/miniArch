@@ -22,6 +22,8 @@ public sealed class CommandStream
     private int _maxCreatedEntityId;
     private Entity _lastCreatedEntity;
     private int _lastCreatedIndex = -1;
+    private readonly record struct HierarchyIntent(bool IsLinked, Entity Parent);
+    private Dictionary<Entity, HierarchyIntent> _hierarchyByChild = new();
     private const int ArchetypeCacheSize = 4;
     private int _archetypeCacheCount;
     private int _archetypeCacheGeneration = -1;
@@ -85,9 +87,117 @@ public sealed class CommandStream
         Append(new StreamEntry(StreamOpKind.Destroy, entity, default, -1, 0, 0));
     }
 
+    /// <summary>
+    /// Records a parent link.
+    /// </summary>
+    public void Link(Entity parent, Entity child)
+    {
+        _hierarchyByChild[child] = new HierarchyIntent(true, parent);
+    }
+
+    /// <summary>
+    /// Records a parent unlink.
+    /// </summary>
+    public void Unlink(Entity child)
+    {
+        _hierarchyByChild[child] = new HierarchyIntent(false, default);
+    }
+
+    /// <summary>
+    /// Clones an existing entity with all its components and children hierarchy.
+    /// </summary>
+    public Entity Clone(Entity source)
+    {
+        if (!_world.TryGetLocation(source, out var location))
+        {
+            throw new InvalidOperationException($"Cannot clone entity {source}: it is no longer alive.");
+        }
+
+        var deferred = Create();
+        SnapshotEntityToCreated(deferred, location);
+        CloneChildrenRecursive(source, deferred);
+        return deferred;
+    }
+
+    private void SnapshotEntityToCreated(Entity deferred, EntityInfo location)
+    {
+        var createdIndex = GetCreatedIndex(deferred);
+        if (createdIndex < 0) return;
+
+        var archetype = location.Archetype;
+        var sourceRow = location.RowIndex;
+        var components = archetype.Signature.AsSpan();
+
+        for (var i = 0; i < components.Length; i++)
+        {
+            var componentType = components[i];
+            var store = GetOrCreateComponentStore(componentType);
+            var dataIndex = store.AppendFromArchetype(archetype, i, sourceRow);
+            var size = ComponentSizeCache.GetSize(ComponentRegistry.Shared.GetType(componentType));
+            AppendCreatedComponent(createdIndex, componentType, store, dataIndex, size);
+        }
+    }
+
+    private void CloneChildrenRecursive(Entity sourceRoot, Entity cloneRoot)
+    {
+        if (!_world.Hierarchy.HasChildren(sourceRoot)) return;
+
+        var stack = ArrayPool<Entity>.Shared.Rent(32);
+        var cloneStack = ArrayPool<Entity>.Shared.Rent(32);
+        var stackCount = 0;
+
+        try
+        {
+            foreach (var child in _world.Hierarchy.EnumerateChildren(_world, sourceRoot))
+            {
+                if (stackCount >= stack.Length)
+                {
+                    Array.Resize(ref stack, stack.Length * 2);
+                    Array.Resize(ref cloneStack, cloneStack.Length * 2);
+                }
+
+                stack[stackCount] = child;
+                cloneStack[stackCount] = cloneRoot;
+                stackCount++;
+            }
+
+            while (stackCount > 0)
+            {
+                stackCount--;
+                var srcChild = stack[stackCount];
+                var cloneParent = cloneStack[stackCount];
+
+                if (!_world.TryGetLocation(srcChild, out var childLocation)) continue;
+
+                var cloneChild = Create();
+                SnapshotEntityToCreated(cloneChild, childLocation);
+                Link(cloneParent, cloneChild);
+
+                foreach (var grandChild in _world.Hierarchy.EnumerateChildren(_world, srcChild))
+                {
+                    if (stackCount >= stack.Length)
+                    {
+                        Array.Resize(ref stack, stack.Length * 2);
+                        Array.Resize(ref cloneStack, cloneStack.Length * 2);
+                    }
+
+                    stack[stackCount] = grandChild;
+                    cloneStack[stackCount] = cloneChild;
+                    stackCount++;
+                }
+            }
+        }
+        finally
+        {
+            ArrayPool<Entity>.Shared.Return(stack);
+            ArrayPool<Entity>.Shared.Return(cloneStack);
+        }
+    }
+
     public bool Submit()
     {
-        if (_entryCount == 0 && _componentCommandCount == 0 && _createdCount == 0)
+        if (_entryCount == 0 && _componentCommandCount == 0 && _createdCount == 0 &&
+            _hierarchyByChild.Count == 0)
         {
             return false;
         }
@@ -97,6 +207,8 @@ public sealed class CommandStream
         {
             MaterializeCreatedEntities(createdDestroyed);
             ApplyExistingEntityCommands();
+            ApplyHierarchy(createdDestroyed);
+            ApplyDestroyEntries();
         }
         finally
         {
@@ -117,6 +229,420 @@ public sealed class CommandStream
         BuildDelta(delta);
         delta.DeepCopyOwnedData();
         return delta;
+    }
+
+    /// <summary>
+    /// Swaps out internal state, submits to world on the calling thread,
+    /// and builds a self-contained FrameDelta on a background thread.
+    /// </summary>
+    public Task<FrameDelta> SubmitAndSnapshotAsync()
+    {
+        if (_entryCount == 0 && _componentCommandCount == 0 && _createdCount == 0 &&
+            _hierarchyByChild.Count == 0)
+        {
+            return Task.FromResult(new FrameDelta());
+        }
+
+        var frozen = SwapOutState();
+        var task = Task.Run(() => BuildFromFrozen(frozen));
+
+        SubmitFromFrozen(frozen);
+
+        return task.ContinueWith(t =>
+        {
+            frozen.HierarchyByChild.Clear();
+            return t.Result.Delta;
+        }, TaskContinuationOptions.ExecuteSynchronously);
+    }
+
+    private FrozenStreamState SwapOutState()
+    {
+        var frozen = new FrozenStreamState
+        {
+            Entries = _entries,
+            EntryCount = _entryCount,
+            ComponentStores = _componentStores,
+            ComponentCommandCount = _componentCommandCount,
+            CreatedEntities = _createdEntities,
+            CreatedCount = _createdCount,
+            CreatedComponentCounts = _createdComponentCounts,
+            CreatedComponents = _createdComponents,
+            CreatedComponentCount = _createdComponentCount,
+            CreatedLookup = _createdLookup,
+            MaxCreatedEntityId = _maxCreatedEntityId,
+            HierarchyByChild = _hierarchyByChild,
+        };
+
+        // Reset self to empty state
+        _entries = [];
+        _entryCount = 0;
+        _componentStores = [];
+        _componentCommandCount = 0;
+        _createdEntities = [];
+        _createdCount = 0;
+        _createdComponentCounts = [];
+        _createdComponents = [];
+        _createdComponentCount = 0;
+        _createdLookup = [];
+        _maxCreatedEntityId = 0;
+        _lastCreatedEntity = default;
+        _lastCreatedIndex = -1;
+        _hierarchyByChild = new Dictionary<Entity, HierarchyIntent>();
+        _archetypeCacheCount = 0;
+
+        return frozen;
+    }
+
+    private void SubmitFromFrozen(FrozenStreamState frozen)
+    {
+        var createdDestroyed = BuildCreatedDestroyedScratch(frozen);
+        try
+        {
+            MaterializeCreatedEntities(frozen, createdDestroyed);
+            ApplyExistingEntityCommands(frozen);
+            ApplyHierarchy(frozen, createdDestroyed);
+            ApplyDestroyEntries(frozen);
+        }
+        finally
+        {
+            if (createdDestroyed.Length > 0)
+            {
+                ArrayPool<bool>.Shared.Return(createdDestroyed);
+            }
+        }
+    }
+
+    private static (FrameDelta Delta, int CopiedBytes) BuildFromFrozen(FrozenStreamState frozen)
+    {
+        var delta = new FrameDelta();
+
+        var createdDestroyed = BuildCreatedDestroyedScratch(frozen);
+        try
+        {
+            delta.ReservedEntities.EnsureCapacity(frozen.CreatedCount);
+            delta.CreatedEntities.EnsureCapacity(frozen.CreatedCount);
+            delta.AddCommands.EnsureCapacity(frozen.ComponentCommandCount);
+            delta.SetCommands.EnsureCapacity(frozen.ComponentCommandCount);
+            delta.DestroyedEntities.EnsureCapacity(frozen.EntryCount);
+
+            for (var i = 0; i < frozen.CreatedCount; i++)
+            {
+                var entity = frozen.CreatedEntities[i];
+                delta.ReservedEntities.Add(entity);
+                if (createdDestroyed.Length > 0 && createdDestroyed[i])
+                {
+                    delta.ReleasedEntities.Add(entity);
+                    continue;
+                }
+
+                delta.CreatedEntities.Add(new RawCreatedEntity(entity, BuildCreatedComponentsForDelta(frozen, i)));
+            }
+
+            for (var i = 0; i < frozen.ComponentStores.Length; i++)
+            {
+                frozen.ComponentStores[i]?.EmitDelta(delta, (ComponentType)i);
+            }
+
+            for (var i = 0; i < frozen.EntryCount; i++)
+            {
+                ref readonly var entry = ref frozen.Entries[i];
+                if (entry.Kind == StreamOpKind.Remove)
+                {
+                    delta.RemoveCommands.Add(new RawRemoveCommand(entry.Entity, entry.ComponentType));
+                }
+                else if (entry.Kind == StreamOpKind.Destroy)
+                {
+                    delta.DestroyedEntities.Add(entry.Entity);
+                }
+            }
+
+            foreach (var (child, intent) in frozen.HierarchyByChild)
+            {
+                if (intent.IsLinked)
+                {
+                    delta.LinkCommands.Add(new LinkCommand(intent.Parent, child));
+                }
+                else
+                {
+                    delta.UnlinkCommands.Add(new UnlinkCommand(child));
+                }
+            }
+        }
+        finally
+        {
+            if (createdDestroyed.Length > 0)
+            {
+                ArrayPool<bool>.Shared.Return(createdDestroyed);
+            }
+        }
+
+        var copiedBytes = delta.DeepCopyOwnedData();
+        return (delta, copiedBytes);
+    }
+
+    private void MaterializeCreatedEntities(FrozenStreamState frozen, bool[] createdDestroyed)
+    {
+        var offsets = BuildCreatedComponentOffsets(frozen, out var totalComponentCount);
+        var writes = totalComponentCount == 0 ? [] : ArrayPool<int>.Shared.Rent(frozen.CreatedCount);
+        var values = totalComponentCount == 0 ? [] : ArrayPool<CreatedComponentRef>.Shared.Rent(totalComponentCount);
+        try
+        {
+            if (totalComponentCount > 0)
+            {
+                Array.Copy(offsets, writes, frozen.CreatedCount);
+                for (var i = 0; i < frozen.CreatedComponentCount; i++)
+                {
+                    ref readonly var component = ref frozen.CreatedComponents[i];
+                    values[writes[component.CreatedIndex]++] = component;
+                }
+            }
+
+            for (var i = 0; i < frozen.CreatedCount; i++)
+            {
+                var entity = frozen.CreatedEntities[i];
+                if (createdDestroyed.Length > 0 && createdDestroyed[i])
+                {
+                    _world.ReleaseReservedEntity(entity);
+                    continue;
+                }
+
+                var count = frozen.CreatedComponentCounts[i];
+                if (count == 0)
+                {
+                    _world.MaterializeReservedEntity(entity, Array.Empty<RawComponentValue>(), reservationChecked: true);
+                    continue;
+                }
+
+                MaterializeCreatedEntityFromFrozen(entity, values.AsSpan(offsets[i], count));
+            }
+        }
+        finally
+        {
+            if (values.Length > 0) ArrayPool<CreatedComponentRef>.Shared.Return(values);
+            if (writes.Length > 0) ArrayPool<int>.Shared.Return(writes);
+            if (offsets.Length > 0) ArrayPool<int>.Shared.Return(offsets);
+        }
+    }
+
+    private void MaterializeCreatedEntityFromFrozen(Entity entity, ReadOnlySpan<CreatedComponentRef> components)
+    {
+        if (IsStrictlySortedByComponentType(components))
+        {
+            var archetype = LookupArchetypeCache(components, out var hash);
+            if (archetype == null)
+            {
+                var signatureTypes = new ComponentType[components.Length];
+                for (var i = 0; i < components.Length; i++)
+                {
+                    signatureTypes[i] = components[i].ComponentType;
+                }
+
+                archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(signatureTypes));
+                InsertArchetypeCache(components.Length, archetype, hash);
+            }
+
+            _world.MaterializeReservedEntityTyped(entity, archetype, components);
+            return;
+        }
+
+        var count = components.Length;
+        var componentTypes = ArrayPool<ComponentType>.Shared.Rent(count);
+        var sortedComponents = ArrayPool<CreatedComponentRef>.Shared.Rent(count);
+        try
+        {
+            for (var i = 0; i < count; i++)
+            {
+                componentTypes[i] = components[i].ComponentType;
+                sortedComponents[i] = components[i];
+            }
+
+            Array.Sort(componentTypes, sortedComponents, 0, count);
+            var archetype = LookupArchetypeCache(componentTypes, count, out var hash);
+            if (archetype == null)
+            {
+                var signatureTypes = new ComponentType[count];
+                Array.Copy(componentTypes, signatureTypes, count);
+                archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(signatureTypes));
+                InsertArchetypeCache(count, archetype, hash);
+            }
+
+            _world.MaterializeReservedEntityTyped(entity, archetype, sortedComponents.AsSpan(0, count));
+        }
+        finally
+        {
+            ArrayPool<ComponentType>.Shared.Return(componentTypes);
+            ArrayPool<CreatedComponentRef>.Shared.Return(sortedComponents);
+        }
+    }
+
+    private static int[] BuildCreatedComponentOffsets(FrozenStreamState frozen, out int totalComponentCount)
+    {
+        totalComponentCount = 0;
+        if (frozen.CreatedCount == 0)
+        {
+            return [];
+        }
+
+        var offsets = ArrayPool<int>.Shared.Rent(frozen.CreatedCount + 1);
+        offsets[0] = 0;
+        for (var i = 0; i < frozen.CreatedCount; i++)
+        {
+            totalComponentCount += frozen.CreatedComponentCounts[i];
+            offsets[i + 1] = totalComponentCount;
+        }
+
+        return offsets;
+    }
+
+    private static bool[] BuildCreatedDestroyedScratch(FrozenStreamState frozen)
+    {
+        if (frozen.CreatedCount == 0)
+        {
+            return [];
+        }
+
+        var destroyed = ArrayPool<bool>.Shared.Rent(frozen.CreatedCount);
+        Array.Clear(destroyed, 0, frozen.CreatedCount);
+        for (var i = 0; i < frozen.EntryCount; i++)
+        {
+            ref readonly var entry = ref frozen.Entries[i];
+            if (entry.Kind != StreamOpKind.Destroy)
+            {
+                continue;
+            }
+
+            var createdIndex = GetCreatedIndex(frozen, entry.Entity);
+            if (createdIndex >= 0)
+            {
+                destroyed[createdIndex] = true;
+            }
+        }
+
+        return destroyed;
+    }
+
+    private static int GetCreatedIndex(FrozenStreamState frozen, Entity entity)
+    {
+        var id = entity.Id;
+        if ((uint)id >= (uint)frozen.CreatedLookup.Length)
+        {
+            return -1;
+        }
+
+        var index = frozen.CreatedLookup[id];
+        return (uint)index < (uint)frozen.CreatedCount && frozen.CreatedEntities[index] == entity ? index : -1;
+    }
+
+    private void ApplyExistingEntityCommands(FrozenStreamState frozen)
+    {
+        for (var i = 0; i < frozen.ComponentStores.Length; i++)
+        {
+            frozen.ComponentStores[i]?.ApplyExistingCommands(_world);
+        }
+
+        for (var i = 0; i < frozen.EntryCount; i++)
+        {
+            ref readonly var entry = ref frozen.Entries[i];
+            if (entry.Kind != StreamOpKind.Remove)
+            {
+                continue;
+            }
+
+            if (GetCreatedIndex(frozen, entry.Entity) >= 0)
+            {
+                continue;
+            }
+
+            _world.RemoveBoxed(entry.Entity, entry.ComponentType);
+        }
+    }
+
+    private void ApplyHierarchy(FrozenStreamState frozen, bool[] createdDestroyed)
+    {
+        if (frozen.HierarchyByChild.Count == 0) return;
+
+        foreach (var (child, intent) in frozen.HierarchyByChild)
+        {
+            if (createdDestroyed.Length > 0)
+            {
+                var childCreatedIdx = GetCreatedIndex(frozen, child);
+                if (childCreatedIdx >= 0 && createdDestroyed[childCreatedIdx]) continue;
+            }
+
+            if (IsEntityMarkedForDestroy(frozen, child)) continue;
+
+            if (intent.IsLinked)
+            {
+                if (createdDestroyed.Length > 0)
+                {
+                    var parentCreatedIdx = GetCreatedIndex(frozen, intent.Parent);
+                    if (parentCreatedIdx >= 0 && createdDestroyed[parentCreatedIdx]) continue;
+                }
+
+                _world.Link(intent.Parent, child);
+            }
+            else
+            {
+                _world.Unlink(child);
+            }
+        }
+    }
+
+    private static bool IsEntityMarkedForDestroy(FrozenStreamState frozen, Entity entity)
+    {
+        for (var i = 0; i < frozen.EntryCount; i++)
+        {
+            if (frozen.Entries[i].Kind == StreamOpKind.Destroy && frozen.Entries[i].Entity == entity)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void ApplyDestroyEntries(FrozenStreamState frozen)
+    {
+        for (var i = 0; i < frozen.EntryCount; i++)
+        {
+            ref readonly var entry = ref frozen.Entries[i];
+            if (entry.Kind != StreamOpKind.Destroy)
+            {
+                continue;
+            }
+
+            if (GetCreatedIndex(frozen, entry.Entity) >= 0)
+            {
+                continue;
+            }
+
+            if (_world.IsAlive(entry.Entity))
+            {
+                _world.Destroy(entry.Entity);
+            }
+        }
+    }
+
+    private static RawComponentValue[] BuildCreatedComponentsForDelta(FrozenStreamState frozen, int createdIndex)
+    {
+        var count = frozen.CreatedComponentCounts[createdIndex];
+        if (count == 0)
+        {
+            return [];
+        }
+
+        var components = new RawComponentValue[count];
+        var write = 0;
+        for (var i = 0; i < frozen.CreatedComponentCount; i++)
+        {
+            ref readonly var component = ref frozen.CreatedComponents[i];
+            if (component.CreatedIndex == createdIndex)
+            {
+                components[write++] = ToRawComponentValue(component);
+            }
+        }
+
+        return components;
     }
 
     private void RegisterCreatedEntity(Entity entity)
@@ -209,6 +735,26 @@ public sealed class CommandStream
         }
 
         return (ComponentCommandStore<T>)store;
+    }
+
+    private ComponentCommandStore GetOrCreateComponentStore(ComponentType componentType)
+    {
+        var id = componentType.Value;
+        if (id >= _componentStores.Length)
+        {
+            Array.Resize(ref _componentStores, id + 1);
+        }
+
+        var store = _componentStores[id];
+        if (store == null)
+        {
+            var runtimeType = ComponentRegistry.Shared.GetType(componentType);
+            var typedStoreType = typeof(ComponentCommandStore<>).MakeGenericType(runtimeType);
+            store = (ComponentCommandStore)Activator.CreateInstance(typedStoreType)!;
+            _componentStores[id] = store;
+        }
+
+        return store;
     }
 
     private bool[] BuildCreatedDestroyedScratch()
@@ -475,22 +1021,85 @@ public sealed class CommandStream
         for (var i = 0; i < _entryCount; i++)
         {
             ref readonly var entry = ref _entries[i];
+            if (entry.Kind != StreamOpKind.Remove)
+            {
+                continue;
+            }
+
             if (IsCreatedEntity(entry.Entity))
             {
                 continue;
             }
 
-            switch (entry.Kind)
+            _world.RemoveBoxed(entry.Entity, entry.ComponentType);
+        }
+    }
+
+    private void ApplyHierarchy(bool[] createdDestroyed)
+    {
+        if (_hierarchyByChild.Count == 0) return;
+
+        foreach (var (child, intent) in _hierarchyByChild)
+        {
+            // Skip if child is a destroyed created entity
+            if (createdDestroyed.Length > 0)
             {
-                case StreamOpKind.Remove:
-                    _world.RemoveBoxed(entry.Entity, entry.ComponentType);
-                    break;
-                case StreamOpKind.Destroy:
-                    if (_world.IsAlive(entry.Entity))
-                    {
-                        _world.Destroy(entry.Entity);
-                    }
-                    break;
+                var childCreatedIdx = GetCreatedIndex(child);
+                if (childCreatedIdx >= 0 && createdDestroyed[childCreatedIdx]) continue;
+            }
+
+            // Skip if child is a destroyed existing entity (destroyed in this submit)
+            if (IsEntityMarkedForDestroy(child)) continue;
+
+            if (intent.IsLinked)
+            {
+                // Skip if parent is a destroyed created entity
+                if (createdDestroyed.Length > 0)
+                {
+                    var parentCreatedIdx = GetCreatedIndex(intent.Parent);
+                    if (parentCreatedIdx >= 0 && createdDestroyed[parentCreatedIdx]) continue;
+                }
+
+                _world.Link(intent.Parent, child);
+            }
+            else
+            {
+                _world.Unlink(child);
+            }
+        }
+    }
+
+    private bool IsEntityMarkedForDestroy(Entity entity)
+    {
+        for (var i = 0; i < _entryCount; i++)
+        {
+            if (_entries[i].Kind == StreamOpKind.Destroy && _entries[i].Entity == entity)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void ApplyDestroyEntries()
+    {
+        for (var i = 0; i < _entryCount; i++)
+        {
+            ref readonly var entry = ref _entries[i];
+            if (entry.Kind != StreamOpKind.Destroy)
+            {
+                continue;
+            }
+
+            if (IsCreatedEntity(entry.Entity))
+            {
+                continue;
+            }
+
+            if (_world.IsAlive(entry.Entity))
+            {
+                _world.Destroy(entry.Entity);
             }
         }
     }
@@ -540,6 +1149,18 @@ public sealed class CommandStream
                     case StreamOpKind.Destroy:
                         delta.DestroyedEntities.Add(entry.Entity);
                         break;
+                }
+            }
+
+            foreach (var (child, intent) in _hierarchyByChild)
+            {
+                if (intent.IsLinked)
+                {
+                    delta.LinkCommands.Add(new LinkCommand(intent.Parent, child));
+                }
+                else
+                {
+                    delta.UnlinkCommands.Add(new UnlinkCommand(child));
                 }
             }
         }
@@ -604,6 +1225,7 @@ public sealed class CommandStream
         _maxCreatedEntityId = 0;
         _lastCreatedEntity = default;
         _lastCreatedIndex = -1;
+        _hierarchyByChild.Clear();
 
     }
 
@@ -636,6 +1258,7 @@ public sealed class CommandStream
         public abstract void EmitDelta(FrameDelta delta, ComponentType componentType);
         public abstract void WriteToArchetype(Archetype archetype, int rowIndex, ComponentType componentType, int index);
         public abstract void WriteRaw(int index, byte[] destination);
+        public abstract int AppendFromArchetype(Archetype archetype, int columnIndex, int rowIndex);
         public abstract void Clear();
     }
 
@@ -725,6 +1348,12 @@ public sealed class CommandStream
             archetype.SetComponentAtTyped(archetype.GetComponentIndex(componentType), rowIndex, in _components[index]);
         }
 
+        public override int AppendFromArchetype(Archetype archetype, int columnIndex, int rowIndex)
+        {
+            var value = archetype.GetComponentAt<T>(columnIndex, rowIndex);
+            return Append(value);
+        }
+
         public override void Clear()
         {
             _count = 0;
@@ -740,5 +1369,21 @@ public sealed class CommandStream
         Set,
         Remove,
         Destroy,
+    }
+
+    private sealed class FrozenStreamState
+    {
+        public StreamEntry[] Entries = [];
+        public int EntryCount;
+        public ComponentCommandStore?[] ComponentStores = [];
+        public int ComponentCommandCount;
+        public Entity[] CreatedEntities = [];
+        public int CreatedCount;
+        public int[] CreatedComponentCounts = [];
+        public CreatedComponentRef[] CreatedComponents = [];
+        public int CreatedComponentCount;
+        public int[] CreatedLookup = [];
+        public int MaxCreatedEntityId;
+        public Dictionary<Entity, HierarchyIntent> HierarchyByChild = new();
     }
 }
