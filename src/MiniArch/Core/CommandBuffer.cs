@@ -360,18 +360,7 @@ public sealed class CommandBuffer
 
     private int FindExistingDestroy(Entity entity)
     {
-        var low = 0;
-        var high = _existingDestroyCount - 1;
-        while (low <= high)
-        {
-            var mid = low + ((high - low) >> 1);
-            var comparison = CompareEntity(_existingDestroyEntities[mid], entity);
-            if (comparison == 0) return mid;
-            if (comparison < 0) low = mid + 1;
-            else high = mid - 1;
-        }
-
-        return ~low;
+        return FindExistingDestroy(_existingDestroyEntities, _existingDestroyCount, entity);
     }
 
     private static int FindExistingDestroy(Entity[] entities, int count, Entity entity)
@@ -381,7 +370,7 @@ public sealed class CommandBuffer
         while (low <= high)
         {
             var mid = low + ((high - low) >> 1);
-            var comparison = CompareEntity(entities[mid], entity);
+            var comparison = entities[mid].CompareTo(entity);
             if (comparison == 0) return mid;
             if (comparison < 0) low = mid + 1;
             else high = mid - 1;
@@ -408,7 +397,7 @@ public sealed class CommandBuffer
 
         if (!sorted)
         {
-            Array.Sort(entities, 0, count, EntityDestroyComparer.Instance);
+            Array.Sort(entities, 0, count);
             sorted = true;
         }
 
@@ -417,7 +406,7 @@ public sealed class CommandBuffer
         for (var read = 1; read < count; read++)
         {
             var current = entities[read];
-            if (CompareEntity(previous, current) == 0)
+            if (previous.CompareTo(current) == 0)
             {
                 continue;
             }
@@ -427,19 +416,6 @@ public sealed class CommandBuffer
         }
 
         return write;
-    }
-
-    private static int CompareEntity(Entity left, Entity right)
-    {
-        var idComparison = left.Id.CompareTo(right.Id);
-        return idComparison != 0 ? idComparison : left.Version.CompareTo(right.Version);
-    }
-
-    private sealed class EntityDestroyComparer : IComparer<Entity>
-    {
-        public static readonly EntityDestroyComparer Instance = new();
-
-        public int Compare(Entity x, Entity y) => CompareEntity(x, y);
     }
 
     /// <summary>

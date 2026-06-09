@@ -5,7 +5,7 @@ namespace MiniArch;
 /// </summary>
 /// <param name="Id">The entity slot id.</param>
 /// <param name="Version">The entity version.</param>
-public readonly record struct Entity(int Id, int Version)
+public readonly record struct Entity(int Id, int Version) : IComparable<Entity>
 {
     /// <summary>
     /// Gets whether the handle has a non-default shape (Id >= 0 and Version > 0).
@@ -18,4 +18,13 @@ public readonly record struct Entity(int Id, int Version)
     /// Returns a compact display string.
     /// </summary>
     public override string ToString() => $"Entity({Id}, v{Version})";
+
+    /// <summary>
+    /// Compares by Id then Version. Used for sorted deduplication.
+    /// </summary>
+    public int CompareTo(Entity other)
+    {
+        var idComparison = Id.CompareTo(other.Id);
+        return idComparison != 0 ? idComparison : Version.CompareTo(other.Version);
+    }
 }
