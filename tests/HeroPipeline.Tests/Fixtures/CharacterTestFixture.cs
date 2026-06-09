@@ -23,9 +23,12 @@ public sealed class CharacterTestFixture
 
     public EffectTable EffectTable => Core.EffectTable;
 
-    public CharacterTestFixture(CoreTestFixture? core = null, Action<RuleTable>? ruleOverride = null, Action<EffectTable>? effectOverride = null)
+    public CharacterTestFixture(CoreTestFixture? core = null, Action<RuleTable>? ruleOverride = null, Action<EffectTable>? effectOverride = null, MiniArchRuntime? runtimeOverride = null)
     {
-        Core = core ?? new CoreTestFixture();
+        Core = core ?? (runtimeOverride is not null
+            ? new CoreTestFixture(runtimeOverride)
+            : new CoreTestFixture());
+        _ = CharacterMovementRegistrations.Register(Core.RuleTable);
         _ = CharacterMovementRegistrations.Register(Core.RuleTable);
         _ = CharacterMovementRegistrations.Register(Core.EffectTable);
 

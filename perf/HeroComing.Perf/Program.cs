@@ -26,17 +26,19 @@ Console.WriteLine();
 
 var results = new List<(string name, double throughput, double avgMs, int totalRounds, double heapDeltaKB, bool memoryStable)>();
 
-results.Add(RunScenario("Movement", CreateMoveRequests));
-results.Add(RunScenario("Attack", CreateAttackRequests));
+results.Add(RunScenario("Movement-Buffer", CreateMoveRequests, useCommandStream: false));
+results.Add(RunScenario("Movement-Stream", CreateMoveRequests, useCommandStream: true));
+results.Add(RunScenario("Attack-Buffer", CreateAttackRequests, useCommandStream: false));
+results.Add(RunScenario("Attack-Stream", CreateAttackRequests, useCommandStream: true));
 
 Console.WriteLine();
 Console.WriteLine("=== Final Summary ===");
 Console.WriteLine();
-Console.WriteLine($"{"Scenario",12} | {"Rounds/s",10} | {"ms/round",10} | {"Rounds",8} | {"Heap Δ KB",10} | {"Memory",8}");
-Console.WriteLine(new string('-', 70));
+Console.WriteLine($"{"Scenario",-18} | {"Rounds/s",10} | {"ms/round",10} | {"Rounds",8} | {"Heap Δ KB",10} | {"Memory",8}");
+Console.WriteLine(new string('-', 76));
 foreach (var (name, throughput, avgMs, totalRounds, heapDeltaKB, memoryStable) in results)
 {
-    Console.WriteLine($"{name,12} | {throughput,10:F1} | {avgMs,10:F3} | {totalRounds,8} | {heapDeltaKB,10:F1} | {(memoryStable ? "OK" : "WARN"),8}");
+    Console.WriteLine($"{name,-18} | {throughput,10:F1} | {avgMs,10:F3} | {totalRounds,8} | {heapDeltaKB,10:F1} | {(memoryStable ? "OK" : "WARN"),8}");
 }
 
 UpdateKnowledgePage(results);
@@ -47,11 +49,12 @@ Console.WriteLine("Baseline updated in .knowledge/kb-hero-pipeline-regression.md
 // --- Scenario runner ---
 
 (string name, double throughput, double avgMs, int totalRounds, double heapDeltaKB, bool memoryStable) RunScenario(
-    string name, Action<MiniArchRuntime, List<Entity>, bool[]> createRequests)
+    string name, Action<MiniArchRuntime, List<Entity>, bool[]> createRequests, bool useCommandStream = false)
 {
     Console.WriteLine($"--- {name} ---");
 
-    var fixture = new CharacterTestFixture();
+    var streamRuntime = useCommandStream ? MiniArchRuntime.CreateWithCommandStream() : null;
+    var fixture = new CharacterTestFixture(runtimeOverride: streamRuntime);
     fixture.AddCoreSystems();
     fixture.Core.AddSpawnSystem();
 
@@ -236,13 +239,13 @@ void UpdateKnowledgePage(List<(string name, double throughput, double avgMs, int
     sb.AppendLine("|---|---|---|---|---|");
     foreach (var (name, throughput, avgMs, totalRounds, heapDeltaKB, memoryStable) in results)
     {
-        string desc = name == "Movement" ? "无 collision" : "含 collision";
+        string desc = name.Contains("Movement") ? "无 collision" : "含 collision";
         sb.AppendLine($"| {name}（{desc}） | {throughput:F1} | {avgMs:F1} | {totalRounds} | {(memoryStable ? "稳定" : "增长")} |");
     }
 
-    // Update regression thresholds (80% of actual)
-    var movResult = results.First(r => r.name == "Movement");
-    var atkResult = results.First(r => r.name == "Attack");
+    // Update regression thresholds (80% of actual) — use first matching result
+    var movResult = results.First(r => r.name.Contains("Movement"));
+    var atkResult = results.First(r => r.name.Contains("Attack"));
     sb.AppendLine();
     sb.AppendLine("### 回归阈值");
     sb.AppendLine();
