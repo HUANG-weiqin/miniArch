@@ -2,7 +2,7 @@
 title: Command Buffer Runtime
 module: MiniArch.Core CommandBuffer
 description: CommandBuffer safety-first per-entity deduplicating recorder plus CommandStream typed-store expert mode, both compatible with FrameDelta
-updated: 2026-06-09 (新增 CommandStream 专家模式：typed component stores、created side table、Submit typed / Snapshot raw)
+updated: 2026-06-10 (增加混合 World.Create/CommandStream 重复 archetype 坑点)
 ---
 # Command Buffer Runtime
 
@@ -117,3 +117,4 @@ HeroPipeline 回归测试涨幅：
 - **`ResolveTypeInfo` 缓存哨兵值不能用 `IsValid`**（已修复 2026-06-08）：删除 `RuntimeType` 后缓存元组变为 `(ComponentType, int)`，用 `cached.Size > 0` 判断命中。**教训：缓存哨兵不能依赖值域内的合法值。**
 - `Clone()` 是完整深拷贝，包含所有 slab 数据，大 buffer 克隆成本高
 - `CommandStream` 是专家模式，不做 `CommandBuffer` 那样的 per-entity/per-component 去重；重复命令的净效果由调用方负责。
+- **混合 World.Create（排序）与 CommandBuffer/CommandStream（未排序）可能产生重复 archetype**：两者创建组件的顺序不同（`World.Create<T>` 用 `public Signature(params ComponentType[])` 构造函数，自动排序去重；CommandBuffer/CommandStream 用 `Signature.CreateNormalized` 按 ADD 顺序存储，不做排序）。如果同一组件集用两条路径分别创建，`_archetypes` 字典中会出现两个不同键的 Signature，产生两个功能等价但列顺序不同的 archetype。`World.TryGetArchetype` 的集合比较能正确匹配两者，但 `ArchetypeMatchesComponentSpan`（CommandStream 分组用顺序比较）可能因顺序不同而失败。**解决办法：整个项目统一用一种创建路径**。

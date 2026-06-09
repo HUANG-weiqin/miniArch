@@ -36,6 +36,15 @@ internal sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentTy
         _componentMask = ComputeMask(_components);
     }
 
+    /// <summary>
+    /// Creates a signature from a pre-normalized array.
+    /// <para><b>Pre-condition:</b> <paramref name="components"/> must already be
+    /// sorted and deduplicated.  This constructor stores the reference directly
+    /// — it does NOT copy, sort, or dedup.</para>
+    /// <para>If callers cannot guarantee sorted+duduplicated input, use
+    /// <c>new Signature(components)</c> (the public constructor) which fully
+    /// normalizes a copy.</para>
+    /// </summary>
     internal static Signature CreateNormalized(ComponentType[] components)
     {
         ArgumentNullException.ThrowIfNull(components);
