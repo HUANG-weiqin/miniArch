@@ -21,6 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\perf\CommandBufferGame.Perf\CommandBufferGame.Perf.csproj" />
     <ProjectReference Include="..\..\src\MiniArch\MiniArch.csproj" />
     <ProjectReference Include="..\..\shared\MiniArch.SharedInfrastructure\MiniArch.SharedInfrastructure.csproj" />
   </ItemGroup>

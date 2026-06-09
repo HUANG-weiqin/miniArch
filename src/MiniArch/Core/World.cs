@@ -476,6 +476,20 @@ public sealed partial class World : IDisposable
         }
     }
 
+    internal void MaterializeReservedEntityTyped(Entity entity, Archetype archetype, ReadOnlySpan<CommandStream.CreatedComponentRef> components)
+    {
+        var rowIndex = archetype.AddEntity(entity);
+        ref var record = ref _records[entity.Id];
+        record.Archetype = archetype;
+        record.RowIndex = rowIndex;
+
+        for (var index = 0; index < components.Length; index++)
+        {
+            ref readonly var component = ref components[index];
+            component.Store.WriteToArchetype(archetype, rowIndex, component.ComponentType, component.DataIndex);
+        }
+    }
+
     internal unsafe void MaterializeReservedEntityFast(
         Entity entity,
         Archetype archetype,
