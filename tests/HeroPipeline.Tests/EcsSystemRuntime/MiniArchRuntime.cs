@@ -20,23 +20,27 @@ public sealed class MiniArchRuntime
 
     private readonly List<ISystem> _systems = [];
 
-    private MiniArchRuntime(MiniArch.World world)
+    private MiniArchRuntime(MiniArch.World world, bool useCommandStream)
     {
         World = world;
         PreRegisterComponentTypes();
-        Commands = new CommandBuffer(world);
-        Recorder = Commands;
+        Recorder = useCommandStream
+            ? new CommandStream(world)
+            : new CommandBuffer(world);
         CurrentFrame = new FrameView(World);
     }
 
-    public MiniArchRuntime() : this(new MiniArch.World()) { }
+    public MiniArchRuntime() : this(new MiniArch.World(), useCommandStream: false) { }
 
-    public static MiniArchRuntime Create() => new(new MiniArch.World());
+    public static MiniArchRuntime Create() => new(new MiniArch.World(), useCommandStream: false);
+
+    public static MiniArchRuntime CreateWithCommandStream() =>
+        new(new MiniArch.World(), useCommandStream: true);
 
     public MiniArch.World World { get; }
 
-    public CommandBuffer Commands { get; }
-    public CommandBuffer Recorder { get; }
+    /// <summary>The underlying recorder (CommandBuffer or CommandStream).</summary>
+    public ICommandRecorder Recorder { get; }
 
     public FrameView CurrentFrame { get; private set; }
 
@@ -64,7 +68,7 @@ public sealed class MiniArchRuntime
 
     private bool FlushPendingCommands()
     {
-        return Commands.Submit();
+        return Recorder.Submit();
     }
 
     private void RunSystems(FrameContext context)

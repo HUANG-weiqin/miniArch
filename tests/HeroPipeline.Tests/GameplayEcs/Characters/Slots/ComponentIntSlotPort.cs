@@ -1,6 +1,6 @@
 using System;
 using Hero.Ecs;
-using CoreCommandBuffer = MiniArch.Core.CommandBuffer;
+using CoreCommandBuffer = MiniArch.Core.ICommandRecorder;
 
 namespace Hero.GameplayEcs.Characters.Slots;
 

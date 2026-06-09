@@ -5,14 +5,14 @@ namespace Hero.Ecs;
 public readonly struct FrameContext
 {
     internal FrameContext(
-        CommandBuffer commands,
+        ICommandRecorder commands,
         FrameView frame)
     {
         Commands = commands;
         Frame = frame;
     }
 
-    public CommandBuffer Commands { get; }
+    public ICommandRecorder Commands { get; }
 
     public FrameView Frame { get; }
 }

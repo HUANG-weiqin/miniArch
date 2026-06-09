@@ -1,6 +1,6 @@
 using System;
 using MiniArch.Core;
-using CoreCommandBuffer = MiniArch.Core.CommandBuffer;
+using CoreCommandBuffer = MiniArch.Core.ICommandRecorder;
 
 namespace Hero.Ecs;
 

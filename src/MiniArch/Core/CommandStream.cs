@@ -6,7 +6,7 @@ namespace MiniArch.Core;
 /// <summary>
 /// Records deferred world commands as an append-only expert-mode stream.
 /// </summary>
-public sealed class CommandStream
+public sealed class CommandStream : ICommandRecorder
 {
     private readonly World _world;
     private StreamEntry[] _entries = [];

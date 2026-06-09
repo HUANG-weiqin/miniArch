@@ -8,7 +8,7 @@ namespace MiniArch.Core;
 /// Records deferred world commands with per-entity deduplication.
 /// Single-threaded: records directly into World without a compile pass.
 /// </summary>
-public sealed class CommandBuffer
+public sealed class CommandBuffer : ICommandRecorder
 {
     private const int DefaultSlabSize = 4096;
 
