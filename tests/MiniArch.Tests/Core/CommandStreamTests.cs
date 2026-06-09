@@ -289,4 +289,93 @@ public sealed class CommandStreamTests
         // Verify delta contains link command (need to check internal structure)
         Assert.NotEmpty(delta.LinkCommands);
     }
+
+    [Fact]
+    public void Snapshot_excludes_created_destroyed_entity_from_delta()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+
+        var created = stream.Create();
+        stream.Add(created, new Position(1, 2));
+        stream.Destroy(created);
+
+        var delta = stream.Snapshot();
+
+        // Created-then-destroyed entity should be released, not created
+        Assert.Contains(created, delta.ReservedEntities);
+        Assert.Contains(created, delta.ReleasedEntities);
+        Assert.DoesNotContain(created, delta.CreatedEntities.Select(c => c.Entity));
+        // Should NOT appear in DestroyedEntities (it was never alive)
+        Assert.DoesNotContain(created, delta.DestroyedEntities);
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotAsync_excludes_created_destroyed_from_delta()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+
+        var created = stream.Create();
+        stream.Add(created, new Position(1, 2));
+        stream.Destroy(created);
+
+        var delta = await stream.SubmitAndSnapshotAsync();
+
+        Assert.Contains(created, delta.ReservedEntities);
+        Assert.Contains(created, delta.ReleasedEntities);
+        Assert.DoesNotContain(created, delta.DestroyedEntities);
+    }
+
+    [Fact]
+    public void Snapshot_excludes_hierarchy_for_destroyed_child()
+    {
+        var world = new World();
+        var parent = world.Create();
+        var child = world.Create(new Position(1, 2));
+        var stream = new CommandStream(world);
+
+        stream.Link(parent, child);
+        stream.Destroy(child);
+
+        var delta = stream.Snapshot();
+
+        // Link should be filtered out since child is destroyed
+        Assert.Empty(delta.LinkCommands);
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotAsync_excludes_hierarchy_for_destroyed_child()
+    {
+        var world = new World();
+        var parent = world.Create();
+        var child = world.Create(new Position(1, 2));
+        var stream = new CommandStream(world);
+
+        stream.Link(parent, child);
+        stream.Destroy(child);
+
+        var delta = await stream.SubmitAndSnapshotAsync();
+
+        Assert.Empty(delta.LinkCommands);
+    }
+
+    [Fact]
+    public void Snapshot_excludes_hierarchy_for_destroyed_created_child()
+    {
+        var world = new World();
+        var parent = world.Create();
+        var stream = new CommandStream(world);
+
+        var child = stream.Create();
+        stream.Add(child, new Position(1, 2));
+        stream.Link(parent, child);
+        stream.Destroy(child);
+
+        var delta = stream.Snapshot();
+
+        // Link for created-then-destroyed child should be filtered
+        Assert.Empty(delta.LinkCommands);
+        Assert.Contains(child, delta.ReleasedEntities);
+    }
 }

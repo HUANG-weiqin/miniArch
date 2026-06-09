@@ -346,6 +346,12 @@ public sealed class CommandStream
             for (var i = 0; i < frozen.EntryCount; i++)
             {
                 ref readonly var entry = ref frozen.Entries[i];
+                // Skip entries targeting created entities — their lifecycle is handled above
+                if (GetCreatedIndex(frozen, entry.Entity) >= 0)
+                {
+                    continue;
+                }
+
                 if (entry.Kind == StreamOpKind.Remove)
                 {
                     delta.RemoveCommands.Add(new RawRemoveCommand(entry.Entity, entry.ComponentType));
@@ -358,8 +364,18 @@ public sealed class CommandStream
 
             foreach (var (child, intent) in frozen.HierarchyByChild)
             {
+                // Skip if child is a destroyed created entity
+                var childCreatedIdx = GetCreatedIndex(frozen, child);
+                if (childCreatedIdx >= 0 && createdDestroyed.Length > 0 && createdDestroyed[childCreatedIdx]) continue;
+                // Skip if child is an existing entity marked for destroy
+                if (childCreatedIdx < 0 && IsEntityMarkedForDestroy(frozen, child)) continue;
+
                 if (intent.IsLinked)
                 {
+                    // Skip if parent is a destroyed created entity
+                    var parentCreatedIdx = GetCreatedIndex(frozen, intent.Parent);
+                    if (parentCreatedIdx >= 0 && createdDestroyed.Length > 0 && createdDestroyed[parentCreatedIdx]) continue;
+
                     delta.LinkCommands.Add(new LinkCommand(intent.Parent, child));
                 }
                 else
@@ -1154,8 +1170,18 @@ public sealed class CommandStream
 
             foreach (var (child, intent) in _hierarchyByChild)
             {
+                // Skip if child is a destroyed created entity
+                var childCreatedIdx = GetCreatedIndex(child);
+                if (childCreatedIdx >= 0 && createdDestroyed.Length > 0 && createdDestroyed[childCreatedIdx]) continue;
+                // Skip if child is an existing entity marked for destroy
+                if (childCreatedIdx < 0 && IsEntityMarkedForDestroy(child)) continue;
+
                 if (intent.IsLinked)
                 {
+                    // Skip if parent is a destroyed created entity
+                    var parentCreatedIdx = GetCreatedIndex(intent.Parent);
+                    if (parentCreatedIdx >= 0 && createdDestroyed.Length > 0 && createdDestroyed[parentCreatedIdx]) continue;
+
                     delta.LinkCommands.Add(new LinkCommand(intent.Parent, child));
                 }
                 else
