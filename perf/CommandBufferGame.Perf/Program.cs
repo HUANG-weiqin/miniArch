@@ -45,6 +45,23 @@ public static class Program
 
         RunAndPrint(new ArchSteadyCombatWorld(), options);
         Console.WriteLine();
+        Console.WriteLine("=== ParticleStorm: high structural churn, minimal Set ===");
+        Console.WriteLine($"Batch: {ParticleStormDefaults.BatchSize:N0}/tick, Lifespan: {ParticleStormDefaults.StormTickBuffer} ticks, Steady pool: {ParticleStormDefaults.InitialLiveCount - ParticleStormDefaults.EmitterCount:N0}");
+        Console.WriteLine($"Emitters: {ParticleStormDefaults.EmitterCount}, Set: {ParticleStormDefaults.EmitterCount}/tick");
+        Console.WriteLine();
+        Console.WriteLine($"{"Engine",-18} | {"Ticks/s",10} | {"ms/tick",9} | {"Checksum",14} | {"Live",8} | {"Heap Δ",12} | {"GC",8} | {"Query",8} | {"Record",8} | {"Apply",8}");
+        Console.WriteLine(new string('-', 122));
+        RunAndPrint(new MiniArchParticleStormWorld(), options);
+        GC.Collect(2, GCCollectionMode.Forced, true, true);
+        GC.WaitForPendingFinalizers();
+        RunAndPrint(new MiniArchCommandStreamParticleStormWorld(), options);
+        GC.Collect(2, GCCollectionMode.Forced, true, true);
+        GC.WaitForPendingFinalizers();
+        RunAndPrint(CreateFrifloParticleStormQuietly(), options);
+        GC.Collect(2, GCCollectionMode.Forced, true, true);
+        GC.WaitForPendingFinalizers();
+        RunAndPrint(new ArchParticleStormWorld(), options);
+        Console.WriteLine();
         Console.WriteLine("Command: dotnet run -c Release --project perf/CommandBufferGame.Perf -- --warmup 3 --measure 10");
     }
 
@@ -64,6 +81,20 @@ public static class Program
         {
             Console.SetOut(TextWriter.Null);
             return new FrifloSteadyCombatWorld();
+        }
+        finally
+        {
+            Console.SetOut(output);
+        }
+    }
+
+    private static FrifloParticleStormWorld CreateFrifloParticleStormQuietly()
+    {
+        var output = Console.Out;
+        try
+        {
+            Console.SetOut(TextWriter.Null);
+            return new FrifloParticleStormWorld();
         }
         finally
         {
@@ -95,6 +126,18 @@ public static class ScenarioDefaults
     public const int ActorMutationCount = 2_048;
     public const int StatusToggleCount = 1_024;
     public const int InitialLiveCount = ActorCount + ProjectileCount;
+}
+
+public static class ParticleStormDefaults
+{
+    /// <summary>Entities created (and destroyed) per tick.</summary>
+    public const int BatchSize = 4_000;
+    /// <summary>Persistent emitter entities with minimal Set mutation.</summary>
+    public const int EmitterCount = 100;
+    /// <summary>Particle lifespan in ticks. Buffer has this many slots.</summary>
+    public const int StormTickBuffer = 2;
+    /// <summary>Steady-state live count after warmup.</summary>
+    public const int InitialLiveCount = BatchSize * StormTickBuffer + EmitterCount;
 }
 
 public readonly record struct BenchmarkOptions(int WarmupSeconds, int MeasureSeconds)
@@ -872,6 +915,433 @@ public sealed class ArchSteadyCombatWorld : ICommandBufferGameScenario
     private int ActorIndex(int offset, int stride) => (int)(((long)_tick * stride + offset * 13L) % _actors.Length);
 }
 
+// ============================================================
+// ParticleStorm scenarios — high structural churn, minimal Set
+// ============================================================
+
+public sealed class MiniArchParticleStormWorld : ICommandBufferGameScenario
+{
+    private readonly MiniWorld _world = new(128, ParticleStormDefaults.InitialLiveCount + ParticleStormDefaults.BatchSize);
+    private readonly MiniCommandBuffer _buffer;
+    private readonly MiniEntity[][] _stormSlots;
+    private readonly MiniEntity[] _emitters;
+    private readonly PhaseTicks _phases = new();
+    private int _tick;
+    private long _checksum;
+
+    public MiniArchParticleStormWorld()
+    {
+        _buffer = new MiniCommandBuffer(_world);
+
+        _stormSlots = new MiniEntity[ParticleStormDefaults.StormTickBuffer][];
+        for (var i = 0; i < _stormSlots.Length; i++)
+            _stormSlots[i] = new MiniEntity[ParticleStormDefaults.BatchSize];
+
+        _emitters = new MiniEntity[ParticleStormDefaults.EmitterCount];
+        for (var i = 0; i < _emitters.Length; i++)
+            _emitters[i] = _world.Create(new Position(i, i), new EmitterTag(i));
+    }
+
+    public string Engine => "MiniArch-Storm";
+    public int LiveCount => ParticleStormDefaults.EmitterCount + Math.Min(_tick, ParticleStormDefaults.StormTickBuffer) * ParticleStormDefaults.BatchSize;
+    public long Checksum => _checksum;
+    public PhaseTicks Phases => _phases;
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public long RunTick()
+    {
+        var tickStart = _checksum;
+        var start = Stopwatch.GetTimestamp();
+
+        // Query emitters (minimal — just for checksum & phase timing)
+        for (var i = 0; i < _emitters.Length; i++)
+            _checksum += _emitters[i].Id + i;
+        var afterQuery = Stopwatch.GetTimestamp();
+
+        RecordCommands();
+        var afterRecord = Stopwatch.GetTimestamp();
+
+        _buffer.Submit();
+        var afterApply = Stopwatch.GetTimestamp();
+
+        _phases.Query += afterQuery - start;
+        _phases.Record += afterRecord - afterQuery;
+        _phases.Apply += afterApply - afterRecord;
+        _tick++;
+        return _checksum - tickStart;
+    }
+
+    public void ResetPhaseCounters() => _phases.Clear();
+    public void Dispose() { }
+
+    private void RecordCommands()
+    {
+        // Destroy batch from (tick) % StormTickBuffer — entities created StormTickBuffer ticks ago
+        if (_tick >= ParticleStormDefaults.StormTickBuffer)
+        {
+            var slot = _stormSlots[_tick % ParticleStormDefaults.StormTickBuffer];
+            for (var i = 0; i < ParticleStormDefaults.BatchSize; i++)
+                _buffer.Destroy(slot[i]);
+        }
+
+        // Set emitter values (the only Set operation in this scenario)
+        for (var i = 0; i < _emitters.Length; i++)
+        {
+            _buffer.Set(_emitters[i], new Position(_tick + i, _tick * 2 + i));
+            _buffer.Set(_emitters[i], new Alpha((_tick + i) % 256));
+        }
+
+        // Create new batch with diversified archetype signatures
+        var createSlot = _stormSlots[_tick % ParticleStormDefaults.StormTickBuffer];
+        for (var i = 0; i < ParticleStormDefaults.BatchSize; i++)
+        {
+            var entity = _buffer.Create();
+            _buffer.Add(entity, new Position(i, _tick));
+            _buffer.Add(entity, new Velocity((i & 3) - 1, (i & 7) - 3));
+            _checksum += i + _tick;
+
+            var type = i % 10;
+            if (type < 3)       // 30%: Position + Velocity + Alpha
+                _buffer.Add(entity, new Alpha((i + _tick) % 256));
+            else if (type < 6)  // 30%: Position + Velocity + Color + Scale
+            {
+                _buffer.Add(entity, new Color(i % 256, (i + 64) % 256, (i + 128) % 256, 255));
+                _buffer.Add(entity, new Scale(1 + (i % 10)));
+            }
+            else if (type < 8)  // 20%: Position + Velocity + Alpha + Lifetime
+            {
+                _buffer.Add(entity, new Alpha((i + _tick) % 256));
+                _buffer.Add(entity, new Lifetime(2));
+            }
+            else                // 20%: Position + Velocity + Color + Scale + Lifetime
+            {
+                _buffer.Add(entity, new Color(i % 256, (i + 64) % 256, (i + 128) % 256, 255));
+                _buffer.Add(entity, new Scale(1 + (i % 10)));
+                _buffer.Add(entity, new Lifetime(2));
+            }
+
+            createSlot[i] = entity;
+        }
+    }
+}
+
+public sealed class MiniArchCommandStreamParticleStormWorld : ICommandBufferGameScenario
+{
+    private readonly MiniWorld _world = new(128, ParticleStormDefaults.InitialLiveCount + ParticleStormDefaults.BatchSize);
+    private readonly MiniCommandStream _stream;
+    private readonly MiniEntity[][] _stormSlots;
+    private readonly MiniEntity[] _emitters;
+    private readonly PhaseTicks _phases = new();
+    private int _tick;
+    private long _checksum;
+
+    public MiniArchCommandStreamParticleStormWorld()
+    {
+        _stream = new MiniCommandStream(_world);
+
+        _stormSlots = new MiniEntity[ParticleStormDefaults.StormTickBuffer][];
+        for (var i = 0; i < _stormSlots.Length; i++)
+            _stormSlots[i] = new MiniEntity[ParticleStormDefaults.BatchSize];
+
+        _emitters = new MiniEntity[ParticleStormDefaults.EmitterCount];
+        for (var i = 0; i < _emitters.Length; i++)
+            _emitters[i] = _world.Create(new Position(i, i), new EmitterTag(i));
+    }
+
+    public string Engine => "MiniStream-Storm";
+    public int LiveCount => ParticleStormDefaults.EmitterCount + Math.Min(_tick, ParticleStormDefaults.StormTickBuffer) * ParticleStormDefaults.BatchSize;
+    public long Checksum => _checksum;
+    public PhaseTicks Phases => _phases;
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public long RunTick()
+    {
+        var tickStart = _checksum;
+        var start = Stopwatch.GetTimestamp();
+
+        for (var i = 0; i < _emitters.Length; i++)
+            _checksum += _emitters[i].Id + i;
+        var afterQuery = Stopwatch.GetTimestamp();
+
+        RecordCommands();
+        var afterRecord = Stopwatch.GetTimestamp();
+
+        _stream.Submit();
+        var afterApply = Stopwatch.GetTimestamp();
+
+        _phases.Query += afterQuery - start;
+        _phases.Record += afterRecord - afterQuery;
+        _phases.Apply += afterApply - afterRecord;
+        _tick++;
+        return _checksum - tickStart;
+    }
+
+    public void ResetPhaseCounters() => _phases.Clear();
+    public void Dispose() { }
+
+    private void RecordCommands()
+    {
+        if (_tick >= ParticleStormDefaults.StormTickBuffer)
+        {
+            var slot = _stormSlots[_tick % ParticleStormDefaults.StormTickBuffer];
+            for (var i = 0; i < ParticleStormDefaults.BatchSize; i++)
+                _stream.Destroy(slot[i]);
+        }
+
+        for (var i = 0; i < _emitters.Length; i++)
+        {
+            _stream.Set(_emitters[i], new Position(_tick + i, _tick * 2 + i));
+            _stream.Set(_emitters[i], new Alpha((_tick + i) % 256));
+        }
+
+        var createSlot = _stormSlots[_tick % ParticleStormDefaults.StormTickBuffer];
+        for (var i = 0; i < ParticleStormDefaults.BatchSize; i++)
+        {
+            var entity = _stream.Create();
+            _stream.Add(entity, new Position(i, _tick));
+            _stream.Add(entity, new Velocity((i & 3) - 1, (i & 7) - 3));
+            _checksum += i + _tick;
+
+            var type = i % 10;
+            if (type < 3)
+                _stream.Add(entity, new Alpha((i + _tick) % 256));
+            else if (type < 6)
+            {
+                _stream.Add(entity, new Color(i % 256, (i + 64) % 256, (i + 128) % 256, 255));
+                _stream.Add(entity, new Scale(1 + (i % 10)));
+            }
+            else if (type < 8)
+            {
+                _stream.Add(entity, new Alpha((i + _tick) % 256));
+                _stream.Add(entity, new Lifetime(2));
+            }
+            else
+            {
+                _stream.Add(entity, new Color(i % 256, (i + 64) % 256, (i + 128) % 256, 255));
+                _stream.Add(entity, new Scale(1 + (i % 10)));
+                _stream.Add(entity, new Lifetime(2));
+            }
+
+            createSlot[i] = entity;
+        }
+    }
+}
+
+public sealed class FrifloParticleStormWorld : ICommandBufferGameScenario
+{
+    private readonly EntityStore _store = new();
+    private readonly CommandBuffer _buffer;
+    private readonly int[][] _stormSlots;
+    private readonly int[] _emitters;
+    private readonly PhaseTicks _phases = new();
+    private int _tick;
+    private long _checksum;
+
+    public FrifloParticleStormWorld()
+    {
+        _store.EnsureCapacity(ParticleStormDefaults.InitialLiveCount + ParticleStormDefaults.BatchSize);
+
+        _stormSlots = new int[ParticleStormDefaults.StormTickBuffer][];
+        for (var i = 0; i < _stormSlots.Length; i++)
+            _stormSlots[i] = new int[ParticleStormDefaults.BatchSize];
+
+        _emitters = new int[ParticleStormDefaults.EmitterCount];
+        for (var i = 0; i < _emitters.Length; i++)
+        {
+            var entity = _store.CreateEntity(new Position(i, i), new EmitterTag(i));
+            _emitters[i] = entity.Id;
+        }
+
+        _buffer = _store.GetCommandBuffer();
+        _buffer.ReuseBuffer = true;
+    }
+
+    public string Engine => "Friflo-Storm";
+    public int LiveCount => ParticleStormDefaults.EmitterCount + Math.Min(_tick, ParticleStormDefaults.StormTickBuffer) * ParticleStormDefaults.BatchSize;
+    public long Checksum => _checksum;
+    public PhaseTicks Phases => _phases;
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public long RunTick()
+    {
+        var tickStart = _checksum;
+        var start = Stopwatch.GetTimestamp();
+
+        for (var i = 0; i < _emitters.Length; i++)
+            _checksum += _emitters[i] + i;
+        var afterQuery = Stopwatch.GetTimestamp();
+
+        RecordCommands();
+        var afterRecord = Stopwatch.GetTimestamp();
+
+        _buffer.Playback();
+        var afterApply = Stopwatch.GetTimestamp();
+
+        _phases.Query += afterQuery - start;
+        _phases.Record += afterRecord - afterQuery;
+        _phases.Apply += afterApply - afterRecord;
+        _tick++;
+        return _checksum - tickStart;
+    }
+
+    public void ResetPhaseCounters() => _phases.Clear();
+    public void Dispose() { }
+
+    private void RecordCommands()
+    {
+        if (_tick >= ParticleStormDefaults.StormTickBuffer)
+        {
+            var slot = _stormSlots[_tick % ParticleStormDefaults.StormTickBuffer];
+            for (var i = 0; i < ParticleStormDefaults.BatchSize; i++)
+                _buffer.DeleteEntity(slot[i]);
+        }
+
+        for (var i = 0; i < _emitters.Length; i++)
+        {
+            _buffer.AddComponent(_emitters[i], new Position(_tick + i, _tick * 2 + i));
+            _buffer.AddComponent(_emitters[i], new Alpha((_tick + i) % 256));
+        }
+
+        var createSlot = _stormSlots[_tick % ParticleStormDefaults.StormTickBuffer];
+        for (var i = 0; i < ParticleStormDefaults.BatchSize; i++)
+        {
+            var entityId = _buffer.CreateEntity();
+            _buffer.AddComponent(entityId, new Position(i, _tick));
+            _buffer.AddComponent(entityId, new Velocity((i & 3) - 1, (i & 7) - 3));
+            _checksum += i + _tick;
+
+            var type = i % 10;
+            if (type < 3)
+                _buffer.AddComponent(entityId, new Alpha((i + _tick) % 256));
+            else if (type < 6)
+            {
+                _buffer.AddComponent(entityId, new Color(i % 256, (i + 64) % 256, (i + 128) % 256, 255));
+                _buffer.AddComponent(entityId, new Scale(1 + (i % 10)));
+            }
+            else if (type < 8)
+            {
+                _buffer.AddComponent(entityId, new Alpha((i + _tick) % 256));
+                _buffer.AddComponent(entityId, new Lifetime(2));
+            }
+            else
+            {
+                _buffer.AddComponent(entityId, new Color(i % 256, (i + 64) % 256, (i + 128) % 256, 255));
+                _buffer.AddComponent(entityId, new Scale(1 + (i % 10)));
+                _buffer.AddComponent(entityId, new Lifetime(2));
+            }
+
+            createSlot[i] = entityId;
+        }
+    }
+}
+
+public sealed class ArchParticleStormWorld : ICommandBufferGameScenario
+{
+    private readonly ArchWorld _world = ArchWorld.Create();
+    // Arch CB cannot safely destroy entities from a previous Playback cycle,
+    // so structural ops (create/destroy) go directly to the world (immediate mode).
+    // Buffer is used only for emitter Set (which CB handles correctly).
+    private readonly ArchCommandBuffer _buffer = new(ParticleStormDefaults.BatchSize);
+    private readonly ArchEntity[][] _stormSlots;
+    private readonly ArchEntity[] _emitters;
+    private readonly PhaseTicks _phases = new();
+    private int _tick;
+    private long _checksum;
+
+    public ArchParticleStormWorld()
+    {
+        _stormSlots = new ArchEntity[ParticleStormDefaults.StormTickBuffer][];
+        for (var i = 0; i < _stormSlots.Length; i++)
+        {
+            _stormSlots[i] = new ArchEntity[ParticleStormDefaults.BatchSize];
+            for (var j = 0; j < ParticleStormDefaults.BatchSize; j++)
+                _stormSlots[i][j] = CreateEntityDirect(j % 10, j, 0);
+        }
+
+        _emitters = new ArchEntity[ParticleStormDefaults.EmitterCount];
+        for (var i = 0; i < _emitters.Length; i++)
+            _emitters[i] = _world.Create<Position, EmitterTag>(new Position(i, i), new EmitterTag(i));
+    }
+
+    public string Engine => "Arch-Storm";
+    public int LiveCount => ParticleStormDefaults.EmitterCount + Math.Min(_tick, ParticleStormDefaults.StormTickBuffer) * ParticleStormDefaults.BatchSize;
+    public long Checksum => _checksum;
+    public PhaseTicks Phases => _phases;
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public long RunTick()
+    {
+        var tickStart = _checksum;
+        var start = Stopwatch.GetTimestamp();
+
+        for (var i = 0; i < _emitters.Length; i++)
+            _checksum += _emitters[i].Id + i;
+        var afterQuery = Stopwatch.GetTimestamp();
+
+        RecordCommands();
+        var afterRecord = Stopwatch.GetTimestamp();
+
+        // Only emitter Set goes through buffer
+        _buffer.Playback(_world, true);
+        var afterApply = Stopwatch.GetTimestamp();
+
+        _phases.Query += afterQuery - start;
+        _phases.Record += afterRecord - afterQuery;
+        _phases.Apply += afterApply - afterRecord;
+        _tick++;
+        return _checksum - tickStart;
+    }
+
+    public void ResetPhaseCounters() => _phases.Clear();
+
+    public void Dispose()
+    {
+        _buffer.Dispose();
+        _world.Dispose();
+    }
+
+    private void RecordCommands()
+    {
+        // Destroy old batch directly (immediate mode)
+        if (_tick >= ParticleStormDefaults.StormTickBuffer)
+        {
+            var slot = _stormSlots[_tick % ParticleStormDefaults.StormTickBuffer];
+            for (var i = 0; i < ParticleStormDefaults.BatchSize; i++)
+                _world.Destroy(slot[i]);
+        }
+
+        // Emitter Set through buffer (the only CB usage)
+        for (var i = 0; i < _emitters.Length; i++)
+        {
+            _buffer.Set(_emitters[i], new Position(_tick + i, _tick * 2 + i));
+            _buffer.Set(_emitters[i], new Alpha((_tick + i) % 256));
+        }
+
+        // Create new batch directly (immediate mode)
+        var createSlot = _stormSlots[_tick % ParticleStormDefaults.StormTickBuffer];
+        for (var i = 0; i < ParticleStormDefaults.BatchSize; i++)
+        {
+            var entity = CreateEntityDirect(i % 10, i, _tick);
+            _checksum += i + _tick;
+            createSlot[i] = entity;
+        }
+    }
+
+    private ArchEntity CreateEntityDirect(int type, int i, int tick)
+    {
+        var p = new Position(i, tick);
+        var v = new Velocity((i & 3) - 1, (i & 7) - 3);
+        if (type < 3)
+            return _world.Create<Position, Velocity, Alpha>(p, v, new Alpha((i + tick) % 256));
+        else if (type < 6)
+            return _world.Create<Position, Velocity, Color, Scale>(p, v, new Color(i % 256, (i + 64) % 256, (i + 128) % 256, 255), new Scale(1 + (i % 10)));
+        else if (type < 8)
+            return _world.Create<Position, Velocity, Alpha, Lifetime>(p, v, new Alpha((i + tick) % 256), new Lifetime(2));
+        else
+            return _world.Create<Position, Velocity, Color, Scale, Lifetime>(p, v, new Color(i % 256, (i + 64) % 256, (i + 128) % 256, 255), new Scale(1 + (i % 10)), new Lifetime(2));
+    }
+}
+
 public struct Position : IComponent
 {
     public int X;
@@ -926,4 +1396,31 @@ public struct Frozen : IComponent
 {
     public int Ticks;
     public Frozen(int ticks) { Ticks = ticks; }
+}
+
+public struct Alpha : IComponent
+{
+    public int Value;
+    public Alpha(int value) { Value = value; }
+}
+
+public struct Color : IComponent
+{
+    public int R;
+    public int G;
+    public int B;
+    public int A;
+    public Color(int r, int g, int b, int a) { R = r; G = g; B = b; A = a; }
+}
+
+public struct Scale : IComponent
+{
+    public int Value;
+    public Scale(int value) { Value = value; }
+}
+
+public struct EmitterTag : IComponent
+{
+    public int Value;
+    public EmitterTag(int value) { Value = value; }
 }

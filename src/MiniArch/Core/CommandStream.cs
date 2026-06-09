@@ -28,6 +28,9 @@ public sealed class CommandStream
     private int _archetypeCacheCount;
     private int _archetypeCacheGeneration = -1;
     private ArchetypeCacheEntry[] _archetypeCache = [];
+    private Archetype? _lastCreatedArchetype;
+    private int _lastCreatedComponentCount;
+    private ComponentType _lastCreatedFirstComponentType;
 
     public CommandStream(World world)
     {
@@ -413,24 +416,8 @@ public sealed class CommandStream
                 }
             }
 
-            for (var i = 0; i < frozen.CreatedCount; i++)
-            {
-                var entity = frozen.CreatedEntities[i];
-                if (createdDestroyed.Length > 0 && createdDestroyed[i])
-                {
-                    _world.ReleaseReservedEntity(entity);
-                    continue;
-                }
-
-                var count = frozen.CreatedComponentCounts[i];
-                if (count == 0)
-                {
-                    _world.MaterializeReservedEntity(entity, Array.Empty<RawComponentValue>(), reservationChecked: true);
-                    continue;
-                }
-
-                MaterializeCreatedEntityFromFrozen(entity, values.AsSpan(offsets[i], count));
-            }
+            // Group by archetype — same as the non-frozen Submit hot path.
+            GroupByArchetypeFrozen(frozen, values, offsets, createdDestroyed);
         }
         finally
         {
@@ -440,55 +427,64 @@ public sealed class CommandStream
         }
     }
 
-    private void MaterializeCreatedEntityFromFrozen(Entity entity, ReadOnlySpan<CreatedComponentRef> components)
+    private void GroupByArchetypeFrozen(
+        FrozenStreamState frozen, CreatedComponentRef[] values, int[] offsets, bool[] createdDestroyed)
     {
-        if (IsStrictlySortedByComponentType(components))
-        {
-            var archetype = LookupArchetypeCache(components, out var hash);
-            if (archetype == null)
-            {
-                var signatureTypes = new ComponentType[components.Length];
-                for (var i = 0; i < components.Length; i++)
-                {
-                    signatureTypes[i] = components[i].ComponentType;
-                }
+        const int maxGroups = 64;
+        var groupKeys = ArrayPool<int>.Shared.Rent(maxGroups);
+        var groupArchetypes = ArrayPool<Archetype?>.Shared.Rent(maxGroups);
+        var entityGroup = ArrayPool<int>.Shared.Rent(frozen.CreatedCount);
+        int groupCount = 0;
 
-                archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(signatureTypes));
-                InsertArchetypeCache(components.Length, archetype, hash);
+        for (var i = 0; i < frozen.CreatedCount; i++)
+        {
+            if (createdDestroyed.Length > 0 && createdDestroyed[i])
+            {
+                _world.ReleaseReservedEntity(frozen.CreatedEntities[i]);
+                entityGroup[i] = -1;
+                continue;
             }
 
-            _world.MaterializeReservedEntityTyped(entity, archetype, components);
-            return;
-        }
-
-        var count = components.Length;
-        var componentTypes = ArrayPool<ComponentType>.Shared.Rent(count);
-        var sortedComponents = ArrayPool<CreatedComponentRef>.Shared.Rent(count);
-        try
-        {
-            for (var i = 0; i < count; i++)
+            var count = frozen.CreatedComponentCounts[i];
+            if (count == 0)
             {
-                componentTypes[i] = components[i].ComponentType;
-                sortedComponents[i] = components[i];
+                _world.MaterializeReservedEntity(frozen.CreatedEntities[i], Array.Empty<RawComponentValue>(), reservationChecked: true);
+                entityGroup[i] = -1;
+                continue;
             }
 
-            Array.Sort(componentTypes, sortedComponents, 0, count);
-            var archetype = LookupArchetypeCache(componentTypes, count, out var hash);
-            if (archetype == null)
+            var span = values.AsSpan(offsets[i], count);
+            var key = ComputeGroupKey(span);
+
+            int g;
+            for (g = 0; g < groupCount; g++)
             {
-                var signatureTypes = new ComponentType[count];
-                Array.Copy(componentTypes, signatureTypes, count);
-                archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(signatureTypes));
-                InsertArchetypeCache(count, archetype, hash);
+                if (groupKeys[g] == key && ArchetypeMatchesComponentSpan(groupArchetypes[g]!, span))
+                    break;
             }
 
-            _world.MaterializeReservedEntityTyped(entity, archetype, sortedComponents.AsSpan(0, count));
+            if (g == groupCount)
+            {
+                groupKeys[g] = key;
+                groupArchetypes[g] = ResolveArchetypeForSpan(span);
+                groupCount++;
+            }
+
+            entityGroup[i] = g;
         }
-        finally
+
+        for (var i = 0; i < frozen.CreatedCount; i++)
         {
-            ArrayPool<ComponentType>.Shared.Return(componentTypes);
-            ArrayPool<CreatedComponentRef>.Shared.Return(sortedComponents);
+            var g = entityGroup[i];
+            if (g < 0) continue;
+            var entity = frozen.CreatedEntities[i];
+            var count = frozen.CreatedComponentCounts[i];
+            _world.MaterializeReservedEntityTyped(entity, groupArchetypes[g]!, values.AsSpan(offsets[i], count));
         }
+
+        ArrayPool<int>.Shared.Return(groupKeys);
+        ArrayPool<Archetype?>.Shared.Return(groupArchetypes);
+        ArrayPool<int>.Shared.Return(entityGroup);
     }
 
     private static int[] BuildCreatedComponentOffsets(FrozenStreamState frozen, out int totalComponentCount)
@@ -817,24 +813,9 @@ public sealed class CommandStream
                 }
             }
 
-            for (var i = 0; i < _createdCount; i++)
-            {
-                var entity = _createdEntities[i];
-                if (createdDestroyed.Length > 0 && createdDestroyed[i])
-                {
-                    _world.ReleaseReservedEntity(entity);
-                    continue;
-                }
-
-                var count = _createdComponentCounts[i];
-                if (count == 0)
-                {
-                    _world.MaterializeReservedEntity(entity, Array.Empty<RawComponentValue>(), reservationChecked: true);
-                    continue;
-                }
-
-                MaterializeCreatedEntity(entity, values.AsSpan(offsets[i], count));
-            }
+            // Group created entities by component combination — archetype lookup once per group.
+            // Uses (componentCount << 24) ^ FastHash as group key (wide enough for practical archetype counts).
+            GroupByArchetype(values, offsets, createdDestroyed);
         }
         finally
         {
@@ -842,6 +823,144 @@ public sealed class CommandStream
             if (writes.Length > 0) ArrayPool<int>.Shared.Return(writes);
             if (offsets.Length > 0) ArrayPool<int>.Shared.Return(offsets);
         }
+    }
+
+    private void GroupByArchetype(
+        CreatedComponentRef[] values, int[] offsets, bool[] createdDestroyed)
+    {
+        // First pass: resolve archetype for each unique component combination.
+        // Key format: (componentCount << 24) | (hash & 0xFFFFFF)
+        const int maxGroups = 64; // far beyond practical archetype variants per batch
+        var groupKeys = ArrayPool<int>.Shared.Rent(maxGroups);
+        var groupArchetypes = ArrayPool<Archetype?>.Shared.Rent(maxGroups);
+        var groupFirstIdx = ArrayPool<int>.Shared.Rent(maxGroups);
+        var entityGroup = ArrayPool<int>.Shared.Rent(_createdCount);
+        int groupCount = 0;
+
+        for (var i = 0; i < _createdCount; i++)
+        {
+            if (createdDestroyed.Length > 0 && createdDestroyed[i])
+            {
+                _world.ReleaseReservedEntity(_createdEntities[i]);
+                entityGroup[i] = -1;
+                continue;
+            }
+
+            var count = _createdComponentCounts[i];
+            if (count == 0)
+            {
+                _world.MaterializeReservedEntity(_createdEntities[i], Array.Empty<RawComponentValue>(), reservationChecked: true);
+                entityGroup[i] = -1;
+                continue;
+            }
+
+            var span = values.AsSpan(offsets[i], count);
+            var key = ComputeGroupKey(span);
+
+            // Find existing group
+            int g;
+            for (g = 0; g < groupCount; g++)
+            {
+                if (groupKeys[g] == key && ArchetypeMatchesComponentSpan(groupArchetypes[g]!, span))
+                    break;
+            }
+
+            if (g == groupCount)
+            {
+                // New group — resolve archetype once
+                var archetype = ResolveArchetypeForSpan(span);
+                groupKeys[g] = key;
+                groupArchetypes[g] = archetype;
+                groupFirstIdx[g] = i;
+                groupCount++;
+            }
+
+            entityGroup[i] = g;
+        }
+
+        // Second pass: materialize entities using their group's archetype.
+        for (var i = 0; i < _createdCount; i++)
+        {
+            var g = entityGroup[i];
+            if (g < 0) continue;
+
+            var entity = _createdEntities[i];
+            var count = _createdComponentCounts[i];
+            var span = values.AsSpan(offsets[i], count);
+            _world.MaterializeReservedEntityTyped(entity, groupArchetypes[g]!, span);
+        }
+
+        ArrayPool<int>.Shared.Return(groupKeys);
+        ArrayPool<Archetype?>.Shared.Return(groupArchetypes);
+        ArrayPool<int>.Shared.Return(groupFirstIdx);
+        ArrayPool<int>.Shared.Return(entityGroup);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int ComputeGroupKey(ReadOnlySpan<CreatedComponentRef> components)
+    {
+        var hash = components.Length;
+        for (var i = 0; i < components.Length; i++)
+            hash = hash * 31 + components[i].ComponentType.Value;
+        return (components.Length << 24) | (hash & 0xFFFFFF);
+    }
+
+    private static bool ArchetypeMatchesComponentSpan(Archetype archetype, ReadOnlySpan<CreatedComponentRef> components)
+    {
+        var signature = archetype.Signature.AsSpan();
+        if (signature.Length != components.Length) return false;
+        for (var i = 0; i < components.Length; i++)
+            if (signature[i] != components[i].ComponentType) return false;
+        return true;
+    }
+
+    private Archetype ResolveArchetypeForSpan(ReadOnlySpan<CreatedComponentRef> components)
+    {
+        // Fast path: last-created archetype hit
+        if (_lastCreatedArchetype != null &&
+            _lastCreatedComponentCount == components.Length &&
+            _lastCreatedFirstComponentType == components[0].ComponentType &&
+            SignatureEquals(_lastCreatedArchetype.Signature.AsSpan(), components))
+        {
+            return _lastCreatedArchetype;
+        }
+
+        // Cache lookup
+        var hash = ComputeComponentHash(components);
+        if (_archetypeCacheGeneration != _world.CreateArchetypeCacheGeneration)
+        {
+            _archetypeCacheGeneration = _world.CreateArchetypeCacheGeneration;
+            _archetypeCacheCount = 0;
+        }
+
+        for (var i = 0; i < _archetypeCacheCount; i++)
+        {
+            var entry = _archetypeCache[i];
+            if (entry.Hash == hash && entry.ComponentCount == components.Length &&
+                SignatureEquals(entry.Archetype.Signature.AsSpan(), components))
+            {
+                return entry.Archetype;
+            }
+        }
+
+        // Create new archetype
+        var signatureTypes = new ComponentType[components.Length];
+        for (var i = 0; i < components.Length; i++)
+            signatureTypes[i] = components[i].ComponentType;
+        var archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(signatureTypes));
+
+        // Insert into cache
+        if (_archetypeCache.Length == 0)
+            _archetypeCache = new ArchetypeCacheEntry[ArchetypeCacheSize];
+        var cacheIdx = _archetypeCacheCount < ArchetypeCacheSize
+            ? _archetypeCacheCount++
+            : hash & (ArchetypeCacheSize - 1);
+        _archetypeCache[cacheIdx] = new ArchetypeCacheEntry(hash, components.Length, archetype);
+
+        _lastCreatedArchetype = archetype;
+        _lastCreatedComponentCount = components.Length;
+        _lastCreatedFirstComponentType = components[0].ComponentType;
+        return archetype;
     }
 
     private int[] BuildCreatedComponentOffsets(out int totalComponentCount)
@@ -863,122 +982,6 @@ public sealed class CommandStream
         return offsets;
     }
 
-    private void MaterializeCreatedEntity(Entity entity, ReadOnlySpan<CreatedComponentRef> components)
-    {
-        if (TryMaterializeNormalizedCreatedEntity(entity, components))
-        {
-            return;
-        }
-
-        var count = components.Length;
-        var componentTypes = ArrayPool<ComponentType>.Shared.Rent(count);
-        var sortedComponents = ArrayPool<CreatedComponentRef>.Shared.Rent(count);
-        try
-        {
-            for (var i = 0; i < count; i++)
-            {
-                componentTypes[i] = components[i].ComponentType;
-                sortedComponents[i] = components[i];
-            }
-
-            Array.Sort(componentTypes, sortedComponents, 0, count);
-            var archetype = LookupArchetypeCache(componentTypes, count, out var hash);
-            if (archetype == null)
-            {
-                var signatureTypes = new ComponentType[count];
-                Array.Copy(componentTypes, signatureTypes, count);
-                archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(signatureTypes));
-                InsertArchetypeCache(count, archetype, hash);
-            }
-
-            _world.MaterializeReservedEntityTyped(entity, archetype, sortedComponents.AsSpan(0, count));
-        }
-        finally
-        {
-            ArrayPool<ComponentType>.Shared.Return(componentTypes);
-            ArrayPool<CreatedComponentRef>.Shared.Return(sortedComponents);
-        }
-    }
-
-    private bool TryMaterializeNormalizedCreatedEntity(Entity entity, ReadOnlySpan<CreatedComponentRef> components)
-    {
-        if (!IsStrictlySortedByComponentType(components))
-        {
-            return false;
-        }
-
-        var archetype = LookupArchetypeCache(components, out var hash);
-        if (archetype == null)
-        {
-            var signatureTypes = new ComponentType[components.Length];
-            for (var i = 0; i < components.Length; i++)
-            {
-                signatureTypes[i] = components[i].ComponentType;
-            }
-
-            archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(signatureTypes));
-            InsertArchetypeCache(components.Length, archetype, hash);
-        }
-
-        _world.MaterializeReservedEntityTyped(entity, archetype, components);
-        return true;
-    }
-
-    private static bool IsStrictlySortedByComponentType(ReadOnlySpan<CreatedComponentRef> components)
-    {
-        for (var i = 1; i < components.Length; i++)
-        {
-            if (components[i - 1].ComponentType.Value >= components[i].ComponentType.Value)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private Archetype? LookupArchetypeCache(ComponentType[] componentTypes, int count, out int hash)
-    {
-        if (_archetypeCacheGeneration != _world.CreateArchetypeCacheGeneration)
-        {
-            _archetypeCacheGeneration = _world.CreateArchetypeCacheGeneration;
-            _archetypeCacheCount = 0;
-        }
-
-        hash = ComputeComponentHash(componentTypes, count);
-        for (var i = 0; i < _archetypeCacheCount; i++)
-        {
-            var entry = _archetypeCache[i];
-            if (entry.Hash == hash && entry.ComponentCount == count && entry.Archetype.Signature.AsSpan().SequenceEqual(componentTypes.AsSpan(0, count)))
-            {
-                return entry.Archetype;
-            }
-        }
-
-        return null;
-    }
-
-    private Archetype? LookupArchetypeCache(ReadOnlySpan<CreatedComponentRef> components, out int hash)
-    {
-        if (_archetypeCacheGeneration != _world.CreateArchetypeCacheGeneration)
-        {
-            _archetypeCacheGeneration = _world.CreateArchetypeCacheGeneration;
-            _archetypeCacheCount = 0;
-        }
-
-        hash = ComputeComponentHash(components);
-        for (var i = 0; i < _archetypeCacheCount; i++)
-        {
-            var entry = _archetypeCache[i];
-            if (entry.Hash == hash && entry.ComponentCount == components.Length && SignatureEquals(entry.Archetype.Signature.AsSpan(), components))
-            {
-                return entry.Archetype;
-            }
-        }
-
-        return null;
-    }
-
     private static bool SignatureEquals(ReadOnlySpan<ComponentType> signature, ReadOnlySpan<CreatedComponentRef> components)
     {
         for (var i = 0; i < components.Length; i++)
@@ -992,39 +995,12 @@ public sealed class CommandStream
         return true;
     }
 
-    private void InsertArchetypeCache(int count, Archetype archetype, int hash)
-    {
-        if (_archetypeCache.Length == 0)
-        {
-            _archetypeCache = new ArchetypeCacheEntry[ArchetypeCacheSize];
-        }
-
-        var index = _archetypeCacheCount < ArchetypeCacheSize
-            ? _archetypeCacheCount++
-            : hash & (ArchetypeCacheSize - 1);
-        _archetypeCache[index] = new ArchetypeCacheEntry(hash, count, archetype);
-    }
-
-    private static int ComputeComponentHash(ComponentType[] componentTypes, int count)
-    {
-        var hash = new HashCode();
-        for (var i = 0; i < count; i++)
-        {
-            hash.Add(componentTypes[i].Value);
-        }
-
-        return hash.ToHashCode();
-    }
-
     private static int ComputeComponentHash(ReadOnlySpan<CreatedComponentRef> components)
     {
-        var hash = new HashCode();
+        var hash = components.Length;
         for (var i = 0; i < components.Length; i++)
-        {
-            hash.Add(components[i].ComponentType.Value);
-        }
-
-        return hash.ToHashCode();
+            hash = hash * 31 + components[i].ComponentType.Value;
+        return hash;
     }
 
     private void ApplyExistingEntityCommands()
@@ -1252,6 +1228,7 @@ public sealed class CommandStream
         _lastCreatedEntity = default;
         _lastCreatedIndex = -1;
         _hierarchyByChild.Clear();
+        _lastCreatedArchetype = null;
 
     }
 
