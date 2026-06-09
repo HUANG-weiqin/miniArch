@@ -368,8 +368,9 @@ public sealed partial class World : IDisposable
 
     /// <summary>
     /// Zero-allocation archetype lookup by linear scan over existing
-    /// archetypes.  Uses set comparison (order-independent), so input
-    /// does NOT need to be sorted.
+    /// archetypes.  Uses a direct double-loop set comparison so it works
+    /// correctly even with unsorted Signatures (e.g. from CommandStream
+    /// whose Signature stores components in ADD order).
     /// </summary>
     internal Archetype? TryGetArchetype(ReadOnlySpan<ComponentType> types)
     {
@@ -379,10 +380,23 @@ public sealed partial class World : IDisposable
         {
             if (signature.Count != count) continue;
 
+            // Double-loop set comparison — order-independent and safe
+            // for unsorted signature arrays.
+            var sigSpan = signature.AsSpan();
             var ok = true;
             for (var i = 0; i < count; i++)
             {
-                if (!signature.Contains(types[i]))
+                var found = false;
+                for (var j = 0; j < sigSpan.Length; j++)
+                {
+                    if (sigSpan[j] == types[i])
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+
+                if (!found)
                 {
                     ok = false;
                     break;

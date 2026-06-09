@@ -625,7 +625,7 @@ public sealed class CommandBuffer
 
                     Array.Sort(components, sourceComponents, 0, componentCount);
 
-                    // Zero-allocation archetype lookup via binary search on World's sorted snapshot
+                    // Zero-allocation archetype lookup via order-independent set comparison
                     var archetype = _world.TryGetArchetype(components.AsSpan(0, componentCount));
                     if (archetype == null)
                     {
@@ -914,7 +914,7 @@ public sealed class CommandBuffer
 
         Array.Sort(types, sources, 0, idx);
 
-        // Zero-allocation archetype lookup via binary search on World's sorted snapshot
+        // Zero-allocation archetype lookup via order-independent set comparison
         var archetype = _world.TryGetArchetype(types.AsSpan(0, idx));
         if (archetype == null)
         {
