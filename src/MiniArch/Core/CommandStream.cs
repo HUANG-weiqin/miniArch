@@ -24,10 +24,6 @@ public sealed class CommandStream
     private int _lastCreatedIndex = -1;
     private readonly record struct HierarchyIntent(bool IsLinked, Entity Parent);
     private Dictionary<Entity, HierarchyIntent> _hierarchyByChild = new();
-    private const int ArchetypeCacheSize = 16;
-    private int _archetypeCacheCount;
-    private int _archetypeCacheGeneration = -1;
-    private ArchetypeCacheEntry[] _archetypeCache = [];
     private Archetype? _lastCreatedArchetype;
     private int _lastCreatedComponentCount;
     private ComponentType _lastCreatedFirstComponentType;
@@ -291,7 +287,6 @@ public sealed class CommandStream
         _lastCreatedEntity = default;
         _lastCreatedIndex = -1;
         _hierarchyByChild = new Dictionary<Entity, HierarchyIntent>();
-        _archetypeCacheCount = 0;
 
         return frozen;
     }
@@ -916,7 +911,7 @@ public sealed class CommandStream
 
     private Archetype ResolveArchetypeForSpan(ReadOnlySpan<CreatedComponentRef> components)
     {
-        // Fast path: last-created archetype hit
+        // Fast path: last-created archetype hit (same component set as previous call)
         if (_lastCreatedArchetype != null &&
             _lastCreatedComponentCount == components.Length &&
             _lastCreatedFirstComponentType == components[0].ComponentType &&
@@ -925,37 +920,19 @@ public sealed class CommandStream
             return _lastCreatedArchetype;
         }
 
-        // Cache lookup
-        var hash = ComputeComponentHash(components);
-        if (_archetypeCacheGeneration != _world.CreateArchetypeCacheGeneration)
-        {
-            _archetypeCacheGeneration = _world.CreateArchetypeCacheGeneration;
-            _archetypeCacheCount = 0;
-        }
-
-        for (var i = 0; i < _archetypeCacheCount; i++)
-        {
-            var entry = _archetypeCache[i];
-            if (entry.Hash == hash && entry.ComponentCount == components.Length &&
-                SignatureEquals(entry.Archetype.Signature.AsSpan(), components))
-            {
-                return entry.Archetype;
-            }
-        }
-
-        // Create new archetype
-        var signatureTypes = new ComponentType[components.Length];
+        // Copy component types to stack (zero allocation) and find existing
+        // archetype via order-independent set comparison.
+        Span<ComponentType> types = stackalloc ComponentType[components.Length];
         for (var i = 0; i < components.Length; i++)
-            signatureTypes[i] = components[i].ComponentType;
-        var archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(signatureTypes));
+            types[i] = components[i].ComponentType;
 
-        // Insert into cache
-        if (_archetypeCache.Length == 0)
-            _archetypeCache = new ArchetypeCacheEntry[ArchetypeCacheSize];
-        var cacheIdx = _archetypeCacheCount < ArchetypeCacheSize
-            ? _archetypeCacheCount++
-            : hash & (ArchetypeCacheSize - 1);
-        _archetypeCache[cacheIdx] = new ArchetypeCacheEntry(hash, components.Length, archetype);
+        var archetype = _world.TryGetArchetype(types);
+        if (archetype == null)
+        {
+            // Truly new archetype — allocate and create
+            var signatureTypes = types.ToArray();
+            archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(signatureTypes));
+        }
 
         _lastCreatedArchetype = archetype;
         _lastCreatedComponentCount = components.Length;
@@ -993,14 +970,6 @@ public sealed class CommandStream
         }
 
         return true;
-    }
-
-    private static int ComputeComponentHash(ReadOnlySpan<CreatedComponentRef> components)
-    {
-        var hash = components.Length;
-        for (var i = 0; i < components.Length; i++)
-            hash = hash * 31 + components[i].ComponentType.Value;
-        return hash;
     }
 
     private void ApplyExistingEntityCommands()
@@ -1252,8 +1221,6 @@ public sealed class CommandStream
         ComponentCommandStore Store,
         int DataIndex,
         int DataSize);
-
-    private readonly record struct ArchetypeCacheEntry(int Hash, int ComponentCount, Archetype Archetype);
 
     internal abstract class ComponentCommandStore
     {

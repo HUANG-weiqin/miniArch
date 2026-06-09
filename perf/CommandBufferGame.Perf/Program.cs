@@ -43,7 +43,6 @@ public static class Program
         GC.Collect(2, GCCollectionMode.Forced, true, true);
         GC.WaitForPendingFinalizers();
 
-        RunAndPrint(new ArchSteadyCombatWorld(), options);
         Console.WriteLine();
         Console.WriteLine("=== ParticleStorm: high structural churn, minimal Set ===");
         Console.WriteLine($"Batch: {ParticleStormDefaults.BatchSize:N0}/tick, Lifespan: {ParticleStormDefaults.StormTickBuffer} ticks, Steady pool: {ParticleStormDefaults.InitialLiveCount - ParticleStormDefaults.EmitterCount:N0}");
@@ -60,7 +59,6 @@ public static class Program
         RunAndPrint(CreateFrifloParticleStormQuietly(), options);
         GC.Collect(2, GCCollectionMode.Forced, true, true);
         GC.WaitForPendingFinalizers();
-        RunAndPrint(new ArchParticleStormWorld(), options);
         Console.WriteLine();
         Console.WriteLine("Command: dotnet run -c Release --project perf/CommandBufferGame.Perf -- --warmup 3 --measure 10");
     }

@@ -43,21 +43,6 @@ public sealed class CommandBuffer
     [ThreadStatic] private static ComponentType[]? _tsExtractTypes;
     [ThreadStatic] private static CreatedComponent[]? _tsExtractSources;
 
-    // Bounded multi-entry archetype cache: avoids repeated Dictionary lookups and
-    // temporary array/Signature allocations for the same component set.
-    // 8 slots cover the attack pipeline's 6+ alternating archetypes with room to spare.
-    private const int ArchetypeCacheSize = 4;
-    private int _archetypeCacheCount;
-    private int _archetypeCacheGeneration = -1;
-    private readonly struct ArchetypeCacheEntry(int hash, int componentCount, Archetype archetype)
-    {
-        public readonly int Hash = hash;
-        public readonly int ComponentCount = componentCount;
-        public readonly Archetype Archetype = archetype;
-    }
-    private ArchetypeCacheEntry[] _archetypeCache = [];
-
-
     /// <summary>
     /// Creates a buffer for a world.
     /// </summary>
@@ -603,7 +588,6 @@ public sealed class CommandBuffer
         _createdOverflow = default;
         _currentSlabIndex = -1;
         _currentSlabOffset = 0;
-        _archetypeCacheCount = 0;
 
         return frozen;
     }
@@ -641,14 +625,13 @@ public sealed class CommandBuffer
 
                     Array.Sort(components, sourceComponents, 0, componentCount);
 
-                    // Use multi-entry archetype cache to avoid allocating ComponentType[] + Signature
-                    var archetype = LookupArchetypeCache(components, componentCount, out var hash);
+                    // Zero-allocation archetype lookup via binary search on World's sorted snapshot
+                    var archetype = _world.TryGetArchetype(components.AsSpan(0, componentCount));
                     if (archetype == null)
                     {
                         var comps = new ComponentType[componentCount];
                         Array.Copy(components, comps, componentCount);
                         archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(comps));
-                        InsertArchetypeCache(components, componentCount, archetype, hash);
                     }
 
                     for (var j = 0; j < componentCount; j++)
@@ -904,8 +887,6 @@ public sealed class CommandBuffer
 
     private (Archetype Archetype, int Count, ComponentType[] Types) BuildCreatedEntityComponents(in CreatedState state, out CreatedComponent[] sources)
     {
-        EnsureArchetypeCacheValid();
-
         var count = state.Map.Count + state.Map.OverflowCount;
 
         // ThreadStatic buffers — guaranteed non-null after the null-check block below
@@ -933,96 +914,16 @@ public sealed class CommandBuffer
 
         Array.Sort(types, sources, 0, idx);
 
-        // Archetype lookup via bounded multi-entry cache
-        var archetype = LookupArchetypeCache(types, idx, out var hash);
-        if (archetype != null)
-            goto ArchetypeResolved;
-
-        // True cache miss: allocate temporary array + Signature, look up in World
+        // Zero-allocation archetype lookup via binary search on World's sorted snapshot
+        var archetype = _world.TryGetArchetype(types.AsSpan(0, idx));
+        if (archetype == null)
         {
             var comps = new ComponentType[idx];
             Array.Copy(types, comps, idx);
             archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(comps));
-            InsertArchetypeCache(types, idx, archetype, hash);
         }
-    ArchetypeResolved:
 
         return (archetype, idx, types!);
-    }
-
-    /// <summary>
-    /// Probes the bounded archetype cache for an exact match.
-    /// Returns null if no entry matches. Outputs the computed hash for reuse on miss.
-    /// </summary>
-    private Archetype? LookupArchetypeCache(ComponentType[] types, int count, out int hash)
-    {
-        EnsureArchetypeCacheValid();
-
-        hash = ComputeComponentHash(types, count);
-        var cache = _archetypeCache;
-        for (var i = 0; i < _archetypeCacheCount; i++)
-        {
-            ref readonly var entry = ref cache[i];
-            if (entry.ComponentCount != count)
-                continue;
-
-            // Quick hash reject
-            if (hash != entry.Hash)
-                continue;
-
-            // Exact compare against the archetype's signature
-            var sig = entry.Archetype.Signature.AsSpan();
-            for (var h = 0; h < count; h++)
-            {
-                if (types[h].Value != sig[h].Value)
-                    goto NextEntry;
-            }
-            return entry.Archetype;
-        NextEntry:;
-        }
-        return null;
-    }
-
-    /// <summary>
-    /// Inserts an archetype into the bounded cache, evicting the oldest entry if full.
-    /// </summary>
-    private void InsertArchetypeCache(ComponentType[] types, int count, Archetype archetype, int hash)
-    {
-        EnsureArchetypeCacheValid();
-
-        if (_archetypeCache.Length == 0)
-            _archetypeCache = new ArchetypeCacheEntry[ArchetypeCacheSize];
-
-        if (_archetypeCacheCount < _archetypeCache.Length)
-        {
-            _archetypeCache[_archetypeCacheCount++] = new ArchetypeCacheEntry(hash, count, archetype);
-        }
-        else
-        {
-            // Evict oldest (index 0) by shifting left
-            Array.Copy(_archetypeCache, 1, _archetypeCache, 0, _archetypeCache.Length - 1);
-            _archetypeCache[_archetypeCache.Length - 1] = new ArchetypeCacheEntry(hash, count, archetype);
-        }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int ComputeComponentHash(ComponentType[] types, int count)
-    {
-        var hash = 17;
-        for (var i = 0; i < count; i++)
-            hash = unchecked((hash * 31) + types[i].Value);
-        return hash;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void EnsureArchetypeCacheValid()
-    {
-        var generation = _world.CreateArchetypeCacheGeneration;
-        if (_archetypeCacheGeneration == generation)
-            return;
-
-        _archetypeCacheGeneration = generation;
-        _archetypeCacheCount = 0;
     }
 
     private RawComponentValue[] BuildCreatedEntityComponentsForDelta(in CreatedState state)

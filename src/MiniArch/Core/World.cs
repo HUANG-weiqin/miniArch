@@ -124,8 +124,6 @@ public sealed partial class World : IDisposable
 
     internal int ArchetypeCount => Volatile.Read(ref _archetypeSnapshot).Length;
 
-    internal int CreateArchetypeCacheGeneration => _createArchetypeCacheGeneration;
-
     internal void Reset(int entitySlotCount)
     {
         if (entitySlotCount < 0)
@@ -366,6 +364,35 @@ public sealed partial class World : IDisposable
         _archetypes.Add(signature, archetype);
         PublishArchetypeSnapshot(archetype);
         return archetype;
+    }
+
+    /// <summary>
+    /// Zero-allocation archetype lookup by linear scan over existing
+    /// archetypes.  Uses set comparison (order-independent), so input
+    /// does NOT need to be sorted.
+    /// </summary>
+    internal Archetype? TryGetArchetype(ReadOnlySpan<ComponentType> types)
+    {
+        var count = types.Length;
+
+        foreach (var (signature, archetype) in _archetypes)
+        {
+            if (signature.Count != count) continue;
+
+            var ok = true;
+            for (var i = 0; i < count; i++)
+            {
+                if (!signature.Contains(types[i]))
+                {
+                    ok = false;
+                    break;
+                }
+            }
+
+            if (ok) return archetype;
+        }
+
+        return null;
     }
 
     private Type[] ResolveComponentTypes(Signature signature)
