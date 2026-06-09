@@ -23,23 +23,30 @@ public static class Program
         var options = BenchmarkOptions.Parse(args);
 
         Console.OutputEncoding = System.Text.Encoding.UTF8;
-        Console.WriteLine("=== CommandBuffer Game Steady-State: MiniArch vs Friflo vs Arch ===");
+
+        static void RunIf(bool matches, ICommandBufferGameScenario scenario, BenchmarkOptions opts)
+        {
+            if (!matches) return;
+            RunAndPrint(scenario, opts);
+        }
+
+        Console.WriteLine("=== CommandBuffer Game Steady-State: MiniArch vs Friflo ===");
         Console.WriteLine($"Actors: {ScenarioDefaults.ActorCount:N0}, Projectiles: {ScenarioDefaults.ProjectileCount:N0}, Spawn/Destroy: {ScenarioDefaults.ProjectileChurnPerTick:N0}/tick");
         Console.WriteLine($"Mutations: {ScenarioDefaults.ActorMutationCount:N0}/tick, Status toggles: {ScenarioDefaults.StatusToggleCount:N0}/tick");
-        Console.WriteLine($"Warmup: {options.WarmupSeconds}s, Measure: {options.MeasureSeconds}s");
+        Console.WriteLine($"Warmup: {options.WarmupSeconds}s, Measure: {options.MeasureSeconds}s{(options.Verbose ? ", Verbose" : "")}");
         Console.WriteLine();
         Console.WriteLine($"{"Engine",-10} | {"Ticks/s",10} | {"ms/tick",9} | {"Checksum",14} | {"Live",8} | {"Heap Δ",12} | {"GC",8} | {"Query",8} | {"Record",8} | {"Apply",8}");
         Console.WriteLine(new string('-', 116));
 
-        RunAndPrint(new MiniArchSteadyCombatWorld(), options);
+        RunIf(options.Matches("MiniArch"), new MiniArchSteadyCombatWorld(), options);
         GC.Collect(2, GCCollectionMode.Forced, true, true);
         GC.WaitForPendingFinalizers();
 
-        RunAndPrint(new MiniArchCommandStreamSteadyCombatWorld(), options);
+        RunIf(options.Matches("MiniStream"), new MiniArchCommandStreamSteadyCombatWorld(), options);
         GC.Collect(2, GCCollectionMode.Forced, true, true);
         GC.WaitForPendingFinalizers();
 
-        RunAndPrint(CreateFrifloScenarioQuietly(), options);
+        RunIf(options.Matches("Friflo"), CreateFrifloScenarioQuietly(), options);
         GC.Collect(2, GCCollectionMode.Forced, true, true);
         GC.WaitForPendingFinalizers();
 
@@ -50,13 +57,13 @@ public static class Program
         Console.WriteLine();
         Console.WriteLine($"{"Engine",-18} | {"Ticks/s",10} | {"ms/tick",9} | {"Checksum",14} | {"Live",8} | {"Heap Δ",12} | {"GC",8} | {"Query",8} | {"Record",8} | {"Apply",8}");
         Console.WriteLine(new string('-', 122));
-        RunAndPrint(new MiniArchParticleStormWorld(), options);
+        RunIf(options.Matches("MiniArch") || options.Matches("Storm"), new MiniArchParticleStormWorld(), options);
         GC.Collect(2, GCCollectionMode.Forced, true, true);
         GC.WaitForPendingFinalizers();
-        RunAndPrint(new MiniArchCommandStreamParticleStormWorld(), options);
+        RunIf(options.Matches("MiniStream") || options.Matches("Storm"), new MiniArchCommandStreamParticleStormWorld(), options);
         GC.Collect(2, GCCollectionMode.Forced, true, true);
         GC.WaitForPendingFinalizers();
-        RunAndPrint(CreateFrifloParticleStormQuietly(), options);
+        RunIf(options.Matches("Friflo"), CreateFrifloParticleStormQuietly(), options);
         GC.Collect(2, GCCollectionMode.Forced, true, true);
         GC.WaitForPendingFinalizers();
         Console.WriteLine();
@@ -138,12 +145,16 @@ public static class ParticleStormDefaults
     public const int InitialLiveCount = BatchSize * StormTickBuffer + EmitterCount;
 }
 
-public readonly record struct BenchmarkOptions(int WarmupSeconds, int MeasureSeconds)
+public readonly record struct BenchmarkOptions(int WarmupSeconds, int MeasureSeconds, bool Verbose, string? ScenarioFilter)
 {
+    public const int SampleInterval = 100;
+
     public static BenchmarkOptions Parse(string[] args)
     {
         var warmup = 3;
         var measure = 10;
+        var verbose = false;
+        string? scenarioFilter = null;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -158,11 +169,28 @@ public readonly record struct BenchmarkOptions(int WarmupSeconds, int MeasureSec
             {
                 measure = Math.Max(1, parsedMeasure);
                 i++;
+                continue;
+            }
+
+            if (args[i] == "--verbose" || args[i] == "-v")
+            {
+                verbose = true;
+                continue;
+            }
+
+            if (args[i] == "--scenario" && i + 1 < args.Length)
+            {
+                scenarioFilter = args[i + 1];
+                i++;
+                continue;
             }
         }
 
-        return new BenchmarkOptions(warmup, measure);
+        return new BenchmarkOptions(warmup, measure, verbose, scenarioFilter);
     }
+
+    public bool Matches(string engine) =>
+        ScenarioFilter is null || engine.Contains(ScenarioFilter, StringComparison.OrdinalIgnoreCase);
 }
 
 public readonly record struct ScenarioResult(
@@ -203,6 +231,7 @@ public sealed class PhaseTicks
 
 public static class BenchmarkRunner
 {
+
     public static ScenarioResult Run(ICommandBufferGameScenario scenario, BenchmarkOptions options)
     {
         var sw = Stopwatch.StartNew();
@@ -223,11 +252,46 @@ public static class BenchmarkRunner
 
         long checksum = 0;
         long ticks = 0;
+
+        if (options.Verbose)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"Baseline GC Heap: {heapBefore / (1024.0 * 1024.0):F2} MB");
+            Console.WriteLine();
+            Console.WriteLine($"{"Round",8} | {"Rounds/s",10} | {"Heap MB",8} | {"dHeap KB",8} | {"WS MB",7} | {"Gen0",5} | {"Gen1",5} | {"Gen2",5}");
+            Console.WriteLine(new string('-', 78));
+        }
+
+        long lastSampleHeap = heapBefore;
+        long lastSampleTicks = 0;
+        double lastSampleTime = 0;
         sw.Restart();
         while (sw.Elapsed.TotalSeconds < options.MeasureSeconds)
         {
             checksum += scenario.RunTick();
             ticks++;
+
+            if (options.Verbose && ticks % BenchmarkOptions.SampleInterval == 0)
+            {
+                var now = sw.Elapsed.TotalSeconds;
+                var currentHeap = GC.GetTotalMemory(false);
+                var ws = Environment.WorkingSet;
+                var roundDelta = ticks - lastSampleTicks;
+                var timeDelta = now - lastSampleTime;
+                var currentRoundsPerSec = timeDelta > 0 ? roundDelta / timeDelta : 0;
+                var dHeapKB = (currentHeap - lastSampleHeap) / 1024.0;
+                var heapMB = currentHeap / (1024.0 * 1024.0);
+                var wsMB = ws / (1024.0 * 1024.0);
+                var c0 = GC.CollectionCount(0) - g0;
+                var c1 = GC.CollectionCount(1) - g1;
+                var c2 = GC.CollectionCount(2) - g2;
+
+                Console.WriteLine($"{ticks,8} | {currentRoundsPerSec,10:F1} | {heapMB,8:F2} | {dHeapKB,8:F1} | {wsMB,7:F1} | {c0,5} | {c1,5} | {c2,5}");
+
+                lastSampleHeap = currentHeap;
+                lastSampleTicks = ticks;
+                lastSampleTime = now;
+            }
         }
 
         var elapsed = sw.Elapsed.TotalSeconds;
