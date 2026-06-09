@@ -2,7 +2,7 @@
 title: Cache & Memory Optimization Review
 module: MiniArch.Core
 description: Memory layout and cache behavior analysis of the ECS runtime, with optimization opportunities
-updated: 2026-06-08 (Edge cache 改为 bounded 4-slot LRU、补充 P12: Edge Cache bounded 优化、public API AggressiveInlining)
+updated: 2026-06-09 (P13: CommandBuffer Entity IComparable 去重排序零分配、P14: CommandStream ArchetypeCacheSize 4→16)
 ---
 # Cache & Memory Optimization Review
 
@@ -136,6 +136,24 @@ struct EntityRecord {
 ## P12: Edge Cache 从直索引改为 bounded LRU ✅ 已修复 (2026-06-08)
 
 同 P4，已实施。
+
+## P13: CommandBuffer 去重排序零分配 ✅ 已修复 (2026-06-09)
+
+**问题**：CommandBuffer 的 `DeduplicateExistingDestroyEntities` 使用 `Array.Sort<Entity>(entities, count, EntityDestroyComparer.Instance)`，自定义 `IComparer<T>` 导致 .NET 内部每调用分配 ~64 bytes delegate 闭包。每 tick 调用一次，10 秒积累 ~955 KB。
+
+**根因**：`Entity` 没有实现 `IComparable<Entity>`，必须用自定义 comparer。
+
+**Fix**：给 `Entity` 加 `IComparable<Entity>`，改为 `Array.Sort(entities, 0, count)` 使用默认比较器（零分配）。删除 `EntityDestroyComparer` 和 `CompareEntity`。
+
+**影响文件**：`Entity.cs`、`CommandBuffer.cs`
+
+## P14: CommandStream 本地 archetype cache 16 槽 ✅ 已修复 (2026-06-09)
+
+**问题**：`ResolveArchetypeForSpan` 只有 4 槽本地缓存。HeroComing 场景每 tick 两个 Submit 创建不同实体类型，原型种类超过 4 种。缓存未命中时走 `new ComponentType[n]`（~24 bytes），每 Submit 一次，累积 ~24 KB / 100 rounds。
+
+**Fix**：`ArchetypeCacheSize` 4 → 16。16 槽足够容纳所有稳态原型组合（实际 <10 种），cache miss 归零。
+
+**影响文件**：`CommandStream.cs`
 
 ## 认知模型
 
