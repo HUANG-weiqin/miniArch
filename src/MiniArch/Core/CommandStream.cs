@@ -42,36 +42,36 @@ public sealed class CommandStream
     public void Add<T>(Entity entity, T component)
     {
         var store = GetOrCreateComponentStore<T>();
-        var dataIndex = store.Append(component);
         if (_createdCount > 0)
         {
             var createdIndex = GetCreatedIndex(entity);
             if (createdIndex >= 0)
             {
+                var dataIndex = store.Append(component);
                 AppendCreatedComponent(createdIndex, CommandTypeInfo<T>.Type, store, dataIndex, CommandTypeInfo<T>.Size);
                 return;
             }
         }
 
-        store.AppendExisting(StreamOpKind.Add, entity, dataIndex);
+        store.AddExisting(StreamOpKind.Add, entity, in component);
         _componentCommandCount++;
     }
 
     public void Set<T>(Entity entity, T component)
     {
         var store = GetOrCreateComponentStore<T>();
-        var dataIndex = store.Append(component);
         if (_createdCount > 0)
         {
             var createdIndex = GetCreatedIndex(entity);
             if (createdIndex >= 0)
             {
+                var dataIndex = store.Append(component);
                 AppendCreatedComponent(createdIndex, CommandTypeInfo<T>.Type, store, dataIndex, CommandTypeInfo<T>.Size);
                 return;
             }
         }
 
-        store.AppendExisting(StreamOpKind.Set, entity, dataIndex);
+        store.AddExisting(StreamOpKind.Set, entity, in component);
         _componentCommandCount++;
     }
 
@@ -658,8 +658,19 @@ public sealed class CommandStream
             return index;
         }
 
-        public void AppendExisting(StreamOpKind kind, Entity entity, int dataIndex)
+        public void AddExisting(StreamOpKind kind, Entity entity, in T component)
         {
+            // Grow components array if needed
+            if (_count == _components.Length)
+            {
+                Array.Resize(ref _components, _components.Length == 0 ? 256 : _components.Length * 2);
+            }
+
+            var dataIndex = _count;
+            _components[dataIndex] = component;
+            _count++;
+
+            // Grow existing commands array if needed
             if (_existingCount == _existingCommands.Length)
             {
                 Array.Resize(ref _existingCommands, _existingCommands.Length == 0 ? 256 : _existingCommands.Length * 2);
@@ -723,7 +734,7 @@ public sealed class CommandStream
 
     private readonly record struct ExistingComponentCommand(StreamOpKind Kind, Entity Entity, int DataIndex);
 
-    private enum StreamOpKind : byte
+    internal enum StreamOpKind : byte
     {
         Add,
         Set,
