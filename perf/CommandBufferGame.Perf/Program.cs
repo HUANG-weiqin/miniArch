@@ -24,9 +24,10 @@ public static class Program
 
         Console.OutputEncoding = System.Text.Encoding.UTF8;
 
-        static void RunIf(bool matches, ICommandBufferGameScenario scenario, BenchmarkOptions opts)
+        static void RunIf(bool matches, Func<ICommandBufferGameScenario> factory, BenchmarkOptions opts)
         {
             if (!matches) return;
+            using var scenario = factory();
             RunAndPrint(scenario, opts);
         }
 
@@ -38,15 +39,15 @@ public static class Program
         Console.WriteLine($"{"Engine",-10} | {"Ticks/s",10} | {"ms/tick",9} | {"Checksum",14} | {"Live",8} | {"Heap Δ",12} | {"GC",8} | {"Query",8} | {"Record",8} | {"Apply",8}");
         Console.WriteLine(new string('-', 116));
 
-        RunIf(options.Matches("MiniArch"), new MiniArchSteadyCombatWorld(), options);
+        RunIf(options.Matches("MiniArch"), () => new MiniArchSteadyCombatWorld(), options);
         GC.Collect(2, GCCollectionMode.Forced, true, true);
         GC.WaitForPendingFinalizers();
 
-        RunIf(options.Matches("MiniStream"), new MiniArchCommandStreamSteadyCombatWorld(), options);
+        RunIf(options.Matches("MiniStream"), () => new MiniArchCommandStreamSteadyCombatWorld(), options);
         GC.Collect(2, GCCollectionMode.Forced, true, true);
         GC.WaitForPendingFinalizers();
 
-        RunIf(options.Matches("Friflo"), CreateFrifloScenarioQuietly(), options);
+        RunIf(options.Matches("Friflo"), () => CreateFrifloScenarioQuietly(), options);
         GC.Collect(2, GCCollectionMode.Forced, true, true);
         GC.WaitForPendingFinalizers();
 
@@ -57,13 +58,29 @@ public static class Program
         Console.WriteLine();
         Console.WriteLine($"{"Engine",-18} | {"Ticks/s",10} | {"ms/tick",9} | {"Checksum",14} | {"Live",8} | {"Heap Δ",12} | {"GC",8} | {"Query",8} | {"Record",8} | {"Apply",8}");
         Console.WriteLine(new string('-', 122));
-        RunIf(options.Matches("MiniArch") || options.Matches("Storm"), new MiniArchParticleStormWorld(), options);
+        RunIf(options.Matches("MiniArch") || options.Matches("Storm"), () => new MiniArchParticleStormWorld(), options);
         GC.Collect(2, GCCollectionMode.Forced, true, true);
         GC.WaitForPendingFinalizers();
-        RunIf(options.Matches("MiniStream") || options.Matches("Storm"), new MiniArchCommandStreamParticleStormWorld(), options);
+        RunIf(options.Matches("MiniStream") || options.Matches("Storm"), () => new MiniArchCommandStreamParticleStormWorld(), options);
         GC.Collect(2, GCCollectionMode.Forced, true, true);
         GC.WaitForPendingFinalizers();
-        RunIf(options.Matches("Friflo"), CreateFrifloParticleStormQuietly(), options);
+        RunIf(options.Matches("Friflo"), () => CreateFrifloParticleStormQuietly(), options);
+        GC.Collect(2, GCCollectionMode.Forced, true, true);
+        GC.WaitForPendingFinalizers();
+        Console.WriteLine();
+        Console.WriteLine("=== HeroLight: lightweight per-tick mutations (like the Hero pipeline) ===");
+        Console.WriteLine($"Characters: {HeroLightDefaults.CharacterCount:N0}, Requests/tick: {HeroLightDefaults.RequestsPerTick}");
+        Console.WriteLine($"Two Submit() per tick, ~{HeroLightDefaults.RequestsPerTick * 2} mutations per tick");
+        Console.WriteLine();
+        Console.WriteLine($"{"Engine",-18} | {"Ticks/s",10} | {"ms/tick",9} | {"Checksum",14} | {"Live",8} | {"Heap Δ",12} | {"GC",8} | {"Query",8} | {"Record",8} | {"Apply",8}");
+        Console.WriteLine(new string('-', 122));
+        RunIf(options.Matches("MiniHero") || options.Matches("Hero"), () => new MiniArchHeroLightWorld(), options);
+        GC.Collect(2, GCCollectionMode.Forced, true, true);
+        GC.WaitForPendingFinalizers();
+        RunIf(options.Matches("MiniStream") || options.Matches("Hero"), () => new MiniArchCommandStreamHeroLightWorld(), options);
+        GC.Collect(2, GCCollectionMode.Forced, true, true);
+        GC.WaitForPendingFinalizers();
+        RunIf(options.Matches("Friflo") || options.Matches("Hero"), () => new FrifloHeroLightWorld(), options);
         GC.Collect(2, GCCollectionMode.Forced, true, true);
         GC.WaitForPendingFinalizers();
         Console.WriteLine();
@@ -72,11 +89,8 @@ public static class Program
 
     private static void RunAndPrint(ICommandBufferGameScenario scenario, BenchmarkOptions options)
     {
-        using (scenario)
-        {
-            var result = BenchmarkRunner.Run(scenario, options);
-            Console.WriteLine($"{result.Engine,-10} | {result.TicksPerSecond,10:F1} | {result.MillisecondsPerTick,9:F3} | {result.Checksum,14} | {result.LiveCount,8:N0} | {FormatBytes(result.HeapDelta),12} | {result.GcCollections,8} | {result.QueryPercent,7:F1}% | {result.RecordPercent,7:F1}% | {result.ApplyPercent,7:F1}%");
-        }
+        var result = BenchmarkRunner.Run(scenario, options);
+        Console.WriteLine($"{result.Engine,-10} | {result.TicksPerSecond,10:F1} | {result.MillisecondsPerTick,9:F3} | {result.Checksum,14} | {result.LiveCount,8:N0} | {FormatBytes(result.HeapDelta),12} | {result.GcCollections,8} | {result.QueryPercent,7:F1}% | {result.RecordPercent,7:F1}% | {result.ApplyPercent,7:F1}%");
     }
 
     private static FrifloSteadyCombatWorld CreateFrifloScenarioQuietly()
@@ -1485,4 +1499,290 @@ public struct EmitterTag : IComponent
 {
     public int Value;
     public EmitterTag(int value) { Value = value; }
+}
+
+// --- HeroLight: lightweight per-tick mutations (like the Hero pipeline) ---
+
+public static class HeroLightDefaults
+{
+    /// <summary>Persistent character entities.</summary>
+    public const int CharacterCount = 1000;
+    /// <summary>Request entities created per tick.</summary>
+    public const int RequestsPerTick = 10;
+}
+
+public struct RequestTag : IComponent { }
+public struct EffectTag : IComponent { }
+
+public struct MiniArchRequestTarget { public MiniEntity Target; }
+public struct FrifloRequestTarget : IComponent { public int TargetId; }
+
+// Friflo doesn't support struct ref fields, so we use entity id via a lookup array.
+public sealed class MiniArchHeroLightWorld : ICommandBufferGameScenario
+{
+    private readonly MiniWorld _world = new();
+    private readonly MiniCommandBuffer _buffer;
+    private readonly MiniEntity[] _characters = new MiniEntity[HeroLightDefaults.CharacterCount];
+    private readonly PhaseTicks _phases = new();
+    private long _checksum;
+
+    public MiniArchHeroLightWorld()
+    {
+        _buffer = new MiniCommandBuffer(_world);
+        for (var i = 0; i < _characters.Length; i++)
+            _characters[i] = _world.Create(new Health(100), new Team(i & 3));
+        // Seed initial pending requests for the first tick
+        for (var i = 0; i < HeroLightDefaults.RequestsPerTick; i++)
+        {
+            var req = _buffer.Create();
+            _buffer.Add(req, new RequestTag());
+            _buffer.Add(req, new MiniArchRequestTarget { Target = _characters[i % _characters.Length] });
+        }
+        _buffer.Submit();
+    }
+
+    public string Engine => "MiniHero";
+    public int LiveCount => HeroLightDefaults.CharacterCount;
+    public long Checksum => _checksum;
+    public PhaseTicks Phases => _phases;
+    public void ResetPhaseCounters() => _phases.Clear();
+    public void Dispose() => _world.Dispose();
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public long RunTick()
+    {
+        var t0 = Stopwatch.GetTimestamp();
+
+        // Submit previous tick's creates + destroys
+        _buffer.Submit();
+        var tQ = Stopwatch.GetTimestamp();
+
+        // Step 2: Process existing requests → create effects + modify HP
+        var requestQuery = _world.Query(new MiniQueryDescription().With<RequestTag>().With<MiniArchRequestTarget>());
+        foreach (var chunk in requestQuery.GetChunks())
+        {
+            var targets = chunk.GetSpan<MiniArchRequestTarget>();
+            for (var i = 0; i < chunk.Count; i++)
+            {
+                var effect = _buffer.Create();
+                _buffer.Add(effect, new EffectTag());
+                _buffer.Add(effect, new MiniArchRequestTarget { Target = targets[i].Target });
+                _buffer.Set(targets[i].Target, new Health(101));
+            }
+        }
+
+        // Step 3: Destroy old request + effect entities (processed this tick)
+        foreach (var chunk in _world.Query(new MiniQueryDescription().With<RequestTag>()).GetChunks())
+        {
+            var entities = chunk.GetEntities();
+            for (var i = 0; i < chunk.Count; i++)
+                _buffer.Destroy(entities[i]);
+        }
+        foreach (var chunk in _world.Query(new MiniQueryDescription().With<EffectTag>()).GetChunks())
+        {
+            var entities = chunk.GetEntities();
+            for (var i = 0; i < chunk.Count; i++)
+                _buffer.Destroy(entities[i]);
+        }
+
+        // Step 4: Create new request entities for the NEXT tick
+        for (var i = 0; i < HeroLightDefaults.RequestsPerTick; i++)
+        {
+            var req = _buffer.Create();
+            _buffer.Add(req, new RequestTag());
+            _buffer.Add(req, new MiniArchRequestTarget { Target = _characters[(i + _tickCounter) % _characters.Length] });
+        }
+        _tickCounter++;
+
+        var tR = Stopwatch.GetTimestamp();
+
+        // Step 5: Submit (applies destroys + creates)
+        _buffer.Submit();
+        var tA = Stopwatch.GetTimestamp();
+
+        _phases.Query += tQ - t0;
+        _phases.Record += tR - tQ;
+        _phases.Apply += tA - tR;
+
+        _checksum += HeroLightDefaults.RequestsPerTick;
+        return _checksum;
+    }
+    private int _tickCounter;
+}
+
+public sealed class MiniArchCommandStreamHeroLightWorld : ICommandBufferGameScenario
+{
+    private readonly MiniWorld _world = new();
+    private readonly MiniCommandStream _stream;
+    private readonly MiniEntity[] _characters = new MiniEntity[HeroLightDefaults.CharacterCount];
+    private readonly PhaseTicks _phases = new();
+    private long _checksum;
+
+    public MiniArchCommandStreamHeroLightWorld()
+    {
+        _stream = new MiniCommandStream(_world);
+        for (var i = 0; i < _characters.Length; i++)
+            _characters[i] = _world.Create(new Health(100), new Team(i & 3));
+        // Seed initial pending requests
+        for (var i = 0; i < HeroLightDefaults.RequestsPerTick; i++)
+        {
+            var req = _stream.Create();
+            _stream.Add<RequestTag>(req, default);
+            _stream.Add(req, new MiniArchRequestTarget { Target = _characters[i % _characters.Length] });
+        }
+        _stream.Submit();
+    }
+
+    public string Engine => "MiniHero-Stream";
+    public int LiveCount => HeroLightDefaults.CharacterCount;
+    public long Checksum => _checksum;
+    public PhaseTicks Phases => _phases;
+    public void ResetPhaseCounters() => _phases.Clear();
+    public void Dispose() => _world.Dispose();
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public long RunTick()
+    {
+        var t0 = Stopwatch.GetTimestamp();
+        _stream.Submit();
+        var tQ = Stopwatch.GetTimestamp();
+
+        // Process existing requests → create effects + modify HP
+        foreach (var chunk in _world.Query(new MiniQueryDescription().With<RequestTag>().With<MiniArchRequestTarget>()).GetChunks())
+        {
+            var targets = chunk.GetSpan<MiniArchRequestTarget>();
+            for (var i = 0; i < chunk.Count; i++)
+            {
+                var effect = _stream.Create();
+                _stream.Add<EffectTag>(effect, default);
+                _stream.Add(effect, new MiniArchRequestTarget { Target = targets[i].Target });
+                _stream.Set(targets[i].Target, new Health(101));
+            }
+        }
+
+        // Destroy old request + effect entities
+        foreach (var chunk in _world.Query(new MiniQueryDescription().With<RequestTag>()).GetChunks())
+        {
+            for (var i = 0; i < chunk.Count; i++)
+                _stream.Destroy(chunk.GetEntities()[i]);
+        }
+        foreach (var chunk in _world.Query(new MiniQueryDescription().With<EffectTag>()).GetChunks())
+        {
+            for (var i = 0; i < chunk.Count; i++)
+                _stream.Destroy(chunk.GetEntities()[i]);
+        }
+
+        // Create new request entities for the NEXT tick
+        for (var i = 0; i < HeroLightDefaults.RequestsPerTick; i++)
+        {
+            var req = _stream.Create();
+            _stream.Add<RequestTag>(req, default);
+            _stream.Add(req, new MiniArchRequestTarget { Target = _characters[(i + _tickCounter) % _characters.Length] });
+        }
+        _tickCounter++;
+
+        var tR = Stopwatch.GetTimestamp();
+        _stream.Submit();
+        var tA = Stopwatch.GetTimestamp();
+
+        _phases.Query += tQ - t0;
+        _phases.Record += tR - tQ;
+        _phases.Apply += tA - tR;
+
+        _checksum += HeroLightDefaults.RequestsPerTick;
+        return _checksum;
+    }
+    private int _tickCounter;
+}
+
+public sealed class FrifloHeroLightWorld : ICommandBufferGameScenario
+{
+    private readonly EntityStore _store = new();
+    private readonly CommandBuffer _buffer;
+    private readonly int[] _characterIds = new int[HeroLightDefaults.CharacterCount];
+    private readonly PhaseTicks _phases = new();
+    private long _checksum;
+
+    public FrifloHeroLightWorld()
+    {
+        _store.EnsureCapacity(HeroLightDefaults.CharacterCount + HeroLightDefaults.RequestsPerTick * 4);
+
+        for (var i = 0; i < _characterIds.Length; i++)
+        {
+            var entity = _store.CreateEntity(new Health(100), new Team(i & 3));
+            _characterIds[i] = entity.Id;
+        }
+
+        _buffer = _store.GetCommandBuffer();
+        _buffer.ReuseBuffer = true;
+
+        // Seed initial pending requests
+        for (var i = 0; i < HeroLightDefaults.RequestsPerTick; i++)
+        {
+            var req = _buffer.CreateEntity();
+            _buffer.AddComponent(req, new RequestTag());
+            _buffer.AddComponent(req, new FrifloRequestTarget { TargetId = _characterIds[i % _characterIds.Length] });
+        }
+        _buffer.Playback();
+    }
+
+    public string Engine => "Friflo-Hero";
+    public int LiveCount => HeroLightDefaults.CharacterCount;
+    public long Checksum => _checksum;
+    public PhaseTicks Phases => _phases;
+    public void ResetPhaseCounters() => _phases.Clear();
+    public void Dispose() { }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public long RunTick()
+    {
+        var t0 = Stopwatch.GetTimestamp();
+        _buffer.Playback();
+        var tQ = Stopwatch.GetTimestamp();
+
+        // Process request entities → create effects + modify HP
+        foreach (var (tags, targets, entities) in _store.Query<RequestTag, FrifloRequestTarget>().Chunks)
+        {
+            for (var i = 0; i < entities.Length; i++)
+            {
+                var effect = _buffer.CreateEntity();
+                _buffer.AddComponent(effect, new EffectTag());
+                _buffer.AddComponent(effect, new FrifloRequestTarget { TargetId = targets[i].TargetId });
+                _buffer.AddComponent(targets[i].TargetId, new Health(101));
+            }
+        }
+
+        // Destroy old request + effect entities
+        foreach (var (_, entities) in _store.Query<RequestTag>().Chunks)
+        {
+            for (var i = 0; i < entities.Length; i++)
+                _buffer.DeleteEntity(entities[i]);
+        }
+        foreach (var (_, entities) in _store.Query<EffectTag>().Chunks)
+        {
+            for (var i = 0; i < entities.Length; i++)
+                _buffer.DeleteEntity(entities[i]);
+        }
+
+        // Create new request entities for the NEXT tick
+        for (var i = 0; i < HeroLightDefaults.RequestsPerTick; i++)
+        {
+            var req = _buffer.CreateEntity();
+            _buffer.AddComponent(req, new RequestTag());
+            _buffer.AddComponent(req, new FrifloRequestTarget { TargetId = _characterIds[(i + _tickCounter) % _characterIds.Length] });
+        }
+        _tickCounter++;
+
+        var tR = Stopwatch.GetTimestamp();
+        _buffer.Playback();
+        var tA = Stopwatch.GetTimestamp();
+
+        _phases.Query += tQ - t0;
+        _phases.Record += tR - tQ;
+        _phases.Apply += tA - tR;
+
+        _checksum += HeroLightDefaults.RequestsPerTick;
+        return _checksum;
+    }
+    private int _tickCounter;
 }

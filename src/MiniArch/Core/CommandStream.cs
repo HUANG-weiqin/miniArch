@@ -20,6 +20,7 @@ public sealed class CommandStream : ICommandRecorder
     private int _createdComponentCount;
     private int[] _createdLookup = [];
     private int _maxCreatedEntityId;
+    private int _minCreatedEntityId = int.MaxValue;
     private Entity _lastCreatedEntity;
     private int _lastCreatedIndex = -1;
     private readonly record struct HierarchyIntent(bool IsLinked, Entity Parent);
@@ -43,7 +44,7 @@ public sealed class CommandStream : ICommandRecorder
     public void Add<T>(Entity entity, T component)
     {
         var store = GetOrCreateComponentStore<T>();
-        if (_createdCount > 0)
+        if (_createdCount > 0 && (uint)(entity.Id - _minCreatedEntityId) < (uint)(_maxCreatedEntityId - _minCreatedEntityId))
         {
             var createdIndex = GetCreatedIndex(entity);
             if (createdIndex >= 0)
@@ -61,7 +62,7 @@ public sealed class CommandStream : ICommandRecorder
     public void Set<T>(Entity entity, T component)
     {
         var store = GetOrCreateComponentStore<T>();
-        if (_createdCount > 0)
+        if (_createdCount > 0 && (uint)(entity.Id - _minCreatedEntityId) < (uint)(_maxCreatedEntityId - _minCreatedEntityId))
         {
             var createdIndex = GetCreatedIndex(entity);
             if (createdIndex >= 0)
@@ -284,6 +285,7 @@ public sealed class CommandStream : ICommandRecorder
         _createdComponentCount = 0;
         _createdLookup = [];
         _maxCreatedEntityId = 0;
+        _minCreatedEntityId = int.MaxValue;
         _lastCreatedEntity = default;
         _lastCreatedIndex = -1;
         _hierarchyByChild = new Dictionary<Entity, HierarchyIntent>();
@@ -680,6 +682,7 @@ public sealed class CommandStream : ICommandRecorder
         _createdLookup[entity.Id] = _createdCount;
         _lastCreatedEntity = entity;
         _lastCreatedIndex = _createdCount;
+        if (entity.Id < _minCreatedEntityId) _minCreatedEntityId = entity.Id;
         _createdCount++;
         if (entity.Id >= _maxCreatedEntityId) _maxCreatedEntityId = entity.Id + 1;
     }
@@ -1194,6 +1197,7 @@ public sealed class CommandStream : ICommandRecorder
         _createdCount = 0;
         _createdComponentCount = 0;
         _maxCreatedEntityId = 0;
+        _minCreatedEntityId = int.MaxValue;
         _lastCreatedEntity = default;
         _lastCreatedIndex = -1;
         _hierarchyByChild.Clear();
