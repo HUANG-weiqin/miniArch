@@ -540,28 +540,6 @@ public sealed partial class World : IDisposable
         }
     }
 
-    internal ref EntityRecord GetEntityRecordRef(Entity entity)
-    {
-        return ref _records[entity.Id];
-    }
-
-    internal void MoveEntityToArchetype(Entity entity, ref EntityRecord record, Archetype destination)
-    {
-        var sourceArchetype = record.Archetype!;
-        var sourceRow = record.RowIndex;
-        var destRow = destination.AddEntity(entity);
-        destination.CopySharedComponentsFrom(sourceArchetype, sourceRow, destRow);
-        sourceArchetype.RemoveAt(sourceRow, out var movedEntity);
-        if (movedEntity.IsValid)
-        {
-            ref var movedRecord = ref _records[movedEntity.Id];
-            movedRecord.Archetype = sourceArchetype;
-            movedRecord.RowIndex = sourceRow;
-        }
-
-        record.Archetype = destination;
-        record.RowIndex = destRow;
-    }
 
     internal unsafe void MaterializeReservedEntityFast(
         Entity entity,
@@ -628,10 +606,6 @@ public sealed partial class World : IDisposable
         return new Signature(componentTypes);
     }
 
-    private ComponentType GetComponentType(Type componentType)
-    {
-        return ComponentRegistry.Shared.GetOrCreate(componentType);
-    }
 
     private readonly record struct CloneWork(Entity Source, Entity CloneEntity);
 
