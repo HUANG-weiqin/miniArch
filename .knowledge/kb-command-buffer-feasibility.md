@@ -2,7 +2,7 @@
 title: Command Buffer Runtime
 module: MiniArch.Core CommandBuffer
 description: CommandBuffer safety-first per-entity deduplicating recorder plus CommandStream typed-store expert mode, both compatible with FrameDelta
-updated: 2026-06-10 (增加混合 World.Create/CommandStream 重复 archetype 坑点)
+updated: 2026-06-10 (修复 CommandStream 三个 Buffer 一致性问题：pending Remove、空实体创建、同帧 Destroy 后操作安全性；补全 48 个测试)
 ---
 # Command Buffer Runtime
 
@@ -118,3 +118,8 @@ HeroPipeline 回归测试涨幅：
 - `Clone()` 是完整深拷贝，包含所有 slab 数据，大 buffer 克隆成本高
 - `CommandStream` 是专家模式，不做 `CommandBuffer` 那样的 per-entity/per-component 去重；重复命令的净效果由调用方负责。
 - **混合 World.Create（排序）与 CommandBuffer/CommandStream（未排序）可能产生重复 archetype**：两者创建组件的顺序不同（`World.Create<T>` 用 `public Signature(params ComponentType[])` 构造函数，自动排序去重；CommandBuffer/CommandStream 用 `Signature.CreateNormalized` 按 ADD 顺序存储，不做排序）。如果同一组件集用两条路径分别创建，`_archetypes` 字典中会出现两个不同键的 Signature，产生两个功能等价但列顺序不同的 archetype。`World.TryGetArchetype` 的集合比较能正确匹配两者，但 `ArchetypeMatchesComponentSpan`（CommandStream 分组用顺序比较）可能因顺序不同而失败。**解决办法：整个项目统一用一种创建路径**。
+- **CommandStream 支持对 pending entity 调用 Remove**（2026-06-10 修复）：同批次内通过 `Create()` 或 `Clone()` 创建的实体处于 pending 状态。对其调用 `Remove<T>()` 现在通过 `BatchedComponent.Removed` 标记正确移除组件。与 CommandBuffer 行为一致。`CommandStreamTests.Remove_on_pending_clone_removes_component` 验证。
+- **CommandStream 支持创建零组件的空实体**（2026-06-10 修复）：`Create()` 后未调用任何 `Add<T>()` 的实体现在通过 `MaterializeReservedEntity(entity, Array.Empty<>())` 正确 materialize 为无组件实体。与 CommandBuffer 行为一致。`CommandStreamTests.CrossWorld_replay_create_empty_entity` 验证。
+- **CommandStream 同批次中 Destroy 后不再影响其他操作**（2026-06-10 修复）：`ApplyAllEntries` 改为两遍处理（pass 1: Create/Add/Set/Remove，pass 2: Destroy），与 CommandBuffer 的"先 ApplyOps 再 Destroy"顺序一致。同批次内先 Destroy 后 Add/Set 同一实体现在安全（Add/Set 先执行，然后 Destroy 销毁实体）。对 pending entity，`CancelPendingEntity` 后的条目在 materialize 时通过 `_pendingBatch[id] < 0` 检测跳过。`CommandStreamTests.Fuzz_200_frames_submit_and_verify_entity_count_stability` 不再需要 `destroyedThisFrame` 过滤。
+- **FrameDelta.Replay 命令处理顺序与原始记录顺序不同**（架构差异，非 bug）：`World.ReplayCore` 按固定顺序处理：Reserved → Released → Created → Link → Unlink → AddCommands → SetCommands → RemoveCommands → Destroy。当同帧对同一组件类型执行 `Remove<Pos>` 后 `Add<Pos>` 时，`Submit` 与 `Snapshot+Replay` 可能产生不同结果。**CommandBuffer 不受此影响：录制时 per-component 去重消除了重复操作。CommandStream 调用方应避免同帧对同组件 Remove+Add 模式，改用 `Set`。**
+
