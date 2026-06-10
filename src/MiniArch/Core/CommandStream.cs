@@ -54,7 +54,7 @@ public sealed class CommandStream : ICommandRecorder
 
     public void Add<T>(Entity entity, T component)
     {
-        if (TryGetPendingBatch(entity, out var batchIdx))
+        if (_pendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
         {
             WritePendingComponent(batchIdx, component);
         }
@@ -68,7 +68,7 @@ public sealed class CommandStream : ICommandRecorder
 
     public void Set<T>(Entity entity, T component)
     {
-        if (TryGetPendingBatch(entity, out var batchIdx))
+        if (_pendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
         {
             WritePendingComponent(batchIdx, component);
         }
