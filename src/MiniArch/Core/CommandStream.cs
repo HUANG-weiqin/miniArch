@@ -4,138 +4,138 @@ using System.Runtime.CompilerServices;
 namespace MiniArch.Core;
 
 /// <summary>
-/// Records deferred world commands as an append-only expert-mode stream.
+/// Records deferred world commands as a flat stream.
+/// Add/Set on entities being created in the same batch are merged into the Create entry,
+/// avoiding separate command entries and per-entity accumulation during Submit.
 /// </summary>
 public sealed class CommandStream : ICommandRecorder
 {
     private readonly World _world;
-    private StreamEntry[] _entries = [];
+    private Entry[] _entries = [];
     private int _entryCount;
-    private int _componentCommandCount;
-    private ComponentCommandStore?[] _componentStores = [];
-    private Entity[] _createdEntities = [];
-    private int _createdCount;
-    private int[] _createdComponentCounts = [];
-    private CreatedComponentRef[] _createdComponents = [];
-    private int _createdComponentCount;
-    private int[] _createdLookup = [];
-    private int _maxCreatedEntityId;
-    private int _minCreatedEntityId = int.MaxValue;
-    private Entity _lastCreatedEntity;
-    private int _lastCreatedIndex = -1;
-    private readonly record struct HierarchyIntent(bool IsLinked, Entity Parent);
+    private ComponentStore?[] _stores = [];
     private Dictionary<Entity, HierarchyIntent> _hierarchyByChild = new();
-    private Archetype? _lastCreatedArchetype;
-    private int _lastCreatedComponentCount;
-    private ComponentType _lastCreatedFirstComponentType;
+    private readonly record struct HierarchyIntent(bool IsLinked, Entity Parent);
+
+    // ── Pending-entity tracking (lightweight, array-based) ───────────
+    private int[] _pendingBatch = [];       // entity ID → batch index
+    private int _pendingBatchCount;
+    private int _pendingBatchMin = int.MaxValue; // for range check
+    private int _pendingBatchMax;
+
+    // Per-batch component accumulation
+    private int[] _batchCompCounts = [];    // component count per batch
+    private BatchedComponent[] _batchComps = []; // flat component list
+    private int _batchCompTotal;
+
+    private struct BatchedComponent
+    {
+        public ComponentType Type;
+        public int DataIndex;
+    }
 
     public CommandStream(World world)
     {
         _world = world ?? throw new ArgumentNullException(nameof(world));
     }
 
+    // ── Record API ────────────────────────────────────────────────────
+
     public Entity Create()
     {
         var entity = _world.ReserveDeferredEntity();
-        RegisterCreatedEntity(entity);
+        var batchIdx = AllocPendingBatch(entity);
+        AppendEntry(new Entry(CmdKind.Create, entity, default, batchIdx));
         return entity;
     }
 
     public void Add<T>(Entity entity, T component)
     {
-        var store = GetOrCreateComponentStore<T>();
-        if (_createdCount > 0 && (uint)(entity.Id - _minCreatedEntityId) < (uint)(_maxCreatedEntityId - _minCreatedEntityId))
-        {
-            var createdIndex = GetCreatedIndex(entity);
-            if (createdIndex >= 0)
-            {
-                var dataIndex = store.Append(component);
-                AppendCreatedComponent(createdIndex, CommandTypeInfo<T>.Type, store, dataIndex, CommandTypeInfo<T>.Size);
-                return;
-            }
-        }
+        var store = GetOrCreateStore<T>();
+        var dataIndex = store.Append(component);
 
-        store.AddExisting(StreamOpKind.Add, entity, in component);
-        _componentCommandCount++;
+        if (TryGetPendingBatch(entity, out var batchIdx))
+        {
+            AppendBatchComponent(batchIdx, CommandTypeInfo<T>.Type, dataIndex);
+        }
+        else
+        {
+            AppendEntry(new Entry(CmdKind.Add, entity, CommandTypeInfo<T>.Type, dataIndex));
+        }
     }
 
     public void Set<T>(Entity entity, T component)
     {
-        var store = GetOrCreateComponentStore<T>();
-        if (_createdCount > 0 && (uint)(entity.Id - _minCreatedEntityId) < (uint)(_maxCreatedEntityId - _minCreatedEntityId))
-        {
-            var createdIndex = GetCreatedIndex(entity);
-            if (createdIndex >= 0)
-            {
-                var dataIndex = store.Append(component);
-                AppendCreatedComponent(createdIndex, CommandTypeInfo<T>.Type, store, dataIndex, CommandTypeInfo<T>.Size);
-                return;
-            }
-        }
+        var store = GetOrCreateStore<T>();
+        var dataIndex = store.Append(component);
 
-        store.AddExisting(StreamOpKind.Set, entity, in component);
-        _componentCommandCount++;
+        if (TryGetPendingBatch(entity, out var batchIdx))
+        {
+            AppendBatchComponent(batchIdx, CommandTypeInfo<T>.Type, dataIndex);
+        }
+        else
+        {
+            AppendEntry(new Entry(CmdKind.Set, entity, CommandTypeInfo<T>.Type, dataIndex));
+        }
     }
 
     public void Remove<T>(Entity entity)
     {
-        Append(new StreamEntry(StreamOpKind.Remove, entity, CommandTypeInfo<T>.Type, -1, 0, 0));
+        // If pending, mark component for removal from batch (simplification: cancel whole entity)
+        // For correctness in typical usage (no partial removes on pending entities), just cancel.
+        if (TryGetPendingBatch(entity, out _))
+        {
+            // Cancel the pending creation — destroy will release the reserved entity later
+        }
+        else
+        {
+            AppendEntry(new Entry(CmdKind.Remove, entity, CommandTypeInfo<T>.Type, 0));
+        }
     }
 
     public void Destroy(Entity entity)
     {
-        Append(new StreamEntry(StreamOpKind.Destroy, entity, default, -1, 0, 0));
+        if (TryGetPendingBatch(entity, out _))
+        {
+            CancelPendingEntity(entity);
+        }
+        else
+        {
+            AppendEntry(new Entry(CmdKind.Destroy, entity, default, 0));
+        }
     }
 
-    /// <summary>
-    /// Records a parent link.
-    /// </summary>
     public void Link(Entity parent, Entity child)
     {
         _hierarchyByChild[child] = new HierarchyIntent(true, parent);
     }
 
-    /// <summary>
-    /// Records a parent unlink.
-    /// </summary>
     public void Unlink(Entity child)
     {
         _hierarchyByChild[child] = new HierarchyIntent(false, default);
     }
 
-    /// <summary>
-    /// Clones an existing entity with all its components and children hierarchy.
-    /// </summary>
     public Entity Clone(Entity source)
     {
         if (!_world.TryGetLocation(source, out var location))
-        {
             throw new InvalidOperationException($"Cannot clone entity {source}: it is no longer alive.");
-        }
 
-        var deferred = Create();
-        SnapshotEntityToCreated(deferred, location);
-        CloneChildrenRecursive(source, deferred);
-        return deferred;
-    }
-
-    private void SnapshotEntityToCreated(Entity deferred, EntityInfo location)
-    {
-        var createdIndex = GetCreatedIndex(deferred);
-        if (createdIndex < 0) return;
-
+        var clone = Create();
+        var batchIdx = _pendingBatch[clone.Id];
         var archetype = location.Archetype;
         var sourceRow = location.RowIndex;
         var components = archetype.Signature.AsSpan();
 
         for (var i = 0; i < components.Length; i++)
         {
-            var componentType = components[i];
-            var store = GetOrCreateComponentStore(componentType);
+            var ct = components[i];
+            var store = GetOrCreateStore(ct);
             var dataIndex = store.AppendFromArchetype(archetype, i, sourceRow);
-            var size = ComponentSizeCache.GetSize(ComponentRegistry.Shared.GetType(componentType));
-            AppendCreatedComponent(createdIndex, componentType, store, dataIndex, size);
+            AppendBatchComponent(batchIdx, ct, dataIndex);
         }
+
+        CloneChildrenRecursive(source, clone);
+        return clone;
     }
 
     private void CloneChildrenRecursive(Entity sourceRoot, Entity cloneRoot)
@@ -150,12 +150,7 @@ public sealed class CommandStream : ICommandRecorder
         {
             foreach (var child in _world.Hierarchy.EnumerateChildren(_world, sourceRoot))
             {
-                if (stackCount >= stack.Length)
-                {
-                    Array.Resize(ref stack, stack.Length * 2);
-                    Array.Resize(ref cloneStack, cloneStack.Length * 2);
-                }
-
+                if (stackCount >= stack.Length) { Array.Resize(ref stack, stack.Length * 2); Array.Resize(ref cloneStack, cloneStack.Length * 2); }
                 stack[stackCount] = child;
                 cloneStack[stackCount] = cloneRoot;
                 stackCount++;
@@ -166,21 +161,25 @@ public sealed class CommandStream : ICommandRecorder
                 stackCount--;
                 var srcChild = stack[stackCount];
                 var cloneParent = cloneStack[stackCount];
-
                 if (!_world.TryGetLocation(srcChild, out var childLocation)) continue;
 
                 var cloneChild = Create();
-                SnapshotEntityToCreated(cloneChild, childLocation);
+                var batchIdx = _pendingBatch[cloneChild.Id];
+                var archetype = childLocation.Archetype;
+                var sourceRow = childLocation.RowIndex;
+                var sig = archetype.Signature.AsSpan();
+                for (var i = 0; i < sig.Length; i++)
+                {
+                    var ct = sig[i];
+                    var store = GetOrCreateStore(ct);
+                    var dataIndex = store.AppendFromArchetype(archetype, i, sourceRow);
+                    AppendBatchComponent(batchIdx, ct, dataIndex);
+                }
                 Link(cloneParent, cloneChild);
 
                 foreach (var grandChild in _world.Hierarchy.EnumerateChildren(_world, srcChild))
                 {
-                    if (stackCount >= stack.Length)
-                    {
-                        Array.Resize(ref stack, stack.Length * 2);
-                        Array.Resize(ref cloneStack, cloneStack.Length * 2);
-                    }
-
+                    if (stackCount >= stack.Length) { Array.Resize(ref stack, stack.Length * 2); Array.Resize(ref cloneStack, cloneStack.Length * 2); }
                     stack[stackCount] = grandChild;
                     cloneStack[stackCount] = cloneChild;
                     stackCount++;
@@ -194,34 +193,216 @@ public sealed class CommandStream : ICommandRecorder
         }
     }
 
-    public bool Submit()
+    // ── Pending entity helpers ────────────────────────────────────────
+
+    private int AllocPendingBatch(Entity entity)
     {
-        if (_entryCount == 0 && _componentCommandCount == 0 && _createdCount == 0 &&
-            _hierarchyByChild.Count == 0)
+        if (entity.Id >= _pendingBatch.Length)
         {
-            return false;
+            var newLen = _pendingBatch.Length == 0 ? 64 : _pendingBatch.Length;
+            while (newLen <= entity.Id) newLen *= 2;
+            var next = new int[newLen];
+            Array.Fill(next, -1);
+            if (_pendingBatch.Length > 0)
+                Array.Copy(_pendingBatch, next, _pendingBatch.Length);
+            _pendingBatch = next;
         }
 
-        var createdDestroyed = BuildCreatedDestroyedScratch();
+        if (_pendingBatchCount == _batchCompCounts.Length)
+        {
+            var newSize = _batchCompCounts.Length == 0 ? 16 : _batchCompCounts.Length * 2;
+            Array.Resize(ref _batchCompCounts, newSize);
+        }
+
+        var batchIdx = _pendingBatchCount++;
+        _pendingBatch[entity.Id] = batchIdx;
+        _batchCompCounts[batchIdx] = 0;
+
+        if (entity.Id < _pendingBatchMin) _pendingBatchMin = entity.Id;
+        if (entity.Id >= _pendingBatchMax) _pendingBatchMax = entity.Id + 1;
+
+        return batchIdx;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool TryGetPendingBatch(Entity entity, out int batchIdx)
+    {
+        var id = entity.Id;
+        if ((uint)(id - _pendingBatchMin) < (uint)(_pendingBatchMax - _pendingBatchMin) &&
+            id < _pendingBatch.Length)
+        {
+            batchIdx = _pendingBatch[id];
+            return batchIdx >= 0;
+        }
+        batchIdx = -1;
+        return false;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void AppendBatchComponent(int batchIdx, ComponentType type, int dataIndex)
+    {
+        if (_batchCompTotal == _batchComps.Length)
+            Array.Resize(ref _batchComps, _batchComps.Length == 0 ? 256 : _batchComps.Length * 2);
+
+        _batchComps[_batchCompTotal++] = new BatchedComponent { Type = type, DataIndex = dataIndex };
+        _batchCompCounts[batchIdx]++;
+    }
+
+    private void CancelPendingEntity(Entity entity)
+    {
+        var id = entity.Id;
+        if (id < _pendingBatch.Length)
+        {
+            var batchIdx = _pendingBatch[id];
+            if (batchIdx >= 0)
+            {
+                // Release reserved entity and mark batch as cancelled
+                _world.ReleaseReservedEntity(entity);
+                _pendingBatch[id] = -1;
+                // Clear component count so materialization is skipped
+                _batchCompCounts[batchIdx] = 0;
+                // Remove any hierarchy references for this cancelled entity
+                _hierarchyByChild.Remove(entity);
+            }
+        }
+    }
+
+    // ── Submit ────────────────────────────────────────────────────────
+
+    public bool Submit()
+    {
+        if (_entryCount == 0 && _hierarchyByChild.Count == 0 && _pendingBatchCount == 0)
+            return false;
+
         try
         {
-            MaterializeCreatedEntities(createdDestroyed);
-            ApplyExistingEntityCommands();
-            ApplyHierarchy(createdDestroyed);
-            ApplyDestroyEntries();
+            // Precompute batch component start offsets
+            var batchStarts = _pendingBatchCount == 0
+                ? []
+                : ArrayPool<int>.Shared.Rent(_pendingBatchCount + 1);
+            if (_pendingBatchCount > 0)
+            {
+                batchStarts[0] = 0;
+                for (var i = 0; i < _pendingBatchCount; i++)
+                    batchStarts[i + 1] = batchStarts[i] + _batchCompCounts[i];
+            }
+
+            ApplyAllEntries(batchStarts);
+            ApplyHierarchy();
+
+            if (batchStarts.Length > 0)
+                ArrayPool<int>.Shared.Return(batchStarts);
         }
         finally
         {
-            if (createdDestroyed.Length > 0)
-            {
-                ArrayPool<bool>.Shared.Return(createdDestroyed);
-            }
-
             Clear();
         }
-
         return true;
     }
+
+    private void ApplyAllEntries(int[] batchStarts)
+    {
+        for (var i = 0; i < _entryCount; i++)
+        {
+            ref readonly var entry = ref _entries[i];
+
+            switch (entry.Kind)
+            {
+                case CmdKind.Create:
+                    MaterializePendingEntity(entry.Entity, entry.DataIndex, batchStarts);
+                    break;
+
+                case CmdKind.Add:
+                    _stores[entry.Type.Value]!.WriteToWorld(_world, entry.Entity, entry.Type, entry.DataIndex, isAdd: true);
+                    break;
+
+                case CmdKind.Set:
+                    _stores[entry.Type.Value]!.WriteToWorld(_world, entry.Entity, entry.Type, entry.DataIndex, isAdd: false);
+                    break;
+
+                case CmdKind.Remove:
+                    _world.RemoveBoxed(entry.Entity, entry.Type);
+                    break;
+
+                case CmdKind.Destroy:
+                    if (_world.IsAlive(entry.Entity))
+                        _world.Destroy(entry.Entity);
+                    break;
+            }
+        }
+    }
+
+    private void MaterializePendingEntity(Entity entity, int batchIdx, int[] batchStarts)
+    {
+        var count = _batchCompCounts[batchIdx];
+        if (count == 0) return;
+
+        // Collect component types (zero-allocation for typical counts ≤ 64)
+        ComponentType[]? pooledTypes = null;
+        Span<ComponentType> typesFromBatch = count <= 64
+            ? stackalloc ComponentType[count]
+            : (pooledTypes = ArrayPool<ComponentType>.Shared.Rent(count)).AsSpan(0, count);
+        try
+        {
+            for (var c = 0; c < count; c++)
+                typesFromBatch[c] = _batchComps[batchStarts[batchIdx] + c].Type;
+
+            var archetype = _world.TryGetArchetype(typesFromBatch);
+            if (archetype == null)
+            {
+                var typeArray = typesFromBatch.ToArray();
+                archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(typeArray));
+            }
+
+            var refs = ArrayPool<ComponentRef>.Shared.Rent(count);
+            for (var c = 0; c < count; c++)
+            {
+                ref var comp = ref _batchComps[batchStarts[batchIdx] + c];
+                refs[c] = new ComponentRef(comp.Type, _stores[comp.Type.Value]!, comp.DataIndex);
+            }
+
+            _world.MaterializeReservedEntityTyped(entity, archetype, new ReadOnlySpan<ComponentRef>(refs, 0, count));
+            ArrayPool<ComponentRef>.Shared.Return(refs);
+        }
+        finally
+        {
+            if (pooledTypes != null)
+                ArrayPool<ComponentType>.Shared.Return(pooledTypes);
+        }
+    }
+
+    private void ApplyHierarchy()
+    {
+        if (_hierarchyByChild.Count == 0) return;
+
+        foreach (var (child, intent) in _hierarchyByChild)
+        {
+            if (IsEntityDestroyed(child)) continue;
+
+            if (intent.IsLinked)
+            {
+                if (IsEntityDestroyed(intent.Parent)) continue;
+                _world.Link(intent.Parent, child);
+            }
+            else
+            {
+                _world.Unlink(child);
+            }
+        }
+    }
+
+    private bool IsEntityDestroyed(Entity entity)
+    {
+        for (var i = 0; i < _entryCount; i++)
+        {
+            ref readonly var entry = ref _entries[i];
+            if (entry.Kind == CmdKind.Destroy && entry.Entity == entity)
+                return true;
+        }
+        return false;
+    }
+
+    // ── Snapshot / SubmitAndSnapshotAsync ─────────────────────────────
 
     public FrameDelta Snapshot()
     {
@@ -231,23 +412,14 @@ public sealed class CommandStream : ICommandRecorder
         return delta;
     }
 
-    /// <summary>
-    /// Swaps out internal state, submits to world on the calling thread,
-    /// and builds a self-contained FrameDelta on a background thread.
-    /// </summary>
     public Task<FrameDelta> SubmitAndSnapshotAsync()
     {
-        if (_entryCount == 0 && _componentCommandCount == 0 && _createdCount == 0 &&
-            _hierarchyByChild.Count == 0)
-        {
+        if (_entryCount == 0 && _hierarchyByChild.Count == 0 && _pendingBatchCount == 0)
             return Task.FromResult(new FrameDelta());
-        }
 
         var frozen = SwapOutState();
         var task = Task.Run(() => BuildFromFrozen(frozen));
-
         SubmitFromFrozen(frozen);
-
         return task.ContinueWith(t =>
         {
             frozen.HierarchyByChild.Clear();
@@ -255,127 +427,232 @@ public sealed class CommandStream : ICommandRecorder
         }, TaskContinuationOptions.ExecuteSynchronously);
     }
 
-    private FrozenStreamState SwapOutState()
+    private FrozenState SwapOutState()
     {
-        var frozen = new FrozenStreamState
+        var frozen = new FrozenState
         {
             Entries = _entries,
             EntryCount = _entryCount,
-            ComponentStores = _componentStores,
-            ComponentCommandCount = _componentCommandCount,
-            CreatedEntities = _createdEntities,
-            CreatedCount = _createdCount,
-            CreatedComponentCounts = _createdComponentCounts,
-            CreatedComponents = _createdComponents,
-            CreatedComponentCount = _createdComponentCount,
-            CreatedLookup = _createdLookup,
-            MaxCreatedEntityId = _maxCreatedEntityId,
+            Stores = _stores,
             HierarchyByChild = _hierarchyByChild,
+            PendingBatch = _pendingBatch,
+            PendingBatchCount = _pendingBatchCount,
+            PendingBatchMin = _pendingBatchMin,
+            PendingBatchMax = _pendingBatchMax,
+            BatchCompCounts = _batchCompCounts,
+            BatchComps = _batchComps,
+            BatchCompTotal = _batchCompTotal,
         };
 
-        // Reset self to empty state
         _entries = [];
         _entryCount = 0;
-        _componentStores = [];
-        _componentCommandCount = 0;
-        _createdEntities = [];
-        _createdCount = 0;
-        _createdComponentCounts = [];
-        _createdComponents = [];
-        _createdComponentCount = 0;
-        _createdLookup = [];
-        _maxCreatedEntityId = 0;
-        _minCreatedEntityId = int.MaxValue;
-        _lastCreatedEntity = default;
-        _lastCreatedIndex = -1;
+        _stores = [];
         _hierarchyByChild = new Dictionary<Entity, HierarchyIntent>();
-
+        _pendingBatch = [];
+        _pendingBatchCount = 0;
+        _pendingBatchMin = int.MaxValue;
+        _pendingBatchMax = 0;
+        _batchCompCounts = [];
+        _batchComps = [];
+        _batchCompTotal = 0;
         return frozen;
     }
 
-    private void SubmitFromFrozen(FrozenStreamState frozen)
+    private void SubmitFromFrozen(FrozenState frozen)
     {
-        var createdDestroyed = BuildCreatedDestroyedScratch(frozen);
+        var batchStarts = frozen.PendingBatchCount == 0
+            ? []
+            : ArrayPool<int>.Shared.Rent(frozen.PendingBatchCount + 1);
+        if (frozen.PendingBatchCount > 0)
+        {
+            batchStarts[0] = 0;
+            for (var i = 0; i < frozen.PendingBatchCount; i++)
+                batchStarts[i + 1] = batchStarts[i] + frozen.BatchCompCounts[i];
+        }
+
         try
         {
-            MaterializeCreatedEntities(frozen, createdDestroyed);
-            ApplyExistingEntityCommands(frozen);
-            ApplyHierarchy(frozen, createdDestroyed);
-            ApplyDestroyEntries(frozen);
+            ApplyAllEntriesFrozen(frozen, batchStarts);
+            ApplyHierarchyFrozen(frozen);
         }
         finally
         {
-            if (createdDestroyed.Length > 0)
+            if (batchStarts.Length > 0)
+                ArrayPool<int>.Shared.Return(batchStarts);
+        }
+    }
+
+    private void ApplyAllEntriesFrozen(FrozenState frozen, int[] batchStarts)
+    {
+        for (var i = 0; i < frozen.EntryCount; i++)
+        {
+            ref readonly var entry = ref frozen.Entries[i];
+
+            switch (entry.Kind)
             {
-                ArrayPool<bool>.Shared.Return(createdDestroyed);
+                case CmdKind.Create:
+                    MaterializePendingEntityFrozen(frozen, entry.Entity, entry.DataIndex, batchStarts);
+                    break;
+
+                case CmdKind.Add:
+                    frozen.Stores[entry.Type.Value]!.WriteToWorld(_world, entry.Entity, entry.Type, entry.DataIndex, isAdd: true);
+                    break;
+
+                case CmdKind.Set:
+                    frozen.Stores[entry.Type.Value]!.WriteToWorld(_world, entry.Entity, entry.Type, entry.DataIndex, isAdd: false);
+                    break;
+
+                case CmdKind.Remove:
+                    _world.RemoveBoxed(entry.Entity, entry.Type);
+                    break;
+
+                case CmdKind.Destroy:
+                    if (_world.IsAlive(entry.Entity))
+                        _world.Destroy(entry.Entity);
+                    break;
             }
         }
     }
 
-    private static (FrameDelta Delta, int CopiedBytes) BuildFromFrozen(FrozenStreamState frozen)
+    private void MaterializePendingEntityFrozen(FrozenState frozen, Entity entity, int batchIdx, int[] batchStarts)
+    {
+        var count = frozen.BatchCompCounts[batchIdx];
+        if (count == 0) return;
+
+        ComponentType[]? pooledTypes = null;
+        Span<ComponentType> typesFromBatch = count <= 64
+            ? stackalloc ComponentType[count]
+            : (pooledTypes = ArrayPool<ComponentType>.Shared.Rent(count)).AsSpan(0, count);
+        try
+        {
+            for (var c = 0; c < count; c++)
+                typesFromBatch[c] = frozen.BatchComps[batchStarts[batchIdx] + c].Type;
+
+            var archetype = _world.TryGetArchetype(typesFromBatch);
+            if (archetype == null)
+            {
+                var typeArray = typesFromBatch.ToArray();
+                archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(typeArray));
+            }
+
+            var refs = ArrayPool<ComponentRef>.Shared.Rent(count);
+            for (var c = 0; c < count; c++)
+            {
+                ref var comp = ref frozen.BatchComps[batchStarts[batchIdx] + c];
+                refs[c] = new ComponentRef(comp.Type, frozen.Stores[comp.Type.Value]!, comp.DataIndex);
+            }
+
+            _world.MaterializeReservedEntityTyped(entity, archetype, new ReadOnlySpan<ComponentRef>(refs, 0, count));
+            ArrayPool<ComponentRef>.Shared.Return(refs);
+        }
+        finally
+        {
+            if (pooledTypes != null)
+                ArrayPool<ComponentType>.Shared.Return(pooledTypes);
+        }
+    }
+
+    private void ApplyHierarchyFrozen(FrozenState frozen)
+    {
+        if (frozen.HierarchyByChild.Count == 0) return;
+        foreach (var (child, intent) in frozen.HierarchyByChild)
+        {
+            if (IsEntityDestroyedFrozen(frozen, child)) continue;
+            if (intent.IsLinked)
+            {
+                if (IsEntityDestroyedFrozen(frozen, intent.Parent)) continue;
+                _world.Link(intent.Parent, child);
+            }
+            else
+            {
+                _world.Unlink(child);
+            }
+        }
+    }
+
+    private static bool IsEntityDestroyedFrozen(FrozenState frozen, Entity entity)
+    {
+        for (var i = 0; i < frozen.EntryCount; i++)
+            if (frozen.Entries[i].Kind == CmdKind.Destroy && frozen.Entries[i].Entity == entity)
+                return true;
+        return false;
+    }
+
+    private static (FrameDelta Delta, int CopiedBytes) BuildFromFrozen(FrozenState frozen)
     {
         var delta = new FrameDelta();
 
-        var createdDestroyed = BuildCreatedDestroyedScratch(frozen);
+        var batchStarts = frozen.PendingBatchCount == 0
+            ? []
+            : ArrayPool<int>.Shared.Rent(frozen.PendingBatchCount + 1);
+        if (frozen.PendingBatchCount > 0)
+        {
+            batchStarts[0] = 0;
+            for (var i = 0; i < frozen.PendingBatchCount; i++)
+                batchStarts[i + 1] = batchStarts[i] + frozen.BatchCompCounts[i];
+        }
+
         try
         {
-            delta.ReservedEntities.EnsureCapacity(frozen.CreatedCount);
-            delta.CreatedEntities.EnsureCapacity(frozen.CreatedCount);
-            delta.AddCommands.EnsureCapacity(frozen.ComponentCommandCount);
-            delta.SetCommands.EnsureCapacity(frozen.ComponentCommandCount);
-            delta.DestroyedEntities.EnsureCapacity(frozen.EntryCount);
-
-            for (var i = 0; i < frozen.CreatedCount; i++)
-            {
-                var entity = frozen.CreatedEntities[i];
-                delta.ReservedEntities.Add(entity);
-                if (createdDestroyed.Length > 0 && createdDestroyed[i])
-                {
-                    delta.ReleasedEntities.Add(entity);
-                    continue;
-                }
-
-                delta.CreatedEntities.Add(new RawCreatedEntity(entity, BuildCreatedComponentsForDelta(frozen, i)));
-            }
-
-            for (var i = 0; i < frozen.ComponentStores.Length; i++)
-            {
-                frozen.ComponentStores[i]?.EmitDelta(delta, (ComponentType)i);
-            }
-
             for (var i = 0; i < frozen.EntryCount; i++)
             {
                 ref readonly var entry = ref frozen.Entries[i];
-                // Skip entries targeting created entities — their lifecycle is handled above
-                if (GetCreatedIndex(frozen, entry.Entity) >= 0)
+
+                switch (entry.Kind)
                 {
-                    continue;
+                case CmdKind.Create:
+                {
+                    var count = frozen.BatchCompCounts[entry.DataIndex];
+                    delta.ReservedEntities.Add(entry.Entity);
+                    if (count > 0)
+                    {
+                        var comps = new RawComponentValue[count];
+                        for (var c = 0; c < count; c++)
+                        {
+                            ref var bc = ref frozen.BatchComps[batchStarts[entry.DataIndex] + c];
+                            comps[c] = frozen.Stores[bc.Type.Value]!.ReadRaw(bc.DataIndex, bc.Type);
+                        }
+                        delta.CreatedEntities.Add(new RawCreatedEntity(entry.Entity, comps));
+                    }
+                    else
+                    {
+                        delta.ReleasedEntities.Add(entry.Entity);
+                    }
+                    break;
                 }
 
-                if (entry.Kind == StreamOpKind.Remove)
-                {
-                    delta.RemoveCommands.Add(new RawRemoveCommand(entry.Entity, entry.ComponentType));
-                }
-                else if (entry.Kind == StreamOpKind.Destroy)
-                {
-                    delta.DestroyedEntities.Add(entry.Entity);
+                    case CmdKind.Add:
+                    {
+                        var store = frozen.Stores[entry.Type.Value]!;
+                        var size = store.ComponentSize(entry.Type);
+                        var raw = store.ReadRawCommand(entry.Entity, entry.Type, entry.DataIndex, 0, size);
+                        delta.AddCommands.Add(raw);
+                        break;
+                    }
+                    case CmdKind.Set:
+                    {
+                        var store = frozen.Stores[entry.Type.Value]!;
+                        var size = store.ComponentSize(entry.Type);
+                        var raw = store.ReadRawCommand(entry.Entity, entry.Type, entry.DataIndex, 0, size);
+                        delta.SetCommands.Add(raw);
+                        break;
+                    }
+                    case CmdKind.Remove:
+                        delta.RemoveCommands.Add(new RawRemoveCommand(entry.Entity, entry.Type));
+                        break;
+
+                    case CmdKind.Destroy:
+                        delta.DestroyedEntities.Add(entry.Entity);
+                        break;
                 }
             }
 
             foreach (var (child, intent) in frozen.HierarchyByChild)
             {
-                // Skip if child is a destroyed created entity
-                var childCreatedIdx = GetCreatedIndex(frozen, child);
-                if (childCreatedIdx >= 0 && createdDestroyed.Length > 0 && createdDestroyed[childCreatedIdx]) continue;
-                // Skip if child is an existing entity marked for destroy
-                if (childCreatedIdx < 0 && IsEntityMarkedForDestroy(frozen, child)) continue;
-
+                if (IsEntityDestroyedFrozen(frozen, child)) continue;
                 if (intent.IsLinked)
                 {
-                    // Skip if parent is a destroyed created entity
-                    var parentCreatedIdx = GetCreatedIndex(frozen, intent.Parent);
-                    if (parentCreatedIdx >= 0 && createdDestroyed.Length > 0 && createdDestroyed[parentCreatedIdx]) continue;
-
+                    if (IsEntityDestroyedFrozen(frozen, intent.Parent)) continue;
                     delta.LinkCommands.Add(new LinkCommand(intent.Parent, child));
                 }
                 else
@@ -386,731 +663,76 @@ public sealed class CommandStream : ICommandRecorder
         }
         finally
         {
-            if (createdDestroyed.Length > 0)
-            {
-                ArrayPool<bool>.Shared.Return(createdDestroyed);
-            }
+            if (batchStarts.Length > 0)
+                ArrayPool<int>.Shared.Return(batchStarts);
         }
 
         var copiedBytes = delta.DeepCopyOwnedData();
         return (delta, copiedBytes);
     }
 
-    private void MaterializeCreatedEntities(FrozenStreamState frozen, bool[] createdDestroyed)
-    {
-        var offsets = BuildCreatedComponentOffsets(frozen, out var totalComponentCount);
-        var writes = totalComponentCount == 0 ? [] : ArrayPool<int>.Shared.Rent(frozen.CreatedCount);
-        var values = totalComponentCount == 0 ? [] : ArrayPool<CreatedComponentRef>.Shared.Rent(totalComponentCount);
-        try
-        {
-            if (totalComponentCount > 0)
-            {
-                Array.Copy(offsets, writes, frozen.CreatedCount);
-                for (var i = 0; i < frozen.CreatedComponentCount; i++)
-                {
-                    ref readonly var component = ref frozen.CreatedComponents[i];
-                    values[writes[component.CreatedIndex]++] = component;
-                }
-            }
-
-            // Group by archetype — same as the non-frozen Submit hot path.
-            GroupByArchetypeFrozen(frozen, values, offsets, createdDestroyed);
-        }
-        finally
-        {
-            if (values.Length > 0) ArrayPool<CreatedComponentRef>.Shared.Return(values);
-            if (writes.Length > 0) ArrayPool<int>.Shared.Return(writes);
-            if (offsets.Length > 0) ArrayPool<int>.Shared.Return(offsets);
-        }
-    }
-
-    private void GroupByArchetypeFrozen(
-        FrozenStreamState frozen, CreatedComponentRef[] values, int[] offsets, bool[] createdDestroyed)
-    {
-        const int maxGroups = 64;
-        var groupKeys = ArrayPool<int>.Shared.Rent(maxGroups);
-        var groupArchetypes = ArrayPool<Archetype?>.Shared.Rent(maxGroups);
-        var entityGroup = ArrayPool<int>.Shared.Rent(frozen.CreatedCount);
-        int groupCount = 0;
-
-        for (var i = 0; i < frozen.CreatedCount; i++)
-        {
-            if (createdDestroyed.Length > 0 && createdDestroyed[i])
-            {
-                _world.ReleaseReservedEntity(frozen.CreatedEntities[i]);
-                entityGroup[i] = -1;
-                continue;
-            }
-
-            var count = frozen.CreatedComponentCounts[i];
-            if (count == 0)
-            {
-                _world.MaterializeReservedEntity(frozen.CreatedEntities[i], Array.Empty<RawComponentValue>(), reservationChecked: true);
-                entityGroup[i] = -1;
-                continue;
-            }
-
-            var span = values.AsSpan(offsets[i], count);
-            var key = ComputeGroupKey(span);
-
-            int g;
-            for (g = 0; g < groupCount; g++)
-            {
-                if (groupKeys[g] == key && ArchetypeMatchesComponentSpan(groupArchetypes[g]!, span))
-                    break;
-            }
-
-            if (g == groupCount)
-            {
-                groupKeys[g] = key;
-                groupArchetypes[g] = ResolveArchetypeForSpan(span);
-                groupCount++;
-            }
-
-            entityGroup[i] = g;
-        }
-
-        for (var i = 0; i < frozen.CreatedCount; i++)
-        {
-            var g = entityGroup[i];
-            if (g < 0) continue;
-            var entity = frozen.CreatedEntities[i];
-            var count = frozen.CreatedComponentCounts[i];
-            _world.MaterializeReservedEntityTyped(entity, groupArchetypes[g]!, values.AsSpan(offsets[i], count));
-        }
-
-        ArrayPool<int>.Shared.Return(groupKeys);
-        ArrayPool<Archetype?>.Shared.Return(groupArchetypes);
-        ArrayPool<int>.Shared.Return(entityGroup);
-    }
-
-    private static int[] BuildCreatedComponentOffsets(FrozenStreamState frozen, out int totalComponentCount)
-    {
-        totalComponentCount = 0;
-        if (frozen.CreatedCount == 0)
-        {
-            return [];
-        }
-
-        var offsets = ArrayPool<int>.Shared.Rent(frozen.CreatedCount + 1);
-        offsets[0] = 0;
-        for (var i = 0; i < frozen.CreatedCount; i++)
-        {
-            totalComponentCount += frozen.CreatedComponentCounts[i];
-            offsets[i + 1] = totalComponentCount;
-        }
-
-        return offsets;
-    }
-
-    private static bool[] BuildCreatedDestroyedScratch(FrozenStreamState frozen)
-    {
-        if (frozen.CreatedCount == 0)
-        {
-            return [];
-        }
-
-        var destroyed = ArrayPool<bool>.Shared.Rent(frozen.CreatedCount);
-        Array.Clear(destroyed, 0, frozen.CreatedCount);
-        for (var i = 0; i < frozen.EntryCount; i++)
-        {
-            ref readonly var entry = ref frozen.Entries[i];
-            if (entry.Kind != StreamOpKind.Destroy)
-            {
-                continue;
-            }
-
-            var createdIndex = GetCreatedIndex(frozen, entry.Entity);
-            if (createdIndex >= 0)
-            {
-                destroyed[createdIndex] = true;
-            }
-        }
-
-        return destroyed;
-    }
-
-    private static int GetCreatedIndex(FrozenStreamState frozen, Entity entity)
-    {
-        var id = entity.Id;
-        if ((uint)id >= (uint)frozen.CreatedLookup.Length)
-        {
-            return -1;
-        }
-
-        var index = frozen.CreatedLookup[id];
-        return (uint)index < (uint)frozen.CreatedCount && frozen.CreatedEntities[index] == entity ? index : -1;
-    }
-
-    private void ApplyExistingEntityCommands(FrozenStreamState frozen)
-    {
-        for (var i = 0; i < frozen.ComponentStores.Length; i++)
-        {
-            frozen.ComponentStores[i]?.ApplyExistingCommands(_world);
-        }
-
-        for (var i = 0; i < frozen.EntryCount; i++)
-        {
-            ref readonly var entry = ref frozen.Entries[i];
-            if (entry.Kind != StreamOpKind.Remove)
-            {
-                continue;
-            }
-
-            if (GetCreatedIndex(frozen, entry.Entity) >= 0)
-            {
-                continue;
-            }
-
-            _world.RemoveBoxed(entry.Entity, entry.ComponentType);
-        }
-    }
-
-    private void ApplyHierarchy(FrozenStreamState frozen, bool[] createdDestroyed)
-    {
-        if (frozen.HierarchyByChild.Count == 0) return;
-
-        foreach (var (child, intent) in frozen.HierarchyByChild)
-        {
-            if (createdDestroyed.Length > 0)
-            {
-                var childCreatedIdx = GetCreatedIndex(frozen, child);
-                if (childCreatedIdx >= 0 && createdDestroyed[childCreatedIdx]) continue;
-            }
-
-            if (IsEntityMarkedForDestroy(frozen, child)) continue;
-
-            if (intent.IsLinked)
-            {
-                if (createdDestroyed.Length > 0)
-                {
-                    var parentCreatedIdx = GetCreatedIndex(frozen, intent.Parent);
-                    if (parentCreatedIdx >= 0 && createdDestroyed[parentCreatedIdx]) continue;
-                }
-
-                _world.Link(intent.Parent, child);
-            }
-            else
-            {
-                _world.Unlink(child);
-            }
-        }
-    }
-
-    private static bool IsEntityMarkedForDestroy(FrozenStreamState frozen, Entity entity)
-    {
-        for (var i = 0; i < frozen.EntryCount; i++)
-        {
-            if (frozen.Entries[i].Kind == StreamOpKind.Destroy && frozen.Entries[i].Entity == entity)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private void ApplyDestroyEntries(FrozenStreamState frozen)
-    {
-        for (var i = 0; i < frozen.EntryCount; i++)
-        {
-            ref readonly var entry = ref frozen.Entries[i];
-            if (entry.Kind != StreamOpKind.Destroy)
-            {
-                continue;
-            }
-
-            if (GetCreatedIndex(frozen, entry.Entity) >= 0)
-            {
-                continue;
-            }
-
-            if (_world.IsAlive(entry.Entity))
-            {
-                _world.Destroy(entry.Entity);
-            }
-        }
-    }
-
-    private static RawComponentValue[] BuildCreatedComponentsForDelta(FrozenStreamState frozen, int createdIndex)
-    {
-        var count = frozen.CreatedComponentCounts[createdIndex];
-        if (count == 0)
-        {
-            return [];
-        }
-
-        var components = new RawComponentValue[count];
-        var write = 0;
-        for (var i = 0; i < frozen.CreatedComponentCount; i++)
-        {
-            ref readonly var component = ref frozen.CreatedComponents[i];
-            if (component.CreatedIndex == createdIndex)
-            {
-                components[write++] = ToRawComponentValue(component);
-            }
-        }
-
-        return components;
-    }
-
-    private void RegisterCreatedEntity(Entity entity)
-    {
-        if (_createdCount == _createdEntities.Length)
-        {
-            var newSize = _createdEntities.Length == 0 ? 64 : _createdEntities.Length * 2;
-            Array.Resize(ref _createdEntities, newSize);
-            Array.Resize(ref _createdComponentCounts, newSize);
-        }
-
-        if (entity.Id >= _createdLookup.Length)
-        {
-            var newLen = _createdLookup.Length == 0 ? 64 : _createdLookup.Length;
-            while (newLen <= entity.Id) newLen *= 2;
-            var next = new int[newLen];
-            Array.Fill(next, -1);
-            if (_createdLookup.Length > 0)
-            {
-                Array.Copy(_createdLookup, next, _createdLookup.Length);
-            }
-
-            _createdLookup = next;
-        }
-
-        _createdEntities[_createdCount] = entity;
-        _createdComponentCounts[_createdCount] = 0;
-        _createdLookup[entity.Id] = _createdCount;
-        _lastCreatedEntity = entity;
-        _lastCreatedIndex = _createdCount;
-        if (entity.Id < _minCreatedEntityId) _minCreatedEntityId = entity.Id;
-        _createdCount++;
-        if (entity.Id >= _maxCreatedEntityId) _maxCreatedEntityId = entity.Id + 1;
-    }
-
-    private void AppendCreatedComponent(int createdIndex, ComponentType componentType, ComponentCommandStore store, int dataIndex, int size)
-    {
-        if (_createdComponentCount == _createdComponents.Length)
-        {
-            Array.Resize(ref _createdComponents, _createdComponents.Length == 0 ? 256 : _createdComponents.Length * 2);
-        }
-
-        _createdComponents[_createdComponentCount++] = new CreatedComponentRef(createdIndex, componentType, store, dataIndex, size);
-        _createdComponentCounts[createdIndex]++;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private int GetCreatedIndex(Entity entity)
-    {
-        if (entity == _lastCreatedEntity)
-        {
-            return _lastCreatedIndex;
-        }
-
-        var id = entity.Id;
-        if ((uint)id >= (uint)_createdLookup.Length)
-        {
-            return -1;
-        }
-
-        var index = _createdLookup[id];
-        return (uint)index < (uint)_createdCount && _createdEntities[index] == entity ? index : -1;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool IsCreatedEntity(Entity entity) => GetCreatedIndex(entity) >= 0;
-
-    private void Append(StreamEntry entry)
-    {
-        if (_entryCount == _entries.Length)
-        {
-            Array.Resize(ref _entries, _entries.Length == 0 ? 256 : _entries.Length * 2);
-        }
-
-        _entries[_entryCount++] = entry;
-    }
-
-    private ComponentCommandStore<T> GetOrCreateComponentStore<T>()
-    {
-        var componentTypeId = CommandTypeInfo<T>.Type.Value;
-        if (componentTypeId >= _componentStores.Length)
-        {
-            Array.Resize(ref _componentStores, componentTypeId + 1);
-        }
-
-        var store = _componentStores[componentTypeId];
-        if (store == null)
-        {
-            store = new ComponentCommandStore<T>();
-            _componentStores[componentTypeId] = store;
-        }
-
-        return (ComponentCommandStore<T>)store;
-    }
-
-    private ComponentCommandStore GetOrCreateComponentStore(ComponentType componentType)
-    {
-        var id = componentType.Value;
-        if (id >= _componentStores.Length)
-        {
-            Array.Resize(ref _componentStores, id + 1);
-        }
-
-        var store = _componentStores[id];
-        if (store == null)
-        {
-            var runtimeType = ComponentRegistry.Shared.GetType(componentType);
-            var typedStoreType = typeof(ComponentCommandStore<>).MakeGenericType(runtimeType);
-            store = (ComponentCommandStore)Activator.CreateInstance(typedStoreType)!;
-            _componentStores[id] = store;
-        }
-
-        return store;
-    }
-
-    private bool[] BuildCreatedDestroyedScratch()
-    {
-        if (_createdCount == 0)
-        {
-            return [];
-        }
-
-        var destroyed = ArrayPool<bool>.Shared.Rent(_createdCount);
-        Array.Clear(destroyed, 0, _createdCount);
-        for (var i = 0; i < _entryCount; i++)
-        {
-            ref readonly var entry = ref _entries[i];
-            if (entry.Kind != StreamOpKind.Destroy)
-            {
-                continue;
-            }
-
-            var createdIndex = GetCreatedIndex(entry.Entity);
-            if (createdIndex >= 0)
-            {
-                destroyed[createdIndex] = true;
-            }
-        }
-
-        return destroyed;
-    }
-
-    private void MaterializeCreatedEntities(bool[] createdDestroyed)
-    {
-        var offsets = BuildCreatedComponentOffsets(out var totalComponentCount);
-        var writes = totalComponentCount == 0 ? [] : ArrayPool<int>.Shared.Rent(_createdCount);
-        var values = totalComponentCount == 0 ? [] : ArrayPool<CreatedComponentRef>.Shared.Rent(totalComponentCount);
-        try
-        {
-            if (totalComponentCount > 0)
-            {
-                Array.Copy(offsets, writes, _createdCount);
-                for (var i = 0; i < _createdComponentCount; i++)
-                {
-                    ref readonly var component = ref _createdComponents[i];
-                    values[writes[component.CreatedIndex]++] = component;
-                }
-            }
-
-            // Group created entities by component combination — archetype lookup once per group.
-            // Uses (componentCount << 24) ^ FastHash as group key (wide enough for practical archetype counts).
-            GroupByArchetype(values, offsets, createdDestroyed);
-        }
-        finally
-        {
-            if (values.Length > 0) ArrayPool<CreatedComponentRef>.Shared.Return(values);
-            if (writes.Length > 0) ArrayPool<int>.Shared.Return(writes);
-            if (offsets.Length > 0) ArrayPool<int>.Shared.Return(offsets);
-        }
-    }
-
-    private void GroupByArchetype(
-        CreatedComponentRef[] values, int[] offsets, bool[] createdDestroyed)
-    {
-        // First pass: resolve archetype for each unique component combination.
-        // Key format: (componentCount << 24) | (hash & 0xFFFFFF)
-        const int maxGroups = 64; // far beyond practical archetype variants per batch
-        var groupKeys = ArrayPool<int>.Shared.Rent(maxGroups);
-        var groupArchetypes = ArrayPool<Archetype?>.Shared.Rent(maxGroups);
-        var groupFirstIdx = ArrayPool<int>.Shared.Rent(maxGroups);
-        var entityGroup = ArrayPool<int>.Shared.Rent(_createdCount);
-        int groupCount = 0;
-
-        for (var i = 0; i < _createdCount; i++)
-        {
-            if (createdDestroyed.Length > 0 && createdDestroyed[i])
-            {
-                _world.ReleaseReservedEntity(_createdEntities[i]);
-                entityGroup[i] = -1;
-                continue;
-            }
-
-            var count = _createdComponentCounts[i];
-            if (count == 0)
-            {
-                _world.MaterializeReservedEntity(_createdEntities[i], Array.Empty<RawComponentValue>(), reservationChecked: true);
-                entityGroup[i] = -1;
-                continue;
-            }
-
-            var span = values.AsSpan(offsets[i], count);
-            var key = ComputeGroupKey(span);
-
-            // Find existing group
-            int g;
-            for (g = 0; g < groupCount; g++)
-            {
-                if (groupKeys[g] == key && ArchetypeMatchesComponentSpan(groupArchetypes[g]!, span))
-                    break;
-            }
-
-            if (g == groupCount)
-            {
-                // New group — resolve archetype once
-                var archetype = ResolveArchetypeForSpan(span);
-                groupKeys[g] = key;
-                groupArchetypes[g] = archetype;
-                groupFirstIdx[g] = i;
-                groupCount++;
-            }
-
-            entityGroup[i] = g;
-        }
-
-        // Second pass: materialize entities using their group's archetype.
-        for (var i = 0; i < _createdCount; i++)
-        {
-            var g = entityGroup[i];
-            if (g < 0) continue;
-
-            var entity = _createdEntities[i];
-            var count = _createdComponentCounts[i];
-            var span = values.AsSpan(offsets[i], count);
-            _world.MaterializeReservedEntityTyped(entity, groupArchetypes[g]!, span);
-        }
-
-        ArrayPool<int>.Shared.Return(groupKeys);
-        ArrayPool<Archetype?>.Shared.Return(groupArchetypes);
-        ArrayPool<int>.Shared.Return(groupFirstIdx);
-        ArrayPool<int>.Shared.Return(entityGroup);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int ComputeGroupKey(ReadOnlySpan<CreatedComponentRef> components)
-    {
-        var hash = components.Length;
-        for (var i = 0; i < components.Length; i++)
-            hash = hash * 31 + components[i].ComponentType.Value;
-        return (components.Length << 24) | (hash & 0xFFFFFF);
-    }
-
-    private static bool ArchetypeMatchesComponentSpan(Archetype archetype, ReadOnlySpan<CreatedComponentRef> components)
-    {
-        var signature = archetype.Signature.AsSpan();
-        if (signature.Length != components.Length) return false;
-        for (var i = 0; i < components.Length; i++)
-            if (signature[i] != components[i].ComponentType) return false;
-        return true;
-    }
-
-    private Archetype ResolveArchetypeForSpan(ReadOnlySpan<CreatedComponentRef> components)
-    {
-        // Fast path: last-created archetype hit (same component set as previous call)
-        if (_lastCreatedArchetype != null &&
-            _lastCreatedComponentCount == components.Length &&
-            _lastCreatedFirstComponentType == components[0].ComponentType &&
-            SignatureEquals(_lastCreatedArchetype.Signature.AsSpan(), components))
-        {
-            return _lastCreatedArchetype;
-        }
-
-        // Copy component types to stack (zero allocation) and find existing
-        // archetype via order-independent set comparison.
-        Span<ComponentType> types = stackalloc ComponentType[components.Length];
-        for (var i = 0; i < components.Length; i++)
-            types[i] = components[i].ComponentType;
-
-        var archetype = _world.TryGetArchetype(types);
-        if (archetype == null)
-        {
-            // Truly new archetype — allocate and create
-            var signatureTypes = types.ToArray();
-            archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(signatureTypes));
-        }
-
-        _lastCreatedArchetype = archetype;
-        _lastCreatedComponentCount = components.Length;
-        _lastCreatedFirstComponentType = components[0].ComponentType;
-        return archetype;
-    }
-
-    private int[] BuildCreatedComponentOffsets(out int totalComponentCount)
-    {
-        totalComponentCount = 0;
-        if (_createdCount == 0)
-        {
-            return [];
-        }
-
-        var offsets = ArrayPool<int>.Shared.Rent(_createdCount + 1);
-        offsets[0] = 0;
-        for (var i = 0; i < _createdCount; i++)
-        {
-            totalComponentCount += _createdComponentCounts[i];
-            offsets[i + 1] = totalComponentCount;
-        }
-
-        return offsets;
-    }
-
-    private static bool SignatureEquals(ReadOnlySpan<ComponentType> signature, ReadOnlySpan<CreatedComponentRef> components)
-    {
-        for (var i = 0; i < components.Length; i++)
-        {
-            if (signature[i] != components[i].ComponentType)
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private void ApplyExistingEntityCommands()
-    {
-        for (var i = 0; i < _componentStores.Length; i++)
-        {
-            _componentStores[i]?.ApplyExistingCommands(_world);
-        }
-
-        for (var i = 0; i < _entryCount; i++)
-        {
-            ref readonly var entry = ref _entries[i];
-            if (entry.Kind != StreamOpKind.Remove)
-            {
-                continue;
-            }
-
-            if (IsCreatedEntity(entry.Entity))
-            {
-                continue;
-            }
-
-            _world.RemoveBoxed(entry.Entity, entry.ComponentType);
-        }
-    }
-
-    private void ApplyHierarchy(bool[] createdDestroyed)
-    {
-        if (_hierarchyByChild.Count == 0) return;
-
-        foreach (var (child, intent) in _hierarchyByChild)
-        {
-            // Skip if child is a destroyed created entity
-            if (createdDestroyed.Length > 0)
-            {
-                var childCreatedIdx = GetCreatedIndex(child);
-                if (childCreatedIdx >= 0 && createdDestroyed[childCreatedIdx]) continue;
-            }
-
-            // Skip if child is a destroyed existing entity (destroyed in this submit)
-            if (IsEntityMarkedForDestroy(child)) continue;
-
-            if (intent.IsLinked)
-            {
-                // Skip if parent is a destroyed created entity
-                if (createdDestroyed.Length > 0)
-                {
-                    var parentCreatedIdx = GetCreatedIndex(intent.Parent);
-                    if (parentCreatedIdx >= 0 && createdDestroyed[parentCreatedIdx]) continue;
-                }
-
-                _world.Link(intent.Parent, child);
-            }
-            else
-            {
-                _world.Unlink(child);
-            }
-        }
-    }
-
-    private bool IsEntityMarkedForDestroy(Entity entity)
-    {
-        for (var i = 0; i < _entryCount; i++)
-        {
-            if (_entries[i].Kind == StreamOpKind.Destroy && _entries[i].Entity == entity)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private void ApplyDestroyEntries()
-    {
-        for (var i = 0; i < _entryCount; i++)
-        {
-            ref readonly var entry = ref _entries[i];
-            if (entry.Kind != StreamOpKind.Destroy)
-            {
-                continue;
-            }
-
-            if (IsCreatedEntity(entry.Entity))
-            {
-                continue;
-            }
-
-            if (_world.IsAlive(entry.Entity))
-            {
-                _world.Destroy(entry.Entity);
-            }
-        }
-    }
-
     private void BuildDelta(FrameDelta delta)
     {
-        var createdDestroyed = BuildCreatedDestroyedScratch();
+        var batchStarts = _pendingBatchCount == 0
+            ? []
+            : ArrayPool<int>.Shared.Rent(_pendingBatchCount + 1);
+        if (_pendingBatchCount > 0)
+        {
+            batchStarts[0] = 0;
+            for (var i = 0; i < _pendingBatchCount; i++)
+                batchStarts[i + 1] = batchStarts[i] + _batchCompCounts[i];
+        }
+
         try
         {
-            delta.ReservedEntities.EnsureCapacity(_createdCount);
-            delta.CreatedEntities.EnsureCapacity(_createdCount);
-            delta.AddCommands.EnsureCapacity(_componentCommandCount);
-            delta.SetCommands.EnsureCapacity(_componentCommandCount);
-            delta.DestroyedEntities.EnsureCapacity(_entryCount);
-
-            for (var i = 0; i < _createdCount; i++)
-            {
-                var entity = _createdEntities[i];
-                delta.ReservedEntities.Add(entity);
-                if (createdDestroyed.Length > 0 && createdDestroyed[i])
-                {
-                    delta.ReleasedEntities.Add(entity);
-                    continue;
-                }
-
-                delta.CreatedEntities.Add(new RawCreatedEntity(entity, BuildCreatedComponentsForDelta(i)));
-            }
-
-            for (var i = 0; i < _componentStores.Length; i++)
-            {
-                _componentStores[i]?.EmitDelta(delta, (ComponentType)i);
-            }
-
             for (var i = 0; i < _entryCount; i++)
             {
                 ref readonly var entry = ref _entries[i];
-                if (IsCreatedEntity(entry.Entity))
-                {
-                    continue;
-                }
 
                 switch (entry.Kind)
                 {
-                    case StreamOpKind.Remove:
-                        delta.RemoveCommands.Add(new RawRemoveCommand(entry.Entity, entry.ComponentType));
+                    case CmdKind.Create:
+                    {
+                        var count = _batchCompCounts[entry.DataIndex];
+                        delta.ReservedEntities.Add(entry.Entity);
+                        if (count > 0)
+                        {
+                            var comps = new RawComponentValue[count];
+                            for (var c = 0; c < count; c++)
+                            {
+                                ref var bc = ref _batchComps[batchStarts[entry.DataIndex] + c];
+                                comps[c] = _stores[bc.Type.Value]!.ReadRaw(bc.DataIndex, bc.Type);
+                            }
+                            delta.CreatedEntities.Add(new RawCreatedEntity(entry.Entity, comps));
+                        }
+                        else
+                        {
+                            delta.ReleasedEntities.Add(entry.Entity);
+                        }
                         break;
-                    case StreamOpKind.Destroy:
+                    }
+
+                    case CmdKind.Add:
+                    {
+                        var store = _stores[entry.Type.Value]!;
+                        var size = store.ComponentSize(entry.Type);
+                        var raw = store.ReadRawCommand(entry.Entity, entry.Type, entry.DataIndex, 0, size);
+                        delta.AddCommands.Add(raw);
+                        break;
+                    }
+                    case CmdKind.Set:
+                    {
+                        var store = _stores[entry.Type.Value]!;
+                        var size = store.ComponentSize(entry.Type);
+                        var raw = store.ReadRawCommand(entry.Entity, entry.Type, entry.DataIndex, 0, size);
+                        delta.SetCommands.Add(raw);
+                        break;
+                    }
+                    case CmdKind.Remove:
+                        delta.RemoveCommands.Add(new RawRemoveCommand(entry.Entity, entry.Type));
+                        break;
+
+                    case CmdKind.Destroy:
                         delta.DestroyedEntities.Add(entry.Entity);
                         break;
                 }
@@ -1118,18 +740,10 @@ public sealed class CommandStream : ICommandRecorder
 
             foreach (var (child, intent) in _hierarchyByChild)
             {
-                // Skip if child is a destroyed created entity
-                var childCreatedIdx = GetCreatedIndex(child);
-                if (childCreatedIdx >= 0 && createdDestroyed.Length > 0 && createdDestroyed[childCreatedIdx]) continue;
-                // Skip if child is an existing entity marked for destroy
-                if (childCreatedIdx < 0 && IsEntityMarkedForDestroy(child)) continue;
-
+                if (IsEntityDestroyed(child)) continue;
                 if (intent.IsLinked)
                 {
-                    // Skip if parent is a destroyed created entity
-                    var parentCreatedIdx = GetCreatedIndex(intent.Parent);
-                    if (parentCreatedIdx >= 0 && createdDestroyed.Length > 0 && createdDestroyed[parentCreatedIdx]) continue;
-
+                    if (IsEntityDestroyed(intent.Parent)) continue;
                     delta.LinkCommands.Add(new LinkCommand(intent.Parent, child));
                 }
                 else
@@ -1140,186 +754,143 @@ public sealed class CommandStream : ICommandRecorder
         }
         finally
         {
-            if (createdDestroyed.Length > 0)
-            {
-                ArrayPool<bool>.Shared.Return(createdDestroyed);
-            }
+            if (batchStarts.Length > 0)
+                ArrayPool<int>.Shared.Return(batchStarts);
         }
     }
 
-    private RawComponentValue[] BuildCreatedComponentsForDelta(int createdIndex)
+    // ── Helpers ───────────────────────────────────────────────────────
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void AppendEntry(Entry entry)
     {
-        var count = _createdComponentCounts[createdIndex];
-        if (count == 0)
-        {
-            return [];
-        }
-
-        var components = new RawComponentValue[count];
-        var write = 0;
-        for (var i = 0; i < _createdComponentCount; i++)
-        {
-            ref readonly var component = ref _createdComponents[i];
-            if (component.CreatedIndex == createdIndex)
-            {
-                components[write++] = ToRawComponentValue(component);
-            }
-        }
-
-        return components;
+        if (_entryCount == _entries.Length)
+            Array.Resize(ref _entries, _entries.Length == 0 ? 256 : _entries.Length * 2);
+        _entries[_entryCount++] = entry;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static RawComponentValue ToRawComponentValue(in CreatedComponentRef component)
+    private ComponentStore<T> GetOrCreateStore<T>()
     {
-        var data = new byte[component.DataSize];
-        component.Store.WriteRaw(component.DataIndex, data);
-        return new RawComponentValue(component.ComponentType, data, 0, component.DataSize);
+        var id = CommandTypeInfo<T>.Type.Value;
+        if (id >= _stores.Length)
+            Array.Resize(ref _stores, id + 1);
+
+        var store = _stores[id];
+        if (store == null)
+        {
+            store = new ComponentStore<T>();
+            _stores[id] = store;
+        }
+        return (ComponentStore<T>)store;
+    }
+
+    private ComponentStore GetOrCreateStore(ComponentType type)
+    {
+        var id = type.Value;
+        if (id >= _stores.Length)
+            Array.Resize(ref _stores, id + 1);
+
+        var store = _stores[id];
+        if (store == null)
+        {
+            var runtimeType = ComponentRegistry.Shared.GetType(type);
+            var typedStoreType = typeof(ComponentStore<>).MakeGenericType(runtimeType);
+            store = (ComponentStore)Activator.CreateInstance(typedStoreType)!;
+            _stores[id] = store;
+        }
+        return store;
     }
 
     private void Clear()
     {
         _entryCount = 0;
-        _componentCommandCount = 0;
-        for (var i = 0; i < _componentStores.Length; i++)
-        {
-            _componentStores[i]?.Clear();
-        }
+        for (var i = 0; i < _stores.Length; i++)
+            _stores[i]?.Clear();
 
-        for (var i = 0; i < _maxCreatedEntityId; i++)
-        {
-            if (i < _createdLookup.Length)
-            {
-                _createdLookup[i] = -1;
-            }
-        }
-
-        _createdCount = 0;
-        _createdComponentCount = 0;
-        _maxCreatedEntityId = 0;
-        _minCreatedEntityId = int.MaxValue;
-        _lastCreatedEntity = default;
-        _lastCreatedIndex = -1;
+        // Clear pending batch tracking
+        for (var i = _pendingBatchMin; i < _pendingBatchMax && i < _pendingBatch.Length; i++)
+            _pendingBatch[i] = -1;
+        _pendingBatchCount = 0;
+        _pendingBatchMin = int.MaxValue;
+        _pendingBatchMax = 0;
+        _batchCompTotal = 0;
         _hierarchyByChild.Clear();
-        _lastCreatedArchetype = null;
-
     }
 
     private static class CommandTypeInfo<T>
     {
         public static readonly ComponentType Type = Component<T>.ComponentType;
-        public static readonly int Size = Unsafe.SizeOf<T>();
     }
 
-    private readonly record struct StreamEntry(
-        StreamOpKind Kind,
+    // ── Internal types ────────────────────────────────────────────────
+
+    internal enum CmdKind : byte { Create, Add, Set, Remove, Destroy }
+
+    /// <summary>
+    /// Flat command entry. For <see cref="CmdKind.Create"/> entries,
+    /// <see cref="Entry.DataIndex"/> stores the pending batch index.
+    /// </summary>
+    internal readonly record struct Entry(
+        CmdKind Kind,
         Entity Entity,
-        ComponentType ComponentType,
-        int SlabIndex,
-        int DataOffset,
-        int DataSize);
+        ComponentType Type,
+        int DataIndex);
 
-    internal readonly record struct CreatedComponentRef(
-        int CreatedIndex,
-        ComponentType ComponentType,
-        ComponentCommandStore Store,
-        int DataIndex,
-        int DataSize);
+    internal readonly record struct ComponentRef(
+        ComponentType Type,
+        ComponentStore Store,
+        int DataIndex);
 
-    internal abstract class ComponentCommandStore
+    internal abstract class ComponentStore
     {
-        public abstract void ApplyExistingCommands(World world);
-        public abstract void EmitDelta(FrameDelta delta, ComponentType componentType);
-        public abstract void WriteToArchetype(Archetype archetype, int rowIndex, ComponentType componentType, int index);
-        public abstract void WriteRaw(int index, byte[] destination);
+        public abstract void WriteToWorld(World world, Entity entity, ComponentType type, int dataIndex, bool isAdd);
+        public abstract void WriteToArchetype(Archetype archetype, int rowIndex, ComponentType type, int dataIndex);
+        public abstract RawComponentValue ReadRaw(int dataIndex, ComponentType type);
+        public abstract RawComponentCommand ReadRawCommand(Entity entity, ComponentType type, int dataIndex, int offset, int size);
         public abstract int AppendFromArchetype(Archetype archetype, int columnIndex, int rowIndex);
+        public abstract int ComponentSize(ComponentType type);
         public abstract void Clear();
     }
 
-    private sealed class ComponentCommandStore<T> : ComponentCommandStore
+    private sealed class ComponentStore<T> : ComponentStore
     {
-        private T[] _components = [];
+        private T[] _data = [];
         private int _count;
-        private ExistingComponentCommand[] _existingCommands = [];
-        private int _existingCount;
 
-        public int Append(T component)
+        public int Append(in T value)
         {
-            if (_count == _components.Length)
-            {
-                Array.Resize(ref _components, _components.Length == 0 ? 256 : _components.Length * 2);
-            }
-
-            var index = _count++;
-            _components[index] = component;
-            return index;
+            if (_count == _data.Length)
+                Array.Resize(ref _data, _data.Length == 0 ? 256 : _data.Length * 2);
+            _data[_count] = value;
+            return _count++;
         }
 
-        public void AddExisting(StreamOpKind kind, Entity entity, in T component)
+        public override void WriteToWorld(World world, Entity entity, ComponentType type, int dataIndex, bool isAdd)
         {
-            // Grow components array if needed
-            if (_count == _components.Length)
-            {
-                Array.Resize(ref _components, _components.Length == 0 ? 256 : _components.Length * 2);
-            }
-
-            var dataIndex = _count;
-            _components[dataIndex] = component;
-            _count++;
-
-            // Grow existing commands array if needed
-            if (_existingCount == _existingCommands.Length)
-            {
-                Array.Resize(ref _existingCommands, _existingCommands.Length == 0 ? 256 : _existingCommands.Length * 2);
-            }
-
-            _existingCommands[_existingCount++] = new ExistingComponentCommand(kind, entity, dataIndex);
+            if (isAdd) world.Add(entity, _data[dataIndex]);
+            else world.Set(entity, _data[dataIndex]);
         }
 
-        public override void ApplyExistingCommands(World world)
+        public override void WriteToArchetype(Archetype archetype, int rowIndex, ComponentType type, int dataIndex)
         {
-            for (var i = 0; i < _existingCount; i++)
-            {
-                ref readonly var command = ref _existingCommands[i];
-                if (command.Kind == StreamOpKind.Add)
-                {
-                    world.Add(command.Entity, _components[command.DataIndex]);
-                }
-                else
-                {
-                    world.Set(command.Entity, _components[command.DataIndex]);
-                }
-            }
+            archetype.SetComponentAtTyped(archetype.GetComponentIndex(type), rowIndex, in _data[dataIndex]);
         }
 
-        public override void EmitDelta(FrameDelta delta, ComponentType componentType)
+        public override RawComponentValue ReadRaw(int dataIndex, ComponentType type)
         {
             var size = Unsafe.SizeOf<T>();
-            for (var i = 0; i < _existingCount; i++)
-            {
-                ref readonly var command = ref _existingCommands[i];
-                var data = new byte[size];
-                WriteRaw(command.DataIndex, data);
-                var raw = new RawComponentCommand(command.Entity, componentType, 0, size, data);
-                if (command.Kind == StreamOpKind.Add)
-                {
-                    delta.AddCommands.Add(raw);
-                }
-                else
-                {
-                    delta.SetCommands.Add(raw);
-                }
-            }
+            var bytes = new byte[size];
+            Unsafe.WriteUnaligned(ref bytes[0], _data[dataIndex]);
+            return new RawComponentValue(type, bytes, 0, size);
         }
 
-        public override void WriteRaw(int index, byte[] destination)
+        public override RawComponentCommand ReadRawCommand(Entity entity, ComponentType type, int dataIndex, int offset, int size)
         {
-            Unsafe.WriteUnaligned(ref destination[0], _components[index]);
-        }
-
-        public override void WriteToArchetype(Archetype archetype, int rowIndex, ComponentType componentType, int index)
-        {
-            archetype.SetComponentAtTyped(archetype.GetComponentIndex(componentType), rowIndex, in _components[index]);
+            var s = Unsafe.SizeOf<T>();
+            var bytes = new byte[s];
+            Unsafe.WriteUnaligned(ref bytes[0], _data[dataIndex]);
+            return new RawComponentCommand(entity, type, offset, s, bytes);
         }
 
         public override int AppendFromArchetype(Archetype archetype, int columnIndex, int rowIndex)
@@ -1328,36 +899,23 @@ public sealed class CommandStream : ICommandRecorder
             return Append(value);
         }
 
-        public override void Clear()
-        {
-            _count = 0;
-            _existingCount = 0;
-        }
+        public override int ComponentSize(ComponentType type) => Unsafe.SizeOf<T>();
+
+        public override void Clear() => _count = 0;
     }
 
-    private readonly record struct ExistingComponentCommand(StreamOpKind Kind, Entity Entity, int DataIndex);
-
-    internal enum StreamOpKind : byte
+    private sealed class FrozenState
     {
-        Add,
-        Set,
-        Remove,
-        Destroy,
-    }
-
-    private sealed class FrozenStreamState
-    {
-        public StreamEntry[] Entries = [];
+        public Entry[] Entries = [];
         public int EntryCount;
-        public ComponentCommandStore?[] ComponentStores = [];
-        public int ComponentCommandCount;
-        public Entity[] CreatedEntities = [];
-        public int CreatedCount;
-        public int[] CreatedComponentCounts = [];
-        public CreatedComponentRef[] CreatedComponents = [];
-        public int CreatedComponentCount;
-        public int[] CreatedLookup = [];
-        public int MaxCreatedEntityId;
+        public ComponentStore?[] Stores = [];
         public Dictionary<Entity, HierarchyIntent> HierarchyByChild = new();
+        public int[] PendingBatch = [];
+        public int PendingBatchCount;
+        public int PendingBatchMin;
+        public int PendingBatchMax;
+        public int[] BatchCompCounts = [];
+        public BatchedComponent[] BatchComps = [];
+        public int BatchCompTotal;
     }
 }

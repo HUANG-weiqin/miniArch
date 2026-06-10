@@ -518,7 +518,7 @@ public sealed partial class World : IDisposable
         }
     }
 
-    internal void MaterializeReservedEntityTyped(Entity entity, Archetype archetype, ReadOnlySpan<CommandStream.CreatedComponentRef> components)
+    internal void MaterializeReservedEntityTyped(Entity entity, Archetype archetype, ReadOnlySpan<CommandStream.ComponentRef> components)
     {
         var rowIndex = archetype.AddEntity(entity);
         ref var record = ref _records[entity.Id];
@@ -528,7 +528,7 @@ public sealed partial class World : IDisposable
         for (var index = 0; index < components.Length; index++)
         {
             ref readonly var component = ref components[index];
-            component.Store.WriteToArchetype(archetype, rowIndex, component.ComponentType, component.DataIndex);
+            component.Store.WriteToArchetype(archetype, rowIndex, component.Type, component.DataIndex);
         }
     }
 
