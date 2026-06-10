@@ -532,6 +532,28 @@ public sealed partial class World : IDisposable
         }
     }
 
+    /// <summary>
+    /// Materializes a reserved entity writing component data from a raw byte buffer.
+    /// Avoids per-type store lookups — caller provides direct pointers.
+    /// </summary>
+    internal unsafe void MaterializeReservedEntityRaw(
+        Entity entity, Archetype archetype,
+        ReadOnlySpan<ComponentType> types,
+        ReadOnlySpan<int> offsets,
+        byte* buffer)
+    {
+        var rowIndex = archetype.AddEntity(entity);
+        ref var record = ref _records[entity.Id];
+        record.Archetype = archetype;
+        record.RowIndex = rowIndex;
+
+        for (var i = 0; i < types.Length; i++)
+        {
+            var colIdx = archetype.GetComponentIndex(types[i]);
+            archetype.WriteComponentRaw(colIdx, rowIndex, buffer + offsets[i]);
+        }
+    }
+
     internal ref EntityRecord GetEntityRecordRef(Entity entity)
     {
         return ref _records[entity.Id];

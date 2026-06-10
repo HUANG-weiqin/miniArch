@@ -23,15 +23,18 @@ public sealed class CommandStream : ICommandRecorder
     private int _pendingBatchMin = int.MaxValue; // for range check
     private int _pendingBatchMax;
 
-    // Per-batch component accumulation
+    // Per-batch component accumulation (raw bytes, no per-type store lookup)
     private int[] _batchCompCounts = [];    // component count per batch
-    private BatchedComponent[] _batchComps = []; // flat component list
+    private BatchedComponent[] _batchComps = []; // flat component metadata
     private int _batchCompTotal;
+    private byte[] _batchBuf = [];          // raw component data
+    private int _batchBufLen;
 
     private struct BatchedComponent
     {
         public ComponentType Type;
-        public int DataIndex;
+        public int Offset;   // byte offset in _batchBuf
+        public int Size;     // byte size
     }
 
     public CommandStream(World world)
@@ -51,32 +54,52 @@ public sealed class CommandStream : ICommandRecorder
 
     public void Add<T>(Entity entity, T component)
     {
-        var store = GetOrCreateStore<T>();
-        var dataIndex = store.Append(component);
-
         if (TryGetPendingBatch(entity, out var batchIdx))
         {
-            AppendBatchComponent(batchIdx, CommandTypeInfo<T>.Type, dataIndex);
+            WritePendingComponent(batchIdx, component);
         }
         else
         {
+            var store = GetOrCreateStore<T>();
+            var dataIndex = store.Append(component);
             AppendEntry(new Entry(CmdKind.Add, entity, CommandTypeInfo<T>.Type, dataIndex));
         }
     }
 
     public void Set<T>(Entity entity, T component)
     {
-        var store = GetOrCreateStore<T>();
-        var dataIndex = store.Append(component);
-
         if (TryGetPendingBatch(entity, out var batchIdx))
         {
-            AppendBatchComponent(batchIdx, CommandTypeInfo<T>.Type, dataIndex);
+            WritePendingComponent(batchIdx, component);
         }
         else
         {
+            var store = GetOrCreateStore<T>();
+            var dataIndex = store.Append(component);
             AppendEntry(new Entry(CmdKind.Set, entity, CommandTypeInfo<T>.Type, dataIndex));
         }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void WritePendingComponent<T>(int batchIdx, T component)
+    {
+        var size = Unsafe.SizeOf<T>();
+        if (_batchBufLen + size > _batchBuf.Length)
+            Array.Resize(ref _batchBuf, Math.Max(_batchBufLen + size, _batchBuf.Length == 0 ? 4096 : _batchBuf.Length * 2));
+
+        Unsafe.WriteUnaligned(ref _batchBuf[_batchBufLen], component);
+
+        if (_batchCompTotal == _batchComps.Length)
+            Array.Resize(ref _batchComps, _batchComps.Length == 0 ? 256 : _batchComps.Length * 2);
+
+        _batchComps[_batchCompTotal++] = new BatchedComponent
+        {
+            Type = CommandTypeInfo<T>.Type,
+            Offset = _batchBufLen,
+            Size = size,
+        };
+        _batchBufLen += size;
+        _batchCompCounts[batchIdx]++;
     }
 
     public void Remove<T>(Entity entity)
@@ -126,12 +149,16 @@ public sealed class CommandStream : ICommandRecorder
         var sourceRow = location.RowIndex;
         var components = archetype.Signature.AsSpan();
 
-        for (var i = 0; i < components.Length; i++)
+        unsafe
         {
-            var ct = components[i];
-            var store = GetOrCreateStore(ct);
-            var dataIndex = store.AppendFromArchetype(archetype, i, sourceRow);
-            AppendBatchComponent(batchIdx, ct, dataIndex);
+            for (var i = 0; i < components.Length; i++)
+            {
+                var ct = components[i];
+                var size = ComponentSizeCache.GetSize(ComponentRegistry.Shared.GetType(ct));
+                byte* buf = stackalloc byte[size];
+                archetype.ReadComponentRaw(i, sourceRow, buf);
+                AppendBatchComponent(batchIdx, ct, size, ref *buf);
+            }
         }
 
         CloneChildrenRecursive(source, clone);
@@ -168,12 +195,16 @@ public sealed class CommandStream : ICommandRecorder
                 var archetype = childLocation.Archetype;
                 var sourceRow = childLocation.RowIndex;
                 var sig = archetype.Signature.AsSpan();
-                for (var i = 0; i < sig.Length; i++)
+                unsafe
                 {
-                    var ct = sig[i];
-                    var store = GetOrCreateStore(ct);
-                    var dataIndex = store.AppendFromArchetype(archetype, i, sourceRow);
-                    AppendBatchComponent(batchIdx, ct, dataIndex);
+                    for (var i = 0; i < sig.Length; i++)
+                    {
+                        var ct = sig[i];
+                        var size = ComponentSizeCache.GetSize(ComponentRegistry.Shared.GetType(ct));
+                        byte* buf = stackalloc byte[size];
+                        archetype.ReadComponentRaw(i, sourceRow, buf);
+                        AppendBatchComponent(batchIdx, ct, size, ref *buf);
+                    }
                 }
                 Link(cloneParent, cloneChild);
 
@@ -239,12 +270,18 @@ public sealed class CommandStream : ICommandRecorder
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void AppendBatchComponent(int batchIdx, ComponentType type, int dataIndex)
+    private void AppendBatchComponent(int batchIdx, ComponentType type, int size, ref byte dataRef)
     {
+        if (_batchBufLen + size > _batchBuf.Length)
+            Array.Resize(ref _batchBuf, Math.Max(_batchBufLen + size, _batchBuf.Length == 0 ? 4096 : _batchBuf.Length * 2));
+
+        Unsafe.CopyBlockUnaligned(ref _batchBuf[_batchBufLen], ref dataRef, (uint)size);
+
         if (_batchCompTotal == _batchComps.Length)
             Array.Resize(ref _batchComps, _batchComps.Length == 0 ? 256 : _batchComps.Length * 2);
 
-        _batchComps[_batchCompTotal++] = new BatchedComponent { Type = type, DataIndex = dataIndex };
+        _batchComps[_batchCompTotal++] = new BatchedComponent { Type = type, Offset = _batchBufLen, Size = size };
+        _batchBufLen += size;
         _batchCompCounts[batchIdx]++;
     }
 
@@ -337,15 +374,24 @@ public sealed class CommandStream : ICommandRecorder
         var count = _batchCompCounts[batchIdx];
         if (count == 0) return;
 
-        // Collect component types (zero-allocation for typical counts ≤ 64)
+        // Collect component types + offsets (zero-allocation for typical counts ≤ 64)
         ComponentType[]? pooledTypes = null;
+        int[]? pooledOffsets = null;
         Span<ComponentType> typesFromBatch = count <= 64
             ? stackalloc ComponentType[count]
             : (pooledTypes = ArrayPool<ComponentType>.Shared.Rent(count)).AsSpan(0, count);
+        Span<int> offsets = count <= 64
+            ? stackalloc int[count]
+            : (pooledOffsets = ArrayPool<int>.Shared.Rent(count)).AsSpan(0, count);
         try
         {
+            var start = batchStarts[batchIdx];
             for (var c = 0; c < count; c++)
-                typesFromBatch[c] = _batchComps[batchStarts[batchIdx] + c].Type;
+            {
+                ref var comp = ref _batchComps[start + c];
+                typesFromBatch[c] = comp.Type;
+                offsets[c] = comp.Offset;
+            }
 
             var archetype = _world.TryGetArchetype(typesFromBatch);
             if (archetype == null)
@@ -354,20 +400,18 @@ public sealed class CommandStream : ICommandRecorder
                 archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(typeArray));
             }
 
-            var refs = ArrayPool<ComponentRef>.Shared.Rent(count);
-            for (var c = 0; c < count; c++)
+            unsafe
             {
-                ref var comp = ref _batchComps[batchStarts[batchIdx] + c];
-                refs[c] = new ComponentRef(comp.Type, _stores[comp.Type.Value]!, comp.DataIndex);
+                fixed (byte* ptr = _batchBuf)
+                {
+                    _world.MaterializeReservedEntityRaw(entity, archetype, typesFromBatch, offsets, ptr);
+                }
             }
-
-            _world.MaterializeReservedEntityTyped(entity, archetype, new ReadOnlySpan<ComponentRef>(refs, 0, count));
-            ArrayPool<ComponentRef>.Shared.Return(refs);
         }
         finally
         {
-            if (pooledTypes != null)
-                ArrayPool<ComponentType>.Shared.Return(pooledTypes);
+            if (pooledTypes != null) ArrayPool<ComponentType>.Shared.Return(pooledTypes);
+            if (pooledOffsets != null) ArrayPool<int>.Shared.Return(pooledOffsets);
         }
     }
 
@@ -442,6 +486,7 @@ public sealed class CommandStream : ICommandRecorder
             BatchCompCounts = _batchCompCounts,
             BatchComps = _batchComps,
             BatchCompTotal = _batchCompTotal,
+            BatchBuf = _batchBuf,
         };
 
         _entries = [];
@@ -455,6 +500,8 @@ public sealed class CommandStream : ICommandRecorder
         _batchCompCounts = [];
         _batchComps = [];
         _batchCompTotal = 0;
+        _batchBuf = [];
+        _batchBufLen = 0;
         return frozen;
     }
 
@@ -520,13 +567,22 @@ public sealed class CommandStream : ICommandRecorder
         if (count == 0) return;
 
         ComponentType[]? pooledTypes = null;
+        int[]? pooledOffsets = null;
         Span<ComponentType> typesFromBatch = count <= 64
             ? stackalloc ComponentType[count]
             : (pooledTypes = ArrayPool<ComponentType>.Shared.Rent(count)).AsSpan(0, count);
+        Span<int> offsets = count <= 64
+            ? stackalloc int[count]
+            : (pooledOffsets = ArrayPool<int>.Shared.Rent(count)).AsSpan(0, count);
         try
         {
+            var start = batchStarts[batchIdx];
             for (var c = 0; c < count; c++)
-                typesFromBatch[c] = frozen.BatchComps[batchStarts[batchIdx] + c].Type;
+            {
+                ref var comp = ref frozen.BatchComps[start + c];
+                typesFromBatch[c] = comp.Type;
+                offsets[c] = comp.Offset;
+            }
 
             var archetype = _world.TryGetArchetype(typesFromBatch);
             if (archetype == null)
@@ -535,20 +591,18 @@ public sealed class CommandStream : ICommandRecorder
                 archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(typeArray));
             }
 
-            var refs = ArrayPool<ComponentRef>.Shared.Rent(count);
-            for (var c = 0; c < count; c++)
+            unsafe
             {
-                ref var comp = ref frozen.BatchComps[batchStarts[batchIdx] + c];
-                refs[c] = new ComponentRef(comp.Type, frozen.Stores[comp.Type.Value]!, comp.DataIndex);
+                fixed (byte* ptr = frozen.BatchBuf)
+                {
+                    _world.MaterializeReservedEntityRaw(entity, archetype, typesFromBatch, offsets, ptr);
+                }
             }
-
-            _world.MaterializeReservedEntityTyped(entity, archetype, new ReadOnlySpan<ComponentRef>(refs, 0, count));
-            ArrayPool<ComponentRef>.Shared.Return(refs);
         }
         finally
         {
-            if (pooledTypes != null)
-                ArrayPool<ComponentType>.Shared.Return(pooledTypes);
+            if (pooledTypes != null) ArrayPool<ComponentType>.Shared.Return(pooledTypes);
+            if (pooledOffsets != null) ArrayPool<int>.Shared.Return(pooledOffsets);
         }
     }
 
@@ -610,7 +664,7 @@ public sealed class CommandStream : ICommandRecorder
                         for (var c = 0; c < count; c++)
                         {
                             ref var bc = ref frozen.BatchComps[batchStarts[entry.DataIndex] + c];
-                            comps[c] = frozen.Stores[bc.Type.Value]!.ReadRaw(bc.DataIndex, bc.Type);
+                            comps[c] = ReadRawFromBuf(frozen.BatchBuf, bc);
                         }
                         delta.CreatedEntities.Add(new RawCreatedEntity(entry.Entity, comps));
                     }
@@ -701,7 +755,7 @@ public sealed class CommandStream : ICommandRecorder
                             for (var c = 0; c < count; c++)
                             {
                                 ref var bc = ref _batchComps[batchStarts[entry.DataIndex] + c];
-                                comps[c] = _stores[bc.Type.Value]!.ReadRaw(bc.DataIndex, bc.Type);
+                                comps[c] = ReadRawFromBuffer(bc);
                             }
                             delta.CreatedEntities.Add(new RawCreatedEntity(entry.Entity, comps));
                         }
@@ -802,6 +856,16 @@ public sealed class CommandStream : ICommandRecorder
         return store;
     }
 
+    private static RawComponentValue ReadRawFromBuf(byte[] buf, in BatchedComponent bc)
+    {
+        var bytes = new byte[bc.Size];
+        Unsafe.CopyBlockUnaligned(ref bytes[0], ref buf[bc.Offset], (uint)bc.Size);
+        return new RawComponentValue(bc.Type, bytes, 0, bc.Size);
+    }
+
+    private RawComponentValue ReadRawFromBuffer(in BatchedComponent bc)
+        => ReadRawFromBuf(_batchBuf, in bc);
+
     private void Clear()
     {
         _entryCount = 0;
@@ -815,6 +879,7 @@ public sealed class CommandStream : ICommandRecorder
         _pendingBatchMin = int.MaxValue;
         _pendingBatchMax = 0;
         _batchCompTotal = 0;
+        _batchBufLen = 0;
         _hierarchyByChild.Clear();
     }
 
@@ -917,5 +982,6 @@ public sealed class CommandStream : ICommandRecorder
         public int[] BatchCompCounts = [];
         public BatchedComponent[] BatchComps = [];
         public int BatchCompTotal;
+        public byte[] BatchBuf = [];
     }
 }
