@@ -1500,6 +1500,142 @@ public sealed class CommandStreamTests
     }
 
     // ═══════════════════════════════════════════════════════════
+    // Pending batch component assignment correctness
+    // ═══════════════════════════════════════════════════════════
+
+    [Fact]
+    public void Interleaved_pending_creates_get_correct_components()
+    {
+        // Creating two pending entities, then adding components in reverse order
+        // must assign components to the correct entity.
+        var world = new World();
+        var stream = new CommandStream(world);
+
+        var a = stream.Create();
+        var b = stream.Create();
+        stream.Add(b, new Velocity(10, 20));
+        stream.Add(a, new Position(1, 2));
+
+        Assert.True(stream.Submit());
+
+        Assert.True(world.TryGet(a, out Position pa));
+        Assert.Equal(new Position(1, 2), pa);
+        Assert.False(world.TryGet<Velocity>(a, out _));
+
+        Assert.True(world.TryGet(b, out Velocity vb));
+        Assert.Equal(new Velocity(10, 20), vb);
+        Assert.False(world.TryGet<Position>(b, out _));
+    }
+
+    [Fact]
+    public void Interleaved_pending_creates_with_three_entities()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+
+        var a = stream.Create();
+        var b = stream.Create();
+        var c = stream.Create();
+
+        stream.Add(b, new Velocity(1, 2));
+        stream.Add(a, new Position(3, 4));
+        stream.Add(c, new Health(100));
+        stream.Add(b, new Health(200));
+        stream.Add(a, new Velocity(5, 6));
+
+        Assert.True(stream.Submit());
+
+        Assert.True(world.TryGet(a, out Position pa));
+        Assert.Equal(new Position(3, 4), pa);
+        Assert.True(world.TryGet(a, out Velocity va));
+        Assert.Equal(new Velocity(5, 6), va);
+
+        Assert.True(world.TryGet(b, out Velocity vb));
+        Assert.Equal(new Velocity(1, 2), vb);
+        Assert.True(world.TryGet(b, out Health hb));
+        Assert.Equal(new Health(200), hb);
+
+        Assert.True(world.TryGet(c, out Health hc));
+        Assert.Equal(new Health(100), hc);
+    }
+
+    [Fact]
+    public void Remove_pending_component_then_create_another_entity()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+
+        var a = stream.Create();
+        stream.Add(a, new Position(1, 2));
+        stream.Remove<Position>(a);
+
+        // After removing from A, create B with components
+        var b = stream.Create();
+        stream.Add(b, new Velocity(10, 20));
+
+        Assert.True(stream.Submit());
+
+        // A should have no Position
+        Assert.True(world.IsAlive(a));
+        Assert.False(world.TryGet<Position>(a, out _));
+
+        // B should have Velocity
+        Assert.True(world.TryGet(b, out Velocity vb));
+        Assert.Equal(new Velocity(10, 20), vb);
+    }
+
+    [Fact]
+    public void Interleaved_pending_creates_snapshot_correct()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+
+        var a = stream.Create();
+        var b = stream.Create();
+        stream.Add(b, new Velocity(10, 20));
+        stream.Add(a, new Position(1, 2));
+
+        var delta = stream.Snapshot();
+
+        // Replay into replica
+        var replica = new World();
+        replica.Replay(delta);
+
+        Assert.True(replica.TryGet(a, out Position pa));
+        Assert.Equal(new Position(1, 2), pa);
+        Assert.False(replica.TryGet<Velocity>(a, out _));
+
+        Assert.True(replica.TryGet(b, out Velocity vb));
+        Assert.Equal(new Velocity(10, 20), vb);
+        Assert.False(replica.TryGet<Position>(b, out _));
+    }
+
+    [Fact]
+    public void Pending_entity_duplicate_Add_does_not_create_corrupted_archetype()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+
+        var source = world.Create(new Velocity(5, 6));
+
+        var e = stream.Create();
+        stream.Add(e, new Position(1, 2));
+        stream.Add(e, new Position(3, 4)); // Duplicate Add — should collapse to one
+        stream.Add(e, new Health(100));
+
+        Assert.True(stream.Submit());
+
+        Assert.True(world.TryGet(e, out Position p));
+        Assert.Equal(new Position(3, 4), p);
+        Assert.True(world.TryGet(e, out Health h));
+        Assert.Equal(new Health(100), h);
+
+        // The source entity with [Velocity] must still be in its own archetype
+        Assert.True(world.TryGet(source, out Velocity v));
+        Assert.Equal(new Velocity(5, 6), v);
+    }
+
+    // ═══════════════════════════════════════════════════════════
     // Fuzz: randomized multi-frame replay
     // ═══════════════════════════════════════════════════════════
 

@@ -38,6 +38,7 @@
 - component `Add/Set` 必须按 typed store 记录；raw byte slab 会让 record 明显慢于 Friflo。
 - created components 必须在录制期分流，否则提交期“每个 created entity 扫整条日志”会退化到 O(created × commands)。
 - created materialize 使用小型 archetype cache，避免每个 projectile spawn 都分配 signature/type array。
+- **2026-06-11 修正**：pending batch 组件存储由前缀和+扁平数组改为 per-batch 单链表，消除交错创建时的组件归属错误。详见 `kb-command-buffer-feasibility.md` 坑点。
 - 性能测量必须使用 `-c Release`。
 
 ## 验证
