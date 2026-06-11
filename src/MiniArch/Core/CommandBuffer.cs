@@ -104,7 +104,9 @@ public sealed class CommandBuffer : ICommandRecorder
     private int GetCreatedStateIndex(Entity entity)
     {
         var id = entity.Id;
-        return (uint)id < (uint)_createdStateLookup.Length ? _createdStateLookup[id] : -1;
+        if ((uint)id >= (uint)_createdStateLookup.Length) return -1;
+        var idx = _createdStateLookup[id];
+        return idx >= 0 && _createdEntityByPoolIndex[idx].Version == entity.Version ? idx : -1;
     }
 
     /// <summary>
@@ -803,7 +805,9 @@ public sealed class CommandBuffer : ICommandRecorder
         if ((uint)id >= (uint)frozen.CreatedStateLookup.Length) return false;
 
         var csIdx = frozen.CreatedStateLookup[id];
-        return csIdx >= 0 && frozen.CreatedStatePool[csIdx].Destroyed;
+        return csIdx >= 0
+            && frozen.CreatedEntityByPoolIndex[csIdx].Version == entity.Version
+            && frozen.CreatedStatePool[csIdx].Destroyed;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -854,6 +858,7 @@ public sealed class CommandBuffer : ICommandRecorder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void ApplyOpDirectFromFrozen(World world, List<byte[]> slabs, EntityOpSlot slot, Entity entity)
     {
+        if (!world.IsAlive(entity)) return;
         switch (slot.Kind)
         {
             case OpKindAdd:
@@ -1208,6 +1213,7 @@ public sealed class CommandBuffer : ICommandRecorder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ApplyOpDirect(EntityOpSlot slot, Entity entity)
     {
+        if (!_world.IsAlive(entity)) return;
         switch (slot.Kind)
         {
             case OpKindAdd:
@@ -1227,7 +1233,8 @@ public sealed class CommandBuffer : ICommandRecorder
         if ((uint)id < (uint)_opsLookup.Length)
         {
             var idx = _opsLookup[id];
-            if (idx >= 0) return idx;
+            if (idx >= 0 && _opsEntityByPoolIndex[idx].Version == entity.Version)
+                return idx;
         }
         return AllocateOpsIndex(entity);
     }

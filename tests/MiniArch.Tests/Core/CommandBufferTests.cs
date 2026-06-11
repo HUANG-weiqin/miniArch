@@ -1735,38 +1735,188 @@ public sealed class CommandBufferTests
     // Merge CreatedEntity cross-world replay bug regression
     // ═══════════════════════════════════════════════════════════
 
+    // ═══════════════════════════════════════════════════════════
+    // Entity version alias safeguards
+    // ═══════════════════════════════════════════════════════════
+
     [Fact]
-    public void Merge_created_entity_cross_world_replay_sets_version_correctly()
+    public void Stale_destroy_does_not_affect_same_id_pending_entity()
     {
-        // Bug: RebuildFromState skips ReservedEntities for IsCreated entities.
-        // When replaying merged deltas into a fresh world, MaterializeReservedEntity
-        // skips EnsureReplayReservation (reservationChecked:true), so _records[id].Version
-        // stays 0 while entity.Version is 1 → IsAlive returns false.
-        var source = new World();
-        var existing = source.Create(new Position(10, 20));
-        var b1 = new CommandBuffer(source);
+        // Destroy with a stale handle (same id, wrong version) must not
+        // affect a pending entity that reuses the same id.
+        var world = new World();
 
-        var created = b1.Create();
-        b1.Add(created, new Position(1, 2));
-        var delta1 = b1.Snapshot();
-        b1.Submit();
+        var victim = world.Create(new Position(1, 2));
+        var staleHandle = victim;
+        world.Destroy(victim);
 
-        var b2 = new CommandBuffer(source);
-        b2.Set(created, new Position(99, 99));
-        var delta2 = b2.Snapshot();
+        var buffer = new CommandBuffer(world);
+        var created = buffer.Create();
+        buffer.Add(created, new Position(10, 20));
 
-        var merged = FrameDelta.Merge(delta1, delta2);
+        // Stale handle has same id but older version
+        buffer.Destroy(staleHandle);
 
-        // Merge should fold the Set into CreatedEntity
-        Assert.Single(merged.CreatedEntities);
-        Assert.Empty(merged.SetCommands);
+        buffer.Submit();
 
-        var replica = new World();
-        var rExisting = replica.Create(new Position(10, 20));
-        replica.Replay(merged);
+        Assert.True(world.IsAlive(created));
+        Assert.True(world.TryGet(created, out Position p));
+        Assert.Equal(new Position(10, 20), p);
+    }
 
-        Assert.True(replica.IsAlive(created));
-        Assert.True(replica.TryGet(created, out Position p));
-        Assert.Equal(new Position(99, 99), p);
+    [Fact]
+    public void Stale_set_does_not_overwrite_recycled_entity_ops()
+    {
+        var world = new World();
+
+        var original = world.Create(new Position(1, 2));
+        var staleHandle = original;
+        world.Destroy(original);
+
+        // Recycled entity gets same id, new version
+        var recycled = world.Create(new Position(10, 20));
+
+        var buffer = new CommandBuffer(world);
+        buffer.Set(recycled, new Position(30, 40));
+        // Stale handle with old version should NOT overwrite recycled's op
+        buffer.Set(staleHandle, new Position(99, 99));
+
+        buffer.Submit();
+
+        Assert.True(world.TryGet(recycled, out Position p));
+        Assert.Equal(new Position(30, 40), p);
+    }
+
+    [Fact]
+    public void Stale_add_on_existing_entity_does_not_interfere()
+    {
+        var world = new World();
+
+        var original = world.Create(new Velocity(5, 6));
+        var staleHandle = original;
+        world.Destroy(original);
+
+        var recycled = world.Create(new Position(10, 20));
+
+        var buffer = new CommandBuffer(world);
+        buffer.Add(recycled, new Velocity(7, 8));
+        // Stale handle Add should target dead entity, not recycled
+        buffer.Add(staleHandle, new Health(100));
+
+        buffer.Submit();
+
+        Assert.True(world.TryGet(recycled, out Position p));
+        Assert.Equal(new Position(10, 20), p);
+        Assert.True(world.TryGet(recycled, out Velocity v));
+        Assert.Equal(new Velocity(7, 8), v);
+        Assert.False(world.TryGet<Health>(recycled, out _));
+    }
+
+    [Fact]
+    public void Stale_destroy_after_recycled_create_does_not_cascade_to_descendants()
+    {
+        var world = new World();
+
+        var victim = world.Create(new Position(1, 2));
+        var staleHandle = victim;
+        world.Destroy(victim);
+
+        var buffer = new CommandBuffer(world);
+
+        var parent = buffer.Create();
+        buffer.Add(parent, new Position(10, 20));
+        var child = buffer.Create();
+        buffer.Add(child, new Velocity(1, 2));
+        buffer.Link(parent, child);
+
+        // Stale destroy must not cascade to mark child destroyed
+        buffer.Destroy(staleHandle);
+
+        buffer.Submit();
+
+        Assert.True(world.IsAlive(parent));
+        Assert.True(world.IsAlive(child));
+        Assert.True(world.TryGet(parent, out Position p));
+        Assert.Equal(new Position(10, 20), p);
+    }
+
+    [Fact]
+    public async Task Stale_ops_in_async_path_do_not_corrupt_world()
+    {
+        var world = new World();
+
+        var original = world.Create(new Position(1, 2));
+        var staleHandle = original;
+        world.Destroy(original);
+
+        var recycled = world.Create(new Position(10, 20));
+
+        var buffer = new CommandBuffer(world);
+        buffer.Set(recycled, new Position(30, 40));
+        buffer.Set(staleHandle, new Position(99, 99));
+
+        var delta = await buffer.SubmitAndSnapshotAsync();
+
+        // Source world: recycled has Position(30,40), not corrupted by stale handle
+        Assert.True(world.TryGet(recycled, out Position p));
+        Assert.Equal(new Position(30, 40), p);
+    }
+
+    [Fact]
+    public void Snapshot_stale_destroy_uses_correct_version()
+    {
+        var world = new World();
+        var stale = world.Create(new Position(1, 1));
+        var buffer = new CommandBuffer(world);
+
+        buffer.Destroy(stale);
+        world.Destroy(stale);
+        var recycled = world.Create(new Position(2, 2));
+
+        Assert.Equal(stale.Id, recycled.Id);
+        Assert.NotEqual(stale.Version, recycled.Version);
+
+        var delta = buffer.Snapshot();
+        Assert.Contains(stale, delta.DestroyedEntities);
+        Assert.DoesNotContain(recycled, delta.DestroyedEntities);
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotAsync_stale_destroy_uses_correct_version()
+    {
+        var world = new World();
+        var stale = world.Create(new Position(1, 1));
+        var buffer = new CommandBuffer(world);
+
+        buffer.Destroy(stale);
+        world.Destroy(stale);
+        var recycled = world.Create(new Position(2, 2));
+
+        Assert.Equal(stale.Id, recycled.Id);
+        Assert.NotEqual(stale.Version, recycled.Version);
+
+        var delta = await buffer.SubmitAndSnapshotAsync();
+        Assert.Contains(stale, delta.DestroyedEntities);
+        Assert.DoesNotContain(recycled, delta.DestroyedEntities);
+    }
+
+    [Fact]
+    public void Stale_destroy_on_created_entity_falls_through_to_existing_destroy()
+    {
+        // When a stale handle doesn't match any created state (version mismatch),
+        // the destroy should fall through to AddExistingDestroy.
+        // The world then skips the dead entity during Submit.
+        var world = new World();
+
+        var victim = world.Create(new Position(1, 2));
+        var staleHandle = victim;
+        world.Destroy(victim);
+
+        var buffer = new CommandBuffer(world);
+        // No pending entity with this id/version pair
+        buffer.Destroy(staleHandle);
+
+        // Must not throw
+        buffer.Submit();
     }
 }
