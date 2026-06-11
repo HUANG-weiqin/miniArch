@@ -33,6 +33,12 @@ public sealed class CommandStream : ICommandRecorder
     private byte[] _batchBuf = [];          // raw component data
     private int _batchBufLen;
 
+    // Per-batch entity tracking for version-aware cancellation and
+    // O(1) unavailable-entity lookup during hierarchy application.
+    private Entity[] _batchEntities = [];    // entity per batch index (for version check)
+    private bool[] _batchCanceled = [];      // whether batch was canceled in same frame
+    private HashSet<Entity>? _unavailableEntities; // destroyed/canceled entities (O(1) lookup)
+
     private struct BatchedComponent
     {
         public ComponentType Type;
@@ -156,6 +162,7 @@ public sealed class CommandStream : ICommandRecorder
 
     public void Destroy(Entity entity)
     {
+        MarkUnavailable(entity);
         if (TryGetPendingBatch(entity, out _))
         {
             CancelPendingEntity(entity);
@@ -291,6 +298,14 @@ public sealed class CommandStream : ICommandRecorder
         _batchHeads[batchIdx] = -1;
         _batchCompCounts[batchIdx] = 0;
 
+        // Track entity per batch for version-aware cancellation checks.
+        if (batchIdx >= _batchEntities.Length)
+            Array.Resize(ref _batchEntities, _batchHeads.Length);
+        if (batchIdx >= _batchCanceled.Length)
+            Array.Resize(ref _batchCanceled, _batchHeads.Length);
+        _batchEntities[batchIdx] = entity;
+        _batchCanceled[batchIdx] = false;
+
         if (entity.Id < _pendingBatchMin) _pendingBatchMin = entity.Id;
         if (entity.Id >= _pendingBatchMax) _pendingBatchMax = entity.Id + 1;
 
@@ -305,7 +320,11 @@ public sealed class CommandStream : ICommandRecorder
             id < _pendingBatch.Length)
         {
             batchIdx = _pendingBatch[id];
-            return batchIdx >= 0;
+            // Version check: same id may be reused with a different version
+            // (Create→Destroy→Create in same batch). Only match if the entity
+            // handle matches the one we stored at allocation time.
+            if (batchIdx >= 0 && !_batchCanceled[batchIdx] && _batchEntities[batchIdx] == entity)
+                return true;
         }
         batchIdx = -1;
         return false;
@@ -325,6 +344,7 @@ public sealed class CommandStream : ICommandRecorder
                 _pendingBatch[id] = -1;
                 _batchHeads[batchIdx] = -1;
                 _batchCompCounts[batchIdx] = 0;
+                _batchCanceled[batchIdx] = true;
                 // Remove any hierarchy references for this cancelled entity
                 _hierarchyByChild.Remove(entity);
             }
@@ -389,7 +409,7 @@ public sealed class CommandStream : ICommandRecorder
     private void MaterializePendingEntity(Entity entity, int batchIdx)
     {
         // Entity was cancelled (Create then Destroy in same batch) — already released
-        if (entity.Id < _pendingBatch.Length && _pendingBatch[entity.Id] < 0)
+        if ((uint)batchIdx < (uint)_batchCanceled.Length && _batchCanceled[batchIdx])
             return;
 
         var rawCount = _batchCompCounts[batchIdx];
@@ -560,15 +580,17 @@ public sealed class CommandStream : ICommandRecorder
         }
     }
 
-    private bool IsEntityDestroyed(Entity entity)
+    /// <summary>O(1) check whether an entity is unavailable in this batch
+    /// (destroyed or created-then-canceled).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool IsEntityDestroyed(Entity entity) =>
+        _unavailableEntities != null && _unavailableEntities.Contains(entity);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void MarkUnavailable(Entity entity)
     {
-        for (var i = 0; i < _entryCount; i++)
-        {
-            ref readonly var entry = ref _entries[i];
-            if (entry.Kind == CmdKind.Destroy && entry.Entity == entity)
-                return true;
-        }
-        return false;
+        _unavailableEntities ??= new HashSet<Entity>();
+        _unavailableEntities.Add(entity);
     }
 
     // ── Snapshot / SubmitAndSnapshotAsync ─────────────────────────────
@@ -610,6 +632,9 @@ public sealed class CommandStream : ICommandRecorder
             BatchCompCounts = _batchCompCounts,
             BatchComps = _batchComps,
             BatchBuf = _batchBuf,
+            UnavailableEntities = _unavailableEntities,
+            BatchEntities = _batchEntities,
+            BatchCanceled = _batchCanceled,
         };
 
         _entries = [];
@@ -626,6 +651,9 @@ public sealed class CommandStream : ICommandRecorder
         _batchCompTotal = 0;
         _batchBuf = [];
         _batchBufLen = 0;
+        _batchEntities = [];
+        _batchCanceled = [];
+        _unavailableEntities = null;
         return frozen;
     }
 
@@ -674,7 +702,7 @@ public sealed class CommandStream : ICommandRecorder
     private void MaterializePendingEntityFrozen(FrozenState frozen, Entity entity, int batchIdx)
     {
         // Entity was cancelled (Create then Destroy in same batch) — already released
-        if (entity.Id < frozen.PendingBatch.Length && frozen.PendingBatch[entity.Id] < 0)
+        if ((uint)batchIdx < (uint)frozen.BatchCanceled.Length && frozen.BatchCanceled[batchIdx])
             return;
 
         var rawCount = frozen.BatchCompCounts[batchIdx];
@@ -746,12 +774,13 @@ public sealed class CommandStream : ICommandRecorder
     private void ApplyHierarchyFrozen(FrozenState frozen)
     {
         if (frozen.HierarchyByChild.Count == 0) return;
+        var unavailable = frozen.UnavailableEntities;
         foreach (var (child, intent) in frozen.HierarchyByChild)
         {
-            if (IsEntityDestroyedFrozen(frozen, child)) continue;
+            if (unavailable != null && unavailable.Contains(child)) continue;
             if (intent.IsLinked)
             {
-                if (IsEntityDestroyedFrozen(frozen, intent.Parent)) continue;
+                if (unavailable != null && unavailable.Contains(intent.Parent)) continue;
                 _world.Link(intent.Parent, child);
             }
             else
@@ -759,14 +788,6 @@ public sealed class CommandStream : ICommandRecorder
                 _world.Unlink(child);
             }
         }
-    }
-
-    private static bool IsEntityDestroyedFrozen(FrozenState frozen, Entity entity)
-    {
-        for (var i = 0; i < frozen.EntryCount; i++)
-            if (frozen.Entries[i].Kind == CmdKind.Destroy && frozen.Entries[i].Entity == entity)
-                return true;
-        return false;
     }
 
     private static (FrameDelta Delta, int CopiedBytes) BuildFromFrozen(FrozenState frozen)
@@ -783,7 +804,7 @@ public sealed class CommandStream : ICommandRecorder
             {
                 var batchIdx = entry.DataIndex;
                 // Entity was cancelled (Create then Destroy in same batch)
-                if (entry.Entity.Id < frozen.PendingBatch.Length && frozen.PendingBatch[entry.Entity.Id] < 0)
+                if ((uint)batchIdx < (uint)frozen.BatchCanceled.Length && frozen.BatchCanceled[batchIdx])
                 {
                     delta.ReservedEntities.Add(entry.Entity);
                     delta.ReleasedEntities.Add(entry.Entity);
@@ -854,10 +875,11 @@ public sealed class CommandStream : ICommandRecorder
 
         foreach (var (child, intent) in frozen.HierarchyByChild)
         {
-            if (IsEntityDestroyedFrozen(frozen, child)) continue;
+            var unavailable = frozen.UnavailableEntities;
+            if (unavailable != null && unavailable.Contains(child)) continue;
             if (intent.IsLinked)
             {
-                if (IsEntityDestroyedFrozen(frozen, intent.Parent)) continue;
+                if (unavailable != null && unavailable.Contains(intent.Parent)) continue;
                 delta.LinkCommands.Add(new LinkCommand(intent.Parent, child));
             }
             else
@@ -882,7 +904,7 @@ public sealed class CommandStream : ICommandRecorder
                 {
                     var batchIdx = entry.DataIndex;
                     // Entity was cancelled (Create then Destroy in same batch)
-                    if (entry.Entity.Id < _pendingBatch.Length && _pendingBatch[entry.Entity.Id] < 0)
+                    if ((uint)batchIdx < (uint)_batchCanceled.Length && _batchCanceled[batchIdx])
                     {
                         delta.ReservedEntities.Add(entry.Entity);
                         delta.ReleasedEntities.Add(entry.Entity);
@@ -1020,6 +1042,7 @@ public sealed class CommandStream : ICommandRecorder
         _batchCompTotal = 0;
         _batchBufLen = 0;
         _hierarchyByChild.Clear();
+        _unavailableEntities?.Clear();
     }
 
     private static class CommandTypeInfo<T>
@@ -1093,5 +1116,8 @@ public sealed class CommandStream : ICommandRecorder
         public int[] BatchCompCounts = [];
         public BatchedComponent[] BatchComps = [];
         public byte[] BatchBuf = [];
+        public HashSet<Entity>? UnavailableEntities;
+        public Entity[] BatchEntities = [];
+        public bool[] BatchCanceled = [];
     }
 }

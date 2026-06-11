@@ -358,7 +358,10 @@ internal sealed partial class Archetype
             totalBytes += elementSize * capacity;
         }
 
-        return (new byte[totalBytes], columnByteOffsets, elementSizes);
+        // Allocate on Pinned Object Heap: avoids LOH compaction overhead,
+        // skips zero-initialization (safe — all rows are written before read),
+        // and guarantees stable pointer for Unsafe ref arithmetic.
+        return (GC.AllocateUninitializedArray<byte>(totalBytes, pinned: true), columnByteOffsets, elementSizes);
     }
 
     private static void ThrowIfManagedComponent(Type type)
