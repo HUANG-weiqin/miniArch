@@ -95,6 +95,26 @@ internal sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentTy
             if ((_componentMask.B3 & (1UL << (id - 192))) == 0)
                 return false;
         }
+        else if ((uint)id < 320)
+        {
+            if ((_componentMask.B4 & (1UL << (id - 256))) == 0)
+                return false;
+        }
+        else if ((uint)id < 384)
+        {
+            if ((_componentMask.B5 & (1UL << (id - 320))) == 0)
+                return false;
+        }
+        else if ((uint)id < 448)
+        {
+            if ((_componentMask.B6 & (1UL << (id - 384))) == 0)
+                return false;
+        }
+        else if ((uint)id < 512)
+        {
+            if ((_componentMask.B7 & (1UL << (id - 448))) == 0)
+                return false;
+        }
 
         return ContainsSlow(component);
     }
@@ -302,28 +322,20 @@ internal sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentTy
 
     private static ComponentMask ComputeMask(ReadOnlySpan<ComponentType> components)
     {
-        ulong b0 = 0, b1 = 0, b2 = 0, b3 = 0;
+        ulong b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0, b7 = 0;
         for (var i = 0; i < components.Length; i++)
         {
             var id = components[i].Value;
-            if ((uint)id < 64)
-            {
-                b0 |= 1UL << id;
-            }
-            else if ((uint)id < 128)
-            {
-                b1 |= 1UL << (id - 64);
-            }
-            else if ((uint)id < 192)
-            {
-                b2 |= 1UL << (id - 128);
-            }
-            else if ((uint)id < 256)
-            {
-                b3 |= 1UL << (id - 192);
-            }
+            if ((uint)id < 64)            b0 |= 1UL << id;
+            else if ((uint)id < 128)      b1 |= 1UL << (id - 64);
+            else if ((uint)id < 192)      b2 |= 1UL << (id - 128);
+            else if ((uint)id < 256)      b3 |= 1UL << (id - 192);
+            else if ((uint)id < 320)      b4 |= 1UL << (id - 256);
+            else if ((uint)id < 384)      b5 |= 1UL << (id - 320);
+            else if ((uint)id < 448)      b6 |= 1UL << (id - 384);
+            else if ((uint)id < 512)      b7 |= 1UL << (id - 448);
         }
 
-        return new ComponentMask(b0, b1, b2, b3);
+        return new ComponentMask(b0, b1, b2, b3, b4, b5, b6, b7);
     }
 }

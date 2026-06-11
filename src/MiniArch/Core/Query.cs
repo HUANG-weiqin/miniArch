@@ -170,6 +170,14 @@ internal sealed class Query
                 return false;
             if (_requiredMask.HasB3 && (archMask.B3 & _requiredMask.B3) != _requiredMask.B3)
                 return false;
+            if (_requiredMask.HasB4 && (archMask.B4 & _requiredMask.B4) != _requiredMask.B4)
+                return false;
+            if (_requiredMask.HasB5 && (archMask.B5 & _requiredMask.B5) != _requiredMask.B5)
+                return false;
+            if (_requiredMask.HasB6 && (archMask.B6 & _requiredMask.B6) != _requiredMask.B6)
+                return false;
+            if (_requiredMask.HasB7 && (archMask.B7 & _requiredMask.B7) != _requiredMask.B7)
+                return false;
         }
 
         // Excluded: archetype must have none of the excluded components.
@@ -183,20 +191,28 @@ internal sealed class Query
                 return false;
             if (_excludedMask.HasB3 && (archMask.B3 & _excludedMask.B3) != 0)
                 return false;
+            if (_excludedMask.HasB4 && (archMask.B4 & _excludedMask.B4) != 0)
+                return false;
+            if (_excludedMask.HasB5 && (archMask.B5 & _excludedMask.B5) != 0)
+                return false;
+            if (_excludedMask.HasB6 && (archMask.B6 & _excludedMask.B6) != 0)
+                return false;
+            if (_excludedMask.HasB7 && (archMask.B7 & _excludedMask.B7) != 0)
+                return false;
         }
 
-        // Fallback: check components with IDs >= 256 (not covered by 256-bit mask).
+        // Fallback: check components with IDs >= 512 (not covered by 512-bit mask).
         var required = _filter.Required.AsSpan();
         for (var i = 0; i < required.Length; i++)
         {
-            if ((uint)required[i].Value >= 256 && !archetype.Signature.Contains(required[i]))
+            if ((uint)required[i].Value >= 512 && !archetype.Signature.Contains(required[i]))
                 return false;
         }
 
         var excluded = _filter.Excluded.AsSpan();
         for (var i = 0; i < excluded.Length; i++)
         {
-            if ((uint)excluded[i].Value >= 256 && archetype.Signature.Contains(excluded[i]))
+            if ((uint)excluded[i].Value >= 512 && archetype.Signature.Contains(excluded[i]))
                 return false;
         }
 
@@ -205,7 +221,7 @@ internal sealed class Query
         if (any.Length == 0)
             return true;
 
-        // Fast any-check via 256-bit mask.
+        // Fast any-check via 512-bit mask.
         if (!_anyMask.IsZero())
         {
             if ((archMask.B0 & _anyMask.B0) != 0)
@@ -216,9 +232,17 @@ internal sealed class Query
                 return true;
             if (_anyMask.HasB3 && (archMask.B3 & _anyMask.B3) != 0)
                 return true;
+            if (_anyMask.HasB4 && (archMask.B4 & _anyMask.B4) != 0)
+                return true;
+            if (_anyMask.HasB5 && (archMask.B5 & _anyMask.B5) != 0)
+                return true;
+            if (_anyMask.HasB6 && (archMask.B6 & _anyMask.B6) != 0)
+                return true;
+            if (_anyMask.HasB7 && (archMask.B7 & _anyMask.B7) != 0)
+                return true;
         }
 
-        // Slow any-check for ids >= 256.
+        // Slow any-check for ids >= 512.
         for (var i = 0; i < any.Length; i++)
         {
             if (archetype.Signature.Contains(any[i]))
@@ -231,28 +255,20 @@ internal sealed class Query
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static ComponentMask ComputeFilterMask(ReadOnlySpan<ComponentType> components)
     {
-        ulong b0 = 0, b1 = 0, b2 = 0, b3 = 0;
+        ulong b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0, b7 = 0;
         for (var i = 0; i < components.Length; i++)
         {
             var id = components[i].Value;
-            if ((uint)id < 64)
-            {
-                b0 |= 1UL << id;
-            }
-            else if ((uint)id < 128)
-            {
-                b1 |= 1UL << (id - 64);
-            }
-            else if ((uint)id < 192)
-            {
-                b2 |= 1UL << (id - 128);
-            }
-            else if ((uint)id < 256)
-            {
-                b3 |= 1UL << (id - 192);
-            }
+            if ((uint)id < 64)            b0 |= 1UL << id;
+            else if ((uint)id < 128)      b1 |= 1UL << (id - 64);
+            else if ((uint)id < 192)      b2 |= 1UL << (id - 128);
+            else if ((uint)id < 256)      b3 |= 1UL << (id - 192);
+            else if ((uint)id < 320)      b4 |= 1UL << (id - 256);
+            else if ((uint)id < 384)      b5 |= 1UL << (id - 320);
+            else if ((uint)id < 448)      b6 |= 1UL << (id - 384);
+            else if ((uint)id < 512)      b7 |= 1UL << (id - 448);
         }
 
-        return new ComponentMask(b0, b1, b2, b3);
+        return new ComponentMask(b0, b1, b2, b3, b4, b5, b6, b7);
     }
 }
