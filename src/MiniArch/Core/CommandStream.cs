@@ -39,6 +39,20 @@ public sealed class CommandStream : ICommandRecorder
     private bool[] _batchCanceled = [];      // whether batch was canceled in same frame
     private HashSet<Entity>? _unavailableEntities; // destroyed/canceled entities (O(1) lookup)
 
+    // Local archetype cache: avoids O(N_arch×C²) World.TryGetArchetype linear scan.
+    // Materialize paths produce the same small set of component-type combinations
+    // repeatedly (e.g. 3–6 archetypes per scenario). A small cache with generation
+    // invalidation catches virtually all hits after the first tick.
+    private const int ArchetypeCacheSize = 8;
+    private ArchetypeCacheSlot[] _archetypeCache = [];
+    private int _archetypeCacheCount;
+    private int _archetypeCacheGeneration = -1;
+    private Archetype? _lastArchetype;
+    private int _lastHash;
+    private int _lastCount;
+
+    private readonly record struct ArchetypeCacheSlot(int Hash, int Count, Archetype Archetype);
+
     private struct BatchedComponent
     {
         public ComponentType Type;
@@ -406,6 +420,66 @@ public sealed class CommandStream : ICommandRecorder
         }
     }
 
+    /// <summary>
+    /// Resolves archetype for a sorted, deduplicated component span with local caching.
+    /// Avoids O(N_arch×C²) World.TryGetArchetype linear scan on every materialize.
+    /// After warmup (first tick), cache hit rate approaches 100% for steady-state scenarios.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private Archetype ResolveArchetypeForSortedTypes(ReadOnlySpan<ComponentType> types)
+    {
+        var generation = _world.ArchetypeCacheGeneration;
+        if (_archetypeCacheGeneration != generation)
+        {
+            _archetypeCacheGeneration = generation;
+            _archetypeCacheCount = 0;
+            _lastArchetype = null;
+        }
+
+        var hash = SpanHelper.CombineHashCodes(types);
+        var count = types.Length;
+
+        // Single-slot last-hit: covers the common case of back-to-back identical creates.
+        if (_lastArchetype is { } last &&
+            _lastHash == hash && _lastCount == count &&
+            last.Signature.AsSpan().SequenceEqual(types))
+        {
+            return last;
+        }
+
+        // Scan small direct-mapped cache.
+        for (var i = 0; i < _archetypeCacheCount; i++)
+        {
+            ref var slot = ref _archetypeCache[i];
+            if (slot.Hash == hash && slot.Count == count &&
+                slot.Archetype.Signature.AsSpan().SequenceEqual(types))
+            {
+                _lastArchetype = slot.Archetype;
+                _lastHash = hash;
+                _lastCount = count;
+                return slot.Archetype;
+            }
+        }
+
+        // Cache miss: allocate on miss only (rare after initial warmup).
+        var typeArray = types.ToArray();
+        var archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(typeArray));
+
+        if (_archetypeCache.Length == 0)
+            _archetypeCache = new ArchetypeCacheSlot[ArchetypeCacheSize];
+
+        var slotIdx = _archetypeCacheCount < ArchetypeCacheSize
+            ? _archetypeCacheCount++
+            : hash & (ArchetypeCacheSize - 1);
+
+        _archetypeCache[slotIdx] = new ArchetypeCacheSlot(hash, count, archetype);
+        _lastArchetype = archetype;
+        _lastHash = hash;
+        _lastCount = count;
+
+        return archetype;
+    }
+
     private void MaterializePendingEntity(Entity entity, int batchIdx)
     {
         // Entity was cancelled (Create then Destroy in same batch) — already released
@@ -462,12 +536,7 @@ public sealed class CommandStream : ICommandRecorder
                 idx = DeduplicateSortedSpans(typesFromBatch[..idx], offsets[..idx]);
             }
 
-            var archetype = _world.TryGetArchetype(typesFromBatch[..idx]);
-            if (archetype == null)
-            {
-                var typeArray = typesFromBatch[..idx].ToArray();
-                archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(typeArray));
-            }
+            var archetype = ResolveArchetypeForSortedTypes(typesFromBatch[..idx]);
 
             unsafe
             {
@@ -748,12 +817,7 @@ public sealed class CommandStream : ICommandRecorder
                 idx = DeduplicateSortedSpans(typesFromBatch[..idx], offsets[..idx]);
             }
 
-            var archetype = _world.TryGetArchetype(typesFromBatch[..idx]);
-            if (archetype == null)
-            {
-                var typeArray = typesFromBatch[..idx].ToArray();
-                archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(typeArray));
-            }
+            var archetype = ResolveArchetypeForSortedTypes(typesFromBatch[..idx]);
 
             unsafe
             {

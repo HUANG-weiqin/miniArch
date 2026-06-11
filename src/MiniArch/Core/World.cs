@@ -124,6 +124,8 @@ public sealed partial class World : IDisposable
 
     internal int ArchetypeCount => Volatile.Read(ref _archetypeSnapshot).Length;
 
+    internal int ArchetypeCacheGeneration => _createArchetypeCacheGeneration;
+
     internal void Reset(int entitySlotCount)
     {
         if (entitySlotCount < 0)
