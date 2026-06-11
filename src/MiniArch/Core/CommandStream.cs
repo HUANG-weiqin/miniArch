@@ -27,6 +27,7 @@ public sealed class CommandStream : ICommandRecorder
     // Each Create() gets a batch index; Add/Set on pending entities writes
     // to that batch's linked list (with last-wins per component type).
     private int[] _batchHeads = [];         // head index in _batchComps, -1 = empty
+    private int[] _batchCompCounts = [];    // raw component count per batch (total, not effective)
     private BatchedComponent[] _batchComps = []; // flat node pool (linked via Next)
     private int _batchCompTotal;
     private byte[] _batchBuf = [];          // raw component data
@@ -124,6 +125,7 @@ public sealed class CommandStream : ICommandRecorder
         };
         _batchHeads[batchIdx] = _batchCompTotal;
         _batchCompTotal++;
+        _batchCompCounts[batchIdx]++;
     }
 
     public void Remove<T>(Entity entity)
@@ -281,11 +283,13 @@ public sealed class CommandStream : ICommandRecorder
         {
             var newSize = _batchHeads.Length == 0 ? 16 : _batchHeads.Length * 2;
             Array.Resize(ref _batchHeads, newSize);
+            Array.Resize(ref _batchCompCounts, newSize);
         }
 
         var batchIdx = _pendingBatchCount++;
         _pendingBatch[entity.Id] = batchIdx;
         _batchHeads[batchIdx] = -1;
+        _batchCompCounts[batchIdx] = 0;
 
         if (entity.Id < _pendingBatchMin) _pendingBatchMin = entity.Id;
         if (entity.Id >= _pendingBatchMax) _pendingBatchMax = entity.Id + 1;
@@ -320,6 +324,7 @@ public sealed class CommandStream : ICommandRecorder
                 _world.ReleaseReservedEntity(entity);
                 _pendingBatch[id] = -1;
                 _batchHeads[batchIdx] = -1;
+                _batchCompCounts[batchIdx] = 0;
                 // Remove any hierarchy references for this cancelled entity
                 _hierarchyByChild.Remove(entity);
             }
@@ -387,43 +392,29 @@ public sealed class CommandStream : ICommandRecorder
         if (entity.Id < _pendingBatch.Length && _pendingBatch[entity.Id] < 0)
             return;
 
-        var head = _batchHeads[batchIdx];
-        if (head < 0)
+        var rawCount = _batchCompCounts[batchIdx];
+        if (rawCount == 0)
         {
             // No components at all — empty entity
             _world.MaterializeReservedEntity(entity, Array.Empty<RawComponentValue>(), reservationChecked: true);
             return;
         }
 
-        // Count effective (non-removed) components by traversing the linked list
-        var effectiveCount = 0;
-        var current = head;
-        while (current >= 0)
-        {
-            if (!_batchComps[current].Removed)
-                effectiveCount++;
-            current = _batchComps[current].Next;
-        }
-
-        if (effectiveCount == 0)
-        {
-            _world.MaterializeReservedEntity(entity, Array.Empty<RawComponentValue>(), reservationChecked: true);
-            return;
-        }
-
-        // Collect component types + offsets, skipping removed (zero-allocation for typical counts ≤ 64)
+        // Collect component types + offsets, skipping removed.
+        // rawCount is the upper bound; actual effective count (idx) ≤ rawCount.
+        // For typical entities with 3-6 components, rawCount is small.
         ComponentType[]? pooledTypes = null;
         int[]? pooledOffsets = null;
-        Span<ComponentType> typesFromBatch = effectiveCount <= 64
-            ? stackalloc ComponentType[effectiveCount]
-            : (pooledTypes = ArrayPool<ComponentType>.Shared.Rent(effectiveCount)).AsSpan(0, effectiveCount);
-        Span<int> offsets = effectiveCount <= 64
-            ? stackalloc int[effectiveCount]
-            : (pooledOffsets = ArrayPool<int>.Shared.Rent(effectiveCount)).AsSpan(0, effectiveCount);
+        Span<ComponentType> typesFromBatch = rawCount <= 64
+            ? stackalloc ComponentType[rawCount]
+            : (pooledTypes = ArrayPool<ComponentType>.Shared.Rent(rawCount)).AsSpan(0, rawCount);
+        Span<int> offsets = rawCount <= 64
+            ? stackalloc int[rawCount]
+            : (pooledOffsets = ArrayPool<int>.Shared.Rent(rawCount)).AsSpan(0, rawCount);
         try
         {
             var idx = 0;
-            current = head;
+            var current = _batchHeads[batchIdx];
             while (current >= 0)
             {
                 ref var comp = ref _batchComps[current];
@@ -436,19 +427,25 @@ public sealed class CommandStream : ICommandRecorder
                 current = comp.Next;
             }
 
+            if (idx == 0)
+            {
+                _world.MaterializeReservedEntity(entity, Array.Empty<RawComponentValue>(), reservationChecked: true);
+                return;
+            }
+
             // Stable sort + dedup: keep first occurrence of each type.
             // Since prepend puts the newest value first and insertion sort is
             // stable, the first occurrence is the last-written value (last-wins).
-            if (effectiveCount > 1)
+            if (idx > 1)
             {
-                SortTypesAndOffsets(typesFromBatch, offsets);
-                effectiveCount = DeduplicateSortedSpans(typesFromBatch, offsets);
+                SortTypesAndOffsets(typesFromBatch[..idx], offsets[..idx]);
+                idx = DeduplicateSortedSpans(typesFromBatch[..idx], offsets[..idx]);
             }
 
-            var archetype = _world.TryGetArchetype(typesFromBatch[..effectiveCount]);
+            var archetype = _world.TryGetArchetype(typesFromBatch[..idx]);
             if (archetype == null)
             {
-                var typeArray = typesFromBatch[..effectiveCount].ToArray();
+                var typeArray = typesFromBatch[..idx].ToArray();
                 archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(typeArray));
             }
 
@@ -457,7 +454,7 @@ public sealed class CommandStream : ICommandRecorder
                 fixed (byte* ptr = _batchBuf)
                 {
                     _world.MaterializeReservedEntityRaw(entity, archetype,
-                        typesFromBatch[..effectiveCount], offsets[..effectiveCount], ptr);
+                        typesFromBatch[..idx], offsets[..idx], ptr);
                 }
             }
         }
@@ -610,6 +607,7 @@ public sealed class CommandStream : ICommandRecorder
             PendingBatch = _pendingBatch,
             PendingBatchCount = _pendingBatchCount,
             BatchHeads = _batchHeads,
+            BatchCompCounts = _batchCompCounts,
             BatchComps = _batchComps,
             BatchBuf = _batchBuf,
         };
@@ -623,6 +621,7 @@ public sealed class CommandStream : ICommandRecorder
         _pendingBatchMin = int.MaxValue;
         _pendingBatchMax = 0;
         _batchHeads = [];
+        _batchCompCounts = [];
         _batchComps = [];
         _batchCompTotal = 0;
         _batchBuf = [];
@@ -678,24 +677,8 @@ public sealed class CommandStream : ICommandRecorder
         if (entity.Id < frozen.PendingBatch.Length && frozen.PendingBatch[entity.Id] < 0)
             return;
 
-        var head = frozen.BatchHeads[batchIdx];
-        if (head < 0)
-        {
-            _world.MaterializeReservedEntity(entity, Array.Empty<RawComponentValue>(), reservationChecked: true);
-            return;
-        }
-
-        // Count effective (non-removed) components
-        var effectiveCount = 0;
-        var current = head;
-        while (current >= 0)
-        {
-            if (!frozen.BatchComps[current].Removed)
-                effectiveCount++;
-            current = frozen.BatchComps[current].Next;
-        }
-
-        if (effectiveCount == 0)
+        var rawCount = frozen.BatchCompCounts[batchIdx];
+        if (rawCount == 0)
         {
             _world.MaterializeReservedEntity(entity, Array.Empty<RawComponentValue>(), reservationChecked: true);
             return;
@@ -703,16 +686,16 @@ public sealed class CommandStream : ICommandRecorder
 
         ComponentType[]? pooledTypes = null;
         int[]? pooledOffsets = null;
-        Span<ComponentType> typesFromBatch = effectiveCount <= 64
-            ? stackalloc ComponentType[effectiveCount]
-            : (pooledTypes = ArrayPool<ComponentType>.Shared.Rent(effectiveCount)).AsSpan(0, effectiveCount);
-        Span<int> offsets = effectiveCount <= 64
-            ? stackalloc int[effectiveCount]
-            : (pooledOffsets = ArrayPool<int>.Shared.Rent(effectiveCount)).AsSpan(0, effectiveCount);
+        Span<ComponentType> typesFromBatch = rawCount <= 64
+            ? stackalloc ComponentType[rawCount]
+            : (pooledTypes = ArrayPool<ComponentType>.Shared.Rent(rawCount)).AsSpan(0, rawCount);
+        Span<int> offsets = rawCount <= 64
+            ? stackalloc int[rawCount]
+            : (pooledOffsets = ArrayPool<int>.Shared.Rent(rawCount)).AsSpan(0, rawCount);
         try
         {
             var idx = 0;
-            current = head;
+            var current = frozen.BatchHeads[batchIdx];
             while (current >= 0)
             {
                 ref var comp = ref frozen.BatchComps[current];
@@ -725,16 +708,22 @@ public sealed class CommandStream : ICommandRecorder
                 current = comp.Next;
             }
 
-            if (effectiveCount > 1)
+            if (idx == 0)
             {
-                SortTypesAndOffsets(typesFromBatch, offsets);
-                effectiveCount = DeduplicateSortedSpans(typesFromBatch, offsets);
+                _world.MaterializeReservedEntity(entity, Array.Empty<RawComponentValue>(), reservationChecked: true);
+                return;
             }
 
-            var archetype = _world.TryGetArchetype(typesFromBatch[..effectiveCount]);
+            if (idx > 1)
+            {
+                SortTypesAndOffsets(typesFromBatch[..idx], offsets[..idx]);
+                idx = DeduplicateSortedSpans(typesFromBatch[..idx], offsets[..idx]);
+            }
+
+            var archetype = _world.TryGetArchetype(typesFromBatch[..idx]);
             if (archetype == null)
             {
-                var typeArray = typesFromBatch[..effectiveCount].ToArray();
+                var typeArray = typesFromBatch[..idx].ToArray();
                 archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(typeArray));
             }
 
@@ -743,7 +732,7 @@ public sealed class CommandStream : ICommandRecorder
                 fixed (byte* ptr = frozen.BatchBuf)
                 {
                     _world.MaterializeReservedEntityRaw(entity, archetype,
-                        typesFromBatch[..effectiveCount], offsets[..effectiveCount], ptr);
+                        typesFromBatch[..idx], offsets[..idx], ptr);
                 }
             }
         }
@@ -802,32 +791,17 @@ public sealed class CommandStream : ICommandRecorder
                 }
 
                 delta.ReservedEntities.Add(entry.Entity);
-                var head = frozen.BatchHeads[batchIdx];
-                if (head < 0)
+                var rawCount = frozen.BatchCompCounts[batchIdx];
+                if (rawCount == 0)
                 {
                     delta.CreatedEntities.Add(new RawCreatedEntity(entry.Entity, []));
                     break;
                 }
 
-                // Collect effective components from linked list
-                var effectiveCount = 0;
-                var current = head;
-                while (current >= 0)
-                {
-                    if (!frozen.BatchComps[current].Removed)
-                        effectiveCount++;
-                    current = frozen.BatchComps[current].Next;
-                }
-
-                if (effectiveCount == 0)
-                {
-                    delta.CreatedEntities.Add(new RawCreatedEntity(entry.Entity, []));
-                    break;
-                }
-
-                var comps = new RawComponentValue[effectiveCount];
+                // Collect effective components from linked list (one traversal)
+                var comps = new RawComponentValue[rawCount];
                 var outIdx = 0;
-                current = head;
+                var current = frozen.BatchHeads[batchIdx];
                 while (current >= 0)
                 {
                     ref var bc = ref frozen.BatchComps[current];
@@ -835,10 +809,19 @@ public sealed class CommandStream : ICommandRecorder
                         comps[outIdx++] = ReadRawFromBuf(frozen.BatchBuf, bc);
                     current = bc.Next;
                 }
-                if (effectiveCount > 1)
-                    effectiveCount = SortAndDeduplicateComponents(comps);
-                if (effectiveCount != comps.Length)
-                    Array.Resize(ref comps, effectiveCount);
+
+                if (outIdx == 0)
+                {
+                    delta.CreatedEntities.Add(new RawCreatedEntity(entry.Entity, []));
+                    break;
+                }
+
+                if (outIdx != comps.Length)
+                    Array.Resize(ref comps, outIdx);
+                if (outIdx > 1)
+                    outIdx = SortAndDeduplicateComponents(comps);
+                if (outIdx != comps.Length)
+                    Array.Resize(ref comps, outIdx);
                 delta.CreatedEntities.Add(new RawCreatedEntity(entry.Entity, comps));
                 break;
             }
@@ -907,32 +890,17 @@ public sealed class CommandStream : ICommandRecorder
                     }
 
                     delta.ReservedEntities.Add(entry.Entity);
-                    var head = _batchHeads[batchIdx];
-                    if (head < 0)
+                    var rawCount = _batchCompCounts[batchIdx];
+                    if (rawCount == 0)
                     {
                         delta.CreatedEntities.Add(new RawCreatedEntity(entry.Entity, []));
                         break;
                     }
 
-                    // Collect effective components from linked list
-                    var effectiveCount = 0;
-                    var current = head;
-                    while (current >= 0)
-                    {
-                        if (!_batchComps[current].Removed)
-                            effectiveCount++;
-                        current = _batchComps[current].Next;
-                    }
-
-                    if (effectiveCount == 0)
-                    {
-                        delta.CreatedEntities.Add(new RawCreatedEntity(entry.Entity, []));
-                        break;
-                    }
-
-                    var comps = new RawComponentValue[effectiveCount];
+                    // Collect effective components from linked list (one traversal)
+                    var comps = new RawComponentValue[rawCount];
                     var outIdx = 0;
-                    current = head;
+                    var current = _batchHeads[batchIdx];
                     while (current >= 0)
                     {
                         ref var bc = ref _batchComps[current];
@@ -940,10 +908,19 @@ public sealed class CommandStream : ICommandRecorder
                             comps[outIdx++] = ReadRawFromBuf(_batchBuf, bc);
                         current = bc.Next;
                     }
-                    if (effectiveCount > 1)
-                        effectiveCount = SortAndDeduplicateComponents(comps);
-                    if (effectiveCount != comps.Length)
-                        Array.Resize(ref comps, effectiveCount);
+
+                    if (outIdx == 0)
+                    {
+                        delta.CreatedEntities.Add(new RawCreatedEntity(entry.Entity, []));
+                        break;
+                    }
+
+                    if (outIdx != comps.Length)
+                        Array.Resize(ref comps, outIdx);
+                    if (outIdx > 1)
+                        outIdx = SortAndDeduplicateComponents(comps);
+                    if (outIdx != comps.Length)
+                        Array.Resize(ref comps, outIdx);
                     delta.CreatedEntities.Add(new RawCreatedEntity(entry.Entity, comps));
                     break;
                 }
@@ -1031,9 +1008,12 @@ public sealed class CommandStream : ICommandRecorder
         // Clear pending batch tracking
         for (var i = _pendingBatchMin; i < _pendingBatchMax && i < _pendingBatch.Length; i++)
             _pendingBatch[i] = -1;
-        // Disconnect all linked lists (nodes remain in pool, overwritten next frame)
+        // Disconnect all linked lists and reset counts (nodes remain in pool, overwritten next frame)
         for (var i = 0; i < _pendingBatchCount; i++)
+        {
             _batchHeads[i] = -1;
+            _batchCompCounts[i] = 0;
+        }
         _pendingBatchCount = 0;
         _pendingBatchMin = int.MaxValue;
         _pendingBatchMax = 0;
@@ -1110,6 +1090,7 @@ public sealed class CommandStream : ICommandRecorder
         public int[] PendingBatch = [];
         public int PendingBatchCount;
         public int[] BatchHeads = [];
+        public int[] BatchCompCounts = [];
         public BatchedComponent[] BatchComps = [];
         public byte[] BatchBuf = [];
     }
