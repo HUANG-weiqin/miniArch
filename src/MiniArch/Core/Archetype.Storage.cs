@@ -74,6 +74,10 @@ internal sealed partial class Archetype
     /// </summary>
     internal bool RemoveAt(int row, out Entity movedEntity)
     {
+#if DEBUG
+        if ((uint)row >= (uint)_count)
+            throw new ArgumentOutOfRangeException(nameof(row));
+#endif
         var last = _count - 1;
         if (row != last)
         {
@@ -344,6 +348,10 @@ internal sealed partial class Archetype
         {
             ThrowIfManagedComponent(componentTypes[index]);
             var elementSize = ComponentSizeCache.GetSize(componentTypes[index]);
+#if DEBUG
+            if (elementSize <= 0)
+                throw new InvalidOperationException($"Component '{componentTypes[index].Name}' has non-positive size {elementSize}.");
+#endif
             totalBytes = AlignUp(totalBytes, Math.Min(elementSize, 8));
             columnByteOffsets[index] = totalBytes;
             elementSizes[index] = elementSize;
