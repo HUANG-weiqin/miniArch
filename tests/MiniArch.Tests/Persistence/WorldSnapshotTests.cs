@@ -8,7 +8,6 @@ public sealed class WorldSnapshotTests
     private readonly record struct Position(int X, int Y);
     private readonly record struct Velocity(int X, int Y);
     private readonly record struct Health(int Value);
-    private readonly record struct Name(string Value);
 
     [Fact]
     public void Unmanaged_world_can_round_trip_preserving_entity_metadata_values_and_archetype_membership()
@@ -118,17 +117,6 @@ public sealed class WorldSnapshotTests
         Assert.NotNull(thirdLivingLocation.Archetype);
     }
 
-    [Fact]
-    public void Adding_a_component_with_managed_references_fails_with_a_clear_exception()
-    {
-        var world = new World();
-        var entity = world.Create();
-
-        var ex = Assert.Throws<NotSupportedException>(() => world.Add(entity, new Name("npc-01")));
-
-        Assert.Contains(nameof(Name), ex.Message);
-        Assert.Contains("managed references", ex.Message);
-    }
 
     [Fact]
     public void Snapshot_preserves_free_slot_versions_for_reused_entity_ids()
@@ -198,7 +186,7 @@ public sealed class WorldSnapshotTests
         Assert.False(loaded.IsAlive(grandChild));
     }
 
-    private static T GetComponent<T>(World world, Entity entity)
+    private static T GetComponent<T>(World world, Entity entity) where T : unmanaged
     {
         Assert.True(world.TryGetLocation(entity, out var location));
 

@@ -8,7 +8,6 @@ public sealed class EntityCloneTests
     private readonly record struct Position(int X, int Y);
     private readonly record struct Velocity(int X, int Y);
     private readonly record struct Health(int Value);
-    private readonly record struct Name(string Value);
 
     [Fact]
     public void Clone_empty_entity()

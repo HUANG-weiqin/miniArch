@@ -159,7 +159,7 @@ public static class TurnSerialCardPlayRegistrations
     }
 
     private static void CopyIfPresent<TValue>(FrameView frame, MiniArch.Entity source, MiniArch.Entity target, FrameContext context)
-        where TValue : struct
+        where TValue : unmanaged
     {
         if (frame.TryGet(source, out TValue value))
         {

@@ -9,7 +9,7 @@ namespace Hero.GameplayEcs.Characters.Slots;
 /// Reads the component's int value via <paramref name="read"/> and writes back via <paramref name="create"/>.
 /// </summary>
 public sealed class ComponentIntSlotPort<TValue> : IIntSlotPort
-    where TValue : struct
+    where TValue : unmanaged
 {
     private readonly Func<TValue, int> _read;
     private readonly Func<int, TValue> _create;

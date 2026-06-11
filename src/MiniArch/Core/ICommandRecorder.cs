@@ -12,13 +12,13 @@ public interface ICommandRecorder
     Entity Create();
 
     /// <summary>Adds a component to a created entity.</summary>
-    void Add<T>(Entity entity, T component);
+    void Add<T>(Entity entity, T component) where T : unmanaged;
 
     /// <summary>Sets a component value on an existing or created entity.</summary>
-    void Set<T>(Entity entity, T component);
+    void Set<T>(Entity entity, T component) where T : unmanaged;
 
     /// <summary>Removes a component from an entity.</summary>
-    void Remove<T>(Entity entity);
+    void Remove<T>(Entity entity) where T : unmanaged;
 
     /// <summary>Destroys an entity.</summary>
     void Destroy(Entity entity);

@@ -24,7 +24,7 @@ public readonly struct ChunkView
     /// Gets a span of component <typeparamref name="T"/> for all rows.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public Span<T> GetSpan<T>() where T : struct =>
+    public Span<T> GetSpan<T>() where T : unmanaged =>
         _archetype.GetComponentSpan<T>(Component<T>.ComponentType);
 
     /// <summary>
@@ -32,7 +32,7 @@ public readonly struct ChunkView
     /// Returns true if the chunk's archetype includes this component type.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool TryGetComponentIndex<T>(out int columnIndex) where T : struct =>
+    public bool TryGetComponentIndex<T>(out int columnIndex) where T : unmanaged =>
         _archetype.TryGetComponentIndex(Component<T>.ComponentType, out columnIndex);
 
     /// <summary>
@@ -40,7 +40,7 @@ public readonly struct ChunkView
     /// Use with <see cref="TryGetComponentIndex{T}"/> for efficient optional component access.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public Span<T> GetComponentSpanAt<T>(int columnIndex) where T : struct =>
+    public Span<T> GetComponentSpanAt<T>(int columnIndex) where T : unmanaged =>
         _archetype.GetComponentSpanAt<T>(columnIndex);
 }
 

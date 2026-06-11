@@ -112,7 +112,7 @@ public sealed class CommandBuffer : ICommandRecorder
     /// <summary>
     /// Records an add command.
     /// </summary>
-    public void Add<T>(Entity entity, T component)
+    public void Add<T>(Entity entity, T component) where T : unmanaged
     {
         var componentTypeId = CommandTypeInfo<T>.Id;
         CopyData(component, CommandTypeInfo<T>.Size, out var slabIndex, out var offset);
@@ -137,7 +137,7 @@ public sealed class CommandBuffer : ICommandRecorder
     /// <summary>
     /// Records a set command.
     /// </summary>
-    public void Set<T>(Entity entity, T component)
+    public void Set<T>(Entity entity, T component) where T : unmanaged
     {
         var componentTypeId = CommandTypeInfo<T>.Id;
         CopyData(component, CommandTypeInfo<T>.Size, out var slabIndex, out var offset);
@@ -162,7 +162,7 @@ public sealed class CommandBuffer : ICommandRecorder
     /// <summary>
     /// Records a remove command.
     /// </summary>
-    public void Remove<T>(Entity entity)
+    public void Remove<T>(Entity entity) where T : unmanaged
     {
         var componentTypeId = CommandTypeInfo<T>.Id;
 
@@ -1110,7 +1110,7 @@ public sealed class CommandBuffer : ICommandRecorder
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private unsafe void CopyData<T>(T component, int size, out int slabIndex, out int offset)
+    private unsafe void CopyData<T>(T component, int size, out int slabIndex, out int offset) where T : unmanaged
     {
         EnsureSlabSpace(size);
 
@@ -1171,7 +1171,7 @@ public sealed class CommandBuffer : ICommandRecorder
         return info;
     }
 
-    private static class CommandTypeInfo<T>
+    private static class CommandTypeInfo<T> where T : unmanaged
     {
         public static readonly ComponentType Type = Component<T>.ComponentType;
         public static readonly int Id = Type.Value;

@@ -58,7 +58,7 @@ public static class CharacterSpawnRegistrations
     }
 
     private static void SetIfMissing<TValue>(FrameContext context, MiniArch.Entity entity, TValue value)
-        where TValue : struct
+        where TValue : unmanaged
     {
         if (!context.Frame.TryGet(entity, out TValue _))
         {

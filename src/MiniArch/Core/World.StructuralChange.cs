@@ -11,7 +11,7 @@ public sealed partial class World
     /// <summary>
     /// Adds a component to an entity.
     /// </summary>
-    public void Add<T>(Entity entity, T component)
+    public void Add<T>(Entity entity, T component) where T : unmanaged
     {
         ThrowIfDisposed();
         ApplyTypedAddOrSet(entity, GetComponentType<T>(), in component);
@@ -20,7 +20,7 @@ public sealed partial class World
     /// <summary>
     /// Sets a component on an entity.
     /// </summary>
-    public void Set<T>(Entity entity, T component)
+    public void Set<T>(Entity entity, T component) where T : unmanaged
     {
         ThrowIfDisposed();
         ApplyTypedAddOrSet(entity, GetComponentType<T>(), in component);
@@ -29,7 +29,7 @@ public sealed partial class World
     /// <summary>
     /// Removes a component from an entity.
     /// </summary>
-    public void Remove<T>(Entity entity)
+    public void Remove<T>(Entity entity) where T : unmanaged
     {
         ThrowIfDisposed();
         var componentType = GetComponentType<T>();
@@ -76,7 +76,7 @@ public sealed partial class World
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ApplyTypedAddOrSet<T>(Entity entity, ComponentType componentType, in T component)
+    private void ApplyTypedAddOrSet<T>(Entity entity, ComponentType componentType, in T component) where T : unmanaged
     {
         var info = GetRequiredLocation(entity);
         var archetype = info.Archetype!;

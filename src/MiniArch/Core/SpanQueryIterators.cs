@@ -21,31 +21,31 @@ internal static class SpanQueryExtensions
     /// <summary>Iterates entities with one component type.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static SpanEach<T1> EachSpan<T1>(this Query query)
-        where T1 : struct
+        where T1 : unmanaged
         => new(query.GetArchetypeSpan());
 
     /// <summary>Iterates entities with two component types.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static SpanEach<T1, T2> EachSpan<T1, T2>(this Query query)
-        where T1 : struct
-        where T2 : struct
+        where T1 : unmanaged
+        where T2 : unmanaged
         => new(query.GetArchetypeSpan());
 
     /// <summary>Iterates entities with three component types.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static SpanEach<T1, T2, T3> EachSpan<T1, T2, T3>(this Query query)
-        where T1 : struct
-        where T2 : struct
-        where T3 : struct
+        where T1 : unmanaged
+        where T2 : unmanaged
+        where T3 : unmanaged
         => new(query.GetArchetypeSpan());
 
     /// <summary>Iterates entities with four component types.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static SpanEach<T1, T2, T3, T4> EachSpan<T1, T2, T3, T4>(this Query query)
-        where T1 : struct
-        where T2 : struct
-        where T3 : struct
-        where T4 : struct
+        where T1 : unmanaged
+        where T2 : unmanaged
+        where T3 : unmanaged
+        where T4 : unmanaged
         => new(query.GetArchetypeSpan());
 }
 
@@ -103,7 +103,7 @@ internal ref struct SpanEntities
 
 /// <summary>Row yielded by <see cref="SpanEach{T1}"/> with one component reference.</summary>
 internal ref struct SpanEachRow<T1>
-    where T1 : struct
+    where T1 : unmanaged
 {
     private ref T1 _r0;
     private Entity _entity;
@@ -123,8 +123,8 @@ internal ref struct SpanEachRow<T1>
 
 /// <summary>Row yielded by <see cref="SpanEach{T1,T2}"/> with two component references.</summary>
 internal ref struct SpanEachRow<T1, T2>
-    where T1 : struct
-    where T2 : struct
+    where T1 : unmanaged
+    where T2 : unmanaged
 {
     private ref T1 _r0;
     private ref T2 _r1;
@@ -148,9 +148,9 @@ internal ref struct SpanEachRow<T1, T2>
 
 /// <summary>Row yielded by <see cref="SpanEach{T1,T2,T3}"/> with three component references.</summary>
 internal ref struct SpanEachRow<T1, T2, T3>
-    where T1 : struct
-    where T2 : struct
-    where T3 : struct
+    where T1 : unmanaged
+    where T2 : unmanaged
+    where T3 : unmanaged
 {
     private ref T1 _r0;
     private ref T2 _r1;
@@ -178,10 +178,10 @@ internal ref struct SpanEachRow<T1, T2, T3>
 
 /// <summary>Row yielded by <see cref="SpanEach{T1,T2,T3,T4}"/> with four component references.</summary>
 internal ref struct SpanEachRow<T1, T2, T3, T4>
-    where T1 : struct
-    where T2 : struct
-    where T3 : struct
-    where T4 : struct
+    where T1 : unmanaged
+    where T2 : unmanaged
+    where T3 : unmanaged
+    where T4 : unmanaged
 {
     private ref T1 _r0;
     private ref T2 _r1;
@@ -216,7 +216,7 @@ internal ref struct SpanEachRow<T1, T2, T3, T4>
 /// entity matching the query. Use via <c>foreach (ref var row in query.EachSpan&lt;T1&gt;())</c>.
 /// </summary>
 internal ref struct SpanEach<T1>
-    where T1 : struct
+    where T1 : unmanaged
 {
     private ReadOnlySpan<Archetype> _chunks;
     private int _chunkIdx;
@@ -278,8 +278,8 @@ internal ref struct SpanEach<T1>
 
 /// <summary>Span-based iterator for two-component queries.</summary>
 internal ref struct SpanEach<T1, T2>
-    where T1 : struct
-    where T2 : struct
+    where T1 : unmanaged
+    where T2 : unmanaged
 {
     private ReadOnlySpan<Archetype> _chunks;
     private int _chunkIdx;
@@ -347,9 +347,9 @@ internal ref struct SpanEach<T1, T2>
 
 /// <summary>Span-based iterator for three-component queries.</summary>
 internal ref struct SpanEach<T1, T2, T3>
-    where T1 : struct
-    where T2 : struct
-    where T3 : struct
+    where T1 : unmanaged
+    where T2 : unmanaged
+    where T3 : unmanaged
 {
     private ReadOnlySpan<Archetype> _chunks;
     private int _chunkIdx;
@@ -423,10 +423,10 @@ internal ref struct SpanEach<T1, T2, T3>
 
 /// <summary>Span-based iterator for four-component queries.</summary>
 internal ref struct SpanEach<T1, T2, T3, T4>
-    where T1 : struct
-    where T2 : struct
-    where T3 : struct
-    where T4 : struct
+    where T1 : unmanaged
+    where T2 : unmanaged
+    where T3 : unmanaged
+    where T4 : unmanaged
 {
     private ReadOnlySpan<Archetype> _chunks;
     private int _chunkIdx;

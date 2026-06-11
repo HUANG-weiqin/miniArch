@@ -29,7 +29,7 @@ internal static class TestEntities
         return entity;
     }
 
-    private static void AddGeneric<T>(MiniArch.World world, MiniArch.Entity entity, object component) =>
+    private static void AddGeneric<T>(MiniArch.World world, MiniArch.Entity entity, object component) where T : unmanaged =>
         world.Add(entity, (T)component);
 }
 

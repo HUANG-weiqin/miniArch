@@ -77,7 +77,7 @@ public sealed class CommandStream : ICommandRecorder
         return entity;
     }
 
-    public void Add<T>(Entity entity, T component)
+    public void Add<T>(Entity entity, T component) where T : unmanaged
     {
         if (_pendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
         {
@@ -91,7 +91,7 @@ public sealed class CommandStream : ICommandRecorder
         }
     }
 
-    public void Set<T>(Entity entity, T component)
+    public void Set<T>(Entity entity, T component) where T : unmanaged
     {
         if (_pendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
         {
@@ -106,7 +106,7 @@ public sealed class CommandStream : ICommandRecorder
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void WritePendingComponent<T>(int batchIdx, T component)
+    private void WritePendingComponent<T>(int batchIdx, T component) where T : unmanaged
     {
         var size = Unsafe.SizeOf<T>();
         var offset = ReserveBatchBufSpace(size);
@@ -148,7 +148,7 @@ public sealed class CommandStream : ICommandRecorder
         _batchCompCounts[batchIdx]++;
     }
 
-    public void Remove<T>(Entity entity)
+    public void Remove<T>(Entity entity) where T : unmanaged
     {
         if (_pendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
         {
@@ -1063,7 +1063,7 @@ public sealed class CommandStream : ICommandRecorder
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private ComponentStore<T> GetOrCreateStore<T>()
+    private ComponentStore<T> GetOrCreateStore<T>() where T : unmanaged
     {
         var id = CommandTypeInfo<T>.Type.Value;
         if (id >= _stores.Length)
@@ -1109,7 +1109,7 @@ public sealed class CommandStream : ICommandRecorder
         _unavailableEntities?.Clear();
     }
 
-    private static class CommandTypeInfo<T>
+    private static class CommandTypeInfo<T> where T : unmanaged
     {
         public static readonly ComponentType Type = Component<T>.ComponentType;
     }
@@ -1136,7 +1136,7 @@ public sealed class CommandStream : ICommandRecorder
         public abstract void Clear();
     }
 
-    private sealed class ComponentStore<T> : ComponentStore
+    private sealed class ComponentStore<T> : ComponentStore where T : unmanaged
     {
         private T[] _data = [];
         private int _count;

@@ -42,16 +42,6 @@ public sealed class TriggerSystem : ISystem
             ReadOnlySpan<TriggerCondition> conditions = chunk.GetSpan<TriggerCondition>();
             ReadOnlySpan<TriggerAction> actions = chunk.GetSpan<TriggerAction>();
 
-            bool hasGuard = chunk.TryGetComponentIndex<TriggerGuard>(out int guardColumn);
-            ReadOnlySpan<TriggerGuard> guards = hasGuard
-                ? chunk.GetComponentSpanAt<TriggerGuard>(guardColumn)
-                : default;
-
-            bool hasPostAction = chunk.TryGetComponentIndex<TriggerPostAction>(out int postActionColumn);
-            ReadOnlySpan<TriggerPostAction> postActions = hasPostAction
-                ? chunk.GetComponentSpanAt<TriggerPostAction>(postActionColumn)
-                : default;
-
             for (int i = 0; i < chunk.Count; i++)
             {
                 TriggerCondition condition = conditions[i];
@@ -69,14 +59,6 @@ public sealed class TriggerSystem : ISystem
                         $"No trigger action handler is registered for action '{action.Id.Value}'.");
                 }
 
-                if (hasGuard)
-                {
-                    if (!guards[i].Condition(context.Frame, entities[i]))
-                    {
-                        continue;
-                    }
-                }
-
                 _matchCount = 0;
                 conditionHandler(context.Frame, entities[i], _cachedOnMatch);
 
@@ -87,11 +69,6 @@ public sealed class TriggerSystem : ISystem
 
                 TriggerTargets targets = new(_matchBuffer, _matchCount);
                 actionHandler(context, entities[i], targets);
-
-                if (hasPostAction)
-                {
-                    postActions[i].Handler(context, entities[i], targets);
-                }
             }
         }
     }

@@ -188,7 +188,7 @@ public sealed class WorldCloneTests
         Assert.NotNull(cloned);
     }
 
-    private static T GetComponent<T>(World world, Entity entity)
+    private static T GetComponent<T>(World world, Entity entity) where T : unmanaged
     {
         Assert.True(world.TryGetLocation(entity, out var location));
 

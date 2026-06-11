@@ -30,7 +30,7 @@ public ref struct EntityAccessor
     /// Use <see cref="Has{T}"/> to check existence first if uncertain.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T Get<T>()
+    public ref T Get<T>() where T : unmanaged
     {
         var columnIndex = _archetype.GetComponentIndexFast(Component<T>.ComponentType);
         return ref _archetype.GetComponentRefAt<T>(columnIndex, _row);
@@ -42,7 +42,7 @@ public ref struct EntityAccessor
     /// entity's archetype). For adding new components, use <c>Commands.Add</c>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void Set<T>(in T value)
+    public void Set<T>(in T value) where T : unmanaged
     {
         var columnIndex = _archetype.GetComponentIndexFast(Component<T>.ComponentType);
         _archetype.SetComponentAtTyped(columnIndex, _row, in value);

@@ -408,7 +408,7 @@ public static class CommandBufferSharedScenarios
         return string.Join("|", parts.Count == 0 ? ["empty"] : parts);
     }
 
-    private static bool TryGetComponent<T>(MiniWorld world, EntityInfo location, Archetype archetype, ComponentType componentType, out T component)
+    private static bool TryGetComponent<T>(MiniWorld world, EntityInfo location, Archetype archetype, ComponentType componentType, out T component) where T : unmanaged
     {
         if (!location.Archetype.Signature.Contains(componentType))
         {

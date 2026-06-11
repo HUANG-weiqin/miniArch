@@ -112,7 +112,7 @@ internal sealed partial class Archetype
 
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ref T GetComponentRef<T>(int columnIndex)
+    internal ref T GetComponentRef<T>(int columnIndex) where T : unmanaged
     {
         return ref Unsafe.As<byte, T>(ref Unsafe.Add(
             ref MemoryMarshal.GetArrayDataReference(_data),
@@ -121,7 +121,7 @@ internal sealed partial class Archetype
 
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ref T GetComponentRefAt<T>(int columnIndex, int row)
+    internal ref T GetComponentRefAt<T>(int columnIndex, int row) where T : unmanaged
     {
         return ref Unsafe.As<byte, T>(ref Unsafe.Add(
             ref MemoryMarshal.GetArrayDataReference(_data),
@@ -130,7 +130,7 @@ internal sealed partial class Archetype
 
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void SetComponentAtTyped<T>(int columnIndex, int row, in T value)
+    internal void SetComponentAtTyped<T>(int columnIndex, int row, in T value) where T : unmanaged
     {
         ref var target = ref GetComponentRefAt<T>(columnIndex, row);
         target = value;
@@ -138,7 +138,7 @@ internal sealed partial class Archetype
 
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal T GetComponentAt<T>(int columnIndex, int row)
+    internal T GetComponentAt<T>(int columnIndex, int row) where T : unmanaged
     {
         return GetComponentRefAt<T>(columnIndex, row);
     }
@@ -148,7 +148,7 @@ internal sealed partial class Archetype
     /// </summary>
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ref T GetComponentRef<T>(ComponentType component)
+    internal ref T GetComponentRef<T>(ComponentType component) where T : unmanaged
     {
         return ref Unsafe.As<byte, T>(ref Unsafe.Add(
             ref MemoryMarshal.GetArrayDataReference(_data),
@@ -160,7 +160,7 @@ internal sealed partial class Archetype
     /// </summary>
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public Span<T> GetComponentSpanAt<T>(int columnIndex)
+    public Span<T> GetComponentSpanAt<T>(int columnIndex) where T : unmanaged
     {
         return MemoryMarshal.CreateSpan(ref GetComponentRef<T>(columnIndex), _count);
     }
@@ -169,7 +169,7 @@ internal sealed partial class Archetype
     /// Gets a span of component <typeparamref name="T"/> by type.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public Span<T> GetComponentSpan<T>(ComponentType component)
+    public Span<T> GetComponentSpan<T>(ComponentType component) where T : unmanaged
     {
         var columnIndex = GetComponentIndex(component);
         return GetComponentSpanAt<T>(columnIndex);

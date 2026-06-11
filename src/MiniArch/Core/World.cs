@@ -194,7 +194,7 @@ public sealed partial class World : IDisposable
     /// <summary>
     /// Tries to read a component directly from an entity.
     /// </summary>
-    public bool TryGet<T>(Entity entity, out T component)
+    public bool TryGet<T>(Entity entity, out T component) where T : unmanaged
     {
         ThrowIfDisposed();
         if (!TryGetLocation(entity, out var info))
@@ -235,7 +235,7 @@ public sealed partial class World : IDisposable
     /// Use only when the entity is known to be alive and the component is known to exist.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public T Get<T>(Entity entity)
+    public T Get<T>(Entity entity) where T : unmanaged
     {
         ref var record = ref _records[entity.Id];
         var arch = record.Archetype!;
@@ -247,7 +247,7 @@ public sealed partial class World : IDisposable
     /// Use only when the entity is known to be alive and the component is known to exist.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref T GetRef<T>(Entity entity)
+    public ref T GetRef<T>(Entity entity) where T : unmanaged
     {
         ref var record = ref _records[entity.Id];
         var arch = record.Archetype!;

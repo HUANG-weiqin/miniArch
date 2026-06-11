@@ -29,7 +29,7 @@ public sealed class FrameView
     public EntityAccessor Access(MiniArch.Entity entity) =>
         _world.Access(entity);
 
-    public T Get<T>(MiniArch.Entity entity)
+    public T Get<T>(MiniArch.Entity entity) where T : unmanaged
     {
         if (!TryGet(entity, out T component))
         {
@@ -40,10 +40,10 @@ public sealed class FrameView
         return component;
     }
 
-    public bool TryGet<T>(MiniArch.Entity entity, out T component) =>
+    public bool TryGet<T>(MiniArch.Entity entity, out T component) where T : unmanaged =>
         _world.TryGet(entity, out component);
 
-    public void Set<T>(MiniArch.Entity entity, T value) =>
+    public void Set<T>(MiniArch.Entity entity, T value) where T : unmanaged =>
         _world.Set(entity, value);
 
     /// <summary>
