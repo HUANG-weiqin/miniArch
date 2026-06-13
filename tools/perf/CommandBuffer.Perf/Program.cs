@@ -5,6 +5,7 @@ using MiniArch.Core;
 using MiniArchBenchmarks;
 using MiniCommandBuffer = MiniArch.Core.CommandBuffer;
 using MiniCommandStream = MiniArch.Core.CommandStream;
+using MiniEntity = MiniArch.Entity;
 using FrifloEntityStore = Friflo.Engine.ECS.EntityStore;
 using FrifloCommandBuffer = Friflo.Engine.ECS.CommandBuffer;
 using DefaultEntity = DefaultEcs.Entity;
@@ -29,6 +30,12 @@ foreach (var scenario in Enum.GetValues<CommandBufferBenchmarkScenario>())
     {
         var state = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, N);
         var cb = new MiniCommandBuffer(state.World);
+        if (scenario == CommandBufferBenchmarkScenario.MixedScript)
+        {
+            var created = new MiniEntity[state.EntityCount / 2 + 1];
+            return (warmup: () => RecordMixedSteady(cb, state, created),
+                    run:    () => RecordMixedSteady(cb, state, created));
+        }
         return (warmup: () => { Record(cb, state, scenario); cb.Submit(); },
                 run:    () => { Record(cb, state, scenario); cb.Submit(); });
     });
@@ -38,6 +45,12 @@ foreach (var scenario in Enum.GetValues<CommandBufferBenchmarkScenario>())
     {
         var state = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, N);
         var cs = new MiniCommandStream(state.World);
+        if (scenario == CommandBufferBenchmarkScenario.MixedScript)
+        {
+            var created = new MiniEntity[state.EntityCount / 2 + 1];
+            return (warmup: () => RecordMixedSteady(cs, state, created),
+                    run:    () => RecordMixedSteady(cs, state, created));
+        }
         return (warmup: () => { Record(cs, state, scenario); cs.Submit(); },
                 run:    () => { Record(cs, state, scenario); cs.Submit(); });
     });
@@ -144,6 +157,40 @@ static void RecordMixed(ICommandRecorder cb, MiniSharedCommandBufferState state)
             if ((i & 3) == 1) cb.Remove<BenchmarkVelocity>(e);
         }
     }
+}
+
+/// <summary>
+/// Records MixedScript and cleans up created entities after Submit,
+/// matching Friflo's behavior where Mixed() deletes created entities post-Playback.
+/// </summary>
+static void RecordMixedSteady(ICommandRecorder cb, MiniSharedCommandBufferState state, MiniEntity[] created)
+{
+    var ci = 0;
+    for (var i = 0; i < state.EntityCount; i++)
+    {
+        if ((i & 1) == 0)
+        {
+            var e = state.ExistingEntities[i];
+            cb.Set(e, new BenchmarkPosition(i + 1, i + 2));
+            cb.Set(e, new BenchmarkVelocity(i + 3, i + 4));
+
+            if ((i & 3) == 0) cb.Remove<BenchmarkHealth>(e);
+            else               cb.Set(e, new BenchmarkHealth(300 + i));
+        }
+        else
+        {
+            var e = cb.Create();
+            cb.Add(e, new BenchmarkPosition(i + 11, i + 12));
+            cb.Add(e, new BenchmarkVelocity(i + 13, i + 14));
+            cb.Add(e, new BenchmarkHealth(400 + i));
+
+            if ((i & 3) == 1) cb.Remove<BenchmarkVelocity>(e);
+            created[ci++] = e;
+        }
+    }
+
+    cb.Submit();
+    for (var i = 0; i < ci; i++) state.World.Destroy(created[i]);
 }
 
 // ════════════════════════════════════════════════════════════════
