@@ -237,7 +237,17 @@ public sealed class CommandStream : ICommandRecorder
         {
             foreach (var child in _world.Hierarchy.EnumerateChildren(_world, sourceRoot))
             {
-                if (stackCount >= stack.Length) { Array.Resize(ref stack, stack.Length * 2); Array.Resize(ref cloneStack, cloneStack.Length * 2); }
+                if (stackCount >= stack.Length)
+                {
+                    var newStack = ArrayPool<Entity>.Shared.Rent(stack.Length * 2);
+                    var newCloneStack = ArrayPool<Entity>.Shared.Rent(stack.Length * 2);
+                    Array.Copy(stack, newStack, stackCount);
+                    Array.Copy(cloneStack, newCloneStack, stackCount);
+                    ArrayPool<Entity>.Shared.Return(stack);
+                    ArrayPool<Entity>.Shared.Return(cloneStack);
+                    stack = newStack;
+                    cloneStack = newCloneStack;
+                }
                 stack[stackCount] = child;
                 cloneStack[stackCount] = cloneRoot;
                 stackCount++;
@@ -271,7 +281,17 @@ public sealed class CommandStream : ICommandRecorder
 
                 foreach (var grandChild in _world.Hierarchy.EnumerateChildren(_world, srcChild))
                 {
-                    if (stackCount >= stack.Length) { Array.Resize(ref stack, stack.Length * 2); Array.Resize(ref cloneStack, cloneStack.Length * 2); }
+                    if (stackCount >= stack.Length)
+                    {
+                        var newStack = ArrayPool<Entity>.Shared.Rent(stack.Length * 2);
+                        var newCloneStack = ArrayPool<Entity>.Shared.Rent(stack.Length * 2);
+                        Array.Copy(stack, newStack, stackCount);
+                        Array.Copy(cloneStack, newCloneStack, stackCount);
+                        ArrayPool<Entity>.Shared.Return(stack);
+                        ArrayPool<Entity>.Shared.Return(cloneStack);
+                        stack = newStack;
+                        cloneStack = newCloneStack;
+                    }
                     stack[stackCount] = grandChild;
                     cloneStack[stackCount] = cloneChild;
                     stackCount++;
@@ -680,11 +700,8 @@ public sealed class CommandStream : ICommandRecorder
         var frozen = SwapOutState();
         var task = Task.Run(() => BuildFromFrozen(frozen));
         SubmitFromFrozen(frozen);
-        return task.ContinueWith(t =>
-        {
-            frozen.HierarchyByChild.Clear();
-            return t.Result.Delta;
-        }, TaskContinuationOptions.ExecuteSynchronously);
+        return task.ContinueWith(t => t.Result.Delta,
+            TaskContinuationOptions.ExecuteSynchronously);
     }
 
     private FrozenState SwapOutState()
