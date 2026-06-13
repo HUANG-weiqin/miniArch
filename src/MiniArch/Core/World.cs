@@ -72,6 +72,7 @@ public sealed partial class World : IDisposable
         _destroyVisitedGen = [];
         _destroyCurrentGen = 0;
         _hierarchy.Reset();
+        _createArchetypeCacheGeneration = int.MaxValue;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

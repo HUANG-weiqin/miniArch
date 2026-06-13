@@ -122,6 +122,12 @@ public static class WorldSnapshot
         {
             var childId = reader.ReadInt32();
             var parentId = reader.ReadInt32();
+            if ((uint)childId >= (uint)slotVersions.Length)
+                throw new InvalidDataException(
+                    $"Hierarchy child id {childId} out of range [0, {slotVersions.Length}) in snapshot.");
+            if ((uint)parentId >= (uint)slotVersions.Length)
+                throw new InvalidDataException(
+                    $"Hierarchy parent id {parentId} out of range [0, {slotVersions.Length}) in snapshot.");
             var child = new Entity(childId, slotVersions[childId]);
             var parent = new Entity(parentId, slotVersions[parentId]);
             world.LinkSnapshot(parent, child);
@@ -242,11 +248,17 @@ public static class WorldSnapshot
         var archetype = world.GetOrCreateArchetype(new Signature(fileOrderedComponentTypes));
         var rowCount = reader.ReadInt32();
 
+        if (rowCount < 0)
+            throw new InvalidDataException($"Negative entity count {rowCount} in snapshot.");
+
         var entities = new Entity[rowCount];
 
         for (var row = 0; row < rowCount; row++)
         {
             var entityId = reader.ReadInt32();
+            if ((uint)entityId >= (uint)slotVersions.Length)
+                throw new InvalidDataException(
+                    $"Entity id {entityId} out of range [0, {slotVersions.Length}) in snapshot.");
             entities[row] = new Entity(entityId, slotVersions[entityId]);
         }
 

@@ -485,7 +485,10 @@ public sealed class CommandBuffer : ICommandRecorder
             }
 
             if (intent.IsLinked)
+            {
+                if (FindExistingDestroy(intent.Parent) >= 0) continue;
                 _world.Link(intent.Parent, child);
+            }
             else
                 _world.Unlink(child);
         }
@@ -677,7 +680,10 @@ public sealed class CommandBuffer : ICommandRecorder
             }
 
             if (intent.IsLinked)
+            {
+                if (FindExistingDestroy(frozen.ExistingDestroyEntities, frozen.ExistingDestroyCount, intent.Parent) >= 0) continue;
                 _world.Link(intent.Parent, child);
+            }
             else
                 _world.Unlink(child);
         }
@@ -743,7 +749,10 @@ public sealed class CommandBuffer : ICommandRecorder
             }
 
             if (intent.IsLinked)
+            {
+                if (FindExistingDestroy(frozen.ExistingDestroyEntities, frozen.ExistingDestroyCount, intent.Parent) >= 0) continue;
                 delta.LinkCommands.Add(new LinkCommand(intent.Parent, child));
+            }
             else
                 delta.UnlinkCommands.Add(new UnlinkCommand(child));
         }
@@ -1020,6 +1029,7 @@ public sealed class CommandBuffer : ICommandRecorder
 
             if (intent.IsLinked)
             {
+                if (FindExistingDestroy(intent.Parent) >= 0) continue;
                 delta.LinkCommands.Add(new LinkCommand(intent.Parent, child));
             }
             else
