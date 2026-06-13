@@ -20,6 +20,7 @@ public sealed class CommandBuffer : ICommandRecorder
     private int[] _opsTouchedIds = Array.Empty<int>();
     private int _opsTouchedIdCount;
     private int _maxOpsEntityId;
+    private ulong[] _opsSeenMask = [];  // bitmask per entity: componentTypeId already recorded
     private Entity[] _existingDestroyEntities = [];
     private int _existingDestroyCount;
     private bool _existingDestroySorted = true;
@@ -129,9 +130,8 @@ public sealed class CommandBuffer : ICommandRecorder
         }
 
         var opsIdx = GetOrCreateOpsIndex(entity);
-        ref var ops = ref _opsPool[opsIdx];
         var slot = new EntityOpSlot { Kind = OpKindAdd, ComponentType = CommandTypeInfo<T>.Type, SlabIndex = slabIndex, DataOffset = offset, DataSize = CommandTypeInfo<T>.Size };
-        ops.Set(componentTypeId, slot, ref _opsOverflow);
+        TryAddOpFast(opsIdx, componentTypeId, slot);
     }
 
     /// <summary>
@@ -154,9 +154,8 @@ public sealed class CommandBuffer : ICommandRecorder
         }
 
         var opsIdx = GetOrCreateOpsIndex(entity);
-        ref var ops = ref _opsPool[opsIdx];
         var slot = new EntityOpSlot { Kind = OpKindSet, ComponentType = CommandTypeInfo<T>.Type, SlabIndex = slabIndex, DataOffset = offset, DataSize = CommandTypeInfo<T>.Size };
-        ops.Set(componentTypeId, slot, ref _opsOverflow);
+        TryAddOpFast(opsIdx, componentTypeId, slot);
     }
 
     /// <summary>
@@ -178,8 +177,30 @@ public sealed class CommandBuffer : ICommandRecorder
         }
 
         var opsIdx = GetOrCreateOpsIndex(entity);
-        ref var ops = ref _opsPool[opsIdx];
         var slot = new EntityOpSlot { Kind = OpKindRemove, ComponentType = CommandTypeInfo<T>.Type };
+        TryAddOpFast(opsIdx, componentTypeId, slot);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void TryAddOpFast(int opsIdx, int componentTypeId, EntityOpSlot slot)
+    {
+        var bit = 1UL << (componentTypeId & 63);
+        ref var ops = ref _opsPool[opsIdx];
+        if ((_opsSeenMask[opsIdx] & bit) == 0)
+        {
+            _opsSeenMask[opsIdx] |= bit;
+            switch (ops.Count)
+            {
+                case 0: ops.Key0 = componentTypeId; ops.Value0 = slot; ops.Count = 1; return;
+                case 1: ops.Key1 = componentTypeId; ops.Value1 = slot; ops.Count = 2; return;
+                case 2: ops.Key2 = componentTypeId; ops.Value2 = slot; ops.Count = 3; return;
+                case 3: ops.Key3 = componentTypeId; ops.Value3 = slot; ops.Count = 4; return;
+                default:
+                    ops.OverflowHead = _opsOverflow.Add(componentTypeId, slot, ops.OverflowCount > 0 ? ops.OverflowHead : -1);
+                    ops.OverflowCount++;
+                    return;
+            }
+        }
         ops.Set(componentTypeId, slot, ref _opsOverflow);
     }
 
@@ -1269,18 +1290,22 @@ public sealed class CommandBuffer : ICommandRecorder
             var newSize = _opsPool.Length == 0 ? 64 : _opsPool.Length * 2;
             var newPool = new InlineMap<int, EntityOpSlot>[newSize];
             var newEntities = new Entity[newSize];
+            var newMask = new ulong[newSize];
             if (_opsPoolCount > 0)
             {
                 Array.Copy(_opsPool, newPool, _opsPoolCount);
                 Array.Copy(_opsEntityByPoolIndex, newEntities, _opsPoolCount);
+                Array.Copy(_opsSeenMask, newMask, _opsPoolCount);
             }
             _opsPool = newPool;
             _opsEntityByPoolIndex = newEntities;
+            _opsSeenMask = newMask;
         }
 
         var index = _opsPoolCount++;
         _opsPool[index].OverflowHead = -1;
         _opsEntityByPoolIndex[index] = entity;
+        _opsSeenMask[index] = 0;
         _opsLookup[id] = index;
         AddTouchedId(ref _opsTouchedIds, ref _opsTouchedIdCount, id);
         if (id >= _maxOpsEntityId) _maxOpsEntityId = id + 1;

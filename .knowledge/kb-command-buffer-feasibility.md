@@ -2,7 +2,7 @@
 title: Command Buffer Runtime
 module: MiniArch.Core CommandBuffer
 description: CommandBuffer safety-first per-entity deduplicating recorder plus CommandStream typed-store expert mode, both compatible with FrameDelta
-updated: 2026-06-13 (修正 ICommandRecorder 未删除, 修复 CommandBuffer Link 已销毁 parent)
+updated: 2026-06-13 (CB/CS vs Friflo 分阶段计时: CB record 3x慢, CS record 1.5x慢, Create-heavy 场景 CS 反超)
 ---
 # Command Buffer Runtime
 
@@ -122,4 +122,49 @@ HeroPipeline 回归测试涨幅：
 - **CommandStream pending batch 组件归属使用 per-batch 链表**（2026-06-11 修复）：旧实现用 `_batchCompCounts` 前缀和 + 扁平 `_batchComps` 数组，隐式假设每个 batch 的组件在数组中连续。但录制 API 不保证此顺序（例如 `Create(A), Create(B), Add(B,V), Add(A,P)` 时组件按 B→A 顺序写入数组，前缀扫描会将 V 误归给 A）。修复为 per-batch 单链表（`_batchHeads[]` 指向每个 batch 的链表头，`BatchedComponent.Next` 链接节点），彻底消除组件归属错误。`CommitBatchComponent` 不做 last-wins 遍历（O(1) prepend），materialize 时稳定排序+去重达到 last-wins 语义。详见测试 `Interleaved_pending_creates_get_correct_components`、`Remove_pending_component_then_create_another_entity` 等。
 - **CommandBuffer Entity lookup 加 Version 校验**（2026-06-11 修复）：`GetCreatedStateIndex`、`IsFrozenCreatedDestroyed`、`GetOrCreateOpsIndex` 之前只按 `Entity.Id` 查找，不校验 `Entity.Version`。World 回收实体后，同 Id 不同 Version 的 stale handle 会错误匹配到最新实体。修复后三个 lookup 函数都校验 `_entityByPoolIndex[idx].Version == entity.Version`，stale handle 不再别名。同时 `ApplyOpDirect`/`ApplyOpDirectFromFrozen` 加 `IsAlive` 保护，Submit 阶段遇到死实体自动跳过。
 - **FrameDelta.Replay 命令处理顺序与原始记录顺序不同**（架构差异，非 bug）：`World.ReplayCore` 按固定顺序处理：Reserved → Released → Created → Link → Unlink → AddCommands → SetCommands → RemoveCommands → Destroy。当同帧对同一组件类型执行 `Remove<Pos>` 后 `Add<Pos>` 时，`Submit` 与 `Snapshot+Replay` 可能产生不同结果。**CommandBuffer 不受此影响：录制时 per-component 去重消除了重复操作。CommandStream 调用方应避免同帧对同组件 Remove+Add 模式，改用 `Set`。**
+
+## CB/CS vs Friflo: Record 阶段瓶颈分析（2026-06-13）
+
+### 分阶段计时数据
+
+**基准测试 A：DenseExisting（纯 mutation，10k 实体，40k ops/iter）**
+
+| Engine | record(us) | submit(us) | total(us) |
+|---|---|---|---|
+| MiniArch CB | 540 | 293 | 833 |
+| MiniArch CS | 263 | 703 | 965 |
+| Friflo | 169 | 414 | 583 |
+
+- **CB record 是 Friflo 的 3.2x**：InlineMap 4-slot linear scan + 每个 entity 重复 version check
+- **CS record 是 Friflo 的 1.6x**：flat append 不需要 InlineMap/version check，只剩 store 管理 + entry 流开销
+- **CB submit 比 Friflo 快 1.4x**：直接 switch + `ApplyOpDirect`，无虚方法
+- **CS submit 比 Friflo 慢 1.7x**：遍历 entry stream → switch → 虚方法 `WriteToWorld`
+
+**基准测试 B：CommandBufferGame.Perf（真实游戏循环，含 query）**
+
+| 场景 | Engine | Ticks/s | record% | apply% | CB/Friflo record 倍率 |
+|---|---|---|---|---|---|
+| Combat | CB | 2,531 | 34.4% | 53.7% | 2.8x |
+| Combat | CS | 3,274 | 25.4% | 59.5% | 1.6x |
+| Combat | Friflo | 3,384 | 16.6% | 67.5% | 1.0x |
+| ParticleStorm | CB | 1,332 | 37.1% | 62.9% | 2.5x |
+| ParticleStorm | CS | 1,691 | 46.3% | 53.7% | 1.8x |
+| ParticleStorm | Friflo | 1,655 | 24.8% | 75.2% | 1.0x |
+| HeroLight | CB | 303k | 44.6% | 54.8% | 2.5x |
+| HeroLight | CS | 341k | 51.0% | 48.5% | 1.5x |
+| HeroLight | Friflo | 354k | 34.1% | 65.4% | 1.0x |
+
+### 关键发现
+
+1. **CB record 固定慢 2.5-3.2x**：根因是 `Set<T>` 每条 op 走 `GetCreatedStateIndex`（version check）+ `GetOrCreateOpsIndex`（bounds + version check）+ `InlineMap.Set`（4-slot linear scan 去重）。每个 entity 做 4 次 op = 4 次重复 version check。Friflo 用裸 int id 无版本校验，直接数组索引。
+
+2. **CS record 固定慢 1.5-1.8x**：把 CB 的 InlineMap + version check 砍掉后，剩余差距来自 typed store 管理（`GetOrCreateStore<T>` + resize check）和 entry 流 append。这个差距在 Create-heavy 场景能被 submit 的 batch materialization 收益弥补甚至反超。
+
+3. **CS 在 Create-heavy 场景反超 Friflo**：ParticleStorm（4000 Create/tick）中 CS 的 apply 阶段通过 batch materialization 省了 137us/tick，超过 record 阶段亏的 124us，总时间 591us < Friflo 604us，达到 +2%。
+
+### 优化方向
+
+- **CB record**：把 `InlineMap` 改成按 componentId 直索引的数组（去掉 linear scan）；把 entity version check 提升到外围、每个 entity 只做一次而非每条 op 一次。预期能把 3x 差距砍到 1.5x。
+- **CS record**：合并 `GetOrCreateStore<T>` 和 `AppendEntry` 为一步，预分配 store 数组避免 resize。差距已经较小（1.5x），ROI 有限。
+- **当前定位**：CB 适合 mutation-heavy（版本安全），CS 适合 create-heavy（batch 合并收益）。两者互补而非替代。
 
