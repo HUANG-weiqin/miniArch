@@ -580,6 +580,7 @@ public sealed class CommandStream : ICommandRecorder
             // Prepend order means first encounter of each type = newest value.
             ulong b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0, b7 = 0;
             var idx = 0;
+            var hasLargeIds = false;
             var current = _batchHeads[batchIdx];
             while (current >= 0)
             {
@@ -587,12 +588,33 @@ public sealed class CommandStream : ICommandRecorder
                 if (!comp.Removed)
                 {
                     var id = comp.Type.Value;
-                    if (!HasBit(b0, b1, b2, b3, b4, b5, b6, b7, id))
+                    if (id < 512)
                     {
-                        SetBit(ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, id);
-                        typesFromBatch[idx] = comp.Type;
-                        offsets[idx] = comp.Offset;
-                        idx++;
+                        if (!HasBit(b0, b1, b2, b3, b4, b5, b6, b7, id))
+                        {
+                            SetBit(ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, id);
+                            typesFromBatch[idx] = comp.Type;
+                            offsets[idx] = comp.Offset;
+                            idx++;
+                        }
+                    }
+                    else
+                    {
+                        // Fallback: ComponentType.Value exceeds bitmask range (512-bit).
+                        // Use linear scan for dedup — entities with ≥512 component types
+                        // are rare, so O(K²) with K ≤ 6 is fine.
+                        hasLargeIds = true;
+                        var seen = false;
+                        for (var j = 0; j < idx; j++)
+                        {
+                            if (typesFromBatch[j].Value == id) { seen = true; break; }
+                        }
+                        if (!seen)
+                        {
+                            typesFromBatch[idx] = comp.Type;
+                            offsets[idx] = comp.Offset;
+                            idx++;
+                        }
                     }
                 }
                 current = comp.Next;
@@ -604,8 +626,22 @@ public sealed class CommandStream : ICommandRecorder
                 return;
             }
 
-            var mask = new ComponentMask(b0, b1, b2, b3, b4, b5, b6, b7);
-            var archetype = ResolveArchetypeForMask(mask);
+            Archetype archetype;
+            if (hasLargeIds)
+            {
+                if (idx > 1)
+                {
+                    SortTypesAndOffsets(typesFromBatch[..idx], offsets[..idx]);
+                    idx = DeduplicateSortedSpans(typesFromBatch[..idx], offsets[..idx]);
+                }
+                var typeArray = typesFromBatch[..idx].ToArray();
+                archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(typeArray));
+            }
+            else
+            {
+                var mask = new ComponentMask(b0, b1, b2, b3, b4, b5, b6, b7);
+                archetype = ResolveArchetypeForMask(mask);
+            }
 
             unsafe
             {
@@ -621,6 +657,47 @@ public sealed class CommandStream : ICommandRecorder
             if (pooledTypes != null) ArrayPool<ComponentType>.Shared.Return(pooledTypes);
             if (pooledOffsets != null) ArrayPool<int>.Shared.Return(pooledOffsets);
         }
+    }
+
+    /// <summary>Sorts two parallel spans by ComponentType.Value (insertion sort, allocation-free).</summary>
+    private static void SortTypesAndOffsets(Span<ComponentType> types, Span<int> offsets)
+    {
+        for (var i = 1; i < types.Length; i++)
+        {
+            var keyType = types[i];
+            var keyOffset = offsets[i];
+            var j = i - 1;
+            while (j >= 0 && types[j].Value > keyType.Value)
+            {
+                types[j + 1] = types[j];
+                offsets[j + 1] = offsets[j];
+                j--;
+            }
+            types[j + 1] = keyType;
+            offsets[j + 1] = keyOffset;
+        }
+    }
+
+    /// <summary>
+    /// Given parallel spans already sorted by type, keeps the first occurrence
+    /// of each type. Returns the number of unique elements.
+    /// </summary>
+    private static int DeduplicateSortedSpans(Span<ComponentType> types, Span<int> offsets)
+    {
+        var writeIdx = 0;
+        for (var readIdx = 0; readIdx < types.Length; readIdx++)
+        {
+            if (writeIdx == 0 || types[readIdx] != types[writeIdx - 1])
+            {
+                if (writeIdx != readIdx)
+                {
+                    types[writeIdx] = types[readIdx];
+                    offsets[writeIdx] = offsets[readIdx];
+                }
+                writeIdx++;
+            }
+        }
+        return writeIdx;
     }
 
     /// <summary>
@@ -816,6 +893,7 @@ public sealed class CommandStream : ICommandRecorder
         {
             ulong b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0, b7 = 0;
             var idx = 0;
+            var hasLargeIds = false;
             var current = frozen.BatchHeads[batchIdx];
             while (current >= 0)
             {
@@ -823,12 +901,30 @@ public sealed class CommandStream : ICommandRecorder
                 if (!comp.Removed)
                 {
                     var id = comp.Type.Value;
-                    if (!HasBit(b0, b1, b2, b3, b4, b5, b6, b7, id))
+                    if (id < 512)
                     {
-                        SetBit(ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, id);
-                        typesFromBatch[idx] = comp.Type;
-                        offsets[idx] = comp.Offset;
-                        idx++;
+                        if (!HasBit(b0, b1, b2, b3, b4, b5, b6, b7, id))
+                        {
+                            SetBit(ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, id);
+                            typesFromBatch[idx] = comp.Type;
+                            offsets[idx] = comp.Offset;
+                            idx++;
+                        }
+                    }
+                    else
+                    {
+                        hasLargeIds = true;
+                        var seen = false;
+                        for (var j = 0; j < idx; j++)
+                        {
+                            if (typesFromBatch[j].Value == id) { seen = true; break; }
+                        }
+                        if (!seen)
+                        {
+                            typesFromBatch[idx] = comp.Type;
+                            offsets[idx] = comp.Offset;
+                            idx++;
+                        }
                     }
                 }
                 current = comp.Next;
@@ -840,8 +936,22 @@ public sealed class CommandStream : ICommandRecorder
                 return;
             }
 
-            var mask = new ComponentMask(b0, b1, b2, b3, b4, b5, b6, b7);
-            var archetype = ResolveArchetypeForMask(mask);
+            Archetype archetype;
+            if (hasLargeIds)
+            {
+                if (idx > 1)
+                {
+                    SortTypesAndOffsets(typesFromBatch[..idx], offsets[..idx]);
+                    idx = DeduplicateSortedSpans(typesFromBatch[..idx], offsets[..idx]);
+                }
+                var typeArray = typesFromBatch[..idx].ToArray();
+                archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(typeArray));
+            }
+            else
+            {
+                var mask = new ComponentMask(b0, b1, b2, b3, b4, b5, b6, b7);
+                archetype = ResolveArchetypeForMask(mask);
+            }
 
             unsafe
             {
