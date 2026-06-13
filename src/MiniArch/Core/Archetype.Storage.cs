@@ -367,16 +367,6 @@ internal sealed partial class Archetype
 
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ref T GetComponentRef<T>(ComponentType component) where T : unmanaged
-    {
-        ThrowIfChunked();
-        return ref Unsafe.As<byte, T>(ref Unsafe.Add(
-            ref MemoryMarshal.GetArrayDataReference(_data),
-            _columnByteOffsets[GetComponentIndexFast(component)]));
-    }
-
-    [SkipLocalsInit]
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Span<T> GetComponentSpanAt<T>(int columnIndex) where T : unmanaged
     {
         return MemoryMarshal.CreateSpan(ref GetComponentRef<T>(columnIndex), _count);

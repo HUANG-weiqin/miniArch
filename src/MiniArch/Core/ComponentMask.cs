@@ -59,7 +59,4 @@ internal readonly struct ComponentMask : IEquatable<ComponentMask>
     public bool HasB5 { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => B5 != 0; }
     public bool HasB6 { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => B6 != 0; }
     public bool HasB7 { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => B7 != 0; }
-
-    public override string ToString() =>
-        $"0x{B7:X16}{B6:X16}{B5:X16}{B4:X16}{B3:X16}{B2:X16}{B1:X16}{B0:X16}";
 }

@@ -1,6 +1,5 @@
 using System.Collections;
 using System.Runtime.CompilerServices;
-using System.Text;
 
 namespace MiniArch.Core;
 
@@ -217,29 +216,6 @@ internal sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentTy
     /// Gets the cached hash code.
     /// </summary>
     public override int GetHashCode() => _hashCode;
-
-    /// <summary>
-    /// Returns a display string.
-    /// </summary>
-    public override string ToString()
-    {
-        if (_components.Length == 0)
-        {
-            return "[]";
-        }
-
-        var builder = new StringBuilder(_components.Length * 4);
-        builder.Append('[');
-        builder.Append(_components[0].Value);
-        for (var i = 1; i < _components.Length; i++)
-        {
-            builder.Append(", ");
-            builder.Append(_components[i].Value);
-        }
-
-        builder.Append(']');
-        return builder.ToString();
-    }
 
     private static ComponentType[] Normalize(IEnumerable<ComponentType> components)
     {
