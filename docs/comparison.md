@@ -28,7 +28,9 @@
 
 ## 基准测试（公平对比）
 
-以下数据来自仓库 `perf/` 下的同场景 benchmark，所有引擎执行相同的工作量，使用 Release 编译。
+以下数据来自仓库 `tools/perf/` 下的同场景 benchmark，所有引擎执行相同的工作量，使用 Release 编译。
+
+> **测试环境：** 11th Gen Intel Core i5-1135G7 @ 2.40GHz, 4 cores / 8 threads, Windows 11, .NET 8.0
 
 ### 1. 12 游戏场景全面对比（MiniArch vs Friflo vs Arch）
 
