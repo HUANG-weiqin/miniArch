@@ -21,6 +21,29 @@ internal sealed partial class Archetype
     //  Conversion & segment growth
     // ──────────────────────────────────────────────
 
+    private void NormalizeForChunked()
+    {
+        if (_capacity < _segmentEntityCapacity)
+        {
+            var newEntities = new Entity[_segmentEntityCapacity];
+            Array.Copy(_entities, newEntities, _count);
+            var (newData, newOffsets, _) = CreateStorage(_signature, _componentTypes, _segmentEntityCapacity, pinned: true);
+            for (var col = 0; col < _elementSizes.Length; col++)
+            {
+                var elemSize = _elementSizes[col];
+                var columnBytes = _count * elemSize;
+                if (columnBytes <= 0) continue;
+                ref var srcRef = ref _data[_columnByteOffsets[col]];
+                ref var dstRef = ref newData[newOffsets[col]];
+                Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, (uint)columnBytes);
+            }
+            _entities = newEntities;
+            _data = newData;
+            _columnByteOffsets = newOffsets;
+            _capacity = _segmentEntityCapacity;
+        }
+    }
+
     private void ConvertToChunked()
     {
         _segments = new Segment[1];
@@ -67,8 +90,9 @@ internal sealed partial class Archetype
     {
         if (requiredCapacity <= Capacity) return;
 
-        if (!_isChunked && (long)_capacity * 2 * _bytesPerEntity > TargetSegmentBytes)
+        if (!_isChunked && _capacity * 2 > _segmentEntityCapacity)
         {
+            NormalizeForChunked();
             ConvertToChunked();
             GrowChunked(requiredCapacity - _count);
             return;
@@ -308,6 +332,7 @@ internal sealed partial class Archetype
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ref T GetComponentRef<T>(int columnIndex) where T : unmanaged
     {
+        ThrowIfChunked();
         return ref Unsafe.As<byte, T>(ref Unsafe.Add(
             ref MemoryMarshal.GetArrayDataReference(_data),
             _columnByteOffsets[columnIndex]));
@@ -348,6 +373,7 @@ internal sealed partial class Archetype
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ref T GetComponentRef<T>(ComponentType component) where T : unmanaged
     {
+        ThrowIfChunked();
         return ref Unsafe.As<byte, T>(ref Unsafe.Add(
             ref MemoryMarshal.GetArrayDataReference(_data),
             _columnByteOffsets[GetComponentIndexFast(component)]));
@@ -625,21 +651,9 @@ internal sealed partial class Archetype
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private int GetByteOffset(int columnIndex, int row)
-    {
-        if (!_isChunked)
-            return _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex];
-        var (_, localRow) = GetSegmentAndLocal(row);
-        return _columnByteOffsets[columnIndex] + localRow * _elementSizes[columnIndex];
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private Span<byte> GetColumnBytes(int columnIndex, int count)
     {
-        if (!_isChunked)
-            return _data.AsSpan(_columnByteOffsets[columnIndex], count * _elementSizes[columnIndex]);
-        var seg = _segments[0];
-        return seg.Data.AsSpan(_columnByteOffsets[columnIndex], count * _elementSizes[columnIndex]);
+        return _data.AsSpan(_columnByteOffsets[columnIndex], count * _elementSizes[columnIndex]);
     }
 
     private unsafe void CopyColumnFrom(Archetype source, int columnIndex, int count)
@@ -762,6 +776,14 @@ internal sealed partial class Archetype
         throw new NotSupportedException(
             $"Component {type.FullName ?? type.Name} contains managed references " +
             "and cannot be stored in flat byte chunks.");
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ThrowIfChunked()
+    {
+        if (_isChunked)
+            throw new InvalidOperationException(
+                "This operation is not supported for chunked archetypes. Use the per-segment API via ChunkView instead.");
     }
 
     private static int AlignUp(int value, int alignment)

@@ -22,7 +22,10 @@ internal sealed partial class Archetype
     private Segment[] _segments = null!;
     private int[] _segmentOffsets = null!;
     private int _segmentCount;
-    private int _bytesPerEntity; // computed at construction, 0 for empty archetypes
+
+    // Fixed entity capacity per segment, computed from component sizes once.
+    // All segments share the same capacity so column byte offsets are identical.
+    private readonly int _segmentEntityCapacity;
 
     // --- Archetype metadata ---
     private readonly Signature _signature;
@@ -44,9 +47,9 @@ internal sealed partial class Archetype
         _capacity = capacity;
         _componentTypes = componentTypes;
         _componentIdToColumnIndex = ComponentColumnMap.Build(signature);
+        _segmentEntityCapacity = ComputeSegmentEntityCapacity(componentTypes);
         _entities = new Entity[capacity];
         (_data, _columnByteOffsets, _elementSizes) = CreateStorage(signature, componentTypes, capacity);
-        _bytesPerEntity = _data.Length / capacity;
     }
 
     /// <summary>
@@ -68,25 +71,7 @@ internal sealed partial class Archetype
     {
         if (!_isChunked)
         {
-            if (_capacity < SegmentEntityCapacity)
-            {
-                var newEntities = new Entity[SegmentEntityCapacity];
-                Array.Copy(_entities, newEntities, _count);
-                var (newData, newOffsets, _) = CreateStorage(_signature, _componentTypes, SegmentEntityCapacity);
-                for (var col = 0; col < _elementSizes.Length; col++)
-                {
-                    var elemSize = _elementSizes[col];
-                    var columnBytes = _count * elemSize;
-                    if (columnBytes <= 0) continue;
-                    ref var srcRef = ref _data[_columnByteOffsets[col]];
-                    ref var dstRef = ref newData[newOffsets[col]];
-                    Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, (uint)columnBytes);
-                }
-                _entities = newEntities;
-                _data = newData;
-                _columnByteOffsets = newOffsets;
-                _capacity = SegmentEntityCapacity;
-            }
+            NormalizeForChunked();
             ConvertToChunked();
         }
     }
@@ -145,10 +130,19 @@ internal sealed partial class Archetype
     // small enough that allocation and GC compaction are near-instant.
     private const int TargetSegmentBytes = 2 * 1024 * 1024;
 
-    private int SegmentEntityCapacity =>
-        _bytesPerEntity > 0
-            ? Math.Max(16, TargetSegmentBytes / _bytesPerEntity)
-            : 65536;
+    private int SegmentEntityCapacity => _segmentEntityCapacity;
+
+    private static int ComputeSegmentEntityCapacity(Type[] componentTypes)
+    {
+        var perEntity = 0;
+        for (var i = 0; i < componentTypes.Length; i++)
+        {
+            var elemSize = ComponentSizeCache.GetSize(componentTypes[i]);
+            perEntity = AlignUp(perEntity, Math.Min(elemSize, 8));
+            perEntity += elemSize;
+        }
+        return perEntity > 0 ? Math.Max(16, TargetSegmentBytes / perEntity) : 65536;
+    }
 
     internal struct Segment
     {
