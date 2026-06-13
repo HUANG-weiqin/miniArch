@@ -6,6 +6,16 @@ The only C# ECS with **built-in frame-synchronized multiplayer** — and **7/12 
 
 ---
 
+## Benchmarked Against
+
+MiniArch was tested against **industry-leading C# ECS libraries**:
+
+- **Arch** — 2.5k+ GitHub stars, used by Space Station 14 (thousands of concurrent players), benchmark-topping performance. Widely considered the C# ECS performance baseline.
+- **Friflo** — Top performer in ECS.CSharp.Benchmark (2.55x faster than Arch on average), used in Steam-shipping titles (Vanguard Tides, Horse Runner DX). Fully managed C#, no unsafe code.
+- **DefaultEcs** — 1.2k+ stars, mature and stable, reference implementation for many C# ECS projects.
+
+These are **not toy projects**. They are production-grade, battle-tested libraries running in shipped games. MiniArch outperforms them in 7/12 scenarios while adding capabilities neither provides.
+
 ## Why MiniArch?
 
 | Other ECS libraries | MiniArch |
