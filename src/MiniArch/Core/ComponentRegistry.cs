@@ -54,6 +54,11 @@ internal sealed class ComponentRegistry
     }
 
     /// <summary>
+    /// Total number of registered component types.
+    /// </summary>
+    internal int ComponentTypeCount => Volatile.Read(ref _snapshot).IdToType.Length;
+
+    /// <summary>
     /// Tries to get the type for an id.
     /// </summary>
     public bool TryGetType(ComponentType id, out Type type)
