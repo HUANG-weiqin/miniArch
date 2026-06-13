@@ -103,6 +103,24 @@ All benchmarks run on identical workloads with the same measurement methodology.
 - **Entity hierarchy** — `Link` / `Unlink` with cascade destroy
 - **GC-friendly** — zero GC collections in steady-state simulation
 
+## When to Use MiniArch
+
+| 你的场景 | 推荐 |
+|---|---|
+| 要做**帧同步联机游戏**（Lockstep） | ✅ **MiniArch 原生支持** — 游戏逻辑天然可同步，不需要额外适配 |
+| 要做**状态同步 + 回滚** | ✅ **World.Clone() + Replay** 开箱即用 |
+| 追求极致 ECS 性能 | ✅ 7/12 场景领先，CommandStream 比 Friflo 快 13%~48% |
+| 需要**零 GC** 稳定运行 | ✅ 所有游戏场景 GC Collections = 0/0/0 |
+| 单机游戏、随便玩玩 | ✅ 也行，API 简洁不折腾 |
+| 需要纯创建/销毁密集型 | ⚠️ 这个场景 DefaultEcs 更快（无 CB 开销） |
+
+## Quality
+
+- **Core:** ~7,750 lines
+- **Tests:** ~15,400 lines（396 tests，测试:代码 ≈ 2:1）
+- **GC:** 0/0/0 across all game scenarios
+- **Fuzz:** 1,000-frame cross-world replay verified
+
 ## Learn More
 
 | Resource | Link |
