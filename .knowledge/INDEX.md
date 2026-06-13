@@ -46,8 +46,8 @@
 
 - **World 拆分为 partial 文件**：World.cs + World.EntityLifecycle.cs + World.Create.Generated.cs + World.QueryCache.cs + World.StructuralChange.cs
 - **Archetype 拆分为 partial 文件**：Archetype.cs（字段/metadata）+ Archetype.Storage.cs（存储操作）
-- **Edge cache 从直索引数组改为 bounded 4-slot LRU**
+- **Edge cache 使用直索引 `Archetype?[]`**（按 componentId 直索引，O(1) 查找）
 - **DebugMetrics 整个子系统已删除**（kb-debug-metrics.md 保留作为历史记录）
-- **ICommandRecorder 接口已删除**
 - **FrameDelta 热路径 struct 大幅缩小**（Movement +50% / Attack +29%）
-- **新增 ChunkView public API** + `Query.GetChunks()` + `World.GetFirst<T>()` + `CommandBuffer.Clone()`
+- **ComponentMask 扩展为 512-bit**（8 × `ulong`），覆盖 component id 0..511 的快速匹配
+- **新增分段存储模式**：Archetype 超过阈值后自动切换为多 Segment 模式（详见 `kb-chunk-storage.md`）

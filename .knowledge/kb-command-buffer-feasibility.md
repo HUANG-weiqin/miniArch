@@ -2,7 +2,7 @@
 title: Command Buffer Runtime
 module: MiniArch.Core CommandBuffer
 description: CommandBuffer safety-first per-entity deduplicating recorder plus CommandStream typed-store expert mode, both compatible with FrameDelta
-updated: 2026-06-11 (修复 CommandStream pending batch 组件归属用链表而非前缀和 + CommandBuffer Entity lookup 加 Version 校验)
+updated: 2026-06-13 (修正 ICommandRecorder 未删除, 修复 CommandBuffer Link 已销毁 parent)
 ---
 # Command Buffer Runtime
 
@@ -23,8 +23,6 @@ updated: 2026-06-11 (修复 CommandStream pending batch 组件归属用链表而
   - `src/MiniArch/Core/InlineMap.cs`：4 inline slot + overflow 的 per-entity map
   - `src/MiniArch/Core/OverflowPool.cs`：三个并行数组（keys, values, next）backed by `ArrayPool<T>` 的单链表节点池
   - `src/MiniArch/Core/World.cs`（+ partial 文件）：`ReserveDeferredEntity`、`ReleaseReservedEntity`、`Replay(FrameDelta)`
-- **已删除**：
-  - `ICommandRecorder.cs`：接口已删除（YAGNI），CommandBuffer 直接使用
 - 数据流 / 控制流：
   - 工作线程通过 `CommandBuffer` 只记录命令；`Create()` 立刻从 world 预留真实 `Entity`
   - recording 完成后可选：`Submit()`（直接执行到 world）→ `Snapshot()`（生成自包含 `FrameDelta`）→ `SubmitAndSnapshotAsync()`（并行执行 Submit + BuildDelta）
@@ -57,7 +55,7 @@ updated: 2026-06-11 (修复 CommandStream pending batch 组件归属用链表而
 - `SubmitAndSnapshotAsync()`：换出 buffer 状态后，主线程 Submit 与后台线程 BuildDelta 并行执行
 - 记录期返回真实 `Entity`，但只是 reserved handle（`world.IsAlive(entity)` 仍为 false）
 - query layout generation 在 replay 期间被抑制，整批结束后只递增一次
-- `ICommandRecorder` 已删除：接口只有 CommandBuffer 一个实现者，YAGNI 原则下直接使用具体类型
+- `ICommandRecorder` 接口存在但仅用于测试抽象层，CommandBuffer 和 CommandStream 都实现它
 - `Clone()` 新增：完整深拷贝，用于需要保留录制状态的场景
 
 ## 性能数据（Release, 全帧 record+submit, 3s×1）

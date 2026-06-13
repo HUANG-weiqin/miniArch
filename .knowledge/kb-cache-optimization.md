@@ -2,7 +2,7 @@
 title: Cache & Memory Optimization Review
 module: MiniArch.Core
 description: Memory layout and cache behavior analysis of the ECS runtime, with optimization opportunities
-updated: 2026-06-10 (P15: 删除 CommandBuffer/CommandStream 本地 archetype 缓存, World.TryGetArchetype 零分配集合查找)
+updated: 2026-06-13 (edge cache 改回直索引, ComponentMask 256→512-bit, _archetypeVersion 更名)
 ---
 # Cache & Memory Optimization Review
 
@@ -39,8 +39,8 @@ Archetype (partial files: Archetype.cs + Archetype.Storage.cs)
 ├── _columnByteOffsets: int[]  // per-column byte offset into _data
 ├── _elementSizes: int[]       // per-column element size
 ├── _componentIdToColumnIndex: int[]  // component id → column index
-├── _addEdgeCacheSlots: (ComponentType, Archetype)[]  // bounded 4-slot LRU
-└── _removeEdgeCacheSlots: (ComponentType, Archetype)[]  // bounded 4-slot LRU
+├── _addDestinationCache: Archetype?[]      // 直索引，component id → 目标 archetype
+└── _removeDestinationCache: Archetype?[]   // 直索引，component id → 目标 archetype
           ↓
 Chunk (internal readonly struct view) / ChunkView (public readonly struct view)
 ```
@@ -62,7 +62,7 @@ Chunk (internal readonly struct view) / ChunkView (public readonly struct view)
 
 1. **迭代热路径几乎完美**：per-row = `Unsafe.Add(ref, 1)` × N，没有间接寻址
 2. **自适应 chunk 容量（16KB）** 正好瞄准 L1 cache，一次迭代不换 cache
-3. **ComponentMask**（256-bit bitmask, 4× `ulong`）用 bitmask 做 signature 匹配，O(1) 无分支
+3. **ComponentMask**（512-bit bitmask, 8× `ulong`）用 bitmask 做 signature 匹配，O(1) 无分支
 4. **CopySmall 特化路径**（1/2/4/8/12/16 字节）覆盖了常见组件大小
 5. **`SkipLocalsInit`** + **`MemoryMarshal.GetArrayDataReference`** 消除了运行时开销
 
@@ -97,13 +97,9 @@ struct EntityRecord {
 
 **判断**：**方案 A 值得做**（排序开销极小，copy 时 cache 更友好）。方案 B 等 profiling 数据。
 
-## P4: Edge Cache 改为 bounded 4-slot LRU ✅ 已修复 (2026-06-08)
+## P4: Edge Cache 直索引 ✅ 已修复 (2026-06-08)
 
-**问题**：原来的 `_addDestinationCache: Archetype?[]` 按 component ID 直索引，如果 component ID 分配不连续（有空洞），浪费内存。
-
-**Fix**：改为 bounded 4-slot LRU cache（`_addEdgeCacheSlots` / `_removeEdgeCacheSlots`）。4 slot 足够覆盖当前 Hero 场景（< 20 组件），LRU 淘汰最近最少使用的 edge。
-
-**状态**：已实施。消除了稀疏数组膨胀问题。
+**当前状态**：`_addDestinationCache: Archetype?[]` / `_removeDestinationCache: Archetype?[]` 按 component ID 直索引。O(1) 查找，简单可靠。component ID 稀疏时数组可能膨胀，但当前场景组件 ID 紧凑，不是问题。
 
 ## P5: CopySharedComponentsFrom O(n*m) 查找
 
@@ -135,9 +131,9 @@ struct EntityRecord {
 
 **Fix**：所有 public 薄转发方法加 `[MethodImpl(AggressiveInlining)]`。
 
-## P12: Edge Cache 从直索引改为 bounded LRU ✅ 已修复 (2026-06-08)
+## P12: Edge Cache 直索引 ✅ 已修复 (2026-06-08)
 
-同 P4，已实施。
+同 P4，当前使用 `Archetype?[]` 按 componentId 直索引。
 
 ## P13: CommandBuffer 去重排序零分配 ✅ 已修复 (2026-06-09)
 
@@ -186,8 +182,8 @@ struct EntityRecord {
 
 ## 坑点
 
-- **EntityRecord 布局已优化为 16 字节**：`(Archetype ref, RowIndex, Version)` 无 padding
-- **Edge cache 已改为 bounded 4-slot LRU**：不再使用 `Archetype?[]` 直索引，miss 时需要重新计算目标 archetype
+- **`World._archetypeVersion` 已更名为 `_createArchetypeCacheGeneration`**：用于 CreateArchetypeCache 的 generation 失效
+- **Edge cache 使用直索引 `Archetype?[]`**：按 componentId 直索引，O(1) 查找。component ID 稀疏时数组可能膨胀
 - **公共 API 薄转发方法必须加 `[MethodImpl(AggressiveInlining)]`**：遗漏会导致迭代退化
 - **Archetype 的 `CreateStorage` 列对齐**：对齐从 8→64 会使每列浪费更多 padding
 
@@ -197,4 +193,4 @@ struct EntityRecord {
 - **看实体随机访问**：`World.cs` 的 `TryGetLocation()`、`World.StructuralChange.cs` 的 `FinishMoveEntity()`
 - **看 storage 布局**：`Archetype.Storage.cs` 的 `EnsureCapacity()`、`GetComponentRefAt<T>()`
 - **看迁移拷贝**：`Archetype.Storage.cs` 的 `CopySharedComponentsFrom()`、`CopySmall()`
-- **看 edge cache**：`Archetype.cs` 的 `_addEdgeCacheSlots` / `_removeEdgeCacheSlots`
+- **看 edge cache**：`Archetype.cs` 的 `_addDestinationCache` / `_removeDestinationCache`

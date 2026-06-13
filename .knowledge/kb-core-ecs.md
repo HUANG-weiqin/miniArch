@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-06-08 (World/Archetype 拆分为 partial 文件、DebugMetrics 已删除、ICommandRecorder 已删除、新增 GetFirst/ChunkView/Clone)
+updated: 2026-06-13 (ComponentMask 256→512-bit, 修正已删除文件声明, edge cache 改回直索引, 分段存储模式)
 ---
 # MiniArch Core ECS
 
@@ -27,17 +27,14 @@ updated: 2026-06-08 (World/Archetype 拆分为 partial 文件、DebugMetrics 已
   - **Archetype partial 文件族**：
     - `Archetype.cs`：字段声明、构造函数、metadata 属性（EntityCount/Capacity/ComponentTypes）、edge cache（add/remove destination）、component index resolution
     - `Archetype.Storage.cs`：存储操作（EnsureCapacity、AddEntity、ReserveRows、RemoveAt、component read/write span、CopySharedComponentsFrom、CreateStorage、CopySmall）
-  - `Chunk.cs`：**internal** readonly struct 视图，包裹 Archetype 暴露查询接口（给 Query 内部迭代器用）
-  - `Ecs/ChunkView.cs`：**public** readonly struct 视图，直接包裹 Archetype（给用户 batch API 用）
-  - `Signature.cs`：组件集合键（排序 `ComponentType[]` + `ComponentMask` 256-bit bitmask）
-  - `ComponentMask.cs`：256-bit bitmask（4 × `ulong`），加速 signature 匹配
+  - `ChunkView.cs`：**public** readonly struct 视图，直接包裹 Archetype（给用户 batch API 用）
+  - `Signature.cs`：组件集合键（排序 `ComponentType[]` + `ComponentMask` 512-bit bitmask）
+  - `ComponentMask.cs`：512-bit bitmask（8 × `ulong`），加速 signature 匹配
   - `ComponentColumnMap.cs`：`component id → column index` 映射的共享 helper
   - `QueryFilter.cs`：query filter 的内部执行形状
   - `QueryComponentSet.cs`：排序组件集合（仅 `CreateFrom` 批量入口）
   - `QueryDescription.cs`：可跨 world 复用的 query 描述，保存 world-agnostic 的 `Type` 集合
   - `Query.cs` / `QueryIterators.cs`：archetype 过滤和 chunk 遍历、单版本号全局快照失效
-  - `ChunkViewTyped.cs`：`ChunkView<T1..T4>` + `ChunkViewEnumerable<T1..T4>` ref struct 族
-  - `SpanQueryIterators.cs`：`EachSpan<T1..T4>()` 零分配 ref struct 迭代器
   - `ComponentRegistry.cs`：全局 `Type ↔ ComponentType` 双向映射（copy-on-write）
   - `ComponentType.cs`：`int` wrapper
   - `ComponentSizeCache.cs`：`Type → size` 缓存
@@ -53,8 +50,6 @@ updated: 2026-06-08 (World/Archetype 拆分为 partial 文件、DebugMetrics 已
 
 - **已删除**：
   - `DebugMetrics.cs`：整个文件已删除（YAGNI 清理），`WorldDebugMetrics`/`CommandBufferDebugMetrics` 类型已移除
-  - `ICommandRecorder.cs`：整个文件已删除，`CommandBuffer` 直接使用，不再有独立录制接口
-  - `GenericMethodCache.cs`：已删除
 
 - 数据流 / 控制流：
   - `World` 创建实体后放入空签名 archetype（`World.EntityLifecycle.cs`）
@@ -62,13 +57,13 @@ updated: 2026-06-08 (World/Archetype 拆分为 partial 文件、DebugMetrics 已
   - `World.GetFirst<T>()` 利用同套泛型 static cache 实现 O(1) 按 component type 查找首个 entity
   - `World.EnsureCapacity` 负责提前扩好 entity metadata 存储
   - `World.CreateMany` 先批量准备 entity id，再一次性落入空签名 archetype
-  - `Add/Remove`（`World.StructuralChange.cs`）先算目标签名，再通过 edge cache（`_addDestinationCache`/`_removeDestinationCache` 直索引数组）找到目标 Archetype，用 `Archetype.CopySharedComponentsFrom` 搬迁共享组件
+  - `Add/Remove`（`World.StructuralChange.cs`）先算目标签名，再通过 edge cache（`_addDestinationCache`/`_removeDestinationCache` `Archetype?[]` 按 componentId 直索引）找到目标 Archetype，用 `Archetype.CopySharedComponentsFrom` 搬迁共享组件
   - `Set` 在组件已存在时直接定位到 typed column 的 row，原地写回，不触发迁移
   - `EntityAccessor` 缓存 `(Archetype, RowIndex)`，后续 `Get<T>` / `Set<T>` / `Has<T>` 跳过 `_records` 查找和 version check
   - `Destroy` 走 leaf-entity 快速路径：无 children 时跳过 `CollectDestroySubtree`
   - `Clone` 执行 deep clone：先 `CloneSingle` 复制 root 实体，有 children 时 DFS 遍历 subtree
   - Query 读路径使用 world 发布（volatile write）的 archetype 数组快照和 query 自身发布的 matched-archetype/chunk 数组快照（`World.QueryCache.cs`）
-  - **每个 Archetype 有且仅有一个 Chunk**（Chunk 是 Archetype 的 readonly struct 视图）：存储为 Archetype 直持的 `_data: byte[]`，通过 `_columnByteOffsets[column] + row * _elementSizes[column]` 定位元素
+  - **Archetype 支持单块和分段两种存储模式**（详见 `kb-chunk-storage.md`）：存储为 Archetype 直持的 `_data: byte[]`（单块）或 `_segments: Segment[]`（分段），通过 `_columnByteOffsets[column] + row * _elementSizes[column]` 定位元素
   - Archetype 按需线性增长：`EnsureCapacity`（`Archetype.Storage.cs`）按 double 策略扩容，每列 `CopyBlockUnaligned` 整列搬移
   - `World.Create/Destroy` 热路径无锁（单线程 world mutation 前提）；`CommandBuffer` 的 `ReserveDeferredEntity` 保留锁
 
@@ -81,13 +76,13 @@ updated: 2026-06-08 (World/Archetype 拆分为 partial 文件、DebugMetrics 已
 - `default(Entity)` 不合法；真实实体从 `Version = 1` 起步
 - 单实体带组件创建直接落到目标签名 archetype，不经过 `Create → Add` 迁移链
 - Query 并发读优先用 copy-on-write 快照发布，而不是加锁
-- Query snapshot 直接内联在 `Query` 上（`_snapshotArchetypes`、`_snapshotChunks`、`_snapshotVersion`）
-- `Chunk` 被扁平化为 Archetype 的 readonly struct 视图：每个 Archetype 有且仅有一个 Chunk，无 multi-chunk 分层
+- Query snapshot 直接内联在 `Query` 上（`_snapshotArchetypes`、`_snapshotChunkViews`、`_lastArchetypeCount`）
+- **Archetype 支持单块/分段双模式**：单块模式下 Archetype = 1 个连续存储块；分段模式下 Archetype = N 个固定大小 Segment，详见 `kb-chunk-storage.md`
 - **World 拆分为 partial 文件**（按职责分组）：EntityLifecycle、Create.Generated、QueryCache、StructuralChange。主文件保留字段声明、component 读写、Clone、Replay、hierarchy
 - **Archetype 拆分为 partial 文件**：主文件保留字段/构造/metadata/edge cache/component index；Storage 文件负责所有存储操作
 - **DebugMetrics 已删除**：YAGNI 清理，不再维护 debug 计数器和报告 API。替代方案：`WorldStats`/`ArchetypeStats` 纯快照式诊断（`World.GetStats()`/`World.GetArchetypeStats()`），零新增状态、零热路径开销
 - **ICommandRecorder 已删除**：CommandBuffer 直接使用，不再需要独立录制接口
-- **Edge cache 内联**：增删目标缓存直接挂在 Archetype 上（`Archetype?[]` 直索引），无需独立 ArchetypeEdges 对象
+- **Edge cache 内联**：增删目标缓存直接挂在 Archetype 上（`Archetype?[]` 按 componentId 直索引），无需独立 ArchetypeEdges 对象
 - **迁移拷贝内联**：`CopySharedComponentsFrom` 直接在 Archetype 上实现，无需 MigrationPlan class
 - 热路径安全检查（bounds check、capacity check 等）包裹 `#if DEBUG`，Release 下零开销
 - `[SkipLocalsInit]` + `AggressiveInlining` + `Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), offset)` 消除 JIT 边界检查
@@ -102,8 +97,8 @@ updated: 2026-06-08 (World/Archetype 拆分为 partial 文件、DebugMetrics 已
 
 ## 入口
 
-- 第一次读：`World.cs`（字段声明+component 读写+hierarchy）→ `World.EntityLifecycle.cs`（Create/Destroy）→ `World.StructuralChange.cs`（Add/Set/Remove）→ `Archetype.cs`（metadata+edge cache）→ `Archetype.Storage.cs`（存储操作）→ `Chunk.cs`（内部视图）
-- 用户 API 层：`Ecs/ChunkView.cs`（公共 batch 视图）、`Ecs/Query.cs`（用户 Query struct）
+- 第一次读：`World.cs`（字段声明+component 读写+hierarchy）→ `World.EntityLifecycle.cs`（Create/Destroy）→ `World.StructuralChange.cs`（Add/Set/Remove）→ `Archetype.cs`（metadata+edge cache）→ `Archetype.Storage.cs`（存储操作）→ `ChunkView.cs`（公共视图）
+- 用户 API 层：`ChunkView.cs`（公共 batch 视图）、`Query.cs`（用户 Query struct）
 - EntityAccessor：`EntityAccessor.cs`（ref struct，单实体多组件直读）
 - 修 bug：`World.EntityLifecycle.cs`（实体版本校验）→ `World.StructuralChange.cs`（迁移逻辑）→ `Query.cs`（快照刷新逻辑）
 
@@ -121,6 +116,5 @@ updated: 2026-06-08 (World/Archetype 拆分为 partial 文件、DebugMetrics 已
 - 性能验证必须看 Arch 对照数据，不能只看自己变快
 - `EntityAccessor` 是 ref struct，不可装箱、不可存字段、不可捕获在 lambda 中
 - 结构变更（Add/Remove）后 entity 可能换 archetype，此时已获取的 accessor 指向旧位置，必须丢弃
-- World 拆分为 partial 后，修改某一职责时要注意 `using` 引用和字段访问的编译正确性
 - `GetFirst<T>()` 依赖 `CreateArchetypeCache<T>` 泛型静态缓存，该缓存使用 `WeakReference<World>` 防止跨 World 误命中
 - DebugMetrics 相关的 `#if DEBUG` 计数累加语句已全部删除，不应再引用
