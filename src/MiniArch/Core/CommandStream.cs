@@ -52,6 +52,12 @@ public sealed class CommandStream : ICommandRecorder
 
     private readonly record struct MaskCacheSlot(ComponentMask Mask, Archetype Archetype);
 
+    // Fast path: caches the most recently created entity to avoid
+    // TryGetPendingBatch range check on the common pattern:
+    //   e = stream.Create(); stream.Add(e, a); stream.Add(e, b);
+    private Entity _lastCreated;
+    private int _lastCreatedBatch = -1;
+
     private struct BatchedComponent
     {
         public ComponentType Type;
@@ -73,6 +79,8 @@ public sealed class CommandStream : ICommandRecorder
         var entity = _world.ReserveDeferredEntity();
         var batchIdx = AllocPendingBatch(entity);
         AppendEntry(new Entry(CmdKind.Create, entity, default, batchIdx));
+        _lastCreated = entity;
+        _lastCreatedBatch = batchIdx;
         return entity;
     }
 
@@ -348,6 +356,13 @@ public sealed class CommandStream : ICommandRecorder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool TryGetPendingBatch(Entity entity, out int batchIdx)
     {
+        // Fast path: most Add/Set calls follow a Create on the same entity
+        if (entity == _lastCreated && _lastCreatedBatch >= 0)
+        {
+            batchIdx = _lastCreatedBatch;
+            return true;
+        }
+
         var id = entity.Id;
         if ((uint)(id - _pendingBatchMin) < (uint)(_pendingBatchMax - _pendingBatchMin) &&
             id < _pendingBatch.Length)
@@ -366,6 +381,9 @@ public sealed class CommandStream : ICommandRecorder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void CancelPendingEntity(Entity entity)
     {
+        if (entity == _lastCreated)
+            _lastCreatedBatch = -1;
+
         var id = entity.Id;
         if (id < _pendingBatch.Length)
         {
@@ -1230,6 +1248,7 @@ public sealed class CommandStream : ICommandRecorder
         _pendingBatchMax = 0;
         _batchCompTotal = 0;
         _batchBufLen = 0;
+        _lastCreatedBatch = -1;
         _hierarchyByChild.Clear();
         _unavailableEntities?.Clear();
     }
