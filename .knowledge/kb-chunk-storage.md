@@ -1,55 +1,148 @@
 ---
 title: Chunk 存储
 module: MiniArch.Core
-description: Archetype 的 readonly struct 视图 — Chunk(internal) 和 ChunkView(public) 都不持有存储，所有数据归属 Archetype
-updated: 2026-06-08 (拆分 Archetype.Storage.cs、新增 public ChunkView、区分 internal Chunk 和 public ChunkView)
+description: Archetype 存储架构 — 单块模式（默认）和分段模式（阈值后自动切换），包括 SoA 布局、跨段 swap-remove、查询分段迭代
+updated: 2026-06-13 (实现 miniarch-chunked-storage-design：分段存储、跨段 swap-remove、查询分段迭代)
 ---
 # Chunk 存储
 
 ## 这个模块是干什么的
 
-- Chunk（internal）和 ChunkView（public）都是 Archetype 的**只读 readonly struct 视图**，不是存储持有者
-- 每个 Archetype **有且仅有一个 Chunk/ChunkView** 实例，包裹 Archetype 引用暴露只读查询接口
+- ChunkView（public）是 Archetype/Segment 的**只读 readonly struct 视图**
+- 在**单块模式**（`_isChunked == false`）下，一个 Archetype 对应一个 ChunkView
+- 在**分段模式**（`_isChunked == true`）下，每个 Segment 对应一个 ChunkView
 - 真正的存储（`_data: byte[]`、`_entities: Entity[]`、列偏移、元素大小等）全部直属于 `Archetype`
 - 存储操作代码在 `Archetype.Storage.cs` partial 文件中
 
 ## 架构
 
-- **两个视图类型**：
-  - `Chunk.cs`（internal）：给 Query 内部迭代器使用，代理 Archetype 的只读接口
-  - `Ecs/ChunkView.cs`（public）：给用户 batch API 使用，直接包裹 Archetype，带 `AggressiveInlining`
-- 核心组成：
-  - `_archetype: Archetype` — 被包裹的 Archetype 引用
-  - 所有数据通过 Archetype 代理访问
-- 数据流：
-  - 读取：`GetComponentSpanAt<T>(col)` → 代理到 `_archetype.GetComponentSpanAt<T>(col)`
-  - 实体：`GetEntities()` → 代理到 `_archetype.GetEntities()`
-  - Span：`GetSpan<T>()` → `_archetype.GetComponentSpan<T>(Component<T>.ComponentType)`
-- **真正的存储归属 Archetype**（`Archetype.cs` 字段 + `Archetype.Storage.cs` 操作）
+### 2.1 两种模式
+
+**单块模式**（默认，零额外开销）：
+```
+_isChunked = false
+  _entities: Entity[]
+  _data: byte[]
+  扩容: 翻倍重分配（和原先完全一致）
+```
+
+**分段模式**（超过阈值后自动切换，零拷贝转换）：
+```
+_isChunked = true
+  _segments: Segment[]
+  _segmentOffsets: int[]  ← 段前缀和
+  Segment {
+      Entities: Entity[]
+      Data: byte[]
+      Count: int
+  }
+```
+
+### 2.2 阈值
+
+```csharp
+const int SegmentEntityCapacity = 65536;  // 每段最多 65536 个实体
+// 当 capacity * 2 > SegmentEntityCapacity 时，触发分段切换
+```
+
+### 2.3 行号映射
+
+- **单块模式**：行号 = 直接数组索引
+- **分段模式**：`globalRow / SegmentEntityCapacity` → 段索引，`globalRow % SegmentEntityCapacity` → 段内行
+- `EntityRecord.RowIndex` 始终存全局行号，不变
+
+### 2.4 存储相关文件
+
+- `Archetype.cs`：字段、`Segment` 内部结构体、常量
+- `Archetype.Storage.cs`：存储操作（EnsureCapacity、AddEntity、RemoveAt、组件读写等）
+- `ChunkView.cs`：public readonly struct 视图，非分段下包裹 Archetype，分段下包裹 Segment
+- `Query.cs（Core）`：内部查询实现，分段下每个 Segment 产生一个 ChunkView
+
+### 2.5 ChunkView 的分段适配
+
+```csharp
+// segmentIndex = -1 表示单块模式，>= 0 表示分段模式中的特定段
+internal ChunkView(Archetype archetype, int segmentIndex = -1)
+public int Count =>
+    _segmentIndex >= 0
+        ? _archetype.GetSegmentCount(_segmentIndex)
+        : _archetype.EntityCount;
+public Span<T> GetSpan<T>() where T : unmanaged
+{
+    if (_archetype.IsChunked)
+        return _archetype.GetSegmentComponentSpan<T>(_segmentIndex, colIdx);
+    return _archetype.GetComponentSpan<T>(Component<T>.ComponentType);
+}
+```
+
+## 分段存储细节
+
+### 3.1 ConvertToChunked（零拷贝）
+
+当 `_capacity * 2 > SegmentEntityCapacity` 且下次需要扩容时，自动执行：
+
+```csharp
+ConvertToChunked():
+    _segments[0] = new Segment {
+        Entities = _entities,   // 直接转移引用
+        Data = _data,           // 直接转移引用
+        Count = _count
+    }
+    _segmentOffsets = [0]
+    _segmentCount = 1
+    _isChunked = true
+    _entities = null
+    _data = null
+```
+
+### 3.2 GrowChunked（逐段扩容零拷贝）
+
+分段后扩容只追加新段，不碰旧段数据。每段固定大小 `SegmentEntityCapacity`。
+
+### 3.3 跨段 swap-remove
+
+只在末段产生空洞。删除行不在末段时，将末段最后一行拷贝到删除行位置，更新被移动实体的 `EntityRecord.RowIndex`。
+
+```csharp
+RemoveAt(globalRow):
+    lastSeg = _segments[_segmentCount - 1]
+    // 如果在末段，直接段内 swap-remove
+    // 如果不在末段，将末段最后一行跨段拷贝到删除位置
+    CopySegmentColumn(srcSegIdx, srcLocalRow, destSegIdx, destLocalRow)
+    // 更新被移动实体的行号
+```
+
+### 3.4 查询分段迭代
+
+`Query` 的 `EnsureRefreshed()` 检测：
+1. 全局 Archetype 数量变化 → 增量追加
+2. 已有匹配 Archetype 的 `SegmentCount` 变化 → 全量刷新
+
+分段后的 Archetype 在匹配时，每个 Segment 被包装为一个独立的 ChunkView。
 
 ## 决策
 
-- **Chunk 不再是存储单元**：将 Chunk 降级为 readonly struct 视图，消除多 Chunk 复杂度
-- **每个 Archetype 精确对应一个 Chunk/ChunkView**：查询接口永远返回长度为 1 的 span
-- **SoA 布局仍在 Archetype 中保持**：列式排列、同一组件的所有行在内存中连续
-- **swap-remove 在 Archetype.Storage.cs 中实现**：逐列复制最后一行数据
+- **单块模式零退化**：`_isChunked == false` 时所有路径和原先完全一致（只多一个分支预测）
+- **阈值保守**：`SegmentEntityCapacity = 65536`，确保切换前已有足够大的单块
+- **行号映射用除法而非二分**：因为所有段（除末段外）固定大小，`globalRow / SegmentEntityCapacity` 即可定位
+- **`_segmentOffsets` 仍维护**：为未来可能支持不等长段预留
+- **`ChunkView.Count` 总是读 Archetype 实时计数**：避免因 CommandBuffer 延迟提交导致的 stale count 问题（2026-06-13 bugfix）
 - **不支持托管引用组件**：`flat byte[]` 不含 GC 跟踪，在 Archetype 构造时 fail fast
-- **ChunkView 方法加 `[MethodImpl(AggressiveInlining)]`**：用户 batch API 路径必须内联
 
 ## 认知模型
 
-- Chunk/ChunkView = **Archetype 的一张只读门票**
-- ChunkView 是面向用户的公开接口，Chunk 是面向内部迭代器的接口
+- 单块模式：Archetype = 1 个连续存储块 = 1 个 ChunkView
+- 分段模式：Archetype = N 个 Segment = N 个 ChunkView
+- EntityRecord 始终存全局行号，行号映射对 World 层完全透明
 
 ## 入口
 
-- 第一次读：`Chunk.cs`（internal 视图）→ `Ecs/ChunkView.cs`（public 视图）→ `Archetype.Storage.cs`（存储操作）
-- 修 bug：`Archetype.Storage.cs` 的 `EnsureCapacity()` / `RemoveAt()`
+- **核心逻辑**：`Archetype.Storage.cs` 的 `EnsureCapacity()` / `AddEntity()` / `RemoveAt()`
+- **查询适配**：`Query.cs` 的 `AppendNewArchetypes()` + `ChunkView.cs`
+- **测试**：`ArchetypeTests.cs` 的 `Chunked_mode_*` 测试方法
 
 ## 坑点
 
-- Chunk 和 ChunkView 都是 readonly struct，不可存字段、不可作为可写状态持有者
-- 所有存储扩容逻辑在 `Archetype.Storage.cs` 上，视图不提供 EnsureCapacity
-- `GetChunkSpan()[0]` 总是访问唯一视图，不再需要遍历多个 chunk
-- ChunkView 的 `GetSpan<T>()` 需要 `where T : struct` 约束
-- 如果未来需要超过单块 `byte[]` 限制（~2GB）的场景，需要重新引入多存储块方案
+- `EnsureCapacity` 可能在非分段路径中将 Archetype **切换为分段模式**，`AddEntity` 和 `ReserveRows` 必须在 `EnsureCapacity` 返回后**重新检查 `_isChunked`**（2026-06-13 bugfix）
+- `ChunkView.Count` 不能用字段缓存实体计数，必须实时读取 Archetype，否则 CommandBuffer 延迟提交导致 chunk.Count 大于 span 长度 → IndexOutOfRangeException
+- `GetSegmentAndLocal` 假设除末段外所有段都满，如果出现不等长段需要改用二分查找

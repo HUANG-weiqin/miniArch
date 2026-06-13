@@ -251,7 +251,8 @@ public static class WorldSnapshot
         }
 
         var startRow = archetype.ReserveRows(rowCount);
-        entities.CopyTo(archetype.GetReservedEntities(startRow, rowCount));
+        for (var row = 0; row < rowCount; row++)
+            archetype.WriteEntityAt(startRow + row, entities[row]);
 
         for (var fileColumnIndex = 0; fileColumnIndex < fileOrderedComponentTypes.Length; fileColumnIndex++)
         {

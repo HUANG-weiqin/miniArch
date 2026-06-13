@@ -1,4 +1,3 @@
-using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -7,54 +6,148 @@ namespace MiniArch.Core;
 [SkipLocalsInit]
 internal sealed partial class Archetype
 {
-    /// <summary>
-    /// Grows storage to guarantee capacity for at least <paramref name="requiredCapacity"/> rows.
-    /// </summary>
+    // ──────────────────────────────────────────────
+    //  Row-mapping helpers (chunked mode)
+    // ──────────────────────────────────────────────
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private (int SegmentIndex, int LocalRow) GetSegmentAndLocal(int globalRow)
+    {
+        var segIdx = globalRow / SegmentEntityCapacity;
+        return (segIdx, globalRow - segIdx * SegmentEntityCapacity);
+    }
+
+    // ──────────────────────────────────────────────
+    //  Conversion & segment growth
+    // ──────────────────────────────────────────────
+
+    private void ConvertToChunked()
+    {
+        _segments = new Segment[1];
+        _segments[0] = new Segment
+        {
+            Entities = _entities,
+            Data = _data,
+            Count = _count
+        };
+        _segmentOffsets = [0];
+        _segmentCount = 1;
+        _entities = null!;
+        _data = null!;
+        _isChunked = true;
+    }
+
+    private void GrowChunked(int need)
+    {
+        while (need > 0)
+        {
+            var seg = new Segment
+            {
+                Entities = new Entity[SegmentEntityCapacity],
+                Data = CreateStorageBytes(_signature, _componentTypes, SegmentEntityCapacity),
+                Count = 0
+            };
+            var newIdx = _segmentCount;
+            if (_segments.Length == newIdx)
+                Array.Resize(ref _segments, Math.Max(newIdx * 2, 4));
+            if (_segmentOffsets.Length == newIdx)
+                Array.Resize(ref _segmentOffsets, Math.Max(newIdx * 2, 4));
+            _segments[newIdx] = seg;
+            _segmentOffsets[newIdx] = _segmentOffsets[newIdx - 1] + SegmentEntityCapacity;
+            _segmentCount++;
+            need -= SegmentEntityCapacity;
+        }
+    }
+
+    // ──────────────────────────────────────────────
+    //  EnsureCapacity
+    // ──────────────────────────────────────────────
+
     internal void EnsureCapacity(int requiredCapacity)
     {
-        if (requiredCapacity <= _capacity) return;
+        if (requiredCapacity <= Capacity) return;
 
-        // Unbounded growth by doubling, capped at max array element count to avoid overflow.
-        var doubleCapacity = Math.Min(_capacity * 2, ArrayMaxLength);
-        var newCapacity = Math.Max(requiredCapacity, doubleCapacity);
-
-        var newEntities = new Entity[newCapacity];
-        Array.Copy(_entities, newEntities, _count);
-
-        var (newData, newOffsets, _) = CreateStorage(_signature, _componentTypes, newCapacity);
-
-        for (var col = 0; col < _elementSizes.Length; col++)
+        if (!_isChunked && (long)_capacity * 2 * _bytesPerEntity > TargetSegmentBytes)
         {
-            var elemSize = _elementSizes[col];
-            var columnBytes = _count * elemSize;
-            if (columnBytes <= 0) continue;
-
-            ref var srcRef = ref _data[_columnByteOffsets[col]];
-            ref var dstRef = ref newData[newOffsets[col]];
-            Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, (uint)columnBytes);
+            ConvertToChunked();
+            GrowChunked(requiredCapacity - _count);
+            return;
         }
 
-        _entities = newEntities;
-        _data = newData;
-        _columnByteOffsets = newOffsets;
-        _capacity = newCapacity;
+        if (!_isChunked)
+        {
+            var doubleCapacity = Math.Min(_capacity * 2, ArrayMaxLength);
+            var newCapacity = Math.Max(requiredCapacity, doubleCapacity);
+
+            var newEntities = new Entity[newCapacity];
+            Array.Copy(_entities, newEntities, _count);
+
+            var (newData, newOffsets, _) = CreateStorage(_signature, _componentTypes, newCapacity);
+
+            for (var col = 0; col < _elementSizes.Length; col++)
+            {
+                var elemSize = _elementSizes[col];
+                var columnBytes = _count * elemSize;
+                if (columnBytes <= 0) continue;
+
+                ref var srcRef = ref _data[_columnByteOffsets[col]];
+                ref var dstRef = ref newData[newOffsets[col]];
+                Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, (uint)columnBytes);
+            }
+
+            _entities = newEntities;
+            _data = newData;
+            _columnByteOffsets = newOffsets;
+            _capacity = newCapacity;
+        }
+        else
+        {
+            GrowChunked(requiredCapacity - Capacity);
+        }
     }
 
-    /// <summary>
-    /// Adds an entity and returns its row index.
-    /// </summary>
+    // ──────────────────────────────────────────────
+    //  AddEntity
+    // ──────────────────────────────────────────────
+
     internal int AddEntity(Entity entity)
     {
+        if (_isChunked)
+            return AddEntityChunked(entity);
+
         EnsureCapacity(_count + 1);
-        var row = _count;
-        _entities[row] = entity;
-        _count++;
-        return row;
+        if (!_isChunked)
+        {
+            var row = _count;
+            _entities[row] = entity;
+            _count++;
+            return row;
+        }
+        return AddEntityChunked(entity);
     }
 
-    /// <summary>
-    /// Reserves rows for batch creation and returns the start row.
-    /// </summary>
+    private int AddEntityChunked(Entity entity)
+    {
+        var lastSegIdx = _segmentCount - 1;
+        ref var lastSeg = ref _segments[lastSegIdx];
+        while (lastSeg.Count >= lastSeg.Entities.Length)
+        {
+            GrowChunked(1);
+            lastSegIdx = _segmentCount - 1;
+            lastSeg = ref _segments[lastSegIdx];
+        }
+        var localRow = lastSeg.Count;
+        var globalRow = _segmentOffsets[lastSegIdx] + localRow;
+        lastSeg.Entities[localRow] = entity;
+        lastSeg.Count++;
+        _count++;
+        return globalRow;
+    }
+
+    // ──────────────────────────────────────────────
+    //  ReserveRows
+    // ──────────────────────────────────────────────
+
     internal int ReserveRows(int count)
     {
         if (count < 0)
@@ -64,51 +157,142 @@ internal sealed partial class Archetype
             return _count;
 
         EnsureCapacity(_count + count);
-        var row = _count;
-        _count += count;
-        return row;
+
+        if (!_isChunked)
+        {
+            var row = _count;
+            _count += count;
+            return row;
+        }
+
+        var startRow = _count;
+        var remaining = count;
+        while (remaining > 0)
+        {
+            var lastSegIdx = _segmentCount - 1;
+            ref var lastSeg = ref _segments[lastSegIdx];
+            var available = lastSeg.Entities.Length - lastSeg.Count;
+            if (available == 0)
+            {
+                EnsureCapacity(_count + remaining);
+                continue;
+            }
+            var take = Math.Min(remaining, available);
+            lastSeg.Count += take;
+            _count += take;
+            remaining -= take;
+        }
+        return startRow;
     }
 
-    /// <summary>
-    /// Removes a row with swap-remove. Returns true if a move occurred.
-    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void WriteEntityAt(int globalRow, Entity entity)
+    {
+        if (!_isChunked)
+        {
+            _entities[globalRow] = entity;
+            return;
+        }
+        var (segIdx, localRow) = GetSegmentAndLocal(globalRow);
+        _segments[segIdx].Entities[localRow] = entity;
+    }
+
+    // ──────────────────────────────────────────────
+    //  RemoveAt (cross-segment swap-remove)
+    // ──────────────────────────────────────────────
+
     internal bool RemoveAt(int row, out Entity movedEntity)
     {
 #if DEBUG
         if ((uint)row >= (uint)_count)
             throw new ArgumentOutOfRangeException(nameof(row));
 #endif
-        var last = _count - 1;
-        if (row != last)
+        if (!_isChunked)
         {
-            movedEntity = _entities[last];
-            _entities[row] = movedEntity;
-            CopyRemovedRow(row, last);
-        }
-        else
-        {
-            movedEntity = default;
+            var last = _count - 1;
+            if (row != last)
+            {
+                movedEntity = _entities[last];
+                _entities[row] = movedEntity;
+                CopyRemovedRow(row, last);
+            }
+            else
+            {
+                movedEntity = default;
+            }
+            _entities[last] = default;
+            _count--;
+            return row != last;
         }
 
-        _entities[last] = default;
+        var lastSeg = _segments[_segmentCount - 1];
+        var lastLocalRow = lastSeg.Count - 1;
+        var lastGlobalRow = _segmentOffsets[_segmentCount - 1] + lastLocalRow;
+
+        if (row == lastGlobalRow)
+        {
+            lastSeg.Entities[lastLocalRow] = default;
+            lastSeg.Count--;
+            _count--;
+            movedEntity = default;
+            return false;
+        }
+
+        var (delSegIdx, delLocalRow) = GetSegmentAndLocal(row);
+
+        movedEntity = _segments[_segmentCount - 1].Entities[lastLocalRow];
+        CopySegmentColumn(_segmentCount - 1, lastLocalRow, delSegIdx, delLocalRow);
+
+        _segments[delSegIdx].Entities[delLocalRow] = movedEntity;
+        _segments[_segmentCount - 1].Entities[lastLocalRow] = default;
+        _segments[_segmentCount - 1].Count--;
         _count--;
-        return row != last;
+        return true;
     }
 
-    /// <summary>
-    /// Gets live entities as a span.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ReadOnlySpan<Entity> GetEntities() => _entities.AsSpan(0, _count);
+    // ──────────────────────────────────────────────
+    //  Entity access
+    // ──────────────────────────────────────────────
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal Entity[] GetEntityStorage() => _entities;
+    public ReadOnlySpan<Entity> GetEntities()
+    {
+        if (!_isChunked)
+            return _entities.AsSpan(0, _count);
 
-    /// <summary>
-    /// Gets the entity at a row.
-    /// </summary>
+        return GetEntityStorage().AsSpan(0, _count);
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal Entity GetEntity(int row) => _entities[row];
+    internal Entity[] GetEntityStorage()
+    {
+        if (!_isChunked)
+            return _entities;
+
+        var all = new Entity[_count];
+        var off = 0;
+        for (var i = 0; i < _segmentCount; i++)
+        {
+            var seg = _segments[i];
+            Array.Copy(seg.Entities, 0, all, off, seg.Count);
+            off += seg.Count;
+        }
+        return all;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal Entity GetEntity(int row)
+    {
+        if (!_isChunked)
+            return _entities[row];
+
+        var (segIdx, localRow) = GetSegmentAndLocal(row);
+        return _segments[segIdx].Entities[localRow];
+    }
+
+    // ──────────────────────────────────────────────
+    //  Component access
+    // ──────────────────────────────────────────────
 
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -123,9 +307,16 @@ internal sealed partial class Archetype
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ref T GetComponentRefAt<T>(int columnIndex, int row) where T : unmanaged
     {
+        if (!_isChunked)
+        {
+            return ref Unsafe.As<byte, T>(ref Unsafe.Add(
+                ref MemoryMarshal.GetArrayDataReference(_data),
+                _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex]));
+        }
+        var (segIdx, localRow) = GetSegmentAndLocal(row);
         return ref Unsafe.As<byte, T>(ref Unsafe.Add(
-            ref MemoryMarshal.GetArrayDataReference(_data),
-            _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex]));
+            ref MemoryMarshal.GetArrayDataReference(_segments[segIdx].Data),
+            _columnByteOffsets[columnIndex] + localRow * _elementSizes[columnIndex]));
     }
 
     [SkipLocalsInit]
@@ -143,9 +334,6 @@ internal sealed partial class Archetype
         return GetComponentRefAt<T>(columnIndex, row);
     }
 
-    /// <summary>
-    /// Gets a reference to the first element of a component column.
-    /// </summary>
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ref T GetComponentRef<T>(ComponentType component) where T : unmanaged
@@ -155,9 +343,6 @@ internal sealed partial class Archetype
             _columnByteOffsets[GetComponentIndexFast(component)]));
     }
 
-    /// <summary>
-    /// Gets a span of component <typeparamref name="T"/> at a pre-resolved column index.
-    /// </summary>
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Span<T> GetComponentSpanAt<T>(int columnIndex) where T : unmanaged
@@ -165,15 +350,35 @@ internal sealed partial class Archetype
         return MemoryMarshal.CreateSpan(ref GetComponentRef<T>(columnIndex), _count);
     }
 
-    /// <summary>
-    /// Gets a span of component <typeparamref name="T"/> by type.
-    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Span<T> GetComponentSpan<T>(ComponentType component) where T : unmanaged
     {
         var columnIndex = GetComponentIndex(component);
         return GetComponentSpanAt<T>(columnIndex);
     }
+
+    // ──────────────────────────────────────────────
+    //  Per-segment component span (for ChunkView)
+    // ──────────────────────────────────────────────
+
+    [SkipLocalsInit]
+    internal Span<T> GetSegmentComponentSpan<T>(int segmentIndex, int columnIndex) where T : unmanaged
+    {
+        ref var dataRef = ref MemoryMarshal.GetArrayDataReference(_segments[segmentIndex].Data);
+        ref var start = ref Unsafe.As<byte, T>(ref Unsafe.Add(ref dataRef, _columnByteOffsets[columnIndex]));
+        return MemoryMarshal.CreateSpan(ref start, _segments[segmentIndex].Count);
+    }
+
+    internal int SegmentCount => _segmentCount;
+
+    internal int GetSegmentCount(int segmentIndex) => _segments[segmentIndex].Count;
+
+    internal ReadOnlySpan<Entity> GetSegmentEntities(int segmentIndex) =>
+        _segments[segmentIndex].Entities.AsSpan(0, _segments[segmentIndex].Count);
+
+    // ──────────────────────────────────────────────
+    //  Copy helpers
+    // ──────────────────────────────────────────────
 
     internal void CopySharedComponentsFrom(Archetype source, int sourceRow, int destinationRow)
     {
@@ -208,27 +413,67 @@ internal sealed partial class Archetype
     {
         var size = _elementSizes[destinationColumnIndex];
 
-        ref var sourceData = ref MemoryMarshal.GetArrayDataReference(source._data);
-        ref var destinationData = ref MemoryMarshal.GetArrayDataReference(_data);
-        ref var sourceRef = ref Unsafe.Add(ref sourceData,
-            source._columnByteOffsets[sourceColumnIndex] + sourceRow * size);
-        ref var destinationRef = ref Unsafe.Add(ref destinationData,
-            _columnByteOffsets[destinationColumnIndex] + destinationRow * size);
-        CopySmall(ref destinationRef, ref sourceRef, size);
+        byte* srcPtr;
+        if (!source._isChunked)
+        {
+            ref var srcData = ref MemoryMarshal.GetArrayDataReference(source._data);
+            srcPtr = (byte*)Unsafe.AsPointer(ref Unsafe.Add(ref srcData,
+                source._columnByteOffsets[sourceColumnIndex] + sourceRow * size));
+        }
+        else
+        {
+            var (srcSegIdx, srcLocal) = source.GetSegmentAndLocal(sourceRow);
+            ref var srcData = ref MemoryMarshal.GetArrayDataReference(source._segments[srcSegIdx].Data);
+            srcPtr = (byte*)Unsafe.AsPointer(ref Unsafe.Add(ref srcData,
+                source._columnByteOffsets[sourceColumnIndex] + srcLocal * size));
+        }
+
+        byte* dstPtr;
+        if (!_isChunked)
+        {
+            ref var dstData = ref MemoryMarshal.GetArrayDataReference(_data);
+            dstPtr = (byte*)Unsafe.AsPointer(ref Unsafe.Add(ref dstData,
+                _columnByteOffsets[destinationColumnIndex] + destinationRow * size));
+        }
+        else
+        {
+            var (dstSegIdx, dstLocal) = GetSegmentAndLocal(destinationRow);
+            ref var dstData = ref MemoryMarshal.GetArrayDataReference(_segments[dstSegIdx].Data);
+            dstPtr = (byte*)Unsafe.AsPointer(ref Unsafe.Add(ref dstData,
+                _columnByteOffsets[destinationColumnIndex] + dstLocal * size));
+        }
+
+        Unsafe.CopyBlockUnaligned(ref *dstPtr, ref *srcPtr, (uint)size);
     }
 
     internal unsafe void ReadComponentRaw(int columnIndex, int row, byte* destination)
     {
-        var offset = _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex];
-        ref var source = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), offset);
-        Unsafe.CopyBlockUnaligned(ref *destination, ref source, (uint)_elementSizes[columnIndex]);
+        if (!_isChunked)
+        {
+            var byteOff = _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex];
+            ref var source = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), byteOff);
+            Unsafe.CopyBlockUnaligned(ref *destination, ref source, (uint)_elementSizes[columnIndex]);
+            return;
+        }
+        var (segIdx, localRow) = GetSegmentAndLocal(row);
+        var segOff = _columnByteOffsets[columnIndex] + localRow * _elementSizes[columnIndex];
+        ref var segSource = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_segments[segIdx].Data), segOff);
+        Unsafe.CopyBlockUnaligned(ref *destination, ref segSource, (uint)_elementSizes[columnIndex]);
     }
 
     internal unsafe void WriteComponentRaw(int columnIndex, int row, byte* source)
     {
-        var offset = _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex];
-        ref var target = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), offset);
-        Unsafe.CopyBlockUnaligned(ref target, ref *source, (uint)_elementSizes[columnIndex]);
+        if (!_isChunked)
+        {
+            var byteOff = _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex];
+            ref var target = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), byteOff);
+            Unsafe.CopyBlockUnaligned(ref target, ref *source, (uint)_elementSizes[columnIndex]);
+            return;
+        }
+        var (segIdx, localRow) = GetSegmentAndLocal(row);
+        var segOff = _columnByteOffsets[columnIndex] + localRow * _elementSizes[columnIndex];
+        ref var segTarget = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_segments[segIdx].Data), segOff);
+        Unsafe.CopyBlockUnaligned(ref segTarget, ref *source, (uint)_elementSizes[columnIndex]);
     }
 
     internal void CopyColumnsFrom(Archetype source, int count)
@@ -250,12 +495,44 @@ internal sealed partial class Archetype
 
     internal void WriteColumnTo<T>(BinaryWriter writer, int columnIndex, int count) where T : unmanaged
     {
-        writer.Write(GetColumnBytes(columnIndex, count));
+        if (!_isChunked)
+        {
+            writer.Write(GetColumnBytes(columnIndex, count));
+            return;
+        }
+        var size = _elementSizes[columnIndex];
+        var segIdx = 0;
+        var remaining = count;
+        while (remaining > 0)
+        {
+            var seg = _segments[segIdx];
+            var take = Math.Min(remaining, seg.Count);
+            var span = seg.Data.AsSpan(_columnByteOffsets[columnIndex], take * size);
+            writer.Write(span);
+            remaining -= take;
+            segIdx++;
+        }
     }
 
     internal void ReadColumnFrom<T>(BinaryReader reader, int columnIndex, int count) where T : unmanaged
     {
-        reader.BaseStream.ReadExactly(GetColumnBytes(columnIndex, count));
+        if (!_isChunked)
+        {
+            reader.BaseStream.ReadExactly(GetColumnBytes(columnIndex, count));
+            return;
+        }
+        var size = _elementSizes[columnIndex];
+        var segIdx = 0;
+        var remaining = count;
+        while (remaining > 0)
+        {
+            var seg = _segments[segIdx];
+            var take = Math.Min(remaining, seg.Count);
+            var span = seg.Data.AsSpan(_columnByteOffsets[columnIndex], take * size);
+            reader.BaseStream.ReadExactly(span);
+            remaining -= take;
+            segIdx++;
+        }
     }
 
     internal Span<Entity> GetReservedEntities(int startRow, int count)
@@ -263,8 +540,16 @@ internal sealed partial class Archetype
         if (startRow < 0 || count < 0 || startRow + count > _count)
             throw new ArgumentOutOfRangeException(nameof(startRow));
 
+        if (_isChunked)
+            throw new InvalidOperationException(
+                "GetReservedEntities is not supported for chunked archetypes. Use WriteEntityAt instead.");
+
         return _entities.AsSpan(startRow, count);
     }
+
+    // ──────────────────────────────────────────────
+    //  Internal helpers
+    // ──────────────────────────────────────────────
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void CopyRemovedRow(int row, int last)
@@ -277,6 +562,21 @@ internal sealed partial class Archetype
             var size = sizes[index];
             ref var sourceRef = ref Unsafe.Add(ref dataRef, offsets[index] + last * size);
             ref var destRef = ref Unsafe.Add(ref dataRef, offsets[index] + row * size);
+            CopySmall(ref destRef, ref sourceRef, size);
+        }
+    }
+
+    private void CopySegmentColumn(int srcSegIdx, int srcLocalRow, int destSegIdx, int destLocalRow)
+    {
+        var offsets = _columnByteOffsets;
+        var sizes = _elementSizes;
+        ref var srcDataRef = ref MemoryMarshal.GetArrayDataReference(_segments[srcSegIdx].Data);
+        ref var dstDataRef = ref MemoryMarshal.GetArrayDataReference(_segments[destSegIdx].Data);
+        for (var index = 0; index < sizes.Length; index++)
+        {
+            var size = sizes[index];
+            ref var sourceRef = ref Unsafe.Add(ref srcDataRef, offsets[index] + srcLocalRow * size);
+            ref var destRef = ref Unsafe.Add(ref dstDataRef, offsets[index] + destLocalRow * size);
             CopySmall(ref destRef, ref sourceRef, size);
         }
     }
@@ -315,23 +615,96 @@ internal sealed partial class Archetype
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private int GetByteOffset(int columnIndex, int row) =>
-        _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex];
+    private int GetByteOffset(int columnIndex, int row)
+    {
+        if (!_isChunked)
+            return _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex];
+        var (_, localRow) = GetSegmentAndLocal(row);
+        return _columnByteOffsets[columnIndex] + localRow * _elementSizes[columnIndex];
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private Span<byte> GetColumnBytes(int columnIndex, int count) =>
-        _data.AsSpan(_columnByteOffsets[columnIndex], count * _elementSizes[columnIndex]);
+    private Span<byte> GetColumnBytes(int columnIndex, int count)
+    {
+        if (!_isChunked)
+            return _data.AsSpan(_columnByteOffsets[columnIndex], count * _elementSizes[columnIndex]);
+        var seg = _segments[0];
+        return seg.Data.AsSpan(_columnByteOffsets[columnIndex], count * _elementSizes[columnIndex]);
+    }
 
     private unsafe void CopyColumnFrom(Archetype source, int columnIndex, int count)
     {
-        var byteCount = checked((uint)(count * _elementSizes[columnIndex]));
-        ref var sourceRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(source._data), source._columnByteOffsets[columnIndex]);
-        ref var destinationRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), _columnByteOffsets[columnIndex]);
-        Unsafe.CopyBlockUnaligned(ref destinationRef, ref sourceRef, byteCount);
+        var elemSize = _elementSizes[columnIndex];
+
+        if (!source._isChunked && !_isChunked)
+        {
+            var byteCount = checked((uint)(count * elemSize));
+            ref var srcRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(source._data), source._columnByteOffsets[columnIndex]);
+            ref var dstRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), _columnByteOffsets[columnIndex]);
+            Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, byteCount);
+            return;
+        }
+
+        var remaining = count;
+        var srcSegIdx = 0;
+        var srcConsumed = 0;
+        var dstSegIdx = 0;
+        var dstConsumed = 0;
+
+        while (remaining > 0)
+        {
+            var srcAvailable = source._isChunked
+                ? source._segments[srcSegIdx].Count - srcConsumed
+                : remaining;
+            var dstAvailable = _isChunked
+                ? _segments[dstSegIdx].Count - dstConsumed
+                : remaining;
+            var take = Math.Min(remaining, Math.Min(srcAvailable, dstAvailable));
+
+            ref byte srcRef = ref Unsafe.NullRef<byte>();
+            if (!source._isChunked)
+            {
+                var consumedTotal = count - remaining;
+                srcRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(source._data),
+                    source._columnByteOffsets[columnIndex] + consumedTotal * elemSize);
+            }
+            else
+            {
+                srcRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(source._segments[srcSegIdx].Data),
+                    source._columnByteOffsets[columnIndex] + srcConsumed * elemSize);
+            }
+
+            ref byte dstRef = ref Unsafe.NullRef<byte>();
+            if (!_isChunked)
+            {
+                var consumedTotal = count - remaining;
+                dstRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data),
+                    _columnByteOffsets[columnIndex] + consumedTotal * elemSize);
+            }
+            else
+            {
+                dstRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_segments[dstSegIdx].Data),
+                    _columnByteOffsets[columnIndex] + dstConsumed * elemSize);
+            }
+
+            Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, checked((uint)(take * elemSize)));
+
+            remaining -= take;
+            if (source._isChunked)
+            {
+                srcConsumed += take;
+                if (srcConsumed >= source._segments[srcSegIdx].Count) { srcSegIdx++; srcConsumed = 0; }
+            }
+            if (_isChunked)
+            {
+                dstConsumed += take;
+                if (dstConsumed >= _segments[dstSegIdx].Count) { dstSegIdx++; dstConsumed = 0; }
+            }
+        }
     }
 
     private static (byte[] Data, int[] ColumnByteOffsets, int[] ElementSizes) CreateStorage(
-        Signature signature, Type[] componentTypes, int capacity)
+        Signature signature, Type[] componentTypes, int capacity, bool pinned = true)
     {
         var componentCount = signature.Count;
         var columnByteOffsets = new int[componentCount];
@@ -358,10 +731,17 @@ internal sealed partial class Archetype
             totalBytes += elementSize * capacity;
         }
 
-        // Allocate on Pinned Object Heap: avoids LOH compaction overhead,
-        // skips zero-initialization (safe — all rows are written before read),
-        // and guarantees stable pointer for Unsafe ref arithmetic.
-        return (GC.AllocateUninitializedArray<byte>(totalBytes, pinned: true), columnByteOffsets, elementSizes);
+        var data = pinned
+            ? GC.AllocateUninitializedArray<byte>(totalBytes, pinned: true)
+            : GC.AllocateUninitializedArray<byte>(totalBytes);
+        return (data, columnByteOffsets, elementSizes);
+    }
+
+    private static byte[] CreateStorageBytes(
+        Signature signature, Type[] componentTypes, int capacity)
+    {
+        var (data, _, _) = CreateStorage(signature, componentTypes, capacity, pinned: false);
+        return data;
     }
 
     private static void ThrowIfManagedComponent(Type type)

@@ -9,13 +9,20 @@ namespace MiniArch.Core;
 /// </summary>
 internal sealed partial class Archetype
 {
-    // --- Storage ---
+    // --- Storage (non-chunked mode) ---
     private Entity[] _entities;
     private byte[] _data;
     private int[] _columnByteOffsets;
     private int[] _elementSizes;
     private int _count;
     private int _capacity;
+
+    // --- Storage (chunked mode) ---
+    private bool _isChunked;
+    private Segment[] _segments = null!;
+    private int[] _segmentOffsets = null!;
+    private int _segmentCount;
+    private int _bytesPerEntity; // computed at construction, 0 for empty archetypes
 
     // --- Archetype metadata ---
     private readonly Signature _signature;
@@ -39,6 +46,7 @@ internal sealed partial class Archetype
         _componentIdToColumnIndex = ComponentColumnMap.Build(signature);
         _entities = new Entity[capacity];
         (_data, _columnByteOffsets, _elementSizes) = CreateStorage(signature, componentTypes, capacity);
+        _bytesPerEntity = _data.Length / capacity;
     }
 
     /// <summary>
@@ -52,9 +60,54 @@ internal sealed partial class Archetype
     internal int EntityCount => _count;
 
     /// <summary>
+    /// Whether this archetype has switched to chunked (segmented) storage.
+    /// </summary>
+    internal bool IsChunked => _isChunked;
+
+    internal void ForceChunkedForTesting()
+    {
+        if (!_isChunked)
+        {
+            if (_capacity < SegmentEntityCapacity)
+            {
+                var newEntities = new Entity[SegmentEntityCapacity];
+                Array.Copy(_entities, newEntities, _count);
+                var (newData, newOffsets, _) = CreateStorage(_signature, _componentTypes, SegmentEntityCapacity);
+                for (var col = 0; col < _elementSizes.Length; col++)
+                {
+                    var elemSize = _elementSizes[col];
+                    var columnBytes = _count * elemSize;
+                    if (columnBytes <= 0) continue;
+                    ref var srcRef = ref _data[_columnByteOffsets[col]];
+                    ref var dstRef = ref newData[newOffsets[col]];
+                    Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, (uint)columnBytes);
+                }
+                _entities = newEntities;
+                _data = newData;
+                _columnByteOffsets = newOffsets;
+                _capacity = SegmentEntityCapacity;
+            }
+            ConvertToChunked();
+        }
+    }
+
+    internal void AddSegmentForTesting()
+    {
+        GrowChunked(1);
+    }
+
+    /// <summary>
     /// Gets the current physical capacity (maximum entities before resize).
     /// </summary>
-    internal int Capacity => _capacity;
+    internal int Capacity => _isChunked ? ComputeChunkedCapacity() : _capacity;
+
+    private int ComputeChunkedCapacity()
+    {
+        var total = 0;
+        for (var i = 0; i < _segmentCount; i++)
+            total += _segments[i].Entities.Length;
+        return total;
+    }
 
     /// <summary>
     /// Gets the component types that define this archetype's signature.
@@ -87,6 +140,22 @@ internal sealed partial class Archetype
 
     // .NET maximum array element count; avoids overflow in _capacity * 2.
     private const int ArrayMaxLength = 0x7FFFFFC7; // Array.MaxLength
+
+    // Target 2 MB per segment: large enough for L3 cache residency,
+    // small enough that allocation and GC compaction are near-instant.
+    private const int TargetSegmentBytes = 2 * 1024 * 1024;
+
+    private int SegmentEntityCapacity =>
+        _bytesPerEntity > 0
+            ? Math.Max(16, TargetSegmentBytes / _bytesPerEntity)
+            : 65536;
+
+    internal struct Segment
+    {
+        public Entity[] Entities;
+        public byte[] Data;
+        public int Count;
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool TryGetComponentIndex(ComponentType component, out int columnIndex)
