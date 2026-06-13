@@ -30,16 +30,30 @@ foreach (var entity in world.Query(in description))
 }
 ```
 
-### Query
+### `Entity`
 
-Entity iteration via `QueryDescription`:
+```csharp
+public readonly record struct Entity(int Id, int Version)
+```
+
+- `Id` — unique entity ID within the world
+- `Version` — incremented on destroy/recycle for stale handle detection
+- `IsValid` — `true` when `Id >= 0 && Version > 0`
+
+`default(Entity)` is invalid; real entities start at `Version = 1`.
+
+### `Query`
+
 - `GetEnumerator()` — `foreach` support
-- `OrderBy(IComparer<Entity>)` / `OrderBy(Comparison<Entity>)` — sorted iteration
+- `OrderBy(IComparer<Entity>)` / `OrderBy(Comparison<Entity>)` — sorted enumeration
 - `GetChunks()` — returns `ReadOnlySpan<ChunkView>` for batch/chunk-level access
+- `RefreshCount` — number of times the cached result has been invalidated
 
-### QueryDescription
+### `QueryDescription`
 
-- `With<T>()` / `Without<T>()` / `WithAny<T>()` — include, exclude, or-match filters
+- `With<T>()` — include required component
+- `Without<T>()` — exclude entities with this component
+- `WithAny<T>()` — OR-match: include entities that have this component (in addition to required types)
 
 ## Advanced Layer: `MiniArch.Core`
 
@@ -72,12 +86,23 @@ foreach (var chunk in query.GetChunks())
 | Type | Description |
 |---|---|
 | `CommandBuffer` | Deferred command recording with per-entity deduplication |
-| `CommandStream` | Byte-stream command recording (20–48% faster than CommandBuffer) |
+| `CommandStream` | Byte-stream recorder (20–48% faster than CommandBuffer) |
 | `FrameDelta` | Self-contained delta for cross-world replay |
 | `WorldSnapshot` | Binary world serialization |
 | `ICommandRecorder` | Shared interface: `Create`, `Add<T>`, `Set<T>`, `Remove<T>`, `Destroy`, `Link`, `Submit` |
-| `EntityAccessor` | Ref struct for direct component access, obtained via `World.Access(entity)` |
-| `EntityInfo` | Entity metadata (archetype, row index) |
+| `EntityAccessor` | Ref struct for batched component access, via `World.Access(entity)` |
+| `EntityInfo` | Entity metadata: `Version`, `RowIndex` |
+| `ChunkView` | Chunk view returned by `GetChunks()` |
+
+### `ChunkView`
+
+```csharp
+public int Count { get; }
+public ReadOnlySpan<Entity> GetEntities()
+public Span<T> GetSpan<T>() where T : unmanaged
+public bool TryGetComponentIndex<T>(out int columnIndex) where T : unmanaged
+public Span<T> GetComponentSpanAt<T>(int columnIndex) where T : unmanaged
+```
 
 ## Common Types
 
@@ -85,9 +110,11 @@ foreach (var chunk in query.GetChunks())
 
 | Method | Description |
 |---|---|
+| `Create()` | Create empty entity |
 | `Create<T1..T16>(...)` | Create entity with 1–16 components |
 | `CreateMany(Span<Entity>)` | Batch create empty entities |
 | `Destroy(Entity)` | Remove entity (cascades through hierarchy) |
+| `EnsureCapacity(int)` | Pre-allocate entity slots |
 | `Add<T>(Entity, T)` | Add component |
 | `Set<T>(Entity, T)` | Set component (adds if missing) |
 | `Remove<T>(Entity)` | Remove component |
@@ -95,15 +122,19 @@ foreach (var chunk in query.GetChunks())
 | `GetRef<T>(Entity)` | Get component by ref (for in-place mutation) |
 | `TryGet<T>(Entity, out T)` | Try-get component |
 | `Has<T>(Entity)` | Check component existence |
-| `Access(Entity)` | Returns `EntityAccessor` for batched access |
+| `Access(Entity)` | Returns `EntityAccessor` for batched operations |
+| `TryGetLocation(Entity, out EntityInfo)` | Get entity metadata |
+| `GetFirst<T>()` | Get first entity with a given component |
+| `IsAlive(Entity)` | Validate entity handle |
 | `Link(Entity, Entity)` | Parent-child hierarchy |
 | `Unlink(Entity)` | Remove from hierarchy |
 | `TryGetParent(Entity, out Entity)` | Get parent |
 | `GetChildren(Entity)` | Get children list |
-| `IsAlive(Entity)` | Validate entity handle |
 | `Query(in QueryDescription)` | Create a query |
-| `Clone(Entity)` | Deep-copy an entity |
+| `Clone(Entity)` | Deep-copy an entity (including child subtree) |
 | `Clone()` | Deep-copy the entire world |
+| `GetStats()` | Returns `WorldStats` |
+| `GetArchetypeStats()` | Returns per-archetype statistics |
 | `Replay(FrameDelta)` | Apply delta to produce identical state |
 | `Dispose()` | Release resources |
 
@@ -111,13 +142,14 @@ foreach (var chunk in query.GetChunks())
 
 - `Create` / `Add<T>` / `Set<T>` / `Remove<T>` — record commands
 - `Destroy` / `Link` / `Unlink` — structural changes
+- `Clone(Entity)` — record an entity deep-copy
 - `Submit()` — apply to world synchronously
 - `Snapshot()` — produce a `FrameDelta` without applying
 - `SubmitAndSnapshotAsync()` — pipelined: main thread submits while background builds delta
 
 ### `CommandStream`
 
-Same API as `CommandBuffer` but records to a flat byte stream instead of per-entity accumulation. 20–48% faster in game scenarios.
+Same API as `CommandBuffer`. Records to a flat byte stream instead of per-entity accumulation. 20–48% faster in game scenarios.
 
 ### `FrameDelta`
 
@@ -133,7 +165,7 @@ Same API as `CommandBuffer` but records to a flat byte stream instead of per-ent
 
 ### `EntityAccessor`
 
-Obtained via `World.Access(entity)`. Allows multiple component operations without repeated entity lookups:
+Obtained via `World.Access(entity)`. Multiple operations without repeated entity lookups:
 
 ```csharp
 var accessor = world.Access(entity);
