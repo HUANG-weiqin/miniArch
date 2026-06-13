@@ -101,6 +101,30 @@ world = checkpoint.Clone();       // revert and re-apply
 
 All benchmarks run on identical workloads with the same measurement methodology. GC collections: **0/0/0** during measurement across all game scenarios.
 
+## Design: Memory & Cache
+
+MiniArch's performance comes from deliberate low-level memory design, not luck.
+
+**Single-block SoA storage** — Each archetype is one flat `byte[]`, not multiple chunks. All entities with the same component set live in contiguous memory. Query iteration is sequential memory access — hardware prefetchers do the rest.
+
+**512-bit archetype matching** — Component mask uses 8 × `ulong` fields. Archetype filtering is a single bitwise AND per ulong. O(1), not O(component count). Unused bit ranges cost zero CPU cycles.
+
+**EntityRecord = 16 bytes, one cache line** — Archetype pointer (8) + row index (4) + version (4). Deliberately ordered for natural alignment. Multiple records fit in one 64-byte cache line.
+
+**InlineMap small-size optimization** — CommandBuffer's per-entity map stores up to 4 entries inline in struct fields (zero heap alloc). Only the remaining ~5% of cases overflow into an `ArrayPool`-backed linked list.
+
+**Slab bump-allocator** — Component data in CommandBuffer is copied raw into pre-rented 4KB byte slabs from `ArrayPool<byte>.Shared`. Recording is a bounds check + pointer write. Slabs are reused across frames — only the offset resets.
+
+**Pinned Object Heap + skip zero-init** — Archetype storage uses `GC.AllocateUninitializedArray<byte>(..., pinned: true)`. No LOH compaction overhead, no memset, stable pointer for Unsafe arithmetic.
+
+**CopySmall size-specialized memcpy** — Component sizes 1/2/4/8/12/16 bytes get inline register-to-register moves instead of a general memcpy call. These cover >90% of real-world component sizes.
+
+**Free-list LIFO entity ID reuse** — Recently freed IDs are reused first (stack discipline). Keeps the active ID space compact and cache-hot.
+
+**CommandStream archetype cache** — A direct-mapped 8-slot cache with generation invalidation avoids the O(N_archetype × C²) linear scan for archetype lookup after the first tick. Cold misses only on the very first frame.
+
+**Per-thread cached buffers** — ThreadStatic arrays for materialization paths are grown once and reused forever.
+
 ## Features
 
 - **Archetype ECS** — `World` / `Entity` / `QueryDescription` with chunk-level iteration
