@@ -113,3 +113,7 @@ All benchmarks run on identical workloads with the same measurement methodology.
 ## License
 
 [MIT](LICENSE)
+
+---
+
+*Built with GPT 5.5 · DeepSeek V4 · GLM5 · Kimi 2.6 · Mimo · Hermes Agent*
