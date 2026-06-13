@@ -5,7 +5,7 @@
 ## 功能矩阵
 
 | 功能 | MiniArch | Arch | Friflo | DefaultEcs |
-|---|---|---|---|---|---|
+|---|---|---|---|---|
 | Archetype ECS | ✅ | ✅ | ✅ | ✅ (混合) |
 | Chunk 级迭代 | ✅ | ✅ | ✅ | ❌ |
 | Query With/Without | ✅ | ✅ | ✅ | ✅ |
