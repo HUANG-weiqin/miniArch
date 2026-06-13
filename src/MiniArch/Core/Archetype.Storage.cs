@@ -53,7 +53,6 @@ internal sealed partial class Archetype
             Data = _data,
             Count = _count
         };
-        _segmentOffsets = [0];
         _segmentCount = 1;
         _entities = null!;
         _data = null!;
@@ -73,10 +72,7 @@ internal sealed partial class Archetype
             var newIdx = _segmentCount;
             if (_segments.Length == newIdx)
                 Array.Resize(ref _segments, Math.Max(newIdx * 2, 4));
-            if (_segmentOffsets.Length == newIdx)
-                Array.Resize(ref _segmentOffsets, Math.Max(newIdx * 2, 4));
             _segments[newIdx] = seg;
-            _segmentOffsets[newIdx] = _segmentOffsets[newIdx - 1] + SegmentEntityCapacity;
             _segmentCount++;
             need -= SegmentEntityCapacity;
         }
@@ -161,7 +157,7 @@ internal sealed partial class Archetype
             lastSeg = ref _segments[lastSegIdx];
         }
         var localRow = lastSeg.Count;
-        var globalRow = _segmentOffsets[lastSegIdx] + localRow;
+        var globalRow = lastSegIdx * SegmentEntityCapacity + localRow;
         lastSeg.Entities[localRow] = entity;
         lastSeg.Count++;
         _count++;
@@ -261,7 +257,7 @@ internal sealed partial class Archetype
 
         var lastSegCount = _segments[lastSegIdx].Count;
         var lastLocalRow = lastSegCount - 1;
-        var lastGlobalRow = _segmentOffsets[lastSegIdx] + lastLocalRow;
+        var lastGlobalRow = lastSegIdx * SegmentEntityCapacity + lastLocalRow;
 
         if (row == lastGlobalRow)
         {

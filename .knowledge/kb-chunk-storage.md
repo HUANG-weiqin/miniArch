@@ -2,7 +2,7 @@
 title: Chunk 存储
 module: MiniArch.Core
 description: Archetype 存储架构 — 单块模式（默认）和分段模式（阈值后自动切换），包括 SoA 布局、跨段 swap-remove、查询分段迭代
-updated: 2026-06-13 (实现 miniarch-chunked-storage-design：分段存储、跨段 swap-remove、查询分段迭代)
+updated: 2026-06-13 (修正阈值描述：65536 固定值 → 动态计算 2MB/bytesPerEntity)
 ---
 # Chunk 存储
 
@@ -30,7 +30,6 @@ _isChunked = false
 ```
 _isChunked = true
   _segments: Segment[]
-  _segmentOffsets: int[]  ← 段前缀和
   Segment {
       Entities: Entity[]
       Data: byte[]
@@ -41,14 +40,17 @@ _isChunked = true
 ### 2.2 阈值
 
 ```csharp
-const int SegmentEntityCapacity = 65536;  // 每段最多 65536 个实体
+// 每段目标 2 MB，实体数根据组件大小动态计算
+const int TargetSegmentBytes = 2 * 1024 * 1024;
+int SegmentEntityCapacity = perEntity > 0 ? Math.Max(16, TargetSegmentBytes / perEntity) : 65536;
 // 当 capacity * 2 > SegmentEntityCapacity 时，触发分段切换
+// 例：Position (8 bytes) → 262144 entities/segment；Position+Velocity (16 bytes) → 131072 entities/segment
 ```
 
 ### 2.3 行号映射
 
 - **单块模式**：行号 = 直接数组索引
-- **分段模式**：`globalRow / SegmentEntityCapacity` → 段索引，`globalRow % SegmentEntityCapacity` → 段内行
+- **分段模式**：`globalRow / SegmentEntityCapacity` → 段索引，`globalRow - segIdx * SegmentEntityCapacity` → 段内行（段大小由组件布局动态决定）
 - `EntityRecord.RowIndex` 始终存全局行号，不变
 
 ### 2.4 存储相关文件
@@ -123,9 +125,8 @@ RemoveAt(globalRow):
 ## 决策
 
 - **单块模式零退化**：`_isChunked == false` 时所有路径和原先完全一致（只多一个分支预测）
-- **阈值保守**：`SegmentEntityCapacity = 65536`，确保切换前已有足够大的单块
+- **阈值按组件大小动态计算**：`SegmentEntityCapacity = Max(16, 2MB / bytesPerEntity)`，目标每段 2 MB，确保切换前已有足够大的单块
 - **行号映射用除法而非二分**：因为所有段（除末段外）固定大小，`globalRow / SegmentEntityCapacity` 即可定位
-- **`_segmentOffsets` 仍维护**：为未来可能支持不等长段预留
 - **`ChunkView.Count` 总是读 Archetype 实时计数**：避免因 CommandBuffer 延迟提交导致的 stale count 问题（2026-06-13 bugfix）
 - **不支持托管引用组件**：`flat byte[]` 不含 GC 跟踪，在 Archetype 构造时 fail fast
 
@@ -145,4 +146,4 @@ RemoveAt(globalRow):
 
 - `EnsureCapacity` 可能在非分段路径中将 Archetype **切换为分段模式**，`AddEntity` 和 `ReserveRows` 必须在 `EnsureCapacity` 返回后**重新检查 `_isChunked`**（2026-06-13 bugfix）
 - `ChunkView.Count` 不能用字段缓存实体计数，必须实时读取 Archetype，否则 CommandBuffer 延迟提交导致 chunk.Count 大于 span 长度 → IndexOutOfRangeException
-- `GetSegmentAndLocal` 假设除末段外所有段都满，如果出现不等长段需要改用二分查找
+- `GetSegmentAndLocal` 假设除末段外所有段都满（段大小 = `SegmentEntityCapacity`，由组件布局动态决定），如果出现不等长段需要改用二分查找

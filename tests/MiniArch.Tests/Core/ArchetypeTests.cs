@@ -542,4 +542,60 @@ public sealed class ArchetypeTests
         Assert.Equal(262144, archetype.Capacity);
     }
 
+    [Fact]
+    public void Chunked_mode_remove_at_survives_trailing_empty_segments()
+    {
+        var registry = new ComponentRegistry();
+        var position = registry.GetOrCreate<Position>();
+        var archetype = new Archetype(new Signature(position), [typeof(Position)], capacity: 4);
+        archetype.ForceChunkedForTesting();
+
+        // Add a few entities to the first segment
+        for (var i = 0; i < 5; i++)
+        {
+            var row = archetype.AddEntity(new Entity(i + 1, 1));
+            archetype.SetComponentAtTyped(0, row, new Position(i, i));
+        }
+        Assert.Equal(1, archetype.SegmentCount);
+
+        // EnsureCapacity with a large value — GrowChunked creates trailing empty segments
+        archetype.EnsureCapacity(archetype.Capacity + 10000);
+        Assert.True(archetype.SegmentCount > 1,
+            "EnsureCapacity should have created additional segments");
+
+        // Last segment is empty (no entities added to it yet)
+        // Now remove from the first segment — must find the last NON-empty segment
+        var moved = archetype.RemoveAt(0, out var movedEntity);
+        Assert.True(moved);
+        Assert.Equal(new Entity(5, 1), movedEntity);
+        Assert.Equal(4, archetype.EntityCount);
+
+        // Verify data integrity after the cross-segment swap
+        Assert.Equal(new Entity(5, 1), archetype.GetEntity(0));
+        Assert.Equal(new Position(4, 4), archetype.GetComponentAt<Position>(0, 0));
+        Assert.Equal(new Entity(2, 1), archetype.GetEntity(1));
+        Assert.Equal(new Position(1, 1), archetype.GetComponentAt<Position>(0, 1));
+    }
+
+    [Fact]
+    public void Chunked_mode_remove_last_entity_with_trailing_empty_segments()
+    {
+        var registry = new ComponentRegistry();
+        var position = registry.GetOrCreate<Position>();
+        var archetype = new Archetype(new Signature(position), [typeof(Position)], capacity: 4);
+        archetype.ForceChunkedForTesting();
+
+        archetype.AddEntity(new Entity(1, 1));
+        archetype.SetComponentAtTyped(0, 0, new Position(10, 10));
+
+        // Create trailing empty segments
+        archetype.EnsureCapacity(archetype.Capacity + 10000);
+
+        // Remove the only entity — last entity globally, trailing empty segments exist
+        var moved = archetype.RemoveAt(0, out var movedEntity);
+        Assert.False(moved);
+        Assert.Equal(default, movedEntity);
+        Assert.Equal(0, archetype.EntityCount);
+    }
+
 }

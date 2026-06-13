@@ -20,7 +20,6 @@ internal sealed partial class Archetype
     // --- Storage (chunked mode) ---
     private bool _isChunked;
     private Segment[] _segments = null!;
-    private int[] _segmentOffsets = null!;
     private int _segmentCount;
 
     // Fixed entity capacity per segment, computed from component sizes once.

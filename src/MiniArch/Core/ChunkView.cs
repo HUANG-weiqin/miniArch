@@ -13,11 +13,11 @@ public readonly struct ChunkView
     private readonly Core.Archetype _archetype;
     private readonly int _segmentIndex; // -1 = non-chunked mode
 
-internal ChunkView(Core.Archetype archetype, int segmentIndex = -1)
-{
-    _archetype = archetype;
-    _segmentIndex = segmentIndex;
-}
+    internal ChunkView(Core.Archetype archetype, int segmentIndex = -1)
+    {
+        _archetype = archetype;
+        _segmentIndex = segmentIndex;
+    }
 
 /// <summary>Number of entities in this chunk.</summary>
 public int Count => _segmentIndex >= 0
