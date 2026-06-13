@@ -9,7 +9,7 @@ A minimal, high-performance archetype ECS runtime for C#, with built-in support 
 - **FrameDelta + Replay** — Record a frame's changes as a self-contained `FrameDelta`, then replay it on any other `World` to produce identical state. Deterministic entity IDs ensure consistency across machines.
 - **Pipelined Snapshot** — `SubmitAndSnapshotAsync()` runs submit and delta-building in parallel
 - **Clone & Snapshot** — Deep-copy any world with `Clone()` for rollback checkpoints; serialize/deserialize with `WorldSnapshot.Save/Load`
-- **Query filtering** — `With<T>`, `Without<T>`, `WithAny<T>`, `Or<T>` composition
+- **Query filtering** — `With<T>`, `Without<T>`, `WithAny<T>` composition
 - **Entity hierarchy** — `Link` / `Unlink` with cascade destroy
 - **GC-friendly** — Zero GC collections during steady-state simulation in all game scenarios
 
@@ -73,7 +73,7 @@ world = checkpoint.Clone();
 
 ## Performance
 
-MiniArch consistently outperforms or matches other C# ECS libraries across a wide range of game scenarios. See [docs/comparison.md](docs/comparison.md) for detailed benchmarks against Arch, Friflo, and DefaultEcs.
+MiniArch consistently outperforms or matches other C# ECS libraries across a wide range of game scenarios:
 
 | Scenario | MiniArch (Stream) | Friflo | Arch |
 |---|---|---|---|
@@ -82,10 +82,12 @@ MiniArch consistently outperforms or matches other C# ECS libraries across a wid
 | BulletHell (100K entities) | 14,416 ops/s | 14,058 | 13,057 |
 | MixedLoad (create+query+destroy) | 29,309 ops/s | 24,253 | 23,896 |
 
+📊 **[Full comparison with Arch, Friflo, and DefaultEcs →](docs/comparison.md)** — 12 game scenarios, CommandBuffer benchmarks, memory stability analysis, and feature matrix.
+
 ## API Layers
 
 - **`MiniArch`** — Minimal user entry: `World`, `Entity`, `QueryDescription`
-- **`MiniArch.Core`** — Advanced types: `Query`, `Chunk`, `CommandBuffer`, `CommandStream`, `FrameDelta`, `WorldSnapshot`
+- **`MiniArch.Core`** — Advanced types: `CommandBuffer`, `CommandStream`, `FrameDelta`, `WorldSnapshot`, `EntityAccessor`, `ICommandRecorder`
 
 See [docs/README.md](docs/README.md) for full API documentation.
 
