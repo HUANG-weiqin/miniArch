@@ -3,6 +3,7 @@ obj/
 **/bin/
 **/obj/
 .vs/
+.idea/
 *.user
 *.suo
 BenchmarkDotNet.Artifacts/
@@ -14,3 +15,5 @@ TestResults/
 *.trx
 artifacts/
 .worktrees/
+.DS_Store
+Thumbs.db

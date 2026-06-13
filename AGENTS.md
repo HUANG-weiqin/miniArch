@@ -84,7 +84,7 @@
 任何改动 `src/MiniArch/` 或 `tests/HeroPipeline.Tests/` 的架构变更，提交前必须执行：
 
 ```bash
-dotnet run -c Release --project perf/HeroComing.Perf
+dotnet run -c Release --project tools/perf/HeroComing.Perf
 ```
 
 检查输出：

@@ -7,19 +7,17 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MiniArch", "src\MiniArch\Mi
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MiniArch.Tests", "tests\MiniArch.Tests\MiniArch.Tests.csproj", "{17E6A4F2-13C5-4D73-8BE8-26C9F0BDA2DD}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "shared", "shared", "{E3AC927E-9C6C-4BA4-95B6-8C8C5AB2E456}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MiniArch.SharedInfrastructure", "tests\SharedInfrastructure\MiniArch.SharedInfrastructure\MiniArch.SharedInfrastructure.csproj", "{60B37132-C349-4E04-A392-888A67D04EB8}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MiniArch.SharedInfrastructure", "shared\MiniArch.SharedInfrastructure\MiniArch.SharedInfrastructure.csproj", "{60B37132-C349-4E04-A392-888A67D04EB8}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MiniArch.Benchmarks", "tests\MiniArch.Benchmarks\MiniArch.Benchmarks.csproj", "{91F501BE-0354-4036-BB50-515C7393BC97}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "perf", "perf", "{A989F849-EE38-4F2D-BAF5-DFC5F396D6CD}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HeroPipeline.Tests", "tests\HeroPipeline.Tests\HeroPipeline.Tests.csproj", "{D4E2F5A1-7B3C-4D8E-9F0A-2B5C7D1E3F4A}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HeroComing.Perf", "perf\HeroComing.Perf\HeroComing.Perf.csproj", "{F9E30B84-63BA-4107-B020-598A8BFEA792}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{A989F849-EE38-4F2D-BAF5-DFC5F396D6CD}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QueryInvalidation.Perf", "perf\QueryInvalidation.Perf\QueryInvalidation.Perf.csproj", "{F2FC2665-6A9C-482A-96E1-3E599B5BF8F8}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HeroComing.Perf", "tools\perf\HeroComing.Perf\HeroComing.Perf.csproj", "{F9E30B84-63BA-4107-B020-598A8BFEA792}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "benchmarks", "benchmarks", "{76B560ED-609C-4D21-9ADC-145D72556178}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MiniArch.Benchmarks", "benchmarks\MiniArch.Benchmarks\MiniArch.Benchmarks.csproj", "{91F501BE-0354-4036-BB50-515C7393BC97}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QueryInvalidation.Perf", "tools\perf\QueryInvalidation.Perf\QueryInvalidation.Perf.csproj", "{F2FC2665-6A9C-482A-96E1-3E599B5BF8F8}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -51,14 +49,16 @@ Global
 		{91F501BE-0354-4036-BB50-515C7393BC97}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{91F501BE-0354-4036-BB50-515C7393BC97}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{91F501BE-0354-4036-BB50-515C7393BC97}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D4E2F5A1-7B3C-4D8E-9F0A-2B5C7D1E3F4A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D4E2F5A1-7B3C-4D8E-9F0A-2B5C7D1E3F4A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D4E2F5A1-7B3C-4D8E-9F0A-2B5C7D1E3F4A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D4E2F5A1-7B3C-4D8E-9F0A-2B5C7D1E3F4A}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
-		{60B37132-C349-4E04-A392-888A67D04EB8} = {E3AC927E-9C6C-4BA4-95B6-8C8C5AB2E456}
 		{F9E30B84-63BA-4107-B020-598A8BFEA792} = {A989F849-EE38-4F2D-BAF5-DFC5F396D6CD}
 		{F2FC2665-6A9C-482A-96E1-3E599B5BF8F8} = {A989F849-EE38-4F2D-BAF5-DFC5F396D6CD}
-		{91F501BE-0354-4036-BB50-515C7393BC97} = {76B560ED-609C-4D21-9ADC-145D72556178}
 	EndGlobalSection
 EndGlobal

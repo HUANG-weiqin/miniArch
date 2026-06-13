@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using MiniArchBenchmarks;
-using MiniCommandBuffer = MiniArch.Core.CommandBuffer;
 using ArchCommandBuffer = Arch.Buffer.CommandBuffer;
 
 const int entityCount = 10_000;
@@ -8,7 +7,7 @@ const int warmupSeconds = 3;
 const int measureSeconds = 10;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
-Console.WriteLine("=== CommandBuffer: record+submit only, World+CB reused ===");
+Console.WriteLine("=== CommandBuffer: record+submit only, new World per iteration ===");
 Console.WriteLine($"Entities: {entityCount:N0}, Warmup: {warmupSeconds}s, Measure: {measureSeconds}s");
 Console.WriteLine();
 
@@ -19,41 +18,25 @@ var scenarios = Enum.GetValues<CommandBufferBenchmarkScenario>();
 
 foreach (var scenario in scenarios)
 {
-    // --- MiniArch: reuse World + CB ---
+    // --- MiniArch: new World + CB per iteration (matching Arch/DefaultEcs approach) ---
     {
-        var state = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
-        var cb = new MiniCommandBuffer(state.World);
-
-        // Warmup: full cycle including reset
         var sw = Stopwatch.StartNew();
         while (sw.Elapsed.TotalSeconds < warmupSeconds)
         {
-            CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(cb, state, scenario);
-            cb.Submit();
-            CommandBufferBenchmarkScenarioFactory.ResetMiniSharedState(state, scenario);
+            var state = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
+            CommandBufferBenchmarkScenarioFactory.RunMiniSharedScenario(state, scenario);
         }
 
-        // Force GC so baseline is clean
         GC.Collect(2, GCCollectionMode.Forced, true, true); GC.WaitForPendingFinalizers();
-
-        // Pre-reset so first iteration has clean world
-        CommandBufferBenchmarkScenarioFactory.ResetMiniSharedState(state, scenario);
-
         long iters = 0;
         int g0 = GC.CollectionCount(0), g1 = GC.CollectionCount(1), g2 = GC.CollectionCount(2);
         sw.Restart();
         while (sw.Elapsed.TotalSeconds < measureSeconds)
         {
-            CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(cb, state, scenario);
-            cb.Submit();
+            var state = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
+            CommandBufferBenchmarkScenarioFactory.RunMiniSharedScenario(state, scenario);
             iters++;
-
-            // Reset outside GC measurement — do a forced GC to flush any pending allocations
-            // so they don't count against our measurement window
-            CommandBufferBenchmarkScenarioFactory.ResetMiniSharedState(state, scenario);
         }
-        // The Reset's slab return/rent inside the loop still counts toward GC.
-        // To isolate: also count GC with Reset excluded:
         int d0 = GC.CollectionCount(0) - g0, d1 = GC.CollectionCount(1) - g1, d2 = GC.CollectionCount(2) - g2;
         Console.WriteLine($"{scenario,-20} | {"MiniArch",-12} | {iters / sw.Elapsed.TotalSeconds,12:F1} | {$"{d0}/{d1}/{d2}",12}");
     }

@@ -1,52 +1,103 @@
 # MiniArch
 
-MiniArch 是一个聚焦于简单、完整 archetype ECS runtime 的 C# 项目。
+A minimal, high-performance archetype ECS runtime for C#, with built-in support for frame-synchronized multiplayer.
 
-## 先看这里
+## Features
 
-- 完整 API 手册：`src/MiniArch/README.md`
-- 项目知识索引：`.knowledge/INDEX.md`
-- 协作约束：`AGENTS.md`
+- **Archetype ECS** — Simple `World` / `Entity` / `QueryDescription` API with chunk-level iteration
+- **CommandBuffer & CommandStream** — Deferred command recording with per-entity deduplication; CommandStream uses flat byte-stream encoding and is 20–48% faster
+- **FrameDelta + Replay** — Record a frame's changes as a self-contained `FrameDelta`, then replay it on any other `World` to produce identical state. Deterministic entity IDs ensure consistency across machines.
+- **Pipelined Snapshot** — `SubmitAndSnapshotAsync()` runs submit and delta-building in parallel
+- **Clone & Snapshot** — Deep-copy any world with `Clone()` for rollback checkpoints; serialize/deserialize with `WorldSnapshot.Save/Load`
+- **Query filtering** — `With<T>`, `Without<T>`, `WithAny<T>`, `Or<T>` composition
+- **Entity hierarchy** — `Link` / `Unlink` with cascade destroy
+- **GC-friendly** — Zero GC collections during steady-state simulation in all game scenarios
 
-## 仓库结构
+## Quick Start
 
-- `src/MiniArch`：运行时代码与详细 API README
-- `shared/MiniArch.SharedInfrastructure`：跨项目共享的 benchmark/throughput/profiling 基础设施
-- `tests/MiniArch.Tests`：运行时行为测试
-- `tests/HeroPipeline.Tests`：Hero 端到端 pipeline benchmark
-- `benchmarks/MiniArch.Benchmarks`：BenchmarkDotNet 基准
-- `perf/HeroComing.Perf`：架构变更回归门禁（固定时长吞吐量）
-- `perf/GameTickSim.Perf`：三方 ECS 孤立场景对比
-- `perf/FrifloGameScenarios.Perf`：Friflo ECS 同构场景交叉验证
-- `docs/plans`：设计与实现记录
-- `.knowledge`：可复用项目知识
-- `scripts`：build、test、benchmark、verify 脚本入口
-
-## 常用命令
-
-```powershell
-.\scripts\build.ps1
-.\scripts\test.ps1
-.\scripts\verify.ps1
-.\scripts\pack.ps1
+```shell
+dotnet new console
+dotnet add package MiniArch
 ```
 
-## 本地包源
+```csharp
+using MiniArch;
 
-- 本仓库的 NuGet 本地源配置在 `NuGet.config`。
-- `./scripts/pack.ps1` 会把 `MiniArch` 打成带 XML 文档的包，并输出到 `artifacts/nuget`。
-- 之后可以直接让其他项目引用这个本地源来消费最新包。
+// Define components (plain structs)
+readonly record struct Position(int X, int Y);
+readonly record struct Velocity(int X, int Y);
 
-## API 分层
+// Create a world
+var world = new World();
+world.Create(new Position(1, 2), new Velocity(3, 4));
 
-- `MiniArch`：唯一的默认用户入口，公开 `World`、`Entity`、`QueryDescription` 和 description-based `foreach` 查询。
-- `MiniArch.Core`：advanced 类型集合，保留 `Query`、`Chunk`、`CommandBuffer`、`WorldSnapshot`、profiling 等底层能力。
+// Query and iterate
+var desc = new QueryDescription()
+    .With<Position>()
+    .With<Velocity>();
 
-完整 API 参考见 `src/MiniArch/README.md`。
+foreach (var entity in world.Query(in desc))
+{
+    if (world.TryGet(entity, out Position pos) &&
+        world.TryGet(entity, out Velocity vel))
+    {
+        world.Set(entity, new Position(pos.X + vel.X, pos.Y + vel.Y));
+    }
+}
+```
 
-## Agent 入口
+## Frame-Synchronized Multiplayer
 
-1. 读取 `AGENTS.md`。
-2. 读取 `.knowledge/INDEX.md`。
-3. 打开最相关的 `kb-*.md`。
-4. 在宣称完成前运行 `scripts\verify.ps1`。
+MiniArch is the only C# ECS with built-in lockstep support:
+
+```csharp
+// Server: record frame delta
+var buffer = new CommandBuffer(world);
+// ... record all changes ...
+var delta = buffer.Snapshot();   // self-contained delta
+buffer.Submit();                  // apply locally
+
+// Send delta over network...
+
+// Client: replay to get identical state
+replicaWorld.Replay(delta);       // deterministic ID validation
+```
+
+```csharp
+// Rollback support
+var checkpoint = world.Clone();  // deep copy
+// ... predict frames ...
+// Correction received: revert and re-apply
+world = checkpoint.Clone();
+```
+
+## Performance
+
+MiniArch consistently outperforms or matches other C# ECS libraries across a wide range of game scenarios. See [docs/comparison.md](docs/comparison.md) for detailed benchmarks against Arch, Friflo, and DefaultEcs.
+
+| Scenario | MiniArch (Stream) | Friflo | Arch |
+|---|---|---|---|
+| HeroLight (1K chars) | 299,946 ticks/s | 281,817 | — |
+| SteadyCombat (20K actors) | 3,129 ticks/s | 2,762 | — |
+| BulletHell (100K entities) | 14,416 ops/s | 14,058 | 13,057 |
+| MixedLoad (create+query+destroy) | 29,309 ops/s | 24,253 | 23,896 |
+
+## API Layers
+
+- **`MiniArch`** — Minimal user entry: `World`, `Entity`, `QueryDescription`
+- **`MiniArch.Core`** — Advanced types: `Query`, `Chunk`, `CommandBuffer`, `CommandStream`, `FrameDelta`, `WorldSnapshot`
+
+See [docs/README.md](docs/README.md) for full API documentation.
+
+## Project Structure
+
+```
+src/MiniArch/       # Library source
+tests/              # Tests, benchmarks, shared infrastructure
+tools/perf/         # Performance regression & comparison tests
+docs/               # Documentation
+```
+
+## License
+
+[MIT](LICENSE)

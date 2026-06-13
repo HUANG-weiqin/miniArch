@@ -8,7 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\shared\MiniArch.SharedInfrastructure\MiniArch.SharedInfrastructure.csproj" />
+    <ProjectReference Include="..\..\..\tests\SharedInfrastructure\MiniArch.SharedInfrastructure\MiniArch.SharedInfrastructure.csproj" />
   </ItemGroup>
 
 </Project>

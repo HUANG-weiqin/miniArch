@@ -13,7 +13,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\MiniArch\MiniArch.csproj" />
-    <ProjectReference Include="..\..\shared\MiniArch.SharedInfrastructure\MiniArch.SharedInfrastructure.csproj" />
+    <ProjectReference Include="..\SharedInfrastructure\MiniArch.SharedInfrastructure\MiniArch.SharedInfrastructure.csproj" />
   </ItemGroup>
 
 </Project>

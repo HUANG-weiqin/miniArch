@@ -8,12 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Arch" Version="2.1.0" />
-    <PackageReference Include="Friflo.Engine.ECS" Version="3.6.0" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\..\src\MiniArch\MiniArch.csproj" />
+    <ProjectReference Include="..\..\..\tests\SharedInfrastructure\MiniArch.SharedInfrastructure\MiniArch.SharedInfrastructure.csproj" />
   </ItemGroup>
 
 </Project>
