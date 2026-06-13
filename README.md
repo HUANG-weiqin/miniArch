@@ -113,6 +113,8 @@ Around this core, there's a collection of targeted optimizations: 512-bit archet
 
 Each one individually is a minor win. Together, they're why MiniArch sustains zero GC and beats production ECS libraries across 7/12 game scenarios.
 
+**Capacity:** Single `byte[]` per archetype supports up to ~67M entities (2 GB .NET array limit, ~32 bytes/component). Entity array (`Entity[]`) reaches ~268M entries. Doubling growth means 19 reallocations from 128 to 67M — amortized O(1) per create. The bottleneck is physical RAM, not the data structure.
+
 ## Features
 
 - **Archetype ECS** — `World` / `Entity` / `QueryDescription` with chunk-level iteration
