@@ -225,14 +225,24 @@ internal sealed partial class Archetype
             return row != last;
         }
 
-        var lastSeg = _segments[_segmentCount - 1];
-        var lastLocalRow = lastSeg.Count - 1;
-        var lastGlobalRow = _segmentOffsets[_segmentCount - 1] + lastLocalRow;
+        var lastSegIdx = _segmentCount - 1;
+        while (lastSegIdx >= 0 && _segments[lastSegIdx].Count == 0)
+            lastSegIdx--;
+        if (lastSegIdx < 0)
+        {
+            movedEntity = default;
+            _count--;
+            return false;
+        }
+
+        var lastSegCount = _segments[lastSegIdx].Count;
+        var lastLocalRow = lastSegCount - 1;
+        var lastGlobalRow = _segmentOffsets[lastSegIdx] + lastLocalRow;
 
         if (row == lastGlobalRow)
         {
-            lastSeg.Entities[lastLocalRow] = default;
-            lastSeg.Count--;
+            _segments[lastSegIdx].Entities[lastLocalRow] = default;
+            _segments[lastSegIdx].Count--;
             _count--;
             movedEntity = default;
             return false;
@@ -240,12 +250,12 @@ internal sealed partial class Archetype
 
         var (delSegIdx, delLocalRow) = GetSegmentAndLocal(row);
 
-        movedEntity = _segments[_segmentCount - 1].Entities[lastLocalRow];
-        CopySegmentColumn(_segmentCount - 1, lastLocalRow, delSegIdx, delLocalRow);
+        movedEntity = _segments[lastSegIdx].Entities[lastLocalRow];
+        CopySegmentColumn(lastSegIdx, lastLocalRow, delSegIdx, delLocalRow);
 
         _segments[delSegIdx].Entities[delLocalRow] = movedEntity;
-        _segments[_segmentCount - 1].Entities[lastLocalRow] = default;
-        _segments[_segmentCount - 1].Count--;
+        _segments[lastSegIdx].Entities[lastLocalRow] = default;
+        _segments[lastSegIdx].Count--;
         _count--;
         return true;
     }
