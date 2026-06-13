@@ -1,3 +1,4 @@
+using System;
 using System.Runtime.CompilerServices;
 
 namespace MiniArch.Core;
@@ -9,7 +10,7 @@ namespace MiniArch.Core;
 /// <see cref="HasB1"/>–<see cref="HasB7"/> is true,
 /// so zero cost for the unused bit ranges.
 /// </summary>
-internal readonly struct ComponentMask
+internal readonly struct ComponentMask : IEquatable<ComponentMask>
 {
     /// <summary>Bits 0..63.</summary>
     public readonly ulong B0;
@@ -40,6 +41,16 @@ internal readonly struct ComponentMask
     public bool IsZero() =>
         B0 == 0 && B1 == 0 && B2 == 0 && B3 == 0 &&
         B4 == 0 && B5 == 0 && B6 == 0 && B7 == 0;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool Equals(ComponentMask other) =>
+        B0 == other.B0 && B1 == other.B1 && B2 == other.B2 && B3 == other.B3 &&
+        B4 == other.B4 && B5 == other.B5 && B6 == other.B6 && B7 == other.B7;
+
+    public override bool Equals(object? obj) => obj is ComponentMask other && Equals(other);
+
+    public override int GetHashCode() =>
+        unchecked((int)(B0 ^ B1 ^ B2 ^ B3 ^ B4 ^ B5 ^ B6 ^ B7));
 
     public bool HasB1 { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => B1 != 0; }
     public bool HasB2 { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => B2 != 0; }
