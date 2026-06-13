@@ -1108,15 +1108,6 @@ public sealed class CommandStream : ICommandRecorder
         for (var i = 0; i < _stores.Length; i++)
             _stores[i]?.Clear();
 
-        // Clear pending batch tracking
-        for (var i = _pendingBatchMin; i < _pendingBatchMax && i < _pendingBatch.Length; i++)
-            _pendingBatch[i] = -1;
-        // Disconnect all linked lists and reset counts (nodes remain in pool, overwritten next frame)
-        for (var i = 0; i < _pendingBatchCount; i++)
-        {
-            _batchHeads[i] = -1;
-            _batchCompCounts[i] = 0;
-        }
         _pendingBatchCount = 0;
         _pendingBatchMin = int.MaxValue;
         _pendingBatchMax = 0;

@@ -513,7 +513,7 @@ public sealed partial class World : IDisposable
         for (var index = 0; index < components.Length; index++)
         {
             ref readonly var component = ref components[index];
-            var columnIndex = archetype.GetComponentIndex(component.ComponentType);
+            var columnIndex = archetype.GetComponentIndexFast(component.ComponentType);
             fixed (byte* ptr = component.Data)
             {
                 archetype.WriteComponentRaw(columnIndex, rowIndex, ptr + component.DataOffset);
@@ -538,7 +538,7 @@ public sealed partial class World : IDisposable
 
         for (var i = 0; i < types.Length; i++)
         {
-            var colIdx = archetype.GetComponentIndex(types[i]);
+            var colIdx = archetype.GetComponentIndexFast(types[i]);
             archetype.WriteComponentRaw(colIdx, rowIndex, buffer + offsets[i]);
         }
     }
@@ -559,7 +559,7 @@ public sealed partial class World : IDisposable
         for (var index = 0; index < components.Length; index++)
         {
             ref readonly var cc = ref components[index];
-            var columnIndex = archetype.GetComponentIndex(componentTypes[index]);
+            var columnIndex = archetype.GetComponentIndexFast(componentTypes[index]);
             var data = slabs[cc.SlabIndex];
             fixed (byte* ptr = data)
             {
@@ -582,7 +582,7 @@ public sealed partial class World : IDisposable
         for (var index = 0; index < components.Count; index++)
         {
             var component = components[index];
-            var columnIndex = archetype.GetComponentIndex(component.ComponentType);
+            var columnIndex = archetype.GetComponentIndexFast(component.ComponentType);
             unsafe
             {
                 fixed (byte* ptr = component.Data)
