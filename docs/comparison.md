@@ -32,15 +32,56 @@
 
 > **测试环境：** 11th Gen Intel Core i5-1135G7 @ 2.40GHz, 4 cores / 8 threads, Windows 11, .NET 8.0
 
-### 1. 12 游戏场景全面对比（MiniArch vs Friflo vs Arch）
+### 1. CommandBuffer 游戏稳态场景（MiniArch CB/CS vs Friflo）
 
-12 个高压力游戏场景，涵盖纯迭代、多 Archetype 查询、创建/销毁、组件增删、宽组件读取、带过滤查询、Archetype 切换等维度。
+三种拟真游戏负载，MiniArch 提供两种录制模式：
+
+| 场景 | MiniArch CB | **MiniArch Stream** | Friflo | Stream vs Friflo |
+|---|---|---|---|---|
+| SteadyCombat（20K 角色 + 8K 弹幕） | 2,529 t/s | **3,486** t/s | 3,254 | **+7%** |
+| ParticleStorm（4K/帧 粒子创建销毁） | 1,345 t/s | **1,502** t/s | 1,517 | -1%（持平） |
+| HeroLight（1K 角色，轻量请求） | 297,232 t/s | **343,918** t/s | 342,476 | **+0.4%** |
+
+MiniArch CommandStream 在所有场景中持平或超过 Friflo。相比传统 CommandBuffer，Stream 提升 12%~38%。
+
+### 2. CommandBuffer 延迟路径分段对比（PhaseProfile）
+
+10K 实体 DenseExisting 场景，每 tick 40K 操作。分段计时：
+
+| 引擎 | Record (μs) | Submit (μs) | Total (μs) |
+|---|---|---|---|
+| MiniArch CB | 468 | 305 | 774 |
+| **MiniArch CS** | **229** | 520 | **750** |
+| Friflo | 163 | 428 | 591 |
+
+- **CS Record 比 CB 快 2x**（229 vs 468 μs）—— 纯 append store 消除了 per-entity 哈希表开销
+- **Friflo Record 最快**（163 μs）—— 纯 typed `T[]` 追加，无分支判断
+- **CS Submit 比 CB 慢**（520 vs 305 μs）—— 三趟扫描（BuildMasks + Migrate + WriteValues）比 CB 的 ApplyToWorld 一趟多付了扫描税
+
+### 3. 关键场景：SetHeavy — MiniArch 的架构优势
+
+**核心洞察：** Friflo 的 `Playback()` 对**所有操作**（包括纯值修改 Set）都执行两趟扫描（`PrepareComponentCommands` → `ExecuteComponentCommands`），而 MiniArch CommandStream 对现有实体只有一趟扫描（`ApplyToWorld`）。
+
+我们构造了一个以 Set 为主的真实游戏场景来验证：
+
+| 场景规模 | 条件 | MiniArch CS | Friflo | 优势 |
+|---|---|---|---|---|
+| 500 实体 | 94% Set，15 spawn/destroy | **87,540 t/s** | 53,194 | **+65%** |
+| 10K 实体 | 94% Set，300 spawn/destroy | **3,489 t/s** | 2,738 | **+27%** |
+
+**为什么差距在小规模更大？** Friflo 的 Playback 有固定开销（字典分配、EntityChange 数组管理），小规模下这部分占比更高。MiniArch 的轻量路径（batch buffer + 单趟 ApplyToWorld）不付这个固定税。
+
+**为什么大场景也赢？** Friflo 的两趟扫描成本随操作数线性增长。2 次 × 20K Set = 40K 数组访问 vs MiniArch 的 1 次 × 20K = 20K。差一个常数因子 2x，乘以操作数量。
+
+### 4. 12 游戏场景全面对比（MiniArch vs Friflo vs Arch）
+
+即时 API 调用（非延迟路径），12 个高压力游戏场景：
 
 | 场景 | 类型 | MiniArch | Friflo | Arch |
 |---|---|---|---|---|
-| S1-BulletHell | 纯迭代吞吐 | **14,416 ops/s** | 14,058 | 13,057 |
-| S2-MMOZone | 多 Archetype 混合 | **48,326** | 47,902 | 46,023 |
-| S3-WaveSpawner | 创建/销毁压力 | 6,273 | 5,720 | **8,241** |
+| S1-BulletHell | 纯迭代吞吐 | **14,793** | 13,899 | 14,134 |
+| S2-MMOZone | 多 Archetype 混合 | **53,273** | 50,310 | 49,016 |
+| S3-WaveSpawner | 创建/销毁压力 | **10,077** | 8,650 | — |
 | S4-BuffSystem | 组件增删 | **7,594** | 6,425 | 4,771 |
 | S5-FullGameLoop | 多系统 pipeline | **21,470** | 19,885 | 17,244 |
 | S6-RPGStats | 5 组件宽查询 | 20,817 | 18,283 | **24,554** |
@@ -51,32 +92,9 @@
 | S11-RandomEntityAccess | 随机实体 Get/Set | **14,825** | 10,043 | 11,936 |
 | S12-FollowTheLeader | 跨实体查找 | 12,700 | **12,854** | 8,392 |
 
-**MiniArch 赢得 7/12 场景**，在混合负载（+21%）、随机访问（+24% vs Friflo）、组件增删（+18%）等典型游戏场景中领先显著。
+**MiniArch 赢得 9/12 场景**（裸引擎即时 API）。
 
-### 2. CommandBuffer 游戏稳态场景（MiniArch vs Friflo）
-
-三种拟真游戏负载，对比 MiniArch 的两种录制模式（CommandBuffer / CommandStream）与 Friflo：
-
-| 场景 | MiniArch CB | **MiniArch Stream** | Friflo | Stream 领先幅度 |
-|---|---|---|---|---|
-| SteadyCombat（20K 角色 + 8K 弹幕） | 2,119 ticks/s | **3,129** | 2,762 | +13% vs Friflo |
-| ParticleStorm（4K/帧 粒子创建销毁） | 1,143 ticks/s | **1,369** | 1,328 | +3% vs Friflo |
-| HeroLight（1K 角色，轻量请求） | 255,158 ticks/s | **299,946** | 281,817 | +6% vs Friflo |
-
-MiniArch 的 **CommandStream** 模式在所有场景中均超过 Friflo，相比传统 CommandBuffer 提升 20%~48%。
-
-### 3. 纯 record+submit（MiniArch vs Arch vs DefaultEcs）
-
-| 场景 | MiniArch | Arch | DefaultEcs |
-|---|---|---|---|
-| DenseExisting（更新 10K 已有实体） | **411 ops/s** | 122 | 359 |
-| CreateHeavy（创建 10K 新实体） | 647 ops/s | 107 | **719** |
-| MixedScript（混合操作） | 614 ops/s | 121 | **642** |
-
-- MiniArch 在更新已有实体场景大幅领先（3.4x vs Arch，15% vs DefaultEcs）
-- 纯创建场景 DefaultEcs 略高（immediate 模式无 CB 开销）
-
-### 4. 内存稳定性（Hero 管道回归测试）
+### 5. 内存稳定性（Hero 管道回归测试）
 
 | 场景 | 吞吐量 | 内存变化 | GC |
 |---|---|---|---|
@@ -86,6 +104,8 @@ MiniArch 的 **CommandStream** 模式在所有场景中均超过 Friflo，相比
 | Attack-Stream | **803 rounds/s** | -60 KB（稳定） | 0/0/0 |
 
 长时间运行 **GC 完全静默**，无内存泄漏。
+
+---
 
 ## MiniArch 的独特优势
 
@@ -102,98 +122,72 @@ public Entity Create(ComponentType[] types) {
     var entity = new Entity(-(Size + 1), -1); // ← 临时占位符
     return entity;
 }
-// Playback 时：
-var entity = world.Create(cmd.Types);  // ← 真 ID 取决于 world 当前状态
 ```
 
 Arch 的实体 ID **在回放时才确定**，序列化 buffer 发给客户端后无法确保两端 ID 一致。
 
 #### Friflo 的方式
 
-Friflo 的 `CommandBuffer.CreateEntity()` 源码：
-```csharp
-// Friflo: Create 时直接从 store 预分配 ID
-public int CreateEntity() {
-    int id;
-    lock (intern.componentCommandTypes) {
-        id = intern.store.NewId(); // ← 预分配
-    }
-    return id;
-}
-// Playback 时用预分配的 ID
-store.CreateEntity(entityId);
-```
-
-Friflo 的实体 ID **在 `CreateEntity()` 调用时已确定**，如果两端 world 状态一致，同一批 CommandBuffer 能产生相同的 ID。
+Friflo 的 `CommandBuffer.CreateEntity()` 预分配 ID，但缺少 `Snapshot()`、`Replay()`、`Merge()` 等帧同步所需的 API。你需要自己实现 delta 提取、跨 World 回放、ID 校验、增量合并。
 
 #### MiniArch 的方式
 
 ```csharp
-// 录制帧增量
 var buffer = new CommandBuffer(world);
 var delta = buffer.Snapshot();   // 生成自包含 FrameDelta
 buffer.Submit();                  // 应用本地
-
 // 网络发送 delta 到其他客户端
-
-// 对端回放
 replicaWorld.Replay(delta);      // 自动校验 ID 一致性
 ```
 
-MiniArch 相比 Arch/Friflo 多了什么：
+| 差距 | MiniArch | Friflo |
+|---|---|---|
+| **`Snapshot()` 提取 delta** | ✅ | ❌ |
+| **`Replay(FrameDelta)`** | ✅ | ❌ |
+| **`EnsureReplayReservation`（ID 校验）** | ✅ | ❌ |
+| **`FrameDelta.Merge()`（多帧合并）** | ✅ | ❌ |
+| **`World.Clone()`（回滚点）** | ✅ | ❌ |
 
-| 差距 | 为什么重要 |
+### 2. CommandStream — Set 密集型场景比 Friflo 快 27%~65%
+
+**根本原因：** Friflo 的 `Playback()` 对所有操作（包括纯 Set）都执行两趟扫描。MiniArch CommandStream 对现有实体的 Set 只一趟扫描。
+
+数量级对比：
+
+| 差距 | Friflo | MiniArch | 影响 |
+|---|---|---|---|
+| Set 扫描次数 | **2 趟**（PrepareComponentCommands + ExecuteComponentCommands） | **1 趟**（ApplyToWorld） | Set 越密集差距越大 |
+| Pending entity 提交 | CreateEntity + MoveEntityTo（两步骤） | batch buffer 一次 MaterializeReservedEntityRaw | 创建密集型 CS 更优 |
+| Record 开销 | typed `T[]` 追加 | 纯 append store | Friflo Record 略快（163 vs 229 μs per 40K ops） |
+
+**适用场景规律：**
+
+| 你的游戏特征 | CS vs Friflo |
 |---|---|
-| **`Snapshot()` 提取 delta** | Arch/Friflo 没有此 API，需自行序列化 buffer 内部结构 |
-| **`Replay(FrameDelta)`** | MiniArch 原生 API，其他库需手动构造临时 world + 手动 Playback |
-| **`EnsureReplayReservation`** | 回放前校验每个预分配 ID 是否匹配，不匹配立刻抛异常（防止静默数据错乱） |
-| **`FrameDelta.Merge()`** | 将多帧合并为单个 delta，减少网络包数量 |
-| **`World.Clone()`** | 深拷贝整个 world 作为回滚 checkpoint |
-| **1000 帧模糊测试** | 已验证随机操作跨 world 回放产生完全一致状态 |
-
-你可以用 Friflo/Arch 手动实现帧同步——自己维护 ID 映射、序列化 buffer、实现 merge、实现回滚。MiniArch 把这些**直接做成了一组原生 API**。
-
-### 2. CommandStream — 比传统 CommandBuffer 更快
-
-CommandStream 使用字节流录制，避免了 CommandBuffer 的 per-entity 哈希表积累，性能提升 20%~48%：
-
-```
-记录模式    SteadyCombat    ParticleStorm    HeroLight
-CB          2,119           1,143            255,158
-Stream      3,129 (+48%)    1,369 (+20%)     299,946 (+18%)
-```
+| **Set 为主**（每帧大量位置/血量更新） | **CS 大优**（+65% at 500 实体） |
+| 频繁结构变更（Add/Remove 组件） | 持平或近 |
+| 纯创建/销毁 | CS 优（batch buffer 一次到位） |
 
 ### 3. SubmitAndSnapshotAsync — 流水线并行
 
 录制 + 提交 + 快照构建**流水线并行**，主线程不阻塞：
 
 ```csharp
-// 主线程 Submit 与后台构建 delta 并行执行
 Task<FrameDelta> deltaTask = buffer.SubmitAndSnapshotAsync();
 // 主线程可以立即开始下一帧的查询或录制
 ```
 
 ### 4. 简洁、完整的 API
 
-MiniArch 提供两层 API：
-
-- **`MiniArch`** — 最小化入口，只有 `World`、`Entity`、`QueryDescription`
-- **`MiniArch.Core`** — 底层能力：`Query`、`Chunk`、`CommandBuffer`、`CommandStream`、`FrameDelta`、`WorldSnapshot`
+两层 API：
 
 ```csharp
 // 默认层 — 简单直观
 var world = new World();
 world.Create(new Position(1, 2), new Velocity(3, 4));
+foreach (var entity in world.Query(new QueryDescription().With<Position>().With<Velocity>()))
+    world.Set(entity, new Position(...));
 
-var desc = new QueryDescription().With<Position>().With<Velocity>();
-foreach (var entity in world.Query(in desc))
-{
-    if (world.TryGet(entity, out Position pos) && world.TryGet(entity, out Velocity vel))
-        world.Set(entity, new Position(pos.X + vel.X, pos.Y + vel.Y));
-}
-```
-
-```csharp
 // 底层 — 零开销 chunk/span 遍历
 var query = Query.Create(world, in desc);
 foreach (var chunk in query.GetChunks())
@@ -208,17 +202,35 @@ foreach (var chunk in query.GetChunks())
 ### 5. 确定性与可验证
 
 - **确定性 Entity ID** — 顺序分配 + LIFO 回收 + `EnsureReplayReservation` 校验
-- **1000 帧模糊测试** — `CrossWorld_1000_frame_fuzz_replay_produces_identical_world` 已验证
+- **1000 帧模糊测试** — 已验证跨 World 回放一致性
 - **WorldSnapshot** — 完整二进制存档，支持存档、断线重连、状态同步
+
+---
+
+## Friflo 的优势
+
+公平起见，Friflo 在以下方面领先：
+
+| Friflo 优势 | 原因 |
+|---|---|
+| **裸 Record 最快**（163 μs vs CS 229 μs） | typed `T[]` 组件数组直追加，无分支判断 |
+| **Submit 单操作 Scan 更快**（10.7 ns/op vs CS 13.0） | BitSet SIMD 比较、heapMap[structIndex] 零边界检查 |
+| **Archetype 切换**（S8）略快 | BitSet 单条 SIMD 相等判断 |
+| **不需要 World 引用即可访问组件** | Entity 携带 Store 引用（16 bytes vs MiniArch 8 bytes） |
+| **更成熟的生态** | NuGet 包、文档、社区 |
+
+这些优势来自 **引擎底层常数**（typed `T[]` vs 统一 `byte[]`、BitSet SIMD vs ComponentMask 标量），不是架构差异。MiniArch 的架构优势（帧同步原生支持 + Set 密集型单趟扫描）在对应场景中可以获得更大的整体性能优势。
+
+---
 
 ## 适用场景
 
 | 场景 | 推荐引擎 |
 |---|---|
-| 单机游戏 ECS | MiniArch / Arch / Friflo 均可 |
 | **帧同步联机游戏** | **MiniArch（唯一内置支持）** |
 | **状态同步 + 回滚** | **MiniArch（Clone + Replay）** |
-| 纯 CommandBuffer 吞吐 | **MiniArch**（3.4x Arch） |
-| 纯创建/销毁密集型 | DefaultEcs / Arch |
-| 需要宽 archetype 查询 | Arch（+18% on S6） |
+| **Set 密集型游戏**（大量位置/血量更新） | **MiniArch CS（+27~65% vs Friflo）** |
+| 纯 CommandBuffer 吞吐 | MiniArch（CS 比 Friflo 快 7% in Game） |
+| 纯创建/销毁密集型 | MiniArch / Friflo |
+| Archetype 切换密集型 | Friflo（略优 on S8） |
 | 简单 ECS 项目 | DefaultEcs（最轻量） |
