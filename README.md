@@ -48,6 +48,18 @@ foreach (var entity in world.Query(in desc))
 
 ## Frame-Synchronized Multiplayer — Built-in
 
+Other ECS libraries have `CommandBuffer`, but frame sync needs more than that:
+
+| Gap | Arch | Friflo | MiniArch |
+|---|---|---|---|
+| `Create()` ID 分配时机 | **回放时**（负 ID 占位符） | 调用时（预分配） | 调用时（预分配） |
+| **`Snapshot()` → 可序列化 delta** | ❌ | ❌ | ✅ |
+| **`Replay(FrameDelta)`** | ❌ | ❌ | ✅ |
+| **Replay 时 ID 一致性校验** | ❌ | ❌ | ✅ |
+| **多帧合并 `Merge()`** | ❌ | ❌ | ✅ |
+| **`World.Clone()` 回滚点** | ❌ | ❌ | ✅ |
+| **跨 World 重放测试** | ❌ | ❌ | ✅ 1000帧模糊测试 |
+
 ```csharp
 // Record a frame's changes as a self-contained delta
 var buffer = new CommandBuffer(world);
@@ -58,10 +70,8 @@ buffer.Submit();                   // apply locally
 // Send delta over network...
 
 // Any client replays to produce identical state
-replicaWorld.Replay(delta);       // deterministic entity ID validation
-```
+replicaWorld.Replay(delta);       // ensure replay reservation + ID validation
 
-```csharp
 // Rollback: save checkpoint, predict, revert on correction
 var checkpoint = world.Clone();   // deep copy with hierarchy
 // ... predict frames ...

@@ -5,23 +5,26 @@
 ## 功能矩阵
 
 | 功能 | MiniArch | Arch | Friflo | DefaultEcs |
-|---|---|---|---|---|
+|---|---|---|---|---|---|
 | Archetype ECS | ✅ | ✅ | ✅ | ✅ (混合) |
 | Chunk 级迭代 | ✅ | ✅ | ✅ | ❌ |
 | Query With/Without | ✅ | ✅ | ✅ | ✅ |
-| Query WithAny/Or | ✅ | ❌ | ✅ | ❌ |
+| Query WithAny | ✅ | ❌ | ✅ | ❌ |
 | CommandBuffer | ✅ | ✅ | ✅ | ❌ |
-| **CommandStream**（字节流录制） | ✅ **独有** | ❌ | ❌ | ❌ |
-| **FrameDelta（帧增量）** | ✅ **独有** | ❌ | ❌ | ❌ |
-| **World.Replay(FrameDelta)** | ✅ **独有** | ❌ | ❌ | ❌ |
-| **FrameDelta.Merge()**（增量合并） | ✅ **独有** | ❌ | ❌ | ❌ |
-| **Clone**（深拷贝） | ✅ | ❌ | ❌ | ❌ |
-| **WorldSnapshot**（二进制序列化） | ✅ | ❌ | ❌ | ❌ |
-| **SubmitAndSnapshotAsync**（流水线） | ✅ **独有** | ❌ | ❌ | ❌ |
-| Entity 层次（Link/Unlink） | ✅ | ❌ | ✅ | ❌ |
-| 确定性 Entity ID | ✅ | ❌ | ❌ | ❌ |
-| 多帧跨 World 重放验证 | ✅ **独有** | ❌ | ❌ | ❌ |
 | Ref 返回组件访问 | ✅ | ✅ | ❌（值拷贝） | ❌ |
+| Entity 层次（Link/Unlink） | ✅ | ❌ | ✅ | ❌ |
+| **帧同步（Lockstep）专属** | | | | |
+| **FrameDelta（帧增量）** | ✅ **独有** | ❌ | ❌ | ❌ |
+| **Snapshot() 提取可序列化增量** | ✅ **独有** | ❌ | ❌ | ❌ |
+| **World.Replay(FrameDelta)** | ✅ **独有** | ❌ | ❌ | ❌ |
+| **Replay 时 ID 一致性校验** | ✅ **独有** | ❌ | ❌ | ❌ |
+| **FrameDelta.Merge()（增量合并）** | ✅ **独有** | ❌ | ❌ | ❌ |
+| **World.Clone() 回滚点** | ✅ **独有** | ❌ | ❌ | ❌ |
+| **WorldSnapshot（二进制序列化）** | ✅ | ❌ | ❌ | ❌ |
+| **SubmitAndSnapshotAsync（流水线）** | ✅ **独有** | ❌ | ❌ | ❌ |
+| **多帧跨 World 模糊重放测试** | ✅ **独有** | ❌ | ❌ | ❌ |
+| **性能** | | | | |
+| **CommandStream**（字节流录制） | ✅ **独有** | ❌ | ❌ | ❌ |
 
 ## 基准测试（公平对比）
 
@@ -84,38 +87,69 @@ MiniArch 的 **CommandStream** 模式在所有场景中均超过 Friflo，相比
 
 ## MiniArch 的独特优势
 
-### 1. 帧同步（Lockstep）原生支持 — 独有
+### 1. 帧同步（Lockstep）原生支持
 
-MiniArch 是**唯一**内置帧同步基础设施的 C# ECS 库：
+帧同步的核心需求：服务端录制一帧的变更 → 序列化发送客户端 → 客户端回放产生完全一致的状态。
+
+#### Arch 的方式
+
+Arch 的 `CommandBuffer.Create()` 源码：
+```csharp
+// Arch: Create 时返回负 ID 占位符，Playback 时才分配真 ID
+public Entity Create(ComponentType[] types) {
+    var entity = new Entity(-(Size + 1), -1); // ← 临时占位符
+    return entity;
+}
+// Playback 时：
+var entity = world.Create(cmd.Types);  // ← 真 ID 取决于 world 当前状态
+```
+
+Arch 的实体 ID **在回放时才确定**，序列化 buffer 发给客户端后无法确保两端 ID 一致。
+
+#### Friflo 的方式
+
+Friflo 的 `CommandBuffer.CreateEntity()` 源码：
+```csharp
+// Friflo: Create 时直接从 store 预分配 ID
+public int CreateEntity() {
+    int id;
+    lock (intern.componentCommandTypes) {
+        id = intern.store.NewId(); // ← 预分配
+    }
+    return id;
+}
+// Playback 时用预分配的 ID
+store.CreateEntity(entityId);
+```
+
+Friflo 的实体 ID **在 `CreateEntity()` 调用时已确定**，如果两端 world 状态一致，同一批 CommandBuffer 能产生相同的 ID。
+
+#### MiniArch 的方式
 
 ```csharp
 // 录制帧增量
 var buffer = new CommandBuffer(world);
-// ... 录制所有变更 ...
-var delta = buffer.Snapshot();          // 生成自包含增量
-buffer.Submit();                         // 应用本地
+var delta = buffer.Snapshot();   // 生成自包含 FrameDelta
+buffer.Submit();                  // 应用本地
 
 // 网络发送 delta 到其他客户端
 
-// 对端回放，产生完全一致的状态
-replicaWorld.Replay(delta);              // 确定性 ID 校验
+// 对端回放
+replicaWorld.Replay(delta);      // 自动校验 ID 一致性
 ```
 
-```csharp
-// 多帧合并，优化网络传输
-var merged = FrameDelta.Merge(frame1, frame2);
-```
+MiniArch 相比 Arch/Friflo 多了什么：
 
-```csharp
-// 回滚 checkpoint
-var checkpoint = world.Clone();          // 深拷贝（含 hierarchy）
-// ... 执行预测帧 ...
-// 收到服务器确认 → 丢弃预测状态
-// 收到回滚 → 从 checkpoint 重新应用
-world = checkpoint.Clone();
-```
+| 差距 | 为什么重要 |
+|---|---|
+| **`Snapshot()` 提取 delta** | Arch/Friflo 没有此 API，需自行序列化 buffer 内部结构 |
+| **`Replay(FrameDelta)`** | MiniArch 原生 API，其他库需手动构造临时 world + 手动 Playback |
+| **`EnsureReplayReservation`** | 回放前校验每个预分配 ID 是否匹配，不匹配立刻抛异常（防止静默数据错乱） |
+| **`FrameDelta.Merge()`** | 将多帧合并为单个 delta，减少网络包数量 |
+| **`World.Clone()`** | 深拷贝整个 world 作为回滚 checkpoint |
+| **1000 帧模糊测试** | 已验证随机操作跨 world 回放产生完全一致状态 |
 
-确定性 Entity ID 分配 + `EnsureReplayReservation` 校验，确保多端状态一致。
+你可以用 Friflo/Arch 手动实现帧同步——自己维护 ID 映射、序列化 buffer、实现 merge、实现回滚。MiniArch 把这些**直接做成了一组原生 API**。
 
 ### 2. CommandStream — 比传统 CommandBuffer 更快
 
