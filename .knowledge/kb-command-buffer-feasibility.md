@@ -2,7 +2,7 @@
 title: Command Buffer Runtime
 module: MiniArch.Core CommandBuffer
 description: CommandBuffer safety-first per-entity deduplicating recorder plus CommandStream typed-store expert mode, both compatible with FrameDelta
-updated: 2026-06-14 (FrameDelta 决定性测试套件落地；新增 lockstep 约束与缺口说明)
+updated: 2026-06-14 (新增 FrameDelta 序列化压缩方案；记录 Merge + id 回收导致 allocator 分叉的 bug)
 ---
 # Command Buffer Runtime
 
@@ -190,7 +190,7 @@ HeroPipeline 回归测试涨幅：
 
 ### 帧同步尚缺的三块
 
-1. **序列化**：FrameDelta 全是 `List<>` + `record struct`，没有 `Serialize(Span<byte>)`。上不了网。头号阻塞。
+1. **序列化**：FrameDelta 全是 `List<>` + `record struct`，没有 `Serialize(Span<byte>)`。详见下方"FrameDelta 序列化压缩方案"。头号阻塞。
 2. **State checksum**：无需新 API。`WorldSnapshot.Save` 输出的字节流可以直接喂给 SHA256/XXHash64 做决定性 hash——前提是两个 world 走过相同的 delta 历史（lockstep 标准用法）。测试中 `HashWorld(World)` 已实现此模式（`tests/MiniArch.Tests/Core/FrameDeltaDeterminismTests.cs`）。**注意**：Save 的字节依赖 archetype 创建顺序和 swap-remove 历史，因此只在"同 delta 序列"场景下稳定；不做"逻辑等价但路径不同"的规范化（YAGNI）。
 3. **Divergent peer resync**：`EnsureReplayReservation` 抛异常而非尝试对齐。对抗性 netcode 需要 snapshot diff + 重放补救。
 
@@ -198,6 +198,55 @@ HeroPipeline 回归测试涨幅：
 
 - **Submit 与 Replay 命令顺序不一致**（已记录在坑点）：纯 lockstep 模式（只用 Replay）不受影响，但禁止同帧内某些 peer 用 Submit、另一些用 Replay。
 - Replay 期间 query layout generation 抑制是一次性的，超大 delta 或分片重放可能触发额外失效。
+
+### Merge + id 回收导致 allocator 分叉（BUG，未修复）
+
+`FrameDelta.Merge` 把多帧 delta 折叠成一个。当原始帧序列中存在 **跨帧 entity id 回收** 时，合并后的 delta 导致 target replay 时 id allocator 与 source 分叉。
+
+**复现场景：**
+- Frame 1：`Create A` → A=(0,v1)
+- Frame 2：`Destroy A` → free=[(0,v2)]
+- Frame 3：`Create B` → 回收 id=0，B=(0,v2)
+
+逐帧 replay 没问题（`EnsureReplayReservation` 检测到 B 在 free list 中，走 `ReserveDeferredEntity` 正常 pop 回收）。Merge 后：
+
+```
+ProcessCommandsInto → A: IsCreated + IsDestroyed
+                       B: IsCreated(存活)
+
+RebuildFromState:244 → A 命中 IsCreated && IsDestroyed，
+                       折叠为 ReservedEntities+=A, ReleasedEntities+=A
+```
+
+合并后 delta 的 `ReplayCore` 处理顺序是 **全部 Reserve → 全部 Release → 全部 Create**：
+
+1. Reserve A=(0,v1)：`ReserveDeferredEntity` 分配 id=0，`_records[0]={v=1, Arch=null}`。
+2. Reserve B=(0,v2)：id=0<slotCount、!IsOccupied、Version=1≠2、不在 free list → fall through 重新分配 id=1 → `reserved≠entity` → **抛 out-of-sync 异常**。
+
+**更阴的变体（纯 reserve+release 被静默丢弃）：**
+- Frame 1：`Reserve X` → X=(0,v1)（无 create）
+- Frame 2：`Release X`
+
+Merge 命中 `RebuildFromState:251` 的 `if (IsReserved && IsReleased && !Created && !Destroyed) continue` → **X 被整个丢弃**。
+Source 走 Submit 后 `free=[(0,v2)]`，target replay 合并 delta 后 `free=[]`。后续帧 create 必然分叉——**不出异常，静默错误**。
+
+**根因：**
+`FrameDelta` 的分段结构（同类命令聚成一段）＋ `ReplayCore` 的批处理顺序（全部 Reserve 后才 Release）→ 丢失了 `reserve A → release A → reserve B 回收 A 的 id` 这种**时序依赖**。逐帧 replay 时每个 delta 太小不会触发，Merge 把多帧拍成一个 delta 就暴露了。
+
+**影响：**
+
+| 用法 | 受影响 |
+|---|---|
+| 逐帧 lockstep（每帧一个 delta） | 安全 |
+| 存档/回放（从 frame 0 逐帧 replay） | 安全 |
+| **Merge 后网络同步**（带宽优化合并多帧） | **会炸** |
+| 单帧内 create+destroy+create 同 id | 也会炸，但 CommandBuffer 录制时语义本就不清 |
+
+**建议措施：**
+1. **文档化约束**：Merge 仅用于"无生灭折叠"的 delta 序列（纯 add/set/link）。
+2. **运行时检测**：Merge 前扫描 source deltas，若检测到跨帧 id 回收，退化成不合并或抛错。
+3. **长期方案**：改 FrameDelta 为时序流（单条命令带 tag），Merge 只 append，Replay 按序处理——但破坏现有分段结构，影响性能。
+4. 第 1+2 条优先，等出现真实带宽瓶颈再考虑 3。
 
 ### `WorldFingerprint` 模式（已删除）
 
@@ -207,4 +256,77 @@ HeroPipeline 回归测试涨幅：
 - Hash 模式直接复用 Save 序列化路径，零新 API，未来还可以喂给网络同步用
 
 hash 失败时只在 message 里打印 stats（entityCount / archetypeCount / hash 前 16 位）做定位起点，详细差异用调试器查。
+
+## FrameDelta 序列化压缩方案（2026-06-14）
+
+### 目标
+
+把 FrameDelta 序列化字节做到**贴近物理下界**。lockstep 场景对带宽敏感（每帧每个 peer 都要广播），YAGNI 原则下只取收益/复杂度比高的技巧。
+
+### 物理下界估算（基线场景）
+
+典型动作游戏一帧：`spawn 3 个怪(Pos+Vel+Health 共 20B payload)、set 50 个 Pos(8B)、destroy 5 个`。
+
+| 命令 | 不可压缩信息 | 物理下界 |
+|---|---|---|
+| 3 creates | 3×(20B payload) + 3×~5bit 实体引用 + 9×~5bit 类型引用 | ~90 B |
+| 50 sets | 50×(8B payload) + 50×~16bit 实体引用 + 50×~5bit 类型引用 | ~600 B |
+| 5 destroys | 5×~16bit 实体引用 | ~12 B |
+| **合计** | | **~702 B** |
+
+payload 本身就是大头（>85%），实体/类型引用是零头。
+
+### 当前裸序列化（baseline）
+
+直接 record struct 一个个写：
+
+- 3 creates: 3 × (8 entity + 3×(4 type + payload)) = 120 B
+- 50 sets: 50 × (8 + 4 + 8) = 1000 B
+- 5 destroys: 5 × 8 = 40 B
+- **~1160 B ≈ 1.65× 物理下界**
+
+冗余主要在：8B Entity(4 id + 4 version) 远超必要；4B ComponentType 远超必要；每命令重复存 type 标签。
+
+### Tier 1 技巧（成本极低，直接打平物理极限）
+
+1. **Varint entity id**（LEB128 或 zigzag varint）：entity id 几乎都 < 65536，2-3 字节代替 8 字节。version 在 lockstep 中是冗余的（可从 delta 序列推算），fresh entity 直接省掉。
+2. **Per-section packed array**：header 列出每段 count，整段同质命令连续打包。**省掉每命令 1 字节 tag**。
+3. **ComponentType → 1 byte varint**：已注册类型通常 < 256，1 字节够。
+4. **Delta-local 实体引用**（可选）：本帧 reserved/created 的实体，后续命令引用时用"本帧第 N 个"，1 字节代替完整 entity。
+
+应用 1+2+3（都很容易）：
+
+- 3 creates: 3 × (3 entity + 3×1 type + 20 payload) = 78 B
+- 50 sets: 50 × (3 entity + 1 type + 8 payload) = 600 B
+- 5 destroys: 5 × 3 = 15 B
+- section header ~10 B
+- **~703 B ≈ 1.00× 物理下界**
+
+### Tier 2 技巧（再省几 B，需要 schema 同步）
+
+- **Archetype-batched create**："spawn N 个 archetype X" + N×payload。省掉每个 create 的类型引用（本例 ~15 B）。需要双方同步 archetype 表。
+- **Component payload delta 编码**：只传位置差。适合高频 set，但需要前帧状态，属于 state-sync 层而非命令日志层。
+
+### 不建议
+
+- **Bit packing**（type ref 5 bit、entity ref 不对齐字节）：CPU 处理开销超过节省的字节。
+- **通用压缩（zstd/LZ4）**：payload 已经是密度高的二进制，对小 delta 收益小，对 batched 多帧才划算（应在 transport 层做，不在 FrameDelta 层）。
+
+### 推荐落地路径
+
+| 阶段 | 内容 | LOC | 收益 |
+|---|---|---|---|
+| Tier 1 | varint + per-section packed + 1B type | ~200 | 1.65× → 1.00× 物理下界 |
+| Tier 2 | + archetype-batched create | +100 | 把 create 路径也贴死物理下界 |
+
+建议直接做 Tier 1：单次工作量大头，把 65% slack 一次吃光。Tier 2 等 profiling 显示 create 占比高再做。
+
+### 实现注意事项（待定）
+
+- **端序**：小端（与 `WorldSnapshot.Save` 现有约定一致）。
+- **Varint 方案**：LEB128（无符号）/ zigzag varint（有符号）。entity id 用 LEB128 即可。
+- **Section header 编码**：每段开头 1 byte tag + varint count。tag 值固定（Reserved=0x01, Released=0x02, Created=0x03, Link=0x04, Unlink=0x05, Add=0x06, Set=0x07, Remove=0x08, Destroy=0x09），与 `FrameDelta.ReplayCore` 处理顺序对齐。
+- **接口形态**：`IFrameDeltaWriter` / `IFrameDeltaReader` 双向，或静态 `FrameDeltaCodec.Serialize(delta, IBufferWriter<byte>)` / `Deserialize(ReadOnlySequence<byte>)`。倾向后者（无状态、零分配）。
+- **Created entity 的 Components 数组**：count + 紧凑排列 (typeId varint + size varint + payload bytes)，无对齐 padding。
+- **版本协商**：第一字节留 4 bit version（wire format 版本）+ 4 bit flags（reserved for compression/extension）。
 

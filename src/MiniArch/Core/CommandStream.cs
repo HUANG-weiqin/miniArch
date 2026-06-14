@@ -247,7 +247,6 @@ public sealed class CommandStream : ICommandRecorder
     {
         var delta = new FrameDelta();
         BuildDelta(delta);
-        delta.DeepCopyOwnedData();
         return delta;
     }
 
@@ -275,7 +274,7 @@ public sealed class CommandStream : ICommandRecorder
         }
 
         for (var i = 0; i < _destroyCount; i++)
-            delta.DestroyedEntities.Add(_destroyEntities[i]);
+            delta.AddDestroy(_destroyEntities[i]);
 
         EmitHierarchyToDelta(delta, _hierarchyByChild, _unavailableEntities);
     }
@@ -377,11 +376,10 @@ public sealed class CommandStream : ICommandRecorder
         }
 
         for (var i = 0; i < frozen.DestroyCount; i++)
-            delta.DestroyedEntities.Add(frozen.DestroyEntities[i]);
+            delta.AddDestroy(frozen.DestroyEntities[i]);
 
         EmitHierarchyToDelta(delta, frozen.HierarchyByChild, frozen.UnavailableEntities);
 
-        delta.DeepCopyOwnedData();
         return delta;
     }
 
@@ -518,21 +516,26 @@ public sealed class CommandStream : ICommandRecorder
         var batchEntities = view.Entities;
         var pendingBatchCount = view.Count;
 
+        // Pass 1: All reserves (sectioned order preserves old ReplayCore semantics)
+        for (var i = 0; i < pendingBatchCount; i++)
+        {
+            delta.AddReserve(batchEntities[i]);
+        }
+
+        // Pass 2: Releases (canceled) and Creates (committed)
         for (var i = 0; i < pendingBatchCount; i++)
         {
             var entity = batchEntities[i];
             if ((uint)i < (uint)batchCanceled.Length && batchCanceled[i])
             {
-                delta.ReservedEntities.Add(entity);
-                delta.ReleasedEntities.Add(entity);
+                delta.AddRelease(entity);
                 continue;
             }
 
-            delta.ReservedEntities.Add(entity);
             var rawCount = batchCompCounts[i];
             if (rawCount == 0)
             {
-                delta.CreatedEntities.Add(new RawCreatedEntity(entity, []));
+                delta.AddCreate(entity, Array.Empty<RawComponentValue>());
                 continue;
             }
 
@@ -549,7 +552,7 @@ public sealed class CommandStream : ICommandRecorder
 
             if (outIdx == 0)
             {
-                delta.CreatedEntities.Add(new RawCreatedEntity(entity, []));
+                delta.AddCreate(entity, Array.Empty<RawComponentValue>());
                 continue;
             }
 
@@ -559,7 +562,7 @@ public sealed class CommandStream : ICommandRecorder
                 outIdx = SortAndDeduplicateComponents(comps);
             if (outIdx != comps.Length)
                 Array.Resize(ref comps, outIdx);
-            delta.CreatedEntities.Add(new RawCreatedEntity(entity, comps));
+            delta.AddCreate(entity, comps);
         }
     }
 
@@ -575,11 +578,11 @@ public sealed class CommandStream : ICommandRecorder
             if (intent.IsLinked)
             {
                 if (unavailableEntities != null && unavailableEntities.Contains(intent.Parent)) continue;
-                delta.LinkCommands.Add(new LinkCommand(intent.Parent, child));
+                delta.AddLink(intent.Parent, child);
             }
             else
             {
-                delta.UnlinkCommands.Add(new UnlinkCommand(child));
+                delta.AddUnlink(child);
             }
         }
     }
@@ -1037,9 +1040,7 @@ public sealed class CommandStream : ICommandRecorder
 
     private static RawComponentValue ReadRawFromBuf(byte[] buf, in BatchedComponent bc)
     {
-        var bytes = new byte[bc.Size];
-        Unsafe.CopyBlockUnaligned(ref bytes[0], ref buf[bc.Offset], (uint)bc.Size);
-        return new RawComponentValue(bc.Type, bytes, 0, bc.Size);
+        return new RawComponentValue(bc.Type, buf, bc.Offset, bc.Size);
     }
 
     private static class CommandTypeInfo<T> where T : unmanaged
@@ -1130,18 +1131,17 @@ public sealed class CommandStream : ICommandRecorder
                 {
                     case KindAdd:
                     case KindSet:
-                    {
-                        var bytes = new byte[size];
-                        Unsafe.WriteUnaligned(ref bytes[0], _data[i]);
-                        var cmd = new RawComponentCommand(_entities[i], compType, 0, size, bytes);
-                        if (_kinds[i] == KindAdd)
-                            delta.AddCommands.Add(cmd);
-                        else
-                            delta.SetCommands.Add(cmd);
+                        unsafe
+                        {
+                            var ptr = Unsafe.AsPointer(ref _data[i]);
+                            if (_kinds[i] == KindAdd)
+                                delta.AddAddUnsafe(_entities[i], compType, ptr, size);
+                            else
+                                delta.AddSetUnsafe(_entities[i], compType, ptr, size);
+                        }
                         break;
-                    }
                     case KindRemove:
-                        delta.RemoveCommands.Add(new RawRemoveCommand(_entities[i], compType));
+                        delta.AddRemove(_entities[i], compType);
                         break;
                 }
             }

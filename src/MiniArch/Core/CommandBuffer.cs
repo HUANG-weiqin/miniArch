@@ -533,7 +533,6 @@ public sealed class CommandBuffer : ICommandRecorder
     {
         var delta = new FrameDelta();
         BuildDelta(delta);
-        var copiedBytes = delta.DeepCopyOwnedData();
         return delta;
     }
 
@@ -562,7 +561,7 @@ public sealed class CommandBuffer : ICommandRecorder
                 ArrayPool<byte>.Shared.Return(slab);
             frozen.OpsOverflow.ReturnArrays();
             frozen.CreatedOverflow.ReturnArrays();
-            return t.Result.Delta;
+            return t.Result;
         }, TaskContinuationOptions.ExecuteSynchronously);
     }
 
@@ -717,46 +716,35 @@ public sealed class CommandBuffer : ICommandRecorder
         }
     }
 
-    private static (FrameDelta Delta, int CopiedBytes) BuildFromFrozen(FrozenBufferState frozen)
+    private static FrameDelta BuildFromFrozen(FrozenBufferState frozen)
     {
         var delta = new FrameDelta();
 
-        var releasedCount = 0;
-        var createdCount = 0;
-        for (var i = 0; i < frozen.CreatedStatePoolCount; i++)
+        // Pass 1: All reserves
+        for (var poolIdx = 0; poolIdx < frozen.CreatedStatePoolCount; poolIdx++)
         {
-            ref readonly var s = ref frozen.CreatedStatePool[i];
-            if (s.Destroyed) releasedCount++;
-            else createdCount++;
+            delta.AddReserve(frozen.CreatedEntityByPoolIndex[poolIdx]);
         }
 
-        delta.ReservedEntities.EnsureCapacity(frozen.CreatedStatePoolCount);
-        delta.ReleasedEntities.EnsureCapacity(releasedCount);
-        delta.CreatedEntities.EnsureCapacity(createdCount);
-        delta.LinkCommands.EnsureCapacity(frozen.HierarchyByChild.Count);
-        delta.UnlinkCommands.EnsureCapacity(frozen.HierarchyByChild.Count);
-        delta.AddCommands.EnsureCapacity(frozen.OpsPoolCount);
-        delta.SetCommands.EnsureCapacity(frozen.OpsPoolCount);
-        delta.RemoveCommands.EnsureCapacity(frozen.OpsPoolCount);
-        delta.DestroyedEntities.EnsureCapacity(frozen.ExistingDestroyCount);
-
+        // Pass 2: All releases for destroyed entities
         for (var poolIdx = 0; poolIdx < frozen.CreatedStatePoolCount; poolIdx++)
         {
             ref readonly var state = ref frozen.CreatedStatePool[poolIdx];
-            var entity = frozen.CreatedEntityByPoolIndex[poolIdx];
-            delta.ReservedEntities.Add(entity);
             if (state.Destroyed)
+                delta.AddRelease(frozen.CreatedEntityByPoolIndex[poolIdx]);
+        }
+
+        // Pass 3: All creates for surviving entities
+        for (var poolIdx = 0; poolIdx < frozen.CreatedStatePoolCount; poolIdx++)
+        {
+            ref readonly var state = ref frozen.CreatedStatePool[poolIdx];
+            if (!state.Destroyed)
             {
-                delta.ReleasedEntities.Add(entity);
-            }
-            else if (state.Map.IsEmpty)
-            {
-                delta.CreatedEntities.Add(new RawCreatedEntity(entity, Array.Empty<RawComponentValue>()));
-            }
-            else
-            {
-                var components = BuildCreatedEntityComponentsFromFrozen(in state, frozen.Slabs, ref frozen.CreatedOverflow);
-                delta.CreatedEntities.Add(new RawCreatedEntity(entity, components));
+                var entity = frozen.CreatedEntityByPoolIndex[poolIdx];
+                if (state.Map.IsEmpty)
+                    delta.AddCreate(entity, Array.Empty<RawComponentValue>());
+                else
+                    delta.AddCreate(entity, BuildCreatedEntityComponentsFromFrozen(in state, frozen.Slabs, ref frozen.CreatedOverflow));
             }
         }
 
@@ -772,10 +760,10 @@ public sealed class CommandBuffer : ICommandRecorder
             if (intent.IsLinked)
             {
                 if (FindExistingDestroy(frozen.ExistingDestroyEntities, frozen.ExistingDestroyCount, intent.Parent) >= 0) continue;
-                delta.LinkCommands.Add(new LinkCommand(intent.Parent, child));
+                delta.AddLink(intent.Parent, child);
             }
             else
-                delta.UnlinkCommands.Add(new UnlinkCommand(child));
+                delta.AddUnlink(child);
         }
 
         for (var i = 0; i < frozen.OpsPoolCount; i++)
@@ -784,7 +772,7 @@ public sealed class CommandBuffer : ICommandRecorder
             if (existingOps.IsEmpty) continue;
             var entity = frozen.OpsEntityByPoolIndex[i];
 
-            EmitOpFromFrozen(frozen.Slabs, in existingOps.Value0, entity, delta);
+            if (existingOps.Count >= 1) EmitOpFromFrozen(frozen.Slabs, in existingOps.Value0, entity, delta);
             if (existingOps.Count >= 2) EmitOpFromFrozen(frozen.Slabs, in existingOps.Value1, entity, delta);
             if (existingOps.Count >= 3) EmitOpFromFrozen(frozen.Slabs, in existingOps.Value2, entity, delta);
             if (existingOps.Count >= 4) EmitOpFromFrozen(frozen.Slabs, in existingOps.Value3, entity, delta);
@@ -796,13 +784,9 @@ public sealed class CommandBuffer : ICommandRecorder
         }
 
         for (var i = 0; i < frozen.ExistingDestroyCount; i++)
-        {
-            delta.DestroyedEntities.Add(frozen.ExistingDestroyEntities[i]);
-        }
+            delta.AddDestroy(frozen.ExistingDestroyEntities[i]);
 
-        var copiedBytes = delta.DeepCopyOwnedData();
-
-        return (delta, copiedBytes);
+        return delta;
     }
 
     private static (ComponentType[] Types, CreatedComponent[] Sources, int Count) ExtractAndSortComponents(
@@ -909,13 +893,13 @@ public sealed class CommandBuffer : ICommandRecorder
         switch (slot.Kind)
         {
             case OpKindAdd:
-                delta.AddCommands.Add(new RawComponentCommand(entity, slot.ComponentType, slot.DataOffset, slot.DataSize, slabs[slot.SlabIndex]));
+                delta.AddAdd(entity, slot.ComponentType, slabs[slot.SlabIndex], slot.DataOffset, slot.DataSize);
                 break;
             case OpKindSet:
-                delta.SetCommands.Add(new RawComponentCommand(entity, slot.ComponentType, slot.DataOffset, slot.DataSize, slabs[slot.SlabIndex]));
+                delta.AddSet(entity, slot.ComponentType, slabs[slot.SlabIndex], slot.DataOffset, slot.DataSize);
                 break;
             case OpKindRemove:
-                delta.RemoveCommands.Add(new RawRemoveCommand(entity, slot.ComponentType));
+                delta.AddRemove(entity, slot.ComponentType);
                 break;
         }
     }
@@ -984,42 +968,35 @@ public sealed class CommandBuffer : ICommandRecorder
     {
         DeduplicateExistingDestroyEntities();
 
-        var releasedCount = 0;
-        var createdCount = 0;
-        for (var i = 0; i < _createdStatePoolCount; i++)
+        // Pass 1: All reserves (grouped so allocator state stays consistent with old sectioned ReplayCore)
+        for (var poolIdx = 0; poolIdx < _createdStatePoolCount; poolIdx++)
         {
-            ref readonly var s = ref _createdStatePool[i];
-            if (s.Destroyed) releasedCount++;
-            else createdCount++;
+            var entity = _createdEntityByPoolIndex[poolIdx];
+            delta.AddReserve(entity);
         }
 
-        delta.ReservedEntities.EnsureCapacity(_createdStatePoolCount);
-        delta.ReleasedEntities.EnsureCapacity(releasedCount);
-        delta.CreatedEntities.EnsureCapacity(createdCount);
-        delta.LinkCommands.EnsureCapacity(_hierarchyByChild.Count);
-        delta.UnlinkCommands.EnsureCapacity(_hierarchyByChild.Count);
-        delta.AddCommands.EnsureCapacity(_opsPoolCount);
-        delta.SetCommands.EnsureCapacity(_opsPoolCount);
-        delta.RemoveCommands.EnsureCapacity(_opsPoolCount);
-        delta.DestroyedEntities.EnsureCapacity(_existingDestroyCount);
-
+        // Pass 2: All releases for destroyed entities
         for (var poolIdx = 0; poolIdx < _createdStatePoolCount; poolIdx++)
         {
             ref readonly var state = ref _createdStatePool[poolIdx];
-            var entity = _createdEntityByPoolIndex[poolIdx];
-            delta.ReservedEntities.Add(entity);
             if (state.Destroyed)
             {
-                delta.ReleasedEntities.Add(entity);
+                var entity = _createdEntityByPoolIndex[poolIdx];
+                delta.AddRelease(entity);
             }
-            else if (state.Map.IsEmpty)
+        }
+
+        // Pass 3: All creates for surviving entities
+        for (var poolIdx = 0; poolIdx < _createdStatePoolCount; poolIdx++)
+        {
+            ref readonly var state = ref _createdStatePool[poolIdx];
+            if (!state.Destroyed)
             {
-                delta.CreatedEntities.Add(new RawCreatedEntity(entity, Array.Empty<RawComponentValue>()));
-            }
-            else
-            {
-                var components = BuildCreatedEntityComponentsForDelta(in state);
-                delta.CreatedEntities.Add(new RawCreatedEntity(entity, components));
+                var entity = _createdEntityByPoolIndex[poolIdx];
+                if (state.Map.IsEmpty)
+                    delta.AddCreate(entity, Array.Empty<RawComponentValue>());
+                else
+                    delta.AddCreate(entity, BuildCreatedEntityComponentsForDelta(in state));
             }
         }
 
@@ -1051,11 +1028,11 @@ public sealed class CommandBuffer : ICommandRecorder
             if (intent.IsLinked)
             {
                 if (FindExistingDestroy(intent.Parent) >= 0) continue;
-                delta.LinkCommands.Add(new LinkCommand(intent.Parent, child));
+                delta.AddLink(intent.Parent, child);
             }
             else
             {
-                delta.UnlinkCommands.Add(new UnlinkCommand(child));
+                delta.AddUnlink(child);
             }
         }
 
@@ -1078,7 +1055,7 @@ public sealed class CommandBuffer : ICommandRecorder
 
         for (var i = 0; i < _existingDestroyCount; i++)
         {
-            delta.DestroyedEntities.Add(_existingDestroyEntities[i]);
+            delta.AddDestroy(_existingDestroyEntities[i]);
         }
     }
 
@@ -1230,13 +1207,13 @@ public sealed class CommandBuffer : ICommandRecorder
         switch (slot.Kind)
         {
             case OpKindAdd:
-                delta.AddCommands.Add(new RawComponentCommand(entity, slot.ComponentType, slot.DataOffset, slot.DataSize, _slabs[slot.SlabIndex]));
+                delta.AddAdd(entity, slot.ComponentType, _slabs[slot.SlabIndex], slot.DataOffset, slot.DataSize);
                 break;
             case OpKindSet:
-                delta.SetCommands.Add(new RawComponentCommand(entity, slot.ComponentType, slot.DataOffset, slot.DataSize, _slabs[slot.SlabIndex]));
+                delta.AddSet(entity, slot.ComponentType, _slabs[slot.SlabIndex], slot.DataOffset, slot.DataSize);
                 break;
             case OpKindRemove:
-                delta.RemoveCommands.Add(new RawRemoveCommand(entity, slot.ComponentType));
+                delta.AddRemove(entity, slot.ComponentType);
                 break;
         }
     }

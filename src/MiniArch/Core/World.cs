@@ -452,41 +452,100 @@ public sealed partial class World : IDisposable
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(delta);
 
-        if (!trusted)
+        var decoder = delta.GetDecoder();
+        while (decoder.MoveNext())
         {
-            foreach (var reserved in delta.ReservedEntities)
-                EnsureReplayReservation(reserved);
+            switch (decoder.Kind)
+            {
+                case DeltaOpKind.Reserve:
+                    if (!trusted)
+                        EnsureReplayReservation(decoder.Entity);
+                    break;
+
+                case DeltaOpKind.Release:
+                    ReleaseReservedEntity(decoder.Entity);
+                    break;
+
+                case DeltaOpKind.Create:
+                {
+                    var compCount = decoder.ReadVarint();
+                    if (compCount < 0)
+                        throw new InvalidOperationException("Corrupt FrameDelta: negative component count.");
+                    if (compCount == 0)
+                    {
+                        MaterializeReservedEntityCore(decoder.Entity, Signature.Empty,
+                            Array.Empty<RawComponentValue>());
+                        break;
+                    }
+                    var compTypes = new ComponentType[compCount];
+                    var compValues = new RawComponentValue[compCount];
+                    for (var i = 0; i < compCount; i++)
+                    {
+                        var type = new ComponentType(decoder.ReadVarint());
+                        var dataSize = decoder.ReadVarint();
+                        compTypes[i] = type;
+                        if (dataSize > 0)
+                        {
+                            var dataStart = decoder.CurrentPosition;
+                            compValues[i] = new RawComponentValue(type, decoder.BackingBuffer,
+                                dataStart, dataSize);
+                            _ = decoder.ReadBytes(dataSize);
+                        }
+                        else
+                        {
+                            compValues[i] = new RawComponentValue(type, Array.Empty<byte>(), 0, 0);
+                        }
+                    }
+                    var signature = new Signature(compTypes);
+                    MaterializeReservedEntityCore(decoder.Entity, signature, compValues);
+                    break;
+                }
+
+                case DeltaOpKind.Link:
+                {
+                    var parent = decoder.ReadExtraEntity();
+                    Link(parent, decoder.Entity);
+                    break;
+                }
+
+                case DeltaOpKind.Unlink:
+                    Unlink(decoder.Entity);
+                    break;
+
+                case DeltaOpKind.Add:
+                case DeltaOpKind.Set:
+                {
+                    var comp = decoder.ReadComponentType();
+                    var dataSize = decoder.ReadVarint();
+                    var dataStart = decoder.CurrentPosition;
+                    _ = decoder.ReadBytes(dataSize);
+                    unsafe
+                    {
+                        fixed (byte* ptr = decoder.BackingBuffer)
+                        {
+                            ApplyRawAddOrSet(decoder.Entity, comp, ptr + dataStart);
+                        }
+                    }
+                    break;
+                }
+
+                case DeltaOpKind.Remove:
+                {
+                    var comp = decoder.ReadComponentType();
+                    RemoveBoxed(decoder.Entity, comp);
+                    break;
+                }
+
+                case DeltaOpKind.Destroy:
+                    if (IsAlive(decoder.Entity))
+                        Destroy(decoder.Entity);
+                    break;
+
+                default:
+                    throw new InvalidOperationException(
+                        $"Unknown FrameDelta operation kind: 0x{(byte)decoder.Kind:X2}");
+            }
         }
-
-        foreach (var released in delta.ReleasedEntities)
-            ReleaseReservedEntity(released);
-
-        foreach (var created in delta.CreatedEntities)
-        {
-            var signature = BuildReplaySignature(created.Components);
-            MaterializeReservedEntityCore(created.Entity, signature, created.Components);
-        }
-
-        foreach (var link in delta.LinkCommands)
-            Link(link.Parent, link.Child);
-
-        foreach (var unlink in delta.UnlinkCommands)
-            Unlink(unlink.Child);
-
-        unsafe
-        {
-            foreach (var add in delta.AddCommands)
-                ApplyRawAddOrSet(add.Entity, add.ComponentType, add.Data, add.DataOffset);
-
-            foreach (var set in delta.SetCommands)
-                ApplyRawAddOrSet(set.Entity, set.ComponentType, set.Data, set.DataOffset);
-        }
-
-        foreach (var remove in delta.RemoveCommands)
-            RemoveBoxed(remove.Entity, remove.ComponentType);
-
-        foreach (var entity in delta.DestroyedEntities)
-            if (IsAlive(entity)) Destroy(entity);
     }
 
     internal void MaterializeReservedEntity(

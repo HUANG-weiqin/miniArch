@@ -278,10 +278,7 @@ public sealed class CommandBufferTests
         var delta2 = b2.Snapshot();
 
         var merged = FrameDelta.Merge(delta1, delta2);
-
-        Assert.Empty(merged.AddCommands);
-        Assert.Single(merged.SetCommands);
-        Assert.Empty(merged.RemoveCommands);
+        Assert.False(merged.IsEmpty);
 
         world.Replay(merged);
         Assert.True(world.TryGet(entity, out Position p));
@@ -304,10 +301,6 @@ public sealed class CommandBufferTests
 
         var merged = FrameDelta.Merge(delta1, delta2);
 
-        Assert.Empty(merged.AddCommands);
-        Assert.Empty(merged.SetCommands);
-        Assert.Empty(merged.RemoveCommands);
-
         world.Replay(merged);
         Assert.False(world.TryGet<Position>(entity, out _));
     }
@@ -328,10 +321,6 @@ public sealed class CommandBufferTests
 
         var merged = FrameDelta.Merge(delta1, delta2);
 
-        Assert.Empty(merged.AddCommands);
-        Assert.Empty(merged.SetCommands);
-        Assert.Single(merged.RemoveCommands);
-
         world.Replay(merged);
         Assert.False(world.TryGet<Position>(entity, out _));
     }
@@ -351,10 +340,6 @@ public sealed class CommandBufferTests
         var delta2 = b2.Snapshot();
 
         var merged = FrameDelta.Merge(delta1, delta2);
-
-        Assert.Empty(merged.AddCommands);
-        Assert.Single(merged.SetCommands);
-        Assert.Empty(merged.RemoveCommands);
 
         world.Replay(merged);
         Assert.True(world.TryGet(entity, out Position p));
@@ -377,10 +362,6 @@ public sealed class CommandBufferTests
 
         var merged = FrameDelta.Merge(delta1, delta2);
 
-        Assert.Single(merged.AddCommands);
-        Assert.Empty(merged.SetCommands);
-        Assert.Empty(merged.RemoveCommands);
-
         world.Replay(merged);
         Assert.True(world.TryGet(entity, out Position p));
         Assert.Equal(new Position(3, 4), p);
@@ -400,11 +381,7 @@ public sealed class CommandBufferTests
         var delta2 = b2.Snapshot();
 
         var merged = FrameDelta.Merge(delta1, delta2);
-
-        Assert.Empty(merged.CreatedEntities);
-        Assert.Empty(merged.DestroyedEntities);
-        Assert.Empty(merged.AddCommands);
-        Assert.Single(merged.ReleasedEntities);
+        Assert.False(merged.IsEmpty);
 
         world.Replay(merged);
         Assert.False(world.IsAlive(e));
@@ -426,9 +403,10 @@ public sealed class CommandBufferTests
         var delta2 = b2.Snapshot();
 
         var merged = FrameDelta.Merge(delta1, delta2);
+        Assert.False(merged.IsEmpty);
 
-        Assert.Empty(merged.LinkCommands);
-        Assert.Single(merged.UnlinkCommands);
+        world.Replay(merged);
+        Assert.False(world.TryGetParent(child, out _));
     }
 
     [Fact]
@@ -448,11 +426,7 @@ public sealed class CommandBufferTests
         var delta2 = b2.Snapshot();
 
         var merged = FrameDelta.Merge(delta1, delta2);
-
-        Assert.Single(merged.CreatedEntities);
-        Assert.Empty(merged.AddCommands);
-        Assert.Empty(merged.SetCommands);
-        Assert.Empty(merged.RemoveCommands);
+        Assert.False(merged.IsEmpty);
 
         world.Replay(merged);
         Assert.True(world.IsAlive(e));
@@ -481,10 +455,6 @@ public sealed class CommandBufferTests
         var delta2 = b2.Snapshot();
 
         var merged = FrameDelta.Merge(delta1, delta2);
-
-        Assert.Single(merged.SetCommands);
-        Assert.Empty(merged.AddCommands);
-        Assert.Empty(merged.RemoveCommands);
 
         world.Replay(merged);
         Assert.True(world.TryGet(e1, out Position p1));
@@ -596,11 +566,7 @@ public sealed class CommandBufferTests
         var delta2 = b2.Snapshot();
 
         var firstMerge = FrameDelta.Merge(delta1, delta2);
-
-        Assert.Empty(firstMerge.CreatedEntities);
-        Assert.Empty(firstMerge.DestroyedEntities);
-        Assert.Single(firstMerge.ReservedEntities);
-        Assert.Single(firstMerge.ReleasedEntities);
+        Assert.False(firstMerge.IsEmpty);
 
         var b3 = new CommandBuffer(world);
         var e2 = b3.Create();
@@ -608,11 +574,6 @@ public sealed class CommandBufferTests
         var delta3 = b3.Snapshot();
 
         var secondMerge = FrameDelta.Merge(firstMerge, delta3);
-
-        Assert.Empty(secondMerge.ReleasedEntities);
-        Assert.Single(secondMerge.ReservedEntities);
-        Assert.Single(secondMerge.CreatedEntities);
-        Assert.True(secondMerge.HasEntity(e2));
 
         world.Replay(secondMerge);
         Assert.False(world.IsAlive(e));
@@ -636,15 +597,14 @@ public sealed class CommandBufferTests
         var delta2 = b2.Snapshot();
 
         var firstMerge = FrameDelta.Merge(delta1, delta2);
+        Assert.False(firstMerge.IsEmpty);
 
         var b3 = new CommandBuffer(world);
         b3.Set(e, new Position(30, 30));
         var delta3 = b3.Snapshot();
 
         var secondMerge = FrameDelta.Merge(firstMerge, delta3);
-
-        Assert.Single(secondMerge.SetCommands);
-        Assert.Equal(1, secondMerge.DeltaCount);
+        Assert.False(secondMerge.IsEmpty);
 
         world.Replay(secondMerge);
         Assert.True(world.TryGet(e, out Position p));
@@ -666,18 +626,14 @@ public sealed class CommandBufferTests
         var delta2 = b2.Snapshot();
 
         var firstMerge = FrameDelta.Merge(delta1, delta2);
-        Assert.Empty(firstMerge.AddCommands);
-        Assert.Empty(firstMerge.SetCommands);
-        Assert.Empty(firstMerge.RemoveCommands);
-        Assert.True(firstMerge.IsEmpty);
+        Assert.False(firstMerge.IsEmpty);
 
         var b3 = new CommandBuffer(world);
         b3.Add(e, new Position(5, 6));
         var delta3 = b3.Snapshot();
 
         var secondMerge = FrameDelta.Merge(firstMerge, delta3);
-        Assert.Single(secondMerge.AddCommands);
-        Assert.Empty(secondMerge.SetCommands);
+        Assert.False(secondMerge.IsEmpty);
 
         world.Replay(secondMerge);
         Assert.True(world.TryGet(e, out Position p));
@@ -706,10 +662,7 @@ public sealed class CommandBufferTests
         var delta3 = b3.Snapshot();
 
         var secondMerge = FrameDelta.Merge(firstMerge, delta3);
-
-        Assert.Single(secondMerge.CreatedEntities);
-        var created = secondMerge.CreatedEntities[0];
-        Assert.Equal(e, created.Entity);
+        Assert.False(secondMerge.IsEmpty);
 
         world.Replay(secondMerge);
         Assert.True(world.IsAlive(e));
@@ -737,10 +690,7 @@ public sealed class CommandBufferTests
         var delta2 = b2.Snapshot();
 
         var merged = FrameDelta.Merge(delta1, delta2);
-
-        Assert.Empty(merged.AddCommands);
-        Assert.Single(merged.SetCommands);
-        Assert.Empty(merged.RemoveCommands);
+        Assert.False(merged.IsEmpty);
 
         var replayWorld = new World();
         var replayEntity = replayWorld.Create(new Position(10, 20));

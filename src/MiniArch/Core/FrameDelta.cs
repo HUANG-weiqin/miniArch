@@ -1,400 +1,546 @@
-using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
 
 namespace MiniArch.Core;
 
 /// <summary>
-/// Stores a compiled set of deferred world changes that can be replayed or merged.
+/// Stores a sequence of world operations in a compact self-contained byte buffer.
+/// Operations are stored in temporal order, making the delta suitable for
+/// deterministic replay, merging, and zero-copy serialization.
 /// </summary>
 public sealed class FrameDelta
 {
-    internal List<Entity> ReservedEntities { get; } = new(16);
-    internal List<RawCreatedEntity> CreatedEntities { get; } = new(16);
-    internal List<LinkCommand> LinkCommands { get; } = new(16);
-    internal List<UnlinkCommand> UnlinkCommands { get; } = new(16);
-    internal List<RawComponentCommand> AddCommands { get; } = new(16);
-    internal List<RawComponentCommand> SetCommands { get; } = new(16);
-    internal List<RawRemoveCommand> RemoveCommands { get; } = new(16);
-    internal List<Entity> DestroyedEntities { get; } = new(16);
-    internal List<Entity> ReleasedEntities { get; } = new(16);
+    internal byte[] _buffer = Array.Empty<byte>();
+    internal int _length;
+    internal int _opCount;
 
-    internal void Clear()
+    /// <summary>
+    /// Gets the total number of operations in this delta.
+    /// </summary>
+    public int DeltaCount => _opCount;
+
+    /// <summary>
+    /// Gets whether this delta has no operations.
+    /// </summary>
+    public bool IsEmpty => _opCount == 0;
+
+    // ── Writer API (used by CommandBuffer / CommandStream) ──────────────
+
+    private void Grow(int additionalBytes)
     {
-        ReservedEntities.Clear();
-        CreatedEntities.Clear();
-        LinkCommands.Clear();
-        UnlinkCommands.Clear();
-        AddCommands.Clear();
-        SetCommands.Clear();
-        RemoveCommands.Clear();
-        DestroyedEntities.Clear();
-        ReleasedEntities.Clear();
+        var needed = _length + additionalBytes;
+        if (needed <= _buffer.Length) return;
+        var newSize = Math.Max(needed, Math.Max(_buffer.Length * 2, 256));
+        Array.Resize(ref _buffer, newSize);
     }
 
-    /// <summary>
-    /// Gets the total number of recorded delta entries.
-    /// </summary>
-    public int DeltaCount =>
-        ReservedEntities.Count +
-        CreatedEntities.Count +
-        LinkCommands.Count +
-        UnlinkCommands.Count +
-        AddCommands.Count +
-        SetCommands.Count +
-        RemoveCommands.Count +
-        DestroyedEntities.Count +
-        ReleasedEntities.Count;
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void WriteTag(DeltaOpKind kind)
+    {
+        var pos = _length;
+        Grow(1);
+        _buffer[pos] = (byte)kind;
+        _length = pos + 1;
+    }
+
+    private void WriteEntity(Entity e)
+    {
+        var pos = _length;
+        var size = VarintSize(e.Id) + VarintSize(e.Version);
+        Grow(size);
+        WriteVarintAt(ref pos, e.Id);
+        WriteVarintAt(ref pos, e.Version);
+        _length = pos;
+    }
+
+    private void WriteComponentType(ComponentType t)
+    {
+        var pos = _length;
+        Grow(VarintSize(t.Value));
+        WriteVarintAt(ref pos, t.Value);
+        _length = pos;
+    }
+
+    private void WriteDataWithSize(byte[] data, int offset, int size)
+    {
+        var pos = _length;
+        var headerSize = VarintSize(size);
+        Grow(headerSize + size);
+        WriteVarintAt(ref pos, size);
+        if (size > 0)
+            Buffer.BlockCopy(data, offset, _buffer, pos, size);
+        _length = pos + size;
+    }
+
+    internal void AddReserve(Entity e)
+    {
+        WriteTag(DeltaOpKind.Reserve);
+        WriteEntity(e);
+        _opCount++;
+    }
+
+    internal void AddRelease(Entity e)
+    {
+        WriteTag(DeltaOpKind.Release);
+        WriteEntity(e);
+        _opCount++;
+    }
+
+    internal void AddCreate(Entity e, RawComponentValue[] components)
+    {
+        WriteTag(DeltaOpKind.Create);
+        WriteEntity(e);
+        var pos = _length;
+        var compCount = components.Length;
+        var size = VarintSize(compCount);
+        for (var i = 0; i < compCount; i++)
+        {
+            ref var c = ref components[i];
+            size += VarintSize(c.ComponentType.Value) + VarintSize(c.DataSize) + c.DataSize;
+        }
+        Grow(size);
+        WriteVarintAt(ref pos, compCount);
+        for (var i = 0; i < compCount; i++)
+        {
+            ref var c = ref components[i];
+            WriteVarintAt(ref pos, c.ComponentType.Value);
+            WriteVarintAt(ref pos, c.DataSize);
+            if (c.DataSize > 0)
+                Buffer.BlockCopy(c.Data, c.DataOffset, _buffer, pos, c.DataSize);
+            pos += c.DataSize;
+        }
+        _length = pos;
+        _opCount++;
+    }
+
+    internal void AddDestroy(Entity e)
+    {
+        WriteTag(DeltaOpKind.Destroy);
+        WriteEntity(e);
+        _opCount++;
+    }
+
+    internal void AddLink(Entity parent, Entity child)
+    {
+        WriteTag(DeltaOpKind.Link);
+        WriteEntity(child);
+        WriteEntity(parent);
+        _opCount++;
+    }
+
+    internal void AddUnlink(Entity child)
+    {
+        WriteTag(DeltaOpKind.Unlink);
+        WriteEntity(child);
+        _opCount++;
+    }
+
+    internal void AddAdd(Entity e, ComponentType t, byte[] data, int offset, int size)
+    {
+        WriteTag(DeltaOpKind.Add);
+        WriteEntity(e);
+        WriteComponentType(t);
+        WriteDataWithSize(data, offset, size);
+        _opCount++;
+    }
+
+    internal void AddSet(Entity e, ComponentType t, byte[] data, int offset, int size)
+    {
+        WriteTag(DeltaOpKind.Set);
+        WriteEntity(e);
+        WriteComponentType(t);
+        WriteDataWithSize(data, offset, size);
+        _opCount++;
+    }
+
+    internal void AddRemove(Entity e, ComponentType t)
+    {
+        WriteTag(DeltaOpKind.Remove);
+        WriteEntity(e);
+        WriteComponentType(t);
+        _opCount++;
+    }
+
+    internal unsafe void AddAddUnsafe(Entity e, ComponentType t, void* data, int size)
+    {
+        WriteTag(DeltaOpKind.Add);
+        WriteEntity(e);
+        WriteComponentType(t);
+        WriteDataUnsafe(data, size);
+        _opCount++;
+    }
+
+    internal unsafe void AddSetUnsafe(Entity e, ComponentType t, void* data, int size)
+    {
+        WriteTag(DeltaOpKind.Set);
+        WriteEntity(e);
+        WriteComponentType(t);
+        WriteDataUnsafe(data, size);
+        _opCount++;
+    }
+
+    private unsafe void WriteDataUnsafe(void* data, int size)
+    {
+        var pos = _length;
+        Grow(VarintSize(size) + size);
+        WriteVarintAt(ref pos, size);
+        if (size > 0)
+            Unsafe.CopyBlockUnaligned(ref _buffer[pos], ref *(byte*)data, (uint)size);
+        _length = pos + size;
+    }
+
+    // ── Decoder API (used by ReplayCore, HasEntity) ────────────────────
+
+    internal OpDecoder GetDecoder() => new(_buffer, _length);
 
     /// <summary>
-    /// Gets whether this delta has no entries.
+    /// Cursor-based decoder that reads operations from the packed buffer.
+    /// Call <see cref="MoveNext"/> to advance, then read the current
+    /// operation's payload using the type-specific read methods.
     /// </summary>
-    public bool IsEmpty => DeltaCount == 0;
+    internal struct OpDecoder
+    {
+        private readonly byte[] _buffer;
+        private readonly int _end;
+        private int _pos;
 
-    /// <summary>
-    /// Returns whether this delta references an entity.
-    /// </summary>
+        public DeltaOpKind Kind { get; private set; }
+        public Entity Entity { get; private set; }
+
+        internal OpDecoder(byte[] buffer, int length)
+        {
+            _buffer = buffer;
+            _end = length;
+            _pos = 0;
+            Kind = default;
+            Entity = default;
+        }
+
+        public bool MoveNext()
+        {
+            if (_pos >= _end) return false;
+            Kind = (DeltaOpKind)_buffer[_pos++];
+            Entity = new Entity(ReadVarint(), ReadVarint());
+            return true;
+        }
+
+        /// <summary>
+        /// Reads a varint from the buffer at the current position and advances.
+        /// </summary>
+        public int ReadVarint()
+        {
+            var buf = _buffer;
+            var end = _end;
+            int result = 0;
+            int shift = 0;
+            for (var i = 0; i < 5; i++)
+            {
+                if (_pos >= end) return result;
+                var b = buf[_pos++];
+                result |= (b & 0x7F) << shift;
+                if ((b & 0x80) == 0) return result;
+                shift += 7;
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Reads the extra entity (Link parent) from the buffer.
+        /// Only valid when <see cref="Kind"/> is <see cref="DeltaOpKind.Link"/>.
+        /// </summary>
+        public Entity ReadExtraEntity()
+        {
+            return new Entity(ReadVarint(), ReadVarint());
+        }
+
+        /// <summary>
+        /// Reads the component type for Add/Set/Remove operations.
+        /// </summary>
+        public ComponentType ReadComponentType()
+        {
+            return new ComponentType(ReadVarint());
+        }
+
+        /// <summary>
+        /// Reads a length-prefixed byte span (component payload).
+        /// </summary>
+        public ReadOnlySpan<byte> ReadData()
+        {
+            var size = ReadVarint();
+            if (size <= 0) return ReadOnlySpan<byte>.Empty;
+            if (_pos + size > _end)
+                throw new InvalidOperationException("Truncated FrameDelta: insufficient data for component payload.");
+            var span = new ReadOnlySpan<byte>(_buffer, _pos, size);
+            _pos += size;
+            return span;
+        }
+
+        /// <summary>
+        /// Reads length bytes from the buffer without a length prefix.
+        /// </summary>
+        public ReadOnlySpan<byte> ReadBytes(int length)
+        {
+            if (length <= 0) return ReadOnlySpan<byte>.Empty;
+            if (_pos + length > _end)
+                throw new InvalidOperationException("Truncated FrameDelta: insufficient data bytes.");
+            var span = new ReadOnlySpan<byte>(_buffer, _pos, length);
+            _pos += length;
+            return span;
+        }
+
+        /// <summary>
+        /// Skips over the data payload for the current Add/Set operation.
+        /// </summary>
+        public void SkipData()
+        {
+            ReadVarint(); // ComponentType
+            var size = ReadVarint();
+            if (_pos + size > _end)
+                throw new InvalidOperationException("Truncated FrameDelta in SkipData.");
+            _pos += size;
+        }
+
+        /// <summary>
+        /// Skips past a Create operation's component payload.
+        /// </summary>
+        public void SkipCreatePayload()
+        {
+            var count = ReadVarint();
+            for (var i = 0; i < count; i++)
+            {
+                ReadVarint(); // type
+                var size = ReadVarint();
+                if (_pos + size > _end)
+                    throw new InvalidOperationException("Truncated FrameDelta in SkipCreatePayload.");
+                _pos += size;
+            }
+        }
+
+        /// <summary>
+        /// Returns the buffer backing this decoder (for direct access in Add/Set).
+        /// </summary>
+        public byte[] BackingBuffer => _buffer;
+
+        /// <summary>
+        /// The current read position within the backing buffer.
+        /// </summary>
+        public int CurrentPosition => _pos;
+    }
+
+    // ── Entity scan ────────────────────────────────────────────────────
+
     public bool HasEntity(Entity entity)
     {
-        for (var i = 0; i < ReservedEntities.Count; i++)
-            if (ReservedEntities[i].Equals(entity)) return true;
-        for (var i = 0; i < CreatedEntities.Count; i++)
-            if (CreatedEntities[i].Entity.Equals(entity)) return true;
-        for (var i = 0; i < AddCommands.Count; i++)
-            if (AddCommands[i].Entity.Equals(entity)) return true;
-        for (var i = 0; i < SetCommands.Count; i++)
-            if (SetCommands[i].Entity.Equals(entity)) return true;
-        for (var i = 0; i < RemoveCommands.Count; i++)
-            if (RemoveCommands[i].Entity.Equals(entity)) return true;
-        for (var i = 0; i < DestroyedEntities.Count; i++)
-            if (DestroyedEntities[i].Equals(entity)) return true;
-        for (var i = 0; i < ReleasedEntities.Count; i++)
-            if (ReleasedEntities[i].Equals(entity)) return true;
-        for (var i = 0; i < LinkCommands.Count; i++)
-            if (LinkCommands[i].Child.Equals(entity)) return true;
-        for (var i = 0; i < UnlinkCommands.Count; i++)
-            if (UnlinkCommands[i].Child.Equals(entity)) return true;
+        var decoder = GetDecoder();
+        while (decoder.MoveNext())
+        {
+            if (decoder.Entity.Equals(entity)) return true;
+            switch (decoder.Kind)
+            {
+                case DeltaOpKind.Link:
+                    if (decoder.ReadExtraEntity().Equals(entity)) return true;
+                    break;
+                case DeltaOpKind.Add:
+                case DeltaOpKind.Set:
+                    decoder.SkipData();
+                    break;
+                case DeltaOpKind.Remove:
+                    decoder.ReadComponentType();
+                    break;
+                case DeltaOpKind.Create:
+                    decoder.SkipCreatePayload();
+                    break;
+                default:
+                    break;
+            }
+        }
         return false;
     }
 
-    internal int DeepCopyOwnedData()
+    // ── Lazy legacy list access (for test code compatibility) ───────────
+
+    private bool _legacyParsed;
+    private List<Entity>? _lazyReserved;
+    private List<RawCreatedEntity>? _lazyCreated;
+    private List<LinkCommand>? _lazyLink;
+    private List<UnlinkCommand>? _lazyUnlink;
+    private List<RawComponentCommand>? _lazyAdd;
+    private List<RawComponentCommand>? _lazySet;
+    private List<RawRemoveCommand>? _lazyRemove;
+    private List<Entity>? _lazyDestroyed;
+    private List<Entity>? _lazyReleased;
+
+    private void ParseLegacy()
     {
-        int totalBytes = 0;
-        for (var i = 0; i < AddCommands.Count; i++)
-            totalBytes += AddCommands[i].DataSize;
-        for (var i = 0; i < SetCommands.Count; i++)
-            totalBytes += SetCommands[i].DataSize;
-        for (var i = 0; i < CreatedEntities.Count; i++)
+        if (_legacyParsed) return;
+        _legacyParsed = true;
+
+        _lazyReserved = new(16);
+        _lazyCreated = new(16);
+        _lazyLink = new(16);
+        _lazyUnlink = new(16);
+        _lazyAdd = new(16);
+        _lazySet = new(16);
+        _lazyRemove = new(16);
+        _lazyDestroyed = new(16);
+        _lazyReleased = new(16);
+
+        var decoder = GetDecoder();
+        while (decoder.MoveNext())
         {
-            var components = CreatedEntities[i].Components;
-            for (var j = 0; j < components.Length; j++)
-                totalBytes += components[j].DataSize;
-        }
-
-        if (totalBytes == 0) return 0;
-
-        var owned = new byte[totalBytes];
-        int pos = 0;
-
-        for (var i = 0; i < AddCommands.Count; i++)
-        {
-            var cmd = AddCommands[i];
-            if (cmd.DataSize > 0)
-                Buffer.BlockCopy(cmd.Data, cmd.DataOffset, owned, pos, cmd.DataSize);
-            AddCommands[i] = cmd with { Data = owned, DataOffset = pos };
-            pos += cmd.DataSize;
-        }
-
-        for (var i = 0; i < SetCommands.Count; i++)
-        {
-            var cmd = SetCommands[i];
-            if (cmd.DataSize > 0)
-                Buffer.BlockCopy(cmd.Data, cmd.DataOffset, owned, pos, cmd.DataSize);
-            SetCommands[i] = cmd with { Data = owned, DataOffset = pos };
-            pos += cmd.DataSize;
-        }
-
-        for (var i = 0; i < CreatedEntities.Count; i++)
-        {
-            var ce = CreatedEntities[i];
-            var src = ce.Components;
-            var dst = new RawComponentValue[src.Length];
-            for (var j = 0; j < src.Length; j++)
+            switch (decoder.Kind)
             {
-                var c = src[j];
-                if (c.DataSize > 0)
-                    Buffer.BlockCopy(c.Data, c.DataOffset, owned, pos, c.DataSize);
-                dst[j] = c with { Data = owned, DataOffset = pos };
-                pos += c.DataSize;
+                case DeltaOpKind.Reserve:
+                    _lazyReserved.Add(decoder.Entity);
+                    break;
+                case DeltaOpKind.Release:
+                    _lazyReleased.Add(decoder.Entity);
+                    break;
+                case DeltaOpKind.Create:
+                {
+                    var compCount = decoder.ReadVarint();
+                    var comps = new RawComponentValue[compCount];
+                    for (var i = 0; i < compCount; i++)
+                    {
+                        var type = new ComponentType(decoder.ReadVarint());
+                        var dataSize = decoder.ReadVarint();
+                        if (dataSize > 0)
+                        {
+                            var offset = decoder.CurrentPosition;
+                            _ = decoder.ReadBytes(dataSize);
+                            comps[i] = new RawComponentValue(type, _buffer, offset, dataSize);
+                        }
+                        else
+                        {
+                            comps[i] = new RawComponentValue(type, Array.Empty<byte>(), 0, 0);
+                        }
+                    }
+                    _lazyCreated.Add(new RawCreatedEntity(decoder.Entity, comps));
+                    break;
+                }
+                case DeltaOpKind.Link:
+                {
+                    var parent = decoder.ReadExtraEntity();
+                    _lazyLink.Add(new LinkCommand(parent, decoder.Entity));
+                    break;
+                }
+                case DeltaOpKind.Unlink:
+                    _lazyUnlink.Add(new UnlinkCommand(decoder.Entity));
+                    break;
+                case DeltaOpKind.Add:
+                {
+                    var comp = decoder.ReadComponentType();
+                    var size = decoder.ReadVarint();
+                    var offset = decoder.CurrentPosition;
+                    _ = decoder.ReadBytes(size);
+                    _lazyAdd.Add(new RawComponentCommand(decoder.Entity, comp, offset, size, _buffer));
+                    break;
+                }
+                case DeltaOpKind.Set:
+                {
+                    var comp = decoder.ReadComponentType();
+                    var size = decoder.ReadVarint();
+                    var offset = decoder.CurrentPosition;
+                    _ = decoder.ReadBytes(size);
+                    _lazySet.Add(new RawComponentCommand(decoder.Entity, comp, offset, size, _buffer));
+                    break;
+                }
+                case DeltaOpKind.Remove:
+                {
+                    var comp = decoder.ReadComponentType();
+                    _lazyRemove.Add(new RawRemoveCommand(decoder.Entity, comp));
+                    break;
+                }
+                case DeltaOpKind.Destroy:
+                    _lazyDestroyed.Add(decoder.Entity);
+                    break;
+                default:
+                    break;
             }
-            CreatedEntities[i] = ce with { Components = dst };
         }
-
-        return totalBytes;
     }
 
+    internal List<Entity> ReservedEntities { get { ParseLegacy(); return _lazyReserved!; } }
+    internal List<RawCreatedEntity> CreatedEntities { get { ParseLegacy(); return _lazyCreated!; } }
+    internal List<LinkCommand> LinkCommands { get { ParseLegacy(); return _lazyLink!; } }
+    internal List<UnlinkCommand> UnlinkCommands { get { ParseLegacy(); return _lazyUnlink!; } }
+    internal List<RawComponentCommand> AddCommands { get { ParseLegacy(); return _lazyAdd!; } }
+    internal List<RawComponentCommand> SetCommands { get { ParseLegacy(); return _lazySet!; } }
+    internal List<RawRemoveCommand> RemoveCommands { get { ParseLegacy(); return _lazyRemove!; } }
+    internal List<Entity> DestroyedEntities { get { ParseLegacy(); return _lazyDestroyed!; } }
+    internal List<Entity> ReleasedEntities { get { ParseLegacy(); return _lazyReleased!; } }
+
+    // ── Merge ──────────────────────────────────────────────────────────
+
     /// <summary>
-    /// Merges two deltas in sequence and returns a new self-contained delta.
+    /// Merges two deltas in temporal order. Operations from <paramref name="a"/>
+    /// appear before those from <paramref name="b"/>, preserving the original
+    /// per-delta temporal order. No folding or squashing is performed —
+    /// the resulting byte stream is a simple concatenation.
     /// </summary>
     public static FrameDelta Merge(FrameDelta a, FrameDelta b)
     {
         ArgumentNullException.ThrowIfNull(a);
         ArgumentNullException.ThrowIfNull(b);
 
-        var entityStates = new Dictionary<Entity, SquashEntityState>();
-        var appearanceOrder = new List<Entity>();
-
-        ProcessCommandsInto(entityStates, appearanceOrder, a);
-        ProcessCommandsInto(entityStates, appearanceOrder, b);
-
         var result = new FrameDelta();
-        RebuildFromState(result, entityStates, appearanceOrder);
-        result.DeepCopyOwnedData();
+        var totalLength = a._length + b._length;
+        result._buffer = new byte[totalLength];
+        if (a._length > 0)
+            Array.Copy(a._buffer, 0, result._buffer, 0, a._length);
+        if (b._length > 0)
+            Array.Copy(b._buffer, 0, result._buffer, a._length, b._length);
+        result._length = totalLength;
+        result._opCount = a._opCount + b._opCount;
         return result;
     }
 
-    private static void ProcessCommandsInto(
-        Dictionary<Entity, SquashEntityState> entityStates,
-        List<Entity> appearanceOrder,
-        FrameDelta source)
+    // ── Varint helpers ─────────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns the number of bytes needed to encode a LEB128 varint.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int VarintSize(int value)
     {
-        void Ensure(Entity e)
-        {
-            ref var state = ref CollectionsMarshal.GetValueRefOrAddDefault(entityStates, e, out bool exists);
-            if (!exists)
-            {
-                state = new SquashEntityState();
-                appearanceOrder.Add(e);
-            }
-        }
-
-        foreach (var e in source.ReservedEntities)
-        {
-            Ensure(e);
-            entityStates[e].IsReserved = true;
-        }
-
-        foreach (var e in source.ReleasedEntities)
-        {
-            Ensure(e);
-            entityStates[e].IsReleased = true;
-        }
-
-        foreach (var ce in source.CreatedEntities)
-        {
-            Ensure(ce.Entity);
-            ref var state = ref CollectionsMarshal.GetValueRefOrNullRef(entityStates, ce.Entity);
-            state.IsCreated = true;
-            if (ce.Components is { Length: > 0 })
-            {
-                state.CreatedComponents ??= new Dictionary<int, RawComponentValue>(ce.Components.Length);
-                foreach (var c in ce.Components)
-                    state.CreatedComponents[c.ComponentType.Value] = c;
-            }
-        }
-
-        foreach (var lc in source.LinkCommands)
-        {
-            Ensure(lc.Child);
-            ref var state = ref CollectionsMarshal.GetValueRefOrNullRef(entityStates, lc.Child);
-            state.HasHierarchyChange = true;
-            state.NetIsLinked = true;
-            state.NetLinkParent = lc.Parent;
-        }
-
-        foreach (var uc in source.UnlinkCommands)
-        {
-            Ensure(uc.Child);
-            ref var state = ref CollectionsMarshal.GetValueRefOrNullRef(entityStates, uc.Child);
-            state.HasHierarchyChange = true;
-            state.NetIsLinked = false;
-        }
-
-        foreach (var cmd in source.AddCommands)
-        {
-            Ensure(cmd.Entity);
-            FoldComponent(ref CollectionsMarshal.GetValueRefOrNullRef(entityStates, cmd.Entity), ComponentNetKind.Add, cmd, default);
-        }
-
-        foreach (var cmd in source.SetCommands)
-        {
-            Ensure(cmd.Entity);
-            FoldComponent(ref CollectionsMarshal.GetValueRefOrNullRef(entityStates, cmd.Entity), ComponentNetKind.Set, cmd, default);
-        }
-
-        foreach (var cmd in source.RemoveCommands)
-        {
-            Ensure(cmd.Entity);
-            FoldComponent(ref CollectionsMarshal.GetValueRefOrNullRef(entityStates, cmd.Entity), ComponentNetKind.Remove, default, cmd);
-        }
-
-        foreach (var e in source.DestroyedEntities)
-        {
-            Ensure(e);
-            entityStates[e].IsDestroyed = true;
-        }
+        if (value < 0) return 5; // negative → bit 31 set, always 5 bytes
+        if (value < 128) return 1;
+        if (value < 16384) return 2;
+        if (value < 2097152) return 3;
+        if (value < 268435456) return 4;
+        return 5;
     }
 
-    private static void RebuildFromState(FrameDelta target, Dictionary<Entity, SquashEntityState> entityStates, List<Entity> appearanceOrder)
+    /// <summary>
+    /// Writes a LEB128 varint into this instance's buffer at pos and advances pos.
+    /// </summary>
+    private void WriteVarintAt(ref int pos, int value)
     {
-        target.Clear();
-
-        foreach (var entity in appearanceOrder)
+        var buf = _buffer;
+        while (value >= 0x80 || value < 0)
         {
-            ref readonly var st = ref CollectionsMarshal.GetValueRefOrNullRef(entityStates, entity);
-
-            if (st.IsCreated && st.IsDestroyed)
-            {
-                target.ReservedEntities.Add(entity);
-                target.ReleasedEntities.Add(entity);
-                continue;
-            }
-
-            if (st.IsReserved && st.IsReleased && !st.IsCreated && !st.IsDestroyed)
-                continue;
-
-            if (st.IsCreated)
-            {
-                target.ReservedEntities.Add(entity);
-
-                if (st.ComponentActions is not null)
-                {
-                    foreach (var (typeId, action) in st.ComponentActions)
-                    {
-                        ref var comps = ref st.CreatedComponents;
-                        switch (action.Kind)
-                        {
-                            case ComponentNetKind.Add or ComponentNetKind.Set:
-                                comps ??= new Dictionary<int, RawComponentValue>();
-                                comps[typeId] = new RawComponentValue(
-                                    action.Command.ComponentType,
-                                    action.Command.Data,
-                                    action.Command.DataOffset,
-                                    action.Command.DataSize);
-                                break;
-                            case ComponentNetKind.Remove:
-                                comps?.Remove(typeId);
-                                break;
-                        }
-                    }
-                }
-
-                var compArray = st.CreatedComponents is { Count: > 0 }
-                    ? System.Linq.Enumerable.ToArray(st.CreatedComponents.Values)
-                    : [];
-
-                target.CreatedEntities.Add(new RawCreatedEntity(entity, compArray));
-            }
-            else
-            {
-                if (st.IsReserved)
-                    target.ReservedEntities.Add(entity);
-
-                if (st.ComponentActions is not null)
-                {
-                    foreach (var (typeId, action) in st.ComponentActions)
-                    {
-                        switch (action.Kind)
-                        {
-                            case ComponentNetKind.Add:
-                                target.AddCommands.Add(action.Command);
-                                break;
-                            case ComponentNetKind.Set:
-                                target.SetCommands.Add(action.Command);
-                                break;
-                            case ComponentNetKind.Remove:
-                                target.RemoveCommands.Add(action.RemoveCmd);
-                                break;
-                        }
-                    }
-                }
-            }
-
-            if (st.HasHierarchyChange)
-            {
-                if (st.NetIsLinked)
-                    target.LinkCommands.Add(new LinkCommand(st.NetLinkParent, entity));
-                else
-                    target.UnlinkCommands.Add(new UnlinkCommand(entity));
-            }
-
-            if (st.IsDestroyed)
-                target.DestroyedEntities.Add(entity);
-            if (st.IsReleased)
-                target.ReleasedEntities.Add(entity);
+            buf[pos++] = (byte)((uint)value | 0x80);
+            value = (int)((uint)value >> 7);
         }
-    }
-
-    private static void FoldComponent(ref SquashEntityState state, ComponentNetKind newKind, RawComponentCommand cmd, RawRemoveCommand removeCmd)
-    {
-        int typeId = newKind == ComponentNetKind.Remove ? removeCmd.ComponentType.Value : cmd.ComponentType.Value;
-        state.ComponentActions ??= new Dictionary<int, ComponentNetAction>();
-
-        ref var action = ref CollectionsMarshal.GetValueRefOrAddDefault(state.ComponentActions, typeId, out bool exists);
-        if (!exists)
-        {
-            action.Kind = newKind;
-            if (newKind == ComponentNetKind.Remove)
-                action.RemoveCmd = removeCmd;
-            else
-                action.Command = cmd;
-            return;
-        }
-
-        switch (action.Kind, newKind)
-        {
-            case (ComponentNetKind.Add, ComponentNetKind.Set):
-                action.Command = cmd;
-                action.Kind = ComponentNetKind.Add;
-                break;
-            case (ComponentNetKind.Add, ComponentNetKind.Remove):
-                state.ComponentActions!.Remove(typeId);
-                break;
-            case (ComponentNetKind.Set, ComponentNetKind.Set):
-                action.Command = cmd;
-                break;
-            case (ComponentNetKind.Set, ComponentNetKind.Remove):
-                action.Kind = ComponentNetKind.Remove;
-                action.RemoveCmd = removeCmd;
-                break;
-            case (ComponentNetKind.Remove, ComponentNetKind.Add):
-                action.Kind = ComponentNetKind.Set;
-                action.Command = cmd;
-                break;
-            case (ComponentNetKind.Remove, ComponentNetKind.Set):
-                action.Kind = ComponentNetKind.Set;
-                action.Command = cmd;
-                break;
-            default:
-                action.Kind = newKind;
-                if (newKind == ComponentNetKind.Remove)
-                    action.RemoveCmd = removeCmd;
-                else
-                    action.Command = cmd;
-                break;
-        }
-    }
-
-    private enum ComponentNetKind : byte { Add, Set, Remove }
-
-    private struct ComponentNetAction
-    {
-        public ComponentNetKind Kind;
-        public RawComponentCommand Command;
-        public RawRemoveCommand RemoveCmd;
-    }
-
-    private class SquashEntityState
-    {
-        public bool IsReserved;
-        public bool IsReleased;
-        public bool IsCreated;
-        public bool IsDestroyed;
-        public bool HasHierarchyChange;
-        public bool NetIsLinked;
-        public Entity NetLinkParent;
-        public Dictionary<int, RawComponentValue>? CreatedComponents;
-        public Dictionary<int, ComponentNetAction>? ComponentActions;
+        buf[pos++] = (byte)value;
     }
 }
+
+// ── Op kind enum ───────────────────────────────────────────────────────
+
+internal enum DeltaOpKind : byte
+{
+    Reserve = 0x01,
+    Release = 0x02,
+    Create = 0x03,
+    Link = 0x04,
+    Unlink = 0x05,
+    Add = 0x06,
+    Set = 0x07,
+    Remove = 0x08,
+    Destroy = 0x09,
+}
+
+// ── Retained record structs (used by CommandBuffer/CommandStream) ──────
 
 internal readonly record struct RawComponentValue(
     ComponentType ComponentType,
@@ -416,4 +562,3 @@ internal readonly record struct RawRemoveCommand(Entity Entity, ComponentType Co
 internal readonly record struct LinkCommand(Entity Parent, Entity Child);
 
 internal readonly record struct UnlinkCommand(Entity Child);
-
