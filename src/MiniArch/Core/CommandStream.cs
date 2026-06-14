@@ -1025,6 +1025,11 @@ public sealed class CommandStream : ICommandRecorder
         foreach (var store in _stores)
             store?.Clear();
 
+        for (var i = 0; i < _pendingBatchCount; i++)
+        {
+            if (!_batchCanceled[i] && i < _batchEntities.Length)
+                _pendingBatch[_batchEntities[i].Id] = -1;
+        }
         _destroyCount = 0;
         _pendingBatchCount = 0;
         _pendingBatchMin = int.MaxValue;
