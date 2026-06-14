@@ -2,7 +2,7 @@
 title: Command Buffer Runtime
 module: MiniArch.Core CommandBuffer
 description: CommandBuffer safety-first per-entity deduplicating recorder plus CommandStream typed-store expert mode, both compatible with FrameDelta
-updated: 2026-06-13 (CB/CS vs Friflo 分阶段计时: CB record 3x慢, CS record 1.5x慢, Create-heavy 场景 CS 反超)
+updated: 2026-06-14 (FrameDelta 决定性测试套件落地；新增 lockstep 约束与缺口说明)
 ---
 # Command Buffer Runtime
 
@@ -167,4 +167,49 @@ HeroPipeline 回归测试涨幅：
 - **CB record**：把 `InlineMap` 改成按 componentId 直索引的数组（去掉 linear scan）；把 entity version check 提升到外围、每个 entity 只做一次而非每条 op 一次。预期能把 3x 差距砍到 1.5x。
 - **CS record**：合并 `GetOrCreateStore<T>` 和 `AppendEntry` 为一步，预分配 store 数组避免 resize。差距已经较小（1.5x），ROI 有限。
 - **当前定位**：CB 适合 mutation-heavy（版本安全），CS 适合 create-heavy（batch 合并收益）。两者互补而非替代。
+
+## FrameDelta 决定性与帧同步（2026-06-14）
+
+### 已验证的决定性属性
+
+`tests/MiniArch.Tests/Core/FrameDeltaDeterminismTests.cs` 通过 `WorldFingerprint`（投影 stats / archetype 列布局 / per-slot version / 组件值 / hierarchy 到字符串）验证以下性质：
+
+1. **同一 delta 序列重放到 N 个全新 world → 状态完全一致**（含 entity id、version、archetype signature、组件字节、父子关系）。
+2. **Submit(源) == Replay(副本)** 在避开 Remove+Add 同组件同帧模式时成立（见前文坑点）。这保证 host 用 Submit、client 用 Replay 的混合模式可收敛。
+3. **ID 回收、hierarchy 演化、深克隆、批量 spawn + 剪枝**等场景下决定性稳定。
+4. **Safety net**：target world 的 entity id allocator 状态与 source 分叉时，`EnsureReplayReservation` 抛 `InvalidOperationException("out of sync")`，不会静默别名。
+
+### 关键约束：必须从 frame 0 完整重放
+
+`EnsureReplayReservation`（World.EntityLifecycle.cs:418）假设 target 的 free-id 栈和 source 同步。**不能从 delta 序列中间开始 replay**——target 的 id allocator 必须被同样的历史驱动到同样位置。否则要么抛 out-of-sync，要么静默分配到错误的 id。
+
+实践含义：
+- **存档/回放**：从空 world 开始，按帧顺序 replay 全部 delta。可工作。
+- **Lockstep/rollback**：所有 peer 必须从相同的初始快照开始，按相同顺序应用相同 delta。可工作。
+- **断点续传 / 增量同步**：当前不支持。需要 id remap 或显式 checkpoint 机制。
+
+### 帧同步尚缺的三块
+
+1. **序列化**：FrameDelta 全是 `List<>` + `record struct`，没有 `Serialize(Span<byte>)`。上不了网。头号阻塞。
+2. **State checksum**：没有 `World.ComputeChecksum()`。无法验证 peer 收敛。`WorldFingerprint`（测试辅助类）可作为粗糙原型。
+3. **Divergent peer resync**：`EnsureReplayReservation` 抛异常而非尝试对齐。对抗性 netcode 需要 snapshot diff + 重放补救。
+
+### 次要问题
+
+- **Submit 与 Replay 命令顺序不一致**（已记录在坑点）：纯 lockstep 模式（只用 Replay）不受影响，但禁止同帧内某些 peer 用 Submit、另一些用 Replay。
+- Replay 期间 query layout generation 抑制是一次性的，超大 delta 或分片重放可能触发额外失效。
+
+### `WorldFingerprint` 模式
+
+测试中的 `Fingerprint(World)` 把 world 全部可观察状态序列化成字符串，是后续实现 `World.ComputeChecksum()` 的参考骨架。结构：
+
+```
+S:ec=N,cap=M,rec=K,ac=L          // WorldStats
+A:TypeName1,TypeName2|n=..|cap=.. // 每个 archetype 一行（按类型名排序）
+E[i]:alive|v=..|sig=[id1,id2]|p=(pid,vpv)|P=(..)|V=(..)|H=..  // 每个槽位
+H:                                // hierarchy
+  L:(child)->(parent)
+```
+
+实现 checksum 时把 StringBuilder 换成 hash 累加器（XXHash64 等），跳过字符串构造即可。
 
