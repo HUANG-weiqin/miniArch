@@ -1645,9 +1645,8 @@ public sealed class CommandStreamTests
         // This fuzz focuses on single-world correctness: after each frame's Submit,
         // the world state is consistent. It avoids cross-world replay of recycled IDs
         // which requires deeper parity between CommandStream and CommandBuffer delta formats.
-        // Important: CommandStream is an expert-mode recorder — operations on entities
-        // destroyed within the same batch will fail. We must exclude destroyed entities
-        // from subsequent operations in the same frame.
+        // CommandStream applies Add/Set/Remove in pass 1 and Destroy in pass 2, so
+        // operations on entities destroyed later in the same frame are safe.
         const int Frames = 200;
         var world = new World();
         var stream = new CommandStream(world);
@@ -1661,13 +1660,11 @@ public sealed class CommandStreamTests
                 if (!world.IsAlive(alive[i]))
                     alive.RemoveAt(i);
 
-            var destroyedThisFrame = new HashSet<Entity>();
             var opsThisFrame = rng.Next(1, 8);
             for (var op = 0; op < opsThisFrame; op++)
             {
-                var candidates = alive.Where(e => !destroyedThisFrame.Contains(e)).ToList();
-                var kind = candidates.Count == 0 ? 0 : rng.Next(100);
-                if (kind < 35 || candidates.Count == 0)
+                var kind = alive.Count == 0 ? 0 : rng.Next(100);
+                if (kind < 35 || alive.Count == 0)
                 {
                     var e = stream.Create();
                     var compCount = rng.Next(3);
@@ -1677,33 +1674,31 @@ public sealed class CommandStreamTests
                 }
                 else if (kind < 48)
                 {
-                    var e = candidates[rng.Next(candidates.Count)];
-                    stream.Destroy(e);
-                    destroyedThisFrame.Add(e);
+                    stream.Destroy(alive[rng.Next(alive.Count)]);
                 }
                 else if (kind < 62)
                 {
-                    stream.Set(candidates[rng.Next(candidates.Count)], new Position(rng.Next(), rng.Next()));
+                    stream.Set(alive[rng.Next(alive.Count)], new Position(rng.Next(), rng.Next()));
                 }
                 else if (kind < 74)
                 {
-                    stream.Add(candidates[rng.Next(candidates.Count)], new Velocity(rng.Next(), rng.Next()));
+                    stream.Add(alive[rng.Next(alive.Count)], new Velocity(rng.Next(), rng.Next()));
                 }
                 else if (kind < 84)
                 {
-                    stream.Add(candidates[rng.Next(candidates.Count)], new Health(rng.Next()));
+                    stream.Add(alive[rng.Next(alive.Count)], new Health(rng.Next()));
                 }
                 else if (kind < 90)
                 {
-                    stream.Remove<Position>(candidates[rng.Next(candidates.Count)]);
+                    stream.Remove<Position>(alive[rng.Next(alive.Count)]);
                 }
                 else if (kind < 95)
                 {
-                    stream.Remove<Velocity>(candidates[rng.Next(candidates.Count)]);
+                    stream.Remove<Velocity>(alive[rng.Next(alive.Count)]);
                 }
                 else
                 {
-                    stream.Remove<Health>(candidates[rng.Next(candidates.Count)]);
+                    stream.Remove<Health>(alive[rng.Next(alive.Count)]);
                 }
             }
 

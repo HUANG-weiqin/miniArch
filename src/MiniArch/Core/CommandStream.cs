@@ -259,14 +259,14 @@ public sealed class CommandStream : ICommandRecorder
         var frozen = SwapOutState();
         var task = Task.Run(() => BuildFromFrozen(frozen));
         SubmitFromFrozen(frozen);
-        return task.ContinueWith(t => t.Result.Delta,
-            TaskContinuationOptions.ExecuteSynchronously);
+        return task;
     }
 
     private void BuildDelta(FrameDelta delta)
     {
-        EmitPendingEntitiesToDelta(delta, _batchCanceled, _batchHeads,
-            _batchCompCounts, _batchComps, _batchBuf, _batchEntities, _pendingBatchCount);
+        EmitPendingEntitiesToDelta(delta, new PendingBatchView(
+            _batchCanceled, _batchHeads, _batchCompCounts,
+            _batchComps, _batchBuf, _batchEntities, _pendingBatchCount));
 
         foreach (var store in _stores)
         {
@@ -364,13 +364,11 @@ public sealed class CommandStream : ICommandRecorder
         }
     }
 
-    private static (FrameDelta Delta, int CopiedBytes) BuildFromFrozen(FrozenState frozen)
+    private static FrameDelta BuildFromFrozen(FrozenState frozen)
     {
         var delta = new FrameDelta();
 
-        EmitPendingEntitiesToDelta(delta, frozen.BatchCanceled, frozen.BatchHeads,
-            frozen.BatchCompCounts, frozen.BatchComps, frozen.BatchBuf,
-            frozen.BatchEntities, frozen.PendingBatchCount);
+        EmitPendingEntitiesToDelta(delta, frozen.Pending);
 
         foreach (var store in frozen.Stores)
         {
@@ -383,8 +381,8 @@ public sealed class CommandStream : ICommandRecorder
 
         EmitHierarchyToDelta(delta, frozen.HierarchyByChild, frozen.UnavailableEntities);
 
-        var copiedBytes = delta.DeepCopyOwnedData();
-        return (delta, copiedBytes);
+        delta.DeepCopyOwnedData();
+        return delta;
     }
 
     // ── Pending entity materialization ─────────────────────────────────
@@ -510,11 +508,16 @@ public sealed class CommandStream : ICommandRecorder
         }
     }
 
-    private static void EmitPendingEntitiesToDelta(FrameDelta delta,
-        bool[] batchCanceled, int[] batchHeads, int[] batchCompCounts,
-        BatchedComponent[] batchComps, byte[] batchBuf,
-        Entity[] batchEntities, int pendingBatchCount)
+    private static void EmitPendingEntitiesToDelta(FrameDelta delta, in PendingBatchView view)
     {
+        var batchCanceled = view.Canceled;
+        var batchHeads = view.Heads;
+        var batchCompCounts = view.CompCounts;
+        var batchComps = view.Comps;
+        var batchBuf = view.Buf;
+        var batchEntities = view.Entities;
+        var pendingBatchCount = view.Count;
+
         for (var i = 0; i < pendingBatchCount; i++)
         {
             var entity = batchEntities[i];
@@ -1158,6 +1161,29 @@ public sealed class CommandStream : ICommandRecorder
         public int Next;
     }
 
+    private readonly struct PendingBatchView
+    {
+        public readonly bool[] Canceled;
+        public readonly int[] Heads;
+        public readonly int[] CompCounts;
+        public readonly BatchedComponent[] Comps;
+        public readonly byte[] Buf;
+        public readonly Entity[] Entities;
+        public readonly int Count;
+
+        public PendingBatchView(bool[] canceled, int[] heads, int[] compCounts,
+            BatchedComponent[] comps, byte[] buf, Entity[] entities, int count)
+        {
+            Canceled = canceled;
+            Heads = heads;
+            CompCounts = compCounts;
+            Comps = comps;
+            Buf = buf;
+            Entities = entities;
+            Count = count;
+        }
+    }
+
     private sealed class FrozenState
     {
         public ComponentStore?[] Stores = [];
@@ -1173,5 +1199,9 @@ public sealed class CommandStream : ICommandRecorder
         public HashSet<Entity>? UnavailableEntities;
         public Entity[] BatchEntities = [];
         public bool[] BatchCanceled = [];
+
+        public PendingBatchView Pending => new(
+            BatchCanceled, BatchHeads, BatchCompCounts, BatchComps,
+            BatchBuf, BatchEntities, PendingBatchCount);
     }
 }
