@@ -23,6 +23,49 @@ public sealed class FrameDelta
     /// </summary>
     public bool IsEmpty => _opCount == 0;
 
+    // ── Network serialization ──────────────────────────────────────────
+
+    /// <summary>
+    /// Exposes the packed buffer for zero-copy transmission.
+    /// The returned span is the wire format — send it as-is over the network.
+    /// </summary>
+    public ReadOnlySpan<byte> AsSpan() => new(_buffer, 0, _length);
+
+    /// <summary>
+    /// Deserializes a FrameDelta from bytes received over the network.
+    /// The caller owns the returned delta; the wire bytes are copied into
+    /// an independent buffer.
+    /// </summary>
+    public static FrameDelta Deserialize(ReadOnlySpan<byte> wire)
+    {
+        var delta = new FrameDelta();
+        delta._buffer = wire.ToArray();
+        delta._length = wire.Length;
+
+        var decoder = delta.GetDecoder();
+        while (decoder.MoveNext())
+        {
+            delta._opCount++;
+            switch (decoder.Kind)
+            {
+                case DeltaOpKind.Add:
+                case DeltaOpKind.Set:
+                    decoder.SkipData();
+                    break;
+                case DeltaOpKind.Remove:
+                    decoder.ReadComponentType();
+                    break;
+                case DeltaOpKind.Create:
+                    decoder.SkipCreatePayload();
+                    break;
+                case DeltaOpKind.Link:
+                    decoder.ReadExtraEntity();
+                    break;
+            }
+        }
+        return delta;
+    }
+
     // ── Writer API (used by CommandBuffer / CommandStream) ──────────────
 
     private void Grow(int additionalBytes)

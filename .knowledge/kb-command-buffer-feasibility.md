@@ -2,7 +2,7 @@
 title: Command Buffer Runtime
 module: MiniArch.Core CommandBuffer
 description: CommandBuffer safety-first per-entity deduplicating recorder plus CommandStream typed-store expert mode, both compatible with FrameDelta
-updated: 2026-06-14 (新增 FrameDelta 序列化压缩方案；记录 Merge + id 回收导致 allocator 分叉的 bug)
+updated: 2026-06-14 (FrameDelta 紧凑字节流重构落地：Merge 简化、零拷贝序列化、开箱即用 Send/Recv)
 ---
 # Command Buffer Runtime
 
@@ -188,9 +188,9 @@ HeroPipeline 回归测试涨幅：
 - **Lockstep/rollback**：所有 peer 必须从相同的初始快照开始，按相同顺序应用相同 delta。可工作。
 - **断点续传 / 增量同步**：当前不支持。需要 id remap 或显式 checkpoint 机制。
 
-### 帧同步尚缺的三块
+### 帧同步尚缺的二块
 
-1. **序列化**：FrameDelta 全是 `List<>` + `record struct`，没有 `Serialize(Span<byte>)`。详见下方"FrameDelta 序列化压缩方案"。头号阻塞。
+1. ~~**序列化**~~ → 已完成。`delta.AsSpan()` + `FrameDelta.Deserialize(ReadOnlySpan<byte>)` 开箱即用。
 2. **State checksum**：无需新 API。`WorldSnapshot.Save` 输出的字节流可以直接喂给 SHA256/XXHash64 做决定性 hash——前提是两个 world 走过相同的 delta 历史（lockstep 标准用法）。测试中 `HashWorld(World)` 已实现此模式（`tests/MiniArch.Tests/Core/FrameDeltaDeterminismTests.cs`）。**注意**：Save 的字节依赖 archetype 创建顺序和 swap-remove 历史，因此只在"同 delta 序列"场景下稳定；不做"逻辑等价但路径不同"的规范化（YAGNI）。
 3. **Divergent peer resync**：`EnsureReplayReservation` 抛异常而非尝试对齐。对抗性 netcode 需要 snapshot diff + 重放补救。
 
@@ -329,4 +329,36 @@ payload 本身就是大头（>85%），实体/类型引用是零头。
 - **接口形态**：`IFrameDeltaWriter` / `IFrameDeltaReader` 双向，或静态 `FrameDeltaCodec.Serialize(delta, IBufferWriter<byte>)` / `Deserialize(ReadOnlySequence<byte>)`。倾向后者（无状态、零分配）。
 - **Created entity 的 Components 数组**：count + 紧凑排列 (typeId varint + size varint + payload bytes)，无对齐 padding。
 - **版本协商**：第一字节留 4 bit version（wire format 版本）+ 4 bit flags（reserved for compression/extension）。
+
+### 实际落地（2026-06-14）
+
+方案已完全实现，且比原计划更简单：
+
+**核心改动：**
+- `FrameDelta` 内部改为 `byte[] _buffer` + `int _length` + `int _opCount`
+- 每个 op 编码为 `[1 byte tag][varint entityId][varint entityVersion][payload...]`
+- buffer 就是 wire format — 无需单独序列化步骤
+- `Merge` 从 200 行折叠状态机变为 15 行 `Array.Copy` 拼接
+
+**开箱即用的网络 API：**
+```csharp
+// 发
+var wire = delta.AsSpan();           // ReadOnlySpan<byte>
+socket.Send(wire);
+
+// 收
+var received = socket.Receive();
+var delta = FrameDelta.Deserialize(received);
+world.Replay(delta);
+```
+
+**约束：**
+- lockstep 先决条件（两边 state 一致）满足时可直接收发
+- `ComponentType.Value` 是进程内 int，跨进程使用需要两边 `ComponentRegistry` 注册顺序一致
+- 跨进程场景可加 type mapping header（约 2-3 字节）
+
+**已删除的死代码：**
+- `Clear()`、`DeepCopyOwnedData()` — 零调用
+- `BuildFromFrozen` 返回的 `CopiedBytes`
+- 所有旧的 `ProcessCommandsInto` / `RebuildFromState` / `FoldComponent` / `SquashEntityState`
 
