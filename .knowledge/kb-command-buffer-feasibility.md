@@ -191,7 +191,7 @@ HeroPipeline 回归测试涨幅：
 ### 帧同步尚缺的三块
 
 1. **序列化**：FrameDelta 全是 `List<>` + `record struct`，没有 `Serialize(Span<byte>)`。上不了网。头号阻塞。
-2. **State checksum**：没有 `World.ComputeChecksum()`。无法验证 peer 收敛。`WorldFingerprint`（测试辅助类）可作为粗糙原型。
+2. **State checksum**：无需新 API。`WorldSnapshot.Save` 输出的字节流可以直接喂给 SHA256/XXHash64 做决定性 hash——前提是两个 world 走过相同的 delta 历史（lockstep 标准用法）。测试中 `HashWorld(World)` 已实现此模式（`tests/MiniArch.Tests/Core/FrameDeltaDeterminismTests.cs`）。**注意**：Save 的字节依赖 archetype 创建顺序和 swap-remove 历史，因此只在"同 delta 序列"场景下稳定；不做"逻辑等价但路径不同"的规范化（YAGNI）。
 3. **Divergent peer resync**：`EnsureReplayReservation` 抛异常而非尝试对齐。对抗性 netcode 需要 snapshot diff + 重放补救。
 
 ### 次要问题
@@ -199,17 +199,12 @@ HeroPipeline 回归测试涨幅：
 - **Submit 与 Replay 命令顺序不一致**（已记录在坑点）：纯 lockstep 模式（只用 Replay）不受影响，但禁止同帧内某些 peer 用 Submit、另一些用 Replay。
 - Replay 期间 query layout generation 抑制是一次性的，超大 delta 或分片重放可能触发额外失效。
 
-### `WorldFingerprint` 模式
+### `WorldFingerprint` 模式（已删除）
 
-测试中的 `Fingerprint(World)` 把 world 全部可观察状态序列化成字符串，是后续实现 `World.ComputeChecksum()` 的参考骨架。结构：
+早期测试用字符串 fingerprint 做状态对比，已替换为 `WorldSnapshot.Save` → SHA256。原因：
+- 字符串太长（KB 级），失败时不可读
+- 与生产路径脱节——无法复用
+- Hash 模式直接复用 Save 序列化路径，零新 API，未来还可以喂给网络同步用
 
-```
-S:ec=N,cap=M,rec=K,ac=L          // WorldStats
-A:TypeName1,TypeName2|n=..|cap=.. // 每个 archetype 一行（按类型名排序）
-E[i]:alive|v=..|sig=[id1,id2]|p=(pid,vpv)|P=(..)|V=(..)|H=..  // 每个槽位
-H:                                // hierarchy
-  L:(child)->(parent)
-```
-
-实现 checksum 时把 StringBuilder 换成 hash 累加器（XXHash64 等），跳过字符串构造即可。
+hash 失败时只在 message 里打印 stats（entityCount / archetypeCount / hash 前 16 位）做定位起点，详细差异用调试器查。
 

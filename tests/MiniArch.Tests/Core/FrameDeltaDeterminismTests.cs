@@ -1,4 +1,5 @@
-using System.Text;
+using System.IO;
+using System.Security.Cryptography;
 using MiniArch.Core;
 
 namespace MiniArchTests.Core;
@@ -349,82 +350,35 @@ public sealed class FrameDeltaDeterminismTests
     }
 
     // ═══════════════════════════════════════════════════════════
-    // WorldFingerprint: full observable-state projection
+    // Hash-based state comparison
     // ═══════════════════════════════════════════════════════════
 
     private static void AssertIdentical(World a, World b, string context)
     {
-        var fa = Fingerprint(a);
-        var fb = Fingerprint(b);
-        if (fa != fb)
+        var ha = HashWorld(a);
+        var hb = HashWorld(b);
+        if (ha != hb)
+        {
+            var sa = a.GetStats();
+            var sb = b.GetStats();
             Assert.Fail(
                 $"Worlds diverge for [{context}].\n" +
-                $"--- World A ({fa.Length} chars) ---\n{fa}\n" +
-                $"--- World B ({fb.Length} chars) ---\n{fb}\n");
+                $"  A: ec={sa.EntityCount}, ac={sa.ArchetypeCount}, slots={sa.EntityCapacity}, hash={ha[..16]}\n" +
+                $"  B: ec={sb.EntityCount}, ac={sb.ArchetypeCount}, slots={sb.EntityCapacity}, hash={hb[..16]}\n");
+        }
     }
 
     /// <summary>
-    /// Projects all observable world state into a deterministic string.
-    /// Two worlds produce the same string iff they are observationally
-    /// equivalent for the purposes of lockstep / replay correctness.
+    /// Hashes a world by piping WorldSnapshot.Save output through SHA256.
+    /// For lockstep scenarios (same delta sequence replayed) this is stable:
+    /// archetype creation order, swap-remove history, and slot allocation
+    /// all match between peers driven by identical inputs.
     /// </summary>
-    private static string Fingerprint(World w)
+    private static string HashWorld(World w)
     {
-        var sb = new StringBuilder();
-
-        // World-level stats
-        var stats = w.GetStats();
-        sb.Append($"S:ec={stats.EntityCount},cap={stats.EntityCapacity},rec={stats.RecycledEntityCount},ac={stats.ArchetypeCount}\n");
-
-        // Archetype layout — sort by component type names for stable comparison.
-        // Different worlds may allocate archetypes in different insertion order;
-        // the SET of (signature, entityCount) tuples is what must match.
-        var archStats = w.GetArchetypeStats()
-            .Select(a => (
-                key: string.Join(",", a.ComponentTypes.Select(t => t.Name)),
-                a.EntityCount,
-                a.Capacity))
-            .OrderBy(x => x.key)
-            .ToArray();
-        foreach (var x in archStats)
-            sb.Append($"A:{x.key}|n={x.EntityCount}|cap={x.Capacity}\n");
-
-        // Per-slot entity record (uses InternalsVisibleTo).
-        // This catches version drift and id-aliasing that pure query-based
-        // enumeration would miss.
-        var records = w.EntityRecords;
-        for (var i = 0; i < records.Length; i++)
-        {
-            ref readonly var r = ref records[i];
-            if (!r.IsOccupied)
-            {
-                sb.Append($"E[{i}]:free|v={r.Version}\n");
-                continue;
-            }
-            var e = new Entity(i, r.Version);
-            var sig = r.Archetype!.Signature.AsSpan();
-            var sigStr = string.Join(",", sig.ToArray().Select(c => c.Value));
-            sb.Append($"E[{i}]:alive|v={r.Version}|sig=[{sigStr}]");
-
-            if (w.TryGetParent(e, out var p))
-                sb.Append($"|p=({p.Id},v{p.Version})");
-
-            AppendComponentValues(sb, w, e);
-            sb.Append('\n');
-        }
-
-        // Hierarchy: enumerate all live links (catches orphan/cycle divergence)
-        sb.Append("H:\n");
-        foreach (var (child, parent) in w.Hierarchy.EnumerateLiveLinks(w))
-            sb.Append($"  L:({child.Id},v{child.Version})<-({parent.Id},v{parent.Version})\n");
-
-        return sb.ToString();
-    }
-
-    private static void AppendComponentValues(StringBuilder sb, World w, Entity e)
-    {
-        if (w.TryGet(e, out Position p)) sb.Append($"|P=({p.X},{p.Y})");
-        if (w.TryGet(e, out Velocity v)) sb.Append($"|V=({v.X},{v.Y})");
-        if (w.TryGet(e, out Health h)) sb.Append($"|H={h.Value}");
+        using var ms = new MemoryStream();
+        WorldSnapshot.Save(ms, w);
+        var span = new ReadOnlySpan<byte>(ms.GetBuffer(), 0, (int)ms.Length);
+        return Convert.ToHexString(SHA256.HashData(span));
     }
 }
