@@ -1,4 +1,5 @@
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using MiniArch.Core;
 
@@ -380,5 +381,208 @@ public sealed class FrameDeltaDeterminismTests
         WorldSnapshot.Save(ms, w);
         var span = new ReadOnlySpan<byte>(ms.GetBuffer(), 0, (int)ms.Length);
         return Convert.ToHexString(SHA256.HashData(span));
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Serialization round-trip: AsSpan → Deserialize → Replay
+    // ═══════════════════════════════════════════════════════════
+
+    [Fact]
+    public void Serialize_then_deserialize_of_empty_delta_is_empty()
+    {
+        var delta = new FrameDelta();
+        var wire = delta.AsSpan();
+        var restored = FrameDelta.Deserialize(wire);
+        Assert.True(restored.IsEmpty);
+    }
+
+    [Fact]
+    public void CB_single_delta_round_trip_produces_identical_world()
+    {
+        var source = new World();
+        var buffer = new CommandBuffer(source);
+
+        var a = buffer.Create(); buffer.Add(a, new Position(1, 2));
+        var b = buffer.Create(); buffer.Add(b, new Position(3, 4)); buffer.Add(b, new Velocity(5, 6));
+        buffer.Link(a, b);
+        var delta = buffer.Snapshot(); buffer.Submit();
+
+        var wire = delta.AsSpan();
+        var restored = FrameDelta.Deserialize(wire);
+
+        var target = new World();
+        target.Replay(restored);
+        AssertIdentical(source, target, "CB single delta round-trip");
+    }
+
+    [Fact]
+    public void CS_single_delta_round_trip_produces_identical_world()
+    {
+        var source = new World();
+        var stream = new CommandStream(source);
+
+        var a = stream.Create(); stream.Add(a, new Position(10, 20));
+        var b = stream.Create(); stream.Add(b, new Health(99));
+        stream.Link(a, b);
+        var delta = stream.Snapshot(); stream.Submit();
+
+        var wire = delta.AsSpan();
+        var restored = FrameDelta.Deserialize(wire);
+
+        var target = new World();
+        target.Replay(restored);
+        AssertIdentical(source, target, "CS single delta round-trip");
+    }
+
+    [Fact]
+    public void CB_destroy_then_recycle_round_trip_preserves_id_allocation()
+    {
+        var source = new World();
+
+        var b1 = new CommandBuffer(source);
+        var a = b1.Create(); b1.Add(a, new Position(1, 1));
+        var d1 = b1.Snapshot(); b1.Submit();
+
+        var b2 = new CommandBuffer(source);
+        b2.Destroy(a);
+        var d2 = b2.Snapshot(); b2.Submit();
+
+        var b3 = new CommandBuffer(source);
+        var recycled = b3.Create(); b3.Add(recycled, new Position(9, 9));
+        var d3 = b3.Snapshot(); b3.Submit();
+
+        var merged = FrameDelta.Merge(FrameDelta.Merge(d1, d2), d3);
+        var wire = merged.AsSpan();
+        var restored = FrameDelta.Deserialize(wire);
+
+        var target = new World();
+        target.Replay(restored);
+        AssertIdentical(source, target, "CB merge destroy-recycle round-trip");
+    }
+
+    [Fact]
+    public void CB_merged_delta_round_trip_produces_identical_world()
+    {
+        var source = new World();
+        var deltas = new List<FrameDelta>();
+
+        var b1 = new CommandBuffer(source);
+        var a = b1.Create(); b1.Add(a, new Position(1, 2));
+        deltas.Add(b1.Snapshot()); b1.Submit();
+
+        var b2 = new CommandBuffer(source);
+        b2.Set(a, new Position(10, 20));
+        b2.Add(a, new Velocity(3, 4));
+        deltas.Add(b2.Snapshot()); b2.Submit();
+
+        var b3 = new CommandBuffer(source);
+        b3.Remove<Velocity>(a);
+        b3.Add(a, new Health(100));
+        deltas.Add(b3.Snapshot()); b3.Submit();
+
+        var merged = deltas.Aggregate(FrameDelta.Merge);
+        var wire = merged.AsSpan();
+        var restored = FrameDelta.Deserialize(wire);
+
+        var target = new World();
+        target.Replay(restored);
+        AssertIdentical(source, target, "CB 3-merge round-trip");
+    }
+
+    [Fact]
+    public void CS_merged_delta_round_trip_produces_identical_world()
+    {
+        var source = new World();
+        var deltas = new List<FrameDelta>();
+
+        var s1 = new CommandStream(source);
+        var a = s1.Create(); s1.Add(a, new Position(1, 1));
+        deltas.Add(s1.Snapshot()); s1.Submit();
+
+        var s2 = new CommandStream(source);
+        s2.Set(a, new Position(55, 66));
+        deltas.Add(s2.Snapshot()); s2.Submit();
+
+        var merged = deltas.Aggregate(FrameDelta.Merge);
+        var wire = merged.AsSpan();
+        var restored = FrameDelta.Deserialize(wire);
+
+        var target = new World();
+        target.Replay(restored);
+        AssertIdentical(source, target, "CS 2-merge round-trip");
+    }
+
+    [Fact]
+    public void Cross_CB_and_CS_merged_delta_round_trip_is_correct()
+    {
+        var source = new World();
+
+        var cb = new CommandBuffer(source);
+        var a = cb.Create(); cb.Add(a, new Position(1, 2));
+        var cbDelta = cb.Snapshot(); cb.Submit();
+
+        var stream = new CommandStream(source);
+        stream.Set(a, new Position(30, 40));
+        stream.Add(a, new Velocity(5, 5));
+        var csDelta = stream.Snapshot(); stream.Submit();
+
+        var merged = FrameDelta.Merge(cbDelta, csDelta);
+        var wire = merged.AsSpan();
+        var restored = FrameDelta.Deserialize(wire);
+
+        var target = new World();
+        target.Replay(restored);
+        AssertIdentical(source, target, "CB+CS merge round-trip");
+    }
+
+    [Fact]
+    public void Complex_multi_frame_scenario_round_trip_is_correct()
+    {
+        var (source, deltas) = BuildComplexScenario();
+        var merged = deltas.Aggregate(FrameDelta.Merge);
+        var wire = merged.AsSpan();
+        var restored = FrameDelta.Deserialize(wire);
+
+        var target = new World();
+        target.Replay(restored);
+        AssertIdentical(source, target, "complex 5-frame merged round-trip");
+    }
+
+    [Fact]
+    public void Serialize_deserialize_preserves_DeltaCount()
+    {
+        var source = new World();
+        var buffer = new CommandBuffer(source);
+        var a = buffer.Create(); buffer.Add(a, new Position(1, 2));
+        buffer.Set(a, new Position(3, 4));
+        buffer.Add(a, new Velocity(5, 6));
+        var delta = buffer.Snapshot(); buffer.Submit();
+
+        var count = delta.DeltaCount;
+        var wire = delta.AsSpan();
+        var restored = FrameDelta.Deserialize(wire);
+
+        Assert.Equal(count, restored.DeltaCount);
+    }
+
+    [Fact]
+    public void Serialize_deserialize_preserves_HasEntity()
+    {
+        var source = new World();
+        var buffer = new CommandBuffer(source);
+        var a = buffer.Create(); buffer.Add(a, new Position(1, 2));
+        var b = buffer.Create();
+        buffer.Link(a, b);
+        var delta = buffer.Snapshot(); buffer.Submit();
+
+        Assert.True(delta.HasEntity(a));
+        Assert.True(delta.HasEntity(b));
+
+        var wire = delta.AsSpan();
+        var restored = FrameDelta.Deserialize(wire);
+
+        Assert.True(restored.HasEntity(a));
+        Assert.True(restored.HasEntity(b));
+        Assert.False(restored.HasEntity(new Entity(9999, 1)));
     }
 }
