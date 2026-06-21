@@ -33,7 +33,7 @@ internal static class WorldClone
 
             for (var row = 0; row < entities.Length; row++)
             {
-                target.SetSnapshotLocation(entities[row], dstArch, row);
+                target.SetSnapshotLocation(entities[row], dstArch, startRow + row);
             }
         }
 

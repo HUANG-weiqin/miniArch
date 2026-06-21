@@ -311,7 +311,7 @@ public static class WorldSnapshot
 
         for (var row = 0; row < entities.Length; row++)
         {
-            world.SetSnapshotLocation(entities[row], archetype, row);
+            world.SetSnapshotLocation(entities[row], archetype, startRow + row);
         }
     }
 
