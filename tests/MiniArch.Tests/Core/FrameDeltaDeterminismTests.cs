@@ -54,10 +54,13 @@ public sealed class FrameDeltaDeterminismTests
     [Fact]
     public void Submit_on_source_equals_Replay_on_replica_for_safe_patterns()
     {
-        // Submit and Replay use different command ordering
-        // (Submit = recording order, Replay = canonical Reserved→Released→Created
-        // →Link→Unlink→Add→Set→Remove→Destroy). For scenarios that avoid
-        // same-frame Remove+Add on the same component type, both must converge.
+        // Submit and Replay use different overall ordering (BuildDelta writes
+        // sectioned buffer, Submit reorders), but ReplayCore processes ops in
+        // temporal order via packed byte buffer. ComponentStore.ApplyToWorld
+        // and EmitToDelta iterate _kinds in the same order, so even same-frame
+        // Remove+Add on the same component type converges between Submit and
+        // Replay. Remaining divergence risk: Hierarchy vs Ops/Destroy relative
+        // position differs between BuildDelta and Submit.
         var (source, deltas) = BuildComplexScenario();
 
         var replica = new World();
@@ -303,9 +306,9 @@ public sealed class FrameDeltaDeterminismTests
 
     /// <summary>
     /// Builds a multi-frame scenario that exercises every FrameDelta command
-    /// kind while avoiding the documented Remove+Add same-type-same-frame
-    /// pattern (which intentionally diverges between Submit and Replay).
-    /// Returns the source world (post-Submit) and the delta list.
+    /// kind. ReplayCore processes ops in temporal order (packed byte buffer),
+    /// so same-frame Remove+Add on the same component type converges between
+    /// Submit and Replay. Returns the source world (post-Submit) and delta list.
     /// </summary>
     private static (World Source, List<FrameDelta> Deltas) BuildComplexScenario()
     {
@@ -584,5 +587,122 @@ public sealed class FrameDeltaDeterminismTests
         Assert.True(restored.HasEntity(a));
         Assert.True(restored.HasEntity(b));
         Assert.False(restored.HasEntity(new Entity(9999, 1)));
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Hierarchy × Ops × Destroy same-frame convergence
+    // (Submit and Replay must produce identical state when these
+    // command kinds are mixed within a single frame; previously
+    // diverged because BuildDelta wrote Hierarchy before Ops while
+    // Submit ran Ops before Hierarchy.)
+    // ═══════════════════════════════════════════════════════════
+
+    [Fact]
+    public void Submit_link_and_set_on_same_child_same_frame_converges_with_replay()
+    {
+        var source = new World();
+        var buffer = new CommandBuffer(source);
+        var parent = buffer.Create(); buffer.Add(parent, new Position(0, 0));
+        var child = buffer.Create(); buffer.Add(child, new Position(1, 1));
+        buffer.Link(parent, child);
+        buffer.Set(child, new Position(99, 99));
+        var delta = buffer.Snapshot(); buffer.Submit();
+
+        var replica = new World();
+        replica.Replay(delta);
+
+        AssertIdentical(source, replica, "Link + Set same frame");
+    }
+
+    [Fact]
+    public void Submit_link_parent_then_destroy_parent_same_frame_converges_with_replay()
+    {
+        var source = new World();
+
+        // Frame 1: establish parent + child linked
+        var buffer1 = new CommandBuffer(source);
+        var parent = buffer1.Create(); buffer1.Add(parent, new Position(0, 0));
+        var child = buffer1.Create(); buffer1.Add(child, new Position(1, 1));
+        buffer1.Link(parent, child);
+        var delta1 = buffer1.Snapshot(); buffer1.Submit();
+
+        // Frame 2: create parent2, link to child, then destroy parent2 — all same frame
+        var buffer2 = new CommandBuffer(source);
+        var parent2 = buffer2.Create(); buffer2.Add(parent2, new Position(2, 2));
+        buffer2.Link(parent2, child);
+        buffer2.Destroy(parent2);
+        var delta2 = buffer2.Snapshot(); buffer2.Submit();
+
+        var replica = new World();
+        replica.Replay(delta1);
+        replica.Replay(delta2);
+
+        AssertIdentical(source, replica, "Link + Destroy parent same frame");
+    }
+
+    [Fact]
+    public void Submit_create_link_add_combined_same_frame_converges_with_replay()
+    {
+        var source = new World();
+        var buffer = new CommandBuffer(source);
+        var parent = buffer.Create();
+        var child = buffer.Create();
+        buffer.Add(parent, new Position(10, 20));
+        buffer.Add(child, new Position(30, 40));
+        buffer.Add(child, new Velocity(5, 5));
+        buffer.Link(parent, child);
+        var delta = buffer.Snapshot(); buffer.Submit();
+
+        var replica = new World();
+        replica.Replay(delta);
+
+        AssertIdentical(source, replica, "Create + Link + Add same frame");
+    }
+
+    [Fact]
+    public void Submit_unlink_then_set_same_frame_converges_with_replay()
+    {
+        var source = new World();
+
+        var buffer1 = new CommandBuffer(source);
+        var parent = buffer1.Create(); buffer1.Add(parent, new Position(0, 0));
+        var child = buffer1.Create(); buffer1.Add(child, new Position(1, 1));
+        buffer1.Link(parent, child);
+        var delta1 = buffer1.Snapshot(); buffer1.Submit();
+
+        var buffer2 = new CommandBuffer(source);
+        buffer2.Unlink(child);
+        buffer2.Set(child, new Position(77, 88));
+        var delta2 = buffer2.Snapshot(); buffer2.Submit();
+
+        var replica = new World();
+        replica.Replay(delta1);
+        replica.Replay(delta2);
+
+        AssertIdentical(source, replica, "Unlink + Set same frame");
+    }
+
+    [Fact]
+    public void Submit_set_then_unlink_same_frame_converges_with_replay()
+    {
+        // Variant: ops before hierarchy (link) in source recording order.
+        var source = new World();
+
+        var buffer1 = new CommandBuffer(source);
+        var parent = buffer1.Create(); buffer1.Add(parent, new Position(0, 0));
+        var child = buffer1.Create(); buffer1.Add(child, new Position(1, 1));
+        buffer1.Link(parent, child);
+        var delta1 = buffer1.Snapshot(); buffer1.Submit();
+
+        var buffer2 = new CommandBuffer(source);
+        buffer2.Set(child, new Position(77, 88));
+        buffer2.Unlink(child);
+        var delta2 = buffer2.Snapshot(); buffer2.Submit();
+
+        var replica = new World();
+        replica.Replay(delta1);
+        replica.Replay(delta2);
+
+        AssertIdentical(source, replica, "Set + Unlink same frame");
     }
 }

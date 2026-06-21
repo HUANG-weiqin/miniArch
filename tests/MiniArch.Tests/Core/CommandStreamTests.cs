@@ -1305,9 +1305,10 @@ public sealed class CommandStreamTests
     {
         // Tests that multiple frames of CommandStream operations, when snapshot
         // and replayed into a fresh world, produce the same final state.
-        // Note: FrameDelta replay processes AddCommands before RemoveCommands,
-        // so interleaving Remove-then-Add for the same component type in one frame
-        // will produce different results. Tests avoid this pattern.
+        // ReplayCore processes ops in temporal order via packed byte buffer;
+        // ComponentStore.ApplyToWorld and EmitToDelta iterate _kinds in the
+        // same order, so Submit and Replay converge even with Remove+Add
+        // same-type patterns in one frame.
         var source = new World();
         var deltas = new List<FrameDelta>();
         var stream = new CommandStream(source);

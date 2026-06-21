@@ -2,7 +2,7 @@
 title: Snapshot Persistence
 module: MiniArch.Core Snapshot
 description: Full-world snapshot save/load design for unmanaged components, plus WorldClone for zero-serialization in-memory copy
-updated: 2026-06-08 (internal 重建 API 在 World partial 文件中)
+updated: 2026-06-21 (Save 字节规范化：archetype 按 signature 排序 + entity 按 Id 排序，使 hash 在不同内部路径下稳定)
 ---
 # Snapshot Persistence
 
@@ -33,6 +33,7 @@ updated: 2026-06-08 (internal 重建 API 在 World partial 文件中)
 - 存档写组件类型的稳定字符串标识，不写运行时 `ComponentType.Value`
 - 存档写 entity slot versions（不只活体 entity version）
 - load 不能通过 `Add/Set/Remove` 回放世界——那会破坏 chunk 边界
+- **Save 字节规范化（2026-06-21）**：`CollectPersistedArchetypes` 按 signature 字典序排序 archetype；`WriteArchetype` 内按 entity.Id 升序排 row index，column payload 同步按排序后 row 顺序写。这样 Save 字节不再依赖 archetype 字典迭代顺序和 archetype 内部 row 顺序（受 swap-remove 影响），可在"逻辑等价但内部路径不同"的两个 world 上产生相同字节 → SHA256/XXHash64 等可用作 client-server diverge 校验。Load 不变（按字节顺序恢复，自然规范化）。冷路径性能略降（每个 component 逐 row 拷贝而非批量写），但 Save 不在游戏循环热路径上。
 
 ## 认知模型
 

@@ -2,7 +2,7 @@
 title: Command Buffer Runtime
 module: MiniArch.Core CommandBuffer
 description: CommandBuffer safety-first per-entity deduplicating recorder plus CommandStream typed-store expert mode, both compatible with FrameDelta
-updated: 2026-06-14 (FrameDelta 紧凑字节流重构落地：Merge 简化、零拷贝序列化、开箱即用 Send/Recv)
+updated: 2026-06-21 (CommandBuffer.Submit/SubmitFromFrozen 顺序对齐 BuildDelta；Merge bug 已根除；ReplayCore 时序处理)
 ---
 # Command Buffer Runtime
 
@@ -121,7 +121,10 @@ HeroPipeline 回归测试涨幅：
 - **CommandStream 同批次中 Destroy 后不再影响其他操作**（2026-06-10 修复）：`ApplyAllEntries` 改为两遍处理（pass 1: Create/Add/Set/Remove，pass 2: Destroy），与 CommandBuffer 的"先 ApplyOps 再 Destroy"顺序一致。同批次内先 Destroy 后 Add/Set 同一实体现在安全（Add/Set 先执行，然后 Destroy 销毁实体）。对 pending entity，`CancelPendingEntity` 后的条目在 materialize 时通过 `_pendingBatch[id] < 0` 检测跳过。`CommandStreamTests.Fuzz_200_frames_submit_and_verify_entity_count_stability` 不再需要 `destroyedThisFrame` 过滤。
 - **CommandStream pending batch 组件归属使用 per-batch 链表**（2026-06-11 修复）：旧实现用 `_batchCompCounts` 前缀和 + 扁平 `_batchComps` 数组，隐式假设每个 batch 的组件在数组中连续。但录制 API 不保证此顺序（例如 `Create(A), Create(B), Add(B,V), Add(A,P)` 时组件按 B→A 顺序写入数组，前缀扫描会将 V 误归给 A）。修复为 per-batch 单链表（`_batchHeads[]` 指向每个 batch 的链表头，`BatchedComponent.Next` 链接节点），彻底消除组件归属错误。`CommitBatchComponent` 不做 last-wins 遍历（O(1) prepend），materialize 时稳定排序+去重达到 last-wins 语义。详见测试 `Interleaved_pending_creates_get_correct_components`、`Remove_pending_component_then_create_another_entity` 等。
 - **CommandBuffer Entity lookup 加 Version 校验**（2026-06-11 修复）：`GetCreatedStateIndex`、`IsFrozenCreatedDestroyed`、`GetOrCreateOpsIndex` 之前只按 `Entity.Id` 查找，不校验 `Entity.Version`。World 回收实体后，同 Id 不同 Version 的 stale handle 会错误匹配到最新实体。修复后三个 lookup 函数都校验 `_entityByPoolIndex[idx].Version == entity.Version`，stale handle 不再别名。同时 `ApplyOpDirect`/`ApplyOpDirectFromFrozen` 加 `IsAlive` 保护，Submit 阶段遇到死实体自动跳过。
-- **FrameDelta.Replay 命令处理顺序与原始记录顺序不同**（架构差异，非 bug）：`World.ReplayCore` 按固定顺序处理：Reserved → Released → Created → Link → Unlink → AddCommands → SetCommands → RemoveCommands → Destroy。当同帧对同一组件类型执行 `Remove<Pos>` 后 `Add<Pos>` 时，`Submit` 与 `Snapshot+Replay` 可能产生不同结果。**CommandBuffer 不受此影响：录制时 per-component 去重消除了重复操作。CommandStream 调用方应避免同帧对同组件 Remove+Add 模式，改用 `Set`。**
+- **Submit vs Replay 命令顺序差异（仍存在，但触发场景比旧描述窄）**：`World.ReplayCore`（`World.cs:450`）是 `while (decoder.MoveNext()) switch`，**按字节流时序处理**——所谓"canonical 顺序（Reserve→Release→Create→Link→Unlink→Add→Set→Remove→Destroy）"实际是 `BuildDelta` 分段写入 buffer 的产物，不是 ReplayCore 硬编码。Submit 与 BuildDelta 顺序在 2026-06-21 后**完全对齐**（Create→Hierarchy→Ops→Destroy），所有命令组合（含 Link+Set、Link+Destroy、Unlink+Set 等同帧混合）下 Submit 与 Replay 都收敛：
+  - **同帧 `Remove<Pos>` + `Add<Pos>` 不再 diverge**（旧描述的核心场景，已不成立）：CommandStream 的 `ComponentStore<T>.ApplyToWorld` (`CommandStream.cs:1111`) 与 `.EmitToDelta` (`CommandStream.cs:1129`) 都按相同 `_kinds` 数组顺序遍历；CommandBuffer 因 InlineMap per-component 去重，同帧同 entity 同 component 只保留最后一个 op。两条路径 Submit 与 Replay 行为一致。
+  - **Hierarchy × Ops × Destroy 任意组合收敛**（2026-06-21 修复）：`CommandBuffer.Submit` 和 `SubmitFromFrozen` 原顺序 Create→Ops→Hierarchy→Destroy 与 `BuildDelta` 的 Create→Hierarchy→Ops→Destroy 不一致，在 Link+Destroy(parent) 同帧等极端组合下可能 diverge。修复后两者顺序对齐（见 `CommandBuffer.cs:457` Submit 和 `CommandBuffer.cs:620` SubmitFromFrozen，hierarchy 循环都移到 ops 之前）。
+  - 验证：`Submit_on_source_equals_Replay_on_replica_for_safe_patterns` (`FrameDeltaDeterminismTests.cs:55`) 用 `BuildComplexScenario` 覆盖多样命令组合；新增 `Submit_link_and_set_on_same_child_same_frame_converges_with_replay` / `Submit_link_parent_then_destroy_parent_same_frame_converges_with_replay` / `Submit_unlink_then_set_same_frame_converges_with_replay` 等针对性测试（`FrameDeltaDeterminismTests.cs:592` 起）覆盖所有同帧组合。
 
 ## CB/CS vs Friflo: Record 阶段瓶颈分析（2026-06-13）
 
@@ -199,54 +202,21 @@ HeroPipeline 回归测试涨幅：
 - **Submit 与 Replay 命令顺序不一致**（已记录在坑点）：纯 lockstep 模式（只用 Replay）不受影响，但禁止同帧内某些 peer 用 Submit、另一些用 Replay。
 - Replay 期间 query layout generation 抑制是一次性的，超大 delta 或分片重放可能触发额外失效。
 
-### Merge + id 回收导致 allocator 分叉（BUG，未修复）
+### Merge + id 回收 → 已通过重构根除（2026-06-14，commit `b0acf38`）
 
-`FrameDelta.Merge` 把多帧 delta 折叠成一个。当原始帧序列中存在 **跨帧 entity id 回收** 时，合并后的 delta 导致 target replay 时 id allocator 与 source 分叉。
+**结论：** bug 已不存在。`FrameDelta` 重构为 packed `byte[]` + 时序 op 流后，`Merge` 退化为 15 行 `Array.Copy` 拼接，不再做任何 entity 状态折叠，因此不会丢 op、不会改变时序，跨帧 id 回收自然正确。
 
-**复现场景：**
-- Frame 1：`Create A` → A=(0,v1)
-- Frame 2：`Destroy A` → free=[(0,v2)]
-- Frame 3：`Create B` → 回收 id=0，B=(0,v2)
+**历史背景（保留可追溯）：**
 
-逐帧 replay 没问题（`EnsureReplayReservation` 检测到 B 在 free list 中，走 `ReserveDeferredEntity` 正常 pop 回收）。Merge 后：
+旧 `FrameDelta` 用 9 个 `List<T>` 按 op 类型分段存储，`Merge` 是 200 行的"折叠状态机"（`ProcessCommandsInto` / `RebuildFromState` / `FoldComponent` / `SquashEntityState`）。折叠逻辑遇到**跨帧 entity id 回收**会让 target replay 时 id allocator 与 source 分叉：
 
-```
-ProcessCommandsInto → A: IsCreated + IsDestroyed
-                       B: IsCreated(存活)
+- 复现：`Frame1 Create A(0,v1)` → `Frame2 Destroy A → free=[(0,v2)]` → `Frame3 Create B(0,v2) 回收 id=0`。
+- 旧 Merge 把 A 折叠成 `Reserve+Release`、把 B 当 fresh create，`ReplayCore` 批处理顺序（全部 Reserve → 全部 Release → 全部 Create）丢失了 `reserve A → release A → reserve B 回收 A 的 id` 的时序依赖，导致抛 `out-of-sync` 异常或静默错误。
+- 更阴的变体：纯 `Reserve X` + `Release X` 被 `RebuildFromState` 的 `continue` 整个丢弃，target free list 与 source 不一致，后续帧必然分叉。
 
-RebuildFromState:244 → A 命中 IsCreated && IsDestroyed，
-                       折叠为 ReservedEntities+=A, ReleasedEntities+=A
-```
+**修复方案：** FrameDelta 内部改为单 `byte[] _buffer` + 时序排列的 op（`[1B tag][varint entityId][varint version][payload]`）。`ReplayCore` 改为单趟 `while (MoveNext()) switch`。`Merge` 不再分析语义，只 `Array.Copy` 两个 buffer——时序信息完整保留，跨帧 id 回收按原始顺序被 replay。
 
-合并后 delta 的 `ReplayCore` 处理顺序是 **全部 Reserve → 全部 Release → 全部 Create**：
-
-1. Reserve A=(0,v1)：`ReserveDeferredEntity` 分配 id=0，`_records[0]={v=1, Arch=null}`。
-2. Reserve B=(0,v2)：id=0<slotCount、!IsOccupied、Version=1≠2、不在 free list → fall through 重新分配 id=1 → `reserved≠entity` → **抛 out-of-sync 异常**。
-
-**更阴的变体（纯 reserve+release 被静默丢弃）：**
-- Frame 1：`Reserve X` → X=(0,v1)（无 create）
-- Frame 2：`Release X`
-
-Merge 命中 `RebuildFromState:251` 的 `if (IsReserved && IsReleased && !Created && !Destroyed) continue` → **X 被整个丢弃**。
-Source 走 Submit 后 `free=[(0,v2)]`，target replay 合并 delta 后 `free=[]`。后续帧 create 必然分叉——**不出异常，静默错误**。
-
-**根因：**
-`FrameDelta` 的分段结构（同类命令聚成一段）＋ `ReplayCore` 的批处理顺序（全部 Reserve 后才 Release）→ 丢失了 `reserve A → release A → reserve B 回收 A 的 id` 这种**时序依赖**。逐帧 replay 时每个 delta 太小不会触发，Merge 把多帧拍成一个 delta 就暴露了。
-
-**影响：**
-
-| 用法 | 受影响 |
-|---|---|
-| 逐帧 lockstep（每帧一个 delta） | 安全 |
-| 存档/回放（从 frame 0 逐帧 replay） | 安全 |
-| **Merge 后网络同步**（带宽优化合并多帧） | **会炸** |
-| 单帧内 create+destroy+create 同 id | 也会炸，但 CommandBuffer 录制时语义本就不清 |
-
-**建议措施：**
-1. **文档化约束**：Merge 仅用于"无生灭折叠"的 delta 序列（纯 add/set/link）。
-2. **运行时检测**：Merge 前扫描 source deltas，若检测到跨帧 id 回收，退化成不合并或抛错。
-3. **长期方案**：改 FrameDelta 为时序流（单条命令带 tag），Merge 只 append，Replay 按序处理——但破坏现有分段结构，影响性能。
-4. 第 1+2 条优先，等出现真实带宽瓶颈再考虑 3。
+**回归测试：** `tests/MiniArch.Tests/Core/FrameDeltaDeterminismTests.cs::CB_merge_destroy_recycle_round_trip_is_correct`（`tests/MiniArch.Tests/Core/FrameDeltaDeterminismTests.cs:439`）正中原始复现场景：Create A → Destroy A → Create B（id 回收），三帧 delta `Aggregate(Merge)` 后序列化/反序列化/replay，`AssertIdentical(source, target)` 通过。另覆盖 `CB_merged_delta_round_trip_produces_identical_world`、`CS_merged_delta_round_trip_produces_identical_world`、`Cross_CB_and_CS_merged_delta_round_trip_is_correct`。
 
 ### `WorldFingerprint` 模式（已删除）
 

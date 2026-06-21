@@ -475,20 +475,8 @@ public sealed class CommandBuffer : ICommandRecorder
             }
         }
 
-        for (var i = 0; i < _opsPoolCount; i++)
-        {
-            ref var existingOps = ref _opsPool[i];
-            if (existingOps.IsEmpty) continue;
-            var entity = _opsEntityByPoolIndex[i];
-
-            if (existingOps.Count >= 1) ApplyOpDirect(existingOps.Value0, entity);
-            if (existingOps.Count >= 2) ApplyOpDirect(existingOps.Value1, entity);
-            if (existingOps.Count >= 3) ApplyOpDirect(existingOps.Value2, entity);
-            if (existingOps.Count >= 4) ApplyOpDirect(existingOps.Value3, entity);
-            for (var nodeIdx = existingOps.OverflowHead; nodeIdx >= 0; nodeIdx = _opsOverflow.GetNext(nodeIdx))
-                ApplyOpDirect(_opsOverflow.GetValueReadonly(nodeIdx), entity);
-        }
-
+        // Hierarchy before Ops — aligns with BuildDelta order (Create→Hierarchy→Ops→Destroy)
+        // so Submit(source) and Replay(replica) converge for all command combinations.
         DeduplicateExistingDestroyEntities();
 
         foreach (var (child, intent) in _hierarchyByChild)
@@ -512,6 +500,20 @@ public sealed class CommandBuffer : ICommandRecorder
             }
             else
                 _world.Unlink(child);
+        }
+
+        for (var i = 0; i < _opsPoolCount; i++)
+        {
+            ref var existingOps = ref _opsPool[i];
+            if (existingOps.IsEmpty) continue;
+            var entity = _opsEntityByPoolIndex[i];
+
+            if (existingOps.Count >= 1) ApplyOpDirect(existingOps.Value0, entity);
+            if (existingOps.Count >= 2) ApplyOpDirect(existingOps.Value1, entity);
+            if (existingOps.Count >= 3) ApplyOpDirect(existingOps.Value2, entity);
+            if (existingOps.Count >= 4) ApplyOpDirect(existingOps.Value3, entity);
+            for (var nodeIdx = existingOps.OverflowHead; nodeIdx >= 0; nodeIdx = _opsOverflow.GetNext(nodeIdx))
+                ApplyOpDirect(_opsOverflow.GetValueReadonly(nodeIdx), entity);
         }
 
         for (var i = 0; i < _existingDestroyCount; i++)
@@ -676,20 +678,7 @@ public sealed class CommandBuffer : ICommandRecorder
             }
         }
 
-        for (var i = 0; i < frozen.OpsPoolCount; i++)
-        {
-            ref var existingOps = ref frozen.OpsPool[i];
-            if (existingOps.IsEmpty) continue;
-            var entity = frozen.OpsEntityByPoolIndex[i];
-
-            if (existingOps.Count >= 1) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value0, entity);
-            if (existingOps.Count >= 2) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value1, entity);
-            if (existingOps.Count >= 3) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value2, entity);
-            if (existingOps.Count >= 4) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value3, entity);
-            for (var nodeIdx = existingOps.OverflowHead; nodeIdx >= 0; nodeIdx = frozen.OpsOverflow.GetNext(nodeIdx))
-                ApplyOpDirectFromFrozen(_world, frozen.Slabs, frozen.OpsOverflow.GetValueReadonly(nodeIdx), entity);
-        }
-
+        // Hierarchy before Ops — aligns with BuildDelta order (Create→Hierarchy→Ops→Destroy)
         foreach (var (child, intent) in frozen.HierarchyByChild)
         {
             if (FindExistingDestroy(frozen.ExistingDestroyEntities, frozen.ExistingDestroyCount, child) >= 0) continue;
@@ -706,6 +695,20 @@ public sealed class CommandBuffer : ICommandRecorder
             }
             else
                 _world.Unlink(child);
+        }
+
+        for (var i = 0; i < frozen.OpsPoolCount; i++)
+        {
+            ref var existingOps = ref frozen.OpsPool[i];
+            if (existingOps.IsEmpty) continue;
+            var entity = frozen.OpsEntityByPoolIndex[i];
+
+            if (existingOps.Count >= 1) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value0, entity);
+            if (existingOps.Count >= 2) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value1, entity);
+            if (existingOps.Count >= 3) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value2, entity);
+            if (existingOps.Count >= 4) ApplyOpDirectFromFrozen(_world, frozen.Slabs, existingOps.Value3, entity);
+            for (var nodeIdx = existingOps.OverflowHead; nodeIdx >= 0; nodeIdx = frozen.OpsOverflow.GetNext(nodeIdx))
+                ApplyOpDirectFromFrozen(_world, frozen.Slabs, frozen.OpsOverflow.GetValueReadonly(nodeIdx), entity);
         }
 
         for (var i = 0; i < frozen.ExistingDestroyCount; i++)

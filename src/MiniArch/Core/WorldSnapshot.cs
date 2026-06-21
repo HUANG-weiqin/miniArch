@@ -163,7 +163,21 @@ public static class WorldSnapshot
             }
         }
 
+        archetypes.Sort(CompareArchetypesBySignature);
         return archetypes;
+    }
+
+    private static int CompareArchetypesBySignature(Archetype a, Archetype b)
+    {
+        var sa = a.Signature.AsSpan();
+        var sb = b.Signature.AsSpan();
+        var n = Math.Min(sa.Length, sb.Length);
+        for (var i = 0; i < n; i++)
+        {
+            var cmp = sa[i].Value.CompareTo(sb[i].Value);
+            if (cmp != 0) return cmp;
+        }
+        return sa.Length.CompareTo(sb.Length);
     }
 
     private static List<SchemaEntry> BuildSchemaEntries(World world, IReadOnlyList<Archetype> archetypes)
@@ -215,18 +229,23 @@ public static class WorldSnapshot
             writer.Write(schemaIndexByType[runtimeType]);
         }
 
-        var entityCount = archetype.EntityCount;
+        var entities = archetype.GetEntities().ToArray();
+        var entityCount = entities.Length;
         writer.Write(entityCount);
 
-        foreach (var entity in archetype.GetEntities())
-        {
-            writer.Write(entity.Id);
-        }
+        // Sort row indices by entity.Id so the byte layout is canonical and
+        // independent of internal swap-remove artifacts.
+        var sortedRows = new int[entityCount];
+        for (var i = 0; i < entityCount; i++) sortedRows[i] = i;
+        Array.Sort(sortedRows, (a, b) => entities[a].Id.CompareTo(entities[b].Id));
+
+        foreach (var row in sortedRows)
+            writer.Write(entities[row].Id);
 
         for (var columnIndex = 0; columnIndex < components.Length; columnIndex++)
         {
             var componentType = ComponentRegistry.Shared.GetType(components[columnIndex]);
-            GetColumnCodec(componentType).Write(writer, archetype, columnIndex, entityCount);
+            GetColumnCodec(componentType).Write(writer, archetype, columnIndex, sortedRows);
         }
     }
 
@@ -297,10 +316,10 @@ public static class WorldSnapshot
         });
     }
 
-    private static void WriteColumnPayload<T>(BinaryWriter writer, Archetype archetype, int columnIndex, int count)
+    private static void WriteColumnPayload<T>(BinaryWriter writer, Archetype archetype, int columnIndex, ReadOnlySpan<int> sortedRows)
         where T : unmanaged
     {
-        archetype.WriteColumnTo<T>(writer, columnIndex, count);
+        archetype.WriteColumnOrderedTo<T>(writer, columnIndex, sortedRows);
     }
 
     private static void ReadColumnPayload<T>(BinaryReader reader, Archetype archetype, int columnIndex, int count)
@@ -358,7 +377,7 @@ public static class WorldSnapshot
         return false;
     }
 
-    private delegate void ColumnWriter(BinaryWriter writer, Archetype archetype, int columnIndex, int count);
+    private delegate void ColumnWriter(BinaryWriter writer, Archetype archetype, int columnIndex, ReadOnlySpan<int> sortedRows);
 
     private delegate void ColumnReader(BinaryReader reader, Archetype archetype, int columnIndex, int count);
 

@@ -515,25 +515,23 @@ internal sealed partial class Archetype
             CopyColumnFrom(source, columnIndex, count);
     }
 
-    internal void WriteColumnTo<T>(BinaryWriter writer, int columnIndex, int count) where T : unmanaged
+    /// <summary>
+    /// Writes column payload for the rows in <paramref name="sortedRows"/> order.
+    /// Used by WorldSnapshot.Save to produce canonical byte layout independent
+    /// of archetype's internal row order (which is affected by swap-remove).
+    /// </summary>
+    internal unsafe void WriteColumnOrderedTo<T>(BinaryWriter writer, int columnIndex, ReadOnlySpan<int> sortedRows) where T : unmanaged
     {
-        if (!_isChunked)
-        {
-            writer.Write(GetColumnBytes(columnIndex, count));
-            return;
-        }
         var size = _elementSizes[columnIndex];
-        var segIdx = 0;
-        var remaining = count;
-        while (remaining > 0)
+        var count = sortedRows.Length;
+        if (count == 0) return;
+        var buf = new byte[count * size];
+        fixed (byte* ptr = buf)
         {
-            var seg = _segments[segIdx];
-            var take = Math.Min(remaining, seg.Count);
-            var span = seg.Data.AsSpan(_columnByteOffsets[columnIndex], take * size);
-            writer.Write(span);
-            remaining -= take;
-            segIdx++;
+            for (var i = 0; i < count; i++)
+                ReadComponentRaw(columnIndex, sortedRows[i], ptr + i * size);
         }
+        writer.Write(buf);
     }
 
     internal void ReadColumnFrom<T>(BinaryReader reader, int columnIndex, int count) where T : unmanaged

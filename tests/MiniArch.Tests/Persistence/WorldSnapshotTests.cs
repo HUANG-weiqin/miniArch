@@ -186,6 +186,52 @@ public sealed class WorldSnapshotTests
         Assert.False(loaded.IsAlive(grandChild));
     }
 
+    [Fact]
+    public void Save_canonicalizes_entity_row_order_within_archetype_so_load_yields_id_ascending_layout()
+    {
+        // Build a world where archetype internal rows are NOT in id order
+        // (swap-remove on row 0 moves the last entity into the first slot).
+        var world = new World();
+        var e0 = world.Create(); world.Add(e0, new Position(10, 20));
+        var e1 = world.Create(); world.Add(e1, new Position(30, 40));
+        var e2 = world.Create(); world.Add(e2, new Position(50, 60));
+        world.Destroy(e0); // swap-remove: e2 moves to row 0 -> internal [e2, e1]
+
+        using var stream = new MemoryStream();
+        WorldSnapshot.Save(stream, world);
+        stream.Position = 0;
+        var loaded = WorldSnapshot.Load(stream);
+
+        // After canonical Save+Load, archetype rows should follow ascending entity id.
+        Assert.True(loaded.TryGetLocation(e1, out var e1Location));
+        Assert.True(loaded.TryGetLocation(e2, out var e2Location));
+        Assert.Equal(0, e1Location.RowIndex);
+        Assert.Equal(1, e2Location.RowIndex);
+        Assert.Equal(new Position(30, 40), GetComponent<Position>(loaded, e1));
+        Assert.Equal(new Position(50, 60), GetComponent<Position>(loaded, e2));
+    }
+
+    [Fact]
+    public void Save_is_idempotent_after_round_trip_with_non_canonical_internal_layout()
+    {
+        var world = new World();
+        var e0 = world.Create(); world.Add(e0, new Position(10, 20));
+        var e1 = world.Create(); world.Add(e1, new Position(30, 40));
+        var e2 = world.Create(); world.Add(e2, new Position(50, 60));
+        world.Destroy(e0); // internal archetype rows: [e2, e1]
+
+        using var stream1 = new MemoryStream();
+        WorldSnapshot.Save(stream1, world);
+
+        stream1.Position = 0;
+        var loaded = WorldSnapshot.Load(stream1);
+
+        using var stream2 = new MemoryStream();
+        WorldSnapshot.Save(stream2, loaded);
+
+        Assert.Equal(stream1.ToArray(), stream2.ToArray());
+    }
+
     private static T GetComponent<T>(World world, Entity entity) where T : unmanaged
     {
         Assert.True(world.TryGetLocation(entity, out var location));
