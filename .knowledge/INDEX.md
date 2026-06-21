@@ -9,7 +9,7 @@
 | Workspace（仓库导航/脚本/流程） | `kb-repo-overview.md`、`kb-profiling-workflow.md`、`kb-throughput-workflow.md` |
 | MiniArch.Core（ECS 运行时） | `kb-core-ecs.md`、`kb-architecture-review.md`、`kb-chunk-storage.md`、`kb-cache-optimization.md` |
 | MiniArch.Core CommandBuffer / CommandStream | `kb-command-buffer-feasibility.md` |
-| MiniArch.Core Query | `kb-query-invalidation.md`、`kb-parallel-query-design.md`（待实现） |
+| MiniArch.Core Query | `kb-query-invalidation.md`、`kb-parallel-query.md` |
 | MiniArch.Core Snapshot | `kb-snapshot-persistence.md` |
 | MiniArch.Core Hierarchy | `kb-hierarchy-runtime.md` |
 | MiniArch.Core DebugMetrics | `kb-debug-metrics.md`（已删除，保留页作为历史记录） |

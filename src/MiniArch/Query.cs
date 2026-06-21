@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Runtime.CompilerServices;
+using System.Threading;
 
 namespace MiniArch;
 
@@ -60,7 +61,42 @@ public readonly struct Query
     /// Gets the refresh count (diagnostic).
     /// </summary>
     public int RefreshCount => _query.RefreshCount;
+
+    // ================================================================
+    //  Chunk-level iteration (sequential + parallel)
+    // ================================================================
+
+    /// <summary>
+    /// Iterates matched chunks sequentially. Zero-alloc if the delegate is cached by the caller.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void ForEachChunk(ChunkAction action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        var chunks = _query.GetChunkViewSpan();
+        for (var i = 0; i < chunks.Length; i++)
+            action(chunks[i]);
+    }
+
+    /// <summary>
+    /// Iterates matched chunks in parallel across worker threads.
+    /// Safe for component value reads/writes via <c>chunk.GetSpan&lt;T&gt;()</c>.
+    /// NOT safe for structural changes (Add/Remove/Create/Destroy) — collect entity ids
+    /// and apply via <see cref="MiniArch.Core.CommandStream"/> after this call returns.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void ForEachChunkParallel(ChunkAction action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        var chunks = _query.GetChunkViewArray(out var count);
+        if (count == 0)
+            return;
+        Parallel.For(0, count, i => action(chunks[i]));
+    }
 }
+
+/// <summary>Delegate for chunk-level iteration.</summary>
+public delegate void ChunkAction(ChunkView chunk);
 
 /// <summary>
 /// Struct enumerator over entities.

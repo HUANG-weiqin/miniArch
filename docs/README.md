@@ -47,6 +47,8 @@ public readonly record struct Entity(int Id, int Version)
 - `GetEnumerator()` — `foreach` support
 - `OrderBy(IComparer<Entity>)` / `OrderBy(Comparison<Entity>)` — sorted enumeration
 - `GetChunks()` — returns `ReadOnlySpan<ChunkView>` for batch/chunk-level access
+- `ForEachChunk(ChunkAction)` — sequential chunk iteration (zero-alloc when delegate is cached)
+- `ForEachChunkParallel(ChunkAction)` — parallel chunk iteration; safe for component value reads/writes via `chunk.GetSpan<T>()`. Structural changes must be deferred to `CommandStream` after the call returns
 - `RefreshCount` — number of times the cached result has been invalidated
 
 ### `QueryDescription`

@@ -91,6 +91,19 @@ internal sealed class Query
     }
 
     /// <summary>
+    /// Returns the underlying chunk-view snapshot array and live count.
+    /// The array length may exceed <paramref name="count"/>; consumers must bound by <paramref name="count"/>.
+    /// Used by the public <c>MiniArch.Query.ForEachChunkParallel</c> to avoid span capture in lambdas (zero-alloc per call).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal ChunkView[] GetChunkViewArray(out int count)
+    {
+        EnsureRefreshed();
+        count = _chunkViewCount;
+        return _snapshotChunkViews;
+    }
+
+    /// <summary>
     /// Gets an archetype enumerable.
     /// </summary>
     internal ArchetypeEnumerable Chunks => new(this);
