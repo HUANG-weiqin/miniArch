@@ -2,7 +2,7 @@
 title: Command Buffer Runtime
 module: MiniArch.Core CommandBuffer
 description: CommandBuffer safety-first per-entity deduplicating recorder plus CommandStream typed-store expert mode, both compatible with FrameDelta
-updated: 2026-06-21 (CommandBuffer.Submit/SubmitFromFrozen 顺序对齐 BuildDelta；Merge bug 已根除；ReplayCore 时序处理)
+updated: 2026-06-21 (修复 _opsSeenMask 64-bit 别名 bug)
 ---
 # Command Buffer Runtime
 
@@ -121,6 +121,8 @@ HeroPipeline 回归测试涨幅：
 - **CommandStream 同批次中 Destroy 后不再影响其他操作**（2026-06-10 修复）：`ApplyAllEntries` 改为两遍处理（pass 1: Create/Add/Set/Remove，pass 2: Destroy），与 CommandBuffer 的"先 ApplyOps 再 Destroy"顺序一致。同批次内先 Destroy 后 Add/Set 同一实体现在安全（Add/Set 先执行，然后 Destroy 销毁实体）。对 pending entity，`CancelPendingEntity` 后的条目在 materialize 时通过 `_pendingBatch[id] < 0` 检测跳过。`CommandStreamTests.Fuzz_200_frames_submit_and_verify_entity_count_stability` 不再需要 `destroyedThisFrame` 过滤。
 - **CommandStream pending batch 组件归属使用 per-batch 链表**（2026-06-11 修复）：旧实现用 `_batchCompCounts` 前缀和 + 扁平 `_batchComps` 数组，隐式假设每个 batch 的组件在数组中连续。但录制 API 不保证此顺序（例如 `Create(A), Create(B), Add(B,V), Add(A,P)` 时组件按 B→A 顺序写入数组，前缀扫描会将 V 误归给 A）。修复为 per-batch 单链表（`_batchHeads[]` 指向每个 batch 的链表头，`BatchedComponent.Next` 链接节点），彻底消除组件归属错误。`CommitBatchComponent` 不做 last-wins 遍历（O(1) prepend），materialize 时稳定排序+去重达到 last-wins 语义。详见测试 `Interleaved_pending_creates_get_correct_components`、`Remove_pending_component_then_create_another_entity` 等。
 - **CommandBuffer Entity lookup 加 Version 校验**（2026-06-11 修复）：`GetCreatedStateIndex`、`IsFrozenCreatedDestroyed`、`GetOrCreateOpsIndex` 之前只按 `Entity.Id` 查找，不校验 `Entity.Version`。World 回收实体后，同 Id 不同 Version 的 stale handle 会错误匹配到最新实体。修复后三个 lookup 函数都校验 `_entityByPoolIndex[idx].Version == entity.Version`，stale handle 不再别名。同时 `ApplyOpDirect`/`ApplyOpDirectFromFrozen` 加 `IsAlive` 保护，Submit 阶段遇到死实体自动跳过。
+- **`_opsSeenMask` 仅 64 位，组件 ID ≥ 64 别名——已修复（2026-06-21）**：`TryAddOpFast` (`CommandBuffer.cs:187`) 用于 per-entity 去重：已记录过同组件类型则走 `ops.Set()` 覆盖而非追加。旧实现只用每实体 1 个 `ulong`（`_opsSeenMask[opsIdx]`），bit 位置 = `componentTypeId & 63`，导致 ID 64→bit 0 与 ID 0 冲突、ID 65→bit 1 与 ID 1 冲突……64 个 ID 一周期。**触发条件**：注册 ≥64 种组件类型。**后果**：高编号组件的命令被误判为已存在，走覆盖路径而非追加，低编号组件的数据被悄悄替换——静默数据丢失。**修复**：扩为每实体 8 个 `ulong`（512-bit 覆盖），平坦数组索引 `opsIdx * 8 + (componentTypeId >> 6)`，`AllocateOpsIndex` 中 `Array.Clear` 清零 8 个而非 1 个。**影响范围**：仅 CommandBuffer（旧路径），CommandStream 不受影响。详见 `CommandBufferTests` 中相关测试。
+
 - **Submit vs Replay 命令顺序差异（仍存在，但触发场景比旧描述窄）**：`World.ReplayCore`（`World.cs:450`）是 `while (decoder.MoveNext()) switch`，**按字节流时序处理**——所谓"canonical 顺序（Reserve→Release→Create→Link→Unlink→Add→Set→Remove→Destroy）"实际是 `BuildDelta` 分段写入 buffer 的产物，不是 ReplayCore 硬编码。Submit 与 BuildDelta 顺序在 2026-06-21 后**完全对齐**（Create→Hierarchy→Ops→Destroy），所有命令组合（含 Link+Set、Link+Destroy、Unlink+Set 等同帧混合）下 Submit 与 Replay 都收敛：
   - **同帧 `Remove<Pos>` + `Add<Pos>` 不再 diverge**（旧描述的核心场景，已不成立）：CommandStream 的 `ComponentStore<T>.ApplyToWorld` (`CommandStream.cs:1111`) 与 `.EmitToDelta` (`CommandStream.cs:1129`) 都按相同 `_kinds` 数组顺序遍历；CommandBuffer 因 InlineMap per-component 去重，同帧同 entity 同 component 只保留最后一个 op。两条路径 Submit 与 Replay 行为一致。
   - **Hierarchy × Ops × Destroy 任意组合收敛**（2026-06-21 修复）：`CommandBuffer.Submit` 和 `SubmitFromFrozen` 原顺序 Create→Ops→Hierarchy→Destroy 与 `BuildDelta` 的 Create→Hierarchy→Ops→Destroy 不一致，在 Link+Destroy(parent) 同帧等极端组合下可能 diverge。修复后两者顺序对齐（见 `CommandBuffer.cs:457` Submit 和 `CommandBuffer.cs:620` SubmitFromFrozen，hierarchy 循环都移到 ops 之前）。

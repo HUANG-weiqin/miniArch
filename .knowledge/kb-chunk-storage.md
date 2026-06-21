@@ -2,7 +2,7 @@
 title: Chunk 存储
 module: MiniArch.Core
 description: Archetype 存储架构 — 单块模式（默认）和分段模式（阈值后自动切换），包括 SoA 布局、跨段 swap-remove、查询分段迭代
-updated: 2026-06-13 (修正阈值描述：65536 固定值 → 动态计算 2MB/bytesPerEntity)
+updated: 2026-06-21 (GetEntityStorage 平坦缓存，消除分段模式下的每次分配)
 ---
 # Chunk 存储
 
@@ -121,6 +121,12 @@ RemoveAt(globalRow):
 2. 已有匹配 Archetype 的 `SegmentCount` 变化 → 全量刷新
 
 分段后的 Archetype 在匹配时，每个 Segment 被包装为一个独立的 ChunkView。
+
+### 3.5 GetEntityStorage 平坦缓存（2026-06-21）
+
+分段模式下 `GetEntityStorage()` 原来每次调用 `new Entity[_count]` + 逐段 `Array.Copy`，在 `QueryEnumerator.MoveNext()` 热路径上造成每帧分配。
+
+修复：引入 `_flatEntitiesGeneration` 计数器 + 缓存数组 `_cachedFlatEntities`。实体布局变更（AddEntityChunked/RemoveAt/WriteEntityAt/ReserveRows/GrowChunked 等）时递增计数器；`GetEntityStorage()` 仅在计数器与缓存版本不匹配时重建平坦数组，否则返回缓存引用——零分配零拷贝。
 
 ## 决策
 

@@ -1110,17 +1110,17 @@ public sealed class CommandStream : ICommandRecorder
         {
             for (var i = 0; i < _count; i++)
             {
-                if (!world.IsAlive(_entities[i])) continue;
+                var entity = _entities[i];
+                if (!world.TryGetLocation(entity, out var loc)) continue;
+                var record = new EntityRecord { Archetype = loc.Archetype, RowIndex = loc.RowIndex, Version = loc.Version };
                 switch (_kinds[i])
                 {
                     case KindAdd:
-                        world.Add(_entities[i], _data[i]);
-                        break;
                     case KindSet:
-                        world.Set(_entities[i], _data[i]);
+                        world.ApplyTypedAddOrSet(entity, record, Component<T>.ComponentType, _data[i]);
                         break;
                     case KindRemove:
-                        world.RemoveBoxed(_entities[i], Component<T>.ComponentType);
+                        world.RemoveBoxed(entity, record, Component<T>.ComponentType);
                         break;
                 }
             }

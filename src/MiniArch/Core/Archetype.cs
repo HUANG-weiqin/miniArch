@@ -22,6 +22,11 @@ internal sealed partial class Archetype
     private Segment[] _segments = null!;
     private int _segmentCount;
 
+    // Cached flat entity view for chunked mode, rebuilt on layout change.
+    private int _flatEntitiesGeneration;
+    private Entity[]? _cachedFlatEntities;
+    private int _cachedFlatEntitiesGeneration = -1;
+
     // Fixed entity capacity per segment, computed from component sizes once.
     // All segments share the same capacity so column byte offsets are identical.
     private readonly int _segmentEntityCapacity;

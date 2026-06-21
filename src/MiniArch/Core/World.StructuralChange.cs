@@ -79,6 +79,12 @@ public sealed partial class World
     private void ApplyTypedAddOrSet<T>(Entity entity, ComponentType componentType, in T component) where T : unmanaged
     {
         var info = GetRequiredLocation(entity);
+        ApplyTypedAddOrSet(entity, info, componentType, in component);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void ApplyTypedAddOrSet<T>(Entity entity, EntityRecord info, ComponentType componentType, in T component) where T : unmanaged
+    {
         var archetype = info.Archetype!;
 
         if (archetype.TryGetComponentIndex(componentType, out var componentIndex))
@@ -103,15 +109,23 @@ public sealed partial class World
 
     internal unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, byte[] data, int offset)
     {
+        if (!TryGetLocation(entity, out var loc))
+            return;
+        var record = new EntityRecord { Archetype = loc.Archetype, RowIndex = loc.RowIndex, Version = loc.Version };
         fixed (byte* ptr = data)
         {
-            ApplyRawAddOrSet(entity, componentType, ptr + offset);
+            ApplyRawAddOrSet(entity, record, componentType, ptr + offset);
         }
     }
 
     private unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, byte* source)
     {
         var info = GetRequiredLocation(entity);
+        ApplyRawAddOrSet(entity, info, componentType, source);
+    }
+
+    internal unsafe void ApplyRawAddOrSet(Entity entity, EntityRecord info, ComponentType componentType, byte* source)
+    {
         var archetype = info.Archetype!;
 
         if (archetype.TryGetComponentIndex(componentType, out var componentIndex))
@@ -152,6 +166,11 @@ public sealed partial class World
     internal void RemoveBoxed(Entity entity, ComponentType componentType)
     {
         var info = GetRequiredLocation(entity);
+        RemoveBoxed(entity, info, componentType);
+    }
+
+    internal void RemoveBoxed(Entity entity, EntityRecord info, ComponentType componentType)
+    {
         var archetype = info.Archetype!;
 
         if (!archetype.TryGetComponentIndex(componentType, out _))

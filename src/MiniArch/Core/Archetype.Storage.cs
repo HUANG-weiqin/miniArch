@@ -76,6 +76,7 @@ internal sealed partial class Archetype
             _segmentCount++;
             need -= SegmentEntityCapacity;
         }
+        _flatEntitiesGeneration++;
     }
 
     // ──────────────────────────────────────────────
@@ -161,6 +162,7 @@ internal sealed partial class Archetype
         lastSeg.Entities[localRow] = entity;
         lastSeg.Count++;
         _count++;
+        _flatEntitiesGeneration++;
         return globalRow;
     }
 
@@ -202,6 +204,7 @@ internal sealed partial class Archetype
             _count += take;
             remaining -= take;
         }
+        _flatEntitiesGeneration++;
         return startRow;
     }
 
@@ -215,6 +218,7 @@ internal sealed partial class Archetype
         }
         var (segIdx, localRow) = GetSegmentAndLocal(globalRow);
         _segments[segIdx].Entities[localRow] = entity;
+        _flatEntitiesGeneration++;
     }
 
     // ──────────────────────────────────────────────
@@ -264,6 +268,7 @@ internal sealed partial class Archetype
             _segments[lastSegIdx].Entities[lastLocalRow] = default;
             _segments[lastSegIdx].Count--;
             _count--;
+            _flatEntitiesGeneration++;
             movedEntity = default;
             return false;
         }
@@ -277,6 +282,7 @@ internal sealed partial class Archetype
         _segments[lastSegIdx].Entities[lastLocalRow] = default;
         _segments[lastSegIdx].Count--;
         _count--;
+        _flatEntitiesGeneration++;
         return true;
     }
 
@@ -299,15 +305,21 @@ internal sealed partial class Archetype
         if (!_isChunked)
             return _entities;
 
-        var all = new Entity[_count];
-        var off = 0;
-        for (var i = 0; i < _segmentCount; i++)
+        if (_cachedFlatEntitiesGeneration != _flatEntitiesGeneration)
         {
-            var seg = _segments[i];
-            Array.Copy(seg.Entities, 0, all, off, seg.Count);
-            off += seg.Count;
+            if (_cachedFlatEntities == null || _cachedFlatEntities.Length < _count)
+                _cachedFlatEntities = new Entity[_count];
+
+            var off = 0;
+            for (var i = 0; i < _segmentCount; i++)
+            {
+                var seg = _segments[i];
+                Array.Copy(seg.Entities, 0, _cachedFlatEntities, off, seg.Count);
+                off += seg.Count;
+            }
+            _cachedFlatEntitiesGeneration = _flatEntitiesGeneration;
         }
-        return all;
+        return _cachedFlatEntities!;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

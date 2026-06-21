@@ -20,7 +20,7 @@ public sealed class CommandBuffer : ICommandRecorder
     private int[] _opsTouchedIds = Array.Empty<int>();
     private int _opsTouchedIdCount;
     private int _maxOpsEntityId;
-    private ulong[] _opsSeenMask = [];  // bitmask per entity: componentTypeId already recorded
+    private ulong[] _opsSeenMask = [];  // bitmask per entity: 8 ulongs (512 bits), flat array indexed by (opsIdx*8 + componentTypeId/64)
     private Entity[] _existingDestroyEntities = [];
     private int _existingDestroyCount;
     private bool _existingDestroySorted = true;
@@ -184,11 +184,14 @@ public sealed class CommandBuffer : ICommandRecorder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void TryAddOpFast(int opsIdx, int componentTypeId, EntityOpSlot slot)
     {
+        var wordIdx = componentTypeId >> 6;
         var bit = 1UL << (componentTypeId & 63);
+        var maskBase = opsIdx * 8;
+        ref var maskWord = ref _opsSeenMask[maskBase + wordIdx];
         ref var ops = ref _opsPool[opsIdx];
-        if ((_opsSeenMask[opsIdx] & bit) == 0)
+        if ((maskWord & bit) == 0)
         {
-            _opsSeenMask[opsIdx] |= bit;
+            maskWord |= bit;
             switch (ops.Count)
             {
                 case 0: ops.Key0 = componentTypeId; ops.Value0 = slot; ops.Count = 1; return;
@@ -875,15 +878,22 @@ public sealed class CommandBuffer : ICommandRecorder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void ApplyOpDirectFromFrozen(World world, List<byte[]> slabs, EntityOpSlot slot, Entity entity)
     {
-        if (!world.IsAlive(entity)) return;
+        if (!world.TryGetLocation(entity, out var loc)) return;
+        var record = new EntityRecord { Archetype = loc.Archetype, RowIndex = loc.RowIndex, Version = loc.Version };
         switch (slot.Kind)
         {
             case OpKindAdd:
             case OpKindSet:
-                world.ApplyRawAddOrSet(entity, slot.ComponentType, slabs[slot.SlabIndex], slot.DataOffset);
+                unsafe
+                {
+                    fixed (byte* ptr = slabs[slot.SlabIndex])
+                    {
+                        world.ApplyRawAddOrSet(entity, record, slot.ComponentType, ptr + slot.DataOffset);
+                    }
+                }
                 break;
             case OpKindRemove:
-                world.RemoveBoxed(entity, slot.ComponentType);
+                world.RemoveBoxed(entity, record, slot.ComponentType);
                 break;
         }
     }
@@ -1224,15 +1234,22 @@ public sealed class CommandBuffer : ICommandRecorder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ApplyOpDirect(EntityOpSlot slot, Entity entity)
     {
-        if (!_world.IsAlive(entity)) return;
+        if (!_world.TryGetLocation(entity, out var loc)) return;
+        var record = new EntityRecord { Archetype = loc.Archetype, RowIndex = loc.RowIndex, Version = loc.Version };
         switch (slot.Kind)
         {
             case OpKindAdd:
             case OpKindSet:
-                _world.ApplyRawAddOrSet(entity, slot.ComponentType, _slabs[slot.SlabIndex], slot.DataOffset);
+                unsafe
+                {
+                    fixed (byte* ptr = _slabs[slot.SlabIndex])
+                    {
+                        _world.ApplyRawAddOrSet(entity, record, slot.ComponentType, ptr + slot.DataOffset);
+                    }
+                }
                 break;
             case OpKindRemove:
-                _world.RemoveBoxed(entity, slot.ComponentType);
+                _world.RemoveBoxed(entity, record, slot.ComponentType);
                 break;
         }
     }
@@ -1270,12 +1287,12 @@ public sealed class CommandBuffer : ICommandRecorder
             var newSize = _opsPool.Length == 0 ? 64 : _opsPool.Length * 2;
             var newPool = new InlineMap<int, EntityOpSlot>[newSize];
             var newEntities = new Entity[newSize];
-            var newMask = new ulong[newSize];
+            var newMask = new ulong[newSize * 8];
             if (_opsPoolCount > 0)
             {
                 Array.Copy(_opsPool, newPool, _opsPoolCount);
                 Array.Copy(_opsEntityByPoolIndex, newEntities, _opsPoolCount);
-                Array.Copy(_opsSeenMask, newMask, _opsPoolCount);
+                Array.Copy(_opsSeenMask, newMask, _opsPoolCount * 8);
             }
             _opsPool = newPool;
             _opsEntityByPoolIndex = newEntities;
@@ -1285,7 +1302,7 @@ public sealed class CommandBuffer : ICommandRecorder
         var index = _opsPoolCount++;
         _opsPool[index].OverflowHead = -1;
         _opsEntityByPoolIndex[index] = entity;
-        _opsSeenMask[index] = 0;
+        Array.Clear(_opsSeenMask, index * 8, 8);
         _opsLookup[id] = index;
         AddTouchedId(ref _opsTouchedIds, ref _opsTouchedIdCount, id);
         if (id >= _maxOpsEntityId) _maxOpsEntityId = id + 1;
