@@ -1,8 +1,8 @@
 ---
 title: Snapshot Persistence
 module: MiniArch.Core Snapshot
-description: Full-world snapshot save/load design for unmanaged components, plus WorldClone for zero-serialization in-memory copy
-updated: 2026-06-21 (Save 字节规范化：archetype 按 signature 排序 + entity 按 Id 排序，使 hash 在不同内部路径下稳定)
+description: Full-world snapshot save/load design for unmanaged components, plus World.Checksum() for lockstep peer state verification
+updated: 2026-06-21 (新增 World.Checksum() / WorldSnapshot.ComputeChecksum 一行 API)
 ---
 # Snapshot Persistence
 
@@ -11,6 +11,7 @@ updated: 2026-06-21 (Save 字节规范化：archetype 按 signature 排序 + ent
 - 把 `World` 的当前活体数据导出成紧凑二进制 snapshot
 - 从 snapshot 快速重建 archetype / chunk / entity metadata
 - 保留 entity slot version 语义（`default(Entity)` 非法，活体 `Version > 0`）
+- `World.Checksum()` 一行调用得到世界状态的 SHA-256 hash，用于帧同步 peer 间状态校验
 
 ## 架构
 

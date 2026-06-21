@@ -232,6 +232,42 @@ public sealed class WorldSnapshotTests
         Assert.Equal(stream1.ToArray(), stream2.ToArray());
     }
 
+    [Fact]
+    public void Checksum_is_stable_for_identical_worlds_and_differs_on_mutation()
+    {
+        var world = new World();
+        var e0 = world.Create(); world.Add(e0, new Position(1, 2));
+        var e1 = world.Create(); world.Add(e1, new Position(3, 4));
+
+        var hash1 = world.Checksum();
+        var hash2 = world.Checksum();
+
+        Assert.Equal(32, hash1.Length);
+        Assert.Equal(hash1, hash2);
+
+        world.Set(e0, new Position(99, 99));
+        var hash3 = world.Checksum();
+        Assert.NotEqual(hash1, hash3);
+    }
+
+    [Fact]
+    public void Checksum_matches_across_save_load_round_trip()
+    {
+        var world = new World();
+        var e0 = world.Create(); world.Add(e0, new Position(1, 2));
+        var e1 = world.Create(); world.Add(e1, new Velocity(3, 4));
+
+        var hashOriginal = world.Checksum();
+
+        using var stream = new MemoryStream();
+        WorldSnapshot.Save(stream, world);
+        stream.Position = 0;
+        var loaded = WorldSnapshot.Load(stream);
+
+        var hashLoaded = loaded.Checksum();
+        Assert.Equal(hashOriginal, hashLoaded);
+    }
+
     private static T GetComponent<T>(World world, Entity entity) where T : unmanaged
     {
         Assert.True(world.TryGetLocation(entity, out var location));

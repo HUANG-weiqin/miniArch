@@ -4,6 +4,8 @@ The only C# ECS with **built-in frame-synchronized multiplayer** — and a **Set
 
 📊 [See full benchmarks vs Arch, Friflo, and DefaultEcs →](docs/comparison.md)
 
+> **Constraint:** Components must be `unmanaged` value types (no `string`, no reference-type fields). This trades generality for zero-GC, cache-line-friendly flat storage. If you need managed components, use Arch or Friflo.
+
 ---
 
 ## Benchmarked Against
@@ -59,6 +61,7 @@ dotnet add package MiniArch
 ```csharp
 using MiniArch;
 
+// Components must be unmanaged value types (struct without reference-type fields)
 readonly record struct Position(int X, int Y);
 readonly record struct Velocity(int X, int Y);
 

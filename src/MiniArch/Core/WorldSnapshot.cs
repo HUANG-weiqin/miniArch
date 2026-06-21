@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace MiniArch.Core;
@@ -135,6 +136,21 @@ public static class WorldSnapshot
 
         world.RebuildFreeIdStack();
         return world;
+    }
+
+    /// <summary>
+    /// Computes a deterministic SHA-256 checksum of the world state.
+    /// For lockstep scenarios (same delta sequence replayed on all peers)
+    /// this is stable: archetype creation order, swap-remove history, and
+    /// slot allocation all match between peers driven by identical inputs.
+    /// Use to detect state divergence between peers.
+    /// </summary>
+    public static byte[] ComputeChecksum(World world)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        using var ms = new MemoryStream();
+        Save(ms, world);
+        return SHA256.HashData(new ReadOnlySpan<byte>(ms.GetBuffer(), 0, (int)ms.Length));
     }
 
     private static void EnsureHeader(BinaryReader reader)
