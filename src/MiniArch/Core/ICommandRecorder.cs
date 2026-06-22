@@ -1,10 +1,12 @@
 namespace MiniArch.Core;
 
 /// <summary>
-/// Minimal recorder interface shared by <see cref="CommandBuffer"/>
+/// Per-frame recording interface shared by <see cref="CommandBuffer"/>
 /// and <see cref="CommandStream"/> for the test-layer abstraction.
-/// Both classes also expose <c>Snapshot()</c> / <c>Clone()</c>
-/// specific to each type; those are not part of this interface.
+/// Both implementations also expose <c>Unlink</c>, <c>Snapshot</c>,
+/// <c>SubmitAndSnapshotAsync</c>, and <c>Clone</c>, but no current
+/// consumer needs polymorphic access to those — they remain on the
+/// concrete types until a use case appears (YAGNI).
 /// </summary>
 public interface ICommandRecorder
 {
