@@ -98,7 +98,7 @@ public sealed class QueryTests
             enumeratedArchetypes.Add(archetype);
         }
 
-        Assert.Equal(enumeratedArchetypes, query.MatchedChunks);
+        Assert.Equal(enumeratedArchetypes, query.MatchedArchetypes);
         Assert.Equal(enumeratedArchetypes, query.GetArchetypeSpan().ToArray());
         Assert.Equal(1, query.RefreshCount);
     }
@@ -144,13 +144,13 @@ public sealed class QueryTests
         var description = new QueryDescription().With<Position>();
 
         var query = MiniQuery.Create(world, in description);
-        Assert.Single(query.MatchedChunks);
+        Assert.Single(query.MatchedArchetypes);
         Assert.Equal(1, query.RefreshCount);
 
         var second = world.Create();
         world.Add(second, new Position(2, 2));
 
-        Assert.Single(query.MatchedChunks);
+        Assert.Single(query.MatchedArchetypes);
         Assert.Single(query.GetArchetypeSpan().ToArray());
         Assert.True(query.RefreshCount >= 1, "Chunk snapshot should be valid");
     }
@@ -499,3 +499,4 @@ public sealed class QueryTests
         return checksum;
     }
 }
+

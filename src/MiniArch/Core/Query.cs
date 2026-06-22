@@ -63,11 +63,6 @@ internal sealed class Query
         }
     }
 
-    /// <summary>
-    /// Compatibility alias: returns matched archetypes as a read-only list.
-    /// </summary>
-    internal IReadOnlyList<Archetype> MatchedChunks => MatchedArchetypes;
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ReadOnlySpan<Archetype> GetArchetypeSpan()
     {
