@@ -9,8 +9,19 @@ namespace MiniArch;
 public sealed partial class World
 {
     /// <summary>
-    /// Adds a component to an entity.
+    /// Adds a component to an entity, or overwrites it if already present.
     /// </summary>
+    /// <remarks>
+    /// This is an <b>upsert</b>: if the entity already has a component of type
+    /// <typeparamref name="T"/>, its value is overwritten in place without an
+    /// archetype migration. If you require strict add semantics (throw on
+    /// duplicate), check <see cref="Has{T}"/> first.
+    /// <para>
+    /// <b>Alias of <see cref="Set{T}"/>.</b> Both route to the same implementation.
+    /// The two names exist for readability at call sites ("Add a new buff" vs
+    /// "Set health to 50"), not for behavioural difference.
+    /// </para>
+    /// </remarks>
     public void Add<T>(Entity entity, T component) where T : unmanaged
     {
         ThrowIfDisposed();
@@ -18,8 +29,11 @@ public sealed partial class World
     }
 
     /// <summary>
-    /// Sets a component on an entity.
+    /// Sets a component on an entity, adding it if absent or overwriting if present.
     /// </summary>
+    /// <remarks>
+    /// This is an <b>upsert</b> — see <see cref="Add{T}"/> for the full contract.
+    /// </remarks>
     public void Set<T>(Entity entity, T component) where T : unmanaged
     {
         ThrowIfDisposed();
@@ -37,14 +51,27 @@ public sealed partial class World
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void MoveEntityCore(
+    private int MoveEntityCore(
         Entity entity,
         EntityRecord sourceInfo,
-        Archetype destination,
-        out int destinationRowIndex)
+        Archetype destination)
     {
-        destinationRowIndex = destination.AddEntity(entity);
-        destination.CopySharedComponentsFrom(sourceInfo.Archetype!, sourceInfo.RowIndex, destinationRowIndex);
+        var destinationRowIndex = destination.AddEntity(entity);
+        try
+        {
+            destination.CopySharedComponentsFrom(sourceInfo.Archetype!, sourceInfo.RowIndex, destinationRowIndex);
+        }
+        catch
+        {
+            // Roll back the AddEntity so the destination archetype does not
+            // retain a phantom row with uninitialized component data. Without
+            // this rollback, an exception mid-migration would leave the entity
+            // present in both source and destination archetypes while the
+            // record still points at the source — an unrecoverable corruption.
+            destination.RemoveAt(destinationRowIndex, out _);
+            throw;
+        }
+        return destinationRowIndex;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -71,7 +98,7 @@ public sealed partial class World
 
     private void MoveEntity(Entity entity, EntityRecord sourceInfo, Archetype destination)
     {
-        MoveEntityCore(entity, sourceInfo, destination, out var rowIdx);
+        var rowIdx = MoveEntityCore(entity, sourceInfo, destination);
         FinishMoveEntity(entity, sourceInfo, destination, rowIdx);
     }
 
@@ -101,10 +128,17 @@ public sealed partial class World
             destination!.CacheRemoveDestination(componentType, archetype);
         }
 
-        var rowIdx = destination!.AddEntity(entity);
-        destination.CopySharedComponentsFrom(archetype, info.RowIndex, rowIdx);
-        destination.SetComponentAtTyped(destination.GetComponentIndex(componentType), rowIdx, in component);
-        FinishMoveEntity(entity, info, destination, rowIdx);
+        var rowIdx = MoveEntityCore(entity, info, destination!);
+        try
+        {
+            destination!.SetComponentAtTyped(destination.GetComponentIndex(componentType), rowIdx, in component);
+        }
+        catch
+        {
+            destination!.RemoveAt(rowIdx, out _);
+            throw;
+        }
+        FinishMoveEntity(entity, info, destination!, rowIdx);
     }
 
     internal unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, byte[] data, int offset)
@@ -145,9 +179,17 @@ public sealed partial class World
         ComponentType componentType,
         byte* source)
     {
-        MoveEntityCore(entity, sourceInfo, destination, out var rowIdx);
-        var columnIndex = destination.GetComponentIndex(componentType);
-        destination.WriteComponentRaw(columnIndex, rowIdx, source);
+        var rowIdx = MoveEntityCore(entity, sourceInfo, destination);
+        try
+        {
+            var columnIndex = destination.GetComponentIndex(componentType);
+            destination.WriteComponentRaw(columnIndex, rowIdx, source);
+        }
+        catch
+        {
+            destination.RemoveAt(rowIdx, out _);
+            throw;
+        }
         FinishMoveEntity(entity, sourceInfo, destination, rowIdx);
     }
 

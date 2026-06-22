@@ -261,13 +261,24 @@ public sealed class FrameDelta
         public bool MoveNext()
         {
             if (_pos >= _end) return false;
-            Kind = (DeltaOpKind)_buffer[_pos++];
+            var opByte = _buffer[_pos++];
+            // Reject unknown op kinds loudly. For lockstep/multiplayer, a peer
+            // that silently skips an op it does not understand will desync.
+            // Failing fast surfaces version mismatches at the first unknown op
+            // instead of producing a subtly corrupted world.
+            if (opByte < 0x01 || opByte > 0x09)
+                throw new InvalidOperationException(
+                    $"Unknown FrameDelta op kind 0x{opByte:X2} at position {_pos - 1}. " +
+                    "This typically indicates a version mismatch between the delta producer and consumer.");
+            Kind = (DeltaOpKind)opByte;
             Entity = new Entity(ReadVarint(), ReadVarint());
             return true;
         }
 
         /// <summary>
         /// Reads a varint from the buffer at the current position and advances.
+        /// Throws if the varint is truncated (extends past end of buffer) or
+        /// malformed (exceeds 5 bytes / 32-bit range).
         /// </summary>
         public int ReadVarint()
         {
@@ -277,13 +288,16 @@ public sealed class FrameDelta
             int shift = 0;
             for (var i = 0; i < 5; i++)
             {
-                if (_pos >= end) return result;
+                if (_pos >= end)
+                    throw new InvalidOperationException("Truncated FrameDelta: varint extends past end of buffer.");
                 var b = buf[_pos++];
                 result |= (b & 0x7F) << shift;
                 if ((b & 0x80) == 0) return result;
                 shift += 7;
             }
-            return result;
+            // 5 bytes consumed but continuation bit still set: the producer is
+            // encoding a value wider than 32 bits, or the stream is corrupt.
+            throw new InvalidOperationException("Malformed FrameDelta: varint exceeds 32-bit range.");
         }
 
         /// <summary>
@@ -392,8 +406,17 @@ public sealed class FrameDelta
                 case DeltaOpKind.Create:
                     decoder.SkipCreatePayload();
                     break;
-                default:
+                case DeltaOpKind.Reserve:
+                case DeltaOpKind.Release:
+                case DeltaOpKind.Unlink:
+                case DeltaOpKind.Destroy:
+                    // No extra payload beyond the entity read by MoveNext.
                     break;
+                default:
+                    // MoveNext already rejects unknown op kinds, so reaching here
+                    // would indicate a logic bug rather than a corrupt stream.
+                    throw new InvalidOperationException(
+                        $"Unhandled DeltaOpKind {decoder.Kind} in HasEntity scan.");
             }
         }
         return false;
@@ -497,7 +520,8 @@ public sealed class FrameDelta
                     _lazyDestroyed.Add(decoder.Entity);
                     break;
                 default:
-                    break;
+                    throw new InvalidOperationException(
+                        $"Unhandled DeltaOpKind {decoder.Kind} in ParseLegacy.");
             }
         }
     }

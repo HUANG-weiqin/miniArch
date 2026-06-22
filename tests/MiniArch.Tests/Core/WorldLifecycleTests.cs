@@ -330,6 +330,58 @@ public sealed class WorldLifecycleTests
         Assert.Equal(7, secondFresh.RowIndex);
     }
 
+    // Regression: CreateMany used to call archetype.GetReservedEntities, which
+    // throws when the archetype has been promoted to chunked storage. A batch
+    // create on an already-chunked archetype must not crash.
+    [Fact]
+    public void CreateMany_works_when_archetype_is_already_chunked()
+    {
+        var world = new World();
+        // Force the lazy empty archetype into existence, then promote it to
+        // chunked storage so we exercise the per-row write path.
+        var empty = world.GetOrCreateArchetype(Signature.Empty);
+        empty.ForceChunkedForTesting();
+        Assert.True(empty.IsChunked);
+
+        var batch = new Entity[5];
+        world.CreateMany(batch);
+
+        Assert.Equal(empty.EntityCount, batch.Length);
+        for (var i = 0; i < batch.Length; i++)
+        {
+            Assert.True(batch[i].IsValid);
+            Assert.True(world.TryGetLocation(batch[i], out var info));
+            Assert.Equal(empty, info.Archetype);
+            Assert.Equal(i, info.RowIndex);
+        }
+    }
+
+    // Regression: CreateMany with mixed recycled+fresh ids on a chunked
+    // archetype exercises both inner loops of the chunked write path.
+    [Fact]
+    public void CreateMany_on_chunked_archetype_mixes_recycled_and_fresh_ids()
+    {
+        var world = new World();
+        var seed = new Entity[4];
+        world.CreateMany(seed);
+        foreach (var e in seed) world.Destroy(e);
+
+        var empty = world.GetOrCreateArchetype(Signature.Empty);
+        empty.ForceChunkedForTesting();
+        Assert.True(empty.IsChunked);
+
+        var batch = new Entity[6];
+        world.CreateMany(batch);
+
+        // First 4 ids come from the free list (recycled), last 2 are fresh.
+        Assert.Equal(empty.EntityCount, batch.Length);
+        for (var i = 0; i < batch.Length; i++)
+        {
+            Assert.True(world.TryGetLocation(batch[i], out var info));
+            Assert.Equal(i, info.RowIndex);
+        }
+    }
+
     [Fact]
     public void Default_world_scales_chunk_capacity_for_dense_component_archetypes()
     {
@@ -408,6 +460,67 @@ public sealed class WorldLifecycleTests
         Assert.Equal(secondParent, resolvedParent);
         Assert.Empty(world.GetChildren(firstParent));
         Assert.Equal([child], world.GetChildren(secondParent));
+    }
+
+    [Fact]
+    public void Link_rejects_self_link()
+    {
+        var world = new World();
+        var e = world.Create();
+
+        Assert.Throws<InvalidOperationException>(() => world.Link(e, e));
+    }
+
+    [Fact]
+    public void Link_rejects_direct_cycle()
+    {
+        var world = new World();
+        var parent = world.Create();
+        var child = world.Create();
+
+        world.Link(parent, child);
+        // child -> parent would close the cycle
+        Assert.Throws<InvalidOperationException>(() => world.Link(child, parent));
+    }
+
+    [Fact]
+    public void Link_rejects_indirect_cycle()
+    {
+        var world = new World();
+        var a = world.Create();
+        var b = world.Create();
+        var c = world.Create();
+
+        world.Link(a, b);
+        world.Link(b, c);
+        // c -> a closes a three-deep cycle
+        Assert.Throws<InvalidOperationException>(() => world.Link(c, a));
+    }
+
+    // Regression: snapshot/clone restore path bypassed ValidateLink, which
+    // meant a tampered snapshot could install a hierarchy cycle that later
+    // hung CollectDestroySubtree. LinkSnapshot must reject cycles too.
+    [Fact]
+    public void LinkSnapshot_rejects_cycle_in_restored_hierarchy()
+    {
+        var world = new World();
+        var parent = world.Create();
+        var child = world.Create();
+
+        // Establish a legitimate link so a cycle is now possible.
+        world.LinkSnapshot(parent, child);
+
+        // Attempt to close the cycle through the restore path.
+        Assert.Throws<InvalidOperationException>(() => world.LinkSnapshot(child, parent));
+    }
+
+    [Fact]
+    public void LinkSnapshot_rejects_self_link()
+    {
+        var world = new World();
+        var e = world.Create();
+
+        Assert.Throws<InvalidOperationException>(() => world.LinkSnapshot(e, e));
     }
 
     [Fact]

@@ -109,8 +109,14 @@ public sealed partial class World
     }
 
     /// <summary>
-    /// Destroys an entity.
+    /// Destroys an entity and, if it has children, its entire descendant subtree.
     /// </summary>
+    /// <remarks>
+    /// Destruction cascades through the hierarchy in post-order (children before
+    /// parent) so that no orphaned child is left behind. If the entity has no
+    /// children, only itself is destroyed. Call <see cref="Unlink"/> first if
+    /// you need to destroy a parent while preserving its subtree.
+    /// </remarks>
     public void Destroy(Entity entity)
     {
         ThrowIfDisposed();
@@ -295,6 +301,14 @@ public sealed partial class World
 
     private void WriteCreatedEntitiesAndLocations(Archetype archetype, Span<Entity> entities, ReadOnlySpan<EntityBatchRange> ranges, int reusedCount, int startId)
     {
+        if (archetype.IsChunked)
+            WriteCreatedEntitiesAndLocationsChunked(archetype, entities, ranges, reusedCount, startId);
+        else
+            WriteCreatedEntitiesAndLocationsFlat(archetype, entities, ranges, reusedCount, startId);
+    }
+
+    private void WriteCreatedEntitiesAndLocationsFlat(Archetype archetype, Span<Entity> entities, ReadOnlySpan<EntityBatchRange> ranges, int reusedCount, int startId)
+    {
         var freeIds = _freeIds;
         var freeIndex = _freeIdCount;
         var entityIndex = 0;
@@ -321,6 +335,47 @@ public sealed partial class World
                 var entity = new Entity(nextId++, 1);
                 entities[entityIndex++] = entity;
                 chunkEntities[rowOffset] = entity;
+                ref var record = ref _records[entity.Id];
+                record.Archetype = archetype;
+                record.RowIndex = range.StartRow + rowOffset;
+            }
+        }
+
+        _freeIdCount = freeIndex;
+    }
+
+    // Chunked archetypes store rows across multiple segment arrays, so the
+    // single-Span fast path in the Flat variant does not apply. Fall back to
+    // per-row WriteEntityAt, which maps a global row to (segment, local) and
+    // works in both modes. Called only when an archetype has already been
+    // promoted to chunked storage (large entity counts on dense signatures).
+    private void WriteCreatedEntitiesAndLocationsChunked(Archetype archetype, Span<Entity> entities, ReadOnlySpan<EntityBatchRange> ranges, int reusedCount, int startId)
+    {
+        var freeIds = _freeIds;
+        var freeIndex = _freeIdCount;
+        var entityIndex = 0;
+        var nextId = startId;
+
+        foreach (var range in ranges)
+        {
+            var rowOffset = 0;
+
+            for (; rowOffset < range.Count && entityIndex < reusedCount; rowOffset++)
+            {
+                var recycled = freeIds[--freeIndex];
+                var entity = new Entity(recycled.Id, recycled.Version);
+                entities[entityIndex++] = entity;
+                archetype.WriteEntityAt(range.StartRow + rowOffset, entity);
+                ref var record = ref _records[entity.Id];
+                record.Archetype = archetype;
+                record.RowIndex = range.StartRow + rowOffset;
+            }
+
+            for (; rowOffset < range.Count; rowOffset++)
+            {
+                var entity = new Entity(nextId++, 1);
+                entities[entityIndex++] = entity;
+                archetype.WriteEntityAt(range.StartRow + rowOffset, entity);
                 ref var record = ref _records[entity.Id];
                 record.Archetype = archetype;
                 record.RowIndex = range.StartRow + rowOffset;

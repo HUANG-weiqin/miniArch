@@ -35,8 +35,14 @@ internal sealed class HierarchyTable
         AddChildToParent(parent.Id, child);
     }
 
-    public void LinkRestored(Entity parent, Entity child)
+    public void LinkRestored(World world, Entity parent, Entity child)
     {
+        // Snapshot/clone paths bypass the public Link() entry point, but the
+        // restored graph still has to obey the same invariants — in particular
+        // no cycles. Without this check, a tampered or corrupted snapshot could
+        // install a cycle that later hangs CollectDestroySubtree.
+        ValidateLink(world, parent, child);
+
         EnsureCapacity(parent.Id);
         EnsureCapacity(child.Id);
 

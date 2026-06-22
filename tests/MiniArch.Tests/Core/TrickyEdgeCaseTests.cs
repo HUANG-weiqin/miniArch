@@ -60,7 +60,11 @@ public sealed class TrickyEdgeCaseTests
         for (var cycle = 0; cycle < 100; cycle++)
         {
             var entity = world.Create();
-            Assert.Equal(cycle % 2 == 0 ? 0 : 0, entity.Id & 0); // id varies
+            // Create→Destroy in a tight loop always reuses slot 0 (freed
+            // immediately each iteration) with a monotonically increasing
+            // version. Verifying both catches ABA-style recycling bugs.
+            Assert.Equal(0, entity.Id);
+            Assert.Equal(cycle + 1, entity.Version);
             Assert.True(world.IsAlive(entity));
             world.Destroy(entity);
             Assert.False(world.IsAlive(entity));

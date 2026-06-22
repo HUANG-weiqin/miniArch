@@ -441,43 +441,45 @@ internal sealed partial class Archetype
             CopyComponent(source, index, sourceRow, index, destinationRow);
     }
 
+    // NOTE: stays in managed-ref space on purpose. The backing byte[] for both
+    // the non-chunked (_data) and chunked (_segments[i].Data) cases is NOT pinned
+    // for the chunked path, so taking a raw pointer via Unsafe.AsPointer would
+    // become a dangling pointer across a compacting GC. Managed refs are tracked
+    // by the GC and remain valid across compaction. See CopyColumnFrom for the
+    // same pattern.
     [SkipLocalsInit]
-    private unsafe void CopyComponent(Archetype source, int sourceColumnIndex, int sourceRow,
+    private void CopyComponent(Archetype source, int sourceColumnIndex, int sourceRow,
         int destinationColumnIndex, int destinationRow)
     {
         var size = _elementSizes[destinationColumnIndex];
 
-        byte* srcPtr;
+        ref byte srcRef = ref Unsafe.NullRef<byte>();
         if (!source._isChunked)
         {
-            ref var srcData = ref MemoryMarshal.GetArrayDataReference(source._data);
-            srcPtr = (byte*)Unsafe.AsPointer(ref Unsafe.Add(ref srcData,
-                source._columnByteOffsets[sourceColumnIndex] + sourceRow * size));
+            srcRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(source._data),
+                source._columnByteOffsets[sourceColumnIndex] + sourceRow * size);
         }
         else
         {
             var (srcSegIdx, srcLocal) = source.GetSegmentAndLocal(sourceRow);
-            ref var srcData = ref MemoryMarshal.GetArrayDataReference(source._segments[srcSegIdx].Data);
-            srcPtr = (byte*)Unsafe.AsPointer(ref Unsafe.Add(ref srcData,
-                source._columnByteOffsets[sourceColumnIndex] + srcLocal * size));
+            srcRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(source._segments[srcSegIdx].Data),
+                source._columnByteOffsets[sourceColumnIndex] + srcLocal * size);
         }
 
-        byte* dstPtr;
+        ref byte dstRef = ref Unsafe.NullRef<byte>();
         if (!_isChunked)
         {
-            ref var dstData = ref MemoryMarshal.GetArrayDataReference(_data);
-            dstPtr = (byte*)Unsafe.AsPointer(ref Unsafe.Add(ref dstData,
-                _columnByteOffsets[destinationColumnIndex] + destinationRow * size));
+            dstRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data),
+                _columnByteOffsets[destinationColumnIndex] + destinationRow * size);
         }
         else
         {
             var (dstSegIdx, dstLocal) = GetSegmentAndLocal(destinationRow);
-            ref var dstData = ref MemoryMarshal.GetArrayDataReference(_segments[dstSegIdx].Data);
-            dstPtr = (byte*)Unsafe.AsPointer(ref Unsafe.Add(ref dstData,
-                _columnByteOffsets[destinationColumnIndex] + dstLocal * size));
+            dstRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_segments[dstSegIdx].Data),
+                _columnByteOffsets[destinationColumnIndex] + dstLocal * size);
         }
 
-        Unsafe.CopyBlockUnaligned(ref *dstPtr, ref *srcPtr, (uint)size);
+        CopySmall(ref dstRef, ref srcRef, size);
     }
 
     internal unsafe void ReadComponentRaw(int columnIndex, int row, byte* destination)

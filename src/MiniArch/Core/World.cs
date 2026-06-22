@@ -10,6 +10,25 @@ namespace MiniArch;
 /// <summary>
 /// Owns entity storage and queries.
 /// </summary>
+/// <remarks>
+/// <b>Threading model</b> (read the following before touching a World from
+/// multiple threads):
+/// <list type="bullet">
+/// <item><b>Structural changes</b> — <see cref="Create"/>, <see cref="Destroy"/>,
+/// <see cref="Add{T}"/>, <see cref="Set{T}"/>, <see cref="Remove{T}"/>,
+/// <see cref="Link"/>, <see cref="Clone(Entity)"/> — are <b>not</b> thread-safe
+/// and must be issued from a single thread (typically the main game thread)
+/// or deferred through <c>CommandBuffer</c> / <c>CommandStream</c>.</item>
+/// <item><b>Reads</b> — <see cref="Has{T}"/>, <see cref="Get{T}"/>,
+/// <see cref="TryGet{T}"/>, query iteration via <c>ForEachChunkParallel</c> —
+/// may run in parallel with other readers, but <b>not</b> concurrent with a
+/// structural change. Snapshot the archetype list (via Query) before
+/// dispatching parallel work.</item>
+/// <item><c>ReserveDeferredEntity</c> takes a lock and is safe to call from
+/// background threads (e.g. async snapshot building); this is the only
+/// write path that is internally synchronized.</item>
+/// </list>
+/// </remarks>
 public sealed partial class World : IDisposable
 {
     private const int DefaultChunkCapacity = 128;
@@ -438,7 +457,7 @@ public sealed partial class World : IDisposable
 
     internal void LinkSnapshot(Entity parent, Entity child)
     {
-        _hierarchy.LinkRestored(parent, child);
+        _hierarchy.LinkRestored(this, parent, child);
     }
 
     /// <summary>

@@ -1711,7 +1711,17 @@ public sealed class CommandStreamTests
             Assert.True(delta.IsEmpty); // Stream was cleared by Submit
         }
 
-        Assert.True(alive.Count >= 0); // Sanity: tracking list is valid
+        // Final prune: entities destroyed in the last frame are still in the
+        // tracking list (pruning only happens at the start of each frame).
+        for (var i = alive.Count - 1; i >= 0; i--)
+            if (!world.IsAlive(alive[i]))
+                alive.RemoveAt(i);
+
+        // The tracking list must match the world's own accounting. If these
+        // diverge, the fuzz found a desync between CommandStream operations
+        // and the world's actual alive set.
+        Assert.Equal(world.EntityCount, alive.Count);
+        Assert.True(alive.Count > 0); // seed 42 + 200 frames leaves survivors
     }
 
     // ═══════════════════════════════════════════════════════════

@@ -61,60 +61,43 @@ internal sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentTy
     public ReadOnlySpan<ComponentType> AsSpan() => _components;
 
     /// <summary>
-    /// Gets a 256-bit bitmask where bit i is set if component with id i is present.
-    /// Only accurate for component ids 0..255; always 0 for ids &gt;= 256.
+    /// Gets a 512-bit bitmask (8 × ulong) where bit i is set if a component
+    /// with id i is present. Accurate for component ids 0..511; ids ≥ 512
+    /// are not represented in the mask (they fall back to array search in
+    /// <see cref="Contains"/>).
     /// </summary>
     internal ComponentMask ComponentMask => _componentMask;
 
     /// <summary>
     /// Returns whether the signature contains a component.
-    /// Uses 256-bit mask for ids 0..255; falls back to array search for ids &gt;= 256.
+    /// Uses the 512-bit mask for ids 0..511; falls back to array search for ids ≥ 512.
+    /// The mask is derived from the same source as <c>_components</c> and the
+    /// signature is immutable, so a set bit is authoritative — we short-circuit
+    /// to <c>true</c> without consulting the component array.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Contains(ComponentType component)
     {
         var id = component.Value;
         if ((uint)id < 64)
-        {
-            if ((_componentMask.B0 & (1UL << id)) == 0)
-                return false;
-        }
-        else if ((uint)id < 128)
-        {
-            if ((_componentMask.B1 & (1UL << (id - 64))) == 0)
-                return false;
-        }
-        else if ((uint)id < 192)
-        {
-            if ((_componentMask.B2 & (1UL << (id - 128))) == 0)
-                return false;
-        }
-        else if ((uint)id < 256)
-        {
-            if ((_componentMask.B3 & (1UL << (id - 192))) == 0)
-                return false;
-        }
-        else if ((uint)id < 320)
-        {
-            if ((_componentMask.B4 & (1UL << (id - 256))) == 0)
-                return false;
-        }
-        else if ((uint)id < 384)
-        {
-            if ((_componentMask.B5 & (1UL << (id - 320))) == 0)
-                return false;
-        }
-        else if ((uint)id < 448)
-        {
-            if ((_componentMask.B6 & (1UL << (id - 384))) == 0)
-                return false;
-        }
-        else if ((uint)id < 512)
-        {
-            if ((_componentMask.B7 & (1UL << (id - 448))) == 0)
-                return false;
-        }
+            return (_componentMask.B0 & (1UL << id)) != 0;
+        if ((uint)id < 128)
+            return (_componentMask.B1 & (1UL << (id - 64))) != 0;
+        if ((uint)id < 192)
+            return (_componentMask.B2 & (1UL << (id - 128))) != 0;
+        if ((uint)id < 256)
+            return (_componentMask.B3 & (1UL << (id - 192))) != 0;
+        if ((uint)id < 320)
+            return (_componentMask.B4 & (1UL << (id - 256))) != 0;
+        if ((uint)id < 384)
+            return (_componentMask.B5 & (1UL << (id - 320))) != 0;
+        if ((uint)id < 448)
+            return (_componentMask.B6 & (1UL << (id - 384))) != 0;
+        if ((uint)id < 512)
+            return (_componentMask.B7 & (1UL << (id - 448))) != 0;
 
+        // Negative ids cast to uint land here as very large values; mask does
+        // not cover them, so fall back to the slow path.
         return ContainsSlow(component);
     }
 

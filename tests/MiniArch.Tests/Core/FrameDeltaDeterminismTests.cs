@@ -590,6 +590,55 @@ public sealed class FrameDeltaDeterminismTests
     }
 
     // ═══════════════════════════════════════════════════════════
+    // Malformed / hostile input must fail loud, not silently corrupt state.
+    // Lockstep/multiplayer depends on the consumer rejecting bad deltas at
+    // the first sign of trouble rather than skipping unknown bytes.
+    // ═══════════════════════════════════════════════════════════
+
+    [Fact]
+    public void Deserialize_rejects_unknown_op_kind()
+    {
+        // 0xFF is not a valid DeltaOpKind (valid range is 0x01..0x09).
+        var wire = new byte[] { 0xFF, 0x01, 0x01 };
+        Assert.Throws<InvalidOperationException>(() => FrameDelta.Deserialize(wire));
+    }
+
+    [Fact]
+    public void Deserialize_rejects_zero_op_kind()
+    {
+        // 0x00 is also not a valid op kind.
+        var wire = new byte[] { 0x00, 0x01, 0x01 };
+        Assert.Throws<InvalidOperationException>(() => FrameDelta.Deserialize(wire));
+    }
+
+    [Fact]
+    public void Deserialize_rejects_truncated_varint_at_end_of_buffer()
+    {
+        // Reserve op (0x01) with entity id varint that has the continuation
+        // bit set (0x80) but no following byte.
+        var wire = new byte[] { 0x01, 0x80 };
+        Assert.Throws<InvalidOperationException>(() => FrameDelta.Deserialize(wire));
+    }
+
+    [Fact]
+    public void Deserialize_rejects_varint_exceeding_32_bit_range()
+    {
+        // 5 bytes each with continuation bit set, plus a 6th byte — a varint
+        // wider than 32 bits is not representable as int and must be rejected.
+        var wire = new byte[] { 0x01, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01, 0x01 };
+        Assert.Throws<InvalidOperationException>(() => FrameDelta.Deserialize(wire));
+    }
+
+    [Fact]
+    public void Deserialize_rejects_truncated_op_payload()
+    {
+        // Add op (0x06): entity(2 bytes) + component type (1 byte) + size varint
+        // claiming 10 bytes of data, but the buffer ends immediately.
+        var wire = new byte[] { 0x06, 0x01, 0x01, 0x01, 10 };
+        Assert.Throws<InvalidOperationException>(() => FrameDelta.Deserialize(wire));
+    }
+
+    // ═══════════════════════════════════════════════════════════
     // Hierarchy × Ops × Destroy same-frame convergence
     // (Submit and Replay must produce identical state when these
     // command kinds are mixed within a single frame; previously

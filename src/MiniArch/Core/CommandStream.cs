@@ -1138,11 +1138,20 @@ public sealed class CommandStream : ICommandRecorder
                     case KindSet:
                         unsafe
                         {
-                            var ptr = Unsafe.AsPointer(ref _data[i]);
-                            if (_kinds[i] == KindAdd)
-                                delta.AddAddUnsafe(_entities[i], compType, ptr, size);
-                            else
-                                delta.AddSetUnsafe(_entities[i], compType, ptr, size);
+                            // Pin _data[i] for the whole delta emit. AddAddUnsafe
+                            // and AddSetUnsafe call Grow internally, which may
+                            // allocate (Array.Resize) and trigger a compacting GC.
+                            // Without pinning, the raw pointer from AsPointer would
+                            // dangle across the compaction — same GC hole as the
+                            // original CopyComponent path.
+                            fixed (T* pFixed = &_data[i])
+                            {
+                                var ptr = (byte*)pFixed;
+                                if (_kinds[i] == KindAdd)
+                                    delta.AddAddUnsafe(_entities[i], compType, ptr, size);
+                                else
+                                    delta.AddSetUnsafe(_entities[i], compType, ptr, size);
+                            }
                         }
                         break;
                     case KindRemove:
