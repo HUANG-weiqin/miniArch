@@ -120,7 +120,7 @@ public sealed class CommandStream : ICommandRecorder
     public void Destroy(Entity entity)
     {
         MarkUnavailable(entity);
-        if (TryGetPendingBatch(entity, out _))
+        if (_pendingBatchCount > 0 && TryGetPendingBatch(entity, out _))
         {
             CancelPendingEntity(entity);
             CancelPendingDescendants(entity);
@@ -392,6 +392,7 @@ public sealed class CommandStream : ICommandRecorder
         _pendingBatchMax = 0;
         _batchCompTotal = 0;
         _batchBufLen = 0;
+        _lastCreated = default;
         _lastCreatedBatch = -1;
         _hierarchyByChild.Clear();
         _unavailableEntities?.Clear();
@@ -1133,7 +1134,10 @@ public sealed class CommandStream : ICommandRecorder
     {
         var id = CommandTypeInfo<T>.Type.Value;
         if ((uint)id >= (uint)_stores.Length)
-            Array.Resize(ref _stores, id + 1);
+        {
+            var newLen = Math.Max(id + 1, _stores.Length == 0 ? 16 : _stores.Length * 2);
+            Array.Resize(ref _stores, newLen);
+        }
 
         var store = _stores[id];
         if (store == null)
@@ -1162,6 +1166,7 @@ public sealed class CommandStream : ICommandRecorder
         _pendingBatchMax = 0;
         _batchCompTotal = 0;
         _batchBufLen = 0;
+        _lastCreated = default;
         _lastCreatedBatch = -1;
         _hierarchyByChild.Clear();
         _unavailableEntities?.Clear();
