@@ -141,17 +141,6 @@ public sealed partial class World
         FinishMoveEntity(entity, info, destination!, rowIdx);
     }
 
-    internal unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, byte[] data, int offset)
-    {
-        if (!TryGetLocation(entity, out var loc))
-            return;
-        var record = new EntityRecord { Archetype = loc.Archetype, RowIndex = loc.RowIndex, Version = loc.Version };
-        fixed (byte* ptr = data)
-        {
-            ApplyRawAddOrSet(entity, record, componentType, ptr + offset);
-        }
-    }
-
     private unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, byte* source)
     {
         var info = GetRequiredLocation(entity);
