@@ -194,7 +194,9 @@ internal sealed class HierarchyTable
             visitedGen[root.Id] = currentGen;
         }
 
-        _destroyTraversalStack.Clear();
+        // The finally block below guarantees the stack is empty on exit, so we
+        // don't need to clear it here on entry — except on the very first call,
+        // when the stack is already empty by construction.
         _destroyTraversalStack.Add((root, false));
 
         try
