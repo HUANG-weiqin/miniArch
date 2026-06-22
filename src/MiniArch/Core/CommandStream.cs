@@ -178,10 +178,13 @@ public sealed class CommandStream : ICommandRecorder
 
         try
         {
+            // Order matches CommandBuffer and BuildDelta: Create → Hierarchy → Ops → Destroy.
+            // Keeping Submit and Snapshot aligned lets hosts use Submit on source and
+            // Replay on replica without diverging for combined command patterns.
             MaterializeAllPending();
+            ApplyHierarchy();
             ApplyComponentStores();
             ApplyDestroys();
-            ApplyHierarchy();
         }
         finally
         {
@@ -281,9 +284,12 @@ public sealed class CommandStream : ICommandRecorder
 
     private void BuildDelta(FrameDelta delta)
     {
+        // Order matches Submit and CommandBuffer: Create → Hierarchy → Ops → Destroy.
         EmitPendingEntitiesToDelta(delta, new PendingBatchView(
             _batchCanceled, _batchHeads, _batchCompCounts,
             _batchComps, _batchBuf, _batchEntities, _pendingBatchCount));
+
+        EmitHierarchyToDelta(delta, _hierarchyByChild, _unavailableEntities);
 
         foreach (var store in _stores)
         {
@@ -293,8 +299,6 @@ public sealed class CommandStream : ICommandRecorder
 
         for (var i = 0; i < _destroyCount; i++)
             delta.AddDestroy(_destroyEntities[i]);
-
-        EmitHierarchyToDelta(delta, _hierarchyByChild, _unavailableEntities);
     }
 
     private void TryReclaimPending()
@@ -396,29 +400,13 @@ public sealed class CommandStream : ICommandRecorder
 
     private void SubmitFromFrozen(FrozenState frozen)
     {
-        // Materialize pending
+        // Order matches Submit and BuildDelta: Create → Hierarchy → Ops → Destroy.
         for (var i = 0; i < frozen.PendingBatchCount; i++)
         {
             if (frozen.BatchCanceled[i]) continue;
             MaterializePendingEntityFrozen(frozen, frozen.BatchEntities[i], i);
         }
 
-        // Apply component stores
-        foreach (var store in frozen.Stores)
-        {
-            if (store?.HasCommands == true)
-                store.ApplyToWorld(_world);
-        }
-
-        // Apply destroys
-        for (var i = 0; i < frozen.DestroyCount; i++)
-        {
-            var entity = frozen.DestroyEntities[i];
-            if (_world.IsAlive(entity))
-                _world.Destroy(entity);
-        }
-
-        // Apply hierarchy
         if (frozen.HierarchyByChild.Count > 0)
         {
             var unavailable = frozen.UnavailableEntities;
@@ -436,13 +424,29 @@ public sealed class CommandStream : ICommandRecorder
                 }
             }
         }
+
+        foreach (var store in frozen.Stores)
+        {
+            if (store?.HasCommands == true)
+                store.ApplyToWorld(_world);
+        }
+
+        for (var i = 0; i < frozen.DestroyCount; i++)
+        {
+            var entity = frozen.DestroyEntities[i];
+            if (_world.IsAlive(entity))
+                _world.Destroy(entity);
+        }
     }
 
     private static FrameDelta BuildFromFrozen(FrozenState frozen)
     {
+        // Order matches Submit and CommandBuffer: Create → Hierarchy → Ops → Destroy.
         var delta = new FrameDelta();
 
         EmitPendingEntitiesToDelta(delta, frozen.Pending);
+
+        EmitHierarchyToDelta(delta, frozen.HierarchyByChild, frozen.UnavailableEntities);
 
         foreach (var store in frozen.Stores)
         {
