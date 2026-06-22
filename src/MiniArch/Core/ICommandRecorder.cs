@@ -3,10 +3,9 @@ namespace MiniArch.Core;
 /// <summary>
 /// Per-frame recording interface shared by <see cref="CommandBuffer"/>
 /// and <see cref="CommandStream"/> for the test-layer abstraction.
-/// Both implementations also expose <c>Unlink</c>, <c>Snapshot</c>,
-/// <c>SubmitAndSnapshotAsync</c>, and <c>Clone</c>, but no current
-/// consumer needs polymorphic access to those — they remain on the
-/// concrete types until a use case appears (YAGNI).
+/// Covers all user-facing input commands. Both implementations also
+/// expose <c>Snapshot</c> and <c>SubmitAndSnapshotAsync</c> for output,
+/// but those are not recording commands and stay on the concrete types.
 /// </summary>
 public interface ICommandRecorder
 {
@@ -27,6 +26,12 @@ public interface ICommandRecorder
 
     /// <summary>Links a child entity to a parent.</summary>
     void Link(Entity parent, Entity child);
+
+    /// <summary>Unlinks a child entity from its parent.</summary>
+    void Unlink(Entity child);
+
+    /// <summary>Records a deep clone of an entity and its child subtree.</summary>
+    Entity Clone(Entity source);
 
     /// <summary>Submits all recorded commands to the World.</summary>
     bool Submit();
