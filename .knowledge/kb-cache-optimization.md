@@ -2,7 +2,7 @@
 title: Cache & Memory Optimization Review
 module: MiniArch.Core
 description: Memory layout and cache behavior analysis of the ECS runtime, with optimization opportunities
-updated: 2026-06-22 (P16: SubmitAndSnapshotAsync 双缓冲消除 Dictionary/HashSet 分配)
+updated: 2026-06-22 (P17: SubmitAndSnapshotAsync 全 FrozenState 池化 + 静态委托消除闭包)
 ---
 # Cache & Memory Optimization Review
 
@@ -18,7 +18,7 @@ MiniArch 的迭代热路径已经高度优化（pointer-bump、SoA、自适应 c
 5. MigrationPlan 小优化
 6. Empty chunk active list（条件执行）
 
-已完成的优化（P0-P16）涵盖：EntityRecord 合并、edge cache 改 bounded LRU、CopySmall 2-byte fast path、ThreadStatic buffer 复用、公共 API AggressiveInlining、Entity IComparable 去重、**本地 archetype 缓存删除**、**SubmitAndSnapshotAsync Dictionary/HashSet 双缓冲复用**。
+已完成的优化（P0-P17）涵盖：EntityRecord 合并、edge cache 改 bounded LRU、CopySmall 2-byte fast path、ThreadStatic buffer 复用、公共 API AggressiveInlining、Entity IComparable 去重、**本地 archetype 缓存删除**、**SubmitAndSnapshotAsync 全 FrozenState + 数组 + Dictionary/HashSet 池化、Task.Run 闭包消除**。
 
 完整实验计划见 `docs/plans/2026-06-06-world-data-structure-optimization-experiments.md`。
 
@@ -192,11 +192,57 @@ struct EntityRecord {
 - `SubmitAndSnapshotAsync()`：记录 `_pendingFrozen` / `_pendingTask` 供下帧回收
 - 线程安全：`Task.IsCompleted` 有内存屏障，true 时后台线程已停止读取 frozen 状态
 
-**未消除的分配**（后续可优化）：`new FrozenState` 对象、`new ComponentStore?[N]` 数组、`Task.Run` 闭包 + Task 对象。这些合计 ~300-900 bytes/call（取决于 ComponentTypeCount）。
+**未消除的分配**（后续可优化）：仅剩 `Task<FrameDelta>` 对象（~80 bytes，async 语义必需）和 `BuildFromFrozen` 内 `new FrameDelta()`（~96 bytes，作为返回值交给调用方）。P17 已把 FrozenState、`ComponentStore?[N]` 数组、所有批次数组、Dictionary/HashSet、Task.Run 闭包全部消除。
 
 **影响文件**：`CommandStream.cs`，`CommandStreamTests.cs`（+1 测试：引用相等验证复用）
 
 **回归门禁**：Movement-Stream 1766 rounds/s，Attack-Stream 1045 rounds/s，均远超阈值，内存稳定。
+
+## P17: SubmitAndSnapshotAsync 全 FrozenState 池化 + 静态委托消除闭包 ✅ 已修复 (2026-06-22)
+
+**问题**：P16 只回收了 Dictionary/HashSet，每帧仍然分配：
+- `new FrozenState` 对象（~200 bytes，13 个引用字段 + 2 个 int + 1 个 struct view）
+- `new ComponentStore?[N]` 数组（N × 8 bytes，N = ComponentTypeCount）
+- 9 个空数组（`_pendingBatch`/`_batchHeads`/`_batchComps`/`_batchBuf`/`_batchEntities`/`_batchCanceled`/`_destroyEntities`/...）
+- `Task.Run(() => BuildFromFrozen(frozen))` 的闭包对象（捕获 `frozen`，~32 bytes）
+
+合计 **~500-900 bytes/call** 的稳态 GC 压力。
+
+**根因**：`SwapOutState` 把当前录制状态"冻结"成新 FrozenState 交给后台线程，然后给主线程换上全新录制状态。P16 只池化了顶层容器（Dictionary/HashSet），其他数组仍然走"换出旧数组、new 新数组"模式。
+
+**Fix**：**整体 FrozenState 双缓冲**——后台 Task 完成后，整个 FrozenState（对象 + 所有内部数组 + Dictionary + HashSet）回收到 `_spareFrozen` 字段，下一次 `SwapOutState` 用元组 swap 把当前状态与 spare 互换：
+- 当前数组（刚录制完）→ frozen（交给后台 build）
+- spare 的数组（两帧前的，已无人读）→ 当前（重置 count 复用）
+
+线程安全：`Task.IsCompleted` 提供内存屏障，true 时后台线程已停止读取 frozen，主线程可安全把它的内部数组 swap 回来用作新录制状态。
+
+**为什么 stale 数据是安全的**：被回收的数组带有两帧前录制的内容，但：
+- 所有 reader 按 count 索引（`_pendingBatchCount`、`_destroyCount`、`_batchCompTotal`、`_batchBufLen`、`store._count`），count 归零后不会触碰旧 slot
+- 每个 allocator（`AllocPendingBatch`、`CommitBatchComponent`、`AppendDestroy`、`Append`）在分配 slot 时显式覆盖 `_batchHeads[i]`/`_batchCanceled[i]`/`_batchEntities[i]`/`_kinds[i]` 等
+- `TryGetPendingBatch` 的 range check（`_pendingBatchMin/Max` 归零后范围判空）阻止 stale `_pendingBatch[id]` 被读到
+- `_batchEntities[slot] == entity` 包含 Version，跨帧 id 回收后 Version 不同也不会误匹配
+
+**闭包消除**：把 `Task.Run(() => BuildFromFrozen(frozen))` 改为静态委托 + `Task.Factory.StartNew(state, ...)`：
+```csharp
+private static readonly Func<object?, FrameDelta> s_buildFromFrozen =
+    state => BuildFromFrozen((FrozenState)state!);
+
+var task = Task.Factory.StartNew(
+    s_buildFromFrozen, frozen, CancellationToken.None,
+    TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
+```
+FrozenState 是引用类型，转 `object` 无装箱；委托是静态字段只初始化一次；`DenyChildAttach + TaskScheduler.Default` 等价于 `Task.Run` 语义。
+
+**未消除的分配**（YAGNI 边界）：
+- `Task<FrameDelta>` 对象（~80 bytes）：TAP 异步语义必需，要彻底消除需改 API 为 `ValueTask<FrameDelta>` + 自实现 `IValueTaskSource` 池（复杂度收益比不划算）
+- `new FrameDelta()` + 内部 `_buffer` Grow：FrameDelta 是返回值交给调用方，无法池化
+
+**影响文件**：`CommandStream.cs`（删 `_spareHierarchy`/`_spareUnavailable`，加 `_spareFrozen`/`s_buildFromFrozen`/`ActiveFrozenForTesting`），`CommandStreamTests.cs`（+2 测试：FrozenState 复用 + 重叠任务正确性）
+
+**回归门禁**（2026-06-22）：
+- Movement-Stream 1766 → 1818 rounds/s（+3%）
+- Attack-Stream 1045 → 1101 rounds/s（+5%）
+- 内存稳定，无 GC Gen2 增长
 
 ## 坑点
 

@@ -55,8 +55,10 @@ public sealed class CommandStream : ICommandRecorder
     private Entity _lastCreated;
     private int _lastCreatedBatch = -1;
 
-    private Dictionary<Entity, HierarchyIntent>? _spareHierarchy;
-    private HashSet<Entity>? _spareUnavailable;
+    // P17: pool the entire FrozenState (object + all arrays + Dictionary + HashSet).
+    // In steady state the active frozen and the spare alternate roles, so no
+    // per-frame allocation happens on the parallel FrameDelta path.
+    private FrozenState? _spareFrozen;
     private FrozenState? _pendingFrozen;
     private Task? _pendingTask;
 
@@ -261,12 +263,20 @@ public sealed class CommandStream : ICommandRecorder
             return Task.FromResult(new FrameDelta());
 
         var frozen = SwapOutState();
-        var task = Task.Run(() => BuildFromFrozen(frozen));
+        // Static delegate + state parameter avoids the per-call closure allocation
+        // that Task.Run(() => ...) would create. FrozenState is a reference type,
+        // so passing it as `object` is a free upcast — no boxing.
+        var task = Task.Factory.StartNew(
+            s_buildFromFrozen, frozen, CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
         SubmitFromFrozen(frozen);
         _pendingFrozen = frozen;
         _pendingTask = task;
         return task;
     }
+
+    private static readonly Func<object?, FrameDelta> s_buildFromFrozen =
+        state => BuildFromFrozen((FrozenState)state!);
 
     private void BuildDelta(FrameDelta delta)
     {
@@ -288,11 +298,13 @@ public sealed class CommandStream : ICommandRecorder
 
     private void TryReclaimPending()
     {
+        // Task.IsCompleted implies the worker thread has stopped reading frozen,
+        // so we can safely hand the whole FrozenState (arrays + containers) to
+        // the spare slot for the next SwapOutState to recycle.
         if (_pendingFrozen is null || _pendingTask is not { IsCompleted: true })
             return;
 
-        _spareHierarchy ??= _pendingFrozen.HierarchyByChild;
-        _spareUnavailable ??= _pendingFrozen.UnavailableEntities;
+        _spareFrozen = _pendingFrozen;
         _pendingFrozen = null;
         _pendingTask = null;
     }
@@ -300,45 +312,84 @@ public sealed class CommandStream : ICommandRecorder
     private FrozenState SwapOutState()
     {
         TryReclaimPending();
-        var frozen = new FrozenState
-        {
-            Stores = _stores,
-            DestroyEntities = _destroyEntities,
-            DestroyCount = _destroyCount,
-            HierarchyByChild = _hierarchyByChild,
-            PendingBatch = _pendingBatch,
-            PendingBatchCount = _pendingBatchCount,
-            BatchHeads = _batchHeads,
-            BatchCompCounts = _batchCompCounts,
-            BatchComps = _batchComps,
-            BatchBuf = _batchBuf,
-            UnavailableEntities = _unavailableEntities,
-            BatchEntities = _batchEntities,
-            BatchCanceled = _batchCanceled,
-        };
 
-        _stores = new ComponentStore?[ComponentRegistry.Shared.ComponentTypeCount];
-        _destroyEntities = [];
+        FrozenState frozen;
+        if (_spareFrozen is { } spare)
+        {
+            // Steady state: recycle the spare FrozenState. Swap every array/container
+            // so current → frozen (worker reads it) and spare → current (we reset it).
+            // No allocation, no Dictionary/HashSet churn.
+            _spareFrozen = null;
+            frozen = spare;
+
+            (frozen.Stores, _stores) = (_stores, spare.Stores);
+            (frozen.DestroyEntities, _destroyEntities) = (_destroyEntities, spare.DestroyEntities);
+            (frozen.PendingBatch, _pendingBatch) = (_pendingBatch, spare.PendingBatch);
+            (frozen.BatchHeads, _batchHeads) = (_batchHeads, spare.BatchHeads);
+            (frozen.BatchCompCounts, _batchCompCounts) = (_batchCompCounts, spare.BatchCompCounts);
+            (frozen.BatchComps, _batchComps) = (_batchComps, spare.BatchComps);
+            (frozen.BatchBuf, _batchBuf) = (_batchBuf, spare.BatchBuf);
+            (frozen.BatchEntities, _batchEntities) = (_batchEntities, spare.BatchEntities);
+            (frozen.BatchCanceled, _batchCanceled) = (_batchCanceled, spare.BatchCanceled);
+            (frozen.HierarchyByChild, _hierarchyByChild) = (_hierarchyByChild, spare.HierarchyByChild);
+            (frozen.UnavailableEntities, _unavailableEntities) = (_unavailableEntities, spare.UnavailableEntities);
+
+            frozen.DestroyCount = _destroyCount;
+            frozen.PendingBatchCount = _pendingBatchCount;
+
+            // The recycled _stores array may predate the current ComponentTypeCount.
+            var typeCount = ComponentRegistry.Shared.ComponentTypeCount;
+            if (_stores.Length < typeCount)
+                Array.Resize(ref _stores, typeCount);
+        }
+        else
+        {
+            // First call or worker hasn't finished: allocate fresh.
+            frozen = new FrozenState
+            {
+                Stores = _stores,
+                DestroyEntities = _destroyEntities,
+                DestroyCount = _destroyCount,
+                HierarchyByChild = _hierarchyByChild,
+                PendingBatch = _pendingBatch,
+                PendingBatchCount = _pendingBatchCount,
+                BatchHeads = _batchHeads,
+                BatchCompCounts = _batchCompCounts,
+                BatchComps = _batchComps,
+                BatchBuf = _batchBuf,
+                UnavailableEntities = _unavailableEntities,
+                BatchEntities = _batchEntities,
+                BatchCanceled = _batchCanceled,
+            };
+
+            _stores = new ComponentStore?[ComponentRegistry.Shared.ComponentTypeCount];
+            _destroyEntities = [];
+            _hierarchyByChild = new Dictionary<Entity, HierarchyIntent>();
+            _pendingBatch = [];
+            _batchHeads = [];
+            _batchCompCounts = [];
+            _batchComps = [];
+            _batchBuf = [];
+            _batchEntities = [];
+            _batchCanceled = [];
+            _unavailableEntities = null;
+        }
+
+        // Reset the now-current state. Underlying arrays may carry stale data from
+        // two frames ago, but every reader indexes by count and every allocator
+        // re-initialises the slot before exposing it, so stale data is never observed.
+        foreach (var store in _stores)
+            store?.Clear();
+
         _destroyCount = 0;
-        _hierarchyByChild = _spareHierarchy ?? new Dictionary<Entity, HierarchyIntent>();
-        _spareHierarchy = null;
-        _hierarchyByChild.Clear();
-        _pendingBatch = [];
         _pendingBatchCount = 0;
         _pendingBatchMin = int.MaxValue;
         _pendingBatchMax = 0;
-        _batchHeads = [];
-        _batchCompCounts = [];
-        _batchComps = [];
         _batchCompTotal = 0;
-        _batchBuf = [];
         _batchBufLen = 0;
-        _batchEntities = [];
-        _batchCanceled = [];
-        _unavailableEntities = _spareUnavailable;
-        _spareUnavailable = null;
-        _unavailableEntities?.Clear();
         _lastCreatedBatch = -1;
+        _hierarchyByChild.Clear();
+        _unavailableEntities?.Clear();
         return frozen;
     }
 
@@ -1066,6 +1117,7 @@ public sealed class CommandStream : ICommandRecorder
 
     internal object? ActiveHierarchyForTesting => _hierarchyByChild;
     internal object? ActiveUnavailableForTesting => _unavailableEntities;
+    internal object? ActiveFrozenForTesting => _pendingFrozen;
 
     // ── Helpers ───────────────────────────────────────────────────────
 

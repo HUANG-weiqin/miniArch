@@ -1784,4 +1784,59 @@ public sealed class CommandStreamTests
         Assert.Same(hierarchyRef, stream.ActiveHierarchyForTesting);
         Assert.Same(unavailableRef, stream.ActiveUnavailableForTesting);
     }
+
+    [Fact]
+    public async Task SubmitAndSnapshotAsync_reuses_frozen_state_in_steady_state()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+
+        async Task RunFrameAsync()
+        {
+            var e = world.Create();
+            stream.Destroy(e);
+            await stream.SubmitAndSnapshotAsync();
+        }
+
+        // Prime: frame 1 allocates the first FrozenState; frame 2 reclaims it
+        // and starts reusing it as the spare. After frame 2 the active frozen
+        // is the same object that will be recycled for every subsequent frame.
+        await RunFrameAsync();
+        await RunFrameAsync();
+
+        var frozenRef = stream.ActiveFrozenForTesting;
+        Assert.NotNull(frozenRef);
+
+        await RunFrameAsync();
+        await RunFrameAsync();
+        await RunFrameAsync();
+
+        // In steady state the same FrozenState instance alternates between the
+        // active and spare roles — no new allocation should occur.
+        Assert.Same(frozenRef, stream.ActiveFrozenForTesting);
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotAsync_overlapping_tasks_stay_correct()
+    {
+        // Caller does NOT await between frames: previous task may still be running
+        // when the next SubmitAndSnapshotAsync fires. We must not corrupt state.
+        var world = new World();
+        var stream = new CommandStream(world);
+
+        var tasks = new List<Task<FrameDelta>>();
+        for (var i = 0; i < 5; i++)
+        {
+            var e = world.Create();
+            stream.Add(e, new Position(i, i));
+            stream.Destroy(e);
+            tasks.Add(stream.SubmitAndSnapshotAsync());
+        }
+
+        foreach (var t in tasks)
+        {
+            var delta = await t;
+            Assert.True(delta.DeltaCount > 0);
+        }
+    }
 }
