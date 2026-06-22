@@ -758,7 +758,7 @@ public sealed class CommandBuffer : ICommandRecorder
                 if (state.Map.IsEmpty)
                     delta.AddCreate(entity, Array.Empty<RawComponentValue>());
                 else
-                    delta.AddCreate(entity, BuildCreatedEntityComponentsFromFrozen(in state, frozen.Slabs, ref frozen.CreatedOverflow));
+                    delta.AddCreate(entity, BuildCreatedEntityComponentsRaw(in state, frozen.Slabs, ref frozen.CreatedOverflow));
             }
         }
 
@@ -863,7 +863,7 @@ public sealed class CommandBuffer : ICommandRecorder
         ArrayPool<ComponentType>.Shared.Return(types);
     }
 
-    private static RawComponentValue[] BuildCreatedEntityComponentsFromFrozen(
+    private static RawComponentValue[] BuildCreatedEntityComponentsRaw(
         in CreatedState state, List<byte[]> slabs, ref OverflowPool<int, CreatedComponent> pool)
     {
         var (types, sources, count) = ExtractAndSortComponents(in state, ref pool);
@@ -967,23 +967,7 @@ public sealed class CommandBuffer : ICommandRecorder
     }
 
     private RawComponentValue[] BuildCreatedEntityComponentsForDelta(in CreatedState state)
-    {
-        var (types, sources, count) = ExtractAndSortComponents(in state, ref _createdOverflow);
-        try
-        {
-            var rawComponents = new RawComponentValue[count];
-            for (var i = 0; i < count; i++)
-            {
-                var sc = sources[i];
-                rawComponents[i] = new RawComponentValue(types[i], _slabs[sc.SlabIndex], sc.DataOffset, sc.DataSize);
-            }
-            return rawComponents;
-        }
-        finally
-        {
-            ReturnExtracted(types, sources);
-        }
-    }
+        => BuildCreatedEntityComponentsRaw(in state, _slabs, ref _createdOverflow);
 
     private void BuildDelta(FrameDelta delta)
     {
