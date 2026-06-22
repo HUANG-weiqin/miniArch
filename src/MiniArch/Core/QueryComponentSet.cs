@@ -34,18 +34,6 @@ internal readonly struct QueryComponentSet : IEquatable<QueryComponentSet>
         return new QueryComponentSet(components);
     }
 
-    public Signature ToSignature()
-    {
-        if (Components.Length == 0)
-        {
-            return Signature.Empty;
-        }
-
-        var copied = new ComponentType[Components.Length];
-        Array.Copy(Components, copied, Components.Length);
-        return new Signature(copied);
-    }
-
     public bool Equals(QueryComponentSet other)
     {
         if (Count != other.Count)

@@ -49,9 +49,8 @@ internal sealed class Query
         return world.GetAdvancedQuery(in description);
     }
 
-    internal Signature RequiredSignature => _filter.Required.ToSignature();
-    internal Signature ExcludedSignature => _filter.Excluded.ToSignature();
-    internal Signature AnySignature => _filter.Any.ToSignature();
+    internal QueryFilter Filter => _filter;
+
     internal int RefreshCount => Volatile.Read(ref _refreshCount);
 
     internal IReadOnlyList<Archetype> MatchedArchetypes

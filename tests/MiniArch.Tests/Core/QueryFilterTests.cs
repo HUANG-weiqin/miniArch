@@ -29,13 +29,13 @@ public sealed class QueryFilterTests
         var tagA = ComponentRegistry.Shared.GetOrCreate<TagA>();
         var tagB = ComponentRegistry.Shared.GetOrCreate<TagB>();
 
-        Assert.Equal(1, query.RequiredSignature.Count);
-        Assert.Contains(position, query.RequiredSignature);
-        Assert.Equal(1, query.ExcludedSignature.Count);
-        Assert.Contains(velocity, query.ExcludedSignature);
-        Assert.Equal(2, query.AnySignature.Count);
-        Assert.Contains(tagA, query.AnySignature);
-        Assert.Contains(tagB, query.AnySignature);
+        Assert.Equal(1, query.Filter.Required.Count);
+        Assert.True(query.Filter.Required.AsSpan().Contains(position));
+        Assert.Equal(1, query.Filter.Excluded.Count);
+        Assert.True(query.Filter.Excluded.AsSpan().Contains(velocity));
+        Assert.Equal(2, query.Filter.Any.Count);
+        Assert.True(query.Filter.Any.AsSpan().Contains(tagA));
+        Assert.True(query.Filter.Any.AsSpan().Contains(tagB));
     }
 
     [Fact]

@@ -493,25 +493,10 @@ internal enum DeltaOpKind : byte
     Destroy = 0x09,
 }
 
-// ── Retained record structs (used by CommandBuffer/CommandStream) ──────
+// ── Retained record struct (used by CommandBuffer/CommandStream) ───────
 
 internal readonly record struct RawComponentValue(
     ComponentType ComponentType,
     byte[] Data,
     int DataOffset,
     int DataSize);
-
-internal readonly record struct RawCreatedEntity(Entity Entity, RawComponentValue[] Components);
-
-internal readonly record struct RawComponentCommand(
-    Entity Entity,
-    ComponentType ComponentType,
-    int DataOffset,
-    int DataSize,
-    byte[] Data);
-
-internal readonly record struct RawRemoveCommand(Entity Entity, ComponentType ComponentType);
-
-internal readonly record struct LinkCommand(Entity Parent, Entity Child);
-
-internal readonly record struct UnlinkCommand(Entity Child);
