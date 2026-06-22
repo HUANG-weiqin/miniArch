@@ -556,7 +556,12 @@ public sealed class CommandBuffer : ICommandRecorder
         }
 
         var frozen = SwapOutState();
-        var task = Task.Run(() => BuildFromFrozen(frozen));
+        // Static delegate + state parameter avoids the per-call closure allocation
+        // that Task.Run(() => ...) would create. FrozenBufferState is a reference
+        // type, so passing it as `object` is a free upcast — no boxing.
+        var task = Task.Factory.StartNew(
+            s_buildFromFrozen, frozen, CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
 
         SubmitFromFrozen(frozen);
 
@@ -569,6 +574,9 @@ public sealed class CommandBuffer : ICommandRecorder
             return t.Result;
         }, TaskContinuationOptions.ExecuteSynchronously);
     }
+
+    private static readonly Func<object?, FrameDelta> s_buildFromFrozen =
+        state => BuildFromFrozen((FrozenBufferState)state!);
 
     private FrozenBufferState SwapOutState()
     {
