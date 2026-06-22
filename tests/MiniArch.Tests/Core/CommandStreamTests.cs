@@ -1839,4 +1839,48 @@ public sealed class CommandStreamTests
             Assert.True(delta.DeltaCount > 0);
         }
     }
+
+    [Fact]
+    public void Destroy_pending_entity_cascades_to_pending_descendants()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+
+        var parent = stream.Create();
+        stream.Add(parent, new Position(1, 1));
+        var child = stream.Create();
+        stream.Add(child, new Position(2, 2));
+        var grandchild = stream.Create();
+        stream.Add(grandchild, new Position(3, 3));
+        stream.Link(parent, child);
+        stream.Link(child, grandchild);
+
+        stream.Destroy(parent);
+        stream.Submit();
+
+        Assert.False(world.IsAlive(parent));
+        Assert.False(world.IsAlive(child));
+        Assert.False(world.IsAlive(grandchild));
+    }
+
+    [Fact]
+    public void Destroy_pending_entity_does_not_destroy_existing_child()
+    {
+        // Existing (already-alive) child linked under a pending parent: when the
+        // pending parent is destroyed, the existing child stays alive. World's
+        // hierarchy doesn't know about the pending link, so there's no cascade.
+        var world = new World();
+        var stream = new CommandStream(world);
+
+        var existingChild = world.Create(new Position(9, 9));
+        var parent = stream.Create();
+        stream.Link(parent, existingChild);
+
+        stream.Destroy(parent);
+        stream.Submit();
+
+        Assert.False(world.IsAlive(parent));
+        // Existing child survives — it was never parented in the live world.
+        Assert.True(world.IsAlive(existingChild));
+    }
 }

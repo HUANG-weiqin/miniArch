@@ -123,6 +123,7 @@ public sealed class CommandStream : ICommandRecorder
         if (TryGetPendingBatch(entity, out _))
         {
             CancelPendingEntity(entity);
+            CancelPendingDescendants(entity);
         }
         else
         {
@@ -745,6 +746,53 @@ public sealed class CommandStream : ICommandRecorder
     }
 
     // ── Batch buffer helpers ──────────────────────────────────────────
+
+    // Mirrors CommandBuffer.MarkCreatedDescendantsDestroyed: when a pending entity
+    // is destroyed before Submit, all pending entities linked under it must also
+    // be cancelled. Existing entities are skipped (World.Destroy cascades them
+    // through the live hierarchy). Without this, CS would leave orphan children.
+    private void CancelPendingDescendants(Entity root)
+    {
+        if (_hierarchyByChild.Count == 0) return;
+
+        // BFS through pending descendants. We must snapshot children before
+        // calling CancelPendingEntity because that mutates _hierarchyByChild.
+        var queue = ArrayPool<Entity>.Shared.Rent(16);
+        var queueCount = 0;
+        try
+        {
+            EnqueuePendingChildren(root, ref queue, ref queueCount);
+
+            var head = 0;
+            while (head < queueCount)
+            {
+                var current = queue[head++];
+                CancelPendingEntity(current);
+                EnqueuePendingChildren(current, ref queue, ref queueCount);
+            }
+        }
+        finally
+        {
+            ArrayPool<Entity>.Shared.Return(queue);
+        }
+    }
+
+    private void EnqueuePendingChildren(Entity parent, ref Entity[] queue, ref int queueCount)
+    {
+        foreach (var (child, intent) in _hierarchyByChild)
+        {
+            if (!intent.IsLinked || intent.Parent != parent) continue;
+            if (!TryGetPendingBatch(child, out _)) continue;
+            if (queueCount == queue.Length)
+            {
+                var grown = ArrayPool<Entity>.Shared.Rent(queue.Length * 2);
+                Array.Copy(queue, grown, queueCount);
+                ArrayPool<Entity>.Shared.Return(queue);
+                queue = grown;
+            }
+            queue[queueCount++] = child;
+        }
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void WritePendingComponent<T>(int batchIdx, T component) where T : unmanaged
