@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-06-13 (清理死代码: 删除未使用的 GetComponentRef<T>(ComponentType)、Signature.ToString、ComponentMask.ToString)
+updated: 2026-06-22 (全库审阅: 修复 BuildFromFrozen 重复 EmitHierarchyToDelta bug, 确认无其他 bug)
 ---
 # MiniArch Core ECS
 
@@ -34,7 +34,7 @@ updated: 2026-06-13 (清理死代码: 删除未使用的 GetComponentRef<T>(Comp
   - `QueryFilter.cs`：query filter 的内部执行形状
   - `QueryComponentSet.cs`：排序组件集合（仅 `CreateFrom` 批量入口）
   - `QueryDescription.cs`：可跨 world 复用的 query 描述，保存 world-agnostic 的 `Type` 集合
-  - `Query.cs` / `QueryIterators.cs`：archetype 过滤和 chunk 遍历、单版本号全局快照失效
+  - `Query.cs`：archetype 过滤和 chunk 遍历、单版本号全局快照失效
   - `ComponentRegistry.cs`：全局 `Type ↔ ComponentType` 双向映射（copy-on-write）
   - `ComponentType.cs`：`int` wrapper
   - `ComponentSizeCache.cs`：`Type → size` 缓存
@@ -65,7 +65,7 @@ updated: 2026-06-13 (清理死代码: 删除未使用的 GetComponentRef<T>(Comp
   - Query 读路径使用 world 发布（volatile write）的 archetype 数组快照和 query 自身发布的 matched-archetype/chunk 数组快照（`World.QueryCache.cs`）
   - **Archetype 支持单块和分段两种存储模式**（详见 `kb-chunk-storage.md`）：存储为 Archetype 直持的 `_data: byte[]`（单块）或 `_segments: Segment[]`（分段），通过 `_columnByteOffsets[column] + row * _elementSizes[column]` 定位元素
   - Archetype 按需线性增长：`EnsureCapacity`（`Archetype.Storage.cs`）按 double 策略扩容，每列 `CopyBlockUnaligned` 整列搬移
-  - `World.Create/Destroy` 热路径无锁（单线程 world mutation 前提）；`CommandBuffer` 的 `ReserveDeferredEntity` 保留锁
+  - `World.Create/Destroy` 热路径无锁（单线程 world mutation 前提）；`World.ReserveDeferredEntity` 保留锁（供 CommandBuffer/CommandStream 的 deferred entity 使用）
 
 ## 决策
 

@@ -2,7 +2,7 @@
 title: Test Workflow
 module: MiniArch.Tests
 description: How the test suite, query profiling, snapshot benchmarks, and structural-change benchmarks are organized and how to run them
-updated: 2026-06-08 (DebugMetricsTests 已删除、CommandBufferTests 大幅扩展、ThroughputRunner 已移除)
+updated: 2026-06-22 (全库审阅: 确认测试组织与文档一致)
 ---
 # Test Workflow
 

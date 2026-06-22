@@ -2,7 +2,7 @@
 title: Query Invalidation System
 module: MiniArch.Core Query
 description: Incremental append-only query invalidation — archetype count comparison, only new archetypes scanned
-updated: 2026-06-13 (实际实现是全量重建，非增量 append；ComponentMask 256→512-bit；_snapshotVersion 已移除)
+updated: 2026-06-22 (全库审阅: 确认实现与文档一致, 修正过时引用)
 ---
 # Query Invalidation System
 

@@ -2,7 +2,7 @@
 title: Throughput Workflow
 module: Workspace
 description: Reusable fixed-duration throughput comparison workflow for MiniArch and Arch workloads
-updated: 2026-06-08 (MiniArch EachSpan throughput case 已移除、保留 ComponentSpan 和 Wide 变体)
+updated: 2026-06-22 (全库审阅: 确认 EachSpan 已移除, 保留 ComponentSpan 和 Wide 变体)
 ---
 # Throughput Workflow
 

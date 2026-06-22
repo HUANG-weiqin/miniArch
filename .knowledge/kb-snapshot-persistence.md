@@ -2,7 +2,7 @@
 title: Snapshot Persistence
 module: MiniArch.Core Snapshot
 description: Full-world snapshot save/load design for unmanaged components, plus World.Checksum() for lockstep peer state verification
-updated: 2026-06-21 (新增 World.Checksum() / WorldSnapshot.ComputeChecksum 一行 API)
+updated: 2026-06-22 (全库审阅: 确认实现与文档一致)
 ---
 # Snapshot Persistence
 

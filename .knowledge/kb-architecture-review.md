@@ -2,7 +2,7 @@
 title: Architecture Mechanistic Review
 module: MiniArch.Core
 description: Mechanistic insight of the entire miniArch ECS library — one-line truths, minimal loops, state models, data flows, known issues, and optimization opportunities
-updated: 2026-06-13 (ComponentMask 256→512-bit, edge cache 改回直索引, 修正已删除文件声明, 分段存储模式)
+updated: 2026-06-22 (全库审阅: 修正过时描述, 删除不存在的文件引用, 修复 BuildFromFrozen bug 记录)
 ---
 # Architecture Mechanistic Review
 
@@ -44,14 +44,13 @@ WorldSnapshot / WorldClone
 - `byte[]` 按列排布所有组件数据，swap-remove 删除行
 - 读取/写入：`Unsafe.As<byte, T>(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), columnOffset + row * elementSize))`
 - `_componentIdToColumnIndex[]`：component id → 列索引 direct map
-- 每个 Archetype 有且仅有一个 Chunk（internal readonly struct 视图）和一个 ChunkView（public readonly struct 视图），无 multi-chunk
+- 支持单块和分段两种存储模式（详见 `kb-chunk-storage.md`）；ChunkView（public readonly struct 视图）对用户屏蔽底层差异
 - 代码位置：`Archetype.cs`（字段/构造/metadata）+ `Archetype.Storage.cs`（存储操作）
 
 ### 3. Archetype
 - 存储持有者：`_data: byte[]`、`_entities: Entity[]`、`_columnByteOffsets`、`_elementSizes`、`_count`、`_capacity`
 - `_addDestinationCache` / `_removeDestinationCache`：`Archetype?[]` 内联直索引 edge cache
 - `CopySharedComponentsFrom`：遍历 destination signature，只复制 source 也有的组件
-- Edge cache 最近改为 bounded 4-slot（`_addEdgeCacheSlots`/`_removeEdgeCacheSlots`），LRU 淘汰
 
 ### 4. Signature & ComponentMask
 - Signature：排序 `ComponentType[]` + `ComponentMask`（512-bit，8 × `ulong`，id < 512 时快速匹配）
@@ -88,7 +87,7 @@ WorldSnapshot / WorldClone
 ### 10. World（编排者）
 - **拆分为 5 个 partial 文件**：World.cs（字段+读写+hierarchy+clone+replay）、World.EntityLifecycle.cs（Create/Destroy）、World.Create.Generated.cs（泛型重载+GetFirst）、World.QueryCache.cs（Query 缓存）、World.StructuralChange.cs（Add/Set/Remove）
 - 拥有身份表（`EntityRecord[]`）、archetype 字典、query 缓存、hierarchy
-- 结构变更：查 `EntityRecord` → 算目标签名 → edge cache → `CopySharedComponentsFrom` → 修 `EntityRecord` → `_archetypeVersion++`
+- 结构变更：查 `EntityRecord` → 算目标签名 → edge cache → `CopySharedComponentsFrom` → 修 `EntityRecord` → `_createArchetypeCacheGeneration++`
 - 新增 `GetFirst<T>()`：O(1) 按 component type 查找首个 entity（复用 `CreateArchetypeCache<T>` 泛型静态缓存）
 
 ### 已删除的子系统

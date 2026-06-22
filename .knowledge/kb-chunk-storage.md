@@ -2,7 +2,7 @@
 title: Chunk 存储
 module: MiniArch.Core
 description: Archetype 存储架构 — 单块模式（默认）和分段模式（阈值后自动切换），包括 SoA 布局、跨段 swap-remove、查询分段迭代
-updated: 2026-06-21 (GetEntityStorage 平坦缓存，消除分段模式下的每次分配)
+updated: 2026-06-22 (全库审阅: 确认实现与文档一致)
 ---
 # Chunk 存储
 
@@ -90,7 +90,6 @@ ConvertToChunked():
         Data = _data,           // 直接转移引用
         Count = _count
     }
-    _segmentOffsets = [0]
     _segmentCount = 1
     _isChunked = true
     _entities = null

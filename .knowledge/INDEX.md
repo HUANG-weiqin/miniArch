@@ -51,3 +51,8 @@
 - **FrameDelta 热路径 struct 大幅缩小**（Movement +50% / Attack +29%）
 - **ComponentMask 扩展为 512-bit**（8 × `ulong`），覆盖 component id 0..511 的快速匹配
 - **新增分段存储模式**：Archetype 超过阈值后自动切换为多 Segment 模式（详见 `kb-chunk-storage.md`）
+
+## 重大变更摘要（2026-06-22 全库审阅）
+
+- **修复 CommandStream.BuildFromFrozen bug**：`EmitHierarchyToDelta` 被重复调用两次，导致 FrameDelta 中 Link/Unlink 操作重复写入
+- **知识库全面更新**：修正过时文件路径（Ecs/Query.cs → Query.cs）、删除不存在的文件引用（SpanQueryIterators.cs、ChunkViewTyped.cs）、修复旧字段名引用（_archetypeVersion → _createArchetypeCacheGeneration）
