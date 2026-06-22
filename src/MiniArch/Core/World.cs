@@ -240,7 +240,7 @@ public sealed partial class World : IDisposable
     /// Inlined hot path: no EntityInfo allocation, no Signature.Contains overhead.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool Has<T>(Entity entity) where T : struct
+    public bool Has<T>(Entity entity) where T : unmanaged
     {
         ThrowIfDisposed();
         ref var record = ref _records[entity.Id];

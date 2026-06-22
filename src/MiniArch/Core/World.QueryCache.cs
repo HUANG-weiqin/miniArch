@@ -26,7 +26,7 @@ public sealed partial class World
     /// <exception cref="InvalidOperationException">
     /// No entity with component <typeparamref name="T" /> exists.
     /// </exception>
-    public Entity GetFirst<T>() where T : struct
+    public Entity GetFirst<T>() where T : unmanaged
     {
         ThrowIfDisposed();
         if (!TryGetCreateArchetype<T>(out var archetype) || archetype.EntityCount == 0)

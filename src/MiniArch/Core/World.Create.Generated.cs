@@ -470,7 +470,7 @@ public sealed partial class World
         return entity;
     }
 
-    private bool TryGetCreateArchetype<T>([NotNullWhen(true)] out Archetype? archetype) where T : struct
+    private bool TryGetCreateArchetype<T>([NotNullWhen(true)] out Archetype? archetype) where T : unmanaged
     {
         var entry = CreateArchetypeCache<T>.Entry;
         if (entry is not null && entry.TryGetArchetype(this, _createArchetypeCacheGeneration, out archetype))
