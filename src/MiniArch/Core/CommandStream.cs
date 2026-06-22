@@ -55,6 +55,11 @@ public sealed class CommandStream : ICommandRecorder
     private Entity _lastCreated;
     private int _lastCreatedBatch = -1;
 
+    private Dictionary<Entity, HierarchyIntent>? _spareHierarchy;
+    private HashSet<Entity>? _spareUnavailable;
+    private FrozenState? _pendingFrozen;
+    private Task? _pendingTask;
+
     // ── Construction ───────────────────────────────────────────────────
 
     public CommandStream(World world)
@@ -258,6 +263,8 @@ public sealed class CommandStream : ICommandRecorder
         var frozen = SwapOutState();
         var task = Task.Run(() => BuildFromFrozen(frozen));
         SubmitFromFrozen(frozen);
+        _pendingFrozen = frozen;
+        _pendingTask = task;
         return task;
     }
 
@@ -279,8 +286,20 @@ public sealed class CommandStream : ICommandRecorder
         EmitHierarchyToDelta(delta, _hierarchyByChild, _unavailableEntities);
     }
 
+    private void TryReclaimPending()
+    {
+        if (_pendingFrozen is null || _pendingTask is not { IsCompleted: true })
+            return;
+
+        _spareHierarchy ??= _pendingFrozen.HierarchyByChild;
+        _spareUnavailable ??= _pendingFrozen.UnavailableEntities;
+        _pendingFrozen = null;
+        _pendingTask = null;
+    }
+
     private FrozenState SwapOutState()
     {
+        TryReclaimPending();
         var frozen = new FrozenState
         {
             Stores = _stores,
@@ -301,7 +320,9 @@ public sealed class CommandStream : ICommandRecorder
         _stores = new ComponentStore?[ComponentRegistry.Shared.ComponentTypeCount];
         _destroyEntities = [];
         _destroyCount = 0;
-        _hierarchyByChild = new Dictionary<Entity, HierarchyIntent>();
+        _hierarchyByChild = _spareHierarchy ?? new Dictionary<Entity, HierarchyIntent>();
+        _spareHierarchy = null;
+        _hierarchyByChild.Clear();
         _pendingBatch = [];
         _pendingBatchCount = 0;
         _pendingBatchMin = int.MaxValue;
@@ -314,7 +335,9 @@ public sealed class CommandStream : ICommandRecorder
         _batchBufLen = 0;
         _batchEntities = [];
         _batchCanceled = [];
-        _unavailableEntities = null;
+        _unavailableEntities = _spareUnavailable;
+        _spareUnavailable = null;
+        _unavailableEntities?.Clear();
         _lastCreatedBatch = -1;
         return frozen;
     }
@@ -1040,6 +1063,9 @@ public sealed class CommandStream : ICommandRecorder
         _hierarchyByChild.Clear();
         _unavailableEntities?.Clear();
     }
+
+    internal object? ActiveHierarchyForTesting => _hierarchyByChild;
+    internal object? ActiveUnavailableForTesting => _unavailableEntities;
 
     // ── Helpers ───────────────────────────────────────────────────────
 

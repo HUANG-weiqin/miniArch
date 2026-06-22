@@ -1754,4 +1754,34 @@ public sealed class CommandStreamTests
         if (expected.TryGetParent(entity, out parentA))
             Assert.Equal(parentA, parentB);
     }
+
+    [Fact]
+    public void SubmitAndSnapshotAsync_reuses_dictionary_and_hashset_in_steady_state()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+        var parent = world.Create();
+
+        void RunFrame()
+        {
+            var child = world.Create();
+            stream.Link(parent, child);
+            stream.Destroy(child);
+            stream.SubmitAndSnapshotAsync().GetAwaiter().GetResult();
+        }
+
+        for (var i = 0; i < 2; i++)
+            RunFrame();
+
+        var hierarchyRef = stream.ActiveHierarchyForTesting;
+        var unavailableRef = stream.ActiveUnavailableForTesting;
+        Assert.NotNull(hierarchyRef);
+        Assert.NotNull(unavailableRef);
+
+        RunFrame();
+        RunFrame();
+
+        Assert.Same(hierarchyRef, stream.ActiveHierarchyForTesting);
+        Assert.Same(unavailableRef, stream.ActiveUnavailableForTesting);
+    }
 }

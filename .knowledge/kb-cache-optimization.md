@@ -2,7 +2,7 @@
 title: Cache & Memory Optimization Review
 module: MiniArch.Core
 description: Memory layout and cache behavior analysis of the ECS runtime, with optimization opportunities
-updated: 2026-06-13 (edge cache 改回直索引, ComponentMask 256→512-bit, _archetypeVersion 更名)
+updated: 2026-06-22 (P16: SubmitAndSnapshotAsync 双缓冲消除 Dictionary/HashSet 分配)
 ---
 # Cache & Memory Optimization Review
 
@@ -18,7 +18,7 @@ MiniArch 的迭代热路径已经高度优化（pointer-bump、SoA、自适应 c
 5. MigrationPlan 小优化
 6. Empty chunk active list（条件执行）
 
-已完成的优化（P0-P15）涵盖：EntityRecord 合并、edge cache 改 bounded LRU、CopySmall 2-byte fast path、ThreadStatic buffer 复用、公共 API AggressiveInlining、Entity IComparable 去重、**本地 archetype 缓存删除**。
+已完成的优化（P0-P16）涵盖：EntityRecord 合并、edge cache 改 bounded LRU、CopySmall 2-byte fast path、ThreadStatic buffer 复用、公共 API AggressiveInlining、Entity IComparable 去重、**本地 archetype 缓存删除**、**SubmitAndSnapshotAsync Dictionary/HashSet 双缓冲复用**。
 
 完整实验计划见 `docs/plans/2026-06-06-world-data-structure-optimization-experiments.md`。
 
@@ -179,6 +179,24 @@ struct EntityRecord {
 ### 最重要的一条数据
 
 **DefaultChunkCapacity = 128** 决定 Archetype 初始容量（行数），间接决定了迭代切换 chunk 的频率。
+
+## P16: SubmitAndSnapshotAsync 双缓冲消除 Dictionary/HashSet 分配 ✅ 已修复 (2026-06-22)
+
+**问题**：`SwapOutState()` 每帧 `new Dictionary<Entity, HierarchyIntent>()`（~360 bytes）和 `_unavailableEntities = null`（下次 Destroy 重新 `new HashSet`，~200 bytes）。稳态下每帧 ~560 bytes 堆分配。对比之下，`Submit()` 同步路径已用 `.Clear()` 复用，稳态零 GC。
+
+**根因**：`SwapOutState` 需要把当前录制状态"冻结"交给后台线程 build delta，同时给主线程换上全新的录制状态。原实现直接 `new` 全部容器。
+
+**Fix**：双缓冲——后台 Task 完成后，其读过的 Dictionary/HashSet 回收到 spare 字段，下一次 `SwapOutState` 优先用 spare（`.Clear()` 复用内部数组），仅在首次或后台未完成时 fallback 到 `new`。
+- `TryReclaimPending()`：检查 `_pendingTask.IsCompleted`，若完成则把 `_pendingFrozen` 的 Dictionary/HashSet 存入 `_spareHierarchy` / `_spareUnavailable`
+- `SwapOutState()`：开头调 `TryReclaimPending()`，然后用 `_spareHierarchy ?? new Dictionary()` + `.Clear()` 替代 `new`
+- `SubmitAndSnapshotAsync()`：记录 `_pendingFrozen` / `_pendingTask` 供下帧回收
+- 线程安全：`Task.IsCompleted` 有内存屏障，true 时后台线程已停止读取 frozen 状态
+
+**未消除的分配**（后续可优化）：`new FrozenState` 对象、`new ComponentStore?[N]` 数组、`Task.Run` 闭包 + Task 对象。这些合计 ~300-900 bytes/call（取决于 ComponentTypeCount）。
+
+**影响文件**：`CommandStream.cs`，`CommandStreamTests.cs`（+1 测试：引用相等验证复用）
+
+**回归门禁**：Movement-Stream 1766 rounds/s，Attack-Stream 1045 rounds/s，均远超阈值，内存稳定。
 
 ## 坑点
 
