@@ -335,13 +335,13 @@ public static class WorldSnapshot
     private static void WriteColumnPayload<T>(BinaryWriter writer, Archetype archetype, int columnIndex, ReadOnlySpan<int> sortedRows)
         where T : unmanaged
     {
-        archetype.WriteColumnOrderedTo<T>(writer, columnIndex, sortedRows);
+        archetype.WriteColumnOrderedTo(writer, columnIndex, sortedRows);
     }
 
     private static void ReadColumnPayload<T>(BinaryReader reader, Archetype archetype, int columnIndex, int count)
         where T : unmanaged
     {
-        archetype.ReadColumnFrom<T>(reader, columnIndex, count);
+        archetype.ReadColumnFrom(reader, columnIndex, count);
     }
 
     private static string GetSchemaName(Type componentType)

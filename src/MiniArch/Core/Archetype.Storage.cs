@@ -534,7 +534,7 @@ internal sealed partial class Archetype
     /// Used by WorldSnapshot.Save to produce canonical byte layout independent
     /// of archetype's internal row order (which is affected by swap-remove).
     /// </summary>
-    internal unsafe void WriteColumnOrderedTo<T>(BinaryWriter writer, int columnIndex, ReadOnlySpan<int> sortedRows) where T : unmanaged
+    internal unsafe void WriteColumnOrderedTo(BinaryWriter writer, int columnIndex, ReadOnlySpan<int> sortedRows)
     {
         var size = _elementSizes[columnIndex];
         var count = sortedRows.Length;
@@ -548,7 +548,7 @@ internal sealed partial class Archetype
         writer.Write(buf);
     }
 
-    internal void ReadColumnFrom<T>(BinaryReader reader, int columnIndex, int count) where T : unmanaged
+    internal void ReadColumnFrom(BinaryReader reader, int columnIndex, int count)
     {
         if (!_isChunked)
         {
