@@ -127,14 +127,9 @@ internal sealed partial class Archetype
         cache[id] = destination;
     }
 
-    // .NET maximum array element count; avoids overflow in _capacity * 2.
-    private const int ArrayMaxLength = 0x7FFFFFC7; // Array.MaxLength
-
     // Target 2 MB per segment: large enough for L3 cache residency,
     // small enough that allocation and GC compaction are near-instant.
     private const int TargetSegmentBytes = 2 * 1024 * 1024;
-
-    private int SegmentEntityCapacity => _segmentEntityCapacity;
 
     private static int ComputeSegmentEntityCapacity(Type[] componentTypes)
     {

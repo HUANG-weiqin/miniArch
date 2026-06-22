@@ -6,6 +6,9 @@ namespace MiniArch.Core;
 [SkipLocalsInit]
 internal sealed partial class Archetype
 {
+    // .NET maximum array element count; avoids overflow in _capacity * 2.
+    private const int ArrayMaxLength = 0x7FFFFFC7; // Array.MaxLength
+
     // ──────────────────────────────────────────────
     //  Row-mapping helpers (chunked mode)
     // ──────────────────────────────────────────────
@@ -13,8 +16,8 @@ internal sealed partial class Archetype
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private (int SegmentIndex, int LocalRow) GetSegmentAndLocal(int globalRow)
     {
-        var segIdx = globalRow / SegmentEntityCapacity;
-        return (segIdx, globalRow - segIdx * SegmentEntityCapacity);
+        var segIdx = globalRow / _segmentEntityCapacity;
+        return (segIdx, globalRow - segIdx * _segmentEntityCapacity);
     }
 
     // ──────────────────────────────────────────────
@@ -65,8 +68,8 @@ internal sealed partial class Archetype
         {
             var seg = new Segment
             {
-                Entities = new Entity[SegmentEntityCapacity],
-                Data = CreateStorageBytes(_signature, _componentTypes, SegmentEntityCapacity),
+                Entities = new Entity[_segmentEntityCapacity],
+                Data = CreateStorageBytes(_signature, _componentTypes, _segmentEntityCapacity),
                 Count = 0
             };
             var newIdx = _segmentCount;
@@ -74,7 +77,7 @@ internal sealed partial class Archetype
                 Array.Resize(ref _segments, Math.Max(newIdx * 2, 4));
             _segments[newIdx] = seg;
             _segmentCount++;
-            need -= SegmentEntityCapacity;
+            need -= _segmentEntityCapacity;
         }
         _flatEntitiesGeneration++;
     }
@@ -158,7 +161,7 @@ internal sealed partial class Archetype
             lastSeg = ref _segments[lastSegIdx];
         }
         var localRow = lastSeg.Count;
-        var globalRow = lastSegIdx * SegmentEntityCapacity + localRow;
+        var globalRow = lastSegIdx * _segmentEntityCapacity + localRow;
         lastSeg.Entities[localRow] = entity;
         lastSeg.Count++;
         _count++;
@@ -261,7 +264,7 @@ internal sealed partial class Archetype
 
         var lastSegCount = _segments[lastSegIdx].Count;
         var lastLocalRow = lastSegCount - 1;
-        var lastGlobalRow = lastSegIdx * SegmentEntityCapacity + lastLocalRow;
+        var lastGlobalRow = lastSegIdx * _segmentEntityCapacity + lastLocalRow;
 
         if (row == lastGlobalRow)
         {
