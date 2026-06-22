@@ -1,4 +1,5 @@
 using MiniArch.Core;
+using MiniArch.Tests.Core.TestSupport;
 using MiniQuery = MiniArch.Core.Query;
 
 namespace MiniArchTests.Core;
@@ -163,7 +164,7 @@ public sealed class CommandBufferTests
         var delta = buffer.Snapshot();
 
         Assert.False(world.IsAlive(e));
-        Assert.Single(delta.CreatedEntities);
+        Assert.Single(delta.CreatedEntities());
     }
 
     [Fact]
@@ -218,7 +219,7 @@ public sealed class CommandBufferTests
         var delta2 = b2.Snapshot();
 
         var merged = FrameDelta.Merge(delta1, delta2);
-        Assert.Equal(2, merged.CreatedEntities.Count);
+        Assert.Equal(2, merged.CreatedEntities().Count);
 
         world.Replay(merged);
         Assert.True(world.IsAlive(e1));
@@ -524,8 +525,8 @@ public sealed class CommandBufferTests
         var recycled = world.Create();
         var delta = cb.Snapshot();
 
-        Assert.Contains(stale, delta.DestroyedEntities);
-        Assert.DoesNotContain(recycled, delta.DestroyedEntities);
+        Assert.Contains(stale, delta.DestroyedEntities());
+        Assert.DoesNotContain(recycled, delta.DestroyedEntities());
     }
 
     [Fact]
@@ -538,7 +539,7 @@ public sealed class CommandBufferTests
         cb.Destroy(unknown);
         var delta = cb.Snapshot();
 
-        Assert.Contains(unknown, delta.DestroyedEntities);
+        Assert.Contains(unknown, delta.DestroyedEntities());
     }
 
     [Fact]
@@ -750,8 +751,8 @@ public sealed class CommandBufferTests
         Assert.Equal(new Position(1, 2), p);
 
         var delta = await task;
-        Assert.Single(delta.CreatedEntities);
-        Assert.Equal(2, delta.CreatedEntities[0].Components.Length);
+        Assert.Single(delta.CreatedEntities());
+        Assert.Equal(2, delta.CreatedEntities()[0].Components.Length);
     }
 
     [Fact]
@@ -770,8 +771,8 @@ public sealed class CommandBufferTests
         Assert.False(world.TryGet<Velocity>(e, out _));
 
         var delta = await task;
-        Assert.Single(delta.SetCommands);
-        Assert.Single(delta.RemoveCommands);
+        Assert.Single(delta.SetCommands());
+        Assert.Single(delta.RemoveCommands());
     }
 
     [Fact]
@@ -789,7 +790,7 @@ public sealed class CommandBufferTests
         Assert.Equal(parent, p);
 
         var delta = await task;
-        Assert.Single(delta.LinkCommands);
+        Assert.Single(delta.LinkCommands());
     }
 
     [Fact]
@@ -805,7 +806,7 @@ public sealed class CommandBufferTests
         Assert.False(world.IsAlive(e));
 
         var delta = await task;
-        Assert.Single(delta.DestroyedEntities);
+        Assert.Single(delta.DestroyedEntities());
     }
 
     [Fact]
@@ -823,8 +824,8 @@ public sealed class CommandBufferTests
         Assert.True(world.IsAlive(recycled));
 
         var delta = await task;
-        Assert.Contains(stale, delta.DestroyedEntities);
-        Assert.DoesNotContain(recycled, delta.DestroyedEntities);
+        Assert.Contains(stale, delta.DestroyedEntities());
+        Assert.DoesNotContain(recycled, delta.DestroyedEntities());
     }
 
     [Fact]
@@ -854,7 +855,7 @@ public sealed class CommandBufferTests
         var task2 = buffer.SubmitAndSnapshotAsync();
         Assert.True(world.IsAlive(e2));
         var delta2 = await task2;
-        Assert.Single(delta2.CreatedEntities);
+        Assert.Single(delta2.CreatedEntities());
     }
 
     [Fact]
@@ -1484,9 +1485,9 @@ public sealed class CommandBufferTests
         return count;
     }
 
-    // ═══════════════════════════════════════════════════════════
-    // Clone → Snapshot → Replay cross-world tests
-    // ═══════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════�?
+    // Clone �?Snapshot �?Replay cross-world tests
+    // ══════════════════════════════════════════════════════════�?
 
     [Fact]
     public void Clone_snapshot_can_be_replayed_into_another_world()
@@ -1591,10 +1592,10 @@ public sealed class CommandBufferTests
         buffer.Destroy(clone);
         var delta = buffer.Snapshot();
 
-        Assert.Empty(delta.CreatedEntities);
-        Assert.Empty(delta.DestroyedEntities);
-        Assert.Single(delta.ReservedEntities);
-        Assert.Single(delta.ReleasedEntities);
+        Assert.Empty(delta.CreatedEntities());
+        Assert.Empty(delta.DestroyedEntities());
+        Assert.Single(delta.ReservedEntities());
+        Assert.Single(delta.ReleasedEntities());
 
         var replica = new World();
         var rEntity = replica.Create(new Position(1, 2));
@@ -1618,7 +1619,7 @@ public sealed class CommandBufferTests
         buffer.Add(clone, new Health(100));
         var delta = buffer.Snapshot();
 
-        Assert.Single(delta.CreatedEntities);
+        Assert.Single(delta.CreatedEntities());
         // Set and Add on a deferred entity fold into CreatedState, not separate commands
 
         var replica = new World();
@@ -1681,13 +1682,13 @@ public sealed class CommandBufferTests
         Assert.Equal(CountAllEntities(source), CountAllEntities(replica));
     }
 
-    // ═══════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════�?
     // Merge CreatedEntity cross-world replay bug regression
-    // ═══════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════�?
 
-    // ═══════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════�?
     // Entity version alias safeguards
-    // ═══════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════�?
 
     [Fact]
     public void Stale_destroy_does_not_affect_same_id_pending_entity()
@@ -1827,8 +1828,8 @@ public sealed class CommandBufferTests
         Assert.NotEqual(stale.Version, recycled.Version);
 
         var delta = buffer.Snapshot();
-        Assert.Contains(stale, delta.DestroyedEntities);
-        Assert.DoesNotContain(recycled, delta.DestroyedEntities);
+        Assert.Contains(stale, delta.DestroyedEntities());
+        Assert.DoesNotContain(recycled, delta.DestroyedEntities());
     }
 
     [Fact]
@@ -1846,8 +1847,8 @@ public sealed class CommandBufferTests
         Assert.NotEqual(stale.Version, recycled.Version);
 
         var delta = await buffer.SubmitAndSnapshotAsync();
-        Assert.Contains(stale, delta.DestroyedEntities);
-        Assert.DoesNotContain(recycled, delta.DestroyedEntities);
+        Assert.Contains(stale, delta.DestroyedEntities());
+        Assert.DoesNotContain(recycled, delta.DestroyedEntities());
     }
 
     [Fact]
