@@ -317,18 +317,11 @@ public sealed class CommandBuffer : ICommandRecorder
     {
         if (_hierarchyByChild.Count == 0) return;
 
-        Dictionary<Entity, List<Entity>> parentToChildren = new(_hierarchyByChild.Count);
-        foreach (var (child, intent) in _hierarchyByChild)
-        {
-            if (!intent.IsLinked) continue;
-            if (!parentToChildren.TryGetValue(intent.Parent, out var list))
-            {
-                list = new List<Entity>();
-                parentToChildren[intent.Parent] = list;
-            }
-            list.Add(child);
-        }
-
+        // Zero-allocation BFS: scan _hierarchyByChild per level instead of
+        // building a Dictionary<Entity, List<Entity>> index.  Typical game
+        // hierarchies are shallow (< 8 levels) with few children per node,
+        // so the O(stack × _hierarchyByChild.Count) scan is cheaper than the
+        // Dictionary + List allocations it replaces.
         var stack = ArrayPool<Entity>.Shared.Rent(16);
         var stackCount = 0;
         try
@@ -339,10 +332,10 @@ public sealed class CommandBuffer : ICommandRecorder
             {
                 var parent = stack[--stackCount];
 
-                if (!parentToChildren.TryGetValue(parent, out var children)) continue;
-
-                foreach (var child in children)
+                foreach (var (child, intent) in _hierarchyByChild)
                 {
+                    if (!intent.IsLinked || intent.Parent != parent) continue;
+
                     var createdIdx = GetCreatedStateIndex(child);
                     if (createdIdx < 0) continue;
 

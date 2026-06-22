@@ -100,6 +100,11 @@ internal sealed class HierarchyTable
         return result;
     }
 
+    /// <summary>
+    /// Returns a zero-allocation enumerable over the live children of
+    /// <paramref name="parent"/>.  Prefer this over <see cref="GetChildren"/>
+    /// in hot paths to avoid List allocation.
+    /// </summary>
     internal ChildrenEnumerable EnumerateChildren(World world, Entity parent)
     {
         return new ChildrenEnumerable(this, world, parent);

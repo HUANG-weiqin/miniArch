@@ -393,17 +393,42 @@ public sealed partial class World : IDisposable
     /// archetypes.  Uses a direct double-loop set comparison so it works
     /// correctly even with unsorted Signatures (e.g. from CommandStream
     /// whose Signature stores components in ADD order).
+    /// Uses a 512-bit mask pre-filter to skip archetypes that cannot match
+    /// in O(1) per archetype, falling back to set comparison only when the
+    /// mask passes.
     /// </summary>
     internal Archetype? TryGetArchetype(ReadOnlySpan<ComponentType> types)
     {
         var count = types.Length;
 
+        // Build a 512-bit mask from the query types for O(1) pre-filtering.
+        ulong q0 = 0, q1 = 0, q2 = 0, q3 = 0, q4 = 0, q5 = 0, q6 = 0, q7 = 0;
+        for (var i = 0; i < count; i++)
+        {
+            var id = types[i].Value;
+            if ((uint)id < 64)       q0 |= 1UL << id;
+            else if ((uint)id < 128) q1 |= 1UL << (id - 64);
+            else if ((uint)id < 192) q2 |= 1UL << (id - 128);
+            else if ((uint)id < 256) q3 |= 1UL << (id - 192);
+            else if ((uint)id < 320) q4 |= 1UL << (id - 256);
+            else if ((uint)id < 384) q5 |= 1UL << (id - 320);
+            else if ((uint)id < 448) q6 |= 1UL << (id - 384);
+            else if ((uint)id < 512) q7 |= 1UL << (id - 448);
+        }
+
         foreach (var (signature, archetype) in _archetypes)
         {
             if (signature.Count != count) continue;
 
-            // Double-loop set comparison — order-independent and safe
-            // for unsorted signature arrays.
+            // O(1) mask pre-filter: archetype mask must be a superset of the query mask.
+            var am = signature.ComponentMask;
+            if ((am.B0 & q0) != q0 || (am.B1 & q1) != q1 ||
+                (am.B2 & q2) != q2 || (am.B3 & q3) != q3 ||
+                (am.B4 & q4) != q4 || (am.B5 & q5) != q5 ||
+                (am.B6 & q6) != q6 || (am.B7 & q7) != q7)
+                continue;
+
+            // Mask passed — do exact set comparison.
             var sigSpan = signature.AsSpan();
             var ok = true;
             for (var i = 0; i < count; i++)

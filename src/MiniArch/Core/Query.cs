@@ -122,7 +122,7 @@ internal sealed class Query
                 var expected = arch.IsChunked ? arch.SegmentCount : 1;
                 if (expected != _archetypeExpectedViews[i])
                 {
-                    Refresh();
+                    RefreshViewsOnly();
                     return;
                 }
             }
@@ -139,43 +139,101 @@ internal sealed class Query
         }
     }
 
-    private void AppendNewArchetypes(int currentArchetypeCount)
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void RefreshViewsOnly()
     {
-        var archetypes = _world.Archetypes;
-        var start = _lastArchetypeCount < 0 ? 0 : _lastArchetypeCount;
-
-        // ── Full rebuild (count views + unique archetypes) ──
-        // Count total views and unique archetypes.
-        var totalViews = 0;
-        var uniqueCount = 0;
-        for (var i = 0; i < currentArchetypeCount; i++)
+        lock (_refreshLock)
         {
-            if (Matches(archetypes[i]))
-            {
-                var a = archetypes[i];
-                totalViews += a.IsChunked ? a.SegmentCount : 1;
-                uniqueCount++;
-            }
+            RebuildChunkViews();
+            Interlocked.Increment(ref _refreshCount);
+        }
+    }
+
+    /// <summary>
+    /// Rebuilds chunk views for already-matched archetypes when their segment
+    /// count changes (chunked growth) without any new archetypes being added.
+    /// </summary>
+    private void RebuildChunkViews()
+    {
+        var totalViews = 0;
+        for (var i = 0; i < _matchedArchetypeCount; i++)
+        {
+            var a = _snapshotArchetypes[i];
+            totalViews += a.IsChunked ? a.SegmentCount : 1;
         }
 
-        // Grow arrays.
         if (_snapshotChunkViews.Length < totalViews)
         {
             var newLen = Math.Max(totalViews, _snapshotChunkViews.Length == 0 ? 4 : _snapshotChunkViews.Length * 2);
             Array.Resize(ref _snapshotChunkViews, newLen);
         }
-        if (_snapshotArchetypes.Length < uniqueCount)
+
+        var ci = 0;
+        for (var i = 0; i < _matchedArchetypeCount; i++)
         {
-            var newLen = Math.Max(uniqueCount, _snapshotArchetypes.Length == 0 ? 4 : _snapshotArchetypes.Length * 2);
+            var a = _snapshotArchetypes[i];
+            var viewCount = a.IsChunked ? a.SegmentCount : 1;
+            _archetypeExpectedViews[i] = viewCount;
+
+            if (a.IsChunked)
+            {
+                for (var s = 0; s < a.SegmentCount; s++)
+                    _snapshotChunkViews[ci++] = new ChunkView(a, s);
+            }
+            else
+            {
+                _snapshotChunkViews[ci++] = new ChunkView(a);
+            }
+        }
+
+        Volatile.Write(ref _chunkViewCount, ci);
+    }
+
+    private void AppendNewArchetypes(int currentArchetypeCount)
+    {
+        var archetypes = _world.Archetypes;
+        var start = _lastArchetypeCount < 0 ? 0 : _lastArchetypeCount;
+
+        // ── Incremental append: only scan new archetypes ──
+        // Existing matched archetypes are already in the snapshot; we only
+        // need to test archetypes added since the last refresh.
+        var newMatchCount = 0;
+        for (var i = start; i < currentArchetypeCount; i++)
+        {
+            if (Matches(archetypes[i]))
+                newMatchCount++;
+        }
+
+        var totalUnique = _matchedArchetypeCount + newMatchCount;
+
+        // Grow arrays if needed.
+        if (_snapshotArchetypes.Length < totalUnique)
+        {
+            var newLen = Math.Max(totalUnique, _snapshotArchetypes.Length == 0 ? 4 : _snapshotArchetypes.Length * 2);
             Array.Resize(ref _snapshotArchetypes, newLen);
         }
-        if (_archetypeExpectedViews.Length < uniqueCount)
-            Array.Resize(ref _archetypeExpectedViews, Math.Max(uniqueCount, _archetypeExpectedViews.Length == 0 ? 4 : _archetypeExpectedViews.Length * 2));
+        if (_archetypeExpectedViews.Length < totalUnique)
+            Array.Resize(ref _archetypeExpectedViews, Math.Max(totalUnique, _archetypeExpectedViews.Length == 0 ? 4 : _archetypeExpectedViews.Length * 2));
 
-        // Populate unique archetypes + chunk views.
-        var ai = 0;
-        var ci = 0;
-        for (var i = 0; i < currentArchetypeCount; i++)
+        // Count total views (existing + new).
+        var totalViews = _chunkViewCount;
+        for (var i = start; i < currentArchetypeCount; i++)
+        {
+            var a = archetypes[i];
+            if (!Matches(a)) continue;
+            totalViews += a.IsChunked ? a.SegmentCount : 1;
+        }
+
+        if (_snapshotChunkViews.Length < totalViews)
+        {
+            var newLen = Math.Max(totalViews, _snapshotChunkViews.Length == 0 ? 4 : _snapshotChunkViews.Length * 2);
+            Array.Resize(ref _snapshotChunkViews, newLen);
+        }
+
+        // Append new matching archetypes + their chunk views.
+        var ai = _matchedArchetypeCount;
+        var ci = _chunkViewCount;
+        for (var i = start; i < currentArchetypeCount; i++)
         {
             var a = archetypes[i];
             if (!Matches(a)) continue;
