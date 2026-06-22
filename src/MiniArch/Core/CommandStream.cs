@@ -458,8 +458,6 @@ public sealed class CommandStream : ICommandRecorder
         for (var i = 0; i < frozen.DestroyCount; i++)
             delta.AddDestroy(frozen.DestroyEntities[i]);
 
-        EmitHierarchyToDelta(delta, frozen.HierarchyByChild, frozen.UnavailableEntities);
-
         return delta;
     }
 
