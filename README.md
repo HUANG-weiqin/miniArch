@@ -74,11 +74,9 @@ var desc = new QueryDescription()
 
 foreach (var entity in world.Query(in desc))
 {
-    if (world.TryGet(entity, out Position pos) &&
-        world.TryGet(entity, out Velocity vel))
-    {
-        world.Set(entity, new Position(pos.X + vel.X, pos.Y + vel.Y));
-    }
+    ref var pos = ref world.GetRef<Position>(entity);
+    ref var vel = ref world.GetRef<Velocity>(entity);
+    pos = new Position(pos.X + vel.X, pos.Y + vel.Y);
 }
 ```
 
@@ -182,11 +180,15 @@ Friflo's advantages are **engine-level constant factors** (typing + SIMD). MiniA
 
 - **Archetype ECS** — `World` / `Entity` / `QueryDescription` with chunk-level iteration
 - **CommandBuffer & CommandStream** — deferred command recording; CommandStream is 12–48% faster
-- **FrameDelta + Replay** — record and replay frame deltas across worlds with deterministic ID validation
+- **FrameDelta + Replay** — record and replay frame deltas across worlds with deterministic ID validation; zero-allocation replay path (mask cache + pre-scan)
 - **World.Clone()** — deep copy for rollback
 - **WorldSnapshot** — binary serialize/deserialize entire world state
 - **SubmitAndSnapshotAsync()** — pipelined submit + delta building
 - **Query filtering** — `With<T>`, `Without<T>`, `WithAny<T>`
+- **Parallel iteration** — `ForEachChunkParallel` for multi-threaded batch processing
+- **Entity accessor** — `Access()` for cached multi-component read/write on a single entity
+- **Ref-return access** — `GetRef<T>()` for zero-copy in-place component mutation
+- **Batch creation** — `CreateMany()` for bulk entity spawning
 - **Entity hierarchy** — `Link` / `Unlink` with cascade destroy
 - **GC-friendly** — zero GC collections in steady-state simulation
 
@@ -207,8 +209,8 @@ Friflo's advantages are **engine-level constant factors** (typing + SIMD). MiniA
 
 ## Quality
 
-- **Core:** ~7,750 lines
-- **Tests:** ~15,400 lines（407 tests，测试:代码 ≈ 2:1）
+- **Source:** ~9,700 lines
+- **Tests:** ~14,400 lines（467 tests，测试:代码 ≈ 1.5:1）
 - **GC:** 0/0/0 across all game scenarios
 - **Fuzz:** 1,000-frame cross-world replay verified
 
