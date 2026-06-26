@@ -1,3 +1,5 @@
+using System.IO;
+using System.Security.Cryptography;
 using MiniArch.Core;
 using MiniArch.Tests.Core.TestSupport;
 
@@ -1642,17 +1644,24 @@ public sealed class CommandStreamTests
     // ══════════════════════════════════════════════════════════�?
 
     [Fact]
-    public void Fuzz_200_frames_submit_and_verify_entity_count_stability()
+    public void Fuzz_10000_frames_submit_and_replay_stay_in_sync()
     {
-        // This fuzz focuses on single-world correctness: after each frame's Submit,
-        // the world state is consistent. Cross-world replay of recycled IDs is not
-        // covered here — it requires the target's id allocator to have walked the
-        // same delta history as the source (EnsureReplayReservation contract), and
-        // is exercised separately by FrameDeltaDeterminismTests.
+        // Dual property fuzz:
+        //   1. Single-world correctness — after each frame's Submit, the source
+        //      world's alive set matches the tracking list (Submit applies cleanly).
+        //   2. Cross-world determinism — Snapshot() before Submit() produces a
+        //      FrameDelta that, replayed into a replica from frame 0, keeps the
+        //      replica bit-identical to the source (Submit == Replay for every
+        //      command combination the RNG throws at it).
+        //
+        // The replica receives every delta in order, so its id allocator walks the
+        // same history as the source (EnsureReplayReservation contract).
         // CommandStream applies Add/Set/Remove in pass 1 and Destroy in pass 2, so
         // operations on entities destroyed later in the same frame are safe.
-        const int Frames = 200;
+        const int Frames = 10000;
+        const int SyncCheckInterval = 1000;
         var world = new World();
+        var replica = new World();
         var stream = new CommandStream(world);
         var alive = new List<Entity>();
         var rng = new Random(42); // Fixed seed for reproducibility
@@ -1706,12 +1715,18 @@ public sealed class CommandStreamTests
                 }
             }
 
-            Assert.True(stream.Submit());
-
-            // Snapshot after submit should produce valid empty delta (stream was cleared)
+            // Capture the delta before Submit applies+clears. The delta is
+            // self-contained (owns its byte[] buffer), so it stays valid after
+            // Submit mutates the stream's internal arrays.
             var delta = stream.Snapshot();
-            Assert.NotNull(delta);
-            Assert.True(delta.IsEmpty); // Stream was cleared by Submit
+            stream.Submit();
+            replica.Replay(delta);
+
+            // Cheap gross-divergence check periodically to localize failures.
+            if ((frame + 1) % SyncCheckInterval == 0)
+            {
+                Assert.Equal(world.EntityCount, replica.EntityCount);
+            }
         }
 
         // Final prune: entities destroyed in the last frame are still in the
@@ -1720,16 +1735,47 @@ public sealed class CommandStreamTests
             if (!world.IsAlive(alive[i]))
                 alive.RemoveAt(i);
 
-        // The tracking list must match the world's own accounting. If these
-        // diverge, the fuzz found a desync between CommandStream operations
-        // and the world's actual alive set.
+        // Single-world correctness: tracking list matches the source's accounting.
         Assert.Equal(world.EntityCount, alive.Count);
-        Assert.True(alive.Count > 0); // seed 42 + 200 frames leaves survivors
+        Assert.True(alive.Count > 0); // seed 42 + 10000 frames leaves survivors
+
+        // Cross-world determinism: source (via Submit) == replica (via Replay),
+        // verified bit-identical through WorldSnapshot serialization + SHA256.
+        AssertIdenticalWorlds(world, replica, "source(Submit) vs replica(Replay) after 10000 frames");
     }
 
     // ══════════════════════════════════════════════════════════�?
     // Helpers
     // ══════════════════════════════════════════════════════════�?
+
+    /// <summary>
+    /// Asserts two worlds are bit-identical by hashing WorldSnapshot.Save output
+    /// through SHA256. Stable for lockstep scenarios where both worlds are driven
+    /// by the same delta sequence (archetype creation order, swap-remove history,
+    /// and slot allocation all match).
+    /// </summary>
+    private static void AssertIdenticalWorlds(World a, World b, string context)
+    {
+        var ha = HashWorld(a);
+        var hb = HashWorld(b);
+        if (ha != hb)
+        {
+            var sa = a.GetStats();
+            var sb = b.GetStats();
+            Assert.Fail(
+                $"Worlds diverge for [{context}].\n" +
+                $"  A: ec={sa.EntityCount}, ac={sa.ArchetypeCount}, hash={ha[..16]}\n" +
+                $"  B: ec={sb.EntityCount}, ac={sb.ArchetypeCount}, hash={hb[..16]}\n");
+        }
+    }
+
+    private static string HashWorld(World w)
+    {
+        using var ms = new MemoryStream();
+        WorldSnapshot.Save(ms, w);
+        var span = new ReadOnlySpan<byte>(ms.GetBuffer(), 0, (int)ms.Length);
+        return Convert.ToHexString(SHA256.HashData(span));
+    }
 
     private static int CountAll(World world)
     {
