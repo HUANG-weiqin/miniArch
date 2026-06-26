@@ -91,6 +91,11 @@ public readonly struct Query
         var chunks = _query.GetChunkViewArray(out var count);
         if (count == 0)
             return;
+        if (count == 1)
+        {
+            action(chunks[0]);
+            return;
+        }
         Parallel.For(0, count, i => action(chunks[i]));
     }
 }

@@ -185,7 +185,7 @@ Friflo's advantages are **engine-level constant factors** (typing + SIMD). MiniA
 - **WorldSnapshot** — binary serialize/deserialize entire world state
 - **SubmitAndSnapshotAsync()** — pipelined submit + delta building
 - **Query filtering** — `With<T>`, `Without<T>`, `WithAny<T>`
-- **Parallel iteration** — `ForEachChunkParallel` for multi-threaded batch processing
+- **Parallel iteration** — `ForEachChunkParallel` for multi-threaded batch processing (auto fast-path for single-chunk queries)
 - **Entity accessor** — `Access()` for cached multi-component read/write on a single entity
 - **Ref-return access** — `GetRef<T>()` for zero-copy in-place component mutation
 - **Batch creation** — `CreateMany()` for bulk entity spawning
