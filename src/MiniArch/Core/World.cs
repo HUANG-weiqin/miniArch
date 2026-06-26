@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Diagnostics.CodeAnalysis;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
@@ -34,6 +35,20 @@ public sealed partial class World : IDisposable
     private const int DefaultChunkCapacity = 128;
 
     private readonly Dictionary<Signature, Archetype> _archetypes = new();
+    // Mask-keyed cache for zero-allocation archetype lookup on the Replay path.
+    // Only populated for archetypes whose ComponentMask is canonical — i.e. every
+    // component id is < 512 (PopCount(mask) == component count). Archetypes with
+    // high-id components are intentionally absent from this cache and always go
+    // through the Signature-keyed dictionary above, preserving the library's
+    // "arbitrary component id range" contract.
+    private readonly Dictionary<ComponentMask, Archetype> _archetypeByMask = new();
+
+    // Reused scratch for the Replay pre-scan pass (counts Creates per archetype
+    // so we can pre-size archetype storage and avoid per-Create doubling
+    // allocations). Cleared at the start of every Replay call; never allocated
+    // per-call in steady state.
+    private readonly Dictionary<Archetype, int> _replayCreateCounts = new();
+
     private readonly HierarchyTable _hierarchy = new();
     private EntityRecord[] _records;
     private int _entitySlotCount;
@@ -82,6 +97,8 @@ public sealed partial class World : IDisposable
         if (_disposed) return;
         _disposed = true;
         _archetypes.Clear();
+        _archetypeByMask.Clear();
+        _replayCreateCounts.Clear();
         _queryFiltersByDescription.Clear();
         _queries.Clear();
         _archetypeSnapshot = Array.Empty<Archetype>();
@@ -154,6 +171,8 @@ public sealed partial class World : IDisposable
         }
 
         _archetypes.Clear();
+        _archetypeByMask.Clear();
+        _replayCreateCounts.Clear();
         _archetypeSnapshot = Array.Empty<Archetype>();
         _queryFiltersByDescription.Clear();
         _queries.Clear();
@@ -384,8 +403,64 @@ public sealed partial class World : IDisposable
 
         archetype = new Archetype(signature, ResolveComponentTypes(signature), _chunkCapacity);
         _archetypes.Add(signature, archetype);
+        CacheArchetypeByMaskIfCanonical(signature, archetype);
         PublishArchetypeSnapshot(archetype);
         return archetype;
+    }
+
+    // Populate the mask cache. Only called when an archetype is freshly created,
+    // so the single dictionary write is amortized across all subsequent lookups.
+    // High-id archetypes (mask not canonical) are intentionally left out — see
+    // the comment on _archetypeByMask.
+    private void CacheArchetypeByMaskIfCanonical(Signature signature, Archetype archetype)
+    {
+        if (IsMaskCanonical(signature.ComponentMask, signature.Count))
+        {
+            _archetypeByMask[signature.ComponentMask] = archetype;
+        }
+    }
+
+    // A ComponentMask is "canonical" for a signature when every component id is
+    // representable in the 512-bit mask — i.e. the popcount of the mask equals
+    // the component count. If any id is >= 512 its bit is dropped from the mask
+    // and popcount would be smaller than the actual count, so the mask is not a
+    // unique key for that set.
+    private static bool IsMaskCanonical(ComponentMask mask, int componentCount)
+    {
+        var bitCount = BitOperations.PopCount(mask.B0)
+                     + BitOperations.PopCount(mask.B1)
+                     + BitOperations.PopCount(mask.B2)
+                     + BitOperations.PopCount(mask.B3)
+                     + BitOperations.PopCount(mask.B4)
+                     + BitOperations.PopCount(mask.B5)
+                     + BitOperations.PopCount(mask.B6)
+                     + BitOperations.PopCount(mask.B7);
+        return bitCount == componentCount;
+    }
+
+    /// <summary>
+    /// Zero-allocation archetype lookup keyed by ComponentMask. Used by the
+    /// Replay path where components are decoded from a byte buffer and we want
+    /// to avoid constructing a Signature just to look the archetype up.
+    /// </summary>
+    /// <remarks>
+    /// <b>Caller contract:</b> <paramref name="types"/> must contain only ids
+    /// &lt; 512 — i.e. the caller must have verified the mask is canonical.
+    /// Violating this would cause two different high-id signatures to collide
+    /// on the same mask and silently return the wrong archetype.
+    /// </remarks>
+    internal Archetype GetOrCreateArchetypeByMask(ComponentMask mask, ReadOnlySpan<ComponentType> types)
+    {
+        if (_archetypeByMask.TryGetValue(mask, out var archetype))
+        {
+            return archetype;
+        }
+
+        // Miss: build a Signature (one-time alloc per unique component set) and
+        // route through the canonical path, which populates the mask cache.
+        var typesArray = types.ToArray();
+        var signature = new Signature(typesArray);
+        return GetOrCreateArchetype(signature);
     }
 
     /// <summary>
@@ -402,18 +477,10 @@ public sealed partial class World : IDisposable
         var count = types.Length;
 
         // Build a 512-bit mask from the query types for O(1) pre-filtering.
-        ulong q0 = 0, q1 = 0, q2 = 0, q3 = 0, q4 = 0, q5 = 0, q6 = 0, q7 = 0;
+        var q = new MaskBuilder();
         for (var i = 0; i < count; i++)
         {
-            var id = types[i].Value;
-            if ((uint)id < 64)       q0 |= 1UL << id;
-            else if ((uint)id < 128) q1 |= 1UL << (id - 64);
-            else if ((uint)id < 192) q2 |= 1UL << (id - 128);
-            else if ((uint)id < 256) q3 |= 1UL << (id - 192);
-            else if ((uint)id < 320) q4 |= 1UL << (id - 256);
-            else if ((uint)id < 384) q5 |= 1UL << (id - 320);
-            else if ((uint)id < 448) q6 |= 1UL << (id - 384);
-            else if ((uint)id < 512) q7 |= 1UL << (id - 448);
+            q.SetBit(types[i].Value);
         }
 
         foreach (var (signature, archetype) in _archetypes)
@@ -422,10 +489,10 @@ public sealed partial class World : IDisposable
 
             // O(1) mask pre-filter: archetype mask must be a superset of the query mask.
             var am = signature.ComponentMask;
-            if ((am.B0 & q0) != q0 || (am.B1 & q1) != q1 ||
-                (am.B2 & q2) != q2 || (am.B3 & q3) != q3 ||
-                (am.B4 & q4) != q4 || (am.B5 & q5) != q5 ||
-                (am.B6 & q6) != q6 || (am.B7 & q7) != q7)
+            if ((am.B0 & q.B0) != q.B0 || (am.B1 & q.B1) != q.B1 ||
+                (am.B2 & q.B2) != q.B2 || (am.B3 & q.B3) != q.B3 ||
+                (am.B4 & q.B4) != q.B4 || (am.B5 & q.B5) != q.B5 ||
+                (am.B6 & q.B6) != q.B6 || (am.B7 & q.B7) != q.B7)
                 continue;
 
             // Mask passed — do exact set comparison.
@@ -491,105 +558,262 @@ public sealed partial class World : IDisposable
     /// </summary>
     public void Replay(FrameDelta delta) => ReplayCore(delta, trusted: false);
 
-    private void ReplayCore(FrameDelta delta, bool trusted)
+    private unsafe void ReplayCore(FrameDelta delta, bool trusted)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(delta);
 
-        var decoder = delta.GetDecoder();
-        while (decoder.MoveNext())
+        // Pre-scan: size archetype storage and the entity record array up-front
+        // so the main pass never hits a doubling resize on the hot Create path.
+        PreScanForCapacity(delta);
+
+        // Pin the backing buffer once for the entire replay. Every Create op
+        // reads component data from this buffer via direct pointer arithmetic,
+        // and Add/Set ops do the same — sharing one pin avoids per-op fixed
+        // overhead.
+        fixed (byte* bufPtr = delta._buffer)
         {
-            switch (decoder.Kind)
+            var decoder = delta.GetDecoder();
+            while (decoder.MoveNext())
             {
-                case DeltaOpKind.Reserve:
-                    if (!trusted)
-                        EnsureReplayReservation(decoder.Entity);
-                    break;
-
-                case DeltaOpKind.Release:
-                    ReleaseReservedEntity(decoder.Entity);
-                    break;
-
-                case DeltaOpKind.Create:
+                switch (decoder.Kind)
                 {
-                    var compCount = decoder.ReadVarint();
-                    if (compCount < 0)
-                        throw new InvalidOperationException("Corrupt FrameDelta: negative component count.");
-                    if (compCount == 0)
+                    case DeltaOpKind.Reserve:
+                        if (!trusted)
+                            EnsureReplayReservation(decoder.Entity);
+                        break;
+
+                    case DeltaOpKind.Release:
+                        ReleaseReservedEntity(decoder.Entity);
+                        break;
+
+                    case DeltaOpKind.Create:
+                        ReplayCreateOp(ref decoder, bufPtr);
+                        break;
+
+                    case DeltaOpKind.Link:
                     {
-                        MaterializeReservedEntityCore(decoder.Entity, Signature.Empty,
-                            Array.Empty<RawComponentValue>());
+                        var parent = decoder.ReadExtraEntity();
+                        Link(parent, decoder.Entity);
                         break;
                     }
-                    var compTypes = new ComponentType[compCount];
-                    var compValues = new RawComponentValue[compCount];
+
+                    case DeltaOpKind.Unlink:
+                        Unlink(decoder.Entity);
+                        break;
+
+                    case DeltaOpKind.Add:
+                    case DeltaOpKind.Set:
+                    {
+                        var comp = decoder.ReadComponentType();
+                        var dataSize = decoder.ReadVarint();
+                        var dataStart = decoder.CurrentPosition;
+                        _ = decoder.ReadBytes(dataSize);
+                        ApplyRawAddOrSet(decoder.Entity, comp, bufPtr + dataStart);
+                        break;
+                    }
+
+                    case DeltaOpKind.Remove:
+                    {
+                        var comp = decoder.ReadComponentType();
+                        RemoveBoxed(decoder.Entity, comp);
+                        break;
+                    }
+
+                    case DeltaOpKind.Destroy:
+                        if (IsAlive(decoder.Entity))
+                            Destroy(decoder.Entity);
+                        break;
+
+                    default:
+                        throw new InvalidOperationException(
+                            $"Unknown FrameDelta operation kind: 0x{(byte)decoder.Kind:X2}");
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Walks the delta once (read-only) to count Creates per existing archetype
+    /// and find the max entity id, then pre-sizes archetype storage and the
+    /// entity record array. This eliminates the cascade of doubling allocations
+    /// that would otherwise happen inside <see cref="Archetype.AddEntity"/> and
+    /// <see cref="EnsureCapacity"/> on the hot Create path.
+    /// </summary>
+    /// <remarks>
+    /// The pre-scan computes a ComponentMask per Create payload to identify the
+    /// target archetype without allocating a Signature. Creates with non-canonical
+    /// masks (any component id &gt;= 512) are skipped here and rely on the
+    /// main pass's natural growth — they are rare and preserve the library's
+    /// support for arbitrary component id ranges.
+    /// </remarks>
+    private void PreScanForCapacity(FrameDelta delta)
+    {
+        _replayCreateCounts.Clear();
+        var maxEntityId = -1;
+
+        var scanner = delta.GetDecoder();
+        while (scanner.MoveNext())
+        {
+            var id = scanner.Entity.Id;
+            if (id > maxEntityId) maxEntityId = id;
+
+            switch (scanner.Kind)
+            {
+                case DeltaOpKind.Create:
+                {
+                    var compCount = scanner.ReadVarint();
+                    if (compCount <= 0) break;
+
+                    var builder = new MaskBuilder();
                     for (var i = 0; i < compCount; i++)
                     {
-                        var type = new ComponentType(decoder.ReadVarint());
-                        var dataSize = decoder.ReadVarint();
-                        compTypes[i] = type;
-                        if (dataSize > 0)
-                        {
-                            var dataStart = decoder.CurrentPosition;
-                            compValues[i] = new RawComponentValue(type, decoder.BackingBuffer,
-                                dataStart, dataSize);
-                            _ = decoder.ReadBytes(dataSize);
-                        }
-                        else
-                        {
-                            compValues[i] = new RawComponentValue(type, Array.Empty<byte>(), 0, 0);
-                        }
+                        builder.SetBit(scanner.ReadComponentType().Value);
+                        var size = scanner.ReadVarint();
+                        scanner.ReadBytes(size);
                     }
-                    var signature = new Signature(compTypes);
-                    MaterializeReservedEntityCore(decoder.Entity, signature, compValues);
+
+                    if (builder.BitsSet == compCount)
+                    {
+                        var mask = builder.ToMask();
+                        if (_archetypeByMask.TryGetValue(mask, out var arch))
+                        {
+                            _replayCreateCounts[arch] =
+                                _replayCreateCounts.GetValueOrDefault(arch, 0) + 1;
+                        }
+                        // Archetype not yet in cache: first encounter will create it
+                        // in the main pass; pre-sizing is skipped for that one.
+                    }
                     break;
                 }
 
                 case DeltaOpKind.Link:
                 {
-                    var parent = decoder.ReadExtraEntity();
-                    Link(parent, decoder.Entity);
+                    var parent = scanner.ReadExtraEntity();
+                    if (parent.Id > maxEntityId) maxEntityId = parent.Id;
                     break;
                 }
-
-                case DeltaOpKind.Unlink:
-                    Unlink(decoder.Entity);
-                    break;
 
                 case DeltaOpKind.Add:
                 case DeltaOpKind.Set:
-                {
-                    var comp = decoder.ReadComponentType();
-                    var dataSize = decoder.ReadVarint();
-                    var dataStart = decoder.CurrentPosition;
-                    _ = decoder.ReadBytes(dataSize);
-                    unsafe
-                    {
-                        fixed (byte* ptr = decoder.BackingBuffer)
-                        {
-                            ApplyRawAddOrSet(decoder.Entity, comp, ptr + dataStart);
-                        }
-                    }
+                    // Advance past component type + size-prefixed payload.
+                    scanner.SkipData();
                     break;
-                }
 
                 case DeltaOpKind.Remove:
-                {
-                    var comp = decoder.ReadComponentType();
-                    RemoveBoxed(decoder.Entity, comp);
-                    break;
-                }
-
-                case DeltaOpKind.Destroy:
-                    if (IsAlive(decoder.Entity))
-                        Destroy(decoder.Entity);
+                    // Advance past the component type only.
+                    scanner.ReadComponentType();
                     break;
 
-                default:
-                    throw new InvalidOperationException(
-                        $"Unknown FrameDelta operation kind: 0x{(byte)decoder.Kind:X2}");
+                // Reserve / Release / Unlink / Destroy carry no payload beyond
+                // the entity that MoveNext has already consumed.
             }
         }
+
+        if (maxEntityId >= _records.Length)
+        {
+            EnsureCapacity(maxEntityId + 1);
+        }
+
+        foreach (var (arch, count) in _replayCreateCounts)
+        {
+            arch.EnsureCapacity(arch.EntityCount + count);
+        }
+    }
+
+    /// <summary>
+    /// Materializes a single Create op with zero steady-state allocation.
+    /// Dispatches to <see cref="ReplayCreateOpCore"/> with either a stackalloc'd
+    /// scratch (common case, components &lt;= 32) or an ArrayPool rental (rare
+    /// large-component case). Splitting the dispatch from the body lets the
+    /// compiler prove the stackalloc spans cannot escape.
+    /// </summary>
+    private unsafe void ReplayCreateOp(ref FrameDelta.OpDecoder decoder, byte* bufPtr)
+    {
+        var entity = decoder.Entity;
+        var compCount = decoder.ReadVarint();
+        if (compCount < 0)
+            throw new InvalidOperationException("Corrupt FrameDelta: negative component count.");
+
+        if (compCount == 0)
+        {
+            MaterializeReservedEntityCore(entity, Signature.Empty, Array.Empty<RawComponentValue>());
+            return;
+        }
+
+        // ComponentType is a 4-byte struct, so 32 entries cost 128 bytes of
+        // stack per span (256 bytes total) — well within limits. Entities with
+        // more components spill to ArrayPool, which is amortized zero-allocation.
+        const int MaxStackComponents = 32;
+
+        if (compCount <= MaxStackComponents)
+        {
+            Span<ComponentType> types = stackalloc ComponentType[compCount];
+            Span<int> offsets = stackalloc int[compCount];
+            ReplayCreateOpCore(ref decoder, bufPtr, entity, compCount, types, offsets);
+        }
+        else
+        {
+            var poolTypes = ArrayPool<ComponentType>.Shared.Rent(compCount);
+            var poolOffsets = ArrayPool<int>.Shared.Rent(compCount);
+            try
+            {
+                ReplayCreateOpCore(
+                    ref decoder, bufPtr, entity, compCount,
+                    poolTypes.AsSpan(0, compCount), poolOffsets.AsSpan(0, compCount));
+            }
+            finally
+            {
+                ArrayPool<ComponentType>.Shared.Return(poolTypes);
+                ArrayPool<int>.Shared.Return(poolOffsets);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Body of <see cref="ReplayCreateOp"/>. Takes the scratch spans as scoped
+    /// parameters so the stackalloc path can pass stack memory without the
+    /// compiler worrying about escape.
+    /// </summary>
+    private unsafe void ReplayCreateOpCore(
+        ref FrameDelta.OpDecoder decoder, byte* bufPtr,
+        Entity entity, int compCount,
+        scoped Span<ComponentType> types, scoped Span<int> offsets)
+    {
+        // One pass over the Create payload: read type, build mask, record the
+        // data offset, advance past data. Data is written back below once the
+        // archetype (and therefore the row) is known.
+        var builder = new MaskBuilder();
+        for (var i = 0; i < compCount; i++)
+        {
+            var t = decoder.ReadComponentType();
+            types[i] = t;
+            builder.SetBit(t.Value);
+
+            var size = decoder.ReadVarint();
+            offsets[i] = decoder.CurrentPosition;
+            decoder.ReadBytes(size);
+        }
+
+        Archetype archetype;
+        if (builder.BitsSet == compCount)
+        {
+            // Canonical mask: every id < 512, safe to use the mask cache.
+            archetype = GetOrCreateArchetypeByMask(builder.ToMask(), types);
+        }
+        else
+        {
+            // Non-canonical mask (one or more ids >= 512): cannot use the mask
+            // cache without colliding. Fall back to the Signature-keyed dictionary
+            // so high-id archetypes are looked up correctly. This allocates once
+            // per unique component set (amortized zero across replays) and is the
+            // same path the structural-change APIs already use.
+            archetype = GetOrCreateArchetype(new Signature(types.ToArray()));
+        }
+
+        // Direct write from delta buffer into archetype columns. No intermediate
+        // RawComponentValue[] and no per-type box.
+        MaterializeReservedEntityRaw(entity, archetype, types, offsets, bufPtr);
     }
 
     internal void MaterializeReservedEntity(

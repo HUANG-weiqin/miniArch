@@ -60,3 +60,47 @@ internal readonly struct ComponentMask : IEquatable<ComponentMask>
     public bool HasB6 { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => B6 != 0; }
     public bool HasB7 { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => B7 != 0; }
 }
+
+/// <summary>
+/// Mutable counterpart to <see cref="ComponentMask"/> for incrementally
+/// building a mask from component ids. <see cref="SetBit"/> is marked
+/// <see cref="MethodImplOptions.AggressiveInlining"/> so the JIT inlines it,
+/// producing the same branch sequence as hand-written bit-setting — there is
+/// zero call overhead vs. inlining the if/else chain at each call site.
+/// </summary>
+/// <remarks>
+/// <see cref="BitsSet"/> tracks how many ids fell within the 0..511 range.
+/// If <c>BitsSet != compCount</c> after processing all components, at least
+/// one id was &gt;= 512 and the mask is <b>not canonical</b> — the caller
+/// must fall back to a Signature-keyed lookup to avoid silent collisions.
+/// </remarks>
+internal struct MaskBuilder
+{
+    public ulong B0, B1, B2, B3, B4, B5, B6, B7;
+    public int BitsSet;
+
+    /// <summary>
+    /// Sets the bit for the given component id. No-op for ids &gt;= 512
+    /// (the bit is silently dropped; <see cref="BitsSet"/> is not incremented).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void SetBit(int id)
+    {
+        var cid = (uint)id;
+        if (cid < 64)        { B0 |= 1UL << (int)cid;         BitsSet++; }
+        else if (cid < 128)  { B1 |= 1UL << (int)(cid - 64);  BitsSet++; }
+        else if (cid < 192)  { B2 |= 1UL << (int)(cid - 128); BitsSet++; }
+        else if (cid < 256)  { B3 |= 1UL << (int)(cid - 192); BitsSet++; }
+        else if (cid < 320)  { B4 |= 1UL << (int)(cid - 256); BitsSet++; }
+        else if (cid < 384)  { B5 |= 1UL << (int)(cid - 320); BitsSet++; }
+        else if (cid < 448)  { B6 |= 1UL << (int)(cid - 384); BitsSet++; }
+        else if (cid < 512)  { B7 |= 1UL << (int)(cid - 448); BitsSet++; }
+        // cid >= 512: bit dropped, BitsSet not incremented.
+    }
+
+    /// <summary>
+    /// Produces the immutable <see cref="ComponentMask"/> snapshot.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public readonly ComponentMask ToMask() => new(B0, B1, B2, B3, B4, B5, B6, B7);
+}
