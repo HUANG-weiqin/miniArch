@@ -45,7 +45,7 @@ This advantage holds across all of MiniArch's benchmarked game scenarios:
 |---|---|
 | ❌ No frame sync support | ✅ **FrameDelta + Replay** — record changes as a self-contained delta, replay on any machine to produce identical state |
 | ❌ No rollback support | ✅ **World.Clone()** — deep copy for rollback checkpoints |
-| ❌ No CommandStream | ✅ **CommandStream** — 12–48% faster than traditional CommandBuffer |
+| ❌ No CommandStream | ✅ **CommandStream** — 12–48% faster than traditional command buffers |
 | ❌ No binary serialization | ✅ **WorldSnapshot** — full state save/load for replays and netcode |
 | ❌ No delta merging | ✅ **FrameDelta.Merge()** — squash multiple frames into one for network optimization |
 
@@ -98,7 +98,7 @@ Other ECS libraries have `CommandBuffer`, but frame sync needs more than that:
 
 ```csharp
 // Record a frame's changes as a self-contained delta
-var buffer = new CommandBuffer(world);
+var buffer = new CommandStream(world);
 // ... record all mutations ...
 var delta = buffer.Snapshot();    // produce delta without applying
 buffer.Submit();                   // apply locally
@@ -179,7 +179,7 @@ Friflo's advantages are **engine-level constant factors** (typing + SIMD). MiniA
 ## Features
 
 - **Archetype ECS** — `World` / `Entity` / `QueryDescription` with chunk-level iteration
-- **CommandBuffer & CommandStream** — deferred command recording; CommandStream is 12–48% faster
+- **CommandStream** — deferred command recording; 12–48% faster than traditional command buffers
 - **FrameDelta + Replay** — record and replay frame deltas across worlds with deterministic ID validation; zero-allocation replay path (mask cache + pre-scan)
 - **World.Clone()** — deep copy for rollback
 - **WorldSnapshot** — binary serialize/deserialize entire world state

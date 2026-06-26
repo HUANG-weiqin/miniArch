@@ -178,7 +178,7 @@ public sealed class CommandStream : ICommandRecorder
 
         try
         {
-            // Order matches CommandBuffer and BuildDelta: Create → Hierarchy → Ops → Destroy.
+            // Order matches BuildDelta: Create → Hierarchy → Ops → Destroy.
             // Keeping Submit and Snapshot aligned lets hosts use Submit on source and
             // Replay on replica without diverging for combined command patterns.
             MaterializeAllPending();
@@ -284,7 +284,7 @@ public sealed class CommandStream : ICommandRecorder
 
     private void BuildDelta(FrameDelta delta)
     {
-        // Order matches Submit and CommandBuffer: Create → Hierarchy → Ops → Destroy.
+        // Order matches Submit: Create → Hierarchy → Ops → Destroy.
         EmitPendingEntitiesToDelta(delta, new PendingBatchView(
             _batchCanceled, _batchHeads, _batchCompCounts,
             _batchComps, _batchBuf, _batchEntities, _pendingBatchCount));
@@ -442,7 +442,7 @@ public sealed class CommandStream : ICommandRecorder
 
     private static FrameDelta BuildFromFrozen(FrozenState frozen)
     {
-        // Order matches Submit and CommandBuffer: Create → Hierarchy → Ops → Destroy.
+        // Order matches Submit: Create → Hierarchy → Ops → Destroy.
         var delta = new FrameDelta();
 
         EmitPendingEntitiesToDelta(delta, frozen.Pending);
@@ -750,8 +750,7 @@ public sealed class CommandStream : ICommandRecorder
 
     // ── Batch buffer helpers ──────────────────────────────────────────
 
-    // Mirrors CommandBuffer.MarkCreatedDescendantsDestroyed: when a pending entity
-    // is destroyed before Submit, all pending entities linked under it must also
+    // When a pending entity is destroyed before Submit, all pending entities linked under it must also
     // be cancelled. Existing entities are skipped (World.Destroy cascades them
     // through the live hierarchy). Without this, CS would leave orphan children.
     private void CancelPendingDescendants(Entity root)

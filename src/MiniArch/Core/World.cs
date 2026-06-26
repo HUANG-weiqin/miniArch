@@ -17,7 +17,7 @@ namespace MiniArch;
 /// <see cref="Add{T}"/>, <see cref="Set{T}"/>, <see cref="Remove{T}"/>,
 /// <see cref="Link"/>, <see cref="Clone(Entity)"/> — are <b>not</b> thread-safe
 /// and must be issued from a single thread (typically the main game thread)
-/// or deferred through <c>CommandBuffer</c> / <c>CommandStream</c>.</item>
+/// or deferred through <c>CommandStream</c>.</item>
 /// <item><b>Reads</b> — <see cref="Has{T}"/>, <see cref="Get{T}"/>,
 /// <see cref="TryGet{T}"/>, query iteration via <c>ForEachChunkParallel</c> —
 /// may run in parallel with other readers, but <b>not</b> concurrent with a
@@ -849,27 +849,6 @@ public sealed partial class World : IDisposable
         {
             var colIdx = archetype.GetComponentIndexFast(types[i]);
             archetype.WriteComponentRaw(colIdx, rowIndex, buffer + offsets[i]);
-        }
-    }
-
-    internal unsafe void MaterializeReservedEntityFast(
-        Entity entity,
-        Archetype archetype,
-        ComponentType[] componentTypes,
-        ReadOnlySpan<CommandBuffer.CreatedComponent> components,
-        List<byte[]> slabs)
-    {
-        var rowIndex = PlaceEntityInArchetype(entity, archetype);
-
-        for (var index = 0; index < components.Length; index++)
-        {
-            ref readonly var cc = ref components[index];
-            var columnIndex = archetype.GetComponentIndexFast(componentTypes[index]);
-            var data = slabs[cc.SlabIndex];
-            fixed (byte* ptr = data)
-            {
-                archetype.WriteComponentRaw(columnIndex, rowIndex, ptr + cc.DataOffset);
-            }
         }
     }
 

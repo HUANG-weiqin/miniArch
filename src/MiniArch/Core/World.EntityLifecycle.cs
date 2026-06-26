@@ -446,7 +446,7 @@ public sealed partial class World
         ref var record = ref _records[entity.Id];
         if (record.IsOccupied || record.Version != entity.Version)
         {
-            throw new InvalidOperationException($"Entity {entity} is not a deferred reserved entity. It may have already been materialized or was never reserved via CommandBuffer.");
+            throw new InvalidOperationException($"Entity {entity} is not a deferred reserved entity. It may have already been materialized or was never reserved via CommandStream.");
         }
 
         var nextVersion = entity.Version + 1;

@@ -76,7 +76,7 @@ public static class CommandBufferBenchmarkScenarioFactory
         }
     }
 
-    public static void RecordMiniSharedScenario(CommandBuffer buffer, MiniSharedCommandBufferState state, CommandBufferBenchmarkScenario scenario)
+    public static void RecordMiniSharedScenario(CommandStream buffer, MiniSharedCommandBufferState state, CommandBufferBenchmarkScenario scenario)
     {
         switch (scenario)
         {
@@ -121,7 +121,7 @@ public static class CommandBufferBenchmarkScenarioFactory
 
     public static void RunMiniHierarchyScenario(MiniHierarchyCommandBufferState state)
     {
-        var buffer = new CommandBuffer(state.World);
+        var buffer = new CommandStream(state.World);
         var transientRoot = buffer.Create();
 
         for (var i = 0; i < state.Children.Length; i++)
@@ -155,14 +155,14 @@ public static class CommandBufferBenchmarkScenarioFactory
 
     private static void RunMiniDenseExisting(MiniSharedCommandBufferState state)
     {
-        var buffer = new CommandBuffer(state.World);
+        var buffer = new CommandStream(state.World);
         RecordMiniDenseExisting(buffer, state);
         buffer.Submit();
     }
 
     private static void RunMiniCreateHeavy(MiniSharedCommandBufferState state)
     {
-        var buffer = new CommandBuffer(state.World);
+        var buffer = new CommandStream(state.World);
         for (var i = 0; i < state.EntityCount; i++)
         {
             var entity = buffer.Create();
@@ -186,12 +186,12 @@ public static class CommandBufferBenchmarkScenarioFactory
 
     private static void RunMiniMixedScript(MiniSharedCommandBufferState state)
     {
-        var buffer = new CommandBuffer(state.World);
+        var buffer = new CommandStream(state.World);
         RecordMiniMixedScript(buffer, state);
         buffer.Submit();
     }
 
-    private static void RecordMiniDenseExisting(CommandBuffer buffer, MiniSharedCommandBufferState state)
+    private static void RecordMiniDenseExisting(CommandStream buffer, MiniSharedCommandBufferState state)
     {
         for (var i = 0; i < state.ExistingEntities.Length; i++)
         {
@@ -217,7 +217,7 @@ public static class CommandBufferBenchmarkScenarioFactory
 
     }
 
-    private static void RecordMiniCreateHeavy(CommandBuffer buffer, MiniSharedCommandBufferState state)
+    private static void RecordMiniCreateHeavy(CommandStream buffer, MiniSharedCommandBufferState state)
     {
         for (var i = 0; i < state.EntityCount; i++)
         {
@@ -238,7 +238,7 @@ public static class CommandBufferBenchmarkScenarioFactory
         }
     }
 
-    private static void RecordMiniMixedScript(CommandBuffer buffer, MiniSharedCommandBufferState state)
+    private static void RecordMiniMixedScript(CommandStream buffer, MiniSharedCommandBufferState state)
     {
         for (var i = 0; i < state.EntityCount; i++)
         {

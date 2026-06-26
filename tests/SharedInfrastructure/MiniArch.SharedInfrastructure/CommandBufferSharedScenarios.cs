@@ -37,7 +37,7 @@ public static class CommandBufferSharedScenarios
         var existing = scenario.Scenario is CommandBufferBenchmarkScenario.CreateHeavy
             ? Array.Empty<MiniEntity>()
             : CreateMiniBaselineEntities(world, scenario.EntityCount);
-        var buffer = new CommandBuffer(world);
+        var buffer = new CommandStream(world);
 
         switch (scenario.Scenario)
         {
@@ -107,7 +107,7 @@ public static class CommandBufferSharedScenarios
         return entities;
     }
 
-    private static void RecordMiniDenseExisting(CommandBuffer buffer, MiniEntity[] existing)
+    private static void RecordMiniDenseExisting(CommandStream buffer, MiniEntity[] existing)
     {
         for (var i = 0; i < existing.Length; i++)
         {
@@ -157,7 +157,7 @@ public static class CommandBufferSharedScenarios
         }
     }
 
-    private static void RecordMiniCreateHeavy(CommandBuffer buffer, int entityCount)
+    private static void RecordMiniCreateHeavy(CommandStream buffer, int entityCount)
     {
         for (var i = 0; i < entityCount; i++)
         {
@@ -199,7 +199,7 @@ public static class CommandBufferSharedScenarios
         }
     }
 
-    private static void RecordMiniMixedScript(CommandBuffer buffer, MiniEntity[] existing, int entityCount)
+    private static void RecordMiniMixedScript(CommandStream buffer, MiniEntity[] existing, int entityCount)
     {
         for (var i = 0; i < entityCount; i++)
         {

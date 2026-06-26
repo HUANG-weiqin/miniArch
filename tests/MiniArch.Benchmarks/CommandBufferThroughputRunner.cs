@@ -220,7 +220,7 @@ public static class CommandBufferThroughputRunner
 
             {
                 var state = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(CommandBufferBenchmarkScenario.DenseExisting, entityCount);
-                var buffer = new CommandBuffer(state.World);
+                var buffer = new CommandStream(state.World);
                 var sw = Stopwatch.StartNew();
                 for (var j = 0; j < state.ExistingEntities.Length; j++)
                 {
@@ -297,7 +297,7 @@ public static class CommandBufferThroughputRunner
         for (var w = 0; w < warmupCount; w++)
         {
             var warmupState = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
-            var buffer = new CommandBuffer(warmupState.World);
+            var buffer = new CommandStream(warmupState.World);
             CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(buffer, warmupState, scenario);
             buffer.Snapshot();
             buffer.Submit();
@@ -310,7 +310,7 @@ public static class CommandBufferThroughputRunner
         {
             cancellationToken.ThrowIfCancellationRequested();
             var state = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
-            var buffer = new CommandBuffer(state.World);
+            var buffer = new CommandStream(state.World);
             var sw = Stopwatch.StartNew();
             CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(buffer, state, scenario);
             buffer.Snapshot();
@@ -329,7 +329,7 @@ public static class CommandBufferThroughputRunner
         for (var w = 0; w < warmupCount; w++)
         {
             var warmupState = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
-            var buffer = new CommandBuffer(warmupState.World);
+            var buffer = new CommandStream(warmupState.World);
             CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(buffer, warmupState, scenario);
             buffer.SubmitAndSnapshotAsync().Wait();
         }
@@ -341,7 +341,7 @@ public static class CommandBufferThroughputRunner
         {
             cancellationToken.ThrowIfCancellationRequested();
             var state = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
-            var buffer = new CommandBuffer(state.World);
+            var buffer = new CommandStream(state.World);
             var sw = Stopwatch.StartNew();
             CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(buffer, state, scenario);
             buffer.SubmitAndSnapshotAsync().Wait();
@@ -439,7 +439,7 @@ public static class CommandBufferThroughputRunner
                 ct.ThrowIfCancellationRequested();
 
                 var state = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
-                var buffer = new CommandBuffer(state.World);
+                var buffer = new CommandStream(state.World);
 
                 var gen0Before = GC.CollectionCount(0);
                 var gen1Before = GC.CollectionCount(1);
@@ -506,18 +506,18 @@ public static class CommandBufferThroughputRunner
             {
                 ct.ThrowIfCancellationRequested();
                 var ws = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
-                var cb = new CommandBuffer(ws.World);
+                var cb = new CommandStream(ws.World);
                 CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(cb, ws, scenario);
                 cb.Submit();
 
                 ws = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
-                cb = new CommandBuffer(ws.World);
+                cb = new CommandStream(ws.World);
                 CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(cb, ws, scenario);
                 cb.Snapshot();
                 cb.Submit();
 
                 ws = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
-                cb = new CommandBuffer(ws.World);
+                cb = new CommandStream(ws.World);
                 CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(cb, ws, scenario);
                 cb.SubmitAndSnapshotAsync().Wait();
             }
@@ -533,7 +533,7 @@ public static class CommandBufferThroughputRunner
 
                 {
                     var state = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
-                    var buffer = new CommandBuffer(state.World);
+                    var buffer = new CommandStream(state.World);
                     CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(buffer, state, scenario);
                     var sw = Stopwatch.StartNew();
                     buffer.Submit();
@@ -543,7 +543,7 @@ public static class CommandBufferThroughputRunner
 
                 {
                     var state = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
-                    var buffer = new CommandBuffer(state.World);
+                    var buffer = new CommandStream(state.World);
                     CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(buffer, state, scenario);
                     var sw = Stopwatch.StartNew();
                     buffer.Snapshot();
@@ -554,7 +554,7 @@ public static class CommandBufferThroughputRunner
 
                 {
                     var state = CommandBufferBenchmarkScenarioFactory.CreateMiniSharedState(scenario, entityCount);
-                    var buffer = new CommandBuffer(state.World);
+                    var buffer = new CommandStream(state.World);
                     CommandBufferBenchmarkScenarioFactory.RecordMiniSharedScenario(buffer, state, scenario);
                     var sw = Stopwatch.StartNew();
                     var task = buffer.SubmitAndSnapshotAsync();
@@ -636,9 +636,9 @@ public static class CommandBufferThroughputRunner
 
     private static void RunMultiThreadedIteration(MiniSharedCommandBufferState state, CommandBufferBenchmarkScenario scenario, int threadCount)
     {
-        var buffers = new CommandBuffer[threadCount];
+        var buffers = new CommandStream[threadCount];
         for (var t = 0; t < threadCount; t++)
-            buffers[t] = new CommandBuffer(state.World);
+            buffers[t] = new CommandStream(state.World);
 
         switch (scenario)
         {
@@ -657,7 +657,7 @@ public static class CommandBufferThroughputRunner
             buffer.Submit();
     }
 
-    private static void RunMultiThreadedDenseExisting(CommandBuffer[] buffers, MiniSharedCommandBufferState state)
+    private static void RunMultiThreadedDenseExisting(CommandStream[] buffers, MiniSharedCommandBufferState state)
     {
         var entityCount = state.EntityCount;
         var entities = state.ExistingEntities;
@@ -691,7 +691,7 @@ public static class CommandBufferThroughputRunner
             threads[t].Join();
     }
 
-    private static void RunMultiThreadedCreateHeavy(CommandBuffer[] buffers, MiniSharedCommandBufferState state)
+    private static void RunMultiThreadedCreateHeavy(CommandStream[] buffers, MiniSharedCommandBufferState state)
     {
         var entityCount = state.EntityCount;
         var threadCount = buffers.Length;
@@ -723,7 +723,7 @@ public static class CommandBufferThroughputRunner
             threads[t].Join();
     }
 
-    private static void RunMultiThreadedMixedScript(CommandBuffer[] buffers, MiniSharedCommandBufferState state)
+    private static void RunMultiThreadedMixedScript(CommandStream[] buffers, MiniSharedCommandBufferState state)
     {
         var entityCount = state.EntityCount;
         var entities = state.ExistingEntities;

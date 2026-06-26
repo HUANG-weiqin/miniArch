@@ -84,7 +84,7 @@ public static class Program
         var stopwatch = Stopwatch.StartNew();
         var beforeAllocated = GC.GetAllocatedBytesForCurrentThread();
 
-        var buffer = new MiniArch.Core.CommandBuffer(world);
+        var buffer = new MiniArch.Core.CommandStream(world);
         for (var i = 0; i < existing.Length; i++)
         {
             buffer.Set(existing[i], new BenchmarkPosition(i + 10, i + 11));

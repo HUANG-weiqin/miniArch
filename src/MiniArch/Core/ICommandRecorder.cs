@@ -1,11 +1,11 @@
 namespace MiniArch.Core;
 
 /// <summary>
-/// Per-frame recording interface shared by <see cref="CommandBuffer"/>
-/// and <see cref="CommandStream"/> for the test-layer abstraction.
-/// Covers all user-facing input commands. Both implementations also
-/// expose <c>Snapshot</c> and <c>SubmitAndSnapshotAsync</c> for output,
-/// but those are not recording commands and stay on the concrete types.
+/// Per-frame recording interface implemented by <see cref="CommandStream"/>
+/// for the test-layer abstraction. Covers all user-facing input commands.
+/// <see cref="CommandStream"/> also exposes <c>Snapshot</c> and
+/// <c>SubmitAndSnapshotAsync</c> for output, but those are not recording
+/// commands and stay on the concrete type.
 /// </summary>
 public interface ICommandRecorder
 {

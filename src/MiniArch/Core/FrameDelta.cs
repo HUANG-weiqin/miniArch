@@ -66,7 +66,7 @@ public sealed class FrameDelta
         return delta;
     }
 
-    // ── Writer API (used by CommandBuffer / CommandStream) ──────────────
+    // ── Writer API (used by CommandStream) ─────────────────────────────
 
     private void Grow(int additionalBytes)
     {
@@ -487,7 +487,7 @@ internal enum DeltaOpKind : byte
     Destroy = 0x09,
 }
 
-// ── Retained record struct (used by CommandBuffer/CommandStream) ───────
+// ── Retained record struct (used by CommandStream) ───────────────────
 
 internal readonly record struct RawComponentValue(
     ComponentType ComponentType,

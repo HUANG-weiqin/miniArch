@@ -26,10 +26,8 @@ Console.WriteLine();
 
 var results = new List<(string name, double throughput, double avgMs, int totalRounds, double heapDeltaKB, bool memoryStable)>();
 
-results.Add(RunScenario("Movement-Buffer", CreateMoveRequests, useCommandStream: false));
-results.Add(RunScenario("Movement-Stream", CreateMoveRequests, useCommandStream: true));
-results.Add(RunScenario("Attack-Buffer", CreateAttackRequests, useCommandStream: false));
-results.Add(RunScenario("Attack-Stream", CreateAttackRequests, useCommandStream: true));
+results.Add(RunScenario("Movement", CreateMoveRequests));
+results.Add(RunScenario("Attack", CreateAttackRequests));
 
 Console.WriteLine();
 Console.WriteLine("=== Final Summary ===");
@@ -49,12 +47,11 @@ Console.WriteLine("Baseline updated in .knowledge/kb-hero-pipeline-regression.md
 // --- Scenario runner ---
 
 (string name, double throughput, double avgMs, int totalRounds, double heapDeltaKB, bool memoryStable) RunScenario(
-    string name, Action<MiniArchRuntime, List<Entity>, bool[]> createRequests, bool useCommandStream = false)
+    string name, Action<MiniArchRuntime, List<Entity>, bool[]> createRequests)
 {
     Console.WriteLine($"--- {name} ---");
 
-    var streamRuntime = useCommandStream ? MiniArchRuntime.CreateWithCommandStream() : null;
-    var fixture = new CharacterTestFixture(runtimeOverride: streamRuntime);
+    var fixture = new CharacterTestFixture();
     fixture.AddCoreSystems();
     fixture.Core.AddSpawnSystem();
 

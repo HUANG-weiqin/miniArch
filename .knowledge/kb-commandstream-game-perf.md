@@ -1,15 +1,15 @@
 ---
-title: CommandBuffer Game Steady-State Perf
+title: CommandStream Game Steady-State Perf
 module: CommandBufferGame.Perf
-description: Independent MiniArch CommandBuffer/CommandStream vs Friflo vs Arch command-buffer + reused-world steady game benchmark
-updated: 2026-06-09
+description: Independent MiniArch CommandStream vs Friflo vs Arch command-buffer + reused-world steady game benchmark
+updated: 2026-06-26 (移除 CommandBuffer, 仅保留 CommandStream 场景)
 ---
-# CommandBuffer Game Steady-State Perf
+# CommandStream Game Steady-State Perf
 
 ## 这个模块是干什么的
 
 - 这个模块负责：
-  - 用独立 perf 项目对比 MiniArch CommandBuffer、MiniArch CommandStream、Friflo、Arch 的 CommandBuffer + World/Store 全链路。
+  - 用独立 perf 项目对比 MiniArch CommandStream、Friflo、Arch 的 command buffer + World/Store 全链路。
   - 模拟长期稳定游戏 tick：query 读取、record 命令、submit/playback 应用到复用 world。
   - 输出吞吐、checksum、live count、GC、heap delta，以及 query/record/apply 阶段占比。
 - 这个模块不负责：
@@ -20,7 +20,6 @@ updated: 2026-06-09
 
 - 核心组成：
   - `perf/CommandBufferGame.Perf/Program.cs`：组件、runner、三方场景实现都在单文件中，保持独立。
-  - `MiniArchSteadyCombatWorld`：`MiniArch.World` + `MiniArch.Core.CommandBuffer.Submit()`。
   - `MiniArchCommandStreamSteadyCombatWorld`：`MiniArch.World` + `MiniArch.Core.CommandStream.Submit()`。
   - `FrifloSteadyCombatWorld`：`EntityStore` + `GetCommandBuffer()` + `ReuseBuffer = true` + `Playback()`。
   - `ArchSteadyCombatWorld`：`Arch.Core.World` + `Arch.Buffer.CommandBuffer.Playback(world, true)`。
@@ -36,12 +35,12 @@ updated: 2026-06-09
 - Friflo/Arch 使用 NuGet 包版本，保证结果可复现；源码路径只用于核对 API 行为。
 - 不使用 `List.RemoveAt(0)` 等 benchmark 容器伪影；销毁目标来自 projectile query scratch buffer。
 - Arch 的 CommandBuffer 创建返回 buffered entity，不能直接作为后续真实 handle 保存；因此新 projectile 通过后续 query 参与生命周期，而不是外部队列追踪。
-- MiniArch 增加 `MiniStream` row，用于评估专家模式 typed component stores 相对默认安全 `CommandBuffer` 的收益。
+- 2026-06-26：移除 `MiniArchSteadyCombatWorld`（CommandBuffer 版）。它与 `MiniArchCommandStreamSteadyCombatWorld` 已是同一实现（CommandBuffer 类被删，alias 一并移除），重复场景只产生相同数字。MiniArch 场景现统一走 CommandStream。
 
 ## 认知模型
 
 - 理解这个模块时，应该把它看成：
-  - 一个“真实帧管线”压测：读世界 → 录制结构变化 → 批量应用 → 下一帧继续。
+  - 一个"真实帧管线"压测：读世界 → 录制结构变化 → 批量应用 → 下一帧继续。
 - 这个模块里最重要的抽象是：
   - 稳态世界：不在测量循环内重建 world/store。
   - 同构 tick：三方吃相同规模、相同阶段、相同命令数量。
@@ -56,7 +55,7 @@ updated: 2026-06-09
   - `docs/plans/2026-06-09-commandbuffer-game-steady-design.md`：设计背景与公平性规则。
   - `docs/plans/2026-06-09-commandbuffer-game-steady-plan.md`：实现步骤。
 - 修 bug，先看：
-  - `MiniArchSteadyCombatWorld.RecordCommands`、`MiniArchCommandStreamSteadyCombatWorld.RecordCommands`、`FrifloSteadyCombatWorld.RecordCommands`、`ArchSteadyCombatWorld.RecordCommands`：各方命令数量是否仍对齐。
+  - `MiniArchCommandStreamSteadyCombatWorld.RecordCommands`、`FrifloSteadyCombatWorld.RecordCommands`、`ArchSteadyCombatWorld.RecordCommands`：各方命令数量是否仍对齐。
   - `QueryWorld`：销毁 scratch 收集逻辑是否引入容器伪影或漏算 live count。
 
 ## 坑点
@@ -70,4 +69,3 @@ updated: 2026-06-09
 - 改这里时要特别小心：
   - 改 spawn/destroy 数量时，三方都必须同步改。
   - 改 query 条件时，确保 actor query 不误扫 projectile，projectile query 不误扫 actor。
-  - `MiniStream` 是专家模式，component Add/Set 按类型批处理；不要用它验证默认 `CommandBuffer` 的严格归约语义。

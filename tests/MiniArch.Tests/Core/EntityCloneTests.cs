@@ -245,7 +245,7 @@ public sealed class CommandBufferCloneTests
     {
         var world = new World();
         var source = world.Create(new Position(1, 2), new Velocity(3, 4));
-        var buffer = new CommandBuffer(world);
+        var buffer = new CommandStream(world);
 
         var clone = buffer.Clone(source);
         Assert.False(world.IsAlive(clone));
@@ -264,7 +264,7 @@ public sealed class CommandBufferCloneTests
     {
         var world = new World();
         var source = world.Create();
-        var buffer = new CommandBuffer(world);
+        var buffer = new CommandStream(world);
 
         var clone = buffer.Clone(source);
         buffer.Submit();
@@ -278,7 +278,7 @@ public sealed class CommandBufferCloneTests
     {
         var world = new World();
         var source = world.Create(new Position(1, 2));
-        var buffer = new CommandBuffer(world);
+        var buffer = new CommandStream(world);
 
         var clone = buffer.Clone(source);
         buffer.Submit();
@@ -294,7 +294,7 @@ public sealed class CommandBufferCloneTests
         var world = new World();
         var entity = world.Create(new Position(1, 2));
         world.Destroy(entity);
-        var buffer = new CommandBuffer(world);
+        var buffer = new CommandStream(world);
 
         Assert.Throws<InvalidOperationException>(() => buffer.Clone(entity));
     }
@@ -304,7 +304,7 @@ public sealed class CommandBufferCloneTests
     {
         var world = new World();
         var source = world.Create(new Position(1, 2));
-        var buffer = new CommandBuffer(world);
+        var buffer = new CommandStream(world);
 
         var cloned = buffer.Clone(source);
         var created = buffer.Create();
@@ -325,7 +325,7 @@ public sealed class CommandBufferCloneTests
     {
         var world = new World();
         var source = world.Create(new Position(1, 2), new Velocity(3, 4));
-        var buffer = new CommandBuffer(world);
+        var buffer = new CommandStream(world);
 
         var clone = buffer.Clone(source);
         buffer.Submit();
@@ -340,7 +340,7 @@ public sealed class CommandBufferCloneTests
     {
         var world = new World();
         var source = world.Create(new Position(1, 2), new Velocity(3, 4));
-        var buffer = new CommandBuffer(world);
+        var buffer = new CommandStream(world);
 
         var clone = buffer.Clone(source);
         buffer.Submit();
@@ -355,7 +355,7 @@ public sealed class CommandBufferCloneTests
     {
         var world = new World();
         var source = world.Create(new Position(1, 2));
-        var buffer = new CommandBuffer(world);
+        var buffer = new CommandStream(world);
 
         var clone1 = buffer.Clone(source);
         var clone2 = buffer.Clone(source);
@@ -376,7 +376,7 @@ public sealed class CommandBufferCloneTests
     {
         var world = new World();
         var source = world.Create(new Position(1, 2), new Velocity(3, 4), new Health(100));
-        var buffer = new CommandBuffer(world);
+        var buffer = new CommandStream(world);
 
         var clone = buffer.Clone(source);
         buffer.Submit();
@@ -398,7 +398,7 @@ public sealed class CommandBufferCloneTests
         var child2 = world.Create(new Health(100));
         world.Link(parent, child1);
         world.Link(parent, child2);
-        var buffer = new CommandBuffer(world);
+        var buffer = new CommandStream(world);
 
         var clone = buffer.Clone(parent);
         buffer.Submit();
@@ -416,7 +416,7 @@ public sealed class CommandBufferCloneTests
         var leaf = world.Create(new Health(100));
         world.Link(root, mid);
         world.Link(mid, leaf);
-        var buffer = new CommandBuffer(world);
+        var buffer = new CommandStream(world);
 
         var clone = buffer.Clone(root);
         buffer.Submit();
@@ -435,7 +435,7 @@ public sealed class CommandBufferCloneTests
         var grandparent = world.Create();
         var parent = world.Create(new Position(1, 2));
         world.Link(grandparent, parent);
-        var buffer = new CommandBuffer(world);
+        var buffer = new CommandStream(world);
 
         var clone = buffer.Clone(parent);
         buffer.Submit();
@@ -450,7 +450,7 @@ public sealed class CommandBufferCloneTests
         var parent = world.Create(new Position(1, 2));
         var child = world.Create(new Velocity(3, 4));
         world.Link(parent, child);
-        var buffer = new CommandBuffer(world);
+        var buffer = new CommandStream(world);
 
         var clone = buffer.Clone(parent);
         buffer.Set(clone, new Position(99, 99));
@@ -468,7 +468,7 @@ public sealed class CommandBufferCloneTests
         var parent = world.Create(new Position(1, 2), new Velocity(3, 4));
         var child = world.Create(new Health(100));
         world.Link(parent, child);
-        var buffer = new CommandBuffer(world);
+        var buffer = new CommandStream(world);
 
         var clone = buffer.Clone(parent);
         buffer.Remove<Position>(clone);
@@ -485,7 +485,7 @@ public sealed class CommandBufferCloneTests
     {
         var world = new World();
         var source = world.Create(new Position(1, 2));
-        var buffer = new CommandBuffer(world);
+        var buffer = new CommandStream(world);
 
         var clone = buffer.Clone(source);
         world.Set(source, new Position(9, 9));
@@ -502,7 +502,7 @@ public sealed class CommandBufferCloneTests
     {
         var world = new World();
         var source = world.Create(new Position(1, 2), new Velocity(3, 4));
-        var buffer = new CommandBuffer(world);
+        var buffer = new CommandStream(world);
 
         buffer.Remove<Position>(source);
         var clone = buffer.Clone(source);
@@ -519,7 +519,7 @@ public sealed class CommandBufferCloneTests
     {
         var world = new World();
         var source = world.Create(new Position(1, 2));
-        var buffer = new CommandBuffer(world);
+        var buffer = new CommandStream(world);
 
         var clone = buffer.Clone(source);
         buffer.Destroy(clone);
@@ -535,7 +535,7 @@ public sealed class CommandBufferCloneTests
         var source = world.Create(new Position(1, 2));
         var child = world.Create(new Health(100));
         world.Link(source, child);
-        var buffer = new CommandBuffer(world);
+        var buffer = new CommandStream(world);
 
         var clone = buffer.Clone(source);
         buffer.Destroy(clone);

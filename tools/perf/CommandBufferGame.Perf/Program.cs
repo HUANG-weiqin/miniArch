@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Friflo.Engine.ECS;
-using MiniCommandBuffer = MiniArch.Core.CommandBuffer;
 using MiniCommandStream = MiniArch.Core.CommandStream;
 using MiniEntity = MiniArch.Entity;
 using MiniQuery = MiniArch.Query;
@@ -39,11 +38,7 @@ public static class Program
         Console.WriteLine($"{"Engine",-10} | {"Ticks/s",10} | {"ms/tick",9} | {"Checksum",14} | {"Live",8} | {"Heap Δ",12} | {"GC",8} | {"Query",8} | {"Record",8} | {"Apply",8}");
         Console.WriteLine(new string('-', 116));
 
-        RunIf(options.Matches("MiniArch"), () => new MiniArchSteadyCombatWorld(), options);
-        GC.Collect(2, GCCollectionMode.Forced, true, true);
-        GC.WaitForPendingFinalizers();
-
-        RunIf(options.Matches("MiniStream"), () => new MiniArchCommandStreamSteadyCombatWorld(), options);
+        RunIf(options.Matches("MiniArch") || options.Matches("MiniStream"), () => new MiniArchCommandStreamSteadyCombatWorld(), options);
         GC.Collect(2, GCCollectionMode.Forced, true, true);
         GC.WaitForPendingFinalizers();
 
@@ -58,10 +53,7 @@ public static class Program
         Console.WriteLine();
         Console.WriteLine($"{"Engine",-18} | {"Ticks/s",10} | {"ms/tick",9} | {"Checksum",14} | {"Live",8} | {"Heap Δ",12} | {"GC",8} | {"Query",8} | {"Record",8} | {"Apply",8}");
         Console.WriteLine(new string('-', 122));
-        RunIf(options.Matches("MiniArch") || options.Matches("Storm"), () => new MiniArchParticleStormWorld(), options);
-        GC.Collect(2, GCCollectionMode.Forced, true, true);
-        GC.WaitForPendingFinalizers();
-        RunIf(options.Matches("MiniStream") || options.Matches("Storm"), () => new MiniArchCommandStreamParticleStormWorld(), options);
+        RunIf(options.Matches("MiniArch") || options.Matches("MiniStream") || options.Matches("Storm"), () => new MiniArchCommandStreamParticleStormWorld(), options);
         GC.Collect(2, GCCollectionMode.Forced, true, true);
         GC.WaitForPendingFinalizers();
         RunIf(options.Matches("Friflo"), () => CreateFrifloParticleStormQuietly(), options);
@@ -74,10 +66,7 @@ public static class Program
         Console.WriteLine();
         Console.WriteLine($"{"Engine",-18} | {"Ticks/s",10} | {"ms/tick",9} | {"Checksum",14} | {"Live",8} | {"Heap Δ",12} | {"GC",8} | {"Query",8} | {"Record",8} | {"Apply",8}");
         Console.WriteLine(new string('-', 122));
-        RunIf(options.Matches("MiniHero") || options.Matches("Hero"), () => new MiniArchHeroLightWorld(), options);
-        GC.Collect(2, GCCollectionMode.Forced, true, true);
-        GC.WaitForPendingFinalizers();
-        RunIf(options.Matches("MiniStream") || options.Matches("Hero"), () => new MiniArchCommandStreamHeroLightWorld(), options);
+        RunIf(options.Matches("MiniHero") || options.Matches("MiniStream") || options.Matches("Hero"), () => new MiniArchCommandStreamHeroLightWorld(), options);
         GC.Collect(2, GCCollectionMode.Forced, true, true);
         GC.WaitForPendingFinalizers();
         RunIf(options.Matches("Friflo") || options.Matches("Hero"), () => new FrifloHeroLightWorld(), options);
@@ -325,172 +314,6 @@ public static class BenchmarkRunner
             scenario.Phases.Record * 100.0 / totalPhaseTicks,
             scenario.Phases.Apply * 100.0 / totalPhaseTicks);
     }
-}
-
-public sealed class MiniArchSteadyCombatWorld : ICommandBufferGameScenario
-{
-    private readonly MiniWorld _world = new(128, ScenarioDefaults.InitialLiveCount + ScenarioDefaults.ProjectileChurnPerTick * 4);
-    private readonly MiniCommandBuffer _buffer;
-    private readonly MiniEntity[] _actors = new MiniEntity[ScenarioDefaults.ActorCount];
-    private readonly MiniEntity[] _destroyScratch = new MiniEntity[ScenarioDefaults.ProjectileChurnPerTick];
-    private readonly bool[] _burning = new bool[ScenarioDefaults.ActorCount];
-    private readonly bool[] _frozen = new bool[ScenarioDefaults.ActorCount];
-    private readonly MiniQuery _actorQuery;
-    private readonly MiniQuery _projectileQuery;
-    private readonly PhaseTicks _phases = new();
-    private int _tick;
-    private int _liveCount = ScenarioDefaults.InitialLiveCount;
-    private long _checksum;
-
-    public MiniArchSteadyCombatWorld()
-    {
-        _buffer = new MiniCommandBuffer(_world);
-
-        for (var i = 0; i < _actors.Length; i++)
-        {
-            var entity = _world.Create(new Position(i, i * 2), new Velocity((i & 3) - 1, (i & 7) - 3), new Health(100 + (i % 50)), new Team(i & 3));
-            _actors[i] = entity;
-
-            if ((i & 3) == 0)
-            {
-                _world.Add(entity, new Burning(1));
-                _burning[i] = true;
-            }
-
-            if ((i & 7) == 0)
-            {
-                _world.Add(entity, new Frozen(1));
-                _frozen[i] = true;
-            }
-        }
-
-        for (var i = 0; i < ScenarioDefaults.ProjectileCount; i++)
-        {
-            _world.Create(new Position(i, -i), new Velocity(3, -2), new Damage(5 + (i % 11)), new Lifetime(60 + (i % 120)), new ProjectileTag(1));
-        }
-
-        _actorQuery = _world.Query(new MiniQueryDescription().With<Position>().With<Velocity>().With<Health>());
-        _projectileQuery = _world.Query(new MiniQueryDescription().With<ProjectileTag>().With<Lifetime>());
-    }
-
-    public string Engine => "MiniArch";
-    public int LiveCount => _liveCount;
-    public long Checksum => _checksum;
-    public PhaseTicks Phases => _phases;
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    public long RunTick()
-    {
-        var tickStartChecksum = _checksum;
-        var start = Stopwatch.GetTimestamp();
-        var destroyed = QueryWorld();
-        var afterQuery = Stopwatch.GetTimestamp();
-        RecordCommands(destroyed);
-        var afterRecord = Stopwatch.GetTimestamp();
-        _buffer.Submit();
-        var afterApply = Stopwatch.GetTimestamp();
-
-        _phases.Query += afterQuery - start;
-        _phases.Record += afterRecord - afterQuery;
-        _phases.Apply += afterApply - afterRecord;
-        _tick++;
-        return _checksum - tickStartChecksum;
-    }
-
-    public void ResetPhaseCounters() => _phases.Clear();
-    public void Dispose() { }
-
-    private int QueryWorld()
-    {
-        foreach (var chunk in _actorQuery.GetChunks())
-        {
-            var positions = chunk.GetSpan<Position>();
-            var velocities = chunk.GetSpan<Velocity>();
-            var health = chunk.GetSpan<Health>();
-            for (var i = 0; i < positions.Length; i++)
-            {
-                _checksum += positions[i].X + velocities[i].VX + health[i].Value;
-            }
-        }
-
-        var destroyed = 0;
-        foreach (var chunk in _projectileQuery.GetChunks())
-        {
-            var lifetimes = chunk.GetSpan<Lifetime>();
-            var entities = chunk.GetEntities();
-            for (var i = 0; i < lifetimes.Length; i++)
-            {
-                _checksum += lifetimes[i].Ticks;
-                if (destroyed < _destroyScratch.Length)
-                {
-                    _destroyScratch[destroyed++] = entities[i];
-                }
-            }
-        }
-
-        return destroyed;
-    }
-
-    private void RecordCommands(int destroyed)
-    {
-        for (var i = 0; i < ScenarioDefaults.ActorMutationCount; i++)
-        {
-            var index = ActorIndex(i, 17);
-            var entity = _actors[index];
-            _buffer.Set(entity, new Position(_tick + index, index - _tick));
-            _buffer.Set(entity, new Health(75 + ((_tick + index) % 125)));
-            _checksum += entity.Id;
-        }
-
-        for (var i = 0; i < ScenarioDefaults.StatusToggleCount; i++)
-        {
-            var index = ActorIndex(i, 31);
-            var entity = _actors[index];
-            if (_burning[index])
-            {
-                _buffer.Remove<Burning>(entity);
-            }
-            else
-            {
-                _buffer.Add(entity, new Burning(_tick));
-            }
-
-            _burning[index] = !_burning[index];
-
-            if ((i & 1) == 0)
-            {
-                if (_frozen[index])
-                {
-                    _buffer.Remove<Frozen>(entity);
-                }
-                else
-                {
-                    _buffer.Add(entity, new Frozen(_tick));
-                }
-
-                _frozen[index] = !_frozen[index];
-            }
-        }
-
-        for (var i = 0; i < destroyed; i++)
-        {
-            _buffer.Destroy(_destroyScratch[i]);
-        }
-
-        for (var i = 0; i < ScenarioDefaults.ProjectileChurnPerTick; i++)
-        {
-            var entity = _buffer.Create();
-            _buffer.Add(entity, new Position(_tick * 3 + i, -i));
-            _buffer.Add(entity, new Velocity(3 + (i & 3), -2));
-            _buffer.Add(entity, new Damage(8 + (i % 13)));
-            _buffer.Add(entity, new Lifetime(90 + (i % 90)));
-            _buffer.Add(entity, new ProjectileTag(1));
-        }
-
-        _liveCount += ScenarioDefaults.ProjectileChurnPerTick - destroyed;
-    }
-
-    private int ActorIndex(int offset, int stride) => (int)(((long)_tick * stride + offset * 13L) % _actors.Length);
 }
 
 public sealed class MiniArchCommandStreamSteadyCombatWorld : ICommandBufferGameScenario
@@ -992,114 +815,8 @@ public sealed class ArchSteadyCombatWorld : ICommandBufferGameScenario
 }
 
 // ============================================================
-// ParticleStorm scenarios — high structural churn, minimal Set
+// ParticleStorm scenarios �?high structural churn, minimal Set
 // ============================================================
-
-public sealed class MiniArchParticleStormWorld : ICommandBufferGameScenario
-{
-    private readonly MiniWorld _world = new(128, ParticleStormDefaults.InitialLiveCount + ParticleStormDefaults.BatchSize);
-    private readonly MiniCommandBuffer _buffer;
-    private readonly MiniEntity[][] _stormSlots;
-    private readonly MiniEntity[] _emitters;
-    private readonly PhaseTicks _phases = new();
-    private int _tick;
-    private long _checksum;
-
-    public MiniArchParticleStormWorld()
-    {
-        _buffer = new MiniCommandBuffer(_world);
-
-        _stormSlots = new MiniEntity[ParticleStormDefaults.StormTickBuffer][];
-        for (var i = 0; i < _stormSlots.Length; i++)
-            _stormSlots[i] = new MiniEntity[ParticleStormDefaults.BatchSize];
-
-        _emitters = new MiniEntity[ParticleStormDefaults.EmitterCount];
-        for (var i = 0; i < _emitters.Length; i++)
-            _emitters[i] = _world.Create(new Position(i, i), new EmitterTag(i));
-    }
-
-    public string Engine => "MiniArch-Storm";
-    public int LiveCount => ParticleStormDefaults.EmitterCount + Math.Min(_tick, ParticleStormDefaults.StormTickBuffer) * ParticleStormDefaults.BatchSize;
-    public long Checksum => _checksum;
-    public PhaseTicks Phases => _phases;
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    public long RunTick()
-    {
-        var tickStart = _checksum;
-        var start = Stopwatch.GetTimestamp();
-
-        // Query emitters (minimal — just for checksum & phase timing)
-        for (var i = 0; i < _emitters.Length; i++)
-            _checksum += _emitters[i].Id + i;
-        var afterQuery = Stopwatch.GetTimestamp();
-
-        RecordCommands();
-        var afterRecord = Stopwatch.GetTimestamp();
-
-        _buffer.Submit();
-        var afterApply = Stopwatch.GetTimestamp();
-
-        _phases.Query += afterQuery - start;
-        _phases.Record += afterRecord - afterQuery;
-        _phases.Apply += afterApply - afterRecord;
-        _tick++;
-        return _checksum - tickStart;
-    }
-
-    public void ResetPhaseCounters() => _phases.Clear();
-    public void Dispose() { }
-
-    private void RecordCommands()
-    {
-        // Destroy batch from (tick) % StormTickBuffer — entities created StormTickBuffer ticks ago
-        if (_tick >= ParticleStormDefaults.StormTickBuffer)
-        {
-            var slot = _stormSlots[_tick % ParticleStormDefaults.StormTickBuffer];
-            for (var i = 0; i < ParticleStormDefaults.BatchSize; i++)
-                _buffer.Destroy(slot[i]);
-        }
-
-        // Set emitter values (the only Set operation in this scenario)
-        for (var i = 0; i < _emitters.Length; i++)
-        {
-            _buffer.Set(_emitters[i], new Position(_tick + i, _tick * 2 + i));
-            _buffer.Set(_emitters[i], new Alpha((_tick + i) % 256));
-        }
-
-        // Create new batch with diversified archetype signatures
-        var createSlot = _stormSlots[_tick % ParticleStormDefaults.StormTickBuffer];
-        for (var i = 0; i < ParticleStormDefaults.BatchSize; i++)
-        {
-            var entity = _buffer.Create();
-            _buffer.Add(entity, new Position(i, _tick));
-            _buffer.Add(entity, new Velocity((i & 3) - 1, (i & 7) - 3));
-            _checksum += i + _tick;
-
-            var type = i % 10;
-            if (type < 3)       // 30%: Position + Velocity + Alpha
-                _buffer.Add(entity, new Alpha((i + _tick) % 256));
-            else if (type < 6)  // 30%: Position + Velocity + Color + Scale
-            {
-                _buffer.Add(entity, new Color(i % 256, (i + 64) % 256, (i + 128) % 256, 255));
-                _buffer.Add(entity, new Scale(1 + (i % 10)));
-            }
-            else if (type < 8)  // 20%: Position + Velocity + Alpha + Lifetime
-            {
-                _buffer.Add(entity, new Alpha((i + _tick) % 256));
-                _buffer.Add(entity, new Lifetime(2));
-            }
-            else                // 20%: Position + Velocity + Color + Scale + Lifetime
-            {
-                _buffer.Add(entity, new Color(i % 256, (i + 64) % 256, (i + 128) % 256, 255));
-                _buffer.Add(entity, new Scale(1 + (i % 10)));
-                _buffer.Add(entity, new Lifetime(2));
-            }
-
-            createSlot[i] = entity;
-        }
-    }
-}
 
 public sealed class MiniArchCommandStreamParticleStormWorld : ICommandBufferGameScenario
 {
@@ -1518,98 +1235,6 @@ public struct MiniArchRequestTarget { public MiniEntity Target; }
 public struct FrifloRequestTarget : IComponent { public int TargetId; }
 
 // Friflo doesn't support struct ref fields, so we use entity id via a lookup array.
-public sealed class MiniArchHeroLightWorld : ICommandBufferGameScenario
-{
-    private readonly MiniWorld _world = new();
-    private readonly MiniCommandBuffer _buffer;
-    private readonly MiniEntity[] _characters = new MiniEntity[HeroLightDefaults.CharacterCount];
-    private readonly PhaseTicks _phases = new();
-    private long _checksum;
-
-    public MiniArchHeroLightWorld()
-    {
-        _buffer = new MiniCommandBuffer(_world);
-        for (var i = 0; i < _characters.Length; i++)
-            _characters[i] = _world.Create(new Health(100), new Team(i & 3));
-        // Seed initial pending requests for the first tick
-        for (var i = 0; i < HeroLightDefaults.RequestsPerTick; i++)
-        {
-            var req = _buffer.Create();
-            _buffer.Add(req, new RequestTag());
-            _buffer.Add(req, new MiniArchRequestTarget { Target = _characters[i % _characters.Length] });
-        }
-        _buffer.Submit();
-    }
-
-    public string Engine => "MiniHero";
-    public int LiveCount => HeroLightDefaults.CharacterCount;
-    public long Checksum => _checksum;
-    public PhaseTicks Phases => _phases;
-    public void ResetPhaseCounters() => _phases.Clear();
-    public void Dispose() => _world.Dispose();
-
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    public long RunTick()
-    {
-        var t0 = Stopwatch.GetTimestamp();
-
-        // Submit previous tick's creates + destroys
-        _buffer.Submit();
-        var tQ = Stopwatch.GetTimestamp();
-
-        // Step 2: Process existing requests → create effects + modify HP
-        var requestQuery = _world.Query(new MiniQueryDescription().With<RequestTag>().With<MiniArchRequestTarget>());
-        foreach (var chunk in requestQuery.GetChunks())
-        {
-            var targets = chunk.GetSpan<MiniArchRequestTarget>();
-            for (var i = 0; i < chunk.Count; i++)
-            {
-                var effect = _buffer.Create();
-                _buffer.Add(effect, new EffectTag());
-                _buffer.Add(effect, new MiniArchRequestTarget { Target = targets[i].Target });
-                _buffer.Set(targets[i].Target, new Health(101));
-            }
-        }
-
-        // Step 3: Destroy old request + effect entities (processed this tick)
-        foreach (var chunk in _world.Query(new MiniQueryDescription().With<RequestTag>()).GetChunks())
-        {
-            var entities = chunk.GetEntities();
-            for (var i = 0; i < chunk.Count; i++)
-                _buffer.Destroy(entities[i]);
-        }
-        foreach (var chunk in _world.Query(new MiniQueryDescription().With<EffectTag>()).GetChunks())
-        {
-            var entities = chunk.GetEntities();
-            for (var i = 0; i < chunk.Count; i++)
-                _buffer.Destroy(entities[i]);
-        }
-
-        // Step 4: Create new request entities for the NEXT tick
-        for (var i = 0; i < HeroLightDefaults.RequestsPerTick; i++)
-        {
-            var req = _buffer.Create();
-            _buffer.Add(req, new RequestTag());
-            _buffer.Add(req, new MiniArchRequestTarget { Target = _characters[(i + _tickCounter) % _characters.Length] });
-        }
-        _tickCounter++;
-
-        var tR = Stopwatch.GetTimestamp();
-
-        // Step 5: Submit (applies destroys + creates)
-        _buffer.Submit();
-        var tA = Stopwatch.GetTimestamp();
-
-        _phases.Query += tQ - t0;
-        _phases.Record += tR - tQ;
-        _phases.Apply += tA - tR;
-
-        _checksum += HeroLightDefaults.RequestsPerTick;
-        return _checksum;
-    }
-    private int _tickCounter;
-}
-
 public sealed class MiniArchCommandStreamHeroLightWorld : ICommandBufferGameScenario
 {
     private readonly MiniWorld _world = new();
@@ -1647,7 +1272,7 @@ public sealed class MiniArchCommandStreamHeroLightWorld : ICommandBufferGameScen
         _stream.Submit();
         var tQ = Stopwatch.GetTimestamp();
 
-        // Process existing requests → create effects + modify HP
+        // Process existing requests �?create effects + modify HP
         foreach (var chunk in _world.Query(new MiniQueryDescription().With<RequestTag>().With<MiniArchRequestTarget>()).GetChunks())
         {
             var targets = chunk.GetSpan<MiniArchRequestTarget>();
@@ -1740,7 +1365,7 @@ public sealed class FrifloHeroLightWorld : ICommandBufferGameScenario
         _buffer.Playback();
         var tQ = Stopwatch.GetTimestamp();
 
-        // Process request entities → create effects + modify HP
+        // Process request entities �?create effects + modify HP
         foreach (var (tags, targets, entities) in _store.Query<RequestTag, FrifloRequestTarget>().Chunks)
         {
             for (var i = 0; i < entities.Length; i++)

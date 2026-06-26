@@ -403,7 +403,7 @@ public sealed class FrameDeltaDeterminismTests
     public void CB_single_delta_round_trip_produces_identical_world()
     {
         var source = new World();
-        var buffer = new CommandBuffer(source);
+        var buffer = new CommandStream(source);
 
         var a = buffer.Create(); buffer.Add(a, new Position(1, 2));
         var b = buffer.Create(); buffer.Add(b, new Position(3, 4)); buffer.Add(b, new Velocity(5, 6));
@@ -442,15 +442,15 @@ public sealed class FrameDeltaDeterminismTests
     {
         var source = new World();
 
-        var b1 = new CommandBuffer(source);
+        var b1 = new CommandStream(source);
         var a = b1.Create(); b1.Add(a, new Position(1, 1));
         var d1 = b1.Snapshot(); b1.Submit();
 
-        var b2 = new CommandBuffer(source);
+        var b2 = new CommandStream(source);
         b2.Destroy(a);
         var d2 = b2.Snapshot(); b2.Submit();
 
-        var b3 = new CommandBuffer(source);
+        var b3 = new CommandStream(source);
         var recycled = b3.Create(); b3.Add(recycled, new Position(9, 9));
         var d3 = b3.Snapshot(); b3.Submit();
 
@@ -469,16 +469,16 @@ public sealed class FrameDeltaDeterminismTests
         var source = new World();
         var deltas = new List<FrameDelta>();
 
-        var b1 = new CommandBuffer(source);
+        var b1 = new CommandStream(source);
         var a = b1.Create(); b1.Add(a, new Position(1, 2));
         deltas.Add(b1.Snapshot()); b1.Submit();
 
-        var b2 = new CommandBuffer(source);
+        var b2 = new CommandStream(source);
         b2.Set(a, new Position(10, 20));
         b2.Add(a, new Velocity(3, 4));
         deltas.Add(b2.Snapshot()); b2.Submit();
 
-        var b3 = new CommandBuffer(source);
+        var b3 = new CommandStream(source);
         b3.Remove<Velocity>(a);
         b3.Add(a, new Health(100));
         deltas.Add(b3.Snapshot()); b3.Submit();
@@ -520,7 +520,7 @@ public sealed class FrameDeltaDeterminismTests
     {
         var source = new World();
 
-        var cb = new CommandBuffer(source);
+        var cb = new CommandStream(source);
         var a = cb.Create(); cb.Add(a, new Position(1, 2));
         var cbDelta = cb.Snapshot(); cb.Submit();
 
@@ -555,7 +555,7 @@ public sealed class FrameDeltaDeterminismTests
     public void Serialize_deserialize_preserves_DeltaCount()
     {
         var source = new World();
-        var buffer = new CommandBuffer(source);
+        var buffer = new CommandStream(source);
         var a = buffer.Create(); buffer.Add(a, new Position(1, 2));
         buffer.Set(a, new Position(3, 4));
         buffer.Add(a, new Velocity(5, 6));
@@ -572,7 +572,7 @@ public sealed class FrameDeltaDeterminismTests
     public void Serialize_deserialize_preserves_HasEntity()
     {
         var source = new World();
-        var buffer = new CommandBuffer(source);
+        var buffer = new CommandStream(source);
         var a = buffer.Create(); buffer.Add(a, new Position(1, 2));
         var b = buffer.Create();
         buffer.Link(a, b);
@@ -650,7 +650,7 @@ public sealed class FrameDeltaDeterminismTests
     public void Submit_link_and_set_on_same_child_same_frame_converges_with_replay()
     {
         var source = new World();
-        var buffer = new CommandBuffer(source);
+        var buffer = new CommandStream(source);
         var parent = buffer.Create(); buffer.Add(parent, new Position(0, 0));
         var child = buffer.Create(); buffer.Add(child, new Position(1, 1));
         buffer.Link(parent, child);
@@ -669,14 +669,14 @@ public sealed class FrameDeltaDeterminismTests
         var source = new World();
 
         // Frame 1: establish parent + child linked
-        var buffer1 = new CommandBuffer(source);
+        var buffer1 = new CommandStream(source);
         var parent = buffer1.Create(); buffer1.Add(parent, new Position(0, 0));
         var child = buffer1.Create(); buffer1.Add(child, new Position(1, 1));
         buffer1.Link(parent, child);
         var delta1 = buffer1.Snapshot(); buffer1.Submit();
 
         // Frame 2: create parent2, link to child, then destroy parent2 — all same frame
-        var buffer2 = new CommandBuffer(source);
+        var buffer2 = new CommandStream(source);
         var parent2 = buffer2.Create(); buffer2.Add(parent2, new Position(2, 2));
         buffer2.Link(parent2, child);
         buffer2.Destroy(parent2);
@@ -693,7 +693,7 @@ public sealed class FrameDeltaDeterminismTests
     public void Submit_create_link_add_combined_same_frame_converges_with_replay()
     {
         var source = new World();
-        var buffer = new CommandBuffer(source);
+        var buffer = new CommandStream(source);
         var parent = buffer.Create();
         var child = buffer.Create();
         buffer.Add(parent, new Position(10, 20));
@@ -713,13 +713,13 @@ public sealed class FrameDeltaDeterminismTests
     {
         var source = new World();
 
-        var buffer1 = new CommandBuffer(source);
+        var buffer1 = new CommandStream(source);
         var parent = buffer1.Create(); buffer1.Add(parent, new Position(0, 0));
         var child = buffer1.Create(); buffer1.Add(child, new Position(1, 1));
         buffer1.Link(parent, child);
         var delta1 = buffer1.Snapshot(); buffer1.Submit();
 
-        var buffer2 = new CommandBuffer(source);
+        var buffer2 = new CommandStream(source);
         buffer2.Unlink(child);
         buffer2.Set(child, new Position(77, 88));
         var delta2 = buffer2.Snapshot(); buffer2.Submit();
@@ -737,13 +737,13 @@ public sealed class FrameDeltaDeterminismTests
         // Variant: ops before hierarchy (link) in source recording order.
         var source = new World();
 
-        var buffer1 = new CommandBuffer(source);
+        var buffer1 = new CommandStream(source);
         var parent = buffer1.Create(); buffer1.Add(parent, new Position(0, 0));
         var child = buffer1.Create(); buffer1.Add(child, new Position(1, 1));
         buffer1.Link(parent, child);
         var delta1 = buffer1.Snapshot(); buffer1.Submit();
 
-        var buffer2 = new CommandBuffer(source);
+        var buffer2 = new CommandStream(source);
         buffer2.Set(child, new Position(77, 88));
         buffer2.Unlink(child);
         var delta2 = buffer2.Snapshot(); buffer2.Submit();
