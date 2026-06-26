@@ -178,22 +178,10 @@ public sealed class FrameDelta
     }
 
     internal void AddAdd(Entity e, ComponentType t, byte[] data, int offset, int size)
-    {
-        WriteTag(DeltaOpKind.Add);
-        WriteEntity(e);
-        WriteComponentType(t);
-        WriteDataWithSize(data, offset, size);
-        _opCount++;
-    }
+        => AddComponentData(DeltaOpKind.Add, e, t, data, offset, size);
 
     internal void AddSet(Entity e, ComponentType t, byte[] data, int offset, int size)
-    {
-        WriteTag(DeltaOpKind.Set);
-        WriteEntity(e);
-        WriteComponentType(t);
-        WriteDataWithSize(data, offset, size);
-        _opCount++;
-    }
+        => AddComponentData(DeltaOpKind.Set, e, t, data, offset, size);
 
     internal void AddRemove(Entity e, ComponentType t)
     {
@@ -204,17 +192,23 @@ public sealed class FrameDelta
     }
 
     internal unsafe void AddAddUnsafe(Entity e, ComponentType t, void* data, int size)
+        => AddComponentDataUnsafe(DeltaOpKind.Add, e, t, data, size);
+
+    internal unsafe void AddSetUnsafe(Entity e, ComponentType t, void* data, int size)
+        => AddComponentDataUnsafe(DeltaOpKind.Set, e, t, data, size);
+
+    private void AddComponentData(DeltaOpKind kind, Entity e, ComponentType t, byte[] data, int offset, int size)
     {
-        WriteTag(DeltaOpKind.Add);
+        WriteTag(kind);
         WriteEntity(e);
         WriteComponentType(t);
-        WriteDataUnsafe(data, size);
+        WriteDataWithSize(data, offset, size);
         _opCount++;
     }
 
-    internal unsafe void AddSetUnsafe(Entity e, ComponentType t, void* data, int size)
+    private unsafe void AddComponentDataUnsafe(DeltaOpKind kind, Entity e, ComponentType t, void* data, int size)
     {
-        WriteTag(DeltaOpKind.Set);
+        WriteTag(kind);
         WriteEntity(e);
         WriteComponentType(t);
         WriteDataUnsafe(data, size);

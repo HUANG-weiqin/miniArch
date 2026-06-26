@@ -71,34 +71,14 @@ internal sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentTy
     /// <summary>
     /// Returns whether the signature contains a component.
     /// Uses the 512-bit mask for ids 0..511; falls back to array search for ids ≥ 512.
-    /// The mask is derived from the same source as <c>_components</c> and the
-    /// signature is immutable, so a set bit is authoritative — we short-circuit
-    /// to <c>true</c> without consulting the component array.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Contains(ComponentType component)
     {
         var id = component.Value;
-        if ((uint)id < 64)
-            return (_componentMask.B0 & (1UL << id)) != 0;
-        if ((uint)id < 128)
-            return (_componentMask.B1 & (1UL << (id - 64))) != 0;
-        if ((uint)id < 192)
-            return (_componentMask.B2 & (1UL << (id - 128))) != 0;
-        if ((uint)id < 256)
-            return (_componentMask.B3 & (1UL << (id - 192))) != 0;
-        if ((uint)id < 320)
-            return (_componentMask.B4 & (1UL << (id - 256))) != 0;
-        if ((uint)id < 384)
-            return (_componentMask.B5 & (1UL << (id - 320))) != 0;
-        if ((uint)id < 448)
-            return (_componentMask.B6 & (1UL << (id - 384))) != 0;
-        if ((uint)id < 512)
-            return (_componentMask.B7 & (1UL << (id - 448))) != 0;
-
-        // Negative ids cast to uint land here as very large values; mask does
-        // not cover them, so fall back to the slow path.
-        return ContainsSlow(component);
+        return (uint)id < 512
+            ? _componentMask.HasBit(id)
+            : ContainsSlow(component);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

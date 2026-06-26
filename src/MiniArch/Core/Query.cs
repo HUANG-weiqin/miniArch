@@ -264,46 +264,12 @@ internal sealed class Query
         var archMask = archetype.Signature.ComponentMask;
 
         // Required: archetype must have all required components.
-        if (!_requiredMask.IsZero())
-        {
-            if ((archMask.B0 & _requiredMask.B0) != _requiredMask.B0)
-                return false;
-            if (_requiredMask.HasB1 && (archMask.B1 & _requiredMask.B1) != _requiredMask.B1)
-                return false;
-            if (_requiredMask.HasB2 && (archMask.B2 & _requiredMask.B2) != _requiredMask.B2)
-                return false;
-            if (_requiredMask.HasB3 && (archMask.B3 & _requiredMask.B3) != _requiredMask.B3)
-                return false;
-            if (_requiredMask.HasB4 && (archMask.B4 & _requiredMask.B4) != _requiredMask.B4)
-                return false;
-            if (_requiredMask.HasB5 && (archMask.B5 & _requiredMask.B5) != _requiredMask.B5)
-                return false;
-            if (_requiredMask.HasB6 && (archMask.B6 & _requiredMask.B6) != _requiredMask.B6)
-                return false;
-            if (_requiredMask.HasB7 && (archMask.B7 & _requiredMask.B7) != _requiredMask.B7)
-                return false;
-        }
+        if (!_requiredMask.IsZero() && !archMask.IsSupersetOf(_requiredMask))
+            return false;
 
         // Excluded: archetype must have none of the excluded components.
-        if (!_excludedMask.IsZero())
-        {
-            if ((archMask.B0 & _excludedMask.B0) != 0)
-                return false;
-            if (_excludedMask.HasB1 && (archMask.B1 & _excludedMask.B1) != 0)
-                return false;
-            if (_excludedMask.HasB2 && (archMask.B2 & _excludedMask.B2) != 0)
-                return false;
-            if (_excludedMask.HasB3 && (archMask.B3 & _excludedMask.B3) != 0)
-                return false;
-            if (_excludedMask.HasB4 && (archMask.B4 & _excludedMask.B4) != 0)
-                return false;
-            if (_excludedMask.HasB5 && (archMask.B5 & _excludedMask.B5) != 0)
-                return false;
-            if (_excludedMask.HasB6 && (archMask.B6 & _excludedMask.B6) != 0)
-                return false;
-            if (_excludedMask.HasB7 && (archMask.B7 & _excludedMask.B7) != 0)
-                return false;
-        }
+        if (!_excludedMask.IsZero() && archMask.Intersects(_excludedMask))
+            return false;
 
         // Fallback: check components with IDs >= 512 (not covered by 512-bit mask).
         var required = _filter.Required.AsSpan();
@@ -326,25 +292,8 @@ internal sealed class Query
             return true;
 
         // Fast any-check via 512-bit mask.
-        if (!_anyMask.IsZero())
-        {
-            if ((archMask.B0 & _anyMask.B0) != 0)
-                return true;
-            if (_anyMask.HasB1 && (archMask.B1 & _anyMask.B1) != 0)
-                return true;
-            if (_anyMask.HasB2 && (archMask.B2 & _anyMask.B2) != 0)
-                return true;
-            if (_anyMask.HasB3 && (archMask.B3 & _anyMask.B3) != 0)
-                return true;
-            if (_anyMask.HasB4 && (archMask.B4 & _anyMask.B4) != 0)
-                return true;
-            if (_anyMask.HasB5 && (archMask.B5 & _anyMask.B5) != 0)
-                return true;
-            if (_anyMask.HasB6 && (archMask.B6 & _anyMask.B6) != 0)
-                return true;
-            if (_anyMask.HasB7 && (archMask.B7 & _anyMask.B7) != 0)
-                return true;
-        }
+        if (!_anyMask.IsZero() && archMask.Intersects(_anyMask))
+            return true;
 
         // Slow any-check for ids >= 512.
         for (var i = 0; i < any.Length; i++)
@@ -359,20 +308,11 @@ internal sealed class Query
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static ComponentMask ComputeFilterMask(ReadOnlySpan<ComponentType> components)
     {
-        ulong b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0, b7 = 0;
+        var builder = new MaskBuilder();
         for (var i = 0; i < components.Length; i++)
         {
-            var id = components[i].Value;
-            if ((uint)id < 64)            b0 |= 1UL << id;
-            else if ((uint)id < 128)      b1 |= 1UL << (id - 64);
-            else if ((uint)id < 192)      b2 |= 1UL << (id - 128);
-            else if ((uint)id < 256)      b3 |= 1UL << (id - 192);
-            else if ((uint)id < 320)      b4 |= 1UL << (id - 256);
-            else if ((uint)id < 384)      b5 |= 1UL << (id - 320);
-            else if ((uint)id < 448)      b6 |= 1UL << (id - 384);
-            else if ((uint)id < 512)      b7 |= 1UL << (id - 448);
+            builder.SetBit(components[i].Value);
         }
-
-        return new ComponentMask(b0, b1, b2, b3, b4, b5, b6, b7);
+        return builder.ToMask();
     }
 }

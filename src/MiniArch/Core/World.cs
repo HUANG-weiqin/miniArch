@@ -830,12 +830,23 @@ public sealed partial class World : IDisposable
         MaterializeReservedEntityCore(entity, signature, components);
     }
 
-    internal unsafe void MaterializeReservedEntityDirect(Entity entity, Archetype archetype, ReadOnlySpan<RawComponentValue> components)
+    /// <summary>
+    /// Adds an entity to an archetype and records its location. Shared prologue
+    /// for all MaterializeReservedEntity* variants.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int PlaceEntityInArchetype(Entity entity, Archetype archetype)
     {
         var rowIndex = archetype.AddEntity(entity);
         ref var record = ref _records[entity.Id];
         record.Archetype = archetype;
         record.RowIndex = rowIndex;
+        return rowIndex;
+    }
+
+    internal unsafe void MaterializeReservedEntityDirect(Entity entity, Archetype archetype, ReadOnlySpan<RawComponentValue> components)
+    {
+        var rowIndex = PlaceEntityInArchetype(entity, archetype);
 
         for (var index = 0; index < components.Length; index++)
         {
@@ -858,10 +869,7 @@ public sealed partial class World : IDisposable
         ReadOnlySpan<int> offsets,
         byte* buffer)
     {
-        var rowIndex = archetype.AddEntity(entity);
-        ref var record = ref _records[entity.Id];
-        record.Archetype = archetype;
-        record.RowIndex = rowIndex;
+        var rowIndex = PlaceEntityInArchetype(entity, archetype);
 
         for (var i = 0; i < types.Length; i++)
         {
@@ -870,7 +878,6 @@ public sealed partial class World : IDisposable
         }
     }
 
-
     internal unsafe void MaterializeReservedEntityFast(
         Entity entity,
         Archetype archetype,
@@ -878,10 +885,7 @@ public sealed partial class World : IDisposable
         ReadOnlySpan<CommandBuffer.CreatedComponent> components,
         List<byte[]> slabs)
     {
-        var rowIndex = archetype.AddEntity(entity);
-        ref var record = ref _records[entity.Id];
-        record.Archetype = archetype;
-        record.RowIndex = rowIndex;
+        var rowIndex = PlaceEntityInArchetype(entity, archetype);
 
         for (var index = 0; index < components.Length; index++)
         {
@@ -901,10 +905,7 @@ public sealed partial class World : IDisposable
         IReadOnlyList<RawComponentValue> components)
     {
         var archetype = GetOrCreateArchetype(signature);
-        var rowIndex = archetype.AddEntity(entity);
-        ref var record = ref _records[entity.Id];
-        record.Archetype = archetype;
-        record.RowIndex = rowIndex;
+        var rowIndex = PlaceEntityInArchetype(entity, archetype);
 
         for (var index = 0; index < components.Count; index++)
         {

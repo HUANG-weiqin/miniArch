@@ -59,6 +59,56 @@ internal readonly struct ComponentMask : IEquatable<ComponentMask>
     public bool HasB5 { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => B5 != 0; }
     public bool HasB6 { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => B6 != 0; }
     public bool HasB7 { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => B7 != 0; }
+
+    /// <summary>
+    /// Returns true when every bit set in <paramref name="other"/> is also set
+    /// in this mask. Used for "required" archetype filtering.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool IsSupersetOf(in ComponentMask other) =>
+        (B0 & other.B0) == other.B0 &&
+        (B1 & other.B1) == other.B1 &&
+        (B2 & other.B2) == other.B2 &&
+        (B3 & other.B3) == other.B3 &&
+        (B4 & other.B4) == other.B4 &&
+        (B5 & other.B5) == other.B5 &&
+        (B6 & other.B6) == other.B6 &&
+        (B7 & other.B7) == other.B7;
+
+    /// <summary>
+    /// Returns true when this mask and <paramref name="other"/> share at least
+    /// one set bit. Used for "excluded" and "any" archetype filtering.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool Intersects(in ComponentMask other) =>
+        (B0 & other.B0) != 0 ||
+        (B1 & other.B1) != 0 ||
+        (B2 & other.B2) != 0 ||
+        (B3 & other.B3) != 0 ||
+        (B4 & other.B4) != 0 ||
+        (B5 & other.B5) != 0 ||
+        (B6 & other.B6) != 0 ||
+        (B7 & other.B7) != 0;
+
+    /// <summary>
+    /// Tests whether bit <paramref name="id"/> is set.
+    /// Returns <c>false</c> for ids outside 0..511 — the caller must fall back
+    /// to a linear/binary search for those.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool HasBit(int id)
+    {
+        var cid = (uint)id;
+        if (cid < 64)       return (B0 & (1UL << (int)cid)) != 0;
+        else if (cid < 128) return (B1 & (1UL << (int)(cid - 64))) != 0;
+        else if (cid < 192) return (B2 & (1UL << (int)(cid - 128))) != 0;
+        else if (cid < 256) return (B3 & (1UL << (int)(cid - 192))) != 0;
+        else if (cid < 320) return (B4 & (1UL << (int)(cid - 256))) != 0;
+        else if (cid < 384) return (B5 & (1UL << (int)(cid - 320))) != 0;
+        else if (cid < 448) return (B6 & (1UL << (int)(cid - 384))) != 0;
+        else if (cid < 512) return (B7 & (1UL << (int)(cid - 448))) != 0;
+        else return false;
+    }
 }
 
 /// <summary>
