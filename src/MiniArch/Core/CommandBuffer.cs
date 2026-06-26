@@ -289,7 +289,7 @@ public sealed class CommandBuffer : ICommandRecorder
     {
         foreach (var child in _world.Hierarchy.EnumerateChildren(_world, sourceParent))
         {
-            PushPooled(ref stack, ref stackCount, new CloneChildWork(cloneParent, child));
+            ArrayPoolUtil.PushPooled(ref stack, ref stackCount, new CloneChildWork(cloneParent, child));
         }
     }
 
@@ -326,7 +326,7 @@ public sealed class CommandBuffer : ICommandRecorder
         var stackCount = 0;
         try
         {
-            PushPooled(ref stack, ref stackCount, root);
+            ArrayPoolUtil.PushPooled(ref stack, ref stackCount, root);
 
             while (stackCount > 0)
             {
@@ -340,7 +340,7 @@ public sealed class CommandBuffer : ICommandRecorder
                     if (createdIdx < 0) continue;
 
                     _createdStatePool[createdIdx].Destroyed = true;
-                    PushPooled(ref stack, ref stackCount, child);
+                    ArrayPoolUtil.PushPooled(ref stack, ref stackCount, child);
                 }
             }
         }
@@ -829,25 +829,6 @@ public sealed class CommandBuffer : ICommandRecorder
         return csIdx >= 0
             && frozen.CreatedEntityByPoolIndex[csIdx].Version == entity.Version
             && frozen.CreatedStatePool[csIdx].Destroyed;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void PushPooled<T>(ref T[] array, ref int count, T value)
-    {
-        if ((uint)count >= (uint)array.Length)
-        {
-            GrowPooled(ref array);
-        }
-
-        array[count++] = value;
-    }
-
-    private static void GrowPooled<T>(ref T[] array)
-    {
-        var next = ArrayPool<T>.Shared.Rent(array.Length * 2);
-        Array.Copy(array, next, array.Length);
-        ArrayPool<T>.Shared.Return(array);
-        array = next;
     }
 
     private static void ReturnExtracted(ComponentType[] types, CreatedComponent[] sources)

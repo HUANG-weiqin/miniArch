@@ -346,7 +346,7 @@ public sealed partial class World : IDisposable
         var stackCount = 0;
         try
         {
-            PushPooled(ref stack, ref stackCount, new CloneWork(sourceRoot, cloneRoot));
+            ArrayPoolUtil.PushPooled(ref stack, ref stackCount, new CloneWork(sourceRoot, cloneRoot));
             while (stackCount > 0)
             {
                 var work = stack[--stackCount];
@@ -354,7 +354,7 @@ public sealed partial class World : IDisposable
                 {
                     var cloneChild = CloneSingle(child);
                     _hierarchy.Link(this, work.CloneEntity, cloneChild);
-                    PushPooled(ref stack, ref stackCount, new CloneWork(child, cloneChild));
+                    ArrayPoolUtil.PushPooled(ref stack, ref stackCount, new CloneWork(child, cloneChild));
                 }
             }
         }
@@ -362,25 +362,6 @@ public sealed partial class World : IDisposable
         {
             ArrayPool<CloneWork>.Shared.Return(stack);
         }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void PushPooled<T>(ref T[] array, ref int count, T value)
-    {
-        if ((uint)count >= (uint)array.Length)
-        {
-            GrowPooled(ref array);
-        }
-
-        array[count++] = value;
-    }
-
-    private static void GrowPooled<T>(ref T[] array)
-    {
-        var next = ArrayPool<T>.Shared.Rent(array.Length * 2);
-        Array.Copy(array, next, array.Length);
-        ArrayPool<T>.Shared.Return(array);
-        array = next;
     }
 
     /// <summary>
