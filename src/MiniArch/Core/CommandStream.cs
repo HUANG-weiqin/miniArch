@@ -594,16 +594,16 @@ public sealed class CommandStream : ICommandRecorder
         var batchEntities = view.Entities;
         var pendingBatchCount = view.Count;
 
-        // Pass 1: All reserves (sectioned order preserves old ReplayCore semantics)
-        for (var i = 0; i < pendingBatchCount; i++)
-        {
-            delta.AddReserve(batchEntities[i]);
-        }
-
-        // Pass 2: Releases (canceled) and Creates (committed)
+        // Single pass: emit Reserve + Release (cancelled) or Reserve + Create
+        // (committed) consecutively for each entity. This preserves temporal
+        // ordering where a cancelled entity's id may be recycled by a later
+        // Create within the same frame — the two-pass approach (all Reserves
+        // before all Releases) breaks this dependency.
         for (var i = 0; i < pendingBatchCount; i++)
         {
             var entity = batchEntities[i];
+            delta.AddReserve(entity);
+
             if ((uint)i < (uint)batchCanceled.Length && batchCanceled[i])
             {
                 delta.AddRelease(entity);
