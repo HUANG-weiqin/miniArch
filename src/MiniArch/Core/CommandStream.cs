@@ -70,6 +70,22 @@ public sealed class CommandStream : ICommandRecorder
         _stores = new ComponentStore?[ComponentRegistry.Shared.ComponentTypeCount];
     }
 
+    /// <summary>
+    /// When enabled, <see cref="SetConcurrent{T}"/>, <see cref="AddConcurrent{T}"/>,
+    /// <see cref="RemoveConcurrent{T}"/> and <see cref="Destroy"/> can be called
+    /// safely from multiple threads. <see cref="Create"/> and <see cref="Clone"/> are
+    /// NOT thread-safe in either mode.
+    /// <see cref="Submit"/> must be called from a single thread after all parallel work completes.
+    /// Disable before returning to single-threaded <see cref="Set{T}"/> etc.
+    /// </summary>
+    public bool ParallelRecording
+    {
+        get => _parallelMode;
+        set => _parallelMode = value;
+    }
+
+    private bool _parallelMode;
+
     // ── Record API ────────────────────────────────────────────────────
 
     public Entity Create()
@@ -117,6 +133,18 @@ public sealed class CommandStream : ICommandRecorder
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void SetConcurrent<T>(Entity entity, T component) where T : unmanaged
+        => GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindSet);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void AddConcurrent<T>(Entity entity, T component) where T : unmanaged
+        => GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindAdd);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void RemoveConcurrent<T>(Entity entity) where T : unmanaged
+        => GetOrCreateStoreParallel<T>().AppendConcurrent(entity, default!, KindRemove);
+
     public void Destroy(Entity entity)
     {
         MarkUnavailable(entity);
@@ -124,6 +152,10 @@ public sealed class CommandStream : ICommandRecorder
         {
             CancelPendingEntity(entity);
             CancelPendingDescendants(entity);
+        }
+        else if (_parallelMode)
+        {
+            AppendDestroyConcurrent(entity);
         }
         else
         {
@@ -1098,8 +1130,34 @@ public sealed class CommandStream : ICommandRecorder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void MarkUnavailable(Entity entity)
     {
-        _unavailableEntities ??= new HashSet<Entity>();
-        _unavailableEntities.Add(entity);
+        if (_parallelMode)
+        {
+            lock (_storeCreateLock)
+            {
+                _unavailableEntities ??= new HashSet<Entity>();
+                _unavailableEntities.Add(entity);
+            }
+        }
+        else
+        {
+            _unavailableEntities ??= new HashSet<Entity>();
+            _unavailableEntities.Add(entity);
+        }
+    }
+
+    private void AppendDestroyConcurrent(Entity entity)
+    {
+        var slot = Interlocked.Increment(ref _destroyCount) - 1;
+        lock (_storeCreateLock)
+        {
+            while (slot >= _destroyEntities.Length)
+            {
+                var newLen = _destroyEntities.Length == 0 ? 64 : _destroyEntities.Length * 2;
+                while (newLen <= slot) newLen *= 2;
+                Array.Resize(ref _destroyEntities, newLen);
+            }
+            _destroyEntities[slot] = entity;
+        }
     }
 
     // ── Store management ──────────────────────────────────────────────
@@ -1122,6 +1180,39 @@ public sealed class CommandStream : ICommandRecorder
         }
         return (ComponentStore<T>)store;
     }
+
+    private ComponentStore<T> GetOrCreateStoreParallel<T>() where T : unmanaged
+    {
+        var id = CommandTypeInfo<T>.Type.Value;
+        if (id >= _stores.Length)
+        {
+            lock (_storeCreateLock)
+            {
+                if (id >= _stores.Length)
+                {
+                    var newLen = Math.Max(id + 1, _stores.Length == 0 ? 16 : _stores.Length * 2);
+                    Array.Resize(ref _stores, newLen);
+                }
+            }
+        }
+
+        var store = _stores[id];
+        if (store == null)
+        {
+            lock (_storeCreateLock)
+            {
+                store = _stores[id];
+                if (store == null)
+                {
+                    store = new ComponentStore<T>();
+                    _stores[id] = store;
+                }
+            }
+        }
+        return (ComponentStore<T>)store;
+    }
+
+    private readonly object _storeCreateLock = new();
 
     // ── Clear ─────────────────────────────────────────────────────────
 
@@ -1191,6 +1282,7 @@ public sealed class CommandStream : ICommandRecorder
         private Entity[] _entities = [];
         private byte[] _kinds = [];
         private int _count;
+        private readonly object _reSizeLock = new();
 
         public override bool HasCommands => _count > 0;
 
@@ -1210,6 +1302,27 @@ public sealed class CommandStream : ICommandRecorder
             _data[_count] = default;
             _kinds[_count] = KindRemove;
             _count++;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void AppendConcurrent(Entity entity, in T value, byte kind)
+        {
+            var slot = Interlocked.Increment(ref _count) - 1;
+            while (slot >= _data.Length)
+            {
+                lock (_reSizeLock)
+                {
+                    if (slot < _data.Length) break;
+                    var newLen = _data.Length == 0 ? 256 : _data.Length;
+                    while (newLen <= slot) newLen *= 2;
+                    Array.Resize(ref _data, newLen);
+                    Array.Resize(ref _entities, newLen);
+                    Array.Resize(ref _kinds, newLen);
+                }
+            }
+            _entities[slot] = entity;
+            _data[slot] = value;
+            _kinds[slot] = kind;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
