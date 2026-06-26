@@ -1,4 +1,3 @@
-using System;
 using System.Runtime.CompilerServices;
 
 namespace MiniArch.Core;
@@ -6,9 +5,6 @@ namespace MiniArch.Core;
 /// <summary>
 /// 512-bit bitmask backed by eight ulong fields.
 /// Enables fast archetype matching for component ids 0..511.
-/// Each additional ulong is only checked when the corresponding
-/// <see cref="HasB1"/>–<see cref="HasB7"/> is true,
-/// so zero cost for the unused bit ranges.
 /// </summary>
 internal readonly struct ComponentMask : IEquatable<ComponentMask>
 {
@@ -51,14 +47,6 @@ internal readonly struct ComponentMask : IEquatable<ComponentMask>
 
     public override int GetHashCode() =>
         unchecked((int)(B0 ^ B1 ^ B2 ^ B3 ^ B4 ^ B5 ^ B6 ^ B7));
-
-    public bool HasB1 { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => B1 != 0; }
-    public bool HasB2 { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => B2 != 0; }
-    public bool HasB3 { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => B3 != 0; }
-    public bool HasB4 { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => B4 != 0; }
-    public bool HasB5 { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => B5 != 0; }
-    public bool HasB6 { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => B6 != 0; }
-    public bool HasB7 { [MethodImpl(MethodImplOptions.AggressiveInlining)] get => B7 != 0; }
 
     /// <summary>
     /// Returns true when every bit set in <paramref name="other"/> is also set

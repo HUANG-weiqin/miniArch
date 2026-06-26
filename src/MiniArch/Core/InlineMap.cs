@@ -1,5 +1,3 @@
-using System.Collections.Generic;
-
 namespace MiniArch.Core;
 
 internal struct InlineMap<TKey, TValue>

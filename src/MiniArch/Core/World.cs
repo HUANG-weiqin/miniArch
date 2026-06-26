@@ -1,8 +1,6 @@
 using System.Buffers;
-using System.Diagnostics.CodeAnalysis;
 using System.Numerics;
 using System.Runtime.CompilerServices;
-using System.Threading;
 
 using MiniArch.Core;
 
@@ -256,7 +254,6 @@ public sealed partial class World : IDisposable
 
     /// <summary>
     /// Checks whether an entity has a specific component.
-    /// Inlined hot path: no EntityInfo allocation, no Signature.Contains overhead.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Has<T>(Entity entity) where T : unmanaged
@@ -482,17 +479,14 @@ public sealed partial class World : IDisposable
         {
             q.SetBit(types[i].Value);
         }
+        var queryMask = q.ToMask();
 
         foreach (var (signature, archetype) in _archetypes)
         {
             if (signature.Count != count) continue;
 
             // O(1) mask pre-filter: archetype mask must be a superset of the query mask.
-            var am = signature.ComponentMask;
-            if ((am.B0 & q.B0) != q.B0 || (am.B1 & q.B1) != q.B1 ||
-                (am.B2 & q.B2) != q.B2 || (am.B3 & q.B3) != q.B3 ||
-                (am.B4 & q.B4) != q.B4 || (am.B5 & q.B5) != q.B5 ||
-                (am.B6 & q.B6) != q.B6 || (am.B7 & q.B7) != q.B7)
+            if (!signature.ComponentMask.IsSupersetOf(queryMask))
                 continue;
 
             // Mask passed — do exact set comparison.
@@ -556,9 +550,9 @@ public sealed partial class World : IDisposable
     /// Replays a frame delta into this world: reserves entities, materializes created entities,
     /// applies hierarchy link/unlink, add/set/remove components, and destroys entities in standard order.
     /// </summary>
-    public void Replay(FrameDelta delta) => ReplayCore(delta, trusted: false);
+    public void Replay(FrameDelta delta) => ReplayCore(delta);
 
-    private unsafe void ReplayCore(FrameDelta delta, bool trusted)
+    private unsafe void ReplayCore(FrameDelta delta)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(delta);
@@ -579,8 +573,7 @@ public sealed partial class World : IDisposable
                 switch (decoder.Kind)
                 {
                     case DeltaOpKind.Reserve:
-                        if (!trusted)
-                            EnsureReplayReservation(decoder.Entity);
+                        EnsureReplayReservation(decoder.Entity);
                         break;
 
                     case DeltaOpKind.Release:
