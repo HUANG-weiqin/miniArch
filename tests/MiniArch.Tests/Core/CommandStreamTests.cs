@@ -1720,7 +1720,12 @@ public sealed class CommandStreamTests
             // Submit mutates the stream's internal arrays.
             var delta = stream.Snapshot();
             stream.Submit();
-            replica.Replay(delta);
+            // Force every frame's delta through the wire format: AsSpan produces
+            // the bytes that would go over the network, Deserialize reconstructs
+            // an independent FrameDelta from those bytes. This catches varint
+            // encoding, truncation, and endianness bugs that a direct in-memory
+            // Replay(delta) would silently miss.
+            replica.Replay(FrameDelta.Deserialize(delta.AsSpan()));
 
             // Cheap gross-divergence check periodically to localize failures.
             if ((frame + 1) % SyncCheckInterval == 0)
