@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using Friflo.Engine.ECS;
 using MiniArch;
 
@@ -42,6 +43,9 @@ public static class Program
             ("S10-MixedLoad",         ()=>new MiniMixedLoad(),         ()=>new FrifloMixedLoad(),         ()=>new ArchMixedLoad()),
             ("S11-RandomEntityAccess",  ()=>new MiniRandomEntityAccess(), ()=>new FrifloRandomEntityAccess(), ()=>new ArchRandomEntityAccess()),
             ("S12-FollowTheLeader",     ()=>new MiniFollowTheLeader(),    ()=>new FrifloFollowTheLeader(),    ()=>new ArchFollowTheLeader()),
+            ("S13-FragmentedQueries", ()=>new MiniFragmentedQueries(),  ()=>new FrifloFragmentedQueries(),  ()=>new ArchFragmentedQueries()),
+            ("S14-ParallelBulletHell",()=>new MiniParallelBulletHell(),()=>new FrifloParallelBulletHell(), ()=>new ArchParallelBulletHell()),
+            ("S15-SeqBeatPar",        ()=>new MiniSeqBeatPar(),        ()=>new FrifloParallelBulletHell(), ()=>new ArchParallelBulletHell()),
         };
 
         var scenarios = args.Length > 0
@@ -324,4 +328,69 @@ public sealed class FrifloFollowTheLeader : IGameScenario
     [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;
         foreach(var(p,l,e)in _fq.Chunks){var sp=p.Span;var sl=l.Span;for(int n=0;n<e.Length;n++){var lp=_ld[sl[n].Value].GetComponent<Position>();s+=sp[n].X+lp.X+sp[n].Y+lp.Y;}}
         foreach(var(p,v,e)in _lq.Chunks){var sp=p.Span;var sv=v.Span;for(int n=0;n<e.Length;n++)s+=sp[n].X+sv[n].VX;}return s;}
+}
+
+// ============================================================================
+// S13: FragmentedQueries — 30K entities across ~70 archetypes (random 4/8 tags)
+// ============================================================================
+public sealed class MiniFragmentedQueries : IGameScenario
+{
+    readonly World _w; readonly MiniArch.Query _qAll,_qMid,_qNarrow;
+    public MiniFragmentedQueries(){_w=new World();var r=new Random(42);
+        for(int i=0;i<30000;i++){var pool=new int[]{0,1,2,3,4,5,6,7};var sz=8;var chosen=new int[4];
+            for(int j=0;j<4;j++){var pick=r.Next(sz);chosen[j]=pool[pick];pool[pick]=pool[--sz];}
+            var e=_w.Create(new Position(i,i),new Velocity(1,1));
+            for(int j=0;j<4;j++){switch(chosen[j]){case 0:_w.Add(e,new FragTag0(0));break;case 1:_w.Add(e,new FragTag1(0));break;case 2:_w.Add(e,new FragTag2(0));break;case 3:_w.Add(e,new FragTag3(0));break;case 4:_w.Add(e,new FragTag4(0));break;case 5:_w.Add(e,new FragTag5(0));break;case 6:_w.Add(e,new FragTag6(0));break;case 7:_w.Add(e,new FragTag7(0));break;}}}
+        _qAll=_w.Query(new QueryDescription().With<Position>().With<Velocity>());
+        _qMid=_w.Query(new QueryDescription().With<FragTag0>().With<Position>().With<Velocity>());
+        _qNarrow=_w.Query(new QueryDescription().With<FragTag0>().With<FragTag1>().With<Position>().With<Velocity>());}
+    public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
+    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;
+        foreach(var c in _qAll.GetChunks()){var sp=c.GetSpan<Position>();var sv=c.GetSpan<Velocity>();int n=sp.Length;for(int i=0;i<n;i++)s+=sp[i].X+sv[i].VY;}
+        foreach(var c in _qMid.GetChunks()){var sp=c.GetSpan<Position>();var sv=c.GetSpan<Velocity>();int n=sp.Length;for(int i=0;i<n;i++)s+=sp[i].X+sv[i].VY;}
+        foreach(var c in _qNarrow.GetChunks()){var sp=c.GetSpan<Position>();var sv=c.GetSpan<Velocity>();int n=sp.Length;for(int i=0;i<n;i++)s+=sp[i].X+sv[i].VY;}return s;}
+}
+public sealed class FrifloFragmentedQueries : IGameScenario
+{
+    readonly EntityStore _s; readonly ArchetypeQuery<Position,Velocity> _qAll; readonly ArchetypeQuery<FragTag0,Position,Velocity> _qMid; readonly ArchetypeQuery<FragTag0,FragTag1,Position,Velocity> _qNarrow;
+    public FrifloFragmentedQueries(){_s=new EntityStore();var r=new Random(42);
+        for(int i=0;i<30000;i++){var pool=new int[]{0,1,2,3,4,5,6,7};var sz=8;var chosen=new int[4];
+            for(int j=0;j<4;j++){var pick=r.Next(sz);chosen[j]=pool[pick];pool[pick]=pool[--sz];}
+            var e=_s.CreateEntity(new Position(i,i),new Velocity(1,1));
+            for(int j=0;j<4;j++){switch(chosen[j]){case 0:e.AddComponent(new FragTag0(0));break;case 1:e.AddComponent(new FragTag1(0));break;case 2:e.AddComponent(new FragTag2(0));break;case 3:e.AddComponent(new FragTag3(0));break;case 4:e.AddComponent(new FragTag4(0));break;case 5:e.AddComponent(new FragTag5(0));break;case 6:e.AddComponent(new FragTag6(0));break;case 7:e.AddComponent(new FragTag7(0));break;}}}
+        _qAll=_s.Query<Position,Velocity>();_qMid=_s.Query<FragTag0,Position,Velocity>();_qNarrow=_s.Query<FragTag0,FragTag1,Position,Velocity>();}
+    public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
+    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;
+        foreach(var(p,v,e)in _qAll.Chunks){var sp=p.Span;var sv=v.Span;for(int n=0;n<e.Length;n++)s+=sp[n].X+sv[n].VY;}
+        foreach(var(_,p,v,e)in _qMid.Chunks){var sp=p.Span;var sv=v.Span;for(int n=0;n<e.Length;n++)s+=sp[n].X+sv[n].VY;}
+        foreach(var(_,__,p,v,e)in _qNarrow.Chunks){var sp=p.Span;var sv=v.Span;for(int n=0;n<e.Length;n++)s+=sp[n].X+sv[n].VY;}return s;}
+}
+
+// ============================================================================
+// S15: SequentialBeatParallel — MiniArch sequential vs Friflo+Arch parallel on same hash workload
+// ============================================================================
+public sealed class MiniSeqBeatPar : IGameScenario
+{
+    readonly World _w; readonly MiniArch.Query _q;
+    public MiniSeqBeatPar(){_w=new World();for(int i=0;i<100000;i++)_w.Create(new Position(i,i),new Velocity(1,1));_q=_w.Query(new QueryDescription().With<Position>().With<Velocity>());}
+    public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
+    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){long s=0;foreach(var c in _q.GetChunks()){var sp=c.GetSpan<Position>();var sv=c.GetSpan<Velocity>();int n=sp.Length;for(int i=0;i<n;i++)s+=sp[i].X*17+sp[i].Y*13+sv[i].VX*31+sv[i].VY*7;}return s;}
+}
+
+// ============================================================================
+// S14: ParallelBulletHell — 100K entities, parallel chunk/entity query (read-only hash)
+// ============================================================================
+public sealed class MiniParallelBulletHell : IGameScenario
+{
+    readonly World _w; readonly MiniArch.Query _q; ChunkAction _body; long _sum;
+    public MiniParallelBulletHell(){_w=new World();for(int i=0;i<100000;i++)_w.Create(new Position(i,i),new Velocity(1,1));_q=_w.Query(new QueryDescription().With<Position>().With<Velocity>());_body=c=>{long local=0;var sp=c.GetSpan<Position>();var sv=c.GetSpan<Velocity>();int n=sp.Length;for(int i=0;i<n;i++)local+=sp[i].X*17+sp[i].Y*13+sv[i].VX*31+sv[i].VY*7;Interlocked.Add(ref _sum,local);};}
+    public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
+    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){_sum=0;_q.ForEachChunkParallel(_body);return _sum;}
+}
+public sealed class FrifloParallelBulletHell : IGameScenario
+{
+    readonly EntityStore _s; QueryJob<Position,Velocity> _job; long _sum;
+    public FrifloParallelBulletHell(){_s=new EntityStore{JobRunner=new ParallelJobRunner(Environment.ProcessorCount)};for(int i=0;i<100000;i++)_s.CreateEntity(new Position(i,i),new Velocity(1,1));var q=_s.Query<Position,Velocity>();        _job=q.ForEach((c1,c2,e)=>{var sp=c1.Span;var sv=c2.Span;long local=0;for(int n=0;n<e.Length;n++)local+=sp[n].X*17+sp[n].Y*13+sv[n].VX*31+sv[n].VY*7;Interlocked.Add(ref _sum,local);});_job.MinParallelChunkLength=1;}
+    public void Warmup(int n){for(int i=0;i<n;i++)RunIteration();}public void Dispose(){}
+    [MethodImpl(MethodImplOptions.NoInlining)]public long RunIteration(){_sum=0;_job.RunParallel();return _sum;}
 }

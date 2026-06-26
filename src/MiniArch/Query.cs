@@ -80,6 +80,8 @@ public readonly struct Query
 
     /// <summary>
     /// Iterates matched chunks in parallel across worker threads.
+    /// When chunk count is lower than processor count, entities within
+    /// chunks are split into sub-ranges for finer-grained parallelism.
     /// Safe for component value reads/writes via <c>chunk.GetSpan&lt;T&gt;()</c>.
     /// NOT safe for structural changes (Add/Remove/Create/Destroy) — collect entity ids
     /// and apply via <see cref="MiniArch.Core.CommandStream"/> after this call returns.
@@ -91,12 +93,51 @@ public readonly struct Query
         var chunks = _query.GetChunkViewArray(out var count);
         if (count == 0)
             return;
-        if (count == 1)
+
+        var threads = Environment.ProcessorCount;
+        if (count >= threads)
         {
-            action(chunks[0]);
+            Parallel.For(0, count, i => action(chunks[i]));
             return;
         }
-        Parallel.For(0, count, i => action(chunks[i]));
+
+        // Fewer chunks than threads — split entity ranges within chunks.
+        var subPerChunk = Math.Max(1, threads / count);
+        var partitions = GetPartitionBuffer(threads);
+        var pIdx = 0;
+        for (var i = 0; i < count; i++)
+        {
+            var entities = chunks[i].Count;
+            if (entities == 0) continue;
+            var per = entities / subPerChunk;
+            var rem = entities % subPerChunk;
+            var start = 0;
+            for (var j = 0; j < subPerChunk; j++)
+            {
+                var size = per + (j < rem ? 1 : 0);
+                if (size > 0)
+                    partitions[pIdx++] = chunks[i].Slice(start, size);
+                start += size;
+            }
+        }
+
+        if (pIdx == 1)
+            action(partitions[0]);
+        else
+            Parallel.For(0, pIdx, i => action(partitions[i]));
+    }
+
+    [ThreadStatic]
+    private static ChunkView[]? t_partitions;
+
+    private static ChunkView[] GetPartitionBuffer(int minLength)
+    {
+        var arr = t_partitions;
+        if (arr != null && arr.Length >= minLength)
+            return arr;
+        arr = new ChunkView[minLength];
+        t_partitions = arr;
+        return arr;
     }
 }
 

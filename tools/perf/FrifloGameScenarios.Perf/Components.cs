@@ -42,3 +42,13 @@ public struct Regen      : IComponent { public int Rate;  public Regen(int r) { 
 public struct Score      : IComponent { public int Value; public Score(int v) { Value = v; } }
 public struct Level      : IComponent { public int Value; public Level(int v) { Value = v; } }
 public struct LeaderIdx  : IComponent { public int Value; public LeaderIdx(int v) { Value = v; } }
+
+// --- Archetype fragmentation tags (S13) ---
+public struct FragTag0 : IComponent { public int Dummy; public FragTag0(int d) { Dummy = d; } }
+public struct FragTag1 : IComponent { public int Dummy; public FragTag1(int d) { Dummy = d; } }
+public struct FragTag2 : IComponent { public int Dummy; public FragTag2(int d) { Dummy = d; } }
+public struct FragTag3 : IComponent { public int Dummy; public FragTag3(int d) { Dummy = d; } }
+public struct FragTag4 : IComponent { public int Dummy; public FragTag4(int d) { Dummy = d; } }
+public struct FragTag5 : IComponent { public int Dummy; public FragTag5(int d) { Dummy = d; } }
+public struct FragTag6 : IComponent { public int Dummy; public FragTag6(int d) { Dummy = d; } }
+public struct FragTag7 : IComponent { public int Dummy; public FragTag7(int d) { Dummy = d; } }

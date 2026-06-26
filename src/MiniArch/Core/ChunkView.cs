@@ -7,30 +7,50 @@ namespace MiniArch;
 /// Public view of a chunk for batch component access.
 /// In non-chunked mode, wraps the Archetype directly.
 /// In chunked mode, represents a single segment within an Archetype.
+/// Supports slicing for intra-chunk parallelism in <see cref="Query.ForEachChunkParallel"/>.
 /// </summary>
 public readonly struct ChunkView
 {
     private readonly Core.Archetype _archetype;
     private readonly int _segmentIndex; // -1 = non-chunked mode
+    private readonly int _startRow;     // row offset, 0 for full views
+    private readonly int _rowCount;     // -1 = use full count
 
     internal ChunkView(Core.Archetype archetype, int segmentIndex = -1)
     {
         _archetype = archetype;
         _segmentIndex = segmentIndex;
+        _startRow = 0;
+        _rowCount = -1;
     }
 
-/// <summary>Number of entities in this chunk.</summary>
-public int Count => _segmentIndex >= 0
-    ? _archetype.GetSegmentCount(_segmentIndex)
-    : _archetype.EntityCount;
+    private ChunkView(Core.Archetype archetype, int segmentIndex, int startRow, int rowCount)
+    {
+        _archetype = archetype;
+        _segmentIndex = segmentIndex;
+        _startRow = startRow;
+        _rowCount = rowCount;
+    }
+
+    /// <summary>Number of entities in this chunk (or slice).</summary>
+    public int Count => _rowCount >= 0
+        ? _rowCount
+        : _segmentIndex >= 0 ? _archetype.GetSegmentCount(_segmentIndex) : _archetype.EntityCount;
+
+    /// <summary>Returns a sub-range view with the same backing storage.</summary>
+    internal ChunkView Slice(int start, int length) =>
+        new(_archetype, _segmentIndex, _startRow + start, length);
 
     /// <summary>Gets live entities as a span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpan<Entity> GetEntities()
     {
+        ReadOnlySpan<Entity> full;
         if (_archetype.IsChunked)
-            return _archetype.GetSegmentEntities(_segmentIndex);
-        return _archetype.GetEntities();
+            full = _archetype.GetSegmentEntities(_segmentIndex);
+        else
+            full = _archetype.GetEntities();
+        return _rowCount >= 0 ? full.Slice(_startRow, _rowCount) : full;
     }
 
     /// <summary>
@@ -39,12 +59,17 @@ public int Count => _segmentIndex >= 0
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Span<T> GetSpan<T>() where T : unmanaged
     {
+        Span<T> full;
         if (_archetype.IsChunked)
         {
             var colIdx = _archetype.GetComponentIndexFast(Component<T>.ComponentType);
-            return _archetype.GetSegmentComponentSpan<T>(_segmentIndex, colIdx);
+            full = _archetype.GetSegmentComponentSpan<T>(_segmentIndex, colIdx);
         }
-        return _archetype.GetComponentSpan<T>(Component<T>.ComponentType);
+        else
+        {
+            full = _archetype.GetComponentSpan<T>(Component<T>.ComponentType);
+        }
+        return _rowCount >= 0 ? full.Slice(_startRow, _rowCount) : full;
     }
 
     /// <summary>
@@ -62,10 +87,11 @@ public int Count => _segmentIndex >= 0
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Span<T> GetComponentSpanAt<T>(int columnIndex) where T : unmanaged
     {
+        Span<T> full;
         if (_archetype.IsChunked)
-            return _archetype.GetSegmentComponentSpan<T>(_segmentIndex, columnIndex);
-        return _archetype.GetComponentSpanAt<T>(columnIndex);
+            full = _archetype.GetSegmentComponentSpan<T>(_segmentIndex, columnIndex);
+        else
+            full = _archetype.GetComponentSpanAt<T>(columnIndex);
+        return _rowCount >= 0 ? full.Slice(_startRow, _rowCount) : full;
     }
 }
-
-
