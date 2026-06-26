@@ -205,11 +205,13 @@ public sealed class CommandStream : ICommandRecorder
 
     private void MaterializeAllPending()
     {
+        var view = new PendingBatchView(
+            _batchCanceled, _batchHeads, _batchCompCounts,
+            _batchComps, _batchBuf, _batchEntities, _pendingBatchCount);
         for (var i = 0; i < _pendingBatchCount; i++)
         {
             if (_batchCanceled[i]) continue;
-            var entity = _batchEntities[i];
-            MaterializePendingEntity(entity, i);
+            MaterializePending(view, view.Entities[i], i);
         }
     }
 
@@ -405,7 +407,7 @@ public sealed class CommandStream : ICommandRecorder
         for (var i = 0; i < frozen.PendingBatchCount; i++)
         {
             if (frozen.BatchCanceled[i]) continue;
-            MaterializePendingEntityFrozen(frozen, frozen.BatchEntities[i], i);
+            MaterializePending(frozen.Pending, frozen.BatchEntities[i], i);
         }
 
         if (frozen.HierarchyByChild.Count > 0)
@@ -463,34 +465,19 @@ public sealed class CommandStream : ICommandRecorder
 
     // ── Pending entity materialization ─────────────────────────────────
 
-    private void MaterializePendingEntity(Entity entity, int batchIdx)
+    private void MaterializePending(in PendingBatchView view, Entity entity, int batchIdx)
     {
-        if ((uint)batchIdx < (uint)_batchCanceled.Length && _batchCanceled[batchIdx])
+        if ((uint)batchIdx < (uint)view.Canceled.Length && view.Canceled[batchIdx])
             return;
 
-        var rawCount = _batchCompCounts[batchIdx];
+        var rawCount = view.CompCounts[batchIdx];
         if (rawCount == 0)
         {
             _world.MaterializeReservedEntity(entity, Array.Empty<RawComponentValue>(), reservationChecked: true);
             return;
         }
 
-        MaterializeFromBatchBuffer(entity, _batchHeads[batchIdx], _batchComps, _batchBuf, rawCount);
-    }
-
-    private void MaterializePendingEntityFrozen(FrozenState frozen, Entity entity, int batchIdx)
-    {
-        if ((uint)batchIdx < (uint)frozen.BatchCanceled.Length && frozen.BatchCanceled[batchIdx])
-            return;
-
-        var rawCount = frozen.BatchCompCounts[batchIdx];
-        if (rawCount == 0)
-        {
-            _world.MaterializeReservedEntity(entity, Array.Empty<RawComponentValue>(), reservationChecked: true);
-            return;
-        }
-
-        MaterializeFromBatchBuffer(entity, frozen.BatchHeads[batchIdx], frozen.BatchComps, frozen.BatchBuf, rawCount);
+        MaterializeFromBatchBuffer(entity, view.Heads[batchIdx], view.Comps, view.Buf, rawCount);
     }
 
     private void MaterializeFromBatchBuffer(Entity entity, int headIdx,
@@ -680,12 +667,8 @@ public sealed class CommandStream : ICommandRecorder
             _pendingBatch = next;
         }
 
-        if (_pendingBatchCount == _batchHeads.Length)
-        {
-            var newSize = _batchHeads.Length == 0 ? 16 : _batchHeads.Length * 2;
-            Array.Resize(ref _batchHeads, newSize);
-            Array.Resize(ref _batchCompCounts, newSize);
-        }
+        EnsureCapacity(ref _batchHeads, _pendingBatchCount, 16);
+        EnsureCapacity(ref _batchCompCounts, _pendingBatchCount, 16);
 
         var batchIdx = _pendingBatchCount++;
         _pendingBatch[entity.Id] = batchIdx;
@@ -818,8 +801,7 @@ public sealed class CommandStream : ICommandRecorder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void CommitBatchComponent(int batchIdx, ComponentType type, int offset, int size)
     {
-        if (_batchCompTotal == _batchComps.Length)
-            Array.Resize(ref _batchComps, _batchComps.Length == 0 ? 256 : _batchComps.Length * 2);
+        EnsureCapacity(ref _batchComps, _batchCompTotal, 256);
         _batchComps[_batchCompTotal] = new BatchedComponent
         {
             Type = type,
@@ -1105,11 +1087,7 @@ public sealed class CommandStream : ICommandRecorder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void AppendDestroy(Entity entity)
     {
-        if (_destroyCount == _destroyEntities.Length)
-        {
-            var newLen = _destroyEntities.Length == 0 ? 64 : _destroyEntities.Length * 2;
-            Array.Resize(ref _destroyEntities, newLen);
-        }
+        EnsureCapacity(ref _destroyEntities, _destroyCount, 64);
         _destroyEntities[_destroyCount++] = entity;
     }
 
@@ -1175,6 +1153,14 @@ public sealed class CommandStream : ICommandRecorder
 
     // ── Helpers ───────────────────────────────────────────────────────
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void EnsureCapacity<T>(ref T[] array, int count, int defaultSize = 16)
+    {
+        if (count < array.Length) return;
+        var newLen = array.Length == 0 ? defaultSize : array.Length * 2;
+        Array.Resize(ref array, newLen);
+    }
+
     private static RawComponentValue ReadRawFromBuf(byte[] buf, in BatchedComponent bc)
     {
         return new RawComponentValue(bc.Type, buf, bc.Offset, bc.Size);
@@ -1210,13 +1196,7 @@ public sealed class CommandStream : ICommandRecorder
 
         public void Append(Entity entity, in T value, byte kind)
         {
-            if (_count == _data.Length)
-            {
-                var newLen = _data.Length == 0 ? 256 : _data.Length * 2;
-                Array.Resize(ref _data, newLen);
-                Array.Resize(ref _entities, newLen);
-                Array.Resize(ref _kinds, newLen);
-            }
+            EnsureStoreCapacity();
             _entities[_count] = entity;
             _data[_count] = value;
             _kinds[_count] = kind;
@@ -1225,17 +1205,21 @@ public sealed class CommandStream : ICommandRecorder
 
         public void AppendRemove(Entity entity)
         {
-            if (_count == _data.Length)
-            {
-                var newLen = _data.Length == 0 ? 256 : _data.Length * 2;
-                Array.Resize(ref _data, newLen);
-                Array.Resize(ref _entities, newLen);
-                Array.Resize(ref _kinds, newLen);
-            }
+            EnsureStoreCapacity();
             _entities[_count] = entity;
             _data[_count] = default;
             _kinds[_count] = KindRemove;
             _count++;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void EnsureStoreCapacity()
+        {
+            if (_count < _data.Length) return;
+            var newLen = _data.Length == 0 ? 256 : _data.Length * 2;
+            Array.Resize(ref _data, newLen);
+            Array.Resize(ref _entities, newLen);
+            Array.Resize(ref _kinds, newLen);
         }
 
         public override void ApplyToWorld(World world)
