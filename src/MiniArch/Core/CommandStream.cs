@@ -213,12 +213,7 @@ public sealed class CommandStream : ICommandRecorder
     private Entity CloneConcurrent(Entity source, EntityInfo info)
     {
         lock (_storeCreateLock)
-        {
-            var clone = CreateImpl();
-            var batchIdx = _pendingBatch[clone.Id];
-            CloneComponents(source, info, clone, batchIdx);
-            return clone;
-        }
+            return CloneImpl(source, info);
     }
 
     private Entity CloneImpl(Entity source, EntityInfo info)
@@ -1273,7 +1268,7 @@ public sealed class CommandStream : ICommandRecorder
 
         for (var i = 0; i < _pendingBatchCount; i++)
         {
-            if (!_batchCanceled[i] && i < _batchEntities.Length)
+            if (i < _batchCanceled.Length && !_batchCanceled[i] && i < _batchEntities.Length)
                 _pendingBatch[_batchEntities[i].Id] = -1;
         }
         _destroyCount = 0;
@@ -1299,6 +1294,7 @@ public sealed class CommandStream : ICommandRecorder
     {
         if (count < array.Length) return;
         var newLen = array.Length == 0 ? defaultSize : array.Length * 2;
+        while (count >= newLen) newLen *= 2;
         Array.Resize(ref array, newLen);
     }
 
@@ -1332,7 +1328,7 @@ public sealed class CommandStream : ICommandRecorder
         private Entity[] _entities = [];
         private byte[] _kinds = [];
         private int _count;
-        private readonly object _reSizeLock = new();
+        private readonly object _resizeLock = new();
 
         public override bool HasCommands => _count > 0;
 
@@ -1360,7 +1356,7 @@ public sealed class CommandStream : ICommandRecorder
             var slot = Interlocked.Increment(ref _count) - 1;
             while (slot >= _data.Length)
             {
-                lock (_reSizeLock)
+                lock (_resizeLock)
                 {
                     if (slot < _data.Length) break;
                     var newLen = _data.Length == 0 ? 256 : _data.Length;

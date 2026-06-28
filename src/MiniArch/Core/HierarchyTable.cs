@@ -424,6 +424,5 @@ internal sealed class HierarchyTable
         Array.Resize(ref _firstChild, newLength);
         Array.Fill(_parentByChild, NoEntity, previousLength, newLength - previousLength);
         Array.Fill(_firstChild, NoSlot, previousLength, newLength - previousLength);
-        _destroyTraversalStack.EnsureCapacity(newLength);
     }
 }
