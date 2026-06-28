@@ -1354,9 +1354,11 @@ public sealed class CommandStream : ICommandRecorder
 
     private int _deferredSeq;
     private int[] _pendingBatchDeferredArr = [];
-    // Reused across ResolveDeferredCreates calls to avoid per-frame allocation.
-    // null between calls; borrowed at entry, returned at exit.
-    private Dictionary<Entity, Entity>? _resolveMapPool;
+    // Indexed by placeholder.Version (== seq), value is the resolved real Entity.
+    // Entries outside [0, _deferredSeq) are stale; entries inside default to
+    // InvalidReal and are written with real entities as they get allocated.
+    // Id < 0 means "not yet resolved" (cancelled placeholder); real ids are >= 0.
+    private Entity[]? _resolveMapPool;
 
     private readonly object _storeCreateLock = new();
 
@@ -1395,9 +1397,10 @@ public sealed class CommandStream : ICommandRecorder
         if (_deferredSeq == 0)
             return;
 
-        var resolveMap = _resolveMapPool ?? new Dictionary<Entity, Entity>();
+        var resolveMap = _resolveMapPool ?? [];
         _resolveMapPool = null;
-        resolveMap.Clear();
+        EnsureCapacity(ref resolveMap, _deferredSeq - 1, 64);
+        Array.Fill(resolveMap, new Entity(-1, -1), 0, _deferredSeq);
 
         for (var seq = 0; seq < _deferredSeq; seq++)
         {
@@ -1408,9 +1411,8 @@ public sealed class CommandStream : ICommandRecorder
             if ((uint)batchIdx < (uint)_batchCanceled.Length && _batchCanceled[batchIdx])
                 continue;
 
-            var placeholder = new Entity(-1, seq);
             var real = _world.ReserveDeferredEntityBatch();
-            resolveMap[placeholder] = real;
+            resolveMap[seq] = real;
 
             _batchEntities[batchIdx] = real;
 
@@ -1429,17 +1431,20 @@ public sealed class CommandStream : ICommandRecorder
 
         for (var i = 0; i < _destroyCount; i++)
         {
-            if (_destroyEntities[i].Id < 0 && resolveMap.TryGetValue(_destroyEntities[i], out var real))
-                _destroyEntities[i] = real;
+            ref var destroyed = ref _destroyEntities[i];
+            if (destroyed.Id < 0)
+            {
+                var real = resolveMap[destroyed.Version];
+                if (real.Id >= 0) destroyed = real;
+            }
         }
 
         ReplaceUnavailablePlaceholders(resolveMap);
 
-        resolveMap.Clear();
         _resolveMapPool = resolveMap;
     }
 
-    private void ReplaceHierarchyPlaceholders(Dictionary<Entity, Entity> resolveMap)
+    private void ReplaceHierarchyPlaceholders(Entity[] resolveMap)
     {
         if (_hierarchyByChild.Count == 0)
             return;
@@ -1453,10 +1458,16 @@ public sealed class CommandStream : ICommandRecorder
             {
                 var newChild = child;
                 if (child.Id < 0)
-                    newChild = resolveMap.TryGetValue(child, out var nc) ? nc : child;
+                {
+                    var resolved = resolveMap[child.Version];
+                    if (resolved.Id >= 0) newChild = resolved;
+                }
                 var newParent = intent.Parent;
                 if (intent.IsLinked && intent.Parent.Id < 0)
-                    newParent = resolveMap.TryGetValue(intent.Parent, out var np) ? np : intent.Parent;
+                {
+                    var resolved = resolveMap[intent.Parent.Version];
+                    if (resolved.Id >= 0) newParent = resolved;
+                }
 
                 if (newChild != child || (intent.IsLinked && newParent != intent.Parent))
                 {
@@ -1481,7 +1492,7 @@ public sealed class CommandStream : ICommandRecorder
         }
     }
 
-    private void ReplaceUnavailablePlaceholders(Dictionary<Entity, Entity> resolveMap)
+    private void ReplaceUnavailablePlaceholders(Entity[] resolveMap)
     {
         if (_unavailableEntities == null || _unavailableEntities.Count == 0)
             return;
@@ -1493,8 +1504,12 @@ public sealed class CommandStream : ICommandRecorder
         {
             foreach (var e in _unavailableEntities)
             {
-                if (e.Id < 0 && resolveMap.TryGetValue(e, out var real))
-                    swaps[swapCount++] = (e, real);
+                if (e.Id < 0)
+                {
+                    var resolved = resolveMap[e.Version];
+                    if (resolved.Id >= 0)
+                        swaps[swapCount++] = (e, resolved);
+                }
             }
 
             for (var i = 0; i < swapCount; i++)
@@ -1562,7 +1577,7 @@ public sealed class CommandStream : ICommandRecorder
         public abstract void ApplyToWorld(World world);
         public abstract void EmitToDelta(FrameDelta delta);
         public abstract void Clear();
-        public abstract void ReplacePlaceholders(Dictionary<Entity, Entity> mapping);
+        public abstract void ReplacePlaceholders(Entity[] resolveMap);
     }
 
     private sealed class ComponentStore<T> : ComponentStore where T : unmanaged
@@ -1679,12 +1694,16 @@ public sealed class CommandStream : ICommandRecorder
             }
         }
 
-        public override void ReplacePlaceholders(Dictionary<Entity, Entity> mapping)
+        public override void ReplacePlaceholders(Entity[] resolveMap)
         {
             for (var i = 0; i < _count; i++)
             {
-                if (_entities[i].Id < 0 && mapping.TryGetValue(_entities[i], out var real))
-                    _entities[i] = real;
+                ref var slot = ref _entities[i];
+                if (slot.Id < 0)
+                {
+                    var resolved = resolveMap[slot.Version];
+                    if (resolved.Id >= 0) slot = resolved;
+                }
             }
         }
 
