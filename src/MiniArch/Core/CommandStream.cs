@@ -1364,7 +1364,17 @@ public sealed class CommandStream : ICommandRecorder
 
     // ── Clear ─────────────────────────────────────────────────────────
 
-    private void Clear()
+    /// <summary>
+    /// Resets the stream to its initial state, discarding all recorded commands
+    /// without applying them to the World. Reserved entity ids allocated by
+    /// deferred Create or by Snapshot are released back to the World's free list.
+    ///
+    /// Use this for relay-only scenarios where recorded commands are forwarded as
+    /// a FrameDelta (via <see cref="Snapshot"/>) but should not run locally.
+    /// For the normal "record and apply" flow, prefer <see cref="Submit"/>,
+    /// which materializes entities into the World and then clears.
+    /// </summary>
+    public void Clear()
     {
         foreach (var store in _stores)
             store?.Clear();
