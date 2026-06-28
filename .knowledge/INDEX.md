@@ -52,6 +52,10 @@
 - **ComponentMask 扩展为 512-bit**（8 × `ulong`），覆盖 component id 0..511 的快速匹配
 - **新增分段存储模式**：Archetype 超过阈值后自动切换为多 Segment 模式（详见 `kb-chunk-storage.md`）
 
+## 重大变更摘要（2026-06-28 CommandStream API 统一）
+
+- **CommandStream 并行 API 统一**：删除 `SetConcurrent`/`AddConcurrent`/`RemoveConcurrent` 专用方法，`ParallelRecording=true` 时所有 Record API 透明切换为并发实现。单线程零退化。
+
 ## 重大变更摘要（2026-06-22 全库审阅）
 
 - **修复 CommandStream.BuildFromFrozen bug**：`EmitHierarchyToDelta` 被重复调用两次，导致 FrameDelta 中 Link/Unlink 操作重复写入

@@ -71,12 +71,12 @@ public sealed class CommandStream : ICommandRecorder
     }
 
     /// <summary>
-    /// When enabled, <see cref="SetConcurrent{T}"/>, <see cref="AddConcurrent{T}"/>,
-    /// <see cref="RemoveConcurrent{T}"/> and <see cref="Destroy"/> can be called
-    /// safely from multiple threads. <see cref="Create"/> and <see cref="Clone"/> are
-    /// NOT thread-safe in either mode.
+    /// When enabled, all record methods (<see cref="Set{T}"/>, <see cref="Add{T}"/>,
+    /// <see cref="Remove{T}"/>, <see cref="Create"/>, <see cref="Clone"/>,
+    /// <see cref="Destroy"/>, <see cref="Link"/> and <see cref="Unlink"/>)
+    /// can be called safely from multiple threads.
     /// <see cref="Submit"/> must be called from a single thread after all parallel work completes.
-    /// Disable before returning to single-threaded <see cref="Set{T}"/> etc.
+    /// Disable before returning to single-threaded use.
     /// </summary>
     public bool ParallelRecording
     {
@@ -90,6 +90,17 @@ public sealed class CommandStream : ICommandRecorder
 
     public Entity Create()
     {
+        if (_parallelMode)
+        {
+            lock (_storeCreateLock)
+                return CreateImpl();
+        }
+        return CreateImpl();
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private Entity CreateImpl()
+    {
         var entity = _world.ReserveDeferredEntity();
         var batchIdx = AllocPendingBatch(entity);
         _lastCreated = entity;
@@ -99,6 +110,11 @@ public sealed class CommandStream : ICommandRecorder
 
     public void Add<T>(Entity entity, T component) where T : unmanaged
     {
+        if (_parallelMode)
+        {
+            GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindAdd);
+            return;
+        }
         if (_pendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
         {
             WritePendingComponent(batchIdx, component);
@@ -111,6 +127,11 @@ public sealed class CommandStream : ICommandRecorder
 
     public void Set<T>(Entity entity, T component) where T : unmanaged
     {
+        if (_parallelMode)
+        {
+            GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindSet);
+            return;
+        }
         if (_pendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
         {
             WritePendingComponent(batchIdx, component);
@@ -123,6 +144,11 @@ public sealed class CommandStream : ICommandRecorder
 
     public void Remove<T>(Entity entity) where T : unmanaged
     {
+        if (_parallelMode)
+        {
+            GetOrCreateStoreParallel<T>().AppendConcurrent(entity, default!, KindRemove);
+            return;
+        }
         if (_pendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
         {
             MarkBatchComponentRemoved(batchIdx, CommandTypeInfo<T>.Type);
@@ -133,29 +159,18 @@ public sealed class CommandStream : ICommandRecorder
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void SetConcurrent<T>(Entity entity, T component) where T : unmanaged
-        => GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindSet);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void AddConcurrent<T>(Entity entity, T component) where T : unmanaged
-        => GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindAdd);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void RemoveConcurrent<T>(Entity entity) where T : unmanaged
-        => GetOrCreateStoreParallel<T>().AppendConcurrent(entity, default!, KindRemove);
-
     public void Destroy(Entity entity)
     {
         MarkUnavailable(entity);
+        if (_parallelMode)
+        {
+            AppendDestroyConcurrent(entity);
+            return;
+        }
         if (_pendingBatchCount > 0 && TryGetPendingBatch(entity, out _))
         {
             CancelPendingEntity(entity);
             CancelPendingDescendants(entity);
-        }
-        else if (_parallelMode)
-        {
-            AppendDestroyConcurrent(entity);
         }
         else
         {
@@ -165,11 +180,23 @@ public sealed class CommandStream : ICommandRecorder
 
     public void Link(Entity parent, Entity child)
     {
+        if (_parallelMode)
+        {
+            lock (_storeCreateLock)
+                _hierarchyByChild[child] = new HierarchyIntent(true, parent);
+            return;
+        }
         _hierarchyByChild[child] = new HierarchyIntent(true, parent);
     }
 
     public void Unlink(Entity child)
     {
+        if (_parallelMode)
+        {
+            lock (_storeCreateLock)
+                _hierarchyByChild[child] = new HierarchyIntent(false, default);
+            return;
+        }
         _hierarchyByChild[child] = new HierarchyIntent(false, default);
     }
 
@@ -178,10 +205,34 @@ public sealed class CommandStream : ICommandRecorder
         if (!_world.TryGetLocation(source, out var location))
             throw new InvalidOperationException($"Cannot clone entity {source}: it is no longer alive.");
 
-        var clone = Create();
+        return _parallelMode
+            ? CloneConcurrent(source, location)
+            : CloneImpl(source, location);
+    }
+
+    private Entity CloneConcurrent(Entity source, EntityInfo info)
+    {
+        lock (_storeCreateLock)
+        {
+            var clone = CreateImpl();
+            var batchIdx = _pendingBatch[clone.Id];
+            CloneComponents(source, info, clone, batchIdx);
+            return clone;
+        }
+    }
+
+    private Entity CloneImpl(Entity source, EntityInfo info)
+    {
+        var clone = CreateImpl();
         var batchIdx = _pendingBatch[clone.Id];
-        var archetype = location.Archetype;
-        var sourceRow = location.RowIndex;
+        CloneComponents(source, info, clone, batchIdx);
+        return clone;
+    }
+
+    private void CloneComponents(Entity source, EntityInfo info, Entity clone, int batchIdx)
+    {
+        var archetype = info.Archetype;
+        var sourceRow = info.RowIndex;
         var components = archetype.Signature.AsSpan();
 
         for (var i = 0; i < components.Length; i++)
@@ -198,7 +249,6 @@ public sealed class CommandStream : ICommandRecorder
         }
 
         CloneChildrenRecursive(source, clone);
-        return clone;
     }
 
     // ── Submit ────────────────────────────────────────────────────────
