@@ -97,7 +97,7 @@ public sealed class FrameDeltaDeterminismTests
         var deltas = new List<FrameDelta>();
 
         // Frame 1: create victim
-        var victim = stream.Create();
+        var victim = stream.CreateImmediate();
         stream.Add(victim, new Position(1, 2));
         stream.Add(victim, new Velocity(3, 4));
         deltas.Add(stream.Snapshot());
@@ -109,7 +109,7 @@ public sealed class FrameDeltaDeterminismTests
         stream.Submit();
 
         // Frame 3: new entity reuses recycled id, different archetype
-        var recycled = stream.Create();
+        var recycled = stream.CreateImmediate();
         stream.Add(recycled, new Health(100));
         deltas.Add(stream.Snapshot());
         stream.Submit();
@@ -136,15 +136,15 @@ public sealed class FrameDeltaDeterminismTests
         var deltas = new List<FrameDelta>();
 
         // Frame 1: build tree A→B→C
-        var a = stream.Create(); stream.Add(a, new Position(1, 1));
-        var b = stream.Create(); stream.Add(b, new Position(2, 2));
-        var c = stream.Create(); stream.Add(c, new Position(3, 3));
+        var a = stream.CreateImmediate(); stream.Add(a, new Position(1, 1));
+        var b = stream.CreateImmediate(); stream.Add(b, new Position(2, 2));
+        var c = stream.CreateImmediate(); stream.Add(c, new Position(3, 3));
         stream.Link(a, b);
         stream.Link(b, c);
         deltas.Add(stream.Snapshot()); stream.Submit();
 
         // Frame 2: restructure A→C, A→D, unlink B
-        var d = stream.Create(); stream.Add(d, new Position(4, 4));
+        var d = stream.CreateImmediate(); stream.Add(d, new Position(4, 4));
         stream.Unlink(b);
         stream.Unlink(c);
         stream.Link(a, c);
@@ -178,15 +178,15 @@ public sealed class FrameDeltaDeterminismTests
         // Frame 0: seed via deltas so replica can replay the same id sequence.
         // (If we used source.Create directly, replica's id allocator would
         // start at 0 and the clone delta referencing id 3 would be rejected.)
-        var parent = stream.Create(); stream.Add(parent, new Position(1, 2));
-        var child1 = stream.Create(); stream.Add(child1, new Velocity(3, 4));
-        var child2 = stream.Create(); stream.Add(child2, new Health(100));
+        var parent = stream.CreateImmediate(); stream.Add(parent, new Position(1, 2));
+        var child1 = stream.CreateImmediate(); stream.Add(child1, new Velocity(3, 4));
+        var child2 = stream.CreateImmediate(); stream.Add(child2, new Health(100));
         stream.Link(parent, child1);
         stream.Link(parent, child2);
         deltas.Add(stream.Snapshot()); stream.Submit();
 
         // Frame 1: clone parent (deep, includes children)
-        var clone = stream.Clone(parent);
+        var clone = stream.CloneImmediate(parent);
         stream.Set(clone, new Position(99, 99));
         deltas.Add(stream.Snapshot()); stream.Submit();
 
@@ -216,7 +216,7 @@ public sealed class FrameDeltaDeterminismTests
         // Frame 1: spawn batch with 4 distinct archetype patterns
         for (var i = 0; i < N; i++)
         {
-            var e = stream.Create();
+            var e = stream.CreateImmediate();
             stream.Add(e, new Position(i, i + 1));
             switch (i & 3)
             {
@@ -264,7 +264,7 @@ public sealed class FrameDeltaDeterminismTests
         var source = new World();
         var stream = new CommandStream(source);
 
-        var e = stream.Create();
+        var e = stream.CreateImmediate();
         stream.Add(e, new Position(1, 2));
         var delta = stream.Snapshot();
 
@@ -285,13 +285,13 @@ public sealed class FrameDeltaDeterminismTests
         var stream = new CommandStream(source);
         var deltas = new List<FrameDelta>();
 
-        var a = stream.Create(); stream.Add(a, new Position(1, 2));
+        var a = stream.CreateImmediate(); stream.Add(a, new Position(1, 2));
         deltas.Add(stream.Snapshot()); stream.Submit();
 
         stream.Destroy(a);
         deltas.Add(stream.Snapshot()); stream.Submit();
 
-        var b = stream.Create(); stream.Add(b, new Health(100));
+        var b = stream.CreateImmediate(); stream.Add(b, new Health(100));
         deltas.Add(stream.Snapshot()); stream.Submit();
 
         var replica = new World();
@@ -317,10 +317,10 @@ public sealed class FrameDeltaDeterminismTests
         var deltas = new List<FrameDelta>();
 
         // Frame 1: seed world with diverse entities and hierarchy
-        var a = stream.Create(); stream.Add(a, new Position(1, 2));
-        var b = stream.Create(); stream.Add(b, new Position(3, 4)); stream.Add(b, new Velocity(5, 6));
-        var c = stream.Create(); stream.Add(c, new Health(50));
-        var d = stream.Create(); stream.Add(d, new Health(100));
+        var a = stream.CreateImmediate(); stream.Add(a, new Position(1, 2));
+        var b = stream.CreateImmediate(); stream.Add(b, new Position(3, 4)); stream.Add(b, new Velocity(5, 6));
+        var c = stream.CreateImmediate(); stream.Add(c, new Health(50));
+        var d = stream.CreateImmediate(); stream.Add(d, new Health(100));
         stream.Link(a, b);
         stream.Link(a, c);
         deltas.Add(stream.Snapshot()); stream.Submit();
@@ -329,12 +329,12 @@ public sealed class FrameDeltaDeterminismTests
         stream.Set(a, new Position(100, 200));
         stream.Set(b, new Position(30, 40));
         stream.Remove<Velocity>(b);
-        var e = stream.Create(); stream.Add(e, new Position(50, 60));
+        var e = stream.CreateImmediate(); stream.Add(e, new Position(50, 60));
         deltas.Add(stream.Snapshot()); stream.Submit();
 
         // Frame 3: component add (no Remove+Add same-type), create new, link
         stream.Add(d, new Position(55, 66));
-        var f = stream.Create(); stream.Add(f, new Health(1));
+        var f = stream.CreateImmediate(); stream.Add(f, new Health(1));
         stream.Link(a, f);
         deltas.Add(stream.Snapshot()); stream.Submit();
 
@@ -346,7 +346,7 @@ public sealed class FrameDeltaDeterminismTests
         deltas.Add(stream.Snapshot()); stream.Submit();
 
         // Frame 5: recycle destroyed id (b's slot)
-        var recycled = stream.Create(); stream.Add(recycled, new Health(7));
+        var recycled = stream.CreateImmediate(); stream.Add(recycled, new Health(7));
         stream.Link(a, recycled);
         deltas.Add(stream.Snapshot()); stream.Submit();
 
@@ -405,8 +405,8 @@ public sealed class FrameDeltaDeterminismTests
         var source = new World();
         var buffer = new CommandStream(source);
 
-        var a = buffer.Create(); buffer.Add(a, new Position(1, 2));
-        var b = buffer.Create(); buffer.Add(b, new Position(3, 4)); buffer.Add(b, new Velocity(5, 6));
+        var a = buffer.CreateImmediate(); buffer.Add(a, new Position(1, 2));
+        var b = buffer.CreateImmediate(); buffer.Add(b, new Position(3, 4)); buffer.Add(b, new Velocity(5, 6));
         buffer.Link(a, b);
         var delta = buffer.Snapshot(); buffer.Submit();
 
@@ -424,8 +424,8 @@ public sealed class FrameDeltaDeterminismTests
         var source = new World();
         var stream = new CommandStream(source);
 
-        var a = stream.Create(); stream.Add(a, new Position(10, 20));
-        var b = stream.Create(); stream.Add(b, new Health(99));
+        var a = stream.CreateImmediate(); stream.Add(a, new Position(10, 20));
+        var b = stream.CreateImmediate(); stream.Add(b, new Health(99));
         stream.Link(a, b);
         var delta = stream.Snapshot(); stream.Submit();
 
@@ -443,7 +443,7 @@ public sealed class FrameDeltaDeterminismTests
         var source = new World();
 
         var b1 = new CommandStream(source);
-        var a = b1.Create(); b1.Add(a, new Position(1, 1));
+        var a = b1.CreateImmediate(); b1.Add(a, new Position(1, 1));
         var d1 = b1.Snapshot(); b1.Submit();
 
         var b2 = new CommandStream(source);
@@ -451,7 +451,7 @@ public sealed class FrameDeltaDeterminismTests
         var d2 = b2.Snapshot(); b2.Submit();
 
         var b3 = new CommandStream(source);
-        var recycled = b3.Create(); b3.Add(recycled, new Position(9, 9));
+        var recycled = b3.CreateImmediate(); b3.Add(recycled, new Position(9, 9));
         var d3 = b3.Snapshot(); b3.Submit();
 
         var merged = FrameDelta.Merge(FrameDelta.Merge(d1, d2), d3);
@@ -470,7 +470,7 @@ public sealed class FrameDeltaDeterminismTests
         var deltas = new List<FrameDelta>();
 
         var b1 = new CommandStream(source);
-        var a = b1.Create(); b1.Add(a, new Position(1, 2));
+        var a = b1.CreateImmediate(); b1.Add(a, new Position(1, 2));
         deltas.Add(b1.Snapshot()); b1.Submit();
 
         var b2 = new CommandStream(source);
@@ -499,7 +499,7 @@ public sealed class FrameDeltaDeterminismTests
         var deltas = new List<FrameDelta>();
 
         var s1 = new CommandStream(source);
-        var a = s1.Create(); s1.Add(a, new Position(1, 1));
+        var a = s1.CreateImmediate(); s1.Add(a, new Position(1, 1));
         deltas.Add(s1.Snapshot()); s1.Submit();
 
         var s2 = new CommandStream(source);
@@ -521,7 +521,7 @@ public sealed class FrameDeltaDeterminismTests
         var source = new World();
 
         var cb = new CommandStream(source);
-        var a = cb.Create(); cb.Add(a, new Position(1, 2));
+        var a = cb.CreateImmediate(); cb.Add(a, new Position(1, 2));
         var cbDelta = cb.Snapshot(); cb.Submit();
 
         var stream = new CommandStream(source);
@@ -556,7 +556,7 @@ public sealed class FrameDeltaDeterminismTests
     {
         var source = new World();
         var buffer = new CommandStream(source);
-        var a = buffer.Create(); buffer.Add(a, new Position(1, 2));
+        var a = buffer.CreateImmediate(); buffer.Add(a, new Position(1, 2));
         buffer.Set(a, new Position(3, 4));
         buffer.Add(a, new Velocity(5, 6));
         var delta = buffer.Snapshot(); buffer.Submit();
@@ -573,8 +573,8 @@ public sealed class FrameDeltaDeterminismTests
     {
         var source = new World();
         var buffer = new CommandStream(source);
-        var a = buffer.Create(); buffer.Add(a, new Position(1, 2));
-        var b = buffer.Create();
+        var a = buffer.CreateImmediate(); buffer.Add(a, new Position(1, 2));
+        var b = buffer.CreateImmediate();
         buffer.Link(a, b);
         var delta = buffer.Snapshot(); buffer.Submit();
 
@@ -651,8 +651,8 @@ public sealed class FrameDeltaDeterminismTests
     {
         var source = new World();
         var buffer = new CommandStream(source);
-        var parent = buffer.Create(); buffer.Add(parent, new Position(0, 0));
-        var child = buffer.Create(); buffer.Add(child, new Position(1, 1));
+        var parent = buffer.CreateImmediate(); buffer.Add(parent, new Position(0, 0));
+        var child = buffer.CreateImmediate(); buffer.Add(child, new Position(1, 1));
         buffer.Link(parent, child);
         buffer.Set(child, new Position(99, 99));
         var delta = buffer.Snapshot(); buffer.Submit();
@@ -670,14 +670,14 @@ public sealed class FrameDeltaDeterminismTests
 
         // Frame 1: establish parent + child linked
         var buffer1 = new CommandStream(source);
-        var parent = buffer1.Create(); buffer1.Add(parent, new Position(0, 0));
-        var child = buffer1.Create(); buffer1.Add(child, new Position(1, 1));
+        var parent = buffer1.CreateImmediate(); buffer1.Add(parent, new Position(0, 0));
+        var child = buffer1.CreateImmediate(); buffer1.Add(child, new Position(1, 1));
         buffer1.Link(parent, child);
         var delta1 = buffer1.Snapshot(); buffer1.Submit();
 
         // Frame 2: create parent2, link to child, then destroy parent2 — all same frame
         var buffer2 = new CommandStream(source);
-        var parent2 = buffer2.Create(); buffer2.Add(parent2, new Position(2, 2));
+        var parent2 = buffer2.CreateImmediate(); buffer2.Add(parent2, new Position(2, 2));
         buffer2.Link(parent2, child);
         buffer2.Destroy(parent2);
         var delta2 = buffer2.Snapshot(); buffer2.Submit();
@@ -694,8 +694,8 @@ public sealed class FrameDeltaDeterminismTests
     {
         var source = new World();
         var buffer = new CommandStream(source);
-        var parent = buffer.Create();
-        var child = buffer.Create();
+        var parent = buffer.CreateImmediate();
+        var child = buffer.CreateImmediate();
         buffer.Add(parent, new Position(10, 20));
         buffer.Add(child, new Position(30, 40));
         buffer.Add(child, new Velocity(5, 5));
@@ -714,8 +714,8 @@ public sealed class FrameDeltaDeterminismTests
         var source = new World();
 
         var buffer1 = new CommandStream(source);
-        var parent = buffer1.Create(); buffer1.Add(parent, new Position(0, 0));
-        var child = buffer1.Create(); buffer1.Add(child, new Position(1, 1));
+        var parent = buffer1.CreateImmediate(); buffer1.Add(parent, new Position(0, 0));
+        var child = buffer1.CreateImmediate(); buffer1.Add(child, new Position(1, 1));
         buffer1.Link(parent, child);
         var delta1 = buffer1.Snapshot(); buffer1.Submit();
 
@@ -738,8 +738,8 @@ public sealed class FrameDeltaDeterminismTests
         var source = new World();
 
         var buffer1 = new CommandStream(source);
-        var parent = buffer1.Create(); buffer1.Add(parent, new Position(0, 0));
-        var child = buffer1.Create(); buffer1.Add(child, new Position(1, 1));
+        var parent = buffer1.CreateImmediate(); buffer1.Add(parent, new Position(0, 0));
+        var child = buffer1.CreateImmediate(); buffer1.Add(child, new Position(1, 1));
         buffer1.Link(parent, child);
         var delta1 = buffer1.Snapshot(); buffer1.Submit();
 

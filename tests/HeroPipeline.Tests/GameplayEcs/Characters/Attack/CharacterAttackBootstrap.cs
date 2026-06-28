@@ -10,7 +10,7 @@ public static class CharacterAttackBootstrap
     {
         ArgumentNullException.ThrowIfNull(runtime);
 
-        MiniArch.Entity request = runtime.Recorder.Create();
+        MiniArch.Entity request = runtime.Recorder.CreateImmediate();
         runtime.Recorder.Add(request, new Request());
         runtime.Recorder.Add(request, new RequestTarget(actionEntity));
         runtime.Recorder.Add(request, CharacterActionIds.DispatchRule);

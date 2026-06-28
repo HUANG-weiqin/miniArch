@@ -93,6 +93,16 @@ public sealed class CommandStream : ICommandRecorder
         if (_parallelMode)
         {
             lock (_storeCreateLock)
+                return CreateDeferredImpl();
+        }
+        return CreateDeferredImpl();
+    }
+
+    public Entity CreateImmediate()
+    {
+        if (_parallelMode)
+        {
+            lock (_storeCreateLock)
                 return CreateImpl();
         }
         return CreateImpl();
@@ -102,10 +112,44 @@ public sealed class CommandStream : ICommandRecorder
     private Entity CreateImpl()
     {
         var entity = _world.ReserveDeferredEntity();
-        var batchIdx = AllocPendingBatch(entity);
+        GrowPendingBatchFor(entity.Id);
+        var batchIdx = AllocBatchSlot(entity);
+        _pendingBatch[entity.Id] = batchIdx;
+        if (entity.Id < _pendingBatchMin) _pendingBatchMin = entity.Id;
+        if (entity.Id >= _pendingBatchMax) _pendingBatchMax = entity.Id + 1;
         _lastCreated = entity;
         _lastCreatedBatch = batchIdx;
         return entity;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private Entity CreateDeferredImpl()
+    {
+        var seq = _deferredSeq++;
+        var placeholder = new Entity(-1, seq);
+        EnsureCapacity(ref _pendingBatchDeferredArr, seq, 64);
+        var batchIdx = AllocBatchSlot(placeholder);
+        _pendingBatchDeferredArr[seq] = batchIdx;
+        _lastCreated = placeholder;
+        _lastCreatedBatch = batchIdx;
+        return placeholder;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private int AllocBatchSlot(Entity entity)
+    {
+        EnsureCapacity(ref _batchHeads, _pendingBatchCount, 16);
+        EnsureCapacity(ref _batchCompCounts, _pendingBatchCount, 16);
+        if (_pendingBatchCount >= _batchEntities.Length)
+            Array.Resize(ref _batchEntities, _batchHeads.Length);
+        if (_pendingBatchCount >= _batchCanceled.Length)
+            Array.Resize(ref _batchCanceled, _batchHeads.Length);
+        var batchIdx = _pendingBatchCount++;
+        _batchHeads[batchIdx] = -1;
+        _batchCompCounts[batchIdx] = 0;
+        _batchEntities[batchIdx] = entity;
+        _batchCanceled[batchIdx] = false;
+        return batchIdx;
     }
 
     public void Add<T>(Entity entity, T component) where T : unmanaged
@@ -210,21 +254,45 @@ public sealed class CommandStream : ICommandRecorder
             : CloneImpl(source, location);
     }
 
+    public Entity CloneImmediate(Entity source)
+    {
+        if (!_world.TryGetLocation(source, out var location))
+            throw new InvalidOperationException($"Cannot clone entity {source}: it is no longer alive.");
+
+        return _parallelMode
+            ? CloneConcurrentImmediate(source, location)
+            : CloneImplImmediate(source, location);
+    }
+
     private Entity CloneConcurrent(Entity source, EntityInfo info)
     {
         lock (_storeCreateLock)
             return CloneImpl(source, info);
     }
 
+    private Entity CloneConcurrentImmediate(Entity source, EntityInfo info)
+    {
+        lock (_storeCreateLock)
+            return CloneImplImmediate(source, info);
+    }
+
     private Entity CloneImpl(Entity source, EntityInfo info)
     {
-        var clone = CreateImpl();
-        var batchIdx = _pendingBatch[clone.Id];
-        CloneComponents(source, info, clone, batchIdx);
+        var clone = CreateDeferredImpl();
+        TryGetPendingBatch(clone, out var batchIdx);
+        CloneComponents(source, info, clone, batchIdx, deferred: true);
         return clone;
     }
 
-    private void CloneComponents(Entity source, EntityInfo info, Entity clone, int batchIdx)
+    private Entity CloneImplImmediate(Entity source, EntityInfo info)
+    {
+        var clone = CreateImpl();
+        var batchIdx = _pendingBatch[clone.Id];
+        CloneComponents(source, info, clone, batchIdx, deferred: false);
+        return clone;
+    }
+
+    private void CloneComponents(Entity source, EntityInfo info, Entity clone, int batchIdx, bool deferred)
     {
         var archetype = info.Archetype;
         var sourceRow = info.RowIndex;
@@ -243,7 +311,7 @@ public sealed class CommandStream : ICommandRecorder
             CommitBatchComponent(batchIdx, ct, offset, size);
         }
 
-        CloneChildrenRecursive(source, clone);
+        CloneChildrenRecursive(source, clone, deferred);
     }
 
     // ── Submit ────────────────────────────────────────────────────────
@@ -258,6 +326,7 @@ public sealed class CommandStream : ICommandRecorder
             // Order matches BuildDelta: Create → Hierarchy → Ops → Destroy.
             // Keeping Submit and Snapshot aligned lets hosts use Submit on source and
             // Replay on replica without diverging for combined command patterns.
+            ResolveDeferredCreates();
             MaterializeAllPending();
             ApplyHierarchy();
             ApplyComponentStores();
@@ -335,6 +404,7 @@ public sealed class CommandStream : ICommandRecorder
 
     public FrameDelta Snapshot()
     {
+        ResolveDeferredCreates();
         var delta = new FrameDelta();
         BuildDelta(delta);
         return delta;
@@ -396,6 +466,7 @@ public sealed class CommandStream : ICommandRecorder
     private FrozenState SwapOutState()
     {
         TryReclaimPending();
+        ResolveDeferredCreates();
 
         FrozenState frozen;
         if (_spareFrozen is { } spare)
@@ -666,6 +737,13 @@ public sealed class CommandStream : ICommandRecorder
         for (var i = 0; i < pendingBatchCount; i++)
         {
             var entity = batchEntities[i];
+            // Deferred create that was cancelled never allocated a real id — skip it.
+            // Unlike immediate cancels (which emit Reserve+Release below to keep id
+            // allocation in lockstep across hosts), deferred cancels consume no id
+            // by design: the whole point of deferred is to avoid touching the world
+            // id allocator until submit.
+            if (entity.Id < 0)
+                continue;
             delta.AddReserve(entity);
 
             if ((uint)i < (uint)batchCanceled.Length && batchCanceled[i])
@@ -731,38 +809,17 @@ public sealed class CommandStream : ICommandRecorder
 
     // ── Pending entity helpers ────────────────────────────────────────
 
-    private int AllocPendingBatch(Entity entity)
+    private void GrowPendingBatchFor(int entityId)
     {
-        if (entity.Id >= _pendingBatch.Length)
-        {
-            var newLen = _pendingBatch.Length == 0 ? 64 : _pendingBatch.Length;
-            while (newLen <= entity.Id) newLen *= 2;
-            var next = new int[newLen];
-            Array.Fill(next, -1);
-            if (_pendingBatch.Length > 0)
-                Array.Copy(_pendingBatch, next, _pendingBatch.Length);
-            _pendingBatch = next;
-        }
+        if (entityId < _pendingBatch.Length) return;
 
-        EnsureCapacity(ref _batchHeads, _pendingBatchCount, 16);
-        EnsureCapacity(ref _batchCompCounts, _pendingBatchCount, 16);
-
-        var batchIdx = _pendingBatchCount++;
-        _pendingBatch[entity.Id] = batchIdx;
-        _batchHeads[batchIdx] = -1;
-        _batchCompCounts[batchIdx] = 0;
-
-        if (batchIdx >= _batchEntities.Length)
-            Array.Resize(ref _batchEntities, _batchHeads.Length);
-        if (batchIdx >= _batchCanceled.Length)
-            Array.Resize(ref _batchCanceled, _batchHeads.Length);
-        _batchEntities[batchIdx] = entity;
-        _batchCanceled[batchIdx] = false;
-
-        if (entity.Id < _pendingBatchMin) _pendingBatchMin = entity.Id;
-        if (entity.Id >= _pendingBatchMax) _pendingBatchMax = entity.Id + 1;
-
-        return batchIdx;
+        var newLen = _pendingBatch.Length == 0 ? 64 : _pendingBatch.Length;
+        while (newLen <= entityId) newLen *= 2;
+        var next = new int[newLen];
+        Array.Fill(next, -1);
+        if (_pendingBatch.Length > 0)
+            Array.Copy(_pendingBatch, next, _pendingBatch.Length);
+        _pendingBatch = next;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -774,13 +831,26 @@ public sealed class CommandStream : ICommandRecorder
             return true;
         }
 
-        var id = entity.Id;
-        if ((uint)(id - _pendingBatchMin) < (uint)(_pendingBatchMax - _pendingBatchMin) &&
-            id < _pendingBatch.Length)
+        if (entity.Id >= 0)
         {
-            batchIdx = _pendingBatch[id];
-            if (batchIdx >= 0 && !_batchCanceled[batchIdx] && _batchEntities[batchIdx] == entity)
-                return true;
+            var id = entity.Id;
+            if ((uint)(id - _pendingBatchMin) < (uint)(_pendingBatchMax - _pendingBatchMin) &&
+                id < _pendingBatch.Length)
+            {
+                batchIdx = _pendingBatch[id];
+                if (batchIdx >= 0 && !_batchCanceled[batchIdx] && _batchEntities[batchIdx] == entity)
+                    return true;
+            }
+        }
+        else
+        {
+            var seq = entity.Version;
+            if ((uint)seq < (uint)_deferredSeq)
+            {
+                batchIdx = _pendingBatchDeferredArr[seq];
+                if (batchIdx >= 0 && (uint)batchIdx < (uint)_batchCanceled.Length && !_batchCanceled[batchIdx])
+                    return true;
+            }
         }
         batchIdx = -1;
         return false;
@@ -792,18 +862,37 @@ public sealed class CommandStream : ICommandRecorder
         if (entity == _lastCreated)
             _lastCreatedBatch = -1;
 
-        var id = entity.Id;
-        if (id < _pendingBatch.Length)
+        if (entity.Id >= 0)
         {
-            var batchIdx = _pendingBatch[id];
-            if (batchIdx >= 0)
+            var id = entity.Id;
+            if (id < _pendingBatch.Length)
             {
-                _world.ReleaseReservedEntity(entity);
-                _pendingBatch[id] = -1;
-                _batchHeads[batchIdx] = -1;
-                _batchCompCounts[batchIdx] = 0;
-                _batchCanceled[batchIdx] = true;
-                _hierarchyByChild.Remove(entity);
+                var batchIdx = _pendingBatch[id];
+                if (batchIdx >= 0)
+                {
+                    _world.ReleaseReservedEntity(entity);
+                    _pendingBatch[id] = -1;
+                    _batchHeads[batchIdx] = -1;
+                    _batchCompCounts[batchIdx] = 0;
+                    _batchCanceled[batchIdx] = true;
+                    _hierarchyByChild.Remove(entity);
+                }
+            }
+        }
+        else
+        {
+            var seq = entity.Version;
+            if ((uint)seq < (uint)_deferredSeq)
+            {
+                var batchIdx = _pendingBatchDeferredArr[seq];
+                if (batchIdx >= 0)
+                {
+                    _pendingBatchDeferredArr[seq] = -1;
+                    _batchHeads[batchIdx] = -1;
+                    _batchCompCounts[batchIdx] = 0;
+                    _batchCanceled[batchIdx] = true;
+                    _hierarchyByChild.Remove(entity);
+                }
             }
         }
     }
@@ -1014,7 +1103,7 @@ public sealed class CommandStream : ICommandRecorder
 
     // ── Clone helpers ─────────────────────────────────────────────────
 
-    private void CloneChildrenRecursive(Entity sourceRoot, Entity cloneRoot)
+    private void CloneChildrenRecursive(Entity sourceRoot, Entity cloneRoot, bool deferred)
     {
         if (!_world.Hierarchy.HasChildren(sourceRoot)) return;
 
@@ -1049,8 +1138,18 @@ public sealed class CommandStream : ICommandRecorder
                 var cloneParent = cloneStack[stackCount];
                 if (!_world.TryGetLocation(srcChild, out var childLocation)) continue;
 
-                var cloneChild = Create();
-                var batchIdx = _pendingBatch[cloneChild.Id];
+                Entity cloneChild;
+                int batchIdx;
+                if (deferred)
+                {
+                    cloneChild = Create();
+                    TryGetPendingBatch(cloneChild, out batchIdx);
+                }
+                else
+                {
+                    cloneChild = CreateImmediate();
+                    batchIdx = _pendingBatch[cloneChild.Id];
+                }
                 var archetype = childLocation.Archetype;
                 var sourceRow = childLocation.RowIndex;
                 var sig = archetype.Signature.AsSpan();
@@ -1059,11 +1158,7 @@ public sealed class CommandStream : ICommandRecorder
                     var ct = sig[i];
                     var size = ComponentSizeCache.GetSize(ComponentRegistry.Shared.GetType(ct));
                     var offset = ReserveBatchBufSpace(size);
-                    unsafe
-                    {
-                        fixed (byte* ptr = &_batchBuf[offset])
-                            archetype.ReadComponentRaw(i, sourceRow, ptr);
-                    }
+                    unsafe { fixed (byte* ptr = &_batchBuf[offset]) archetype.ReadComponentRaw(i, sourceRow, ptr); }
                     CommitBatchComponent(batchIdx, ct, offset, size);
                 }
                 Link(cloneParent, cloneChild);
@@ -1257,6 +1352,12 @@ public sealed class CommandStream : ICommandRecorder
         return (ComponentStore<T>)store;
     }
 
+    private int _deferredSeq;
+    private int[] _pendingBatchDeferredArr = [];
+    // Reused across ResolveDeferredCreates calls to avoid per-frame allocation.
+    // null between calls; borrowed at entry, returned at exit.
+    private Dictionary<Entity, Entity>? _resolveMapPool;
+
     private readonly object _storeCreateLock = new();
 
     // ── Clear ─────────────────────────────────────────────────────────
@@ -1269,8 +1370,12 @@ public sealed class CommandStream : ICommandRecorder
         for (var i = 0; i < _pendingBatchCount; i++)
         {
             if (i < _batchCanceled.Length && !_batchCanceled[i] && i < _batchEntities.Length)
-                _pendingBatch[_batchEntities[i].Id] = -1;
+            {
+                var id = _batchEntities[i].Id;
+                if (id >= 0) _pendingBatch[id] = -1;
+            }
         }
+        _deferredSeq = 0;
         _destroyCount = 0;
         _pendingBatchCount = 0;
         _pendingBatchMin = int.MaxValue;
@@ -1281,6 +1386,141 @@ public sealed class CommandStream : ICommandRecorder
         _lastCreatedBatch = -1;
         _hierarchyByChild.Clear();
         _unavailableEntities?.Clear();
+    }
+
+    // ── Deferred entity resolution ────────────────────────────────────
+
+    private void ResolveDeferredCreates()
+    {
+        if (_deferredSeq == 0)
+            return;
+
+        var resolveMap = _resolveMapPool ?? new Dictionary<Entity, Entity>();
+        _resolveMapPool = null;
+        resolveMap.Clear();
+
+        for (var seq = 0; seq < _deferredSeq; seq++)
+        {
+            var batchIdx = _pendingBatchDeferredArr[seq];
+            _pendingBatchDeferredArr[seq] = -1;
+            if (batchIdx < 0)
+                continue;
+            if ((uint)batchIdx < (uint)_batchCanceled.Length && _batchCanceled[batchIdx])
+                continue;
+
+            var placeholder = new Entity(-1, seq);
+            var real = _world.ReserveDeferredEntityBatch();
+            resolveMap[placeholder] = real;
+
+            _batchEntities[batchIdx] = real;
+
+            GrowPendingBatchFor(real.Id);
+            _pendingBatch[real.Id] = batchIdx;
+            if (real.Id < _pendingBatchMin) _pendingBatchMin = real.Id;
+            if (real.Id >= _pendingBatchMax) _pendingBatchMax = real.Id + 1;
+        }
+
+        _deferredSeq = 0;
+
+        foreach (var store in _stores)
+            store?.ReplacePlaceholders(resolveMap);
+
+        ReplaceHierarchyPlaceholders(resolveMap);
+
+        for (var i = 0; i < _destroyCount; i++)
+        {
+            if (resolveMap.TryGetValue(_destroyEntities[i], out var real))
+                _destroyEntities[i] = real;
+        }
+
+        ReplaceUnavailablePlaceholders(resolveMap);
+
+        resolveMap.Clear();
+        _resolveMapPool = resolveMap;
+    }
+
+    private void ReplaceHierarchyPlaceholders(Dictionary<Entity, Entity> resolveMap)
+    {
+        if (_hierarchyByChild.Count == 0)
+            return;
+
+        var count = _hierarchyByChild.Count;
+        var replacements = ArrayPool<HierarchyReplacement>.Shared.Rent(count);
+        var repCount = 0;
+        try
+        {
+            foreach (var (child, intent) in _hierarchyByChild)
+            {
+                var newChild = resolveMap.TryGetValue(child, out var nc) ? nc : child;
+                var newParent = intent.Parent;
+                if (intent.IsLinked)
+                    newParent = resolveMap.TryGetValue(intent.Parent, out var np) ? np : intent.Parent;
+
+                if (newChild != child || (intent.IsLinked && newParent != intent.Parent))
+                {
+                    replacements[repCount++] = new HierarchyReplacement(
+                        child, newChild, intent.IsLinked, newParent);
+                }
+            }
+
+            for (var i = 0; i < repCount; i++)
+            {
+                ref var r = ref replacements[i];
+                _hierarchyByChild.Remove(r.OldChild);
+                if (r.IsLinked)
+                    _hierarchyByChild[r.NewChild] = new HierarchyIntent(true, r.Parent);
+                else
+                    _hierarchyByChild[r.NewChild] = new HierarchyIntent(false, default);
+            }
+        }
+        finally
+        {
+            ArrayPool<HierarchyReplacement>.Shared.Return(replacements);
+        }
+    }
+
+    private void ReplaceUnavailablePlaceholders(Dictionary<Entity, Entity> resolveMap)
+    {
+        if (_unavailableEntities == null || _unavailableEntities.Count == 0)
+            return;
+
+        var count = _unavailableEntities.Count;
+        var swaps = ArrayPool<(Entity Old, Entity New)>.Shared.Rent(count);
+        var swapCount = 0;
+        try
+        {
+            foreach (var e in _unavailableEntities)
+            {
+                if (resolveMap.TryGetValue(e, out var real))
+                    swaps[swapCount++] = (e, real);
+            }
+
+            for (var i = 0; i < swapCount; i++)
+            {
+                _unavailableEntities.Remove(swaps[i].Old);
+                _unavailableEntities.Add(swaps[i].New);
+            }
+        }
+        finally
+        {
+            ArrayPool<(Entity, Entity)>.Shared.Return(swaps);
+        }
+    }
+
+    private struct HierarchyReplacement
+    {
+        public Entity OldChild;
+        public Entity NewChild;
+        public bool IsLinked;
+        public Entity Parent;
+
+        public HierarchyReplacement(Entity oldChild, Entity newChild, bool isLinked, Entity parent)
+        {
+            OldChild = oldChild;
+            NewChild = newChild;
+            IsLinked = isLinked;
+            Parent = parent;
+        }
     }
 
     internal object? ActiveHierarchyForTesting => _hierarchyByChild;
@@ -1320,6 +1560,7 @@ public sealed class CommandStream : ICommandRecorder
         public abstract void ApplyToWorld(World world);
         public abstract void EmitToDelta(FrameDelta delta);
         public abstract void Clear();
+        public abstract void ReplacePlaceholders(Dictionary<Entity, Entity> mapping);
     }
 
     private sealed class ComponentStore<T> : ComponentStore where T : unmanaged
@@ -1433,6 +1674,15 @@ public sealed class CommandStream : ICommandRecorder
                         delta.AddRemove(_entities[i], compType);
                         break;
                 }
+            }
+        }
+
+        public override void ReplacePlaceholders(Dictionary<Entity, Entity> mapping)
+        {
+            for (var i = 0; i < _count; i++)
+            {
+                if (mapping.TryGetValue(_entities[i], out var real))
+                    _entities[i] = real;
             }
         }
 

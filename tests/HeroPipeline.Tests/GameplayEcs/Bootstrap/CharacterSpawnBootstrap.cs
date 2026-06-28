@@ -8,7 +8,7 @@ public static class CharacterSpawnBootstrap
 {
     public static MiniArch.Entity CreatePlayer(MiniArchRuntime runtime)
     {
-        MiniArch.Entity player = runtime.Recorder.Create();
+        MiniArch.Entity player = runtime.Recorder.CreateImmediate();
         runtime.Recorder.Add(player, new SpawnPending());
         runtime.Recorder.Add(player, CharacterSpawnKinds.Player);
         return player;
@@ -25,7 +25,7 @@ public static class CharacterSpawnBootstrap
 
     private static MiniArch.Entity CreateEntityAt(MiniArchRuntime runtime, SpawnKind kind, int q, int r)
     {
-        MiniArch.Entity entity = runtime.Recorder.Create();
+        MiniArch.Entity entity = runtime.Recorder.CreateImmediate();
         runtime.Recorder.Add(entity, new SpawnPending());
         runtime.Recorder.Add(entity, kind);
         runtime.Recorder.Add(entity, new PositionQValue(q));

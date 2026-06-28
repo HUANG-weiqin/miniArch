@@ -436,6 +436,12 @@ public sealed partial class World
         }
     }
 
+    internal Entity ReserveDeferredEntityBatch()
+    {
+        var id = AcquireEntityIdUnsafe(out var version);
+        return new Entity(id, version);
+    }
+
     internal void ReleaseReservedEntity(Entity entity)
     {
         if (entity.Id < 0 || entity.Id >= _entitySlotCount)
