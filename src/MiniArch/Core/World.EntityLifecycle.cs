@@ -470,11 +470,11 @@ public sealed partial class World
 
     private void EnsureReplayReservation(Entity entity)
     {
-        if (entity.Id < _entitySlotCount &&
+        if ((uint)entity.Id < (uint)_entitySlotCount &&
             !_records[entity.Id].IsOccupied &&
-            _records[entity.Id].Version == entity.Version &&
-            !IsEntityAvailableInFreeList(entity))
+            _records[entity.Id].Version == entity.Version)
         {
+            RemoveFromFreeList(entity);
             return;
         }
 
@@ -485,18 +485,17 @@ public sealed partial class World
         }
     }
 
-    private bool IsEntityAvailableInFreeList(Entity entity)
+    private void RemoveFromFreeList(Entity entity)
     {
-        for (var index = 0; index < _freeIdCount; index++)
+        for (var i = 0; i < _freeIdCount; i++)
         {
-            var recycled = _freeIds[index];
-            if (recycled.Id == entity.Id && recycled.Version == entity.Version)
+            if (_freeIds[i].Id == entity.Id && _freeIds[i].Version == entity.Version)
             {
-                return true;
+                _freeIds[i] = _freeIds[_freeIdCount - 1];
+                _freeIdCount--;
+                return;
             }
         }
-
-        return false;
     }
 
     private readonly record struct RecycledEntity(int Id, int Version);

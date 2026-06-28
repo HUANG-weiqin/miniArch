@@ -657,6 +657,41 @@ internal sealed partial class Archetype
         return _data.AsSpan(_columnByteOffsets[columnIndex], count * _elementSizes[columnIndex]);
     }
 
+    internal delegate void SpanFeeder(ReadOnlySpan<byte> span);
+
+    internal void FeedColumnData(int columnIndex, int rowCount, SpanFeeder append)
+    {
+        var elemSize = _elementSizes[columnIndex];
+        if (_isChunked)
+        {
+            var remaining = rowCount;
+            for (var s = 0; s < _segmentCount && remaining > 0; s++)
+            {
+                var take = Math.Min(remaining, _segments[s].Count);
+                append(_segments[s].Data.AsSpan(_columnByteOffsets[columnIndex], take * elemSize));
+                remaining -= take;
+            }
+        }
+        else
+        {
+            append(_data.AsSpan(_columnByteOffsets[columnIndex], rowCount * elemSize));
+        }
+    }
+
+    internal void FeedRowData(int columnIndex, int globalRow, SpanFeeder feed)
+    {
+        var elemSize = _elementSizes[columnIndex];
+        if (_isChunked)
+        {
+            var (segIdx, localRow) = GetSegmentAndLocal(globalRow);
+            feed(_segments[segIdx].Data.AsSpan(_columnByteOffsets[columnIndex] + localRow * elemSize, elemSize));
+        }
+        else
+        {
+            feed(_data.AsSpan(_columnByteOffsets[columnIndex] + globalRow * elemSize, elemSize));
+        }
+    }
+
     private unsafe void CopyColumnFrom(Archetype source, int columnIndex, int count)
     {
         var elemSize = _elementSizes[columnIndex];

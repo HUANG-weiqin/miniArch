@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -147,9 +148,107 @@ public static class WorldSnapshot
     public static byte[] ComputeChecksum(World world)
     {
         ArgumentNullException.ThrowIfNull(world);
-        using var ms = new MemoryStream();
-        Save(ms, world);
-        return SHA256.HashData(new ReadOnlySpan<byte>(ms.GetBuffer(), 0, (int)ms.Length));
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var persisted = CollectPersistedArchetypes(world);
+
+        AppendInt(hash, world.EntitySlotCount);
+        AppendInt(hash, persisted.Count);
+
+        foreach (var rec in world.EntityRecords)
+            AppendInt(hash, rec.Version);
+
+        foreach (var arch in persisted)
+        {
+            var sig = arch.Signature.AsSpan();
+            AppendInt(hash, sig.Length);
+            foreach (var ct in sig)
+                AppendInt(hash, ct.Value);
+
+            var entities = arch.GetEntities().ToArray();
+            var entityCount = entities.Length;
+            AppendInt(hash, entityCount);
+
+            var rows = new int[entityCount];
+            for (var i = 0; i < entityCount; i++) rows[i] = i;
+            Array.Sort(rows, (a, b) => entities[a].Id.CompareTo(entities[b].Id));
+
+            foreach (var r in rows)
+                AppendInt(hash, entities[r].Id);
+
+            for (var col = 0; col < sig.Length; col++)
+                arch.FeedColumnData(col, entityCount, span => hash.AppendData(span));
+        }
+
+        var links = new List<(int ChildId, int ParentId)>();
+        foreach (var (child, parent) in world.Hierarchy.EnumerateLiveLinks(world))
+            links.Add((child.Id, parent.Id));
+        links.Sort((a, b) => a.ChildId.CompareTo(b.ChildId));
+
+        AppendInt(hash, links.Count);
+        foreach (var (childId, parentId) in links)
+        {
+            AppendInt(hash, childId);
+            AppendInt(hash, parentId);
+        }
+
+        return hash.GetCurrentHash();
+    }
+
+    private static void AppendInt(IncrementalHash hash, int v)
+    {
+        hash.AppendData(MemoryMarshal.AsBytes(new ReadOnlySpan<int>(ref v)));
+    }
+
+    /// <summary>
+    /// Computes a canonical SHA-256 checksum of the world's <b>logical state</b>:
+    /// alive entities (id + version), their components (type + value), and
+    /// hierarchy links. Two worlds with the same logical content produce the
+    /// same hash regardless of internal layout, free-list contents, slot count,
+    /// or archetype organisation. Slower than <see cref="ComputeChecksum"/>.
+    /// </summary>
+    public static byte[] ComputeCanonicalChecksum(World world)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+
+        var entries = new List<(Entity Entity, Archetype Archetype, int Row)>();
+        foreach (var arch in world.Archetypes)
+        {
+            if (arch.EntityCount == 0) continue;
+            var entities = arch.GetEntities();
+            for (var row = 0; row < entities.Length; row++)
+                entries.Add((entities[row], arch, row));
+        }
+        entries.Sort((a, b) => a.Entity.Id.CompareTo(b.Entity.Id));
+
+        AppendInt(hash, entries.Count);
+        foreach (var (entity, arch, row) in entries)
+        {
+            AppendInt(hash, entity.Id);
+            AppendInt(hash, entity.Version);
+
+            var sig = arch.Signature.AsSpan();
+            AppendInt(hash, sig.Length);
+            for (var col = 0; col < sig.Length; col++)
+            {
+                AppendInt(hash, sig[col].Value);
+                arch.FeedRowData(col, row, span => hash.AppendData(span));
+            }
+        }
+
+        var links = new List<(int ChildId, int ParId)>();
+        foreach (var (child, parent) in world.Hierarchy.EnumerateLiveLinks(world))
+            links.Add((child.Id, parent.Id));
+        links.Sort((a, b) => a.ChildId.CompareTo(b.ChildId));
+
+        AppendInt(hash, links.Count);
+        foreach (var (cid, pid) in links)
+        {
+            AppendInt(hash, cid);
+            AppendInt(hash, pid);
+        }
+
+        return hash.GetCurrentHash();
     }
 
     private static void EnsureHeader(BinaryReader reader)
