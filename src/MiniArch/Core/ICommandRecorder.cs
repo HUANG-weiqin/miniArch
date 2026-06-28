@@ -52,6 +52,20 @@ public interface ICommandRecorder
     /// </summary>
     Entity CloneImmediate(Entity source);
 
-    /// <summary>Submits all recorded commands to the World.</summary>
+    /// <summary>
+    /// Applies all recorded commands to the World, then clears the recorder.
+    /// Clearing runs in a finally block, so the recorder is reset to its initial
+    /// state even if applying throws. Reserved entity ids from deferred Create
+    /// are released back to the World's free list during clearing for any entity
+    /// that did not get materialized (e.g. on the exception path).
+    /// </summary>
+    /// <returns>True if any commands were applied; false if the recorder was empty.</returns>
     bool Submit();
+
+    /// <summary>
+    /// Resets the recorder to its initial state, discarding all recorded commands
+    /// without applying them. Reserved entity ids are released back to the World.
+    /// Use for relay-only flow: <see cref="CommandStream.Snapshot"/> then Clear.
+    /// </summary>
+    void Clear();
 }
