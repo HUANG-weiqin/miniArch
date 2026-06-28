@@ -1429,7 +1429,7 @@ public sealed class CommandStream : ICommandRecorder
 
         for (var i = 0; i < _destroyCount; i++)
         {
-            if (resolveMap.TryGetValue(_destroyEntities[i], out var real))
+            if (_destroyEntities[i].Id < 0 && resolveMap.TryGetValue(_destroyEntities[i], out var real))
                 _destroyEntities[i] = real;
         }
 
@@ -1451,9 +1451,11 @@ public sealed class CommandStream : ICommandRecorder
         {
             foreach (var (child, intent) in _hierarchyByChild)
             {
-                var newChild = resolveMap.TryGetValue(child, out var nc) ? nc : child;
+                var newChild = child;
+                if (child.Id < 0)
+                    newChild = resolveMap.TryGetValue(child, out var nc) ? nc : child;
                 var newParent = intent.Parent;
-                if (intent.IsLinked)
+                if (intent.IsLinked && intent.Parent.Id < 0)
                     newParent = resolveMap.TryGetValue(intent.Parent, out var np) ? np : intent.Parent;
 
                 if (newChild != child || (intent.IsLinked && newParent != intent.Parent))
@@ -1491,7 +1493,7 @@ public sealed class CommandStream : ICommandRecorder
         {
             foreach (var e in _unavailableEntities)
             {
-                if (resolveMap.TryGetValue(e, out var real))
+                if (e.Id < 0 && resolveMap.TryGetValue(e, out var real))
                     swaps[swapCount++] = (e, real);
             }
 
@@ -1681,7 +1683,7 @@ public sealed class CommandStream : ICommandRecorder
         {
             for (var i = 0; i < _count; i++)
             {
-                if (mapping.TryGetValue(_entities[i], out var real))
+                if (_entities[i].Id < 0 && mapping.TryGetValue(_entities[i], out var real))
                     _entities[i] = real;
             }
         }
