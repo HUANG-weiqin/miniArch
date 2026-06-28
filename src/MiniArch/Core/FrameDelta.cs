@@ -262,7 +262,7 @@ public sealed class FrameDelta
             // instead of producing a subtly corrupted world.
             if (opByte < 0x01 || opByte > 0x09)
                 throw new InvalidOperationException(
-                    $"Unknown FrameDelta op kind 0x{opByte:X2} at position {_pos - 1}. " +
+                    $"Unknown FrameDelta op kind 0x{opByte:X2} at offset {_pos - 1}. " +
                     "This typically indicates a version mismatch between the delta producer and consumer.");
             Kind = (DeltaOpKind)opByte;
             Entity = new Entity(ReadVarint(), ReadVarint());
@@ -278,12 +278,14 @@ public sealed class FrameDelta
         {
             var buf = _buffer;
             var end = _end;
+            var startPos = _pos;
             int result = 0;
             int shift = 0;
             for (var i = 0; i < 5; i++)
             {
                 if (_pos >= end)
-                    throw new InvalidOperationException("Truncated FrameDelta: varint extends past end of buffer.");
+                    throw new InvalidOperationException(
+                        $"Truncated FrameDelta: varint extends past end of buffer at offset {startPos}.");
                 var b = buf[_pos++];
                 result |= (b & 0x7F) << shift;
                 if ((b & 0x80) == 0) return result;
@@ -291,7 +293,8 @@ public sealed class FrameDelta
             }
             // 5 bytes consumed but continuation bit still set: the producer is
             // encoding a value wider than 32 bits, or the stream is corrupt.
-            throw new InvalidOperationException("Malformed FrameDelta: varint exceeds 32-bit range.");
+            throw new InvalidOperationException(
+                $"Malformed FrameDelta: varint exceeds 32-bit range at offset {startPos}.");
         }
 
         /// <summary>
@@ -319,7 +322,9 @@ public sealed class FrameDelta
             var size = ReadVarint();
             if (size <= 0) return ReadOnlySpan<byte>.Empty;
             if (_pos + size > _end)
-                throw new InvalidOperationException("Truncated FrameDelta: insufficient data for component payload.");
+                throw new InvalidOperationException(
+                    $"Truncated FrameDelta: insufficient data for component payload at offset {_pos} " +
+                    $"(need {size} bytes, {_end - _pos} remaining).");
             var span = new ReadOnlySpan<byte>(_buffer, _pos, size);
             _pos += size;
             return span;
@@ -332,7 +337,9 @@ public sealed class FrameDelta
         {
             if (length <= 0) return ReadOnlySpan<byte>.Empty;
             if (_pos + length > _end)
-                throw new InvalidOperationException("Truncated FrameDelta: insufficient data bytes.");
+                throw new InvalidOperationException(
+                    $"Truncated FrameDelta: insufficient data bytes at offset {_pos} " +
+                    $"(need {length} bytes, {_end - _pos} remaining).");
             var span = new ReadOnlySpan<byte>(_buffer, _pos, length);
             _pos += length;
             return span;
@@ -346,7 +353,9 @@ public sealed class FrameDelta
             ReadVarint(); // ComponentType
             var size = ReadVarint();
             if (_pos + size > _end)
-                throw new InvalidOperationException("Truncated FrameDelta in SkipData.");
+                throw new InvalidOperationException(
+                    $"Truncated FrameDelta in SkipData at offset {_pos} " +
+                    $"(need {size} bytes, {_end - _pos} remaining).");
             _pos += size;
         }
 
@@ -361,7 +370,9 @@ public sealed class FrameDelta
                 ReadVarint(); // type
                 var size = ReadVarint();
                 if (_pos + size > _end)
-                    throw new InvalidOperationException("Truncated FrameDelta in SkipCreatePayload.");
+                    throw new InvalidOperationException(
+                        $"Truncated FrameDelta in SkipCreatePayload at offset {_pos} " +
+                        $"(need {size} bytes, {_end - _pos} remaining).");
                 _pos += size;
             }
         }
@@ -379,6 +390,10 @@ public sealed class FrameDelta
 
     // ── Entity scan ────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Checks whether this delta references <paramref name="entity"/>.
+    /// O(n) linear scan over every operation — use for debugging only, not in hot paths.
+    /// </summary>
     public bool HasEntity(Entity entity)
     {
         var decoder = GetDecoder();
