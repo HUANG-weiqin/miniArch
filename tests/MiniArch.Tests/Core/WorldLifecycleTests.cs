@@ -712,5 +712,56 @@ public sealed class WorldLifecycleTests
             ExceptionDispatchInfo.Capture(capturedException).Throw();
         }
     }
+
+    [Fact]
+    public void TryReleaseReserved_releases_reserved_entity_and_returns_true()
+    {
+        var world = new World();
+        var reserved = world.ReserveDeferredEntity();
+
+        var released = world.TryReleaseReserved(reserved);
+
+        Assert.True(released);
+        // The id must be back in the free list: the next reserve reuses it.
+        var next = world.ReserveDeferredEntity();
+        Assert.Equal(reserved.Id, next.Id);
+        Assert.NotEqual(reserved.Version, next.Version);
+    }
+    [Fact]
+    public void TryReleaseReserved_returns_false_for_alive_entity()
+    {
+        var world = new World();
+        var entity = world.Create(new Position(1, 2));
+
+        var released = world.TryReleaseReserved(entity);
+
+        Assert.False(released);
+        Assert.True(world.IsAlive(entity));
+    }
+
+    [Fact]
+    public void TryReleaseReserved_returns_false_for_already_released()
+    {
+        var world = new World();
+        var reserved = world.ReserveDeferredEntity();
+
+        var first = world.TryReleaseReserved(reserved);
+        var second = world.TryReleaseReserved(reserved);
+
+        Assert.True(first);
+        Assert.False(second); // version bumped after first release, no longer matches
+    }
+
+    [Fact]
+    public void TryReleaseReserved_returns_false_for_destroyed_entity()
+    {
+        var world = new World();
+        var entity = world.Create(new Position(1, 2));
+        world.Destroy(entity);
+
+        var released = world.TryReleaseReserved(entity);
+
+        Assert.False(released);
+    }
 }
 

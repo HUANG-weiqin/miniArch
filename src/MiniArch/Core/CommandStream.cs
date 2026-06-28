@@ -1369,12 +1369,23 @@ public sealed class CommandStream : ICommandRecorder
         foreach (var store in _stores)
             store?.Clear();
 
+        // Submit path: every non-cancelled batch entity has been materialized to
+        // alive by MaterializeAllPending, so TryReleaseReserved returns false and
+        // we just drop the pending-batch index.
+        // Snapshot/relay path (or Submit exception path): batch entities may still
+        // be in the reserved state, so we release their ids back to the World's
+        // free list here. Either way Clear is self-sufficient — it does not rely
+        // on the caller having materialized anything.
         for (var i = 0; i < _pendingBatchCount; i++)
         {
             if (i < _batchCanceled.Length && !_batchCanceled[i] && i < _batchEntities.Length)
             {
-                var id = _batchEntities[i].Id;
-                if (id >= 0) _pendingBatch[id] = -1;
+                var entity = _batchEntities[i];
+                if (entity.Id >= 0)
+                {
+                    _pendingBatch[entity.Id] = -1;
+                    _world.TryReleaseReserved(entity);
+                }
             }
         }
         _deferredSeq = 0;

@@ -460,6 +460,24 @@ public sealed partial class World
         PushFreeIdUnsafe(entity.Id, nextVersion);
     }
 
+    /// <summary>
+    /// Releases the reserved id if (and only if) <paramref name="entity"/> is still
+    /// in the reserved (not yet materialized, not yet released) state. Returns false
+    /// for alive/free/destroyed entities without throwing — use this on cleanup paths
+    /// where the entity state is not known a priori.
+    /// </summary>
+    internal bool TryReleaseReserved(Entity entity)
+    {
+        if ((uint)entity.Id >= (uint)_entitySlotCount) return false;
+        ref var record = ref _records[entity.Id];
+        if (record.IsOccupied || record.Version != entity.Version) return false;
+
+        var nextVersion = entity.Version + 1;
+        record.Version = nextVersion;
+        PushFreeIdUnsafe(entity.Id, nextVersion);
+        return true;
+    }
+
     private void EnsureDestroyScratchCapacity(int entityCount)
     {
         if (entityCount <= 0)
