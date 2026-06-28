@@ -8,7 +8,7 @@
 |---|---|
 | Workspace（仓库导航/脚本/流程） | `kb-repo-overview.md`、`kb-profiling-workflow.md`、`kb-throughput-workflow.md` |
 | MiniArch.Core（ECS 运行时） | `kb-core-ecs.md`、`kb-architecture-review.md`、`kb-chunk-storage.md`、`kb-cache-optimization.md` |
-| MiniArch.Core CommandStream | `kb-command-stream.md` |
+| MiniArch.Core CommandStream | `kb-command-stream.md`、`kb-deferred-create-design.md`（多 host placeholder-in-delta 改造进度/开放决策） |
 | MiniArch.Core Query | `kb-query-invalidation.md`、`kb-parallel-query.md` |
 | MiniArch.Core Snapshot | `kb-snapshot-persistence.md` |
 | MiniArch.Core Hierarchy | `kb-hierarchy-runtime.md` |
@@ -32,6 +32,7 @@
 - **Cache/内存优化** → `kb-cache-optimization.md`
 - **Query 失效机制** → `kb-query-invalidation.md`
 - **CommandStream** → `kb-command-stream.md`
+- **Deferred Create 多 host 改造进度** → `kb-deferred-create-design.md`（开放决策 + 已知 bug + 实施计划）
 - **Archive/Snapshot** → `kb-snapshot-persistence.md`
 - **Hierarchy** → `kb-hierarchy-runtime.md`
 - **用户 API 分层** → `kb-user-api-layering.md`
