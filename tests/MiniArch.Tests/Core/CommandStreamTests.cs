@@ -1669,14 +1669,78 @@ public sealed class CommandStreamTests
         AssertIdenticalWorlds(source, replica, "pending cancel after later create");
     }
 
+    [Fact]
+    public void Parallel_recording_skips_stale_existing_entity_component_commands()
+    {
+        var source = new World();
+        var replica = new World();
+        var entity = source.Create(new Position(1, 2), new Velocity(3, 4));
+        var replicaEntity = replica.Create(new Position(1, 2), new Velocity(3, 4));
+        Assert.Equal(entity, replicaEntity);
+
+        var stream = new CommandStream(source);
+        stream.Destroy(entity);
+        var destroyDelta = stream.Snapshot();
+        stream.Submit();
+        replica.Replay(FrameDelta.Deserialize(destroyDelta.AsSpan()));
+
+        stream.ParallelRecording = true;
+        stream.Set(entity, new Position(10, 20));
+        stream.Add(entity, new Health(30));
+        stream.Remove<Velocity>(entity);
+        stream.ParallelRecording = false;
+
+        var staleDelta = stream.Snapshot();
+        stream.Submit();
+        replica.Replay(FrameDelta.Deserialize(staleDelta.AsSpan()));
+
+        AssertIdenticalWorlds(source, replica, "parallel stale existing entity component commands");
+    }
+
+    [Fact]
+    public void Parallel_recording_keeps_pending_create_component_commands()
+    {
+        var source = new World();
+        var replica = new World();
+        var stream = new CommandStream(source) { ParallelRecording = true };
+
+        var created = stream.Create();
+        stream.Add(created, new Position(1, 2));
+        stream.Set(created, new Health(10));
+        stream.ParallelRecording = false;
+
+        var delta = stream.Snapshot();
+        stream.Submit();
+        replica.Replay(FrameDelta.Deserialize(delta.AsSpan()));
+
+        Assert.True(source.TryGet(created, out Position p));
+        Assert.Equal(new Position(1, 2), p);
+        Assert.True(source.TryGet(created, out Health h));
+        Assert.Equal(new Health(10), h);
+        AssertIdenticalWorlds(source, replica, "parallel pending create component commands");
+    }
+
+    public static IEnumerable<object[]> SeedData()
+    {
+        for (var s = 0; s <= 5000; s++) yield return new object[] { s };
+        foreach (var s in new[] { 65535, 999999, 2147483647 })
+            yield return new object[] { s };
+    }
+
+    [Fact]
+    public void Fuzz_10000_frames_seed_42_submit_and_replay_stay_in_sync()
+    {
+        RunFuzz(seed: 42, frames: 10000, syncCheckInterval: 1000);
+    }
+
     [Theory]
-    [InlineData(0)]
-    [InlineData(1)]
-    [InlineData(42)]
-    [InlineData(1337)]
-    [InlineData(2024)]
-    [InlineData(65535)]
-    public void Fuzz_10000_frames_submit_and_replay_stay_in_sync(int seed)
+    [MemberData(nameof(SeedData))]
+    public void Fuzz_frames_submit_and_replay_stay_in_sync(int seed)
+    {
+        RunFuzz(seed, frames: 30, syncCheckInterval: 10);
+    }
+
+    private static void RunFuzz(int seed, int frames, int syncCheckInterval)
     {
         // Dual property fuzz:
         //   1. Single-world correctness — after each frame's Submit, the source
@@ -1690,15 +1754,13 @@ public sealed class CommandStreamTests
         // same history as the source (EnsureReplayReservation contract).
         // CommandStream applies Add/Set/Remove in pass 1 and Destroy in pass 2, so
         // operations on entities destroyed later in the same frame are safe.
-        const int Frames = 10000;
-        const int SyncCheckInterval = 1000;
         var world = new World();
         var replica = new World();
         var stream = new CommandStream(world);
         var alive = new List<Entity>();
         var rng = new Random(seed); // Fixed seed for reproducibility
 
-        for (var frame = 0; frame < Frames; frame++)
+        for (var frame = 0; frame < frames; frame++)
         {
             // Prune dead entities from tracking list
             for (var i = alive.Count - 1; i >= 0; i--)
@@ -1766,7 +1828,7 @@ public sealed class CommandStreamTests
                 throw new InvalidOperationException($"Replay failed during fuzz seed={seed}, frame={frame}.", ex);
             }
             // Cheap gross-divergence check periodically to localize failures.
-            if ((frame + 1) % SyncCheckInterval == 0)
+            if ((frame + 1) % syncCheckInterval == 0)
             {
                 Assert.Equal(world.EntityCount, replica.EntityCount);
             }
@@ -1780,11 +1842,11 @@ public sealed class CommandStreamTests
 
         // Single-world correctness: tracking list matches the source's accounting.
         Assert.Equal(world.EntityCount, alive.Count);
-        Assert.True(alive.Count > 0); // selected fixed seeds + 10000 frames leave survivors
+        Assert.True(alive.Count > 0); // 30+ frames with these seeds leave survivors
 
         // Cross-world determinism: source (via Submit) == replica (via Replay),
         // verified bit-identical through WorldSnapshot serialization + SHA256.
-        AssertIdenticalWorlds(world, replica, $"source(Submit) vs replica(Replay) after 10000 frames, seed={seed}");
+        AssertIdenticalWorlds(world, replica, $"source(Submit) vs replica(Replay) after {frames} frames, seed={seed}");
     }
 
     // ══════════════════════════════════════════════════════════�?

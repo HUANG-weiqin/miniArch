@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream typed-store append-only recorder, compatible with FrameDelta. The per-entity deduplicating CommandBuffer was removed (YAGNI) — CommandStream is now the sole recorder.
-updated: 2026-06-30 (补 Replay fresh slot 与 cancelled pending create 约束)
+updated: 2026-06-30 (补 Replay fresh slot、parallel stale 命令与 cancelled pending create 约束)
 ---
 # Command Stream Runtime
 
@@ -119,7 +119,8 @@ HeroPipeline 回归测试涨幅：
 - **Submit vs Replay 命令顺序对齐**：`World.ReplayCore`（`World.cs:481`）是 `while (decoder.MoveNext()) switch`，**按字节流时序处理**——所谓"canonical 顺序（Reserve→Release→Create→Link→Unlink→Add→Set→Remove→Destroy）"实际是 `BuildDelta` 分段写入 buffer 的产物，不是 ReplayCore 硬编码。Submit 与 BuildDelta 顺序**完全对齐**（Create→Hierarchy→Ops→Destroy），所有命令组合（含 Link+Set、Link+Destroy、Unlink+Set 等同帧混合）下 Submit 与 Replay 都收敛：
   - CommandStream 的 `ComponentStore<T>.ApplyToWorld` 与 `.EmitToDelta` 都按相同 `_kinds` 数组顺序遍历，Submit 与 Replay 行为一致。
   - 验证：`Submit_on_source_equals_Replay_on_replica_for_safe_patterns` (`FrameDeltaDeterminismTests.cs:55`) 用 `BuildComplexScenario` 覆盖多样命令组合；`Submit_link_and_set_on_same_child_same_frame_converges_with_replay` / `Submit_link_parent_then_destroy_parent_same_frame_converges_with_replay` / `Submit_unlink_then_set_same_frame_converges_with_replay` 等针对性测试（`FrameDeltaDeterminismTests.cs:592` 起）覆盖所有同帧组合。
-- **Cancelled pending create 的单遍 emit 约束**（2026-06-30 修复）：`EmitPendingEntitiesToDelta` 必须保留每个 batch `Reserve + Release/Create` 的单遍顺序，不能退回“先所有 Reserve、再 Release/Create”。原因是同帧取消的 reserved id 可能被后续 `Create()` 复用，Replay 端必须先看到旧 id 的 `Release` 才能预定复用 id。副作用是 `Release` 会污染 free list，后续 fresh `Reserve(Entity(slotCount), v1)` 不能走普通 `ReserveDeferredEntity()`（它会先 pop free list），而应只在 `id == _entitySlotCount && version == 1` 时直接创建 fresh slot；`id > _entitySlotCount` 仍表示 replay 历史分叉，必须抛错。回归：`Pending_cancel_after_later_create_does_not_diverge_replay_allocator` + fuzz seeds `0/1/42/1337/2024/65535`。
+- **Cancelled pending create 的单遍 emit 约束**（2026-06-30 修复）：`EmitPendingEntitiesToDelta` 必须保留每个 batch `Reserve + Release/Create` 的单遍顺序，不能退回“先所有 Reserve、再 Release/Create”。原因是同帧取消的 reserved id 可能被后续 `Create()` 复用，Replay 端必须先看到旧 id 的 `Release` 才能预定复用 id。副作用是 `Release` 会污染 free list，后续 fresh `Reserve(Entity(slotCount), v1)` 不能走普通 `ReserveDeferredEntity()`（它会先 pop free list），而应只在 `id == _entitySlotCount && version == 1` 时直接创建 fresh slot；`id > _entitySlotCount` 仍表示 replay 历史分叉，必须抛错。回归：`Pending_cancel_after_later_create_does_not_diverge_replay_allocator`、短 seed sweep `0..5000/65535/999999/int.MaxValue`、长程 seed `42`。
+- **Component command 对 stale entity 必须录制期过滤**（2026-06-30 修复）：`Submit()` 对 stale `Add/Set/Remove` 会在 apply 时因 `TryGetLocation` 失败而跳过；`Snapshot()` 若仍 emit 这些命令，Replay 端会在 `ApplyRawAddOrSet` / `RemoveBoxed` 上抛错并分叉。因此单线程和 `ParallelRecording=true` 路径都要跳过既非 alive、也非本 batch pending 的 entity。并行路径要保留 pending create 的组件命令（pending entity 尚未 alive），同时跳过已 `Destroy()` 标记 unavailable 的 pending entity。回归：`Parallel_recording_skips_stale_existing_entity_component_commands`、`Parallel_recording_keeps_pending_create_component_commands`。
 
 ## CommandStream vs Friflo: Record 阶段瓶颈分析（2026-06-13，历史——移除 CommandBuffer 的依据）
 

@@ -164,14 +164,15 @@ public sealed class CommandStream : ICommandRecorder
     {
         if (_parallelMode)
         {
-            GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindAdd);
+            if (CanRecordParallelComponentCommand(entity))
+                GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindAdd);
             return;
         }
         if (_pendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
         {
             WritePendingComponent(batchIdx, component);
         }
-        else
+        else if (_world.IsAlive(entity))
         {
             GetOrCreateStore<T>().Append(entity, component, KindAdd);
         }
@@ -181,14 +182,15 @@ public sealed class CommandStream : ICommandRecorder
     {
         if (_parallelMode)
         {
-            GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindSet);
+            if (CanRecordParallelComponentCommand(entity))
+                GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindSet);
             return;
         }
         if (_pendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
         {
             WritePendingComponent(batchIdx, component);
         }
-        else
+        else if (_world.IsAlive(entity))
         {
             GetOrCreateStore<T>().Append(entity, component, KindSet);
         }
@@ -198,14 +200,15 @@ public sealed class CommandStream : ICommandRecorder
     {
         if (_parallelMode)
         {
-            GetOrCreateStoreParallel<T>().AppendConcurrent(entity, default!, KindRemove);
+            if (CanRecordParallelComponentCommand(entity))
+                GetOrCreateStoreParallel<T>().AppendConcurrent(entity, default!, KindRemove);
             return;
         }
         if (_pendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
         {
             MarkBatchComponentRemoved(batchIdx, CommandTypeInfo<T>.Type);
         }
-        else
+        else if (_world.IsAlive(entity))
         {
             GetOrCreateStore<T>().AppendRemove(entity);
         }
@@ -1333,6 +1336,19 @@ public sealed class CommandStream : ICommandRecorder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool IsEntityDestroyed(Entity entity) =>
         _unavailableEntities != null && _unavailableEntities.Contains(entity);
+
+    private bool CanRecordParallelComponentCommand(Entity entity)
+    {
+        if (_world.IsAlive(entity))
+            return true;
+
+        lock (_storeCreateLock)
+        {
+            if (_unavailableEntities != null && _unavailableEntities.Contains(entity))
+                return false;
+            return TryGetPendingBatch(entity, out _);
+        }
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void MarkUnavailable(Entity entity)
