@@ -14,12 +14,13 @@ return slice switch
     5 => RunSlice5(hostCount, frameCount),
     6 => RunSlice6(hostCount, frameCount),
     7 => RunSlice7(hostCount, frameCount),
+    8 => RunSlice8(hostCount, frameCount),
     _ => BadSlice(slice),
 };
 
 static int BadSlice(int slice)
 {
-    Console.Error.WriteLine($"Unknown slice: {slice}. Supported: 2-7.");
+    Console.Error.WriteLine($"Unknown slice: {slice}. Supported: 2-8.");
     return 2;
 }
 
@@ -207,6 +208,90 @@ static int RunSlice7(int hostCount, int frameCount)
     Console.WriteLine($"  peak entity count: {peakEntityCount} (chunked storage threshold ~32K for 28-byte bullets)");
     var triggeredChunked = peakEntityCount >= 32_000;
     Console.WriteLine($"  chunked storage triggered: {triggeredChunked}");
+    return 0;
+}
+
+// ── Slice 8: persistence + authority topology ────────────────────────
+// Phase A: WorldSnapshot round-trip. Snapshot host 0's world to a memory
+//          stream after running N frames, load it into a fresh world, verify
+//          CanonicalChecksum is byte-identical (binary serialization lossless).
+// Phase B: Authority + Mirror topology via SubmitAndSnapshotAsync. Authority
+//          records + pipelined submit+delta; mirrors replay the real-id delta
+//          and run the same deterministic systems. Verify all hosts converge.
+static int RunSlice8(int hostCount, int frameCount)
+{
+    Console.WriteLine($"BulletLockstep Slice 8 (persistence + authority/mirror topology)");
+    Console.WriteLine($"  {hostCount} mirrors, {frameCount} frames");
+    Console.WriteLine();
+
+    // ── Phase A: WorldSnapshot round-trip ──────────────────────────────
+    Console.WriteLine("[Phase A] WorldSnapshot round-trip");
+    var seedSim = new LockstepSimulator(hostCount: 2) { SpawnPlayers = true, SpawnBoss = true };
+    for (var f = 0; f < Math.Min(50, frameCount); f++)
+        seedSim.Tick(f);
+
+    var ms = new System.IO.MemoryStream();
+    MiniArch.Core.WorldSnapshot.Save(ms, seedSim.Hosts[0].World);
+    ms.Position = 0;
+    var loaded = MiniArch.Core.WorldSnapshot.Load(ms);
+
+    var origChecksum = seedSim.Hosts[0].World.CanonicalChecksum();
+    var loadedChecksum = loaded.CanonicalChecksum();
+    if (!BytesEqual(origChecksum, loadedChecksum))
+    {
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.WriteLine($"  FAIL: snapshot round-trip lost state");
+        Console.WriteLine($"        original: {Convert.ToHexString(origChecksum)}");
+        Console.WriteLine($"        loaded :  {Convert.ToHexString(loadedChecksum)}");
+        Console.ResetColor();
+        return 1;
+    }
+    Console.ForegroundColor = ConsoleColor.Green;
+    Console.WriteLine($"  PASS: snapshot round-trip byte-identical ({ms.Length:N0} bytes)");
+    Console.ResetColor();
+    Console.WriteLine();
+
+    // ── Phase B: Authority + Mirror via SubmitAndSnapshotAsync ─────────
+    Console.WriteLine("[Phase B] Authority + Mirror (SubmitAndSnapshotAsync)");
+    var authSim = new AuthorityMirrorSimulator(mirrorCount: hostCount, spawnBoss: true);
+    GcBaseline(out var gc0, out var gc1, out var gc2, out var bytes);
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+
+    int mismatch = -1;
+    for (var f = 0; f < frameCount; f++)
+    {
+        if (!authSim.Tick(f))
+        {
+            mismatch = f;
+            break;
+        }
+    }
+
+    sw.Stop();
+    GcDelta(gc0, gc1, gc2, bytes, out var gc, out var alloc);
+
+    if (mismatch >= 0)
+    {
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.WriteLine($"  FAIL: divergence at frame {mismatch}");
+        Console.WriteLine($"        authority: {Convert.ToHexString(authSim.Authority.Checksum())}");
+        foreach (var m in authSim.Mirrors)
+            Console.WriteLine($"        mirror:    {Convert.ToHexString(m.CanonicalChecksum())}");
+        Console.ResetColor();
+        return 1;
+    }
+
+    Console.ForegroundColor = ConsoleColor.Green;
+    Console.WriteLine($"  PASS: all {frameCount} frames consistent across " +
+                      $"1 authority + {hostCount} mirrors");
+    Console.ResetColor();
+    Console.WriteLine($"  Time:      {sw.ElapsedMilliseconds} ms " +
+                      $"({(double)sw.ElapsedMilliseconds / frameCount:F3} ms/frame)");
+    Console.WriteLine($"  GC:        {gc}");
+    Console.WriteLine($"  Allocated: {alloc:N0} bytes ({(double)alloc / frameCount:N0} bytes/frame)");
+    Console.WriteLine();
+    var stats = authSim.Authority.World.GetStats();
+    Console.WriteLine($"  authority: {stats.EntityCount} alive, {stats.ArchetypeCount} archetypes");
     return 0;
 }
 
