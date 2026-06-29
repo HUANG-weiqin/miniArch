@@ -12,7 +12,7 @@ public static class TurnSerialBootstrap
     {
         ArgumentNullException.ThrowIfNull(runtime);
 
-        MiniArch.Entity context = runtime.Recorder.CreateImmediate();
+        MiniArch.Entity context = runtime.Recorder.Create();
         runtime.Recorder.Add(context, new TurnSerialContext());
         runtime.Recorder.Add(context, new TurnRoundIndex(0));
         return context;
@@ -30,7 +30,7 @@ public static class TurnSerialBootstrap
     {
         ArgumentNullException.ThrowIfNull(runtime);
 
-        MiniArch.Entity request = runtime.Recorder.CreateImmediate();
+        MiniArch.Entity request = runtime.Recorder.Create();
         runtime.Recorder.Add(request, new Request());
         runtime.Recorder.Add(request, new RequestTarget(character));
         runtime.Recorder.Add(request, TurnSerialIds.EndTurnRule);
@@ -42,7 +42,7 @@ public static class TurnSerialBootstrap
     {
         ArgumentNullException.ThrowIfNull(runtime);
 
-        MiniArch.Entity request = runtime.Recorder.CreateImmediate();
+        MiniArch.Entity request = runtime.Recorder.Create();
         runtime.Recorder.Add(request, new Request());
         runtime.Recorder.Add(request, new RequestTarget(card));
         runtime.Recorder.Add(request, TurnSerialIds.CardPlayRule);

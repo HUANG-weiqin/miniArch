@@ -10,20 +10,13 @@ namespace MiniArch.Core;
 public interface ICommandRecorder
 {
     /// <summary>
-    /// Records a deferred create. Returns a placeholder entity (Id &lt; 0) that is
-    /// resolved to a real id at <see cref="Submit"/> time, deterministic across
-    /// hosts that share the same record sequence. The placeholder is only valid
-    /// within this recorder during the current frame; do not store it across
-    /// frames or embed it in component data.
+    /// Records a create. When <see cref="CommandStream.DeferredEntities"/> is
+    /// <c>true</c>, returns a placeholder entity (Id &lt; 0) that is resolved
+    /// to a real id at <see cref="Submit"/> time, deterministic across hosts
+    /// that share the same record sequence. When <c>false</c> (default),
+    /// reserves a real entity id immediately.
     /// </summary>
     Entity Create();
-
-    /// <summary>
-    /// Reserves a real entity id immediately. Use when the returned reference
-    /// must remain stable across frames or be embedded in component data
-    /// (e.g. as a <c>RequestTarget</c> field).
-    /// </summary>
-    Entity CreateImmediate();
 
     /// <summary>Adds a component to a created entity.</summary>
     void Add<T>(Entity entity, T component) where T : unmanaged;
@@ -43,14 +36,12 @@ public interface ICommandRecorder
     /// <summary>Unlinks a child entity from its parent.</summary>
     void Unlink(Entity child);
 
-    /// <summary>Records a deep clone of an entity and its child subtree. Returns a placeholder.</summary>
-    Entity Clone(Entity source);
-
     /// <summary>
-    /// Clones an entity and reserves a real id immediately for the clone root.
-    /// Use when the returned reference must remain stable across frames.
+    /// Records a deep clone of an entity and its child subtree.
+    /// When <see cref="CommandStream.DeferredEntities"/> is <c>true</c>,
+    /// returns a placeholder; otherwise reserves a real id immediately.
     /// </summary>
-    Entity CloneImmediate(Entity source);
+    Entity Clone(Entity source);
 
     /// <summary>
     /// Applies all recorded commands to the World, then clears the recorder.

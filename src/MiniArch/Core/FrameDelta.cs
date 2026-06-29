@@ -7,6 +7,35 @@ namespace MiniArch.Core;
 /// Operations are stored in temporal order, making the delta suitable for
 /// deterministic replay, merging, and zero-copy serialization.
 /// </summary>
+/// <remarks>
+/// <para>
+/// <b>Two entity-id modes:</b> a <c>FrameDelta</c> can carry either
+/// <b>placeholder</b> entities (<c>Entity(-1, seq)</c>) or <b>real</b>
+/// entities. The wire format is identical — both encode entity id and
+/// version as signed LEB128 varints — so the consumer must know which
+/// mode to expect.
+/// </para>
+/// <list type="bullet">
+/// <item>
+/// <b>Placeholder delta</b> (multi-host lockstep): produced by
+/// <see cref="CommandStream.Snapshot"/> when
+/// <see cref="CommandStream.DeferredEntities"/> is <c>true</c>. Each
+/// replaying <see cref="World"/> assigns its own local ids by mapping
+/// <c>seq→local real</c>. Two hosts replaying the same delta will
+/// converge to identical world state even though entity ids may differ.
+/// </item>
+/// <item>
+/// <b>Real-id delta</b>: produced by
+/// <see cref="CommandStream.SubmitAndSnapshotAsync"/> (always) or by
+/// <see cref="CommandStream.Snapshot"/> when
+/// <see cref="CommandStream.DeferredEntities"/> is <c>false</c>
+/// (default). Ids are already resolved by the producer. Mirror clients
+/// must have synchronized id allocators (e.g. by replaying every frame
+/// since frame 0). <c>World.EnsureReplayReservation</c> enforces this
+/// invariant and throws if the allocator has diverged.
+/// </item>
+/// </list>
+/// </remarks>
 public sealed class FrameDelta
 {
     internal byte[] _buffer = Array.Empty<byte>();

@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream typed-store append-only recorder, compatible with FrameDelta. The per-entity deduplicating CommandBuffer was removed (YAGNI) — CommandStream is now the sole recorder.
-updated: 2026-06-26 (移除 CommandBuffer, CommandStream 成为唯一录制器)
+updated: 2026-06-29 (DeferredEntities flag 控制 placeholder vs immediate 模式)
 ---
 # Command Stream Runtime
 
@@ -21,14 +21,14 @@ updated: 2026-06-26 (移除 CommandBuffer, CommandStream 成为唯一录制器)
   - `src/MiniArch/Core/FrameDelta.cs`：帧快照 IR，可保留并重放到同步 world
   - `src/MiniArch/Core/World.cs`（+ partial 文件）：`ReserveDeferredEntity`、`ReleaseReservedEntity`、`Replay(FrameDelta)`
 - 数据流 / 控制流：
-  - 工作线程通过 `CommandStream` 只记录命令；`Create()` 立刻从 world 预留真实 `Entity`
+  - 工作线程通过 `CommandStream` 只记录命令；`Create()` 在 `DeferredEntities=false`（默认）时立刻从 world 预留真实 `Entity`，`DeferredEntities=true` 时返回 placeholder `Entity(-1, seq)`
   - recording 完成后可选：`Submit()`（直接执行到 world）→ `Snapshot()`（生成自包含 `FrameDelta`）→ `SubmitAndSnapshotAsync()`（并行执行 Submit + BuildDelta）
   - `Clone()`：深拷贝源实体及子树到 pending batch，用于 snapshot/replay 场景
   - `Add/Set` 进入按组件类型分组的 typed store；`Remove/Destroy` 进入 structural log；created entity 的组件录制期分流到 created side table（per-batch 单链表），提交时一次性 materialize；`Snapshot()` 从 typed stores + side table/log 生成 `FrameDelta`
 
 ## 关键约束
 
-- `Create()` 仍使用 `World.ReserveDeferredEntity()`，所以生成的 `FrameDelta` 可以保留确定的 entity id/version。
+- `Create()` 在 `DeferredEntities=false` 时使用 `World.ReserveDeferredEntity()` 分配 real id；`DeferredEntities=true` 时返回 placeholder，不碰 World id allocator。
 - 组件数据按 typed value 记录，`Submit()` 直接写 typed value，`Snapshot()` 再转成 `FrameDelta` 所需 raw bytes。
 - component `Add/Set` 按类型批处理，不承诺与 `Remove/Destroy` 的严格全局追加顺序；同帧冲突命令的净效果由调用方负责。
 - created entity 组件在 record 时分流，避免提交时 O(created × commands) 扫描整条日志。
@@ -46,7 +46,7 @@ updated: 2026-06-26 (移除 CommandBuffer, CommandStream 成为唯一录制器)
 - `Snapshot()` 用于跨 world 同步或延迟回放；无此需求时优先用 `Submit()`
 - `CommandStream.Snapshot()` 首版同步生成 `FrameDelta`；后续可在同一日志形状上增加 async/compile 变体。
 - `SubmitAndSnapshotAsync()`：换出 buffer 状态后，主线程 Submit 与后台线程 BuildDelta 并行执行
-- 记录期返回真实 `Entity`，但只是 reserved handle（`world.IsAlive(entity)` 仍为 false）
+- `DeferredEntities=false` 时记录期返回真实 `Entity`（reserved handle，`world.IsAlive(entity)` 仍为 false）；`DeferredEntities=true` 时返回 placeholder `Entity(-1, seq)`（单帧有效，不跨帧）
 - query layout generation 在 replay 期间被抑制，整批结束后只递增一次
 - `ICommandRecorder` 接口存在但仅用于测试抽象层，CommandStream 实现它
 - `Clone()` 新增：完整深拷贝，用于需要保留录制状态的场景
@@ -153,7 +153,29 @@ HeroPipeline 回归测试涨幅：
 
 - **CS record**：合并 `GetOrCreateStore<T>` 和 `AppendEntry` 为一步，预分配 store 数组避免 resize。差距已经较小（1.5x），ROI 有限。
 
-## FrameDelta 决定性与帧同步（2026-06-14）
+## FrameDelta 两种 entity-id 模式
+
+`FrameDelta` 的 wire format 对两种模式是相同的（signed LEB128 varint 编码 entity id + version），区别只在 **id 是 placeholder 还是 real**。模式由 `CommandStream.DeferredEntities` flag 控制。
+
+| 模式 | flag | 生产者 | id 格式 | 消费者要求 | 场景 |
+|---|---|---|---|---|---|
+| **Placeholder delta** | `true` | `Snapshot()` | `Entity(-1, seq)` — 未分配 host id | replay 端各自建 `seq→local real` 映射，自行分配 | 多 host lockstep |
+| **Real-id delta** | `false`（默认） | `Snapshot()` 或 `SubmitAndSnapshotAsync()` | `Entity(realId, version)` — 已分配 host id | replay 端 id allocator 必须与源同步（`EnsureReplayReservation` 校验） | 单机跨 world 同步 / 权威服务器 + 镜像客户端 |
+
+**注意**：`SubmitAndSnapshotAsync()` 始终输出 real-id delta，忽略 `DeferredEntities` flag。
+
+**关键约束：**
+- `DeferredEntities=true` 时 `Snapshot()` 路径**禁止出现 immediate entity**（Id >= 0 的 batch entity）。检测到即抛 `InvalidOperationException`。
+- `Submit()` 单机路径两种模式都能用——它不走 delta 序列化，`ResolveDeferredCreates` 在本地兑成 real id。
+- wire format 本身是**模式无关**的：producer 写什么 id，consumer 就读到什么 id。
+
+### 选择指南
+
+```
+用户场景：多个独立 world 各自创建实体，需要互相同步？
+  ├── 是 → Snapshot() 走 placeholder delta，每个 host Replay 自己分配 id
+  └── 否 → 单机用 Submit()，服务器镜像用 SubmitAndSnapshotAsync()
+```
 
 ### 已验证的决定性属性
 

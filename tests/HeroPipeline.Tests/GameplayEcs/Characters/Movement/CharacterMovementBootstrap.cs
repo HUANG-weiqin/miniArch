@@ -9,7 +9,7 @@ public static class CharacterMovementBootstrap
     {
         ArgumentNullException.ThrowIfNull(runtime);
 
-        MiniArch.Entity request = runtime.Recorder.CreateImmediate();
+        MiniArch.Entity request = runtime.Recorder.Create();
         runtime.Recorder.Add(request, new Request());
         runtime.Recorder.Add(request, new RequestTarget(target));
         runtime.Recorder.Add(request, CharacterMovementIds.MoveRule);

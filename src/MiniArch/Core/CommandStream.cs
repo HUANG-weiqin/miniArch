@@ -86,6 +86,24 @@ public sealed class CommandStream : ICommandRecorder
 
     private bool _parallelMode;
 
+    /// <summary>
+    /// When <c>true</c>, <see cref="Create"/> and <see cref="Clone"/> produce
+    /// placeholder entities (negative ids) instead of allocating real ids from
+    /// the host <see cref="World"/>. <see cref="Snapshot"/> then emits a
+    /// placeholder-id <see cref="FrameDelta"/> suitable for multi-host lockstep
+    /// where each peer owns an independent <see cref="World"/> and id allocator.
+    /// When <c>false</c> (default), <see cref="Create"/> and <see cref="Clone"/>
+    /// allocate real ids immediately, and <see cref="Snapshot"/> resolves any
+    /// deferred placeholders before building a real-id delta.
+    /// </summary>
+    public bool DeferredEntities
+    {
+        get => _deferredEntities;
+        set => _deferredEntities = value;
+    }
+
+    private bool _deferredEntities;
+
     // ── Record API ────────────────────────────────────────────────────
 
     public Entity Create()
@@ -93,19 +111,9 @@ public sealed class CommandStream : ICommandRecorder
         if (_parallelMode)
         {
             lock (_storeCreateLock)
-                return CreateDeferredImpl();
+                return _deferredEntities ? CreateDeferredImpl() : CreateImpl();
         }
-        return CreateDeferredImpl();
-    }
-
-    public Entity CreateImmediate()
-    {
-        if (_parallelMode)
-        {
-            lock (_storeCreateLock)
-                return CreateImpl();
-        }
-        return CreateImpl();
+        return _deferredEntities ? CreateDeferredImpl() : CreateImpl();
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -254,34 +262,22 @@ public sealed class CommandStream : ICommandRecorder
             : CloneImpl(source, location);
     }
 
-    public Entity CloneImmediate(Entity source)
-    {
-        if (!_world.TryGetLocation(source, out var location))
-            throw new InvalidOperationException($"Cannot clone entity {source}: it is no longer alive.");
-
-        return _parallelMode
-            ? CloneConcurrentImmediate(source, location)
-            : CloneImplImmediate(source, location);
-    }
-
     private Entity CloneConcurrent(Entity source, EntityInfo info)
     {
         lock (_storeCreateLock)
             return CloneImpl(source, info);
     }
 
-    private Entity CloneConcurrentImmediate(Entity source, EntityInfo info)
-    {
-        lock (_storeCreateLock)
-            return CloneImplImmediate(source, info);
-    }
-
     private Entity CloneImpl(Entity source, EntityInfo info)
     {
-        var clone = CreateDeferredImpl();
-        TryGetPendingBatch(clone, out var batchIdx);
-        CloneComponents(source, info, clone, batchIdx, deferred: true);
-        return clone;
+        if (_deferredEntities)
+        {
+            var clone = CreateDeferredImpl();
+            TryGetPendingBatch(clone, out var batchIdx);
+            CloneComponents(source, info, clone, batchIdx, deferred: true);
+            return clone;
+        }
+        return CloneImplImmediate(source, info);
     }
 
     private Entity CloneImplImmediate(Entity source, EntityInfo info)
@@ -402,14 +398,79 @@ public sealed class CommandStream : ICommandRecorder
 
     // ── Snapshot / SubmitAndSnapshotAsync ─────────────────────────────
 
+    /// <summary>
+    /// Produces a <see cref="FrameDelta"/> from the recorded commands without
+    /// applying them to the local <see cref="World"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// When <see cref="DeferredEntities"/> is <c>false</c> (default), deferred
+    /// placeholders are first resolved into host-local real ids, producing a
+    /// <b>real-id delta</b>. This is the original single-host behavior.
+    /// </para>
+    /// <para>
+    /// When <see cref="DeferredEntities"/> is <c>true</c>, the delta contains
+    /// <b>placeholder</b> entities (negative ids). Each replaying host assigns
+    /// its own local ids in deterministic order, making this the lockstep-safe
+    /// code path for multi-host scenarios.
+    /// </para>
+    /// <para>
+    /// For the relay-only flow (produce delta, do not apply locally),
+    /// call <c>Snapshot()</c> then <c>Clear()</c>. The source host then
+    /// replays the delta back into its own world — together with all peer
+    /// deltas — achieving the deterministic multi-host guarantee.
+    /// </para>
+    /// </remarks>
     public FrameDelta Snapshot()
     {
-        ResolveDeferredCreates();
-        var delta = new FrameDelta();
-        BuildDelta(delta);
-        return delta;
+        if (!_deferredEntities)
+        {
+            ResolveDeferredCreates();
+            var delta = new FrameDelta();
+            BuildDelta(delta);
+            return delta;
+        }
+        ThrowIfSnapshotHasImmediateEntities();
+        var d = new FrameDelta();
+        BuildDelta(d);
+        return d;
     }
 
+    private void ThrowIfSnapshotHasImmediateEntities()
+    {
+        for (var i = 0; i < _pendingBatchCount; i++)
+        {
+            if (_batchCanceled[i]) continue;
+            if (_batchEntities[i].Id >= 0)
+                throw new InvalidOperationException(
+                    "Snapshot() with DeferredEntities=true contains immediate entities. " +
+                    "Use Submit() / SubmitAndSnapshotAsync() for single-host real-id scenarios.");
+        }
+    }
+
+    /// <summary>
+    /// Submits recorded commands to the local <see cref="World"/> and
+    /// simultaneously builds a <see cref="FrameDelta"/> on a background
+    /// thread. The returned delta always contains <b>real</b> entity ids
+    /// because the host world owns the authoritative id allocator.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the code path for an authoritative server that wants to
+    /// apply changes locally while also forwarding a delta to mirror
+    /// clients that must maintain id synchronization with the server.
+    /// </para>
+    /// <para>
+    /// Always produces a <b>real-id delta</b> — deferred placeholders are
+    /// resolved into the host's own ids before building the delta,
+    /// regardless of <see cref="DeferredEntities"/>. Mirror clients
+    /// replaying this delta must have an id allocator synchronized with
+    /// the server (e.g. by replaying every frame from frame 0). For
+    /// multi-host lockstep where each peer owns an independent world,
+    /// use <see cref="Snapshot"/> with
+    /// <see cref="DeferredEntities"/> set to <c>true</c> instead.
+    /// </para>
+    /// </remarks>
     public Task<FrameDelta> SubmitAndSnapshotAsync()
     {
         if (!HasAnyCommands())
@@ -734,6 +795,10 @@ public sealed class CommandStream : ICommandRecorder
         // ordering where a cancelled entity's id may be recycled by a later
         // Create within the same frame — the two-pass approach (all Reserves
         // before all Releases) breaks this dependency.
+        //
+        // Placeholder entities (Id < 0) carry deferred creates: they have not
+        // yet been resolved to host-local real ids. Snapshots emit them as-is
+        // so that each replaying host assigns its own ids independently.
         for (var i = 0; i < pendingBatchCount; i++)
         {
             var entity = batchEntities[i];
@@ -743,7 +808,11 @@ public sealed class CommandStream : ICommandRecorder
             // by design: the whole point of deferred is to avoid touching the world
             // id allocator until submit.
             if (entity.Id < 0)
-                continue;
+            {
+                if (batchCanceled[i]) continue;
+                // Committed deferred: emit Reserve + Create with placeholder entity.
+                // The replay side will assign a local id when it reads the Reserve op.
+            }
             delta.AddReserve(entity);
 
             if ((uint)i < (uint)batchCanceled.Length && batchCanceled[i])
@@ -1138,18 +1207,12 @@ public sealed class CommandStream : ICommandRecorder
                 var cloneParent = cloneStack[stackCount];
                 if (!_world.TryGetLocation(srcChild, out var childLocation)) continue;
 
-                Entity cloneChild;
+                var cloneChild = Create();
                 int batchIdx;
                 if (deferred)
-                {
-                    cloneChild = Create();
                     TryGetPendingBatch(cloneChild, out batchIdx);
-                }
                 else
-                {
-                    cloneChild = CreateImmediate();
                     batchIdx = _pendingBatch[cloneChild.Id];
-                }
                 var archetype = childLocation.Archetype;
                 var sourceRow = childLocation.RowIndex;
                 var sig = archetype.Signature.AsSpan();

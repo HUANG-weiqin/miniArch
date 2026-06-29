@@ -8,7 +8,7 @@
 |---|---|
 | Workspace（仓库导航/脚本/流程） | `kb-repo-overview.md`、`kb-profiling-workflow.md`、`kb-throughput-workflow.md` |
 | MiniArch.Core（ECS 运行时） | `kb-core-ecs.md`、`kb-architecture-review.md`、`kb-chunk-storage.md`、`kb-cache-optimization.md` |
-| MiniArch.Core CommandStream | `kb-command-stream.md`、`kb-deferred-create-design.md`（多 host placeholder-in-delta 改造进度/开放决策） |
+| MiniArch.Core CommandStream | `kb-command-stream.md`、`kb-deferred-create-design.md`（DeferredEntities flag：placeholder/immediate 模式切换、多 host lockstep 设计） |
 | MiniArch.Core Query | `kb-query-invalidation.md`、`kb-parallel-query.md` |
 | MiniArch.Core Snapshot | `kb-snapshot-persistence.md` |
 | MiniArch.Core Hierarchy | `kb-hierarchy-runtime.md` |
@@ -32,7 +32,7 @@
 - **Cache/内存优化** → `kb-cache-optimization.md`
 - **Query 失效机制** → `kb-query-invalidation.md`
 - **CommandStream** → `kb-command-stream.md`
-- **Deferred Create 多 host 改造进度** → `kb-deferred-create-design.md`（开放决策 + 已知 bug + 实施计划）
+- **Deferred Create 多 host 设计** → `kb-deferred-create-design.md`（DeferredEntities flag + ReplayCore placeholder 映射）
 - **Archive/Snapshot** → `kb-snapshot-persistence.md`
 - **Hierarchy** → `kb-hierarchy-runtime.md`
 - **用户 API 分层** → `kb-user-api-layering.md`
@@ -52,6 +52,14 @@
 - **FrameDelta 热路径 struct 大幅缩小**（Movement +50% / Attack +29%）
 - **ComponentMask 扩展为 512-bit**（8 × `ulong`），覆盖 component id 0..511 的快速匹配
 - **新增分段存储模式**：Archetype 超过阈值后自动切换为多 Segment 模式（详见 `kb-chunk-storage.md`）
+
+## 重大变更摘要（2026-06-29 DeferredEntities flag）
+
+- **`CommandStream.DeferredEntities` flag**：`false`（默认）时 `Create()`/`Clone()` 分配 real id（单机）；`true` 时返回 placeholder（多 host lockstep）。`Snapshot()` 按 flag 输出 placeholder delta 或 real-id delta。`SubmitAndSnapshotAsync()` 始终输出 real-id delta。
+- **删除 `CreateImmediate()` / `CloneImmediate()`**：公共 API 和 `ICommandRecorder` 接口同步移除。`DeferredEntities=false` 时 `Create()`/`Clone()` 即原 immediate 行为。
+- **`Snapshot()` 不再泄漏 host world id**：`DeferredEntities=true` 时跳过 `ResolveDeferredCreates()`，delta 保留 placeholder。
+- **ReplayCore placeholder→local 映射**：`_replayPlaceholderMap` 按 seq 索引，每帧 `mapLen=0` 重置防 stale。`ResolveReplayEntity` 加 bounds check。
+- **`_replayPlaceholderMapLen` 字段删除**：mapLen 现在是 ReplayCore 局部变量，不复用跨帧。
 
 ## 重大变更摘要（2026-06-28 CommandStream API 统一）
 

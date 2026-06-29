@@ -47,6 +47,13 @@ public sealed partial class World : IDisposable
     // per-call in steady state.
     private readonly Dictionary<Archetype, int> _replayCreateCounts = new();
 
+    // Placeholder → local real entity mapping for FrameDelta replay.
+    // Indexed by placeholder seq (Entity.Version when Id == -1).
+    // Reused across ReplayCore calls — never allocated per-call in steady state.
+    // mapLen resets to 0 at the start of each ReplayCore call to prevent stale
+    // mappings from previous frames leaking into the current replay.
+    private Entity[] _replayPlaceholderMap = [];
+
     private readonly HierarchyTable _hierarchy = new();
     private EntityRecord[] _records;
     private int _entitySlotCount;
@@ -531,6 +538,13 @@ public sealed partial class World : IDisposable
     /// Replays a frame delta into this world: reserves entities, materializes created entities,
     /// applies hierarchy link/unlink, add/set/remove components, and destroys entities in standard order.
     /// </summary>
+    /// <remarks>
+    /// Supports both placeholder deltas (<see cref="CommandStream.Snapshot"/>) and real-id deltas
+    /// (<see cref="CommandStream.SubmitAndSnapshotAsync"/>). Placeholder entities (<c>Id == -1</c>)
+    /// allocate fresh local ids via <c>ReserveDeferredEntityBatch</c> and are mapped through a
+    /// per-replay <c>seq → local real</c> table. Real-id entities go through
+    /// <see cref="EnsureReplayReservation"/> to verify allocator synchronization.
+    /// </remarks>
     public void Replay(FrameDelta delta) => ReplayCore(delta);
 
     private unsafe void ReplayCore(FrameDelta delta)
@@ -541,6 +555,9 @@ public sealed partial class World : IDisposable
         // Pre-scan: size archetype storage and the entity record array up-front
         // so the main pass never hits a doubling resize on the hot Create path.
         PreScanForCapacity(delta);
+
+        var map = _replayPlaceholderMap;
+        var mapLen = 0;
 
         // Pin the backing buffer once for the entire replay. Every Create op
         // reads component data from this buffer via direct pointer arithmetic,
@@ -554,50 +571,69 @@ public sealed partial class World : IDisposable
                 switch (decoder.Kind)
                 {
                     case DeltaOpKind.Reserve:
-                        EnsureReplayReservation(decoder.Entity);
+                    {
+                        var raw = decoder.Entity;
+                        if (raw.Id < 0)
+                        {
+                            // Placeholder: allocate a fresh local id.
+                            var real = ReserveDeferredEntityBatch();
+                            EnsurePlaceholderMap(ref map, ref mapLen, raw.Version);
+                            map[raw.Version] = real;
+                        }
+                        else
+                        {
+                            EnsureReplayReservation(raw);
+                        }
                         break;
+                    }
 
                     case DeltaOpKind.Release:
-                        ReleaseReservedEntity(decoder.Entity);
+                        ReleaseReservedEntity(ResolveReplayEntity(decoder.Entity, map, mapLen));
                         break;
 
                     case DeltaOpKind.Create:
-                        ReplayCreateOp(ref decoder, bufPtr);
+                        ReplayCreateOpResolved(ResolveReplayEntity(decoder.Entity, map, mapLen), ref decoder, bufPtr);
                         break;
 
                     case DeltaOpKind.Link:
                     {
-                        var parent = decoder.ReadExtraEntity();
-                        Link(parent, decoder.Entity);
+                        var child = ResolveReplayEntity(decoder.Entity, map, mapLen);
+                        var parent = ResolveReplayEntity(decoder.ReadExtraEntity(), map, mapLen);
+                        Link(parent, child);
                         break;
                     }
 
                     case DeltaOpKind.Unlink:
-                        Unlink(decoder.Entity);
+                        Unlink(ResolveReplayEntity(decoder.Entity, map, mapLen));
                         break;
 
                     case DeltaOpKind.Add:
                     case DeltaOpKind.Set:
                     {
+                        var entity = ResolveReplayEntity(decoder.Entity, map, mapLen);
                         var comp = decoder.ReadComponentType();
                         var dataSize = decoder.ReadVarint();
                         var dataStart = decoder.CurrentPosition;
                         _ = decoder.ReadBytes(dataSize);
-                        ApplyRawAddOrSet(decoder.Entity, comp, bufPtr + dataStart);
+                        ApplyRawAddOrSet(entity, comp, bufPtr + dataStart);
                         break;
                     }
 
                     case DeltaOpKind.Remove:
                     {
+                        var entity = ResolveReplayEntity(decoder.Entity, map, mapLen);
                         var comp = decoder.ReadComponentType();
-                        RemoveBoxed(decoder.Entity, comp);
+                        RemoveBoxed(entity, comp);
                         break;
                     }
 
                     case DeltaOpKind.Destroy:
-                        if (IsAlive(decoder.Entity))
-                            Destroy(decoder.Entity);
+                    {
+                        var entity = ResolveReplayEntity(decoder.Entity, map, mapLen);
+                        if (IsAlive(entity))
+                            Destroy(entity);
                         break;
+                    }
 
                     default:
                         throw new InvalidOperationException(
@@ -605,6 +641,33 @@ public sealed partial class World : IDisposable
                 }
             }
         }
+
+        _replayPlaceholderMap = map;
+    }
+
+    // ── Replay placeholder helpers ─────────────────────────────────────
+
+    private void EnsurePlaceholderMap(ref Entity[] map, ref int mapLen, int seq)
+    {
+        if (seq < mapLen) return;
+        var newLen = map.Length == 0 ? 64 : map.Length;
+        while (newLen <= seq) newLen *= 2;
+        Array.Resize(ref map, newLen);
+        for (var i = mapLen; i < newLen; i++)
+            map[i] = new Entity(-1, -1); // sentinel: not yet mapped
+        mapLen = newLen;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Entity ResolveReplayEntity(Entity wireEntity, Entity[] map, int mapLen)
+    {
+        if (wireEntity.Id >= 0) return wireEntity;
+        if ((uint)wireEntity.Version >= (uint)mapLen ||
+            map[wireEntity.Version].Id < 0)
+            throw new InvalidOperationException(
+                $"Unresolved placeholder entity seq={wireEntity.Version} in FrameDelta replay. " +
+                "The delta is malformed: a placeholder appears without a preceding Reserve op.");
+        return map[wireEntity.Version];
     }
 
     /// <summary>
@@ -630,7 +693,11 @@ public sealed partial class World : IDisposable
         while (scanner.MoveNext())
         {
             var id = scanner.Entity.Id;
-            if (id > maxEntityId) maxEntityId = id;
+            // Placeholder entities (Id < 0) have not been allocated yet;
+            // their real ids are assigned during the main replay pass.
+            // Skip them for maxEntityId tracking — the entity record array
+            // will grow on-demand inside ReserveDeferredEntityBatch.
+            if (id >= 0 && id > maxEntityId) maxEntityId = id;
 
             switch (scanner.Kind)
             {
@@ -664,7 +731,7 @@ public sealed partial class World : IDisposable
                 case DeltaOpKind.Link:
                 {
                     var parent = scanner.ReadExtraEntity();
-                    if (parent.Id > maxEntityId) maxEntityId = parent.Id;
+                    if (parent.Id >= 0 && parent.Id > maxEntityId) maxEntityId = parent.Id;
                     break;
                 }
 
@@ -696,15 +763,12 @@ public sealed partial class World : IDisposable
     }
 
     /// <summary>
-    /// Materializes a single Create op with zero steady-state allocation.
-    /// Dispatches to <see cref="ReplayCreateOpCore"/> with either a stackalloc'd
-    /// scratch (common case, components &lt;= 32) or an ArrayPool rental (rare
-    /// large-component case). Splitting the dispatch from the body lets the
-    /// compiler prove the stackalloc spans cannot escape.
+    /// Materializes a single Create op with a pre-resolved entity.
+    /// The entity may have been resolved from a placeholder via
+    /// <see cref="ResolveReplayEntity"/> in <see cref="ReplayCore"/>.
     /// </summary>
-    private unsafe void ReplayCreateOp(ref FrameDelta.OpDecoder decoder, byte* bufPtr)
+    private unsafe void ReplayCreateOpResolved(Entity entity, ref FrameDelta.OpDecoder decoder, byte* bufPtr)
     {
-        var entity = decoder.Entity;
         var compCount = decoder.ReadVarint();
         if (compCount < 0)
             throw new InvalidOperationException("Corrupt FrameDelta: negative component count.");
@@ -745,7 +809,7 @@ public sealed partial class World : IDisposable
     }
 
     /// <summary>
-    /// Body of <see cref="ReplayCreateOp"/>. Takes the scratch spans as scoped
+    /// Body of <see cref="ReplayCreateOpResolved"/>. Takes the scratch spans as scoped
     /// parameters so the stackalloc path can pass stack memory without the
     /// compiler worrying about escape.
     /// </summary>

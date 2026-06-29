@@ -18,7 +18,7 @@ public sealed class CommandStreamTests
         var world = new World();
         var stream = new CommandStream(world);
 
-        var entity = stream.CreateImmediate();
+        var entity = stream.Create();
         stream.Add(entity, new Position(1, 2));
         stream.Add(entity, new Velocity(3, 4));
 
@@ -63,7 +63,7 @@ public sealed class CommandStreamTests
         var existing = world.Create(new Position(1, 2));
         var stream = new CommandStream(world);
 
-        var created = stream.CreateImmediate();
+        var created = stream.Create();
         stream.Add(created, new Position(3, 4));
         stream.Destroy(created);
         stream.Destroy(existing);
@@ -81,7 +81,7 @@ public sealed class CommandStreamTests
         var existing = world.Create(new Position(0, 0));
         var stream = new CommandStream(world);
 
-        var created = stream.CreateImmediate();
+        var created = stream.Create();
         stream.Add(created, new Position(1, 2));
         stream.Set(existing, new Position(3, 4));
 
@@ -150,7 +150,7 @@ public sealed class CommandStreamTests
         var entity = world.Create(new Position(1, 2), new Velocity(3, 4));
         var stream = new CommandStream(world);
 
-        var clone = stream.CloneImmediate(entity);
+        var clone = stream.Clone(entity);
         Assert.True(stream.Submit());
 
         Assert.True(world.IsAlive(clone));
@@ -175,7 +175,7 @@ public sealed class CommandStreamTests
         world.Link(parent, child2);
 
         var stream = new CommandStream(world);
-        var clone = stream.CloneImmediate(parent);
+        var clone = stream.Clone(parent);
         Assert.True(stream.Submit());
 
         Assert.True(world.IsAlive(clone));
@@ -198,7 +198,7 @@ public sealed class CommandStreamTests
         var entity = world.Create(new Position(1, 2), new Velocity(3, 4));
         var stream = new CommandStream(world);
 
-        var clone = stream.CloneImmediate(entity);
+        var clone = stream.Clone(entity);
         var delta = stream.Snapshot();
 
         // Clone not yet materialized
@@ -223,7 +223,7 @@ public sealed class CommandStreamTests
         var existing = world.Create(new Position(0, 0));
         var stream = new CommandStream(world);
 
-        var created = stream.CreateImmediate();
+        var created = stream.Create();
         stream.Add(created, new Position(1, 2));
         stream.Set(existing, new Position(3, 4));
 
@@ -262,11 +262,11 @@ public sealed class CommandStreamTests
         var world = new World();
         var stream = new CommandStream(world);
 
-        stream.CreateImmediate();
+        stream.Create();
         await stream.SubmitAndSnapshotAsync();
 
         // Should be able to use stream again
-        var e = stream.CreateImmediate();
+        var e = stream.Create();
         stream.Add(e, new Position(5, 6));
         await stream.SubmitAndSnapshotAsync();
 
@@ -300,7 +300,7 @@ public sealed class CommandStreamTests
         var world = new World();
         var stream = new CommandStream(world);
 
-        var created = stream.CreateImmediate();
+        var created = stream.Create();
         stream.Add(created, new Position(1, 2));
         stream.Destroy(created);
 
@@ -320,7 +320,7 @@ public sealed class CommandStreamTests
         var world = new World();
         var stream = new CommandStream(world);
 
-        var created = stream.CreateImmediate();
+        var created = stream.Create();
         stream.Add(created, new Position(1, 2));
         stream.Destroy(created);
 
@@ -371,7 +371,7 @@ public sealed class CommandStreamTests
         var parent = world.Create();
         var stream = new CommandStream(world);
 
-        var child = stream.CreateImmediate();
+        var child = stream.Create();
         stream.Add(child, new Position(1, 2));
         stream.Link(parent, child);
         stream.Destroy(child);
@@ -394,7 +394,7 @@ public sealed class CommandStreamTests
         var existing = world.Create(new Position(0, 0));
         var stream = new CommandStream(world);
 
-        var created = stream.CreateImmediate();
+        var created = stream.Create();
         stream.Add(created, new Position(1, 2));
         stream.Add(created, new Velocity(3, 4));
         stream.Set(existing, new Position(5, 6));
@@ -413,7 +413,7 @@ public sealed class CommandStreamTests
         var world = new World();
         var stream = new CommandStream(world);
 
-        var e = stream.CreateImmediate();
+        var e = stream.Create();
         stream.Add(e, new Position(1, 2));
         var delta = stream.Snapshot();
 
@@ -452,7 +452,7 @@ public sealed class CommandStreamTests
         var world = new World();
         var stream = new CommandStream(world);
 
-        var e = stream.CreateImmediate();
+        var e = stream.Create();
         stream.Add(e, new Position(1, 2));
         var delta = stream.Snapshot();
 
@@ -513,7 +513,7 @@ public sealed class CommandStreamTests
         var source = new World();
         var stream = new CommandStream(source);
 
-        var e = stream.CreateImmediate();
+        var e = stream.Create();
         stream.Add(e, new Position(1, 2));
         stream.Add(e, new Velocity(3, 4));
         stream.Add(e, new Health(100));
@@ -619,7 +619,7 @@ public sealed class CommandStreamTests
         var existing = source.Create(new Position(10, 20));
         var stream = new CommandStream(source);
 
-        var created = stream.CreateImmediate();
+        var created = stream.Create();
         stream.Add(created, new Position(100, 200));
         stream.Set(existing, new Position(30, 40));
         stream.Add(existing, new Velocity(5, 6));
@@ -671,7 +671,7 @@ public sealed class CommandStreamTests
 
         for (var i = 0; i < N; i++)
         {
-            entities[i] = stream.CreateImmediate();
+            entities[i] = stream.Create();
             stream.Add(entities[i], new Position(i, i + 1));
             if ((i & 1) == 0)
                 stream.Add(entities[i], new Velocity(i * 10, i * 20));
@@ -701,7 +701,7 @@ public sealed class CommandStreamTests
         var source = new World();
         var stream = new CommandStream(source);
 
-        var e = stream.CreateImmediate();
+        var e = stream.Create();
         // No components �?empty entity is now fully supported
         var delta = stream.Snapshot();
 
@@ -721,7 +721,7 @@ public sealed class CommandStreamTests
         var source = new World();
         var stream = new CommandStream(source);
 
-        var e = stream.CreateImmediate();
+        var e = stream.Create();
         stream.Add(e, new Position(1, 2));
         stream.Destroy(e);
         var delta = stream.Snapshot();
@@ -739,11 +739,11 @@ public sealed class CommandStreamTests
         var existing = source.Create(new Position(10, 20), new Velocity(5, 6));
         var stream = new CommandStream(source);
 
-        var created1 = stream.CreateImmediate();
+        var created1 = stream.Create();
         stream.Add(created1, new Position(100, 200));
         stream.Add(created1, new Velocity(10, 20));
 
-        var created2 = stream.CreateImmediate();
+        var created2 = stream.Create();
         stream.Add(created2, new Health(50));
 
         stream.Set(existing, new Position(30, 40));
@@ -780,8 +780,8 @@ public sealed class CommandStreamTests
         var world = new World();
         var stream = new CommandStream(world);
 
-        stream.CreateImmediate();
-        stream.Add(stream.CreateImmediate(), new Position(1, 2));
+        stream.Create();
+        stream.Add(stream.Create(), new Position(1, 2));
         stream.Submit();
 
         // Snapshot after submit on a fresh (reused) buffer should be empty
@@ -864,7 +864,7 @@ public sealed class CommandStreamTests
         var world = new World();
         var stream = new CommandStream(world);
 
-        var e = stream.CreateImmediate();
+        var e = stream.Create();
         stream.Add(e, new Position(1, 2));
         stream.Destroy(e); // Cancel pending entity
         Assert.True(stream.Submit());
@@ -883,7 +883,7 @@ public sealed class CommandStreamTests
         var world = new World();
         var stream = new CommandStream(world);
 
-        var e = stream.CreateImmediate();
+        var e = stream.Create();
         stream.Add(e, new Position(1, 2));
         stream.Add(e, new Position(3, 4)); // Second Add overwrites via batch merge
         Assert.True(stream.Submit());
@@ -898,7 +898,7 @@ public sealed class CommandStreamTests
         var world = new World();
         var stream = new CommandStream(world);
 
-        var e = stream.CreateImmediate();
+        var e = stream.Create();
         stream.Add(e, new Position(1, 2));
         stream.Set(e, new Position(99, 99));
         Assert.True(stream.Submit());
@@ -921,7 +921,7 @@ public sealed class CommandStreamTests
 
         for (var i = 0; i < N; i++)
         {
-            entities[i] = stream.CreateImmediate();
+            entities[i] = stream.Create();
             stream.Add(entities[i], new Position(i, i + 1));
             if (i % 3 == 0) stream.Add(entities[i], new Velocity(i, i));
             if (i % 5 == 0) stream.Add(entities[i], new Health(100 + i));
@@ -961,7 +961,7 @@ public sealed class CommandStreamTests
             }
             else
             {
-                var e = stream.CreateImmediate();
+                var e = stream.Create();
                 stream.Add(e, new Position(i + 30, i + 40));
                 if ((i & 3) == 1) stream.Remove<Position>(e);
                 if ((i & 7) == 1) stream.Destroy(e);
@@ -1040,7 +1040,7 @@ public sealed class CommandStreamTests
         var existing = world.Create(new Position(0, 0));
         var stream = new CommandStream(world);
 
-        var created = stream.CreateImmediate();
+        var created = stream.Create();
         stream.Add(created, new Position(1, 2));
         stream.Add(created, new Velocity(3, 4));
         stream.Set(existing, new Position(99, 99));
@@ -1067,7 +1067,7 @@ public sealed class CommandStreamTests
         var source = world.Create(new Position(1, 2), new Velocity(3, 4));
         var stream = new CommandStream(world);
 
-        var clone = stream.CloneImmediate(source);
+        var clone = stream.Clone(source);
         var delta = await stream.SubmitAndSnapshotAsync();
 
         Assert.True(world.IsAlive(clone));
@@ -1096,7 +1096,7 @@ public sealed class CommandStreamTests
             }
             else
             {
-                var e = stream.CreateImmediate();
+                var e = stream.Create();
                 stream.Add(e, new Position(i + 30, i + 40));
                 if ((i & 3) == 1) stream.Remove<Position>(e);
             }
@@ -1124,7 +1124,7 @@ public sealed class CommandStreamTests
 
         for (var cycle = 0; cycle < 5; cycle++)
         {
-            var e = stream.CreateImmediate();
+            var e = stream.Create();
             stream.Add(e, new Position(cycle, cycle + 1));
             var delta = await stream.SubmitAndSnapshotAsync();
 
@@ -1146,7 +1146,7 @@ public sealed class CommandStreamTests
         var entity = source.Create(new Position(1, 2), new Velocity(3, 4));
         var stream = new CommandStream(source);
 
-        var clone = stream.CloneImmediate(entity);
+        var clone = stream.Clone(entity);
         stream.Set(clone, new Position(99, 99));
         stream.Add(clone, new Health(100));
         var delta = stream.Snapshot();
@@ -1171,7 +1171,7 @@ public sealed class CommandStreamTests
         var entity = source.Create(new Position(1, 2));
         var stream = new CommandStream(source);
 
-        var clone = stream.CloneImmediate(entity);
+        var clone = stream.Clone(entity);
         stream.Destroy(clone);
         var delta = stream.Snapshot();
 
@@ -1200,7 +1200,7 @@ public sealed class CommandStreamTests
         source.Link(parent, child2);
         var stream = new CommandStream(source);
 
-        var clone = stream.CloneImmediate(parent);
+        var clone = stream.Clone(parent);
         var delta = stream.Snapshot();
 
         var replica = new World();
@@ -1227,8 +1227,8 @@ public sealed class CommandStreamTests
         var toClone = source.Create(new Velocity(5, 6), new Health(100));
         var stream = new CommandStream(source);
 
-        var clone = stream.CloneImmediate(toClone);
-        var created = stream.CreateImmediate();
+        var clone = stream.Clone(toClone);
+        var created = stream.Create();
         stream.Add(created, new Position(100, 200));
         stream.Set(existing, new Position(30, 40));
         var delta = stream.Snapshot();
@@ -1264,7 +1264,7 @@ public sealed class CommandStreamTests
         var entity = source.Create(new Position(1, 2), new Velocity(3, 4));
         var stream = new CommandStream(source);
 
-        var clone = stream.CloneImmediate(entity);
+        var clone = stream.Clone(entity);
         stream.Remove<Velocity>(clone); // Remove Velocity from pending clone
         Assert.True(stream.Submit());
 
@@ -1286,7 +1286,7 @@ public sealed class CommandStreamTests
         source.Link(parent, child);
         var stream = new CommandStream(source);
 
-        var clone = stream.CloneImmediate(grandparent);
+        var clone = stream.Clone(grandparent);
         Assert.True(stream.Submit());
 
         Assert.True(source.IsAlive(clone));
@@ -1319,10 +1319,10 @@ public sealed class CommandStreamTests
         var survivors = new List<Entity>();
 
         // Frame 1: seed world with diverse entities and hierarchy
-        var a = stream.CreateImmediate(); stream.Add(a, new Position(1, 2));
-        var b = stream.CreateImmediate(); stream.Add(b, new Position(3, 4)); stream.Add(b, new Velocity(5, 6));
-        var c = stream.CreateImmediate(); stream.Add(c, new Health(50));
-        var d = stream.CreateImmediate(); stream.Add(d, new Health(100));
+        var a = stream.Create(); stream.Add(a, new Position(1, 2));
+        var b = stream.Create(); stream.Add(b, new Position(3, 4)); stream.Add(b, new Velocity(5, 6));
+        var c = stream.Create(); stream.Add(c, new Health(50));
+        var d = stream.Create(); stream.Add(d, new Health(100));
         stream.Link(a, b);
         stream.Link(a, c);
         deltas.Add(stream.Snapshot());
@@ -1332,13 +1332,13 @@ public sealed class CommandStreamTests
         stream.Set(a, new Position(100, 200));
         stream.Set(b, new Position(30, 40));
         stream.Remove<Velocity>(b);
-        var e = stream.CreateImmediate(); stream.Add(e, new Position(50, 60));
+        var e = stream.Create(); stream.Add(e, new Position(50, 60));
         deltas.Add(stream.Snapshot());
         stream.Submit();
 
         // Frame 3: component cycling, create new
         stream.Add(d, new Position(55, 66));
-        var f = stream.CreateImmediate(); stream.Add(f, new Health(1));
+        var f = stream.Create(); stream.Add(f, new Health(1));
         stream.Link(a, f);
         deltas.Add(stream.Snapshot());
         stream.Submit();
@@ -1377,7 +1377,7 @@ public sealed class CommandStreamTests
         var stream = new CommandStream(source);
 
         // Frame 1: create entity
-        var victim = stream.CreateImmediate();
+        var victim = stream.Create();
         stream.Add(victim, new Position(1, 2));
         stream.Add(victim, new Velocity(3, 4));
         deltas.Add(stream.Snapshot());
@@ -1389,7 +1389,7 @@ public sealed class CommandStreamTests
         stream.Submit();
 
         // Frame 3: new entity reuses ID
-        var recycled = stream.CreateImmediate();
+        var recycled = stream.Create();
         stream.Add(recycled, new Health(100));
         deltas.Add(stream.Snapshot());
         stream.Submit();
@@ -1421,16 +1421,16 @@ public sealed class CommandStreamTests
         var stream = new CommandStream(source);
 
         // Frame 1: create tree A->B->C
-        var a = stream.CreateImmediate(); stream.Add(a, new Position(1, 1));
-        var b = stream.CreateImmediate(); stream.Add(b, new Position(2, 2));
-        var c = stream.CreateImmediate(); stream.Add(c, new Position(3, 3));
+        var a = stream.Create(); stream.Add(a, new Position(1, 1));
+        var b = stream.Create(); stream.Add(b, new Position(2, 2));
+        var c = stream.Create(); stream.Add(c, new Position(3, 3));
         stream.Link(a, b);
         stream.Link(b, c);
         deltas.Add(stream.Snapshot());
         stream.Submit();
 
         // Frame 2: restructure A->C and A->D, unlink B
-        var d = stream.CreateImmediate(); stream.Add(d, new Position(4, 4));
+        var d = stream.Create(); stream.Add(d, new Position(4, 4));
         stream.Unlink(b);
         stream.Unlink(c);
         stream.Link(a, c);
@@ -1467,15 +1467,15 @@ public sealed class CommandStreamTests
         var tracked = new List<Entity>();
 
         // Frame 1: seed with linked entities
-        var a = stream.CreateImmediate(); stream.Add(a, new Position(1, 2));
-        var b = stream.CreateImmediate(); stream.Add(b, new Position(3, 4)); stream.Add(b, new Velocity(5, 6));
+        var a = stream.Create(); stream.Add(a, new Position(1, 2));
+        var b = stream.Create(); stream.Add(b, new Position(3, 4)); stream.Add(b, new Velocity(5, 6));
         stream.Link(a, b);
         tracked.AddRange([a, b]);
         deltas.Add(stream.Snapshot());
         stream.Submit();
 
         // Frame 2: clone A
-        var cloneA = stream.CloneImmediate(a);
+        var cloneA = stream.Clone(a);
         tracked.Add(cloneA);
         deltas.Add(stream.Snapshot());
         stream.Submit();
@@ -1488,7 +1488,7 @@ public sealed class CommandStreamTests
         stream.Submit();
 
         // Frame 4: clone the clone, remove component
-        var clone2 = stream.CloneImmediate(cloneA);
+        var clone2 = stream.Clone(cloneA);
         stream.Remove<Health>(clone2);
         tracked.Add(clone2);
         deltas.Add(stream.Snapshot());
@@ -1516,8 +1516,8 @@ public sealed class CommandStreamTests
         var world = new World();
         var stream = new CommandStream(world);
 
-        var a = stream.CreateImmediate();
-        var b = stream.CreateImmediate();
+        var a = stream.Create();
+        var b = stream.Create();
         stream.Add(b, new Velocity(10, 20));
         stream.Add(a, new Position(1, 2));
 
@@ -1538,9 +1538,9 @@ public sealed class CommandStreamTests
         var world = new World();
         var stream = new CommandStream(world);
 
-        var a = stream.CreateImmediate();
-        var b = stream.CreateImmediate();
-        var c = stream.CreateImmediate();
+        var a = stream.Create();
+        var b = stream.Create();
+        var c = stream.Create();
 
         stream.Add(b, new Velocity(1, 2));
         stream.Add(a, new Position(3, 4));
@@ -1570,12 +1570,12 @@ public sealed class CommandStreamTests
         var world = new World();
         var stream = new CommandStream(world);
 
-        var a = stream.CreateImmediate();
+        var a = stream.Create();
         stream.Add(a, new Position(1, 2));
         stream.Remove<Position>(a);
 
         // After removing from A, create B with components
-        var b = stream.CreateImmediate();
+        var b = stream.Create();
         stream.Add(b, new Velocity(10, 20));
 
         Assert.True(stream.Submit());
@@ -1595,8 +1595,8 @@ public sealed class CommandStreamTests
         var world = new World();
         var stream = new CommandStream(world);
 
-        var a = stream.CreateImmediate();
-        var b = stream.CreateImmediate();
+        var a = stream.Create();
+        var b = stream.Create();
         stream.Add(b, new Velocity(10, 20));
         stream.Add(a, new Position(1, 2));
 
@@ -1623,7 +1623,7 @@ public sealed class CommandStreamTests
 
         var source = world.Create(new Velocity(5, 6));
 
-        var e = stream.CreateImmediate();
+        var e = stream.Create();
         stream.Add(e, new Position(1, 2));
         stream.Add(e, new Position(3, 4)); // Duplicate Add �?should collapse to one
         stream.Add(e, new Health(100));
@@ -1680,7 +1680,7 @@ public sealed class CommandStreamTests
                 var kind = alive.Count == 0 ? 0 : rng.Next(100);
                 if (kind < 35 || alive.Count == 0)
                 {
-                    var e = stream.CreateImmediate();
+                    var e = stream.Create();
                     var compCount = rng.Next(3);
                     if (compCount > 0) stream.Add(e, new Position(rng.Next(), rng.Next()));
                     if (compCount > 1) stream.Add(e, new Velocity(rng.Next(), rng.Next()));
@@ -1901,11 +1901,11 @@ public sealed class CommandStreamTests
         var world = new World();
         var stream = new CommandStream(world);
 
-        var parent = stream.CreateImmediate();
+        var parent = stream.Create();
         stream.Add(parent, new Position(1, 1));
-        var child = stream.CreateImmediate();
+        var child = stream.Create();
         stream.Add(child, new Position(2, 2));
-        var grandchild = stream.CreateImmediate();
+        var grandchild = stream.Create();
         stream.Add(grandchild, new Position(3, 3));
         stream.Link(parent, child);
         stream.Link(child, grandchild);
@@ -1928,7 +1928,7 @@ public sealed class CommandStreamTests
         var stream = new CommandStream(world);
 
         var existingChild = world.Create(new Position(9, 9));
-        var parent = stream.CreateImmediate();
+        var parent = stream.Create();
         stream.Link(parent, existingChild);
 
         stream.Destroy(parent);
@@ -1948,11 +1948,14 @@ public sealed class DeferredCreateTests
     private readonly record struct Velocity(int X, int Y);
     private readonly record struct Health(int Value);
 
+    private static CommandStream MakeStream(World world) =>
+        new CommandStream(world) { DeferredEntities = true };
+
     [Fact]
     public void Create_returns_placeholder()
     {
         var world = new World();
-        var stream = new CommandStream(world);
+        var stream = MakeStream(world);
         var entity = stream.Create();
         Assert.Equal(-1, entity.Id);
     }
@@ -1961,7 +1964,7 @@ public sealed class DeferredCreateTests
     public void Placeholder_not_alive_before_submit()
     {
         var world = new World();
-        var stream = new CommandStream(world);
+        var stream = MakeStream(world);
         var entity = stream.Create();
         Assert.False(world.IsAlive(entity));
     }
@@ -1970,7 +1973,7 @@ public sealed class DeferredCreateTests
     public void Placeholder_not_alive_after_submit()
     {
         var world = new World();
-        var stream = new CommandStream(world);
+        var stream = MakeStream(world);
         var entity = stream.Create();
         stream.Submit();
         Assert.False(world.IsAlive(entity));
@@ -1980,7 +1983,7 @@ public sealed class DeferredCreateTests
     public void Entity_materialized_after_submit()
     {
         var world = new World();
-        var stream = new CommandStream(world);
+        var stream = MakeStream(world);
         stream.Create();
         stream.Submit();
         // Verify the entity was materialized: a query finds it
@@ -1994,7 +1997,7 @@ public sealed class DeferredCreateTests
     public void Deferred_with_components()
     {
         var world = new World();
-        var stream = new CommandStream(world);
+        var stream = MakeStream(world);
         var entity = stream.Create();
         stream.Add(entity, new Position(1, 2));
         stream.Submit();
@@ -2008,7 +2011,7 @@ public sealed class DeferredCreateTests
     public void Multiple_deferred_creates()
     {
         var world = new World();
-        var stream = new CommandStream(world);
+        var stream = MakeStream(world);
         stream.Create();
         stream.Create();
         stream.Create();
@@ -2020,27 +2023,10 @@ public sealed class DeferredCreateTests
     }
 
     [Fact]
-    public void Mixed_deferred_and_immediate()
-    {
-        var world = new World();
-        var stream = new CommandStream(world);
-        var deferred = stream.Create();
-        stream.Add(deferred, new Position(1, 2));
-        var immediate = stream.CreateImmediate();
-        stream.Add(immediate, new Health(100));
-        stream.Submit();
-        Assert.True(world.IsAlive(immediate));
-        var found = 0;
-        foreach (ref readonly var arch in MiniQuery.Create(world, new QueryDescription()).GetArchetypeSpan())
-            found += arch.GetEntities().Length;
-        Assert.Equal(2, found);
-    }
-
-    [Fact]
     public void Destroy_deferred_before_submit_cancels_materialization()
     {
         var world = new World();
-        var stream = new CommandStream(world);
+        var stream = MakeStream(world);
         var entity = stream.Create();
         stream.Add(entity, new Position(1, 2));
         stream.Destroy(entity);
@@ -2055,7 +2041,7 @@ public sealed class DeferredCreateTests
     public void Deferred_entity_increments_seq()
     {
         var world = new World();
-        var stream = new CommandStream(world);
+        var stream = MakeStream(world);
         var a = stream.Create();
         var b = stream.Create();
         var c = stream.Create();
@@ -2068,7 +2054,7 @@ public sealed class DeferredCreateTests
     {
         var world = new World();
         var source = world.Create(new Position(1, 2));
-        var stream = new CommandStream(world);
+        var stream = MakeStream(world);
         var clone = stream.Clone(source);
         Assert.Equal(-1, clone.Id);
         Assert.False(world.IsAlive(clone));
