@@ -42,7 +42,7 @@ internal static class WorldClone
             target.LinkSnapshot(parent, child);
         }
 
-        target.RebuildFreeIdStack();
+        target.CopyFreeIdsFrom(source);
         return target;
     }
 }

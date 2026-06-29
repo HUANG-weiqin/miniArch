@@ -12,7 +12,7 @@ namespace MiniArch.Core;
 public static class WorldSnapshot
 {
     private const int Magic = 0x4D415243;
-    private const int FormatVersion = 2;
+    private const int FormatVersion = 3;
 
     private static readonly ConcurrentDictionary<Type, ColumnCodec> ColumnCodecs = new();
 
@@ -61,6 +61,8 @@ public static class WorldSnapshot
             writer.Write(child.Id);
             writer.Write(parent.Id);
         }
+
+        world.WriteFreeList(writer);
     }
 
     /// <summary>
@@ -134,7 +136,7 @@ public static class WorldSnapshot
             world.LinkSnapshot(parent, child);
         }
 
-        world.RebuildFreeIdStack();
+        world.ReadFreeList(reader);
         return world;
     }
 

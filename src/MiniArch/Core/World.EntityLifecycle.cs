@@ -43,6 +43,34 @@ public sealed partial class World
         }
     }
 
+    internal void WriteFreeList(System.IO.BinaryWriter writer)
+    {
+        writer.Write(_freeIdCount);
+        for (var i = 0; i < _freeIdCount; i++)
+        {
+            writer.Write(_freeIds[i].Id);
+            writer.Write(_freeIds[i].Version);
+        }
+    }
+
+    internal void ReadFreeList(System.IO.BinaryReader reader)
+    {
+        _freeIdCount = reader.ReadInt32();
+        if (_freeIds.Length < _freeIdCount)
+            Array.Resize(ref _freeIds, _freeIdCount);
+        for (var i = 0; i < _freeIdCount; i++)
+            _freeIds[i] = new RecycledEntity(reader.ReadInt32(), reader.ReadInt32());
+    }
+
+    internal void CopyFreeIdsFrom(World source)
+    {
+        var count = source._freeIdCount;
+        if (_freeIds.Length < count)
+            Array.Resize(ref _freeIds, count);
+        Array.Copy(source._freeIds, _freeIds, count);
+        _freeIdCount = count;
+    }
+
     /// <summary>
     /// Creates an empty entity.
     /// </summary>

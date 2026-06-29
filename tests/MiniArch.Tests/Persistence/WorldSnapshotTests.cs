@@ -268,6 +268,42 @@ public sealed class WorldSnapshotTests
         Assert.Equal(hashOriginal, hashLoaded);
     }
 
+    [Fact]
+    public void Save_load_preserves_free_id_allocation_order()
+    {
+        var world = new World();
+        var e0 = world.Create(new Position(0, 0));
+        var e1 = world.Create(new Position(1, 1));
+        var e2 = world.Create(new Position(2, 2));
+        var e3 = world.Create(new Position(3, 3));
+        var e4 = world.Create(new Position(4, 4));
+
+        // Destroy in non-descending order to create a specific LIFO free list.
+        // Free list after these destroys (push order): [1, 3, 4]
+        // Pop order on next Create: 4, 3, 1
+        world.Destroy(e1);
+        world.Destroy(e3);
+        world.Destroy(e4);
+
+        using var stream = new MemoryStream();
+        WorldSnapshot.Save(stream, world);
+        stream.Position = 0;
+        var loaded = WorldSnapshot.Load(stream);
+
+        // Both worlds should allocate the same recycled ids in the same order.
+        var a = world.Create();
+        var b = world.Create();
+        var c = world.Create();
+
+        var la = loaded.Create();
+        var lb = loaded.Create();
+        var lc = loaded.Create();
+
+        Assert.Equal(a.Id, la.Id);
+        Assert.Equal(b.Id, lb.Id);
+        Assert.Equal(c.Id, lc.Id);
+    }
+
     private static T GetComponent<T>(World world, Entity entity) where T : unmanaged
     {
         Assert.True(world.TryGetLocation(entity, out var location));
