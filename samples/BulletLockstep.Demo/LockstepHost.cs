@@ -23,6 +23,16 @@ public sealed class LockstepHost
         Stream = new CommandStream(World) { DeferredEntities = true };
     }
 
+    // Slice 9: construct a host bound to an externally-supplied world (e.g.
+    // a World.Clone() snapshot for rollback recovery). The CommandStream is
+    // rebound to the new world.
+    public LockstepHost(int hostId, World existingWorld)
+    {
+        HostId = hostId;
+        World = existingWorld;
+        Stream = new CommandStream(World) { DeferredEntities = true };
+    }
+
     // Frame 0 init. Every host records its own player. Host 0 additionally
     // records the Boss + 5 WeakPoints + 5 Link ops. Because all hosts replay
     // every host's frame-0 delta in fixed HostId order, every host ends up

@@ -146,6 +146,20 @@ public sealed class LockstepSimulator
         StatusTimerSystem.Run(world);
     }
 
+    // Slice 9 helper: runs a tick and returns a SNAPSHOT copy of the deltas
+    // array (not the reused buffer). Use when the caller needs to keep deltas
+    // across multiple ticks (e.g. rollback replay buffer). The per-host
+    // FrameDelta objects themselves are independent across ticks (the stream
+    // allocates fresh internals on each Snapshot), only the holding array is
+    // reused by the pooled fast path.
+    public FrameDelta[] TickAndSnapshotDeltas(int frame)
+    {
+        Tick(frame, out var deltas);
+        var copy = new FrameDelta[deltas.Length];
+        Array.Copy(deltas, copy, deltas.Length);
+        return copy;
+    }
+
     public void ReplayDeltasOnAllHosts(FrameDelta[] deltas)
     {
         foreach (var h in _hosts)
@@ -161,6 +175,16 @@ public sealed class LockstepSimulator
         foreach (var d in deltas)
             h.World.Replay(d);
         RunSystems(h.World, frame);
+    }
+
+    // Slice 9: replaces a host's world with a fresh independent World (e.g.
+    // a World.Clone() snapshot). The host's CommandStream is also rebound to
+    // the new world. Used to emulate rollback-recovery: discard rogue state,
+    // restart from a clean snapshot, replay authoritative deltas.
+    public void ReplaceHostWorld(int hostIndex, World newWorld)
+    {
+        var oldHost = _hosts[hostIndex];
+        _hosts[hostIndex] = new LockstepHost(oldHost.HostId, newWorld);
     }
 
     private static bool EqualBytes(byte[] a, byte[] b)

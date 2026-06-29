@@ -1,6 +1,7 @@
 using BulletLockstep.Demo;
 using BulletLockstep.Demo.Systems;
 using MiniArch;
+using MiniArch.Core;
 
 int slice = args.Length > 0 && int.TryParse(args[0], out var s) ? s : 2;
 int hostCount = args.Length > 1 && int.TryParse(args[1], out var h) ? h : 4;
@@ -15,12 +16,13 @@ return slice switch
     6 => RunSlice6(hostCount, frameCount),
     7 => RunSlice7(hostCount, frameCount),
     8 => RunSlice8(hostCount, frameCount),
+    9 => RunSlice9(hostCount, frameCount),
     _ => BadSlice(slice),
 };
 
 static int BadSlice(int slice)
 {
-    Console.Error.WriteLine($"Unknown slice: {slice}. Supported: 2-8.");
+    Console.Error.WriteLine($"Unknown slice: {slice}. Supported: 2-9.");
     return 2;
 }
 
@@ -295,6 +297,131 @@ static int RunSlice8(int hostCount, int frameCount)
     return 0;
 }
 
+// ── Slice 9: World.Clone + FrameDelta.Merge ──────────────────────────
+// Three sub-verifications:
+//   A. World.Clone produces a fully decoupled world with identical state;
+//      running both forward identically keeps them in lockstep.
+//   B. FrameDelta.Merge: replaying N sequential deltas produces the same
+//      final state as replaying the merged single delta (network coalescing
+//      is lossless).
+//   C. Replay-buffer rollback: a host saves a World.Clone snapshot, runs
+//      forward with WRONG inputs, discards its world, restarts from the
+//      cloned snapshot, runs forward with CORRECT inputs -> converges with
+//      hosts that never rolled back.
+static int RunSlice9(int hostCount, int frameCount)
+{
+    Console.WriteLine($"BulletLockstep Slice 9 (World.Clone + FrameDelta.Merge)");
+    Console.WriteLine($"  {hostCount} hosts");
+    Console.WriteLine();
+
+    var anyFail = false;
+
+    // ── Phase A: World.Clone ──────────────────────────────────────────
+    Console.WriteLine("[Phase A] World.Clone independence + forward lockstep");
+    {
+        var sim = new LockstepSimulator(hostCount) { SpawnPlayers = true, SpawnBoss = true };
+        const int warm = 30;
+        for (var f = 0; f < warm; f++)
+            sim.Tick(f);
+        var (ok, detail) = NetcodeVerification.VerifyWorldClone(sim, warm);
+        ReportPhase("A", ok, detail);
+        anyFail |= !ok;
+    }
+
+    // ── Phase B: FrameDelta.Merge ────────────────────────────────────
+    Console.WriteLine("[Phase B] FrameDelta.Merge == sequential replay");
+    {
+        var sim = new LockstepSimulator(hostCount) { SpawnPlayers = true, SpawnBoss = true };
+        const int warm = 10;
+        const int mergeCount = 5;
+        for (var f = 0; f < warm; f++)
+            sim.Tick(f);
+        var (ok, detail) = NetcodeVerification.VerifyFrameDeltaMerge(sim, warm, mergeCount);
+        ReportPhase("B", ok, detail);
+        anyFail |= !ok;
+    }
+
+    // ── Phase C: Replay-buffer rollback ──────────────────────────────
+    Console.WriteLine("[Phase C] Rollback via World.Clone snapshot");
+    {
+        // Full pipeline config (players + boss). Host 0 captures a Clone at
+        // frame `warm`, then `window` authoritative frames run on top. Host 0
+        // discards its world (simulating misprediction), restarts from a
+        // fresh Clone of the snapshot, and re-replays the saved deltas +
+        // deterministic systems. Must converge with hosts that never rolled
+        // back.
+        var sim = new LockstepSimulator(hostCount) { SpawnPlayers = true, SpawnBoss = true };
+        const int warm = 30;
+        const int window = 8;
+        for (var f = 0; f < warm; f++)
+            sim.Tick(f);
+
+        var snapshot = sim.Hosts[0].World.Clone();
+        var captureChecksum = snapshot.CanonicalChecksum();
+
+        // Save per-tick deltas as INDEPENDENT copies (Tick reuses an internal
+        // buffer; TickAndSnapshotDeltas returns a fresh array per call).
+        var savedDeltas = new FrameDelta[window][];
+        for (var i = 0; i < window; i++)
+            savedDeltas[i] = sim.TickAndSnapshotDeltas(warm + i);
+
+        var authorityChecksum = sim.Hosts[1].Checksum();
+
+        sim.ReplaceHostWorld(0, snapshot.Clone());
+
+        // Sanity: snapshot.Clone() should match snapshot's checksum.
+        var afterReplace = sim.Hosts[0].Checksum();
+        if (!BytesEqual(afterReplace, captureChecksum))
+        {
+            ReportPhase("C", false, $"snapshot.Clone() diverged from snapshot:\n" +
+                $"  snapshot: {Convert.ToHexString(captureChecksum)}\n" +
+                $"  clone:    {Convert.ToHexString(afterReplace)}");
+            anyFail = true;
+        }
+        else
+        {
+            for (var i = 0; i < window; i++)
+                sim.ReplayAndTickSystemsOnHost(0, savedDeltas[i], warm + i);
+
+            var replayedChecksum = sim.Hosts[0].Checksum();
+            var ok = BytesEqual(replayedChecksum, authorityChecksum);
+            var detail = ok
+                ? $"host 0 rollback+re-replay converged with authority (full pipeline: players + boss)"
+                : $"host 0 diverged after rollback:\n  authority: {Convert.ToHexString(authorityChecksum)}\n  replayed:  {Convert.ToHexString(replayedChecksum)}";
+            ReportPhase("C", ok, detail);
+            anyFail |= !ok;
+        }
+    }
+
+    Console.WriteLine();
+    if (anyFail)
+    {
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.WriteLine("FAIL: one or more phases failed");
+        Console.ResetColor();
+        return 1;
+    }
+    Console.ForegroundColor = ConsoleColor.Green;
+    Console.WriteLine("PASS: all Slice 9 phases passed");
+    Console.ResetColor();
+    return 0;
+}
+
+static void ReportPhase(string label, bool ok, string detail)
+{
+    if (ok)
+    {
+        Console.ForegroundColor = ConsoleColor.Green;
+        Console.WriteLine($"  [{label}] PASS: {detail}");
+    }
+    else
+    {
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.WriteLine($"  [{label}] FAIL: {detail}");
+    }
+    Console.ResetColor();
+}
+
 // ── Slice 3: rollback recovery ────────────────────────────────────────
 // Proves the rollback core semantic:
 //   capture(F) -> run M frames -> restore(F) -> re-replay same M deltas
@@ -341,10 +468,16 @@ static int RunSlice3(int hostCount, int frameCount)
     for (var i = 0; i < RollbackWindow; i++)
     {
         int frame = CheckpointFrame + i;
-        if (!sim.Tick(frame, out savedDeltas[i]))
+        savedDeltas[i] = sim.TickAndSnapshotDeltas(frame);
+        // After collecting, verify the tick itself stayed consistent.
+        var refChecksum = sim.Hosts[0].Checksum();
+        for (var j = 1; j < sim.HostCount; j++)
         {
-            Console.Error.WriteLine($"divergence during phase C at F{frame}");
-            return 1;
+            if (!BytesEqual(refChecksum, sim.Hosts[j].Checksum()))
+            {
+                Console.Error.WriteLine($"divergence during phase C at F{frame}");
+                return 1;
+            }
         }
     }
     var authorityChecksum = sim.Hosts[1].Checksum();  // any non-rolled-back host
