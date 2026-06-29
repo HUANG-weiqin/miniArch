@@ -26,23 +26,6 @@ public sealed partial class World
         _records[entity.Id].RowIndex = rowIndex;
     }
 
-    internal void RebuildFreeIdStack()
-    {
-        if (_freeIds.Length < _entitySlotCount)
-        {
-            Array.Resize(ref _freeIds, _entitySlotCount);
-        }
-
-        _freeIdCount = 0;
-        for (var id = _entitySlotCount - 1; id >= 0; id--)
-        {
-            if (!_records[id].IsOccupied)
-            {
-                _freeIds[_freeIdCount++] = new RecycledEntity(id, _records[id].Version);
-            }
-        }
-    }
-
     internal void WriteFreeList(System.IO.BinaryWriter writer)
     {
         writer.Write(_freeIdCount);

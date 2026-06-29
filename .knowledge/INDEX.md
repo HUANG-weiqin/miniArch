@@ -65,6 +65,8 @@
 - **XML docs 明确区分 `WorldSnapshot` vs `WorldStateSnapshot`**：`WorldSnapshot` 的 doc 写明"NOT for in-memory rollback"，`WorldStateSnapshot` 的 doc 写明"NOT for persistence/network"。`WorldStateSnapshot` 改用 `int[] FreeIds + int[] FreeIdVersions` 避免依赖 `World.RecycledEntity`（private 嵌套类型）。
 - **Tier 1 完整实现**：`World.CaptureState()` / `World.RestoreState()` 通过 Array.Copy 在稳态零分配地备份/恢复 Records、FreeIds、per-archetype 数据（非 chunked + chunked）、Hierarchy。`_createArchetypeCacheGeneration++` 使 query cache 失效。预测帧创建的空 archetype count 被置零。4 个端到端测试验证：state preservation、deterministic ids、idempotency、cache invalidation。
 
+- **死代码清理 + Delta 确定性排序（2026-06-29）**：删除 `RebuildFreeIdStack()`（v3 格式后零调用点），kb-snapshot-persistence 移除其引用。`EmitHierarchyToDelta` 按 `child.Id` 排序输出，消除 Dictionary 迭代顺序导致的 delta 字节级非确定性（不影响 entity ID）。
+
 ## 重大变更摘要（2026-06-28 CommandStream API 统一）
 
 - **CommandStream 并行 API 统一**：删除 `SetConcurrent`/`AddConcurrent`/`RemoveConcurrent` 专用方法，`ParallelRecording=true` 时所有 Record API 透明切换为并发实现。单线程零退化。

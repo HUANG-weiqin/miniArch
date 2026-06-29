@@ -861,7 +861,11 @@ public sealed class CommandStream : ICommandRecorder
     {
         if (hierarchyByChild.Count == 0) return;
 
-        foreach (var (child, intent) in hierarchyByChild)
+        var sorted = new KeyValuePair<Entity, HierarchyIntent>[hierarchyByChild.Count];
+        ((ICollection<KeyValuePair<Entity, HierarchyIntent>>)hierarchyByChild).CopyTo(sorted, 0);
+        Array.Sort(sorted, (a, b) => a.Key.Id.CompareTo(b.Key.Id));
+
+        foreach (var (child, intent) in sorted)
         {
             if (unavailableEntities != null && unavailableEntities.Contains(child)) continue;
             if (intent.IsLinked)

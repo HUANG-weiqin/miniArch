@@ -2,7 +2,7 @@
 title: Snapshot Persistence
 module: MiniArch.Core Snapshot
 description: Full-world snapshot save/load design for unmanaged components, plus World.Checksum() for lockstep peer state verification
-updated: 2026-06-22 (全库审阅: 确认实现与文档一致)
+updated: 2026-06-29 (删除 RebuildFreeIdStack 死代码；补 v3 free list 直接序列化说明)
 ---
 # Snapshot Persistence
 
@@ -25,7 +25,8 @@ updated: 2026-06-22 (全库审阅: 确认实现与文档一致)
 
 - `WorldSnapshot.Save/Load`：走二进制序列化，支持跨进程传输
 - `WorldClone.Clone`：纯内存直拷，跳过全部编解码，5-20× 快于 Snapshot 往返
-- 两者共享同一套 internal 重建 API（`world.Reset(slotCount)`, `SetSnapshotEntityVersion()`, `SetSnapshotLocation()`, `RebuildFreeIdStack()`）
+- 两者共享同一套 internal 重建 API（`world.Reset(slotCount)`, `SetSnapshotEntityVersion()`, `SetSnapshotLocation()`）
+- v3 起 free list 直接序列化/反序列化（`WriteFreeList`/`ReadFreeList`），不再通过扫描 record 重建。Clone 用 `CopyFreeIdsFrom` 内存直拷。
 
 ## 决策
 
