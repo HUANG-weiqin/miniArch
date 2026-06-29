@@ -1,4 +1,5 @@
 using BulletLockstep.Demo;
+using BulletLockstep.Demo.Systems;
 using MiniArch;
 
 int slice = args.Length > 0 && int.TryParse(args[0], out var s) ? s : 2;
@@ -11,12 +12,13 @@ return slice switch
     3 => RunSlice3(hostCount, frameCount),
     4 => RunSlice4(hostCount, frameCount),
     5 => RunSlice5(hostCount, frameCount),
+    6 => RunSlice6(hostCount, frameCount),
     _ => BadSlice(slice),
 };
 
 static int BadSlice(int slice)
 {
-    Console.Error.WriteLine($"Unknown slice: {slice}. Supported: 2, 3, 4, 5.");
+    Console.Error.WriteLine($"Unknown slice: {slice}. Supported: 2, 3, 4, 5, 6.");
     return 2;
 }
 
@@ -120,6 +122,48 @@ static int RunSlice5(int hostCount, int frameCount)
     Console.WriteLine();
     Console.WriteLine($"  end state: boss alive={bossAlive}, weakpoints={weakPointCount}");
     Console.WriteLine($"  (boss HP drain: {500} frames to die from full; cascade should clear weakpoints)");
+    return 0;
+}
+
+// ── Slice 6: real collision (bullet × player) ────────────────────────
+// Builds on Slice 5 (boss + homing bullets) and adds a deterministic spatial
+// hash grid for collision. Each frame: homing bullets fly toward target
+// players -> collision system detects hits via grid -> player takes damage
+// (Set<Health> with Shield absorption) -> bullets Destroy. Verifies that
+// heavy Set/Destroy load stays byte-identical across hosts.
+static int RunSlice6(int hostCount, int frameCount)
+{
+    Console.WriteLine($"BulletLockstep Slice 6 (real collision via spatial grid)");
+    Console.WriteLine($"  {hostCount} hosts, {frameCount} frames");
+    Console.WriteLine();
+
+    var sim = new LockstepSimulator(hostCount) { SpawnPlayers = true, SpawnBoss = true };
+    GcBaseline(out var gc0, out var gc1, out var gc2, out var bytes);
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+
+    int mismatch = RunLockstep(sim, frameCount);
+
+    sw.Stop();
+    GcDelta(gc0, gc1, gc2, bytes, out var gc, out var alloc);
+
+    if (mismatch >= 0) return ReportFail(sim, mismatch);
+
+    Console.ForegroundColor = ConsoleColor.Green;
+    Console.WriteLine($"PASS: all {frameCount} frames consistent across {hostCount} hosts");
+    Console.ResetColor();
+    Report(sw, frameCount, gc, alloc, sim);
+
+    // Show per-host player HP as a sanity signal — collisions actually happened.
+    Console.WriteLine();
+    foreach (var h in sim.Hosts)
+    {
+        var players = PlayerQuery.SortedByHostId(h.World);
+        foreach (var (pe, tag) in players)
+        {
+            var hp = h.World.Get<Health>(pe);
+            Console.WriteLine($"  host {h.HostId} view: player {tag.HostId} HP = {hp.Cur}/{hp.Max}");
+        }
+    }
     return 0;
 }
 

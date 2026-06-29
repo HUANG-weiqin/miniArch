@@ -74,19 +74,29 @@ public sealed class LockstepSimulator
 
     private void RunSystems(World world, int frame)
     {
-        // Slice 2 baseline (always run; no-op when no matching components).
+        // Slice 5: homing steer first — modifies bullet Velocity so the new
+        // heading applies to this frame's move.
+        if (SpawnBoss)
+            HomingBulletSteerSystem.Run(world);
+
+        // Slice 2 baseline: move + lifetime.
         BulletMoveSystem.Run(world);
+
+        // Slice 6: bullet × player collision. Set<Health> + Destroy<bullet>.
+        if (SpawnPlayers)
+            CollisionSystem.Run(world);
+
         BulletLifetimeSystem.Run(world, frame);
 
         if (!SpawnPlayers)
             return;
 
-        // Slice 5: boss + hierarchy + homing bullets.
+        // Slice 5: boss AI + hierarchy follow. BossAISystem may Destroy the
+        // boss -> cascade removes weakpoints.
         if (SpawnBoss)
         {
             BossAISystem.Run(world, frame);
             WeakPointFollowSystem.Run(world);
-            HomingBulletSteerSystem.Run(world);
         }
 
         // Slice 4: status pipeline. Order: structural adds first, then damage
