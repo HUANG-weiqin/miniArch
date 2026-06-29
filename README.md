@@ -222,6 +222,7 @@ Friflo's advantages are **engine-level constant factors** (typing + SIMD). MiniA
 |---|---|
 | API Guide | [docs/README.md](docs/README.md) |
 | Benchmarks vs Other ECS | [docs/comparison.md](docs/comparison.md) |
+| Multi-host Lockstep Demo | [samples/BulletLockstep.Demo/](samples/BulletLockstep.Demo/) — 9-slice end-to-end test exercising every public feature (placeholder lockstep, archetype migration, hierarchy+cascade, real collision, chunked storage, snapshot persistence, authority/mirror topology, World.Clone rollback) |
 
 ---
 

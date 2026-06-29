@@ -20,6 +20,7 @@
 | HeroComing.Perf（回归门禁） | `kb-hero-pipeline-regression.md` |
 | GameTickSim.Perf（场景基准） | `kb-gameticksim-scenarios.md` |
 | CommandStreamGame.Perf（CommandStream 真实游戏稳态压测） | `kb-commandstream-game-perf.md` |
+| samples/BulletLockstep.Demo（多 host 弹幕游戏集成测试） | `kb-bullet-lockstep-demo.md`（9 个 slice 端到端压测库全部公共能力：placeholder lockstep / archetype 迁移 / hierarchy / chunked / 持久化 / 回滚） |
 
 ## 快速入口
 
@@ -38,6 +39,7 @@
 - **用户 API 分层** → `kb-user-api-layering.md`
 - **测试/基准** → `kb-test-workflow.md`、`kb-hero-pipeline-benchmarks.md`、`kb-ecs-comparison.md`、`kb-gameticksim-scenarios.md`
 - **CommandStream 真实游戏稳态压测** → `kb-commandstream-game-perf.md`
+- **多 host 弹幕游戏集成测试** → `kb-bullet-lockstep-demo.md`
 - **回归门禁** → `kb-hero-pipeline-regression.md`
 - **排查行为偏差** → 各模块页的 `坑点` + 对应测试文件
 - **理解"为什么边界这么划"** → 各模块页的 `决策`
@@ -52,6 +54,13 @@
 - **FrameDelta 热路径 struct 大幅缩小**（Movement +50% / Attack +29%）
 - **ComponentMask 扩展为 512-bit**（8 × `ulong`），覆盖 component id 0..511 的快速匹配
 - **新增分段存储模式**：Archetype 超过阈值后自动切换为多 Segment 模式（详见 `kb-chunk-storage.md`）
+
+## 重大变更摘要（2026-06-30 BulletLockstep demo）
+
+- **新增 `samples/BulletLockstep.Demo/`**：9 个 slice 的端到端集成测试，把库全部公共能力用真实弹幕游戏场景压一遍
+- **覆盖矩阵**（详见 `docs/internal/plans/2026-06-30-bullet-lockstep-coverage-design.md`）：placeholder lockstep / archetype 迁移 / hierarchy + cascade / 真实碰撞 / chunked storage / WorldSnapshot / Authority+Mirror / World.Clone + FrameDelta.Merge 全部走通
+- **关键坑**（已修复）：`_deltaBuffer` 跨 tick 复用导致 savedDeltas alias；placeholder seq 在 Merge 中重复（实际不破坏，但有前向引用的脆弱点）
+- **用法沉淀**：长生命周期 entity 的 Set/Destroy 走确定性后处理系统（按 PlayerTag.HostId 等逻辑键排序），不走 record；位移用整型定点数
 
 ## 重大变更摘要（2026-06-29 DeferredEntities flag）
 

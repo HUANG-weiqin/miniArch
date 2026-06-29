@@ -10,25 +10,33 @@ Slice 1-3 已经端到端验证了**多 host lockstep 框架契约**（placehold
 
 ## 2. 覆盖矩阵（库能力 → 测试 slice → 触发机制）
 
-| 库能力 | 已覆盖（Slice 1-3） | 待覆盖 slice | 触发机制 |
+> 更新于 2026-06-30，9 个 slice 全部跑通后。
+
+| 库能力 | 已覆盖 | 触发 slice | 触发机制 |
 |---|---|---|---|
-| **Archetype ECS**（World/Entity/QueryDescription） | ✅ 基础查询 | S4 S5 S6 S7 | 多 archetype + WithAny/Without 过滤 |
-| **CommandStream**（record） | ✅ Create/Add | S4 S6 | Set/Remove/Destroy/Link 全部 op |
-| **FrameDelta + Replay** | ✅ placeholder Create | S4 S6 | placeholder Set/Remove/Link/Destroy op |
-| **World.Clone()**（深拷贝 World） | ❌（用了 CaptureState） | S9 | 回滚 replay buffer，预测 N 帧 |
-| **WorldSnapshot**（二进制序列化） | ❌ | S8 | 存档/读档、断线重连 |
-| **SubmitAndSnapshotAsync()**（流水线 submit+delta） | ❌ | S8 | 权威服务器 + 镜像客户端模式 |
-| **Query filtering**（With/Without/WithAny） | ❌ 几乎没用 | S4 S5 S6 | 多子弹类型混合查询、玩家/敌人分离 |
-| **Parallel iteration**（ForEachChunkParallel） | ❌ | S7 | 大规模子弹位移并行 |
-| **Entity accessor**（Access()） | ❌ | S4 S6 | 玩家多组件批量读写（HP+Powerup+Shield） |
-| **Ref-return access**（GetRef / chunk span） | ✅ chunk span | S4 | 单 entity GetRef 路径 |
-| **Batch creation**（CreateMany） | ❌ | S7 | Boss 一次发射 100+ 子弹的弹幕 |
-| **Entity Hierarchy**（Link/Unlink + cascade destroy） | ❌ | S5 | Boss + weak points 父子关系 |
-| **GC-friendly**（0/0/0 稳态） | ⚠️ 12/0/0 | S7 | 优化到 0/0/0（pool FrameDelta/checksum buffer） |
-| **Archetype 迁移**（Add/Remove on existing） | ❌ | S4 | 燃烧/冰冻状态切换、护盾获取/失去 |
-| **FrameDelta.Merge** | ❌ | S9 | 多帧合并优化网络 |
-| **Chunked storage**（多 segment archetype） | ❌ | S7 | 单 archetype 实体数 > chunk 阈值 |
-| **跨帧 entity 引用 workaround**（kb 决策 #3） | ✅ FiredBy(int) | S5 S6 | 通过查询组件定位，不用 placeholder 跨帧 |
+| **Archetype ECS**（World/Entity/QueryDescription） | ✅ | S2-S9 | 多 archetype 查询遍布所有系统 |
+| **CommandStream**（record） | ✅ | S2-S9 | Create/Add 在每个 slice；Set 在 S6 命中扣血 |
+| **FrameDelta + Replay** | ✅ | S1-S9 | placeholder Create/Set/Add/Link/Destroy op 全部走通 |
+| **World.Clone()**（深拷贝 World） | ✅ | S9 Phase A+C | 独立 world 前向运行 + replay-buffer 回滚 |
+| **WorldSnapshot**（二进制序列化） | ✅ | S8 Phase A | MemoryStream round-trip 字节级无损 |
+| **SubmitAndSnapshotAsync()**（流水线 submit+delta） | ✅ | S8 Phase B | Authority + Mirror 拓扑 |
+| **Query filtering**（With/Without/WithAny） | ⚠️ With/Without 全用，**WithAny 未用** | S2-S9 | 多 bullet archetype 查询；WithAny 待补 |
+| **Parallel iteration**（ForEachChunkParallel） | ✅ | S7 | BulletMoveSystem 升级为并行 |
+| **Entity accessor**（Access()） | ✅ | S4 S6 | TickDamageSystem + CollisionSystem 多组件批量读写 |
+| **Ref-return access**（GetRef / chunk span） | ✅ | S2+ | chunk span 遍布系统 |
+| **Batch Creation**（CreateMany） | ❌ **未直接测** | - | S7 用了多次 Stream.Create 替代；World.CreateMany API 未触发 |
+| **Entity Hierarchy**（Link/Unlink + cascade destroy） | ✅ | S5 | Boss + 5 WeakPoint Link，cascade destroy 验证 |
+| **GC-friendly**（0/0/0 稳态） | ⚠️ 12/0/0 standard，scale 模式 Gen2 | - | FrameDelta[] 已 pool，checksum byte[] 待 pool |
+| **Archetype 迁移**（Add/Remove on existing） | ✅ | S4 | BurningTimer + Shield Add/Remove 完整循环，4 变体并存 |
+| **FrameDelta.Merge** | ✅ | S9 Phase B | 20 delta 合并为 1，replay 等价于逐帧 |
+| **Chunked storage**（多 segment archetype） | ✅ | S7 scale | 36K 实体触发 chunked 切换，checksum 一致 |
+| **跨帧 entity 引用 workaround**（kb 决策 #3） | ✅ | S5 S6 | Target(int HostId)、FiredBy(int HostId) 查询定位 |
+
+### 仍未覆盖（待补 slice）
+
+- **WithAny 查询**：当前所有查询都用 With/Without。WithAny 用于「至少有 N 个组件之一」的 OR 匹配，可在未来 slice 加「状态效果系统」时一并测试（query WithAny<BurningTimer, FrozenTimer, PoisonTimer>）
+- **World.CreateMany**：S7 用 `Stream.Create × N` 替代，未直接调用 immediate API。可在 Slice 8 authority 模式下补一个 boss pattern 用 `World.CreateMany` 批量创建（real-id 路径）
+- **0/0/0 GC**：standard 模式仍有 Gen0 ~12 次/1000 帧（来自 checksum byte[] + 偶发 List 扩容）。优化点：checksum byte[] 用 stackalloc 或 ArrayPool、CollisionSystem 的 HashSet 用排序去重替代
 
 ## 3. 游戏设计
 
