@@ -11,6 +11,9 @@ dotnet test miniArch.sln
 
 # Run benchmarks
 dotnet run -c Release --project tests/MiniArch.Benchmarks
+
+# Check for dead code (requires ripgrep: winget install BurntSushi.ripgrep.MSVC)
+.\tools\scripts\deadcode.ps1
 ```
 
 ## Performance Gate

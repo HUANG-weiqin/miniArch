@@ -99,7 +99,7 @@ dotnet run -c Release --project tools/perf/HeroComing.Perf
 下列改动**确定不可能影响运行时性能**，可跳过 `HeroComing.Perf` 门禁（仍需 `dotnet build` + `dotnet test` 通过）：
 
 - **纯文档**：XML doc（`<summary>`/`<remarks>`/`<param>` 等）、行内注释、`.knowledge/` 下文件
-- **死代码删除**：已通过调用方搜索确认零 caller 的方法/类型/字段
+- **死代码删除**：已通过调用方搜索确认零 caller 的方法/类型/字段（可用 `.\tools\scripts\deadcode.ps1` 辅助扫描）
 - **同类 partial 间迁移**：把方法/字段在同一 `partial class` 的多个 `.cs` 文件间挪动（JIT 看到合并后的同一类型，IL 不变）
 - **重命名 private/internal 符号**：仅 metadata name 变化，不影响运行时查找（前提：未使用反射按名查找）
 - **纯格式/空白**：缩进、换行、`using` 排序
