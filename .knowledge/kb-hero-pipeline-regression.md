@@ -2,7 +2,7 @@
 title: Hero Pipeline Regression Test
 module: HeroComing.Perf
 description: First-class regression gate for architecture changes — 30s timed throughput test; also covers PipelineBenchmarkTests (history reference)
-updated: 2026-06-30 (合并 kb-hero-pipeline-benchmarks.md)
+updated: 2026-06-30 (补 --check-baseline / --update-baseline 门禁语义)
 ---
 # Hero Pipeline Regression Test
 
@@ -17,6 +17,9 @@ updated: 2026-06-30 (合并 kb-hero-pipeline-benchmarks.md)
 - `tools/perf/HeroComing.Perf/Program.cs`：单文件控制台应用
 - 引用 `tests/HeroPipeline.Tests/HeroPipeline.Tests.csproj` 获取 pipeline 代码
 - 500 players + 500 enemies on 100x100 grid
+- 默认运行只测量并打印结果，不写 baseline
+- `--check-baseline`：读取本页阈值并作为门禁比较，低于阈值时进程返回非 0
+- `--update-baseline`：人工确认刷新基线时才写回本页，只替换 baseline/阈值区块
 
 ## 当前 baseline（2026-06-30）
 

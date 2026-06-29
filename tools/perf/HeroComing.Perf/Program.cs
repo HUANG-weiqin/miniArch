@@ -17,11 +17,42 @@ const int GridHeight = 100;
 const int DurationSeconds = 30;
 const int ReportInterval = 100;
 const int WarmupRounds = 50;
+const string UpdateBaselineArg = "--update-baseline";
+const string CheckBaselineArg = "--check-baseline";
+const string HelpArg = "--help";
+
+var updateBaseline = args.Contains(UpdateBaselineArg, StringComparer.OrdinalIgnoreCase);
+var checkBaseline = args.Contains(CheckBaselineArg, StringComparer.OrdinalIgnoreCase);
+var showHelp = args.Contains(HelpArg, StringComparer.OrdinalIgnoreCase) ||
+               args.Contains("-h", StringComparer.OrdinalIgnoreCase);
+var knownArgs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+{
+    UpdateBaselineArg,
+    CheckBaselineArg,
+    HelpArg,
+    "-h"
+};
+
+if (showHelp)
+{
+    PrintUsage();
+    return;
+}
+
+var unknownArgs = args.Where(arg => !knownArgs.Contains(arg)).ToArray();
+if (unknownArgs.Length > 0)
+{
+    Console.Error.WriteLine($"Unknown argument(s): {string.Join(", ", unknownArgs)}");
+    PrintUsage();
+    Environment.ExitCode = 2;
+    return;
+}
 
 Console.WriteLine("=== HeroComing ECS Performance Test ===");
 Console.WriteLine($"Characters: {CharacterCount}");
 Console.WriteLine($"Grid:       {GridWidth}x{GridHeight}");
 Console.WriteLine($"Duration:   {DurationSeconds}s per scenario");
+Console.WriteLine($"Mode:       measure{(checkBaseline ? " + check baseline" : "")}{(updateBaseline ? " + update baseline" : "")}");
 Console.WriteLine();
 
 var results = new List<(string name, double throughput, double avgMs, int totalRounds, double heapDeltaKB, bool memoryStable)>();
@@ -39,10 +70,37 @@ foreach (var (name, throughput, avgMs, totalRounds, heapDeltaKB, memoryStable) i
     Console.WriteLine($"{name,-18} | {throughput,10:F1} | {avgMs,10:F3} | {totalRounds,8} | {heapDeltaKB,10:F1} | {(memoryStable ? "OK" : "WARN"),8}");
 }
 
-UpdateKnowledgePage(results);
-
 Console.WriteLine();
-Console.WriteLine("Baseline updated in .knowledge/kb-hero-pipeline-regression.md");
+var baselinePassed = true;
+if (checkBaseline)
+{
+    baselinePassed = CheckBaseline(results);
+}
+
+if (updateBaseline)
+{
+    UpdateKnowledgePage(results);
+    Console.WriteLine("Baseline updated in .knowledge/kb-hero-pipeline-regression.md");
+}
+else
+{
+    Console.WriteLine("Baseline not updated. Pass --update-baseline to write current results.");
+}
+
+if (!baselinePassed)
+{
+    Environment.ExitCode = 1;
+}
+
+void PrintUsage()
+{
+    Console.WriteLine("Usage: dotnet run -c Release --project tools/perf/HeroComing.Perf [options]");
+    Console.WriteLine();
+    Console.WriteLine("Options:");
+    Console.WriteLine("  --check-baseline   Compare results against thresholds in .knowledge/kb-hero-pipeline-regression.md.");
+    Console.WriteLine("  --update-baseline  Update the baseline block in .knowledge/kb-hero-pipeline-regression.md.");
+    Console.WriteLine("  --help             Show this help.");
+}
 
 // --- Scenario runner ---
 
@@ -228,7 +286,28 @@ void UpdateKnowledgePage(List<(string name, double throughput, double avgMs, int
     // Update the date in front matter
     content = Regex.Replace(content, @"updated: \d{4}-\d{2}-\d{2}", $"updated: {date}");
 
-    // Build new baseline table
+    var baselineBlock = BuildBaselineBlock(results, date).TrimEnd();
+    var replaced = Regex.Replace(
+        content,
+        @"## 当前 baseline（.*?）\r?\n.*?(?=\r?\n### 如果失败|\z)",
+        baselineBlock,
+        RegexOptions.Singleline);
+
+    if (replaced == content)
+    {
+        content += Environment.NewLine + baselineBlock + Environment.NewLine;
+    }
+    else
+    {
+        content = replaced;
+    }
+
+    File.WriteAllText(kbPath, content);
+    Console.WriteLine($"Updated: {kbPath}");
+}
+
+string BuildBaselineBlock(List<(string name, double throughput, double avgMs, int totalRounds, double heapDeltaKB, bool memoryStable)> results, string date)
+{
     var sb = new StringBuilder();
     sb.AppendLine($"## 当前 baseline（{date}）");
     sb.AppendLine();
@@ -240,7 +319,6 @@ void UpdateKnowledgePage(List<(string name, double throughput, double avgMs, int
         sb.AppendLine($"| {name}（{desc}） | {throughput:F1} | {avgMs:F1} | {totalRounds} | {(memoryStable ? "稳定" : "增长")} |");
     }
 
-    // Update regression thresholds (80% of actual) — use first matching result
     var movResult = results.First(r => r.name.Contains("Movement"));
     var atkResult = results.First(r => r.name.Contains("Attack"));
     sb.AppendLine();
@@ -249,20 +327,48 @@ void UpdateKnowledgePage(List<(string name, double throughput, double avgMs, int
     sb.AppendLine($"- Movement 吞吐量：≥{(int)(movResult.throughput * 0.8)} rounds/s（baseline 的 80%）");
     sb.AppendLine($"- Attack 吞吐量：≥{(int)(atkResult.throughput * 0.8)} rounds/s（baseline 的 80%）");
     sb.AppendLine("- 内存：heap delta 不能持续增长（允许 ±10% 波动）");
+    return sb.ToString();
+}
 
-    // Replace everything from "## 当前 baseline" to end of file
-    int baselineStart = content.IndexOf("## 当前 baseline");
-    if (baselineStart >= 0)
+bool CheckBaseline(List<(string name, double throughput, double avgMs, int totalRounds, double heapDeltaKB, bool memoryStable)> results)
+{
+    Console.WriteLine();
+    Console.WriteLine("=== Baseline Check ===");
+
+    if (!TryReadThresholds(out var movementThreshold, out var attackThreshold))
     {
-        content = content[..baselineStart] + sb.ToString();
-    }
-    else
-    {
-        content += Environment.NewLine + sb.ToString();
+        Console.Error.WriteLine("FAIL: Could not read regression thresholds from .knowledge/kb-hero-pipeline-regression.md.");
+        return false;
     }
 
-    File.WriteAllText(kbPath, content);
-    Console.WriteLine($"Updated: {kbPath}");
+    var movement = results.First(r => r.name.Contains("Movement"));
+    var attack = results.First(r => r.name.Contains("Attack"));
+    var movementOk = movement.throughput >= movementThreshold;
+    var attackOk = attack.throughput >= attackThreshold;
+    var memoryOk = results.All(r => r.memoryStable);
+
+    Console.WriteLine($"Movement: {movement.throughput:F1} rounds/s >= {movementThreshold:F1} => {(movementOk ? "OK" : "FAIL")}");
+    Console.WriteLine($"Attack:   {attack.throughput:F1} rounds/s >= {attackThreshold:F1} => {(attackOk ? "OK" : "FAIL")}");
+    Console.WriteLine($"Memory:   {(memoryOk ? "OK" : "FAIL")}");
+
+    return movementOk && attackOk && memoryOk;
+}
+
+bool TryReadThresholds(out double movementThreshold, out double attackThreshold)
+{
+    movementThreshold = 0;
+    attackThreshold = 0;
+
+    string? kbPath = FindKnowledgePage();
+    if (kbPath is null) return false;
+
+    var content = File.ReadAllText(kbPath);
+    var movementMatch = Regex.Match(content, @"Movement 吞吐量：≥(?<value>\d+(?:\.\d+)?) rounds/s");
+    var attackMatch = Regex.Match(content, @"Attack 吞吐量：≥(?<value>\d+(?:\.\d+)?) rounds/s");
+    return movementMatch.Success &&
+           attackMatch.Success &&
+           double.TryParse(movementMatch.Groups["value"].Value, out movementThreshold) &&
+           double.TryParse(attackMatch.Groups["value"].Value, out attackThreshold);
 }
 
 string? FindKnowledgePage()

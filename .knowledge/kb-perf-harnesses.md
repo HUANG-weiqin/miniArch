@@ -2,7 +2,7 @@
 title: Performance Harnesses Disambiguation
 module: Meta
 description: Matrix of the 4 performance harnesses in miniArch — what each measures, current baselines, and which one is the regression gate
-updated: 2026-06-30 (新建)
+updated: 2026-06-30 (补 HeroComing --check-baseline / --update-baseline)
 ---
 # Performance Harnesses Disambiguation
 
@@ -23,7 +23,7 @@ miniArch 有 **4 套独立的性能测试工具**，它们用相似的词汇（r
 
 ```
 你的任务是什么？
-├── 架构变更后验证没退化 → HeroComing.Perf（唯一门禁）
+├── 架构变更后验证没退化 → HeroComing.Perf --check-baseline（唯一门禁）
 ├── 对比 MiniArch vs Arch/DefaultEcs/Friflo → GameTickSim.Perf
 ├── 验证 CommandStream 优化效果 → SubmitAndSnapshotAsync 内联测量
 ├── 微观 per-operation 分析 → PipelineBenchmarkTests
@@ -43,7 +43,10 @@ miniArch 有 **4 套独立的性能测试工具**，它们用相似的词汇（r
 
 ```bash
 # 门禁（必须 -c Release）
-dotnet run -c Release --project tools/perf/HeroComing.Perf
+dotnet run -c Release --project tools/perf/HeroComing.Perf --check-baseline
+
+# 人工刷新 baseline（不要用于普通门禁）
+dotnet run -c Release --project tools/perf/HeroComing.Perf --update-baseline
 
 # 竞品对比
 dotnet run -c Release --project tools/perf/GameTickSim.Perf

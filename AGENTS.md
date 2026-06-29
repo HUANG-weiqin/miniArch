@@ -84,7 +84,7 @@
 任何改动 `src/MiniArch/` 或 `tests/HeroPipeline.Tests/` 的架构变更，提交前必须执行：
 
 ```bash
-dotnet run -c Release --project tools/perf/HeroComing.Perf
+dotnet run -c Release --project tools/perf/HeroComing.Perf --check-baseline
 ```
 
 检查输出：
@@ -93,6 +93,7 @@ dotnet run -c Release --project tools/perf/HeroComing.Perf
 - 崩溃或异常 → **回退改动**
 
 > 阈值取 baseline 的 80%，随 `kb-hero-pipeline-regression.md` 的 baseline 更新而同步。
+> 普通门禁不会写 baseline；只有人工确认要刷新基线时才运行 `dotnet run -c Release --project tools/perf/HeroComing.Perf --update-baseline`。
 
 ### 5a) 确定性豁免（不必跑门禁）
 
@@ -111,6 +112,6 @@ dotnet run -c Release --project tools/perf/HeroComing.Perf
 - `git stash` 或 `git checkout .` 恢复到改动前状态
 - 分析失败原因，修复后重新测试
 
-测试会自动更新 `.knowledge/kb-hero-pipeline-regression.md` 中的 baseline 数据。
+仅显式传入 `--update-baseline` 时，测试才会更新 `.knowledge/kb-hero-pipeline-regression.md` 中的 baseline 数据。
 
 详细说明见 `.knowledge/kb-hero-pipeline-regression.md`。

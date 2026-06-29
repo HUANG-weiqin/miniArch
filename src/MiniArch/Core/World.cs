@@ -236,6 +236,9 @@ public sealed partial class World : IDisposable
     public bool Has<T>(Entity entity) where T : unmanaged
     {
         ThrowIfDisposed();
+        if ((uint)entity.Id >= (uint)_entitySlotCount)
+            return false;
+
         ref var record = ref _records[entity.Id];
         if (!record.IsOccupied || record.Version != entity.Version)
             return false;

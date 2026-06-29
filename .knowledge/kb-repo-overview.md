@@ -2,7 +2,7 @@
 title: Repository Overview
 module: Workspace
 description: How to navigate the repo and where to start
-updated: 2026-06-30 (加 build/test quickstart 段)
+updated: 2026-06-30 (补 HeroComing --check-baseline 门禁命令)
 ---
 # Repository Overview
 
@@ -45,7 +45,7 @@ dotnet test miniArch.sln -c Release
 dotnet test miniArch.sln -c Release --filter "Chunked_mode_*"
 
 # 回归门禁（架构变更后必跑）
-dotnet run -c Release --project tools/perf/HeroComing.Perf
+dotnet run -c Release --project tools/perf/HeroComing.Perf --check-baseline
 
 # 生成知识库新页面前先看模板
 # .knowledge/_template.md

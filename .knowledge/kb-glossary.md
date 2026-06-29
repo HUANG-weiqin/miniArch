@@ -2,7 +2,7 @@
 title: Glossary
 module: Meta
 description: Terms and acronyms used across the miniArch knowledge base
-updated: 2026-06-30 (新建)
+updated: 2026-06-30 (补 HeroComing.Perf 参数语义)
 ---
 # Glossary
 
@@ -66,6 +66,6 @@ updated: 2026-06-30 (新建)
 
 | 术语 | 定义 |
 |------|------|
-| **HeroComing.Perf** | 唯一的回归门禁工具。30s 固定时长吞吐量测试，Movement ≥1210 / Attack ≥767 rounds/s。 |
+| **HeroComing.Perf** | 唯一的回归门禁工具。30s 固定时长吞吐量测试；门禁用 `--check-baseline`，人工刷新基线用 `--update-baseline`。Movement ≥1210 / Attack ≥767 rounds/s。 |
 | **rounds/s** | 每秒完整游戏帧数（500 players + 500 enemies，含 query+command+submit 全链路）。 |
 | **cycles/s** | PipelineBenchmarkTests 的 per-operation cycle 计数。与 rounds/s 是不同 harness，不可跨工具比较。 |

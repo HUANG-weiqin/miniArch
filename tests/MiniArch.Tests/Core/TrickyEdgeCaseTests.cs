@@ -926,6 +926,29 @@ public sealed class TrickyEdgeCaseTests
 
         Assert.False(world.TryGet(badEntity, out Position _));
     }
+
+    [Fact]
+    public void Has_returns_false_for_invalid_entity_handles()
+    {
+        var world = new World();
+        var alive = world.Create(new Position(1, 2));
+        world.Destroy(alive);
+
+        Assert.False(world.Has<Position>(default));
+        Assert.False(world.Has<Position>(new Entity(-1, 1)));
+        Assert.False(world.Has<Position>(new Entity(9999, 1)));
+        Assert.False(world.Has<Position>(alive));
+    }
+
+    [Fact]
+    public void Has_returns_false_for_entity_from_different_world()
+    {
+        var worldA = new World();
+        var worldB = new World();
+        var entityA = worldA.Create(new Position(1, 2));
+
+        Assert.False(worldB.Has<Position>(entityA));
+    }
 }
 
 

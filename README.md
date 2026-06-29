@@ -152,17 +152,17 @@ All benchmarks: **GC 0/0/0** across all game scenarios, zero heap pressure.
 
 ## Design: Why It's Fast
 
-Most C# ECS libraries (Arch included) split each archetype into **multiple fixed-size chunks** (e.g. 16KB). Entity data for the same component set is scattered across chunks. Iteration means jumping between chunks — cache misses everywhere.
+Most C# ECS libraries (Arch included) split each archetype into **multiple fixed-size chunks** (e.g. 16KB). MiniArch keeps the small and common path flatter: an archetype starts as one column-major `byte[]` that grows by doubling, so hot query iteration is a sequential scan through contiguous component columns.
 
-MiniArch does the opposite: **one archetype = one contiguous `byte[]` that grows by doubling.** All entities with the same components sit in a single flat block of memory. Query iteration is pure sequential memory scan — zero cross-chunk jumps, hardware prefetcher runs at full speed.
+When an archetype grows past a layout-dependent threshold, MiniArch promotes it to segmented storage: each segment owns its own entity array and component `byte[]`, and each segment is exposed as a `ChunkView`. This bounds allocation size and avoids repeatedly copying huge arrays while preserving the same public chunk API.
 
-This single-block design cascades into simpler code everywhere: no chunk list management, no chunk boundary checks, no chunk iteration overhead. The entire storage is just a base pointer + column offsets + element sizes. Row access is one multiply-add. Query iteration is one pointer bump per entity.
+This storage design keeps the inner loop simple: a component read is still base pointer + column offset + row * element size. Small archetypes get a single contiguous scan; large archetypes trade one segment boundary per ~2 MB of component data for predictable allocation behavior.
 
-Around this core, there's a collection of targeted optimizations: 512-bit archetype matching (8 × ulong, O(1) per mask), 16-byte entity records (4 fit in one cache line), inline small-size maps in CommandBuffer (4 entries zero-alloc inline), slab bump-allocator for component data (bounds check + pointer write), size-specialized memcpy for 1/2/4/8/12/16 byte components, and an 8-slot direct-mapped archetype cache in CommandStream.
+Around this core, there's a collection of targeted optimizations: 512-bit archetype matching (8 × ulong, O(1) per mask), 16-byte entity records (4 fit in one cache line), a slab bump-allocator for pending component data, size-specialized memcpy for 1/2/4/8/12/16 byte components, and an 8-slot direct-mapped archetype cache in CommandStream.
 
 **Why CommandStream beats Friflo:** Friflo's `Playback()` scans every operation twice (once to build bitmasks, once to write values). MiniArch CommandStream scans **once** for Set operations on existing entities — because structural changes are the exception, not the norm in real games. The more your game does "update health by -5" vs "add Burning debuff," the more MiniArch pulls ahead.
 
-**Capacity:** Single `byte[]` per archetype supports up to ~67M entities (2 GB .NET array limit, ~32 bytes/component). Doubling growth means 19 reallocations from 128 to 67M — amortized O(1) per create. The bottleneck is physical RAM, not the data structure.
+**Capacity:** Small archetypes stay in one flat buffer. Large archetypes promote to fixed-size segments, avoiding the 2 GB single-array ceiling and large copy spikes. The practical bottleneck is still physical RAM and the component footprint of your archetypes.
 
 ---
 
