@@ -21,7 +21,8 @@
 | HeroPipeline.Tests | 合并到 `kb-hero-pipeline-regression.md` "PipelineBenchmarkTests" 段 |
 | HeroComing.Perf（回归门禁） | `kb-hero-pipeline-regression.md` |
 | GameTickSim.Perf（场景基准） | `kb-gameticksim-scenarios.md` |
-| CommandStreamGame.Perf | `kb-commandstream-game-perf.md` |
+| CommandStreamGame.Perf（CommandStream 真实游戏稳态压测） | `kb-commandstream-game-perf.md` |
+| samples/BulletLockstep.Demo（多 host 弹幕游戏集成测试） | `kb-bullet-lockstep-demo.md`（9 个 slice 端到端压测库全部公共能力：placeholder lockstep / archetype 迁移 / hierarchy / chunked / 持久化 / 回滚） |
 
 ## 快速入口
 
@@ -36,6 +37,7 @@
 - **不知道该跑哪个 perf 工具** → `kb-perf-harnesses.md`（消歧矩阵）
 - **CPU 采样定位热点** → `kb-profiling-workflow.md`
 - **固定时长吞吐量对比** → `kb-throughput-workflow.md`
+- **多 host 弹幕游戏集成测试** → `kb-bullet-lockstep-demo.md`
 - **回归门禁** → `kb-hero-pipeline-regression.md`
 - **Cache/内存优化** → `kb-cache-optimization.md`
 
