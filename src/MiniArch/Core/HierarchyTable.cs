@@ -411,6 +411,43 @@ internal sealed class HierarchyTable
         }
     }
 
+    internal void CaptureState(WorldStateSnapshot snapshot)
+    {
+        snapshot.EnsureHierarchyCapacity(_parentByChild.Length, _childSlotCount);
+
+        Array.Copy(_parentByChild, snapshot.HierarchyParentByChild, _parentByChild.Length);
+        Array.Copy(_firstChild, snapshot.HierarchyFirstChild, _firstChild.Length);
+        Array.Copy(_childEntity, snapshot.HierarchyChildEntity, _childSlotCount);
+        Array.Copy(_childNext, snapshot.HierarchyChildNext, _childSlotCount);
+
+        snapshot.HierarchyChildSlotCount = _childSlotCount;
+        snapshot.HierarchyChildFreeList = _childFreeList;
+    }
+
+    internal void RestoreState(WorldStateSnapshot snapshot)
+    {
+        if (_parentByChild.Length != snapshot.HierarchyParentByChild.Length)
+        {
+            _parentByChild = new Entity[snapshot.HierarchyParentByChild.Length];
+            _firstChild = new int[snapshot.HierarchyFirstChild.Length];
+        }
+        Array.Copy(snapshot.HierarchyParentByChild, _parentByChild, snapshot.HierarchyParentByChild.Length);
+        Array.Copy(snapshot.HierarchyFirstChild, _firstChild, snapshot.HierarchyFirstChild.Length);
+
+        if (_childEntity.Length < snapshot.HierarchyChildSlotCount)
+        {
+            _childEntity = new Entity[snapshot.HierarchyChildSlotCount];
+            _childNext = new int[snapshot.HierarchyChildSlotCount];
+        }
+        if (snapshot.HierarchyChildSlotCount > 0)
+        {
+            Array.Copy(snapshot.HierarchyChildEntity, _childEntity, snapshot.HierarchyChildSlotCount);
+            Array.Copy(snapshot.HierarchyChildNext, _childNext, snapshot.HierarchyChildSlotCount);
+        }
+        _childSlotCount = snapshot.HierarchyChildSlotCount;
+        _childFreeList = snapshot.HierarchyChildFreeList;
+    }
+
     private void EnsureCapacity(int entityId)
     {
         if (entityId < _parentByChild.Length)

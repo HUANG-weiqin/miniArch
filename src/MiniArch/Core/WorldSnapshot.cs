@@ -7,7 +7,16 @@ using System.Text;
 namespace MiniArch.Core;
 
 /// <summary>
-/// Saves and loads world snapshots.
+/// Persists world state to and from a versioned byte stream (file/network).
+/// Designed for <b>cross-process</b> scenarios: save to disk, send over the
+/// network, checksum for lockstep verification. Uses versioned encoding
+/// (<see cref="FormatVersion"/>) with schema tables, archetype mapping,
+/// entity-id remapping, and signed checksums.
+/// <para/>
+/// <b>NOT</b> for high-frequency in-memory rollback (GGPO frame save/restore).
+/// For that, use <see cref="WorldStateSnapshot"/> with
+/// <see cref="World.CaptureState"/> / <see cref="World.RestoreState"/>,
+/// which achieves zero-allocation after warmup by copying raw memory arrays.
 /// </summary>
 public static class WorldSnapshot
 {

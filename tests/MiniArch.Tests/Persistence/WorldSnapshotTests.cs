@@ -304,6 +304,116 @@ public sealed class WorldSnapshotTests
         Assert.Equal(c.Id, lc.Id);
     }
 
+    // ──────────────────────────────────────────────
+    //  Tier 1 in-memory rollback snapshot
+    // ──────────────────────────────────────────────
+
+    [Fact]
+    public void Capture_and_restore_preserves_full_state()
+    {
+        var world = new World();
+        var e0 = world.Create(new Position(1, 2));
+        var e1 = world.Create(new Velocity(3, 4));
+        var e2 = world.Create(new Position(5, 6));
+        world.Add(e2, new Velocity(7, 8));
+        world.Destroy(e1);
+
+        var parent = world.Create();
+        var child = world.Create();
+        world.Link(parent, child);
+
+        var checksumPre = world.Checksum();
+        var snapshot = world.CaptureState();
+
+        // Mutate heavily
+        var fresh = world.Create(new Health(100));
+        world.Destroy(e0);
+        world.Add(fresh, new Position(9, 10));
+        world.Remove<Velocity>(fresh);
+        world.Unlink(child);
+        world.Destroy(parent);
+
+        world.RestoreState(snapshot);
+        var checksumPost = world.Checksum();
+
+        Assert.Equal(checksumPre, checksumPost);
+        Assert.True(world.IsAlive(e0));
+        Assert.True(world.IsAlive(e2));
+        Assert.False(world.IsAlive(e1));
+        Assert.True(world.TryGetParent(child, out var restoredParent));
+        Assert.Equal(parent, restoredParent);
+    }
+
+    [Fact]
+    public void Rollback_and_replay_produces_deterministic_ids()
+    {
+        var world = new World();
+        world.Create(new Position(0, 0));
+        world.Create(new Position(1, 1));
+        world.Create(new Position(2, 2));
+
+        // Create a specific free-list state
+        world.Destroy(world.Create(new Position(3, 3)));
+        world.Destroy(world.Create(new Position(4, 4)));
+
+        var snapshot = world.CaptureState();
+
+        // Simulate a predicted frame
+        var a1 = world.Create(new Position(10, 10));
+        var a2 = world.Create(new Position(20, 20));
+
+        world.RestoreState(snapshot);
+
+        // Re-simulate same frame
+        var b1 = world.Create(new Position(10, 10));
+        var b2 = world.Create(new Position(20, 20));
+
+        Assert.Equal(a1.Id, b1.Id);
+        Assert.Equal(a2.Id, b2.Id);
+        Assert.Equal(a1.Version, b1.Version);
+        Assert.Equal(a2.Version, b2.Version);
+    }
+
+    [Fact]
+    public void Capture_restore_twice_is_idempotent()
+    {
+        var world = new World();
+        var e0 = world.Create(new Position(1, 2));
+        var e1 = world.Create(new Velocity(3, 4));
+        world.Link(e0, e1);
+
+        var s1 = world.CaptureState();
+        world.RestoreState(s1);
+        var hash1 = world.Checksum();
+
+        var s2 = world.CaptureState();
+        world.RestoreState(s2);
+        var hash2 = world.Checksum();
+
+        Assert.Equal(hash1, hash2);
+    }
+
+    [Fact]
+    public void Rollback_with_invalidated_caches_still_correct()
+    {
+        var world = new World();
+        world.Create(new Position(1, 2));
+
+        var snapshot = world.CaptureState();
+
+        // Mutate
+        world.Create(new Velocity(3, 4));
+        world.Create(new Health(5));
+
+        world.RestoreState(snapshot);
+
+        // After rollback, only the Position entity should exist.
+        // Verify by performing structural changes (which use destination caches).
+        var fresh = world.Create(new Velocity(6, 7));
+        Assert.True(world.IsAlive(fresh));
+        Assert.Equal(2, world.EntityCount);
+    }
+
     private static T GetComponent<T>(World world, Entity entity) where T : unmanaged
     {
         Assert.True(world.TryGetLocation(entity, out var location));

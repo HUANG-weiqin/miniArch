@@ -955,6 +955,109 @@ public sealed partial class World : IDisposable
     }
 
 
+    // ──────────────────────────────────────────────
+    //  Tier 1 in-memory rollback snapshot
+    // ──────────────────────────────────────────────
+
+    private WorldStateSnapshot? _stateSnapshotSpare;
+
+    /// <summary>
+    /// Captures the world's current mutable state into an opaque handle
+    /// for later rollback via <see cref="RestoreState"/>.
+    /// <para/>
+    /// The snapshot is recycled after restore — in steady state (warm cache)
+    /// this method allocates zero GC memory. Suitable for GGPO-style 60fps
+    /// frame save/restore cycles at &lt;1000 entities.
+    /// </summary>
+    public WorldStateSnapshot CaptureState()
+    {
+        ThrowIfDisposed();
+        var snap = _stateSnapshotSpare ?? new WorldStateSnapshot();
+        snap.Clear();
+
+        // Records
+        snap.EnsureRecordsCapacity(_entitySlotCount);
+        Array.Copy(_records, snap.Records, _entitySlotCount);
+        snap.EntitySlotCount = _entitySlotCount;
+
+        // Free ids
+        snap.EnsureFreeIdsCapacity(_freeIdCount);
+        for (var i = 0; i < _freeIdCount; i++)
+        {
+            snap.FreeIds[i] = _freeIds[i].Id;
+            snap.FreeIdVersions[i] = _freeIds[i].Version;
+        }
+        snap.FreeIdCount = _freeIdCount;
+
+        // Per-archetype data
+        snap.EnsureArchetypeBackupsCapacity(_archetypes.Count);
+        var backupIdx = 0;
+        foreach (var arch in _archetypes.Values)
+        {
+            if (arch.EntityCount == 0) continue;
+            ref var entry = ref snap.ArchetypeBackups[backupIdx];
+            if (!arch.IsChunked)
+                ArchetypeBackupEntry.CopyFromNonChunked(arch, ref entry);
+            else
+                ArchetypeBackupEntry.CopyFromChunked(arch, ref entry);
+            backupIdx++;
+        }
+        snap.ArchetypeBackupCount = backupIdx;
+
+        // Hierarchy
+        _hierarchy.CaptureState(snap);
+
+        _stateSnapshotSpare = null;
+        return snap;
+    }
+
+    /// <summary>
+    /// Restores the world to a previously captured state. The snapshot is
+    /// recycled internally and should not be used after this call (it becomes
+    /// the world's spare for the next <see cref="CaptureState"/>).
+    /// <para/>
+    /// After restore, all query caches and archetype transition caches are
+    /// invalidated and will rebuild on next use.
+    /// </summary>
+    public void RestoreState(WorldStateSnapshot snapshot)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        // Records
+        if (_records.Length < snapshot.EntitySlotCount)
+            Array.Resize(ref _records, snapshot.EntitySlotCount);
+        Array.Copy(snapshot.Records, _records, snapshot.EntitySlotCount);
+        _entitySlotCount = snapshot.EntitySlotCount;
+
+        // Free ids
+        if (_freeIds.Length < snapshot.FreeIdCount)
+            Array.Resize(ref _freeIds, snapshot.FreeIdCount);
+        for (var i = 0; i < snapshot.FreeIdCount; i++)
+            _freeIds[i] = new RecycledEntity(snapshot.FreeIds[i], snapshot.FreeIdVersions[i]);
+        _freeIdCount = snapshot.FreeIdCount;
+
+        // Reset all archetypes to empty, then restore backed-up ones.
+        // This handles prediction-created archetypes that have no backup.
+        foreach (var arch in _archetypes.Values)
+            arch.ResetCount();
+
+        for (var i = 0; i < snapshot.ArchetypeBackupCount; i++)
+        {
+            ref var entry = ref snapshot.ArchetypeBackups[i];
+            entry.RestoreTo(entry.Archetype);
+        }
+
+        // Hierarchy
+        _hierarchy.RestoreState(snapshot);
+
+        // Invalidate all caches
+        _createArchetypeCacheGeneration++;
+
+        // Recycle snapshot as spare for next CaptureState
+        _stateSnapshotSpare = snapshot;
+    }
+
     private readonly record struct CloneWork(Entity Source, Entity CloneEntity);
 
 }

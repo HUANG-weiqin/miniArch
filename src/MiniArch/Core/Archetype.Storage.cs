@@ -678,6 +678,37 @@ internal sealed partial class Archetype
         }
     }
 
+    // ──────────────────────────────────────────────
+    //  Snapshot/restore helpers (Tier 1 rollback)
+    // ──────────────────────────────────────────────
+
+    internal int TotalDataBytes => _data?.Length ?? 0;
+
+    internal void CopyDataTo(byte[] dest) => Array.Copy(_data, dest, _data.Length);
+
+    internal void CopyDataFrom(byte[] src) => Array.Copy(src, _data, src.Length);
+
+    internal void SetCount(int count) => _count = count;
+
+    internal ref Segment GetSegmentRef(int index) => ref _segments[index];
+    internal Segment GetSegment(int index) => _segments[index];
+
+    internal void RebuildFlatEntities()
+    {
+        _flatEntitiesGeneration++;
+        _cachedFlatEntitiesGeneration = -1;
+    }
+
+    internal void ResetCount()
+    {
+        _count = 0;
+        if (_isChunked)
+        {
+            for (var i = 0; i < _segmentCount; i++)
+                _segments[i].Count = 0;
+        }
+    }
+
     internal void FeedRowData(int columnIndex, int globalRow, SpanFeeder feed)
     {
         var elemSize = _elementSizes[columnIndex];
