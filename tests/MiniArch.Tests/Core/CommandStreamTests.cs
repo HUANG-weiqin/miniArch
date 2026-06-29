@@ -1646,7 +1646,37 @@ public sealed class CommandStreamTests
     // ══════════════════════════════════════════════════════════�?
 
     [Fact]
-    public void Fuzz_10000_frames_submit_and_replay_stay_in_sync()
+    public void Pending_cancel_after_later_create_does_not_diverge_replay_allocator()
+    {
+        var source = new World();
+        var replica = new World();
+        var stream = new CommandStream(source);
+
+        var cancelled = stream.Create();
+        stream.Add(cancelled, new Position(1, 2));
+
+        var survivor = stream.Create();
+        stream.Add(survivor, new Health(10));
+
+        stream.Destroy(cancelled);
+
+        var delta = stream.Snapshot();
+        stream.Submit();
+        replica.Replay(FrameDelta.Deserialize(delta.AsSpan()));
+
+        Assert.False(source.IsAlive(cancelled));
+        Assert.True(source.IsAlive(survivor));
+        AssertIdenticalWorlds(source, replica, "pending cancel after later create");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(42)]
+    [InlineData(1337)]
+    [InlineData(2024)]
+    [InlineData(65535)]
+    public void Fuzz_10000_frames_submit_and_replay_stay_in_sync(int seed)
     {
         // Dual property fuzz:
         //   1. Single-world correctness — after each frame's Submit, the source
@@ -1666,7 +1696,7 @@ public sealed class CommandStreamTests
         var replica = new World();
         var stream = new CommandStream(world);
         var alive = new List<Entity>();
-        var rng = new Random(42); // Fixed seed for reproducibility
+        var rng = new Random(seed); // Fixed seed for reproducibility
 
         for (var frame = 0; frame < Frames; frame++)
         {
@@ -1727,8 +1757,14 @@ public sealed class CommandStreamTests
             // an independent FrameDelta from those bytes. This catches varint
             // encoding, truncation, and endianness bugs that a direct in-memory
             // Replay(delta) would silently miss.
-            replica.Replay(FrameDelta.Deserialize(delta.AsSpan()));
-
+            try
+            {
+                replica.Replay(FrameDelta.Deserialize(delta.AsSpan()));
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException($"Replay failed during fuzz seed={seed}, frame={frame}.", ex);
+            }
             // Cheap gross-divergence check periodically to localize failures.
             if ((frame + 1) % SyncCheckInterval == 0)
             {
@@ -1744,11 +1780,11 @@ public sealed class CommandStreamTests
 
         // Single-world correctness: tracking list matches the source's accounting.
         Assert.Equal(world.EntityCount, alive.Count);
-        Assert.True(alive.Count > 0); // seed 42 + 10000 frames leaves survivors
+        Assert.True(alive.Count > 0); // selected fixed seeds + 10000 frames leave survivors
 
         // Cross-world determinism: source (via Submit) == replica (via Replay),
         // verified bit-identical through WorldSnapshot serialization + SHA256.
-        AssertIdenticalWorlds(world, replica, "source(Submit) vs replica(Replay) after 10000 frames");
+        AssertIdenticalWorlds(world, replica, $"source(Submit) vs replica(Replay) after 10000 frames, seed={seed}");
     }
 
     // ══════════════════════════════════════════════════════════�?

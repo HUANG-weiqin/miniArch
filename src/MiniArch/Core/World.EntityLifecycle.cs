@@ -458,11 +458,25 @@ public sealed partial class World
             return;
         }
 
+        if (entity.Id == _entitySlotCount && entity.Version == 1)
+        {
+            ReserveReplayFreshSlot(entity);
+            return;
+        }
+
         var reserved = ReserveDeferredEntity();
         if (reserved != entity)
         {
             throw new InvalidOperationException($"Replay failed: expected to reserve entity {entity} but got {reserved} instead. The source and target worlds may be out of sync.");
         }
+    }
+
+    private void ReserveReplayFreshSlot(Entity entity)
+    {
+        EnsureEntityCapacity(entity.Id + 1);
+        _records[entity.Id] = new EntityRecord { Version = entity.Version };
+        _entitySlotCount = entity.Id + 1;
+        EnsureDestroyScratchCapacity(_entitySlotCount);
     }
 
     private void RemoveFromFreeList(Entity entity)
