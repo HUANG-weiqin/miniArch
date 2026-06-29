@@ -27,6 +27,22 @@ public sealed class LockstepSimulator
     // frame 0 init, and homing-bullet + boss + weakpoint-follow systems run.
     public bool SpawnBoss { get; init; } = false;
 
+    // Slice 7: scale mode cranks boss ring-pattern spawn rate to push a single
+    // archetype past the chunked-storage threshold (~50K entities for our
+    // 28-byte bullet layout). Used to verify chunked storage stays byte-
+    // identical across hosts.
+    public bool ScaleMode { get; init; } = false;
+
+    // Reusable per-tick delta buffer (Slice 7 alloc reduction). Allocated once
+    // at first tick; reused across ticks. Caller still receives a valid
+    // reference for the current tick's deltas (overwritten on next tick).
+    private FrameDelta[]? _deltaBuffer;
+
+    // Slice 7: track peak concurrent entity count across all hosts during the
+    // run. End-of-run snapshot misses peaks that occur mid-run (e.g. bullet
+    // waves that get destroyed before the run ends).
+    public int PeakEntityCount { get; private set; }
+
     public LockstepSimulator(int hostCount)
     {
         _hosts = new LockstepHost[hostCount];
@@ -36,37 +52,59 @@ public sealed class LockstepSimulator
 
     public bool Tick(int frame) => Tick(frame, out _);
 
+    // Slice 7: ScaleMode reduces checksum frequency (every 50 frames) because
+    // CanonicalChecksum is O(N) with SHA256 — too slow to run per-frame at
+    // 30K+ entities. Determinism is still verified at sample points; the
+    // post-replay systems run every frame on every host regardless.
+    private bool ShouldChecksum(int frame) => !ScaleMode || frame % 50 == 0;
+
     public bool Tick(int frame, out FrameDelta[] deltas)
     {
         // 1. Record. Frame 0 = player init (if enabled); else bullet fire.
         foreach (var h in _hosts)
         {
             if (SpawnPlayers && frame == 0)
-                h.RecordInit(SpawnBoss);
+                h.RecordInit(SpawnBoss, ScaleMode);
             else
-                h.RecordFrame(frame);
+                h.RecordFrame(frame, ScaleMode);
         }
 
         // 2. Snapshot each host's intent to a placeholder delta, then Clear.
-        deltas = new FrameDelta[_hosts.Length];
+        //    Slice 7: reuse the same buffer across ticks to avoid per-frame
+        //    allocation. Snapshot returns a fresh FrameDelta object per host
+        //    (its internals are pooled inside CommandStream), but the array
+        //    holding them is reused.
+        if (_deltaBuffer is null || _deltaBuffer.Length != _hosts.Length)
+            _deltaBuffer = new FrameDelta[_hosts.Length];
         for (var i = 0; i < _hosts.Length; i++)
         {
-            deltas[i] = _hosts[i].Stream.Snapshot();
+            _deltaBuffer[i] = _hosts[i].Stream.Snapshot();
             _hosts[i].Stream.Clear();
         }
+        deltas = _deltaBuffer;
 
         // 3. Every host replays all deltas in fixed HostId order.
         ReplayDeltasOnAllHosts(deltas);
 
         // 4. Deterministic post-replay systems. Order matters — same on every host.
         foreach (var h in _hosts)
+        {
             RunSystems(h.World, frame);
+            var count = h.World.GetStats().EntityCount;
+            if (count > PeakEntityCount)
+                PeakEntityCount = count;
+        }
 
-        // 5. Compare canonical checksums.
+        // 5. Compare canonical checksums at sampled frames (every frame in
+        //    normal mode; every 50 frames in ScaleMode to keep runtime sane).
+        if (!ShouldChecksum(frame))
+            return true;
+
         var refChecksum = _hosts[0].Checksum();
         for (var i = 1; i < _hosts.Length; i++)
         {
-            if (!EqualBytes(refChecksum, _hosts[i].Checksum()))
+            var other = _hosts[i].Checksum();
+            if (!EqualBytes(refChecksum, other))
                 return false;
         }
         return true;

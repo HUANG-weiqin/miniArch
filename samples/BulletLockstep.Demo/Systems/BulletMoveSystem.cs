@@ -4,10 +4,19 @@ using MiniArch.Core;
 namespace BulletLockstep.Demo.Systems;
 
 // Deterministic post-replay system: advances every transient entity's
-// position by its velocity. Runs identically on every host because the world
-// state is identical after replay — no input needed, no record needed.
+// position by its velocity. Slice 7 upgrade: parallel chunk iteration for
+// large entity counts.
 //
-// Uses chunk-span iteration for in-place mutation (zero alloc, zero record).
+// Parallel safety: ChunkView.GetSpan<T>() returns a writable span into the
+// archetype's storage. Distinct chunks live in distinct memory; writing
+// positions[i] from one chunk never races with another chunk's write. No
+// structural changes inside the parallel body (those still go through the
+// simulator's record phase via CommandStream).
+//
+// Determinism: every host runs the same number of chunks through the same
+// Parallel.For partitions, so the resulting Position values are identical
+// regardless of host. Writes are commutative across chunks (each chunk's
+// rows are independent), so partitioning does not affect the final state.
 public static class BulletMoveSystem
 {
     private static readonly QueryDescription Query = new QueryDescription()
@@ -16,7 +25,8 @@ public static class BulletMoveSystem
 
     public static void Run(World world)
     {
-        foreach (var chunk in world.Query(in Query).GetChunks())
+        var query = world.Query(in Query);
+        query.ForEachChunkParallel(chunk =>
         {
             var positions = chunk.GetSpan<Position>();
             var velocities = chunk.GetSpan<Velocity>();
@@ -26,6 +36,6 @@ public static class BulletMoveSystem
                     positions[i].X + velocities[i].Dx,
                     positions[i].Y + velocities[i].Dy);
             }
-        }
+        });
     }
 }

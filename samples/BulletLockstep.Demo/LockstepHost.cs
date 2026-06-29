@@ -29,7 +29,7 @@ public sealed class LockstepHost
     // with: N players + 1 boss + 5 weakpoints, all hierarchically linked.
     // The placeholder refs in Link() are valid because Create + Link happen
     // in the same frame's record.
-    public void RecordInit(bool spawnBoss)
+    public void RecordInit(bool spawnBoss, bool scaleMode = false)
     {
         var player = Stream.Create();
         Stream.Add(player, new PlayerTag(HostId));
@@ -38,17 +38,21 @@ public sealed class LockstepHost
         Stream.Add(player, new Health(1000, 1000));
 
         if (spawnBoss && HostId == 0)
-            RecordBossHierarchy();
+            RecordBossHierarchy(scaleMode);
     }
 
-    private void RecordBossHierarchy()
+    private void RecordBossHierarchy(bool scaleMode)
     {
         const int weakPointCount = 5;
         var boss = Stream.Create();
         Stream.Add(boss, new BossTag());
         Stream.Add(boss, new Position(50_000, 50_000));
-        Stream.Add(boss, new Health(weakPointCount * 100, weakPointCount * 100));
-        Stream.Add(boss, new AIPattern(Phase: 0, PhaseFrame: 0));
+        // Scale mode starts the boss in phase 1 immediately so the ring
+        // pattern kicks in from frame 0 (otherwise we'd wait 200 frames for
+        // the natural phase transition).
+        Stream.Add(boss, new Health(scaleMode ? int.MaxValue : weakPointCount * 100,
+                                     scaleMode ? int.MaxValue : weakPointCount * 100));
+        Stream.Add(boss, new AIPattern(Phase: scaleMode ? 1 : 0, PhaseFrame: 0));
 
         for (var i = 0; i < weakPointCount; i++)
         {
@@ -67,8 +71,9 @@ public sealed class LockstepHost
 
     // Frame > 0: each host records Create(bullet). Host 0 fires homing bullets
     // periodically (different archetype, exercises With<Target> queries);
-    // other hosts fire basic bullets.
-    public void RecordFrame(int frame)
+    // other hosts fire basic bullets. Slice 7: host 0 also fires ring-pattern
+    // bursts in boss phase 1 (many Stream.Create in one frame).
+    public void RecordFrame(int frame, bool scaleMode = false)
     {
         var (dx, dy) = InputProvider.Get(HostId, frame);
 
@@ -96,6 +101,44 @@ public sealed class LockstepHost
             Stream.Add(bullet, new Velocity(dx * 1000, dy * 1000));
             Stream.Add(bullet, new Damage(50));
         }
+
+        // Slice 7: host 0 fires a ring pattern when boss is in phase 1. Scale
+        // mode cranks the count to test chunked storage at 30K+ entities.
+        if (HostId == 0)
+            RecordBossRingPattern(frame, scaleMode);
+    }
+
+    private void RecordBossRingPattern(int frame, bool scaleMode)
+    {
+        // Read boss phase from the local world. BossAISystem mutates phase in
+        // post-replay; at record time we see last frame's phase.
+        var bossPhase = ReadBossPhase();
+        if (bossPhase != 1)
+            return;
+
+        var ringCount = scaleMode ? 600 : 24;
+        var speed = scaleMode ? 400 : 1200;
+        for (var i = 0; i < ringCount; i++)
+        {
+            var angle = i * (2 * Math.PI / ringCount) + frame * 0.05;
+            var vx = (int)(Math.Cos(angle) * speed);
+            var vy = (int)(Math.Sin(angle) * speed);
+            var bullet = Stream.Create();
+            Stream.Add(bullet, new BulletTag());
+            Stream.Add(bullet, new SpawnFrame(frame));
+            Stream.Add(bullet, new FiredBy(HostId));
+            Stream.Add(bullet, new Position(50_000, 50_000));
+            Stream.Add(bullet, new Velocity(vx, vy));
+            Stream.Add(bullet, new Damage(30));
+        }
+    }
+
+    private int ReadBossPhase()
+    {
+        var desc = new QueryDescription().With<BossTag>();
+        foreach (var e in World.Query(in desc))
+            return World.Get<AIPattern>(e).Phase;
+        return -1;
     }
 
     public byte[] Checksum() => World.CanonicalChecksum();

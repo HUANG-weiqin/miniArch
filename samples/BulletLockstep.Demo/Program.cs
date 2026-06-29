@@ -13,12 +13,13 @@ return slice switch
     4 => RunSlice4(hostCount, frameCount),
     5 => RunSlice5(hostCount, frameCount),
     6 => RunSlice6(hostCount, frameCount),
+    7 => RunSlice7(hostCount, frameCount),
     _ => BadSlice(slice),
 };
 
 static int BadSlice(int slice)
 {
-    Console.Error.WriteLine($"Unknown slice: {slice}. Supported: 2, 3, 4, 5, 6.");
+    Console.Error.WriteLine($"Unknown slice: {slice}. Supported: 2-7.");
     return 2;
 }
 
@@ -164,6 +165,48 @@ static int RunSlice6(int hostCount, int frameCount)
             Console.WriteLine($"  host {h.HostId} view: player {tag.HostId} HP = {hp.Cur}/{hp.Max}");
         }
     }
+    return 0;
+}
+
+// ── Slice 7: scale + parallel + chunked storage ──────────────────────
+// Boss ring pattern spawns 400 bullets/frame in scale mode, pushing the
+// bullet archetype past the chunked-storage threshold (~50K entities for
+// the 28-byte bullet layout). BulletMoveSystem uses ForEachChunkParallel for
+// multi-threaded position updates. Verifies chunked storage + parallel
+// writes stay byte-identical across hosts.
+static int RunSlice7(int hostCount, int frameCount)
+{
+    Console.WriteLine($"BulletLockstep Slice 7 (scale + parallel + chunked storage)");
+    Console.WriteLine($"  {hostCount} hosts, {frameCount} frames, scale mode (400 bullets/frame ring)");
+    Console.WriteLine();
+
+    var sim = new LockstepSimulator(hostCount)
+    {
+        SpawnPlayers = true,
+        SpawnBoss = true,
+        ScaleMode = true,
+    };
+    GcBaseline(out var gc0, out var gc1, out var gc2, out var bytes);
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+
+    int mismatch = RunLockstep(sim, frameCount);
+
+    sw.Stop();
+    GcDelta(gc0, gc1, gc2, bytes, out var gc, out var alloc);
+
+    if (mismatch >= 0) return ReportFail(sim, mismatch);
+
+    Console.ForegroundColor = ConsoleColor.Green;
+    Console.WriteLine($"PASS: all {frameCount} frames consistent across {hostCount} hosts");
+    Console.ResetColor();
+    Report(sw, frameCount, gc, alloc, sim);
+
+    // Confirm we actually hit scale.
+    var peakEntityCount = sim.PeakEntityCount;
+    Console.WriteLine();
+    Console.WriteLine($"  peak entity count: {peakEntityCount} (chunked storage threshold ~32K for 28-byte bullets)");
+    var triggeredChunked = peakEntityCount >= 32_000;
+    Console.WriteLine($"  chunked storage triggered: {triggeredChunked}");
     return 0;
 }
 
