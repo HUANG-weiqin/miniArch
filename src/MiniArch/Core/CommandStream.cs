@@ -84,7 +84,7 @@ public sealed class CommandStream : ICommandRecorder
         set => _parallelMode = value;
     }
 
-    private bool _parallelMode;
+    private volatile bool _parallelMode;
 
     /// <summary>
     /// When <c>true</c>, <see cref="Create"/> and <see cref="Clone"/> produce
