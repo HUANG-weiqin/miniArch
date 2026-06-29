@@ -19,6 +19,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HeroComing.Perf", "tools\pe
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QueryInvalidation.Perf", "tools\perf\QueryInvalidation.Perf\QueryInvalidation.Perf.csproj", "{F2FC2665-6A9C-482A-96E1-3E599B5BF8F8}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "samples", "samples", "{ECD22EC6-A041-4F54-90F2-CA207F66BB3F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BulletLockstep.Demo", "samples\BulletLockstep.Demo\BulletLockstep.Demo.csproj", "{4888A783-86D5-479B-8A83-F45921B61FBB}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -53,6 +57,10 @@ Global
 		{D4E2F5A1-7B3C-4D8E-9F0A-2B5C7D1E3F4A}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D4E2F5A1-7B3C-4D8E-9F0A-2B5C7D1E3F4A}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{D4E2F5A1-7B3C-4D8E-9F0A-2B5C7D1E3F4A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4888A783-86D5-479B-8A83-F45921B61FBB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4888A783-86D5-479B-8A83-F45921B61FBB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4888A783-86D5-479B-8A83-F45921B61FBB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4888A783-86D5-479B-8A83-F45921B61FBB}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -60,5 +68,6 @@ Global
 	GlobalSection(NestedProjects) = preSolution
 		{F9E30B84-63BA-4107-B020-598A8BFEA792} = {A989F849-EE38-4F2D-BAF5-DFC5F396D6CD}
 		{F2FC2665-6A9C-482A-96E1-3E599B5BF8F8} = {A989F849-EE38-4F2D-BAF5-DFC5F396D6CD}
+		{4888A783-86D5-479B-8A83-F45921B61FBB} = {ECD22EC6-A041-4F54-90F2-CA207F66BB3F}
 	EndGlobalSection
 EndGlobal
