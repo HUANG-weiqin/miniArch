@@ -1,4 +1,5 @@
 using BulletLockstep.Demo;
+using MiniArch;
 
 int slice = args.Length > 0 && int.TryParse(args[0], out var s) ? s : 2;
 int hostCount = args.Length > 1 && int.TryParse(args[1], out var h) ? h : 4;
@@ -9,12 +10,13 @@ return slice switch
     2 => RunSlice2(hostCount, frameCount),
     3 => RunSlice3(hostCount, frameCount),
     4 => RunSlice4(hostCount, frameCount),
+    5 => RunSlice5(hostCount, frameCount),
     _ => BadSlice(slice),
 };
 
 static int BadSlice(int slice)
 {
-    Console.Error.WriteLine($"Unknown slice: {slice}. Supported: 2, 3, 4.");
+    Console.Error.WriteLine($"Unknown slice: {slice}. Supported: 2, 3, 4, 5.");
     return 2;
 }
 
@@ -78,6 +80,46 @@ static int RunSlice4(int hostCount, int frameCount)
     Console.WriteLine($"  archetype variants present at end of run: {archStats.Length}");
     foreach (var a in archStats)
         Console.WriteLine($"    [{a.EntityCount,4} entities] components: {string.Join(", ", a.ComponentTypes.Select(t => t.Name))}");
+    return 0;
+}
+
+// ── Slice 5: hierarchy + Boss + cascade destroy ──────────────────────
+// Host 0 spawns Boss + 5 WeakPoints linked via World.Link at frame 0. Boss
+// drains HP deterministically; on death World.Destroy(boss) cascades through
+// the hierarchy, removing all weakpoints. Homing bullets target host players
+// by PlayerTag.HostId (no cross-host entity references).
+static int RunSlice5(int hostCount, int frameCount)
+{
+    Console.WriteLine($"BulletLockstep Slice 5 (hierarchy + boss + cascade destroy)");
+    Console.WriteLine($"  {hostCount} hosts, {frameCount} frames");
+    Console.WriteLine();
+
+    var sim = new LockstepSimulator(hostCount) { SpawnPlayers = true, SpawnBoss = true };
+    GcBaseline(out var gc0, out var gc1, out var gc2, out var bytes);
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+
+    int mismatch = RunLockstep(sim, frameCount);
+
+    sw.Stop();
+    GcDelta(gc0, gc1, gc2, bytes, out var gc, out var alloc);
+
+    if (mismatch >= 0) return ReportFail(sim, mismatch);
+
+    Console.ForegroundColor = ConsoleColor.Green;
+    Console.WriteLine($"PASS: all {frameCount} frames consistent across {hostCount} hosts");
+    Console.ResetColor();
+    Report(sw, frameCount, gc, alloc, sim);
+
+    // Verify boss lived and died via cascade. Look at entity counts.
+    var bossAlive = false;
+    var weakPointCount = 0;
+    var bossDesc = new QueryDescription().With<BossTag>();
+    var wpDesc = new QueryDescription().With<WeakPointTag>();
+    foreach (var _ in sim.Hosts[0].World.Query(in bossDesc)) bossAlive = true;
+    foreach (var _ in sim.Hosts[0].World.Query(in wpDesc)) weakPointCount++;
+    Console.WriteLine();
+    Console.WriteLine($"  end state: boss alive={bossAlive}, weakpoints={weakPointCount}");
+    Console.WriteLine($"  (boss HP drain: {500} frames to die from full; cascade should clear weakpoints)");
     return 0;
 }
 

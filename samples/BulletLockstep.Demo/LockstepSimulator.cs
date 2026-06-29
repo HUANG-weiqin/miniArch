@@ -23,6 +23,10 @@ public sealed class LockstepSimulator
     public IReadOnlyList<LockstepHost> Hosts => _hosts;
     public bool SpawnPlayers { get; init; } = true;
 
+    // Slice 5: when true, host 0 also records a Boss + 5 linked WeakPoints in
+    // frame 0 init, and homing-bullet + boss + weakpoint-follow systems run.
+    public bool SpawnBoss { get; init; } = false;
+
     public LockstepSimulator(int hostCount)
     {
         _hosts = new LockstepHost[hostCount];
@@ -38,7 +42,7 @@ public sealed class LockstepSimulator
         foreach (var h in _hosts)
         {
             if (SpawnPlayers && frame == 0)
-                h.RecordInit();
+                h.RecordInit(SpawnBoss);
             else
                 h.RecordFrame(frame);
         }
@@ -76,6 +80,14 @@ public sealed class LockstepSimulator
 
         if (!SpawnPlayers)
             return;
+
+        // Slice 5: boss + hierarchy + homing bullets.
+        if (SpawnBoss)
+        {
+            BossAISystem.Run(world, frame);
+            WeakPointFollowSystem.Run(world);
+            HomingBulletSteerSystem.Run(world);
+        }
 
         // Slice 4: status pipeline. Order: structural adds first, then damage
         // (uses EntityAccessor — no structural inside the read/write pass,

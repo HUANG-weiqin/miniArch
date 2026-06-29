@@ -17,6 +17,11 @@ public static class PlayerQuery
 
     private static readonly List<(Entity Entity, PlayerTag Tag)> _buffer = new(64);
 
+    // Exposes the query description for read-only reuse by other systems
+    // (e.g. HomingBulletSteerSystem finds target players without rebuilding
+    // the description).
+    public static QueryDescription Description => Query;
+
     // Returns players sorted by PlayerTag.HostId. Caller must not hold the
     // returned list across structural changes (it's reused next call).
     public static List<(Entity Entity, PlayerTag Tag)> SortedByHostId(World world)
