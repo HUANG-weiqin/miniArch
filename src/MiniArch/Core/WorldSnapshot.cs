@@ -212,10 +212,11 @@ public static class WorldSnapshot
 
     /// <summary>
     /// Computes a canonical SHA-256 checksum of the world's <b>logical state</b>:
-    /// alive entities (id + version), their components (type + value), and
-    /// hierarchy links. Two worlds with the same logical content produce the
-    /// same hash regardless of internal layout, free-list contents, slot count,
-    /// or archetype organisation. Slower than <see cref="ComputeChecksum"/>.
+    /// alive entities (id + version), their components (type + value),
+    /// hierarchy links, and free-list entries (id + version). Two worlds with
+    /// the same logical content produce the same hash regardless of internal
+    /// layout, slot count, or archetype organisation. Slower than
+    /// <see cref="ComputeChecksum"/>.
     /// </summary>
     public static byte[] ComputeCanonicalChecksum(World world)
     {
@@ -257,6 +258,14 @@ public static class WorldSnapshot
         {
             AppendInt(hash, cid);
             AppendInt(hash, pid);
+        }
+
+        var freeList = world.FreeList;
+        AppendInt(hash, freeList.Length);
+        for (var i = 0; i < freeList.Length; i++)
+        {
+            AppendInt(hash, freeList[i].Id);
+            AppendInt(hash, freeList[i].Version);
         }
 
         return hash.GetCurrentHash();

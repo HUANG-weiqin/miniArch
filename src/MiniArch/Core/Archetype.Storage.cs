@@ -823,8 +823,8 @@ internal sealed partial class Archetype
         }
 
         var data = pinned
-            ? GC.AllocateUninitializedArray<byte>(totalBytes, pinned: true)
-            : GC.AllocateUninitializedArray<byte>(totalBytes);
+            ? GC.AllocateArray<byte>(totalBytes, pinned: true)
+            : GC.AllocateArray<byte>(totalBytes);
         return (data, columnByteOffsets, elementSizes);
     }
 

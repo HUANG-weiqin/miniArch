@@ -67,6 +67,12 @@
 
 - **死代码清理 + Delta 确定性排序（2026-06-29）**：删除 `RebuildFreeIdStack()`（v3 格式后零调用点），kb-snapshot-persistence 移除其引用。`EmitHierarchyToDelta` 按 `child.Id` 排序输出，消除 Dictionary 迭代顺序导致的 delta 字节级非确定性（不影响 entity ID）。
 
+## 重大变更摘要（2026-06-29 Checksum 加固）
+
+- **Archetype 存储零填充**：`CreateStorage` 从 `GC.AllocateUninitializedArray` 改为 `GC.AllocateArray`（零初始化），消除组件 struct padding 字节中的未定义值导致跨 peer checksum 不一致的风险。
+- **CanonicalChecksum 加入 free list**：`ComputeCanonicalChecksum` 在实体/组件/层级之后追加 free list 中每个 (Id, Version) 对。此前 canonical checksum 仅覆盖活实体，若两 host 因 bug 出现不同 free list 但活实体一致时无法检测。
+- **暴露 FreeList 内部 API**：`World.RecycledEntity` 从 `private` 改为 `internal`，新增 `World.FreeList` 属性供 checksum 访问。
+
 ## 重大变更摘要（2026-06-28 CommandStream API 统一）
 
 - **CommandStream 并行 API 统一**：删除 `SetConcurrent`/`AddConcurrent`/`RemoveConcurrent` 专用方法，`ParallelRecording=true` 时所有 Record API 透明切换为并发实现。单线程零退化。

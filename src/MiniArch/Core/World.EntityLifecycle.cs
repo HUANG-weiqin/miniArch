@@ -45,6 +45,8 @@ public sealed partial class World
             _freeIds[i] = new RecycledEntity(reader.ReadInt32(), reader.ReadInt32());
     }
 
+    internal ReadOnlySpan<RecycledEntity> FreeList => _freeIds.AsSpan(0, _freeIdCount);
+
     internal void CopyFreeIdsFrom(World source)
     {
         var count = source._freeIdCount;
@@ -533,6 +535,6 @@ public sealed partial class World
         }
     }
 
-    private readonly record struct RecycledEntity(int Id, int Version);
+    internal readonly record struct RecycledEntity(int Id, int Version);
 
 }
