@@ -58,6 +58,15 @@ public sealed class FrameDelta
     /// Exposes the packed buffer for zero-copy transmission.
     /// The returned span is the wire format — send it as-is over the network.
     /// </summary>
+    /// <remarks>
+    /// <b>Cross-process contract:</b> the wire format encodes
+    /// <see cref="Core.ComponentType"/> values as process-local integer ids.
+    /// Both peers must have identical <see cref="ComponentRegistry"/> state
+    /// (same types registered in the same order) before exchanging deltas,
+    /// otherwise component ids will be silently misinterpreted. Within a
+    /// single process this is automatic; for multi-process scenarios add a
+    /// type-mapping header at the transport layer.
+    /// </remarks>
     public ReadOnlySpan<byte> AsSpan() => new(_buffer, 0, _length);
 
     /// <summary>
@@ -65,6 +74,11 @@ public sealed class FrameDelta
     /// The caller owns the returned delta; the wire bytes are copied into
     /// an independent buffer.
     /// </summary>
+    /// <remarks>
+    /// See <see cref="AsSpan"/> for the cross-process
+    /// <see cref="ComponentRegistry"/> synchronization contract — the same
+    /// constraint applies on receive.
+    /// </remarks>
     public static FrameDelta Deserialize(ReadOnlySpan<byte> wire)
     {
         var delta = new FrameDelta();

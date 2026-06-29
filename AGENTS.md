@@ -88,11 +88,26 @@ dotnet run -c Release --project tools/perf/HeroComing.Perf
 ```
 
 检查输出：
-- 吞吐量低于阈值（Movement ≥866 rounds/s, Attack ≥200 rounds/s）→ **回退改动**
+- 吞吐量低于阈值（Movement ≥1407 rounds/s, Attack ≥854 rounds/s）→ **回退改动**
 - 内存持续增长 → **回退改动**
 - 崩溃或异常 → **回退改动**
 
-回退流程：
+> 阈值取 baseline 的 80%，随 `kb-hero-pipeline-regression.md` 的 baseline 更新而同步。
+
+### 5a) 确定性豁免（不必跑门禁）
+
+下列改动**确定不可能影响运行时性能**，可跳过 `HeroComing.Perf` 门禁（仍需 `dotnet build` + `dotnet test` 通过）：
+
+- **纯文档**：XML doc（`<summary>`/`<remarks>`/`<param>` 等）、行内注释、`.knowledge/` 下文件
+- **死代码删除**：已通过调用方搜索确认零 caller 的方法/类型/字段
+- **同类 partial 间迁移**：把方法/字段在同一 `partial class` 的多个 `.cs` 文件间挪动（JIT 看到合并后的同一类型，IL 不变）
+- **重命名 private/internal 符号**：仅 metadata name 变化，不影响运行时查找（前提：未使用反射按名查找）
+- **纯格式/空白**：缩进、换行、`using` 排序
+
+**判断标准**：改动要么零 IL 差异，要么差异仅限于删除从未被调用的 IL。任一不满足时**必须跑门禁**——拿不准就跑。
+
+### 5b) 回退流程
+
 - `git stash` 或 `git checkout .` 恢复到改动前状态
 - 分析失败原因，修复后重新测试
 

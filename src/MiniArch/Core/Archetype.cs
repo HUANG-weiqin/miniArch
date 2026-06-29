@@ -3,10 +3,21 @@ using System.Runtime.CompilerServices;
 namespace MiniArch.Core;
 
 /// <summary>
-/// Stores entities for one signature.
-/// Archetype is the sole storage unit — there is exactly one data block
-/// per archetype (no multi-chunk splitting).
+/// Stores entities for one signature in column-major <see cref="byte"/> storage.
 /// </summary>
+/// <remarks>
+/// <b>Two storage modes</b>, switched automatically by <see cref="EnsureCapacity"/>:
+/// <list type="bullet">
+/// <item><b>Non-chunked</b> (small archetype): a single flat
+/// <c>_data</c> buffer + <c>_entities</c> array. Doubles in place until
+/// <c>_capacity * 2</c> would exceed <see cref="_segmentEntityCapacity"/>.</item>
+/// <item><b>Chunked</b> (large archetype): a <see cref="Segment"/>[] where each
+/// segment owns its own <c>Entities</c>/<c>Data</c> arrays of fixed size
+/// <see cref="_segmentEntityCapacity"/> (target ~2 MB per segment). Promotion is
+/// one-way; <see cref="IsChunked"/> never reverts. <see cref="ChunkView"/>
+/// exposes one segment per chunk to public consumers.</item>
+/// </list>
+/// </remarks>
 internal sealed partial class Archetype
 {
     // --- Storage (non-chunked mode) ---
@@ -70,20 +81,6 @@ internal sealed partial class Archetype
     /// Whether this archetype has switched to chunked (segmented) storage.
     /// </summary>
     internal bool IsChunked => _isChunked;
-
-    internal void ForceChunkedForTesting()
-    {
-        if (!_isChunked)
-        {
-            NormalizeForChunked();
-            ConvertToChunked();
-        }
-    }
-
-    internal void AddSegmentForTesting()
-    {
-        GrowChunked(1);
-    }
 
     /// <summary>
     /// Gets the current physical capacity (maximum entities before resize).

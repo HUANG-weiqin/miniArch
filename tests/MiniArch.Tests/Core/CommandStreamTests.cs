@@ -1811,30 +1811,30 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
-    public void SubmitAndSnapshotAsync_reuses_dictionary_and_hashset_in_steady_state()
+    public async System.Threading.Tasks.Task SubmitAndSnapshotAsync_reuses_dictionary_and_hashset_in_steady_state()
     {
         var world = new World();
         var stream = new CommandStream(world);
         var parent = world.Create();
 
-        void RunFrame()
+        async System.Threading.Tasks.Task RunFrame()
         {
             var child = world.Create();
             stream.Link(parent, child);
             stream.Destroy(child);
-            stream.SubmitAndSnapshotAsync().GetAwaiter().GetResult();
+            await stream.SubmitAndSnapshotAsync();
         }
 
         for (var i = 0; i < 2; i++)
-            RunFrame();
+            await RunFrame();
 
         var hierarchyRef = stream.ActiveHierarchyForTesting;
         var unavailableRef = stream.ActiveUnavailableForTesting;
         Assert.NotNull(hierarchyRef);
         Assert.NotNull(unavailableRef);
 
-        RunFrame();
-        RunFrame();
+        await RunFrame();
+        await RunFrame();
 
         Assert.Same(hierarchyRef, stream.ActiveHierarchyForTesting);
         Assert.Same(unavailableRef, stream.ActiveUnavailableForTesting);

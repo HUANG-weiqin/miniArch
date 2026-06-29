@@ -167,6 +167,8 @@ struct EntityRecord {
 
 **注意**：不要对 archetype 快照排序——Query 的 `AppendNewArchetypes` 依赖追加式语义。CommandStream 有独立的 `ResolveArchetypeForMask` 本地缓存（8 槽），用于 pending entity materialize 的快速 archetype 解析。
 
+**2026-06-29 后续**：本节描述的 `World.TryGetArchetype`、`CommandStream.ResolveArchetypeForSpan`、`CommandBuffer.BuildCreatedEntityComponents` 三个调用方全部消失——CommandBuffer 整体删除（2026-06-26）、`ResolveArchetypeForSpan` 重写为 `ResolveArchetypeForMask`（直接走 `_archetypeByMask` 字典 + `MaskToTypes` 升序枚举），`World.TryGetArchetype` 因此变成零调用方死代码并已删除。当前 CommandStream 的 archetype 解析路径无任何"顺序无关集合比较"需求。
+
 ## 认知模型
 
 ### 理解方式

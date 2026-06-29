@@ -168,36 +168,6 @@ public sealed partial class World : IDisposable
 
     internal int ArchetypeCacheGeneration => _createArchetypeCacheGeneration;
 
-    internal void Reset(int entitySlotCount)
-    {
-        if (entitySlotCount < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(entitySlotCount));
-        }
-
-        _archetypes.Clear();
-        _archetypeByMask.Clear();
-        _replayCreateCounts.Clear();
-        _archetypeSnapshot = Array.Empty<Archetype>();
-        _queryFiltersByDescription.Clear();
-        _queries.Clear();
-        _createArchetypeCacheGeneration++;
-        _freeIdCount = 0;
-        _destroyVisitedGen = [];
-        _destroyCurrentGen = 0;
-        _hierarchy.Reset();
-
-        _entitySlotCount = 0;
-        EnsureCapacity(entitySlotCount);
-        _entitySlotCount = entitySlotCount;
-        _records.AsSpan(0, entitySlotCount).Clear();
-
-        if (_freeIds.Length < entitySlotCount)
-        {
-            Array.Resize(ref _freeIds, entitySlotCount);
-        }
-    }
-
     /// <summary>
     /// Links a child to a parent.
     /// </summary>
@@ -448,63 +418,6 @@ public sealed partial class World : IDisposable
         return GetOrCreateArchetype(signature);
     }
 
-    /// <summary>
-    /// Zero-allocation archetype lookup by linear scan over existing
-    /// archetypes.  Uses a direct double-loop set comparison so it works
-    /// correctly even with unsorted Signatures (e.g. from CommandStream
-    /// whose Signature stores components in ADD order).
-    /// Uses a 512-bit mask pre-filter to skip archetypes that cannot match
-    /// in O(1) per archetype, falling back to set comparison only when the
-    /// mask passes.
-    /// </summary>
-    internal Archetype? TryGetArchetype(ReadOnlySpan<ComponentType> types)
-    {
-        var count = types.Length;
-
-        // Build a 512-bit mask from the query types for O(1) pre-filtering.
-        var q = new MaskBuilder();
-        for (var i = 0; i < count; i++)
-        {
-            q.SetBit(types[i].Value);
-        }
-        var queryMask = q.ToMask();
-
-        foreach (var (signature, archetype) in _archetypes)
-        {
-            if (signature.Count != count) continue;
-
-            // O(1) mask pre-filter: archetype mask must be a superset of the query mask.
-            if (!signature.ComponentMask.IsSupersetOf(queryMask))
-                continue;
-
-            // Mask passed — do exact set comparison.
-            var sigSpan = signature.AsSpan();
-            var ok = true;
-            for (var i = 0; i < count; i++)
-            {
-                var found = false;
-                for (var j = 0; j < sigSpan.Length; j++)
-                {
-                    if (sigSpan[j] == types[i])
-                    {
-                        found = true;
-                        break;
-                    }
-                }
-
-                if (!found)
-                {
-                    ok = false;
-                    break;
-                }
-            }
-
-            if (ok) return archetype;
-        }
-
-        return null;
-    }
-
     private Type[] ResolveComponentTypes(Signature signature)
     {
         var componentCount = signature.Count;
@@ -527,11 +440,6 @@ public sealed partial class World : IDisposable
     private ComponentType GetComponentType<T>()
     {
         return Component<T>.ComponentType;
-    }
-
-    internal void LinkSnapshot(Entity parent, Entity child)
-    {
-        _hierarchy.LinkRestored(this, parent, child);
     }
 
     /// <summary>
