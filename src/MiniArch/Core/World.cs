@@ -251,6 +251,10 @@ public sealed partial class World : IDisposable
     public T Get<T>(Entity entity) where T : unmanaged
     {
         ref var record = ref _records[entity.Id];
+#if DEBUG
+        if ((uint)entity.Id >= (uint)_entitySlotCount || !record.IsOccupied || record.Version != entity.Version)
+            throw new InvalidOperationException($"Entity {entity} is not alive.");
+#endif
         var arch = record.Archetype!;
         return arch.GetComponentAt<T>(arch.GetComponentIndexFast(GetComponentType<T>()), record.RowIndex);
     }
@@ -263,6 +267,10 @@ public sealed partial class World : IDisposable
     public ref T GetRef<T>(Entity entity) where T : unmanaged
     {
         ref var record = ref _records[entity.Id];
+#if DEBUG
+        if ((uint)entity.Id >= (uint)_entitySlotCount || !record.IsOccupied || record.Version != entity.Version)
+            throw new InvalidOperationException($"Entity {entity} is not alive.");
+#endif
         var arch = record.Archetype!;
         return ref arch.GetComponentRefAt<T>(arch.GetComponentIndexFast(GetComponentType<T>()), record.RowIndex);
     }
