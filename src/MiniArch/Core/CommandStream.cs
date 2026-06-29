@@ -274,7 +274,7 @@ public sealed class CommandStream : ICommandRecorder
         {
             var clone = CreateDeferredImpl();
             TryGetPendingBatch(clone, out var batchIdx);
-            CloneComponents(source, info, clone, batchIdx, deferred: true);
+            CloneComponents(source, info, clone, batchIdx);
             return clone;
         }
         return CloneImplImmediate(source, info);
@@ -284,11 +284,11 @@ public sealed class CommandStream : ICommandRecorder
     {
         var clone = CreateImpl();
         var batchIdx = _pendingBatch[clone.Id];
-        CloneComponents(source, info, clone, batchIdx, deferred: false);
+        CloneComponents(source, info, clone, batchIdx);
         return clone;
     }
 
-    private void CloneComponents(Entity source, EntityInfo info, Entity clone, int batchIdx, bool deferred)
+    private void CloneComponents(Entity source, EntityInfo info, Entity clone, int batchIdx)
     {
         var archetype = info.Archetype;
         var sourceRow = info.RowIndex;
@@ -307,7 +307,7 @@ public sealed class CommandStream : ICommandRecorder
             CommitBatchComponent(batchIdx, ct, offset, size);
         }
 
-        CloneChildrenRecursive(source, clone, deferred);
+        CloneChildrenRecursive(source, clone);
     }
 
     // ── Submit ────────────────────────────────────────────────────────
@@ -1172,7 +1172,7 @@ public sealed class CommandStream : ICommandRecorder
 
     // ── Clone helpers ─────────────────────────────────────────────────
 
-    private void CloneChildrenRecursive(Entity sourceRoot, Entity cloneRoot, bool deferred)
+    private void CloneChildrenRecursive(Entity sourceRoot, Entity cloneRoot)
     {
         if (!_world.Hierarchy.HasChildren(sourceRoot)) return;
 
@@ -1209,7 +1209,7 @@ public sealed class CommandStream : ICommandRecorder
 
                 var cloneChild = Create();
                 int batchIdx;
-                if (deferred)
+                if (_deferredEntities)
                     TryGetPendingBatch(cloneChild, out batchIdx);
                 else
                     batchIdx = _pendingBatch[cloneChild.Id];

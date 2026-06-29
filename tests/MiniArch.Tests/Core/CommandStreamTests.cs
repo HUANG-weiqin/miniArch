@@ -2064,4 +2064,174 @@ public sealed class DeferredCreateTests
             found += arch.GetEntities().Length;
         Assert.Equal(2, found);
     }
+
+    // ═══════════════════════════════════════════════════════════
+    // Placeholder delta → Replay (multi-host lockstep core path)
+    // ═══════════════════════════════════════════════════════════
+
+    [Fact]
+    public void Placeholder_delta_replays_into_fresh_world()
+    {
+        var host = new World();
+        var stream = MakeStream(host);
+        stream.Create();
+        stream.Add(new Entity(-1, 0), new Position(10, 20));
+        var delta = stream.Snapshot();
+        stream.Clear();
+
+        var replica = new World();
+        replica.Replay(delta);
+
+        Assert.Equal(1, CountEntities(replica));
+        AssertPosition(replica, 10, 20);
+    }
+
+    [Fact]
+    public void Placeholder_delta_into_two_worlds_produces_identical_state()
+    {
+        var host = new World();
+        var stream = MakeStream(host);
+        var a = stream.Create(); stream.Add(a, new Position(1, 2));
+        var b = stream.Create(); stream.Add(b, new Position(3, 4)); stream.Add(b, new Velocity(5, 6));
+        stream.Link(a, b);
+        var delta = stream.Snapshot();
+        stream.Clear();
+
+        var wire = delta.AsSpan();
+
+        var replicaA = new World();
+        replicaA.Replay(FrameDelta.Deserialize(wire));
+
+        var replicaB = new World();
+        replicaB.Replay(FrameDelta.Deserialize(wire));
+
+        var statsA = replicaA.GetStats();
+        var statsB = replicaB.GetStats();
+        Assert.Equal(statsA.EntityCount, statsB.EntityCount);
+        Assert.Equal(statsA.ArchetypeCount, statsB.ArchetypeCount);
+        Assert.Equal(HashWorld(replicaA), HashWorld(replicaB));
+    }
+
+    [Fact]
+    public void Placeholder_delta_serialization_roundtrip()
+    {
+        var host = new World();
+        var stream = MakeStream(host);
+        var a = stream.Create(); stream.Add(a, new Position(7, 8));
+        var b = stream.Create(); stream.Add(b, new Health(99));
+        var delta = stream.Snapshot();
+        stream.Clear();
+
+        var wire = delta.AsSpan();
+        var restored = FrameDelta.Deserialize(wire);
+
+        var replica = new World();
+        replica.Replay(restored);
+
+        Assert.Equal(2, CountEntities(replica));
+    }
+
+    [Fact]
+    public void Multiple_host_deltas_replayed_into_one_world()
+    {
+        // Simulate 2 hosts, each producing a placeholder delta.
+        var host1 = new World();
+        var s1 = MakeStream(host1);
+        s1.Create(); s1.Add(new Entity(-1, 0), new Position(1, 1));
+        var d1 = s1.Snapshot(); s1.Clear();
+
+        var host2 = new World();
+        var s2 = MakeStream(host2);
+        s2.Create(); s2.Add(new Entity(-1, 0), new Health(50));
+        var d2 = s2.Snapshot(); s2.Clear();
+
+        // A third world replays both deltas in order.
+        var replica = new World();
+        replica.Replay(d1);
+        replica.Replay(d2);
+
+        Assert.Equal(2, CountEntities(replica));
+    }
+
+    [Fact]
+    public void Placeholder_hierarchy_replays_correctly()
+    {
+        var host = new World();
+        var stream = MakeStream(host);
+        var parent = stream.Create(); stream.Add(parent, new Position(0, 0));
+        var child = stream.Create(); stream.Add(child, new Position(1, 1));
+        stream.Link(parent, child);
+        var delta = stream.Snapshot();
+        stream.Clear();
+
+        var replica = new World();
+        replica.Replay(delta);
+
+        Assert.Equal(2, CountEntities(replica));
+        // Find the parent (has Position 0,0) and verify it has children.
+        var hasHierarchy = false;
+        foreach (ref readonly var arch in MiniQuery.Create(replica, new QueryDescription()).GetArchetypeSpan())
+        {
+            foreach (var entity in arch.GetEntities())
+            {
+                if (replica.Get<Position>(entity).X == 0)
+                {
+                    Assert.True(replica.Hierarchy.HasChildren(entity));
+                    hasHierarchy = true;
+                }
+            }
+        }
+        Assert.True(hasHierarchy, "Expected a parent entity with children after replay.");
+    }
+
+    [Fact]
+    public void Placeholder_delta_destroy_before_snapshot_not_emitted()
+    {
+        var host = new World();
+        var stream = MakeStream(host);
+        var a = stream.Create(); stream.Add(a, new Position(1, 2));
+        stream.Destroy(a); // cancel before snapshot
+        var b = stream.Create(); stream.Add(b, new Position(3, 4));
+        var delta = stream.Snapshot();
+        stream.Clear();
+
+        var replica = new World();
+        replica.Replay(delta);
+
+        Assert.Equal(1, CountEntities(replica));
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────
+
+    private static int CountEntities(World w)
+    {
+        var count = 0;
+        foreach (ref readonly var arch in MiniQuery.Create(w, new QueryDescription()).GetArchetypeSpan())
+            count += arch.GetEntities().Length;
+        return count;
+    }
+
+    private static void AssertPosition(World w, int expectedX, int expectedY)
+    {
+        var desc = new QueryDescription().With<Position>();
+        foreach (ref readonly var arch in MiniQuery.Create(w, in desc).GetArchetypeSpan())
+        {
+            foreach (var entity in arch.GetEntities())
+            {
+                var pos = w.Get<Position>(entity);
+                Assert.Equal(expectedX, pos.X);
+                Assert.Equal(expectedY, pos.Y);
+                return;
+            }
+        }
+        Assert.Fail("No entity with Position component found.");
+    }
+
+    private static string HashWorld(World w)
+    {
+        using var ms = new MemoryStream();
+        WorldSnapshot.Save(ms, w);
+        var span = new ReadOnlySpan<byte>(ms.GetBuffer(), 0, (int)ms.Length);
+        return Convert.ToHexString(SHA256.HashData(span));
+    }
 }
