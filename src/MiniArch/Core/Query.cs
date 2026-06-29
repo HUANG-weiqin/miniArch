@@ -105,7 +105,7 @@ internal sealed class Query
     private void EnsureRefreshed()
     {
         var currentCount = _world.ArchetypeCount;
-        if (currentCount != _lastArchetypeCount)
+        if (currentCount != Volatile.Read(ref _lastArchetypeCount))
         {
             Refresh();
             return;

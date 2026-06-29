@@ -1,4 +1,5 @@
 using System.IO;
+using System.Reflection;
 using System.Security.Cryptography;
 using MiniArch.Core;
 using MiniQuery = MiniArch.Core.Query;
@@ -1937,6 +1938,59 @@ public sealed class CommandStreamTests
         Assert.False(world.IsAlive(parent));
         // Existing child survives �?it was never parented in the live world.
         Assert.True(world.IsAlive(existingChild));
+    }
+
+    [Fact]
+    public void SwapOutState_swaps_all_working_fields()
+    {
+        var allFields = typeof(CommandStream).GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
+            .Select(f => f.Name)
+            .ToHashSet();
+
+        var nonSwapped = new HashSet<string>
+        {
+            "_world",
+            "_parallelMode",
+            "_deferredEntities",
+            "_spareFrozen",
+            "_pendingFrozen",
+            "_pendingTask",
+            "_storeCreateLock",
+            "_lastCreated",
+            "_lastCreatedBatch",
+            "_deferredSeq",
+            "_pendingBatchDeferredArr",
+            "_resolveMapPool",
+            "_pendingBatchMin",
+            "_pendingBatchMax",
+            "_batchCompTotal",
+            "_batchBufLen",
+            "_maskCache",
+            "_maskCacheCount",
+            "_maskCacheGeneration",
+            "_lastMask",
+            "_lastMaskArchetype",
+        };
+
+        var swapped = new HashSet<string>
+        {
+            "_stores",
+            "_destroyEntities",
+            "_destroyCount",
+            "_pendingBatch",
+            "_pendingBatchCount",
+            "_batchHeads",
+            "_batchCompCounts",
+            "_batchComps",
+            "_batchBuf",
+            "_batchEntities",
+            "_batchCanceled",
+            "_hierarchyByChild",
+            "_unavailableEntities",
+        };
+
+        var unclassified = allFields.Where(f => !nonSwapped.Contains(f) && !swapped.Contains(f)).ToList();
+        Assert.Empty(unclassified);
     }
 }
 

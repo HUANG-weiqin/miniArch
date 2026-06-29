@@ -153,6 +153,8 @@ struct EntityRecord {
 
 **影响文件**：`CommandStream.cs`
 
+**2026-06-29 后续**：`ResolveArchetypeForSpan` 已被重写为 `ResolveArchetypeForMask`（`CommandStream.cs:1070`），使用 8 槽本地 mask 缓存 + `MaskToTypes` 升序枚举 + `_world.GetOrCreateArchetype`。此处的 4→16 槽修复已被后续 P15 的本地缓存删除方案 supersede。
+
 ## P15: 删除本地 archetype 缓存，改用 World.TryGetArchetype ✅ 已修复 (2026-06-10)
 
 **问题**：P14 扩大缓存只是补丁——CommandBuffer 和 CommandStream 各自维护本地 LRU 缓存，镜像了 World 中已经存在的 archetype 状态。缓存 miss 时仍然走 `new ComponentType[n]` 分配。

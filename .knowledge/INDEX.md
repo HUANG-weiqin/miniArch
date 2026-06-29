@@ -61,7 +61,7 @@
 - **ReplayCore placeholder→local 映射**：`_replayPlaceholderMap` 按 seq 索引，每帧 `mapLen=0` 重置防 stale。`ResolveReplayEntity` 加 bounds check。
 - **`_replayPlaceholderMapLen` 字段删除**：mapLen 现在是 ReplayCore 局部变量，不复用跨帧。
 - **WorldSnapshot free list 持久化**：格式 v3 直接序列化 free list 数组到流末尾，不再调用 RebuildFreeIdStack。`WorldClone` 改为 `CopyFreeIdsFrom`。新增 `Save_load_preserves_free_id_allocation_order` 验证测试。
-- **`WorldStateSnapshot.cs` 骨架创建**：Tier 1 in-memory rollback snapshot 数据类，尚未接入 World。
+- **`WorldStateSnapshot.cs` 接入 World**：`World.CaptureState()` / `World.RestoreState()` 在稳态零分配地备份/恢复 Records、FreeIds、per-archetype 数据（非 chunked + chunked）、Hierarchy。`_createArchetypeCacheGeneration++` 使 query cache 失效。4 个端到端测试验证：state preservation、deterministic ids、idempotency、cache invalidation。
 - **XML docs 明确区分 `WorldSnapshot` vs `WorldStateSnapshot`**：`WorldSnapshot` 的 doc 写明"NOT for in-memory rollback"，`WorldStateSnapshot` 的 doc 写明"NOT for persistence/network"。`WorldStateSnapshot` 改用 `int[] FreeIds + int[] FreeIdVersions` 避免依赖 `World.RecycledEntity`（private 嵌套类型）。
 - **Tier 1 完整实现**：`World.CaptureState()` / `World.RestoreState()` 通过 Array.Copy 在稳态零分配地备份/恢复 Records、FreeIds、per-archetype 数据（非 chunked + chunked）、Hierarchy。`_createArchetypeCacheGeneration++` 使 query cache 失效。预测帧创建的空 archetype count 被置零。4 个端到端测试验证：state preservation、deterministic ids、idempotency、cache invalidation。
 
