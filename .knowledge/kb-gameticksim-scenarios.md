@@ -1,8 +1,8 @@
 ---
 title: GameTickSim Scenarios
-module: perf/GameTickSim.Perf
+module: GameTickSim.Perf
 description: GameTickSim isolated scenario benchmarks and BulletHell workload design rules
-updated: 2026-06-01
+updated: 2026-06-30 (修正 front matter module 格式与路径漂移)
 ---
 # GameTickSim Scenarios
 
@@ -19,8 +19,8 @@ updated: 2026-06-01
 ## 架构
 
 - 核心组成：
-  - `perf/GameTickSim.Perf/ScenarioBenchmark.cs`：`RunAll` 注册孤立场景，并按 MiniArch、DefaultEcs、Arch 三方同构执行。
-  - `shared/MiniArch.SharedInfrastructure/GameTickComponents.cs`：三方 benchmark 共享组件定义，避免输入结构不一致。
+  - `tools/perf/GameTickSim.Perf/ScenarioBenchmark.cs`：`RunAll` 注册孤立场景，并按 MiniArch、DefaultEcs、Arch 三方同构执行。
+  - `tests/SharedInfrastructure/MiniArch.SharedInfrastructure/GameTickComponents.cs`：三方 benchmark 共享组件定义，避免输入结构不一致。
   - `MeasureTimed`：固定 2 秒 warmup，然后按场景自己的 `durationSeconds` 测量 ops/s、ms/op、heap delta 和 GC。
 - 数据流 / 控制流：
   - `Program.cs --scenarios <name>` 进入 `ScenarioBenchmark.RunAll`。
@@ -51,9 +51,9 @@ updated: 2026-06-01
 ## 入口
 
 - 第一次读或加功能，先看：
-  - `perf/GameTickSim.Perf/ScenarioBenchmark.cs`：场景注册、三方实现和 phase breakdown 都在这里。
-  - `shared/MiniArch.SharedInfrastructure/GameTickComponents.cs`：新增场景组件必须先在共享组件项目里定义。
-  - `perf/GameTickSim.Perf/Program.cs`：`--scenarios` 单场景入口。
+  - `tools/perf/GameTickSim.Perf/ScenarioBenchmark.cs`：场景注册、三方实现和 phase breakdown 都在这里。
+  - `tests/SharedInfrastructure/MiniArch.SharedInfrastructure/GameTickComponents.cs`：新增场景组件必须先在共享组件项目里定义。
+  - `tools/perf/GameTickSim.Perf/Program.cs`：`--scenarios` 单场景入口。
 - 修 bug，先看：
   - `RunBulletHell`、`RunBulletHellBuffs`、`RunBulletHellWarfare`：BulletHell 系列应先确认 query 选择是否互相污染。
   - `MeasureTimed`：确认测量时长、warmup 和 GC 口径是否符合当前结论。

@@ -358,7 +358,14 @@ public sealed partial class World : IDisposable
     }
 
     /// <summary>
-    /// Creates a snapshot-equivalent clone of this world.
+    /// Creates a snapshot-equivalent clone of this world as a brand-new,
+    /// independent <see cref="World"/> (fresh archetype caches, own capacity).
+    /// Use for branching simulations or materializing a long-lived checkpoint.
+    /// <para/>
+    /// <b>Not</b> the right tool for high-frequency in-place rollback (GGPO-style
+    /// 60fps save/restore): each call allocates a new world. For that, use
+    /// <see cref="CaptureState"/> / <see cref="RestoreState"/> which recycles a
+    /// single opaque handle and allocates zero GC memory in steady state.
     /// </summary>
     public World Clone()
     {

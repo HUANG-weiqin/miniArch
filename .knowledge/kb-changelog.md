@@ -1,0 +1,99 @@
+---
+title: Knowledge Base Changelog
+module: Meta
+description: Chronological log of significant changes to the miniArch knowledge base and architecture
+updated: 2026-06-30
+---
+# Knowledge Base Changelog
+
+> 这个页面只记录**重大架构变更和知识库校准事件**，供追溯。
+> 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
+
+## 2026-06-30 第二轮 agent 反馈修复
+
+基于 6 个 agent 再次审计的反馈，做了以下增量修复：
+
+- **阈值对齐**：Movement 阈值 1209→1210（1512.5 × 80% = 1210.0，此前 1209 是舍入误差）。涉及 AGENTS.md、CONTRIBUTING.md、kb-hero-pipeline-regression.md、kb-glossary.md。
+- **`kb-hero-pipeline-regression.md` 加"如果失败"段**：门禁失败时直接给出 profiling 命令和热点路径索引。
+- **`kb-profiling-workflow.md` 脆路径修复**：硬编码 DLL 路径改为 `dotnet run --project`；加交叉链接到 `kb-cache-optimization.md` 热路径分析表和 `kb-query-invalidation.md`。
+- **`kb-architecture-review.md` O1-O5 加链接**：每条可优化点现在指向对应的 kb 页。
+- **`kb-repo-overview.md` 加 Quickstart**：构建/测试/门禁命令的速查。
+- **`INDEX.md` 加 `_template.md` 引用**：新增知识页时提示先看模板。
+- **`kb-core-ecs.md` Destroy+Create 坑点改善**：加结论（当前线程安全/理论风险）、加 repro 方向、加测试文件引用（缺用例`Destroy_then_Create_same_frame_recycles_id_with_incremented_version`）。
+- **`kb-glossary.md` 加 Tag 条目**：明确 MiniArch 中标签就是零大小组件，`With<T>()` 即可查询。
+- **`kb-chunk-storage.md` Storage Invariants 加测试映射列**：每个不变量关联可能失败的测试文件。
+
+## 2026-06-30 知识库结构优化
+
+基于 6 个不同角色 agent（新人/Bug fix/Perf/Feature/Lockstep/Refactor）的视角审计，做了以下结构调整：
+
+- **`kb-cache-optimization` 全文重写**：删除已废弃的 CommandBuffer/TryGetArchetype 优化段（P7/P9/P10/P12/P13/P14/P15），保留当前有效内容，重组为主题分组而非 P 编号。
+- **changelog 从 INDEX.md 拆出到本页**：INDEX 只保留模块地图和快速入口，减少导航噪音。
+- **新建 `kb-perf-harnesses.md`**：4 套 perf harness 的消歧矩阵（PipelineBenchmarkTests / HeroComing.Perf / SubmitAndSnapshotAsync / GameTickSim）。
+- **新建 `kb-lockstep-playbook.md`**：端到端帧同步 spine 页，整合 5 个碎片化页面的导航。
+- **新建 `kb-glossary.md`**：术语表（GGPO/SoA/LEB128/Tier 等）。
+- **去冗余**：World partial 文件列表权威源只在 `kb-architecture-review.md`，其他页改为链接；Merge 历史只在 `kb-frame-delta-merge.md`。
+- **跨链接修复**：`kb-command-stream.md` → `kb-frame-delta-merge.md` / `kb-deferred-create-design.md` 互链；perf 页面互联。
+- **合并墓碑页**：`kb-debug-metrics.md` 合并到 `kb-architecture-review.md` 已删除子系统段。
+- **`kb-core-ecs.md` 补坑点**：同帧 `World.Destroy + World.Create` 的 id 回收/version 一致性。
+- **`kb-chunk-storage.md` 加 Storage Invariants 集中段**。
+
+## 2026-06-30 全库知识库校准
+
+本次全库审阅修正了 kb 文档落后于代码演进的漂移，全部为 .knowledge/ 文档改动，零 IL 差异：
+
+- **路径漂移（10 个 kb 页）**：`shared/MiniArch.SharedInfrastructure/` → `tests/SharedInfrastructure/MiniArch.SharedInfrastructure/`；`scripts/` → `tools/scripts/`；`perf/` → `tools/perf/`；`docs/plans/` → `docs/internal/plans/`；`benchmarks\` → `tests\`。涉及 kb-repo-overview / kb-profiling-workflow / kb-throughput-workflow / kb-gameticksim-scenarios / kb-commandstream-game-perf / kb-test-workflow / kb-cache-optimization / kb-ecs-comparison。
+- **`kb-query-invalidation` 重大重写**：原正文声称 `AppendNewArchetypes` 是"全量重建"，与代码不符（`Query.cs:190` 是 append-only 增量扫描，从 `_lastArchetypeCount` 起）。front matter 描述原本正确但正文整段错了。改为正确的两段式增量失效描述。
+- **`kb-user-api-layering` 重大重写**：原描述 `MiniArch.Core.Query.Create(...)` 公开 advanced 入口、`MiniArch.Query.Advanced` 暴露 Core.Query、`EachSpan` API 等均与现状不符（Core.Query 是 internal；Advanced 是 internal；EachSpan 已删除）。改为基于现状的 facade 描述。
+- **`kb-test-workflow` 测试文件名**：`CommandBufferTests.cs` → `CommandStreamTests.cs`；补充缺失的 `WorldStatsTests.cs`、`ParallelQueryTests.cs`、`FrameDeltaDeterminismTests.cs`、`CommandBufferGamePerfTests.cs`。
+- **`kb-cache-optimization`**：删除已不存在的内部 `Chunk` struct 引用（实际只有 public `ChunkView`）。
+- **`kb-ecs-comparison`**：失效机制行从"全量重建"改为"两段式增量"，并加交叉引用指向 `kb-query-invalidation`。
+- **`kb-command-stream`**：`EnsureReplayReservation` 行号 418 → 451。
+- **残留漂移修复**：`kb-architecture-review` partial 计数 6→7 + 行号修正；`kb-command-stream` ReplayCore 行号 450→481 + 测试名修正；`kb-core-ecs` 补 World.SnapshotBridge/Checksum + Archetype.TestHooks 到 partial 列表。
+
+> 教训：`kb-architecture-review.md` 末尾警告的"曾经存在的 kb 文档落后于代码演进"在本次审阅中被实证——多页错误描述持续了 1–3 个月。后续架构变更必须同步更新对应 kb 页（AGENTS.md §4 已强制）。
+> 同日新建 `kb-checksum.md`（从 kb-snapshot-persistence 拆出——后合并回）、`kb-frame-delta-merge.md`（后合并回 kb-command-stream），补全知识覆盖空白。
+
+## 2026-06-30 文档单一事实来源收敛
+
+- **性能阈值对齐**：AGENTS.md 与 CONTRIBUTING.md 的回归阈值统一指向 `kb-hero-pipeline-regression.md` 的 80% baseline（Movement ≥1210 / Attack ≥767 rounds/s，后修正为精确值 1210）。此前 AGENTS.md 写 1407/854、CONTRIBUTING.md 写 866/200 均已过期。
+- **回滚路径文档纠偏**：README/AGENTS 历史把 `World.Clone()` 推荐为回滚方案，但 2026-06-29 起真正的高频回滚路径是 `CaptureState/RestoreState`。现 README Frame-Sync 示例、Features、When-to-Use 表、`docs/comparison.md`、`docs/README.md`、`World.Clone()` XML doc 均已区分二者职责。`World.Clone()` 现定位为"分支/独立副本"。
+- **`kb-snapshot-persistence` 补 WorldStateSnapshot 段**：澄清三套状态复制机制（WorldSnapshot / WorldClone / WorldStateSnapshot）职责正交。
+
+## 2026-06-29 DeferredEntities flag
+
+- **`CommandStream.DeferredEntities` flag**：`false`（默认）时 `Create()`/`Clone()` 分配 real id（单机）；`true` 时返回 placeholder（多 host lockstep）。`Snapshot()` 按 flag 输出 placeholder delta 或 real-id delta。`SubmitAndSnapshotAsync()` 始终输出 real-id delta。
+- **删除 `CreateImmediate()` / `CloneImmediate()`**：公共 API 和 `ICommandRecorder` 接口同步移除。`DeferredEntities=false` 时 `Create()`/`Clone()` 即原 immediate 行为。
+- **`Snapshot()` 不再泄漏 host world id**：`DeferredEntities=true` 时跳过 `ResolveDeferredCreates()`，delta 保留 placeholder。
+- **ReplayCore placeholder→local 映射**：`_replayPlaceholderMap` 按 seq 索引，每帧 `mapLen=0` 重置防 stale。`ResolveReplayEntity` 加 bounds check。
+- **`_replayPlaceholderMapLen` 字段删除**：mapLen 现在是 ReplayCore 局部变量，不复用跨帧。
+- **WorldSnapshot free list 持久化**：格式 v3 直接序列化 free list 数组到流末尾，不再调用 RebuildFreeIdStack。`WorldClone` 改为 `CopyFreeIdsFrom`。新增 `Save_load_preserves_free_id_allocation_order` 验证测试。
+- **`WorldStateSnapshot.cs` 接入 World**：`World.CaptureState()` / `World.RestoreState()` 在稳态零分配地备份/恢复 Records、FreeIds、per-archetype 数据（非 chunked + chunked）、Hierarchy。`_createArchetypeCacheGeneration++` 使 query cache 失效。4 个端到端测试验证：state preservation、deterministic ids、idempotency、cache invalidation。
+- **XML docs 明确区分 `WorldSnapshot` vs `WorldStateSnapshot`**：`WorldSnapshot` 的 doc 写明"NOT for in-memory rollback"，`WorldStateSnapshot` 的 doc 写明"NOT for persistence/network"。`WorldStateSnapshot` 改用 `int[] FreeIds + int[] FreeIdVersions` 避免依赖 `World.RecycledEntity`（private 嵌套类型）。
+- **Tier 1 完整实现**：`World.CaptureState()` / `World.RestoreState()` 通过 Array.Copy 在稳态零分配地备份/恢复 Records、FreeIds、per-archetype 数据（非 chunked + chunked）、Hierarchy。`_createArchetypeCacheGeneration++` 使 query cache 失效。预测帧创建的空 archetype count 被置零。4 个端到端测试验证：state preservation、deterministic ids、idempotency、cache invalidation。
+- **死代码清理 + Delta 确定性排序**：删除 `RebuildFreeIdStack()`（v3 格式后零调用点），kb-snapshot-persistence 移除其引用。`EmitHierarchyToDelta` 按 `child.Id` 排序输出，消除 Dictionary 迭代顺序导致的 delta 字节级非确定性（不影响 entity ID）。
+
+## 2026-06-29 Checksum 加固
+
+- **Archetype 存储零填充**：`CreateStorage` 从 `GC.AllocateUninitializedArray` 改为 `GC.AllocateArray`（零初始化），消除组件 struct padding 字节中的未定义值导致跨 peer checksum 不一致的风险。
+- **CanonicalChecksum 加入 free list**：`ComputeCanonicalChecksum` 在实体/组件/层级之后追加 free list 中每个 (Id, Version) 对。此前 canonical checksum 仅覆盖活实体，若两 host 因 bug 出现不同 free list 但活实体一致时无法检测。
+- **暴露 FreeList 内部 API**：`World.RecycledEntity` 从 `private` 改为 `internal`，新增 `World.FreeList` 属性供 checksum 访问。
+
+## 2026-06-28 CommandStream API 统一
+
+- **CommandStream 并行 API 统一**：删除 `SetConcurrent`/`AddConcurrent`/`RemoveConcurrent` 专用方法，`ParallelRecording=true` 时所有 Record API 透明切换为并发实现。单线程零退化。
+
+## 2026-06-22 全库审阅
+
+- **修复 CommandStream.BuildFromFrozen bug**：`EmitHierarchyToDelta` 被重复调用两次，导致 FrameDelta 中 Link/Unlink 操作重复写入
+- **知识库全面更新**：修正过时文件路径（Ecs/Query.cs → Query.cs）、删除不存在的文件引用（SpanQueryIterators.cs、ChunkViewTyped.cs）、修复旧字段名引用（_archetypeVersion → _createArchetypeCacheGeneration）
+
+## 2026-06-08 大重构
+
+- **World 拆分为 partial 文件**：World.cs + World.EntityLifecycle.cs + World.Create.Generated.cs + World.QueryCache.cs + World.StructuralChange.cs
+- **Archetype 拆分为 partial 文件**：Archetype.cs（字段/metadata）+ Archetype.Storage.cs（存储操作）
+- **Edge cache 使用直索引 `Archetype?[]`**（按 componentId 直索引，O(1) 查找）
+- **DebugMetrics 整个子系统已删除**（kb-debug-metrics.md 保留作为历史记录）
+- **FrameDelta 热路径 struct 大幅缩小**（Movement +50% / Attack +29%）
+- **ComponentMask 扩展为 512-bit**（8 × `ulong`），覆盖 component id 0..511 的快速匹配
+- **新增分段存储模式**：Archetype 超过阈值后自动切换为多 Segment 模式（详见 `kb-chunk-storage.md`）

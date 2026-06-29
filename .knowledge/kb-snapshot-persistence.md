@@ -1,8 +1,8 @@
 ---
 title: Snapshot Persistence
 module: MiniArch.Core Snapshot
-description: Full-world snapshot save/load design for unmanaged components, plus World.Checksum()/CanonicalChecksum() for peer state verification
-updated: 2026-06-29 (Checksum 加固：Archetype 存储零填充、CanonicalChecksum 含 free list)
+description: Full-world snapshot save/load design for unmanaged components (WorldSnapshot.Save/Load, Clone, CaptureState/RestoreState), plus Checksum double mode
+updated: 2026-06-30 (checksum.md 合并回; 补 WorldStateSnapshot 段落，澄清三种状态复制机制的职责边界)
 ---
 # Snapshot Persistence
 
@@ -11,7 +11,19 @@ updated: 2026-06-29 (Checksum 加固：Archetype 存储零填充、CanonicalChec
 - 把 `World` 的当前活体数据导出成紧凑二进制 snapshot
 - 从 snapshot 快速重建 archetype / chunk / entity metadata
 - 保留 entity slot version 语义（`default(Entity)` 非法，活体 `Version > 0`）
-- `World.Checksum()` 一行调用得到世界状态的 SHA-256 hash，用于帧同步 peer 间状态校验
+- `Checksum()` / `CanonicalChecksum()` 双模式 peer 状态校验（见本章 Checksum 双模式段）
+
+## 三套状态复制机制（职责正交，不可互相替代）
+
+| 机制 | 产物 | 跨进程 | 用途 |
+|---|---|---|---|
+| `WorldSnapshot.Save/Load` | 版本化字节流 | ✅ | 持久化/网络/checksum |
+| `World.Clone()` (`WorldClone.Clone`) | 全新独立 `World` | ❌ | 分支模拟/独立副本/长生命周期 checkpoint |
+| `World.CaptureState/RestoreState` (`WorldStateSnapshot`) | opaque 句柄（绑定源 World） | ❌ | 高频原地回滚（GGPO 60fps，零分配稳态） |
+
+> **概念唯一性**：这三者看似都在"复制世界状态"，但产物形状不同（字节流 / 新 World / 原地句柄），
+> 各自服务于一个不可替代的场景。`Clone` 不应被推荐为高频回滚工具（每次产新 World），
+> `CaptureState` 不能跨进程（含 raw internal 数组）。任何文档把它们混用即为漂移。
 
 ## 架构
 
@@ -21,19 +33,36 @@ updated: 2026-06-29 (Checksum 加固：Archetype 存储零填充、CanonicalChec
   - `src/MiniArch/Core/World.cs`（+ partial 文件）：slot version、location、free id 重建桥接点
   - `src/MiniArch/Core/Archetype.cs` + `Archetype.Storage.cs`：按快照 chunk 精确导入实体批次
 
-## WorldClone vs WorldSnapshot
+## WorldClone vs WorldSnapshot vs WorldStateSnapshot
 
 - `WorldSnapshot.Save/Load`：走二进制序列化，支持跨进程传输
-- `WorldClone.Clone`：纯内存直拷，跳过全部编解码，5-20× 快于 Snapshot 往返
-- 两者共享同一套 internal 重建 API（`world.Reset(slotCount)`, `SetSnapshotEntityVersion()`, `SetSnapshotLocation()`）
+- `WorldClone.Clone`：纯内存直拷，跳过全部编解码，5-20× 快于 Snapshot 往返；产物是**新 World**
+- `World.CaptureState/RestoreState`：原地 raw 数组拷贝，spare 句柄复用，稳态零 GC；产物是**绑定源 World 的句柄**
+- 前两者共享同一套 internal 重建 API（`world.Reset(slotCount)`, `SetSnapshotEntityVersion()`, `SetSnapshotLocation()`）；后者独立走 `WorldStateSnapshot` + `ArchetypeBackupEntry` + `HierarchyTable.CaptureState/RestoreState`
 - v3 起 free list 直接序列化/反序列化（`WriteFreeList`/`ReadFreeList`），不再通过扫描 record 重建。Clone 用 `CopyFreeIdsFrom` 内存直拷。
 
 ## Checksum 双模式
 
-- **`ComputeChecksum`（`world.Checksum()`）**：快速 lockstep 校验，包含 slot versions + archetype 实体（按 ID 排序）+ component 原始字节 + hierarchy 链接。依赖同路径 replay（archetype 创建顺序、swap-remove 历史一致），不可用于不同构造路径的 world 间比较。
-- **`ComputeCanonicalChecksum`（`world.CanonicalChecksum()`）**：仅活实体（ID + Version + component）+ hierarchy + free list，全量按 ID 排序。同一逻辑状态的不同构造路径（replay / snapshot-load / 手工构造）产生相同 hash。
-- **Padding 字节安全**：Archetype 存储使用 `GC.AllocateArray`（零初始化）分配，组件 struct 的 padding 字节确定为 0，避免跨 peer 因未初始化内存产生 hash 差异。
-- **Free list 纳入 canonical checksum**：两 host 活实体相同但 free list 不同时（如一个 peer 未正确销毁实体），canonical checksum 可检测到差异。
+- **`world.Checksum()`**（`World.Checksum.cs:11` → `WorldSnapshot.cs:159`）：快，依赖同构造路径（archetype 顺序、swap-remove 历史一致）。输入：所有 slot version + 非空 archetype + hierarchy。不包含 free list。用于同 delta 序列驱动的 peer 间检测分叉。
+- **`world.CanonicalChecksum()`**（`World.Checksum.cs:20` → `WorldSnapshot.cs:221`）：慢，逻辑等价的世界在不同构造路径下产同一 hash。输入：仅活实体（id+version+组件）+ hierarchy + free list。排序后的规范输出。用于不同路径（replay / snapshot-load / 手工构造）的世界间比较。
+
+### Padding 字节安全
+Archetype 存储使用 `GC.AllocateArray`（零初始化）分配，组件 struct padding 确定为 0，避免跨 peer 因未初始化内存产生 hash 差异。
+
+### 决策
+- **双模式而非单模式**：Checksum 快且足够 lockstep 场景；CanonicalChecksum 慢但容不同路径。
+- **SHA-256 而非 XXHash64**：密码学安全 hash 避免对抗性 netcode 碰撞，且 hash 不在热路径。
+- **Free list 纳入 canonical**：fast 假设 delta 驱动 → free list 一致；canonical 用于不同路径 → free list 可能分叉。
+- **Padding 零初始化保证在 storage 层而非 checksum 层**：storage 层分配即确定，不做则 hash 不可靠。
+
+### 坑点
+- `Checksum` 依赖同构造路径：不同 archetype 创建顺序/swap-remove 历史 → 不同 hash。逻辑相等但路径不同的 world 会误报。
+- `CanonicalChecksum` 仍依赖 `ComponentType.Value` 进程内一致性：跨进程比较时双方 `ComponentRegistry` 注册顺序必须一致。
+- 两个 checksum 不适用于含托管引用组件的 world（构造时已 fail fast）。
+
+### 入口
+- `src/MiniArch/World.Checksum.cs`、`src/MiniArch/Core/WorldSnapshot.cs:159-271`
+- `tests/MiniArch.Tests/Persistence/WorldSnapshotTests.cs`
 
 ## 决策
 

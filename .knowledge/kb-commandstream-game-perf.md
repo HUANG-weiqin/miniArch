@@ -2,7 +2,7 @@
 title: CommandStream Game Steady-State Perf
 module: CommandBufferGame.Perf
 description: Independent MiniArch CommandStream vs Friflo vs Arch command-buffer + reused-world steady game benchmark
-updated: 2026-06-26 (移除 CommandBuffer, 仅保留 CommandStream 场景)
+updated: 2026-06-30 (修正 tools/perf 与 docs/internal/plans 路径漂移)
 ---
 # CommandStream Game Steady-State Perf
 
@@ -19,7 +19,7 @@ updated: 2026-06-26 (移除 CommandBuffer, 仅保留 CommandStream 场景)
 ## 架构
 
 - 核心组成：
-  - `perf/CommandBufferGame.Perf/Program.cs`：组件、runner、三方场景实现都在单文件中，保持独立。
+  - `tools/perf/CommandBufferGame.Perf/Program.cs`：组件、runner、三方场景实现都在单文件中，保持独立。
   - `MiniArchCommandStreamSteadyCombatWorld`：`MiniArch.World` + `MiniArch.Core.CommandStream.Submit()`。
   - `FrifloSteadyCombatWorld`：`EntityStore` + `GetCommandBuffer()` + `ReuseBuffer = true` + `Playback()`。
   - `ArchSteadyCombatWorld`：`Arch.Core.World` + `Arch.Buffer.CommandBuffer.Playback(world, true)`。
@@ -51,9 +51,9 @@ updated: 2026-06-26 (移除 CommandBuffer, 仅保留 CommandStream 场景)
 ## 入口
 
 - 第一次读或加功能，先看：
-  - `perf/CommandBufferGame.Perf/Program.cs`：完整场景实现和输出格式。
-  - `docs/plans/2026-06-09-commandbuffer-game-steady-design.md`：设计背景与公平性规则。
-  - `docs/plans/2026-06-09-commandbuffer-game-steady-plan.md`：实现步骤。
+  - `tools/perf/CommandBufferGame.Perf/Program.cs`：完整场景实现和输出格式。
+  - `docs/internal/plans/2026-06-09-commandbuffer-game-steady-design.md`：设计背景与公平性规则。
+  - `docs/internal/plans/2026-06-09-commandbuffer-game-steady-plan.md`：实现步骤。
 - 修 bug，先看：
   - `MiniArchCommandStreamSteadyCombatWorld.RecordCommands`、`FrifloSteadyCombatWorld.RecordCommands`、`ArchSteadyCombatWorld.RecordCommands`：各方命令数量是否仍对齐。
   - `QueryWorld`：销毁 scratch 收集逻辑是否引入容器伪影或漏算 live count。

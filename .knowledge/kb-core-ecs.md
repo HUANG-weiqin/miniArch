@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-06-22 (全库审阅: 修复 BuildFromFrozen 重复 EmitHierarchyToDelta bug, 确认无其他 bug)
+updated: 2026-06-30 (补 World.SnapshotBridge/Checksum 与 Archetype.TestHooks 到 partial 列表)
 ---
 # MiniArch Core ECS
 
@@ -18,15 +18,11 @@ updated: 2026-06-22 (全库审阅: 修复 BuildFromFrozen 重复 EmitHierarchyTo
 ## 架构
 
 - 核心组成（文件拆分为 partial 类）：
-  - **World partial 文件族**：
-    - `World.cs`：构造/Dispose、字段声明、component 读写（TryGet/Get/GetRef/Has/Access）、Clone、Replay、hierarchy API、GetOrCreateArchetype、诊断 API（GetStats/GetArchetypeStats）、helper 方法
-    - `World.EntityLifecycle.cs`：实体创建/销毁/生命周期（Create、CreateMany、Destroy、TryGetLocation、IsAlive、free-list 管理、deferred entity reservation）
-    - `World.Create.Generated.cs`：`Create<T1>..Create<T16>` 泛型重载 + `CachedCreateArchetype` 泛型 static cache + `GetFirst<T>()`
-    - `World.QueryCache.cs`：Query 缓存（QueryDescription→QueryFilter→Query 链路）、archetype snapshot 发布、`GetFirst<T>()` O(1) entity lookup
-    - `World.StructuralChange.cs`：Add/Set/Remove 组件、entity 迁移（MoveEntity/ApplyTypedAddOrSet/ApplyRawAddOrSet/RemoveBoxed）
-  - **Archetype partial 文件族**：
+  - **World partial 文件族（7 个）**：详见 `kb-architecture-review.md` §10
+  - **Archetype partial 文件族（3 个）**：
     - `Archetype.cs`：字段声明、构造函数、metadata 属性（EntityCount/Capacity/ComponentTypes）、edge cache（add/remove destination）、component index resolution
     - `Archetype.Storage.cs`：存储操作（EnsureCapacity、AddEntity、ReserveRows、RemoveAt、component read/write span、CopySharedComponentsFrom、CreateStorage、CopySmall）
+    - `Archetype.TestHooks.cs`：`*ForTesting` 内部方法（ForceChunked、AddSegment），与生产职责分离
   - `ChunkView.cs`：**public** readonly struct 视图，直接包裹 Archetype（给用户 batch API 用）
   - `Signature.cs`：组件集合键（排序 `ComponentType[]` + `ComponentMask` 512-bit bitmask）
   - `ComponentMask.cs`：512-bit bitmask（8 × `ulong`），加速 signature 匹配
@@ -59,13 +55,40 @@ updated: 2026-06-22 (全库审阅: 修复 BuildFromFrozen 重复 EmitHierarchyTo
   - `World.CreateMany` 先批量准备 entity id，再一次性落入空签名 archetype
   - `Add/Remove`（`World.StructuralChange.cs`）先算目标签名，再通过 edge cache（`_addDestinationCache`/`_removeDestinationCache` `Archetype?[]` 按 componentId 直索引）找到目标 Archetype，用 `Archetype.CopySharedComponentsFrom` 搬迁共享组件
   - `Set` 在组件已存在时直接定位到 typed column 的 row，原地写回，不触发迁移
-  - `EntityAccessor` 缓存 `(Archetype, RowIndex)`，后续 `Get<T>` / `Set<T>` / `Has<T>` 跳过 `_records` 查找和 version check
-  - `Destroy` 走 leaf-entity 快速路径：无 children 时跳过 `CollectDestroySubtree`
-  - `Clone` 执行 deep clone：先 `CloneSingle` 复制 root 实体，有 children 时 DFS 遍历 subtree
-  - Query 读路径使用 world 发布（volatile write）的 archetype 数组快照和 query 自身发布的 matched-archetype/chunk 数组快照（`World.QueryCache.cs`）
-  - **Archetype 支持单块和分段两种存储模式**（详见 `kb-chunk-storage.md`）：存储为 Archetype 直持的 `_data: byte[]`（单块）或 `_segments: Segment[]`（分段），通过 `_columnByteOffsets[column] + row * _elementSizes[column]` 定位元素
-  - Archetype 按需线性增长：`EnsureCapacity`（`Archetype.Storage.cs`）按 double 策略扩容，每列 `CopyBlockUnaligned` 整列搬移
-  - `World.Create/Destroy` 热路径无锁（单线程 world mutation 前提）；`World.ReserveDeferredEntity` 保留锁（供 CommandBuffer/CommandStream 的 deferred entity 使用）
+- `EntityAccessor` 缓存 `(Archetype, RowIndex)`，后续 `Get<T>` / `Set<T>` / `Has<T>` 跳过 `_records` 查找和 version check
+- `Destroy` 走 leaf-entity 快速路径：无 children 时跳过 `CollectDestroySubtree`
+- `Clone` 执行 deep clone：先 `CloneSingle` 复制 root 实体，有 children 时 DFS 遍历 subtree
+- Query 读路径使用 world 发布（volatile write）的 archetype 数组快照和 query 自身发布的 matched-archetype/chunk 数组快照（`World.QueryCache.cs`）
+- **Archetype 支持单块和分段两种存储模式**（详见 `kb-chunk-storage.md`）：存储为 Archetype 直持的 `_data: byte[]`（单块）或 `_segments: Segment[]`（分段），通过 `_columnByteOffsets[column] + row * _elementSizes[column]` 定位元素
+- Archetype 按需线性增长：`EnsureCapacity`（`Archetype.Storage.cs`）按 double 策略扩容，每列 `CopyBlockUnaligned` 整列搬移
+- `World.Create/Destroy` 热路径无锁（单线程 world mutation 前提）；`World.ReserveDeferredEntity` 保留锁（供 CommandBuffer/CommandStream 的 deferred entity 使用）
+
+### 用户 API 分层（`MiniArch` namespace）
+
+用户面 API 收敛在 `MiniArch` 根命名空间，`MiniArch.Core` 对用户不可见：
+
+| 概念 | 公开定义 | 用户入口 |
+|------|---------|---------|
+| World | `MiniArch.World` | `new World()` |
+| Entity | `MiniArch.Entity` | `world.Create<T>()` |
+| Query 描述 | `MiniArch.QueryDescription` | `new QueryDescription().With<T>()` |
+| Query facade | `MiniArch.Query` (public struct) | `world.Query(desc)` → `GetChunks()` / `ForEachChunk` |
+| Chunk 视图 | `ChunkView` (public readonly struct) | `chunk.GetSpan<T>()` |
+| O(1) entity 查找 | `World.GetFirst<T>()` | `world.GetFirst<T>()` |
+
+**关键分层边界：**
+- `MiniArch.Core.Query` 是 `internal sealed class`（`Core/Query.cs:11`），用户不能接触
+- `MiniArch.Query.Advanced` 是 `internal`，**用户层无 advanced 入口**——batch/parallel 已在 `MiniArch.Query` 上直接提供
+- EachSpan API 已删除，统一走 `ChunkView.GetSpan<T>()`
+- typed query 家族（`Query<T>`、`Query<T1,T2>` 等）已移除
+- builder 风格 `World.Query()...Build()` 已移除
+- `OrderBy(...)` 在 `MiniArch.Query` facade 上提供，不缓存排序结果（每次枚举租 `ArrayPool` 排序）
+
+**坑点：**
+- `MiniArch.Query` 是 struct wrapper，不能用于 identity 断言
+- `EachSpan` 引用会编译失败——改用 `chunk.GetSpan<T>()`
+- `GetChunks()` 返回的 `ChunkView` 是 readonly struct，不能长期持有
+- `GetFirst<T>()` 依赖泛型 static cache（`WeakReference<World>`），跨 World 首次有缓存未命中
 
 ## 决策
 
@@ -95,6 +118,37 @@ updated: 2026-06-22 (全库审阅: 修复 BuildFromFrozen 重复 EmitHierarchyTo
 - 一条从 entity id 到 dense typed storage 的映射链
 - 最重要的抽象：`World`（拆分为 partial）→ `Signature` → `Archetype`（拆分为 partial，Chunk 是其 readonly 视图）
 
+### 最小示例（C#）
+
+```csharp
+// 1. 创建 world
+var world = new World();
+
+// 2. 带组件创建实体
+var e = world.Create<Position, Velocity>();
+
+// 3. 组件读写
+ref var pos = ref world.Get<Position>(e);
+pos.X += 1;
+
+// 4. 结构变更
+world.Add<Health>(e, new Health { Value = 100 });
+
+// 5. 查询
+var query = world.Query(new QueryDescription().With<Position>());
+foreach (var chunk in query.GetChunks())
+{
+    var positions = chunk.GetSpan<Position>();
+    for (var i = 0; i < chunk.Length; i++)
+        positions[i].X += 1;
+}
+
+// 6. 销毁
+world.Destroy(e);
+```
+
+> 完整 API 参考见源码 `MiniArch.Query` struct 和 `World` 方法。
+
 ## 入口
 
 - 第一次读：`World.cs`（字段声明+component 读写+hierarchy）→ `World.EntityLifecycle.cs`（Create/Destroy）→ `World.StructuralChange.cs`（Add/Set/Remove）→ `Archetype.cs`（metadata+edge cache）→ `Archetype.Storage.cs`（存储操作）→ `ChunkView.cs`（公共视图）
@@ -118,3 +172,4 @@ updated: 2026-06-22 (全库审阅: 修复 BuildFromFrozen 重复 EmitHierarchyTo
 - 结构变更（Add/Remove）后 entity 可能换 archetype，此时已获取的 accessor 指向旧位置，必须丢弃
 - `GetFirst<T>()` 依赖 `CreateArchetypeCache<T>` 泛型静态缓存，该缓存使用 `WeakReference<World>` 防止跨 World 误命中
 - DebugMetrics 相关的 `#if DEBUG` 计数累加语句已全部删除，不应再引用
+- **同帧 `World.Destroy(e)` + `World.Create()` 的 id 回收与 version 一致性**（**理论风险，当前串行单线程路径安全，但修改时要小心**）：Destroy 把 `(id, version)` 推回 free-list 并对 `EntityRecord[id]` 做 swap-remove + version bump；Create 从 free-list 弹 id 并写新 `EntityRecord[id]`。两者必须严格串行且 Destroy 的 swap-remove 必须先于 Create 的 slot 写入，否则新实体可能读到被销毁实体的旧 `(Archetype, RowIndex)` 或 stale version。验证链：`World.EntityLifecycle.cs:Destroy` → `Archetype.Storage.cs:RemoveAt`（swap-remove）→ free-list push → `World.EntityLifecycle.cs:Create` → free-list pop。**当前在单线程串行调用下安全**（Destroy 的 version bump + swap-remove 在 Create 读 free-list 前完成），但引入 CommandStream 批量 materialize、多线程或 `Destroy` callback 嵌套 `Create` 时可能被打破。跨帧版本（CommandStream Merge 路径）已在 `kb-command-stream.md` "Merge + id 回收" 段文档化并修复。**回归测试入口**：`tests/MiniArch.Tests/Core/WorldLifecycleTests.cs`（当前缺同帧 destroy+create 用例，需补 `Destroy_then_Create_same_frame_recycles_id_with_incremented_version`）

@@ -1,65 +1,75 @@
 ---
 title: Query Invalidation System
 module: MiniArch.Core Query
-description: Incremental append-only query invalidation — archetype count comparison, only new archetypes scanned
-updated: 2026-06-22 (全库审阅: 确认实现与文档一致, 修正过时引用)
+description: Two-stage incremental query invalidation — archetype count gate, append-only scan of new archetypes, per-archetype segment-count refresh
+updated: 2026-06-30 (重写正文：原描述全量重建与代码不符；实际是两段式增量)
 ---
 # Query Invalidation System
 
 ## 这个模块是干什么的
 
 - 检测 Query 匹配的 archetype 集合是否发生变化
-- 决定何时刷新 Query 的快照（archetype 和 chunk 列表）
-- 变化时全量重建快照（遍历所有 archetype，重新匹配）
+- 决定何时刷新 Query 的快照（archetype + chunk view 列表）
+- 变化时**只扫新增 archetype**（append-only），不重扫已匹配的旧 archetype
 
 ## 架构
 
 - 核心组成：
-  - **World.ArchetypeCount**：当前 archetype 数组长度（archetype 创建时原子增长）
-  - **Query._lastArchetypeCount**：上次刷新时记录的 archetype 数量
-  - **Query._requiredMask/_excludedMask/_anyMask**：构造时预计算的 filter bitmask，不可变
-  - **Query._refreshLock**：double-check locking 用于并发只读场景
-  - **Query._archetypeExpectedViews[]**：跟踪每个匹配 archetype 的 segment 数量，检测分段增长
+  - **`World.ArchetypeCount`**：当前 archetype 数组长度（archetype 创建时只增不减）
+  - **`Query._lastArchetypeCount`**：上次刷新时记录的 archetype 数量
+  - **`Query._requiredMask/_excludedMask/_anyMask`**：构造时预计算的 filter bitmask，不可变
+  - **`Query._refreshLock`**：double-check locking 用于并发只读场景
+  - **`Query._archetypeExpectedViews[]`**：跟踪每个匹配 archetype 的 segment 数量，检测分段增长
+
+- **两段式失效**（`src/MiniArch/Core/Query.cs:105-128` `EnsureRefreshed`）：
+  1. 快路径：`_world.ArchetypeCount == _lastArchetypeCount` → 跳过 archetype 匹配阶段
+  2. 慢路径 A：archetype 数量变 → `Refresh()` → `AppendNewArchetypes()`（**只扫 `_lastArchetypeCount` 之后的新 archetype**，append 到现有快照）
+  3. 慢路径 B：已有匹配 archetype 的 segment 数变（chunked 增长）→ `RefreshViewsOnly()`（不重做 match，只重建 ChunkView）
 
 - 数据流：
   1. 新 Archetype 创建时 `PublishArchetypeSnapshot()` 原子替换更大的 archetype 数组
   2. Query 访问 `MatchedArchetypes`/`GetChunkSpan()` 时调用 `EnsureRefreshed()`
   3. `if (_world.ArchetypeCount != _lastArchetypeCount)` 数量变化则进入 `Refresh()`
-  4. 分段模式下，已有匹配 archetype 的 `SegmentCount` 变化也触发 `Refresh()`
+  4. 分段模式下，已有匹配 archetype 的 `SegmentCount` 变化也触发 `RefreshViewsOnly()`
   5. `Refresh()` 下用 lock double-check → `AppendNewArchetypes()`
-  6. `AppendNewArchetypes()` 遍历**所有** archetype 重新匹配，重建快照数组
+  6. `AppendNewArchetypes()` 从 `start = _lastArchetypeCount` 起线性扫描到 `currentArchetypeCount`，匹配的追加进 `_snapshotArchetypes`
 
 - Chunk 快照：每个匹配的 archetype 贡献 1 个 chunk（单块模式）或 N 个 chunk（分段模式，每个 Segment 一个 ChunkView）。
 
 ## 决策
 
-- **全量重建而非增量 append**：`AppendNewArchetypes` 名字具有误导性——实际每次调用都遍历所有 archetype 重新匹配并重建快照。archetype 数量通常很小（<50），全量重建成本可忽略。
+- **增量 append-only 而非全量重建**：archetype 是 append-only（创建后不删除），所以 `_lastArchetypeCount` 之后的 archetype 集合就是"自上次刷新起新增的"。append-only 扫描代价随新增量缩放，不随总 archetype 数增长。
+- **名字诚实**：`AppendNewArchetypes` 的名字就是字面意思——append 新 archetype 进快照。历史上的 kb 描述说"名字具有误导性，实际全量重建"是错的，已修正。
 - **archetype 数量代替全局版本号**：`ArchetypeCount` 直接用 archetype 数组长度，语义更清晰。
 - **filter mask 预计算到构造时**：`_requiredMask`/`_excludedMask`/`_anyMask` 在 Query 构造时一次性计算为 readonly 字段，匹配时直接使用。
 - **512-bit ComponentMask 手动展开**：8×ulong 逐个比较，手动展开无循环。在 <64 组件的典型场景下只需 1 条 AND 指令。
-- **分段增长检测**：`_archetypeExpectedViews[]` 跟踪每个匹配 archetype 的 segment 数量，segment 增长时触发快照重建。
+- **分段增长检测**：`_archetypeExpectedViews[]` 跟踪每个匹配 archetype 的 segment 数量，segment 增长时只重建 ChunkView，不重做 archetype match。
 
 ## 认知模型
 
-- 一个基于 archetype 数量比较的缓存失效系统。数量变化时全量重建快照。
+- 一个基于 archetype 数量比较 + segment 数量比较的**两段式**缓存失效系统：
+  - 第一段：archetype 数量没变 → 直接进入第二段
+  - 第二段：每个已匹配 archetype 的 segment 数没变 → 完全跳过刷新
+  - 任一段失配 → 走对应增量刷新路径
 
 ## 入口
 
-- `src/MiniArch/Core/Query.cs`：`EnsureRefreshed()`、`Refresh()` 和 `AppendNewArchetypes()`
+- `src/MiniArch/Core/Query.cs`：`EnsureRefreshed()`、`Refresh()`、`AppendNewArchetypes()`、`RefreshViewsOnly()`
 - `src/MiniArch/Core/World.QueryCache.cs`：Query 缓存管理、archetype snapshot 发布
 - `src/MiniArch/Core/World.cs`：`ArchetypeCount` 属性
 
 ## 坑点
 
-- `AppendNewArchetypes()` 名字暗示增量，实际是全量重建——修改时注意
-- `AppendNewArchetypes()` 使用 volatile write 发布快照，并发只读场景安全
+- `AppendNewArchetypes` 是真正的增量 append，**不要**把它当全量重建改——重写时若改成全量，会破坏"archetype 数量回到 0 后再增长"等边界场景下的 `_lastArchetypeCount` 语义
+- `Refresh` / `RefreshViewsOnly` 都用 `lock (_refreshLock)` + volatile publish，并发只读场景安全
 - Query 缓存代码在 `World.QueryCache.cs` partial 文件中，修改时要注意 partial 类的编译范围
 - 分段模式下 chunk 数量 = 所有匹配 archetype 的 segment 数之和，不等于 archetype 数量
+- `EnsureRefreshed` 每次访问 query 都会被调用，必须是极轻量的"两个 int 比较"快路径
 
 ## 竞品对比
 
 | | miniArch | Arch | Friflo |
 |---|---|---|---|
-| 失效检测 | archetype 数量比较 | Archetypes 集合 hash code | archetype 数量比较 |
-| 重建策略 | **全量重建** | 全量重建 | **增量 append** |
+| 失效检测 | archetype 数量 + per-archetype segment 数（两段式） | Archetypes 集合 hash code | archetype 数量比较 |
+| 重建策略 | **增量 append**（只扫新 archetype） | 全量重建 | 增量 append |
 | 匹配算法 | 8×ulong 手动展开 | uint[] + SIMD Vector | Vector256 / 4×long fallback |

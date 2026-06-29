@@ -130,7 +130,7 @@ RemoveAt(globalRow):
 ## 决策
 
 - **单块模式零退化**：`_isChunked == false` 时所有路径和原先完全一致（只多一个分支预测）
-- **阈值按组件大小动态计算**：`SegmentEntityCapacity = Max(16, 2MB / bytesPerEntity)`，目标每段 2 MB，确保切换前已有足够大的单块
+- **阈值按组件大小动态计算**：`SegmentEntityCapacity = Max(16, 2MB / bytesPerEntity)`，目标每段 2 MB。2MB 的选择基于：超过 85000 字节的 `byte[]` 分配在 LOH（大对象堆），而 2MB 远高于此但仍是可控的单次分配。更小的段（如 256KB）会增加 segment 数量和遍历开销；更大的段则减少遍历开销但增加单次晋升分配的峰值内存。2MB 是经验平衡点。
 - **行号映射用除法而非二分**：因为所有段（除末段外）固定大小，`globalRow / SegmentEntityCapacity` 即可定位
 - **`ChunkView.Count` 总是读 Archetype 实时计数**：避免因 CommandBuffer 延迟提交导致的 stale count 问题（2026-06-13 bugfix）
 - **不支持托管引用组件**：`flat byte[]` 不含 GC 跟踪，在 Archetype 构造时 fail fast
@@ -146,6 +146,24 @@ RemoveAt(globalRow):
 - **核心逻辑**：`Archetype.Storage.cs` 的 `EnsureCapacity()` / `AddEntity()` / `RemoveAt()`
 - **查询适配**：`Query.cs` 的 `AppendNewArchetypes()` + `ChunkView.cs`
 - **测试**：`ArchetypeTests.cs` 的 `Chunked_mode_*` 测试方法
+
+## Storage Invariants（集中参考）
+
+> 以下不变量分散在多个 kb 页中，这里集中供存储层 refactor 时参考。
+> 破环后会失败哪些测试见第三列。
+
+| 不变量 | 描述 | 定义位置 | 相关测试 |
+|--------|------|---------|---------|
+| **Swap-remove 语义** | `RemoveAt(row)` 把最后一行移到被删行位置，`EntityRecord.RowIndex` 必须同步更新 | 本页 §3.3 + `kb-core-ecs.md` 坑点 | `ArchetypeTests` / `WorldStructuralChangeTests` |
+| **列偏移公式** | 元素定位 = `_columnByteOffsets[col] + row * _elementSizes[col]` | `kb-cache-optimization.md` 内存布局 | 几乎所有读组件的测试（`ChunkTests`, `QueryTests`, `QueryFilterTests`） |
+| **容量增长** | 单块模式 doubling；超过 `_capacity * 2 > _segmentEntityCapacity` 时晋升为分段 | 本页 §2.2 + §3.1 | `ArchetypeTests` / `WorldLifecycleTests` |
+| **晋升单向** | chunked 模式不回退为单块 | `kb-architecture-review.md` §2 | `ArchetypeTests.Chunked_mode_*` |
+| **Padding 零初始化** | `GC.AllocateArray`（零初始化）分配，组件 struct padding 确定为 0 → checksum 安全 | `kb-snapshot-persistence.md` Checksum 段 | `WorldSnapshotTests` (checksum) / `FrameDeltaDeterminismTests` |
+| **段等长假设** | 除末段外所有段 = `SegmentEntityCapacity`，`GetSegmentAndLocal` 用除法定位 | 本页 坑点 | `ArchetypeTests.Chunked_mode_*` / `QueryTests` |
+| **`_isChunked` re-check** | `EnsureCapacity` 可能切换模式，`AddEntity`/`ReserveRows` 返回后必须重检 `_isChunked` | 本页 坑点 | `ArchetypeTests` / `CommandStreamTests` (materialize 路径) |
+| **`_flatEntitiesGeneration` 失效** | 布局变更（AddEntityChunked/RemoveAt/WriteEntityAt/ReserveRows/GrowChunked）时递增 | 本页 §3.5 | `ChunkTests.GetEntities` / `QueryEnumerator` 热路径 |
+| **RowIndex 全局性** | `EntityRecord.RowIndex` 始终是全局行号，模式透明 | 本页 认知模型 | `WorldStructuralChangeTests` / `IntegrationTests` |
+| **Load 不能走 Add/Set/Remove** | 否则会挤压重排快照 chunk 边界 | `kb-snapshot-persistence.md` 决策 | `WorldSnapshotTests` (save+load round-trip) |
 
 ## 坑点
 

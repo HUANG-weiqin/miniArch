@@ -44,7 +44,7 @@ This advantage holds across all of MiniArch's benchmarked game scenarios:
 | Other ECS libraries | MiniArch |
 |---|---|
 | ❌ No frame sync support | ✅ **FrameDelta + Replay** — record changes as a self-contained delta, replay on any machine to produce identical state |
-| ❌ No rollback support | ✅ **World.Clone()** — deep copy for rollback checkpoints |
+| ❌ No rollback support | ✅ **CaptureState/RestoreState**（原地零分配）+ **World.Clone()**（独立副本）|
 | ❌ No CommandStream | ✅ **CommandStream** — 12–48% faster than traditional command buffers |
 | ❌ No binary serialization | ✅ **WorldSnapshot** — full state save/load for replays and netcode |
 | ❌ No delta merging | ✅ **FrameDelta.Merge()** — squash multiple frames into one for network optimization |
@@ -93,7 +93,8 @@ Other ECS libraries have `CommandBuffer`, but frame sync needs more than that:
 | **`Replay(FrameDelta)`** | ❌ | ❌ | ✅ |
 | **Replay 时 ID 一致性校验** | ❌ | ❌ | ✅ |
 | **多帧合并 `Merge()`** | ❌ | ❌ | ✅ |
-| **`World.Clone()` 回滚点** | ❌ | ❌ | ✅ |
+| **`CaptureState/RestoreState` 原地零分配回滚** | ❌ | ❌ | ✅ |
+| **`World.Clone()` 分支/独立副本** | ❌ | ❌ | ✅ |
 | **跨 World 重放测试** | ❌ | ❌ | ✅ 1000帧模糊测试 |
 
 ```csharp
@@ -108,10 +109,13 @@ buffer.Submit();                   // apply locally
 // Any client replays to produce identical state
 replicaWorld.Replay(delta);       // ensure replay reservation + ID validation
 
-// Rollback: save checkpoint, predict, revert on correction
-var checkpoint = world.Clone();   // deep copy with hierarchy
-// ... predict frames ...
-world = checkpoint.Clone();       // revert and re-apply
+// High-frequency in-place rollback (GGPO-style 60fps, zero-alloc steady state):
+var handle = world.CaptureState();  // save current mutable state
+// ... predict frames on the same world ...
+world.RestoreState(handle);         // revert in place, handle is recycled
+
+// Branching / long-lived checkpoint: Clone materializes a NEW independent world
+var branch = world.Clone();
 ```
 
 ---
@@ -181,8 +185,9 @@ Friflo's advantages are **engine-level constant factors** (typing + SIMD). MiniA
 - **Archetype ECS** — `World` / `Entity` / `QueryDescription` with chunk-level iteration
 - **CommandStream** — deferred command recording; 12–48% faster than traditional command buffers
 - **FrameDelta + Replay** — record and replay frame deltas across worlds with deterministic ID validation; zero-allocation replay path (mask cache + pre-scan)
-- **World.Clone()** — deep copy for rollback
-- **WorldSnapshot** — binary serialize/deserialize entire world state
+- **CaptureState/RestoreState** — in-place zero-alloc rollback (GGPO-style 60fps; opaque handle recycled across frames)
+- **World.Clone()** — materialize a brand-new independent world (branching / long-lived checkpoint)
+- **WorldSnapshot** — binary serialize/deserialize entire world state (cross-process persistence)
 - **SubmitAndSnapshotAsync()** — pipelined submit + delta building
 - **Query filtering** — `With<T>`, `Without<T>`, `WithAny<T>`
 - **Parallel iteration** — `ForEachChunkParallel` for multi-threaded batch processing (auto fast-path for single-chunk queries)
@@ -199,7 +204,7 @@ Friflo's advantages are **engine-level constant factors** (typing + SIMD). MiniA
 | 你的场景 | 推荐 |
 |---|---|
 | 要做**帧同步联机游戏**（Lockstep） | ✅ **MiniArch 原生支持** — 游戏逻辑天然可同步 |
-| 要做**状态同步 + 回滚** | ✅ **World.Clone() + Replay** 开箱即用 |
+| 要做**状态同步 + 回滚** | ✅ **CaptureState/RestoreState**（高频原地零分配）+ `Replay` |
 | 游戏有大量**每帧 Set 操作**（位置/血量/速度更新） | ✅ **CommandStream +27~65% vs Friflo** |
 | 追求**零 GC** 稳定运行 | ✅ 所有游戏场景 GC = 0/0/0 |
 | 单机游戏、随便玩玩 | ✅ API 简洁不折腾 |

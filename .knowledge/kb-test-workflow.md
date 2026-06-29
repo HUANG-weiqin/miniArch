@@ -2,7 +2,7 @@
 title: Test Workflow
 module: MiniArch.Tests
 description: How the test suite, query profiling, snapshot benchmarks, and structural-change benchmarks are organized and how to run them
-updated: 2026-06-30 (新增 CanonicalChecksum + Get/GetRef DEBUG 活性检查覆盖)
+updated: 2026-06-30 (修 CommandBufferTests 引用→CommandStreamTests)
 ---
 # Test Workflow
 
@@ -20,17 +20,21 @@ updated: 2026-06-30 (新增 CanonicalChecksum + Get/GetRef DEBUG 活性检查覆
 |---|---|
 | `Core/WorldLifecycleTests.cs` | 实体生命周期、version、free-list、EnsureCapacity、CreateMany、带组件 Create<T...>、GetFirst<T>() |
 | `Core/WorldStructuralChangeTests.cs` | Add/Set/Remove/Destroy 的 structural semantics |
+| `Core/WorldStatsTests.cs` | WorldStats / ArchetypeStats 诊断快照 |
 | `Core/EntityTests.cs` | Entity 句柄契约 |
 | `Core/ChunkTests.cs` | 存储密度、并发只读、引用类型列清尾槽位 |
 | `Core/ChunkColumnIndexTests.cs` | Column index 查找正确性 |
-| `Core/ArchetypeTests.cs` | chunk 复用、non-full chunk tracking |
-| `Core/CommandBufferTests.cs` | Submit/Snapshot/Merge、cross-world replay、concurrent recording、Clone、struct 缩小后的正确性 |
-| `Core/CommandBufferParityTests.cs` | MiniArch/Arch 共享结构命令 parity |
+| `Core/ArchetypeTests.cs` | chunk 复用、non-full chunk tracking、chunked 模式 |
+| `Core/CommandStreamTests.cs` | Submit/Snapshot/Merge、cross-world replay、concurrent recording、Clone、struct 缩小后的正确性、SwapOutState 字段分类契约 |
+| `Core/CommandBufferParityTests.cs` | MiniArch/Arch 共享结构命令 parity（文件名沿用历史，实际比对的是 CommandStream）|
+| `Core/CommandBufferGamePerfTests.cs` | 真实游戏循环稳态 perf（CommandStream）|
 | `Core/QueryTests.cs` | 缓存与并发读取、冷热路径 |
 | `Core/QueryFilterTests.cs` | 链式 filter 和 builder 契约 |
 | `Core/QueryComponentSetTests.cs` | ComponentSet 创建/排序契约 |
+| `Core/ParallelQueryTests.cs` | ForEachChunk / ForEachChunkParallel 安全性与加速比 |
 | `Core/EntityAccessorTests.cs` | EntityAccessor ref struct 契约 |
 | `Core/IntegrationTests.cs` | 最完整的端到端例子 |
+| `Core/FrameDeltaDeterminismTests.cs` | 跨 world replay 决定性、Submit vs Replay 收敛、Merge 字节级一致性 |
 | ~~`Core/DebugMetricsTests.cs`~~ | **已删除** — DebugMetrics 子系统已移除 |
 | `Core/ThroughputRunnerTests.cs` | 参数解析和汇总契约 |
 | `Core/QueryProfilingRunnerTests.cs` | Profiling runner 构造契约 |
@@ -59,14 +63,14 @@ updated: 2026-06-30 (新增 CanonicalChecksum + Get/GetRef DEBUG 活性检查覆
 
 ## 入口
 
-- 第一次读：`IntegrationTests.cs` → `CommandBufferTests.cs` → `WorldStructuralChangeTests.cs`
+- 第一次读：`IntegrationTests.cs` → `CommandStreamTests.cs` → `WorldStructuralChangeTests.cs`
 - 修 bug：对应功能的测试文件
-- 运行测试：`scripts/test.ps1` 或 `dotnet test`
-- 运行 benchmark：`scripts/benchmark.ps1` — 或 `dotnet run --project benchmarks\MiniArch.Benchmarks -c Release -- command-buffer`
+- 运行测试：`tools/scripts/test.ps1` 或 `dotnet test`
+- 运行 benchmark：`tools/scripts/benchmark.ps1` — 或 `dotnet run --project tests\MiniArch.Benchmarks -c Release -- command-buffer`
 
 ## 坑点
 
-- 只跑局部测试不看整体迁移可能破坏；跑完 `CommandBufferTests` 还必须回归 lifecycle / structural-change / query
+- 只跑局部测试不看整体迁移可能破坏；跑完 `CommandStreamTests` 还必须回归 lifecycle / structural-change / query
 - `Remove` 只快不一定是好事——需确认 archetype 在复用已有空 chunk
 - `Create` 只看时间不看 entity metadata 扩容分配可能漏掉问题
 - `Set` 相关测试要先确认核心是否已切到 typed-column

@@ -2,7 +2,7 @@
 title: Throughput Workflow
 module: Workspace
 description: Reusable fixed-duration throughput comparison workflow for MiniArch and Arch workloads
-updated: 2026-06-22 (全库审阅: 确认 EachSpan 已移除, 保留 ComponentSpan 和 Wide 变体)
+updated: 2026-06-30 (修正脚本/共享基础设施路径漂移)
 ---
 # Throughput Workflow
 
@@ -14,9 +14,9 @@ updated: 2026-06-22 (全库审阅: 确认 EachSpan 已移除, 保留 ComponentSp
 ## 架构
 
 - 核心组成：
-  - `shared/MiniArch.SharedInfrastructure/ThroughputRunner.cs`
-  - `shared/MiniArch.SharedInfrastructure/BenchmarkWorldFactory.cs`
-  - `scripts/throughput.ps1`
+  - `tests/SharedInfrastructure/MiniArch.SharedInfrastructure/ThroughputRunner.cs`
+  - `tests/SharedInfrastructure/MiniArch.SharedInfrastructure/BenchmarkWorldFactory.cs`
+  - `tools/scripts/throughput.ps1`
 - 数据流 / 控制流：
   - 根据 `workload + engine + entityCount` 构造固定 case → `WarmupAndMeasure<T>`（泛型约束，消除 interface dispatch）→ 先 warmup 再跑固定时长循环 → 每轮累计 iteration count 和 checksum → 输出 avg/median/best ops/s
 
@@ -33,10 +33,10 @@ updated: 2026-06-22 (全库审阅: 确认 EachSpan 已移除, 保留 ComponentSp
 
 ## 入口
 
-- `scripts/throughput.ps1`：直接可跑的吞吐入口
-- `shared/MiniArch.SharedInfrastructure/ThroughputRunner.cs`：runner 组织 repeat / warmup / compare
-- `shared/MiniArch.SharedInfrastructure/BenchmarkWorldFactory.cs`：复用已有 world shape
-- `perf/Throughput.Perf`：自包含的 Release 控制台，快速添加临时 benchmark
+- `tools/scripts/throughput.ps1`：直接可跑的吞吐入口
+- `tests/SharedInfrastructure/MiniArch.SharedInfrastructure/ThroughputRunner.cs`：runner 组织 repeat / warmup / compare
+- `tests/SharedInfrastructure/MiniArch.SharedInfrastructure/BenchmarkWorldFactory.cs`：复用已有 world shape
+- `tools/perf/Throughput.Perf`：自包含的 Release 控制台，快速添加临时 benchmark
 - `tests/MiniArch.Tests/Core/ThroughputRunnerTests.cs`：参数解析和汇总契约
 
 ## 坑点

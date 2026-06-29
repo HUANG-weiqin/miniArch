@@ -2,7 +2,7 @@
 title: Architecture Mechanistic Review
 module: MiniArch.Core
 description: Mechanistic insight of the entire miniArch ECS library — one-line truths, subsystem breakdown, data flows, known issues, and design tensions. Links to per-subsystem kb pages for depth.
-updated: 2026-06-29 (全文重写: 删除已移除的 CommandBuffer 描述, 同步 FrameDelta byte[]+varint 重写, 补充两层 archetype lookup 与两段式 query 失效; 同日删死代码 TryGetArchetype)
+updated: 2026-06-30 (修正 partial 文件计数 6→7 与行号漂移; 全文重写: 删除已移除的 CommandBuffer 描述, 同步 FrameDelta byte[]+varint 重写, 补充两层 archetype lookup 与两段式 query 失效; 同日删死代码 TryGetArchetype)
 ---
 # Architecture Mechanistic Review
 
@@ -33,7 +33,7 @@ Archetype (单块 byte[] 或多 Segment，按列排布所有组件数据)
   ↓
 Query (archetype/chunk 快照 + 两段式失效: archetypeCount + per-archetype segment count)
   ↓
-World (拆分为 5 个 partial 文件，编排一切)
+World (拆分为 7 个 partial 文件，编排一切)
   ↓
 CommandStream (typed store 录制器) → FrameDelta (packed byte[] + varint op 流) → World.Replay
 HierarchyTable (side-table, SoA 邻接表)
@@ -64,7 +64,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 | `_archetypes: Dict<Signature, Archetype>` | 创建 archetype 主路径 | O(1) 哈希 |
 | `_archetypeByMask: Dict<ComponentMask, Archetype>` | Replay 路径零分配查找（仅 cache canonical mask） | O(1) 哈希 |
 
-`_archetypeByMask` 只 cache "canonical" mask（popcount == component count，即所有 id < 512）。高 id archetype 故意不进 mask cache，避免不同 signature 在 mask 上碰撞。`IsMaskCanonical`（`World.cs:413`）做这个不变式检查。
+`_archetypeByMask` 只 cache "canonical" mask（popcount == component count，即所有 id < 512）。高 id archetype 故意不进 mask cache，避免不同 signature 在 mask 上碰撞。`IsMaskCanonical`（`World.cs:406`）做这个不变式检查。
 
 > **历史**：曾存在第三层 `TryGetArchetype(types)` 线性扫描 fallback，用于兼容 CommandStream 早期版本未排序的 signature。CommandStream materialize 改为显式排序后该 fallback 变死代码，已于 2026-06-29 删除。
 
@@ -116,18 +116,19 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - 两种 entity-id 模式（placeholder vs real），wire format 相同，由 `CommandStream.DeferredEntities` flag 控制 producer 行为
 
 ### 10. World（编排者）
-- 拆分为 6 个 partial 文件：
+- 拆分为 7 个 partial 文件：
   - `World.cs`：字段 + TryGet/Get/Has + Clone + Replay + archetype lookup
   - `World.EntityLifecycle.cs`：Create/Destroy + free list + 版本管理
   - `World.SnapshotBridge.cs`：snapshot/clone 用的 internal backdoor（`Reset`、`LinkSnapshot`、`SetSnapshot*`、`WriteFreeList`/`ReadFreeList`/`CopyFreeIdsFrom`、`FreeList`、`ValidateSnapshotEntitySlot`）
   - `World.Create.Generated.cs`：泛型重载 + `GetFirst<T>`
   - `World.QueryCache.cs`：Query 缓存管理
   - `World.StructuralChange.cs`：Add/Set/Remove（upsert 语义，`Add`/`Set` 是 alias）
+  - `World.Checksum.cs`：`Checksum()` / `CanonicalChecksum()` 双模式（详见 `kb-snapshot-persistence.md` Checksum 段）
 - 结构变更核心：查 `EntityRecord` → 算目标签名 → edge cache → `MoveEntityCore`（带 catch rollback）+ `FinishMoveEntity` 分离，便于批量 materialize 复用
 
 ### 已删除的子系统
 - **CommandBuffer**（2026-06-26）：per-entity 去重的录制器，被 CommandStream 取代。详见 `kb-command-stream.md` 的历史段落
-- **DebugMetrics**：整个子系统删除（`kb-debug-metrics.md` 保留作历史）
+- **DebugMetrics**（2026-06-08）：整个子系统 YAGNI 删除。删除内容：`WorldDebugMetrics` / `CommandBufferDebugMetrics` struct、`#if DEBUG` 计数器累加、`GetDebugMetrics()`/`GetDebugReport()` API、`DebugMetricsTests.cs`。替代方案：`dotnet-trace` / `EventSource` 外部采样，或 benchmark 中 `PERF_DIAG` 条件编译临时埋点
 
 ## 已知问题
 
@@ -152,17 +153,17 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - 详见 `kb-hierarchy-runtime.md`
 
 ### P5. EnsureReplayReservation 的 O(n) free list 扫描
-- `World.EntityLifecycle.cs:523 RemoveFromFreeList` 是 O(freeIdCount) 线性扫描
+- `World.EntityLifecycle.cs:468 RemoveFromFreeList` 是 O(freeIdCount) 线性扫描
 - 大帧 lockstep replay（每 reserve 都走 fallback）下是潜在热点
 - 候补：free list 反向 HashSet 索引；或在注释里至少承认 O(n)
 
 ## 可优化点
 
-- **O1. Query entity 枚举跨 chunk 开销**：refresh 时把所有匹配 entity 预收集到连续 `Entity[]`
-- **O2. Signature 不可变导致频繁分配**：≤4 组件用 stackalloc 或 interning
-- **O3. Chunk swap-remove 的全列拷贝**：对大组件（如 256B Matrix4x4）单次 copy 成本高
-- **O4. SubmitAndSnapshotAsync 的字段对调**：`CommandStream.cs:540-552` 是 12 个 `(frozen.X, _X) = (_X, spare.X)` 元组交换——加字段忘交换 = bug 且编译器不报。考虑反射驱动的测试或 `[FieldsMustBeSwapped]` attribute
-- **O5. Replay free list 反向索引**：消除 P5 的 O(n) 扫描
+- **O1. Query entity 枚举跨 chunk 开销**：`refresh` 时把所有匹配 entity 预收集到连续 `Entity[]`。详见 `kb-query-invalidation.md` + `kb-cache-optimization.md` 热路径分析
+- **O2. Signature 不可变导致频繁分配**：≤4 组件用 `stackalloc` 或 `interning`。详见 `kb-core-ecs.md`（Signature 类型作为 archetype key）
+- **O3. Chunk swap-remove 的全列拷贝**：对大组件（如 256B Matrix4x4）单次 copy 成本高。详见 `kb-chunk-storage.md`
+- **O4. SubmitAndSnapshotAsync 的字段对调**：`CommandStream.cs:540-552` 是 12 个 `(frozen.X, _X) = (_X, spare.X)` 元组交换——加字段忘交换 = bug 且编译器不报。考虑反射驱动的测试或 `[FieldsMustBeSwapped]` attribute。详见 `kb-cache-optimization.md` "SubmitAndSnapshotAsync 双缓冲池化"
+- **O5. Replay free list 反向索引**：消除 P5 的 O(n) 扫描。详见 `kb-command-stream.md`（Merge 段 + EnsureReplayReservation 段）
 
 ## 设计张力
 
@@ -171,11 +172,12 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 | 全局 Registry vs World 隔离 | 全局 | 真实游戏场景正确；省一层间接 |
 | 单线程写入 vs 并行读取 | 单线程写 | archetype ECS 经典约束 |
 | Hierarchy 一等公民 vs 组件 | side-table | 正确性 > 表达力 |
-| 大文件 vs partial 拆分 | partial 5 文件 | 按职责分组，保持编译单元聚焦 |
+| 大文件 vs partial 拆分 | partial 7 文件 | 按职责分组，保持编译单元聚焦 |
 | 直索引 edge cache vs bounded cache | 直索引 `Archetype?[]` | O(1) 查找，简单可靠；稀疏 id 场景的代价已被承认 |
 | CommandBuffer per-entity 去重 vs CommandStream typed store | CommandStream（独存） | 实测更快，去重语义无真实消费者，YAGNI |
 | FrameDelta IR 折叠 vs 简单拼接 | 简单 byte 拼接 | 折叠状态机的复杂度转嫁到跨帧 id 回收 bug 上得不偿失；Array.Copy 简洁正确 |
 | Submit 直接 Apply vs 统一走 Replay | 双路径 | Submit 是本地 canonical 路径无 Replay 不变式；详见 `kb-command-stream.md` |
+| `WithTag<T>()` vs `With<T>()` 标签查询 | `With<T>()`（独存） | MiniArch 没有独立标签概念，零大小组件就是标签，`With<T>()` 可查询。`WithTag<T>()` 是纯冗余 API 面，YAGNI 拒绝（详见 `kb-glossary.md` "Tag" 条目） |
 
 ## 做得好的地方
 

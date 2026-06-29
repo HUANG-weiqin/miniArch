@@ -134,7 +134,9 @@ public Span<T> GetComponentSpanAt<T>(int columnIndex) where T : unmanaged
 | `GetChildren(Entity)` | Get children list |
 | `Query(in QueryDescription)` | Create a query |
 | `Clone(Entity)` | Deep-copy an entity (including child subtree) |
-| `Clone()` | Deep-copy the entire world |
+| `Clone()` | Materialize a brand-new independent world (branching / long-lived checkpoint) |
+| `CaptureState()` | Save mutable state into an opaque handle for in-place rollback (zero-alloc steady state) |
+| `RestoreState(WorldStateSnapshot)` | Revert this world to a previously captured state; handle is recycled |
 | `GetStats()` | Returns `WorldStats` |
 | `GetArchetypeStats()` | Returns per-archetype statistics |
 | `Replay(FrameDelta)` | Apply delta to produce identical state |
