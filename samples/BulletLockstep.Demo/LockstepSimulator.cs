@@ -1,27 +1,27 @@
 using BulletLockstep.Demo.Systems;
+using MiniArch;
 using MiniArch.Core;
 
 namespace BulletLockstep.Demo;
 
 // Drives N hosts in P2P lockstep. Each frame:
 //   1. Every host records its own intent (placeholder Create) into its stream.
+//      Frame 0 records player creation; frame > 0 records bullet creation.
 //   2. Every host produces a placeholder FrameDelta via Snapshot (relay-only:
-//      Clear, not Submit — the host's own world is updated only by replay).
-//   3. Every host replays ALL N deltas in fixed HostId order. Each host maps
-//      placeholder seqs to its own local ids, so the same logical entity may
-//      have different local ids on different hosts — CanonicalChecksum still
-//      matches because it ignores construction path.
-//   4. Run deterministic post-replay systems (move + lifetime) on every host.
+//      Clear, not Submit).
+//   3. Every host replays ALL N deltas in fixed HostId order.
+//   4. Run deterministic post-replay systems on every host.
 //   5. Compare CanonicalChecksum across all hosts.
 //
-// Slice 1 v2: no deterministic post-replay systems yet — pure Create pipeline
-// test. Slice 2 adds direct-mutation systems (move / lifetime) on long-lived
-// and transient entities.
+// When SpawnPlayers is false the simulator runs the Slice 2 minimal flow
+// (no players, no status systems). When true (Slice 4+) it exercises the
+// full archetype migration pipeline.
 public sealed class LockstepSimulator
 {
     private readonly LockstepHost[] _hosts;
     public int HostCount => _hosts.Length;
     public IReadOnlyList<LockstepHost> Hosts => _hosts;
+    public bool SpawnPlayers { get; init; } = true;
 
     public LockstepSimulator(int hostCount)
     {
@@ -32,14 +32,16 @@ public sealed class LockstepSimulator
 
     public bool Tick(int frame) => Tick(frame, out _);
 
-    // Runs one full lockstep tick and exposes the per-host placeholder deltas
-    // that were broadcast this frame. Callers can save the deltas for later
-    // rollback re-replay (Slice 3).
     public bool Tick(int frame, out FrameDelta[] deltas)
     {
-        // 1. Record
+        // 1. Record. Frame 0 = player init (if enabled); else bullet fire.
         foreach (var h in _hosts)
-            h.RecordFrame(frame);
+        {
+            if (SpawnPlayers && frame == 0)
+                h.RecordInit();
+            else
+                h.RecordFrame(frame);
+        }
 
         // 2. Snapshot each host's intent to a placeholder delta, then Clear.
         deltas = new FrameDelta[_hosts.Length];
@@ -52,17 +54,11 @@ public sealed class LockstepSimulator
         // 3. Every host replays all deltas in fixed HostId order.
         ReplayDeltasOnAllHosts(deltas);
 
-        // 4. Deterministic post-replay systems. Run identically on every
-        //    host (no input, no record) — they mutate the local world directly.
-        //    Order: move first (in-place value bump), then lifetime (structural
-        //    destroy). Both must run in identical order on every host.
+        // 4. Deterministic post-replay systems. Order matters — same on every host.
         foreach (var h in _hosts)
-        {
-            BulletMoveSystem.Run(h.World);
-            BulletLifetimeSystem.Run(h.World, frame);
-        }
+            RunSystems(h.World, frame);
 
-        // 5. Compare canonical checksums across all hosts.
+        // 5. Compare canonical checksums.
         var refChecksum = _hosts[0].Checksum();
         for (var i = 1; i < _hosts.Length; i++)
         {
@@ -72,9 +68,24 @@ public sealed class LockstepSimulator
         return true;
     }
 
-    // Replays a saved set of per-host deltas on every host (used by Slice 3
-    // rollback re-replay). Does NOT re-run record or systems — caller drives
-    // those if needed.
+    private void RunSystems(World world, int frame)
+    {
+        // Slice 2 baseline (always run; no-op when no matching components).
+        BulletMoveSystem.Run(world);
+        BulletLifetimeSystem.Run(world, frame);
+
+        if (!SpawnPlayers)
+            return;
+
+        // Slice 4: status pipeline. Order: structural adds first, then damage
+        // (uses EntityAccessor — no structural inside the read/write pass,
+        // structural remove after), then timer (decrement + structural removes).
+        BurningTriggerSystem.Run(world, frame, HostCount);
+        ShieldGrantSystem.Run(world, frame, HostCount);
+        TickDamageSystem.Run(world);
+        StatusTimerSystem.Run(world);
+    }
+
     public void ReplayDeltasOnAllHosts(FrameDelta[] deltas)
     {
         foreach (var h in _hosts)
@@ -84,16 +95,12 @@ public sealed class LockstepSimulator
         }
     }
 
-    // Replays a saved set of per-host deltas on a single host, then runs the
-    // deterministic post-replay systems on that host. Used by Slice 3 to
-    // re-simulate frames after a rollback.
     public void ReplayAndTickSystemsOnHost(int hostIndex, FrameDelta[] deltas, int frame)
     {
         var h = _hosts[hostIndex];
         foreach (var d in deltas)
             h.World.Replay(d);
-        BulletMoveSystem.Run(h.World);
-        BulletLifetimeSystem.Run(h.World, frame);
+        RunSystems(h.World, frame);
     }
 
     private static bool EqualBytes(byte[] a, byte[] b)

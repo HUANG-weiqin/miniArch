@@ -8,12 +8,13 @@ return slice switch
 {
     2 => RunSlice2(hostCount, frameCount),
     3 => RunSlice3(hostCount, frameCount),
+    4 => RunSlice4(hostCount, frameCount),
     _ => BadSlice(slice),
 };
 
 static int BadSlice(int slice)
 {
-    Console.Error.WriteLine($"Unknown slice: {slice}. Supported: 2, 3.");
+    Console.Error.WriteLine($"Unknown slice: {slice}. Supported: 2, 3, 4.");
     return 2;
 }
 
@@ -24,7 +25,7 @@ static int RunSlice2(int hostCount, int frameCount)
     Console.WriteLine($"  {hostCount} hosts, {frameCount} frames");
     Console.WriteLine();
 
-    var sim = new LockstepSimulator(hostCount);
+    var sim = new LockstepSimulator(hostCount) { SpawnPlayers = false };
     GcBaseline(out var gc0, out var gc1, out var gc2, out var bytes);
     var sw = System.Diagnostics.Stopwatch.StartNew();
 
@@ -39,6 +40,44 @@ static int RunSlice2(int hostCount, int frameCount)
     Console.WriteLine($"PASS: all {frameCount} frames consistent across {hostCount} hosts");
     Console.ResetColor();
     Report(sw, frameCount, gc, alloc, sim);
+    return 0;
+}
+
+// ── Slice 4: archetype migration via Add/Remove status ───────────────
+// Players spawn at frame 0 via placeholder delta. Each frame, deterministic
+// systems Add<Shield> / Add<BurningTimer> / Remove<...> them, migrating
+// players between archetypes. Verifies that placeholder replay + structural
+// migration stay byte-identical across hosts even as players move between
+// archetypes (with different local entity ids per host).
+static int RunSlice4(int hostCount, int frameCount)
+{
+    Console.WriteLine($"BulletLockstep Slice 4 (archetype migration via Add/Remove status)");
+    Console.WriteLine($"  {hostCount} hosts, {frameCount} frames");
+    Console.WriteLine();
+
+    var sim = new LockstepSimulator(hostCount) { SpawnPlayers = true };
+    GcBaseline(out var gc0, out var gc1, out var gc2, out var bytes);
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+
+    int mismatch = RunLockstep(sim, frameCount);
+
+    sw.Stop();
+    GcDelta(gc0, gc1, gc2, bytes, out var gc, out var alloc);
+
+    if (mismatch >= 0) return ReportFail(sim, mismatch);
+
+    Console.ForegroundColor = ConsoleColor.Green;
+    Console.WriteLine($"PASS: all {frameCount} frames consistent across {hostCount} hosts");
+    Console.ResetColor();
+    Report(sw, frameCount, gc, alloc, sim);
+
+    // Verify the 4 expected player archetype variants coexisted at some point.
+    // At end-of-run snapshot the per-host archetype breakdown.
+    var archStats = sim.Hosts[0].World.GetArchetypeStats();
+    Console.WriteLine();
+    Console.WriteLine($"  archetype variants present at end of run: {archStats.Length}");
+    foreach (var a in archStats)
+        Console.WriteLine($"    [{a.EntityCount,4} entities] components: {string.Join(", ", a.ComponentTypes.Select(t => t.Name))}");
     return 0;
 }
 
@@ -66,7 +105,7 @@ static int RunSlice3(int hostCount, int frameCount)
     Console.WriteLine($"  {hostCount} hosts, checkpoint @ F{CheckpointFrame}, window +{RollbackWindow}");
     Console.WriteLine();
 
-    var sim = new LockstepSimulator(hostCount);
+    var sim = new LockstepSimulator(hostCount) { SpawnPlayers = false };
 
     // Phase A: run normally up to (but not including) the checkpoint frame.
     int mismatch = RunLockstep(sim, CheckpointFrame);

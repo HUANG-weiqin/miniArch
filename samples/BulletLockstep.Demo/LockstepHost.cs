@@ -9,7 +9,7 @@ namespace BulletLockstep.Demo;
 //
 // Consequence (kb 决策 #3): placeholder refs are single-frame only.
 // Long-lived entities (players) are NOT referenced by record ops; they are
-// located each frame via deterministic post-replay queries.
+// located each frame via deterministic post-replay queries (by PlayerTag.HostId).
 public sealed class LockstepHost
 {
     public int HostId { get; }
@@ -23,24 +23,32 @@ public sealed class LockstepHost
         Stream = new CommandStream(World) { DeferredEntities = true };
     }
 
-    // Slice 1 v2: world starts empty. The only state changes flow through
-    // placeholder deltas, so every host's logical state is identical even
-    // though local entity ids may differ. (Slice 2 will spawn the local
-    // "self" player here for movement system input.)
+    // Frame 0: each host records Create(player) + Add player base components.
+    // All hosts replay all deltas -> every host ends up with all N players.
+    // Local entity ids may differ across hosts; logical state (by PlayerTag.HostId)
+    // is identical -> CanonicalChecksum matches.
+    public void RecordInit()
+    {
+        var player = Stream.Create();
+        Stream.Add(player, new PlayerTag(HostId));
+        Stream.Add(player, new Position(HostId * 10_000, 0));
+        Stream.Add(player, new Velocity(0, 0));
+        Stream.Add(player, new Health(1000, 1000));
+        // No Shield / BurningTimer / PowerupState at spawn — those are added
+        // and removed over time by deterministic systems (archetype migration).
+    }
 
-    // Records this host's intent for the frame. Slice 1 v2: only structural
-    // Create of a transient "ping" entity. Carried components encode all the
-    // data we need (no cross-frame Set on existing entities).
+    // Frame > 0: each host records Create(bullet) for its own fired bullet.
     public void RecordFrame(int frame)
     {
         var (dx, dy) = InputProvider.Get(HostId, frame);
-        // Placeholder Create — delta will carry placeholder, replay maps to
-        // each host's local id.
-        var ping = Stream.Create();
-        Stream.Add(ping, new SpawnFrame(frame));
-        Stream.Add(ping, new FiredBy(HostId));
-        Stream.Add(ping, new Position(0, 0));
-        Stream.Add(ping, new Velocity(dx * 1000, dy * 1000));
+        var bullet = Stream.Create();
+        Stream.Add(bullet, new BulletTag());
+        Stream.Add(bullet, new SpawnFrame(frame));
+        Stream.Add(bullet, new FiredBy(HostId));
+        Stream.Add(bullet, new Position(HostId * 10_000, 0));
+        Stream.Add(bullet, new Velocity(dx * 1000, dy * 1000));
+        Stream.Add(bullet, new Damage(50));
     }
 
     public byte[] Checksum() => World.CanonicalChecksum();
