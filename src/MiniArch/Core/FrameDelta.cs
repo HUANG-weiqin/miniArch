@@ -482,6 +482,30 @@ public sealed class FrameDelta
     /// per-delta temporal order. No folding or squashing is performed —
     /// the resulting byte stream is a simple concatenation.
     /// </summary>
+    /// <remarks>
+    /// <b>Real-id deltas only.</b> Merge is pure byte concatenation and does
+    /// not remap placeholder seq namespaces. It is therefore correct only for
+    /// <b>real-id</b> deltas (those produced by
+    /// <see cref="CommandStream.Snapshot"/> with
+    /// <see cref="CommandStream.DeferredEntities"/> = <c>false</c>, or by
+    /// <see cref="CommandStream.SubmitAndSnapshotAsync"/>). For those, the
+    /// merged delta is observationally equivalent to replaying
+    /// <paramref name="a"/> and <paramref name="b"/> sequentially.
+    /// <para>
+    /// Merging <b>placeholder</b> deltas (DeferredEntities = <c>true</c>) is
+    /// unsafe and silently produces wrong results: each
+    /// <see cref="CommandStream"/> with DeferredEntities starts its own seq
+    /// counter at 0, so two independent streams both emit
+    /// <c>Reserve(seq=0)/Create(seq=0)</c>. During replay
+    /// (<see cref="World.Replay"/>) a single per-replay map[seq]→local id is
+    /// used, and the second <c>Reserve</c> overwrites the first's entry — so
+    /// any later op that references the first stream's placeholder resolves to
+    /// the wrong entity. The canonical lockstep pattern replays each peer's
+    /// placeholder delta as a separate <see cref="World.Replay"/> call (which
+    /// resets the map each time), avoiding this issue entirely; do not Merge
+    /// placeholder deltas across streams.
+    /// </para>
+    /// </remarks>
     public static FrameDelta Merge(FrameDelta a, FrameDelta b)
     {
         ArgumentNullException.ThrowIfNull(a);
