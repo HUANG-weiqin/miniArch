@@ -250,9 +250,13 @@ public sealed partial class World : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public T Get<T>(Entity entity) where T : unmanaged
     {
+#if DEBUG
+        if ((uint)entity.Id >= (uint)_entitySlotCount)
+            throw new InvalidOperationException($"Entity {entity} is not alive.");
+#endif
         ref var record = ref _records[entity.Id];
 #if DEBUG
-        if ((uint)entity.Id >= (uint)_entitySlotCount || !record.IsOccupied || record.Version != entity.Version)
+        if (!record.IsOccupied || record.Version != entity.Version)
             throw new InvalidOperationException($"Entity {entity} is not alive.");
 #endif
         var arch = record.Archetype!;
@@ -266,9 +270,13 @@ public sealed partial class World : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ref T GetRef<T>(Entity entity) where T : unmanaged
     {
+#if DEBUG
+        if ((uint)entity.Id >= (uint)_entitySlotCount)
+            throw new InvalidOperationException($"Entity {entity} is not alive.");
+#endif
         ref var record = ref _records[entity.Id];
 #if DEBUG
-        if ((uint)entity.Id >= (uint)_entitySlotCount || !record.IsOccupied || record.Version != entity.Version)
+        if (!record.IsOccupied || record.Version != entity.Version)
             throw new InvalidOperationException($"Entity {entity} is not alive.");
 #endif
         var arch = record.Archetype!;

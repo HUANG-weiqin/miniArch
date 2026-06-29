@@ -268,6 +268,96 @@ public sealed class WorldSnapshotTests
         Assert.Equal(hashOriginal, hashLoaded);
     }
 
+    // ──────────────────────────────────────────────
+    //  CanonicalChecksum
+    // ──────────────────────────────────────────────
+
+    [Fact]
+    public void CanonicalChecksum_returns_32_bytes()
+    {
+        var world = new World();
+        world.Create(new Position(1, 2));
+
+        var hash = world.CanonicalChecksum();
+
+        Assert.Equal(32, hash.Length);
+    }
+
+    [Fact]
+    public void CanonicalChecksum_matches_across_save_load_round_trip()
+    {
+        // The canonical hash is the right tool for comparing worlds that arrived at
+        // the same logical state via different construction paths (live vs loaded).
+        var world = new World();
+        var e0 = world.Create(); world.Add(e0, new Position(1, 2));
+        var e1 = world.Create(); world.Add(e1, new Velocity(3, 4));
+        world.Destroy(e1);
+        world.Link(e0, world.Create(new Health(9)));
+
+        var hashOriginal = world.CanonicalChecksum();
+
+        using var stream = new MemoryStream();
+        WorldSnapshot.Save(stream, world);
+        stream.Position = 0;
+        var loaded = WorldSnapshot.Load(stream);
+
+        Assert.Equal(hashOriginal, loaded.CanonicalChecksum());
+    }
+
+    [Fact]
+    public void CanonicalChecksum_detects_free_list_divergence_ignored_by_checksum()
+    {
+        // Hardening target (commit 8f1d517): two worlds with identical live
+        // entities/components/hierarchy but different free lists must hash
+        // differently under CanonicalChecksum. Plain Checksum() only sees
+        // slot-count + per-slot version, so two slot-compatible layouts with
+        // divergent free lists produce the same Checksum but must diverge
+        // under CanonicalChecksum (which appends every (id,version) free slot).
+        var a = new World();
+        var b = new World();
+
+        // Both worlds arrive at the same live state: one Position entity at id 0.
+        a.Create(new Position(1, 2));
+        b.Create(new Position(1, 2));
+
+        // Now diverge their free lists while keeping live state identical.
+        // World A: create id 1 then destroy it  → free list [1(v2)], slot count 2
+        // World B: create ids 1,2 then destroy both → free list [2(v2),1(v2)], slot count 3
+        // In both worlds the only alive entity is id 0 with Position(1,2), so
+        // live-state hashes must agree — but canonical (with free list) must not.
+        var a1 = a.Create(new Velocity(0, 0));
+        a.Destroy(a1);
+
+        var b1 = b.Create(new Velocity(0, 0));
+        var b2 = b.Create(new Health(0));
+        b.Destroy(b1);
+        b.Destroy(b2);
+
+        // Sanity: identical live state.
+        Assert.Equal(1, a.EntityCount);
+        Assert.Equal(1, b.EntityCount);
+
+        var canonicalA = a.CanonicalChecksum();
+        var canonicalB = b.CanonicalChecksum();
+        Assert.NotEqual(canonicalA, canonicalB);
+    }
+
+    [Fact]
+    public void CanonicalChecksum_stable_for_identical_worlds_and_differs_on_mutation()
+    {
+        var world = new World();
+        var e0 = world.Create(); world.Add(e0, new Position(1, 2));
+        var e1 = world.Create(); world.Add(e1, new Position(3, 4));
+
+        var hash1 = world.CanonicalChecksum();
+        var hash2 = world.CanonicalChecksum();
+        Assert.Equal(hash1, hash2);
+
+        world.Set(e0, new Position(99, 99));
+        var hash3 = world.CanonicalChecksum();
+        Assert.NotEqual(hash1, hash3);
+    }
+
     [Fact]
     public void Save_load_preserves_free_id_allocation_order()
     {
@@ -413,6 +503,139 @@ public sealed class WorldSnapshotTests
         Assert.True(world.IsAlive(fresh));
         Assert.Equal(2, world.EntityCount);
     }
+
+    // ──────────────────────────────────────────────
+    //  Chunked archetype coverage for CaptureState/RestoreState
+    // ──────────────────────────────────────────────
+
+    [Fact]
+    public void Capture_restore_preserves_chunked_archetype_across_multiple_segments()
+    {
+        // Build a world whose Position archetype is chunked across multiple segments.
+        // Position is 8 bytes; the byte-based segment capacity (2MB/8 = 262144) means
+        // auto-promotion would need a huge entity count, so we force chunked explicitly
+        // and then grow segments. All entities are created via world.Create so that
+        // _records stays consistent — direct arch.AddEntity would bypass the registry.
+        var world = new World();
+        const int EntityCount = 40;
+        var entities = new Entity[EntityCount];
+        for (var i = 0; i < EntityCount; i++)
+            entities[i] = world.Create(new Position(i, i * 2));
+
+        // Promote the Position archetype to chunked and add a second empty segment
+        // so subsequent world.Create calls land in a non-first segment.
+        Assert.True(world.TryGetLocation(entities[0], out var info));
+        var arch = info.Archetype;
+        arch.ForceChunkedForTesting();
+        arch.AddSegmentForTesting();
+        Assert.True(arch.IsChunked);
+        Assert.True(arch.SegmentCount >= 2, $"expected >=2 segments, got {arch.SegmentCount}");
+
+        var checksumPre = world.Checksum();
+        var snapshot = world.CaptureState();
+
+        // Mutate heavily: destroy several entities (triggers cross-segment swap-remove
+        // that rewrites segment data), add a brand-new archetype (prediction frame),
+        // and link a parent/child to perturb the hierarchy table.
+        for (var i = 0; i < EntityCount; i += 5)
+            world.Destroy(entities[i]);
+        var parent = world.Create(new Velocity(1, 1));
+        var child = world.Create(new Velocity(2, 2));
+        world.Link(parent, child);
+        world.Create(new Health(7));
+
+        world.RestoreState(snapshot);
+
+        // Whole-world checksum must match the pre-mutation state. This simultaneously
+        // validates entity records, free list, and chunked archetype bytes.
+        Assert.Equal(checksumPre, world.Checksum());
+
+        // Spot-check every entity we created before the snapshot: liveness and the
+        // exact component value, regardless of which segment it landed in.
+        for (var i = 0; i < EntityCount; i++)
+        {
+            Assert.True(world.IsAlive(entities[i]));
+            Assert.Equal(new Position(i, i * 2), GetComponent<Position>(world, entities[i]));
+        }
+        Assert.Equal(EntityCount, world.EntityCount);
+
+        // The archetype is still chunked with the same segment layout after restore.
+        Assert.True(arch.IsChunked);
+        Assert.True(arch.SegmentCount >= 2);
+    }
+
+    [Fact]
+    public void Capture_restore_round_trip_is_chunked_aware_after_segment_growth_during_prediction()
+    {
+        // Regression: prediction frame may GrowChunked on the live archetype, adding
+        // new trailing segments. After RestoreState, the archetype must revert to
+        // exactly the segment layout captured, with no stale trailing-segment data.
+        //
+        // Use a large component so segment capacity (2MB / sizeof(Big)) is small —
+        // a modest create burst then forces real GrowChunked during the prediction frame.
+        var world = new World();
+        var seed = world.Create(new BigPayload(1));
+        Assert.True(world.TryGetLocation(seed, out var info));
+        var arch = info.Archetype;
+        arch.ForceChunkedForTesting();
+        var segmentsAtCapture = arch.SegmentCount;
+
+        var snapshot = world.CaptureState();
+
+        // Prediction frame: create enough entities to force at least one new segment
+        // on the live archetype via the chunked write path.
+        const int PredictedCount = 5000;
+        var predicted = new Entity[PredictedCount];
+        for (var i = 0; i < predicted.Length; i++)
+            predicted[i] = world.Create(new BigPayload(2));        Assert.True(arch.SegmentCount > segmentsAtCapture,
+            $"prediction should have grown segments from {segmentsAtCapture}, got {arch.SegmentCount}");
+
+        world.RestoreState(snapshot);
+
+        // Only the seed entity remains; archetype count and segment contents must match
+        // the pre-prediction state exactly. Stale data in grown-then-unused trailing
+        // segments must not affect observable state.
+        Assert.Equal(1, world.EntityCount);
+        Assert.True(world.IsAlive(seed));
+        Assert.Equal(1, GetComponent<BigPayload>(world, seed).Tag);
+        Assert.Equal(1, arch.EntityCount);
+
+        // Re-creating after rollback must produce a deterministic id (free list intact)
+        // and be observable through the query layer (cache was invalidated by restore).
+        var next = world.Create(new BigPayload(3));
+        Assert.True(world.IsAlive(next));
+        Assert.Equal(2, world.EntityCount);
+
+        var desc = new QueryDescription().With<BigPayload>();
+        var query = world.Query(in desc);
+        var seen = 0;
+        foreach (var chunk in query.GetChunks())
+        {
+            var span = chunk.GetSpan<BigPayload>();
+            for (var i = 0; i < chunk.Count; i++)
+                seen++;
+        }
+        Assert.Equal(2, seen);
+    }
+
+    // ~512 bytes per entity → segment capacity ≈ 4096 (2MB / 512). A 5000-create
+    // burst then reliably crosses a segment boundary during the prediction frame.
+#pragma warning disable CS0649 // padding fields intentionally never assigned
+    private struct BigPayload
+    {
+        public int Tag;
+        public long P00, P01, P02, P03, P04, P05, P06, P07;
+        public long P08, P09, P10, P11, P12, P13, P14, P15;
+        public long P16, P17, P18, P19, P20, P21, P22, P23;
+        public long P24, P25, P26, P27, P28, P29, P30, P31;
+        public long P32, P33, P34, P35, P36, P37, P38, P39;
+        public long P40, P41, P42, P43, P44, P45, P46, P47;
+        public long P48, P49, P50, P51, P52, P53, P54, P55;
+        public long P56, P57, P58, P59, P60, P61, P62, P63;
+
+        public BigPayload(int tag) => Tag = tag;
+    }
+#pragma warning restore CS0649
 
     private static T GetComponent<T>(World world, Entity entity) where T : unmanaged
     {

@@ -2,7 +2,7 @@
 title: Test Workflow
 module: MiniArch.Tests
 description: How the test suite, query profiling, snapshot benchmarks, and structural-change benchmarks are organized and how to run them
-updated: 2026-06-22 (全库审阅: 确认测试组织与文档一致)
+updated: 2026-06-30 (新增 CanonicalChecksum + Get/GetRef DEBUG 活性检查覆盖)
 ---
 # Test Workflow
 
@@ -38,8 +38,8 @@ updated: 2026-06-22 (全库审阅: 确认测试组织与文档一致)
 | `Core/SignatureTests.cs` | Signature 构造/比较/Contains |
 | `Core/ComponentRegistryTests.cs` | Registry 注册/查找 |
 | `Core/EntityCloneTests.cs` | Clone 语义 |
-| `Core/TrickyEdgeCaseTests.cs` | 边界/边缘情况 |
-| `Persistence/WorldSnapshotTests.cs` | Round-trip、free slot version、unsupported component |
+| `Core/TrickyEdgeCaseTests.cs` | 边界/边缘情况；DEBUG 安全检查（Set/Add/Destroy 越界 + Get/GetRef 活性） |
+| `Persistence/WorldSnapshotTests.cs` | Round-trip、free slot version、unsupported component、Tier 1 in-memory rollback（含 chunked archetype 跨 segment 回滚 + prediction 后 segment 增长回滚） |
 | `Persistence/WorldCloneTests.cs` | 内存直拷克隆 |
 | `UserApi/UserQueryTests.cs` | 普通 API 契约、OrderBy |
 

@@ -10,9 +10,9 @@ public sealed class TrickyEdgeCaseTests
     private readonly record struct Velocity(int X, int Y);
     private readonly record struct Health(int Value);
 
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
     // Category 1: Entity Handle / Lifecycle Edge Cases
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
 
     [Fact]
     public void Stale_handle_Set_throws_because_version_check_always_runs()
@@ -115,9 +115,9 @@ public sealed class TrickyEdgeCaseTests
         }
     }
 
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
     // Category 2: Set / Add / Remove Edge Cases
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
 
     [Fact]
     public void Set_default_value_preserves_integrity()
@@ -254,9 +254,9 @@ public sealed class TrickyEdgeCaseTests
         Assert.Equal(new Position(42, 42), p);
     }
 
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
     // Category 3: Query Edge Cases
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
 
     [Fact]
     public void QueryDescription_order_independent_equality()
@@ -403,9 +403,9 @@ public sealed class TrickyEdgeCaseTests
         Assert.Single(query2.MatchedArchetypes);
     }
 
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
     // Category 4: Hierarchy Edge Cases
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
 
     [Fact]
     public void GetChildren_on_entity_with_no_children_returns_empty()
@@ -490,9 +490,9 @@ public sealed class TrickyEdgeCaseTests
 
 
 
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
     // Category 6: Structural Integrity / Chunk Boundaries
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
 
     [Fact]
     public void Entities_spread_across_chunk_boundaries_preserve_set_values()
@@ -588,9 +588,9 @@ public sealed class TrickyEdgeCaseTests
         Assert.Equal(0, CountEntities(query));
     }
 
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
     // Category 7: World / Snapshot / Replay
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
 
     [Fact]
     public void Replay_empty_delta_does_nothing()
@@ -660,9 +660,9 @@ public sealed class TrickyEdgeCaseTests
         Assert.Equal(1, query.GetArchetypeSpan().Length);
     }
 
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
     // Category 8: TryGet / OrderBy / Query Behaviors
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
 
     [Fact]
     public void TryGet_on_destroyed_entity_returns_false()
@@ -741,9 +741,9 @@ public sealed class TrickyEdgeCaseTests
         Assert.True(defaultQuery.GetChunks().GetEnumerator().MoveNext());
     }
 
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
     // Category 9: ComponentType / Registry
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
 
     [Fact]
     public void Same_struct_type_registered_multiple_times_returns_same_ComponentType()
@@ -772,9 +772,9 @@ public sealed class TrickyEdgeCaseTests
         Assert.False(worldB.TryGet(entityA, out Position _));
     }
 
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
     // Helpers
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
 
     private static int CountEntities(MiniQuery query)
     {
@@ -793,9 +793,9 @@ public sealed class TrickyEdgeCaseTests
     }
 
 #if DEBUG
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
     // Category: Debug-only safety checks
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
 
     [Fact]
     public void Set_with_negative_entity_id_throws_in_debug()
@@ -831,6 +831,90 @@ public sealed class TrickyEdgeCaseTests
         var badEntity = new Entity(9999, 1);
 
         Assert.Throws<InvalidOperationException>(() => world.Destroy(badEntity));
+    }
+
+    [Fact]
+    public void Get_with_negative_entity_id_throws_in_debug()
+    {
+        var world = new World();
+        world.Create(new Position(1, 2));
+        var badEntity = new Entity(-1, 1);
+
+        Assert.Throws<InvalidOperationException>(() => world.Get<Position>(badEntity));
+    }
+
+    [Fact]
+    public void Get_with_out_of_range_entity_id_throws_in_debug()
+    {
+        var world = new World();
+        var badEntity = new Entity(9999, 1);
+
+        Assert.Throws<InvalidOperationException>(() => world.Get<Position>(badEntity));
+    }
+
+    [Fact]
+    public void Get_with_destroyed_entity_throws_in_debug()
+    {
+        // Liveness check (commit 46dbc0a): a stale handle whose slot has been
+        // recycled to a new version must throw, not silently read garbage.
+        var world = new World();
+        var e = world.Create(new Position(1, 2));
+        world.Destroy(e);
+
+        Assert.Throws<InvalidOperationException>(() => world.Get<Position>(e));
+    }
+
+    [Fact]
+    public void Get_with_recycled_entity_throws_in_debug()
+    {
+        // After destroy+recreate the slot is occupied again but with a new version;
+        // the stale handle must still throw.
+        var world = new World();
+        var e = world.Create(new Position(1, 2));
+        world.Destroy(e);
+        world.Create(new Position(3, 4)); // recycles id 0 at version 2
+
+        Assert.Throws<InvalidOperationException>(() => world.Get<Position>(e));
+    }
+
+    [Fact]
+    public void GetRef_with_negative_entity_id_throws_in_debug()
+    {
+        var world = new World();
+        world.Create(new Position(1, 2));
+        var badEntity = new Entity(-1, 1);
+
+        Assert.Throws<InvalidOperationException>(() => world.GetRef<Position>(badEntity));
+    }
+
+    [Fact]
+    public void GetRef_with_out_of_range_entity_id_throws_in_debug()
+    {
+        var world = new World();
+        var badEntity = new Entity(9999, 1);
+
+        Assert.Throws<InvalidOperationException>(() => world.GetRef<Position>(badEntity));
+    }
+
+    [Fact]
+    public void GetRef_with_destroyed_entity_throws_in_debug()
+    {
+        var world = new World();
+        var e = world.Create(new Position(1, 2));
+        world.Destroy(e);
+
+        Assert.Throws<InvalidOperationException>(() => world.GetRef<Position>(e));
+    }
+
+    [Fact]
+    public void GetRef_with_recycled_entity_throws_in_debug()
+    {
+        var world = new World();
+        var e = world.Create(new Position(1, 2));
+        world.Destroy(e);
+        world.Create(new Position(3, 4));
+
+        Assert.Throws<InvalidOperationException>(() => world.GetRef<Position>(e));
     }
 #endif
 
