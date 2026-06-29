@@ -64,7 +64,7 @@ public sealed partial class World : IDisposable
     private RecycledEntity[] _freeIds;
     private int _freeIdCount;
 
-    private int _createArchetypeCacheGeneration;
+    private volatile int _createArchetypeCacheGeneration;
     private readonly List<Entity> _destroyOrderScratch;
     private int[] _destroyVisitedGen = [];
     private int _destroyCurrentGen;

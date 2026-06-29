@@ -1337,15 +1337,7 @@ public sealed class CommandStream : ICommandRecorder
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void MarkUnavailable(Entity entity)
     {
-        if (_parallelMode)
-        {
-            lock (_storeCreateLock)
-            {
-                _unavailableEntities ??= new HashSet<Entity>();
-                _unavailableEntities.Add(entity);
-            }
-        }
-        else
+        lock (_storeCreateLock)
         {
             _unavailableEntities ??= new HashSet<Entity>();
             _unavailableEntities.Add(entity);
