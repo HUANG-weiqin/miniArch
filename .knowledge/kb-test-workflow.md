@@ -2,7 +2,7 @@
 title: Test Workflow
 module: MiniArch.Tests
 description: How the test suite, query profiling, snapshot benchmarks, and structural-change benchmarks are organized and how to run them
-updated: 2026-06-30 (修 CommandBufferTests 引用→CommandStreamTests)
+updated: 2026-07-01 (+ PBT PropertyBased/ 目录 + FsCheck 集成 + wire budget 测试)
 ---
 # Test Workflow
 
@@ -43,6 +43,8 @@ updated: 2026-06-30 (修 CommandBufferTests 引用→CommandStreamTests)
 | `Core/ComponentRegistryTests.cs` | Registry 注册/查找 |
 | `Core/EntityCloneTests.cs` | Clone 语义 |
 | `Core/TrickyEdgeCaseTests.cs` | 边界/边缘情况；DEBUG 安全检查（Set/Add/Destroy 越界 + Get/GetRef 活性） |
+| `Core/IntMathTests.cs` | 整数平方根 `IntMath.Isqrt` 边界覆盖（0/1/2/3/4/15/16/int.MaxValue） |
+| `PropertyBased/SerializationRoundtripPropertyTests.cs` | FsCheck 属性测试：Save/Load roundtrip 保持 canonical checksum（200 次随机 iteration） |
 | `Persistence/WorldSnapshotTests.cs` | Round-trip、free slot version、unsupported component、Tier 1 in-memory rollback（含 chunked archetype 跨 segment 回滚 + prediction 后 segment 增长回滚） |
 | `Persistence/WorldCloneTests.cs` | 内存直拷克隆 |
 | `UserApi/UserQueryTests.cs` | 普通 API 契约、OrderBy |

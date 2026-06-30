@@ -64,5 +64,5 @@
 **通用**：
 - **排查行为偏差** → 各模块页的 `坑点` + 对应测试文件
 - **理解"为什么边界这么划"** → 各模块页的 `决策`
-- **架构变更历史** → `kb-changelog.md`
+- **架构变更历史** → `kb-changelog.md`（2026-07-01 代码硬化：isqrt / wire 预算 / CRC32 / PBT / Conditional / Entity.IsPlaceholder / SpanFeeder struct）
 - **新增知识页** → 先看 `.knowledge/_template.md` 模板，再挂到上面的地图，再写模块正文

@@ -9,7 +9,19 @@ updated: 2026-06-30
 > 这个页面只记录**重大架构变更和知识库校准事件**，供追溯。
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
 
-## 2026-06-30 三项公共 API 改进
+## 2026-07-01 代码硬化（7 个低垂果实）
+
+完整的代码硬化执行计划见 `docs/internal/plans/2026-07-01-miniarch-codebase-hardening-plan.md`。
+所有 7 个 Task 已完成，Debug + Release dotnet test 全绿。
+
+- **Task 1 — 整数 isqrt**：`HomingBulletSteerSystem` 的 `Math.Sqrt` 替换为纯整数 `IntMath.Isqrt`，demo 的 1000 帧 checksum 现在真正跨硬件确定。新增 `IntMathTests.cs`（13 边界用例）。
+- **Task 2 — FrameDelta wire 预算**：`MaxFrameBytes`（16 MiB）和 `MaxOpsPerFrame`（1M）在 Deserialize 入口和 OpDecoder 循环中 fail-fast，关闭 wire OOM 攻击面。新增 2 个 `[Fact]`。
+- **Task 3 — `#if DEBUG` → `[Conditional("DEBUG")]`**：8 个 `#if DEBUG` 全部转换为 `[Conditional]` 方法（`ValidateAlive`、`AssertValidRow`、`AssertPositiveElementSize` 等）。Zero `#if DEBUG` 残留。
+- **Task 4 — `Entity.IsPlaceholder`**：新增 `IsPlaceholder`（Id==-1, Version>=0）和 `IsUnmappedSentinel`（Id==-1, Version<0）属性。9 处 placeholder 检测站替换为 `entity.IsPlaceholder`。
+- **Task 5 — WorldSnapshot CRC32**：格式版本 3→4，Save 附加 `Crc32.HashToUInt32` 尾部校验；Load 对 v4 验证 CRC、v3 向后兼容。新增 `System.IO.Hashing` 依赖 + 3 个 `[Fact]`。
+- **Task 6 — FsCheck PBT**：集成 FsCheck 3.0，`Snapshot_roundtrip_preserves_canonical_checksum` 属性（MaxTest=200）通过。generator 覆盖 Position/Velocity/Health 组合。
+- **Task 7 — SpanFeeder struct 接口**：`delegate void SpanFeeder` 替换为 `ISpanFeeder` struct 接口 + `HashFeeder` 特化结构，checksum 路径闭包分配消除。`FeedColumnData`/`FeedRowData` 改为泛型 `ref TFeeder`。
+
 
 外部 review 出的三项高优改动全部落地（A1 + E1/E2 + B3）：
 

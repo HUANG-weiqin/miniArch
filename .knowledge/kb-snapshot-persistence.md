@@ -2,7 +2,7 @@
 title: Snapshot Persistence
 module: MiniArch.Core Snapshot
 description: Full-world snapshot save/load design for unmanaged components (WorldSnapshot.Save/Load, Clone, CaptureState/RestoreState), plus Checksum double mode
-updated: 2026-06-30 (CaptureState/RestoreState 改 rollback 池 + IsRecycled 生命周期)
+updated: 2026-07-01 (v4 CRC32 尾部校验 + 格式版本 bumped to 4)
 ---
 # Snapshot Persistence
 
@@ -91,6 +91,15 @@ Archetype 存储使用 `GC.AllocateArray`（零初始化）分配，组件 struc
 ### 入口
 - `src/MiniArch/World.Checksum.cs`、`src/MiniArch/Core/WorldSnapshot.cs:159-271`
 - `tests/MiniArch.Tests/Persistence/WorldSnapshotTests.cs`
+
+### CRC32 尾部校验（v4 格式）
+
+2026-07-01 新增：`WorldSnapshot.Save` 在写入所有 body 字节后追加 `Crc32.HashToUInt32` 校验值。
+`Load` 在 v4 格式下先验证 CRC 再解析 body，损坏时抛出 `InvalidDataException("CRC mismatch at offset ...")`。
+v3 格式仍可读且跳过 CRC 校验。
+
+格式结构：`[magic:4][version=4:4][body:...][crc32:4]`。body 通过 `MemoryStream` 缓冲后再算 CRC，
+避免直接写入输出流后无法追加尾部。对低频 Save 操作可接受的单次分配。
 
 ## 决策
 
