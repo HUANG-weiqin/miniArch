@@ -423,8 +423,8 @@ public sealed class WorldLifecycleTests
         var firstChild = world.Create();
         var secondChild = world.Create();
 
-        world.Link(parent, firstChild);
-        world.Link(parent, secondChild);
+        world.AddChild(parent, firstChild);
+        world.AddChild(parent, secondChild);
 
         Assert.True(world.TryGetParent(firstChild, out var resolvedParent));
         Assert.Equal(parent, resolvedParent);
@@ -454,8 +454,8 @@ public sealed class WorldLifecycleTests
         var secondParent = world.Create();
         var child = world.Create();
 
-        world.Link(firstParent, child);
-        world.Link(secondParent, child);
+        world.AddChild(firstParent, child);
+        world.AddChild(secondParent, child);
 
         Assert.True(world.TryGetParent(child, out var resolvedParent));
         Assert.Equal(secondParent, resolvedParent);
@@ -469,7 +469,7 @@ public sealed class WorldLifecycleTests
         var world = new World();
         var e = world.Create();
 
-        Assert.Throws<InvalidOperationException>(() => world.Link(e, e));
+        Assert.Throws<InvalidOperationException>(() => world.AddChild(e, e));
     }
 
     [Fact]
@@ -479,9 +479,9 @@ public sealed class WorldLifecycleTests
         var parent = world.Create();
         var child = world.Create();
 
-        world.Link(parent, child);
+        world.AddChild(parent, child);
         // child -> parent would close the cycle
-        Assert.Throws<InvalidOperationException>(() => world.Link(child, parent));
+        Assert.Throws<InvalidOperationException>(() => world.AddChild(child, parent));
     }
 
     [Fact]
@@ -492,36 +492,36 @@ public sealed class WorldLifecycleTests
         var b = world.Create();
         var c = world.Create();
 
-        world.Link(a, b);
-        world.Link(b, c);
+        world.AddChild(a, b);
+        world.AddChild(b, c);
         // c -> a closes a three-deep cycle
-        Assert.Throws<InvalidOperationException>(() => world.Link(c, a));
+        Assert.Throws<InvalidOperationException>(() => world.AddChild(c, a));
     }
 
-    // Regression: snapshot/clone restore path bypassed ValidateLink, which
+    // Regression: snapshot/clone restore path bypassed ValidateAddChild, which
     // meant a tampered snapshot could install a hierarchy cycle that later
-    // hung CollectDestroySubtree. LinkSnapshot must reject cycles too.
+    // hung CollectDestroySubtree. AddChildFromSnapshot must reject cycles too.
     [Fact]
-    public void LinkSnapshot_rejects_cycle_in_restored_hierarchy()
+    public void AddChildFromSnapshot_rejects_cycle_in_restored_hierarchy()
     {
         var world = new World();
         var parent = world.Create();
         var child = world.Create();
 
-        // Establish a legitimate link so a cycle is now possible.
-        world.LinkSnapshot(parent, child);
+        // Establish a legitimate AddChild so a cycle is now possible.
+        world.AddChildFromSnapshot(parent, child);
 
         // Attempt to close the cycle through the restore path.
-        Assert.Throws<InvalidOperationException>(() => world.LinkSnapshot(child, parent));
+        Assert.Throws<InvalidOperationException>(() => world.AddChildFromSnapshot(child, parent));
     }
 
     [Fact]
-    public void LinkSnapshot_rejects_self_link()
+    public void AddChildFromSnapshot_rejects_self_link()
     {
         var world = new World();
         var e = world.Create();
 
-        Assert.Throws<InvalidOperationException>(() => world.LinkSnapshot(e, e));
+        Assert.Throws<InvalidOperationException>(() => world.AddChildFromSnapshot(e, e));
     }
 
     [Fact]
@@ -532,8 +532,8 @@ public sealed class WorldLifecycleTests
         var child = world.Create();
         var grandChild = world.Create();
 
-        world.Link(root, child);
-        world.Link(child, grandChild);
+        world.AddChild(root, child);
+        world.AddChild(child, grandChild);
 
         world.Destroy(root);
 
@@ -555,8 +555,8 @@ public sealed class WorldLifecycleTests
             var child = world.Create();
             var grandChild = world.Create();
 
-            world.Link(root, child);
-            world.Link(child, grandChild);
+            world.AddChild(root, child);
+            world.AddChild(child, grandChild);
 
             GC.Collect();
             GC.WaitForPendingFinalizers();
@@ -637,7 +637,7 @@ public sealed class WorldLifecycleTests
         var parent = world.Create();
         var child = world.Create();
 
-        world.Link(parent, child);
+        world.AddChild(parent, child);
         world.Destroy(child);
 
         var replacement = world.Create();
@@ -655,8 +655,8 @@ public sealed class WorldLifecycleTests
         var child = world.Create();
         var grandChild = world.Create();
 
-        world.Link(root, child);
-        world.Link(child, grandChild);
+        world.AddChild(root, child);
+        world.AddChild(child, grandChild);
         world.Destroy(root);
     }
 

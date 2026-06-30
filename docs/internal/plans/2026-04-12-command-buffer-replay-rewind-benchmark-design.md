@@ -7,7 +7,7 @@
 - 场景至少保留三类：
   - `existing-heavy`：existing entity 为主，压旧值捕获与 restore。
   - `create-or-mixed-heavy`：大量 create，或 existing/create 混合，压 reservation、created final-state 与 rewind 后再 replay。
-  - `hierarchy`：`MiniArch-only` 扩展场景，用 `Link/Unlink` 与 subtree destroy 压 hierarchy rewind 顺序。
+  - `hierarchy`：`MiniArch-only` 扩展场景，用 `AddChild/RemoveChild` 与 subtree destroy 压 hierarchy rewind 顺序。
 - 不与 `Arch` 比 rewind。`Arch` 当前没有等价的 `ReplayWithReverse(...)` / `PlayWithReverse()` / `Rewind(...)` 契约；硬做对比只会把 snapshot/undo 模拟成本混进结果，失去可解释性。
 - 现有 `MiniArch vs Arch` benchmark 继续回答共享命令子集上的 `record + play` 差距；新 benchmark 负责回答 `MiniArch` 自己在 replay/reverse/rewind 各阶段的时间与分配结构。
 
@@ -140,7 +140,7 @@
 ### 3. `hierarchy`（推荐作为扩展场景）
 
 - 只跑 `MiniArch`。
-- 在 `mixed-heavy` 基础上加入 `Link/Unlink`、destroy subtree。
+- 在 `mixed-heavy` 基础上加入 `AddChild/RemoveChild`、destroy subtree。
 - 重点压：
   - reverse hierarchy capture。
   - restore old parent/children。

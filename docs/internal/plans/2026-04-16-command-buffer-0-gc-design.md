@@ -74,7 +74,7 @@ Play(): Compile() -> Replay(CompiledCommandBatch) -> Clear()
 | 操作 | 目标 |
 |------|------|
 | `CommandBuffer.Add<T>` / `Set<T>` / `Remove<T>` | 0 装箱 |
-| `CommandBuffer.Create()` / `Destroy()` / `Link` / `Unlink` | 0 装箱 |
+| `CommandBuffer.Create()` / `Destroy()` / `AddChild` / `RemoveChild` | 0 装箱 |
 | `CommandBuffer.Play()` | 0 GC（除外部 World mutation） |
 | `CommandBuffer.Playback()` | 允许 `FrameCommands` 分配（用户主动获取 IR） |
 | `CommandBuffer.PlayWithReverse()` | 可选优化，优先级低于 Play() |
@@ -216,8 +216,8 @@ var componentTypeCache = _compiledReplayComponentTypeScratch;
 var restoredEntities = new List<ReverseFrameEntity>();
 var restoredEntitySet = new HashSet<Entity>();
 var destroyedEntities = new List<Entity>(state.CreatedEntities.Length);
-var linkCommands = new List<FrameLinkCommand>();
-var unlinkCommands = new List<FrameUnlinkCommand>();
+var AddChildCommands = new List<FrameAddChildCommand>();
+var unAddChildCommands = new List<FrameUnAddChildCommand>();
 var addCommands = new List<FrameEntityComponentCommand>();
 var setCommands = new List<FrameEntityComponentCommand>();
 var removeCommands = new List<FrameEntityRemoveCommand>();
@@ -231,8 +231,8 @@ internal class WorldReplayScratch
     public List<ReverseFrameEntity> RestoredEntities = new(4);
     public HashSet<Entity> RestoredEntitySet = new(4);
     public List<Entity> DestroyedEntities = new(4);
-    public List<FrameLinkCommand> LinkCommands = new(4);
-    public List<FrameUnlinkCommand> UnlinkCommands = new(4);
+    public List<FrameAddChildCommand> AddChildCommands = new(4);
+    public List<FrameUnAddChildCommand> UnAddChildCommands = new(4);
     public List<FrameEntityComponentCommand> AddCommands = new(4);
     public List<FrameEntityComponentCommand> SetCommands = new(4);
     public List<FrameEntityRemoveCommand> RemoveCommands = new(4);

@@ -34,9 +34,9 @@ public sealed partial class World
         }
     }
 
-    internal void LinkSnapshot(Entity parent, Entity child)
+    internal void AddChildFromSnapshot(Entity parent, Entity child)
     {
-        _hierarchy.LinkRestored(this, parent, child);
+        _hierarchy.AddChildRestored(this, parent, child);
     }
 
     internal ReadOnlySpan<RecycledEntity> FreeList => _freeIds.AsSpan(0, _freeIdCount);

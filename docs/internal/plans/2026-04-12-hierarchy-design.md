@@ -82,7 +82,7 @@ Expected: FAIL.
 
 Implement:
 - single-parent runtime table keyed by entity id/version
-- `Link`, `Unlink`, `TryGetParent`, `GetChildren`
+- `AddChild`, `RemoveChild`, `TryGetParent`, `GetChildren`
 - cycle rejection and stale-entity validation
 - child-first subtree collection and internal bulk destroy path
 - cleanup on destroy and slot reuse safety

@@ -34,7 +34,7 @@
 - 新增一组失败测试，至少覆盖：
   - `PlaybackDelta()` 不改 source world，且能在另一个同步 world 上 `ApplyDeltaForward()` 得到相同公开状态。
   - `ApplyDeltaBackward()` 能把同一个 world 恢复到生成 delta 前的公开状态。
-  - `link/unlink` 与 cascade destroy 的 delta 正反向语义正确。
+  - `AddChild/RemoveChild` 与 cascade destroy 的 delta 正反向语义正确。
   - same-frame transient entity 不出现在最终 delta 中。
 
 **Step 2: Run test to verify it fails**
@@ -84,7 +84,7 @@ Expected: 失败，说明 shadow public state 推演或 apply 还未恢复组件
 - 在 `World` 中实现：
   - 读取 entity 当前公开组件与 parent 的 helper
   - 基于 `FrameCommands` 构建候选实体集
-  - 在 shadow state 上按 `create -> link/unlink -> add -> set -> remove -> destroy` 推演 `After`
+  - 在 shadow state 上按 `create -> AddChild/RemoveChild -> add -> set -> remove -> destroy` 推演 `After`
   - 生成双向 `WorldDelta`
   - 让 `ApplyDeltaForward()` / `ApplyDeltaBackward()` 对最小组件场景生效
 
@@ -103,10 +103,10 @@ Expected: 最小 delta 测试通过。
 **Step 1: Write the failing test**
 
 - 扩展失败测试，覆盖：
-  - `link/unlink/relink`
+  - `AddChild/RemoveChild/relink`
   - destroy root 触发 existing subtree 级联销毁
-  - `unlink` 后逃逸 subtree destroy
-  - `create -> link 到 doomed subtree -> 同帧消失`
+  - `RemoveChild` 后逃逸 subtree destroy
+  - `create -> AddChild 到 doomed subtree -> 同帧消失`
   - 多帧 tick-by-tick 跨实例顺序 apply
 
 **Step 2: Run test to verify it fails**

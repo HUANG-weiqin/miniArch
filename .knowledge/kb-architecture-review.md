@@ -94,7 +94,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 ### 7. Hierarchy
 - side-table SoA 邻接表：`_parentByChild[id]` 直索引 + `_firstChild[id]` → `_childNext[slot]` → -1 链表 + slot free list
 - 子节点用 slot 而非 id 索引（一个 parent 可有多个 child）
-- `Link` vs `LinkRestored` 区分：前者 `unlinkFirst=true`，后者跳过（snapshot 恢复时旧 parent 已清）
+- `AddChild` vs `AddChildRestored` 区分：前者 `removeFirst=true`，后者跳过（snapshot 恢复时旧 parent 已清）
 - Destroy 子树：DFS 后序遍历（generation-counter `_destroyVisitedGen` 避免 O(n) 清零），逐个 `DestroySingle`
 - 同时提供 `GetChildren`（List alloc）和 `EnumerateChildren`（零分配 struct enumerator）
 - 代码位置：`HierarchyTable.cs`
@@ -119,7 +119,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - 拆分为 7 个 partial 文件：
   - `World.cs`：字段 + TryGet/Get/Has + Clone + Replay + archetype lookup
   - `World.EntityLifecycle.cs`：Create/Destroy + free list + 版本管理
-  - `World.SnapshotBridge.cs`：snapshot/clone 用的 internal backdoor（`Reset`、`LinkSnapshot`、`SetSnapshot*`、`WriteFreeList`/`ReadFreeList`/`CopyFreeIdsFrom`、`FreeList`、`ValidateSnapshotEntitySlot`）
+  - `World.SnapshotBridge.cs`：snapshot/clone 用的 internal backdoor（`Reset`、`AddChildFromSnapshot`、`SetSnapshot*`、`WriteFreeList`/`ReadFreeList`/`CopyFreeIdsFrom`、`FreeList`、`ValidateSnapshotEntitySlot`）
   - `World.Create.Generated.cs`：泛型重载 + `GetFirst<T>`
   - `World.QueryCache.cs`：Query 缓存管理
   - `World.StructuralChange.cs`：Add/Set/Remove（upsert 语义，`Add`/`Set` 是 alias）

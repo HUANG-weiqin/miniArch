@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Add a multi-producer command buffer that records structural changes and hierarchy changes without mutating `World`, compiles them into `FrameCommands`, and replays them with fixed ordering `create -> link/unlink -> add -> set -> remove -> destroy`.
+**Goal:** Add a multi-producer command buffer that records structural changes and hierarchy changes without mutating `World`, compiles them into `FrameCommands`, and replays them with fixed ordering `create -> AddChild/RemoveChild -> add -> set -> remove -> destroy`.
 
-**Architecture:** Add a new `MiniArch.Core.CommandBuffer` recording layer with thread-local shards and a real-entity allocator that can reserve both fresh ids and recycled ids without immediately materializing them into the world. `Playback()` compiles recorded commands into an immutable `FrameCommands` IR, eliminates `create + destroy` pairs in the same frame, precomputes final signatures for newly created entities, carries hierarchy `link/unlink` operations in a dedicated post-create phase, and leaves actual world mutation to `World.Replay(in FrameCommands)`.
+**Architecture:** Add a new `MiniArch.Core.CommandBuffer` recording layer with thread-local shards and a real-entity allocator that can reserve both fresh ids and recycled ids without immediately materializing them into the world. `Playback()` compiles recorded commands into an immutable `FrameCommands` IR, eliminates `create + destroy` pairs in the same frame, precomputes final signatures for newly created entities, carries hierarchy `AddChild/RemoveChild` operations in a dedicated post-create phase, and leaves actual world mutation to `World.Replay(in FrameCommands)`.
 
 **Tech Stack:** C# 12, .NET 8, xUnit, PowerShell
 
@@ -99,7 +99,7 @@ git commit -m "feat: add command buffer api skeleton"
 **Step 1: Write the failing tests**
 
 - Add a test that `CommandBuffer.Create()` returns a real `Entity` immediately.
-- Add a test that a newly returned entity can be referenced by later recorded `Link/Unlink/Add/Set/Remove/Destroy` commands in the same buffer.
+- Add a test that a newly returned entity can be referenced by later recorded `AddChild/RemoveChild/Add/Set/Remove/Destroy` commands in the same buffer.
 - Add a test that after a previous replay destroys entities, a later command buffer create can reuse recycled ids rather than growing only through fresh ids.
 
 **Step 2: Run the targeted tests**
@@ -147,9 +147,9 @@ git commit -m "feat: reserve real entities for command buffer recording"
 **Step 1: Write the failing tests**
 
 - Add a test that recording order does not define final execution order.
-- Record commands in user order such as `destroy`, `set`, `link`, `add`, `create`, `unlink`, `remove`.
-- Assert that compilation/replay behaves as if order were always `create -> link/unlink -> add -> set -> remove -> destroy`.
-- Add a test that `link/unlink` are compiled after `create`, so same-frame newly created entities can participate in hierarchy replay.
+- Record commands in user order such as `destroy`, `set`, `AddChild`, `add`, `create`, `RemoveChild`, `remove`.
+- Assert that compilation/replay behaves as if order were always `create -> AddChild/RemoveChild -> add -> set -> remove -> destroy`.
+- Add a test that `AddChild/RemoveChild` are compiled after `create`, so same-frame newly created entities can participate in hierarchy replay.
 - Add a test that duplicate commands in the same bucket are folded to the intended final form for the same entity and component.
 
 **Step 2: Run the targeted tests**
@@ -172,7 +172,7 @@ Expected: fail because recording is still linear or missing.
 
 - Compile buckets in fixed order:
   - `create`
-  - `link/unlink`
+  - `AddChild/RemoveChild`
   - `add`
   - `set`
   - `remove`
@@ -207,7 +207,7 @@ git commit -m "feat: add shard-based command recording"
 
 - Add a test that a newly created entity with same-frame `Add/Set/Remove` lands directly in its final archetype after replay.
 - Add a test that a newly created parent and child can be linked in the same frame and are visible as parent/child after replay.
-- Add a test that same-frame `link` followed by `unlink` results in no live link after replay.
+- Add a test that same-frame `AddChild` followed by `RemoveChild` results in no live AddChild after replay.
 - Add a test that same-frame `create + destroy` is removed during `Playback()` and never materializes in `Replay()`.
 - Add a test that a created entity with `Add(Position)` then `Set(Position)` ends with the `Set` value.
 - Add a test that a created entity with `Add(Position)` then `Remove(Position)` ends without `Position`.
@@ -227,7 +227,7 @@ Expected: fail because created entities are not compiled to final state yet.
   - whether it survives the frame
   - final signature after `add -> set -> remove`
   - create-time component payloads needed to instantiate directly in the final archetype
-- Preserve enough information for later `link/unlink` compilation against surviving created entities
+- Preserve enough information for later `AddChild/RemoveChild` compilation against surviving created entities
 - Remove `create + destroy` pairs from the resulting `FrameCommands`
 
 **Step 4: Re-run the targeted tests**
@@ -259,7 +259,7 @@ git commit -m "feat: compile created entities to final archetypes"
 **Step 1: Write the failing tests**
 
 - Add a test that replay materializes created entities directly into the final archetype.
-- Add a test that replay applies `link` and `unlink` after create and before structural component mutation buckets.
+- Add a test that replay applies `AddChild` and `RemoveChild` after create and before structural component mutation buckets.
 - Add a test that linking a created child to a created parent in the same frame succeeds.
 - Add a test that unlinking an entity in the same frame removes the relation before possible destroy.
 - Add a test that replay applies `add`, then `set`, then `remove`, then `destroy` to existing entities.
@@ -278,7 +278,7 @@ Expected: fail because `Replay` is still incomplete.
 
 - Add a batch world mutation path that:
   - creates final-form entities first
-  - applies link and unlink commands
+  - applies AddChild and RemoveChild commands
   - applies add commands to existing entities
   - applies set commands
   - applies remove commands
@@ -316,7 +316,7 @@ git commit -m "feat: replay compiled frame commands"
 - Add a test that multiple tasks can record into one command buffer concurrently and produce the same final world as a single-thread reference compilation.
 - Add a test that recycled ids are reused across frames after replayed destroy commands.
 - Add a test that same-frame destroyed ids are not reused by same-frame creates.
-- Add a test that concurrent recording of `link/unlink` targeting valid entities produces the same hierarchy as a single-thread reference compilation.
+- Add a test that concurrent recording of `AddChild/RemoveChild` targeting valid entities produces the same hierarchy as a single-thread reference compilation.
 
 **Step 2: Run the targeted tests**
 
@@ -403,7 +403,7 @@ git commit -m "bench: add command buffer benchmarks"
 
 - Explain `CommandBuffer`, `FrameCommands`, `Playback()`, and `Replay()`
 - Explain fixed replay order
-- Explain that hierarchy commands participate in replay as `link/unlink` immediately after `create`
+- Explain that hierarchy commands participate in replay as `AddChild/RemoveChild` immediately after `create`
 - Explain that create returns a real entity during recording
 - Explain that same-frame `create + destroy` is eliminated during playback
 - Explain that concurrent support is only for recording, not for world mutation

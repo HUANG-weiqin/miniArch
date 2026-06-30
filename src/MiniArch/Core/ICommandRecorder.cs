@@ -30,11 +30,11 @@ public interface ICommandRecorder
     /// <summary>Destroys an entity.</summary>
     void Destroy(Entity entity);
 
-    /// <summary>Links a child entity to a parent.</summary>
-    void Link(Entity parent, Entity child);
+    /// <summary>Adds a child to a parent.</summary>
+    void AddChild(Entity parent, Entity child);
 
-    /// <summary>Unlinks a child entity from its parent.</summary>
-    void Unlink(Entity child);
+    /// <summary>Removes a child from its parent.</summary>
+    void RemoveChild(Entity child);
 
     /// <summary>
     /// Records a deep clone of an entity and its child subtree.

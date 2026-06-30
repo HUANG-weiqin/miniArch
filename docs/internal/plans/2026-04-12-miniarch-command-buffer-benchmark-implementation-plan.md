@@ -94,7 +94,7 @@ Expected: benchmark runs and emits `MiniArch` and `Arch` results for the shared 
 
 **Step 1: Add the hierarchy extension scenario**
 
-- Add a `MiniArch-only` mixed scenario with `Link / Unlink`.
+- Add a `MiniArch-only` mixed scenario with `AddChild / RemoveChild`.
 - Keep it out of `Arch` comparison summaries and out of the `1.5x` gate.
 
 **Step 2: Verify the scenario**

@@ -194,7 +194,7 @@ Friflo's advantages are **engine-level constant factors** (typing + SIMD). MiniA
 - **Entity accessor** — `Access()` for cached multi-component read/write on a single entity
 - **Ref-return access** — `GetRef<T>()` for zero-copy in-place component mutation
 - **Batch creation** — `CreateMany()` for bulk entity spawning
-- **Entity hierarchy** — `Link` / `Unlink` with cascade destroy
+- **Entity hierarchy** — `AddChild` / `RemoveChild` with cascade destroy
 - **GC-friendly** — zero GC collections in steady-state simulation
 
 ---

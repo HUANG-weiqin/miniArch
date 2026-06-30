@@ -23,25 +23,25 @@ internal sealed class HierarchyTable
         _childFreeList = NoSlot;
     }
 
-    public void Link(World world, Entity parent, Entity child)
-        => LinkCore(world, parent, child, unlinkFirst: true);
+    public void AddChild(World world, Entity parent, Entity child)
+        => AddChildCore(world, parent, child, removeFirst: true);
 
-    public void LinkRestored(World world, Entity parent, Entity child)
-        => LinkCore(world, parent, child, unlinkFirst: false);
+    public void AddChildRestored(World world, Entity parent, Entity child)
+        => AddChildCore(world, parent, child, removeFirst: false);
 
-    private void LinkCore(World world, Entity parent, Entity child, bool unlinkFirst)
+    private void AddChildCore(World world, Entity parent, Entity child, bool removeFirst)
     {
-        ValidateLink(world, parent, child);
+        ValidateAddChild(world, parent, child);
 
         EnsureCapacity(parent.Id);
         EnsureCapacity(child.Id);
-        if (unlinkFirst) Unlink(child);
+        if (removeFirst) RemoveChild(child);
 
         _parentByChild[child.Id] = parent;
         AddChildToParent(parent.Id, child);
     }
 
-    public void Unlink(Entity child)
+    public void RemoveChild(Entity child)
     {
         if (child.Id < 0 || child.Id >= _parentByChild.Length)
         {
@@ -99,7 +99,7 @@ internal sealed class HierarchyTable
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool HasAnyLinks(Entity entity)
+    public bool HasAnyRelations(Entity entity)
     {
         if ((uint)entity.Id >= (uint)_parentByChild.Length)
         {
@@ -127,7 +127,7 @@ internal sealed class HierarchyTable
         }
 
         // The finally block below guarantees the stack is empty on exit, so we
-        // don't need to clear it here on entry — except on the very first call,
+        // don't need to clear it here on entry �?except on the very first call,
         // when the stack is already empty by construction.
         _destroyTraversalStack.Add((root, false));
 
@@ -214,7 +214,7 @@ internal sealed class HierarchyTable
         }
     }
 
-    public int CountLiveLinks(World world)
+    public int CountLiveRelations(World world)
     {
         var count = 0;
         var slotCount = world.EntitySlotCount;
@@ -236,7 +236,7 @@ internal sealed class HierarchyTable
         return count;
     }
 
-    public IEnumerable<(Entity Child, Entity Parent)> EnumerateLiveLinks(World world)
+    public IEnumerable<(Entity Child, Entity Parent)> EnumerateLiveRelations(World world)
     {
         var slotCount = world.EntitySlotCount;
         for (var childId = 0; childId < slotCount && childId < _parentByChild.Length; childId++)
@@ -315,7 +315,7 @@ internal sealed class HierarchyTable
         }
     }
 
-    private void ValidateLink(World world, Entity parent, Entity child)
+    private void ValidateAddChild(World world, Entity parent, Entity child)
     {
         if (!world.IsAlive(parent))
         {
@@ -337,7 +337,7 @@ internal sealed class HierarchyTable
         {
             if (current == child)
             {
-                throw new InvalidOperationException("Hierarchy links must not create cycles.");
+                throw new InvalidOperationException("Parent-child relations must not create cycles.");
             }
 
             if (!TryGetParent(world, current, out current))

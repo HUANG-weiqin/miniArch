@@ -26,7 +26,7 @@ internal struct OverflowPool<TKey, TValue> where TKey : unmanaged
     // Walk list from head, return node index or -1.
     public int FindIndex(int head, TKey key);
 
-    // Unlink node from list. Returns true if found.
+    // RemoveChild node from list. Returns true if found.
     public bool Remove(ref int head, TKey key);
 
     // Direct access by node index.

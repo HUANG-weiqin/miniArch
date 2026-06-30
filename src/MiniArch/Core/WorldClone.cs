@@ -37,9 +37,9 @@ internal static class WorldClone
             }
         }
 
-        foreach (var (child, parent) in source.Hierarchy.EnumerateLiveLinks(source))
+        foreach (var (child, parent) in source.Hierarchy.EnumerateLiveRelations(source))
         {
-            target.LinkSnapshot(parent, child);
+            target.AddChildFromSnapshot(parent, child);
         }
 
         target.CopyFreeIdsFrom(source);

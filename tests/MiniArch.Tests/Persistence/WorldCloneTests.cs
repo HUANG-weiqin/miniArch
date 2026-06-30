@@ -134,8 +134,8 @@ public sealed class WorldCloneTests
         var firstChild = world.Create();
         var secondChild = world.Create();
 
-        world.Link(parent, firstChild);
-        world.Link(parent, secondChild);
+        world.AddChild(parent, firstChild);
+        world.AddChild(parent, secondChild);
 
         var cloned = world.Clone();
 
@@ -154,8 +154,8 @@ public sealed class WorldCloneTests
         var child = world.Create();
         var grandChild = world.Create();
 
-        world.Link(root, child);
-        world.Link(child, grandChild);
+        world.AddChild(root, child);
+        world.AddChild(child, grandChild);
 
         var cloned = world.Clone();
         cloned.Destroy(root);

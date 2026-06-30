@@ -91,7 +91,7 @@ foreach (var chunk in query.GetChunks())
 | `CommandStream` | Byte-stream recorder (20–48% faster than CommandBuffer) |
 | `FrameDelta` | Self-contained delta for cross-world replay |
 | `WorldSnapshot` | Binary world serialization |
-| `ICommandRecorder` | Shared interface: `Create`, `Add<T>`, `Set<T>`, `Remove<T>`, `Destroy`, `Link`, `Submit` |
+| `ICommandRecorder` | Shared interface: `Create`, `Add<T>`, `Set<T>`, `Remove<T>`, `Destroy`, `AddChild`, `Submit` |
 | `EntityAccessor` | Ref struct for batched component access, via `World.Access(entity)` |
 | `EntityInfo` | Entity metadata: `Version`, `RowIndex` |
 | `ChunkView` | Chunk view returned by `GetChunks()` |
@@ -128,8 +128,8 @@ public Span<T> GetComponentSpanAt<T>(int columnIndex) where T : unmanaged
 | `TryGetLocation(Entity, out EntityInfo)` | Get entity metadata |
 | `GetFirst<T>()` | Get first entity with a given component |
 | `IsAlive(Entity)` | Validate entity handle |
-| `Link(Entity, Entity)` | Parent-child hierarchy |
-| `Unlink(Entity)` | Remove from hierarchy |
+| `AddChild(Entity, Entity)` | Parent-child hierarchy |
+| `RemoveChild(Entity)` | Remove from hierarchy |
 | `TryGetParent(Entity, out Entity)` | Get parent |
 | `GetChildren(Entity)` | Get children list |
 | `Query(in QueryDescription)` | Create a query |
@@ -145,7 +145,7 @@ public Span<T> GetComponentSpanAt<T>(int columnIndex) where T : unmanaged
 ### `CommandBuffer`
 
 - `Create` / `Add<T>` / `Set<T>` / `Remove<T>` — record commands
-- `Destroy` / `Link` / `Unlink` — structural changes
+- `Destroy` / `AddChild` / `RemoveChild` — structural changes
 - `Clone(Entity)` — record an entity deep-copy
 - `Submit()` — apply to world synchronously
 - `Snapshot()` — produce a `FrameDelta` without applying

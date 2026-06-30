@@ -15,7 +15,7 @@
 ## 目标
 
 - 为 command buffer 增加 frame 级撤销能力：一帧成功 `Replay()` 或 `Play()` 后，可以把这一帧对 world 造成的结构变化和 hierarchy 变化完整回退。
-- 保持现有固定顺序语义：正向仍是 `create -> link/unlink -> add -> set -> remove -> destroy`，回退则执行其严格逆序语义。
+- 保持现有固定顺序语义：正向仍是 `create -> AddChild/RemoveChild -> add -> set -> remove -> destroy`，回退则执行其严格逆序语义。
 - 保持 `CommandBuffer` 的 recording 并发边界不变；rewind 仍然只在单线程 world mutation 阶段发生。
 - 为后续“时间回退 / 逐帧撤销 / 调试回放”提供可保留的 frame 级 reverse 状态。
 
@@ -32,15 +32,15 @@
 ### 已有基础
 
 - `CommandBuffer.cs` 已能把 recording 编译为固定桶顺序，并对 same-frame created entity 预计算 final state。
-- `FrameCommands.cs` 已是稳定的正向 frame IR，公开了 `CreatedEntities / LinkCommands / AddCommands / SetCommands / RemoveCommands / DestroyedEntities / ReleasedEntities`。
+- `FrameCommands.cs` 已是稳定的正向 frame IR，公开了 `CreatedEntities / AddChildCommands / AddCommands / SetCommands / RemoveCommands / DestroyedEntities / ReleasedEntities`。
 - `World.cs` 已有 `Replay(in FrameCommands)` 和 `Replay(CompiledCommandBatch)`，并且 batch 期间会抑制 query layout 的逐条发布。
-- `HierarchyTable.cs` 已有 `Link / Unlink / TryGetParent / GetChildren / CollectDestroySubtree / RemoveDestroyed`，足以支持 hierarchy undo 所需的当前态查询。
+- `HierarchyTable.cs` 已有 `AddChild / RemoveChild / TryGetParent / GetChildren / CollectDestroySubtree / RemoveDestroyed`，足以支持 hierarchy undo 所需的当前态查询。
 - `tests/MiniArch.Tests/Core/CommandBufferTests.cs` 已覆盖 playback/replay、same-frame create+destroy 消除、跨 world replay、并发 recording、`Play()` 等核心正向语义。
 
 ### 当前缺口
 
 - `FrameCommands` 只表达“要做什么”，不表达“做之前 world 是什么样”。
-- `World.Replay()` 在执行 `Add/Set/Remove/Destroy/Link/Unlink` 前没有采集旧值，因此无法生成精确回退信息。
+- `World.Replay()` 在执行 `Add/Set/Remove/Destroy/AddChild/RemoveChild` 前没有采集旧值，因此无法生成精确回退信息。
 - existing entity 的组件回退需要旧 payload；destroy 回退需要实体销毁前的完整组件集与 hierarchy 关系；这些信息 compile 阶段无法仅靠 `CommandBuffer` 得到。
 - `HierarchyTable` 当前只有当前关系表，没有 frame 级 inverse log。
 - 测试层目前没有“apply -> rewind -> state restored”这一类断言网。
@@ -104,7 +104,7 @@
 - `IReadOnlyList<ReverseDestroyedEntity> RestoredEntities`
   - 正向帧里被 destroy 的 existing entity；rewind 时按其销毁前完整状态重建。
 - `IReadOnlyList<ReverseHierarchyCommand> HierarchyCommands`
-  - 回退 link/unlink 所需的旧关系操作。
+  - 回退 AddChild/RemoveChild 所需的旧关系操作。
 - `IReadOnlyList<ReverseComponentCommand> ComponentCommands`
   - 对 existing entity 的 add/set/remove 回退。
 - `IReadOnlyList<Entity> ReacquiredReservedEntities`
@@ -144,7 +144,7 @@
 - reverse 命令的执行前提和正向不同：
 - 正向 `CreatedEntities` 是“materialize reserved entity”。
 - 逆向恢复 destroy 则是“用旧 id/version 和旧组件集重建被删实体”。
-- hierarchy undo 需要表达“child 之前是否有 parent”，而不是仅仅表达 link 或 unlink。
+- hierarchy undo 需要表达“child 之前是否有 parent”，而不是仅仅表达 AddChild 或 RemoveChild。
 - same-frame create+destroy 的回退关注的是 free-list/version 对齐，不是普通 create/destroy 对称。
 
 ## 公开状态定义
@@ -187,7 +187,7 @@
 2. 初始化 `ReverseFrameBuilder`。
 3. 处理 `ReleasedEntities` 前，先把这些 reserved entity 记录到 reverse 的 `ReacquiredReservedEntities`。
 4. materialize `CreatedEntities` 时，把真正存活的新实体加入 reverse 的 `CreatedEntities`。
-5. 执行 `Link/Unlink` 前，先查询 child 当前 parent，生成对应 `ReverseHierarchyCommand`。
+5. 执行 `AddChild/RemoveChild` 前，先查询 child 当前 parent，生成对应 `ReverseHierarchyCommand`。
 6. 执行 `Add/Set/Remove` 前，对 existing entity 读取旧组件存在性与旧值，生成对应 `ReverseComponentCommand`。
 7. 执行 `Destroy` 前，调用世界侧辅助函数收集待销毁子树中每个实体的完整组件集与旧 parent，生成 `RestoredEntities`。
 8. 正向全部成功后结束 deferred layout update，并返回不可变 `ReverseFrameCommands`。
@@ -255,13 +255,13 @@
 - existing entity `Add` 后 rewind，组件消失且 archetype 回到原位。
 - existing entity `Set` 后 rewind，值恢复且不发生额外迁移。
 - existing entity `Remove` 后 rewind，组件和值恢复。
-- `Link/Unlink` 后 rewind，parent/children 恢复。
+- `AddChild/RemoveChild` 后 rewind，parent/children 恢复。
 - `Create` 后 rewind，实体不再 alive。
 - `Destroy` 后 rewind，实体及其 hierarchy 关系恢复。
 
 ### 2. 复杂帧测试
 
-- 同帧混合 `Create/Add/Set/Remove/Link/Unlink/Destroy` 后 rewind，source world 回到 apply 前状态。
+- 同帧混合 `Create/Add/Set/Remove/AddChild/RemoveChild/Destroy` 后 rewind，source world 回到 apply 前状态。
 - same-frame `create + destroy` 的 frame 在 rewind 后，应恢复 free-list/version，而不是留下多余 live entity。
 - child-first cascade destroy 的正向帧在 rewind 后，应恢复整棵子树和原 parent-child 关系。
 
@@ -289,7 +289,7 @@
 
 - destroy rewind 是最高风险点：它同时涉及 entity version、free-list、组件重建和 hierarchy 子树恢复。
 - same-frame `create + destroy` 的回退很容易只恢复 live state，却漏掉 reservation/free-list/version 对齐。
-- hierarchy 回退如果只恢复 parent，不恢复 destroy 前子树 materialization 顺序，容易出现 link 到 stale entity 或父先缺失的问题。
+- hierarchy 回退如果只恢复 parent，不恢复 destroy 前子树 materialization 顺序，容易出现 AddChild 到 stale entity 或父先缺失的问题。
 - 若 reverse 采集散落在多个分支里，`Replay()` 和 `Play()` 可能发生语义漂移；需要共用一套 apply-with-reverse 内核。
 - 公开 reverse 状态若被误解为跨 world 通用格式，会产生错误使用；文档和 API 命名必须明确其 world-bound 属性。
 - reverse 日志会增加每帧内存；若后续需要优化，应优先复用 compile/replay 现有缓存和 typed component 读取路径，而不是回退到整 snapshot。

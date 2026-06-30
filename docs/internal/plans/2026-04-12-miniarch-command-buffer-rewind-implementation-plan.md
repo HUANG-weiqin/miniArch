@@ -92,7 +92,7 @@ dotnet test tests/MiniArch.Tests/MiniArch.Tests.csproj --filter "FullyQualifiedN
 - `Create` 后 world 可见；`Rewind()` 后实体不再 alive。
 - `Destroy` existing entity 后 world 不可见；`Rewind()` 后实体、组件和 query 可见性恢复。
 - `Add` / `Set` / `Remove` 的正反向效果正确。
-- `Link` / `Unlink` 的正反向效果正确。
+- `AddChild` / `RemoveChild` 的正反向效果正确。
 - mixed script 中同一实体跨多个命令桶的最终状态与回退状态正确。
 
 **Step 2:** 运行 command buffer 与 structural change 相关测试，确认失败集中在命令覆盖缺口。
@@ -102,7 +102,7 @@ dotnet test tests/MiniArch.Tests/MiniArch.Tests.csproj --filter "FullyQualifiedN
 dotnet test tests/MiniArch.Tests/MiniArch.Tests.csproj --filter "FullyQualifiedName~CommandBufferTests|FullyQualifiedName~WorldStructuralChangeTests" -v minimal
 ```
 
-预期：失败，至少暴露 `Create/Destroy/Link/Unlink` 的 reverse 语义未齐全。
+预期：失败，至少暴露 `Create/Destroy/AddChild/RemoveChild` 的 reverse 语义未齐全。
 
 **Step 3:** 补齐 `World` 的 reverse 采集与 `Rewind()` 执行逻辑，使全部命令都具备可逆公开语义。
 
@@ -124,8 +124,8 @@ dotnet test tests/MiniArch.Tests/MiniArch.Tests.csproj --filter "FullyQualifiedN
 - Modify: `tests/MiniArch.Tests/Core/WorldLifecycleTests.cs`
 
 **Step 1:** 先写失败测试，覆盖 hierarchy 与 subtree 回退：
-- 新建 parent/child 并在同帧 `Link`，正向后 parent/children 可见，回退后关系消失。
-- existing hierarchy 执行 `Unlink`，回退后恢复原 parent。
+- 新建 parent/child 并在同帧 `AddChild`，正向后 parent/children 可见，回退后关系消失。
+- existing hierarchy 执行 `RemoveChild`，回退后恢复原 parent。
 - destroy parent 触发 subtree destroy，回退后整棵子树恢复，且 child-parent 关系正确。
 - 混合 existing/newly-created 实体的 hierarchy 脚本在回退后恢复到帧前公开状态。
 
@@ -158,7 +158,7 @@ dotnet test tests/MiniArch.Tests/MiniArch.Tests.csproj --filter "FullyQualifiedN
 - Modify: `tests/MiniArch.Tests/Core/QueryTests.cs`
 
 **Step 1:** 先写失败测试，覆盖时序与规模：
-- 多实体随机脚本：至少包含 `Create/Add/Set/Remove/Destroy/Link/Unlink` 混合。
+- 多实体随机脚本：至少包含 `Create/Add/Set/Remove/Destroy/AddChild/RemoveChild` 混合。
 - 多帧栈式流程：frame1 应用并保存 reverse1，frame2 应用并保存 reverse2，然后按 `reverse2 -> reverse1` 回退，最终 world 回到初始公开状态。
 - `PlayWithReverse()` 与 `Playback()+ReplayWithReverse()` 在多实体多帧场景中结果一致。
 - rewind 后 query 结果、hierarchy 结果、entity alive 集合与回退前快照一致。

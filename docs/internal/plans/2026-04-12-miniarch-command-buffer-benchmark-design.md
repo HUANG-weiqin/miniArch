@@ -9,7 +9,7 @@
 
 ## 非目标
 
-- 不把 `Link / Unlink` 混入 `Arch` 对比主口径。
+- 不把 `AddChild / RemoveChild` 混入 `Arch` 对比主口径。
 - 不把 setup/world 构建放进测量区。
 - 不把 benchmark 当成功能正确性的唯一证明。
 
@@ -27,7 +27,7 @@
 
 - 优点：
   - 对外对比干净。
-  - 对内仍能压到 `Link / Unlink` 真实场景。
+  - 对内仍能压到 `AddChild / RemoveChild` 真实场景。
 - 缺点：
   - benchmark 结构稍复杂。
 
@@ -65,7 +65,7 @@
 
 - `miniarch-hierarchy-mixed`
   - 只跑 `MiniArch`。
-  - 在 `mixed-script` 基础上加入 `Link / Unlink`。
+  - 在 `mixed-script` 基础上加入 `AddChild / RemoveChild`。
   - 用于防止 `Play()` 在真实工作负载下回退。
 
 ## 档位

@@ -76,7 +76,7 @@ public sealed partial class World
     /// <remarks>
     /// Destruction cascades through the hierarchy in post-order (children before
     /// parent) so that no orphaned child is left behind. If the entity has no
-    /// children, only itself is destroyed. Call <see cref="Unlink"/> first if
+    /// children, only itself is destroyed. Call <see cref="RemoveChild"/> first if
     /// you need to destroy a parent while preserving its subtree.
     /// </remarks>
     public void Destroy(Entity entity)
@@ -184,7 +184,7 @@ public sealed partial class World
         var info = GetRequiredLocation(entity);
         var arch = info.Archetype!;
         arch.RemoveAt(info.RowIndex, out var movedEntity);
-        if (_hierarchy.HasAnyLinks(entity))
+        if (_hierarchy.HasAnyRelations(entity))
         {
             _hierarchy.RemoveDestroyed(entity);
         }
@@ -419,7 +419,7 @@ public sealed partial class World
     /// <summary>
     /// Releases the reserved id if (and only if) <paramref name="entity"/> is still
     /// in the reserved (not yet materialized, not yet released) state. Returns false
-    /// for alive/free/destroyed entities without throwing â€” use this on cleanup paths
+    /// for alive/free/destroyed entities without throwing â€?use this on cleanup paths
     /// where the entity state is not known a priori.
     /// </summary>
     internal bool TryReleaseReserved(Entity entity)

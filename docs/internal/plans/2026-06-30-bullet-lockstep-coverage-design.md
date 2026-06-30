@@ -16,7 +16,7 @@ Slice 1-3 已经端到端验证了**多 host lockstep 框架契约**（placehold
 |---|---|---|---|
 | **Archetype ECS**（World/Entity/QueryDescription） | ✅ | S2-S9 | 多 archetype 查询遍布所有系统 |
 | **CommandStream**（record） | ✅ | S2-S9 | Create/Add 在每个 slice；Set 在 S6 命中扣血 |
-| **FrameDelta + Replay** | ✅ | S1-S9 | placeholder Create/Set/Add/Link/Destroy op 全部走通 |
+| **FrameDelta + Replay** | ✅ | S1-S9 | placeholder Create/Set/Add/AddChild/Destroy op 全部走通 |
 | **World.Clone()**（深拷贝 World） | ✅ | S9 Phase A+C | 独立 world 前向运行 + replay-buffer 回滚 |
 | **WorldSnapshot**（二进制序列化） | ✅ | S8 Phase A | MemoryStream round-trip 字节级无损 |
 | **SubmitAndSnapshotAsync()**（流水线 submit+delta） | ✅ | S8 Phase B | Authority + Mirror 拓扑 |
@@ -25,7 +25,7 @@ Slice 1-3 已经端到端验证了**多 host lockstep 框架契约**（placehold
 | **Entity accessor**（Access()） | ✅ | S4 S6 | TickDamageSystem + CollisionSystem 多组件批量读写 |
 | **Ref-return access**（GetRef / chunk span） | ✅ | S2+ | chunk span 遍布系统 |
 | **Batch Creation**（CreateMany） | ❌ **未直接测** | - | S7 用了多次 Stream.Create 替代；World.CreateMany API 未触发 |
-| **Entity Hierarchy**（Link/Unlink + cascade destroy） | ✅ | S5 | Boss + 5 WeakPoint Link，cascade destroy 验证 |
+| **Entity Hierarchy**（AddChild/RemoveChild + cascade destroy） | ✅ | S5 | Boss + 5 WeakPoint AddChild，cascade destroy 验证 |
 | **GC-friendly**（0/0/0 稳态） | ⚠️ 12/0/0 standard，scale 模式 Gen2 | - | FrameDelta[] 已 pool，checksum byte[] 待 pool |
 | **Archetype 迁移**（Add/Remove on existing） | ✅ | S4 | BurningTimer + Shield Add/Remove 完整循环，4 变体并存 |
 | **FrameDelta.Merge** | ✅ | S9 Phase B | 20 delta 合并为 1，replay 等价于逐帧 |
@@ -50,7 +50,7 @@ Slice 1-3 已经端到端验证了**多 host lockstep 框架契约**（placehold
 
 **Boss**（长生命周期，权威 host 创建）
 - `BossTag`、`Position`、`Health`、`AIPattern(int PatternId, int Phase)`
-- 通过 `Link` 挂载多个 `WeakPoint`
+- 通过 `AddChild` 挂载多个 `WeakPoint`
 
 **WeakPoint**（长生命周期，Boss 子节点）
 - `WeakPointTag`、`Position`、`Health`、`LocalOffset(int Dx, int Dy)`（相对 Boss）
@@ -130,11 +130,11 @@ Slice 1-3 已经端到端验证了**多 host lockstep 框架契约**（placehold
 - **完成条件**：游戏过程中至少有 4 个不同 archetype 的玩家变体（裸玩家 / +Shield / +Burning / +Shield+Burning）并存，checksum 一致
 
 ### Slice 5 — Hierarchy 与 Boss
-**重点**：Link/Unlink、cascade destroy、复杂状态机
-- Boss + 多个 WeakPoint 通过 `Link` 挂载
+**重点**：AddChild/RemoveChild、cascade destroy、复杂状态机
+- Boss + 多个 WeakPoint 通过 `AddChild` 挂载
 - BossAISystem 切换 phase、发射追踪弹（Target = 某玩家 HostId）
 - Boss 死亡 → cascade destroy 所有 weakpoint
-- 玩家死亡 → Unlink 父子关系（如适用）
+- 玩家死亡 → RemoveChild 父子关系（如适用）
 - **完成条件**：Boss 持续 spawn 弹幕并切换 phase，最终死亡时 cascade 销毁 5+ weakpoint，checksum 一致
 
 ### Slice 6 — 真实碰撞

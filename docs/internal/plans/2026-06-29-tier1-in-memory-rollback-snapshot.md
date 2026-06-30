@@ -128,7 +128,7 @@ RestoreState 反向操作。snapshot 实例在 Restore 后回收为 spare，下�
 public void Capture_and_restore_preserves_full_state()
 {
     var world = new World();
-    // create entities, add components, destroy some, link some
+    // create entities, add components, destroy some, AddChild some
     var snapshot = world.CaptureState();
     // mutate world heavily (create, destroy, add/remove components)
     world.RestoreState(snapshot);

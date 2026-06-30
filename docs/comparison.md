@@ -12,7 +12,7 @@
 | Query WithAny | ✅ | ❌ | ✅ | ❌ |
 | CommandBuffer | ✅ | ✅ | ✅ | ❌ |
 | Ref 返回组件访问 | ✅ | ✅ | ❌（值拷贝） | ❌ |
-| Entity 层次（Link/Unlink） | ✅ | ❌ | ✅ | ❌ |
+| Entity 层次（AddChild/RemoveChild） | ✅ | ❌ | ✅ | ❌ |
 | **帧同步（Lockstep）专属** | | | | |
 | **FrameDelta（帧增量）** | ✅ **独有** | ❌ | ❌ | ❌ |
 | **Snapshot() 提取可序列化增量** | ✅ **独有** | ❌ | ❌ | ❌ |

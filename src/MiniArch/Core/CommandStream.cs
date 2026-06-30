@@ -6,7 +6,7 @@ namespace MiniArch.Core;
 
 /// <summary>
 /// Records deferred world commands with per-component-type append-only stores.
-/// Add/Set/Remove on existing entities are stored inline in typed arrays — no entry stream,
+/// Add/Set/Remove on existing entities are stored inline in typed arrays �?no entry stream,
 /// no per-entity dedup. Created entities use a pending batch buffer for pre-materialization
 /// component accumulation.
 /// </summary>
@@ -73,7 +73,7 @@ public sealed class CommandStream : ICommandRecorder
     /// <summary>
     /// When enabled, all record methods (<see cref="Set{T}"/>, <see cref="Add{T}"/>,
     /// <see cref="Remove{T}"/>, <see cref="Create"/>, <see cref="Clone"/>,
-    /// <see cref="Destroy"/>, <see cref="Link"/> and <see cref="Unlink"/>)
+    /// <see cref="Destroy"/>, <see cref="AddChild"/> and <see cref="RemoveChild"/>)
     /// can be called safely from multiple threads.
     /// <see cref="Submit"/> must be called from a single thread after all parallel work completes.
     /// Disable before returning to single-threaded use.
@@ -233,7 +233,7 @@ public sealed class CommandStream : ICommandRecorder
         }
     }
 
-    public void Link(Entity parent, Entity child)
+    public void AddChild(Entity parent, Entity child)
     {
         if (_parallelMode)
         {
@@ -244,7 +244,7 @@ public sealed class CommandStream : ICommandRecorder
         _hierarchyByChild[child] = new HierarchyIntent(true, parent);
     }
 
-    public void Unlink(Entity child)
+    public void RemoveChild(Entity child)
     {
         if (_parallelMode)
         {
@@ -322,7 +322,7 @@ public sealed class CommandStream : ICommandRecorder
 
         try
         {
-            // Order matches BuildDelta: Create → Hierarchy → Ops → Destroy.
+            // Order matches BuildDelta: Create �?Hierarchy �?Ops �?Destroy.
             // Keeping Submit and Snapshot aligned lets hosts use Submit on source and
             // Replay on replica without diverging for combined command patterns.
             ResolveDeferredCreates();
@@ -387,14 +387,14 @@ public sealed class CommandStream : ICommandRecorder
         {
             if (IsEntityDestroyed(child)) continue;
 
-            if (intent.IsLinked)
+            if (intent.IsAdd)
             {
                 if (IsEntityDestroyed(intent.Parent)) continue;
-                _world.Link(intent.Parent, child);
+                _world.AddChild(intent.Parent, child);
             }
             else
             {
-                _world.Unlink(child);
+                _world.RemoveChild(child);
             }
         }
     }
@@ -420,8 +420,8 @@ public sealed class CommandStream : ICommandRecorder
     /// <para>
     /// For the relay-only flow (produce delta, do not apply locally),
     /// call <c>Snapshot()</c> then <c>Clear()</c>. The source host then
-    /// replays the delta back into its own world — together with all peer
-    /// deltas — achieving the deterministic multi-host guarantee.
+    /// replays the delta back into its own world �?together with all peer
+    /// deltas �?achieving the deterministic multi-host guarantee.
     /// </para>
     /// </remarks>
     public FrameDelta Snapshot()
@@ -464,7 +464,7 @@ public sealed class CommandStream : ICommandRecorder
     /// clients that must maintain id synchronization with the server.
     /// </para>
     /// <para>
-    /// Always produces a <b>real-id delta</b> — deferred placeholders are
+    /// Always produces a <b>real-id delta</b> �?deferred placeholders are
     /// resolved into the host's own ids before building the delta,
     /// regardless of <see cref="DeferredEntities"/>. Mirror clients
     /// replaying this delta must have an id allocator synchronized with
@@ -482,7 +482,7 @@ public sealed class CommandStream : ICommandRecorder
         var frozen = SwapOutState();
         // Static delegate + state parameter avoids the per-call closure allocation
         // that Task.Run(() => ...) would create. FrozenState is a reference type,
-        // so passing it as `object` is a free upcast — no boxing.
+        // so passing it as `object` is a free upcast �?no boxing.
         var task = Task.Factory.StartNew(
             s_buildFromFrozen, frozen, CancellationToken.None,
             TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
@@ -497,7 +497,7 @@ public sealed class CommandStream : ICommandRecorder
 
     private void BuildDelta(FrameDelta delta)
     {
-        // Order matches Submit: Create → Hierarchy → Ops → Destroy.
+        // Order matches Submit: Create �?Hierarchy �?Ops �?Destroy.
         EmitPendingEntitiesToDelta(delta, new PendingBatchView(
             _batchCanceled, _batchHeads, _batchCompCounts,
             _batchComps, _batchBuf, _batchEntities, _pendingBatchCount));
@@ -536,7 +536,7 @@ public sealed class CommandStream : ICommandRecorder
         if (_spareFrozen is { } spare)
         {
             // Steady state: recycle the spare FrozenState. Swap every array/container
-            // so current → frozen (worker reads it) and spare → current (we reset it).
+            // so current �?frozen (worker reads it) and spare �?current (we reset it).
             // No allocation, no Dictionary/HashSet churn.
             _spareFrozen = null;
             frozen = spare;
@@ -615,7 +615,7 @@ public sealed class CommandStream : ICommandRecorder
 
     private void SubmitFromFrozen(FrozenState frozen)
     {
-        // Order matches Submit and BuildDelta: Create → Hierarchy → Ops → Destroy.
+        // Order matches Submit and BuildDelta: Create �?Hierarchy �?Ops �?Destroy.
         for (var i = 0; i < frozen.PendingBatchCount; i++)
         {
             if (frozen.BatchCanceled[i]) continue;
@@ -628,14 +628,14 @@ public sealed class CommandStream : ICommandRecorder
             foreach (var (child, intent) in frozen.HierarchyByChild)
             {
                 if (unavailable != null && unavailable.Contains(child)) continue;
-                if (intent.IsLinked)
+                if (intent.IsAdd)
                 {
                     if (unavailable != null && unavailable.Contains(intent.Parent)) continue;
-                    _world.Link(intent.Parent, child);
+                    _world.AddChild(intent.Parent, child);
                 }
                 else
                 {
-                    _world.Unlink(child);
+                    _world.RemoveChild(child);
                 }
             }
         }
@@ -656,7 +656,7 @@ public sealed class CommandStream : ICommandRecorder
 
     private static FrameDelta BuildFromFrozen(FrozenState frozen)
     {
-        // Order matches Submit: Create → Hierarchy → Ops → Destroy.
+        // Order matches Submit: Create �?Hierarchy �?Ops �?Destroy.
         var delta = new FrameDelta();
 
         EmitPendingEntitiesToDelta(delta, frozen.Pending);
@@ -796,7 +796,7 @@ public sealed class CommandStream : ICommandRecorder
         // Single pass: emit Reserve + Release (cancelled) or Reserve + Create
         // (committed) consecutively for each entity. This preserves temporal
         // ordering where a cancelled entity's id may be recycled by a later
-        // Create within the same frame — the two-pass approach (all Reserves
+        // Create within the same frame �?the two-pass approach (all Reserves
         // before all Releases) breaks this dependency.
         //
         // Placeholder entities (Id < 0) carry deferred creates: they have not
@@ -805,7 +805,7 @@ public sealed class CommandStream : ICommandRecorder
         for (var i = 0; i < pendingBatchCount; i++)
         {
             var entity = batchEntities[i];
-            // Deferred create that was cancelled never allocated a real id — skip it.
+            // Deferred create that was cancelled never allocated a real id �?skip it.
             // Unlike immediate cancels (which emit Reserve+Release below to keep id
             // allocation in lockstep across hosts), deferred cancels consume no id
             // by design: the whole point of deferred is to avoid touching the world
@@ -871,14 +871,14 @@ public sealed class CommandStream : ICommandRecorder
         foreach (var (child, intent) in sorted)
         {
             if (unavailableEntities != null && unavailableEntities.Contains(child)) continue;
-            if (intent.IsLinked)
+            if (intent.IsAdd)
             {
                 if (unavailableEntities != null && unavailableEntities.Contains(intent.Parent)) continue;
-                delta.AddLink(intent.Parent, child);
+                delta.AddAddChild(intent.Parent, child);
             }
             else
             {
-                delta.AddUnlink(child);
+                delta.AddRemoveChild(child);
             }
         }
     }
@@ -1008,7 +1008,7 @@ public sealed class CommandStream : ICommandRecorder
     {
         foreach (var (child, intent) in _hierarchyByChild)
         {
-            if (!intent.IsLinked || intent.Parent != parent) continue;
+            if (!intent.IsAdd || intent.Parent != parent) continue;
             if (!TryGetPendingBatch(child, out _)) continue;
             if (queueCount == queue.Length)
             {
@@ -1231,7 +1231,7 @@ public sealed class CommandStream : ICommandRecorder
                     unsafe { fixed (byte* ptr = &_batchBuf[offset]) archetype.ReadComponentRaw(i, sourceRow, ptr); }
                     CommitBatchComponent(batchIdx, ct, offset, size);
                 }
-                Link(cloneParent, cloneChild);
+                AddChild(cloneParent, cloneChild);
 
                 foreach (var grandChild in _world.Hierarchy.EnumerateChildren(_world, srcChild))
                 {
@@ -1459,7 +1459,7 @@ public sealed class CommandStream : ICommandRecorder
         // we just drop the pending-batch index.
         // Snapshot/relay path (or Submit exception path): batch entities may still
         // be in the reserved state, so we release their ids back to the World's
-        // free list here. Either way Clear is self-sufficient — it does not rely
+        // free list here. Either way Clear is self-sufficient �?it does not rely
         // on the caller having materialized anything.
         for (var i = 0; i < _pendingBatchCount; i++)
         {
@@ -1559,16 +1559,16 @@ public sealed class CommandStream : ICommandRecorder
                     if (resolved.Id >= 0) newChild = resolved;
                 }
                 var newParent = intent.Parent;
-                if (intent.IsLinked && intent.Parent.Id < 0)
+                if (intent.IsAdd && intent.Parent.Id < 0)
                 {
                     var resolved = resolveMap[intent.Parent.Version];
                     if (resolved.Id >= 0) newParent = resolved;
                 }
 
-                if (newChild != child || (intent.IsLinked && newParent != intent.Parent))
+                if (newChild != child || (intent.IsAdd && newParent != intent.Parent))
                 {
                     replacements[repCount++] = new HierarchyReplacement(
-                        child, newChild, intent.IsLinked, newParent);
+                        child, newChild, intent.IsAdd, newParent);
                 }
             }
 
@@ -1576,7 +1576,7 @@ public sealed class CommandStream : ICommandRecorder
             {
                 ref var r = ref replacements[i];
                 _hierarchyByChild.Remove(r.OldChild);
-                if (r.IsLinked)
+                if (r.IsAdd)
                     _hierarchyByChild[r.NewChild] = new HierarchyIntent(true, r.Parent);
                 else
                     _hierarchyByChild[r.NewChild] = new HierarchyIntent(false, default);
@@ -1624,14 +1624,14 @@ public sealed class CommandStream : ICommandRecorder
     {
         public Entity OldChild;
         public Entity NewChild;
-        public bool IsLinked;
+        public bool IsAdd;
         public Entity Parent;
 
-        public HierarchyReplacement(Entity oldChild, Entity newChild, bool isLinked, Entity parent)
+        public HierarchyReplacement(Entity oldChild, Entity newChild, bool isAdd, Entity parent)
         {
             OldChild = oldChild;
             NewChild = newChild;
-            IsLinked = isLinked;
+            IsAdd = isAdd;
             Parent = parent;
         }
     }
@@ -1771,7 +1771,7 @@ public sealed class CommandStream : ICommandRecorder
                             // and AddSetUnsafe call Grow internally, which may
                             // allocate (Array.Resize) and trigger a compacting GC.
                             // Without pinning, the raw pointer from AsPointer would
-                            // dangle across the compaction — same GC hole as the
+                            // dangle across the compaction �?same GC hole as the
                             // original CopyComponent path.
                             fixed (T* pFixed = &_data[i])
                             {
@@ -1806,7 +1806,7 @@ public sealed class CommandStream : ICommandRecorder
         public override void Clear() => _count = 0;
     }
 
-    private readonly record struct HierarchyIntent(bool IsLinked, Entity Parent);
+    private readonly record struct HierarchyIntent(bool IsAdd, Entity Parent);
 
     private struct BatchedComponent
     {

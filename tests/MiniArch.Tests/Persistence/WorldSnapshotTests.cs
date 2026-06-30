@@ -148,8 +148,8 @@ public sealed class WorldSnapshotTests
         var firstChild = world.Create();
         var secondChild = world.Create();
 
-        world.Link(parent, firstChild);
-        world.Link(parent, secondChild);
+        world.AddChild(parent, firstChild);
+        world.AddChild(parent, secondChild);
 
         using var stream = new MemoryStream();
         WorldSnapshot.Save(stream, world);
@@ -172,8 +172,8 @@ public sealed class WorldSnapshotTests
         var child = world.Create();
         var grandChild = world.Create();
 
-        world.Link(root, child);
-        world.Link(child, grandChild);
+        world.AddChild(root, child);
+        world.AddChild(child, grandChild);
 
         using var stream = new MemoryStream();
         WorldSnapshot.Save(stream, world);
@@ -293,7 +293,7 @@ public sealed class WorldSnapshotTests
         var e0 = world.Create(); world.Add(e0, new Position(1, 2));
         var e1 = world.Create(); world.Add(e1, new Velocity(3, 4));
         world.Destroy(e1);
-        world.Link(e0, world.Create(new Health(9)));
+        world.AddChild(e0, world.Create(new Health(9)));
 
         var hashOriginal = world.CanonicalChecksum();
 
@@ -322,10 +322,10 @@ public sealed class WorldSnapshotTests
         b.Create(new Position(1, 2));
 
         // Now diverge their free lists while keeping live state identical.
-        // World A: create id 1 then destroy it  â†’ free list [1(v2)], slot count 2
-        // World B: create ids 1,2 then destroy both â†’ free list [2(v2),1(v2)], slot count 3
+        // World A: create id 1 then destroy it  â†?free list [1(v2)], slot count 2
+        // World B: create ids 1,2 then destroy both â†?free list [2(v2),1(v2)], slot count 3
         // In both worlds the only alive entity is id 0 with Position(1,2), so
-        // live-state hashes must agree â€” but canonical (with free list) must not.
+        // live-state hashes must agree â€?but canonical (with free list) must not.
         var a1 = a.Create(new Velocity(0, 0));
         a.Destroy(a1);
 
@@ -411,7 +411,7 @@ public sealed class WorldSnapshotTests
 
         var parent = world.Create();
         var child = world.Create();
-        world.Link(parent, child);
+        world.AddChild(parent, child);
 
         var checksumPre = world.Checksum();
         var snapshot = world.CaptureState();
@@ -421,7 +421,7 @@ public sealed class WorldSnapshotTests
         world.Destroy(e0);
         world.Add(fresh, new Position(9, 10));
         world.Remove<Velocity>(fresh);
-        world.Unlink(child);
+        world.RemoveChild(child);
         world.Destroy(parent);
 
         world.RestoreState(snapshot);
@@ -471,7 +471,7 @@ public sealed class WorldSnapshotTests
         var world = new World();
         var e0 = world.Create(new Position(1, 2));
         var e1 = world.Create(new Velocity(3, 4));
-        world.Link(e0, e1);
+        world.AddChild(e0, e1);
 
         var s1 = world.CaptureState();
         world.RestoreState(s1);
@@ -516,7 +516,7 @@ public sealed class WorldSnapshotTests
         // Position is 8 bytes; the byte-based segment capacity (2MB/8 = 262144) means
         // auto-promotion would need a huge entity count, so we force chunked explicitly
         // and then grow segments. All entities are created via world.Create so that
-        // _records stays consistent â€” direct arch.AddEntity would bypass the registry.
+        // _records stays consistent â€?direct arch.AddEntity would bypass the registry.
         var world = new World();
         const int EntityCount = 40;
         var entities = new Entity[EntityCount];
@@ -537,12 +537,12 @@ public sealed class WorldSnapshotTests
 
         // Mutate heavily: destroy several entities (triggers cross-segment swap-remove
         // that rewrites segment data), add a brand-new archetype (prediction frame),
-        // and link a parent/child to perturb the hierarchy table.
+        // and AddChild a parent/child to perturb the hierarchy table.
         for (var i = 0; i < EntityCount; i += 5)
             world.Destroy(entities[i]);
         var parent = world.Create(new Velocity(1, 1));
         var child = world.Create(new Velocity(2, 2));
-        world.Link(parent, child);
+        world.AddChild(parent, child);
         world.Create(new Health(7));
 
         world.RestoreState(snapshot);
@@ -572,7 +572,7 @@ public sealed class WorldSnapshotTests
         // new trailing segments. After RestoreState, the archetype must revert to
         // exactly the segment layout captured, with no stale trailing-segment data.
         //
-        // Use a large component so segment capacity (2MB / sizeof(Big)) is small â€”
+        // Use a large component so segment capacity (2MB / sizeof(Big)) is small â€?
         // a modest create burst then forces real GrowChunked during the prediction frame.
         var world = new World();
         var seed = world.Create(new BigPayload(1));
@@ -619,7 +619,7 @@ public sealed class WorldSnapshotTests
         Assert.Equal(2, seen);
     }
 
-    // ~512 bytes per entity â†’ segment capacity â‰ˆ 4096 (2MB / 512). A 5000-create
+    // ~512 bytes per entity â†?segment capacity â‰?4096 (2MB / 512). A 5000-create
     // burst then reliably crosses a segment boundary during the prediction frame.
 #pragma warning disable CS0649 // padding fields intentionally never assigned
     private struct BigPayload

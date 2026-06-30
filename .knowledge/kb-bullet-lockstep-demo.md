@@ -93,7 +93,7 @@ hits 按 `(bulletFiredBy, bulletSpawnFrame, playerHostId)` 排序后应用 damag
 ### 历史/已修复的坑
 
 - **`LockstepSimulator._deltaBuffer` 跨 tick 复用**（Slice 7 引入的 GC 优化）：保存 deltas 数组引用跨 tick 会 alias，所有 entry 最后指向同一帧的 delta。修复：`TickAndSnapshotDeltas` 拷贝数组。Slice 3 和 Slice 9 都踩过。
-- **placeholder seq 重复在 Merge 中**：多个 stream 的 placeholder 都从 seq=0 开始，Merge 后会出现重复 seq。**实际不破坏**，因为 Reserve-Create-Add 块是连续的，map slot 被覆盖时机刚好不冲突。**但有脆弱点**：如果 delta 内有跨块前向引用（如末尾 Link 引用前面的 placeholder），会解析到错的 real id。
+- **placeholder seq 重复在 Merge 中**：多个 stream 的 placeholder 都从 seq=0 开始，Merge 后会出现重复 seq。**实际不破坏**，因为 Reserve-Create-Add 块是连续的，map slot 被覆盖时机刚好不冲突。**但有脆弱点**：如果 delta 内有跨块前向引用（如末尾 AddChild 引用前面的 placeholder），会解析到错的 real id。
 - **Phase A 系统顺序**：clone 上手动跑系统时，必须严格按 `LockstepSimulator.RunSystems` 的顺序，否则与原 world 分叉。Slice 9 Phase A 第一次写错系统顺序导致 clone diverge。
 
 ### 改这里时要特别小心

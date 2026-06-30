@@ -51,7 +51,7 @@ public static class CommandBufferBenchmarkScenarioFactory
         for (var i = 0; i < entityCount; i++)
         {
             var child = world.Create(new BenchmarkPosition(i, i + 1), new BenchmarkVelocity(i + 2, i + 3), new BenchmarkHealth(100 + i));
-            world.Link(parent, child);
+            world.AddChild(parent, child);
             children[i] = child;
         }
 
@@ -132,11 +132,11 @@ public static class CommandBufferBenchmarkScenarioFactory
 
             if ((i & 1) == 0)
             {
-                buffer.Link(transientRoot, child);
+                buffer.AddChild(transientRoot, child);
             }
             else
             {
-                buffer.Unlink(child);
+                buffer.RemoveChild(child);
             }
 
             if ((i & 3) == 0)

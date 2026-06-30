@@ -13,6 +13,6 @@ internal readonly record struct RawComponentCommand(
 
 internal readonly record struct RawRemoveCommand(Entity Entity, ComponentType ComponentType);
 
-internal readonly record struct LinkCommand(Entity Parent, Entity Child);
+internal readonly record struct AddChildCommand(Entity Parent, Entity Child);
 
-internal readonly record struct UnlinkCommand(Entity Child);
+internal readonly record struct UnAddChildCommand(Entity Child);

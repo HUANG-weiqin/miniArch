@@ -26,7 +26,7 @@ public readonly struct ChildrenEnumerable
 
 /// <summary>
 /// Enumerator over live children of an entity. Do not mutate the world
-/// (Link/Unlink/Destroy) while an instance is in use.
+/// (AddChild/RemoveChild/Destroy) while an instance is in use.
 /// </summary>
 public struct ChildrenEnumerator
 {

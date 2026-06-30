@@ -13,13 +13,13 @@ namespace MiniArch;
 /// <b>Threading model</b> (read the following before touching a World from
 /// multiple threads):
 /// <list type="bullet">
-/// <item><b>Structural changes</b> — <see cref="Create"/>, <see cref="Destroy"/>,
+/// <item><b>Structural changes</b> �?<see cref="Create"/>, <see cref="Destroy"/>,
 /// <see cref="Add{T}"/>, <see cref="Set{T}"/>, <see cref="Remove{T}"/>,
-/// <see cref="Link"/>, <see cref="Clone(Entity)"/> — are <b>not</b> thread-safe
+/// <see cref="AddChild"/>, <see cref="Clone(Entity)"/> �?are <b>not</b> thread-safe
 /// and must be issued from a single thread (typically the main game thread)
 /// or deferred through <c>CommandStream</c>.</item>
-/// <item><b>Reads</b> — <see cref="Has{T}"/>, <see cref="Get{T}"/>,
-/// <see cref="TryGet{T}"/>, query iteration via <c>ForEachChunkParallel</c> —
+/// <item><b>Reads</b> �?<see cref="Has{T}"/>, <see cref="Get{T}"/>,
+/// <see cref="TryGet{T}"/>, query iteration via <c>ForEachChunkParallel</c> �?
 /// may run in parallel with other readers, but <b>not</b> concurrent with a
 /// structural change. Snapshot the archetype list (via Query) before
 /// dispatching parallel work.</item>
@@ -34,7 +34,7 @@ public sealed partial class World : IDisposable
 
     private readonly Dictionary<Signature, Archetype> _archetypes = new();
     // Mask-keyed cache for zero-allocation archetype lookup on the Replay path.
-    // Only populated for archetypes whose ComponentMask is canonical — i.e. every
+    // Only populated for archetypes whose ComponentMask is canonical �?i.e. every
     // component id is < 512 (PopCount(mask) == component count). Archetypes with
     // high-id components are intentionally absent from this cache and always go
     // through the Signature-keyed dictionary above, preserving the library's
@@ -47,9 +47,9 @@ public sealed partial class World : IDisposable
     // per-call in steady state.
     private readonly Dictionary<Archetype, int> _replayCreateCounts = new();
 
-    // Placeholder → local real entity mapping for FrameDelta replay.
+    // Placeholder �?local real entity mapping for FrameDelta replay.
     // Indexed by placeholder seq (Entity.Version when Id == -1).
-    // Reused across ReplayCore calls — never allocated per-call in steady state.
+    // Reused across ReplayCore calls �?never allocated per-call in steady state.
     // mapLen resets to 0 at the start of each ReplayCore call to prevent stale
     // mappings from previous frames leaking into the current replay.
     private Entity[] _replayPlaceholderMap = [];
@@ -169,22 +169,22 @@ public sealed partial class World : IDisposable
     internal int ArchetypeCacheGeneration => _createArchetypeCacheGeneration;
 
     /// <summary>
-    /// Links a child to a parent.
+    /// Adds a child to a parent.
     /// </summary>
-    public void Link(Entity parent, Entity child)
+    public void AddChild(Entity parent, Entity child)
     {
         ThrowIfDisposed();
-        _hierarchy.Link(this, parent, child);
+        _hierarchy.AddChild(this, parent, child);
     }
 
     /// <summary>
-    /// Unlinks a child.
+    /// Removes a child.
     /// </summary>
-    public void Unlink(Entity child)
+    public void RemoveChild(Entity child)
     {
         ThrowIfDisposed();
         GetRequiredLocation(child);
-        _hierarchy.Unlink(child);
+        _hierarchy.RemoveChild(child);
     }
 
     /// <summary>
@@ -298,7 +298,7 @@ public sealed partial class World : IDisposable
 
     /// <summary>
     /// Creates a cached <see cref="EntityAccessor"/> for multiple component
-    /// reads/writes on the same entity. The entity→(archetype,chunk,row) lookup
+    /// reads/writes on the same entity. The entity�?archetype,chunk,row) lookup
     /// is performed once; subsequent <see cref="EntityAccessor.Get{T}"/>,
     /// <see cref="EntityAccessor.Set{T}"/>, and <see cref="EntityAccessor.Has{T}"/>
     /// calls on the returned accessor skip the entity lookup entirely.
@@ -322,7 +322,7 @@ public sealed partial class World : IDisposable
     /// <summary>
     /// Deep-clones an entity and its entire child subtree.
     /// All component data is copied into new entities in the same archetypes.
-    /// Parent-child links within the subtree are preserved; the clone root has no parent.
+    /// Parent-child relations within the subtree are preserved; the clone root has no parent.
     /// </summary>
     /// <param name="source">The entity to clone. Must be alive.</param>
     /// <returns>A new entity that is the root of the cloned subtree.</returns>
@@ -359,7 +359,7 @@ public sealed partial class World : IDisposable
                 foreach (var child in _hierarchy.EnumerateChildren(this, work.Source))
                 {
                     var cloneChild = CloneSingle(child);
-                    _hierarchy.Link(this, work.CloneEntity, cloneChild);
+                    _hierarchy.AddChild(this, work.CloneEntity, cloneChild);
                     ArrayPoolUtil.PushPooled(ref stack, ref stackCount, new CloneWork(child, cloneChild));
                 }
             }
@@ -401,7 +401,7 @@ public sealed partial class World : IDisposable
 
     // Populate the mask cache. Only called when an archetype is freshly created,
     // so the single dictionary write is amortized across all subsequent lookups.
-    // High-id archetypes (mask not canonical) are intentionally left out — see
+    // High-id archetypes (mask not canonical) are intentionally left out �?see
     // the comment on _archetypeByMask.
     private void CacheArchetypeByMaskIfCanonical(Signature signature, Archetype archetype)
     {
@@ -412,7 +412,7 @@ public sealed partial class World : IDisposable
     }
 
     // A ComponentMask is "canonical" for a signature when every component id is
-    // representable in the 512-bit mask — i.e. the popcount of the mask equals
+    // representable in the 512-bit mask �?i.e. the popcount of the mask equals
     // the component count. If any id is >= 512 its bit is dropped from the mask
     // and popcount would be smaller than the actual count, so the mask is not a
     // unique key for that set.
@@ -436,7 +436,7 @@ public sealed partial class World : IDisposable
     /// </summary>
     /// <remarks>
     /// <b>Caller contract:</b> <paramref name="types"/> must contain only ids
-    /// &lt; 512 — i.e. the caller must have verified the mask is canonical.
+    /// &lt; 512 �?i.e. the caller must have verified the mask is canonical.
     /// Violating this would cause two different high-id signatures to collide
     /// on the same mask and silently return the wrong archetype.
     /// </remarks>
@@ -480,13 +480,13 @@ public sealed partial class World : IDisposable
 
     /// <summary>
     /// Replays a frame delta into this world: reserves entities, materializes created entities,
-    /// applies hierarchy link/unlink, add/set/remove components, and destroys entities in standard order.
+    /// applies hierarchy AddChild/RemoveChild, add/set/remove components, and destroys entities in standard order.
     /// </summary>
     /// <remarks>
     /// Supports both placeholder deltas (<see cref="CommandStream.Snapshot"/>) and real-id deltas
     /// (<see cref="CommandStream.SubmitAndSnapshotAsync"/>). Placeholder entities (<c>Id == -1</c>)
     /// allocate fresh local ids via <c>ReserveDeferredEntityBatch</c> and are mapped through a
-    /// per-replay <c>seq → local real</c> table. Real-id entities go through
+    /// per-replay <c>seq �?local real</c> table. Real-id entities go through
     /// <see cref="EnsureReplayReservation"/> to verify allocator synchronization.
     /// </remarks>
     public void Replay(FrameDelta delta) => ReplayCore(delta);
@@ -505,7 +505,7 @@ public sealed partial class World : IDisposable
 
         // Pin the backing buffer once for the entire replay. Every Create op
         // reads component data from this buffer via direct pointer arithmetic,
-        // and Add/Set ops do the same — sharing one pin avoids per-op fixed
+        // and Add/Set ops do the same �?sharing one pin avoids per-op fixed
         // overhead.
         fixed (byte* bufPtr = delta._buffer)
         {
@@ -539,16 +539,16 @@ public sealed partial class World : IDisposable
                         ReplayCreateOpResolved(ResolveReplayEntity(decoder.Entity, map, mapLen), ref decoder, bufPtr);
                         break;
 
-                    case DeltaOpKind.Link:
+                    case DeltaOpKind.AddChild:
                     {
                         var child = ResolveReplayEntity(decoder.Entity, map, mapLen);
                         var parent = ResolveReplayEntity(decoder.ReadExtraEntity(), map, mapLen);
-                        Link(parent, child);
+                        AddChild(parent, child);
                         break;
                     }
 
-                    case DeltaOpKind.Unlink:
-                        Unlink(ResolveReplayEntity(decoder.Entity, map, mapLen));
+                    case DeltaOpKind.RemoveChild:
+                        RemoveChild(ResolveReplayEntity(decoder.Entity, map, mapLen));
                         break;
 
                     case DeltaOpKind.Add:
@@ -625,7 +625,7 @@ public sealed partial class World : IDisposable
     /// The pre-scan computes a ComponentMask per Create payload to identify the
     /// target archetype without allocating a Signature. Creates with non-canonical
     /// masks (any component id &gt;= 512) are skipped here and rely on the
-    /// main pass's natural growth — they are rare and preserve the library's
+    /// main pass's natural growth �?they are rare and preserve the library's
     /// support for arbitrary component id ranges.
     /// </remarks>
     private void PreScanForCapacity(FrameDelta delta)
@@ -639,7 +639,7 @@ public sealed partial class World : IDisposable
             var id = scanner.Entity.Id;
             // Placeholder entities (Id < 0) have not been allocated yet;
             // their real ids are assigned during the main replay pass.
-            // Skip them for maxEntityId tracking — the entity record array
+            // Skip them for maxEntityId tracking �?the entity record array
             // will grow on-demand inside ReserveDeferredEntityBatch.
             if (id >= 0 && id > maxEntityId) maxEntityId = id;
 
@@ -672,7 +672,7 @@ public sealed partial class World : IDisposable
                     break;
                 }
 
-                case DeltaOpKind.Link:
+                case DeltaOpKind.AddChild:
                 {
                     var parent = scanner.ReadExtraEntity();
                     if (parent.Id >= 0 && parent.Id > maxEntityId) maxEntityId = parent.Id;
@@ -690,7 +690,7 @@ public sealed partial class World : IDisposable
                     scanner.ReadComponentType();
                     break;
 
-                // Reserve / Release / Unlink / Destroy carry no payload beyond
+                // Reserve / Release / RemoveChild / Destroy carry no payload beyond
                 // the entity that MoveNext has already consumed.
             }
         }
@@ -724,7 +724,7 @@ public sealed partial class World : IDisposable
         }
 
         // ComponentType is a 4-byte struct, so 32 entries cost 128 bytes of
-        // stack per span (256 bytes total) — well within limits. Entities with
+        // stack per span (256 bytes total) �?well within limits. Entities with
         // more components spill to ArrayPool, which is amortized zero-allocation.
         const int MaxStackComponents = 32;
 
@@ -843,7 +843,7 @@ public sealed partial class World : IDisposable
 
     /// <summary>
     /// Materializes a reserved entity writing component data from a raw byte buffer.
-    /// Avoids per-type store lookups — caller provides direct pointers.
+    /// Avoids per-type store lookups �?caller provides direct pointers.
     /// </summary>
     internal unsafe void MaterializeReservedEntityRaw(
         Entity entity, Archetype archetype,
@@ -909,7 +909,7 @@ public sealed partial class World : IDisposable
     /// Captures the world's current mutable state into an opaque handle
     /// for later rollback via <see cref="RestoreState"/>.
     /// <para/>
-    /// The snapshot is recycled after restore — in steady state (warm cache)
+    /// The snapshot is recycled after restore �?in steady state (warm cache)
     /// this method allocates zero GC memory. Suitable for GGPO-style 60fps
     /// frame save/restore cycles at &lt;1000 entities.
     /// </summary>

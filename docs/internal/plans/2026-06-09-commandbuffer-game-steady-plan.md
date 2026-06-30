@@ -89,7 +89,7 @@
 - Create: `.knowledge/kb-commandbuffer-game-perf.md`
 
 **Steps:**
-1. Add a `CommandBufferGame.Perf` module row and quick-entry link.
+1. Add a `CommandBufferGame.Perf` module row and quick-entry AddChild.
 2. Create a knowledge page using `.knowledge/_template.md` structure.
 3. Document purpose, fairness rules, command, and pitfalls.
 4. Verify `updated` is today's date.

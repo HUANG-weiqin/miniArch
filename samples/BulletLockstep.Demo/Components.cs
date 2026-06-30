@@ -47,7 +47,7 @@ public readonly record struct FiredBy(int HostId);
 public readonly record struct BulletTag();
 public readonly record struct Damage(int Amount);
 
-// Homing bullet target. Stores the logical PlayerTag.HostId of the prey —
+// Homing bullet target. Stores the logical PlayerTag.HostId of the prey �?
 // never an entity reference (placeholder refs are single-frame, kb 决策 #3).
 // The steer system resolves HostId -> player Position via world.Query every
 // frame, so any host can replay identically without cross-host id mapping.
@@ -55,7 +55,7 @@ public readonly record struct Target(int HostId);
 public readonly record struct TurnRate(int MilliPixPerFrameSq);
 
 // ── Boss hierarchy (Slice 5) ──────────────────────────────────────────
-// Boss + WeakPoint form a parent/child hierarchy via World.Link. Destroying
+// Boss + WeakPoint form a parent/child hierarchy via World.AddChild. Destroying
 // the Boss cascades to all linked WeakPoints automatically.
 
 public readonly record struct BossTag();

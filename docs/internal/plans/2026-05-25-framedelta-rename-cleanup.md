@@ -20,8 +20,8 @@ From `FrameCommands.cs` (entire file deleted, some types moved):
 - `ReverseFrameEntity` record struct → DELETED
 - `FrameEntityComponentCommand` record struct → DELETED
 - `FrameEntityRemoveCommand` record struct → DELETED
-- `FrameLinkCommand` → MOVE to FrameDelta.cs
-- `FrameUnlinkCommand` → MOVE to FrameDelta.cs
+- `FrameAddChildCommand` → MOVE to FrameDelta.cs
+- `FrameUnAddChildCommand` → MOVE to FrameDelta.cs
 - `RecordedHierarchyCommand` → MOVE to FrameDelta.cs (internal)
 - `RecordedRawCommand` → MOVE to FrameDelta.cs (internal)
 - `RecordedRemoveCommand` → MOVE to FrameDelta.cs (internal)
@@ -100,8 +100,8 @@ public sealed class FrameDelta
 {
     public List<Entity> ReservedEntities { get; } = new(4);
     public List<CompiledRawCreatedEntity> CreatedEntities { get; } = new(4);
-    public List<FrameLinkCommand> LinkCommands { get; } = new(4);
-    public List<FrameUnlinkCommand> UnlinkCommands { get; } = new(4);
+    public List<FrameAddChildCommand> AddChildCommands { get; } = new(4);
+    public List<FrameUnAddChildCommand> UnAddChildCommands { get; } = new(4);
     public List<CompiledRawComponentCommand> AddCommands { get; } = new(4);
     public List<CompiledRawComponentCommand> SetCommands { get; } = new(4);
     public List<CompiledRemoveCommand> RemoveCommands { get; } = new(4);
@@ -112,8 +112,8 @@ public sealed class FrameDelta
     {
         ReservedEntities.Clear();
         CreatedEntities.Clear();
-        LinkCommands.Clear();
-        UnlinkCommands.Clear();
+        AddChildCommands.Clear();
+        UnAddChildCommands.Clear();
         AddCommands.Clear();
         SetCommands.Clear();
         RemoveCommands.Clear();
@@ -124,8 +124,8 @@ public sealed class FrameDelta
     public bool IsEmpty =>
         ReservedEntities.Count == 0 &&
         CreatedEntities.Count == 0 &&
-        LinkCommands.Count == 0 &&
-        UnlinkCommands.Count == 0 &&
+        AddChildCommands.Count == 0 &&
+        UnAddChildCommands.Count == 0 &&
         AddCommands.Count == 0 &&
         SetCommands.Count == 0 &&
         RemoveCommands.Count == 0 &&
@@ -156,9 +156,9 @@ public readonly record struct CompiledRawComponentCommand(
 
 public readonly record struct CompiledRemoveCommand(Entity Entity, int ComponentTypeId, Type RuntimeType, ComponentType ComponentType);
 
-public readonly record struct FrameLinkCommand(Entity Parent, Entity Child);
+public readonly record struct FrameAddChildCommand(Entity Parent, Entity Child);
 
-public readonly record struct FrameUnlinkCommand(Entity Child);
+public readonly record struct FrameUnAddChildCommand(Entity Child);
 
 internal readonly record struct RecordedHierarchyCommand(Entity Child, Entity Parent, bool IsLink);
 

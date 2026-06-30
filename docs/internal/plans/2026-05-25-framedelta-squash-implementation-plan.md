@@ -34,8 +34,8 @@
 
 ### Hierarchy
 
-- Link(P,C) + Unlink(C) → **cancel**
-- Unlink(C) + Link(P,C) → keep both (parent may differ)
+- AddChild(P,C) + RemoveChild(C) → **cancel**
+- RemoveChild(C) + AddChild(P,C) → keep both (parent may differ)
 
 ### Created component folding
 
@@ -246,11 +246,11 @@ public void Squash_Link_then_Unlink_same_child_cancels()
     var child = world.Create();
 
     var buffer1 = new CommandBuffer(world);
-    buffer1.Link(parent, child);
+    buffer1.AddChild(parent, child);
     var delta1 = buffer1.Compile();
 
     var buffer2 = new CommandBuffer(world);
-    buffer2.Unlink(child);
+    buffer2.RemoveChild(child);
     var delta2 = buffer2.Compile();
 
     var merged = new FrameDelta();
@@ -258,8 +258,8 @@ public void Squash_Link_then_Unlink_same_child_cancels()
     merged.Append(delta2);
     merged.Squash();
 
-    Assert.Empty(merged.LinkCommands);
-    Assert.Empty(merged.UnlinkCommands);
+    Assert.Empty(merged.AddChildCommands);
+    Assert.Empty(merged.UnAddChildCommands);
 }
 
 [Fact]
@@ -360,8 +360,8 @@ public void Merge_is_equivalent_to_append_then_squash()
     Assert.Equal(appendSquash.RemoveCommands.Count, merged.RemoveCommands.Count);
     Assert.Equal(appendSquash.DestroyedEntities.Count, merged.DestroyedEntities.Count);
     Assert.Equal(appendSquash.ReleasedEntities.Count, merged.ReleasedEntities.Count);
-    Assert.Equal(appendSquash.LinkCommands.Count, merged.LinkCommands.Count);
-    Assert.Equal(appendSquash.UnlinkCommands.Count, merged.UnlinkCommands.Count);
+    Assert.Equal(appendSquash.AddChildCommands.Count, merged.AddChildCommands.Count);
+    Assert.Equal(appendSquash.UnAddChildCommands.Count, merged.UnAddChildCommands.Count);
 
     var replayWorld = new World();
     var replayEntity = replayWorld.Create(new Position(10, 20));
@@ -415,7 +415,7 @@ private class SquashEntityState
     public Dictionary<int, RawComponentValue>? CreatedComponents;
     public readonly Dictionary<int, ComponentNetAction> ComponentActions = new();
     public bool HasHierarchyChange;
-    public bool NetIsLinked;
+    public bool NetIsAdd;
     public Entity NetLinkParent;
 }
 ```
@@ -429,13 +429,13 @@ The algorithm:
 3. For CreatedEntities: copy Components into mutable dictionary
 4. For DestroyedEntities: set flag
 5. For AddCommands/SetCommands/RemoveCommands: fold into ComponentActions per (Entity, ComponentTypeId) using the state machine rules
-6. For LinkCommands/UnlinkCommands: last-write-wins per child entity
+6. For AddChildCommands/UnAddChildCommands: last-write-wins per child entity
 7. Clear all lists, then rebuild from net state:
    - Create+Destroy → emit Reserved+Released only
    - Reserve+Release (no Create) → skip
    - IsCreated: fold ComponentActions into CreatedComponents, rebuild CreatedEntity with `null` Signature
    - !IsCreated: emit component commands from ComponentActions (respecting kind: Add→AddCommands, Set→SetCommands, Remove→RemoveCommands)
-   - Hierarchy: emit Link/Unlink from net state
+   - Hierarchy: emit AddChild/RemoveChild from net state
    - Emit DestroyedEntities for non-created destroyed entities
 
 Key folding logic:

@@ -11,8 +11,8 @@ namespace MiniArch.Core;
 /// <para>
 /// <b>Two entity-id modes:</b> a <c>FrameDelta</c> can carry either
 /// <b>placeholder</b> entities (<c>Entity(-1, seq)</c>) or <b>real</b>
-/// entities. The wire format is identical â€” both encode entity id and
-/// version as signed LEB128 varints â€” so the consumer must know which
+/// entities. The wire format is identical â€?both encode entity id and
+/// version as signed LEB128 varints â€?so the consumer must know which
 /// mode to expect.
 /// </para>
 /// <list type="bullet">
@@ -56,7 +56,7 @@ public sealed class FrameDelta
 
     /// <summary>
     /// Exposes the packed buffer for zero-copy transmission.
-    /// The returned span is the wire format â€” send it as-is over the network.
+    /// The returned span is the wire format â€?send it as-is over the network.
     /// </summary>
     /// <remarks>
     /// <b>Cross-process contract:</b> the wire format encodes
@@ -76,7 +76,7 @@ public sealed class FrameDelta
     /// </summary>
     /// <remarks>
     /// See <see cref="AsSpan"/> for the cross-process
-    /// <see cref="ComponentRegistry"/> synchronization contract â€” the same
+    /// <see cref="ComponentRegistry"/> synchronization contract â€?the same
     /// constraint applies on receive.
     /// </remarks>
     public static FrameDelta Deserialize(ReadOnlySpan<byte> wire)
@@ -101,7 +101,7 @@ public sealed class FrameDelta
                 case DeltaOpKind.Create:
                     decoder.SkipCreatePayload();
                     break;
-                case DeltaOpKind.Link:
+                case DeltaOpKind.AddChild:
                     decoder.ReadExtraEntity();
                     break;
             }
@@ -205,17 +205,17 @@ public sealed class FrameDelta
         _opCount++;
     }
 
-    internal void AddLink(Entity parent, Entity child)
+    internal void AddAddChild(Entity parent, Entity child)
     {
-        WriteTag(DeltaOpKind.Link);
+        WriteTag(DeltaOpKind.AddChild);
         WriteEntity(child);
         WriteEntity(parent);
         _opCount++;
     }
 
-    internal void AddUnlink(Entity child)
+    internal void AddRemoveChild(Entity child)
     {
-        WriteTag(DeltaOpKind.Unlink);
+        WriteTag(DeltaOpKind.RemoveChild);
         WriteEntity(child);
         _opCount++;
     }
@@ -341,8 +341,8 @@ public sealed class FrameDelta
         }
 
         /// <summary>
-        /// Reads the extra entity (Link parent) from the buffer.
-        /// Only valid when <see cref="Kind"/> is <see cref="DeltaOpKind.Link"/>.
+        /// Reads the extra entity (AddChild parent) from the buffer.
+        /// Only valid when <see cref="Kind"/> is <see cref="DeltaOpKind.AddChild"/>.
         /// </summary>
         public Entity ReadExtraEntity()
         {
@@ -435,7 +435,7 @@ public sealed class FrameDelta
 
     /// <summary>
     /// Checks whether this delta references <paramref name="entity"/>.
-    /// O(n) linear scan over every operation â€” use for debugging only, not in hot paths.
+    /// O(n) linear scan over every operation â€?use for debugging only, not in hot paths.
     /// </summary>
     public bool HasEntity(Entity entity)
     {
@@ -445,7 +445,7 @@ public sealed class FrameDelta
             if (decoder.Entity.Equals(entity)) return true;
             switch (decoder.Kind)
             {
-                case DeltaOpKind.Link:
+                case DeltaOpKind.AddChild:
                     if (decoder.ReadExtraEntity().Equals(entity)) return true;
                     break;
                 case DeltaOpKind.Add:
@@ -460,7 +460,7 @@ public sealed class FrameDelta
                     break;
                 case DeltaOpKind.Reserve:
                 case DeltaOpKind.Release:
-                case DeltaOpKind.Unlink:
+                case DeltaOpKind.RemoveChild:
                 case DeltaOpKind.Destroy:
                     // No extra payload beyond the entity read by MoveNext.
                     break;
@@ -479,7 +479,7 @@ public sealed class FrameDelta
     /// <summary>
     /// Merges two deltas in temporal order. Operations from <paramref name="a"/>
     /// appear before those from <paramref name="b"/>, preserving the original
-    /// per-delta temporal order. No folding or squashing is performed â€”
+    /// per-delta temporal order. No folding or squashing is performed â€?
     /// the resulting byte stream is a simple concatenation.
     /// </summary>
     /// <remarks>
@@ -498,7 +498,7 @@ public sealed class FrameDelta
     /// counter at 0, so two independent streams both emit
     /// <c>Reserve(seq=0)/Create(seq=0)</c>. During replay
     /// (<see cref="World.Replay"/>) a single per-replay map[seq]â†’local id is
-    /// used, and the second <c>Reserve</c> overwrites the first's entry â€” so
+    /// used, and the second <c>Reserve</c> overwrites the first's entry â€?so
     /// any later op that references the first stream's placeholder resolves to
     /// the wrong entity. The canonical lockstep pattern replays each peer's
     /// placeholder delta as a separate <see cref="World.Replay"/> call (which
@@ -531,7 +531,7 @@ public sealed class FrameDelta
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int VarintSize(int value)
     {
-        if (value < 0) return 5; // negative â†’ bit 31 set, always 5 bytes
+        if (value < 0) return 5; // negative â†?bit 31 set, always 5 bytes
         if (value < 128) return 1;
         if (value < 16384) return 2;
         if (value < 2097152) return 3;
@@ -561,8 +561,8 @@ internal enum DeltaOpKind : byte
     Reserve = 0x01,
     Release = 0x02,
     Create = 0x03,
-    Link = 0x04,
-    Unlink = 0x05,
+    AddChild = 0x04,
+    RemoveChild = 0x05,
     Add = 0x06,
     Set = 0x07,
     Remove = 0x08,

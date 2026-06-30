@@ -77,7 +77,7 @@ updated: 2026-06-29
 - **每帧 `mapLen = 0` 重置**：防止上一帧的 stale mapping 泄漏到当前帧。`EnsurePlaceholderMap` 在首次 Reserve 时重新初始化所有 slot 为 `Entity(-1, -1)` sentinel
 - `ResolveReplayEntity(wireEntity, map, mapLen)`：`Id >= 0` 直接用（real-id delta）；`Id < 0` 查 map + bounds check（placeholder delta）
 - `Reserve` op with `Id < 0`：`ReserveDeferredEntityBatch()` 分配 local id + 写入 map
-- 所有其他 op（Create/Add/Set/Link/Destroy/...）的 entity 参数都走 `ResolveReplayEntity`
+- 所有其他 op（Create/Add/Set/AddChild/Destroy/...）的 entity 参数都走 `ResolveReplayEntity`
 - `PreScanForCapacity` 跳过 placeholder entity（`Id < 0`）的 `maxEntityId` 追踪——它们的 real id 在 main pass 才分配
 
 ### 历史 commit（已合入 main）

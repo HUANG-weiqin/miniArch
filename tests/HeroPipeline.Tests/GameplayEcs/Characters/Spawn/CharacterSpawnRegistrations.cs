@@ -74,6 +74,6 @@ public static class CharacterSpawnRegistrations
         context.Commands.Add(action, new ActionRuleId(ruleId));
         context.Commands.Add(action, new ActionPointCostValue(1));
 
-        context.Commands.Link(entity, action);
+        context.Commands.AddChild(entity, action);
     }
 }

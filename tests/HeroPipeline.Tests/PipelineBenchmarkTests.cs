@@ -26,7 +26,7 @@ public sealed class PipelineBenchmarkTests
     [Trait("Category", "Benchmark")]
     public void Benchmark_Movement_20Seconds()
     {
-        // Movement: create request â†’ move effect â†’ position modifier
+        // Movement: create request â†?move effect â†?position modifier
         CoreTestFixture core = new();
         _ = new CharacterTestFixture(core);
 
@@ -57,7 +57,7 @@ public sealed class PipelineBenchmarkTests
     [Trait("Category", "Benchmark")]
     public void Benchmark_SimpleAttack_20Seconds()
     {
-        // Simple attack: create request â†’ damage â†’ modifier (no trigger)
+        // Simple attack: create request â†?damage â†?modifier (no trigger)
         CoreTestFixture core = new();
         _ = new CharacterTestFixture(core);
 
@@ -95,7 +95,7 @@ public sealed class PipelineBenchmarkTests
     [Trait("Category", "Benchmark")]
     public void Benchmark_AttackWithTrigger_20Seconds()
     {
-        // Full pipeline: attack â†’ damage â†’ trigger â†’ armor gain
+        // Full pipeline: attack â†?damage â†?trigger â†?armor gain
         // Uses a card with built-in trigger markers (no manual observer needed)
         CoreTestFixture core = new();
         CharacterTestFixture charFixture = new(core);
@@ -125,7 +125,7 @@ public sealed class PipelineBenchmarkTests
             new CardOrderValue(0),
             new TriggerCondition(TriggerIds.DamageDealtBySelf),
             new TriggerAction(TriggerIds.GainArmorFromDamage));
-        runtime.World.Link(player, triggerCard);
+        runtime.World.AddChild(player, triggerCard);
 
         FrameView frame = runtime.CurrentFrame;
         MiniArch.Entity action = FindActionChild(runtime, frame, player, CharacterActionKinds.Attack);
@@ -150,7 +150,7 @@ public sealed class PipelineBenchmarkTests
     public void Benchmark_FullCardPlayWithCollision_20Seconds()
     {
         // Full pipeline with collision detection:
-        // play card â†’ action dispatch â†’ attack â†’ collision scan â†’ damage â†’ trigger â†’ armor
+        // play card â†?action dispatch â†?attack â†?collision scan â†?damage â†?trigger â†?armor
         CoreTestFixture core = new(CreateMergedSlotPorts());
         CharacterTestFixture charFixture = new(core);
         CardTestFixture cardFixture = new(core);
@@ -190,7 +190,7 @@ public sealed class PipelineBenchmarkTests
             new CardOrderValue(0),
             new TriggerCondition(TriggerIds.DamageDealtBySelf),
             new TriggerAction(TriggerIds.GainArmorFromDamage));
-        runtime.World.Link(player, triggerCard);
+        runtime.World.AddChild(player, triggerCard);
         MiniArch.Entity context = TurnSerialBootstrap.CreateContext(runtime);
         TurnSerialBootstrap.Activate(runtime, context, player);
 
@@ -206,14 +206,14 @@ public sealed class PipelineBenchmarkTests
         }
         sw.Stop();
 
-        Report("Full Card Play with Collision (play card â†’ attack â†’ collision â†’ damage â†’ trigger â†’ armor)", sw, ticks);
+        Report("Full Card Play with Collision (play card â†?attack â†?collision â†?damage â†?trigger â†?armor)", sw, ticks);
     }
 
     [Fact]
     [Trait("Category", "Benchmark")]
     public void Benchmark_FullCardPlayToArmor_20Seconds()
     {
-        // Most complex: play trigger card â†’ action dispatch â†’ attack â†’ damage â†’ trigger â†’ armor
+        // Most complex: play trigger card â†?action dispatch â†?attack â†?damage â†?trigger â†?armor
         CoreTestFixture core = new(CreateMergedSlotPorts());
         CharacterTestFixture charFixture = new(core);
         CardTestFixture cardFixture = new(core);
@@ -243,7 +243,7 @@ public sealed class PipelineBenchmarkTests
             new CardOrderValue(0),
             new TriggerCondition(TriggerIds.DamageDealtBySelf),
             new TriggerAction(TriggerIds.GainArmorFromDamage));
-        runtime.World.Link(player, triggerCard);
+        runtime.World.AddChild(player, triggerCard);
         MiniArch.Entity context = TurnSerialBootstrap.CreateContext(runtime);
         TurnSerialBootstrap.Activate(runtime, context, player);
 
@@ -259,7 +259,7 @@ public sealed class PipelineBenchmarkTests
         }
         sw.Stop();
 
-        Report("Full Card Play (play card â†’ attack â†’ trigger â†’ armor)", sw, ticks);
+        Report("Full Card Play (play card â†?attack â†?trigger â†?armor)", sw, ticks);
     }
 
     private static void ExecuteMoveCycle(

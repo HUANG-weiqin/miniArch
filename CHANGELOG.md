@@ -12,6 +12,6 @@
 - `World.Clone()` — deep copy for rollback checkpoints
 - `WorldSnapshot.Save/Load` — full binary serialization
 - `SubmitAndSnapshotAsync()` — pipelined submit + delta building
-- Hierarchy: `Link` / `Unlink` with cascade destroy
+- Hierarchy: `AddChild` / `RemoveChild` with cascade destroy
 - Deterministic entity ID allocation with LIFO recycling
 - 1000-frame fuzz-tested cross-world replay

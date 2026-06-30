@@ -54,12 +54,12 @@
 
 ## Slice 5 — Hierarchy 与 Boss
 
-**目标**：覆盖 Link/Unlink + cascade destroy + 复杂状态机 + WithAny 查询。
+**目标**：覆盖 AddChild/RemoveChild + cascade destroy + 复杂状态机 + WithAny 查询。
 
 ### Task 5.1 — Boss 与 WeakPoint 组件
 - `Components.cs` 加：`BossTag`、`AIPattern(int Id, int Phase)`、`WeakPointTag`、`LocalOffset(int Dx, int Dy)`
 - authority host（HostId=0）创建 1 个 Boss + 5 个 WeakPoint
-- 用 `world.Link(boss, weakpoint)` 建立 5 个父子关系
+- 用 `world.AddChild(boss, weakpoint)` 建立 5 个父子关系
 
 ### Task 5.2 — Boss AI 状态机系统
 - `Systems/BossAISystem.cs`（新）：query BossTag + AIPattern，按 frame 推进 phase
@@ -73,8 +73,8 @@
 - 验证：HomingBullet 与 BasicBullet 共存，WithAny 过滤命中正确
 
 ### Task 5.4 — Hierarchy delta 路径
-- 在 `LockstepHost.RecordFrame` 里加 1 个 Link op（如道具挂到玩家），Snapshot 输出 Link delta
-- 验证：placeholder Link 在所有 host replay 后都建立正确父子关系
+- 在 `LockstepHost.RecordFrame` 里加 1 个 AddChild op（如道具挂到玩家），Snapshot 输出 AddChild delta
+- 验证：placeholder AddChild 在所有 host replay 后都建立正确父子关系
 
 ### Task 5.5 — Cascade destroy
 - Boss 死亡（Health <= 0）：`world.Destroy(boss)` → 库自动 cascade 销毁 5 个 WeakPoint
@@ -82,7 +82,7 @@
 
 **Slice 5 完成条件**：
 - [ ] Smoke/Standard 全 PASS
-- [ ] Link/Unlink 在 record 和直接调用两条路径都走过
+- [ ] AddChild/RemoveChild 在 record 和直接调用两条路径都走过
 - [ ] cascade destroy 触发 ≥ 5 个子节点同时消失
 - [ ] WithAny 查询至少有 1 处真实使用
 

@@ -43,7 +43,7 @@ public static class DeckBuilder
                 context.Commands.Add(card, new CardTraitFinale());
             }
 
-            context.Commands.Link(owner, card);
+            context.Commands.AddChild(owner, card);
         }
     }
 }

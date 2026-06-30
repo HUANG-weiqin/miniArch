@@ -22,9 +22,9 @@ public sealed class FrameDeltaDeterminismTests
     private readonly record struct Velocity(int X, int Y);
     private readonly record struct Health(int Value);
 
-    // ═══════════════════════════════════════════════════════════
-    // Core determinism: same deltas → identical worlds
-    // ═══════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════�?
+    // Core determinism: same deltas �?identical worlds
+    // ══════════════════════════════════════════════════════════�?
 
     [Fact]
     public void Empty_delta_sequence_keeps_both_worlds_empty()
@@ -86,9 +86,9 @@ public sealed class FrameDeltaDeterminismTests
             AssertIdentical(replicas[0], replicas[i], $"replica[{i}] vs replica[0]");
     }
 
-    // ═══════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════�?
     // Targeted scenarios
-    // ═══════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════�?
 
     [Fact]
     public void Determinism_survives_id_recycling()
@@ -140,16 +140,16 @@ public sealed class FrameDeltaDeterminismTests
         var a = stream.Create(); stream.Add(a, new Position(1, 1));
         var b = stream.Create(); stream.Add(b, new Position(2, 2));
         var c = stream.Create(); stream.Add(c, new Position(3, 3));
-        stream.Link(a, b);
-        stream.Link(b, c);
+        stream.AddChild(a, b);
+        stream.AddChild(b, c);
         deltas.Add(stream.Snapshot()); stream.Submit();
 
-        // Frame 2: restructure A→C, A→D, unlink B
+        // Frame 2: restructure A→C, A→D, RemoveChild B
         var d = stream.Create(); stream.Add(d, new Position(4, 4));
-        stream.Unlink(b);
-        stream.Unlink(c);
-        stream.Link(a, c);
-        stream.Link(a, d);
+        stream.RemoveChild(b);
+        stream.RemoveChild(c);
+        stream.AddChild(a, c);
+        stream.AddChild(a, d);
         deltas.Add(stream.Snapshot()); stream.Submit();
 
         // Frame 3: destroy leaf B, its slot frees
@@ -182,8 +182,8 @@ public sealed class FrameDeltaDeterminismTests
         var parent = stream.Create(); stream.Add(parent, new Position(1, 2));
         var child1 = stream.Create(); stream.Add(child1, new Velocity(3, 4));
         var child2 = stream.Create(); stream.Add(child2, new Health(100));
-        stream.Link(parent, child1);
-        stream.Link(parent, child2);
+        stream.AddChild(parent, child1);
+        stream.AddChild(parent, child2);
         deltas.Add(stream.Snapshot()); stream.Submit();
 
         // Frame 1: clone parent (deep, includes children)
@@ -253,9 +253,9 @@ public sealed class FrameDeltaDeterminismTests
         AssertIdentical(source, replica1, "source vs replica after batch spawn");
     }
 
-    // ═══════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════�?
     // Safety net: divergent target world must reject replay
-    // ═══════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════�?
 
     [Fact]
     public void Replay_into_world_with_occupied_target_slot_throws()
@@ -301,9 +301,9 @@ public sealed class FrameDeltaDeterminismTests
         Assert.Throws<InvalidOperationException>(() => replica.Replay(deltas[2]));
     }
 
-    // ═══════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════�?
     // Scenario builder
-    // ═══════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════�?
 
     /// <summary>
     /// Builds a multi-frame scenario that exercises every FrameDelta command
@@ -322,8 +322,8 @@ public sealed class FrameDeltaDeterminismTests
         var b = stream.Create(); stream.Add(b, new Position(3, 4)); stream.Add(b, new Velocity(5, 6));
         var c = stream.Create(); stream.Add(c, new Health(50));
         var d = stream.Create(); stream.Add(d, new Health(100));
-        stream.Link(a, b);
-        stream.Link(a, c);
+        stream.AddChild(a, b);
+        stream.AddChild(a, c);
         deltas.Add(stream.Snapshot()); stream.Submit();
 
         // Frame 2: modify existing, create new
@@ -333,10 +333,10 @@ public sealed class FrameDeltaDeterminismTests
         var e = stream.Create(); stream.Add(e, new Position(50, 60));
         deltas.Add(stream.Snapshot()); stream.Submit();
 
-        // Frame 3: component add (no Remove+Add same-type), create new, link
+        // Frame 3: component add (no Remove+Add same-type), create new, AddChild
         stream.Add(d, new Position(55, 66));
         var f = stream.Create(); stream.Add(f, new Health(1));
-        stream.Link(a, f);
+        stream.AddChild(a, f);
         deltas.Add(stream.Snapshot()); stream.Submit();
 
         // Frame 4: destroy, add unrelated type, set existing
@@ -348,15 +348,15 @@ public sealed class FrameDeltaDeterminismTests
 
         // Frame 5: recycle destroyed id (b's slot)
         var recycled = stream.Create(); stream.Add(recycled, new Health(7));
-        stream.Link(a, recycled);
+        stream.AddChild(a, recycled);
         deltas.Add(stream.Snapshot()); stream.Submit();
 
         return (source, deltas);
     }
 
-    // ═══════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════�?
     // Hash-based state comparison
-    // ═══════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════�?
 
     private static void AssertIdentical(World a, World b, string context)
     {
@@ -387,9 +387,9 @@ public sealed class FrameDeltaDeterminismTests
         return Convert.ToHexString(SHA256.HashData(span));
     }
 
-    // ═══════════════════════════════════════════════════════════
-    // Serialization round-trip: AsSpan → Deserialize → Replay
-    // ═══════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════�?
+    // Serialization round-trip: AsSpan �?Deserialize �?Replay
+    // ══════════════════════════════════════════════════════════�?
 
     [Fact]
     public void Serialize_then_deserialize_of_empty_delta_is_empty()
@@ -408,7 +408,7 @@ public sealed class FrameDeltaDeterminismTests
 
         var a = buffer.Create(); buffer.Add(a, new Position(1, 2));
         var b = buffer.Create(); buffer.Add(b, new Position(3, 4)); buffer.Add(b, new Velocity(5, 6));
-        buffer.Link(a, b);
+        buffer.AddChild(a, b);
         var delta = buffer.Snapshot(); buffer.Submit();
 
         var wire = delta.AsSpan();
@@ -427,7 +427,7 @@ public sealed class FrameDeltaDeterminismTests
 
         var a = stream.Create(); stream.Add(a, new Position(10, 20));
         var b = stream.Create(); stream.Add(b, new Health(99));
-        stream.Link(a, b);
+        stream.AddChild(a, b);
         var delta = stream.Snapshot(); stream.Submit();
 
         var wire = delta.AsSpan();
@@ -576,7 +576,7 @@ public sealed class FrameDeltaDeterminismTests
         var buffer = new CommandStream(source);
         var a = buffer.Create(); buffer.Add(a, new Position(1, 2));
         var b = buffer.Create();
-        buffer.Link(a, b);
+        buffer.AddChild(a, b);
         var delta = buffer.Snapshot(); buffer.Submit();
 
         Assert.True(delta.HasEntity(a));
@@ -590,11 +590,11 @@ public sealed class FrameDeltaDeterminismTests
         Assert.False(restored.HasEntity(new Entity(9999, 1)));
     }
 
-    // ═══════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════�?
     // Malformed / hostile input must fail loud, not silently corrupt state.
     // Lockstep/multiplayer depends on the consumer rejecting bad deltas at
     // the first sign of trouble rather than skipping unknown bytes.
-    // ═══════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════�?
 
     [Fact]
     public void Deserialize_rejects_unknown_op_kind()
@@ -624,7 +624,7 @@ public sealed class FrameDeltaDeterminismTests
     [Fact]
     public void Deserialize_rejects_varint_exceeding_32_bit_range()
     {
-        // 5 bytes each with continuation bit set, plus a 6th byte — a varint
+        // 5 bytes each with continuation bit set, plus a 6th byte �?a varint
         // wider than 32 bits is not representable as int and must be rejected.
         var wire = new byte[] { 0x01, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01, 0x01 };
         Assert.Throws<InvalidOperationException>(() => FrameDelta.Deserialize(wire));
@@ -639,13 +639,13 @@ public sealed class FrameDeltaDeterminismTests
         Assert.Throws<InvalidOperationException>(() => FrameDelta.Deserialize(wire));
     }
 
-    // ═══════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════�?
     // Hierarchy × Ops × Destroy same-frame convergence
     // (Submit and Replay must produce identical state when these
     // command kinds are mixed within a single frame; previously
     // diverged because BuildDelta wrote Hierarchy before Ops while
     // Submit ran Ops before Hierarchy.)
-    // ═══════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════�?
 
     [Fact]
     public void Submit_link_and_set_on_same_child_same_frame_converges_with_replay()
@@ -654,14 +654,14 @@ public sealed class FrameDeltaDeterminismTests
         var buffer = new CommandStream(source);
         var parent = buffer.Create(); buffer.Add(parent, new Position(0, 0));
         var child = buffer.Create(); buffer.Add(child, new Position(1, 1));
-        buffer.Link(parent, child);
+        buffer.AddChild(parent, child);
         buffer.Set(child, new Position(99, 99));
         var delta = buffer.Snapshot(); buffer.Submit();
 
         var replica = new World();
         replica.Replay(delta);
 
-        AssertIdentical(source, replica, "Link + Set same frame");
+        AssertIdentical(source, replica, "AddChild + Set same frame");
     }
 
     [Fact]
@@ -673,13 +673,13 @@ public sealed class FrameDeltaDeterminismTests
         var buffer1 = new CommandStream(source);
         var parent = buffer1.Create(); buffer1.Add(parent, new Position(0, 0));
         var child = buffer1.Create(); buffer1.Add(child, new Position(1, 1));
-        buffer1.Link(parent, child);
+        buffer1.AddChild(parent, child);
         var delta1 = buffer1.Snapshot(); buffer1.Submit();
 
-        // Frame 2: create parent2, link to child, then destroy parent2 — all same frame
+        // Frame 2: create parent2, AddChild to child, then destroy parent2 �?all same frame
         var buffer2 = new CommandStream(source);
         var parent2 = buffer2.Create(); buffer2.Add(parent2, new Position(2, 2));
-        buffer2.Link(parent2, child);
+        buffer2.AddChild(parent2, child);
         buffer2.Destroy(parent2);
         var delta2 = buffer2.Snapshot(); buffer2.Submit();
 
@@ -687,7 +687,7 @@ public sealed class FrameDeltaDeterminismTests
         replica.Replay(delta1);
         replica.Replay(delta2);
 
-        AssertIdentical(source, replica, "Link + Destroy parent same frame");
+        AssertIdentical(source, replica, "AddChild + Destroy parent same frame");
     }
 
     [Fact]
@@ -700,13 +700,13 @@ public sealed class FrameDeltaDeterminismTests
         buffer.Add(parent, new Position(10, 20));
         buffer.Add(child, new Position(30, 40));
         buffer.Add(child, new Velocity(5, 5));
-        buffer.Link(parent, child);
+        buffer.AddChild(parent, child);
         var delta = buffer.Snapshot(); buffer.Submit();
 
         var replica = new World();
         replica.Replay(delta);
 
-        AssertIdentical(source, replica, "Create + Link + Add same frame");
+        AssertIdentical(source, replica, "Create + AddChild + Add same frame");
     }
 
     [Fact]
@@ -717,11 +717,11 @@ public sealed class FrameDeltaDeterminismTests
         var buffer1 = new CommandStream(source);
         var parent = buffer1.Create(); buffer1.Add(parent, new Position(0, 0));
         var child = buffer1.Create(); buffer1.Add(child, new Position(1, 1));
-        buffer1.Link(parent, child);
+        buffer1.AddChild(parent, child);
         var delta1 = buffer1.Snapshot(); buffer1.Submit();
 
         var buffer2 = new CommandStream(source);
-        buffer2.Unlink(child);
+        buffer2.RemoveChild(child);
         buffer2.Set(child, new Position(77, 88));
         var delta2 = buffer2.Snapshot(); buffer2.Submit();
 
@@ -729,30 +729,30 @@ public sealed class FrameDeltaDeterminismTests
         replica.Replay(delta1);
         replica.Replay(delta2);
 
-        AssertIdentical(source, replica, "Unlink + Set same frame");
+        AssertIdentical(source, replica, "RemoveChild + Set same frame");
     }
 
     [Fact]
     public void Submit_set_then_unlink_same_frame_converges_with_replay()
     {
-        // Variant: ops before hierarchy (link) in source recording order.
+        // Variant: ops before hierarchy (AddChild) in source recording order.
         var source = new World();
 
         var buffer1 = new CommandStream(source);
         var parent = buffer1.Create(); buffer1.Add(parent, new Position(0, 0));
         var child = buffer1.Create(); buffer1.Add(child, new Position(1, 1));
-        buffer1.Link(parent, child);
+        buffer1.AddChild(parent, child);
         var delta1 = buffer1.Snapshot(); buffer1.Submit();
 
         var buffer2 = new CommandStream(source);
         buffer2.Set(child, new Position(77, 88));
-        buffer2.Unlink(child);
+        buffer2.RemoveChild(child);
         var delta2 = buffer2.Snapshot(); buffer2.Submit();
 
         var replica = new World();
         replica.Replay(delta1);
         replica.Replay(delta2);
 
-        AssertIdentical(source, replica, "Set + Unlink same frame");
+        AssertIdentical(source, replica, "Set + RemoveChild same frame");
     }
 }

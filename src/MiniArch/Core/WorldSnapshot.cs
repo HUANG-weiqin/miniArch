@@ -48,7 +48,7 @@ public static class WorldSnapshot
         writer.Write(world.EntitySlotCount);
         writer.Write(schemaEntries.Count);
         writer.Write(persistedArchetypes.Count);
-        writer.Write(world.Hierarchy.CountLiveLinks(world));
+        writer.Write(world.Hierarchy.CountLiveRelations(world));
 
         foreach (var record in world.EntityRecords)
         {
@@ -65,7 +65,7 @@ public static class WorldSnapshot
             WriteArchetype(writer, world, archetype, schemaEntries);
         }
 
-        foreach (var (child, parent) in world.Hierarchy.EnumerateLiveLinks(world))
+        foreach (var (child, parent) in world.Hierarchy.EnumerateLiveRelations(world))
         {
             writer.Write(child.Id);
             writer.Write(parent.Id);
@@ -142,7 +142,7 @@ public static class WorldSnapshot
                     $"Hierarchy parent id {parentId} out of range [0, {slotVersions.Length}) in snapshot.");
             var child = new Entity(childId, slotVersions[childId]);
             var parent = new Entity(parentId, slotVersions[parentId]);
-            world.LinkSnapshot(parent, child);
+            world.AddChildFromSnapshot(parent, child);
         }
 
         world.ReadFreeList(reader);
@@ -190,13 +190,13 @@ public static class WorldSnapshot
                 arch.FeedColumnData(col, entityCount, span => hash.AppendData(span));
         }
 
-        var links = new List<(int ChildId, int ParentId)>();
-        foreach (var (child, parent) in world.Hierarchy.EnumerateLiveLinks(world))
-            links.Add((child.Id, parent.Id));
-        links.Sort((a, b) => a.ChildId.CompareTo(b.ChildId));
+        var relations = new List<(int ChildId, int ParentId)>();
+        foreach (var (child, parent) in world.Hierarchy.EnumerateLiveRelations(world))
+            relations.Add((child.Id, parent.Id));
+        relations.Sort((a, b) => a.ChildId.CompareTo(b.ChildId));
 
-        AppendInt(hash, links.Count);
-        foreach (var (childId, parentId) in links)
+        AppendInt(hash, relations.Count);
+        foreach (var (childId, parentId) in relations)
         {
             AppendInt(hash, childId);
             AppendInt(hash, parentId);
@@ -213,7 +213,7 @@ public static class WorldSnapshot
     /// <summary>
     /// Computes a canonical SHA-256 checksum of the world's <b>logical state</b>:
     /// alive entities (id + version), their components (type + value),
-    /// hierarchy links, and free-list entries (id + version). Two worlds with
+    /// hierarchy relations, and free-list entries (id + version). Two worlds with
     /// the same logical content produce the same hash regardless of internal
     /// layout, slot count, or archetype organisation. Slower than
     /// <see cref="ComputeChecksum"/>.
@@ -248,13 +248,13 @@ public static class WorldSnapshot
             }
         }
 
-        var links = new List<(int ChildId, int ParId)>();
-        foreach (var (child, parent) in world.Hierarchy.EnumerateLiveLinks(world))
-            links.Add((child.Id, parent.Id));
-        links.Sort((a, b) => a.ChildId.CompareTo(b.ChildId));
+        var relations = new List<(int ChildId, int ParId)>();
+        foreach (var (child, parent) in world.Hierarchy.EnumerateLiveRelations(world))
+            relations.Add((child.Id, parent.Id));
+        relations.Sort((a, b) => a.ChildId.CompareTo(b.ChildId));
 
-        AppendInt(hash, links.Count);
-        foreach (var (cid, pid) in links)
+        AppendInt(hash, relations.Count);
+        foreach (var (cid, pid) in relations)
         {
             AppendInt(hash, cid);
             AppendInt(hash, pid);

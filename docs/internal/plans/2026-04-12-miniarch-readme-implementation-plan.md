@@ -37,7 +37,7 @@
 **Step 1: Replace the current minimal content**
 
 - Keep project purpose, repository layout, quick commands, and collaboration entry points.
-- Add a prominent link to `src/MiniArch/README.md`.
+- Add a prominent AddChild to `src/MiniArch/README.md`.
 
 **Step 2: Self-check**
 
