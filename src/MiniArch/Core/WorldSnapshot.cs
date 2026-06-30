@@ -245,7 +245,10 @@ public static class WorldSnapshot
                 AppendInt(hash, entities[r].Id);
 
             for (var col = 0; col < sig.Length; col++)
-                arch.FeedColumnData(col, entityCount, span => hash.AppendData(span));
+            {
+                var feeder = new HashFeeder(hash);
+                arch.FeedColumnData(col, entityCount, ref feeder);
+            }
         }
 
         var relations = new List<(int ChildId, int ParentId)>();
@@ -261,6 +264,13 @@ public static class WorldSnapshot
         }
 
         return hash.GetCurrentHash();
+    }
+
+    private readonly struct HashFeeder : Archetype.ISpanFeeder
+    {
+        private readonly IncrementalHash _hash;
+        public HashFeeder(IncrementalHash hash) => _hash = hash;
+        public void Feed(ReadOnlySpan<byte> span) => _hash.AppendData(span);
     }
 
     private static void AppendInt(IncrementalHash hash, int v)
@@ -302,7 +312,8 @@ public static class WorldSnapshot
             for (var col = 0; col < sig.Length; col++)
             {
                 AppendInt(hash, sig[col].Value);
-                arch.FeedRowData(col, row, span => hash.AppendData(span));
+                var feeder = new HashFeeder(hash);
+                arch.FeedRowData(col, row, ref feeder);
             }
         }
 
