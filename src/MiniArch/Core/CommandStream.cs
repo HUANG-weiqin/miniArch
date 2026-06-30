@@ -810,7 +810,7 @@ public sealed class CommandStream : ICommandRecorder
             // allocation in lockstep across hosts), deferred cancels consume no id
             // by design: the whole point of deferred is to avoid touching the world
             // id allocator until submit.
-            if (entity.Id < 0)
+            if (entity.IsPlaceholder)
             {
                 if (batchCanceled[i]) continue;
                 // Committed deferred: emit Reserve + Create with placeholder entity.
@@ -1496,7 +1496,7 @@ public sealed class CommandStream : ICommandRecorder
         var resolveMap = _resolveMapPool ?? [];
         _resolveMapPool = null;
         EnsureCapacity(ref resolveMap, _deferredSeq - 1, 64);
-        Array.Fill(resolveMap, new Entity(-1, -1), 0, _deferredSeq);
+        Array.Fill(resolveMap, new Entity(-1, -1), 0, _deferredSeq); // IsUnmappedSentinel
 
         for (var seq = 0; seq < _deferredSeq; seq++)
         {
@@ -1528,7 +1528,7 @@ public sealed class CommandStream : ICommandRecorder
         for (var i = 0; i < _destroyCount; i++)
         {
             ref var destroyed = ref _destroyEntities[i];
-            if (destroyed.Id < 0)
+            if (destroyed.IsPlaceholder)
             {
                 var real = resolveMap[destroyed.Version];
                 if (real.Id >= 0) destroyed = real;
@@ -1553,13 +1553,13 @@ public sealed class CommandStream : ICommandRecorder
             foreach (var (child, intent) in _hierarchyByChild)
             {
                 var newChild = child;
-                if (child.Id < 0)
+                if (child.IsPlaceholder)
                 {
                     var resolved = resolveMap[child.Version];
                     if (resolved.Id >= 0) newChild = resolved;
                 }
                 var newParent = intent.Parent;
-                if (intent.IsAdd && intent.Parent.Id < 0)
+                if (intent.IsAdd && intent.Parent.IsPlaceholder)
                 {
                     var resolved = resolveMap[intent.Parent.Version];
                     if (resolved.Id >= 0) newParent = resolved;
@@ -1600,7 +1600,7 @@ public sealed class CommandStream : ICommandRecorder
         {
             foreach (var e in _unavailableEntities)
             {
-                if (e.Id < 0)
+                if (e.IsPlaceholder)
                 {
                     var resolved = resolveMap[e.Version];
                     if (resolved.Id >= 0)
@@ -1795,7 +1795,7 @@ public sealed class CommandStream : ICommandRecorder
             for (var i = 0; i < _count; i++)
             {
                 ref var slot = ref _entities[i];
-                if (slot.Id < 0)
+                if (slot.IsPlaceholder)
                 {
                     var resolved = resolveMap[slot.Version];
                     if (resolved.Id >= 0) slot = resolved;

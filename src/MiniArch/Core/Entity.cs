@@ -15,6 +15,19 @@ public readonly record struct Entity(int Id, int Version) : IComparable<Entity>
     public bool IsValid => Id >= 0 && Version > 0;
 
     /// <summary>
+    /// Whether this entity is a lockstep placeholder (deferred create).
+    /// Placeholders have Id == -1 and Version >= 0 (the version is the seq number).
+    /// Distinguished from <see cref="IsUnmappedSentinel"/> by the Version sign.
+    /// </summary>
+    public bool IsPlaceholder => Id == -1 && Version >= 0;
+
+    /// <summary>
+    /// Whether this entity is an unmapped sentinel (unoccupied slot in the
+    /// placeholder-to-local mapping table). Sentinels have Id == -1 and Version == -1.
+    /// </summary>
+    public bool IsUnmappedSentinel => Id == -1 && Version < 0;
+
+    /// <summary>
     /// Returns a compact display string.
     /// </summary>
     public override string ToString() => $"Entity({Id}, v{Version})";

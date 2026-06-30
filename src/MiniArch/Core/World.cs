@@ -514,7 +514,7 @@ public sealed partial class World : IDisposable
                     case DeltaOpKind.Reserve:
                     {
                         var raw = decoder.Entity;
-                        if (raw.Id < 0)
+                        if (raw.IsPlaceholder)
                         {
                             // Placeholder: allocate a fresh local id.
                             var real = ReserveDeferredEntityBatch();
@@ -595,7 +595,7 @@ public sealed partial class World : IDisposable
         while (newLen <= seq) newLen *= 2;
         Array.Resize(ref map, newLen);
         for (var i = mapLen; i < newLen; i++)
-            map[i] = new Entity(-1, -1); // sentinel: not yet mapped
+            map[i] = new Entity(-1, -1); // IsUnmappedSentinel: not yet mapped
         mapLen = newLen;
     }
 
@@ -604,7 +604,7 @@ public sealed partial class World : IDisposable
     {
         if (wireEntity.Id >= 0) return wireEntity;
         if ((uint)wireEntity.Version >= (uint)mapLen ||
-            map[wireEntity.Version].Id < 0)
+            map[wireEntity.Version].IsUnmappedSentinel)
             throw new InvalidOperationException(
                 $"Unresolved placeholder entity seq={wireEntity.Version} in FrameDelta replay. " +
                 "The delta is malformed: a placeholder appears without a preceding Reserve op.");
