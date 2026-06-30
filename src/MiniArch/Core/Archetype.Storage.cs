@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -224,16 +225,20 @@ internal sealed partial class Archetype
         _flatEntitiesGeneration++;
     }
 
+    [Conditional("DEBUG")]
+    private void AssertValidRow(int row)
+    {
+        if ((uint)row >= (uint)_count)
+            throw new ArgumentOutOfRangeException(nameof(row));
+    }
+
     // ──────────────────────────────────────────────
     //  RemoveAt (cross-segment swap-remove)
     // ──────────────────────────────────────────────
 
     internal bool RemoveAt(int row, out Entity movedEntity)
     {
-#if DEBUG
-        if ((uint)row >= (uint)_count)
-            throw new ArgumentOutOfRangeException(nameof(row));
-#endif
+        AssertValidRow(row);
         if (!_isChunked)
         {
             var last = _count - 1;
@@ -812,10 +817,7 @@ internal sealed partial class Archetype
         {
             ThrowIfManagedComponent(componentTypes[index]);
             var elementSize = ComponentSizeCache.GetSize(componentTypes[index]);
-#if DEBUG
-            if (elementSize <= 0)
-                throw new InvalidOperationException($"Component '{componentTypes[index].Name}' has non-positive size {elementSize}.");
-#endif
+            AssertPositiveElementSize(elementSize, componentTypes[index]);
             totalBytes = AlignUp(totalBytes, Math.Min(elementSize, 8));
             columnByteOffsets[index] = totalBytes;
             elementSizes[index] = elementSize;
@@ -843,6 +845,13 @@ internal sealed partial class Archetype
         throw new NotSupportedException(
             $"Component {type.FullName ?? type.Name} contains managed references " +
             "and cannot be stored in flat byte chunks.");
+    }
+
+    [Conditional("DEBUG")]
+    private static void AssertPositiveElementSize(int elementSize, Type componentType)
+    {
+        if (elementSize <= 0)
+            throw new InvalidOperationException($"Component '{componentType.Name}' has non-positive size {elementSize}.");
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

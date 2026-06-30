@@ -11,9 +11,9 @@ public sealed class TrickyEdgeCaseTests
     private readonly record struct Velocity(int X, int Y);
     private readonly record struct Health(int Value);
 
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
     // Category 1: Entity Handle / Lifecycle Edge Cases
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
 
     [Fact]
     public void Stale_handle_Set_throws_because_version_check_always_runs()
@@ -116,9 +116,9 @@ public sealed class TrickyEdgeCaseTests
         }
     }
 
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
     // Category 2: Set / Add / Remove Edge Cases
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
 
     [Fact]
     public void Set_default_value_preserves_integrity()
@@ -255,9 +255,9 @@ public sealed class TrickyEdgeCaseTests
         Assert.Equal(new Position(42, 42), p);
     }
 
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
     // Category 3: Query Edge Cases
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
 
     [Fact]
     public void QueryDescription_order_independent_equality()
@@ -404,9 +404,9 @@ public sealed class TrickyEdgeCaseTests
         Assert.Single(query2.MatchedArchetypes);
     }
 
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
     // Category 4: Hierarchy Edge Cases
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
 
     [Fact]
     public void EnumerateChildren_on_entity_with_no_children_returns_empty()
@@ -491,9 +491,9 @@ public sealed class TrickyEdgeCaseTests
 
 
 
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
     // Category 6: Structural Integrity / Chunk Boundaries
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
 
     [Fact]
     public void Entities_spread_across_chunk_boundaries_preserve_set_values()
@@ -589,9 +589,9 @@ public sealed class TrickyEdgeCaseTests
         Assert.Equal(0, CountEntities(query));
     }
 
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
     // Category 7: World / Snapshot / Replay
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
 
     [Fact]
     public void Replay_empty_delta_does_nothing()
@@ -661,9 +661,9 @@ public sealed class TrickyEdgeCaseTests
         Assert.Equal(1, query.GetArchetypeSpan().Length);
     }
 
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
     // Category 8: TryGet / OrderBy / Query Behaviors
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
 
     [Fact]
     public void TryGet_on_destroyed_entity_returns_false()
@@ -742,9 +742,9 @@ public sealed class TrickyEdgeCaseTests
         Assert.True(defaultQuery.GetChunks().GetEnumerator().MoveNext());
     }
 
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
     // Category 9: ComponentType / Registry
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
 
     [Fact]
     public void Same_struct_type_registered_multiple_times_returns_same_ComponentType()
@@ -773,9 +773,9 @@ public sealed class TrickyEdgeCaseTests
         Assert.False(worldB.TryGet(entityA, out Position _));
     }
 
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
     // Helpers
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
 
     private static int CountEntities(MiniQuery query)
     {
@@ -794,9 +794,9 @@ public sealed class TrickyEdgeCaseTests
     }
 
 #if DEBUG
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
     // Category: Debug-only safety checks
-    // ══════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════�?
 
     [Fact]
     public void Set_with_negative_entity_id_throws_in_debug()
@@ -950,6 +950,20 @@ public sealed class TrickyEdgeCaseTests
 
         Assert.False(worldB.Has<Position>(entityA));
     }
+
+#if DEBUG
+    [Fact]
+    public void Disposed_world_methods_throw_ObjectDisposedException()
+    {
+        var world = new World();
+        world.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => world.AddChild(default, default));
+        Assert.Throws<ObjectDisposedException>(() => world.RemoveChild(default));
+        Assert.Throws<ObjectDisposedException>(() => world.Has<Position>(default));
+        Assert.Throws<ObjectDisposedException>(() => world.TryGetParent(default, out _));
+    }
+#endif
 }
 
 

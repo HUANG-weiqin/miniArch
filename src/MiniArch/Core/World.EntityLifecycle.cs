@@ -1,4 +1,5 @@
-﻿using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 
 using MiniArch.Core;
@@ -171,16 +172,18 @@ public sealed partial class World
         return TryGetLocation(entity, out _);
     }
 
+    [Conditional("DEBUG")]
+    private void AssertValidEntityId(int id, Entity entity)
+    {
+        if ((uint)id >= (uint)_entitySlotCount)
+            ThrowInvalidEntity(entity);
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private EntityRecord GetRequiredLocation(Entity entity)
     {
         var id = entity.Id;
-#if DEBUG
-        if ((uint)id >= (uint)_entitySlotCount)
-        {
-            ThrowInvalidEntity(entity);
-        }
-#endif
+        AssertValidEntityId(id, entity);
 
         ref var record = ref _records[id];
         if (!record.IsOccupied || record.Version != entity.Version)

@@ -1,4 +1,5 @@
 ﻿using System.Buffers;
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
@@ -117,11 +118,21 @@ public sealed partial class World : IDisposable
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    [Conditional("DEBUG")]
     private void ThrowIfDisposed()
     {
-#if DEBUG
         if (_disposed) throw new ObjectDisposedException(nameof(World));
-#endif
+    }
+
+    [Conditional("DEBUG")]
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ValidateAlive(Entity entity)
+    {
+        if ((uint)entity.Id >= (uint)_entitySlotCount)
+            throw new InvalidOperationException($"Entity {entity} is not alive.");
+        ref var record = ref _records[entity.Id];
+        if (!record.IsOccupied || record.Version != entity.Version)
+            throw new InvalidOperationException($"Entity {entity} is not alive.");
     }
 
     /// <summary>
@@ -263,15 +274,8 @@ public sealed partial class World : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public T Get<T>(Entity entity) where T : unmanaged
     {
-#if DEBUG
-        if ((uint)entity.Id >= (uint)_entitySlotCount)
-            throw new InvalidOperationException($"Entity {entity} is not alive.");
-#endif
+        ValidateAlive(entity);
         ref var record = ref _records[entity.Id];
-#if DEBUG
-        if (!record.IsOccupied || record.Version != entity.Version)
-            throw new InvalidOperationException($"Entity {entity} is not alive.");
-#endif
         var arch = record.Archetype!;
         return arch.GetComponentAt<T>(arch.GetComponentIndexFast(GetComponentType<T>()), record.RowIndex);
     }
@@ -283,15 +287,8 @@ public sealed partial class World : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ref T GetRef<T>(Entity entity) where T : unmanaged
     {
-#if DEBUG
-        if ((uint)entity.Id >= (uint)_entitySlotCount)
-            throw new InvalidOperationException($"Entity {entity} is not alive.");
-#endif
+        ValidateAlive(entity);
         ref var record = ref _records[entity.Id];
-#if DEBUG
-        if (!record.IsOccupied || record.Version != entity.Version)
-            throw new InvalidOperationException($"Entity {entity} is not alive.");
-#endif
         var arch = record.Archetype!;
         return ref arch.GetComponentRefAt<T>(arch.GetComponentIndexFast(GetComponentType<T>()), record.RowIndex);
     }
