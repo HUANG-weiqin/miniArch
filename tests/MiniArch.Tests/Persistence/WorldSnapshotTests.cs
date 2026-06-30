@@ -1,5 +1,7 @@
 using System.IO;
+using System.Runtime.ExceptionServices;
 using System.Text;
+using System.Threading;
 using MiniArch.Core;
 using MiniArch.Tests.Core.TestSupport;
 
@@ -323,10 +325,10 @@ public sealed class WorldSnapshotTests
         b.Create(new Position(1, 2));
 
         // Now diverge their free lists while keeping live state identical.
-        // World A: create id 1 then destroy it  �?free list [1(v2)], slot count 2
-        // World B: create ids 1,2 then destroy both �?free list [2(v2),1(v2)], slot count 3
+        // World A: create id 1 then destroy it  —free list [1(v2)], slot count 2
+        // World B: create ids 1,2 then destroy both —free list [2(v2),1(v2)], slot count 3
         // In both worlds the only alive entity is id 0 with Position(1,2), so
-        // live-state hashes must agree �?but canonical (with free list) must not.
+        // live-state hashes must agree —but canonical (with free list) must not.
         var a1 = a.Create(new Velocity(0, 0));
         a.Destroy(a1);
 
@@ -517,7 +519,7 @@ public sealed class WorldSnapshotTests
         // Position is 8 bytes; the byte-based segment capacity (2MB/8 = 262144) means
         // auto-promotion would need a huge entity count, so we force chunked explicitly
         // and then grow segments. All entities are created via world.Create so that
-        // _records stays consistent �?direct arch.AddEntity would bypass the registry.
+        // _records stays consistent —direct arch.AddEntity would bypass the registry.
         var world = new World();
         const int EntityCount = 40;
         var entities = new Entity[EntityCount];
@@ -573,7 +575,7 @@ public sealed class WorldSnapshotTests
         // new trailing segments. After RestoreState, the archetype must revert to
         // exactly the segment layout captured, with no stale trailing-segment data.
         //
-        // Use a large component so segment capacity (2MB / sizeof(Big)) is small �?
+        // Use a large component so segment capacity (2MB / sizeof(Big)) is small —
         // a modest create burst then forces real GrowChunked during the prediction frame.
         var world = new World();
         var seed = world.Create(new BigPayload(1));
@@ -620,7 +622,7 @@ public sealed class WorldSnapshotTests
         Assert.Equal(2, seen);
     }
 
-    // ~512 bytes per entity �?segment capacity �?4096 (2MB / 512). A 5000-create
+    // ~512 bytes per entity —segment capacity —4096 (2MB / 512). A 5000-create
     // burst then reliably crosses a segment boundary during the prediction frame.
 #pragma warning disable CS0649 // padding fields intentionally never assigned
     private struct BigPayload
@@ -795,6 +797,127 @@ public sealed class WorldSnapshotTests
         var world = WorldSnapshot.Load(ms);
         Assert.NotNull(world);
         Assert.Equal(4, world.EntitySlotCount);
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // Zero-allocation: Task 7 (SpanFeeder delegate -> ISpanFeeder struct)
+    // ───────────────────────────────────────────────────────────────────
+    //
+    // Task 7 replaced `internal delegate void SpanFeeder(ReadOnlySpan<byte>)`
+    // with a struct interface `ISpanFeeder` + generic `where TFeeder:struct`
+    // methods taking `ref TFeeder`. Before Task 7, every FeedColumnData /
+    // FeedRowData caller in ComputeChecksum / ComputeCanonicalChecksum passed
+    // `span => hash.AppendData(span)`, a closure that captured the
+    // IncrementalHash on the heap each call — i.e. one allocation per
+    // component column per archetype per checksum. The struct rewrite removes
+    // that allocation from the inner feeding loop.
+    //
+    // NOTE on scope: this makes the *per-column/per-row feeding path* zero
+    // alloc. The full ComputeChecksum/ComputeCanonicalChecksum methods still
+    // carry fixed per-call overhead (entity-id sort buffer, relations list)
+    // that does NOT scale with component data volume. The two tests below
+    // verify the inner-loop fix directly and prove allocation is independent
+    // of column count.
+
+    /// <summary>
+    /// FeedColumnData with a struct ISpanFeeder allocates zero bytes,
+    /// regardless of row count. This is the exact path Task 7 rewrote.
+    /// Asserts the literal inner-loop invariant.
+    /// </summary>
+    [Fact]
+    public void FeedColumnData_with_struct_feeder_is_zero_alloc()
+    {
+        RunOnDedicatedThread(() =>
+        {
+            var world = new World();
+            for (var i = 0; i < 256; i++)
+                world.Create(new Position(i, i + 1));
+
+            var arch = world.Archetypes[0];
+            var feeder = new NoOpFeeder();
+
+            // Warmup (resolve JIT / method-table for the generic specialization).
+            arch.FeedColumnData(0, 256, ref feeder);
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            arch.FeedColumnData(0, 256, ref feeder);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+            Assert.Equal(0, allocated);
+        });
+    }
+
+    /// <summary>
+    /// End-to-end proof that Task 7 removed per-COLUMN allocation: two worlds
+    /// with identical entity/relation counts but different component-column
+    /// counts (1 vs 3) must allocate the same number of bytes in
+    /// ComputeCanonicalChecksum. If the closure had returned, the 3-column
+    /// world would allocate ~2 extra delegate captures.
+    /// </summary>
+    [Fact]
+    public void ComputeCanonicalChecksum_allocation_does_not_scale_with_column_count()
+    {
+        RunOnDedicatedThread(() =>
+        {
+            var worldA = new World();
+            for (var i = 0; i < 100; i++)
+                worldA.Create(new Position(i, i));              // 1 column
+
+            var worldB = new World();
+            for (var i = 0; i < 100; i++)
+                worldB.Create(new Position(i, i),               // 3 columns
+                              new Velocity(i, i),
+                              new Health(i));
+
+            // Warmup both (resolve column codecs, JIT the generic feeders).
+            worldA.CanonicalChecksum();
+            worldB.CanonicalChecksum();
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            var beforeA = GC.GetAllocatedBytesForCurrentThread();
+            worldA.CanonicalChecksum();
+            var allocA = GC.GetAllocatedBytesForCurrentThread() - beforeA;
+
+            var beforeB = GC.GetAllocatedBytesForCurrentThread();
+            worldB.CanonicalChecksum();
+            var allocB = GC.GetAllocatedBytesForCurrentThread() - beforeB;
+
+            // Fixed per-call overhead is identical (same entity count, same
+            // relation count). The only column-dependent allocation source
+            // was the pre-Task-7 closure. After Task 7 the difference is 0.
+            // Tolerance of 8 bytes absorbs any measurement granularity; a
+            // regression would add ~64 bytes (closure display class) per
+            // extra column, well above the tolerance.
+            var delta = allocB - allocA;
+            Assert.True(delta <= 8,
+                $"Per-column allocation regressed: 3-column checksum allocated {delta} bytes " +
+                $"more than 1-column (allocA={allocA}, allocB={allocB}). Expected ~0.");
+        });
+    }
+
+    private readonly struct NoOpFeeder : Archetype.ISpanFeeder
+    {
+        public void Feed(ReadOnlySpan<byte> span) { }
+    }
+
+    private static void RunOnDedicatedThread(Action action)
+    {
+        Exception? captured = null;
+        var thread = new Thread(() =>
+        {
+            try { action(); }
+            catch (Exception ex) { captured = ex; }
+        });
+        thread.Start();
+        thread.Join();
+        if (captured is not null) ExceptionDispatchInfo.Capture(captured).Throw();
     }
 }
 
