@@ -2,12 +2,23 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-06-30
+updated: 2026-07-01
 ---
 # Knowledge Base Changelog
 
 > 这个页面只记录**重大架构变更和知识库校准事件**，供追溯。
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
+
+## 2026-07-01 ComponentSchema 握手 API
+
+新增 `ComponentSchema.Fingerprint()`——跨进程交换 FrameDelta 前的注册表兼容性校验，填补 FrameDelta wire 格式用裸整数 id 编码组件类型但无检测机制的缺口。
+
+- **新增 `src/MiniArch/ComponentSchema.cs`**（public static 门面）：`Fingerprint()` 返回 32 字节 SHA-256 指纹（哈希内容 = `count + 每个类型 FullName（按 id 顺序）`，顺序敏感）。同一份二进制 lockstep 下注册顺序天然确定，指纹校验连接基线；运行时分叉由 per-frame `world.Checksum()` 检测。
+- **`ComponentRegistry.cs` 新增 `GetFingerprint()`**（internal）：用 `IncrementalHash` 流式追加。
+- **`FrameDelta.cs` 注释更新**：原"add a type-mapping header at the transport layer"改为指向 `ComponentSchema.Fingerprint`。
+- **设计原则**：YAGNI（不做映射表协商、不做注册锁定）；纯函数（静态、无副作用）；概念唯一（一个指纹、一个表示）。
+- **新增测试** `ComponentSchemaTests.cs`（7 个）：顺序一致/不一致、类型集不同、数量不同、返回长度、空注册表、逐步注册时指纹实时变化。
+- **kb 同步**：`kb-lockstep-playbook.md`（新增步骤 0）、`kb-core-ecs.md`（架构段 + 用户 API 表）。
 
 ## 2026-07-01 代码硬化（7 个低垂果实）
 

@@ -77,9 +77,10 @@ public sealed class FrameDelta
     /// <see cref="Core.ComponentType"/> values as process-local integer ids.
     /// Both peers must have identical <see cref="ComponentRegistry"/> state
     /// (same types registered in the same order) before exchanging deltas,
-    /// otherwise component ids will be silently misinterpreted. Within a
-    /// single process this is automatic; for multi-process scenarios add a
-    /// type-mapping header at the transport layer.
+    /// otherwise component ids will be silently misinterpreted. For same-binary
+    /// lockstep this holds automatically (deterministic code paths). For
+    /// cross-version scenarios, use <see cref="MiniArch.ComponentSchema.Fingerprint"/>
+    /// as a debugging aid to verify registry state.
     /// </remarks>
     public ReadOnlySpan<byte> AsSpan() => new(_buffer, 0, _length);
 

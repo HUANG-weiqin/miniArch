@@ -164,6 +164,19 @@ Same API as `CommandBuffer`. Records to a flat byte stream instead of per-entity
 - `Merge(FrameDelta, FrameDelta)` — combine two deltas into one
 - `IsEmpty` — whether the delta has no entries
 
+### `ComponentSchema`
+
+Development/debugging utility: captures the current component registry state as a SHA-256 fingerprint. Useful for investigating version mismatches between processes. Not a required part of the lockstep protocol.
+
+- `Fingerprint()` → `byte[]` — 32-byte SHA-256 of the global `ComponentRegistry` (id→type mapping, order-dependent). Reflects current state at call time; types registered later are not included.
+
+```csharp
+var fp = ComponentSchema.Fingerprint();
+// compare with peer's fingerprint during debugging
+if (!fp.AsSpan().SequenceEqual(peerFp))
+    Console.WriteLine("Registry divergence — different builds?");
+```
+
 ### `WorldSnapshot`
 
 - `Save(Stream, World)` — serialize world to binary stream

@@ -2,7 +2,7 @@
 title: Lockstep Playbook
 module: Meta
 description: End-to-end guide for implementing lockstep multiplayer on miniArch — from recording commands to peer synchronization and divergence detection
-updated: 2026-06-30 (新建)
+updated: 2026-07-01 (移除步骤 0 ——Fingerprint 是调试工具，非协议步骤)
 ---
 # Lockstep Playbook
 

@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-06-30 (Core.Query → Core.QueryCache 重命名；补 IChunkForEach 到 facade 表)
+updated: 2026-07-01 (新增 ComponentSchema 到架构段 + 用户 API 表)
 ---
 # MiniArch Core ECS
 
@@ -31,7 +31,8 @@ updated: 2026-06-30 (Core.Query → Core.QueryCache 重命名；补 IChunkForEac
   - `QueryComponentSet.cs`：排序组件集合（仅 `CreateFrom` 批量入口）
   - `QueryDescription.cs`：可跨 world 复用的 query 描述，保存 world-agnostic 的 `Type` 集合
   - `Query.cs`：archetype 过滤和 chunk 遍历、单版本号全局快照失效；定义 `internal sealed class QueryCache`（用户面是 `MiniArch.Query` struct facade）
-  - `ComponentRegistry.cs`：全局 `Type ↔ ComponentType` 双向映射（copy-on-write）
+  - `ComponentRegistry.cs`：全局 `Type ↔ ComponentType` 双向映射（copy-on-write）；`GetFingerprint()` 算 SHA-256 指纹供跨进程握手
+  - `ComponentSchema.cs`：**public** 静态门面，`Fingerprint()` 返回注册表 SHA-256 指纹——调试期版本兼容性校验工具
   - `ComponentType.cs`：`int` wrapper
   - `ComponentSizeCache.cs`：`Type → size` 缓存
   - `Entity.cs`：`(id, version)` 二元组
@@ -76,6 +77,7 @@ updated: 2026-06-30 (Core.Query → Core.QueryCache 重命名；补 IChunkForEac
 | 零分配 chunk job | `MiniArch.IChunkForEach` (public interface) | `query.ForEachChunk<TForEach>(ref job)` |
 | Chunk 视图 | `ChunkView` (public readonly struct) | `chunk.GetSpan<T>()` |
 | O(1) entity 查找 | `World.GetFirst<T>()` | `world.GetFirst<T>()` |
+| 注册表指纹 | `MiniArch.ComponentSchema` (public static) | `ComponentSchema.Fingerprint()` |
 
 **关键分层边界：**
 - `MiniArch.Core.QueryCache`（原 `Core.Query`，2026-06-30 重命名）是 `internal sealed class`（`Core/Query.cs:11`），用户不能接触。重命名消除了 public struct `MiniArch.Query` 与 internal class `Core.Query` 的命名空间碰撞

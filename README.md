@@ -187,6 +187,7 @@ Friflo's advantages are **engine-level constant factors** (typing + SIMD). MiniA
 - **Archetype ECS** — `World` / `Entity` / `QueryDescription` with chunk-level iteration
 - **CommandStream** — deferred command recording; 12–48% faster than traditional command buffers
 - **FrameDelta + Replay** — record and replay frame deltas across worlds with deterministic ID validation; zero-allocation replay path (mask cache + pre-scan)
+- **ComponentSchema.Fingerprint** — SHA-256 registry fingerprint for debugging cross-version compatibility
 - **CaptureState/RestoreState** — in-place zero-alloc rollback (GGPO-style 60fps; opaque handle recycled across frames)
 - **World.Clone()** — materialize a brand-new independent world (branching / long-lived checkpoint)
 - **WorldSnapshot** — binary serialize/deserialize entire world state (cross-process persistence)

@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+
 namespace MiniArch.Core;
 
 /// <summary>
@@ -12,6 +15,12 @@ internal sealed class ComponentRegistry
 
     private readonly object _writeLock = new();
     private RegistrySnapshot _snapshot = new(new Dictionary<Type, ComponentType>(), Array.Empty<Type>());
+    private uint _cachedRegistryHash;
+
+    internal ComponentRegistry()
+    {
+        _cachedRegistryHash = ComputeHash(_snapshot.IdToType);
+    }
 
     /// <summary>
     /// Gets or creates the id for <typeparamref name="T" />.
@@ -49,6 +58,7 @@ internal sealed class ComponentRegistry
             updatedIdToType[^1] = type;
 
             Volatile.Write(ref _snapshot, new RegistrySnapshot(updatedTypeToId, updatedIdToType));
+            _cachedRegistryHash = ComputeHash(updatedIdToType);
             return id;
         }
     }
@@ -86,6 +96,37 @@ internal sealed class ComponentRegistry
 
         return type;
     }
+
+    /// <summary>
+    /// Computes a SHA-256 fingerprint of the current id→type mapping (full 32 bytes).
+    /// For manual/debug use. See <see cref="MiniArch.ComponentSchema"/>.
+    /// </summary>
+    internal byte[] GetFingerprint() => ComputeFingerprintBytes(Volatile.Read(ref _snapshot).IdToType);
+
+    /// <summary>
+    /// Returns the cached 4-byte hash of the full registry.
+    /// Computed eagerly on each registration; reading is a volatile load —zero cost on the hot path.
+    /// </summary>
+    internal uint GetRegistryHash() => Volatile.Read(ref _cachedRegistryHash);
+
+    private static byte[] ComputeFingerprintBytes(Type[] idToType)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+
+        hash.AppendData(BitConverter.GetBytes(idToType.Length));
+        foreach (var type in idToType)
+        {
+            var name = type.FullName ?? type.Name;
+            var nameBytes = Encoding.UTF8.GetBytes(name);
+            hash.AppendData(BitConverter.GetBytes(nameBytes.Length));
+            hash.AppendData(nameBytes);
+        }
+
+        return hash.GetHashAndReset();
+    }
+
+    private static uint ComputeHash(Type[] idToType)
+        => BitConverter.ToUInt32(ComputeFingerprintBytes(idToType), 0);
 
     private sealed record RegistrySnapshot(IReadOnlyDictionary<Type, ComponentType> TypeToId, Type[] IdToType);
 }
