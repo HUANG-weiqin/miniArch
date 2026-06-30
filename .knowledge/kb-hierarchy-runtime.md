@@ -2,22 +2,33 @@
 title: Hierarchy Runtime
 module: MiniArch.Core Hierarchy
 description: Runtime-owned parent-child relations, cascade destroy semantics, and snapshot restore behavior
-updated: 2026-06-22 (全库审阅: 确认实现与文档一致)
+updated: 2026-06-30 (hierarchy 用户面 API 重构: 新增 EnumerateChildren/HasChildren, 删除 GetChildren)
 ---
 # Hierarchy Runtime
 
 ## 这个模块是干什么的
 
 - 维护 entity 的单父 parent-child 关系
-- 提供 parent 查询和 children 列表查询
+- 提供 parent 查询和 children 遍历（零分配 struct enumerator）
 - 在父实体销毁时扩展为 child-first 的级联销毁
 - snapshot save/load 后 hierarchy 关系保持有效
+
+## 用户面 API（World 上 public）
+
+- `Link(parent, child)` / `Unlink(child)`
+- `TryGetParent(child, out parent)`
+- `EnumerateChildren(parent)` → `ChildrenEnumerable`（public readonly struct，零分配 foreach）
+- `HasChildren(entity)` → O(1) 布尔查询
+
+> 已删除 `GetChildren → List<Entity>`：与 `EnumerateChildren` 概念重复，违反"概念唯一"。
+> 需要 List 的调用方写 `new List<Entity>(world.EnumerateChildren(parent))` 或 foreach 收集。
 
 ## 架构
 
 - 核心组成：
   - `src/MiniArch/Core/HierarchyTable.cs`：runtime-owned 关系表（邻接链表：`_parentByChild[id]` + `_firstChild[id]` + free-list 复用 slot）
-  - `src/MiniArch/Core/World.cs`（主文件）：对外 API（`Link`、`GetChildren`、`Destroy` 级联）、destroy 集成
+  - `src/MiniArch/Core/ChildrenEnumerable.cs`：public readonly struct + struct enumerator（`MiniArch` 命名空间），零分配遍历孩子
+  - `src/MiniArch/Core/World.cs`（主文件）：对外 API（`Link`、`EnumerateChildren`、`HasChildren`、`Destroy` 级联）、destroy 集成
   - `src/MiniArch/Core/WorldSnapshot.cs`：hierarchy link 的持久化读写
 
 ## 决策

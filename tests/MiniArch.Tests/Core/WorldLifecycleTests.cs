@@ -1,5 +1,6 @@
 using System.Runtime.ExceptionServices;
 using MiniArch.Core;
+using MiniArch.Tests.Core.TestSupport;
 using MiniQuery = MiniArch.Core.Query;
 
 namespace MiniArchTests.Core;
@@ -428,7 +429,7 @@ public sealed class WorldLifecycleTests
         Assert.True(world.TryGetParent(firstChild, out var resolvedParent));
         Assert.Equal(parent, resolvedParent);
 
-        var children = world.GetChildren(parent);
+        var children = world.EnumerateChildren(parent).ToChildList();
         Assert.Equal(2, children.Count);
         Assert.Equal([firstChild, secondChild], children.OrderBy(entity => entity.Id).ToArray());
     }
@@ -458,8 +459,8 @@ public sealed class WorldLifecycleTests
 
         Assert.True(world.TryGetParent(child, out var resolvedParent));
         Assert.Equal(secondParent, resolvedParent);
-        Assert.Empty(world.GetChildren(firstParent));
-        Assert.Equal([child], world.GetChildren(secondParent));
+        Assert.False(world.HasChildren(firstParent));
+        Assert.Equal([child], world.EnumerateChildren(secondParent).ToChildList());
     }
 
     [Fact]
@@ -539,7 +540,7 @@ public sealed class WorldLifecycleTests
         Assert.False(world.IsAlive(root));
         Assert.False(world.IsAlive(child));
         Assert.False(world.IsAlive(grandChild));
-        Assert.Empty(world.GetChildren(root));
+        Assert.False(world.HasChildren(root));
     }
 
     [Fact]
@@ -644,7 +645,7 @@ public sealed class WorldLifecycleTests
         Assert.Equal(child.Id, replacement.Id);
         Assert.NotEqual(child.Version, replacement.Version);
         Assert.False(world.TryGetParent(replacement, out _));
-        Assert.Empty(world.GetChildren(parent));
+        Assert.False(world.HasChildren(parent));
     }
 
     private static void WarmupDestroyCascadeAllocations()

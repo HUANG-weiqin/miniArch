@@ -197,12 +197,22 @@ public sealed partial class World : IDisposable
     }
 
     /// <summary>
-    /// Gets the direct children of an entity.
+    /// Returns a zero-allocation enumerable over the live children of
+    /// <paramref name="parent"/>. Use <c>foreach</c> to iterate.
     /// </summary>
-    public List<Entity> GetChildren(Entity parent)
+    public ChildrenEnumerable EnumerateChildren(Entity parent)
     {
         ThrowIfDisposed();
-        return _hierarchy.GetChildren(this, parent);
+        return _hierarchy.EnumerateChildren(this, parent);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="entity"/> has at least one live child.
+    /// </summary>
+    public bool HasChildren(Entity entity)
+    {
+        ThrowIfDisposed();
+        return _hierarchy.HasChildren(entity);
     }
 
     /// <summary>

@@ -80,76 +80,12 @@ internal sealed class HierarchyTable
         return true;
     }
 
-    public List<Entity> GetChildren(World world, Entity parent)
-    {
-        var result = new List<Entity>();
-        foreach (var child in EnumerateChildren(world, parent))
-        {
-            result.Add(child);
-        }
-
-        return result;
-    }
-
-    /// <summary>
-    /// Returns a zero-allocation enumerable over the live children of
-    /// <paramref name="parent"/>.  Prefer this over <see cref="GetChildren"/>
-    /// in hot paths to avoid List allocation.
-    /// </summary>
     internal ChildrenEnumerable EnumerateChildren(World world, Entity parent)
     {
-        return new ChildrenEnumerable(this, world, parent);
-    }
-
-    internal readonly struct ChildrenEnumerable
-    {
-        private readonly HierarchyTable _table;
-        private readonly World _world;
-        private readonly int _firstSlot;
-
-        internal ChildrenEnumerable(HierarchyTable table, World world, Entity parent)
-        {
-            _table = table;
-            _world = world;
-            _firstSlot = world.IsAlive(parent) && parent.Id >= 0 && parent.Id < table._firstChild.Length
-                ? table._firstChild[parent.Id]
-                : NoSlot;
-        }
-
-        public ChildrenEnumerator GetEnumerator() => new(_table, _world, _firstSlot);
-    }
-
-    internal struct ChildrenEnumerator
-    {
-        private readonly HierarchyTable _table;
-        private readonly World _world;
-        private int _slot;
-
-        internal ChildrenEnumerator(HierarchyTable table, World world, int firstSlot)
-        {
-            _table = table;
-            _world = world;
-            _slot = firstSlot;
-            Current = default;
-        }
-
-        public Entity Current { get; private set; }
-
-        public bool MoveNext()
-        {
-            while (_slot >= 0)
-            {
-                var slot = _slot;
-                _slot = _table._childNext[slot];
-                var child = _table._childEntity[slot];
-                if (!_world.IsAlive(child)) continue;
-
-                Current = child;
-                return true;
-            }
-
-            return false;
-        }
+        var firstSlot = world.IsAlive(parent) && parent.Id >= 0 && parent.Id < _firstChild.Length
+            ? _firstChild[parent.Id]
+            : NoSlot;
+        return new ChildrenEnumerable(_childEntity, _childNext, world, firstSlot);
     }
 
     public bool HasChildren(Entity entity)

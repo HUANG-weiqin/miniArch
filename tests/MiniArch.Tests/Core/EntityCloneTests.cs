@@ -1,4 +1,5 @@
 using MiniArch.Core;
+using MiniArch.Tests.Core.TestSupport;
 using MiniQuery = MiniArch.Core.Query;
 
 namespace MiniArchTests.Core;
@@ -146,7 +147,7 @@ public sealed class EntityCloneTests
 
         var clone = world.Clone(parent);
 
-        var cloneChildren = world.GetChildren(clone);
+        var cloneChildren = world.EnumerateChildren(clone).ToChildList();
         Assert.Equal(2, cloneChildren.Count);
         Assert.Contains(cloneChildren, child => world.TryGet(child, out Velocity _));
         Assert.Contains(cloneChildren, child => world.TryGet(child, out Health _));
@@ -164,12 +165,12 @@ public sealed class EntityCloneTests
 
         var clone = world.Clone(root);
 
-        var cloneMids = world.GetChildren(clone);
+        var cloneMids = world.EnumerateChildren(clone).ToChildList();
         Assert.Single(cloneMids);
         var cloneMid = cloneMids[0];
         Assert.True(world.TryGet(cloneMid, out Velocity _));
 
-        var cloneLeaves = world.GetChildren(cloneMid);
+        var cloneLeaves = world.EnumerateChildren(cloneMid).ToChildList();
         Assert.Single(cloneLeaves);
         Assert.True(world.TryGet(cloneLeaves[0], out Health _));
     }
@@ -216,7 +217,7 @@ public sealed class EntityCloneTests
         world.Destroy(parent);
 
         Assert.True(world.IsAlive(clone));
-        Assert.Single(world.GetChildren(clone));
+        Assert.Single(world.EnumerateChildren(clone).ToChildList());
     }
 
     [Fact]
@@ -228,7 +229,7 @@ public sealed class EntityCloneTests
         var clone = world.Clone(entity);
 
         Assert.True(world.IsAlive(clone));
-        Assert.Empty(world.GetChildren(clone));
+        Assert.False(world.HasChildren(clone));
         Assert.True(world.TryGet(clone, out Position pos));
         Assert.Equal(new Position(1, 2), pos);
     }
@@ -403,7 +404,7 @@ public sealed class CommandBufferCloneTests
         var clone = buffer.Clone(parent);
         buffer.Submit();
 
-        var cloneChildren = world.GetChildren(clone);
+        var cloneChildren = world.EnumerateChildren(clone).ToChildList();
         Assert.Equal(2, cloneChildren.Count);
     }
 
@@ -421,9 +422,9 @@ public sealed class CommandBufferCloneTests
         var clone = buffer.Clone(root);
         buffer.Submit();
 
-        var cloneMids = world.GetChildren(clone);
+        var cloneMids = world.EnumerateChildren(clone).ToChildList();
         Assert.Single(cloneMids);
-        var cloneLeaves = world.GetChildren(cloneMids[0]);
+        var cloneLeaves = world.EnumerateChildren(cloneMids[0]).ToChildList();
         Assert.Single(cloneLeaves);
         Assert.True(world.TryGet(cloneLeaves[0], out Health _));
     }
@@ -458,7 +459,7 @@ public sealed class CommandBufferCloneTests
 
         Assert.True(world.TryGet(clone, out Position pos));
         Assert.Equal(new Position(99, 99), pos);
-        Assert.Single(world.GetChildren(clone));
+        Assert.Single(world.EnumerateChildren(clone).ToChildList());
     }
 
     [Fact]
@@ -477,7 +478,7 @@ public sealed class CommandBufferCloneTests
         Assert.False(world.TryGet<Position>(clone, out _));
         Assert.True(world.TryGet(clone, out Velocity vel));
         Assert.Equal(new Velocity(3, 4), vel);
-        Assert.Single(world.GetChildren(clone));
+        Assert.Single(world.EnumerateChildren(clone).ToChildList());
     }
 
     [Fact]

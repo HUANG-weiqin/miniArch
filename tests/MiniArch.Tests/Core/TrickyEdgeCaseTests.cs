@@ -1,5 +1,6 @@
 using System.Reflection;
 using MiniArch.Core;
+using MiniArch.Tests.Core.TestSupport;
 using MiniQuery = MiniArch.Core.Query;
 
 namespace MiniArchTests.Core;
@@ -408,12 +409,12 @@ public sealed class TrickyEdgeCaseTests
     // ══════════════════════════════════════════════════════�?
 
     [Fact]
-    public void GetChildren_on_entity_with_no_children_returns_empty()
+    public void EnumerateChildren_on_entity_with_no_children_returns_empty()
     {
         var world = new World();
         var entity = world.Create();
 
-        var children = world.GetChildren(entity);
+        var children = world.EnumerateChildren(entity).ToChildList();
 
         Assert.NotNull(children);
         Assert.Empty(children);
@@ -443,7 +444,7 @@ public sealed class TrickyEdgeCaseTests
         Assert.NotEqual(child.Version, recycled.Version);
 
         Assert.False(world.TryGetParent(recycled, out _));
-        Assert.Empty(world.GetChildren(parent));
+        Assert.False(world.HasChildren(parent));
     }
 
     [Fact]
@@ -482,7 +483,7 @@ public sealed class TrickyEdgeCaseTests
         Assert.False(world.IsAlive(child2));
         Assert.True(world.IsAlive(child3));
 
-        var remainingChildren = world.GetChildren(parent);
+        var remainingChildren = world.EnumerateChildren(parent).ToChildList();
         Assert.Equal(2, remainingChildren.Count);
         Assert.Contains(child1, remainingChildren);
         Assert.Contains(child3, remainingChildren);

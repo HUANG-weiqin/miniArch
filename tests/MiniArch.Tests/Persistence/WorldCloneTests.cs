@@ -1,4 +1,5 @@
 using MiniArch.Core;
+using MiniArch.Tests.Core.TestSupport;
 
 namespace MiniArchTests.Persistence;
 
@@ -142,7 +143,7 @@ public sealed class WorldCloneTests
         Assert.Equal(parent, resolvedParent);
         Assert.Equal(
             [firstChild, secondChild],
-            cloned.GetChildren(parent).OrderBy(entity => entity.Id).ToArray());
+            cloned.EnumerateChildren(parent).ToChildList().OrderBy(entity => entity.Id).ToArray());
     }
 
     [Fact]

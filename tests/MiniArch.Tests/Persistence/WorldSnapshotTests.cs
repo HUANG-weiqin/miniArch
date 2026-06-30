@@ -1,5 +1,6 @@
 using System.IO;
 using MiniArch.Core;
+using MiniArch.Tests.Core.TestSupport;
 
 namespace MiniArchTests.Persistence;
 
@@ -160,7 +161,7 @@ public sealed class WorldSnapshotTests
         Assert.Equal(parent, resolvedParent);
         Assert.Equal(
             [firstChild, secondChild],
-            loaded.GetChildren(parent).OrderBy(entity => entity.Id).ToArray());
+            loaded.EnumerateChildren(parent).ToChildList().OrderBy(entity => entity.Id).ToArray());
     }
 
     [Fact]

@@ -2,6 +2,7 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using MiniArch.Core;
+using MiniArch.Tests.Core.TestSupport;
 
 namespace MiniArchTests.Core;
 
@@ -191,7 +192,7 @@ public sealed class FrameDeltaDeterminismTests
         deltas.Add(stream.Snapshot()); stream.Submit();
 
         // Frame 2: mutate a clone child
-        var cloneChildren = source.GetChildren(clone);
+        var cloneChildren = source.EnumerateChildren(clone).ToChildList();
         foreach (var cc in cloneChildren)
             stream.Add(cc, new Health(7));
         deltas.Add(stream.Snapshot()); stream.Submit();

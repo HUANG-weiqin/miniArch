@@ -1216,7 +1216,7 @@ public sealed class CommandStreamTests
         Assert.True(replica.TryGet(clone, out Position p));
         Assert.Equal(new Position(1, 2), p);
 
-        var cloneChildren = replica.GetChildren(clone);
+        var cloneChildren = replica.EnumerateChildren(clone).ToChildList();
         Assert.Equal(2, cloneChildren.Count);
     }
 
@@ -1295,9 +1295,9 @@ public sealed class CommandStreamTests
         Assert.Equal(new Position(1, 2), p);
 
         // Clone should have nested children
-        var cloneChildren = source.GetChildren(clone);
+        var cloneChildren = source.EnumerateChildren(clone).ToChildList();
         Assert.Single(cloneChildren);
-        var grandChildren = source.GetChildren(cloneChildren[0]);
+        var grandChildren = source.EnumerateChildren(cloneChildren[0]).ToChildList();
         Assert.Single(grandChildren);
     }
 
