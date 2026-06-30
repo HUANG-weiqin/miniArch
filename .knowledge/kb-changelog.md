@@ -9,6 +9,17 @@ updated: 2026-06-30
 > 这个页面只记录**重大架构变更和知识库校准事件**，供追溯。
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
 
+## 2026-06-30 三项公共 API 改进
+
+外部 review 出的三项高优改动全部落地（A1 + E1/E2 + B3）：
+
+- **A1：`MiniArch.Core.Query` → `MiniArch.Core.QueryCache`**（internal 重命名，免门禁）。消除 public struct `MiniArch.Query` 与 internal class `Core.Query` 的命名空间碰撞。涉及 `Core/Query.cs` 类定义、`Core/QueryIterators.cs`、`Query.cs` facade、`World.QueryCache.cs`、`World.cs` 字段类型、19 个 test/benchmark 文件的 `using MiniQuery = ...` 别名。
+- **E1+E2：`WorldStateSnapshot` 生命周期 + rollback 池**。原 `_stateSnapshotSpare` 单 slot 改为 `Stack<WorldStateSnapshot>` 池；新增 `IsRecycled` 公共属性；`RestoreState` 对已 recycled 的 snapshot 抛 `InvalidOperationException`（修复原静默状态污染 bug）；支持 GGPO 多帧深度回滚窗口稳态零 GC。新增 4 个测试覆盖：recycled 标志、double-restore throw、多帧乱序 restore、稳态池复用。
+- **B3：`IChunkForEach` 接口**（`src/MiniArch/Query.cs:196`）。新增 `Query.ForEachChunk<TForEach>(ref TForEach)` 和 `ForEachChunkParallel<TForEach>(TForEach)`，零分配 + JIT 特化去虚化。保留原 delegate API。同步重构：抽出 `BuildEntityRangePartitions` helper 让 delegate/IChunkForEach 两套并行入口共用 partitioning。
+- **`EntityInfo` 从公共 API 删除**：`RowIndex` 对用户无用（`Archetype` 是 internal 字段且无意义），改 `internal`。`World.TryGetEntityVersion(Entity, out int)` 作为公共替代。`TryGetLocation` 改 `internal`。涉及 `EntityInfo.cs`、`World.EntityLifecycle.cs`、`docs/README.md`、`kb-core-ecs.md`。
+- **CHANGELOG**：新增 2.2.0 条目。
+- **kb 同步**：`kb-architecture-review.md`（§4b 新增"回滚快照池"、§6 Query 系统更新、P3b 新增"已修复"段）、`kb-core-ecs.md`（用户 API 分层表加 IChunkForEach 行、命名说明改为 QueryCache）、`kb-snapshot-persistence.md`（WorldStateSnapshot 生命周期段全新）、`kb-parallel-query.md`（API 段加 IChunkForEach、决策段重写、不做的事表更新）。
+
 ## 2026-06-30 第二轮 agent 反馈修复
 
 基于 6 个 agent 再次审计的反馈，做了以下增量修复：

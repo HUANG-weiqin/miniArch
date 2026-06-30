@@ -1,5 +1,5 @@
 using MiniArch.Core;
-using MiniQuery = MiniArch.Core.Query;
+using MiniQuery = MiniArch.Core.QueryCache;
 
 namespace MiniArchTests.Core;
 

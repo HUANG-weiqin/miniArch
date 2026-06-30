@@ -11,9 +11,9 @@ namespace MiniArch.Core;
 /// </summary>
 internal readonly struct ArchetypeEnumerable : IEnumerable<Archetype>
 {
-    private readonly Query _query;
+    private readonly QueryCache _query;
 
-    internal ArchetypeEnumerable(Query query)
+    internal ArchetypeEnumerable(QueryCache query)
     {
         _query = query;
     }
@@ -62,7 +62,7 @@ internal struct ArchetypeEnumerator
     /// <summary>
     /// Creates an enumerator for a query.
     /// </summary>
-    public ArchetypeEnumerator(Query query)
+    public ArchetypeEnumerator(QueryCache query)
     {
         _archetypes = query.GetArchetypeArray(out var archetypeCount);
         _archetypeCount = archetypeCount;

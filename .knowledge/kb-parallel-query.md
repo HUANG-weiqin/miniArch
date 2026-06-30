@@ -2,7 +2,7 @@
 title: 并行 Query 迭代
 module: MiniArch.Core Query
 description: ChunkView 作为并行工作单元的并行 query 迭代 API、安全模型、性能特征
-updated: 2026-06-21 (从设计草稿落地为已实现 API)
+updated: 2026-06-30 (新增 IChunkForEach 接口路径：零分配 + JIT 特化去虚化)
 ---
 # 并行 Query 迭代
 
@@ -44,14 +44,25 @@ Query.GetChunkViewArray()  →  ChunkView[0]  ChunkView[1]  ...  ChunkView[N-1]
 ```csharp
 public delegate void ChunkAction(ChunkView chunk);
 
-public void ForEachChunk(ChunkAction action);          // 顺序迭代，零分配（缓存 delegate 时）
+// Delegate-based（缓存 delegate 时零分配）：
+public void ForEachChunk(ChunkAction action);          // 顺序迭代
 public void ForEachChunkParallel(ChunkAction action);  // 并行迭代，组件值读写安全
+
+// IChunkForEach-based（始终零分配 + JIT 特化去虚化）：
+public interface IChunkForEach {
+    void OnChunk(ChunkView chunk);
+}
+public void ForEachChunk<TForEach>(ref TForEach forEach)
+    where TForEach : IChunkForEach;            // 顺序；ref 支持有状态 job
+public void ForEachChunkParallel<TForEach>(TForEach forEach)
+    where TForEach : IChunkForEach;            // 并行；struct 按 worker 拷贝
 ```
 
 实现侧的关键决策：
 - `ForEachChunk` 直接对 `_query.GetChunkViewSpan()` 跑 `for` 循环，没有跨 lambda 分配。
 - `ForEachChunkParallel` 用 `_query.GetChunkViewArray(out var count)`（新增内部 API）拿到 underlying `ChunkView[]` 数组+count，因为 `ReadOnlySpan<T>` 无法被 lambda 捕获。
 - 并行入口：`Parallel.For(0, count, i => action(chunks[i]))`。
+- 共享 `BuildEntityRangePartitions` helper 处理"chunk 数 < 线程数"时的 entity 子区间拆分（delegate 和 IChunkForEach 路径共用）。
 
 ### 典型用法
 
@@ -103,12 +114,23 @@ cs.Submit();
 - 实测在 chunk 数 ≥ 核心数时性能足够好
 - 如果未来 profiling 显示 `Parallel.For` 的 partitioner 开销大，再换——先证明收益再优化
 
-### 为什么用 delegate 而不是 `IForEach` struct 接口
+### 为什么提供两套 API（delegate + IChunkForEach）
+
+- **delegate 路径**：保留是为了简洁。`Move` 是 static method 时 `query.ForEachChunkParallel(Move)` 编译器生成 static delegate，零分配。适合一次性脚本/原型。
+- **IChunkForEach 路径**：解决 inline lambda 不缓存场景的隐藏分配。用户每帧写：
+  ```csharp
+  query.ForEachChunk(chunk => { /* ... */ });  // ← 每次 call 都 new Delegate
+  ```
+  换成 struct + interface 后 JIT 跨泛型特化，零分配 + 内层调用去虚化。
+- **设计取舍**：没有像 Arch/Friflo 那样提供 `IForEach<T1,T2>` typed span 接口。ChunkView 内部的 `GetSpan<T>()` 已经只做 1 次 colIdx 查找 + 1 次 IsChunked 分支（每 chunk 而非每 entity），typed 接口能省的常数有限。YAGNI：用户用例出现 typed 收益后再加。
+- **顺序 vs 并行的参数模式**：顺序用 `ref TForEach`（job 字段跨 chunk 可见，支持 accumulator）；并行用 by-value `TForEach`（struct 按 worker 拷贝，每个 worker 独立，per-worker 累积用 `[ThreadStatic]`）。并行不能用 `in`/`ref`，因为 `Parallel.For` 的 lambda 无法捕获 ref-like 参数。
+
+### 历史：为什么用 delegate 起步
 
 - Arch 走 `IForEach` struct 是为了 JIT 内联，避开虚方法调度
 - 但 MiniArch 的 chunk API 让用户自己写内层 `for` 循环（遍历 `Span<T>`），delegate 调用只发生在外层（每 chunk 一次），不是热路径
 - IForEach 模式要求用户为每种组件组合定义 struct，API 复杂度高
-- **未来可选**：如果 profiling 显示 delegate 调用是瓶颈，再加 `IForEachChunk` struct 重载
+- **2026-06-30 落地**：profiling 在 inline-lambda-不缓存的真实使用模式下显示 delegate 分配是 GC 噪声来源，加 `IChunkForEach` 路径消除该路径上的全部分配
 
 ### 为什么 `ForEachChunkParallel` 内部用 `GetChunkViewArray` 而不是 `GetChunkViewSpan`
 
@@ -210,5 +232,5 @@ cs.Submit();
 | `IJob` / `JobHandle` 依赖链 | `Parallel.For` 足够；自定义线程池是另一个项目 |
 | 自动 Read/Write 冲突检测 | Arch/Friflo 都没做，痛度不够 |
 | 并行结构变更 | 复杂度爆炸，收益为负（cache 争用） |
-| `IForEach<T1,T2,...>` struct 接口 | 未来可选，v1 先用 delegate 验证收益 |
+| `IForEach<T1,T2,...>` typed span 接口 | ChunkView.GetSpan 已是 per-chunk 而非 per-entity 开销；先证明 typed 收益再加 |
 | SIMD query 匹配 | query 匹配已经用 512-bit mask，瓶颈不在这 |

@@ -322,10 +322,10 @@ public sealed class WorldSnapshotTests
         b.Create(new Position(1, 2));
 
         // Now diverge their free lists while keeping live state identical.
-        // World A: create id 1 then destroy it  �?free list [1(v2)], slot count 2
-        // World B: create ids 1,2 then destroy both �?free list [2(v2),1(v2)], slot count 3
+        // World A: create id 1 then destroy it  �?free list [1(v2)], slot count 2
+        // World B: create ids 1,2 then destroy both �?free list [2(v2),1(v2)], slot count 3
         // In both worlds the only alive entity is id 0 with Position(1,2), so
-        // live-state hashes must agree �?but canonical (with free list) must not.
+        // live-state hashes must agree �?but canonical (with free list) must not.
         var a1 = a.Create(new Velocity(0, 0));
         a.Destroy(a1);
 
@@ -516,7 +516,7 @@ public sealed class WorldSnapshotTests
         // Position is 8 bytes; the byte-based segment capacity (2MB/8 = 262144) means
         // auto-promotion would need a huge entity count, so we force chunked explicitly
         // and then grow segments. All entities are created via world.Create so that
-        // _records stays consistent �?direct arch.AddEntity would bypass the registry.
+        // _records stays consistent �?direct arch.AddEntity would bypass the registry.
         var world = new World();
         const int EntityCount = 40;
         var entities = new Entity[EntityCount];
@@ -572,7 +572,7 @@ public sealed class WorldSnapshotTests
         // new trailing segments. After RestoreState, the archetype must revert to
         // exactly the segment layout captured, with no stale trailing-segment data.
         //
-        // Use a large component so segment capacity (2MB / sizeof(Big)) is small �?
+        // Use a large component so segment capacity (2MB / sizeof(Big)) is small �?
         // a modest create burst then forces real GrowChunked during the prediction frame.
         var world = new World();
         var seed = world.Create(new BigPayload(1));
@@ -619,7 +619,7 @@ public sealed class WorldSnapshotTests
         Assert.Equal(2, seen);
     }
 
-    // ~512 bytes per entity �?segment capacity �?4096 (2MB / 512). A 5000-create
+    // ~512 bytes per entity �?segment capacity �?4096 (2MB / 512). A 5000-create
     // burst then reliably crosses a segment boundary during the prediction frame.
 #pragma warning disable CS0649 // padding fields intentionally never assigned
     private struct BigPayload
@@ -644,6 +644,92 @@ public sealed class WorldSnapshotTests
 
         var componentType = ComponentRegistry.Shared.GetOrCreate<T>();
         return location.Archetype.GetComponentAt<T>(location.Archetype.GetComponentIndex(componentType), location.RowIndex);
+    }
+
+    // ──────────────────────────────────────────────
+    //  Lifecycle / rollback-pool coverage
+    // ──────────────────────────────────────────────
+
+    [Fact]
+    public void Restored_snapshot_is_marked_recycled()
+    {
+        var world = new World();
+        world.Create(new Position(1, 2));
+
+        var snap = world.CaptureState();
+        Assert.False(snap.IsRecycled);
+
+        world.RestoreState(snap);
+        Assert.True(snap.IsRecycled);
+    }
+
+    [Fact]
+    public void Restoring_same_snapshot_twice_throws()
+    {
+        var world = new World();
+        world.Create(new Position(1, 2));
+
+        var snap = world.CaptureState();
+        world.RestoreState(snap);
+
+        Assert.Throws<InvalidOperationException>(() => world.RestoreState(snap));
+    }
+
+    [Fact]
+    public void Multi_frame_rollback_window_round_trips_out_of_order()
+    {
+        // GGPO-style: capture N frames forward, then restore an earlier
+        // handle on misprediction. The pool must support multiple live
+        // snapshots simultaneously.
+        var world = new World();
+        var e = world.Create(new Position(0, 0));
+
+        var ring = new WorldStateSnapshot[4];
+        for (var i = 0; i < ring.Length; i++)
+        {
+            ring[i] = world.CaptureState();
+            world.Set(e, new Position(i + 1, 0));
+        }
+
+        // World is now at Position(4, 0). Roll back to frame 1's snapshot,
+        // which captured Position(1, 0). The other snapshots remain live.
+        world.RestoreState(ring[1]);
+        Assert.Equal(1, world.Get<Position>(e).X);
+
+        // Restoring another still-live handle (frame 3) must work even though
+        // ring[1] has been recycled into the pool.
+        world.RestoreState(ring[3]);
+        Assert.Equal(3, world.Get<Position>(e).X);
+    }
+
+    [Fact]
+    public void Multi_frame_window_is_zero_alloc_in_steady_state()
+    {
+        // Warm the pool by running one full capture/restore cycle of depth N,
+        // then assert that a second identical cycle allocates no new
+        // WorldStateSnapshot instances. We detect this by counting how many
+        // times the constructor would run: each pooled CaptureState reuses
+        // an instance, so after warmup the pool depth covers the window.
+        var world = new World();
+        world.Create(new Position(7, 7));
+
+        const int Depth = 6;
+        var ring = new WorldStateSnapshot[Depth];
+
+        // Warm-up: prime the pool.
+        for (var i = 0; i < Depth; i++) ring[i] = world.CaptureState();
+        for (var i = 0; i < Depth; i++) world.RestoreState(ring[i]);
+
+        // Steady state: every CaptureState must pop from the pool. We verify
+        // by checking reference identity against the warm-up handles, which
+        // were all returned to the pool.
+        for (var i = 0; i < Depth; i++)
+        {
+            var s = world.CaptureState();
+            Assert.True(Array.IndexOf(ring, s) >= 0,
+                "CaptureState should reuse a pooled instance in steady state.");
+            world.RestoreState(s);
+        }
     }
 }
 

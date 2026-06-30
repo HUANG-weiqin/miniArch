@@ -10,9 +10,9 @@ namespace MiniArch;
 /// </summary>
 public readonly struct Query
 {
-    private readonly MiniArch.Core.Query _query;
+    private readonly MiniArch.Core.QueryCache _query;
 
-    internal Query(MiniArch.Core.Query query)
+    internal Query(MiniArch.Core.QueryCache query)
     {
         _query = query;
     }
@@ -20,7 +20,7 @@ public readonly struct Query
     /// <summary>
     /// Gets the underlying advanced query.
     /// </summary>
-    internal MiniArch.Core.Query Advanced => _query;
+    internal MiniArch.Core.QueryCache Advanced => _query;
 
     /// <summary>
     /// Returns the struct enumerator used by foreach.
@@ -79,6 +79,32 @@ public readonly struct Query
     }
 
     /// <summary>
+    /// Iterates matched chunks sequentially using a struct <c>IChunkForEach</c>
+    /// implementation. The JIT specialises the call site for the concrete
+    /// <typeparamref name="TForEach"/> type, devirtualising
+    /// <see cref="IChunkForEach.OnChunk"/> and removing the delegate
+    /// allocation that the <see cref="ChunkAction"/>-based overload incurs
+    /// when its lambda is not cached.
+    /// <para>
+    /// <typeparamref name="TForEach"/> is passed by <c>ref</c> so that
+    /// mutable accumulator fields on the struct are visible across chunks:
+    /// <code>
+    /// var job = new SumJob();
+    /// query.ForEachChunk(ref job);
+    /// return job.Total;
+    /// </code>
+    /// </para>
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void ForEachChunk<TForEach>(ref TForEach forEach)
+        where TForEach : IChunkForEach
+    {
+        var chunks = _query.GetChunkViewSpan();
+        for (var i = 0; i < chunks.Length; i++)
+            forEach.OnChunk(chunks[i]);
+    }
+
+    /// <summary>
     /// Iterates matched chunks in parallel across worker threads.
     /// When chunk count is lower than processor count, entities within
     /// chunks are split into sub-ranges for finer-grained parallelism.
@@ -102,8 +128,68 @@ public readonly struct Query
         }
 
         // Fewer chunks than threads — split entity ranges within chunks.
+        BuildEntityRangePartitions(chunks, count, threads, out var partitionArray, out var partitionCount);
+        if (partitionCount == 0)
+            return;
+        if (partitionCount == 1)
+        {
+            action(partitionArray[0]);
+            return;
+        }
+
+        Parallel.For(0, partitionCount, i => action(partitionArray[i]));
+    }
+
+    /// <summary>
+    /// Iterates matched chunks in parallel using a struct <c>IChunkForEach</c>
+    /// implementation. Same parallelism strategy as the delegate-based
+    /// <see cref="ForEachChunkParallel(ChunkAction)"/> overload, but the inner
+    /// <see cref="IChunkForEach.OnChunk"/> call is devirtualised to the
+    /// concrete <typeparamref name="TForEach"/> type.
+    /// <para>
+    /// <typeparamref name="TForEach"/> is passed by value and captured into
+    /// each <c>Parallel.For</c> worker. For stateful per-worker accumulation,
+    /// use <c>[ThreadStatic]</c> fields inside the struct rather than mutating
+    /// the struct itself.
+    /// </para>
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void ForEachChunkParallel<TForEach>(TForEach forEach)
+        where TForEach : IChunkForEach
+    {
+        var chunks = _query.GetChunkViewArray(out var count);
+        if (count == 0)
+            return;
+
+        var threads = Environment.ProcessorCount;
+        if (count >= threads)
+        {
+            Parallel.For(0, count, i => forEach.OnChunk(chunks[i]));
+            return;
+        }
+
+        BuildEntityRangePartitions(chunks, count, threads, out var partitionArray, out var partitionCount);
+        if (partitionCount == 0)
+            return;
+        if (partitionCount == 1)
+        {
+            forEach.OnChunk(partitionArray[0]);
+            return;
+        }
+
+        Parallel.For(0, partitionCount, i => forEach.OnChunk(partitionArray[i]));
+    }
+
+    // Splits chunks into N entity-range subviews when chunk count is below
+    // processor count, so Parallel.For still has enough independent units
+    // of work. Returns the pooled buffer (caller owns lifetime via
+    // ThreadStatic reuse) and the live count via out parameters.
+    private static void BuildEntityRangePartitions(
+        ChunkView[] chunks, int count, int threads,
+        out ChunkView[] partitionArray, out int partitionCount)
+    {
         var subPerChunk = Math.Max(1, threads / count);
-        var partitions = GetPartitionBuffer(threads);
+        partitionArray = GetPartitionBuffer(threads);
         var pIdx = 0;
         for (var i = 0; i < count; i++)
         {
@@ -116,15 +202,12 @@ public readonly struct Query
             {
                 var size = per + (j < rem ? 1 : 0);
                 if (size > 0)
-                    partitions[pIdx++] = chunks[i].Slice(start, size);
+                    partitionArray[pIdx++] = chunks[i].Slice(start, size);
                 start += size;
             }
         }
 
-        if (pIdx == 1)
-            action(partitions[0]);
-        else
-            Parallel.For(0, pIdx, i => action(partitions[i]));
+        partitionCount = pIdx;
     }
 
     [ThreadStatic]
@@ -145,6 +228,38 @@ public readonly struct Query
 public delegate void ChunkAction(ChunkView chunk);
 
 /// <summary>
+/// Zero-allocation chunk-level iteration interface. Implement this on a
+/// <c>struct</c> and pass an instance to
+/// <see cref="Query.ForEachChunk{TForEach}(ref TForEach)"/> or
+/// <see cref="Query.ForEachChunkParallel{TForEach}(TForEach)"/>: the JIT
+/// specialises the call site for the concrete struct type, devirtualising
+/// <see cref="OnChunk"/> and eliding the delegate allocation that the
+/// <see cref="ChunkAction"/>-based overloads incur when their lambda is not
+/// cached by the caller.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>Sequential usage</b> (<c>ref</c> parameter): the job struct is passed
+/// by reference, so mutable fields on the struct are visible across chunks
+/// (useful for accumulators).
+/// </para>
+/// <para>
+/// <b>Parallel usage</b> (<c>in</c> parameter): the struct is copied into
+/// each worker; per-worker accumulation must use <c>[ThreadStatic]</c>
+/// fields inside the struct rather than mutating the struct itself, since
+/// each worker observes its own copy.
+/// </para>
+/// </remarks>
+public interface IChunkForEach
+{
+    /// <summary>
+    /// Processes a single matched chunk. Reads/writes happen via
+    /// <see cref="ChunkView.GetSpan{T}"/> / <see cref="ChunkView.GetComponentSpanAt{T}"/>.
+    /// </summary>
+    void OnChunk(ChunkView chunk);
+}
+
+/// <summary>
 /// Struct enumerator over entities.
 /// </summary>
 public struct QueryEnumerator
@@ -157,7 +272,7 @@ public struct QueryEnumerator
     private int _count;
     private Entity _current;
 
-    internal QueryEnumerator(MiniArch.Core.Query query)
+    internal QueryEnumerator(MiniArch.Core.QueryCache query)
     {
         _archetypes = query.GetArchetypeArray(out var archetypeCount);
         _archetypeCount = archetypeCount;
@@ -215,10 +330,10 @@ public struct QueryEnumerator
 /// </summary>
 public readonly struct OrderedQuery
 {
-    private readonly MiniArch.Core.Query _query;
+    private readonly MiniArch.Core.QueryCache _query;
     private readonly IComparer<Entity> _comparer;
 
-    internal OrderedQuery(MiniArch.Core.Query query, IComparer<Entity> comparer)
+    internal OrderedQuery(MiniArch.Core.QueryCache query, IComparer<Entity> comparer)
     {
         _query = query;
         _comparer = comparer;
@@ -235,7 +350,7 @@ public readonly struct OrderedQuery
 /// </summary>
 public struct OrderedQueryEnumerator : IDisposable
 {
-    private readonly MiniArch.Core.Query _query;
+    private readonly MiniArch.Core.QueryCache _query;
     private readonly IComparer<Entity> _comparer;
     private Entity[]? _entities;
     private int _count;
@@ -243,7 +358,7 @@ public struct OrderedQueryEnumerator : IDisposable
     private bool _initialized;
     private Entity _current;
 
-    internal OrderedQueryEnumerator(MiniArch.Core.Query query, IComparer<Entity> comparer)
+    internal OrderedQueryEnumerator(MiniArch.Core.QueryCache query, IComparer<Entity> comparer)
     {
         _query = query;
         _comparer = comparer;

@@ -2,7 +2,7 @@
 title: Architecture Mechanistic Review
 module: MiniArch.Core
 description: Mechanistic insight of the entire miniArch ECS library — one-line truths, subsystem breakdown, data flows, known issues, and design tensions. Links to per-subsystem kb pages for depth.
-updated: 2026-06-30 (修正 partial 文件计数 6→7 与行号漂移; 全文重写: 删除已移除的 CommandBuffer 描述, 同步 FrameDelta byte[]+varint 重写, 补充两层 archetype lookup 与两段式 query 失效; 同日删死代码 TryGetArchetype)
+updated: 2026-06-30 (Core.Query → Core.QueryCache 重命名；CaptureState/RestoreState 改 rollback 池支持多帧深度；新增 IChunkForEach 零分配 chunk 迭代)
 ---
 # Architecture Mechanistic Review
 
@@ -31,7 +31,7 @@ Archetype (单块 byte[] 或多 Segment，按列排布所有组件数据)
   ├── 内联 edge cache: _addDestinationCache / _removeDestinationCache (Archetype?[] 直索引)
   └── ChunkView (public readonly struct 视图，屏蔽单块/多 Segment 差异)
   ↓
-Query (archetype/chunk 快照 + 两段式失效: archetypeCount + per-archetype segment count)
+QueryCache (archetype/chunk 快照 + 两段式失效: archetypeCount + per-archetype segment count)
   ↓
 World (拆分为 7 个 partial 文件，编排一切)
   ↓
@@ -74,6 +74,14 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - ComponentMask：8 × ulong（id 0..511），手写 8-way 分支 JIT 友好；`MaskBuilder` 是 mutable counterpart，`BitsSet` 跟踪 canonical 性
 - Edge Cache：内联在 Archetype 上的 `Archetype?[] _addDestinationCache` / `_removeDestinationCache`，按 componentId 直索引
 
+### 4b. 回滚快照池（2026-06-30 新增）
+- `World._stateSnapshotPool: Stack<WorldStateSnapshot>`（替换原单 spare slot）
+- `CaptureState()`：池非空时 Pop，否则 `new`；填充数据后 `_isRecycled = false` 返回给调用者
+- `RestoreState(snap)`：校验 `snap._isRecycled == false`（已 recycled 则 `InvalidOperationException` fail-fast）；恢复后 `_isRecycled = true`、`Clear()`、Push 回池
+- 池容量自我稳定在峰值并发使用量 → GGPO 多帧窗口（N 帧预测+乱序 restore）稳态零 GC
+- 历史问题：原单 spare 设计下，连着两次 `CaptureState` 不 restore 时第二次必分配；重复 restore 同一 snapshot 静默污染 world 状态。两个问题都被池 + IsRecycled 修复
+- 代码位置：`World.cs:902-1015` + `WorldStateSnapshot.cs:34-99`
+
 ### 5. 组件类型系统
 - `ComponentType` = `internal readonly record struct` 包 int；用户侧只见 `<T>` 泛型
 - `ComponentRegistry.Shared` 全局 copy-on-write
@@ -81,15 +89,18 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - **跨进程约束**：`ComponentType.Value` 是进程内 int，FrameDelta wire 直接 varint 编码——跨进程使用必须双方 `ComponentRegistry` 注册顺序一致（见 `FrameDelta.AsSpan` XML doc）
 
 ### 6. Query 系统
-- `QueryDescription`（`Type` 集合）→ `QueryFilter`（`ComponentType` 集合）→ `Query`（archetype + chunk view 快照）
+- `QueryDescription`（`Type` 集合）→ `QueryFilter`（`ComponentType` 集合）→ `QueryCache`（archetype + chunk view 快照，`internal sealed class`）
 - **两段式失效**（`Core/Query.cs:104-128`）：
   - 快路径：`World.ArchetypeCount == _lastArchetypeCount` → 不扫
   - 慢路径 A：archetype 数量变 → `Refresh`（append-only 扫新 archetype）
   - 慢路径 B：matched archetype segment count 变（chunked 增长）→ `RefreshViewsOnly`（不重做 match，只重建 ChunkView）
 - `Matches`：mask 预过滤 + `Signature.Contains` fallback for id ≥ 512
 - 用户层 `MiniArch.Query` 是 struct facade：`GetChunks()` 零拷贝、`ForEachChunk` / `ForEachChunkParallel`、`OrderBy` 走 `ArrayPool<Entity>.Shared.Rent`
+- 两类 chunk 迭代入口：
+  - `ForEachChunk(ChunkAction)` / `ForEachChunkParallel(ChunkAction)`：基于 delegate，缓存 delegate 时零分配
+  - `ForEachChunk<TForEach>(ref TForEach)` / `ForEachChunkParallel<TForEach>(TForEach)`：基于 `IChunkForEach` struct 接口（`src/MiniArch/Query.cs:196`），JIT 特化去虚化、零分配。`ref` 路径支持 stateful accumulator；by-value 路径供并行 worker 拷贝（不能用 `in` 因 Parallel.For lambda 不允许捕获 ref-like 参数）
 - `ForEachChunkParallel` 在 chunks < threads 时自动按 entity 子区间拆分，`[ThreadStatic] t_partitions` 避免每次分配
-- 代码位置：`Core/Query.cs` + `Query.cs` + `World.QueryCache.cs`
+- 代码位置：`Core/Query.cs`（`QueryCache` internal class）+ `Query.cs`（`MiniArch.Query` facade + `IChunkForEach`）+ `World.QueryCache.cs`
 
 ### 7. Hierarchy
 - side-table SoA 邻接表：`_parentByChild[id]` 直索引 + `_firstChild[id]` → `_childNext[slot]` → -1 链表 + slot free list
@@ -146,6 +157,11 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - `World.Add<T>` / `World.Set<T>` 都是 upsert，文档已明示是 alias（`World.StructuralChange.cs:11-22`）
 - 严格 add 语义需要用户先 `Has<T>` 检查
 - 当前是"够用的简单方案"——不打算改
+
+### P3b.（已修复）CaptureState/RestoreState 单 spare + 静默错误
+- 历史问题：`_stateSnapshotSpare` 单 slot，>1 帧深度时第二次 CaptureState 强制分配；重复 restore 同一 snapshot 静默污染 world 状态
+- **2026-06-30 修复**：替换为 `Stack<WorldStateSnapshot>` 池 + `IsRecycled` 标志 + RestoreState fail-fast
+- 现在支持任意深度 GGPO 回滚窗口（稳态零 GC），重复 restore 抛 `InvalidOperationException`
 
 ### P4. Hierarchy 作为 side-table 的表达力缺失
 - 无法写 `With<ChildOf>()` 这样的查询

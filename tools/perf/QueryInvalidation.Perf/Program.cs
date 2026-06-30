@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using MiniWorld = MiniArch.World;
 using MiniEntity = MiniArch.Entity;
-using MiniQuery = MiniArch.Core.Query;
+using MiniQuery = MiniArch.Core.QueryCache;
 using MiniQueryDescription = MiniArch.QueryDescription;
 using ArchWorld = Arch.Core.World;
 using ArchEntity = Arch.Core.Entity;

@@ -110,9 +110,11 @@ buffer.Submit();                   // apply locally
 replicaWorld.Replay(delta);       // ensure replay reservation + ID validation
 
 // High-frequency in-place rollback (GGPO-style 60fps, zero-alloc steady state):
+// Multiple snapshots may be live simultaneously — supports multi-frame
+// rollback windows (capture N frames ahead, restore out-of-order on misprediction).
 var handle = world.CaptureState();  // save current mutable state
 // ... predict frames on the same world ...
-world.RestoreState(handle);         // revert in place, handle is recycled
+world.RestoreState(handle);         // revert in place, handle recycled to pool
 
 // Branching / long-lived checkpoint: Clone materializes a NEW independent world
 var branch = world.Clone();

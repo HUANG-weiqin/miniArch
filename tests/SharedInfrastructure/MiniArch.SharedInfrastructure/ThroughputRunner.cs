@@ -6,7 +6,7 @@ using MiniArch.Core;
 namespace MiniArchBenchmarks;
 
 using ArchQueryDescription = Arch.Core.QueryDescription;
-using MiniQuery = MiniArch.Core.Query;
+using MiniQuery = MiniArch.Core.QueryCache;
 using MiniComponentType = MiniArch.Core.ComponentType;
 using ArchWorld = Arch.Core.World;
 using ArchEntity = Arch.Core.Entity;

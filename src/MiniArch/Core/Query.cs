@@ -8,7 +8,7 @@ using MiniArch;
 /// Cached archetype query with incremental append-only invalidation.
 /// Archetypes are never removed, so we only scan newly added ones.
 /// </summary>
-internal sealed class Query
+internal sealed class QueryCache
 {
     private readonly World _world;
     private readonly QueryFilter _filter;
@@ -33,7 +33,7 @@ internal sealed class Query
     // Tracks expected views per archetype (indexed parallel to _snapshotArchetypes).
     private int[] _archetypeExpectedViews = [];
 
-    internal Query(World world, QueryFilter filter)
+    internal QueryCache(World world, QueryFilter filter)
     {
         _world = world;
         _filter = filter;
@@ -42,7 +42,7 @@ internal sealed class Query
         _anyMask = ComputeFilterMask(filter.Any.AsSpan());
     }
 
-    internal static Query Create(World world, in QueryDescription description)
+    internal static QueryCache Create(World world, in QueryDescription description)
     {
         ArgumentNullException.ThrowIfNull(world);
         return world.GetAdvancedQuery(in description);

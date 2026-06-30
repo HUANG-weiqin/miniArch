@@ -5,7 +5,7 @@ using DefaultEcs;
 namespace MiniArchBenchmarks;
 
 using MiniEntity = MiniArch.Entity;
-using MiniQuery = MiniArch.Core.Query;
+using MiniQuery = MiniArch.Core.QueryCache;
 using MiniQueryDescription = MiniArch.QueryDescription;
 using MiniWorld = MiniArch.World;
 using MiniComponentType = MiniArch.Core.ComponentType;

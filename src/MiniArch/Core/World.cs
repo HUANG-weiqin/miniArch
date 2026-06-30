@@ -1,4 +1,4 @@
-using System.Buffers;
+﻿using System.Buffers;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
@@ -58,7 +58,7 @@ public sealed partial class World : IDisposable
     private EntityRecord[] _records;
     private int _entitySlotCount;
     private Dictionary<QueryDescription, QueryFilter> _queryFiltersByDescription = new();
-    private Dictionary<QueryFilter, MiniArch.Core.Query> _queries = new();
+    private Dictionary<QueryFilter, MiniArch.Core.QueryCache> _queries = new();
     private Archetype[] _archetypeSnapshot = Array.Empty<Archetype>();
     private readonly int _chunkCapacity;
     private RecycledEntity[] _freeIds;
@@ -903,21 +903,36 @@ public sealed partial class World : IDisposable
     //  Tier 1 in-memory rollback snapshot
     // ──────────────────────────────────────────────
 
-    private WorldStateSnapshot? _stateSnapshotSpare;
+    // Pool of recycled WorldStateSnapshot instances. Each CaptureState pops
+    // one (or constructs a new one when empty); each RestoreState pushes the
+    // incoming snapshot back. Pool size self-stabilises at the peak number
+    // of simultaneously live snapshots, so a GGPO-style N-frame rollback
+    // window pays zero allocation in steady state.
+    //
+    // Stack<WorldStateSnapshot> is chosen over a single spare slot so that
+    // callers may capture multiple frames ahead before restoring them out of
+    // order on misprediction - the previous single-spare design silently
+    // broke at rollback depth > 1.
+    private readonly Stack<WorldStateSnapshot> _stateSnapshotPool = new();
 
     /// <summary>
     /// Captures the world's current mutable state into an opaque handle
     /// for later rollback via <see cref="RestoreState"/>.
     /// <para/>
-    /// The snapshot is recycled after restore �?in steady state (warm cache)
-    /// this method allocates zero GC memory. Suitable for GGPO-style 60fps
-    /// frame save/restore cycles at &lt;1000 entities.
+    /// Multiple snapshots may be live simultaneously; each call returns an
+    /// independent handle drawn from the world's pool. In steady state
+    /// (warm pool sized to peak concurrent usage) this method allocates zero
+    /// GC memory. Suitable for GGPO-style 60fps frame save/restore cycles at
+    /// &lt;1000 entities, including rollback windows deeper than 1 frame.
     /// </summary>
     public WorldStateSnapshot CaptureState()
     {
         ThrowIfDisposed();
-        var snap = _stateSnapshotSpare ?? new WorldStateSnapshot();
+        var snap = _stateSnapshotPool.Count > 0
+            ? _stateSnapshotPool.Pop()
+            : new WorldStateSnapshot();
         snap.Clear();
+        snap._isRecycled = false;
 
         // Records
         snap.EnsureRecordsCapacity(_entitySlotCount);
@@ -951,22 +966,34 @@ public sealed partial class World : IDisposable
         // Hierarchy
         _hierarchy.CaptureState(snap);
 
-        _stateSnapshotSpare = null;
         return snap;
     }
 
     /// <summary>
     /// Restores the world to a previously captured state. The snapshot is
-    /// recycled internally and should not be used after this call (it becomes
-    /// the world's spare for the next <see cref="CaptureState"/>).
+    /// recycled internally and should not be used after this call: its
+    /// <see cref="WorldStateSnapshot.IsRecycled"/> flag becomes <c>true</c>
+    /// and it is returned to the world's pool for reuse by the next
+    /// <see cref="CaptureState"/>.
     /// <para/>
     /// After restore, all query caches and archetype transition caches are
     /// invalidated and will rebuild on next use.
     /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when <paramref name="snapshot"/> has already been restored
+    /// (its <see cref="WorldStateSnapshot.IsRecycled"/> is <c>true</c>).
+    /// </exception>
     public void RestoreState(WorldStateSnapshot snapshot)
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(snapshot);
+        if (snapshot._isRecycled)
+        {
+            throw new InvalidOperationException(
+                "Cannot RestoreState: the snapshot has already been restored " +
+                "(or was never produced by CaptureState). Call CaptureState to " +
+                "obtain a fresh handle before restoring.");
+        }
 
         // Records
         if (_records.Length < snapshot.EntitySlotCount)
@@ -998,10 +1025,11 @@ public sealed partial class World : IDisposable
         // Invalidate all caches
         _createArchetypeCacheGeneration++;
 
-        // Recycle snapshot as spare for next CaptureState
-        _stateSnapshotSpare = snapshot;
+        // Recycle snapshot to the pool for the next CaptureState.
+        snapshot._isRecycled = true;
+        snapshot.Clear();
+        _stateSnapshotPool.Push(snapshot);
     }
-
     private readonly record struct CloneWork(Entity Source, Entity CloneEntity);
 
 }

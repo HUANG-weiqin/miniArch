@@ -16,6 +16,18 @@ namespace MiniArch.Core;
 /// encodes to a versioned byte stream suitable for file/network transfer.
 /// </summary>
 /// <remarks>
+/// <b>Lifecycle contract:</b>
+/// <list type="bullet">
+/// <item>A snapshot returned by <see cref="World.CaptureState"/> is owned by
+/// the caller until passed to <see cref="World.RestoreState"/>.</item>
+/// <item>After <see cref="World.RestoreState"/>, <see cref="IsRecycled"/>
+/// becomes <c>true</c> and the snapshot is returned to the world's pool —
+/// any subsequent use (including a second <c>RestoreState</c>) will throw
+/// <see cref="InvalidOperationException"/>.</item>
+/// <item>Multiple snapshots may be live simultaneously, supporting GGPO
+/// rollback windows deeper than 1 frame (capture N frames ahead, restore
+/// them out of order on misprediction).</item>
+/// </list>
 /// Correct usage:
 /// <code>
 /// // Frame loop (zero GC after warmup):
@@ -24,11 +36,24 @@ namespace MiniArch.Core;
 /// world.RestoreState(rollback);
 /// // ... re-simulate with corrected inputs ...
 /// </code>
+/// Multi-frame rollback window:
+/// <code>
+/// // Capture several frames ahead (GGPO-style depth &gt; 1):
+/// var ring = new WorldStateSnapshot[WindowDepth];
+/// for (int i = 0; i &lt; WindowDepth; i++)
+/// {
+///     ring[i] = world.CaptureState();
+///     SimulateOneFrame();
+/// }
+/// // On misprediction at frame k, restore that frame and re-simulate forward:
+/// world.RestoreState(ring[k]);
+/// </code>
 /// Incorrect usage (use WorldSnapshot instead):
 /// <code>
 /// // DON'T: serialize a WorldStateSnapshot to bytes
 /// // DON'T: send it over the network
 /// // DON'T: save it to a replay file
+/// // DON'T: call RestoreState twice on the same handle
 /// </code>
 /// </remarks>
 public sealed class WorldStateSnapshot
@@ -49,6 +74,23 @@ public sealed class WorldStateSnapshot
     internal int[] HierarchyChildNext = [];
     internal int HierarchyChildSlotCount;
     internal int HierarchyChildFreeList;
+
+    // Tracks lifecycle state. true when in the world's pool (or freshly
+    // constructed and not yet filled), false when handed to a caller via
+    // CaptureState. Set to true by RestoreState before returning to the pool.
+    // The internal field avoids a property backing field; the public property
+    // is the documented API.
+    internal bool _isRecycled = true;
+
+    /// <summary>
+    /// Gets whether this snapshot has been recycled back to the world's pool.
+    /// <c>true</c> after <see cref="World.RestoreState"/> has been called on
+    /// this instance (or before it has ever been filled by
+    /// <see cref="World.CaptureState"/>). Any operation on a recycled
+    /// snapshot other than dropping the reference is undefined behaviour and
+    /// will throw on the World APIs.
+    /// </summary>
+    public bool IsRecycled => _isRecycled;
 
     internal void Clear()
     {

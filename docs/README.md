@@ -3,7 +3,7 @@
 MiniArch exposes two API layers:
 
 - **`MiniArch`** — Default user entry: `World`, `Entity`, `QueryDescription`
-- **`MiniArch.Core`** — Advanced types: `CommandBuffer`, `CommandStream`, `FrameDelta`, `WorldSnapshot`, `EntityInfo`, `EntityAccessor`, `ICommandRecorder`
+- **`MiniArch.Core`** — Advanced types: `CommandBuffer`, `CommandStream`, `FrameDelta`, `WorldSnapshot`, `EntityAccessor`, `ICommandRecorder`, `IChunkForEach`
 
 ## Default Layer: `MiniArch`
 
@@ -48,7 +48,9 @@ public readonly record struct Entity(int Id, int Version)
 - `OrderBy(IComparer<Entity>)` / `OrderBy(Comparison<Entity>)` — sorted enumeration
 - `GetChunks()` — returns `ReadOnlySpan<ChunkView>` for batch/chunk-level access
 - `ForEachChunk(ChunkAction)` — sequential chunk iteration (zero-alloc when delegate is cached)
+- `ForEachChunk<TForEach>(ref TForEach)` — sequential chunk iteration via a struct `IChunkForEach` implementation (zero-alloc + JIT-devirtualised; supports stateful jobs via `ref`)
 - `ForEachChunkParallel(ChunkAction)` — parallel chunk iteration; safe for component value reads/writes via `chunk.GetSpan<T>()`. Structural changes must be deferred to `CommandStream` after the call returns
+- `ForEachChunkParallel<TForEach>(TForEach)` — parallel chunk iteration via a struct `IChunkForEach` (job struct copied per worker; use `[ThreadStatic]` fields for per-worker accumulation)
 - `RefreshCount` — number of times the cached result has been invalidated
 
 ### `QueryDescription`
@@ -93,7 +95,7 @@ foreach (var chunk in query.GetChunks())
 | `WorldSnapshot` | Binary world serialization |
 | `ICommandRecorder` | Shared interface: `Create`, `Add<T>`, `Set<T>`, `Remove<T>`, `Destroy`, `AddChild`, `Submit` |
 | `EntityAccessor` | Ref struct for batched component access, via `World.Access(entity)` |
-| `EntityInfo` | Entity metadata: `Version`, `RowIndex` |
+| `IChunkForEach` | Struct-generic chunk iteration interface: implement `OnChunk(ChunkView)` on a struct; pass to `Query.ForEachChunk<TForEach>(ref TForEach)` or `ForEachChunkParallel<TForEach>(TForEach)` for zero-alloc, JIT-devirtualised iteration |
 | `ChunkView` | Chunk view returned by `GetChunks()` |
 
 ### `ChunkView`
@@ -125,7 +127,7 @@ public Span<T> GetComponentSpanAt<T>(int columnIndex) where T : unmanaged
 | `TryGet<T>(Entity, out T)` | Try-get component |
 | `Has<T>(Entity)` | Check component existence |
 | `Access(Entity)` | Returns `EntityAccessor` for batched operations |
-| `TryGetLocation(Entity, out EntityInfo)` | Get entity metadata |
+| `TryGetEntityVersion(Entity, out int)` | Check if a handle is alive and get its current version |
 | `GetFirst<T>()` | Get first entity with a given component |
 | `IsAlive(Entity)` | Validate entity handle |
 | `AddChild(Entity, Entity)` | Parent-child hierarchy |
@@ -135,8 +137,8 @@ public Span<T> GetComponentSpanAt<T>(int columnIndex) where T : unmanaged
 | `Query(in QueryDescription)` | Create a query |
 | `Clone(Entity)` | Deep-copy an entity (including child subtree) |
 | `Clone()` | Materialize a brand-new independent world (branching / long-lived checkpoint) |
-| `CaptureState()` | Save mutable state into an opaque handle for in-place rollback (zero-alloc steady state) |
-| `RestoreState(WorldStateSnapshot)` | Revert this world to a previously captured state; handle is recycled |
+| `CaptureState()` | Save mutable state into an opaque handle for in-place rollback (zero-alloc steady state; multiple handles may be live simultaneously for GGPO-style multi-frame rollback windows) |
+| `RestoreState(WorldStateSnapshot)` | Revert this world to a previously captured state; handle is recycled back to the world's pool. Throws `InvalidOperationException` if the handle was already restored (check `WorldStateSnapshot.IsRecycled`) |
 | `GetStats()` | Returns `WorldStats` |
 | `GetArchetypeStats()` | Returns per-archetype statistics |
 | `Replay(FrameDelta)` | Apply delta to produce identical state |
@@ -179,6 +181,36 @@ accessor.Set(new Health(100));
 bool hasArmor = accessor.Has<Armor>();
 ```
 
+### `IChunkForEach` (zero-alloc chunk iteration)
+
+Implement `OnChunk(ChunkView)` on a `struct`; the JIT specialises the call site for the concrete type, removing the delegate allocation that the `ChunkAction`-based overloads incur when their lambda is not cached.
+
+```csharp
+// Stateless job (most common: write component values via spans)
+readonly struct MoveJob : IChunkForEach
+{
+    public void OnChunk(ChunkView chunk)
+    {
+        var positions = chunk.GetSpan<Position>();
+        var velocities = chunk.GetSpan<Velocity>();
+        for (var i = 0; i < positions.Length; i++)
+            positions[i] = new Position(
+                positions[i].X + velocities[i].X,
+                positions[i].Y + velocities[i].Y);
+    }
+}
+
+var job = new MoveJob();
+query.ForEachChunk(ref job);          // sequential; zero alloc
+query.ForEachChunkParallel(job);      // parallel; struct captured per worker
+
+// Stateful accumulator (sequential path supports `ref`, so struct fields
+// are visible across chunks):
+var sum = new SumJob();
+query.ForEachChunk(ref sum);
+return sum.Total;
+```
+
 ## Constraints
 
 - `default(Entity)` is invalid; real entities start at `Version = 1`
@@ -187,6 +219,7 @@ bool hasArmor = accessor.Has<Armor>();
 - `Set<T>()` on a missing component adds it (implicit migration)
 - `CommandBuffer` supports concurrent recording; `Submit()` is single-threaded
 - `WorldSnapshot` only supports unmanaged component types
+- `World.RestoreState(snapshot)` throws if `snapshot.IsRecycled` is `true` — capture a fresh handle before restoring again
 
 ## Concurrency
 

@@ -8,7 +8,7 @@ using MiniArch.Core;
 namespace MiniArchBenchmarks;
 
 using ArchQueryDescription = Arch.Core.QueryDescription;
-using MiniQuery = MiniArch.Core.Query;
+using MiniQuery = MiniArch.Core.QueryCache;
 using MiniComponentType = MiniArch.Core.ComponentType;
 using MiniQueryDescription = MiniArch.QueryDescription;
 

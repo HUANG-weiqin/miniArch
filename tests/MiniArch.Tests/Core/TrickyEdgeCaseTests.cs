@@ -1,7 +1,7 @@
 using System.Reflection;
 using MiniArch.Core;
 using MiniArch.Tests.Core.TestSupport;
-using MiniQuery = MiniArch.Core.Query;
+using MiniQuery = MiniArch.Core.QueryCache;
 
 namespace MiniArchTests.Core;
 

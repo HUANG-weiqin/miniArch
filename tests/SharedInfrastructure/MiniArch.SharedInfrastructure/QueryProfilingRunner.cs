@@ -4,7 +4,7 @@ using MiniArch.Core;
 
 namespace MiniArchBenchmarks;
 
-using MiniQuery = MiniArch.Core.Query;
+using MiniQuery = MiniArch.Core.QueryCache;
 using MiniWorld = MiniArch.World;
 using MiniComponentType = MiniArch.Core.ComponentType;
 

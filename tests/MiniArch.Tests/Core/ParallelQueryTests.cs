@@ -401,4 +401,130 @@ public sealed class ParallelQueryTests
         }
         return sum;
     }
+
+    // ================================================================
+    //  IChunkForEach (struct-generic, zero-alloc)
+    // ================================================================
+
+    private readonly struct DoublePositionJob : IChunkForEach
+    {
+        public void OnChunk(ChunkView chunk)
+        {
+            var span = chunk.GetSpan<Position>();
+            for (var i = 0; i < span.Length; i++)
+                span[i] = new Position(span[i].X * 2, span[i].Y * 2);
+        }
+    }
+
+    private struct SumPositionJob : IChunkForEach
+    {
+        public int Total;
+        public void OnChunk(ChunkView chunk)
+        {
+            var span = chunk.GetSpan<Position>();
+            for (var i = 0; i < span.Length; i++)
+                Total += span[i].X;
+        }
+    }
+
+    private struct MoveJob : IChunkForEach
+    {
+        public void OnChunk(ChunkView chunk)
+        {
+            var pos = chunk.GetSpan<Position>();
+            var vel = chunk.GetSpan<Velocity>();
+            for (var i = 0; i < pos.Length; i++)
+                pos[i] = new Position(pos[i].X + vel[i].X, pos[i].Y + vel[i].Y);
+        }
+    }
+
+    [Fact]
+    public void ForEachChunk_with_IChunkForEach_visits_every_row()
+    {
+        var world = new World();
+        for (var i = 0; i < 10; i++)
+            world.Create(new Position(i, i));
+
+        var desc = PositionDescription();
+        var query = world.Query(in desc);
+        var job = new DoublePositionJob();
+        query.ForEachChunk(ref job);
+
+        desc = PositionDescription();
+        foreach (var entity in world.Query(in desc))
+            Assert.Equal(entity.Id * 2, world.Get<Position>(entity).X);
+    }
+
+    [Fact]
+    public void ForEachChunk_with_IChunkForEach_supports_stateful_accumulator_via_ref()
+    {
+        var world = new World();
+        for (var i = 0; i < 10; i++)
+            world.Create(new Position(i + 1, 0));
+
+        var desc = PositionDescription();
+        var query = world.Query(in desc);
+        var sum = new SumPositionJob();
+        query.ForEachChunk(ref sum);
+
+        // 1+2+...+10 = 55
+        Assert.Equal(55, sum.Total);
+    }
+
+    [Fact]
+    public void ForEachChunkParallel_with_IChunkForEach_writes_components_correctly()
+    {
+        var world = new World();
+        for (var i = 0; i < 100; i++)
+            world.Create(new Position(i, 0));
+
+        var desc = PositionDescription();
+        var query = world.Query(in desc);
+        query.ForEachChunkParallel(new DoublePositionJob());
+
+        var idx = 0;
+        desc = PositionDescription();
+        foreach (var chunk in world.Query(in desc).GetChunks())
+        {
+            var span = chunk.GetSpan<Position>();
+            for (var i = 0; i < span.Length; i++)
+            {
+                Assert.Equal(idx * 2, span[i].X);
+                idx++;
+            }
+        }
+    }
+
+    [Fact]
+    public void IChunkForEach_produces_same_result_as_delegate_overload()
+    {
+        var world1 = new World();
+        var world2 = new World();
+        for (var i = 0; i < 50; i++)
+        {
+            world1.Create(new Position(i, i), new Velocity(1, 1));
+            world2.Create(new Position(i, i), new Velocity(1, 1));
+        }
+
+        var desc = PositionVelocityDescription();
+        var q1 = world1.Query(in desc);
+        q1.ForEachChunk(static chunk =>
+        {
+            var pos = chunk.GetSpan<Position>();
+            var vel = chunk.GetSpan<Velocity>();
+            for (var i = 0; i < pos.Length; i++)
+                pos[i] = new Position(pos[i].X + vel[i].X, pos[i].Y + vel[i].Y);
+        });
+
+        var move = new MoveJob();
+        var q2 = world2.Query(in desc);
+        q2.ForEachChunk(ref move);
+
+        desc = PositionDescription();
+        var sum1 = 0;
+        var sum2 = 0;
+        foreach (var e in world1.Query(in desc)) sum1 += world1.Get<Position>(e).X;
+        foreach (var e in world2.Query(in desc)) sum2 += world2.Get<Position>(e).X;
+        Assert.Equal(sum1, sum2);
+    }
 }

@@ -2,7 +2,7 @@ using System.IO;
 using System.Reflection;
 using System.Security.Cryptography;
 using MiniArch.Core;
-using MiniQuery = MiniArch.Core.Query;
+using MiniQuery = MiniArch.Core.QueryCache;
 using MiniArch.Tests.Core.TestSupport;
 
 namespace MiniArchTests.Core;

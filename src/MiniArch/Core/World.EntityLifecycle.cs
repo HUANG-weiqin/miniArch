@@ -116,9 +116,33 @@ public sealed partial class World
     }
 
     /// <summary>
-    /// Tries to get an entity location.
+    /// Tries to get the current version of an entity handle. Returns <c>true</c>
+    /// if the entity is alive, in which case <paramref name="version"/> contains
+    /// the entity's current version (same as <c>entity.Version</c> for an up-to-date
+    /// handle, or higher if the entity has been destroyed and recreated).
+    /// Use <see cref="IsAlive"/> for a simple liveness check.
     /// </summary>
-    public bool TryGetLocation(Entity entity, out EntityInfo info)
+    public bool TryGetEntityVersion(Entity entity, out int version)
+    {
+        ThrowIfDisposed();
+        if (entity.Id < 0 || entity.Id >= _entitySlotCount)
+        {
+            version = -1;
+            return false;
+        }
+
+        ref var record = ref _records[entity.Id];
+        if (!record.IsOccupied || record.Version != entity.Version)
+        {
+            version = -1;
+            return false;
+        }
+
+        version = record.Version;
+        return true;
+    }
+
+    internal bool TryGetLocation(Entity entity, out EntityInfo info)
     {
         ThrowIfDisposed();
         if (entity.Id < 0 || entity.Id >= _entitySlotCount)
@@ -419,7 +443,7 @@ public sealed partial class World
     /// <summary>
     /// Releases the reserved id if (and only if) <paramref name="entity"/> is still
     /// in the reserved (not yet materialized, not yet released) state. Returns false
-    /// for alive/free/destroyed entities without throwing â€?use this on cleanup paths
+    /// for alive/free/destroyed entities without throwing ï¿½?use this on cleanup paths
     /// where the entity state is not known a priori.
     /// </summary>
     internal bool TryReleaseReserved(Entity entity)

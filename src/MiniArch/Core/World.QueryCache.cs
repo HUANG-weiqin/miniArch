@@ -33,12 +33,12 @@ public sealed partial class World
         return archetype.GetEntity(0);
     }
 
-    internal MiniArch.Core.Query GetAdvancedQuery(in QueryDescription description)
+    internal MiniArch.Core.QueryCache GetAdvancedQuery(in QueryDescription description)
     {
         return GetOrCreateQuery(GetOrCreateQueryFilter(description));
     }
 
-    internal MiniArch.Core.Query GetOrCreateQuery(QueryFilter filter)
+    internal MiniArch.Core.QueryCache GetOrCreateQuery(QueryFilter filter)
     {
         while (true)
         {
@@ -48,8 +48,8 @@ public sealed partial class World
                 return query;
             }
 
-            var candidate = new MiniArch.Core.Query(this, filter);
-            var updated = new Dictionary<QueryFilter, MiniArch.Core.Query>(snapshot)
+            var candidate = new MiniArch.Core.QueryCache(this, filter);
+            var updated = new Dictionary<QueryFilter, MiniArch.Core.QueryCache>(snapshot)
             {
                 [filter] = candidate
             };
