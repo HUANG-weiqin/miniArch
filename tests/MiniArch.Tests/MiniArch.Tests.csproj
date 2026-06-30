@@ -23,6 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\tools\perf\CommandBufferGame.Perf\CommandBufferGame.Perf.csproj" />
     <ProjectReference Include="..\..\src\MiniArch\MiniArch.csproj" />
+    <ProjectReference Include="..\..\samples\BulletLockstep.Demo\BulletLockstep.Demo.csproj" />
     <ProjectReference Include="..\SharedInfrastructure\MiniArch.SharedInfrastructure\MiniArch.SharedInfrastructure.csproj" />
   </ItemGroup>
 

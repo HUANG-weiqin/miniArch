@@ -42,7 +42,7 @@ public static class HomingBulletSteerSystem
 
             // Normalize direction (approx, fixed-point), then nudge velocity
             // toward target by TurnRate, capped at SpeedCap magnitude.
-            var dist = (int)Math.Sqrt(dist2);
+            var dist = IntMath.Isqrt(dist2);
             var ndx = (int)((long)dx * 1000 / dist);
             var ndy = (int)((long)dy * 1000 / dist);
 
