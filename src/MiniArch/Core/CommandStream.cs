@@ -227,7 +227,7 @@ public sealed class CommandStream : ICommandRecorder
             CancelPendingEntity(entity);
             CancelPendingDescendants(entity);
         }
-        else
+        else if (!entity.IsPlaceholder)
         {
             AppendDestroy(entity);
         }

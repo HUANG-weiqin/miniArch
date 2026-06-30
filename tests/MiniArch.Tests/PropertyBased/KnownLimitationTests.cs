@@ -13,31 +13,19 @@ public sealed class KnownLimitationTests
     private readonly record struct Position(int X, int Y);
 
     /// <summary>
-    /// KNOWN LIMITATION (surfaced by ReplayConvergencePropertyTests, pinned by
-    /// brute-force search): when BOTH endpoints of a deferred AddChild are
-    /// destroyed in the same frame, the cancelled creates emit no Reserve ops
-    /// but the hierarchy intent is not cleaned up. The resulting FrameDelta
-    /// carries an AddChild referencing unresolved placeholder seqs, and any
-    /// peer replaying the delta throws "Unresolved placeholder entity".
-    ///
-    /// The producing host does not throw (it never replays its own cancelled
-    /// creates), so this is a silent producer-side hazard for lockstep: every
-    /// replica crashes on a delta the producer believed was valid.
-    ///
-    /// Minimal repro: 2 entities, link(0,1), destroy both, single frame.
-    ///
-    /// Two possible fixes (out of scope for the codebase-hardening pass, each
-    /// needs a design call):
-    ///   (a) In CommandStream hierarchy resolution, DROP an intent whose
-    ///       resolved parent or child is the (-1,-1) sentinel.
-    ///   (b) Throw at Snapshot() when an intent references a cancelled
-    ///       placeholder, so the producer fails loud instead of the replica.
-    /// The convergence property's generator excludes linked placeholders from
-    /// destroy, which avoids the combination and lets the property pass for
-    /// supported usage.
+    /// Regression guard: destroying BOTH endpoints of a deferred AddChild in the
+    /// same frame must replay cleanly. Previously the second Destroy fell through
+    /// to AppendDestroy (the cascade from the first Destroy had already cancelled
+    /// the other endpoint's deferred batch, so TryGetPendingBatch returned false),
+    /// emitting a placeholder Destroy op with no matching Reserve and crashing
+    /// every replaying peer with "Unresolved placeholder entity". The producing
+    /// host never replayed its own cancelled creates, so this was a silent
+    /// producer-side lockstep hazard. Fixed by guarding the Destroy fallthrough
+    /// against placeholders: both endpoints cancel, the link intent is purged by
+    /// the cascade, and the delta is empty.
     /// </summary>
     [Fact]
-    public void Deferred_link_then_destroy_BOTH_endpoints_yields_unresolved_delta()
+    public void Deferred_link_then_destroy_BOTH_endpoints_replays_cleanly()
     {
         using var scratch = new World();
         var recorder = new CommandStream(scratch) { DeferredEntities = true };
@@ -52,11 +40,13 @@ public sealed class KnownLimitationTests
         recorder.Destroy(child);
 
         var delta = recorder.Snapshot();
+        Assert.True(delta.IsEmpty, "Both endpoints cancelled: the delta must be empty.");
 
         var replica = new World();
         try
         {
-            Assert.Throws<InvalidOperationException>(() => replica.Replay(delta));
+            replica.Replay(delta);
+            Assert.Equal(0, replica.EntityCount);
         }
         finally
         {
@@ -90,6 +80,39 @@ public sealed class KnownLimitationTests
             replica.Replay(delta); // no throw
             // Parent survives; child was cancelled before materialization.
             Assert.Equal(1, replica.EntityCount);
+        }
+        finally
+        {
+            replica.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Minimal root-cause repro for the bug above, independent of hierarchy:
+    /// destroying a deferred placeholder whose batch was already cancelled (here,
+    /// simply by a prior Destroy on the same placeholder) must be a no-op. Before
+    /// the Destroy fallthrough guard, the second Destroy emitted a placeholder
+    /// Destroy op and crashed replay with "Unresolved placeholder seq=0".
+    /// </summary>
+    [Fact]
+    public void Deferred_destroy_twice_on_same_placeholder_cancels_cleanly()
+    {
+        using var scratch = new World();
+        var recorder = new CommandStream(scratch) { DeferredEntities = true };
+
+        var p = recorder.Create();
+        recorder.Add(p, new Position(1, 1));
+        recorder.Destroy(p);
+        recorder.Destroy(p);
+
+        var delta = recorder.Snapshot();
+        Assert.True(delta.IsEmpty, "Cancelled create: the delta must be empty.");
+
+        var replica = new World();
+        try
+        {
+            replica.Replay(delta);
+            Assert.Equal(0, replica.EntityCount);
         }
         finally
         {
