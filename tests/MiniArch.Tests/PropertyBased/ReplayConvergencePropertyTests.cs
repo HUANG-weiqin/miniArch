@@ -9,9 +9,12 @@ namespace MiniArchTests.PropertyBased;
 // Property-based tests for replay convergence and snapshot round-trip under
 // richer models than the narrow Position/Velocity/Health-only generator in
 // SerializationRoundtripPropertyTests. These exercise:
-//   * placeholder �?local id mapping (lockstep core)
+//   * placeholder — local id mapping (lockstep core)
 //   * intra-frame hierarchy (AddChild) replayed identically on independent worlds
 //   * destroy-within-frame (free-list / recycling) preserved across snapshot
+//   * same-frame destroy of BOTH endpoints of a deferred link (the combination
+//     that used to yield a malformed delta; now covered after the Destroy
+//     fallthrough guard — see KnownLimitationTests)
 //
 // Out of scope here: component ids crossing the 512-bit mask boundary. The
 // global ComponentRegistry assigns ids sequentially from Type registration
@@ -36,14 +39,12 @@ public sealed class ReplayConvergencePropertyTests
     /// identical logical state hashes equal.
     /// </summary>
     /// <remarks>
-    /// Same-frame placeholder <c>Destroy</c> is exercised for non-linked
-    /// placeholders: their component Adds are cleaned up by the cancelled-
-    /// create path, so the delta stays well-formed and both replicas converge.
-    /// Placeholders that ALSO participate in a hierarchy link are excluded
-    /// from destroy — destroying both endpoints of a deferred AddChild
-    /// currently yields a malformed delta (the cancelled creates emit no
-    /// Reserve while the hierarchy intent is not cleaned up; see
-    /// KnownLimitationTests).
+    /// Same-frame placeholder <c>Destroy</c> is exercised for BOTH linked and
+    /// non-linked placeholders. Destroying both endpoints of a deferred
+    /// AddChild in one frame previously emitted a malformed delta (a placeholder
+    /// Destroy op with no Reserve); the Destroy fallthrough guard fixed this,
+    /// and the generator no longer excludes linked indices from destroy. The
+    /// component-Adds-on-cancelled-create cleanup is covered the same way.
     /// </remarks>
     [Property(MaxTest = 150, QuietOnSuccess = true)]
     public bool Two_worlds_replaying_same_placeholder_deltas_converge_each_frame(
@@ -125,39 +126,31 @@ public sealed class ReplayConvergencePropertyTests
         if (created.Count > 0)
         {
             // Resolve which indices participate in a valid link (parent < child
-            // after normalization). A deferred placeholder that is linked AND
-            // destroyed in the same frame can yield a malformed delta: when
-            // BOTH endpoints of an AddChild are destroyed, the cancelled
-            // creates emit no Reserve but the hierarchy intent is not cleaned
-            // up, so the delta carries an AddChild over unresolved seqs (see
-            // KnownLimitationTests.Deferred_link_then_destroy_BOTH_endpoints_...).
-            // Excluding linked indices from destroy avoids the combination.
-            // Non-linked placeholders CAN be safely destroyed in-frame: their
-            // component Adds are cleaned up by the cancelled-create path, and
-            // exercising that here covers same-frame recycling convergence.
-            var linked = new HashSet<int>();
+            // after normalization). parent < child guarantees a forest: no
+            // self-link, no cycle.
             var validLinks = new List<(int Parent, int Child)>();
             foreach (var link in frame.Links)
             {
                 var pi = NormalizeIndex(link.ParentIdx, created.Count);
                 var ci = NormalizeIndex(link.ChildIdx, created.Count);
-                // parent < child guarantees a forest: no self-link, no cycle.
                 if (pi < ci)
-                {
                     validLinks.Add((pi, ci));
-                    linked.Add(pi);
-                    linked.Add(ci);
-                }
             }
 
             foreach (var (pi, ci) in validLinks)
                 recorder.AddChild(created[pi], created[ci]);
 
+            // Linked placeholders may be destroyed too — including BOTH
+            // endpoints of a link in one frame. After the Destroy fallthrough
+            // guard that is a clean no-op cascade, not a malformed delta, so no
+            // index is excluded from destroy here. Each index is destroyed at
+            // most once (destroyed set); an index whose batch was already
+            // cascade-cancelled by an earlier destroy hits the guarded no-op.
             var destroyed = new HashSet<int>();
             foreach (var d in frame.DestroyIdx)
             {
                 var di = NormalizeIndex(d, created.Count);
-                if (linked.Contains(di) || !destroyed.Add(di))
+                if (!destroyed.Add(di))
                     continue;
                 recorder.Destroy(created[di]);
             }
