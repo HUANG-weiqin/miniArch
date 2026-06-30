@@ -22,9 +22,9 @@ public sealed class FrameDeltaDeterminismTests
     private readonly record struct Velocity(int X, int Y);
     private readonly record struct Health(int Value);
 
-    // ══════════════════════════════════════════════════════════�?
-    // Core determinism: same deltas �?identical worlds
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════—
+    // Core determinism: same deltas —identical worlds
+    // ══════════════════════════════════════════════════════════—
 
     [Fact]
     public void Empty_delta_sequence_keeps_both_worlds_empty()
@@ -86,9 +86,9 @@ public sealed class FrameDeltaDeterminismTests
             AssertIdentical(replicas[0], replicas[i], $"replica[{i}] vs replica[0]");
     }
 
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════—
     // Targeted scenarios
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════—
 
     [Fact]
     public void Determinism_survives_id_recycling()
@@ -253,9 +253,9 @@ public sealed class FrameDeltaDeterminismTests
         AssertIdentical(source, replica1, "source vs replica after batch spawn");
     }
 
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════—
     // Safety net: divergent target world must reject replay
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════—
 
     [Fact]
     public void Replay_into_world_with_occupied_target_slot_throws()
@@ -301,9 +301,9 @@ public sealed class FrameDeltaDeterminismTests
         Assert.Throws<InvalidOperationException>(() => replica.Replay(deltas[2]));
     }
 
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════—
     // Scenario builder
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════—
 
     /// <summary>
     /// Builds a multi-frame scenario that exercises every FrameDelta command
@@ -354,9 +354,9 @@ public sealed class FrameDeltaDeterminismTests
         return (source, deltas);
     }
 
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════—
     // Hash-based state comparison
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════—
 
     private static void AssertIdentical(World a, World b, string context)
     {
@@ -387,9 +387,9 @@ public sealed class FrameDeltaDeterminismTests
         return Convert.ToHexString(SHA256.HashData(span));
     }
 
-    // ══════════════════════════════════════════════════════════�?
-    // Serialization round-trip: AsSpan �?Deserialize �?Replay
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════—
+    // Serialization round-trip: AsSpan —Deserialize —Replay
+    // ══════════════════════════════════════════════════════════—
 
     [Fact]
     public void Serialize_then_deserialize_of_empty_delta_is_empty()
@@ -590,11 +590,11 @@ public sealed class FrameDeltaDeterminismTests
         Assert.False(restored.HasEntity(new Entity(9999, 1)));
     }
 
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════—
     // Malformed / hostile input must fail loud, not silently corrupt state.
     // Lockstep/multiplayer depends on the consumer rejecting bad deltas at
     // the first sign of trouble rather than skipping unknown bytes.
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════—
 
     [Fact]
     public void Deserialize_rejects_unknown_op_kind()
@@ -624,7 +624,7 @@ public sealed class FrameDeltaDeterminismTests
     [Fact]
     public void Deserialize_rejects_varint_exceeding_32_bit_range()
     {
-        // 5 bytes each with continuation bit set, plus a 6th byte �?a varint
+        // 5 bytes each with continuation bit set, plus a 6th byte —a varint
         // wider than 32 bits is not representable as int and must be rejected.
         var wire = new byte[] { 0x01, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01, 0x01 };
         Assert.Throws<InvalidOperationException>(() => FrameDelta.Deserialize(wire));
@@ -639,13 +639,13 @@ public sealed class FrameDeltaDeterminismTests
         Assert.Throws<InvalidOperationException>(() => FrameDelta.Deserialize(wire));
     }
 
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════—
     // Hierarchy × Ops × Destroy same-frame convergence
     // (Submit and Replay must produce identical state when these
     // command kinds are mixed within a single frame; previously
     // diverged because BuildDelta wrote Hierarchy before Ops while
     // Submit ran Ops before Hierarchy.)
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════—
 
     [Fact]
     public void Submit_link_and_set_on_same_child_same_frame_converges_with_replay()
@@ -676,7 +676,7 @@ public sealed class FrameDeltaDeterminismTests
         buffer1.AddChild(parent, child);
         var delta1 = buffer1.Snapshot(); buffer1.Submit();
 
-        // Frame 2: create parent2, AddChild to child, then destroy parent2 �?all same frame
+        // Frame 2: create parent2, AddChild to child, then destroy parent2 —all same frame
         var buffer2 = new CommandStream(source);
         var parent2 = buffer2.Create(); buffer2.Add(parent2, new Position(2, 2));
         buffer2.AddChild(parent2, child);

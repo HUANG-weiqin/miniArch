@@ -11,8 +11,8 @@ namespace MiniArch.Core;
 /// <para>
 /// <b>Two entity-id modes:</b> a <c>FrameDelta</c> can carry either
 /// <b>placeholder</b> entities (<c>Entity(-1, seq)</c>) or <b>real</b>
-/// entities. The wire format is identical �?both encode entity id and
-/// version as signed LEB128 varints �?so the consumer must know which
+/// entities. The wire format is identical —both encode entity id and
+/// version as signed LEB128 varints —so the consumer must know which
 /// mode to expect.
 /// </para>
 /// <list type="bullet">
@@ -70,7 +70,7 @@ public sealed class FrameDelta
 
     /// <summary>
     /// Exposes the packed buffer for zero-copy transmission.
-    /// The returned span is the wire format �?send it as-is over the network.
+    /// The returned span is the wire format —send it as-is over the network.
     /// </summary>
     /// <remarks>
     /// <b>Cross-process contract:</b> the wire format encodes
@@ -90,7 +90,7 @@ public sealed class FrameDelta
     /// </summary>
     /// <remarks>
     /// See <see cref="AsSpan"/> for the cross-process
-    /// <see cref="ComponentRegistry"/> synchronization contract �?the same
+    /// <see cref="ComponentRegistry"/> synchronization contract —the same
     /// constraint applies on receive.
     /// </remarks>
     public static FrameDelta Deserialize(ReadOnlySpan<byte> wire)
@@ -460,7 +460,7 @@ public sealed class FrameDelta
 
     /// <summary>
     /// Checks whether this delta references <paramref name="entity"/>.
-    /// O(n) linear scan over every operation �?use for debugging only, not in hot paths.
+    /// O(n) linear scan over every operation —use for debugging only, not in hot paths.
     /// </summary>
     public bool HasEntity(Entity entity)
     {
@@ -504,7 +504,7 @@ public sealed class FrameDelta
     /// <summary>
     /// Merges two deltas in temporal order. Operations from <paramref name="a"/>
     /// appear before those from <paramref name="b"/>, preserving the original
-    /// per-delta temporal order. No folding or squashing is performed �?
+    /// per-delta temporal order. No folding or squashing is performed —
     /// the resulting byte stream is a simple concatenation.
     /// </summary>
     /// <remarks>
@@ -523,7 +523,7 @@ public sealed class FrameDelta
     /// counter at 0, so two independent streams both emit
     /// <c>Reserve(seq=0)/Create(seq=0)</c>. During replay
     /// (<see cref="World.Replay"/>) a single per-replay map[seq]→local id is
-    /// used, and the second <c>Reserve</c> overwrites the first's entry �?so
+    /// used, and the second <c>Reserve</c> overwrites the first's entry —so
     /// any later op that references the first stream's placeholder resolves to
     /// the wrong entity. The canonical lockstep pattern replays each peer's
     /// placeholder delta as a separate <see cref="World.Replay"/> call (which
@@ -556,7 +556,7 @@ public sealed class FrameDelta
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int VarintSize(int value)
     {
-        if (value < 0) return 5; // negative �?bit 31 set, always 5 bytes
+        if (value < 0) return 5; // negative —bit 31 set, always 5 bytes
         if (value < 128) return 1;
         if (value < 16384) return 2;
         if (value < 2097152) return 3;
