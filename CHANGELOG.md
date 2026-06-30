@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.1.0 (2026-06-30)
+
+- **API rename**: `Link`/`Unlink` → `AddChild`/`RemoveChild` (directional parent-child semantics)
+- **Zero-alloc children traversal**: `World.EnumerateChildren()` → public `ChildrenEnumerable` struct
+- **O(1) children check**: `World.HasChildren(entity)`
+- **Dropped**: `World.GetChildren()` (List allocation; use `EnumerateChildren`)
+
 ## 0.1.0 (2026-06-13)
 
 - Initial public release
