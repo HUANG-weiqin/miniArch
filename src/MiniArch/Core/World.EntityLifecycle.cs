@@ -1,4 +1,4 @@
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 
 using MiniArch.Core;
@@ -443,7 +443,7 @@ public sealed partial class World
     /// <summary>
     /// Releases the reserved id if (and only if) <paramref name="entity"/> is still
     /// in the reserved (not yet materialized, not yet released) state. Returns false
-    /// for alive/free/destroyed entities without throwing �?use this on cleanup paths
+    /// for alive/free/destroyed entities without throwing —use this on cleanup paths
     /// where the entity state is not known a priori.
     /// </summary>
     internal bool TryReleaseReserved(Entity entity)

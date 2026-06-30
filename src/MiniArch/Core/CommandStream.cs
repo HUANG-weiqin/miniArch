@@ -1,4 +1,4 @@
-using System.Buffers;
+﻿using System.Buffers;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
@@ -6,7 +6,7 @@ namespace MiniArch.Core;
 
 /// <summary>
 /// Records deferred world commands with per-component-type append-only stores.
-/// Add/Set/Remove on existing entities are stored inline in typed arrays �?no entry stream,
+/// Add/Set/Remove on existing entities are stored inline in typed arrays —no entry stream,
 /// no per-entity dedup. Created entities use a pending batch buffer for pre-materialization
 /// component accumulation.
 /// </summary>
@@ -322,7 +322,7 @@ public sealed class CommandStream : ICommandRecorder
 
         try
         {
-            // Order matches BuildDelta: Create �?Hierarchy �?Ops �?Destroy.
+            // Order matches BuildDelta: Create —Hierarchy —Ops —Destroy.
             // Keeping Submit and Snapshot aligned lets hosts use Submit on source and
             // Replay on replica without diverging for combined command patterns.
             ResolveDeferredCreates();
@@ -420,8 +420,8 @@ public sealed class CommandStream : ICommandRecorder
     /// <para>
     /// For the relay-only flow (produce delta, do not apply locally),
     /// call <c>Snapshot()</c> then <c>Clear()</c>. The source host then
-    /// replays the delta back into its own world �?together with all peer
-    /// deltas �?achieving the deterministic multi-host guarantee.
+    /// replays the delta back into its own world —together with all peer
+    /// deltas —achieving the deterministic multi-host guarantee.
     /// </para>
     /// </remarks>
     public FrameDelta Snapshot()
@@ -464,7 +464,7 @@ public sealed class CommandStream : ICommandRecorder
     /// clients that must maintain id synchronization with the server.
     /// </para>
     /// <para>
-    /// Always produces a <b>real-id delta</b> �?deferred placeholders are
+    /// Always produces a <b>real-id delta</b> —deferred placeholders are
     /// resolved into the host's own ids before building the delta,
     /// regardless of <see cref="DeferredEntities"/>. Mirror clients
     /// replaying this delta must have an id allocator synchronized with
@@ -482,7 +482,7 @@ public sealed class CommandStream : ICommandRecorder
         var frozen = SwapOutState();
         // Static delegate + state parameter avoids the per-call closure allocation
         // that Task.Run(() => ...) would create. FrozenState is a reference type,
-        // so passing it as `object` is a free upcast �?no boxing.
+        // so passing it as `object` is a free upcast —no boxing.
         var task = Task.Factory.StartNew(
             s_buildFromFrozen, frozen, CancellationToken.None,
             TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
@@ -497,7 +497,7 @@ public sealed class CommandStream : ICommandRecorder
 
     private void BuildDelta(FrameDelta delta)
     {
-        // Order matches Submit: Create �?Hierarchy �?Ops �?Destroy.
+        // Order matches Submit: Create —Hierarchy —Ops —Destroy.
         EmitPendingEntitiesToDelta(delta, new PendingBatchView(
             _batchCanceled, _batchHeads, _batchCompCounts,
             _batchComps, _batchBuf, _batchEntities, _pendingBatchCount));
@@ -536,7 +536,7 @@ public sealed class CommandStream : ICommandRecorder
         if (_spareFrozen is { } spare)
         {
             // Steady state: recycle the spare FrozenState. Swap every array/container
-            // so current �?frozen (worker reads it) and spare �?current (we reset it).
+            // so current —frozen (worker reads it) and spare —current (we reset it).
             // No allocation, no Dictionary/HashSet churn.
             _spareFrozen = null;
             frozen = spare;
@@ -615,7 +615,7 @@ public sealed class CommandStream : ICommandRecorder
 
     private void SubmitFromFrozen(FrozenState frozen)
     {
-        // Order matches Submit and BuildDelta: Create �?Hierarchy �?Ops �?Destroy.
+        // Order matches Submit and BuildDelta: Create —Hierarchy —Ops —Destroy.
         for (var i = 0; i < frozen.PendingBatchCount; i++)
         {
             if (frozen.BatchCanceled[i]) continue;
@@ -656,7 +656,7 @@ public sealed class CommandStream : ICommandRecorder
 
     private static FrameDelta BuildFromFrozen(FrozenState frozen)
     {
-        // Order matches Submit: Create �?Hierarchy �?Ops �?Destroy.
+        // Order matches Submit: Create —Hierarchy —Ops —Destroy.
         var delta = new FrameDelta();
 
         EmitPendingEntitiesToDelta(delta, frozen.Pending);
@@ -796,7 +796,7 @@ public sealed class CommandStream : ICommandRecorder
         // Single pass: emit Reserve + Release (cancelled) or Reserve + Create
         // (committed) consecutively for each entity. This preserves temporal
         // ordering where a cancelled entity's id may be recycled by a later
-        // Create within the same frame �?the two-pass approach (all Reserves
+        // Create within the same frame —the two-pass approach (all Reserves
         // before all Releases) breaks this dependency.
         //
         // Placeholder entities (Id < 0) carry deferred creates: they have not
@@ -805,7 +805,7 @@ public sealed class CommandStream : ICommandRecorder
         for (var i = 0; i < pendingBatchCount; i++)
         {
             var entity = batchEntities[i];
-            // Deferred create that was cancelled never allocated a real id �?skip it.
+            // Deferred create that was cancelled never allocated a real id —skip it.
             // Unlike immediate cancels (which emit Reserve+Release below to keep id
             // allocation in lockstep across hosts), deferred cancels consume no id
             // by design: the whole point of deferred is to avoid touching the world
@@ -1459,7 +1459,7 @@ public sealed class CommandStream : ICommandRecorder
         // we just drop the pending-batch index.
         // Snapshot/relay path (or Submit exception path): batch entities may still
         // be in the reserved state, so we release their ids back to the World's
-        // free list here. Either way Clear is self-sufficient �?it does not rely
+        // free list here. Either way Clear is self-sufficient —it does not rely
         // on the caller having materialized anything.
         for (var i = 0; i < _pendingBatchCount; i++)
         {
@@ -1771,7 +1771,7 @@ public sealed class CommandStream : ICommandRecorder
                             // and AddSetUnsafe call Grow internally, which may
                             // allocate (Array.Resize) and trigger a compacting GC.
                             // Without pinning, the raw pointer from AsPointer would
-                            // dangle across the compaction �?same GC hole as the
+                            // dangle across the compaction —same GC hole as the
                             // original CopyComponent path.
                             fixed (T* pFixed = &_data[i])
                             {

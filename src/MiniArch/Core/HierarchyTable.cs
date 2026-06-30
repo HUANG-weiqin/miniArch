@@ -1,4 +1,4 @@
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 
 namespace MiniArch.Core;
 
@@ -127,7 +127,7 @@ internal sealed class HierarchyTable
         }
 
         // The finally block below guarantees the stack is empty on exit, so we
-        // don't need to clear it here on entry �?except on the very first call,
+        // don't need to clear it here on entry —except on the very first call,
         // when the stack is already empty by construction.
         _destroyTraversalStack.Add((root, false));
 
