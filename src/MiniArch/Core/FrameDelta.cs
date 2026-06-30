@@ -11,8 +11,8 @@ namespace MiniArch.Core;
 /// <para>
 /// <b>Two entity-id modes:</b> a <c>FrameDelta</c> can carry either
 /// <b>placeholder</b> entities (<c>Entity(-1, seq)</c>) or <b>real</b>
-/// entities. The wire format is identical â€?both encode entity id and
-/// version as signed LEB128 varints â€?so the consumer must know which
+/// entities. The wire format is identical ï¿½?both encode entity id and
+/// version as signed LEB128 varints ï¿½?so the consumer must know which
 /// mode to expect.
 /// </para>
 /// <list type="bullet">
@@ -38,6 +38,20 @@ namespace MiniArch.Core;
 /// </remarks>
 public sealed class FrameDelta
 {
+    /// <summary>
+    /// Maximum wire size for a single frame delta (16 MiB).
+    /// Prevents OOM from oversized or malicious wire data before allocation.
+    /// Callers may wrap the transport layer with a smaller budget.
+    /// </summary>
+    public const int MaxFrameBytes = 16 * 1024 * 1024;
+
+    /// <summary>
+    /// Maximum number of operations per frame delta (1 million).
+    /// Prevents runaway op-count from exhausting CPU in the decoder loop.
+    /// Callers may wrap the transport layer with a smaller budget.
+    /// </summary>
+    public const int MaxOpsPerFrame = 1_000_000;
+
     internal byte[] _buffer = Array.Empty<byte>();
     internal int _length;
     internal int _opCount;
@@ -56,7 +70,7 @@ public sealed class FrameDelta
 
     /// <summary>
     /// Exposes the packed buffer for zero-copy transmission.
-    /// The returned span is the wire format â€?send it as-is over the network.
+    /// The returned span is the wire format ï¿½?send it as-is over the network.
     /// </summary>
     /// <remarks>
     /// <b>Cross-process contract:</b> the wire format encodes
@@ -76,11 +90,16 @@ public sealed class FrameDelta
     /// </summary>
     /// <remarks>
     /// See <see cref="AsSpan"/> for the cross-process
-    /// <see cref="ComponentRegistry"/> synchronization contract â€?the same
+    /// <see cref="ComponentRegistry"/> synchronization contract ï¿½?the same
     /// constraint applies on receive.
     /// </remarks>
     public static FrameDelta Deserialize(ReadOnlySpan<byte> wire)
     {
+        if (wire.Length > MaxFrameBytes)
+            throw new ArgumentException(
+                $"FrameDelta exceeds MaxFrameBytes budget ({wire.Length} > {MaxFrameBytes}). " +
+                "Increase MaxFrameBytes or reduce frame payload.");
+
         var delta = new FrameDelta();
         delta._buffer = wire.ToArray();
         delta._length = wire.Length;
@@ -282,6 +301,7 @@ public sealed class FrameDelta
         private readonly byte[] _buffer;
         private readonly int _end;
         private int _pos;
+        private int _opCount;
 
         public DeltaOpKind Kind { get; private set; }
         public Entity Entity { get; private set; }
@@ -291,6 +311,7 @@ public sealed class FrameDelta
             _buffer = buffer;
             _end = length;
             _pos = 0;
+            _opCount = 0;
             Kind = default;
             Entity = default;
         }
@@ -298,6 +319,10 @@ public sealed class FrameDelta
         public bool MoveNext()
         {
             if (_pos >= _end) return false;
+            if (++_opCount > MaxOpsPerFrame)
+                throw new InvalidOperationException(
+                    $"FrameDelta exceeds MaxOpsPerFrame budget ({MaxOpsPerFrame} ops). " +
+                    "Increase MaxOpsPerFrame or reduce frame complexity.");
             var opByte = _buffer[_pos++];
             // Reject unknown op kinds loudly. For lockstep/multiplayer, a peer
             // that silently skips an op it does not understand will desync.
@@ -435,7 +460,7 @@ public sealed class FrameDelta
 
     /// <summary>
     /// Checks whether this delta references <paramref name="entity"/>.
-    /// O(n) linear scan over every operation â€?use for debugging only, not in hot paths.
+    /// O(n) linear scan over every operation ï¿½?use for debugging only, not in hot paths.
     /// </summary>
     public bool HasEntity(Entity entity)
     {
@@ -479,7 +504,7 @@ public sealed class FrameDelta
     /// <summary>
     /// Merges two deltas in temporal order. Operations from <paramref name="a"/>
     /// appear before those from <paramref name="b"/>, preserving the original
-    /// per-delta temporal order. No folding or squashing is performed â€?
+    /// per-delta temporal order. No folding or squashing is performed ï¿½?
     /// the resulting byte stream is a simple concatenation.
     /// </summary>
     /// <remarks>
@@ -498,7 +523,7 @@ public sealed class FrameDelta
     /// counter at 0, so two independent streams both emit
     /// <c>Reserve(seq=0)/Create(seq=0)</c>. During replay
     /// (<see cref="World.Replay"/>) a single per-replay map[seq]â†’local id is
-    /// used, and the second <c>Reserve</c> overwrites the first's entry â€?so
+    /// used, and the second <c>Reserve</c> overwrites the first's entry ï¿½?so
     /// any later op that references the first stream's placeholder resolves to
     /// the wrong entity. The canonical lockstep pattern replays each peer's
     /// placeholder delta as a separate <see cref="World.Replay"/> call (which
@@ -531,7 +556,7 @@ public sealed class FrameDelta
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int VarintSize(int value)
     {
-        if (value < 0) return 5; // negative â†?bit 31 set, always 5 bytes
+        if (value < 0) return 5; // negative ï¿½?bit 31 set, always 5 bytes
         if (value < 128) return 1;
         if (value < 16384) return 2;
         if (value < 2097152) return 3;
