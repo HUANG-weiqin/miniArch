@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.IO.Hashing;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -21,7 +22,7 @@ namespace MiniArch.Core;
 public static class WorldSnapshot
 {
     private const int Magic = 0x4D415243;
-    private const int FormatVersion = 3;
+    private const int FormatVersion = 4;
 
     private static readonly ConcurrentDictionary<Type, ColumnCodec> ColumnCodecs = new();
 
@@ -41,37 +42,51 @@ public static class WorldSnapshot
         var persistedArchetypes = CollectPersistedArchetypes(world);
         var schemaEntries = BuildSchemaEntries(world, persistedArchetypes);
 
-        using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
-        writer.Write(Magic);
-        writer.Write(FormatVersion);
-        writer.Write(world.ChunkCapacity);
-        writer.Write(world.EntitySlotCount);
-        writer.Write(schemaEntries.Count);
-        writer.Write(persistedArchetypes.Count);
-        writer.Write(world.Hierarchy.CountLiveRelations(world));
+        // Buffer body in MemoryStream so we can compute CRC32 before writing
+        // the final stream. The body is everything after the header (magic+version).
+        using var bodyStream = new MemoryStream();
+        using var bodyWriter = new BinaryWriter(bodyStream, Encoding.UTF8, leaveOpen: true);
+
+        bodyWriter.Write(world.ChunkCapacity);
+        bodyWriter.Write(world.EntitySlotCount);
+        bodyWriter.Write(schemaEntries.Count);
+        bodyWriter.Write(persistedArchetypes.Count);
+        bodyWriter.Write(world.Hierarchy.CountLiveRelations(world));
 
         foreach (var record in world.EntityRecords)
         {
-            writer.Write(record.Version);
+            bodyWriter.Write(record.Version);
         }
 
         foreach (var schemaEntry in schemaEntries)
         {
-            writer.Write(schemaEntry.SchemaName);
+            bodyWriter.Write(schemaEntry.SchemaName);
         }
 
         foreach (var archetype in persistedArchetypes)
         {
-            WriteArchetype(writer, world, archetype, schemaEntries);
+            WriteArchetype(bodyWriter, world, archetype, schemaEntries);
         }
 
         foreach (var (child, parent) in world.Hierarchy.EnumerateLiveRelations(world))
         {
-            writer.Write(child.Id);
-            writer.Write(parent.Id);
+            bodyWriter.Write(child.Id);
+            bodyWriter.Write(parent.Id);
         }
 
-        world.WriteFreeList(writer);
+        world.WriteFreeList(bodyWriter);
+        bodyWriter.Flush();
+
+        // Compute CRC32 over body bytes
+        var bodyBytes = bodyStream.ToArray();
+        var crc = Crc32.HashToUInt32(bodyBytes);
+
+        // Write header + body + CRC to output stream
+        using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
+        writer.Write(Magic);
+        writer.Write(FormatVersion);
+        writer.Write(bodyBytes);
+        writer.Write(crc);
     }
 
     /// <summary>
@@ -86,9 +101,52 @@ public static class WorldSnapshot
             throw new ArgumentException("Snapshot stream must be readable.", nameof(stream));
         }
 
-        using var reader = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true);
+        // Read entire stream into a byte array
+        using var ms = new MemoryStream();
+        stream.CopyTo(ms);
+        var snapshotBytes = ms.ToArray();
+        var snapshotOffset = 0;
 
-        EnsureHeader(reader);
+        // Read magic + version using BinaryReader semantics (little-endian)
+        var magic = BitConverter.ToInt32(snapshotBytes, snapshotOffset); snapshotOffset += 4;
+        if (magic != Magic)
+            throw new InvalidDataException("Snapshot magic header does not match MiniArch snapshot format.");
+        var formatVersion = BitConverter.ToInt32(snapshotBytes, snapshotOffset); snapshotOffset += 4;
+
+        if (formatVersion < 3 || formatVersion > FormatVersion)
+            throw new InvalidDataException($"Unsupported snapshot format version {formatVersion}.");
+
+        byte[] bodyBytes;
+        if (formatVersion >= 4)
+        {
+            var bodyLen = snapshotBytes.Length - snapshotOffset - sizeof(uint);
+            if (bodyLen < 0)
+                throw new InvalidDataException("Snapshot too short for v4 format (missing CRC32 trailer).");
+
+            bodyBytes = new byte[bodyLen];
+            Buffer.BlockCopy(snapshotBytes, snapshotOffset, bodyBytes, 0, bodyLen);
+
+            var crcOffset = snapshotOffset + bodyLen;
+            var storedCrc = BitConverter.ToUInt32(snapshotBytes, crcOffset);
+
+            var computedCrc = Crc32.HashToUInt32(bodyBytes);
+            if (computedCrc != storedCrc)
+            {
+                throw new InvalidDataException(
+                    $"WorldSnapshot corrupted: CRC mismatch at offset {snapshotOffset}. " +
+                    $"Expected 0x{storedCrc:X8}, computed 0x{computedCrc:X8}.");
+            }
+        }
+        else
+        {
+            // v3: no CRC, body is the rest of the stream
+            bodyBytes = new byte[snapshotBytes.Length - snapshotOffset];
+            Buffer.BlockCopy(snapshotBytes, snapshotOffset, bodyBytes, 0, bodyBytes.Length);
+        }
+
+        // Parse body bytes using BinaryReader over a MemoryStream
+        using var bodyStream = new MemoryStream(bodyBytes);
+        using var reader = new BinaryReader(bodyStream, Encoding.UTF8, leaveOpen: true);
 
         var chunkCapacity = reader.ReadInt32();
         var entitySlotCount = reader.ReadInt32();
@@ -269,21 +327,6 @@ public static class WorldSnapshot
         }
 
         return hash.GetCurrentHash();
-    }
-
-    private static void EnsureHeader(BinaryReader reader)
-    {
-        var magic = reader.ReadInt32();
-        if (magic != Magic)
-        {
-            throw new InvalidDataException("Snapshot magic header does not match MiniArch snapshot format.");
-        }
-
-        var formatVersion = reader.ReadInt32();
-        if (formatVersion != FormatVersion)
-        {
-            throw new InvalidDataException($"Unsupported snapshot format version {formatVersion}.");
-        }
     }
 
     private static List<Archetype> CollectPersistedArchetypes(World world)

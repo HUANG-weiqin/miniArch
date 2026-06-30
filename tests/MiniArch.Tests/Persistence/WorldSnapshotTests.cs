@@ -1,4 +1,5 @@
 using System.IO;
+using System.Text;
 using MiniArch.Core;
 using MiniArch.Tests.Core.TestSupport;
 
@@ -730,6 +731,70 @@ public sealed class WorldSnapshotTests
                 "CaptureState should reuse a pooled instance in steady state.");
             world.RestoreState(s);
         }
+    }
+
+    // ══════════════════════════════════════════════════════════?
+    // CRC32 integrity (v4 format)
+    // ══════════════════════════════════════════════════════════?
+
+    [Fact]
+    public void V4_snapshot_round_trip_preserves_checksum()
+    {
+        var world = new World();
+        world.Create(new Position(10, 20));
+        world.Create(new Velocity(1, 2));
+
+        using var stream = new MemoryStream();
+        WorldSnapshot.Save(stream, world);
+        stream.Position = 0;
+
+        var loaded = WorldSnapshot.Load(stream);
+        Assert.Equal(world.CanonicalChecksum(), loaded.CanonicalChecksum());
+    }
+
+    [Fact]
+    public void V4_corrupted_snapshot_throws_InvalidDataException()
+    {
+        var world = new World();
+        world.Create(new Position(10, 20));
+
+        using var stream = new MemoryStream();
+        WorldSnapshot.Save(stream, world);
+        var bytes = stream.ToArray();
+
+        // Flip a byte in the body (after header, before CRC)
+        var bodyOffset = 8; // magic(4) + version(4)
+        bytes[bodyOffset + 4] ^= 0xFF;
+
+        using var corrupted = new MemoryStream(bytes);
+        var ex = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(corrupted));
+        Assert.Contains("CRC mismatch", ex.Message);
+    }
+
+    [Fact]
+    public void V3_snapshot_without_CRC_loads_successfully()
+    {
+        // Build a minimal v3 snapshot: [magic:4][version=3:4][body...]
+        // body contains: chunkCapacity=16, entitySlotCount=4, schemaCount=0,
+        // archetypeCount=0, hierarchyLinkCount=0, slotVersions(4x0)
+        // + empty free list (0 length).
+        using var ms = new MemoryStream();
+        using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
+        writer.Write(0x4D415243); // magic
+        writer.Write(3); // v3 (no CRC)
+        writer.Write(16); // chunkCapacity
+        writer.Write(4);  // entitySlotCount
+        writer.Write(0);  // schemaCount
+        writer.Write(0);  // archetypeCount
+        writer.Write(0);  // hierarchyLinkCount
+        for (var i = 0; i < 4; i++) writer.Write(0); // slot versions
+        writer.Write(0);  // free list length
+        writer.Flush();
+
+        ms.Position = 0;
+        var world = WorldSnapshot.Load(ms);
+        Assert.NotNull(world);
+        Assert.Equal(4, world.EntitySlotCount);
     }
 }
 
