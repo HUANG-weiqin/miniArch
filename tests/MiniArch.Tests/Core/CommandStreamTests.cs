@@ -2353,6 +2353,83 @@ public sealed class DeferredCreateTests
         Assert.Equal(1, CountEntities(replica));
     }
 
+    [Fact]
+    public void ReplayMapping_resolves_placeholder_to_real_entity()
+    {
+        var host = new World();
+        var stream = MakeStream(host);
+        var placeholder = stream.Create();
+        stream.Add(placeholder, new Position(10, 20));
+        var delta = stream.Snapshot();
+        stream.Clear();
+
+        var replica = new World();
+        var mapping = replica.Replay(delta);
+
+        var real = mapping.Resolve(placeholder);
+        Assert.True(real.IsValid);
+        Assert.True(replica.IsAlive(real));
+        Assert.Equal(1, CountEntities(replica));
+    }
+
+    [Fact]
+    public void ReplayMapping_resolve_passthrough_non_placeholder()
+    {
+        var host = new World();
+        var stream = MakeStream(host);
+        var placeholder = stream.Create();
+        var delta = stream.Snapshot();
+        stream.Clear();
+
+        var replica = new World();
+        var mapping = replica.Replay(delta);
+
+        var real = mapping.Resolve(placeholder);
+        var same = mapping.Resolve(real);
+        Assert.Equal(real, same);
+    }
+
+    [Fact]
+    public void ReplayMapping_resolve_unknown_placeholder_returns_default()
+    {
+        var host = new World();
+        var stream = MakeStream(host);
+        var delta = stream.Snapshot();
+        stream.Clear();
+
+        var replica = new World();
+        var mapping = replica.Replay(delta);
+
+        var result = mapping.Resolve(new Entity(-1, 99));
+        Assert.False(result.IsValid);
+    }
+
+    [Fact]
+    public void ReplayMapping_Frozen_survives_subsequent_replay()
+    {
+        var host = new World();
+        var stream = MakeStream(host);
+        var a = stream.Create();
+        stream.Add(a, new Position(1, 2));
+        var deltaA = stream.Snapshot();
+        stream.Clear();
+
+        var b = stream.Create();
+        stream.Add(b, new Health(50));
+        var deltaB = stream.Snapshot();
+        stream.Clear();
+
+        var replica = new World();
+        var frozenA = replica.Replay(deltaA).Frozen();
+
+        replica.Replay(deltaB);
+
+        var real = frozenA.Resolve(a);
+        Assert.True(real.IsValid);
+        Assert.True(replica.IsAlive(real));
+        Assert.True(replica.TryGet(real, out Position pos));
+        Assert.Equal(1, pos.X);
+    }
     // ── Helpers ──────────────────────────────────────────────────
 
     private static int CountEntities(World w)

@@ -54,6 +54,9 @@ public sealed partial class World : IDisposable
     // mapLen resets to 0 at the start of each ReplayCore call to prevent stale
     // mappings from previous frames leaking into the current replay.
     private Entity[] _replayPlaceholderMap = [];
+    // Number of valid entries in _replayPlaceholderMap (power-of-two array length).
+    // Snapshot by Replay() to build the ReplayMapping returned to the caller.
+    private int _replayMapCount;
 
     private readonly HierarchyTable _hierarchy = new();
     private EntityRecord[] _records;
@@ -486,7 +489,11 @@ public sealed partial class World : IDisposable
     /// per-replay <c>seq —local real</c> table. Real-id entities go through
     /// <see cref="EnsureReplayReservation"/> to verify allocator synchronization.
     /// </remarks>
-    public void Replay(FrameDelta delta) => ReplayCore(delta);
+    public ReplayMapping Replay(FrameDelta delta)
+    {
+        ReplayCore(delta);
+        return new ReplayMapping(_replayPlaceholderMap, _replayMapCount);
+    }
 
     private unsafe void ReplayCore(FrameDelta delta)
     {
@@ -584,6 +591,7 @@ public sealed partial class World : IDisposable
         }
 
         _replayPlaceholderMap = map;
+        _replayMapCount = mapLen;
     }
 
     // ── Replay placeholder helpers ─────────────────────────────────────

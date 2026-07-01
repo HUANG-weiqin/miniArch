@@ -2,7 +2,7 @@
 title: Deferred Create — Multi-Host Lockstep Design
 module: MiniArch.Core.CommandStream
 description: DeferredEntities flag 让 Create/Clone 在 placeholder（多 host lockstep）和 immediate（单机/权威服务器）之间切换。Snapshot 按 flag 输出 placeholder delta 或 real-id delta；SubmitAndSnapshotAsync 始终输出 real-id delta。
-updated: 2026-07-01
+updated: 2026-07-02
 ---
 
 # Deferred Create — Multi-Host Lockstep Design
@@ -17,7 +17,7 @@ updated: 2026-07-01
   - ~~跨网络传输~~ → 传输层未实现（`socket.Send` 是伪代码），见 `kb-lockstep-playbook.md` "尚未解决的网络问题"
   - ~~序列化协议~~ → **已实现**，见 `kb-command-stream.md` "FrameDelta wire format" 段（`AsSpan()` / `Deserialize()` 开箱即用）
   - host 间的时序协调（lockstep 框架的事）→ **端到端指南**见 `kb-lockstep-playbook.md`
-  - 跨帧的 placeholder 持久映射（明确放弃，见决策 #3）
+  - 跨帧的 placeholder 持久映射（ReplayMapping 提供单帧查询，见决策 #3 / ReplayMapping 节）
 
 ## 要应对的游戏用户场景
 
@@ -79,6 +79,7 @@ updated: 2026-07-01
 - `Reserve` op with `Id < 0`：`ReserveDeferredEntityBatch()` 分配 local id + 写入 map
 - 所有其他 op（Create/Add/Set/AddChild/Destroy/...）的 entity 参数都走 `ResolveReplayEntity`
 - `PreScanForCapacity` 跳过 placeholder entity（`Id < 0`）的 `maxEntityId` 追踪——它们的 real id 在 main pass 才分配
+- 新增 `ReplayMapping` 作为 `Replay()` 的返回值，暴露 `Resolve(Entity)` 和 `Frozen()`（详见下文）
 
 ### 历史 commit（已合入 main）
 
@@ -89,6 +90,49 @@ updated: 2026-07-01
 | `91d1d35` | resolveMap 从 `Dictionary<Entity, Entity>` 改为 `Entity[]` 按 seq 索引。 |
 | `024de01` | `Clear` 自给自足（覆盖 Submit 异常路径的 id leak）。 |
 | `d45514d` | `CommandStream.Clear` 改 public，支持中继模式。 |
+
+### ReplayMapping — replay 后查询占位符 → real 映射
+
+**问题**：replay 后用户只有 `Entity(-1, seq)`，不知道它在本地 world 里变成了哪个 real entity。
+
+**方案**：`World.Replay()` 不再返回 `void`，改为返回 `ReplayMapping` struct：
+
+```csharp
+public readonly struct ReplayMapping
+{
+    internal ReplayMapping(Entity[] map, int count);
+
+    // 查询占位符对应的本地 real entity
+    public Entity Resolve(Entity placeholder);
+
+    // 创建独立副本，不受后续 Replay 的影响
+    public ReplayMapping Frozen();
+}
+```
+
+**设计约束：**
+- `ReplayMapping` 是一个 view，底层映射数组由 `World._replayPlaceholderMap` 借用
+- 调用下一个 `Replay()` 后，前一个 view 的数据会被覆盖（底层数组复用）
+- 需要长期保留时，调用 `Frozen()` 做一次 `Entity[]` 拷贝
+- `_replayMapCount` 录回调回的数组长度，`Resolve` 用边界检查 + sentinel 过滤保证安全
+
+**使用示例：**
+
+单 delta 即时查：
+```csharp
+var mapping = world.Replay(delta);
+var real = mapping.Resolve(placeholder);  // → Entity(3, 1)
+```
+
+多 delta 需要保留每份映射：
+```csharp
+var mapA = world.Replay(deltaA).Frozen();  // 独立副本
+var mapB = world.Replay(deltaB).Frozen();  // 不受 mapA 影响
+```
+
+**性能：**
+- `ReplayMapping` 不分配，16 字节栈上 struct
+- `Frozen()` 按需分配，大小 = 该次 delta 中 Reserve 的幂次数组长度，通常是几十
 
 ## 决策
 
@@ -102,13 +146,11 @@ updated: 2026-07-01
 
 ### 决策 #3：跨帧引用 placeholder
 
-**已定**：明确放弃。placeholder 单帧有效。业务需要跨帧引用 entity 时：
-- 单机：用 `DeferredEntities = false`，`Create()` 返回 real id
-- 多 host：业务自己维护跨 host 稳定标识（gameplay 层 entity guid），replay 后通过查询组件定位本地 real id
+**已定**：placeholder 引用的跨帧问题不通过修改占位符 ID 模式解决。改用 `ReplayMapping.Resolve()` 在 replay 后即时查得 local real entity，用户自己保存。
 
 ### 决策 #4：replay 端 placeholder→local real 映射的数据结构
 
-**已定**：`Entity[]` 按 seq 索引。每帧 `mapLen = 0` 重置，`EnsurePlaceholderMap` lazy 扩容 + 初始化 sentinel。
+**已定**：`Entity[]` 按 seq 索引。每帧 `mapLen = 0` 重置，`EnsurePlaceholderMap` lazy 扩容 + 初始化 sentinel。`ReplayMapping` 暴露此映射的只读 view。
 
 ## 坑点
 

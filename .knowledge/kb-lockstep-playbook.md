@@ -61,6 +61,17 @@ stream.DeferredEntities = true;  // Create() 返回 placeholder Entity(-1, seq)
 ```
 
 > **关键**：所有 host 必须从 frame 0 完整重放。不支持断点续传/增量同步（见 `kb-command-stream.md` "关键约束"）。
+>
+> **Replay 后查询占位符对应的本地 real entity**：
+> ```csharp
+> var mapping = world.Replay(deltaA);
+> var real = mapping.Resolve(myPlaceholder);  // Entity(-1,seq) → 本地 real entity
+> // 需要保存到下一帧用？直接存 real
+> // 多 delta 时保留每份映射：
+> var frozenA = world.Replay(deltaA).Frozen();  // 独立副本，不受后续 Replay 影响
+> var frozenB = world.Replay(deltaB).Frozen();
+> ```
+> 详见 `kb-deferred-create-design.md` ReplayMapping 节。
 
 ### 3. 多帧合并（可选，网络优化）
 
