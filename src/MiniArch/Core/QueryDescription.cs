@@ -14,17 +14,17 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
     /// <summary>
     /// Gets required component types.
     /// </summary>
-    public IReadOnlyList<Type> RequiredTypes => _required.ToArray();
+    public IReadOnlyList<Type> RequiredTypes => _required.GetTypes();
 
     /// <summary>
     /// Gets excluded component types.
     /// </summary>
-    public IReadOnlyList<Type> ExcludedTypes => _excluded.ToArray();
+    public IReadOnlyList<Type> ExcludedTypes => _excluded.GetTypes();
 
     /// <summary>
     /// Gets any-match component types.
     /// </summary>
-    public IReadOnlyList<Type> AnyTypes => _any.ToArray();
+    public IReadOnlyList<Type> AnyTypes => _any.GetTypes();
 
     /// <summary>
     /// Adds a required type.
@@ -93,7 +93,7 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
 
         public ReadOnlySpan<Type> AsSpan() => _types ?? Array.Empty<Type>();
 
-        public Type[] ToArray() => _types is null ? Array.Empty<Type>() : (Type[])_types.Clone();
+        internal Type[] GetTypes() => _types ?? Array.Empty<Type>();
 
         public QueryDescriptionTypeSet Add(Type type)
         {

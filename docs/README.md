@@ -3,7 +3,7 @@
 MiniArch exposes two API layers:
 
 - **`MiniArch`** — Default user entry: `World`, `Entity`, `QueryDescription`
-- **`MiniArch.Core`** — Advanced types: `CommandBuffer`, `CommandStream`, `FrameDelta`, `WorldSnapshot`, `EntityAccessor`, `ICommandRecorder`, `IChunkForEach`
+- **`MiniArch.Core`** — Advanced types: `CommandStream`, `FrameDelta`, `WorldSnapshot`, `EntityAccessor`, `IChunkForEach`
 
 ## Default Layer: `MiniArch`
 
@@ -89,11 +89,9 @@ foreach (var chunk in query.GetChunks())
 
 | Type | Description |
 |---|---|
-| `CommandBuffer` | Deferred command recording with per-entity deduplication |
-| `CommandStream` | Byte-stream recorder (20–48% faster than CommandBuffer) |
+| `CommandStream` | Byte-stream recorder for deferred world mutations |
 | `FrameDelta` | Self-contained delta for cross-world replay |
 | `WorldSnapshot` | Binary world serialization |
-| `ICommandRecorder` | Shared interface: `Create`, `Add<T>`, `Set<T>`, `Remove<T>`, `Destroy`, `AddChild`, `Submit` |
 | `EntityAccessor` | Ref struct for batched component access, via `World.Access(entity)` |
 | `IChunkForEach` | Struct-generic chunk iteration interface: implement `OnChunk(ChunkView)` on a struct; pass to `Query.ForEachChunk<TForEach>(ref TForEach)` or `ForEachChunkParallel<TForEach>(TForEach)` for zero-alloc, JIT-devirtualised iteration |
 | `ChunkView` | Chunk view returned by `GetChunks()` |

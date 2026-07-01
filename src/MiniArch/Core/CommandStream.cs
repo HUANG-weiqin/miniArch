@@ -10,7 +10,7 @@ namespace MiniArch.Core;
 /// no per-entity dedup. Created entities use a pending batch buffer for pre-materialization
 /// component accumulation.
 /// </summary>
-public sealed class CommandStream : ICommandRecorder
+public sealed class CommandStream
 {
     private readonly World _world;
     private ComponentStore?[] _stores;

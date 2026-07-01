@@ -35,7 +35,7 @@ public sealed class MiniArchRuntime
     public MiniArch.World World { get; }
 
     /// <summary>The underlying recorder (CommandStream).</summary>
-    public ICommandRecorder Recorder { get; }
+    public CommandStream Recorder { get; }
 
     public FrameView CurrentFrame { get; private set; }
 

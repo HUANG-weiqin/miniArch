@@ -203,7 +203,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - **FrameDelta packed byte format**：单一 buffer + varint + tag，零拷贝网络发送，Merge 退化到 Array.Copy
 - **`MoveEntityCore` + `FinishMoveEntity` 分离**：带 catch rollback，便于批量 materialize 复用
 - **`[SkipLocalsInit]` / `AggressiveInlining` / `Unsafe.As<byte,T>`** 系统化性能卫生
-- **Add/Set alias 文档化**、`Unsafe`/`Try` 前缀一致、`ICommandRecorder` 不硬塞输出方法——命名诚实贯穿全库
+- **Add/Set alias 文档化**、`Unsafe`/`Try` 前缀一致——命名诚实贯穿全库
 
 ## 入口
 

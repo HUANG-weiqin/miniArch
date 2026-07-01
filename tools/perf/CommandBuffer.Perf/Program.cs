@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 using Friflo.Engine.ECS;
 using MiniArch.Core;
 using MiniArchBenchmarks;
-using MiniCommandBuffer = MiniArch.Core.CommandBuffer;
+using MiniCommandBuffer = MiniArch.Core.CommandStream;
 using MiniCommandStream = MiniArch.Core.CommandStream;
 using MiniEntity = MiniArch.Entity;
 using FrifloEntityStore = Friflo.Engine.ECS.EntityStore;
@@ -91,10 +91,10 @@ static void Run(string engine, CommandBufferBenchmarkScenario scenario, Func<(Ac
 }
 
 // ════════════════════════════════════════════════════════════════
-//  Unified record helpers (no Destroy — fair comparison)
+//  Unified record helpers (no Destroy �?fair comparison)
 // ════════════════════════════════════════════════════════════════
 
-static void Record(ICommandRecorder cb, MiniSharedCommandBufferState state, CommandBufferBenchmarkScenario scenario)
+static void Record(CommandStream cb, MiniSharedCommandBufferState state, CommandBufferBenchmarkScenario scenario)
 {
     switch (scenario)
     {
@@ -107,7 +107,7 @@ static void Record(ICommandRecorder cb, MiniSharedCommandBufferState state, Comm
 static bool IsSteadyStateFriendly(CommandBufferBenchmarkScenario scenario) =>
     scenario is CommandBufferBenchmarkScenario.DenseExisting or CommandBufferBenchmarkScenario.MixedScript;
 
-static void RecordDense(ICommandRecorder cb, MiniSharedCommandBufferState state)
+static void RecordDense(CommandStream cb, MiniSharedCommandBufferState state)
 {
     for (var i = 0; i < state.ExistingEntities.Length; i++)
     {
@@ -121,7 +121,7 @@ static void RecordDense(ICommandRecorder cb, MiniSharedCommandBufferState state)
     }
 }
 
-static void RecordCreate(ICommandRecorder cb, MiniSharedCommandBufferState state)
+static void RecordCreate(CommandStream cb, MiniSharedCommandBufferState state)
 {
     for (var i = 0; i < state.EntityCount; i++)
     {
@@ -134,7 +134,7 @@ static void RecordCreate(ICommandRecorder cb, MiniSharedCommandBufferState state
     }
 }
 
-static void RecordMixed(ICommandRecorder cb, MiniSharedCommandBufferState state)
+static void RecordMixed(CommandStream cb, MiniSharedCommandBufferState state)
 {
     for (var i = 0; i < state.EntityCount; i++)
     {
@@ -163,7 +163,7 @@ static void RecordMixed(ICommandRecorder cb, MiniSharedCommandBufferState state)
 /// Records MixedScript and cleans up created entities after Submit,
 /// matching Friflo's behavior where Mixed() deletes created entities post-Playback.
 /// </summary>
-static void RecordMixedSteady(ICommandRecorder cb, MiniSharedCommandBufferState state, MiniEntity[] created)
+static void RecordMixedSteady(CommandStream cb, MiniSharedCommandBufferState state, MiniEntity[] created)
 {
     var ci = 0;
     for (var i = 0; i < state.EntityCount; i++)

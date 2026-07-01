@@ -51,7 +51,7 @@ updated: 2026-06-30 (补 Replay fresh slot、parallel stale 命令与 cancelled 
 - `SubmitAndSnapshotAsync()`：换出 buffer 状态后，主线程 Submit 与后台线程 BuildDelta 并行执行
 - `DeferredEntities=false` 时记录期返回真实 `Entity`（reserved handle，`world.IsAlive(entity)` 仍为 false）；`DeferredEntities=true` 时返回 placeholder `Entity(-1, seq)`（单帧有效，不跨帧）
 - query layout generation 在 replay 期间被抑制，整批结束后只递增一次
-- `ICommandRecorder` 接口存在但仅用于测试抽象层，CommandStream 实现它
+- ~~`ICommandRecorder`~~ — 已删除。CommandStream 直接提供 Record API（YAGNI）
 - `Clone()` 新增：完整深拷贝，用于需要保留录制状态的场景
 - **2026-06-28 API 统一**：删除 `SetConcurrent`/`AddConcurrent`/`RemoveConcurrent` 专用并行方法。用户在 `ParallelRecording=true` 时直接用 `Set`/`Add`/`Remove`/`Create`/`Destroy`/`AddChild`/`RemoveChild` 即可，热路径自动切换到并发实现。单线程模式零额外成本（一次可预测的 `_parallelMode` 分支）。
 

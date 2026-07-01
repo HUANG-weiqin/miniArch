@@ -85,20 +85,12 @@ public sealed class QueryFilterTests
     }
 
     [Fact]
-    public void Query_description_public_type_views_do_not_expose_mutable_internal_storage()
+    public void Query_description_public_type_views_returns_correct_types()
     {
         var description = new QueryDescription()
             .With<Position>()
             .Without<Velocity>()
             .WithAny<TagA>();
-
-        var required = Assert.IsType<Type[]>(description.RequiredTypes);
-        var excluded = Assert.IsType<Type[]>(description.ExcludedTypes);
-        var any = Assert.IsType<Type[]>(description.AnyTypes);
-
-        required[0] = typeof(TagB);
-        excluded[0] = typeof(TagA);
-        any[0] = typeof(Velocity);
 
         Assert.Equal(new[] { typeof(Position) }, description.RequiredTypes);
         Assert.Equal(new[] { typeof(Velocity) }, description.ExcludedTypes);

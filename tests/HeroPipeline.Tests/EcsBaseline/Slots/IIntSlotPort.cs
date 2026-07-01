@@ -1,4 +1,4 @@
-using CoreCommandBuffer = MiniArch.Core.ICommandRecorder;
+using CoreCommandBuffer = MiniArch.Core.CommandStream;
 
 namespace Hero.Ecs;
 

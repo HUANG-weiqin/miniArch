@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 using Friflo.Engine.ECS;
 using MiniArch.Core;
 using MiniArchBenchmarks;
-using MiniCommandBuffer = MiniArch.Core.CommandBuffer;
+using MiniCommandBuffer = MiniArch.Core.CommandStream;
 using MiniCommandStream = MiniArch.Core.CommandStream;
 using FrifloEntityStore = Friflo.Engine.ECS.EntityStore;
 using FrifloCommandBuffer = Friflo.Engine.ECS.CommandBuffer;

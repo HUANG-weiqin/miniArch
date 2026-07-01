@@ -27,7 +27,7 @@ public sealed class CollisionSystem : ISystem
     public void Execute(in FrameContext context)
     {
         FrameView frame = context.Frame;
-        ICommandRecorder commands = context.Commands;
+        CommandStream commands = context.Commands;
 
         ResetGroups();
         CollectGroups(frame);
@@ -100,7 +100,7 @@ public sealed class CollisionSystem : ISystem
         return list;
     }
 
-    private static void ProcessGroup(FrameView frame, ICommandRecorder commands, in GroupKey key, List<CollisionRequestData> requests)
+    private static void ProcessGroup(FrameView frame, CommandStream commands, in GroupKey key, List<CollisionRequestData> requests)
     {
         foreach (var chunk in frame.ChunkQuery(CollisionTargetDescription).GetChunks())
         {
@@ -126,7 +126,7 @@ public sealed class CollisionSystem : ISystem
         }
     }
 
-    private static void DestroyAll(FrameView frame, ICommandRecorder commands)
+    private static void DestroyAll(FrameView frame, CommandStream commands)
     {
         foreach (var chunk in frame.ChunkQuery(CollisionRequestDescription).GetChunks())
         {
@@ -138,7 +138,7 @@ public sealed class CollisionSystem : ISystem
         }
     }
 
-    private static void CreateHitRequest(ICommandRecorder commands, in CollisionRequestData req, Entity candidate)
+    private static void CreateHitRequest(CommandStream commands, in CollisionRequestData req, Entity candidate)
     {
         Entity hitRequest = commands.Create();
         commands.Add(hitRequest, new Request());
