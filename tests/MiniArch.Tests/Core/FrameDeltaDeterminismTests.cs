@@ -194,7 +194,12 @@ public sealed class FrameDeltaDeterminismTests
         // Frame 2: mutate a clone child
         var cloneChildren = source.EnumerateChildren(clone).ToChildList();
         foreach (var cc in cloneChildren)
-            stream.Add(cc, new Health(7));
+        {
+            if (source.Has<Health>(cc))
+                stream.Set(cc, new Health(7));
+            else
+                stream.Add(cc, new Health(7));
+        }
         deltas.Add(stream.Snapshot()); stream.Submit();
 
         var replica1 = new World();

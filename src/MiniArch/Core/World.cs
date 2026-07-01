@@ -556,6 +556,17 @@ public sealed partial class World : IDisposable
                         break;
 
                     case DeltaOpKind.Add:
+                    {
+                        var entity = ResolveReplayEntity(decoder.Entity, map, mapLen);
+                        var comp = decoder.ReadComponentType();
+                        var dataSize = decoder.ReadVarint();
+                        var dataStart = decoder.CurrentPosition;
+                        _ = decoder.ReadBytes(dataSize);
+                        var loc = GetRequiredLocation(entity);
+                        ApplyRawAdd(entity, loc, comp, bufPtr + dataStart);
+                        break;
+                    }
+
                     case DeltaOpKind.Set:
                     {
                         var entity = ResolveReplayEntity(decoder.Entity, map, mapLen);
@@ -564,7 +575,7 @@ public sealed partial class World : IDisposable
                         var dataStart = decoder.CurrentPosition;
                         _ = decoder.ReadBytes(dataSize);
                         var loc = GetRequiredLocation(entity);
-                        ApplyRawAddOrSet(entity, loc, comp, bufPtr + dataStart);
+                        ApplyRawSet(entity, loc, comp, bufPtr + dataStart);
                         break;
                     }
 

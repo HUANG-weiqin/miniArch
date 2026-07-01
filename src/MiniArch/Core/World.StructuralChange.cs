@@ -148,52 +148,24 @@ public sealed partial class World
         archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
     }
 
-    // Upsert path used by CommandStream (deferred apply) and Replay.
-    // At apply time the entity may or may not have the component —strict
-    // Add/Set semantics belong on the direct World API, not on deferred paths.
-    internal unsafe void ApplyRawAddOrSet(Entity entity, EntityRecord info, ComponentType componentType, byte* source)
+    // Raw-byte paths: ReplayCore dispatches Add/Set ops here.
+    internal unsafe void ApplyRawAdd(Entity entity, EntityRecord info, ComponentType componentType, byte* source)
     {
         var archetype = info.Archetype!;
-
-        if (archetype.TryGetComponentIndex(componentType, out var componentIndex))
-        {
-            archetype.WriteComponentRaw(componentIndex, info.RowIndex, source);
-            return;
-        }
-
+        if (archetype.TryGetComponentIndex(componentType, out _))
+            throw new InvalidOperationException(
+                $"Replay Add: entity {entity} already has component id {componentType.Value}.");
         var destination = GetOrCreateAddDestinationArchetype(archetype, componentType);
         MoveEntityFromBytes(entity, info, destination, componentType, source);
     }
 
-    internal void ApplyTypedAddOrSet<T>(Entity entity, EntityRecord info, ComponentType componentType, in T component) where T : unmanaged
+    internal unsafe void ApplyRawSet(Entity entity, EntityRecord info, ComponentType componentType, byte* source)
     {
         var archetype = info.Archetype!;
-
-        if (archetype.TryGetComponentIndex(componentType, out var componentIndex))
-        {
-            archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
-            return;
-        }
-
-        if (!archetype.TryGetAddDestination(componentType, out var destination))
-        {
-            var destinationSignature = archetype.Signature.Add(componentType);
-            destination = GetOrCreateArchetype(destinationSignature);
-            archetype.CacheAddDestination(componentType, destination);
-            destination!.CacheRemoveDestination(componentType, archetype);
-        }
-
-        var rowIdx = MoveEntityCore(entity, info, destination!);
-        try
-        {
-            destination!.SetComponentAtTyped(destination.GetComponentIndex(componentType), rowIdx, in component);
-        }
-        catch
-        {
-            destination!.RemoveAt(rowIdx, out _);
-            throw;
-        }
-        FinishMoveEntity(entity, info, destination!, rowIdx);
+        if (!archetype.TryGetComponentIndex(componentType, out var componentIndex))
+            throw new InvalidOperationException(
+                $"Replay Set: entity {entity} does not have component id {componentType.Value}.");
+        archetype.WriteComponentRaw(componentIndex, info.RowIndex, source);
     }
 
     private unsafe void MoveEntityFromBytes(

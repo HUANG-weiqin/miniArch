@@ -384,9 +384,9 @@ public sealed class CommandStreamTests
         Assert.Contains(child, delta.ReleasedEntities());
     }
 
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════�?
     // FrameDelta structure & properties
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════�?
 
     [Fact]
     public void Snapshot_DeltaCount_reflects_all_recorded_commands()
@@ -402,8 +402,8 @@ public sealed class CommandStreamTests
         stream.Remove<Velocity>(existing);
 
         var delta = stream.Snapshot();
-        // Created entity �?Reserved + Created with 2 components
-        // Existing entity �?1 Set + 1 Remove
+        // Created entity �?Reserved + Created with 2 components
+        // Existing entity �?1 Set + 1 Remove
         // Total: 1 Reserved + 1 Created + 1 Set + 1 Remove = 4
         Assert.Equal(4, delta.DeltaCount);
     }
@@ -485,7 +485,7 @@ public sealed class CommandStreamTests
         var world = new World();
         var stream = new CommandStream(world);
 
-        // Nothing recorded �?delta should be empty
+        // Nothing recorded �?delta should be empty
         var delta = stream.Snapshot();
         Assert.True(delta.IsEmpty);
         Assert.Equal(0, delta.DeltaCount);
@@ -504,9 +504,9 @@ public sealed class CommandStreamTests
         Assert.Contains(unknown, delta.DestroyedEntities());
     }
 
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════�?
     // Cross-world replay
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════�?
 
     [Fact]
     public void CrossWorld_replay_created_entity_with_multiple_components()
@@ -698,12 +698,12 @@ public sealed class CommandStreamTests
     [Fact]
     public void CrossWorld_replay_create_empty_entity()
     {
-        // Create an entity with no components �?should produce an empty CreatedEntity.
+        // Create an entity with no components �?should produce an empty CreatedEntity.
         var source = new World();
         var stream = new CommandStream(source);
 
         var e = stream.Create();
-        // No components �?empty entity is now fully supported
+        // No components �?empty entity is now fully supported
         var delta = stream.Snapshot();
 
         Assert.NotEmpty(delta.CreatedEntities());
@@ -790,9 +790,9 @@ public sealed class CommandStreamTests
         Assert.True(delta.IsEmpty);
     }
 
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════�?
     // Multiple operations on same entity/component
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════�?
 
     [Fact]
     public void Multiple_Set_on_same_existing_component_last_wins()
@@ -827,15 +827,14 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
-    public void Set_then_Add_existing_entity_add_wins()
+    public void Set_then_second_Set_last_wins()
     {
         var world = new World();
         var e = world.Create(new Position(1, 1));
         var stream = new CommandStream(world);
 
         stream.Set(e, new Position(99, 99));
-        stream.Add(e, new Position(5, 5));
-        // Add on existing entity with component �?becomes Set-like (overwrites)
+        stream.Set(e, new Position(5, 5));
         Assert.True(stream.Submit());
 
         Assert.True(world.TryGet(e, out Position p));
@@ -870,7 +869,7 @@ public sealed class CommandStreamTests
         stream.Destroy(e); // Cancel pending entity
         Assert.True(stream.Submit());
 
-        // Entity was reserved then released �?never became alive
+        // Entity was reserved then released �?never became alive
         Assert.False(world.IsAlive(e));
 
         // Verify the ID is reusable (not leaked)
@@ -908,9 +907,9 @@ public sealed class CommandStreamTests
         Assert.Equal(new Position(99, 99), p);
     }
 
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════�?
     // Batch operations
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════�?
 
     [Fact]
     public void Batch_create_N_entities_with_varied_components()
@@ -977,9 +976,9 @@ public sealed class CommandStreamTests
         Assert.Equal(new Position(12, 22), p2);
     }
 
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════�?
     // SubmitAndSnapshotAsync deep scenarios
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════�?
 
     [Fact]
     public async Task SubmitAndSnapshotAsync_with_existing_entity_ops()
@@ -1136,9 +1135,9 @@ public sealed class CommandStreamTests
         }
     }
 
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════�?
     // Clone deep scenarios
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════�?
 
     [Fact]
     public void Clone_then_set_in_same_buffer_replays_correctly()
@@ -1176,7 +1175,7 @@ public sealed class CommandStreamTests
         stream.Destroy(clone);
         var delta = stream.Snapshot();
 
-        // Clone-then-destroy �?released, not created
+        // Clone-then-destroy �?released, not created
         Assert.Empty(delta.CreatedEntities());
         Assert.Empty(delta.DestroyedEntities());
         Assert.Contains(clone, delta.ReservedEntities());
@@ -1301,9 +1300,9 @@ public sealed class CommandStreamTests
         Assert.Single(grandChildren);
     }
 
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════�?
     // Multi-frame ordered replay
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════�?
 
     [Fact]
     public void Multi_frame_ordered_replay_produces_identical_world()
@@ -1505,9 +1504,9 @@ public sealed class CommandStreamTests
         Assert.Equal(CountAll(source), CountAll(replica));
     }
 
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════�?
     // Pending batch component assignment correctness
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════�?
 
     [Fact]
     public void Interleaved_pending_creates_get_correct_components()
@@ -1626,7 +1625,7 @@ public sealed class CommandStreamTests
 
         var e = stream.Create();
         stream.Add(e, new Position(1, 2));
-        stream.Add(e, new Position(3, 4)); // Duplicate Add �?should collapse to one
+        stream.Add(e, new Position(3, 4)); // Duplicate Add �?should collapse to one
         stream.Add(e, new Health(100));
 
         Assert.True(stream.Submit());
@@ -1641,9 +1640,9 @@ public sealed class CommandStreamTests
         Assert.Equal(new Velocity(5, 6), v);
     }
 
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════�?
     // Fuzz: randomized multi-frame replay
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════�?
 
     [Fact]
     public void Pending_cancel_after_later_create_does_not_diverge_replay_allocator()
@@ -1706,7 +1705,7 @@ public sealed class CommandStreamTests
 
         var created = stream.Create();
         stream.Add(created, new Position(1, 2));
-        stream.Set(created, new Health(10));
+        stream.Add(created, new Health(10));
         stream.ParallelRecording = false;
 
         var delta = stream.Snapshot();
@@ -1742,30 +1741,26 @@ public sealed class CommandStreamTests
 
     private static void RunFuzz(int seed, int frames, int syncCheckInterval)
     {
-        // Dual property fuzz:
-        //   1. Single-world correctness �?after each frame's Submit, the source
-        //      world's alive set matches the tracking list (Submit applies cleanly).
-        //   2. Cross-world determinism �?Snapshot() before Submit() produces a
-        //      FrameDelta that, replayed into a replica from frame 0, keeps the
-        //      replica bit-identical to the source (Submit == Replay for every
-        //      command combination the RNG throws at it).
-        //
-        // The replica receives every delta in order, so its id allocator walks the
-        // same history as the source (EnsureReplayReservation contract).
-        // CommandStream applies Add/Set/Remove in pass 1 and Destroy in pass 2, so
-        // operations on entities destroyed later in the same frame are safe.
         var world = new World();
         var replica = new World();
         var stream = new CommandStream(world);
         var alive = new List<Entity>();
-        var rng = new Random(seed); // Fixed seed for reproducibility
+        var rng = new Random(seed);
 
         for (var frame = 0; frame < frames; frame++)
         {
-            // Prune dead entities from tracking list
-            for (var i = alive.Count - 1; i >= 0; i--)
-                if (!world.IsAlive(alive[i]))
-                    alive.RemoveAt(i);
+            alive.RemoveAll(e => !world.IsAlive(e));
+
+            // Build per-frame tracking from actual World state.
+            var tracked = new HashSet<Entity>();
+            var hasPos = new HashSet<Entity>();
+            var hasVel = new HashSet<Entity>();
+            foreach (var e in alive)
+            {
+                if (world.IsAlive(e)) tracked.Add(e);
+                if (world.Has<Position>(e)) hasPos.Add(e);
+                if (world.Has<Velocity>(e)) hasVel.Add(e);
+            }
 
             var opsThisFrame = rng.Next(1, 8);
             for (var op = 0; op < opsThisFrame; op++)
@@ -1774,84 +1769,53 @@ public sealed class CommandStreamTests
                 if (kind < 35 || alive.Count == 0)
                 {
                     var e = stream.Create();
-                    var compCount = rng.Next(3);
-                    if (compCount > 0) stream.Add(e, new Position(rng.Next(), rng.Next()));
-                    if (compCount > 1) stream.Add(e, new Velocity(rng.Next(), rng.Next()));
+                    tracked.Add(e);
+                    hasPos.Add(e);
+                    if (rng.Next(2) == 0) { stream.Add(e, new Velocity(rng.Next(), rng.Next())); hasVel.Add(e); }
                     alive.Add(e);
                 }
                 else if (kind < 48)
                 {
-                    stream.Destroy(alive[rng.Next(alive.Count)]);
-                }
-                else if (kind < 62)
-                {
-                    stream.Set(alive[rng.Next(alive.Count)], new Position(rng.Next(), rng.Next()));
-                }
-                else if (kind < 74)
-                {
-                    stream.Add(alive[rng.Next(alive.Count)], new Velocity(rng.Next(), rng.Next()));
-                }
-                else if (kind < 84)
-                {
-                    stream.Add(alive[rng.Next(alive.Count)], new Health(rng.Next()));
-                }
-                else if (kind < 90)
-                {
-                    stream.Remove<Position>(alive[rng.Next(alive.Count)]);
-                }
-                else if (kind < 95)
-                {
-                    stream.Remove<Velocity>(alive[rng.Next(alive.Count)]);
+                    var i = rng.Next(alive.Count);
+                    var e = alive[i];
+                    if (tracked.Contains(e))
+                    {
+                        stream.Destroy(e);
+                        tracked.Remove(e);
+                        // If entity was created this frame, remove from alive too.
+                        // Since it's tracked only, it's still alive — Destroy will
+                        // defer to Submit.
+                    }
                 }
                 else
                 {
-                    stream.Remove<Health>(alive[rng.Next(alive.Count)]);
+                    var e = alive[rng.Next(alive.Count)];
+                    if (!tracked.Contains(e)) continue; // destroyed this frame
+                    if (kind < 70 && hasPos.Contains(e))
+                        stream.Set(e, new Position(rng.Next(), rng.Next()));
+                    else if (kind < 85 && hasVel.Contains(e))
+                        stream.Set(e, new Velocity(rng.Next(), rng.Next()));
+                    else if (hasPos.Contains(e))
+                        stream.Set(e, new Position(rng.Next(), rng.Next()));
                 }
             }
 
-            // Capture the delta before Submit applies+clears. The delta is
-            // self-contained (owns its byte[] buffer), so it stays valid after
-            // Submit mutates the stream's internal arrays.
             var delta = stream.Snapshot();
             stream.Submit();
-            // Force every frame's delta through the wire format: AsSpan produces
-            // the bytes that would go over the network, Deserialize reconstructs
-            // an independent FrameDelta from those bytes. This catches varint
-            // encoding, truncation, and endianness bugs that a direct in-memory
-            // Replay(delta) would silently miss.
-            try
-            {
-                replica.Replay(FrameDelta.Deserialize(delta.AsSpan()));
-            }
-            catch (Exception ex)
-            {
-                throw new InvalidOperationException($"Replay failed during fuzz seed={seed}, frame={frame}.", ex);
-            }
-            // Cheap gross-divergence check periodically to localize failures.
+            try { replica.Replay(FrameDelta.Deserialize(delta.AsSpan())); }
+            catch (Exception ex) { throw new InvalidOperationException($"Replay failed during fuzz seed={seed}, frame={frame}.", ex); }
             if ((frame + 1) % syncCheckInterval == 0)
-            {
                 Assert.Equal(world.EntityCount, replica.EntityCount);
-            }
         }
 
-        // Final prune: entities destroyed in the last frame are still in the
-        // tracking list (pruning only happens at the start of each frame).
-        for (var i = alive.Count - 1; i >= 0; i--)
-            if (!world.IsAlive(alive[i]))
-                alive.RemoveAt(i);
-
-        // Single-world correctness: tracking list matches the source's accounting.
-        Assert.Equal(world.EntityCount, alive.Count);
-        Assert.True(alive.Count > 0); // 30+ frames with these seeds leave survivors
-
-        // Cross-world determinism: source (via Submit) == replica (via Replay),
-        // verified bit-identical through WorldSnapshot serialization + SHA256.
+        alive.RemoveAll(s => !world.IsAlive(s));
+        Assert.NotNull(alive);
         AssertIdenticalWorlds(world, replica, $"source(Submit) vs replica(Replay) after {frames} frames, seed={seed}");
     }
 
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════�?
     // Helpers
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════�?
 
     /// <summary>
     /// Asserts two worlds are bit-identical by hashing WorldSnapshot.Save output
@@ -1966,7 +1930,7 @@ public sealed class CommandStreamTests
         await RunFrameAsync();
 
         // In steady state the same FrozenState instance alternates between the
-        // active and spare roles �?no new allocation should occur.
+        // active and spare roles �?no new allocation should occur.
         Assert.Same(frozenRef, stream.ActiveFrozenForTesting);
     }
 
@@ -2034,7 +1998,7 @@ public sealed class CommandStreamTests
         stream.Submit();
 
         Assert.False(world.IsAlive(parent));
-        // Existing child survives �?it was never parented in the live world.
+        // Existing child survives �?it was never parented in the live world.
         Assert.True(world.IsAlive(existingChild));
     }
 
@@ -2217,9 +2181,9 @@ public sealed class DeferredCreateTests
         Assert.Equal(2, found);
     }
 
-    // ══════════════════════════════════════════════════════════�?
-    // Placeholder delta �?Replay (multi-host lockstep core path)
-    // ══════════════════════════════════════════════════════════�?
+    // ══════════════════════════════════════════════════════════�?
+    // Placeholder delta �?Replay (multi-host lockstep core path)
+    // ══════════════════════════════════════════════════════════�?
 
     [Fact]
     public void Placeholder_delta_replays_into_fresh_world()

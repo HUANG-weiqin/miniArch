@@ -84,7 +84,10 @@ public sealed class NetworkSyncTests
             var deltaA = csA.Snapshot();
 
             var csB = new CommandStream(hostB) { DeferredEntities = true };
-            csB.Add(E(2), new Health(frame));
+            if (frame == 0)
+                csB.Add(E(2), new Health(0));
+            else
+                csB.Set(E(2), new Health(frame));
             if (frame % 2 == 0)
             {
                 var g = csB.Create();
