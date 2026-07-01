@@ -7,35 +7,23 @@ namespace MiniArch;
 public sealed partial class World
 {
     /// <summary>
-    /// Adds a component to an entity, or overwrites it if already present.
+    /// Adds a new component to an entity. Throws if the entity already has it.
     /// </summary>
-    /// <remarks>
-    /// This is an <b>upsert</b>: if the entity already has a component of type
-    /// <typeparamref name="T"/>, its value is overwritten in place without an
-    /// archetype migration. If you require strict add semantics (throw on
-    /// duplicate), check <see cref="Has{T}"/> first.
-    /// <para>
-    /// <b>Alias of <see cref="Set{T}"/>.</b> Both route to the same implementation.
-    /// The two names exist for readability at call sites ("Add a new buff" vs
-    /// "Set health to 50"), not for behavioural difference.
-    /// </para>
-    /// </remarks>
+    /// <exception cref="InvalidOperationException">The entity already has a component of type <typeparamref name="T"/>.</exception>
     public void Add<T>(Entity entity, T component) where T : unmanaged
     {
         ThrowIfDisposed();
-        ApplyTypedAddOrSet(entity, GetComponentType<T>(), in component);
+        ApplyTypedAdd(entity, GetComponentType<T>(), in component);
     }
 
     /// <summary>
-    /// Sets a component on an entity, adding it if absent or overwriting if present.
+    /// Sets the value of an existing component. Throws if the entity does not have it.
     /// </summary>
-    /// <remarks>
-    /// This is an <b>upsert</b> — see <see cref="Add{T}"/> for the full contract.
-    /// </remarks>
+    /// <exception cref="InvalidOperationException">The entity does not have a component of type <typeparamref name="T"/>.</exception>
     public void Set<T>(Entity entity, T component) where T : unmanaged
     {
         ThrowIfDisposed();
-        ApplyTypedAddOrSet(entity, GetComponentType<T>(), in component);
+        ApplyTypedSet(entity, GetComponentType<T>(), in component);
     }
 
     /// <summary>
@@ -101,13 +89,82 @@ public sealed partial class World
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ApplyTypedAddOrSet<T>(Entity entity, ComponentType componentType, in T component) where T : unmanaged
+    private void ApplyTypedAdd<T>(Entity entity, ComponentType componentType, in T component) where T : unmanaged
     {
         var info = GetRequiredLocation(entity);
-        ApplyTypedAddOrSet(entity, info, componentType, in component);
+        ApplyTypedAdd(entity, info, componentType, in component);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void ApplyTypedAdd<T>(Entity entity, EntityRecord info, ComponentType componentType, in T component) where T : unmanaged
+    {
+        var archetype = info.Archetype!;
+
+        if (archetype.TryGetComponentIndex(componentType, out _))
+        {
+            throw new InvalidOperationException(
+                $"Entity {entity} already has component {typeof(T).Name}.");
+        }
+
+        if (!archetype.TryGetAddDestination(componentType, out var destination))
+        {
+            var destinationSignature = archetype.Signature.Add(componentType);
+            destination = GetOrCreateArchetype(destinationSignature);
+            archetype.CacheAddDestination(componentType, destination);
+            destination!.CacheRemoveDestination(componentType, archetype);
+        }
+
+        var rowIdx = MoveEntityCore(entity, info, destination!);
+        try
+        {
+            destination!.SetComponentAtTyped(destination.GetComponentIndex(componentType), rowIdx, in component);
+        }
+        catch
+        {
+            destination!.RemoveAt(rowIdx, out _);
+            throw;
+        }
+        FinishMoveEntity(entity, info, destination!, rowIdx);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ApplyTypedSet<T>(Entity entity, ComponentType componentType, in T component) where T : unmanaged
+    {
+        var info = GetRequiredLocation(entity);
+        ApplyTypedSet(entity, info, componentType, in component);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void ApplyTypedSet<T>(Entity entity, EntityRecord info, ComponentType componentType, in T component) where T : unmanaged
+    {
+        var archetype = info.Archetype!;
+
+        if (!archetype.TryGetComponentIndex(componentType, out var componentIndex))
+        {
+            throw new InvalidOperationException(
+                $"Entity {entity} does not have component {typeof(T).Name}.");
+        }
+
+        archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
+    }
+
+    // Upsert path used by CommandStream (deferred apply) and Replay.
+    // At apply time the entity may or may not have the component —strict
+    // Add/Set semantics belong on the direct World API, not on deferred paths.
+    internal unsafe void ApplyRawAddOrSet(Entity entity, EntityRecord info, ComponentType componentType, byte* source)
+    {
+        var archetype = info.Archetype!;
+
+        if (archetype.TryGetComponentIndex(componentType, out var componentIndex))
+        {
+            archetype.WriteComponentRaw(componentIndex, info.RowIndex, source);
+            return;
+        }
+
+        var destination = GetOrCreateAddDestinationArchetype(archetype, componentType);
+        MoveEntityFromBytes(entity, info, destination, componentType, source);
+    }
+
     internal void ApplyTypedAddOrSet<T>(Entity entity, EntityRecord info, ComponentType componentType, in T component) where T : unmanaged
     {
         var archetype = info.Archetype!;
@@ -137,26 +194,6 @@ public sealed partial class World
             throw;
         }
         FinishMoveEntity(entity, info, destination!, rowIdx);
-    }
-
-    private unsafe void ApplyRawAddOrSet(Entity entity, ComponentType componentType, byte* source)
-    {
-        var info = GetRequiredLocation(entity);
-        ApplyRawAddOrSet(entity, info, componentType, source);
-    }
-
-    internal unsafe void ApplyRawAddOrSet(Entity entity, EntityRecord info, ComponentType componentType, byte* source)
-    {
-        var archetype = info.Archetype!;
-
-        if (archetype.TryGetComponentIndex(componentType, out var componentIndex))
-        {
-            archetype.WriteComponentRaw(componentIndex, info.RowIndex, source);
-            return;
-        }
-
-        var destination = GetOrCreateAddDestinationArchetype(archetype, componentType);
-        MoveEntityFromBytes(entity, info, destination, componentType, source);
     }
 
     private unsafe void MoveEntityFromBytes(

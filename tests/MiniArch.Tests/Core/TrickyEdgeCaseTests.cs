@@ -137,22 +137,17 @@ public sealed class TrickyEdgeCaseTests
     }
 
     [Fact]
-    public void Add_component_that_already_exists_overwrites_value()
+    public void Add_component_that_already_exists_throws()
     {
         var world = new World();
         var entity = world.Create();
-        var positionId = ComponentRegistry.Shared.GetOrCreate<Position>();
 
         world.Add(entity, new Position(1, 2));
-        world.Add(entity, new Position(99, 99));
-
-        Assert.True(world.TryGetLocation(entity, out var info));
-        Assert.Single(info.Archetype.Signature);
-        Assert.Equal(new Position(99, 99), info.Archetype.GetComponentAt<Position>(info.Archetype.GetComponentIndex(positionId), info.RowIndex));
+        Assert.Throws<InvalidOperationException>(() => world.Add(entity, new Position(99, 99)));
     }
 
     [Fact]
-    public void Remove_then_Set_readds_component()
+    public void Remove_then_Add_readds_component()
     {
         var world = new World();
         var entity = world.Create(new Position(1, 2));
@@ -160,7 +155,7 @@ public sealed class TrickyEdgeCaseTests
         world.Remove<Position>(entity);
         Assert.False(world.TryGet<Position>(entity, out _));
 
-        world.Set(entity, new Position(5, 6));
+        world.Add(entity, new Position(5, 6));
 
         Assert.True(world.TryGet(entity, out Position p));
         Assert.Equal(new Position(5, 6), p);

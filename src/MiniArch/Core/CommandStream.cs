@@ -1742,16 +1742,13 @@ public sealed class CommandStream
                 var entity = _entities[i];
                 if (!world.TryGetLocation(entity, out var loc)) continue;
                 var record = new EntityRecord { Archetype = loc.Archetype, RowIndex = loc.RowIndex, Version = loc.Version };
-                switch (_kinds[i])
-                {
-                    case KindAdd:
-                    case KindSet:
-                        world.ApplyTypedAddOrSet(entity, record, Component<T>.ComponentType, _data[i]);
-                        break;
-                    case KindRemove:
-                        world.RemoveBoxed(entity, record, Component<T>.ComponentType);
-                        break;
-                }
+                // Use upsert semantics: at apply time the entity may or may not
+                // have the component (deferred applies run later than record time).
+                // Strict Add/Set belong on the direct World API, not on deferred paths.
+                if (_kinds[i] == KindRemove)
+                    world.RemoveBoxed(entity, record, Component<T>.ComponentType);
+                else
+                    world.ApplyTypedAddOrSet(entity, record, Component<T>.ComponentType, _data[i]);
             }
         }
 

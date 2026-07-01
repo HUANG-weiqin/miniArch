@@ -563,7 +563,8 @@ public sealed partial class World : IDisposable
                         var dataSize = decoder.ReadVarint();
                         var dataStart = decoder.CurrentPosition;
                         _ = decoder.ReadBytes(dataSize);
-                        ApplyRawAddOrSet(entity, comp, bufPtr + dataStart);
+                        var loc = GetRequiredLocation(entity);
+                        ApplyRawAddOrSet(entity, loc, comp, bufPtr + dataStart);
                         break;
                     }
 

@@ -118,29 +118,27 @@ public sealed class WorldStructuralChangeTests
     }
 
     [Fact]
-    public void Set_missing_component_adds_component()
+    public void Set_missing_component_throws()
     {
         var world = new World();
         var entity = world.Create();
 
-        world.Set(entity, new Position(9, 9));
-
-        Assert.True(HasComponent<Position>(world, entity));
-        Assert.Equal(new Position(9, 9), GetComponentValue(world, entity));
+        Assert.Throws<InvalidOperationException>(() => world.Set(entity, new Position(9, 9)));
     }
 
     [Fact]
-    public void Set_missing_component_preserves_existing_components()
+    public void Add_adds_and_Set_sets_existing()
     {
         var world = new World();
         var entity = world.Create();
 
         world.Add(entity, new Position(1, 2));
-        world.Set(entity, new Velocity(3, 4));
+        world.Add(entity, new Velocity(3, 4));
+        world.Set(entity, new Position(99, 99));
 
         Assert.True(HasComponent<Position>(world, entity));
         Assert.True(HasComponent<Velocity>(world, entity));
-        Assert.Equal(new Position(1, 2), GetComponentValue(world, entity));
+        Assert.Equal(new Position(99, 99), GetComponentValue(world, entity));
         Assert.Equal(new Velocity(3, 4), world.TryGetLocation(entity, out var info)
             ? info.Archetype.GetComponentAt<Velocity>(info.Archetype.GetComponentIndex(ComponentRegistry.Shared.GetOrCreate<Velocity>()), info.RowIndex)
             : default);
