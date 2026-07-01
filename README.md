@@ -61,23 +61,39 @@ dotnet add package MiniArch
 ```csharp
 using MiniArch;
 
-// Components must be unmanaged value types (struct without reference-type fields)
+// Components must be unmanaged value types (no reference-type fields)
 readonly record struct Position(int X, int Y);
 readonly record struct Velocity(int X, int Y);
 
 var world = new World();
-world.Create(new Position(1, 2), new Velocity(3, 4));
 
-var desc = new QueryDescription()
-    .With<Position>()
-    .With<Velocity>();
+// 1. Create an entity with two components, keep the handle
+var entity = world.Create(new Position(0, 0), new Velocity(1, 2));
 
-foreach (var entity in world.Query(in desc))
+// 2. Batch chunk iteration — the fast path
+var desc = new QueryDescription().With<Position>().With<Velocity>();
+foreach (var chunk in world.Query(in desc).GetChunks())
 {
-    ref var pos = ref world.GetRef<Position>(entity);
-    ref var vel = ref world.GetRef<Velocity>(entity);
-    pos = new Position(pos.X + vel.X, pos.Y + vel.Y);
+    var positions = chunk.GetSpan<Position>();
+    var velocities = chunk.GetSpan<Velocity>();
+    for (var i = 0; i < positions.Length; i++)
+        positions[i] = new Position(
+            positions[i].X + velocities[i].X,
+            positions[i].Y + velocities[i].Y);
 }
+
+// 3. Deferred mutation via CommandStream
+var stream = new CommandStream(world);
+stream.Set(entity, new Position(10, 20));
+stream.Add(entity, new Velocity(5, 6));
+stream.Submit();   // apply all recorded changes to the world
+
+// 4. Structural change — remove a component (archetype migration)
+world.Remove<Velocity>(entity);
+
+// 5. Read back
+Console.WriteLine($"Position: {world.Get<Position>(entity)}");
+Console.WriteLine($"Has Velocity: {world.Has<Velocity>(entity)}");
 ```
 
 ---
