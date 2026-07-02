@@ -322,6 +322,7 @@ public sealed class CommandStream
         if (!HasAnyCommands())
             return false;
 
+        var submitted = false;
         try
         {
             // Order matches BuildDelta: Create ��Hierarchy ��Ops ��Destroy.
@@ -332,10 +333,11 @@ public sealed class CommandStream
             ApplyHierarchy();
             ApplyComponentStores();
             ApplyDestroys();
+            submitted = true;
         }
         finally
         {
-            Clear();
+            Clear(releaseReserved: !submitted);
         }
         return true;
     }
@@ -656,9 +658,6 @@ public sealed class CommandStream
 
     private void MaterializePending(in PendingBatchView view, Entity entity, int batchIdx)
     {
-        if ((uint)batchIdx < (uint)view.Canceled.Length && view.Canceled[batchIdx])
-            return;
-
         var rawCount = view.CompCounts[batchIdx];
         if (rawCount == 0)
         {
@@ -694,9 +693,8 @@ public sealed class CommandStream
                     var id = comp.Type.Value;
                     if (id < 512)
                     {
-                        if (!HasBit(b0, b1, b2, b3, b4, b5, b6, b7, id))
+                        if (TrySetBit(ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, id))
                         {
-                            SetBit(ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, id);
                             typesFromBatch[idx] = comp.Type;
                             offsets[idx] = comp.Offset;
                             idx++;
@@ -1127,31 +1125,26 @@ public sealed class CommandStream
         a.B4 == b.B4 && a.B5 == b.B5 && a.B6 == b.B6 && a.B7 == b.B7;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool HasBit(ulong b0, ulong b1, ulong b2, ulong b3,
-                               ulong b4, ulong b5, ulong b6, ulong b7, int id)
+    private static bool TrySetBit(ref ulong b0, ref ulong b1, ref ulong b2, ref ulong b3,
+                                  ref ulong b4, ref ulong b5, ref ulong b6, ref ulong b7, int id)
     {
-        if (id < 64)      return (b0 & (1UL << id)) != 0;
-        if (id < 128)     return (b1 & (1UL << (id - 64))) != 0;
-        if (id < 192)     return (b2 & (1UL << (id - 128))) != 0;
-        if (id < 256)     return (b3 & (1UL << (id - 192))) != 0;
-        if (id < 320)     return (b4 & (1UL << (id - 256))) != 0;
-        if (id < 384)     return (b5 & (1UL << (id - 320))) != 0;
-        if (id < 448)     return (b6 & (1UL << (id - 384))) != 0;
-        return (b7 & (1UL << (id - 448))) != 0;
+        if (id < 64)      return TrySetBitInLane(ref b0, id);
+        if (id < 128)     return TrySetBitInLane(ref b1, id - 64);
+        if (id < 192)     return TrySetBitInLane(ref b2, id - 128);
+        if (id < 256)     return TrySetBitInLane(ref b3, id - 192);
+        if (id < 320)     return TrySetBitInLane(ref b4, id - 256);
+        if (id < 384)     return TrySetBitInLane(ref b5, id - 320);
+        if (id < 448)     return TrySetBitInLane(ref b6, id - 384);
+        return TrySetBitInLane(ref b7, id - 448);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void SetBit(ref ulong b0, ref ulong b1, ref ulong b2, ref ulong b3,
-                               ref ulong b4, ref ulong b5, ref ulong b6, ref ulong b7, int id)
+    private static bool TrySetBitInLane(ref ulong lane, int bitIndex)
     {
-        if (id < 64)      { b0 |= 1UL << id; return; }
-        if (id < 128)     { b1 |= 1UL << (id - 64); return; }
-        if (id < 192)     { b2 |= 1UL << (id - 128); return; }
-        if (id < 256)     { b3 |= 1UL << (id - 192); return; }
-        if (id < 320)     { b4 |= 1UL << (id - 256); return; }
-        if (id < 384)     { b5 |= 1UL << (id - 320); return; }
-        if (id < 448)     { b6 |= 1UL << (id - 384); return; }
-        b7 |= 1UL << (id - 448);
+        var bit = 1UL << bitIndex;
+        if ((lane & bit) != 0) return false;
+        lane |= bit;
+        return true;
     }
 
     // ���� Clone helpers ��������������������������������������������������������������������������������������������������
@@ -1428,6 +1421,11 @@ public sealed class CommandStream
     /// </summary>
     public void Clear()
     {
+        Clear(releaseReserved: true);
+    }
+
+    private void Clear(bool releaseReserved)
+    {
         foreach (var store in _frozen.Stores)
             store?.Clear();
 
@@ -1438,15 +1436,28 @@ public sealed class CommandStream
         // be in the reserved state, so we release their ids back to the World's
         // free list here. Either way Clear is self-sufficient ��it does not rely
         // on the caller having materialized anything.
-        for (var i = 0; i < _frozen.PendingBatchCount; i++)
+        if (releaseReserved)
         {
-            if (i < _frozen.BatchCanceled.Length && !_frozen.BatchCanceled[i] && i < _frozen.BatchEntities.Length)
+            for (var i = 0; i < _frozen.PendingBatchCount; i++)
             {
+                if (_frozen.BatchCanceled[i]) continue;
                 var entity = _frozen.BatchEntities[i];
                 if (entity.Id >= 0)
                 {
                     _frozen.PendingBatch[entity.Id] = -1;
                     _world.TryReleaseReserved(entity);
+                }
+            }
+        }
+        else
+        {
+            for (var i = 0; i < _frozen.PendingBatchCount; i++)
+            {
+                if (_frozen.BatchCanceled[i]) continue;
+                var entity = _frozen.BatchEntities[i];
+                if (entity.Id >= 0)
+                {
+                    _frozen.PendingBatch[entity.Id] = -1;
                 }
             }
         }
@@ -1762,23 +1773,21 @@ public sealed class CommandStream
                 switch (_kinds[i])
                 {
                     case KindAdd:
+                        unsafe
+                        {
+                            // AddAddUnsafe may grow the delta buffer and trigger a compacting GC;
+                            // keep the source element pinned for the whole raw write.
+                            fixed (T* pFixed = &_data[i])
+                                delta.AddAddUnsafe(_entities[i], compType, (byte*)pFixed, size);
+                        }
+                        break;
                     case KindSet:
                         unsafe
                         {
-                            // Pin _data[i] for the whole delta emit. AddAddUnsafe
-                            // and AddSetUnsafe call Grow internally, which may
-                            // allocate (Array.Resize) and trigger a compacting GC.
-                            // Without pinning, the raw pointer from AsPointer would
-                            // dangle across the compaction ��same GC hole as the
-                            // original CopyComponent path.
+                            // AddSetUnsafe may grow the delta buffer and trigger a compacting GC;
+                            // keep the source element pinned for the whole raw write.
                             fixed (T* pFixed = &_data[i])
-                            {
-                                var ptr = (byte*)pFixed;
-                                if (_kinds[i] == KindAdd)
-                                    delta.AddAddUnsafe(_entities[i], compType, ptr, size);
-                                else
-                                    delta.AddSetUnsafe(_entities[i], compType, ptr, size);
-                            }
+                                delta.AddSetUnsafe(_entities[i], compType, (byte*)pFixed, size);
                         }
                         break;
                     case KindRemove:

@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream typed-store append-only recorder, compatible with FrameDelta. The per-entity deduplicating CommandBuffer was removed (YAGNI) — CommandStream is now the sole recorder.
-updated: 2026-06-30 (补 Replay fresh slot、parallel stale 命令与 cancelled pending create 约束)
+updated: 2026-07-02 (CommandStream hot-path 小优化; 记录 EnsureCapacity 副作用陷阱)
 ---
 # Command Stream Runtime
 
@@ -121,6 +121,16 @@ HeroPipeline 回归测试涨幅：
   - 验证：`Submit_on_source_equals_Replay_on_replica_for_safe_patterns` (`FrameDeltaDeterminismTests.cs:55`) 用 `BuildComplexScenario` 覆盖多样命令组合；`Submit_link_and_set_on_same_child_same_frame_converges_with_replay` / `Submit_link_parent_then_destroy_parent_same_frame_converges_with_replay` / `Submit_unlink_then_set_same_frame_converges_with_replay` 等针对性测试（`FrameDeltaDeterminismTests.cs:592` 起）覆盖所有同帧组合。
 - **Cancelled pending create 的单遍 emit 约束**（2026-06-30 修复）：`EmitPendingEntitiesToDelta` 必须保留每个 batch `Reserve + Release/Create` 的单遍顺序，不能退回“先所有 Reserve、再 Release/Create”。原因是同帧取消的 reserved id 可能被后续 `Create()` 复用，Replay 端必须先看到旧 id 的 `Release` 才能预定复用 id。副作用是 `Release` 会污染 free list，后续 fresh `Reserve(Entity(slotCount), v1)` 不能走普通 `ReserveDeferredEntity()`（它会先 pop free list），而应只在 `id == _entitySlotCount && version == 1` 时直接创建 fresh slot；`id > _entitySlotCount` 仍表示 replay 历史分叉，必须抛错。回归：`Pending_cancel_after_later_create_does_not_diverge_replay_allocator`、短 seed sweep `0..5000/65535/999999/int.MaxValue`、长程 seed `42`。
 - **Component command 对 stale entity 必须录制期过滤**（2026-06-30 修复）：`Submit()` 对 stale `Add/Set/Remove` 会在 apply 时因 `TryGetLocation` 失败而跳过；`Snapshot()` 若仍 emit 这些命令，Replay 端会在 `ApplyRawAddOrSet` / `RemoveBoxed` 上抛错并分叉。因此单线程和 `ParallelRecording=true` 路径都要跳过既非 alive、也非本 batch pending 的 entity。并行路径要保留 pending create 的组件命令（pending entity 尚未 alive），同时跳过已 `Destroy()` 标记 unavailable 的 pending entity。回归：`Parallel_recording_skips_stale_existing_entity_component_commands`、`Parallel_recording_keeps_pending_create_component_commands`。
+
+- **`ComponentStore.EmitToDelta` 删除冗余 `_kinds[i]` 二次检查**（2026-07-02）：`switch (_kinds[i]) { case KindAdd: case KindSet: ... if (_kinds[i] == KindAdd) ... }` 中，switch 已匹配 KindAdd/KindSet，内部又读一次 `_kinds[i]` 来区分两者。拆分为独立 `case KindAdd:` / `case KindSet:`，消除一次数组 read + 分支。Attack +0.8%，Movement 噪声。注意：拆分后 `case KindAdd` 和 `case KindSet` 的 `fixed` 块内不能共享 `ptr` 变量，各自独立声明。
+
+- **`Submit()` 成功路径清理不再 `TryReleaseReserved`**（2026-07-02）：`Submit()` 成功后，所有未取消 pending entity 已被 `MaterializeAllPending` 变成 alive，`Clear()` 中的 `TryReleaseReserved(entity)` 必然返回 false，但仍会读 `_records` 并做版本/占用判断。改为 `Clear(releaseReserved: !submitted)`：成功路径只清 `_frozen.PendingBatch[id]`；异常/显式 `Clear()` 路径仍释放 reserved id。语义边界：只有 `ApplyDestroys()` 结束后才设置 `submitted=true`。
+
+- **`MaterializePending` 依赖 caller 已跳过 cancelled batch**（2026-07-02）：两个调用点（`MaterializeAllPending`、`SubmitFromFrozen`）都在调用前判断 `BatchCanceled[i]`，`MaterializePending` 内部二次 cancelled/bounds 检查是冗余热路径分支，已删除。若未来新增调用点，必须保持“只传非 cancelled batch”的前置条件。
+
+- **`MaterializeFromBatchBuffer` 合并 `HasBit` + `SetBit`**（2026-07-02）：小 id 组件去重原先对同一个 component id 先跑一遍 8-lane branch ladder 做 `HasBit`，未命中再跑一遍 ladder 做 `SetBit`。改为 `TrySetBit`，一次定位 lane 完成 test-and-set。对 create-heavy batch materialize 路径最直接。
+
+- **`EnsureCapacity` 在 `Archetype.AddEntity` 中有副作用陷阱**（2026-07-02 发现）：`AddEntity` 非 chunked 路径调用 `EnsureCapacity(_count + 1)`，该方法在 `_capacity * 2 > _segmentCapacity` 时会 `ConvertToChunked()`，将 `_entities = null!` 并设置 `_isChunked = true`。后续如果直接访问 `_entities[row]` 会 NRE。旧代码在 `EnsureCapacity` 之后用 `if (!_isChunked)` 守卫，看似"冗余"的 `else` 分支（`return AddEntityChunked(entity)`）实际是 conversion 后的安全 fallback。**教训：在有副作用的调用之后，不能假设类型状态不变。**
 
 ## CommandStream vs Friflo: Record 阶段瓶颈分析（2026-06-13，历史——移除 CommandBuffer 的依据）
 
