@@ -79,6 +79,8 @@ public sealed class CommandStream
     /// can be called safely from multiple threads.
     /// <see cref="Submit"/> must be called from a single thread after all parallel work completes.
     /// Disable before returning to single-threaded use.
+    /// Do not record concurrently into multiple <see cref="CommandStream"/> instances that target
+    /// the same <see cref="World"/>; concurrent recording is only supported within one stream.
     /// </summary>
     public bool ParallelRecording
     {
@@ -121,7 +123,7 @@ public sealed class CommandStream
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private Entity CreateImpl()
     {
-        var entity = _world.ReserveDeferredEntity();
+        var entity = _world.ReserveDeferredEntityUnsafe();
         GrowPendingBatchFor(entity.Id);
         var batchIdx = AllocBatchSlot(entity);
         _frozen.PendingBatch[entity.Id] = batchIdx;
@@ -218,12 +220,14 @@ public sealed class CommandStream
 
     public void Destroy(Entity entity)
     {
-        MarkUnavailable(entity);
         if (_parallelMode)
         {
+            MarkUnavailableConcurrent(entity);
             AppendDestroyConcurrent(entity);
             return;
         }
+
+        MarkUnavailable(entity);
         if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out _))
         {
             CancelPendingEntity(entity);
@@ -1323,10 +1327,16 @@ public sealed class CommandStream
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void MarkUnavailable(Entity entity)
     {
+        _frozen.UnavailableEntities ??= new HashSet<Entity>();
+        _frozen.UnavailableEntities.Add(entity);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void MarkUnavailableConcurrent(Entity entity)
+    {
         lock (_storeCreateLock)
         {
-            _frozen.UnavailableEntities ??= new HashSet<Entity>();
-            _frozen.UnavailableEntities.Add(entity);
+            MarkUnavailable(entity);
         }
     }
 
@@ -1495,7 +1505,7 @@ public sealed class CommandStream
             if ((uint)batchIdx < (uint)_frozen.BatchCanceled.Length && _frozen.BatchCanceled[batchIdx])
                 continue;
 
-            var real = _world.ReserveDeferredEntityBatch();
+            var real = _world.ReserveDeferredEntityUnsafe();
             resolveMap[seq] = real;
 
             _frozen.BatchEntities[batchIdx] = real;

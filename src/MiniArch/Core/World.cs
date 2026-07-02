@@ -24,9 +24,10 @@ namespace MiniArch;
 /// may run in parallel with other readers, but <b>not</b> concurrent with a
 /// structural change. Snapshot the archetype list (via Query) before
 /// dispatching parallel work.</item>
-/// <item><c>ReserveDeferredEntity</c> takes a lock and is safe to call from
-/// background threads (e.g. async snapshot building); this is the only
-/// write path that is internally synchronized.</item>
+    /// <item><c>ReserveDeferredEntity</c> takes a lock and is safe to call from
+    /// background threads (e.g. async snapshot building); this is the only
+    /// write path that is internally synchronized. Multiple <c>CommandStream</c>
+    /// instances must not concurrently reserve ids against the same world.</item>
 /// </list>
 /// </remarks>
 public sealed partial class World : IDisposable
@@ -485,7 +486,7 @@ public sealed partial class World : IDisposable
     /// <remarks>
     /// Supports both placeholder deltas (<see cref="CommandStream.Snapshot"/>) and real-id deltas
     /// (<see cref="CommandStream.SubmitAndSnapshotAsync"/>). Placeholder entities (<c>Id == -1</c>)
-    /// allocate fresh local ids via <c>ReserveDeferredEntityBatch</c> and are mapped through a
+    /// allocate fresh local ids via <c>ReserveDeferredEntityUnsafe</c> and are mapped through a
     /// per-replay <c>seq —local real</c> table. Real-id entities go through
     /// <see cref="EnsureReplayReservation"/> to verify allocator synchronization.
     /// </remarks>
@@ -524,7 +525,7 @@ public sealed partial class World : IDisposable
                         if (raw.IsPlaceholder)
                         {
                             // Placeholder: allocate a fresh local id.
-                            var real = ReserveDeferredEntityBatch();
+                            var real = ReserveDeferredEntityUnsafe();
                             EnsurePlaceholderMap(ref map, ref mapLen, raw.Version);
                             map[raw.Version] = real;
                         }
@@ -657,7 +658,7 @@ public sealed partial class World : IDisposable
             // Placeholder entities (Id < 0) have not been allocated yet;
             // their real ids are assigned during the main replay pass.
             // Skip them for maxEntityId tracking —the entity record array
-            // will grow on-demand inside ReserveDeferredEntityBatch.
+            // will grow on-demand inside ReserveDeferredEntityUnsafe.
             if (id >= 0 && id > maxEntityId) maxEntityId = id;
 
             switch (scanner.Kind)

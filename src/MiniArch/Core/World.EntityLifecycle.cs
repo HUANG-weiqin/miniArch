@@ -414,12 +414,15 @@ public sealed partial class World
     {
         lock (_entityIdLock)
         {
-            var id = AcquireEntityIdUnsafe(out var version);
-            return new Entity(id, version);
+            return ReserveDeferredEntityUnsafe();
         }
     }
 
-    internal Entity ReserveDeferredEntityBatch()
+    /// <summary>
+    /// Reserves an entity id without taking the world-level allocator lock.
+    /// The caller must guarantee no other thread is reserving or mutating this world.
+    /// </summary>
+    internal Entity ReserveDeferredEntityUnsafe()
     {
         var id = AcquireEntityIdUnsafe(out var version);
         return new Entity(id, version);

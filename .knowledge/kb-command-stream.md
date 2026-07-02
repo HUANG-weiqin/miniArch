@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream typed-store append-only recorder, compatible with FrameDelta. The per-entity deduplicating CommandBuffer was removed (YAGNI) — CommandStream is now the sole recorder.
-updated: 2026-07-02 (CommandStream hot-path 小优化; 记录 EnsureCapacity 副作用陷阱)
+updated: 2026-07-03 (补 trace 优化：Create/Destroy 单线程无锁化、并发 reserve 契约明确、HeroComing perf gate 通过)
 ---
 # Command Stream Runtime
 
@@ -54,6 +54,10 @@ updated: 2026-07-02 (CommandStream hot-path 小优化; 记录 EnsureCapacity 副
 - ~~`ICommandRecorder`~~ — 已删除。CommandStream 直接提供 Record API（YAGNI）
 - `Clone()` 新增：完整深拷贝，用于需要保留录制状态的场景
 - **2026-06-28 API 统一**：删除 `SetConcurrent`/`AddConcurrent`/`RemoveConcurrent` 专用并行方法。用户在 `ParallelRecording=true` 时直接用 `Set`/`Add`/`Remove`/`Create`/`Destroy`/`AddChild`/`RemoveChild` 即可，热路径自动切换到并发实现。单线程模式零额外成本（一次可预测的 `_parallelMode` 分支）。
+- **2026-07-03 并发 reserve 契约明确**：同一 `World` 不支持多个 `CommandStream` 实例并发录制。`ParallelRecording=true` 的并发只能在一个 stream 内。单线程路径 `Create`/`Destroy` 跳过不必要的 lock：
+  - `Destroy` 单线程转用无锁 `MarkUnavailable`（`MarkUnavailableConcurrent` 供 parallel 路径）
+  - `Create` 单线程走 `World.ReserveDeferredEntityUnsafe`（原 `ReserveDeferredEntityBatch` 改名，无锁，调用方保证无并发）
+  - `World.ReserveDeferredEntity` 保留锁供外部或并行路径安全使用
 
 ## 性能数据（Release, 全帧 record+submit, 3s×1）
 
@@ -167,6 +171,51 @@ HeroPipeline 回归测试涨幅：
 ### 优化方向
 
 - **CS record**：合并 `GetOrCreateStore<T>` 和 `AppendEntry` 为一步，预分配 store 数组避免 resize。差距已经较小（1.5x），ROI 有限。
+
+## CommandStream 专用 Profile Runner（2026-07-02）
+
+`tools/perf/CommandStream.Profile` 是独立于三方对比的 CommandStream 专剖工具。
+
+**用途：**
+- 只测 MiniArch CommandStream，排除 query / 游戏逻辑 / 空间 hash 噪声
+- 分阶段计时：record % / submit % / snapshot % / clear %
+- 输出 heap delta、GC count，配合 `dotnet-trace` 做 CPU sampling
+
+**6 个 workload：**
+
+| workload | 目标 | 典型 record% | 典型 submit% |
+|---|---|---|---|
+| existing-set | `ComponentStore.ApplyToWorld`（Set 热路径） | ~67% | ~33% |
+| existing-add-remove | 结构 Add/Remove Apply | ~54% | ~46% |
+| create-small4 | pending materialize mask 路径；持续创建，会增长 world/heap，长 trace 会混入扩容成本 | ~64-71% | ~29-36% |
+| create-duplicates | per-batch last-wins 去重 | ~64% | ~36% |
+| create-destroy | reserve/release/cancel + destroy submit；固定 2,000 live entity 的稳态替换 | ~65% | ~35% |
+| snapshot-only | `EmitToDelta` / FrameDelta append（~37% snapshot） | ~63% | — |
+
+**快速上手：**
+```bash
+# 列出 workload
+dotnet run -c Release --project tools/perf/CommandStream.Profile -- --list
+
+# 跑单个 workload（warmup 3s, measure 10s）
+dotnet run -c Release --project tools/perf/CommandStream.Profile -- --scenario create-small4
+
+# 配合 dotnet-trace 采样（trace 20s）
+tools/scripts/profile-commandstream.ps1 -Scenario create-small4 -TraceSeconds 20
+
+# 从采样结果看热点
+dotnet-trace report profiles/commandstream-*.nettrace topN -n 50 --inclusive
+# 当前 dotnet-trace 版本没有 --exclusive；不加 --inclusive 即 exclusive topN
+dotnet-trace report profiles/commandstream-*.nettrace topN -n 50
+```
+
+**2026-07-03 trace 结论：**
+- `existing-set`：record 循环被 JIT inline 到 `ExistingSetScenario.RunTick()`，exclusive ~47%；submit 侧 `ComponentStore<Position>.ApplyToWorld` exclusive ~47%。方法级 topN 已确认 Set submit 热点，但 record 内部需要额外 no-inline/条件计数才能继续拆。
+- `existing-add-remove`：submit 已转入 `World`/`Archetype` 结构变更：`ComponentStore<Velocity>.ApplyToWorld`、`World.ApplyTypedAdd`、`MoveEntityCore`、`CopySharedComponentsFrom`、`RemoveAt`。CommandStream 记录层不是主要瓶颈。
+- `create-destroy`（修复为稳态后）：最热是录制/提交辅助结构，`CommandStream.MarkUnavailable` exclusive ~24%、`World.ReserveDeferredEntity` exclusive ~16%、`MaterializeFromBatchBuffer` exclusive ~10%。**已实施优化**：`Destroy` 单线程分流转无锁 `MarkUnavailable`；`Create` 单线程绕开 `World` allocator lock（用 `ReserveDeferredEntityUnsafe`）。优化后 create-destroy 从 ~18.7k → ~21.6k ticks/s (+15.5%)。HeroComing perf gate 通过 (Movement 1907.5 r/s, Attack 1194.8 r/s, memory 无增长)。
+- `create-small4` 是有意持续创建的压力场景，30s trace 会导致上亿实体与十 GB 级 heap，适合短跑或配合 growth 分析，不应用来代表稳态 create 成本。
+
+**判停规则：** 如果 `CommandStream.*` 在 sampling 中总占比低于 ~10-15%，或热点已转移到 `World` / `Archetype` / query / GC 层，则停止 CommandStream 内部微优化。
 
 ## FrameDelta 两种 entity-id 模式
 
