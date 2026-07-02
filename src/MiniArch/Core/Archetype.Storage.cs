@@ -600,9 +600,10 @@ internal sealed partial class Archetype
         var sizes = _elementSizes;
         for (var index = 0; index < sizes.Length; index++)
         {
+            var off = offsets[index];
             var size = sizes[index];
-            ref var sourceRef = ref Unsafe.Add(ref dataRef, offsets[index] + last * size);
-            ref var destRef = ref Unsafe.Add(ref dataRef, offsets[index] + row * size);
+            ref var sourceRef = ref Unsafe.Add(ref dataRef, off + last * size);
+            ref var destRef = ref Unsafe.Add(ref dataRef, off + row * size);
             CopySmall(ref destRef, ref sourceRef, size);
         }
     }
@@ -615,9 +616,10 @@ internal sealed partial class Archetype
         ref var dstDataRef = ref MemoryMarshal.GetArrayDataReference(_segments[destSegIdx].Data);
         for (var index = 0; index < sizes.Length; index++)
         {
+            var off = offsets[index];
             var size = sizes[index];
-            ref var sourceRef = ref Unsafe.Add(ref srcDataRef, offsets[index] + srcLocalRow * size);
-            ref var destRef = ref Unsafe.Add(ref dstDataRef, offsets[index] + destLocalRow * size);
+            ref var sourceRef = ref Unsafe.Add(ref srcDataRef, off + srcLocalRow * size);
+            ref var destRef = ref Unsafe.Add(ref dstDataRef, off + destLocalRow * size);
             CopySmall(ref destRef, ref sourceRef, size);
         }
     }
