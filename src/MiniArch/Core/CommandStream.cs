@@ -1714,22 +1714,41 @@ public sealed class CommandStream
 
         public override void ApplyToWorld(World world)
         {
+            // Cache for consecutive Set operations on the same archetype:
+            // resolves the component column index once per archetype instead
+            // of once per entity.
+            Archetype? lastArch = null;
+            int lastColIdx = -1;
+
             for (var i = 0; i < _count; i++)
             {
                 var entity = _entities[i];
                 if (!world.TryGetLocation(entity, out var loc)) continue;
-                var record = new EntityRecord { Archetype = loc.Archetype, RowIndex = loc.RowIndex, Version = loc.Version };
-                switch (_kinds[i])
+
+                var kind = _kinds[i];
+                if (kind == KindSet)
                 {
-                    case KindAdd:
+                    var arch = loc.Archetype!;
+                    int colIdx;
+                    if (arch == lastArch)
+                    {
+                        colIdx = lastColIdx;
+                    }
+                    else
+                    {
+                        lastArch = arch;
+                        colIdx = lastColIdx = arch.GetComponentIndex(Component<T>.ComponentType);
+                    }
+                    arch.SetComponentAtTyped(colIdx, loc.RowIndex, in _data[i]);
+                }
+                else
+                {
+                    lastArch = null; // structural change invalidates cache
+                    var record = new EntityRecord { Archetype = loc.Archetype, RowIndex = loc.RowIndex, Version = loc.Version };
+                    if (kind == KindAdd)
                         world.ApplyTypedAdd(entity, record, Component<T>.ComponentType, _data[i]);
-                        break;
-                    case KindSet:
-                        world.ApplyTypedSet(entity, record, Component<T>.ComponentType, _data[i]);
-                        break;
-                    case KindRemove:
+                    else
                         world.RemoveBoxed(entity, record, Component<T>.ComponentType);
-                        break;
                 }
             }
         }
