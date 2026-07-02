@@ -6,7 +6,7 @@ namespace MiniArch.Core;
 
 /// <summary>
 /// Records deferred world commands with per-component-type append-only stores.
-/// Add/Set/Remove on existing entities are stored inline in typed arrays ��no entry stream,
+/// Add/Set/Remove on existing entities are stored inline in typed arrays —no entry stream,
 /// no per-entity dedup. Created entities use a pending batch buffer for pre-materialization
 /// component accumulation.
 /// </summary>
@@ -49,7 +49,7 @@ public sealed class CommandStream
     private Entity _lastCreated;
     private int _lastCreatedBatch = -1;
 
-    // ���� Construction ������������������������������������������������������������������������������������������������������
+    // ── Construction ───────────────────────────────────────────────────
 
     public CommandStream(World world)
     {
@@ -108,7 +108,7 @@ public sealed class CommandStream
 
     private bool _deferredEntities;
 
-    // ���� Record API ��������������������������������������������������������������������������������������������������������
+    // ── Record API ────────────────────────────────────────────────────
 
     public Entity Create()
     {
@@ -318,7 +318,7 @@ public sealed class CommandStream
         CloneChildrenRecursive(source, clone);
     }
 
-    // ���� Submit ����������������������������������������������������������������������������������������������������������������
+    // ── Submit ────────────────────────────────────────────────────────
 
     public bool Submit()
     {
@@ -328,7 +328,7 @@ public sealed class CommandStream
         var submitted = false;
         try
         {
-            // Order matches BuildDelta: Create ��Hierarchy ��Ops ��Destroy.
+            // Order matches BuildDelta: Create —Hierarchy —Ops —Destroy.
             // Keeping Submit and Snapshot aligned lets hosts use Submit on source and
             // Replay on replica without diverging for combined command patterns.
             ResolveDeferredCreates();
@@ -392,7 +392,7 @@ public sealed class CommandStream
         ApplyHierarchyToWorld(_world, _frozen.HierarchyByChild, _frozen.UnavailableEntities);
     }
 
-    // ���� Snapshot / SubmitAndSnapshotAsync ����������������������������������������������������������
+    // ── Snapshot / SubmitAndSnapshotAsync ─────────────────────────────
 
     /// <summary>
     /// Produces a <see cref="FrameDelta"/> from the recorded commands without
@@ -413,8 +413,8 @@ public sealed class CommandStream
     /// <para>
     /// For the relay-only flow (produce delta, do not apply locally),
     /// call <c>Snapshot()</c> then <c>Clear()</c>. The source host then
-    /// replays the delta back into its own world ��together with all peer
-    /// deltas ��achieving the deterministic multi-host guarantee.
+    /// replays the delta back into its own world —together with all peer
+    /// deltas —achieving the deterministic multi-host guarantee.
     /// </para>
     /// </remarks>
     public FrameDelta Snapshot()
@@ -459,7 +459,7 @@ public sealed class CommandStream
     /// clients that must maintain id synchronization with the server.
     /// </para>
     /// <para>
-    /// Always produces a <b>real-id delta</b> ��deferred placeholders are
+    /// Always produces a <b>real-id delta</b> —deferred placeholders are
     /// resolved into the host's own ids before building the delta,
     /// regardless of <see cref="DeferredEntities"/>. Mirror clients
     /// replaying this delta must have an id allocator synchronized with
@@ -478,7 +478,7 @@ public sealed class CommandStream
         PrepareUnavailableLookup(ref frozen);
         // Static delegate + state parameter avoids the per-call closure allocation
         // that Task.Run(() => ...) would create. FrozenState is a reference type,
-        // so passing it as `object` is a free upcast ��no boxing.
+        // so passing it as `object` is a free upcast —no boxing.
         var task = Task.Factory.StartNew(
             s_buildFromFrozen, frozen, CancellationToken.None,
             TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
@@ -493,7 +493,7 @@ public sealed class CommandStream
 
     private void BuildDelta(FrameDelta delta)
     {
-        // Order matches Submit: Create ��Hierarchy ��Ops ��Destroy.
+        // Order matches Submit: Create —Hierarchy —Ops —Destroy.
         EmitPendingEntitiesToDelta(delta, new PendingBatchView(
             _frozen.BatchCanceled, _frozen.BatchHeads, _frozen.BatchCompCounts,
             _frozen.BatchComps, _frozen.BatchBuf, _frozen.BatchEntities, _frozen.PendingBatchCount));
@@ -586,7 +586,7 @@ public sealed class CommandStream
 
     private void SubmitFromFrozen(FrozenState frozen)
     {
-        // Order matches Submit and BuildDelta: Create ��Hierarchy ��Ops ��Destroy.
+        // Order matches Submit and BuildDelta: Create —Hierarchy —Ops —Destroy.
         for (var i = 0; i < frozen.PendingBatchCount; i++)
         {
             if (frozen.BatchCanceled[i]) continue;
@@ -614,7 +614,7 @@ public sealed class CommandStream
 
     private static FrameDelta BuildFromFrozen(FrozenState frozen)
     {
-        // Order matches Submit: Create ��Hierarchy ��Ops ��Destroy.
+        // Order matches Submit: Create —Hierarchy —Ops —Destroy.
         var delta = new FrameDelta();
 
         EmitPendingEntitiesToDelta(delta, frozen.Pending);
@@ -633,7 +633,7 @@ public sealed class CommandStream
         return delta;
     }
 
-    // ���� Pending entity materialization ������������������������������������������������������������������
+    // ── Pending entity materialization ─────────────────────────────────
 
     private void MaterializePending(in PendingBatchView view, Entity entity, int batchIdx)
     {
@@ -750,7 +750,7 @@ public sealed class CommandStream
         // Single pass: emit Reserve + Release (cancelled) or Reserve + Create
         // (committed) consecutively for each entity. This preserves temporal
         // ordering where a cancelled entity's id may be recycled by a later
-        // Create within the same frame ��the two-pass approach (all Reserves
+        // Create within the same frame —the two-pass approach (all Reserves
         // before all Releases) breaks this dependency.
         //
         // Placeholder entities (Id < 0) carry deferred creates: they have not
@@ -759,7 +759,7 @@ public sealed class CommandStream
         for (var i = 0; i < pendingBatchCount; i++)
         {
             var entity = batchEntities[i];
-            // Deferred create that was cancelled never allocated a real id ��skip it.
+            // Deferred create that was cancelled never allocated a real id —skip it.
             // Unlike immediate cancels (which emit Reserve+Release below to keep id
             // allocation in lockstep across hosts), deferred cancels consume no id
             // by design: the whole point of deferred is to avoid touching the world
@@ -890,7 +890,7 @@ public sealed class CommandStream
         lookup.Add(entity);
     }
 
-    // ���� Pending entity helpers ��������������������������������������������������������������������������������
+    // ── Pending entity helpers ────────────────────────────────────────
 
     private void GrowPendingBatchFor(int entityId)
     {
@@ -980,7 +980,7 @@ public sealed class CommandStream
         }
     }
 
-    // ���� Batch buffer helpers ������������������������������������������������������������������������������������
+    // ── Batch buffer helpers ──────────────────────────────────────────
 
     // When a pending entity is destroyed before Submit, all pending entities linked under it must also
     // be cancelled. Existing entities are skipped (World.Destroy cascades them
@@ -1075,7 +1075,7 @@ public sealed class CommandStream
         }
     }
 
-    // ���� Archetype resolution ������������������������������������������������������������������������������������
+    // ── Archetype resolution ──────────────────────────────────────────
 
     private Archetype ResolveArchetypeForMask(ComponentMask mask)
     {
@@ -1149,7 +1149,7 @@ public sealed class CommandStream
         }
     }
 
-    // ���� Bit helpers ������������������������������������������������������������������������������������������������������
+    // ── Bit helpers ───────────────────────────────────────────────────
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool MaskEq(ComponentMask a, ComponentMask b) =>
@@ -1179,7 +1179,7 @@ public sealed class CommandStream
         return true;
     }
 
-    // ���� Clone helpers ��������������������������������������������������������������������������������������������������
+    // ── Clone helpers ─────────────────────────────────────────────────
 
     private void CloneChildrenRecursive(Entity sourceRoot, Entity cloneRoot)
     {
@@ -1261,7 +1261,7 @@ public sealed class CommandStream
         }
     }
 
-    // ���� Sorting / dedup ����������������������������������������������������������������������������������������������
+    // ── Sorting / dedup ───────────────────────────────────────────────
 
     private static void SortTypesAndOffsets(Span<ComponentType> types, Span<int> offsets)
     {
@@ -1326,7 +1326,7 @@ public sealed class CommandStream
         return writeIdx;
     }
 
-    // ���� Destroy helpers ����������������������������������������������������������������������������������������������
+    // ── Destroy helpers ───────────────────────────────────────────────
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void AppendDestroy(Entity entity)
@@ -1379,7 +1379,7 @@ public sealed class CommandStream
         }
     }
 
-    // ���� Store management ��������������������������������������������������������������������������������������������
+    // ── Store management ──────────────────────────────────────────────
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private ComponentStore<T> GetOrCreateStore<T>() where T : unmanaged
@@ -1441,7 +1441,7 @@ public sealed class CommandStream
 
     private readonly object _storeCreateLock = new();
 
-    // ���� Clear ������������������������������������������������������������������������������������������������������������������
+    // ── Clear ─────────────────────────────────────────────────────────
 
     /// <summary>
     /// Resets the stream to its initial state, discarding all recorded commands
@@ -1468,7 +1468,7 @@ public sealed class CommandStream
         // we just drop the pending-batch index.
         // Snapshot/relay path (or Submit exception path): batch entities may still
         // be in the reserved state, so we release their ids back to the World's
-        // free list here. Either way Clear is self-sufficient ��it does not rely
+        // free list here. Either way Clear is self-sufficient —it does not rely
         // on the caller having materialized anything.
         if (releaseReserved)
         {
@@ -1508,7 +1508,7 @@ public sealed class CommandStream
         _frozen.UnavailableEntities?.Clear();
     }
 
-    // ���� Deferred entity resolution ������������������������������������������������������������������������
+    // ── Deferred entity resolution ────────────────────────────────────
 
     private void ResolveDeferredCreates()
     {
@@ -1627,7 +1627,7 @@ public sealed class CommandStream
     internal object? ActiveUnavailableForTesting => _frozen.UnavailableEntities;
     internal object? ActiveFrozenForTesting => _pendingFrozen;
 
-    // ���� Helpers ��������������������������������������������������������������������������������������������������������������
+    // ── Helpers ───────────────────────────────────────────────────────
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void EnsureCapacity<T>(ref T[] array, int count, int defaultSize = 16)
@@ -1648,7 +1648,7 @@ public sealed class CommandStream
         public static readonly ComponentType Type = Component<T>.ComponentType;
     }
 
-    // ���� Internal types ������������������������������������������������������������������������������������������������
+    // ── Internal types ────────────────────────────────────────────────
 
     private const byte KindAdd = 0;
     private const byte KindSet = 1;
