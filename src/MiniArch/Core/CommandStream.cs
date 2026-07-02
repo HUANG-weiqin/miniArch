@@ -227,7 +227,6 @@ public sealed class CommandStream
             return;
         }
 
-        MarkUnavailable(entity);
         if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out _))
         {
             CancelPendingEntity(entity);
@@ -333,6 +332,7 @@ public sealed class CommandStream
             // Keeping Submit and Snapshot aligned lets hosts use Submit on source and
             // Replay on replica without diverging for combined command patterns.
             ResolveDeferredCreates();
+            PrepareUnavailableLookup(ref _frozen);
             MaterializeAllPending();
             ApplyHierarchy();
             ApplyComponentStores();
@@ -389,22 +389,7 @@ public sealed class CommandStream
 
     private void ApplyHierarchy()
     {
-        if (_frozen.HierarchyByChild.Count == 0) return;
-
-        foreach (var (child, intent) in _frozen.HierarchyByChild)
-        {
-            if (IsEntityDestroyed(child)) continue;
-
-            if (intent.IsAdd)
-            {
-                if (IsEntityDestroyed(intent.Parent)) continue;
-                _world.AddChild(intent.Parent, child);
-            }
-            else
-            {
-                _world.RemoveChild(child);
-            }
-        }
+        ApplyHierarchyToWorld(_world, _frozen.HierarchyByChild, _frozen.UnavailableEntities);
     }
 
     // ���� Snapshot / SubmitAndSnapshotAsync ����������������������������������������������������������
@@ -437,11 +422,13 @@ public sealed class CommandStream
         if (!_deferredEntities)
         {
             ResolveDeferredCreates();
+            PrepareUnavailableLookup(ref _frozen);
             var delta = new FrameDelta();
             BuildDelta(delta);
             return delta;
         }
         ThrowIfSnapshotHasImmediateEntities();
+        PrepareUnavailableLookup(ref _frozen);
         var d = new FrameDelta();
         BuildDelta(d);
         return d;
@@ -488,6 +475,7 @@ public sealed class CommandStream
             return Task.FromResult(new FrameDelta());
 
         var frozen = SwapOutState();
+        PrepareUnavailableLookup(ref frozen);
         // Static delegate + state parameter avoids the per-call closure allocation
         // that Task.Run(() => ...) would create. FrozenState is a reference type,
         // so passing it as `object` is a free upcast ��no boxing.
@@ -607,20 +595,7 @@ public sealed class CommandStream
 
         if (frozen.HierarchyByChild.Count > 0)
         {
-            var unavailable = frozen.UnavailableEntities;
-            foreach (var (child, intent) in frozen.HierarchyByChild)
-            {
-                if (unavailable != null && unavailable.Contains(child)) continue;
-                if (intent.IsAdd)
-                {
-                    if (unavailable != null && unavailable.Contains(intent.Parent)) continue;
-                    _world.AddChild(intent.Parent, child);
-                }
-                else
-                {
-                    _world.RemoveChild(child);
-                }
-            }
+            ApplyHierarchyToWorld(_world, frozen.HierarchyByChild, frozen.UnavailableEntities);
         }
 
         foreach (var store in frozen.Stores)
@@ -860,6 +835,59 @@ public sealed class CommandStream
                 delta.AddRemoveChild(child);
             }
         }
+    }
+
+    private static void ApplyHierarchyToWorld(World world,
+        Dictionary<Entity, HierarchyIntent> hierarchyByChild,
+        HashSet<Entity>? unavailableEntities)
+    {
+        if (hierarchyByChild.Count == 0) return;
+
+        foreach (var (child, intent) in hierarchyByChild)
+        {
+            if (unavailableEntities != null && unavailableEntities.Contains(child)) continue;
+
+            if (intent.IsAdd)
+            {
+                if (unavailableEntities != null && unavailableEntities.Contains(intent.Parent)) continue;
+                world.AddChild(intent.Parent, child);
+            }
+            else
+            {
+                world.RemoveChild(child);
+            }
+        }
+    }
+
+    private static void PrepareUnavailableLookup(ref FrozenState frozen)
+    {
+        var lookup = frozen.UnavailableEntities;
+        if (lookup != null)
+            lookup.Clear();
+
+        if (frozen.HierarchyByChild.Count == 0)
+        {
+            frozen.UnavailableEntities = lookup;
+            return;
+        }
+
+        for (var i = 0; i < frozen.DestroyCount; i++)
+            AddUnavailable(ref lookup, frozen.DestroyEntities[i]);
+
+        for (var i = 0; i < frozen.PendingBatchCount; i++)
+        {
+            if (frozen.BatchCanceled[i])
+                AddUnavailable(ref lookup, frozen.BatchEntities[i]);
+        }
+
+        frozen.UnavailableEntities = lookup;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void AddUnavailable(ref HashSet<Entity>? lookup, Entity entity)
+    {
+        lookup ??= new HashSet<Entity>();
+        lookup.Add(entity);
     }
 
     // ���� Pending entity helpers ��������������������������������������������������������������������������������
@@ -1307,10 +1335,6 @@ public sealed class CommandStream
         _frozen.DestroyEntities[_frozen.DestroyCount++] = entity;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool IsEntityDestroyed(Entity entity) =>
-        _frozen.UnavailableEntities != null && _frozen.UnavailableEntities.Contains(entity);
-
     private bool CanRecordParallelComponentCommand(Entity entity)
     {
         if (_world.IsAlive(entity))
@@ -1532,9 +1556,6 @@ public sealed class CommandStream
                 if (real.Id >= 0) destroyed = real;
             }
         }
-
-        ReplaceUnavailablePlaceholders(resolveMap);
-
         _resolveMapPool = resolveMap;
     }
 
@@ -1583,38 +1604,6 @@ public sealed class CommandStream
         finally
         {
             ArrayPool<HierarchyReplacement>.Shared.Return(replacements);
-        }
-    }
-
-    private void ReplaceUnavailablePlaceholders(Entity[] resolveMap)
-    {
-        if (_frozen.UnavailableEntities == null || _frozen.UnavailableEntities.Count == 0)
-            return;
-
-        var count = _frozen.UnavailableEntities.Count;
-        var swaps = ArrayPool<(Entity Old, Entity New)>.Shared.Rent(count);
-        var swapCount = 0;
-        try
-        {
-            foreach (var e in _frozen.UnavailableEntities)
-            {
-                if (e.IsPlaceholder)
-                {
-                    var resolved = resolveMap[e.Version];
-                    if (resolved.Id >= 0)
-                        swaps[swapCount++] = (e, resolved);
-                }
-            }
-
-            for (var i = 0; i < swapCount; i++)
-            {
-                _frozen.UnavailableEntities.Remove(swaps[i].Old);
-                _frozen.UnavailableEntities.Add(swaps[i].New);
-            }
-        }
-        finally
-        {
-            ArrayPool<(Entity, Entity)>.Shared.Return(swaps);
         }
     }
 

@@ -366,6 +366,37 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
+    public void Destroy_without_hierarchy_does_not_create_unavailable_tracking()
+    {
+        var world = new World();
+        var entity = world.Create(new Position(1, 2));
+        var stream = new CommandStream(world);
+
+        stream.Destroy(entity);
+
+        Assert.Null(stream.ActiveUnavailableForTesting);
+        Assert.True(stream.Submit());
+        Assert.False(world.IsAlive(entity));
+        Assert.Null(stream.ActiveUnavailableForTesting);
+    }
+
+    [Fact]
+    public void Submit_skips_hierarchy_intent_for_destroyed_parent_even_when_destroy_is_recorded_first()
+    {
+        var world = new World();
+        var parent = world.Create();
+        var child = world.Create();
+        var stream = new CommandStream(world);
+
+        stream.Destroy(parent);
+        stream.AddChild(parent, child);
+
+        Assert.True(stream.Submit());
+        Assert.False(world.IsAlive(parent));
+        Assert.False(world.TryGetParent(child, out _));
+    }
+
+    [Fact]
     public void Snapshot_excludes_hierarchy_for_destroyed_created_child()
     {
         var world = new World();
@@ -1874,7 +1905,7 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
-    public async System.Threading.Tasks.Task SubmitAndSnapshotAsync_reuses_dictionary_and_hashset_in_steady_state()
+    public async System.Threading.Tasks.Task SubmitAndSnapshotAsync_reuses_hierarchy_dictionary_and_hashset_in_steady_state()
     {
         var world = new World();
         var stream = new CommandStream(world);
