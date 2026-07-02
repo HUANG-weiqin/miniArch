@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Runtime.CompilerServices;
 
 namespace MiniArch.Core;
@@ -10,12 +11,13 @@ namespace MiniArch.Core;
 /// <list type="bullet">
 /// <item><b>Non-chunked</b> (small archetype): a single flat
 /// <c>_data</c> buffer + <c>_entities</c> array. Doubles in place until
-/// <c>_capacity * 2</c> would exceed <see cref="_segmentEntityCapacity"/>.</item>
+/// <c>_capacity * 2</c> would exceed <see cref="_segmentCapacity"/>.</item>
 /// <item><b>Chunked</b> (large archetype): a <see cref="Segment"/>[] where each
 /// segment owns its own <c>Entities</c>/<c>Data</c> arrays of fixed size
-/// <see cref="_segmentEntityCapacity"/> (target ~2 MB per segment). Promotion is
-/// one-way; <see cref="IsChunked"/> never reverts. <see cref="ChunkView"/>
-/// exposes one segment per chunk to public consumers.</item>
+/// <see cref="_segmentCapacity"/> (target ~2 MB per segment, rounded up to a
+/// power of two so row resolution uses <c>SHR</c>/<c>AND</c> instead of
+/// <c>DIV</c>). Promotion is one-way; <see cref="IsChunked"/> never reverts.
+/// <see cref="ChunkView"/> exposes one segment per chunk to public consumers.</item>
 /// </list>
 /// </remarks>
 internal sealed partial class Archetype
@@ -38,9 +40,12 @@ internal sealed partial class Archetype
     private Entity[]? _cachedFlatEntities;
     private int _cachedFlatEntitiesGeneration = -1;
 
-    // Fixed entity capacity per segment, computed from component sizes once.
+    // Fixed entity capacity per segment (power of two), computed from component sizes once.
     // All segments share the same capacity so column byte offsets are identical.
-    private readonly int _segmentEntityCapacity;
+    // _segmentBitShift and _segmentMask provide a SHR+AND hot path instead of DIV.
+    private readonly int _segmentCapacity;
+    private readonly int _segmentBitShift;
+    private readonly int _segmentMask;
 
     // --- Archetype metadata ---
     private readonly Signature _signature;
@@ -62,7 +67,10 @@ internal sealed partial class Archetype
         _capacity = capacity;
         _componentTypes = componentTypes;
         _componentIdToColumnIndex = ComponentColumnMap.Build(signature);
-        _segmentEntityCapacity = ComputeSegmentEntityCapacity(componentTypes);
+        var segCap = ComputeSegmentEntityCapacity(componentTypes);
+        _segmentCapacity = segCap;
+        _segmentBitShift = BitOperations.TrailingZeroCount((uint)segCap);
+        _segmentMask = segCap - 1;
         _entities = new Entity[capacity];
         (_data, _columnByteOffsets, _elementSizes) = CreateStorage(signature, componentTypes, capacity);
     }
@@ -137,7 +145,8 @@ internal sealed partial class Archetype
             perEntity = AlignUp(perEntity, Math.Min(elemSize, 8));
             perEntity += elemSize;
         }
-        return perEntity > 0 ? Math.Max(16, TargetSegmentBytes / perEntity) : 65536;
+        var raw = perEntity > 0 ? Math.Max(16, TargetSegmentBytes / perEntity) : 65536;
+        return (int)BitOperations.RoundUpToPowerOf2((uint)raw);
     }
 
     internal struct Segment

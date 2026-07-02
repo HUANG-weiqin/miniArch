@@ -17,8 +17,7 @@ internal sealed partial class Archetype
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private (int SegmentIndex, int LocalRow) GetSegmentAndLocal(int globalRow)
     {
-        var segIdx = globalRow / _segmentEntityCapacity;
-        return (segIdx, globalRow - segIdx * _segmentEntityCapacity);
+        return (globalRow >> _segmentBitShift, globalRow & _segmentMask);
     }
 
     // ──────────────────────────────────────────────
@@ -27,11 +26,11 @@ internal sealed partial class Archetype
 
     private void NormalizeForChunked()
     {
-        if (_capacity < _segmentEntityCapacity)
+        if (_capacity < _segmentCapacity)
         {
-            var newEntities = new Entity[_segmentEntityCapacity];
+            var newEntities = new Entity[_segmentCapacity];
             Array.Copy(_entities, newEntities, _count);
-            var (newData, newOffsets, _) = CreateStorage(_signature, _componentTypes, _segmentEntityCapacity, pinned: true);
+            var (newData, newOffsets, _) = CreateStorage(_signature, _componentTypes, _segmentCapacity, pinned: true);
             for (var col = 0; col < _elementSizes.Length; col++)
             {
                 var elemSize = _elementSizes[col];
@@ -44,7 +43,7 @@ internal sealed partial class Archetype
             _entities = newEntities;
             _data = newData;
             _columnByteOffsets = newOffsets;
-            _capacity = _segmentEntityCapacity;
+            _capacity = _segmentCapacity;
         }
     }
 
@@ -69,8 +68,8 @@ internal sealed partial class Archetype
         {
             var seg = new Segment
             {
-                Entities = new Entity[_segmentEntityCapacity],
-                Data = CreateStorageBytes(_signature, _componentTypes, _segmentEntityCapacity),
+                Entities = new Entity[_segmentCapacity],
+                Data = CreateStorageBytes(_signature, _componentTypes, _segmentCapacity),
                 Count = 0
             };
             var newIdx = _segmentCount;
@@ -78,7 +77,7 @@ internal sealed partial class Archetype
                 Array.Resize(ref _segments, Math.Max(newIdx * 2, 4));
             _segments[newIdx] = seg;
             _segmentCount++;
-            need -= _segmentEntityCapacity;
+            need -= _segmentCapacity;
         }
         _flatEntitiesGeneration++;
     }
@@ -91,7 +90,7 @@ internal sealed partial class Archetype
     {
         if (requiredCapacity <= Capacity) return;
 
-        if (!_isChunked && _capacity * 2 > _segmentEntityCapacity)
+        if (!_isChunked && _capacity * 2 > _segmentCapacity)
         {
             NormalizeForChunked();
             ConvertToChunked();
@@ -162,7 +161,7 @@ internal sealed partial class Archetype
             lastSeg = ref _segments[lastSegIdx];
         }
         var localRow = lastSeg.Count;
-        var globalRow = lastSegIdx * _segmentEntityCapacity + localRow;
+        var globalRow = lastSegIdx * _segmentCapacity + localRow;
         lastSeg.Entities[localRow] = entity;
         lastSeg.Count++;
         _count++;
@@ -269,7 +268,7 @@ internal sealed partial class Archetype
 
         var lastSegCount = _segments[lastSegIdx].Count;
         var lastLocalRow = lastSegCount - 1;
-        var lastGlobalRow = lastSegIdx * _segmentEntityCapacity + lastLocalRow;
+        var lastGlobalRow = lastSegIdx * _segmentCapacity + lastLocalRow;
 
         if (row == lastGlobalRow)
         {
