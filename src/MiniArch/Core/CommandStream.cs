@@ -1,4 +1,4 @@
-﻿using System.Buffers;
+using System.Buffers;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
@@ -6,40 +6,34 @@ namespace MiniArch.Core;
 
 /// <summary>
 /// Records deferred world commands with per-component-type append-only stores.
-/// Add/Set/Remove on existing entities are stored inline in typed arrays —no entry stream,
+/// Add/Set/Remove on existing entities are stored inline in typed arrays ��no entry stream,
 /// no per-entity dedup. Created entities use a pending batch buffer for pre-materialization
 /// component accumulation.
 /// </summary>
 public sealed class CommandStream
 {
     private readonly World _world;
-    private ComponentStore?[] _stores;
+    // P17: pool the entire FrozenState (struct + all arrays + Dictionary + HashSet).
+    // In steady state the active frozen and the spare alternate roles — a single
+    // struct swap replaces the old 13-field-by-field swap, eliminating a class
+    // of silent correctness bugs that only surface on the async path.
+    //
+    // FrozenState is ~98 bytes (11 ref fields + 2 ints) — normally a red flag for
+    // a struct. It is acceptable here because it is never passed as an argument
+    // across call boundaries, never boxed, and swapped at most once per frame in
+    // SwapOutState. All other accesses are field accesses (JIT emits offset loads,
+    // same as before the struct wrap).
+    private FrozenState _frozen;
+    private FrozenState? _spareFrozen;
+    private FrozenState? _pendingFrozen;
+    private Task? _pendingTask;
 
-    // ── Entity-level commands ──────────────────────────────────────────
-    private Entity[] _destroyEntities = [];
-    private int _destroyCount;
-
-    // ── Hierarchy ──────────────────────────────────────────────────────
-    private Dictionary<Entity, HierarchyIntent> _hierarchyByChild = new();
-
-    // ── Pending-entity tracking ────────────────────────────────────────
-    private int[] _pendingBatch = [];
-    private int _pendingBatchCount;
+    // Scalars that live outside FrozenState (only needed during recording/reset,
+    // not by the background worker).
     private int _pendingBatchMin = int.MaxValue;
     private int _pendingBatchMax;
-
-    // Per-batch linked lists for component accumulation.
-    private int[] _batchHeads = [];
-    private int[] _batchCompCounts = [];
-    private BatchedComponent[] _batchComps = [];
     private int _batchCompTotal;
-    private byte[] _batchBuf = [];
     private int _batchBufLen;
-
-    // Per-batch entity tracking for version-aware cancellation.
-    private Entity[] _batchEntities = [];
-    private bool[] _batchCanceled = [];
-    private HashSet<Entity>? _unavailableEntities;
 
     // Local archetype cache keyed by ComponentMask.
     private const int MaskCacheSize = 8;
@@ -55,19 +49,27 @@ public sealed class CommandStream
     private Entity _lastCreated;
     private int _lastCreatedBatch = -1;
 
-    // P17: pool the entire FrozenState (object + all arrays + Dictionary + HashSet).
-    // In steady state the active frozen and the spare alternate roles, so no
-    // per-frame allocation happens on the parallel FrameDelta path.
-    private FrozenState? _spareFrozen;
-    private FrozenState? _pendingFrozen;
-    private Task? _pendingTask;
-
-    // ── Construction ───────────────────────────────────────────────────
+    // ���� Construction ������������������������������������������������������������������������������������������������������
 
     public CommandStream(World world)
     {
         _world = world ?? throw new ArgumentNullException(nameof(world));
-        _stores = new ComponentStore?[ComponentRegistry.Shared.ComponentTypeCount];
+        _frozen = new FrozenState
+        {
+            Stores = new ComponentStore?[ComponentRegistry.Shared.ComponentTypeCount],
+            DestroyEntities = [],
+            DestroyCount = 0,
+            HierarchyByChild = new Dictionary<Entity, HierarchyIntent>(),
+            PendingBatch = [],
+            PendingBatchCount = 0,
+            BatchHeads = [],
+            BatchCompCounts = [],
+            BatchComps = [],
+            BatchBuf = [],
+            BatchEntities = [],
+            BatchCanceled = [],
+            UnavailableEntities = null,
+        };
     }
 
     /// <summary>
@@ -104,7 +106,7 @@ public sealed class CommandStream
 
     private bool _deferredEntities;
 
-    // ── Record API ────────────────────────────────────────────────────
+    // ���� Record API ��������������������������������������������������������������������������������������������������������
 
     public Entity Create()
     {
@@ -122,7 +124,7 @@ public sealed class CommandStream
         var entity = _world.ReserveDeferredEntity();
         GrowPendingBatchFor(entity.Id);
         var batchIdx = AllocBatchSlot(entity);
-        _pendingBatch[entity.Id] = batchIdx;
+        _frozen.PendingBatch[entity.Id] = batchIdx;
         if (entity.Id < _pendingBatchMin) _pendingBatchMin = entity.Id;
         if (entity.Id >= _pendingBatchMax) _pendingBatchMax = entity.Id + 1;
         _lastCreated = entity;
@@ -146,17 +148,17 @@ public sealed class CommandStream
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private int AllocBatchSlot(Entity entity)
     {
-        EnsureCapacity(ref _batchHeads, _pendingBatchCount, 16);
-        EnsureCapacity(ref _batchCompCounts, _pendingBatchCount, 16);
-        if (_pendingBatchCount >= _batchEntities.Length)
-            Array.Resize(ref _batchEntities, _batchHeads.Length);
-        if (_pendingBatchCount >= _batchCanceled.Length)
-            Array.Resize(ref _batchCanceled, _batchHeads.Length);
-        var batchIdx = _pendingBatchCount++;
-        _batchHeads[batchIdx] = -1;
-        _batchCompCounts[batchIdx] = 0;
-        _batchEntities[batchIdx] = entity;
-        _batchCanceled[batchIdx] = false;
+        EnsureCapacity(ref _frozen.BatchHeads, _frozen.PendingBatchCount, 16);
+        EnsureCapacity(ref _frozen.BatchCompCounts, _frozen.PendingBatchCount, 16);
+        if (_frozen.PendingBatchCount >= _frozen.BatchEntities.Length)
+            Array.Resize(ref _frozen.BatchEntities, _frozen.BatchHeads.Length);
+        if (_frozen.PendingBatchCount >= _frozen.BatchCanceled.Length)
+            Array.Resize(ref _frozen.BatchCanceled, _frozen.BatchHeads.Length);
+        var batchIdx = _frozen.PendingBatchCount++;
+        _frozen.BatchHeads[batchIdx] = -1;
+        _frozen.BatchCompCounts[batchIdx] = 0;
+        _frozen.BatchEntities[batchIdx] = entity;
+        _frozen.BatchCanceled[batchIdx] = false;
         return batchIdx;
     }
 
@@ -168,7 +170,7 @@ public sealed class CommandStream
                 GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindAdd);
             return;
         }
-        if (_pendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
+        if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
         {
             WritePendingComponent(batchIdx, component);
         }
@@ -186,7 +188,7 @@ public sealed class CommandStream
                 GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindSet);
             return;
         }
-        if (_pendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
+        if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
         {
             WritePendingComponent(batchIdx, component);
         }
@@ -204,7 +206,7 @@ public sealed class CommandStream
                 GetOrCreateStoreParallel<T>().AppendConcurrent(entity, default!, KindRemove);
             return;
         }
-        if (_pendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
+        if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
         {
             MarkBatchComponentRemoved(batchIdx, CommandTypeInfo<T>.Type);
         }
@@ -222,7 +224,7 @@ public sealed class CommandStream
             AppendDestroyConcurrent(entity);
             return;
         }
-        if (_pendingBatchCount > 0 && TryGetPendingBatch(entity, out _))
+        if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out _))
         {
             CancelPendingEntity(entity);
             CancelPendingDescendants(entity);
@@ -238,10 +240,10 @@ public sealed class CommandStream
         if (_parallelMode)
         {
             lock (_storeCreateLock)
-                _hierarchyByChild[child] = new HierarchyIntent(true, parent);
+                _frozen.HierarchyByChild[child] = new HierarchyIntent(true, parent);
             return;
         }
-        _hierarchyByChild[child] = new HierarchyIntent(true, parent);
+        _frozen.HierarchyByChild[child] = new HierarchyIntent(true, parent);
     }
 
     public void RemoveChild(Entity child)
@@ -249,10 +251,10 @@ public sealed class CommandStream
         if (_parallelMode)
         {
             lock (_storeCreateLock)
-                _hierarchyByChild[child] = new HierarchyIntent(false, default);
+                _frozen.HierarchyByChild[child] = new HierarchyIntent(false, default);
             return;
         }
-        _hierarchyByChild[child] = new HierarchyIntent(false, default);
+        _frozen.HierarchyByChild[child] = new HierarchyIntent(false, default);
     }
 
     public Entity Clone(Entity source)
@@ -286,7 +288,7 @@ public sealed class CommandStream
     private Entity CloneImplImmediate(Entity source, EntityInfo info)
     {
         var clone = CreateImpl();
-        var batchIdx = _pendingBatch[clone.Id];
+        var batchIdx = _frozen.PendingBatch[clone.Id];
         CloneComponents(source, info, clone, batchIdx);
         return clone;
     }
@@ -304,7 +306,7 @@ public sealed class CommandStream
             var offset = ReserveBatchBufSpace(size);
             unsafe
             {
-                fixed (byte* ptr = &_batchBuf[offset])
+                fixed (byte* ptr = &_frozen.BatchBuf[offset])
                     archetype.ReadComponentRaw(i, sourceRow, ptr);
             }
             CommitBatchComponent(batchIdx, ct, offset, size);
@@ -313,7 +315,7 @@ public sealed class CommandStream
         CloneChildrenRecursive(source, clone);
     }
 
-    // ── Submit ────────────────────────────────────────────────────────
+    // ���� Submit ����������������������������������������������������������������������������������������������������������������
 
     public bool Submit()
     {
@@ -322,7 +324,7 @@ public sealed class CommandStream
 
         try
         {
-            // Order matches BuildDelta: Create —Hierarchy —Ops —Destroy.
+            // Order matches BuildDelta: Create ��Hierarchy ��Ops ��Destroy.
             // Keeping Submit and Snapshot aligned lets hosts use Submit on source and
             // Replay on replica without diverging for combined command patterns.
             ResolveDeferredCreates();
@@ -340,10 +342,10 @@ public sealed class CommandStream
 
     private bool HasAnyCommands()
     {
-        if (_pendingBatchCount > 0 || _destroyCount > 0 || _hierarchyByChild.Count > 0)
+        if (_frozen.PendingBatchCount > 0 || _frozen.DestroyCount > 0 || _frozen.HierarchyByChild.Count > 0)
             return true;
-        for (var i = 0; i < _stores.Length; i++)
-            if (_stores[i]?.HasCommands == true)
+        for (var i = 0; i < _frozen.Stores.Length; i++)
+            if (_frozen.Stores[i]?.HasCommands == true)
                 return true;
         return false;
     }
@@ -351,18 +353,18 @@ public sealed class CommandStream
     private void MaterializeAllPending()
     {
         var view = new PendingBatchView(
-            _batchCanceled, _batchHeads, _batchCompCounts,
-            _batchComps, _batchBuf, _batchEntities, _pendingBatchCount);
-        for (var i = 0; i < _pendingBatchCount; i++)
+            _frozen.BatchCanceled, _frozen.BatchHeads, _frozen.BatchCompCounts,
+            _frozen.BatchComps, _frozen.BatchBuf, _frozen.BatchEntities, _frozen.PendingBatchCount);
+        for (var i = 0; i < _frozen.PendingBatchCount; i++)
         {
-            if (_batchCanceled[i]) continue;
+            if (_frozen.BatchCanceled[i]) continue;
             MaterializePending(view, view.Entities[i], i);
         }
     }
 
     private void ApplyComponentStores()
     {
-        foreach (var store in _stores)
+        foreach (var store in _frozen.Stores)
         {
             if (store?.HasCommands == true)
                 store.ApplyToWorld(_world);
@@ -371,9 +373,9 @@ public sealed class CommandStream
 
     private void ApplyDestroys()
     {
-        for (var i = 0; i < _destroyCount; i++)
+        for (var i = 0; i < _frozen.DestroyCount; i++)
         {
-            var entity = _destroyEntities[i];
+            var entity = _frozen.DestroyEntities[i];
             if (_world.IsAlive(entity))
                 _world.Destroy(entity);
         }
@@ -381,9 +383,9 @@ public sealed class CommandStream
 
     private void ApplyHierarchy()
     {
-        if (_hierarchyByChild.Count == 0) return;
+        if (_frozen.HierarchyByChild.Count == 0) return;
 
-        foreach (var (child, intent) in _hierarchyByChild)
+        foreach (var (child, intent) in _frozen.HierarchyByChild)
         {
             if (IsEntityDestroyed(child)) continue;
 
@@ -399,7 +401,7 @@ public sealed class CommandStream
         }
     }
 
-    // ── Snapshot / SubmitAndSnapshotAsync ─────────────────────────────
+    // ���� Snapshot / SubmitAndSnapshotAsync ����������������������������������������������������������
 
     /// <summary>
     /// Produces a <see cref="FrameDelta"/> from the recorded commands without
@@ -420,8 +422,8 @@ public sealed class CommandStream
     /// <para>
     /// For the relay-only flow (produce delta, do not apply locally),
     /// call <c>Snapshot()</c> then <c>Clear()</c>. The source host then
-    /// replays the delta back into its own world —together with all peer
-    /// deltas —achieving the deterministic multi-host guarantee.
+    /// replays the delta back into its own world ��together with all peer
+    /// deltas ��achieving the deterministic multi-host guarantee.
     /// </para>
     /// </remarks>
     public FrameDelta Snapshot()
@@ -441,10 +443,10 @@ public sealed class CommandStream
 
     private void ThrowIfSnapshotHasImmediateEntities()
     {
-        for (var i = 0; i < _pendingBatchCount; i++)
+        for (var i = 0; i < _frozen.PendingBatchCount; i++)
         {
-            if (_batchCanceled[i]) continue;
-            if (_batchEntities[i].Id >= 0)
+            if (_frozen.BatchCanceled[i]) continue;
+            if (_frozen.BatchEntities[i].Id >= 0)
                 throw new InvalidOperationException(
                     "Snapshot() with DeferredEntities=true contains immediate entities. " +
                     "Use Submit() / SubmitAndSnapshotAsync() for single-host real-id scenarios.");
@@ -464,7 +466,7 @@ public sealed class CommandStream
     /// clients that must maintain id synchronization with the server.
     /// </para>
     /// <para>
-    /// Always produces a <b>real-id delta</b> —deferred placeholders are
+    /// Always produces a <b>real-id delta</b> ��deferred placeholders are
     /// resolved into the host's own ids before building the delta,
     /// regardless of <see cref="DeferredEntities"/>. Mirror clients
     /// replaying this delta must have an id allocator synchronized with
@@ -482,7 +484,7 @@ public sealed class CommandStream
         var frozen = SwapOutState();
         // Static delegate + state parameter avoids the per-call closure allocation
         // that Task.Run(() => ...) would create. FrozenState is a reference type,
-        // so passing it as `object` is a free upcast —no boxing.
+        // so passing it as `object` is a free upcast ��no boxing.
         var task = Task.Factory.StartNew(
             s_buildFromFrozen, frozen, CancellationToken.None,
             TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
@@ -497,21 +499,21 @@ public sealed class CommandStream
 
     private void BuildDelta(FrameDelta delta)
     {
-        // Order matches Submit: Create —Hierarchy —Ops —Destroy.
+        // Order matches Submit: Create ��Hierarchy ��Ops ��Destroy.
         EmitPendingEntitiesToDelta(delta, new PendingBatchView(
-            _batchCanceled, _batchHeads, _batchCompCounts,
-            _batchComps, _batchBuf, _batchEntities, _pendingBatchCount));
+            _frozen.BatchCanceled, _frozen.BatchHeads, _frozen.BatchCompCounts,
+            _frozen.BatchComps, _frozen.BatchBuf, _frozen.BatchEntities, _frozen.PendingBatchCount));
 
-        EmitHierarchyToDelta(delta, _hierarchyByChild, _unavailableEntities);
+        EmitHierarchyToDelta(delta, _frozen.HierarchyByChild, _frozen.UnavailableEntities);
 
-        foreach (var store in _stores)
+        foreach (var store in _frozen.Stores)
         {
             if (store?.HasCommands == true)
                 store.EmitToDelta(delta);
         }
 
-        for (var i = 0; i < _destroyCount; i++)
-            delta.AddDestroy(_destroyEntities[i]);
+        for (var i = 0; i < _frozen.DestroyCount; i++)
+            delta.AddDestroy(_frozen.DestroyEntities[i]);
     }
 
     private void TryReclaimPending()
@@ -535,87 +537,62 @@ public sealed class CommandStream
         FrozenState frozen;
         if (_spareFrozen is { } spare)
         {
-            // Steady state: recycle the spare FrozenState. Swap every array/container
-            // so current —frozen (worker reads it) and spare —current (we reset it).
-            // No allocation, no Dictionary/HashSet churn.
+            // Steady state: swap entire structs in one operation.
+            // No field-by-field swap, no risk of missing a field.
             _spareFrozen = null;
-            frozen = spare;
+            frozen = _frozen;
+            _frozen = spare;
 
-            (frozen.Stores, _stores) = (_stores, spare.Stores);
-            (frozen.DestroyEntities, _destroyEntities) = (_destroyEntities, spare.DestroyEntities);
-            (frozen.PendingBatch, _pendingBatch) = (_pendingBatch, spare.PendingBatch);
-            (frozen.BatchHeads, _batchHeads) = (_batchHeads, spare.BatchHeads);
-            (frozen.BatchCompCounts, _batchCompCounts) = (_batchCompCounts, spare.BatchCompCounts);
-            (frozen.BatchComps, _batchComps) = (_batchComps, spare.BatchComps);
-            (frozen.BatchBuf, _batchBuf) = (_batchBuf, spare.BatchBuf);
-            (frozen.BatchEntities, _batchEntities) = (_batchEntities, spare.BatchEntities);
-            (frozen.BatchCanceled, _batchCanceled) = (_batchCanceled, spare.BatchCanceled);
-            (frozen.HierarchyByChild, _hierarchyByChild) = (_hierarchyByChild, spare.HierarchyByChild);
-            (frozen.UnavailableEntities, _unavailableEntities) = (_unavailableEntities, spare.UnavailableEntities);
-
-            frozen.DestroyCount = _destroyCount;
-            frozen.PendingBatchCount = _pendingBatchCount;
-
-            // The recycled _stores array may predate the current ComponentTypeCount.
+            // The recycled Stores array may predate the current ComponentTypeCount.
             var typeCount = ComponentRegistry.Shared.ComponentTypeCount;
-            if (_stores.Length < typeCount)
-                Array.Resize(ref _stores, typeCount);
+            if (_frozen.Stores.Length < typeCount)
+                Array.Resize(ref _frozen.Stores, typeCount);
         }
         else
         {
-            // First call or worker hasn't finished: allocate fresh.
-            frozen = new FrozenState
+            // First call or worker hasn't finished: copy live state to frozen,
+            // then re-initialise _frozen with fresh containers.
+            frozen = _frozen;
+            _frozen = new FrozenState
             {
-                Stores = _stores,
-                DestroyEntities = _destroyEntities,
-                DestroyCount = _destroyCount,
-                HierarchyByChild = _hierarchyByChild,
-                PendingBatch = _pendingBatch,
-                PendingBatchCount = _pendingBatchCount,
-                BatchHeads = _batchHeads,
-                BatchCompCounts = _batchCompCounts,
-                BatchComps = _batchComps,
-                BatchBuf = _batchBuf,
-                UnavailableEntities = _unavailableEntities,
-                BatchEntities = _batchEntities,
-                BatchCanceled = _batchCanceled,
+                Stores = new ComponentStore?[ComponentRegistry.Shared.ComponentTypeCount],
+                DestroyEntities = [],
+                DestroyCount = 0,
+                HierarchyByChild = new Dictionary<Entity, HierarchyIntent>(),
+                PendingBatch = [],
+                PendingBatchCount = 0,
+                BatchHeads = [],
+                BatchCompCounts = [],
+                BatchComps = [],
+                BatchBuf = [],
+                BatchEntities = [],
+                BatchCanceled = [],
+                UnavailableEntities = null,
             };
-
-            _stores = new ComponentStore?[ComponentRegistry.Shared.ComponentTypeCount];
-            _destroyEntities = [];
-            _hierarchyByChild = new Dictionary<Entity, HierarchyIntent>();
-            _pendingBatch = [];
-            _batchHeads = [];
-            _batchCompCounts = [];
-            _batchComps = [];
-            _batchBuf = [];
-            _batchEntities = [];
-            _batchCanceled = [];
-            _unavailableEntities = null;
         }
 
         // Reset the now-current state. Underlying arrays may carry stale data from
         // two frames ago, but every reader indexes by count and every allocator
         // re-initialises the slot before exposing it, so stale data is never observed.
-        foreach (var store in _stores)
+        foreach (var store in _frozen.Stores)
             store?.Clear();
 
-        _destroyCount = 0;
-        _pendingBatchCount = 0;
+        _frozen.DestroyCount = 0;
+        _frozen.PendingBatchCount = 0;
         _pendingBatchMin = int.MaxValue;
         _pendingBatchMax = 0;
         _batchCompTotal = 0;
         _batchBufLen = 0;
         _lastCreated = default;
         _lastCreatedBatch = -1;
-        _hierarchyByChild.Clear();
-        _unavailableEntities?.Clear();
+        _frozen.HierarchyByChild.Clear();
+        _frozen.UnavailableEntities?.Clear();
         return frozen;
     }
 
     private void SubmitFromFrozen(FrozenState frozen)
     {
-        // Order matches Submit and BuildDelta: Create —Hierarchy —Ops —Destroy.
+        // Order matches Submit and BuildDelta: Create ��Hierarchy ��Ops ��Destroy.
         for (var i = 0; i < frozen.PendingBatchCount; i++)
         {
             if (frozen.BatchCanceled[i]) continue;
@@ -656,7 +633,7 @@ public sealed class CommandStream
 
     private static FrameDelta BuildFromFrozen(FrozenState frozen)
     {
-        // Order matches Submit: Create —Hierarchy —Ops —Destroy.
+        // Order matches Submit: Create ��Hierarchy ��Ops ��Destroy.
         var delta = new FrameDelta();
 
         EmitPendingEntitiesToDelta(delta, frozen.Pending);
@@ -675,7 +652,7 @@ public sealed class CommandStream
         return delta;
     }
 
-    // ── Pending entity materialization ─────────────────────────────────
+    // ���� Pending entity materialization ������������������������������������������������������������������
 
     private void MaterializePending(in PendingBatchView view, Entity entity, int batchIdx)
     {
@@ -796,7 +773,7 @@ public sealed class CommandStream
         // Single pass: emit Reserve + Release (cancelled) or Reserve + Create
         // (committed) consecutively for each entity. This preserves temporal
         // ordering where a cancelled entity's id may be recycled by a later
-        // Create within the same frame —the two-pass approach (all Reserves
+        // Create within the same frame ��the two-pass approach (all Reserves
         // before all Releases) breaks this dependency.
         //
         // Placeholder entities (Id < 0) carry deferred creates: they have not
@@ -805,7 +782,7 @@ public sealed class CommandStream
         for (var i = 0; i < pendingBatchCount; i++)
         {
             var entity = batchEntities[i];
-            // Deferred create that was cancelled never allocated a real id —skip it.
+            // Deferred create that was cancelled never allocated a real id ��skip it.
             // Unlike immediate cancels (which emit Reserve+Release below to keep id
             // allocation in lockstep across hosts), deferred cancels consume no id
             // by design: the whole point of deferred is to avoid touching the world
@@ -883,19 +860,19 @@ public sealed class CommandStream
         }
     }
 
-    // ── Pending entity helpers ────────────────────────────────────────
+    // ���� Pending entity helpers ��������������������������������������������������������������������������������
 
     private void GrowPendingBatchFor(int entityId)
     {
-        if (entityId < _pendingBatch.Length) return;
+        if (entityId < _frozen.PendingBatch.Length) return;
 
-        var newLen = _pendingBatch.Length == 0 ? 64 : _pendingBatch.Length;
+        var newLen = _frozen.PendingBatch.Length == 0 ? 64 : _frozen.PendingBatch.Length;
         while (newLen <= entityId) newLen *= 2;
         var next = new int[newLen];
         Array.Fill(next, -1);
-        if (_pendingBatch.Length > 0)
-            Array.Copy(_pendingBatch, next, _pendingBatch.Length);
-        _pendingBatch = next;
+        if (_frozen.PendingBatch.Length > 0)
+            Array.Copy(_frozen.PendingBatch, next, _frozen.PendingBatch.Length);
+        _frozen.PendingBatch = next;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -911,10 +888,10 @@ public sealed class CommandStream
         {
             var id = entity.Id;
             if ((uint)(id - _pendingBatchMin) < (uint)(_pendingBatchMax - _pendingBatchMin) &&
-                id < _pendingBatch.Length)
+                id < _frozen.PendingBatch.Length)
             {
-                batchIdx = _pendingBatch[id];
-                if (batchIdx >= 0 && !_batchCanceled[batchIdx] && _batchEntities[batchIdx] == entity)
+                batchIdx = _frozen.PendingBatch[id];
+                if (batchIdx >= 0 && !_frozen.BatchCanceled[batchIdx] && _frozen.BatchEntities[batchIdx] == entity)
                     return true;
             }
         }
@@ -924,7 +901,7 @@ public sealed class CommandStream
             if ((uint)seq < (uint)_deferredSeq)
             {
                 batchIdx = _pendingBatchDeferredArr[seq];
-                if (batchIdx >= 0 && (uint)batchIdx < (uint)_batchCanceled.Length && !_batchCanceled[batchIdx])
+                if (batchIdx >= 0 && (uint)batchIdx < (uint)_frozen.BatchCanceled.Length && !_frozen.BatchCanceled[batchIdx])
                     return true;
             }
         }
@@ -941,17 +918,17 @@ public sealed class CommandStream
         if (entity.Id >= 0)
         {
             var id = entity.Id;
-            if (id < _pendingBatch.Length)
+            if (id < _frozen.PendingBatch.Length)
             {
-                var batchIdx = _pendingBatch[id];
+                var batchIdx = _frozen.PendingBatch[id];
                 if (batchIdx >= 0)
                 {
                     _world.ReleaseReservedEntity(entity);
-                    _pendingBatch[id] = -1;
-                    _batchHeads[batchIdx] = -1;
-                    _batchCompCounts[batchIdx] = 0;
-                    _batchCanceled[batchIdx] = true;
-                    _hierarchyByChild.Remove(entity);
+                    _frozen.PendingBatch[id] = -1;
+                    _frozen.BatchHeads[batchIdx] = -1;
+                    _frozen.BatchCompCounts[batchIdx] = 0;
+                    _frozen.BatchCanceled[batchIdx] = true;
+                    _frozen.HierarchyByChild.Remove(entity);
                 }
             }
         }
@@ -964,26 +941,26 @@ public sealed class CommandStream
                 if (batchIdx >= 0)
                 {
                     _pendingBatchDeferredArr[seq] = -1;
-                    _batchHeads[batchIdx] = -1;
-                    _batchCompCounts[batchIdx] = 0;
-                    _batchCanceled[batchIdx] = true;
-                    _hierarchyByChild.Remove(entity);
+                    _frozen.BatchHeads[batchIdx] = -1;
+                    _frozen.BatchCompCounts[batchIdx] = 0;
+                    _frozen.BatchCanceled[batchIdx] = true;
+                    _frozen.HierarchyByChild.Remove(entity);
                 }
             }
         }
     }
 
-    // ── Batch buffer helpers ──────────────────────────────────────────
+    // ���� Batch buffer helpers ������������������������������������������������������������������������������������
 
     // When a pending entity is destroyed before Submit, all pending entities linked under it must also
     // be cancelled. Existing entities are skipped (World.Destroy cascades them
     // through the live hierarchy). Without this, CS would leave orphan children.
     private void CancelPendingDescendants(Entity root)
     {
-        if (_hierarchyByChild.Count == 0) return;
+        if (_frozen.HierarchyByChild.Count == 0) return;
 
         // BFS through pending descendants. We must snapshot children before
-        // calling CancelPendingEntity because that mutates _hierarchyByChild.
+        // calling CancelPendingEntity because that mutates _frozen.HierarchyByChild.
         var queue = ArrayPool<Entity>.Shared.Rent(16);
         var queueCount = 0;
         try
@@ -1006,7 +983,7 @@ public sealed class CommandStream
 
     private void EnqueuePendingChildren(Entity parent, ref Entity[] queue, ref int queueCount)
     {
-        foreach (var (child, intent) in _hierarchyByChild)
+        foreach (var (child, intent) in _frozen.HierarchyByChild)
         {
             if (!intent.IsAdd || intent.Parent != parent) continue;
             if (!TryGetPendingBatch(child, out _)) continue;
@@ -1026,15 +1003,15 @@ public sealed class CommandStream
     {
         var size = Unsafe.SizeOf<T>();
         var offset = ReserveBatchBufSpace(size);
-        Unsafe.WriteUnaligned(ref _batchBuf[offset], component);
+        Unsafe.WriteUnaligned(ref _frozen.BatchBuf[offset], component);
         CommitBatchComponent(batchIdx, CommandTypeInfo<T>.Type, offset, size);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private int ReserveBatchBufSpace(int size)
     {
-        if (_batchBufLen + size > _batchBuf.Length)
-            Array.Resize(ref _batchBuf, Math.Max(_batchBufLen + size, _batchBuf.Length == 0 ? 4096 : _batchBuf.Length * 2));
+        if (_batchBufLen + size > _frozen.BatchBuf.Length)
+            Array.Resize(ref _frozen.BatchBuf, Math.Max(_batchBufLen + size, _frozen.BatchBuf.Length == 0 ? 4096 : _frozen.BatchBuf.Length * 2));
         var offset = _batchBufLen;
         _batchBufLen += size;
         return offset;
@@ -1043,32 +1020,32 @@ public sealed class CommandStream
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void CommitBatchComponent(int batchIdx, ComponentType type, int offset, int size)
     {
-        EnsureCapacity(ref _batchComps, _batchCompTotal, 256);
-        _batchComps[_batchCompTotal] = new BatchedComponent
+        EnsureCapacity(ref _frozen.BatchComps, _batchCompTotal, 256);
+        _frozen.BatchComps[_batchCompTotal] = new BatchedComponent
         {
             Type = type,
             Offset = offset,
             Size = size,
-            Next = _batchHeads[batchIdx],
+            Next = _frozen.BatchHeads[batchIdx],
         };
-        _batchHeads[batchIdx] = _batchCompTotal;
+        _frozen.BatchHeads[batchIdx] = _batchCompTotal;
         _batchCompTotal++;
-        _batchCompCounts[batchIdx]++;
+        _frozen.BatchCompCounts[batchIdx]++;
     }
 
     private void MarkBatchComponentRemoved(int batchIdx, ComponentType targetType)
     {
-        var current = _batchHeads[batchIdx];
+        var current = _frozen.BatchHeads[batchIdx];
         while (current >= 0)
         {
-            ref var comp = ref _batchComps[current];
+            ref var comp = ref _frozen.BatchComps[current];
             if (comp.Type == targetType)
                 comp.Removed = true;
             current = comp.Next;
         }
     }
 
-    // ── Archetype resolution ──────────────────────────────────────────
+    // ���� Archetype resolution ������������������������������������������������������������������������������������
 
     private Archetype ResolveArchetypeForMask(ComponentMask mask)
     {
@@ -1142,7 +1119,7 @@ public sealed class CommandStream
         }
     }
 
-    // ── Bit helpers ───────────────────────────────────────────────────
+    // ���� Bit helpers ������������������������������������������������������������������������������������������������������
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool MaskEq(ComponentMask a, ComponentMask b) =>
@@ -1177,7 +1154,7 @@ public sealed class CommandStream
         b7 |= 1UL << (id - 448);
     }
 
-    // ── Clone helpers ─────────────────────────────────────────────────
+    // ���� Clone helpers ��������������������������������������������������������������������������������������������������
 
     private void CloneChildrenRecursive(Entity sourceRoot, Entity cloneRoot)
     {
@@ -1219,7 +1196,7 @@ public sealed class CommandStream
                 if (_deferredEntities)
                     TryGetPendingBatch(cloneChild, out batchIdx);
                 else
-                    batchIdx = _pendingBatch[cloneChild.Id];
+                    batchIdx = _frozen.PendingBatch[cloneChild.Id];
                 var archetype = childLocation.Archetype;
                 var sourceRow = childLocation.RowIndex;
                 var sig = archetype.Signature.AsSpan();
@@ -1228,7 +1205,7 @@ public sealed class CommandStream
                     var ct = sig[i];
                     var size = ComponentSizeCache.GetSize(ComponentRegistry.Shared.GetType(ct));
                     var offset = ReserveBatchBufSpace(size);
-                    unsafe { fixed (byte* ptr = &_batchBuf[offset]) archetype.ReadComponentRaw(i, sourceRow, ptr); }
+                    unsafe { fixed (byte* ptr = &_frozen.BatchBuf[offset]) archetype.ReadComponentRaw(i, sourceRow, ptr); }
                     CommitBatchComponent(batchIdx, ct, offset, size);
                 }
                 AddChild(cloneParent, cloneChild);
@@ -1259,7 +1236,7 @@ public sealed class CommandStream
         }
     }
 
-    // ── Sorting / dedup ───────────────────────────────────────────────
+    // ���� Sorting / dedup ����������������������������������������������������������������������������������������������
 
     private static void SortTypesAndOffsets(Span<ComponentType> types, Span<int> offsets)
     {
@@ -1324,18 +1301,18 @@ public sealed class CommandStream
         return writeIdx;
     }
 
-    // ── Destroy helpers ───────────────────────────────────────────────
+    // ���� Destroy helpers ����������������������������������������������������������������������������������������������
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void AppendDestroy(Entity entity)
     {
-        EnsureCapacity(ref _destroyEntities, _destroyCount, 64);
-        _destroyEntities[_destroyCount++] = entity;
+        EnsureCapacity(ref _frozen.DestroyEntities, _frozen.DestroyCount, 64);
+        _frozen.DestroyEntities[_frozen.DestroyCount++] = entity;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool IsEntityDestroyed(Entity entity) =>
-        _unavailableEntities != null && _unavailableEntities.Contains(entity);
+        _frozen.UnavailableEntities != null && _frozen.UnavailableEntities.Contains(entity);
 
     private bool CanRecordParallelComponentCommand(Entity entity)
     {
@@ -1344,7 +1321,7 @@ public sealed class CommandStream
 
         lock (_storeCreateLock)
         {
-            if (_unavailableEntities != null && _unavailableEntities.Contains(entity))
+            if (_frozen.UnavailableEntities != null && _frozen.UnavailableEntities.Contains(entity))
                 return false;
             return TryGetPendingBatch(entity, out _);
         }
@@ -1355,43 +1332,43 @@ public sealed class CommandStream
     {
         lock (_storeCreateLock)
         {
-            _unavailableEntities ??= new HashSet<Entity>();
-            _unavailableEntities.Add(entity);
+            _frozen.UnavailableEntities ??= new HashSet<Entity>();
+            _frozen.UnavailableEntities.Add(entity);
         }
     }
 
     private void AppendDestroyConcurrent(Entity entity)
     {
-        var slot = Interlocked.Increment(ref _destroyCount) - 1;
+        var slot = Interlocked.Increment(ref _frozen.DestroyCount) - 1;
         lock (_storeCreateLock)
         {
-            while (slot >= _destroyEntities.Length)
+            while (slot >= _frozen.DestroyEntities.Length)
             {
-                var newLen = _destroyEntities.Length == 0 ? 64 : _destroyEntities.Length * 2;
+                var newLen = _frozen.DestroyEntities.Length == 0 ? 64 : _frozen.DestroyEntities.Length * 2;
                 while (newLen <= slot) newLen *= 2;
-                Array.Resize(ref _destroyEntities, newLen);
+                Array.Resize(ref _frozen.DestroyEntities, newLen);
             }
-            _destroyEntities[slot] = entity;
+            _frozen.DestroyEntities[slot] = entity;
         }
     }
 
-    // ── Store management ──────────────────────────────────────────────
+    // ���� Store management ��������������������������������������������������������������������������������������������
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private ComponentStore<T> GetOrCreateStore<T>() where T : unmanaged
     {
         var id = CommandTypeInfo<T>.Type.Value;
-        if ((uint)id >= (uint)_stores.Length)
+        if ((uint)id >= (uint)_frozen.Stores.Length)
         {
-            var newLen = Math.Max(id + 1, _stores.Length == 0 ? 16 : _stores.Length * 2);
-            Array.Resize(ref _stores, newLen);
+            var newLen = Math.Max(id + 1, _frozen.Stores.Length == 0 ? 16 : _frozen.Stores.Length * 2);
+            Array.Resize(ref _frozen.Stores, newLen);
         }
 
-        var store = _stores[id];
+        var store = _frozen.Stores[id];
         if (store == null)
         {
             store = new ComponentStore<T>();
-            _stores[id] = store;
+            _frozen.Stores[id] = store;
         }
         return (ComponentStore<T>)store;
     }
@@ -1399,28 +1376,28 @@ public sealed class CommandStream
     private ComponentStore<T> GetOrCreateStoreParallel<T>() where T : unmanaged
     {
         var id = CommandTypeInfo<T>.Type.Value;
-        if (id >= _stores.Length)
+        if (id >= _frozen.Stores.Length)
         {
             lock (_storeCreateLock)
             {
-                if (id >= _stores.Length)
+                if (id >= _frozen.Stores.Length)
                 {
-                    var newLen = Math.Max(id + 1, _stores.Length == 0 ? 16 : _stores.Length * 2);
-                    Array.Resize(ref _stores, newLen);
+                    var newLen = Math.Max(id + 1, _frozen.Stores.Length == 0 ? 16 : _frozen.Stores.Length * 2);
+                    Array.Resize(ref _frozen.Stores, newLen);
                 }
             }
         }
 
-        var store = _stores[id];
+        var store = _frozen.Stores[id];
         if (store == null)
         {
             lock (_storeCreateLock)
             {
-                store = _stores[id];
+                store = _frozen.Stores[id];
                 if (store == null)
                 {
                     store = new ComponentStore<T>();
-                    _stores[id] = store;
+                    _frozen.Stores[id] = store;
                 }
             }
         }
@@ -1437,7 +1414,7 @@ public sealed class CommandStream
 
     private readonly object _storeCreateLock = new();
 
-    // ── Clear ─────────────────────────────────────────────────────────
+    // ���� Clear ������������������������������������������������������������������������������������������������������������������
 
     /// <summary>
     /// Resets the stream to its initial state, discarding all recorded commands
@@ -1451,7 +1428,7 @@ public sealed class CommandStream
     /// </summary>
     public void Clear()
     {
-        foreach (var store in _stores)
+        foreach (var store in _frozen.Stores)
             store?.Clear();
 
         // Submit path: every non-cancelled batch entity has been materialized to
@@ -1459,34 +1436,34 @@ public sealed class CommandStream
         // we just drop the pending-batch index.
         // Snapshot/relay path (or Submit exception path): batch entities may still
         // be in the reserved state, so we release their ids back to the World's
-        // free list here. Either way Clear is self-sufficient —it does not rely
+        // free list here. Either way Clear is self-sufficient ��it does not rely
         // on the caller having materialized anything.
-        for (var i = 0; i < _pendingBatchCount; i++)
+        for (var i = 0; i < _frozen.PendingBatchCount; i++)
         {
-            if (i < _batchCanceled.Length && !_batchCanceled[i] && i < _batchEntities.Length)
+            if (i < _frozen.BatchCanceled.Length && !_frozen.BatchCanceled[i] && i < _frozen.BatchEntities.Length)
             {
-                var entity = _batchEntities[i];
+                var entity = _frozen.BatchEntities[i];
                 if (entity.Id >= 0)
                 {
-                    _pendingBatch[entity.Id] = -1;
+                    _frozen.PendingBatch[entity.Id] = -1;
                     _world.TryReleaseReserved(entity);
                 }
             }
         }
         _deferredSeq = 0;
-        _destroyCount = 0;
-        _pendingBatchCount = 0;
+        _frozen.DestroyCount = 0;
+        _frozen.PendingBatchCount = 0;
         _pendingBatchMin = int.MaxValue;
         _pendingBatchMax = 0;
         _batchCompTotal = 0;
         _batchBufLen = 0;
         _lastCreated = default;
         _lastCreatedBatch = -1;
-        _hierarchyByChild.Clear();
-        _unavailableEntities?.Clear();
+        _frozen.HierarchyByChild.Clear();
+        _frozen.UnavailableEntities?.Clear();
     }
 
-    // ── Deferred entity resolution ────────────────────────────────────
+    // ���� Deferred entity resolution ������������������������������������������������������������������������
 
     private void ResolveDeferredCreates()
     {
@@ -1504,30 +1481,30 @@ public sealed class CommandStream
             _pendingBatchDeferredArr[seq] = -1;
             if (batchIdx < 0)
                 continue;
-            if ((uint)batchIdx < (uint)_batchCanceled.Length && _batchCanceled[batchIdx])
+            if ((uint)batchIdx < (uint)_frozen.BatchCanceled.Length && _frozen.BatchCanceled[batchIdx])
                 continue;
 
             var real = _world.ReserveDeferredEntityBatch();
             resolveMap[seq] = real;
 
-            _batchEntities[batchIdx] = real;
+            _frozen.BatchEntities[batchIdx] = real;
 
             GrowPendingBatchFor(real.Id);
-            _pendingBatch[real.Id] = batchIdx;
+            _frozen.PendingBatch[real.Id] = batchIdx;
             if (real.Id < _pendingBatchMin) _pendingBatchMin = real.Id;
             if (real.Id >= _pendingBatchMax) _pendingBatchMax = real.Id + 1;
         }
 
         _deferredSeq = 0;
 
-        foreach (var store in _stores)
+        foreach (var store in _frozen.Stores)
             store?.ReplacePlaceholders(resolveMap);
 
         ReplaceHierarchyPlaceholders(resolveMap);
 
-        for (var i = 0; i < _destroyCount; i++)
+        for (var i = 0; i < _frozen.DestroyCount; i++)
         {
-            ref var destroyed = ref _destroyEntities[i];
+            ref var destroyed = ref _frozen.DestroyEntities[i];
             if (destroyed.IsPlaceholder)
             {
                 var real = resolveMap[destroyed.Version];
@@ -1542,15 +1519,15 @@ public sealed class CommandStream
 
     private void ReplaceHierarchyPlaceholders(Entity[] resolveMap)
     {
-        if (_hierarchyByChild.Count == 0)
+        if (_frozen.HierarchyByChild.Count == 0)
             return;
 
-        var count = _hierarchyByChild.Count;
+        var count = _frozen.HierarchyByChild.Count;
         var replacements = ArrayPool<HierarchyReplacement>.Shared.Rent(count);
         var repCount = 0;
         try
         {
-            foreach (var (child, intent) in _hierarchyByChild)
+            foreach (var (child, intent) in _frozen.HierarchyByChild)
             {
                 var newChild = child;
                 if (child.IsPlaceholder)
@@ -1575,11 +1552,11 @@ public sealed class CommandStream
             for (var i = 0; i < repCount; i++)
             {
                 ref var r = ref replacements[i];
-                _hierarchyByChild.Remove(r.OldChild);
+                _frozen.HierarchyByChild.Remove(r.OldChild);
                 if (r.IsAdd)
-                    _hierarchyByChild[r.NewChild] = new HierarchyIntent(true, r.Parent);
+                    _frozen.HierarchyByChild[r.NewChild] = new HierarchyIntent(true, r.Parent);
                 else
-                    _hierarchyByChild[r.NewChild] = new HierarchyIntent(false, default);
+                    _frozen.HierarchyByChild[r.NewChild] = new HierarchyIntent(false, default);
             }
         }
         finally
@@ -1590,15 +1567,15 @@ public sealed class CommandStream
 
     private void ReplaceUnavailablePlaceholders(Entity[] resolveMap)
     {
-        if (_unavailableEntities == null || _unavailableEntities.Count == 0)
+        if (_frozen.UnavailableEntities == null || _frozen.UnavailableEntities.Count == 0)
             return;
 
-        var count = _unavailableEntities.Count;
+        var count = _frozen.UnavailableEntities.Count;
         var swaps = ArrayPool<(Entity Old, Entity New)>.Shared.Rent(count);
         var swapCount = 0;
         try
         {
-            foreach (var e in _unavailableEntities)
+            foreach (var e in _frozen.UnavailableEntities)
             {
                 if (e.IsPlaceholder)
                 {
@@ -1610,8 +1587,8 @@ public sealed class CommandStream
 
             for (var i = 0; i < swapCount; i++)
             {
-                _unavailableEntities.Remove(swaps[i].Old);
-                _unavailableEntities.Add(swaps[i].New);
+                _frozen.UnavailableEntities.Remove(swaps[i].Old);
+                _frozen.UnavailableEntities.Add(swaps[i].New);
             }
         }
         finally
@@ -1636,11 +1613,11 @@ public sealed class CommandStream
         }
     }
 
-    internal object? ActiveHierarchyForTesting => _hierarchyByChild;
-    internal object? ActiveUnavailableForTesting => _unavailableEntities;
+    internal object? ActiveHierarchyForTesting => _frozen.HierarchyByChild;
+    internal object? ActiveUnavailableForTesting => _frozen.UnavailableEntities;
     internal object? ActiveFrozenForTesting => _pendingFrozen;
 
-    // ── Helpers ───────────────────────────────────────────────────────
+    // ���� Helpers ��������������������������������������������������������������������������������������������������������������
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void EnsureCapacity<T>(ref T[] array, int count, int defaultSize = 16)
@@ -1661,7 +1638,7 @@ public sealed class CommandStream
         public static readonly ComponentType Type = Component<T>.ComponentType;
     }
 
-    // ── Internal types ────────────────────────────────────────────────
+    // ���� Internal types ������������������������������������������������������������������������������������������������
 
     private const byte KindAdd = 0;
     private const byte KindSet = 1;
@@ -1773,7 +1750,7 @@ public sealed class CommandStream
                             // and AddSetUnsafe call Grow internally, which may
                             // allocate (Array.Resize) and trigger a compacting GC.
                             // Without pinning, the raw pointer from AsPointer would
-                            // dangle across the compaction —same GC hole as the
+                            // dangle across the compaction ��same GC hole as the
                             // original CopyComponent path.
                             fixed (T* pFixed = &_data[i])
                             {
@@ -1842,21 +1819,21 @@ public sealed class CommandStream
         }
     }
 
-    private sealed class FrozenState
+    private struct FrozenState
     {
-        public ComponentStore?[] Stores = [];
-        public Entity[] DestroyEntities = [];
+        public ComponentStore?[] Stores;
+        public Entity[] DestroyEntities;
         public int DestroyCount;
-        public Dictionary<Entity, HierarchyIntent> HierarchyByChild = new();
-        public int[] PendingBatch = [];
+        public Dictionary<Entity, HierarchyIntent> HierarchyByChild;
+        public int[] PendingBatch;
         public int PendingBatchCount;
-        public int[] BatchHeads = [];
-        public int[] BatchCompCounts = [];
-        public BatchedComponent[] BatchComps = [];
-        public byte[] BatchBuf = [];
+        public int[] BatchHeads;
+        public int[] BatchCompCounts;
+        public BatchedComponent[] BatchComps;
+        public byte[] BatchBuf;
         public HashSet<Entity>? UnavailableEntities;
-        public Entity[] BatchEntities = [];
-        public bool[] BatchCanceled = [];
+        public Entity[] BatchEntities;
+        public bool[] BatchCanceled;
 
         public PendingBatchView Pending => new(
             BatchCanceled, BatchHeads, BatchCompCounts, BatchComps,

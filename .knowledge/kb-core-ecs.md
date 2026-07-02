@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-07-01 (新增 ComponentSchema 到架构段 + 用户 API 表)
+updated: 2026-07-02 (修正决策段 CommandStream upsert 描述 → strict 语义；交叉引用 kb-design-rationale.md)
 ---
 # MiniArch Core ECS
 
@@ -98,7 +98,7 @@ updated: 2026-07-01 (新增 ComponentSchema 到架构段 + 用户 API 表)
 - 用 `ComponentType` 而不是直接用 `Type` 作为运行时 key
 - 用 `Signature` 作为 archetype key，保证等价组件集合落在同一个 storage family
 - Set/Add 的原地写入路径优先走 flat byte storage + component id → 列索引 direct map
-- `World.Add<T>` 是严格 Add（组件已存在时抛异常）；`World.Set<T>` 是严格 Set（组件不存在时抛异常）。CommandStream 内部使用 upsert 路径（延迟 apply 时无法保证组件状态）
+- `World.Add<T>` 是严格 Add（组件已存在时抛异常）；`World.Set<T>` 是严格 Set（组件不存在时抛异常）。CommandStream 和 Replay 路径同样走 strict 分发（`DeltaOpKind.Add` → `ApplyRawAdd`，`DeltaOpKind.Set` → `ApplyRawSet`），零额外开销
 - `World` 的 entity metadata 需要显式容量管理，不依赖 `List<T>` 自然扩容
 - `default(Entity)` 不合法；真实实体从 `Version = 1` 起步
 - 单实体带组件创建直接落到目标签名 archetype，不经过 `Create → Add` 迁移链

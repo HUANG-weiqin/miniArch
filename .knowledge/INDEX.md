@@ -8,7 +8,7 @@
 
 | 模块 | 知识页 |
 |---|---|
-| **入门 / 导航** | `kb-glossary.md`（术语表）、`kb-perf-harnesses.md`（4 套 perf harness 消歧）、`kb-lockstep-playbook.md`（帧同步端到端 spine） |
+| **入门 / 导航** | `kb-design-rationale.md`（**新人必读**：为什么是这样而不是那样）、`kb-glossary.md`（术语表）、`kb-perf-harnesses.md`（4 套 perf harness 消歧）、`kb-lockstep-playbook.md`（帧同步端到端 spine） |
 | Workspace（仓库导航/脚本/流程） | `kb-repo-overview.md`、`kb-profiling-workflow.md`、`kb-throughput-workflow.md` |
 | MiniArch.Core（ECS 运行时） | `kb-core-ecs.md`、`kb-architecture-review.md`、`kb-chunk-storage.md`、`kb-cache-optimization.md` |
 | MiniArch.Core CommandStream | `kb-command-stream.md`、`kb-deferred-create-design.md` |
@@ -26,12 +26,14 @@
 
 ## 快速入口
 
-**新人 / 第一次接触**：
-- **术语不认识** → `kb-glossary.md`（GGPO/SoA/LEB128/Tier 等）
-- **仓库入口** → `kb-repo-overview.md`
-- **整体架构理解** → `kb-architecture-review.md`
-- **ECS 运行时** → `kb-core-ecs.md`
-- **用户 API 分层** → `kb-user-api-layering.md`
+**第一次接触**：
+1. **先读 `kb-design-rationale.md`** — 10 分钟理解 "为什么长这样"，以及为什么常见优化提案都已被拒绝
+2. **术语不认识** → `kb-glossary.md`
+3. **仓库入口** → `kb-repo-overview.md`
+4. **整体架构** → `kb-architecture-review.md`
+5. **ECS 运行时** → `kb-core-ecs.md`
+
+**在想"能不能这样改"之前**：先查 `kb-design-rationale.md` §2（子系统的替代方案）和 §3（常见误判优化），很大概率已经被评估过并拒绝了。
 
 **性能 / 回归**：
 - **不知道该跑哪个 perf 工具** → `kb-perf-harnesses.md`（消歧矩阵）

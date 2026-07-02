@@ -2,7 +2,7 @@
 title: Architecture Mechanistic Review
 module: MiniArch.Core
 description: Mechanistic insight of the entire miniArch ECS library — one-line truths, subsystem breakdown, data flows, known issues, and design tensions. Links to per-subsystem kb pages for depth.
-updated: 2026-06-30 (Core.Query → Core.QueryCache 重命名；CaptureState/RestoreState 改 rollback 池支持多帧深度；新增 IChunkForEach 零分配 chunk 迭代)
+updated: 2026-07-02 (清理已评估问题 P1/P5/O1/O3/O5 → 降级到已评估不值得改；P3 更新为 strict 语义；O4 保留为唯一可操作项；交叉引用 kb-design-rationale.md)
 ---
 # Architecture Mechanistic Review
 
@@ -143,43 +143,47 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 
 ## 已知问题
 
-### P1. Query 失效粒度
-- 当前两段式（archetypeCount + per-matched-archetype segment count），但 archetypeCount 一变仍触发对**所有** archetype 的 mask match 重扫
-- 由于 append-only 且 mask 预过滤便宜，实测可接受；archetype 数 > 1000 时考虑 per-query-filter 分组失效
-- 代码位置：`Core/Query.cs:104-128`
+> **已评估的"问题"入口**：大部分条目已被 `kb-design-rationale.md` 详细评估过，此处只保留结论和交叉引用。
 
 ### P2. Edge Cache 直索引稀疏膨胀
 - `_addDestinationCache` / `_removeDestinationCache` 用 `Archetype?[]` 按 componentId 直索引
 - component id 稀疏（如 max=10000 但只有 2 个组件）时数组浪费内存
 - 当前游戏场景下 component id 密集，trade-off 合理
 
-### P3. Add/Set 语义合并
-- `World.Add<T>` / `World.Set<T>` 都是 upsert，文档已明示是 alias（`World.StructuralChange.cs:11-22`）
-- 严格 add 语义需要用户先 `Has<T>` 检查
-- 当前是"够用的简单方案"——不打算改
-
-### P3b.（已修复）CaptureState/RestoreState 单 spare + 静默错误
-- 历史问题：`_stateSnapshotSpare` 单 slot，>1 帧深度时第二次 CaptureState 强制分配；重复 restore 同一 snapshot 静默污染 world 状态
-- **2026-06-30 修复**：替换为 `Stack<WorldStateSnapshot>` 池 + `IsRecycled` 标志 + RestoreState fail-fast
-- 现在支持任意深度 GGPO 回滚窗口（稳态零 GC），重复 restore 抛 `InvalidOperationException`
-
 ### P4. Hierarchy 作为 side-table 的表达力缺失
-- 无法写 `With<ChildOf>()` 这样的查询
-- 候补方案：把 Parent 做成组件——代价是级联销毁变慢但表达力提升
-- 详见 `kb-hierarchy-runtime.md`
+- 无法在 query 中按层级关系过滤
+- 已评估 Parent 作为组件的方案——代价（级联销毁从 O(subtree) → O(N)、每次 AddChild 触发 archetype 迁移）远超收益
+- 详见 `kb-design-rationale.md` §2.4 及 §3.4
 
-### P5. EnsureReplayReservation 的 O(n) free list 扫描
-- `World.EntityLifecycle.cs:468 RemoveFromFreeList` 是 O(freeIdCount) 线性扫描
-- 大帧 lockstep replay（每 reserve 都走 fallback）下是潜在热点
-- 候补：free list 反向 HashSet 索引；或在注释里至少承认 O(n)
+### --- 以下为已评估并解决或拒绝的条目 ---
+
+### P1. Query 失效粒度 — 已评估，不值得改
+- 稳态 = 一次 `cmp`（`archetypeCount == _lastCount`），已是最优
+- 非稳态 refresh 成本（~250ns）比 archetype 创建（~5000ns）小两个数量级
+- Per-filter 跟踪用代码复杂度换噪音级 CPU 时间
+- 详见 `kb-design-rationale.md` §2.8 及 §3.1
+
+### P3. Add/Set 语义 — 已改（strict 语义）
+- 原 upsert 语义（`Add`/`Set` 同义别名）已改为 strict：`Add<T>` 抛异常若组件已存在，`Set<T>` 抛异常若组件不存在
+- 性能影响为零——`TryGetComponentIndex` 在旧 upsert 代码中同样需要
+- 详见 `kb-core-ecs.md` 决策段 + `kb-design-rationale.md` §2.9
+
+### P3b. CaptureState/RestoreState — 已修复
+- 2026-06-30 替换为 `Stack<WorldStateSnapshot>` 池 + `IsRecycled` 标志
+
+### P5. EnsureReplayReservation O(n) free list 扫描 — 已评估，不构成热点
+- Reserve 路径在正常 replay 中不构成热点——每个实体只 Reserve 一次
+- 反向 HashSet 无实测收益
+- 详见 `kb-design-rationale.md` §3.6
 
 ## 可优化点
 
-- **O1. Query entity 枚举跨 chunk 开销**：`refresh` 时把所有匹配 entity 预收集到连续 `Entity[]`。详见 `kb-query-invalidation.md` + `kb-cache-optimization.md` 热路径分析
-- **O2. Signature 不可变导致频繁分配**：≤4 组件用 `stackalloc` 或 `interning`。详见 `kb-core-ecs.md`（Signature 类型作为 archetype key）
-- **O3. Chunk swap-remove 的全列拷贝**：对大组件（如 256B Matrix4x4）单次 copy 成本高。详见 `kb-chunk-storage.md`
-- **O4. SubmitAndSnapshotAsync 的字段对调**：`CommandStream.cs:540-552` 是 12 个 `(frozen.X, _X) = (_X, spare.X)` 元组交换——加字段忘交换 = bug 且编译器不报。考虑反射驱动的测试或 `[FieldsMustBeSwapped]` attribute。详见 `kb-cache-optimization.md` "SubmitAndSnapshotAsync 双缓冲池化"
-- **O5. Replay free list 反向索引**：消除 P5 的 O(n) 扫描。详见 `kb-command-stream.md`（Merge 段 + EnsureReplayReservation 段）
+**O1-O5 已全部处理**：
+- O1（Query 增量失效）、O3（swap-remove 大组件）、O5（free-list 反向索引）→ 已评估，不值得做（见 `kb-design-rationale.md` §3）
+- O2（Signature 分配）→ 已有 `CachedCreateArchetype` + edge cache 解决（见 `kb-design-rationale.md` §3.7）
+- O4（FrozenState 字段对调 struct 化）→ `d70c0c3` 已完成，`FrozenState` 现为 struct，`SwapOutState` 一次整体赋值
+
+无剩余可优化点。库处于维护期。
 
 ## 设计张力
 

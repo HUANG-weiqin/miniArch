@@ -1922,16 +1922,29 @@ public sealed class CommandStreamTests
         await RunFrameAsync();
         await RunFrameAsync();
 
-        var frozenRef = stream.ActiveFrozenForTesting;
-        Assert.NotNull(frozenRef);
+        // After steady state the two FrozenState structs alternate roles
+        // every frame. Their Stores arrays also alternate. Verify that no
+        // new Stores array is allocated after frame 2 (count ≤ 2).
+        var field = typeof(CommandStream).GetField("_frozen", BindingFlags.Instance | BindingFlags.NonPublic);
+        var storesField = typeof(CommandStream).GetNestedType("FrozenState", BindingFlags.NonPublic)?.GetField("Stores");
+        var observed = new List<object?>();
 
-        await RunFrameAsync();
-        await RunFrameAsync();
-        await RunFrameAsync();
+        object? GetStores()
+        {
+            var frozenObj = field?.GetValue(stream);
+            return storesField?.GetValue(frozenObj);
+        }
 
-        // In steady state the same FrozenState instance alternates between the
-        // active and spare roles �?no new allocation should occur.
-        Assert.Same(frozenRef, stream.ActiveFrozenForTesting);
+        for (var i = 0; i < 5; i++)
+        {
+            observed.Add(GetStores());
+            await RunFrameAsync();
+        }
+        observed.Add(GetStores());
+
+        var distinct = observed.Distinct().ToList();
+        Assert.True(distinct.Count <= 2,
+            $"Expected ≤ 2 distinct Stores arrays (struct swap recycles 2), got {distinct.Count}");
     }
 
     [Fact]
@@ -2014,8 +2027,6 @@ public sealed class CommandStreamTests
             "_world",
             "_parallelMode",
             "_deferredEntities",
-            "_spareFrozen",
-            "_pendingFrozen",
             "_pendingTask",
             "_storeCreateLock",
             "_lastCreated",
@@ -2034,21 +2045,13 @@ public sealed class CommandStreamTests
             "_lastMaskArchetype",
         };
 
+        // _frozen and _spareFrozen are the two halves of the struct swap;
+        // _pendingFrozen holds the in-flight task's snapshot.
         var swapped = new HashSet<string>
         {
-            "_stores",
-            "_destroyEntities",
-            "_destroyCount",
-            "_pendingBatch",
-            "_pendingBatchCount",
-            "_batchHeads",
-            "_batchCompCounts",
-            "_batchComps",
-            "_batchBuf",
-            "_batchEntities",
-            "_batchCanceled",
-            "_hierarchyByChild",
-            "_unavailableEntities",
+            "_frozen",
+            "_spareFrozen",
+            "_pendingFrozen",
         };
 
         var unclassified = allFields.Where(f => !nonSwapped.Contains(f) && !swapped.Contains(f)).ToList();
