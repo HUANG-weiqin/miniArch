@@ -2,7 +2,7 @@
 title: Test Workflow
 module: MiniArch.Tests
 description: How the test suite, query profiling, snapshot benchmarks, and structural-change benchmarks are organized and how to run them
-updated: 2026-07-03 (FrameDelta.Merge → Concat 重命名)
+updated: 2026-07-03 (GetFirst<T> → GetSingleton<T> 测试更新)
 ---
 # Test Workflow
 
@@ -18,7 +18,7 @@ updated: 2026-07-03 (FrameDelta.Merge → Concat 重命名)
 
 | 测试文件 | 覆盖范围 |
 |---|---|
-| `Core/WorldLifecycleTests.cs` | 实体生命周期、version、free-list、EnsureCapacity、CreateMany、带组件 Create<T...>、GetFirst<T>() |
+| `Core/WorldLifecycleTests.cs` | 实体生命周期、version、free-list、EnsureCapacity、CreateMany、带组件 Create<T...>、GetSingleton<T>() |
 | `Core/WorldStructuralChangeTests.cs` | Add/Set/Remove/Destroy 的 structural semantics |
 | `Core/WorldStatsTests.cs` | WorldStats / ArchetypeStats 诊断快照 |
 | `Core/EntityTests.cs` | Entity 句柄契约 |

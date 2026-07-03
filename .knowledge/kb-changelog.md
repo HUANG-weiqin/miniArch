@@ -2,12 +2,23 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-07-01
+updated: 2026-07-03
 ---
 # Knowledge Base Changelog
 
 > 这个页面只记录**重大架构变更和知识库校准事件**，供追溯。
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
+
+## 2026-07-03 全量审阅落地（死代码 + GetFirst→GetSingleton + 文档校准）
+
+外部 review 确认的问题逐项落地，全部 Debug+Release test 绿，HeroComing.Perf 门禁通过（Movement 1941.8、Attack 1208.9）。
+
+- **死代码删除**：`Core/InlineMap.cs` + `Core/OverflowPool.cs`（约 200 行）。二者构成互相引用的孤立簇，零实例化、零外部 caller、零测试。`deadcode.ps1` 因按符号名统计文本出现次数（自引用计数 >0）而漏报——已知检测盲区。纯删除，IL 仅减少。
+- **API 重命名 `GetFirst<T>()` → `GetSingleton<T>()`**：旧 `GetFirst<T>` 用 `CreateArchetypeCache<T>` 缓存只命中**单组件 `{T}` 原型**，多组件原型里的实体被静默漏掉（语义与 XML doc "stores component T" 不符，且无测试覆盖该边界）。新 `GetSingleton<T>` 全量扫描 archetype，返回**唯一**含 T 的实体（singleton 语义：0 或 >1 抛异常），O(archetypes) 冷路径。同时删除随之变死的 `TryGetCreateArchetype<T>`。
+- **测试**：`WorldLifecycleTests.cs` 删除 3 个 GetFirst 用例，新增 5 个 GetSingleton 用例，其中 `GetSingleton_finds_entity_in_multi_component_archetype` 作为回归用例固化旧 API 的缺陷已修复。
+- **P4 防御性契约**：`CommandStream.CloneImpl` deferred 路径原来忽略 `TryGetPendingBatch` 返回值（依赖 `CreateDeferredImpl` 必设 `_lastCreated` 的隐式契约），改为显式检查并 fail-fast throw。运行时行为零变化，纯防回归。
+- **文档校准（3 处陈旧/矛盾）**：`kb-architecture-review.md` StructuralChange "upsert/Add-Set alias" 改为 strict（指向 §2.9）；`kb-core-ecs.md` 坑点 "Set 静默添加" 改为 strict；`kb-core-ecs.md` 重复的 WorldStats 行去重。
+- **设计原则一致性**：删除死代码兑现"激进 YAGNI"；GetFirst→GetSingleton 兑现"名字诚实"（singleton 实为 singleton）；显式契约兑现 fail-fast 风格。
 
 ## 2026-07-01 ComponentSchema 握手 API
 

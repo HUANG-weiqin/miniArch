@@ -14,23 +14,44 @@ public sealed partial class World
     }
 
     /// <summary>
-    /// Gets the first entity in the archetype that stores component
-    /// <typeparamref name="T" />.
-    /// Uses the same generic archetype cache as <see cref="Create{T}" />,
-    /// so the hot path is O(1) with no allocation and no dictionary lookup.
+    /// Returns the single entity that has component <typeparamref name="T"/>.
+    /// Intended for global/state components that exist on exactly one entity
+    /// (e.g. game settings, turn state, camera). Scans every archetype, so
+    /// this is an O(archetypes) cold path — for multi-entity access use
+    /// <see cref="Query(in QueryDescription)" />.
     /// </summary>
+    /// <remarks>
+    /// Unlike the old <c>GetFirst&lt;T&gt;</c>, this finds the entity
+    /// regardless of which archetype stores it (single- or multi-component).
+    /// </remarks>
     /// <exception cref="InvalidOperationException">
-    /// No entity with component <typeparamref name="T" /> exists.
+    /// Thrown when zero entities have component <typeparamref name="T" />,
+    /// or when more than one entity has it (the singleton contract is violated).
     /// </exception>
-    public Entity GetFirst<T>() where T : unmanaged
+    public Entity GetSingleton<T>() where T : unmanaged
     {
         ThrowIfDisposed();
-        if (!TryGetCreateArchetype<T>(out var archetype) || archetype.EntityCount == 0)
+        var componentType = Component<T>.ComponentType;
+        Entity found = default;
+        var seen = 0;
+        foreach (var archetype in _archetypes.Values)
         {
-            throw new InvalidOperationException(
-                $"No entity with component '{typeof(T).Name}' exists.");
+            if (!archetype.TryGetComponentIndex(componentType, out _)) continue;
+            var count = archetype.EntityCount;
+            if (count == 0) continue;
+            if (seen == 0)
+                found = archetype.GetEntity(0);
+            seen += count;
         }
-        return archetype.GetEntity(0);
+
+        if (seen == 0)
+            throw new InvalidOperationException(
+                $"No entity has component '{typeof(T).Name}'.");
+        if (seen > 1)
+            throw new InvalidOperationException(
+                $"GetSingleton<{typeof(T).Name}>(): expected exactly one entity with this component, but found {seen}.");
+
+        return found;
     }
 
     internal MiniArch.Core.QueryCache GetAdvancedQuery(in QueryDescription description)

@@ -128,7 +128,7 @@ public Span<T> GetComponentSpanAt<T>(int columnIndex) where T : unmanaged
 | `Has<T>(Entity)` | Check component existence |
 | `Access(Entity)` | Returns `EntityAccessor` for batched operations |
 | `TryGetEntityVersion(Entity, out int)` | Check if a handle is alive and get its current version |
-| `GetFirst<T>()` | Get first entity with a given component |
+| `GetSingleton<T>()` | Get the single entity with a given component (throws if zero or >1) |
 | `IsAlive(Entity)` | Validate entity handle |
 | `AddChild(Entity, Entity)` | Parent-child hierarchy |
 | `RemoveChild(Entity)` | Remove from hierarchy |

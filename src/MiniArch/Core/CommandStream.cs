@@ -263,7 +263,17 @@ public sealed class CommandStream
         if (_deferredEntities)
         {
             var clone = CreateDeferredImpl();
-            TryGetPendingBatch(clone, out var batchIdx);
+            // CreateDeferredImpl always allocates a batch slot and publishes it
+            // via _lastCreated, so TryGetPendingBatch must succeed. Check the
+            // return value explicitly instead of relying on the implicit
+            // invariant — a future change that stops setting _lastCreated would
+            // otherwise silently pass batchIdx = -1 into CloneComponents and
+            // corrupt the batch arrays.
+            if (!TryGetPendingBatch(clone, out var batchIdx))
+            {
+                throw new InvalidOperationException(
+                    $"Clone: deferred clone {clone} has no pending batch slot.");
+            }
             CloneComponents(source, info, clone, batchIdx);
             return clone;
         }

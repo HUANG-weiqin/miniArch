@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-07-03 (补 ReserveDeferredEntityUnsafe 无锁变体；单线程 CommandStream 跳过 allocator lock 的契约说明; FrameDelta.Merge → Concat 重命名)
+updated: 2026-07-03 (GetFirst<T> → GetSingleton<T> API 重命名；删除死代码 InlineMap/OverflowPool；修正 strict 语义陈旧描述)
 ---
 # MiniArch Core ECS
 
@@ -39,7 +39,6 @@ updated: 2026-07-03 (补 ReserveDeferredEntityUnsafe 无锁变体；单线程 Co
   - `EntityRecord.cs`：`(Archetype, RowIndex, Version)` 16 字节，合并版本与位置
   - `EntityAccessor.cs`：ref struct，一次 entity 定位后直读/直写多个组件（跳过重复的 `_records` 查找）
   - `WorldStats.cs`：`WorldStats`（全局诊断快照）+ `ArchetypeStats`（单 archetype 快照），纯按需推算、零新增状态
-  - `WorldStats.cs`：`WorldStats`（全局诊断快照）+ `ArchetypeStats`（单 archetype 快照），纯按需推算、零新增状态
   - `EntityBatchRange.cs`：批量创建/克隆的连续范围记录
   - `ManagedReferenceCheck.cs`：托管引用检测
   - `SpanHelper.cs`：排序+去重、hash 合并等 span 工具
@@ -51,7 +50,7 @@ updated: 2026-07-03 (补 ReserveDeferredEntityUnsafe 无锁变体；单线程 Co
 - 数据流 / 控制流：
   - `World` 创建实体后放入空签名 archetype（`World.EntityLifecycle.cs`）
   - `World.Create<T...>` 为 `1..16` 个组件提供固定重载（`World.Create.Generated.cs`）；warmed 路径缓存在泛型 static cache（`CachedCreateArchetype`），O(1) 无分配
-  - `World.GetFirst<T>()` 利用同套泛型 static cache 实现 O(1) 按 component type 查找首个 entity
+  - `World.GetSingleton<T>()` 扫描所有 archetype 返回唯一含 `T` 的实体（singleton 语义：0 或 >1 抛异常），O(archetypes) 冷路径
   - `World.EnsureCapacity` 负责提前扩好 entity metadata 存储
   - `World.CreateMany` 先批量准备 entity id，再一次性落入空签名 archetype
   - `Add/Remove`（`World.StructuralChange.cs`）先算目标签名，再通过 edge cache（`_addDestinationCache`/`_removeDestinationCache` `Archetype?[]` 按 componentId 直索引）找到目标 Archetype，用 `Archetype.CopySharedComponentsFrom` 搬迁共享组件
@@ -76,7 +75,7 @@ updated: 2026-07-03 (补 ReserveDeferredEntityUnsafe 无锁变体；单线程 Co
 | Query facade | `MiniArch.Query` (public struct) | `world.Query(desc)` → `GetChunks()` / `ForEachChunk` |
 | 零分配 chunk job | `MiniArch.IChunkForEach` (public interface) | `query.ForEachChunk<TForEach>(ref job)` |
 | Chunk 视图 | `ChunkView` (public readonly struct) | `chunk.GetSpan<T>()` |
-| O(1) entity 查找 | `World.GetFirst<T>()` | `world.GetFirst<T>()` |
+| Singleton 实体查找 | `World.GetSingleton<T>()` | `world.GetSingleton<T>()`（找唯一含 T 的实体，O(archetypes)） |
 | 注册表指纹 | `MiniArch.ComponentSchema` (public static) | `ComponentSchema.Fingerprint()` |
 
 **关键分层边界：**
@@ -91,7 +90,7 @@ updated: 2026-07-03 (补 ReserveDeferredEntityUnsafe 无锁变体；单线程 Co
 - `MiniArch.Query` 是 struct wrapper，不能用于 identity 断言
 - `EachSpan` 引用会编译失败——改用 `chunk.GetSpan<T>()`
 - `GetChunks()` 返回的 `ChunkView` 是 readonly struct，不能长期持有
-- `GetFirst<T>()` 依赖泛型 static cache（`WeakReference<World>`），跨 World 首次有缓存未命中
+- `GetSingleton<T>()` 是 O(archetypes) 全量扫描，仅用于"全局唯一组件"（设置/状态），不适合热路径；多实体访问走 Query
 
 ## 决策
 
@@ -115,7 +114,7 @@ updated: 2026-07-03 (补 ReserveDeferredEntityUnsafe 无锁变体；单线程 Co
 - `[SkipLocalsInit]` + `AggressiveInlining` + `Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), offset)` 消除 JIT 边界检查
 - Entity version 和 location 合并存储在 `EntityRecord[] _records`：`(Archetype, RowIndex, Version)` 16 字节紧凑布局
 - flat byte storage 只面向 unmanaged 组件；含托管引用组件在 storage 构造时 fail fast
-- `GetFirst<T>()` 复用 `CreateArchetypeCache<T>` 泛型静态缓存，实现 O(1) 按 component type 查找首个 entity
+- `GetSingleton<T>()` 扫描 archetype 返回唯一含 T 的实体（singleton：恰好一个），取代旧的 `GetFirst<T>`（旧 API 只匹配单组件 `{T}` 原型，多组件原型实体被漏掉，语义误导）
 
 ## 认知模型
 
@@ -168,12 +167,12 @@ world.Destroy(e);
 - `Create<T...>` 如果复用 `Add` 迁移路径，会留下中间态 archetype
 - `CreateMany` 不能退化成外部循环调 `Create`
 - Edge cache 用 `Archetype?[]` 按 componentId 直索引，当组件 ID 稀疏时数组可能膨胀
-- `Set` 和 `Add` 在内部可能调用同一底层——组件不存在时 `Set` 会静默添加（当前语义）
+- Add/Set 是 strict 语义：`Add<T>` 组件已存在时抛异常，`Set<T>` 组件不存在时抛异常（详见 `kb-design-rationale.md` §2.9）
 - Query 快照是非原子的，安全性依赖 volatile publish + "world 无并发写"前提
 - `IsAlive` 必须和 `TryGetLocation` 共用同一条 version/location 校验链
 - 性能验证必须看 Arch 对照数据，不能只看自己变快
 - `EntityAccessor` 是 ref struct，不可装箱、不可存字段、不可捕获在 lambda 中
 - 结构变更（Add/Remove）后 entity 可能换 archetype，此时已获取的 accessor 指向旧位置，必须丢弃
-- `GetFirst<T>()` 依赖 `CreateArchetypeCache<T>` 泛型静态缓存，该缓存使用 `WeakReference<World>` 防止跨 World 误命中
+- `GetSingleton<T>()` 取代了旧的 `GetFirst<T>()`：旧 API 用 `CreateArchetypeCache<T>` 缓存只命中单组件 `{T}` 原型；新 API 全量扫描，不再依赖该缓存
 - DebugMetrics 相关的 `#if DEBUG` 计数累加语句已全部删除，不应再引用
 - **同帧 `World.Destroy(e)` + `World.Create()` 的 id 回收与 version 一致性**（**理论风险，当前串行单线程路径安全，但修改时要小心**）：Destroy 把 `(id, version)` 推回 free-list 并对 `EntityRecord[id]` 做 swap-remove + version bump；Create 从 free-list 弹 id 并写新 `EntityRecord[id]`。两者必须严格串行且 Destroy 的 swap-remove 必须先于 Create 的 slot 写入，否则新实体可能读到被销毁实体的旧 `(Archetype, RowIndex)` 或 stale version。验证链：`World.EntityLifecycle.cs:Destroy` → `Archetype.Storage.cs:RemoveAt`（swap-remove）→ free-list push → `World.EntityLifecycle.cs:Create` → free-list pop。**当前在单线程串行调用下安全**（Destroy 的 version bump + swap-remove 在 Create 读 free-list 前完成），但引入 CommandStream 批量 materialize、多线程或 `Destroy` callback 嵌套 `Create` 时可能被打破。跨帧版本（CommandStream Concat 路径）已在 `kb-command-stream.md` "Concat + id 回收" 段文档化并修复。**回归测试入口**：`tests/MiniArch.Tests/Core/WorldLifecycleTests.cs`（当前缺同帧 destroy+create 用例，需补 `Destroy_then_Create_same_frame_recycles_id_with_incremented_version`）

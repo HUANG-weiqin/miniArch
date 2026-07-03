@@ -2,7 +2,7 @@
 title: Architecture Mechanistic Review
 module: MiniArch.Core
 description: Mechanistic insight of the entire miniArch ECS library — one-line truths, subsystem breakdown, data flows, known issues, and design tensions. Links to per-subsystem kb pages for depth.
-updated: 2026-07-03 (FrameDelta.Merge → Concat 重命名)
+updated: 2026-07-03 (GetFirst<T> → GetSingleton<T>；修正 StructuralChange 陈旧的 upsert 描述)
 ---
 # Architecture Mechanistic Review
 
@@ -131,9 +131,9 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
   - `World.cs`：字段 + TryGet/Get/Has + Clone + Replay + archetype lookup
   - `World.EntityLifecycle.cs`：Create/Destroy + free list + 版本管理
   - `World.SnapshotBridge.cs`：snapshot/clone 用的 internal backdoor（`Reset`、`AddChildFromSnapshot`、`SetSnapshot*`、`WriteFreeList`/`ReadFreeList`/`CopyFreeIdsFrom`、`FreeList`、`ValidateSnapshotEntitySlot`）
-  - `World.Create.Generated.cs`：泛型重载 + `GetFirst<T>`
+  - `World.Create.Generated.cs`：泛型重载 + `GetSingleton<T>`
   - `World.QueryCache.cs`：Query 缓存管理
-  - `World.StructuralChange.cs`：Add/Set/Remove（upsert 语义，`Add`/`Set` 是 alias）
+  - `World.StructuralChange.cs`：Add/Set/Remove（strict 语义：`Add` 组件已存在时抛异常，`Set` 组件不存在时抛异常；CommandStream/Replay 同样 strict——详见 `kb-design-rationale.md` §2.9）
   - `World.Checksum.cs`：`Checksum()` / `CanonicalChecksum()` 双模式（详见 `kb-snapshot-persistence.md` Checksum 段）
 - 结构变更核心：查 `EntityRecord` → 算目标签名 → edge cache → `MoveEntityCore`（带 catch rollback）+ `FinishMoveEntity` 分离，便于批量 materialize 复用
 

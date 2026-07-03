@@ -661,33 +661,57 @@ public sealed class WorldLifecycleTests
     }
 
     [Fact]
-    public void GetFirst_returns_first_entity_with_component()
+    public void GetSingleton_returns_the_single_entity_with_component()
     {
         var world = new World();
         var created = world.Create(new Position(1, 2));
 
-        var first = world.GetFirst<Position>();
+        var singleton = world.GetSingleton<Position>();
 
-        Assert.Equal(created, first);
-        Assert.Equal(1, world.Get<Position>(first).X);
+        Assert.Equal(created, singleton);
+        Assert.Equal(1, world.Get<Position>(singleton).X);
     }
 
     [Fact]
-    public void GetFirst_throws_when_no_entity_with_component()
+    public void GetSingleton_finds_entity_in_multi_component_archetype()
+    {
+        // Regression: the old GetFirst<T> only matched the single-component {T}
+        // archetype and silently missed entities in multi-component archetypes.
+        // GetSingleton scans all archetypes and must find this entity.
+        var world = new World();
+        var created = world.Create(new Position(1, 2), new Velocity(3, 4));
+
+        var singleton = world.GetSingleton<Position>();
+
+        Assert.Equal(created, singleton);
+    }
+
+    [Fact]
+    public void GetSingleton_throws_when_no_entity_has_component()
     {
         var world = new World();
 
-        Assert.Throws<InvalidOperationException>(() => world.GetFirst<Position>());
+        Assert.Throws<InvalidOperationException>(() => world.GetSingleton<Position>());
     }
 
     [Fact]
-    public void GetFirst_throws_when_entity_destroyed()
+    public void GetSingleton_throws_when_more_than_one_entity_has_component()
+    {
+        var world = new World();
+        world.Create(new Position(1, 2));
+        world.Create(new Position(3, 4));
+
+        Assert.Throws<InvalidOperationException>(() => world.GetSingleton<Position>());
+    }
+
+    [Fact]
+    public void GetSingleton_throws_when_entity_destroyed()
     {
         var world = new World();
         var entity = world.Create(new Position(1, 2));
         world.Destroy(entity);
 
-        Assert.Throws<InvalidOperationException>(() => world.GetFirst<Position>());
+        Assert.Throws<InvalidOperationException>(() => world.GetSingleton<Position>());
     }
 
     private static void RunOnDedicatedThread(Action action)
