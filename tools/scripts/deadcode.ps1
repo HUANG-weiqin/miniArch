@@ -54,22 +54,22 @@ if (-not $SkipBuild) {
 
 # --- Phase 2: rg scan for unreferenced public/internal symbols ---
 Write-Host $header -ForegroundColor Cyan
-Write-Host "  Phase 2: rg + sg scan for unused public/internal API" -ForegroundColor Cyan
+Write-Host "  Phase 2: rg scan for unused public/internal API" -ForegroundColor Cyan
 Write-Host $header -ForegroundColor Cyan
 Write-Host ""
 
-# Prefer sg (ast-grep) for C#-aware matching, fallback to rg
+# The patterns below are written for ripgrep's regex dialect. ast-grep (sg)
+# uses a completely different DSL and its CLI does not accept ripgrep-style
+# flags, so we deliberately do not support sg here despite its theoretical
+# C#-awareness advantage.
 $tool = $null
-if (Get-Command "sg" -ErrorAction SilentlyContinue) {
-    $tool = "sg"
-} elseif (Get-Command "rg" -ErrorAction SilentlyContinue) {
+if (Get-Command "rg" -ErrorAction SilentlyContinue) {
     $tool = "rg"
 }
 
 if (-not $tool) {
-    Write-Host "Neither sg (ast-grep) nor rg (ripgrep) found." -ForegroundColor Yellow
-    Write-Host "Install one of them to enable public/internal dead code scanning:" -ForegroundColor Yellow
-    Write-Host "  sg:  cargo install ast-grep --locked" -ForegroundColor Yellow
+    Write-Host "rg (ripgrep) not found." -ForegroundColor Yellow
+    Write-Host "Install it to enable public/internal dead code scanning:" -ForegroundColor Yellow
     Write-Host "  rg:  winget install BurntSushi.ripgrep.MSVC" -ForegroundColor Yellow
     Write-Host ""
     Write-Host "Only private member dead code was checked (via build, Phase 1)." -ForegroundColor Yellow
@@ -78,21 +78,24 @@ if (-not $tool) {
     exit 0
 }
 
-# Helper: count references to a symbol name across src + test paths
+# Helper: count references to a symbol name across src + test paths.
+# Uses rg -c which emits "<path>:<count>" per matched file. The path may
+# itself contain ':' on Windows (drive letter such as "E:/repo/..."), so we
+# parse by anchoring on ":<digits>$" rather than splitting on every ':'.
+# rg's two output modes (-n vs -c) emit different slash directions on Windows,
+# so we canonicalize both sides to forward slashes before comparing.
 function Get-ReferenceCount {
     param([string]$Name, [string]$DefFile)
     $count = 0
-    if ($tool -eq "sg") {
-        # When available, use sg for reference search
-        $refs = & sg -l -e "$Name" $srcDir $testDir1 $testDir2 2>$null
-    } else {
-        $output = & rg -c -F "$Name" $srcDir $testDir1 $testDir2 2>$null
-        if (-not $output) { return 0 }
-        foreach ($line in $output) {
-            $parts = $line -split ':'
-            $c = [int]$parts[-1]
-            $f = $parts[0..($parts.Length-2)] -join ':'
-            if ($f -eq $DefFile) { $c-- }
+    $defFileNorm = $DefFile -replace '\\', '/'
+    $output = & rg -c -F "$Name" $srcDir $testDir1 $testDir2 2>$null
+    if (-not $output) { return 0 }
+    foreach ($line in $output) {
+        # Match "<path>:<count>" where path may contain ':' (Windows drive).
+        if ($line -match '^(.+):(\d+)$') {
+            $f = $matches[1] -replace '\\', '/'
+            $c = [int]$matches[2]
+            if ($f -eq $defFileNorm) { $c-- }
             if ($c -gt 0) { $count += $c }
         }
     }
@@ -108,18 +111,17 @@ function Find-Unused {
         [string]$NameExtract
     )
 
-    $defs = if ($tool -eq "sg") {
-        & sg -n $Pattern $SearchDir 2>$null
-    } else {
-        & rg --no-heading -n $Pattern $SearchDir 2>$null
-    }
+    $defs = & rg --no-heading -n $Pattern $SearchDir 2>$null
     if (-not $defs) { return }
 
     foreach ($def in $defs) {
-        $parts = $def -split ':', 3
-        $file = $parts[0]
-        $line = $parts[1]
-        $text = $parts[2]
+        # rg emits "<path>:<line>:<content>". The path may contain ':' on
+        # Windows (drive letter), so anchor the parse with a regex that
+        # greedily takes the path and requires ":<digits>:<rest>" after it.
+        if ($def -notmatch '^(.+):(\d+):(.*)$') { continue }
+        $file = $matches[1]
+        $line = $matches[2]
+        $text = $matches[3]
 
         # Extract symbol name
         $name = $null

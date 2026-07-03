@@ -15,12 +15,6 @@ internal sealed class ComponentRegistry
 
     private readonly object _writeLock = new();
     private RegistrySnapshot _snapshot = new(new Dictionary<Type, ComponentType>(), Array.Empty<Type>());
-    private uint _cachedRegistryHash;
-
-    internal ComponentRegistry()
-    {
-        _cachedRegistryHash = ComputeHash(_snapshot.IdToType);
-    }
 
     /// <summary>
     /// Gets or creates the id for <typeparamref name="T" />.
@@ -58,7 +52,6 @@ internal sealed class ComponentRegistry
             updatedIdToType[^1] = type;
 
             Volatile.Write(ref _snapshot, new RegistrySnapshot(updatedTypeToId, updatedIdToType));
-            _cachedRegistryHash = ComputeHash(updatedIdToType);
             return id;
         }
     }
@@ -103,12 +96,6 @@ internal sealed class ComponentRegistry
     /// </summary>
     internal byte[] GetFingerprint() => ComputeFingerprintBytes(Volatile.Read(ref _snapshot).IdToType);
 
-    /// <summary>
-    /// Returns the cached 4-byte hash of the full registry.
-    /// Computed eagerly on each registration; reading is a volatile load —zero cost on the hot path.
-    /// </summary>
-    internal uint GetRegistryHash() => Volatile.Read(ref _cachedRegistryHash);
-
     private static byte[] ComputeFingerprintBytes(Type[] idToType)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -124,9 +111,6 @@ internal sealed class ComponentRegistry
 
         return hash.GetHashAndReset();
     }
-
-    private static uint ComputeHash(Type[] idToType)
-        => BitConverter.ToUInt32(ComputeFingerprintBytes(idToType), 0);
 
     private sealed record RegistrySnapshot(IReadOnlyDictionary<Type, ComponentType> TypeToId, Type[] IdToType);
 }

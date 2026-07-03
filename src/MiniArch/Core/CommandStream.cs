@@ -613,7 +613,7 @@ public sealed class CommandStream
         var rawCount = view.CompCounts[batchIdx];
         if (rawCount == 0)
         {
-            _world.MaterializeReservedEntity(entity, Array.Empty<RawComponentValue>(), reservationChecked: true);
+            _world.MaterializeEmptyReservedEntity(entity);
             return;
         }
 
@@ -673,7 +673,7 @@ public sealed class CommandStream
 
             if (idx == 0)
             {
-                _world.MaterializeReservedEntity(entity, Array.Empty<RawComponentValue>(), reservationChecked: true);
+                _world.MaterializeEmptyReservedEntity(entity);
                 return;
             }
 
@@ -1425,30 +1425,13 @@ public sealed class CommandStream
         // be in the reserved state, so we release their ids back to the World's
         // free list here. Either way Clear is self-sufficient —it does not rely
         // on the caller having materialized anything.
-        if (releaseReserved)
+        for (var i = 0; i < _frozen.PendingBatchCount; i++)
         {
-            for (var i = 0; i < _frozen.PendingBatchCount; i++)
-            {
-                if (_frozen.BatchCanceled[i]) continue;
-                var entity = _frozen.BatchEntities[i];
-                if (entity.Id >= 0)
-                {
-                    _frozen.PendingBatch[entity.Id] = -1;
-                    _world.TryReleaseReserved(entity);
-                }
-            }
-        }
-        else
-        {
-            for (var i = 0; i < _frozen.PendingBatchCount; i++)
-            {
-                if (_frozen.BatchCanceled[i]) continue;
-                var entity = _frozen.BatchEntities[i];
-                if (entity.Id >= 0)
-                {
-                    _frozen.PendingBatch[entity.Id] = -1;
-                }
-            }
+            if (_frozen.BatchCanceled[i]) continue;
+            var entity = _frozen.BatchEntities[i];
+            if (entity.Id < 0) continue;
+            _frozen.PendingBatch[entity.Id] = -1;
+            if (releaseReserved) _world.TryReleaseReserved(entity);
         }
         _deferredSeq = 0;
         _frozen.DestroyCount = 0;

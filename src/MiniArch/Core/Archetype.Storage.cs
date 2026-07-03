@@ -705,8 +705,9 @@ internal sealed partial class Archetype
 
     internal void RebuildFlatEntities()
     {
+        // Bumping the generation invalidates GetEntityStorage's cache; the
+        // next read will rebuild _cachedFlatEntities from current segments.
         _flatEntitiesGeneration++;
-        _cachedFlatEntitiesGeneration = -1;
     }
 
     internal void ResetCount()

@@ -402,17 +402,6 @@ public sealed class FrameDelta
         _length = pos;
     }
 
-    private void WriteDataWithSize(byte[] data, int offset, int size)
-    {
-        var pos = _length;
-        var headerSize = VarintSize(size);
-        Grow(headerSize + size);
-        WriteVarintAt(ref pos, size);
-        if (size > 0)
-            Buffer.BlockCopy(data, offset, _buffer, pos, size);
-        _length = pos + size;
-    }
-
     internal void AddReserve(Entity e)
     {
         WriteTag(DeltaOpKind.Reserve);
@@ -476,12 +465,6 @@ public sealed class FrameDelta
         _opCount++;
     }
 
-    internal void AddAdd(Entity e, ComponentType t, byte[] data, int offset, int size)
-        => AddComponentData(DeltaOpKind.Add, e, t, data, offset, size);
-
-    internal void AddSet(Entity e, ComponentType t, byte[] data, int offset, int size)
-        => AddComponentData(DeltaOpKind.Set, e, t, data, offset, size);
-
     internal void AddRemove(Entity e, ComponentType t)
     {
         WriteTag(DeltaOpKind.Remove);
@@ -495,15 +478,6 @@ public sealed class FrameDelta
 
     internal unsafe void AddSetUnsafe(Entity e, ComponentType t, void* data, int size)
         => AddComponentDataUnsafe(DeltaOpKind.Set, e, t, data, size);
-
-    private void AddComponentData(DeltaOpKind kind, Entity e, ComponentType t, byte[] data, int offset, int size)
-    {
-        WriteTag(kind);
-        WriteEntity(e);
-        WriteComponentType(t);
-        WriteDataWithSize(data, offset, size);
-        _opCount++;
-    }
 
     private unsafe void AddComponentDataUnsafe(DeltaOpKind kind, Entity e, ComponentType t, void* data, int size)
     {
@@ -617,22 +591,6 @@ public sealed class FrameDelta
         public ComponentType ReadComponentType()
         {
             return new ComponentType(ReadVarint());
-        }
-
-        /// <summary>
-        /// Reads a length-prefixed byte span (component payload).
-        /// </summary>
-        public ReadOnlySpan<byte> ReadData()
-        {
-            var size = ReadVarint();
-            if (size <= 0) return ReadOnlySpan<byte>.Empty;
-            if (_pos + size > _end)
-                throw new InvalidOperationException(
-                    $"Truncated FrameDelta: insufficient data for component payload at offset {_pos} " +
-                    $"(need {size} bytes, {_end - _pos} remaining).");
-            var span = new ReadOnlySpan<byte>(_buffer, _pos, size);
-            _pos += size;
-            return span;
         }
 
         /// <summary>

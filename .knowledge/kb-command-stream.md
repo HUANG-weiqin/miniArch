@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream typed-store append-only recorder, compatible with FrameDelta. The per-entity deduplicating CommandBuffer was removed (YAGNI) — CommandStream is now the sole recorder.
-updated: 2026-07-03 (补 trace 优化：Create 单线程无锁化、Destroy 按需 hierarchy unavailable lookup、并发 reserve 契约明确; FrameDelta.Merge → Concat 重命名)
+updated: 2026-07-03 (补 trace 优化：Create 单线程无锁化、Destroy 按需 hierarchy unavailable lookup、并发 reserve 契约明确; FrameDelta.Merge → Concat 重命名; MaterializeReservedEntity IReadOnlyList 链替换为 MaterializeEmptyReservedEntity)
 ---
 # Command Stream Runtime
 
@@ -117,7 +117,7 @@ HeroPipeline 回归测试涨幅：
 - `CommandStream` 不做 per-entity/per-component 去重；重复命令的净效果由调用方负责。
 - ~~**混合 World.Create（排序）与 CommandStream（未排序）可能产生重复 archetype**~~ **（已修复，保留作历史）**：早期 CommandStream 用 `Signature.CreateNormalized` 按 ADD 顺序存储不排序，与 `World.Create<T>` 的排序构造函数产生不同 Signature key。**当前 CommandStream materialize 两条路径都已排序**：`hasLargeIds` 分支显式 `SortTypesAndOffsets` + `DeduplicateSortedSpans`（`CommandStream.cs:755-756`）；mask 分支通过 `MaskToTypes` 按位序升序枚举（`CommandStream.cs:1113`）。两者产出的 Signature 与 `World.Create<T>` 完全一致，不再有 archetype 重复。曾经的 fallback `World.TryGetArchetype` 已于 2026-06-29 作为死代码删除。
 - **CommandStream 支持对 pending entity 调用 Remove**（2026-06-10 修复）：同批次内通过 `Create()` 或 `Clone()` 创建的实体处于 pending 状态。对其调用 `Remove<T>()` 现在通过 `BatchedComponent.Removed` 标记正确移除组件。`CommandStreamTests.Remove_on_pending_clone_removes_component` 验证。
-- **CommandStream 支持创建零组件的空实体**（2026-06-10 修复）：`Create()` 后未调用任何 `Add<T>()` 的实体现在通过 `MaterializeReservedEntity(entity, Array.Empty<>())` 正确 materialize 为无组件实体。`CommandStreamTests.CrossWorld_replay_create_empty_entity` 验证。
+- **CommandStream 支持创建零组件的空实体**（2026-06-10 修复，2026-07-03 重构为 `MaterializeEmptyReservedEntity`）：`Create()` 后未调用任何 `Add<T>()` 的实体通过 `World.MaterializeEmptyReservedEntity(entity)` 正确 materialize 为无组件实体。`CommandStreamTests.CrossWorld_replay_create_empty_entity` 验证。
 - **CommandStream 同批次中 Destroy 后不再影响其他操作**（2026-06-10 修复）：`ApplyAllEntries` 改为两遍处理（pass 1: Create/Add/Set/Remove，pass 2: Destroy），"先 ApplyOps 再 Destroy"顺序。同批次内先 Destroy 后 Add/Set 同一实体现在安全（Add/Set 先执行，然后 Destroy 销毁实体）。对 pending entity，`CancelPendingEntity` 后的条目在 materialize 时通过 `_pendingBatch[id] < 0` 检测跳过。`CommandStreamTests.Fuzz_200_frames_submit_and_verify_entity_count_stability` 不再需要 `destroyedThisFrame` 过滤。
 - **CommandStream pending batch 组件归属使用 per-batch 链表**（2026-06-11 修复）：旧实现用 `_batchCompCounts` 前缀和 + 扁平 `_batchComps` 数组，隐式假设每个 batch 的组件在数组中连续。但录制 API 不保证此顺序（例如 `Create(A), Create(B), Add(B,V), Add(A,P)` 时组件按 B→A 顺序写入数组，前缀扫描会将 V 误归给 A）。修复为 per-batch 单链表（`_batchHeads[]` 指向每个 batch 的链表头，`BatchedComponent.Next` 链接节点），彻底消除组件归属错误。`CommitBatchComponent` 不做 last-wins 遍历（O(1) prepend），materialize 时稳定排序+去重达到 last-wins 语义。详见测试 `Interleaved_pending_creates_get_correct_components`、`Remove_pending_component_then_create_another_entity` 等。
 

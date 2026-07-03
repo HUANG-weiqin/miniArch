@@ -2,14 +2,35 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-07-03
+updated: 2026-07-03 (dead code 全量清理 + deadcode.ps1 修复)
 ---
 # Knowledge Base Changelog
 
 > 这个页面只记录**重大架构变更和知识库校准事件**，供追溯。
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
 
-## 2026-07-03 全量审阅落地（死代码 + GetFirst→GetSingleton + 文档校准）
+## 2026-07-03 全量审阅落地（死代码清理 + deadcode.ps1 修复 + 过度防御改善）
+
+全量代码审阅完结，逐项落地。所有 Debug + Release test 绿，HeroComing.Perf 门禁通过（Movement 2002.3、Attack 1217.0）。
+
+- **`deadcode.ps1` 三处 bug 修复**：
+  - Bug 1：`$def -split ':', 3` 在 Windows 盘符（`E:`)处断开 → 改为 `'^(.+):(\d+):(.*)$'` regex 解析
+  - Bug 2：`rg -c` 输出正斜杠 vs `rg -n` 输出反斜杠 → 比较前统一为 `/`
+  - Bug 3：脚本优先使用 `sg -n` 但 ast-grep 不支持该语法 → 移除 sg 分支，固定使用 rg
+  - 修完后脚本能正确检测死代码（验证：插入故意死方法后被捕获）
+- **旧 `CommandBuffer` 残留死代码删除**：
+  - `World.cs: MaterializeReservedEntity(IReadOnlyList<RawComponentValue>, bool)`、`MaterializeReservedEntityCore`、`MaterializeReservedEntityDirect`、`BuildReplaySignature` — 整条 IReadOnlyList 链只有 3 个空组件调用方，替换为 `MaterializeEmptyReservedEntity`（2 行 inline helper）
+  - `FrameDelta.cs: AddAdd/AddSet(byte[] 重载)`、`AddComponentData`、`WriteDataWithSize` — 热路径用 unsafe 变体，byte[] 重载零调用
+  - `FrameDelta.cs: ReadData()` — 零调用（ReplayCore 用 ReadVarint+ReadBytes）
+- **组件相关死代码删除**：
+  - `ComponentType.cs` 的 `implicit operator int` 和 `explicit operator ComponentType(int)` — 零调用（全库用 `.Value`）
+  - `ComponentRegistry.cs: GetRegistryHash()` + `_cachedRegistryHash` 字段 + `ComputeHash` — 零调用，无人读取该 hash
+- **公共 API 简化**：
+  - `World.TryGetEntityVersion()` — 零调用，`IsAlive` 已覆盖，按 YAGNI 删除
+- **过度防御改善**：
+  - `CommandStream.Clear(releaseReserved)` 的 if/else 双分支合并为单循环+条件
+  - `Archetype.RebuildFlatEntities()` 移除冗余 `_cachedFlatEntitiesGeneration = -1`（`_flatEntitiesGeneration++` 已使缓存失效）
+- **kb 同步**：`kb-changelog.md` 本条目
 
 外部 review 确认的问题逐项落地，全部 Debug+Release test 绿，HeroComing.Perf 门禁通过（Movement 1941.8、Attack 1208.9）。
 

@@ -116,33 +116,6 @@ public sealed partial class World
         }
     }
 
-    /// <summary>
-    /// Tries to get the current version of an entity handle. Returns <c>true</c>
-    /// if the entity is alive, in which case <paramref name="version"/> contains
-    /// the entity's current version (same as <c>entity.Version</c> for an up-to-date
-    /// handle, or higher if the entity has been destroyed and recreated).
-    /// Use <see cref="IsAlive"/> for a simple liveness check.
-    /// </summary>
-    public bool TryGetEntityVersion(Entity entity, out int version)
-    {
-        ThrowIfDisposed();
-        if (entity.Id < 0 || entity.Id >= _entitySlotCount)
-        {
-            version = -1;
-            return false;
-        }
-
-        ref var record = ref _records[entity.Id];
-        if (!record.IsOccupied || record.Version != entity.Version)
-        {
-            version = -1;
-            return false;
-        }
-
-        version = record.Version;
-        return true;
-    }
-
     internal bool TryGetLocation(Entity entity, out EntityInfo info)
     {
         ThrowIfDisposed();

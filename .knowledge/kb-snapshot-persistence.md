@@ -2,7 +2,7 @@
 title: Snapshot Persistence
 module: MiniArch.Core Snapshot
 description: Full-world snapshot save/load design for unmanaged components (WorldSnapshot.Save/Load, Clone, CaptureState/RestoreState), plus Checksum double mode
-updated: 2026-07-01 (v4 CRC32 尾部校验 + 格式版本 bumped to 4)
+updated: 2026-07-03 (坑点修正 CaptureState/CommandStream 交互描述，实测确认 `Clear()` 复位 `_deferredSeq`)
 ---
 # Snapshot Persistence
 
@@ -127,3 +127,9 @@ v3 格式仍可读且跳过 CRC 校验。
 - `struct` 不一定是 `unmanaged`
 - 跨版本类型名变化直接失配（当前不压缩、无校验和）
 - internal 重建 API 分布在 World 的多个 partial 文件中，修改时需确认编译范围
+- **`CaptureState` 后使用 `CommandStream.Record` 再 `RestoreState` 是安全的**：`Clear()` 会重置 `_deferredSeq = 0`（见 `CommandStream.cs:1436`），`RestoreState` 恢复 World 的 entity allocator 状态。实测验证过：capture → stream record+snapshot+replay → restore → 重复同一序列 → checksum 一致。坑点不在 `_deferredSeq`，而在以下场景：
+  - **`RestoreState` 后如果继续录制而不 `Clear`**：`_deferredSeq` 不会自动回退（它不在 World 里）。但在正常 GGPO 流程中，`RestoreState` 后应该是重新录制修正后的输入，此时先 `Clear()` 再 `Record` 即可。
+  - **`CaptureState` 前后 `CommandStream` 的 pending batch 状态**（`_frozen.PendingBatch`、`_frozen.PendingBatchCount` 等）不在 World 内，不被 capture/restore。如果 capture 前 stream 有未 snapshot 的 batch，restore 后这些 batch 会残留。**建议 capture 前先 `Snapshot()` + `Clear()` 确保 stream 干净。**
+- **推荐模式**：
+  - **纯 GGPO（无录制）**：`CaptureState` → 直接读写组件 → `RestoreState` → 重新跑系统。
+  - **录制 + 回滚**：capture 前先 `stream.Snapshot()` + `stream.Clear()` 排空，然后 `CaptureState()` → 录制/Replay/跑系统 → `RestoreState()` → `stream.Clear()` → 重新录制修正输入 → `Snapshot` → `Replay` → 跑系统。

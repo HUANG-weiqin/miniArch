@@ -1,4 +1,4 @@
-﻿using System.Buffers;
+using System.Buffers;
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -737,7 +737,7 @@ public sealed partial class World : IDisposable
 
         if (compCount == 0)
         {
-            MaterializeReservedEntityCore(entity, Signature.Empty, Array.Empty<RawComponentValue>());
+            MaterializeEmptyReservedEntity(entity);
             return;
         }
 
@@ -816,20 +816,6 @@ public sealed partial class World : IDisposable
         MaterializeReservedEntityRaw(entity, archetype, types, offsets, bufPtr);
     }
 
-    internal void MaterializeReservedEntity(
-        Entity entity,
-        IReadOnlyList<RawComponentValue> components,
-        bool reservationChecked = false)
-    {
-        if (!reservationChecked)
-        {
-            EnsureReplayReservation(entity);
-        }
-
-        var signature = BuildReplaySignature(components);
-        MaterializeReservedEntityCore(entity, signature, components);
-    }
-
     /// <summary>
     /// Adds an entity to an archetype and records its location. Shared prologue
     /// for all MaterializeReservedEntity* variants.
@@ -844,19 +830,16 @@ public sealed partial class World : IDisposable
         return rowIndex;
     }
 
-    internal unsafe void MaterializeReservedEntityDirect(Entity entity, Archetype archetype, ReadOnlySpan<RawComponentValue> components)
+    /// <summary>
+    /// Materializes a previously-reserved entity with no components. The entity
+    /// must already have been reserved via <see cref="ReserveDeferredEntityUnsafe"/>
+    /// or a Replay Reserve op —this method does not re-check reservation.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void MaterializeEmptyReservedEntity(Entity entity)
     {
-        var rowIndex = PlaceEntityInArchetype(entity, archetype);
-
-        for (var index = 0; index < components.Length; index++)
-        {
-            ref readonly var component = ref components[index];
-            var columnIndex = archetype.GetComponentIndexFast(component.ComponentType);
-            fixed (byte* ptr = component.Data)
-            {
-                archetype.WriteComponentRaw(columnIndex, rowIndex, ptr + component.DataOffset);
-            }
-        }
+        var archetype = GetOrCreateArchetype(Signature.Empty);
+        PlaceEntityInArchetype(entity, archetype);
     }
 
     /// <summary>
@@ -876,44 +859,6 @@ public sealed partial class World : IDisposable
             var colIdx = archetype.GetComponentIndexFast(types[i]);
             archetype.WriteComponentRaw(colIdx, rowIndex, buffer + offsets[i]);
         }
-    }
-
-    private void MaterializeReservedEntityCore(
-        Entity entity,
-        Signature signature,
-        IReadOnlyList<RawComponentValue> components)
-    {
-        var archetype = GetOrCreateArchetype(signature);
-        var rowIndex = PlaceEntityInArchetype(entity, archetype);
-
-        for (var index = 0; index < components.Count; index++)
-        {
-            var component = components[index];
-            var columnIndex = archetype.GetComponentIndexFast(component.ComponentType);
-            unsafe
-            {
-                fixed (byte* ptr = component.Data)
-                {
-                    archetype.WriteComponentRaw(columnIndex, rowIndex, ptr + component.DataOffset);
-                }
-            }
-        }
-    }
-
-    private static Signature BuildReplaySignature(IReadOnlyList<RawComponentValue> components)
-    {
-        if (components.Count == 0)
-        {
-            return Signature.Empty;
-        }
-
-        var componentTypes = new ComponentType[components.Count];
-        for (var index = 0; index < components.Count; index++)
-        {
-            componentTypes[index] = components[index].ComponentType;
-        }
-
-        return new Signature(componentTypes);
     }
 
 
