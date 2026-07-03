@@ -28,21 +28,62 @@ public readonly struct Query
     public QueryEnumerator GetEnumerator() => new(_query);
 
     /// <summary>
-    /// Returns an ordered entity enumerable using an internally pooled buffer per enumeration.
+    /// Returns entities sorted by <see cref="Entity.Id"/> using an internally pooled buffer.
     /// </summary>
-    public OrderedQuery OrderBy(IComparer<Entity> comparer)
+    public OrderedEntityQuery OrderByEntityId()
     {
-        ArgumentNullException.ThrowIfNull(comparer);
-        return new OrderedQuery(_query, comparer);
+        return new OrderedEntityQuery(_query, descending: false);
     }
 
     /// <summary>
-    /// Returns an ordered entity enumerable using an internally pooled buffer per enumeration.
+    /// Returns entities sorted by <see cref="Entity.Id"/> in descending order.
     /// </summary>
-    public OrderedQuery OrderBy(Comparison<Entity> comparison)
+    public OrderedEntityQuery OrderByEntityIdDescending()
+    {
+        return new OrderedEntityQuery(_query, descending: true);
+    }
+
+    /// <summary>
+    /// Returns entities sorted by component <typeparamref name="T"/>.
+    /// Reads all T values in a single linear scan for cache-friendly sorting.
+    /// </summary>
+    public OrderedComponentQuery<T> OrderByComponent<T>(Comparison<T> comparison)
+        where T : unmanaged
     {
         ArgumentNullException.ThrowIfNull(comparison);
-        return OrderBy(Comparer<Entity>.Create(comparison));
+        return new OrderedComponentQuery<T>(_query, comparison, descending: false);
+    }
+
+    /// <summary>
+    /// Returns entities sorted by component <typeparamref name="T"/> in descending order.
+    /// </summary>
+    public OrderedComponentQuery<T> OrderByComponentDescending<T>(Comparison<T> comparison)
+        where T : unmanaged
+    {
+        ArgumentNullException.ThrowIfNull(comparison);
+        return new OrderedComponentQuery<T>(_query, comparison, descending: true);
+    }
+
+    /// <summary>
+    /// Returns entities sorted by component <typeparamref name="T"/>
+    /// using a reusable <see cref="IComparer{T}"/>.
+    /// </summary>
+    public OrderedComponentQuery<T> OrderByComponent<T>(IComparer<T> comparer)
+        where T : unmanaged
+    {
+        ArgumentNullException.ThrowIfNull(comparer);
+        return new OrderedComponentQuery<T>(_query, comparer.Compare, descending: false);
+    }
+
+    /// <summary>
+    /// Returns entities sorted by component <typeparamref name="T"/> in descending order
+    /// using a reusable <see cref="IComparer{T}"/>.
+    /// </summary>
+    public OrderedComponentQuery<T> OrderByComponentDescending<T>(IComparer<T> comparer)
+        where T : unmanaged
+    {
+        ArgumentNullException.ThrowIfNull(comparer);
+        return new OrderedComponentQuery<T>(_query, comparer.Compare, descending: true);
     }
 
     // ================================================================
@@ -326,42 +367,42 @@ public struct QueryEnumerator
 }
 
 /// <summary>
-/// Entity-only ordered query facade that materializes and sorts results per enumeration.
+/// Entity-only ordered query facade that materializes and sorts results by <see cref="Entity.Id"/> per enumeration.
 /// </summary>
-public readonly struct OrderedQuery
+public readonly struct OrderedEntityQuery
 {
     private readonly MiniArch.Core.QueryCache _query;
-    private readonly IComparer<Entity> _comparer;
+    private readonly bool _descending;
 
-    internal OrderedQuery(MiniArch.Core.QueryCache query, IComparer<Entity> comparer)
+    internal OrderedEntityQuery(MiniArch.Core.QueryCache query, bool descending)
     {
         _query = query;
-        _comparer = comparer;
+        _descending = descending;
     }
 
     /// <summary>
     /// Returns the struct enumerator used by foreach.
     /// </summary>
-    public OrderedQueryEnumerator GetEnumerator() => new(_query, _comparer);
+    public OrderedEntityEnumerator GetEnumerator() => new(_query, _descending);
 }
 
 /// <summary>
-/// Struct enumerator over sorted entities.
+/// Struct enumerator over entities sorted by <see cref="Entity.Id"/>.
 /// </summary>
-public struct OrderedQueryEnumerator : IDisposable
+public struct OrderedEntityEnumerator : IDisposable
 {
     private readonly MiniArch.Core.QueryCache _query;
-    private readonly IComparer<Entity> _comparer;
+    private readonly bool _descending;
     private Entity[]? _entities;
     private int _count;
     private int _index;
     private bool _initialized;
     private Entity _current;
 
-    internal OrderedQueryEnumerator(MiniArch.Core.QueryCache query, IComparer<Entity> comparer)
+    internal OrderedEntityEnumerator(MiniArch.Core.QueryCache query, bool descending)
     {
         _query = query;
-        _comparer = comparer;
+        _descending = descending;
         _entities = null;
         _count = 0;
         _index = -1;
@@ -380,15 +421,11 @@ public struct OrderedQueryEnumerator : IDisposable
     public bool MoveNext()
     {
         if (!_initialized)
-        {
             Initialize();
-        }
 
         _index++;
         if (_index >= _count)
-        {
             return false;
-        }
 
         _current = _entities![_index];
         return true;
@@ -401,9 +438,7 @@ public struct OrderedQueryEnumerator : IDisposable
     {
         var entities = _entities;
         if (entities is null)
-        {
             return;
-        }
 
         _entities = null;
         _count = 0;
@@ -416,30 +451,214 @@ public struct OrderedQueryEnumerator : IDisposable
 
         var archetypes = _query.GetArchetypeArray(out var archetypeCount);
         var count = 0;
-        for (var archetypeIndex = 0; archetypeIndex < archetypeCount; archetypeIndex++)
-        {
-            count += archetypes[archetypeIndex].EntityCount;
-        }
+        for (var i = 0; i < archetypeCount; i++)
+            count += archetypes[i].EntityCount;
 
         if (count == 0)
-        {
             return;
-        }
 
         var entities = ArrayPool<Entity>.Shared.Rent(count);
         _entities = entities;
         _count = count;
 
         var entityIndex = 0;
-        for (var archetypeIndex = 0; archetypeIndex < archetypeCount; archetypeIndex++)
+        for (var i = 0; i < archetypeCount; i++)
         {
-            var archetype = archetypes[archetypeIndex];
+            var archetype = archetypes[i];
             var storage = archetype.GetEntityStorage();
             var rowCount = archetype.EntityCount;
             Array.Copy(storage, 0, entities, entityIndex, rowCount);
             entityIndex += rowCount;
         }
 
-        Array.Sort(entities, 0, count, _comparer);
+        // Entity record struct implements IComparable<Entity> comparing (Id, Version).
+        Array.Sort(entities, 0, count);
+
+        if (_descending)
+            Array.Reverse(entities, 0, count);
+    }
+}
+
+/// <summary>
+/// Entity query facade that sorts matching entities by component <typeparamref name="T"/>.
+/// Internally batch-reads all T values in a single linear scan per archetype,
+/// then sorts using the provided comparison.
+/// </summary>
+public readonly struct OrderedComponentQuery<T> where T : unmanaged
+{
+    private readonly MiniArch.Core.QueryCache _query;
+    private readonly Comparison<T> _comparison;
+    private readonly bool _descending;
+
+    internal OrderedComponentQuery(MiniArch.Core.QueryCache query, Comparison<T> comparison, bool descending)
+    {
+        _query = query;
+        _comparison = comparison;
+        _descending = descending;
+    }
+
+    /// <summary>
+    /// Returns the struct enumerator used by foreach.
+    /// </summary>
+    public OrderedComponentEnumerator<T> GetEnumerator() => new(_query, _comparison, _descending);
+}
+
+/// <summary>
+/// Struct enumerator over entities sorted by component <typeparamref name="T"/>.
+/// </summary>
+public struct OrderedComponentEnumerator<T> : IDisposable where T : unmanaged
+{
+    private readonly MiniArch.Core.QueryCache _query;
+    private readonly Comparison<T> _comparison;
+    private readonly bool _descending;
+    private Entity[]? _entities;
+    private T[]? _values;
+    private int _count;
+    private int _index;
+    private bool _initialized;
+    private Entity _current;
+
+    internal OrderedComponentEnumerator(MiniArch.Core.QueryCache query, Comparison<T> comparison, bool descending)
+    {
+        _query = query;
+        _comparison = comparison;
+        _descending = descending;
+        _entities = null;
+        _values = null;
+        _count = 0;
+        _index = -1;
+        _initialized = false;
+        _current = default;
+    }
+
+    /// <summary>
+    /// Gets the current entity.
+    /// </summary>
+    public Entity Current => _current;
+
+    /// <summary>
+    /// Advances to the next sorted entity.
+    /// </summary>
+    public bool MoveNext()
+    {
+        if (!_initialized)
+            Initialize();
+
+        _index++;
+        if (_index >= _count)
+            return false;
+
+        _current = _entities![_index];
+        return true;
+    }
+
+    /// <summary>
+    /// Returns the rented sort buffers.
+    /// </summary>
+    public void Dispose()
+    {
+        var entities = _entities;
+        var values = _values;
+        if (entities is not null)
+        {
+            _entities = null;
+            _count = 0;
+            ArrayPool<Entity>.Shared.Return(entities);
+        }
+        if (values is not null)
+        {
+            _values = null;
+            ArrayPool<T>.Shared.Return(values);
+        }
+    }
+
+    private void Initialize()
+    {
+        _initialized = true;
+
+        var archetypes = _query.GetArchetypeArray(out var archetypeCount);
+        var count = 0;
+        for (var i = 0; i < archetypeCount; i++)
+            count += archetypes[i].EntityCount;
+
+        if (count == 0)
+            return;
+
+        var componentType = Core.Component<T>.ComponentType;
+
+        // Fail-fast: all matched archetypes must contain component T.
+        for (var i = 0; i < archetypeCount; i++)
+        {
+            if (!archetypes[i].TryGetComponentIndex(componentType, out _))
+            {
+                throw new InvalidOperationException(
+                    $"Cannot sort by '{typeof(T).Name}': archetype {i} lacks this component. " +
+                    $"Add .With<{typeof(T).Name}>() to the QueryDescription.");
+            }
+        }
+
+        var entities = ArrayPool<Entity>.Shared.Rent(count);
+        var values = ArrayPool<T>.Shared.Rent(count);
+        _entities = entities;
+        _values = values;
+        _count = count;
+
+        var index = 0;
+        for (var i = 0; i < archetypeCount; i++)
+        {
+            var archetype = archetypes[i];
+            var rowCount = archetype.EntityCount;
+            if (rowCount == 0)
+                continue;
+
+            var entitySpan = archetype.GetEntityStorage();
+            entitySpan.AsSpan(0, rowCount).CopyTo(entities.AsSpan(index));
+
+            var componentSpan = archetype.GetComponentSpan<T>(componentType);
+            componentSpan.Slice(0, rowCount).CopyTo(values.AsSpan(index));
+
+            index += rowCount;
+        }
+
+        // Sort values as keys, rearranging entities accordingly.
+        var comparison = _comparison; // local copy avoids CS1673 in struct
+        var comparer = ComparisonCache<T>.Acquire(comparison, _descending);
+        Array.Sort(values, entities, 0, count, comparer);
+    }
+}
+
+/// <summary>
+/// Thread-local cached <see cref="IComparer{T}"/> that wraps a <see cref="Comparison{T}"/>
+/// without per-call allocation. <c>Array.Sort</c> accepts <c>IComparer{T}</c> only as a
+/// reference type, so a single cached instance is reused across calls on the same thread.
+/// </summary>
+internal static class ComparisonCache<T>
+{
+    [ThreadStatic]
+    private static ComparisonComparer? t_cached;
+
+    internal static IComparer<T> Acquire(Comparison<T> comparison, bool descending)
+    {
+        var c = t_cached;
+        if (c is null)
+        {
+            c = new ComparisonComparer();
+            t_cached = c;
+        }
+        c.Comparison = comparison;
+        c.Descending = descending;
+        return c;
+    }
+
+    private sealed class ComparisonComparer : IComparer<T>
+    {
+        public Comparison<T>? Comparison;
+        public bool Descending;
+
+        public int Compare(T? x, T? y)
+        {
+            var cmp = Comparison!;
+            return Descending ? cmp(y!, x!) : cmp(x!, y!);
+        }
     }
 }

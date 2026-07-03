@@ -47,7 +47,7 @@ updated: 2026-07-01 (+ PBT PropertyBased/ 目录 + FsCheck 集成 + wire budget 
 | `PropertyBased/SerializationRoundtripPropertyTests.cs` | FsCheck 属性测试：Save/Load roundtrip 保持 canonical checksum（200 次随机 iteration） |
 | `Persistence/WorldSnapshotTests.cs` | Round-trip、free slot version、unsupported component、Tier 1 in-memory rollback（含 chunked archetype 跨 segment 回滚 + prediction 后 segment 增长回滚） |
 | `Persistence/WorldCloneTests.cs` | 内存直拷克隆 |
-| `UserApi/UserQueryTests.cs` | 普通 API 契约、OrderBy |
+| `UserApi/UserQueryTests.cs` | 普通 API 契约、OrderByEntityId/OrderByComponent |
 
 ## 决策
 

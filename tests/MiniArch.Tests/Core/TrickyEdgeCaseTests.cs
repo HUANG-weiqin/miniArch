@@ -657,7 +657,7 @@ public sealed class TrickyEdgeCaseTests
     }
 
     // ══════════════════════════════════════════════════════—
-    // Category 8: TryGet / OrderBy / Query Behaviors
+    // Category 8: TryGet / OrderByEntityId / Query Behaviors
     // ══════════════════════════════════════════════════════—
 
     [Fact]
@@ -682,7 +682,7 @@ public sealed class TrickyEdgeCaseTests
     }
 
     [Fact]
-    public void Default_OrderBy_returns_sorted_entities()
+    public void OrderByEntityId_returns_sorted_entities()
     {
         var world = new World();
         var entities = new Entity[10];
@@ -692,7 +692,7 @@ public sealed class TrickyEdgeCaseTests
         }
 
         var description = new QueryDescription().With<Position>();
-        var orderedQuery = world.Query(in description).OrderBy((a, b) => b.Id.CompareTo(a.Id));
+        var orderedQuery = world.Query(in description).OrderByEntityIdDescending();
 
         var seen = new List<Entity>();
         foreach (var entity in orderedQuery)
@@ -708,14 +708,14 @@ public sealed class TrickyEdgeCaseTests
     }
 
     [Fact]
-    public void Two_OrderBy_enumerations_are_independent()
+    public void Two_ordered_entity_enumerations_are_independent()
     {
         var world = new World();
         for (var i = 0; i < 5; i++)
             world.Create(new Position(i, i));
 
         var description = new QueryDescription().With<Position>();
-        var orderedQuery = world.Query(in description).OrderBy((a, b) => a.Id.CompareTo(b.Id));
+        var orderedQuery = world.Query(in description).OrderByEntityId();
 
         var first = new List<Entity>();
         foreach (var entity in orderedQuery) first.Add(entity);

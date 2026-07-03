@@ -33,6 +33,8 @@ internal sealed class QueryCache
     // Tracks expected views per archetype (indexed parallel to _snapshotArchetypes).
     private int[] _archetypeExpectedViews = [];
 
+
+
     internal QueryCache(World world, QueryFilter filter)
     {
         _world = world;
@@ -75,6 +77,8 @@ internal sealed class QueryCache
         count = _matchedArchetypeCount;
         return _snapshotArchetypes;
     }
+
+
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ReadOnlySpan<ChunkView> GetChunkViewSpan()

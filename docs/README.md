@@ -45,7 +45,9 @@ public readonly record struct Entity(int Id, int Version)
 ### `Query`
 
 - `GetEnumerator()` — `foreach` support
-- `OrderBy(IComparer<Entity>)` / `OrderBy(Comparison<Entity>)` — sorted enumeration
+- `OrderByEntityId()` / `OrderByEntityIdDescending()` — sorted enumeration by entity ID
+- `OrderByComponent<T>(Comparison<T>)` / `OrderByComponent<T>(IComparer<T>)` — sorted enumeration by component value (batch-reads T in one linear scan, then sorts)
+- `OrderByComponentDescending<T>(Comparison<T>)` / `OrderByComponentDescending<T>(IComparer<T>)` — descending variant
 - `GetChunks()` — returns `ReadOnlySpan<ChunkView>` for batch/chunk-level access
 - `ForEachChunk(ChunkAction)` — sequential chunk iteration (zero-alloc when delegate is cached)
 - `ForEachChunk<TForEach>(ref TForEach)` — sequential chunk iteration via a struct `IChunkForEach` implementation (zero-alloc + JIT-devirtualised; supports stateful jobs via `ref`)
@@ -236,7 +238,7 @@ return sum.Total;
 
 | API | Semantics | Notes |
 |---|---|---|
-| `Query` / `OrderedQuery` | MT-Read | World must not mutate concurrently |
+| `Query` / `OrderedEntityQuery` / `OrderedComponentQuery<T>` | MT-Read | World must not mutate concurrently |
 | `CommandBuffer` recording | MT-Record | Each thread records to its own buffer |
 | `CommandBuffer.Submit()` | Exclusive | Single-threaded |
 | `SubmitAndSnapshotAsync()` | Pipelined | Main thread: Submit; background: BuildDelta |
