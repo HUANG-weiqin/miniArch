@@ -12,7 +12,7 @@ internal struct InlineMap<TKey, TValue>
     public int OverflowHead;
     public int OverflowCount;
 
-    public bool IsEmpty => Count == 0 && OverflowCount == 0;
+    public readonly bool IsEmpty => Count == 0 && OverflowCount == 0;
 
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     private static bool KeyEquals(TKey a, TKey b) => a.Equals(b);
@@ -82,7 +82,7 @@ internal struct InlineMap<TKey, TValue>
         Count = last;
     }
 
-    public void CopyTo(List<(TKey, TValue)> target, ref OverflowPool<TKey, TValue> pool)
+    public readonly void CopyTo(List<(TKey, TValue)> target, ref OverflowPool<TKey, TValue> pool)
     {
         if (Count >= 1) target.Add((Key0, Value0));
         if (Count >= 2) target.Add((Key1, Value1));

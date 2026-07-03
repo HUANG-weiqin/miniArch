@@ -23,7 +23,7 @@ internal struct OverflowPool<TKey, TValue> where TKey : unmanaged
         return idx;
     }
 
-    public int FindIndex(int head, TKey key)
+    public readonly int FindIndex(int head, TKey key)
     {
         var comparer = EqualityComparer<TKey>.Default;
         for (var idx = head; idx >= 0; idx = _next[idx])
@@ -60,9 +60,9 @@ internal struct OverflowPool<TKey, TValue> where TKey : unmanaged
     }
 
     public ref TValue GetValue(int index) => ref _values[index];
-    public ref readonly TValue GetValueReadonly(int index) => ref _values[index];
-    public ref readonly TKey GetKeyReadonly(int index) => ref _keys[index];
-    public int GetNext(int index) => _next[index];
+    public readonly ref readonly TValue GetValueReadonly(int index) => ref _values[index];
+    public readonly ref readonly TKey GetKeyReadonly(int index) => ref _keys[index];
+    public readonly int GetNext(int index) => _next[index];
 
     public void Clear() => _count = 0;
 

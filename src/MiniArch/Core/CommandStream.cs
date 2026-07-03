@@ -1049,13 +1049,13 @@ public sealed class CommandStream
             _lastMaskArchetype = null;
         }
 
-        if (_lastMaskArchetype is { } last && MaskEq(_lastMask, mask))
+        if (_lastMaskArchetype is { } last && _lastMask.Equals(mask))
             return last;
 
         for (var i = 0; i < _maskCacheCount; i++)
         {
             ref var slot = ref _maskCache[i];
-            if (MaskEq(slot.Mask, mask))
+            if (slot.Mask.Equals(mask))
             {
                 _lastMask = mask;
                 _lastMaskArchetype = slot.Archetype;
@@ -1109,11 +1109,6 @@ public sealed class CommandStream
     }
 
     // ── Bit helpers ───────────────────────────────────────────────────
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool MaskEq(ComponentMask a, ComponentMask b) =>
-        a.B0 == b.B0 && a.B1 == b.B1 && a.B2 == b.B2 && a.B3 == b.B3 &&
-        a.B4 == b.B4 && a.B5 == b.B5 && a.B6 == b.B6 && a.B7 == b.B7;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool TrySetBit(ref ulong b0, ref ulong b1, ref ulong b2, ref ulong b3,

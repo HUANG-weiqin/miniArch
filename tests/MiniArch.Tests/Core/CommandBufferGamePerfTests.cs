@@ -15,6 +15,6 @@ public sealed class CommandBufferGamePerfTests
         }
 
         Assert.Equal(ScenarioDefaults.InitialLiveCount, scenario.LiveCount);
-        Assert.True(scenario.Checksum != 0);
+        Assert.NotEqual(0u, scenario.Checksum);
     }
 }
