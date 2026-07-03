@@ -95,7 +95,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
   - 慢路径 A：archetype 数量变 → `Refresh`（append-only 扫新 archetype）
   - 慢路径 B：matched archetype segment count 变（chunked 增长）→ `RefreshViewsOnly`（不重做 match，只重建 ChunkView）
 - `Matches`：mask 预过滤 + `Signature.Contains` fallback for id ≥ 512
-- 用户层 `MiniArch.Query` 是 struct facade：`GetChunks()` 零拷贝、`ForEachChunk` / `ForEachChunkParallel`、`OrderBy` 走 `ArrayPool<Entity>.Shared.Rent`
+- 用户层 `MiniArch.Query` 是 struct facade：`GetChunks()` 零拷贝、`ForEachChunk` / `ForEachChunkParallel`、`OrderByEntityId` + `OrderByComponent<T>` 走 `ArrayPool`
 - 两类 chunk 迭代入口：
   - `ForEachChunk(ChunkAction)` / `ForEachChunkParallel(ChunkAction)`：基于 delegate，缓存 delegate 时零分配
   - `ForEachChunk<TForEach>(ref TForEach)` / `ForEachChunkParallel<TForEach>(TForEach)`：基于 `IChunkForEach` struct 接口（`src/MiniArch/Query.cs:196`），JIT 特化去虚化、零分配。`ref` 路径支持 stateful accumulator；by-value 路径供并行 worker 拷贝（不能用 `in` 因 Parallel.For lambda 不允许捕获 ref-like 参数）

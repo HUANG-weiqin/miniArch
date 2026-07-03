@@ -85,7 +85,7 @@ updated: 2026-07-03 (补 ReserveDeferredEntityUnsafe 无锁变体；单线程 Co
 - EachSpan API 已删除，统一走 `ChunkView.GetSpan<T>()`
 - typed query 家族（`Query<T>`、`Query<T1,T2>` 等）已移除
 - builder 风格 `World.Query()...Build()` 已移除
-- `OrderBy(...)` 在 `MiniArch.Query` facade 上提供，不缓存排序结果（每次枚举租 `ArrayPool` 排序）
+- `OrderByEntityId()` / `OrderByComponent<T>(Comparison<T>)` 在 `MiniArch.Query` facade 上提供，不缓存排序结果（每次枚举租 `ArrayPool` 排序）。`OrderByComponent<T>` 批量线性扫描组件值后排序，避免 per-comparison `world.Get` 开销
 
 **坑点：**
 - `MiniArch.Query` 是 struct wrapper，不能用于 identity 断言

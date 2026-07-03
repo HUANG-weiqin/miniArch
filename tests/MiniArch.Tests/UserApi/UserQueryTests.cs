@@ -139,7 +139,7 @@ public sealed class UserQueryTests
     }
 
     [Fact]
-    public void Query_can_order_entities_with_comparison()
+    public void Query_can_order_entities_with_component_comparison()
     {
         var world = new World();
         var description = new QueryDescription().With<Position>();
@@ -148,12 +148,8 @@ public sealed class UserQueryTests
         var last = world.Create(new Position(3, 0));
 
         var seen = new List<Entity>();
-        foreach (var entity in world.Query(in description).OrderBy((left, right) =>
-        {
-            Assert.True(world.TryGet(left, out Position leftPosition));
-            Assert.True(world.TryGet(right, out Position rightPosition));
-            return leftPosition.X.CompareTo(rightPosition.X);
-        }))
+        foreach (var entity in world.Query(in description).OrderByComponent<Position>(
+            (a, b) => a.X.CompareTo(b.X)))
         {
             seen.Add(entity);
         }
@@ -162,7 +158,7 @@ public sealed class UserQueryTests
     }
 
     [Fact]
-    public void Query_can_order_entities_with_comparer()
+    public void Query_can_order_entities_with_component_comparer()
     {
         var world = new World();
         var description = new QueryDescription().With<Position>();
@@ -170,40 +166,29 @@ public sealed class UserQueryTests
         var first = world.Create(new Position(1, 0));
         var middle = world.Create(new Position(2, 0));
 
-        var ordered = world.Query(in description).OrderBy(Comparer<Entity>.Create((left, right) =>
-        {
-            Assert.True(world.TryGet(left, out Position leftPosition));
-            Assert.True(world.TryGet(right, out Position rightPosition));
-            return leftPosition.X.CompareTo(rightPosition.X);
-        }));
+        var ordered = world.Query(in description).OrderByComponent<Position>(
+            Comparer<Position>.Create((a, b) => a.X.CompareTo(b.X)));
 
         Assert.Equal(new[] { first, middle, last }, Capture(ordered));
     }
 
     [Fact]
-    public async Task Ordered_query_can_be_enumerated_concurrently()
+    public async Task Ordered_component_query_can_be_enumerated_concurrently()
     {
         var world = new World();
         var description = new QueryDescription().With<Position>();
         var expected = new List<Entity>();
+        var expectedPairs = new List<(Entity Entity, int X)>();
         for (var i = 63; i >= 0; i--)
         {
-            expected.Add(world.Create(new Position(i, 0)));
+            var e = world.Create(new Position(i, 0));
+            expectedPairs.Add((e, i));
         }
+        expectedPairs.Sort((a, b) => a.X.CompareTo(b.X));
+        expected.AddRange(expectedPairs.Select(p => p.Entity));
 
-        expected.Sort((left, right) =>
-        {
-            Assert.True(world.TryGet(left, out Position leftPosition));
-            Assert.True(world.TryGet(right, out Position rightPosition));
-            return leftPosition.X.CompareTo(rightPosition.X);
-        });
-
-        var ordered = world.Query(in description).OrderBy((left, right) =>
-        {
-            Assert.True(world.TryGet(left, out Position leftPosition));
-            Assert.True(world.TryGet(right, out Position rightPosition));
-            return leftPosition.X.CompareTo(rightPosition.X);
-        });
+        var ordered = world.Query(in description).OrderByComponent<Position>(
+            (a, b) => a.X.CompareTo(b.X));
 
         var start = new Barrier(9);
         var tasks = Enumerable.Range(0, 8)
@@ -240,7 +225,7 @@ public sealed class UserQueryTests
         return total;
     }
 
-    private static Entity[] Capture(OrderedQuery query)
+    private static Entity[] Capture(OrderedComponentQuery<Position> query)
     {
         var entities = new List<Entity>();
         foreach (var entity in query)
