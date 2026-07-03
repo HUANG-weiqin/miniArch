@@ -106,6 +106,34 @@ MiniArch CommandStream 在所有场景中持平或超过 Friflo。
 
 长时间运行 **GC 完全静默**，无内存泄漏。
 
+### 6. BDN 统计基准：MixedLoad Archetype Scaling 矩阵
+
+使用 BenchmarkDotNet `[Params]` 机制，单次运行覆盖 1/4/8/16 archetype × 5 引擎变体（20 个 benchmark），自动输出 Mean / Error (99.9% CI) / StdDev / Allocated。
+
+> **测试环境：** AMD Ryzen 7 5700X3D (8C/16T), Windows 11, .NET 8.0.28, BenchmarkDotNet v0.14.0
+>
+> **场景设计：** 15K 实体，每帧 create 200 + structural change 20（Burning Add/Remove toggle）+ 2 个 chunk 级查询 + destroy 200。所有引擎使用各自的标准 chunk 遍历 API（公平对比，非不对称最快路径）。SIMD 变体使用 `Vector256<int>` + `MemoryMarshal.Cast` 手写向量化。源码：`tools/perf/S10Simd.Perf/`。
+
+| 引擎 | 1 arch | 4 arch | 8 arch | 16 arch | 退化 (1→16) |
+|---|---:|---:|---:|---:|---:|
+| **MiniArch SIMD** | **35.94** | **39.99** | **42.20** | **44.67** | +24% |
+| MiniArch Scalar | 52.38 | 52.73 | 54.49 | 64.63 | +23% |
+| Friflo SIMD | 41.31 | 42.95 | 48.50 | 54.17 | +31% |
+| Friflo Scalar | 51.52 | 54.80 | 61.90 | 67.45 | +31% |
+| Arch Scalar | 70.08 | 72.91 | 74.07 | 79.00 | +13% |
+
+（μs/帧，Error ±0.06~1.58 μs，全零 GC 分配）
+
+**关键发现：**
+
+1. **MiniArch SIMD 全程最快**——16 archetype 时 44.67 μs vs Friflo SIMD 54.17 μs（**快 18%**，99.9% CI 不重叠）。
+
+2. **1 archetype scalar 持平**（MiniArch 52.38 ≈ Friflo 51.52，CI 重叠）→ 单 archetype 测试会掩盖 MiniArch 的真实优势。真实游戏 16+ archetype 是常态，多 archetype 数据才是有意义的对比。
+
+3. **MiniArch archetype scaling 更优**（退化 +23% vs Friflo +31%）。1→4 几乎零退化（+1%），8→16 才明显（+19%）。
+
+4. **BDN 统计严谨性**：99.9% CI + 自动离群值剔除 + 字节级分配追踪，结论可证伪。
+
 ---
 
 ## MiniArch 的独特优势
