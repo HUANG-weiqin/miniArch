@@ -1,6 +1,6 @@
 namespace MiniArch.Core;
 
-internal static class SpanHelper
+internal static class SpanSorting
 {
     public static int SortAndDeduplicate(Span<ComponentType> values)
     {

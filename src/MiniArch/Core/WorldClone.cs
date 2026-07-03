@@ -4,8 +4,6 @@ internal static class WorldClone
 {
     public static World Clone(World source)
     {
-        ArgumentNullException.ThrowIfNull(source);
-
         var entitySlotCount = source.EntitySlotCount;
         var target = new World(source.ChunkCapacity, entitySlotCount);
         target.Reset(entitySlotCount);

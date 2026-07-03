@@ -22,7 +22,6 @@ internal sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentTy
     /// </summary>
     public Signature(params ComponentType[] components)
     {
-        ArgumentNullException.ThrowIfNull(components);
         _components = Normalize(components);
         _hashCode = ComputeHashCode(_components);
         _componentMask = ComputeMask(_components);
@@ -46,7 +45,6 @@ internal sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentTy
     /// </summary>
     internal static Signature CreateNormalized(ComponentType[] components)
     {
-        ArgumentNullException.ThrowIfNull(components);
         return components.Length == 0 ? Empty : new Signature(components, isNormalized: true);
     }
 
@@ -188,7 +186,7 @@ internal sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentTy
             return normalized.Length == 0 ? Array.Empty<ComponentType>() : normalized;
         }
 
-        var uniqueCount = SpanHelper.SortAndDeduplicate(normalized);
+        var uniqueCount = SpanSorting.SortAndDeduplicate(normalized);
 
         if (uniqueCount == normalized.Length)
         {
@@ -257,7 +255,7 @@ internal sealed class Signature : IEquatable<Signature>, IEnumerable<ComponentTy
     }
 
     private static int ComputeHashCode(ReadOnlySpan<ComponentType> components) =>
-        SpanHelper.CombineHashCodes(components);
+        SpanSorting.CombineHashCodes(components);
 
     private static ComponentMask ComputeMask(ReadOnlySpan<ComponentType> components)
     {

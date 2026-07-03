@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 
 namespace MiniArch.Core;
 
-internal static class ArrayPoolUtil
+internal static class ArrayPoolStack
 {
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void PushPooled<T>(ref T[] array, ref int count, T value)

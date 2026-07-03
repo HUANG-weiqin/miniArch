@@ -55,8 +55,6 @@ internal sealed partial class Archetype
     private Archetype?[] _removeDestinationCache = Array.Empty<Archetype?>();
     internal Archetype(Signature signature, Type[] componentTypes, int capacity = 4)
     {
-        ArgumentNullException.ThrowIfNull(signature);
-
         if (capacity <= 0)
             throw new ArgumentOutOfRangeException(nameof(capacity));
 

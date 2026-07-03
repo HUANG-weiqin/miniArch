@@ -37,7 +37,7 @@ public sealed partial class World
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private int MoveEntityCore(
+    private static int MoveEntityCore(
         Entity entity,
         EntityRecord sourceInfo,
         Archetype destination)
@@ -91,7 +91,7 @@ public sealed partial class World
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ApplyTypedAdd<T>(Entity entity, ComponentType componentType, in T component) where T : unmanaged
     {
-        var info = GetRequiredLocation(entity);
+        var info = RequireLocation(entity);
         ApplyTypedAdd(entity, info, componentType, in component);
     }
 
@@ -130,7 +130,7 @@ public sealed partial class World
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ApplyTypedSet<T>(Entity entity, ComponentType componentType, in T component) where T : unmanaged
     {
-        var info = GetRequiredLocation(entity);
+        var info = RequireLocation(entity);
         ApplyTypedSet(entity, info, componentType, in component);
     }
 
@@ -203,7 +203,7 @@ public sealed partial class World
 
     internal void RemoveBoxed(Entity entity, ComponentType componentType)
     {
-        var info = GetRequiredLocation(entity);
+        var info = RequireLocation(entity);
         RemoveBoxed(entity, info, componentType);
     }
 

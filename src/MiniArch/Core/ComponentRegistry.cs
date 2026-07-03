@@ -26,8 +26,6 @@ internal sealed class ComponentRegistry
     /// </summary>
     public ComponentType GetOrCreate(Type type)
     {
-        ArgumentNullException.ThrowIfNull(type);
-
         var snapshot = Volatile.Read(ref _snapshot);
         if (snapshot.TypeToId.TryGetValue(type, out var existing))
         {

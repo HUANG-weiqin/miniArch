@@ -108,7 +108,7 @@ public sealed partial class World
         }
     }
 
-    private QueryComponentSet CreateQueryComponentSet(ReadOnlySpan<Type> types)
+    private static QueryComponentSet CreateQueryComponentSet(ReadOnlySpan<Type> types)
     {
         if (types.Length == 0)
         {

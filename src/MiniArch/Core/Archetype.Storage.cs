@@ -521,8 +521,6 @@ internal sealed partial class Archetype
 
     internal void CopyColumnsFrom(Archetype source, int count)
     {
-        ArgumentNullException.ThrowIfNull(source);
-
         if (!_signature.Equals(source._signature))
             throw new ArgumentException("Source archetype signature must match.", nameof(source));
 

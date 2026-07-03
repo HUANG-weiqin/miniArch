@@ -46,7 +46,6 @@ internal sealed class QueryCache
 
     internal static QueryCache Create(World world, in QueryDescription description)
     {
-        ArgumentNullException.ThrowIfNull(world);
         return world.GetAdvancedQuery(in description);
     }
 

@@ -170,7 +170,7 @@ public sealed partial class World
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private EntityRecord GetRequiredLocation(Entity entity)
+    private EntityRecord RequireLocation(Entity entity)
     {
         var id = entity.Id;
         AssertValidEntityId(id, entity);
@@ -198,7 +198,7 @@ public sealed partial class World
 
     private void DestroySingle(Entity entity)
     {
-        var info = GetRequiredLocation(entity);
+        var info = RequireLocation(entity);
         var arch = info.Archetype!;
         arch.RemoveAt(info.RowIndex, out var movedEntity);
         if (_hierarchy.HasAnyRelations(entity))

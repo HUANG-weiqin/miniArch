@@ -198,7 +198,7 @@ public sealed partial class World : IDisposable
     public void RemoveChild(Entity child)
     {
         ThrowIfDisposed();
-        GetRequiredLocation(child);
+        RequireLocation(child);
         _hierarchy.RemoveChild(child);
     }
 
@@ -338,7 +338,7 @@ public sealed partial class World : IDisposable
 
     private Entity CloneSingle(Entity source)
     {
-        var sourceInfo = GetRequiredLocation(source);
+        var sourceInfo = RequireLocation(source);
         var archetype = sourceInfo.Archetype!;
         var entity = CreateInArchetype(archetype, out var destRow);
         archetype.CopySharedComponentsFrom(sourceInfo.Archetype!, sourceInfo.RowIndex, destRow);
@@ -353,7 +353,7 @@ public sealed partial class World : IDisposable
         var stackCount = 0;
         try
         {
-            ArrayPoolUtil.PushPooled(ref stack, ref stackCount, new CloneWork(sourceRoot, cloneRoot));
+            ArrayPoolStack.PushPooled(ref stack, ref stackCount, new CloneWork(sourceRoot, cloneRoot));
             while (stackCount > 0)
             {
                 var work = stack[--stackCount];
@@ -361,7 +361,7 @@ public sealed partial class World : IDisposable
                 {
                     var cloneChild = CloneSingle(child);
                     _hierarchy.AddChild(this, work.CloneEntity, cloneChild);
-                    ArrayPoolUtil.PushPooled(ref stack, ref stackCount, new CloneWork(child, cloneChild));
+                    ArrayPoolStack.PushPooled(ref stack, ref stackCount, new CloneWork(child, cloneChild));
                 }
             }
         }
@@ -455,7 +455,7 @@ public sealed partial class World : IDisposable
         return GetOrCreateArchetype(signature);
     }
 
-    private Type[] ResolveComponentTypes(Signature signature)
+    private static Type[] ResolveComponentTypes(Signature signature)
     {
         var componentCount = signature.Count;
         if (componentCount == 0)
@@ -474,7 +474,7 @@ public sealed partial class World : IDisposable
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private ComponentType GetComponentType<T>()
+    private static ComponentType GetComponentType<T>()
     {
         return Component<T>.ComponentType;
     }
@@ -499,7 +499,6 @@ public sealed partial class World : IDisposable
     private unsafe void ReplayCore(FrameDelta delta)
     {
         ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(delta);
 
         // Pre-scan: size archetype storage and the entity record array up-front
         // so the main pass never hits a doubling resize on the hot Create path.
@@ -563,7 +562,7 @@ public sealed partial class World : IDisposable
                         var dataSize = decoder.ReadVarint();
                         var dataStart = decoder.CurrentPosition;
                         _ = decoder.ReadBytes(dataSize);
-                        var loc = GetRequiredLocation(entity);
+                        var loc = RequireLocation(entity);
                         ApplyRawAdd(entity, loc, comp, bufPtr + dataStart);
                         break;
                     }
@@ -575,7 +574,7 @@ public sealed partial class World : IDisposable
                         var dataSize = decoder.ReadVarint();
                         var dataStart = decoder.CurrentPosition;
                         _ = decoder.ReadBytes(dataSize);
-                        var loc = GetRequiredLocation(entity);
+                        var loc = RequireLocation(entity);
                         ApplyRawSet(entity, loc, comp, bufPtr + dataStart);
                         break;
                     }
@@ -609,7 +608,7 @@ public sealed partial class World : IDisposable
 
     // ── Replay placeholder helpers ─────────────────────────────────────
 
-    private void EnsurePlaceholderMap(ref Entity[] map, ref int mapLen, int seq)
+    private static void EnsurePlaceholderMap(ref Entity[] map, ref int mapLen, int seq)
     {
         if (seq < mapLen) return;
         var newLen = map.Length == 0 ? 64 : map.Length;

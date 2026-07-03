@@ -2,7 +2,7 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-07-03 (dead code 全量清理 + deadcode.ps1 修复)
+updated: 2026-07-03 (洁癖全量清扫 + dead code 清理 + deadcode.ps1 修复)
 ---
 # Knowledge Base Changelog
 
@@ -10,6 +10,34 @@ updated: 2026-07-03 (dead code 全量清理 + deadcode.ps1 修复)
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
 
 ## 2026-07-03 全量审阅落地（死代码清理 + deadcode.ps1 修复 + 过度防御改善）
+
+### 洁癖全量清扫（YAGNI + static 化 + 命名诚实）
+
+全量系统性扫描 44 个源文件（~8970 行），按"激进 YAGNI、纯函数优先、名字诚实"原则清扫。Build + 500 MiniArch.Tests + 5 HeroPipeline.Tests + HeroComing.Perf 门禁全部通过（Movement 2025.3、Attack 1244.9）。
+
+- **YAGNI：移除 8 处内部/私有方法的无意义 null guard**：
+  - `World.ReplayCore(delta)` — private，调用方 `Replay()` 已做 checked
+  - `ComponentRegistry.GetOrCreate(type)` — internal class，caller 同程序集
+  - `Archetype.CopyColumnsFrom(source, ...)` — internal method
+  - `QueryCache.Create(world, ...)` — internal static
+  - `WorldClone.Clone(source)` — internal class
+  - `Signature(ComponentType[])` / `Signature.CreateNormalized(...)` — internal class
+  - `Archetype(signature, ...)` — internal 构造
+- **纯函数原则：5 个未用 this 的实例方法改为 `static`**：
+  - `World.EnsurePlaceholderMap` — 仅操作参数 ref map
+  - `World.GetComponentType<T>` — 仅访问 `Component<T>.ComponentType`（静态）
+  - `World.ResolveComponentTypes` — 仅用 `ComponentRegistry.Shared`（静态）
+  - `World.MoveEntityCore` — 仅调用参数上的方法
+  - `World.CreateQueryComponentSet` — 仅用 `ComponentRegistry.Shared`（静态）
+- **名字诚实：3 处重命名**：
+  - `GetRequiredLocation` → `RequireLocation` — 该方法 throw（不存在即抛），"Get" 误导
+  - `ArrayPoolUtil` → `ArrayPoolStack` — "Util" 模糊，实际实现栈式 PushPooled/GrowPooled
+  - `SpanHelper` → `SpanSorting` — "Helper" 模糊，实际提供 SortAndDeduplicate + CombineHashCodes
+- **未改动的（经评估后判定合理）**：
+  - `ISpanFeeder` 单实现接口 — `Archetype` 和 `HashFeeder` 之间的清洁接缝，不移除
+  - `[Conditional("DEBUG")]` 守卫方法 — Release 零开销模式
+  - 3 个 bare `catch` in StructuralChange — 回滚补偿逻辑，意图明确
+  - 公共 API 的 null guard（`Query.OrderByComponent`、`WorldSnapshot.Save/Load` 等）— 公共边界保留
 
 全量代码审阅完结，逐项落地。所有 Debug + Release test 绿，HeroComing.Perf 门禁通过（Movement 2002.3、Attack 1217.0）。
 
