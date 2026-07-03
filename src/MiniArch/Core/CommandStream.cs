@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace MiniArch.Core;
 
@@ -1646,19 +1647,27 @@ public sealed class CommandStream
         public void Append(Entity entity, in T value, byte kind)
         {
             EnsureStoreCapacity();
-            _entities[_count] = entity;
-            _data[_count] = value;
-            _kinds[_count] = kind;
-            _count++;
+            var count = _count;
+            ref var entitiesRef = ref MemoryMarshal.GetArrayDataReference(_entities);
+            ref var dataRef = ref MemoryMarshal.GetArrayDataReference(_data);
+            ref var kindsRef = ref MemoryMarshal.GetArrayDataReference(_kinds);
+            Unsafe.Add(ref entitiesRef, count) = entity;
+            Unsafe.Add(ref dataRef, count) = value;
+            Unsafe.Add(ref kindsRef, count) = kind;
+            _count = count + 1;
         }
 
         public void AppendRemove(Entity entity)
         {
             EnsureStoreCapacity();
-            _entities[_count] = entity;
-            _data[_count] = default;
-            _kinds[_count] = KindRemove;
-            _count++;
+            var count = _count;
+            ref var entitiesRef = ref MemoryMarshal.GetArrayDataReference(_entities);
+            ref var dataRef = ref MemoryMarshal.GetArrayDataReference(_data);
+            ref var kindsRef = ref MemoryMarshal.GetArrayDataReference(_kinds);
+            Unsafe.Add(ref entitiesRef, count) = entity;
+            Unsafe.Add(ref dataRef, count) = default;
+            Unsafe.Add(ref kindsRef, count) = KindRemove;
+            _count = count + 1;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1699,13 +1708,18 @@ public sealed class CommandStream
             // of once per entity.
             Archetype? lastArch = null;
             int lastColIdx = -1;
+            var count = _count;
 
-            for (var i = 0; i < _count; i++)
+            ref var entitiesRef = ref MemoryMarshal.GetArrayDataReference(_entities);
+            ref var kindsRef = ref MemoryMarshal.GetArrayDataReference(_kinds);
+            ref var dataRef = ref MemoryMarshal.GetArrayDataReference(_data);
+
+            for (var i = 0; i < count; i++)
             {
-                var entity = _entities[i];
+                var entity = Unsafe.Add(ref entitiesRef, i);
                 if (!world.TryGetLocation(entity, out var loc)) continue;
 
-                var kind = _kinds[i];
+                var kind = Unsafe.Add(ref kindsRef, i);
                 if (kind == KindSet)
                 {
                     var arch = loc.Archetype!;
@@ -1719,14 +1733,14 @@ public sealed class CommandStream
                         lastArch = arch;
                         colIdx = lastColIdx = arch.GetComponentIndex(Component<T>.ComponentType);
                     }
-                    arch.SetComponentAtTyped(colIdx, loc.RowIndex, in _data[i]);
+                    arch.SetComponentAtTyped(colIdx, loc.RowIndex, in Unsafe.Add(ref dataRef, i));
                 }
                 else
                 {
                     lastArch = null; // structural change invalidates cache
                     var record = new EntityRecord { Archetype = loc.Archetype, RowIndex = loc.RowIndex, Version = loc.Version };
                     if (kind == KindAdd)
-                        world.ApplyTypedAdd(entity, record, Component<T>.ComponentType, _data[i]);
+                        world.ApplyTypedAdd(entity, record, Component<T>.ComponentType, in Unsafe.Add(ref dataRef, i));
                     else
                         world.RemoveBoxed(entity, record, Component<T>.ComponentType);
                 }
