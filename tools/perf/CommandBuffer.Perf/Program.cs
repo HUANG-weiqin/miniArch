@@ -91,7 +91,7 @@ static void Run(string engine, CommandBufferBenchmarkScenario scenario, Func<(Ac
 }
 
 // ════════════════════════════════════════════════════════════════
-//  Unified record helpers (no Destroy �?fair comparison)
+//  Unified record helpers (no Destroy �?fair comparison)
 // ════════════════════════════════════════════════════════════════
 
 static void Record(CommandStream cb, MiniSharedCommandBufferState state, CommandBufferBenchmarkScenario scenario)
@@ -109,15 +109,14 @@ static bool IsSteadyStateFriendly(CommandBufferBenchmarkScenario scenario) =>
 
 static void RecordDense(CommandStream cb, MiniSharedCommandBufferState state)
 {
+    // Pure Set on existing entities — no structural changes for steady-state safety.
+    // Structural ops (Add/Remove) are covered by MixedScript and CreateHeavy scenarios.
     for (var i = 0; i < state.ExistingEntities.Length; i++)
     {
         var e = state.ExistingEntities[i];
         cb.Set(e, new BenchmarkPosition(i + 1, i + 2));
         cb.Set(e, new BenchmarkVelocity(i + 3, i + 4));
         cb.Set(e, new BenchmarkHealth(200 + i));
-
-        if ((i & 1) == 0) cb.Remove<BenchmarkHealth>(e);
-        else               cb.Add(e, new BenchmarkArmor(300 + i));
     }
 }
 
@@ -234,8 +233,6 @@ sealed class FrifloBench
             _buffer.AddComponent(id, new FPos(i + 1, i + 2));
             _buffer.AddComponent(id, new FVel(i + 3, i + 4));
             _buffer.AddComponent(id, new FHp(200 + i));
-            if ((i & 1) == 0) _buffer.RemoveComponent<FHp>(id);
-            else               _buffer.AddComponent(id, new FArmor(300 + i));
         }
         _buffer.Playback();
     }
@@ -345,8 +342,6 @@ sealed class DefaultEcsBench
             e.Set(new DPos(i + 1, i + 2));
             e.Set(new DVel(i + 3, i + 4));
             e.Set(new DHp(200 + i));
-            if ((i & 1) == 0) e.Remove<DHp>();
-            else               e.Set(new DArmor(300 + i));
         }
     }
 

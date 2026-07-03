@@ -815,7 +815,7 @@ public sealed class ArchSteadyCombatWorld : ICommandBufferGameScenario
 }
 
 // ============================================================
-// ParticleStorm scenarios â€?high structural churn, minimal Set
+// ParticleStorm scenarios ï¿½?high structural churn, minimal Set
 // ============================================================
 
 public sealed class MiniArchCommandStreamParticleStormWorld : ICommandBufferGameScenario
@@ -838,7 +838,7 @@ public sealed class MiniArchCommandStreamParticleStormWorld : ICommandBufferGame
 
         _emitters = new MiniEntity[ParticleStormDefaults.EmitterCount];
         for (var i = 0; i < _emitters.Length; i++)
-            _emitters[i] = _world.Create(new Position(i, i), new EmitterTag(i));
+            _emitters[i] = _world.Create(new Position(i, i), new EmitterTag(i), new Alpha(0));
     }
 
     public string Engine => "MiniStream-Storm";
@@ -1272,7 +1272,7 @@ public sealed class MiniArchCommandStreamHeroLightWorld : ICommandBufferGameScen
         _stream.Submit();
         var tQ = Stopwatch.GetTimestamp();
 
-        // Process existing requests â†?create effects + modify HP
+        // Process existing requests ï¿½?create effects + modify HP
         foreach (var chunk in _world.Query(new MiniQueryDescription().With<RequestTag>().With<MiniArchRequestTarget>()).GetChunks())
         {
             var targets = chunk.GetSpan<MiniArchRequestTarget>();
@@ -1365,7 +1365,7 @@ public sealed class FrifloHeroLightWorld : ICommandBufferGameScenario
         _buffer.Playback();
         var tQ = Stopwatch.GetTimestamp();
 
-        // Process request entities â†?create effects + modify HP
+        // Process request entities ï¿½?create effects + modify HP
         foreach (var (tags, targets, entities) in _store.Query<RequestTag, FrifloRequestTarget>().Chunks)
         {
             for (var i = 0; i < entities.Length; i++)
