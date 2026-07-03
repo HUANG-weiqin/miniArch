@@ -2,7 +2,7 @@
 title: Deferred Create — Multi-Host Lockstep Design
 module: MiniArch.Core.CommandStream
 description: DeferredEntities flag 让 Create/Clone 在 placeholder（多 host lockstep）和 immediate（单机/权威服务器）之间切换。Snapshot 按 flag 输出 placeholder delta 或 real-id delta；SubmitAndSnapshotAsync 始终输出 real-id delta。
-updated: 2026-07-02
+updated: 2026-07-03
 ---
 
 # Deferred Create — Multi-Host Lockstep Design
@@ -17,7 +17,7 @@ updated: 2026-07-02
   - ~~跨网络传输~~ → 传输层未实现（`socket.Send` 是伪代码），见 `kb-lockstep-playbook.md` "尚未解决的网络问题"
   - ~~序列化协议~~ → **已实现**，见 `kb-command-stream.md` "FrameDelta wire format" 段（`AsSpan()` / `Deserialize()` 开箱即用）
   - host 间的时序协调（lockstep 框架的事）→ **端到端指南**见 `kb-lockstep-playbook.md`
-  - 跨帧的 placeholder 持久映射（ReplayMapping 提供单帧查询，见决策 #3 / ReplayMapping 节）
+  - 跨帧的 entity 引用走真实 Entity ID（见 TryResolvePlaceholder 节）
 
 ## 要应对的游戏用户场景
 
@@ -37,8 +37,8 @@ updated: 2026-07-02
   3. `stream.Clear()` 清空 record（relay-only：不本地 apply）
   4. 每个 host 收集齐本帧所有 N 个 delta（包括自己的）
   5. 每个 host **按固定 host 顺序**串行 replay 这 N 个 delta 到本地 World
-  6. 所有 host 的本地 World 最终状态等价（但同一个 entity 在不同 host 上的 id 数值可能不同）
-- **关键要求**：delta 里**不能携带任何 host local id**，否则不同 host 的 id 会撞车。
+  6. 所有 host 的本地 World 最终状态等价（**且同一个 entity 在不同 host 上的 id 数值相同**——allocator 由 replay 序列同步驱动）
+- **关键要求**：delta 里刚创建的 entity 必须用 placeholder（`Entity(-1, seq)`），因为 record 阶段不能跨 host 分配 id。但 replay 后所有 host 的 allocator 状态一致，真实 ID 跨 host 相同。
 
 ### 场景 C：权威服务器 + 镜像客户端
 
@@ -79,7 +79,7 @@ updated: 2026-07-02
 - `Reserve` op with `Id < 0`：`ReserveDeferredEntityBatch()` 分配 local id + 写入 map
 - 所有其他 op（Create/Add/Set/AddChild/Destroy/...）的 entity 参数都走 `ResolveReplayEntity`
 - `PreScanForCapacity` 跳过 placeholder entity（`Id < 0`）的 `maxEntityId` 追踪——它们的 real id 在 main pass 才分配
-- 新增 `ReplayMapping` 作为 `Replay()` 的返回值，暴露 `Resolve(Entity)` 和 `Frozen()`（详见下文）
+- `World.Replay()` 返回 `void`。占位符解析通过 `World.TryResolvePlaceholder()` 完成（详见下文）
 
 ### 历史 commit（已合入 main）
 
@@ -91,48 +91,34 @@ updated: 2026-07-02
 | `024de01` | `Clear` 自给自足（覆盖 Submit 异常路径的 id leak）。 |
 | `d45514d` | `CommandStream.Clear` 改 public，支持中继模式。 |
 
-### ReplayMapping — replay 后查询占位符 → real 映射
+### TryResolvePlaceholder — replay 后查询占位符 → real 映射
 
 **问题**：replay 后用户只有 `Entity(-1, seq)`，不知道它在本地 world 里变成了哪个 real entity。
 
-**方案**：`World.Replay()` 不再返回 `void`，改为返回 `ReplayMapping` struct：
+**方案**：`World.Replay()` 返回 `void`，新增 `World.TryResolvePlaceholder()`：
 
 ```csharp
-public readonly struct ReplayMapping
+// 只对本帧有效。跨帧用返回的 real Entity。
+public bool TryResolvePlaceholder(Entity placeholder, out Entity real);
+```
+
+**正确用法——立即转 real ID：**
+```csharp
+world.Replay(delta);
+
+if (world.TryResolvePlaceholder(created, out var real))
 {
-    internal ReplayMapping(Entity[] map, int count);
-
-    // 查询占位符对应的本地 real entity
-    public Entity Resolve(Entity placeholder);
-
-    // 创建独立副本，不受后续 Replay 的影响
-    public ReplayMapping Frozen();
+    // ✅ real 可以直接存组件跨帧用（所有 host 上值相同）
+    world.Set(tracker, new Target { Value = real });
 }
+// 如果返回 false：placeholder 不在当前 replay 范围内（过期或不存在）
 ```
 
-**设计约束：**
-- `ReplayMapping` 是一个 view，底层映射数组由 `World._replayPlaceholderMap` 借用
-- 调用下一个 `Replay()` 后，前一个 view 的数据会被覆盖（底层数组复用）
-- 需要长期保留时，调用 `Frozen()` 做一次 `Entity[]` 拷贝
-- `_replayMapCount` 录回调回的数组长度，`Resolve` 用边界检查 + sentinel 过滤保证安全
+**⚠️ 关键约束**：`TryResolvePlaceholder` 只解析**最近一次 `Replay()` 产生的占位符**。下一个 `Replay()` 会覆盖内部映射表，
+同一个 `Entity(-1, seq)` 会解析到不同的实体或失败。
 
-**使用示例：**
-
-单 delta 即时查：
-```csharp
-var mapping = world.Replay(delta);
-var real = mapping.Resolve(placeholder);  // → Entity(3, 1)
-```
-
-多 delta 需要保留每份映射：
-```csharp
-var mapA = world.Replay(deltaA).Frozen();  // 独立副本
-var mapB = world.Replay(deltaB).Frozen();  // 不受 mapA 影响
-```
-
-**性能：**
-- `ReplayMapping` 不分配，16 字节栈上 struct
-- `Frozen()` 按需分配，大小 = 该次 delta 中 Reserve 的幂次数组长度，通常是几十
+**为什么没有 `ResolvePlaceholder`（无 bool 返回值）？** 为了防止用户拿过期占位符来问却静默拿到错误实体。
+`bool` 返回值强制调用方检查是否成功。
 
 ## 决策
 
@@ -144,19 +130,29 @@ var mapB = world.Replay(deltaB).Frozen();  // 不受 mapA 影响
 
 **已定**：严格禁止。`DeferredEntities = true` 时 `Snapshot()` 检测到 `Id >= 0` 的 batch entity 即抛 `InvalidOperationException`。
 
-### 决策 #3：跨帧引用 placeholder
+### 决策 #3：跨帧引用真实 Entity ID
 
-**已定**：placeholder 引用的跨帧问题不通过修改占位符 ID 模式解决。改用 `ReplayMapping.Resolve()` 在 replay 后即时查得 local real entity，用户自己保存。
+**已定**：`Resolve()` 返回的是真实 Entity ID。由于 allocator 由 replay 序列唯一驱动（所有 host replay 相同的 Reserve/Create/Release/Destroy 序列），**真实 Entity ID 跨 host 一致**，可以直接存组件跨帧使用。不需要保留 placeholder 或 mapping。
+
+```csharp
+world.Replay(delta);
+if (world.TryResolvePlaceholder(placeholder, out var real))
+{
+    // real 在 host A/B/C 上都是 Entity(3, 1)
+    // 可以存到组件里，下帧拿出来用
+    world.Set(foo, new Bar { Target = real });
+}
+```
 
 ### 决策 #4：replay 端 placeholder→local real 映射的数据结构
 
-**已定**：`Entity[]` 按 seq 索引。每帧 `mapLen = 0` 重置，`EnsurePlaceholderMap` lazy 扩容 + 初始化 sentinel。`ReplayMapping` 暴露此映射的只读 view。
+**已定**：`Entity[]` 按 seq 索引。每帧 `mapLen = 0` 重置，`EnsurePlaceholderMap` lazy 扩容 + 初始化 sentinel。`TryResolvePlaceholder` 直接查询此内部映射。
 
 ## 坑点
 
 - **placeholder 失效契约**：Snapshot/Submit 后外部 placeholder 引用变成 stale。合法使用下不会触发（placeholder 仅在 record → Snapshot/Submit 之间有效）。
 - **cancelled deferred vs cancelled immediate**：cancelled deferred emit 什么都不 emit（不占 id）；cancelled immediate emit Reserve+Release（占 id 槽位保持 host/replica 同步）。
-- **跨帧引用**：明确不支持。见决策 #3。
+- **跨帧引用用真实 ID**：placeholder 不跨帧，但 `TryResolvePlaceholder()` 返回的真实 ID 可以跨帧直接存组件用。见决策 #3。
 - **`_replayPlaceholderMap` 跨帧清零**：`mapLen` 在 `ReplayCore` 入口重置为 0。如果不清零，上一帧的 stale mapping 会被 malformed delta 静默误用。
 - **Destroy 已取消的 deferred placeholder 必须是 no-op（非并行）**：`Destroy()` 的 `else` 分支调 `AppendDestroy`。当一个 deferred placeholder 的 batch 已被级联取消（`CancelPendingDescendants` 把它一起 cancel，或同一 placeholder 被第二次 `Destroy`），`TryGetPendingBatch` 返回 false → 落到 `else`。若不守护 `!entity.IsPlaceholder`，会把一个**没有对应 Reserve** 的 placeholder Destroy op 写进 delta，每个 replay 端都抛 "Unresolved placeholder entity"，而产生端自己不 replay 所以不报错——silent lockstep hazard。最小复现：同一个 deferred placeholder `Destroy` 两次（不需要 link）。修复在 `CommandStream.Destroy` 的 `else if (!entity.IsPlaceholder)` 守护；回归测试 `KnownLimitationTests.Deferred_destroy_twice_on_same_placeholder_cancels_cleanly` 与 `Deferred_link_then_destroy_BOTH_endpoints_replays_cleanly`。real entity（`Id >= 0`）的二次 destroy 不受影响（replay 端 `if (IsAlive)` 已是安全 no-op）。
 - **并行模式永不取消 batch（因此不受上一条影响）**：`Destroy` 并行分支只 `AppendDestroyConcurrent`，不走 `CancelPendingEntity`/`CancelPendingDescendants`。所以 deferred+并行下每个 batch 都 commit，placeholder destroy 在 `ResolveDeferredCreates` 时 resolve 成 real entity——delta 里永远不会有未 resolve 的 placeholder。代价：同一帧 create+destroy 在并行模式 emit `Reserve+Create+Destroy`（每个 replica 都先 create 再 destroy，浪费但正确收敛），而非非并行模式的"取消为空"。

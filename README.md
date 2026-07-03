@@ -136,10 +136,8 @@ world.RestoreState(handle);         // revert in place, handle recycled to pool
 var branch = world.Clone();
 
 // After replay, resolve placeholder IDs to local real entities
-var mapping = world.Replay(peerDelta);
-var localEntity = mapping.Resolve(placeholder);  // Entity(-1, 5) → Entity(3, 1)
-// .Frozen() creates an independent copy that survives subsequent Replay calls
-var snapshot = world.Replay(nextDelta).Frozen();
+world.Replay(peerDelta);
+world.TryResolvePlaceholder(placeholder, out var localEntity);  // Entity(-1, 5) → Entity(3, 1)
 ```
 
 ---
@@ -208,7 +206,7 @@ Friflo's advantages are **engine-level constant factors** (typing + SIMD). MiniA
 
 - **Archetype ECS** — `World` / `Entity` / `QueryDescription` with chunk-level iteration
 - **CommandStream** — deferred command recording; 12–48% faster than traditional command buffers
-- **FrameDelta + Replay** — record and replay frame deltas across worlds with deterministic ID validation; zero-allocation replay path (mask cache + pre-scan); `Replay()` returns `ReplayMapping` for placeholder→real entity lookup after replay
+- **FrameDelta + Replay** — record and replay frame deltas across worlds with deterministic ID validation; zero-allocation replay path (mask cache + pre-scan); `World.TryResolvePlaceholder()` for placeholder→real entity lookup after replay
 - **ComponentSchema.Fingerprint** — SHA-256 registry fingerprint for debugging cross-version compatibility
 - **CaptureState/RestoreState** — in-place zero-alloc rollback (GGPO-style 60fps; opaque handle recycled across frames)
 - **World.Clone()** — materialize a brand-new independent world (branching / long-lived checkpoint)

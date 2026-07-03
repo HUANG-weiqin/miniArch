@@ -64,14 +64,15 @@ stream.DeferredEntities = true;  // Create() 返回 placeholder Entity(-1, seq)
 >
 > **Replay 后查询占位符对应的本地 real entity**：
 > ```csharp
-> var mapping = world.Replay(deltaA);
-> var real = mapping.Resolve(myPlaceholder);  // Entity(-1,seq) → 本地 real entity
-> // 需要保存到下一帧用？直接存 real
-> // 多 delta 时保留每份映射：
-> var frozenA = world.Replay(deltaA).Frozen();  // 独立副本，不受后续 Replay 影响
-> var frozenB = world.Replay(deltaB).Frozen();
+> world.Replay(deltaA);
+> if (world.TryResolvePlaceholder(myPlaceholder, out var real))
+> {
+>     // real 在 host A/B/C 上都是同一个 Entity(3, 1)
+>     // 直接存组件跨帧用
+>     world.Set(tracker, new Target { Value = real });
+> }
 > ```
-> 详见 `kb-deferred-create-design.md` ReplayMapping 节。
+> 详见 `kb-deferred-create-design.md` TryResolvePlaceholder 节。
 
 ### 3. 多帧合并（可选，网络优化）
 

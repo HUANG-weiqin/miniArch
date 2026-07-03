@@ -56,7 +56,7 @@ public sealed partial class World : IDisposable
     // mappings from previous frames leaking into the current replay.
     private Entity[] _replayPlaceholderMap = [];
     // Number of valid entries in _replayPlaceholderMap (power-of-two array length).
-    // Snapshot by Replay() to build the ReplayMapping returned to the caller.
+    // Snapshot by Replay() to populate the internal mapping for TryResolvePlaceholder.
     private int _replayMapCount;
 
     private readonly HierarchyTable _hierarchy = new();
@@ -489,11 +489,66 @@ public sealed partial class World : IDisposable
     /// allocate fresh local ids via <c>ReserveDeferredEntityUnsafe</c> and are mapped through a
     /// per-replay <c>seq —local real</c> table. Real-id entities go through
     /// <see cref="EnsureReplayReservation"/> to verify allocator synchronization.
+    ///
+    /// After replay, use <see cref="TryResolvePlaceholder"/> to convert placeholder entity handles
+    /// to real entity IDs within the current frame. Placeholder handles are **not valid** across
+    /// frames: always store and use the resolved real <see cref="Entity"/> instead.
     /// </remarks>
-    public ReplayMapping Replay(FrameDelta delta)
+    public void Replay(FrameDelta delta)
     {
         ReplayCore(delta);
-        return new ReplayMapping(_replayPlaceholderMap, _replayMapCount);
+    }
+
+    /// <summary>
+    /// Attempts to resolve a placeholder entity (<c>Entity(-1, seq)</c>) to its real
+    /// local entity ID after the most recent <see cref="Replay"/> call.
+    /// </summary>
+    /// <remarks>
+    /// <b>Placeholders are valid only against the replay that produced them.</b>
+    /// A subsequent <see cref="Replay"/> call replaces the internal mapping table,
+    /// causing the same placeholder handle to resolve to a different real entity (or
+    /// to fail if the seq is out of range).
+    ///
+    /// To safely refer to an entity across frames, resolve the placeholder immediately
+    /// after replay and store the real <see cref="Entity"/>:
+    /// <code>
+    /// world.Replay(delta);
+    /// if (world.TryResolvePlaceholder(created, out var real))
+    /// {
+    ///     world.Set(tracker, new Target { Value = real }); // ✅ store real ID
+    /// }
+    /// </code>
+    /// The real Entity ID is deterministic across hosts when replaying the same deltas.
+    /// </remarks>
+    /// <param name="placeholder">A placeholder handle (<c>Entity(-1, seq)</c>).</param>
+    /// <param name="real">When this method returns, the resolved real entity;
+    /// or <c>default</c> if the placeholder could not be resolved.</param>
+    /// <returns><c>true</c> if the placeholder was resolved to a valid real entity;
+    /// <c>false</c> if the placeholder is out of range or unmapped.</returns>
+    public bool TryResolvePlaceholder(Entity placeholder, out Entity real)
+    {
+        if (!placeholder.IsPlaceholder)
+        {
+            real = placeholder;
+            return true;
+        }
+
+        var seq = placeholder.Version;
+        if ((uint)seq >= (uint)_replayMapCount)
+        {
+            real = default;
+            return false;
+        }
+
+        var mapped = _replayPlaceholderMap[seq];
+        if (mapped.IsUnmappedSentinel)
+        {
+            real = default;
+            return false;
+        }
+
+        real = mapped;
+        return true;
     }
 
     private unsafe void ReplayCore(FrameDelta delta)

@@ -2329,7 +2329,7 @@ public sealed class DeferredCreateTests
     }
 
     [Fact]
-    public void ReplayMapping_resolves_placeholder_to_real_entity()
+    public void TryResolvePlaceholder_resolves_to_real_entity()
     {
         var host = new World();
         var stream = MakeStream(host);
@@ -2339,16 +2339,17 @@ public sealed class DeferredCreateTests
         stream.Clear();
 
         var replica = new World();
-        var mapping = replica.Replay(delta);
+        replica.Replay(delta);
 
-        var real = mapping.Resolve(placeholder);
+        var found = replica.TryResolvePlaceholder(placeholder, out var real);
+        Assert.True(found);
         Assert.True(real.IsValid);
         Assert.True(replica.IsAlive(real));
         Assert.Equal(1, CountEntities(replica));
     }
 
     [Fact]
-    public void ReplayMapping_resolve_passthrough_non_placeholder()
+    public void TryResolvePlaceholder_passthrough_non_placeholder()
     {
         var host = new World();
         var stream = MakeStream(host);
@@ -2357,15 +2358,19 @@ public sealed class DeferredCreateTests
         stream.Clear();
 
         var replica = new World();
-        var mapping = replica.Replay(delta);
+        replica.Replay(delta);
 
-        var real = mapping.Resolve(placeholder);
-        var same = mapping.Resolve(real);
+        var found = replica.TryResolvePlaceholder(placeholder, out var real);
+        Assert.True(found);
+
+        // Real entity should be passed through when it's not a placeholder
+        var passed = replica.TryResolvePlaceholder(real, out var same);
+        Assert.True(passed);
         Assert.Equal(real, same);
     }
 
     [Fact]
-    public void ReplayMapping_resolve_unknown_placeholder_returns_default()
+    public void TryResolvePlaceholder_unknown_returns_false()
     {
         var host = new World();
         var stream = MakeStream(host);
@@ -2373,14 +2378,15 @@ public sealed class DeferredCreateTests
         stream.Clear();
 
         var replica = new World();
-        var mapping = replica.Replay(delta);
+        replica.Replay(delta);
 
-        var result = mapping.Resolve(new Entity(-1, 99));
+        var found = replica.TryResolvePlaceholder(new Entity(-1, 99), out var result);
+        Assert.False(found);
         Assert.False(result.IsValid);
     }
 
     [Fact]
-    public void ReplayMapping_Frozen_survives_subsequent_replay()
+    public void TryResolvePlaceholder_then_real_entity_survives_subsequent_replay()
     {
         var host = new World();
         var stream = MakeStream(host);
@@ -2395,14 +2401,19 @@ public sealed class DeferredCreateTests
         stream.Clear();
 
         var replica = new World();
-        var frozenA = replica.Replay(deltaA).Frozen();
 
+        // Resolve to real Entity ID immediately — don't keep the placeholder.
+        replica.Replay(deltaA);
+        var found = replica.TryResolvePlaceholder(a, out var realA);
+        Assert.True(found);
+        Assert.True(realA.IsValid);
+
+        // Subsequent Replay doesn't invalidate the real Entity ID
+        // (allocator is deterministic, same real ID across all hosts).
         replica.Replay(deltaB);
 
-        var real = frozenA.Resolve(a);
-        Assert.True(real.IsValid);
-        Assert.True(replica.IsAlive(real));
-        Assert.True(replica.TryGet(real, out Position pos));
+        Assert.True(replica.IsAlive(realA));
+        Assert.True(replica.TryGet(realA, out Position pos));
         Assert.Equal(1, pos.X);
     }
     // ── Helpers ──────────────────────────────────────────────────
