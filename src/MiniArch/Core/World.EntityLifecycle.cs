@@ -166,10 +166,16 @@ public sealed partial class World
     /// <summary>
     /// Returns whether an entity is alive.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool IsAlive(Entity entity)
     {
         ThrowIfDisposed();
-        return TryGetLocation(entity, out _);
+
+        if ((uint)entity.Id >= (uint)_entitySlotCount)
+            return false;
+
+        ref var record = ref _records[entity.Id];
+        return record.IsOccupied && record.Version == entity.Version;
     }
 
     [Conditional("DEBUG")]
