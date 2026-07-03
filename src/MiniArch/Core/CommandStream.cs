@@ -82,7 +82,24 @@ public sealed class CommandStream
     /// When <c>false</c> (default), <see cref="Create"/> and <see cref="Clone"/>
     /// allocate real ids immediately, and <see cref="Snapshot"/> resolves any
     /// deferred placeholders before building a real-id delta.
+    ///
+    /// When <c>DeferredEntities</c> is <c>true</c>, component fields of type
+    /// <see cref="Entity"/> that reference deferred-created entities are
+    /// automatically resolved by both <see cref="Submit"/> and
+    /// <see cref="World.Replay(global::MiniArch.Core.FrameDelta)"/>.
+    /// You can freely store a placeholder returned by <see cref="Create"/>
+    /// in another component's <see cref="Entity"/> field; the system
+    /// replaces it with the real entity ID at apply time.
     /// </summary>
+    /// <example>
+    /// <code>
+    /// var stream = new CommandStream(world) { DeferredEntities = true };
+    /// var target = stream.Create();
+    /// var follower = stream.Create();
+    /// stream.Add(follower, new AIFollow { Target = target });
+    /// // Target is a placeholder —resolved automatically on Submit/Replay.
+    /// </code>
+    /// </example>
     public bool DeferredEntities
     {
         get => _deferredEntities;
@@ -484,7 +501,8 @@ public sealed class CommandStream
         // Order matches Submit: Create —Hierarchy —Ops —Destroy.
         EmitPendingEntitiesToDelta(delta, new PendingBatchView(
             _frozen.BatchCanceled, _frozen.BatchHeads, _frozen.BatchCompCounts,
-            _frozen.BatchComps, _frozen.BatchBuf, _frozen.BatchEntities, _frozen.PendingBatchCount));
+            _frozen.BatchComps, _frozen.BatchBuf, _frozen.BatchEntities, _frozen.PendingBatchCount),
+            _deferredEntities);
 
         EmitHierarchyToDelta(delta, _frozen);
 
@@ -590,7 +608,7 @@ public sealed class CommandStream
         // Order matches Submit: Create —Hierarchy —Ops —Destroy.
         var delta = new FrameDelta();
 
-        EmitPendingEntitiesToDelta(delta, frozen.Pending);
+        EmitPendingEntitiesToDelta(delta, frozen.Pending, deferredMode: false);
 
         EmitHierarchyToDelta(delta, frozen);
 
@@ -710,7 +728,7 @@ public sealed class CommandStream
         }
     }
 
-    private static void EmitPendingEntitiesToDelta(FrameDelta delta, in PendingBatchView view)
+    private static void EmitPendingEntitiesToDelta(FrameDelta delta, in PendingBatchView view, bool deferredMode = false)
     {
         var batchCanceled = view.Canceled;
         var batchHeads = view.Heads;
@@ -720,29 +738,38 @@ public sealed class CommandStream
         var batchEntities = view.Entities;
         var pendingBatchCount = view.Count;
 
-        // Single pass: emit Reserve + Release (cancelled) or Reserve + Create
-        // (committed) consecutively for each entity. This preserves temporal
-        // ordering where a cancelled entity's id may be recycled by a later
-        // Create within the same frame —the two-pass approach (all Reserves
-        // before all Releases) breaks this dependency.
+        // Deferred (placeholder) mode: emit all Reserves first, then all
+        // Creates.  This guarantees that when ReplayCore processes the delta
+        // sequentially, every placeholder seq->real mapping is established
+        // before any Create payload is read —essential because a Create's
+        // component data may contain Entity refs that reference other
+        // placeholders in the same frame.
         //
-        // Placeholder entities (Id < 0) carry deferred creates: they have not
-        // yet been resolved to host-local real ids. Snapshots emit them as-is
-        // so that each replaying host assigns its own ids independently.
+        // Real-id mode: keep the original single-pass per-entity emission
+        // (Reserve + Create/Release) so that a Release of a cancelled entity
+        // can recycle its id for a later Create in the same frame.
+        if (deferredMode)
+        {
+            // Pass 1: all Reserves for non-cancelled deferred entities.
+            for (var i = 0; i < pendingBatchCount; i++)
+            {
+                if (batchCanceled[i]) continue;
+                delta.AddReserve(batchEntities[i]);
+            }
+
+            // Pass 2: all Creates for non-cancelled deferred entities.
+            for (var i = 0; i < pendingBatchCount; i++)
+            {
+                if (batchCanceled[i]) continue;
+                EmitCreateFromBatch(delta, view, i);
+            }
+            return;
+        }
+
+        // ── Real-id (single-pass, per-entity) ──────────────────────
         for (var i = 0; i < pendingBatchCount; i++)
         {
             var entity = batchEntities[i];
-            // Deferred create that was cancelled never allocated a real id —skip it.
-            // Unlike immediate cancels (which emit Reserve+Release below to keep id
-            // allocation in lockstep across hosts), deferred cancels consume no id
-            // by design: the whole point of deferred is to avoid touching the world
-            // id allocator until submit.
-            if (entity.IsPlaceholder)
-            {
-                if (batchCanceled[i]) continue;
-                // Committed deferred: emit Reserve + Create with placeholder entity.
-                // The replay side will assign a local id when it reads the Reserve op.
-            }
             delta.AddReserve(entity);
 
             if ((uint)i < (uint)batchCanceled.Length && batchCanceled[i])
@@ -751,38 +778,50 @@ public sealed class CommandStream
                 continue;
             }
 
-            var rawCount = batchCompCounts[i];
-            if (rawCount == 0)
-            {
-                delta.AddCreate(entity, Array.Empty<RawComponentValue>());
-                continue;
-            }
-
-            var comps = new RawComponentValue[rawCount];
-            var outIdx = 0;
-            var current = batchHeads[i];
-            while (current >= 0)
-            {
-                ref var bc = ref batchComps[current];
-                if (!bc.Removed)
-                    comps[outIdx++] = ReadRawFromBuf(batchBuf, bc);
-                current = bc.Next;
-            }
-
-            if (outIdx == 0)
-            {
-                delta.AddCreate(entity, Array.Empty<RawComponentValue>());
-                continue;
-            }
-
-            if (outIdx != comps.Length)
-                Array.Resize(ref comps, outIdx);
-            if (outIdx > 1)
-                outIdx = SortAndDeduplicateComponents(comps);
-            if (outIdx != comps.Length)
-                Array.Resize(ref comps, outIdx);
-            delta.AddCreate(entity, comps);
+            EmitCreateFromBatch(delta, view, i);
         }
+    }
+
+    private static void EmitCreateFromBatch(FrameDelta delta, in PendingBatchView view, int i)
+    {
+        var batchBuf = view.Buf;
+        var batchHeads = view.Heads;
+        var batchCompCounts = view.CompCounts;
+        var batchComps = view.Comps;
+        var batchEntities = view.Entities;
+
+        var entity = batchEntities[i];
+        var rawCount = batchCompCounts[i];
+        if (rawCount == 0)
+        {
+            delta.AddCreate(entity, Array.Empty<RawComponentValue>());
+            return;
+        }
+
+        var comps = new RawComponentValue[rawCount];
+        var outIdx = 0;
+        var current = batchHeads[i];
+        while (current >= 0)
+        {
+            ref var bc = ref batchComps[current];
+            if (!bc.Removed)
+                comps[outIdx++] = ReadRawFromBuf(batchBuf, bc);
+            current = bc.Next;
+        }
+
+        if (outIdx == 0)
+        {
+            delta.AddCreate(entity, Array.Empty<RawComponentValue>());
+            return;
+        }
+
+        if (outIdx != comps.Length)
+            Array.Resize(ref comps, outIdx);
+        if (outIdx > 1)
+            outIdx = SortAndDeduplicateComponents(comps);
+        if (outIdx != comps.Length)
+            Array.Resize(ref comps, outIdx);
+        delta.AddCreate(entity, comps);
     }
 
     // An entity is excluded from hierarchy application when it is scheduled for
@@ -1456,7 +1495,7 @@ public sealed class CommandStream
         var resolveMap = _resolveMapPool ?? [];
         _resolveMapPool = null;
         EnsureCapacity(ref resolveMap, _deferredSeq - 1, 64);
-        Array.Fill(resolveMap, new Entity(-1, -1), 0, _deferredSeq); // IsUnmappedSentinel
+        Array.Fill(resolveMap, new Entity(-1, -1)); // IsUnmappedSentinel —fill entire array to wipe stale pool data
 
         for (var seq = 0; seq < _deferredSeq; seq++)
         {
@@ -1484,6 +1523,25 @@ public sealed class CommandStream
             store?.ReplacePlaceholders(resolveMap);
 
         ReplaceHierarchyPlaceholders(resolveMap);
+
+        // Resolve embedded Entity refs in pending-batch (created-entity) component data.
+        var resolveSpan = new ReadOnlySpan<Entity>(resolveMap);
+        for (var i = 0; i < _frozen.PendingBatchCount; i++)
+        {
+            if (_frozen.BatchCanceled[i]) continue;
+            var current = _frozen.BatchHeads[i];
+            while (current >= 0)
+            {
+                ref var bc = ref _frozen.BatchComps[current];
+                if (!bc.Removed)
+                {
+                    EntityFieldResolver.ResolveInPlace(
+                        new Span<byte>(_frozen.BatchBuf, bc.Offset, bc.Size),
+                        bc.Type, resolveSpan);
+                }
+                current = bc.Next;
+            }
+        }
 
         for (var i = 0; i < _frozen.DestroyCount; i++)
         {
@@ -1747,13 +1805,27 @@ public sealed class CommandStream
 
         public override void ReplacePlaceholders(Entity[] resolveMap)
         {
+            var typeId = Component<T>.ComponentType;
+            var offsets = EntityFieldResolver.GetOffsets(typeId);
+            var dataSpan = new ReadOnlySpan<Entity>(resolveMap);
+
             for (var i = 0; i < _count; i++)
             {
+                // Resolve the command-target entity (existing behaviour).
                 ref var slot = ref _entities[i];
                 if (slot.IsPlaceholder)
                 {
                     var resolved = resolveMap[slot.Version];
                     if (resolved.Id >= 0) slot = resolved;
+                }
+
+                // Resolve embedded Entity refs in the component value itself.
+                // Remove operations carry no meaningful payload —skip them.
+                if (offsets.Length > 0 && _kinds[i] != KindRemove)
+                {
+                    EntityFieldResolver.ResolveInPlace(
+                        MemoryMarshal.AsBytes(new Span<T>(ref _data[i])),
+                        typeId, dataSpan);
                 }
             }
         }

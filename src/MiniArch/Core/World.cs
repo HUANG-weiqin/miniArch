@@ -595,8 +595,11 @@ public sealed partial class World : IDisposable
                         break;
 
                     case DeltaOpKind.Create:
-                        ReplayCreateOpResolved(ResolveReplayEntity(decoder.Entity, map, mapLen), ref decoder, bufPtr);
+                    {
+                        var placeholderMap = new ReadOnlySpan<Entity>(map, 0, mapLen);
+                        ReplayCreateOpResolved(ResolveReplayEntity(decoder.Entity, map, mapLen), ref decoder, bufPtr, placeholderMap);
                         break;
+                    }
 
                     case DeltaOpKind.AddChild:
                     {
@@ -617,8 +620,29 @@ public sealed partial class World : IDisposable
                         var dataSize = decoder.ReadVarint();
                         var dataStart = decoder.CurrentPosition;
                         _ = decoder.ReadBytes(dataSize);
-                        var loc = RequireLocation(entity);
-                        ApplyRawAdd(entity, loc, comp, bufPtr + dataStart);
+                        var src = bufPtr + dataStart;
+                        if (EntityFieldResolver.GetOffsets(comp).Length > 0)
+                        {
+                            // Cannot mutate the delta buffer (the same FrameDelta may be
+                            // replayed into multiple worlds). Use a pooled scratch buffer
+                            // instead of stackalloc to avoid per-op stack accumulation.
+                            var pooled = ArrayPool<byte>.Shared.Rent(dataSize);
+                            fixed (byte* pScratch = pooled)
+                            {
+                                Unsafe.CopyBlockUnaligned(pScratch, src, (uint)dataSize);
+                                EntityFieldResolver.ResolveInPlace(
+                                    new Span<byte>(pScratch, dataSize), comp,
+                                    new ReadOnlySpan<Entity>(map, 0, mapLen));
+                                var loc = RequireLocation(entity);
+                                ApplyRawAdd(entity, loc, comp, pScratch);
+                            }
+                            ArrayPool<byte>.Shared.Return(pooled);
+                        }
+                        else
+                        {
+                            var loc = RequireLocation(entity);
+                            ApplyRawAdd(entity, loc, comp, src);
+                        }
                         break;
                     }
 
@@ -629,8 +653,26 @@ public sealed partial class World : IDisposable
                         var dataSize = decoder.ReadVarint();
                         var dataStart = decoder.CurrentPosition;
                         _ = decoder.ReadBytes(dataSize);
-                        var loc = RequireLocation(entity);
-                        ApplyRawSet(entity, loc, comp, bufPtr + dataStart);
+                        var src = bufPtr + dataStart;
+                        if (EntityFieldResolver.GetOffsets(comp).Length > 0)
+                        {
+                            var pooled = ArrayPool<byte>.Shared.Rent(dataSize);
+                            fixed (byte* pScratch = pooled)
+                            {
+                                Unsafe.CopyBlockUnaligned(pScratch, src, (uint)dataSize);
+                                EntityFieldResolver.ResolveInPlace(
+                                    new Span<byte>(pScratch, dataSize), comp,
+                                    new ReadOnlySpan<Entity>(map, 0, mapLen));
+                                var loc = RequireLocation(entity);
+                                ApplyRawSet(entity, loc, comp, pScratch);
+                            }
+                            ArrayPool<byte>.Shared.Return(pooled);
+                        }
+                        else
+                        {
+                            var loc = RequireLocation(entity);
+                            ApplyRawSet(entity, loc, comp, src);
+                        }
                         break;
                     }
 
@@ -785,7 +827,8 @@ public sealed partial class World : IDisposable
     /// The entity may have been resolved from a placeholder via
     /// <see cref="ResolveReplayEntity"/> in <see cref="ReplayCore"/>.
     /// </summary>
-    private unsafe void ReplayCreateOpResolved(Entity entity, ref FrameDelta.OpDecoder decoder, byte* bufPtr)
+    private unsafe void ReplayCreateOpResolved(Entity entity, ref FrameDelta.OpDecoder decoder, byte* bufPtr,
+        scoped ReadOnlySpan<Entity> placeholderMap)
     {
         var compCount = decoder.ReadVarint();
 
@@ -804,22 +847,26 @@ public sealed partial class World : IDisposable
         {
             Span<ComponentType> types = stackalloc ComponentType[compCount];
             Span<int> offsets = stackalloc int[compCount];
-            ReplayCreateOpCore(ref decoder, bufPtr, entity, compCount, types, offsets);
+            Span<int> sizes = stackalloc int[compCount];
+            ReplayCreateOpCore(ref decoder, bufPtr, entity, compCount, types, offsets, sizes, placeholderMap);
         }
         else
         {
             var poolTypes = ArrayPool<ComponentType>.Shared.Rent(compCount);
             var poolOffsets = ArrayPool<int>.Shared.Rent(compCount);
+            var poolSizes = ArrayPool<int>.Shared.Rent(compCount);
             try
             {
                 ReplayCreateOpCore(
                     ref decoder, bufPtr, entity, compCount,
-                    poolTypes.AsSpan(0, compCount), poolOffsets.AsSpan(0, compCount));
+                    poolTypes.AsSpan(0, compCount), poolOffsets.AsSpan(0, compCount),
+                    poolSizes.AsSpan(0, compCount), placeholderMap);
             }
             finally
             {
                 ArrayPool<ComponentType>.Shared.Return(poolTypes);
                 ArrayPool<int>.Shared.Return(poolOffsets);
+                ArrayPool<int>.Shared.Return(poolSizes);
             }
         }
     }
@@ -832,7 +879,8 @@ public sealed partial class World : IDisposable
     private unsafe void ReplayCreateOpCore(
         ref FrameDelta.OpDecoder decoder, byte* bufPtr,
         Entity entity, int compCount,
-        scoped Span<ComponentType> types, scoped Span<int> offsets)
+        scoped Span<ComponentType> types, scoped Span<int> offsets, scoped Span<int> sizes,
+        scoped ReadOnlySpan<Entity> placeholderMap)
     {
         // One pass over the Create payload: read type, build mask, record the
         // data offset, advance past data. Data is written back below once the
@@ -845,6 +893,7 @@ public sealed partial class World : IDisposable
             builder.SetBit(t.Value);
 
             var size = decoder.ReadVarint();
+            sizes[i] = size;
             offsets[i] = decoder.CurrentPosition;
             decoder.ReadBytes(size);
         }
@@ -865,9 +914,48 @@ public sealed partial class World : IDisposable
             archetype = GetOrCreateArchetype(new Signature(types.ToArray()));
         }
 
-        // Direct write from delta buffer into archetype columns. No intermediate
-        // RawComponentValue[] and no per-type box.
-        MaterializeReservedEntityRaw(entity, archetype, types, offsets, bufPtr);
+        // Write components into archetype columns, resolving embedded Entity
+        // refs on the fly. We cannot mutate the delta buffer because the same
+        // FrameDelta may be replayed into multiple worlds; instead, component
+        // payloads that contain Entity fields are copied to a stack scratch,
+        // resolved, and written from the scratch.
+        var rowIndex = PlaceEntityInArchetype(entity, archetype);
+
+        // Find the largest component that has Entity fields —that's the scratch
+        // size needed. Hoist stackalloc out of the loop below.
+        int scratchSize = 0;
+        for (var i = 0; i < compCount; i++)
+        {
+            if (EntityFieldResolver.GetOffsets(types[i]).Length > 0 && sizes[i] > scratchSize)
+                scratchSize = sizes[i];
+        }
+
+        if (scratchSize > 0)
+        {
+            byte* scratch = stackalloc byte[scratchSize];
+            for (var i = 0; i < compCount; i++)
+            {
+                var colIdx = archetype.GetComponentIndexFast(types[i]);
+                var src = bufPtr + offsets[i];
+                if (EntityFieldResolver.GetOffsets(types[i]).Length > 0)
+                {
+                    Unsafe.CopyBlockUnaligned(scratch, src, (uint)sizes[i]);
+                    EntityFieldResolver.ResolveInPlace(
+                        new Span<byte>(scratch, sizes[i]), types[i], placeholderMap);
+                    src = scratch;
+                }
+                archetype.WriteComponentRaw(colIdx, rowIndex, src);
+            }
+        }
+        else
+        {
+            // Fast path: no Entity refs in any component.
+            for (var i = 0; i < compCount; i++)
+            {
+                var colIdx = archetype.GetComponentIndexFast(types[i]);
+                archetype.WriteComponentRaw(colIdx, rowIndex, bufPtr + offsets[i]);
+            }
+        }
     }
 
     /// <summary>

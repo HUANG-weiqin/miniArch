@@ -2,7 +2,7 @@
 title: Deferred Create — Multi-Host Lockstep Design
 module: MiniArch.Core.CommandStream
 description: DeferredEntities flag 让 Create/Clone 在 placeholder（多 host lockstep）和 immediate（单机/权威服务器）之间切换。Snapshot 按 flag 输出 placeholder delta 或 real-id delta；SubmitAndSnapshotAsync 始终输出 real-id delta。
-updated: 2026-07-03
+updated: 2026-07-04
 ---
 
 # Deferred Create — Multi-Host Lockstep Design
@@ -147,6 +147,45 @@ if (world.TryResolvePlaceholder(placeholder, out var real))
 ### 决策 #4：replay 端 placeholder→local real 映射的数据结构
 
 **已定**：`Entity[]` 按 seq 索引。每帧 `mapLen = 0` 重置，`EnsurePlaceholderMap` lazy 扩容 + 初始化 sentinel。`TryResolvePlaceholder` 直接查询此内部映射。
+
+## 用户指南：组件 Entity 字段自动解析
+
+从 `Component<T>` 组件字段可以直接存放 `Entity` 值，指向同帧 deferred 创建的实体。
+
+```csharp
+public record struct AIFollow(Entity Target);  // 普通组件，含 Entity 字段
+
+var stream = new CommandStream(world) { DeferredEntities = true };
+
+var target = stream.Create();   // Entity(-1, 0) — placeholder
+var drone = stream.Create();    // Entity(-1, 1)
+stream.Add(drone, new AIFollow { Target = target });
+
+stream.Submit();  // 或 Snapshot() + Replay()
+// drone.AIFollow.Target 自动解析为真实的 target Entity ID ✅
+```
+
+### 哪些场景会自动解析
+
+| 场景 | Submit | Replay |
+|---|---|---|
+| 新建实体引用另一个新建实体 | ✅ | ✅ |
+| 已有实体引用新建实体 | ✅ | ✅ |
+| 自引用（A → A） | ✅ | ✅ |
+| Clone 出来的实体引用其他实体 | ✅（源组件的 ID 是实时的） | ✅ |
+| 被引用实体已取消 Destroy | ⚠️ placeholder 保持未解析（无对应实体） | ⚠️ 同上 |
+
+### 约束
+
+- 组件类型必须使用 `LayoutKind.Sequential`（C# 默认）。`LayoutKind.Auto` 会抛出 `InvalidOperationException`
+- 只扫描**直接** `Entity` 字段，不递归嵌套结构体
+- 跨帧引用不要用 placeholder，用 `TryResolvePlaceholder()` 拿真实 ID 后存组件
+
+### 实现原理（概要）
+
+`EntityFieldResolver` 运行时反射一次组件类型的 `Entity` 字段偏移量，缓存永久。Submit/Replay 在写入前逐字段检查——如果是 placeholder 则查 resolveMap 替换为真实 ID。Replay 路径用 `ArrayPool<byte>` scratch 做解析，不修改 delta buffer。
+
+详细路径见上文"Producer 端实现"和"Consumer 端实现"节。
 
 ## 坑点
 

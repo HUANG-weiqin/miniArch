@@ -2075,6 +2075,10 @@ public sealed class DeferredCreateTests
     private readonly record struct Velocity(int X, int Y);
     private readonly record struct Health(int Value);
 
+    // Component with an embedded Entity reference —used to test automatic
+    // placeholder resolution in both Submit and Replay paths.
+    private readonly record struct Linked(int Extra, Entity Target);
+
     private static CommandStream MakeStream(World world) =>
         new CommandStream(world) { DeferredEntities = true };
 
@@ -2440,6 +2444,333 @@ public sealed class DeferredCreateTests
             }
         }
         Assert.Fail("No entity with Position component found.");
+    }
+
+    // ══════════════════════════════════════════════════════════—
+    // Embedded Entity ref (automatic placeholder resolution)
+    // ══════════════════════════════════════════════════════════—
+
+    [Fact]
+    public void Submit_resolves_embedded_Entity_ref_in_pending_create()
+    {
+        // Two pending entities, one references the other via an Entity field
+        // inside a component struct.
+        var world = new World();
+        var stream = new CommandStream(world);
+
+        var a = stream.Create();
+        var b = stream.Create();
+        stream.Add(a, new Position(1, 2));
+        // b's component references a —both are placeholders at record time.
+        stream.Add(b, new Linked(99, a));
+
+        stream.Submit();
+
+        Assert.True(world.IsAlive(a));
+        Assert.True(world.IsAlive(b));
+        Assert.True(world.TryGet(b, out Linked linked));
+        Assert.Equal(99, linked.Extra);
+        // The placeholder Entity(-1, 0) should have been resolved to the real a.
+        Assert.Equal(a, linked.Target);
+        Assert.True(a.IsValid);
+    }
+
+    [Fact]
+    public void Submit_resolves_embedded_Entity_ref_from_existing_to_pending()
+    {
+        // Existing entity gets a component whose Entity field points to a
+        // deferred-created entity.
+        var world = new World();
+        var existing = world.Create(new Position(0, 0));
+        var stream = new CommandStream(world);
+
+        var target = stream.Create();
+        stream.Add(target, new Health(100));
+        stream.Add(existing, new Linked(42, target));
+
+        stream.Submit();
+
+        Assert.True(world.IsAlive(target));
+        Assert.True(world.TryGet(existing, out Linked linked));
+        Assert.Equal(42, linked.Extra);
+        Assert.Equal(target, linked.Target);
+    }
+
+    [Fact]
+    public void Submit_resolves_Entity_ref_then_Set_on_same_target()
+    {
+        // Existing entity gets a component referencing the deferred target,
+        // then Set the same component on the same entity —both reference
+        // must resolve.
+        var world = new World();
+        var stream = new CommandStream(world);
+
+        var target = stream.Create();
+        stream.Add(target, new Health(100));
+        stream.Add(target, new Linked(1, target));   // self-reference
+        stream.Set(target, new Linked(2, target));   // overwrite via Set
+
+        stream.Submit();
+
+        Assert.True(world.TryGet(target, out Linked linked));
+        Assert.Equal(2, linked.Extra);
+        Assert.Equal(target, linked.Target);
+    }
+
+    [Fact]
+    public void Replay_resolves_embedded_Entity_ref_in_pending_create()
+    {
+        var host = new World();
+        var stream = MakeStream(host);
+
+        var a = stream.Create();
+        var b = stream.Create();
+        stream.Add(a, new Position(10, 20));
+        stream.Add(b, new Linked(77, a));
+
+        var delta = stream.Snapshot();
+        stream.Clear();
+
+        var replica = new World();
+        replica.Replay(delta);
+
+        // Resolve placeholders to real handles.
+        Assert.True(replica.TryResolvePlaceholder(a, out var realA));
+        Assert.True(replica.TryResolvePlaceholder(b, out var realB));
+
+        Assert.True(replica.IsAlive(realA));
+        Assert.True(replica.IsAlive(realB));
+        Assert.True(replica.TryGet(realB, out Linked linked));
+        Assert.Equal(77, linked.Extra);
+        // The embedded placeholder in Linked.Target must have been resolved
+        // to the same realA that b's own entity reference resolved to.
+        Assert.Equal(realA, linked.Target);
+    }
+
+    [Fact]
+    public void Replay_resolves_embedded_Entity_ref_from_existing_to_pending()
+    {
+        var host = new World();
+        var existing = host.Create(new Position(0, 0));
+        var stream = MakeStream(host);
+
+        var target = stream.Create();
+        stream.Add(target, new Health(99));
+        stream.Add(existing, new Linked(55, target));
+
+        var delta = stream.Snapshot();
+        stream.Clear();
+
+        var replica = new World();
+        var replicaExisting = replica.Create(new Position(0, 0));
+        replica.Replay(delta);
+
+        Assert.True(replica.TryResolvePlaceholder(target, out var realTarget));
+        Assert.True(replica.IsAlive(realTarget));
+        Assert.True(replica.TryGet(replicaExisting, out Linked linked));
+        Assert.Equal(55, linked.Extra);
+        Assert.Equal(realTarget, linked.Target);
+    }
+
+    [Fact]
+    public void Replay_same_delta_into_two_worlds_produces_independent_resolution()
+    {
+        // Regression: the delta buffer must not be mutated in-place.
+        // Each world independently resolves the same placeholder seq → local id.
+        var host = new World();
+        var stream = MakeStream(host);
+
+        var target = stream.Create();
+        stream.Add(target, new Health(10));
+        var a = stream.Create();
+        stream.Add(a, new Linked(1, target));
+
+        var delta = stream.Snapshot();
+        stream.Clear();
+
+        // Replay into world A.
+        var worldA = new World();
+        worldA.Replay(delta);
+
+        // Replay the same delta into world B.
+        var worldB = new World();
+        worldB.Replay(delta);
+
+        Assert.True(worldA.TryResolvePlaceholder(target, out var targetA));
+        Assert.True(worldA.TryResolvePlaceholder(a, out var aA));
+        Assert.True(worldA.TryGet(aA, out Linked linkedA));
+        Assert.Equal(targetA, linkedA.Target);
+
+        Assert.True(worldB.TryResolvePlaceholder(target, out var targetB));
+        Assert.True(worldB.TryResolvePlaceholder(a, out var aB));
+        Assert.True(worldB.TryGet(aB, out Linked linkedB));
+        Assert.Equal(targetB, linkedB.Target);
+
+        // Both worlds independently resolved to the same IDs (deterministic allocator).
+        // But mutations in one world must NOT affect the other.
+        worldA.Destroy(targetA);
+        Assert.False(worldA.IsAlive(targetA));
+        Assert.True(worldB.IsAlive(targetB));
+    }
+
+    [Fact]
+    public void Submit_resolves_embedded_Entity_ref_after_Destroy_pending()
+    {
+        // Deferred mode: A references B via component; B is then destroyed.
+        // The resolver leaves B's placeholder as-is (cancelled → Id < 0).
+        var world = new World();
+        var stream = MakeStream(world);
+
+        var a = stream.Create(); // Entity(-1,0)
+        var b = stream.Create(); // Entity(-1,1)
+        stream.Add(a, new Linked(0, b));
+        stream.Destroy(b);
+
+        stream.Submit();
+
+        // A was materialized; locate it via query since the placeholder
+        // handle a = Entity(-1,0) is no longer valid in the world.
+        var query = world.Query(new QueryDescription().With<Linked>());
+        var found = false;
+        foreach (var chunk in query.GetChunks())
+        {
+            var linkedSpan = chunk.GetSpan<Linked>();
+            for (var i = 0; i < chunk.Count; i++)
+            {
+                found = true;
+                // B was cancelled —its placeholder slot maps to an unmapped
+                // sentinel (Id < 0), so the resolver skipped it and the
+                // placeholder Entity(-1,1) remains in the component data.
+                Assert.True(linkedSpan[i].Target.IsPlaceholder);
+            }
+        }
+        Assert.True(found);
+    }
+
+    [Fact]
+    public void Submit_resolves_self_reference_in_pending_entity()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+
+        var e = stream.Create();
+        stream.Add(e, new Linked(0, e)); // self-reference
+
+        stream.Submit();
+
+        Assert.True(world.IsAlive(e));
+        Assert.True(world.TryGet(e, out Linked linked));
+        Assert.Equal(e, linked.Target);
+    }
+
+    // ══════════════════════════════════════════════════════—
+    //  Deferred-mode Submit (DeferredEntities = true)
+    // ══════════════════════════════════════════════════════—
+
+    [Fact]
+    public void DeferredSubmit_resolves_embedded_ref_between_pending_entities()
+    {
+        var world = new World();
+        var stream = MakeStream(world);
+
+        var target = stream.Create(); // Entity(-1,0)
+        var owner = stream.Create();  // Entity(-1,1)
+        stream.Add(target, new Health(42));
+        stream.Add(owner, new Linked(100, target));
+
+        stream.Submit();
+
+        // After deferred Submit, placeholder handles are stale; verify via query.
+        var qTarget = world.Query(new QueryDescription().With<Health>());
+        Entity? foundTarget = null;
+        foreach (var chunk in qTarget.GetChunks())
+        {
+            var healths = chunk.GetSpan<Health>();
+            var entities = chunk.GetEntities();
+            for (var i = 0; i < chunk.Count; i++)
+            {
+                if (healths[i].Value == 42)
+                    foundTarget = entities[i];
+            }
+        }
+        Assert.NotNull(foundTarget);
+
+        var qLinked = world.Query(new QueryDescription().With<Linked>());
+        bool verified = false;
+        foreach (var chunk in qLinked.GetChunks())
+        {
+            var linked = chunk.GetSpan<Linked>();
+            for (var i = 0; i < chunk.Count; i++)
+            {
+                Assert.Equal(100, linked[i].Extra);
+                Assert.Equal(foundTarget!.Value, linked[i].Target);
+                verified = true;
+            }
+        }
+        Assert.True(verified);
+    }
+
+    [Fact]
+    public void DeferredSubmit_resolves_existing_to_pending_ref()
+    {
+        var world = new World();
+        var existing = world.Create(new Position(0, 0));
+        var stream = MakeStream(world);
+
+        var target = stream.Create();
+        stream.Add(target, new Health(77));
+        stream.Add(existing, new Linked(50, target));
+
+        stream.Submit();
+
+        Assert.True(world.TryGet(existing, out Linked linked));
+        Assert.Equal(50, linked.Extra);
+        // The placeholder in Linked.Target must resolve to a live entity.
+        Assert.True(world.IsAlive(linked.Target));
+    }
+
+    [Fact]
+    public void DeferredSubmit_two_pass_delta_passes_Validate()
+    {
+        var host = new World();
+        var stream = MakeStream(host);
+
+        // Multiple entities referencing each other to exercise two-pass emission.
+        var a = stream.Create();
+        var b = stream.Create();
+        stream.Add(a, new Linked(1, b));
+        stream.Add(b, new Linked(2, a));
+
+        var delta = stream.Snapshot();
+
+        // Validate checks structural integrity (Reserve before Create, etc.)
+        delta.Validate();
+
+        // Ensure all ops are present.
+        Assert.True(delta.DeltaCount >= 4); // Reserve(a) + Reserve(b) + Create(a) + Create(b)
+    }
+
+    // ══════════════════════════════════════════════════════—
+    //  Unsupported layout —fail-fast
+    // ══════════════════════════════════════════════════════—
+
+    // Auto-layout component with Entity field —resolution must throw.
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Auto)]
+    private struct BadLinked
+    {
+        public int X;
+        public Entity Target;
+    }
+
+    [Fact]
+    public void EntityFieldResolver_throws_for_auto_layout_with_Entity_fields()
+    {
+        // Force registration first (which triggers the scan).
+        var ct = Component<BadLinked>.ComponentType;
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            EntityFieldResolver.GetOffsets(ct));
+        Assert.Contains("LayoutKind.Auto", ex.Message);
     }
 
     private static string HashWorld(World w)
