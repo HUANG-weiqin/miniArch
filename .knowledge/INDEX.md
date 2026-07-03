@@ -46,7 +46,7 @@
 **帧同步 / 网络**：
 - **端到端帧同步指南** → `kb-lockstep-playbook.md`
 - **CommandStream** → `kb-command-stream.md`
-- **FrameDelta.Merge** → `kb-command-stream.md`（Merge 段）
+- **FrameDelta.Concat** → `kb-command-stream.md`（Concat 段）
 - **Deferred Create 多 host 设计** → `kb-deferred-create-design.md`
 - **Checksum 双模式** → `kb-snapshot-persistence.md`（Checksum 双模式段）
 

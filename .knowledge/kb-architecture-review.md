@@ -2,7 +2,7 @@
 title: Architecture Mechanistic Review
 module: MiniArch.Core
 description: Mechanistic insight of the entire miniArch ECS library — one-line truths, subsystem breakdown, data flows, known issues, and design tensions. Links to per-subsystem kb pages for depth.
-updated: 2026-07-02 (清理已评估问题 P1/P5/O1/O3/O5 → 降级到已评估不值得改；P3 更新为 strict 语义；O4 保留为唯一可操作项；交叉引用 kb-design-rationale.md)
+updated: 2026-07-03 (FrameDelta.Merge → Concat 重命名)
 ---
 # Architecture Mechanistic Review
 
@@ -123,7 +123,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - Varint codec显式拒绝 5 字节 / 32 位溢出
 - `AsSpan()` 直接 `new(_buffer, 0, _length)` —— 零拷贝网络发送
 - `Deserialize` 只是 `wire.ToArray()` + 一次走读计数
-- `Merge(a, b)` 是 15 行 `Array.Copy` 拼接，**不做语义折叠**——时序信息完整保留，跨帧 id 回收自然正确
+- `Concat(a, b)` 是 15 行 `Array.Copy` 拼接，**不做语义折叠**——时序信息完整保留，跨帧 id 回收自然正确
 - 两种 entity-id 模式（placeholder vs real），wire format 相同，由 `CommandStream.DeferredEntities` flag 控制 producer 行为
 
 ### 10. World（编排者）
@@ -204,7 +204,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - **两层 archetype lookup**：Signature dict（权威）+ Mask dict（canonical-only，零分配 Replay 路径），每层职责单一
 - **两段式 query 失效**：archetypeCount 粗扫 + per-archetype segment count 细扫
 - **CommandStream typed store**：替代旧 entry stream 后反超 Friflo，详见 `kb-command-stream.md` vs Friflo 段
-- **FrameDelta packed byte format**：单一 buffer + varint + tag，零拷贝网络发送，Merge 退化到 Array.Copy
+- **FrameDelta packed byte format**：单一 buffer + varint + tag，零拷贝网络发送，Concat 退化到 Array.Copy
 - **`MoveEntityCore` + `FinishMoveEntity` 分离**：带 catch rollback，便于批量 materialize 复用
 - **`[SkipLocalsInit]` / `AggressiveInlining` / `Unsafe.As<byte,T>`** 系统化性能卫生
 - **Add/Set alias 文档化**、`Unsafe`/`Try` 前缀一致——命名诚实贯穿全库

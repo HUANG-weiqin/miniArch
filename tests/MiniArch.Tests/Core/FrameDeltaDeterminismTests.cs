@@ -460,17 +460,17 @@ public sealed class FrameDeltaDeterminismTests
         var recycled = b3.Create(); b3.Add(recycled, new Position(9, 9));
         var d3 = b3.Snapshot(); b3.Submit();
 
-        var merged = FrameDelta.Merge(FrameDelta.Merge(d1, d2), d3);
+        var merged = FrameDelta.Concat(FrameDelta.Concat(d1, d2), d3);
         var wire = merged.AsSpan();
         var restored = FrameDelta.Deserialize(wire);
 
         var target = new World();
         target.Replay(restored);
-        AssertIdentical(source, target, "CB merge destroy-recycle round-trip");
+        AssertIdentical(source, target, "CB concat destroy-recycle round-trip");
     }
 
     [Fact]
-    public void CB_merged_delta_round_trip_produces_identical_world()
+    public void CB_concat_delta_round_trip_produces_identical_world()
     {
         var source = new World();
         var deltas = new List<FrameDelta>();
@@ -489,17 +489,17 @@ public sealed class FrameDeltaDeterminismTests
         b3.Add(a, new Health(100));
         deltas.Add(b3.Snapshot()); b3.Submit();
 
-        var merged = deltas.Aggregate(FrameDelta.Merge);
+        var merged = deltas.Aggregate(FrameDelta.Concat);
         var wire = merged.AsSpan();
         var restored = FrameDelta.Deserialize(wire);
 
         var target = new World();
         target.Replay(restored);
-        AssertIdentical(source, target, "CB 3-merge round-trip");
+        AssertIdentical(source, target, "CB 3-concat round-trip");
     }
 
     [Fact]
-    public void CS_merged_delta_round_trip_produces_identical_world()
+    public void CS_concat_delta_round_trip_produces_identical_world()
     {
         var source = new World();
         var deltas = new List<FrameDelta>();
@@ -512,17 +512,17 @@ public sealed class FrameDeltaDeterminismTests
         s2.Set(a, new Position(55, 66));
         deltas.Add(s2.Snapshot()); s2.Submit();
 
-        var merged = deltas.Aggregate(FrameDelta.Merge);
+        var merged = deltas.Aggregate(FrameDelta.Concat);
         var wire = merged.AsSpan();
         var restored = FrameDelta.Deserialize(wire);
 
         var target = new World();
         target.Replay(restored);
-        AssertIdentical(source, target, "CS 2-merge round-trip");
+        AssertIdentical(source, target, "CS 2-concat round-trip");
     }
 
     [Fact]
-    public void Cross_CB_and_CS_merged_delta_round_trip_is_correct()
+    public void Cross_CB_and_CS_concat_delta_round_trip_is_correct()
     {
         var source = new World();
 
@@ -535,20 +535,20 @@ public sealed class FrameDeltaDeterminismTests
         stream.Add(a, new Velocity(5, 5));
         var csDelta = stream.Snapshot(); stream.Submit();
 
-        var merged = FrameDelta.Merge(cbDelta, csDelta);
+        var merged = FrameDelta.Concat(cbDelta, csDelta);
         var wire = merged.AsSpan();
         var restored = FrameDelta.Deserialize(wire);
 
         var target = new World();
         target.Replay(restored);
-        AssertIdentical(source, target, "CB+CS merge round-trip");
+        AssertIdentical(source, target, "CB+CS concat round-trip");
     }
 
     [Fact]
     public void Complex_multi_frame_scenario_round_trip_is_correct()
     {
         var (source, deltas) = BuildComplexScenario();
-        var merged = deltas.Aggregate(FrameDelta.Merge);
+        var merged = deltas.Aggregate(FrameDelta.Concat);
         var wire = merged.AsSpan();
         var restored = FrameDelta.Deserialize(wire);
 

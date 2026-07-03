@@ -18,7 +18,7 @@
 | **Snapshot() 提取可序列化增量** | ✅ **独有** | ❌ | ❌ | ❌ |
 | **World.Replay(FrameDelta)** | ✅ **独有** | ❌ | ❌ | ❌ |
 | **Replay 时 ID 一致性校验** | ✅ **独有** | ❌ | ❌ | ❌ |
-| **FrameDelta.Merge()（增量合并）** | ✅ **独有** | ❌ | ❌ | ❌ |
+| **FrameDelta.Concat()（增量合并）** | ✅ **独有** | ❌ | ❌ | ❌ |
 | **World.Clone() 分支/独立副本** | ✅ **独有** | ❌ | ❌ | ❌ |
 | **CaptureState/RestoreState（原地零分配回滚，多帧窗口）** | ✅ **独有** | ❌ | ❌ | ❌ |
 | **WorldSnapshot（二进制序列化）** | ✅ | ❌ | ❌ | ❌ |
@@ -146,7 +146,7 @@ replicaWorld.Replay(delta);      // 自动校验 ID 一致性
 | **`Snapshot()` 提取 delta** | ✅ | ❌ |
 | **`Replay(FrameDelta)`** | ✅ | ❌ |
 | **`EnsureReplayReservation`（ID 校验）** | ✅ | ❌ |
-| **`FrameDelta.Merge()`（多帧合并）** | ✅ | ❌ |
+| **`FrameDelta.Concat()`（多帧合并）** | ✅ | ❌ |
 | **`CaptureState/RestoreState`（原地回滚，多帧窗口）** | ✅ | ❌ |
 | **`World.Clone()`（独立副本/分支）** | ✅ | ❌ |
 

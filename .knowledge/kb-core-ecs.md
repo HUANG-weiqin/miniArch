@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-07-03 (补 ReserveDeferredEntityUnsafe 无锁变体；单线程 CommandStream 跳过 allocator lock 的契约说明)
+updated: 2026-07-03 (补 ReserveDeferredEntityUnsafe 无锁变体；单线程 CommandStream 跳过 allocator lock 的契约说明; FrameDelta.Merge → Concat 重命名)
 ---
 # MiniArch Core ECS
 
@@ -176,4 +176,4 @@ world.Destroy(e);
 - 结构变更（Add/Remove）后 entity 可能换 archetype，此时已获取的 accessor 指向旧位置，必须丢弃
 - `GetFirst<T>()` 依赖 `CreateArchetypeCache<T>` 泛型静态缓存，该缓存使用 `WeakReference<World>` 防止跨 World 误命中
 - DebugMetrics 相关的 `#if DEBUG` 计数累加语句已全部删除，不应再引用
-- **同帧 `World.Destroy(e)` + `World.Create()` 的 id 回收与 version 一致性**（**理论风险，当前串行单线程路径安全，但修改时要小心**）：Destroy 把 `(id, version)` 推回 free-list 并对 `EntityRecord[id]` 做 swap-remove + version bump；Create 从 free-list 弹 id 并写新 `EntityRecord[id]`。两者必须严格串行且 Destroy 的 swap-remove 必须先于 Create 的 slot 写入，否则新实体可能读到被销毁实体的旧 `(Archetype, RowIndex)` 或 stale version。验证链：`World.EntityLifecycle.cs:Destroy` → `Archetype.Storage.cs:RemoveAt`（swap-remove）→ free-list push → `World.EntityLifecycle.cs:Create` → free-list pop。**当前在单线程串行调用下安全**（Destroy 的 version bump + swap-remove 在 Create 读 free-list 前完成），但引入 CommandStream 批量 materialize、多线程或 `Destroy` callback 嵌套 `Create` 时可能被打破。跨帧版本（CommandStream Merge 路径）已在 `kb-command-stream.md` "Merge + id 回收" 段文档化并修复。**回归测试入口**：`tests/MiniArch.Tests/Core/WorldLifecycleTests.cs`（当前缺同帧 destroy+create 用例，需补 `Destroy_then_Create_same_frame_recycles_id_with_incremented_version`）
+- **同帧 `World.Destroy(e)` + `World.Create()` 的 id 回收与 version 一致性**（**理论风险，当前串行单线程路径安全，但修改时要小心**）：Destroy 把 `(id, version)` 推回 free-list 并对 `EntityRecord[id]` 做 swap-remove + version bump；Create 从 free-list 弹 id 并写新 `EntityRecord[id]`。两者必须严格串行且 Destroy 的 swap-remove 必须先于 Create 的 slot 写入，否则新实体可能读到被销毁实体的旧 `(Archetype, RowIndex)` 或 stale version。验证链：`World.EntityLifecycle.cs:Destroy` → `Archetype.Storage.cs:RemoveAt`（swap-remove）→ free-list push → `World.EntityLifecycle.cs:Create` → free-list pop。**当前在单线程串行调用下安全**（Destroy 的 version bump + swap-remove 在 Create 读 free-list 前完成），但引入 CommandStream 批量 materialize、多线程或 `Destroy` callback 嵌套 `Create` 时可能被打破。跨帧版本（CommandStream Concat 路径）已在 `kb-command-stream.md` "Concat + id 回收" 段文档化并修复。**回归测试入口**：`tests/MiniArch.Tests/Core/WorldLifecycleTests.cs`（当前缺同帧 destroy+create 用例，需补 `Destroy_then_Create_same_frame_recycles_id_with_incremented_version`）

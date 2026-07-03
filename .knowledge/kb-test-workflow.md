@@ -2,7 +2,7 @@
 title: Test Workflow
 module: MiniArch.Tests
 description: How the test suite, query profiling, snapshot benchmarks, and structural-change benchmarks are organized and how to run them
-updated: 2026-07-01 (+ PBT PropertyBased/ 目录 + FsCheck 集成 + wire budget 测试)
+updated: 2026-07-03 (FrameDelta.Merge → Concat 重命名)
 ---
 # Test Workflow
 
@@ -25,7 +25,7 @@ updated: 2026-07-01 (+ PBT PropertyBased/ 目录 + FsCheck 集成 + wire budget 
 | `Core/ChunkTests.cs` | 存储密度、并发只读、引用类型列清尾槽位 |
 | `Core/ChunkColumnIndexTests.cs` | Column index 查找正确性 |
 | `Core/ArchetypeTests.cs` | chunk 复用、non-full chunk tracking、chunked 模式 |
-| `Core/CommandStreamTests.cs` | Submit/Snapshot/Merge、cross-world replay、concurrent recording、Clone、struct 缩小后的正确性、SwapOutState 字段分类契约 |
+| `Core/CommandStreamTests.cs` | Submit/Snapshot/Concat、cross-world replay、concurrent recording、Clone、struct 缩小后的正确性、SwapOutState 字段分类契约 |
 | `Core/CommandBufferParityTests.cs` | MiniArch/Arch 共享结构命令 parity（文件名沿用历史，实际比对的是 CommandStream）|
 | `Core/CommandBufferGamePerfTests.cs` | 真实游戏循环稳态 perf（CommandStream）|
 | `Core/QueryTests.cs` | 缓存与并发读取、冷热路径 |
@@ -34,7 +34,7 @@ updated: 2026-07-01 (+ PBT PropertyBased/ 目录 + FsCheck 集成 + wire budget 
 | `Core/ParallelQueryTests.cs` | ForEachChunk / ForEachChunkParallel 安全性与加速比 |
 | `Core/EntityAccessorTests.cs` | EntityAccessor ref struct 契约 |
 | `Core/IntegrationTests.cs` | 最完整的端到端例子 |
-| `Core/FrameDeltaDeterminismTests.cs` | 跨 world replay 决定性、Submit vs Replay 收敛、Merge 字节级一致性 |
+| `Core/FrameDeltaDeterminismTests.cs` | 跨 world replay 决定性、Submit vs Replay 收敛、Concat 字节级一致性 |
 | ~~`Core/DebugMetricsTests.cs`~~ | **已删除** — DebugMetrics 子系统已移除 |
 | `Core/ThroughputRunnerTests.cs` | 参数解析和汇总契约 |
 | `Core/QueryProfilingRunnerTests.cs` | Profiling runner 构造契约 |

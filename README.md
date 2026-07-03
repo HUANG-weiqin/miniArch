@@ -47,7 +47,7 @@ This advantage holds across all of MiniArch's benchmarked game scenarios:
 | ❌ No rollback support | ✅ **CaptureState/RestoreState**（原地零分配）+ **World.Clone()**（独立副本）|
 | ❌ No CommandStream | ✅ **CommandStream** — 12–48% faster than traditional command buffers |
 | ❌ No binary serialization | ✅ **WorldSnapshot** — full state save/load for replays and netcode |
-| ❌ No delta merging | ✅ **FrameDelta.Merge()** — squash multiple frames into one for network optimization |
+| ❌ No delta merging | ✅ **FrameDelta.Concat()** — combine multiple frames into one for network optimization |
 
 ---
 

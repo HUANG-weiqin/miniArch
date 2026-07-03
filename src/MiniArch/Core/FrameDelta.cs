@@ -5,7 +5,7 @@ namespace MiniArch.Core;
 /// <summary>
 /// Stores a sequence of world operations in a compact self-contained byte buffer.
 /// Operations are stored in temporal order, making the delta suitable for
-/// deterministic replay, merging, and zero-copy serialization.
+/// deterministic replay, concatenation, and zero-copy serialization.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -52,9 +52,78 @@ public sealed class FrameDelta
     /// </summary>
     public const int MaxOpsPerFrame = 1_000_000;
 
+    // ── Wire format header ─────────────────────────────────────────────
+    // Every FrameDelta carries a 4-byte header at the start of _buffer:
+    //   [0-1] Magic "MF" (0x4D46) — format identification.
+    //   [2]   Flags: bit 7 = endianness (1=little, 0=big);
+    //         bits 0-6 = format version (currently 1).
+    //   [3]   Reserved (0x00).
+    // Op data starts immediately after the header (offset 4).
+    //
+    // Backward compatibility: buffers where byte[0] is not 'M' (i.e. legacy
+    // format starting with a DeltaOpKind tag) are detected and read without
+    // header offset. All newly produced deltas always include the header.
+    internal const int HeaderSize = 4;
+    internal const byte FormatVersion = 0x01;
+
     internal byte[] _buffer = Array.Empty<byte>();
     internal int _length;
     internal int _opCount;
+
+    /// <summary>
+    /// Returns the offset at which op data starts (HeaderSize for new format,
+    /// 0 for legacy format without header).
+    /// </summary>
+    internal int DataStart => _length >= 2 && _buffer[0] == 'M' && _buffer[1] == 'F' ? HeaderSize : 0;
+
+    /// <summary>
+    /// Writes the 4-byte format header into <see cref="_buffer"/> at offset 0
+    /// and sets <see cref="_length"/> to <see cref="HeaderSize"/>. Called once
+    /// before the first op is written.
+    /// </summary>
+    private void EnsureHeader()
+    {
+        if (_length >= HeaderSize)
+            return;
+        if (_buffer.Length < HeaderSize)
+            Array.Resize(ref _buffer, HeaderSize);
+        // Magic: "MF"
+        _buffer[0] = (byte)'M';
+        _buffer[1] = (byte)'F';
+        // Flags: version | (LE ? 0x80 : 0)
+        _buffer[2] = (byte)(FormatVersion | (BitConverter.IsLittleEndian ? 0x80 : 0));
+        _buffer[3] = 0;
+        _length = HeaderSize;
+    }
+
+    /// <summary>
+    /// Validates the header bytes at the start of a received delta. Throws on
+    /// magic mismatch, unsupported version, or endianness mismatch.
+    /// </summary>
+    private static void ValidateHeader(ReadOnlySpan<byte> buf)
+    {
+        if (buf.Length < 2 || buf[0] != 'M' || buf[1] != 'F')
+            return; // legacy format — skip validation
+
+        if (buf.Length < HeaderSize)
+            throw new InvalidOperationException(
+                "FrameDelta header truncated: expected 4 bytes.");
+
+        var flags = buf[2];
+        var version = flags & 0x7F;
+        if (version > FormatVersion)
+            throw new InvalidOperationException(
+                $"FrameDelta format version {version} is newer than the current version {FormatVersion}. " +
+                "Update the MiniArch library to read this delta.");
+
+        var isLittleEndian = (flags & 0x80) != 0;
+        if (isLittleEndian != BitConverter.IsLittleEndian)
+            throw new InvalidOperationException(
+                $"FrameDelta endianness mismatch: producer={(isLittleEndian ? "LE" : "BE")}, " +
+                $"consumer={(BitConverter.IsLittleEndian ? "LE" : "BE")}. " +
+                "Cross-endian replay is not supported because component data is encoded " +
+                "in the producer's native memory layout.");
+    }
 
     /// <summary>
     /// Gets the total number of operations in this delta.
@@ -104,6 +173,7 @@ public sealed class FrameDelta
         var delta = new FrameDelta();
         delta._buffer = wire.ToArray();
         delta._length = wire.Length;
+        ValidateHeader(wire);
 
         var decoder = delta.GetDecoder();
         while (decoder.MoveNext())
@@ -307,6 +377,7 @@ public sealed class FrameDelta
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void WriteTag(DeltaOpKind kind)
     {
+        EnsureHeader();
         var pos = _length;
         Grow(1);
         _buffer[pos] = (byte)kind;
@@ -455,7 +526,7 @@ public sealed class FrameDelta
 
     // ── Decoder API (used by ReplayCore, HasEntity) ────────────────────
 
-    internal OpDecoder GetDecoder() => new(_buffer, _length);
+    internal OpDecoder GetDecoder() => new(_buffer, _length, DataStart);
 
     /// <summary>
     /// Cursor-based decoder that reads operations from the packed buffer.
@@ -472,11 +543,11 @@ public sealed class FrameDelta
         public DeltaOpKind Kind { get; private set; }
         public Entity Entity { get; private set; }
 
-        internal OpDecoder(byte[] buffer, int length)
+        internal OpDecoder(byte[] buffer, int length, int startPos = 0)
         {
             _buffer = buffer;
             _end = length;
-            _pos = 0;
+            _pos = startPos;
             _opCount = 0;
             Kind = default;
             Entity = default;
@@ -665,26 +736,27 @@ public sealed class FrameDelta
         return false;
     }
 
-    // ── Merge ──────────────────────────────────────────────────────────
+    // ── Concat ─────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Merges two deltas in temporal order. Operations from <paramref name="a"/>
-    /// appear before those from <paramref name="b"/>, preserving the original
-    /// per-delta temporal order. No folding or squashing is performed —
-    /// the resulting byte stream is a simple concatenation.
+    /// Concatenates two real-id deltas in temporal order. Operations from
+    /// <paramref name="a"/> appear before those from <paramref name="b"/>,
+    /// preserving the original per-delta temporal order. No folding or
+    /// squashing is performed —the resulting byte stream is a simple
+    /// concatenation of the two wire buffers.
     /// </summary>
     /// <remarks>
-    /// <b>Real-id deltas only.</b> Merge is pure byte concatenation and does
+    /// <b>Real-id deltas only.</b> Concat is pure byte concatenation and does
     /// not remap placeholder seq namespaces. It is therefore correct only for
     /// <b>real-id</b> deltas (those produced by
     /// <see cref="CommandStream.Snapshot"/> with
     /// <see cref="CommandStream.DeferredEntities"/> = <c>false</c>, or by
     /// <see cref="CommandStream.SubmitAndSnapshotAsync"/>). For those, the
-    /// merged delta is observationally equivalent to replaying
+    /// concatenated delta is observationally equivalent to replaying
     /// <paramref name="a"/> and <paramref name="b"/> sequentially.
     /// <para>
-    /// Merging <b>placeholder</b> deltas (DeferredEntities = <c>true</c>) is
-    /// unsafe and silently produces wrong results: each
+    /// Concatenating <b>placeholder</b> deltas (DeferredEntities = <c>true</c>)
+    /// is unsafe and silently produces wrong results: each
     /// <see cref="CommandStream"/> with DeferredEntities starts its own seq
     /// counter at 0, so two independent streams both emit
     /// <c>Reserve(seq=0)/Create(seq=0)</c>. During replay
@@ -693,23 +765,34 @@ public sealed class FrameDelta
     /// any later op that references the first stream's placeholder resolves to
     /// the wrong entity. The canonical lockstep pattern replays each peer's
     /// placeholder delta as a separate <see cref="World.Replay"/> call (which
-    /// resets the map each time), avoiding this issue entirely; do not Merge
-    /// placeholder deltas across streams.
+    /// resets the map each time), avoiding this issue entirely; do not
+    /// concatenate placeholder deltas across streams.
     /// </para>
     /// </remarks>
-    public static FrameDelta Merge(FrameDelta a, FrameDelta b)
+    public static FrameDelta Concat(FrameDelta a, FrameDelta b)
     {
         ArgumentNullException.ThrowIfNull(a);
         ArgumentNullException.ThrowIfNull(b);
 
+        // Concat is byte concatenation of op data, not semantic folding.
+        // Each input may carry a 4-byte header; the result carries exactly one.
+        var aStart = a.DataStart;
+        var bStart = b.DataStart;
+        var aLen = a._length - aStart;
+        var bLen = b._length - bStart;
+        var totalDataLen = aLen + bLen;
+
         var result = new FrameDelta();
-        var totalLength = a._length + b._length;
-        result._buffer = new byte[totalLength];
-        if (a._length > 0)
-            Array.Copy(a._buffer, 0, result._buffer, 0, a._length);
-        if (b._length > 0)
-            Array.Copy(b._buffer, 0, result._buffer, a._length, b._length);
-        result._length = totalLength;
+        result.EnsureHeader();                          // writes result header at [0..3]
+        var totalLen = HeaderSize + totalDataLen;
+        if (result._buffer.Length < totalLen)
+            Array.Resize(ref result._buffer, totalLen);
+
+        if (aLen > 0)
+            Array.Copy(a._buffer, aStart, result._buffer, HeaderSize, aLen);
+        if (bLen > 0)
+            Array.Copy(b._buffer, bStart, result._buffer, HeaderSize + aLen, bLen);
+        result._length = totalLen;
         result._opCount = a._opCount + b._opCount;
         return result;
     }

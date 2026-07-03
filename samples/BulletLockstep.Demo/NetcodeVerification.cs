@@ -4,7 +4,7 @@ using MiniArch.Core;
 
 namespace BulletLockstep.Demo;
 
-// Slice 9 utilities: FrameDelta.Merge verification and World.Clone-based
+// Slice 9 utilities: FrameDelta.Concat verification and World.Clone-based
 // replay-buffer rollback. These exercise the netcode-focused APIs that
 // complement the lockstep core (Slice 1-7) and authority topology (Slice 8).
 //
@@ -62,14 +62,14 @@ public static class NetcodeVerification
         return (true, $"clone byte-identical initially and after 5 forward frames");
     }
 
-    // Verifies FrameDelta.Merge semantics: replaying 3 sequential deltas
-    // produces the same world state as replaying their Merge() output once.
-    public static (bool Ok, string Detail) VerifyFrameDeltaMerge(LockstepSimulator sim, int startFrame, int count)
+    // Verifies FrameDelta.Concat semantics: replaying `count` sequential deltas
+    // produces the same world state as replaying their Concat() output once.
+    public static (bool Ok, string Detail) VerifyFrameDeltaConcat(LockstepSimulator sim, int startFrame, int count)
     {
         // Path A: collect `count` frames of deltas, replay each sequentially
         // on a fresh world.
         var worldA = new World();
-        // Path B: collect same deltas, merge them, replay merged on a fresh world.
+        // Path B: collect same deltas, concat them, replay concatenated on a fresh world.
         var worldB = new World();
 
         // To collect deltas, we drive the simulator. But the simulator also
@@ -80,11 +80,11 @@ public static class NetcodeVerification
         {
             sim.Tick(startFrame + i, out var deltas);
             // Each frame's "delta" is an array of per-host deltas. Concatenate
-            // them via Merge on path B. Replay each on path A.
+            // them via Concat on path B. Replay each on path A.
             foreach (var d in deltas)
             {
                 worldA.Replay(d);
-                merged = merged is null ? d : FrameDelta.Merge(merged, d);
+                merged = merged is null ? d : FrameDelta.Concat(merged, d);
             }
         }
         worldB.Replay(merged);
@@ -117,9 +117,9 @@ public static class NetcodeVerification
         var a = worldA.CanonicalChecksum();
         var b = worldB.CanonicalChecksum();
         if (!BytesEqual(a, b))
-            return (false, $"Merge replay diverged from sequential replay:\n  seq:    {Convert.ToHexString(a)}\n  merged: {Convert.ToHexString(b)}");
+            return (false, $"Concat replay diverged from sequential replay:\n  seq:    {Convert.ToHexString(a)}\n  concat: {Convert.ToHexString(b)}");
 
-        return (true, $"Merge({count} deltas) replay == sequential replay");
+        return (true, $"Concat({count} deltas) replay == sequential replay");
     }
 
     private static bool BytesEqual(byte[] a, byte[] b)
