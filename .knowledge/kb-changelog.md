@@ -39,6 +39,13 @@ updated: 2026-07-03 (洁癖全量清扫 + dead code 清理 + deadcode.ps1 修复
   - 3 个 bare `catch` in StructuralChange — 回滚补偿逻辑，意图明确
   - 公共 API 的 null guard（`Query.OrderByComponent`、`WorldSnapshot.Save/Load` 等）— 公共边界保留
 
+### 洁癖全量清扫（第二轮 — 顾问检视补漏）
+
+Apply advisor 轮次审阅发现，补充 3 项：
+- **YAGNI：删除 `FrameDelta.OpDecoder.BackingBuffer`** — 零引用 dead public property
+- **文件与类名同步**：`ArrayPoolUtil.cs` → `ArrayPoolStack.cs`、`SpanHelper.cs` → `SpanSorting.cs`
+- **冗余 using/directive 清理**：`World.Create.Generated.cs` 移除无用 `using System.Buffers` + `using System.Runtime.CompilerServices`
+
 全量代码审阅完结，逐项落地。所有 Debug + Release test 绿，HeroComing.Perf 门禁通过（Movement 2002.3、Attack 1217.0）。
 
 - **`deadcode.ps1` 三处 bug 修复**：

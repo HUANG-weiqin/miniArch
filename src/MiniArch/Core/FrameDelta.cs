@@ -640,14 +640,6 @@ public sealed class FrameDelta
             }
         }
 
-        /// <summary>
-        /// Returns the buffer backing this decoder (for direct access in Add/Set).
-        /// </summary>
-        public byte[] BackingBuffer => _buffer;
-
-        /// <summary>
-        /// The current read position within the backing buffer.
-        /// </summary>
         public int CurrentPosition => _pos;
     }
 
