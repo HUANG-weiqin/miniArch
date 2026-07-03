@@ -129,6 +129,171 @@ public sealed class FrameDelta
         return delta;
     }
 
+    // ── Validation (defense-in-depth for untrusted deltas) ─────────────
+
+    /// <summary>
+    /// Maximum placeholder sequence number allowed in <see cref="Validate"/>.
+    /// Placeholder seq values above this are rejected as malformed.
+    /// Equal to <see cref="MaxOpsPerFrame"/> since a single delta cannot
+    /// produce more unique placeholders than operations.
+    /// </summary>
+    internal const int MaxPlaceholderSeq = MaxOpsPerFrame;
+
+    /// <summary>
+    /// Validates structural integrity of this FrameDelta. Throws if the delta
+    /// is malformed —missing Reserve for Create, component data size mismatch,
+    /// negative counts, duplicate component types, unknown type ids, or
+    /// invalid entity shapes.
+    ///
+    /// Call before <see cref="World.Replay"/> for deltas received over
+    /// the network. Deltas produced locally by <see cref="CommandStream"/> are
+    /// always valid and can skip this step.
+    /// </summary>
+    /// <remarks>
+    /// Walks the entire delta once (same cost as deserialization). Uses the
+    /// global <see cref="ComponentRegistry"/> to resolve type sizes.
+    /// Per-entity state machine: Reserve → Create|Release (terminal per entity).
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">The delta is structurally invalid.</exception>
+    public void Validate()
+    {
+        var decoder = GetDecoder();
+        // Per-entity state machine: state is implied by which set the entity
+        // belongs to. "reserved" = reserved but not yet created/released.
+        // "terminal" = created or released (can no longer be reserved again).
+        var reserved = new HashSet<Entity>();
+        var terminal = new HashSet<Entity>();
+
+        while (decoder.MoveNext())
+        {
+            ValidateEntityShape(decoder.Entity);
+
+            switch (decoder.Kind)
+            {
+                case DeltaOpKind.Reserve:
+                {
+                    if (terminal.Contains(decoder.Entity))
+                        throw new InvalidOperationException(
+                            $"Reserve for entity {decoder.Entity} after its terminal operation.");
+                    if (!reserved.Add(decoder.Entity))
+                        throw new InvalidOperationException(
+                            $"Duplicate Reserve for entity {decoder.Entity}.");
+                    break;
+                }
+
+                case DeltaOpKind.Release:
+                {
+                    if (!reserved.Remove(decoder.Entity))
+                        throw new InvalidOperationException(
+                            $"Release for entity {decoder.Entity} without preceding Reserve.");
+                    terminal.Add(decoder.Entity);
+                    break;
+                }
+
+                case DeltaOpKind.Create:
+                {
+                    if (!reserved.Remove(decoder.Entity))
+                        throw new InvalidOperationException(
+                            $"Create for entity {decoder.Entity} without preceding Reserve.");
+                    terminal.Add(decoder.Entity);
+                    ValidateCreatePayload(ref decoder);
+                    break;
+                }
+
+                case DeltaOpKind.Add:
+                case DeltaOpKind.Set:
+                    ValidateComponentData(ref decoder);
+                    break;
+
+                case DeltaOpKind.Remove:
+                    decoder.ReadComponentType();
+                    break;
+
+                case DeltaOpKind.AddChild:
+                {
+                    var parent = decoder.ReadExtraEntity();
+                    ValidateEntityShape(parent);
+                    break;
+                }
+
+                case DeltaOpKind.RemoveChild:
+                case DeltaOpKind.Destroy:
+                    // No extra payload beyond what MoveNext consumed.
+                    break;
+
+                default:
+                    // MoveNext already rejects unknown op kinds.
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Validates entity handle shape: placeholder entities must have exactly
+    /// <c>Id == -1</c> and <c>Version</c> within <see cref="MaxPlaceholderSeq"/>.
+    /// Real entities must have <c>Id >= 0</c>. Rejects <c>Id &lt; -1</c>.
+    /// </summary>
+    private static void ValidateEntityShape(Entity entity)
+    {
+        if (entity.Id == -1)
+        {
+            if ((uint)entity.Version > MaxPlaceholderSeq)
+                throw new InvalidOperationException(
+                    $"Placeholder entity seq={entity.Version} exceeds max ({MaxPlaceholderSeq}).");
+            return;
+        }
+
+        if (entity.Id < -1)
+            throw new InvalidOperationException(
+                $"Invalid entity id {entity.Id}: only -1 (placeholder) and >= 0 are valid.");
+    }
+
+    private static void ValidateCreatePayload(ref OpDecoder decoder)
+    {
+        var compCount = decoder.ReadVarint();
+        if (compCount < 0)
+            throw new InvalidOperationException("Negative component count in Create op.");
+
+        if (compCount == 0) return;
+
+        var seenTypes = new HashSet<int>();
+        for (var i = 0; i < compCount; i++)
+        {
+            var typeId = decoder.ReadVarint();
+            if (!seenTypes.Add(typeId))
+                throw new InvalidOperationException(
+                    $"Duplicate component type id {typeId} in Create op.");
+
+            var dataSize = decoder.ReadVarint();
+            if (dataSize < 0)
+                throw new InvalidOperationException(
+                    $"Negative data size for component type id {typeId}.");
+
+            ValidateComponentSize(typeId, dataSize);
+            decoder.ReadBytes(dataSize);
+        }
+    }
+
+    private static void ValidateComponentData(ref OpDecoder decoder)
+    {
+        var typeId = decoder.ReadVarint();
+        var dataSize = decoder.ReadVarint();
+        ValidateComponentSize(typeId, dataSize);
+        decoder.ReadBytes(dataSize);
+    }
+
+    private static void ValidateComponentSize(int typeId, int dataSize)
+    {
+        var compType = new ComponentType(typeId);
+        if (!ComponentRegistry.Shared.TryGetType(compType, out var clrType))
+            throw new InvalidOperationException($"Unknown component type id {typeId}.");
+
+        var expected = ComponentSizeCache.GetSize(clrType);
+        if (dataSize != expected)
+            throw new InvalidOperationException(
+                $"Component type id {typeId} has size {expected} bytes, but delta declares {dataSize} bytes.");
+    }
+
     // ── Writer API (used by CommandStream) ─────────────────────────────
 
     private void Grow(int additionalBytes)
