@@ -15,16 +15,12 @@ namespace MiniArch.Core;
 public sealed class CommandStream
 {
     private readonly World _world;
-    // P17: pool the entire FrozenState (struct + all arrays + Dictionary + HashSet).
-    // In steady state the active frozen and the spare alternate roles — a single
-    // struct swap replaces the old 13-field-by-field swap, eliminating a class
-    // of silent correctness bugs that only surface on the async path.
-    //
-    // FrozenState is ~98 bytes (11 ref fields + 2 ints) — normally a red flag for
-    // a struct. It is acceptable here because it is never passed as an argument
-    // across call boundaries, never boxed, and swapped at most once per frame in
-    // SwapOutState. All other accesses are field accesses (JIT emits offset loads,
-    // same as before the struct wrap).
+    // Pooled mutable buffer bundle. _frozen holds the current recording state;
+    // _spareFrozen is a recycled standby (when the background worker is done);
+    // _pendingFrozen holds state handed off to the background BuildFromFrozen worker.
+    // A single reference swap in SwapOutState replaces the old 13-field-by-field
+    // swap, eliminating a class of silent correctness bugs that only surface on
+    // the async path.
     private FrozenState _frozen;
     private FrozenState? _spareFrozen;
     private FrozenState? _pendingFrozen;
@@ -56,21 +52,7 @@ public sealed class CommandStream
     public CommandStream(World world)
     {
         _world = world ?? throw new ArgumentNullException(nameof(world));
-        _frozen = new FrozenState
-        {
-            Stores = new ComponentStore?[ComponentRegistry.Shared.ComponentTypeCount],
-            DestroyEntities = [],
-            DestroyCount = 0,
-            HierarchyByChild = new Dictionary<Entity, HierarchyIntent>(),
-            PendingBatch = [],
-            PendingBatchCount = 0,
-            BatchHeads = [],
-            BatchCompCounts = [],
-            BatchComps = [],
-            BatchBuf = [],
-            BatchEntities = [],
-            BatchCanceled = [],
-        };
+        _frozen = new FrozenState(ComponentRegistry.Shared.ComponentTypeCount);
     }
 
     /// <summary>
@@ -527,7 +509,7 @@ public sealed class CommandStream
         FrozenState frozen;
         if (_spareFrozen is { } spare)
         {
-            // Steady state: swap entire structs in one operation.
+            // Steady state: swap state-object references in one operation.
             // No field-by-field swap, no risk of missing a field.
             _spareFrozen = null;
             frozen = _frozen;
@@ -540,24 +522,10 @@ public sealed class CommandStream
         }
         else
         {
-            // First call or worker hasn't finished: copy live state to frozen,
-            // then re-initialise _frozen with fresh containers.
+            // First call or worker hasn't finished: the old _frozen becomes
+            // the returned snapshot; _frozen gets a fresh bundle.
             frozen = _frozen;
-            _frozen = new FrozenState
-            {
-                Stores = new ComponentStore?[ComponentRegistry.Shared.ComponentTypeCount],
-                DestroyEntities = [],
-                DestroyCount = 0,
-                HierarchyByChild = new Dictionary<Entity, HierarchyIntent>(),
-                PendingBatch = [],
-                PendingBatchCount = 0,
-                BatchHeads = [],
-                BatchCompCounts = [],
-                BatchComps = [],
-                BatchBuf = [],
-                BatchEntities = [],
-                BatchCanceled = [],
-            };
+            _frozen = new FrozenState(ComponentRegistry.Shared.ComponentTypeCount);
         }
 
         // Reset the now-current state. Underlying arrays may carry stale data from
@@ -1839,7 +1807,7 @@ public sealed class CommandStream
         }
     }
 
-    private struct FrozenState
+    private sealed class FrozenState
     {
         public ComponentStore?[] Stores;
         public Entity[] DestroyEntities;
@@ -1854,6 +1822,23 @@ public sealed class CommandStream
         public Entity[] BatchEntities;
         public bool[] BatchCanceled;
         public int CancelledBatchCount;
+
+        public FrozenState(int storeCount)
+        {
+            Stores = new ComponentStore?[storeCount];
+            DestroyEntities = [];
+            DestroyCount = 0;
+            HierarchyByChild = new Dictionary<Entity, HierarchyIntent>();
+            PendingBatch = [];
+            PendingBatchCount = 0;
+            BatchHeads = [];
+            BatchCompCounts = [];
+            BatchComps = [];
+            BatchBuf = [];
+            BatchEntities = [];
+            BatchCanceled = [];
+            CancelledBatchCount = 0;
+        }
 
         public PendingBatchView Pending => new(
             BatchCanceled, BatchHeads, BatchCompCounts, BatchComps,

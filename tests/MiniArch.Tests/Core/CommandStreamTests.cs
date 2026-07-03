@@ -1935,7 +1935,7 @@ public sealed class CommandStreamTests
         await RunFrameAsync();
         await RunFrameAsync();
 
-        // After steady state the two FrozenState structs alternate roles
+        // After steady state the two FrozenState objects alternate roles
         // every frame. Their Stores arrays also alternate. Verify that no
         // new Stores array is allocated after frame 2 (count ≤ 2).
         var field = typeof(CommandStream).GetField("_frozen", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -1957,7 +1957,7 @@ public sealed class CommandStreamTests
 
         var distinct = observed.Distinct().ToList();
         Assert.True(distinct.Count <= 2,
-            $"Expected ≤ 2 distinct Stores arrays (struct swap recycles 2), got {distinct.Count}");
+            $"Expected ≤ 2 distinct Stores arrays (object swap recycles 2), got {distinct.Count}");
     }
 
     [Fact]
@@ -2058,7 +2058,7 @@ public sealed class CommandStreamTests
             "_lastMaskArchetype",
         };
 
-        // _frozen and _spareFrozen are the two halves of the struct swap;
+        // _frozen and _spareFrozen are the two halves of the state-object swap;
         // _pendingFrozen holds the in-flight task's snapshot.
         var swapped = new HashSet<string>
         {
