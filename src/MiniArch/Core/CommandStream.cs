@@ -68,7 +68,6 @@ public sealed class CommandStream
             BatchBuf = [],
             BatchEntities = [],
             BatchCanceled = [],
-            UnavailableEntities = null,
         };
     }
 
@@ -222,7 +221,6 @@ public sealed class CommandStream
     {
         if (_parallelMode)
         {
-            MarkUnavailableConcurrent(entity);
             AppendDestroyConcurrent(entity);
             return;
         }
@@ -332,7 +330,6 @@ public sealed class CommandStream
             // Keeping Submit and Snapshot aligned lets hosts use Submit on source and
             // Replay on replica without diverging for combined command patterns.
             ResolveDeferredCreates();
-            PrepareUnavailableLookup(ref _frozen);
             MaterializeAllPending();
             ApplyHierarchy();
             ApplyComponentStores();
@@ -389,7 +386,7 @@ public sealed class CommandStream
 
     private void ApplyHierarchy()
     {
-        ApplyHierarchyToWorld(_world, _frozen.HierarchyByChild, _frozen.UnavailableEntities);
+        ApplyHierarchyToWorld(_world, _frozen);
     }
 
     // ── Snapshot / SubmitAndSnapshotAsync ─────────────────────────────
@@ -422,13 +419,11 @@ public sealed class CommandStream
         if (!_deferredEntities)
         {
             ResolveDeferredCreates();
-            PrepareUnavailableLookup(ref _frozen);
             var delta = new FrameDelta();
             BuildDelta(delta);
             return delta;
         }
         ThrowIfSnapshotHasImmediateEntities();
-        PrepareUnavailableLookup(ref _frozen);
         var d = new FrameDelta();
         BuildDelta(d);
         return d;
@@ -475,7 +470,6 @@ public sealed class CommandStream
             return Task.FromResult(new FrameDelta());
 
         var frozen = SwapOutState();
-        PrepareUnavailableLookup(ref frozen);
         // Static delegate + state parameter avoids the per-call closure allocation
         // that Task.Run(() => ...) would create. FrozenState is a reference type,
         // so passing it as `object` is a free upcast —no boxing.
@@ -498,7 +492,7 @@ public sealed class CommandStream
             _frozen.BatchCanceled, _frozen.BatchHeads, _frozen.BatchCompCounts,
             _frozen.BatchComps, _frozen.BatchBuf, _frozen.BatchEntities, _frozen.PendingBatchCount));
 
-        EmitHierarchyToDelta(delta, _frozen.HierarchyByChild, _frozen.UnavailableEntities);
+        EmitHierarchyToDelta(delta, _frozen);
 
         foreach (var store in _frozen.Stores)
         {
@@ -561,7 +555,6 @@ public sealed class CommandStream
                 BatchBuf = [],
                 BatchEntities = [],
                 BatchCanceled = [],
-                UnavailableEntities = null,
             };
         }
 
@@ -580,7 +573,6 @@ public sealed class CommandStream
         _lastCreated = default;
         _lastCreatedBatch = -1;
         _frozen.HierarchyByChild.Clear();
-        _frozen.UnavailableEntities?.Clear();
         return frozen;
     }
 
@@ -595,7 +587,7 @@ public sealed class CommandStream
 
         if (frozen.HierarchyByChild.Count > 0)
         {
-            ApplyHierarchyToWorld(_world, frozen.HierarchyByChild, frozen.UnavailableEntities);
+            ApplyHierarchyToWorld(_world, frozen);
         }
 
         foreach (var store in frozen.Stores)
@@ -619,7 +611,7 @@ public sealed class CommandStream
 
         EmitPendingEntitiesToDelta(delta, frozen.Pending);
 
-        EmitHierarchyToDelta(delta, frozen.HierarchyByChild, frozen.UnavailableEntities);
+        EmitHierarchyToDelta(delta, frozen);
 
         foreach (var store in frozen.Stores)
         {
@@ -812,10 +804,25 @@ public sealed class CommandStream
         }
     }
 
-    private static void EmitHierarchyToDelta(FrameDelta delta,
-        Dictionary<Entity, HierarchyIntent> hierarchyByChild,
-        HashSet<Entity>? unavailableEntities)
+    // An entity is excluded from hierarchy application when it is scheduled for
+    // destruction this frame. Two sources cover all cases:
+    //   1. DestroyEntities[]  — non-pending entities that had Destroy() called.
+    //   2. BatchCanceled[]    — pending/placeholder entities cancelled by Destroy().
+    // These arrays are tiny (typically 0-1 entries), so a linear scan is faster
+    // than maintaining a HashSet and avoids per-frame allocation entirely.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsDestroyedThisFrame(Entity entity, FrozenState frozen)
     {
+        for (var i = 0; i < frozen.DestroyCount; i++)
+            if (frozen.DestroyEntities[i] == entity) return true;
+        for (var i = 0; i < frozen.PendingBatchCount; i++)
+            if (frozen.BatchCanceled[i] && frozen.BatchEntities[i] == entity) return true;
+        return false;
+    }
+
+    private static void EmitHierarchyToDelta(FrameDelta delta, FrozenState frozen)
+    {
+        var hierarchyByChild = frozen.HierarchyByChild;
         if (hierarchyByChild.Count == 0) return;
 
         var sorted = new KeyValuePair<Entity, HierarchyIntent>[hierarchyByChild.Count];
@@ -824,10 +831,10 @@ public sealed class CommandStream
 
         foreach (var (child, intent) in sorted)
         {
-            if (unavailableEntities != null && unavailableEntities.Contains(child)) continue;
+            if (IsDestroyedThisFrame(child, frozen)) continue;
             if (intent.IsAdd)
             {
-                if (unavailableEntities != null && unavailableEntities.Contains(intent.Parent)) continue;
+                if (IsDestroyedThisFrame(intent.Parent, frozen)) continue;
                 delta.AddAddChild(intent.Parent, child);
             }
             else
@@ -837,19 +844,17 @@ public sealed class CommandStream
         }
     }
 
-    private static void ApplyHierarchyToWorld(World world,
-        Dictionary<Entity, HierarchyIntent> hierarchyByChild,
-        HashSet<Entity>? unavailableEntities)
+    private static void ApplyHierarchyToWorld(World world, FrozenState frozen)
     {
-        if (hierarchyByChild.Count == 0) return;
+        if (frozen.HierarchyByChild.Count == 0) return;
 
-        foreach (var (child, intent) in hierarchyByChild)
+        foreach (var (child, intent) in frozen.HierarchyByChild)
         {
-            if (unavailableEntities != null && unavailableEntities.Contains(child)) continue;
+            if (IsDestroyedThisFrame(child, frozen)) continue;
 
             if (intent.IsAdd)
             {
-                if (unavailableEntities != null && unavailableEntities.Contains(intent.Parent)) continue;
+                if (IsDestroyedThisFrame(intent.Parent, frozen)) continue;
                 world.AddChild(intent.Parent, child);
             }
             else
@@ -857,37 +862,6 @@ public sealed class CommandStream
                 world.RemoveChild(child);
             }
         }
-    }
-
-    private static void PrepareUnavailableLookup(ref FrozenState frozen)
-    {
-        var lookup = frozen.UnavailableEntities;
-        if (lookup != null)
-            lookup.Clear();
-
-        if (frozen.HierarchyByChild.Count == 0)
-        {
-            frozen.UnavailableEntities = lookup;
-            return;
-        }
-
-        for (var i = 0; i < frozen.DestroyCount; i++)
-            AddUnavailable(ref lookup, frozen.DestroyEntities[i]);
-
-        for (var i = 0; i < frozen.PendingBatchCount; i++)
-        {
-            if (frozen.BatchCanceled[i])
-                AddUnavailable(ref lookup, frozen.BatchEntities[i]);
-        }
-
-        frozen.UnavailableEntities = lookup;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void AddUnavailable(ref HashSet<Entity>? lookup, Entity entity)
-    {
-        lookup ??= new HashSet<Entity>();
-        lookup.Add(entity);
     }
 
     // ── Pending entity helpers ────────────────────────────────────────
@@ -1342,25 +1316,7 @@ public sealed class CommandStream
 
         lock (_storeCreateLock)
         {
-            if (_frozen.UnavailableEntities != null && _frozen.UnavailableEntities.Contains(entity))
-                return false;
             return TryGetPendingBatch(entity, out _);
-        }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void MarkUnavailable(Entity entity)
-    {
-        _frozen.UnavailableEntities ??= new HashSet<Entity>();
-        _frozen.UnavailableEntities.Add(entity);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void MarkUnavailableConcurrent(Entity entity)
-    {
-        lock (_storeCreateLock)
-        {
-            MarkUnavailable(entity);
         }
     }
 
@@ -1505,7 +1461,6 @@ public sealed class CommandStream
         _lastCreated = default;
         _lastCreatedBatch = -1;
         _frozen.HierarchyByChild.Clear();
-        _frozen.UnavailableEntities?.Clear();
     }
 
     // ── Deferred entity resolution ────────────────────────────────────
@@ -1624,7 +1579,6 @@ public sealed class CommandStream
     }
 
     internal object? ActiveHierarchyForTesting => _frozen.HierarchyByChild;
-    internal object? ActiveUnavailableForTesting => _frozen.UnavailableEntities;
     internal object? ActiveFrozenForTesting => _pendingFrozen;
 
     // ── Helpers ───────────────────────────────────────────────────────
@@ -1858,7 +1812,6 @@ public sealed class CommandStream
         public int[] BatchCompCounts;
         public BatchedComponent[] BatchComps;
         public byte[] BatchBuf;
-        public HashSet<Entity>? UnavailableEntities;
         public Entity[] BatchEntities;
         public bool[] BatchCanceled;
 
