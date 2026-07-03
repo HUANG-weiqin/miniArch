@@ -566,6 +566,7 @@ public sealed class CommandStream
 
         _frozen.DestroyCount = 0;
         _frozen.PendingBatchCount = 0;
+        _frozen.CancelledBatchCount = 0;
         _pendingBatchMin = int.MaxValue;
         _pendingBatchMax = 0;
         _batchCompTotal = 0;
@@ -808,13 +809,16 @@ public sealed class CommandStream
     // destruction this frame. Two sources cover all cases:
     //   1. DestroyEntities[]  — non-pending entities that had Destroy() called.
     //   2. BatchCanceled[]    — pending/placeholder entities cancelled by Destroy().
-    // These arrays are tiny (typically 0-1 entries), so a linear scan is faster
-    // than maintaining a HashSet and avoids per-frame allocation entirely.
+    // CancelledBatchCount provides a fast-path: when no batches were cancelled
+    // (the common case), the BatchCanceled scan is skipped entirely.
+    // Additionally, CancelPendingDescendants removes hierarchy entries for
+    // cancelled parents at record time, so surviving entries are rare.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool IsDestroyedThisFrame(Entity entity, FrozenState frozen)
     {
         for (var i = 0; i < frozen.DestroyCount; i++)
             if (frozen.DestroyEntities[i] == entity) return true;
+        if (frozen.CancelledBatchCount == 0) return false;
         for (var i = 0; i < frozen.PendingBatchCount; i++)
             if (frozen.BatchCanceled[i] && frozen.BatchEntities[i] == entity) return true;
         return false;
@@ -932,6 +936,7 @@ public sealed class CommandStream
                     _frozen.BatchHeads[batchIdx] = -1;
                     _frozen.BatchCompCounts[batchIdx] = 0;
                     _frozen.BatchCanceled[batchIdx] = true;
+                    _frozen.CancelledBatchCount++;
                     _frozen.HierarchyByChild.Remove(entity);
                 }
             }
@@ -948,6 +953,7 @@ public sealed class CommandStream
                     _frozen.BatchHeads[batchIdx] = -1;
                     _frozen.BatchCompCounts[batchIdx] = 0;
                     _frozen.BatchCanceled[batchIdx] = true;
+                    _frozen.CancelledBatchCount++;
                     _frozen.HierarchyByChild.Remove(entity);
                 }
             }
@@ -956,27 +962,37 @@ public sealed class CommandStream
 
     // ── Batch buffer helpers ──────────────────────────────────────────
 
-    // When a pending entity is destroyed before Submit, all pending entities linked under it must also
-    // be cancelled. Existing entities are skipped (World.Destroy cascades them
-    // through the live hierarchy). Without this, CS would leave orphan children.
+    // When a pending entity is destroyed before Submit, all hierarchy entries
+    // referencing it as a parent must be cleaned up — the entity will never be
+    // materialized. Pending children are cancelled recursively; existing children
+    // simply have their AddChild intent removed.
     private void CancelPendingDescendants(Entity root)
     {
         if (_frozen.HierarchyByChild.Count == 0) return;
 
-        // BFS through pending descendants. We must snapshot children before
+        // BFS through ALL descendants. We must snapshot children before
         // calling CancelPendingEntity because that mutates _frozen.HierarchyByChild.
         var queue = ArrayPool<Entity>.Shared.Rent(16);
         var queueCount = 0;
         try
         {
-            EnqueuePendingChildren(root, ref queue, ref queueCount);
+            EnqueueAllChildren(root, ref queue, ref queueCount);
 
             var head = 0;
             while (head < queueCount)
             {
                 var current = queue[head++];
-                CancelPendingEntity(current);
-                EnqueuePendingChildren(current, ref queue, ref queueCount);
+                if (TryGetPendingBatch(current, out _))
+                {
+                    CancelPendingEntity(current);
+                    EnqueueAllChildren(current, ref queue, ref queueCount);
+                }
+                else
+                {
+                    // Existing child of a cancelled pending parent: remove the
+                    // AddChild intent since the parent will never materialize.
+                    _frozen.HierarchyByChild.Remove(current);
+                }
             }
         }
         finally
@@ -985,12 +1001,11 @@ public sealed class CommandStream
         }
     }
 
-    private void EnqueuePendingChildren(Entity parent, ref Entity[] queue, ref int queueCount)
+    private void EnqueueAllChildren(Entity parent, ref Entity[] queue, ref int queueCount)
     {
         foreach (var (child, intent) in _frozen.HierarchyByChild)
         {
             if (!intent.IsAdd || intent.Parent != parent) continue;
-            if (!TryGetPendingBatch(child, out _)) continue;
             if (queueCount == queue.Length)
             {
                 var grown = ArrayPool<Entity>.Shared.Rent(queue.Length * 2);
@@ -1454,6 +1469,7 @@ public sealed class CommandStream
         _deferredSeq = 0;
         _frozen.DestroyCount = 0;
         _frozen.PendingBatchCount = 0;
+        _frozen.CancelledBatchCount = 0;
         _pendingBatchMin = int.MaxValue;
         _pendingBatchMax = 0;
         _batchCompTotal = 0;
@@ -1814,6 +1830,7 @@ public sealed class CommandStream
         public byte[] BatchBuf;
         public Entity[] BatchEntities;
         public bool[] BatchCanceled;
+        public int CancelledBatchCount;
 
         public PendingBatchView Pending => new(
             BatchCanceled, BatchHeads, BatchCompCounts, BatchComps,
