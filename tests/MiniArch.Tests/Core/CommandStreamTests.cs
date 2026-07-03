@@ -1735,24 +1735,19 @@ public sealed class CommandStreamTests
         AssertIdenticalWorlds(source, replica, "parallel pending create component commands");
     }
 
-    public static IEnumerable<object[]> SeedData()
-    {
-        for (var s = 0; s <= 5000; s++) yield return new object[] { s };
-        foreach (var s in new[] { 65535, 999999, 2147483647 })
-            yield return new object[] { s };
-    }
-
     [Fact]
     public void Fuzz_10000_frames_seed_42_submit_and_replay_stay_in_sync()
     {
         RunFuzz(seed: 42, frames: 10000, syncCheckInterval: 1000);
     }
 
-    [Theory]
-    [MemberData(nameof(SeedData))]
-    public void Fuzz_frames_submit_and_replay_stay_in_sync(int seed)
+    [Fact]
+    public void Fuzz_frames_submit_and_replay_stay_in_sync()
     {
-        RunFuzz(seed, frames: 30, syncCheckInterval: 10);
+        for (var s = 0; s <= 5000; s++)
+            RunFuzz(s, frames: 30, syncCheckInterval: 10);
+        foreach (var s in new[] { 65535, 999999, 2147483647 })
+            RunFuzz(s, frames: 30, syncCheckInterval: 10);
     }
 
     private static void RunFuzz(int seed, int frames, int syncCheckInterval)
