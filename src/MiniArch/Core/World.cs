@@ -654,17 +654,22 @@ public sealed partial class World : IDisposable
         var scanner = delta.GetDecoder();
         while (scanner.MoveNext())
         {
-            var id = scanner.Entity.Id;
-            // Placeholder entities (Id < 0) have not been allocated yet;
-            // their real ids are assigned during the main replay pass.
-            // Skip them for maxEntityId tracking —the entity record array
-            // will grow on-demand inside ReserveDeferredEntityUnsafe.
-            if (id >= 0 && id > maxEntityId) maxEntityId = id;
-
             switch (scanner.Kind)
             {
+                case DeltaOpKind.Reserve:
+                {
+                    // Reserve allocates new entity slots. Track the id so the
+                    // _records array is pre-grown for the coming Create.
+                    var id = scanner.Entity.Id;
+                    if (id >= 0 && id > maxEntityId) maxEntityId = id;
+                    break;
+                }
+
                 case DeltaOpKind.Create:
                 {
+                    var id = scanner.Entity.Id;
+                    if (id >= 0 && id > maxEntityId) maxEntityId = id;
+
                     var compCount = scanner.ReadVarint();
                     if (compCount <= 0) break;
 
@@ -684,8 +689,6 @@ public sealed partial class World : IDisposable
                             _replayCreateCounts[arch] =
                                 _replayCreateCounts.GetValueOrDefault(arch, 0) + 1;
                         }
-                        // Archetype not yet in cache: first encounter will create it
-                        // in the main pass; pre-sizing is skipped for that one.
                     }
                     break;
                 }
@@ -699,17 +702,16 @@ public sealed partial class World : IDisposable
 
                 case DeltaOpKind.Add:
                 case DeltaOpKind.Set:
-                    // Advance past component type + size-prefixed payload.
                     scanner.SkipData();
                     break;
 
                 case DeltaOpKind.Remove:
-                    // Advance past the component type only.
                     scanner.ReadComponentType();
                     break;
 
-                // Reserve / Release / RemoveChild / Destroy carry no payload beyond
-                // the entity that MoveNext has already consumed.
+                // Release / RemoveChild / Destroy: entity must already exist.
+                // Do NOT track maxEntityId — prevents OOM from malicious
+                // Destroy(Entity(100M,1)) pre-growing _records.
             }
         }
 
@@ -732,8 +734,6 @@ public sealed partial class World : IDisposable
     private unsafe void ReplayCreateOpResolved(Entity entity, ref FrameDelta.OpDecoder decoder, byte* bufPtr)
     {
         var compCount = decoder.ReadVarint();
-        if (compCount < 0)
-            throw new InvalidOperationException("Corrupt FrameDelta: negative component count.");
 
         if (compCount == 0)
         {
