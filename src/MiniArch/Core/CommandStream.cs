@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -1357,19 +1358,28 @@ public sealed class CommandStream
     private ComponentStore<T> GetOrCreateStore<T>() where T : unmanaged
     {
         var id = CommandTypeInfo<T>.Type.Value;
-        if ((uint)id >= (uint)_frozen.Stores.Length)
+        Debug.Assert(id >= 0, "Component type id must be non-negative.");
+
+        var stores = _frozen.Stores;
+        if ((uint)id >= (uint)stores.Length)
         {
-            var newLen = Math.Max(id + 1, _frozen.Stores.Length == 0 ? 16 : _frozen.Stores.Length * 2);
+            var newLen = Math.Max(id + 1, stores.Length == 0 ? 16 : stores.Length * 2);
             Array.Resize(ref _frozen.Stores, newLen);
+            stores = _frozen.Stores;
         }
 
-        var store = _frozen.Stores[id];
+        ref var slot = ref MemoryMarshal.GetArrayDataReference(stores);
+        slot = ref Unsafe.Add(ref slot, id);
+        var store = slot;
         if (store == null)
         {
             store = new ComponentStore<T>();
-            _frozen.Stores[id] = store;
+            slot = store;
         }
-        return (ComponentStore<T>)store;
+
+        Debug.Assert(store is ComponentStore<T>,
+            $"Slot {id} holds {store.GetType()} but expected ComponentStore<{typeof(T)}>.");
+        return Unsafe.As<ComponentStore<T>>(store);
     }
 
     private ComponentStore<T> GetOrCreateStoreParallel<T>() where T : unmanaged
@@ -1717,12 +1727,12 @@ public sealed class CommandStream
             for (var i = 0; i < count; i++)
             {
                 var entity = Unsafe.Add(ref entitiesRef, i);
-                if (!world.TryGetLocation(entity, out var loc)) continue;
+                if (!world.TryGetRecord(entity, out var record)) continue;
 
                 var kind = Unsafe.Add(ref kindsRef, i);
                 if (kind == KindSet)
                 {
-                    var arch = loc.Archetype!;
+                    var arch = record.Archetype!;
                     int colIdx;
                     if (arch == lastArch)
                     {
@@ -1733,12 +1743,11 @@ public sealed class CommandStream
                         lastArch = arch;
                         colIdx = lastColIdx = arch.GetComponentIndex(Component<T>.ComponentType);
                     }
-                    arch.SetComponentAtTyped(colIdx, loc.RowIndex, in Unsafe.Add(ref dataRef, i));
+                    arch.SetComponentAtTyped(colIdx, record.RowIndex, in Unsafe.Add(ref dataRef, i));
                 }
                 else
                 {
                     lastArch = null; // structural change invalidates cache
-                    var record = new EntityRecord { Archetype = loc.Archetype, RowIndex = loc.RowIndex, Version = loc.Version };
                     if (kind == KindAdd)
                         world.ApplyTypedAdd(entity, record, Component<T>.ComponentType, in Unsafe.Add(ref dataRef, i));
                     else

@@ -186,6 +186,17 @@ public sealed partial class World
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool TryGetRecord(Entity entity, out EntityRecord record)
+    {
+        ThrowIfDisposed();
+        if ((uint)entity.Id >= (uint)_entitySlotCount) { record = default; return false; }
+        ref var r = ref _records[entity.Id];
+        if (!r.IsOccupied || r.Version != entity.Version) { record = default; return false; }
+        record = r;
+        return true;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private EntityRecord GetRequiredLocation(Entity entity)
     {
         var id = entity.Id;
