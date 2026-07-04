@@ -1,6 +1,6 @@
 using MiniArch.Core;
 using MiniArch.Tests.Core.TestSupport;
-using MiniQuery = MiniArch.Core.QueryCache;
+using MiniQueryCache = MiniArch.Core.QueryCache;
 
 namespace MiniArchTests.Core;
 
@@ -544,10 +544,10 @@ public sealed class CommandBufferCloneTests
 
         Assert.False(world.IsAlive(clone));
         var description = new QueryDescription().With<Health>();
-        Assert.Equal(1, CountEntities(MiniQuery.Create(world, in description)));
+        Assert.Equal(1, CountEntities(MiniQueryCache.Create(world, in description)));
     }
 
-    private static int CountEntities(MiniQuery query)
+    private static int CountEntities(MiniQueryCache query)
     {
         var total = 0;
         foreach (ref readonly var archetype in query.GetArchetypeSpan())

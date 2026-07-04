@@ -1,7 +1,7 @@
 using MiniArchBenchmarks;
 using MiniArch.Core;
 using System.Reflection;
-using MiniQuery = MiniArch.Core.QueryCache;
+using MiniQueryCache = MiniArch.Core.QueryCache;
 
 namespace MiniArchTests.Core;
 
@@ -35,7 +35,7 @@ public sealed class ComplexQueryBenchmarkScenarioTests
             .With<Velocity>()
             .With<Health>()
             .With<Team>();
-        var withAll = MiniQuery.Create(state.World, in withAllDescription);
+        var withAll = MiniQueryCache.Create(state.World, in withAllDescription);
 
         var withWithoutDescription = new QueryDescription()
             .With<Position>()
@@ -43,7 +43,7 @@ public sealed class ComplexQueryBenchmarkScenarioTests
             .With<Health>()
             .With<Team>()
             .Without<ExcludedTag>();
-        var withWithout = MiniQuery.Create(state.World, in withWithoutDescription);
+        var withWithout = MiniQueryCache.Create(state.World, in withWithoutDescription);
 
         var withAnyDescription = new QueryDescription()
             .With<Position>()
@@ -52,7 +52,7 @@ public sealed class ComplexQueryBenchmarkScenarioTests
             .With<Team>()
             .WithAny<AnyTagA>()
             .WithAny<AnyTagB>();
-        var withAny = MiniQuery.Create(state.World, in withAnyDescription);
+        var withAny = MiniQueryCache.Create(state.World, in withAnyDescription);
 
         Assert.Equal(90, CountEntities(withAll));
         Assert.Equal(70, CountEntities(withWithout));
@@ -69,7 +69,7 @@ public sealed class ComplexQueryBenchmarkScenarioTests
             .With<Velocity>()
             .With<Health>()
             .With<Team>();
-        var query = MiniQuery.Create(state.World, in description);
+        var query = MiniQueryCache.Create(state.World, in description);
 
         var inspectedChunkCount = 0;
         foreach (var archetype in query.MatchedArchetypes)
@@ -113,7 +113,7 @@ public sealed class ComplexQueryBenchmarkScenarioTests
         Assert.Equal(55, CountEntities(state.WithAllAnyQuery));
     }
 
-    private static int CountEntities(MiniQuery query)
+    private static int CountEntities(MiniQueryCache query)
     {
         var total = 0;
         foreach (var archetype in query.MatchedArchetypes)

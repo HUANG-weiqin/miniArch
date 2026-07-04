@@ -5,7 +5,7 @@ using DefaultEcs;
 namespace MiniArchBenchmarks;
 
 using MiniEntity = MiniArch.Entity;
-using MiniQuery = MiniArch.Core.QueryCache;
+using MiniQueryCache = MiniArch.Core.QueryCache;
 using MiniQueryDescription = MiniArch.QueryDescription;
 using MiniWorld = MiniArch.World;
 using MiniComponentType = MiniArch.Core.ComponentType;
@@ -498,9 +498,9 @@ public sealed class MiniComplexQueryWorldState
     public MiniEntity[] Entities;
     internal MiniComponentType PositionType;
     internal MiniComponentType VelocityType;
-    internal MiniQuery WithAllQuery;
-    internal MiniQuery WithAllWithoutQuery;
-    internal MiniQuery WithAllAnyQuery;
+    internal MiniQueryCache WithAllQuery;
+    internal MiniQueryCache WithAllWithoutQuery;
+    internal MiniQueryCache WithAllAnyQuery;
 }
 
 public sealed class ArchComplexQueryWorldState : IDisposable
@@ -551,7 +551,7 @@ public sealed class MiniWideQueryWorldState
     internal MiniComponentType TeamType;
     internal MiniComponentType AccelerationType;
     internal MiniComponentType ManaType;
-    internal MiniQuery WideQuery;
+    internal MiniQueryCache WideQuery;
 }
 
 public sealed class ArchWideQueryWorldState : IDisposable
@@ -589,7 +589,7 @@ public static partial class BenchmarkWorldFactory
         return new ArchWideQueryWorldState(world, entities);
     }
 
-    internal static MiniQuery BuildMiniWithAllQuery(MiniWorld world)
+    internal static MiniQueryCache BuildMiniWithAllQuery(MiniWorld world)
     {
         var description = new MiniQueryDescription()
             .With<Position>()
@@ -597,10 +597,10 @@ public static partial class BenchmarkWorldFactory
             .With<Health>()
             .With<Team>();
 
-        return MiniQuery.Create(world, in description);
+        return MiniQueryCache.Create(world, in description);
     }
 
-    internal static MiniQuery BuildMiniWideQuery(MiniWorld world)
+    internal static MiniQueryCache BuildMiniWideQuery(MiniWorld world)
     {
         var description = new MiniQueryDescription()
             .With<Position>()
@@ -610,7 +610,7 @@ public static partial class BenchmarkWorldFactory
             .With<Acceleration>()
             .With<Mana>();
 
-        return MiniQuery.Create(world, in description);
+        return MiniQueryCache.Create(world, in description);
     }
 
     internal static ArchQueryDescription BuildArchWideDescription()
@@ -619,7 +619,7 @@ public static partial class BenchmarkWorldFactory
             .WithAll<Position, Velocity, Health, Team, Acceleration, Mana>();
     }
 
-    internal static MiniQuery BuildMiniWithAllWithoutQuery(MiniWorld world)
+    internal static MiniQueryCache BuildMiniWithAllWithoutQuery(MiniWorld world)
     {
         var description = new MiniQueryDescription()
             .With<Position>()
@@ -628,10 +628,10 @@ public static partial class BenchmarkWorldFactory
             .With<Team>()
             .Without<ExcludedTag>();
 
-        return MiniQuery.Create(world, in description);
+        return MiniQueryCache.Create(world, in description);
     }
 
-    internal static MiniQuery BuildMiniWithAllAnyQuery(MiniWorld world)
+    internal static MiniQueryCache BuildMiniWithAllAnyQuery(MiniWorld world)
     {
         var description = new MiniQueryDescription()
             .With<Position>()
@@ -641,7 +641,7 @@ public static partial class BenchmarkWorldFactory
             .WithAny<AnyTagA>()
             .WithAny<AnyTagB>();
 
-        return MiniQuery.Create(world, in description);
+        return MiniQueryCache.Create(world, in description);
     }
 
     internal static ArchQueryDescription BuildArchWithAllDescription()

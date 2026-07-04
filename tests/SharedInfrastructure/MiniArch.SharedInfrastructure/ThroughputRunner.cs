@@ -6,7 +6,7 @@ using MiniArch.Core;
 namespace MiniArchBenchmarks;
 
 using ArchQueryDescription = Arch.Core.QueryDescription;
-using MiniQuery = MiniArch.Core.QueryCache;
+using MiniQueryCache = MiniArch.Core.QueryCache;
 using MiniComponentType = MiniArch.Core.ComponentType;
 using ArchWorld = Arch.Core.World;
 using ArchEntity = Arch.Core.Entity;
@@ -651,7 +651,7 @@ internal static class ThroughputCaseFactory
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static int ExecuteMiniEntityQuery(MiniQuery query)
+    private static int ExecuteMiniEntityQuery(MiniQueryCache query)
     {
         var checksum = 0;
         var archetypes = query.GetArchetypeSpan();
@@ -686,7 +686,7 @@ internal static class ThroughputCaseFactory
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static int ExecuteMiniComponentRefQuery(MiniQuery query, MiniComponentType positionType, MiniComponentType velocityType)
+    private static int ExecuteMiniComponentRefQuery(MiniQueryCache query, MiniComponentType positionType, MiniComponentType velocityType)
     {
         var checksum = 0;
         var archetypes = query.GetArchetypeSpan();
@@ -768,7 +768,7 @@ internal static class ThroughputCaseFactory
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static int ExecuteMiniWideComponentSpanQuery(MiniQuery query,
+    private static int ExecuteMiniWideComponentSpanQuery(MiniQueryCache query,
         MiniComponentType posType, MiniComponentType velType,
         MiniComponentType healthType, MiniComponentType teamType,
         MiniComponentType accelType, MiniComponentType manaType)

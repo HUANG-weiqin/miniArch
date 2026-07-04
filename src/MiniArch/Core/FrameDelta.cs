@@ -43,14 +43,14 @@ public sealed class FrameDelta
     /// Prevents OOM from oversized or malicious wire data before allocation.
     /// Callers may wrap the transport layer with a smaller budget.
     /// </summary>
-    public const int MaxFrameBytes = 16 * 1024 * 1024;
+    public static readonly int MaxFrameBytes = 16 * 1024 * 1024;
 
     /// <summary>
     /// Maximum number of operations per frame delta (1 million).
     /// Prevents runaway op-count from exhausting CPU in the decoder loop.
     /// Callers may wrap the transport layer with a smaller budget.
     /// </summary>
-    public const int MaxOpsPerFrame = 1_000_000;
+    public static readonly int MaxOpsPerFrame = 1_000_000;
 
     // ── Wire format header ─────────────────────────────────────────────
     // Non-empty deltas carry a 4-byte header at the start of _buffer:
@@ -210,7 +210,7 @@ public sealed class FrameDelta
     /// Equal to <see cref="MaxOpsPerFrame"/> since a single delta cannot
     /// produce more unique placeholders than operations.
     /// </summary>
-    internal const int MaxPlaceholderSeq = MaxOpsPerFrame;
+    internal static readonly int MaxPlaceholderSeq = MaxOpsPerFrame;
 
     /// <summary>
     /// Validates structural integrity of this FrameDelta. Throws if the delta

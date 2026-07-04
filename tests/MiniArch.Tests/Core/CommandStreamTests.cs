@@ -2,7 +2,7 @@ using System.IO;
 using System.Reflection;
 using System.Security.Cryptography;
 using MiniArch.Core;
-using MiniQuery = MiniArch.Core.QueryCache;
+using MiniQueryCache = MiniArch.Core.QueryCache;
 using MiniArch.Tests.Core.TestSupport;
 
 namespace MiniArchTests.Core;
@@ -2124,7 +2124,7 @@ public sealed class DeferredCreateTests
         stream.Submit();
         // Verify the entity was materialized: a query finds it
         var found = false;
-        foreach (ref readonly var arch in MiniQuery.Create(world, new QueryDescription()).GetArchetypeSpan())
+        foreach (ref readonly var arch in MiniQueryCache.Create(world, new QueryDescription()).GetArchetypeSpan())
             if (arch.GetEntities().Length > 0) found = true;
         Assert.True(found);
     }
@@ -2138,7 +2138,7 @@ public sealed class DeferredCreateTests
         stream.Add(entity, new Position(1, 2));
         stream.Submit();
         var found = 0;
-        foreach (ref readonly var arch in MiniQuery.Create(world, new QueryDescription()).GetArchetypeSpan())
+        foreach (ref readonly var arch in MiniQueryCache.Create(world, new QueryDescription()).GetArchetypeSpan())
             found += arch.GetEntities().Length;
         Assert.Equal(1, found);
     }
@@ -2153,7 +2153,7 @@ public sealed class DeferredCreateTests
         stream.Create();
         stream.Submit();
         var found = 0;
-        foreach (ref readonly var arch in MiniQuery.Create(world, new QueryDescription()).GetArchetypeSpan())
+        foreach (ref readonly var arch in MiniQueryCache.Create(world, new QueryDescription()).GetArchetypeSpan())
             found += arch.GetEntities().Length;
         Assert.Equal(3, found);
     }
@@ -2168,7 +2168,7 @@ public sealed class DeferredCreateTests
         stream.Destroy(entity);
         stream.Submit();
         var found = 0;
-        foreach (ref readonly var arch in MiniQuery.Create(world, new QueryDescription()).GetArchetypeSpan())
+        foreach (ref readonly var arch in MiniQueryCache.Create(world, new QueryDescription()).GetArchetypeSpan())
             found += arch.GetEntities().Length;
         Assert.Equal(0, found);
     }
@@ -2196,7 +2196,7 @@ public sealed class DeferredCreateTests
         Assert.False(world.IsAlive(clone));
         stream.Submit();
         var found = 0;
-        foreach (ref readonly var arch in MiniQuery.Create(world, new QueryDescription()).GetArchetypeSpan())
+        foreach (ref readonly var arch in MiniQueryCache.Create(world, new QueryDescription()).GetArchetypeSpan())
             found += arch.GetEntities().Length;
         Assert.Equal(2, found);
     }
@@ -2306,7 +2306,7 @@ public sealed class DeferredCreateTests
         Assert.Equal(2, CountEntities(replica));
         // Find the parent (has Position 0,0) and verify it has children.
         var hasHierarchy = false;
-        foreach (ref readonly var arch in MiniQuery.Create(replica, new QueryDescription()).GetArchetypeSpan())
+        foreach (ref readonly var arch in MiniQueryCache.Create(replica, new QueryDescription()).GetArchetypeSpan())
         {
             foreach (var entity in arch.GetEntities())
             {
@@ -2344,7 +2344,7 @@ public sealed class DeferredCreateTests
     private static int CountEntities(World w)
     {
         var count = 0;
-        foreach (ref readonly var arch in MiniQuery.Create(w, new QueryDescription()).GetArchetypeSpan())
+        foreach (ref readonly var arch in MiniQueryCache.Create(w, new QueryDescription()).GetArchetypeSpan())
             count += arch.GetEntities().Length;
         return count;
     }
@@ -2352,7 +2352,7 @@ public sealed class DeferredCreateTests
     private static void AssertPosition(World w, int expectedX, int expectedY)
     {
         var desc = new QueryDescription().With<Position>();
-        foreach (ref readonly var arch in MiniQuery.Create(w, in desc).GetArchetypeSpan())
+        foreach (ref readonly var arch in MiniQueryCache.Create(w, in desc).GetArchetypeSpan())
         {
             foreach (var entity in arch.GetEntities())
             {

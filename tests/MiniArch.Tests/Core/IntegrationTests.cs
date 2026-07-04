@@ -1,6 +1,6 @@
 using System.Linq;
 using MiniArch.Core;
-using MiniQuery = MiniArch.Core.QueryCache;
+using MiniQueryCache = MiniArch.Core.QueryCache;
 
 namespace MiniArchTests.Core;
 
@@ -22,7 +22,7 @@ public sealed class IntegrationTests
 
         var positionId = ComponentRegistry.Shared.GetOrCreate<Position>();
         var description = new QueryDescription().With<Position>();
-        var query = MiniQuery.Create(world, in description);
+        var query = MiniQueryCache.Create(world, in description);
 
         Assert.True(world.TryGetLocation(entity, out var location));
         Assert.Equal(1, location.Archetype.Signature.Count);

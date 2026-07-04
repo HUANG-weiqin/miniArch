@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using MiniWorld = MiniArch.World;
 using MiniEntity = MiniArch.Entity;
-using MiniQuery = MiniArch.Core.QueryCache;
+using MiniQueryCache = MiniArch.Core.QueryCache;
 using MiniQueryDescription = MiniArch.QueryDescription;
 using ArchWorld = Arch.Core.World;
 using ArchEntity = Arch.Core.Entity;
@@ -61,14 +61,14 @@ static class Program
         Console.WriteLine("--- MiniArch ---");
 
         var world = new MiniWorld();
-        var queries = new MiniQuery[ArchetypeCount];
+        var queries = new MiniQueryCache[ArchetypeCount];
         var entities = new List<MiniEntity>[ArchetypeCount];
         for (int i = 0; i < ArchetypeCount; i++)
             entities[i] = new List<MiniEntity>(EntitiesPerArchetype + StructuralChangesPerIteration);
 
         var descs = CreateMiniDescriptions();
         for (int i = 0; i < ArchetypeCount; i++)
-            queries[i] = MiniQuery.Create(world, in descs[i]);
+            queries[i] = MiniQueryCache.Create(world, in descs[i]);
 
         PopulateMiniArch(world, entities);
 
@@ -163,7 +163,7 @@ static class Program
     }
 
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
-    static int IterateMiniEntity(MiniQuery query)
+    static int IterateMiniEntity(MiniQueryCache query)
     {
         int checksum = 0;
         var archetypes = query.GetArchetypeSpan();
