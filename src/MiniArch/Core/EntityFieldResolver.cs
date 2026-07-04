@@ -14,8 +14,9 @@ namespace MiniArch.Core;
 /// fields throw <see cref="InvalidOperationException"/> —apply
 /// <c>[StructLayout(LayoutKind.Sequential)]</c> to the type.
 ///
-/// Nested structs containing <see cref="Entity"/> fields are NOT scanned
-/// recursively; only direct fields of type <see cref="Entity"/> are found.
+/// Nested structs containing <see cref="Entity"/> fields are rejected at
+/// registration time. Only direct fields of type <see cref="Entity"/> are
+/// supported; move Entity fields to the top level of the component struct.
 /// </remarks>
 internal static class EntityFieldResolver
 {
@@ -71,6 +72,11 @@ internal static class EntityFieldResolver
         var fields = type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         var entityFieldCount = CountEntityFields(fields);
 
+        // Fail fast on nested Entity fields — they cannot be resolved correctly.
+        // Must run regardless of entityFieldCount; a type could have Entity only
+        // inside a nested struct (zero top-level, but still need to throw).
+        ThrowIfNestedEntity(fields, type);
+
         if (entityFieldCount == 0)
             return []; // no Entity fields found
 
@@ -105,6 +111,47 @@ internal static class EntityFieldResolver
                 count++;
         }
         return count;
+    }
+
+    /// <summary>
+    /// Recursively scans non-Entity struct fields for nested <see cref="Entity"/>
+    /// fields. Throws <see cref="InvalidOperationException"/> if any Entity field
+    /// is found at depth &gt; 0 (inside a nested struct rather than at the top level
+    /// of the component type). Component types with Entity fields must declare them
+    /// at the top level to guarantee correct placeholder resolution.
+    /// </summary>
+    private static void ThrowIfNestedEntity(FieldInfo[] fields, Type ownerType)
+    {
+        var revisited = new HashSet<Type>();
+        foreach (var f in fields)
+        {
+            if (f.FieldType == typeof(Entity))
+                continue; // top-level Entity is fine
+            CheckStructForEntity(f.FieldType, ownerType, f.Name, revisited);
+        }
+    }
+
+    private static void CheckStructForEntity(
+        Type type, Type ownerType, string path, HashSet<Type> revisited)
+    {
+        if (!type.IsValueType || type.IsPrimitive || type.IsEnum)
+            return;
+        if (!revisited.Add(type))
+            return; // already checked, prevent cycles
+
+        var fields = type.GetFields(
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        foreach (var f in fields)
+        {
+            if (f.FieldType == typeof(Entity))
+            {
+                throw new InvalidOperationException(
+                    $"Component type '{ownerType.FullName ?? ownerType.Name}' has a nested " +
+                    $"Entity field '{path}.{f.Name}'. Entity fields must be at the top level " +
+                    $"of the component struct. Move '{f.Name}' to the top level or flatten '{path}'.");
+            }
+            CheckStructForEntity(f.FieldType, ownerType, $"{path}.{f.Name}", revisited);
+        }
     }
 
     /// <summary>
