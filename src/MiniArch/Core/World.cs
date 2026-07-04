@@ -134,7 +134,7 @@ public sealed partial class World : IDisposable
 
     [Conditional("DEBUG")]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ValidateAlive(Entity entity)
+    private void AssertAlive(Entity entity)
     {
         if ((uint)entity.Id >= (uint)_entitySlotCount)
             throw new InvalidOperationException($"Entity {entity} is not alive.");
@@ -282,7 +282,7 @@ public sealed partial class World : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public T Get<T>(Entity entity) where T : unmanaged
     {
-        ValidateAlive(entity);
+        AssertAlive(entity);
         ref var record = ref _records[entity.Id];
         var arch = record.Archetype!;
         return arch.GetComponentAt<T>(arch.GetComponentIndexFast(GetComponentType<T>()), record.RowIndex);
@@ -295,7 +295,7 @@ public sealed partial class World : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ref T GetRef<T>(Entity entity) where T : unmanaged
     {
-        ValidateAlive(entity);
+        AssertAlive(entity);
         ref var record = ref _records[entity.Id];
         var arch = record.Archetype!;
         return ref arch.GetComponentRefAt<T>(arch.GetComponentIndexFast(GetComponentType<T>()), record.RowIndex);

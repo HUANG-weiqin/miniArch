@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-07-04 (AssertNotDisposed rename; clarify DEBUG-only safety checks are intentional design)
+updated: 2026-07-04 (AssertNotDisposed + AssertAlive rename; clarify DEBUG-only safety checks are intentional design)
 ---
 # MiniArch Core ECS
 
@@ -110,7 +110,7 @@ updated: 2026-07-04 (AssertNotDisposed rename; clarify DEBUG-only safety checks 
 - ~~**ICommandRecorder 保留**~~ — 已删除（YAGNI）。测试层直接使用 `CommandStream`
 - **Edge cache 内联**：增删目标缓存直接挂在 Archetype 上（`Archetype?[]` 按 componentId 直索引），无需独立 ArchetypeEdges 对象
 - **迁移拷贝内联**：`CopySharedComponentsFrom` 直接在 Archetype 上实现，无需 MigrationPlan class
-- 热路径安全检查（bounds check、capacity check、`AssertNotDisposed`、`ValidateAlive` 等）包裹 `[Conditional("DEBUG")]`，Release 下零开销。这是有意设计：将这些检查改为常开会为每个 public API 增加分支，在没有明确契约变更和 perf 证明前保持 DEBUG-only
+- 热路径安全检查（bounds check、capacity check、`AssertNotDisposed`、`AssertAlive` 等）包裹 `[Conditional("DEBUG")]`，Release 下零开销。这是有意设计：将这些检查改为常开会为每个 public API 增加分支，在没有明确契约变更和 perf 证明前保持 DEBUG-only
 - `[SkipLocalsInit]` + `AggressiveInlining` + `Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), offset)` 消除 JIT 边界检查
 - Entity version 和 location 合并存储在 `EntityRecord[] _records`：`(Archetype, RowIndex, Version)` 16 字节紧凑布局
 - flat byte storage 只面向 unmanaged 组件；含托管引用组件在 storage 构造时 fail fast
