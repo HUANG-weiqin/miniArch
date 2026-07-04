@@ -104,40 +104,41 @@ Other ECS libraries have `CommandBuffer`, but frame sync needs more than that:
 
 | Gap | Arch | Friflo | MiniArch |
 |---|---|---|---|
-| `Create()` ID 分配时机 | 回放时（负 ID 占位符） | 调用时（预分配） | 调用时（预分配） |
+| `Create()` ID 分配时机 | 回放时（负 ID 占位符） | 调用时（预分配） | 可配置：默认调用时（预分配），lockstep 模式回放时（占位符） |
 | **`Snapshot()` → 可序列化 delta** | ❌ | ❌ | ✅ |
 | **`Replay(FrameDelta)`** | ❌ | ❌ | ✅ |
 | **Replay 时 ID 一致性校验** | ❌ | ❌ | ✅ |
 | **多帧合并 `Merge()`** | ❌ | ❌ | ✅ |
 | **`CaptureState/RestoreState` 原地零分配回滚** | ❌ | ❌ | ✅ |
 | **`World.Clone()` 分支/独立副本** | ❌ | ❌ | ✅ |
-| **跨 World 重放测试** | ❌ | ❌ | ✅ 1000帧模糊测试 |
+| **跨 World 重放测试** | ❌ | ❌ | ✅ 10,000帧模糊测试 |
 
 ```csharp
-// Record a frame's changes as a self-contained delta
-var buffer = new CommandStream(world);
-// ... record all mutations ...
-var delta = buffer.Snapshot();    // produce delta without applying
-buffer.Submit();                   // apply locally
+// ── Relay mode: record delta, send, replay ──
+var buffer = new CommandStream(world) { DeferredEntities = true };
+// ... record all mutations with placeholder entities ...
+var delta = buffer.Snapshot();    // produce placeholder-ID delta
+buffer.Clear();                   // discard locally (delta will be replayed)
+// Send delta to all peers...
+foreach (var peer in peers)
+    peer.Replay(delta);
 
-// Send delta over network...
+// ── After replay, resolve placeholders to local real entities ──
+if (world.TryResolvePlaceholder(placeholder, out var real))  // Entity(-1, 5) → Entity(3, 1)
+    world.Set(tracker, new Target { Value = real });         // ✅ real ID is stable across hosts
 
-// Any client replays to produce identical state
-replicaWorld.Replay(delta);       // ensure replay reservation + ID validation
+// ── Authority + Mirror: apply locally AND produce real-ID delta ──
+var authority = new CommandStream(world);
+// ... record mutations with real entities (DeferredEntities=false, default) ...
+var localDelta = await authority.SubmitAndSnapshotAsync();   // pipelined submit + delta
 
-// High-frequency in-place rollback (GGPO-style 60fps, zero-alloc steady state):
-// Multiple snapshots may be live simultaneously — supports multi-frame
-// rollback windows (capture N frames ahead, restore out-of-order on misprediction).
+// ── High-frequency in-place rollback (GGPO-style 60fps, zero-alloc steady state) ──
 var handle = world.CaptureState();  // save current mutable state
 // ... predict frames on the same world ...
 world.RestoreState(handle);         // revert in place, handle recycled to pool
 
-// Branching / long-lived checkpoint: Clone materializes a NEW independent world
-var branch = world.Clone();
-
-// After replay, resolve placeholder IDs to local real entities
-world.Replay(peerDelta);
-world.TryResolvePlaceholder(placeholder, out var localEntity);  // Entity(-1, 5) → Entity(3, 1)
+// ── Branching / long-lived checkpoint ──
+var branch = world.Clone();         // materialize a NEW independent world
 ```
 
 ---
