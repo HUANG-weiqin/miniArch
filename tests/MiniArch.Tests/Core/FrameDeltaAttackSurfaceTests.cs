@@ -192,11 +192,13 @@ public sealed class FrameDeltaAttackSurfaceTests
     public void Validate_rejects_negative_component_count()
     {
         // Reserve(0,1) + Create(0,1) compCount=-1
-        var wire = new byte[] {
-            (byte)DeltaOpKind.Reserve, 0x00, 0x01,
-            (byte)DeltaOpKind.Create, 0x00, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F
-        };
-        var delta = FrameDelta.Deserialize(wire);
+        // Build delta manually so Deserialize does not eagerly reject it;
+        // the purpose of this test is to verify Validate catches it.
+        var buf = new System.Collections.Generic.List<byte>();
+        buf.AddRange([(byte)DeltaOpKind.Reserve, 0x00, 0x01]);
+        buf.AddRange([(byte)DeltaOpKind.Create, 0x00, 0x01]);
+        buf.AddRange(V(-1)); // compCount = -1
+        var delta = new FrameDelta { _buffer = buf.ToArray(), _length = buf.Count, _opCount = 2 };
 
         var ex = Assert.Throws<InvalidOperationException>(() => delta.Validate());
         Assert.Contains("Negative component count", ex.Message);
@@ -351,5 +353,121 @@ public sealed class FrameDeltaAttackSurfaceTests
 
         // Destroy on non-existent entity is a no-op.
         Assert.Equal(0, world.EntityCount);
+    }
+
+    // ══════════════════════════════════════════════════════════
+    //  10. Decoder negative length/size/count rejection
+    // ══════════════════════════════════════════════════════════
+
+    [Fact]
+    public void Decoder_ReadBytes_negative_length_throws()
+    {
+        var buf = new byte[64];
+        var decoder = new FrameDelta.OpDecoder(buf, buf.Length, 0);
+        var ex = Assert.Throws<InvalidOperationException>(() => decoder.ReadBytes(-1));
+        Assert.Contains("negative", ex.Message);
+    }
+
+    [Fact]
+    public void Decoder_SkipData_negative_size_throws()
+    {
+        var buf = new System.Collections.Generic.List<byte>();
+        buf.AddRange(V(1234)); // component type id
+        buf.AddRange(V(-1));   // size = -1
+        var decoder = new FrameDelta.OpDecoder(buf.ToArray(), buf.Count, 0);
+        var ex = Assert.Throws<InvalidOperationException>(() => decoder.SkipData());
+        Assert.Contains("negative", ex.Message);
+    }
+
+    [Fact]
+    public void Decoder_SkipCreatePayload_negative_count_throws()
+    {
+        var buf = new System.Collections.Generic.List<byte>();
+        buf.AddRange(V(-1)); // compCount = -1
+        var decoder = new FrameDelta.OpDecoder(buf.ToArray(), buf.Count, 0);
+        var ex = Assert.Throws<InvalidOperationException>(() => decoder.SkipCreatePayload());
+        Assert.Contains("negative", ex.Message);
+    }
+
+    [Fact]
+    public void Decoder_SkipCreatePayload_negative_component_size_throws()
+    {
+        var buf = new System.Collections.Generic.List<byte>();
+        buf.AddRange(V(1));   // compCount = 1
+        buf.AddRange(V(42));  // component type
+        buf.AddRange(V(-1));  // size = -1
+        var decoder = new FrameDelta.OpDecoder(buf.ToArray(), buf.Count, 0);
+        var ex = Assert.Throws<InvalidOperationException>(() => decoder.SkipCreatePayload());
+        Assert.Contains("negative", ex.Message);
+    }
+
+    // ══════════════════════════════════════════════════════════
+    //  11. Int-adder overflow — large positive size/length bypasses bounds check
+    // ══════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// When <c>_pos &gt; 0</c> and <c>size = int.MaxValue</c>, the check
+    /// <c>_pos + size &gt; _end</c> overflows to negative and passes.
+    /// The decoder must reject with <see cref="InvalidOperationException"/>.
+    /// </summary>
+    [Fact]
+    public void Decoder_ReadBytes_overflow_length_throws()
+    {
+        // _pos = 5, _end = 10 → only 5 bytes remaining
+        // length = int.MaxValue → 5 + int.MaxValue overflows in old code
+        var buf = new byte[10];
+        var decoder = new FrameDelta.OpDecoder(buf, buf.Length, 5);
+        Assert.Throws<InvalidOperationException>(() => decoder.ReadBytes(int.MaxValue));
+    }
+
+    [Fact]
+    public void Decoder_SkipData_overflow_size_throws()
+    {
+        // Wire: small component type (0x00) + size = int.MaxValue (FF FF FF FF 07)
+        // After reading type (+1) and size (+5), _pos = 6, _end = 6.
+        // _pos + int.MaxValue overflows → old code bypasses bounds.
+        var buf = new byte[] { 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0x07 };
+        var decoder = new FrameDelta.OpDecoder(buf, buf.Length, 0);
+
+        Assert.Throws<InvalidOperationException>(() =>
+        {
+            decoder.SkipData();
+            // If SkipData didn't throw (old code: overflow bypass),
+            // attempting the next read will crash with IndexOutOfRangeException.
+            decoder.MoveNext();
+        });
+    }
+
+    [Fact]
+    public void Decoder_SkipCreatePayload_overflow_component_size_throws()
+    {
+        // Wire: compCount=1, type=42, size=int.MaxValue (FF FF FF FF 07)
+        // After reading count (+1), type (+1), size (+5): _pos=7, _end=7.
+        var buf = new byte[] { 0x01, 0x2A, 0xFF, 0xFF, 0xFF, 0xFF, 0x07 };
+        var decoder = new FrameDelta.OpDecoder(buf, buf.Length, 0);
+
+        Assert.Throws<InvalidOperationException>(() =>
+        {
+            decoder.SkipCreatePayload();
+            decoder.MoveNext();
+        });
+    }
+
+    /// <summary>
+    /// Reproduces the reviewer's exact malformed wire bytes:
+    /// Set op (0x06) + Entity(0,0) + component size = int.MaxValue.
+    /// Before fix: _pos + size overflows, bypasses bounds check, then
+    /// next MoveNext throws IndexOutOfRangeException (uncontrolled).
+    /// After fix: must throw <see cref="InvalidOperationException"/>.
+    /// </summary>
+    [Fact]
+    public void Deserialize_rejects_overflow_size_with_invalid_operation()
+    {
+        // 0x06 = Set, 0x00 = entity id, 0x00 = entity ver,
+        // 0x00 = component type, 0xFF,0xFF,0xFF,0xFF,0x07 = size = int.MaxValue
+        var wire = new byte[] { 0x06, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0x07 };
+
+        var ex = Record.Exception(() => FrameDelta.Deserialize(wire));
+        Assert.IsType<InvalidOperationException>(ex);
     }
 }

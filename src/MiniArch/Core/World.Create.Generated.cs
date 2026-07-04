@@ -13,7 +13,7 @@ public sealed partial class World
     /// </summary>
     public Entity Create<T1>(T1 component1) where T1 : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var componentType1 = GetComponentType<T1>();
         var archetype = GetOrCreateCreateArchetype<T1>(componentType1);
         var entity = CreateInArchetype(archetype, out var rowIndex);
@@ -26,7 +26,7 @@ public sealed partial class World
     /// </summary>
     public Entity Create<T1, T2>(T1 component1, T2 component2) where T1 : unmanaged where T2 : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var archetype = GetOrCreateCreateArchetype<T1, T2>(componentType1, componentType2);
@@ -41,7 +41,7 @@ public sealed partial class World
     /// </summary>
     public Entity Create<T1, T2, T3>(T1 component1, T2 component2, T3 component3) where T1 : unmanaged where T2 : unmanaged where T3 : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -58,7 +58,7 @@ public sealed partial class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4>(T1 component1, T2 component2, T3 component3, T4 component4) where T1 : unmanaged where T2 : unmanaged where T3 : unmanaged where T4 : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -77,7 +77,7 @@ public sealed partial class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5) where T1 : unmanaged where T2 : unmanaged where T3 : unmanaged where T4 : unmanaged where T5 : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -99,7 +99,7 @@ public sealed partial class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6) where T1 : unmanaged where T2 : unmanaged where T3 : unmanaged where T4 : unmanaged where T5 : unmanaged where T6 : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -123,7 +123,7 @@ public sealed partial class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7) where T1 : unmanaged where T2 : unmanaged where T3 : unmanaged where T4 : unmanaged where T5 : unmanaged where T6 : unmanaged where T7 : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -149,7 +149,7 @@ public sealed partial class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8) where T1 : unmanaged where T2 : unmanaged where T3 : unmanaged where T4 : unmanaged where T5 : unmanaged where T6 : unmanaged where T7 : unmanaged where T8 : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -177,7 +177,7 @@ public sealed partial class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9) where T1 : unmanaged where T2 : unmanaged where T3 : unmanaged where T4 : unmanaged where T5 : unmanaged where T6 : unmanaged where T7 : unmanaged where T8 : unmanaged where T9 : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -207,7 +207,7 @@ public sealed partial class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10) where T1 : unmanaged where T2 : unmanaged where T3 : unmanaged where T4 : unmanaged where T5 : unmanaged where T6 : unmanaged where T7 : unmanaged where T8 : unmanaged where T9 : unmanaged where T10 : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -239,7 +239,7 @@ public sealed partial class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11) where T1 : unmanaged where T2 : unmanaged where T3 : unmanaged where T4 : unmanaged where T5 : unmanaged where T6 : unmanaged where T7 : unmanaged where T8 : unmanaged where T9 : unmanaged where T10 : unmanaged where T11 : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -273,7 +273,7 @@ public sealed partial class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12) where T1 : unmanaged where T2 : unmanaged where T3 : unmanaged where T4 : unmanaged where T5 : unmanaged where T6 : unmanaged where T7 : unmanaged where T8 : unmanaged where T9 : unmanaged where T10 : unmanaged where T11 : unmanaged where T12 : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -309,7 +309,7 @@ public sealed partial class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13) where T1 : unmanaged where T2 : unmanaged where T3 : unmanaged where T4 : unmanaged where T5 : unmanaged where T6 : unmanaged where T7 : unmanaged where T8 : unmanaged where T9 : unmanaged where T10 : unmanaged where T11 : unmanaged where T12 : unmanaged where T13 : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -347,7 +347,7 @@ public sealed partial class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13, T14 component14) where T1 : unmanaged where T2 : unmanaged where T3 : unmanaged where T4 : unmanaged where T5 : unmanaged where T6 : unmanaged where T7 : unmanaged where T8 : unmanaged where T9 : unmanaged where T10 : unmanaged where T11 : unmanaged where T12 : unmanaged where T13 : unmanaged where T14 : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -387,7 +387,7 @@ public sealed partial class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13, T14 component14, T15 component15) where T1 : unmanaged where T2 : unmanaged where T3 : unmanaged where T4 : unmanaged where T5 : unmanaged where T6 : unmanaged where T7 : unmanaged where T8 : unmanaged where T9 : unmanaged where T10 : unmanaged where T11 : unmanaged where T12 : unmanaged where T13 : unmanaged where T14 : unmanaged where T15 : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();
@@ -429,7 +429,7 @@ public sealed partial class World
     /// </summary>
     public Entity Create<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16>(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13, T14 component14, T15 component15, T16 component16) where T1 : unmanaged where T2 : unmanaged where T3 : unmanaged where T4 : unmanaged where T5 : unmanaged where T6 : unmanaged where T7 : unmanaged where T8 : unmanaged where T9 : unmanaged where T10 : unmanaged where T11 : unmanaged where T12 : unmanaged where T13 : unmanaged where T14 : unmanaged where T15 : unmanaged where T16 : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var componentType1 = GetComponentType<T1>();
         var componentType2 = GetComponentType<T2>();
         var componentType3 = GetComponentType<T3>();

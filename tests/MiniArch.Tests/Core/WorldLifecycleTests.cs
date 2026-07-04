@@ -1,7 +1,7 @@
 using System.Runtime.ExceptionServices;
 using MiniArch.Core;
 using MiniArch.Tests.Core.TestSupport;
-using MiniQuery = MiniArch.Core.QueryCache;
+using MiniQueryCache = MiniArch.Core.QueryCache;
 
 namespace MiniArchTests.Core;
 
@@ -434,16 +434,16 @@ public sealed class WorldLifecycleTests
         Assert.Equal([firstChild, secondChild], children.OrderBy(entity => entity.Id).ToArray());
     }
 
-    private static MiniQuery CreateQuery<T>(World world)
+    private static MiniQueryCache CreateQuery<T>(World world) where T : unmanaged
     {
         var description = new QueryDescription().With<T>();
-        return MiniQuery.Create(world, in description);
+        return MiniQueryCache.Create(world, in description);
     }
 
-    private static MiniQuery CreateQuery<T1, T2>(World world)
+    private static MiniQueryCache CreateQuery<T1, T2>(World world) where T1 : unmanaged where T2 : unmanaged
     {
         var description = new QueryDescription().With<T1>().With<T2>();
-        return MiniQuery.Create(world, in description);
+        return MiniQueryCache.Create(world, in description);
     }
 
     [Fact]
@@ -646,6 +646,18 @@ public sealed class WorldLifecycleTests
         Assert.Equal(child.Id, replacement.Id);
         Assert.NotEqual(child.Version, replacement.Version);
         Assert.False(world.TryGetParent(replacement, out _));
+        Assert.False(world.HasChildren(parent));
+    }
+
+    [Fact]
+    public void HasChildren_returns_false_for_stale_entity()
+    {
+        var world = new World();
+        var parent = world.Create();
+        var child = world.Create();
+        world.AddChild(parent, child);
+        Assert.True(world.HasChildren(parent));
+        world.Destroy(parent);
         Assert.False(world.HasChildren(parent));
     }
 

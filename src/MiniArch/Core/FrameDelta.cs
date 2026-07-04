@@ -31,7 +31,7 @@ namespace MiniArch.Core;
 /// <see cref="CommandStream.DeferredEntities"/> is <c>false</c>
 /// (default). Ids are already resolved by the producer. Mirror clients
 /// must have synchronized id allocators (e.g. by replaying every frame
-/// since frame 0). <c>World.EnsureReplayReservation</c> enforces this
+/// since frame 0). The replay system enforces this
 /// invariant and throws if the allocator has diverged.
 /// </item>
 /// </list>
@@ -43,26 +43,29 @@ public sealed class FrameDelta
     /// Prevents OOM from oversized or malicious wire data before allocation.
     /// Callers may wrap the transport layer with a smaller budget.
     /// </summary>
-    public const int MaxFrameBytes = 16 * 1024 * 1024;
+    public static readonly int MaxFrameBytes = 16 * 1024 * 1024;
 
     /// <summary>
     /// Maximum number of operations per frame delta (1 million).
     /// Prevents runaway op-count from exhausting CPU in the decoder loop.
     /// Callers may wrap the transport layer with a smaller budget.
     /// </summary>
-    public const int MaxOpsPerFrame = 1_000_000;
+    public static readonly int MaxOpsPerFrame = 1_000_000;
 
     // ── Wire format header ─────────────────────────────────────────────
-    // Every FrameDelta carries a 4-byte header at the start of _buffer:
+    // Non-empty deltas carry a 4-byte header at the start of _buffer:
     //   [0-1] Magic "MF" (0x4D46) — format identification.
     //   [2]   Flags: bit 7 = endianness (1=little, 0=big);
     //         bits 0-6 = format version (currently 1).
     //   [3]   Reserved (0x00).
     // Op data starts immediately after the header (offset 4).
+    // Empty deltas (_opCount == 0) have _length 0 and _buffer may be empty;
+    // AsSpan() returns an empty span with no header.
     //
     // Backward compatibility: buffers where byte[0] is not 'M' (i.e. legacy
     // format starting with a DeltaOpKind tag) are detected and read without
-    // header offset. All newly produced deltas always include the header.
+    // header offset. All newly produced non-empty deltas always include the
+    // header; empty deltas are an empty span.
     internal const int HeaderSize = 4;
     internal const byte FormatVersion = 0x01;
 
@@ -207,7 +210,7 @@ public sealed class FrameDelta
     /// Equal to <see cref="MaxOpsPerFrame"/> since a single delta cannot
     /// produce more unique placeholders than operations.
     /// </summary>
-    internal const int MaxPlaceholderSeq = MaxOpsPerFrame;
+    internal static readonly int MaxPlaceholderSeq = MaxOpsPerFrame;
 
     /// <summary>
     /// Validates structural integrity of this FrameDelta. Throws if the delta
@@ -598,8 +601,11 @@ public sealed class FrameDelta
         /// </summary>
         public ReadOnlySpan<byte> ReadBytes(int length)
         {
-            if (length <= 0) return ReadOnlySpan<byte>.Empty;
-            if (_pos + length > _end)
+            if (length < 0)
+                throw new InvalidOperationException(
+                    $"Invalid FrameDelta: negative byte length ({length}) at offset {_pos}.");
+            if (length == 0) return ReadOnlySpan<byte>.Empty;
+            if ((uint)length > (uint)(_end - _pos))
                 throw new InvalidOperationException(
                     $"Truncated FrameDelta: insufficient data bytes at offset {_pos} " +
                     $"(need {length} bytes, {_end - _pos} remaining).");
@@ -615,7 +621,10 @@ public sealed class FrameDelta
         {
             ReadVarint(); // ComponentType
             var size = ReadVarint();
-            if (_pos + size > _end)
+            if (size < 0)
+                throw new InvalidOperationException(
+                    $"Invalid FrameDelta: negative data size ({size}) at offset {_pos}.");
+            if ((uint)size > (uint)(_end - _pos))
                 throw new InvalidOperationException(
                     $"Truncated FrameDelta in SkipData at offset {_pos} " +
                     $"(need {size} bytes, {_end - _pos} remaining).");
@@ -628,11 +637,17 @@ public sealed class FrameDelta
         public void SkipCreatePayload()
         {
             var count = ReadVarint();
+            if (count < 0)
+                throw new InvalidOperationException(
+                    $"Invalid FrameDelta: negative component count ({count}) at offset {_pos}.");
             for (var i = 0; i < count; i++)
             {
                 ReadVarint(); // type
                 var size = ReadVarint();
-                if (_pos + size > _end)
+                if (size < 0)
+                    throw new InvalidOperationException(
+                        $"Invalid FrameDelta: negative data size ({size}) in Create component at offset {_pos}.");
+                if ((uint)size > (uint)(_end - _pos))
                     throw new InvalidOperationException(
                         $"Truncated FrameDelta in SkipCreatePayload at offset {_pos} " +
                         $"(need {size} bytes, {_end - _pos} remaining).");

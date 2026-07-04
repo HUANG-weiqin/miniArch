@@ -156,7 +156,7 @@ internal struct ArchetypeBackupEntry
 
         if (entry.Entities is null || entry.Entities.Length < count)
             entry.Entities = new Entity[count];
-        Array.Copy(arch.GetEntityStorage(), entry.Entities, count);
+        Array.Copy(arch.GetEntityStorageUnsafe(), entry.Entities, count);
 
         var totalBytes = arch.TotalDataBytes;
         if (entry.Data is null || entry.Data.Length < totalBytes)
@@ -201,7 +201,7 @@ internal struct ArchetypeBackupEntry
     {
         if (!IsChunked)
         {
-            Array.Copy(Entities, arch.GetEntityStorage(), Count);
+            Array.Copy(Entities, arch.GetEntityStorageUnsafe(), Count);
             arch.CopyDataFrom(Data);
             arch.SetCount(Count);
         }

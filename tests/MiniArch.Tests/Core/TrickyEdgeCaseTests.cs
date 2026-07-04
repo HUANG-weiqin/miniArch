@@ -1,7 +1,7 @@
 using System.Reflection;
 using MiniArch.Core;
 using MiniArch.Tests.Core.TestSupport;
-using MiniQuery = MiniArch.Core.QueryCache;
+using MiniQueryCache = MiniArch.Core.QueryCache;
 
 namespace MiniArchTests.Core;
 
@@ -279,7 +279,7 @@ public sealed class TrickyEdgeCaseTests
         var world = new World();
         world.Create(new Position(1, 2));
         var description = new QueryDescription().With<Position>().Without<Position>();
-        var query = MiniQuery.Create(world, in description);
+        var query = MiniQueryCache.Create(world, in description);
 
         Assert.Empty(query.MatchedArchetypes);
         Assert.Empty(query.MatchedArchetypes);
@@ -291,7 +291,7 @@ public sealed class TrickyEdgeCaseTests
         var world = new World();
         world.Create();
         var description = new QueryDescription().WithAny<Position>();
-        var query = MiniQuery.Create(world, in description);
+        var query = MiniQueryCache.Create(world, in description);
 
         Assert.Empty(query.MatchedArchetypes);
     }
@@ -305,7 +305,7 @@ public sealed class TrickyEdgeCaseTests
         world.Create(new Position(5, 6), new Velocity(7, 8));
         world.Create(); // empty entity, should not match
         var description = new QueryDescription().WithAny<Position>();
-        var query = MiniQuery.Create(world, in description);
+        var query = MiniQueryCache.Create(world, in description);
 
         Assert.Equal(2, CountEntities(query));
     }
@@ -323,7 +323,7 @@ public sealed class TrickyEdgeCaseTests
 
         var description = new QueryDescription().With<Position>();
         var defaultQuery = world.Query(in description);
-        var advancedQuery = MiniQuery.Create(world, in description);
+        var advancedQuery = MiniQueryCache.Create(world, in description);
 
         var defaultCount = 0;
         foreach (var _ in defaultQuery) defaultCount++;
@@ -345,7 +345,7 @@ public sealed class TrickyEdgeCaseTests
         }
 
         var description = new QueryDescription().With<Position>();
-        var query = MiniQuery.Create(world, in description);
+        var query = MiniQueryCache.Create(world, in description);
         Assert.Equal(entities.Length, CountEntities(query));
 
         foreach (var entity in entities) world.Destroy(entity);
@@ -368,7 +368,7 @@ public sealed class TrickyEdgeCaseTests
         }
 
         var description = new QueryDescription().With<Position>();
-        var query = MiniQuery.Create(world, in description);
+        var query = MiniQueryCache.Create(world, in description);
 
         Assert.Equal(entities.Length, CountEntities(query));
 
@@ -389,11 +389,11 @@ public sealed class TrickyEdgeCaseTests
     {
         var world = new World();
         var description = new QueryDescription().With<Position>();
-        var query1 = MiniQuery.Create(world, in description);
+        var query1 = MiniQueryCache.Create(world, in description);
         Assert.Empty(query1.MatchedArchetypes);
 
         world.Create(new Position(1, 2));
-        var query2 = MiniQuery.Create(world, in description);
+        var query2 = MiniQueryCache.Create(world, in description);
 
         Assert.Same(query1, query2);
         Assert.Single(query2.MatchedArchetypes);
@@ -527,7 +527,7 @@ public sealed class TrickyEdgeCaseTests
         }
 
         var description = new QueryDescription().With<Position>();
-        var query = MiniQuery.Create(world, in description);
+        var query = MiniQueryCache.Create(world, in description);
         Assert.Equal(entities.Length, CountEntities(query));
 
         world.Remove<Position>(entities[0]);
@@ -578,7 +578,7 @@ public sealed class TrickyEdgeCaseTests
         world.Remove<Position>(entity);
 
         var description = new QueryDescription().With<Position>();
-        var query = MiniQuery.Create(world, in description);
+        var query = MiniQueryCache.Create(world, in description);
 
         Assert.NotEmpty(query.MatchedArchetypes);
         Assert.Equal(0, CountEntities(query));
@@ -652,7 +652,7 @@ public sealed class TrickyEdgeCaseTests
         }
 
         var description = new QueryDescription().With<Position>();
-        var query = MiniQuery.Create(world, in description);
+        var query = MiniQueryCache.Create(world, in description);
         Assert.Equal(1, query.GetArchetypeSpan().Length);
     }
 
@@ -772,7 +772,7 @@ public sealed class TrickyEdgeCaseTests
     // Helpers
     // ══════════════════════════════════════════════════════—
 
-    private static int CountEntities(MiniQuery query)
+    private static int CountEntities(MiniQueryCache query)
     {
         var total = 0;
         foreach (ref readonly var archetype in query.GetArchetypeSpan())

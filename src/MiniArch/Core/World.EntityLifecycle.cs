@@ -6,6 +6,8 @@ using MiniArch.Core;
 
 namespace MiniArch;
 
+internal readonly record struct EntityBatchRange(int StartRow, int Count);
+
 public sealed partial class World
 {
     /// <summary>
@@ -13,7 +15,7 @@ public sealed partial class World
     /// </summary>
     public Entity Create()
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var archetype = GetOrCreateArchetype(Signature.Empty)!;
         return CreateInArchetype(archetype, out _);
     }
@@ -23,7 +25,7 @@ public sealed partial class World
     /// </summary>
     public void CreateMany(Span<Entity> entities)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         if (entities.Length == 0)
         {
             return;
@@ -50,11 +52,8 @@ public sealed partial class World
     /// </summary>
     public void EnsureCapacity(int entityCapacity)
     {
-        ThrowIfDisposed();
-        if (entityCapacity < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(entityCapacity));
-        }
+        AssertNotDisposed();
+        ArgumentOutOfRangeException.ThrowIfNegative(entityCapacity);
 
         if (_records.Length < entityCapacity)
         {
@@ -82,9 +81,9 @@ public sealed partial class World
     /// </remarks>
     public void Destroy(Entity entity)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
 
-        if (!_hierarchy.HasChildren(entity))
+        if (!_hierarchy.HasChildren(this, entity))
         {
             DestroySingle(entity);
             return;
@@ -118,7 +117,7 @@ public sealed partial class World
 
     internal bool TryGetLocation(Entity entity, out EntityInfo info)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         if (entity.Id < 0 || entity.Id >= _entitySlotCount)
         {
             info = default;
@@ -142,7 +141,7 @@ public sealed partial class World
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool IsAlive(Entity entity)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
 
         if ((uint)entity.Id >= (uint)_entitySlotCount)
             return false;
@@ -161,7 +160,7 @@ public sealed partial class World
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool TryGetRecord(Entity entity, out EntityRecord record)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         if ((uint)entity.Id >= (uint)_entitySlotCount) { record = default; return false; }
         ref var r = ref _records[entity.Id];
         if (!r.IsOccupied || r.Version != entity.Version) { record = default; return false; }
@@ -185,13 +184,13 @@ public sealed partial class World
     }
 
     [DoesNotReturn]
-    private void ThrowInvalidEntity(Entity entity)
+    private static void ThrowInvalidEntity(Entity entity)
     {
         throw new InvalidOperationException($"Entity {entity} does not exist. The entity may have never been created, or its id is invalid.");
     }
 
     [DoesNotReturn]
-    private void ThrowStaleEntity(Entity entity)
+    private static void ThrowStaleEntity(Entity entity)
     {
         throw new InvalidOperationException($"Entity {entity} is no longer alive. It may have been destroyed in a previous frame or the handle is stale.");
     }

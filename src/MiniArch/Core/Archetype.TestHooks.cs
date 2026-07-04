@@ -11,8 +11,5 @@ internal sealed partial class Archetype
         }
     }
 
-    internal void AddSegmentForTesting()
-    {
-        GrowChunked(1);
-    }
+    internal void AddSegmentForTesting() => GrowChunked(1);
 }

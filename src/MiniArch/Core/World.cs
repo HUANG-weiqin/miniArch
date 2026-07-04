@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Diagnostics;
+using System.Linq;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
@@ -117,20 +118,23 @@ public sealed partial class World : IDisposable
         _freeIdCount = 0;
         _destroyVisitedGen = [];
         _destroyCurrentGen = 0;
+        _replayPlaceholderMap = [];
+        _replayMapCount = 0;
+        _stateSnapshotPool.Clear();
         _hierarchy.Reset();
         _createArchetypeCacheGeneration = int.MaxValue;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     [Conditional("DEBUG")]
-    private void ThrowIfDisposed()
+    private void AssertNotDisposed()
     {
-        if (_disposed) throw new ObjectDisposedException(nameof(World));
+        ObjectDisposedException.ThrowIf(_disposed, this);
     }
 
     [Conditional("DEBUG")]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ValidateAlive(Entity entity)
+    private void AssertAlive(Entity entity)
     {
         if ((uint)entity.Id >= (uint)_entitySlotCount)
             throw new InvalidOperationException($"Entity {entity} is not alive.");
@@ -163,7 +167,7 @@ public sealed partial class World : IDisposable
         var i = 0;
         foreach (var arch in _archetypes.Values)
         {
-            result[i++] = new ArchetypeStats(arch.EntityCount, arch.Capacity, arch.ComponentTypes);
+            result[i++] = new ArchetypeStats(arch.EntityCount, arch.Capacity, arch.ComponentTypes.ToArray());
         }
 
         return result;
@@ -188,7 +192,7 @@ public sealed partial class World : IDisposable
     /// </summary>
     public void AddChild(Entity parent, Entity child)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         _hierarchy.AddChild(this, parent, child);
     }
 
@@ -197,7 +201,7 @@ public sealed partial class World : IDisposable
     /// </summary>
     public void RemoveChild(Entity child)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         RequireLocation(child);
         _hierarchy.RemoveChild(child);
     }
@@ -207,7 +211,7 @@ public sealed partial class World : IDisposable
     /// </summary>
     public bool TryGetParent(Entity child, out Entity parent)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         return _hierarchy.TryGetParent(this, child, out parent);
     }
 
@@ -217,7 +221,7 @@ public sealed partial class World : IDisposable
     /// </summary>
     public ChildrenEnumerable EnumerateChildren(Entity parent)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         return _hierarchy.EnumerateChildren(this, parent);
     }
 
@@ -226,8 +230,8 @@ public sealed partial class World : IDisposable
     /// </summary>
     public bool HasChildren(Entity entity)
     {
-        ThrowIfDisposed();
-        return _hierarchy.HasChildren(entity);
+        AssertNotDisposed();
+        return _hierarchy.HasChildren(this, entity);
     }
 
     /// <summary>
@@ -235,7 +239,7 @@ public sealed partial class World : IDisposable
     /// </summary>
     public bool TryGet<T>(Entity entity, out T component) where T : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         if (!TryGetLocation(entity, out var info))
         {
             component = default!;
@@ -260,7 +264,7 @@ public sealed partial class World : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Has<T>(Entity entity) where T : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         if ((uint)entity.Id >= (uint)_entitySlotCount)
             return false;
 
@@ -278,7 +282,7 @@ public sealed partial class World : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public T Get<T>(Entity entity) where T : unmanaged
     {
-        ValidateAlive(entity);
+        AssertAlive(entity);
         ref var record = ref _records[entity.Id];
         var arch = record.Archetype!;
         return arch.GetComponentAt<T>(arch.GetComponentIndexFast(GetComponentType<T>()), record.RowIndex);
@@ -291,7 +295,7 @@ public sealed partial class World : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ref T GetRef<T>(Entity entity) where T : unmanaged
     {
-        ValidateAlive(entity);
+        AssertAlive(entity);
         ref var record = ref _records[entity.Id];
         var arch = record.Archetype!;
         return ref arch.GetComponentRefAt<T>(arch.GetComponentIndexFast(GetComponentType<T>()), record.RowIndex);
@@ -310,7 +314,7 @@ public sealed partial class World : IDisposable
     /// </remarks>
     public EntityAccessor Access(Entity entity)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         if (!TryGetLocation(entity, out var info))
         {
             throw new InvalidOperationException(
@@ -330,7 +334,7 @@ public sealed partial class World : IDisposable
     /// <exception cref="InvalidOperationException">Thrown when <paramref name="source"/> is no longer alive.</exception>
     public Entity Clone(Entity source)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var root = CloneSingle(source);
         DeepCloneChildren(source, root);
         return root;
@@ -347,13 +351,13 @@ public sealed partial class World : IDisposable
 
     private void DeepCloneChildren(Entity sourceRoot, Entity cloneRoot)
     {
-        if (!_hierarchy.HasChildren(sourceRoot)) return;
+        if (!_hierarchy.HasChildren(this, sourceRoot)) return;
 
         var stack = ArrayPool<CloneWork>.Shared.Rent(16);
         var stackCount = 0;
         try
         {
-            ArrayPoolStack.PushPooled(ref stack, ref stackCount, new CloneWork(sourceRoot, cloneRoot));
+            PushPooled(ref stack, ref stackCount, new CloneWork(sourceRoot, cloneRoot));
             while (stackCount > 0)
             {
                 var work = stack[--stackCount];
@@ -361,7 +365,7 @@ public sealed partial class World : IDisposable
                 {
                     var cloneChild = CloneSingle(child);
                     _hierarchy.AddChild(this, work.CloneEntity, cloneChild);
-                    ArrayPoolStack.PushPooled(ref stack, ref stackCount, new CloneWork(child, cloneChild));
+                    PushPooled(ref stack, ref stackCount, new CloneWork(child, cloneChild));
                 }
             }
         }
@@ -378,8 +382,22 @@ public sealed partial class World : IDisposable
     /// <para/>
     /// <b>Not</b> the right tool for high-frequency in-place rollback (GGPO-style
     /// 60fps save/restore): each call allocates a new world. For that, use
-    /// <see cref="CaptureState"/> / <see cref="RestoreState"/> which recycles a
-    /// single opaque handle and allocates zero GC memory in steady state.
+    /// <see cref="CaptureState"/> / <see cref="RestoreState"/> which use pooled
+    /// snapshot handles and allocate zero GC memory in steady state. Multiple snapshots
+    /// may be live simultaneously (e.g. for an N-frame rollback window).
+    /// </summary>
+    /// <summary>
+    /// Creates an independent, <b>ID-preserving</b> deep copy of this world.
+    /// Entity IDs match the source exactly — component data, hierarchy, and
+    /// free list are deep-copied, but <see cref="Entity"/> references inside
+    /// component fields carry the source world's IDs. If the clone is used
+    /// with a different <see cref="World"/> instance (different ID space),
+    /// those embedded references will be stale.
+    /// <para/>
+    /// For persistence or cross-process use, prefer
+    /// <see cref="Core.WorldSnapshot.Save"/> / <see cref="Core.WorldSnapshot.Load"/>,
+    /// which remaps entity IDs for the target world.
+    /// For in-memory rollback, use <see cref="CaptureState"/> / <see cref="RestoreState"/>.
     /// </summary>
     public World Clone()
     {
@@ -525,7 +543,7 @@ public sealed partial class World : IDisposable
 
     internal unsafe void ReplayCore(FrameDelta delta)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
 
         // Pre-scan: size archetype storage and the entity record array up-front
         // so the main pass never hits a doubling resize on the hot Create path.
@@ -599,16 +617,22 @@ public sealed partial class World : IDisposable
                             // replayed into multiple worlds). Use a pooled scratch buffer
                             // instead of stackalloc to avoid per-op stack accumulation.
                             var pooled = ArrayPool<byte>.Shared.Rent(dataSize);
-                            fixed (byte* pScratch = pooled)
+                            try
                             {
-                                Unsafe.CopyBlockUnaligned(pScratch, src, (uint)dataSize);
-                                EntityFieldResolver.ResolveInPlace(
-                                    new Span<byte>(pScratch, dataSize), comp,
-                                    new ReadOnlySpan<Entity>(map, 0, mapLen));
-                                var loc = RequireLocation(entity);
-                                ApplyRawAdd(entity, loc, comp, pScratch);
+                                fixed (byte* pScratch = pooled)
+                                {
+                                    Unsafe.CopyBlockUnaligned(pScratch, src, (uint)dataSize);
+                                    EntityFieldResolver.ResolveInPlace(
+                                        new Span<byte>(pScratch, dataSize), comp,
+                                        new ReadOnlySpan<Entity>(map, 0, mapLen));
+                                    var loc = RequireLocation(entity);
+                                    ApplyRawAdd(entity, loc, comp, pScratch);
+                                }
                             }
-                            ArrayPool<byte>.Shared.Return(pooled);
+                            finally
+                            {
+                                ArrayPool<byte>.Shared.Return(pooled);
+                            }
                         }
                         else
                         {
@@ -629,16 +653,22 @@ public sealed partial class World : IDisposable
                         if (EntityFieldResolver.GetOffsets(comp).Length > 0)
                         {
                             var pooled = ArrayPool<byte>.Shared.Rent(dataSize);
-                            fixed (byte* pScratch = pooled)
+                            try
                             {
-                                Unsafe.CopyBlockUnaligned(pScratch, src, (uint)dataSize);
-                                EntityFieldResolver.ResolveInPlace(
-                                    new Span<byte>(pScratch, dataSize), comp,
-                                    new ReadOnlySpan<Entity>(map, 0, mapLen));
-                                var loc = RequireLocation(entity);
-                                ApplyRawSet(entity, loc, comp, pScratch);
+                                fixed (byte* pScratch = pooled)
+                                {
+                                    Unsafe.CopyBlockUnaligned(pScratch, src, (uint)dataSize);
+                                    EntityFieldResolver.ResolveInPlace(
+                                        new Span<byte>(pScratch, dataSize), comp,
+                                        new ReadOnlySpan<Entity>(map, 0, mapLen));
+                                    var loc = RequireLocation(entity);
+                                    ApplyRawSet(entity, loc, comp, pScratch);
+                                }
                             }
-                            ArrayPool<byte>.Shared.Return(pooled);
+                            finally
+                            {
+                                ArrayPool<byte>.Shared.Return(pooled);
+                            }
                         }
                         else
                         {
@@ -1004,7 +1034,7 @@ public sealed partial class World : IDisposable
     /// </summary>
     public WorldStateSnapshot CaptureState()
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var snap = _stateSnapshotPool.Count > 0
             ? _stateSnapshotPool.Pop()
             : new WorldStateSnapshot();
@@ -1062,7 +1092,7 @@ public sealed partial class World : IDisposable
     /// </exception>
     public void RestoreState(WorldStateSnapshot snapshot)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         ArgumentNullException.ThrowIfNull(snapshot);
         if (snapshot._isRecycled)
         {
@@ -1109,5 +1139,137 @@ public sealed partial class World : IDisposable
     }
     private readonly record struct CloneWork(Entity Source, Entity CloneEntity);
 
+    /// <summary>
+    /// Computes a SHA-256 checksum of the entire world state.
+    /// Stable across peers driven by the same delta sequence — use to detect
+    /// lockstep divergence. Returns 32 raw bytes; use
+    /// <c>Convert.ToHexString(world.Checksum())</c> for a hex string.
+    /// </summary>
+    public byte[] Checksum() => Core.WorldSnapshot.ComputeChecksum(this);
+
+    /// <summary>
+    /// Computes a canonical SHA-256 checksum that is identical for any two
+    /// worlds with the same logical state, regardless of how they were built
+    /// (replay, snapshot-load, or manual construction). Slower than
+    /// <see cref="Checksum"/>; use only for comparing worlds from different
+    /// construction paths (e.g. client snapshot vs server live state).
+    /// </summary>
+    public byte[] CanonicalChecksum() => Core.WorldSnapshot.ComputeCanonicalChecksum(this);
+
+    internal void Reset(int entitySlotCount)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(entitySlotCount);
+
+        _archetypes.Clear();
+        _archetypeByMask.Clear();
+        _replayCreateCounts.Clear();
+        _archetypeSnapshot = Array.Empty<Archetype>();
+        _queryFiltersByDescription.Clear();
+        _queries.Clear();
+        _createArchetypeCacheGeneration++;
+        _freeIdCount = 0;
+        _destroyVisitedGen = [];
+        _destroyCurrentGen = 0;
+        _hierarchy.Reset();
+
+        _entitySlotCount = 0;
+        EnsureCapacity(entitySlotCount);
+        _entitySlotCount = entitySlotCount;
+        _records.AsSpan(0, entitySlotCount).Clear();
+
+        if (_freeIds.Length < entitySlotCount)
+        {
+            Array.Resize(ref _freeIds, entitySlotCount);
+        }
+    }
+
+    internal void AddChildFromSnapshot(Entity parent, Entity child)
+    {
+        _hierarchy.AddChildRestored(this, parent, child);
+    }
+
+    internal ReadOnlySpan<RecycledEntity> FreeList => _freeIds.AsSpan(0, _freeIdCount);
+
+    internal void SetSnapshotEntityVersion(int entityId, int version)
+    {
+        ValidateSnapshotEntitySlot(entityId);
+        _records[entityId].Version = version;
+    }
+
+    internal int GetEntityVersion(int entityId)
+    {
+        ValidateSnapshotEntitySlot(entityId);
+        return _records[entityId].Version;
+    }
+
+    internal void SetSnapshotLocation(Entity entity, Archetype archetype, int rowIndex)
+    {
+        ValidateSnapshotEntitySlot(entity.Id);
+        _records[entity.Id].Archetype = archetype;
+        _records[entity.Id].RowIndex = rowIndex;
+    }
+
+    internal void WriteFreeList(System.IO.BinaryWriter writer)
+    {
+        writer.Write(_freeIdCount);
+        for (var i = 0; i < _freeIdCount; i++)
+        {
+            writer.Write(_freeIds[i].Id);
+            writer.Write(_freeIds[i].Version);
+        }
+    }
+
+    internal void ReadFreeList(System.IO.BinaryReader reader)
+    {
+        _freeIdCount = reader.ReadInt32();
+        if (_freeIds.Length < _freeIdCount)
+            Array.Resize(ref _freeIds, _freeIdCount);
+        for (var i = 0; i < _freeIdCount; i++)
+        {
+            var id = reader.ReadInt32();
+            var version = reader.ReadInt32();
+            if ((uint)id >= (uint)_entitySlotCount)
+                throw new InvalidOperationException(
+                    $"Corrupt snapshot: free-list entity id {id} is out of range " +
+                    $"(entity slot count: {_entitySlotCount}).");
+            _freeIds[i] = new RecycledEntity(id, version);
+        }
+    }
+
+    internal void CopyFreeIdsFrom(World source)
+    {
+        var count = source._freeIdCount;
+        if (_freeIds.Length < count)
+            Array.Resize(ref _freeIds, count);
+        Array.Copy(source._freeIds, _freeIds, count);
+        _freeIdCount = count;
+    }
+
+    private void ValidateSnapshotEntitySlot(int entityId)
+    {
+        if (entityId < 0 || entityId >= _entitySlotCount)
+        {
+            throw new ArgumentOutOfRangeException(nameof(entityId));
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void PushPooled<T>(ref T[] array, ref int count, T value)
+    {
+        if ((uint)count >= (uint)array.Length)
+            GrowPooled(ref array);
+        array[count++] = value;
+    }
+
+    private static void GrowPooled<T>(ref T[] array)
+    {
+        var next = ArrayPool<T>.Shared.Rent(array.Length == 0 ? 16 : array.Length * 2);
+        if (array.Length > 0)
+        {
+            Array.Copy(array, next, array.Length);
+            ArrayPool<T>.Shared.Return(array);
+        }
+        array = next;
+    }
 }
 

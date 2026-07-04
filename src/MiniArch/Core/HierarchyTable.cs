@@ -88,20 +88,20 @@ internal sealed class HierarchyTable
         return new ChildrenEnumerable(_childEntity, _childNext, world, firstSlot);
     }
 
-    public bool HasChildren(Entity entity)
+    public bool HasChildren(World world, Entity entity)
     {
-        if (entity.Id < 0 || entity.Id >= _firstChild.Length)
-        {
+        if (!world.IsAlive(entity))
             return false;
-        }
-
+        if (entity.Id < 0 || entity.Id >= _firstChild.Length)
+            return false;
         return _firstChild[entity.Id] >= 0;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool HasAnyRelations(Entity entity)
     {
-        if ((uint)entity.Id >= (uint)_parentByChild.Length)
+        if ((uint)entity.Id >= (uint)_parentByChild.Length ||
+            (uint)entity.Id >= (uint)_firstChild.Length)
         {
             return false;
         }

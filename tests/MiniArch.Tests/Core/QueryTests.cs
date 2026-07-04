@@ -1,7 +1,7 @@
 using System.Threading;
 using System.Threading.Tasks;
 using MiniArch.Core;
-using MiniQuery = MiniArch.Core.QueryCache;
+using MiniQueryCache = MiniArch.Core.QueryCache;
 
 namespace MiniArchTests.Core;
 
@@ -26,7 +26,7 @@ public sealed class QueryTests
         world.Add(third, new Position(3, 3));
         world.Add(third, new Velocity(4, 4));
 
-        var query = MiniQuery.Create(world, in description);
+        var query = MiniQueryCache.Create(world, in description);
         var matched = query.MatchedArchetypes;
 
         Assert.Equal(2, matched.Count);
@@ -42,8 +42,8 @@ public sealed class QueryTests
         world.Add(entity, new Position(1, 1));
         var description = new QueryDescription().With<Position>();
 
-        var first = MiniQuery.Create(world, in description);
-        var second = MiniQuery.Create(world, in description);
+        var first = MiniQueryCache.Create(world, in description);
+        var second = MiniQueryCache.Create(world, in description);
 
         Assert.Same(first, second);
         _ = first.MatchedArchetypes;
@@ -67,10 +67,10 @@ public sealed class QueryTests
         world.Add(second, new Position(2, 2));
         world.Add(third, new Position(3, 3));
 
-        var query = MiniQuery.Create(world, in description);
+        var query = MiniQueryCache.Create(world, in description);
         var archetypes = new List<Archetype>();
 
-        foreach (var archetype in query.Chunks)
+        foreach (var archetype in query.MatchedArchetypes)
         {
             archetypes.Add(archetype);
         }
@@ -90,10 +90,10 @@ public sealed class QueryTests
             world.Add(entity, new Position(i, i));
         }
 
-        var query = MiniQuery.Create(world, in description);
+        var query = MiniQueryCache.Create(world, in description);
 
         var enumeratedArchetypes = new List<Archetype>();
-        foreach (var archetype in query.Chunks)
+        foreach (var archetype in query.MatchedArchetypes)
         {
             enumeratedArchetypes.Add(archetype);
         }
@@ -114,7 +114,7 @@ public sealed class QueryTests
         _ = world.Create(new Position(2, 2));
         _ = world.Create(new Velocity(3, 3));
 
-        var query = MiniQuery.Create(world, in description);
+        var query = MiniQueryCache.Create(world, in description);
         var matched = query.MatchedArchetypes.ToArray();
 
         Assert.Equal(matched, query.GetArchetypeSpan().ToArray());
@@ -129,7 +129,7 @@ public sealed class QueryTests
         _ = world.Create(new Position(2, 2));
         var description = new QueryDescription().With<Position>();
 
-        var query = MiniQuery.Create(world, in description);
+        var query = MiniQueryCache.Create(world, in description);
         var archetype = Assert.Single(query.GetArchetypeSpan().ToArray());
 
         Assert.Equal(2, archetype.EntityCount);
@@ -143,7 +143,7 @@ public sealed class QueryTests
         world.Add(first, new Position(1, 1));
         var description = new QueryDescription().With<Position>();
 
-        var query = MiniQuery.Create(world, in description);
+        var query = MiniQueryCache.Create(world, in description);
         Assert.Single(query.MatchedArchetypes);
         Assert.Equal(1, query.RefreshCount);
 
@@ -210,7 +210,7 @@ public sealed class QueryTests
             .Select(_ => Task.Run(() =>
             {
                 start.SignalAndWait();
-                return CaptureEnumeratedEntities(MiniQuery.Create(world, in description));
+                return CaptureEnumeratedEntities(MiniQueryCache.Create(world, in description));
             }))
             .ToArray();
 
@@ -227,7 +227,7 @@ public sealed class QueryTests
         var world = new World();
         var description = new QueryDescription().With<Position>();
 
-        Assert.Same(MiniQuery.Create(world, in description), MiniQuery.Create(world, in description));
+        Assert.Same(MiniQueryCache.Create(world, in description), MiniQueryCache.Create(world, in description));
     }
 
     [Fact]
@@ -245,8 +245,8 @@ public sealed class QueryTests
         var secondMatched = secondWorld.Create(new Position(4, 4));
         _ = secondWorld.Create(new Position(5, 5), new Velocity(6, 6));
 
-        var firstQuery = MiniQuery.Create(firstWorld, in description);
-        var secondQuery = MiniQuery.Create(secondWorld, in description);
+        var firstQuery = MiniQueryCache.Create(firstWorld, in description);
+        var secondQuery = MiniQueryCache.Create(secondWorld, in description);
 
         Assert.NotSame(firstQuery, secondQuery);
         Assert.Equal(new[] { firstMatched }, CaptureEnumeratedEntities(firstQuery));
@@ -264,7 +264,7 @@ public sealed class QueryTests
         var warmTotal = 0;
         for (var w = 0; w < 10; w++)
         {
-            warmTotal += CountEntities(MiniQuery.Create(world, in description));
+            warmTotal += CountEntities(MiniQueryCache.Create(world, in description));
         }
 
         Assert.Equal(60, warmTotal);
@@ -276,7 +276,7 @@ public sealed class QueryTests
         var before = GC.GetAllocatedBytesForCurrentThread();
         for (var i = 0; i < 100; i++)
         {
-            total += CountEntities(MiniQuery.Create(world, in description));
+            total += CountEntities(MiniQueryCache.Create(world, in description));
         }
 
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
@@ -304,16 +304,16 @@ public sealed class QueryTests
         return world;
     }
 
-    private static MiniQuery CreatePositionQuery(World world)
+    private static MiniQueryCache CreatePositionQuery(World world)
     {
         var description = new QueryDescription().With<Position>();
-        return MiniQuery.Create(world, in description);
+        return MiniQueryCache.Create(world, in description);
     }
 
     private static async Task<Entity[][]> RunConcurrentReaders(
         int taskCount,
-        MiniQuery query,
-        Func<MiniQuery, Entity[]> capture)
+        MiniQueryCache query,
+        Func<MiniQueryCache, Entity[]> capture)
     {
         var start = new Barrier(taskCount + 1);
         var tasks = Enumerable.Range(0, taskCount)
@@ -328,21 +328,7 @@ public sealed class QueryTests
         return await Task.WhenAll(tasks);
     }
 
-    private static Entity[] CaptureEnumeratedEntities(MiniQuery query)
-    {
-        var entities = new List<Entity>();
-        foreach (var archetype in query.Chunks)
-        {
-            for (var row = 0; row < archetype.EntityCount; row++)
-            {
-                entities.Add(archetype.GetEntity(row));
-            }
-        }
-
-        return entities.ToArray();
-    }
-
-    private static Entity[] CaptureMaterializedEntities(MiniQuery query)
+    private static Entity[] CaptureEnumeratedEntities(MiniQueryCache query)
     {
         var entities = new List<Entity>();
         foreach (var archetype in query.MatchedArchetypes)
@@ -356,7 +342,21 @@ public sealed class QueryTests
         return entities.ToArray();
     }
 
-    private static int CountEntities(MiniQuery query)
+    private static Entity[] CaptureMaterializedEntities(MiniQueryCache query)
+    {
+        var entities = new List<Entity>();
+        foreach (var archetype in query.MatchedArchetypes)
+        {
+            for (var row = 0; row < archetype.EntityCount; row++)
+            {
+                entities.Add(archetype.GetEntity(row));
+            }
+        }
+
+        return entities.ToArray();
+    }
+
+    private static int CountEntities(MiniQueryCache query)
     {
         var total = 0;
         foreach (ref readonly var archetype in query.GetArchetypeSpan())
@@ -382,7 +382,7 @@ public sealed class QueryTests
         var world = new World();
 
         var description = new QueryDescription().With<Velocity>();
-        var query = MiniQuery.Create(world, in description);
+        var query = MiniQueryCache.Create(world, in description);
 
         Assert.Empty(query.MatchedArchetypes);
         Assert.Equal(1, query.RefreshCount);
@@ -411,7 +411,7 @@ public sealed class QueryTests
         }
 
         var description = new QueryDescription().With<Position>().With<Velocity>();
-        var query = MiniQuery.Create(world, in description);
+        var query = MiniQueryCache.Create(world, in description);
         var positionType = ComponentRegistry.Shared.GetOrCreate<Position>();
         var velocityType = ComponentRegistry.Shared.GetOrCreate<Velocity>();
 
@@ -433,7 +433,7 @@ public sealed class QueryTests
         }
 
         var description = new QueryDescription().With<Position>().With<Velocity>();
-        var query = MiniQuery.Create(world, in description);
+        var query = MiniQueryCache.Create(world, in description);
         var positionType = ComponentRegistry.Shared.GetOrCreate<Position>();
         var velocityType = ComponentRegistry.Shared.GetOrCreate<Velocity>();
 
@@ -455,7 +455,7 @@ public sealed class QueryTests
         }
 
         var description = new QueryDescription().With<Position>().With<Velocity>();
-        var query = MiniQuery.Create(world, in description);
+        var query = MiniQueryCache.Create(world, in description);
         var positionType = ComponentRegistry.Shared.GetOrCreate<Position>();
         var velocityType = ComponentRegistry.Shared.GetOrCreate<Velocity>();
 
@@ -465,7 +465,7 @@ public sealed class QueryTests
         Assert.Equal(firstRun, secondRun);
     }
 
-    private static int ComputeRowWiseChecksum(MiniQuery query, ComponentType positionType, ComponentType velocityType)
+    private static int ComputeRowWiseChecksum(MiniQueryCache query, ComponentType positionType, ComponentType velocityType)
     {
         var checksum = 0;
         foreach (ref readonly var archetype in query.GetArchetypeSpan())
@@ -483,7 +483,7 @@ public sealed class QueryTests
         return checksum;
     }
 
-    private static int ComputeSpanChecksum(MiniQuery query, ComponentType positionType, ComponentType velocityType)
+    private static int ComputeSpanChecksum(MiniQueryCache query, ComponentType positionType, ComponentType velocityType)
     {
         var checksum = 0;
         foreach (ref readonly var archetype in query.GetArchetypeSpan())
@@ -497,6 +497,29 @@ public sealed class QueryTests
         }
 
         return checksum;
+    }
+
+    [Fact]
+    public void QueryDescription_RequiredTypes_is_defensive_snapshot()
+    {
+        var desc = new QueryDescription().With<Position>().Without<Velocity>().WithAny<Position>();
+
+        // Required: mutate via cast
+        var required = (Type[])desc.RequiredTypes;
+        required[0] = typeof(string);
+
+        // Excluded: mutate via cast
+        var excluded = (Type[])desc.ExcludedTypes;
+        excluded[0] = typeof(int);
+
+        // Any: mutate via cast
+        var any = (Type[])desc.AnyTypes;
+        any[0] = typeof(double);
+
+        // Re-read: must still contain original types
+        Assert.Equal(typeof(Position), desc.RequiredTypes[0]);
+        Assert.Equal(typeof(Velocity), desc.ExcludedTypes[0]);
+        Assert.Equal(typeof(Position), desc.AnyTypes[0]);
     }
 }
 

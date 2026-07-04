@@ -1,6 +1,6 @@
 using System.Linq;
 using MiniArch.Core;
-using MiniQuery = MiniArch.Core.QueryCache;
+using MiniQueryCache = MiniArch.Core.QueryCache;
 
 namespace MiniArchTests.Core;
 
@@ -22,17 +22,15 @@ public sealed class IntegrationTests
 
         var positionId = ComponentRegistry.Shared.GetOrCreate<Position>();
         var description = new QueryDescription().With<Position>();
-        var query = MiniQuery.Create(world, in description);
+        var query = MiniQueryCache.Create(world, in description);
 
         Assert.True(world.TryGetLocation(entity, out var location));
         Assert.Equal(1, location.Archetype.Signature.Count);
         Assert.Contains(positionId, location.Archetype.Signature);
 
-        var archetypes = query.Chunks.ToList();
         Assert.Equal(2, query.MatchedArchetypes.Count);
         // Both matching archetypes contribute a chunk (one empty, one with 1 entity).
-        Assert.Equal(2, archetypes.Count);
-        Assert.Single(archetypes.Where(c => c.EntityCount == 1));
+        Assert.Single(query.MatchedArchetypes.Where(c => c.EntityCount == 1));
 
         Assert.Equal(entity, location.Archetype.GetEntity(location.RowIndex));
         Assert.Equal(new Position(9, 9), location.Archetype.GetComponentAt<Position>(location.Archetype.GetComponentIndex(positionId), location.RowIndex));

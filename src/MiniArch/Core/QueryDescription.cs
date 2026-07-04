@@ -29,7 +29,7 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
     /// <summary>
     /// Adds a required type.
     /// </summary>
-    public QueryDescription With<T>()
+    public QueryDescription With<T>() where T : unmanaged
     {
         var required = _required.Add(typeof(T));
         return required.Equals(_required) ? this : new QueryDescription(required, _excluded, _any);
@@ -38,7 +38,7 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
     /// <summary>
     /// Adds an excluded type.
     /// </summary>
-    public QueryDescription Without<T>()
+    public QueryDescription Without<T>() where T : unmanaged
     {
         var excluded = _excluded.Add(typeof(T));
         return excluded.Equals(_excluded) ? this : new QueryDescription(_required, excluded, _any);
@@ -47,7 +47,7 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
     /// <summary>
     /// Adds an any-match type.
     /// </summary>
-    public QueryDescription WithAny<T>()
+    public QueryDescription WithAny<T>() where T : unmanaged
     {
         var any = _any.Add(typeof(T));
         return any.Equals(_any) ? this : new QueryDescription(_required, _excluded, any);
@@ -56,12 +56,9 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
     /// <summary>
     /// Compares two descriptions by value.
     /// </summary>
-    public bool Equals(QueryDescription other)
-    {
-        return _required.Equals(other._required)
-            && _excluded.Equals(other._excluded)
-            && _any.Equals(other._any);
-    }
+    public bool Equals(QueryDescription other) => _required.Equals(other._required)
+        && _excluded.Equals(other._excluded)
+        && _any.Equals(other._any);
 
     /// <summary>
     /// Compares against an object.
@@ -69,9 +66,19 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
     public override bool Equals(object? obj) => obj is QueryDescription other && Equals(other);
 
     /// <summary>
-    /// Gets the cached hash code.
+    /// Gets the hash code computed from the three type sets.
     /// </summary>
     public override int GetHashCode() => HashCode.Combine(_required, _excluded, _any);
+
+    /// <summary>
+    /// Returns whether two query descriptions are equal.
+    /// </summary>
+    public static bool operator ==(QueryDescription left, QueryDescription right) => left.Equals(right);
+
+    /// <summary>
+    /// Returns whether two query descriptions are not equal.
+    /// </summary>
+    public static bool operator !=(QueryDescription left, QueryDescription right) => !left.Equals(right);
 
     internal ReadOnlySpan<Type> GetRequiredTypes() => _required.AsSpan();
 
@@ -93,7 +100,7 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
 
         public ReadOnlySpan<Type> AsSpan() => _types ?? Array.Empty<Type>();
 
-        internal Type[] GetTypes() => _types ?? Array.Empty<Type>();
+        internal Type[] GetTypes() => _types?.ToArray() ?? Array.Empty<Type>();
 
         public QueryDescriptionTypeSet Add(Type type)
         {
@@ -134,7 +141,14 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
 
         public override bool Equals(object? obj) => obj is QueryDescriptionTypeSet other && Equals(other);
 
-        public override int GetHashCode() => SpanSorting.CombineHashCodes(AsSpan());
+        public override int GetHashCode()
+        {
+            var span = AsSpan();
+            int hash = 17;
+            for (int i = 0; i < span.Length; i++)
+                hash = unchecked(hash * 31 + span[i].TypeHandle.GetHashCode());
+            return hash;
+        }
 
         private QueryDescriptionTypeSet(Type[] types)
         {

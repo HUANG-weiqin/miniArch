@@ -8,7 +8,7 @@ using MiniArch.Core;
 namespace MiniArchBenchmarks;
 
 using ArchQueryDescription = Arch.Core.QueryDescription;
-using MiniQuery = MiniArch.Core.QueryCache;
+using MiniQueryCache = MiniArch.Core.QueryCache;
 using MiniComponentType = MiniArch.Core.ComponentType;
 using MiniQueryDescription = MiniArch.QueryDescription;
 
@@ -50,7 +50,7 @@ public class QueryBenchmarks
             .With<Velocity>()
             .With<Health>()
             .With<Team>();
-        var query = MiniQuery.Create(_miniState.World, in description);
+        var query = MiniQueryCache.Create(_miniState.World, in description);
 
         return ExecuteMiniQuery(query);
     }
@@ -104,7 +104,7 @@ public class QueryBenchmarks
             .With<Health>()
             .With<Team>()
             .Without<ExcludedTag>();
-        var query = MiniQuery.Create(_miniState.World, in description);
+        var query = MiniQueryCache.Create(_miniState.World, in description);
 
         return ExecuteMiniQuery(query);
     }
@@ -141,7 +141,7 @@ public class QueryBenchmarks
             .With<Team>()
             .WithAny<AnyTagA>()
             .WithAny<AnyTagB>();
-        var query = MiniQuery.Create(_miniState.World, in description);
+        var query = MiniQueryCache.Create(_miniState.World, in description);
 
         return ExecuteMiniQuery(query);
     }
@@ -158,7 +158,7 @@ public class QueryBenchmarks
         return ExecuteMiniQuery(_miniState.WithAllAnyQuery);
     }
 
-    private int ExecuteMiniQuery(MiniQuery query)
+    private int ExecuteMiniQuery(MiniQueryCache query)
     {
         var checksum = 0;
         var archetypes = query.GetArchetypeSpan();
@@ -181,7 +181,7 @@ public class QueryBenchmarks
         return ExecuteMiniQuerySimd(_miniState.WithAllQuery);
     }
 
-    private static int ExecuteMiniQuerySimd(MiniQuery query)
+    private static int ExecuteMiniQuerySimd(MiniQueryCache query)
     {
         var checksum = 0;
         var archetypes = query.GetArchetypeSpan();
@@ -222,7 +222,7 @@ public class QueryBenchmarks
         return ExecuteMiniComponentQuerySpanSimd(_miniState.WithAllQuery, _miniState.PositionType, _miniState.VelocityType);
     }
 
-    private static int ExecuteMiniComponentQuerySpanSimd(MiniQuery query, MiniComponentType positionType, MiniComponentType velocityType)
+    private static int ExecuteMiniComponentQuerySpanSimd(MiniQueryCache query, MiniComponentType positionType, MiniComponentType velocityType)
     {
         var checksum = 0;
         var archetypes = query.GetArchetypeSpan();
@@ -265,7 +265,7 @@ public class QueryBenchmarks
         return checksum;
     }
 
-    private static int ExecuteMiniComponentQueryRowWise(MiniQuery query, MiniComponentType positionType, MiniComponentType velocityType)
+    private static int ExecuteMiniComponentQueryRowWise(MiniQueryCache query, MiniComponentType positionType, MiniComponentType velocityType)
     {
         var checksum = 0;
         var archetypes = query.GetArchetypeSpan();
@@ -289,7 +289,7 @@ public class QueryBenchmarks
         return checksum;
     }
 
-    private static int ExecuteMiniComponentQuerySpan(MiniQuery query, MiniComponentType positionType, MiniComponentType velocityType)
+    private static int ExecuteMiniComponentQuerySpan(MiniQueryCache query, MiniComponentType positionType, MiniComponentType velocityType)
     {
         var checksum = 0;
         var archetypes = query.GetArchetypeSpan();

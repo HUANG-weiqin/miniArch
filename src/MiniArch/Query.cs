@@ -30,18 +30,12 @@ public readonly struct Query
     /// <summary>
     /// Returns entities sorted by <see cref="Entity.Id"/> using an internally pooled buffer.
     /// </summary>
-    public OrderedEntityQuery OrderByEntityId()
-    {
-        return new OrderedEntityQuery(_query, descending: false);
-    }
+    public OrderedEntityQuery OrderByEntityId() => new OrderedEntityQuery(_query, descending: false);
 
     /// <summary>
     /// Returns entities sorted by <see cref="Entity.Id"/> in descending order.
     /// </summary>
-    public OrderedEntityQuery OrderByEntityIdDescending()
-    {
-        return new OrderedEntityQuery(_query, descending: true);
-    }
+    public OrderedEntityQuery OrderByEntityIdDescending() => new OrderedEntityQuery(_query, descending: true);
 
     /// <summary>
     /// Returns entities sorted by component <typeparamref name="T"/>.
@@ -152,33 +146,17 @@ public readonly struct Query
     /// Safe for component value reads/writes via <c>chunk.GetSpan&lt;T&gt;()</c>.
     /// NOT safe for structural changes (Add/Remove/Create/Destroy) — collect entity ids
     /// and apply via <see cref="MiniArch.Core.CommandStream"/> after this call returns.
+    /// <para>
+    /// This overload delegates to <see cref="ForEachChunkParallel{TForEach}(TForEach)"/>
+    /// via the <see cref="ActionChunkForEach"/> adapter, so the parallelism
+    /// logic is not duplicated.
+    /// </para>
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void ForEachChunkParallel(ChunkAction action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        var chunks = _query.GetChunkViewArray(out var count);
-        if (count == 0)
-            return;
-
-        var threads = Environment.ProcessorCount;
-        if (count >= threads)
-        {
-            Parallel.For(0, count, i => action(chunks[i]));
-            return;
-        }
-
-        // Fewer chunks than threads — split entity ranges within chunks.
-        BuildEntityRangePartitions(chunks, count, threads, out var partitionArray, out var partitionCount);
-        if (partitionCount == 0)
-            return;
-        if (partitionCount == 1)
-        {
-            action(partitionArray[0]);
-            return;
-        }
-
-        Parallel.For(0, partitionCount, i => action(partitionArray[i]));
+        ForEachChunkParallel(new ActionChunkForEach(action));
     }
 
     /// <summary>
@@ -188,10 +166,13 @@ public readonly struct Query
     /// <see cref="IChunkForEach.OnChunk"/> call is devirtualised to the
     /// concrete <typeparamref name="TForEach"/> type.
     /// <para>
-    /// <typeparamref name="TForEach"/> is passed by value and captured into
-    /// each <c>Parallel.For</c> worker. For stateful per-worker accumulation,
-    /// use <c>[ThreadStatic]</c> fields inside the struct rather than mutating
-    /// the struct itself.
+    /// <typeparamref name="TForEach"/> is passed by value and captured into the
+    /// <c>Parallel.For</c> closure — all workers share the same captured copy.
+    /// Mutating struct fields from <see cref="IChunkForEach.OnChunk"/> is a
+    /// data race on the closure copy and the caller's original variable is never
+    /// updated. To produce visible results, write to external shared state (e.g.
+    /// <c>ConcurrentBag&lt;T&gt;</c>), thread-local storage with explicit merge,
+    /// or a thread-safe collector.
     /// </para>
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -257,11 +238,22 @@ public readonly struct Query
     private static ChunkView[] GetPartitionBuffer(int minLength)
     {
         var arr = t_partitions;
-        if (arr != null && arr.Length >= minLength)
+        if (arr is not null && arr.Length >= minLength)
             return arr;
         arr = new ChunkView[minLength];
         t_partitions = arr;
         return arr;
+    }
+
+    /// <summary>
+    /// Adapter that bridges <see cref="ChunkAction"/> delegates into
+    /// <see cref="IChunkForEach"/>, enabling the delegate-based
+    /// <see cref="ForEachChunkParallel(ChunkAction)"/> to reuse the
+    /// struct-generic parallelism logic without duplicating it.
+    /// </summary>
+    private readonly struct ActionChunkForEach(ChunkAction _action) : IChunkForEach
+    {
+        public void OnChunk(ChunkView chunk) => _action(chunk);
     }
 }
 
@@ -285,10 +277,12 @@ public delegate void ChunkAction(ChunkView chunk);
 /// (useful for accumulators).
 /// </para>
 /// <para>
-/// <b>Parallel usage</b> (<c>in</c> parameter): the struct is copied into
-/// each worker; per-worker accumulation must use <c>[ThreadStatic]</c>
-/// fields inside the struct rather than mutating the struct itself, since
-/// each worker observes its own copy.
+/// <b>Parallel usage</b> (by-value parameter): the struct is captured by value
+/// into the <c>Parallel.For</c> closure — all workers share the same captured
+/// copy. Mutating fields from <see cref="OnChunk"/> is a data race on the
+/// closure copy and the caller&#39;s variable is never updated. To produce visible
+/// results, write to external shared state, thread-local storage with explicit
+/// merge, or a thread-safe collector.
 /// </para>
 /// </remarks>
 public interface IChunkForEach
@@ -359,7 +353,7 @@ public struct QueryEnumerator
                 continue;
             }
 
-            _entities = archetype.GetEntityStorage();
+            _entities = archetype.GetEntityStorageUnsafe();
             _count = archetype.EntityCount;
             _rowIndex = -1;
         }
@@ -465,7 +459,7 @@ public struct OrderedEntityEnumerator : IDisposable
         for (var i = 0; i < archetypeCount; i++)
         {
             var archetype = archetypes[i];
-            var storage = archetype.GetEntityStorage();
+            var storage = archetype.GetEntityStorageUnsafe();
             var rowCount = archetype.EntityCount;
             Array.Copy(storage, 0, entities, entityIndex, rowCount);
             entityIndex += rowCount;
@@ -611,7 +605,7 @@ public struct OrderedComponentEnumerator<T> : IDisposable where T : unmanaged
             if (rowCount == 0)
                 continue;
 
-            var entitySpan = archetype.GetEntityStorage();
+            var entitySpan = archetype.GetEntityStorageUnsafe();
             entitySpan.AsSpan(0, rowCount).CopyTo(entities.AsSpan(index));
 
             var componentSpan = archetype.GetComponentSpan<T>(componentType);

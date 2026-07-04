@@ -33,9 +33,11 @@ public sealed class LockstepSimulator
     // identical across hosts.
     public bool ScaleMode { get; init; } = false;
 
-    // Reusable per-tick delta buffer (Slice 7 alloc reduction). Allocated once
-    // at first tick; reused across ticks. Caller still receives a valid
-    // reference for the current tick's deltas (overwritten on next tick).
+    // Reusable per-tick array of FrameDelta references (Slice 7 alloc reduction).
+    // The array is allocated once and reused each tick —each Snapshot() call
+    // returns a fresh independent FrameDelta object, but the array slots are
+    // overwritten every tick. Callers that need to retain deltas across ticks
+    // must copy the array (see TickAndSnapshotDeltas).
     private FrameDelta[]? _deltaBuffer;
 
     // Slice 7: track peak concurrent entity count across all hosts during the
@@ -70,10 +72,10 @@ public sealed class LockstepSimulator
         }
 
         // 2. Snapshot each host's intent to a placeholder delta, then Clear.
-        //    Slice 7: reuse the same buffer across ticks to avoid per-frame
-        //    allocation. Snapshot returns a fresh FrameDelta object per host
-        //    (its internals are pooled inside CommandStream), but the array
-        //    holding them is reused.
+        //    Reuses the _deltaBuffer array across ticks (allocated once). Each
+        //    Snapshot() call returns a fresh independent FrameDelta; the array
+        //    slots are overwritten every tick. To retain deltas across ticks,
+        //    callers must copy the array (see TickAndSnapshotDeltas).
         if (_deltaBuffer is null || _deltaBuffer.Length != _hosts.Length)
             _deltaBuffer = new FrameDelta[_hosts.Length];
         for (var i = 0; i < _hosts.Length; i++)

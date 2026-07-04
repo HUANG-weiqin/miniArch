@@ -60,7 +60,7 @@ MiniArch CommandStream 在所有场景中持平或超过 Friflo。
 
 ### 3. 关键场景：SetHeavy — MiniArch 的架构优势
 
-**核心洞察：** Friflo 的 `Playback()` 对**所有操作**（包括纯值修改 Set）都执行两趟扫描（`PrepareComponentCommands` → `ExecuteComponentCommands`），而 MiniArch CommandStream 对现有实体只有一趟扫描（`ApplyToWorld`）。
+**核心洞察：** Friflo 的 `Compile()` 对**所有操作**（包括纯值修改 Set）都执行两趟扫描（`PrepareComponentCommands` → `ExecuteComponentCommands`），而 MiniArch CommandStream 对现有实体只有一趟扫描（`ApplyToWorld`）。
 
 我们构造了一个以 Set 为主的真实游戏场景来验证：
 
@@ -69,7 +69,7 @@ MiniArch CommandStream 在所有场景中持平或超过 Friflo。
 | 500 实体 | 94% Set，15 spawn/destroy | **87,540 t/s** | 53,194 | **+65%** |
 | 10K 实体 | 94% Set，300 spawn/destroy | **3,489 t/s** | 2,738 | **+27%** |
 
-**为什么差距在小规模更大？** Friflo 的 Playback 有固定开销（字典分配、EntityChange 数组管理），小规模下这部分占比更高。MiniArch 的轻量路径（batch buffer + 单趟 ApplyToWorld）不付这个固定税。
+**为什么差距在小规模更大？** Friflo 的 Compile 有固定开销（字典分配、EntityChange 数组管理），小规模下这部分占比更高。MiniArch 的轻量路径（batch buffer + 单趟 ApplyToWorld）不付这个固定税。
 
 **为什么大场景也赢？** Friflo 的两趟扫描成本随操作数线性增长。2 次 × 20K Set = 40K 数组访问 vs MiniArch 的 1 次 × 20K = 20K。差一个常数因子 2x，乘以操作数量。
 
@@ -179,7 +179,7 @@ replica.Replay(delta);              // 自动校验 ID 一致性
 
 ### 2. CommandStream — Set 密集型场景比 Friflo 快 27%~65%
 
-**根本原因：** Friflo 的 `Playback()` 对所有操作（包括纯 Set）都执行两趟扫描。MiniArch CommandStream 对现有实体的 Set 只一趟扫描。
+**根本原因：** Friflo 的 `Compile()` 对所有操作（包括纯 Set）都执行两趟扫描。MiniArch CommandStream 对现有实体的 Set 只一趟扫描。
 
 数量级对比：
 

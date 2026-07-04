@@ -55,8 +55,7 @@ internal sealed partial class Archetype
     private Archetype?[] _removeDestinationCache = Array.Empty<Archetype?>();
     internal Archetype(Signature signature, Type[] componentTypes, int capacity = 4)
     {
-        if (capacity <= 0)
-            throw new ArgumentOutOfRangeException(nameof(capacity));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
 
         if (componentTypes.Length != signature.Count)
             throw new ArgumentException("Component type count must match signature count.", nameof(componentTypes));
@@ -64,7 +63,7 @@ internal sealed partial class Archetype
         _signature = signature;
         _capacity = capacity;
         _componentTypes = componentTypes;
-        _componentIdToColumnIndex = ComponentColumnMap.Build(signature);
+        _componentIdToColumnIndex = BuildColumnMap(signature);
         var segCap = ComputeSegmentEntityCapacity(componentTypes);
         _segmentCapacity = segCap;
         _segmentBitShift = BitOperations.TrailingZeroCount((uint)segCap);
@@ -179,4 +178,33 @@ internal sealed partial class Archetype
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal int GetComponentIndexFast(ComponentType component) =>
         _componentIdToColumnIndex[component.Value];
+
+    private static int[] BuildColumnMap(Signature signature)
+    {
+        var maxComponentId = -1;
+        var components = signature.AsSpan();
+        for (var index = 0; index < components.Length; index++)
+        {
+            var componentId = components[index].Value;
+            if (componentId > maxComponentId)
+            {
+                maxComponentId = componentId;
+            }
+        }
+
+        if (maxComponentId < 0)
+        {
+            return Array.Empty<int>();
+        }
+
+        var lookup = new int[maxComponentId + 1];
+        Array.Fill(lookup, -1);
+
+        for (var index = 0; index < components.Length; index++)
+        {
+            lookup[components[index].Value] = index;
+        }
+
+        return lookup;
+    }
 }

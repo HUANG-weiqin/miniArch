@@ -6,7 +6,7 @@ using MiniArch.Core;
 namespace MiniArchBenchmarks;
 
 using ArchQueryDescription = Arch.Core.QueryDescription;
-using MiniQuery = MiniArch.Core.QueryCache;
+using MiniQueryCache = MiniArch.Core.QueryCache;
 using MiniComponentType = MiniArch.Core.ComponentType;
 using ArchWorld = Arch.Core.World;
 using ArchEntity = Arch.Core.Entity;
@@ -430,7 +430,7 @@ internal static class ThroughputCaseFactory
         {
             (ThroughputWorkload.QueryWithAllEntity, ThroughputEngine.MiniArch) => new MiniQueryEntityThroughputCase(entityCount),
             (ThroughputWorkload.QueryWithAllEntity, ThroughputEngine.Arch) => new ArchQueryEntityThroughputCase(entityCount),
-            (ThroughputWorkload.QueryWithAllComponentSpan, ThroughputEngine.MiniArch) => new MiniQueryComponentSpanThroughputCase(entityCount),
+            (ThroughputWorkload.QueryWithAllComponentSpan, ThroughputEngine.MiniArch) => new MiniQueryComponentRefThroughputCase(entityCount),
             (ThroughputWorkload.QueryWithAllComponentSpan, ThroughputEngine.Arch) => new ArchQueryComponentSpanThroughputCase(entityCount),
             (ThroughputWorkload.SetSingleComponent, ThroughputEngine.MiniArch) => new MiniSetSingleComponentThroughputCase(entityCount),
             (ThroughputWorkload.SetSingleComponent, ThroughputEngine.Arch) => new ArchSetSingleComponentThroughputCase(entityCount),
@@ -468,7 +468,7 @@ internal static class ThroughputCaseFactory
                 using (var c = new ArchQueryEntityThroughputCase(entityCount))
                     return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
             case (ThroughputWorkload.QueryWithAllComponentSpan, ThroughputEngine.MiniArch):
-                using (var c = new MiniQueryComponentSpanThroughputCase(entityCount))
+                using (var c = new MiniQueryComponentRefThroughputCase(entityCount))
                     return ThroughputRunner.WarmupAndMeasure(engine, c, warmupIterations, duration, cancellationToken);
             case (ThroughputWorkload.QueryWithAllComponentSpan, ThroughputEngine.Arch):
                 using (var c = new ArchQueryComponentSpanThroughputCase(entityCount))
@@ -573,11 +573,11 @@ internal static class ThroughputCaseFactory
         }
     }
 
-    private sealed class MiniQueryComponentSpanThroughputCase : IThroughputCase
+    private sealed class MiniQueryComponentRefThroughputCase : IThroughputCase
     {
         private readonly MiniComplexQueryWorldState _state;
 
-        public MiniQueryComponentSpanThroughputCase(int entityCount)
+        public MiniQueryComponentRefThroughputCase(int entityCount)
         {
             _state = BenchmarkWorldFactory.CreateMiniComplexQueryWorld(entityCount);
         }
@@ -587,11 +587,11 @@ internal static class ThroughputCaseFactory
             for (var i = 0; i < count; i++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                _ = ExecuteMiniComponentSpanQuery(_state.WithAllQuery, _state.PositionType, _state.VelocityType);
+                _ = ExecuteMiniComponentRefQuery(_state.WithAllQuery, _state.PositionType, _state.VelocityType);
             }
         }
 
-        public long RunIteration() => ExecuteMiniComponentSpanQuery(_state.WithAllQuery, _state.PositionType, _state.VelocityType);
+        public long RunIteration() => ExecuteMiniComponentRefQuery(_state.WithAllQuery, _state.PositionType, _state.VelocityType);
 
         public void Dispose()
         {
@@ -651,7 +651,7 @@ internal static class ThroughputCaseFactory
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static int ExecuteMiniEntityQuery(MiniQuery query)
+    private static int ExecuteMiniEntityQuery(MiniQueryCache query)
     {
         var checksum = 0;
         var archetypes = query.GetArchetypeSpan();
@@ -659,7 +659,7 @@ internal static class ThroughputCaseFactory
         {
             var archetype = archetypes[archetypeIndex];
             var count = archetype.EntityCount;
-            var entities = archetype.GetEntityStorage();
+            var entities = archetype.GetEntityStorageUnsafe();
             for (var row = 0; row < count; row++)
             {
                 checksum += entities[row].Id;
@@ -686,7 +686,7 @@ internal static class ThroughputCaseFactory
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static int ExecuteMiniComponentSpanQuery(MiniQuery query, MiniComponentType positionType, MiniComponentType velocityType)
+    private static int ExecuteMiniComponentRefQuery(MiniQueryCache query, MiniComponentType positionType, MiniComponentType velocityType)
     {
         var checksum = 0;
         var archetypes = query.GetArchetypeSpan();
@@ -768,7 +768,7 @@ internal static class ThroughputCaseFactory
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static int ExecuteMiniWideComponentSpanQuery(MiniQuery query,
+    private static int ExecuteMiniWideComponentSpanQuery(MiniQueryCache query,
         MiniComponentType posType, MiniComponentType velType,
         MiniComponentType healthType, MiniComponentType teamType,
         MiniComponentType accelType, MiniComponentType manaType)

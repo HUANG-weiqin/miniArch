@@ -283,7 +283,7 @@ public sealed class ParallelQueryTests
     // ================================================================
 
     [Fact]
-    public void ForEachChunkParallel_actually_uses_multiple_threads()
+    public void ForEachChunkParallel_may_use_multiple_threads()
     {
         // Use chunked mode with many segments so Parallel.For has enough work items
         // to spread across worker threads.

@@ -11,10 +11,7 @@ internal static class ComponentSizeCache
     private static readonly MethodInfo SizeOfMethod = typeof(ComponentSizeCache)
         .GetMethod(nameof(SizeOfGeneric), BindingFlags.Static | BindingFlags.NonPublic)!;
 
-    public static int GetSize(Type componentType)
-    {
-        return GenericMethodCache.GetOrInvoke(Cache, componentType, SizeOfMethod);
-    }
+    public static int GetSize(Type componentType) => GenericMethodCache.GetOrInvoke(Cache, componentType, SizeOfMethod);
 
     private static int SizeOfGeneric<T>() => Unsafe.SizeOf<T>();
 }

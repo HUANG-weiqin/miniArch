@@ -427,9 +427,12 @@ struct SumJob : IChunkForEach
 }
 ```
 
-> **Note:** For stateful jobs on the parallel path, use `[ThreadStatic]` fields for
-> per-worker accumulation, then merge results after the call returns. The struct
-> is copied per worker, so fields are not shared.
+> **Note:** For stateful jobs on the parallel path, write to external shared
+> state (e.g. `ConcurrentBag<T>`), thread-local storage with explicit merge,
+> or a thread-safe collector. The struct is captured by value into the
+> `Parallel.For` closure — all workers share the same captured copy. Mutating
+> the struct's own fields is a data race on the closure copy, and the caller's
+> variable is never updated.
 
 ---
 
@@ -476,7 +479,7 @@ for (var i = 0; i < 3; i++)
 readonly record struct Position(float X, float Y);
 ```
 
-> **Key constraint:** Mirror clients must replay the same delta sequence from frame 0 (empty world) to keep ID allocators in sync. `World.EnsureReplayReservation` enforces this — if a replay tries to allocate an ID that the local allocator has already passed, it throws.
+> **Key constraint:** Mirror clients must replay the same delta sequence from frame 0 (empty world) to keep ID allocators in sync. The replay system enforces this — if a replay tries to allocate an ID that the local allocator has already passed, it throws.
 
 ---
 

@@ -4,7 +4,7 @@ using MiniArch.Core;
 
 namespace MiniArchBenchmarks;
 
-using MiniQuery = MiniArch.Core.QueryCache;
+using MiniQueryCache = MiniArch.Core.QueryCache;
 using MiniWorld = MiniArch.World;
 using MiniComponentType = MiniArch.Core.ComponentType;
 
@@ -186,11 +186,11 @@ public readonly record struct QueryProfilingResult(
 
 public static class QueryProfilingRunner
 {
-    private static readonly ConstructorInfo QueryConstructor = typeof(MiniQuery)
+    private static readonly ConstructorInfo QueryConstructor = typeof(MiniQueryCache)
         .GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic)
         .Single(ctor => ctor.GetParameters().Length == 2);
 
-    private static readonly FieldInfo QueryFilterField = typeof(MiniQuery)
+    private static readonly FieldInfo QueryFilterField = typeof(MiniQueryCache)
         .GetField("_filter", BindingFlags.Instance | BindingFlags.NonPublic)
         ?? throw new InvalidOperationException("Unable to find Query._filter.");
 
@@ -256,7 +256,7 @@ public static class QueryProfilingRunner
         return new QueryProfilingResult(iterations, totalChecksum, stopwatch.Elapsed, refreshCount);
     }
 
-    private static void WarmUp(MiniQuery template, MiniWorld world, QueryProfilingOptions options, CancellationToken cancellationToken)
+    private static void WarmUp(MiniQueryCache template, MiniWorld world, QueryProfilingOptions options, CancellationToken cancellationToken)
     {
         for (var i = 0; i < options.WarmupIterations; i++)
         {
@@ -266,22 +266,22 @@ public static class QueryProfilingRunner
         }
     }
 
-    private static MiniQuery CreateQueryForIteration(MiniQuery template, MiniWorld world, QueryProfilingTemperature temperature)
+    private static MiniQueryCache CreateQueryForIteration(MiniQueryCache template, MiniWorld world, QueryProfilingTemperature temperature)
     {
         return temperature == QueryProfilingTemperature.Hot
             ? template
             : CloneFreshQuery(template, world);
     }
 
-    private static MiniQuery CloneFreshQuery(MiniQuery template, MiniWorld world)
+    private static MiniQueryCache CloneFreshQuery(MiniQueryCache template, MiniWorld world)
     {
         var filter = QueryFilterField.GetValue(template)
             ?? throw new InvalidOperationException("Unable to read Query._filter.");
 
-        return (MiniQuery)QueryConstructor.Invoke(new object[] { world, filter });
+        return (MiniQueryCache)QueryConstructor.Invoke(new object[] { world, filter });
     }
 
-    private static MiniQuery BuildQuery(MiniWorld world, QueryProfilingScenario scenario)
+    private static MiniQueryCache BuildQuery(MiniWorld world, QueryProfilingScenario scenario)
     {
         var description = new QueryDescription()
             .With<Position>()
@@ -291,26 +291,26 @@ public static class QueryProfilingRunner
 
         return scenario switch
         {
-            QueryProfilingScenario.WithAll => MiniQuery.Create(world, in description),
+            QueryProfilingScenario.WithAll => MiniQueryCache.Create(world, in description),
             QueryProfilingScenario.WithAllWithout => BuildWithoutQuery(world, description),
             QueryProfilingScenario.WithAllAny => BuildAnyQuery(world, description),
             _ => throw new ArgumentOutOfRangeException(nameof(scenario))
         };
     }
 
-    private static MiniQuery BuildWithoutQuery(MiniWorld world, QueryDescription description)
+    private static MiniQueryCache BuildWithoutQuery(MiniWorld world, QueryDescription description)
     {
         var filtered = description.Without<ExcludedTag>();
-        return MiniQuery.Create(world, in filtered);
+        return MiniQueryCache.Create(world, in filtered);
     }
 
-    private static MiniQuery BuildAnyQuery(MiniWorld world, QueryDescription description)
+    private static MiniQueryCache BuildAnyQuery(MiniWorld world, QueryDescription description)
     {
         var filtered = description.WithAny<AnyTagA>().WithAny<AnyTagB>();
-        return MiniQuery.Create(world, in filtered);
+        return MiniQueryCache.Create(world, in filtered);
     }
 
-    private static int Execute(MiniQuery query)
+    private static int Execute(MiniQueryCache query)
     {
         var checksum = 0;
         var archetypes = query.GetArchetypeSpan();
@@ -326,7 +326,7 @@ public static class QueryProfilingRunner
         return checksum;
     }
 
-    private static int ExecuteWorkload(MiniQuery query, MiniComplexQueryWorldState state, QueryProfilingWorkload workload)
+    private static int ExecuteWorkload(MiniQueryCache query, MiniComplexQueryWorldState state, QueryProfilingWorkload workload)
     {
         return workload switch
         {
@@ -337,7 +337,7 @@ public static class QueryProfilingRunner
         };
     }
 
-    private static int ExecuteEntityChecksum(MiniQuery query)
+    private static int ExecuteEntityChecksum(MiniQueryCache query)
     {
         var checksum = 0;
         var archetypes = query.GetArchetypeSpan();
@@ -353,7 +353,7 @@ public static class QueryProfilingRunner
         return checksum;
     }
 
-    private static int ExecuteComponentRowWiseChecksum(MiniQuery query, MiniComponentType positionType, MiniComponentType velocityType)
+    private static int ExecuteComponentRowWiseChecksum(MiniQueryCache query, MiniComponentType positionType, MiniComponentType velocityType)
     {
         var checksum = 0;
         var archetypes = query.GetArchetypeSpan();
@@ -377,7 +377,7 @@ public static class QueryProfilingRunner
         return checksum;
     }
 
-    private static int ExecuteComponentSpanChecksum(MiniQuery query, MiniComponentType positionType, MiniComponentType velocityType)
+    private static int ExecuteComponentSpanChecksum(MiniQueryCache query, MiniComponentType positionType, MiniComponentType velocityType)
     {
         var checksum = 0;
         var archetypes = query.GetArchetypeSpan();

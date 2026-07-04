@@ -103,4 +103,29 @@ public sealed class WorldStatsTests
         var totalEntities = archetypeStats.Sum(s => s.EntityCount);
         Assert.Equal(globalStats.EntityCount, totalEntities);
     }
+
+    [Fact]
+    public void ArchetypeStats_ComponentTypes_is_defensive_snapshot()
+    {
+        using var world = new World();
+        world.Create(new Position(1, 2));
+        world.Create(new Position(3, 4), new Velocity(5, 6));
+
+        var stats = world.GetArchetypeStats();
+        var posVelStats = stats.First(s => s.ComponentTypes.Count == 2);
+
+        // Mutate the returned list if it's a mutable array
+        if (posVelStats.ComponentTypes is Type[] arr)
+        {
+            arr[0] = typeof(int);
+            arr[1] = typeof(string);
+        }
+
+        // Re-read stats: should still report original types
+        var stats2 = world.GetArchetypeStats();
+        var posVelStats2 = stats2.First(s => s.ComponentTypes.Count == 2);
+
+        Assert.Equal(typeof(Position), posVelStats2.ComponentTypes[0]);
+        Assert.Equal(typeof(Velocity), posVelStats2.ComponentTypes[1]);
+    }
 }

@@ -1,7 +1,7 @@
 using System.Collections;
 using System.Reflection;
 using MiniArch.Core;
-using MiniQuery = MiniArch.Core.QueryCache;
+using MiniQueryCache = MiniArch.Core.QueryCache;
 
 namespace MiniArchTests.Core;
 
@@ -22,7 +22,7 @@ public sealed class QueryFilterTests
             .WithAny<TagA>()
             .WithAny<TagB>();
 
-        var query = MiniQuery.Create(world, in description);
+        var query = MiniQueryCache.Create(world, in description);
 
         var position = ComponentRegistry.Shared.GetOrCreate<Position>();
         var velocity = ComponentRegistry.Shared.GetOrCreate<Velocity>();
@@ -45,8 +45,8 @@ public sealed class QueryFilterTests
         var firstDescription = new QueryDescription().WithAny<TagA>().WithAny<TagB>();
         var secondDescription = new QueryDescription().WithAny<TagB>().WithAny<TagA>();
 
-        var first = MiniQuery.Create(world, in firstDescription);
-        var second = MiniQuery.Create(world, in secondDescription);
+        var first = MiniQueryCache.Create(world, in firstDescription);
+        var second = MiniQueryCache.Create(world, in secondDescription);
 
         Assert.Same(first, second);
     }
@@ -104,8 +104,8 @@ public sealed class QueryFilterTests
         var firstDescription = new QueryDescription().With<Position>();
         var secondDescription = new QueryDescription().With<Position>();
 
-        var first = MiniQuery.Create(world, in firstDescription);
-        var second = MiniQuery.Create(world, in secondDescription);
+        var first = MiniQueryCache.Create(world, in firstDescription);
+        var second = MiniQueryCache.Create(world, in secondDescription);
 
         Assert.Same(first, second);
     }
@@ -134,7 +134,7 @@ public sealed class QueryFilterTests
 
         Assert.Equal(0, GetCachedQueryCount(world));
 
-        _ = MiniQuery.Create(world, in description);
+        _ = MiniQueryCache.Create(world, in description);
         Assert.Equal(1, GetCachedQueryCount(world));
     }
 

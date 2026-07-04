@@ -251,17 +251,7 @@ public static class WorldSnapshot
             }
         }
 
-        var relations = new List<(int ChildId, int ParentId)>();
-        foreach (var (child, parent) in world.Hierarchy.EnumerateLiveRelations(world))
-            relations.Add((child.Id, parent.Id));
-        relations.Sort((a, b) => a.ChildId.CompareTo(b.ChildId));
-
-        AppendInt(hash, relations.Count);
-        foreach (var (childId, parentId) in relations)
-        {
-            AppendInt(hash, childId);
-            AppendInt(hash, parentId);
-        }
+        AppendHierarchyRelations(hash, world);
 
         return hash.GetCurrentHash();
     }
@@ -276,6 +266,21 @@ public static class WorldSnapshot
     private static void AppendInt(IncrementalHash hash, int v)
     {
         hash.AppendData(MemoryMarshal.AsBytes(new ReadOnlySpan<int>(ref v)));
+    }
+
+    private static void AppendHierarchyRelations(IncrementalHash hash, World world)
+    {
+        var relations = new List<(int ChildId, int ParentId)>();
+        foreach (var (child, parent) in world.Hierarchy.EnumerateLiveRelations(world))
+            relations.Add((child.Id, parent.Id));
+        relations.Sort((a, b) => a.ChildId.CompareTo(b.ChildId));
+
+        AppendInt(hash, relations.Count);
+        foreach (var (childId, parentId) in relations)
+        {
+            AppendInt(hash, childId);
+            AppendInt(hash, parentId);
+        }
     }
 
     /// <summary>
@@ -317,17 +322,7 @@ public static class WorldSnapshot
             }
         }
 
-        var relations = new List<(int ChildId, int ParId)>();
-        foreach (var (child, parent) in world.Hierarchy.EnumerateLiveRelations(world))
-            relations.Add((child.Id, parent.Id));
-        relations.Sort((a, b) => a.ChildId.CompareTo(b.ChildId));
-
-        AppendInt(hash, relations.Count);
-        foreach (var (cid, pid) in relations)
-        {
-            AppendInt(hash, cid);
-            AppendInt(hash, pid);
-        }
+        AppendHierarchyRelations(hash, world);
 
         var freeList = world.FreeList;
         AppendInt(hash, freeList.Length);

@@ -52,7 +52,7 @@ Date: 2026-04-11
 ## 复跑命令
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts/benchmark.ps1 -Filter "*QueryBenchmarks*"
+powershell -ExecutionPolicy Bypass -File tools/scripts/benchmark.ps1 -Filter "*QueryBenchmarks*"
 ```
 
 原始 BenchmarkDotNet 汇总文件：

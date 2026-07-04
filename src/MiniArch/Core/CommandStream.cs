@@ -51,20 +51,31 @@ public sealed class CommandStream
     // Registration array indexed by placeholder seq. Each entry is a linked
     // list of Slot objects that want to be notified when this seq is resolved.
     // Cleared after each resolution pass.
-    private Slot?[] _trackedBySeq = [];
+    private EntitySlot.Slot?[] _trackedBySeq = [];
     private int _trackedMaxSeq;
     // Saved by Clear() for the Snapshot+Clear+Replay path. When Clear() is
     // called after Snapshot(), the tracked registrations are preserved here
     // so Replay() can resolve them after the underlying ReplayCore call.
-    private Slot?[]? _replayTrackedBySeq;
+    private EntitySlot.Slot?[]? _replayTrackedBySeq;
     private int _replayTrackedMaxSeq;
     // Set by Snapshot(), consumed by Clear(). When true, Clear() preserves
     // _trackedBySeq into _replayTrackedBySeq for subsequent Replay().
     // When false (e.g. user abandons a frame), registrations are dropped.
     private bool _pendingReplay;
 
+    private static void GrowPooled<T>(ref T[] array, int count)
+    {
+        var grown = ArrayPool<T>.Shared.Rent(count * 2);
+        Array.Copy(array, grown, count);
+        ArrayPool<T>.Shared.Return(array);
+        array = grown;
+    }
+
     // ── Construction ───────────────────────────────────────────────────
 
+    /// <summary>
+    /// Initializes a new instance bound to the specified world for deferred command recording.
+    /// </summary>
     public CommandStream(World world)
     {
         _world = world ?? throw new ArgumentNullException(nameof(world));
@@ -126,6 +137,9 @@ public sealed class CommandStream
 
     // ── Record API ────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Records a deferred entity creation and returns the new entity (placeholder or real).
+    /// </summary>
     public Entity Create()
     {
         if (_parallelMode)
@@ -163,7 +177,7 @@ public sealed class CommandStream
         if (!entity.IsPlaceholder)
             return new EntitySlot(entity);
 
-        var slot = new Slot { Entity = entity };
+        var slot = new EntitySlot.Slot { Entity = entity };
         var seq = entity.Version;
 
         if (_parallelMode)
@@ -180,7 +194,7 @@ public sealed class CommandStream
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void RegisterTrackedSlot(Slot slot, int seq)
+    private void RegisterTrackedSlot(EntitySlot.Slot slot, int seq)
     {
         EnsureCapacity(ref _trackedBySeq, seq, 16);
         slot.Next = _trackedBySeq[seq];
@@ -232,6 +246,9 @@ public sealed class CommandStream
         return batchIdx;
     }
 
+    /// <summary>
+    /// Records an Add command for the specified component on the given entity.
+    /// </summary>
     public void Add<T>(Entity entity, T component) where T : unmanaged
     {
         if (_parallelMode)
@@ -250,6 +267,9 @@ public sealed class CommandStream
         }
     }
 
+    /// <summary>
+    /// Records a Set command for the specified component on the given entity.
+    /// </summary>
     public void Set<T>(Entity entity, T component) where T : unmanaged
     {
         if (_parallelMode)
@@ -268,6 +288,9 @@ public sealed class CommandStream
         }
     }
 
+    /// <summary>
+    /// Records a Remove command for the specified component type from the given entity.
+    /// </summary>
     public void Remove<T>(Entity entity) where T : unmanaged
     {
         if (_parallelMode)
@@ -286,6 +309,9 @@ public sealed class CommandStream
         }
     }
 
+    /// <summary>
+    /// Records a Destroy command for the specified entity.
+    /// </summary>
     public void Destroy(Entity entity)
     {
         if (_parallelMode)
@@ -305,6 +331,9 @@ public sealed class CommandStream
         }
     }
 
+    /// <summary>
+    /// Records an AddChild command establishing a parent-child relationship.
+    /// </summary>
     public void AddChild(Entity parent, Entity child)
     {
         if (_parallelMode)
@@ -316,6 +345,9 @@ public sealed class CommandStream
         _frozen.HierarchyByChild[child] = new HierarchyIntent(true, parent);
     }
 
+    /// <summary>
+    /// Records a RemoveChild command detaching the entity from its parent.
+    /// </summary>
     public void RemoveChild(Entity child)
     {
         if (_parallelMode)
@@ -327,6 +359,9 @@ public sealed class CommandStream
         _frozen.HierarchyByChild[child] = new HierarchyIntent(false, default);
     }
 
+    /// <summary>
+    /// Records a clone of the source entity, including all components and descendants.
+    /// </summary>
     public Entity Clone(Entity source)
     {
         if (!_world.TryGetLocation(source, out var location))
@@ -397,6 +432,9 @@ public sealed class CommandStream
 
     // ── Submit ────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Applies all recorded commands to the world and returns true if any work was performed.
+    /// </summary>
     public bool Submit()
     {
         if (!HasAnyCommands())
@@ -825,8 +863,8 @@ public sealed class CommandStream
         }
         finally
         {
-            if (pooledTypes != null) ArrayPool<ComponentType>.Shared.Return(pooledTypes);
-            if (pooledOffsets != null) ArrayPool<int>.Shared.Return(pooledOffsets);
+            if (pooledTypes is not null) ArrayPool<ComponentType>.Shared.Return(pooledTypes);
+            if (pooledOffsets is not null) ArrayPool<int>.Shared.Return(pooledOffsets);
         }
     }
 
@@ -1128,12 +1166,7 @@ public sealed class CommandStream
         {
             if (!intent.IsAdd || intent.Parent != parent) continue;
             if (queueCount == queue.Length)
-            {
-                var grown = ArrayPool<Entity>.Shared.Rent(queue.Length * 2);
-                Array.Copy(queue, grown, queueCount);
-                ArrayPool<Entity>.Shared.Return(queue);
-                queue = grown;
-            }
+                GrowPooled(ref queue, queueCount);
             queue[queueCount++] = child;
         }
     }
@@ -1288,7 +1321,7 @@ public sealed class CommandStream
 
     private void CloneChildrenRecursive(Entity sourceRoot, Entity cloneRoot)
     {
-        if (!_world.Hierarchy.HasChildren(sourceRoot)) return;
+        if (!_world.Hierarchy.HasChildren(_world, sourceRoot)) return;
 
         var stack = ArrayPool<Entity>.Shared.Rent(32);
         var cloneStack = ArrayPool<Entity>.Shared.Rent(32);
@@ -1300,14 +1333,8 @@ public sealed class CommandStream
             {
                 if (stackCount >= stack.Length)
                 {
-                    var newStack = ArrayPool<Entity>.Shared.Rent(stack.Length * 2);
-                    var newCloneStack = ArrayPool<Entity>.Shared.Rent(stack.Length * 2);
-                    Array.Copy(stack, newStack, stackCount);
-                    Array.Copy(cloneStack, newCloneStack, stackCount);
-                    ArrayPool<Entity>.Shared.Return(stack);
-                    ArrayPool<Entity>.Shared.Return(cloneStack);
-                    stack = newStack;
-                    cloneStack = newCloneStack;
+                    GrowPooled(ref stack, stackCount);
+                    GrowPooled(ref cloneStack, stackCount);
                 }
                 stack[stackCount] = child;
                 cloneStack[stackCount] = cloneRoot;
@@ -1344,14 +1371,8 @@ public sealed class CommandStream
                 {
                     if (stackCount >= stack.Length)
                     {
-                        var newStack = ArrayPool<Entity>.Shared.Rent(stack.Length * 2);
-                        var newCloneStack = ArrayPool<Entity>.Shared.Rent(stack.Length * 2);
-                        Array.Copy(stack, newStack, stackCount);
-                        Array.Copy(cloneStack, newCloneStack, stackCount);
-                        ArrayPool<Entity>.Shared.Return(stack);
-                        ArrayPool<Entity>.Shared.Return(cloneStack);
-                        stack = newStack;
-                        cloneStack = newCloneStack;
+                        GrowPooled(ref stack, stackCount);
+                        GrowPooled(ref cloneStack, stackCount);
                     }
                     stack[stackCount] = grandChild;
                     cloneStack[stackCount] = cloneChild;
@@ -1485,7 +1506,7 @@ public sealed class CommandStream
         ref var slot = ref MemoryMarshal.GetArrayDataReference(stores);
         slot = ref Unsafe.Add(ref slot, id);
         var store = slot;
-        if (store == null)
+        if (store is null)
         {
             store = new ComponentStore<T>();
             slot = store;
@@ -1512,12 +1533,12 @@ public sealed class CommandStream
         }
 
         var store = _frozen.Stores[id];
-        if (store == null)
+        if (store is null)
         {
             lock (_storeCreateLock)
             {
                 store = _frozen.Stores[id];
-                if (store == null)
+                if (store is null)
                 {
                     store = new ComponentStore<T>();
                     _frozen.Stores[id] = store;

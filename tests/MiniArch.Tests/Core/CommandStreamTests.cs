@@ -2,7 +2,7 @@ using System.IO;
 using System.Reflection;
 using System.Security.Cryptography;
 using MiniArch.Core;
-using MiniQuery = MiniArch.Core.QueryCache;
+using MiniQueryCache = MiniArch.Core.QueryCache;
 using MiniArch.Tests.Core.TestSupport;
 
 namespace MiniArchTests.Core;
@@ -418,8 +418,8 @@ public sealed class CommandStreamTests
         stream.Remove<Velocity>(existing);
 
         var delta = stream.Snapshot();
-        // Created entity �??Reserved + Created with 2 components
-        // Existing entity �??1 Set + 1 Remove
+        // Created entity -- Reserved + Created with 2 components
+        // Existing entity -- 1 Set + 1 Remove
         // Total: 1 Reserved + 1 Created + 1 Set + 1 Remove = 4
         Assert.Equal(4, delta.DeltaCount);
     }
@@ -501,7 +501,7 @@ public sealed class CommandStreamTests
         var world = new World();
         var stream = new CommandStream(world);
 
-        // Nothing recorded �??delta should be empty
+        // Nothing recorded -- delta should be empty
         var delta = stream.Snapshot();
         Assert.True(delta.IsEmpty);
         Assert.Equal(0, delta.DeltaCount);
@@ -714,12 +714,12 @@ public sealed class CommandStreamTests
     [Fact]
     public void CrossWorld_replay_create_empty_entity()
     {
-        // Create an entity with no components �??should produce an empty CreatedEntity.
+        // Create an entity with no components -- should produce an empty CreatedEntity.
         var source = new World();
         var stream = new CommandStream(source);
 
         var e = stream.Create();
-        // No components �??empty entity is now fully supported
+        // No components -- empty entity is now fully supported
         var delta = stream.Snapshot();
 
         Assert.NotEmpty(delta.CreatedEntities());
@@ -885,7 +885,7 @@ public sealed class CommandStreamTests
         stream.Destroy(e); // Cancel pending entity
         Assert.True(stream.Submit());
 
-        // Entity was reserved then released �??never became alive
+        // Entity was reserved then released -- never became alive
         Assert.False(world.IsAlive(e));
 
         // Verify the ID is reusable (not leaked)
@@ -1191,7 +1191,7 @@ public sealed class CommandStreamTests
         stream.Destroy(clone);
         var delta = stream.Snapshot();
 
-        // Clone-then-destroy �??released, not created
+        // Clone-then-destroy -- released, not created
         Assert.Empty(delta.CreatedEntities());
         Assert.Empty(delta.DestroyedEntities());
         Assert.Contains(clone, delta.ReservedEntities());
@@ -1641,7 +1641,7 @@ public sealed class CommandStreamTests
 
         var e = stream.Create();
         stream.Add(e, new Position(1, 2));
-        stream.Add(e, new Position(3, 4)); // Duplicate Add �??should collapse to one
+        stream.Add(e, new Position(3, 4)); // Duplicate Add -- should collapse to one
         stream.Add(e, new Health(100));
 
         Assert.True(stream.Submit());
@@ -2019,7 +2019,7 @@ public sealed class CommandStreamTests
         stream.Submit();
 
         Assert.False(world.IsAlive(parent));
-        // Existing child survives �??it was never parented in the live world.
+        // Existing child survives -- it was never parented in the live world.
         Assert.True(world.IsAlive(existingChild));
     }
 
@@ -2124,7 +2124,7 @@ public sealed class DeferredCreateTests
         stream.Submit();
         // Verify the entity was materialized: a query finds it
         var found = false;
-        foreach (ref readonly var arch in MiniQuery.Create(world, new QueryDescription()).GetArchetypeSpan())
+        foreach (ref readonly var arch in MiniQueryCache.Create(world, new QueryDescription()).GetArchetypeSpan())
             if (arch.GetEntities().Length > 0) found = true;
         Assert.True(found);
     }
@@ -2138,7 +2138,7 @@ public sealed class DeferredCreateTests
         stream.Add(entity, new Position(1, 2));
         stream.Submit();
         var found = 0;
-        foreach (ref readonly var arch in MiniQuery.Create(world, new QueryDescription()).GetArchetypeSpan())
+        foreach (ref readonly var arch in MiniQueryCache.Create(world, new QueryDescription()).GetArchetypeSpan())
             found += arch.GetEntities().Length;
         Assert.Equal(1, found);
     }
@@ -2153,7 +2153,7 @@ public sealed class DeferredCreateTests
         stream.Create();
         stream.Submit();
         var found = 0;
-        foreach (ref readonly var arch in MiniQuery.Create(world, new QueryDescription()).GetArchetypeSpan())
+        foreach (ref readonly var arch in MiniQueryCache.Create(world, new QueryDescription()).GetArchetypeSpan())
             found += arch.GetEntities().Length;
         Assert.Equal(3, found);
     }
@@ -2168,7 +2168,7 @@ public sealed class DeferredCreateTests
         stream.Destroy(entity);
         stream.Submit();
         var found = 0;
-        foreach (ref readonly var arch in MiniQuery.Create(world, new QueryDescription()).GetArchetypeSpan())
+        foreach (ref readonly var arch in MiniQueryCache.Create(world, new QueryDescription()).GetArchetypeSpan())
             found += arch.GetEntities().Length;
         Assert.Equal(0, found);
     }
@@ -2196,13 +2196,13 @@ public sealed class DeferredCreateTests
         Assert.False(world.IsAlive(clone));
         stream.Submit();
         var found = 0;
-        foreach (ref readonly var arch in MiniQuery.Create(world, new QueryDescription()).GetArchetypeSpan())
+        foreach (ref readonly var arch in MiniQueryCache.Create(world, new QueryDescription()).GetArchetypeSpan())
             found += arch.GetEntities().Length;
         Assert.Equal(2, found);
     }
 
     // ══════════════════════════════════════════════════════════—
-    // Placeholder delta �??Replay (multi-host lockstep core path)
+    // Placeholder delta -- Replay (multi-host lockstep core path)
     // ══════════════════════════════════════════════════════════—
 
     [Fact]
@@ -2306,13 +2306,13 @@ public sealed class DeferredCreateTests
         Assert.Equal(2, CountEntities(replica));
         // Find the parent (has Position 0,0) and verify it has children.
         var hasHierarchy = false;
-        foreach (ref readonly var arch in MiniQuery.Create(replica, new QueryDescription()).GetArchetypeSpan())
+        foreach (ref readonly var arch in MiniQueryCache.Create(replica, new QueryDescription()).GetArchetypeSpan())
         {
             foreach (var entity in arch.GetEntities())
             {
                 if (replica.Get<Position>(entity).X == 0)
                 {
-                    Assert.True(replica.Hierarchy.HasChildren(entity));
+                    Assert.True(replica.Hierarchy.HasChildren(replica, entity));
                     hasHierarchy = true;
                 }
             }
@@ -2344,7 +2344,7 @@ public sealed class DeferredCreateTests
     private static int CountEntities(World w)
     {
         var count = 0;
-        foreach (ref readonly var arch in MiniQuery.Create(w, new QueryDescription()).GetArchetypeSpan())
+        foreach (ref readonly var arch in MiniQueryCache.Create(w, new QueryDescription()).GetArchetypeSpan())
             count += arch.GetEntities().Length;
         return count;
     }
@@ -2352,7 +2352,7 @@ public sealed class DeferredCreateTests
     private static void AssertPosition(World w, int expectedX, int expectedY)
     {
         var desc = new QueryDescription().With<Position>();
-        foreach (ref readonly var arch in MiniQuery.Create(w, in desc).GetArchetypeSpan())
+        foreach (ref readonly var arch in MiniQueryCache.Create(w, in desc).GetArchetypeSpan())
         {
             foreach (var entity in arch.GetEntities())
             {

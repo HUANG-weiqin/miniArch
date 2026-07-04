@@ -15,10 +15,7 @@ internal sealed partial class Archetype
     // ──────────────────────────────────────────────
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private (int SegmentIndex, int LocalRow) GetSegmentAndLocal(int globalRow)
-    {
-        return (globalRow >> _segmentBitShift, globalRow & _segmentMask);
-    }
+    private (int SegmentIndex, int LocalRow) GetSegmentAndLocal(int globalRow) => (globalRow >> _segmentBitShift, globalRow & _segmentMask);
 
     // ──────────────────────────────────────────────
     //  Conversion & segment growth
@@ -30,7 +27,7 @@ internal sealed partial class Archetype
         {
             var newEntities = new Entity[_segmentCapacity];
             Array.Copy(_entities, newEntities, _count);
-            var (newData, newOffsets, _) = CreateStorage(_signature, _componentTypes, _segmentCapacity, pinned: true);
+            var (newData, newOffsets, _) = CreateStorage(_signature, _componentTypes, _segmentCapacity);
             for (var col = 0; col < _elementSizes.Length; col++)
             {
                 var elemSize = _elementSizes[col];
@@ -175,8 +172,7 @@ internal sealed partial class Archetype
 
     internal int ReserveRows(int count)
     {
-        if (count < 0)
-            throw new ArgumentOutOfRangeException(nameof(count));
+        ArgumentOutOfRangeException.ThrowIfNegative(count);
 
         if (count == 0)
             return _count;
@@ -235,6 +231,16 @@ internal sealed partial class Archetype
     //  RemoveAt (cross-segment swap-remove)
     // ──────────────────────────────────────────────
 
+    /// <summary>
+    /// Removes the entity at <paramref name="row"/> using swap-remove.
+    /// </summary>
+    /// <param name="row">Row index to remove.</param>
+    /// <param name="movedEntity">The entity that was moved into <paramref name="row"/>
+    /// from the last position, if any; <c>default</c> if the removed entity was already
+    /// the last row.</param>
+    /// <returns><c>true</c> if a different entity was moved into the removed row
+    /// (swap occurred); <c>false</c> if the removed entity was the last row
+    /// (no swap needed).</returns>
     internal bool RemoveAt(int row, out Entity movedEntity)
     {
         AssertValidRow(row);
@@ -303,18 +309,23 @@ internal sealed partial class Archetype
         if (!_isChunked)
             return _entities.AsSpan(0, _count);
 
-        return GetEntityStorage().AsSpan(0, _count);
+        return GetEntityStorageUnsafe().AsSpan(0, _count);
     }
 
+    /// <summary>
+    /// Returns the internal entity array. <b>Unsafe:</b> the returned array is
+    /// cached internal storage — callers must not mutate it. For read-only access
+    /// prefer <see cref="GetEntities"/> which returns <see cref="ReadOnlySpan{T}"/>.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal Entity[] GetEntityStorage()
+    internal Entity[] GetEntityStorageUnsafe()
     {
         if (!_isChunked)
             return _entities;
 
         if (_cachedFlatEntitiesGeneration != _flatEntitiesGeneration)
         {
-            if (_cachedFlatEntities == null || _cachedFlatEntities.Length < _count)
+            if (_cachedFlatEntities is null || _cachedFlatEntities.Length < _count)
                 _cachedFlatEntities = new Entity[_count];
 
             var off = 0;
@@ -490,33 +501,34 @@ internal sealed partial class Archetype
     }
 
     internal unsafe void ReadComponentRaw(int columnIndex, int row, byte* destination)
-    {
-        if (!_isChunked)
-        {
-            var byteOff = _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex];
-            ref var source = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), byteOff);
-            Unsafe.CopyBlockUnaligned(ref *destination, ref source, (uint)_elementSizes[columnIndex]);
-            return;
-        }
-        var (segIdx, localRow) = GetSegmentAndLocal(row);
-        var segOff = _columnByteOffsets[columnIndex] + localRow * _elementSizes[columnIndex];
-        ref var segSource = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_segments[segIdx].Data), segOff);
-        Unsafe.CopyBlockUnaligned(ref *destination, ref segSource, (uint)_elementSizes[columnIndex]);
-    }
+        => CopyComponentRaw(columnIndex, row, destination, read: true);
 
     internal unsafe void WriteComponentRaw(int columnIndex, int row, byte* source)
+        => CopyComponentRaw(columnIndex, row, source, read: false);
+
+    private unsafe void CopyComponentRaw(int columnIndex, int row, byte* external, bool read)
     {
+        int byteOff;
+        ref var dataRef = ref Unsafe.NullRef<byte>();
         if (!_isChunked)
         {
-            var byteOff = _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex];
-            ref var target = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), byteOff);
-            Unsafe.CopyBlockUnaligned(ref target, ref *source, (uint)_elementSizes[columnIndex]);
-            return;
+            byteOff = _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex];
+            dataRef = ref MemoryMarshal.GetArrayDataReference(_data);
         }
-        var (segIdx, localRow) = GetSegmentAndLocal(row);
-        var segOff = _columnByteOffsets[columnIndex] + localRow * _elementSizes[columnIndex];
-        ref var segTarget = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_segments[segIdx].Data), segOff);
-        Unsafe.CopyBlockUnaligned(ref segTarget, ref *source, (uint)_elementSizes[columnIndex]);
+        else
+        {
+            var (segIdx, localRow) = GetSegmentAndLocal(row);
+            byteOff = _columnByteOffsets[columnIndex] + localRow * _elementSizes[columnIndex];
+            dataRef = ref MemoryMarshal.GetArrayDataReference(_segments[segIdx].Data);
+        }
+
+        ref var storage = ref Unsafe.Add(ref dataRef, byteOff);
+        var size = (uint)_elementSizes[columnIndex];
+
+        if (read)
+            Unsafe.CopyBlockUnaligned(ref *external, ref storage, size);
+        else
+            Unsafe.CopyBlockUnaligned(ref storage, ref *external, size);
     }
 
     internal void CopyColumnsFrom(Archetype source, int count)
@@ -805,7 +817,7 @@ internal sealed partial class Archetype
     }
 
     private static (byte[] Data, int[] ColumnByteOffsets, int[] ElementSizes) CreateStorage(
-        Signature signature, Type[] componentTypes, int capacity, bool pinned = true)
+        Signature signature, Type[] componentTypes, int capacity)
     {
         var componentCount = signature.Count;
         var columnByteOffsets = new int[componentCount];
@@ -829,16 +841,14 @@ internal sealed partial class Archetype
             totalBytes += elementSize * capacity;
         }
 
-        var data = pinned
-            ? GC.AllocateArray<byte>(totalBytes, pinned: true)
-            : GC.AllocateArray<byte>(totalBytes);
+        var data = GC.AllocateArray<byte>(totalBytes);
         return (data, columnByteOffsets, elementSizes);
     }
 
     private static byte[] CreateStorageBytes(
         Signature signature, Type[] componentTypes, int capacity)
     {
-        var (data, _, _) = CreateStorage(signature, componentTypes, capacity, pinned: false);
+        var (data, _, _) = CreateStorage(signature, componentTypes, capacity);
         return data;
     }
 
