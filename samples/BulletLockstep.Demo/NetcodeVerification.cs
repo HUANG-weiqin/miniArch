@@ -33,7 +33,7 @@ public static class NetcodeVerification
         {
             sim.Tick(frame + i, out var deltas);
             foreach (var d in deltas)
-                clone.Replay(d);
+                new CommandStream(clone).Replay(d);
             // System order must match LockstepSimulator.RunSystems exactly.
             if (sim.SpawnBoss)
                 HomingBulletSteerSystem.Run(clone);
@@ -83,11 +83,11 @@ public static class NetcodeVerification
             // them via Concat on path B. Replay each on path A.
             foreach (var d in deltas)
             {
-                worldA.Replay(d);
+                new CommandStream(worldA).Replay(d);
                 merged = merged is null ? d : FrameDelta.Concat(merged, d);
             }
         }
-        worldB.Replay(merged);
+        new CommandStream(worldB).Replay(merged);
 
         // Run the same deterministic systems on both (post-replay state).
         // Must match LockstepSimulator.RunSystems order exactly.

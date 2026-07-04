@@ -223,9 +223,9 @@ public sealed class FrameDelta
     /// negative counts, duplicate component types, unknown type ids, or
     /// invalid entity shapes.
     ///
-    /// Call before <see cref="World.Replay"/> for deltas received over
-    /// the network. Deltas produced locally by <see cref="CommandStream"/> are
-    /// always valid and can skip this step.
+    /// Call before <see cref="CommandStream.Replay(FrameDelta)"/> for deltas
+    /// received over the network. Deltas produced locally by
+    /// <see cref="CommandStream"/> are always valid and can skip this step.
     /// </summary>
     /// <remarks>
     /// Walks the entire delta once (same cost as deserialization). Uses the
@@ -718,13 +718,14 @@ public sealed class FrameDelta
     /// <see cref="CommandStream"/> with DeferredEntities starts its own seq
     /// counter at 0, so two independent streams both emit
     /// <c>Reserve(seq=0)/Create(seq=0)</c>. During replay
-    /// (<see cref="World.Replay"/>) a single per-replay map[seq]→local id is
-    /// used, and the second <c>Reserve</c> overwrites the first's entry —so
-    /// any later op that references the first stream's placeholder resolves to
-    /// the wrong entity. The canonical lockstep pattern replays each peer's
-    /// placeholder delta as a separate <see cref="World.Replay"/> call (which
-    /// resets the map each time), avoiding this issue entirely; do not
-    /// concatenate placeholder deltas across streams.
+    /// (<see cref="CommandStream.Replay(FrameDelta)"/>) a single per-replay
+    /// map[seq]→local id is used, and the second <c>Reserve</c> overwrites the
+    /// first's entry —so any later op that references the first stream's
+    /// placeholder resolves to the wrong entity. The canonical lockstep pattern
+    /// replays each peer's placeholder delta as a separate
+    /// <see cref="CommandStream.Replay(FrameDelta)"/> call (which resets the map
+    /// each time), avoiding this issue entirely; do not concatenate placeholder
+    /// deltas across streams.
     /// </para>
     /// </remarks>
     public static FrameDelta Concat(FrameDelta a, FrameDelta b)

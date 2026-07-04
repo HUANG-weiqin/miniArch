@@ -60,7 +60,7 @@ public sealed class AuthorityMirrorSimulator
         // 3. Mirrors replay the authority's delta. Their allocators advance
         //    in lockstep with the authority since they all started empty.
         foreach (var m in _mirrors)
-            m.Replay(delta);
+            new CommandStream(m).Replay(delta);
 
         // 4. Deterministic systems on every host.
         RunSystems(_authority.World, frame);

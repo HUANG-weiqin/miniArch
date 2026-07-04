@@ -9,6 +9,19 @@ updated: 2026-07-03 (洁癖全量清扫 + dead code 清理 + deadcode.ps1 修复
 > 这个页面只记录**重大架构变更和知识库校准事件**，供追溯。
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
 
+## 2026-07-04 拆掉 World.Replay + TryResolvePlaceholder 公共 API
+
+- **`World.Replay(FrameDelta)` 删除**：已 `[Obsolete]` 一个版本，函数体只有一行 `ReplayCore(delta)`。CommandStream.Replay() 直接调 `_world.ReplayCore(delta)`。
+- **`World.TryResolvePlaceholder()` 改为 `internal`**：`EntitySlot` + `CommandStream.Track()` 完全覆盖用例。CommandStream 内部仍通过 InternalsVisibleTo 使用。
+- **`World.ReplayCore()` 改为 `internal`**（原 `private`）。
+- **所有调用方迁移**：sample（LockstepSimulator / AuthorityMirrorSimulator / NetcodeVerification）改用 `host.Stream.Replay()` 或 `new CommandStream(world).Replay()`；测试全部迁移到 `new CommandStream(world).Replay()`。
+- **删除 4 个 `TryResolvePlaceholder_*` 测试**（测试旧公共 API，EntitySlot 测试已覆盖等价功能）。
+- **移除 `MiniArch.Tests.csproj` 的 CS0618 抑制**（不再有 obsoleted API）。
+- **`FrameDelta.xml` 引用更新**：全部 `World.Replay` → `CommandStream.Replay`。
+- **README Features 行更新**：`World.TryResolvePlaceholder()` → `EntitySlot` + `CommandStream.Track()`。
+- **`kb-deferred-create-design.md` TryResolvePlaceholder 节标记为已移除**，指向 EntitySlot。
+- 全 Build + 541 Tests + HeroComing.Perf 门禁通过（Movement 2021.5 / Attack 1248.0）。
+
 ## 2026-07-03 全量审阅落地（死代码清理 + deadcode.ps1 修复 + 过度防御改善）
 
 ### 洁癖全量清扫（YAGNI + static 化 + 命名诚实）

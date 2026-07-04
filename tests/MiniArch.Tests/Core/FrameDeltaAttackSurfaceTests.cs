@@ -13,7 +13,7 @@ namespace MiniArchTests.Core;
 ///
 /// These tests document:
 ///   A) <c>delta.Validate()</c> → throws (malformed delta rejected)
-///   B) <c>world.Replay(delta)</c> without prior Validate → silently corrupts
+///   B) <c>new CommandStream(world).Replay(delta)</c> without prior Validate → silently corrupts
 ///      (demonstrating WHY validation is needed for untrusted deltas)
 ///
 /// The first block of each test shows the safe path (A).  The second block (B)
@@ -70,7 +70,7 @@ public sealed class FrameDeltaAttackSurfaceTests
         var delta = FrameDelta.Deserialize([0x03, 0x00, 0x01, 0x00]);
         var world = new World();
 
-        world.Replay(delta); // no Validate → ghost created
+        new CommandStream(world).Replay(delta); // no Validate → ghost created
 
         Assert.Equal(1, QueryCount(world));
         Assert.Equal(0, world.EntityCount);
@@ -104,7 +104,7 @@ public sealed class FrameDeltaAttackSurfaceTests
         var delta = FrameDelta.Deserialize(buf.ToArray());
         var world = new World();
 
-        world.Replay(delta); // no Validate → duplicate row leaked
+        new CommandStream(world).Replay(delta); // no Validate → duplicate row leaked
 
         Assert.Equal(2, QueryCount(world));
         Assert.Equal(1, world.EntityCount);
@@ -124,7 +124,7 @@ public sealed class FrameDeltaAttackSurfaceTests
 
         var world = new World();
         world.Create();
-        var ex = Assert.Throws<InvalidOperationException>(() => world.Replay(delta));
+        var ex = Assert.Throws<InvalidOperationException>(() => new CommandStream(world).Replay(delta));
         Assert.Contains("out of sync", ex.Message);
         // Allocator leaked (slot 1 consumed) — documented in the test above.
     }
@@ -177,7 +177,7 @@ public sealed class FrameDeltaAttackSurfaceTests
 
         var delta = new FrameDelta { _buffer = buf.ToArray(), _length = buf.Count, _opCount = 3 };
 
-        world.Replay(delta); // no Validate → silent corruption
+        new CommandStream(world).Replay(delta); // no Validate → silent corruption
 
         Assert.True(world.TryGet(e, out Position p));
         Assert.NotEqual(100, p.X);
@@ -239,7 +239,7 @@ public sealed class FrameDeltaAttackSurfaceTests
         var delta = FrameDelta.Deserialize(buf.ToArray());
         var world = new World();
 
-        world.Replay(delta); // no Validate → last write wins
+        new CommandStream(world).Replay(delta); // no Validate → last write wins
 
         Assert.True(world.IsAlive(new Entity(0, 1)));
         Assert.True(world.TryGet(new Entity(0, 1), out Health h));
@@ -347,7 +347,7 @@ public sealed class FrameDeltaAttackSurfaceTests
 
         // Should not OOM —pre-scan skips non-alloc entity ids.
         var world = new World();
-        world.Replay(delta);
+        new CommandStream(world).Replay(delta);
 
         // Destroy on non-existent entity is a no-op.
         Assert.Equal(0, world.EntityCount);

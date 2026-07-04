@@ -595,7 +595,7 @@ public sealed class TrickyEdgeCaseTests
         var entity = world.Create(new Position(1, 2));
         var delta = new FrameDelta();
 
-        world.Replay(delta);
+        new CommandStream(world).Replay(delta);
 
         Assert.True(world.IsAlive(entity));
         Assert.True(world.TryGet(entity, out Position p));

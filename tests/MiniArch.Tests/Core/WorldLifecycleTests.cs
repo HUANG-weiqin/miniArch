@@ -605,14 +605,15 @@ public sealed class WorldLifecycleTests
         {
             var world = new World();
             var delta = new FrameDelta();
-            world.Replay(delta);
+            var stream = new CommandStream(world);
+            stream.Replay(delta);
 
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
 
             var before = GC.GetAllocatedBytesForCurrentThread();
-            world.Replay(delta);
+            stream.Replay(delta);
             var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
             Assert.Equal(0, allocated);

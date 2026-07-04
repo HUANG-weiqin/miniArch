@@ -57,11 +57,11 @@ public sealed class NetworkSyncTests
         csB.Add(g, new Health(50));
         var deltaB = csB.Snapshot();
 
-        hostA.Replay(deltaA);
-        hostA.Replay(deltaB);
+        new CommandStream(hostA).Replay(deltaA);
+        new CommandStream(hostA).Replay(deltaB);
 
-        hostB.Replay(deltaA);
-        hostB.Replay(deltaB);
+        new CommandStream(hostB).Replay(deltaA);
+        new CommandStream(hostB).Replay(deltaB);
 
         Assert.Equal(hostA.Checksum(), hostB.Checksum());
         Assert.NotEqual(hashBefore, hostA.Checksum());
@@ -95,11 +95,11 @@ public sealed class NetworkSyncTests
             }
             var deltaB = csB.Snapshot();
 
-            hostA.Replay(deltaA);
-            hostA.Replay(deltaB);
+            new CommandStream(hostA).Replay(deltaA);
+            new CommandStream(hostA).Replay(deltaB);
 
-            hostB.Replay(deltaA);
-            hostB.Replay(deltaB);
+            new CommandStream(hostB).Replay(deltaA);
+            new CommandStream(hostB).Replay(deltaB);
 
             Assert.Equal(hostA.Checksum(), hostB.Checksum());
         }
@@ -120,7 +120,7 @@ public sealed class NetworkSyncTests
         var serverDelta = serverCs.Snapshot();
 
         // Server must replay its own delta to materialize reserved entities
-        server.Replay(serverDelta);
+        new CommandStream(server).Replay(serverDelta);
 
         // Client starts from same initial state, predicts, then rolls back
         var client = WorldClone.Clone(CreateInitialWorld());
@@ -130,7 +130,7 @@ public sealed class NetworkSyncTests
         client.Create(new Position(111, 222));
 
         client.RestoreState(snap);
-        client.Replay(serverDelta);
+        new CommandStream(client).Replay(serverDelta);
 
         Assert.Equal(server.Checksum(), client.Checksum());
     }
@@ -151,8 +151,8 @@ public sealed class NetworkSyncTests
         cs1.Add(E(2), new Health(10));
         var delta1 = cs1.Snapshot();
         // Source must replay its own delta to materialize
-        a.Replay(delta1);
-        b.Replay(delta1);
+        new CommandStream(a).Replay(delta1);
+        new CommandStream(b).Replay(delta1);
         Assert.Equal(a.Checksum(), b.Checksum());
 
         // Round 2: Host B produces, A replays
@@ -163,8 +163,8 @@ public sealed class NetworkSyncTests
         cs2.Destroy(E(0));
         var delta2 = cs2.Snapshot();
         // Source must replay its own delta first
-        b.Replay(delta2);
-        a.Replay(delta2);
+        new CommandStream(b).Replay(delta2);
+        new CommandStream(a).Replay(delta2);
         Assert.Equal(a.Checksum(), b.Checksum());
     }
 
@@ -228,11 +228,11 @@ public sealed class NetworkSyncTests
             csB.Set(E(0), new Position(300 + frame, 400 + frame));
             var deltaB = csB.Snapshot();
 
-            hostA.Replay(deltaA);
-            hostA.Replay(deltaB);
+            new CommandStream(hostA).Replay(deltaA);
+            new CommandStream(hostA).Replay(deltaB);
 
-            hostB.Replay(deltaA);
-            hostB.Replay(deltaB);
+            new CommandStream(hostB).Replay(deltaA);
+            new CommandStream(hostB).Replay(deltaB);
 
             Assert.Equal(hostA.Checksum(), hostB.Checksum());
         }
@@ -290,11 +290,11 @@ public sealed class NetworkSyncTests
         csB.Destroy(new Entity(alive[1].Id, alive[1].Version + 1)); // Entity(1,2) already free → no-op
         var deltaB = csB.Snapshot();
 
-        hostA.Replay(deltaB);
-        hostA.Replay(deltaA);
+        new CommandStream(hostA).Replay(deltaB);
+        new CommandStream(hostA).Replay(deltaA);
 
-        hostB.Replay(deltaB);
-        hostB.Replay(deltaA);
+        new CommandStream(hostB).Replay(deltaB);
+        new CommandStream(hostB).Replay(deltaA);
 
         Assert.Equal(hostA.Checksum(), hostB.Checksum());
     }

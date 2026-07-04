@@ -55,7 +55,7 @@ public sealed class CommandStream
     private int _trackedMaxSeq;
     // Saved by Clear() for the Snapshot+Clear+Replay path. When Clear() is
     // called after Snapshot(), the tracked registrations are preserved here
-    // so Replay() can resolve them after World.Replay().
+    // so Replay() can resolve them after the underlying ReplayCore call.
     private Slot?[]? _replayTrackedBySeq;
     private int _replayTrackedMaxSeq;
     // Set by Snapshot(), consumed by Clear(). When true, Clear() preserves
@@ -529,15 +529,13 @@ public sealed class CommandStream
     /// resolves tracked slots at the right time.
     /// </para>
     /// <para>
-    /// The underlying <see cref="World.Replay(FrameDelta)"/> is also available
-    /// for direct use, but does not resolve tracked EntitySlots.
+    /// Note: <see cref="World"/> no longer exposes a public Replay method.
+    /// Use <see cref="Replay(FrameDelta)"/> to replay deltas through this stream.
     /// </para>
     /// </remarks>
     public void Replay(FrameDelta delta)
     {
-#pragma warning disable CS0618 // World.Replay is obsolete but is the implementation we need here.
-        _world.Replay(delta);
-#pragma warning restore CS0618
+        _world.ReplayCore(delta);
 
         // Only resolve tracked slots when replaying our own delta.
         // Peer deltas (deserialized, OriginStream == null) are skipped.
@@ -1581,7 +1579,7 @@ public sealed class CommandStream
         if (_pendingReplay)
         {
             // Snapshot was called before Clear —preserve tracked registrations
-            // so Replay() can resolve them after World.Replay().
+            // so Replay() can resolve them after the underlying ReplayCore call.
             _replayTrackedBySeq = _trackedBySeq;
             _replayTrackedMaxSeq = _trackedMaxSeq;
             _pendingReplay = false;

@@ -2,7 +2,7 @@
 title: Lockstep Playbook
 module: Meta
 description: End-to-end guide for implementing lockstep multiplayer on miniArch — from recording commands to peer synchronization and divergence detection
-updated: 2026-07-03 (FrameDelta.Merge → Concat 重命名)
+updated: 2026-07-04 (World.TryResolvePlaceholder → internal, 改指 EntitySlot)
 ---
 # Lockstep Playbook
 
@@ -65,14 +65,14 @@ stream.DeferredEntities = true;  // Create() 返回 placeholder Entity(-1, seq)
 > **Replay 后查询占位符对应的本地 real entity**：
 > ```csharp
 > world.Replay(deltaA);
-> if (world.TryResolvePlaceholder(myPlaceholder, out var real))
+> var slot = myStream.Track(myPlaceholder);  // auto-resolved on Replay
 > {
 >     // real 在 host A/B/C 上都是同一个 Entity(3, 1)
 >     // 直接存组件跨帧用
 >     world.Set(tracker, new Target { Value = real });
 > }
 > ```
-> 详见 `kb-deferred-create-design.md` TryResolvePlaceholder 节。
+> 详见 `kb-deferred-create-design.md` EntitySlot 节。
 
 ### 3. 多帧合并（可选，网络优化）
 

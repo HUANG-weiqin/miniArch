@@ -165,7 +165,7 @@ public sealed class LockstepSimulator
         foreach (var h in _hosts)
         {
             foreach (var d in deltas)
-                h.World.Replay(d);
+                h.Stream.Replay(d);
         }
     }
 
@@ -173,7 +173,7 @@ public sealed class LockstepSimulator
     {
         var h = _hosts[hostIndex];
         foreach (var d in deltas)
-            h.World.Replay(d);
+            h.Stream.Replay(d);
         RunSystems(h.World, frame);
     }
 

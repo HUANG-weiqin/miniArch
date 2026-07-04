@@ -480,59 +480,24 @@ public sealed partial class World : IDisposable
     }
 
     /// <summary>
-    /// Replays a frame delta into this world: reserves entities, materializes created entities,
-    /// applies hierarchy AddChild/RemoveChild, add/set/remove components, and destroys entities in standard order.
-    /// </summary>
-    /// <remarks>
-    /// Supports both placeholder deltas (<see cref="CommandStream.Snapshot"/>) and real-id deltas
-    /// (<see cref="CommandStream.SubmitAndSnapshotAsync"/>). Placeholder entities (<c>Id == -1</c>)
-    /// allocate fresh local ids via <c>ReserveDeferredEntityUnsafe</c> and are mapped through a
-    /// per-replay <c>seq —local real</c> table. Real-id entities go through
-    /// <see cref="EnsureReplayReservation"/> to verify allocator synchronization.
-    ///
-    /// After replay, use <see cref="TryResolvePlaceholder"/> to convert placeholder entity handles
-    /// to real entity IDs within the current frame. Placeholder handles are **not valid** across
-    /// frames: always store and use the resolved real <see cref="Entity"/> instead.
-    /// <para>
-    /// For tracked entity support (<see cref="CommandStream.Track"/>), use
-    /// <see cref="CommandStream.Replay(FrameDelta)"/> instead, which wraps
-    /// this method and auto-resolves tracked EntitySlots.
-    /// This method will be removed in a future version.
-    /// </para>
-    /// </remarks>
-    [Obsolete("Use CommandStream.Replay(delta) for EntitySlot support. This method will be removed in a future version.")]
-    public void Replay(FrameDelta delta)
-    {
-        ReplayCore(delta);
-    }
-
-    /// <summary>
     /// Attempts to resolve a placeholder entity (<c>Entity(-1, seq)</c>) to its real
-    /// local entity ID after the most recent <see cref="Replay"/> call.
+    /// local entity ID after the most recent <see cref="CommandStream.Replay(FrameDelta)"/> call.
     /// </summary>
     /// <remarks>
     /// <b>Placeholders are valid only against the replay that produced them.</b>
-    /// A subsequent <see cref="Replay"/> call replaces the internal mapping table,
-    /// causing the same placeholder handle to resolve to a different real entity (or
-    /// to fail if the seq is out of range).
+    /// A subsequent <see cref="CommandStream.Replay(FrameDelta)"/> call replaces the
+    /// internal mapping table, causing the same placeholder handle to resolve to a
+    /// different real entity (or to fail if the seq is out of range).
     ///
     /// To safely refer to an entity across frames, resolve the placeholder immediately
-    /// after replay and store the real <see cref="Entity"/>:
-    /// <code>
-    /// world.Replay(delta);
-    /// if (world.TryResolvePlaceholder(created, out var real))
-    /// {
-    ///     world.Set(tracker, new Target { Value = real }); // ✅ store real ID
-    /// }
-    /// </code>
-    /// The real Entity ID is deterministic across hosts when replaying the same deltas.
+    /// after replay via <see cref="CommandStream.Track"/> and <see cref="CommandStream.Replay(FrameDelta)"/>.
     /// </remarks>
     /// <param name="placeholder">A placeholder handle (<c>Entity(-1, seq)</c>).</param>
     /// <param name="real">When this method returns, the resolved real entity;
     /// or <c>default</c> if the placeholder could not be resolved.</param>
     /// <returns><c>true</c> if the placeholder was resolved to a valid real entity;
     /// <c>false</c> if the placeholder is out of range or unmapped.</returns>
-    public bool TryResolvePlaceholder(Entity placeholder, out Entity real)
+    internal bool TryResolvePlaceholder(Entity placeholder, out Entity real)
     {
         if (!placeholder.IsPlaceholder)
         {
@@ -558,7 +523,7 @@ public sealed partial class World : IDisposable
         return true;
     }
 
-    private unsafe void ReplayCore(FrameDelta delta)
+    internal unsafe void ReplayCore(FrameDelta delta)
     {
         ThrowIfDisposed();
 

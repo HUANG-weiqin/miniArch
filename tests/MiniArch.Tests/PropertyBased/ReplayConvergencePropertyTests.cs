@@ -70,8 +70,8 @@ public sealed class ReplayConvergencePropertyTests
                 // local ids during Replay.
                 recorder.Clear();
 
-                replica1.Replay(delta);
-                replica2.Replay(delta);
+                new CommandStream(replica1).Replay(delta);
+                new CommandStream(replica2).Replay(delta);
 
                 // Cumulative check after every frame: any divergence must be
                 // caught at the earliest frame it appears, not just at the end.

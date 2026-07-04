@@ -45,7 +45,7 @@ public sealed class KnownLimitationTests
         var replica = new World();
         try
         {
-            replica.Replay(delta);
+            new CommandStream(replica).Replay(delta);
             Assert.Equal(0, replica.EntityCount);
         }
         finally
@@ -77,7 +77,7 @@ public sealed class KnownLimitationTests
         var replica = new World();
         try
         {
-            replica.Replay(delta); // no throw
+            new CommandStream(replica).Replay(delta); // no throw
             // Parent survives; child was cancelled before materialization.
             Assert.Equal(1, replica.EntityCount);
         }
@@ -111,7 +111,7 @@ public sealed class KnownLimitationTests
         var replica = new World();
         try
         {
-            replica.Replay(delta);
+            new CommandStream(replica).Replay(delta);
             Assert.Equal(0, replica.EntityCount);
         }
         finally
@@ -142,7 +142,7 @@ public sealed class KnownLimitationTests
         var replica = new World();
         try
         {
-            replica.Replay(delta);
+            new CommandStream(replica).Replay(delta);
             Assert.Equal(0, replica.EntityCount);
         }
         finally

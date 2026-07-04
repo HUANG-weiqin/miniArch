@@ -92,7 +92,7 @@ public sealed class CommandStreamTests
         Assert.True(world.TryGet(existing, out Position position));
         Assert.Equal(new Position(0, 0), position);
 
-        world.Replay(delta);
+        new CommandStream(world).Replay(delta);
         Assert.True(world.IsAlive(created));
         Assert.True(world.TryGet(created, out position));
         Assert.Equal(new Position(1, 2), position);
@@ -208,7 +208,7 @@ public sealed class CommandStreamTests
         // Replay into replica
         var replica = new World();
         var replicaEntity = replica.Create(new Position(1, 2), new Velocity(3, 4));
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         Assert.True(replica.IsAlive(clone));
         Assert.True(replica.TryGet(clone, out Position p));
@@ -240,7 +240,7 @@ public sealed class CommandStreamTests
         // Delta is replayable
         var replica = new World();
         var replicaExisting = replica.Create(new Position(0, 0));
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         Assert.True(replica.IsAlive(created));
         Assert.True(replica.TryGet(existing, out Position rp));
@@ -537,7 +537,7 @@ public sealed class CommandStreamTests
         var delta = stream.Snapshot();
 
         var replica = new World();
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         Assert.True(replica.IsAlive(e));
         Assert.True(replica.TryGet(e, out Position p));
@@ -560,7 +560,7 @@ public sealed class CommandStreamTests
 
         var replica = new World();
         var replicaE = replica.Create(new Position(10, 20));
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         Assert.True(replica.TryGet(replicaE, out Position p));
         Assert.Equal(new Position(30, 40), p);
@@ -579,7 +579,7 @@ public sealed class CommandStreamTests
 
         var replica = new World();
         var replicaE = replica.Create(new Position(1, 1));
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         Assert.False(replica.TryGet<Position>(replicaE, out _));
         Assert.True(replica.TryGet(replicaE, out Velocity v));
@@ -598,7 +598,7 @@ public sealed class CommandStreamTests
 
         var replica = new World();
         var replicaE = replica.Create(new Position(1, 2));
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         Assert.False(replica.IsAlive(replicaE));
     }
@@ -617,7 +617,7 @@ public sealed class CommandStreamTests
         var replica = new World();
         var replicaParent = replica.Create();
         var replicaChild = replica.Create();
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         Assert.True(replica.TryGetParent(replicaChild, out var p));
         Assert.Equal(replicaParent, p);
@@ -625,7 +625,7 @@ public sealed class CommandStreamTests
         var stream2 = new CommandStream(source);
         stream2.RemoveChild(child);
         var delta2 = stream2.Snapshot();
-        replica.Replay(delta2);
+        new CommandStream(replica).Replay(delta2);
         Assert.False(replica.TryGetParent(replicaChild, out _));
     }
 
@@ -644,7 +644,7 @@ public sealed class CommandStreamTests
 
         var replica = new World();
         var replicaExisting = replica.Create(new Position(10, 20));
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         Assert.True(replica.IsAlive(created));
         Assert.True(replica.TryGet(created, out Position cp));
@@ -673,7 +673,7 @@ public sealed class CommandStreamTests
 
         var replica = new World();
         var replicaE = replica.Create(new Position(1, 2));
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         Assert.False(replica.IsAlive(replicaE));
     }
@@ -696,7 +696,7 @@ public sealed class CommandStreamTests
         var delta = stream.Snapshot();
 
         var replica = new World();
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         var query = replica.Query(new QueryDescription().With<Position>());
         var count = 0;
@@ -726,7 +726,7 @@ public sealed class CommandStreamTests
         Assert.True(delta.HasEntity(e));
 
         var replica = new World();
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         Assert.True(replica.IsAlive(e));
         Assert.False(replica.TryGet<Position>(e, out _));
@@ -744,7 +744,7 @@ public sealed class CommandStreamTests
         var delta = stream.Snapshot();
 
         var replica = new World();
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         Assert.False(replica.IsAlive(e));
     }
@@ -771,7 +771,7 @@ public sealed class CommandStreamTests
 
         var replica = new World();
         var replicaExisting = replica.Create(new Position(10, 20), new Velocity(5, 6));
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         Assert.True(replica.IsAlive(created1));
         Assert.True(replica.TryGet(created1, out Position cp1));
@@ -1065,7 +1065,7 @@ public sealed class CommandStreamTests
 
         var replica = new World();
         var rExisting = replica.Create(new Position(0, 0));
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         Assert.True(replica.IsAlive(created));
         Assert.True(replica.TryGet(created, out Position cp));
@@ -1169,7 +1169,7 @@ public sealed class CommandStreamTests
 
         var replica = new World();
         var rEntity = replica.Create(new Position(1, 2), new Velocity(3, 4));
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         Assert.True(replica.IsAlive(clone));
         Assert.True(replica.TryGet(clone, out Position p));
@@ -1199,7 +1199,7 @@ public sealed class CommandStreamTests
 
         var replica = new World();
         var rEntity = replica.Create(new Position(1, 2));
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         Assert.True(replica.IsAlive(rEntity));
         Assert.False(replica.IsAlive(clone));
@@ -1225,7 +1225,7 @@ public sealed class CommandStreamTests
         var rChild2 = replica.Create(new Health(100));
         replica.AddChild(rParent, rChild1);
         replica.AddChild(rParent, rChild2);
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         Assert.True(replica.IsAlive(clone));
         Assert.True(replica.TryGet(clone, out Position p));
@@ -1252,7 +1252,7 @@ public sealed class CommandStreamTests
         var replica = new World();
         var rExisting = replica.Create(new Position(10, 20));
         var rToClone = replica.Create(new Velocity(5, 6), new Health(100));
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         // Clone is alive with correct components
         Assert.True(replica.IsAlive(clone));
@@ -1376,7 +1376,7 @@ public sealed class CommandStreamTests
         // Replay all frames into empty world
         var replica = new World();
         foreach (var delta in deltas)
-            replica.Replay(delta);
+            new CommandStream(replica).Replay(delta);
 
         foreach (var entity in survivors)
             AssertEntityStateEquals(source, replica, entity);
@@ -1418,7 +1418,7 @@ public sealed class CommandStreamTests
 
         var replica = new World();
         foreach (var delta in deltas)
-            replica.Replay(delta);
+            new CommandStream(replica).Replay(delta);
 
         Assert.False(replica.IsAlive(victim));
         Assert.True(replica.IsAlive(recycled));
@@ -1466,7 +1466,7 @@ public sealed class CommandStreamTests
 
         var replica = new World();
         foreach (var delta in deltas)
-            replica.Replay(delta);
+            new CommandStream(replica).Replay(delta);
 
         Assert.False(replica.IsAlive(a));
         Assert.False(replica.IsAlive(b));
@@ -1512,7 +1512,7 @@ public sealed class CommandStreamTests
 
         var replica = new World();
         foreach (var delta in deltas)
-            replica.Replay(delta);
+            new CommandStream(replica).Replay(delta);
 
         foreach (var entity in tracked)
             AssertEntityStateEquals(source, replica, entity);
@@ -1620,7 +1620,7 @@ public sealed class CommandStreamTests
 
         // Replay into replica
         var replica = new World();
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         Assert.True(replica.TryGet(a, out Position pa));
         Assert.Equal(new Position(1, 2), pa);
@@ -1677,7 +1677,7 @@ public sealed class CommandStreamTests
 
         var delta = stream.Snapshot();
         stream.Submit();
-        replica.Replay(FrameDelta.Deserialize(delta.AsSpan()));
+        new CommandStream(replica).Replay(FrameDelta.Deserialize(delta.AsSpan()));
 
         Assert.False(source.IsAlive(cancelled));
         Assert.True(source.IsAlive(survivor));
@@ -1697,7 +1697,7 @@ public sealed class CommandStreamTests
         stream.Destroy(entity);
         var destroyDelta = stream.Snapshot();
         stream.Submit();
-        replica.Replay(FrameDelta.Deserialize(destroyDelta.AsSpan()));
+        new CommandStream(replica).Replay(FrameDelta.Deserialize(destroyDelta.AsSpan()));
 
         stream.ParallelRecording = true;
         stream.Set(entity, new Position(10, 20));
@@ -1707,7 +1707,7 @@ public sealed class CommandStreamTests
 
         var staleDelta = stream.Snapshot();
         stream.Submit();
-        replica.Replay(FrameDelta.Deserialize(staleDelta.AsSpan()));
+        new CommandStream(replica).Replay(FrameDelta.Deserialize(staleDelta.AsSpan()));
 
         AssertIdenticalWorlds(source, replica, "parallel stale existing entity component commands");
     }
@@ -1726,7 +1726,7 @@ public sealed class CommandStreamTests
 
         var delta = stream.Snapshot();
         stream.Submit();
-        replica.Replay(FrameDelta.Deserialize(delta.AsSpan()));
+        new CommandStream(replica).Replay(FrameDelta.Deserialize(delta.AsSpan()));
 
         Assert.True(source.TryGet(created, out Position p));
         Assert.Equal(new Position(1, 2), p);
@@ -1813,7 +1813,7 @@ public sealed class CommandStreamTests
 
             var delta = stream.Snapshot();
             stream.Submit();
-            try { replica.Replay(FrameDelta.Deserialize(delta.AsSpan())); }
+            try { new CommandStream(replica).Replay(FrameDelta.Deserialize(delta.AsSpan())); }
             catch (Exception ex) { throw new InvalidOperationException($"Replay failed during fuzz seed={seed}, frame={frame}.", ex); }
             if ((frame + 1) % syncCheckInterval == 0)
                 Assert.Equal(world.EntityCount, replica.EntityCount);
@@ -2216,7 +2216,7 @@ public sealed class DeferredCreateTests
         stream.Clear();
 
         var replica = new World();
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         Assert.Equal(1, CountEntities(replica));
         AssertPosition(replica, 10, 20);
@@ -2236,10 +2236,10 @@ public sealed class DeferredCreateTests
         var wire = delta.AsSpan();
 
         var replicaA = new World();
-        replicaA.Replay(FrameDelta.Deserialize(wire));
+        new CommandStream(replicaA).Replay(FrameDelta.Deserialize(wire));
 
         var replicaB = new World();
-        replicaB.Replay(FrameDelta.Deserialize(wire));
+        new CommandStream(replicaB).Replay(FrameDelta.Deserialize(wire));
 
         var statsA = replicaA.GetStats();
         var statsB = replicaB.GetStats();
@@ -2262,7 +2262,7 @@ public sealed class DeferredCreateTests
         var restored = FrameDelta.Deserialize(wire);
 
         var replica = new World();
-        replica.Replay(restored);
+        new CommandStream(replica).Replay(restored);
 
         Assert.Equal(2, CountEntities(replica));
     }
@@ -2283,8 +2283,8 @@ public sealed class DeferredCreateTests
 
         // A third world replays both deltas in order.
         var replica = new World();
-        replica.Replay(d1);
-        replica.Replay(d2);
+        new CommandStream(replica).Replay(d1);
+        new CommandStream(replica).Replay(d2);
 
         Assert.Equal(2, CountEntities(replica));
     }
@@ -2301,7 +2301,7 @@ public sealed class DeferredCreateTests
         stream.Clear();
 
         var replica = new World();
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         Assert.Equal(2, CountEntities(replica));
         // Find the parent (has Position 0,0) and verify it has children.
@@ -2332,99 +2332,13 @@ public sealed class DeferredCreateTests
         stream.Clear();
 
         var replica = new World();
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         Assert.Equal(1, CountEntities(replica));
     }
 
-    [Fact]
-    public void TryResolvePlaceholder_resolves_to_real_entity()
-    {
-        var host = new World();
-        var stream = MakeStream(host);
-        var placeholder = stream.Create();
-        stream.Add(placeholder, new Position(10, 20));
-        var delta = stream.Snapshot();
-        stream.Clear();
+    
 
-        var replica = new World();
-        replica.Replay(delta);
-
-        var found = replica.TryResolvePlaceholder(placeholder, out var real);
-        Assert.True(found);
-        Assert.True(real.IsValid);
-        Assert.True(replica.IsAlive(real));
-        Assert.Equal(1, CountEntities(replica));
-    }
-
-    [Fact]
-    public void TryResolvePlaceholder_passthrough_non_placeholder()
-    {
-        var host = new World();
-        var stream = MakeStream(host);
-        var placeholder = stream.Create();
-        var delta = stream.Snapshot();
-        stream.Clear();
-
-        var replica = new World();
-        replica.Replay(delta);
-
-        var found = replica.TryResolvePlaceholder(placeholder, out var real);
-        Assert.True(found);
-
-        // Real entity should be passed through when it's not a placeholder
-        var passed = replica.TryResolvePlaceholder(real, out var same);
-        Assert.True(passed);
-        Assert.Equal(real, same);
-    }
-
-    [Fact]
-    public void TryResolvePlaceholder_unknown_returns_false()
-    {
-        var host = new World();
-        var stream = MakeStream(host);
-        var delta = stream.Snapshot();
-        stream.Clear();
-
-        var replica = new World();
-        replica.Replay(delta);
-
-        var found = replica.TryResolvePlaceholder(new Entity(-1, 99), out var result);
-        Assert.False(found);
-        Assert.False(result.IsValid);
-    }
-
-    [Fact]
-    public void TryResolvePlaceholder_then_real_entity_survives_subsequent_replay()
-    {
-        var host = new World();
-        var stream = MakeStream(host);
-        var a = stream.Create();
-        stream.Add(a, new Position(1, 2));
-        var deltaA = stream.Snapshot();
-        stream.Clear();
-
-        var b = stream.Create();
-        stream.Add(b, new Health(50));
-        var deltaB = stream.Snapshot();
-        stream.Clear();
-
-        var replica = new World();
-
-        // Resolve to real Entity ID immediately — don't keep the placeholder.
-        replica.Replay(deltaA);
-        var found = replica.TryResolvePlaceholder(a, out var realA);
-        Assert.True(found);
-        Assert.True(realA.IsValid);
-
-        // Subsequent Replay doesn't invalidate the real Entity ID
-        // (allocator is deterministic, same real ID across all hosts).
-        replica.Replay(deltaB);
-
-        Assert.True(replica.IsAlive(realA));
-        Assert.True(replica.TryGet(realA, out Position pos));
-        Assert.Equal(1, pos.X);
-    }
     // ── Helpers ──────────────────────────────────────────────────
 
     private static int CountEntities(World w)
@@ -2537,7 +2451,7 @@ public sealed class DeferredCreateTests
         stream.Clear();
 
         var replica = new World();
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         // Resolve placeholders to real handles.
         Assert.True(replica.TryResolvePlaceholder(a, out var realA));
@@ -2568,7 +2482,7 @@ public sealed class DeferredCreateTests
 
         var replica = new World();
         var replicaExisting = replica.Create(new Position(0, 0));
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         Assert.True(replica.TryResolvePlaceholder(target, out var realTarget));
         Assert.True(replica.IsAlive(realTarget));
@@ -2595,11 +2509,11 @@ public sealed class DeferredCreateTests
 
         // Replay into world A.
         var worldA = new World();
-        worldA.Replay(delta);
+        new CommandStream(worldA).Replay(delta);
 
         // Replay the same delta into world B.
         var worldB = new World();
-        worldB.Replay(delta);
+        new CommandStream(worldB).Replay(delta);
 
         Assert.True(worldA.TryResolvePlaceholder(target, out var targetA));
         Assert.True(worldA.TryResolvePlaceholder(a, out var aA));

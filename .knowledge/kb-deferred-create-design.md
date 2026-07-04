@@ -91,34 +91,24 @@ updated: 2026-07-04
 | `024de01` | `Clear` 自给自足（覆盖 Submit 异常路径的 id leak）。 |
 | `d45514d` | `CommandStream.Clear` 改 public，支持中继模式。 |
 
-### TryResolvePlaceholder — replay 后查询占位符 → real 映射
+### (已移除公共 API) TryResolvePlaceholder — 改用 EntitySlot
+
+> **2026-07-04 更新**：`World.TryResolvePlaceholder()` 已改为 `internal`，不再暴露为公共 API。
+> 使用 `EntitySlot` + `CommandStream.Track()` 代替手动解析。详见 `EntitySlot` 节。
+
+**遗留设计说明**（仅供内部实现参考）：
 
 **问题**：replay 后用户只有 `Entity(-1, seq)`，不知道它在本地 world 里变成了哪个 real entity。
 
-**方案**：`World.Replay()` 返回 `void`，新增 `World.TryResolvePlaceholder()`：
+**方案**：`World.ReplayCore()` 填充内部 `_replayPlaceholderMap`，`TryResolvePlaceholder()` 查询此映射：
 
 ```csharp
-// 只对本帧有效。跨帧用返回的 real Entity。
-public bool TryResolvePlaceholder(Entity placeholder, out Entity real);
+// 只对本帧有效（internal，仅 CommandStream 内部使用）
+internal bool TryResolvePlaceholder(Entity placeholder, out Entity real);
 ```
 
-**正确用法——立即转 real ID：**
-```csharp
-world.Replay(delta);
-
-if (world.TryResolvePlaceholder(created, out var real))
-{
-    // ✅ real 可以直接存组件跨帧用（所有 host 上值相同）
-    world.Set(tracker, new Target { Value = real });
-}
-// 如果返回 false：placeholder 不在当前 replay 范围内（过期或不存在）
-```
-
-**⚠️ 关键约束**：`TryResolvePlaceholder` 只解析**最近一次 `Replay()` 产生的占位符**。下一个 `Replay()` 会覆盖内部映射表，
+**⚠️ 关键约束**：`TryResolvePlaceholder` 只解析**最近一次 `ReplayCore()` 产生的占位符**。下一个 `ReplayCore()` 会覆盖内部映射表，
 同一个 `Entity(-1, seq)` 会解析到不同的实体或失败。
-
-**为什么没有 `ResolvePlaceholder`（无 bool 返回值）？** 为了防止用户拿过期占位符来问却静默拿到错误实体。
-`bool` 返回值强制调用方检查是否成功。
 
 ## 决策
 

@@ -35,7 +35,7 @@ public sealed class FrameDeltaDeterminismTests
 
         var a = new World();
         var b = new World();
-        foreach (var d in deltas) { a.Replay(d); b.Replay(d); }
+        foreach (var d in deltas) { new CommandStream(a).Replay(d); new CommandStream(b).Replay(d); }
 
         AssertIdentical(a, b, "two empty-world replays");
     }
@@ -47,7 +47,7 @@ public sealed class FrameDeltaDeterminismTests
 
         var a = new World();
         var b = new World();
-        foreach (var d in deltas) { a.Replay(d); b.Replay(d); }
+        foreach (var d in deltas) { new CommandStream(a).Replay(d); new CommandStream(b).Replay(d); }
 
         AssertIdentical(a, b, "two fresh worlds, same delta sequence");
     }
@@ -65,7 +65,7 @@ public sealed class FrameDeltaDeterminismTests
         var (source, deltas) = BuildComplexScenario();
 
         var replica = new World();
-        foreach (var d in deltas) replica.Replay(d);
+        foreach (var d in deltas) new CommandStream(replica).Replay(d);
 
         AssertIdentical(source, replica, "Submit(source) vs Replay(replica)");
     }
@@ -79,7 +79,7 @@ public sealed class FrameDeltaDeterminismTests
         for (var i = 0; i < replicas.Length; i++)
         {
             replicas[i] = new World();
-            foreach (var d in deltas) replicas[i].Replay(d);
+            foreach (var d in deltas) new CommandStream(replicas[i]).Replay(d);
         }
 
         for (var i = 1; i < replicas.Length; i++)
@@ -123,7 +123,7 @@ public sealed class FrameDeltaDeterminismTests
 
         var a = new World();
         var b = new World();
-        foreach (var d in deltas) { a.Replay(d); b.Replay(d); }
+        foreach (var d in deltas) { new CommandStream(a).Replay(d); new CommandStream(b).Replay(d); }
 
         AssertIdentical(a, b, "after id recycling");
         AssertIdentical(source, a, "source vs replica after id recycling");
@@ -163,7 +163,7 @@ public sealed class FrameDeltaDeterminismTests
         var replica1 = new World();
         var replica2 = new World();
         foreach (var delta in deltas)
-        { replica1.Replay(delta); replica2.Replay(delta); }
+        { new CommandStream(replica1).Replay(delta); new CommandStream(replica2).Replay(delta); }
 
         AssertIdentical(replica1, replica2, "hierarchy evolution");
         AssertIdentical(source, replica1, "source vs replica hierarchy");
@@ -205,7 +205,7 @@ public sealed class FrameDeltaDeterminismTests
         var replica1 = new World();
         var replica2 = new World();
         foreach (var delta in deltas)
-        { replica1.Replay(delta); replica2.Replay(delta); }
+        { new CommandStream(replica1).Replay(delta); new CommandStream(replica2).Replay(delta); }
 
         AssertIdentical(replica1, replica2, "after clone");
         AssertIdentical(source, replica1, "source vs replica after clone");
@@ -252,7 +252,7 @@ public sealed class FrameDeltaDeterminismTests
         var replica1 = new World();
         var replica2 = new World();
         foreach (var delta in deltas)
-        { replica1.Replay(delta); replica2.Replay(delta); }
+        { new CommandStream(replica1).Replay(delta); new CommandStream(replica2).Replay(delta); }
 
         AssertIdentical(replica1, replica2, "after batch spawn + prune");
         AssertIdentical(source, replica1, "source vs replica after batch spawn");
@@ -278,7 +278,7 @@ public sealed class FrameDeltaDeterminismTests
         // Diverge: create an entity in slot 0 directly (not via the delta)
         divergent.Create(new Position(99, 99));
 
-        var ex = Assert.Throws<InvalidOperationException>(() => divergent.Replay(delta));
+        var ex = Assert.Throws<InvalidOperationException>(() => new CommandStream(divergent).Replay(delta));
         Assert.Contains("out of sync", ex.Message);
     }
 
@@ -301,9 +301,9 @@ public sealed class FrameDeltaDeterminismTests
         deltas.Add(stream.Snapshot()); stream.Submit();
 
         var replica = new World();
-        replica.Replay(deltas[0]);
+        new CommandStream(replica).Replay(deltas[0]);
         // deliberately skip deltas[1]
-        Assert.Throws<InvalidOperationException>(() => replica.Replay(deltas[2]));
+        Assert.Throws<InvalidOperationException>(() => new CommandStream(replica).Replay(deltas[2]));
     }
 
     // ══════════════════════════════════════════════════════════—
@@ -420,7 +420,7 @@ public sealed class FrameDeltaDeterminismTests
         var restored = FrameDelta.Deserialize(wire);
 
         var target = new World();
-        target.Replay(restored);
+        new CommandStream(target).Replay(restored);
         AssertIdentical(source, target, "CB single delta round-trip");
     }
 
@@ -439,7 +439,7 @@ public sealed class FrameDeltaDeterminismTests
         var restored = FrameDelta.Deserialize(wire);
 
         var target = new World();
-        target.Replay(restored);
+        new CommandStream(target).Replay(restored);
         AssertIdentical(source, target, "CS single delta round-trip");
     }
 
@@ -465,7 +465,7 @@ public sealed class FrameDeltaDeterminismTests
         var restored = FrameDelta.Deserialize(wire);
 
         var target = new World();
-        target.Replay(restored);
+        new CommandStream(target).Replay(restored);
         AssertIdentical(source, target, "CB concat destroy-recycle round-trip");
     }
 
@@ -494,7 +494,7 @@ public sealed class FrameDeltaDeterminismTests
         var restored = FrameDelta.Deserialize(wire);
 
         var target = new World();
-        target.Replay(restored);
+        new CommandStream(target).Replay(restored);
         AssertIdentical(source, target, "CB 3-concat round-trip");
     }
 
@@ -517,7 +517,7 @@ public sealed class FrameDeltaDeterminismTests
         var restored = FrameDelta.Deserialize(wire);
 
         var target = new World();
-        target.Replay(restored);
+        new CommandStream(target).Replay(restored);
         AssertIdentical(source, target, "CS 2-concat round-trip");
     }
 
@@ -540,7 +540,7 @@ public sealed class FrameDeltaDeterminismTests
         var restored = FrameDelta.Deserialize(wire);
 
         var target = new World();
-        target.Replay(restored);
+        new CommandStream(target).Replay(restored);
         AssertIdentical(source, target, "CB+CS concat round-trip");
     }
 
@@ -553,7 +553,7 @@ public sealed class FrameDeltaDeterminismTests
         var restored = FrameDelta.Deserialize(wire);
 
         var target = new World();
-        target.Replay(restored);
+        new CommandStream(target).Replay(restored);
         AssertIdentical(source, target, "complex 5-frame merged round-trip");
     }
 
@@ -664,7 +664,7 @@ public sealed class FrameDeltaDeterminismTests
         var delta = buffer.Snapshot(); buffer.Submit();
 
         var replica = new World();
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         AssertIdentical(source, replica, "AddChild + Set same frame");
     }
@@ -689,8 +689,8 @@ public sealed class FrameDeltaDeterminismTests
         var delta2 = buffer2.Snapshot(); buffer2.Submit();
 
         var replica = new World();
-        replica.Replay(delta1);
-        replica.Replay(delta2);
+        new CommandStream(replica).Replay(delta1);
+        new CommandStream(replica).Replay(delta2);
 
         AssertIdentical(source, replica, "AddChild + Destroy parent same frame");
     }
@@ -709,7 +709,7 @@ public sealed class FrameDeltaDeterminismTests
         var delta = buffer.Snapshot(); buffer.Submit();
 
         var replica = new World();
-        replica.Replay(delta);
+        new CommandStream(replica).Replay(delta);
 
         AssertIdentical(source, replica, "Create + AddChild + Add same frame");
     }
@@ -731,8 +731,8 @@ public sealed class FrameDeltaDeterminismTests
         var delta2 = buffer2.Snapshot(); buffer2.Submit();
 
         var replica = new World();
-        replica.Replay(delta1);
-        replica.Replay(delta2);
+        new CommandStream(replica).Replay(delta1);
+        new CommandStream(replica).Replay(delta2);
 
         AssertIdentical(source, replica, "RemoveChild + Set same frame");
     }
@@ -755,8 +755,8 @@ public sealed class FrameDeltaDeterminismTests
         var delta2 = buffer2.Snapshot(); buffer2.Submit();
 
         var replica = new World();
-        replica.Replay(delta1);
-        replica.Replay(delta2);
+        new CommandStream(replica).Replay(delta1);
+        new CommandStream(replica).Replay(delta2);
 
         AssertIdentical(source, replica, "Set + RemoveChild same frame");
     }
