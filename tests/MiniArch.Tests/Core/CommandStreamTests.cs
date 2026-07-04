@@ -2312,7 +2312,7 @@ public sealed class DeferredCreateTests
             {
                 if (replica.Get<Position>(entity).X == 0)
                 {
-                    Assert.True(replica.Hierarchy.HasChildren(entity));
+                    Assert.True(replica.Hierarchy.HasChildren(replica, entity));
                     hasHierarchy = true;
                 }
             }

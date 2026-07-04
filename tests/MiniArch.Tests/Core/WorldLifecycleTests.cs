@@ -649,6 +649,18 @@ public sealed class WorldLifecycleTests
         Assert.False(world.HasChildren(parent));
     }
 
+    [Fact]
+    public void HasChildren_returns_false_for_stale_entity()
+    {
+        var world = new World();
+        var parent = world.Create();
+        var child = world.Create();
+        world.AddChild(parent, child);
+        Assert.True(world.HasChildren(parent));
+        world.Destroy(parent);
+        Assert.False(world.HasChildren(parent));
+    }
+
     private static void WarmupDestroyCascadeAllocations()
     {
         var world = new World();

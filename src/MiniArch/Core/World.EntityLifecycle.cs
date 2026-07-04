@@ -84,7 +84,7 @@ public sealed partial class World
     {
         ThrowIfDisposed();
 
-        if (!_hierarchy.HasChildren(entity))
+        if (!_hierarchy.HasChildren(this, entity))
         {
             DestroySingle(entity);
             return;

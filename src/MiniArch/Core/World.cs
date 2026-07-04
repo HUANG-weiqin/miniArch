@@ -227,7 +227,7 @@ public sealed partial class World : IDisposable
     public bool HasChildren(Entity entity)
     {
         ThrowIfDisposed();
-        return _hierarchy.HasChildren(entity);
+        return _hierarchy.HasChildren(this, entity);
     }
 
     /// <summary>
@@ -347,7 +347,7 @@ public sealed partial class World : IDisposable
 
     private void DeepCloneChildren(Entity sourceRoot, Entity cloneRoot)
     {
-        if (!_hierarchy.HasChildren(sourceRoot)) return;
+        if (!_hierarchy.HasChildren(this, sourceRoot)) return;
 
         var stack = ArrayPool<CloneWork>.Shared.Rent(16);
         var stackCount = 0;

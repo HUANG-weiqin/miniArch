@@ -1288,7 +1288,7 @@ public sealed class CommandStream
 
     private void CloneChildrenRecursive(Entity sourceRoot, Entity cloneRoot)
     {
-        if (!_world.Hierarchy.HasChildren(sourceRoot)) return;
+        if (!_world.Hierarchy.HasChildren(_world, sourceRoot)) return;
 
         var stack = ArrayPool<Entity>.Shared.Rent(32);
         var cloneStack = ArrayPool<Entity>.Shared.Rent(32);
