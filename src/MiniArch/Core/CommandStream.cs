@@ -50,9 +50,14 @@ public sealed class CommandStream
     // ── EntitySlot tracking ──────────────────────────────────────────
     // Registration array indexed by placeholder seq. Each entry is a linked
     // list of Slot objects that want to be notified when this seq is resolved.
-    // Cleared (Array.Clear + _trackedMaxSeq=0) after each resolution pass.
+    // Cleared after each resolution pass.
     private Slot?[] _trackedBySeq = [];
     private int _trackedMaxSeq;
+    // Saved by Clear() for the Snapshot+Clear+Replay path. When Clear() is
+    // called after Snapshot(), the tracked registrations are preserved here
+    // so Replay() can resolve them after World.Replay().
+    private Slot?[]? _replayTrackedBySeq;
+    private int _replayTrackedMaxSeq;
 
     // ── Construction ───────────────────────────────────────────────────
 
@@ -157,12 +162,26 @@ public sealed class CommandStream
         var slot = new Slot { Entity = entity };
         var seq = entity.Version;
 
+        if (_parallelMode)
+        {
+            lock (_storeCreateLock)
+                RegisterTrackedSlot(slot, seq);
+        }
+        else
+        {
+            RegisterTrackedSlot(slot, seq);
+        }
+
+        return new EntitySlot(slot);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void RegisterTrackedSlot(Slot slot, int seq)
+    {
         EnsureCapacity(ref _trackedBySeq, seq, 16);
         slot.Next = _trackedBySeq[seq];
         _trackedBySeq[seq] = slot;
         if (seq >= _trackedMaxSeq) _trackedMaxSeq = seq + 1;
-
-        return new EntitySlot(slot);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1553,6 +1572,13 @@ public sealed class CommandStream
             if (releaseReserved) _world.TryReleaseReserved(entity);
         }
         _deferredSeq = 0;
+        // Save tracked slots for the pending Replay path, then reset.
+        // ResolveDeferredCreates and ResolveTrackedSlotsFromReplay read from
+        // _replayTrackedBySeq when they detect a pending snapshot-replay cycle.
+        _replayTrackedBySeq = _trackedBySeq;
+        _replayTrackedMaxSeq = _trackedMaxSeq;
+        _trackedBySeq = [];
+        _trackedMaxSeq = 0;
         _frozen.DestroyCount = 0;
         _frozen.PendingBatchCount = 0;
         _frozen.CancelledBatchCount = 0;
@@ -1607,12 +1633,17 @@ public sealed class CommandStream
     /// </summary>
     private void ResolveTrackedSlotsFromReplay()
     {
-        if (_trackedMaxSeq == 0) return;
+        var slots = _replayTrackedBySeq;
+        var maxSeq = _replayTrackedMaxSeq;
+        _replayTrackedBySeq = null;
+        _replayTrackedMaxSeq = 0;
 
-        var max = Math.Min(_trackedMaxSeq, _trackedBySeq.Length);
+        if (maxSeq == 0) return;
+
+        var max = Math.Min(maxSeq, slots!.Length);
         for (var seq = 0; seq < max; seq++)
         {
-            var s = _trackedBySeq[seq];
+            var s = slots[seq];
             if (s is null) continue;
 
             if (_world.TryResolvePlaceholder(new Entity(-1, seq), out var real))
@@ -1626,24 +1657,19 @@ public sealed class CommandStream
                 }
             }
 
-            _trackedBySeq[seq] = null;
+            slots[seq] = null;
         }
-
-        _trackedMaxSeq = 0;
     }
 
     private void ResolveDeferredCreates()
     {
+        // Discard any pending-replay registrations —they belong to a
+        // previous Snapshot+Clear cycle that was not followed by Replay.
+        _replayTrackedBySeq = null;
+        _replayTrackedMaxSeq = 0;
+
         if (_deferredSeq == 0)
-        {
-            // No deferred creates to resolve, but clear any stale tracked slots.
-            if (_trackedMaxSeq > 0)
-            {
-                Array.Clear(_trackedBySeq, 0, _trackedMaxSeq);
-                _trackedMaxSeq = 0;
-            }
             return;
-        }
 
         var resolveMap = _resolveMapPool ?? [];
         _resolveMapPool = null;
@@ -2062,63 +2088,4 @@ public sealed class CommandStream
             BatchBuf, BatchEntities, PendingBatchCount);
     }
 
-    // ── EntitySlot types ──────────────────────────────────────────────
-
-    /// <summary>
-    /// Internal mutable state shared between all copies of an <see cref="EntitySlot"/>.
-    /// One instance is allocated per <see cref="CommandStream.Track"/> call on a placeholder entity.
-    /// </summary>
-    internal sealed class Slot
-    {
-        /// <summary>The current entity value: placeholder before resolution, real after.</summary>
-        internal Entity Entity;
-
-        /// <summary>Linked-list pointer for registration in <c>_trackedBySeq</c>. Nulled after resolution.</summary>
-        internal Slot? Next;
-    }
-
-    /// <summary>
-    /// A tracked entity handle that auto-updates when a deferred placeholder is resolved.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Obtain an EntitySlot via <see cref="CommandStream.Track"/>. The <see cref="Value"/>
-    /// property returns the placeholder entity before resolution and the real entity after
-    /// <see cref="CommandStream.Submit"/> or <see cref="CommandStream.Replay(FrameDelta)"/>.
-    /// </para>
-    /// <para>
-    /// <b>EntitySlot cannot be stored in ECS components</b> (it contains reference types and
-    /// is not <c>unmanaged</c>). Store <see cref="Entity"/> (via <c>slot.Value</c>) in
-    /// component fields instead —the existing <c>EntityFieldResolver</c> handles auto-resolution
-    /// of component fields independently.
-    /// </para>
-    /// </remarks>
-    public readonly struct EntitySlot
-    {
-        private readonly Entity _entity;
-        private readonly Slot? _slot;
-
-        /// <summary>Creates an EntitySlot wrapping an inline real entity (non-deferred mode).</summary>
-        internal EntitySlot(Entity entity)
-        {
-            _entity = entity;
-            _slot = null;
-        }
-
-        /// <summary>Creates an EntitySlot wrapping a mutable Slot (deferred mode).</summary>
-        internal EntitySlot(Slot slot)
-        {
-            _entity = default;
-            _slot = slot;
-        }
-
-        /// <summary>
-        /// The current entity. Returns the placeholder before resolution,
-        /// the real entity after Submit/Replay.
-        /// </summary>
-        public Entity Value => _slot is not null ? _slot.Entity : _entity;
-
-        /// <summary>Whether this slot holds a non-default entity handle.</summary>
-        public bool HasValue => Value != default;
-    }
 }
