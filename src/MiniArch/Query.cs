@@ -188,10 +188,11 @@ public readonly struct Query
     /// <see cref="IChunkForEach.OnChunk"/> call is devirtualised to the
     /// concrete <typeparamref name="TForEach"/> type.
     /// <para>
-    /// <typeparamref name="TForEach"/> is passed by value and captured into
-    /// each <c>Parallel.For</c> worker. For stateful per-worker accumulation,
-    /// use <c>[ThreadStatic]</c> fields inside the struct rather than mutating
-    /// the struct itself.
+    /// <typeparamref name="TForEach"/> is captured into the <c>Parallel.For</c>
+    /// delegate — all workers share the same captured instance. Do not mutate
+    /// fields from <see cref="IChunkForEach.OnChunk"/>; the struct must be
+    /// stateless or thread-safe. For per-worker accumulation, use
+    /// <c>[ThreadStatic]</c> fields or explicit synchronization inside the struct.
     /// </para>
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -285,10 +286,10 @@ public delegate void ChunkAction(ChunkView chunk);
 /// (useful for accumulators).
 /// </para>
 /// <para>
-/// <b>Parallel usage</b> (<c>in</c> parameter): the struct is copied into
-/// each worker; per-worker accumulation must use <c>[ThreadStatic]</c>
-/// fields inside the struct rather than mutating the struct itself, since
-/// each worker observes its own copy.
+/// <b>Parallel usage</b> (by-value parameter): the struct is captured into
+/// the <c>Parallel.For</c> delegate — all workers share the same captured
+/// instance. Do not mutate fields from <see cref="OnChunk"/>; for per-worker
+/// accumulation use <c>[ThreadStatic]</c> fields or explicit synchronization.
 /// </para>
 /// </remarks>
 public interface IChunkForEach
