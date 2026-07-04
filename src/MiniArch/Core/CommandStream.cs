@@ -488,9 +488,14 @@ public sealed class CommandStream
     /// </para>
     /// <para>
     /// For the relay-only flow (produce delta, do not apply locally),
-    /// call <c>Snapshot()</c> then <c>Clear()</c>. The source host then
-    /// replays the delta back into its own world —together with all peer
-    /// deltas —achieving the deterministic multi-host guarantee.
+    /// call <c>Snapshot()</c> then <c>Clear()</c>. The source host must
+    /// replay the <b>local</b> delta object (the one returned by
+    /// <c>Snapshot</c>) —not a deserialized copy received via network.
+    /// Only the local object retains the internal marker that triggers
+    /// tracked <see cref="EntitySlot"/> resolution. Peer hosts receive
+    /// serialized copies (which lose the marker) and have no tracked
+    /// slots to resolve. World-state convergence is identical either way:
+    /// <see cref="Replay(FrameDelta)"/> processes the same byte payload.
     /// </para>
     /// </remarks>
     public FrameDelta Snapshot()

@@ -727,6 +727,16 @@ public sealed class FrameDelta
     /// each time), avoiding this issue entirely; do not concatenate placeholder
     /// deltas across streams.
     /// </para>
+    /// <para>
+    /// <b>Concat and EntitySlot:</b> the result always has
+    /// <c>OriginStream == null</c> (the internal marker is not copied), so
+    /// <see cref="CommandStream.Replay(FrameDelta)"/> never triggers tracked
+    /// <see cref="EntitySlot"/> resolution on a concatenated delta —tracked
+    /// slots stay as placeholders. This is intentional: even if the marker
+    /// were restored, seq collisions across the concatenated deltas would
+    /// resolve slots to wrong entities. The relay-only host must replay its
+    /// own un-concatenated delta to resolve slots.
+    /// </para>
     /// </remarks>
     public static FrameDelta Concat(FrameDelta a, FrameDelta b)
     {
