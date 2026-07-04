@@ -43,4 +43,16 @@ public readonly struct EntitySlot
 
     /// <summary>Whether this slot holds a non-default entity handle.</summary>
     public bool HasValue => Value != default;
+
+    /// <summary>
+    /// Implicit conversion to <see cref="Entity"/>. Returns the current value
+    /// of <see cref="Value"/> —placeholder before resolution, real entity after.
+    /// </summary>
+    /// <remarks>
+    /// This allows passing an <see cref="EntitySlot"/> directly to any method
+    /// that accepts <see cref="Entity"/> (e.g. <see cref="CommandStream.Add{T}"/>,
+    /// <see cref="CommandStream.Set{T}"/>, <see cref="CommandStream.Destroy"/>).
+    /// The conversion always returns the best-known entity at call time.
+    /// </remarks>
+    public static implicit operator Entity(EntitySlot slot) => slot.Value;
 }

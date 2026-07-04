@@ -145,6 +145,29 @@ public sealed class EntitySlotTests
         Assert.False(slot.HasValue);
     }
 
+    [Fact]
+    public void Track_implicit_conversion_works_before_and_after_Submit()
+    {
+        var world = new World();
+        var stream = MakeStream(world);
+
+        var slot = stream.Track(stream.Create());
+
+        // Before Submit: implicit conversion returns placeholder.
+        Entity before = slot;
+        Assert.True(before.IsPlaceholder);
+
+        stream.Add(slot, new Health(7));  // implicit conversion in API call
+        stream.Submit();
+
+        // After Submit: implicit conversion returns real entity.
+        Entity after = slot;
+        Assert.False(after.IsPlaceholder);
+        Assert.True(world.IsAlive(after));
+        Assert.True(world.TryGet(after, out Health hp));
+        Assert.Equal(7, hp.Value);
+    }
+
     // ── Replay path (lockstep relay) ──────────────────────────────
 
     [Fact]

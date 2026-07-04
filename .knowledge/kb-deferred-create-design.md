@@ -193,11 +193,13 @@ stream.Submit();  // 或 Snapshot() + Replay()
 
 ```csharp
 var slot = stream.Track(stream.Create());
-stream.Add(slot.Value, new Health(100));  // slot.Value 是 placeholder，组件自动解析
+stream.Add(slot, new Health(100));  // 隐式转换 → slot.Value，placeholder 阶段组件自动解析
 stream.Submit();
-// slot.Value 现在是 real Entity ✅，跨帧持有也有效
-world.Get<Health>(slot.Value);
+// slot 现在是 real Entity ✅，跨帧持有也有效
+world.Get<Health>(slot);            // 隐式转换，等价于 slot.Value
 ```
+
+`EntitySlot` 有到 `Entity` 的隐式转换（`implicit operator Entity`），可以直接传给任何接受 `Entity` 的方法。
 
 ### 锁步中继模式
 
@@ -215,9 +217,10 @@ slot.Value  // real Entity ✅
 
 ### 约束
 
-- EntitySlot 不能当组件用（含引用类型，不是 unmanaged）。组件里用 `Entity`（`slot.Value`）。
+- EntitySlot 不能当组件用（含引用类型，不是 unmanaged）。组件里用 `Entity`（`slot.Value` 或隐式转换）。
 - 非延迟模式下 Track 零分配（Entity 内联存储）。
 - 延迟模式下每个 Track 分配一个小的 `Slot` 对象（opt-in）。
+- `EntitySlot → Entity` 隐式转换始终返回当前最佳值（placeholder 或 real），安全无副作用。
 
 ## 坑点
 
