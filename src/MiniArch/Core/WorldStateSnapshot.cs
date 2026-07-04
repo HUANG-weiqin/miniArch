@@ -211,8 +211,14 @@ internal struct ArchetypeBackupEntry
             for (var i = 0; i < SegmentCount; i++)
             {
                 ref var seg = ref arch.GetSegmentRef(i);
-                Array.Copy(SegmentEntities[i], seg.Entities, SegmentEntities[i].Length);
-                Array.Copy(SegmentData[i], seg.Data, SegmentData[i].Length);
+                // Copy at most the destination capacity — SegmentEntities[i]
+                // / SegmentData[i] may be larger than seg.Entities / seg.Data
+                // when the backup pool reused an entry from an archetype with
+                // larger segments. CopyFromChunked only fills up to
+                // seg.Entities.Length / seg.Data.Length, so the extra tail
+                // slots contain stale data from a prior capture.
+                Array.Copy(SegmentEntities[i], seg.Entities, seg.Entities.Length);
+                Array.Copy(SegmentData[i], seg.Data, seg.Data.Length);
                 seg.Count = SegmentCounts[i];
             }
             arch.SetCount(Count);
