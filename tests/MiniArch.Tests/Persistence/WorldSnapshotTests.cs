@@ -963,6 +963,59 @@ public sealed class WorldSnapshotTests
         Assert.Equal(new Velocity(3, 4), v2);
     }
 
+    // BUG REPROOF: when two archetypes with different segment capacities
+    // (and thus different segment array sizes) are captured, the backup pool
+    // reuses arrays sized for the larger archetype when backing up the
+    // smaller one. RestoreTo then copies SegmentEntities[i].Length /
+    // SegmentData[i].Length (the oversized length) into the smaller
+    // destination arrays, causing ArgumentException.
+    //
+    // Empty archetype → _segmentCapacity = 65536.
+    // BigPayload (~516 bytes) → _segmentCapacity = 4096.
+    [Fact]
+    public void BUG_chunked_restore_pooled_larger_backup_arrays_overflow_smaller_destination()
+    {
+        var world = new World();
+
+        // Phase 1: create empty entity + BigPayload entity, force-chunk both
+        // archetypes so they expose standard-capacity segments.
+        var empty = world.Create();
+        Assert.True(world.TryGetLocation(empty, out var emptyLoc));
+        var archEmpty = emptyLoc.Archetype;
+        archEmpty.ForceChunkedForTesting();    // segment arrays sized to 65536
+
+        var bp = world.Create(new BigPayload(1));
+        Assert.True(world.TryGetLocation(bp, out var bpLoc));
+        var archBP = bpLoc.Archetype;
+        archBP.ForceChunkedForTesting();       // segment arrays sized to 4096
+
+        // Capture: both archetypes non-empty → two backup slots.
+        // Slot 0 = Empty archetype (inserted first), segment arrays of size 65536.
+        var snap = world.CaptureState();
+
+        // Restore returns the snapshot to the pool.
+        world.RestoreState(snap);
+
+        // Phase 2: destroy the empty entity so its archetype becomes empty
+        // and is skipped during the second capture. Only BigPayload remains
+        // non-empty, reusing backup slot 0 whose arrays are oversized.
+        world.Destroy(empty);
+
+        // Capture again — the pool pops the recycled snapshot whose
+        // ArchetypeBackups[0] still holds Empty's 65536-length arrays.
+        // CopyFromChunked(BigPayload) reuses them (65536 >= 4096).
+        snap = world.CaptureState();
+
+        // Old code: RestoreTo copies SegmentEntities[0].Length (65536)
+        // into archBP's segment[0].Entities (4096) → ArgumentException.
+        // Fix: copies seg.Entities.Length (4096) instead.
+        var ex = Record.Exception(() => world.RestoreState(snap));
+        Assert.Null(ex);
+
+        Assert.True(world.IsAlive(bp));
+        Assert.Equal(new BigPayload(1), GetComponent<BigPayload>(world, bp));
+    }
+
     private readonly struct NoOpFeeder : Archetype.ISpanFeeder
     {
         public void Feed(ReadOnlySpan<byte> span) { }
