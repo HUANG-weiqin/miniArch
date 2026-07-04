@@ -1532,6 +1532,71 @@ public sealed class CommandStream
 
     // ── Deferred entity resolution ────────────────────────────────────
 
+    // ── EntitySlot resolution ────────────────────────────────────────
+
+    /// <summary>
+    /// Resolves all tracked slots using a Submit-path resolve map.
+    /// Called at the end of <see cref="ResolveDeferredCreates"/>.
+    /// </summary>
+    private void ResolveTrackedSlots(Entity[] resolveMap, int mapLen)
+    {
+        if (_trackedMaxSeq == 0) return;
+
+        var max = Math.Min(_trackedMaxSeq, _trackedBySeq.Length);
+        for (var seq = 0; seq < max; seq++)
+        {
+            var s = _trackedBySeq[seq];
+            if (s is null) continue;
+
+            var hasReal = (uint)seq < (uint)mapLen && resolveMap[seq].Id >= 0;
+
+            while (s is not null)
+            {
+                var next = s.Next;
+                if (hasReal)
+                    s.Entity = resolveMap[seq];
+                s.Next = null;  // break chain so Slot doesn't retain linked list
+                s = next;
+            }
+
+            _trackedBySeq[seq] = null;
+        }
+
+        _trackedMaxSeq = 0;
+    }
+
+    /// <summary>
+    /// Resolves all tracked slots using the World's replay placeholder map.
+    /// Called after <see cref="Replay(FrameDelta)"/> when the delta is this
+    /// stream's own (detected via <see cref="FrameDelta.OriginStream"/>).
+    /// </summary>
+    private void ResolveTrackedSlotsFromReplay()
+    {
+        if (_trackedMaxSeq == 0) return;
+
+        var max = Math.Min(_trackedMaxSeq, _trackedBySeq.Length);
+        for (var seq = 0; seq < max; seq++)
+        {
+            var s = _trackedBySeq[seq];
+            if (s is null) continue;
+
+            if (_world.TryResolvePlaceholder(new Entity(-1, seq), out var real))
+            {
+                while (s is not null)
+                {
+                    var next = s.Next;
+                    s.Entity = real;
+                    s.Next = null;
+                    s = next;
+                }
+            }
+
+            _trackedBySeq[seq] = null;
+        }
+
+        _trackedMaxSeq = 0;
+    }
+
     private void ResolveDeferredCreates()
     {
         if (_deferredSeq == 0)
