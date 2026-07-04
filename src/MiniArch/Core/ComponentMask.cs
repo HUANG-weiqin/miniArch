@@ -46,7 +46,7 @@ internal readonly struct ComponentMask : IEquatable<ComponentMask>
     public override bool Equals(object? obj) => obj is ComponentMask other && Equals(other);
 
     public override int GetHashCode() =>
-        unchecked((int)(B0 ^ B1 ^ B2 ^ B3 ^ B4 ^ B5 ^ B6 ^ B7));
+        HashCode.Combine(B0, B1, B2, B3, B4, B5, B6, B7);
 
     /// <summary>
     /// Returns true when every bit set in <paramref name="other"/> is also set
