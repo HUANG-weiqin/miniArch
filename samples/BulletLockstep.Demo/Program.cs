@@ -297,20 +297,17 @@ static int RunSlice8(int hostCount, int frameCount)
     return 0;
 }
 
-// ── Slice 9: World.Clone + FrameDelta.Concat ─────────────────────────
-// Three sub-verifications:
+// ── Slice 9: World.Clone + replay-buffer rollback ────────────────────
+// Two sub-verifications:
 //   A. World.Clone produces a fully decoupled world with identical state;
 //      running both forward identically keeps them in lockstep.
-//   B. FrameDelta.Concat: replaying N sequential deltas produces the same
-//      final state as replaying the concatenated single delta (network
-//      coalescing is lossless).
-//   C. Replay-buffer rollback: a host saves a World.Clone snapshot, runs
+//   B. Replay-buffer rollback: a host saves a World.Clone snapshot, runs
 //      forward with WRONG inputs, discards its world, restarts from the
 //      cloned snapshot, runs forward with CORRECT inputs -> converges with
 //      hosts that never rolled back.
 static int RunSlice9(int hostCount, int frameCount)
 {
-    Console.WriteLine($"BulletLockstep Slice 9 (World.Clone + FrameDelta.Concat)");
+    Console.WriteLine($"BulletLockstep Slice 9 (World.Clone + rollback)");
     Console.WriteLine($"  {hostCount} hosts");
     Console.WriteLine();
 
@@ -328,21 +325,8 @@ static int RunSlice9(int hostCount, int frameCount)
         anyFail |= !ok;
     }
 
-    // ── Phase B: FrameDelta.Concat ───────────────────────────────────
-    Console.WriteLine("[Phase B] FrameDelta.Concat == sequential replay");
-    {
-        var sim = new LockstepSimulator(hostCount) { SpawnPlayers = true, SpawnBoss = true };
-        const int warm = 10;
-        const int concatCount = 5;
-        for (var f = 0; f < warm; f++)
-            sim.Tick(f);
-        var (ok, detail) = NetcodeVerification.VerifyFrameDeltaConcat(sim, warm, concatCount);
-        ReportPhase("B", ok, detail);
-        anyFail |= !ok;
-    }
-
-    // ── Phase C: Replay-buffer rollback ──────────────────────────────
-    Console.WriteLine("[Phase C] Rollback via World.Clone snapshot");
+    // ── Phase B: Replay-buffer rollback ──────────────────────────────
+    Console.WriteLine("[Phase B] Rollback via World.Clone snapshot");
     {
         // Full pipeline config (players + boss). Host 0 captures a Clone at
         // frame `warm`, then `window` authoritative frames run on top. Host 0

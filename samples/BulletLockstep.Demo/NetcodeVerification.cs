@@ -4,9 +4,9 @@ using MiniArch.Core;
 
 namespace BulletLockstep.Demo;
 
-// Slice 9 utilities: FrameDelta.Concat verification and World.Clone-based
-// replay-buffer rollback. These exercise the netcode-focused APIs that
-// complement the lockstep core (Slice 1-7) and authority topology (Slice 8).
+// Slice 9 utilities: World.Clone-based replay-buffer rollback.
+// These exercise the netcode-focused APIs that complement the lockstep core
+// (Slice 1-7) and authority topology (Slice 8).
 //
 // All methods are deterministic and verify CanonicalChecksum byte-equality
 // across the compared paths.
@@ -60,66 +60,6 @@ public static class NetcodeVerification
             return (false, $"clone diverged after 5 forward frames:\n  orig:  {Convert.ToHexString(c)}\n  clone: {Convert.ToHexString(d2)}");
 
         return (true, $"clone byte-identical initially and after 5 forward frames");
-    }
-
-    // Verifies FrameDelta.Concat semantics: replaying `count` sequential deltas
-    // produces the same world state as replaying their Concat() output once.
-    public static (bool Ok, string Detail) VerifyFrameDeltaConcat(LockstepSimulator sim, int startFrame, int count)
-    {
-        // Path A: collect `count` frames of deltas, replay each sequentially
-        // on a fresh world.
-        var worldA = new World();
-        // Path B: collect same deltas, concat them, replay concatenated on a fresh world.
-        var worldB = new World();
-
-        // To collect deltas, we drive the simulator. But the simulator also
-        // applies them to its own hosts. We capture the deltas via the out
-        // parameter and replay onto our fresh worlds.
-        FrameDelta merged = null!;
-        for (var i = 0; i < count; i++)
-        {
-            sim.Tick(startFrame + i, out var deltas);
-            // Each frame's "delta" is an array of per-host deltas. Concatenate
-            // them via Concat on path B. Replay each on path A.
-            foreach (var d in deltas)
-            {
-                new CommandStream(worldA).Replay(d);
-                merged = merged is null ? d : FrameDelta.Concat(merged, d);
-            }
-        }
-        new CommandStream(worldB).Replay(merged);
-
-        // Run the same deterministic systems on both (post-replay state).
-        // Must match LockstepSimulator.RunSystems order exactly.
-        var finalFrame = startFrame + count - 1;
-        foreach (var w in new[] { worldA, worldB })
-        {
-            if (sim.SpawnBoss)
-                HomingBulletSteerSystem.Run(w);
-            BulletMoveSystem.Run(w);
-            if (sim.SpawnPlayers)
-                CollisionSystem.Run(w);
-            BulletLifetimeSystem.Run(w, finalFrame);
-            if (sim.SpawnBoss)
-            {
-                BossAISystem.Run(w, finalFrame);
-                WeakPointFollowSystem.Run(w);
-            }
-            if (sim.SpawnPlayers)
-            {
-                BurningTriggerSystem.Run(w, finalFrame, hostCount: sim.HostCount);
-                ShieldGrantSystem.Run(w, finalFrame, hostCount: sim.HostCount);
-                TickDamageSystem.Run(w);
-                StatusTimerSystem.Run(w);
-            }
-        }
-
-        var a = worldA.CanonicalChecksum();
-        var b = worldB.CanonicalChecksum();
-        if (!BytesEqual(a, b))
-            return (false, $"Concat replay diverged from sequential replay:\n  seq:    {Convert.ToHexString(a)}\n  concat: {Convert.ToHexString(b)}");
-
-        return (true, $"Concat({count} deltas) replay == sequential replay");
     }
 
     private static bool BytesEqual(byte[] a, byte[] b)

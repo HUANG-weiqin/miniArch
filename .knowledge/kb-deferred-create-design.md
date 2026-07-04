@@ -138,6 +138,18 @@ if (world.TryResolvePlaceholder(placeholder, out var real))
 
 **已定**：`Entity[]` 按 seq 索引。每帧 `mapLen = 0` 重置，`EnsurePlaceholderMap` lazy 扩容 + 初始化 sentinel。`TryResolvePlaceholder` 直接查询此内部映射。
 
+### 决策 #5：FrameDelta 不内置可序列化来源标识
+
+**已定**：FrameDelta 不携带任何可序列化的来源指纹（host id / source id / fingerprint）。来源标识是传输层职责，由用户在 FrameDelta 外面包一层 Envelope 实现。
+
+**理由**：
+- 没有任何真实网络游戏只传裸 FrameDelta——传输层信封（frame number、ack 等）是必需品，不是可选项。Envelope 里多一个 `SourceHostId` 字段不构成额外代价。
+- sourceId 的语义（host id？player id？session id？）由具体网络架构决定，ECS 核心猜不准，硬编码反而限制灵活性。
+- FrameDelta 是纯操作序列；混入传输层元数据违反概念唯一。
+- 序列化体积增加是热路径代价，对 ECS 核心（EntitySlot resolve 只需 own/peer 二分）零收益。
+
+**现状**：`FrameDelta.OriginStream`（`internal`，不序列化的内存引用）仅用于 own/peer 二分判断——`Replay(delta)` 通过 `ReferenceEquals(delta.OriginStream, this)` 检测"是不是自己 Snapshot 出来的"。反序列化后自然为 null，恰是接收方需要的正确值。这不构成"来源标识"——它只回答"是不是我的"，不回答"来自谁"。
+
 ## 用户指南：组件 Entity 字段自动解析
 
 从 `Component<T>` 组件字段可以直接存放 `Entity` 值，指向同帧 deferred 创建的实体。

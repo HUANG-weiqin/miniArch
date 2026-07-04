@@ -123,7 +123,6 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - Varint codec显式拒绝 5 字节 / 32 位溢出
 - `AsSpan()` 直接 `new(_buffer, 0, _length)` —— 零拷贝网络发送
 - `Deserialize` 只是 `wire.ToArray()` + 一次走读计数
-- `Concat(a, b)` 是 15 行 `Array.Copy` 拼接，**不做语义折叠**——时序信息完整保留，跨帧 id 回收自然正确
 - 两种 entity-id 模式（placeholder vs real），wire format 相同，由 `CommandStream.DeferredEntities` flag 控制 producer 行为
 
 ### 10. World（编排者）
@@ -204,7 +203,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - **两层 archetype lookup**：Signature dict（权威）+ Mask dict（canonical-only，零分配 Replay 路径），每层职责单一
 - **两段式 query 失效**：archetypeCount 粗扫 + per-archetype segment count 细扫
 - **CommandStream typed store**：替代旧 entry stream 后反超 Friflo，详见 `kb-command-stream.md` vs Friflo 段
-- **FrameDelta packed byte format**：单一 buffer + varint + tag，零拷贝网络发送，Concat 退化到 Array.Copy
+- **FrameDelta packed byte format**：单一 buffer + varint + tag，零拷贝网络发送
 - **`MoveEntityCore` + `FinishMoveEntity` 分离**：带 catch rollback，便于批量 materialize 复用
 - **`[SkipLocalsInit]` / `AggressiveInlining` / `Unsafe.As<byte,T>`** 系统化性能卫生
 - **Add/Set alias 文档化**、`Unsafe`/`Try` 前缀一致——命名诚实贯穿全库

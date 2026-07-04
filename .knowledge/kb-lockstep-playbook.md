@@ -74,22 +74,13 @@ stream.DeferredEntities = true;  // Create() 返回 placeholder Entity(-1, seq)
 > ```
 > 详见 `kb-deferred-create-design.md` EntitySlot 节。
 
-### 3. 多帧合并（可选，网络优化）
-
-```csharp
-// 把多帧 delta 合并成一个发送，省网络头开销
-var merged = FrameDelta.Concat(delta1, delta2);
-// Concat 是纯 Array.Copy 拼接，不做语义折叠
-// 详见 kb-command-stream.md Concat 段
-```
-
 ## 决定性行为
 
 | 性质 | 状态 | 验证测试 |
 |------|------|---------|
 | 同一 delta 序列重放到 N 个 world → 状态一致 | ✅ | `FrameDeltaDeterminismTests` |
 | Submit(源) == Replay(副本) | ✅（避开同帧 Remove+Add 同组件） | `Submit_*_converges_with_replay` |
-| 跨帧 id 回收正确 | ✅（Concat 是纯拼接） | `CB_destroy_then_recycle_round_trip_preserves_id_allocation` |
+| 跨帧 id 回收正确 | ✅ | `CB_destroy_then_recycle_round_trip_preserves_id_allocation` |
 | Placeholder→local id 映射 | ✅ | `kb-deferred-create-design.md` ReplayCore 段 |
 
 ## Divergence 检测
@@ -104,7 +95,7 @@ var merged = FrameDelta.Concat(delta1, delta2);
 | 问题 | 状态 | 备注 |
 |------|------|------|
 | 传输层（UDP/TCP/WebSocket） | ❌ | `socket.Send` 是伪代码，transport 由调用方实现 |
-| 丢包/乱序重排 | ❌ | Concat 不排序，调用方需按帧号排序后 Concat |
+| 丢包/乱序重排 | ❌ | 调用方需按帧号排序后逐个 Replay |
 | Late-join / 断线重连 | ❌ | 无 checkpoint / id remap 机制 |
 | Divergent peer resync | ❌ | `EnsureReplayReservation` 抛异常而非尝试对齐 |
 | Client prediction + rollback | ⚠️ 有基础 | `CaptureState/RestoreState` 支持 GGPO 式原地回滚，但无 netcode 层集成 |
@@ -117,6 +108,5 @@ var merged = FrameDelta.Concat(delta1, delta2);
 | 步骤 2a-2b 录制+生成 delta | `kb-command-stream.md`（CommandStream API + FrameDelta wire format） |
 | 步骤 2c-2d 序列化 | `kb-command-stream.md`（AsSpan / Deserialize） |
 | 步骤 2e replay | `kb-command-stream.md`（ReplayCore + EnsureReplayReservation） |
-| 步骤 3 Concat | `kb-command-stream.md`（Concat + id 回收段） |
 | 步骤 2g checksum | `kb-snapshot-persistence.md`（Checksum 双模式段） |
 | Rollback 基础 | `kb-snapshot-persistence.md`（CaptureState/RestoreState） |
