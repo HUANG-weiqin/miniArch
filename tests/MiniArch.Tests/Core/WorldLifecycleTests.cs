@@ -434,13 +434,13 @@ public sealed class WorldLifecycleTests
         Assert.Equal([firstChild, secondChild], children.OrderBy(entity => entity.Id).ToArray());
     }
 
-    private static MiniQuery CreateQuery<T>(World world)
+    private static MiniQuery CreateQuery<T>(World world) where T : unmanaged
     {
         var description = new QueryDescription().With<T>();
         return MiniQuery.Create(world, in description);
     }
 
-    private static MiniQuery CreateQuery<T1, T2>(World world)
+    private static MiniQuery CreateQuery<T1, T2>(World world) where T1 : unmanaged where T2 : unmanaged
     {
         var description = new QueryDescription().With<T1>().With<T2>();
         return MiniQuery.Create(world, in description);

@@ -29,7 +29,7 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
     /// <summary>
     /// Adds a required type.
     /// </summary>
-    public QueryDescription With<T>()
+    public QueryDescription With<T>() where T : unmanaged
     {
         var required = _required.Add(typeof(T));
         return required.Equals(_required) ? this : new QueryDescription(required, _excluded, _any);
@@ -38,7 +38,7 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
     /// <summary>
     /// Adds an excluded type.
     /// </summary>
-    public QueryDescription Without<T>()
+    public QueryDescription Without<T>() where T : unmanaged
     {
         var excluded = _excluded.Add(typeof(T));
         return excluded.Equals(_excluded) ? this : new QueryDescription(_required, excluded, _any);
@@ -47,7 +47,7 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
     /// <summary>
     /// Adds an any-match type.
     /// </summary>
-    public QueryDescription WithAny<T>()
+    public QueryDescription WithAny<T>() where T : unmanaged
     {
         var any = _any.Add(typeof(T));
         return any.Equals(_any) ? this : new QueryDescription(_required, _excluded, any);
