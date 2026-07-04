@@ -603,16 +603,22 @@ public sealed partial class World : IDisposable
                             // replayed into multiple worlds). Use a pooled scratch buffer
                             // instead of stackalloc to avoid per-op stack accumulation.
                             var pooled = ArrayPool<byte>.Shared.Rent(dataSize);
-                            fixed (byte* pScratch = pooled)
+                            try
                             {
-                                Unsafe.CopyBlockUnaligned(pScratch, src, (uint)dataSize);
-                                EntityFieldResolver.ResolveInPlace(
-                                    new Span<byte>(pScratch, dataSize), comp,
-                                    new ReadOnlySpan<Entity>(map, 0, mapLen));
-                                var loc = RequireLocation(entity);
-                                ApplyRawAdd(entity, loc, comp, pScratch);
+                                fixed (byte* pScratch = pooled)
+                                {
+                                    Unsafe.CopyBlockUnaligned(pScratch, src, (uint)dataSize);
+                                    EntityFieldResolver.ResolveInPlace(
+                                        new Span<byte>(pScratch, dataSize), comp,
+                                        new ReadOnlySpan<Entity>(map, 0, mapLen));
+                                    var loc = RequireLocation(entity);
+                                    ApplyRawAdd(entity, loc, comp, pScratch);
+                                }
                             }
-                            ArrayPool<byte>.Shared.Return(pooled);
+                            finally
+                            {
+                                ArrayPool<byte>.Shared.Return(pooled);
+                            }
                         }
                         else
                         {
@@ -633,16 +639,22 @@ public sealed partial class World : IDisposable
                         if (EntityFieldResolver.GetOffsets(comp).Length > 0)
                         {
                             var pooled = ArrayPool<byte>.Shared.Rent(dataSize);
-                            fixed (byte* pScratch = pooled)
+                            try
                             {
-                                Unsafe.CopyBlockUnaligned(pScratch, src, (uint)dataSize);
-                                EntityFieldResolver.ResolveInPlace(
-                                    new Span<byte>(pScratch, dataSize), comp,
-                                    new ReadOnlySpan<Entity>(map, 0, mapLen));
-                                var loc = RequireLocation(entity);
-                                ApplyRawSet(entity, loc, comp, pScratch);
+                                fixed (byte* pScratch = pooled)
+                                {
+                                    Unsafe.CopyBlockUnaligned(pScratch, src, (uint)dataSize);
+                                    EntityFieldResolver.ResolveInPlace(
+                                        new Span<byte>(pScratch, dataSize), comp,
+                                        new ReadOnlySpan<Entity>(map, 0, mapLen));
+                                    var loc = RequireLocation(entity);
+                                    ApplyRawSet(entity, loc, comp, pScratch);
+                                }
                             }
-                            ArrayPool<byte>.Shared.Return(pooled);
+                            finally
+                            {
+                                ArrayPool<byte>.Shared.Return(pooled);
+                            }
                         }
                         else
                         {
