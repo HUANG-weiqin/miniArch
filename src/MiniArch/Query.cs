@@ -146,33 +146,17 @@ public readonly struct Query
     /// Safe for component value reads/writes via <c>chunk.GetSpan&lt;T&gt;()</c>.
     /// NOT safe for structural changes (Add/Remove/Create/Destroy) — collect entity ids
     /// and apply via <see cref="MiniArch.Core.CommandStream"/> after this call returns.
+    /// <para>
+    /// This overload delegates to <see cref="ForEachChunkParallel{TForEach}(TForEach)"/>
+    /// via the <see cref="ActionChunkForEach"/> adapter, so the parallelism
+    /// logic is not duplicated.
+    /// </para>
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void ForEachChunkParallel(ChunkAction action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        var chunks = _query.GetChunkViewArray(out var count);
-        if (count == 0)
-            return;
-
-        var threads = Environment.ProcessorCount;
-        if (count >= threads)
-        {
-            Parallel.For(0, count, i => action(chunks[i]));
-            return;
-        }
-
-        // Fewer chunks than threads — split entity ranges within chunks.
-        BuildEntityRangePartitions(chunks, count, threads, out var partitionArray, out var partitionCount);
-        if (partitionCount == 0)
-            return;
-        if (partitionCount == 1)
-        {
-            action(partitionArray[0]);
-            return;
-        }
-
-        Parallel.For(0, partitionCount, i => action(partitionArray[i]));
+        ForEachChunkParallel(new ActionChunkForEach(action));
     }
 
     /// <summary>
@@ -259,6 +243,17 @@ public readonly struct Query
         arr = new ChunkView[minLength];
         t_partitions = arr;
         return arr;
+    }
+
+    /// <summary>
+    /// Adapter that bridges <see cref="ChunkAction"/> delegates into
+    /// <see cref="IChunkForEach"/>, enabling the delegate-based
+    /// <see cref="ForEachChunkParallel(ChunkAction)"/> to reuse the
+    /// struct-generic parallelism logic without duplicating it.
+    /// </summary>
+    private readonly struct ActionChunkForEach(ChunkAction _action) : IChunkForEach
+    {
+        public void OnChunk(ChunkView chunk) => _action(chunk);
     }
 }
 
