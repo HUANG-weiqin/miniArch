@@ -12,7 +12,7 @@ public sealed partial class World
     /// <exception cref="InvalidOperationException">The entity already has a component of type <typeparamref name="T"/>.</exception>
     public void Add<T>(Entity entity, T component) where T : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         ApplyTypedAdd(entity, GetComponentType<T>(), in component);
     }
 
@@ -22,7 +22,7 @@ public sealed partial class World
     /// <exception cref="InvalidOperationException">The entity does not have a component of type <typeparamref name="T"/>.</exception>
     public void Set<T>(Entity entity, T component) where T : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         ApplyTypedSet(entity, GetComponentType<T>(), in component);
     }
 
@@ -31,7 +31,7 @@ public sealed partial class World
     /// </summary>
     public void Remove<T>(Entity entity) where T : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var componentType = GetComponentType<T>();
         RemoveBoxed(entity, componentType);
     }

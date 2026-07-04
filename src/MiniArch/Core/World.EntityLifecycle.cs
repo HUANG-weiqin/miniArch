@@ -13,7 +13,7 @@ public sealed partial class World
     /// </summary>
     public Entity Create()
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var archetype = GetOrCreateArchetype(Signature.Empty)!;
         return CreateInArchetype(archetype, out _);
     }
@@ -23,7 +23,7 @@ public sealed partial class World
     /// </summary>
     public void CreateMany(Span<Entity> entities)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         if (entities.Length == 0)
         {
             return;
@@ -50,7 +50,7 @@ public sealed partial class World
     /// </summary>
     public void EnsureCapacity(int entityCapacity)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         if (entityCapacity < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(entityCapacity));
@@ -82,7 +82,7 @@ public sealed partial class World
     /// </remarks>
     public void Destroy(Entity entity)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
 
         if (!_hierarchy.HasChildren(this, entity))
         {
@@ -118,7 +118,7 @@ public sealed partial class World
 
     internal bool TryGetLocation(Entity entity, out EntityInfo info)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         if (entity.Id < 0 || entity.Id >= _entitySlotCount)
         {
             info = default;
@@ -142,7 +142,7 @@ public sealed partial class World
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool IsAlive(Entity entity)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
 
         if ((uint)entity.Id >= (uint)_entitySlotCount)
             return false;
@@ -161,7 +161,7 @@ public sealed partial class World
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool TryGetRecord(Entity entity, out EntityRecord record)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         if ((uint)entity.Id >= (uint)_entitySlotCount) { record = default; return false; }
         ref var r = ref _records[entity.Id];
         if (!r.IsOccupied || r.Version != entity.Version) { record = default; return false; }

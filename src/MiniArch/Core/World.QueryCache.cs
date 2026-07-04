@@ -9,7 +9,7 @@ public sealed partial class World
     /// </summary>
     public Query Query(in QueryDescription description)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         return new Query(GetAdvancedQuery(in description));
     }
 
@@ -30,7 +30,7 @@ public sealed partial class World
     /// </exception>
     public Entity GetSingleton<T>() where T : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var componentType = Component<T>.ComponentType;
         Entity found = default;
         var seen = 0;

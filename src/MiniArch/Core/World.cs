@@ -123,7 +123,7 @@ public sealed partial class World : IDisposable
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     [Conditional("DEBUG")]
-    private void ThrowIfDisposed()
+    private void AssertNotDisposed()
     {
         if (_disposed) throw new ObjectDisposedException(nameof(World));
     }
@@ -188,7 +188,7 @@ public sealed partial class World : IDisposable
     /// </summary>
     public void AddChild(Entity parent, Entity child)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         _hierarchy.AddChild(this, parent, child);
     }
 
@@ -197,7 +197,7 @@ public sealed partial class World : IDisposable
     /// </summary>
     public void RemoveChild(Entity child)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         RequireLocation(child);
         _hierarchy.RemoveChild(child);
     }
@@ -207,7 +207,7 @@ public sealed partial class World : IDisposable
     /// </summary>
     public bool TryGetParent(Entity child, out Entity parent)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         return _hierarchy.TryGetParent(this, child, out parent);
     }
 
@@ -217,7 +217,7 @@ public sealed partial class World : IDisposable
     /// </summary>
     public ChildrenEnumerable EnumerateChildren(Entity parent)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         return _hierarchy.EnumerateChildren(this, parent);
     }
 
@@ -226,7 +226,7 @@ public sealed partial class World : IDisposable
     /// </summary>
     public bool HasChildren(Entity entity)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         return _hierarchy.HasChildren(this, entity);
     }
 
@@ -235,7 +235,7 @@ public sealed partial class World : IDisposable
     /// </summary>
     public bool TryGet<T>(Entity entity, out T component) where T : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         if (!TryGetLocation(entity, out var info))
         {
             component = default!;
@@ -260,7 +260,7 @@ public sealed partial class World : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Has<T>(Entity entity) where T : unmanaged
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         if ((uint)entity.Id >= (uint)_entitySlotCount)
             return false;
 
@@ -310,7 +310,7 @@ public sealed partial class World : IDisposable
     /// </remarks>
     public EntityAccessor Access(Entity entity)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         if (!TryGetLocation(entity, out var info))
         {
             throw new InvalidOperationException(
@@ -330,7 +330,7 @@ public sealed partial class World : IDisposable
     /// <exception cref="InvalidOperationException">Thrown when <paramref name="source"/> is no longer alive.</exception>
     public Entity Clone(Entity source)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var root = CloneSingle(source);
         DeepCloneChildren(source, root);
         return root;
@@ -525,7 +525,7 @@ public sealed partial class World : IDisposable
 
     internal unsafe void ReplayCore(FrameDelta delta)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
 
         // Pre-scan: size archetype storage and the entity record array up-front
         // so the main pass never hits a doubling resize on the hot Create path.
@@ -1004,7 +1004,7 @@ public sealed partial class World : IDisposable
     /// </summary>
     public WorldStateSnapshot CaptureState()
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         var snap = _stateSnapshotPool.Count > 0
             ? _stateSnapshotPool.Pop()
             : new WorldStateSnapshot();
@@ -1062,7 +1062,7 @@ public sealed partial class World : IDisposable
     /// </exception>
     public void RestoreState(WorldStateSnapshot snapshot)
     {
-        ThrowIfDisposed();
+        AssertNotDisposed();
         ArgumentNullException.ThrowIfNull(snapshot);
         if (snapshot._isRecycled)
         {
