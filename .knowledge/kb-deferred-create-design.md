@@ -148,7 +148,7 @@ if (world.TryResolvePlaceholder(placeholder, out var real))
 - FrameDelta 是纯操作序列；混入传输层元数据违反概念唯一。
 - 序列化体积增加是热路径代价，对 ECS 核心（EntitySlot resolve 只需 own/peer 二分）零收益。
 
-**现状**：`FrameDelta.OriginStream`（`internal`，不序列化的内存引用）仅用于 own/peer 二分判断——`Replay(delta)` 通过 `ReferenceEquals(delta.OriginStream, this)` 检测"是不是自己 Snapshot 出来的"。反序列化后自然为 null，恰是接收方需要的正确值。这不构成"来源标识"——它只回答"是不是我的"，不回答"来自谁"。
+**现状**：`CommandStream.Replay(delta, resolveSlots)` 由用户显式控制是否解析 tracked slots。默认 `false`（不解析），用户在自己的 delta 上传 `true`。FrameDelta 不携带任何来源标记——用户通过外部 Envelope（SourceHostId 等）判断哪个是自己的。
 
 ## 用户指南：组件 Entity 字段自动解析
 
@@ -211,11 +211,11 @@ var myDelta = stream.Snapshot();
 stream.Clear();
 // ... 网络交换 ...
 foreach (var delta in allDeltas)
-    stream.Replay(delta);   // 自动识别自己的 delta，解析 slots
+    stream.Replay(delta, resolveSlots: delta == myDelta);
 slot.Value  // real Entity ✅
 ```
 
-`stream.Replay(delta)` 包装了 `world.Replay(delta)`，通过 `FrameDelta.OriginStream` 自动检测哪个 delta 是自己产的，只在自己的 delta replay 后解析 tracked slots。
+`stream.Replay(delta, resolveSlots)` 包装了 `world.Replay(delta)`。对 own delta 传 `resolveSlots: true`，对 peer delta 用默认 `false`。用户通过外部 Envelope（`SourceHostId`）判断哪个是自己的。
 
 ### 约束
 

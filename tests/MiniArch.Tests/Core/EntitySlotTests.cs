@@ -241,8 +241,8 @@ public sealed class EntitySlotTests
         // Relay-only: Clear done, Replay not yet —slot is still placeholder.
         Assert.True(slot.Value.IsPlaceholder);
 
-        // Replay own delta —should auto-resolve slot.
-        stream.Replay(delta);
+        // Replay own delta —explicit resolveSlots triggers slot resolution.
+        stream.Replay(delta, resolveSlots: true);
 
         Assert.False(slot.Value.IsPlaceholder);
         Assert.True(world.IsAlive(slot.Value));
@@ -273,8 +273,8 @@ public sealed class EntitySlotTests
         var peerDelta = FrameDelta.Deserialize(bytes);
         var streamPeer = MakeStream(worldPeer);
 
-        // Source replays own delta (original, OriginStream intact).
-        streamSrc.Replay(delta);
+        // Source replays own delta with resolveSlots: true.
+        streamSrc.Replay(delta, resolveSlots: true);
         Assert.False(slot.Value.IsPlaceholder);
         Assert.True(worldSrc.IsAlive(slot.Value));
 
@@ -303,12 +303,12 @@ public sealed class EntitySlotTests
         var deltaB = streamB.Snapshot();
         streamB.Clear();
 
-        // Host B replays both deltas. deltaA is NOT streamB's own (OriginStream != streamB).
+        // Host B replays both deltas. deltaA is a peer delta.
         streamB.Replay(deltaA);
         // slotB should NOT be resolved yet —deltaB hasn't been replayed.
         Assert.True(slotB.Value.IsPlaceholder);
 
-        streamB.Replay(deltaB);
+        streamB.Replay(deltaB, resolveSlots: true);
         // NOW slotB resolves —deltaB is streamB's own.
         Assert.False(slotB.Value.IsPlaceholder);
         Assert.True(hostB.IsAlive(slotB.Value));
@@ -333,13 +333,13 @@ public sealed class EntitySlotTests
 
         // Each host replays both deltas in order.
         // Host A:
-        streamA.Replay(deltaA);  // own —resolves slotA
-        streamA.Replay(deltaB);  // peer —no effect on slotA
+        streamA.Replay(deltaA, resolveSlots: true);  // own —resolves slotA
+        streamA.Replay(deltaB);                       // peer —no effect on slotA
         Assert.True(worldA.IsAlive(slotA.Value));
 
         // Host B:
-        streamB.Replay(deltaA);  // peer —no effect on slotB
-        streamB.Replay(deltaB);  // own —resolves slotB
+        streamB.Replay(deltaA);                       // peer —no effect on slotB
+        streamB.Replay(deltaB, resolveSlots: true);  // own —resolves slotB
         Assert.True(worldB.IsAlive(slotB.Value));
 
         // Slots resolved to different entities (different hosts' entities).
@@ -357,7 +357,7 @@ public sealed class EntitySlotTests
         stream.Add(slot.Value, new Health(1));
         var delta1 = stream.Snapshot();
         stream.Clear();
-        stream.Replay(delta1);
+        stream.Replay(delta1, resolveSlots: true);
 
         var realEntity = slot.Value;
         Assert.True(world.IsAlive(realEntity));
@@ -367,7 +367,7 @@ public sealed class EntitySlotTests
         stream.Add(slot2.Value, new Health(2));
         var delta2 = stream.Snapshot();
         stream.Clear();
-        stream.Replay(delta2);
+        stream.Replay(delta2, resolveSlots: true);
 
         // Original slot still valid.
         Assert.Equal(realEntity, slot.Value);
@@ -376,9 +376,10 @@ public sealed class EntitySlotTests
     }
 
     [Fact]
-    public void Track_Replay_deserialized_delta_does_not_trigger_resolution()
+    public void Track_Replay_deserialized_delta_resolves_with_explicit_flag()
     {
-        // Simulate receiving own delta back via network (deserialized).
+        // Deserialized delta (e.g. received via network) can still resolve
+        // slots —the user just passes resolveSlots: true explicitly.
         var world = new World();
         var stream = MakeStream(world);
 
@@ -386,17 +387,23 @@ public sealed class EntitySlotTests
         var delta = stream.Snapshot();
         stream.Clear();
 
-        // Serialize and deserialize —loses OriginStream.
+        // Serialize and deserialize —simulates network round-trip.
         var bytes = delta.AsSpan().ToArray();
         var deserialized = FrameDelta.Deserialize(bytes);
 
-        stream.Replay(deserialized);
-        // Deserialized delta has OriginStream == null —not recognized as own.
-        // Slot is NOT resolved (placeholder still).
-        Assert.True(slot.Value.IsPlaceholder);
+        // Default: no resolution.
+        // (Use a fresh world so we can replay the same delta twice without
+        // double-applying.)
+        var world2 = new World();
+        var stream2 = MakeStream(world2);
+        var slot2 = stream2.Track(stream2.Create());
+        stream2.Snapshot();
+        stream2.Clear();
+        stream2.Replay(deserialized);
+        Assert.True(slot2.Value.IsPlaceholder);
 
-        // Now replay the ORIGINAL delta —resolves correctly.
-        stream.Replay(delta);
+        // Explicit resolveSlots: true triggers resolution.
+        stream.Replay(deserialized, resolveSlots: true);
         Assert.False(slot.Value.IsPlaceholder);
         Assert.True(world.IsAlive(slot.Value));
     }

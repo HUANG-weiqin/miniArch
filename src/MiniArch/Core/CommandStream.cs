@@ -505,14 +505,12 @@ public sealed class CommandStream
             ResolveDeferredCreates();
             var delta = new FrameDelta();
             BuildDelta(delta);
-            delta.OriginStream = this;
             _pendingReplay = true;
             return delta;
         }
         ThrowIfSnapshotHasImmediateEntities();
         var d = new FrameDelta();
         BuildDelta(d);
-        d.OriginStream = this;
         _pendingReplay = true;
         return d;
     }
@@ -520,31 +518,27 @@ public sealed class CommandStream
     // ── Replay ───────────────────────────────────────────────────────
 
     /// <summary>
-    /// Replays a <see cref="FrameDelta"/> into the underlying <see cref="World"/>
-    /// and, if the delta was produced by this stream's <see cref="Snapshot"/>,
-    /// automatically resolves all tracked <see cref="EntitySlot"/>s.
+    /// Replays a <see cref="FrameDelta"/> into the underlying <see cref="World"/>.
     /// </summary>
-    /// <param name="delta">The delta to replay. Can be from any source —only
-    /// deltas produced by this stream's <see cref="Snapshot"/> trigger slot
-    /// resolution (detected via internal <see cref="FrameDelta.OriginStream"/>).</param>
+    /// <param name="delta">The delta to replay.</param>
+    /// <param name="resolveSlots">When <c>true</c>, resolves all tracked
+    /// <see cref="EntitySlot"/>s using the placeholder map produced by this
+    /// replay. Pass <c>true</c> only for your own delta —the delta whose
+    /// placeholders you registered via <see cref="Track"/>.</param>
     /// <remarks>
-    /// <para>
-    /// In a lockstep setup, replay all peer deltas and your own delta through
-    /// this method. The stream automatically recognizes its own delta and
-    /// resolves tracked slots at the right time.
-    /// </para>
+    /// In a lockstep setup, replay all peer deltas with
+    /// <paramref name="resolveSlots"/> = <c>false</c> (the default), and
+    /// replay your own delta with <c>true</c>.
     /// <para>
     /// Note: <see cref="World"/> no longer exposes a public Replay method.
-    /// Use <see cref="Replay(FrameDelta)"/> to replay deltas through this stream.
+    /// Use this method to replay deltas.
     /// </para>
     /// </remarks>
-    public void Replay(FrameDelta delta)
+    public void Replay(FrameDelta delta, bool resolveSlots = false)
     {
         _world.ReplayCore(delta);
 
-        // Only resolve tracked slots when replaying our own delta.
-        // Peer deltas (deserialized, OriginStream == null) are skipped.
-        if (ReferenceEquals(delta.OriginStream, this))
+        if (resolveSlots)
             ResolveTrackedSlotsFromReplay();
     }
 
@@ -1648,8 +1642,8 @@ public sealed class CommandStream
 
     /// <summary>
     /// Resolves all tracked slots using the World's replay placeholder map.
-    /// Called after <see cref="Replay(FrameDelta)"/> when the delta is this
-    /// stream's own (detected via <see cref="FrameDelta.OriginStream"/>).
+    /// Called after <see cref="Replay(FrameDelta, bool)"/> when
+    /// <paramref name="resolveSlots"/> is <c>true</c>.
     /// </summary>
     private void ResolveTrackedSlotsFromReplay()
     {
