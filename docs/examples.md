@@ -479,7 +479,7 @@ for (var i = 0; i < 3; i++)
 readonly record struct Position(float X, float Y);
 ```
 
-> **Key constraint:** Mirror clients must replay the same delta sequence from frame 0 (empty world) to keep ID allocators in sync. `World.EnsureReplayReservation` enforces this — if a replay tries to allocate an ID that the local allocator has already passed, it throws.
+> **Key constraint:** Mirror clients must replay the same delta sequence from frame 0 (empty world) to keep ID allocators in sync. The replay system enforces this — if a replay tries to allocate an ID that the local allocator has already passed, it throws.
 
 ---
 

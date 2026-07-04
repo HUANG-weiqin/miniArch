@@ -31,7 +31,7 @@ namespace MiniArch.Core;
 /// <see cref="CommandStream.DeferredEntities"/> is <c>false</c>
 /// (default). Ids are already resolved by the producer. Mirror clients
 /// must have synchronized id allocators (e.g. by replaying every frame
-/// since frame 0). <c>World.EnsureReplayReservation</c> enforces this
+/// since frame 0). The replay system enforces this
 /// invariant and throws if the allocator has diverged.
 /// </item>
 /// </list>
