@@ -47,6 +47,13 @@ public sealed class CommandStream
     private Entity _lastCreated;
     private int _lastCreatedBatch = -1;
 
+    // ── EntitySlot tracking ──────────────────────────────────────────
+    // Registration array indexed by placeholder seq. Each entry is a linked
+    // list of Slot objects that want to be notified when this seq is resolved.
+    // Cleared (Array.Clear + _trackedMaxSeq=0) after each resolution pass.
+    private Slot?[] _trackedBySeq = [];
+    private int _trackedMaxSeq;
+
     // ── Construction ───────────────────────────────────────────────────
 
     public CommandStream(World world)
@@ -118,6 +125,44 @@ public sealed class CommandStream
                 return _deferredEntities ? CreateDeferredImpl() : CreateImpl();
         }
         return _deferredEntities ? CreateDeferredImpl() : CreateImpl();
+    }
+
+    // ── EntitySlot API ───────────────────────────────────────────────
+
+    /// <summary>
+    /// Creates a tracked handle for <paramref name="entity"/> that auto-updates
+    /// when a deferred placeholder is resolved during Submit or Replay.
+    /// </summary>
+    /// <param name="entity">A placeholder from <see cref="Create"/> (deferred mode)
+    /// or any real entity (non-deferred mode).</param>
+    /// <returns>
+    /// An <see cref="EntitySlot"/> whose <see cref="EntitySlot.Value"/> returns
+    /// the placeholder before resolution and the real entity after.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// In deferred mode, one small heap object is allocated per call (the internal
+    /// <c>Slot</c>). In non-deferred mode (when <paramref name="entity"/> is already
+    /// a real entity), no allocation occurs —the entity is stored inline.
+    /// </para>
+    /// <para>
+    /// Track the entity in the same frame you create it. Call before Submit/Snapshot.
+    /// </para>
+    /// </remarks>
+    public EntitySlot Track(Entity entity)
+    {
+        if (!entity.IsPlaceholder)
+            return new EntitySlot(entity);
+
+        var slot = new Slot { Entity = entity };
+        var seq = entity.Version;
+
+        EnsureCapacity(ref _trackedBySeq, seq, 16);
+        slot.Next = _trackedBySeq[seq];
+        _trackedBySeq[seq] = slot;
+        if (seq >= _trackedMaxSeq) _trackedMaxSeq = seq + 1;
+
+        return new EntitySlot(slot);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
