@@ -100,7 +100,8 @@ internal sealed class HierarchyTable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool HasAnyRelations(Entity entity)
     {
-        if ((uint)entity.Id >= (uint)_parentByChild.Length)
+        if ((uint)entity.Id >= (uint)_parentByChild.Length ||
+            (uint)entity.Id >= (uint)_firstChild.Length)
         {
             return false;
         }
