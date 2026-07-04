@@ -235,6 +235,16 @@ internal sealed partial class Archetype
     //  RemoveAt (cross-segment swap-remove)
     // ──────────────────────────────────────────────
 
+    /// <summary>
+    /// Removes the entity at <paramref name="row"/> using swap-remove.
+    /// </summary>
+    /// <param name="row">Row index to remove.</param>
+    /// <param name="movedEntity">The entity that was moved into <paramref name="row"/>
+    /// from the last position, if any; <c>default</c> if the removed entity was already
+    /// the last row.</param>
+    /// <returns><c>true</c> if a different entity was moved into the removed row
+    /// (swap occurred); <c>false</c> if the removed entity was the last row
+    /// (no swap needed).</returns>
     internal bool RemoveAt(int row, out Entity movedEntity)
     {
         AssertValidRow(row);
