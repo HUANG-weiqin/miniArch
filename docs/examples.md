@@ -350,6 +350,642 @@ struct SumJob : IChunkForEach
 
 ---
 
+## 12. Authority Server + Mirror Clients
+
+A single source host (authority) records and applies commands locally, then distributes a **real-id delta** to mirror clients. Mirrors replay verbatim — their ID allocators stay synchronized because they replay every delta from frame 0.
+
+```csharp
+using MiniArch;
+using MiniArch.Core;
+
+// ── Authority server ──────────────────────────────────────────────────
+var authority = new World();
+var authStream = new CommandStream(authority) { DeferredEntities = false };
+var player = authStream.Create();
+authStream.Add(player, new Position(100, 200));
+
+// Pipelined: main thread applies locally, background builds delta
+var deltaTask = authStream.SubmitAndSnapshotAsync();
+var delta = deltaTask.GetAwaiter().GetResult();
+
+Console.WriteLine(delta.DeltaCount); // ≥3 (Reserve + Create + components in payload)
+Console.WriteLine(delta.IsEmpty);    // False
+
+// ── Mirror clients start from empty and replay ────────────────────────
+var mirror = new World();
+new CommandStream(mirror).Replay(delta);
+
+// All mirrors converge to identical logical state
+Console.WriteLine(mirror.Get<Position>(new Entity(0, 1))); // Position(100, 200)
+
+// Verify with canonical checksum (same logical state regardless of construction path)
+byte[] authHash = authority.CanonicalChecksum();
+byte[] mirHash  = mirror.CanonicalChecksum();
+Console.WriteLine(Convert.ToHexString(authHash) == Convert.ToHexString(mirHash)); // True
+
+// Multiple mirrors: create N worlds, replay the same delta on each
+for (var i = 0; i < 3; i++)
+{
+    var m = new World();
+    new CommandStream(m).Replay(delta);
+}
+
+readonly record struct Position(float X, float Y);
+```
+
+> **Key constraint:** Mirror clients must replay the same delta sequence from frame 0 (empty world) to keep ID allocators in sync. `World.EnsureReplayReservation` enforces this — if a replay tries to allocate an ID that the local allocator has already passed, it throws.
+
+---
+
+## 13. P2P Lockstep Multi-Host
+
+Each peer owns an independent `World` + independent ID allocator. `DeferredEntities = true` makes `Create()` return **placeholder** entities (`Entity(-1, seq)`). Each peer `Snapshot`s a placeholder delta, exchanges deltas with all peers, then each replays every delta (including its own) in deterministic host-ID order.
+
+```csharp
+using MiniArch;
+using MiniArch.Core;
+
+// Three lockstep peers — each owns an independent world + id allocator
+var peers = new LockstepHost[3];
+for (var i = 0; i < peers.Length; i++)
+    peers[i] = new LockstepHost(i);
+
+// ── Frame 0: each peer records its own player ─────────────────────────
+Entity? firstPlayer = null;
+for (var i = 0; i < peers.Length; i++)
+{
+    var p = peers[i].Stream.Create();               // placeholder Entity(-1, 0)
+    peers[i].Stream.Add(p, new PlayerTag(i));
+    peers[i].Stream.Add(p, new Position(i * 100, 0));
+    if (i == 0) firstPlayer = p;                    // save for EntitySlot tracking
+}
+
+// Track the first host's player to capture the real ID after replay
+var slot = peers[0].Stream.Track(firstPlayer!.Value);
+Console.WriteLine(slot.Value.IsPlaceholder); // True — still deferred
+
+// ── Snapshot placeholder deltas (do NOT Submit) ───────────────────────
+var deltas = new FrameDelta[peers.Length];
+for (var i = 0; i < peers.Length; i++)
+{
+    deltas[i] = peers[i].Stream.Snapshot();
+    peers[i].Stream.Clear();     // discard recorded commands, keep replay state
+}
+
+// ── Each peer replays ALL deltas in deterministic host-id order ───────
+for (var host = 0; host < peers.Length; host++)
+    for (var source = 0; source < peers.Length; source++)
+        peers[host].Stream.Replay(deltas[source]);
+
+// EntitySlot resolved: slot.Value is now the real entity ID in each host's world
+Console.WriteLine(slot.Value.IsPlaceholder); // False
+Console.WriteLine(slot.Value.Id);            // 0
+
+// All peers agree on state
+Console.WriteLine(peers[0].World.Get<Position>(new Entity(0, 1))); // Position(0, 0)
+Console.WriteLine(peers[1].World.Get<Position>(new Entity(0, 1))); // Position(0, 0)
+
+// ── Checksums match across all hosts ─────────────────────────────────
+var refHash = peers[0].World.CanonicalChecksum();
+for (var i = 1; i < peers.Length; i++)
+{
+    var hash = peers[i].World.CanonicalChecksum();
+    Console.WriteLine(Convert.ToHexString(refHash) == Convert.ToHexString(hash)); // True
+}
+
+// Helper type — placed after all top-level statements
+sealed class LockstepHost
+{
+    public int HostId { get; }
+    public World World { get; }
+    public CommandStream Stream { get; }
+    public LockstepHost(int hostId)
+    {
+        HostId = hostId;
+        World = new World();
+        Stream = new CommandStream(World) { DeferredEntities = true };
+    }
+}
+
+readonly record struct PlayerTag(int HostId);
+readonly record struct Position(float X, float Y);
+```
+
+> The **canonical lockstep pattern**: each host records with `DeferredEntities=true`, `Snapshot`s a placeholder delta, `Clear`s its stream, then `Replay`s every peer's delta (own + others) in a fixed order. Because each host maps `seq → local id` independently, there is no single point of failure and no id-sync protocol — the ECS guarantees deterministic entity IDs per host.
+
+---
+
+## 14. Relay-Only Source Host
+
+The source records commands but **never applies them locally via `Submit`**. Instead it calls `Snapshot()` + `Clear()` to produce a delta without mutating its own world, then later `Replay`s its own delta alongside all peer deltas — guaranteeing the source follows exactly the same replay path as every other host.
+
+```csharp
+using MiniArch;
+using MiniArch.Core;
+
+var sourceWorld = new World();
+var stream = new CommandStream(sourceWorld) { DeferredEntities = true };
+
+// Source records actions (never submits)
+var bullet = stream.Create();
+stream.Add(bullet, new Position(100, 200));
+stream.Add(bullet, new Velocity(10, 0));
+
+// Snapshot → Clear — source world is untouched
+var sourceDelta = stream.Snapshot();
+stream.Clear();
+Console.WriteLine(sourceWorld.GetStats().EntityCount); // 0
+
+// ── Distribution: peer replays the delta ──────────────────────────────
+var peer = new World();
+new CommandStream(peer).Replay(sourceDelta);
+Console.WriteLine(peer.Get<Position>(new Entity(0, 1))); // Position(100, 200)
+
+// ── Source replays its own delta (same path as peers) ─────────────────
+new CommandStream(sourceWorld).Replay(sourceDelta);
+Console.WriteLine(sourceWorld.Get<Position>(new Entity(0, 1))); // Position(100, 200)
+
+// Source and peer are byte-identical
+Console.WriteLine(Convert.ToHexString(sourceWorld.CanonicalChecksum())
+               == Convert.ToHexString(peer.CanonicalChecksum())); // True
+
+readonly record struct Position(float X, float Y);
+readonly record struct Velocity(float X, float Y);
+```
+
+> This pattern is essential for **relay servers** or **GGPO** where the source host must not diverge from peers by taking a different execution path. The source produces a delta, hands it off, then replays it back alongside all other deltas — everyone sees the same ops in the same order.
+
+---
+
+## 15. Delta Wire Transport & Registry Handshake
+
+Shows the full round-trip for shipping a `FrameDelta` over the network: `AsSpan()` for zero-copy wire format, `Deserialize()` on the receiving side, `Validate()` as defense-in-depth against malformed deltas (important for untrusted peers), and `ComponentSchema.Fingerprint()` to verify registry compatibility at connect time.
+
+```csharp
+using MiniArch;
+using MiniArch.Core;
+
+// ── Producer side ─────────────────────────────────────────────────────
+var sourceWorld = new World();
+var sourceStream = new CommandStream(sourceWorld);
+var e = sourceStream.Create();
+sourceStream.Add(e, new Health(100));
+sourceStream.Add(e, new Position(10, 20));
+
+var delta = sourceStream.Snapshot();
+sourceStream.Clear();
+
+// Zero-copy wire format — send this span over Socket/UDP
+var wireBytes = delta.AsSpan();
+
+// ── Consumer side (potentially untrusted source) ──────────────────────
+// 1. Deserialize from wire bytes
+var received = FrameDelta.Deserialize(wireBytes);
+
+// 2. Validate structural integrity (safe for untrusted deltas)
+received.Validate();
+// Throws InvalidOperationException if:
+//   - Create missing preceding Reserve
+//   - component data size mismatch
+//   - unknown component type id
+//   - duplicate component types in a Create payload
+//   - placeholder seq outside valid range, etc.
+
+// 3. Replay into a fresh world
+var targetWorld = new World();
+new CommandStream(targetWorld).Replay(received);
+Console.WriteLine(targetWorld.Get<Health>(new Entity(0, 1))); // Health(100)
+
+// ── Registry handshake (do once at connect time) ──────────────────────
+// In real code, exchange fingerprint bytes between peers before exchanging deltas.
+// Here we compare two local fingerprints (same binary, so they match):
+var fpLocal = ComponentSchema.Fingerprint();
+var fpRemote = ComponentSchema.Fingerprint(); // would come from peer in practice
+if (!fpLocal.AsSpan().SequenceEqual(fpRemote))
+    Console.WriteLine("WARNING: ComponentRegistry divergence — are peers on the same build?");
+else
+    Console.WriteLine("Registry compatible — safe to exchange deltas");
+
+readonly record struct Position(float X, float Y);
+readonly record struct Health(int Value);
+```
+
+> **Security note:** Always call `Validate()` on deltas received from the network before passing them to `Replay()`. The `MaxFrameBytes` (16 MiB) and `MaxOpsPerFrame` (1M) limits prevent OOM attacks. `ComponentSchema.Fingerprint()` uses SHA-256 and helps catch silent registry mismatches during development.
+
+---
+
+## 16. Placeholder as Component Reference (Auto-Resolve)
+
+The signature feature: **store a placeholder entity in another component's `Entity` field**. When the stream is `Submit`ed or `Replay`ed, `EntityFieldResolver` automatically rewrites the placeholder to the real entity — so a frame's `Create` + `Add` with cross-references "just works" without post-processing.
+
+```csharp
+using MiniArch;
+using MiniArch.Core;
+using System.Runtime.InteropServices;
+
+var world = new World();
+var stream = new CommandStream(world) { DeferredEntities = true };
+
+// Create a target entity (returns placeholder)
+var target = stream.Create();
+stream.Add(target, new Position(500, 500));
+
+// Create a follower that references the target in its component
+var follower = stream.Create();
+stream.Add(follower, new Follow { Target = target }); // placeholder stored in Entity field
+stream.Add(follower, new Position(0, 0));
+
+// Submit: Target field is auto-resolved (placeholder → real entity)
+stream.Submit();
+
+// target (created first → Entity(0,1)), follower (created second → Entity(1,1))
+ref var follow = ref world.GetRef<Follow>(new Entity(1, 1)); // the follower's Follow component
+Console.WriteLine(follow.Target.Id);  // 0 — resolved from placeholder to real target Entity(0,1)
+Console.WriteLine(world.Get<Position>(follow.Target)); // Position(500, 500)
+
+// ── Same thing with Replay (placeholder delta → resolved on every host) ──
+var peerWorld = new World();
+var peerStream = new CommandStream(peerWorld) { DeferredEntities = true };
+// ... same recording pattern ...
+// Snapshot → Replay → same auto-resolution ensures deterministic cross-references
+
+[StructLayout(LayoutKind.Sequential)] // Required — EntityFieldResolver scans byte offsets
+readonly record struct Position(float X, float Y);
+
+[StructLayout(LayoutKind.Sequential)]
+readonly record struct Follow
+{
+    public Entity Target; // <-- auto-resolved by EntityFieldResolver
+}
+```
+
+> **Requirements:** The component type that holds an `Entity` field must use `[StructLayout(LayoutKind.Sequential)]` (or `LayoutKind.Explicit`). `LayoutKind.Auto` (the default for some .NET types) throws `InvalidOperationException`. Nested structs are NOT scanned — only direct `Entity` fields are discovered.
+
+---
+
+## 17. Deferred Hierarchy + Clone Subtree
+
+Two unique deferred-entity capabilities combined: (1) `AddChild` between two **placeholders** — the parent-child intent is recorded and both sides resolve on Submit. (2) `CommandStream.Clone` deep-copies an entity plus all its hierarchy children as deferred placeholders — perfect for "spawn squad from template" in lockstep.
+
+```csharp
+using MiniArch;
+using MiniArch.Core;
+
+var world = new World();
+var stream = new CommandStream(world) { DeferredEntities = true };
+
+// ── Hierarchy between two placeholders ─────────────────────────────────
+var boss = stream.Create();
+stream.Add(boss, new Position(500, 500));
+stream.Add(boss, new Health(1000));
+
+var weakPoint = stream.Create();
+stream.Add(weakPoint, new Position(500, 500));
+stream.Add(weakPoint, new Health(100));
+stream.AddChild(boss, weakPoint); // both are placeholders —resolved on Submit
+
+stream.Submit();
+
+// boss = Entity(0,1), weakPoint = Entity(1,1); hierarchy established
+Console.WriteLine(world.TryGetParent(new Entity(1, 1), out Entity parent)); // True
+Console.WriteLine(parent == new Entity(0, 1));                              // True
+
+// ── Deferred Clone — deep-copy boss + entire subtree ──────────────────
+var cloneStream = new CommandStream(world) { DeferredEntities = true };
+var clone = cloneStream.Clone(new Entity(0, 1)); // returns placeholder
+cloneStream.Submit();
+
+// Clone is a new entity (Entity(2,1)) with all components + a child (Entity(3,1))
+Console.WriteLine(world.Get<Position>(new Entity(2, 1))); // Position(500, 500)
+Console.WriteLine(world.TryGetParent(new Entity(3, 1), out Entity p2)); // True
+Console.WriteLine(p2 == new Entity(2, 1));                              // True
+
+readonly record struct Position(float X, float Y);
+readonly record struct Health(int Value);
+```
+
+> **Tip:** `CommandStream.Clone` records the deep-copy as pending creation — in `DeferredEntities=true` mode the clone and all its descendants are placeholders. This guarantees deterministic ID assignment across all hosts replaying the same delta.
+
+---
+
+## 18. Deferred Destroy / Cancel Pending
+
+Sometimes you record entities speculatively, then decide not to commit them. `CommandStream.Destroy` on a **placeholder** cancels that pending entity (marks the batch slot as canceled). If the placeholder has children via `AddChild`, the entire subtree is cancelled recursively.
+
+```csharp
+using MiniArch;
+using MiniArch.Core;
+
+var world = new World();
+var stream = new CommandStream(world) { DeferredEntities = true };
+
+// ── Speculative creation + cancellation ───────────────────────────────
+var maybe = stream.Create();
+stream.Add(maybe, new Health(100));
+// ... condition evaluates to false ...
+stream.Destroy(maybe); // cancel the pending entity
+
+stream.Submit();
+Console.WriteLine(world.GetStats().EntityCount); // 0 — nothing materialized
+
+// ── Cascade cancellation: destroy a parent, children follow ───────────
+var parent = stream.Create();
+var child = stream.Create();
+stream.AddChild(parent, child);
+stream.Destroy(parent); // also cancels child recursively
+stream.Submit();
+Console.WriteLine(world.GetStats().EntityCount); // 0
+
+// ── Destroy existing (real) entity ────────────────────────────────────
+world.Create(new Health(1));
+var destroyStream = new CommandStream(world);
+destroyStream.Destroy(new Entity(0, 1));
+destroyStream.Submit();
+Console.WriteLine(world.IsAlive(new Entity(0, 1))); // False
+
+readonly record struct Health(int Value);
+```
+
+> **Internals:** Cancelling a pending entity calls `CancelPendingDescendants` which BFS through every hierarchy entry where the entity is a parent, cancels all pending children, and removes `AddChild` intents for existing (non-pending) children. The batch slot is kept (so `PendingBatchCount` stays stable) but marked as cancelled — `Submit` and `BuildDelta` both skip cancelled batches.
+
+---
+
+## 19. Pending Batch Fast Path + GetSingleton
+
+When you `Create` then `Add`/`Set` multiple components on the same entity in a `CommandStream`, all component data accumulates in the **pending batch buffer** — a single contiguous byte array. `Submit` materializes the entity **once** into the correct archetype, avoiding the per-`Add` archetype migration cost that the immediate `World` API would incur.
+
+```csharp
+using MiniArch;
+using MiniArch.Core;
+
+var world = new World();
+var stream = new CommandStream(world);
+
+// Fast path: all Adds go into the pending batch, Submit materializes once
+var fast = stream.Create();
+stream.Add(fast, new Health(100));
+stream.Add(fast, new Position(10, 20));
+stream.Add(fast, new Velocity(1, 0));
+// The three writes land in BatchBuf; Submit does a single materialization
+// into archetype {Health, Position, Velocity}
+stream.Submit();
+
+// Contrast with immediate World API: each Add triggers archetype migration
+var slow = world.Create(new Health(200));        // archetype  {Health}
+world.Add(slow, new Position(30, 40));           // migrate →  {Health, Position}
+world.Add(slow, new Velocity(2, 0));             // migrate →  {Health, Position, Velocity}
+// 3 archetype operations vs. 1
+
+// ── GetSingleton convenience ──────────────────────────────────────────
+// When exactly one entity has a component, GetSingleton returns its Entity
+world.Create(new GameConfig { TickRate = 60 });
+Entity configEntity = world.GetSingleton<GameConfig>();
+var config = world.Get<GameConfig>(configEntity);
+Console.WriteLine(config.TickRate); // 60
+// Throws if zero or more than one entity has GameConfig
+
+readonly record struct Health(int Value);
+readonly record struct Position(float X, float Y);
+readonly record struct Velocity(float X, float Y);
+readonly record struct GameConfig { public int TickRate; }
+```
+
+> **Tip:** The `_lastCreated` fast path avoids scanning the pending-batch ID array — `Add`/`Set` on the entity returned by the most recent `Create()` is direct (no dictionary lookup). This is the common case ("create and populate") and is optimized accordingly.
+
+---
+
+## 20. FrameDelta.Concat — Batched Replay / Catch-up
+
+`FrameDelta.Concat` merges multiple **real-id** deltas into a single delta in temporal order. The result is observationally equivalent to replaying each delta sequentially. Useful for fast-forwarding through replay files or catching up late-joining mirror clients.
+
+```csharp
+using MiniArch;
+using MiniArch.Core;
+
+// Use a single world across all frames — entities persist between snapshots
+var deltas = new FrameDelta[3];
+var world = new World();
+
+// Frame 0: create entity
+var s0 = new CommandStream(world);
+var e = s0.Create();
+s0.Add(e, new Position(0, 0));
+deltas[0] = s0.Snapshot(); // Reserve(0,1) + Create(0,1, [Position(0,0)])
+s0.Submit();               // apply to world, materialise entity (0,1)
+
+// Frame 1: Set position
+var s1 = new CommandStream(world);
+s1.Set(new Entity(0, 1), new Position(10, 10));
+deltas[1] = s1.Snapshot(); // Set(0,1, Position(10,10))
+s1.Clear();
+
+// Frame 2: Set position again
+var s2 = new CommandStream(world);
+s2.Set(new Entity(0, 1), new Position(20, 20));
+deltas[2] = s2.Snapshot(); // Set(0,1, Position(20,20))
+s2.Clear();
+
+// ── Path A: sequential replay ─────────────────────────────────────────
+var worldA = new World();
+var streamA = new CommandStream(worldA);
+foreach (var d in deltas) streamA.Replay(d);
+
+// ── Path B: concatenated replay ────────────────────────────────────────
+var merged = deltas[0];
+for (var i = 1; i < deltas.Length; i++)
+    merged = FrameDelta.Concat(merged, deltas[i]);
+
+var worldB = new World();
+new CommandStream(worldB).Replay(merged);
+
+// Both paths produce identical state
+Console.WriteLine(worldA.Get<Position>(new Entity(0, 1))); // Position(20, 20)
+Console.WriteLine(worldB.Get<Position>(new Entity(0, 1))); // Position(20, 20)
+Console.WriteLine(Convert.ToHexString(worldA.CanonicalChecksum())
+               == Convert.ToHexString(worldB.CanonicalChecksum())); // True
+
+readonly record struct Position(float X, float Y);
+```
+
+> **⚠️ Real-id only:** `FrameDelta.Concat` is safe only for **real-id deltas** (`DeferredEntities=false` or `SubmitAndSnapshotAsync`). Concatenating placeholder deltas from independent `CommandStream` instances will corrupt the `seq → local id` mapping because multiple streams start their seq counter at 0. The canonical lockstep pattern replays each peer's placeholder delta as a separate `Replay()` call — never concatenate across streams.
+
+---
+
+## 21. WithAny (OR-match) + Without (Exclusion)
+
+`QueryDescription` supports three filter types: `With<T>` (AND-required), `WithAny<T>` (OR-match — at least one of the listed types must be present), and `Without<T>` (exclusion). These compose freely.
+
+```csharp
+using MiniArch;
+
+var world = new World();
+world.Create(new Moving(), new Burning(), new Health(100));
+world.Create(new Moving(), new Poisoned(), new Health(80));
+world.Create(new Moving(), new Health(50));       // no status
+world.Create(new Burning(), new Dead());           // excluded — dead
+world.Create(new Poisoned(), new Dead());          // excluded — dead
+
+// Moving AND (Burning OR Poisoned) AND NOT Dead
+var query = world.Query(
+    new QueryDescription()
+        .With<Moving>()
+        .WithAny<Burning>()
+        .WithAny<Poisoned>()
+        .Without<Dead>());
+
+Console.WriteLine($"Matching: {CountEntities(world, query)}"); // 2
+
+// Pure exclusion — all alive entities
+var alive = world.Query(new QueryDescription().Without<Dead>());
+Console.WriteLine($"Alive: {CountEntities(world, alive)}");    // 3
+
+static int CountEntities(World w, Query q)
+{
+    var count = 0;
+    foreach (var _ in q) count++;
+    return count;
+}
+
+readonly record struct Moving;
+readonly record struct Burning;
+readonly record struct Poisoned;
+readonly record struct Dead;
+readonly record struct Health(int Value);
+```
+
+> **Performance:** `With<T>` and `Without<T>` are evaluated at the archetype level (bitmask intersection) — O(number of archetypes), not O(entities). `WithAny<T>` identifies archetypes that contain at least one of the listed components, then the entity-level filter defaults to "accept all entities in those archetypes" (since any entity in the archetype has the required components). For fine-grained per-entity OR logic, use entity-level iteration with `Has<T>`.
+
+---
+
+## 22. Multi-Frame Rollback Window (GGPO)
+
+`World.CaptureState()` and `World.RestoreState()` support a ring-buffer rollback window of arbitrary depth — not just single-frame save/restore. Handles are pooled, achieving **zero allocation in steady state**.
+
+```csharp
+using MiniArch;
+using MiniArch.Core;
+
+const int WindowDepth = 4;
+var world = new World();
+var ring = new WorldStateSnapshot[WindowDepth];
+
+// Simulate frames: capture before each mutation
+// ring[0] = Capture(empty) → Create(Position(0,0))
+// ring[1] = Capture(Position(0,0)) → Set(Position(10,0))
+// ring[2] = Capture(Position(10,0)) → Set(Position(20,0))
+// ring[3] = Capture(Position(20,0)) → Set(Position(30,0))
+for (var frame = 0; frame < WindowDepth; frame++)
+{
+    ring[frame] = world.CaptureState();
+    if (frame == 0)
+        world.Create(new Position(frame * 10, 0));
+    else
+        world.Set(new Entity(0, 1), new Position(frame * 10, 0));
+}
+
+// Before rollback: world is at final state (frame 3 applied)
+Console.WriteLine(world.Get<Position>(new Entity(0, 1))); // Position(30, 0)
+
+// Restore ring[1] → revert to state BEFORE frame 1 mutation (Position(0,0))
+world.RestoreState(ring[1]); // handle recycled to pool
+Console.WriteLine(world.Get<Position>(new Entity(0, 1))); // Position(0, 0)
+
+// Recycled handle: IsRecycled is true; calling RestoreState again throws
+Console.WriteLine(ring[1].IsRecycled); // True
+
+// ring[2] is still valid (captured at Position(10,0) before frame 2's Set)
+world.RestoreState(ring[2]);
+Console.WriteLine(world.Get<Position>(new Entity(0, 1))); // Position(10, 0)
+
+readonly record struct Position(float X, float Y);
+```
+
+> **GGPO pattern:** Keep a ring buffer of `WorldStateSnapshot` handles. Each frame: `CaptureState()` (pushes the oldest slot back to the pool), simulate, check for misprediction. On misprediction: `RestoreState(ring[safeFrame])`, re-simulate with correct inputs. Zero GC after warm-up because handles are pooled (see `WorldStateSnapshot` lifecycle docs).
+
+---
+
+## 23. World.Clone() Branching + Subtree Copy
+
+`World.Clone()` creates a fully independent fork of the entire world — no shared internal arrays. Use it for speculative "what-if" simulation or as an alternative to `CaptureState`/`RestoreState` for long-lived checkpoints. `World.Clone(Entity)` deep-copies a single entity and its entire subtree.
+
+```csharp
+using MiniArch;
+
+var world = new World();
+var player = world.Create(new Position(0, 0), new Health(100));
+var pet = world.Create(new Position(5, 5));
+world.AddChild(player, pet); // hierarchy: player → pet
+
+// ── Fork a speculative branch ─────────────────────────────────────────
+var branch = world.Clone(); // fully independent copy
+
+// Simulate 5 frames on the branch with "what-if" input
+for (var frame = 1; frame <= 5; frame++)
+{
+    branch.Set(new Entity(0, 1), new Position(frame * 10, 0));
+    if (branch.Get<Health>(new Entity(0, 1)).Value <= 0)
+        break;
+}
+Console.WriteLine(branch.Get<Position>(new Entity(0, 1))); // Position(50, 0)
+
+// Original world is untouched
+Console.WriteLine(world.Get<Position>(new Entity(0, 1))); // Position(0, 0)
+
+// ── Deep-copy a single entity + subtree ───────────────────────────────
+var standalonePet = world.Clone(pet); // new entity with Position(5, 5), no parent
+Console.WriteLine(world.TryGetParent(standalonePet, out _)); // False
+Console.WriteLine(world.Get<Position>(standalonePet));        // Position(5, 5)
+
+readonly record struct Position(float X, float Y);
+readonly record struct Health(int Value);
+```
+
+> **Clone vs CaptureState:** `World.Clone()` is for **branching** — the result is a new `World` that can outlive the original and be modified independently. `CaptureState`/`RestoreState` is for **in-place rollback** — faster (array swap vs. full copy) but the snapshot is invalidated on restore. Use `Clone` when you need both the original and the branch to coexist.
+
+---
+
+## 24. ParallelRecording (Multi-Threaded Command Recording)
+
+When `CommandStream.ParallelRecording = true`, all `Create`, `Add`, `Set`, `Remove`, and `Destroy` calls become thread-safe. Useful when game systems run on multiple worker threads and each produces commands independently. `Submit` must still be single-threaded.
+
+```csharp
+using MiniArch;
+using MiniArch.Core;
+using System.Threading.Tasks;
+
+var world = new World();
+// Pre-spawn entities via the fast pending-batch path
+var spawnStream = new CommandStream(world);
+for (var i = 0; i < 10_000; i++)
+    spawnStream.Create();
+spawnStream.Submit();
+
+// ── Multi-threaded recording ─────────────────────────────────────────
+var stream = new CommandStream(world) { ParallelRecording = true };
+
+Parallel.For(0, 10_000, i =>
+{
+    // Each worker records a Position component for its assigned entity
+    stream.Add(new Entity(i, 1), new Position(i, i * 2));
+});
+
+stream.ParallelRecording = false; // back to single-threaded
+stream.Submit();
+
+// All updates applied
+Console.WriteLine(world.Get<Position>(new Entity(9999, 1))); // Position(9999, 19998)
+
+readonly record struct Position(float X, float Y);
+```
+
+> **Rules:**
+> - Enable `ParallelRecording` before the parallel section, disable after. Do not toggle while multiple threads are recording.
+> - Do **not** record concurrently into **multiple** `CommandStream` instances targeting the same `World` — only one stream may be in parallel mode per world.
+> - `Submit` must be single-threaded and exclusive. It is not concurrent-safe.
+> - Parallel `Set`/`Add` on existing entities uses per-component-type concurrent append stores (lock-free for `Add`/`Set`; `Destroy`/`Create` are lock-protected). Entity creation in parallel mode uses a shared lock (`_storeCreateLock`) — acceptable because creates are typically a small fraction of total commands.
+
+---
+
 ## Next
 
 - Full API signatures → [api.md](api.md)
