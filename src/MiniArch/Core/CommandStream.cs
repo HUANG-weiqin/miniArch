@@ -477,11 +477,13 @@ public sealed class CommandStream
             ResolveDeferredCreates();
             var delta = new FrameDelta();
             BuildDelta(delta);
+            delta.OriginStream = this;
             return delta;
         }
         ThrowIfSnapshotHasImmediateEntities();
         var d = new FrameDelta();
         BuildDelta(d);
+        d.OriginStream = this;
         return d;
     }
 
