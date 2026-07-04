@@ -141,6 +141,7 @@ internal struct ArchetypeBackupEntry
     public byte[] Data;
     public int Count;
     public bool IsChunked;
+    public int[] ColumnByteOffsets;
 
     public Entity[][] SegmentEntities;
     public byte[][] SegmentData;
@@ -163,6 +164,7 @@ internal struct ArchetypeBackupEntry
             entry.Data = new byte[totalBytes];
         arch.CopyDataTo(entry.Data);
 
+        entry.ColumnByteOffsets = arch.ColumnByteOffsets;
         entry.SegmentCount = 0;
     }
 
@@ -201,13 +203,24 @@ internal struct ArchetypeBackupEntry
     {
         if (!IsChunked)
         {
-            Array.Copy(Entities, arch.GetEntityStorageUnsafe(), Count);
-            arch.CopyDataFrom(Data);
-            arch.SetCount(Count);
+            if (!arch.IsChunked)
+            {
+                Array.Copy(Entities, arch.GetEntityStorageUnsafe(), Count);
+                arch.CopyDataFrom(Data);
+                arch.SetCount(Count);
+            }
+            else
+            {
+                // Backup was non-chunked but the archetype was promoted to
+                // chunked after capture (e.g. prediction created enough
+                // entities). Distribute the flat backup across segments,
+                // translating from backup-time offsets to segment offsets.
+                arch.RestoreFlatBackup(Entities, Data, ColumnByteOffsets, Count);
+            }
         }
         else
         {
-            arch.SetCount(0);
+            arch.ResetCount();
             for (var i = 0; i < SegmentCount; i++)
             {
                 ref var seg = ref arch.GetSegmentRef(i);

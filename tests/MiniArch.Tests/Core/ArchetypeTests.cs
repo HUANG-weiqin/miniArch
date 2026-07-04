@@ -598,4 +598,98 @@ public sealed class ArchetypeTests
         Assert.Equal(0, archetype.EntityCount);
     }
 
+    // 1024-byte component → _segmentCapacity = RoundUpToPow2(2MB / 1024) = 2048.
+    // Lets tests exercise the "_capacity > _segmentCapacity" promotion path
+    // without allocating hundreds of thousands of entities.
+    private unsafe struct Component1024
+    {
+        public int Value;
+        public fixed byte Pad[1020];
+    }
+
+    // BUG: when non-chunked _capacity > _segmentCapacity at promotion time,
+    // ConvertToChunked wrapped the oversized flat buffer as segment[0].
+    // GetSegmentAndLocal then mapped globalRow >= _segmentCapacity to
+    // non-existent segments, returning zero / corrupt data.
+    //
+    // Path A: constructor capacity overshoots segment capacity.
+    [Fact]
+    public void BUG_capacity_above_segment_capacity_corrupts_row_mapping_on_promote()
+    {
+        var registry = new ComponentRegistry();
+        var comp = registry.GetOrCreate<Component1024>();
+        var archetype = new Archetype(new Signature(comp), [typeof(Component1024)], capacity: 4096);
+
+        for (var i = 0; i < 3000; i++)
+        {
+            archetype.AddEntity(new Entity(i + 1, 1));
+            archetype.SetComponentAtTyped(0, i, new Component1024 { Value = i + 100 });
+        }
+        Assert.False(archetype.IsChunked);
+
+        archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
+
+        // Rows >= 2048 must land in segment[1] with correct, rebased data.
+        Assert.Equal(2148, archetype.GetComponentAt<Component1024>(0, 2048).Value);
+        Assert.Equal(3099, archetype.GetComponentAt<Component1024>(0, 2999).Value);
+    }
+
+    // BUG path B: EnsureCapacity doubling branch (newCapacity = max(required,
+    // _capacity*2)) can inflate _capacity past _segmentCapacity via a bulk
+    // ReserveRows, leaving an oversized flat buffer that corrupts on promote.
+    [Fact]
+    public void BUG_bulk_reserve_above_segment_capacity_corrupts_row_mapping_on_promote()
+    {
+        var registry = new ComponentRegistry();
+        var comp = registry.GetOrCreate<Component1024>();
+        var archetype = new Archetype(new Signature(comp), [typeof(Component1024)], capacity: 4);
+
+        // Bulk reserve overshoots: EnsureCapacity(3000) → newCapacity=3000.
+        archetype.ReserveRows(3000);
+
+        for (var i = 0; i < 3000; i++)
+        {
+            archetype.WriteEntityAt(i, new Entity(i + 1, 1));
+            archetype.SetComponentAtTyped(0, i, new Component1024 { Value = i + 100 });
+        }
+        Assert.False(archetype.IsChunked);
+
+        archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
+
+        Assert.Equal(2148, archetype.GetComponentAt<Component1024>(0, 2048).Value);
+        Assert.Equal(3099, archetype.GetComponentAt<Component1024>(0, 2999).Value);
+    }
+
+    // Regression: multi-column offset rebasing during oversized-capacity
+    // promotion. Column byte offsets differ between the flat layout (based on
+    // _capacity) and the segment layout (based on _segmentCapacity). Each
+    // column's data must be independently rebased.
+    [Fact]
+    public void Promote_above_segment_capacity_preserves_multi_column_offsets()
+    {
+        var registry = new ComponentRegistry();
+        var posComp = registry.GetOrCreate<Position>();
+        var bigComp = registry.GetOrCreate<Component1024>();
+        var sig = new Signature(posComp, bigComp);
+        var archetype = new Archetype(sig, [typeof(Position), typeof(Component1024)], capacity: 4096);
+
+        for (var i = 0; i < 3000; i++)
+        {
+            archetype.AddEntity(new Entity(i + 1, 1));
+            archetype.SetComponentAtTyped(0, i, new Position(i, i + 1));
+            archetype.SetComponentAtTyped(1, i, new Component1024 { Value = i + 100 });
+        }
+        archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
+
+        // Row 2048 = first row of segment[1]. Both columns must rebase correctly.
+        Assert.Equal(new Position(2048, 2049), archetype.GetComponentAt<Position>(0, 2048));
+        Assert.Equal(2148, archetype.GetComponentAt<Component1024>(1, 2048).Value);
+        // Last row (segment[1], local 951).
+        Assert.Equal(new Position(2999, 3000), archetype.GetComponentAt<Position>(0, 2999));
+        Assert.Equal(3099, archetype.GetComponentAt<Component1024>(1, 2999).Value);
+    }
+
 }

@@ -8,7 +8,7 @@
 
 | 模块 | 知识页 |
 |---|---|
-| **入门 / 导航** | `kb-design-rationale.md`（**新人必读**：为什么是这样而不是那样）、`kb-glossary.md`（术语表）、`kb-perf-harnesses.md`（4 套 perf harness 消歧）、`kb-lockstep-playbook.md`（帧同步端到端 spine） |
+| **入门 / 导航** | `kb-design-rationale.md`（**新人必读**：为什么是这样而不是那样）、`kb-code-review-findings.md`（**审阅前必读**：历次审阅的真 bug 索引 + 已排除的非 bug 猜想）、`kb-glossary.md`（术语表）、`kb-perf-harnesses.md`（4 套 perf harness 消歧）、`kb-lockstep-playbook.md`（帧同步端到端 spine） |
 | Workspace（仓库导航/脚本/流程） | `kb-repo-overview.md`、`kb-profiling-workflow.md`、`kb-throughput-workflow.md` |
 | MiniArch.Core（ECS 运行时） | `kb-core-ecs.md`、`kb-architecture-review.md`、`kb-chunk-storage.md`、`kb-cache-optimization.md` |
 | MiniArch.Core CommandStream | `kb-command-stream.md`、`kb-deferred-create-design.md` |
@@ -28,10 +28,11 @@
 
 **第一次接触**：
 1. **先读 `kb-design-rationale.md`** — 10 分钟理解 "为什么长这样"，以及为什么常见优化提案都已被拒绝
-2. **术语不认识** → `kb-glossary.md`
-3. **仓库入口** → `kb-repo-overview.md`
-4. **整体架构** → `kb-architecture-review.md`
-5. **ECS 运行时** → `kb-core-ecs.md`
+2. **要审阅代码查 bug → `kb-code-review-findings.md`** — 跳过已知结论，避免重复验证已排除的非 bug 猜想
+3. **术语不认识** → `kb-glossary.md`
+4. **仓库入口** → `kb-repo-overview.md`
+5. **整体架构** → `kb-architecture-review.md`
+6. **ECS 运行时** → `kb-core-ecs.md`
 
 **在想"能不能这样改"之前**：先查 `kb-design-rationale.md` §2（子系统的替代方案）和 §3（常见误判优化），很大概率已经被评估过并拒绝了。
 
@@ -65,5 +66,6 @@
 **通用**：
 - **排查行为偏差** → 各模块页的 `坑点` + 对应测试文件
 - **理解"为什么边界这么划"** → 各模块页的 `决策`
+- **审阅代码查 bug** → `kb-code-review-findings.md`（先查已排除的猜想，再决定是否深挖）
 - **架构变更历史** → `kb-changelog.md`（2026-07-01 代码硬化：isqrt / wire 预算 / CRC32 / PBT / Conditional / Entity.IsPlaceholder / SpanFeeder struct）
 - **新增知识页** → 先看 `.knowledge/_template.md` 模板，再挂到上面的地图，再写模块正文

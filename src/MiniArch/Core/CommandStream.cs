@@ -1941,25 +1941,29 @@ public sealed class CommandStream
             _count = count + 1;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void AppendConcurrent(Entity entity, in T value, byte kind)
         {
             var slot = Interlocked.Increment(ref _count) - 1;
-            while (slot >= _data.Length)
+            // Hold the lock for both resize and write. The three backing arrays
+            // (_data/_entities/_kinds) are resized independently inside the
+            // lock; a reader that only checks _data.Length can exit the wait
+            // and write _entities[slot] before that array has been resized.
+            // Writing under the lock also prevents data loss when a concurrent
+            // resize's Array.Copy races with a deferred element write.
+            lock (_resizeLock)
             {
-                lock (_resizeLock)
+                if ((uint)slot >= (uint)_data.Length)
                 {
-                    if (slot < _data.Length) break;
                     var newLen = _data.Length == 0 ? 256 : _data.Length;
                     while (newLen <= slot) newLen *= 2;
                     Array.Resize(ref _data, newLen);
                     Array.Resize(ref _entities, newLen);
                     Array.Resize(ref _kinds, newLen);
                 }
+                _entities[slot] = entity;
+                _data[slot] = value;
+                _kinds[slot] = kind;
             }
-            _entities[slot] = entity;
-            _data[slot] = value;
-            _kinds[slot] = kind;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

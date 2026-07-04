@@ -115,3 +115,23 @@ dotnet run -c Release --project tools/perf/HeroComing.Perf --check-baseline
 仅显式传入 `--update-baseline` 时，测试才会更新 `.knowledge/kb-hero-pipeline-regression.md` 中的 baseline 数据。
 
 详细说明见 `.knowledge/kb-hero-pipeline-regression.md`。
+
+## 6) 代码审阅 / Bug Hunt 工作流
+
+审阅代码、找 bug 时，必须遵循以下循环，避免重复验证已知结论：
+
+### 审阅前
+
+1. **先读 `.knowledge/kb-code-review-findings.md`**——这是审阅前必读：
+   - **已修复的真 bug**（`BUG_` 测试索引）：已修且有回归测试，不要重复报。
+   - **已排除的非 bug 猜想**（按模块归档，每条含位置 / 猜想 / 结论 / 验证）：已被验证为安全，不要重复思考。
+2. 产生新猜想时，先查该文件——已被记录为非 bug 的直接跳过。
+
+### 审阅后
+
+把高价值发现写回 `.knowledge/kb-code-review-findings.md`：
+
+1. **新猜想是真 bug** → 写 `BUG_` 前缀测试证明 → 加到"已修复的真 bug"索引（含修复方案）。
+2. **新猜想非 bug** → append 到对应模块段，4 字段：**位置 / 猜想 / 结论 / 验证**（验证段写"怎么确认的"，不写推理过程）。
+3. **已有条目被推翻**（非 bug → 真 bug）→ 从非 bug 清单移除，改写到真 bug 索引。
+4. 只写**结论 + 指路**，不重复推理过程——推理留在代码和测试里。

@@ -2692,6 +2692,74 @@ public sealed class DeferredCreateTests
         Assert.Contains("LayoutKind.Auto", ex.Message);
     }
 
+    // BUG REPROOF HYPOTHESIS: ComponentStore<T>.AppendConcurrent uses
+    // `_data.Length` as the gate for slot validity, but performs three
+    // independent Array.Resize calls (_data, _entities, _kinds) inside the
+    // resize lock. A concurrent appender that reads _data.Length after the
+    // first Resize but before the other two completes will exit the wait
+    // loop and write _entities[slot] / _kinds[slot] / _data[slot] into
+    // arrays that are still the old (shorter) length — producing either an
+    // IndexOutOfRangeException or a silent write into a discarded array.
+    //
+    // The test runs many trials; each trial hammers a fresh ComponentStore
+    // with parallel Set commands whose counts cross resize thresholds.
+    // A healthy implementation never throws and never loses a Set.
+    [Fact]
+    public void BUG_parallel_append_concurrent_resize_is_not_atomic()
+    {
+        var crashCount = 0;
+        var lossCount = 0;
+        var trials = 200;
+
+        for (var trial = 0; trial < trials; trial++)
+        {
+            var world = new World();
+            var entities = new Entity[1024];
+            for (var i = 0; i < entities.Length; i++)
+                entities[i] = world.Create(new Position(i, i));
+
+            var stream = new CommandStream(world) { ParallelRecording = true };
+
+            Exception? crash = null;
+            try
+            {
+                Parallel.For(0, entities.Length, i =>
+                {
+                    stream.Set(entities[i], new Position(i + 1, i + 2));
+                });
+            }
+            catch (Exception ex)
+            {
+                crash = ex;
+            }
+
+            stream.ParallelRecording = false;
+            // Submit may also throw if the recorded state is corrupt.
+            try { stream.Submit(); }
+            catch (Exception ex) { crash = crash ?? ex; }
+
+            if (crash != null)
+            {
+                crashCount++;
+                continue;
+            }
+
+            for (var i = 0; i < entities.Length; i++)
+            {
+                if (!world.TryGet(entities[i], out Position p) ||
+                    p.X != i + 1 || p.Y != i + 2)
+                {
+                    lossCount++;
+                    break;
+                }
+            }
+        }
+
+        Assert.True(crashCount == 0 && lossCount == 0,
+            $"AppendConcurrent race: {crashCount}/{trials} trials crashed, " +
+            $"{lossCount}/{trials} trials lost data.");
+    }
+
     private static string HashWorld(World w)
     {
         using var ms = new MemoryStream();

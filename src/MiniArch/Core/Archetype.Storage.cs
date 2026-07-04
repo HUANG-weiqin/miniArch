@@ -21,39 +21,72 @@ internal sealed partial class Archetype
     //  Conversion & segment growth
     // ──────────────────────────────────────────────
 
-    private void NormalizeForChunked()
+    // Promote non-chunked storage to chunked segments. Guarantees the
+    // chunked invariant: every segment owns exactly _segmentCapacity entity
+    // slots and column offsets are based on _segmentCapacity.
+    //
+    // Fast path: when the flat buffer already holds exactly _segmentCapacity
+    // slots (the normal doubling-threshold promotion), the existing arrays are
+    // wrapped as a single segment with zero copy.
+    //
+    // General path: when the flat capacity differs from _segmentCapacity
+    // (smaller — e.g. ForceChunked on a young archetype; or larger — e.g. a
+    // bulk ReserveRows that overshot the threshold), entities are split across
+    // standard segments and column data is rebased onto segment-capacity
+    // offsets. The old oversized/undersized flat buffer is abandoned.
+    private void ConvertToChunked()
     {
-        if (_capacity < _segmentCapacity)
+        if (_capacity == _segmentCapacity)
         {
-            var newEntities = new Entity[_segmentCapacity];
-            Array.Copy(_entities, newEntities, _count);
-            var (newData, newOffsets, _) = CreateStorage(_signature, _componentTypes, _segmentCapacity);
+            _segments = new Segment[1];
+            _segments[0] = new Segment
+            {
+                Entities = _entities,
+                Data = _data,
+                Count = _count
+            };
+            _segmentCount = 1;
+            _entities = null!;
+            _data = null!;
+            _isChunked = true;
+            return;
+        }
+
+        var segOffsets = ComputeColumnLayout(_elementSizes, _segmentCapacity).Offsets;
+        var segCount = Math.Max(1, (_count + _segmentCapacity - 1) / _segmentCapacity);
+        _segments = new Segment[segCount];
+        _segmentCount = segCount;
+
+        for (var s = 0; s < segCount; s++)
+        {
+            var segStart = s * _segmentCapacity;
+            var rowsInSeg = Math.Min(_segmentCapacity, _count - segStart);
+
+            var segEntities = new Entity[_segmentCapacity];
+            Array.Copy(_entities, segStart, segEntities, 0, rowsInSeg);
+
+            var segData = CreateStorageBytes(_signature, _componentTypes, _segmentCapacity);
             for (var col = 0; col < _elementSizes.Length; col++)
             {
                 var elemSize = _elementSizes[col];
-                var columnBytes = _count * elemSize;
+                var columnBytes = rowsInSeg * elemSize;
                 if (columnBytes <= 0) continue;
-                ref var srcRef = ref _data[_columnByteOffsets[col]];
-                ref var dstRef = ref newData[newOffsets[col]];
+                ref var srcRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data),
+                    _columnByteOffsets[col] + segStart * elemSize);
+                ref var dstRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(segData),
+                    segOffsets[col]);
                 Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, (uint)columnBytes);
             }
-            _entities = newEntities;
-            _data = newData;
-            _columnByteOffsets = newOffsets;
-            _capacity = _segmentCapacity;
-        }
-    }
 
-    private void ConvertToChunked()
-    {
-        _segments = new Segment[1];
-        _segments[0] = new Segment
-        {
-            Entities = _entities,
-            Data = _data,
-            Count = _count
-        };
-        _segmentCount = 1;
+            _segments[s] = new Segment
+            {
+                Entities = segEntities,
+                Data = segData,
+                Count = rowsInSeg
+            };
+        }
+
+        _columnByteOffsets = segOffsets;
         _entities = null!;
         _data = null!;
         _isChunked = true;
@@ -89,7 +122,6 @@ internal sealed partial class Archetype
 
         if (!_isChunked && _capacity * 2 > _segmentCapacity)
         {
-            NormalizeForChunked();
             ConvertToChunked();
             if (requiredCapacity <= Capacity) return;
             GrowChunked(requiredCapacity - _count);
@@ -731,6 +763,82 @@ internal sealed partial class Archetype
         }
     }
 
+    /// <summary>
+    /// Column byte offsets valid for the current storage layout. Snapshot at
+    /// capture time so a restore can translate across a layout change (e.g.
+    /// promotion from non-chunked to chunked rebases the offsets).
+    /// </summary>
+    internal int[] ColumnByteOffsets => _columnByteOffsets;
+
+    /// <summary>
+    /// Restores entity and component data from a non-chunked flat backup.
+    /// Handles the case where this archetype was promoted to chunked storage
+    /// after the backup was taken: entities and per-column data are split
+    /// across standard segments, translating from <paramref name="srcOffsets"/>
+    /// (backup-time layout) to the current segment-capacity layout.
+    /// </summary>
+    internal void RestoreFlatBackup(Entity[] srcEntities, byte[] srcData, int[] srcOffsets, int count)
+    {
+        EnsureCapacity(count);
+
+        if (!_isChunked)
+        {
+            Array.Copy(srcEntities, _entities, count);
+            for (var col = 0; col < _elementSizes.Length; col++)
+            {
+                var elemSize = _elementSizes[col];
+                var columnBytes = count * elemSize;
+                if (columnBytes <= 0) continue;
+                ref var srcRef = ref Unsafe.Add(
+                    ref MemoryMarshal.GetArrayDataReference(srcData), srcOffsets[col]);
+                ref var dstRef = ref Unsafe.Add(
+                    ref MemoryMarshal.GetArrayDataReference(_data), _columnByteOffsets[col]);
+                Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, (uint)columnBytes);
+            }
+            _count = count;
+            return;
+        }
+
+        // Chunked: zero all existing segment counts, then distribute the flat
+        // backup across segments using the current segment-capacity offsets.
+        for (var i = 0; i < _segmentCount; i++)
+            _segments[i].Count = 0;
+
+        var remaining = count;
+        var segIdx = 0;
+        while (remaining > 0)
+        {
+            if (segIdx >= _segmentCount)
+                GrowChunked(remaining);
+
+            ref var seg = ref _segments[segIdx];
+            var take = Math.Min(_segmentCapacity, remaining);
+            var segStart = count - remaining;
+
+            Array.Copy(srcEntities, segStart, seg.Entities, 0, take);
+
+            for (var col = 0; col < _elementSizes.Length; col++)
+            {
+                var elemSize = _elementSizes[col];
+                var columnBytes = take * elemSize;
+                if (columnBytes <= 0) continue;
+                ref var srcRef = ref Unsafe.Add(
+                    ref MemoryMarshal.GetArrayDataReference(srcData),
+                    srcOffsets[col] + segStart * elemSize);
+                ref var dstRef = ref Unsafe.Add(
+                    ref MemoryMarshal.GetArrayDataReference(seg.Data),
+                    _columnByteOffsets[col]);
+                Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, (uint)columnBytes);
+            }
+
+            seg.Count = take;
+            remaining -= take;
+            segIdx++;
+        }
+        _count = count;
+        _flatEntitiesGeneration++;
+    }
+
     internal void FeedRowData<TFeeder>(int columnIndex, int globalRow, ref TFeeder feed)
         where TFeeder : struct, ISpanFeeder
     {
@@ -821,29 +929,42 @@ internal sealed partial class Archetype
         Signature signature, Type[] componentTypes, int capacity)
     {
         var componentCount = signature.Count;
-        var columnByteOffsets = new int[componentCount];
-        var elementSizes = new int[componentCount];
-
         if (componentCount == 0)
-            return (Array.Empty<byte>(), columnByteOffsets, elementSizes);
+            return (Array.Empty<byte>(), Array.Empty<int>(), Array.Empty<int>());
 
         if (componentTypes.Length != componentCount)
             throw new ArgumentException("Component type count must match signature count.", nameof(componentTypes));
 
-        var totalBytes = 0;
+        var elementSizes = new int[componentCount];
         for (var index = 0; index < componentCount; index++)
         {
             ThrowIfManagedComponent(componentTypes[index]);
             var elementSize = ComponentSizeCache.GetSize(componentTypes[index]);
             AssertPositiveElementSize(elementSize, componentTypes[index]);
-            totalBytes = AlignUp(totalBytes, Math.Min(elementSize, 8));
-            columnByteOffsets[index] = totalBytes;
             elementSizes[index] = elementSize;
-            totalBytes += elementSize * capacity;
         }
 
+        var (columnByteOffsets, totalBytes) = ComputeColumnLayout(elementSizes, capacity);
         var data = GC.AllocateArray<byte>(totalBytes);
         return (data, columnByteOffsets, elementSizes);
+    }
+
+    // Computes per-column byte offsets and total buffer size for a given
+    // per-entity capacity. Pure function over element sizes + capacity; the
+    // same offsets are valid for every segment of a chunked archetype.
+    private static (int[] Offsets, int TotalBytes) ComputeColumnLayout(int[] elementSizes, int capacity)
+    {
+        var count = elementSizes.Length;
+        var offsets = new int[count];
+        var totalBytes = 0;
+        for (var index = 0; index < count; index++)
+        {
+            var elementSize = elementSizes[index];
+            totalBytes = AlignUp(totalBytes, Math.Min(elementSize, 8));
+            offsets[index] = totalBytes;
+            totalBytes += elementSize * capacity;
+        }
+        return (offsets, totalBytes);
     }
 
     private static byte[] CreateStorageBytes(

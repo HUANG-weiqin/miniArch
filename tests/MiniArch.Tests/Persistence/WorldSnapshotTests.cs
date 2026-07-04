@@ -902,6 +902,67 @@ public sealed class WorldSnapshotTests
         });
     }
 
+    // BUG REPROOF: CaptureState stores a non-chunked backup; if the archetype
+    // is promoted to chunked storage between CaptureState and RestoreState
+    // (e.g. a GGPO prediction frame creates enough entities to trigger
+    // chunked promotion), RestoreState crashes inside RestoreTo because the
+    // non-chunked restore branch assumes arch._data / arch entity storage are
+    // the flat arrays it captured, but they have been replaced by segment
+    // arrays (or _data is null).
+    [Fact]
+    public void BUG_capture_nonchunked_then_promote_then_restore_crashes()
+    {
+        var world = new World();
+        var seed = world.Create(new Position(1, 2));
+        Assert.True(world.TryGetLocation(seed, out var info));
+        var arch = info.Archetype;
+        Assert.False(arch.IsChunked);
+
+        var snapshot = world.CaptureState();
+
+        // Simulate prediction-time promotion to chunked storage.
+        arch.ForceChunkedForTesting();
+        Assert.True(arch.IsChunked);
+
+        // This throws ArgumentException ("Destination array was not long
+        // enough") from RestoreTo's Array.Copy(Entities, arch.GetEntityStorageUnsafe(), Count).
+        world.RestoreState(snapshot);
+
+        Assert.True(world.IsAlive(seed));
+        Assert.Equal(new Position(1, 2), GetComponent<Position>(world, seed));
+    }
+
+    // Regression: multi-column cross-mode restore. Backup taken non-chunked
+    // has column data laid out at old-capacity offsets; after promotion the
+    // archetype uses segment-capacity offsets. RestoreFlatBackup must rebase
+    // each column independently.
+    [Fact]
+    public void Restore_flat_backup_to_chunked_preserves_multi_column_data()
+    {
+        var world = new World();
+        var e1 = world.Create(new Position(10, 20), new Velocity(1, 2));
+        var e2 = world.Create(new Position(30, 40), new Velocity(3, 4));
+        Assert.True(world.TryGetLocation(e1, out var info));
+        var arch = info.Archetype;
+        Assert.False(arch.IsChunked);
+
+        var snapshot = world.CaptureState();
+        arch.ForceChunkedForTesting();
+        Assert.True(arch.IsChunked);
+
+        world.RestoreState(snapshot);
+
+        Assert.True(world.TryGet(e1, out Position p1));
+        Assert.Equal(new Position(10, 20), p1);
+        Assert.True(world.TryGet(e1, out Velocity v1));
+        Assert.Equal(new Velocity(1, 2), v1);
+
+        Assert.True(world.TryGet(e2, out Position p2));
+        Assert.Equal(new Position(30, 40), p2);
+        Assert.True(world.TryGet(e2, out Velocity v2));
+        Assert.Equal(new Velocity(3, 4), v2);
+    }
+
     private readonly struct NoOpFeeder : Archetype.ISpanFeeder
     {
         public void Feed(ReadOnlySpan<byte> span) { }
