@@ -498,5 +498,28 @@ public sealed class QueryTests
 
         return checksum;
     }
+
+    [Fact]
+    public void QueryDescription_RequiredTypes_is_defensive_snapshot()
+    {
+        var desc = new QueryDescription().With<Position>().Without<Velocity>().WithAny<Position>();
+
+        // Required: mutate via cast
+        var required = (Type[])desc.RequiredTypes;
+        required[0] = typeof(string);
+
+        // Excluded: mutate via cast
+        var excluded = (Type[])desc.ExcludedTypes;
+        excluded[0] = typeof(int);
+
+        // Any: mutate via cast
+        var any = (Type[])desc.AnyTypes;
+        any[0] = typeof(double);
+
+        // Re-read: must still contain original types
+        Assert.Equal(typeof(Position), desc.RequiredTypes[0]);
+        Assert.Equal(typeof(Velocity), desc.ExcludedTypes[0]);
+        Assert.Equal(typeof(Position), desc.AnyTypes[0]);
+    }
 }
 

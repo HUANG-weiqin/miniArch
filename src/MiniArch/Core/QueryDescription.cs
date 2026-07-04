@@ -93,7 +93,7 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
 
         public ReadOnlySpan<Type> AsSpan() => _types ?? Array.Empty<Type>();
 
-        internal Type[] GetTypes() => _types ?? Array.Empty<Type>();
+        internal Type[] GetTypes() => _types?.ToArray() ?? Array.Empty<Type>();
 
         public QueryDescriptionTypeSet Add(Type type)
         {
