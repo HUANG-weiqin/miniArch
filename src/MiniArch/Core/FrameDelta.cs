@@ -605,7 +605,7 @@ public sealed class FrameDelta
                 throw new InvalidOperationException(
                     $"Invalid FrameDelta: negative byte length ({length}) at offset {_pos}.");
             if (length == 0) return ReadOnlySpan<byte>.Empty;
-            if (_pos + length > _end)
+            if ((uint)length > (uint)(_end - _pos))
                 throw new InvalidOperationException(
                     $"Truncated FrameDelta: insufficient data bytes at offset {_pos} " +
                     $"(need {length} bytes, {_end - _pos} remaining).");
@@ -624,7 +624,7 @@ public sealed class FrameDelta
             if (size < 0)
                 throw new InvalidOperationException(
                     $"Invalid FrameDelta: negative data size ({size}) at offset {_pos}.");
-            if (_pos + size > _end)
+            if ((uint)size > (uint)(_end - _pos))
                 throw new InvalidOperationException(
                     $"Truncated FrameDelta in SkipData at offset {_pos} " +
                     $"(need {size} bytes, {_end - _pos} remaining).");
@@ -647,7 +647,7 @@ public sealed class FrameDelta
                 if (size < 0)
                     throw new InvalidOperationException(
                         $"Invalid FrameDelta: negative data size ({size}) in Create component at offset {_pos}.");
-                if (_pos + size > _end)
+                if ((uint)size > (uint)(_end - _pos))
                     throw new InvalidOperationException(
                         $"Truncated FrameDelta in SkipCreatePayload at offset {_pos} " +
                         $"(need {size} bytes, {_end - _pos} remaining).");
