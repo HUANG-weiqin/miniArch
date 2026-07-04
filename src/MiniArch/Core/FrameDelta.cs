@@ -53,16 +53,19 @@ public sealed class FrameDelta
     public const int MaxOpsPerFrame = 1_000_000;
 
     // ── Wire format header ─────────────────────────────────────────────
-    // Every FrameDelta carries a 4-byte header at the start of _buffer:
+    // Non-empty deltas carry a 4-byte header at the start of _buffer:
     //   [0-1] Magic "MF" (0x4D46) — format identification.
     //   [2]   Flags: bit 7 = endianness (1=little, 0=big);
     //         bits 0-6 = format version (currently 1).
     //   [3]   Reserved (0x00).
     // Op data starts immediately after the header (offset 4).
+    // Empty deltas (_opCount == 0) have _length 0 and _buffer may be empty;
+    // AsSpan() returns an empty span with no header.
     //
     // Backward compatibility: buffers where byte[0] is not 'M' (i.e. legacy
     // format starting with a DeltaOpKind tag) are detected and read without
-    // header offset. All newly produced deltas always include the header.
+    // header offset. All newly produced non-empty deltas always include the
+    // header; empty deltas are an empty span.
     internal const int HeaderSize = 4;
     internal const byte FormatVersion = 0x01;
 

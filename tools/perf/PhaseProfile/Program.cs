@@ -3,6 +3,8 @@ using System.Runtime.CompilerServices;
 using Friflo.Engine.ECS;
 using MiniArch.Core;
 using MiniArchBenchmarks;
+// Both aliases map to the same type (MiniArch.Core.CommandStream).
+// "CB" and "CS" labels in output distinguish usage patterns, not implementations.
 using MiniCommandBuffer = MiniArch.Core.CommandStream;
 using MiniCommandStream = MiniArch.Core.CommandStream;
 using FrifloEntityStore = Friflo.Engine.ECS.EntityStore;

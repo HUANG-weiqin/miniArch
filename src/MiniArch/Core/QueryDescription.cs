@@ -69,7 +69,7 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
     public override bool Equals(object? obj) => obj is QueryDescription other && Equals(other);
 
     /// <summary>
-    /// Gets the cached hash code.
+    /// Gets the hash code computed from the three type sets.
     /// </summary>
     public override int GetHashCode() => HashCode.Combine(_required, _excluded, _any);
 

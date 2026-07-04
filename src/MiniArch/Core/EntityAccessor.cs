@@ -39,7 +39,7 @@ public ref struct EntityAccessor
     /// <summary>
     /// Writes a component value directly to the accessed entity.
     /// Assumes the component already exists on the entity (i.e. is part of the
-    /// entity's archetype). For adding new components, use <c>Commands.Add</c>.
+    /// entity's archetype). For adding new components, use <c>CommandStream.Add&lt;T&gt;</c>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Set<T>(in T value) where T : unmanaged

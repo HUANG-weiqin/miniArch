@@ -73,7 +73,7 @@ public static class Program
         GC.Collect(2, GCCollectionMode.Forced, true, true);
         GC.WaitForPendingFinalizers();
         Console.WriteLine();
-        Console.WriteLine("Command: dotnet run -c Release --project perf/CommandBufferGame.Perf -- --warmup 3 --measure 10");
+        Console.WriteLine("Command: dotnet run -c Release --project tools/perf/CommandBufferGame.Perf -- --warmup 3 --measure 10");
     }
 
     private static void RunAndPrint(ICommandBufferGameScenario scenario, BenchmarkOptions options)
@@ -815,7 +815,7 @@ public sealed class ArchSteadyCombatWorld : ICommandBufferGameScenario
 }
 
 // ============================================================
-// ParticleStorm scenarios �?high structural churn, minimal Set
+// ParticleStorm scenarios -- high structural churn, minimal Set
 // ============================================================
 
 public sealed class MiniArchCommandStreamParticleStormWorld : ICommandBufferGameScenario
@@ -1272,7 +1272,7 @@ public sealed class MiniArchCommandStreamHeroLightWorld : ICommandBufferGameScen
         _stream.Submit();
         var tQ = Stopwatch.GetTimestamp();
 
-        // Process existing requests �?create effects + modify HP
+        // Process existing requests -- create effects + modify HP
         foreach (var chunk in _world.Query(new MiniQueryDescription().With<RequestTag>().With<MiniArchRequestTarget>()).GetChunks())
         {
             var targets = chunk.GetSpan<MiniArchRequestTarget>();
@@ -1365,7 +1365,7 @@ public sealed class FrifloHeroLightWorld : ICommandBufferGameScenario
         _buffer.Playback();
         var tQ = Stopwatch.GetTimestamp();
 
-        // Process request entities �?create effects + modify HP
+        // Process request entities -- create effects + modify HP
         foreach (var (tags, targets, entities) in _store.Query<RequestTag, FrifloRequestTarget>().Chunks)
         {
             for (var i = 0; i < entities.Length; i++)

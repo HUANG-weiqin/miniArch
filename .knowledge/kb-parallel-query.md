@@ -203,7 +203,7 @@ cs.Submit();
 
 ### 如何验证并行实际启动
 
-参考 `tests/MiniArch.Tests/Core/ParallelQueryTests.cs::ForEachChunkParallel_actually_uses_multiple_threads`——通过 chunked 模式强制生成 16+ segments，观察 `Environment.CurrentManagedThreadId` 出现多个不同值。
+参考 `tests/MiniArch.Tests/Core/ParallelQueryTests.cs::ForEachChunkParallel_may_use_multiple_threads`——通过 chunked 模式强制生成 16+ segments，观察 `Environment.CurrentManagedThreadId` 出现多个不同值。
 
 ## 入口
 

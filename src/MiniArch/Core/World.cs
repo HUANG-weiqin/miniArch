@@ -382,8 +382,9 @@ public sealed partial class World : IDisposable
     /// <para/>
     /// <b>Not</b> the right tool for high-frequency in-place rollback (GGPO-style
     /// 60fps save/restore): each call allocates a new world. For that, use
-    /// <see cref="CaptureState"/> / <see cref="RestoreState"/> which recycles a
-    /// single opaque handle and allocates zero GC memory in steady state.
+    /// <see cref="CaptureState"/> / <see cref="RestoreState"/> which use pooled
+    /// snapshot handles and allocate zero GC memory in steady state. Multiple snapshots
+    /// may be live simultaneously (e.g. for an N-frame rollback window).
     /// </summary>
     public World Clone()
     {

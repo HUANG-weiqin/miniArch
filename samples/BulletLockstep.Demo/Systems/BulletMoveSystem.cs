@@ -13,10 +13,10 @@ namespace BulletLockstep.Demo.Systems;
 // structural changes inside the parallel body (those still go through the
 // simulator's record phase via CommandStream).
 //
-// Determinism: every host runs the same number of chunks through the same
-// Parallel.For partitions, so the resulting Position values are identical
-// regardless of host. Writes are commutative across chunks (each chunk's
-// rows are independent), so partitioning does not affect the final state.
+// Determinism: each chunk's rows are updated independently from their old values
+// (positions[i] = f(positions[i], velocities[i])), so the result does not depend
+// on chunk partitioning or execution order. Different Parallel.For partitions
+// across hosts still converge to identical final state.
 public static class BulletMoveSystem
 {
     private static readonly QueryDescription Query = new QueryDescription()

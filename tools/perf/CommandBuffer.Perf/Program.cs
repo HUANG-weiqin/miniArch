@@ -3,6 +3,8 @@ using System.Runtime.CompilerServices;
 using Friflo.Engine.ECS;
 using MiniArch.Core;
 using MiniArchBenchmarks;
+// Both aliases map to the same type (MiniArch.Core.CommandStream).
+// "CB" and "CS" labels in output distinguish usage patterns, not implementations.
 using MiniCommandBuffer = MiniArch.Core.CommandStream;
 using MiniCommandStream = MiniArch.Core.CommandStream;
 using MiniEntity = MiniArch.Entity;
@@ -91,7 +93,7 @@ static void Run(string engine, CommandBufferBenchmarkScenario scenario, Func<(Ac
 }
 
 // ════════════════════════════════════════════════════════════════
-//  Unified record helpers (no Destroy �?fair comparison)
+//  Unified record helpers (no Destroy -- fair comparison)
 // ════════════════════════════════════════════════════════════════
 
 static void Record(CommandStream cb, MiniSharedCommandBufferState state, CommandBufferBenchmarkScenario scenario)

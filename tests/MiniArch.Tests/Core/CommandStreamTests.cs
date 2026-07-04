@@ -418,8 +418,8 @@ public sealed class CommandStreamTests
         stream.Remove<Velocity>(existing);
 
         var delta = stream.Snapshot();
-        // Created entity �??Reserved + Created with 2 components
-        // Existing entity �??1 Set + 1 Remove
+        // Created entity -- Reserved + Created with 2 components
+        // Existing entity -- 1 Set + 1 Remove
         // Total: 1 Reserved + 1 Created + 1 Set + 1 Remove = 4
         Assert.Equal(4, delta.DeltaCount);
     }
@@ -501,7 +501,7 @@ public sealed class CommandStreamTests
         var world = new World();
         var stream = new CommandStream(world);
 
-        // Nothing recorded �??delta should be empty
+        // Nothing recorded -- delta should be empty
         var delta = stream.Snapshot();
         Assert.True(delta.IsEmpty);
         Assert.Equal(0, delta.DeltaCount);
@@ -714,12 +714,12 @@ public sealed class CommandStreamTests
     [Fact]
     public void CrossWorld_replay_create_empty_entity()
     {
-        // Create an entity with no components �??should produce an empty CreatedEntity.
+        // Create an entity with no components -- should produce an empty CreatedEntity.
         var source = new World();
         var stream = new CommandStream(source);
 
         var e = stream.Create();
-        // No components �??empty entity is now fully supported
+        // No components -- empty entity is now fully supported
         var delta = stream.Snapshot();
 
         Assert.NotEmpty(delta.CreatedEntities());
@@ -885,7 +885,7 @@ public sealed class CommandStreamTests
         stream.Destroy(e); // Cancel pending entity
         Assert.True(stream.Submit());
 
-        // Entity was reserved then released �??never became alive
+        // Entity was reserved then released -- never became alive
         Assert.False(world.IsAlive(e));
 
         // Verify the ID is reusable (not leaked)
@@ -1191,7 +1191,7 @@ public sealed class CommandStreamTests
         stream.Destroy(clone);
         var delta = stream.Snapshot();
 
-        // Clone-then-destroy �??released, not created
+        // Clone-then-destroy -- released, not created
         Assert.Empty(delta.CreatedEntities());
         Assert.Empty(delta.DestroyedEntities());
         Assert.Contains(clone, delta.ReservedEntities());
@@ -1641,7 +1641,7 @@ public sealed class CommandStreamTests
 
         var e = stream.Create();
         stream.Add(e, new Position(1, 2));
-        stream.Add(e, new Position(3, 4)); // Duplicate Add �??should collapse to one
+        stream.Add(e, new Position(3, 4)); // Duplicate Add -- should collapse to one
         stream.Add(e, new Health(100));
 
         Assert.True(stream.Submit());
@@ -2019,7 +2019,7 @@ public sealed class CommandStreamTests
         stream.Submit();
 
         Assert.False(world.IsAlive(parent));
-        // Existing child survives �??it was never parented in the live world.
+        // Existing child survives -- it was never parented in the live world.
         Assert.True(world.IsAlive(existingChild));
     }
 
@@ -2202,7 +2202,7 @@ public sealed class DeferredCreateTests
     }
 
     // ══════════════════════════════════════════════════════════—
-    // Placeholder delta �??Replay (multi-host lockstep core path)
+    // Placeholder delta -- Replay (multi-host lockstep core path)
     // ══════════════════════════════════════════════════════════—
 
     [Fact]
