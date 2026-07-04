@@ -118,6 +118,9 @@ public sealed partial class World : IDisposable
         _freeIdCount = 0;
         _destroyVisitedGen = [];
         _destroyCurrentGen = 0;
+        _replayPlaceholderMap = [];
+        _replayMapCount = 0;
+        _stateSnapshotPool.Clear();
         _hierarchy.Reset();
         _createArchetypeCacheGeneration = int.MaxValue;
     }
