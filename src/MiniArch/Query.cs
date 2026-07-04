@@ -188,11 +188,13 @@ public readonly struct Query
     /// <see cref="IChunkForEach.OnChunk"/> call is devirtualised to the
     /// concrete <typeparamref name="TForEach"/> type.
     /// <para>
-    /// <typeparamref name="TForEach"/> is captured into the <c>Parallel.For</c>
-    /// delegate — all workers share the same captured instance. Do not mutate
-    /// fields from <see cref="IChunkForEach.OnChunk"/>; the struct must be
-    /// stateless or thread-safe. For per-worker accumulation, use
-    /// <c>[ThreadStatic]</c> fields or explicit synchronization inside the struct.
+    /// <typeparamref name="TForEach"/> is passed by value and captured into the
+    /// <c>Parallel.For</c> closure — all workers share the same captured copy.
+    /// Mutating struct fields from <see cref="IChunkForEach.OnChunk"/> is a
+    /// data race on the closure copy and the caller's original variable is never
+    /// updated. To produce visible results, write to external shared state (e.g.
+    /// <c>ConcurrentBag&lt;T&gt;</c>), thread-local storage with explicit merge,
+    /// or a thread-safe collector.
     /// </para>
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -286,10 +288,12 @@ public delegate void ChunkAction(ChunkView chunk);
 /// (useful for accumulators).
 /// </para>
 /// <para>
-/// <b>Parallel usage</b> (by-value parameter): the struct is captured into
-/// the <c>Parallel.For</c> delegate — all workers share the same captured
-/// instance. Do not mutate fields from <see cref="OnChunk"/>; for per-worker
-/// accumulation use <c>[ThreadStatic]</c> fields or explicit synchronization.
+/// <b>Parallel usage</b> (by-value parameter): the struct is captured by value
+/// into the <c>Parallel.For</c> closure — all workers share the same captured
+/// copy. Mutating fields from <see cref="OnChunk"/> is a data race on the
+/// closure copy and the caller&#39;s variable is never updated. To produce visible
+/// results, write to external shared state, thread-local storage with explicit
+/// merge, or a thread-safe collector.
 /// </para>
 /// </remarks>
 public interface IChunkForEach

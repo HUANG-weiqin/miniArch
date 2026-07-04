@@ -123,7 +123,7 @@ cs.Submit();
   ```
   换成 struct + interface 后 JIT 跨泛型特化，零分配 + 内层调用去虚化。
 - **设计取舍**：没有像 Arch/Friflo 那样提供 `IForEach<T1,T2>` typed span 接口。ChunkView 内部的 `GetSpan<T>()` 已经只做 1 次 colIdx 查找 + 1 次 IsChunked 分支（每 chunk 而非每 entity），typed 接口能省的常数有限。YAGNI：用户用例出现 typed 收益后再加。
-- **顺序 vs 并行的参数模式**：顺序用 `ref TForEach`（job 字段跨 chunk 可见，支持 accumulator）；并行用 by-value `TForEach`（struct 被捕获进 `Parallel.For` 委托，所有 worker 共享同一实例，不可在 `OnChunk` 中 mutate 字段；per-worker 累积用 `[ThreadStatic]` 或显式同步）。并行不能用 `in`/`ref`，因为 `Parallel.For` 的 lambda 无法捕获 ref-like 参数。
+- **顺序 vs 并行的参数模式**：顺序用 `ref TForEach`（job 字段跨 chunk 可见，支持 accumulator）；并行用 by-value `TForEach`（struct 被值捕获进 `Parallel.For` 闭包——所有 worker 共享同一 captured copy。在 `OnChunk` 中 mutate struct 字段对闭包 copy 构成 data race，且调用方变量不会被更新。要产生可见结果，应写到外部共享引用状态、线程本地状态并显式合并，或使用线程安全 collector。并行不能用 `in`/`ref`，因为 `Parallel.For` 的 lambda 无法捕获 ref-like 参数）。
 
 ### 历史：为什么用 delegate 起步
 

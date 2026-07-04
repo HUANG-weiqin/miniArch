@@ -427,9 +427,12 @@ struct SumJob : IChunkForEach
 }
 ```
 
-> **Note:** For stateful jobs on the parallel path, use `[ThreadStatic]` fields for
-> per-worker accumulation, then merge results after the call returns. The struct
-> is copied per worker, so fields are not shared.
+> **Note:** For stateful jobs on the parallel path, write to external shared
+> state (e.g. `ConcurrentBag<T>`), thread-local storage with explicit merge,
+> or a thread-safe collector. The struct is captured by value into the
+> `Parallel.For` closure — all workers share the same captured copy. Mutating
+> the struct's own fields is a data race on the closure copy, and the caller's
+> variable is never updated.
 
 ---
 
