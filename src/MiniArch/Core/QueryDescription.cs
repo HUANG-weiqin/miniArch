@@ -141,7 +141,14 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
 
         public override bool Equals(object? obj) => obj is QueryDescriptionTypeSet other && Equals(other);
 
-        public override int GetHashCode() => SpanSorting.CombineHashCodes(AsSpan());
+        public override int GetHashCode()
+        {
+            var span = AsSpan();
+            int hash = 17;
+            for (int i = 0; i < span.Length; i++)
+                hash = unchecked(hash * 31 + span[i].TypeHandle.GetHashCode());
+            return hash;
+        }
 
         private QueryDescriptionTypeSet(Type[] types)
         {

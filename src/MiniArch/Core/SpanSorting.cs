@@ -32,15 +32,4 @@ internal static class SpanSorting
 
         return hash;
     }
-
-    public static int CombineHashCodes(ReadOnlySpan<Type> types)
-    {
-        int hash = 17;
-        for (int i = 0; i < types.Length; i++)
-        {
-            hash = unchecked(hash * 31 + types[i].TypeHandle.GetHashCode());
-        }
-
-        return hash;
-    }
 }
