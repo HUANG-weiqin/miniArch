@@ -6,10 +6,7 @@ public sealed partial class World
 {
     internal void Reset(int entitySlotCount)
     {
-        if (entitySlotCount < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(entitySlotCount));
-        }
+        ArgumentOutOfRangeException.ThrowIfNegative(entitySlotCount);
 
         _archetypes.Clear();
         _archetypeByMask.Clear();

@@ -35,7 +35,7 @@ internal static class EntityFieldResolver
     {
         var id = typeId.Value;
         var arr = Volatile.Read(ref s_offsetsByTypeId);
-        if (arr != null && (uint)id < (uint)arr.Length)
+        if (arr is not null && (uint)id < (uint)arr.Length)
         {
             var result = arr[id];
             if (result is not null)

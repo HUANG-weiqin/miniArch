@@ -129,7 +129,7 @@ public sealed partial class World : IDisposable
     [Conditional("DEBUG")]
     private void AssertNotDisposed()
     {
-        if (_disposed) throw new ObjectDisposedException(nameof(World));
+        ObjectDisposedException.ThrowIf(_disposed, this);
     }
 
     [Conditional("DEBUG")]

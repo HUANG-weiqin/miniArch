@@ -56,12 +56,9 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
     /// <summary>
     /// Compares two descriptions by value.
     /// </summary>
-    public bool Equals(QueryDescription other)
-    {
-        return _required.Equals(other._required)
-            && _excluded.Equals(other._excluded)
-            && _any.Equals(other._any);
-    }
+    public bool Equals(QueryDescription other) => _required.Equals(other._required)
+        && _excluded.Equals(other._excluded)
+        && _any.Equals(other._any);
 
     /// <summary>
     /// Compares against an object.
@@ -72,6 +69,16 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
     /// Gets the hash code computed from the three type sets.
     /// </summary>
     public override int GetHashCode() => HashCode.Combine(_required, _excluded, _any);
+
+    /// <summary>
+    /// Returns whether two query descriptions are equal.
+    /// </summary>
+    public static bool operator ==(QueryDescription left, QueryDescription right) => left.Equals(right);
+
+    /// <summary>
+    /// Returns whether two query descriptions are not equal.
+    /// </summary>
+    public static bool operator !=(QueryDescription left, QueryDescription right) => !left.Equals(right);
 
     internal ReadOnlySpan<Type> GetRequiredTypes() => _required.AsSpan();
 

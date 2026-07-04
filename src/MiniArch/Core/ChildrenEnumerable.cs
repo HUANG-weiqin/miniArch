@@ -21,6 +21,9 @@ public readonly struct ChildrenEnumerable
         _firstSlot = firstSlot;
     }
 
+    /// <summary>
+    /// Returns an enumerator that iterates through the live children of the entity.
+    /// </summary>
     public ChildrenEnumerator GetEnumerator() => new(_childEntity, _childNext, _world, _firstSlot);
 }
 
@@ -44,8 +47,14 @@ public struct ChildrenEnumerator
         Current = default;
     }
 
+    /// <summary>
+    /// Gets the current child entity in the enumeration.
+    /// </summary>
     public Entity Current { get; private set; }
 
+    /// <summary>
+    /// Advances the enumerator to the next live child entity.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MoveNext()
     {

@@ -15,10 +15,7 @@ internal sealed partial class Archetype
     // ──────────────────────────────────────────────
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private (int SegmentIndex, int LocalRow) GetSegmentAndLocal(int globalRow)
-    {
-        return (globalRow >> _segmentBitShift, globalRow & _segmentMask);
-    }
+    private (int SegmentIndex, int LocalRow) GetSegmentAndLocal(int globalRow) => (globalRow >> _segmentBitShift, globalRow & _segmentMask);
 
     // ──────────────────────────────────────────────
     //  Conversion & segment growth
@@ -175,8 +172,7 @@ internal sealed partial class Archetype
 
     internal int ReserveRows(int count)
     {
-        if (count < 0)
-            throw new ArgumentOutOfRangeException(nameof(count));
+        ArgumentOutOfRangeException.ThrowIfNegative(count);
 
         if (count == 0)
             return _count;
@@ -329,7 +325,7 @@ internal sealed partial class Archetype
 
         if (_cachedFlatEntitiesGeneration != _flatEntitiesGeneration)
         {
-            if (_cachedFlatEntities == null || _cachedFlatEntities.Length < _count)
+            if (_cachedFlatEntities is null || _cachedFlatEntities.Length < _count)
                 _cachedFlatEntities = new Entity[_count];
 
             var off = 0;

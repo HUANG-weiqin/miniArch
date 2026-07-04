@@ -15,12 +15,9 @@ internal readonly struct QueryFilter : IEquatable<QueryFilter>
 
     public QueryComponentSet Any { get; }
 
-    public bool Equals(QueryFilter other)
-    {
-        return Required.Equals(other.Required)
-            && Excluded.Equals(other.Excluded)
-            && Any.Equals(other.Any);
-    }
+    public bool Equals(QueryFilter other) => Required.Equals(other.Required)
+        && Excluded.Equals(other.Excluded)
+        && Any.Equals(other.Any);
 
     public override bool Equals(object? obj) => obj is QueryFilter other && Equals(other);
 

@@ -135,7 +135,7 @@ public sealed partial class World
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void ApplyTypedSet<T>(Entity entity, EntityRecord info, ComponentType componentType, in T component) where T : unmanaged
+    internal static void ApplyTypedSet<T>(Entity entity, EntityRecord info, ComponentType componentType, in T component) where T : unmanaged
     {
         var archetype = info.Archetype!;
 
@@ -159,7 +159,7 @@ public sealed partial class World
         MoveEntityFromBytes(entity, info, destination, componentType, source);
     }
 
-    internal unsafe void ApplyRawSet(Entity entity, EntityRecord info, ComponentType componentType, byte* source)
+    internal static unsafe void ApplyRawSet(Entity entity, EntityRecord info, ComponentType componentType, byte* source)
     {
         var archetype = info.Archetype!;
         if (!archetype.TryGetComponentIndex(componentType, out var componentIndex))

@@ -1,6 +1,6 @@
 ---
 title: Deferred Create — Multi-Host Lockstep Design
-module: MiniArch.Core.CommandStream
+module: MiniArch.Core CommandStream
 description: DeferredEntities flag 让 Create/Clone 在 placeholder（多 host lockstep）和 immediate（单机/权威服务器）之间切换。Snapshot 按 flag 输出 placeholder delta 或 real-id delta；SubmitAndSnapshotAsync 始终输出 real-id delta。
 updated: 2026-07-04
 ---

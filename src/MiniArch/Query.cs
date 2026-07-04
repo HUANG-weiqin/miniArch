@@ -30,18 +30,12 @@ public readonly struct Query
     /// <summary>
     /// Returns entities sorted by <see cref="Entity.Id"/> using an internally pooled buffer.
     /// </summary>
-    public OrderedEntityQuery OrderByEntityId()
-    {
-        return new OrderedEntityQuery(_query, descending: false);
-    }
+    public OrderedEntityQuery OrderByEntityId() => new OrderedEntityQuery(_query, descending: false);
 
     /// <summary>
     /// Returns entities sorted by <see cref="Entity.Id"/> in descending order.
     /// </summary>
-    public OrderedEntityQuery OrderByEntityIdDescending()
-    {
-        return new OrderedEntityQuery(_query, descending: true);
-    }
+    public OrderedEntityQuery OrderByEntityIdDescending() => new OrderedEntityQuery(_query, descending: true);
 
     /// <summary>
     /// Returns entities sorted by component <typeparamref name="T"/>.
@@ -260,7 +254,7 @@ public readonly struct Query
     private static ChunkView[] GetPartitionBuffer(int minLength)
     {
         var arr = t_partitions;
-        if (arr != null && arr.Length >= minLength)
+        if (arr is not null && arr.Length >= minLength)
             return arr;
         arr = new ChunkView[minLength];
         t_partitions = arr;

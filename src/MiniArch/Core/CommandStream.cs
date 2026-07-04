@@ -65,6 +65,9 @@ public sealed class CommandStream
 
     // ── Construction ───────────────────────────────────────────────────
 
+    /// <summary>
+    /// Initializes a new instance bound to the specified world for deferred command recording.
+    /// </summary>
     public CommandStream(World world)
     {
         _world = world ?? throw new ArgumentNullException(nameof(world));
@@ -126,6 +129,9 @@ public sealed class CommandStream
 
     // ── Record API ────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Records a deferred entity creation and returns the new entity (placeholder or real).
+    /// </summary>
     public Entity Create()
     {
         if (_parallelMode)
@@ -232,6 +238,9 @@ public sealed class CommandStream
         return batchIdx;
     }
 
+    /// <summary>
+    /// Records an Add command for the specified component on the given entity.
+    /// </summary>
     public void Add<T>(Entity entity, T component) where T : unmanaged
     {
         if (_parallelMode)
@@ -250,6 +259,9 @@ public sealed class CommandStream
         }
     }
 
+    /// <summary>
+    /// Records a Set command for the specified component on the given entity.
+    /// </summary>
     public void Set<T>(Entity entity, T component) where T : unmanaged
     {
         if (_parallelMode)
@@ -268,6 +280,9 @@ public sealed class CommandStream
         }
     }
 
+    /// <summary>
+    /// Records a Remove command for the specified component type from the given entity.
+    /// </summary>
     public void Remove<T>(Entity entity) where T : unmanaged
     {
         if (_parallelMode)
@@ -286,6 +301,9 @@ public sealed class CommandStream
         }
     }
 
+    /// <summary>
+    /// Records a Destroy command for the specified entity.
+    /// </summary>
     public void Destroy(Entity entity)
     {
         if (_parallelMode)
@@ -305,6 +323,9 @@ public sealed class CommandStream
         }
     }
 
+    /// <summary>
+    /// Records an AddChild command establishing a parent-child relationship.
+    /// </summary>
     public void AddChild(Entity parent, Entity child)
     {
         if (_parallelMode)
@@ -316,6 +337,9 @@ public sealed class CommandStream
         _frozen.HierarchyByChild[child] = new HierarchyIntent(true, parent);
     }
 
+    /// <summary>
+    /// Records a RemoveChild command detaching the entity from its parent.
+    /// </summary>
     public void RemoveChild(Entity child)
     {
         if (_parallelMode)
@@ -327,6 +351,9 @@ public sealed class CommandStream
         _frozen.HierarchyByChild[child] = new HierarchyIntent(false, default);
     }
 
+    /// <summary>
+    /// Records a clone of the source entity, including all components and descendants.
+    /// </summary>
     public Entity Clone(Entity source)
     {
         if (!_world.TryGetLocation(source, out var location))
@@ -397,6 +424,9 @@ public sealed class CommandStream
 
     // ── Submit ────────────────────────────────────────────────────────
 
+    /// <summary>
+    /// Applies all recorded commands to the world and returns true if any work was performed.
+    /// </summary>
     public bool Submit()
     {
         if (!HasAnyCommands())
@@ -825,8 +855,8 @@ public sealed class CommandStream
         }
         finally
         {
-            if (pooledTypes != null) ArrayPool<ComponentType>.Shared.Return(pooledTypes);
-            if (pooledOffsets != null) ArrayPool<int>.Shared.Return(pooledOffsets);
+            if (pooledTypes is not null) ArrayPool<ComponentType>.Shared.Return(pooledTypes);
+            if (pooledOffsets is not null) ArrayPool<int>.Shared.Return(pooledOffsets);
         }
     }
 
@@ -1485,7 +1515,7 @@ public sealed class CommandStream
         ref var slot = ref MemoryMarshal.GetArrayDataReference(stores);
         slot = ref Unsafe.Add(ref slot, id);
         var store = slot;
-        if (store == null)
+        if (store is null)
         {
             store = new ComponentStore<T>();
             slot = store;
@@ -1512,12 +1542,12 @@ public sealed class CommandStream
         }
 
         var store = _frozen.Stores[id];
-        if (store == null)
+        if (store is null)
         {
             lock (_storeCreateLock)
             {
                 store = _frozen.Stores[id];
-                if (store == null)
+                if (store is null)
                 {
                     store = new ComponentStore<T>();
                     _frozen.Stores[id] = store;

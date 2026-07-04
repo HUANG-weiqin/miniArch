@@ -51,10 +51,7 @@ public sealed partial class World
     public void EnsureCapacity(int entityCapacity)
     {
         AssertNotDisposed();
-        if (entityCapacity < 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(entityCapacity));
-        }
+        ArgumentOutOfRangeException.ThrowIfNegative(entityCapacity);
 
         if (_records.Length < entityCapacity)
         {
@@ -185,13 +182,13 @@ public sealed partial class World
     }
 
     [DoesNotReturn]
-    private void ThrowInvalidEntity(Entity entity)
+    private static void ThrowInvalidEntity(Entity entity)
     {
         throw new InvalidOperationException($"Entity {entity} does not exist. The entity may have never been created, or its id is invalid.");
     }
 
     [DoesNotReturn]
-    private void ThrowStaleEntity(Entity entity)
+    private static void ThrowStaleEntity(Entity entity)
     {
         throw new InvalidOperationException($"Entity {entity} is no longer alive. It may have been destroyed in a previous frame or the handle is stale.");
     }

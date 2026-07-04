@@ -1,6 +1,6 @@
 ---
 title: CommandStream Game Steady-State Perf
-module: CommandBufferGame.Perf
+module: CommandStreamGame.Perf
 description: Independent MiniArch CommandStream vs Friflo vs Arch command-buffer + reused-world steady game benchmark
 updated: 2026-06-30 (修正 tools/perf 与 docs/internal/plans 路径漂移)
 ---

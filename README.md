@@ -60,7 +60,7 @@ readonly record struct Velocity(float X, float Y);
 
 ## Performance
 
-In Set-heavy game scenarios (position, health, velocity updates), MiniArch CommandStream outperforms Friflo's `Playback()` by **+27–65%** because MiniArch scans once per Set operation while Friflo scans twice. [Full benchmark comparison →](docs/comparison.md)
+In Set-heavy game scenarios (position, health, velocity updates), MiniArch CommandStream outperforms Friflo's `Compile()` by **+27–65%** because MiniArch scans once per Set operation while Friflo scans twice. [Full benchmark comparison →](docs/comparison.md)
 
 ---
 
