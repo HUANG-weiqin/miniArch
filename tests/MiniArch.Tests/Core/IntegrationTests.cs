@@ -28,11 +28,9 @@ public sealed class IntegrationTests
         Assert.Equal(1, location.Archetype.Signature.Count);
         Assert.Contains(positionId, location.Archetype.Signature);
 
-        var archetypes = query.Chunks.ToList();
         Assert.Equal(2, query.MatchedArchetypes.Count);
         // Both matching archetypes contribute a chunk (one empty, one with 1 entity).
-        Assert.Equal(2, archetypes.Count);
-        Assert.Single(archetypes.Where(c => c.EntityCount == 1));
+        Assert.Single(query.MatchedArchetypes.Where(c => c.EntityCount == 1));
 
         Assert.Equal(entity, location.Archetype.GetEntity(location.RowIndex));
         Assert.Equal(new Position(9, 9), location.Archetype.GetComponentAt<Position>(location.Archetype.GetComponentIndex(positionId), location.RowIndex));

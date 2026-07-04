@@ -99,11 +99,6 @@ internal sealed class QueryCache
         return _snapshotChunkViews;
     }
 
-    /// <summary>
-    /// Gets an archetype enumerable.
-    /// </summary>
-    internal ArchetypeEnumerable Chunks => new(this);
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EnsureRefreshed()
     {

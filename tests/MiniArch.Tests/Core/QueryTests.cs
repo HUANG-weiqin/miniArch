@@ -70,7 +70,7 @@ public sealed class QueryTests
         var query = MiniQuery.Create(world, in description);
         var archetypes = new List<Archetype>();
 
-        foreach (var archetype in query.Chunks)
+        foreach (var archetype in query.MatchedArchetypes)
         {
             archetypes.Add(archetype);
         }
@@ -93,7 +93,7 @@ public sealed class QueryTests
         var query = MiniQuery.Create(world, in description);
 
         var enumeratedArchetypes = new List<Archetype>();
-        foreach (var archetype in query.Chunks)
+        foreach (var archetype in query.MatchedArchetypes)
         {
             enumeratedArchetypes.Add(archetype);
         }
@@ -331,7 +331,7 @@ public sealed class QueryTests
     private static Entity[] CaptureEnumeratedEntities(MiniQuery query)
     {
         var entities = new List<Entity>();
-        foreach (var archetype in query.Chunks)
+        foreach (var archetype in query.MatchedArchetypes)
         {
             for (var row = 0; row < archetype.EntityCount; row++)
             {

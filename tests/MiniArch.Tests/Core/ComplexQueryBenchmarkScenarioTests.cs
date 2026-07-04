@@ -72,7 +72,7 @@ public sealed class ComplexQueryBenchmarkScenarioTests
         var query = MiniQuery.Create(state.World, in description);
 
         var inspectedChunkCount = 0;
-        foreach (var archetype in query.Chunks)
+        foreach (var archetype in query.MatchedArchetypes)
         {
             if (archetype.EntityCount == 0)
             {
@@ -116,7 +116,7 @@ public sealed class ComplexQueryBenchmarkScenarioTests
     private static int CountEntities(MiniQuery query)
     {
         var total = 0;
-        foreach (var archetype in query.Chunks)
+        foreach (var archetype in query.MatchedArchetypes)
         {
             total += archetype.EntityCount;
         }
