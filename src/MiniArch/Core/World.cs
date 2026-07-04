@@ -493,7 +493,14 @@ public sealed partial class World : IDisposable
     /// After replay, use <see cref="TryResolvePlaceholder"/> to convert placeholder entity handles
     /// to real entity IDs within the current frame. Placeholder handles are **not valid** across
     /// frames: always store and use the resolved real <see cref="Entity"/> instead.
+    /// <para>
+    /// For tracked entity support (<see cref="CommandStream.Track"/>), use
+    /// <see cref="CommandStream.Replay(FrameDelta)"/> instead, which wraps
+    /// this method and auto-resolves tracked EntitySlots.
+    /// This method will be removed in a future version.
+    /// </para>
     /// </remarks>
+    [Obsolete("Use CommandStream.Replay(delta) for EntitySlot support. This method will be removed in a future version.")]
     public void Replay(FrameDelta delta)
     {
         ReplayCore(delta);

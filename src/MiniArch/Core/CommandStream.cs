@@ -510,7 +510,9 @@ public sealed class CommandStream
     /// </remarks>
     public void Replay(FrameDelta delta)
     {
+#pragma warning disable CS0618 // World.Replay is obsolete but is the implementation we need here.
         _world.Replay(delta);
+#pragma warning restore CS0618
 
         // Only resolve tracked slots when replaying our own delta.
         // Peer deltas (deserialized, OriginStream == null) are skipped.
