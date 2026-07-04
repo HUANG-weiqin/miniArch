@@ -71,6 +71,14 @@ public sealed class FrameDelta
     internal int _opCount;
 
     /// <summary>
+    /// Set by <see cref="CommandStream.Snapshot"/> to the producing stream.
+    /// Used by <see cref="CommandStream.Replay(FrameDelta)"/> to auto-detect
+    /// the stream's own delta and resolve tracked EntitySlots.
+    /// Not serialized —deserialized deltas have this set to <c>null</c>.
+    /// </summary>
+    internal CommandStream? OriginStream;
+
+    /// <summary>
     /// Returns the offset at which op data starts (HeaderSize for new format,
     /// 0 for legacy format without header).
     /// </summary>
