@@ -136,6 +136,26 @@ public sealed class QueryTests
     }
 
     [Fact]
+    public void BUG_order_by_component_supports_chunked_archetypes()
+    {
+        var world = new World();
+        var first = world.Create(new Position(2, 0));
+        var second = world.Create(new Position(1, 0));
+        var description = new QueryDescription().With<Position>();
+        var query = MiniQueryCache.Create(world, in description);
+        Assert.Single(query.MatchedArchetypes).ForceChunkedForTesting();
+
+        var sorted = new List<Entity>();
+        foreach (var entity in world.Query(in description)
+                     .OrderByComponent<Position>((left, right) => left.X.CompareTo(right.X)))
+        {
+            sorted.Add(entity);
+        }
+
+        Assert.Equal(new[] { second, first }, sorted);
+    }
+
+    [Fact]
     public void Matching_archetypes_refresh_when_world_changes()
     {
         var world = new World(chunkCapacity: 1);

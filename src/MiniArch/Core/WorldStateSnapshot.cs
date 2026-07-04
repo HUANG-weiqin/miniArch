@@ -225,8 +225,6 @@ internal struct ArchetypeBackupEntry
             ref var seg = ref arch.GetSegmentRef(i);
             Debug.Assert(seg.Entities.Length == segCap,
                 "All segments in a chunked archetype share the same _segmentCapacity.");
-            Debug.Assert(seg.Data.Length >= segCap * sizeof(byte) /* enough for entities */,
-                "Segment data must be sized for _segmentCapacity entities.");
 
             if (entry.SegmentEntities[i] is null || entry.SegmentEntities[i].Length < seg.Entities.Length)
                 entry.SegmentEntities[i] = new Entity[seg.Entities.Length];

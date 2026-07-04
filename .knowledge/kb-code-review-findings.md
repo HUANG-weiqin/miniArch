@@ -2,7 +2,7 @@
 title: 代码审阅发现清单
 module: Meta
 description: 历次代码审阅中产生过的猜想与结论。真 bug 索引 + 已排除的非 bug 猜想。AI 审阅前必读，避免重复验证已知结论。
-updated: 2026-07-05 (4 真 bug 已修复 + 2026-07-05 全面 chunk + CommandStream + FrameDelta + 健壮性审阅，新增 A7-A12、W7-W8、WC1-WC2、CS1-CS6、F5-F8、Q5-Q6 共 20 条非 bug 猜想)
+updated: 2026-07-05 (6 真 bug 已修复 + 2026-07-05 健壮性审阅新增 OrderByComponent chunked bug 与 chunked snapshot Debug.Assert 修复)
 ---
 # 代码审阅发现清单
 
@@ -30,7 +30,7 @@ updated: 2026-07-05 (4 真 bug 已修复 + 2026-07-05 全面 chunk + CommandStre
 
 ## 已确认的真 bug → 已修复（`BUG_` 测试转为回归测试）
 
-> 四条 bug 均已修复，`BUG_` 前缀测试现在通过，充当回归守卫。
+> 六条 bug 均已修复，`BUG_` 前缀测试现在通过，充当回归守卫。
 
 | 测试名 | 位置 | 一句话描述 | 修复 |
 |---|---|---|---|
@@ -38,6 +38,8 @@ updated: 2026-07-05 (4 真 bug 已修复 + 2026-07-05 全面 chunk + CommandStre
 | `BUG_parallel_append_concurrent_resize_is_not_atomic` | `CommandStream.cs:AppendConcurrent` | `ParallelRecording=true` 下并发 append 时，`_data`/`_entities`/`_kinds` 三个独立 `Array.Resize` 非原子；等待循环只看 `_data.Length` 作闸门，外部线程读到 `_data` 已扩容就退出，写 `_entities[slot]`/`_kinds[slot]` 越界或写入废弃数组 | `AppendConcurrent` 改为在 `_resizeLock` 内完成 ensure+write（与 `AppendDestroyConcurrent` 同模式），消除三数组观测不一致和数据丢失（resize Array.Copy 与延迟写竞争）|
 | `BUG_capacity_above_segment_capacity_corrupts_row_mapping_on_promote` | `Archetype.Storage.cs:ConvertToChunked` | 当 non-chunked `_capacity > _segmentCapacity` 时（构造大 capacity 或 `EnsureCapacity` doubling 分支 `newCapacity=max(required, _capacity*2)` 把容量顶过 segment 阈值），promote 路径把超长 buffer 直接当 segment[0]，之后 `GetSegmentAndLocal` 按 `_segmentMask` 切分会把 `globalRow ≥ _segmentCapacity` 的数据映射到不存在的 segment | 删除 `NormalizeForChunked`，`ConvertToChunked` 统一负责 canonical split：`_capacity == _segmentCapacity` 时 fast-path wrap（正常 doubling 阈值 promote 零拷贝），否则 general path 按 `_segmentCapacity` 分割为 N 个标准 segment 并 rebase column offsets（提取 `ComputeColumnLayout` 纯函数复用）|
 | `BUG_parallel_destroy_on_pending_entity_does_not_cancel_like_single_threaded` | `CommandStream.cs:Destroy` | `ParallelRecording=true` 下 `Destroy(pendingEntity)` 直接调 `AppendDestroyConcurrent`，不检查 pending 状态也不调 `CancelPendingEntity`/`CancelPendingDescendants`；Submit 时该 entity 被 materialize 再 destroy，pending descendants 也被 materialize——与单线程语义（cancel 整棵子树，从不 materialize）不一致，导致 alive count / id allocator 分叉 | 并行 `Destroy` 在 `_storeCreateLock` 内复制单线程的 pending-check + cancel 逻辑；删除不再使用的 `AppendDestroyConcurrent` |
+| `BUG_order_by_component_supports_chunked_archetypes` | `Query.cs:OrderedComponentEnumerator.Initialize` | `OrderByComponent<T>` 对匹配 archetype 批量读组件值时直接调用 `GetComponentSpan<T>()`；该 API 只支持非 chunked，chunked archetype 会抛 `InvalidOperationException`，导致公共排序 API 在大 archetype 上不可用 | chunked 分支按 segment 顺序调用 `GetSegmentComponentSpan<T>()` 拷贝组件值，保持与 `GetEntityStorageUnsafe()` flatten 顺序一致 |
+| `BUG_chunked_restore_pooled_larger_backup_arrays_overflow_smaller_destination` | `WorldStateSnapshot.cs:ArchetypeBackupEntry.CopyFromChunked` | 修复后的回归测试在 Debug 下仍会被错误 `Debug.Assert(seg.Data.Length >= segCap)` 拦截；零组件 chunked archetype 的 `seg.Data.Length == 0` 是合法状态（没有组件列），断言把合法状态误判为损坏 | 删除该无效断言；真实安全条件由后续按列/按 `entityCount` 拷贝和已有回归测试覆盖 |
 
 ---
 
