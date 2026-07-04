@@ -63,6 +63,14 @@ public sealed class CommandStream
     // When false (e.g. user abandons a frame), registrations are dropped.
     private bool _pendingReplay;
 
+    private static void GrowPooled<T>(ref T[] array, int count)
+    {
+        var grown = ArrayPool<T>.Shared.Rent(count * 2);
+        Array.Copy(array, grown, count);
+        ArrayPool<T>.Shared.Return(array);
+        array = grown;
+    }
+
     // ── Construction ───────────────────────────────────────────────────
 
     /// <summary>
@@ -1158,12 +1166,7 @@ public sealed class CommandStream
         {
             if (!intent.IsAdd || intent.Parent != parent) continue;
             if (queueCount == queue.Length)
-            {
-                var grown = ArrayPool<Entity>.Shared.Rent(queue.Length * 2);
-                Array.Copy(queue, grown, queueCount);
-                ArrayPool<Entity>.Shared.Return(queue);
-                queue = grown;
-            }
+                GrowPooled(ref queue, queueCount);
             queue[queueCount++] = child;
         }
     }
@@ -1330,14 +1333,8 @@ public sealed class CommandStream
             {
                 if (stackCount >= stack.Length)
                 {
-                    var newStack = ArrayPool<Entity>.Shared.Rent(stack.Length * 2);
-                    var newCloneStack = ArrayPool<Entity>.Shared.Rent(stack.Length * 2);
-                    Array.Copy(stack, newStack, stackCount);
-                    Array.Copy(cloneStack, newCloneStack, stackCount);
-                    ArrayPool<Entity>.Shared.Return(stack);
-                    ArrayPool<Entity>.Shared.Return(cloneStack);
-                    stack = newStack;
-                    cloneStack = newCloneStack;
+                    GrowPooled(ref stack, stackCount);
+                    GrowPooled(ref cloneStack, stackCount);
                 }
                 stack[stackCount] = child;
                 cloneStack[stackCount] = cloneRoot;
@@ -1374,14 +1371,8 @@ public sealed class CommandStream
                 {
                     if (stackCount >= stack.Length)
                     {
-                        var newStack = ArrayPool<Entity>.Shared.Rent(stack.Length * 2);
-                        var newCloneStack = ArrayPool<Entity>.Shared.Rent(stack.Length * 2);
-                        Array.Copy(stack, newStack, stackCount);
-                        Array.Copy(cloneStack, newCloneStack, stackCount);
-                        ArrayPool<Entity>.Shared.Return(stack);
-                        ArrayPool<Entity>.Shared.Return(cloneStack);
-                        stack = newStack;
-                        cloneStack = newCloneStack;
+                        GrowPooled(ref stack, stackCount);
+                        GrowPooled(ref cloneStack, stackCount);
                     }
                     stack[stackCount] = grandChild;
                     cloneStack[stackCount] = cloneChild;
