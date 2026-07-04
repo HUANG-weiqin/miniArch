@@ -2051,6 +2051,8 @@ public sealed class CommandStreamTests
             "_maskCacheGeneration",
             "_lastMask",
             "_lastMaskArchetype",
+            "_trackedBySeq",
+            "_trackedMaxSeq",
         };
 
         // _frozen and _spareFrozen are the two halves of the state-object swap;
