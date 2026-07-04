@@ -41,7 +41,7 @@ public sealed class FrameDeltaAttackSurfaceTests
         return bytes.ToArray();
     }
 
-    private static byte[] Enc(Entity e) => [.. V(e.Id), .. V(e.Version)];
+    private static byte[] Enc(Entity e) => [.. V(e.Id == -1 ? 0 : e.Id + 1), .. V(e.Version)];
 
     private static int QueryCount(World w)
     {
@@ -58,7 +58,7 @@ public sealed class FrameDeltaAttackSurfaceTests
     [Fact]
     public void Validate_rejects_create_without_reserve()
     {
-        var delta = FrameDelta.Deserialize([0x03, 0x00, 0x01, 0x00]);
+        var delta = FrameDelta.Deserialize([0x03, 0x01, 0x01, 0x00]);
 
         var ex = Assert.Throws<InvalidOperationException>(() => delta.Validate());
         Assert.Contains("without preceding Reserve", ex.Message);
@@ -67,7 +67,7 @@ public sealed class FrameDeltaAttackSurfaceTests
     [Fact]
     public void Replay_without_validate_accepts_create_without_reserve_and_leaks_ghost()
     {
-        var delta = FrameDelta.Deserialize([0x03, 0x00, 0x01, 0x00]);
+        var delta = FrameDelta.Deserialize([0x03, 0x01, 0x01, 0x00]);
         var world = new World();
 
         new CommandStream(world).Replay(delta); // no Validate → ghost created
@@ -320,7 +320,7 @@ public sealed class FrameDeltaAttackSurfaceTests
         var hugeSeq = FrameDelta.MaxPlaceholderSeq + 1;
         var buf = new System.Collections.Generic.List<byte>();
         buf.Add((byte)DeltaOpKind.Reserve);
-        buf.AddRange(V(-1));  // placeholder id
+        buf.AddRange(V(0));  // placeholder id: bias -1 → 0
         buf.AddRange(V(hugeSeq));
         var delta = FrameDelta.Deserialize(buf.ToArray());
 
