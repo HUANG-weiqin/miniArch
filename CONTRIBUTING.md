@@ -40,6 +40,9 @@ tools/
   perf/                   # Performance regression & comparison tests
   scripts/                # Development scripts
 docs/
+  README.md               # Documentation index
+  api.md                  # API reference
+  examples.md             # Capability examples & patterns
   comparison.md           # Comparison with other ECS libraries
   internal/               # Internal development documentation
 .knowledge/               # Agent knowledge base (for AI-assisted development)
