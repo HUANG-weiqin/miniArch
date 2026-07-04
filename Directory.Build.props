@@ -3,9 +3,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <AnalysisLevel>latest-Recommended</AnalysisLevel>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <WarningsAsErrors>$(WarningsAsErrors);IDE0051;IDE0052</WarningsAsErrors>
-    <NoWarn>$(NoWarn);CA1036;CA1051;CA1512;CA1707;CA1711;CA1720;CA1805;CA1836;CA1859;CA1861</NoWarn>
   </PropertyGroup>
 </Project>
