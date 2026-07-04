@@ -127,6 +127,12 @@ foreach (var peer in peers)
 if (world.TryResolvePlaceholder(placeholder, out var real))  // Entity(-1, 5) → Entity(3, 1)
     world.Set(tracker, new Target { Value = real });         // ✅ real ID is stable across hosts
 
+// ── Or use EntitySlot for automatic resolution (no manual TryResolvePlaceholder) ──
+var slot = stream.Track(stream.Create());   // EntitySlot auto-updates on Submit/Replay
+stream.Add(slot.Value, new Health(100));    // slot.Value is placeholder before, real after
+stream.Submit();
+world.Get<Health>(slot.Value);              // ✅ slot.Value is now the real Entity
+
 // ── Authority + Mirror: apply locally AND produce real-ID delta ──
 var authority = new CommandStream(world);
 // ... record mutations with real entities (DeferredEntities=false, default) ...
