@@ -238,10 +238,10 @@ Friflo's advantages are **engine-level constant factors** (typing + SIMD). MiniA
 
 ## Quality
 
-- **Source:** ~9,700 lines
-- **Tests:** ~14,400 lines（467 tests，测试:代码 ≈ 1.5:1）
+- **Source:** ~9,300 lines
+- **Tests:** ~15,100 lines（521 tests，测试:代码 ≈ 1.6:1）
 - **GC:** 0/0/0 across all game scenarios
-- **Fuzz:** 1,000-frame cross-world replay verified
+- **Fuzz:** 10,000-frame cross-world replay verified
 
 ---
 
