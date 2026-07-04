@@ -501,33 +501,34 @@ internal sealed partial class Archetype
     }
 
     internal unsafe void ReadComponentRaw(int columnIndex, int row, byte* destination)
-    {
-        if (!_isChunked)
-        {
-            var byteOff = _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex];
-            ref var source = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), byteOff);
-            Unsafe.CopyBlockUnaligned(ref *destination, ref source, (uint)_elementSizes[columnIndex]);
-            return;
-        }
-        var (segIdx, localRow) = GetSegmentAndLocal(row);
-        var segOff = _columnByteOffsets[columnIndex] + localRow * _elementSizes[columnIndex];
-        ref var segSource = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_segments[segIdx].Data), segOff);
-        Unsafe.CopyBlockUnaligned(ref *destination, ref segSource, (uint)_elementSizes[columnIndex]);
-    }
+        => CopyComponentRaw(columnIndex, row, destination, read: true);
 
     internal unsafe void WriteComponentRaw(int columnIndex, int row, byte* source)
+        => CopyComponentRaw(columnIndex, row, source, read: false);
+
+    private unsafe void CopyComponentRaw(int columnIndex, int row, byte* external, bool read)
     {
+        int byteOff;
+        ref var dataRef = ref Unsafe.NullRef<byte>();
         if (!_isChunked)
         {
-            var byteOff = _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex];
-            ref var target = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), byteOff);
-            Unsafe.CopyBlockUnaligned(ref target, ref *source, (uint)_elementSizes[columnIndex]);
-            return;
+            byteOff = _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex];
+            dataRef = ref MemoryMarshal.GetArrayDataReference(_data);
         }
-        var (segIdx, localRow) = GetSegmentAndLocal(row);
-        var segOff = _columnByteOffsets[columnIndex] + localRow * _elementSizes[columnIndex];
-        ref var segTarget = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_segments[segIdx].Data), segOff);
-        Unsafe.CopyBlockUnaligned(ref segTarget, ref *source, (uint)_elementSizes[columnIndex]);
+        else
+        {
+            var (segIdx, localRow) = GetSegmentAndLocal(row);
+            byteOff = _columnByteOffsets[columnIndex] + localRow * _elementSizes[columnIndex];
+            dataRef = ref MemoryMarshal.GetArrayDataReference(_segments[segIdx].Data);
+        }
+
+        ref var storage = ref Unsafe.Add(ref dataRef, byteOff);
+        var size = (uint)_elementSizes[columnIndex];
+
+        if (read)
+            Unsafe.CopyBlockUnaligned(ref *external, ref storage, size);
+        else
+            Unsafe.CopyBlockUnaligned(ref storage, ref *external, size);
     }
 
     internal void CopyColumnsFrom(Archetype source, int count)
