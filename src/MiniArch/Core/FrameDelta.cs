@@ -11,9 +11,10 @@ namespace MiniArch.Core;
 /// <para>
 /// <b>Two entity-id modes:</b> a <c>FrameDelta</c> can carry either
 /// <b>placeholder</b> entities (<c>Entity(-1, seq)</c>) or <b>real</b>
-/// entities. The wire format is identical —both encode entity id and
-/// version as signed LEB128 varints —so the consumer must know which
-/// mode to expect.
+/// entities. The wire format is identical —entity Id is encoded with a
+/// +1 bias (placeholder -1 → 0, real n → n+1), Version as a standard
+/// unsigned LEB128 varint —so the consumer must know which mode to
+/// expect.
 /// </para>
 /// <list type="bullet">
 /// <item>
@@ -56,18 +57,22 @@ public sealed class FrameDelta
     // Non-empty deltas carry a 4-byte header at the start of _buffer:
     //   [0-1] Magic "MF" (0x4D46) — format identification.
     //   [2]   Flags: bit 7 = endianness (1=little, 0=big);
-    //         bits 0-6 = format version (currently 1).
+    //         bits 0-6 = format version (currently 2).
     //   [3]   Reserved (0x00).
     // Op data starts immediately after the header (offset 4).
     // Empty deltas (_opCount == 0) have _length 0 and _buffer may be empty;
     // AsSpan() returns an empty span with no header.
     //
+    // Format version history:
+    //   1 — initial (signed-varint entity Id)
+    //   2 — entity Id bias +1 (placeholder -1 → 0, real n → n+1); backward-compat decoder.
+    //
     // Backward compatibility: buffers where byte[0] is not 'M' (i.e. legacy
     // format starting with a DeltaOpKind tag) are detected and read without
-    // header offset. All newly produced non-empty deltas always include the
-    // header; empty deltas are an empty span.
+    // header offset as v1. All newly produced non-empty deltas always include
+    // the header; empty deltas are an empty span.
     internal const int HeaderSize = 4;
-    internal const byte FormatVersion = 0x01;
+    internal const byte FormatVersion = 0x02;
 
     internal byte[] _buffer = Array.Empty<byte>();
     internal int _length;
@@ -387,12 +392,31 @@ public sealed class FrameDelta
         _length = pos + 1;
     }
 
+    // ── Entity Id encoding (v2+) ───────────────────────────────────
+    // Entity.Id in the wire format uses a +1 bias so that the common
+    // placeholder value -1 encodes as 0 (1 varint byte) instead of the
+    // 5 bytes that signed-varint would require. Real ids (>= 0) become
+    // n+1, which is at most 1 byte larger than the raw id when the +1
+    // pushes the value past a varint size boundary (e.g. 127 → 128).
+    //
+    // Version is always >= 0 and stored as a plain unsigned varint.
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static uint EncodeEntityIdV2(int id) => (uint)(id + 1);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int DecodeEntityIdV2(uint raw) => raw == 0 ? -1 : (int)(raw - 1);
+
+    /// <summary>
+    /// Writes an entity handle with the current wire format (v2+: Id bias +1).
+    /// </summary>
     private void WriteEntity(Entity e)
     {
         var pos = _length;
-        var size = VarintSize(e.Id) + VarintSize(e.Version);
+        var encId = EncodeEntityIdV2(e.Id);
+        var size = VarintSize((int)encId) + VarintSize(e.Version);
         Grow(size);
-        WriteVarintAt(ref pos, e.Id);
+        WriteVarintAt(ref pos, (int)encId);
         WriteVarintAt(ref pos, e.Version);
         _length = pos;
     }
@@ -503,7 +527,13 @@ public sealed class FrameDelta
 
     // ── Decoder API (used by ReplayCore, HasEntity) ────────────────────
 
-    internal OpDecoder GetDecoder() => new(_buffer, _length, DataStart);
+    internal OpDecoder GetDecoder()
+    {
+        var fmtVer = 1;
+        if (_length >= HeaderSize && _buffer[0] == 'M' && _buffer[1] == 'F')
+            fmtVer = _buffer[2] & 0x7F;
+        return new OpDecoder(_buffer, _length, DataStart, fmtVer);
+    }
 
     /// <summary>
     /// Cursor-based decoder that reads operations from the packed buffer.
@@ -516,16 +546,18 @@ public sealed class FrameDelta
         private readonly int _end;
         private int _pos;
         private int _opCount;
+        private readonly int _formatVersion;
 
         public DeltaOpKind Kind { get; private set; }
         public Entity Entity { get; private set; }
 
-        internal OpDecoder(byte[] buffer, int length, int startPos = 0)
+        internal OpDecoder(byte[] buffer, int length, int startPos, int formatVersion = 1)
         {
             _buffer = buffer;
             _end = length;
             _pos = startPos;
             _opCount = 0;
+            _formatVersion = formatVersion;
             Kind = default;
             Entity = default;
         }
@@ -547,8 +579,24 @@ public sealed class FrameDelta
                     $"Unknown FrameDelta op kind 0x{opByte:X2} at offset {_pos - 1}. " +
                     "This typically indicates a version mismatch between the delta producer and consumer.");
             Kind = (DeltaOpKind)opByte;
-            Entity = new Entity(ReadVarint(), ReadVarint());
+            Entity = ReadEntityFromBuffer();
             return true;
+        }
+
+        /// <summary>
+        /// Reads one entity handle from the buffer using the delta's format version.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private Entity ReadEntityFromBuffer()
+        {
+            if (_formatVersion >= 2)
+            {
+                var id = DecodeEntityIdV2((uint)ReadVarint());
+                var ver = ReadVarint();
+                return new Entity(id, ver);
+            }
+            // v1: raw signed-varint entity Id.
+            return new Entity(ReadVarint(), ReadVarint());
         }
 
         /// <summary>
@@ -585,6 +633,12 @@ public sealed class FrameDelta
         /// </summary>
         public Entity ReadExtraEntity()
         {
+            if (_formatVersion >= 2)
+            {
+                var id = DecodeEntityIdV2((uint)ReadVarint());
+                var ver = ReadVarint();
+                return new Entity(id, ver);
+            }
             return new Entity(ReadVarint(), ReadVarint());
         }
 
