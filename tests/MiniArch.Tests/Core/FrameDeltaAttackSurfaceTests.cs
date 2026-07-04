@@ -192,11 +192,13 @@ public sealed class FrameDeltaAttackSurfaceTests
     public void Validate_rejects_negative_component_count()
     {
         // Reserve(0,1) + Create(0,1) compCount=-1
-        var wire = new byte[] {
-            (byte)DeltaOpKind.Reserve, 0x00, 0x01,
-            (byte)DeltaOpKind.Create, 0x00, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F
-        };
-        var delta = FrameDelta.Deserialize(wire);
+        // Build delta manually so Deserialize does not eagerly reject it;
+        // the purpose of this test is to verify Validate catches it.
+        var buf = new System.Collections.Generic.List<byte>();
+        buf.AddRange([(byte)DeltaOpKind.Reserve, 0x00, 0x01]);
+        buf.AddRange([(byte)DeltaOpKind.Create, 0x00, 0x01]);
+        buf.AddRange(V(-1)); // compCount = -1
+        var delta = new FrameDelta { _buffer = buf.ToArray(), _length = buf.Count, _opCount = 2 };
 
         var ex = Assert.Throws<InvalidOperationException>(() => delta.Validate());
         Assert.Contains("Negative component count", ex.Message);
@@ -351,5 +353,51 @@ public sealed class FrameDeltaAttackSurfaceTests
 
         // Destroy on non-existent entity is a no-op.
         Assert.Equal(0, world.EntityCount);
+    }
+
+    // ══════════════════════════════════════════════════════════
+    //  10. Decoder negative length/size/count rejection
+    // ══════════════════════════════════════════════════════════
+
+    [Fact]
+    public void Decoder_ReadBytes_negative_length_throws()
+    {
+        var buf = new byte[64];
+        var decoder = new FrameDelta.OpDecoder(buf, buf.Length, 0);
+        var ex = Assert.Throws<InvalidOperationException>(() => decoder.ReadBytes(-1));
+        Assert.Contains("negative", ex.Message);
+    }
+
+    [Fact]
+    public void Decoder_SkipData_negative_size_throws()
+    {
+        var buf = new System.Collections.Generic.List<byte>();
+        buf.AddRange(V(1234)); // component type id
+        buf.AddRange(V(-1));   // size = -1
+        var decoder = new FrameDelta.OpDecoder(buf.ToArray(), buf.Count, 0);
+        var ex = Assert.Throws<InvalidOperationException>(() => decoder.SkipData());
+        Assert.Contains("negative", ex.Message);
+    }
+
+    [Fact]
+    public void Decoder_SkipCreatePayload_negative_count_throws()
+    {
+        var buf = new System.Collections.Generic.List<byte>();
+        buf.AddRange(V(-1)); // compCount = -1
+        var decoder = new FrameDelta.OpDecoder(buf.ToArray(), buf.Count, 0);
+        var ex = Assert.Throws<InvalidOperationException>(() => decoder.SkipCreatePayload());
+        Assert.Contains("negative", ex.Message);
+    }
+
+    [Fact]
+    public void Decoder_SkipCreatePayload_negative_component_size_throws()
+    {
+        var buf = new System.Collections.Generic.List<byte>();
+        buf.AddRange(V(1));   // compCount = 1
+        buf.AddRange(V(42));  // component type
+        buf.AddRange(V(-1));  // size = -1
+        var decoder = new FrameDelta.OpDecoder(buf.ToArray(), buf.Count, 0);
+        var ex = Assert.Throws<InvalidOperationException>(() => decoder.SkipCreatePayload());
+        Assert.Contains("negative", ex.Message);
     }
 }
