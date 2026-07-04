@@ -91,6 +91,7 @@ internal sealed partial class Archetype
         {
             NormalizeForChunked();
             ConvertToChunked();
+            if (requiredCapacity <= Capacity) return;
             GrowChunked(requiredCapacity - _count);
             return;
         }

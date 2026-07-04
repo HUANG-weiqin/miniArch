@@ -1220,6 +1220,17 @@ public sealed class CommandStream
 
     // ── Archetype resolution ──────────────────────────────────────────
 
+    /// <remarks>
+    /// <b>Synchronization note:</b> <c>_maskCache</c>, <c>_lastMask</c>, and
+    /// <c>_lastMaskArchetype</c> are intentionally unsynchronized.
+    /// This method is only called from the Submit/materialize path
+    /// (<see cref="MaterializeFromBatchBuffer"/>), which is single-threaded
+    /// per <c>World</c>'s threading contract — <see cref="ParallelRecording"/>
+    /// covers the recording phase (append-only), not Submit.
+    /// If parallel materialization is ever added, the correct fix is to give
+    /// each worker its own local mask cache + serialize archetype creation,
+    /// NOT a lock around this cache.
+    /// </remarks>
     private Archetype ResolveArchetypeForMask(ComponentMask mask)
     {
         if (mask.IsZero())
@@ -1255,7 +1266,7 @@ public sealed class CommandStream
 
         var slotIdx = _maskCacheCount < MaskCacheSize
             ? _maskCacheCount++
-            : (int)(mask.B0 ^ mask.B1 ^ mask.B2 ^ mask.B3 ^ mask.B4 ^ mask.B5 ^ mask.B6 ^ mask.B7) & (MaskCacheSize - 1);
+            : mask.GetHashCode() & (MaskCacheSize - 1);
 
         _maskCache[slotIdx] = new MaskCacheSlot(mask, archetype);
         _lastMask = mask;

@@ -622,37 +622,35 @@ public struct OrderedComponentEnumerator<T> : IDisposable where T : unmanaged
 }
 
 /// <summary>
-/// Thread-local cached <see cref="IComparer{T}"/> that wraps a <see cref="Comparison{T}"/>
-/// without per-call allocation. <c>Array.Sort</c> accepts <c>IComparer{T}</c> only as a
-/// reference type, so a single cached instance is reused across calls on the same thread.
+/// Factory for <see cref="IComparer{T}"/> wrappers around <see cref="Comparison{T}"/>.
+/// Returns a new immutable <see cref="ComparisonComparer"/> per call — the allocation
+/// is negligible compared to the O(n log n) sort and the pooled arrays it rents.
+/// Previously used a <c>[ThreadStatic]</c> cache with mutable fields, but the
+/// mutable-reuse pattern broke the <see cref="IComparer{T}"/> immutability contract
+/// and risked corruption under same-thread reentrant sorting (outer sort callback
+/// triggering an inner sort that overwrites the shared comparer's state).
 /// </summary>
 internal static class ComparisonCache<T>
 {
-    [ThreadStatic]
-    private static ComparisonComparer? t_cached;
-
     internal static IComparer<T> Acquire(Comparison<T> comparison, bool descending)
     {
-        var c = t_cached;
-        if (c is null)
-        {
-            c = new ComparisonComparer();
-            t_cached = c;
-        }
-        c.Comparison = comparison;
-        c.Descending = descending;
-        return c;
+        return new ComparisonComparer(comparison, descending);
     }
 
     private sealed class ComparisonComparer : IComparer<T>
     {
-        public Comparison<T>? Comparison;
-        public bool Descending;
+        private readonly Comparison<T> _comparison;
+        private readonly bool _descending;
+
+        public ComparisonComparer(Comparison<T> comparison, bool descending)
+        {
+            _comparison = comparison;
+            _descending = descending;
+        }
 
         public int Compare(T? x, T? y)
         {
-            var cmp = Comparison!;
-            return Descending ? cmp(y!, x!) : cmp(x!, y!);
+            return _descending ? _comparison(y!, x!) : _comparison(x!, y!);
         }
     }
 }

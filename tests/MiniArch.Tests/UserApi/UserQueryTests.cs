@@ -205,6 +205,67 @@ public sealed class UserQueryTests
         Assert.All(results, actual => Assert.Equal(expected, actual));
     }
 
+    [Fact]
+    public void Ordered_component_query_in_comparison_does_not_corrupt_outer_sort()
+    {
+        // Regression: the ThreadStatic mutable IComparer<T> pattern let an
+        // inner sort (triggered from the outer sort's comparison callback)
+        // overwrite the shared comparer's Comparison field / Descending flag,
+        // producing wrong order in the outer sort.
+        var world = new World();
+        var desc = new QueryDescription().With<Position>();
+        // Entities with X = 0, 1, 2, 3, 4, 5 (creation order is reversed
+        // so the sort is non-trivial).
+        for (var i = 5; i >= 0; i--)
+            world.Create(new Position(i, 0));
+
+        var innerVerified = false;
+        var outerEntities = new List<Entity>();
+
+        foreach (var entity in world.Query(in desc).OrderByComponent<Position>(
+            (a, b) =>
+            {
+                if (!innerVerified)
+                {
+                    innerVerified = true;
+                    // Inner sort by X descending — must produce correct order
+                    // (5,4,3,2,1,0) even though the outer sort's comparer is
+                    // mid-execution.
+                    var inner = new List<Entity>();
+                    foreach (var e in world.Query(in desc).OrderByComponent<Position>(
+                        (x, y) => y.X.CompareTo(x.X)))
+                    {
+                        inner.Add(e);
+                    }
+
+                    Assert.Equal(6, inner.Count);
+                    for (var j = 1; j < inner.Count; j++)
+                        Assert.True(
+                            world.Get<Position>(inner[j - 1]).X >= world.Get<Position>(inner[j]).X,
+                            $"Inner sort out of order at index {j - 1}/{j}");
+                }
+
+                return a.Y.CompareTo(b.Y);
+            }))
+        {
+            outerEntities.Add(entity);
+        }
+
+        // Outer sort must not have been corrupted: all 6 entities are present.
+        Assert.Equal(6, outerEntities.Count);
+
+        // Also verify: inner sort result independently.
+        var standalone = new List<Entity>();
+        foreach (var e in world.Query(in desc).OrderByComponent<Position>(
+            (x, y) => y.Y.CompareTo(x.Y)))
+        {
+            standalone.Add(e);
+        }
+
+        Assert.Equal(6, standalone.Count);
+        Assert.Equal(standalone, outerEntities);
+    }
+
     private static int Sum(World world, Query query)
     {
         var total = 0;

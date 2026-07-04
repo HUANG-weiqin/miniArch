@@ -89,7 +89,6 @@ public sealed partial class World
             return;
         }
 
-        _destroyOrderScratch.Clear();
         if (++_destroyCurrentGen == 0)
         {
             Array.Clear(_destroyVisitedGen);
@@ -498,14 +497,21 @@ public sealed partial class World
         EnsureDestroyScratchCapacity(_entitySlotCount);
     }
 
+    /// <remarks>
+    /// Scans from the tail because the common case is removing the most
+    /// recently pushed entry (stack-top, the entity just reserved).
+    /// Reverse scan makes that a single iteration. Worst case is still O(n)
+    /// but no extra state is needed — if profiling ever shows this to be a
+    /// bottleneck, add a <c>Dictionary&lt;int, int&gt;</c> for O(1) lookup.
+    /// </remarks>
     private void RemoveFromFreeList(Entity entity)
     {
-        for (var i = 0; i < _freeIdCount; i++)
+        for (var i = _freeIdCount - 1; i >= 0; i--)
         {
             if (_freeIds[i].Id == entity.Id && _freeIds[i].Version == entity.Version)
             {
-                _freeIds[i] = _freeIds[_freeIdCount - 1];
-                _freeIdCount--;
+                var last = --_freeIdCount;
+                _freeIds[i] = _freeIds[last];
                 return;
             }
         }

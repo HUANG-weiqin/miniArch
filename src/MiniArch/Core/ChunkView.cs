@@ -9,6 +9,14 @@ namespace MiniArch;
 /// In chunked mode, represents a single segment within an Archetype.
 /// Supports slicing for intra-chunk parallelism in <see cref="Query.ForEachChunkParallel"/>.
 /// </summary>
+/// <remarks>
+/// <b>Do not retain a <see cref="ChunkView"/> (or any span obtained from it)
+/// across a structural change</b> (Add/Remove/Create/Destroy on any entity in
+/// the same <see cref="World"/>). Structural changes may move entities between
+/// archetypes or promote an archetype to chunked storage, invalidating the
+/// internal row/segment mapping. Re-query each frame after all structural
+/// changes are applied.
+/// </remarks>
 public readonly struct ChunkView
 {
     private readonly Core.Archetype _archetype;

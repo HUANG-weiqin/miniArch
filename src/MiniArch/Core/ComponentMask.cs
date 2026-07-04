@@ -45,8 +45,28 @@ internal readonly struct ComponentMask : IEquatable<ComponentMask>
 
     public override bool Equals(object? obj) => obj is ComponentMask other && Equals(other);
 
-    public override int GetHashCode() =>
-        HashCode.Combine(B0, B1, B2, B3, B4, B5, B6, B7);
+    /// <summary>
+    /// FNV-1a hash over all eight lanes.
+    /// Deterministic across runtimes and .NET versions. Used both for
+    /// dictionary lookups and for the mask-cache replacement slot index
+    /// in <see cref="MiniArch.Core.CommandStream.ResolveArchetypeForMask"/>.
+    /// </summary>
+    public override int GetHashCode()
+    {
+        unchecked
+        {
+            ulong h = 14695981039346656037UL;
+            h = (h ^ B0) * 1099511628211UL;
+            h = (h ^ B1) * 1099511628211UL;
+            h = (h ^ B2) * 1099511628211UL;
+            h = (h ^ B3) * 1099511628211UL;
+            h = (h ^ B4) * 1099511628211UL;
+            h = (h ^ B5) * 1099511628211UL;
+            h = (h ^ B6) * 1099511628211UL;
+            h = (h ^ B7) * 1099511628211UL;
+            return (int)(h ^ (h >> 32));
+        }
+    }
 
     /// <summary>
     /// Returns true when every bit set in <paramref name="other"/> is also set
