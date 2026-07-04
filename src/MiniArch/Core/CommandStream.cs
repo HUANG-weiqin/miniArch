@@ -988,23 +988,41 @@ public sealed class CommandStream
         var hierarchyByChild = frozen.HierarchyByChild;
         if (hierarchyByChild.Count == 0) return;
 
-        var sorted = new KeyValuePair<Entity, HierarchyIntent>[hierarchyByChild.Count];
-        ((ICollection<KeyValuePair<Entity, HierarchyIntent>>)hierarchyByChild).CopyTo(sorted, 0);
-        Array.Sort(sorted, (a, b) => a.Key.Id.CompareTo(b.Key.Id));
-
-        foreach (var (child, intent) in sorted)
+        var count = hierarchyByChild.Count;
+        var sorted = ArrayPool<KeyValuePair<Entity, HierarchyIntent>>.Shared.Rent(count);
+        try
         {
-            if (IsDestroyedThisFrame(child, frozen)) continue;
-            if (intent.IsAdd)
+            ((ICollection<KeyValuePair<Entity, HierarchyIntent>>)hierarchyByChild).CopyTo(sorted, 0);
+            Array.Sort(sorted, 0, count, HierarchyComparer.Instance);
+
+            for (var i = 0; i < count; i++)
             {
-                if (IsDestroyedThisFrame(intent.Parent, frozen)) continue;
-                delta.AddAddChild(intent.Parent, child);
-            }
-            else
-            {
-                delta.AddRemoveChild(child);
+                ref readonly var entry = ref sorted[i];
+                var (child, intent) = (entry.Key, entry.Value);
+                if (IsDestroyedThisFrame(child, frozen)) continue;
+                if (intent.IsAdd)
+                {
+                    if (IsDestroyedThisFrame(intent.Parent, frozen)) continue;
+                    delta.AddAddChild(intent.Parent, child);
+                }
+                else
+                {
+                    delta.AddRemoveChild(child);
+                }
             }
         }
+        finally
+        {
+            Array.Clear(sorted, 0, count); // clear refs before returning to pool
+            ArrayPool<KeyValuePair<Entity, HierarchyIntent>>.Shared.Return(sorted);
+        }
+    }
+
+    private sealed class HierarchyComparer : IComparer<KeyValuePair<Entity, HierarchyIntent>>
+    {
+        public static readonly HierarchyComparer Instance = new();
+        public int Compare(KeyValuePair<Entity, HierarchyIntent> x, KeyValuePair<Entity, HierarchyIntent> y)
+            => x.Key.Id.CompareTo(y.Key.Id);
     }
 
     private static void ApplyHierarchyToWorld(World world, FrozenState frozen)

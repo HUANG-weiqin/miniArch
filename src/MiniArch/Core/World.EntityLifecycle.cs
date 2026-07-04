@@ -197,6 +197,7 @@ public sealed partial class World
     private void DestroySingle(Entity entity)
     {
         var info = RequireLocation(entity);
+        var nextVersion = NextEntityVersion(entity);
         var arch = info.Archetype!;
         arch.RemoveAt(info.RowIndex, out var movedEntity);
         if (_hierarchy.HasAnyRelations(entity))
@@ -206,8 +207,8 @@ public sealed partial class World
 
         ref var record = ref _records[entity.Id];
         record = default;
-        record.Version = entity.Version + 1;
-        PushFreeIdUnsafe(entity.Id, entity.Version + 1);
+        record.Version = nextVersion;
+        PushFreeIdUnsafe(entity.Id, nextVersion);
 
         if (movedEntity.IsValid)
         {
@@ -429,7 +430,7 @@ public sealed partial class World
             throw new InvalidOperationException($"Entity {entity} is not a deferred reserved entity. It may have already been materialized or was never reserved via CommandStream.");
         }
 
-        var nextVersion = entity.Version + 1;
+        var nextVersion = NextEntityVersion(entity);
         record.Version = nextVersion;
         PushFreeIdUnsafe(entity.Id, nextVersion);
     }
@@ -446,7 +447,7 @@ public sealed partial class World
         ref var record = ref _records[entity.Id];
         if (record.IsOccupied || record.Version != entity.Version) return false;
 
-        var nextVersion = entity.Version + 1;
+        var nextVersion = NextEntityVersion(entity);
         record.Version = nextVersion;
         PushFreeIdUnsafe(entity.Id, nextVersion);
         return true;
@@ -515,6 +516,15 @@ public sealed partial class World
                 return;
             }
         }
+    }
+
+    /// <summary>
+    /// Returns <c>entity.Version + 1</c>, wrapping to 1 on overflow past <see cref="int.MaxValue"/>.
+    /// Must be called before any mutation (archetype RemoveAt, hierarchy cleanup, record write).
+    /// </summary>
+    private static int NextEntityVersion(Entity entity)
+    {
+        return entity.Version == int.MaxValue ? 1 : entity.Version + 1;
     }
 
     internal readonly record struct RecycledEntity(int Id, int Version);

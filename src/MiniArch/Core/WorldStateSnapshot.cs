@@ -183,7 +183,7 @@ internal struct ArchetypeBackupEntry
 
         for (var i = 0; i < segCount; i++)
         {
-            var seg = arch.GetSegment(i);
+            ref var seg = ref arch.GetSegmentRef(i);
             if (entry.SegmentEntities[i] is null || entry.SegmentEntities[i].Length < seg.Entities.Length)
                 entry.SegmentEntities[i] = new Entity[seg.Entities.Length];
             Array.Copy(seg.Entities, entry.SegmentEntities[i], seg.Entities.Length);

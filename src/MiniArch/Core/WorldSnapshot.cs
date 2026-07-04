@@ -77,15 +77,16 @@ public static class WorldSnapshot
         world.WriteFreeList(bodyWriter);
         bodyWriter.Flush();
 
-        // Compute CRC32 over body bytes
-        var bodyBytes = bodyStream.ToArray();
-        var crc = Crc32.HashToUInt32(bodyBytes);
+        // Compute CRC32 over body bytes (avoid ToArray() copy — use GetBuffer directly)
+        var bodyBuffer = bodyStream.GetBuffer();
+        var bodyLength = checked((int)bodyStream.Length);
+        var crc = Crc32.HashToUInt32(new ReadOnlySpan<byte>(bodyBuffer, 0, bodyLength));
 
         // Write header + body + CRC to output stream
         using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
         writer.Write(Magic);
         writer.Write(FormatVersion);
-        writer.Write(bodyBytes);
+        writer.Write(bodyBuffer, 0, bodyLength);
         writer.Write(crc);
     }
 
@@ -233,16 +234,17 @@ public static class WorldSnapshot
             foreach (var ct in sig)
                 AppendInt(hash, ct.Value);
 
-            var entities = arch.GetEntities().ToArray();
-            var entityCount = entities.Length;
+            var entitySpan = arch.GetEntities();
+            var entityCount = entitySpan.Length;
             AppendInt(hash, entityCount);
 
-            var rows = new int[entityCount];
-            for (var i = 0; i < entityCount; i++) rows[i] = i;
-            Array.Sort(rows, (a, b) => entities[a].Id.CompareTo(entities[b].Id));
+            var ids = new int[entityCount];
+            for (var i = 0; i < entityCount; i++)
+                ids[i] = entitySpan[i].Id;
+            Array.Sort(ids);
 
-            foreach (var r in rows)
-                AppendInt(hash, entities[r].Id);
+            foreach (var id in ids)
+                AppendInt(hash, id);
 
             for (var col = 0; col < sig.Length; col++)
             {

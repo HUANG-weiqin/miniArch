@@ -712,7 +712,7 @@ internal sealed partial class Archetype
     internal void SetCount(int count) => _count = count;
 
     internal ref Segment GetSegmentRef(int index) => ref _segments[index];
-    internal Segment GetSegment(int index) => _segments[index];
+
 
     internal void RebuildFlatEntities()
     {

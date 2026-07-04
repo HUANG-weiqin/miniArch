@@ -2,13 +2,21 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-07-03 (洁癖全量清扫 + dead code 清理 + deadcode.ps1 修复)
+updated: 2026-07-04 (持续审计：4 项代码优化 + 测试覆盖补充)
 ---
 # Knowledge Base Changelog
 
 > 这个页面只记录**重大架构变更和知识库校准事件**，供追溯。
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
 
+
+## 2026-07-04 持续审计：4 项代码优化 + 测试覆盖补充
+
+- **World.Clone() 重复 XML doc 修复**：删除第一个冗余 `<summary>` 块（11 行），保留第二个正确的 ID-preserving 描述。
+- **GetSegment value-return → ref 替代**：`WorldStateSnapshot.CopyFromChunked` 改用 `GetSegmentRef` 避免 struct 拷贝；删除零调用的 `GetSegment()` 值返回方法。
+- **WorldSnapshot.Save 去双缓冲**：`bodyStream.ToArray()` → `GetBuffer()` + span 切片，Save 时减少一次完整 body 拷贝。
+- **CommandStream.EmitHierarchyToDelta 零分配**：排序数组改用 `ArrayPool`；比较 lambda 替换为 `HierarchyComparer` 缓存单例。
+- **测试补充**：新增 `ChildrenEnumerableTests.cs`（12 个测试覆盖死子实体过滤、重设父实体、零分配验证等边界）。
 ## 2026-07-04 拆掉 World.Replay + TryResolvePlaceholder 公共 API
 
 - **`World.Replay(FrameDelta)` 删除**：已 `[Obsolete]` 一个版本，函数体只有一行 `ReplayCore(delta)`。CommandStream.Replay() 直接调 `_world.ReplayCore(delta)`。
@@ -211,3 +219,5 @@ Apply advisor 轮次审阅发现，补充 3 项：
 - **FrameDelta 热路径 struct 大幅缩小**（Movement +50% / Attack +29%）
 - **ComponentMask 扩展为 512-bit**（8 × `ulong`），覆盖 component id 0..511 的快速匹配
 - **新增分段存储模式**：Archetype 超过阈值后自动切换为多 Segment 模式（详见 `kb-chunk-storage.md`）
+
+
