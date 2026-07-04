@@ -6,6 +6,8 @@ using MiniArch.Core;
 
 namespace MiniArch;
 
+internal readonly record struct EntityBatchRange(int StartRow, int Count);
+
 public sealed partial class World
 {
     /// <summary>

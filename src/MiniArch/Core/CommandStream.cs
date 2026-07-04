@@ -51,12 +51,12 @@ public sealed class CommandStream
     // Registration array indexed by placeholder seq. Each entry is a linked
     // list of Slot objects that want to be notified when this seq is resolved.
     // Cleared after each resolution pass.
-    private Slot?[] _trackedBySeq = [];
+    private EntitySlot.Slot?[] _trackedBySeq = [];
     private int _trackedMaxSeq;
     // Saved by Clear() for the Snapshot+Clear+Replay path. When Clear() is
     // called after Snapshot(), the tracked registrations are preserved here
     // so Replay() can resolve them after the underlying ReplayCore call.
-    private Slot?[]? _replayTrackedBySeq;
+    private EntitySlot.Slot?[]? _replayTrackedBySeq;
     private int _replayTrackedMaxSeq;
     // Set by Snapshot(), consumed by Clear(). When true, Clear() preserves
     // _trackedBySeq into _replayTrackedBySeq for subsequent Replay().
@@ -169,7 +169,7 @@ public sealed class CommandStream
         if (!entity.IsPlaceholder)
             return new EntitySlot(entity);
 
-        var slot = new Slot { Entity = entity };
+        var slot = new EntitySlot.Slot { Entity = entity };
         var seq = entity.Version;
 
         if (_parallelMode)
@@ -186,7 +186,7 @@ public sealed class CommandStream
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void RegisterTrackedSlot(Slot slot, int seq)
+    private void RegisterTrackedSlot(EntitySlot.Slot slot, int seq)
     {
         EnsureCapacity(ref _trackedBySeq, seq, 16);
         slot.Next = _trackedBySeq[seq];

@@ -357,7 +357,7 @@ public sealed partial class World : IDisposable
         var stackCount = 0;
         try
         {
-            ArrayPoolStack.PushPooled(ref stack, ref stackCount, new CloneWork(sourceRoot, cloneRoot));
+            PushPooled(ref stack, ref stackCount, new CloneWork(sourceRoot, cloneRoot));
             while (stackCount > 0)
             {
                 var work = stack[--stackCount];
@@ -365,7 +365,7 @@ public sealed partial class World : IDisposable
                 {
                     var cloneChild = CloneSingle(child);
                     _hierarchy.AddChild(this, work.CloneEntity, cloneChild);
-                    ArrayPoolStack.PushPooled(ref stack, ref stackCount, new CloneWork(child, cloneChild));
+                    PushPooled(ref stack, ref stackCount, new CloneWork(child, cloneChild));
                 }
             }
         }
@@ -1126,5 +1126,129 @@ public sealed partial class World : IDisposable
     }
     private readonly record struct CloneWork(Entity Source, Entity CloneEntity);
 
+    /// <summary>
+    /// Computes a SHA-256 checksum of the entire world state.
+    /// Stable across peers driven by the same delta sequence — use to detect
+    /// lockstep divergence. Returns 32 raw bytes; use
+    /// <c>Convert.ToHexString(world.Checksum())</c> for a hex string.
+    /// </summary>
+    public byte[] Checksum() => Core.WorldSnapshot.ComputeChecksum(this);
+
+    /// <summary>
+    /// Computes a canonical SHA-256 checksum that is identical for any two
+    /// worlds with the same logical state, regardless of how they were built
+    /// (replay, snapshot-load, or manual construction). Slower than
+    /// <see cref="Checksum"/>; use only for comparing worlds from different
+    /// construction paths (e.g. client snapshot vs server live state).
+    /// </summary>
+    public byte[] CanonicalChecksum() => Core.WorldSnapshot.ComputeCanonicalChecksum(this);
+
+    internal void Reset(int entitySlotCount)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(entitySlotCount);
+
+        _archetypes.Clear();
+        _archetypeByMask.Clear();
+        _replayCreateCounts.Clear();
+        _archetypeSnapshot = Array.Empty<Archetype>();
+        _queryFiltersByDescription.Clear();
+        _queries.Clear();
+        _createArchetypeCacheGeneration++;
+        _freeIdCount = 0;
+        _destroyVisitedGen = [];
+        _destroyCurrentGen = 0;
+        _hierarchy.Reset();
+
+        _entitySlotCount = 0;
+        EnsureCapacity(entitySlotCount);
+        _entitySlotCount = entitySlotCount;
+        _records.AsSpan(0, entitySlotCount).Clear();
+
+        if (_freeIds.Length < entitySlotCount)
+        {
+            Array.Resize(ref _freeIds, entitySlotCount);
+        }
+    }
+
+    internal void AddChildFromSnapshot(Entity parent, Entity child)
+    {
+        _hierarchy.AddChildRestored(this, parent, child);
+    }
+
+    internal ReadOnlySpan<RecycledEntity> FreeList => _freeIds.AsSpan(0, _freeIdCount);
+
+    internal void SetSnapshotEntityVersion(int entityId, int version)
+    {
+        ValidateSnapshotEntitySlot(entityId);
+        _records[entityId].Version = version;
+    }
+
+    internal int GetEntityVersion(int entityId)
+    {
+        ValidateSnapshotEntitySlot(entityId);
+        return _records[entityId].Version;
+    }
+
+    internal void SetSnapshotLocation(Entity entity, Archetype archetype, int rowIndex)
+    {
+        ValidateSnapshotEntitySlot(entity.Id);
+        _records[entity.Id].Archetype = archetype;
+        _records[entity.Id].RowIndex = rowIndex;
+    }
+
+    internal void WriteFreeList(System.IO.BinaryWriter writer)
+    {
+        writer.Write(_freeIdCount);
+        for (var i = 0; i < _freeIdCount; i++)
+        {
+            writer.Write(_freeIds[i].Id);
+            writer.Write(_freeIds[i].Version);
+        }
+    }
+
+    internal void ReadFreeList(System.IO.BinaryReader reader)
+    {
+        _freeIdCount = reader.ReadInt32();
+        if (_freeIds.Length < _freeIdCount)
+            Array.Resize(ref _freeIds, _freeIdCount);
+        for (var i = 0; i < _freeIdCount; i++)
+            _freeIds[i] = new RecycledEntity(reader.ReadInt32(), reader.ReadInt32());
+    }
+
+    internal void CopyFreeIdsFrom(World source)
+    {
+        var count = source._freeIdCount;
+        if (_freeIds.Length < count)
+            Array.Resize(ref _freeIds, count);
+        Array.Copy(source._freeIds, _freeIds, count);
+        _freeIdCount = count;
+    }
+
+    private void ValidateSnapshotEntitySlot(int entityId)
+    {
+        if (entityId < 0 || entityId >= _entitySlotCount)
+        {
+            throw new ArgumentOutOfRangeException(nameof(entityId));
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void PushPooled<T>(ref T[] array, ref int count, T value)
+    {
+        if ((uint)count >= (uint)array.Length)
+            GrowPooled(ref array);
+        array[count++] = value;
+    }
+
+    private static void GrowPooled<T>(ref T[] array)
+    {
+        var next = ArrayPool<T>.Shared.Rent(array.Length == 0 ? 16 : array.Length * 2);
+        if (array.Length > 0)
+        {
+            Array.Copy(array, next, array.Length);
+            ArrayPool<T>.Shared.Return(array);
+        }
+        array = next;
+    }
 }
 
