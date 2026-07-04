@@ -52,7 +52,7 @@ public ref struct EntityAccessor
     /// Returns whether the accessed entity has the component <typeparamref name="T"/>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool Has<T>()
+    public bool Has<T>() where T : unmanaged
     {
         return _archetype.TryGetComponentIndex(Component<T>.ComponentType, out _);
     }
