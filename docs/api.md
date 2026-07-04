@@ -120,7 +120,7 @@ public Span<T> GetComponentSpanAt<T>(int columnIndex) where T : unmanaged
 | `Clone(Entity)` | Record entity deep-copy |
 | `Submit()` | Apply all recorded changes synchronously |
 | `Snapshot()` | Produce a `FrameDelta` without applying |
-| `Replay(FrameDelta)` | Apply a delta to produce identical state |
+| `Replay(FrameDelta, Boolean)` | Apply a delta to produce identical state; `true` resolves tracked `EntitySlot`s |
 | `SubmitAndSnapshotAsync()` | Pipelined: main thread submits, background builds delta |
 | `Clear()` | Discard recorded commands without applying |
 | `ParallelRecording` | Enable multi-threaded recording on this stream |
@@ -155,7 +155,6 @@ after Submit or Replay, `Value` returns the resolved real entity.
 | `DeltaCount` | Total number of delta entries |
 | `HasEntity(Entity)` | Check if an entity is referenced |
 | `IsEmpty` | Whether the delta has no entries |
-| `Concat(FrameDelta, FrameDelta)` | Concatenate two deltas in temporal order |
 
 ---
 

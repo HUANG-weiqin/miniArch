@@ -1,5 +1,7 @@
 # EntitySlot Implementation Plan
 
+> **⚠️ 设计已变更：** 最初使用 `FrameDelta.OriginStream`（内部引用）自动检测自己的 delta。2026-07-04 重构为显式 `stream.Replay(delta, resolveSlots: true)` 参数——删除了 `OriginStream`，用户为自己的 delta 传 `true`，其他传 `false`。当前设计见 `.knowledge/kb-deferred-create-design.md`。以下内容反映的是旧设计方案。
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Add an `EntitySlot` API that automatically tracks deferred entity resolution —users call `stream.Track(placeholder)`, hold the returned `EntitySlot` across frames, and `.Value` auto-updates to the real Entity ID after Submit or Replay.

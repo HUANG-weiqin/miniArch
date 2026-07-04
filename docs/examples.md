@@ -157,7 +157,8 @@ FrameDelta delta = stream.Snapshot();
 stream.Clear();
 
 // Replay: the delta is applied, producing identical state
-stream.Replay(delta);
+// resolveSlots: true updates the tracked EntitySlot from placeholder→real
+stream.Replay(delta, resolveSlots: true);
 
 // slot.Value is now the real entity ID assigned during replay
 Console.WriteLine(world.Get<Health>(slot.Value)); // Health(50)
@@ -435,7 +436,7 @@ for (var i = 0; i < peers.Length; i++)
 // ── Each peer replays ALL deltas in deterministic host-id order ───────
 for (var host = 0; host < peers.Length; host++)
     for (var source = 0; source < peers.Length; source++)
-        peers[host].Stream.Replay(deltas[source]);
+        peers[host].Stream.Replay(deltas[source], resolveSlots: source == host);
 
 // EntitySlot resolved: slot.Value is now the real entity ID in each host's world
 Console.WriteLine(slot.Value.IsPlaceholder); // False
@@ -754,64 +755,7 @@ readonly record struct GameConfig { public int TickRate; }
 
 ---
 
-## 20. FrameDelta.Concat — Batched Replay / Catch-up
-
-`FrameDelta.Concat` merges multiple **real-id** deltas into a single delta in temporal order. The result is observationally equivalent to replaying each delta sequentially. Useful for fast-forwarding through replay files or catching up late-joining mirror clients.
-
-```csharp
-using MiniArch;
-using MiniArch.Core;
-
-// Use a single world across all frames — entities persist between snapshots
-var deltas = new FrameDelta[3];
-var world = new World();
-
-// Frame 0: create entity
-var s0 = new CommandStream(world);
-var e = s0.Create();
-s0.Add(e, new Position(0, 0));
-deltas[0] = s0.Snapshot(); // Reserve(0,1) + Create(0,1, [Position(0,0)])
-s0.Submit();               // apply to world, materialise entity (0,1)
-
-// Frame 1: Set position
-var s1 = new CommandStream(world);
-s1.Set(new Entity(0, 1), new Position(10, 10));
-deltas[1] = s1.Snapshot(); // Set(0,1, Position(10,10))
-s1.Clear();
-
-// Frame 2: Set position again
-var s2 = new CommandStream(world);
-s2.Set(new Entity(0, 1), new Position(20, 20));
-deltas[2] = s2.Snapshot(); // Set(0,1, Position(20,20))
-s2.Clear();
-
-// ── Path A: sequential replay ─────────────────────────────────────────
-var worldA = new World();
-var streamA = new CommandStream(worldA);
-foreach (var d in deltas) streamA.Replay(d);
-
-// ── Path B: concatenated replay ────────────────────────────────────────
-var merged = deltas[0];
-for (var i = 1; i < deltas.Length; i++)
-    merged = FrameDelta.Concat(merged, deltas[i]);
-
-var worldB = new World();
-new CommandStream(worldB).Replay(merged);
-
-// Both paths produce identical state
-Console.WriteLine(worldA.Get<Position>(new Entity(0, 1))); // Position(20, 20)
-Console.WriteLine(worldB.Get<Position>(new Entity(0, 1))); // Position(20, 20)
-Console.WriteLine(Convert.ToHexString(worldA.CanonicalChecksum())
-               == Convert.ToHexString(worldB.CanonicalChecksum())); // True
-
-readonly record struct Position(float X, float Y);
-```
-
-> **⚠️ Real-id only:** `FrameDelta.Concat` is safe only for **real-id deltas** (`DeferredEntities=false` or `SubmitAndSnapshotAsync`). Concatenating placeholder deltas from independent `CommandStream` instances will corrupt the `seq → local id` mapping because multiple streams start their seq counter at 0. The canonical lockstep pattern replays each peer's placeholder delta as a separate `Replay()` call — never concatenate across streams.
-
----
-
-## 21. WithAny (OR-match) + Without (Exclusion)
+## 20. WithAny (OR-match) + Without (Exclusion)
 
 `QueryDescription` supports three filter types: `With<T>` (AND-required), `WithAny<T>` (OR-match — at least one of the listed types must be present), and `Without<T>` (exclusion). These compose freely.
 
@@ -857,7 +801,7 @@ readonly record struct Health(int Value);
 
 ---
 
-## 22. Multi-Frame Rollback Window (GGPO)
+## 21. Multi-Frame Rollback Window (GGPO)
 
 `World.CaptureState()` and `World.RestoreState()` support a ring-buffer rollback window of arbitrary depth — not just single-frame save/restore. Handles are pooled, achieving **zero allocation in steady state**.
 
@@ -904,7 +848,7 @@ readonly record struct Position(float X, float Y);
 
 ---
 
-## 23. World.Clone() Branching + Subtree Copy
+## 22. World.Clone() Branching + Subtree Copy
 
 `World.Clone()` creates a fully independent fork of the entire world — no shared internal arrays. Use it for speculative "what-if" simulation or as an alternative to `CaptureState`/`RestoreState` for long-lived checkpoints. `World.Clone(Entity)` deep-copies a single entity and its entire subtree.
 
@@ -944,7 +888,7 @@ readonly record struct Health(int Value);
 
 ---
 
-## 24. ParallelRecording (Multi-Threaded Command Recording)
+## 23. ParallelRecording (Multi-Threaded Command Recording)
 
 When `CommandStream.ParallelRecording = true`, all `Create`, `Add`, `Set`, `Remove`, and `Destroy` calls become thread-safe. Useful when game systems run on multiple worker threads and each produces commands independently. `Submit` must still be single-threaded.
 
