@@ -16,6 +16,38 @@ public sealed class EntitySlotTests
         return new CommandStream(world) { DeferredEntities = deferred };
     }
 
+    // ── Struct copy semantics ────────────────────────────────────
+
+    [Fact]
+    public void Track_copied_slots_all_resolve_to_same_entity()
+    {
+        var world = new World();
+        var stream = MakeStream(world);
+
+        var slot = stream.Track(stream.Create());
+
+        // Value-type copies —all share the same Slot reference.
+        var copy1 = slot;
+        var copy2 = slot;
+
+        Assert.True(slot.Value.IsPlaceholder);
+        Assert.True(copy1.Value.IsPlaceholder);
+        Assert.True(copy2.Value.IsPlaceholder);
+
+        stream.Submit();
+
+        // All copies see the resolved entity.
+        Assert.False(slot.Value.IsPlaceholder);
+        Assert.False(copy1.Value.IsPlaceholder);
+        Assert.False(copy2.Value.IsPlaceholder);
+
+        Assert.Equal(slot.Value, copy1.Value);
+        Assert.Equal(slot.Value, copy2.Value);
+        Assert.True(world.IsAlive(slot.Value));
+        Assert.True(world.IsAlive(copy1.Value));
+        Assert.True(world.IsAlive(copy2.Value));
+    }
+
     // ── Submit path ───────────────────────────────────────────────
 
     [Fact]
