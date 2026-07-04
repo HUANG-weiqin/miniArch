@@ -38,7 +38,7 @@ static class Program
         Console.WriteLine($"Entities/archetype: {EntitiesPerArchetype}");
         Console.WriteLine($"Duration:          {DurationSeconds}s per engine");
         Console.WriteLine($"Structural changes/iter: {StructuralChangesPerIteration}");
-        Console.WriteLine($"Iteration:         entity-by-entity via cached query");
+        Console.WriteLine($"Iteration:         entity-by-entity via internal GetEntityStorageUnsafe()");
         Console.WriteLine();
 
         var miniResult = RunMiniArch();
@@ -171,7 +171,7 @@ static class Program
         {
             var archetype = archetypes[ai];
             int count = archetype.EntityCount;
-            var ents = archetype.GetEntityStorageUnsafe();
+            var ents = archetype.GetEntityStorageUnsafe(); // internal unsafe storage, not public GetEntities()
             for (int r = 0; r < count; r++)
                 checksum += ents[r].Id;
         }
