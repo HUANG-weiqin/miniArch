@@ -2055,6 +2055,7 @@ public sealed class CommandStreamTests
             "_trackedMaxSeq",
             "_replayTrackedBySeq",
             "_replayTrackedMaxSeq",
+            "_pendingReplay",
         };
 
         // _frozen and _spareFrozen are the two halves of the state-object swap;

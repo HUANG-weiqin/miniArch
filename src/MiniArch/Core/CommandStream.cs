@@ -58,6 +58,10 @@ public sealed class CommandStream
     // so Replay() can resolve them after World.Replay().
     private Slot?[]? _replayTrackedBySeq;
     private int _replayTrackedMaxSeq;
+    // Set by Snapshot(), consumed by Clear(). When true, Clear() preserves
+    // _trackedBySeq into _replayTrackedBySeq for subsequent Replay().
+    // When false (e.g. user abandons a frame), registrations are dropped.
+    private bool _pendingReplay;
 
     // ── Construction ───────────────────────────────────────────────────
 
@@ -497,12 +501,14 @@ public sealed class CommandStream
             var delta = new FrameDelta();
             BuildDelta(delta);
             delta.OriginStream = this;
+            _pendingReplay = true;
             return delta;
         }
         ThrowIfSnapshotHasImmediateEntities();
         var d = new FrameDelta();
         BuildDelta(d);
         d.OriginStream = this;
+        _pendingReplay = true;
         return d;
     }
 
@@ -1572,11 +1578,22 @@ public sealed class CommandStream
             if (releaseReserved) _world.TryReleaseReserved(entity);
         }
         _deferredSeq = 0;
-        // Save tracked slots for the pending Replay path, then reset.
-        // ResolveDeferredCreates and ResolveTrackedSlotsFromReplay read from
-        // _replayTrackedBySeq when they detect a pending snapshot-replay cycle.
-        _replayTrackedBySeq = _trackedBySeq;
-        _replayTrackedMaxSeq = _trackedMaxSeq;
+        if (_pendingReplay)
+        {
+            // Snapshot was called before Clear —preserve tracked registrations
+            // so Replay() can resolve them after World.Replay().
+            _replayTrackedBySeq = _trackedBySeq;
+            _replayTrackedMaxSeq = _trackedMaxSeq;
+            _pendingReplay = false;
+        }
+        else
+        {
+            // No pending replay: discard any stale saved registrations and
+            // the active tracked slots. This prevents abandoned-frame slots
+            // from being resolved by a future Replay() call.
+            _replayTrackedBySeq = null;
+            _replayTrackedMaxSeq = 0;
+        }
         _trackedBySeq = [];
         _trackedMaxSeq = 0;
         _frozen.DestroyCount = 0;

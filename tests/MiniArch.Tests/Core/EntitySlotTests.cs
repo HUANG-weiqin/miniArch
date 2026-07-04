@@ -138,6 +138,30 @@ public sealed class EntitySlotTests
     }
 
     [Fact]
+    public void Track_Clear_without_Snapshot_discards_stale_registrations()
+    {
+        // Regression: Clear() without preceding Snapshot() must not leave
+        // tracked slots pending for a future Replay to resolve.
+        var world = new World();
+        var stream = MakeStream(world);
+
+        var oldSlot = stream.Track(stream.Create());
+        stream.Clear();  // abandon frame —no Snapshot was called
+
+        // New frame: create+track a different entity.
+        var freshSlot = stream.Track(stream.Create());
+        stream.Submit();
+
+        // Old slot is abandoned —it must stay as placeholder.
+        Assert.True(oldSlot.Value.IsPlaceholder,
+            $"oldSlot={oldSlot.Value} should be placeholder (abandoned frame).");
+
+        // Fresh slot resolved correctly.
+        Assert.False(freshSlot.Value.IsPlaceholder);
+        Assert.True(world.IsAlive(freshSlot.Value));
+    }
+
+    [Fact]
     public void Track_default_EntitySlot_returns_default_entity()
     {
         EntitySlot slot = default;
