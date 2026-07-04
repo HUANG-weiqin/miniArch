@@ -1736,6 +1736,36 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
+    public void BUG_parallel_destroy_on_pending_entity_does_not_cancel_like_single_threaded()
+    {
+        // Single-threaded: Destroy on a pending entity cancels it (never materialized)
+        // and cascades to pending descendants. Parallel mode should produce the same
+        // observable result.
+        var worldSt = new World();
+        var streamSt = new CommandStream(worldSt);
+        var parentSt = streamSt.Create();
+        var childSt = streamSt.Create();
+        streamSt.AddChild(parentSt, childSt);
+        streamSt.Destroy(parentSt);
+        streamSt.Submit();
+
+        // Parallel: same operations but with ParallelRecording=true
+        var worldPar = new World();
+        var streamPar = new CommandStream(worldPar) { ParallelRecording = true };
+        var parentPar = streamPar.Create();
+        var childPar = streamPar.Create();
+        streamPar.AddChild(parentPar, childPar);
+        streamPar.Destroy(parentPar);
+        streamPar.ParallelRecording = false;
+        streamPar.Submit();
+
+        Assert.True(worldSt.EntityCount == 0,
+            $"Single-threaded: parent+child cancelled, expected 0 alive, got {worldSt.EntityCount}");
+        Assert.True(worldPar.EntityCount == 0,
+            $"Parallel: Destroy on pending should also cancel, expected 0 alive, got {worldPar.EntityCount}");
+    }
+
+    [Fact]
     public void Fuzz_10000_frames_seed_42_submit_and_replay_stay_in_sync()
     {
         RunFuzz(seed: 42, frames: 10000, syncCheckInterval: 1000);

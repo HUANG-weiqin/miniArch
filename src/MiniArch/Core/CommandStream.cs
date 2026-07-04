@@ -316,7 +316,24 @@ public sealed class CommandStream
     {
         if (_parallelMode)
         {
-            AppendDestroyConcurrent(entity);
+            // Same pending-check + cancel logic as single-threaded, under the
+            // lock. Without this, parallel Destroy on a pending entity would
+            // append to DestroyEntities without cancelling the batch, causing
+            // the entity (and its pending descendants) to be materialized then
+            // destroyed — diverging from single-threaded semantics where they
+            // are never materialized.
+            lock (_storeCreateLock)
+            {
+                if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out _))
+                {
+                    CancelPendingEntity(entity);
+                    CancelPendingDescendants(entity);
+                }
+                else if (!entity.IsPlaceholder)
+                {
+                    AppendDestroy(entity);
+                }
+            }
             return;
         }
 
@@ -1498,21 +1515,6 @@ public sealed class CommandStream
         lock (_storeCreateLock)
         {
             return TryGetPendingBatch(entity, out _);
-        }
-    }
-
-    private void AppendDestroyConcurrent(Entity entity)
-    {
-        var slot = Interlocked.Increment(ref _frozen.DestroyCount) - 1;
-        lock (_storeCreateLock)
-        {
-            while (slot >= _frozen.DestroyEntities.Length)
-            {
-                var newLen = _frozen.DestroyEntities.Length == 0 ? 64 : _frozen.DestroyEntities.Length * 2;
-                while (newLen <= slot) newLen *= 2;
-                Array.Resize(ref _frozen.DestroyEntities, newLen);
-            }
-            _frozen.DestroyEntities[slot] = entity;
         }
     }
 

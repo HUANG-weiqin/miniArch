@@ -2,7 +2,7 @@
 title: 代码审阅发现清单
 module: Meta
 description: 历次代码审阅中产生过的猜想与结论。真 bug 索引 + 已排除的非 bug 猜想。AI 审阅前必读，避免重复验证已知结论。
-updated: 2026-07-05 (3 真 bug 已修复 + 2026-07-05 全面 chunk + CommandStream + FrameDelta 审阅，新增 A7-A12、W7-W8、WC1-WC2、CS1-CS5、F5-F8、Q5-Q6 共 19 条非 bug 猜想)
+updated: 2026-07-05 (4 真 bug 已修复 + 2026-07-05 全面 chunk + CommandStream + FrameDelta + 健壮性审阅，新增 A7-A12、W7-W8、WC1-WC2、CS1-CS6、F5-F8、Q5-Q6 共 20 条非 bug 猜想)
 ---
 # 代码审阅发现清单
 
@@ -30,13 +30,14 @@ updated: 2026-07-05 (3 真 bug 已修复 + 2026-07-05 全面 chunk + CommandStre
 
 ## 已确认的真 bug → 已修复（`BUG_` 测试转为回归测试）
 
-> 三条 bug 均已修复，`BUG_` 前缀测试现在通过，充当回归守卫。
+> 四条 bug 均已修复，`BUG_` 前缀测试现在通过，充当回归守卫。
 
 | 测试名 | 位置 | 一句话描述 | 修复 |
 |---|---|---|---|
 | `BUG_capture_nonchunked_then_promote_then_restore_crashes` | `WorldStateSnapshot.cs:RestoreTo` | CaptureState 备份非 chunked archetype，prediction 期间 archetype 被 promote 为 chunked 后，RestoreState 走非 chunked 分支调用 `arch.CopyDataFrom`/`GetEntityStorageUnsafe`，撞上 `_data=null`/零长度缓存数组崩溃 | `RestoreTo` 检测 backup 非_chunked 但 arch 已 chunked 时，调用新增 `Archetype.RestoreFlatBackup`，按列从 flat backup（backup-time offsets）拆分到 segments（current segment-capacity offsets）；chunked→chunked 路径改用 `ResetCount` 清零多余 segment count |
 | `BUG_parallel_append_concurrent_resize_is_not_atomic` | `CommandStream.cs:AppendConcurrent` | `ParallelRecording=true` 下并发 append 时，`_data`/`_entities`/`_kinds` 三个独立 `Array.Resize` 非原子；等待循环只看 `_data.Length` 作闸门，外部线程读到 `_data` 已扩容就退出，写 `_entities[slot]`/`_kinds[slot]` 越界或写入废弃数组 | `AppendConcurrent` 改为在 `_resizeLock` 内完成 ensure+write（与 `AppendDestroyConcurrent` 同模式），消除三数组观测不一致和数据丢失（resize Array.Copy 与延迟写竞争）|
 | `BUG_capacity_above_segment_capacity_corrupts_row_mapping_on_promote` | `Archetype.Storage.cs:ConvertToChunked` | 当 non-chunked `_capacity > _segmentCapacity` 时（构造大 capacity 或 `EnsureCapacity` doubling 分支 `newCapacity=max(required, _capacity*2)` 把容量顶过 segment 阈值），promote 路径把超长 buffer 直接当 segment[0]，之后 `GetSegmentAndLocal` 按 `_segmentMask` 切分会把 `globalRow ≥ _segmentCapacity` 的数据映射到不存在的 segment | 删除 `NormalizeForChunked`，`ConvertToChunked` 统一负责 canonical split：`_capacity == _segmentCapacity` 时 fast-path wrap（正常 doubling 阈值 promote 零拷贝），否则 general path 按 `_segmentCapacity` 分割为 N 个标准 segment 并 rebase column offsets（提取 `ComputeColumnLayout` 纯函数复用）|
+| `BUG_parallel_destroy_on_pending_entity_does_not_cancel_like_single_threaded` | `CommandStream.cs:Destroy` | `ParallelRecording=true` 下 `Destroy(pendingEntity)` 直接调 `AppendDestroyConcurrent`，不检查 pending 状态也不调 `CancelPendingEntity`/`CancelPendingDescendants`；Submit 时该 entity 被 materialize 再 destroy，pending descendants 也被 materialize——与单线程语义（cancel 整棵子树，从不 materialize）不一致，导致 alive count / id allocator 分叉 | 并行 `Destroy` 在 `_storeCreateLock` 内复制单线程的 pending-check + cancel 逻辑；删除不再使用的 `AppendDestroyConcurrent` |
 
 ---
 
@@ -434,6 +435,24 @@ updated: 2026-07-05 (3 真 bug 已修复 + 2026-07-05 全面 chunk + CommandStre
 - **猜想**：两个线程同时为不同 type id 进入 resize 分支，`Array.Resize` 能否 shrink 数组？
 - **结论**：正确。`_storeCreateLock` 串行化 resize。`newLen = Math.Max(id + 1, Stores.Length == 0 ? 16 : Stores.Length * 2)` 只增不减（Array.Resize 在本项目中从不用来 shrink 到小于当前 length）。第二个线程进入时重新检查 `id >= Stores.Length`，此时 Stores 已被第一个线程扩到足够大，不会再 resize。
 - **验证**：手算 A(id=20)+B(id=25) 并发进入的时序
+
+#### CS6. `SwapOutState` 回收 `_spareFrozen` 时 `PendingBatch` 数组不清零
+- **位置**：`CommandStream.cs` SwapOutState line 672-716
+- **猜想**：`_spareFrozen` 回收后，`_frozen.PendingBatch`（id→batchIdx 映射）保留两帧前的 stale 条目；新的 `Create()` 只覆盖当前 entity.Id 对应的 slot，其他 stale 条目是否会被 `TryGetPendingBatch` 误读？
+- **结论**：安全。`_pendingBatchMin`/`_pendingBatchMax` 在 SwapOutState 中被重置为 `int.MaxValue`/`0`，`TryGetPendingBatch` 的 range guard `(uint)(id - min) < (uint)(max - min)` 在 min=max 的极端值下对所有 id 都返回 false。且 `PendingBatchCount` 被重置为 0，Add/Set 的前置检查 `_frozen.PendingBatchCount > 0` 短路。stale 条目不可达。
+- **验证**：手算 min=int.MaxValue, max=0 时的 range check（`id - int.MaxValue` unchecked→负→uint 大值，`0 - int.MaxValue` unchecked→int.MinValue+1→uint 大值，前者 > 后者→false）
+
+#### CS7. `SubmitAndSnapshotAsync` 中 main thread 和 background thread 并发读同一 FrozenState
+- **位置**：`CommandStream.cs` SubmitAndSnapshotAsync line 618-634
+- **猜想**：`SubmitFromFrozen(frozen)`（main thread）和 `BuildFromFrozen(frozen)`（background thread）同时遍历 frozen 的数组，是否 race？
+- **结论**：安全。两条路径对 frozen 都是**只读**：SubmitFromFrozen 写 `_world`，BuildFromFrozen 写 `delta`。frozen 的 arrays（BatchHeads/BatchComps/BatchBuf/DestroyEntities/Stores 等）在 SwapOutState 后不再被 recording 路径写入。并发只读无 race。
+- **验证**：确认 SubmitFromFrozen 和 BuildFromFrozen 的所有写入目标（_world / delta）都不在 frozen 内
+
+#### CS8. `ResolveArchetypeForMask` mask cache 满后 hash 驱逐可能碰撞
+- **位置**：`CommandStream.cs` ResolveArchetypeForMask line 1252-1293
+- **猜想**：cache 满（8 slot）后 `slotIdx = mask.GetHashCode() & (MaskCacheSize-1)`，不同 mask 可能 hash 到同一 slot 互相驱逐
+- **结论**：性能问题不是正确性问题。读取时验证 `slot.Mask.Equals(mask)`，miss 则走 `GetOrCreateArchetype`。功能正确，只影响命中率。
+- **验证**：读 cache lookup 的 Equals 验证 + miss fallback 路径
 
 ### FrameDelta / ReplayCore
 
