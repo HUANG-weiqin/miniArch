@@ -487,6 +487,37 @@ public sealed class CommandStream
         return d;
     }
 
+    // ── Replay ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Replays a <see cref="FrameDelta"/> into the underlying <see cref="World"/>
+    /// and, if the delta was produced by this stream's <see cref="Snapshot"/>,
+    /// automatically resolves all tracked <see cref="EntitySlot"/>s.
+    /// </summary>
+    /// <param name="delta">The delta to replay. Can be from any source —only
+    /// deltas produced by this stream's <see cref="Snapshot"/> trigger slot
+    /// resolution (detected via internal <see cref="FrameDelta.OriginStream"/>).</param>
+    /// <remarks>
+    /// <para>
+    /// In a lockstep setup, replay all peer deltas and your own delta through
+    /// this method. The stream automatically recognizes its own delta and
+    /// resolves tracked slots at the right time.
+    /// </para>
+    /// <para>
+    /// The underlying <see cref="World.Replay(FrameDelta)"/> is also available
+    /// for direct use, but does not resolve tracked EntitySlots.
+    /// </para>
+    /// </remarks>
+    public void Replay(FrameDelta delta)
+    {
+        _world.Replay(delta);
+
+        // Only resolve tracked slots when replaying our own delta.
+        // Peer deltas (deserialized, OriginStream == null) are skipped.
+        if (ReferenceEquals(delta.OriginStream, this))
+            ResolveTrackedSlotsFromReplay();
+    }
+
     private void ThrowIfSnapshotHasImmediateEntities()
     {
         for (var i = 0; i < _frozen.PendingBatchCount; i++)
