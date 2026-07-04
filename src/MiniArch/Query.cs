@@ -359,7 +359,7 @@ public struct QueryEnumerator
                 continue;
             }
 
-            _entities = archetype.GetEntityStorage();
+            _entities = archetype.GetEntityStorageUnsafe();
             _count = archetype.EntityCount;
             _rowIndex = -1;
         }
@@ -465,7 +465,7 @@ public struct OrderedEntityEnumerator : IDisposable
         for (var i = 0; i < archetypeCount; i++)
         {
             var archetype = archetypes[i];
-            var storage = archetype.GetEntityStorage();
+            var storage = archetype.GetEntityStorageUnsafe();
             var rowCount = archetype.EntityCount;
             Array.Copy(storage, 0, entities, entityIndex, rowCount);
             entityIndex += rowCount;
@@ -611,7 +611,7 @@ public struct OrderedComponentEnumerator<T> : IDisposable where T : unmanaged
             if (rowCount == 0)
                 continue;
 
-            var entitySpan = archetype.GetEntityStorage();
+            var entitySpan = archetype.GetEntityStorageUnsafe();
             entitySpan.AsSpan(0, rowCount).CopyTo(entities.AsSpan(index));
 
             var componentSpan = archetype.GetComponentSpan<T>(componentType);

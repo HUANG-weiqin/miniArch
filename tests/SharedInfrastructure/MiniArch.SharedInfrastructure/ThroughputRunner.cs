@@ -659,7 +659,7 @@ internal static class ThroughputCaseFactory
         {
             var archetype = archetypes[archetypeIndex];
             var count = archetype.EntityCount;
-            var entities = archetype.GetEntityStorage();
+            var entities = archetype.GetEntityStorageUnsafe();
             for (var row = 0; row < count; row++)
             {
                 checksum += entities[row].Id;

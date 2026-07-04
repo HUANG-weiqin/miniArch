@@ -313,11 +313,16 @@ internal sealed partial class Archetype
         if (!_isChunked)
             return _entities.AsSpan(0, _count);
 
-        return GetEntityStorage().AsSpan(0, _count);
+        return GetEntityStorageUnsafe().AsSpan(0, _count);
     }
 
+    /// <summary>
+    /// Returns the internal entity array. <b>Unsafe:</b> the returned array is
+    /// cached internal storage — callers must not mutate it. For read-only access
+    /// prefer <see cref="GetEntities"/> which returns <see cref="ReadOnlySpan{T}"/>.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal Entity[] GetEntityStorage()
+    internal Entity[] GetEntityStorageUnsafe()
     {
         if (!_isChunked)
             return _entities;

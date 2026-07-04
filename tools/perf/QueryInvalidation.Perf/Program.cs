@@ -171,7 +171,7 @@ static class Program
         {
             var archetype = archetypes[ai];
             int count = archetype.EntityCount;
-            var ents = archetype.GetEntityStorage();
+            var ents = archetype.GetEntityStorageUnsafe();
             for (int r = 0; r < count; r++)
                 checksum += ents[r].Id;
         }
