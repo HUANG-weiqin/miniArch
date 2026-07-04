@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Diagnostics;
+using System.Linq;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
@@ -163,7 +164,7 @@ public sealed partial class World : IDisposable
         var i = 0;
         foreach (var arch in _archetypes.Values)
         {
-            result[i++] = new ArchetypeStats(arch.EntityCount, arch.Capacity, arch.ComponentTypes);
+            result[i++] = new ArchetypeStats(arch.EntityCount, arch.Capacity, arch.ComponentTypes.ToArray());
         }
 
         return result;
