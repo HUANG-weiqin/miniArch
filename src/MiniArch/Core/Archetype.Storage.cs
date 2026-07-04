@@ -27,7 +27,7 @@ internal sealed partial class Archetype
         {
             var newEntities = new Entity[_segmentCapacity];
             Array.Copy(_entities, newEntities, _count);
-            var (newData, newOffsets, _) = CreateStorage(_signature, _componentTypes, _segmentCapacity, pinned: true);
+            var (newData, newOffsets, _) = CreateStorage(_signature, _componentTypes, _segmentCapacity);
             for (var col = 0; col < _elementSizes.Length; col++)
             {
                 var elemSize = _elementSizes[col];
@@ -817,7 +817,7 @@ internal sealed partial class Archetype
     }
 
     private static (byte[] Data, int[] ColumnByteOffsets, int[] ElementSizes) CreateStorage(
-        Signature signature, Type[] componentTypes, int capacity, bool pinned = true)
+        Signature signature, Type[] componentTypes, int capacity)
     {
         var componentCount = signature.Count;
         var columnByteOffsets = new int[componentCount];
@@ -841,16 +841,14 @@ internal sealed partial class Archetype
             totalBytes += elementSize * capacity;
         }
 
-        var data = pinned
-            ? GC.AllocateArray<byte>(totalBytes, pinned: true)
-            : GC.AllocateArray<byte>(totalBytes);
+        var data = GC.AllocateArray<byte>(totalBytes);
         return (data, columnByteOffsets, elementSizes);
     }
 
     private static byte[] CreateStorageBytes(
         Signature signature, Type[] componentTypes, int capacity)
     {
-        var (data, _, _) = CreateStorage(signature, componentTypes, capacity, pinned: false);
+        var (data, _, _) = CreateStorage(signature, componentTypes, capacity);
         return data;
     }
 

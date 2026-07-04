@@ -386,6 +386,19 @@ public sealed partial class World : IDisposable
     /// snapshot handles and allocate zero GC memory in steady state. Multiple snapshots
     /// may be live simultaneously (e.g. for an N-frame rollback window).
     /// </summary>
+    /// <summary>
+    /// Creates an independent, <b>ID-preserving</b> deep copy of this world.
+    /// Entity IDs match the source exactly — component data, hierarchy, and
+    /// free list are deep-copied, but <see cref="Entity"/> references inside
+    /// component fields carry the source world's IDs. If the clone is used
+    /// with a different <see cref="World"/> instance (different ID space),
+    /// those embedded references will be stale.
+    /// <para/>
+    /// For persistence or cross-process use, prefer
+    /// <see cref="Core.WorldSnapshot.Save"/> / <see cref="Core.WorldSnapshot.Load"/>,
+    /// which remaps entity IDs for the target world.
+    /// For in-memory rollback, use <see cref="CaptureState"/> / <see cref="RestoreState"/>.
+    /// </summary>
     public World Clone()
     {
         return WorldClone.Clone(this);
@@ -1212,7 +1225,15 @@ public sealed partial class World : IDisposable
         if (_freeIds.Length < _freeIdCount)
             Array.Resize(ref _freeIds, _freeIdCount);
         for (var i = 0; i < _freeIdCount; i++)
-            _freeIds[i] = new RecycledEntity(reader.ReadInt32(), reader.ReadInt32());
+        {
+            var id = reader.ReadInt32();
+            var version = reader.ReadInt32();
+            if ((uint)id >= (uint)_entitySlotCount)
+                throw new InvalidOperationException(
+                    $"Corrupt snapshot: free-list entity id {id} is out of range " +
+                    $"(entity slot count: {_entitySlotCount}).");
+            _freeIds[i] = new RecycledEntity(id, version);
+        }
     }
 
     internal void CopyFreeIdsFrom(World source)
