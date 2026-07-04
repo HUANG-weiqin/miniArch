@@ -238,6 +238,9 @@ public sealed class EntitySlotTests
         var delta = stream.Snapshot();
         stream.Clear();
 
+        // Relay-only: Clear done, Replay not yet —slot is still placeholder.
+        Assert.True(slot.Value.IsPlaceholder);
+
         // Replay own delta —should auto-resolve slot.
         stream.Replay(delta);
 
@@ -245,6 +248,41 @@ public sealed class EntitySlotTests
         Assert.True(world.IsAlive(slot.Value));
         Assert.True(world.TryGet(slot.Value, out Health hp));
         Assert.Equal(99, hp.Value);
+    }
+
+    [Fact]
+    public void Track_relay_only_source_replays_own_delta_among_peers()
+    {
+        // Relay-only: source host records, Snapshot+Clear (no Submit),
+        // then replays own delta alongside peer deltas.
+        var worldSrc = new World();
+        var worldPeer = new World();
+        var streamSrc = MakeStream(worldSrc);
+
+        var slot = streamSrc.Track(streamSrc.Create());
+        streamSrc.Add(slot.Value, new Health(7));
+
+        var delta = streamSrc.Snapshot();
+        streamSrc.Clear();
+
+        // Source: still placeholder until Replay.
+        Assert.True(slot.Value.IsPlaceholder);
+
+        // Simulate network: peer receives serialized copy.
+        var bytes = delta.AsSpan().ToArray();
+        var peerDelta = FrameDelta.Deserialize(bytes);
+        var streamPeer = MakeStream(worldPeer);
+
+        // Source replays own delta (original, OriginStream intact).
+        streamSrc.Replay(delta);
+        Assert.False(slot.Value.IsPlaceholder);
+        Assert.True(worldSrc.IsAlive(slot.Value));
+
+        // Peer replays deserialized copy —no slots to resolve on peer side.
+        streamPeer.Replay(peerDelta);
+        // Peer's world has the entity too (deterministic replay).
+        // Source slot still points to source's local entity.
+        Assert.True(worldSrc.IsAlive(slot.Value));
     }
 
     [Fact]

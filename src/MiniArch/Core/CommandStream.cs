@@ -102,7 +102,7 @@ public sealed class CommandStream
     /// When <c>DeferredEntities</c> is <c>true</c>, component fields of type
     /// <see cref="Entity"/> that reference deferred-created entities are
     /// automatically resolved by both <see cref="Submit"/> and
-    /// <see cref="World.Replay(global::MiniArch.Core.FrameDelta)"/>.
+    /// <see cref="Replay(FrameDelta)"/>.
     /// You can freely store a placeholder returned by <see cref="Create"/>
     /// in another component's <see cref="Entity"/> field; the system
     /// replaces it with the real entity ID at apply time.
