@@ -187,6 +187,38 @@ stream.Submit();  // 或 Snapshot() + Replay()
 
 详细路径见上文"Producer 端实现"和"Consumer 端实现"节。
 
+## 用户指南：EntitySlot —跨帧追踪 deferred entity
+
+当你在 deferred mode 下 `Create()` 拿到 placeholder 后，除了塞进组件字段（自动解析）外，还可以用 `EntitySlot` 追踪解析结果：
+
+```csharp
+var slot = stream.Track(stream.Create());
+stream.Add(slot.Value, new Health(100));  // slot.Value 是 placeholder，组件自动解析
+stream.Submit();
+// slot.Value 现在是 real Entity ✅，跨帧持有也有效
+world.Get<Health>(slot.Value);
+```
+
+### 锁步中继模式
+
+```csharp
+var slot = stream.Track(stream.Create());
+var myDelta = stream.Snapshot();
+stream.Clear();
+// ... 网络交换 ...
+foreach (var delta in allDeltas)
+    stream.Replay(delta);   // 自动识别自己的 delta，解析 slots
+slot.Value  // real Entity ✅
+```
+
+`stream.Replay(delta)` 包装了 `world.Replay(delta)`，通过 `FrameDelta.OriginStream` 自动检测哪个 delta 是自己产的，只在自己的 delta replay 后解析 tracked slots。
+
+### 约束
+
+- EntitySlot 不能当组件用（含引用类型，不是 unmanaged）。组件里用 `Entity`（`slot.Value`）。
+- 非延迟模式下 Track 零分配（Entity 内联存储）。
+- 延迟模式下每个 Track 分配一个小的 `Slot` 对象（opt-in）。
+
 ## 坑点
 
 - **placeholder 失效契约**：Snapshot/Submit 后外部 placeholder 引用变成 stale。合法使用下不会触发（placeholder 仅在 record → Snapshot/Submit 之间有效）。
