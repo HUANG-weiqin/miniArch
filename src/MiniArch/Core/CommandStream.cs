@@ -1600,7 +1600,15 @@ public sealed class CommandStream
     private void ResolveDeferredCreates()
     {
         if (_deferredSeq == 0)
+        {
+            // No deferred creates to resolve, but clear any stale tracked slots.
+            if (_trackedMaxSeq > 0)
+            {
+                Array.Clear(_trackedBySeq, 0, _trackedMaxSeq);
+                _trackedMaxSeq = 0;
+            }
             return;
+        }
 
         var resolveMap = _resolveMapPool ?? [];
         _resolveMapPool = null;
@@ -1663,6 +1671,10 @@ public sealed class CommandStream
             }
         }
         _resolveMapPool = resolveMap;
+
+        // Resolve tracked EntitySlots using this resolve map.
+        // _deferredSeq was reset to 0 above, so use resolveMap.Length as the bound.
+        ResolveTrackedSlots(resolveMap, resolveMap.Length);
     }
 
     private void ReplaceHierarchyPlaceholders(Entity[] resolveMap)
