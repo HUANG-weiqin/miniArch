@@ -456,6 +456,18 @@ internal sealed partial class Archetype
 
     internal int SegmentCount => _segmentCount;
 
+    /// <summary>
+    /// Fixed entity capacity per segment (power of two), computed from
+    /// component sizes at archetype creation. All segments share the
+    /// same capacity.
+    /// </summary>
+    internal int SegmentCapacity => _segmentCapacity;
+
+    /// <summary>
+    /// Returns the per-entity byte size of the component at the given column index.
+    /// </summary>
+    internal int ComponentElementSize(int columnIndex) => _elementSizes[columnIndex];
+
     internal int GetSegmentCount(int segmentIndex) => _segments[segmentIndex].Count;
 
     internal ReadOnlySpan<Entity> GetSegmentEntities(int segmentIndex) =>
@@ -738,8 +750,6 @@ internal sealed partial class Archetype
     internal int TotalDataBytes => _data?.Length ?? 0;
 
     internal void CopyDataTo(byte[] dest) => Array.Copy(_data, dest, _data.Length);
-
-    internal void CopyDataFrom(byte[] src) => Array.Copy(src, _data, src.Length);
 
     internal void SetCount(int count) => _count = count;
 

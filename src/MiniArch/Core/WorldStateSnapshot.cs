@@ -1,3 +1,7 @@
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+
 namespace MiniArch.Core;
 
 /// <summary>
@@ -141,12 +145,33 @@ internal struct ArchetypeBackupEntry
     public byte[] Data;
     public int Count;
     public bool IsChunked;
+
+    // Source layout snapshot (deep-copied, not a reference). RestoreTo uses
+    // these to interpret the backup data independently of the archetype's
+    // current layout, which may have changed during prediction.
+    //
+    // Non-chunked: SourceCapacity = arch.Capacity at capture time;
+    //              ColumnByteOffsets is the flat buffer layout for that capacity.
+    // Chunked:     SourceCapacity = 0 (sentinel — not used for chunked backups);
+    //              ColumnByteOffsets is the segment layout (= segment capacity).
+    public int SourceCapacity;
     public int[] ColumnByteOffsets;
 
+    // Chunked backup: per-segment arrays. SegmentEntities[i] and
+    // SegmentData[i] are sized to the source archetype's _segmentCapacity
+    // at capture time. Pool reuse may leave them larger than needed, but
+    // CopyFromChunked guarantees they are at least as large as necessary.
     public Entity[][] SegmentEntities;
     public byte[][] SegmentData;
     public int[] SegmentCounts;
     public int SegmentCount;
+
+    /// <summary>
+    /// Minimum capacity for pooled backup arrays. Prevents pathological
+    /// allocation for very small archetypes while keeping steady-state
+    /// resize cost negligible.
+    /// </summary>
+    private const int MinBackupCapacity = 64;
 
     public static void CopyFromNonChunked(Archetype arch, ref ArchetypeBackupEntry entry)
     {
@@ -154,18 +179,27 @@ internal struct ArchetypeBackupEntry
         entry.Archetype = arch;
         entry.Count = count;
         entry.IsChunked = false;
+        entry.SourceCapacity = arch.Capacity;
+        entry.SegmentCount = 0;
 
-        if (entry.Entities is null || entry.Entities.Length < count)
-            entry.Entities = new Entity[count];
+        // Entities
+        var neededEntityLen = Math.Max(count, MinBackupCapacity);
+        if (entry.Entities is null || entry.Entities.Length < neededEntityLen)
+            entry.Entities = new Entity[neededEntityLen];
         Array.Copy(arch.GetEntityStorageUnsafe(), entry.Entities, count);
 
+        // Data (flat buffer)
         var totalBytes = arch.TotalDataBytes;
         if (entry.Data is null || entry.Data.Length < totalBytes)
-            entry.Data = new byte[totalBytes];
+            entry.Data = new byte[Math.Max(totalBytes, MinBackupCapacity * 16)];
         arch.CopyDataTo(entry.Data);
 
-        entry.ColumnByteOffsets = arch.ColumnByteOffsets;
-        entry.SegmentCount = 0;
+        // Column offsets: deep copy (not reference) so restore can translate
+        // even if the archetype's offsets changed after capture.
+        var srcOffsets = arch.ColumnByteOffsets;
+        if (entry.ColumnByteOffsets is null || entry.ColumnByteOffsets.Length != srcOffsets.Length)
+            entry.ColumnByteOffsets = new int[srcOffsets.Length];
+        Array.Copy(srcOffsets, entry.ColumnByteOffsets, srcOffsets.Length);
     }
 
     public static void CopyFromChunked(Archetype arch, ref ArchetypeBackupEntry entry)
@@ -174,7 +208,10 @@ internal struct ArchetypeBackupEntry
         entry.Archetype = arch;
         entry.Count = arch.EntityCount;
         entry.IsChunked = true;
+        entry.SourceCapacity = 0; // chunked sentinel
         entry.SegmentCount = segCount;
+
+        var segCap = arch.SegmentCapacity;
 
         if (entry.SegmentEntities is null || entry.SegmentEntities.Length < segCount)
             entry.SegmentEntities = new Entity[segCount][];
@@ -186,55 +223,106 @@ internal struct ArchetypeBackupEntry
         for (var i = 0; i < segCount; i++)
         {
             ref var seg = ref arch.GetSegmentRef(i);
+            Debug.Assert(seg.Entities.Length == segCap,
+                "All segments in a chunked archetype share the same _segmentCapacity.");
+            Debug.Assert(seg.Data.Length >= segCap * sizeof(byte) /* enough for entities */,
+                "Segment data must be sized for _segmentCapacity entities.");
+
             if (entry.SegmentEntities[i] is null || entry.SegmentEntities[i].Length < seg.Entities.Length)
                 entry.SegmentEntities[i] = new Entity[seg.Entities.Length];
             Array.Copy(seg.Entities, entry.SegmentEntities[i], seg.Entities.Length);
+
             if (entry.SegmentData[i] is null || entry.SegmentData[i].Length < seg.Data.Length)
                 entry.SegmentData[i] = new byte[seg.Data.Length];
             Array.Copy(seg.Data, entry.SegmentData[i], seg.Data.Length);
+
             entry.SegmentCounts[i] = seg.Count;
         }
 
         entry.Entities = null!;
         entry.Data = null!;
+
+        // Deep-copy column byte offsets (not used by chunked→chunked restore,
+        // but stored for uniformity and so non-chunked→chunked restore via
+        // RestoreFlatBackup works if the backup type is chunked).
+        var srcOffsets = arch.ColumnByteOffsets;
+        if (entry.ColumnByteOffsets is null || entry.ColumnByteOffsets.Length != srcOffsets.Length)
+            entry.ColumnByteOffsets = new int[srcOffsets.Length];
+        Array.Copy(srcOffsets, entry.ColumnByteOffsets, srcOffsets.Length);
     }
 
     public readonly void RestoreTo(Archetype arch)
     {
+        Debug.Assert(Count >= 0, "Backup entity count must be non-negative.");
+        Debug.Assert(ColumnByteOffsets is not null, "Column offsets must not be null.");
+        Debug.Assert(ColumnByteOffsets.Length == 0 || ColumnByteOffsets.Length == arch.ComponentTypes.Count,
+            "Column offset count must match archetype component count (or be empty).");
+
         if (!IsChunked)
         {
-            // Delegating to RestoreFlatBackup handles both paths:
+            // Sanity: SourceCapacity should match what the archetype's
+            // capacity was at capture time. If it doesn't (because
+            // EnsureCapacity ran between capture and restore), that's
+            // expected — RestoreFlatBackup handles offset translation.
+            Debug.Assert(SourceCapacity > 0,
+                "Non-chunked backup must have a positive SourceCapacity.");
+
+            // Delegating to RestoreFlatBackup handles both:
             //
-            // non-chunked → non-chunked: The archetype may have undergone
-            // EnsureCapacity between capture and restore, which replaces
-            // _columnByteOffsets with new capacity-based offsets.
-            // CopyDataFrom's bulk Array.Copy would place old-layout data at
-            // the wrong offsets, so we copy each column independently with
-            // offset translation (same semantics as the non-chunked branch of
-            // RestoreFlatBackup).
+            // non-chunked → non-chunked: column-by-column copy with offset
+            // translation from SourceColumnByteOffsets to current
+            // _columnByteOffsets. Correct even when EnsureCapacity changed
+            // the layout.
             //
-            // non-chunked → chunked: Distribute the flat backup across
-            // segments, translating from backup-time offsets to segment-
-            // capacity offsets (explicitly tested by
-            // BUG_capture_nonchunked_then_promote_then_restore_crashes and
-            // Restore_flat_backup_to_chunked_preserves_multi_column_data).
+            // non-chunked → chunked: Distributes flat backup across segments,
+            // translating from backup-time offsets to segment-capacity offsets.
             arch.RestoreFlatBackup(Entities, Data, ColumnByteOffsets, Count);
         }
         else
         {
+            Debug.Assert(SourceCapacity == 0,
+                "Chunked backup must have SourceCapacity == 0 (sentinel).");
+            Debug.Assert(SegmentCount <= arch.SegmentCount,
+                "Backup segment count must not exceed the archetype's current " +
+                "segment count (segments only grow between capture and restore).");
+
             arch.ResetCount();
             for (var i = 0; i < SegmentCount; i++)
             {
                 ref var seg = ref arch.GetSegmentRef(i);
-                // Copy at most the destination capacity — SegmentEntities[i]
-                // / SegmentData[i] may be larger than seg.Entities / seg.Data
-                // when the backup pool reused an entry from an archetype with
-                // larger segments. CopyFromChunked only fills up to
-                // seg.Entities.Length / seg.Data.Length, so the extra tail
-                // slots contain stale data from a prior capture.
-                Array.Copy(SegmentEntities[i], seg.Entities, seg.Entities.Length);
-                Array.Copy(SegmentData[i], seg.Data, seg.Data.Length);
-                seg.Count = SegmentCounts[i];
+                var entityCount = SegmentCounts[i];
+
+                Debug.Assert((uint)entityCount <= (uint)seg.Entities.Length,
+                    "Backup segment entity count must fit in the destination segment.");
+                Debug.Assert(entityCount >= 0,
+                    "Backup per-segment entity count must be non-negative.");
+
+                // Copy exactly entityCount entities and their component data.
+                // Do NOT copy by seg.Entities.Length — that would copy stale
+                // tail slots from pool-reused oversized arrays (BUG #2).
+                // Do NOT copy by SegmentEntities[i].Length — that would
+                // overflow the destination if pool reuse left a larger array
+                // (BUG #2, original form).
+                Array.Copy(SegmentEntities[i], seg.Entities, entityCount);
+                seg.Count = entityCount;
+
+                // Copy component data: for each column, copy entityCount rows
+                // from the backup segment data to the destination segment data
+                // at the current segment-capacity offsets.
+                for (var col = 0; col < ColumnByteOffsets.Length; col++)
+                {
+                    var elemSize = arch.ComponentElementSize(col);
+                    var columnBytes = entityCount * elemSize;
+                    if (columnBytes <= 0) continue;
+
+                    ref var srcRef = ref Unsafe.Add(
+                        ref MemoryMarshal.GetArrayDataReference(SegmentData[i]),
+                        ColumnByteOffsets[col]);
+                    ref var dstRef = ref Unsafe.Add(
+                        ref MemoryMarshal.GetArrayDataReference(seg.Data),
+                        arch.ColumnByteOffsets[col]);
+                    Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, (uint)columnBytes);
+                }
             }
             arch.SetCount(Count);
             arch.RebuildFlatEntities();
