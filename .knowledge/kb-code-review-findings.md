@@ -2,7 +2,7 @@
 title: 代码审阅发现清单
 module: Meta
 description: 历次代码审阅中产生过的猜想与结论。真 bug 索引 + 已排除的非 bug 猜想。AI 审阅前必读，避免重复验证已知结论。
-updated: 2026-07-04 (3 真 bug 已修复)
+updated: 2026-07-05 (3 真 bug 已修复 + 2026-07-05 全面 chunk 审阅，新增 A7-A12、W7-W8、WC1-WC2、Q5-Q6 共 10 条非 bug 猜想)
 ---
 # 代码审阅发现清单
 
@@ -336,6 +336,86 @@ updated: 2026-07-04 (3 真 bug 已修复)
 - **为什么单列一个文件而不是散落到各模块 kb**：审阅流程是"先读 INDEX → 找审阅相关页 → 开始审"，单一入口最契合；跨模块猜想也有安放处
 - **为什么真 bug 只放索引不展开**：真 bug 的单一事实来源是 `BUG_` 测试代码 + git 历史，本文件展开会重复且易过期
 - **为什么记录"快速排除清单"**：这些判断虽然低价值，但下一个审阅者仍会驻足思考几秒；一行带过可省去这些时间，且不污染主清单
+
+### 存储 / Archetype（续）
+
+#### A7. `ConvertToChunked` fast path 不更新 `_columnByteOffsets`
+- **位置**：`Archetype.Storage.cs` ConvertToChunked line 39-53
+- **猜想**：fast path（`_capacity == _segmentCapacity`）只包装数组，不更新 `_columnByteOffsets`，是否应同步？
+- **结论**：无需同步。`_capacity == _segmentCapacity` 时 flat buffer 的 column layout 与 segment-capacity 的 layout 相同（capacity 相同 → `ComputeColumnLayout` 结果相同），`_columnByteOffsets` 已正确。General path（line 89）才更新。
+- **验证**：读 `ComputeColumnLayout` 是 pure function over elementSizes + capacity，capacity 相同则 offsets 相同
+
+#### A8. `ConvertToChunked` general path 中 `segOffset` vs `_columnByteOffsets` 的 segStart 索引
+- **位置**：`Archetype.Storage.cs` ConvertToChunked general path line 60-87
+- **猜想**：source 用 `_columnByteOffsets[col] + segStart * elemSize`，dest 用 `segOffsets[col]`。segStart 是全局行索引（基于 flat buffer），dest 只偏移列起始——是否一致？
+- **结论**：正确。Source 侧：`_columnByteOffsets[col]` 是 flat buffer 中列 col 的起始字节，加上 `segStart * elemSize` 得到第 segStart 行的数据。Dest 侧：segData 是 segment 的 byte[]，`segOffsets[col]` 是按 `_segmentCapacity` 布局的列起始。`CopyBlockUnaligned` 写 `rowsInSeg * elemSize` 字节，正好是从列起始开始的 rowsInSeg 行数据。
+- **验证**：手算一个 3 列、2 segment 的通用路径数据复制
+
+#### A9. `CopyColumnFrom` 对有 Count=0 的 segment 可能越界
+- **位置**：`Archetype.Storage.cs` CopyColumnFrom line 857-926
+- **猜想**：chunked 模式下遍历 segment，如果某个 segment 的 Count=0（如 RestoreFlatBackup 后残留的尾部空 segment），`take = Math.Min(remaining, Math.Min(srcAvailable, dstAvailable))` 中 dstAvailable=0 或 srcAvailable=0→take=0→remaining 不变→segIdx++。若所有尾部 segment 都是空，segIdx 持续增长直到越界。
+- **结论**：不可达。调用方（`CopyColumnsFrom`）保证 `count <= _count` 且 `_count` 等于所有 segment Count 之和。`remaining` 在耗尽所有非空 segment 的数据前降到 0，不会进入尾部空 segment。**但此结论依赖 `_count == sum(segment.Count)` 不变式**——若某条路径破坏该不变式，就会在此处越界。
+- **验证**：读 CopyColumnsFrom 的 count 范围检查 + 确认 ReserveRows、AddEntity、RemoveAt 都维护该不变式
+
+#### A10. `ReadColumnFrom` chunked 分支遇到空 segment 死循环
+- **位置**：`Archetype.Storage.cs` ReadColumnFrom line 601-620
+- **猜想**：与 A5 相同，但补充验证 RestoreFlatBackup 路径。RestoreFlatBackup 可能产生尾部 Count=0 的 segment。
+- **结论**：安全。同上，`count`=调用方读取的 entity 数≤`_count`=非空 segment Count 之和。`remaining` 在到达空 segment 前降到 0。
+- **验证**：读 RestoreFlatBackup 的 `seg.Count = take` 和 `_count = count` 设置
+
+#### A11. `WriteCreatedEntitiesAndLocationsChunked` 不检查 archetype 是否实际 chunked
+- **位置**：`World.EntityLifecycle.cs` WriteCreatedEntitiesAndLocationsChunked line 330-364
+- **猜想**：如果 dispacher（WriteCreatedEntitiesAndLocations .cs line 282）意外调用此方法在非 chunked archetype 上，`WriteEntityAt` 也能正确工作（它检查 `_isChunked` 并走对应分支），所以是安全的。
+- **结论**：安全。`WriteEntityAt` 是 dual-mode 的，两种路径都正确处理。且 dispatcher 不会错派。
+- **验证**：读 WriteEntityAt 的 `if (!_isChunked)` 分支
+
+#### A12. `FeedColumnData` 中 `_segments[s].Count` 为 0 时 take=0
+- **位置**：`Archetype.Storage.cs` FeedColumnData line 714-732
+- **猜想**：与 A10 相同模式，尾部空 segment 可能死循环
+- **结论**：安全。`rowCount` 来自 ChunkView.Count 或 Query 枚举的 EntityCount，不会超过非空 segment 总和。
+- **验证**：读所有 FeedColumnData 调用方
+
+### World / 实体生命周期（续）
+
+#### W7. `DestroySingle` 中 `Record = default; record.Version = nextVersion` 后 `_count--` 前 movedEntity 更新记录的时序
+- **位置**：`World.EntityLifecycle.cs` DestroySingle line 197-219
+- **猜想**：`arch.RemoveAt(row, out movedEntity)` 已在 chunked 模式下递增 `_flatEntitiesGeneration`。但 movedEntity 的 record 更新（line 214-218）在 `record = default; record.Version = nextVersion`（line 208-209）之后——是否可能 record 已被重用？
+- **结论**：安全。`record` 是 `_records[entity.Id]` 的 ref，`movedRecord` 是 `_records[movedEntity.Id]` 的 ref。两个不同的 slot，不会互相影响。`record` 被清零（版本递增）与 `movedRecord` 更新无关。
+- **验证**：确认 entity.Id != movedEntity.Id（swap-remove 只在 row != lastGlobalRow 时移动，被移动的 entity 不可能是被销毁的 entity）
+
+#### W8. `WriteCreatedEntitiesAndLocationsFlat` 中 `GetReservedEntities` 在 chunked 模式下抛异常
+- **位置**：`World.EntityLifecycle.cs` line 297
+- **猜想**：`ReserveRows` 可能在调用 `WriteCreatedEntitiesAndLocations` 之前将 archetype 提升为 chunked，但 dispacher（line 282）在 ReserveRows 之后检查 `IsChunked`，不会派发到 flat 分支。
+- **结论**：安全。`ReserveRows` 可能提升，但 dispatcher 在 `ReserveRows` 返回后才检查 `IsChunked`，能看到最新状态。
+- **验证**：读 `CreateMany` → `ReserveRows` → `WriteCreatedEntitiesAndLocations` 的调用顺序
+
+### WorldClone / 全量克隆
+
+#### WC1. `Clone` 中 `CopyColumnsFrom` 可能跨 chunked/non-chunked 边界
+- **位置**：`WorldClone.cs` line 30，`Archetype.Storage.cs` CopyColumnsFrom/CopyColumnFrom
+- **猜想**：srcArch 可能是 chunked 的，dstArch 在 `ReserveRows` 后可能是 chunked 的 → `CopyColumnFrom` 的 general path 处理 4 种模式组合。是否所有组合正确？
+- **结论**：正确。`CopyColumnFrom` general path 用 `_isChunked` 判断 source/dest 各自模式，`segments[segIdx].Count - consumed`（chunked）和 `remaining`（non-chunked）在任一种组合下正确计算可用行数。
+- **验证**：手算 4 种组合（S!=C, S=C, D!=C, D=C）的循环迭代
+
+#### WC2. `Clone` 中 `dstArch` 是新创建的但 `target.GetOrCreateArchetype` 可能返回已存在的 archetype
+- **位置**：`WorldClone.cs` line 24
+- **猜想**：target 是全新的 World（刚 `Reset` 清除所有 archetype），所以 `GetOrCreateArchetype` 创建新 archetype。Signature 不会重复。安全。
+- **结论**：安全。`Reset` 清空 `_archetypes` 字典，`GetOrCreateArchetype` 创建全新实例。
+- **验证**：读 `Reset()` 中 `_archetypes.Clear()`
+
+### QueryCache / ChunkView 快照
+
+#### Q5. `EnsureRefreshed` 中 segment count 变化检测用 `_archetypeExpectedViews[i]`
+- **位置**：`QueryCache.cs` EnsureRefreshed line 103-126
+- **猜想**：chunked 增长（新 segment 加入）使 `arch.SegmentCount` 变化，但 `EnsureRefreshed` 只比较 `expected != _archetypeExpectedViews[i]`。如果 `_archetypeExpectedViews` 数组不够大？
+- **结论**：安全。EnsureRefreshed 要么先走 `currentCount != _lastArchetypeCount`（新 archetype 加入，此时调用完整 Refresh 重建所有数组），要么走 segment count 比较。后者的前提是 `_matchedArchetypeCount > 0` 且 `_archetypeExpectedViews` 在 `_matchedArchetypeCount` 范围内（由 AppendNewArchetypes 保证同步增长）。
+- **验证**：读 AppendNewArchetypes 中对 `_archetypeExpectedViews` 的 Array.Resize 和 `Volatile.Write(ref _matchedArchetypeCount, ai)` 的发布顺序
+
+#### Q6. `RefreshViewsOnly` 中 `_snapshotChunkViews` 在迭代时被覆盖
+- **位置**：`QueryCache.cs` RebuildChunkViews line 152-186
+- **猜想**：`_snapshotChunkViews[ci++]` 从 0 开始覆盖，并行 worker 可能正在读旧 chunk views
+- **结论**：由用户契约覆盖（同 Q3）。`RefreshViewsOnly` 只在 segment count 变化时触发，这说明有结构变更正在进行，而 `ChunkView` 的文档禁止跨结构变更保留。
+- **验证**：读 ChunkView struct XML doc 第一段
 
 ## 入口
 

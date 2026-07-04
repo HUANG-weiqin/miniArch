@@ -203,20 +203,22 @@ internal struct ArchetypeBackupEntry
     {
         if (!IsChunked)
         {
-            if (!arch.IsChunked)
-            {
-                Array.Copy(Entities, arch.GetEntityStorageUnsafe(), Count);
-                arch.CopyDataFrom(Data);
-                arch.SetCount(Count);
-            }
-            else
-            {
-                // Backup was non-chunked but the archetype was promoted to
-                // chunked after capture (e.g. prediction created enough
-                // entities). Distribute the flat backup across segments,
-                // translating from backup-time offsets to segment offsets.
-                arch.RestoreFlatBackup(Entities, Data, ColumnByteOffsets, Count);
-            }
+            // Delegating to RestoreFlatBackup handles both paths:
+            //
+            // non-chunked → non-chunked: The archetype may have undergone
+            // EnsureCapacity between capture and restore, which replaces
+            // _columnByteOffsets with new capacity-based offsets.
+            // CopyDataFrom's bulk Array.Copy would place old-layout data at
+            // the wrong offsets, so we copy each column independently with
+            // offset translation (same semantics as the non-chunked branch of
+            // RestoreFlatBackup).
+            //
+            // non-chunked → chunked: Distribute the flat backup across
+            // segments, translating from backup-time offsets to segment-
+            // capacity offsets (explicitly tested by
+            // BUG_capture_nonchunked_then_promote_then_restore_crashes and
+            // Restore_flat_backup_to_chunked_preserves_multi_column_data).
+            arch.RestoreFlatBackup(Entities, Data, ColumnByteOffsets, Count);
         }
         else
         {

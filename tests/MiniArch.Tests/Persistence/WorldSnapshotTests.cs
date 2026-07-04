@@ -1016,6 +1016,46 @@ public sealed class WorldSnapshotTests
         Assert.Equal(new BigPayload(1), GetComponent<BigPayload>(world, bp));
     }
 
+    // BUG REPROOF: Non-chunked archetype with small chunkCapacity undergoes
+    // EnsureCapacity doubling between Capture and Restore, changing column
+    // byte offsets. CopyDataFrom copies old-layout backup data into the
+    // new-layout _data buffer at the wrong offsets. The real scenario:
+    // prediction MODIFIES a component at the new offset, and CopyDataFrom
+    // does NOT overwrite it, so the entity keeps the predicted value.
+    [Fact]
+    public void BUG_nonchunked_restore_after_capacity_doubling_does_not_restore_modified_column()
+    {
+        // Use small chunkCapacity so EntityCount quickly triggers doubling.
+        var world = new World(chunkCapacity: 4);
+
+        var e1 = world.Create(new Position(10, 20), new Velocity(1, 2));
+        var snap = world.CaptureState();
+
+        // Trigger EnsureCapacity doubling (capacity 4 → 8).
+        // With Position(8B)+Velocity(8B):
+        //   old layout (cap=4): pos@0(32B), vel@32(32B)  → _data=64
+        //   new layout (cap=8): pos@0(64B), vel@64(64B)  → _data=128
+        for (var i = 0; i < 5; i++)
+            world.Create(new Position(i, i), new Velocity(i, i));
+
+        // Modify e1's Velocity during prediction (written at new offset 64).
+        world.Set(e1, new Velocity(99, 100));
+
+        // Restore — e1 must revert to the captured Velocity(1, 2).
+        // CopyDataFrom copies 64-byte backup into _data[0..63].
+        // But _data[64] (new vel offset) is NOT overwritten → still (99,100).
+        world.RestoreState(snap);
+
+        Assert.True(world.IsAlive(e1));
+        Assert.True(world.TryGet(e1, out Position p1));
+        Assert.Equal(new Position(10, 20), p1);
+
+        Assert.True(world.TryGet(e1, out Velocity v1),
+            "Velocity should be restored to the captured value. If this " +
+            "fails then CopyDataFrom did not rebase column offsets.");
+        Assert.Equal(new Velocity(1, 2), v1);
+    }
+
     private readonly struct NoOpFeeder : Archetype.ISpanFeeder
     {
         public void Feed(ReadOnlySpan<byte> span) { }
