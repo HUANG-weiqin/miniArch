@@ -7,7 +7,7 @@ namespace MiniArch.Core;
 /// <para>
 /// Obtain an EntitySlot via <see cref="CommandStream.Track"/>. The <see cref="Value"/>
 /// property returns the placeholder entity before resolution and the real entity after
-/// <see cref="CommandStream.Submit"/> or <see cref="CommandStream.Replay(FrameDelta)"/>.
+/// <see cref="CommandStream.Submit"/> or <see cref="CommandStream.Replay(FrameDelta, Boolean)"/>.
 /// </para>
 /// <para>
 /// <b>EntitySlot cannot be stored in ECS components</b> (it contains reference types and

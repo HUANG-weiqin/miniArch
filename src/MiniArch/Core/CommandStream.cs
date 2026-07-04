@@ -102,7 +102,7 @@ public sealed class CommandStream
     /// When <c>DeferredEntities</c> is <c>true</c>, component fields of type
     /// <see cref="Entity"/> that reference deferred-created entities are
     /// automatically resolved by both <see cref="Submit"/> and
-    /// <see cref="Replay(FrameDelta)"/>.
+    /// <see cref="Replay(FrameDelta, Boolean)"/>.
     /// You can freely store a placeholder returned by <see cref="Create"/>
     /// in another component's <see cref="Entity"/> field; the system
     /// replaces it with the real entity ID at apply time.
@@ -495,7 +495,7 @@ public sealed class CommandStream
     /// tracked <see cref="EntitySlot"/> resolution. Peer hosts receive
     /// serialized copies (which lose the marker) and have no tracked
     /// slots to resolve. World-state convergence is identical either way:
-    /// <see cref="Replay(FrameDelta)"/> processes the same byte payload.
+    /// <see cref="Replay(FrameDelta, Boolean)"/> processes the same byte payload.
     /// </para>
     /// </remarks>
     public FrameDelta Snapshot()
@@ -1642,8 +1642,8 @@ public sealed class CommandStream
 
     /// <summary>
     /// Resolves all tracked slots using the World's replay placeholder map.
-    /// Called after <see cref="Replay(FrameDelta, bool)"/> when
-    /// <paramref name="resolveSlots"/> is <c>true</c>.
+    /// Called after <see cref="Replay(FrameDelta, Boolean)"/> when the
+    /// <c>resolveSlots</c> parameter is <c>true</c>.
     /// </summary>
     private void ResolveTrackedSlotsFromReplay()
     {

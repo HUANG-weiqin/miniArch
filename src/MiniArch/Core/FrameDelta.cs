@@ -215,7 +215,7 @@ public sealed class FrameDelta
     /// negative counts, duplicate component types, unknown type ids, or
     /// invalid entity shapes.
     ///
-    /// Call before <see cref="CommandStream.Replay(FrameDelta)"/> for deltas
+    /// Call before <see cref="CommandStream.Replay(FrameDelta, Boolean)"/> for deltas
     /// received over the network. Deltas produced locally by
     /// <see cref="CommandStream"/> are always valid and can skip this step.
     /// </summary>
