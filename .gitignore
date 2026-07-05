@@ -308,3 +308,6 @@ tools/scripts/*.ps1
 # Benchmark artifacts
 benchmarks/
 profiles/
+
+# Worktree workspaces
+.worktrees/
