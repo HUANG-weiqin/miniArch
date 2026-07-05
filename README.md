@@ -52,6 +52,16 @@ readonly record struct Velocity(float X, float Y);
 - **WorldSnapshot** — binary world serialize/deserialize for replays and netcode
 - **Entity hierarchy** — `AddChild` / `RemoveChild` with cascade destroy
 - **Parallel iteration** — `ForEachChunkParallel` with struct-generic `IChunkForEach` (zero-alloc, JIT-devirtualised)
+- **World diagnostics** — `WorldDiff.Compare()` for lockstep divergence pinpointing, `WorldValidator.Validate()` for structural integrity, `EntityDump.Describe()` for per-entity state, `WorldDigest.Compute()` for per-domain checksum narrowing (`MiniArch.Diagnostics` namespace)
+
+  ```csharp
+  using MiniArch.Diagnostics;
+
+  var diff = WorldDiff.Compare(worldA, worldB);               // two-world comparison
+  var report = EntityDump.Describe(world, entity);            // inspect one entity
+  var ok = WorldValidator.Validate(world).IsValid;            // check structural integrity
+  var digest = WorldDigest.Compute(world);                    // per-domain checksums
+  ```
 - **Zero GC** — no collections in steady-state simulation across all game scenarios
 
 [Full example catalogue →](docs/examples.md)
@@ -73,6 +83,7 @@ In Set-heavy game scenarios (position, health, velocity updates), MiniArch Comma
 | Per-frame Set-heavy (position, health, velocity) | ✅ CommandStream advantage vs Friflo |
 | Zero-GC steady-state | ✅ 0/0/0 collections |
 | Archetype-switch-heavy workloads | ⚠️ Friflo slightly ahead (S8 scenario) |
+| Debugging state divergence | ✅ WorldDiff, WorldDigest, WorldValidator |
 
 ---
 
@@ -82,6 +93,7 @@ In Set-heavy game scenarios (position, health, velocity updates), MiniArch Comma
 |---|---|
 | API Reference | [docs/api.md](docs/api.md) |
 | Examples & Patterns | [docs/examples.md](docs/examples.md) |
+| World Diagnostics | [`.knowledge/kb-ecs-diagnostics.md`](.knowledge/kb-ecs-diagnostics.md) |
 | Benchmarks vs Other ECS | [docs/comparison.md](docs/comparison.md) |
 | Full Multiplayer Demo | [samples/BulletLockstep.Demo/](samples/BulletLockstep.Demo/) |
 
