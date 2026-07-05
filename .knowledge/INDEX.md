@@ -15,6 +15,7 @@
 | MiniArch.Core Query | `kb-query-invalidation.md`、`kb-parallel-query.md` |
 | MiniArch.Core Snapshot | `kb-snapshot-persistence.md` |
 | MiniArch.Core Hierarchy | `kb-hierarchy-runtime.md` |
+| MiniArch.Diagnostics（诊断工具） | `kb-ecs-diagnostics.md`（WorldDiff、WorldValidator、EntityDump、WorldDigest） |
 | MiniArch（用户 API 分层） | 合并到 `kb-core-ecs.md` "用户 API 分层" 段 |
 | MiniArch.Tests（测试组织） | `kb-test-workflow.md` |
 | MiniArch.Benchmarks（对比数据） | `kb-ecs-comparison.md` |
@@ -49,6 +50,7 @@
 - **CommandStream** → `kb-command-stream.md`
 - **Deferred Create 多 host 设计** → `kb-deferred-create-design.md`
 - **Checksum 双模式** → `kb-snapshot-persistence.md`（Checksum 双模式段）
+- **状态诊断（diff/校验/探查）** → `kb-ecs-diagnostics.md`
 
 **存储 / 查询**：
 - **Chunk 存储** → `kb-chunk-storage.md`
