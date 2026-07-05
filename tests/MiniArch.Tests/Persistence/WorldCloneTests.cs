@@ -189,6 +189,46 @@ public sealed class WorldCloneTests
         Assert.NotNull(cloned);
     }
 
+    // BUG ( witness for ReserveRows deadlock, via the public World.Clone API ):
+    // Clone() calls dstArch.ReserveRows(entities.Length) on a freshly created
+    // archetype whose _capacity == chunkCapacity (default 128). For a component
+    // large enough that _segmentCapacity <= chunkCapacity, the first
+    // EnsureCapacity inside ReserveRows promotes the archetype to chunked and
+    // GrowChunked creates multiple empty tail segments. ReserveRows only fills
+    // the LAST segment and deadlocks once it is full.
+    //
+    // Here Component16k (16384 bytes) → _segmentCapacity = 128. With the default
+    // chunkCapacity of 128, _capacity * 2 (256) > _segmentCapacity (128) triggers
+    // promotion. Cloning an archetype holding 200 (> 128) such entities hangs.
+    //
+    // Same root cause as ArchetypeTests.BUG_reserverows_deadlocks_when_promotion_creates_multiple_empty_segments;
+    // this test proves the deadlock is reachable through a public API.
+    [Fact]
+    public void BUG_clone_deadlocks_on_archetype_with_large_component()
+    {
+        var world = new World();
+        for (var i = 0; i < 200; i++)
+        {
+            var e = world.Create();
+            world.Add(e, new Component16k { Value = i });
+        }
+
+        var task = Task.Run(() => world.Clone());
+        var completed = task.Wait(TimeSpan.FromSeconds(3));
+
+        Assert.True(completed,
+            "World.Clone() did not complete within 3s — it is deadlocked in " +
+            "ReserveRows. The destination archetype (Component16k, segCap=128) was " +
+            "promoted to chunked with multiple empty tail segments, and ReserveRows " +
+            "cannot backfill them, looping forever once the last segment fills.");
+    }
+
+    private unsafe struct Component16k
+    {
+        public int Value;
+        public fixed byte Pad[16380];
+    }
+
     private static T GetComponent<T>(World world, Entity entity) where T : unmanaged
     {
         Assert.True(world.TryGetLocation(entity, out var location));

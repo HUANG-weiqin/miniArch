@@ -598,6 +598,53 @@ public sealed class ArchetypeTests
         Assert.Equal(0, archetype.EntityCount);
     }
 
+    // BUG: ReserveRows deadlocks when EnsureCapacity promotes a fresh archetype
+    // to chunked and GrowChunked creates multiple empty tail segments.
+    //
+    // Trigger: capacity: 4096 + Component1024 (segCap = 2048).
+    //   _capacity * 2 (8192) > _segmentCapacity (2048) → first EnsureCapacity
+    //   inside ReserveRows takes the promotion branch:
+    //     1. ConvertToChunked general path creates 1 segment (Count=0).
+    //     2. requiredCapacity (5000) > Capacity (2048) → GrowChunked(5000)
+    //        creates 3 more empty segments → 4 segments, ALL empty.
+    //   ReserveRows' chunked loop then fills ONLY the last segment
+    //   (lastSegIdx = _segmentCount - 1 = 3). After filling seg[3] (2048 rows),
+    //   remaining = 2952, but seg[3] is full and seg[0..2] are empty. The loop
+    //   calls EnsureCapacity (no-op, capacity already sufficient) and `continue`s
+    //   forever — an infinite loop with no progress.
+    //
+    // Root cause: ReserveRows assumes segments fill front-to-back with no holes,
+    // but EnsureCapacity's promotion path (ConvertToChunked + bulk GrowChunked)
+    // violates that assumption by creating empty segments before the last.
+    //
+    // Affected public paths: World.Clone() (WorldClone.cs:27), WorldSnapshot.Load
+    // (ReadArchetype → ReserveRows). Both hard-lock the process when cloning /
+    // loading an archetype whose initial _capacity * 2 > _segmentCapacity and
+    // whose entity count > _segmentCapacity.
+    //
+    // This witness runs ReserveRows on a background task with a timeout. On the
+    // current (buggy) code the task never completes; once fixed it returns in
+    // microseconds. The timeout is generous to avoid false failures on slow CI.
+    [Fact]
+    public void BUG_reserverows_deadlocks_when_promotion_creates_multiple_empty_segments()
+    {
+        var registry = new ComponentRegistry();
+        var comp = registry.GetOrCreate<Component1024>();
+        // capacity: 4096 > segCap/2 → _capacity*2 > segCap triggers promotion.
+        var archetype = new Archetype(new Signature(comp), [typeof(Component1024)], capacity: 4096);
+
+        var task = Task.Run(() => archetype.ReserveRows(5000));
+        var completed = task.Wait(TimeSpan.FromSeconds(3));
+
+        Assert.True(completed,
+            "ReserveRows(5000) did not complete within 3s — it is deadlocked. " +
+            "EnsureCapacity promoted the archetype to chunked via ConvertToChunked + " +
+            "GrowChunked, creating multiple empty tail segments. ReserveRows only " +
+            "fills the last segment (lastSegIdx = _segmentCount - 1) and cannot " +
+            "backfill the earlier empty segments, looping forever once the last " +
+            "segment is full.");
+    }
+
     // 1024-byte component → _segmentCapacity = RoundUpToPow2(2MB / 1024) = 2048.
     // Lets tests exercise the "_capacity > _segmentCapacity" promotion path
     // without allocating hundreds of thousands of entities.
@@ -690,6 +737,83 @@ public sealed class ArchetypeTests
         // Last row (segment[1], local 951).
         Assert.Equal(new Position(2999, 3000), archetype.GetComponentAt<Position>(0, 2999));
         Assert.Equal(3099, archetype.GetComponentAt<Component1024>(1, 2999).Value);
+    }
+
+    // BUG: when a chunked archetype has an empty segment in the middle (a "hole"),
+    // the flat entity array produced by GetEntities() / GetEntityStorageUnsafe() has
+    // indices that DO NOT match GetSegmentAndLocal's arithmetic mapping. This means
+    // using a flat index as a global row — as WriteColumnOrderedTo (Save) and
+    // FeedRowData (CanonicalChecksum) do — reads from the wrong (empty) segment,
+    // returning stale/zero data instead of the real entity's data.
+    //
+    // Root cause: AddEntityChunked always fills the last segment (index _segmentCount-1)
+    // via a fixed lastSegIdx. If interior segments are empty (e.g. after RemoveAt empties
+    // tail segments, then AddEntity fills the last), GetSegmentAndLocal still maps by
+    // fixed segment boundaries, so a flat-index falling inside the hole reads from the
+    // empty segment.
+    //
+    // This test creates the hole deterministically using internal test hooks:
+    //   1. Fill segCap entities, then ForceChunkedForTesting → seg0(full, 1 segment).
+    //   2. AddSegmentForTesting twice → seg1(empty), seg2(empty).
+    //   3. AddEntity → fills seg2 (last by index). seg1 stays empty.
+    //   4. Flat[segCap] = seg2[0] (the real entity), but
+    //      GetSegmentAndLocal(segCap) → seg1[0] → stale/default data.
+    [Fact]
+    public void BUG_flat_entity_index_mismatches_global_row_when_segment_hole_exists()
+    {
+        var registry = new ComponentRegistry();
+        var comp = registry.GetOrCreate<Component1024>();
+        var segCap = 2048; // Component1024's _segmentCapacity
+        var archetype = new Archetype(new Signature(comp), [typeof(Component1024)], capacity: 4096);
+
+        // Step 1: fill a full segment's worth of entities with known data, then promote.
+        for (var i = 0; i < segCap; i++)
+        {
+            var e = new Entity(i + 1, 1);
+            archetype.AddEntity(e);
+            archetype.SetComponentAtTyped(0, i, new Component1024 { Value = i + 100 });
+        }
+        archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
+
+        // Step 2: add two empty tail segments.
+        archetype.AddSegmentForTesting();
+        archetype.AddSegmentForTesting();
+        Assert.Equal(3, archetype.SegmentCount);
+
+        // Step 3: add one entity → fills seg2 (last by index, globalRow = 2*segCap).
+        // seg1 (middle) stays empty — this is the permanent hole.
+        var finalEntity = new Entity(9999, 1);
+        var addedRow = archetype.AddEntity(finalEntity);
+        Assert.Equal(2 * segCap, addedRow);
+        archetype.SetComponentAtTyped(0, addedRow, new Component1024 { Value = 9999 });
+
+        // Flat entity array length = _count = segCap + 1.
+        var flatEntities = archetype.GetEntities();
+        Assert.Equal(segCap + 1, flatEntities.Length);
+
+        // Flat[segCap] = seg2[0] = the entity we just added. ✓ (flat view is correct).
+        Assert.Equal(finalEntity, flatEntities[segCap]);
+
+        // BUT GetSegmentAndLocal(segCap) maps to (1, 0) = seg1[0], NOT seg2[0].
+        // seg1 is empty → should still return the correct mapping but returns default.
+        // This FAILS on current code: the global-row mapping gives wrong data.
+        var viaRow = archetype.GetEntity(segCap);
+        Assert.Equal(finalEntity, viaRow); // ← FAILS: reads seg1[0] → default Entity
+
+        // Same for component data: GetComponentAt(0, segCap) should return 9999
+        // but reads from seg1 → zeroed data instead.
+        var componentViaRow = archetype.GetComponentAt<Component1024>(0, segCap);
+        Assert.Equal(9999, componentViaRow.Value); // ← FAILS: reads from seg1 → 0
+
+        // The real data lives at addedRow = 2*segCap — this confirms the correct
+        // entity data IS stored at the right global row, but flat-index lookup fails.
+        Assert.Equal(9999, archetype.GetComponentAt<Component1024>(0, addedRow).Value);
+
+        // CONSEQUENCE: Save (WriteColumnOrderedTo → ReadComponentRaw) and
+        // CanonicalChecksum (FeedRowData) use flat-index as global-row. When a
+        // hole exists, they read from the empty segment instead of the real data
+        // segment, silently persisting/hashing wrong component data.
     }
 
 }
