@@ -866,6 +866,8 @@ internal sealed partial class Archetype
 
         if (!IsChunked)
         {
+            Debug.Assert((uint)count <= (uint)_capacity,
+                $"Backup count ({count}) exceeds archetype capacity ({_capacity}).");
             Array.Copy(srcEntities, _entities, count);
             for (var col = 0; col < _elementSizes.Length; col++)
             {
@@ -884,6 +886,8 @@ internal sealed partial class Archetype
 
         // Chunked: zero all existing segment counts, then distribute the flat
         // backup across segments using the current segment-capacity offsets.
+        Debug.Assert(count <= _segmentCount * _segmentCapacity,
+            $"Backup count ({count}) exceeds chunked capacity ({_segmentCount * _segmentCapacity}).");
         for (var i = 0; i < _segmentCount; i++)
             _segments[i].Count = 0;
 

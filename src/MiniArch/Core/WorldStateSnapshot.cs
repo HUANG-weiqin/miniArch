@@ -264,6 +264,8 @@ internal struct ArchetypeBackupEntry
             // expected — RestoreFlatBackup handles offset translation.
             Debug.Assert(SourceCapacity > 0,
                 "Non-chunked backup must have a positive SourceCapacity.");
+            Debug.Assert((uint)Count <= (uint)arch.Capacity,
+                $"Backup Count ({Count}) must fit in archetype capacity ({arch.Capacity}).");
 
             // Delegating to RestoreFlatBackup handles both:
             //
