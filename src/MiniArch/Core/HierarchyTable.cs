@@ -9,8 +9,7 @@ internal sealed class HierarchyTable
     private static readonly Entity NoEntity = default;
     private Entity[] _parentByChild = [];
     private int[] _firstChild = [];
-    private Entity[] _childEntity = [];
-    private int[] _childNext = [];
+    private ChildSlot[] _childSlots = [];
     private int _childSlotCount;
     private int _childFreeList = NoSlot;
     private readonly List<(Entity Entity, bool Expanded)> _destroyTraversalStack = new(4);
@@ -85,7 +84,7 @@ internal sealed class HierarchyTable
         var firstSlot = world.IsAlive(parent) && parent.Id >= 0 && parent.Id < _firstChild.Length
             ? _firstChild[parent.Id]
             : NoSlot;
-        return new ChildrenEnumerable(_childEntity, _childNext, world, firstSlot);
+        return new ChildrenEnumerable(_childSlots, world, firstSlot);
     }
 
     public bool HasChildren(World world, Entity entity)
@@ -153,8 +152,8 @@ internal sealed class HierarchyTable
                 var slot = _firstChild[entity.Id];
                 while (slot >= 0)
                 {
-                    var child = _childEntity[slot];
-                    slot = _childNext[slot];
+                    var child = _childSlots[slot].Entity;
+                    slot = _childSlots[slot].Next;
 
                     if (!world.IsAlive(child))
                     {
@@ -201,8 +200,8 @@ internal sealed class HierarchyTable
 
         while (slot >= 0)
         {
-            var child = _childEntity[slot];
-            var next = _childNext[slot];
+            var child = _childSlots[slot].Entity;
+            var next = _childSlots[slot].Next;
 
             if (child.Id >= 0 && child.Id < _parentByChild.Length && _parentByChild[child.Id] == entity)
             {
@@ -260,15 +259,14 @@ internal sealed class HierarchyTable
         if (_childFreeList >= 0)
         {
             var slot = _childFreeList;
-            _childFreeList = _childNext[slot];
+            _childFreeList = _childSlots[slot].Next;
             return slot;
         }
 
-        if (_childSlotCount == _childEntity.Length)
+        if (_childSlotCount == _childSlots.Length)
         {
-            var newCapacity = _childEntity.Length == 0 ? 16 : _childEntity.Length * 2;
-            Array.Resize(ref _childEntity, newCapacity);
-            Array.Resize(ref _childNext, newCapacity);
+            var newCapacity = _childSlots.Length == 0 ? 16 : _childSlots.Length * 2;
+            Array.Resize(ref _childSlots, newCapacity);
         }
 
         return _childSlotCount++;
@@ -276,16 +274,16 @@ internal sealed class HierarchyTable
 
     private void FreeChildSlot(int slot)
     {
-        _childEntity[slot] = default;
-        _childNext[slot] = _childFreeList;
+        _childSlots[slot].Entity = default;
+        _childSlots[slot].Next = _childFreeList;
         _childFreeList = slot;
     }
 
     private void AddChildToParent(int parentId, Entity child)
     {
         var slot = AllocateChildSlot();
-        _childEntity[slot] = child;
-        _childNext[slot] = _firstChild[parentId];
+        _childSlots[slot].Entity = child;
+        _childSlots[slot].Next = _firstChild[parentId];
         _firstChild[parentId] = slot;
     }
 
@@ -295,15 +293,15 @@ internal sealed class HierarchyTable
         var slot = _firstChild[parentId];
         while (slot >= 0)
         {
-            if (_childEntity[slot] == child)
+            if (_childSlots[slot].Entity == child)
             {
                 if (prev < 0)
                 {
-                    _firstChild[parentId] = _childNext[slot];
+                    _firstChild[parentId] = _childSlots[slot].Next;
                 }
                 else
                 {
-                    _childNext[prev] = _childNext[slot];
+                    _childSlots[prev].Next = _childSlots[slot].Next;
                 }
 
                 FreeChildSlot(slot);
@@ -311,7 +309,7 @@ internal sealed class HierarchyTable
             }
 
             prev = slot;
-            slot = _childNext[slot];
+            slot = _childSlots[slot].Next;
         }
     }
 
@@ -353,8 +351,7 @@ internal sealed class HierarchyTable
 
         Array.Copy(_parentByChild, snapshot.HierarchyParentByChild, _parentByChild.Length);
         Array.Copy(_firstChild, snapshot.HierarchyFirstChild, _firstChild.Length);
-        Array.Copy(_childEntity, snapshot.HierarchyChildEntity, _childSlotCount);
-        Array.Copy(_childNext, snapshot.HierarchyChildNext, _childSlotCount);
+        Array.Copy(_childSlots, snapshot.HierarchyChildSlots, _childSlotCount);
 
         snapshot.HierarchyChildSlotCount = _childSlotCount;
         snapshot.HierarchyChildFreeList = _childFreeList;
@@ -370,16 +367,10 @@ internal sealed class HierarchyTable
         Array.Copy(snapshot.HierarchyParentByChild, _parentByChild, snapshot.HierarchyParentByChild.Length);
         Array.Copy(snapshot.HierarchyFirstChild, _firstChild, snapshot.HierarchyFirstChild.Length);
 
-        if (_childEntity.Length < snapshot.HierarchyChildSlotCount)
-        {
-            _childEntity = new Entity[snapshot.HierarchyChildSlotCount];
-            _childNext = new int[snapshot.HierarchyChildSlotCount];
-        }
+        if (_childSlots.Length < snapshot.HierarchyChildSlotCount)
+            _childSlots = new ChildSlot[snapshot.HierarchyChildSlotCount];
         if (snapshot.HierarchyChildSlotCount > 0)
-        {
-            Array.Copy(snapshot.HierarchyChildEntity, _childEntity, snapshot.HierarchyChildSlotCount);
-            Array.Copy(snapshot.HierarchyChildNext, _childNext, snapshot.HierarchyChildSlotCount);
-        }
+            Array.Copy(snapshot.HierarchyChildSlots, _childSlots, snapshot.HierarchyChildSlotCount);
         _childSlotCount = snapshot.HierarchyChildSlotCount;
         _childFreeList = snapshot.HierarchyChildFreeList;
     }

@@ -684,6 +684,13 @@ public sealed class CommandStream
         _spareFrozen = _pendingFrozen;
         _pendingFrozen = null;
         _pendingTask = null;
+
+#if DEBUG
+        // Reclaimed — will become the active _frozen on next SwapOutState.
+        _spareFrozen._isReadOnly = false;
+        foreach (var store in _spareFrozen.Stores)
+            if (store is not null) store._isReadOnly = false;
+#endif
     }
 
     private FrozenState SwapOutState()
@@ -729,6 +736,15 @@ public sealed class CommandStream
         _lastCreated = default;
         _lastCreatedBatch = -1;
         _frozen.HierarchyByChild.Clear();
+
+#if DEBUG
+        // The swapped-out state is now read-only — neither SubmitFromFrozen
+        // nor the background BuildFromFrozen task should mutate it.
+        frozen._isReadOnly = true;
+        foreach (var store in frozen.Stores)
+            if (store is not null) store._isReadOnly = true;
+#endif
+
         return frozen;
     }
 
@@ -1905,77 +1921,89 @@ public sealed class CommandStream
         public abstract void EmitToDelta(FrameDelta delta);
         public abstract void Clear();
         public abstract void ReplacePlaceholders(Entity[] resolveMap);
+
+#if DEBUG
+        protected bool _isReadOnly;
+#endif
+    }
+
+    private struct StoreEntry<T> where T : unmanaged
+    {
+        public Entity Entity;
+        public byte Kind;
+        public T Value;
     }
 
     private sealed class ComponentStore<T> : ComponentStore where T : unmanaged
     {
-        private T[] _data = [];
-        private Entity[] _entities = [];
-        private byte[] _kinds = [];
+        private readonly object _entriesLock = new();
+        private StoreEntry<T>[] _entries = [];
         private int _count;
-        private readonly object _resizeLock = new();
 
         public override bool HasCommands => _count > 0;
 
         public void Append(Entity entity, in T value, byte kind)
         {
+#if DEBUG
+            Debug.Assert(!_isReadOnly, "Cannot write to a read-only ComponentStore");
+#endif
             EnsureStoreCapacity();
             var count = _count;
-            ref var entitiesRef = ref MemoryMarshal.GetArrayDataReference(_entities);
-            ref var dataRef = ref MemoryMarshal.GetArrayDataReference(_data);
-            ref var kindsRef = ref MemoryMarshal.GetArrayDataReference(_kinds);
-            Unsafe.Add(ref entitiesRef, count) = entity;
-            Unsafe.Add(ref dataRef, count) = value;
-            Unsafe.Add(ref kindsRef, count) = kind;
+            ref var entry = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_entries), count);
+            entry.Entity = entity;
+            entry.Kind = kind;
+            entry.Value = value;
             _count = count + 1;
         }
 
         public void AppendRemove(Entity entity)
         {
+#if DEBUG
+            Debug.Assert(!_isReadOnly, "Cannot write to a read-only ComponentStore");
+#endif
             EnsureStoreCapacity();
             var count = _count;
-            ref var entitiesRef = ref MemoryMarshal.GetArrayDataReference(_entities);
-            ref var dataRef = ref MemoryMarshal.GetArrayDataReference(_data);
-            ref var kindsRef = ref MemoryMarshal.GetArrayDataReference(_kinds);
-            Unsafe.Add(ref entitiesRef, count) = entity;
-            Unsafe.Add(ref dataRef, count) = default;
-            Unsafe.Add(ref kindsRef, count) = KindRemove;
+            ref var entry = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_entries), count);
+            entry.Entity = entity;
+            entry.Kind = KindRemove;
+            entry.Value = default;
             _count = count + 1;
         }
 
         public void AppendConcurrent(Entity entity, in T value, byte kind)
         {
-            var slot = Interlocked.Increment(ref _count) - 1;
-            // Hold the lock for both resize and write. The three backing arrays
-            // (_data/_entities/_kinds) are resized independently inside the
-            // lock; a reader that only checks _data.Length can exit the wait
-            // and write _entities[slot] before that array has been resized.
-            // Writing under the lock also prevents data loss when a concurrent
-            // resize's Array.Copy races with a deferred element write.
-            lock (_resizeLock)
+#if DEBUG
+            Debug.Assert(!_isReadOnly, "Cannot write to a read-only ComponentStore");
+#endif
+
+            lock (_entriesLock)
             {
-                if ((uint)slot >= (uint)_data.Length)
+                var slot = _count;
+
+                if ((uint)slot >= (uint)_entries.Length)
                 {
-                    var newLen = _data.Length == 0 ? 256 : _data.Length;
+                    var newLen = _entries.Length == 0 ? 256 : _entries.Length * 2;
                     while (newLen <= slot) newLen *= 2;
-                    Array.Resize(ref _data, newLen);
-                    Array.Resize(ref _entities, newLen);
-                    Array.Resize(ref _kinds, newLen);
+                    Array.Resize(ref _entries, newLen);
                 }
-                _entities[slot] = entity;
-                _data[slot] = value;
-                _kinds[slot] = kind;
+
+                ref var entry = ref Unsafe.Add(
+                    ref MemoryMarshal.GetArrayDataReference(_entries), slot);
+
+                entry.Entity = entity;
+                entry.Kind = kind;
+                entry.Value = value;
+
+                _count = slot + 1;
             }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void EnsureStoreCapacity()
         {
-            if (_count < _data.Length) return;
-            var newLen = _data.Length == 0 ? 256 : _data.Length * 2;
-            Array.Resize(ref _data, newLen);
-            Array.Resize(ref _entities, newLen);
-            Array.Resize(ref _kinds, newLen);
+            if (_count < _entries.Length) return;
+            var newLen = _entries.Length == 0 ? 256 : _entries.Length * 2;
+            Array.Resize(ref _entries, newLen);
         }
 
         public override void ApplyToWorld(World world)
@@ -1987,17 +2015,14 @@ public sealed class CommandStream
             int lastColIdx = -1;
             var count = _count;
 
-            ref var entitiesRef = ref MemoryMarshal.GetArrayDataReference(_entities);
-            ref var kindsRef = ref MemoryMarshal.GetArrayDataReference(_kinds);
-            ref var dataRef = ref MemoryMarshal.GetArrayDataReference(_data);
+            ref var entriesRef = ref MemoryMarshal.GetArrayDataReference(_entries);
 
             for (var i = 0; i < count; i++)
             {
-                var entity = Unsafe.Add(ref entitiesRef, i);
-                if (!world.TryGetRecord(entity, out var record)) continue;
+                ref var entry = ref Unsafe.Add(ref entriesRef, i);
+                if (!world.TryGetRecord(entry.Entity, out var record)) continue;
 
-                var kind = Unsafe.Add(ref kindsRef, i);
-                if (kind == KindSet)
+                if (entry.Kind == KindSet)
                 {
                     var arch = record.Archetype!;
                     int colIdx;
@@ -2010,15 +2035,15 @@ public sealed class CommandStream
                         lastArch = arch;
                         colIdx = lastColIdx = arch.GetComponentIndex(Component<T>.ComponentType);
                     }
-                    arch.SetComponentAtTyped(colIdx, record.RowIndex, in Unsafe.Add(ref dataRef, i));
+                    arch.SetComponentAtTyped(colIdx, record.RowIndex, in entry.Value);
                 }
                 else
                 {
                     lastArch = null; // structural change invalidates cache
-                    if (kind == KindAdd)
-                        world.ApplyTypedAdd(entity, record, Component<T>.ComponentType, in Unsafe.Add(ref dataRef, i));
+                    if (entry.Kind == KindAdd)
+                        world.ApplyTypedAdd(entry.Entity, record, Component<T>.ComponentType, in entry.Value);
                     else
-                        world.RemoveBoxed(entity, record, Component<T>.ComponentType);
+                        world.RemoveBoxed(entry.Entity, record, Component<T>.ComponentType);
                 }
             }
         }
@@ -2029,28 +2054,27 @@ public sealed class CommandStream
             var size = Unsafe.SizeOf<T>();
             for (var i = 0; i < _count; i++)
             {
-                switch (_kinds[i])
+                switch (_entries[i].Kind)
                 {
                     case KindAdd:
                         unsafe
                         {
-                            // AddAddUnsafe may grow the delta buffer and trigger a compacting GC;
-                            // keep the source element pinned for the whole raw write.
-                            fixed (T* pFixed = &_data[i])
-                                delta.AddAddUnsafe(_entities[i], compType, (byte*)pFixed, size);
+                            // Pin the array element directly rather than a ref local
+                            // to work around a .NET 8 JIT bug (internal CLR error when
+                            // fixed(&refLocal) is used on a field of a struct-in-array).
+                            fixed (T* pFixed = &_entries[i].Value)
+                                delta.AddAddUnsafe(_entries[i].Entity, compType, (byte*)pFixed, size);
                         }
                         break;
                     case KindSet:
                         unsafe
                         {
-                            // AddSetUnsafe may grow the delta buffer and trigger a compacting GC;
-                            // keep the source element pinned for the whole raw write.
-                            fixed (T* pFixed = &_data[i])
-                                delta.AddSetUnsafe(_entities[i], compType, (byte*)pFixed, size);
+                            fixed (T* pFixed = &_entries[i].Value)
+                                delta.AddSetUnsafe(_entries[i].Entity, compType, (byte*)pFixed, size);
                         }
                         break;
                     case KindRemove:
-                        delta.AddRemove(_entities[i], compType);
+                        delta.AddRemove(_entries[i].Entity, compType);
                         break;
                 }
             }
@@ -2064,20 +2088,21 @@ public sealed class CommandStream
 
             for (var i = 0; i < _count; i++)
             {
+                ref var entry = ref _entries[i];
+
                 // Resolve the command-target entity (existing behaviour).
-                ref var slot = ref _entities[i];
-                if (slot.IsPlaceholder)
+                if (entry.Entity.IsPlaceholder)
                 {
-                    var resolved = resolveMap[slot.Version];
-                    if (resolved.Id >= 0) slot = resolved;
+                    var resolved = resolveMap[entry.Entity.Version];
+                    if (resolved.Id >= 0) entry.Entity = resolved;
                 }
 
                 // Resolve embedded Entity refs in the component value itself.
                 // Remove operations carry no meaningful payload —skip them.
-                if (offsets.Length > 0 && _kinds[i] != KindRemove)
+                if (offsets.Length > 0 && entry.Kind != KindRemove)
                 {
                     EntityFieldResolver.ResolveInPlace(
-                        MemoryMarshal.AsBytes(new Span<T>(ref _data[i])),
+                        MemoryMarshal.AsBytes(new Span<T>(ref entry.Value)),
                         typeId, dataSpan);
                 }
             }
@@ -2135,6 +2160,16 @@ public sealed class CommandStream
         public Entity[] BatchEntities;
         public bool[] BatchCanceled;
         public int CancelledBatchCount;
+
+#if DEBUG
+        internal bool _isReadOnly;
+
+        internal void AssertWritable()
+        {
+            if (_isReadOnly)
+                throw new InvalidOperationException("Attempt to mutate a frozen FrozenState");
+        }
+#endif
 
         public FrozenState(int storeCount)
         {
