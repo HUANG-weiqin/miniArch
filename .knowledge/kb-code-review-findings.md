@@ -2,7 +2,7 @@
 title: 代码审阅发现清单
 module: Meta
 description: 历次代码审阅中产生过的猜想与结论。真 bug 索引 + 已排除的非 bug 猜想。AI 审阅前必读，避免重复验证已知结论。
-updated: 2026-07-05 (CS10: ParallelCommandStream.Add/Set/Remove 对 pending-batch 实体走 AppendConcurrent 而非 WritePendingComponent 是真 bug)
+updated: 2026-07-05 (CS10: ParallelCommandStream 真 bug; A21: "非末段必须满"是历史误判的过强断言，已修正为"非空段连续在前")
 ---
 # 代码审阅发现清单
 
@@ -434,6 +434,12 @@ updated: 2026-07-05 (CS10: ParallelCommandStream.Add/Set/Remove 对 pending-batc
 - **猜想**：可能有 layout 变更操作遗漏递增 `_flatEntitiesGeneration`，导致 `GetEntityStorageUnsafe` 返回 stale 缓存
 - **结论**：7 个递增点全部必要且充分。`ConvertToChunked` 自身不递增，但安全：`_cachedFlatEntitiesGeneration` 在构造时初始化为 -1，而 `_flatEntitiesGeneration` 默认 0，首次 GetEntityStorageUnsafe 调用时 -1 != 0 强制重建缓存。后续无中间 mutation 时缓存内容与 segment 数据一致。已确认非 bug（2026-07-05 bug hunt H4.1）。
 - **验证**：`rg "_flatEntitiesGeneration\+\+"` 确认 7 个递增点；`AssertFlatCacheConsistent` DEBUG 断言守护缓存一致性；`GetEntities_after_ConvertToChunked_returns_correct_data` 测试覆盖。
+
+#### A21. "非末段必须满（`Count == segCap`）"是错误断言（2026-07-05 修正 commit `40165f7`）
+- **位置**：`Archetype.Storage.cs` `AssertSegmentInvariants`
+- **猜想**：commit `40165f7` 认为"除末段外所有段必须 `Count == _segmentCapacity`"是核心不变量，加入 DEBUG 断言。结果打破 20 个测试（`AllocateRows_skips_empty_tail_segments_and_fills_first_available`、`Chunked_mode_get_chunks_returns_one_view_per_segment`、`Fuzz_large_scale_random_operations_multi_column`、`Capture_*_prediction_*`、`BUG_clone_deadlocks_on_archetype_with_large_component` 等）。
+- **结论**：错误断言。`GetSegmentAndLocal(globalRow) = (row>>shift, row&mask)` 依赖的是**每段容量等长**（`Entities.Length == segCap`），不是段都满。`RemoveAt` 跨段 swap-remove 后 `lastSeg` 留空洞（`Count < segCap`），若后跟预分配空段就出现"非末段未满"——这是合法中间状态，`AllocateRows` 按"填首个非满段"补上。真正必要的不变量是"**非空段连续在前**"（空段不得夹在非空段之间，否则 `globalRow = _count` 与除法映射错位）。已修正断言为检查 `seenEmpty` 后不再有 `Count>0` 段。详见 `kb-chunk-storage.md` §3.6。
+- **验证**：`dotnet test`（Debug）687/687 通过；`dotnet test -c Release` 674/674 通过；`HeroComing.Perf --check-baseline` Movement 1663/Attack 1216 通过。
 
 ### World / 实体生命周期（续）
 

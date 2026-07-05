@@ -120,6 +120,7 @@ internal sealed partial class Archetype
     {
         if (!IsChunked) return;
         var total = 0;
+        var seenEmpty = false;
         for (var i = 0; i < _segmentCount; i++)
         {
             ref var seg = ref _segments[i];
@@ -127,10 +128,19 @@ internal sealed partial class Archetype
                 $"Segment {i} entity capacity ({seg.Entities.Length}) != _segmentCapacity ({_segmentCapacity}).");
             Debug.Assert((uint)seg.Count <= (uint)seg.Entities.Length,
                 $"Segment {i} count ({seg.Count}) exceeds capacity ({seg.Entities.Length}).");
-            // All but the last segment must be full (tight packing invariant).
-            if (i < _segmentCount - 1)
-                Debug.Assert(seg.Count == _segmentCapacity,
-                    $"Non-last segment {i} count ({seg.Count}) != _segmentCapacity ({_segmentCapacity}).");
+            // Non-empty segments must be front-packed. A hole *inside* a
+            // segment (Count < Capacity) is legal — RemoveAt creates them and
+            // AllocateRows fills the first non-full segment. Trailing empty
+            // segments (Count == 0) are also legal (EnsureCapacity/GrowChunked
+            // pre-allocate them). What is NOT legal is an empty segment
+            // preceding a non-empty one: AllocateRows assigns globalRow = _count
+            // and GetSegmentAndLocal maps globalRow by fixed segCap, so a front
+            // gap would desync the row→segment mapping.
+            if (seg.Count == 0)
+                seenEmpty = true;
+            else
+                Debug.Assert(!seenEmpty,
+                    $"Empty segment precedes non-empty segment {i}; non-empty segments must be front-packed.");
             total += seg.Count;
         }
         Debug.Assert(total == _count,

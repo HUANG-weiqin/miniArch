@@ -1889,7 +1889,7 @@ public abstract class CommandStreamCore
         public abstract void SealParallelWrites();
 
 #if DEBUG
-        protected bool _isReadOnly;
+        internal bool _isReadOnly;
 #endif
     }
 

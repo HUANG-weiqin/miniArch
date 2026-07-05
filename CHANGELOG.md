@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.3.0 (2026-07-05)
+
+- **Refactor: CommandStream split** — `CommandStream` split into `SingleThreadCommandStream` (single writer) and `ParallelCommandStream` (thread-safe). Mutators changed from `abstract`+`override` to `new` (non-virtual), eliminating virtual dispatch overhead in hot paths. Parallel arrays replaced with struct arrays for cache locality.
+- **New: Diagnostics tools** — `WorldDiff` for lockstep divergence diagnosis, `WorldValidator` for structural integrity checks, `EntityDump`/`WorldDigest` for runtime introspection.
+- **Perf: CommandStream hot path** — `GetRecordFast` skips redundant entity lookup in `ApplyToWorld`; `SetComponentAtFlat` provides flat-index fast path; Set-only operations bypass full-record plumbing.
+- **Perf: Bounds check elimination** — `GetOrCreateStore<T>` and `TryGetRecord` round-trip eliminated; `ComponentStore` hot paths; `_columnByteOffsets[index]` hoisted in `CopyRemovedRow`/`CopySegmentColumn`.
+- **Perf: Capacity rounding** — segment capacity rounded to power of 2, replacing `DIV` with `SHR+AND` in `GetSegmentAndLocal`.
+- **Chunk storage hardening** — DEBUG-only invariant assertions (`AssertSegmentInvariants`, cross-mode `RestoreTo` guards); `GetColumnRef` helper replacing raw pointer arithmetic; `NonChunkedSegmentIndex` constant; APIs renamed to `GetFlat*` for honesty.
+- **Feat: `Entity.IsPlaceholder`/`IsUnmappedSentinel`** — public flags for deferred entity lifecycle inspection.
+- **Feat: CRC32 tail integrity** — `WorldSnapshot` v4 CRC32 checksum for corrupted-data detection.
+- **FrameDelta hardening** — wire size budgets for OOM/DoS protection; `Validate()` defense-in-depth with attack surface tests; removed `FormatVersion`/header/magic/endianness checks (YAGNI); entity `Id` bias `+1` for compact varint encoding.
+- **EntitySlot / Replay rework** — `CommandStream.Replay` with `EntitySlot` auto-resolution; `Track` method for slot tracking; `OriginStream` field in `FrameDelta`; implicit `EntitySlot → Entity` conversion; `World.Replay` and `FrameDelta.Concat` removed (use `CommandStream.Replay`).
+- **Strict Add/Set** — `World.Add` (strict) and `World.Set` (strict) separated; last upsert holdout in deferred path cleaned up.
+- **Removed** — `ICommandRecorder` interface (YAGNI), public `World.Replay`/`FrameDelta.Concat` (superseded), `GetFirst<T>` (use `GetSingleton<T>`), legacy query chunks enumerable, `SpanSorting` dead overload.
+
 ## 2.2.0 (2026-06-30)
 
 - **New: `IChunkForEach` interface** — zero-allocation chunk iteration via struct-generic `Query.ForEachChunk<TForEach>(ref TForEach)` and `ForEachChunkParallel<TForEach>(in TForEach)`. JIT devirtualises the per-chunk call; no delegate allocation when the inline-lambda pattern was previously used uncached.

@@ -2,7 +2,7 @@
 title: Chunk 存储
 module: MiniArch.Core
 description: Archetype 存储架构 — 单块模式（默认）和分段模式（阈值后自动切换），包括 SoA 布局、跨段 swap-remove、查询分段迭代
-updated: 2026-07-05 (AddEntity=AllocateRows+WriteEntityAt, IsChunked derived, ConvertToChunked unified copy, DEBUG assertions)
+updated: 2026-07-05 (修正 AssertSegmentInvariants 不变量：非空段连续在前，非"非末段必须满"；段内空洞合法)
 ---
 # Chunk 存储
 
@@ -105,13 +105,13 @@ ConvertToChunked():
 
 ### 3.3 跨段 swap-remove
 
-只在末段产生空洞。删除行不在末段时，将末段最后一行拷贝到删除行位置，更新被移动实体的 `EntityRecord.RowIndex`。
+只缩减最后一个非空段（`lastSeg`）的 `Count`。删除行不在 `lastSeg` 时，将 `lastSeg` 最后一行拷贝到删除行位置，更新被移动实体的 `EntityRecord.RowIndex`。删除后 `lastSeg` 可能 `Count < segCap`（留空洞）；若 `lastSeg` 后还有预分配空段，则出现"非末段未满"——这是合法中间状态（§3.6），`AllocateRows` 下次会优先补这个空洞。
 
 ```csharp
 RemoveAt(globalRow):
-    lastSeg = _segments[_segmentCount - 1]
-    // 如果在末段，直接段内 swap-remove
-    // 如果不在末段，将末段最后一行跨段拷贝到删除位置
+    lastSeg = 最后一个 Count>0 的段
+    // 如果删的就是 lastSeg 末行，直接 Count--（无 swap）
+    // 否则将 lastSeg 末行跨段拷贝到删除位置，再 Count--
     CopySegmentColumn(srcSegIdx, srcLocalRow, destSegIdx, destLocalRow)
     // 更新被移动实体的行号
 ```
@@ -130,11 +130,23 @@ RemoveAt(globalRow):
 
 修复：引入 `_flatEntitiesGeneration` 计数器 + 缓存数组 `_cachedFlatEntities`。实体布局变更（AllocateRows/RemoveAt/WriteEntityAt/GrowChunked 等）时递增计数器；`GetEntityStorage()` 仅在计数器与缓存版本不匹配时重建平坦数组，否则返回缓存引用——零分配零拷贝。
 
+### 3.6 真正的段不变量：非空段连续在前（2026-07-05 修正）
+
+> 曾误以为"除末段外所有段必须满（`Count == segCap`）"。这是**错误**的过强不变量，会把 `RemoveAt` 后的合法中间状态判为非法（commit `40165f7` 加此断言后打破 20 个测试）。正确不变量如下。
+
+`GetSegmentAndLocal(globalRow) = (globalRow >> shift, globalRow & mask)` 依赖的是**每段占固定 segCap 个行号**（容量等长），**不是**段都满。因此：
+
+- ✅ **合法**：段内 `Count < segCap`（空洞）。`RemoveAt` 跨段 swap-remove 后 `lastSeg` 缩一格留下空洞；`AllocateRows` 按"填首个非满段"补上（见 `BUG_flat_entity_index_mismatches_global_row_when_segment_hole_exists`）。例：`seg0=2047, seg1=0, seg2=0`。
+- ✅ **合法**：尾部连续空段。`EnsureCapacity`/`GrowChunked` 预分配的空段。例：`seg0=128(满), seg1=72, seg2=0`。
+- ❌ **非法**：空段夹在非空段之间。例：`seg0=0, seg1=5`。否则 `AllocateRows` 分配 `globalRow = _count = 5`，但 `GetSegmentAndLocal(5) = (0, 5)` 指向空 `seg0` 的越界槽，行号映射错位。
+
+`AssertSegmentInvariants` 因此检查"**非空段连续在前**"（`seenEmpty` 后不允许再出现 `Count > 0` 的段），而非"非末段必须满"。所有操作（`RemoveAt`/`AllocateRows`/`RestoreFlatBackup`/`GrowChunked`/`ConvertToChunked`）都维护此不变量。
+
 ## 决策
 
 - **单块模式零退化**：`!IsChunked`（flat 模式）时所有路径和原先完全一致（只多一个分支预测）
 - **阈值按组件大小动态计算**：`SegmentEntityCapacity = Max(16, 2MB / bytesPerEntity)`，目标每段 2 MB。2MB 的选择基于：超过 85000 字节的 `byte[]` 分配在 LOH（大对象堆），而 2MB 远高于此但仍是可控的单次分配。更小的段（如 256KB）会增加 segment 数量和遍历开销；更大的段则减少遍历开销但增加单次晋升分配的峰值内存。2MB 是经验平衡点。
-- **行号映射用除法而非二分**：因为所有段（除末段外）固定大小，`globalRow / SegmentEntityCapacity` 即可定位
+- **行号映射用除法而非二分**：所有段**容量**等长（`Entities.Length == segCap`），`globalRow / segCap` 即可定位段号。段内 `Count` 可不满（空洞合法，见 §3.6）
 - **`ChunkView.Count` 总是读 Archetype 实时计数**：避免因 CommandBuffer 延迟提交导致的 stale count 问题（2026-06-13 bugfix）
 - **不支持托管引用组件**：`flat byte[]` 不含 GC 跟踪，在 Archetype 构造时 fail fast
 - **`AddEntity = AllocateRows(1) + WriteEntityAt`**：分配和写入分离设计。`AllocateRows` 负责扩容/模式切换后分配行号，`WriteEntityAt` 负责写入实体标识。每个方法独立读取 `IsChunked`，消除了老代码中 "EnsureCapacity 可能切换模式→调用方必须重检" 的 bug 类。代码位置：`Archetype.Storage.cs:162-173`
@@ -164,7 +176,7 @@ RemoveAt(globalRow):
 | **容量增长** | 单块模式 doubling；超过 `_capacity * 2 > _segmentEntityCapacity` 时晋升为分段 | 本页 §2.2 + §3.1 | `ArchetypeTests` / `WorldLifecycleTests` |
 | **晋升单向** | chunked 模式不回退为单块 | `kb-architecture-review.md` §2 | `ArchetypeTests.Chunked_mode_*` |
 | **Padding 零初始化** | `GC.AllocateArray`（零初始化）分配，组件 struct padding 确定为 0 → checksum 安全 | `kb-snapshot-persistence.md` Checksum 段 | `WorldSnapshotTests` (checksum) / `FrameDeltaDeterminismTests` |
-| **段等长假设** | 除末段外所有段 = `SegmentEntityCapacity`，`GetSegmentAndLocal` 用除法定位 | 本页 坑点 | `ArchetypeTests.Chunked_mode_*` / `QueryTests` |
+| **段容量等长** | 所有段 `Entities.Length == SegmentEntityCapacity`（容量等长），`GetSegmentAndLocal` 用除法定位行号空间。段内 `Count` **可以** `< segCap`（RemoveAt 空洞，合法） | 本页 坑点 + §3.6 | `ArchetypeTests.Chunked_mode_*` / `AllocateRows_skips_empty_tail_segments_and_fills_first_available` |
 | **`IsChunked` 重检（历史）** | 曾经的坑：`EnsureCapacity` 可能切换模式，老 API 返回后须重检 `_isChunked`。已解决：`AddEntity = AllocateRows(1) + WriteEntityAt`，每个方法内部单次读取 `IsChunked` | 本页 决策 + 坑点（历史） | `ArchetypeTests` / `CommandStreamTests` (materialize 路径) |
 | **`_flatEntitiesGeneration` 失效** | 布局变更（AllocateRows/WriteEntityAt/RemoveAt/GrowChunked/RestoreFlatBackup/RebuildFlatEntities）时递增 | 本页 §3.5 | `ChunkTests.GetEntities` / `QueryEnumerator` 热路径 |
 | **RowIndex 全局性** | `EntityRecord.RowIndex` 始终是全局行号，模式透明 | 本页 认知模型 | `WorldStructuralChangeTests` / `IntegrationTests` |
@@ -174,9 +186,10 @@ RemoveAt(globalRow):
 
 - **(已解决)** `EnsureCapacity` 可能在非分段路径中将 Archetype **切换为分段模式**，老的 `ReserveRows` 和 `AddEntity` 必须在 `EnsureCapacity` 返回后重新检查 `_isChunked`（2026-06-13 bugfix）。当前代码已重构为 `AddEntity = AllocateRows(1) + WriteEntityAt`，每个方法内部单次读取 `IsChunked`，消除了调用方二次重检的 bug 类。历史记录保留供参考。
 - `ChunkView.Count` 不能用字段缓存实体计数，必须实时读取 Archetype，否则 CommandBuffer 延迟提交导致 chunk.Count 大于 span 长度 → IndexOutOfRangeException
-- `GetSegmentAndLocal` 假设除末段外所有段都满（段大小 = `SegmentEntityCapacity`，由组件布局动态决定），如果出现不等长段需要改用二分查找
+- `GetSegmentAndLocal` 假设所有段**容量**等长（`Entities.Length == SegmentEntityCapacity`），从而 `globalRow / segCap` 能定位段号。它**不**假设段都满——段内 `Count < segCap` 的空洞是合法中间状态（`RemoveAt` 产生，`AllocateRows` 按"填首个非满段"补上）。真正禁止的是"空段夹在非空段之间"（见下条 + §3.6），否则 `globalRow = _count` 的分配会与除法映射错位
 
 ### DEBUG 不变式断言
 
-- **`AssertConvertedInvariants()`**（`Archetype.Storage.cs:77-91`，`[Conditional("DEBUG")]`）：在 `ConvertToChunked` 末尾调用。验证：`_entities is null`、`_data is null`、`_segments is not null`、每个 segment 的 `Entities.Length == _segmentCapacity`、所有 segment 的 `Count` 之和等于 `_count`。
-- **`AssertFlatCacheConsistent()`**（`Archetype.Storage.cs:354-363`，`[Conditional("DEBUG")]`）：在 `GetEntityStorageUnsafe` 返回前调用。验证：平坦缓存存在且 generation 匹配时，缓存数组长度 >= 所有 segment 的 Count 之和。
+- **`AssertSegmentInvariants()`**（`Archetype.Storage.cs`，`[Conditional("DEBUG")]`）：在 `AllocateRows`/`WriteEntityAt`/`RemoveAt`/`RestoreFlatBackup`/`RebuildFlatEntities` 等状态变更后调用。验证：① 每段 `Entities.Length == _segmentCapacity`（容量等长）；② `Count <= Entities.Length`；③ **非空段连续在前**（`seenEmpty` 后不再有 `Count>0` 的段）；④ `sum(Count) == _count`。**注意**：不检查"非末段必须满"——这是历史误判（commit `40165f7` 曾误加，2026-07-05 修正为"非空段连续"，见 §3.6）。
+- **`AssertConvertedInvariants()`**（`Archetype.Storage.cs`，`[Conditional("DEBUG")]`）：在 `ConvertToChunked` 末尾调用。验证：`_entities is null`、`_data is null`、`_segments is not null`、每个 segment 的 `Entities.Length == _segmentCapacity`、所有 segment 的 `Count` 之和等于 `_count`。
+- **`AssertFlatCacheConsistent()`**（`Archetype.Storage.cs`，`[Conditional("DEBUG")]`）：在 `GetEntityStorageUnsafe` 返回前调用。验证：平坦缓存存在且 generation 匹配时，缓存数组长度 >= 所有 segment 的 Count 之和。
