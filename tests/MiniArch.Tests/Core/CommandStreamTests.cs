@@ -2853,4 +2853,161 @@ public sealed class DeferredCreateTests
         var span = new ReadOnlySpan<byte>(ms.GetBuffer(), 0, (int)ms.Length);
         return Convert.ToHexString(SHA256.HashData(span));
     }
+
+    // ────────────────────────────────────────────────────────────────────
+    //  ParallelCommandStream subclass coverage (reviewer P2)
+    //  These mirror single-threaded tests for Track / RemoveChild / Clone.
+    //  They exist to lock in the contract that ParallelCommandStream is a
+    //  drop-in for CommandStream on these APIs — not just the Add/Set/Remove
+    //  fast path that already had coverage.
+    // ────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ParallelCommandStream_Track_resolves_placeholder_after_Submit()
+    {
+        var world = new World();
+        var stream = new ParallelCommandStream(world) { DeferredEntities = true };
+
+        var placeholder = stream.Create();
+        Assert.True(placeholder.IsPlaceholder);
+
+        var slot = stream.Track(placeholder);
+        Assert.Equal(placeholder, slot.Value);
+
+        stream.Add(placeholder, new Position(7, 8));
+        Assert.True(stream.Submit());
+
+        // After Submit, the slot's Value must resolve to the real entity, not
+        // the placeholder. This is the same contract EntitySlotTests verifies
+        // for the single-threaded stream.
+        var resolved = slot.Value;
+        Assert.True(resolved.IsValid);
+        Assert.True(resolved.Id >= 0);
+        Assert.True(world.IsAlive(resolved));
+        Assert.True(world.TryGet(resolved, out Position p));
+        Assert.Equal(new Position(7, 8), p);
+    }
+
+    [Fact]
+    public void ParallelCommandStream_RemoveChild_detaches_recorded_parent_child()
+    {
+        var world = new World();
+        var stream = new ParallelCommandStream(world);
+
+        var parent = stream.Create();
+        var child = stream.Create();
+        stream.AddChild(parent, child);
+
+        // Detach before Submit — same recording session.
+        stream.RemoveChild(child);
+
+        Assert.True(stream.Submit());
+
+        Assert.True(world.IsAlive(parent));
+        Assert.True(world.IsAlive(child));
+        Assert.False(world.HasChildren(parent));
+        Assert.False(world.TryGetParent(child, out _));
+    }
+
+    [Fact]
+    public void ParallelCommandStream_Clone_deep_copies_subtree()
+    {
+        var world = new World();
+        // Source subtree exists in the live world before recording.
+        var parent = world.Create(new Position(5, 6));
+        var child1 = world.Create(new Velocity(1, 1));
+        var child2 = world.Create(new Health(50));
+        world.AddChild(parent, child1);
+        world.AddChild(parent, child2);
+
+        var stream = new ParallelCommandStream(world);
+        var clone = stream.Clone(parent);
+        Assert.True(stream.Submit());
+
+        Assert.True(world.IsAlive(clone));
+        Assert.True(world.TryGet(clone, out Position p));
+        Assert.Equal(new Position(5, 6), p);
+
+        var cloneChildren = new List<Entity>();
+        foreach (var c in world.Hierarchy.EnumerateChildren(world, clone))
+            cloneChildren.Add(c);
+
+        Assert.Equal(2, cloneChildren.Count);
+        // Clone's children must carry the same component data as the source children.
+        Assert.Contains(cloneChildren, c => world.TryGet(c, out Velocity _));
+        Assert.Contains(cloneChildren, c => world.TryGet(c, out Health _));
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    //  CommandStreamCore base-reference throw contract (reviewer P2)
+    //  Locks in the design decision from kb-design-rationale.md §3.9:
+    //  the 9 mutators on the base class are non-virtual stubs that throw,
+    //  not abstract methods. If a future refactor flips them back to
+    //  abstract+override, these tests will start passing differently
+    //  (the call will succeed instead of throwing) — which is exactly the
+    //  performance trap we want to prevent silently returning.
+    // ────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void CommandStreamCore_base_reference_Create_throws_NotSupportedException()
+    {
+        CommandStreamCore core = new CommandStream(new World());
+        Assert.Throws<NotSupportedException>(() => core.Create());
+    }
+
+    [Fact]
+    public void CommandStreamCore_base_reference_Track_throws_NotSupportedException()
+    {
+        CommandStreamCore core = new CommandStream(new World());
+        Assert.Throws<NotSupportedException>(() => core.Track(default));
+    }
+
+    [Fact]
+    public void CommandStreamCore_base_reference_Add_throws_NotSupportedException()
+    {
+        CommandStreamCore core = new CommandStream(new World());
+        Assert.Throws<NotSupportedException>(() => core.Add(new Entity(0, 1), new Position(0, 0)));
+    }
+
+    [Fact]
+    public void CommandStreamCore_base_reference_Set_throws_NotSupportedException()
+    {
+        CommandStreamCore core = new CommandStream(new World());
+        Assert.Throws<NotSupportedException>(() => core.Set(new Entity(0, 1), new Position(0, 0)));
+    }
+
+    [Fact]
+    public void CommandStreamCore_base_reference_Remove_throws_NotSupportedException()
+    {
+        CommandStreamCore core = new CommandStream(new World());
+        Assert.Throws<NotSupportedException>(() => core.Remove<Position>(new Entity(0, 1)));
+    }
+
+    [Fact]
+    public void CommandStreamCore_base_reference_Destroy_throws_NotSupportedException()
+    {
+        CommandStreamCore core = new CommandStream(new World());
+        Assert.Throws<NotSupportedException>(() => core.Destroy(new Entity(0, 1)));
+    }
+
+    [Fact]
+    public void CommandStreamCore_base_reference_AddChild_throws_NotSupportedException()
+    {
+        CommandStreamCore core = new CommandStream(new World());
+        Assert.Throws<NotSupportedException>(() => core.AddChild(new Entity(0, 1), new Entity(1, 1)));
+    }
+
+    [Fact]
+    public void CommandStreamCore_base_reference_RemoveChild_throws_NotSupportedException()
+    {
+        CommandStreamCore core = new CommandStream(new World());
+        Assert.Throws<NotSupportedException>(() => core.RemoveChild(new Entity(0, 1)));
+    }
+
+    [Fact]
+    public void CommandStreamCore_base_reference_Clone_throws_NotSupportedException()
+    {
+        CommandStreamCore core = new CommandStream(new World());
+        Assert.Throws<NotSupportedException>(() => core.Clone(new Entity(0, 1)));
+    }
 }
