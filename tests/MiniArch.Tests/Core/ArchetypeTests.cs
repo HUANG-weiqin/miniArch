@@ -2027,6 +2027,10 @@ public sealed class ArchetypeTests
 
         for (var step = 0; step < 2000; step++)
         {
+            // Guarantee chunked mode is exercised: promote at step 200
+            if (step == 200 && !archetype.IsChunked)
+                archetype.ForceChunkedForTesting();
+
             var op = rng.Next(0, 4);
             switch (op)
             {
@@ -2066,7 +2070,7 @@ public sealed class ArchetypeTests
                     }
                     break;
                 }
-                case 3: // Force promote
+                case 3: // Force promote (also random, but deterministic at step 200 above)
                 {
                     if (!archetype.IsChunked)
                         archetype.ForceChunkedForTesting();
@@ -2074,6 +2078,8 @@ public sealed class ArchetypeTests
                 }
             }
         }
+        // Verify the archetype IS chunked after the test (step 200 guarantee)
+        Assert.True(archetype.IsChunked, "Fuzz test must exercise chunked mode");
 
         // Final full verification
         var finalEntities = archetype.GetEntities();
@@ -2107,6 +2113,10 @@ public sealed class ArchetypeTests
 
         for (var step = 0; step < 5000; step++)
         {
+            // Guarantee chunked mode: promote at step 500
+            if (step == 500 && !archetype.IsChunked)
+                archetype.ForceChunkedForTesting();
+
             var op = rng.Next(0, 4);
             switch (op)
             {
@@ -2152,7 +2162,7 @@ public sealed class ArchetypeTests
                     }
                     break;
                 }
-                case 3: // Force promote (aggressive: may revert to flat... no, one-way)
+                case 3: // Force promote + bulk growth
                 {
                     if (!archetype.IsChunked)
                         archetype.ForceChunkedForTesting();
@@ -2163,6 +2173,7 @@ public sealed class ArchetypeTests
                 }
             }
         }
+        Assert.True(archetype.IsChunked, "Large-scale fuzz must exercise chunked mode");
 
         // Final verification
         var finalEntities = archetype.GetEntities();

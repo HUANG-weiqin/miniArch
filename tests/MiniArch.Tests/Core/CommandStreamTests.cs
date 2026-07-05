@@ -2791,26 +2791,30 @@ public sealed class DeferredCreateTests
     }
 
     // CommandStream operations on entities in chunked archetypes.
-    // All paths (Create/Set/Add/Remove/Destroy) must work when the
-    // entity's archetype is chunked, as Materialize calls into the
-    // same World.Add/Remove/Set APIs that are dual-mode.
+    // All paths (Set/Add/Remove) must work when the entity's archetype
+    // is chunked, as Materialize calls into the same World APIs.
     [Fact]
     public void Submit_works_on_chunked_archetype_entities()
     {
-        var world = new World(chunkCapacity: 4, entityCapacity: 4);
+        var world = new World();
         var stream = new CommandStream(world);
 
-        // Create enough entities to trigger chunked promotion on the
-        // (Position) archetype that they land in.
-        for (var i = 0; i < 50; i++)
+        // Create entities and force the archetype to chunked
+        for (var i = 0; i < 20; i++)
         {
             var e = stream.Create();
             stream.Add(e, new Position(i, i + 1));
         }
         Assert.True(stream.Submit());
 
-        // Verify all entities alive and data correct
+        // Force chunked mode
         var desc = new QueryDescription().With<Position>();
+        var coreQuery = MiniQueryCache.Create(world, in desc);
+        var archetype = Assert.Single(coreQuery.MatchedArchetypes);
+        archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
+
+        // Verify baseline data via chunks
         var count = 0;
         foreach (var chunk in world.Query(in desc).GetChunks())
         {
@@ -2821,14 +2825,12 @@ public sealed class DeferredCreateTests
                 count++;
             }
         }
-        Assert.Equal(50, count);
+        Assert.Equal(20, count);
 
-        // Now apply Set/Remove/Add via CommandStream on chunked entities
+        // Now apply Set/Add/Remove via CommandStream on chunked entities
         stream = new CommandStream(world);
-        // Grab a reference to one of the chunked entities
-        var sample = world.Create(new Position(0, 0)); // fresh entity
-        var query2 = world.Query(in desc);
-        foreach (var e in query2)
+        var sample = world.Create(new Position(0, 0));
+        foreach (var e in world.Query(in desc))
         {
             if (e != sample)
             {
@@ -2838,7 +2840,7 @@ public sealed class DeferredCreateTests
         }
         Assert.True(stream.Submit());
 
-        foreach (var e in query2)
+        foreach (var e in world.Query(in desc))
         {
             if (e == sample) continue;
             Assert.Equal(new Position(999, 888), world.Get<Position>(e));

@@ -237,6 +237,7 @@ public sealed class WorldCloneTests
         Assert.True(world.TryGetLocation(new Entity(1, 1), out var info));
         var arch = info.Archetype;
         arch.ForceChunkedForTesting();
+        Assert.True(arch.IsChunked);
 
         // Clone
         var cloned = world.Clone();
