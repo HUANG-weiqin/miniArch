@@ -11,12 +11,12 @@ namespace MiniArch.Core;
 /// <see cref="ParallelCommandStream"/>. Owns all recording buffers, emit/submit
 /// machinery, EntitySlot tracking, and the archetype mask cache.
 /// <para/>
-/// Subclasses are responsible <b>only</b> for the 9 mutators
-/// (<see cref="Create"/>, <see cref="Track"/>, <see cref="Add{T}"/>,
-/// <see cref="Set{T}"/>, <see cref="Remove{T}"/>, <see cref="Destroy"/>,
-/// <see cref="AddChild"/>, <see cref="RemoveChild"/>, <see cref="Clone"/>):
+/// Subclasses are responsible <b>only</b> for the 9 public mutators
+/// (<c>Create</c>, <c>Track</c>, <c>Add&lt;T&gt;</c>,
+/// <c>Set&lt;T&gt;</c>, <c>Remove&lt;T&gt;</c>, <c>Destroy</c>,
+/// <c>AddChild</c>, <c>RemoveChild</c>, <c>Clone</c>):
 /// they pick the synchronization strategy (none vs lock) and dispatch to the
-/// protected helpers in this base class. Everything else —Submit, Snapshot,
+/// <c>*Core</c> helpers in this base class. Everything else —Submit, Snapshot,
 /// Replay, async paths, materialization, FrameDelta emission— is shared.
 /// </summary>
 // Visibility is public so that public sealed subclasses (CommandStream,
@@ -110,12 +110,12 @@ public abstract class CommandStreamCore
     }
 
     /// <summary>
-    /// When <c>true</c>, <see cref="Create"/> and <see cref="Clone"/> produce
+    /// When <c>true</c>, <c>Create</c> and <c>Clone</c> produce
     /// placeholder entities (negative ids) instead of allocating real ids from
     /// the host <see cref="World"/>. <see cref="Snapshot"/> then emits a
     /// placeholder-id <see cref="FrameDelta"/> suitable for multi-host lockstep
     /// where each peer owns an independent <see cref="World"/> and id allocator.
-    /// When <c>false</c> (default), <see cref="Create"/> and <see cref="Clone"/>
+    /// When <c>false</c> (default), <c>Create</c> and <c>Clone</c>
     /// allocate real ids immediately, and <see cref="Snapshot"/> resolves any
     /// deferred placeholders before building a real-id delta.
     ///
@@ -123,7 +123,7 @@ public abstract class CommandStreamCore
     /// <see cref="Entity"/> that reference deferred-created entities are
     /// automatically resolved by both <see cref="Submit"/> and
     /// <see cref="Replay(FrameDelta, Boolean)"/>.
-    /// You can freely store a placeholder returned by <see cref="Create"/>
+    /// You can freely store a placeholder returned by <c>Create</c>
     /// in another component's <see cref="Entity"/> field; the system
     /// replaces it with the real entity ID at apply time.
     /// </summary>
@@ -147,38 +147,19 @@ public abstract class CommandStreamCore
     // ── Record API ────────────────────────────────────────────────────
 
     /// <summary>
-    /// Records a deferred entity creation and returns the new entity (placeholder or real).
-    /// Synchronization is the subclass's responsibility: <see cref="CommandStream"/>
-    /// calls <see cref="CreateCore"/> directly; <see cref="ParallelCommandStream"/>
-    /// wraps it in <c>_storeCreateLock</c>.
+    /// Core create logic shared by both subclasses (no synchronization). Subclasses
+    /// call this from their own public <c>Create</c> method, adding synchronization
+    /// as needed.
     /// </summary>
-    /// <remarks>
-    /// <b>Why this is non-virtual:</b> subclasses hide this with <c>new</c>, not
-    /// <c>override</c>. Callers always hold a reference typed as the sealed
-    /// subclass (<c>CommandStream</c> or <c>ParallelCommandStream</c>), so the
-    /// JIT resolves the call as a direct, inlinable method invocation —no
-    /// virtual dispatch, no generic virtual devirt heuristics. Profiling showed
-    /// that <c>abstract</c>+<c>override</c> cost ~10% throughput on
-    /// HeroComing.Perf because the .NET 8 JIT does not devirt generic virtual
-    /// methods reliably.
-    /// </remarks>
-    public Entity Create() => throw new NotSupportedException(
-        "Callers must hold a CommandStream or ParallelCommandStream reference, not CommandStreamCore.");
-
-    /// <summary>Core create logic shared by both subclasses (no synchronization).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected Entity CreateCore() => _deferredEntities ? CreateDeferredImpl() : CreateImpl();
 
     // ── EntitySlot API ───────────────────────────────────────────────
 
     /// <summary>
-    /// Creates a tracked handle for <paramref name="entity"/> that auto-updates
-    /// when a deferred placeholder is resolved during Submit or Replay.
+    /// Core track logic for placeholder entities. Caller handles synchronization.
+    /// Subclasses call this from their own public <c>Track</c> method.
     /// </summary>
-    public EntitySlot Track(Entity entity) => throw new NotSupportedException(
-        "Callers must hold a CommandStream or ParallelCommandStream reference, not CommandStreamCore.");
-
-    /// <summary>Core track logic for placeholder entities. Caller handles synchronization.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected EntitySlot TrackCore(Entity entity)
     {
@@ -245,35 +226,9 @@ public abstract class CommandStreamCore
     }
 
     /// <summary>
-    /// Records an Add command for the specified component on the given entity.
-    /// Synchronization strategy is the subclass's responsibility.
+    /// Core destroy logic. Caller handles synchronization.
+    /// Subclasses call this from their own public <c>Destroy</c> method.
     /// </summary>
-    public void Add<T>(Entity entity, T component) where T : unmanaged
-        => throw new NotSupportedException("Use CommandStream or ParallelCommandStream.");
-
-    /// <summary>
-    /// Records a Set command for the specified component on the given entity.
-    /// Synchronization strategy is the subclass's responsibility.
-    /// </summary>
-    public void Set<T>(Entity entity, T component) where T : unmanaged
-        => throw new NotSupportedException("Use CommandStream or ParallelCommandStream.");
-
-    /// <summary>
-    /// Records a Remove command for the specified component type from the given entity.
-    /// Synchronization strategy is the subclass's responsibility.
-    /// </summary>
-    public void Remove<T>(Entity entity) where T : unmanaged
-        => throw new NotSupportedException("Use CommandStream or ParallelCommandStream.");
-
-    /// <summary>
-    /// Records a Destroy command for the specified entity.
-    /// Synchronization strategy is the subclass's responsibility: subclasses call
-    /// <see cref="DestroyCore"/> (single-threaded) or wrap it in a lock.
-    /// </summary>
-    public void Destroy(Entity entity)
-        => throw new NotSupportedException("Use CommandStream or ParallelCommandStream.");
-
-    /// <summary>Core destroy logic. Caller handles synchronization.</summary>
     protected void DestroyCore(Entity entity)
     {
         if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out _))
@@ -288,37 +243,25 @@ public abstract class CommandStreamCore
     }
 
     /// <summary>
-    /// Records an AddChild command establishing a parent-child relationship.
-    /// Synchronization strategy is the subclass's responsibility.
+    /// Core AddChild logic. Caller handles synchronization.
+    /// Subclasses call this from their own public <c>AddChild</c> method.
     /// </summary>
-    public void AddChild(Entity parent, Entity child)
-        => throw new NotSupportedException("Use CommandStream or ParallelCommandStream.");
-
-    /// <summary>Core AddChild logic. Caller handles synchronization.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected void AddChildCore(Entity parent, Entity child)
         => _frozen.HierarchyByChild[child] = new HierarchyIntent(true, parent);
 
     /// <summary>
-    /// Records a RemoveChild command detaching the entity from its parent.
-    /// Synchronization strategy is the subclass's responsibility.
+    /// Core RemoveChild logic. Caller handles synchronization.
+    /// Subclasses call this from their own public <c>RemoveChild</c> method.
     /// </summary>
-    public void RemoveChild(Entity child)
-        => throw new NotSupportedException("Use CommandStream or ParallelCommandStream.");
-
-    /// <summary>Core RemoveChild logic. Caller handles synchronization.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected void RemoveChildCore(Entity child)
         => _frozen.HierarchyByChild[child] = new HierarchyIntent(false, default);
 
     /// <summary>
-    /// Records a clone of the source entity, including all components and descendants.
-    /// Synchronization strategy is the subclass's responsibility.
+    /// Core clone logic. Caller handles synchronization.
+    /// Subclasses call this from their own public <c>Clone</c> method.
     /// </summary>
-    public Entity Clone(Entity source)
-        => throw new NotSupportedException("Use CommandStream or ParallelCommandStream.");
-
-    /// <summary>Core clone logic. Caller handles synchronization.</summary>
     protected Entity CloneCore(Entity source)
     {
         if (!_world.TryGetLocation(source, out var location))
@@ -522,7 +465,7 @@ public abstract class CommandStreamCore
     /// <param name="resolveSlots">When <c>true</c>, resolves all tracked
     /// <see cref="EntitySlot"/>s using the placeholder map produced by this
     /// replay. Pass <c>true</c> only for your own delta —the delta whose
-    /// placeholders you registered via <see cref="Track"/>.</param>
+    /// placeholders you registered via <c>Track</c>.</param>
     /// <remarks>
     /// In a lockstep setup, replay all peer deltas with
     /// <paramref name="resolveSlots"/> = <c>false</c> (the default), and

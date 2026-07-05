@@ -4,9 +4,9 @@ namespace MiniArch.Core;
 
 /// <summary>
 /// Multi-threaded <see cref="CommandStreamCore"/>. All record methods
-/// (<see cref="Create"/>, <see cref="Track"/>, <see cref="Add{T}"/>,
-/// <see cref="Set{T}"/>, <see cref="Remove{T}"/>, <see cref="Destroy"/>,
-/// <see cref="AddChild"/>, <see cref="RemoveChild"/>, <see cref="Clone"/>)
+/// (<c>Create</c>, <c>Track</c>, <c>Add&lt;T&gt;</c>,
+/// <c>Set&lt;T&gt;</c>, <c>Remove&lt;T&gt;</c>, <c>Destroy</c>,
+/// <c>AddChild</c>, <c>RemoveChild</c>, <c>Clone</c>)
 /// can be invoked concurrently from multiple threads.
 /// <see cref="CommandStreamCore.Submit"/>, <see cref="CommandStreamCore.Snapshot"/>,
 /// <see cref="CommandStreamCore.SubmitAndSnapshotAsync"/> and
@@ -38,15 +38,22 @@ public sealed class ParallelCommandStream : CommandStreamCore
     /// </summary>
     public ParallelCommandStream(World world) : base(world) { }
 
-    /// <inheritdoc/>
-    public new Entity Create()
+    /// <summary>
+    /// Records a deferred entity creation and returns the new entity (placeholder or real).
+    /// Thread-safe; serializes on the internal create lock.
+    /// </summary>
+    public Entity Create()
     {
         lock (_storeCreateLock)
             return CreateCore();
     }
 
-    /// <inheritdoc/>
-    public new EntitySlot Track(Entity entity)
+    /// <summary>
+    /// Creates a tracked handle for <paramref name="entity"/> that auto-updates
+    /// when a deferred placeholder is resolved during Submit or Replay.
+    /// Thread-safe; serializes on the internal create lock for placeholder registration.
+    /// </summary>
+    public EntitySlot Track(Entity entity)
     {
         if (!entity.IsPlaceholder)
             return new EntitySlot(entity);
@@ -56,8 +63,12 @@ public sealed class ParallelCommandStream : CommandStreamCore
             return TrackCore(entity);
     }
 
-    /// <inheritdoc/>
-    public new void Add<T>(Entity entity, T component) where T : unmanaged
+    /// <summary>
+    /// Records an Add command for the specified component on the given entity.
+    /// Thread-safe; uses per-component concurrent store append for alive entities,
+    /// and serializes on the internal create lock for pending-batch entities.
+    /// </summary>
+    public void Add<T>(Entity entity, T component) where T : unmanaged
     {
         if (_world.IsAlive(entity))
         {
@@ -72,8 +83,12 @@ public sealed class ParallelCommandStream : CommandStreamCore
         }
     }
 
-    /// <inheritdoc/>
-    public new void Set<T>(Entity entity, T component) where T : unmanaged
+    /// <summary>
+    /// Records a Set command for the specified component on the given entity.
+    /// Thread-safe; uses per-component concurrent store append for alive entities,
+    /// and serializes on the internal create lock for pending-batch entities.
+    /// </summary>
+    public void Set<T>(Entity entity, T component) where T : unmanaged
     {
         if (_world.IsAlive(entity))
         {
@@ -88,8 +103,12 @@ public sealed class ParallelCommandStream : CommandStreamCore
         }
     }
 
-    /// <inheritdoc/>
-    public new void Remove<T>(Entity entity) where T : unmanaged
+    /// <summary>
+    /// Records a Remove command for the specified component type from the given entity.
+    /// Thread-safe; uses per-component concurrent store append for alive entities,
+    /// and serializes on the internal create lock for pending-batch entities.
+    /// </summary>
+    public void Remove<T>(Entity entity) where T : unmanaged
     {
         if (_world.IsAlive(entity))
         {
@@ -104,8 +123,11 @@ public sealed class ParallelCommandStream : CommandStreamCore
         }
     }
 
-    /// <inheritdoc/>
-    public new void Destroy(Entity entity)
+    /// <summary>
+    /// Records a Destroy command for the specified entity.
+    /// Thread-safe; serializes on the internal create lock.
+    /// </summary>
+    public void Destroy(Entity entity)
     {
         // Same pending-check + cancel logic as single-threaded, under the lock.
         // Without this, parallel Destroy on a pending entity would append to
@@ -116,22 +138,31 @@ public sealed class ParallelCommandStream : CommandStreamCore
             DestroyCore(entity);
     }
 
-    /// <inheritdoc/>
-    public new void AddChild(Entity parent, Entity child)
+    /// <summary>
+    /// Records an AddChild command establishing a parent-child relationship.
+    /// Thread-safe; serializes on the internal create lock.
+    /// </summary>
+    public void AddChild(Entity parent, Entity child)
     {
         lock (_storeCreateLock)
             AddChildCore(parent, child);
     }
 
-    /// <inheritdoc/>
-    public new void RemoveChild(Entity child)
+    /// <summary>
+    /// Records a RemoveChild command detaching the entity from its parent.
+    /// Thread-safe; serializes on the internal create lock.
+    /// </summary>
+    public void RemoveChild(Entity child)
     {
         lock (_storeCreateLock)
             RemoveChildCore(child);
     }
 
-    /// <inheritdoc/>
-    public new Entity Clone(Entity source)
+    /// <summary>
+    /// Records a clone of the source entity, including all components and descendants.
+    /// Thread-safe; validates outside the lock, materializes under it.
+    /// </summary>
+    public Entity Clone(Entity source)
     {
         // Validate outside the lock (read-only world access); materialize under it.
         if (!_world.TryGetLocation(source, out var location))
