@@ -739,25 +739,18 @@ public sealed class ArchetypeTests
         Assert.Equal(3099, archetype.GetComponentAt<Component1024>(1, 2999).Value);
     }
 
-    // BUG: when a chunked archetype has an empty segment in the middle (a "hole"),
-    // the flat entity array produced by GetEntities() / GetEntityStorageUnsafe() has
-    // indices that DO NOT match GetSegmentAndLocal's arithmetic mapping. This means
-    // using a flat index as a global row — as WriteColumnOrderedTo (Save) and
-    // FeedRowData (CanonicalChecksum) do — reads from the wrong (empty) segment,
-    // returning stale/zero data instead of the real entity's data.
+    // Previously a BUG: AddEntityChunked always filled the last segment (index _segmentCount-1).
+    // If interior segments were empty, GetSegmentAndLocal's arithmetic mapping would
+    // diverge from the flat entity array, causing WriteColumnOrderedTo (Save) and
+    // FeedRowData (CanonicalChecksum) to read from the wrong segment.
     //
-    // Root cause: AddEntityChunked always fills the last segment (index _segmentCount-1)
-    // via a fixed lastSegIdx. If interior segments are empty (e.g. after RemoveAt empties
-    // tail segments, then AddEntity fills the last), GetSegmentAndLocal still maps by
-    // fixed segment boundaries, so a flat-index falling inside the hole reads from the
-    // empty segment.
+    // FIX: Both AddEntityChunked and ReserveRows now fill the first segment with
+    // available capacity, preventing holes from persisting. The entity goes to the
+    // first non-full segment, whose global-row arithmetic matches the flat index.
     //
-    // This test creates the hole deterministically using internal test hooks:
-    //   1. Fill segCap entities, then ForceChunkedForTesting → seg0(full, 1 segment).
-    //   2. AddSegmentForTesting twice → seg1(empty), seg2(empty).
-    //   3. AddEntity → fills seg2 (last by index). seg1 stays empty.
-    //   4. Flat[segCap] = seg2[0] (the real entity), but
-    //      GetSegmentAndLocal(segCap) → seg1[0] → stale/default data.
+    // This test uses internal test hooks (AddSegmentForTesting) to create empty
+    // segments and verifies that the fix correctly places the entity at the position
+    // that keeps flat-index ↔ global-row mapping consistent.
     [Fact]
     public void BUG_flat_entity_index_mismatches_global_row_when_segment_hole_exists()
     {
@@ -776,44 +769,36 @@ public sealed class ArchetypeTests
         archetype.ForceChunkedForTesting();
         Assert.True(archetype.IsChunked);
 
-        // Step 2: add two empty tail segments.
+        // Step 2: add two empty tail segments (seg1, seg2).
         archetype.AddSegmentForTesting();
         archetype.AddSegmentForTesting();
         Assert.Equal(3, archetype.SegmentCount);
 
-        // Step 3: add one entity → fills seg2 (last by index, globalRow = 2*segCap).
-        // seg1 (middle) stays empty — this is the permanent hole.
+        // Step 3: add one entity. With the fix it fills seg1 (first non-full segment,
+        // globalRow = segCap), NOT seg2 (last). This keeps flat-index ↔ global-row
+        // mapping correct.
         var finalEntity = new Entity(9999, 1);
         var addedRow = archetype.AddEntity(finalEntity);
-        Assert.Equal(2 * segCap, addedRow);
+        Assert.Equal(segCap, addedRow); // seg1[0], not seg2[0]
         archetype.SetComponentAtTyped(0, addedRow, new Component1024 { Value = 9999 });
 
         // Flat entity array length = _count = segCap + 1.
         var flatEntities = archetype.GetEntities();
         Assert.Equal(segCap + 1, flatEntities.Length);
 
-        // Flat[segCap] = seg2[0] = the entity we just added. ✓ (flat view is correct).
+        // Flat[segCap] = seg1[0] = the entity we just added. ✓
         Assert.Equal(finalEntity, flatEntities[segCap]);
 
-        // BUT GetSegmentAndLocal(segCap) maps to (1, 0) = seg1[0], NOT seg2[0].
-        // seg1 is empty → should still return the correct mapping but returns default.
-        // This FAILS on current code: the global-row mapping gives wrong data.
+        // GetSegmentAndLocal(segCap) → (1, 0) = seg1[0] which now has the entity. ✓
         var viaRow = archetype.GetEntity(segCap);
-        Assert.Equal(finalEntity, viaRow); // ← FAILS: reads seg1[0] → default Entity
+        Assert.Equal(finalEntity, viaRow);
 
-        // Same for component data: GetComponentAt(0, segCap) should return 9999
-        // but reads from seg1 → zeroed data instead.
+        // Component data at flat-index segCap is also correct. ✓
         var componentViaRow = archetype.GetComponentAt<Component1024>(0, segCap);
-        Assert.Equal(9999, componentViaRow.Value); // ← FAILS: reads from seg1 → 0
+        Assert.Equal(9999, componentViaRow.Value);
 
-        // The real data lives at addedRow = 2*segCap — this confirms the correct
-        // entity data IS stored at the right global row, but flat-index lookup fails.
+        // The real data at the returned global row is also correct.
         Assert.Equal(9999, archetype.GetComponentAt<Component1024>(0, addedRow).Value);
-
-        // CONSEQUENCE: Save (WriteColumnOrderedTo → ReadComponentRaw) and
-        // CanonicalChecksum (FeedRowData) use flat-index as global-row. When a
-        // hole exists, they read from the empty segment instead of the real data
-        // segment, silently persisting/hashing wrong component data.
     }
 
 }

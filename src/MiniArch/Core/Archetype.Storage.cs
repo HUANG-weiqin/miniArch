@@ -182,18 +182,22 @@ internal sealed partial class Archetype
 
     private int AddEntityChunked(Entity entity)
     {
-        var lastSegIdx = _segmentCount - 1;
-        ref var lastSeg = ref _segments[lastSegIdx];
-        while (lastSeg.Count >= lastSeg.Entities.Length)
+        var segIdx = _segmentCount - 1;
+        for (var i = 0; i < _segmentCount; i++)
+        {
+            if (_segments[i].Count < _segments[i].Entities.Length)
+            { segIdx = i; break; }
+        }
+        if (_segments[segIdx].Count >= _segments[segIdx].Entities.Length)
         {
             GrowChunked(1);
-            lastSegIdx = _segmentCount - 1;
-            lastSeg = ref _segments[lastSegIdx];
+            segIdx = _segmentCount - 1;
         }
-        var localRow = lastSeg.Count;
-        var globalRow = lastSegIdx * _segmentCapacity + localRow;
-        lastSeg.Entities[localRow] = entity;
-        lastSeg.Count++;
+        ref var seg = ref _segments[segIdx];
+        var localRow = seg.Count;
+        var globalRow = segIdx * _segmentCapacity + localRow;
+        seg.Entities[localRow] = entity;
+        seg.Count++;
         _count++;
         _flatEntitiesGeneration++;
         return globalRow;
@@ -223,16 +227,22 @@ internal sealed partial class Archetype
         var remaining = count;
         while (remaining > 0)
         {
-            var lastSegIdx = _segmentCount - 1;
-            ref var lastSeg = ref _segments[lastSegIdx];
-            var available = lastSeg.Entities.Length - lastSeg.Count;
+            // Find the first segment with available capacity.
+            var segIdx = _segmentCount - 1;
+            for (var i = 0; i < _segmentCount; i++)
+            {
+                if (_segments[i].Count < _segments[i].Entities.Length)
+                { segIdx = i; break; }
+            }
+            ref var seg = ref _segments[segIdx];
+            var available = seg.Entities.Length - seg.Count;
             if (available == 0)
             {
                 EnsureCapacity(_count + remaining);
                 continue;
             }
             var take = Math.Min(remaining, available);
-            lastSeg.Count += take;
+            seg.Count += take;
             _count += take;
             remaining -= take;
         }

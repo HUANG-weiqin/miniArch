@@ -2,14 +2,14 @@
 title: 代码审阅发现清单
 module: Meta
 description: 历次代码审阅中产生过的猜想与结论。真 bug 索引 + 已排除的非 bug 猜想。AI 审阅前必读，避免重复验证已知结论。
-updated: 2026-07-05 (10 真 bug — 7 已修复 + 3 新发现未修复: ReserveRows 死锁、Clone 死锁、段空洞平坦索引错位)
+updated: 2026-07-05 (10 真 bug 全部已修复 — 最后 3 个通过「首个非满段填充」统一修复)
 ---
 # 代码审阅发现清单
 
 > **审阅前必读**。这个文档只记录**结论 + 指路**，不重复推理过程。
 > 真 bug 由 `BUG_` 前缀测试证明（本文件只放索引）；非 bug 猜想按模块归档。
 >
-> **当前状态**：7 个 BUG 已修复并转为回归测试（通过）；3 个 BUG 新发现尚未修复（测试失败，见下方真 bug 索引）。
+> **当前状态**：全部 10 个 BUG 已修复并转为回归测试（通过）。
 
 ## 这个模块是干什么的
 
@@ -34,7 +34,7 @@ updated: 2026-07-05 (10 真 bug — 7 已修复 + 3 新发现未修复: ReserveR
 
 ### 已修复（`BUG_` 测试转为回归测试，现在通过）
 
-> 七条 bug 均已修复，`BUG_` 前缀测试现在通过，充当回归守卫。
+> 全部 10 条 bug 均已修复，`BUG_` 前缀测试现在通过，充当回归守卫。
 
 | 测试名 | 位置 | 一句话描述 | 修复 |
 |---|---|---|---|
@@ -45,17 +45,9 @@ updated: 2026-07-05 (10 真 bug — 7 已修复 + 3 新发现未修复: ReserveR
 | `BUG_order_by_component_supports_chunked_archetypes` | `Query.cs:OrderedComponentEnumerator.Initialize` | `OrderByComponent<T>` 对匹配 archetype 批量读组件值时直接调用 `GetComponentSpan<T>()`；该 API 只支持非 chunked，chunked archetype 会抛 `InvalidOperationException`，导致公共排序 API 在大 archetype 上不可用 | chunked 分支按 segment 顺序调用 `GetSegmentComponentSpan<T>()` 拷贝组件值，保持与 `GetEntityStorageUnsafe()` flatten 顺序一致 |
 | `BUG_chunked_restore_pooled_larger_backup_arrays_overflow_smaller_destination` | `WorldStateSnapshot.cs:ArchetypeBackupEntry.CopyFromChunked` | 修复后的回归测试在 Debug 下仍会被错误 `Debug.Assert(seg.Data.Length >= segCap)` 拦截；零组件 chunked archetype 的 `seg.Data.Length == 0` 是合法状态（没有组件列），断言把合法状态误判为损坏 | 删除该无效断言；真实安全条件由后续按列/按 `entityCount` 拷贝和已有回归测试覆盖 |
 | `BUG_query_chunks_refresh_when_archetype_promotes_to_single_chunk_segment`<br>`BUG_query_chunks_refresh_existing_view_shape_when_archetype_count_also_changes`<br>`BUG_query_chunks_refresh_segment_growth_when_archetype_count_also_changes` | `QueryCache.cs:EnsureRefreshed` / `AppendNewArchetypes` / `ChunkView.cs:GetSpan` | Query 缓存只用 view 数量检测 chunk 快照是否失效；非 chunked archetype 晋升为 chunked 但仍只有 1 个 segment 时，旧 `ChunkView(segmentIndex=-1)` 未刷新，随后 `GetSpan<T>()` 走 chunked 分支访问 segment `-1` 越界。若同次还新增 archetype，`Refresh()` 的 append-only 路径也会漏重建旧 ChunkView，或在 segment 增长时首帧少返回 chunk | `_archetypeExpectedViews` 改为记录 view shape（non-chunked = -1，chunked = SegmentCount），即使 view 数量同为 1 也能检测模式变化；`AppendNewArchetypes` 追加新 archetype 前先检查已匹配 archetype 的 shape 漂移，必要时先重建 ChunkView |
-
-### 新发现待修复（BUG_ 测试失败，当前代码可触发）
-
-> 以下三条在 2026-07-05 Robustness Review 中发现。BUG_ 测试在当前代码上失败（死锁超时 / Assert 失败），
-> 修复后这些测试应转为通过。
-
-| 测试名 | 位置 | 一句话描述 | 修复方向 |
-|---|---|---|---|
-| `BUG_reserverows_deadlocks_when_promotion_creates_multiple_empty_segments` | `Archetype.Storage.cs:206-241` (ReserveRows) + 123-129 (EnsureCapacity 晋升) | ReserveRows 在 EnsureCapacity 晋升 chunked 后，GrowChunked 批量创建多空段；ReserveRows 只填末段（lastSegIdx = _segmentCount-1），末段满后无限循环 | ReserveRows 从首个非满段填充，或 EnsureCapacity 晋升不预创多段 |
-| `BUG_clone_deadlocks_on_archetype_with_large_component` | `WorldClone.cs:27` (ReserveRows) + 同上 | 同根因，经公共 API `World.Clone()` 触发：克隆 >segCap 实体的 16KB+ 组件 archetype 死锁 | 同上 |
-| `BUG_flat_entity_index_mismatches_global_row_when_segment_hole_exists` | `Archetype.Storage.cs:183-200` (AddEntityChunked 只填末段) + `Archetype.Storage.cs:18` (GetSegmentAndLocal) | 段空洞时平坦索引 ≠ 全局行号，Save 和 CanonicalChecksum 读入空段 → 静默数据损坏 | 消除空洞产生机制，或让迭代器处理空洞 |
+| `BUG_reserverows_deadlocks_when_promotion_creates_multiple_empty_segments` | `Archetype.Storage.cs:ReserveRows` | ReserveRows 在 EnsureCapacity 晋升 chunked 后，GrowChunked 批量创建多空段；ReserveRows 只填末段（lastSegIdx = _segmentCount-1），末段满后无限循环 | `ReserveRows` 改为扫码首个非满段，而非固定填末段。同时 `AddEntityChunked` 同步改为首个非满段填充 — 同一根因统一修复 |
+| `BUG_clone_deadlocks_on_archetype_with_large_component` | `WorldClone.cs:27` (ReserveRows) | 同根因，经公共 API `World.Clone()` 触发：克隆 >segCap 实体的 16KB+ 组件 archetype 死锁 | 同上根因修复 |
+| `BUG_flat_entity_index_mismatches_global_row_when_segment_hole_exists` | `Archetype.Storage.cs:AddEntityChunked` | 段空洞时平坦索引 ≠ 全局行号，Save 和 CanonicalChecksum 读入空段 → 静默数据损坏 | `AddEntityChunked` 改填首个非满段，空洞不再持久存在 |
 
 ---
 
