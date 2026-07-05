@@ -1880,7 +1880,10 @@ public abstract class CommandStreamCore
             {
                 var i = Count;
                 if ((uint)i >= (uint)Entries.Length)
-                    Array.Resize(ref Entries, Entries.Length * 2);
+                {
+                    var newLen = Entries.Length == 0 ? 256 : Entries.Length * 2;
+                    Array.Resize(ref Entries, newLen);
+                }
 
                 Entries[i] = new StoreEntry<T>
                 {
@@ -1974,10 +1977,42 @@ public abstract class CommandStreamCore
                 return;
 
             var locals = _locals.Values;
-            var total = _count;
-            foreach (var local in locals)
-                total += local.Count;
 
+            // Count total entries and find first non-empty local
+            int total = _count, nonEmpty = 0;
+            LocalBuffer? firstNonEmpty = null;
+            foreach (var local in locals)
+            {
+                if (local.Count > 0)
+                {
+                    total += local.Count;
+                    nonEmpty++;
+                    firstNonEmpty ??= local;
+                }
+            }
+
+            if (nonEmpty == 0)
+            {
+                _hasLocalWrites = 0;
+                return;
+            }
+
+            // Steal: when _entries is empty and only one writer, steal its array.
+            // This eliminates the Array.Copy entirely for the common single-writer case
+            // and also for cases where serial Append happened on an empty store followed
+            // by a single parallel writer.
+            if (_count == 0 && nonEmpty == 1)
+            {
+                var oldEntries = _entries;
+                _entries = firstNonEmpty!.Entries;
+                _count = firstNonEmpty.Count;
+                firstNonEmpty.Entries = oldEntries; // reuse old empty/small array
+                firstNonEmpty.Count = 0;
+                _hasLocalWrites = 0;
+                return;
+            }
+
+            // Normal merge: copy all local buffers into _entries
             EnsureCapacity(total);
 
             var dst = _count;
