@@ -83,4 +83,22 @@ public class EntityDumpTests
         Assert.Contains("ALIVE", str);
         Assert.Contains(nameof(Position), str);
     }
+
+    [Fact]
+    public void Describe_PlaceholderEntity_ReturnsDead()
+    {
+        using var world = new World();
+        var placeholder = new Entity(-1, 0);
+        var report = EntityDump.Describe(world, placeholder);
+        Assert.False(report.IsAlive);
+    }
+
+    [Fact]
+    public void Describe_OutOfBoundsId_ReturnsDead()
+    {
+        using var world = new World();
+        var bogus = new Entity(999_999, 0);
+        var report = EntityDump.Describe(world, bogus);
+        Assert.False(report.IsAlive);
+    }
 }

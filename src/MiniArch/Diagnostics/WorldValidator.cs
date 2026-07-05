@@ -173,5 +173,11 @@ public static class WorldValidator
                 ValidationCode.SlotCapacityWarning,
                 $"EntitySlotCount={world.EntitySlotCount} > occupied({occupiedCount}) + free({world.FreeList.Length}) = {totalKnown}. Possible pending reservations."));
         }
+        else if (totalKnown > world.EntitySlotCount)
+        {
+            issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.Archetype,
+                ValidationCode.SlotCapacityWarning,
+                $"EntitySlotCount={world.EntitySlotCount} < occupied({occupiedCount}) + free({world.FreeList.Length}) = {totalKnown}. Free-list or slot tracking is corrupted."));
+        }
     }
 }

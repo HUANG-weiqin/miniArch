@@ -37,7 +37,7 @@ public static class EntityDump
         // Alive — read archetype info.
         var arch = record.Archetype!;
         var row = record.RowIndex;
-        var archInfo = new ArchetypeInfo(arch.EntityCount, (IList<Type>)arch.ComponentTypes);
+        var archInfo = new ArchetypeInfo(arch.EntityCount, arch.ComponentTypes);
 
         // Component values.
         var components = new List<ComponentInfo>();

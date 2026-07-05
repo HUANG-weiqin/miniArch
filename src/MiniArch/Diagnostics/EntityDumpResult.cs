@@ -89,10 +89,14 @@ public readonly struct ArchetypeInfo
     /// <summary>Component types that define this archetype's signature.</summary>
     public ReadOnlyCollection<Type> ComponentTypes { get; }
 
-    internal ArchetypeInfo(int entityCount, IList<Type> componentTypes)
+    internal ArchetypeInfo(int entityCount, IReadOnlyList<Type> componentTypes)
     {
         EntityCount = entityCount;
-        ComponentTypes = new ReadOnlyCollection<Type>(componentTypes);
+        // Copy to a mutable list so the ReadOnlyCollection owns the data.
+        var list = new List<Type>(componentTypes.Count);
+        for (var i = 0; i < componentTypes.Count; i++)
+            list.Add(componentTypes[i]);
+        ComponentTypes = new ReadOnlyCollection<Type>(list);
     }
 }
 
