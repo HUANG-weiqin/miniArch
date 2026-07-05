@@ -25,33 +25,14 @@ internal sealed partial class Archetype
     // chunked invariant: every segment owns exactly _segmentCapacity entity
     // slots and column offsets are based on _segmentCapacity.
     //
-    // Fast path: when the flat buffer already holds exactly _segmentCapacity
-    // slots (the normal doubling-threshold promotion), the existing arrays are
-    // wrapped as a single segment with zero copy.
-    //
-    // General path: when the flat capacity differs from _segmentCapacity
-    // (smaller — e.g. ForceChunked on a young archetype; or larger — e.g. a
-    // bulk ReserveRows that overshot the threshold), entities are split across
-    // standard segments and column data is rebased onto segment-capacity
-    // offsets. The old oversized/undersized flat buffer is abandoned.
+    // Single path: entities are split across standard segments and column data
+    // is rebased onto segment-capacity offsets, regardless of whether the flat
+    // buffer happened to match _segmentCapacity. The old flat buffer is
+    // abandoned. (Previously a "fast path" wrapped the flat arrays as segment[0]
+    // when sizes matched; unifying on the copy path keeps the promotion
+    // invariant enforced uniformly and removes a mode branch.)
     private void ConvertToChunked()
     {
-        if (_capacity == _segmentCapacity)
-        {
-            _segments = new Segment[1];
-            _segments[0] = new Segment
-            {
-                Entities = _entities,
-                Data = _data,
-                Count = _count
-            };
-            _segmentCount = 1;
-            _entities = null!;
-            _data = null!;
-            _isChunked = true;
-            return;
-        }
-
         var segOffsets = ComputeColumnLayout(_elementSizes, _segmentCapacity).Offsets;
         var segCount = Math.Max(1, (_count + _segmentCapacity - 1) / _segmentCapacity);
         _segments = new Segment[segCount];
@@ -89,7 +70,24 @@ internal sealed partial class Archetype
         _columnByteOffsets = segOffsets;
         _entities = null!;
         _data = null!;
-        _isChunked = true;
+
+        AssertConvertedInvariants();
+    }
+
+    [Conditional("DEBUG")]
+    private void AssertConvertedInvariants()
+    {
+        Debug.Assert(_entities is null, "Flat entities array must be null after promotion.");
+        Debug.Assert(_data is null, "Flat data buffer must be null after promotion.");
+        Debug.Assert(_segments is not null, "Segments must be non-null after promotion.");
+        for (var i = 0; i < _segmentCount; i++)
+            Debug.Assert(_segments[i].Entities.Length == _segmentCapacity,
+                $"Segment {i} entity capacity ({_segments[i].Entities.Length}) != _segmentCapacity ({_segmentCapacity}).");
+        var total = 0;
+        for (var i = 0; i < _segmentCount; i++)
+            total += _segments[i].Count;
+        Debug.Assert(total == _count,
+            $"Segment count sum ({total}) != _count ({_count}) after promotion.");
     }
 
     private void GrowChunked(int need)
@@ -120,7 +118,7 @@ internal sealed partial class Archetype
     {
         if (requiredCapacity <= Capacity) return;
 
-        if (!_isChunked && _capacity * 2 > _segmentCapacity)
+        if (!IsChunked && _capacity * 2 > _segmentCapacity)
         {
             ConvertToChunked();
             if (requiredCapacity <= Capacity) return;
@@ -128,7 +126,7 @@ internal sealed partial class Archetype
             return;
         }
 
-        if (!_isChunked)
+        if (!IsChunked)
         {
             var doubleCapacity = Math.Min(_capacity * 2, ArrayMaxLength);
             var newCapacity = Math.Max(requiredCapacity, doubleCapacity);
@@ -166,48 +164,16 @@ internal sealed partial class Archetype
 
     internal int AddEntity(Entity entity)
     {
-        if (_isChunked)
-            return AddEntityChunked(entity);
-
-        EnsureCapacity(_count + 1);
-        if (!_isChunked)
-        {
-            var row = _count;
-            _entities[row] = entity;
-            _count++;
-            return row;
-        }
-        return AddEntityChunked(entity);
-    }
-
-    private int AddEntityChunked(Entity entity)
-    {
-        var segIdx = _segmentCount - 1;
-        for (var i = 0; i < _segmentCount; i++)
-        {
-            if (_segments[i].Count < _segments[i].Entities.Length)
-            { segIdx = i; break; }
-        }
-        if (_segments[segIdx].Count >= _segments[segIdx].Entities.Length)
-        {
-            GrowChunked(1);
-            segIdx = _segmentCount - 1;
-        }
-        ref var seg = ref _segments[segIdx];
-        var localRow = seg.Count;
-        var globalRow = segIdx * _segmentCapacity + localRow;
-        seg.Entities[localRow] = entity;
-        seg.Count++;
-        _count++;
-        _flatEntitiesGeneration++;
-        return globalRow;
+        var row = AllocateRows(1);
+        WriteEntityAt(row, entity);
+        return row;
     }
 
     // ──────────────────────────────────────────────
-    //  ReserveRows
+    //  AllocateRows
     // ──────────────────────────────────────────────
 
-    internal int ReserveRows(int count)
+    internal int AllocateRows(int count)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(count);
 
@@ -216,7 +182,7 @@ internal sealed partial class Archetype
 
         EnsureCapacity(_count + count);
 
-        if (!_isChunked)
+        if (!IsChunked)
         {
             var row = _count;
             _count += count;
@@ -253,7 +219,7 @@ internal sealed partial class Archetype
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void WriteEntityAt(int globalRow, Entity entity)
     {
-        if (!_isChunked)
+        if (!IsChunked)
         {
             _entities[globalRow] = entity;
             return;
@@ -287,7 +253,7 @@ internal sealed partial class Archetype
     internal bool RemoveAt(int row, out Entity movedEntity)
     {
         AssertValidRow(row);
-        if (!_isChunked)
+        if (!IsChunked)
         {
             var last = _count - 1;
             if (row != last)
@@ -349,7 +315,7 @@ internal sealed partial class Archetype
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpan<Entity> GetEntities()
     {
-        if (!_isChunked)
+        if (!IsChunked)
             return _entities.AsSpan(0, _count);
 
         return GetEntityStorageUnsafe().AsSpan(0, _count);
@@ -363,7 +329,7 @@ internal sealed partial class Archetype
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal Entity[] GetEntityStorageUnsafe()
     {
-        if (!_isChunked)
+        if (!IsChunked)
             return _entities;
 
         if (_cachedFlatEntitiesGeneration != _flatEntitiesGeneration)
@@ -380,13 +346,26 @@ internal sealed partial class Archetype
             }
             _cachedFlatEntitiesGeneration = _flatEntitiesGeneration;
         }
+        AssertFlatCacheConsistent();
         return _cachedFlatEntities!;
+    }
+
+    [Conditional("DEBUG")]
+    private void AssertFlatCacheConsistent()
+    {
+        if (!IsChunked || _cachedFlatEntities is null) return;
+        if (_cachedFlatEntitiesGeneration != _flatEntitiesGeneration) return;
+        var total = 0;
+        for (var i = 0; i < _segmentCount; i++)
+            total += _segments[i].Count;
+        Debug.Assert(_cachedFlatEntities.Length >= total,
+            $"Flat cache size {_cachedFlatEntities.Length} < total segment count {total}.");
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal Entity GetEntity(int row)
     {
-        if (!_isChunked)
+        if (!IsChunked)
             return _entities[row];
 
         var (segIdx, localRow) = GetSegmentAndLocal(row);
@@ -411,7 +390,7 @@ internal sealed partial class Archetype
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ref T GetComponentRefAt<T>(int columnIndex, int row) where T : unmanaged
     {
-        if (!_isChunked)
+        if (!IsChunked)
         {
             return ref Unsafe.As<byte, T>(ref Unsafe.Add(
                 ref MemoryMarshal.GetArrayDataReference(_data),
@@ -527,7 +506,7 @@ internal sealed partial class Archetype
         var size = _elementSizes[destinationColumnIndex];
 
         ref byte srcRef = ref Unsafe.NullRef<byte>();
-        if (!source._isChunked)
+        if (!source.IsChunked)
         {
             srcRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(source._data),
                 source._columnByteOffsets[sourceColumnIndex] + sourceRow * size);
@@ -540,7 +519,7 @@ internal sealed partial class Archetype
         }
 
         ref byte dstRef = ref Unsafe.NullRef<byte>();
-        if (!_isChunked)
+        if (!IsChunked)
         {
             dstRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data),
                 _columnByteOffsets[destinationColumnIndex] + destinationRow * size);
@@ -565,7 +544,7 @@ internal sealed partial class Archetype
     {
         int byteOff;
         ref var dataRef = ref Unsafe.NullRef<byte>();
-        if (!_isChunked)
+        if (!IsChunked)
         {
             byteOff = _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex];
             dataRef = ref MemoryMarshal.GetArrayDataReference(_data);
@@ -622,7 +601,7 @@ internal sealed partial class Archetype
 
     internal void ReadColumnFrom(BinaryReader reader, int columnIndex, int count)
     {
-        if (!_isChunked)
+        if (!IsChunked)
         {
             reader.BaseStream.ReadExactly(GetColumnBytes(columnIndex, count));
             return;
@@ -646,7 +625,7 @@ internal sealed partial class Archetype
         if (startRow < 0 || count < 0 || startRow + count > _count)
             throw new ArgumentOutOfRangeException(nameof(startRow));
 
-        if (_isChunked)
+        if (IsChunked)
             throw new InvalidOperationException(
                 "GetReservedEntities is not supported for chunked archetypes. Use WriteEntityAt instead.");
 
@@ -737,7 +716,7 @@ internal sealed partial class Archetype
         where TFeeder : struct, ISpanFeeder
     {
         var elemSize = _elementSizes[columnIndex];
-        if (_isChunked)
+        if (IsChunked)
         {
             var remaining = rowCount;
             for (var s = 0; s < _segmentCount && remaining > 0; s++)
@@ -776,7 +755,7 @@ internal sealed partial class Archetype
     internal void ResetCount()
     {
         _count = 0;
-        if (_isChunked)
+        if (IsChunked)
         {
             for (var i = 0; i < _segmentCount; i++)
                 _segments[i].Count = 0;
@@ -801,7 +780,7 @@ internal sealed partial class Archetype
     {
         EnsureCapacity(count);
 
-        if (!_isChunked)
+        if (!IsChunked)
         {
             Array.Copy(srcEntities, _entities, count);
             for (var col = 0; col < _elementSizes.Length; col++)
@@ -863,7 +842,7 @@ internal sealed partial class Archetype
         where TFeeder : struct, ISpanFeeder
     {
         var elemSize = _elementSizes[columnIndex];
-        if (_isChunked)
+        if (IsChunked)
         {
             var (segIdx, localRow) = GetSegmentAndLocal(globalRow);
             feed.Feed(_segments[segIdx].Data.AsSpan(_columnByteOffsets[columnIndex] + localRow * elemSize, elemSize));
@@ -878,7 +857,7 @@ internal sealed partial class Archetype
     {
         var elemSize = _elementSizes[columnIndex];
 
-        if (!source._isChunked && !_isChunked)
+        if (!source.IsChunked && !IsChunked)
         {
             var byteCount = checked((uint)(count * elemSize));
             ref var srcRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(source._data), source._columnByteOffsets[columnIndex]);
@@ -895,16 +874,16 @@ internal sealed partial class Archetype
 
         while (remaining > 0)
         {
-            var srcAvailable = source._isChunked
+            var srcAvailable = source.IsChunked
                 ? source._segments[srcSegIdx].Count - srcConsumed
                 : remaining;
-            var dstAvailable = _isChunked
+            var dstAvailable = IsChunked
                 ? _segments[dstSegIdx].Count - dstConsumed
                 : remaining;
             var take = Math.Min(remaining, Math.Min(srcAvailable, dstAvailable));
 
             ref byte srcRef = ref Unsafe.NullRef<byte>();
-            if (!source._isChunked)
+            if (!source.IsChunked)
             {
                 var consumedTotal = count - remaining;
                 srcRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(source._data),
@@ -917,7 +896,7 @@ internal sealed partial class Archetype
             }
 
             ref byte dstRef = ref Unsafe.NullRef<byte>();
-            if (!_isChunked)
+            if (!IsChunked)
             {
                 var consumedTotal = count - remaining;
                 dstRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data),
@@ -932,12 +911,12 @@ internal sealed partial class Archetype
             Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, checked((uint)(take * elemSize)));
 
             remaining -= take;
-            if (source._isChunked)
+            if (source.IsChunked)
             {
                 srcConsumed += take;
                 if (srcConsumed >= source._segments[srcSegIdx].Count) { srcSegIdx++; srcConsumed = 0; }
             }
-            if (_isChunked)
+            if (IsChunked)
             {
                 dstConsumed += take;
                 if (dstConsumed >= _segments[dstSegIdx].Count) { dstSegIdx++; dstConsumed = 0; }
@@ -1014,7 +993,7 @@ internal sealed partial class Archetype
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ThrowIfChunked()
     {
-        if (_isChunked)
+        if (IsChunked)
             throw new InvalidOperationException(
                 "This operation is not supported for chunked archetypes. Use the per-segment API via ChunkView instead.");
     }

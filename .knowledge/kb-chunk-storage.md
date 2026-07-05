@@ -2,15 +2,15 @@
 title: Chunk 存储
 module: MiniArch.Core
 description: Archetype 存储架构 — 单块模式（默认）和分段模式（阈值后自动切换），包括 SoA 布局、跨段 swap-remove、查询分段迭代
-updated: 2026-06-22 (全库审阅: 确认实现与文档一致)
+updated: 2026-07-05 (AddEntity=AllocateRows+WriteEntityAt, IsChunked derived, ConvertToChunked unified copy, DEBUG assertions)
 ---
 # Chunk 存储
 
 ## 这个模块是干什么的
 
 - ChunkView（public）是 Archetype/Segment 的**只读 readonly struct 视图**
-- 在**单块模式**（`_isChunked == false`）下，一个 Archetype 对应一个 ChunkView
-- 在**分段模式**（`_isChunked == true`）下，每个 Segment 对应一个 ChunkView
+- 在**单块模式**（`_segments` 为 null，即 `!IsChunked`）下，一个 Archetype 对应一个 ChunkView
+- 在**分段模式**（`_segments` 非 null，即 `IsChunked`）下，每个 Segment 对应一个 ChunkView
 - 真正的存储（`_data: byte[]`、`_entities: Entity[]`、列偏移、元素大小等）全部直属于 `Archetype`
 - 存储操作代码在 `Archetype.Storage.cs` partial 文件中
 
@@ -20,15 +20,13 @@ updated: 2026-06-22 (全库审阅: 确认实现与文档一致)
 
 **单块模式**（默认，零额外开销）：
 ```
-_isChunked = false
   _entities: Entity[]
   _data: byte[]
   扩容: 翻倍重分配（和原先完全一致）
 ```
 
-**分段模式**（超过阈值后自动切换，零拷贝转换）：
+**分段模式**（超过阈值后自动切换）：
 ```
-_isChunked = true
   _segments: Segment[]
   Segment {
       Entities: Entity[]
@@ -79,22 +77,27 @@ public Span<T> GetSpan<T>() where T : unmanaged
 
 ## 分段存储细节
 
-### 3.1 ConvertToChunked（零拷贝）
+### 3.1 ConvertToChunked（统一拷贝路径）
 
-当 `_capacity * 2 > SegmentEntityCapacity` 且下次需要扩容时，自动执行：
+当 `_capacity * 2 > SegmentEntityCapacity` 检测到需要扩容且容量超阈值时自动执行。总是分配标准 Segment 并将平坦数组数据逐段拷贝：
 
 ```csharp
 ConvertToChunked():
-    _segments[0] = new Segment {
-        Entities = _entities,   // 直接转移引用
-        Data = _data,           // 直接转移引用
-        Count = _count
-    }
-    _segmentCount = 1
-    _isChunked = true
+    segOffsets = ComputeColumnLayout(_elementSizes, _segmentCapacity).Offsets
+    segCount = Math.Max(1, (_count + _segmentCapacity - 1) / _segmentCapacity)
+    _segments = new Segment[segCount]
+    for each segment:
+        Array.Copy(_entities, ...)        // 实体数据
+        CreateStorageBytes(...)           // 新 segment byte[]
+        CopyBlockUnaligned column data    // 组件列数据
+    _columnByteOffsets = segOffsets
     _entities = null
     _data = null
+    AssertConvertedInvariants()
 ```
+
+- **旧 fast path 已删**：曾当 `_capacity == _segmentCapacity` 时将平坦数组直接当 segment[0] 零拷贝包装。统一到拷贝路径的理由：分段不变式一致执行、消除一个模式分支。
+- 转换后状态：`_entities = null`，`_data = null`，`_segments` 填充，`AssertConvertedInvariants()` 在 DEBUG 下验证全部不变式（segment 等长、count 求和一致）。
 
 ### 3.2 GrowChunked（逐段扩容零拷贝）
 
@@ -125,15 +128,17 @@ RemoveAt(globalRow):
 
 分段模式下 `GetEntityStorage()` 原来每次调用 `new Entity[_count]` + 逐段 `Array.Copy`，在 `QueryEnumerator.MoveNext()` 热路径上造成每帧分配。
 
-修复：引入 `_flatEntitiesGeneration` 计数器 + 缓存数组 `_cachedFlatEntities`。实体布局变更（AddEntityChunked/RemoveAt/WriteEntityAt/ReserveRows/GrowChunked 等）时递增计数器；`GetEntityStorage()` 仅在计数器与缓存版本不匹配时重建平坦数组，否则返回缓存引用——零分配零拷贝。
+修复：引入 `_flatEntitiesGeneration` 计数器 + 缓存数组 `_cachedFlatEntities`。实体布局变更（AllocateRows/RemoveAt/WriteEntityAt/GrowChunked 等）时递增计数器；`GetEntityStorage()` 仅在计数器与缓存版本不匹配时重建平坦数组，否则返回缓存引用——零分配零拷贝。
 
 ## 决策
 
-- **单块模式零退化**：`_isChunked == false` 时所有路径和原先完全一致（只多一个分支预测）
+- **单块模式零退化**：`!IsChunked`（flat 模式）时所有路径和原先完全一致（只多一个分支预测）
 - **阈值按组件大小动态计算**：`SegmentEntityCapacity = Max(16, 2MB / bytesPerEntity)`，目标每段 2 MB。2MB 的选择基于：超过 85000 字节的 `byte[]` 分配在 LOH（大对象堆），而 2MB 远高于此但仍是可控的单次分配。更小的段（如 256KB）会增加 segment 数量和遍历开销；更大的段则减少遍历开销但增加单次晋升分配的峰值内存。2MB 是经验平衡点。
 - **行号映射用除法而非二分**：因为所有段（除末段外）固定大小，`globalRow / SegmentEntityCapacity` 即可定位
 - **`ChunkView.Count` 总是读 Archetype 实时计数**：避免因 CommandBuffer 延迟提交导致的 stale count 问题（2026-06-13 bugfix）
 - **不支持托管引用组件**：`flat byte[]` 不含 GC 跟踪，在 Archetype 构造时 fail fast
+- **`AddEntity = AllocateRows(1) + WriteEntityAt`**：分配和写入分离设计。`AllocateRows` 负责扩容/模式切换后分配行号，`WriteEntityAt` 负责写入实体标识。每个方法独立读取 `IsChunked`，消除了老代码中 "EnsureCapacity 可能切换模式→调用方必须重检" 的 bug 类。代码位置：`Archetype.Storage.cs:162-173`
+- **`ConvertToChunked` 统一拷贝路径**：旧 fast path（`_capacity == _segmentCapacity` 时零拷贝包装平坦数组）已删除。理由：分段 invariant（`Entities.Length == _segmentCapacity`、列偏移基于 `_segmentCapacity`）在所有路径一致执行，消除一个模式分支。
 
 ## 认知模型
 
@@ -160,13 +165,18 @@ RemoveAt(globalRow):
 | **晋升单向** | chunked 模式不回退为单块 | `kb-architecture-review.md` §2 | `ArchetypeTests.Chunked_mode_*` |
 | **Padding 零初始化** | `GC.AllocateArray`（零初始化）分配，组件 struct padding 确定为 0 → checksum 安全 | `kb-snapshot-persistence.md` Checksum 段 | `WorldSnapshotTests` (checksum) / `FrameDeltaDeterminismTests` |
 | **段等长假设** | 除末段外所有段 = `SegmentEntityCapacity`，`GetSegmentAndLocal` 用除法定位 | 本页 坑点 | `ArchetypeTests.Chunked_mode_*` / `QueryTests` |
-| **`_isChunked` re-check** | `EnsureCapacity` 可能切换模式，`AddEntity`/`ReserveRows` 返回后必须重检 `_isChunked` | 本页 坑点 | `ArchetypeTests` / `CommandStreamTests` (materialize 路径) |
-| **`_flatEntitiesGeneration` 失效** | 布局变更（AddEntityChunked/RemoveAt/WriteEntityAt/ReserveRows/GrowChunked）时递增 | 本页 §3.5 | `ChunkTests.GetEntities` / `QueryEnumerator` 热路径 |
+| **`IsChunked` 重检（历史）** | 曾经的坑：`EnsureCapacity` 可能切换模式，老 API 返回后须重检 `_isChunked`。已解决：`AddEntity = AllocateRows(1) + WriteEntityAt`，每个方法内部单次读取 `IsChunked` | 本页 决策 + 坑点（历史） | `ArchetypeTests` / `CommandStreamTests` (materialize 路径) |
+| **`_flatEntitiesGeneration` 失效** | 布局变更（AllocateRows/WriteEntityAt/RemoveAt/GrowChunked/RestoreFlatBackup/RebuildFlatEntities）时递增 | 本页 §3.5 | `ChunkTests.GetEntities` / `QueryEnumerator` 热路径 |
 | **RowIndex 全局性** | `EntityRecord.RowIndex` 始终是全局行号，模式透明 | 本页 认知模型 | `WorldStructuralChangeTests` / `IntegrationTests` |
 | **Load 不能走 Add/Set/Remove** | 否则会挤压重排快照 chunk 边界 | `kb-snapshot-persistence.md` 决策 | `WorldSnapshotTests` (save+load round-trip) |
 
 ## 坑点
 
-- `EnsureCapacity` 可能在非分段路径中将 Archetype **切换为分段模式**，`AddEntity` 和 `ReserveRows` 必须在 `EnsureCapacity` 返回后**重新检查 `_isChunked`**（2026-06-13 bugfix）
+- **(已解决)** `EnsureCapacity` 可能在非分段路径中将 Archetype **切换为分段模式**，老的 `ReserveRows` 和 `AddEntity` 必须在 `EnsureCapacity` 返回后重新检查 `_isChunked`（2026-06-13 bugfix）。当前代码已重构为 `AddEntity = AllocateRows(1) + WriteEntityAt`，每个方法内部单次读取 `IsChunked`，消除了调用方二次重检的 bug 类。历史记录保留供参考。
 - `ChunkView.Count` 不能用字段缓存实体计数，必须实时读取 Archetype，否则 CommandBuffer 延迟提交导致 chunk.Count 大于 span 长度 → IndexOutOfRangeException
 - `GetSegmentAndLocal` 假设除末段外所有段都满（段大小 = `SegmentEntityCapacity`，由组件布局动态决定），如果出现不等长段需要改用二分查找
+
+### DEBUG 不变式断言
+
+- **`AssertConvertedInvariants()`**（`Archetype.Storage.cs:77-91`，`[Conditional("DEBUG")]`）：在 `ConvertToChunked` 末尾调用。验证：`_entities is null`、`_data is null`、`_segments is not null`、每个 segment 的 `Entities.Length == _segmentCapacity`、所有 segment 的 `Count` 之和等于 `_count`。
+- **`AssertFlatCacheConsistent()`**（`Archetype.Storage.cs:354-363`，`[Conditional("DEBUG")]`）：在 `GetEntityStorageUnsafe` 返回前调用。验证：平坦缓存存在且 generation 匹配时，缓存数组长度 >= 所有 segment 的 Count 之和。

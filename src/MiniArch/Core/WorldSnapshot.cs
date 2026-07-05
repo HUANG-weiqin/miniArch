@@ -466,7 +466,7 @@ public static class WorldSnapshot
             entities[row] = new Entity(entityId, slotVersions[entityId]);
         }
 
-        var startRow = archetype.ReserveRows(rowCount);
+        var startRow = archetype.AllocateRows(rowCount);
         for (var row = 0; row < rowCount; row++)
             archetype.WriteEntityAt(startRow + row, entities[row]);
 

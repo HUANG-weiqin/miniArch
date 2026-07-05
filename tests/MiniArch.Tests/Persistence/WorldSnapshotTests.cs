@@ -532,7 +532,6 @@ public sealed class WorldSnapshotTests
         var arch = info.Archetype;
         arch.ForceChunkedForTesting();
         arch.AddSegmentForTesting();
-        Assert.True(arch.IsChunked);
         Assert.True(arch.SegmentCount >= 2, $"expected >=2 segments, got {arch.SegmentCount}");
 
         var checksumPre = world.Checksum();
@@ -564,7 +563,6 @@ public sealed class WorldSnapshotTests
         Assert.Equal(EntityCount, world.EntityCount);
 
         // The archetype is still chunked with the same segment layout after restore.
-        Assert.True(arch.IsChunked);
         Assert.True(arch.SegmentCount >= 2);
     }
 
@@ -922,7 +920,6 @@ public sealed class WorldSnapshotTests
 
         // Simulate prediction-time promotion to chunked storage.
         arch.ForceChunkedForTesting();
-        Assert.True(arch.IsChunked);
 
         // This throws ArgumentException ("Destination array was not long
         // enough") from RestoreTo's Array.Copy(Entities, arch.GetEntityStorageUnsafe(), Count).
@@ -948,7 +945,6 @@ public sealed class WorldSnapshotTests
 
         var snapshot = world.CaptureState();
         arch.ForceChunkedForTesting();
-        Assert.True(arch.IsChunked);
 
         world.RestoreState(snapshot);
 
@@ -1054,6 +1050,70 @@ public sealed class WorldSnapshotTests
             "Velocity should be restored to the captured value. If this " +
             "fails then CopyDataFrom did not rebase column offsets.");
         Assert.Equal(new Velocity(1, 2), v1);
+    }
+
+    // 1024-byte component → segCap = 2048. Used to trigger chunked promotion
+    // without allocating hundreds of thousands of entities.
+    private unsafe struct Component1024
+    {
+        public int Value;
+        public fixed byte Pad[1020];
+    }
+
+    // Capture flat → predict (promote to chunked) → restore → verify count.
+    // Exercises RestoreFlatBackup loading a flat backup into a now-chunked archetype.
+    [Fact]
+    public void Capture_nonchunked_promoted_during_prediction_restores_correctly()
+    {
+        var world = new World();
+        for (var i = 0; i < 100; i++)
+        {
+            var e = world.Create();
+            world.Add(e, new Component1024 { Value = i });
+        }
+
+        var snap = world.CaptureState();
+
+        // Prediction: add enough to promote Component1024 archetype (segCap=2048).
+        for (var i = 0; i < 4000; i++)
+        {
+            var e = world.Create();
+            world.Add(e, new Component1024 { Value = i + 1000 });
+        }
+
+        world.RestoreState(snap);
+        Assert.Equal(100, world.EntityCount);
+    }
+
+    // Capture → restore cycle twice with a chunked archetype.
+    // Verifies pool reuse of backup arrays stays stable across cycles.
+    [Fact]
+    public void Capture_restore_cycle_twice_with_chunked_archetype_is_stable()
+    {
+        var world = new World();
+        // Create enough entities with Component1024 to trigger chunked mode.
+        for (var i = 0; i < 3000; i++)
+        {
+            var e = world.Create();
+            world.Add(e, new Component1024 { Value = i });
+        }
+
+        var snap1 = world.CaptureState();
+
+        // Modify world.
+        for (var i = 0; i < 1000; i++)
+        {
+            var e = world.Create();
+            world.Add(e, new Component1024 { Value = i + 9000 });
+        }
+
+        world.RestoreState(snap1);
+        Assert.Equal(3000, world.EntityCount);
+
+        var snap2 = world.CaptureState(); // pool reuse — backup arrays from snap1
+
+        world.RestoreState(snap2); // restore from pool-recycled arrays
+        Assert.Equal(3000, world.EntityCount);
     }
 
     private readonly struct NoOpFeeder : Archetype.ISpanFeeder

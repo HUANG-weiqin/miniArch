@@ -24,7 +24,7 @@ internal static class WorldClone
             var dstArch = target.GetOrCreateArchetype(srcArch.Signature);
 
             var entities = srcArch.GetEntities();
-            var startRow = dstArch.ReserveRows(entities.Length);
+            var startRow = dstArch.AllocateRows(entities.Length);
             for (var i = 0; i < entities.Length; i++)
                 dstArch.WriteEntityAt(startRow + i, entities[i]);
             dstArch.CopyColumnsFrom(srcArch, entities.Length);

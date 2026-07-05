@@ -31,8 +31,8 @@ internal sealed class QueryCache
     private int _lastArchetypeCount = -1;
 
     // Tracks expected view shape per archetype (indexed parallel to _snapshotArchetypes).
-    // Non-chunked and chunked-with-one-segment both expose one view, but they
-    // need different ChunkView segment indices (-1 vs 0). Encode the mode too.
+    // Non-chunked = NonChunkedShape (-1), chunked = SegmentCount.
+    // Even when both have 1 view, the ChunkView segment index differs (-1 vs 0).
     private int[] _archetypeExpectedViews = [];
 
 
@@ -273,9 +273,11 @@ internal sealed class QueryCache
         return false;
     }
 
+    private const int NonChunkedShape = -1;
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int ExpectedViewShape(Archetype archetype) =>
-        archetype.IsChunked ? archetype.SegmentCount : -1;
+        archetype.IsChunked ? archetype.SegmentCount : NonChunkedShape;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool Matches(Archetype archetype)

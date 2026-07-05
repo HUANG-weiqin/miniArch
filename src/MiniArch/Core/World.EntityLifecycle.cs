@@ -41,7 +41,7 @@ public sealed partial class World
         var startId = AppendEntitySlots(entities.Length - reusedCount);
 
         var archetype = GetOrCreateArchetype(Signature.Empty)!;
-        var startRow = archetype.ReserveRows(entities.Length);
+        var startRow = archetype.AllocateRows(entities.Length);
         Span<EntityBatchRange> ranges = stackalloc EntityBatchRange[1];
         ranges[0] = new EntityBatchRange(startRow, entities.Length);
         WriteCreatedEntitiesAndLocations(archetype, entities, ranges, reusedCount, startId);
@@ -271,7 +271,7 @@ public sealed partial class World
         var startId = AppendEntitySlots(entities.Length);
 
         var archetype = GetOrCreateArchetype(Signature.Empty)!;
-        var startRow = archetype.ReserveRows(entities.Length);
+        var startRow = archetype.AllocateRows(entities.Length);
         Span<EntityBatchRange> ranges = stackalloc EntityBatchRange[1];
         ranges[0] = new EntityBatchRange(startRow, entities.Length);
         WriteCreatedEntitiesAndLocations(archetype, entities, ranges, 0, startId);

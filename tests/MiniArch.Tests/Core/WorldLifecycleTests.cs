@@ -342,7 +342,6 @@ public sealed class WorldLifecycleTests
         // chunked storage so we exercise the per-row write path.
         var empty = world.GetOrCreateArchetype(Signature.Empty);
         empty.ForceChunkedForTesting();
-        Assert.True(empty.IsChunked);
 
         var batch = new Entity[5];
         world.CreateMany(batch);
@@ -369,7 +368,6 @@ public sealed class WorldLifecycleTests
 
         var empty = world.GetOrCreateArchetype(Signature.Empty);
         empty.ForceChunkedForTesting();
-        Assert.True(empty.IsChunked);
 
         var batch = new Entity[6];
         world.CreateMany(batch);

@@ -4,7 +4,7 @@ internal sealed partial class Archetype
 {
     internal void ForceChunkedForTesting()
     {
-        if (!_isChunked)
+        if (!IsChunked)
             ConvertToChunked();
     }
 

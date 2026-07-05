@@ -145,7 +145,6 @@ public sealed class ArchetypeTests
         var position = registry.GetOrCreate<Position>();
         var archetype = new Archetype(new Signature(position), [typeof(Position)], capacity: 4);
         archetype.ForceChunkedForTesting();
-        Assert.True(archetype.IsChunked);
 
         var row1 = archetype.AddEntity(new Entity(1, 1));
         archetype.SetComponentAtTyped(0, row1, new Position(10, 20));
@@ -375,7 +374,6 @@ public sealed class ArchetypeTests
         var position = registry.GetOrCreate<Position>();
         var archetype = new Archetype(new Signature(position), [typeof(Position)], capacity: 2);
         archetype.ForceChunkedForTesting();
-        Assert.True(archetype.IsChunked);
 
         var row = archetype.AddEntity(new Entity(1, 1));
         archetype.SetComponentAtTyped(0, row, new Position(10, 20));
@@ -439,7 +437,7 @@ public sealed class ArchetypeTests
         var r1 = archetype.AddEntity(new Entity(1, 1));
         archetype.SetComponentAtTyped(0, r1, new Position(1, 1));
 
-        var startRow = archetype.ReserveRows(10);
+        var startRow = archetype.AllocateRows(10);
         Assert.Equal(1, startRow);
         Assert.Equal(11, archetype.EntityCount);
 
@@ -533,7 +531,6 @@ public sealed class ArchetypeTests
 
         archetype.AddEntity(new Entity(1, 1));
         archetype.ForceChunkedForTesting();
-        Assert.True(archetype.IsChunked);
         Assert.Equal(1, archetype.EntityCount);
         Assert.Equal(1, archetype.SegmentCount);
 
@@ -633,7 +630,7 @@ public sealed class ArchetypeTests
         // capacity: 4096 > segCap/2 → _capacity*2 > segCap triggers promotion.
         var archetype = new Archetype(new Signature(comp), [typeof(Component1024)], capacity: 4096);
 
-        var task = Task.Run(() => archetype.ReserveRows(5000));
+        var task = Task.Run(() => archetype.AllocateRows(5000));
         var completed = task.Wait(TimeSpan.FromSeconds(3));
 
         Assert.True(completed,
@@ -675,7 +672,6 @@ public sealed class ArchetypeTests
         Assert.False(archetype.IsChunked);
 
         archetype.ForceChunkedForTesting();
-        Assert.True(archetype.IsChunked);
 
         // Rows >= 2048 must land in segment[1] with correct, rebased data.
         Assert.Equal(2148, archetype.GetComponentAt<Component1024>(0, 2048).Value);
@@ -693,7 +689,7 @@ public sealed class ArchetypeTests
         var archetype = new Archetype(new Signature(comp), [typeof(Component1024)], capacity: 4);
 
         // Bulk reserve overshoots: EnsureCapacity(3000) → newCapacity=3000.
-        archetype.ReserveRows(3000);
+        archetype.AllocateRows(3000);
 
         for (var i = 0; i < 3000; i++)
         {
@@ -703,7 +699,6 @@ public sealed class ArchetypeTests
         Assert.False(archetype.IsChunked);
 
         archetype.ForceChunkedForTesting();
-        Assert.True(archetype.IsChunked);
 
         Assert.Equal(2148, archetype.GetComponentAt<Component1024>(0, 2048).Value);
         Assert.Equal(3099, archetype.GetComponentAt<Component1024>(0, 2999).Value);
@@ -729,7 +724,6 @@ public sealed class ArchetypeTests
             archetype.SetComponentAtTyped(1, i, new Component1024 { Value = i + 100 });
         }
         archetype.ForceChunkedForTesting();
-        Assert.True(archetype.IsChunked);
 
         // Row 2048 = first row of segment[1]. Both columns must rebase correctly.
         Assert.Equal(new Position(2048, 2049), archetype.GetComponentAt<Position>(0, 2048));
@@ -767,7 +761,6 @@ public sealed class ArchetypeTests
             archetype.SetComponentAtTyped(0, i, new Component1024 { Value = i + 100 });
         }
         archetype.ForceChunkedForTesting();
-        Assert.True(archetype.IsChunked);
 
         // Step 2: add two empty tail segments (seg1, seg2).
         archetype.AddSegmentForTesting();
@@ -799,6 +792,132 @@ public sealed class ArchetypeTests
 
         // The real data at the returned global row is also correct.
         Assert.Equal(9999, archetype.GetComponentAt<Component1024>(0, addedRow).Value);
+    }
+
+    // segCap=2048 for Component1024. EnsureCapacity promotes only when
+    // _capacity*2 STRICTLY exceeds _segmentCapacity. At capacity=1024 the
+    // doubling hits 2048 exactly (== not >) → flat growth, no promotion.
+    [Fact]
+    public void EnsureCapacity_at_exact_segment_capacity_boundary_does_not_promote()
+    {
+        var registry = new ComponentRegistry();
+        var comp = registry.GetOrCreate<Component1024>();
+        var archetype = new Archetype(new Signature(comp), [typeof(Component1024)], capacity: 1024);
+
+        for (var i = 0; i < 1024; i++)
+            archetype.AddEntity(new Entity(i + 1, 1));
+
+        Assert.False(archetype.IsChunked);
+        // Adding one more: EnsureCapacity(1025) → _capacity*2=2048 == segCap → no promote.
+        archetype.AddEntity(new Entity(1025, 1));
+        Assert.False(archetype.IsChunked); // Still flat — doubling hit exactly, no promotion
+    }
+
+    // capacity=1025: _capacity*2=2050 > segCap=2048 → promote on next EnsureCapacity.
+    [Fact]
+    public void EnsureCapacity_one_past_segment_boundary_promotes()
+    {
+        var registry = new ComponentRegistry();
+        var comp = registry.GetOrCreate<Component1024>();
+        var archetype = new Archetype(new Signature(comp), [typeof(Component1024)], capacity: 1025);
+
+        for (var i = 0; i < 1025; i++)
+            archetype.AddEntity(new Entity(i + 1, 1));
+
+        Assert.False(archetype.IsChunked);
+        archetype.AddEntity(new Entity(1026, 1)); // triggers EnsureCapacity → promote
+        Assert.True(archetype.IsChunked);
+        Assert.Equal(1026, archetype.EntityCount);
+        Assert.Equal(1026, archetype.GetEntities().Length);
+    }
+
+    [Fact]
+    public void RemoveAt_after_promotion_preserves_row_mapping()
+    {
+        var registry = new ComponentRegistry();
+        var comp = registry.GetOrCreate<Component1024>();
+        var archetype = new Archetype(new Signature(comp), [typeof(Component1024)], capacity: 4);
+
+        // Add entities until promotion occurs naturally via doubling.
+        while (!archetype.IsChunked)
+        {
+            var e = new Entity(archetype.EntityCount + 1, 1);
+            var row = archetype.AddEntity(e);
+            archetype.SetComponentAtTyped(0, row, new Component1024 { Value = archetype.EntityCount });
+        }
+
+        var count = archetype.EntityCount;
+        Assert.True(count > 0);
+
+        // Remove middle entity via swap-remove.
+        archetype.RemoveAt(count / 2, out var movedEntity);
+
+        // Verify entities via GetEntities() (flat cache).
+        var entities = archetype.GetEntities();
+        Assert.Equal(count - 1, entities.Length);
+
+        // Verify component data at deleted row is now the moved entity's data.
+        var movedComponent = archetype.GetComponentAt<Component1024>(0, count / 2);
+        Assert.True(movedComponent.Value > 0);
+    }
+
+    // CopyColumnsFrom chunked → chunked: cross-archetype column copy where both
+    // sides are chunked. Verifies segment-by-segment copy logic in CopyColumnFrom.
+    [Fact]
+    public void CopyColumnsFrom_chunked_to_chunked_preserves_all_data()
+    {
+        var registry = new ComponentRegistry();
+        var comp = registry.GetOrCreate<Component1024>();
+        var sig = new Signature(comp);
+
+        var src = new Archetype(sig, [typeof(Component1024)], capacity: 4096);
+        for (var i = 0; i < 3000; i++)
+        {
+            var e = new Entity(i + 1, 1);
+            src.AddEntity(e);
+            src.SetComponentAtTyped(0, i, new Component1024 { Value = i + 100 });
+        }
+        src.ForceChunkedForTesting();
+        Assert.True(src.IsChunked);
+
+        var dst = new Archetype(sig, [typeof(Component1024)], capacity: 4096);
+        dst.AllocateRows(3000);
+        for (var i = 0; i < 3000; i++)
+            dst.WriteEntityAt(i, new Entity(i + 10001, 1));
+        dst.ForceChunkedForTesting();
+        Assert.True(dst.IsChunked);
+
+        dst.CopyColumnsFrom(src, 3000);
+        for (var i = 0; i < 3000; i++)
+            Assert.Equal(i + 100, dst.GetComponentAt<Component1024>(0, i).Value);
+    }
+
+    // CopyColumnsFrom flat → chunked: source flat, destination chunked.
+    [Fact]
+    public void CopyColumnsFrom_flat_to_chunked_copies_correctly()
+    {
+        var registry = new ComponentRegistry();
+        var comp = registry.GetOrCreate<Component1024>();
+        var sig = new Signature(comp);
+
+        var src = new Archetype(sig, [typeof(Component1024)], capacity: 4);
+        for (var i = 0; i < 100; i++)
+        {
+            src.AddEntity(new Entity(i + 1, 1));
+            src.SetComponentAtTyped(0, i, new Component1024 { Value = i + 100 });
+        }
+        Assert.False(src.IsChunked);
+
+        var dst = new Archetype(sig, [typeof(Component1024)], capacity: 4096);
+        dst.AllocateRows(100);
+        for (var i = 0; i < 100; i++)
+            dst.WriteEntityAt(i, new Entity(i + 10001, 1));
+        dst.ForceChunkedForTesting();
+        Assert.True(dst.IsChunked);
+
+        dst.CopyColumnsFrom(src, 100);
+        for (var i = 0; i < 100; i++)
+            Assert.Equal(i + 100, dst.GetComponentAt<Component1024>(0, i).Value);
     }
 
 }

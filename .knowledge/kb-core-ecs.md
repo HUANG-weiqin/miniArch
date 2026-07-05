@@ -21,7 +21,7 @@ updated: 2026-07-04 (AssertNotDisposed + AssertAlive rename; clarify DEBUG-only 
   - **World partial 文件族（7 个）**：详见 `kb-architecture-review.md` §10
   - **Archetype partial 文件族（3 个）**：
     - `Archetype.cs`：字段声明、构造函数、metadata 属性（EntityCount/Capacity/ComponentTypes）、edge cache（add/remove destination）、component index resolution
-    - `Archetype.Storage.cs`：存储操作（EnsureCapacity、AddEntity、ReserveRows、RemoveAt、component read/write span、CopySharedComponentsFrom、CreateStorage、CopySmall）
+    - `Archetype.Storage.cs`：存储操作（EnsureCapacity、AddEntity、AllocateRows、WriteEntityAt、RemoveAt、component read/write span、CopySharedComponentsFrom、CreateStorage、CopySmall）
     - `Archetype.TestHooks.cs`：`*ForTesting` 内部方法（ForceChunked、AddSegment），与生产职责分离
   - `ChunkView.cs`：**public** readonly struct 视图，直接包裹 Archetype（给用户 batch API 用）
   - `Signature.cs`：组件集合键（排序 `ComponentType[]` + `ComponentMask` 512-bit bitmask）

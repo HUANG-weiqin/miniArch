@@ -31,7 +31,6 @@ internal sealed partial class Archetype
     private int _capacity;
 
     // --- Storage (chunked mode) ---
-    private bool _isChunked;
     private Segment[] _segments = null!;
     private int _segmentCount;
 
@@ -85,12 +84,12 @@ internal sealed partial class Archetype
     /// <summary>
     /// Whether this archetype has switched to chunked (segmented) storage.
     /// </summary>
-    internal bool IsChunked => _isChunked;
+    internal bool IsChunked => _segments is not null;
 
     /// <summary>
     /// Gets the current physical capacity (maximum entities before resize).
     /// </summary>
-    internal int Capacity => _isChunked ? ComputeChunkedCapacity() : _capacity;
+    internal int Capacity => IsChunked ? ComputeChunkedCapacity() : _capacity;
 
     private int ComputeChunkedCapacity()
     {

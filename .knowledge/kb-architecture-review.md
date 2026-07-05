@@ -2,7 +2,7 @@
 title: Architecture Mechanistic Review
 module: MiniArch.Core
 description: Mechanistic insight of the entire miniArch ECS library — one-line truths, subsystem breakdown, data flows, known issues, and design tensions. Links to per-subsystem kb pages for depth.
-updated: 2026-07-03 (GetFirst<T> → GetSingleton<T>；修正 StructuralChange 陈旧的 upsert 描述)
+updated: 2026-07-05 (IsChunked derived from _segments, AddEntity=AllocateRows+WriteEntityAt, ConvertToChunked unified copy)
 ---
 # Architecture Mechanistic Review
 
@@ -53,8 +53,11 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - 读取/写入：`Unsafe.As<byte, T>(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), columnOffset + row * elementSize))`
 - `_componentIdToColumnIndex: int[]`：component id → 列索引 direct map
 - **双存储模式**（详见 `kb-chunk-storage.md`）：
-  - 非 chunked：单 `_data: byte[]` + `_entities: Entity[]`，doubling 直到 `_capacity * 2 > _segmentEntityCapacity`
+  - 非 chunked：单 `_data: byte[]` + `_entities: Entity[]`，doubling 直到 `_capacity * 2 > _segmentCapacity`
   - chunked：`Segment[] _segments`，每 segment 固定容量（目标 ~2 MB/segment），单向晋升不回退
+  - `IsChunked` 是派生属性：`=> _segments is not null`（不再存 `_isChunked` 字段）
+  - `AddEntity = AllocateRows(1) + WriteEntityAt`：分配/写入分离，消除 `EnsureCapacity` 切换模式导致的二次检测 bug 类
+  - `ConvertToChunked` 统一拷贝路径（原零拷贝 fast path 已删）：总是分配标准 Segment，逐段拷贝实体和列数据
 - `ChunkView`（public readonly struct）对用户屏蔽底层模式差异，`ForEachChunkParallel` 也透明
 - 代码位置：`Archetype.cs`（字段/metadata）+ `Archetype.Storage.cs`（存储操作）+ `Archetype.TestHooks.cs`（`*ForTesting` 内部方法，与生产职责分离）
 

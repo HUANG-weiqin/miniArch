@@ -134,7 +134,7 @@ HeroPipeline 回归测试涨幅：
 
 - **`MaterializeFromBatchBuffer` 合并 `HasBit` + `SetBit`**（2026-07-02）：小 id 组件去重原先对同一个 component id 先跑一遍 8-lane branch ladder 做 `HasBit`，未命中再跑一遍 ladder 做 `SetBit`。改为 `TrySetBit`，一次定位 lane 完成 test-and-set。对 create-heavy batch materialize 路径最直接。
 
-- **`EnsureCapacity` 在 `Archetype.AddEntity` 中有副作用陷阱**（2026-07-02 发现）：`AddEntity` 非 chunked 路径调用 `EnsureCapacity(_count + 1)`，该方法在 `_capacity * 2 > _segmentCapacity` 时会 `ConvertToChunked()`，将 `_entities = null!` 并设置 `_isChunked = true`。后续如果直接访问 `_entities[row]` 会 NRE。旧代码在 `EnsureCapacity` 之后用 `if (!_isChunked)` 守卫，看似"冗余"的 `else` 分支（`return AddEntityChunked(entity)`）实际是 conversion 后的安全 fallback。**教训：在有副作用的调用之后，不能假设类型状态不变。**
+- **`EnsureCapacity` 在 `Archetype.AddEntity` 中的副作用已消除**（2026-07-02 发现，2026-07-05 修复）：旧 `AddEntity` 非 chunked 路径调用 `EnsureCapacity(_count + 1)`，该方法在 `_capacity * 2 > _segmentCapacity` 时会 `ConvertToChunked()`，将 `_entities = null!` 并设置模式切换。旧代码在 `EnsureCapacity` 之后用 `if (!_isChunked)` 守卫，看似"冗余"的 `else` 分支实际是 conversion 后的安全 fallback。**修复**：`AddEntity` 重构为 `AllocateRows(1) + WriteEntityAt`，每个方法各自单次读 `IsChunked`（现为 `_segments is not null` 派生属性），EnsureCapacity 的模式切换副作用被封装在 AllocateRows 内部，调用方不再需要重检。**教训保留：在有副作用的调用之后，不能假设类型状态不变。**
 
 ## CommandStream vs Friflo: Record 阶段瓶颈分析（2026-06-13，历史——移除 CommandBuffer 的依据）
 
