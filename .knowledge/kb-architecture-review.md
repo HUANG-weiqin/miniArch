@@ -114,11 +114,16 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - 代码位置：`HierarchyTable.cs`
 
 ### 8. CommandStream（recorder 层）
-- per-component-type typed store（`ComponentStore<T>`：flat `T[]` + `Entity[]` + `byte[] kinds`）append-only 录制
+- **2026-07-05 拆分为两个公开 sealed 类型**：
+  - `CommandStream`：单线程默认，所有 mutator 直接调用，无锁、无非虚拟化开销
+  - `ParallelCommandStream`：mutator 在 `_storeCreateLock` 内，可多线程并发录制
+  - 共享层是 `public abstract CommandStreamCore`，承载所有 emit/submit/snapshot/replay/async 逻辑
+  - 9 个 mutator（Create/Track/Add/Set/Remove/Destroy/AddChild/RemoveChild/Clone）在 base class 里是 `public` 非虚拟方法（默认 throw `NotSupportedException`），子类用 `public new` 隐藏——**不**用 `abstract`+`override`，因为 .NET 8 JIT 无法可靠 devirtualize generic virtual 方法（详见 `kb-design-rationale.md` §3.9 + `kb-code-review-findings.md` CS9）
+- per-component-type typed store（`ComponentStore<T>`：main `T[]` + ThreadLocal buffer）append-only 录制
 - created entity 走 pending batch（per-batch 单链表 `_batchHeads` → `BatchedComponent.Next`），materialize 时稳定排序+去重达到 last-wins
 - `Submit()` 直接写 typed value 到 World（零序列化）；`Snapshot()` 编译成 `FrameDelta`；`SubmitAndSnapshotAsync()` 双 buffer 池（`_spareFrozen` ↔ `_pendingFrozen`）稳态零分配
 - `DeferredEntities` flag：`false`（默认）`Create()` 立即分配 real id；`true` 返回 placeholder（多 host lockstep）
-- 历史曾并存 per-entity 去重的 `CommandBuffer`，2026-06-26 按 YAGNI 移除——详见 `kb-command-stream.md`
+- 历史：曾并存 per-entity 去重的 `CommandBuffer`（2026-06-26 YAGNI 删除）；曾是单 sealed class + `_parallelMode` flag（2026-07-05 拆分）
 
 ### 9. FrameDelta（wire format 层）
 - 单一 `byte[] _buffer` + 时序排列的 op：`[1B tag][varint entityId][varint version][payload...]`

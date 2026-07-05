@@ -1,41 +1,82 @@
 ---
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
-description: CommandStream typed-store append-only recorder, compatible with FrameDelta. The per-entity deduplicating CommandBuffer was removed (YAGNI) — CommandStream is now the sole recorder.
-updated: 2026-07-04 (删除 FrameDelta.Concat)
+description: CommandStream/ParallelCommandStream typed-store append-only recorder, compatible with FrameDelta. The per-entity deduplicating CommandBuffer was removed (YAGNI) — CommandStream is now the sole recorder.
+updated: 2026-07-05 (拆分为 SingleThread + Parallel 两个 sealed 子类 + CommandStreamCore base)
 ---
 # Command Stream Runtime
 
 ## 这个模块是干什么的
 
-- 提供 `CommandStream` 录制层，把结构变化和 hierarchy 变化先记成延迟命令
+- 提供录制层，把结构变化和 hierarchy 变化先记成延迟命令
+- **两个公开类型**：
+  - `CommandStream`（单线程默认）：所有 mutator 直接调用，无锁、无非虚拟化开销
+  - `ParallelCommandStream`：所有 mutator 在 `_storeCreateLock` 内，可多线程并发录制
+- 共享层是 `public abstract class CommandStreamCore`，承载所有 emit/submit/snapshot/replay/async/ComponentStore/FrozenState 等共享逻辑
 - append-only：`Add/Set/Remove` 按组件类型分片记录 typed value，不做录制期去重；同帧冲突命令的净效果由调用方负责
 - `Submit()` 消费当前批次后自动清空，允许下一帧复用同一实例
-- 约束并发只覆盖 recording，不把 `World` 变成并发写安全对象
 - **帧同步端到端指南** → 见 `kb-lockstep-playbook.md`
 - **DeferredEntities flag（placeholder vs real-id 模式）** → 见 `kb-deferred-create-design.md`
-- 历史：曾并存 `CommandBuffer`（per-entity 录制期去重的安全默认）。2026-06-26 按 YAGNI 移除——实测无真实消费者依赖去重语义，CommandStream 在所有工作负载上更快（Movement +37%、Attack +33%），双实现是冗余维护包袱。
+- 历史：曾并存 `CommandBuffer`（per-entity 录制期去重的安全默认）。2026-06-26 按 YAGNI 移除。2026-07-05 进一步把单线程/并行两套路径从同一 sealed class + `_parallelMode` flag 拆分为两个独立 sealed 类型。
 
 ## 架构
 
 - 核心组成：
-  - `src/MiniArch/Core/CommandStream.cs`：append-only recording API + `Submit()` + `Snapshot()` + `Clone()`
+  - `src/MiniArch/Core/CommandStreamCore.cs`：`public abstract` base，所有共享字段、emit/submit/snapshot/replay 逻辑、ComponentStore/FrozenState/HierarchyIntent 等嵌套类型
+  - `src/MiniArch/Core/CommandStream.cs`：`public sealed`，单线程默认。9 个 mutator 全是 `public new`（非虚拟）
+  - `src/MiniArch/Core/ParallelCommandStream.cs`：`public sealed`，并行实现。9 个 mutator 全是 `public new`，lock 包裹共享 helper
   - `src/MiniArch/Core/FrameDelta.cs`：帧快照 IR，可保留并重放到同步 world
   - `src/MiniArch/Core/World.cs`（+ partial 文件）：`ReserveDeferredEntity`、`ReleaseReservedEntity`、`Replay(FrameDelta)`
 - 数据流 / 控制流：
-  - 工作线程通过 `CommandStream` 只记录命令；`Create()` 在 `DeferredEntities=false`（默认）时立刻从 world 预留真实 `Entity`，`DeferredEntities=true` 时返回 placeholder `Entity(-1, seq)`
+  - 工作线程通过具体子类只记录命令；`Create()` 在 `DeferredEntities=false`（默认）时立刻从 world 预留真实 `Entity`，`DeferredEntities=true` 时返回 placeholder `Entity(-1, seq)`
   - recording 完成后可选：`Submit()`（直接执行到 world）→ `Snapshot()`（生成自包含 `FrameDelta`）→ `SubmitAndSnapshotAsync()`（并行执行 Submit + BuildDelta）
   - `Clone()`：深拷贝源实体及子树到 pending batch，用于 snapshot/replay 场景
   - `Add/Set` 进入按组件类型分组的 typed store；`Remove/Destroy` 进入 structural log；created entity 的组件录制期分流到 created side table（per-batch 单链表），提交时一次性 materialize；`Snapshot()` 从 typed stores + side table/log 生成 `FrameDelta`
 
 ## 关键约束
 
+- **9 个 mutator（Create/Track/Add/Set/Remove/Destroy/AddChild/RemoveChild/Clone）在 `CommandStreamCore` 里是 `public` 非虚拟方法，默认 throw `NotSupportedException`**。子类用 `public new` 隐藏，提供真实实现。
+- **调用方契约**：必须以 `CommandStream` 或 `ParallelCommandStream`（sealed 子类）作为引用类型。`FrameContext.Commands` / `MiniArchRuntime.Recorder` / 所有 system 代码已经是这种形态。**不要把 stream 引用升级为 `CommandStreamCore`**——会调到 throw stub。
+- `CommandStreamCore` 内部递归路径（如 `CloneChildrenRecursive`）必须直接调 `*Core` helper（`CreateCore`/`AddChildCore`），不能调公共 mutator（会调到 throw stub）。
 - `Create()` 在 `DeferredEntities=false` 时使用 `World.ReserveDeferredEntity()` 分配 real id；`DeferredEntities=true` 时返回 placeholder，不碰 World id allocator。
 - 组件数据按 typed value 记录，`Submit()` 直接写 typed value，`Snapshot()` 再转成 `FrameDelta` 所需 raw bytes。
 - component `Add/Set` 按类型批处理，不承诺与 `Remove/Destroy` 的严格全局追加顺序；同帧冲突命令的净效果由调用方负责。
 - created entity 组件在 record 时分流，避免提交时 O(created × commands) 扫描整条日志。
 - created materialize 使用小型 archetype cache，避免每个 spawn 反复分配 signature/type array。
 - `SubmitAndSnapshotAsync` 使用 FrozenState 双缓冲池（`_spareFrozen`/`_pendingFrozen`），稳态零分配。
+
+## 决策
+
+### 为什么用 `new` 而不是 `override`（关键性能决策）
+
+**最初实现**用 `public abstract` + `public override`，结果在 HeroComing.Perf 上 regression ~10%（Movement 1917→1737，Attack 1205→1063）。
+
+**根因**：.NET 8 JIT **不**对 generic virtual 方法（`Add<T>`/`Set<T>`/`Remove<T>`）做可靠的 devirtualize，即使 receiver 静态类型是 sealed 子类。每次调用都付虚表查证 + 阻止 inline。详见 `kb-code-review-findings.md` 的 CS9。
+
+**修复**：把 9 个 mutator 改为 base class 提供默认 throw 实现 + 子类 `public new` 隐藏。`new` 方法是完全非虚拟的，JIT 视为 direct call，可以 inline。修复后性能反超原版（Movement 2065 / Attack 1300，比 `_parallelMode` flag 版本快 7-8%）。
+
+**副作用**：base class 的 throw stub 看起来"不优雅"，但诚实表达"这是 type slot 不是真实 API"。
+
+### 为什么两个 sealed 子类而不是 `_parallelMode` flag
+
+原版单 sealed class + `_parallelMode` volatile bool：每个 mutator 都 `if (_parallelMode)` 分支判断，CPU 分支预测器要 track，且语义"录制中途切模式"使代码路径复杂。
+
+拆分后：
+- 单线程路径无锁、无分支判断、可 inline
+- 并行路径无 `if` 判断、直接进 lock
+- 调用方在构造时选类型，模式不可运行时切换（YAGNI——实际无消费者需要中途切换）
+
+### 并行 placeholder 录制仍是双锁（待优化）
+
+`ParallelCommandStream.Add<T>(placeholder, ...)` 当前路径：
+1. `CanRecordParallelComponentCommand(entity)`：进锁检查 `TryGetPendingBatch`
+2. `GetOrCreateStoreParallel<T>().AppendConcurrent(...)`：内部 ThreadLocal 写
+
+placeholder 每次 Add 双锁，是已知优化点。**未做**——`seq` 线程唯一的属性可让 pending-batch 用 Interlocked 实现真正无锁写入。详见本页"待优化"段。
+
+## 待优化
+
+- **placeholder 并行写入优化**（v2，未实施）：让 `ParallelCommandStream.Add/Set/Remove` 在 placeholder 路径下走 pending-batch（与单线程一致），用 Interlocked 处理全局 counter。预期每 placeholder Add 节省 ~90ns。前提：ECS 天然保证同一 entity 不被多线程并发写。
 
 ## 数据模型
 
