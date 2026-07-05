@@ -626,6 +626,21 @@ internal sealed partial class Archetype
     internal unsafe void WriteComponentRaw(int columnIndex, int row, byte* source)
         => CopyComponentRaw(columnIndex, row, source, read: false);
 
+    /// <summary>
+    /// Returns a read-only span over the raw bytes of a single component cell.
+    /// Zero-allocation; the span points directly into the archetype's backing store.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal ReadOnlySpan<byte> GetComponentBytes(int columnIndex, int row)
+    {
+        var elemSize = _elementSizes[columnIndex];
+        if (!IsChunked)
+            return _data.AsSpan(_columnByteOffsets[columnIndex] + row * elemSize, elemSize);
+        var (segIdx, localRow) = GetSegmentAndLocal(row);
+        return _segments[segIdx].Data.AsSpan(
+            _columnByteOffsets[columnIndex] + localRow * elemSize, elemSize);
+    }
+
     private unsafe void CopyComponentRaw(int columnIndex, int row, byte* external, bool read)
     {
         ref var storage = ref GetColumnRef(this, columnIndex, row, _elementSizes[columnIndex]);
