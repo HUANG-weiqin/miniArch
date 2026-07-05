@@ -53,81 +53,9 @@ public sealed class FrameDelta
     /// </summary>
     public static readonly int MaxOpsPerFrame = 1_000_000;
 
-    // ── Wire format header ─────────────────────────────────────────────
-    // Non-empty deltas carry a 4-byte header at the start of _buffer:
-    //   [0-1] Magic "MF" (0x4D46) — format identification.
-    //   [2]   Flags: bit 7 = endianness (1=little, 0=big);
-    //         bits 0-6 = format version (currently 2).
-    //   [3]   Reserved (0x00).
-    // Op data starts immediately after the header (offset 4).
-    // Empty deltas (_opCount == 0) have _length 0 and _buffer may be empty;
-    // AsSpan() returns an empty span with no header.
-    //
-    // Buffers where byte[0] is not 'M' (i.e. legacy format starting with
-    // a DeltaOpKind tag) are detected and read without header offset.
-    // All newly produced non-empty deltas always include the header;
-    // empty deltas are an empty span.
-    internal const int HeaderSize = 4;
-    internal const byte FormatVersion = 0x02;
-
     internal byte[] _buffer = Array.Empty<byte>();
     internal int _length;
     internal int _opCount;
-
-    /// <summary>
-    /// Returns the offset at which op data starts (HeaderSize for new format,
-    /// 0 for legacy format without header).
-    /// </summary>
-    internal int DataStart => _length >= 2 && _buffer[0] == 'M' && _buffer[1] == 'F' ? HeaderSize : 0;
-
-    /// <summary>
-    /// Writes the 4-byte format header into <see cref="_buffer"/> at offset 0
-    /// and sets <see cref="_length"/> to <see cref="HeaderSize"/>. Called once
-    /// before the first op is written.
-    /// </summary>
-    private void EnsureHeader()
-    {
-        if (_length >= HeaderSize)
-            return;
-        if (_buffer.Length < HeaderSize)
-            Array.Resize(ref _buffer, HeaderSize);
-        // Magic: "MF"
-        _buffer[0] = (byte)'M';
-        _buffer[1] = (byte)'F';
-        // Flags: version | (LE ? 0x80 : 0)
-        _buffer[2] = (byte)(FormatVersion | (BitConverter.IsLittleEndian ? 0x80 : 0));
-        _buffer[3] = 0;
-        _length = HeaderSize;
-    }
-
-    /// <summary>
-    /// Validates the header bytes at the start of a received delta. Throws on
-    /// magic mismatch, unsupported version, or endianness mismatch.
-    /// </summary>
-    private static void ValidateHeader(ReadOnlySpan<byte> buf)
-    {
-        if (buf.Length < 2 || buf[0] != 'M' || buf[1] != 'F')
-            return; // legacy format — skip validation
-
-        if (buf.Length < HeaderSize)
-            throw new InvalidOperationException(
-                "FrameDelta header truncated: expected 4 bytes.");
-
-        var flags = buf[2];
-        var version = flags & 0x7F;
-        if (version > FormatVersion)
-            throw new InvalidOperationException(
-                $"FrameDelta format version {version} is newer than the current version {FormatVersion}. " +
-                "Update the MiniArch library to read this delta.");
-
-        var isLittleEndian = (flags & 0x80) != 0;
-        if (isLittleEndian != BitConverter.IsLittleEndian)
-            throw new InvalidOperationException(
-                $"FrameDelta endianness mismatch: producer={(isLittleEndian ? "LE" : "BE")}, " +
-                $"consumer={(BitConverter.IsLittleEndian ? "LE" : "BE")}. " +
-                "Cross-endian replay is not supported because component data is encoded " +
-                "in the producer's native memory layout.");
-    }
 
     /// <summary>
     /// Gets the total number of operations in this delta.
@@ -177,7 +105,6 @@ public sealed class FrameDelta
         var delta = new FrameDelta();
         delta._buffer = wire.ToArray();
         delta._length = wire.Length;
-        ValidateHeader(wire);
 
         var decoder = delta.GetDecoder();
         while (decoder.MoveNext())
@@ -381,14 +308,13 @@ public sealed class FrameDelta
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void WriteTag(DeltaOpKind kind)
     {
-        EnsureHeader();
         var pos = _length;
         Grow(1);
         _buffer[pos] = (byte)kind;
         _length = pos + 1;
     }
 
-    // ── Entity Id encoding (v2+) ───────────────────────────────────
+    // ── Entity Id encoding ──────────────────────────────────────────
     // Entity.Id in the wire format uses a +1 bias so that the common
     // placeholder value -1 encodes as 0 (1 varint byte) instead of the
     // 5 bytes that signed-varint would require. Real ids (>= 0) become
@@ -398,18 +324,18 @@ public sealed class FrameDelta
     // Version is always >= 0 and stored as a plain unsigned varint.
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static uint EncodeEntityIdV2(int id) => (uint)(id + 1);
+    private static uint EncodeEntityId(int id) => (uint)(id + 1);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int DecodeEntityIdV2(uint raw) => raw == 0 ? -1 : (int)(raw - 1);
+    private static int DecodeEntityId(uint raw) => raw == 0 ? -1 : (int)(raw - 1);
 
     /// <summary>
-    /// Writes an entity handle with the current wire format (v2+: Id bias +1).
+    /// Writes an entity handle with Id bias +1 encoding.
     /// </summary>
     private void WriteEntity(Entity e)
     {
         var pos = _length;
-        var encId = EncodeEntityIdV2(e.Id);
+        var encId = EncodeEntityId(e.Id);
         var size = VarintSize((int)encId) + VarintSize(e.Version);
         Grow(size);
         WriteVarintAt(ref pos, (int)encId);
@@ -523,13 +449,13 @@ public sealed class FrameDelta
 
     // ── Decoder API (used by ReplayCore, HasEntity) ────────────────────
 
-    internal OpDecoder GetDecoder() => new(_buffer, _length, DataStart);
+    internal OpDecoder GetDecoder() => new(_buffer, _length, 0);
 
     /// <summary>
     /// Cursor-based decoder that reads operations from the packed buffer.
     /// Call <see cref="MoveNext"/> to advance, then read the current
     /// operation's payload using the type-specific read methods.
-    /// Entity fields are decoded with the v2+ wire format: Id is bias +1
+    /// Entity fields are decoded with the Id bias +1 wire format:
     /// (placeholder -1 → 0, real n → n+1), Version is a plain varint.
     /// </summary>
     internal struct OpDecoder
@@ -569,7 +495,7 @@ public sealed class FrameDelta
                     $"Unknown FrameDelta op kind 0x{opByte:X2} at offset {_pos - 1}. " +
                     "This typically indicates a version mismatch between the delta producer and consumer.");
             Kind = (DeltaOpKind)opByte;
-            var id = DecodeEntityIdV2((uint)ReadVarint());
+            var id = DecodeEntityId((uint)ReadVarint());
             var ver = ReadVarint();
             Entity = new Entity(id, ver);
             return true;
@@ -609,7 +535,7 @@ public sealed class FrameDelta
         /// </summary>
         public Entity ReadExtraEntity()
         {
-            var id = DecodeEntityIdV2((uint)ReadVarint());
+            var id = DecodeEntityId((uint)ReadVarint());
             var ver = ReadVarint();
             return new Entity(id, ver);
         }
