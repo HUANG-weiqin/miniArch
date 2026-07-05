@@ -44,6 +44,12 @@ public sealed partial class World : IDisposable
     // "arbitrary component id range" contract.
     private readonly Dictionary<ComponentMask, Archetype> _archetypeByMask = new();
 
+    // Hash-keyed cache for non-canonical masks (component ids >= 512).
+    // Avoids allocating a Signature object on repeated lookup. Each bucket
+    // holds archetypes whose normalized component set produced the same hash;
+    // collisions are rare but handled via full SequenceEqual.
+    private readonly Dictionary<int, List<Archetype>> _archetypeByHash = new();
+
     // Reused scratch for the Replay pre-scan pass (counts Creates per archetype
     // so we can pre-size archetype storage and avoid per-Create doubling
     // allocations). Cleared at the start of every Replay call; never allocated
@@ -109,6 +115,7 @@ public sealed partial class World : IDisposable
         _disposed = true;
         _archetypes.Clear();
         _archetypeByMask.Clear();
+        _archetypeByHash.Clear();
         _replayCreateCounts.Clear();
         _queryFiltersByDescription.Clear();
         _queries.Clear();
@@ -424,7 +431,7 @@ public sealed partial class World : IDisposable
     // the component count. If any id is >= 512 its bit is dropped from the mask
     // and popcount would be smaller than the actual count, so the mask is not a
     // unique key for that set.
-    private static bool IsMaskCanonical(ComponentMask mask, int componentCount)
+    internal static bool IsMaskCanonical(ComponentMask mask, int componentCount)
     {
         var bitCount = BitOperations.PopCount(mask.B0)
                      + BitOperations.PopCount(mask.B1)
@@ -438,28 +445,104 @@ public sealed partial class World : IDisposable
     }
 
     /// <summary>
-    /// Zero-allocation archetype lookup keyed by ComponentMask. Used by the
-    /// Replay path where components are decoded from a byte buffer and we want
-    /// to avoid constructing a Signature just to look the archetype up.
+    /// Unified archetype resolver. Hides the canonical/non-canonical bifurcation.
     /// </summary>
     /// <remarks>
-    /// <b>Caller contract:</b> <paramref name="types"/> must contain only ids
-    /// &lt; 512 —i.e. the caller must have verified the mask is canonical.
-    /// Violating this would cause two different high-id signatures to collide
-    /// on the same mask and silently return the wrong archetype.
+    /// Canonical masks (all IDs &lt; 512) go through the fast <see cref="_archetypeByMask"/>
+    /// dictionary. Non-canonical masks use a hash-bypass index (<see cref="_archetypeByHash"/>)
+    /// to avoid allocating a <see cref="Signature"/> on repeated lookup.
+    /// <para/>
+    /// The input <paramref name="types"/> span is never modified — the non-canonical
+    /// path copies to a scratch buffer for sorting.
     /// </remarks>
-    internal Archetype GetOrCreateArchetypeByMask(ComponentMask mask, ReadOnlySpan<ComponentType> types)
+    internal Archetype GetOrCreateArchetype(ComponentMask mask, scoped ReadOnlySpan<ComponentType> types)
     {
-        if (_archetypeByMask.TryGetValue(mask, out var archetype))
+        // ── Fast path: canonical mask (all IDs < 512) ──
+        if (IsMaskCanonical(mask, types.Length))
         {
-            return archetype;
+            if (_archetypeByMask.TryGetValue(mask, out var arch))
+                return arch;
+
+            // First-seen canonical: create Signature, populates both caches.
+            return CreateArchetypeCore(types);
         }
 
-        // Miss: build a Signature (one-time alloc per unique component set) and
-        // route through the canonical path, which populates the mask cache.
-        var typesArray = types.ToArray();
-        var signature = new Signature(typesArray);
-        return GetOrCreateArchetype(signature);
+        // ── Non-canonical path: some ID >= 512 (or duplicates) ──
+        return GetOrCreateArchetypeNonCanonical(mask, types);
+    }
+
+    /// <summary>
+    /// Handles non-canonical archetype resolution with zero-allocation on
+    /// repeated lookup via a hash-bypass index.
+    /// </summary>
+    private Archetype GetOrCreateArchetypeNonCanonical(
+        ComponentMask mask, ReadOnlySpan<ComponentType> types)
+    {
+        // Copy to scratch and normalize (sort + dedup).
+        // The caller's span is never modified.
+        ComponentType[]? rented = null;
+        Span<ComponentType> scratch = types.Length <= 64
+            ? stackalloc ComponentType[types.Length]
+            : (rented = ArrayPool<ComponentType>.Shared.Rent(types.Length)).AsSpan(0, types.Length);
+        try
+        {
+            types.CopyTo(scratch);
+            var uniqueCount = SpanSorting.SortAndDeduplicate(scratch);
+            var normalized = scratch[..uniqueCount];
+
+            // After removing duplicates, the mask may now be canonical.
+            // Defensive — CommandStream/Replay inputs are already deduplicated,
+            // but the guarantee is cheap to uphold.
+            if (IsMaskCanonical(mask, uniqueCount))
+            {
+                if (_archetypeByMask.TryGetValue(mask, out var arch))
+                    return arch;
+                return CreateArchetypeCore(normalized);
+            }
+
+            // True non-canonical: hash-bypass lookup (zero alloc on hit).
+            var hash = SpanSorting.CombineHashCodes(normalized);
+            if (_archetypeByHash.TryGetValue(hash, out var bucket))
+            {
+                foreach (var candidate in bucket)
+                {
+                    if (candidate.Signature.AsSpan().SequenceEqual(normalized))
+                        return candidate;
+                }
+            }
+
+            // Miss: create Signature (one-time allocation per unique set).
+            var array = normalized.ToArray();
+            var signature = Signature.CreateNormalized(array);
+            var archetype = GetOrCreateArchetype(signature);
+
+            // Add to hash cache.
+            if (bucket is null)
+            {
+                bucket = new List<Archetype>(1);
+                _archetypeByHash[hash] = bucket;
+            }
+            bucket.Add(archetype);
+
+            return archetype;
+        }
+        finally
+        {
+            if (rented is not null)
+                ArrayPool<ComponentType>.Shared.Return(rented);
+        }
+    }
+
+    /// <summary>
+    /// Creates an Archetype from an unsorted, potentially-duplicated span.
+    /// </summary>
+    private Archetype CreateArchetypeCore(ReadOnlySpan<ComponentType> types)
+    {
+        if (types.Length == 0)
+            return GetOrCreateArchetype(Signature.Empty);
+
+        var array = types.ToArray();
+        return GetOrCreateArchetype(new Signature(array));
     }
 
     private static Type[] ResolveComponentTypes(Signature signature)
@@ -889,21 +972,7 @@ public sealed partial class World : IDisposable
             decoder.ReadBytes(size);
         }
 
-        Archetype archetype;
-        if (builder.BitsSet == compCount)
-        {
-            // Canonical mask: every id < 512, safe to use the mask cache.
-            archetype = GetOrCreateArchetypeByMask(builder.ToMask(), types);
-        }
-        else
-        {
-            // Non-canonical mask (one or more ids >= 512): cannot use the mask
-            // cache without colliding. Fall back to the Signature-keyed dictionary
-            // so high-id archetypes are looked up correctly. This allocates once
-            // per unique component set (amortized zero across replays) and is the
-            // same path the structural-change APIs already use.
-            archetype = GetOrCreateArchetype(new Signature(types.ToArray()));
-        }
+        var archetype = GetOrCreateArchetype(builder.ToMask(), types[..compCount]);
 
         // Write components into archetype columns, resolving embedded Entity
         // refs on the fly. We cannot mutate the delta buffer because the same
@@ -1148,6 +1217,7 @@ public sealed partial class World : IDisposable
 
         _archetypes.Clear();
         _archetypeByMask.Clear();
+        _archetypeByHash.Clear();
         _replayCreateCounts.Clear();
         _archetypeSnapshot = Array.Empty<Archetype>();
         _queryFiltersByDescription.Clear();

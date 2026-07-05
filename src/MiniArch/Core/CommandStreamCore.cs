@@ -774,7 +774,6 @@ public abstract class CommandStreamCore
         {
             ulong b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0, b7 = 0;
             var idx = 0;
-            var hasLargeIds = false;
             var current = headIdx;
             while (current >= 0)
             {
@@ -793,7 +792,6 @@ public abstract class CommandStreamCore
                     }
                     else
                     {
-                        hasLargeIds = true;
                         var seen = false;
                         for (var j = 0; j < idx; j++)
                         {
@@ -816,22 +814,8 @@ public abstract class CommandStreamCore
                 return;
             }
 
-            Archetype archetype;
-            if (hasLargeIds)
-            {
-                if (idx > 1)
-                {
-                    SortTypesAndOffsets(typesFromBatch[..idx], offsets[..idx]);
-                    idx = DeduplicateSortedSpans(typesFromBatch[..idx], offsets[..idx]);
-                }
-                var typeArray = typesFromBatch[..idx].ToArray();
-                archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(typeArray));
-            }
-            else
-            {
-                var mask = new ComponentMask(b0, b1, b2, b3, b4, b5, b6, b7);
-                archetype = ResolveArchetypeForMask(mask);
-            }
+            var mask = new ComponentMask(b0, b1, b2, b3, b4, b5, b6, b7);
+            var archetype = ResolveArchetype(mask, typesFromBatch[..idx]);
 
             unsafe
             {
@@ -1219,6 +1203,13 @@ public abstract class CommandStreamCore
 
     // ── Archetype resolution ──────────────────────────────────────────
 
+    /// <summary>
+    /// Resolves an Archetype for a mask+types pair.
+    /// Canonical masks (all IDs &lt; 512) use a small local cache
+    /// (1-slot last + 8-slot LRU) on top of the World-level unified resolver.
+    /// Non-canonical masks bypass the local cache (they are not unique keys
+    /// for the mask alone) and go directly to <see cref="World.GetOrCreateArchetype(ComponentMask, ReadOnlySpan{ComponentType})"/>.
+    /// </summary>
     /// <remarks>
     /// <b>Synchronization note:</b> <c>_maskCache</c>, <c>_lastMask</c>, and
     /// <c>_lastMaskArchetype</c> are intentionally unsynchronized.
@@ -1230,11 +1221,17 @@ public abstract class CommandStreamCore
     /// each worker its own local mask cache + serialize archetype creation,
     /// NOT a lock around this cache.
     /// </remarks>
-    private Archetype ResolveArchetypeForMask(ComponentMask mask)
+    private Archetype ResolveArchetype(ComponentMask mask, scoped ReadOnlySpan<ComponentType> types)
     {
+        // Non-canonical: bypass local cache (mask is not a unique key).
+        if (!World.IsMaskCanonical(mask, types.Length))
+            return _world.GetOrCreateArchetype(mask, types);
+
+        // Zero-component mask: empty signature.
         if (mask.IsZero())
             return _world.GetOrCreateArchetype(Signature.Empty);
 
+        // ── Canonical mask: use local cache ──
         var generation = _world.ArchetypeCacheGeneration;
         if (_maskCacheGeneration != generation)
         {
@@ -1257,8 +1254,8 @@ public abstract class CommandStreamCore
             }
         }
 
-        var types = MaskToTypes(mask);
-        var archetype = _world.GetOrCreateArchetype(Signature.CreateNormalized(types));
+        // Cache miss: use World's unified resolver, then cache locally.
+        var archetype = _world.GetOrCreateArchetype(mask, types);
 
         if (_maskCache.Length == 0)
             _maskCache = new MaskCacheSlot[MaskCacheSize];
@@ -1271,35 +1268,6 @@ public abstract class CommandStreamCore
         _lastMask = mask;
         _lastMaskArchetype = archetype;
         return archetype;
-    }
-
-    private static ComponentType[] MaskToTypes(ComponentMask mask)
-    {
-        var count = BitOperations.PopCount(mask.B0) + BitOperations.PopCount(mask.B1)
-                  + BitOperations.PopCount(mask.B2) + BitOperations.PopCount(mask.B3)
-                  + BitOperations.PopCount(mask.B4) + BitOperations.PopCount(mask.B5)
-                  + BitOperations.PopCount(mask.B6) + BitOperations.PopCount(mask.B7);
-        var types = new ComponentType[count];
-        var idx = 0;
-        CollectBits(mask.B0, 0, types, ref idx);
-        CollectBits(mask.B1, 64, types, ref idx);
-        CollectBits(mask.B2, 128, types, ref idx);
-        CollectBits(mask.B3, 192, types, ref idx);
-        CollectBits(mask.B4, 256, types, ref idx);
-        CollectBits(mask.B5, 320, types, ref idx);
-        CollectBits(mask.B6, 384, types, ref idx);
-        CollectBits(mask.B7, 448, types, ref idx);
-        return types;
-    }
-
-    private static void CollectBits(ulong bits, int baseValue, ComponentType[] types, ref int idx)
-    {
-        while (bits != 0)
-        {
-            var tz = BitOperations.TrailingZeroCount(bits);
-            types[idx++] = new ComponentType(baseValue + tz);
-            bits &= bits - 1;
-        }
     }
 
     // ── Bit helpers ───────────────────────────────────────────────────
@@ -1395,44 +1363,6 @@ public abstract class CommandStreamCore
             ArrayPool<Entity>.Shared.Return(stack);
             ArrayPool<Entity>.Shared.Return(cloneStack);
         }
-    }
-
-    // ── Sorting / dedup ───────────────────────────────────────────────
-
-    private static void SortTypesAndOffsets(Span<ComponentType> types, Span<int> offsets)
-    {
-        for (var i = 1; i < types.Length; i++)
-        {
-            var keyType = types[i];
-            var keyOffset = offsets[i];
-            var j = i - 1;
-            while (j >= 0 && types[j].Value > keyType.Value)
-            {
-                types[j + 1] = types[j];
-                offsets[j + 1] = offsets[j];
-                j--;
-            }
-            types[j + 1] = keyType;
-            offsets[j + 1] = keyOffset;
-        }
-    }
-
-    private static int DeduplicateSortedSpans(Span<ComponentType> types, Span<int> offsets)
-    {
-        var writeIdx = 0;
-        for (var readIdx = 0; readIdx < types.Length; readIdx++)
-        {
-            if (writeIdx == 0 || types[readIdx] != types[writeIdx - 1])
-            {
-                if (writeIdx != readIdx)
-                {
-                    types[writeIdx] = types[readIdx];
-                    offsets[writeIdx] = offsets[readIdx];
-                }
-                writeIdx++;
-            }
-        }
-        return writeIdx;
     }
 
     private static int SortAndDeduplicateComponents(Span<RawComponentValue> comps)

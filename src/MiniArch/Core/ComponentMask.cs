@@ -49,7 +49,7 @@ internal readonly struct ComponentMask : IEquatable<ComponentMask>
     /// FNV-1a hash over all eight lanes.
     /// Deterministic across runtimes and .NET versions. Used both for
     /// dictionary lookups and for the mask-cache replacement slot index
-    /// in <see cref="MiniArch.Core.CommandStream.ResolveArchetypeForMask"/>.
+    /// in <see cref="MiniArch.Core.CommandStreamCore.ResolveArchetype"/>.
     /// </summary>
     public override int GetHashCode()
     {
