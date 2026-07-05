@@ -2249,4 +2249,99 @@ public sealed class ArchetypeTests
             Assert.Equal(expected.BigVal, archetype.GetComponentAt<Component1024>(1, i).Value);
         }
     }
+
+    // ──────────────────────────────────────────────
+    //  CopyComponent 4-mode combos
+    // ──────────────────────────────────────────────
+    // These test GetColumnRef correctness for all src×dst storage mode
+    // combinations by calling CopySharedComponentsFrom (which calls CopyComponent).
+
+    [Fact]
+    public void CopyComponent_flat_src_flat_dst()
+    {
+        var registry = new ComponentRegistry();
+        var position = registry.GetOrCreate<Position>();
+        var sig = new Signature(position);
+        var types = new[] { typeof(Position) };
+
+        var src = new Archetype(sig, types, capacity: 8);
+        var dst = new Archetype(sig, types, capacity: 8);
+
+        var srcRow = src.AddEntity(new Entity(1, 1));
+        src.SetComponentAtTyped(0, srcRow, new Position(10, 20));
+
+        var dstRow = dst.AddEntity(new Entity(2, 1));
+        dst.CopySharedComponentsFrom(src, srcRow, dstRow);
+
+        Assert.False(src.IsChunked);
+        Assert.False(dst.IsChunked);
+        Assert.Equal(new Position(10, 20), dst.GetComponentAt<Position>(0, dstRow));
+    }
+
+    [Fact]
+    public void CopyComponent_chunked_src_flat_dst()
+    {
+        var registry = new ComponentRegistry();
+        var position = registry.GetOrCreate<Position>();
+        var sig = new Signature(position);
+        var types = new[] { typeof(Position) };
+
+        var src = new Archetype(sig, types, capacity: 4);
+        src.ForceChunkedForTesting();
+        var srcRow = src.AddEntity(new Entity(1, 1));
+        src.SetComponentAtTyped(0, srcRow, new Position(10, 20));
+
+        var dst = new Archetype(sig, types, capacity: 8);
+        var dstRow = dst.AddEntity(new Entity(2, 1));
+        dst.CopySharedComponentsFrom(src, srcRow, dstRow);
+
+        Assert.True(src.IsChunked);
+        Assert.False(dst.IsChunked);
+        Assert.Equal(new Position(10, 20), dst.GetComponentAt<Position>(0, dstRow));
+    }
+
+    [Fact]
+    public void CopyComponent_flat_src_chunked_dst()
+    {
+        var registry = new ComponentRegistry();
+        var position = registry.GetOrCreate<Position>();
+        var sig = new Signature(position);
+        var types = new[] { typeof(Position) };
+
+        var src = new Archetype(sig, types, capacity: 8);
+        var srcRow = src.AddEntity(new Entity(1, 1));
+        src.SetComponentAtTyped(0, srcRow, new Position(30, 40));
+
+        var dst = new Archetype(sig, types, capacity: 4);
+        dst.ForceChunkedForTesting();
+        var dstRow = dst.AddEntity(new Entity(2, 1));
+        dst.CopySharedComponentsFrom(src, srcRow, dstRow);
+
+        Assert.False(src.IsChunked);
+        Assert.True(dst.IsChunked);
+        Assert.Equal(new Position(30, 40), dst.GetComponentAt<Position>(0, dstRow));
+    }
+
+    [Fact]
+    public void CopyComponent_chunked_src_chunked_dst()
+    {
+        var registry = new ComponentRegistry();
+        var position = registry.GetOrCreate<Position>();
+        var sig = new Signature(position);
+        var types = new[] { typeof(Position) };
+
+        var src = new Archetype(sig, types, capacity: 4);
+        src.ForceChunkedForTesting();
+        var srcRow = src.AddEntity(new Entity(1, 1));
+        src.SetComponentAtTyped(0, srcRow, new Position(50, 60));
+
+        var dst = new Archetype(sig, types, capacity: 4);
+        dst.ForceChunkedForTesting();
+        var dstRow = dst.AddEntity(new Entity(2, 1));
+        dst.CopySharedComponentsFrom(src, srcRow, dstRow);
+
+        Assert.True(src.IsChunked);
+        Assert.True(dst.IsChunked);
+        Assert.Equal(new Position(50, 60), dst.GetComponentAt<Position>(0, dstRow));
+    }
 }

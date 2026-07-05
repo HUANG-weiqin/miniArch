@@ -17,9 +17,28 @@ internal sealed partial class Archetype
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private (int SegmentIndex, int LocalRow) GetSegmentAndLocal(int globalRow) => (globalRow >> _segmentBitShift, globalRow & _segmentMask);
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void InvalidateFlatEntityCache()
     {
         _flatEntitiesGeneration++;
+    }
+
+    /// <summary>
+    /// Returns a managed reference to a single cell in any archetype (flat or chunked).
+    /// Collapses dual-mode knowledge (IsChunked check) to a single point.
+    /// Must be inlined — hot path across archetype migration (CopyComponent).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ref byte GetColumnRef(Archetype arch, int columnIndex, int row, int elementSize)
+    {
+        if (!arch.IsChunked)
+        {
+            return ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(arch._data),
+                arch._columnByteOffsets[columnIndex] + row * elementSize);
+        }
+        var (segIdx, localRow) = arch.GetSegmentAndLocal(row);
+        return ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(arch._segments[segIdx].Data),
+            arch._columnByteOffsets[columnIndex] + localRow * elementSize);
     }
 
     // ──────────────────────────────────────────────
@@ -592,33 +611,8 @@ internal sealed partial class Archetype
         int destinationColumnIndex, int destinationRow)
     {
         var size = _elementSizes[destinationColumnIndex];
-
-        ref byte srcRef = ref Unsafe.NullRef<byte>();
-        if (!source.IsChunked)
-        {
-            srcRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(source._data),
-                source._columnByteOffsets[sourceColumnIndex] + sourceRow * size);
-        }
-        else
-        {
-            var (srcSegIdx, srcLocal) = source.GetSegmentAndLocal(sourceRow);
-            srcRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(source._segments[srcSegIdx].Data),
-                source._columnByteOffsets[sourceColumnIndex] + srcLocal * size);
-        }
-
-        ref byte dstRef = ref Unsafe.NullRef<byte>();
-        if (!IsChunked)
-        {
-            dstRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data),
-                _columnByteOffsets[destinationColumnIndex] + destinationRow * size);
-        }
-        else
-        {
-            var (dstSegIdx, dstLocal) = GetSegmentAndLocal(destinationRow);
-            dstRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_segments[dstSegIdx].Data),
-                _columnByteOffsets[destinationColumnIndex] + dstLocal * size);
-        }
-
+        ref var srcRef = ref GetColumnRef(source, sourceColumnIndex, sourceRow, size);
+        ref var dstRef = ref GetColumnRef(this, destinationColumnIndex, destinationRow, size);
         CopySmall(ref dstRef, ref srcRef, size);
     }
 
@@ -630,23 +624,8 @@ internal sealed partial class Archetype
 
     private unsafe void CopyComponentRaw(int columnIndex, int row, byte* external, bool read)
     {
-        int byteOff;
-        ref var dataRef = ref Unsafe.NullRef<byte>();
-        if (!IsChunked)
-        {
-            byteOff = _columnByteOffsets[columnIndex] + row * _elementSizes[columnIndex];
-            dataRef = ref MemoryMarshal.GetArrayDataReference(_data);
-        }
-        else
-        {
-            var (segIdx, localRow) = GetSegmentAndLocal(row);
-            byteOff = _columnByteOffsets[columnIndex] + localRow * _elementSizes[columnIndex];
-            dataRef = ref MemoryMarshal.GetArrayDataReference(_segments[segIdx].Data);
-        }
-
-        ref var storage = ref Unsafe.Add(ref dataRef, byteOff);
+        ref var storage = ref GetColumnRef(this, columnIndex, row, _elementSizes[columnIndex]);
         var size = (uint)_elementSizes[columnIndex];
-
         if (read)
             Unsafe.CopyBlockUnaligned(ref *external, ref storage, size);
         else
@@ -834,6 +813,7 @@ internal sealed partial class Archetype
         // Bumping the generation invalidates GetEntityStorage's cache; the
         // next read will rebuild _cachedFlatEntities from current segments.
         InvalidateFlatEntityCache();
+        AssertSegmentInvariants();
     }
 
     internal void ResetCount()
@@ -947,6 +927,9 @@ internal sealed partial class Archetype
         var elemSize = _elementSizes[columnIndex];
 
         // Fast path: both flat — single CopyBlock for the whole column.
+        // NOTE: cannot use GetColumnRef here because this is a batch column copy
+        // that computes segment-aware batch offsets. GetColumnRef is per-row and
+        // would destroy the CopyBlock batching advantage.
         if (!source.IsChunked && !IsChunked)
         {
             var byteCount = checked((uint)(count * elemSize));
