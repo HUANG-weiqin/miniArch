@@ -1906,6 +1906,10 @@ public abstract class CommandStreamCore
         private StoreEntry<T>[] _entries = [];
         private int _count;
 
+        // ── Kind tracking: enables a branchless Set-only fast path in ApplyToWorld ──
+        // _allSetKind is true only when every entry in this store has Kind == KindSet.
+        private bool _allSetKind = true;
+
         // ── Per-thread local buffers — write path (parallel recording) ──
         private sealed class LocalBuffer
         {
@@ -1983,6 +1987,7 @@ public abstract class CommandStreamCore
             entry.Kind = kind;
             entry.Value = value;
             _count = count + 1;
+            if (kind != KindSet) _allSetKind = false;
         }
 
         public void AppendRemove(Entity entity)
@@ -1997,6 +2002,7 @@ public abstract class CommandStreamCore
             entry.Kind = KindRemove;
             entry.Value = default;
             _count = count + 1;
+            _allSetKind = false;
         }
 
         public void AppendConcurrent(Entity entity, in T value, byte kind)
@@ -2013,6 +2019,9 @@ public abstract class CommandStreamCore
         {
             if (_hasLocalWrites == 0)
                 return;
+
+            // Parallel writes may contain non-Set kinds; conservatively disable fast path.
+            _allSetKind = false;
 
             var locals = _locals.Values;
 
@@ -2071,6 +2080,7 @@ public abstract class CommandStreamCore
         public override void Clear()
         {
             _count = 0;
+            _allSetKind = true;
             if (_hasLocalWrites != 0)
             {
                 foreach (var local in _locals.Values)
@@ -2102,19 +2112,54 @@ public abstract class CommandStreamCore
 
         public override void ApplyToWorld(World world)
         {
-            Archetype? lastArch = null;
-            int lastColIdx = -1;
             var count = _count;
             var compType = Component<T>.ComponentType;
-
             ref var entriesRef = ref MemoryMarshal.GetArrayDataReference(_entries);
+
+            // Set-only fast path: every entry is KindSet, so we skip the per-entry
+            // Kind branch and the lastArch invalidation that Add/Remove require.
+            if (_allSetKind)
+            {
+                Archetype? fastArch = null;
+                int fastColIdx = -1;
+                int fastByteOffset = 0;
+                bool fastIsChunked = false;
+
+                for (var i = 0; i < count; i++)
+                {
+                    ref var entry = ref Unsafe.Add(ref entriesRef, i);
+                    var record = world.GetRecordFast(entry.Entity);
+#if DEBUG
+                    Debug.Assert(record.Archetype is not null,
+                        $"GetRecordFast returned unoccupied record for entity {entry.Entity}.");
+#endif
+                    if (record.Archetype is null) continue;
+
+                    var arch = record.Archetype;
+                    if (arch != fastArch)
+                    {
+                        fastArch = arch;
+                        fastColIdx = arch.GetComponentIndex(compType);
+                        fastByteOffset = arch.GetColumnByteOffset(fastColIdx);
+                        fastIsChunked = arch.IsChunked;
+                    }
+                    if (!fastIsChunked)
+                        arch.SetComponentAtFlat<T>(fastByteOffset, record.RowIndex, in entry.Value);
+                    else
+                        arch.SetComponentAtTyped(fastColIdx, record.RowIndex, in entry.Value);
+                }
+                return;
+            }
+
+            // Mixed-kind path: full Kind dispatch + archetype cache invalidation.
+            Archetype? lastArchMixed = null;
+            int lastColIdx = -1;
+            int lastByteOffsetMixed = 0;
+            bool lastIsChunkedMixed = false;
 
             for (var i = 0; i < count; i++)
             {
                 ref var entry = ref Unsafe.Add(ref entriesRef, i);
-                // Fast unchecked lookup: entity existence was validated by IsAlive
-                // at record time, and Submit order guarantees no entity is destroyed
-                // before ApplyComponentStores completes.
                 var record = world.GetRecordFast(entry.Entity);
 #if DEBUG
                 Debug.Assert(record.Archetype is not null,
@@ -2126,21 +2171,21 @@ public abstract class CommandStreamCore
                 if (entry.Kind == KindSet)
                 {
                     var arch = record.Archetype;
-                    int colIdx;
-                    if (arch == lastArch)
+                    if (arch != lastArchMixed)
                     {
-                        colIdx = lastColIdx;
+                        lastArchMixed = arch;
+                        lastColIdx = arch.GetComponentIndex(compType);
+                        lastByteOffsetMixed = arch.GetColumnByteOffset(lastColIdx);
+                        lastIsChunkedMixed = arch.IsChunked;
                     }
+                    if (!lastIsChunkedMixed)
+                        arch.SetComponentAtFlat<T>(lastByteOffsetMixed, record.RowIndex, in entry.Value);
                     else
-                    {
-                        lastArch = arch;
-                        colIdx = lastColIdx = arch.GetComponentIndex(compType);
-                    }
-                    arch.SetComponentAtTyped(colIdx, record.RowIndex, in entry.Value);
+                        arch.SetComponentAtTyped(lastColIdx, record.RowIndex, in entry.Value);
                 }
                 else
                 {
-                    lastArch = null;
+                    lastArchMixed = null;
                     if (entry.Kind == KindAdd)
                         world.ApplyTypedAdd(entry.Entity, record, compType, in entry.Value);
                     else

@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream/ParallelCommandStream typed-store append-only recorder, compatible with FrameDelta. The per-entity deduplicating CommandBuffer was removed (YAGNI) — CommandStream is now the sole recorder.
-updated: 2026-07-05 (Hero perf: Set alive-first + GetOrCreateStore cache + dirty flags)
+updated: 2026-07-05 (Hero perf: SetComponentAtFlat + Set-only fast path + GetRecordFast)
 ---
 # Command Stream Runtime
 
@@ -182,8 +182,14 @@ HeroPipeline 回归测试涨幅：
   - `GetOrCreateStore<T>()` 增加 2-slot LRU cache（按 component type id），命中时跳过 `_frozen.Stores` 数组访问/resize/null 检查；`SwapOutState()` 重置 cache，避免 async frozen state 写错对象。`existing-set` proxy 从约 10.4k ticks/s 提升到约 12.8k ticks/s（单机单轮，噪声存在）。
   - 增加 `_hasStoreCommands` / `_hasParallelStoreWrites` dirty flags：无 component-store 命令时 `Submit()` 不再为 `SealParallelStores()` / `HasAnyCommands()` 扫整张 `Stores`；parallel 写入仍通过 `_hasParallelStoreWrites` 强制 seal。
   - `ComponentStore<T>.ApplyToWorld` 将 `Component<T>.ComponentType` hoist 到循环外，避免依赖 JIT 对 generic static 的 CSE。
+  - `World.GetRecordFast(entity)` 用于 `ApplyToWorld`：record 阶段 `Set/Add/Remove` 已做 alive validation，submit 阶段可跳过重复 bounds/version/occupied 检查，只做 direct `_records[entity.Id]` 读取；`record.Archetype is null` 仍作为防御性 skip。`existing-set` proxy 约 12.55k → 13.05k（Hero 噪声内）。
+  - `Archetype.SetComponentAtFlat<T>(byteOffset, row, value)` + `GetColumnByteOffset()`：`ApplyToWorld` 在 archetype cache miss 时缓存 column byte offset 和 `IsChunked`，非 chunked 热路径每条 Set 不再重复跑 `IsChunked` 分支、`_columnByteOffsets[columnIndex]`/`_elementSizes[columnIndex]` 数组访问和 runtime `row * elementSize`。`existing-set` proxy 约 13.05k → 15.5k~16.3k。
+  - `ComponentStore<T>` 增加 `_allSetKind`，当 store 全是 `KindSet` 时走 Set-only fast path：跳过每条 entry 的 `Kind` 分支和 Add/Remove cache invalidation；与 `SetComponentAtFlat` 累计后 `existing-set` proxy 约 17.6k~18.0k。
   - 最终 fresh 验证：`dotnet test -c Release` 627 + 5 全通过；`HeroComing.Perf --check-baseline` 通过（Movement 2003.5 r/s, Attack 1253.9 r/s, memory OK）。
+  - 追加验证（SetComponentAtFlat + Set-only 后）：`dotnet test -c Release` 674 + 5 全通过；`HeroComing.Perf --check-baseline` 单独运行通过（Movement 2104.5 r/s, Attack 1268.1 r/s, memory OK）。
   - 已否定/回退：2-slot cache 的 no-promotion 变体。它对 A/B 交替可能少写 cache 字段，但对 A/B/C 混合局部性不如 LRU；现有数据不能证明收益，保留 LRU。
+  - 已否定/回退：last-entity `IsAlive` cache。对严格 `Set<Q>(e); Set<R>(e)` 可能有用，但 `existing-set` proxy 每次不同 entity，额外比较/写 cache 导致约 -17% 回归。
+  - 已否定/回退：默认 `Add/Set/Remove` 直接跳过 `IsAlive`。即使 submit 路径可在 `GetRecordFast` 增加 version guard 跳过 stale/recycled entity，`Snapshot()`/`EmitToDelta()` 没有 `World` 参数，无法过滤 stale command；安全折中（record id-range + apply version guard）性能也未优于现状。
 
 ## CommandStream vs Friflo: Record 阶段瓶颈分析（2026-06-13，历史——移除 CommandBuffer 的依据）
 

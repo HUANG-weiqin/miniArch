@@ -479,6 +479,32 @@ internal sealed partial class Archetype
         target = value;
     }
 
+    /// <summary>
+    /// Returns the byte offset of the component column at the given column index.
+    /// Used by callers that cache the offset outside a hot loop to avoid
+    /// per-iteration array lookups.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal int GetColumnByteOffset(int columnIndex) => _columnByteOffsets[columnIndex];
+
+    /// <summary>
+    /// Sets a component value using a pre-computed byte offset, skipping the
+    /// <see cref="IsChunked"/> branch and per-call array lookups for
+    /// <c>_columnByteOffsets</c> and <c>_elementSizes</c>.
+    /// <para/>
+    /// <b>Precondition:</b> the archetype must be non-chunked
+    /// (<see cref="IsChunked"/> = false). The caller is responsible for checking
+    /// <see cref="IsChunked"/> once and caching the result.
+    /// </summary>
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void SetComponentAtFlat<T>(int byteOffset, int row, in T value) where T : unmanaged
+    {
+        Unsafe.As<byte, T>(ref Unsafe.Add(
+            ref MemoryMarshal.GetArrayDataReference(_data),
+            byteOffset + row * Unsafe.SizeOf<T>())) = value;
+    }
+
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal T GetComponentAt<T>(int columnIndex, int row) where T : unmanaged
