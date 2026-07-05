@@ -639,6 +639,53 @@ public sealed class WorldSnapshotTests
     }
 #pragma warning restore CS0649
 
+    // WorldSnapshot Save/Load round-trip with explicitly forced-chunked
+    // archetype (not just natural promotion). Verifies the serialization
+    // path (WriteColumnOrderedTo / ReadColumnFrom) handles segment data.
+    [Fact]
+    public void Save_load_round_trip_with_explicitly_chunked_archetype()
+    {
+        var world = new World(chunkCapacity: 4, entityCapacity: 4);
+
+        var originalEntities = new Entity[50];
+        for (var i = 0; i < 50; i++)
+            originalEntities[i] = world.Create(new Position(i, i * 10));
+
+        // Force the archetype to be chunked
+        Assert.True(world.TryGetLocation(new Entity(1, 1), out var info));
+        info.Archetype.ForceChunkedForTesting();
+        Assert.True(info.Archetype.IsChunked);
+
+        // Save
+        using var stream = new MemoryStream();
+        WorldSnapshot.Save(stream, world);
+        stream.Position = 0;
+
+        // Load
+        var loaded = WorldSnapshot.Load(stream);
+
+        // Verify data
+        var desc = new QueryDescription().With<Position>();
+        var count = 0;
+        foreach (var chunk in loaded.Query(in desc).GetChunks())
+        {
+            var positions = chunk.GetSpan<Position>();
+            for (var ci = 0; ci < chunk.Count; ci++)
+            {
+                Assert.Equal(new Position(count, count * 10), positions[ci]);
+                count++;
+            }
+        }
+        Assert.Equal(50, count);
+
+        // Also verify via entity lookup using the original entity handle
+        for (var i = 0; i < 50; i++)
+        {
+            Assert.True(loaded.IsAlive(originalEntities[i]));
+            Assert.Equal(new Position(i, i * 10), GetComponent<Position>(loaded, originalEntities[i]));
+        }
+    }
+
     private static T GetComponent<T>(World world, Entity entity) where T : unmanaged
     {
         Assert.True(world.TryGetLocation(entity, out var location));

@@ -2084,4 +2084,94 @@ public sealed class ArchetypeTests
                 archetype.GetComponentAt<Component1024>(0, i).Value);
         }
     }
+
+    // Larger-scale fuzz: 10000 steps, multi-column (Position + Component1024),
+    // exercises multi-segment scenarios more aggressively.
+    [Theory]
+    [InlineData(7)]
+    [InlineData(777)]
+    [InlineData(65535)]
+    public void Fuzz_large_scale_random_operations_multi_column(int seed)
+    {
+        var rng = new Random(seed);
+
+        var registry = new ComponentRegistry();
+        var posComp = registry.GetOrCreate<Position>();
+        var bigComp = registry.GetOrCreate<Component1024>();
+        var sig = new Signature(posComp, bigComp);
+        var archetype = new Archetype(sig, [typeof(Position), typeof(Component1024)],
+            capacity: rng.Next(4, 32));
+
+        var tracker = new Dictionary<int, (Position Pos, int BigVal)>();
+        var nextId = 1;
+
+        for (var step = 0; step < 5000; step++)
+        {
+            var op = rng.Next(0, 4);
+            switch (op)
+            {
+                case 0: // AddEntity
+                {
+                    var id = nextId++;
+                    var row = archetype.AddEntity(new Entity(id, 1));
+                    var pos = new Position(rng.Next(-10000, 10000), rng.Next(-10000, 10000));
+                    var bigVal = rng.Next(1, 1000000);
+                    archetype.SetComponentAtTyped(0, row, pos);
+                    archetype.SetComponentAtTyped(1, row, new Component1024 { Value = bigVal });
+                    tracker[id] = (pos, bigVal);
+                    break;
+                }
+                case 1 when archetype.EntityCount > 0: // RemoveAt
+                {
+                    var entities = archetype.GetEntities();
+                    var removeIdx = rng.Next(0, entities.Length);
+                    var removedId = entities[removeIdx].Id;
+                    archetype.RemoveAt(removeIdx, out var moved);
+                    tracker.Remove(removedId);
+                    if (moved.IsValid && tracker.ContainsKey(moved.Id))
+                    {
+                        var expected = tracker[moved.Id];
+                        var actualPos = archetype.GetComponentAt<Position>(0, removeIdx);
+                        var actualBig = archetype.GetComponentAt<Component1024>(1, removeIdx).Value;
+                        Assert.Equal(expected.Pos, actualPos);
+                        Assert.Equal(expected.BigVal, actualBig);
+                    }
+                    break;
+                }
+                case 2 when archetype.EntityCount > 0: // Verify all
+                {
+                    var allEntities = archetype.GetEntities();
+                    Assert.Equal(tracker.Count, allEntities.Length);
+                    for (var i = 0; i < allEntities.Length; i++)
+                    {
+                        var expected = tracker[allEntities[i].Id];
+                        var actualPos = archetype.GetComponentAt<Position>(0, i);
+                        var actualBig = archetype.GetComponentAt<Component1024>(1, i).Value;
+                        Assert.Equal(expected.Pos, actualPos);
+                        Assert.Equal(expected.BigVal, actualBig);
+                    }
+                    break;
+                }
+                case 3: // Force promote (aggressive: may revert to flat... no, one-way)
+                {
+                    if (!archetype.IsChunked)
+                        archetype.ForceChunkedForTesting();
+                    // After chunked, exercise bulk growth via EnsureCapacity
+                    if (rng.Next(0, 3) == 0)
+                        archetype.EnsureCapacity(archetype.Capacity + rng.Next(1, 5000));
+                    break;
+                }
+            }
+        }
+
+        // Final verification
+        var finalEntities = archetype.GetEntities();
+        Assert.Equal(tracker.Count, finalEntities.Length);
+        for (var i = 0; i < finalEntities.Length; i++)
+        {
+            var expected = tracker[finalEntities[i].Id];
+            Assert.Equal(expected.Pos, archetype.GetComponentAt<Position>(0, i));
+            Assert.Equal(expected.BigVal, archetype.GetComponentAt<Component1024>(1, i).Value);
+        }
+    }
 }
