@@ -799,5 +799,59 @@ public sealed class WorldLifecycleTests
 
         Assert.False(released);
     }
+
+    // Hierarchy operations (AddChild/RemoveChild/TryGetParent) on entities
+    // that belong to chunked archetypes. Hierarchy uses entity IDs, not
+    // row indices, so it should be safe regardless of storage mode.
+    [Fact]
+    public void Hierarchy_works_on_chunked_archetype_entities()
+    {
+        var world = new World(chunkCapacity: 4, entityCapacity: 4);
+
+        // Create enough entities with Position to force chunked promotion
+        var parents = new Entity[3];
+        for (var i = 0; i < parents.Length; i++)
+        {
+            parents[i] = world.Create(new Position(i, i * 10));
+        }
+
+        // Make children that share the same chunked archetype
+        var child1 = world.Create(new Position(100, 200));
+        var child2 = world.Create(new Position(300, 400));
+
+        // Ensure parent archetype is chunked
+        Assert.True(world.TryGetLocation(parents[0], out var info));
+        info.Archetype.ForceChunkedForTesting();
+        // Same archetype since all have Position only
+        Assert.True(info.Archetype.IsChunked);
+
+        // Also ensure children archetype is chunked
+        Assert.True(world.TryGetLocation(child1, out var childInfo));
+        Assert.Equal(info.Archetype, childInfo.Archetype);
+
+        // Hierarchy operations
+        world.AddChild(parents[0], child1);
+        world.AddChild(parents[0], child2);
+
+        Assert.True(world.TryGetParent(child1, out var resolvedParent));
+        Assert.Equal(parents[0], resolvedParent);
+
+        var children = world.EnumerateChildren(parents[0]).ToChildList();
+        Assert.Equal(2, children.Count);
+        Assert.Contains(child1, children);
+        Assert.Contains(child2, children);
+
+        // RemoveChild
+        world.RemoveChild(child1);
+        Assert.False(world.TryGetParent(child1, out _));
+        children = world.EnumerateChildren(parents[0]).ToChildList();
+        Assert.Single(children);
+        Assert.Equal(child2, children[0]);
+
+        // Destroy an entity in a chunked archetype that has children
+        world.AddChild(parents[1], child1);
+        world.Destroy(child1);
+        Assert.False(world.IsAlive(child1));
+    }
 }
 

@@ -2790,6 +2790,62 @@ public sealed class DeferredCreateTests
             $"{lossCount}/{trials} trials lost data.");
     }
 
+    // CommandStream operations on entities in chunked archetypes.
+    // All paths (Create/Set/Add/Remove/Destroy) must work when the
+    // entity's archetype is chunked, as Materialize calls into the
+    // same World.Add/Remove/Set APIs that are dual-mode.
+    [Fact]
+    public void Submit_works_on_chunked_archetype_entities()
+    {
+        var world = new World(chunkCapacity: 4, entityCapacity: 4);
+        var stream = new CommandStream(world);
+
+        // Create enough entities to trigger chunked promotion on the
+        // (Position) archetype that they land in.
+        for (var i = 0; i < 50; i++)
+        {
+            var e = stream.Create();
+            stream.Add(e, new Position(i, i + 1));
+        }
+        Assert.True(stream.Submit());
+
+        // Verify all entities alive and data correct
+        var desc = new QueryDescription().With<Position>();
+        var count = 0;
+        foreach (var chunk in world.Query(in desc).GetChunks())
+        {
+            var positions = chunk.GetSpan<Position>();
+            for (var ci = 0; ci < chunk.Count; ci++)
+            {
+                Assert.Equal(new Position(count, count + 1), positions[ci]);
+                count++;
+            }
+        }
+        Assert.Equal(50, count);
+
+        // Now apply Set/Remove/Add via CommandStream on chunked entities
+        stream = new CommandStream(world);
+        // Grab a reference to one of the chunked entities
+        var sample = world.Create(new Position(0, 0)); // fresh entity
+        var query2 = world.Query(in desc);
+        foreach (var e in query2)
+        {
+            if (e != sample)
+            {
+                stream.Set(e, new Position(999, 888));
+                stream.Add(e, new Velocity(e.Id, e.Id * 2));
+            }
+        }
+        Assert.True(stream.Submit());
+
+        foreach (var e in query2)
+        {
+            if (e == sample) continue;
+            Assert.Equal(new Position(999, 888), world.Get<Position>(e));
+            Assert.Equal(new Velocity(e.Id, e.Id * 2), world.Get<Velocity>(e));
+        }
+    }
+
     private static string HashWorld(World w)
     {
         using var ms = new MemoryStream();

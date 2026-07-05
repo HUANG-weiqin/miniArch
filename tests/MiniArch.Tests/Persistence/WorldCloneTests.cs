@@ -223,6 +223,39 @@ public sealed class WorldCloneTests
             "cannot backfill them, looping forever once the last segment fills.");
     }
 
+    // Positive test: Clone preserves data when the source archetype is
+    // explicitly chunked (not just naturally promoted).
+    [Fact]
+    public void Clone_preserves_chunked_archetype_data()
+    {
+        var world = new World(chunkCapacity: 4, entityCapacity: 4);
+
+        // Create entities, force the archetype to be chunked
+        for (var i = 0; i < 20; i++)
+            world.Create(new Position(i, i * 10));
+
+        Assert.True(world.TryGetLocation(new Entity(1, 1), out var info));
+        var arch = info.Archetype;
+        arch.ForceChunkedForTesting();
+
+        // Clone
+        var cloned = world.Clone();
+
+        // Verify data via query
+        var desc = new QueryDescription().With<Position>();
+        var count = 0;
+        foreach (var chunk in cloned.Query(in desc).GetChunks())
+        {
+            var positions = chunk.GetSpan<Position>();
+            for (var ci = 0; ci < chunk.Count; ci++)
+            {
+                Assert.Equal(new Position(count, count * 10), positions[ci]);
+                count++;
+            }
+        }
+        Assert.Equal(20, count);
+    }
+
     private unsafe struct Component16k
     {
         public int Value;
