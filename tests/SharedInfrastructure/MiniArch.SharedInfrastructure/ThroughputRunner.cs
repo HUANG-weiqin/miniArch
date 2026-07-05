@@ -695,8 +695,8 @@ internal static class ThroughputCaseFactory
             var archetype = archetypes[archetypeIndex];
             var posColIdx = archetype.GetComponentIndexFast(positionType);
             var velColIdx = archetype.GetComponentIndexFast(velocityType);
-            ref var posBase = ref archetype.GetComponentRef<Position>(posColIdx);
-            ref var velBase = ref archetype.GetComponentRef<Velocity>(velColIdx);
+            ref var posBase = ref archetype.GetFlatComponentRef<Position>(posColIdx);
+            ref var velBase = ref archetype.GetFlatComponentRef<Velocity>(velColIdx);
             var count = archetype.EntityCount;
             for (var row = count - 1; row >= 0; row--)
             {
@@ -778,12 +778,12 @@ internal static class ThroughputCaseFactory
         for (var archetypeIndex = 0; archetypeIndex < archetypes.Length; archetypeIndex++)
         {
             var archetype = archetypes[archetypeIndex];
-            var positions = archetype.GetComponentSpan<Position>(posType);
-            var velocities = archetype.GetComponentSpan<Velocity>(velType);
-            var healths = archetype.GetComponentSpan<Health>(healthType);
-            var teams = archetype.GetComponentSpan<Team>(teamType);
-            var accelerations = archetype.GetComponentSpan<Acceleration>(accelType);
-            var manas = archetype.GetComponentSpan<Mana>(manaType);
+            var positions = archetype.GetFlatComponentSpan<Position>(posType);
+            var velocities = archetype.GetFlatComponentSpan<Velocity>(velType);
+            var healths = archetype.GetFlatComponentSpan<Health>(healthType);
+            var teams = archetype.GetFlatComponentSpan<Team>(teamType);
+            var accelerations = archetype.GetFlatComponentSpan<Acceleration>(accelType);
+            var manas = archetype.GetFlatComponentSpan<Mana>(manaType);
             var count = archetype.EntityCount;
             for (var row = 0; row < count; row++)
             {

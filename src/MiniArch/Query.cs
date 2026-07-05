@@ -608,21 +608,13 @@ public struct OrderedComponentEnumerator<T> : IDisposable where T : unmanaged
             var entitySpan = archetype.GetEntityStorageUnsafe();
             entitySpan.AsSpan(0, rowCount).CopyTo(entities.AsSpan(index));
 
-            if (!archetype.IsChunked)
+            var columnIndex = archetype.GetComponentIndex(componentType);
+            var valueIndex = index;
+            foreach (var chunk in archetype.AsChunkViews())
             {
-                var componentSpan = archetype.GetComponentSpan<T>(componentType);
-                componentSpan.Slice(0, rowCount).CopyTo(values.AsSpan(index));
-            }
-            else
-            {
-                var columnIndex = archetype.GetComponentIndex(componentType);
-                var valueIndex = index;
-                for (var segmentIndex = 0; segmentIndex < archetype.SegmentCount; segmentIndex++)
-                {
-                    var componentSpan = archetype.GetSegmentComponentSpan<T>(segmentIndex, columnIndex);
-                    componentSpan.CopyTo(values.AsSpan(valueIndex));
-                    valueIndex += componentSpan.Length;
-                }
+                var componentSpan = chunk.GetComponentSpanAt<T>(columnIndex);
+                componentSpan.CopyTo(values.AsSpan(valueIndex));
+                valueIndex += componentSpan.Length;
             }
 
             index += rowCount;

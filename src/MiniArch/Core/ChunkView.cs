@@ -92,7 +92,7 @@ public readonly struct ChunkView
         }
         else
         {
-            full = _archetype.GetComponentSpan<T>(Component<T>.ComponentType);
+            full = _archetype.GetFlatComponentSpan<T>(Component<T>.ComponentType);
         }
         return _rowCount >= 0 ? full.Slice(_startRow, _rowCount) : full;
     }
@@ -116,7 +116,7 @@ public readonly struct ChunkView
         if (_archetype.IsChunked)
             full = _archetype.GetSegmentComponentSpan<T>(_segmentIndex, columnIndex);
         else
-            full = _archetype.GetComponentSpanAt<T>(columnIndex);
+            full = _archetype.GetFlatComponentSpanAt<T>(columnIndex);
         return _rowCount >= 0 ? full.Slice(_startRow, _rowCount) : full;
     }
 }

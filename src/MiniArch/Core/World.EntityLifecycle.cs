@@ -294,7 +294,7 @@ public sealed partial class World
 
         foreach (var range in ranges)
         {
-            var chunkEntities = archetype.GetReservedEntities(range.StartRow, range.Count);
+            var chunkEntities = archetype.GetFlatReservedEntities(range.StartRow, range.Count);
             var rowOffset = 0;
 
             for (; rowOffset < range.Count && entityIndex < reusedCount; rowOffset++)

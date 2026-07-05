@@ -64,7 +64,7 @@ public sealed class ArchetypeTests
         Assert.True(moved);
         Assert.Equal(third, movedEntity);
         Assert.Equal(third, archetype.GetEntity(1));
-        Assert.Equal(new Position(3, 3), archetype.GetComponentSpan<Position>(position)[1]);
+        Assert.Equal(new Position(3, 3), archetype.GetFlatComponentSpan<Position>(position)[1]);
     }
 
     [Fact]

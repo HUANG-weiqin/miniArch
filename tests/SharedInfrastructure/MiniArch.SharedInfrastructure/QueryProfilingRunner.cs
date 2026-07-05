@@ -384,8 +384,8 @@ public static class QueryProfilingRunner
         for (var archetypeIndex = 0; archetypeIndex < archetypes.Length; archetypeIndex++)
         {
             var archetype = archetypes[archetypeIndex];
-            var positions = archetype.GetComponentSpan<Position>(positionType);
-            var velocities = archetype.GetComponentSpan<Velocity>(velocityType);
+            var positions = archetype.GetFlatComponentSpan<Position>(positionType);
+            var velocities = archetype.GetFlatComponentSpan<Velocity>(velocityType);
             for (var row = 0; row < positions.Length; row++)
             {
                 checksum += positions[row].X + velocities[row].Y;

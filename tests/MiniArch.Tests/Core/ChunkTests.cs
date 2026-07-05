@@ -34,7 +34,7 @@ public sealed class ChunkTests
         Assert.Equal(1, secondRow);
         Assert.Equal(first, archetype.GetEntity(0));
         Assert.Equal(second, archetype.GetEntity(1));
-        Assert.Equal(new Position(5, 6), archetype.GetComponentSpan<Position>(position)[1]);
+        Assert.Equal(new Position(5, 6), archetype.GetFlatComponentSpan<Position>(position)[1]);
     }
 
     [Fact]
@@ -58,7 +58,7 @@ public sealed class ChunkTests
         Assert.True(moved);
         Assert.Equal(third, movedEntity);
         Assert.Equal(third, archetype.GetEntity(1));
-        Assert.Equal(new Position(3, 3), archetype.GetComponentSpan<Position>(position)[1]);
+        Assert.Equal(new Position(3, 3), archetype.GetFlatComponentSpan<Position>(position)[1]);
         Assert.Equal(2, archetype.EntityCount);
     }
 
@@ -94,8 +94,8 @@ public sealed class ChunkTests
 
         archetype.SetComponentAtTyped(archetype.GetComponentIndex(position), 1, new Position(9, 9));
 
-        Assert.Equal(new Position(1, 1), archetype.GetComponentSpan<Position>(position)[0]);
-        Assert.Equal(new Position(9, 9), archetype.GetComponentSpan<Position>(position)[1]);
+        Assert.Equal(new Position(1, 1), archetype.GetFlatComponentSpan<Position>(position)[0]);
+        Assert.Equal(new Position(9, 9), archetype.GetFlatComponentSpan<Position>(position)[1]);
     }
 
     [Fact]
@@ -126,7 +126,7 @@ public sealed class ChunkTests
         AddEntity(archetype, new Entity(1, 1), new Position(1, 2), new Velocity(3, 4));
         AddEntity(archetype, new Entity(2, 1), new Position(5, 6), new Velocity(7, 8));
 
-        var positions = archetype.GetComponentSpan<Position>(position);
+        var positions = archetype.GetFlatComponentSpan<Position>(position);
 
         Assert.Equal(2, positions.Length);
         Assert.Equal(new Position(1, 2), positions[0]);
@@ -169,13 +169,13 @@ public sealed class ChunkTests
 
         var moved = archetype.RemoveAt(0, out var movedEntity);
 
-        var positions = archetype.GetComponentSpan<Position>(position);
-        var velocities = archetype.GetComponentSpan<Velocity>(velocity);
+        var positions = archetype.GetFlatComponentSpan<Position>(position);
+        var velocities = archetype.GetFlatComponentSpan<Velocity>(velocity);
 
         Assert.True(moved);
         Assert.Equal(second, movedEntity);
-        Assert.Equal(secondPosition, archetype.GetComponentSpan<Position>(position)[0]);
-        Assert.Equal(secondVelocity, archetype.GetComponentSpan<Velocity>(velocity)[0]);
+        Assert.Equal(secondPosition, archetype.GetFlatComponentSpan<Position>(position)[0]);
+        Assert.Equal(secondVelocity, archetype.GetFlatComponentSpan<Velocity>(velocity)[0]);
         Assert.Equal(secondPosition, positions[0]);
         Assert.Equal(secondVelocity, velocities[0]);
     }
@@ -194,10 +194,10 @@ public sealed class ChunkTests
         archetype.SetComponentAtTyped(archetype.GetComponentIndex(small), 0, new Small(9));
         archetype.RemoveAt(0, out _);
 
-        Assert.Equal(new Small(5), archetype.GetComponentSpan<Small>(small)[0]);
-        Assert.Equal(new Large(6, 7, 8), archetype.GetComponentSpan<Large>(large)[0]);
-        Assert.Equal(new Small(5), archetype.GetComponentSpan<Small>(small)[0]);
-        Assert.Equal(new Large(6, 7, 8), archetype.GetComponentSpan<Large>(large)[0]);
+        Assert.Equal(new Small(5), archetype.GetFlatComponentSpan<Small>(small)[0]);
+        Assert.Equal(new Large(6, 7, 8), archetype.GetFlatComponentSpan<Large>(large)[0]);
+        Assert.Equal(new Small(5), archetype.GetFlatComponentSpan<Small>(small)[0]);
+        Assert.Equal(new Large(6, 7, 8), archetype.GetFlatComponentSpan<Large>(large)[0]);
     }
 
     [Fact]

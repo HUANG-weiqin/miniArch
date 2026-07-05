@@ -419,9 +419,9 @@ internal sealed partial class Archetype
 
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ref T GetComponentRef<T>(int columnIndex) where T : unmanaged
+    internal ref T GetFlatComponentRef<T>(int columnIndex) where T : unmanaged
     {
-        ThrowIfChunked();
+        Debug.Assert(!IsChunked, "GetFlatComponentRef requires non-chunked archetype.");
         return ref Unsafe.As<byte, T>(ref Unsafe.Add(
             ref MemoryMarshal.GetArrayDataReference(_data),
             _columnByteOffsets[columnIndex]));
@@ -460,16 +460,18 @@ internal sealed partial class Archetype
 
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public Span<T> GetComponentSpanAt<T>(int columnIndex) where T : unmanaged
+    internal Span<T> GetFlatComponentSpanAt<T>(int columnIndex) where T : unmanaged
     {
-        return MemoryMarshal.CreateSpan(ref GetComponentRef<T>(columnIndex), _count);
+        Debug.Assert(!IsChunked, "GetFlatComponentSpanAt requires non-chunked archetype.");
+        return MemoryMarshal.CreateSpan(ref GetFlatComponentRef<T>(columnIndex), _count);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public Span<T> GetComponentSpan<T>(ComponentType component) where T : unmanaged
+    internal Span<T> GetFlatComponentSpan<T>(ComponentType component) where T : unmanaged
     {
+        Debug.Assert(!IsChunked, "GetFlatComponentSpan requires non-chunked archetype.");
         var columnIndex = GetComponentIndex(component);
-        return GetComponentSpanAt<T>(columnIndex);
+        return GetFlatComponentSpanAt<T>(columnIndex);
     }
 
     // ──────────────────────────────────────────────
@@ -502,6 +504,46 @@ internal sealed partial class Archetype
 
     internal ReadOnlySpan<Entity> GetSegmentEntities(int segmentIndex) =>
         _segments[segmentIndex].Entities.AsSpan(0, _segments[segmentIndex].Count);
+
+    /// <summary>
+    /// Returns a struct enumerator that yields one <see cref="ChunkView"/> per
+    /// segment (or a single view for non-chunked archetypes). Zero-allocation.
+    /// </summary>
+    internal ChunkViewEnumerator AsChunkViews() => new(this);
+
+    /// <summary>
+    /// Zero-allocation struct enumerator over <see cref="ChunkView"/> for a single archetype.
+    /// Non-chunked: yields one view (segmentIndex = NonChunkedSegmentIndex).
+    /// Chunked: yields one view per segment.
+    /// </summary>
+    internal struct ChunkViewEnumerator
+    {
+        private readonly Archetype _archetype;
+        private int _index; // -1 before first MoveNext
+
+        internal ChunkViewEnumerator(Archetype archetype)
+        {
+            _archetype = archetype;
+            _index = -1;
+        }
+
+        public ChunkViewEnumerator GetEnumerator() => this;
+
+        public ChunkView Current => _archetype.IsChunked
+            ? new ChunkView(_archetype, _index)
+            : new ChunkView(_archetype);
+
+        public bool MoveNext()
+        {
+            if (!_archetype.IsChunked)
+            {
+                if (_index == -1) { _index = 0; return true; }
+                return false;
+            }
+            _index++;
+            return _index < _archetype._segmentCount;
+        }
+    }
 
     // ──────────────────────────────────────────────
     //  Copy helpers
@@ -661,15 +703,11 @@ internal sealed partial class Archetype
         }
     }
 
-    internal Span<Entity> GetReservedEntities(int startRow, int count)
+    internal Span<Entity> GetFlatReservedEntities(int startRow, int count)
     {
+        Debug.Assert(!IsChunked, "GetFlatReservedEntities requires non-chunked archetype.");
         if (startRow < 0 || count < 0 || startRow + count > _count)
             throw new ArgumentOutOfRangeException(nameof(startRow));
-
-        if (IsChunked)
-            throw new InvalidOperationException(
-                "GetReservedEntities is not supported for chunked archetypes. Use WriteEntityAt instead.");
-
         return _entities.AsSpan(startRow, count);
     }
 
@@ -1030,14 +1068,6 @@ internal sealed partial class Archetype
     {
         if (elementSize <= 0)
             throw new InvalidOperationException($"Component '{componentType.Name}' has non-positive size {elementSize}.");
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ThrowIfChunked()
-    {
-        if (IsChunked)
-            throw new InvalidOperationException(
-                "This operation is not supported for chunked archetypes. Use the per-segment API via ChunkView instead.");
     }
 
     private static int AlignUp(int value, int alignment)
