@@ -328,17 +328,15 @@ sealed class Runner
     }
 
     public Result Measure(bool multi, int entityOps,
-        Action<CommandStream, Entity[], World> recordAction)
+        Action<CommandStreamCore, Entity[], World> recordAction)
     {
         // Warmup
         using var ww = CreateWorld();
         for (var wi = 0; wi < _warmup; wi++)
         {
             var ents = SnapshotEntities(ww);
-            var stream = new CommandStream(ww);
-            if (multi) stream.ParallelRecording = true;
+            CommandStreamCore stream = multi ? new ParallelCommandStream(ww) : new CommandStream(ww);
             recordAction(stream, ents, ww);
-            if (multi) stream.ParallelRecording = false;
             stream.Submit();
         }
 
@@ -353,14 +351,12 @@ sealed class Runner
 
         while (sw.ElapsedMilliseconds < _measureMs)
         {
-            var stream = new CommandStream(w);
-            if (multi) stream.ParallelRecording = true;
+            CommandStreamCore stream = multi ? new ParallelCommandStream(w) : new CommandStream(w);
 
             var t0 = Stopwatch.GetTimestamp();
             recordAction(stream, entities, w);
             var t1 = Stopwatch.GetTimestamp();
 
-            if (multi) stream.ParallelRecording = false;
             stream.Submit();
             var t2 = Stopwatch.GetTimestamp();
 

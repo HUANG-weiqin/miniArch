@@ -1699,14 +1699,16 @@ public sealed class CommandStreamTests
         stream.Submit();
         new CommandStream(replica).Replay(FrameDelta.Deserialize(destroyDelta.AsSpan()));
 
-        stream.ParallelRecording = true;
-        stream.Set(entity, new Position(10, 20));
-        stream.Add(entity, new Health(30));
-        stream.Remove<Velocity>(entity);
-        stream.ParallelRecording = false;
+        // After destroy, the entity is gone. A separate parallel stream attempting
+        // Set/Add/Remove must silently drop those commands (matching single-threaded
+        // behavior on dead entities).
+        var streamPar = new ParallelCommandStream(source);
+        streamPar.Set(entity, new Position(10, 20));
+        streamPar.Add(entity, new Health(30));
+        streamPar.Remove<Velocity>(entity);
 
-        var staleDelta = stream.Snapshot();
-        stream.Submit();
+        var staleDelta = streamPar.Snapshot();
+        streamPar.Submit();
         new CommandStream(replica).Replay(FrameDelta.Deserialize(staleDelta.AsSpan()));
 
         AssertIdenticalWorlds(source, replica, "parallel stale existing entity component commands");
@@ -1717,12 +1719,11 @@ public sealed class CommandStreamTests
     {
         var source = new World();
         var replica = new World();
-        var stream = new CommandStream(source) { ParallelRecording = true };
+        var stream = new ParallelCommandStream(source);
 
         var created = stream.Create();
         stream.Add(created, new Position(1, 2));
         stream.Add(created, new Health(10));
-        stream.ParallelRecording = false;
 
         var delta = stream.Snapshot();
         stream.Submit();
@@ -1749,14 +1750,13 @@ public sealed class CommandStreamTests
         streamSt.Destroy(parentSt);
         streamSt.Submit();
 
-        // Parallel: same operations but with ParallelRecording=true
+        // Parallel: same operations but using ParallelCommandStream
         var worldPar = new World();
-        var streamPar = new CommandStream(worldPar) { ParallelRecording = true };
+        var streamPar = new ParallelCommandStream(worldPar);
         var parentPar = streamPar.Create();
         var childPar = streamPar.Create();
         streamPar.AddChild(parentPar, childPar);
         streamPar.Destroy(parentPar);
-        streamPar.ParallelRecording = false;
         streamPar.Submit();
 
         Assert.True(worldSt.EntityCount == 0,
@@ -2063,7 +2063,6 @@ public sealed class CommandStreamTests
         var nonSwapped = new HashSet<string>
         {
             "_world",
-            "_parallelMode",
             "_deferredEntities",
             "_pendingTask",
             "_storeCreateLock",
@@ -2748,7 +2747,7 @@ public sealed class DeferredCreateTests
             for (var i = 0; i < entities.Length; i++)
                 entities[i] = world.Create(new Position(i, i));
 
-            var stream = new CommandStream(world) { ParallelRecording = true };
+            var stream = new ParallelCommandStream(world);
 
             Exception? crash = null;
             try
@@ -2763,7 +2762,6 @@ public sealed class DeferredCreateTests
                 crash = ex;
             }
 
-            stream.ParallelRecording = false;
             // Submit may also throw if the recorded state is corrupt.
             try { stream.Submit(); }
             catch (Exception ex) { crash = crash ?? ex; }
