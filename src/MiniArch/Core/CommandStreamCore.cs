@@ -330,6 +330,7 @@ public abstract class CommandStreamCore
     public bool Submit()
     {
         SealParallelStores();
+        PruneStaleComponentCommands();
         if (!HasAnyCommands())
             return false;
 
@@ -440,6 +441,7 @@ public abstract class CommandStreamCore
     public FrameDelta Snapshot()
     {
         SealParallelStores();
+        PruneStaleComponentCommands();
         if (!_deferredEntities)
         {
             ResolveDeferredCreates();
@@ -520,6 +522,7 @@ public abstract class CommandStreamCore
     public Task<FrameDelta> SubmitAndSnapshotAsync()
     {
         SealParallelStores();
+        PruneStaleComponentCommands();
         if (!HasAnyCommands())
             return Task.FromResult(new FrameDelta());
 
@@ -557,6 +560,12 @@ public abstract class CommandStreamCore
 
         for (var i = 0; i < _frozen.DestroyCount; i++)
             delta.AddDestroy(_frozen.DestroyEntities[i]);
+    }
+
+    private void PruneStaleComponentCommands()
+    {
+        foreach (var store in _frozen.Stores)
+            store?.PruneStaleCommands(_world);
     }
 
     private void TryReclaimPending()
@@ -1758,6 +1767,7 @@ public abstract class CommandStreamCore
         public abstract bool HasCommands { get; }
         public abstract void ApplyToWorld(World world);
         public abstract void EmitToDelta(FrameDelta delta);
+        public abstract void PruneStaleCommands(World world);
         public abstract void Clear();
         public abstract void ReplacePlaceholders(Entity[] resolveMap);
         public abstract void SealParallelWrites();
@@ -1961,6 +1971,30 @@ public abstract class CommandStreamCore
                     local.Count = 0;
                 _hasLocalWrites = 0;
             }
+        }
+
+        public override void PruneStaleCommands(World world)
+        {
+            var write = 0;
+            var allSetKind = true;
+
+            for (var read = 0; read < _count; read++)
+            {
+                ref var entry = ref _entries[read];
+                if (entry.Entity.IsPlaceholder || !world.IsAlive(entry.Entity))
+                    continue;
+
+                if (write != read)
+                    _entries[write] = entry;
+
+                if (_entries[write].Kind != KindSet)
+                    allSetKind = false;
+
+                write++;
+            }
+
+            _count = write;
+            _allSetKind = allSetKind;
         }
 
         // ── Private helpers ──

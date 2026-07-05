@@ -77,6 +77,9 @@ public sealed class ParallelCommandStream : CommandStreamCore
                 WritePendingComponent(batchIdx, component);
                 return;
             }
+
+            if (entity.IsPlaceholder || !_world.IsAlive(entity))
+                return;
         }
         GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindAdd);
     }
@@ -95,6 +98,9 @@ public sealed class ParallelCommandStream : CommandStreamCore
                 WritePendingComponent(batchIdx, component);
                 return;
             }
+
+            if (entity.IsPlaceholder || !_world.IsAlive(entity))
+                return;
         }
         GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindSet);
     }
@@ -113,6 +119,9 @@ public sealed class ParallelCommandStream : CommandStreamCore
                 MarkBatchComponentRemoved(batchIdx, CommandTypeInfo<T>.Type);
                 return;
             }
+
+            if (entity.IsPlaceholder || !_world.IsAlive(entity))
+                return;
         }
         GetOrCreateStoreParallel<T>().AppendConcurrent(entity, default!, KindRemove);
     }

@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream/ParallelCommandStream typed-store append-only recorder, compatible with FrameDelta. The per-entity deduplicating CommandBuffer was removed (YAGNI) — CommandStream is now the sole recorder.
-updated: 2026-07-05 (Hero perf: SetComponentAtFlat + Set-only fast path + GetRecordFast)
+updated: 2026-07-06 (恢复 stale existing entity 的录制期过滤，避免 Submit / Replay 分叉)
 ---
 # Command Stream Runtime
 
@@ -165,7 +165,7 @@ HeroPipeline 回归测试涨幅：
   - CommandStream 的 `ComponentStore<T>.ApplyToWorld` 与 `.EmitToDelta` 都按相同 `_kinds` 数组顺序遍历，Submit 与 Replay 行为一致。
   - 验证：`Submit_on_source_equals_Replay_on_replica_for_safe_patterns` (`FrameDeltaDeterminismTests.cs:55`) 用 `BuildComplexScenario` 覆盖多样命令组合；`Submit_link_and_set_on_same_child_same_frame_converges_with_replay` / `Submit_link_parent_then_destroy_parent_same_frame_converges_with_replay` / `Submit_unlink_then_set_same_frame_converges_with_replay` 等针对性测试（`FrameDeltaDeterminismTests.cs:592` 起）覆盖所有同帧组合。
 - **Cancelled pending create 的单遍 emit 约束**（2026-06-30 修复）：`EmitPendingEntitiesToDelta` 必须保留每个 batch `Reserve + Release/Create` 的单遍顺序，不能退回“先所有 Reserve、再 Release/Create”。原因是同帧取消的 reserved id 可能被后续 `Create()` 复用，Replay 端必须先看到旧 id 的 `Release` 才能预定复用 id。副作用是 `Release` 会污染 free list，后续 fresh `Reserve(Entity(slotCount), v1)` 不能走普通 `ReserveDeferredEntity()`（它会先 pop free list），而应只在 `id == _entitySlotCount && version == 1` 时直接创建 fresh slot；`id > _entitySlotCount` 仍表示 replay 历史分叉，必须抛错。回归：`Pending_cancel_after_later_create_does_not_diverge_replay_allocator`、短 seed sweep `0..5000/65535/999999/int.MaxValue`、长程 seed `42`。
-- **Component command 对 stale entity 必须录制期过滤**（2026-06-30 修复）：`Submit()` 对 stale `Add/Set/Remove` 会在 apply 时因 `TryGetLocation` 失败而跳过；`Snapshot()` 若仍 emit 这些命令，Replay 端会在 `ApplyRawAddOrSet` / `RemoveBoxed` 上抛错并分叉。因此单线程和 `ParallelRecording=true` 路径都要跳过既非 alive、也非本 batch pending 的 entity。并行路径要保留 pending create 的组件命令（pending entity 尚未 alive），同时跳过已 `Destroy()` 标记 unavailable 的 pending entity。回归：`Parallel_recording_skips_stale_existing_entity_component_commands`、`Parallel_recording_keeps_pending_create_component_commands`。
+- **Component command 对 stale entity 必须在“录制期 + 消费前”双层过滤**（2026-06-30 立规矩，2026-07-06 回归修复）：两类 stale 都要防：① 录制当下已 stale 的 existing entity；② 录制时 alive，但在 `Submit`/`Snapshot`/`SubmitAndSnapshotAsync` 前被 direct world 改动变 stale 的 existing entity。若不处理，`Submit()` 会按 `Id` 命中已复用的新实体并误改数据，而 `Replay()` 会在 `RequireLocation` 上按旧 version 抛错，导致消费链分叉。当前规则：record 阶段仅允许 pending entity 或 `world.IsAlive(entity)` 的 existing entity 进入 component store；consume 前再统一 prune 掉“录制后才变 stale”的 existing component commands。回归：`BUG_stale_existing_entity_set_is_skipped_so_submit_matches_replay`、`BUG_existing_entity_that_becomes_stale_before_consume_is_skipped_so_submit_matches_replay`、`Parallel_recording_skips_stale_existing_entity_component_commands`、`Parallel_recording_keeps_pending_create_component_commands`、`SubmitAndSnapshotAsync_skips_existing_entity_commands_that_become_stale_before_consume`。
 
 - **`ComponentStore.EmitToDelta` 删除冗余 `_kinds[i]` 二次检查**（2026-07-02）：`switch (_kinds[i]) { case KindAdd: case KindSet: ... if (_kinds[i] == KindAdd) ... }` 中，switch 已匹配 KindAdd/KindSet，内部又读一次 `_kinds[i]` 来区分两者。拆分为独立 `case KindAdd:` / `case KindSet:`，消除一次数组 read + 分支。Attack +0.8%，Movement 噪声。注意：拆分后 `case KindAdd` 和 `case KindSet` 的 `fixed` 块内不能共享 `ptr` 变量，各自独立声明。
 

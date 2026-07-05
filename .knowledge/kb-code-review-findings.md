@@ -2,14 +2,14 @@
 title: 代码审阅发现清单
 module: Meta
 description: 历次代码审阅中产生过的猜想与结论。真 bug 索引 + 已排除的非 bug 猜想。AI 审阅前必读，避免重复验证已知结论。
-updated: 2026-07-05 (CS9: 第二版，base class 彻底删除 public throw 桩; 新增 API surface 反射测试替代 9 个 throw 测试)
+updated: 2026-07-06 (新增 BUG_stale_existing_entity_set_is_skipped_so_submit_matches_replay；新增 C5: Clone 读取 committed world 视图，不回看同一 stream 的 pending 变更)
 ---
 # 代码审阅发现清单
 
 > **审阅前必读**。这个文档只记录**结论 + 指路**，不重复推理过程。
 > 真 bug 由 `BUG_` 前缀测试证明（本文件只放索引）；非 bug 猜想按模块归档。
 >
-> **当前状态**：全部 11 个 BUG 已修复并转为回归测试（通过）。
+> **当前状态**：全部 12 个 BUG 已修复并转为回归测试（通过）。
 
 ## 这个模块是干什么的
 
@@ -34,7 +34,7 @@ updated: 2026-07-05 (CS9: 第二版，base class 彻底删除 public throw 桩; 
 
 ### 已修复（`BUG_` 测试转为回归测试，现在通过）
 
-> 全部 11 条 bug 均已修复，`BUG_` 前缀测试现在通过，充当回归守卫。
+> 全部 12 条 bug 均已修复，`BUG_` 前缀测试现在通过，充当回归守卫。
 
 | 测试名 | 位置 | 一句话描述 | 修复 |
 |---|---|---|---|
@@ -49,6 +49,7 @@ updated: 2026-07-05 (CS9: 第二版，base class 彻底删除 public throw 桩; 
 | `BUG_clone_deadlocks_on_archetype_with_large_component` | `WorldClone.cs:27` (ReserveRows) | 同根因，经公共 API `World.Clone()` 触发：克隆 >segCap 实体的 16KB+ 组件 archetype 死锁 | 同上根因修复 |
 | `BUG_flat_entity_index_mismatches_global_row_when_segment_hole_exists` | `Archetype.Storage.cs:AddEntityChunked` | 段空洞时平坦索引 ≠ 全局行号，Save 和 CanonicalChecksum 读入空段 → 静默数据损坏 | `AddEntityChunked` 改填首个非满段，空洞不再持久存在 |
 | `BUG_parallel_pending_Add_Set_Remove_bypass_batch_buffer` | `ParallelCommandStream.cs:Add/Set/Remove` | `ParallelCommandStream` 对 pending-batch 实体（刚 `Create`/`Clone`）的 `Add/Set/Remove` 走 `AppendConcurrent`（ComponentStore 路径）而非 `WritePendingComponent`（batch buffer 路径）；Submit 时实体被空身 materialize，随后 `ApplyComponentStores` 尝试对不存在组件执行 `Add`/`Set` 抛异常 | `ParallelCommandStream.Add/Set/Remove` 改为：alive 实体走 `AppendConcurrent`（无锁快路径），否则在 `_storeCreateLock` 内调 `TryGetPendingBatch` + `WritePendingComponent`/`MarkBatchComponentRemoved` |
+| `BUG_stale_existing_entity_set_is_skipped_so_submit_matches_replay`<br>`BUG_existing_entity_that_becomes_stale_before_consume_is_skipped_so_submit_matches_replay` | `CommandStream.cs:Add/Set/Remove` / `ParallelCommandStream.cs:Add/Set/Remove` / `CommandStreamCore.cs:Submit/Snapshot/SubmitAndSnapshotAsync` | 两类 stale existing entity 都会导致分叉：① 录制当下已 stale 的 handle 未被过滤，进入 component store；② 录制时 alive，但在 `Submit`/`Snapshot`/`SubmitAndSnapshotAsync` 前被 direct world 改动变 stale。旧实现下 `Submit()` 会按 `Id` 命中已复用的新实体并误改数据，而 `Replay()` 会在 `RequireLocation` 上按 stale handle 抛异常 | 修复分两层：录制阶段只允许 pending entity 或 `world.IsAlive(entity)` 的 existing entity 进入 component store；消费前（`Submit` / `Snapshot` / `SubmitAndSnapshotAsync`）再统一 prune 掉“录制后才变 stale”的 existing component commands，保证 Submit / Replay / async 三条消费链收敛。并行回归测试补 `Parallel_recording_skips_stale_existing_entity_component_commands` |
 
 ---
 
@@ -160,6 +161,12 @@ updated: 2026-07-05 (CS9: 第二版，base class 彻底删除 public throw 桩; 
 - **猜想**：placeholder 未解析时（resolveMap[seq].Id < 0），slot.Entity 保持 placeholder 似乎不对
 - **结论**：正确。用户可通过 `slot.Value.IsPlaceholder` 检测未解析。`slots[seq]=null` 和 `s.Next=null` 总执行，避免 Slot 残留链表指针
 - **验证**：读 EntitySlot.Value 实现
+
+#### C5. `Clone(source)` 忽略同一 stream 里更早录制到 source 的 pending 变更
+- **位置**：`CommandStreamCore.cs` CloneComponents / CloneChildrenRecursive
+- **猜想**：同一 `CommandStream` 中先 `Remove/Set/AddChild` source，再 `Clone(source)`，clone 没读取 pending 录制态，似乎丢操作
+- **结论**：当前是**已定义语义**：`Clone` 读取的是 record-time 的 committed world 视图，不回看同一 stream 的 pending 变更。不是 bug，但很容易被误报为顺序语义错误
+- **验证**：测试 `EntityCloneTests.Clone_snapshots_source_at_record_time_before_world_changes`、`EntityCloneTests.Clone_ignores_pending_source_remove_in_same_buffer`
 
 ### FrameDelta / wire format
 

@@ -1058,6 +1058,34 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
+    public async Task SubmitAndSnapshotAsync_skips_existing_entity_commands_that_become_stale_before_consume()
+    {
+        var source = new World();
+        var replica = new World();
+
+        var sourceVictim = source.Create(new Position(1, 1));
+        var replicaVictim = replica.Create(new Position(1, 1));
+
+        var stream = new CommandStream(source);
+        stream.Set(sourceVictim, new Position(9, 9));
+
+        source.Destroy(sourceVictim);
+        var sourceRecycled = source.Create(new Position(2, 2));
+
+        replica.Destroy(replicaVictim);
+        var replicaRecycled = replica.Create(new Position(2, 2));
+
+        var delta = await stream.SubmitAndSnapshotAsync();
+        new CommandStream(replica).Replay(delta);
+
+        Assert.True(source.TryGet(sourceRecycled, out Position srcPosition));
+        Assert.True(replica.TryGet(replicaRecycled, out Position replicaPosition));
+        Assert.Equal(new Position(2, 2), srcPosition);
+        Assert.Equal(new Position(2, 2), replicaPosition);
+        AssertIdenticalWorlds(source, replica, "SubmitAndSnapshotAsync delayed stale existing Set should be skipped");
+    }
+
+    [Fact]
     public async Task SubmitAndSnapshotAsync_with_clone_includes_clone_in_delta()
     {
         var world = new World();
@@ -1685,6 +1713,109 @@ public sealed class CommandStreamTests
         Assert.True(source.TryGet(created, out Health h));
         Assert.Equal(new Health(10), h);
         AssertIdenticalWorlds(source, replica, "parallel pending create component commands");
+    }
+
+    [Fact]
+    public void BUG_stale_existing_entity_set_is_skipped_so_submit_matches_replay()
+    {
+        var source = new World();
+        var replica = new World();
+
+        var staleSource = source.Create(new Position(1, 1));
+        source.Destroy(staleSource);
+        var recycledSource = source.Create(new Velocity(2, 2));
+
+        var staleReplica = replica.Create(new Position(1, 1));
+        replica.Destroy(staleReplica);
+        var recycledReplica = replica.Create(new Velocity(2, 2));
+
+        Assert.Equal(staleSource.Id, recycledSource.Id);
+        Assert.Equal(staleReplica.Id, recycledReplica.Id);
+        Assert.NotEqual(staleSource.Version, recycledSource.Version);
+        Assert.NotEqual(staleReplica.Version, recycledReplica.Version);
+
+        var stream = new CommandStream(source);
+        stream.Set(staleSource, new Velocity(9, 9));
+
+        var delta = stream.Snapshot();
+        stream.Submit();
+        new CommandStream(replica).Replay(FrameDelta.Deserialize(delta.AsSpan()));
+
+        Assert.True(source.TryGet(recycledSource, out Velocity srcVelocity));
+        Assert.True(replica.TryGet(recycledReplica, out Velocity replicaVelocity));
+        Assert.Equal(new Velocity(2, 2), srcVelocity);
+        Assert.Equal(new Velocity(2, 2), replicaVelocity);
+        AssertIdenticalWorlds(source, replica, "stale existing Set should be skipped");
+    }
+
+    [Fact]
+    public void Parallel_recording_skips_stale_existing_entity_component_commands()
+    {
+        var source = new World();
+        var replica = new World();
+
+        var staleSource = source.Create(new Position(1, 1));
+        source.Destroy(staleSource);
+        var recycledSource = source.Create(new Velocity(2, 2), new Health(3));
+
+        var staleReplica = replica.Create(new Position(1, 1));
+        replica.Destroy(staleReplica);
+        var recycledReplica = replica.Create(new Velocity(2, 2), new Health(3));
+
+        var stream = new ParallelCommandStream(source);
+        stream.Add(staleSource, new Position(9, 9));
+        stream.Set(staleSource, new Velocity(8, 8));
+        stream.Remove<Health>(staleSource);
+
+        var delta = stream.Snapshot();
+        stream.Submit();
+        new CommandStream(replica).Replay(FrameDelta.Deserialize(delta.AsSpan()));
+
+        Assert.True(source.TryGet(recycledSource, out Velocity srcVelocity));
+        Assert.True(source.TryGet(recycledSource, out Health srcHealth));
+        Assert.True(replica.TryGet(recycledReplica, out Velocity replicaVelocity));
+        Assert.True(replica.TryGet(recycledReplica, out Health replicaHealth));
+        Assert.False(source.TryGet<Position>(recycledSource, out _));
+        Assert.False(replica.TryGet<Position>(recycledReplica, out _));
+        Assert.Equal(new Velocity(2, 2), srcVelocity);
+        Assert.Equal(new Velocity(2, 2), replicaVelocity);
+        Assert.Equal(new Health(3), srcHealth);
+        Assert.Equal(new Health(3), replicaHealth);
+        AssertIdenticalWorlds(source, replica, "parallel stale existing component commands should be skipped");
+    }
+
+    [Fact]
+    public void BUG_existing_entity_that_becomes_stale_before_consume_is_skipped_so_submit_matches_replay()
+    {
+        var source = new World();
+        var replica = new World();
+
+        var sourceVictim = source.Create(new Position(1, 1));
+        var replicaVictim = replica.Create(new Position(1, 1));
+
+        var stream = new CommandStream(source);
+        stream.Set(sourceVictim, new Position(9, 9));
+
+        source.Destroy(sourceVictim);
+        var sourceRecycled = source.Create(new Position(2, 2));
+
+        replica.Destroy(replicaVictim);
+        var replicaRecycled = replica.Create(new Position(2, 2));
+
+        Assert.Equal(sourceVictim.Id, sourceRecycled.Id);
+        Assert.Equal(replicaVictim.Id, replicaRecycled.Id);
+        Assert.NotEqual(sourceVictim.Version, sourceRecycled.Version);
+        Assert.NotEqual(replicaVictim.Version, replicaRecycled.Version);
+
+        var delta = stream.Snapshot();
+        stream.Submit();
+        new CommandStream(replica).Replay(FrameDelta.Deserialize(delta.AsSpan()));
+
+        Assert.True(source.TryGet(sourceRecycled, out Position srcPosition));
+        Assert.True(replica.TryGet(replicaRecycled, out Position replicaPosition));
+        Assert.Equal(new Position(2, 2), srcPosition);
+        Assert.Equal(new Position(2, 2), replicaPosition);
+        AssertIdenticalWorlds(source, replica, "delayed stale existing Set should be skipped");
     }
 
     [Fact]
