@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream/ParallelCommandStream typed-store append-only recorder, compatible with FrameDelta. The per-entity deduplicating CommandBuffer was removed (YAGNI) — CommandStream is now the sole recorder.
-updated: 2026-07-05 (拆分为 SingleThread + Parallel 两个 sealed 子类 + CommandStreamCore base)
+updated: 2026-07-05 (Hero perf: Set alive-first + GetOrCreateStore cache + dirty flags)
 ---
 # Command Stream Runtime
 
@@ -176,6 +176,14 @@ HeroPipeline 回归测试涨幅：
 - **`MaterializeFromBatchBuffer` 合并 `HasBit` + `SetBit`**（2026-07-02）：小 id 组件去重原先对同一个 component id 先跑一遍 8-lane branch ladder 做 `HasBit`，未命中再跑一遍 ladder 做 `SetBit`。改为 `TrySetBit`，一次定位 lane 完成 test-and-set。对 create-heavy batch materialize 路径最直接。
 
 - **`EnsureCapacity` 在 `Archetype.AddEntity` 中的副作用已消除**（2026-07-02 发现，2026-07-05 修复）：旧 `AddEntity` 非 chunked 路径调用 `EnsureCapacity(_count + 1)`，该方法在 `_capacity * 2 > _segmentCapacity` 时会 `ConvertToChunked()`，将 `_entities = null!` 并设置模式切换。旧代码在 `EnsureCapacity` 之后用 `if (!_isChunked)` 守卫，看似"冗余"的 `else` 分支实际是 conversion 后的安全 fallback。**修复**：`AddEntity` 重构为 `AllocateRows(1) + WriteEntityAt`，每个方法各自单次读 `IsChunked`（现为 `_segments is not null` 派生属性），EnsureCapacity 的模式切换副作用被封装在 AllocateRows 内部，调用方不再需要重检。**教训保留：在有副作用的调用之后，不能假设类型状态不变。**
+
+- **Hero perf CommandStream record/submit 微优化（2026-07-05）**：只改 `src/MiniArch/Core/`，未改 HeroPipeline 业务逻辑。保留项：
+  - `CommandStream.Set<T>` 单线程路径改为先走 `_world.IsAlive(entity)`，alive existing entity 直接 append；pending/reserved entity 不是 alive，仍落到 pending-batch fallback。收益主要来自 mixed frame 中 existing Set 跳过 `TryGetPendingBatch`。
+  - `GetOrCreateStore<T>()` 增加 2-slot LRU cache（按 component type id），命中时跳过 `_frozen.Stores` 数组访问/resize/null 检查；`SwapOutState()` 重置 cache，避免 async frozen state 写错对象。`existing-set` proxy 从约 10.4k ticks/s 提升到约 12.8k ticks/s（单机单轮，噪声存在）。
+  - 增加 `_hasStoreCommands` / `_hasParallelStoreWrites` dirty flags：无 component-store 命令时 `Submit()` 不再为 `SealParallelStores()` / `HasAnyCommands()` 扫整张 `Stores`；parallel 写入仍通过 `_hasParallelStoreWrites` 强制 seal。
+  - `ComponentStore<T>.ApplyToWorld` 将 `Component<T>.ComponentType` hoist 到循环外，避免依赖 JIT 对 generic static 的 CSE。
+  - 最终 fresh 验证：`dotnet test -c Release` 627 + 5 全通过；`HeroComing.Perf --check-baseline` 通过（Movement 2003.5 r/s, Attack 1253.9 r/s, memory OK）。
+  - 已否定/回退：2-slot cache 的 no-promotion 变体。它对 A/B 交替可能少写 cache 字段，但对 A/B/C 混合局部性不如 LRU；现有数据不能证明收益，保留 LRU。
 
 ## CommandStream vs Friflo: Record 阶段瓶颈分析（2026-06-13，历史——移除 CommandBuffer 的依据）
 
