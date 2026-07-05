@@ -1,6 +1,7 @@
 ﻿using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 using MiniArch.Core;
 
@@ -165,6 +166,25 @@ public sealed partial class World
         if (!r.IsOccupied || r.Version != entity.Version) { record = default; return false; }
         record = r;
         return true;
+    }
+
+    /// <summary>
+    /// Unchecked direct record access for paths that have already validated entity
+    /// existence via <see cref="IsAlive"/> and whose execution order guarantees no
+    /// entity destruction or version change occurs before the read.
+    /// <para/>
+    /// <b>Invariant (caller must uphold):</b> the entity is alive with an id within
+    /// [0, <c>_entitySlotCount</c>). Used only by
+    /// <c>ComponentStore&lt;T&gt;.ApplyToWorld</c> where all entities were validated
+    /// at record time and the Submit order ensures <c>ApplyComponentStores</c> runs
+    /// before <c>ApplyDestroys</c>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal EntityRecord GetRecordFast(Entity entity)
+    {
+        AssertNotDisposed();
+        ref var data = ref MemoryMarshal.GetArrayDataReference(_records);
+        return Unsafe.Add(ref data, entity.Id);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

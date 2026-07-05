@@ -2112,11 +2112,20 @@ public abstract class CommandStreamCore
             for (var i = 0; i < count; i++)
             {
                 ref var entry = ref Unsafe.Add(ref entriesRef, i);
-                if (!world.TryGetRecord(entry.Entity, out var record)) continue;
+                // Fast unchecked lookup: entity existence was validated by IsAlive
+                // at record time, and Submit order guarantees no entity is destroyed
+                // before ApplyComponentStores completes.
+                var record = world.GetRecordFast(entry.Entity);
+#if DEBUG
+                Debug.Assert(record.Archetype is not null,
+                    $"GetRecordFast returned unoccupied record for entity {entry.Entity}. " +
+                    "Submit order invariant may be violated.");
+#endif
+                if (record.Archetype is null) continue;
 
                 if (entry.Kind == KindSet)
                 {
-                    var arch = record.Archetype!;
+                    var arch = record.Archetype;
                     int colIdx;
                     if (arch == lastArch)
                     {
