@@ -127,6 +127,10 @@ internal sealed partial class Archetype
                 $"Segment {i} entity capacity ({seg.Entities.Length}) != _segmentCapacity ({_segmentCapacity}).");
             Debug.Assert((uint)seg.Count <= (uint)seg.Entities.Length,
                 $"Segment {i} count ({seg.Count}) exceeds capacity ({seg.Entities.Length}).");
+            // All but the last segment must be full (tight packing invariant).
+            if (i < _segmentCount - 1)
+                Debug.Assert(seg.Count == _segmentCapacity,
+                    $"Non-last segment {i} count ({seg.Count}) != _segmentCapacity ({_segmentCapacity}).");
             total += seg.Count;
         }
         Debug.Assert(total == _count,
