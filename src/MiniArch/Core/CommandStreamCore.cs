@@ -398,8 +398,7 @@ public abstract class CommandStreamCore
         for (var i = 0; i < _frozen.DestroyCount; i++)
         {
             var entity = _frozen.DestroyEntities[i];
-            if (_world.IsAlive(entity))
-                _world.Destroy(entity);
+            _world.Destroy(entity);
         }
     }
 
@@ -662,8 +661,7 @@ public abstract class CommandStreamCore
         for (var i = 0; i < frozen.DestroyCount; i++)
         {
             var entity = frozen.DestroyEntities[i];
-            if (_world.IsAlive(entity))
-                _world.Destroy(entity);
+            _world.Destroy(entity);
         }
     }
 
@@ -1267,7 +1265,10 @@ public abstract class CommandStreamCore
                 stackCount--;
                 var srcChild = stack[stackCount];
                 var cloneParent = cloneStack[stackCount];
-                if (!_world.TryGetLocation(srcChild, out var childLocation)) continue;
+                if (!_world.TryGetLocation(srcChild, out var childLocation))
+                    throw new InvalidOperationException(
+                        $"Clone failed: child entity {srcChild} has no location. " +
+                        "The source entity may be corrupted.");
 
                 var cloneChild = CreateCore();
                 int batchIdx;
@@ -1998,29 +1999,27 @@ public abstract class CommandStreamCore
                 int fastByteOffset = 0;
                 bool fastIsChunked = false;
 
-                for (var i = 0; i < count; i++)
-                {
-                    ref var entry = ref Unsafe.Add(ref entriesRef, i);
-                    var record = world.GetRecordFast(entry.Entity);
+            for (var i = 0; i < count; i++)
+            {
+                ref var entry = ref Unsafe.Add(ref entriesRef, i);
+                var record = world.GetRecordFast(entry.Entity);
 #if DEBUG
-                    Debug.Assert(record.Archetype is not null,
-                        $"GetRecordFast returned unoccupied record for entity {entry.Entity}.");
+                Debug.Assert(record.Archetype is not null,
+                    $"GetRecordFast returned unoccupied record for entity {entry.Entity}.");
 #endif
-                    if (record.Archetype is null) continue;
-
-                    var arch = record.Archetype;
-                    if (arch != fastArch)
-                    {
-                        fastArch = arch;
-                        fastColIdx = arch.GetComponentIndex(compType);
-                        fastByteOffset = arch.GetColumnByteOffset(fastColIdx);
-                        fastIsChunked = arch.IsChunked;
-                    }
-                    if (!fastIsChunked)
-                        arch.SetComponentAtFlat<T>(fastByteOffset, record.RowIndex, in entry.Value);
-                    else
-                        arch.SetComponentAtTyped(fastColIdx, record.RowIndex, in entry.Value);
+                var arch = record.Archetype!;
+                if (arch != fastArch)
+                {
+                    fastArch = arch;
+                    fastColIdx = arch.GetComponentIndex(compType);
+                    fastByteOffset = arch.GetColumnByteOffset(fastColIdx);
+                    fastIsChunked = arch.IsChunked;
                 }
+                if (!fastIsChunked)
+                    arch.SetComponentAtFlat<T>(fastByteOffset, record.RowIndex, in entry.Value);
+                else
+                    arch.SetComponentAtTyped(fastColIdx, record.RowIndex, in entry.Value);
+            }
                 return;
             }
 
@@ -2036,14 +2035,12 @@ public abstract class CommandStreamCore
                 var record = world.GetRecordFast(entry.Entity);
 #if DEBUG
                 Debug.Assert(record.Archetype is not null,
-                    $"GetRecordFast returned unoccupied record for entity {entry.Entity}. " +
-                    "Submit order invariant may be violated.");
+                    $"GetRecordFast returned unoccupied record for entity {entry.Entity}.");
 #endif
-                if (record.Archetype is null) continue;
 
                 if (entry.Kind == KindSet)
                 {
-                    var arch = record.Archetype;
+                    var arch = record.Archetype!;
                     if (arch != lastArchMixed)
                     {
                         lastArchMixed = arch;

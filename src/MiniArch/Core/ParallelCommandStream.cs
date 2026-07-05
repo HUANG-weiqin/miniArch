@@ -70,16 +70,14 @@ public sealed class ParallelCommandStream : CommandStreamCore
     /// </summary>
     public void Add<T>(Entity entity, T component) where T : unmanaged
     {
-        if (_world.IsAlive(entity))
+        if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
+        {
+            lock (_storeCreateLock)
+                WritePendingComponent(batchIdx, component);
+        }
+        else
         {
             GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindAdd);
-            return;
-        }
-
-        lock (_storeCreateLock)
-        {
-            if (TryGetPendingBatch(entity, out var batchIdx))
-                WritePendingComponent(batchIdx, component);
         }
     }
 
@@ -90,16 +88,14 @@ public sealed class ParallelCommandStream : CommandStreamCore
     /// </summary>
     public void Set<T>(Entity entity, T component) where T : unmanaged
     {
-        if (_world.IsAlive(entity))
+        if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
+        {
+            lock (_storeCreateLock)
+                WritePendingComponent(batchIdx, component);
+        }
+        else
         {
             GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindSet);
-            return;
-        }
-
-        lock (_storeCreateLock)
-        {
-            if (TryGetPendingBatch(entity, out var batchIdx))
-                WritePendingComponent(batchIdx, component);
         }
     }
 
@@ -110,16 +106,14 @@ public sealed class ParallelCommandStream : CommandStreamCore
     /// </summary>
     public void Remove<T>(Entity entity) where T : unmanaged
     {
-        if (_world.IsAlive(entity))
+        if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
+        {
+            lock (_storeCreateLock)
+                MarkBatchComponentRemoved(batchIdx, CommandTypeInfo<T>.Type);
+        }
+        else
         {
             GetOrCreateStoreParallel<T>().AppendConcurrent(entity, default!, KindRemove);
-            return;
-        }
-
-        lock (_storeCreateLock)
-        {
-            if (TryGetPendingBatch(entity, out var batchIdx))
-                MarkBatchComponentRemoved(batchIdx, CommandTypeInfo<T>.Type);
         }
     }
 

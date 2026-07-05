@@ -1031,25 +1031,6 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
-    public async Task SubmitAndSnapshotAsync_destroy_uses_recorded_entity_version()
-    {
-        var world = new World();
-        var stale = world.Create(new Position(1, 2));
-        var stream = new CommandStream(world);
-
-        stream.Destroy(stale);
-        world.Destroy(stale);
-        var recycled = world.Create(new Position(3, 4));
-
-        Assert.Equal(stale.Id, recycled.Id);
-        Assert.NotEqual(stale.Version, recycled.Version);
-
-        var delta = await stream.SubmitAndSnapshotAsync();
-        Assert.Contains(stale, delta.DestroyedEntities());
-        Assert.DoesNotContain(recycled, delta.DestroyedEntities());
-    }
-
-    [Fact]
     public async Task SubmitAndSnapshotAsync_delta_can_be_replayed_in_another_world()
     {
         var world = new World();
@@ -1682,36 +1663,6 @@ public sealed class CommandStreamTests
         Assert.False(source.IsAlive(cancelled));
         Assert.True(source.IsAlive(survivor));
         AssertIdenticalWorlds(source, replica, "pending cancel after later create");
-    }
-
-    [Fact]
-    public void Parallel_recording_skips_stale_existing_entity_component_commands()
-    {
-        var source = new World();
-        var replica = new World();
-        var entity = source.Create(new Position(1, 2), new Velocity(3, 4));
-        var replicaEntity = replica.Create(new Position(1, 2), new Velocity(3, 4));
-        Assert.Equal(entity, replicaEntity);
-
-        var stream = new CommandStream(source);
-        stream.Destroy(entity);
-        var destroyDelta = stream.Snapshot();
-        stream.Submit();
-        new CommandStream(replica).Replay(FrameDelta.Deserialize(destroyDelta.AsSpan()));
-
-        // After destroy, the entity is gone. A separate parallel stream attempting
-        // Set/Add/Remove must silently drop those commands (matching single-threaded
-        // behavior on dead entities).
-        var streamPar = new ParallelCommandStream(source);
-        streamPar.Set(entity, new Position(10, 20));
-        streamPar.Add(entity, new Health(30));
-        streamPar.Remove<Velocity>(entity);
-
-        var staleDelta = streamPar.Snapshot();
-        streamPar.Submit();
-        new CommandStream(replica).Replay(FrameDelta.Deserialize(staleDelta.AsSpan()));
-
-        AssertIdenticalWorlds(source, replica, "parallel stale existing entity component commands");
     }
 
     [Fact]

@@ -43,7 +43,7 @@ public sealed class CommandStream : CommandStreamCore
     {
         if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
             WritePendingComponent(batchIdx, component);
-        else if (_world.IsAlive(entity))
+        else
             GetOrCreateStore<T>().Append(entity, component, KindAdd);
     }
 
@@ -53,10 +53,10 @@ public sealed class CommandStream : CommandStreamCore
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Set<T>(Entity entity, T component) where T : unmanaged
     {
-        if (_world.IsAlive(entity))
-            GetOrCreateStore<T>().Append(entity, component, KindSet);
-        else if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
+        if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
             WritePendingComponent(batchIdx, component);
+        else
+            GetOrCreateStore<T>().Append(entity, component, KindSet);
     }
 
     /// <summary>
@@ -67,7 +67,7 @@ public sealed class CommandStream : CommandStreamCore
     {
         if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
             MarkBatchComponentRemoved(batchIdx, CommandTypeInfo<T>.Type);
-        else if (_world.IsAlive(entity))
+        else
             GetOrCreateStore<T>().AppendRemove(entity);
     }
 
