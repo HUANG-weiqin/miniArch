@@ -614,7 +614,7 @@ public sealed class FrameDelta
 
     /// <summary>
     /// Checks whether this delta references <paramref name="entity"/>.
-    /// O(n) linear scan over every operation —use for debugging only, not in hot paths.
+    /// O(n) linear scan over every operation.
     /// </summary>
     public bool HasEntity(Entity entity)
     {
