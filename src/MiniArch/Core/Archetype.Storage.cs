@@ -72,6 +72,7 @@ internal sealed partial class Archetype
         _data = null!;
 
         AssertConvertedInvariants();
+        AssertSegmentInvariants();
     }
 
     [Conditional("DEBUG")]
@@ -88,6 +89,24 @@ internal sealed partial class Archetype
             total += _segments[i].Count;
         Debug.Assert(total == _count,
             $"Segment count sum ({total}) != _count ({_count}) after promotion.");
+    }
+
+    [Conditional("DEBUG")]
+    private void AssertSegmentInvariants()
+    {
+        if (!IsChunked) return;
+        var total = 0;
+        for (var i = 0; i < _segmentCount; i++)
+        {
+            ref var seg = ref _segments[i];
+            Debug.Assert(seg.Entities.Length == _segmentCapacity,
+                $"Segment {i} entity capacity ({seg.Entities.Length}) != _segmentCapacity ({_segmentCapacity}).");
+            Debug.Assert((uint)seg.Count <= (uint)seg.Entities.Length,
+                $"Segment {i} count ({seg.Count}) exceeds capacity ({seg.Entities.Length}).");
+            total += seg.Count;
+        }
+        Debug.Assert(total == _count,
+            $"Sum of segment counts ({total}) != _count ({_count}).");
     }
 
     private void GrowChunked(int need)
@@ -213,6 +232,7 @@ internal sealed partial class Archetype
             remaining -= take;
         }
         _flatEntitiesGeneration++;
+        AssertSegmentInvariants();
         return startRow;
     }
 
@@ -227,6 +247,7 @@ internal sealed partial class Archetype
         var (segIdx, localRow) = GetSegmentAndLocal(globalRow);
         _segments[segIdx].Entities[localRow] = entity;
         _flatEntitiesGeneration++;
+        AssertSegmentInvariants();
     }
 
     [Conditional("DEBUG")]
@@ -291,6 +312,7 @@ internal sealed partial class Archetype
             _segments[lastSegIdx].Count--;
             _count--;
             _flatEntitiesGeneration++;
+            AssertSegmentInvariants();
             movedEntity = default;
             return false;
         }
@@ -305,6 +327,7 @@ internal sealed partial class Archetype
         _segments[lastSegIdx].Count--;
         _count--;
         _flatEntitiesGeneration++;
+        AssertSegmentInvariants();
         return true;
     }
 
@@ -360,6 +383,24 @@ internal sealed partial class Archetype
             total += _segments[i].Count;
         Debug.Assert(_cachedFlatEntities.Length >= total,
             $"Flat cache size {_cachedFlatEntities.Length} < total segment count {total}.");
+
+        // Spot-check: first N=32 cached entity ids match segment order.
+        var check = Math.Min(32, _count);
+        var flatIdx = 0;
+        var segIdx = 0;
+        var localIdx = 0;
+        for (var i = 0; i < check; i++)
+        {
+            while (localIdx >= _segments[segIdx].Count)
+            {
+                segIdx++;
+                localIdx = 0;
+                Debug.Assert(segIdx < _segmentCount,
+                    "Segment sum ran out before reaching flat cache check length — " +
+                    "indicates segment invariant already broken.");
+            }
+            Debug.Assert(_cachedFlatEntities[flatIdx++].Equals(_segments[segIdx].Entities[localIdx++]));
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -836,6 +877,7 @@ internal sealed partial class Archetype
         }
         _count = count;
         _flatEntitiesGeneration++;
+        AssertSegmentInvariants();
     }
 
     internal void FeedRowData<TFeeder>(int columnIndex, int globalRow, ref TFeeder feed)

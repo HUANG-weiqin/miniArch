@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using MiniArch.Core;
 
@@ -19,17 +20,20 @@ namespace MiniArch;
 /// </remarks>
 public readonly struct ChunkView
 {
+    private const int NonChunkedSegmentIndex = -1;
+
     private readonly Core.Archetype _archetype;
-    private readonly int _segmentIndex; // -1 = non-chunked mode
+    private readonly int _segmentIndex; // NonChunkedSegmentIndex = non-chunked mode
     private readonly int _startRow;     // row offset, 0 for full views
     private readonly int _rowCount;     // -1 = use full count
 
-    internal ChunkView(Core.Archetype archetype, int segmentIndex = -1)
+    internal ChunkView(Core.Archetype archetype, int segmentIndex = NonChunkedSegmentIndex)
     {
         _archetype = archetype;
         _segmentIndex = segmentIndex;
         _startRow = 0;
         _rowCount = -1;
+        AssertValid();
     }
 
     private ChunkView(Core.Archetype archetype, int segmentIndex, int startRow, int rowCount)
@@ -38,6 +42,19 @@ public readonly struct ChunkView
         _segmentIndex = segmentIndex;
         _startRow = startRow;
         _rowCount = rowCount;
+        AssertValid();
+    }
+
+    [Conditional("DEBUG")]
+    private void AssertValid()
+    {
+        Debug.Assert(_archetype is not null);
+        if (_segmentIndex >= 0)
+            Debug.Assert(_archetype.IsChunked, "Positive segment index requires chunked archetype.");
+        else
+            Debug.Assert(_segmentIndex == NonChunkedSegmentIndex);
+        Debug.Assert(_rowCount >= -1);
+        Debug.Assert(_startRow >= 0);
     }
 
     /// <summary>Number of entities in this chunk (or slice).</summary>
