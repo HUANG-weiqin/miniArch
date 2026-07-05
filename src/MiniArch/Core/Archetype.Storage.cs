@@ -937,6 +937,7 @@ internal sealed partial class Archetype
     {
         var elemSize = _elementSizes[columnIndex];
 
+        // Fast path: both flat — single CopyBlock for the whole column.
         if (!source.IsChunked && !IsChunked)
         {
             var byteCount = checked((uint)(count * elemSize));
@@ -946,6 +947,7 @@ internal sealed partial class Archetype
             return;
         }
 
+        // Hybrid/chunked path: iterate in segment-sized batches.
         var remaining = count;
         var srcSegIdx = 0;
         var srcConsumed = 0;
@@ -961,32 +963,19 @@ internal sealed partial class Archetype
                 ? _segments[dstSegIdx].Count - dstConsumed
                 : remaining;
             var take = Math.Min(remaining, Math.Min(srcAvailable, dstAvailable));
+            var consumedTotal = count - remaining;
 
-            ref byte srcRef = ref Unsafe.NullRef<byte>();
-            if (!source.IsChunked)
-            {
-                var consumedTotal = count - remaining;
-                srcRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(source._data),
+            ref var srcRef = ref source.IsChunked
+                ? ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(source._segments[srcSegIdx].Data),
+                    source._columnByteOffsets[columnIndex] + srcConsumed * elemSize)
+                : ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(source._data),
                     source._columnByteOffsets[columnIndex] + consumedTotal * elemSize);
-            }
-            else
-            {
-                srcRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(source._segments[srcSegIdx].Data),
-                    source._columnByteOffsets[columnIndex] + srcConsumed * elemSize);
-            }
 
-            ref byte dstRef = ref Unsafe.NullRef<byte>();
-            if (!IsChunked)
-            {
-                var consumedTotal = count - remaining;
-                dstRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data),
+            ref var dstRef = ref IsChunked
+                ? ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_segments[dstSegIdx].Data),
+                    _columnByteOffsets[columnIndex] + dstConsumed * elemSize)
+                : ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data),
                     _columnByteOffsets[columnIndex] + consumedTotal * elemSize);
-            }
-            else
-            {
-                dstRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_segments[dstSegIdx].Data),
-                    _columnByteOffsets[columnIndex] + dstConsumed * elemSize);
-            }
 
             Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, checked((uint)(take * elemSize)));
 
