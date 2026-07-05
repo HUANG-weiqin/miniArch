@@ -454,6 +454,7 @@ public sealed class CommandStream
     /// </summary>
     public bool Submit()
     {
+        SealParallelStores();
         if (!HasAnyCommands())
             return false;
 
@@ -497,6 +498,12 @@ public sealed class CommandStream
             if (_frozen.BatchCanceled[i]) continue;
             MaterializePending(view, view.Entities[i], i);
         }
+    }
+
+    private void SealParallelStores()
+    {
+        foreach (var store in _frozen.Stores)
+            store?.SealParallelWrites();
     }
 
     private void ApplyComponentStores()
@@ -555,6 +562,7 @@ public sealed class CommandStream
     /// </remarks>
     public FrameDelta Snapshot()
     {
+        SealParallelStores();
         if (!_deferredEntities)
         {
             ResolveDeferredCreates();
@@ -634,6 +642,7 @@ public sealed class CommandStream
     /// </remarks>
     public Task<FrameDelta> SubmitAndSnapshotAsync()
     {
+        SealParallelStores();
         if (!HasAnyCommands())
             return Task.FromResult(new FrameDelta());
 
@@ -1921,6 +1930,7 @@ public sealed class CommandStream
         public abstract void EmitToDelta(FrameDelta delta);
         public abstract void Clear();
         public abstract void ReplacePlaceholders(Entity[] resolveMap);
+        public abstract void SealParallelWrites();
 
 #if DEBUG
         protected bool _isReadOnly;
@@ -1936,11 +1946,74 @@ public sealed class CommandStream
 
     private sealed class ComponentStore<T> : ComponentStore where T : unmanaged
     {
-        private readonly object _entriesLock = new();
+        // ── Main (merged) storage — read path ──
         private StoreEntry<T>[] _entries = [];
         private int _count;
 
-        public override bool HasCommands => _count > 0;
+        // ── Per-thread local buffers — write path (parallel recording) ──
+        private sealed class LocalBuffer
+        {
+            public StoreEntry<T>[] Entries = new StoreEntry<T>[256];
+            public int Count;
+
+            /// <summary>Append one entry. Returns true if this was the first entry (buffer was empty).</summary>
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public bool Append(Entity entity, in T value, byte kind)
+            {
+                var i = Count;
+                if ((uint)i >= (uint)Entries.Length)
+                {
+                    var newLen = Entries.Length == 0 ? 256 : Entries.Length * 2;
+                    Array.Resize(ref Entries, newLen);
+                }
+
+                Entries[i] = new StoreEntry<T>
+                {
+                    Entity = entity,
+                    Kind = kind,
+                    Value = value,
+                };
+                Count = i + 1;
+                return i == 0;
+            }
+        }
+
+        // ── ThreadLocal storage (for enumeration via Values) ──
+        private readonly ThreadLocal<LocalBuffer> _locals =
+            new(() => new LocalBuffer(), trackAllValues: true);
+
+        // ── [ThreadStatic] front-cache: avoids ThreadLocal.Value lookup on hot path ──
+        private static int s_nextCacheId;
+        private readonly int _cacheId = Interlocked.Increment(ref s_nextCacheId);
+
+        [ThreadStatic] private static int t_cachedStoreId;
+        [ThreadStatic] private static LocalBuffer? t_cachedLocal;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private LocalBuffer GetLocal()
+        {
+            if (t_cachedStoreId == _cacheId)
+            {
+                var local = t_cachedLocal;
+                if (local is not null) return local;
+            }
+            return GetLocalSlow();
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private LocalBuffer GetLocalSlow()
+        {
+            var local = _locals.Value!;
+            t_cachedStoreId = _cacheId;
+            t_cachedLocal = local;
+            return local;
+        }
+
+        private volatile int _hasLocalWrites;
+
+        // ── Public API ──
+
+        public override bool HasCommands => _count > 0 || _hasLocalWrites != 0;
 
         public void Append(Entity entity, in T value, byte kind)
         {
@@ -1975,27 +2048,89 @@ public sealed class CommandStream
 #if DEBUG
             Debug.Assert(!_isReadOnly, "Cannot write to a read-only ComponentStore");
 #endif
+            var local = GetLocal();
+            if (local.Append(entity, value, kind))
+                _hasLocalWrites = 1;
+        }
 
-            lock (_entriesLock)
+        public override void SealParallelWrites()
+        {
+            if (_hasLocalWrites == 0)
+                return;
+
+            var locals = _locals.Values;
+
+            // Count total entries and find first non-empty local
+            int total = _count, nonEmpty = 0;
+            LocalBuffer? firstNonEmpty = null;
+            foreach (var local in locals)
             {
-                var slot = _count;
-
-                if ((uint)slot >= (uint)_entries.Length)
+                if (local.Count > 0)
                 {
-                    var newLen = _entries.Length == 0 ? 256 : _entries.Length * 2;
-                    while (newLen <= slot) newLen *= 2;
-                    Array.Resize(ref _entries, newLen);
+                    total += local.Count;
+                    nonEmpty++;
+                    firstNonEmpty ??= local;
                 }
-
-                ref var entry = ref Unsafe.Add(
-                    ref MemoryMarshal.GetArrayDataReference(_entries), slot);
-
-                entry.Entity = entity;
-                entry.Kind = kind;
-                entry.Value = value;
-
-                _count = slot + 1;
             }
+
+            if (nonEmpty == 0)
+            {
+                _hasLocalWrites = 0;
+                return;
+            }
+
+            // Steal: when _entries is empty and only one writer, steal its array.
+            // This eliminates the Array.Copy entirely for the common single-writer case
+            // and also for cases where serial Append happened on an empty store followed
+            // by a single parallel writer.
+            if (_count == 0 && nonEmpty == 1)
+            {
+                var oldEntries = _entries;
+                _entries = firstNonEmpty!.Entries;
+                _count = firstNonEmpty.Count;
+                firstNonEmpty.Entries = oldEntries; // reuse old empty/small array
+                firstNonEmpty.Count = 0;
+                _hasLocalWrites = 0;
+                return;
+            }
+
+            // Normal merge: copy all local buffers into _entries
+            EnsureCapacity(total);
+            var dst = _count;
+            foreach (var local in locals)
+            {
+                var n = local.Count;
+                if (n == 0) continue;
+
+                Array.Copy(local.Entries, 0, _entries, dst, n);
+                dst += n;
+                local.Count = 0;
+            }
+
+            _count = dst;
+            _hasLocalWrites = 0;
+        }
+
+        public override void Clear()
+        {
+            _count = 0;
+            if (_hasLocalWrites != 0)
+            {
+                foreach (var local in _locals.Values)
+                    local.Count = 0;
+                _hasLocalWrites = 0;
+            }
+        }
+
+        // ── Private helpers ──
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void EnsureCapacity(int required)
+        {
+            if ((uint)required <= (uint)_entries.Length) return;
+            var newLen = _entries.Length == 0 ? 256 : _entries.Length;
+            while (newLen < required) newLen *= 2;
+            Array.Resize(ref _entries, newLen);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -2006,11 +2141,10 @@ public sealed class CommandStream
             Array.Resize(ref _entries, newLen);
         }
 
+        // ── Read-only consumers (must be called AFTER SealParallelWrites) ──
+
         public override void ApplyToWorld(World world)
         {
-            // Cache for consecutive Set operations on the same archetype:
-            // resolves the component column index once per archetype instead
-            // of once per entity.
             Archetype? lastArch = null;
             int lastColIdx = -1;
             var count = _count;
@@ -2039,7 +2173,7 @@ public sealed class CommandStream
                 }
                 else
                 {
-                    lastArch = null; // structural change invalidates cache
+                    lastArch = null;
                     if (entry.Kind == KindAdd)
                         world.ApplyTypedAdd(entry.Entity, record, Component<T>.ComponentType, in entry.Value);
                     else
@@ -2059,9 +2193,6 @@ public sealed class CommandStream
                     case KindAdd:
                         unsafe
                         {
-                            // Pin the array element directly rather than a ref local
-                            // to work around a .NET 8 JIT bug (internal CLR error when
-                            // fixed(&refLocal) is used on a field of a struct-in-array).
                             fixed (T* pFixed = &_entries[i].Value)
                                 delta.AddAddUnsafe(_entries[i].Entity, compType, (byte*)pFixed, size);
                         }
@@ -2090,15 +2221,12 @@ public sealed class CommandStream
             {
                 ref var entry = ref _entries[i];
 
-                // Resolve the command-target entity (existing behaviour).
                 if (entry.Entity.IsPlaceholder)
                 {
                     var resolved = resolveMap[entry.Entity.Version];
                     if (resolved.Id >= 0) entry.Entity = resolved;
                 }
 
-                // Resolve embedded Entity refs in the component value itself.
-                // Remove operations carry no meaningful payload —skip them.
                 if (offsets.Length > 0 && entry.Kind != KindRemove)
                 {
                     EntityFieldResolver.ResolveInPlace(
@@ -2107,8 +2235,6 @@ public sealed class CommandStream
                 }
             }
         }
-
-        public override void Clear() => _count = 0;
     }
 
     private readonly record struct HierarchyIntent(bool IsAdd, Entity Parent);
