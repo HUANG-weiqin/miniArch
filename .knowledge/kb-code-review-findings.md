@@ -137,25 +137,25 @@ updated: 2026-07-05 (CS9: abstract+override generic virtual 无法 devirt 是 Co
 > **C1、C2 已移除**：`AppendConcurrent` 在 `BUG_parallel_append_concurrent_resize_is_not_atomic`（见真 bug 索引）修复后不再使用外层 `while` + `lock` + `break` 结构，改为读写全在 `lock` 内一次完成。C1 的 grow 对比和 C2 的 break-in-lock 语义均不再适用。
 
 #### C1. `MaterializeFromBatchBuffer` 链表迭代 + id>=512 线性去重
-- **位置**：`CommandStream.cs` MaterializeFromBatchBuffer
+- **位置**：`CommandStreamCore.cs` MaterializeFromBatchBuffer
 - **猜想**：id < 512 用 bit set O(1) 去重，id >= 512 用线性扫描 O(n)，似乎不平衡
 - **结论**：正确。hasLargeIds 时最后再 `SortTypesAndOffsets + DeduplicateSortedSpans` 兜底。重复 Add 由 `MarkBatchComponentRemoved` 标记旧条目 Removed、新条目独立处理
 - **验证**：读 MaterializeFromBatchBuffer 的 hasLargeIds 分支
 
 #### C2. `Submit` finally 中 `Clear(releaseReserved: !submitted)`
-- **位置**：`CommandStream.cs` Submit
+- **位置**：`CommandStreamCore.cs` Submit
 - **猜想**：异常路径下已 materialize 的 entity 留在 World，似乎清理不完整
 - **结论**：设计选择。World 直写路径本就无 undo。finally 只释放 reserved id；已 materialize 的 entity 靠 `TryReleaseReserved` 返回 false（IsOccupied=true）跳过，不重复释放。文档未明确"异常后状态不确定"，但符合 World 直写语义
 - **验证**：读 Clear 中 `if (releaseReserved) _world.TryReleaseReserved(entity)` 与 TryReleaseReserved 的 IsOccupied 检查
 
 #### C3. `CancelPendingDescendants` 中 foreach + 修改 Dictionary
-- **位置**：`CommandStream.cs` CancelPendingDescendants / EnqueueAllChildren
+- **位置**：`CommandStreamCore.cs` CancelPendingDescendants / EnqueueAllChildren
 - **猜想**：foreach 期间修改 Dictionary 会抛 InvalidOperationException
 - **结论**：正确。`EnqueueAllChildren` 内部 foreach 只读；修改（`CancelPendingEntity` 的 Remove、`_frozen.HierarchyByChild.Remove`）在 foreach 外的 while 循环里。每次 foreach 开始时 Dictionary version 已稳定
 - **验证**：读 EnqueueAllChildren 和外层 while 的调用顺序
 
 #### C4. `ResolveTrackedSlots` hasReal false 时 slot.Entity 不更新但 Next 清空
-- **位置**：`CommandStream.cs` ResolveTrackedSlots
+- **位置**：`CommandStreamCore.cs` ResolveTrackedSlots
 - **猜想**：placeholder 未解析时（resolveMap[seq].Id < 0），slot.Entity 保持 placeholder 似乎不对
 - **结论**：正确。用户可通过 `slot.Value.IsPlaceholder` 检测未解析。`slots[seq]=null` 和 `s.Next=null` 总执行，避免 Slot 残留链表指针
 - **验证**：读 EntitySlot.Value 实现
@@ -266,7 +266,7 @@ updated: 2026-07-05 (CS9: abstract+override generic virtual 无法 devirt 是 Co
 - **验证**：对比 ComputeChecksum 与 ComputeCanonicalChecksum 的 XML doc
 
 #### P6. `EmitHierarchyToDelta` 排序但 `ApplyHierarchyToWorld` 不排序
-- **位置**：`CommandStream.cs` EmitHierarchyToDelta / ApplyHierarchyToWorld
+- **位置**：`CommandStreamCore.cs` EmitHierarchyToDelta / ApplyHierarchyToWorld
 - **猜想**：Submit 路径（不排序）与 Replay 路径（排序）hierarchy apply 顺序不一致
 - **结论**：不影响最终状态。Dictionary 中同一 child 只有一个 entry（后者覆盖），Apply 顺序不影响每个 child 独立的关系建立。EmitHierarchyToDelta 排序是为了 lockstep delta 的跨 host 确定性
 - **验证**：读 HierarchyByChild 的索引语义（child 为 key，唯一）
@@ -274,19 +274,19 @@ updated: 2026-07-05 (CS9: abstract+override generic virtual 无法 devirt 是 Co
 ### 并发 / 内存模型
 
 #### CC1. `GetOrCreateStoreParallel` double-check locking
-- **位置**：`CommandStream.cs` GetOrCreateStoreParallel
+- **位置**：`CommandStreamCore.cs` GetOrCreateStoreParallel
 - **猜想**：第一层 `_frozen.Stores[id]` 在 lock 外读，似乎 race
 - **结论**：正确。引用类型赋值在 .NET 是 atomic（ECMA-335 Partition I），读到的要么 null 要么完整引用。null 时进入 lock 重新读 + 创建
 - **验证**：查 ECMA-335 引用类型赋值原子性保证
 
 #### CC2. `GetOrCreateStoreParallel` 中 Stores 数组 resize 与读的 race
-- **位置**：`CommandStream.cs` GetOrCreateStoreParallel
+- **位置**：`CommandStreamCore.cs` GetOrCreateStoreParallel
 - **猜想**：resize 替换 Stores 数组，外部读旧引用越界
 - **结论**：正确。Array.Resize 在 lock 内，退出 lock 有 memory barrier。读字段在 lock 外，但读到旧引用时 id < 旧长度（否则进入 lock resize），读到新引用时 id < 新长度。两种情况都安全
 - **验证**：读 double-check 的两个分支条件
 
 #### CC3. `AppendDestroyConcurrent` resize + write 都在 `_storeCreateLock` 内
-- **位置**：`CommandStream.cs` AppendDestroyConcurrent
+- **位置**：`CommandStreamCore.cs` AppendDestroyConcurrent
 - **猜想**：与 AppendConcurrent 一样的 race？
 - **结论**：无 race。AppendDestroyConcurrent 的 resize 和 write 都在同一个 lock 内，没有"读长度→后写"的窗口。**与 AppendConcurrent 形成对比**：AppendConcurrent 只 resize 在 lock 内，write 在 lock 外（见真 bug 索引）
 - **验证**：对比 AppendDestroyConcurrent 与 AppendConcurrent 的 lock 范围
@@ -465,49 +465,49 @@ updated: 2026-07-05 (CS9: abstract+override generic virtual 无法 devirt 是 Co
 ### CommandStream / ComponentStore
 
 #### CS1. `ApplyToWorld` 中 `lastArch` 缓存在 Add/Remove 后正确失效
-- **位置**：`CommandStream.cs` ComponentStore.ApplyToWorld line 1979-2022
+- **位置**：`CommandStreamCore.cs` ComponentStore.ApplyToWorld line 1979-2022
 - **猜想**：Add/Remove 操作移动 entity 到新 archetype，但 `lastArch` 缓存是否在跨 archetype 的情况下误用旧索引？
 - **结论**：正确。`KindAdd`/`KindRemove` 分支都设 `lastArch = null`，下一个 Set 重新解析索引。Set 自身不会改变 entity 的 archetype，`arch == lastArch` 检查有效。
 - **验证**：读 ApplyToWorld 中 `lastArch = null` 的两个赋值点
 
 #### CS2. `ApplyToWorld` 中 TryGetRecord 返回 struct copy，但 ApplyTypedAdd/RemoveBoxed 需要最新 record
-- **位置**：`CommandStream.cs` ComponentStore.ApplyToWorld line 1995
+- **位置**：`CommandStreamCore.cs` ComponentStore.ApplyToWorld line 1995
 - **猜想**：`record` 是 `TryGetRecord` 返回的 struct 拷贝，ApplyTypedAdd 内部修改了 entity 在 `_records[]` 中的实际 record，但本地拷贝仍是旧值。如果同一个 entity 在同一个 store 中有后续操作，第二次循环的 `TryGetRecord` 会读到已更新的 record——但本循环剩下的代码（SetComponentAtTyped 等）用的是 `record.RowIndex` 这一拷贝的旧 row，是否指向 chunked archetype 中错误的位置？
 - **结论**：安全。`ApplyTypedAdd(entity, record, ...)` 中虽然 `record` 是拷贝，但 `MoveEntityCore` 返回新的 destinationRowIndex，`FinishMoveEntity` 用该值直接写 `_records[entity.Id]`。Set 操作的 `record.RowIndex` 取自本次循环顶部 `TryGetRecord` 的结果，该记录在 Set 之前不会被修改（Set 是纯写操作，不移动 entity）。后续 entity 的操作重新调用 TryGetRecord 读到最新值。
 - **验证**：读 ApplyTypedAdd 中 MoveEntityCore → FinishMoveEntity 的 RowIndex 更新
 
 #### CS3. `CloneChildrenRecursive` 从 chunked source archetype 读组件
-- **位置**：`CommandStream.cs` CloneChildrenRecursive line 1351-1417
+- **位置**：`CommandStreamCore.cs` CloneChildrenRecursive line 1351-1417
 - **猜想**：`archetype.ReadComponentRaw(i, sourceRow, ptr)` 从 chunked archetype 读取组件数据。`sourceRow` 是 entity 在 chunked archetype 中的全局 row，`ReadComponentRaw` 用 `GetSegmentAndLocal` 正确映射到 segment 内偏移。
 - **结论**：安全。ReadComponentRaw 是 dual-mode 的（chunked 分支用 GetSegmentAndLocal），sourceRow 来自 `TryGetLocation` 返回的 `RowIndex`，指向正确的全局行。
 - **验证**：读 ReadComponentRaw 的 `if (!_isChunked)` 分支
 
 #### CS4. `ComponentStore.AppendConcurrent` 中 resize+write 在同一 lock 内（已修复）
-- **位置**：`CommandStream.cs` ComponentStore.AppendConcurrent line 1944-1967
+- **位置**：`CommandStreamCore.cs` ComponentStore.AppendConcurrent line 1944-1967
 - **猜想**：此路径是否仍存在 `BUG_parallel_append_concurrent_resize_is_not_atomic` 说的 race？
 - **结论**：已修复。Array.Resize + element write 全部在 `_resizeLock` 内，消除了三数组观测不一致的问题。
 - **验证**：对比 `AppendConcurrent`（lock 内 resize+write）与 `EnsureStoreCapacity`（单线程，resize 分开无 lock）。查看 git 历史确认此路径是修复目标
 
 #### CS5. `GetOrCreateStoreParallel` double-check locking 中 Stores 数组 resize
-- **位置**：`CommandStream.cs` GetOrCreateStoreParallel line 1549-1578
+- **位置**：`CommandStreamCore.cs` GetOrCreateStoreParallel line 1549-1578
 - **猜想**：两个线程同时为不同 type id 进入 resize 分支，`Array.Resize` 能否 shrink 数组？
 - **结论**：正确。`_storeCreateLock` 串行化 resize。`newLen = Math.Max(id + 1, Stores.Length == 0 ? 16 : Stores.Length * 2)` 只增不减（Array.Resize 在本项目中从不用来 shrink 到小于当前 length）。第二个线程进入时重新检查 `id >= Stores.Length`，此时 Stores 已被第一个线程扩到足够大，不会再 resize。
 - **验证**：手算 A(id=20)+B(id=25) 并发进入的时序
 
 #### CS6. `SwapOutState` 回收 `_spareFrozen` 时 `PendingBatch` 数组不清零
-- **位置**：`CommandStream.cs` SwapOutState line 672-716
+- **位置**：`CommandStreamCore.cs` SwapOutState line 672-716
 - **猜想**：`_spareFrozen` 回收后，`_frozen.PendingBatch`（id→batchIdx 映射）保留两帧前的 stale 条目；新的 `Create()` 只覆盖当前 entity.Id 对应的 slot，其他 stale 条目是否会被 `TryGetPendingBatch` 误读？
 - **结论**：安全。`_pendingBatchMin`/`_pendingBatchMax` 在 SwapOutState 中被重置为 `int.MaxValue`/`0`，`TryGetPendingBatch` 的 range guard `(uint)(id - min) < (uint)(max - min)` 在 min=max 的极端值下对所有 id 都返回 false。且 `PendingBatchCount` 被重置为 0，Add/Set 的前置检查 `_frozen.PendingBatchCount > 0` 短路。stale 条目不可达。
 - **验证**：手算 min=int.MaxValue, max=0 时的 range check（`id - int.MaxValue` unchecked→负→uint 大值，`0 - int.MaxValue` unchecked→int.MinValue+1→uint 大值，前者 > 后者→false）
 
 #### CS7. `SubmitAndSnapshotAsync` 中 main thread 和 background thread 并发读同一 FrozenState
-- **位置**：`CommandStream.cs` SubmitAndSnapshotAsync line 618-634
+- **位置**：`CommandStreamCore.cs` SubmitAndSnapshotAsync line 618-634
 - **猜想**：`SubmitFromFrozen(frozen)`（main thread）和 `BuildFromFrozen(frozen)`（background thread）同时遍历 frozen 的数组，是否 race？
 - **结论**：安全。两条路径对 frozen 都是**只读**：SubmitFromFrozen 写 `_world`，BuildFromFrozen 写 `delta`。frozen 的 arrays（BatchHeads/BatchComps/BatchBuf/DestroyEntities/Stores 等）在 SwapOutState 后不再被 recording 路径写入。并发只读无 race。
 - **验证**：确认 SubmitFromFrozen 和 BuildFromFrozen 的所有写入目标（_world / delta）都不在 frozen 内
 
 #### CS8. `ResolveArchetypeForMask` mask cache 满后 hash 驱逐可能碰撞
-- **位置**：`CommandStream.cs` ResolveArchetypeForMask line 1252-1293
+- **位置**：`CommandStreamCore.cs` ResolveArchetypeForMask line 1252-1293
 - **猜想**：cache 满（8 slot）后 `slotIdx = mask.GetHashCode() & (MaskCacheSize-1)`，不同 mask 可能 hash 到同一 slot 互相驱逐
 - **结论**：性能问题不是正确性问题。读取时验证 `slot.Mask.Equals(mask)`，miss 则走 `GetOrCreateArchetype`。功能正确，只影响命中率。
 - **验证**：读 cache lookup 的 Equals 验证 + miss fallback 路径

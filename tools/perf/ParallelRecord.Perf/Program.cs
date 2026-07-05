@@ -46,7 +46,7 @@ void RunSuite(int threads)
     var runner = new Runner(entityCount, Warmup, MeasureMs);
 
     // ---- Seq-Simple ----
-    var r = runner.Measure(multi: false, entityOps: 1,
+    var r = runner.Measure( entityOps: 1,
         (stream, ents, _) =>
         {
             for (var i = 0; i < ents.Length; i++)
@@ -56,7 +56,7 @@ void RunSuite(int threads)
 
     // ---- Par-Simple (same store, range partition) ----
     {
-        var r2 = runner.Measure(multi: true, entityOps: 1,
+        var r2 = runner.MeasureParallel( entityOps: 1,
             (stream, ents, _) =>
             {
                 Parallel.For(0, threads, ti =>
@@ -70,7 +70,7 @@ void RunSuite(int threads)
     }
 
     // ---- Seq-ReadCompute (query + compute + record) ----
-    var r3 = runner.Measure(multi: false, entityOps: 1,
+    var r3 = runner.Measure( entityOps: 1,
         (stream, ents, world) =>
         {
             var q = world.Query(new QueryDescription().With<Pos>().With<Vel>());
@@ -87,7 +87,7 @@ void RunSuite(int threads)
 
     // ---- Par-ReadCompute (parallel chunks + record) ----
     {
-        var r4 = runner.Measure(multi: true, entityOps: 1,
+        var r4 = runner.MeasureParallel( entityOps: 1,
             (stream, ents, world) =>
             {
                 var q = world.Query(new QueryDescription().With<Pos>().With<Vel>());
@@ -104,7 +104,7 @@ void RunSuite(int threads)
     }
 
     // ---- Seq-Multi3 ----
-    var r5 = runner.Measure(multi: false, entityOps: 3,
+    var r5 = runner.Measure( entityOps: 3,
         (stream, ents, _) =>
         {
             for (var i = 0; i < ents.Length; i++)
@@ -118,7 +118,7 @@ void RunSuite(int threads)
 
     // ---- Par-Multi3 (3 stores, range partition) ----
     {
-        var r6 = runner.Measure(multi: true, entityOps: 3,
+        var r6 = runner.MeasureParallel( entityOps: 3,
             (stream, ents, _) =>
             {
                 Parallel.For(0, threads, ti =>
@@ -144,7 +144,7 @@ void RunScale(out double baselineTotal)
 {
     // Measure sequential baseline
     var seqRunner = new Runner(entityCount, Warmup, MeasureMs);
-    var seq = seqRunner.Measure(multi: false, entityOps: 1,
+    var seq = seqRunner.Measure( entityOps: 1,
         (stream, ents, _) =>
         {
             for (var i = 0; i < ents.Length; i++)
@@ -158,7 +158,7 @@ void RunScale(out double baselineTotal)
     {
         if (t > Environment.ProcessorCount * 2) continue;
         var r2 = new Runner(entityCount, Warmup, MeasureMs / 2);
-        var par = r2.Measure(multi: true, entityOps: 1,
+        var par = r2.MeasureParallel( entityOps: 1,
             (stream, ents, _) =>
             {
                 Parallel.For(0, t, ti =>
@@ -173,7 +173,7 @@ void RunScale(out double baselineTotal)
 
     // Heavy compute scenario: each entity does 100x the work
     Console.WriteLine();
-    var seqH = seqRunner.Measure(multi: false, entityOps: 1,
+    var seqH = seqRunner.Measure( entityOps: 1,
         (stream, ents, _) =>
         {
             for (var i = 0; i < ents.Length; i++)
@@ -187,7 +187,7 @@ void RunScale(out double baselineTotal)
     Console.WriteLine($"  HeavyCompute Seq:  {seqH.Record,12:F0} rec/s  {seqH.Total,12:F0} total/s");
 
     var parHeavy = new Runner(entityCount, Warmup, MeasureMs / 2);
-    var parH = parHeavy.Measure(multi: true, entityOps: 1,
+    var parH = parHeavy.MeasureParallel( entityOps: 1,
         (stream, ents, _) =>
         {
             Parallel.For(0, Environment.ProcessorCount, ti =>
@@ -211,7 +211,7 @@ void RunScale(out double baselineTotal)
 void RunPartitionStrategies(int threads)
 {
     var seqRunner = new Runner(entityCount, Warmup, MeasureMs);
-    var seq = seqRunner.Measure(multi: false, entityOps: 3,
+    var seq = seqRunner.Measure( entityOps: 3,
         (stream, ents, _) =>
         {
             for (var i = 0; i < ents.Length; i++)
@@ -225,7 +225,7 @@ void RunPartitionStrategies(int threads)
 
     // Strategy A: Range partition (each thread handles entity range, writes all 3 comps)
     {
-        var r = new Runner(entityCount, Warmup, MeasureMs).Measure(multi: true, entityOps: 3,
+        var r = new Runner(entityCount, Warmup, MeasureMs).MeasureParallel( entityOps: 3,
             (stream, ents, _) =>
             {
                 Parallel.For(0, threads, ti =>
@@ -247,7 +247,7 @@ void RunPartitionStrategies(int threads)
     // Thread 1: Set<Vel> on all entities
     // Thread 2: Set<Hp> on all entities
     {
-        var r = new Runner(entityCount, Warmup, MeasureMs).Measure(multi: true, entityOps: 1,
+        var r = new Runner(entityCount, Warmup, MeasureMs).MeasureParallel( entityOps: 1,
             (stream, ents, _) =>
             {
                 Parallel.For(0, 3, ci =>
@@ -272,7 +272,7 @@ void RunPartitionStrategies(int threads)
     // Strategy C: By component with fewer threads
     // Only 2 components: Pos + Vel (2 threads, no contention)
     {
-        var r = new Runner(entityCount, Warmup, MeasureMs).Measure(multi: true, entityOps: 1,
+        var r = new Runner(entityCount, Warmup, MeasureMs).MeasureParallel( entityOps: 1,
             (stream, ents, _) =>
             {
                 Parallel.For(0, 2, ci =>
@@ -286,7 +286,7 @@ void RunPartitionStrategies(int threads)
             });
         var corrected = new Result(r.Record * 2, r.Submit * 2, r.Total * 2);
         // Compare vs Seq-Multi2 (Seq that does Pos+Vel only)
-        var seq2 = seqRunner.Measure(multi: false, entityOps: 2,
+        var seq2 = seqRunner.Measure( entityOps: 2,
             (stream, ents, _) =>
             {
                 for (var i = 0; i < ents.Length; i++)
@@ -327,15 +327,24 @@ sealed class Runner
         _measureMs = measureMs;
     }
 
-    public Result Measure(bool multi, int entityOps,
-        Action<CommandStreamCore, Entity[], World> recordAction)
+    public Result Measure(int entityOps,
+        Action<CommandStream, Entity[], World> recordAction)
+        => MeasureCore(entityOps, static w => new CommandStream(w), recordAction);
+
+    public Result MeasureParallel(int entityOps,
+        Action<ParallelCommandStream, Entity[], World> recordAction)
+        => MeasureCore(entityOps, static w => new ParallelCommandStream(w), recordAction);
+
+    private Result MeasureCore<TStream>(int entityOps, Func<World, TStream> makeStream,
+        Action<TStream, Entity[], World> recordAction)
+        where TStream : CommandStreamCore
     {
         // Warmup
         using var ww = CreateWorld();
         for (var wi = 0; wi < _warmup; wi++)
         {
             var ents = SnapshotEntities(ww);
-            CommandStreamCore stream = multi ? new ParallelCommandStream(ww) : new CommandStream(ww);
+            var stream = makeStream(ww);
             recordAction(stream, ents, ww);
             stream.Submit();
         }
@@ -351,7 +360,7 @@ sealed class Runner
 
         while (sw.ElapsedMilliseconds < _measureMs)
         {
-            CommandStreamCore stream = multi ? new ParallelCommandStream(w) : new CommandStream(w);
+            var stream = makeStream(w);
 
             var t0 = Stopwatch.GetTimestamp();
             recordAction(stream, entities, w);

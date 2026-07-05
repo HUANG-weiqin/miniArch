@@ -38,7 +38,7 @@ updated: 2026-07-05 (拆分为 SingleThread + Parallel 两个 sealed 子类 + Co
 - **9 个 mutator（Create/Track/Add/Set/Remove/Destroy/AddChild/RemoveChild/Clone）在 `CommandStreamCore` 里是 `public` 非虚拟方法，默认 throw `NotSupportedException`**。子类用 `public new` 隐藏，提供真实实现。
 - **调用方契约**：必须以 `CommandStream` 或 `ParallelCommandStream`（sealed 子类）作为引用类型。`FrameContext.Commands` / `MiniArchRuntime.Recorder` / 所有 system 代码已经是这种形态。**不要把 stream 引用升级为 `CommandStreamCore`**——会调到 throw stub。
 - `CommandStreamCore` 内部递归路径（如 `CloneChildrenRecursive`）必须直接调 `*Core` helper（`CreateCore`/`AddChildCore`），不能调公共 mutator（会调到 throw stub）。
-- `Create()` 在 `DeferredEntities=false` 时使用 `World.ReserveDeferredEntity()` 分配 real id；`DeferredEntities=true` 时返回 placeholder，不碰 World id allocator。
+- `Create()` 在 `DeferredEntities=false` 时使用 `World.ReserveDeferredEntityUnsafe()` 分配 real id；`DeferredEntities=true` 时返回 placeholder，不碰 World id allocator。
 - 组件数据按 typed value 记录，`Submit()` 直接写 typed value，`Snapshot()` 再转成 `FrameDelta` 所需 raw bytes。
 - component `Add/Set` 按类型批处理，不承诺与 `Remove/Destroy` 的严格全局追加顺序；同帧冲突命令的净效果由调用方负责。
 - created entity 组件在 record 时分流，避免提交时 O(created × commands) 扫描整条日志。
@@ -53,7 +53,7 @@ updated: 2026-07-05 (拆分为 SingleThread + Parallel 两个 sealed 子类 + Co
 
 **根因**：.NET 8 JIT **不**对 generic virtual 方法（`Add<T>`/`Set<T>`/`Remove<T>`）做可靠的 devirtualize，即使 receiver 静态类型是 sealed 子类。每次调用都付虚表查证 + 阻止 inline。详见 `kb-code-review-findings.md` 的 CS9。
 
-**修复**：把 9 个 mutator 改为 base class 提供默认 throw 实现 + 子类 `public new` 隐藏。`new` 方法是完全非虚拟的，JIT 视为 direct call，可以 inline。修复后性能反超原版（Movement 2065 / Attack 1300，比 `_parallelMode` flag 版本快 7-8%）。
+**修复**：把 9 个 mutator 改为 base class 提供默认 throw 实现 + 子类 `public new` 隐藏。`new` 方法是完全非虚拟的，JIT 视为 direct call，可以 inline。修复后性能恢复或小幅超过原版（同机器 baseline 1917/1205，修复后 2065/1300；后续多次测量有 ±2% 波动，故不承诺固定增益）。
 
 **副作用**：base class 的 throw stub 看起来"不优雅"，但诚实表达"这是 type slot 不是真实 API"。
 
