@@ -65,56 +65,56 @@ public sealed class ParallelCommandStream : CommandStreamCore
 
     /// <summary>
     /// Records an Add command for the specified component on the given entity.
-    /// Thread-safe; uses per-component concurrent store append for alive entities,
-    /// and serializes on the internal create lock for pending-batch entities.
+    /// Thread-safe; checks pending batch under the lock, falls back to
+    /// per-component concurrent store append.
     /// </summary>
     public void Add<T>(Entity entity, T component) where T : unmanaged
     {
-        if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
+        lock (_storeCreateLock)
         {
-            lock (_storeCreateLock)
+            if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
+            {
                 WritePendingComponent(batchIdx, component);
+                return;
+            }
         }
-        else
-        {
-            GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindAdd);
-        }
+        GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindAdd);
     }
 
     /// <summary>
     /// Records a Set command for the specified component on the given entity.
-    /// Thread-safe; uses per-component concurrent store append for alive entities,
-    /// and serializes on the internal create lock for pending-batch entities.
+    /// Thread-safe; checks pending batch under the lock, falls back to
+    /// per-component concurrent store append.
     /// </summary>
     public void Set<T>(Entity entity, T component) where T : unmanaged
     {
-        if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
+        lock (_storeCreateLock)
         {
-            lock (_storeCreateLock)
+            if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
+            {
                 WritePendingComponent(batchIdx, component);
+                return;
+            }
         }
-        else
-        {
-            GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindSet);
-        }
+        GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindSet);
     }
 
     /// <summary>
     /// Records a Remove command for the specified component type from the given entity.
-    /// Thread-safe; uses per-component concurrent store append for alive entities,
-    /// and serializes on the internal create lock for pending-batch entities.
+    /// Thread-safe; checks pending batch under the lock, falls back to
+    /// per-component concurrent store append.
     /// </summary>
     public void Remove<T>(Entity entity) where T : unmanaged
     {
-        if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
+        lock (_storeCreateLock)
         {
-            lock (_storeCreateLock)
+            if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
+            {
                 MarkBatchComponentRemoved(batchIdx, CommandTypeInfo<T>.Type);
+                return;
+            }
         }
-        else
-        {
-            GetOrCreateStoreParallel<T>().AppendConcurrent(entity, default!, KindRemove);
-        }
+        GetOrCreateStoreParallel<T>().AppendConcurrent(entity, default!, KindRemove);
     }
 
     /// <summary>

@@ -158,20 +158,21 @@ public sealed partial class World
     }
 
     /// <summary>
-    /// Unchecked direct record access for paths that have already validated entity
-    /// existence via <see cref="IsAlive"/> and whose execution order guarantees no
-    /// entity destruction or version change occurs before the read.
+    /// Unchecked direct record access for hot paths that have already validated
+    /// entity existence. Caller guarantees <c>entity.Id</c> is in range and the
+    /// entity is alive (slot occupied, version matches).
     /// <para/>
-    /// <b>Invariant (caller must uphold):</b> the entity is alive with an id within
-    /// [0, <c>_entitySlotCount</c>). Used only by
-    /// <c>ComponentStore&lt;T&gt;.ApplyToWorld</c> where all entities were validated
-    /// at record time and the Submit order ensures <c>ApplyComponentStores</c> runs
-    /// before <c>ApplyDestroys</c>.
+    /// Used by <c>ComponentStore&lt;T&gt;.ApplyToWorld</c> where the Submit order
+    /// ensures <c>ApplyComponentStores</c> runs before <c>ApplyDestroys</c>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal EntityRecord GetRecordFast(Entity entity)
     {
         AssertNotDisposed();
+#if DEBUG
+        Debug.Assert((uint)entity.Id < (uint)_entitySlotCount,
+            $"GetRecordFast id {entity.Id} out of range [0, {_entitySlotCount}).");
+#endif
         ref var data = ref MemoryMarshal.GetArrayDataReference(_records);
         return Unsafe.Add(ref data, entity.Id);
     }
