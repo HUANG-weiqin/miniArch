@@ -10,7 +10,7 @@
 |---|---|
 | **入门 / 导航** | `kb-design-rationale.md`（**新人必读**：为什么是这样而不是那样）、`kb-code-review-findings.md`（**审阅前必读**：历次审阅的真 bug 索引 + 已排除的非 bug 猜想）、`kb-glossary.md`（术语表）、`kb-perf-harnesses.md`（4 套 perf harness 消歧）、`kb-lockstep-playbook.md`（帧同步端到端 spine） |
 | Workspace（仓库导航/脚本/流程） | `kb-repo-overview.md`、`kb-profiling-workflow.md`、`kb-throughput-workflow.md` |
-| MiniArch.Core（ECS 运行时） | `kb-core-ecs.md`、`kb-architecture-review.md`、`kb-chunk-storage.md`、`kb-cache-optimization.md` |
+| MiniArch.Core（ECS 运行时） | `kb-core-ecs.md`、`kb-architecture-review.md`、`kb-chunk-storage.md`、`kb-cache-optimization.md`、`kb-chunk-tech-debt.md`（dual-mode 结构债审计 + 偿还规划） |
 | MiniArch.Core CommandStream | `kb-command-stream.md`、`kb-deferred-create-design.md` |
 | MiniArch.Core Query | `kb-query-invalidation.md`、`kb-parallel-query.md` |
 | MiniArch.Core Snapshot | `kb-snapshot-persistence.md` |
@@ -52,6 +52,7 @@
 
 **存储 / 查询**：
 - **Chunk 存储** → `kb-chunk-storage.md`
+- **Chunk 结构债偿还（后期逐步做）** → `kb-chunk-tech-debt.md`
 - **Query 失效机制** → `kb-query-invalidation.md`
 - **并行 Query** → `kb-parallel-query.md`
 - **Hierarchy** → `kb-hierarchy-runtime.md`

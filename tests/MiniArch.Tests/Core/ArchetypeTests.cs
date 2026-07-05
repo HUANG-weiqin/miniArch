@@ -1,4 +1,5 @@
 using MiniArch.Core;
+using MiniQueryCache = MiniArch.Core.QueryCache;
 
 namespace MiniArchTests.Core;
 
@@ -145,6 +146,7 @@ public sealed class ArchetypeTests
         var position = registry.GetOrCreate<Position>();
         var archetype = new Archetype(new Signature(position), [typeof(Position)], capacity: 4);
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         var row1 = archetype.AddEntity(new Entity(1, 1));
         archetype.SetComponentAtTyped(0, row1, new Position(10, 20));
@@ -163,6 +165,7 @@ public sealed class ArchetypeTests
         var position = registry.GetOrCreate<Position>();
         var archetype = new Archetype(new Signature(position), [typeof(Position)], capacity: 4);
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         var r1 = archetype.AddEntity(new Entity(1, 1));
         archetype.SetComponentAtTyped(0, r1, new Position(1, 1));
@@ -185,6 +188,7 @@ public sealed class ArchetypeTests
         var position = registry.GetOrCreate<Position>();
         var archetype = new Archetype(new Signature(position), [typeof(Position)], capacity: 4);
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         var r1 = archetype.AddEntity(new Entity(1, 1));
         archetype.SetComponentAtTyped(0, r1, new Position(10, 10));
@@ -206,6 +210,7 @@ public sealed class ArchetypeTests
         var position = registry.GetOrCreate<Position>();
         var archetype = new Archetype(new Signature(position), [typeof(Position)], capacity: 2);
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         for (var i = 0; i < 100; i++)
         {
@@ -229,6 +234,12 @@ public sealed class ArchetypeTests
         var entities = new Entity[150];
         for (var i = 0; i < 150; i++)
             entities[i] = world.Create(new Position(i, i));
+
+        // Force chunked — Position segCap=262144, 150 entities never promote naturally
+        var coreQuery = MiniQueryCache.Create(world, in description);
+        var arch = Assert.Single(coreQuery.MatchedArchetypes);
+        arch.ForceChunkedForTesting();
+        Assert.True(arch.IsChunked);
 
         for (var i = 0; i < 150; i++)
         {
@@ -270,7 +281,13 @@ public sealed class ArchetypeTests
         for (var i = 0; i < 200; i++)
             world.Create(new Position(i, i), new Velocity(i * 2, i * 2));
 
+        // Force chunked — Position+Velocity segCap=131072, 200 entities never promote
         var description = new QueryDescription().With<Position>().With<Velocity>();
+        var coreQuery = MiniQueryCache.Create(world, in description);
+        var arch = Assert.Single(coreQuery.MatchedArchetypes);
+        arch.ForceChunkedForTesting();
+        Assert.True(arch.IsChunked);
+
         var query = world.Query(in description);
         var count = 0;
         foreach (var chunk in query.GetChunks())
@@ -298,6 +315,7 @@ public sealed class ArchetypeTests
         var position = registry.GetOrCreate<Position>();
         var archetype = new Archetype(new Signature(position), [typeof(Position)], capacity: 4);
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         // Add entities to first segment
         for (var i = 0; i < 100; i++)
@@ -342,6 +360,7 @@ public sealed class ArchetypeTests
         var signature = new Signature(position, velocity);
         var archetype = new Archetype(signature, [typeof(Position), typeof(Velocity)], capacity: 4);
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         for (var i = 0; i < 50; i++)
         {
@@ -374,6 +393,7 @@ public sealed class ArchetypeTests
         var position = registry.GetOrCreate<Position>();
         var archetype = new Archetype(new Signature(position), [typeof(Position)], capacity: 2);
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         var row = archetype.AddEntity(new Entity(1, 1));
         archetype.SetComponentAtTyped(0, row, new Position(10, 20));
@@ -392,6 +412,7 @@ public sealed class ArchetypeTests
         Assert.True(world.TryGetLocation(entity, out var info));
         var arch = info.Archetype;
         arch.ForceChunkedForTesting();
+        Assert.True(arch.IsChunked);
 
         var desc = new QueryDescription().With<Position>();
         var query = world.Query(in desc);
@@ -433,6 +454,7 @@ public sealed class ArchetypeTests
         var position = registry.GetOrCreate<Position>();
         var archetype = new Archetype(new Signature(position), [typeof(Position)], capacity: 4);
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         var r1 = archetype.AddEntity(new Entity(1, 1));
         archetype.SetComponentAtTyped(0, r1, new Position(1, 1));
@@ -453,6 +475,7 @@ public sealed class ArchetypeTests
         Assert.True(world.TryGetLocation(entity, out var info));
         var arch = info.Archetype;
         arch.ForceChunkedForTesting();
+        Assert.True(arch.IsChunked);
 
         // Add entities, then add a second segment, then add more entities to second segment
         for (var i = 0; i < 20; i++)
@@ -490,6 +513,7 @@ public sealed class ArchetypeTests
         Assert.True(world.TryGetLocation(entity, out var info));
         var arch = info.Archetype;
         arch.ForceChunkedForTesting();
+        Assert.True(arch.IsChunked);
 
         for (var i = 0; i < 30; i++)
         {
@@ -531,6 +555,7 @@ public sealed class ArchetypeTests
 
         archetype.AddEntity(new Entity(1, 1));
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
         Assert.Equal(1, archetype.EntityCount);
         Assert.Equal(1, archetype.SegmentCount);
 
@@ -546,6 +571,7 @@ public sealed class ArchetypeTests
         var position = registry.GetOrCreate<Position>();
         var archetype = new Archetype(new Signature(position), [typeof(Position)], capacity: 4);
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         // Add a few entities to the first segment
         for (var i = 0; i < 5; i++)
@@ -581,6 +607,7 @@ public sealed class ArchetypeTests
         var position = registry.GetOrCreate<Position>();
         var archetype = new Archetype(new Signature(position), [typeof(Position)], capacity: 4);
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         archetype.AddEntity(new Entity(1, 1));
         archetype.SetComponentAtTyped(0, 0, new Position(10, 10));
@@ -672,6 +699,7 @@ public sealed class ArchetypeTests
         Assert.False(archetype.IsChunked);
 
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         // Rows >= 2048 must land in segment[1] with correct, rebased data.
         Assert.Equal(2148, archetype.GetComponentAt<Component1024>(0, 2048).Value);
@@ -699,6 +727,7 @@ public sealed class ArchetypeTests
         Assert.False(archetype.IsChunked);
 
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         Assert.Equal(2148, archetype.GetComponentAt<Component1024>(0, 2048).Value);
         Assert.Equal(3099, archetype.GetComponentAt<Component1024>(0, 2999).Value);
@@ -724,6 +753,7 @@ public sealed class ArchetypeTests
             archetype.SetComponentAtTyped(1, i, new Component1024 { Value = i + 100 });
         }
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         // Row 2048 = first row of segment[1]. Both columns must rebase correctly.
         Assert.Equal(new Position(2048, 2049), archetype.GetComponentAt<Position>(0, 2048));
@@ -761,6 +791,7 @@ public sealed class ArchetypeTests
             archetype.SetComponentAtTyped(0, i, new Component1024 { Value = i + 100 });
         }
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         // Step 2: add two empty tail segments (seg1, seg2).
         archetype.AddSegmentForTesting();
@@ -967,6 +998,7 @@ public sealed class ArchetypeTests
         }
 
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
         Assert.Equal(segCap, archetype.EntityCount);
         Assert.Equal(1, archetype.SegmentCount);
 
@@ -998,6 +1030,7 @@ public sealed class ArchetypeTests
         }
 
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
         Assert.Equal(segCap * 2, archetype.EntityCount);
         Assert.Equal(2, archetype.SegmentCount);
 
@@ -1082,6 +1115,7 @@ public sealed class ArchetypeTests
         var row = archetype.AddEntity(new Entity(1, 1));
         archetype.SetComponentAtTyped(0, row, new Component1024 { Value = 1 });
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         // Remove it — now _count = 0, one segment exists with Count=0
         archetype.RemoveAt(0, out _);
@@ -1107,6 +1141,7 @@ public sealed class ArchetypeTests
         var comp = registry.GetOrCreate<Component1024>();
         var archetype = new Archetype(new Signature(comp), [typeof(Component1024)], capacity: 4);
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         archetype.AddEntity(new Entity(1, 1));
         archetype.SetComponentAtTyped(0, 0, new Component1024 { Value = 42 });
@@ -1127,6 +1162,7 @@ public sealed class ArchetypeTests
         var comp = registry.GetOrCreate<Component1024>();
         var archetype = new Archetype(new Signature(comp), [typeof(Component1024)], capacity: 4);
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         for (var i = 0; i < 5; i++)
         {
@@ -1166,6 +1202,7 @@ public sealed class ArchetypeTests
             archetype.SetComponentAtTyped(0, i, new Component1024 { Value = i });
         }
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
         Assert.Equal(2, archetype.SegmentCount);
 
         // Remove the last entity (from segment[1]) so segment[1] has capacity
@@ -1198,6 +1235,7 @@ public sealed class ArchetypeTests
             archetype.SetComponentAtTyped(0, i, new Component1024 { Value = i });
         }
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
         Assert.Equal(1, archetype.SegmentCount);
         Assert.Equal(segCap, archetype.EntityCount);
 
@@ -1247,6 +1285,7 @@ public sealed class ArchetypeTests
         var comp = registry.GetOrCreate<Component1024>();
         var archetype = new Archetype(new Signature(comp), [typeof(Component1024)], capacity: 4);
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         for (var i = 0; i < 5; i++)
             archetype.AddEntity(new Entity(i + 1, 1));
@@ -1296,6 +1335,7 @@ public sealed class ArchetypeTests
         var segCap = 2048;
         var archetype = new Archetype(new Signature(comp), [typeof(Component1024)], capacity: 4);
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         // Bulk allocate > segCap → spans multiple segments via the while loop
         var startRow = archetype.AllocateRows(segCap + 100);
@@ -1319,6 +1359,7 @@ public sealed class ArchetypeTests
         var comp = registry.GetOrCreate<Component1024>();
         var archetype = new Archetype(new Signature(comp), [typeof(Component1024)], capacity: 4);
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         var result = archetype.AllocateRows(0);
         Assert.Equal(0, result);
@@ -1342,6 +1383,7 @@ public sealed class ArchetypeTests
         var segCap = 2048;
         var archetype = new Archetype(new Signature(comp), [typeof(Component1024)], capacity: 4);
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         // Fill the first segment completely
         archetype.AllocateRows(segCap);
@@ -1379,6 +1421,7 @@ public sealed class ArchetypeTests
         var segCap = 2048;
         var archetype = new Archetype(new Signature(comp), [typeof(Component1024)], capacity: 4);
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         var count = segCap + 500;
         archetype.AllocateRows(count);
@@ -1507,6 +1550,7 @@ public sealed class ArchetypeTests
             dstArch.SetComponentAtTyped(0, row, new Component1024 { Value = i });
         }
         dstArch.ForceChunkedForTesting();
+        Assert.True(dstArch.IsChunked);
         Assert.Equal(50, dstArch.EntityCount);
 
         // Restore the smaller backup (20 entities) into the larger chunked archetype
@@ -1682,6 +1726,7 @@ public sealed class ArchetypeTests
         // Create small chunked destination
         var dst = new Archetype(sig, [typeof(Component1024)], capacity: 4);
         dst.ForceChunkedForTesting();
+        Assert.True(dst.IsChunked);
         Assert.Equal(1, dst.SegmentCount);
 
         // Restore 5000 entities into it — must GrowChunked
@@ -1741,6 +1786,7 @@ public sealed class ArchetypeTests
         Assert.True(world.TryGetLocation(entity, out var info));
         var arch = info.Archetype;
         arch.ForceChunkedForTesting();
+        Assert.True(arch.IsChunked);
 
         for (var i = 0; i < 10; i++)
         {
@@ -1804,6 +1850,7 @@ public sealed class ArchetypeTests
             archetype.SetComponentAtTyped(1, row, new PositionAndTag(i, i * 2));
         }
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         // Read component data — should not crash or return corrupted data
         for (var i = 0; i < 50; i++)
@@ -1843,6 +1890,7 @@ public sealed class ArchetypeTests
             archetype.SetComponentAtTyped(0, row, new BigComponent { Value = i * 100 });
         }
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         Assert.True(archetype.SegmentCount >= 3);
         Assert.Equal(segCap * 3, archetype.EntityCount);
@@ -1872,6 +1920,7 @@ public sealed class ArchetypeTests
             archetype.SetComponentAtTyped(1, row, new Position(i * 3, i * 4));
         }
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         for (var i = 0; i < 50; i++)
         {
@@ -1909,6 +1958,7 @@ public sealed class ArchetypeTests
         // Force chunked promotion via the archetype
         Assert.True(world.TryGetLocation(entities[0], out var info));
         info.Archetype.ForceChunkedForTesting();
+        Assert.True(info.Archetype.IsChunked);
 
         // Remove several entities (creates swap-removed holes)
         world.Destroy(entities[10]);
@@ -1960,20 +2010,26 @@ public sealed class ArchetypeTests
     {
         var world = new World(chunkCapacity: 4, entityCapacity: 4);
 
-        // Create entities in flat mode (small archetype)
+        // All 205 entities share the same Position-only archetype.
+        // Position segCap=262144, so 205 entities never promote naturally.
+        // We force chunked to exercise chunked snapshot/restore.
         var flatEntities = new Entity[5];
         for (var i = 0; i < 5; i++)
             flatEntities[i] = world.Create(new Position(i, i + 1));
 
-        // Create many entities that will trigger chunked promotion
+        // Get the archetype after first entity exists
+        var desc = new QueryDescription().With<Position>();
+        var coreQuery = MiniQueryCache.Create(world, in desc);
+        var arch = Assert.Single(coreQuery.MatchedArchetypes);
+
         var chunkedEntities = new Entity[200];
         for (var i = 0; i < 200; i++)
             chunkedEntities[i] = world.Create(new Position(i + 100, i + 200));
 
-        // All are in flat mode initially — force chunked promotion on the
-        // second archetype via natural growth
-        // (Actually with chunkCapacity=4, 200 entities should trigger
-        // automatic promotion. Just verify at least one is chunked.)
+        // Force chunked on the single archetype
+        arch.ForceChunkedForTesting();
+        Assert.True(arch.IsChunked);
+
         foreach (var e in chunkedEntities)
         {
             Assert.True(world.IsAlive(e));
@@ -2029,7 +2085,10 @@ public sealed class ArchetypeTests
         {
             // Guarantee chunked mode is exercised: promote at step 200
             if (step == 200 && !archetype.IsChunked)
+            {
                 archetype.ForceChunkedForTesting();
+                Assert.True(archetype.IsChunked);
+            }
 
             var op = rng.Next(0, 4);
             switch (op)
@@ -2074,6 +2133,7 @@ public sealed class ArchetypeTests
                 {
                     if (!archetype.IsChunked)
                         archetype.ForceChunkedForTesting();
+                        Assert.True(archetype.IsChunked);
                     break;
                 }
             }
@@ -2115,7 +2175,10 @@ public sealed class ArchetypeTests
         {
             // Guarantee chunked mode: promote at step 500
             if (step == 500 && !archetype.IsChunked)
+            {
                 archetype.ForceChunkedForTesting();
+                Assert.True(archetype.IsChunked);
+            }
 
             var op = rng.Next(0, 4);
             switch (op)
@@ -2166,6 +2229,7 @@ public sealed class ArchetypeTests
                 {
                     if (!archetype.IsChunked)
                         archetype.ForceChunkedForTesting();
+                        Assert.True(archetype.IsChunked);
                     // After chunked, exercise bulk growth via EnsureCapacity
                     if (rng.Next(0, 3) == 0)
                         archetype.EnsureCapacity(archetype.Capacity + rng.Next(1, 5000));

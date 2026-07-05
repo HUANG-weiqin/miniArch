@@ -531,6 +531,7 @@ public sealed class WorldSnapshotTests
         Assert.True(world.TryGetLocation(entities[0], out var info));
         var arch = info.Archetype;
         arch.ForceChunkedForTesting();
+        Assert.True(arch.IsChunked);
         arch.AddSegmentForTesting();
         Assert.True(arch.SegmentCount >= 2, $"expected >=2 segments, got {arch.SegmentCount}");
 
@@ -580,6 +581,7 @@ public sealed class WorldSnapshotTests
         Assert.True(world.TryGetLocation(seed, out var info));
         var arch = info.Archetype;
         arch.ForceChunkedForTesting();
+        Assert.True(arch.IsChunked);
         var segmentsAtCapture = arch.SegmentCount;
 
         var snapshot = world.CaptureState();
@@ -967,6 +969,7 @@ public sealed class WorldSnapshotTests
 
         // Simulate prediction-time promotion to chunked storage.
         arch.ForceChunkedForTesting();
+        Assert.True(arch.IsChunked);
 
         // This throws ArgumentException ("Destination array was not long
         // enough") from RestoreTo's Array.Copy(Entities, arch.GetEntityStorageUnsafe(), Count).
@@ -992,6 +995,7 @@ public sealed class WorldSnapshotTests
 
         var snapshot = world.CaptureState();
         arch.ForceChunkedForTesting();
+        Assert.True(arch.IsChunked);
 
         world.RestoreState(snapshot);
 
@@ -1181,4 +1185,3 @@ public sealed class WorldSnapshotTests
         if (captured is not null) ExceptionDispatchInfo.Capture(captured).Throw();
     }
 }
-

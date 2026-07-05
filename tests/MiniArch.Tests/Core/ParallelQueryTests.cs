@@ -202,6 +202,7 @@ public sealed class ParallelQueryTests
         Assert.True(world.TryGetLocation(first, out var info));
         var arch = info.Archetype;
         arch.ForceChunkedForTesting();
+        Assert.True(arch.IsChunked);
 
         for (var i = 0; i < 20; i++)
         {
@@ -291,6 +292,7 @@ public sealed class ParallelQueryTests
         Assert.True(world.TryGetLocation(first, out var info));
         var arch = info.Archetype;
         arch.ForceChunkedForTesting();
+        Assert.True(arch.IsChunked);
 
         const int SegmentCount = 16;
         for (var s = 0; s < SegmentCount; s++)

@@ -143,7 +143,9 @@ public sealed class QueryTests
         var second = world.Create(new Position(1, 0));
         var description = new QueryDescription().With<Position>();
         var query = MiniQueryCache.Create(world, in description);
-        Assert.Single(query.MatchedArchetypes).ForceChunkedForTesting();
+        var arch = Assert.Single(query.MatchedArchetypes);
+        arch.ForceChunkedForTesting();
+        Assert.True(arch.IsChunked);
 
         var sorted = new List<Entity>();
         foreach (var entity in world.Query(in description)
@@ -168,7 +170,9 @@ public sealed class QueryTests
         var initialChunks = publicQuery.GetChunks();
         Assert.Equal(1, initialChunks.Length);
 
-        Assert.Single(coreQuery.MatchedArchetypes).ForceChunkedForTesting();
+        var arch = Assert.Single(coreQuery.MatchedArchetypes);
+        arch.ForceChunkedForTesting();
+        Assert.True(arch.IsChunked);
 
         var refreshedChunks = publicQuery.GetChunks();
         Assert.Equal(1, refreshedChunks.Length);
@@ -192,6 +196,7 @@ public sealed class QueryTests
 
         _ = world.Create(new Velocity(1, 0));
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         var refreshedChunks = publicQuery.GetChunks();
         Assert.Equal(1, refreshedChunks.Length);
@@ -210,6 +215,7 @@ public sealed class QueryTests
         var coreQuery = MiniQueryCache.Create(world, in description);
         var archetype = Assert.Single(coreQuery.MatchedArchetypes);
         archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         Assert.Equal(1, publicQuery.GetChunks().Length);
 
@@ -608,4 +614,3 @@ public sealed class QueryTests
         Assert.Equal(typeof(Position), desc.AnyTypes[0]);
     }
 }
-
