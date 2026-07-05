@@ -57,6 +57,18 @@ public abstract class CommandStreamCore
     protected Entity _lastCreated;
     protected int _lastCreatedBatch = -1;
 
+    // 2-slot LRU cache for GetOrCreateStore<T>() — avoids Stores array lookup
+    // on repeated/alternating Set<T>/Add<T>/Remove<T> calls.
+    private int _lastStoreId0 = -1;
+    private ComponentStore? _lastStore0;
+    private int _lastStoreId1 = -1;
+    private ComponentStore? _lastStore1;
+
+    // Dirty flags to avoid scanning _frozen.Stores when there are no
+    // component store commands (common no-op Submit case).
+    private bool _hasStoreCommands;
+    private bool _hasParallelStoreWrites;
+
     // Lock used by <see cref="ParallelCommandStream"/> for serializing mutators
     // that touch shared FrozenState arrays. Single-threaded subclasses never
     // acquire it; the field exists so protected helpers can take it when needed.
@@ -402,9 +414,8 @@ public abstract class CommandStreamCore
     {
         if (_frozen.PendingBatchCount > 0 || _frozen.DestroyCount > 0 || _frozen.HierarchyByChild.Count > 0)
             return true;
-        for (var i = 0; i < _frozen.Stores.Length; i++)
-            if (_frozen.Stores[i]?.HasCommands == true)
-                return true;
+        if (_hasStoreCommands)
+            return true;
         return false;
     }
 
@@ -422,8 +433,12 @@ public abstract class CommandStreamCore
 
     private void SealParallelStores()
     {
+        if (!_hasParallelStoreWrites)
+            return;
         foreach (var store in _frozen.Stores)
             store?.SealParallelWrites();
+        // Flag is consumed; reset so the next cycle starts clean.
+        _hasParallelStoreWrites = false;
     }
 
     private void ApplyComponentStores()
@@ -664,6 +679,10 @@ public abstract class CommandStreamCore
         _batchBufLen = 0;
         _lastCreated = default;
         _lastCreatedBatch = -1;
+        _lastStoreId0 = -1; _lastStore0 = null;
+        _lastStoreId1 = -1; _lastStore1 = null;
+        _hasStoreCommands = false;
+        _hasParallelStoreWrites = false;
         _frozen.HierarchyByChild.Clear();
 
 #if DEBUG
@@ -1460,6 +1479,22 @@ public abstract class CommandStreamCore
         var id = CommandTypeInfo<T>.Type.Value;
         Debug.Assert(id >= 0, "Component type id must be non-negative.");
 
+        // Dirty: caller will write to this store. Must be set before any cache-hit return
+        // because the cache survives Clear() —a post-Clear cache hit still dirties the stream.
+        // Conditional write avoids repeated store-buffer / cache-line pressure in the hot path.
+        if (!_hasStoreCommands) _hasStoreCommands = true;
+
+        // 2-slot LRU cache: avoids Stores array lookups for repeated/alternating types.
+        if (_lastStoreId0 == id)
+            return Unsafe.As<ComponentStore<T>>(_lastStore0!);
+        if (_lastStoreId1 == id)
+        {
+            // Promote slot1 to most-recently-used.
+            (_lastStoreId0, _lastStoreId1) = (_lastStoreId1, _lastStoreId0);
+            (_lastStore0, _lastStore1) = (_lastStore1, _lastStore0);
+            return Unsafe.As<ComponentStore<T>>(_lastStore0!);
+        }
+
         var stores = _frozen.Stores;
         if ((uint)id >= (uint)stores.Length)
         {
@@ -1479,12 +1514,24 @@ public abstract class CommandStreamCore
 
         Debug.Assert(store is ComponentStore<T>,
             $"Slot {id} holds {store.GetType()} but expected ComponentStore<{typeof(T)}>.");
+
+        // Insert into LRU cache (evict least-recently-used).
+        _lastStoreId1 = _lastStoreId0; _lastStore1 = _lastStore0;
+        _lastStoreId0 = id; _lastStore0 = store;
+
         return Unsafe.As<ComponentStore<T>>(store);
     }
 
     private protected ComponentStore<T> GetOrCreateStoreParallel<T>() where T : unmanaged
     {
         var id = CommandTypeInfo<T>.Type.Value;
+
+        // Dirty: concurrent writer will AppendConcurrent to this store.
+        // _hasParallelStoreWrites ensures SealParallelStores() iterates stores to
+        // merge the per-thread local buffers before applying/snapshotting.
+        // Conditional writes avoid repeated store-buffer / cache-line pressure in the hot path.
+        if (!_hasStoreCommands) _hasStoreCommands = true;
+        if (!_hasParallelStoreWrites) _hasParallelStoreWrites = true;
         if (id >= _frozen.Stores.Length)
         {
             lock (_storeCreateLock)
@@ -1587,6 +1634,8 @@ public abstract class CommandStreamCore
         _lastCreated = default;
         _lastCreatedBatch = -1;
         _frozen.HierarchyByChild.Clear();
+        _hasStoreCommands = false;
+        _hasParallelStoreWrites = false;
     }
 
     // ── Deferred entity resolution ────────────────────────────────────
@@ -2056,6 +2105,7 @@ public abstract class CommandStreamCore
             Archetype? lastArch = null;
             int lastColIdx = -1;
             var count = _count;
+            var compType = Component<T>.ComponentType;
 
             ref var entriesRef = ref MemoryMarshal.GetArrayDataReference(_entries);
 
@@ -2075,7 +2125,7 @@ public abstract class CommandStreamCore
                     else
                     {
                         lastArch = arch;
-                        colIdx = lastColIdx = arch.GetComponentIndex(Component<T>.ComponentType);
+                        colIdx = lastColIdx = arch.GetComponentIndex(compType);
                     }
                     arch.SetComponentAtTyped(colIdx, record.RowIndex, in entry.Value);
                 }
@@ -2083,9 +2133,9 @@ public abstract class CommandStreamCore
                 {
                     lastArch = null;
                     if (entry.Kind == KindAdd)
-                        world.ApplyTypedAdd(entry.Entity, record, Component<T>.ComponentType, in entry.Value);
+                        world.ApplyTypedAdd(entry.Entity, record, compType, in entry.Value);
                     else
-                        world.RemoveBoxed(entry.Entity, record, Component<T>.ComponentType);
+                        world.RemoveBoxed(entry.Entity, record, compType);
                 }
             }
         }

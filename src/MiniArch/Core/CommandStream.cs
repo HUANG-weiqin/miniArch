@@ -44,10 +44,10 @@ public sealed class CommandStream : CommandStreamCore
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public new void Set<T>(Entity entity, T component) where T : unmanaged
     {
-        if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
-            WritePendingComponent(batchIdx, component);
-        else if (_world.IsAlive(entity))
+        if (_world.IsAlive(entity))
             GetOrCreateStore<T>().Append(entity, component, KindSet);
+        else if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
+            WritePendingComponent(batchIdx, component);
     }
 
     /// <inheritdoc/>

@@ -2,7 +2,7 @@
 title: Cache & Memory Optimization Review
 module: MiniArch.Core
 description: Memory layout, cache behavior analysis, applied optimizations, and remaining opportunities for the ECS runtime
-updated: 2026-06-30 (全文重写: 删除已移除的 CommandBuffer/TryGetArchetype 过时段, 重组为主题分组)
+updated: 2026-07-05 (补 CommandStream store cache / dirty flags Hero perf 微优化)
 ---
 # Cache & Memory Optimization Review
 
@@ -78,11 +78,11 @@ struct EntityRecord {
 
 `SwapOutState()` 每帧分配 Dictionary/HashSet/数组的问题，通过**整体 FrozenState 双缓冲**解决：
 - 后台 Task 完成后，整个 FrozenState（对象 + 所有内部数组 + Dictionary + HashSet）回收到 `_spareFrozen`
-- 下一次 `SwapOutState` 用元组 swap 把当前状态与 spare 互换
+- 下一次 `SwapOutState` 直接交换 `_frozen` / `_spareFrozen` 两个 `FrozenState` 对象引用，旧 `_frozen` 作为只读快照交给 submit/build，spare 成为新的 recording state
 - 闭包消除：`Task.Run(() => ...)` → 静态委托 `s_buildFromFrozen` + `Task.Factory.StartNew`
 - **未消除的分配**（YAGNI 边界）：仅剩 `Task<FrameDelta>`（~80B，TAP 语义必需）和 `new FrameDelta()` 返回值
 
-**重要：FrozenState 字段对调的安全性。** `SwapOutState` 通过 12 个 `(frozen.X, _X) = (_X, spare.X)` 元组交换来互换当前与 spare 的全部字段。每新增一个 `CommandStream` 字段（如 `_someList`），都必须在此处添加对应的交换行——漏掉一个会导致下帧读/写到错误的存储区，编译器不会报错。可能的防范方法：反射驱动的测试（枚举所有匹配字段自动验证），或 `[FieldsMustBeSwapped]` 标记属性。
+**重要：FrozenState 边界。** 录制数据应放进 `FrozenState`，这样 async 路径只需交换对象引用；仅录制期/重置期使用、不被后台 worker 读取的标量（如 cache/dirty flags）才留在 `CommandStreamCore` 上，并必须在 `SwapOutState()` / `Clear()` 中重置。
 
 **回归门禁数据**（2026-06-22，见 `kb-commandstream-game-perf.md`）：
 - Movement-Stream: 1766 → 1818 rounds/s（+3%）
@@ -90,6 +90,17 @@ struct EntityRecord {
 - 内存稳定，无 GC Gen2 增长
 
 > **注意**：这里的 Movement-Stream 1818 rounds/s 是 `SubmitAndSnapshotAsync` 路径的独立测量，与 `HeroComing.Perf` 回归门禁的 1512 rounds/s（`Submit` 路径）是不同 harness——详见 `kb-perf-harnesses.md`。
+
+### CommandStream store cache / dirty flags（2026-07-05）
+
+Hero perf 瓶颈继续推进时，保留了 4 个核心库内的低层微优化（详见 `kb-command-stream.md` “Hero perf CommandStream record/submit 微优化”）：
+
+- `CommandStream.Set<T>` alive-first：mixed frame 中 existing Set 跳过 pending-batch probe。
+- `GetOrCreateStore<T>()` 2-slot LRU cache：重复/交替组件类型少走 `Stores` 数组访问。
+- `_hasStoreCommands` / `_hasParallelStoreWrites` dirty flags：无命令 `Submit()` 少扫 store 表；parallel 写入仍 seal。
+- `ComponentStore<T>.ApplyToWorld` hoist `Component<T>.ComponentType`。
+
+**结论**：收益主要在 CommandStream record path；`existing-set` proxy 有明确改善，full HeroComing 单轮有较大噪声但门禁通过。不要把 no-promotion cache 当作已验证优化——该变体已因证据不足回退。
 
 ## 认知模型
 
