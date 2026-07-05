@@ -15,7 +15,7 @@ updated: 2026-07-05 (initial audit after advisor review)
 - 这个文档不负责：
   - 性能取舍的依据——见 `kb-ecs-comparison.md`（flat 模式 +70~74% vs Arch 是显式选择不是债）
   - storage layout 的完整说明——见 `kb-chunk-storage.md`（本页只覆盖它的脆弱点）
-  - "是否要走 always-chunked / small-chunk PoC" 的讨论——见 `kb-design-rationale.md` §3.8 已评估的方向
+  - "是否要走 always-chunked / small-chunk PoC" 的讨论——目前**未经评估**（见本页 §不算债的两点 / §决策的 §2.1 替代项未做的事实），不是已拒绝的提案
 
 ## 架构（不变式分层与脆弱性分布）
 
@@ -29,7 +29,7 @@ updated: 2026-07-05 (initial audit after advisor review)
 
 ### 层 2：ThrowIfChunked API 家族（裸露，结构性脆弱）
 
-以下方法**只在 archetype 还小时适用**，升 chunked 即 `InvalidOperationException`：
+以下方法**只在 archetype 还小时适用**，升 chunked 时直接 `throw InvalidOperationException`（这点**运行时诚实**——chunked 物理上没有单一连续 span，throw 是对的；债不是 throw 本身，而是"诚实只停留在运行时"——API 名字像通用、合同靠 throw 偶尔出现，不是靠命名（`GetFlat*`）或 static 强制）：
 
 - `GetComponentRef<T>(colIdx)`             — `Archetype.Storage.cs:381`
 - `GetComponentSpanAt<T>(colIdx)`         — `:422`
@@ -114,7 +114,7 @@ updated: 2026-07-05 (initial audit after advisor review)
 
 ### 三项关键判断的依据
 
-1. **(2) 删而不补**：`GetComponentSpan<T>()` 在 chunked 下"工作"是错的。`OrderedComponentEnumerator` 修过的 bug（`kb-code-review-findings.md:45`）正是同一陷阱——同族 bug 已经发生过，合同不静态强制还会再发生。
+1. **(2) 删而不补**：当前 `GetComponentSpan<T>()` 在 chunked 下直接 `throw`（诚实——chunked 无单一连续 span 是物理事实）。提议"让它工作"（per-segment iteration 或返回 copy span）才是错的——同族 bug `BUG_order_by_component_supports_chunked_archetypes`（`kb-code-review-findings.md:45`）正是调用方未防 throw 而崩，合同靠 runtime throw 不靠 static，必再发生。
 
 2. **(4) token 化先不做**：把 cache 失效摊到 immutable token 需要 mutation 全部通过 token-producing primitive。token 化自身 blast radius 大，且不真正消除纪律（即使强制走 primitive 也是纪律的一种）。集中 + DEBUG 校验覆盖度足够且改动面小。
 
@@ -128,7 +128,7 @@ updated: 2026-07-05 (initial audit after advisor review)
   - **`BumpLayoutGen()` 集中不减少纪律**——8 个 mutation site 仍要每个调一次。减少纪律的真正方式是减少 mutation site，不是集中表达
   - **sloppy 但 cold 的边界不构成债**——动它的成本（引入新 sub-state）比现状高
 - 常见误解：
-  - 误判 1：以为"让 `GetComponentSpan<T>` 在 chunked 下也工作"是安全化——反向，是放大了撒谎的范围
+  - 误判 1：以为"让 `GetComponentSpan<T>` 在 chunked 下也工作"是安全化——当前它已经 throw 不工作（bullet 在运行时诚实），提议让它工作才是反向（放大谎言）
   - 误判 2：以为"集中 bump 函数把纪律从 8 减到 1"——数学错误，递增点数量没变
   - 误判 3：把"flat 模式保留"算成债——不是，是显式性能选择，见 `kb-ecs-comparison.md:55`
 
