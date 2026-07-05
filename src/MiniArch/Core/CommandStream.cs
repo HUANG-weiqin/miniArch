@@ -24,15 +24,15 @@ public sealed class CommandStream : CommandStreamCore
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public override Entity Create() => CreateCore();
+    public new Entity Create() => CreateCore();
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public override EntitySlot Track(Entity entity) => TrackCore(entity);
+    public new EntitySlot Track(Entity entity) => TrackCore(entity);
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public override void Add<T>(Entity entity, T component)
+    public new void Add<T>(Entity entity, T component) where T : unmanaged
     {
         if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
             WritePendingComponent(batchIdx, component);
@@ -42,7 +42,7 @@ public sealed class CommandStream : CommandStreamCore
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public override void Set<T>(Entity entity, T component)
+    public new void Set<T>(Entity entity, T component) where T : unmanaged
     {
         if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
             WritePendingComponent(batchIdx, component);
@@ -52,7 +52,7 @@ public sealed class CommandStream : CommandStreamCore
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public override void Remove<T>(Entity entity)
+    public new void Remove<T>(Entity entity) where T : unmanaged
     {
         if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
             MarkBatchComponentRemoved(batchIdx, CommandTypeInfo<T>.Type);
@@ -62,16 +62,16 @@ public sealed class CommandStream : CommandStreamCore
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public override void Destroy(Entity entity) => DestroyCore(entity);
+    public new void Destroy(Entity entity) => DestroyCore(entity);
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public override void AddChild(Entity parent, Entity child) => AddChildCore(parent, child);
+    public new void AddChild(Entity parent, Entity child) => AddChildCore(parent, child);
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public override void RemoveChild(Entity child) => RemoveChildCore(child);
+    public new void RemoveChild(Entity child) => RemoveChildCore(child);
 
     /// <inheritdoc/>
-    public override Entity Clone(Entity source) => CloneCore(source);
+    public new Entity Clone(Entity source) => CloneCore(source);
 }

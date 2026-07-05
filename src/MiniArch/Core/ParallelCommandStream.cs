@@ -39,14 +39,14 @@ public sealed class ParallelCommandStream : CommandStreamCore
     public ParallelCommandStream(World world) : base(world) { }
 
     /// <inheritdoc/>
-    public override Entity Create()
+    public new Entity Create()
     {
         lock (_storeCreateLock)
             return CreateCore();
     }
 
     /// <inheritdoc/>
-    public override EntitySlot Track(Entity entity)
+    public new EntitySlot Track(Entity entity)
     {
         if (!entity.IsPlaceholder)
             return new EntitySlot(entity);
@@ -57,28 +57,28 @@ public sealed class ParallelCommandStream : CommandStreamCore
     }
 
     /// <inheritdoc/>
-    public override void Add<T>(Entity entity, T component)
+    public new void Add<T>(Entity entity, T component) where T : unmanaged
     {
         if (CanRecordParallelComponentCommand(entity))
             GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindAdd);
     }
 
     /// <inheritdoc/>
-    public override void Set<T>(Entity entity, T component)
+    public new void Set<T>(Entity entity, T component) where T : unmanaged
     {
         if (CanRecordParallelComponentCommand(entity))
             GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindSet);
     }
 
     /// <inheritdoc/>
-    public override void Remove<T>(Entity entity)
+    public new void Remove<T>(Entity entity) where T : unmanaged
     {
         if (CanRecordParallelComponentCommand(entity))
             GetOrCreateStoreParallel<T>().AppendConcurrent(entity, default!, KindRemove);
     }
 
     /// <inheritdoc/>
-    public override void Destroy(Entity entity)
+    public new void Destroy(Entity entity)
     {
         // Same pending-check + cancel logic as single-threaded, under the lock.
         // Without this, parallel Destroy on a pending entity would append to
@@ -90,21 +90,21 @@ public sealed class ParallelCommandStream : CommandStreamCore
     }
 
     /// <inheritdoc/>
-    public override void AddChild(Entity parent, Entity child)
+    public new void AddChild(Entity parent, Entity child)
     {
         lock (_storeCreateLock)
             AddChildCore(parent, child);
     }
 
     /// <inheritdoc/>
-    public override void RemoveChild(Entity child)
+    public new void RemoveChild(Entity child)
     {
         lock (_storeCreateLock)
             RemoveChildCore(child);
     }
 
     /// <inheritdoc/>
-    public override Entity Clone(Entity source)
+    public new Entity Clone(Entity source)
     {
         // Validate outside the lock (read-only world access); materialize under it.
         if (!_world.TryGetLocation(source, out var location))

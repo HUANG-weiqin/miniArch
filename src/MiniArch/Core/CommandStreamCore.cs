@@ -140,7 +140,18 @@ public abstract class CommandStreamCore
     /// calls <see cref="CreateCore"/> directly; <see cref="ParallelCommandStream"/>
     /// wraps it in <c>_storeCreateLock</c>.
     /// </summary>
-    public abstract Entity Create();
+    /// <remarks>
+    /// <b>Why this is non-virtual:</b> subclasses hide this with <c>new</c>, not
+    /// <c>override</c>. Callers always hold a reference typed as the sealed
+    /// subclass (<c>CommandStream</c> or <c>ParallelCommandStream</c>), so the
+    /// JIT resolves the call as a direct, inlinable method invocation —no
+    /// virtual dispatch, no generic virtual devirt heuristics. Profiling showed
+    /// that <c>abstract</c>+<c>override</c> cost ~10% throughput on
+    /// HeroComing.Perf because the .NET 8 JIT does not devirt generic virtual
+    /// methods reliably.
+    /// </remarks>
+    public Entity Create() => throw new NotSupportedException(
+        "Callers must hold a CommandStream or ParallelCommandStream reference, not CommandStreamCore.");
 
     /// <summary>Core create logic shared by both subclasses (no synchronization).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -152,23 +163,8 @@ public abstract class CommandStreamCore
     /// Creates a tracked handle for <paramref name="entity"/> that auto-updates
     /// when a deferred placeholder is resolved during Submit or Replay.
     /// </summary>
-    /// <param name="entity">A placeholder from <see cref="Create"/> (deferred mode)
-    /// or any real entity (non-deferred mode).</param>
-    /// <returns>
-    /// An <see cref="EntitySlot"/> whose <see cref="EntitySlot.Value"/> returns
-    /// the placeholder before resolution and the real entity after.
-    /// </returns>
-    /// <remarks>
-    /// <para>
-    /// In deferred mode, one small heap object is allocated per call (the internal
-    /// <c>Slot</c>). In non-deferred mode (when <paramref name="entity"/> is already
-    /// a real entity), no allocation occurs —the entity is stored inline.
-    /// </para>
-    /// <para>
-    /// Track the entity in the same frame you create it. Call before Submit/Snapshot.
-    /// </para>
-    /// </remarks>
-    public abstract EntitySlot Track(Entity entity);
+    public EntitySlot Track(Entity entity) => throw new NotSupportedException(
+        "Callers must hold a CommandStream or ParallelCommandStream reference, not CommandStreamCore.");
 
     /// <summary>Core track logic for placeholder entities. Caller handles synchronization.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -240,26 +236,30 @@ public abstract class CommandStreamCore
     /// Records an Add command for the specified component on the given entity.
     /// Synchronization strategy is the subclass's responsibility.
     /// </summary>
-    public abstract void Add<T>(Entity entity, T component) where T : unmanaged;
+    public void Add<T>(Entity entity, T component) where T : unmanaged
+        => throw new NotSupportedException("Use CommandStream or ParallelCommandStream.");
 
     /// <summary>
     /// Records a Set command for the specified component on the given entity.
     /// Synchronization strategy is the subclass's responsibility.
     /// </summary>
-    public abstract void Set<T>(Entity entity, T component) where T : unmanaged;
+    public void Set<T>(Entity entity, T component) where T : unmanaged
+        => throw new NotSupportedException("Use CommandStream or ParallelCommandStream.");
 
     /// <summary>
     /// Records a Remove command for the specified component type from the given entity.
     /// Synchronization strategy is the subclass's responsibility.
     /// </summary>
-    public abstract void Remove<T>(Entity entity) where T : unmanaged;
+    public void Remove<T>(Entity entity) where T : unmanaged
+        => throw new NotSupportedException("Use CommandStream or ParallelCommandStream.");
 
     /// <summary>
     /// Records a Destroy command for the specified entity.
     /// Synchronization strategy is the subclass's responsibility: subclasses call
     /// <see cref="DestroyCore"/> (single-threaded) or wrap it in a lock.
     /// </summary>
-    public abstract void Destroy(Entity entity);
+    public void Destroy(Entity entity)
+        => throw new NotSupportedException("Use CommandStream or ParallelCommandStream.");
 
     /// <summary>Core destroy logic. Caller handles synchronization.</summary>
     protected void DestroyCore(Entity entity)
@@ -279,7 +279,8 @@ public abstract class CommandStreamCore
     /// Records an AddChild command establishing a parent-child relationship.
     /// Synchronization strategy is the subclass's responsibility.
     /// </summary>
-    public abstract void AddChild(Entity parent, Entity child);
+    public void AddChild(Entity parent, Entity child)
+        => throw new NotSupportedException("Use CommandStream or ParallelCommandStream.");
 
     /// <summary>Core AddChild logic. Caller handles synchronization.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -290,7 +291,8 @@ public abstract class CommandStreamCore
     /// Records a RemoveChild command detaching the entity from its parent.
     /// Synchronization strategy is the subclass's responsibility.
     /// </summary>
-    public abstract void RemoveChild(Entity child);
+    public void RemoveChild(Entity child)
+        => throw new NotSupportedException("Use CommandStream or ParallelCommandStream.");
 
     /// <summary>Core RemoveChild logic. Caller handles synchronization.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -301,7 +303,8 @@ public abstract class CommandStreamCore
     /// Records a clone of the source entity, including all components and descendants.
     /// Synchronization strategy is the subclass's responsibility.
     /// </summary>
-    public abstract Entity Clone(Entity source);
+    public Entity Clone(Entity source)
+        => throw new NotSupportedException("Use CommandStream or ParallelCommandStream.");
 
     /// <summary>Core clone logic. Caller handles synchronization.</summary>
     protected Entity CloneCore(Entity source)
@@ -1336,7 +1339,7 @@ public abstract class CommandStreamCore
                 var cloneParent = cloneStack[stackCount];
                 if (!_world.TryGetLocation(srcChild, out var childLocation)) continue;
 
-                var cloneChild = Create();
+                var cloneChild = CreateCore();
                 int batchIdx;
                 if (_deferredEntities)
                     TryGetPendingBatch(cloneChild, out batchIdx);
@@ -1353,7 +1356,7 @@ public abstract class CommandStreamCore
                     unsafe { fixed (byte* ptr = &_frozen.BatchBuf[offset]) archetype.ReadComponentRaw(i, sourceRow, ptr); }
                     CommitBatchComponent(batchIdx, ct, offset, size);
                 }
-                AddChild(cloneParent, cloneChild);
+                AddChildCore(cloneParent, cloneChild);
 
                 foreach (var grandChild in _world.Hierarchy.EnumerateChildren(_world, srcChild))
                 {
