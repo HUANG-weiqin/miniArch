@@ -59,22 +59,49 @@ public sealed class ParallelCommandStream : CommandStreamCore
     /// <inheritdoc/>
     public new void Add<T>(Entity entity, T component) where T : unmanaged
     {
-        if (CanRecordParallelComponentCommand(entity))
+        if (_world.IsAlive(entity))
+        {
             GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindAdd);
+            return;
+        }
+
+        lock (_storeCreateLock)
+        {
+            if (TryGetPendingBatch(entity, out var batchIdx))
+                WritePendingComponent(batchIdx, component);
+        }
     }
 
     /// <inheritdoc/>
     public new void Set<T>(Entity entity, T component) where T : unmanaged
     {
-        if (CanRecordParallelComponentCommand(entity))
+        if (_world.IsAlive(entity))
+        {
             GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindSet);
+            return;
+        }
+
+        lock (_storeCreateLock)
+        {
+            if (TryGetPendingBatch(entity, out var batchIdx))
+                WritePendingComponent(batchIdx, component);
+        }
     }
 
     /// <inheritdoc/>
     public new void Remove<T>(Entity entity) where T : unmanaged
     {
-        if (CanRecordParallelComponentCommand(entity))
+        if (_world.IsAlive(entity))
+        {
             GetOrCreateStoreParallel<T>().AppendConcurrent(entity, default!, KindRemove);
+            return;
+        }
+
+        lock (_storeCreateLock)
+        {
+            if (TryGetPendingBatch(entity, out var batchIdx))
+                MarkBatchComponentRemoved(batchIdx, CommandTypeInfo<T>.Type);
+        }
     }
 
     /// <inheritdoc/>

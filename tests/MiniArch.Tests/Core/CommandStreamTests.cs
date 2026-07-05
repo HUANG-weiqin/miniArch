@@ -2939,6 +2939,72 @@ public sealed class DeferredCreateTests
     }
 
     // ────────────────────────────────────────────────────────────────────
+    // ────────────────────────────────────────────────────────────────────
+    //  ParallelCommandStream pending-batch regression tests (CS10)
+    //  ParallelCommandStream.Add/Set/Remove on a pending-batch entity MUST
+    //  write to the batch buffer (like single-threaded CommandStream does),
+    //  NOT to the component store.  The store path materializes the entity
+    //  empty and then tries to ApplyToWorld, which throws when the component
+    //  doesn't exist on the entity.
+    // ────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ParallelCommandStream_Set_on_pending_entity_applies_component()
+    {
+        var world = new World();
+        var stream = new ParallelCommandStream(world);
+        var e = stream.Create();
+        stream.Set(e, new Position(1, 2));
+        Assert.True(stream.Submit());
+        Assert.True(world.TryGet(e, out Position p));
+        Assert.Equal(new Position(1, 2), p);
+    }
+
+    [Fact]
+    public void ParallelCommandStream_Add_on_pending_entity_does_not_throw_on_second_Add()
+    {
+        var world = new World();
+        var stream = new ParallelCommandStream(world);
+        var e = stream.Create();
+        stream.Add(e, new Position(1, 2));
+        stream.Add(e, new Position(3, 4)); // second Add on same pending entity
+        Assert.True(stream.Submit());
+        Assert.True(world.TryGet(e, out Position p));
+        Assert.Equal(new Position(3, 4), p); // last write wins
+    }
+
+    [Fact]
+    public void ParallelCommandStream_Remove_on_pending_entity_skips_component()
+    {
+        var world = new World();
+        var stream = new ParallelCommandStream(world);
+        var e = stream.Create();
+        // Add a component, then remove it before Submit — should not appear
+        stream.Add(e, new Position(1, 2));
+        stream.Remove<Position>(e);
+        Assert.True(stream.Submit());
+        Assert.True(world.IsAlive(e));
+        Assert.False(world.TryGet<Position>(e, out _));
+    }
+
+    [Fact]
+    public void ParallelCommandStream_Clone_then_Add_component_matches_single_threaded()
+    {
+        var world = new World();
+        // Source entity in the world
+        var src = world.Create(new Position(10, 20));
+        var stream = new ParallelCommandStream(world);
+        var clone = stream.Clone(src);
+        // Add an additional component that the source didn't have
+        stream.Add(clone, new Health(99));
+        Assert.True(stream.Submit());
+        Assert.True(world.IsAlive(clone));
+        Assert.True(world.TryGet(clone, out Position p));
+        Assert.Equal(new Position(10, 20), p);
+        Assert.True(world.TryGet(clone, out Health h));
+        Assert.Equal(new Health(99), h);
+    }
+
     //  CommandStreamCore base-reference throw contract (reviewer P2)
     //  Locks in the design decision from kb-design-rationale.md §3.9:
     //  the 9 mutators on the base class are non-virtual stubs that throw,

@@ -2,14 +2,14 @@
 title: 代码审阅发现清单
 module: Meta
 description: 历次代码审阅中产生过的猜想与结论。真 bug 索引 + 已排除的非 bug 猜想。AI 审阅前必读，避免重复验证已知结论。
-updated: 2026-07-05 (CS9: abstract+override generic virtual 无法 devirt 是 CommandStream 拆分时的真 performance regression)
+updated: 2026-07-05 (CS10: ParallelCommandStream.Add/Set/Remove 对 pending-batch 实体走 AppendConcurrent 而非 WritePendingComponent 是真 bug)
 ---
 # 代码审阅发现清单
 
 > **审阅前必读**。这个文档只记录**结论 + 指路**，不重复推理过程。
 > 真 bug 由 `BUG_` 前缀测试证明（本文件只放索引）；非 bug 猜想按模块归档。
 >
-> **当前状态**：全部 10 个 BUG 已修复并转为回归测试（通过）。
+> **当前状态**：全部 11 个 BUG 已修复并转为回归测试（通过）。
 
 ## 这个模块是干什么的
 
@@ -34,7 +34,7 @@ updated: 2026-07-05 (CS9: abstract+override generic virtual 无法 devirt 是 Co
 
 ### 已修复（`BUG_` 测试转为回归测试，现在通过）
 
-> 全部 10 条 bug 均已修复，`BUG_` 前缀测试现在通过，充当回归守卫。
+> 全部 11 条 bug 均已修复，`BUG_` 前缀测试现在通过，充当回归守卫。
 
 | 测试名 | 位置 | 一句话描述 | 修复 |
 |---|---|---|---|
@@ -48,6 +48,7 @@ updated: 2026-07-05 (CS9: abstract+override generic virtual 无法 devirt 是 Co
 | `BUG_reserverows_deadlocks_when_promotion_creates_multiple_empty_segments` | `Archetype.Storage.cs:ReserveRows` | ReserveRows 在 EnsureCapacity 晋升 chunked 后，GrowChunked 批量创建多空段；ReserveRows 只填末段（lastSegIdx = _segmentCount-1），末段满后无限循环 | `ReserveRows` 改为扫码首个非满段，而非固定填末段。同时 `AddEntityChunked` 同步改为首个非满段填充 — 同一根因统一修复 |
 | `BUG_clone_deadlocks_on_archetype_with_large_component` | `WorldClone.cs:27` (ReserveRows) | 同根因，经公共 API `World.Clone()` 触发：克隆 >segCap 实体的 16KB+ 组件 archetype 死锁 | 同上根因修复 |
 | `BUG_flat_entity_index_mismatches_global_row_when_segment_hole_exists` | `Archetype.Storage.cs:AddEntityChunked` | 段空洞时平坦索引 ≠ 全局行号，Save 和 CanonicalChecksum 读入空段 → 静默数据损坏 | `AddEntityChunked` 改填首个非满段，空洞不再持久存在 |
+| `BUG_parallel_pending_Add_Set_Remove_bypass_batch_buffer` | `ParallelCommandStream.cs:Add/Set/Remove` | `ParallelCommandStream` 对 pending-batch 实体（刚 `Create`/`Clone`）的 `Add/Set/Remove` 走 `AppendConcurrent`（ComponentStore 路径）而非 `WritePendingComponent`（batch buffer 路径）；Submit 时实体被空身 materialize，随后 `ApplyComponentStores` 尝试对不存在组件执行 `Add`/`Set` 抛异常 | `ParallelCommandStream.Add/Set/Remove` 改为：alive 实体走 `AppendConcurrent`（无锁快路径），否则在 `_storeCreateLock` 内调 `TryGetPendingBatch` + `WritePendingComponent`/`MarkBatchComponentRemoved` |
 
 ---
 
@@ -520,6 +521,14 @@ updated: 2026-07-05 (CS9: abstract+override generic virtual 无法 devirt 是 Co
 - **副作用**：base class 内部递归路径（`CloneChildrenRecursive`）必须直接调 `*Core` helper（`CreateCore`/`AddChildCore`），不能调公共 mutator（会调到 throw stub）。
 - **验证**：`dotnet test -c Release` 611 通过；`HeroComing.Perf --check-baseline` 通过且大幅超基线（Movement 2065 vs baseline 1917，Attack 1300 vs 1205）。
 - **教训**：拆分 ECS 热路径类型时，**不要**用 abstract+override。用 sealed 子类 + `new` 隐藏 + 调用方持有具体子类引用。同等价于"手动单态化"。
+
+#### CS10. `ParallelCommandStream.Add/Set/Remove` 对 pending-batch 实体走 AppendConcurrent 而非 WritePendingComponent（真 bug）
+- **位置**：`ParallelCommandStream.cs:60-78`（修复后 `src/MiniArch/Core/ParallelCommandStream.cs` 的 Add/Set/Remove）
+- **猜想**：parallel 路径的 `CanRecordParallelComponentCommand` 对 alive 和 pending 实体都返回 true，用 `AppendConcurrent` 统一处理，Submit 时序 `SealParallelStores → MaterializeAllPending → ApplyComponentStores` 使组件在实体 materialize 后 apply——最终状态应该一致。
+- **结论**：**真 bug**。`ApplyComponentStores` 走 `ApplyToWorld`，对 `KindSet` 调用 `SetComponentAtTyped`（要求组件已存在，否则抛 `Archetype does not contain component X`），对 `KindAdd` 要求组件不存在（重复 Add 抛 `Entity already has component Y`）。而 batch buffer 路径（`WritePendingComponent`）把组件写入批处理缓冲区，在 `MaterializePending` 阶段一次性将 batch 实体按完整组件集创建。两条路径语义不等价。
+- **修复**：`ParallelCommandStream.Add/Set/Remove` 改为：alive 实体走 `AppendConcurrent`（无锁快路径），否则在 `_storeCreateLock` 内调 `TryGetPendingBatch` + `WritePendingComponent`/`MarkBatchComponentRemoved`。与单线程 `CommandStream` 完全一致的模式。
+- **验证**：4 个回归测试（`ParallelCommandStream_Set_on_pending_entity_applies_component`、`ParallelCommandStream_Add_on_pending_entity_does_not_throw_on_second_Add`、`ParallelCommandStream_Remove_on_pending_entity_skips_component`、`ParallelCommandStream_Clone_then_Add_component_matches_single_threaded`）+ `dotnet test -c Release` 627 通过 + `HeroComing.Perf --check-baseline` 通过。
+- **教训**：split 重构中，parallel 路径不能简单等价取"最终状态一致"——batch buffer 和 component store 的 apply 语义不同。pending-batch 实体必须在 `_storeCreateLock` 内走 batch buffer 路径。`CanRecordParallelComponentCommand` helper 方法本身正确（alive + pending 都可以录），但录到哪里的决策错了。
 
 ### FrameDelta / ReplayCore
 

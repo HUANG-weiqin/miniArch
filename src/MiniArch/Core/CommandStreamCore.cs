@@ -1452,17 +1452,6 @@ public abstract class CommandStreamCore
         _frozen.DestroyEntities[_frozen.DestroyCount++] = entity;
     }
 
-    private protected bool CanRecordParallelComponentCommand(Entity entity)
-    {
-        if (_world.IsAlive(entity))
-            return true;
-
-        lock (_storeCreateLock)
-        {
-            return TryGetPendingBatch(entity, out _);
-        }
-    }
-
     // ── Store management ──────────────────────────────────────────────
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
