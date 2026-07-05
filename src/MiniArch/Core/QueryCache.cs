@@ -30,7 +30,9 @@ internal sealed class QueryCache
 
     private int _lastArchetypeCount = -1;
 
-    // Tracks expected views per archetype (indexed parallel to _snapshotArchetypes).
+    // Tracks expected view shape per archetype (indexed parallel to _snapshotArchetypes).
+    // Non-chunked and chunked-with-one-segment both expose one view, but they
+    // need different ChunkView segment indices (-1 vs 0). Encode the mode too.
     private int[] _archetypeExpectedViews = [];
 
 
@@ -115,8 +117,8 @@ internal sealed class QueryCache
             for (var i = 0; i < _matchedArchetypeCount; i++)
             {
                 var arch = _snapshotArchetypes[i];
-                var expected = arch.IsChunked ? arch.SegmentCount : 1;
-                if (expected != _archetypeExpectedViews[i])
+                var expected = ExpectedViewShape(arch);
+                if (expected != Volatile.Read(ref _archetypeExpectedViews[i]))
                 {
                     RefreshViewsOnly();
                     return;
@@ -168,9 +170,6 @@ internal sealed class QueryCache
         for (var i = 0; i < _matchedArchetypeCount; i++)
         {
             var a = _snapshotArchetypes[i];
-            var viewCount = a.IsChunked ? a.SegmentCount : 1;
-            _archetypeExpectedViews[i] = viewCount;
-
             if (a.IsChunked)
             {
                 for (var s = 0; s < a.SegmentCount; s++)
@@ -183,12 +182,21 @@ internal sealed class QueryCache
         }
 
         Volatile.Write(ref _chunkViewCount, ci);
+
+        // Publish expected shapes last: readers use these as the fast-path
+        // "view snapshot is current" signal. If they still see the old shape,
+        // they will take the lock and wait instead of observing stale views.
+        for (var i = 0; i < _matchedArchetypeCount; i++)
+            Volatile.Write(ref _archetypeExpectedViews[i], ExpectedViewShape(_snapshotArchetypes[i]));
     }
 
     private void AppendNewArchetypes(int currentArchetypeCount)
     {
         var archetypes = _world.Archetypes;
         var start = _lastArchetypeCount < 0 ? 0 : _lastArchetypeCount;
+
+        if (ExistingViewShapeChanged())
+            RebuildChunkViews();
 
         // ── Incremental append: only scan new archetypes ──
         // Existing matched archetypes are already in the snapshot; we only
@@ -235,8 +243,7 @@ internal sealed class QueryCache
             if (!Matches(a)) continue;
 
             _snapshotArchetypes[ai] = a;
-            var viewCount = a.IsChunked ? a.SegmentCount : 1;
-            _archetypeExpectedViews[ai] = viewCount;
+            _archetypeExpectedViews[ai] = ExpectedViewShape(a);
 
             if (a.IsChunked)
             {
@@ -254,6 +261,21 @@ internal sealed class QueryCache
         Volatile.Write(ref _matchedArchetypeCount, ai);
         Volatile.Write(ref _lastArchetypeCount, currentArchetypeCount);
     }
+
+    private bool ExistingViewShapeChanged()
+    {
+        for (var i = 0; i < _matchedArchetypeCount; i++)
+        {
+            if (ExpectedViewShape(_snapshotArchetypes[i]) != _archetypeExpectedViews[i])
+                return true;
+        }
+
+        return false;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int ExpectedViewShape(Archetype archetype) =>
+        archetype.IsChunked ? archetype.SegmentCount : -1;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool Matches(Archetype archetype)

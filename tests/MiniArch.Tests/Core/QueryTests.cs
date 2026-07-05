@@ -156,6 +156,72 @@ public sealed class QueryTests
     }
 
     [Fact]
+    public void BUG_query_chunks_refresh_when_archetype_promotes_to_single_chunk_segment()
+    {
+        var world = new World();
+        _ = world.Create(new Position(1, 0));
+        _ = world.Create(new Position(2, 0));
+        var description = new QueryDescription().With<Position>();
+        var publicQuery = world.Query(in description);
+        var coreQuery = MiniQueryCache.Create(world, in description);
+
+        var initialChunks = publicQuery.GetChunks();
+        Assert.Equal(1, initialChunks.Length);
+
+        Assert.Single(coreQuery.MatchedArchetypes).ForceChunkedForTesting();
+
+        var refreshedChunks = publicQuery.GetChunks();
+        Assert.Equal(1, refreshedChunks.Length);
+        var positions = refreshedChunks[0].GetSpan<Position>();
+
+        Assert.Equal(new[] { new Position(1, 0), new Position(2, 0) }, positions.ToArray());
+    }
+
+    [Fact]
+    public void BUG_query_chunks_refresh_existing_view_shape_when_archetype_count_also_changes()
+    {
+        var world = new World();
+        _ = world.Create(new Position(1, 0));
+        _ = world.Create(new Position(2, 0));
+        var description = new QueryDescription().With<Position>();
+        var publicQuery = world.Query(in description);
+        var coreQuery = MiniQueryCache.Create(world, in description);
+        var archetype = Assert.Single(coreQuery.MatchedArchetypes);
+
+        Assert.Equal(1, publicQuery.GetChunks().Length);
+
+        _ = world.Create(new Velocity(1, 0));
+        archetype.ForceChunkedForTesting();
+
+        var refreshedChunks = publicQuery.GetChunks();
+        Assert.Equal(1, refreshedChunks.Length);
+        var positions = refreshedChunks[0].GetSpan<Position>();
+
+        Assert.Equal(new[] { new Position(1, 0), new Position(2, 0) }, positions.ToArray());
+    }
+
+    [Fact]
+    public void BUG_query_chunks_refresh_segment_growth_when_archetype_count_also_changes()
+    {
+        var world = new World();
+        _ = world.Create(new Position(1, 0));
+        var description = new QueryDescription().With<Position>();
+        var publicQuery = world.Query(in description);
+        var coreQuery = MiniQueryCache.Create(world, in description);
+        var archetype = Assert.Single(coreQuery.MatchedArchetypes);
+        archetype.ForceChunkedForTesting();
+
+        Assert.Equal(1, publicQuery.GetChunks().Length);
+
+        _ = world.Create(new Velocity(1, 0));
+        archetype.AddSegmentForTesting();
+
+        var refreshedChunks = publicQuery.GetChunks();
+
+        Assert.Equal(2, refreshedChunks.Length);
+    }
+
+    [Fact]
     public void Matching_archetypes_refresh_when_world_changes()
     {
         var world = new World(chunkCapacity: 1);

@@ -2,7 +2,7 @@
 title: 代码审阅发现清单
 module: Meta
 description: 历次代码审阅中产生过的猜想与结论。真 bug 索引 + 已排除的非 bug 猜想。AI 审阅前必读，避免重复验证已知结论。
-updated: 2026-07-05 (6 真 bug 已修复 + 2026-07-05 健壮性审阅新增 OrderByComponent chunked bug 与 chunked snapshot Debug.Assert 修复)
+updated: 2026-07-05 (7 真 bug 已修复 + QueryCache 单 segment 晋升 ChunkView 失效修复)
 ---
 # 代码审阅发现清单
 
@@ -30,7 +30,7 @@ updated: 2026-07-05 (6 真 bug 已修复 + 2026-07-05 健壮性审阅新增 Orde
 
 ## 已确认的真 bug → 已修复（`BUG_` 测试转为回归测试）
 
-> 六条 bug 均已修复，`BUG_` 前缀测试现在通过，充当回归守卫。
+> 七条 bug 均已修复，`BUG_` 前缀测试现在通过，充当回归守卫。
 
 | 测试名 | 位置 | 一句话描述 | 修复 |
 |---|---|---|---|
@@ -40,6 +40,7 @@ updated: 2026-07-05 (6 真 bug 已修复 + 2026-07-05 健壮性审阅新增 Orde
 | `BUG_parallel_destroy_on_pending_entity_does_not_cancel_like_single_threaded` | `CommandStream.cs:Destroy` | `ParallelRecording=true` 下 `Destroy(pendingEntity)` 直接调 `AppendDestroyConcurrent`，不检查 pending 状态也不调 `CancelPendingEntity`/`CancelPendingDescendants`；Submit 时该 entity 被 materialize 再 destroy，pending descendants 也被 materialize——与单线程语义（cancel 整棵子树，从不 materialize）不一致，导致 alive count / id allocator 分叉 | 并行 `Destroy` 在 `_storeCreateLock` 内复制单线程的 pending-check + cancel 逻辑；删除不再使用的 `AppendDestroyConcurrent` |
 | `BUG_order_by_component_supports_chunked_archetypes` | `Query.cs:OrderedComponentEnumerator.Initialize` | `OrderByComponent<T>` 对匹配 archetype 批量读组件值时直接调用 `GetComponentSpan<T>()`；该 API 只支持非 chunked，chunked archetype 会抛 `InvalidOperationException`，导致公共排序 API 在大 archetype 上不可用 | chunked 分支按 segment 顺序调用 `GetSegmentComponentSpan<T>()` 拷贝组件值，保持与 `GetEntityStorageUnsafe()` flatten 顺序一致 |
 | `BUG_chunked_restore_pooled_larger_backup_arrays_overflow_smaller_destination` | `WorldStateSnapshot.cs:ArchetypeBackupEntry.CopyFromChunked` | 修复后的回归测试在 Debug 下仍会被错误 `Debug.Assert(seg.Data.Length >= segCap)` 拦截；零组件 chunked archetype 的 `seg.Data.Length == 0` 是合法状态（没有组件列），断言把合法状态误判为损坏 | 删除该无效断言；真实安全条件由后续按列/按 `entityCount` 拷贝和已有回归测试覆盖 |
+| `BUG_query_chunks_refresh_when_archetype_promotes_to_single_chunk_segment`<br>`BUG_query_chunks_refresh_existing_view_shape_when_archetype_count_also_changes`<br>`BUG_query_chunks_refresh_segment_growth_when_archetype_count_also_changes` | `QueryCache.cs:EnsureRefreshed` / `AppendNewArchetypes` / `ChunkView.cs:GetSpan` | Query 缓存只用 view 数量检测 chunk 快照是否失效；非 chunked archetype 晋升为 chunked 但仍只有 1 个 segment 时，旧 `ChunkView(segmentIndex=-1)` 未刷新，随后 `GetSpan<T>()` 走 chunked 分支访问 segment `-1` 越界。若同次还新增 archetype，`Refresh()` 的 append-only 路径也会漏重建旧 ChunkView，或在 segment 增长时首帧少返回 chunk | `_archetypeExpectedViews` 改为记录 view shape（non-chunked = -1，chunked = SegmentCount），即使 view 数量同为 1 也能检测模式变化；`AppendNewArchetypes` 追加新 archetype 前先检查已匹配 archetype 的 shape 漂移，必要时先重建 ChunkView |
 
 ---
 
