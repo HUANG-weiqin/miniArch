@@ -22,17 +22,24 @@ public sealed class CommandStream : CommandStreamCore
     /// </summary>
     public CommandStream(World world) : base(world) { }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Records a deferred entity creation and returns the new entity (placeholder or real).
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public new Entity Create() => CreateCore();
+    public Entity Create() => CreateCore();
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Creates a tracked handle for <paramref name="entity"/> that auto-updates
+    /// when a deferred placeholder is resolved during Submit or Replay.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public new EntitySlot Track(Entity entity) => TrackCore(entity);
+    public EntitySlot Track(Entity entity) => TrackCore(entity);
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Records an Add command for the specified component on the given entity.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public new void Add<T>(Entity entity, T component) where T : unmanaged
+    public void Add<T>(Entity entity, T component) where T : unmanaged
     {
         if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
             WritePendingComponent(batchIdx, component);
@@ -40,9 +47,11 @@ public sealed class CommandStream : CommandStreamCore
             GetOrCreateStore<T>().Append(entity, component, KindAdd);
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Records a Set command for the specified component on the given entity.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public new void Set<T>(Entity entity, T component) where T : unmanaged
+    public void Set<T>(Entity entity, T component) where T : unmanaged
     {
         if (_world.IsAlive(entity))
             GetOrCreateStore<T>().Append(entity, component, KindSet);
@@ -50,9 +59,11 @@ public sealed class CommandStream : CommandStreamCore
             WritePendingComponent(batchIdx, component);
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Records a Remove command for the specified component type from the given entity.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public new void Remove<T>(Entity entity) where T : unmanaged
+    public void Remove<T>(Entity entity) where T : unmanaged
     {
         if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out var batchIdx))
             MarkBatchComponentRemoved(batchIdx, CommandTypeInfo<T>.Type);
@@ -60,18 +71,26 @@ public sealed class CommandStream : CommandStreamCore
             GetOrCreateStore<T>().AppendRemove(entity);
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Records a Destroy command for the specified entity.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public new void Destroy(Entity entity) => DestroyCore(entity);
+    public void Destroy(Entity entity) => DestroyCore(entity);
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Records an AddChild command establishing a parent-child relationship.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public new void AddChild(Entity parent, Entity child) => AddChildCore(parent, child);
+    public void AddChild(Entity parent, Entity child) => AddChildCore(parent, child);
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Records a RemoveChild command detaching the entity from its parent.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public new void RemoveChild(Entity child) => RemoveChildCore(child);
+    public void RemoveChild(Entity child) => RemoveChildCore(child);
 
-    /// <inheritdoc/>
-    public new Entity Clone(Entity source) => CloneCore(source);
+    /// <summary>
+    /// Records a clone of the source entity, including all components and descendants.
+    /// </summary>
+    public Entity Clone(Entity source) => CloneCore(source);
 }

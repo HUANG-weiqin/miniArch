@@ -3005,75 +3005,39 @@ public sealed class DeferredCreateTests
         Assert.Equal(new Health(99), h);
     }
 
-    //  CommandStreamCore base-reference throw contract (reviewer P2)
-    //  Locks in the design decision from kb-design-rationale.md §3.9:
-    //  the 9 mutators on the base class are non-virtual stubs that throw,
-    //  not abstract methods. If a future refactor flips them back to
-    //  abstract+override, these tests will start passing differently
-    //  (the call will succeed instead of throwing) — which is exactly the
-    //  performance trap we want to prevent silently returning.
+    //  CommandStreamCore no longer exposes any recording mutators directly.
+    //  These methods live only on CommandStream and ParallelCommandStream.
+    //  This test prevents accidental reintroduction of the old public throw-stubs.
     // ────────────────────────────────────────────────────────────────────
 
-    [Fact]
-    public void CommandStreamCore_base_reference_Create_throws_NotSupportedException()
-    {
-        CommandStreamCore core = new CommandStream(new World());
-        Assert.Throws<NotSupportedException>(() => core.Create());
-    }
+    private static readonly string[] MutatorNames =
+    [
+        "Create", "Track", "Add", "Set", "Remove", "Destroy",
+        "AddChild", "RemoveChild", "Clone"
+    ];
 
     [Fact]
-    public void CommandStreamCore_base_reference_Track_throws_NotSupportedException()
+    public void CommandStreamCore_does_not_expose_recording_mutators()
     {
-        CommandStreamCore core = new CommandStream(new World());
-        Assert.Throws<NotSupportedException>(() => core.Track(default));
-    }
+        var baseMethods = typeof(CommandStreamCore)
+            .GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+            .Select(m => m.Name)
+            .ToHashSet();
 
-    [Fact]
-    public void CommandStreamCore_base_reference_Add_throws_NotSupportedException()
-    {
-        CommandStreamCore core = new CommandStream(new World());
-        Assert.Throws<NotSupportedException>(() => core.Add(new Entity(0, 1), new Position(0, 0)));
-    }
+        var forbidden = MutatorNames.Where(m => baseMethods.Contains(m)).ToArray();
+        Assert.Empty(forbidden);
 
-    [Fact]
-    public void CommandStreamCore_base_reference_Set_throws_NotSupportedException()
-    {
-        CommandStreamCore core = new CommandStream(new World());
-        Assert.Throws<NotSupportedException>(() => core.Set(new Entity(0, 1), new Position(0, 0)));
-    }
-
-    [Fact]
-    public void CommandStreamCore_base_reference_Remove_throws_NotSupportedException()
-    {
-        CommandStreamCore core = new CommandStream(new World());
-        Assert.Throws<NotSupportedException>(() => core.Remove<Position>(new Entity(0, 1)));
-    }
-
-    [Fact]
-    public void CommandStreamCore_base_reference_Destroy_throws_NotSupportedException()
-    {
-        CommandStreamCore core = new CommandStream(new World());
-        Assert.Throws<NotSupportedException>(() => core.Destroy(new Entity(0, 1)));
-    }
-
-    [Fact]
-    public void CommandStreamCore_base_reference_AddChild_throws_NotSupportedException()
-    {
-        CommandStreamCore core = new CommandStream(new World());
-        Assert.Throws<NotSupportedException>(() => core.AddChild(new Entity(0, 1), new Entity(1, 1)));
-    }
-
-    [Fact]
-    public void CommandStreamCore_base_reference_RemoveChild_throws_NotSupportedException()
-    {
-        CommandStreamCore core = new CommandStream(new World());
-        Assert.Throws<NotSupportedException>(() => core.RemoveChild(new Entity(0, 1)));
-    }
-
-    [Fact]
-    public void CommandStreamCore_base_reference_Clone_throws_NotSupportedException()
-    {
-        CommandStreamCore core = new CommandStream(new World());
-        Assert.Throws<NotSupportedException>(() => core.Clone(new Entity(0, 1)));
+        // Also verify the concrete types expose them.
+        foreach (var name in MutatorNames)
+        {
+            Assert.True(
+                typeof(CommandStream).GetMethod(name,
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance) is not null,
+                $"CommandStream should expose '{name}'");
+            Assert.True(
+                typeof(ParallelCommandStream).GetMethod(name,
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance) is not null,
+                $"ParallelCommandStream should expose '{name}'");
+        }
     }
 }
