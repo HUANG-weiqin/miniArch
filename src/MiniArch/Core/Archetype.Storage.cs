@@ -17,6 +17,11 @@ internal sealed partial class Archetype
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private (int SegmentIndex, int LocalRow) GetSegmentAndLocal(int globalRow) => (globalRow >> _segmentBitShift, globalRow & _segmentMask);
 
+    private void InvalidateFlatEntityCache()
+    {
+        _flatEntitiesGeneration++;
+    }
+
     // ──────────────────────────────────────────────
     //  Conversion & segment growth
     // ──────────────────────────────────────────────
@@ -126,7 +131,7 @@ internal sealed partial class Archetype
             _segmentCount++;
             need -= _segmentCapacity;
         }
-        _flatEntitiesGeneration++;
+        InvalidateFlatEntityCache();
     }
 
     // ──────────────────────────────────────────────
@@ -231,7 +236,7 @@ internal sealed partial class Archetype
             _count += take;
             remaining -= take;
         }
-        _flatEntitiesGeneration++;
+        InvalidateFlatEntityCache();
         AssertSegmentInvariants();
         return startRow;
     }
@@ -246,7 +251,7 @@ internal sealed partial class Archetype
         }
         var (segIdx, localRow) = GetSegmentAndLocal(globalRow);
         _segments[segIdx].Entities[localRow] = entity;
-        _flatEntitiesGeneration++;
+        InvalidateFlatEntityCache();
         AssertSegmentInvariants();
     }
 
@@ -311,7 +316,7 @@ internal sealed partial class Archetype
             _segments[lastSegIdx].Entities[lastLocalRow] = default;
             _segments[lastSegIdx].Count--;
             _count--;
-            _flatEntitiesGeneration++;
+            InvalidateFlatEntityCache();
             AssertSegmentInvariants();
             movedEntity = default;
             return false;
@@ -326,7 +331,7 @@ internal sealed partial class Archetype
         _segments[lastSegIdx].Entities[lastLocalRow] = default;
         _segments[lastSegIdx].Count--;
         _count--;
-        _flatEntitiesGeneration++;
+        InvalidateFlatEntityCache();
         AssertSegmentInvariants();
         return true;
     }
@@ -828,7 +833,7 @@ internal sealed partial class Archetype
     {
         // Bumping the generation invalidates GetEntityStorage's cache; the
         // next read will rebuild _cachedFlatEntities from current segments.
-        _flatEntitiesGeneration++;
+        InvalidateFlatEntityCache();
     }
 
     internal void ResetCount()
@@ -914,7 +919,7 @@ internal sealed partial class Archetype
             segIdx++;
         }
         _count = count;
-        _flatEntitiesGeneration++;
+        InvalidateFlatEntityCache();
         AssertSegmentInvariants();
     }
 
