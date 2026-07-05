@@ -1038,10 +1038,7 @@ public sealed partial class World : IDisposable
         // Free ids
         snap.EnsureFreeIdsCapacity(_freeIdCount);
         for (var i = 0; i < _freeIdCount; i++)
-        {
-            snap.FreeIds[i] = _freeIds[i].Id;
-            snap.FreeIdVersions[i] = _freeIds[i].Version;
-        }
+            snap.FreeEntities[i] = new FreeEntityEntry(_freeIds[i].Id, _freeIds[i].Version);
         snap.FreeIdCount = _freeIdCount;
 
         // Per-archetype data
@@ -1101,7 +1098,7 @@ public sealed partial class World : IDisposable
         if (_freeIds.Length < snapshot.FreeIdCount)
             Array.Resize(ref _freeIds, snapshot.FreeIdCount);
         for (var i = 0; i < snapshot.FreeIdCount; i++)
-            _freeIds[i] = new RecycledEntity(snapshot.FreeIds[i], snapshot.FreeIdVersions[i]);
+            _freeIds[i] = new RecycledEntity(snapshot.FreeEntities[i].Id, snapshot.FreeEntities[i].Version);
         _freeIdCount = snapshot.FreeIdCount;
 
         // Reset all archetypes to empty, then restore backed-up ones.

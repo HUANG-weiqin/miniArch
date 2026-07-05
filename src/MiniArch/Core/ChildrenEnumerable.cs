@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using MiniArch.Core;
 
 namespace MiniArch;
 
@@ -8,15 +9,13 @@ namespace MiniArch;
 /// </summary>
 public readonly struct ChildrenEnumerable
 {
-    private readonly Entity[] _childEntity;
-    private readonly int[] _childNext;
+    private readonly ChildSlot[] _childSlots;
     private readonly World _world;
     private readonly int _firstSlot;
 
-    internal ChildrenEnumerable(Entity[] childEntity, int[] childNext, World world, int firstSlot)
+    internal ChildrenEnumerable(ChildSlot[] childSlots, World world, int firstSlot)
     {
-        _childEntity = childEntity;
-        _childNext = childNext;
+        _childSlots = childSlots;
         _world = world;
         _firstSlot = firstSlot;
     }
@@ -24,7 +23,7 @@ public readonly struct ChildrenEnumerable
     /// <summary>
     /// Returns an enumerator that iterates through the live children of the entity.
     /// </summary>
-    public ChildrenEnumerator GetEnumerator() => new(_childEntity, _childNext, _world, _firstSlot);
+    public ChildrenEnumerator GetEnumerator() => new(_childSlots, _world, _firstSlot);
 }
 
 /// <summary>
@@ -33,15 +32,13 @@ public readonly struct ChildrenEnumerable
 /// </summary>
 public struct ChildrenEnumerator
 {
-    private readonly Entity[] _childEntity;
-    private readonly int[] _childNext;
+    private readonly ChildSlot[] _childSlots;
     private readonly World _world;
     private int _slot;
 
-    internal ChildrenEnumerator(Entity[] childEntity, int[] childNext, World world, int firstSlot)
+    internal ChildrenEnumerator(ChildSlot[] childSlots, World world, int firstSlot)
     {
-        _childEntity = childEntity;
-        _childNext = childNext;
+        _childSlots = childSlots;
         _world = world;
         _slot = firstSlot;
         Current = default;
@@ -61,8 +58,8 @@ public struct ChildrenEnumerator
         while (_slot >= 0)
         {
             var slot = _slot;
-            _slot = _childNext[slot];
-            var child = _childEntity[slot];
+            _slot = _childSlots[slot].Next;
+            var child = _childSlots[slot].Entity;
             if (!_world.IsAlive(child)) continue;
 
             Current = child;

@@ -65,8 +65,7 @@ public sealed class WorldStateSnapshot
     internal EntityRecord[] Records = [];
     internal int EntitySlotCount;
 
-    internal int[] FreeIds = [];
-    internal int[] FreeIdVersions = [];
+    internal FreeEntityEntry[] FreeEntities = [];
     internal int FreeIdCount;
 
     internal ArchetypeBackupEntry[] ArchetypeBackups = [];
@@ -74,8 +73,7 @@ public sealed class WorldStateSnapshot
 
     internal Entity[] HierarchyParentByChild = [];
     internal int[] HierarchyFirstChild = [];
-    internal Entity[] HierarchyChildEntity = [];
-    internal int[] HierarchyChildNext = [];
+    internal ChildSlot[] HierarchyChildSlots = [];
     internal int HierarchyChildSlotCount;
     internal int HierarchyChildFreeList;
 
@@ -113,10 +111,8 @@ public sealed class WorldStateSnapshot
 
     internal void EnsureFreeIdsCapacity(int capacity)
     {
-        if (FreeIds.Length < capacity)
-            Array.Resize(ref FreeIds, capacity);
-        if (FreeIdVersions.Length < capacity)
-            Array.Resize(ref FreeIdVersions, capacity);
+        if (FreeEntities.Length < capacity)
+            Array.Resize(ref FreeEntities, capacity);
     }
 
     internal void EnsureArchetypeBackupsCapacity(int capacity)
@@ -131,11 +127,22 @@ public sealed class WorldStateSnapshot
             Array.Resize(ref HierarchyParentByChild, parentByChildLength);
         if (HierarchyFirstChild.Length < parentByChildLength)
             Array.Resize(ref HierarchyFirstChild, parentByChildLength);
-        if (HierarchyChildEntity.Length < childSlotCapacity)
-            Array.Resize(ref HierarchyChildEntity, childSlotCapacity);
-        if (HierarchyChildNext.Length < childSlotCapacity)
-            Array.Resize(ref HierarchyChildNext, childSlotCapacity);
+        if (HierarchyChildSlots.Length < childSlotCapacity)
+            Array.Resize(ref HierarchyChildSlots, childSlotCapacity);
     }
+}
+
+internal readonly struct FreeEntityEntry
+{
+    public readonly int Id;
+    public readonly int Version;
+    public FreeEntityEntry(int id, int version) { Id = id; Version = version; }
+}
+
+internal struct ChildSlot
+{
+    public Entity Entity;
+    public int Next;
 }
 
 internal struct ArchetypeBackupEntry
