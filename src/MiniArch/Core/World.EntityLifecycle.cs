@@ -157,17 +157,6 @@ public sealed partial class World
             ThrowInvalidEntity(entity);
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal bool TryGetRecord(Entity entity, out EntityRecord record)
-    {
-        AssertNotDisposed();
-        if ((uint)entity.Id >= (uint)_entitySlotCount) { record = default; return false; }
-        ref var r = ref _records[entity.Id];
-        if (!r.IsOccupied || r.Version != entity.Version) { record = default; return false; }
-        record = r;
-        return true;
-    }
-
     /// <summary>
     /// Unchecked direct record access for paths that have already validated entity
     /// existence via <see cref="IsAlive"/> and whose execution order guarantees no
