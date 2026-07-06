@@ -254,6 +254,10 @@ public sealed partial class World : IDisposable
         if (!_anyTrackingActive)
         {
             _anyTrackingActive = true;
+            // Pre-warm the transition log so a burst of structural ops (level load, wave spawn)
+            // does not thrash List<>.Resize from capacity 0. Paid once, only when tracking is
+            // first activated; non-tracking worlds keep the default empty list (zero cost).
+            _transitionLog.EnsureCapacity(256);
             foreach (var arch in _archetypes.Values)
                 ActivateArchetypeTracking(arch);
         }
