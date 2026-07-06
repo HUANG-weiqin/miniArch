@@ -179,12 +179,14 @@ internal static class EntityFieldResolver
             if (entity.IsPlaceholder)
             {
                 var seq = entity.Version;
-                if ((uint)seq < (uint)resolveMap.Length)
-                {
-                    var resolved = resolveMap[seq];
-                    if (resolved.Id >= 0)
-                        Unsafe.WriteUnaligned(ref Unsafe.Add(ref dataRef, offset), resolved);
-                }
+                if ((uint)seq >= (uint)resolveMap.Length)
+                    throw new InvalidOperationException(
+                        $"Unresolved placeholder entity seq={seq}: the referenced entity was not materialized (seq exceeds resolveMap length).");
+                var resolved = resolveMap[seq];
+                if (resolved.Id < 0)
+                    throw new InvalidOperationException(
+                        $"Unresolved placeholder entity seq={seq}: the referenced entity was not materialized (cancelled or not reserved).");
+                Unsafe.WriteUnaligned(ref Unsafe.Add(ref dataRef, offset), resolved);
             }
         }
     }

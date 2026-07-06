@@ -1,5 +1,7 @@
 using System.IO;
 using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using MiniArch.Core;
 using MiniQueryCache = MiniArch.Core.QueryCache;
@@ -2647,7 +2649,8 @@ public sealed class DeferredCreateTests
     public void Submit_resolves_embedded_Entity_ref_after_Destroy_pending()
     {
         // Deferred mode: A references B via component; B is then destroyed.
-        // The resolver leaves B's placeholder as-is (cancelled → Id < 0).
+        // The resolver must throw: A references B via an Entity field, but
+        // B's batch was cancelled so the placeholder cannot be resolved.
         var world = new World();
         var stream = MakeStream(world);
 
@@ -2656,25 +2659,7 @@ public sealed class DeferredCreateTests
         stream.Add(a, new Linked(0, b));
         stream.Destroy(b);
 
-        stream.Submit();
-
-        // A was materialized; locate it via query since the placeholder
-        // handle a = Entity(-1,0) is no longer valid in the world.
-        var query = world.Query(new QueryDescription().With<Linked>());
-        var found = false;
-        foreach (var chunk in query.GetChunks())
-        {
-            var linkedSpan = chunk.GetSpan<Linked>();
-            for (var i = 0; i < chunk.Count; i++)
-            {
-                found = true;
-                // B was cancelled —its placeholder slot maps to an unmapped
-                // sentinel (Id < 0), so the resolver skipped it and the
-                // placeholder Entity(-1,1) remains in the component data.
-                Assert.True(linkedSpan[i].Target.IsPlaceholder);
-            }
-        }
-        Assert.True(found);
+        Assert.Throws<InvalidOperationException>(() => stream.Submit());
     }
 
     [Fact]
@@ -2801,6 +2786,34 @@ public sealed class DeferredCreateTests
         var ex = Assert.Throws<InvalidOperationException>(() =>
             EntityFieldResolver.GetOffsets(ct));
         Assert.Contains("LayoutKind.Auto", ex.Message);
+    }
+
+    [Fact]
+    public void ResolveInPlace_throws_when_placeholder_seq_exceeds_resolveMap_length()
+    {
+        var ct = Component<Linked>.ComponentType;
+        var linked = new Linked(42, new Entity(-1, 5));
+        var data = new byte[Unsafe.SizeOf<Linked>()];
+        MemoryMarshal.Write(data, in linked);
+        var resolveMap = new Entity[3]; // indices 0-2 only, seq=5 is OOB
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            EntityFieldResolver.ResolveInPlace(data.AsSpan(), ct, resolveMap.AsSpan()));
+        Assert.Contains("seq=5", ex.Message);
+    }
+
+    [Fact]
+    public void ResolveInPlace_throws_when_placeholder_seq_maps_to_unmapped_sentinel()
+    {
+        var ct = Component<Linked>.ComponentType;
+        var linked = new Linked(42, new Entity(-1, 2));
+        var data = new byte[Unsafe.SizeOf<Linked>()];
+        MemoryMarshal.Write(data, in linked);
+        var resolveMap = new Entity[] { default, default, new Entity(-1, -1) };
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            EntityFieldResolver.ResolveInPlace(data.AsSpan(), ct, resolveMap.AsSpan()));
+        Assert.Contains("seq=2", ex.Message);
     }
 
     // BUG REPROOF HYPOTHESIS: ComponentStore<T>.AppendConcurrent uses

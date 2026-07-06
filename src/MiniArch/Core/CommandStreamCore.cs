@@ -333,8 +333,7 @@ public abstract class CommandStreamCore
     /// </summary>
     public bool Submit()
     {
-        SealParallelStores();
-        PruneStaleComponentCommands();
+        PrepareStores();
         if (!HasAnyCommands())
             return false;
 
@@ -519,8 +518,7 @@ public abstract class CommandStreamCore
     /// </remarks>
     public FrameDelta Snapshot()
     {
-        SealParallelStores();
-        PruneStaleComponentCommands();
+        PrepareStores();
         if (!_deferredEntities)
         {
             ResolveDeferredCreates();
@@ -550,8 +548,7 @@ public abstract class CommandStreamCore
     /// </remarks>
     public void SnapshotInto(FrameDelta target)
     {
-        SealParallelStores();
-        PruneStaleComponentCommands();
+        PrepareStores();
         if (!_deferredEntities)
         {
             ResolveDeferredCreates();
@@ -630,8 +627,7 @@ public abstract class CommandStreamCore
     /// </remarks>
     public Task<FrameDelta> SubmitAndSnapshotAsync()
     {
-        SealParallelStores();
-        PruneStaleComponentCommands();
+        PrepareStores();
         if (!HasAnyCommands())
             return Task.FromResult(new FrameDelta());
 
@@ -683,6 +679,17 @@ public abstract class CommandStreamCore
     {
         foreach (var store in _frozen.Stores)
             store?.PruneStaleCommands(_world);
+    }
+
+    /// <summary>
+    /// Seals parallel stores then prunes stale component commands.
+    /// Must be called before any Submit/Snapshot/SnapshotInto/SubmitAndSnapshotAsync
+    /// operation. Not needed before Replay (no recording state to prepare).
+    /// </summary>
+    private void PrepareStores()
+    {
+        SealParallelStores();
+        PruneStaleComponentCommands();
     }
 
     private void TryReclaimPending()

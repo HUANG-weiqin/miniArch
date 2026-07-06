@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 健壮性审阅发现汇总——已确认的设计债、已验证的安全猜想、已排除的非 bug 猜想
-updated: 2026-07-06 (架构审阅校准: Validate size check 已补; RestoreState archetype snapshot 安全猜想记录)
+updated: 2026-07-06 (架构审阅校准: Validate size check 已补; RestoreState archetype snapshot 安全猜想记录; ResolveInPlace fail-fast 已实现)
 ---
 # 代码审阅发现
 
@@ -26,13 +26,16 @@ updated: 2026-07-06 (架构审阅校准: Validate size check 已补; RestoreStat
 - **真实风险**: 低。该异常仅在 CommandStream 内部数据不一致时触发，正常用户路径不可达
 - **建议修复**: 在 materialize 前预验证所有 slot 为 reserved 状态（defense-in-depth）
 
-### #2: EntityFieldResolver 静默跳过未决占位符 (R8)
+### #2: EntityFieldResolver 静默跳过未决占位符 (R8) ✅ 已修复
 
 - **模式**: R8 静默截断
-- **位置**: `EntityFieldResolver.cs:174-189` ResolveInPlace
-- **缺失的安全条件**: 当 `seq >= resolveMap.Length` 或 `resolved.Id < 0` 时，不返回错误也不记录日志，死占位符 Entity(-1, seq) 残留于组件数据
-- **真实风险**: 低-中。需要恶意 FrameDelta（占位符引用无对应 Reserve）。正常 lockstep 场景不可达
-- **建议修复**: `ResolveInPlace` 返回 `int unresolvedCount`，调用方非零时抛异常；或在 `FrameDelta.Validate` 中校验占位符引用的完整性
+- **位置**: `EntityFieldResolver.cs:174-189` ResolveInPlace（修复时 line numbers 已变）
+- **原始缺陷**: 当 `seq >= resolveMap.Length` 或 `resolved.Id < 0` 时，不返回错误也不记录日志，死占位符 Entity(-1, seq) 残留于组件数据
+- **修复方案**: 直接在 `ResolveInPlace` 中 fail-fast 抛 `InvalidOperationException`，消息含 seq 值。签名不变（仍 `void`）。不改调用方。
+- **后续保护**:
+  - 两个红测试（seq OOB、resolved.Id < 0）直接测试 `EntityFieldResolver.ResolveInPlace`
+  - 现有集成测试 `Submit_resolves_embedded_Entity_ref_after_Destroy_pending` 已从"验证静默跳过"改为"验证抛出 `InvalidOperationException`"
+- **真实风险（修复前）**: 低-中。需要恶意 FrameDelta（占位符引用无对应 Reserve）。正常 lockstep 场景不可达
 
 ### #3: ReplayCore 无事务语义 (R11)
 
