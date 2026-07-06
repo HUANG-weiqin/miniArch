@@ -1,3 +1,4 @@
+using MiniArch.Core;
 using MiniArch.Diagnostics;
 
 namespace MiniArchTests.Diagnostics;
@@ -102,5 +103,53 @@ public class WorldValidatorTests
         world.Destroy(e);
         var result = WorldValidator.Validate(world);
         Assert.True(result.IsValid);
+    }
+
+    [Fact]
+    public void HierarchyWithCycle_ReportsError()
+    {
+        using var world = new World();
+        var a = world.Create(new Position(0, 0));
+        var b = world.Create(new Position(1, 1));
+        var c = world.Create(new Position(2, 2));
+
+        // Inject a 3-cycle A -> B -> C -> A via test hook.
+        world.Hierarchy.SetParentForTest(b, a);
+        world.Hierarchy.SetParentForTest(c, b);
+        world.Hierarchy.SetParentForTest(a, c);
+
+        var result = WorldValidator.Validate(world);
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Issues, i => i.Code == ValidationCode.HierarchyCycle);
+    }
+
+    [Fact]
+    public void HierarchyWithSelfCycle_ReportsError()
+    {
+        using var world = new World();
+        var a = world.Create(new Position(0, 0));
+
+        // Inject self-cycle A -> A.
+        world.Hierarchy.SetParentForTest(a, a);
+
+        var result = WorldValidator.Validate(world);
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Issues, i => i.Code == ValidationCode.HierarchyCycle);
+    }
+
+    [Fact]
+    public void HierarchyWithoutCycle_NoCycleError()
+    {
+        using var world = new World();
+        var parent = world.Create(new Position(0, 0));
+        var child = world.Create(new Position(1, 1));
+        var grandchild = world.Create(new Position(2, 2));
+
+        world.AddChild(parent, child);
+        world.AddChild(child, grandchild);
+
+        var result = WorldValidator.Validate(world);
+        Assert.True(result.IsValid);
+        Assert.DoesNotContain(result.Issues, i => i.Code == ValidationCode.HierarchyCycle);
     }
 }

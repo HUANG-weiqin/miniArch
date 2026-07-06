@@ -375,6 +375,17 @@ internal sealed class HierarchyTable
         }
     }
 
+    /// <summary>
+    /// Directly assigns a parent to a child without validation.
+    /// TEST-ONLY: used to inject cycles for diagnostics validation.
+    /// </summary>
+    internal void SetParentForTest(Entity child, Entity parent)
+    {
+        EnsureCapacity(child.Id);
+        EnsureCapacity(parent.Id);
+        _parentByChild[child.Id] = parent;
+    }
+
     internal void CaptureState(WorldStateSnapshot snapshot)
     {
         snapshot.EnsureHierarchyCapacity(_parentByChild.Length, _childSlotCount);

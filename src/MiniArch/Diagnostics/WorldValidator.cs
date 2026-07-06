@@ -17,6 +17,7 @@ public static class WorldValidator
     [ThreadStatic] private static HashSet<(Archetype Archetype, int Row)>? _usedSlots;
     [ThreadStatic] private static HashSet<int>? _freeSeen;
     [ThreadStatic] private static HashSet<int>? _archSeen;
+    [ThreadStatic] private static HashSet<int>? _cycleChainVisited;
 
     /// <summary>
     /// Runs all validation checks on <paramref name="world"/> and returns
@@ -136,6 +137,34 @@ public static class WorldValidator
                 issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.Hierarchy,
                     ValidationCode.AsymmetricParent,
                     $"Child {child} recorded parent {parent} but TryGetParent finds none."));
+            }
+        }
+
+        // Cycle detection: walk parent chain from each live child.
+        var chainVisited = _cycleChainVisited ??= [];
+        chainVisited.Clear();
+
+        foreach (var (child, _) in hierarchy.EnumerateLiveRelations(world))
+        {
+            chainVisited.Clear();
+            var current = child;
+
+            while (true)
+            {
+                if (!chainVisited.Add(current.Id))
+                {
+                    issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.Hierarchy,
+                        ValidationCode.HierarchyCycle,
+                        $"Hierarchy cycle detected: entity {current} appears twice in the parent chain starting from {child}."));
+                    break;
+                }
+
+                if (!hierarchy.TryGetParent(world, current, out var next))
+                {
+                    break; // Reached root (no parent).
+                }
+
+                current = next;
             }
         }
     }

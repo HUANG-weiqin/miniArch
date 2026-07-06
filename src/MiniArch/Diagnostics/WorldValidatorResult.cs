@@ -39,6 +39,9 @@ public enum ValidationCode
     ArchetypeEntityCount,
     DuplicateEntityId,
     SlotCapacityWarning,
+
+    /// <summary>A parent-child cycle was detected in the hierarchy.</summary>
+    HierarchyCycle,
 }
 
 /// <summary>A single validation finding.</summary>
