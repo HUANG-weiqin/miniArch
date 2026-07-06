@@ -288,7 +288,6 @@ internal sealed partial class Archetype
         AssertSegmentInvariants();
     }
 
-    [Conditional("DEBUG")]
     private void AssertValidRow(int row)
     {
         if ((uint)row >= (uint)_count)
@@ -1100,7 +1099,6 @@ internal sealed partial class Archetype
             "and cannot be stored in flat byte chunks.");
     }
 
-    [Conditional("DEBUG")]
     private static void AssertPositiveElementSize(int elementSize, Type componentType)
     {
         if (elementSize <= 0)

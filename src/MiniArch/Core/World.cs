@@ -138,13 +138,11 @@ public sealed partial class World : IDisposable
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    [Conditional("DEBUG")]
     private void AssertNotDisposed()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
     }
 
-    [Conditional("DEBUG")]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void AssertAlive(Entity entity)
     {
@@ -305,6 +303,7 @@ public sealed partial class World : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public T Get<T>(Entity entity) where T : unmanaged
     {
+        AssertNotDisposed();
         AssertAlive(entity);
         ref var record = ref _records[entity.Id];
         var arch = record.Archetype!;
@@ -318,6 +317,7 @@ public sealed partial class World : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ref T GetRef<T>(Entity entity) where T : unmanaged
     {
+        AssertNotDisposed();
         AssertAlive(entity);
         ref var record = ref _records[entity.Id];
         var arch = record.Archetype!;
@@ -1151,9 +1151,7 @@ public sealed partial class World : IDisposable
         // Hierarchy
         _hierarchy.CaptureState(snap);
 
-#if DEBUG
         snap._sourceWorld = this;
-#endif
         return snap;
     }
 
@@ -1183,11 +1181,12 @@ public sealed partial class World : IDisposable
                 "obtain a fresh handle before restoring.");
         }
 
-#if DEBUG
-        Debug.Assert(ReferenceEquals(snapshot._sourceWorld, this),
-            "RestoreState: snapshot was captured from a different World instance. " +
-            "Snapshots are tied to their originating world and cannot be shared.");
-#endif
+        if (!ReferenceEquals(snapshot._sourceWorld, this))
+        {
+            throw new InvalidOperationException(
+                "RestoreState: snapshot was captured from a different World instance. " +
+                "Snapshots are tied to their originating world and cannot be shared.");
+        }
 
         // Records
         if (_records.Length < snapshot.EntitySlotCount)

@@ -150,7 +150,6 @@ public sealed partial class World
         return record.IsOccupied && record.Version == entity.Version;
     }
 
-    [Conditional("DEBUG")]
     private void AssertValidEntityId(int id, Entity entity)
     {
         if ((uint)id >= (uint)_entitySlotCount)
@@ -169,10 +168,9 @@ public sealed partial class World
     internal EntityRecord GetRecordFast(Entity entity)
     {
         AssertNotDisposed();
-#if DEBUG
-        Debug.Assert((uint)entity.Id < (uint)_entitySlotCount,
-            $"GetRecordFast id {entity.Id} out of range [0, {_entitySlotCount}).");
-#endif
+        if ((uint)entity.Id >= (uint)_entitySlotCount)
+            throw new InvalidOperationException(
+                $"GetRecordFast: id {entity.Id} out of range [0, {_entitySlotCount}).");
         ref var data = ref MemoryMarshal.GetArrayDataReference(_records);
         return Unsafe.Add(ref data, entity.Id);
     }

@@ -84,9 +84,7 @@ public sealed class WorldStateSnapshot
     // is the documented API.
     internal bool _isRecycled = true;
 
-#if DEBUG
     internal World? _sourceWorld;
-#endif
 
     /// <summary>
     /// Gets whether this snapshot has been recycled back to the world's pool.
@@ -105,9 +103,7 @@ public sealed class WorldStateSnapshot
         ArchetypeBackupCount = 0;
         HierarchyChildSlotCount = 0;
         HierarchyChildFreeList = -1;
-#if DEBUG
         _sourceWorld = null;
-#endif
     }
 
     internal void EnsureRecordsCapacity(int capacity)
