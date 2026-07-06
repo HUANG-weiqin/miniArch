@@ -314,6 +314,10 @@ public sealed partial class World
                 entities[entityIndex++] = entity;
                 chunkEntities[rowOffset] = entity;
                 ref var record = ref _records[entity.Id];
+#if DEBUG
+                if (!record.IsOccupied && record.Version == entity.Version)
+                    _reservedCount--;
+#endif
                 record.Archetype = archetype;
                 record.RowIndex = range.StartRow + rowOffset;
             }
@@ -324,6 +328,10 @@ public sealed partial class World
                 entities[entityIndex++] = entity;
                 chunkEntities[rowOffset] = entity;
                 ref var record = ref _records[entity.Id];
+#if DEBUG
+                if (!record.IsOccupied && record.Version == entity.Version)
+                    _reservedCount--;
+#endif
                 record.Archetype = archetype;
                 record.RowIndex = range.StartRow + rowOffset;
             }
@@ -355,6 +363,10 @@ public sealed partial class World
                 entities[entityIndex++] = entity;
                 archetype.WriteEntityAt(range.StartRow + rowOffset, entity);
                 ref var record = ref _records[entity.Id];
+#if DEBUG
+                if (!record.IsOccupied && record.Version == entity.Version)
+                    _reservedCount--;
+#endif
                 record.Archetype = archetype;
                 record.RowIndex = range.StartRow + rowOffset;
             }
@@ -365,6 +377,10 @@ public sealed partial class World
                 entities[entityIndex++] = entity;
                 archetype.WriteEntityAt(range.StartRow + rowOffset, entity);
                 ref var record = ref _records[entity.Id];
+#if DEBUG
+                if (!record.IsOccupied && record.Version == entity.Version)
+                    _reservedCount--;
+#endif
                 record.Archetype = archetype;
                 record.RowIndex = range.StartRow + rowOffset;
             }
@@ -424,6 +440,9 @@ public sealed partial class World
     internal Entity ReserveDeferredEntityUnsafe()
     {
         var id = AcquireEntityIdUnsafe(out var version);
+#if DEBUG
+        _reservedCount++;
+#endif
         return new Entity(id, version);
     }
 
@@ -443,6 +462,9 @@ public sealed partial class World
         var nextVersion = NextEntityVersion(entity);
         record.Version = nextVersion;
         PushFreeIdUnsafe(entity.Id, nextVersion);
+#if DEBUG
+        _reservedCount--;
+#endif
     }
 
     /// <summary>
@@ -460,6 +482,9 @@ public sealed partial class World
         var nextVersion = NextEntityVersion(entity);
         record.Version = nextVersion;
         PushFreeIdUnsafe(entity.Id, nextVersion);
+#if DEBUG
+        _reservedCount--;
+#endif
         return true;
     }
 
@@ -484,12 +509,18 @@ public sealed partial class World
             _records[entity.Id].Version == entity.Version)
         {
             RemoveFromFreeList(entity);
+#if DEBUG
+            _reservedCount++;
+#endif
             return;
         }
 
         if (entity.Id == _entitySlotCount && entity.Version == 1)
         {
             ReserveReplayFreshSlot(entity);
+#if DEBUG
+            _reservedCount++;
+#endif
             return;
         }
 

@@ -201,6 +201,10 @@ public abstract class CommandStreamCore
         var seq = _deferredSeq++;
         var placeholder = new Entity(-1, seq);
         EnsureCapacity(ref _pendingBatchDeferredArr, seq, 64);
+#if DEBUG
+        EnsureCapacity(ref _pendingBatchDeferredEpoch, seq, 64);
+        _pendingBatchDeferredEpoch[seq] = _world._deferredEpoch;
+#endif
         var batchIdx = AllocBatchSlot(placeholder);
         _pendingBatchDeferredArr[seq] = batchIdx;
         _lastCreated = placeholder;
@@ -527,6 +531,10 @@ public abstract class CommandStreamCore
             return Task.FromResult(new FrameDelta());
 
         var frozen = SwapOutState();
+#if DEBUG
+        _world._deferredEpoch++;
+        _pendingBatchDeferredEpoch = [];
+#endif
         // Static delegate + state parameter avoids the per-call closure allocation
         // that Task.Run(() => ...) would create. FrozenState is a reference type,
         // so passing it as `object` is a free upcast —no boxing.
@@ -980,6 +988,18 @@ public abstract class CommandStreamCore
     {
         if (entity == _lastCreated && _lastCreatedBatch >= 0)
         {
+#if DEBUG
+            if (entity.Id < 0)
+            {
+                var seq = entity.Version;
+                if ((uint)seq >= (uint)_pendingBatchDeferredEpoch.Length ||
+                    _pendingBatchDeferredEpoch[seq] != _world._deferredEpoch)
+                {
+                    batchIdx = -1;
+                    return false;
+                }
+            }
+#endif
             batchIdx = _lastCreatedBatch;
             return true;
         }
@@ -1002,7 +1022,14 @@ public abstract class CommandStreamCore
             {
                 batchIdx = _pendingBatchDeferredArr[seq];
                 if (batchIdx >= 0 && (uint)batchIdx < (uint)_frozen.BatchCanceled.Length && !_frozen.BatchCanceled[batchIdx])
+                {
+#if DEBUG
+                    if ((uint)seq >= (uint)_pendingBatchDeferredEpoch.Length ||
+                        _pendingBatchDeferredEpoch[seq] != _world._deferredEpoch)
+                        return false;
+#endif
                     return true;
+                }
             }
         }
         batchIdx = -1;
@@ -1450,6 +1477,9 @@ public abstract class CommandStreamCore
     // InvalidReal and are written with real entities as they get allocated.
     // Id < 0 means "not yet resolved" (cancelled placeholder); real ids are >= 0.
     private Entity[]? _resolveMapPool;
+#if DEBUG
+    private int[] _pendingBatchDeferredEpoch = [];
+#endif
 
     // ── Clear ─────────────────────────────────────────────────────────
 
@@ -1519,6 +1549,10 @@ public abstract class CommandStreamCore
         _frozen.HierarchyByChild.Clear();
         _hasStoreCommands = false;
         _hasParallelStoreWrites = false;
+#if DEBUG
+        _pendingBatchDeferredEpoch = [];
+        _world._deferredEpoch++;
+#endif
     }
 
     // ── Deferred entity resolution ────────────────────────────────────
@@ -1627,6 +1661,9 @@ public abstract class CommandStreamCore
         }
 
         _deferredSeq = 0;
+#if DEBUG
+        _pendingBatchDeferredEpoch = [];
+#endif
 
         foreach (var store in _frozen.Stores)
             store?.ReplacePlaceholders(resolveMap);

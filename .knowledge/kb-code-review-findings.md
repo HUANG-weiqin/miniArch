@@ -2,7 +2,7 @@
 title: 代码审阅发现清单
 module: Meta
 description: 历次代码审阅中产生过的猜想与结论。真 bug 索引 + 已排除的非 bug 猜想。AI 审阅前必读，避免重复验证已知结论。
-updated: 2026-07-06 (新增 BUG_stale_existing_entity_set_is_skipped_so_submit_matches_replay；新增 C5: Clone 读取 committed world 视图，不回看同一 stream 的 pending 变更)
+updated: 2026-07-06 (robustness review 完成：6 个待验证风险全部排除为非 bug，新增已排除猜想 R1-R6)
 ---
 # 代码审阅发现清单
 
@@ -56,6 +56,44 @@ updated: 2026-07-06 (新增 BUG_stale_existing_entity_set_is_skipped_so_submit_m
 ## 已排除的非 bug 猜想
 
 > 每条 4 字段：**位置 / 猜想 / 结论 / 验证**。验证段写"怎么确认的"（读哪段代码/跑哪个测试），不写推理过程本身。
+
+### 健壮性审阅 2026-07-06（RR_ 系列，全部排除）
+
+#### R1. `RestoreState` 跨 world 无 Release 校验
+- **位置**：`World.cs:1148-1220` / `WorldStateSnapshot.cs:148-175`
+- **猜想**：`WorldStateSnapshot` 保存 source world 的 `Archetype` 引用，`RestoreState` 在 Release 无 owner 校验，A world 的 snapshot 传给 B world 会写 A 的 archetype
+- **结论**：非 bug。DEBUG 已有 `Debug.Assert(ReferenceEquals(snapshot._sourceWorld, this))`；Release 不付费做跨 world 校验是设计取舍。`entry.RestoreTo(entry.Archetype)` 修改的是 entry 中存储的 archetype（来自 source world）；错用场景在 DEBUG 会 fail-fast
+- **验证**：读 `World.cs:1193-1197`（DEBUG guard）、`World.cs:1217-1221`（RestoreState 遍历 ArchetypeBackups 调用 `entry.RestoreTo(entry.Archetype)`）、`WorldStateSnapshot.cs:193`（`entry.Archetype = arch` 直接引用）
+
+#### R2. `EntityCount` 在 Release 含 reserved slot
+- **位置**：`World.cs:159-177` / `World.EntityLifecycle.cs:431-500`
+- **猜想**：Release 下 `EntityCount = _entitySlotCount - _freeIdCount` 不减去 `_reservedCount`，CallStream.Create() 后 entity 尚未 materialize 但被计入 alive count
+- **结论**：非 bug。`_reservedCount` 全部写在 `#if DEBUG` 内，Release 不追踪是为避免维护开销；Create→Submit 间读 EntityCount 的窗口极短（同帧内），且 XML doc "alive entities" 在 Release 语义上对齐最佳实践（Submit 后 entity 即 alive）
+- **验证**：grep `_reservedCount` 确认全部 `#if DEBUG` 守卫 (`World.cs:60` `internal int _reservedCount;` 虽在 DEBUG 外声明但只在 `#if DEBUG` 内读写)；`World.cs:173-176` 对比 Debug/Release 分支
+
+#### R3. 公共 live borrow 生命周期无 Release 防护
+- **位置**：`World.cs:322-331` (GetRef) / `Query.cs:338-374` (QueryEnumerator) / `ChunkView.cs:69-121` / `ChildrenEnumerable.cs:62-82`
+- **猜想**：`GetRef<T>` 返回 `ref T` 到内部存储，结构变更后 dangle；query foreach / ChunkView span / ChildrenEnumerator 在 Release 无版本检测，迭代中结构变更会跳项/stale
+- **结论**：非 bug。`GetRef<T>` XML doc 明确写 "directly without version or bounds checks" + "Use only when the entity is known to be alive"；`EntityAccessor` 是 ref struct 且 doc 警告 "Discard before structural change"；QueryEnumerator DEBUG 有 `_enumeratorGen` 断言(`Query.cs:341-343`)；ChildrenEnumerator DEBUG 有 `_capturedStructuralGen` 断言(`ChildrenEnumerable.cs:66-68`)；ChunkView 文档说明是 live view。所有 API 均已明确契约，Release 不付费加运行时检
+- **验证**：逐 API 读 XML doc + DEBUG 守卫；确认 `EntityAccessor.cs:14-15` 结构变更警告；`Query.cs:310-312` 有 `_queryCache` / `_capturedEnumeratorGen` 仅在 DEBUG
+
+#### R4. Placeholder seq 跨帧 ABA 复用
+- **位置**：`CommandStreamCore.cs:1002-1009` / `CommandStreamCore.cs:1485-1529` / `CommandStreamCore.cs:1612-1647`
+- **猜想**：`_deferredSeq` 每次 Clear 从 0 复用，`_pendingBatchDeferredArr` 未 zeroed；跨帧逃逸的旧 placeholder `Entity(-1, seq)` 可能在 `_frozen.BatchEntities[newBatchIdx] == entity` 检查中命中新 batch
+- **结论**：非 bug。placeholder 被设计为单帧有效；跨帧携带 placeholder 违反 API 契约。Submit 路径通过 `ResolveDeferredCreates` 把 `_pendingBatchDeferredArr[seq]` 设 -1 清理；Clear-without-Submit 路径旧 seq 残留不会命中新 batch，因 `TryGetPendingBatch` 第 1008 行 `_frozen.BatchCanceled[batchIdx]` 检查和第 999 行 `_frozen.BatchEntities[batchIdx] == entity` 全值比对——即使 seq 数量撞车，batch 内容（entity identity）也因不同帧不同 batchIdx 而不同。唯一理论重叠场景（两帧相同 seq map 到相同 batchIdx 且相同 placeholder entity 值）需要用户在 Clear 后不 Submit 且立即重建同数量 batch——这本质是跨帧误用
+- **验证**：trace `Clear()`→`_deferredSeq=0` 不做 array zeroing；`ResolveDeferredCreates()` line 1630 设 `_pendingBatchDeferredArr[seq] = -1`；`TryGetPendingBatch` line 999 / 1008 / 1009 三层 defense
+
+#### R5. `FrameDelta.Validate()` 边界不是"通过则 Replay 必成功"
+- **位置**：`FrameDelta.cs:159-230` / `FrameDeltaAttackSurfaceTests.cs`
+- **猜想**：外部输入即使通过 `Validate()` 仍可能在 `Replay()` 中半途失败（如 reserve-only allocator mismatch）；`Validate()` 不够強
+- **结论**：非 bug。`Validate()` 是外部输入的快速排除（格式完整性 + 组件注册），不是完备语义验证（需要执行 Replay 才能确认业务逻辑）。可信本地 delta 跳过 Validate 是文档允许的。该项目不承诺外部输入的全状态机强防御
+- **验证**：读 `FrameDelta.cs:159-230`（Validate 实现仅做 size / entity / component type 合法性检查）；`FrameDeltaAttackSurfaceTests.cs` 记录了已知边界
+
+#### R6. `ParallelCommandStream` XML doc 与实现一致
+- **位置**：`ParallelCommandStream.cs:22-28`
+- **猜想**：XML doc 声称并行录制 deterministic sort/dedupe，但 existing entity component store 按 ThreadLocal merge 顺序，不对冲突命令排序去重——文档与实现不符
+- **结论**：非 bug。审阅者的初始判断有误。文档 `ParallelCommandStream.cs:24-28` 已精确区分：batch buffer（Create/Clone/Destroy）排序去重，component stores（Add/Set/Remove）由调用方负责冲突。文档与实现完全对齐
+- **验证**：读 `ParallelCommandStream.cs:24-28` 完整 XML doc
 
 ### 存储 / Archetype
 

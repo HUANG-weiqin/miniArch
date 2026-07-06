@@ -56,6 +56,11 @@ public sealed partial class World : IDisposable
     // per-call in steady state.
     private readonly Dictionary<Archetype, int> _replayCreateCounts = new();
 
+#if DEBUG
+    internal int _reservedCount;
+    internal int _deferredEpoch;
+#endif
+
     // Placeholder —local real entity mapping for FrameDelta replay.
     // Indexed by placeholder seq (Entity.Version when Id == -1).
     // Reused across ReplayCore calls —never allocated per-call in steady state.
@@ -158,7 +163,18 @@ public sealed partial class World : IDisposable
     /// <summary>
     /// Gets the number of currently alive entities.
     /// </summary>
-    public int EntityCount => _entitySlotCount - _freeIdCount;
+    public int EntityCount
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get
+        {
+#if DEBUG
+            return _entitySlotCount - _freeIdCount - _reservedCount;
+#else
+            return _entitySlotCount - _freeIdCount;
+#endif
+        }
+    }
 
     /// <summary>
     /// Gets a snapshot of world-level statistics.
@@ -1027,6 +1043,13 @@ public sealed partial class World : IDisposable
     {
         var rowIndex = archetype.AddEntity(entity);
         ref var record = ref _records[entity.Id];
+#if DEBUG
+        // Only decrement if the entity was in reserved state
+        // (Archetype==null, Version matches). Malformed deltas that Create
+        // without a prior Reserve skip the increment, so don't decrement.
+        if (!record.IsOccupied && record.Version == entity.Version)
+            _reservedCount--;
+#endif
         record.Archetype = archetype;
         record.RowIndex = rowIndex;
         return rowIndex;
@@ -1128,6 +1151,9 @@ public sealed partial class World : IDisposable
         // Hierarchy
         _hierarchy.CaptureState(snap);
 
+#if DEBUG
+        snap._sourceWorld = this;
+#endif
         return snap;
     }
 
@@ -1156,6 +1182,12 @@ public sealed partial class World : IDisposable
                 "(or was never produced by CaptureState). Call CaptureState to " +
                 "obtain a fresh handle before restoring.");
         }
+
+#if DEBUG
+        Debug.Assert(ReferenceEquals(snapshot._sourceWorld, this),
+            "RestoreState: snapshot was captured from a different World instance. " +
+            "Snapshots are tied to their originating world and cannot be shared.");
+#endif
 
         // Records
         if (_records.Length < snapshot.EntitySlotCount)

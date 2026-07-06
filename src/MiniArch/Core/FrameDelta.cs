@@ -154,6 +154,15 @@ public sealed class FrameDelta
     /// Walks the entire delta once (same cost as deserialization). Uses the
     /// global <see cref="ComponentRegistry"/> to resolve type sizes.
     /// Per-entity state machine: Reserve → Create|Release (terminal per entity).
+    /// <para/>
+    /// <b>Limitations:</b> Validate only checks the delta's internal state
+    /// machine (Reserve → Create|Release ordering, payload sizes). It does
+    /// <b>not</b> verify that the target <see cref="World"/>'s allocator state
+    /// (free list, version counters) is compatible — a delta that passes
+    /// <c>Validate()</c> may still cause <see cref="CommandStream.Replay"/>
+    /// to throw due to allocator mismatch. Use <see cref="FrameDelta"/> replay
+    /// from frame 0, or bootstrap peer states with <see cref="WorldSnapshot.Load"/>
+    /// before incremental replay.
     /// </remarks>
     /// <exception cref="InvalidOperationException">The delta is structurally invalid.</exception>
     public void Validate()

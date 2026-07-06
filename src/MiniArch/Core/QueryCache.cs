@@ -35,8 +35,6 @@ internal sealed class QueryCache
     // Even when both have 1 view, the ChunkView segment index differs (-1 vs 0).
     private int[] _archetypeExpectedViews = [];
 
-
-
     internal QueryCache(World world, QueryFilter filter)
     {
         _world = world;

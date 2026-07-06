@@ -21,9 +21,11 @@ namespace MiniArch.Core;
 /// <para>
 /// <b>Concurrency model:</b> all mutators serialize on
 /// <c>_storeCreateLock</c>. Per-entity record order across threads is
-/// non-deterministic, but Submit/Snapshot deterministically sorts and dedupes
-/// before emission, so cross-thread reordering does not affect the resulting
-/// <see cref="FrameDelta"/> or world state.
+/// non-deterministic. For the batch buffer (<c>Create</c>/<c>Clone</c>/<c>Destroy</c>),
+/// commands are sorted and deduped before emission. For existing entity component
+/// stores (<c>Add</c>/<c>Set</c>/<c>Remove</c>), conflicting commands on the same
+/// entity are applied in ThreadLocal merge order —the caller is responsible for
+/// avoiding or reconciling conflicts on the same entity.
 /// </para>
 /// <para>
 /// Do <b>not</b> record concurrently into multiple <see cref="ParallelCommandStream"/>
