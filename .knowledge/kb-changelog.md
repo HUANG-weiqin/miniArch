@@ -10,6 +10,13 @@ updated: 2026-07-06 (架构审阅知识库校准：CommandStreamCore 边界、Ad
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
 
 
+## 2026-07-06 新增 Change Tracking 知识库
+
+- **新增 Change Tracking 子系统知识页**：`kb-change-tracking.md`，覆盖 `Track<T>` / `ChangeQuery<T>` / `ModifiedChunks` / `Transitions`。per-(archetype,column) long 版本号 + old→new signature transition log。Get=read/Set=write 契约。tracking-off 零回归（门禁绿）。详见 `kb-change-tracking.md`，设计决策见 `kb-design-rationale.md` §2.11，push-event 误判见 §3.10。
+- **`kb-design-rationale.md`** §2 新增 2.11 Change Tracking 子系统决策，§3 新增 3.10 push-event 误判（原 3.10 防御性检查顺移至 3.11），front matter 日期同步更新。
+- **`INDEX.md`** 模块地图新增 MiniArch.Core Change Tracking 行，快速入口新增"反应式 / 变更追踪"区。
+- **`kb-changelog.md`** 本条目。
+
 ## 2026-07-06 架构审阅知识库校准
 
 - **Add/Set/Remove 真实语义校准**：`World.Add<T>` 当前是 ensure+overwrite（已存在时原地覆盖），不是 strict throw；`World.Set<T>` 缺失时抛异常；`World.Remove<T>` 缺失时 no-op。同步更新 `World.StructuralChange.cs` XML doc、`kb-design-rationale.md`、`kb-core-ecs.md`、`kb-architecture-review.md`。历史上 strict Add 曾被文档化，但 B1/B4 证明重复 Add 必须覆盖才能保持 Submit/Replay 收敛。
