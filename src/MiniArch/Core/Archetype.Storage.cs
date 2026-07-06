@@ -480,12 +480,24 @@ internal sealed partial class Archetype
             _columnByteOffsets[columnIndex] + localRow * _elementSizes[columnIndex]));
     }
 
+    /// <summary>
+    /// Bumps the per-column version when tracking is active.
+    /// Must be inlineable — called on every write chokepoint hot path.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void MarkColumnWritten(int columnIndex)
+    {
+        if (_anyTrackingActive)
+            _columnVersions![columnIndex] = ++_owner!._writeEpoch;
+    }
+
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void SetComponentAtTyped<T>(int columnIndex, int row, in T value) where T : unmanaged
     {
         ref var target = ref GetComponentRefAt<T>(columnIndex, row);
         target = value;
+        MarkColumnWritten(columnIndex);
     }
 
     /// <summary>
@@ -507,11 +519,12 @@ internal sealed partial class Archetype
     /// </summary>
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void SetComponentAtFlat<T>(int byteOffset, int row, in T value) where T : unmanaged
+    internal void SetComponentAtFlat<T>(int columnIndex, int byteOffset, int row, in T value) where T : unmanaged
     {
         Unsafe.As<byte, T>(ref Unsafe.Add(
             ref MemoryMarshal.GetArrayDataReference(_data),
             byteOffset + row * Unsafe.SizeOf<T>())) = value;
+        MarkColumnWritten(columnIndex);
     }
 
     [SkipLocalsInit]
@@ -683,7 +696,10 @@ internal sealed partial class Archetype
         if (read)
             Unsafe.CopyBlockUnaligned(ref *external, ref storage, size);
         else
+        {
             Unsafe.CopyBlockUnaligned(ref storage, ref *external, size);
+            MarkColumnWritten(columnIndex);
+        }
     }
 
     internal void CopyColumnsFrom(Archetype source, int count)

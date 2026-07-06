@@ -2332,7 +2332,7 @@ public abstract class CommandStreamCore
                         fastIsChunked = arch.IsChunked;
                     }
                     if (!fastIsChunked)
-                        arch.SetComponentAtFlat<T>(fastByteOffset, record.RowIndex, in entry.Value);
+                        arch.SetComponentAtFlat<T>(fastColIdx, fastByteOffset, record.RowIndex, in entry.Value);
                     else
                         arch.SetComponentAtTyped(fastColIdx, record.RowIndex, in entry.Value);
                 }
@@ -2365,7 +2365,7 @@ public abstract class CommandStreamCore
                         lastIsChunkedMixed = arch.IsChunked;
                     }
                     if (!lastIsChunkedMixed)
-                        arch.SetComponentAtFlat<T>(lastByteOffsetMixed, record.RowIndex, in entry.Value);
+                        arch.SetComponentAtFlat<T>(lastColIdx, lastByteOffsetMixed, record.RowIndex, in entry.Value);
                     else
                         arch.SetComponentAtTyped(lastColIdx, record.RowIndex, in entry.Value);
                 }

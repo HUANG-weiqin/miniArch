@@ -89,7 +89,7 @@ public sealed partial class World : IDisposable
     private bool _disposed;
 
     // ── Change tracking ─────────────────────────────────────────────
-    private long _writeEpoch;                                  // monotonic, long = no wraparound
+    internal long _writeEpoch;                                  // monotonic, long = no wraparound
     private readonly List<Core.TransitionEntry> _transitionLog = new();
     private bool _anyTrackingActive;                           // world-level gate
 
@@ -217,6 +217,20 @@ public sealed partial class World : IDisposable
     internal bool IsChangeTrackingActive => _anyTrackingActive;
     internal long CurrentWriteEpoch => _writeEpoch;
     internal IReadOnlyList<Core.TransitionEntry> GetTransitionLogInternal() => _transitionLog;
+
+    /// <summary>
+    /// Debug/test helper: reads the current column version for a component on an entity.
+    /// Returns 0 if tracking is inactive or the entity does not have the component.
+    /// </summary>
+    internal long DebugGetColumnVersion(Entity entity, ComponentType type)
+    {
+        if ((uint)entity.Id >= (uint)_entitySlotCount) return 0;
+        ref var record = ref _records[entity.Id];
+        if (!record.IsOccupied || record.Version != entity.Version) return 0;
+        var arch = record.Archetype!;
+        if (!arch.TryGetComponentIndex(type, out var col)) return 0;
+        return arch._columnVersions?[col] ?? 0;
+    }
 
     /// <summary>
     /// Activates change tracking for component <typeparamref name="T"/> and returns a

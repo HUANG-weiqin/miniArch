@@ -53,4 +53,63 @@ public class ChangeTrackingInfrastructureTests
         var world = new World();
         Assert.Equal(0, world.CurrentWriteEpoch);
     }
+
+    // ── Task 2: per-column version bump on write chokepoints ──────────
+
+    [Fact]
+    public void Set_advances_column_version_when_tracking_active()
+    {
+        var world = new World();
+        world.Track<Position>();
+        var e = world.Create(new Position(0, 0));
+        var v0 = world.DebugGetColumnVersion(e, Component<Position>.ComponentType);
+        world.Set(e, new Position(5, 0));
+        var v1 = world.DebugGetColumnVersion(e, Component<Position>.ComponentType);
+        Assert.True(v1 > v0);
+    }
+
+    [Fact]
+    public void Set_does_not_advance_version_when_tracking_inactive()
+    {
+        var world = new World();   // no Track
+        var e = world.Create(new Position(0, 0));
+        world.Set(e, new Position(5, 0));
+        Assert.Equal(0, world.DebugGetColumnVersion(e, Component<Position>.ComponentType));
+    }
+
+    [Fact]
+    public void Get_does_not_advance_version_even_when_tracking_active()
+    {
+        var world = new World();
+        world.Track<Position>();
+        var e = world.Create(new Position(1, 0));
+        world.Set(e, new Position(1, 0));
+        var v = world.DebugGetColumnVersion(e, Component<Position>.ComponentType);
+        _ = world.Get<Position>(e);
+        Assert.Equal(v, world.DebugGetColumnVersion(e, Component<Position>.ComponentType));
+    }
+
+    [Fact]
+    public void Set_on_one_column_does_not_advance_other_column()
+    {
+        var world = new World();
+        world.Track<Position>();
+        var e = world.Create(new Position(0, 0), new Velocity(0, 0));
+        var posV = world.DebugGetColumnVersion(e, Component<Position>.ComponentType);
+        world.Set(e, new Velocity(1, 0));
+        Assert.Equal(posV, world.DebugGetColumnVersion(e, Component<Position>.ComponentType));
+    }
+
+    [Fact]
+    public void EntityAccessor_Set_advances_version()
+    {
+        var world = new World();
+        world.Track<Position>();
+        var e = world.Create(new Position(0, 0));
+        var accessor = world.Access(e);
+        var v0 = world.DebugGetColumnVersion(e, Component<Position>.ComponentType);
+        accessor.Set(new Position(9, 0));
+        var v1 = world.DebugGetColumnVersion(e, Component<Position>.ComponentType);
+        Assert.True(v1 > v0);
+    }
 }
