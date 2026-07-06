@@ -9,6 +9,11 @@ public sealed class NetworkSyncTests
     private readonly record struct Velocity(int X, int Y);
     private readonly record struct Health(int Value);
 
+    // Component carrying an Entity field — exercises EntityFieldResolver
+    // auto-resolution of placeholder refs during Replay. record struct defaults
+    // to LayoutKind.Sequential, which EntityFieldResolver requires.
+    private readonly record struct Follow(Entity Target);
+
     // ── Helpers ────────────────────────────────────────────────────────
 
     private static Entity E(int id, int version = 1) => new(id, version);
@@ -297,5 +302,87 @@ public sealed class NetworkSyncTests
         new CommandStream(hostB).Replay(deltaA);
 
         Assert.Equal(hostA.Checksum(), hostB.Checksum());
+    }
+
+    // ── T8: EntityFieldResolver across hosts (component Entity field) ──
+    // Each host records a component whose Entity field holds a same-frame
+    // placeholder. After all hosts replay all deltas, EntityFieldResolver must
+    // have resolved every placeholder to a real id — and the same real id on
+    // every host (id allocator synced by replay history). This is the path the
+    // soak fuzz does not reach (test components carry no Entity fields).
+
+    [Fact]
+    public void T8_Entity_field_placeholder_resolves_across_hosts()
+    {
+        var hostA = new World();
+        var hostB = new World();
+
+        // Host A: leader + follower referencing leader (placeholder→placeholder)
+        var csA = new CommandStream(hostA) { DeferredEntities = true };
+        var leader = csA.Create();
+        csA.Add(leader, new Position(1, 1));
+        var follower = csA.Create();
+        csA.Add(follower, new Follow { Target = leader });
+        var deltaA = csA.Snapshot();
+        csA.Clear();
+
+        // Host B: boss + minion referencing boss (its own placeholder, same-frame)
+        var csB = new CommandStream(hostB) { DeferredEntities = true };
+        var boss = csB.Create();
+        csB.Add(boss, new Position(2, 2));
+        var minion = csB.Create();
+        csB.Add(minion, new Follow { Target = boss });
+        var deltaB = csB.Snapshot();
+        csB.Clear();
+
+        // Both hosts replay both deltas in fixed hostId order (A then B)
+        new CommandStream(hostA).Replay(deltaA);
+        new CommandStream(hostA).Replay(deltaB);
+        new CommandStream(hostB).Replay(deltaA);
+        new CommandStream(hostB).Replay(deltaB);
+
+        // 1. Convergence
+        Assert.Equal(hostA.Checksum(), hostB.Checksum());
+
+        // 2. Every Follow.Target must be resolved to a real id (not stale placeholder)
+        var followDesc = new QueryDescription().With<Follow>();
+        var holdersA = new List<Entity>();
+        var holdersB = new List<Entity>();
+        foreach (var e in hostA.Query(in followDesc)) holdersA.Add(e);
+        foreach (var e in hostB.Query(in followDesc)) holdersB.Add(e);
+        Assert.Equal(2, holdersA.Count);
+        Assert.Equal(2, holdersB.Count);
+
+        foreach (var h in holdersA)
+        {
+            var t = hostA.Get<Follow>(h).Target;
+            Assert.True(t.Id >= 0, $"Unresolved placeholder leaked through on hostA: holder={h} target={t}");
+            Assert.True(hostA.IsAlive(t), $"Follow.Target not alive on hostA: holder={h} target={t}");
+        }
+        foreach (var h in holdersB)
+        {
+            var t = hostB.Get<Follow>(h).Target;
+            Assert.True(t.Id >= 0, $"Unresolved placeholder leaked through on hostB: holder={h} target={t}");
+            Assert.True(hostB.IsAlive(t), $"Follow.Target not alive on hostB: holder={h} target={t}");
+        }
+
+        // 3. Same real ids across hosts (allocator synced → deterministic)
+        Assert.Equal(hostA.Checksum(), hostB.Checksum()); // already asserted; re-affirm intent
+        // Spot-check: host A's follower.Target points to the leader, which has Position(1,1)
+        // Find the holder whose Target has Position(1,1) on hostA, confirm hostB agrees.
+        Entity ResolveLeaderOn(World w)
+        {
+            foreach (var h in w.Query(in followDesc))
+            {
+                var t = w.Get<Follow>(h).Target;
+                if (w.Has<Position>(t) && w.Get<Position>(t).X == 1)
+                    return t;
+            }
+            return default;
+        }
+        var leaderA = ResolveLeaderOn(hostA);
+        var leaderB = ResolveLeaderOn(hostB);
+        Assert.True(leaderA.Id >= 0, "leader not found on hostA");
+        Assert.Equal(leaderA, leaderB); // identical real id across hosts
     }
 }

@@ -22,6 +22,7 @@
 | HeroPipeline.Tests | 合并到 `kb-hero-pipeline-regression.md` "PipelineBenchmarkTests" 段 |
 | HeroComing.Perf（回归门禁） | `kb-hero-pipeline-regression.md` |
 | **浸没测试（必读）** | **`kb-soak-test.md`**（**🚨 这个测试存在！所有 miniArch 改动后应运行** — 长周期随机操作正确性验证器，已发现 6 个 Submit/Replay 不一致 bug） |
+| **多 host 同步浸没测试** | **`kb-lockstep-soak.md`**（🚨 N host placeholder lockstep 收敛证明 — 补齐单 host soak 无法覆盖的 DeferredEntities=true 多 host 交错收敛性） |
 | **安全证明报告** | **`kb-safety-proof.md`**（2026-07-06 正式库安全证明——224 seed × 5M 帧全 PASS，15 条代码路径审计零分歧） |
 | GameTickSim.Perf（场景基准） | `kb-gameticksim-scenarios.md` |
 | CommandStreamGame.Perf（CommandStream 真实游戏稳态压测） | `kb-commandstream-game-perf.md` |
@@ -48,6 +49,7 @@
 
 **帧同步 / 网络**：
 - **端到端帧同步指南** → `kb-lockstep-playbook.md`
+- **多 host lockstep 收敛证明** → `kb-lockstep-soak.md`
 - **CommandStream** → `kb-command-stream.md`
 - **Deferred Create 多 host 设计** → `kb-deferred-create-design.md`
 - **Checksum 双模式** → `kb-snapshot-persistence.md`（Checksum 双模式段）

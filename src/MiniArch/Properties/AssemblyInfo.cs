@@ -9,4 +9,5 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("QueryInvalidation.Perf")]
 [assembly: InternalsVisibleTo("HeroPipeline.Tests")]
 [assembly: InternalsVisibleTo("MiniArch.Soak")]
+[assembly: InternalsVisibleTo("MiniArch.LockstepSoak")]
 
