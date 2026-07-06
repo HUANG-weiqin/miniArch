@@ -219,6 +219,39 @@ public sealed partial class World : IDisposable
     internal IReadOnlyList<Core.TransitionEntry> GetTransitionLogInternal() => _transitionLog;
 
     /// <summary>
+    /// Activates change tracking for component <typeparamref name="T"/> and returns a
+    /// <see cref="ChangeQuery{T}"/> cursor. Safe to call multiple times; idempotent.
+    /// </summary>
+    public ChangeQuery<T> Track<T>() where T : unmanaged
+    {
+        ActivateTracking(Component<T>.ComponentType);
+        return new ChangeQuery<T>(this);
+    }
+
+    internal void ActivateTracking(ComponentType type)
+    {
+        if (!_anyTrackingActive)
+        {
+            _anyTrackingActive = true;
+            foreach (var arch in _archetypes.Values)
+                ActivateArchetypeTracking(arch);
+        }
+        else
+        {
+            foreach (var arch in _archetypes.Values)
+                if (arch.ContainsComponent(type))
+                    ActivateArchetypeTracking(arch);
+        }
+    }
+
+    private void ActivateArchetypeTracking(Core.Archetype arch)
+    {
+        if (arch._anyTrackingActive) return;
+        arch._anyTrackingActive = true;
+        arch._columnVersions = new long[arch._elementSizes!.Length];
+    }
+
+    /// <summary>
     /// Adds a child to a parent.
     /// </summary>
     public void AddChild(Entity parent, Entity child)
@@ -435,6 +468,8 @@ public sealed partial class World : IDisposable
 
         archetype = new Archetype(signature, ResolveComponentTypes(signature), _chunkCapacity);
         archetype._owner = this;
+        if (_anyTrackingActive)
+            ActivateArchetypeTracking(archetype);
         _archetypes.Add(signature, archetype);
         CacheArchetypeByMaskIfCanonical(signature, archetype);
         PublishArchetypeSnapshot(archetype);
