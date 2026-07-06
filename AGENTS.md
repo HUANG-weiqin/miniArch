@@ -88,7 +88,7 @@ dotnet run -c Release --project tools/perf/HeroComing.Perf --check-baseline
 ```
 
 检查输出：
-- 吞吐量低于阈值（Movement ≥1210 rounds/s, Attack ≥767 rounds/s）→ **回退改动**
+- 吞吐量低于阈值（Movement ≥1642 rounds/s, Attack ≥997 rounds/s）→ **回退改动**
 - 内存持续增长 → **回退改动**
 - 崩溃或异常 → **回退改动**
 
