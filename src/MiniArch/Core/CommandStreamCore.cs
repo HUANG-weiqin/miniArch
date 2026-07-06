@@ -341,10 +341,11 @@ public abstract class CommandStreamCore
         var sourceRow = info.RowIndex;
         var components = archetype.Signature.AsSpan();
 
-        // Step 1: Collect archetype base components into temp lists
-        var mergedTypes = new List<ComponentType>(components.Length);
-        var mergedOffsets = new List<int>(components.Length);
-        var mergedSizes = new List<int>(components.Length);
+        // Step 1: stackalloc arrays for merged components (no heap List)
+        Span<ComponentType> mergedTypes = stackalloc ComponentType[64];
+        Span<int> mergedOffsets = stackalloc int[64];
+        Span<int> mergedSizes = stackalloc int[64];
+        var count = 0;
 
         for (var i = 0; i < components.Length; i++)
         {
@@ -356,56 +357,39 @@ public abstract class CommandStreamCore
                 fixed (byte* ptr = &_frozen.BatchBuf[offset])
                     archetype.ReadComponentRaw(i, sourceRow, ptr);
             }
-            mergedTypes.Add(ct);
-            mergedOffsets.Add(offset);
-            mergedSizes.Add(size);
+            mergedTypes[count] = ct;
+            mergedOffsets[count] = offset;
+            mergedSizes[count] = size;
+            count++;
         }
 
-        // Step 2: Scan component stores for overlay entries (pending Add/Set/Remove)
-        var stores = _frozen.Stores;
-        for (var s = 0; s < stores.Length; s++)
+        // Step 2: Create ONE ComponentMerger and scan all stores (no per-store OverlayCollector)
+        var merger = new ComponentMerger(this, mergedTypes, mergedOffsets, mergedSizes, ref count);
+
+        try
         {
-            var store = stores[s];
-            if (store is null) continue;
-            var collector = new OverlayCollector(this);
-            store.ForEachEntityEntry(source, ref collector);
-            var overlayEntries = collector.Entries;
-            for (var e = 0; e < overlayEntries.Count; e++)
+            var stores = _frozen.Stores;
+            for (var s = 0; s < stores.Length; s++)
             {
-                var overlayEntry = overlayEntries[e];
-                if (overlayEntry.Kind == KindRemove)
-                {
-                    var idx = mergedTypes.FindIndex(t => t == overlayEntry.Type);
-                    if (idx >= 0)
-                    {
-                        mergedTypes.RemoveAt(idx);
-                        mergedOffsets.RemoveAt(idx);
-                        mergedSizes.RemoveAt(idx);
-                    }
-                }
-                else
-                {
-                    // KindAdd or KindSet: overwrite in place or append
-                    var idx = mergedTypes.FindIndex(t => t == overlayEntry.Type);
-                    if (idx >= 0)
-                    {
-                        mergedOffsets[idx] = overlayEntry.Offset;
-                        mergedSizes[idx] = overlayEntry.Size;
-                    }
-                    else
-                    {
-                        mergedTypes.Add(overlayEntry.Type);
-                        mergedOffsets.Add(overlayEntry.Offset);
-                        mergedSizes.Add(overlayEntry.Size);
-                    }
-                }
+                var store = stores[s];
+                if (store is null) continue;
+                store.ForEachEntityEntry(source, ref merger);
+            }
+
+            // Step 3: Read final arrays from merger (may have grown past stackalloc)
+            var finalTypes = merger.Types;
+            var finalOffsets = merger.Offsets;
+            var finalSizes = merger.Sizes;
+            var finalCount = merger.Count;
+
+            for (var i = 0; i < finalCount; i++)
+            {
+                CommitBatchComponent(batchIdx, finalTypes[i], finalOffsets[i], finalSizes[i]);
             }
         }
-
-        // Step 3: Commit merged component list to clone's batch buffer
-        for (var i = 0; i < mergedTypes.Count; i++)
+        finally
         {
-            CommitBatchComponent(batchIdx, mergedTypes[i], mergedOffsets[i], mergedSizes[i]);
+            merger.ReturnRented();
         }
 
         // Step 4: Clone children recursively
@@ -1673,27 +1657,37 @@ public abstract class CommandStreamCore
     // ── Clone helpers ─────────────────────────────────────────────────
 
     /// <summary>
-    /// Returns the virtual children of <paramref name="parent"/> as seen by Clone.
-    /// Virtual children = world hierarchy children + pending AddChild intents - pending RemoveChild intents.
+    /// Writes the virtual children of <paramref name="parent"/> into <paramref name="buffer"/>
+    /// and returns the count. Virtual children = world hierarchy children + pending AddChild
+    /// intents - pending RemoveChild intents.
     /// </summary>
-    private List<Entity> GetVirtualChildren(Entity parent)
+    private int GetVirtualChildren(Entity parent, Span<Entity> buffer)
     {
-        var children = new List<Entity>();
+        var count = 0;
 
         // 1. World real children
         if (_world.Hierarchy.HasChildren(_world, parent))
         {
             foreach (var child in _world.Hierarchy.EnumerateChildren(_world, parent))
-                children.Add(child);
+            {
+                if (count < buffer.Length)
+                    buffer[count++] = child;
+            }
         }
 
         // 2. pending AddChild: HierarchyByChild entries where IsAdd && Parent == parent
+        // Use linear scan to avoid duplicates (List.Contains without allocation)
         foreach (var (child, intent) in _frozen.HierarchyByChild)
         {
             if (intent.IsAdd && intent.Parent == parent)
             {
-                if (!children.Contains(child))  // avoid duplicate from world children
-                    children.Add(child);
+                var alreadyPresent = false;
+                for (var i = 0; i < count; i++)
+                {
+                    if (buffer[i] == child) { alreadyPresent = true; break; }
+                }
+                if (!alreadyPresent && count < buffer.Length)
+                    buffer[count++] = child;
             }
         }
 
@@ -1707,21 +1701,37 @@ public abstract class CommandStreamCore
         {
             if (!intent.IsAdd)
             {
-                children.Remove(child);
+                for (var i = 0; i < count; i++)
+                {
+                    if (buffer[i] == child)
+                    {
+                        // Shift remaining elements left
+                        for (var j = i; j < count - 1; j++)
+                            buffer[j] = buffer[j + 1];
+                        count--;
+                        break;
+                    }
+                }
             }
         }
 
-        return children;
+        return count;
     }
 
     private void CloneChildrenRecursive(Entity sourceRoot, Entity cloneRoot)
     {
-        var virtualChildren = GetVirtualChildren(sourceRoot);
-        if (virtualChildren.Count == 0)
+        // Use ArrayPool buffer for virtual children (replaces heap List)
+        var childBuf = ArrayPool<Entity>.Shared.Rent(32);
+        var childCount = GetVirtualChildren(sourceRoot, childBuf.AsSpan());
+        if (childCount == 0)
+        {
+            ArrayPool<Entity>.Shared.Return(childBuf);
             return;
+        }
 
-        // Cycle detection: visited set using linear scan (typical pending entities < 64)
-        var visited = new List<Entity>();
+        // Cycle detection: visited set using ArrayPool + linear scan (typical pending entities < 64)
+        var visited = ArrayPool<Entity>.Shared.Rent(32);
+        var visitedCount = 0;
 
         var stack = ArrayPool<Entity>.Shared.Rent(32);
         var cloneStack = ArrayPool<Entity>.Shared.Rent(32);
@@ -1729,12 +1739,18 @@ public abstract class CommandStreamCore
 
         try
         {
-            foreach (var child in virtualChildren)
+            // Buffer for grandchildren (reused across iterations)
+            Span<Entity> gcBuf = stackalloc Entity[32];
+
+            for (var ci = 0; ci < childCount; ci++)
             {
-                if (visited.Contains(child))
+                var child = childBuf[ci];
+
+                // Cycle check via linear scan
+                if (Contains(visited, visitedCount, child))
                     throw new InvalidOperationException(
                         $"Clone detected a cycle in the virtual hierarchy at entity {child}.");
-                visited.Add(child);
+                visited[visitedCount++] = child;
 
                 if (stackCount >= stack.Length)
                 {
@@ -1745,6 +1761,10 @@ public abstract class CommandStreamCore
                 cloneStack[stackCount] = cloneRoot;
                 stackCount++;
             }
+
+            // Return child buffer early since we've pushed all entries
+            ArrayPool<Entity>.Shared.Return(childBuf);
+            childBuf = null!;
 
             while (stackCount > 0)
             {
@@ -1797,12 +1817,16 @@ public abstract class CommandStreamCore
                 AddChildCore(cloneParent, cloneChild);
 
                 // Enqueue grandchildren (virtual view)
-                foreach (var grandChild in GetVirtualChildren(srcChild))
+                var gcCount = GetVirtualChildren(srcChild, gcBuf);
+                for (var gi = 0; gi < gcCount; gi++)
                 {
-                    if (visited.Contains(grandChild))
+                    var grandChild = gcBuf[gi];
+
+                    // Cycle check via linear scan
+                    if (Contains(visited, visitedCount, grandChild))
                         throw new InvalidOperationException(
                             $"Clone detected a cycle in the virtual hierarchy at entity {grandChild}.");
-                    visited.Add(grandChild);
+                    visited[visitedCount++] = grandChild;
 
                     if (stackCount >= stack.Length)
                     {
@@ -1817,9 +1841,20 @@ public abstract class CommandStreamCore
         }
         finally
         {
+            if (childBuf is not null)
+                ArrayPool<Entity>.Shared.Return(childBuf);
+            ArrayPool<Entity>.Shared.Return(visited);
             ArrayPool<Entity>.Shared.Return(stack);
             ArrayPool<Entity>.Shared.Return(cloneStack);
         }
+    }
+
+    /// <summary>Linear scan for entity in span (allocation-free).</summary>
+    private static bool Contains(Span<Entity> span, int count, Entity entity)
+    {
+        for (var i = 0; i < count; i++)
+            if (span[i] == entity) return true;
+        return false;
     }
 
     private static int SortAndDeduplicateComponents(Span<RawComponentValue> comps)
@@ -2286,39 +2321,137 @@ public abstract class CommandStreamCore
     private protected const byte KindRemove = 2;
 
     /// <summary>
-    /// Entry collected during the component store overlay scan.
-    /// <see cref="Offset"/> and <see cref="Size"/> reference data already
-    /// written into <see cref="FrozenState.BatchBuf"/>.
+    /// Merges component store overlay entries directly into a flat array during Clone,
+    /// eliminating the intermediate <see cref="List{T}"/> allocation of <c>OverlayCollector</c>.
+    /// <para/>
+    /// Callbacks from <see cref="ComponentStore.ForEachEntityEntry"/> go straight into
+    /// the caller's stackalloc (or pooled) arrays — no lambda closures, no temp lists.
     /// </summary>
-    private protected struct OverlayEntry
-    {
-        public ComponentType Type;
-        public int Offset;
-        public int Size;
-        public byte Kind;
-    }
-
-    /// <summary>
-    /// Collects component store overlay entries during Clone. Each call to <see cref="Add"/>
-    /// reserves space in the batch buffer and copies the raw component data into it so the
-    /// caller can merge archetype + overlay entries without keeping extra copies.
-    /// </summary>
-    private protected struct OverlayCollector
+    private protected ref struct ComponentMerger
     {
         private readonly CommandStreamCore _core;
-        public List<OverlayEntry> Entries;
+        private Span<ComponentType> _types;
+        private Span<int> _offsets;
+        private Span<int> _sizes;
+        private ref int _count;
+        private ComponentType[]? _rentedTypes;
+        private int[]? _rentedOffsets;
+        private int[]? _rentedSizes;
 
-        public OverlayCollector(CommandStreamCore core)
+        public ComponentMerger(CommandStreamCore core,
+            Span<ComponentType> types, Span<int> offsets, Span<int> sizes,
+            ref int count)
         {
             _core = core;
-            Entries = new List<OverlayEntry>();
+            _types = types;
+            _offsets = offsets;
+            _sizes = sizes;
+            _count = ref count;
+            _rentedTypes = null;
+            _rentedOffsets = null;
+            _rentedSizes = null;
         }
 
+        public readonly Span<ComponentType> Types => _types;
+        public readonly Span<int> Offsets => _offsets;
+        public readonly Span<int> Sizes => _sizes;
+        public readonly int Count => _count;
+
+        /// <summary>Returns any rented arrays back to the pool. Safe to call even if no arrays were rented.</summary>
+        public void ReturnRented()
+        {
+            if (_rentedTypes is not null)
+            {
+                ArrayPool<ComponentType>.Shared.Return(_rentedTypes);
+                _rentedTypes = null;
+            }
+            if (_rentedOffsets is not null)
+            {
+                ArrayPool<int>.Shared.Return(_rentedOffsets);
+                _rentedOffsets = null;
+            }
+            if (_rentedSizes is not null)
+            {
+                ArrayPool<int>.Shared.Return(_rentedSizes);
+                _rentedSizes = null;
+            }
+        }
+
+        /// <summary>
+        /// Merges one overlay entry directly into the typed arrays.
+        /// <c>KindRemove</c> → find and shift-delete from the arrays.
+        /// <c>KindAdd</c> / <c>KindSet</c> → overwrite in place or append.
+        /// </summary>
         public void Add(ComponentType type, byte kind, ReadOnlySpan<byte> data)
         {
+            if (kind == KindRemove)
+            {
+                // KindRemove: find type and remove by shifting remaining elements left
+                for (var i = 0; i < _count; i++)
+                {
+                    if (_types[i] == type)
+                    {
+                        var shiftCount = _count - i - 1;
+                        for (var j = 0; j < shiftCount; j++)
+                        {
+                            _types[i + j] = _types[i + j + 1];
+                            _offsets[i + j] = _offsets[i + j + 1];
+                            _sizes[i + j] = _sizes[i + j + 1];
+                        }
+                        _count--;
+                        return;
+                    }
+                }
+                // Type not found → nothing to remove
+                return;
+            }
+
+            // KindAdd / KindSet: ensure capacity for at least one more entry
+            if (_count >= _types.Length)
+                Grow();
+
+            // Reserve batch buffer space and copy data
             var offset = _core.ReserveBatchBufSpace(data.Length);
             data.CopyTo(new Span<byte>(_core._frozen.BatchBuf, offset, data.Length));
-            Entries.Add(new OverlayEntry { Type = type, Offset = offset, Size = data.Length, Kind = kind });
+
+            // Find existing type → overwrite; otherwise append
+            for (var i = 0; i < _count; i++)
+            {
+                if (_types[i] == type)
+                {
+                    _offsets[i] = offset;
+                    _sizes[i] = data.Length;
+                    return;
+                }
+            }
+
+            // Append new entry
+            _types[_count] = type;
+            _offsets[_count] = offset;
+            _sizes[_count] = data.Length;
+            _count++;
+        }
+
+        private void Grow()
+        {
+            var newLen = _types.Length == 0 ? 64 : _types.Length * 2;
+
+            var newTypes = ArrayPool<ComponentType>.Shared.Rent(newLen);
+            var newOffsets = ArrayPool<int>.Shared.Rent(newLen);
+            var newSizes = ArrayPool<int>.Shared.Rent(newLen);
+
+            _types[.._count].CopyTo(newTypes);
+            _offsets[.._count].CopyTo(newOffsets);
+            _sizes[.._count].CopyTo(newSizes);
+
+            ReturnRented();
+
+            _types = newTypes;
+            _offsets = newOffsets;
+            _sizes = newSizes;
+            _rentedTypes = newTypes;
+            _rentedOffsets = newOffsets;
+            _rentedSizes = newSizes;
         }
     }
 
@@ -2331,7 +2464,7 @@ public abstract class CommandStreamCore
         public abstract void Clear();
         public abstract void ReplacePlaceholders(Entity[] resolveMap);
         public abstract void SealParallelWrites();
-        protected internal abstract void ForEachEntityEntry(Entity entity, ref OverlayCollector collector);
+        protected internal abstract void ForEachEntityEntry(Entity entity, ref ComponentMerger merger);
 
 #if DEBUG
         internal bool _isReadOnly;
@@ -2713,7 +2846,7 @@ public abstract class CommandStreamCore
             }
         }
 
-        protected internal override void ForEachEntityEntry(Entity entity, ref OverlayCollector collector)
+        protected internal override void ForEachEntityEntry(Entity entity, ref ComponentMerger merger)
         {
             var ct = Component<T>.ComponentType;
             for (var i = 0; i < _count; i++)
@@ -2721,7 +2854,7 @@ public abstract class CommandStreamCore
                 ref var entry = ref _entries[i];
                 if (entry.Entity == entity)
                 {
-                    collector.Add(ct, entry.Kind,
+                    merger.Add(ct, entry.Kind,
                         MemoryMarshal.AsBytes(new ReadOnlySpan<T>(ref entry.Value)));
                 }
             }

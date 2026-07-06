@@ -776,6 +776,91 @@ public sealed class CommandBufferCloneTests
         Assert.True(world.IsAlive(clone));
     }
 
+    [Fact]
+    public void Clone_materialized_source_does_not_allocate()
+    {
+        var world = new World();
+        var src = world.Create(new Position(1, 2), new Velocity(3, 4));
+        var buffer = new CommandStream(world);
+
+        // Add overlay to force store scan (Remove + Set)
+        buffer.Remove<Velocity>(src);
+        buffer.Set(src, new Position(99, 99));
+
+        // Warm up: let batch buffer and internal arrays pre-allocate
+        buffer.Clone(src); buffer.Submit();
+        buffer.Clone(src); buffer.Submit();
+
+        // Measure on same buffer (arrays already grown)
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        buffer.Clone(src);
+        var after = GC.GetAllocatedBytesForCurrentThread();
+        var allocated = after - before;
+
+        // Temporary Lists and lambda closures should be eliminated.
+        // Allow tiny overhead (≤1 byte) for edge cases like batch buffer growth.
+        Assert.True(allocated <= 1,
+            $"Clone_materialized_source allocated {allocated} bytes, expected ~0. " +
+            "Temporary Lists and lambda closures should be eliminated.");
+    }
+
+    [Fact]
+    public void Clone_pending_source_does_not_allocate()
+    {
+        var world = new World();
+        var buffer = new CommandStream(world);
+
+        // Source is a pending entity (created in buffer, not yet submitted)
+        var src = buffer.Create();
+        buffer.Add(src, new Position(1, 2));
+        buffer.Add(src, new Velocity(3, 4));
+        buffer.Set(src, new Position(99, 99));
+
+        // Warm up
+        buffer.Clone(src); buffer.Submit();
+
+        // Re-create source in same buffer for measurement
+        src = buffer.Create();
+        buffer.Add(src, new Position(1, 2));
+        buffer.Add(src, new Velocity(3, 4));
+        buffer.Set(src, new Position(99, 99));
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        buffer.Clone(src);
+        var after = GC.GetAllocatedBytesForCurrentThread();
+        var allocated = after - before;
+
+        Assert.True(allocated <= 1,
+            $"Clone_pending_source allocated {allocated} bytes, expected ~0. " +
+            "Temporary Lists and lambda closures should be eliminated.");
+    }
+
+    [Fact]
+    public void Clone_with_children_does_not_allocate()
+    {
+        var world = new World();
+        var parent = world.Create(new Position(1, 2));
+        var child1 = world.Create(new Velocity(3, 4));
+        var child2 = world.Create(new Health(100));
+        world.AddChild(parent, child1);
+        world.AddChild(parent, child2);
+        var buffer = new CommandStream(world);
+
+        // Warm up
+        buffer.Clone(parent); buffer.Submit();
+        buffer.Clone(parent); buffer.Submit();
+
+        // Measure on same buffer
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        buffer.Clone(parent);
+        var after = GC.GetAllocatedBytesForCurrentThread();
+        var allocated = after - before;
+
+        Assert.True(allocated <= 1,
+            $"Clone_with_children allocated {allocated} bytes, expected ~0. " +
+            "Temporary Lists and lambda closures should be eliminated.");
+    }
+
     private static int CountEntities(MiniQueryCache query)
     {
         var total = 0;
