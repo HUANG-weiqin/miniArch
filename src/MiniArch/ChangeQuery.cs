@@ -8,13 +8,23 @@ namespace MiniArch;
 /// consuming system; each enumeration call auto-advances its cursor. Obtain via <see cref="World.Track{T}"/>.
 /// </summary>
 /// <remarks>
+/// <para>
+/// By default the cursor tracks entities that have component <typeparamref name="T"/>. Use the
+/// <see cref="With{TU}"/>, <see cref="Without{TU}"/>, and <see cref="WithAny{TU}"/> fluent methods
+/// to narrow the tracked set. Fluent methods must be called before the first call to either
+/// <see cref="ModifiedChunks"/> or <see cref="Transitions"/>; after consumption begins the filter
+/// is frozen.
+/// </para>
+/// <para>
 /// After a snapshot save/load, observer state resets. Call <see cref="World.Track{T}"/> again
 /// to obtain a fresh cursor; discard cursors from before the restore.
+/// </para>
 /// </remarks>
 public sealed class ChangeQuery<T> where T : unmanaged
 {
     private readonly World _world;
     private readonly ComponentType _type;
+    private QueryDescription _filter;
     private long _valueCursor;
     private int _transitionCursor;
 
@@ -22,15 +32,47 @@ public sealed class ChangeQuery<T> where T : unmanaged
     {
         _world = world;
         _type = Component<T>.ComponentType;
+        _filter = new QueryDescription().With<T>();
     }
 
     /// <summary>
-    /// Returns chunks whose component <typeparamref name="T"/> was written since the last call.
+    /// Adds a required component to the change-query filter. Must be called before the first
+    /// <see cref="ModifiedChunks"/> or <see cref="Transitions"/> enumeration.
+    /// </summary>
+    public ChangeQuery<T> With<TU>() where TU : unmanaged
+    {
+        _filter = _filter.With<TU>();
+        return this;
+    }
+
+    /// <summary>
+    /// Adds an excluded component to the change-query filter. Must be called before the first
+    /// <see cref="ModifiedChunks"/> or <see cref="Transitions"/> enumeration.
+    /// </summary>
+    public ChangeQuery<T> Without<TU>() where TU : unmanaged
+    {
+        _filter = _filter.Without<TU>();
+        return this;
+    }
+
+    /// <summary>
+    /// Adds an any-match component to the change-query filter. Must be called before the first
+    /// <see cref="ModifiedChunks"/> or <see cref="Transitions"/> enumeration.
+    /// </summary>
+    public ChangeQuery<T> WithAny<TU>() where TU : unmanaged
+    {
+        _filter = _filter.WithAny<TU>();
+        return this;
+    }
+
+    /// <summary>
+    /// Returns chunks whose component <typeparamref name="T"/> was written since the last call
+    /// and whose archetype matches this cursor's filter.
     /// Materializes eagerly; cursor advances regardless of consumer enumeration depth.
     /// </summary>
     public IEnumerable<ChunkView> ModifiedChunks()
     {
-        var query = _world.Query(new QueryDescription().With<T>());
+        var query = _world.Query(_filter);
         var snapshotEpoch = _world.CurrentWriteEpoch;
         var result = new List<ChunkView>();
         var chunks = query.GetChunks().ToArray();
@@ -51,25 +93,28 @@ public sealed class ChangeQuery<T> where T : unmanaged
     }
 
     /// <summary>
-    /// Returns entities that entered or exited the set of entities having component
-    /// <typeparamref name="T"/> since the last call.
+    /// Returns entities that entered or exited the set matching this cursor's filter
+    /// since the last call.
     /// Materializes eagerly; cursor advances regardless of consumer enumeration depth.
     /// </summary>
     public IEnumerable<Transition> Transitions()
     {
+        // Build (or reuse) a QueryCache from the filter so we can use its
+        // pre-computed mask-based archetype matching.
+        var cache = _world.Query(_filter).Advanced;
         var log = _world.GetTransitionLogInternal();
         var end = log.Count;
         var result = new List<Transition>();
         for (int i = _transitionCursor; i < end; i++)
         {
             var entry = log[i];
-            var oldHas = entry.OldArchetype is { } o && o.ContainsComponent(_type);
-            var newHas = entry.NewArchetype is { } n && n.ContainsComponent(_type);
-            if (!oldHas && newHas)
+            var oldMatch = entry.OldArchetype is { } o && cache.Matches(o);
+            var newMatch = entry.NewArchetype is { } n && cache.Matches(n);
+            if (!oldMatch && newMatch)
                 result.Add(new Transition(TransitionKind.Entered, entry.Entity));
-            else if (oldHas && !newHas)
+            else if (oldMatch && !newMatch)
                 result.Add(new Transition(TransitionKind.Exited, entry.Entity));
-            // both true or both false: membership in {T} unchanged -> skip
+            // both match or neither match: membership in the filtered set unchanged → skip
         }
 
         _transitionCursor = end;
