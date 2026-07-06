@@ -652,8 +652,74 @@ public abstract class CommandStreamCore
         return task;
     }
 
+    /// <summary>
+    /// Combines <see cref="Submit"/> and <see cref="SnapshotInto"/> into a
+    /// single async operation. Commands are submitted to the local
+    /// <see cref="World"/> on the calling thread while the delta is built
+    /// concurrently on a background thread, writing into <paramref name="target"/>
+    /// to avoid allocating a new <see cref="FrameDelta"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// After warmup, repeated calls avoid allocating a new
+    /// <see cref="FrameDelta"/> object header —only one small boxed tuple is
+    /// allocated per call (the frozen state and target passed to the background
+    /// worker).
+    /// </para>
+    /// <para>
+    /// The caller must not mutate <paramref name="target"/> until the returned
+    /// <see cref="Task"/> completes.
+    /// </para>
+    /// <para>
+    /// The delta always uses real (non-placeholder) entity ids, regardless of
+    /// <see cref="DeferredEntities"/>. Mirror clients replaying this delta must
+    /// have an id allocator synchronized with the server (e.g. by replaying
+    /// every frame from frame 0). For multi-host lockstep where each peer owns
+    /// an independent world, use <see cref="Snapshot"/> / <see cref="SnapshotInto"/>
+    /// with <see cref="DeferredEntities"/> set to <c>true</c> instead.
+    /// </para>
+    /// </remarks>
+    /// <returns>
+    /// A <see cref="Task"/> that completes when the background delta-building
+    /// work is done. The caller should await this task before reading
+    /// <paramref name="target"/>. The submit (world apply) runs synchronously
+    /// on the calling thread before the returned task.
+    /// </returns>
+    public Task SubmitAndSnapshotIntoAsync(FrameDelta target)
+    {
+        PrepareStores();
+        if (!HasAnyCommands())
+        {
+            target.Clear();
+            return Task.CompletedTask;
+        }
+
+        var frozen = SwapOutState();
+#if DEBUG
+        _world._deferredEpoch++;
+        _pendingBatchDeferredEpoch = [];
+#endif
+        var task = Task.Factory.StartNew(
+            s_buildFromFrozenInto, (frozen, target), CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
+
+        // Align free-list entries for cancelled batches to match the wire
+        // (batch) order before processing the frozen state.
+        AlignCancelledBatchFreeListOrderForFrozen(frozen);
+        SubmitFromFrozen(frozen);
+        _pendingFrozen = frozen;
+        _pendingTask = task;
+        return task;
+    }
+
     private static readonly Func<object?, FrameDelta> s_buildFromFrozen =
         state => BuildFromFrozen((FrozenState)state!);
+
+    private static readonly Action<object?> s_buildFromFrozenInto = state =>
+    {
+        var (frozen, target) = ((FrozenState, FrameDelta))state!;
+        BuildFromFrozenInto(frozen, target);
+    };
 
     private void BuildDelta(FrameDelta delta)
     {
@@ -683,8 +749,9 @@ public abstract class CommandStreamCore
 
     /// <summary>
     /// Seals parallel stores then prunes stale component commands.
-    /// Must be called before any Submit/Snapshot/SnapshotInto/SubmitAndSnapshotAsync
-    /// operation. Not needed before Replay (no recording state to prepare).
+    /// Must be called before any Submit/Snapshot/SnapshotInto/SubmitAndSnapshotAsync/
+    /// SubmitAndSnapshotIntoAsync operation. Not needed before Replay (no recording
+    /// state to prepare).
     /// </summary>
     private void PrepareStores()
     {
@@ -820,6 +887,30 @@ public abstract class CommandStreamCore
             delta.AddDestroy(frozen.DestroyEntities[i]);
 
         return delta;
+    }
+
+    /// <summary>
+    /// Same as <see cref="BuildFromFrozen"/> but writes into an existing
+    /// <see cref="FrameDelta"/> instead of allocating a new one. After warmup
+    /// (buffer sized), repeated calls are zero-allocation.
+    /// </summary>
+    private static void BuildFromFrozenInto(FrozenState frozen, FrameDelta target)
+    {
+        // Order matches Submit: Create —Hierarchy —Ops —Destroy.
+        target.Clear();
+
+        EmitPendingEntitiesToDelta(target, frozen.Pending, deferredMode: false);
+
+        EmitHierarchyToDelta(target, frozen);
+
+        foreach (var store in frozen.Stores)
+        {
+            if (store?.HasCommands == true)
+                store.EmitToDelta(target);
+        }
+
+        for (var i = 0; i < frozen.DestroyCount; i++)
+            target.AddDestroy(frozen.DestroyEntities[i]);
     }
 
     // ── Pending entity materialization ─────────────────────────────────
