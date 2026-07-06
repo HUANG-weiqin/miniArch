@@ -20,14 +20,15 @@ sealed class SoakRunner
     double _prevDetailElapsed;
     int _prevDetailEntCount;
     long _prevDetailG0, _prevDetailG1, _prevDetailG2;
-    long _prevDetailAllocBytes;
+    long _prevDetailAllocBytes, _prevDetailDeltaBytes;
 
     long _creates, _destroys, _adds, _sets, _removes, _clones, _addHier, _removeHier;
     long _migrations;
     int _peakEntityCount;
 
-    // Allocation tracking
+    // Allocation & network tracking
     long _frameOpsBytes, _frameSubmitBytes, _frameReplayBytes, _frameValidateBytes;
+    long _frameDeltaBytes;
 
     // Reference model — independent oracle for CompA and CompB
     sealed record RefState(int? A, long? B);
@@ -47,6 +48,7 @@ sealed class SoakRunner
     readonly HashSet<Entity> _pendingHierarchyParents = [];
 
     readonly CommandStream _shadowStream;
+    readonly FrameDelta _replayDelta = new();
 
     public SoakRunner(SoakConfig cfg)
     {
@@ -60,9 +62,8 @@ sealed class SoakRunner
 
     public bool Run()
     {
-        Console.WriteLine($" MiniArch Soak — seed={_cfg.Seed} frames={_cfg.TotalFrames}");
-        Console.WriteLine($" entity cap={_cfg.EntityCap} floor={_cfg.EntityFloor} ops/frame={_cfg.MaxOpsPerFrame}");
-        Console.WriteLine($" ────────────────────────────────────");
+        Console.WriteLine($"  Soak  seed={_cfg.Seed}  frames={_cfg.TotalFrames}  cap={_cfg.EntityCap}  floor={_cfg.EntityFloor}  ops/f={_cfg.MaxOpsPerFrame}");
+        Console.WriteLine($"  {new string('─', 60)}");
         _sw.Start();
 
         var result = RunCore();
@@ -97,6 +98,7 @@ sealed class SoakRunner
 
             // Layer 1: detail line
             var printedDetail = false;
+            if (frame == 0) Console.WriteLine();
             if (frame % _cfg.DetailInterval == 0)
             {
                 PrintDetail(frame, phase);
@@ -112,9 +114,9 @@ sealed class SoakRunner
                 printedDetail = true;
             }
 
-            // Spinner (only when no other output this frame, every 500 frames)
+            // Quick inline entity count (only when no detail this frame)
             if (!printedDetail && frame % 500 == 0)
-                PrintSpinner(frame);
+                Console.Write($"\r  [{frame,7}]  ent={_alive.Count,5}{EntityTrend(frame)}\r");
         }
         return true;
     }
@@ -167,9 +169,9 @@ sealed class SoakRunner
             removeW = 10; cloneW = 5; addHierW = 5; removeHierW = 5;
         }
 
-        // Entity cap regulation: bias against creates when near cap
-        if (count >= _cfg.EntityCap * 0.9) createW *= 0.3;
-        if (count <= _cfg.EntityFloor * 1.5 && phase != SoakPhase.WarmUp) createW *= 1.5;
+        // Entity cap regulation: hard cap & hard floor
+        if (count >= _cfg.EntityCap) { createW = 0; cloneW = 0; }
+        else if (count <= _cfg.EntityFloor && phase != SoakPhase.WarmUp) destroyW = 0;
 
         // Normalize weights
         var total = createW + destroyW + addW + setW + removeW + cloneW + addHierW + removeHierW;
@@ -362,8 +364,10 @@ sealed class SoakRunner
             if (!delta.IsEmpty)
             {
                 var bytes = delta.AsSpan();
+                _frameDeltaBytes += bytes.Length;
                 _shadowStream.Clear();
-                _shadowStream.Replay(Core.FrameDelta.Deserialize(bytes));
+                _replayDelta.Deserialize(bytes);
+                _shadowStream.Replay(_replayDelta);
             }
             _frameReplayBytes += GC.GetAllocatedBytesForCurrentThread() - afterSubmit;
         }
@@ -471,37 +475,29 @@ sealed class SoakRunner
 
     // ── Logging ───────────────────────────────────────────────
 
-    void PrintSpinner(int frame)
-    {
-        var spin = "\\|/-"[(frame / 100) % 4];
-        var entDir = _alive.Count > _prevDetailEntCount ? '↗' : _alive.Count < _prevDetailEntCount ? '↘' : '→';
-        Console.Write($"\r {spin} {frame,8}  ent={_alive.Count,5}{entDir}  ");
-    }
-
     void PrintDetail(int frame, SoakPhase phase)
     {
         var pct = (int)((double)frame / _cfg.TotalFrames * 100);
         var entDir = EntityTrend(frame);
-        var checks = "✓✓✓✓";
         var phaseStr = PhaseName(phase);
 
-        // Interval-based FPS
         var dt = _lastDetailFrame > 0 ? _sw.Elapsed.TotalSeconds - _prevDetailElapsed : _sw.Elapsed.TotalSeconds;
         var df = frame - (long)_lastDetailFrame;
         var fps = dt > 0 ? (int)(df / dt) : 0;
 
-        // GC & memory
         var g0 = GC.CollectionCount(0);
         var g1 = GC.CollectionCount(1);
         var g2 = GC.CollectionCount(2);
         var dg0 = g0 - _prevDetailG0;
         var dg1 = g1 - _prevDetailG1;
         var dg2 = g2 - _prevDetailG2;
-        var mem = GC.GetTotalMemory(false) >> 20; // MB
-        var ws = Environment.WorkingSet >> 20;    // MB
+        var mem = GC.GetTotalMemory(false) >> 20;
+        var ws = Environment.WorkingSet >> 20;
         var alloc = GC.GetAllocatedBytesForCurrentThread();
         var dAlloc = alloc - _prevDetailAllocBytes;
+        var dNet = _frameDeltaBytes - _prevDetailDeltaBytes;
 
+        _prevDetailDeltaBytes = _frameDeltaBytes;
         _prevDetailElapsed = _sw.Elapsed.TotalSeconds;
         _prevDetailG0 = g0;
         _prevDetailG1 = g1;
@@ -510,38 +506,74 @@ sealed class SoakRunner
         _prevDetailEntCount = _alive.Count;
         _lastDetailFrame = frame;
 
-        Console.WriteLine($"\r[{frame,8}]  {pct,3}%  ent={_alive.Count,5}{entDir}  {phaseStr,-18}  {checks}  ⚡{fps,4}f/s  GC {dg0}/{dg1}/{dg2}  mem={mem}MB  ws={ws}MB  alloc={dAlloc >> 10,7}KB");
+        var checks = "✓✓✓✓";
+        var gcStr = $"{dg0,2}/{dg1,2}/{dg2,2}";
+        var allocStr = dAlloc < 1_048_576
+            ? $"{dAlloc >> 10}KB"
+            : $"{dAlloc >> 20}.{(dAlloc >> 10) % 1024 * 10 / 1024}MB";
+        var netStr = dNet >= 1024
+            ? $"{dNet >> 10}KB"
+            : $"{dNet}B";
+
+        Console.WriteLine(
+            $"\r  [{frame,7}] {pct,3}%  " +
+            $"ent={_alive.Count,5}{entDir}  " +
+            $"{phaseStr,-16}  " +
+            $"{checks}  " +
+            $"fps={fps,4}  " +
+            $"GC{gcStr}  " +
+            $"mem={mem}MB  " +
+            $"ws={ws}MB  " +
+            $"+{allocStr}  " +
+            $"~{netStr}");
     }
 
     void PrintFinal(bool passed)
     {
         _sw.Stop();
         var elapsed = _sw.Elapsed;
-            if (passed)
-            {
-                Console.WriteLine($"\r{new string('═', 50)}");
-                Console.WriteLine($" ══════════════ PASS ══════════════  {_cfg.TotalFrames:N0} frames in {elapsed:hh\\:mm\\:ss}");
-            }
-            else
-            {
-                Console.WriteLine($"\r{new string('═', 50)}");
-                Console.WriteLine($" ══════════════ FAIL ══════════════  at frame {_lastDetailFrame}, elapsed {elapsed:hh\\:mm\\:ss}");
+        if (passed)
+        {
+            Console.WriteLine($"  {new string('═', 56)}");
+            Console.WriteLine($"  {' ',15}P A S S  —  {_cfg.TotalFrames:N0} frames in {elapsed:hh\\:mm\\:ss}");
         }
+        else
+        {
+            Console.WriteLine($"  {new string('═', 56)}");
+            Console.WriteLine($"  {' ',15}F A I L  —  at frame {_lastDetailFrame}, elapsed {elapsed:hh\\:mm\\:ss}");
+        }
+        Console.WriteLine($"  {new string('═', 56)}");
 
-        Console.WriteLine($@" operations: create={_creates,7} destroy={_destroys,7} add={_adds,7} set={_sets,7}
-             remove={_removes,7} clone={_clones,7} addChild={_addHier,7} removeChild={_removeHier,7}");
-        Console.WriteLine($" migrations: {_migrations,7}  |  peak entities: {_peakEntityCount,5}  |  oracle entities tracked: {_refModel.Count,5}");
-        Console.WriteLine($" GC: gen0={GC.CollectionCount(0),5} gen1={GC.CollectionCount(1),5} gen2={GC.CollectionCount(2),5}  |  managed={GC.GetTotalMemory(false) >> 20,3}MB  ws={Environment.WorkingSet >> 20,3}MB");
+        var tf = Math.Max(1L, _cfg.TotalFrames);
         var totalAlloc = GC.GetAllocatedBytesForCurrentThread();
-        Console.WriteLine($" total thread alloc: {(totalAlloc >> 20),4}MB  |  avg={(totalAlloc / Math.Max(1L, _cfg.TotalFrames) >> 10),5}KB/frame");
-        Console.WriteLine($" alloc breakdown:        ops={_frameOpsBytes >> 20,4}MB  submit={_frameSubmitBytes >> 20,4}MB  replay={_frameReplayBytes >> 20,4}MB  validate={_frameValidateBytes >> 20,4}MB");
-        Console.WriteLine($"                   per-frame: ops={(_frameOpsBytes / Math.Max(1L, _cfg.TotalFrames) >> 10),5}KB  submit={(_frameSubmitBytes / Math.Max(1L, _cfg.TotalFrames) >> 10),5}KB  replay={(_frameReplayBytes / Math.Max(1L, _cfg.TotalFrames) >> 10),5}KB  validate={(_frameValidateBytes / Math.Max(1L, _cfg.TotalFrames) >> 10),5}KB");
-    }
 
-    char EntityTrend(int frame)
-    {
-        var prev = _prevDetailEntCount >= 0 ? _prevDetailEntCount : _alive.Count;
-        return _alive.Count > prev ? '↗' : _alive.Count < prev ? '↘' : '→';
+        // Operations table
+        Console.WriteLine();
+        Console.WriteLine("  operations");
+        Console.WriteLine($"    create {_creates,8}  destroy {_destroys,8}");
+        Console.WriteLine($"    add    {_adds,8}  set     {_sets,8}");
+        Console.WriteLine($"    remove {_removes,8}  clone   {_clones,8}");
+        Console.WriteLine($"    addCh  {_addHier,8}  remCh   {_removeHier,8}");
+        Console.WriteLine($"    ─────────────────────────────────────");
+        Console.WriteLine($"    total  {_creates + _destroys + _adds + _sets + _removes + _clones + _addHier + _removeHier,8}");
+        Console.WriteLine();
+        Console.WriteLine($"  migrations      {_migrations,8}");
+        Console.WriteLine($"  peak entities   {_peakEntityCount,8}");
+        Console.WriteLine($"  oracle tracked  {_refModel.Count,8}");
+        Console.WriteLine();
+        Console.WriteLine("  memory & gc");
+        Console.WriteLine($"    gen0  {GC.CollectionCount(0),5}  managed  {GC.GetTotalMemory(false) >> 20,3}MB");
+        Console.WriteLine($"    gen1  {GC.CollectionCount(1),5}  ws       {Environment.WorkingSet >> 20,3}MB");
+        Console.WriteLine($"    gen2  {GC.CollectionCount(2),5}");
+        Console.WriteLine();
+        Console.WriteLine("  thread alloc");
+        Console.WriteLine($"    total  {(totalAlloc >> 20),4}MB  avg  {(totalAlloc / tf >> 10),4}KB/f");
+        Console.WriteLine($"    ops    {_frameOpsBytes >> 20,4}MB  {_frameOpsBytes / tf >> 10,4}KB/f");
+        Console.WriteLine($"    submit {_frameSubmitBytes >> 20,4}MB  {_frameSubmitBytes / tf >> 10,4}KB/f");
+        Console.WriteLine($"    replay {_frameReplayBytes >> 20,4}MB  {_frameReplayBytes / tf >> 10,4}KB/f");
+        Console.WriteLine($"    val    {_frameValidateBytes >> 20,4}MB  {_frameValidateBytes / tf >> 10,4}KB/f");
+        Console.WriteLine();
+        Console.WriteLine($"  network  total {_frameDeltaBytes >> 10,5}KB  avg  {_frameDeltaBytes / tf,5}B/f");
     }
 
     static string PhaseName(SoakPhase p) => p switch
@@ -555,9 +587,15 @@ sealed class SoakRunner
         _ => "unknown"
     };
 
+    char EntityTrend(int frame)
+    {
+        var prev = _prevDetailEntCount >= 0 ? _prevDetailEntCount : _alive.Count;
+        return _alive.Count > prev ? '↗' : _alive.Count < prev ? '↘' : '→';
+    }
+
     void Fail(int frame, SoakPhase phase, string reason)
     {
-        Console.Error.WriteLine($"\r{new string('═', 50)}");
+        Console.Error.WriteLine($"  {new string('═', 50)}");
         Console.Error.WriteLine($"  FAIL  frame={frame}  phase={PhaseName(phase)}");
         Console.Error.WriteLine($"  {reason}");
         Console.Error.WriteLine($"  seed={_cfg.Seed}");
