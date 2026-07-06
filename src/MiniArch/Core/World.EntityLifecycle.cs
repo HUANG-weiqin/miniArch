@@ -542,9 +542,14 @@ public sealed partial class World
     /// <remarks>
     /// Scans from the tail because the common case is removing the most
     /// recently pushed entry (stack-top, the entity just reserved).
-    /// Reverse scan makes that a single iteration. Worst case is still O(n)
-    /// but no extra state is needed — if profiling ever shows this to be a
-    /// bottleneck, add a <c>Dictionary&lt;int, int&gt;</c> for O(1) lookup.
+    /// Reverse scan makes that a single iteration.
+    /// <para/>
+    /// Survivors are shifted left (not swap-removed) to preserve free-list
+    /// order. This is essential: Submit's Create pops from the end via
+    /// <see cref="PopFreeIdUnsafe"/> (LIFO), so a swap-remove here would
+    /// reorder survivors and diverge from Submit's free-list state when
+    /// Reserve+Release are interleaved within one frame (cancelled pending
+    /// entities). Shift keeps Replay's free-list order identical to Submit's.
     /// </remarks>
     private void RemoveFromFreeList(Entity entity)
     {
@@ -552,8 +557,8 @@ public sealed partial class World
         {
             if (_freeIds[i].Id == entity.Id && _freeIds[i].Version == entity.Version)
             {
-                var last = --_freeIdCount;
-                _freeIds[i] = _freeIds[last];
+                _freeIdCount--;
+                Array.Copy(_freeIds, i + 1, _freeIds, i, _freeIdCount - i);
                 return;
             }
         }

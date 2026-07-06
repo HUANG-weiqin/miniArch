@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 健壮性审阅发现汇总——已确认的设计债、已验证的安全猜想、已排除的非 bug 猜想
-updated: 2026-07-06
+updated: 2026-07-06 (B5: EnsureReplayReservation swap-remove 导致 FreeList 顺序分歧)
 ---
 # 代码审阅发现
 
@@ -129,6 +129,20 @@ updated: 2026-07-06
 - **触发场景**: 浸泡测试中 OpClone 后紧接 OpAdd 同一组件
 - **修复**: 与 B1 相同：实体已有组件时原地写值而不是抛异常
 - **验证**: 浸泡测试 20000 帧 PASS + 测试 `Add_component_that_already_exists_overwrites_value`
+
+### B5: `EnsureReplayReservation` swap-remove 导致 FreeList 顺序分歧（Submit vs Replay）
+
+- **位置**: `World.EntityLifecycle.cs:549-560` `RemoveFromFreeList` / `World.EntityLifecycle.cs:423-426` `PopFreeIdUnsafe`
+- **症状**: Submit 与 Replay 产生不同的 free-list 顺序；alive entities 集合完全一致，但 free-list 上已回收 slot 的顺序不同。最终 CanonicalChecksum 因 free-list 顺序不匹配而报错。浸泡测试 `--seed 111 --entity-cap 100 --entity-floor 10 --ops-per-frame 50` 在单帧高频操作下触发。
+- **根因**: 同一帧内多个 pending entity 被 Create 后部分被 Cancel（Destroy）时，Submit 路径与 Replay 路径对 free-list 的移除方式不同：
+  - **Submit 录制期**：`CreateImpl()` → `AcquireEntityIdUnsafe()` → `PopFreeIdUnsafe()` 始终从 free-list **末尾**（栈顶）LIFO 弹出，不改变剩余条目的相对顺序。
+  - **Replay 期**：`EnsureReplayReservation()` (Case 1) → `RemoveFromFreeList(entity)` 从 free-list **任意位置**扫描匹配的 `(id, version)`，找到后执行 **swap-remove**（用末尾元素覆盖匹配位置，再递减 count）。当匹配的实体不在末尾时，末尾元素被 swap 到中间，改变了 free-list 的内存顺序。
+  - 当同一帧内有 2+ 个 pending entity 被取消并重新被后续 Create 消费时，Replay 路径的 swap-remove 级联改变那些**在帧结束时幸存**的 free-list 条目的顺序，而 Submit 路径的 LIFO pop 不会产生这种重排。
+- **详细机制**：见 `tests/MiniArch.Tests/Core/FrameDeltaDeterminismTests.cs` 中 `Submit_and_Replay_free_list_diverges_with_multi_cancel` 测试的 XML doc。核心序列：Create 3 entities（消耗 free-list 顶部 3 个 slot），Cancel 其中 2 个（Push back 到栈顶），然后 Submit vs Replay 在帧结束后 survivor 条目的数组顺序不同。
+- **触发条件**：需要单帧内 2+ 个 pending entity 被取消，且 free-list 上至少 2 个幸存条目（即 frame 结束后 free-list 非空）。浸泡测试高 ops/frame + 小 entity cap 时容易命中：Create 耗尽 free-list、Cancel 回填、survivor 因 swap-remove 顺序错乱。
+- **修复建议**：`RemoveFromFreeList` 不应使用 swap-remove。改为从末尾线性扫描找到匹配项后，直接递减 `_freeIdCount`（用末尾元素覆盖匹配项，而不是反过来）。但调用方 `EnsureReplayReservation` 需要保证匹配的实体确实在 free-list 上且其位置不影响正确性。或者让 `EnsureReplayReservation` 走统一的 `PopFreeIdUnsafe()` + 版本校验，但需处理 Reserve 要求指定实体而非任意实体的问题。
+- **回归测试**：`Submit_and_Replay_free_list_diverges_with_multi_cancel`（目前 FAIL，修复后应通过）
+- **确认**: 推翻"cascade destroy ordering"假说；根因在 free-list 的 swap-remove vs LIFO pop，而非层级级联顺序。
 
 ### 修复原则
 

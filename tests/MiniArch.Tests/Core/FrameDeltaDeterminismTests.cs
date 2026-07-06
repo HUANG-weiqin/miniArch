@@ -704,4 +704,68 @@ public sealed class FrameDeltaDeterminismTests
             FrameDelta.FromWire(new ReadOnlySpan<byte>(buf, 0, pos)));
         Assert.Contains("MaxOpsPerFrame", ex.Message);
     }
+
+    // ══════════════════════════════════════════════════════════—
+    // Bug reproduction: Submit vs Replay free-list divergence
+    // ══════════════════════════════════════════════════════════—
+
+    /// <summary>
+    /// Regression test for a source/shadow free-list ordering divergence.
+    /// When multiple pending entities are cancelled in the same frame,
+    /// Submit (recording phase) uses PopFreeIdUnsafe (LIFO pop from end of
+    /// free-list array) while Replay (EnsureReplayReservation) previously used
+    /// RemoveFromFreeList with swap-remove semantics. The swap-remove reordered
+    /// survivors, so a single frame with 2+ cancelled pending entities produced
+    /// a different final free-list ordering between Submit and Replay while
+    /// occupancy (alive entity set) stayed identical.
+    ///
+    /// Fixed by changing RemoveFromFreeList to shift survivors left (preserving
+    /// order) instead of swap-removing. See World.EntityLifecycle.cs.
+    /// </summary>
+    [Fact]
+    public void Submit_and_Replay_free_list_diverges_with_multi_cancel()
+    {
+        var source = new World();
+        var stream = new CommandStream(source);
+        var deltas = new List<FrameDelta>();
+
+        // Frame 1: create 4 entities to populate the world
+        var e1 = stream.Create();
+        var e2 = stream.Create();
+        var e3 = stream.Create();
+        var e4 = stream.Create();
+        deltas.Add(stream.Snapshot());
+        stream.Submit();
+
+        // Frame 2: destroy 3 entities → free-list has 3 entries
+        stream.Destroy(e1);
+        stream.Destroy(e2);
+        stream.Destroy(e3);
+        deltas.Add(stream.Snapshot());
+        stream.Submit();
+
+        // Frame 3: create 3 entities (consuming free-list top 3), cancel 2 of them.
+        // This triggers RemoveFromFreeList swap-removes in the Replay path.
+        var p1 = stream.Create();  // pops last free entry (top of stack)
+        var p2 = stream.Create();
+        var p3 = stream.Create();
+        stream.Destroy(p1);        // cancel pending → pushes back
+        stream.Destroy(p2);        // cancel pending → pushes back
+        // p3 survives (not cancelled, stays alive)
+
+        deltas.Add(stream.Snapshot());
+        stream.Submit();
+
+        // Replay all deltas into a fresh world
+        var replica = new World();
+        foreach (var d in deltas)
+            new CommandStream(replica).Replay(d);
+
+        // BUG: free-list ordering differs between source (Submit) and
+        // replica (Replay) while alive entities are identical.
+        // This assertion FAILS — it proves the bug exists.
+        AssertIdentical(source, replica,
+            "Submit path (source) vs Replay path (replica) after " +
+            "multiple pending creates + cancels in one frame");
+    }
 }
