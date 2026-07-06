@@ -285,25 +285,7 @@ public abstract class CommandStreamCore
     }
 
     private protected bool IsSourceDestroyedThisFrame(Entity source)
-    {
-        // Check DestroyEntities[] (materialized Destroy)
-        for (var i = 0; i < _frozen.DestroyCount; i++)
-            if (_frozen.DestroyEntities[i] == source) return true;
-
-        // Check if source was a pending entity whose batch was canceled
-        // (after CancelPendingEntity, TryGetPendingBatch returns false because
-        // PendingBatch[id] is set to -1, so we scan BatchEntities directly)
-        if (_frozen.CancelledBatchCount > 0)
-        {
-            for (var i = 0; i < _frozen.PendingBatchCount; i++)
-            {
-                if (_frozen.BatchCanceled[i] && _frozen.BatchEntities[i] == source)
-                    return true;
-            }
-        }
-
-        return false;
-    }
+        => IsDestroyedThisFrame(source, _frozen);
 
     private protected Entity CloneImpl(Entity source, EntityInfo info)
     {
@@ -335,7 +317,13 @@ public abstract class CommandStreamCore
         return clone;
     }
 
-    private void CloneComponents(Entity source, EntityInfo info, Entity clone, int batchIdx)
+    /// <summary>
+    /// Copies components from a materialized (world-archetype) source entity into the clone's
+    /// batch buffer. Reads archetype storage + pending component store overlays via
+    /// <see cref="ComponentMerger"/>. Does NOT recurse into children — the caller is
+    /// responsible for that.
+    /// </summary>
+    private void CloneMaterializedComponents(Entity source, EntityInfo info, int batchIdx)
     {
         var archetype = info.Archetype;
         var sourceRow = info.RowIndex;
@@ -391,9 +379,12 @@ public abstract class CommandStreamCore
         {
             merger.ReturnRented();
         }
+    }
 
-        // Step 4: Clone children recursively
-        CloneChildrenRecursive(source, clone);
+    private void CloneComponents(Entity source, EntityInfo info, Entity clone, int batchIdx)
+    {
+        CloneMaterializedComponents(source, info, batchIdx);
+        CloneChildrenFromVirtualHierarchy(source, clone);
     }
 
     private Entity ClonePendingSource(Entity source, int srcBatchIdx)
@@ -408,7 +399,7 @@ public abstract class CommandStreamCore
         CopyComponentsFromBatch(source, srcBatchIdx, clone, cloneBatchIdx);
 
         // Clone children via virtual hierarchy view (world children + pending intents)
-        CloneChildrenRecursive(source, clone);
+        CloneChildrenFromVirtualHierarchy(source, clone);
 
         return clone;
     }
@@ -418,57 +409,29 @@ public abstract class CommandStreamCore
         var head = _frozen.BatchHeads[srcBatchIdx];
         var comps = _frozen.BatchComps;
         var buf = _frozen.BatchBuf;
+        var rawCount = _frozen.BatchCompCounts[srcBatchIdx];
 
-        // Same bit-dedup + last-wins traversal as MaterializeFromBatchBuffer (lines 943-977)
-        ulong b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0, b7 = 0;
-        Span<int> dedupedCompIndices = stackalloc int[64];
-        var dedupCount = 0;
-        var current = head;
-        while (current >= 0)
+        int[]? pooledIndices = null;
+        Span<int> indices = rawCount <= 64
+            ? stackalloc int[rawCount]
+            : (pooledIndices = ArrayPool<int>.Shared.Rent(rawCount)).AsSpan(0, rawCount);
+        try
         {
-            ref var comp = ref comps[current];
-            if (!comp.Removed)
+            var idx = DeduplicateBatchChain(comps, head, indices);
+
+            // Copy deduplicated components into clone's batch buffer
+            for (var i = 0; i < idx; i++)
             {
-                var id = comp.Type.Value;
-                if (id < 512)
-                {
-                    if (TrySetBit(ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, id))
-                    {
-                        dedupedCompIndices[dedupCount] = current;
-                        dedupCount++;
-                    }
-                }
-                else
-                {
-                    var seen = false;
-                    for (var j = 0; j < dedupCount; j++)
-                    {
-                        if (comps[dedupedCompIndices[j]].Type == comp.Type) { seen = true; break; }
-                    }
-                    if (!seen)
-                    {
-                        if (dedupCount >= dedupedCompIndices.Length)
-                        {
-                            // Grow stackalloc by falling back to heap for large batches
-                            var grown = ArrayPool<int>.Shared.Rent(dedupCount * 2);
-                            dedupedCompIndices[..dedupCount].CopyTo(grown);
-                            dedupedCompIndices = grown;
-                        }
-                        dedupedCompIndices[dedupCount] = current;
-                        dedupCount++;
-                    }
-                }
+                ref var comp = ref comps[indices[i]];
+                var offset = ReserveBatchBufSpace(comp.Size);
+                buf.AsSpan(comp.Offset, comp.Size).CopyTo(new Span<byte>(buf, offset, comp.Size));
+                CommitBatchComponent(cloneBatchIdx, comp.Type, offset, comp.Size);
             }
-            current = comp.Next;
         }
-
-        // Copy deduplicated components into clone's batch buffer
-        for (var i = 0; i < dedupCount; i++)
+        finally
         {
-            ref var comp = ref comps[dedupedCompIndices[i]];
-            var offset = ReserveBatchBufSpace(comp.Size);
-            buf.AsSpan(comp.Offset, comp.Size).CopyTo(new Span<byte>(buf, offset, comp.Size));
-            CommitBatchComponent(cloneBatchIdx, comp.Type, offset, comp.Size);
+            if (pooledIndices is not null)
+                ArrayPool<int>.Shared.Return(pooledIndices);
         }
     }
 
@@ -1076,56 +1039,37 @@ public abstract class CommandStreamCore
     private void MaterializeFromBatchBuffer(Entity entity, int headIdx,
         BatchedComponent[] comps, byte[] buf, int rawCount)
     {
+        int[]? pooledIndices = null;
+        Span<int> indices = rawCount <= 64
+            ? stackalloc int[rawCount]
+            : (pooledIndices = ArrayPool<int>.Shared.Rent(rawCount)).AsSpan(0, rawCount);
+
         ComponentType[]? pooledTypes = null;
         int[]? pooledOffsets = null;
-        Span<ComponentType> typesFromBatch = rawCount <= 64
-            ? stackalloc ComponentType[rawCount]
-            : (pooledTypes = ArrayPool<ComponentType>.Shared.Rent(rawCount)).AsSpan(0, rawCount);
-        Span<int> offsets = rawCount <= 64
-            ? stackalloc int[rawCount]
-            : (pooledOffsets = ArrayPool<int>.Shared.Rent(rawCount)).AsSpan(0, rawCount);
         try
         {
-            ulong b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0, b7 = 0;
-            var idx = 0;
-            var current = headIdx;
-            while (current >= 0)
-            {
-                ref var comp = ref comps[current];
-                if (!comp.Removed)
-                {
-                    var id = comp.Type.Value;
-                    if (id < 512)
-                    {
-                        if (TrySetBit(ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, id))
-                        {
-                            typesFromBatch[idx] = comp.Type;
-                            offsets[idx] = comp.Offset;
-                            idx++;
-                        }
-                    }
-                    else
-                    {
-                        var seen = false;
-                        for (var j = 0; j < idx; j++)
-                        {
-                            if (typesFromBatch[j].Value == id) { seen = true; break; }
-                        }
-                        if (!seen)
-                        {
-                            typesFromBatch[idx] = comp.Type;
-                            offsets[idx] = comp.Offset;
-                            idx++;
-                        }
-                    }
-                }
-                current = comp.Next;
-            }
-
+            var idx = DeduplicateBatchChain(comps, headIdx, indices);
             if (idx == 0)
             {
                 _world.MaterializeEmptyReservedEntity(entity);
                 return;
+            }
+
+            // Build (type, offset) arrays and reconstruct component mask from deduped indices
+            Span<ComponentType> typesFromBatch = idx <= 64
+                ? stackalloc ComponentType[idx]
+                : (pooledTypes = ArrayPool<ComponentType>.Shared.Rent(idx)).AsSpan(0, idx);
+            Span<int> offsets = idx <= 64
+                ? stackalloc int[idx]
+                : (pooledOffsets = ArrayPool<int>.Shared.Rent(idx)).AsSpan(0, idx);
+
+            ulong b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0, b7 = 0;
+            for (var i = 0; i < idx; i++)
+            {
+                ref var comp = ref comps[indices[i]];
+                typesFromBatch[i] = comp.Type;
+                offsets[i] = comp.Offset;
+                TrySetBit(ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, comp.Type.Value);
             }
 
             var mask = new ComponentMask(b0, b1, b2, b3, b4, b5, b6, b7);
@@ -1142,6 +1086,7 @@ public abstract class CommandStreamCore
         }
         finally
         {
+            if (pooledIndices is not null) ArrayPool<int>.Shared.Return(pooledIndices);
             if (pooledTypes is not null) ArrayPool<ComponentType>.Shared.Return(pooledTypes);
             if (pooledOffsets is not null) ArrayPool<int>.Shared.Return(pooledOffsets);
         }
@@ -1675,32 +1620,31 @@ public abstract class CommandStreamCore
             }
         }
 
-        // 2. pending AddChild: HierarchyByChild entries where IsAdd && Parent == parent
-        // Use linear scan to avoid duplicates (List.Contains without allocation)
+        // 2. Pending HierarchyByChild intents: AddChild (if Parent matches) then RemoveChild
+        //    in a single pass. RemoveChild has no Parent filter — see note below.
         foreach (var (child, intent) in _frozen.HierarchyByChild)
         {
-            if (intent.IsAdd && intent.Parent == parent)
+            if (intent.IsAdd)
             {
-                var alreadyPresent = false;
-                for (var i = 0; i < count; i++)
+                if (intent.Parent == parent)
                 {
-                    if (buffer[i] == child) { alreadyPresent = true; break; }
+                    // Add if not already present (world children may already include it)
+                    var alreadyPresent = false;
+                    for (var i = 0; i < count; i++)
+                    {
+                        if (buffer[i] == child) { alreadyPresent = true; break; }
+                    }
+                    if (!alreadyPresent && count < buffer.Length)
+                        buffer[count++] = child;
                 }
-                if (!alreadyPresent && count < buffer.Length)
-                    buffer[count++] = child;
             }
-        }
-
-        // 3. pending RemoveChild: HierarchyByChild entries where !IsAdd
-        // NOTE: No intent.Parent == parent check here. In a single-parent hierarchy,
-        // RemoveChild always unlinks the child from its current parent regardless of
-        // which parent GetVirtualChildren is querying for. RemoveChildCore stores
-        // default(Entity) as Parent, so checking intent.Parent would be incorrect
-        // (it would never match any real parent and RemoveChild would be a no-op).
-        foreach (var (child, intent) in _frozen.HierarchyByChild)
-        {
-            if (!intent.IsAdd)
+            else
             {
+                // NOTE: No intent.Parent == parent check here. In a single-parent hierarchy,
+                // RemoveChild always unlinks the child from its current parent regardless of
+                // which parent GetVirtualChildren is querying for. RemoveChildCore stores
+                // default(Entity) as Parent, so checking intent.Parent would be incorrect
+                // (it would never match any real parent and RemoveChild would be a no-op).
                 for (var i = 0; i < count; i++)
                 {
                     if (buffer[i] == child)
@@ -1718,7 +1662,12 @@ public abstract class CommandStreamCore
         return count;
     }
 
-    private void CloneChildrenRecursive(Entity sourceRoot, Entity cloneRoot)
+    /// <summary>
+    /// Clones all children of <paramref name="sourceRoot"/> under <paramref name="cloneRoot"/>
+    /// using the virtual hierarchy view (world children + pending AddChild intents − pending
+    /// RemoveChild intents). Iterative DFS with explicit stack — not recursive.
+    /// </summary>
+    private void CloneChildrenFromVirtualHierarchy(Entity sourceRoot, Entity cloneRoot)
     {
         // Use ArrayPool buffer for virtual children (replaces heap List)
         var childBuf = ArrayPool<Entity>.Shared.Rent(32);
@@ -1796,23 +1745,12 @@ public abstract class CommandStreamCore
                 }
                 else
                 {
-                    // Copy components from world archetype (materialized child)
+                    // Materialized child: read archetype + overlay scan (same as root)
                     if (!_world.TryGetLocation(srcChild, out var childLocation))
                         throw new InvalidOperationException(
                             $"Clone failed: child entity {srcChild} has no location. " +
                             "The source entity may be corrupted.");
-
-                    var archetype = childLocation.Archetype;
-                    var sourceRow = childLocation.RowIndex;
-                    var sig = archetype.Signature.AsSpan();
-                    for (var i = 0; i < sig.Length; i++)
-                    {
-                        var ct = sig[i];
-                        var size = ComponentSizeCache.GetSize(ComponentRegistry.Shared.GetType(ct));
-                        var offset = ReserveBatchBufSpace(size);
-                        unsafe { fixed (byte* ptr = &_frozen.BatchBuf[offset]) archetype.ReadComponentRaw(i, sourceRow, ptr); }
-                        CommitBatchComponent(batchIdx, ct, offset, size);
-                    }
+                    CloneMaterializedComponents(srcChild, childLocation, batchIdx);
                 }
                 AddChildCore(cloneParent, cloneChild);
 
@@ -1855,6 +1793,54 @@ public abstract class CommandStreamCore
         for (var i = 0; i < count; i++)
             if (span[i] == entity) return true;
         return false;
+    }
+
+    /// <summary>
+    /// Walks a batch linked-list chain with last-wins deduplication.
+    /// Writes indices of non-removed, deduplicated <see cref="BatchedComponent"/> entries
+    /// into <paramref name="indices"/> and returns the count.
+    /// The caller must ensure <paramref name="indices"/> is large enough (upper bound is
+    /// the raw component count for this batch — deduplication can only reduce it).
+    /// Shared by <see cref="MaterializeFromBatchBuffer"/> and <see cref="CopyComponentsFromBatch"/>.
+    /// </summary>
+    private static int DeduplicateBatchChain(
+        BatchedComponent[] comps, int headIdx,
+        Span<int> indices)
+    {
+        ulong b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0, b7 = 0;
+        var idx = 0;
+        var current = headIdx;
+        while (current >= 0)
+        {
+            ref var comp = ref comps[current];
+            if (!comp.Removed)
+            {
+                var id = comp.Type.Value;
+                if (id < 512)
+                {
+                    if (TrySetBit(ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, id))
+                    {
+                        indices[idx] = current;
+                        idx++;
+                    }
+                }
+                else
+                {
+                    var seen = false;
+                    for (var j = 0; j < idx; j++)
+                    {
+                        if (comps[indices[j]].Type.Value == id) { seen = true; break; }
+                    }
+                    if (!seen)
+                    {
+                        indices[idx] = current;
+                        idx++;
+                    }
+                }
+            }
+            current = comp.Next;
+        }
+        return idx;
     }
 
     private static int SortAndDeduplicateComponents(Span<RawComponentValue> comps)
