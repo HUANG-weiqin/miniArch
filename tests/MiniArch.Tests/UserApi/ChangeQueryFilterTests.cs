@@ -166,10 +166,10 @@ public class ChangeQueryFilterTests
         Assert.Equal(e4, ts[0].Entity);
     }
 
-    // ── ClearTransitionLog ─────────────────────────────────────────
+    // ── Auto-clear (replaces ClearTransitionLog) ────────────────────
 
     [Fact]
-    public void ClearTransitionLog_resets_for_new_transitions()
+    public void Transitions_auto_clears_after_drain()
     {
         var world = new World();
         var hp = world.Track<HP>();
@@ -182,10 +182,8 @@ public class ChangeQueryFilterTests
         Assert.Equal(3, ts.Count);
         Assert.True(ts.All(t => t.Kind == TransitionKind.Entered));
 
-        // Clear the log
-        world.ClearTransitionLog();
-
-        // Create 2 more entities with HP → cursor should see only 2 (not 5)
+        // Create 2 more entities with HP → auto-cleared after first drain,
+        // so cursor should see only 2 (not 5)
         world.Create(new HP(40));
         world.Create(new HP(50));
         ts = hp.Transitions().ToList();
@@ -194,38 +192,40 @@ public class ChangeQueryFilterTests
     }
 
     [Fact]
-    public void ClearTransitionLog_cursor_clamp_correct()
+    public void Undrained_entries_accumulate_then_clear_on_drain()
     {
         var world = new World();
         var hp = world.Track<HP>();
 
-        // Create 1 entity with HP (cursor at 0, log has 1 entry)
+        // Create 1 entity with HP — do NOT drain
         world.Create(new HP(10));
 
-        // Do NOT drain — cursor stays at 0
-
-        // Clear the log → log is empty
-        world.ClearTransitionLog();
-
-        // Create 2 entities with HP (log has 2 entries at indices 0,1)
+        // Create 2 more — still not drained
         world.Create(new HP(20));
         world.Create(new HP(30));
 
-        // Cursor was 0, log was cleared and rebuilt from 0;
-        // cursor 0 < end 2 → sees both (the 1 unconsumed entry from before clear is lost)
+        // Drain → sees all 3 (accumulated)
         var ts = hp.Transitions().ToList();
-        Assert.Equal(2, ts.Count);
+        Assert.Equal(3, ts.Count);
         Assert.True(ts.All(t => t.Kind == TransitionKind.Entered));
+
+        // Create 1 more
+        world.Create(new HP(40));
+
+        // Drain → sees only 1 (previous 3 were cleared)
+        ts = hp.Transitions().ToList();
+        Assert.Single(ts);
+        Assert.Equal(TransitionKind.Entered, ts[0].Kind);
     }
 
     [Fact]
-    public void ClearTransitionLog_reuse_after_multiple_cycles()
+    public void Multiple_drain_cycles_stable()
     {
         var world = new World();
         var hp = world.Track<HP>();
         var totalSeen = 0;
 
-        // Repeat 10 cycles: create 5, drain, clear
+        // Repeat 10 cycles: create 5, drain (auto-clears)
         for (var cycle = 0; cycle < 10; cycle++)
         {
             for (var j = 0; j < 5; j++)
@@ -235,8 +235,6 @@ public class ChangeQueryFilterTests
             Assert.Equal(5, ts.Count);
             Assert.True(ts.All(t => t.Kind == TransitionKind.Entered));
             totalSeen += ts.Count;
-
-            world.ClearTransitionLog();
         }
 
         Assert.Equal(50, totalSeen);

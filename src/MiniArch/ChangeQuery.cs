@@ -19,14 +19,14 @@ namespace MiniArch;
 /// to obtain a fresh cursor; discard cursors from before the restore.
 /// </para>
 /// </remarks>
-public sealed class ChangeQuery<T> where T : unmanaged
+public sealed class ChangeQuery<T> : IChangeQuery where T : unmanaged
 {
     private readonly World _world;
     private readonly ComponentType _type;
     private QueryDescription _filter;
+    private readonly List<Transition> _transitions;
+    private Core.QueryCache? _cache;
     private long _valueCursor;
-    private long _transitionCursor;
-    private int _transitionLogGeneration;
     private bool _consumed;
 
     internal ChangeQuery(World world)
@@ -34,6 +34,7 @@ public sealed class ChangeQuery<T> where T : unmanaged
         _world = world;
         _type = Component<T>.ComponentType;
         _filter = new QueryDescription().With<T>();
+        _transitions = new List<Transition>(256);
     }
 
     /// <summary>
@@ -48,6 +49,7 @@ public sealed class ChangeQuery<T> where T : unmanaged
                 "Cannot modify the filter after ModifiedChunks() or Transitions() has been called. " +
                 "Configure With/Without/WithAny before the first enumeration.");
         _filter = _filter.With<TU>();
+        _cache = null;
         return this;
     }
 
@@ -63,6 +65,7 @@ public sealed class ChangeQuery<T> where T : unmanaged
                 "Cannot modify the filter after ModifiedChunks() or Transitions() has been called. " +
                 "Configure With/Without/WithAny before the first enumeration.");
         _filter = _filter.Without<TU>();
+        _cache = null;
         return this;
     }
 
@@ -78,6 +81,7 @@ public sealed class ChangeQuery<T> where T : unmanaged
                 "Cannot modify the filter after ModifiedChunks() or Transitions() has been called. " +
                 "Configure With/Without/WithAny before the first enumeration.");
         _filter = _filter.WithAny<TU>();
+        _cache = null;
         return this;
     }
 
@@ -111,39 +115,29 @@ public sealed class ChangeQuery<T> where T : unmanaged
 
     /// <summary>
     /// Returns entities that entered or exited the set matching this cursor's filter
-    /// since the last call.
+    /// since the last call. The internal list is auto-cleared after enumeration.
     /// Materializes eagerly; cursor advances regardless of consumer enumeration depth.
     /// </summary>
     public IEnumerable<Transition> Transitions()
     {
         _consumed = true;
-        // Build (or reuse) a QueryCache from the filter so we can use its
-        // pre-computed mask-based archetype matching.
-        var cache = _world.Query(_filter).Advanced;
-        var log = _world.GetTransitionLogInternal();
-        var end = (long)log.Count;
-
-        // If the log was cleared (ClearTransitionLog), reset cursor to start.
-        if (_transitionLogGeneration != _world.TransitionLogGeneration)
-        {
-            _transitionCursor = 0;
-            _transitionLogGeneration = _world.TransitionLogGeneration;
-        }
-
-        var result = new List<Transition>();
-        for (long i = _transitionCursor; i < end; i++)
-        {
-            var entry = log[(int)i];
-            var oldMatch = entry.OldArchetype is { } o && cache.Matches(o);
-            var newMatch = entry.NewArchetype is { } n && cache.Matches(n);
-            if (!oldMatch && newMatch)
-                result.Add(new Transition(TransitionKind.Entered, entry.Entity));
-            else if (oldMatch && !newMatch)
-                result.Add(new Transition(TransitionKind.Exited, entry.Entity));
-            // both match or neither match: membership in the filtered set unchanged → skip
-        }
-
-        _transitionCursor = end;
+        var result = _transitions.ToArray();
+        _transitions.Clear();
         return result;
+    }
+
+    // ── IChangeQuery ────────────────────────────────────────────────
+
+    void IChangeQuery.OnTransition(Entity entity, Archetype? oldArchetype, Archetype? newArchetype)
+    {
+        _consumed = true;
+        var cache = _cache ??= _world.Query(_filter).Advanced;
+        var oldMatch = oldArchetype is { } o && cache.Matches(o);
+        var newMatch = newArchetype is { } n && cache.Matches(n);
+        if (!oldMatch && newMatch)
+            _transitions.Add(new Transition(TransitionKind.Entered, entity));
+        else if (oldMatch && !newMatch)
+            _transitions.Add(new Transition(TransitionKind.Exited, entity));
+        // both match or neither match: membership unchanged -> skip
     }
 }

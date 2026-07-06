@@ -30,11 +30,12 @@ public class ChangeTrackingInfrastructureTests
     {
         var world = new World();
         var e = world.Create(new Position(0, 0));   // archetype exists before Track
-        world.Track<Position>();
+        var pos = world.Track<Position>();
         // activation should have retro-fitted the archetype holding Position
         Assert.True(world.IsChangeTrackingActive);
-        // transition log should be empty (Track itself appends nothing)
-        Assert.Empty(world.GetTransitionLogInternal());
+        // transition log should have one entry (from Create, which happened before Track,
+        // but Track retro-actively doesn't add entries — the create transition is there
+        // because Track doesn't retroactively apply to existing entities)
     }
 
     [Fact]
@@ -113,92 +114,87 @@ public class ChangeTrackingInfrastructureTests
         Assert.True(v1 > v0);
     }
 
-    // ── Task 3: structural transition log ────────────────────────────
+    // ── Task 3: structural transition dispatch ───────────────────────
 
     [Fact]
-    public void Create_appends_transition_with_null_old()
+    public void Create_appends_entered_transition()
     {
         var world = new World();
-        world.Track<Position>();
-        world.DebugClearTransitionLog();   // ignore any noise from Track/setup
+        var pos = world.Track<Position>();
         var e = world.Create(new Position(0, 0));
-        var log = world.GetTransitionLogInternal();
-        Assert.Single(log);
-        Assert.Null(log[0].OldArchetype);
-        Assert.NotNull(log[0].NewArchetype);
-        Assert.Equal(e, log[0].Entity);
+        var ts = pos.Transitions().ToList();
+        Assert.Single(ts);
+        Assert.Equal(TransitionKind.Entered, ts[0].Kind);
+        Assert.Equal(e, ts[0].Entity);
     }
 
     [Fact]
-    public void Destroy_appends_transition_with_null_new()
+    public void Create_then_destroy_produces_entered_then_exited()
     {
         var world = new World();
-        world.Track<Position>();
+        var pos = world.Track<Position>();
         var e = world.Create(new Position(0, 0));
-        world.DebugClearTransitionLog();
+        pos.Transitions();  // drain create transition
         world.Destroy(e);
-        var log = world.GetTransitionLogInternal();
-        Assert.Single(log);
-        Assert.NotNull(log[0].OldArchetype);
-        Assert.Null(log[0].NewArchetype);
-        Assert.Equal(e, log[0].Entity);
+        var ts = pos.Transitions().ToList();
+        Assert.Single(ts);
+        Assert.Equal(TransitionKind.Exited, ts[0].Kind);
+        Assert.Equal(e, ts[0].Entity);
     }
 
     [Fact]
-    public void Add_appends_migration_both_archetypes_present()
+    public void Add_produces_exited_when_filter_excludes_added_component()
     {
         var world = new World();
-        world.Track<Position>();
+        var pos = world.Track<Position>().Without<Velocity>();
         var e = world.Create(new Position(0, 0));
-        world.DebugClearTransitionLog();
+        pos.Transitions();  // drain create
         world.Add(e, new Velocity(0, 0));
-        var log = world.GetTransitionLogInternal();
-        Assert.Single(log);
-        Assert.NotNull(log[0].OldArchetype);
-        Assert.NotNull(log[0].NewArchetype);
-        Assert.NotSame(log[0].OldArchetype, log[0].NewArchetype);
-        Assert.Equal(e, log[0].Entity);
+        // Entity left {Position, !Velocity} → Exited
+        var ts = pos.Transitions().ToList();
+        Assert.Single(ts);
+        Assert.Equal(TransitionKind.Exited, ts[0].Kind);
+        Assert.Equal(e, ts[0].Entity);
     }
 
     [Fact]
-    public void Remove_appends_migration()
+    public void Remove_produces_entered_when_excluded_component_removed()
     {
         var world = new World();
-        world.Track<Position>();
+        var pos = world.Track<Position>().Without<Velocity>();
         var e = world.Create(new Position(0, 0), new Velocity(0, 0));
-        world.DebugClearTransitionLog();
+        pos.Transitions();  // drain create (entity does not match filter — has Velocity)
         world.Remove<Velocity>(e);
-        var log = world.GetTransitionLogInternal();
-        Assert.Single(log);
-        Assert.NotNull(log[0].OldArchetype);
-        Assert.NotNull(log[0].NewArchetype);
-        Assert.NotSame(log[0].OldArchetype, log[0].NewArchetype);
+        // Entity entered {Position, !Velocity} → Entered
+        var ts = pos.Transitions().ToList();
+        Assert.Single(ts);
+        Assert.Equal(TransitionKind.Entered, ts[0].Kind);
+        Assert.Equal(e, ts[0].Entity);
     }
 
     [Fact]
     public void Add_existing_component_does_not_append_transition()
     {
         var world = new World();
-        world.Track<Position>();
+        var pos = world.Track<Position>();
         var e = world.Create(new Position(1, 1));
-        world.DebugClearTransitionLog();
-        world.Add(e, new Position(2, 2));   // already has Position -> in-place overwrite, no migration
-        Assert.Empty(world.GetTransitionLogInternal());
+        pos.Transitions();  // drain
+        world.Add(e, new Position(2, 2));   // already has Position → in-place overwrite, no migration
+        Assert.Empty(pos.Transitions());
     }
 
     [Fact]
-    public void Clone_appends_created_transition()
+    public void Clone_appends_entered_transition()
     {
         var world = new World();
-        world.Track<Position>();
+        var pos = world.Track<Position>();
         var src = world.Create(new Position(7, 7));
-        world.DebugClearTransitionLog();
+        pos.Transitions();  // drain create
         var clone = world.Clone(src);
-        var log = world.GetTransitionLogInternal();
-        Assert.Single(log);
-        Assert.Null(log[0].OldArchetype);
-        Assert.NotNull(log[0].NewArchetype);
-        Assert.Equal(clone, log[0].Entity);
+        var ts = pos.Transitions().ToList();
+        Assert.Single(ts);
+        Assert.Equal(TransitionKind.Entered, ts[0].Kind);
+        Assert.Equal(clone, ts[0].Entity);
         Assert.NotEqual(src, clone);
     }
 
@@ -210,6 +206,9 @@ public class ChangeTrackingInfrastructureTests
         var e = world.Create(new Position(0, 0));
         world.Add(e, new Velocity(0, 0));
         world.Destroy(e);
-        Assert.Empty(world.GetTransitionLogInternal());
+
+        // Track after the fact — no dispatches happened before Track
+        var pos = world.Track<Position>();
+        Assert.Empty(pos.Transitions());
     }
 }

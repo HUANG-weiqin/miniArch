@@ -90,8 +90,7 @@ public sealed partial class World : IDisposable
 
     // ── Change tracking ─────────────────────────────────────────────
     internal long _writeEpoch;                                  // monotonic, long = no wraparound
-    private readonly List<Core.TransitionEntry> _transitionLog = new();
-    private int _transitionLogGeneration;                      // incremented on clear
+    private readonly List<WeakReference<Core.IChangeQuery>> _changeQueries = new();
     private bool _anyTrackingActive;                           // world-level gate
 
     /// <summary>
@@ -217,32 +216,28 @@ public sealed partial class World : IDisposable
     // ── Change tracking accessors ───────────────────────────────────
     internal bool IsChangeTrackingActive => _anyTrackingActive;
     internal long CurrentWriteEpoch => _writeEpoch;
-    internal int TransitionLogGeneration => _transitionLogGeneration;
-    internal IReadOnlyList<Core.TransitionEntry> GetTransitionLogInternal() => _transitionLog;
-    internal void DebugClearTransitionLog() => _transitionLog.Clear();
 
-    /// <summary>
-    /// Clears the transition log, freeing consumed entries. The internal array is reused
-    /// (no GC pressure). Call this after all <see cref="ChangeQuery{T}"/> consumers have
-    /// drained their transitions — typically at the end of each frame after rendering
-    /// systems have processed <see cref="ChangeQuery{T}.Transitions"/>.
-    /// </summary>
-    /// <remarks>
-    /// Entries not yet consumed by any cursor are discarded. Ensure all interested
-    /// consumers have called <see cref="ChangeQuery{T}.Transitions"/> before clearing.
-    /// After clearing, existing cursors automatically reset (via cursor clamp) and
-    /// will correctly see only transitions appended after the clear.
-    /// </remarks>
-    public void ClearTransitionLog()
+    internal void RegisterChangeQuery(Core.IChangeQuery query)
     {
-        _transitionLog.Clear();
-        _transitionLogGeneration++;
+        _changeQueries.Add(new WeakReference<Core.IChangeQuery>(query));
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void AppendTransition(Entity e, Core.Archetype? old, Core.Archetype? @new)
     {
-        if (_anyTrackingActive) _transitionLog.Add(new Core.TransitionEntry(e, old, @new));
+        if (!_anyTrackingActive) return;
+        for (var i = _changeQueries.Count - 1; i >= 0; i--)
+        {
+            var weakRef = _changeQueries[i];
+            if (weakRef.TryGetTarget(out var query))
+                query.OnTransition(e, old, @new);
+            else
+            {
+                // Swap-remove dead weak ref (O(1)).
+                _changeQueries[i] = _changeQueries[_changeQueries.Count - 1];
+                _changeQueries.RemoveAt(_changeQueries.Count - 1);
+            }
+        }
     }
 
     /// <summary>
@@ -266,7 +261,9 @@ public sealed partial class World : IDisposable
     public ChangeQuery<T> Track<T>() where T : unmanaged
     {
         ActivateTracking(Component<T>.ComponentType);
-        return new ChangeQuery<T>(this);
+        var query = new ChangeQuery<T>(this);
+        RegisterChangeQuery(query);
+        return query;
     }
 
     internal void ActivateTracking(ComponentType type)
@@ -274,10 +271,6 @@ public sealed partial class World : IDisposable
         if (!_anyTrackingActive)
         {
             _anyTrackingActive = true;
-            // Pre-warm the transition log so a burst of structural ops (level load, wave spawn)
-            // does not thrash List<>.Resize from capacity 0. Paid once, only when tracking is
-            // first activated; non-tracking worlds keep the default empty list (zero cost).
-            _transitionLog.EnsureCapacity(256);
             foreach (var arch in _archetypes.Values)
                 ActivateArchetypeTracking(arch);
         }
