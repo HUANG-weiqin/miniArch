@@ -90,7 +90,7 @@ public abstract class CommandStreamCore
     // When false (e.g. user abandons a frame), registrations are dropped.
     private protected bool _pendingReplay;
 
-    private static void GrowPooled<T>(ref T[] array, int count)
+    private protected static void GrowPooled<T>(ref T[] array, int count)
     {
         var grown = ArrayPool<T>.Shared.Rent(count * 2);
         Array.Copy(array, grown, count);
@@ -268,10 +268,41 @@ public abstract class CommandStreamCore
     /// </summary>
     protected Entity CloneCore(Entity source)
     {
+        // Destroy detection FIRST: if source is in DestroyEntities or its pending batch is canceled
+        if (IsSourceDestroyedThisFrame(source))
+            throw new InvalidOperationException(
+                $"Cannot clone entity {source}: it was destroyed in the same batch.");
+
+        // 1. Check if source is a pending entity (created in same buffer)
+        if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(source, out var srcBatchIdx))
+            return ClonePendingSource(source, srcBatchIdx);
+
+        // 2. Fall through to materialized path
         if (!_world.TryGetLocation(source, out var location))
             throw new InvalidOperationException($"Cannot clone entity {source}: it is no longer alive.");
 
         return CloneImpl(source, location);
+    }
+
+    private protected bool IsSourceDestroyedThisFrame(Entity source)
+    {
+        // Check DestroyEntities[] (materialized Destroy)
+        for (var i = 0; i < _frozen.DestroyCount; i++)
+            if (_frozen.DestroyEntities[i] == source) return true;
+
+        // Check if source was a pending entity whose batch was canceled
+        // (after CancelPendingEntity, TryGetPendingBatch returns false because
+        // PendingBatch[id] is set to -1, so we scan BatchEntities directly)
+        if (_frozen.CancelledBatchCount > 0)
+        {
+            for (var i = 0; i < _frozen.PendingBatchCount; i++)
+            {
+                if (_frozen.BatchCanceled[i] && _frozen.BatchEntities[i] == source)
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     private protected Entity CloneImpl(Entity source, EntityInfo info)
@@ -310,6 +341,11 @@ public abstract class CommandStreamCore
         var sourceRow = info.RowIndex;
         var components = archetype.Signature.AsSpan();
 
+        // Step 1: Collect archetype base components into temp lists
+        var mergedTypes = new List<ComponentType>(components.Length);
+        var mergedOffsets = new List<int>(components.Length);
+        var mergedSizes = new List<int>(components.Length);
+
         for (var i = 0; i < components.Length; i++)
         {
             var ct = components[i];
@@ -320,10 +356,136 @@ public abstract class CommandStreamCore
                 fixed (byte* ptr = &_frozen.BatchBuf[offset])
                     archetype.ReadComponentRaw(i, sourceRow, ptr);
             }
-            CommitBatchComponent(batchIdx, ct, offset, size);
+            mergedTypes.Add(ct);
+            mergedOffsets.Add(offset);
+            mergedSizes.Add(size);
         }
 
+        // Step 2: Scan component stores for overlay entries (pending Add/Set/Remove)
+        var stores = _frozen.Stores;
+        for (var s = 0; s < stores.Length; s++)
+        {
+            var store = stores[s];
+            if (store is null) continue;
+            var collector = new OverlayCollector(this);
+            store.ForEachEntityEntry(source, ref collector);
+            var overlayEntries = collector.Entries;
+            for (var e = 0; e < overlayEntries.Count; e++)
+            {
+                var overlayEntry = overlayEntries[e];
+                if (overlayEntry.Kind == KindRemove)
+                {
+                    var idx = mergedTypes.FindIndex(t => t == overlayEntry.Type);
+                    if (idx >= 0)
+                    {
+                        mergedTypes.RemoveAt(idx);
+                        mergedOffsets.RemoveAt(idx);
+                        mergedSizes.RemoveAt(idx);
+                    }
+                }
+                else
+                {
+                    // KindAdd or KindSet: overwrite in place or append
+                    var idx = mergedTypes.FindIndex(t => t == overlayEntry.Type);
+                    if (idx >= 0)
+                    {
+                        mergedOffsets[idx] = overlayEntry.Offset;
+                        mergedSizes[idx] = overlayEntry.Size;
+                    }
+                    else
+                    {
+                        mergedTypes.Add(overlayEntry.Type);
+                        mergedOffsets.Add(overlayEntry.Offset);
+                        mergedSizes.Add(overlayEntry.Size);
+                    }
+                }
+            }
+        }
+
+        // Step 3: Commit merged component list to clone's batch buffer
+        for (var i = 0; i < mergedTypes.Count; i++)
+        {
+            CommitBatchComponent(batchIdx, mergedTypes[i], mergedOffsets[i], mergedSizes[i]);
+        }
+
+        // Step 4: Clone children recursively
         CloneChildrenRecursive(source, clone);
+    }
+
+    private Entity ClonePendingSource(Entity source, int srcBatchIdx)
+    {
+        // Create clone entity (same deferred mode as source)
+        var clone = _deferredEntities ? CreateDeferredImpl() : CreateImpl();
+        var cloneBatchIdx = clone.Id >= 0
+            ? _frozen.PendingBatch[clone.Id]
+            : _pendingBatchDeferredArr[clone.Version];
+
+        // Copy components from source's batch chain into clone's batch
+        CopyComponentsFromBatch(source, srcBatchIdx, clone, cloneBatchIdx);
+
+        // Clone children via virtual hierarchy view (world children + pending intents)
+        CloneChildrenRecursive(source, clone);
+
+        return clone;
+    }
+
+    private void CopyComponentsFromBatch(Entity source, int srcBatchIdx, Entity clone, int cloneBatchIdx)
+    {
+        var head = _frozen.BatchHeads[srcBatchIdx];
+        var comps = _frozen.BatchComps;
+        var buf = _frozen.BatchBuf;
+
+        // Same bit-dedup + last-wins traversal as MaterializeFromBatchBuffer (lines 943-977)
+        ulong b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0, b7 = 0;
+        Span<int> dedupedCompIndices = stackalloc int[64];
+        var dedupCount = 0;
+        var current = head;
+        while (current >= 0)
+        {
+            ref var comp = ref comps[current];
+            if (!comp.Removed)
+            {
+                var id = comp.Type.Value;
+                if (id < 512)
+                {
+                    if (TrySetBit(ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, id))
+                    {
+                        dedupedCompIndices[dedupCount] = current;
+                        dedupCount++;
+                    }
+                }
+                else
+                {
+                    var seen = false;
+                    for (var j = 0; j < dedupCount; j++)
+                    {
+                        if (comps[dedupedCompIndices[j]].Type == comp.Type) { seen = true; break; }
+                    }
+                    if (!seen)
+                    {
+                        if (dedupCount >= dedupedCompIndices.Length)
+                        {
+                            // Grow stackalloc by falling back to heap for large batches
+                            var grown = ArrayPool<int>.Shared.Rent(dedupCount * 2);
+                            dedupedCompIndices[..dedupCount].CopyTo(grown);
+                            dedupedCompIndices = grown;
+                        }
+                        dedupedCompIndices[dedupCount] = current;
+                        dedupCount++;
+                    }
+                }
+            }
+            current = comp.Next;
+        }
+
+        // Copy deduplicated components into clone's batch buffer
+        for (var i = 0; i < dedupCount; i++)
+        {
+            ref var comp = ref comps[dedupedCompIndices[i]];
+            var offset = ReserveBatchBufSpace(comp.Size);
+            buf.AsSpan(comp.Offset, comp.Size).CopyTo(new Span<byte>(buf, offset, comp.Size));
+            CommitBatchComponent(cloneBatchIdx, comp.Type, offset, comp.Size);
+        }
     }
 
     // ── Submit ────────────────────────────────────────────────────────
@@ -1377,7 +1539,7 @@ public abstract class CommandStreamCore
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private int ReserveBatchBufSpace(int size)
+    private protected int ReserveBatchBufSpace(int size)
     {
         if (_batchBufLen + size > _frozen.BatchBuf.Length)
             Array.Resize(ref _frozen.BatchBuf, Math.Max(_batchBufLen + size, _frozen.BatchBuf.Length == 0 ? 4096 : _frozen.BatchBuf.Length * 2));
@@ -1387,7 +1549,7 @@ public abstract class CommandStreamCore
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void CommitBatchComponent(int batchIdx, ComponentType type, int offset, int size)
+    private protected void CommitBatchComponent(int batchIdx, ComponentType type, int offset, int size)
     {
         EnsureCapacity(ref _frozen.BatchComps, _batchCompTotal, 256);
         _frozen.BatchComps[_batchCompTotal] = new BatchedComponent
@@ -1510,9 +1672,56 @@ public abstract class CommandStreamCore
 
     // ── Clone helpers ─────────────────────────────────────────────────
 
+    /// <summary>
+    /// Returns the virtual children of <paramref name="parent"/> as seen by Clone.
+    /// Virtual children = world hierarchy children + pending AddChild intents - pending RemoveChild intents.
+    /// </summary>
+    private List<Entity> GetVirtualChildren(Entity parent)
+    {
+        var children = new List<Entity>();
+
+        // 1. World real children
+        if (_world.Hierarchy.HasChildren(_world, parent))
+        {
+            foreach (var child in _world.Hierarchy.EnumerateChildren(_world, parent))
+                children.Add(child);
+        }
+
+        // 2. pending AddChild: HierarchyByChild entries where IsAdd && Parent == parent
+        foreach (var (child, intent) in _frozen.HierarchyByChild)
+        {
+            if (intent.IsAdd && intent.Parent == parent)
+            {
+                if (!children.Contains(child))  // avoid duplicate from world children
+                    children.Add(child);
+            }
+        }
+
+        // 3. pending RemoveChild: HierarchyByChild entries where !IsAdd
+        // NOTE: No intent.Parent == parent check here. In a single-parent hierarchy,
+        // RemoveChild always unlinks the child from its current parent regardless of
+        // which parent GetVirtualChildren is querying for. RemoveChildCore stores
+        // default(Entity) as Parent, so checking intent.Parent would be incorrect
+        // (it would never match any real parent and RemoveChild would be a no-op).
+        foreach (var (child, intent) in _frozen.HierarchyByChild)
+        {
+            if (!intent.IsAdd)
+            {
+                children.Remove(child);
+            }
+        }
+
+        return children;
+    }
+
     private void CloneChildrenRecursive(Entity sourceRoot, Entity cloneRoot)
     {
-        if (!_world.Hierarchy.HasChildren(_world, sourceRoot)) return;
+        var virtualChildren = GetVirtualChildren(sourceRoot);
+        if (virtualChildren.Count == 0)
+            return;
+
+        // Cycle detection: visited set using linear scan (typical pending entities < 64)
+        var visited = new List<Entity>();
 
         var stack = ArrayPool<Entity>.Shared.Rent(32);
         var cloneStack = ArrayPool<Entity>.Shared.Rent(32);
@@ -1520,8 +1729,13 @@ public abstract class CommandStreamCore
 
         try
         {
-            foreach (var child in _world.Hierarchy.EnumerateChildren(_world, sourceRoot))
+            foreach (var child in virtualChildren)
             {
+                if (visited.Contains(child))
+                    throw new InvalidOperationException(
+                        $"Clone detected a cycle in the virtual hierarchy at entity {child}.");
+                visited.Add(child);
+
                 if (stackCount >= stack.Length)
                 {
                     GrowPooled(ref stack, stackCount);
@@ -1537,32 +1751,59 @@ public abstract class CommandStreamCore
                 stackCount--;
                 var srcChild = stack[stackCount];
                 var cloneParent = cloneStack[stackCount];
-                if (!_world.TryGetLocation(srcChild, out var childLocation))
-                    throw new InvalidOperationException(
-                        $"Clone failed: child entity {srcChild} has no location. " +
-                        "The source entity may be corrupted.");
 
                 var cloneChild = CreateCore();
                 int batchIdx;
                 if (_deferredEntities)
-                    TryGetPendingBatch(cloneChild, out batchIdx);
+                {
+                    // CreateCore (via CreateDeferredImpl) always allocates a batch slot
+                    // and sets _lastCreated, so TryGetPendingBatch must succeed. Check
+                    // the return value explicitly as a defensive invariant guard.
+                    if (!TryGetPendingBatch(cloneChild, out batchIdx))
+                    {
+                        throw new InvalidOperationException(
+                            $"Clone: deferred clone child {cloneChild} has no pending batch slot.");
+                    }
+                }
                 else
                     batchIdx = _frozen.PendingBatch[cloneChild.Id];
-                var archetype = childLocation.Archetype;
-                var sourceRow = childLocation.RowIndex;
-                var sig = archetype.Signature.AsSpan();
-                for (var i = 0; i < sig.Length; i++)
+
+                // Check if child is a pending entity (same buffer)
+                if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(srcChild, out var srcChildBatchIdx))
                 {
-                    var ct = sig[i];
-                    var size = ComponentSizeCache.GetSize(ComponentRegistry.Shared.GetType(ct));
-                    var offset = ReserveBatchBufSpace(size);
-                    unsafe { fixed (byte* ptr = &_frozen.BatchBuf[offset]) archetype.ReadComponentRaw(i, sourceRow, ptr); }
-                    CommitBatchComponent(batchIdx, ct, offset, size);
+                    // Copy components from pending source batch
+                    CopyComponentsFromBatch(srcChild, srcChildBatchIdx, cloneChild, batchIdx);
+                }
+                else
+                {
+                    // Copy components from world archetype (materialized child)
+                    if (!_world.TryGetLocation(srcChild, out var childLocation))
+                        throw new InvalidOperationException(
+                            $"Clone failed: child entity {srcChild} has no location. " +
+                            "The source entity may be corrupted.");
+
+                    var archetype = childLocation.Archetype;
+                    var sourceRow = childLocation.RowIndex;
+                    var sig = archetype.Signature.AsSpan();
+                    for (var i = 0; i < sig.Length; i++)
+                    {
+                        var ct = sig[i];
+                        var size = ComponentSizeCache.GetSize(ComponentRegistry.Shared.GetType(ct));
+                        var offset = ReserveBatchBufSpace(size);
+                        unsafe { fixed (byte* ptr = &_frozen.BatchBuf[offset]) archetype.ReadComponentRaw(i, sourceRow, ptr); }
+                        CommitBatchComponent(batchIdx, ct, offset, size);
+                    }
                 }
                 AddChildCore(cloneParent, cloneChild);
 
-                foreach (var grandChild in _world.Hierarchy.EnumerateChildren(_world, srcChild))
+                // Enqueue grandchildren (virtual view)
+                foreach (var grandChild in GetVirtualChildren(srcChild))
                 {
+                    if (visited.Contains(grandChild))
+                        throw new InvalidOperationException(
+                            $"Clone detected a cycle in the virtual hierarchy at entity {grandChild}.");
+                    visited.Add(grandChild);
+
                     if (stackCount >= stack.Length)
                     {
                         GrowPooled(ref stack, stackCount);
@@ -2044,6 +2285,43 @@ public abstract class CommandStreamCore
     private protected const byte KindSet = 1;
     private protected const byte KindRemove = 2;
 
+    /// <summary>
+    /// Entry collected during the component store overlay scan.
+    /// <see cref="Offset"/> and <see cref="Size"/> reference data already
+    /// written into <see cref="FrozenState.BatchBuf"/>.
+    /// </summary>
+    private protected struct OverlayEntry
+    {
+        public ComponentType Type;
+        public int Offset;
+        public int Size;
+        public byte Kind;
+    }
+
+    /// <summary>
+    /// Collects component store overlay entries during Clone. Each call to <see cref="Add"/>
+    /// reserves space in the batch buffer and copies the raw component data into it so the
+    /// caller can merge archetype + overlay entries without keeping extra copies.
+    /// </summary>
+    private protected struct OverlayCollector
+    {
+        private readonly CommandStreamCore _core;
+        public List<OverlayEntry> Entries;
+
+        public OverlayCollector(CommandStreamCore core)
+        {
+            _core = core;
+            Entries = new List<OverlayEntry>();
+        }
+
+        public void Add(ComponentType type, byte kind, ReadOnlySpan<byte> data)
+        {
+            var offset = _core.ReserveBatchBufSpace(data.Length);
+            data.CopyTo(new Span<byte>(_core._frozen.BatchBuf, offset, data.Length));
+            Entries.Add(new OverlayEntry { Type = type, Offset = offset, Size = data.Length, Kind = kind });
+        }
+    }
+
     private protected abstract class ComponentStore
     {
         public abstract bool HasCommands { get; }
@@ -2053,6 +2331,7 @@ public abstract class CommandStreamCore
         public abstract void Clear();
         public abstract void ReplacePlaceholders(Entity[] resolveMap);
         public abstract void SealParallelWrites();
+        protected internal abstract void ForEachEntityEntry(Entity entity, ref OverlayCollector collector);
 
 #if DEBUG
         internal bool _isReadOnly;
@@ -2430,6 +2709,20 @@ public abstract class CommandStreamCore
                     EntityFieldResolver.ResolveInPlace(
                         MemoryMarshal.AsBytes(new Span<T>(ref entry.Value)),
                         typeId, dataSpan);
+                }
+            }
+        }
+
+        protected internal override void ForEachEntityEntry(Entity entity, ref OverlayCollector collector)
+        {
+            var ct = Component<T>.ComponentType;
+            for (var i = 0; i < _count; i++)
+            {
+                ref var entry = ref _entries[i];
+                if (entry.Entity == entity)
+                {
+                    collector.Add(ct, entry.Kind,
+                        MemoryMarshal.AsBytes(new ReadOnlySpan<T>(ref entry.Value)));
                 }
             }
         }
