@@ -2145,37 +2145,48 @@ public sealed class CommandStreamTests
             for (var op = 0; op < opsThisFrame; op++)
             {
                 var kind = alive.Count == 0 ? 0 : rng.Next(100);
-                if (kind < 35 || alive.Count == 0)
+                if (kind < 28 || alive.Count == 0)
                 {
+                    // Create entity (pending at record time)
                     var e = stream.Create();
                     tracked.Add(e);
                     hasPos.Add(e);
                     if (rng.Next(2) == 0) { stream.Add(e, new Velocity(rng.Next(), rng.Next())); hasVel.Add(e); }
                     alive.Add(e);
                 }
-                else if (kind < 48)
+                else if (kind < 42)
                 {
+                    // Destroy existing entity (may be materialized or pending)
                     var i = rng.Next(alive.Count);
                     var e = alive[i];
                     if (tracked.Contains(e))
                     {
                         stream.Destroy(e);
                         tracked.Remove(e);
-                        // If entity was created this frame, remove from alive too.
-                        // Since it's tracked only, it's still alive — Destroy will
-                        // defer to Submit.
                     }
+                }
+                else if (kind < 70)
+                {
+                    // Set component on materialized entity (must have component)
+                    var e = alive[rng.Next(alive.Count)];
+                    if (!tracked.Contains(e)) continue;
+                    if (hasPos.Contains(e))
+                        stream.Set(e, new Position(rng.Next(), rng.Next()));
+                    else if (hasVel.Contains(e))
+                        stream.Set(e, new Velocity(rng.Next(), rng.Next()));
+                    // else: no known component → skip Set
                 }
                 else
                 {
-                    var e = alive[rng.Next(alive.Count)];
-                    if (!tracked.Contains(e)) continue; // destroyed this frame
-                    if (kind < 70 && hasPos.Contains(e))
-                        stream.Set(e, new Position(rng.Next(), rng.Next()));
-                    else if (kind < 85 && hasVel.Contains(e))
-                        stream.Set(e, new Velocity(rng.Next(), rng.Next()));
-                    else if (hasPos.Contains(e))
-                        stream.Set(e, new Position(rng.Next(), rng.Next()));
+                    // Clone from an entity alive and not destroyed this frame
+                    // (tracked ensures we never Clone a Destroy-this-frame entity)
+                    var valid = alive.Where(e => tracked.Contains(e)).ToArray();
+                    if (valid.Length > 0)
+                    {
+                        var src = valid[rng.Next(valid.Length)];
+                        var clone = stream.Clone(src);
+                        alive.Add(clone);
+                    }
                 }
             }
 
