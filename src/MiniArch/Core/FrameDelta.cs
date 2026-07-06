@@ -86,47 +86,89 @@ public sealed class FrameDelta
     public ReadOnlySpan<byte> AsSpan() => new(_buffer, 0, _length);
 
     /// <summary>
-    /// Deserializes a FrameDelta from bytes received over the network.
-    /// The caller owns the returned delta; the wire bytes are copied into
-    /// an independent buffer.
+    /// Deserializes wire bytes into this existing <see cref="FrameDelta"/>,
+    /// reusing its internal buffer when capacity is sufficient.
+    /// After warmup (buffer sized), repeated calls are zero-allocation.
     /// </summary>
     /// <remarks>
+    /// The delta retains its own copy of the wire data —no external span is
+    /// borrowed. On return, <see cref="AsSpan"/> exposes the deserialized bytes.
+    /// <para/>
     /// See <see cref="AsSpan"/> for the cross-process
     /// <see cref="ComponentRegistry"/> synchronization contract —the same
     /// constraint applies on receive.
     /// </remarks>
-    public static FrameDelta Deserialize(ReadOnlySpan<byte> wire)
+    /// <exception cref="ArgumentException">
+    /// <paramref name="wire"/> exceeds <see cref="MaxFrameBytes"/>.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// The wire data is structurally malformed (truncated, oversized varints,
+    /// unknown op kinds, etc.).
+    /// </exception>
+    public void Deserialize(ReadOnlySpan<byte> wire)
     {
         if (wire.Length > MaxFrameBytes)
             throw new ArgumentException(
                 $"FrameDelta exceeds MaxFrameBytes budget ({wire.Length} > {MaxFrameBytes}). " +
                 "Increase MaxFrameBytes or reduce frame payload.");
 
-        var delta = new FrameDelta();
-        delta._buffer = wire.ToArray();
-        delta._length = wire.Length;
+        // Ensure buffer capacity without shrinking.
+        if (_buffer.Length < wire.Length)
+            _buffer = new byte[wire.Length];
 
-        var decoder = delta.GetDecoder();
-        while (decoder.MoveNext())
+        wire.CopyTo(_buffer);
+        _length = wire.Length;
+
+        // Compute _opCount during the validation scan; only commit on success.
+        // If the scan throws (malformed wire), reset state so the instance
+        // remains in a well-defined empty state.
+        var computedOpCount = 0;
+        try
         {
-            delta._opCount++;
-            switch (decoder.Kind)
+            var decoder = GetDecoder();
+            while (decoder.MoveNext())
             {
-                case DeltaOpKind.Add:
-                case DeltaOpKind.Set:
-                    decoder.SkipData();
-                    break;
-                case DeltaOpKind.Remove:
-                    decoder.ReadComponentType();
-                    break;
-                case DeltaOpKind.Create:
-                    decoder.SkipCreatePayload();
-                    break;
-                case DeltaOpKind.AddChild:
-                    decoder.ReadExtraEntity();
-                    break;
+                computedOpCount++;
+                switch (decoder.Kind)
+                {
+                    case DeltaOpKind.Add:
+                    case DeltaOpKind.Set:
+                        decoder.SkipData();
+                        break;
+                    case DeltaOpKind.Remove:
+                        decoder.ReadComponentType();
+                        break;
+                    case DeltaOpKind.Create:
+                        decoder.SkipCreatePayload();
+                        break;
+                    case DeltaOpKind.AddChild:
+                        decoder.ReadExtraEntity();
+                        break;
+                }
             }
         }
+        catch
+        {
+            _length = 0;
+            _opCount = 0;
+            throw;
+        }
+        _opCount = computedOpCount;
+    }
+
+    /// <summary>
+    /// Creates a new <see cref="FrameDelta"/> from wire bytes.
+    /// Convenience one-shot allocation entry point; prefer reusing a
+    /// <see cref="FrameDelta"/> instance with <see cref="Deserialize"/>
+    /// on hot paths to avoid per-call allocation.
+    /// </summary>
+    /// <remarks>
+    /// The returned delta owns its data independently of <paramref name="wire"/>.
+    /// </remarks>
+    public static FrameDelta FromWire(ReadOnlySpan<byte> wire)
+    {
+        var delta = new FrameDelta();
+        delta.Deserialize(wire);
         return delta;
     }
 
@@ -374,7 +416,7 @@ public sealed class FrameDelta
         _opCount++;
     }
 
-    internal void AddCreate(Entity e, RawComponentValue[] components)
+    internal void AddCreate(Entity e, ReadOnlySpan<RawComponentValue> components)
     {
         WriteTag(DeltaOpKind.Create);
         WriteEntity(e);
@@ -383,14 +425,14 @@ public sealed class FrameDelta
         var size = VarintSize(compCount);
         for (var i = 0; i < compCount; i++)
         {
-            ref var c = ref components[i];
+            ref readonly var c = ref components[i];
             size += VarintSize(c.ComponentType.Value) + VarintSize(c.DataSize) + c.DataSize;
         }
         Grow(size);
         WriteVarintAt(ref pos, compCount);
         for (var i = 0; i < compCount; i++)
         {
-            ref var c = ref components[i];
+            ref readonly var c = ref components[i];
             WriteVarintAt(ref pos, c.ComponentType.Value);
             WriteVarintAt(ref pos, c.DataSize);
             if (c.DataSize > 0)

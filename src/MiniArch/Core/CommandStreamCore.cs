@@ -851,40 +851,52 @@ public abstract class CommandStreamCore
         var batchHeads = view.Heads;
         var batchCompCounts = view.CompCounts;
         var batchComps = view.Comps;
-        var batchEntities = view.Entities;
 
-        var entity = batchEntities[i];
+        var entity = view.Entities[i];
         var rawCount = batchCompCounts[i];
         if (rawCount == 0)
         {
-            delta.AddCreate(entity, Array.Empty<RawComponentValue>());
+            delta.AddCreate(entity, ReadOnlySpan<RawComponentValue>.Empty);
             return;
         }
 
-        var comps = new RawComponentValue[rawCount];
-        var outIdx = 0;
-        var current = batchHeads[i];
-        while (current >= 0)
+        var rented = ArrayPool<RawComponentValue>.Shared.Rent(rawCount);
+        var fillCount = 0;
+        try
         {
-            ref var bc = ref batchComps[current];
-            if (!bc.Removed)
-                comps[outIdx++] = ReadRawFromBuf(batchBuf, bc);
-            current = bc.Next;
-        }
+            var outIdx = 0;
+            var current = batchHeads[i];
+            while (current >= 0)
+            {
+                ref var bc = ref batchComps[current];
+                if (!bc.Removed)
+                {
+                    rented[outIdx] = ReadRawFromBuf(batchBuf, bc);
+                    outIdx++;
+                    fillCount = outIdx; // update in real-time so exception cleanup clears all written slots
+                }
+                current = bc.Next;
+            }
 
-        if (outIdx == 0)
+            if (outIdx == 0)
+            {
+                delta.AddCreate(entity, ReadOnlySpan<RawComponentValue>.Empty);
+                return;
+            }
+
+            // Sort and dedup only the filled portion.
+            var comps = rented.AsSpan(0, outIdx);
+            if (outIdx > 1)
+                outIdx = SortAndDeduplicateComponents(comps);
+
+            delta.AddCreate(entity, comps[..outIdx]);
+        }
+        finally
         {
-            delta.AddCreate(entity, Array.Empty<RawComponentValue>());
-            return;
+            if (fillCount > 0)
+                Array.Clear(rented, 0, fillCount);
+            ArrayPool<RawComponentValue>.Shared.Return(rented);
         }
-
-        if (outIdx != comps.Length)
-            Array.Resize(ref comps, outIdx);
-        if (outIdx > 1)
-            outIdx = SortAndDeduplicateComponents(comps);
-        if (outIdx != comps.Length)
-            Array.Resize(ref comps, outIdx);
-        delta.AddCreate(entity, comps);
     }
 
     // An entity is excluded from hierarchy application when it is scheduled for

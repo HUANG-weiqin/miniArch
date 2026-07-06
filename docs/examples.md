@@ -626,7 +626,7 @@ var wireBytes = delta.AsSpan();
 
 // ── Consumer side (potentially untrusted source) ──────────────────────
 // 1. Deserialize from wire bytes
-var received = FrameDelta.Deserialize(wireBytes);
+var received = FrameDelta.FromWire(wireBytes);
 
 // 2. Validate structural integrity (safe for untrusted deltas)
 received.Validate();
