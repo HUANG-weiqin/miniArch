@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 健壮性审阅发现汇总——已确认的设计债、已验证的安全猜想、已排除的非 bug 猜想
-updated: 2026-07-06 (B5: EnsureReplayReservation swap-remove 导致 FreeList 顺序分歧)
+updated: 2026-07-06 (B5: EnsureReplayReservation swap-remove 导致 FreeList 顺序分歧; B6: CancelPendingEntity push order 与 Release 顺序不同)
 ---
 # 代码审阅发现
 
@@ -143,6 +143,21 @@ updated: 2026-07-06 (B5: EnsureReplayReservation swap-remove 导致 FreeList 顺
 - **修复建议**：`RemoveFromFreeList` 不应使用 swap-remove。改为从末尾线性扫描找到匹配项后，直接递减 `_freeIdCount`（用末尾元素覆盖匹配项，而不是反过来）。但调用方 `EnsureReplayReservation` 需要保证匹配的实体确实在 free-list 上且其位置不影响正确性。或者让 `EnsureReplayReservation` 走统一的 `PopFreeIdUnsafe()` + 版本校验，但需处理 Reserve 要求指定实体而非任意实体的问题。
 - **回归测试**：`Submit_and_Replay_free_list_diverges_with_multi_cancel`（目前 FAIL，修复后应通过）
 - **确认**: 推翻"cascade destroy ordering"假说；根因在 free-list 的 swap-remove vs LIFO pop，而非层级级联顺序。
+
+### B6: `CancelPendingEntity` 录制期 push 顺序与 Replay 期 Release 顺序不同（修复后仍存在二次分歧）
+
+- **位置**: `CommandStreamCore.cs:1096` `CancelPendingEntity` / `World.EntityLifecycle.cs:449` `ReleaseReservedEntity`
+- **症状**: 浸泡测试 `--seed 111 --entity-cap 100 --entity-floor 10 --ops-per-frame 50 --frames 5000` 在 frame ~1839 报 CanonicalChecksum mismatch——occupancy 一致但 free-list 上 2 个相邻条目互换位置（如 9(v54) 与 121(v9)）。
+- **根因**: B5 的 shift-remove 修复后，仍有第二条分歧路径：
+  - **录制期**：`CancelPendingEntity` 在用户 Destroy 调用时立即调用 `ReleaseReservedEntity` → `PushFreeIdUnsafe`，将废 slot 追加到 free-list 末尾。push 顺序是**用户销毁顺序**。
+  - **Replay 期**：`EmitPendingEntitiesToDelta` 按 batch 索引（创建顺序）发射 `Reserve+Release` 对。Release 处理 `ReleaseReservedEntity` → `PushFreeIdUnsafe`，push 顺序是**batch 创建顺序**。
+  - 当同一帧内 pending entity 的创建顺序与销毁顺序不同时（如创建 A 再创建 B，但销毁 B 再销毁 A），两个路径的 free-list 末尾条目顺序相反——相邻两条目互换。
+- **触发场景**: 浸泡测试中 `Clone(76)→9` 创建 entity 9、`Create(121)` 创建 entity 121，然后 `Destroy(9)`、`Destroy(121)` 依次调用。batch 创建顺序为 [15, ..., 121, 9, ...]，销毁顺序为 9 先于 121。录制期 push 顺序为 9(v54)、121(v9)；Replay 期的 Release 顺序为 121(v9)、9(v54)。最终 free-list 上 9 与 121 互换。
+- **修复**: 在 `Submit()` 开始时调用 `AlignCancelledBatchFreeListOrder()`，遍历已取消的 batch（按 batch 创建顺序），对每个仍留在 free-list 中的 cancelled entity 执行 `RepushFreeEntry`（从当前位置移除并重新 append 到末尾）。这使源 world 的 free-list 在 `ApplyDestroys`（push 常规销毁）之前与 Replay 路径的 free-list 一致。
+  - **副作用**: batch 顺序对齐改变了后续帧的 entity ID 分配（free-list pop 顺序不同），间接触发了已存在的级联销毁顺序问题和层级循环检测问题。为此额外修复：
+    - `ApplyDestroys` 和 `SubmitFromFrozen` 在销毁前检查 `IsAlive`（与 Replay 路径一致），防止已级联销毁的 entity 再次销毁报错。
+    - 浸泡测试 `OpAddChild` 的循环检测增强为模拟 `ApplyHierarchy` 的排序顺序检测循环，防止违反库层级不变式的操作被记录。
+- **验证**: 浸泡测试 200000 帧 PASS + `HeroComing.Perf` 性能门禁通过 + 全部 695 个单元测试通过。
 
 ### 修复原则
 

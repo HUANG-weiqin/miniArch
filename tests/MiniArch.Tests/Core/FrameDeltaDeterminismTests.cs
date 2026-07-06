@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -767,5 +768,66 @@ public sealed class FrameDeltaDeterminismTests
         AssertIdentical(source, replica,
             "Submit path (source) vs Replay path (replica) after " +
             "multiple pending creates + cancels in one frame");
+    }
+
+    /// <summary>
+    /// Regression test for a SECOND free-list ordering divergence (B6).
+    /// When pending entities are created in order [A, B] but destroyed
+    /// in reverse order [B, A], the source's CancelPendingEntity pushes
+    /// to the free-list in destroy order (B first, then A) during the
+    /// record phase. The Replay Release ops are processed in batch
+    /// creation order (A first, then B). Without the batch-order
+    /// realignment in Submit, the final free-list tail has B before A
+    /// in the source but A before B in the shadow —two adjacent entries
+    /// swapped while occupancy stays identical.
+    ///
+    /// Fixed by AlignCancelledBatchFreeListOrder in Submit, which
+    /// re-appends cancelled-batch free-list entries in batch order
+    /// before ApplyDestroys pushes regular-destroy entries.
+    /// </summary>
+    [Fact]
+    public void Submit_and_Replay_free_list_diverges_with_reverse_destroy_order()
+    {
+        var source = new World(entityCapacity: 8);
+        var stream = new CommandStream(source);
+        var deltas = new List<FrameDelta>();
+
+        // Frame 1: create 2 entities to populate slots 0, 1
+        var e0 = stream.Create();
+        var e1 = stream.Create();
+        deltas.Add(stream.Snapshot());
+        stream.Submit();
+
+        // Frame 2: destroy both → free-list has [0(v2), 1(v2)]
+        stream.Destroy(e0);
+        stream.Destroy(e1);
+        deltas.Add(stream.Snapshot());
+        stream.Submit();
+
+        // Frame 3: create A (gets slot 1), create B (gets slot 0),
+        // then destroy in REVERSE order: B first, then A.
+        // batch[0] = A(id=1,v2), batch[1] = B(id=0,v2)
+        // Destroy B (cancel batch[1]) → push 0(v3) to free-list.
+        // Destroy A (cancel batch[0]) → push 1(v3) to free-list.
+        // Source free-list after record: [0(v3), 1(v3)] (destroy order).
+        // Emit to wire (batch order): Reserve(1,v2),Release(1,v2),Reserve(0,v2),Release(0,v2)
+        // Replay free-list after replay: [1(v3), 0(v3)] (batch/Release order).
+        // Source would have [0(v3), 1(v3)] —SWAPPED— without the fix.
+        var a = stream.Create();
+        var b = stream.Create();
+        stream.Destroy(b); // cancel pending —push first in record, batch[1]
+        stream.Destroy(a); // cancel pending —push second in record, batch[0]
+
+        deltas.Add(stream.Snapshot());
+        stream.Submit();
+
+        // Verify: Submit path (source) and Replay path (replica) match.
+        var replica = new World(entityCapacity: 8);
+        foreach (var d in deltas)
+            new CommandStream(replica).Replay(d);
+
+        AssertIdentical(source, replica,
+            "Submit (source) vs Replay (replica) after reverse destroy order " +
+            "(create A,B → destroy B,A)");
     }
 }

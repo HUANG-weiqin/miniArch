@@ -358,18 +358,92 @@ sealed class SoakRunner
         if (_pendingHierarchyParents.Contains(child)) return;
         if (_pendingHierarchyChildren.Contains(parent)) return;
         // Walk up from parent; if we reach child, it would be a cycle.
-        var cur = parent;
-        while (cur != default)
-        {
-            if (cur == child) return;
-            if (!_source.TryGetParent(cur, out cur)) break;
-        }
+        // Check both the committed world hierarchy AND pending stream intents
+        // (AddChild intents that were recorded earlier in this frame but not yet
+        // applied). Pending intents are not visible in the world hierarchy until
+        // Submit runs ApplyHierarchy, so the walk must traverse both chains.
+        if (WouldCreateCycle(parent, child))
+            return;
         _stream.AddChild(parent, child);
         _pendingHierarchyChildren.Add(child);
         _pendingHierarchyParents.Add(parent);
         LogOp($"AddChild({parent}, {child})");
         _addHier++;
     }
+
+    /// <summary>
+    /// Simulates ApplyHierarchy's sorted-by-ChildId order to detect cycles
+    /// that would be thrown during <see cref="CommandStream.Submit"/>.
+    /// Includes the proposed new AddChild intent in the simulation.
+    /// </summary>
+    bool WouldCreateCycle(Entity parent, Entity child)
+    {
+        // Collect existing pending Add intents plus the proposed one.
+        var intents = new System.Collections.Generic.List<(Entity Child, Entity Parent)>();
+        var pending = _stream.ActiveHierarchyForTesting
+            as System.Collections.Generic.IDictionary<Entity, Core.CommandStreamCore.HierarchyIntent>;
+        if (pending is not null)
+        {
+            foreach (var kvp in pending)
+            {
+                if (kvp.Value.IsAdd)
+                    intents.Add((kvp.Key, kvp.Value.Parent));
+            }
+        }
+        intents.Add((child, parent));
+
+        // Early exit: only the proposed intent —check the world hierarchy.
+        if (intents.Count <= 1)
+        {
+            var cur = parent;
+            while (cur.Id >= 0)
+            {
+                if (cur == child) return true;
+                if (!_source.TryGetParent(cur, out cur)) break;
+            }
+            return false;
+        }
+
+        // Sort by child.Entity.Id to match ApplyHierarchy order.
+        intents.Sort((a, b) => a.Child.Id.CompareTo(b.Child.Id));
+
+        // Simulate serial apply: local hierarchy tracking child→parent for
+        // entities modified by intents processed so far.
+        var localParent = new System.Collections.Generic.Dictionary<int, Entity>();
+        foreach (var (c, p) in intents)
+        {
+            // Walk from parent p up through (local + world) hierarchy.
+            // Check if any ancestor equals child c.
+            var seen = new System.Collections.Generic.HashSet<int>();
+            var cur = p;
+            while (cur.Id >= 0)
+            {
+                if (!seen.Add(cur.Id))
+                    break; // cycle in local state (shouldn't happen with correct simulation)
+                if (cur == c)
+                    return true;
+
+                // Next parent: check local first (intents processed earlier),
+                // then fall back to world hierarchy.
+                if (localParent.TryGetValue(cur.Id, out var nextP) && nextP.Id >= 0)
+                {
+                    cur = nextP;
+                }
+                else if (_source.TryGetParent(cur, out var worldP))
+                {
+                    cur = worldP;
+                }
+                else
+                {
+                    break;
+                }
+            }
+            // Record this intent as applied
+            localParent[c.Id] = p;
+        }
+        return false;
+    }
+
 
     void OpRemoveChild()
     {
@@ -463,21 +537,33 @@ sealed class SoakRunner
                 return false;
             }
 
-            var srcCs = _source.CanonicalChecksum();
-            var shdCs = _shadow.CanonicalChecksum();
-            _frameValidateBytes += GC.GetAllocatedBytesForCurrentThread() - beforeVal;
-            if (!srcCs.AsSpan().SequenceEqual(shdCs))
-            {
-                var srcDigest = WorldDigest.Compute(_source);
-                var shdDigest = WorldDigest.Compute(_shadow);
-                Fail(frame, phase,
-                    $"CanonicalChecksum mismatch\n" +
-                    $"  source: {Convert.ToHexString(srcCs)}\n" +
-                    $"  shadow: {Convert.ToHexString(shdCs)}\n" +
-                    $"  digest source occupancy={Convert.ToHexString(srcDigest.Occupancy)} free={Convert.ToHexString(srcDigest.FreeList)}\n" +
-                    $"  digest shadow  occupancy={Convert.ToHexString(shdDigest.Occupancy)} free={Convert.ToHexString(shdDigest.FreeList)}");
-                return false;
-            }
+                var srcCs = _source.CanonicalChecksum();
+                var shdCs = _shadow.CanonicalChecksum();
+                _frameValidateBytes += GC.GetAllocatedBytesForCurrentThread() - beforeVal;
+                if (!srcCs.AsSpan().SequenceEqual(shdCs))
+                {
+                    var srcDigest = WorldDigest.Compute(_source);
+                    var shdDigest = WorldDigest.Compute(_shadow);
+                    var srcFree = _source.FreeList;
+                    var shdFree = _shadow.FreeList;
+                    var freeDump = new System.Text.StringBuilder();
+                    var maxFree = Math.Max(srcFree.Length, shdFree.Length);
+                    for (var i = 0; i < maxFree; i++)
+                    {
+                        var src = i < srcFree.Length ? $"{srcFree[i].Id}(v{srcFree[i].Version})" : "(none)";
+                        var shd = i < shdFree.Length ? $"{shdFree[i].Id}(v{shdFree[i].Version})" : "(none)";
+                        var marker = src == shd ? "" : " ← MISMATCH";
+                        freeDump.Append($"\n      [{i,3}] src={src,-16} shd={shd}{marker}");
+                    }
+                    Fail(frame, phase,
+                        $"CanonicalChecksum mismatch\n" +
+                        $"  source: {Convert.ToHexString(srcCs)}\n" +
+                        $"  shadow: {Convert.ToHexString(shdCs)}\n" +
+                        $"  digest source occupancy={Convert.ToHexString(srcDigest.Occupancy)} free={Convert.ToHexString(srcDigest.FreeList)}\n" +
+                        $"  digest shadow  occupancy={Convert.ToHexString(shdDigest.Occupancy)} free={Convert.ToHexString(shdDigest.FreeList)}" +
+                        $"  FreeList side-by-side:{freeDump}");
+                    return false;
+                }
         }
 
         // Periodic reference model spot-check
@@ -746,6 +832,20 @@ sealed class SoakRunner
                 }
             }
             catch { /* best-effort diagnostics */ }
+        }
+
+        // Full free-list dump for source vs shadow debugging.
+        // Occupancy is identical; only free-list ordering diverges.
+        var srcFree = _source.FreeList;
+        var shdFree = _shadow.FreeList;
+        Console.Error.WriteLine($"  FreeList source={srcFree.Length} shadow={shdFree.Length}:");
+        var maxFree = Math.Max(srcFree.Length, shdFree.Length);
+        for (var i = 0; i < maxFree; i++)
+        {
+            var src = i < srcFree.Length ? $"{srcFree[i].Id}(v{srcFree[i].Version})" : "(none)";
+            var shd = i < shdFree.Length ? $"{shdFree[i].Id}(v{shdFree[i].Version})" : "(none)";
+            var marker = src == shd ? "" : " ← MISMATCH";
+            Console.Error.WriteLine($"    [{i,3}] src={src,-16} shd={shd}{marker}");
         }
 
         if (_cfg.PauseOnFail)

@@ -344,6 +344,14 @@ public abstract class CommandStreamCore
             // Order matches BuildDelta: Create —Hierarchy —Ops —Destroy.
             // Keeping Submit and Snapshot aligned lets hosts use Submit on source and
             // Replay on replica without diverging for combined command patterns.
+            //
+            // Before any free-list mutations, align the cancelled-batch entries to
+            // match the wire emission order. CancelPendingEntity pushes free-list
+            // entries in user destroy-order during recording, but Replay processes
+            // Release ops in batch (creation) order. The batch-order realignment
+            // below corrects this divergence so the source's free-list matches the
+            // shadow's after Replay.
+            AlignCancelledBatchFreeListOrder();
             ResolveDeferredCreates();
             MaterializeAllPending();
             ApplyHierarchy();
@@ -356,6 +364,68 @@ public abstract class CommandStreamCore
             Clear(releaseReserved: !submitted);
         }
         return true;
+    }
+
+    /// <summary>
+    /// Realigns free-list entries for cancelled pending entities to match the
+    /// batch (creation) order, ensuring the source's free-list ordering is
+    /// identical to the shadow's after Replay.
+    /// </summary>
+    /// <remarks>
+    /// When a pending entity is destroyed during recording,
+    /// <see cref="CancelPendingEntity"/> calls
+    /// <see cref="World.ReleaseReservedEntity"/> immediately, pushing the
+    /// entity's slot to the free-list in user destroy-order. The FrameDelta
+    /// wire, however, emits Release ops in batch (creation) order. During
+    /// Replay, the shadow processes these Release ops in batch order.
+    /// When creates and cancels are interleaved in different user ordering,
+    /// the free-list tail diverges —adjacent entries are swapped.
+    ///
+    /// This method walks cancelled batches in creation order and re-appends
+    /// each cancelled entity's free-list entry (if still present —it may have
+    /// been consumed by a later Create). The result: cancelled entities that
+    /// survive to frame end in the free-list are ordered by batch index, matching
+    /// the Replay's Release order. Regular destroys (non-pending) are pushed
+    /// later by <see cref="ApplyDestroys"/>, also in emit order.
+    /// </remarks>
+    private void AlignCancelledBatchFreeListOrder()
+    {
+        if (_frozen.CancelledBatchCount == 0)
+            return;
+
+        // Walk cancelled batches in creation (batch) order.
+        for (var i = 0; i < _frozen.PendingBatchCount; i++)
+        {
+            if (!_frozen.BatchCanceled[i])
+                continue;
+
+            var entity = _frozen.BatchEntities[i];
+            if (entity.Id < 0)
+                continue; // deferred placeholder —no free-list push during record
+
+            // CancelPendingEntity increments version before pushing.
+            var expectedVersion = entity.Version == int.MaxValue ? 1 : entity.Version + 1;
+            _world.RepushFreeEntry(entity.Id, expectedVersion);
+        }
+    }
+
+    private void AlignCancelledBatchFreeListOrderForFrozen(FrozenState frozen)
+    {
+        if (frozen.CancelledBatchCount == 0)
+            return;
+
+        for (var i = 0; i < frozen.PendingBatchCount; i++)
+        {
+            if (!frozen.BatchCanceled[i])
+                continue;
+
+            var entity = frozen.BatchEntities[i];
+            if (entity.Id < 0)
+                continue;
+
+            var expectedVersion = entity.Version == int.MaxValue ? 1 : entity.Version + 1;
+            _world.RepushFreeEntry(entity.Id, expectedVersion);
+        }
     }
 
     private bool HasAnyCommands()
@@ -403,7 +473,12 @@ public abstract class CommandStreamCore
         for (var i = 0; i < _frozen.DestroyCount; i++)
         {
             var entity = _frozen.DestroyEntities[i];
-            _world.Destroy(entity);
+            // The entity may already have been cascade-destroyed if a parent
+            // earlier in the DestroyEntities array was destroyed (DestroySingle
+            // recursively destroys all descendants). Check liveness to match
+            // the Replay path, which also guards with IsAlive.
+            if (_world.IsAlive(entity))
+                _world.Destroy(entity);
         }
     }
 
@@ -571,6 +646,10 @@ public abstract class CommandStreamCore
         var task = Task.Factory.StartNew(
             s_buildFromFrozen, frozen, CancellationToken.None,
             TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
+
+        // Align free-list entries for cancelled batches to match the wire
+        // (batch) order before processing the frozen state.
+        AlignCancelledBatchFreeListOrderForFrozen(frozen);
         SubmitFromFrozen(frozen);
         _pendingFrozen = frozen;
         _pendingTask = task;
@@ -708,7 +787,10 @@ public abstract class CommandStreamCore
         for (var i = 0; i < frozen.DestroyCount; i++)
         {
             var entity = frozen.DestroyEntities[i];
-            _world.Destroy(entity);
+            // Guard against cascade-destroyed entities (parent destroyed
+            // before child in the array). Matches Replay path semantics.
+            if (_world.IsAlive(entity))
+                _world.Destroy(entity);
         }
     }
 
@@ -2255,7 +2337,7 @@ public abstract class CommandStreamCore
         }
     }
 
-    private protected readonly record struct HierarchyIntent(bool IsAdd, Entity Parent);
+    internal readonly record struct HierarchyIntent(bool IsAdd, Entity Parent);
 
     private protected struct BatchedComponent
     {

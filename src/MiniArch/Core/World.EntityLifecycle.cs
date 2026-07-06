@@ -425,6 +425,33 @@ public sealed partial class World
         return _freeIds[--_freeIdCount];
     }
 
+    /// <summary>
+    /// Removes the free-list entry <c>(id, version)</c> from its current position
+    /// and re-appends it at the end (preserving all other entries' relative order).
+    /// If no matching entry exists (the slot was reused by a subsequent Create),
+    /// this is a no-op.
+    /// </summary>
+    /// <remarks>
+    /// Used by <see cref="CommandStreamCore.Submit"/> to align the free-list order
+    /// of cancelled pending entities with the batch-order Release ops emitted in
+    /// the wire. See B6 in <c>kb-code-review-findings.md</c>.
+    /// </remarks>
+    internal void RepushFreeEntry(int id, int version)
+    {
+        for (var i = 0; i < _freeIdCount; i++)
+        {
+            if (_freeIds[i].Id == id && _freeIds[i].Version == version)
+            {
+                // Remove from current position (shift survivors left).
+                _freeIdCount--;
+                Array.Copy(_freeIds, i + 1, _freeIds, i, _freeIdCount - i);
+                // Re-append at end.
+                PushFreeIdUnsafe(id, version);
+                return;
+            }
+        }
+    }
+
     internal Entity ReserveDeferredEntity()
     {
         lock (_entityIdLock)
