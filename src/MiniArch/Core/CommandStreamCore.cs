@@ -952,19 +952,33 @@ public abstract class CommandStreamCore
     {
         if (frozen.HierarchyByChild.Count == 0) return;
 
-        foreach (var (child, intent) in frozen.HierarchyByChild)
+        var count = frozen.HierarchyByChild.Count;
+        var sorted = ArrayPool<KeyValuePair<Entity, HierarchyIntent>>.Shared.Rent(count);
+        try
         {
-            if (IsDestroyedThisFrame(child, frozen)) continue;
+            ((ICollection<KeyValuePair<Entity, HierarchyIntent>>)frozen.HierarchyByChild).CopyTo(sorted, 0);
+            Array.Sort(sorted, 0, count, HierarchyComparer.Instance);
 
-            if (intent.IsAdd)
+            for (var i = 0; i < count; i++)
             {
-                if (IsDestroyedThisFrame(intent.Parent, frozen)) continue;
-                world.AddChild(intent.Parent, child);
+                ref readonly var entry = ref sorted[i];
+                var (child, intent) = (entry.Key, entry.Value);
+                if (IsDestroyedThisFrame(child, frozen)) continue;
+
+                if (intent.IsAdd)
+                {
+                    if (IsDestroyedThisFrame(intent.Parent, frozen)) continue;
+                    world.AddChild(intent.Parent, child);
+                }
+                else
+                {
+                    world.RemoveChild(child);
+                }
             }
-            else
-            {
-                world.RemoveChild(child);
-            }
+        }
+        finally
+        {
+            ArrayPool<KeyValuePair<Entity, HierarchyIntent>>.Shared.Return(sorted);
         }
     }
 
@@ -1512,10 +1526,19 @@ public abstract class CommandStreamCore
         // on the caller having materialized anything.
         for (var i = 0; i < _frozen.PendingBatchCount; i++)
         {
-            if (_frozen.BatchCanceled[i]) continue;
             var entity = _frozen.BatchEntities[i];
             if (entity.Id < 0) continue;
             _frozen.PendingBatch[entity.Id] = -1;
+            if (_frozen.BatchCanceled[i])
+            {
+                // Cancelled batch: release the reserved entity back to the free list.
+                // Non-cancelled entities are already materialized (Submit path) and
+                // TryReleaseReserved returns false; cancelled ones were never
+                // materialized and must be released to keep the free list in sync
+                // with ReplayCore's Release operation.
+                _world.TryReleaseReserved(entity);
+                continue;
+            }
             if (releaseReserved) _world.TryReleaseReserved(entity);
         }
         _deferredSeq = 0;

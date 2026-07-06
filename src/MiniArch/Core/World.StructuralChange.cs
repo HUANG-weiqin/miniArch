@@ -100,10 +100,11 @@ public sealed partial class World
     {
         var archetype = info.Archetype!;
 
-        if (archetype.TryGetComponentIndex(componentType, out _))
+        if (archetype.TryGetComponentIndex(componentType, out var existingIdx))
         {
-            throw new InvalidOperationException(
-                $"Entity {entity} already has component {typeof(T).Name}.");
+            // Entity already has component — write value in-place
+            archetype.SetComponentAtTyped(existingIdx, info.RowIndex, in component);
+            return;
         }
 
         if (!archetype.TryGetAddDestination(componentType, out var destination))
@@ -152,9 +153,18 @@ public sealed partial class World
     internal unsafe void ApplyRawAdd(Entity entity, EntityRecord info, ComponentType componentType, byte* source)
     {
         var archetype = info.Archetype!;
-        if (archetype.TryGetComponentIndex(componentType, out _))
-            throw new InvalidOperationException(
-                $"Replay Add: entity {entity} already has component id {componentType.Value}.");
+        if (archetype.TryGetComponentIndex(componentType, out var existingColIdx))
+        {
+            // Entity already has component — write value in-place without
+            // moving the entity. This path matches how the component stores
+            // interact with Add on an entity that may have inherited the
+            // component from a prior frame or a clone: the Submit path's
+            // ApplyTypedAdd handles it by moving within the same archetype,
+            // but ApplyTypedAdd<T> throws (by design) and is not reached
+            // for this case. ApplyRawAdd is the only path that encounters it.
+            archetype.WriteComponentRaw(existingColIdx, info.RowIndex, source);
+            return;
+        }
         var destination = GetOrCreateAddDestinationArchetype(archetype, componentType);
         MoveEntityFromBytes(entity, info, destination, componentType, source);
     }

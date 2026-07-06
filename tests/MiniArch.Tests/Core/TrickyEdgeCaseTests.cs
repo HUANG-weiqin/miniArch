@@ -137,13 +137,15 @@ public sealed class TrickyEdgeCaseTests
     }
 
     [Fact]
-    public void Add_component_that_already_exists_throws()
+    public void Add_component_that_already_exists_overwrites_value()
     {
         var world = new World();
         var entity = world.Create();
 
         world.Add(entity, new Position(1, 2));
-        Assert.Throws<InvalidOperationException>(() => world.Add(entity, new Position(99, 99)));
+        world.Add(entity, new Position(99, 99));
+        Assert.True(world.TryGet(entity, out Position p));
+        Assert.Equal(new Position(99, 99), p);
     }
 
     [Fact]
