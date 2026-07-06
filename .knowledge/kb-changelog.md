@@ -17,6 +17,10 @@ updated: 2026-07-06 (架构审阅知识库校准：CommandStreamCore 边界、Ad
 - **`INDEX.md`** 模块地图新增 MiniArch.Core Change Tracking 行，快速入口新增"反应式 / 变更追踪"区。
 - **`kb-changelog.md`** 本条目。
 
+## 2026-07-06 ChangeQuery\<T\> fluent filter（With/Without/WithAny）
+
+- **ChangeQuery\<T\> 增加 fluent filter（With/Without/WithAny）**：支持复合签名变更追踪。`QueryCache.Matches` 改 `internal`。Transitions 语义从"组件有无"升级为"签名匹配集进出"。详见 `kb-change-tracking.md`。
+
 ## 2026-07-06 架构审阅知识库校准
 
 - **Add/Set/Remove 真实语义校准**：`World.Add<T>` 当前是 ensure+overwrite（已存在时原地覆盖），不是 strict throw；`World.Set<T>` 缺失时抛异常；`World.Remove<T>` 缺失时 no-op。同步更新 `World.StructuralChange.cs` XML doc、`kb-design-rationale.md`、`kb-core-ecs.md`、`kb-architecture-review.md`。历史上 strict Add 曾被文档化，但 B1/B4 证明重复 Add 必须覆盖才能保持 Submit/Replay 收敛。

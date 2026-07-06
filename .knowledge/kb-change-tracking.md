@@ -38,6 +38,7 @@ updated: 2026-07-06
 7. **long epoch 无回绕**：~29000 年 @ 1M writes/s。
 8. **transition log 不序列化、不 checksum**：ephemeral 渲染层状态，非确定 sim 状态。Snapshot save/load 不含它；Load 建新 World，observer 状态天然重置。
 9. **无 compaction（MVP）**：transition log 单调增长，长会话内存特征见坑点。YAGNI，soak 观测后再说。
+10. **fluent filter 复用 QueryDescription/QueryCache.Matches（而非独立 filter 机制）**：With/Without/WithAny 直接操作 `ChangeQuery._filter: QueryDescription`（默认 `new QueryDescription().With<T>()`），Transitions 用 `QueryCache.Matches(archetype)` 判断进出。决策理由见 `kb-design-rationale.md` §2.11——概念唯一：QueryDescription 已是唯一筛选抽象，QueryCache.Matches 已是唯一 archetype 匹配原语，ChangeQuery 复用两者，零新概念。
 
 ## 认知模型
 
@@ -72,6 +73,29 @@ foreach (var chunk in hp.ModifiedChunks())
     // update health bars from current values
 }
 ```
+
+### Fluent Filter API
+
+`ChangeQuery<T>` 现在支持链式筛选方法：`.With<TU>()`、`.Without<TU>()`、`.WithAny<TU>()`。它们在 `Track<T>()` 的隐式 `With<T>` 基础上附加签名约束。
+
+**语义要点**：
+
+- T 始终是值追踪列——`ModifiedChunks()` 只检查 T 列的版本号。With/Without/WithAny **不**额外追踪其他列，仅用于限定 Transitions 的成员集和 ModifiedChunks 扫描的 archetype 范围。
+- 默认（不调用任何 Fluent 方法）行为 = 仅 `With<T>`，向后兼容无 filter 版本。
+- `Transitions()` 的 Entered/Exited 语义从"实体的 archetype 是否含 T"升级为"实体 archetype **是否匹配整个筛选签名集**"。
+- `ModifiedChunks()` 仅扫描满足筛选条件的 archetype——不含 TU 或含 Dead 的 archetype 直接跳过，`chunk.GetSpan<T>` 即可安全访问关联数据。
+
+**关键示例**——血条场景：
+
+```csharp
+var hp = world.Track<HP>().Without<Dead>();
+// Add<Dead> → Exited（实体离开 {HP, !Dead} 集合，血条 despawn）
+// Remove<Dead> → Entered（实体重新进入，血条 respawn）
+```
+
+**约束**——先配置后消费：
+
+必须在第一次 `ModifiedChunks()` 或 `Transitions()` 枚举之前调用 `.With()`/`.Without()`/`.WithAny()`。枚举开始后仍可继续调用，但仅对下次枚举生效。已在 XML doc 注明。
 
 ## 坑点
 
