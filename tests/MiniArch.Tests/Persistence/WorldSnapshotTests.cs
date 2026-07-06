@@ -469,6 +469,41 @@ public sealed class WorldSnapshotTests
     }
 
     [Fact]
+    public void RestoreState_clears_replay_placeholder_map()
+    {
+        // Scenario: replay populates the placeholder→real-entity map,
+        // then a rollback via RestoreState must discard stale mappings
+        // so TryResolvePlaceholder doesn't return entities from the
+        // rolled-back frame.
+
+        var world = new World(chunkCapacity: 4);
+        // Create a baseline entity so the world isn't empty.
+        world.Create(new Position(0, 0));
+
+        var snapshot = world.CaptureState();
+
+        // Produce a FrameDelta with a placeholder entity.
+        var stream = new CommandStream(world) { DeferredEntities = true };
+        var placeholder = stream.Create();
+        stream.Add(placeholder, new Position(99, 99));
+        var delta = stream.Snapshot();
+
+        // Replay populates _replayPlaceholderMap.
+        new CommandStream(world).Replay(delta);
+
+        // The placeholder should resolve to a real entity now.
+        Assert.True(world.TryResolvePlaceholder(new Entity(-1, 0), out var beforeRollback));
+        Assert.NotEqual(default, beforeRollback);
+
+        // Rollback: the replay-allocated entity must disappear,
+        // and the placeholder map must be cleared.
+        world.RestoreState(snapshot);
+
+        // After rollback, the placeholder must NOT resolve.
+        Assert.False(world.TryResolvePlaceholder(new Entity(-1, 0), out _));
+    }
+
+    [Fact]
     public void Capture_restore_twice_is_idempotent()
     {
         var world = new World();

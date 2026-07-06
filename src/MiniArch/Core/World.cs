@@ -1216,6 +1216,13 @@ public sealed partial class World : IDisposable
         // Hierarchy
         _hierarchy.RestoreState(snapshot);
 
+        // Clear replay state — stale after rollback.
+        // ReplayCore rebuilds these from scratch on next replay;
+        // stale mappings from a pre-rollback replay must not survive.
+        _replayPlaceholderMap = [];
+        _replayMapCount = 0;
+        _replayCreateCounts.Clear();
+
         // Invalidate all caches
         _createArchetypeCacheGeneration++;
 
@@ -1251,6 +1258,8 @@ public sealed partial class World : IDisposable
         _archetypeByMask.Clear();
         _archetypeByHash.Clear();
         _replayCreateCounts.Clear();
+        _replayPlaceholderMap = [];
+        _replayMapCount = 0;
         _archetypeSnapshot = Array.Empty<Archetype>();
         _queryFiltersByDescription.Clear();
         _queries.Clear();

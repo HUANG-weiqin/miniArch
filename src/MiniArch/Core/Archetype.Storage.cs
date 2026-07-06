@@ -878,6 +878,7 @@ internal sealed partial class Archetype
         {
             for (var i = 0; i < _segmentCount; i++)
                 _segments[i].Count = 0;
+            InvalidateFlatEntityCache();
         }
     }
 
