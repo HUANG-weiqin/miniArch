@@ -172,9 +172,9 @@ public sealed partial class World
     internal static unsafe void ApplyRawSet(Entity entity, EntityRecord info, ComponentType componentType, byte* source)
     {
         var archetype = info.Archetype!;
-        if (!archetype.TryGetComponentIndex(componentType, out var componentIndex))
-            throw new InvalidOperationException(
-                $"Replay Set: entity {entity} does not have component id {componentType.Value}.");
+        // GetComponentIndex throws ArgumentException on missing component,
+        // matching the Submit path's mixed-kind Set behavior.
+        var componentIndex = archetype.GetComponentIndex(componentType);
         archetype.WriteComponentRaw(componentIndex, info.RowIndex, source);
     }
 
