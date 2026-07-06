@@ -26,7 +26,7 @@ internal sealed partial class Archetype
     private Entity[] _entities;
     private byte[] _data;
     private int[] _columnByteOffsets;
-    private int[] _elementSizes;
+    internal int[] _elementSizes;
     private int _count;
     private int _capacity;
 
@@ -52,6 +52,9 @@ internal sealed partial class Archetype
     private readonly int[] _componentIdToColumnIndex;
     private Archetype?[] _addDestinationCache = Array.Empty<Archetype?>();
     private Archetype?[] _removeDestinationCache = Array.Empty<Archetype?>();
+    internal World? _owner;                 // backref, set by World.GetOrCreateArchetype
+    internal bool _anyTrackingActive;       // gate on write path; false = zero-cost skip
+    internal long[]? _columnVersions;       // allocated lazily when tracking activated; len = _elementSizes.Length
     internal Archetype(Signature signature, Type[] componentTypes, int capacity = 4)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
@@ -177,6 +180,9 @@ internal sealed partial class Archetype
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal int GetComponentIndexFast(ComponentType component) =>
         _componentIdToColumnIndex[component.Value];
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool ContainsComponent(ComponentType type) => TryGetComponentIndex(type, out _);
 
     private static int[] BuildColumnMap(Signature signature)
     {

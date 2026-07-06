@@ -88,6 +88,11 @@ public sealed partial class World : IDisposable
 
     private bool _disposed;
 
+    // ── Change tracking ─────────────────────────────────────────────
+    private long _writeEpoch;                                  // monotonic, long = no wraparound
+    private readonly List<Core.TransitionEntry> _transitionLog = new();
+    private bool _anyTrackingActive;                           // world-level gate
+
     /// <summary>
     /// Creates a world.
     /// </summary>
@@ -207,6 +212,11 @@ public sealed partial class World : IDisposable
     internal int ArchetypeCount => Volatile.Read(ref _archetypeSnapshot).Length;
 
     internal int ArchetypeCacheGeneration => _createArchetypeCacheGeneration;
+
+    // ── Change tracking accessors ───────────────────────────────────
+    internal bool IsChangeTrackingActive => _anyTrackingActive;
+    internal long CurrentWriteEpoch => _writeEpoch;
+    internal IReadOnlyList<Core.TransitionEntry> GetTransitionLogInternal() => _transitionLog;
 
     /// <summary>
     /// Adds a child to a parent.
@@ -424,6 +434,7 @@ public sealed partial class World : IDisposable
         }
 
         archetype = new Archetype(signature, ResolveComponentTypes(signature), _chunkCapacity);
+        archetype._owner = this;
         _archetypes.Add(signature, archetype);
         CacheArchetypeByMaskIfCanonical(signature, archetype);
         PublishArchetypeSnapshot(archetype);
