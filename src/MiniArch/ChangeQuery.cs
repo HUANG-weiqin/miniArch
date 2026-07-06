@@ -19,6 +19,21 @@ namespace MiniArch;
 /// to obtain a fresh cursor; discard cursors from before the restore.
 /// </para>
 /// </remarks>
+/// <example>
+/// Track HP changes for alive enemies only:
+/// <code>
+/// var hp = world.Track&lt;HP&gt;().Without&lt;Dead&gt;().With&lt;Enemy&gt;();
+///
+/// // Transitions: Entered when entity enters {HP, !Dead, Enemy},
+/// // Exited when entity leaves it (e.g. Add&lt;Dead&gt; fires Exited).
+/// foreach (var t in hp.Transitions())
+///     ToggleHealthBar(t.Entity, t.Kind == TransitionKind.Entered);
+///
+/// // ModifiedChunks: HP-value changes in matching archetypes.
+/// foreach (var chunk in hp.ModifiedChunks())
+///     foreach (ref var h in chunk.GetSpan&lt;HP&gt;())
+///         UpdateDamageNumber(chunk.GetEntityId(ref h), h.Value);
+/// </code>
 public sealed class ChangeQuery<T> : IChangeQuery where T : unmanaged
 {
     private readonly World _world;
@@ -42,6 +57,11 @@ public sealed class ChangeQuery<T> : IChangeQuery where T : unmanaged
     /// Throws <see cref="InvalidOperationException"/> if called after the first
     /// <see cref="ModifiedChunks"/> or <see cref="Transitions"/> enumeration.
     /// </summary>
+    /// <example>
+    /// <code>
+    /// var hp = world.Track&lt;HP&gt;().With&lt;Enemy&gt;();    // only enemy HP changes
+    /// </code>
+    /// </example>
     public ChangeQuery<T> With<TU>() where TU : unmanaged
     {
         if (_consumed)
@@ -58,6 +78,12 @@ public sealed class ChangeQuery<T> : IChangeQuery where T : unmanaged
     /// Throws <see cref="InvalidOperationException"/> if called after the first
     /// <see cref="ModifiedChunks"/> or <see cref="Transitions"/> enumeration.
     /// </summary>
+    /// <example>
+    /// <code>
+    /// var hp = world.Track&lt;HP&gt;().Without&lt;Dead&gt;();  // alive entities only
+    /// </code>
+    /// Add&lt;Dead&gt; fires <see cref="TransitionKind.Exited"/> — entity left {HP, !Dead}.
+    /// </example>
     public ChangeQuery<T> Without<TU>() where TU : unmanaged
     {
         if (_consumed)
@@ -74,6 +100,12 @@ public sealed class ChangeQuery<T> : IChangeQuery where T : unmanaged
     /// Throws <see cref="InvalidOperationException"/> if called after the first
     /// <see cref="ModifiedChunks"/> or <see cref="Transitions"/> enumeration.
     /// </summary>
+    /// <example>
+    /// <code>
+    /// var buff = world.Track&lt;Burning&gt;().WithAny&lt;FireResistance&gt;();
+    /// // tracks entities with Burning that also have either FireResistance or ... (any-match list)
+    /// </code>
+    /// </example>
     public ChangeQuery<T> WithAny<TU>() where TU : unmanaged
     {
         if (_consumed)
@@ -90,6 +122,17 @@ public sealed class ChangeQuery<T> : IChangeQuery where T : unmanaged
     /// and whose archetype matches this cursor's filter.
     /// Materializes eagerly; cursor advances regardless of consumer enumeration depth.
     /// </summary>
+    /// <example>
+    /// Iterate chunks with modified HP values:
+    /// <code>
+    /// foreach (var chunk in hp.ModifiedChunks())
+    /// {
+    ///     ref var h = ref chunk.GetComponentAt&lt;HP&gt;(0);
+    ///     UpdateHealthBar(chunk.GetEntityId(0), h.Value);
+    /// }
+    /// </code>
+    /// Consumed chunks are tracked so the next call only returns newly-written chunks.
+    /// </example>
     public IEnumerable<ChunkView> ModifiedChunks()
     {
         _consumed = true;
@@ -118,6 +161,17 @@ public sealed class ChangeQuery<T> : IChangeQuery where T : unmanaged
     /// since the last call. The internal list is auto-cleared after enumeration.
     /// Materializes eagerly; cursor advances regardless of consumer enumeration depth.
     /// </summary>
+    /// <example>
+    /// React to membership changes:
+    /// <code>
+    /// foreach (var t in hp.Transitions())
+    ///     if (t.Kind == TransitionKind.Entered)
+    ///         SpawnHealthBar(t.Entity);
+    ///     else
+    ///         DestroyHealthBar(t.Entity);
+    /// </code>
+    /// The list is auto-cleared — subsequent calls return only new transitions.
+    /// </example>
     public IEnumerable<Transition> Transitions()
     {
         _consumed = true;
