@@ -2,7 +2,7 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-07-06 (架构审阅知识库校准：CommandStreamCore 边界、Add 语义、baseline 提醒)
+updated: 2026-07-06 (架构审阅知识库校准 + long cursor + ClearTransitionLog 服务器安全)
 ---
 # Knowledge Base Changelog
 
@@ -20,6 +20,12 @@ updated: 2026-07-06 (架构审阅知识库校准：CommandStreamCore 边界、Ad
 ## 2026-07-06 ChangeQuery\<T\> fluent filter（With/Without/WithAny）
 
 - **ChangeQuery\<T\> 增加 fluent filter（With/Without/WithAny）**：支持复合签名变更追踪。`QueryCache.Matches` 改 `internal`。Transitions 语义从"组件有无"升级为"签名匹配集进出"。详见 `kb-change-tracking.md`。
+
+## 2026-07-06 long cursor + ClearTransitionLog — 服务器长运行安全
+
+- **ChangeQuery._transitionCursor int→long**：修复 2B 回绕风险（100 ops/s 下约 8 个月溢出）。long 消除该风险，服务器可无限期连续运行。
+- **World.ClearTransitionLog() 新增**：List.Clear() 复用内部数组（零 GC），cursor 通过 generation counter + clamp 自动 reset。用户需在每帧所有消费者 drain 完 transitions 后调用，以 bound 内存。
+- 不调用 ClearTransitionLog 则 log 单调增长（100 ops/s ≈ 207 MB/天），调用则每帧归零。
 
 ## 2026-07-06 架构审阅知识库校准
 

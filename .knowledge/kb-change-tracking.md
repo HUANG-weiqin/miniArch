@@ -74,6 +74,14 @@ foreach (var chunk in hp.ModifiedChunks())
 }
 ```
 
+### 每帧使用模式（长运行服务器）
+
+```
+1. Sim systems 运行（自动 append transitions）
+2. 渲染/UI 层调用 Transitions() / ModifiedChunks() drain 变更
+3. world.ClearTransitionLog()  ← 归零 log，复用数组，零 GC
+```
+
 ### Fluent Filter API
 
 `ChangeQuery<T>` 现在支持链式筛选方法：`.With<TU>()`、`.Without<TU>()`、`.WithAny<TU>()`。它们在 `Track<T>()` 的隐式 `With<T>` 基础上附加签名约束。
@@ -102,6 +110,6 @@ var hp = world.Track<HP>().Without<Dead>();
 - `Get<T>` 返回 ref 后直接改字段**不追踪**（C# ref 无法拦截）。想追踪值变更必走 `Set<T>`。
 - 批量 `chunk.GetSpan<T>()` 后改 span **不追踪**（同上）。HP 这类事件驱动单实体改不受影响；Position 那种批量写的组件本来也不需要 per-change 通知。
 - chunked 模式（>2MB archetype）下版本是 per-archetype，跨 segment 过报——一个大 archetype 里任一实体改了，所有 segment 的 chunk 都算 Modified。HP 类小 archetype 是 flat 模式，不受影响。
-- transition log 无 compaction：长会话（1h+）结构性操作单调累积内存。MVP 接受，soak 观测后若成问题再加 min-cursor shift 压缩。
+- transition log 不自动压缩：用户需在每帧 drain 完所有 transitions 后调用 `World.ClearTransitionLog()`。该方法复用内部数组（零 GC），cursor 通过 generation counter + clamp 自动 reset。不调用则 log 单调增长（100 ops/s ≈ 207 MB/天），调用则每帧归零。
 - snapshot restore 后 observer 状态重置（Load 建新 World）。用户需重新 `Track<T>()` 并丢弃旧 ChangeQuery（其游标已失效）。已在 ChangeQuery XML doc 注明。
 - transition log 条目持有 Archetype 引用——restore 后这些 archetype 可能失效，故 restore 必须清空 log（Load 建新 World 自然满足）。
