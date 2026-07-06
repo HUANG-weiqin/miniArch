@@ -20,12 +20,12 @@ updated: 2026-07-06
 
 - 核心组成：
   - **值变更机制**：per-(Archetype, componentColumn) 的 `long` 版本号，在 Archetype 的 3 个写入 chokepoint（`SetComponentAtTyped`、`SetComponentAtFlat`、`WriteComponentRaw`）处 bump。全局 `World._writeEpoch`（long，无回绕）作单调时钟。
-  - **结构变更机制**：append-only 的 `List<TransitionEntry>`，每条 `(Entity, OldArchetype?, NewArchetype?)`。5 个 hook 点：CreateInArchetype（Create/Clone 共享）、DestroySingle、ApplyTypedAdd（迁移分支）、RemoveBoxed、MoveEntityFromBytes（Replay Add 迁移）、PlaceEntityInArchetype（Submit/Replay Create）。消费者对 old/new signature 各 match 一次推出 Entered/Exited。
-  - **ChangeQuery\<T>**：持 `_valueCursor: long` 和 `_transitionCursor: int`，每次调用 `ModifiedChunks()` 或 `Transitions()` 即推进游标。
+  - **结构变更机制**：每个 `ChangeQuery<T>` 持有自己的 `List<Transition>`（只存匹配的 Entered/Exited，预过滤）。World 在每个结构操作时通过 `IChangeQuery.OnTransition` 将变更 dispatch 到所有注册的 query（`List<WeakReference<IChangeQuery>>`），每个 query 独立 filter 后存入自己的 log。Entered/Exited 在 dispatch 时确定（不在消费时）。5 个 hook 点不变（CreateInArchetype、DestroySingle、ApplyTypedAdd、RemoveBoxed、MoveEntityFromBytes、PlaceEntityInArchetype）。无人 Track 时 `_anyTrackingActive` gate 零成本；有人 Track 时每次结构操作做 N 次 `Matches()`（N = 活跃 query 数，典型 1-3）。
+  - **ChangeQuery\<T>**：持 `_valueCursor: long`（ModifiedChunks 用，不变）和 `List<Transition> _transitions`（自有 log）。`Transitions()` 调用时 `ToArray()` + `Clear()`（auto-clear，复用内部数组零 GC）。
   - **全局 gate**：`Archetype._anyTrackingActive` / `World._anyTrackingActive`。无人 Track 时所有 hook 是一条预测不命中的 bool 分支，零成本。
 - 数据流 / 控制流：
   - 写入路径（Set / CommandStream Submit / Replay）→ Archetype 3 个写入方法 bump 列版本号 → ChangeQuery.ModifiedChunks() 比对游标 → 返回脏 chunk
-  - 结构路径（Create/Destroy/Add/Remove）→ TransitionEntry 追加到 log → ChangeQuery.Transitions() 比对 old/new archetype signature → 返回 Entered/Exited
+  - 结构路径（Create/Destroy/Add/Remove）→ World 遍历 `_changeQueries`（弱引用列表），调用存活 query 的 `IChangeQuery.OnTransition` → 每个 query 独立 `Matches()` 判断 → 匹配的 `Transition` 追加到 query 自有的 `_transitions` → 用户调用 `Transitions()` 时 drain（auto-clear）
 
 ## 决策
 
@@ -33,12 +33,14 @@ updated: 2026-07-06
 2. **per-archetype 列版本非 per-segment**：HP 类组件 archetype 是 flat 模式（实体少 <2MB 阈值），per-archetype = per-chunk = 最细粒度。chunked 模式跨 segment 过报，YAGNI 先不做 segment 级。
 3. **instrument 在 Archetype 3 个写入方法 = 所有写入路径的公共底**：World.Set、EntityAccessor.Set、CommandStream Submit（ComponentStore.ApplyToWorld）、Replay（ApplyRawSet/ApplyRawAdd）全部自动覆盖，无需每条路径单独 instrument。
 4. **自动 per-type opt-in**：没人 Track\<T> 则零成本；Track 后只有该类型付 bump。
-5. **transition log 记 old→new signature 转移（非 per-component Added/Removed）**：一条原语覆盖所有 query 形态（With/Without/多组件），消费者 match 两边推出 Entered/Exited。
+5. **transition log 记 old→new signature 转移（非 per-component Added/Removed），Entered/Exited 在 dispatch 时确定**：一条原语覆盖所有 query 形态（With/Without/多组件）。各 query 在 `OnTransition` 时独立 `Matches()` 判断，只在匹配时写入自己的 `Transition` log。每条记录 12B（Entity+Kind），预过滤使 log 更紧凑，消费时无需再 match。
 6. **ModifiedChunks/Transitions 急切物化（非 yield return）**：保证"调用即推进游标"语义——消费者即使只 MoveNext 一次（如 Assert.NotEmpty / LINQ First）游标也正确推进。冷路径可接受 List 分配。
 7. **long epoch 无回绕**：~29000 年 @ 1M writes/s。
 8. **transition log 不序列化、不 checksum**：ephemeral 渲染层状态，非确定 sim 状态。Snapshot save/load 不含它；Load 建新 World，observer 状态天然重置。
-9. **无 compaction（MVP）**：transition log 单调增长，长会话内存特征见坑点。YAGNI，soak 观测后再说。
+9. **Transitions() auto-clear（无需外部清理）**：drain 时 `ToArray()` + `List.Clear()` 复用内部数组，零 GC。不再需要 `World.ClearTransitionLog()`。不调用 `Transitions()` 的 query log 会增长——丢弃的 query 由 WeakReference 自动清理。
 10. **fluent filter 复用 QueryDescription/QueryCache.Matches（而非独立 filter 机制）**：With/Without/WithAny 直接操作 `ChangeQuery._filter: QueryDescription`（默认 `new QueryDescription().With<T>()`），Transitions 用 `QueryCache.Matches(archetype)` 判断进出。决策理由见 `kb-design-rationale.md` §2.11——概念唯一：QueryDescription 已是唯一筛选抽象，QueryCache.Matches 已是唯一 archetype 匹配原语，ChangeQuery 复用两者，零新概念。
+11. **transition log 挂在 ChangeQuery 而非 World**：每个 query 自管 `List<Transition>`，drain 即 clear，无需 world 级协调（ClearTransitionLog 已删）。API 更干净：用户不需要记得调 Clear。
+12. **WeakReference 自动 prune**：World 通过 `List<WeakReference<IChangeQuery>>` 持有 query 引用。query 被 GC 后下次 dispatch 时自动清理 dead ref（swap-remove），不需要 IDisposable。
 
 ## 认知模型
 
@@ -64,22 +66,12 @@ Track\<T> 是一个游标：值写入 bump 列版本、结构变更进 transitio
 最小示例：
 ```csharp
 var hp = world.Track<HP>();
-foreach (var t in hp.Transitions())
+foreach (var t in hp.Transitions())        // 进/出（spawn/despawn 血条）
     if (t.Kind == TransitionKind.Entered) SpawnHealthBar(t.Entity);
     else DestroyHealthBar(t.Entity);
-foreach (var chunk in hp.ModifiedChunks())
-{
-    var span = chunk.GetSpan<HP>();
-    // update health bars from current values
-}
-```
-
-### 每帧使用模式（长运行服务器）
-
-```
-1. Sim systems 运行（自动 append transitions）
-2. 渲染/UI 层调用 Transitions() / ModifiedChunks() drain 变更
-3. world.ClearTransitionLog()  ← 归零 log，复用数组，零 GC
+foreach (var chunk in hp.ModifiedChunks()) // 值写入（更新血量）
+    { var span = chunk.GetSpan<HP>(); ... }
+// 无需 ClearTransitionLog — Transitions() 已自动清零
 ```
 
 ### Fluent Filter API
@@ -110,6 +102,5 @@ var hp = world.Track<HP>().Without<Dead>();
 - `Get<T>` 返回 ref 后直接改字段**不追踪**（C# ref 无法拦截）。想追踪值变更必走 `Set<T>`。
 - 批量 `chunk.GetSpan<T>()` 后改 span **不追踪**（同上）。HP 这类事件驱动单实体改不受影响；Position 那种批量写的组件本来也不需要 per-change 通知。
 - chunked 模式（>2MB archetype）下版本是 per-archetype，跨 segment 过报——一个大 archetype 里任一实体改了，所有 segment 的 chunk 都算 Modified。HP 类小 archetype 是 flat 模式，不受影响。
-- transition log 不自动压缩：用户需在每帧 drain 完所有 transitions 后调用 `World.ClearTransitionLog()`。该方法复用内部数组（零 GC），cursor 通过 generation counter + clamp 自动 reset。不调用则 log 单调增长（100 ops/s ≈ 207 MB/天），调用则每帧归零。
-- snapshot restore 后 observer 状态重置（Load 建新 World）。用户需重新 `Track<T>()` 并丢弃旧 ChangeQuery（其游标已失效）。已在 ChangeQuery XML doc 注明。
-- transition log 条目持有 Archetype 引用——restore 后这些 archetype 可能失效，故 restore 必须清空 log（Load 建新 World 自然满足）。
+- transition log 在 drain 时自动清零（`Transitions()` 内部 `ToArray()` + `List.Clear()`），复用内部数组零 GC。不调用 `Transitions()` 的 query log 会增长——丢弃的 query 由 WeakReference 自动 prune。
+- snapshot restore 后 observer 状态重置（Load 建新 World，`_changeQueries` 为空）。旧 ChangeQuery 持旧 World 引用，WeakReference 在旧 World 上 prune。用户需重新 `Track<T>()`。

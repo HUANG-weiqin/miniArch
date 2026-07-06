@@ -245,4 +245,13 @@ Apply advisor 轮次审阅发现，补充 3 项：
 - **ComponentMask 扩展为 512-bit**（8 × `ulong`），覆盖 component id 0..511 的快速匹配
 - **新增分段存储模式**：Archetype 超过阈值后自动切换为多 Segment 模式（详见 `kb-chunk-storage.md`）
 
+## 2026-07-06 transition log 重构：per-ChangeQuery 私有 + dispatch via IChangeQuery.OnTransition
+
+- **transition log 从 World 共享重构为 per-ChangeQuery 私有**：每个 `ChangeQuery<T>` 持有自己的 `List<Transition>`。World 在结构操作时通过 `IChangeQuery.OnTransition` 将变更 dispatch 到所有注册的 query（`List<WeakReference<IChangeQuery>>`），每个 query 独立 filter 后存入自己的 log。
+- **Entered/Exited 在 dispatch 时确定**（不在消费时）：预过滤，log 只存匹配的 `Transition`（12B/条），不存全量 `TransitionEntry`。
+- **Transitions() auto-clear**：drain 时 `ToArray()` + `List.Clear()` 复用内部数组，零 GC。无需 `ClearTransitionLog()`。
+- **TransitionEntry 删除**：旧 `(Entity, OldArchetype?, NewArchetype?)` 不再需要——Entered/Exited 在 dispatch 时已确定，不再存储 old/new archetype。
+- **ClearTransitionLog() 删除**：每个 query 自管 log，drain 即 clear，无需 world 级协调。
+- **服务器长运行安全 by design**：log 以 "drain 后清零" 为界，不再 "全 World 共享单调增长"。
+
 
