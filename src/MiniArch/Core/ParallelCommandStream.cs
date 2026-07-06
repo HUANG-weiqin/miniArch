@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.CompilerServices;
 
 namespace MiniArch.Core;
@@ -169,13 +170,158 @@ public sealed class ParallelCommandStream : CommandStreamCore
     /// Records a clone of the source entity, including all components and descendants.
     /// Thread-safe; validates outside the lock, materializes under it.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Limitations (parallel mode):</b>
+    /// </para>
+    /// <para>
+    /// - <c>Clone</c> does <b>not</b> support pending (same-buffer created) source entities.
+    ///   Use a single-threaded <see cref="CommandStream"/> when cloning pending entities,
+    ///   or <c>Submit</c> first then clone the materialized result.
+    /// </para>
+    /// <para>
+    /// - For materialized source entities, only the archetype storage is read
+    ///   (no component-store overlay scan). This avoids ThreadLocal visibility issues
+    ///   in parallel recording. Virtual hierarchy semantics (pending AddChild/RemoveChild)
+    ///   are <b>not</b> applied —only the world hierarchy is used.
+    /// </para>
+    /// <para>
+    /// Full virtual-state clone semantics (overlay scan + virtual hierarchy + pending source)
+    /// are only available in the single-threaded <see cref="CommandStream"/>.
+    /// </para>
+    /// </remarks>
     public Entity Clone(Entity source)
     {
-        // Validate outside the lock (read-only world access); materialize under it.
-        if (!_world.TryGetLocation(source, out var location))
-            throw new InvalidOperationException($"Cannot clone entity {source}: it is no longer alive.");
+        // Destroy detection (read-only, safe outside lock)
+        if (IsSourceDestroyedThisFrame(source))
+            throw new InvalidOperationException(
+                $"Cannot clone entity {source}: it was destroyed in the same batch.");
+
+        // pending source NOT supported in parallel mode — component store uses
+        // ThreadLocal append, clone-time snapshot cannot see concurrent writes reliably.
+        if (TryGetPendingBatch(source, out _))
+            throw new NotSupportedException(
+                "ParallelCommandStream.Clone does not support pending source. " +
+                "Use single-threaded CommandStream for pending-entity cloning, " +
+                "or Submit first then clone the materialized result.");
 
         lock (_storeCreateLock)
-            return CloneImpl(source, location);
+        {
+            if (!_world.TryGetLocation(source, out var location))
+                throw new InvalidOperationException($"Cannot clone entity {source}: it is no longer alive.");
+
+            // Materialized path: only read archetype storage (no overlay scan).
+            // Children are cloned from world hierarchy only (no virtual view).
+            var clone = CreateCore();
+            int cloneBatchIdx;
+            if (_deferredEntities)
+                TryGetPendingBatch(clone, out cloneBatchIdx);
+            else
+                cloneBatchIdx = _frozen.PendingBatch[clone.Id];
+
+            // Copy components from archetype only (no overlay)
+            var archetype = location.Archetype;
+            var sourceRow = location.RowIndex;
+            var sig = archetype.Signature.AsSpan();
+            for (var i = 0; i < sig.Length; i++)
+            {
+                var ct = sig[i];
+                var size = ComponentSizeCache.GetSize(ComponentRegistry.Shared.GetType(ct));
+                var offset = ReserveBatchBufSpace(size);
+                unsafe { fixed (byte* ptr = &_frozen.BatchBuf[offset]) archetype.ReadComponentRaw(i, sourceRow, ptr); }
+                CommitBatchComponent(cloneBatchIdx, ct, offset, size);
+            }
+
+            // Clone children from world hierarchy only (no pending intents)
+            CloneChildrenFromWorld(source, clone);
+
+            return clone;
+        }
+    }
+
+    /// <summary>
+    /// Clones children of <paramref name="sourceRoot"/> using only the world hierarchy
+    /// (no virtual view). Used by <see cref="Clone"/> in parallel mode.
+    /// </summary>
+    private void CloneChildrenFromWorld(Entity sourceRoot, Entity cloneRoot)
+    {
+        if (!_world.Hierarchy.HasChildren(_world, sourceRoot))
+            return;
+
+        var stack = ArrayPool<Entity>.Shared.Rent(32);
+        var cloneStack = ArrayPool<Entity>.Shared.Rent(32);
+        var stackCount = 0;
+
+        try
+        {
+            foreach (var child in _world.Hierarchy.EnumerateChildren(_world, sourceRoot))
+            {
+                if (stackCount >= stack.Length)
+                {
+                    GrowPooled(ref stack, stackCount);
+                    GrowPooled(ref cloneStack, stackCount);
+                }
+                stack[stackCount] = child;
+                cloneStack[stackCount] = cloneRoot;
+                stackCount++;
+            }
+
+            while (stackCount > 0)
+            {
+                stackCount--;
+                var srcChild = stack[stackCount];
+                var cloneParent = cloneStack[stackCount];
+
+                if (!_world.TryGetLocation(srcChild, out var childLocation))
+                    throw new InvalidOperationException(
+                        $"Clone failed: child entity {srcChild} has no location. " +
+                        "The source entity may be corrupted.");
+
+                var cloneChild = CreateCore();
+                int batchIdx;
+                if (_deferredEntities)
+                {
+                    // CreateCore (via CreateDeferredImpl) always allocates a batch slot
+                    // and sets _lastCreated, so TryGetPendingBatch must succeed.
+                    if (!TryGetPendingBatch(cloneChild, out batchIdx))
+                    {
+                        throw new InvalidOperationException(
+                            $"Clone: deferred clone child {cloneChild} has no pending batch slot.");
+                    }
+                }
+                else
+                    batchIdx = _frozen.PendingBatch[cloneChild.Id];
+
+                var archetype = childLocation.Archetype;
+                var sourceRow = childLocation.RowIndex;
+                var sig = archetype.Signature.AsSpan();
+                for (var i = 0; i < sig.Length; i++)
+                {
+                    var ct = sig[i];
+                    var size = ComponentSizeCache.GetSize(ComponentRegistry.Shared.GetType(ct));
+                    var offset = ReserveBatchBufSpace(size);
+                    unsafe { fixed (byte* ptr = &_frozen.BatchBuf[offset]) archetype.ReadComponentRaw(i, sourceRow, ptr); }
+                    CommitBatchComponent(batchIdx, ct, offset, size);
+                }
+                AddChildCore(cloneParent, cloneChild);
+
+                foreach (var grandChild in _world.Hierarchy.EnumerateChildren(_world, srcChild))
+                {
+                    if (stackCount >= stack.Length)
+                    {
+                        GrowPooled(ref stack, stackCount);
+                        GrowPooled(ref cloneStack, stackCount);
+                    }
+                    stack[stackCount] = grandChild;
+                    cloneStack[stackCount] = cloneChild;
+                    stackCount++;
+                }
+            }
+        }
+        finally
+        {
+            ArrayPool<Entity>.Shared.Return(stack);
+            ArrayPool<Entity>.Shared.Return(cloneStack);
+        }
     }
 }
