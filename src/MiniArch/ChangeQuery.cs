@@ -11,9 +11,8 @@ namespace MiniArch;
 /// <para>
 /// By default the cursor tracks entities that have component <typeparamref name="T"/>. Use the
 /// <see cref="With{TU}"/>, <see cref="Without{TU}"/>, and <see cref="WithAny{TU}"/> fluent methods
-/// to narrow the tracked set. Fluent methods must be called before the first call to either
-/// <see cref="ModifiedChunks"/> or <see cref="Transitions"/>; after consumption begins the filter
-/// is frozen.
+/// to narrow the tracked set. Fluent methods throw <see cref="InvalidOperationException"/> if called
+/// after the first call to either <see cref="ModifiedChunks"/> or <see cref="Transitions"/>.
 /// </para>
 /// <para>
 /// After a snapshot save/load, observer state resets. Call <see cref="World.Track{T}"/> again
@@ -27,6 +26,7 @@ public sealed class ChangeQuery<T> where T : unmanaged
     private QueryDescription _filter;
     private long _valueCursor;
     private int _transitionCursor;
+    private bool _consumed;
 
     internal ChangeQuery(World world)
     {
@@ -36,31 +36,46 @@ public sealed class ChangeQuery<T> where T : unmanaged
     }
 
     /// <summary>
-    /// Adds a required component to the change-query filter. Must be called before the first
+    /// Adds a required component to the change-query filter.
+    /// Throws <see cref="InvalidOperationException"/> if called after the first
     /// <see cref="ModifiedChunks"/> or <see cref="Transitions"/> enumeration.
     /// </summary>
     public ChangeQuery<T> With<TU>() where TU : unmanaged
     {
+        if (_consumed)
+            throw new InvalidOperationException(
+                "Cannot modify the filter after ModifiedChunks() or Transitions() has been called. " +
+                "Configure With/Without/WithAny before the first enumeration.");
         _filter = _filter.With<TU>();
         return this;
     }
 
     /// <summary>
-    /// Adds an excluded component to the change-query filter. Must be called before the first
+    /// Adds an excluded component to the change-query filter.
+    /// Throws <see cref="InvalidOperationException"/> if called after the first
     /// <see cref="ModifiedChunks"/> or <see cref="Transitions"/> enumeration.
     /// </summary>
     public ChangeQuery<T> Without<TU>() where TU : unmanaged
     {
+        if (_consumed)
+            throw new InvalidOperationException(
+                "Cannot modify the filter after ModifiedChunks() or Transitions() has been called. " +
+                "Configure With/Without/WithAny before the first enumeration.");
         _filter = _filter.Without<TU>();
         return this;
     }
 
     /// <summary>
-    /// Adds an any-match component to the change-query filter. Must be called before the first
+    /// Adds an any-match component to the change-query filter.
+    /// Throws <see cref="InvalidOperationException"/> if called after the first
     /// <see cref="ModifiedChunks"/> or <see cref="Transitions"/> enumeration.
     /// </summary>
     public ChangeQuery<T> WithAny<TU>() where TU : unmanaged
     {
+        if (_consumed)
+            throw new InvalidOperationException(
+                "Cannot modify the filter after ModifiedChunks() or Transitions() has been called. " +
+                "Configure With/Without/WithAny before the first enumeration.");
         _filter = _filter.WithAny<TU>();
         return this;
     }
@@ -72,6 +87,7 @@ public sealed class ChangeQuery<T> where T : unmanaged
     /// </summary>
     public IEnumerable<ChunkView> ModifiedChunks()
     {
+        _consumed = true;
         var query = _world.Query(_filter);
         var snapshotEpoch = _world.CurrentWriteEpoch;
         var result = new List<ChunkView>();
@@ -99,6 +115,7 @@ public sealed class ChangeQuery<T> where T : unmanaged
     /// </summary>
     public IEnumerable<Transition> Transitions()
     {
+        _consumed = true;
         // Build (or reuse) a QueryCache from the filter so we can use its
         // pre-computed mask-based archetype matching.
         var cache = _world.Query(_filter).Advanced;

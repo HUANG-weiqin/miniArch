@@ -165,4 +165,117 @@ public class ChangeQueryFilterTests
         Assert.Equal(TransitionKind.Entered, ts[0].Kind);
         Assert.Equal(e4, ts[0].Entity);
     }
+
+    // ── Multi-cursor sharing ───────────────────────────────────────
+
+    [Fact]
+    public void Two_cursors_independent_progress()
+    {
+        var world = new World();
+        var cursor1 = world.Track<HP>();
+        var cursor2 = world.Track<HP>();
+
+        // Both see the same first entity
+        var e1 = world.Create(new HP(100));
+        var ts1 = cursor1.Transitions().ToList();
+        Assert.Single(ts1);
+        Assert.Equal(TransitionKind.Entered, ts1[0].Kind);
+        Assert.Equal(e1, ts1[0].Entity);
+
+        var ts2 = cursor2.Transitions().ToList();
+        Assert.Single(ts2);
+        Assert.Equal(TransitionKind.Entered, ts2[0].Kind);
+        Assert.Equal(e1, ts2[0].Entity);
+
+        // Both see the same second entity
+        var e2 = world.Create(new HP(50));
+        ts1 = cursor1.Transitions().ToList();
+        Assert.Single(ts1);
+        Assert.Equal(TransitionKind.Entered, ts1[0].Kind);
+        Assert.Equal(e2, ts1[0].Entity);
+
+        ts2 = cursor2.Transitions().ToList();
+        Assert.Single(ts2);
+        Assert.Equal(TransitionKind.Entered, ts2[0].Kind);
+        Assert.Equal(e2, ts2[0].Entity);
+
+        // Both fully drained
+        Assert.Empty(cursor1.Transitions());
+        Assert.Empty(cursor2.Transitions());
+    }
+
+    [Fact]
+    public void Two_cursors_staggered_consumption()
+    {
+        var world = new World();
+        var cursor1 = world.Track<HP>();
+        var cursor2 = world.Track<HP>();
+
+        // Create 3 entities (3 Entered entries in log)
+        world.Create(new HP(10));
+        world.Create(new HP(20));
+        world.Create(new HP(30));
+
+        // cursor1 drains all 3
+        var ts1 = cursor1.Transitions().ToList();
+        Assert.Equal(3, ts1.Count);
+        Assert.True(ts1.All(t => t.Kind == TransitionKind.Entered));
+
+        // Create 1 more entity (1 more Entered)
+        world.Create(new HP(40));
+
+        // cursor2 still at position 0 → sees all 4
+        var ts2 = cursor2.Transitions().ToList();
+        Assert.Equal(4, ts2.Count);
+        Assert.True(ts2.All(t => t.Kind == TransitionKind.Entered));
+
+        // cursor1 only sees the new one
+        ts1 = cursor1.Transitions().ToList();
+        Assert.Single(ts1);
+        Assert.Equal(TransitionKind.Entered, ts1[0].Kind);
+
+        // Both fully drained
+        Assert.Empty(cursor1.Transitions());
+        Assert.Empty(cursor2.Transitions());
+    }
+
+    [Fact]
+    public void Two_cursors_different_filters()
+    {
+        var world = new World();
+        var cursor1 = world.Track<HP>().Without<Dead>();
+        var cursor2 = world.Track<HP>();
+
+        // Create entity {HP} → both see Entered
+        var e = world.Create(new HP(100));
+        var ts1 = cursor1.Transitions().ToList();
+        Assert.Single(ts1);
+        Assert.Equal(TransitionKind.Entered, ts1[0].Kind);
+        Assert.Equal(e, ts1[0].Entity);
+
+        var ts2 = cursor2.Transitions().ToList();
+        Assert.Single(ts2);
+        Assert.Equal(TransitionKind.Entered, ts2[0].Kind);
+        Assert.Equal(e, ts2[0].Entity);
+
+        // Add Dead → cursor1 sees Exited (entity left {HP,!Dead}),
+        // cursor2 sees nothing (HP still present)
+        world.Add(e, new Dead());
+        ts1 = cursor1.Transitions().ToList();
+        Assert.Single(ts1);
+        Assert.Equal(TransitionKind.Exited, ts1[0].Kind);
+
+        ts2 = cursor2.Transitions().ToList();
+        Assert.Empty(ts2);
+
+        // Remove Dead → cursor1 sees Entered (re-entered {HP,!Dead}),
+        // cursor2 sees nothing
+        world.Remove<Dead>(e);
+        ts1 = cursor1.Transitions().ToList();
+        Assert.Single(ts1);
+        Assert.Equal(TransitionKind.Entered, ts1[0].Kind);
+
+        ts2 = cursor2.Transitions().ToList();
+        Assert.Empty(ts2);
+    }
 }
