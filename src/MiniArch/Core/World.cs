@@ -91,6 +91,7 @@ public sealed partial class World : IDisposable
     // ── Change tracking ─────────────────────────────────────────────
     internal long _writeEpoch;                                  // monotonic, long = no wraparound
     private readonly List<Core.TransitionEntry> _transitionLog = new();
+    private int _transitionLogGeneration;                      // incremented on clear
     private bool _anyTrackingActive;                           // world-level gate
 
     /// <summary>
@@ -216,8 +217,27 @@ public sealed partial class World : IDisposable
     // ── Change tracking accessors ───────────────────────────────────
     internal bool IsChangeTrackingActive => _anyTrackingActive;
     internal long CurrentWriteEpoch => _writeEpoch;
+    internal int TransitionLogGeneration => _transitionLogGeneration;
     internal IReadOnlyList<Core.TransitionEntry> GetTransitionLogInternal() => _transitionLog;
     internal void DebugClearTransitionLog() => _transitionLog.Clear();
+
+    /// <summary>
+    /// Clears the transition log, freeing consumed entries. The internal array is reused
+    /// (no GC pressure). Call this after all <see cref="ChangeQuery{T}"/> consumers have
+    /// drained their transitions — typically at the end of each frame after rendering
+    /// systems have processed <see cref="ChangeQuery{T}.Transitions"/>.
+    /// </summary>
+    /// <remarks>
+    /// Entries not yet consumed by any cursor are discarded. Ensure all interested
+    /// consumers have called <see cref="ChangeQuery{T}.Transitions"/> before clearing.
+    /// After clearing, existing cursors automatically reset (via cursor clamp) and
+    /// will correctly see only transitions appended after the clear.
+    /// </remarks>
+    public void ClearTransitionLog()
+    {
+        _transitionLog.Clear();
+        _transitionLogGeneration++;
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void AppendTransition(Entity e, Core.Archetype? old, Core.Archetype? @new)

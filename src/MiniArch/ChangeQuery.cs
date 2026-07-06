@@ -25,7 +25,8 @@ public sealed class ChangeQuery<T> where T : unmanaged
     private readonly ComponentType _type;
     private QueryDescription _filter;
     private long _valueCursor;
-    private int _transitionCursor;
+    private long _transitionCursor;
+    private int _transitionLogGeneration;
     private bool _consumed;
 
     internal ChangeQuery(World world)
@@ -120,11 +121,19 @@ public sealed class ChangeQuery<T> where T : unmanaged
         // pre-computed mask-based archetype matching.
         var cache = _world.Query(_filter).Advanced;
         var log = _world.GetTransitionLogInternal();
-        var end = log.Count;
-        var result = new List<Transition>();
-        for (int i = _transitionCursor; i < end; i++)
+        var end = (long)log.Count;
+
+        // If the log was cleared (ClearTransitionLog), reset cursor to start.
+        if (_transitionLogGeneration != _world.TransitionLogGeneration)
         {
-            var entry = log[i];
+            _transitionCursor = 0;
+            _transitionLogGeneration = _world.TransitionLogGeneration;
+        }
+
+        var result = new List<Transition>();
+        for (long i = _transitionCursor; i < end; i++)
+        {
+            var entry = log[(int)i];
             var oldMatch = entry.OldArchetype is { } o && cache.Matches(o);
             var newMatch = entry.NewArchetype is { } n && cache.Matches(n);
             if (!oldMatch && newMatch)
