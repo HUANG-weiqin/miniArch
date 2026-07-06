@@ -15,7 +15,7 @@ updated: 2026-07-04
   - `true`：返回 placeholder `Entity(-1, seq)`，不碰任何 World（多 host lockstep）
 - 这个模块**不负责**：
   - ~~跨网络传输~~ → 传输层未实现（`socket.Send` 是伪代码），见 `kb-lockstep-playbook.md` "尚未解决的网络问题"
-  - ~~序列化协议~~ → **已实现**，见 `kb-command-stream.md` "FrameDelta wire format" 段（`AsSpan()` / `Deserialize()` 开箱即用）
+   - ~~序列化协议~~ → **已实现**，见 `kb-command-stream.md` "FrameDelta wire format" 段（`AsSpan()` / `FromWire()` / `Deserialize()` 开箱即用）
   - host 间的时序协调（lockstep 框架的事）→ **端到端指南**见 `kb-lockstep-playbook.md`
   - 跨帧的 entity 引用走真实 Entity ID（见 TryResolvePlaceholder 节）
 

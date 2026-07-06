@@ -43,8 +43,8 @@ stream.DeferredEntities = true;  // Create() 返回 placeholder Entity(-1, seq)
 
 ┌─ Host B ──────────────────────────────────────────────┐
 │ 2d. 接收 N 个 host 的 delta                            │
-│   var deltaA = FrameDelta.Deserialize(socketA.Recv());│
-│   var deltaB = FrameDelta.Deserialize(socketB.Recv());│
+│   var deltaA = FrameDelta.FromWire(socketA.Recv());   │
+│   var deltaB = FrameDelta.FromWire(socketB.Recv());   │
 │                                                        │
 │ 2e. 按固定 host 顺序 replay                            │
 │   world.Replay(deltaA);  // placeholder→local id 映射  │
@@ -106,7 +106,7 @@ stream.DeferredEntities = true;  // Create() 返回 placeholder Entity(-1, seq)
 |------|---------|
 | 步骤 1 初始化 | `kb-deferred-create-design.md`（DeferredEntities flag 全貌） |
 | 步骤 2a-2b 录制+生成 delta | `kb-command-stream.md`（CommandStream API + FrameDelta wire format） |
-| 步骤 2c-2d 序列化 | `kb-command-stream.md`（AsSpan / Deserialize） |
+| 步骤 2c-2d 序列化 | `kb-command-stream.md`（AsSpan / FromWire / Deserialize） |
 | 步骤 2e replay | `kb-command-stream.md`（ReplayCore + EnsureReplayReservation） |
 | 步骤 2g checksum | `kb-snapshot-persistence.md`（Checksum 双模式段） |
 | Rollback 基础 | `kb-snapshot-persistence.md`（CaptureState/RestoreState） |

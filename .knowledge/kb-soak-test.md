@@ -12,7 +12,7 @@ updated: 2026-07-06
 
 - 核心职责：
   - 随机生成 Create / Destroy / Add / Set / Remove / Clone / AddChild / RemoveChild 操作序列
-  - 每帧执行 `CommandStream.Submit()` → 序列化为 `FrameDelta` → `Deserialize()` → `Replay()` 到影子世界
+   - 每帧执行 `CommandStream.Submit()` → 序列化为 `FrameDelta` → `delta.Deserialize()`（实例方法零 GC）→ `Replay()` 到影子世界
   - 每帧校验：`WorldValidator` 结构不变量 + `CanonicalChecksum` 双世界一致 + `EntityCount` 对齐
   - 每 10000 帧执行全量 `WorldDiff` + `WorldSnapshot` 往返 + `World.Clone` 校验
 - 这个测试不负责：

@@ -130,7 +130,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - 9 种 op kind（`DeltaOpKind` 枚举 0x01-0x09），unknown byte 立即 throw 提示 version mismatch（lockstep fail-fast）
 - Varint codec显式拒绝 5 字节 / 32 位溢出
 - `AsSpan()` 直接 `new(_buffer, 0, _length)` —— 零拷贝网络发送
-- `Deserialize` 只是 `wire.ToArray()` + 一次走读计数
+- `FromWire()` 一次性分配 + 走读计数；`Deserialize(wire)` 实例方法复用 `_buffer`，容量足时零 GC 分配
 - 两种 entity-id 模式（placeholder vs real），wire format 相同，由 `CommandStream.DeferredEntities` flag 控制 producer 行为
 
 ### 10. World（编排者）

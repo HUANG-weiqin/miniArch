@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream/ParallelCommandStream typed-store append-only recorder, compatible with FrameDelta. The per-entity deduplicating CommandBuffer was removed (YAGNI) — CommandStream is now the sole recorder.
-updated: 2026-07-06 (恢复 stale existing entity 的录制期过滤，避免 Submit / Replay 分叉)
+updated: 2026-07-06 (FrameDelta Deserialize API 清理: 实例方法零 GC 复用 + FromWire 显式分配; Submit/Snapshot create emission 零临时数组)
 ---
 # Command Stream Runtime
 
@@ -316,7 +316,7 @@ dotnet-trace report profiles/commandstream-*.nettrace topN -n 50
 
 ### 帧同步已实现和尚缺的部分
 
-1. ~~**序列化**~~ → 已完成。`delta.AsSpan()` + `FrameDelta.Deserialize(ReadOnlySpan<byte>)` 开箱即用。
+1. ~~**序列化**~~ → 已完成。`delta.AsSpan()` + `FrameDelta.FromWire(ReadOnlySpan<byte>)` 开箱即用；热路径可用 `reusableDelta.Deserialize(wire)` 实例方法稳态零 GC。
 2. **State checksum**：无需新 API。`WorldSnapshot.Save` 输出的字节流可以直接喂给 SHA256/XXHash64 做决定性 hash——前提是两个 world 走过相同的 delta 历史（lockstep 标准用法）。测试中 `HashWorld(World)` 已实现此模式（`tests/MiniArch.Tests/Core/FrameDeltaDeterminismTests.cs`）。**注意**：Save 的字节依赖 archetype 创建顺序和 swap-remove 历史，因此只在"同 delta 序列"场景下稳定；不做"逻辑等价但路径不同"的规范化（YAGNI）。
 3. **Divergent peer resync**：`EnsureReplayReservation` 抛异常而非尝试对齐。对抗性 netcode 需要 snapshot diff + 重放补救。
 
@@ -339,10 +339,16 @@ FrameDelta 内部 `byte[] _buffer` 就是 wire format：每个 op 编码为 `[1 
 var wire = delta.AsSpan();           // ReadOnlySpan<byte>
 socket.Send(wire);
 
-// 收
+// 收（一次性分配）
 var received = socket.Receive();
-var delta = FrameDelta.Deserialize(received);
+var delta = FrameDelta.FromWire(received);
 world.Replay(delta);
+
+// 收（热路径，复用实例零 GC）
+var reusable = new FrameDelta();
+// ... loop on receive ...
+reusable.Deserialize(received);
+world.Replay(reusable);
 ```
 
 **约束：**
