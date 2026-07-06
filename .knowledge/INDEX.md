@@ -21,7 +21,8 @@
 | MiniArch.Benchmarks（对比数据） | `kb-ecs-comparison.md` |
 | HeroPipeline.Tests | 合并到 `kb-hero-pipeline-regression.md` "PipelineBenchmarkTests" 段 |
 | HeroComing.Perf（回归门禁） | `kb-hero-pipeline-regression.md` |
-| **浸没测试（必读）** | **`kb-soak-test.md`**（**🚨 这个测试存在！所有 miniArch 改动后应运行** — 长周期随机操作正确性验证器，已发现 4 个 Submit/Replay 不一致 bug） |
+| **浸没测试（必读）** | **`kb-soak-test.md`**（**🚨 这个测试存在！所有 miniArch 改动后应运行** — 长周期随机操作正确性验证器，已发现 6 个 Submit/Replay 不一致 bug） |
+| **安全证明报告** | **`kb-safety-proof.md`**（2026-07-06 正式库安全证明——224 seed × 5M 帧全 PASS，15 条代码路径审计零分歧） |
 | GameTickSim.Perf（场景基准） | `kb-gameticksim-scenarios.md` |
 | CommandStreamGame.Perf（CommandStream 真实游戏稳态压测） | `kb-commandstream-game-perf.md` |
 | samples/BulletLockstep.Demo（多 host 弹幕游戏集成测试） | `kb-bullet-lockstep-demo.md`（9 个 slice 端到端压测库全部公共能力：placeholder lockstep / archetype 迁移 / hierarchy / chunked / 持久化 / 回滚） |
