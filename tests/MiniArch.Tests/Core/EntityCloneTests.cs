@@ -861,6 +861,88 @@ public sealed class CommandBufferCloneTests
             "Temporary Lists and lambda closures should be eliminated.");
     }
 
+    [Fact]
+    public void Clone_materialized_source_pending_Set_overlay()
+    {
+        var world = new World();
+        var src = world.Create(new Position(1, 2));
+        var buffer = new CommandStream(world);
+        buffer.Set(src, new Position(5, 6));
+        var clone = buffer.Clone(src);
+        buffer.Submit();
+
+        Assert.True(world.TryGet(clone, out Position pos));
+        Assert.Equal(new Position(5, 6), pos);
+    }
+
+    [Fact]
+    public void Clone_materialized_source_pending_Add_overlay()
+    {
+        var world = new World();
+        var src = world.Create(new Position(1, 2));
+        var buffer = new CommandStream(world);
+        buffer.Add(src, new Velocity(3, 4));
+        var clone = buffer.Clone(src);
+        buffer.Submit();
+
+        Assert.True(world.TryGet(clone, out Position _));
+        Assert.True(world.TryGet(clone, out Velocity v));
+        Assert.Equal(new Velocity(3, 4), v);
+    }
+
+    [Fact]
+    public void Deep_clone_preserves_hierarchy_in_buffer()
+    {
+        var world = new World();
+        var root = world.Create(new Position(1, 2));
+        var mid = world.Create(new Velocity(3, 4));
+        var leaf = world.Create(new Health(100));
+        world.AddChild(root, mid);
+        world.AddChild(mid, leaf);
+        var buffer = new CommandStream(world);
+        var clone = buffer.Clone(root);
+        buffer.Submit();
+
+        var cloneMids = world.EnumerateChildren(clone).ToChildList();
+        Assert.Single(cloneMids);
+        var cloneMid = cloneMids[0];
+        Assert.True(world.TryGet(cloneMid, out Velocity _));
+
+        var cloneLeaves = world.EnumerateChildren(cloneMid).ToChildList();
+        Assert.Single(cloneLeaves);
+        Assert.True(world.TryGet(cloneLeaves[0], out Health _));
+    }
+
+    [Fact]
+    public void Clone_snapshot_isolation_between_two_clones()
+    {
+        var world = new World();
+        var src = world.Create(new Position(1, 2), new Velocity(3, 4));
+        var buffer = new CommandStream(world);
+
+        var clone1 = buffer.Clone(src);
+        buffer.Set(src, new Position(9, 9));
+        var clone2 = buffer.Clone(src);
+        buffer.Submit();
+
+        Assert.True(world.TryGet(clone1, out Position pos1));
+        Assert.Equal(new Position(1, 2), pos1);
+
+        Assert.True(world.TryGet(clone2, out Position pos2));
+        Assert.Equal(new Position(9, 9), pos2);
+    }
+
+    [Fact]
+    public void Parallel_clone_pending_source_throws()
+    {
+        var world = new World();
+        var buffer = new ParallelCommandStream(world);
+        var src = buffer.Create();
+        buffer.Add(src, new Position(1, 2));
+
+        Assert.Throws<NotSupportedException>(() => buffer.Clone(src));
+    }
+
     private static int CountEntities(MiniQueryCache query)
     {
         var total = 0;
