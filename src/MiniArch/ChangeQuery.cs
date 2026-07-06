@@ -1,8 +1,6 @@
 using System.Collections.Generic;
 using MiniArch.Core;
 
-#pragma warning disable IDE0051, IDE0052, CS0169 // _transitionCursor used by Task 6
-
 namespace MiniArch;
 
 /// <summary>
@@ -53,5 +51,24 @@ public sealed class ChangeQuery<T> where T : unmanaged
     /// <typeparamref name="T"/> since the last call.
     /// Materializes eagerly; cursor advances regardless of consumer enumeration depth.
     /// </summary>
-    public IEnumerable<Transition> Transitions() => throw new NotImplementedException();
+    public IEnumerable<Transition> Transitions()
+    {
+        var log = _world.GetTransitionLogInternal();
+        var end = log.Count;
+        var result = new List<Transition>();
+        for (int i = _transitionCursor; i < end; i++)
+        {
+            var entry = log[i];
+            var oldHas = entry.OldArchetype is { } o && o.ContainsComponent(_type);
+            var newHas = entry.NewArchetype is { } n && n.ContainsComponent(_type);
+            if (!oldHas && newHas)
+                result.Add(new Transition(TransitionKind.Entered, entry.Entity));
+            else if (oldHas && !newHas)
+                result.Add(new Transition(TransitionKind.Exited, entry.Entity));
+            // both true or both false: membership in {T} unchanged -> skip
+        }
+
+        _transitionCursor = end;
+        return result;
+    }
 }
