@@ -26,6 +26,9 @@ public static class WorldSnapshot
 
     private static readonly ConcurrentDictionary<Type, ColumnCodec> ColumnCodecs = new();
 
+    [ThreadStatic] private static List<(Entity Entity, Archetype Archetype, int Row)>? _csEntries;
+    [ThreadStatic] private static List<(int ChildId, int ParentId)>? _csRelations;
+
     /// <summary>
     /// Writes a world snapshot.
     /// </summary>
@@ -272,7 +275,8 @@ public static class WorldSnapshot
 
     private static void AppendHierarchyRelations(IncrementalHash hash, World world)
     {
-        var relations = new List<(int ChildId, int ParentId)>();
+        var relations = _csRelations ??= [];
+        relations.Clear();
         foreach (var (child, parent) in world.Hierarchy.EnumerateLiveRelations(world))
             relations.Add((child.Id, parent.Id));
         relations.Sort((a, b) => a.ChildId.CompareTo(b.ChildId));
@@ -298,7 +302,8 @@ public static class WorldSnapshot
         ArgumentNullException.ThrowIfNull(world);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
-        var entries = new List<(Entity Entity, Archetype Archetype, int Row)>();
+        var entries = _csEntries ??= [];
+        entries.Clear();
         foreach (var arch in world.Archetypes)
         {
             if (arch.EntityCount == 0) continue;

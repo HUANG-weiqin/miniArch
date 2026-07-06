@@ -13,6 +13,11 @@ namespace MiniArch.Diagnostics;
 /// </remarks>
 public static class WorldValidator
 {
+    [ThreadStatic] private static List<ValidationIssue>? _issues;
+    [ThreadStatic] private static HashSet<(Archetype Archetype, int Row)>? _usedSlots;
+    [ThreadStatic] private static HashSet<int>? _freeSeen;
+    [ThreadStatic] private static HashSet<int>? _archSeen;
+
     /// <summary>
     /// Runs all validation checks on <paramref name="world"/> and returns
     /// a report of any issues found.
@@ -20,7 +25,12 @@ public static class WorldValidator
     public static ValidationResult Validate(World world)
     {
         ArgumentNullException.ThrowIfNull(world);
-        var issues = new List<ValidationIssue>();
+
+        var issues = _issues ??= [];
+        issues.Clear();
+        (_usedSlots ??= []).Clear();
+        (_freeSeen ??= []).Clear();
+        (_archSeen ??= []).Clear();
 
         CheckEntitySlots(world, issues);
         CheckFreeList(world, issues);
@@ -33,7 +43,7 @@ public static class WorldValidator
     private static void CheckEntitySlots(World world, List<ValidationIssue> issues)
     {
         var records = world.EntityRecords;
-        var usedSlots = new HashSet<(Archetype, int)>();
+        var usedSlots = _usedSlots!;
 
         for (var id = 0; id < records.Length; id++)
         {
@@ -64,7 +74,7 @@ public static class WorldValidator
     {
         var freeList = world.FreeList;
         var records = world.EntityRecords;
-        var seenIds = new HashSet<int>();
+        var seenIds = _freeSeen!;
 
         for (var i = 0; i < freeList.Length; i++)
         {
@@ -132,7 +142,7 @@ public static class WorldValidator
 
     private static void CheckArchetypes(World world, List<ValidationIssue> issues)
     {
-        var seenEntityIds = new HashSet<int>();
+        var seenEntityIds = _archSeen!;
 
         foreach (var arch in world.Archetypes)
         {

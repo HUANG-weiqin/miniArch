@@ -235,21 +235,51 @@ internal sealed class HierarchyTable
         return count;
     }
 
-    public IEnumerable<(Entity Child, Entity Parent)> EnumerateLiveRelations(World world)
+    public LiveRelationEnumerable EnumerateLiveRelations(World world)
+        => new(this, world);
+
+    public readonly struct LiveRelationEnumerable(HierarchyTable table, World world)
     {
-        var slotCount = world.EntitySlotCount;
-        for (var childId = 0; childId < slotCount && childId < _parentByChild.Length; childId++)
+        private readonly HierarchyTable _table = table;
+        private readonly int _limit = Math.Min(world.EntitySlotCount, table._parentByChild.Length);
+
+        public Enumerator GetEnumerator() => new(_table, _limit, world);
+
+        public struct Enumerator
         {
-            var parent = _parentByChild[childId];
-            if (parent == NoEntity)
+            private readonly HierarchyTable _table;
+            private readonly World _world;
+            private readonly int _limit;
+            private int _childId;
+
+            internal Enumerator(HierarchyTable table, int limit, World world)
             {
-                continue;
+                _table = table;
+                _limit = limit;
+                _world = world;
+                _childId = -1;
             }
 
-            var child = new Entity(childId, world.GetEntityVersion(childId));
-            if (world.IsAlive(child) && world.IsAlive(parent))
+            public (Entity Child, Entity Parent) Current { get; private set; }
+
+            public bool MoveNext()
             {
-                yield return (child, parent);
+                _childId++;
+                while (_childId < _limit)
+                {
+                    var parent = _table._parentByChild[_childId];
+                    if (parent != NoEntity)
+                    {
+                        var child = new Entity(_childId, _world.GetEntityVersion(_childId));
+                        if (_world.IsAlive(child) && _world.IsAlive(parent))
+                        {
+                            Current = (child, parent);
+                            return true;
+                        }
+                    }
+                    _childId++;
+                }
+                return false;
             }
         }
     }
