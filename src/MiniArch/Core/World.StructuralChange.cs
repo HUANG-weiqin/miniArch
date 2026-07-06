@@ -187,6 +187,7 @@ public sealed partial class World
         ComponentType componentType,
         byte* source)
     {
+        var sourceArchetype = sourceInfo.Archetype!;
         var rowIdx = MoveEntityCore(entity, sourceInfo, destination);
         try
         {
@@ -199,6 +200,7 @@ public sealed partial class World
             throw;
         }
         FinishMoveEntity(entity, sourceInfo, destination, rowIdx);
+        AppendTransition(entity, sourceArchetype, destination);
     }
 
     private Archetype GetOrCreateAddDestinationArchetype(Archetype source, ComponentType componentType)

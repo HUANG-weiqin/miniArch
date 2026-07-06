@@ -1119,6 +1119,7 @@ public sealed partial class World : IDisposable
 #endif
         record.Archetype = archetype;
         record.RowIndex = rowIndex;
+        AppendTransition(entity, null, archetype);
         return rowIndex;
     }
 
