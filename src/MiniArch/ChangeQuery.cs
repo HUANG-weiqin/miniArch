@@ -1,6 +1,7 @@
+using System.Collections.Generic;
 using MiniArch.Core;
 
-#pragma warning disable IDE0051, IDE0052, CS0169 // Fields used by later tasks
+#pragma warning disable IDE0051, IDE0052, CS0169 // _transitionCursor used by Task 6
 
 namespace MiniArch;
 
@@ -22,15 +23,35 @@ public sealed class ChangeQuery<T> where T : unmanaged
     }
 
     /// <summary>
-    /// Enumerates chunks whose component <typeparamref name="T"/> was written since the last call.
+    /// Returns chunks whose component <typeparamref name="T"/> was written since the last call.
+    /// Materializes eagerly; cursor advances regardless of consumer enumeration depth.
     /// </summary>
-    public IEnumerable<ChunkView> ModifiedChunks() => throw new NotImplementedException();
+    public IEnumerable<ChunkView> ModifiedChunks()
+    {
+        var query = _world.Query(new QueryDescription().With<T>());
+        var snapshotEpoch = _world.CurrentWriteEpoch;
+        var result = new List<ChunkView>();
+        var chunks = query.GetChunks().ToArray();
+        for (var ci = 0; ci < chunks.Length; ci++)
+        {
+            var chunk = chunks[ci];
+            var arch = chunk.Archetype;
+            if (!arch.TryGetComponentIndex(_type, out var col))
+                continue;
+
+            var versions = arch._columnVersions;
+            if (versions is not null && versions[col] > _valueCursor)
+                result.Add(chunk);
+        }
+
+        _valueCursor = snapshotEpoch;
+        return result;
+    }
 
     /// <summary>
-    /// Enumerates entities that entered or exited the set of entities having component
+    /// Returns entities that entered or exited the set of entities having component
     /// <typeparamref name="T"/> since the last call.
+    /// Materializes eagerly; cursor advances regardless of consumer enumeration depth.
     /// </summary>
     public IEnumerable<Transition> Transitions() => throw new NotImplementedException();
 }
-
-#pragma warning restore IDE0051, IDE0052, CS0169

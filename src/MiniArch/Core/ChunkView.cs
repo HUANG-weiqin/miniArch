@@ -57,6 +57,9 @@ public readonly struct ChunkView
         Debug.Assert(_startRow >= 0);
     }
 
+    /// <summary>Gets the backing archetype.</summary>
+    internal Core.Archetype Archetype => _archetype;
+
     /// <summary>Number of entities in this chunk (or slice).</summary>
     public int Count => _rowCount >= 0
         ? _rowCount
