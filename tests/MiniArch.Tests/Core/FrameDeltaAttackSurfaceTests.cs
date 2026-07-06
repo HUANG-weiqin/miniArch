@@ -58,7 +58,7 @@ public sealed class FrameDeltaAttackSurfaceTests
     [Fact]
     public void Validate_rejects_create_without_reserve()
     {
-        var delta = FrameDelta.Deserialize([0x03, 0x01, 0x01, 0x00]);
+        var delta = FrameDelta.FromWire([0x03, 0x01, 0x01, 0x00]);
 
         var ex = Assert.Throws<InvalidOperationException>(() => delta.Validate());
         Assert.Contains("without preceding Reserve", ex.Message);
@@ -67,7 +67,7 @@ public sealed class FrameDeltaAttackSurfaceTests
     [Fact]
     public void Replay_without_validate_accepts_create_without_reserve_and_leaks_ghost()
     {
-        var delta = FrameDelta.Deserialize([0x03, 0x01, 0x01, 0x00]);
+        var delta = FrameDelta.FromWire([0x03, 0x01, 0x01, 0x00]);
         var world = new World();
 
         new CommandStream(world).Replay(delta); // no Validate → ghost created
@@ -88,7 +88,7 @@ public sealed class FrameDeltaAttackSurfaceTests
         buf.AddRange([(byte)DeltaOpKind.Reserve, .. Enc(new Entity(0, 1))]);
         buf.AddRange([(byte)DeltaOpKind.Create, .. Enc(new Entity(0, 1)), 0x00]);
         buf.AddRange([(byte)DeltaOpKind.Create, .. Enc(new Entity(0, 1)), 0x00]);
-        var delta = FrameDelta.Deserialize(buf.ToArray());
+        var delta = FrameDelta.FromWire(buf.ToArray());
 
         var ex = Assert.Throws<InvalidOperationException>(() => delta.Validate());
         Assert.Contains("without preceding Reserve", ex.Message);
@@ -101,7 +101,7 @@ public sealed class FrameDeltaAttackSurfaceTests
         buf.AddRange([(byte)DeltaOpKind.Reserve, .. Enc(new Entity(0, 1))]);
         buf.AddRange([(byte)DeltaOpKind.Create, .. Enc(new Entity(0, 1)), 0x00]);
         buf.AddRange([(byte)DeltaOpKind.Create, .. Enc(new Entity(0, 1)), 0x00]);
-        var delta = FrameDelta.Deserialize(buf.ToArray());
+        var delta = FrameDelta.FromWire(buf.ToArray());
         var world = new World();
 
         new CommandStream(world).Replay(delta); // no Validate → duplicate row leaked
@@ -119,7 +119,7 @@ public sealed class FrameDeltaAttackSurfaceTests
     {
         // Validate() only checks delta structure, not world allocator state.
         // The allocator-advance-before-throw is still a World.Replay issue.
-        var delta = FrameDelta.Deserialize([(byte)DeltaOpKind.Reserve, .. Enc(new Entity(5, 1))]);
+        var delta = FrameDelta.FromWire([(byte)DeltaOpKind.Reserve, .. Enc(new Entity(5, 1))]);
         delta.Validate(); // passes —delta structure is fine
 
         var world = new World();
@@ -220,7 +220,7 @@ public sealed class FrameDeltaAttackSurfaceTests
         buf.AddRange(V(healthType)); buf.AddRange(V(4)); buf.AddRange(System.BitConverter.GetBytes(1));
         buf.AddRange(V(healthType)); buf.AddRange(V(4)); buf.AddRange(System.BitConverter.GetBytes(100));
 
-        var delta = FrameDelta.Deserialize(buf.ToArray());
+        var delta = FrameDelta.FromWire(buf.ToArray());
 
         var ex = Assert.Throws<InvalidOperationException>(() => delta.Validate());
         Assert.Contains("Duplicate component type", ex.Message);
@@ -238,7 +238,7 @@ public sealed class FrameDeltaAttackSurfaceTests
         buf.AddRange(V(healthType)); buf.AddRange(V(4)); buf.AddRange(System.BitConverter.GetBytes(1));
         buf.AddRange(V(healthType)); buf.AddRange(V(4)); buf.AddRange(System.BitConverter.GetBytes(100));
 
-        var delta = FrameDelta.Deserialize(buf.ToArray());
+        var delta = FrameDelta.FromWire(buf.ToArray());
         var world = new World();
 
         new CommandStream(world).Replay(delta); // no Validate → last write wins
@@ -261,7 +261,7 @@ public sealed class FrameDeltaAttackSurfaceTests
         buf.AddRange([(byte)DeltaOpKind.Reserve, .. Enc(new Entity(0, 1))]);
         buf.AddRange([(byte)DeltaOpKind.Release, .. Enc(new Entity(0, 1))]);
         buf.AddRange([(byte)DeltaOpKind.Create, .. Enc(new Entity(0, 1)), 0x00]);
-        var delta = FrameDelta.Deserialize(buf.ToArray());
+        var delta = FrameDelta.FromWire(buf.ToArray());
 
         var ex = Assert.Throws<InvalidOperationException>(() => delta.Validate());
         Assert.Contains("without preceding Reserve", ex.Message);
@@ -276,7 +276,7 @@ public sealed class FrameDeltaAttackSurfaceTests
         buf.AddRange([(byte)DeltaOpKind.Reserve, .. Enc(new Entity(0, 1))]);
         buf.AddRange([(byte)DeltaOpKind.Create, .. Enc(new Entity(0, 1)), 0x00]);
         buf.AddRange([(byte)DeltaOpKind.Release, .. Enc(new Entity(0, 1))]);
-        var delta = FrameDelta.Deserialize(buf.ToArray());
+        var delta = FrameDelta.FromWire(buf.ToArray());
 
         var ex = Assert.Throws<InvalidOperationException>(() => delta.Validate());
         Assert.Contains("without preceding Reserve", ex.Message);
@@ -286,7 +286,7 @@ public sealed class FrameDeltaAttackSurfaceTests
     public void Validate_rejects_release_without_reserve()
     {
         // Release(0,1) without Reserve
-        var delta = FrameDelta.Deserialize([(byte)DeltaOpKind.Release, 0x00, 0x01]);
+        var delta = FrameDelta.FromWire([(byte)DeltaOpKind.Release, 0x00, 0x01]);
 
         var ex = Assert.Throws<InvalidOperationException>(() => delta.Validate());
         Assert.Contains("without preceding Reserve", ex.Message);
@@ -307,7 +307,7 @@ public sealed class FrameDeltaAttackSurfaceTests
             0xFE, 0xFF, 0xFF, 0xFF, 0x0F,  // id = -2
             0x00                              // version = 0
         };
-        var delta = FrameDelta.Deserialize(wire);
+        var delta = FrameDelta.FromWire(wire);
 
         var ex = Assert.Throws<InvalidOperationException>(() => delta.Validate());
         Assert.Contains("Invalid entity id", ex.Message);
@@ -322,7 +322,7 @@ public sealed class FrameDeltaAttackSurfaceTests
         buf.Add((byte)DeltaOpKind.Reserve);
         buf.AddRange(V(0));  // placeholder id: bias -1 → 0
         buf.AddRange(V(hugeSeq));
-        var delta = FrameDelta.Deserialize(buf.ToArray());
+        var delta = FrameDelta.FromWire(buf.ToArray());
 
         var ex = Assert.Throws<InvalidOperationException>(() => delta.Validate());
         Assert.Contains("exceeds max", ex.Message);
@@ -345,7 +345,7 @@ public sealed class FrameDeltaAttackSurfaceTests
         buf.Add((byte)DeltaOpKind.Destroy);
         buf.AddRange(V(id));
         buf.AddRange(V(1));
-        var delta = FrameDelta.Deserialize(buf.ToArray());
+        var delta = FrameDelta.FromWire(buf.ToArray());
 
         // Should not OOM —pre-scan skips non-alloc entity ids.
         var world = new World();
@@ -467,7 +467,7 @@ public sealed class FrameDeltaAttackSurfaceTests
         // 0x00 = component type, 0xFF,0xFF,0xFF,0xFF,0x07 = size = int.MaxValue
         var wire = new byte[] { 0x06, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0x07 };
 
-        var ex = Record.Exception(() => FrameDelta.Deserialize(wire));
+        var ex = Record.Exception(() => FrameDelta.FromWire(wire));
         Assert.IsType<InvalidOperationException>(ex);
     }
 }

@@ -1686,7 +1686,7 @@ public sealed class CommandStreamTests
 
         var delta = stream.Snapshot();
         stream.Submit();
-        new CommandStream(replica).Replay(FrameDelta.Deserialize(delta.AsSpan()));
+        new CommandStream(replica).Replay(FrameDelta.FromWire(delta.AsSpan()));
 
         Assert.False(source.IsAlive(cancelled));
         Assert.True(source.IsAlive(survivor));
@@ -1706,7 +1706,7 @@ public sealed class CommandStreamTests
 
         var delta = stream.Snapshot();
         stream.Submit();
-        new CommandStream(replica).Replay(FrameDelta.Deserialize(delta.AsSpan()));
+        new CommandStream(replica).Replay(FrameDelta.FromWire(delta.AsSpan()));
 
         Assert.True(source.TryGet(created, out Position p));
         Assert.Equal(new Position(1, 2), p);
@@ -1739,7 +1739,7 @@ public sealed class CommandStreamTests
 
         var delta = stream.Snapshot();
         stream.Submit();
-        new CommandStream(replica).Replay(FrameDelta.Deserialize(delta.AsSpan()));
+        new CommandStream(replica).Replay(FrameDelta.FromWire(delta.AsSpan()));
 
         Assert.True(source.TryGet(recycledSource, out Velocity srcVelocity));
         Assert.True(replica.TryGet(recycledReplica, out Velocity replicaVelocity));
@@ -1769,7 +1769,7 @@ public sealed class CommandStreamTests
 
         var delta = stream.Snapshot();
         stream.Submit();
-        new CommandStream(replica).Replay(FrameDelta.Deserialize(delta.AsSpan()));
+        new CommandStream(replica).Replay(FrameDelta.FromWire(delta.AsSpan()));
 
         Assert.True(source.TryGet(recycledSource, out Velocity srcVelocity));
         Assert.True(source.TryGet(recycledSource, out Health srcHealth));
@@ -1809,7 +1809,7 @@ public sealed class CommandStreamTests
 
         var delta = stream.Snapshot();
         stream.Submit();
-        new CommandStream(replica).Replay(FrameDelta.Deserialize(delta.AsSpan()));
+        new CommandStream(replica).Replay(FrameDelta.FromWire(delta.AsSpan()));
 
         Assert.True(source.TryGet(sourceRecycled, out Position srcPosition));
         Assert.True(replica.TryGet(replicaRecycled, out Position replicaPosition));
@@ -1925,7 +1925,7 @@ public sealed class CommandStreamTests
 
             var delta = stream.Snapshot();
             stream.Submit();
-            try { new CommandStream(replica).Replay(FrameDelta.Deserialize(delta.AsSpan())); }
+            try { new CommandStream(replica).Replay(FrameDelta.FromWire(delta.AsSpan())); }
             catch (Exception ex) { throw new InvalidOperationException($"Replay failed during fuzz seed={seed}, frame={frame}.", ex); }
             if ((frame + 1) % syncCheckInterval == 0)
                 Assert.Equal(world.EntityCount, replica.EntityCount);
@@ -2347,10 +2347,10 @@ public sealed class DeferredCreateTests
         var wire = delta.AsSpan();
 
         var replicaA = new World();
-        new CommandStream(replicaA).Replay(FrameDelta.Deserialize(wire));
+        new CommandStream(replicaA).Replay(FrameDelta.FromWire(wire));
 
         var replicaB = new World();
-        new CommandStream(replicaB).Replay(FrameDelta.Deserialize(wire));
+        new CommandStream(replicaB).Replay(FrameDelta.FromWire(wire));
 
         var statsA = replicaA.GetStats();
         var statsB = replicaB.GetStats();
@@ -2370,7 +2370,7 @@ public sealed class DeferredCreateTests
         stream.Clear();
 
         var wire = delta.AsSpan();
-        var restored = FrameDelta.Deserialize(wire);
+        var restored = FrameDelta.FromWire(wire);
 
         var replica = new World();
         new CommandStream(replica).Replay(restored);

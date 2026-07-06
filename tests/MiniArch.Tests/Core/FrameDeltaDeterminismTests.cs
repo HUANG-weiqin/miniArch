@@ -401,7 +401,7 @@ public sealed class FrameDeltaDeterminismTests
     {
         var delta = new FrameDelta();
         var wire = delta.AsSpan();
-        var restored = FrameDelta.Deserialize(wire);
+        var restored = FrameDelta.FromWire(wire);
         Assert.True(restored.IsEmpty);
     }
 
@@ -417,7 +417,7 @@ public sealed class FrameDeltaDeterminismTests
         var delta = buffer.Snapshot(); buffer.Submit();
 
         var wire = delta.AsSpan();
-        var restored = FrameDelta.Deserialize(wire);
+        var restored = FrameDelta.FromWire(wire);
 
         var target = new World();
         new CommandStream(target).Replay(restored);
@@ -436,7 +436,7 @@ public sealed class FrameDeltaDeterminismTests
         var delta = stream.Snapshot(); stream.Submit();
 
         var wire = delta.AsSpan();
-        var restored = FrameDelta.Deserialize(wire);
+        var restored = FrameDelta.FromWire(wire);
 
         var target = new World();
         new CommandStream(target).Replay(restored);
@@ -462,9 +462,9 @@ public sealed class FrameDeltaDeterminismTests
 
         var target = new World();
         var stream = new CommandStream(target);
-        stream.Replay(FrameDelta.Deserialize(d1.AsSpan()));
-        stream.Replay(FrameDelta.Deserialize(d2.AsSpan()));
-        stream.Replay(FrameDelta.Deserialize(d3.AsSpan()));
+        stream.Replay(FrameDelta.FromWire(d1.AsSpan()));
+        stream.Replay(FrameDelta.FromWire(d2.AsSpan()));
+        stream.Replay(FrameDelta.FromWire(d3.AsSpan()));
         AssertIdentical(source, target, "CB destroy-recycle round-trip");
     }
 
@@ -480,7 +480,7 @@ public sealed class FrameDeltaDeterminismTests
 
         var count = delta.DeltaCount;
         var wire = delta.AsSpan();
-        var restored = FrameDelta.Deserialize(wire);
+        var restored = FrameDelta.FromWire(wire);
 
         Assert.Equal(count, restored.DeltaCount);
     }
@@ -499,7 +499,7 @@ public sealed class FrameDeltaDeterminismTests
         Assert.True(delta.HasEntity(b));
 
         var wire = delta.AsSpan();
-        var restored = FrameDelta.Deserialize(wire);
+        var restored = FrameDelta.FromWire(wire);
 
         Assert.True(restored.HasEntity(a));
         Assert.True(restored.HasEntity(b));
@@ -517,7 +517,7 @@ public sealed class FrameDeltaDeterminismTests
     {
         // 0xFF is not a valid DeltaOpKind (valid range is 0x01..0x09).
         var wire = new byte[] { 0xFF, 0x01, 0x01 };
-        Assert.Throws<InvalidOperationException>(() => FrameDelta.Deserialize(wire));
+        Assert.Throws<InvalidOperationException>(() => FrameDelta.FromWire(wire));
     }
 
     [Fact]
@@ -525,7 +525,7 @@ public sealed class FrameDeltaDeterminismTests
     {
         // 0x00 is also not a valid op kind.
         var wire = new byte[] { 0x00, 0x01, 0x01 };
-        Assert.Throws<InvalidOperationException>(() => FrameDelta.Deserialize(wire));
+        Assert.Throws<InvalidOperationException>(() => FrameDelta.FromWire(wire));
     }
 
     [Fact]
@@ -534,7 +534,7 @@ public sealed class FrameDeltaDeterminismTests
         // Reserve op (0x01) with entity id varint that has the continuation
         // bit set (0x80) but no following byte.
         var wire = new byte[] { 0x01, 0x80 };
-        Assert.Throws<InvalidOperationException>(() => FrameDelta.Deserialize(wire));
+        Assert.Throws<InvalidOperationException>(() => FrameDelta.FromWire(wire));
     }
 
     [Fact]
@@ -543,7 +543,7 @@ public sealed class FrameDeltaDeterminismTests
         // 5 bytes each with continuation bit set, plus a 6th byte —a varint
         // wider than 32 bits is not representable as int and must be rejected.
         var wire = new byte[] { 0x01, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01, 0x01 };
-        Assert.Throws<InvalidOperationException>(() => FrameDelta.Deserialize(wire));
+        Assert.Throws<InvalidOperationException>(() => FrameDelta.FromWire(wire));
     }
 
     [Fact]
@@ -552,7 +552,7 @@ public sealed class FrameDeltaDeterminismTests
         // Add op (0x06): entity(2 bytes) + component type (1 byte) + size varint
         // claiming 10 bytes of data, but the buffer ends immediately.
         var wire = new byte[] { 0x06, 0x01, 0x01, 0x01, 10 };
-        Assert.Throws<InvalidOperationException>(() => FrameDelta.Deserialize(wire));
+        Assert.Throws<InvalidOperationException>(() => FrameDelta.FromWire(wire));
     }
 
     // ══════════════════════════════════════════════════════════—
@@ -680,7 +680,7 @@ public sealed class FrameDeltaDeterminismTests
     public void Deserialize_rejects_wire_exceeding_MaxFrameBytes()
     {
         var oversized = new byte[FrameDelta.MaxFrameBytes + 1];
-        var ex = Assert.Throws<ArgumentException>(() => FrameDelta.Deserialize(oversized.AsSpan()));
+        var ex = Assert.Throws<ArgumentException>(() => FrameDelta.FromWire(oversized.AsSpan()));
         Assert.Contains("MaxFrameBytes", ex.Message);
     }
 
@@ -701,7 +701,7 @@ public sealed class FrameDeltaDeterminismTests
         }
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            FrameDelta.Deserialize(new ReadOnlySpan<byte>(buf, 0, pos)));
+            FrameDelta.FromWire(new ReadOnlySpan<byte>(buf, 0, pos)));
         Assert.Contains("MaxOpsPerFrame", ex.Message);
     }
 }

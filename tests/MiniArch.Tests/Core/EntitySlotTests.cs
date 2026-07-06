@@ -270,7 +270,7 @@ public sealed class EntitySlotTests
 
         // Simulate network: peer receives serialized copy.
         var bytes = delta.AsSpan().ToArray();
-        var peerDelta = FrameDelta.Deserialize(bytes);
+        var peerDelta = FrameDelta.FromWire(bytes);
         var streamPeer = MakeStream(worldPeer);
 
         // Source replays own delta with resolveSlots: true.
@@ -389,7 +389,7 @@ public sealed class EntitySlotTests
 
         // Serialize and deserialize —simulates network round-trip.
         var bytes = delta.AsSpan().ToArray();
-        var deserialized = FrameDelta.Deserialize(bytes);
+        var deserialized = FrameDelta.FromWire(bytes);
 
         // Default: no resolution.
         // (Use a fresh world so we can replay the same delta twice without
