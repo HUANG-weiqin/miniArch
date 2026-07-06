@@ -7,6 +7,10 @@ namespace MiniArch;
 /// Stateful cursor over changes to component <typeparamref name="T"/>. Hold one instance per
 /// consuming system; each enumeration call auto-advances its cursor. Obtain via <see cref="World.Track{T}"/>.
 /// </summary>
+/// <remarks>
+/// After a snapshot save/load, observer state resets. Call <see cref="World.Track{T}"/> again
+/// to obtain a fresh cursor; discard cursors from before the restore.
+/// </remarks>
 public sealed class ChangeQuery<T> where T : unmanaged
 {
     private readonly World _world;
