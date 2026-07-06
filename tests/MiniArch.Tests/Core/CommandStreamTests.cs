@@ -1163,6 +1163,260 @@ public sealed class CommandStreamTests
     }
 
     // ══════════════════════════════════════════════════════════—
+    // SubmitAndSnapshotIntoAsync — async submit+snapshot into existing target
+    // ══════════════════════════════════════════════════════════—
+
+    [Fact]
+    public async Task SubmitAndSnapshotIntoAsync_submits_and_writes_to_target()
+    {
+        var world = new World();
+        var existing = world.Create(new Position(0, 0));
+        var stream = new CommandStream(world);
+        var target = new FrameDelta();
+
+        var created = stream.Create();
+        stream.Add(created, new Position(1, 2));
+        stream.Set(existing, new Position(3, 4));
+
+        await stream.SubmitAndSnapshotIntoAsync(target);
+
+        // Changes applied to world
+        Assert.True(world.IsAlive(created));
+        Assert.True(world.TryGet(created, out Position p1));
+        Assert.Equal(new Position(1, 2), p1);
+        Assert.True(world.TryGet(existing, out Position p2));
+        Assert.Equal(new Position(3, 4), p2);
+
+        // Target contains the delta
+        Assert.True(target.DeltaCount > 0);
+        Assert.True(target.HasEntity(created));
+
+        // Target is replayable
+        var replica = new World();
+        var replicaExisting = replica.Create(new Position(0, 0));
+        new CommandStream(replica).Replay(target);
+        Assert.True(replica.IsAlive(created));
+        Assert.True(replica.TryGet(existing, out Position rp));
+        Assert.Equal(new Position(3, 4), rp);
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotIntoAsync_clears_target_for_empty_stream()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+        var target = new FrameDelta();
+
+        // Prime target with some data
+        var dummy = stream.Create();
+        stream.Add(dummy, new Position(1, 2));
+        await stream.SubmitAndSnapshotIntoAsync(target);
+        Assert.True(target.DeltaCount > 0);
+        Assert.True(target.HasEntity(dummy));
+
+        // Clear stream and call again — target should be cleared
+        var stream2 = new CommandStream(world);
+        await stream2.SubmitAndSnapshotIntoAsync(target);
+        Assert.Empty(target.CreatedEntities());
+        Assert.Empty(target.DestroyedEntities());
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotIntoAsync_stream_reusable_after_call()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+        var target = new FrameDelta();
+
+        stream.Create();
+        await stream.SubmitAndSnapshotIntoAsync(target);
+
+        // Should be able to use stream again
+        var e = stream.Create();
+        stream.Add(e, new Position(5, 6));
+        await stream.SubmitAndSnapshotIntoAsync(target);
+
+        Assert.True(world.IsAlive(e));
+        Assert.True(world.TryGet(e, out Position p));
+        Assert.Equal(new Position(5, 6), p);
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotIntoAsync_includes_hierarchy_in_delta()
+    {
+        var world = new World();
+        var parent = world.Create();
+        var child = world.Create();
+        var stream = new CommandStream(world);
+        var target = new FrameDelta();
+
+        stream.AddChild(parent, child);
+        await stream.SubmitAndSnapshotIntoAsync(target);
+
+        Assert.True(world.TryGetParent(child, out var p));
+        Assert.Equal(parent, p);
+        Assert.NotEmpty(target.AddChildCommands());
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotIntoAsync_with_existing_entity_ops()
+    {
+        var world = new World();
+        var e = world.Create(new Position(10, 20), new Velocity(5, 6));
+        var stream = new CommandStream(world);
+        var target = new FrameDelta();
+
+        stream.Set(e, new Position(30, 40));
+        stream.Remove<Velocity>(e);
+
+        var task = stream.SubmitAndSnapshotIntoAsync(target);
+        Assert.True(world.TryGet(e, out Position p));
+        Assert.Equal(new Position(30, 40), p);
+        Assert.False(world.TryGet<Velocity>(e, out _));
+
+        await task;
+        Assert.NotEmpty(target.SetCommands());
+        Assert.NotEmpty(target.RemoveCommands());
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotIntoAsync_with_destroy()
+    {
+        var world = new World();
+        var e = world.Create(new Position(1, 2));
+        var stream = new CommandStream(world);
+        var target = new FrameDelta();
+
+        stream.Destroy(e);
+        await stream.SubmitAndSnapshotIntoAsync(target);
+
+        Assert.False(world.IsAlive(e));
+        Assert.Single(target.DestroyedEntities());
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotIntoAsync_delta_can_be_replayed()
+    {
+        var world = new World();
+        var existing = world.Create(new Position(0, 0));
+        var stream = new CommandStream(world);
+        var target = new FrameDelta();
+
+        var created = stream.Create();
+        stream.Add(created, new Position(1, 2));
+        stream.Add(created, new Velocity(3, 4));
+        stream.Set(existing, new Position(99, 99));
+
+        await stream.SubmitAndSnapshotIntoAsync(target);
+
+        var replica = new World();
+        var rExisting = replica.Create(new Position(0, 0));
+        new CommandStream(replica).Replay(target);
+
+        Assert.True(replica.IsAlive(created));
+        Assert.True(replica.TryGet(created, out Position cp));
+        Assert.Equal(new Position(1, 2), cp);
+        Assert.True(replica.TryGet(created, out Velocity cv));
+        Assert.Equal(new Velocity(3, 4), cv);
+        Assert.True(replica.TryGet(rExisting, out Position ep));
+        Assert.Equal(new Position(99, 99), ep);
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotIntoAsync_mixed_crud_scenario()
+    {
+        var world = new World();
+        var entities = new Entity[30];
+        for (var i = 0; i < 30; i++)
+            entities[i] = world.Create(new Position(i, i + 1));
+        var stream = new CommandStream(world);
+        var target = new FrameDelta();
+
+        for (var i = 0; i < 30; i++)
+        {
+            if ((i & 1) == 0)
+            {
+                stream.Set(entities[i], new Position(i + 10, i + 20));
+                if ((i & 7) == 0) stream.Destroy(entities[i]);
+            }
+            else
+            {
+                var e = stream.Create();
+                stream.Add(e, new Position(i + 30, i + 40));
+                if ((i & 3) == 1) stream.Remove<Position>(e);
+            }
+        }
+
+        await stream.SubmitAndSnapshotIntoAsync(target);
+        Assert.False(world.IsAlive(entities[0])); // i=0 destroyed
+        Assert.Equal(new Position(12, 22), world.TryGet(entities[2], out Position p2) ? p2 : default);
+        Assert.True(target.DeltaCount > 0);
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotIntoAsync_multiple_cycles_reuses_target()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+        var target = new FrameDelta();
+
+        for (var cycle = 0; cycle < 5; cycle++)
+        {
+            var e = stream.Create();
+            stream.Add(e, new Position(cycle, cycle + 1));
+            await stream.SubmitAndSnapshotIntoAsync(target);
+
+            Assert.True(world.IsAlive(e));
+            Assert.True(world.TryGet(e, out Position p));
+            Assert.Equal(new Position(cycle, cycle + 1), p);
+            Assert.True(target.HasEntity(e));
+        }
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotIntoAsync_with_clone_includes_clone_in_delta()
+    {
+        var world = new World();
+        var source = world.Create(new Position(1, 2), new Velocity(3, 4));
+        var stream = new CommandStream(world);
+        var target = new FrameDelta();
+
+        var clone = stream.Clone(source);
+        await stream.SubmitAndSnapshotIntoAsync(target);
+
+        Assert.True(world.IsAlive(clone));
+        Assert.True(world.TryGet(clone, out Position cp));
+        Assert.Equal(new Position(1, 2), cp);
+        Assert.True(target.HasEntity(clone));
+    }
+
+    [Fact]
+    public async Task SubmitAndSnapshotIntoAsync_overlapping_tasks_stay_correct()
+    {
+        // Caller does NOT await between frames: previous task may still be running
+        // when the next SubmitAndSnapshotIntoAsync fires. Must not corrupt state.
+        var world = new World();
+        var stream = new CommandStream(world);
+        var targets = new FrameDelta[5];
+
+        var tasks = new List<Task>();
+        for (var i = 0; i < 5; i++)
+        {
+            var e = world.Create();
+            stream.Add(e, new Position(i, i));
+            stream.Destroy(e);
+            targets[i] = new FrameDelta();
+            tasks.Add(stream.SubmitAndSnapshotIntoAsync(targets[i]));
+        }
+
+        for (var i = 0; i < tasks.Count; i++)
+        {
+            await tasks[i];
+            Assert.True(targets[i].DeltaCount > 0);
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════—
     // Clone deep scenarios
     // ══════════════════════════════════════════════════════════—
 

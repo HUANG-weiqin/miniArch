@@ -9,7 +9,9 @@ namespace MiniArch.Core;
 /// <c>AddChild</c>, <c>RemoveChild</c>, <c>Clone</c>)
 /// can be invoked concurrently from multiple threads.
 /// <see cref="CommandStreamCore.Submit"/>, <see cref="CommandStreamCore.Snapshot"/>,
-/// <see cref="CommandStreamCore.SubmitAndSnapshotAsync"/> and
+/// <see cref="CommandStreamCore.SnapshotInto"/>,
+/// <see cref="CommandStreamCore.SubmitAndSnapshotAsync"/>,
+/// <see cref="CommandStreamCore.SubmitAndSnapshotIntoAsync"/> and
 /// <see cref="CommandStreamCore.Replay"/> must be called from a single thread
 /// after all parallel recording work has completed.
 /// </summary>

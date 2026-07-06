@@ -117,5 +117,5 @@ dotnet run -c Release --project tools/soak/MiniArch.Soak -- --seed 222 --entity-
 ## 后续增强方向
 
 - Oracle 扩展：当前只跟踪 CompA/CompB 值，可扩展到 CompC/CompD + hierarchy 关系
-- Async 路径：soak 只测 `Submit` + `SnapshotInto`，未覆盖 `SubmitAndSnapshotAsync` / `SubmitFromFrozen` 路径
+- Async 路径：soak 只测 `Submit` + `SnapshotInto`，未覆盖 `SubmitAndSnapshotAsync` / `SubmitAndSnapshotIntoAsync` / `SubmitFromFrozen` 路径
 - 更深 hierarchy：当前 AddChild 只做浅层，深层嵌套（10+ 层）的级联销毁顺序可进一步压测
