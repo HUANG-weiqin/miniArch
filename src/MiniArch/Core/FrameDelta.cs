@@ -19,17 +19,17 @@ namespace MiniArch.Core;
 /// <list type="bullet">
 /// <item>
 /// <b>Placeholder delta</b> (multi-host lockstep): produced by
-/// <see cref="CommandStream.Snapshot"/> when
-/// <see cref="CommandStream.DeferredEntities"/> is <c>true</c>. Each
+/// <see cref="CommandStreamCore.Snapshot"/> when
+        /// <see cref="CommandStreamCore.DeferredEntities"/> is <c>true</c>. Each
 /// replaying <see cref="World"/> assigns its own local ids by mapping
 /// <c>seq→local real</c>. Two hosts replaying the same delta will
 /// converge to identical world state even though entity ids may differ.
 /// </item>
 /// <item>
 /// <b>Real-id delta</b>: produced by
-/// <see cref="CommandStream.SubmitAndSnapshotAsync"/> (always) or by
-/// <see cref="CommandStream.Snapshot"/> when
-/// <see cref="CommandStream.DeferredEntities"/> is <c>false</c>
+/// <see cref="CommandStreamCore.SubmitAndSnapshotAsync"/> (always) or by
+        /// <see cref="CommandStreamCore.Snapshot"/> when
+        /// <see cref="CommandStreamCore.DeferredEntities"/> is <c>false</c>
 /// (default). Ids are already resolved by the producer. Mirror clients
 /// must have synchronized id allocators (e.g. by replaying every frame
 /// since frame 0). The replay system enforces this
@@ -188,7 +188,7 @@ public sealed class FrameDelta
     /// negative counts, duplicate component types, unknown type ids, or
     /// invalid entity shapes.
     ///
-    /// Call before <see cref="CommandStream.Replay(FrameDelta, Boolean)"/> for deltas
+    /// Call before <see cref="CommandStreamCore.Replay(FrameDelta, bool)"/> for deltas
     /// received over the network. Deltas produced locally by
     /// <see cref="CommandStream"/> are always valid and can skip this step.
     /// </summary>
@@ -201,7 +201,7 @@ public sealed class FrameDelta
     /// machine (Reserve → Create|Release ordering, payload sizes). It does
     /// <b>not</b> verify that the target <see cref="World"/>'s allocator state
     /// (free list, version counters) is compatible — a delta that passes
-    /// <c>Validate()</c> may still cause <see cref="CommandStream.Replay"/>
+    /// <c>Validate()</c> may still cause <see cref="CommandStreamCore.Replay(FrameDelta, bool)"/>
     /// to throw due to allocator mismatch. Use <see cref="FrameDelta"/> replay
     /// from frame 0, or bootstrap peer states with <see cref="WorldSnapshot.Load"/>
     /// before incremental replay.

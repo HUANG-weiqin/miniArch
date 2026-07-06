@@ -587,16 +587,16 @@ public sealed partial class World : IDisposable
 
     /// <summary>
     /// Attempts to resolve a placeholder entity (<c>Entity(-1, seq)</c>) to its real
-    /// local entity ID after the most recent <see cref="CommandStream.Replay(FrameDelta, Boolean)"/> call.
+    /// local entity ID after the most recent <see cref="CommandStreamCore.Replay(FrameDelta, bool)"/> call.
     /// </summary>
     /// <remarks>
     /// <b>Placeholders are valid only against the replay that produced them.</b>
-    /// A subsequent <see cref="CommandStream.Replay(FrameDelta, Boolean)"/> call replaces the
+    /// A subsequent <see cref="CommandStreamCore.Replay(FrameDelta, bool)"/> call replaces the
     /// internal mapping table, causing the same placeholder handle to resolve to a
     /// different real entity (or to fail if the seq is out of range).
     ///
     /// To safely refer to an entity across frames, resolve the placeholder immediately
-    /// after replay via <see cref="CommandStream.Track"/> and <see cref="CommandStream.Replay(FrameDelta, Boolean)"/>.
+    /// after replay via <see cref="CommandStream.Track"/> and <see cref="CommandStreamCore.Replay(FrameDelta, bool)"/>.
     /// </remarks>
     /// <param name="placeholder">A placeholder handle (<c>Entity(-1, seq)</c>).</param>
     /// <param name="real">When this method returns, the resolved real entity;
