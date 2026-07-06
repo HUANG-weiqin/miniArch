@@ -22,12 +22,19 @@ sealed class SoakRunner
     long _prevDetailG0, _prevDetailG1, _prevDetailG2;
     long _prevDetailAllocBytes, _prevDetailDeltaBytes;
 
+    // Per-run baseline for GC/alloc accounting. In sweep mode multiple seeds
+    // share one process; GC.CollectionCount is process-wide, so we subtract the
+    // baseline captured at each Run() start to report per-seed numbers.
+    long _runStartAlloc;
+    int _runStartG0, _runStartG1, _runStartG2;
+
     long _creates, _destroys, _adds, _sets, _removes, _clones, _addHier, _removeHier;
     long _migrations;
     int _peakEntityCount;
 
     // Allocation & network tracking
     long _frameOpsBytes, _frameSubmitBytes, _frameReplayBytes, _frameValidateBytes;
+    long _frameParseBytes;  // Deserialize only (should be 0 after warmup)
     long _frameDeltaBytes;
 
     // Reference model — independent oracle for CompA and CompB
@@ -37,6 +44,11 @@ sealed class SoakRunner
     // Per-frame pending remove tracking: prevents recording Add/Set for a
     // component that was already removed in the same frame.
     readonly HashSet<(Entity E, int CompIdx)> _pendingRemoves = [];
+
+    // Tracks all entities explicitly destroyed this frame, so we can skip
+    // child destroys when the parent is also being destroyed (cascade will
+    // handle the child).
+    readonly HashSet<Entity> _destroyedThisFrame = [];
 
     // Tracks entities made children via AddChild this frame, so OpDestroy can
     // skip them — destroying the parent cascade-destroys children, creating a
@@ -48,7 +60,14 @@ sealed class SoakRunner
     readonly HashSet<Entity> _pendingHierarchyParents = [];
 
     readonly CommandStream _shadowStream;
+
+    public byte[]? FinalChecksum { get; private set; }
+    readonly FrameDelta _snapDelta = new();
     readonly FrameDelta _replayDelta = new();
+
+    // Operation log: last N ops per frame for crash diagnostics
+    const int MaxOpLog = 64;
+    readonly List<string> _opLog = new(MaxOpLog);
 
     public SoakRunner(SoakConfig cfg)
     {
@@ -64,9 +83,24 @@ sealed class SoakRunner
     {
         Console.WriteLine($"  Soak  seed={_cfg.Seed}  frames={_cfg.TotalFrames}  cap={_cfg.EntityCap}  floor={_cfg.EntityFloor}  ops/f={_cfg.MaxOpsPerFrame}");
         Console.WriteLine($"  {new string('─', 60)}");
+
+        // Snapshot process-wide GC counters at run start so PrintFinal and
+        // GetSweepSummaryLine report per-seed deltas even when multiple seeds
+        // share one process (sweep mode).
+        _runStartAlloc = GC.GetAllocatedBytesForCurrentThread();
+        _runStartG0 = GC.CollectionCount(0);
+        _runStartG1 = GC.CollectionCount(1);
+        _runStartG2 = GC.CollectionCount(2);
+        _prevDetailG0 = _runStartG0;
+        _prevDetailG1 = _runStartG1;
+        _prevDetailG2 = _runStartG2;
+        _prevDetailAllocBytes = _runStartAlloc;
+
         _sw.Start();
 
         var result = RunCore();
+        if (result)
+            FinalChecksum = _source.CanonicalChecksum();
         PrintFinal(result);
         return result;
     }
@@ -87,6 +121,8 @@ sealed class SoakRunner
             _pendingRemoves.Clear();
             _pendingHierarchyChildren.Clear();
             _pendingHierarchyParents.Clear();
+            _destroyedThisFrame.Clear();
+            _opLog.Clear();
             var beforeOps = GC.GetAllocatedBytesForCurrentThread();
             var opsThisFrame = _rng.Next(1, _cfg.MaxOpsPerFrame + 1);
             for (var op = 0; op < opsThisFrame; op++)
@@ -98,24 +134,27 @@ sealed class SoakRunner
 
             // Layer 1: detail line
             var printedDetail = false;
-            if (frame == 0) Console.WriteLine();
-            if (frame % _cfg.DetailInterval == 0)
+            if (!_cfg.Quiet)
             {
-                PrintDetail(frame, phase);
-                printedDetail = true;
+                if (frame == 0) Console.WriteLine();
+                if (frame % _cfg.DetailInterval == 0)
+                {
+                    PrintDetail(frame, phase);
+                    printedDetail = true;
+                }
             }
 
             // Layer 2: full checkpoint
             if (frame % _cfg.CheckpointInterval == 0)
             {
                 if (!RunCheckpoint(frame)) return false;
-                if (!printedDetail)
+                if (!_cfg.Quiet && !printedDetail)
                     Console.WriteLine($"\r[{frame,8}] checkpoint passed");
                 printedDetail = true;
             }
 
             // Quick inline entity count (only when no detail this frame)
-            if (!printedDetail && frame % 500 == 0)
+            if (!_cfg.Quiet && !printedDetail && frame % 500 == 0)
                 Console.Write($"\r  [{frame,7}]  ent={_alive.Count,5}{EntityTrend(frame)}\r");
         }
         return true;
@@ -227,6 +266,7 @@ sealed class SoakRunner
             else if (t == 3) { _stream.Add(e, new CompD(_rng.Next(), _rng.Next(), _rng.Next(), _rng.Next(), _rng.Next(), _rng.Next(), _rng.Next(), _rng.Next())); }
         }
         _refModel[e] = new RefState(aV, bV);
+        LogOp($"Create({e}) comps={compCount}");
         _creates++;
         _peakEntityCount = Math.Max(_peakEntityCount, _alive.Count);
     }
@@ -238,10 +278,15 @@ sealed class SoakRunner
         var idx = _rng.Next(_alive.Count);
         var e = _alive[idx];
         if (_pendingHierarchyChildren.Contains(e)) return; // cascade-destroyed with parent
+        // If e has a parent ancestor that's already scheduled for destroy
+        // this frame, skip —the parent's cascade will handle e.
+        if (HasAncestorDestroyedThisFrame(e)) return;
         _alive.RemoveAt(idx);
+        _destroyedThisFrame.Add(e);
 
         _stream.Destroy(e);
         _refModel.Remove(e);
+        LogOp($"Destroy({e})");
         _destroys++;
     }
 
@@ -256,6 +301,7 @@ sealed class SoakRunner
         else if (t == 1 && !_source.Has<CompB>(e) && !_pendingRemoves.Contains((e, 1))) { var v = (long)_rng.Next(); _stream.Add(e, new CompB(v)); AddRefB(e, v); _adds++; }
         else if (t == 2 && !_source.Has<CompC>(e) && !_pendingRemoves.Contains((e, 2))) { _stream.Add(e, new CompC((float)_rng.NextDouble(), (float)_rng.NextDouble())); _adds++; }
         else if (t == 3 && !_source.Has<CompD>(e) && !_pendingRemoves.Contains((e, 3))) { _stream.Add(e, new CompD(_rng.Next(), _rng.Next(), _rng.Next(), _rng.Next(), _rng.Next(), _rng.Next(), _rng.Next(), _rng.Next())); _adds++; }
+        LogOp($"Add({e}) t={t}");
     }
 
     void OpSet()
@@ -268,6 +314,7 @@ sealed class SoakRunner
         if (t == 0 && _source.Has<CompA>(e) && !_pendingRemoves.Contains((e, 0))) { var v = _rng.Next(); _stream.Set(e, new CompA(v)); AddRefA(e, v); _sets++; }
         else if (t == 1 && _source.Has<CompB>(e) && !_pendingRemoves.Contains((e, 1))) { var v = (long)_rng.Next(); _stream.Set(e, new CompB(v)); AddRefB(e, v); _sets++; }
         else if (t == 2 && _source.Has<CompC>(e) && !_pendingRemoves.Contains((e, 2))) { _stream.Set(e, new CompC((float)_rng.NextDouble(), (float)_rng.NextDouble())); _sets++; }
+        LogOp($"Set({e}) t={t}");
     }
 
     void OpRemove()
@@ -283,6 +330,7 @@ sealed class SoakRunner
         else if (t == 2 && _source.Has<CompC>(e)) { _stream.Remove<CompC>(e); migrated = true; _pendingRemoves.Add((e, 2)); }
         else if (t == 3 && _source.Has<CompD>(e)) { _stream.Remove<CompD>(e); migrated = true; _pendingRemoves.Add((e, 3)); }
         if (migrated) { _removes++; _migrations++; }
+        LogOp($"Remove({e}) t={t}");
     }
 
     void OpClone()
@@ -294,6 +342,7 @@ sealed class SoakRunner
         {
             var clone = _stream.Clone(source);
             _alive.Add(clone);
+            LogOp($"Clone({source})→({clone})");
             _clones++;
         }
         catch { /* Clone can fail if source dies between the check and the clone — ignore */ }
@@ -318,6 +367,7 @@ sealed class SoakRunner
         _stream.AddChild(parent, child);
         _pendingHierarchyChildren.Add(child);
         _pendingHierarchyParents.Add(parent);
+        LogOp($"AddChild({parent}, {child})");
         _addHier++;
     }
 
@@ -326,6 +376,7 @@ sealed class SoakRunner
         if (_alive.Count == 0) return;
         var child = _alive[_rng.Next(_alive.Count)];
         _stream.RemoveChild(child);
+        LogOp($"RemoveChild({child})");
         _removeHier++;
     }
 
@@ -354,59 +405,79 @@ sealed class SoakRunner
         // Track library allocations vs test harness allocations
         var beforeLib = GC.GetAllocatedBytesForCurrentThread();
 
+        // Submit phase
         try
         {
-            var delta = _stream.Snapshot();
+            _stream.SnapshotInto(_snapDelta);
             _stream.Submit();
-            var afterSubmit = GC.GetAllocatedBytesForCurrentThread();
-            _frameSubmitBytes += afterSubmit - beforeLib;
-
-            if (!delta.IsEmpty)
-            {
-                var bytes = delta.AsSpan();
-                _frameDeltaBytes += bytes.Length;
-                _shadowStream.Clear();
-                _replayDelta.Deserialize(bytes);
-                _shadowStream.Replay(_replayDelta);
-            }
-            _frameReplayBytes += GC.GetAllocatedBytesForCurrentThread() - afterSubmit;
         }
         catch (Exception ex)
         {
-            Fail(frame, phase, $"Submit/Replay failed: {ex.Message}");
+            Fail(frame, phase, $"Submit failed: {ex.Message}");
             return false;
         }
+        var afterSubmit = GC.GetAllocatedBytesForCurrentThread();
+        _frameSubmitBytes += afterSubmit - beforeLib;
 
-        // Layer 0: structural validity + checksum + entity count
-        var beforeVal = GC.GetAllocatedBytesForCurrentThread();
-        var srcValid = WorldValidator.Validate(_source);
-        var shdValid = WorldValidator.Validate(_shadow);
-        if (!srcValid.IsValid || !shdValid.IsValid)
+        // Replay phase
+        if (!_snapDelta.IsEmpty)
         {
-            Fail(frame, phase, $"WorldValidator failed:\n  source: {string.Join("\n  ", srcValid.Issues)}\n  shadow: {string.Join("\n  ", shdValid.Issues)}");
-            return false;
-        }
+            try
+            {
+                var bytes = _snapDelta.AsSpan();
+                _frameDeltaBytes += bytes.Length;
+                _shadowStream.Clear();
 
-        var srcCs = _source.CanonicalChecksum();
-        var shdCs = _shadow.CanonicalChecksum();
-        _frameValidateBytes += GC.GetAllocatedBytesForCurrentThread() - beforeVal;
-        if (!srcCs.AsSpan().SequenceEqual(shdCs))
-        {
-            var srcDigest = WorldDigest.Compute(_source);
-            var shdDigest = WorldDigest.Compute(_shadow);
-            Fail(frame, phase,
-                $"CanonicalChecksum mismatch\n" +
-                $"  source: {Convert.ToHexString(srcCs)}\n" +
-                $"  shadow: {Convert.ToHexString(shdCs)}\n" +
-                $"  digest source occupancy={Convert.ToHexString(srcDigest.Occupancy)} free={Convert.ToHexString(srcDigest.FreeList)}\n" +
-                $"  digest shadow  occupancy={Convert.ToHexString(shdDigest.Occupancy)} free={Convert.ToHexString(shdDigest.FreeList)}");
-            return false;
-        }
+                var beforeDeser = GC.GetAllocatedBytesForCurrentThread();
+                _replayDelta.Deserialize(bytes);
+                _frameParseBytes += GC.GetAllocatedBytesForCurrentThread() - beforeDeser;
 
+                _shadowStream.Replay(_replayDelta);
+            }
+            catch (Exception ex)
+            {
+                Fail(frame, phase, $"Replay failed: {ex.Message}");
+                return false;
+            }
+        }
+        _frameReplayBytes += GC.GetAllocatedBytesForCurrentThread() - afterSubmit;
+
+        // Entity count is O(1) — check every frame.
         if (_source.EntityCount != _shadow.EntityCount)
         {
             Fail(frame, phase, $"EntityCount mismatch: source={_source.EntityCount} shadow={_shadow.EntityCount}");
             return false;
+        }
+
+        // Heavy validation (WorldValidator + CanonicalChecksum) runs at
+        // the configured interval to keep the test responsive.
+        var doHeavy = _cfg.ValidateInterval <= 1 || frame % _cfg.ValidateInterval == 0;
+        if (doHeavy)
+        {
+            var beforeVal = GC.GetAllocatedBytesForCurrentThread();
+            var srcValid = WorldValidator.Validate(_source);
+            var shdValid = WorldValidator.Validate(_shadow);
+            if (!srcValid.IsValid || !shdValid.IsValid)
+            {
+                Fail(frame, phase, $"WorldValidator failed:\n  source: {string.Join("\n  ", srcValid.Issues)}\n  shadow: {string.Join("\n  ", shdValid.Issues)}");
+                return false;
+            }
+
+            var srcCs = _source.CanonicalChecksum();
+            var shdCs = _shadow.CanonicalChecksum();
+            _frameValidateBytes += GC.GetAllocatedBytesForCurrentThread() - beforeVal;
+            if (!srcCs.AsSpan().SequenceEqual(shdCs))
+            {
+                var srcDigest = WorldDigest.Compute(_source);
+                var shdDigest = WorldDigest.Compute(_shadow);
+                Fail(frame, phase,
+                    $"CanonicalChecksum mismatch\n" +
+                    $"  source: {Convert.ToHexString(srcCs)}\n" +
+                    $"  shadow: {Convert.ToHexString(shdCs)}\n" +
+                    $"  digest source occupancy={Convert.ToHexString(srcDigest.Occupancy)} free={Convert.ToHexString(srcDigest.FreeList)}\n" +
+                    $"  digest shadow  occupancy={Convert.ToHexString(shdDigest.Occupancy)} free={Convert.ToHexString(shdDigest.FreeList)}");
+                return false;
+            }
         }
 
         // Periodic reference model spot-check
@@ -545,7 +616,7 @@ sealed class SoakRunner
         Console.WriteLine($"  {new string('═', 56)}");
 
         var tf = Math.Max(1L, _cfg.TotalFrames);
-        var totalAlloc = GC.GetAllocatedBytesForCurrentThread();
+        var totalAlloc = GC.GetAllocatedBytesForCurrentThread() - _runStartAlloc;
 
         // Operations table
         Console.WriteLine();
@@ -562,18 +633,33 @@ sealed class SoakRunner
         Console.WriteLine($"  oracle tracked  {_refModel.Count,8}");
         Console.WriteLine();
         Console.WriteLine("  memory & gc");
-        Console.WriteLine($"    gen0  {GC.CollectionCount(0),5}  managed  {GC.GetTotalMemory(false) >> 20,3}MB");
-        Console.WriteLine($"    gen1  {GC.CollectionCount(1),5}  ws       {Environment.WorkingSet >> 20,3}MB");
-        Console.WriteLine($"    gen2  {GC.CollectionCount(2),5}");
+        Console.WriteLine($"    gen0  {GC.CollectionCount(0) - _runStartG0,5}  managed  {GC.GetTotalMemory(false) >> 20,3}MB");
+        Console.WriteLine($"    gen1  {GC.CollectionCount(1) - _runStartG1,5}  ws       {Environment.WorkingSet >> 20,3}MB");
+        Console.WriteLine($"    gen2  {GC.CollectionCount(2) - _runStartG2,5}");
         Console.WriteLine();
         Console.WriteLine("  thread alloc");
         Console.WriteLine($"    total  {(totalAlloc >> 20),4}MB  avg  {(totalAlloc / tf >> 10),4}KB/f");
         Console.WriteLine($"    ops    {_frameOpsBytes >> 20,4}MB  {_frameOpsBytes / tf >> 10,4}KB/f");
         Console.WriteLine($"    submit {_frameSubmitBytes >> 20,4}MB  {_frameSubmitBytes / tf >> 10,4}KB/f");
         Console.WriteLine($"    replay {_frameReplayBytes >> 20,4}MB  {_frameReplayBytes / tf >> 10,4}KB/f");
+        Console.WriteLine($"      deserialize  {_frameParseBytes >> 10,4}KB  {_frameParseBytes / tf,4}B/f");
+        Console.WriteLine($"      grow         {(_frameReplayBytes - _frameParseBytes) >> 10,4}KB  {(_frameReplayBytes - _frameParseBytes) / tf,4}B/f");
         Console.WriteLine($"    val    {_frameValidateBytes >> 20,4}MB  {_frameValidateBytes / tf >> 10,4}KB/f");
         Console.WriteLine();
         Console.WriteLine($"  network  total {_frameDeltaBytes >> 10,5}KB  avg  {_frameDeltaBytes / tf,5}B/f");
+
+        if (_cfg.Determinism && FinalChecksum != null)
+            Console.WriteLine($"  final checksum  {Convert.ToHexString(FinalChecksum)}");
+    }
+
+    public string GetSweepSummaryLine()
+    {
+        var totalAlloc = (GC.GetAllocatedBytesForCurrentThread() - _runStartAlloc) >> 20;
+        var g0 = GC.CollectionCount(0) - _runStartG0;
+        var g1 = GC.CollectionCount(1) - _runStartG1;
+        var g2 = GC.CollectionCount(2) - _runStartG2;
+        var netKb = _frameDeltaBytes >> 10;
+        return $"  seed={_cfg.Seed,7}  PASS  frames={_cfg.TotalFrames,7}  peak_ent={_peakEntityCount,5}  GC={g0}/{g1}/{g2}  alloc={totalAlloc}MB  net={netKb}KB";
     }
 
     static string PhaseName(SoakPhase p) => p switch
@@ -593,6 +679,30 @@ sealed class SoakRunner
         return _alive.Count > prev ? '↗' : _alive.Count < prev ? '↘' : '→';
     }
 
+    void LogOp(string desc)
+    {
+        if (_opLog.Count < MaxOpLog)
+            _opLog.Add(desc);
+    }
+
+    /// <summary>
+    /// Returns true if <paramref name="e"/> has a parent-chain ancestor that
+    /// is already in <see cref="_destroyedThisFrame"/> —meaning the parent's
+    /// cascade will destroy <paramref name="e"/>, so an explicit destroy
+    /// would be a duplicate.
+    /// </summary>
+    bool HasAncestorDestroyedThisFrame(Entity e)
+    {
+        var cur = e;
+        while (_source.TryGetParent(cur, out var parent))
+        {
+            if (_destroyedThisFrame.Contains(parent))
+                return true;
+            cur = parent;
+        }
+        return false;
+    }
+
     void Fail(int frame, SoakPhase phase, string reason)
     {
         Console.Error.WriteLine($"  {new string('═', 50)}");
@@ -602,7 +712,41 @@ sealed class SoakRunner
         Console.Error.WriteLine($"  alive={_alive.Count}  oracle={_refModel.Count}");
         Console.Error.WriteLine($"  operations: C={_creates} D={_destroys} A={_adds} S={_sets} R={_removes} Cl={_clones} H+={_addHier} H-={_removeHier}");
         Console.Error.WriteLine($"  migrations={_migrations}  peak_ent={_peakEntityCount}");
-        Console.Error.WriteLine($"  last operations this frame: ...");
+
+        // Dump operation log
+        Console.Error.WriteLine($"  last ops this frame ({_opLog.Count}):");
+        foreach (var op in _opLog)
+            Console.Error.WriteLine($"    {op}");
+
+        // Try to extract the failing entity from the error message and dump its state.
+        // Format example: "Entity Entity(3591, v16) is no longer alive."
+        if (reason.Contains("Entity("))
+        {
+            try
+            {
+                var start = reason.IndexOf("Entity(");
+                var end = reason.IndexOf(')', start) + 1;
+                var entityStr = reason[start..end];
+                // Parse "Entity(3591, v16)"
+                var inner = entityStr.AsSpan("Entity(".Length, entityStr.Length - "Entity(".Length - 1);
+                var comma = inner.IndexOf(", ");
+                var idSpan = inner[..comma];
+                var verSpan = inner[(comma + 2)..];
+                var id = int.Parse(idSpan);
+                var ver = int.Parse(verSpan);
+                var entity = new Entity(id, ver);
+
+                // Dump entity state from both worlds.
+                foreach (var (world, label) in new[] { (_source, "source"), (_shadow, "shadow") })
+                {
+                    var report = EntityDump.Describe(world, entity);
+                    Console.Error.WriteLine($"  {label}:");
+                    foreach (var line in report.ToString().Split(Environment.NewLine))
+                        Console.Error.WriteLine($"    {line}");
+                }
+            }
+            catch { /* best-effort diagnostics */ }
+        }
 
         if (_cfg.PauseOnFail)
         {
