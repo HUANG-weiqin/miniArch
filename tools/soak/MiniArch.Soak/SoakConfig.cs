@@ -14,6 +14,7 @@ sealed record SoakConfig
     public int SweepCount { get; init; }
     public bool Determinism { get; init; }
     public bool Quiet { get; init; }
+    public bool Async { get; init; }
 
     public static SoakConfig FromArgs(string[] args)
     {
@@ -34,6 +35,7 @@ sealed record SoakConfig
                 case "--pause-on-fail": cfg = cfg with { PauseOnFail = true }; break;
                 case "--sweep" when i + 1 < args.Length: cfg = cfg with { SweepCount = int.Parse(args[++i]) }; break;
                 case "--determinism": cfg = cfg with { Determinism = true }; break;
+                case "--async": cfg = cfg with { Async = true }; break;
                 case "--quiet": cfg = cfg with { Quiet = true }; break;
                 case "--help":
                 case "-h":
@@ -64,6 +66,7 @@ sealed record SoakConfig
               --pause-on-fail        Wait for keypress on fail (default: off)
               --sweep N              Run N consecutive seeds (diversity sweep; quiet auto-enabled per seed)
               --determinism          Run same seed twice, compare final canonical checksum
+              --async                Use SubmitAndSnapshotAsync (async frozen path) (default: off)
               --quiet                Suppress per-frame detail output (auto-enabled in sweep)
               --help, -h             Show this help
             """);

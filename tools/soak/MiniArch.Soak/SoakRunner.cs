@@ -105,6 +105,81 @@ sealed class SoakRunner
         return result;
     }
 
+    public async Task<bool> RunAsync()
+    {
+        Console.WriteLine($"  Soak  seed={_cfg.Seed}  frames={_cfg.TotalFrames}  cap={_cfg.EntityCap}  floor={_cfg.EntityFloor}  ops/f={_cfg.MaxOpsPerFrame}  async=on");
+        Console.WriteLine($"  {new string('─', 60)}");
+
+        _runStartAlloc = GC.GetAllocatedBytesForCurrentThread();
+        _runStartG0 = GC.CollectionCount(0);
+        _runStartG1 = GC.CollectionCount(1);
+        _runStartG2 = GC.CollectionCount(2);
+        _prevDetailG0 = _runStartG0;
+        _prevDetailG1 = _runStartG1;
+        _prevDetailG2 = _runStartG2;
+        _prevDetailAllocBytes = _runStartAlloc;
+
+        _sw.Start();
+
+        var result = await RunCoreAsync();
+        if (result)
+            FinalChecksum = _source.CanonicalChecksum();
+        PrintFinal(result);
+        return result;
+    }
+
+    async Task<bool> RunCoreAsync()
+    {
+        for (var frame = 1; frame <= _cfg.TotalFrames; frame++)
+        {
+            var phase = GetPhase(frame);
+            _alive.RemoveAll(e => !_source.IsAlive(e));
+            var count = _alive.Count;
+
+            AdjustOpWeights(phase, count, out var createW, out var destroyW, out var addW, out var setW,
+                out var removeW, out var cloneW, out var addHierW, out var removeHierW);
+
+            _pendingRemoves.Clear();
+            _pendingHierarchyChildren.Clear();
+            _pendingHierarchyParents.Clear();
+            _destroyedThisFrame.Clear();
+            _opLog.Clear();
+            var beforeOps = GC.GetAllocatedBytesForCurrentThread();
+            var opsThisFrame = _rng.Next(1, _cfg.MaxOpsPerFrame + 1);
+            for (var op = 0; op < opsThisFrame; op++)
+                RandomOp(createW, destroyW, addW, setW, removeW, cloneW, addHierW, removeHierW);
+            _frameOpsBytes += GC.GetAllocatedBytesForCurrentThread() - beforeOps;
+
+            // Layer 0: Async submit + replay + validate
+            if (!await SubmitAndValidateAsync(frame, phase)) return false;
+
+            // Layer 1: detail line
+            var printedDetail = false;
+            if (!_cfg.Quiet)
+            {
+                if (frame == 0) Console.WriteLine();
+                if (frame % _cfg.DetailInterval == 0)
+                {
+                    PrintDetail(frame, phase);
+                    printedDetail = true;
+                }
+            }
+
+            // Layer 2: full checkpoint
+            if (frame % _cfg.CheckpointInterval == 0)
+            {
+                if (!RunCheckpoint(frame)) return false;
+                if (!_cfg.Quiet && !printedDetail)
+                    Console.WriteLine($"\r[{frame,8}] checkpoint passed");
+                printedDetail = true;
+            }
+
+            if (!_cfg.Quiet && !printedDetail && frame % 500 == 0)
+                Console.Write($"\r  [{frame,7}]  ent={_alive.Count,5}{EntityTrend(frame)}\r");
+        }
+        return true;
+    }
+
     bool RunCore()
     {
         for (var frame = 1; frame <= _cfg.TotalFrames; frame++)
@@ -564,6 +639,129 @@ sealed class SoakRunner
                         $"  FreeList side-by-side:{freeDump}");
                     return false;
                 }
+        }
+
+        // Periodic reference model spot-check
+        if (_refModel.Count > 0 && frame % 100 == 0)
+        {
+            var sample = _refModel.Keys.Take(10).ToList();
+            foreach (var e in sample)
+            {
+                if (!_source.IsAlive(e)) continue;
+                var st = _refModel[e];
+                if (st.A.HasValue && (!_source.Has<CompA>(e) || _source.Get<CompA>(e).Value != st.A.Value))
+                {
+                    Fail(frame, phase, $"Reference model mismatch: entity {e} CompA expected={st.A.Value} actual={(_source.Has<CompA>(e) ? _source.Get<CompA>(e).Value.ToString() : "missing")}");
+                    return false;
+                }
+                if (st.B.HasValue && (!_source.Has<CompB>(e) || _source.Get<CompB>(e).Value != st.B.Value))
+                {
+                    Fail(frame, phase, $"Reference model mismatch: entity {e} CompB expected={st.B.Value} actual={(_source.Has<CompB>(e) ? _source.Get<CompB>(e).Value.ToString() : "missing")}");
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Non-async helper for replaying a FrameDelta into the shadow world.
+    /// Extracted to avoid ReadOnlySpan&lt;byte&gt; (ref struct) inside an
+    /// async method, which is unsupported without preview language features.
+    /// </summary>
+    private void ReplayDeltaToShadow(FrameDelta source)
+    {
+        var bytes = source.AsSpan();
+        _frameDeltaBytes += bytes.Length;
+        _shadowStream.Clear();
+        var beforeDeser = GC.GetAllocatedBytesForCurrentThread();
+        _replayDelta.Deserialize(bytes);
+        _frameParseBytes += GC.GetAllocatedBytesForCurrentThread() - beforeDeser;
+        _shadowStream.Replay(_replayDelta);
+    }
+
+    async Task<bool> SubmitAndValidateAsync(int frame, SoakPhase phase)
+    {
+        var beforeLib = GC.GetAllocatedBytesForCurrentThread();
+
+        // Async submit + snapshot — applies to local world and builds delta
+        // in a background task simultaneously.
+        FrameDelta delta;
+        try
+        {
+            delta = await _stream.SubmitAndSnapshotAsync();
+        }
+        catch (Exception ex)
+        {
+            Fail(frame, phase, $"SubmitAsync failed: {ex.Message}");
+            return false;
+        }
+        var afterSubmit = GC.GetAllocatedBytesForCurrentThread();
+        _frameSubmitBytes += afterSubmit - beforeLib;
+
+        // Replay phase (delegated to non-async helper for ref struct compat)
+        if (!delta.IsEmpty)
+        {
+            try
+            {
+                ReplayDeltaToShadow(delta);
+            }
+            catch (Exception ex)
+            {
+                Fail(frame, phase, $"Replay failed: {ex.Message}");
+                return false;
+            }
+        }
+        _frameReplayBytes += GC.GetAllocatedBytesForCurrentThread() - afterSubmit;
+
+        // Entity count check (every frame)
+        if (_source.EntityCount != _shadow.EntityCount)
+        {
+            Fail(frame, phase, $"EntityCount mismatch: source={_source.EntityCount} shadow={_shadow.EntityCount}");
+            return false;
+        }
+
+        // Heavy validation (WorldValidator + CanonicalChecksum)
+        var doHeavy = _cfg.ValidateInterval <= 1 || frame % _cfg.ValidateInterval == 0;
+        if (doHeavy)
+        {
+            var beforeVal = GC.GetAllocatedBytesForCurrentThread();
+            var srcValid = WorldValidator.Validate(_source);
+            var shdValid = WorldValidator.Validate(_shadow);
+            if (!srcValid.IsValid || !shdValid.IsValid)
+            {
+                Fail(frame, phase, $"WorldValidator failed:\n  source: {string.Join("\n  ", srcValid.Issues)}\n  shadow: {string.Join("\n  ", shdValid.Issues)}");
+                return false;
+            }
+
+            var srcCs = _source.CanonicalChecksum();
+            var shdCs = _shadow.CanonicalChecksum();
+            _frameValidateBytes += GC.GetAllocatedBytesForCurrentThread() - beforeVal;
+            if (!srcCs.AsSpan().SequenceEqual(shdCs))
+            {
+                var srcDigest = WorldDigest.Compute(_source);
+                var shdDigest = WorldDigest.Compute(_shadow);
+                var srcFree = _source.FreeList.ToArray();
+                var shdFree = _shadow.FreeList.ToArray();
+                var freeDump = new System.Text.StringBuilder();
+                var maxFree = Math.Max(srcFree.Length, shdFree.Length);
+                for (var i = 0; i < maxFree; i++)
+                {
+                    var src = i < srcFree.Length ? $"{srcFree[i].Id}(v{srcFree[i].Version})" : "(none)";
+                    var shd = i < shdFree.Length ? $"{shdFree[i].Id}(v{shdFree[i].Version})" : "(none)";
+                    var marker = src == shd ? "" : " ← MISMATCH";
+                    freeDump.Append($"\n      [{i,3}] src={src,-16} shd={shd}{marker}");
+                }
+                Fail(frame, phase,
+                    $"CanonicalChecksum mismatch\n" +
+                    $"  source: {Convert.ToHexString(srcCs)}\n" +
+                    $"  shadow: {Convert.ToHexString(shdCs)}\n" +
+                    $"  digest source occupancy={Convert.ToHexString(srcDigest.Occupancy)} free={Convert.ToHexString(srcDigest.FreeList)}\n" +
+                    $"  digest shadow  occupancy={Convert.ToHexString(shdDigest.Occupancy)} free={Convert.ToHexString(shdDigest.FreeList)}" +
+                    $"  FreeList side-by-side:{freeDump}");
+                return false;
+            }
         }
 
         // Periodic reference model spot-check
