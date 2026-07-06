@@ -112,4 +112,104 @@ public class ChangeTrackingInfrastructureTests
         var v1 = world.DebugGetColumnVersion(e, Component<Position>.ComponentType);
         Assert.True(v1 > v0);
     }
+
+    // ── Task 3: structural transition log ────────────────────────────
+
+    [Fact]
+    public void Create_appends_transition_with_null_old()
+    {
+        var world = new World();
+        world.Track<Position>();
+        world.DebugClearTransitionLog();   // ignore any noise from Track/setup
+        var e = world.Create(new Position(0, 0));
+        var log = world.GetTransitionLogInternal();
+        Assert.Single(log);
+        Assert.Null(log[0].OldArchetype);
+        Assert.NotNull(log[0].NewArchetype);
+        Assert.Equal(e, log[0].Entity);
+    }
+
+    [Fact]
+    public void Destroy_appends_transition_with_null_new()
+    {
+        var world = new World();
+        world.Track<Position>();
+        var e = world.Create(new Position(0, 0));
+        world.DebugClearTransitionLog();
+        world.Destroy(e);
+        var log = world.GetTransitionLogInternal();
+        Assert.Single(log);
+        Assert.NotNull(log[0].OldArchetype);
+        Assert.Null(log[0].NewArchetype);
+        Assert.Equal(e, log[0].Entity);
+    }
+
+    [Fact]
+    public void Add_appends_migration_both_archetypes_present()
+    {
+        var world = new World();
+        world.Track<Position>();
+        var e = world.Create(new Position(0, 0));
+        world.DebugClearTransitionLog();
+        world.Add(e, new Velocity(0, 0));
+        var log = world.GetTransitionLogInternal();
+        Assert.Single(log);
+        Assert.NotNull(log[0].OldArchetype);
+        Assert.NotNull(log[0].NewArchetype);
+        Assert.NotSame(log[0].OldArchetype, log[0].NewArchetype);
+        Assert.Equal(e, log[0].Entity);
+    }
+
+    [Fact]
+    public void Remove_appends_migration()
+    {
+        var world = new World();
+        world.Track<Position>();
+        var e = world.Create(new Position(0, 0), new Velocity(0, 0));
+        world.DebugClearTransitionLog();
+        world.Remove<Velocity>(e);
+        var log = world.GetTransitionLogInternal();
+        Assert.Single(log);
+        Assert.NotNull(log[0].OldArchetype);
+        Assert.NotNull(log[0].NewArchetype);
+        Assert.NotSame(log[0].OldArchetype, log[0].NewArchetype);
+    }
+
+    [Fact]
+    public void Add_existing_component_does_not_append_transition()
+    {
+        var world = new World();
+        world.Track<Position>();
+        var e = world.Create(new Position(1, 1));
+        world.DebugClearTransitionLog();
+        world.Add(e, new Position(2, 2));   // already has Position -> in-place overwrite, no migration
+        Assert.Empty(world.GetTransitionLogInternal());
+    }
+
+    [Fact]
+    public void Clone_appends_created_transition()
+    {
+        var world = new World();
+        world.Track<Position>();
+        var src = world.Create(new Position(7, 7));
+        world.DebugClearTransitionLog();
+        var clone = world.Clone(src);
+        var log = world.GetTransitionLogInternal();
+        Assert.Single(log);
+        Assert.Null(log[0].OldArchetype);
+        Assert.NotNull(log[0].NewArchetype);
+        Assert.Equal(clone, log[0].Entity);
+        Assert.NotEqual(src, clone);
+    }
+
+    [Fact]
+    public void No_transitions_when_tracking_inactive()
+    {
+        var world = new World();   // no Track
+        world.Create(new Position(0, 0));
+        var e = world.Create(new Position(0, 0));
+        world.Add(e, new Velocity(0, 0));
+        world.Destroy(e);
+        Assert.Empty(world.GetTransitionLogInternal());
+    }
 }

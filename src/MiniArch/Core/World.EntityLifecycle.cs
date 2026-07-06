@@ -224,6 +224,8 @@ public sealed partial class World
             movedRecord.Archetype = info.Archetype;
             movedRecord.RowIndex = info.RowIndex;
         }
+
+        AppendTransition(entity, arch, null);
     }
 
     private Entity CreateInArchetype(Archetype archetype, out int rowIndex)
@@ -234,6 +236,7 @@ public sealed partial class World
         ref var record = ref _records[id];
         record.Archetype = archetype;
         record.RowIndex = rowIndex;
+        AppendTransition(entity, null, archetype);
         return entity;
     }
 

@@ -217,6 +217,13 @@ public sealed partial class World : IDisposable
     internal bool IsChangeTrackingActive => _anyTrackingActive;
     internal long CurrentWriteEpoch => _writeEpoch;
     internal IReadOnlyList<Core.TransitionEntry> GetTransitionLogInternal() => _transitionLog;
+    internal void DebugClearTransitionLog() => _transitionLog.Clear();
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void AppendTransition(Entity e, Core.Archetype? old, Core.Archetype? @new)
+    {
+        if (_anyTrackingActive) _transitionLog.Add(new Core.TransitionEntry(e, old, @new));
+    }
 
     /// <summary>
     /// Debug/test helper: reads the current column version for a component on an entity.
