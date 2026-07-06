@@ -7,9 +7,9 @@ namespace MiniArch;
 public sealed partial class World
 {
     /// <summary>
-    /// Adds a new component to an entity. Throws if the entity already has it.
+    /// Ensures the entity has component <typeparamref name="T"/>. If the component
+    /// already exists, its value is overwritten in place.
     /// </summary>
-    /// <exception cref="InvalidOperationException">The entity already has a component of type <typeparamref name="T"/>.</exception>
     public void Add<T>(Entity entity, T component) where T : unmanaged
     {
         AssertNotDisposed();

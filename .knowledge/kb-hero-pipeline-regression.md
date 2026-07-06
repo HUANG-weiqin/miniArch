@@ -2,7 +2,7 @@
 title: Hero Pipeline Regression Test
 module: HeroComing.Perf
 description: First-class regression gate for architecture changes — 30s timed throughput test; also covers PipelineBenchmarkTests (history reference)
-updated: 2026-06-30 (补 --check-baseline / --update-baseline 门禁语义)
+updated: 2026-07-06 (标注 baseline 可能落后 2026-07-05/06 最新测量; 待人工 --update-baseline)
 ---
 # Hero Pipeline Regression Test
 
@@ -33,6 +33,8 @@ updated: 2026-06-30 (补 --check-baseline / --update-baseline 门禁语义)
 - Movement 吞吐量：≥1210 rounds/s（baseline 的 80%）
 - Attack 吞吐量：≥767 rounds/s（baseline 的 80%）
 - 内存：heap delta 不能持续增长（允许 ±10% 波动）
+
+> **2026-07-06 审阅提醒**：`kb-command-stream.md` 与 `kb-safety-proof.md` 记录的最新 HeroComing.Perf 测量约为 Movement 2086~2104 rounds/s、Attack 1256~1268 rounds/s，高于本页 2026-06-30 baseline。当前阈值可能偏宽松；不要手工改表，需人工确认当前代码/机器状态稳定后运行 `dotnet run -c Release --project tools/perf/HeroComing.Perf --update-baseline` 刷新本页 baseline 与阈值。
 
 ### 如果失败
 

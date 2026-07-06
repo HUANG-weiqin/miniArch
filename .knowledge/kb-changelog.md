@@ -2,13 +2,21 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-07-04 (持续审计：4 项代码优化 + 测试覆盖补充)
+updated: 2026-07-06 (架构审阅知识库校准：CommandStreamCore 边界、Add 语义、baseline 提醒)
 ---
 # Knowledge Base Changelog
 
 > 这个页面只记录**重大架构变更和知识库校准事件**，供追溯。
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
 
+
+## 2026-07-06 架构审阅知识库校准
+
+- **Add/Set/Remove 真实语义校准**：`World.Add<T>` 当前是 ensure+overwrite（已存在时原地覆盖），不是 strict throw；`World.Set<T>` 缺失时抛异常；`World.Remove<T>` 缺失时 no-op。同步更新 `World.StructuralChange.cs` XML doc、`kb-design-rationale.md`、`kb-core-ecs.md`、`kb-architecture-review.md`。历史上 strict Add 曾被文档化，但 B1/B4 证明重复 Add 必须覆盖才能保持 Submit/Replay 收敛。
+- **CommandStreamCore mutator 边界校准**：base class 不再公开 public throw mutator，也不再需要子类 `public new` 隐藏；9 个录制 mutator 只存在于 `CommandStream` / `ParallelCommandStream` sealed 子类，base 只提供 `protected *Core` helper 与消费 API。同步更新 `kb-command-stream.md`、`kb-architecture-review.md`。
+- **FrameDelta.Validate 状态校准**：`FrameDelta.Validate` 已校验 component data size 与注册表 schema 一致性；`ReplayCore` 的剩余 P2 设计债是无事务回滚/目标 world allocator 兼容性，而非 size 校验缺失。同步更新 `kb-code-review-findings.md`。
+- **HeroComing.Perf baseline 提醒**：不手工刷新 baseline；在 `kb-hero-pipeline-regression.md` 标注当前 2026-06-30 阈值可能落后最新 2026-07-05/06 测量，需人工确认后运行 `--update-baseline`。
+- **安全猜想记录**：记录 `RestoreState` 不回退 `_archetypeSnapshot` 非 bug；capture 后新 archetype 已发布到当前 snapshot，restore 后空壳 archetype 不影响 query 正确性。
 
 ## 2026-07-04 持续审计：4 项代码优化 + 测试覆盖补充
 

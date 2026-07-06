@@ -2,7 +2,7 @@
 title: Architecture Mechanistic Review
 module: MiniArch.Core
 description: Mechanistic insight of the entire miniArch ECS library — one-line truths, subsystem breakdown, data flows, known issues, and design tensions. Links to per-subsystem kb pages for depth.
-updated: 2026-07-05 (IsChunked derived from _segments, AddEntity=AllocateRows+WriteEntityAt, ConvertToChunked unified copy)
+updated: 2026-07-06 (CommandStreamCore mutator boundary + Add/Set/Remove semantics calibrated)
 ---
 # Architecture Mechanistic Review
 
@@ -116,9 +116,9 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 ### 8. CommandStream（recorder 层）
 - **2026-07-05 拆分为两个公开 sealed 类型**：
   - `CommandStream`：单线程默认，所有 mutator 直接调用，无锁、无非虚拟化开销
-  - `ParallelCommandStream`：mutator 在 `_storeCreateLock` 内（`Create`/`Track`/`Destroy`/`AddChild`/`RemoveChild`/`Clone` 全程 lock；`Add`/`Set`/`Remove` 用 `CanRecordParallelComponentCommand` 守门 + `GetOrCreateStoreParallel<T>().AppendConcurrent`，后者自身在 store 内部用 ThreadLocal buffer 实现并行）
-  - 共享层是 `public abstract CommandStreamCore`，承载所有 emit/submit/snapshot/replay/async 逻辑
-  - 9 个 mutator（Create/Track/Add/Set/Remove/Destroy/AddChild/RemoveChild/Clone）在 base class 里是 `public` 非虚拟方法（默认 throw `NotSupportedException`），子类用 `public new` 隐藏——**不**用 `abstract`+`override`，因为 .NET 8 JIT 无法可靠 devirtualize generic virtual 方法（详见 `kb-design-rationale.md` §3.9 + `kb-code-review-findings.md` CS9）
+  - `ParallelCommandStream`：mutator 在 `_storeCreateLock` 内（`Create`/`Track`/`Destroy`/`AddChild`/`RemoveChild`/`Clone` 全程 lock；`Add`/`Set`/`Remove` 在锁内判定 pending/alive，随后走 `GetOrCreateStoreParallel<T>().AppendConcurrent`，后者自身在 store 内部用 ThreadLocal buffer 实现并行）
+  - 共享层是 `public abstract CommandStreamCore`，承载所有 emit/submit/snapshot/replay/async 逻辑，以及 `CreateCore`/`DestroyCore` 等 `protected` helper
+  - 9 个 mutator（Create/Track/Add/Set/Remove/Destroy/AddChild/RemoveChild/Clone）**不**在 base class 上公开；只存在于两个 sealed 子类上。这样既避免 `abstract`+`override` generic virtual 热路径开销，也把“用 base 引用调用 mutator”的错误从运行时 throw 变成编译期不可调用（详见 `kb-design-rationale.md` §3.9）
 - per-component-type typed store（`ComponentStore<T>`：main `StoreEntry<T>[]` + ThreadLocal buffer）append-only 录制
 - created entity 走 pending batch（per-batch 单链表 `_batchHeads` → `BatchedComponent.Next`），materialize 时稳定排序+去重达到 last-wins
 - `Submit()` 直接写 typed value 到 World（零序列化）；`Snapshot()` 编译成 `FrameDelta`；`SubmitAndSnapshotAsync()` 双 buffer 池（`_spareFrozen` ↔ `_pendingFrozen`）稳态零分配
@@ -140,7 +140,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
   - `World.SnapshotBridge.cs`：snapshot/clone 用的 internal backdoor（`Reset`、`AddChildFromSnapshot`、`SetSnapshot*`、`WriteFreeList`/`ReadFreeList`/`CopyFreeIdsFrom`、`FreeList`、`ValidateSnapshotEntitySlot`）
   - `World.Create.Generated.cs`：泛型重载 + `GetSingleton<T>`
   - `World.QueryCache.cs`：Query 缓存管理
-  - `World.StructuralChange.cs`：Add/Set/Remove（strict 语义：`Add` 组件已存在时抛异常，`Set` 组件不存在时抛异常；CommandStream/Replay 同样 strict——详见 `kb-design-rationale.md` §2.9）
+  - `World.StructuralChange.cs`：Add/Set/Remove（当前语义：`Add` ensure+overwrite，`Set` 缺失时抛异常，`Remove` 缺失时 no-op；CommandStream/Replay 同样把 Add 解释为 ensure+overwrite——详见 `kb-design-rationale.md` §2.9）
   - `World.Checksum.cs`：`Checksum()` / `CanonicalChecksum()` 双模式（详见 `kb-snapshot-persistence.md` Checksum 段）
 - 结构变更核心：查 `EntityRecord` → 算目标签名 → edge cache → `MoveEntityCore`（带 catch rollback）+ `FinishMoveEntity` 分离，便于批量 materialize 复用
 
@@ -170,9 +170,10 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - Per-filter 跟踪用代码复杂度换噪音级 CPU 时间
 - 详见 `kb-design-rationale.md` §2.8 及 §3.1
 
-### P3. Add/Set 语义 — 已改（strict 语义）
-- 原 upsert 语义（`Add`/`Set` 同义别名）已改为 strict：`Add<T>` 抛异常若组件已存在，`Set<T>` 抛异常若组件不存在
-- 性能影响为零——`TryGetComponentIndex` 在旧 upsert 代码中同样需要
+### P3. Add/Set/Remove 语义 — 已校准（Add ensure+overwrite, Set strict）
+- `Add<T>` 已存在时覆盖值，缺失时添加；`Set<T>` 缺失时抛异常；`Remove<T>` 缺失时 no-op
+- 这是 Submit/Replay parity 的真实语义：Clone 后同帧重复 Add 同组件必须收敛（见 `kb-code-review-findings.md` B1/B4）
+- 性能影响为零——`TryGetComponentIndex` 无论 strict/upsert/ensure 都需要
 - 详见 `kb-core-ecs.md` 决策段 + `kb-design-rationale.md` §2.9
 
 ### P3b. CaptureState/RestoreState — 已修复
@@ -185,12 +186,12 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 
 ## 可优化点
 
-**O1-O5 已全部处理**：
+**O1-O5 已全部处理或拒绝**：
 - O1（Query 增量失效）、O3（swap-remove 大组件）、O5（free-list 反向索引）→ 已评估，不值得做（见 `kb-design-rationale.md` §3）
 - O2（Signature 分配）→ 已有 `CachedCreateArchetype` + edge cache 解决（见 `kb-design-rationale.md` §3.7）
-- O4（FrozenState 字段对调 struct 化）→ `d70c0c3` 已完成，`FrozenState` 现为 struct，`SwapOutState` 一次整体赋值
+- O4（FrozenState 字段对调）→ 已改为 `FrozenState` 引用对象整体换出/回收；`SwapOutState` 做单次对象引用交换，不再逐字段 swap
 
-无剩余可优化点。库处于维护期。
+库处于维护期：没有剩余“应做的大重构/性能优化”。仍存在少量 P2 级 defense-in-depth 设计债与已验证安全猜想，统一记录在 `kb-code-review-findings.md`，不要把它们解读为需要重开架构。
 
 ## 设计张力
 

@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 健壮性审阅发现汇总——已确认的设计债、已验证的安全猜想、已排除的非 bug 猜想
-updated: 2026-07-06 (B5: EnsureReplayReservation swap-remove 导致 FreeList 顺序分歧; B6: CancelPendingEntity push order 与 Release 顺序不同)
+updated: 2026-07-06 (架构审阅校准: Validate size check 已补; RestoreState archetype snapshot 安全猜想记录)
 ---
 # 代码审阅发现
 
@@ -39,8 +39,8 @@ updated: 2026-07-06 (B5: EnsureReplayReservation swap-remove 导致 FreeList 顺
 - **模式**: R11 部分修改
 - **位置**: `World.EntityLifecycle.cs` ReplayCore
 - **缺失的安全条件**: Delta 回放中途失败时无法回滚已执行操作
-- **真实风险**: 低。用户应通过 `FrameDelta.Validate()` 预校验——这已在文档中。但 Validate 当前不校验 component data 大小与 schema 一致性（潜在绕过路径）
-- **建议修复**: 强化文档约束；`FrameDelta.Validate` 增加 component data 大小交叉校验
+- **真实风险**: 低。用户应通过 `FrameDelta.Validate()` 预校验——这已在文档中。`FrameDelta.Validate` 现在已校验 component data 大小与 schema 一致性；剩余风险是 replay 中途失败仍无法回滚，且 allocator/free-list 兼容性只能由从 frame 0 replay 或 snapshot bootstrap 保证
+- **建议修复**: 强化文档约束；如需进一步 harden，可增加 replay 前 dry-run/target-world compatibility check，但当前 ROI 低
 
 ---
 
@@ -79,6 +79,7 @@ updated: 2026-07-06 (B5: EnsureReplayReservation swap-remove 导致 FreeList 顺
 | S4 | `Archetype.RemoveAt` 残留组件数据在 ID 复用时泄露 | ❌ 非 bug。Archetype 内同组件集合保证新实体迁入时全量覆写。`Count` 边界阻止读取 | 设计分析 |
 | S5 | `Archetype._cachedFlatEntities` 世代计数器 `long` 溢出 | ❌ 非 bug。需 2^63 次布局变更，物理不可能 | 数值分析 |
 | S6 | EntityFieldResolver struct layout 变化导致 offset 缓存失效 | ❌ 非 bug。`Marshal.OffsetOf` 实时查 CLR，缓存按 `ComponentType.Value` 索引，类型→ID 映射不可变 | 代码走读 `EntityFieldResolver.cs:70-103` |
+| S7 | `RestoreState` 不回退 `_archetypeSnapshot` 导致 query 看不到 capture 后创建的新 archetype | ❌ 非 bug。capture 后创建新 archetype 时当前 `_archetypeSnapshot` 已经由 `PublishArchetypeSnapshot` 追加；restore 后这些 archetype 作为空壳保留，QueryCache 看到空 chunk/entity count 不影响正确性。archetype 永不删除是 QueryCache append-only 失效机制的基础 | 代码走读 `World.cs:1205-1228` + `World.QueryCache.cs:127-140` + `QueryCache.cs:103-126` |
 
 ---
 
