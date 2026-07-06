@@ -277,8 +277,9 @@ internal sealed class QueryCache
     private static int ExpectedViewShape(Archetype archetype) =>
         archetype.IsChunked ? archetype.SegmentCount : NonChunkedShape;
 
+    /// <summary>Tests whether a single archetype matches this query's filter.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool Matches(Archetype archetype)
+    internal bool Matches(Archetype archetype)
     {
         var archMask = archetype.Signature.ComponentMask;
 

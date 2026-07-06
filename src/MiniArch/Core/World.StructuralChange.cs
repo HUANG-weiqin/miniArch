@@ -115,6 +115,7 @@ public sealed partial class World
             destination!.CacheRemoveDestination(componentType, archetype);
         }
 
+        var sourceArchetype = info.Archetype!;
         var rowIdx = MoveEntityCore(entity, info, destination!);
         try
         {
@@ -126,6 +127,7 @@ public sealed partial class World
             throw;
         }
         FinishMoveEntity(entity, info, destination!, rowIdx);
+        AppendTransition(entity, sourceArchetype, destination!);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -185,6 +187,7 @@ public sealed partial class World
         ComponentType componentType,
         byte* source)
     {
+        var sourceArchetype = sourceInfo.Archetype!;
         var rowIdx = MoveEntityCore(entity, sourceInfo, destination);
         try
         {
@@ -197,6 +200,7 @@ public sealed partial class World
             throw;
         }
         FinishMoveEntity(entity, sourceInfo, destination, rowIdx);
+        AppendTransition(entity, sourceArchetype, destination);
     }
 
     private Archetype GetOrCreateAddDestinationArchetype(Archetype source, ComponentType componentType)
@@ -235,6 +239,7 @@ public sealed partial class World
         }
 
         MoveEntity(entity, info, destination!);
+        AppendTransition(entity, archetype, destination!);
     }
 
 }

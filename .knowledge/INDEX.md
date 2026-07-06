@@ -13,6 +13,7 @@
 | MiniArch.Core（ECS 运行时） | `kb-core-ecs.md`、`kb-architecture-review.md`、`kb-chunk-storage.md`、`kb-cache-optimization.md` |
 | MiniArch.Core CommandStream | `kb-command-stream.md`、`kb-deferred-create-design.md` |
 | MiniArch.Core Query | `kb-query-invalidation.md`、`kb-parallel-query.md` |
+| MiniArch.Core Change Tracking | `kb-change-tracking.md`（Track\<T> 游标、ModifiedChunks/Transitions、为什么不是 push event） |
 | MiniArch.Core Snapshot | `kb-snapshot-persistence.md` |
 | MiniArch.Core Hierarchy | `kb-hierarchy-runtime.md` |
 | MiniArch.Diagnostics（诊断工具） | `kb-ecs-diagnostics.md`（WorldDiff、WorldValidator、EntityDump、WorldDigest） |
@@ -60,6 +61,9 @@
 - **Query 失效机制** → `kb-query-invalidation.md`
 - **并行 Query** → `kb-parallel-query.md`
 - **Hierarchy** → `kb-hierarchy-runtime.md`
+
+**反应式 / 变更追踪**：
+- **变更追踪（渲染层反应式）** → `kb-change-tracking.md`（Track\<T> / ModifiedChunks / Transitions；为什么不是 push event 见 `kb-design-rationale.md` §3.10）
 
 **持久化 / 状态复制**：
 - **Archive/Snapshot** → `kb-snapshot-persistence.md`

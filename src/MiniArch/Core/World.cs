@@ -88,6 +88,11 @@ public sealed partial class World : IDisposable
 
     private bool _disposed;
 
+    // ── Change tracking ─────────────────────────────────────────────
+    internal long _writeEpoch;                                  // monotonic, long = no wraparound
+    private readonly List<WeakReference<Core.IChangeQuery>> _changeQueries = new();
+    private bool _anyTrackingActive;                           // world-level gate
+
     /// <summary>
     /// Creates a world.
     /// </summary>
@@ -207,6 +212,82 @@ public sealed partial class World : IDisposable
     internal int ArchetypeCount => Volatile.Read(ref _archetypeSnapshot).Length;
 
     internal int ArchetypeCacheGeneration => _createArchetypeCacheGeneration;
+
+    // ── Change tracking accessors ───────────────────────────────────
+    internal bool IsChangeTrackingActive => _anyTrackingActive;
+    internal long CurrentWriteEpoch => _writeEpoch;
+
+    internal void RegisterChangeQuery(Core.IChangeQuery query)
+    {
+        _changeQueries.Add(new WeakReference<Core.IChangeQuery>(query));
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void AppendTransition(Entity e, Core.Archetype? old, Core.Archetype? @new)
+    {
+        if (!_anyTrackingActive) return;
+        for (var i = _changeQueries.Count - 1; i >= 0; i--)
+        {
+            var weakRef = _changeQueries[i];
+            if (weakRef.TryGetTarget(out var query))
+                query.OnTransition(e, old, @new);
+            else
+            {
+                // Swap-remove dead weak ref (O(1)).
+                _changeQueries[i] = _changeQueries[_changeQueries.Count - 1];
+                _changeQueries.RemoveAt(_changeQueries.Count - 1);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Debug/test helper: reads the current column version for a component on an entity.
+    /// Returns 0 if tracking is inactive or the entity does not have the component.
+    /// </summary>
+    internal long DebugGetColumnVersion(Entity entity, ComponentType type)
+    {
+        if ((uint)entity.Id >= (uint)_entitySlotCount) return 0;
+        ref var record = ref _records[entity.Id];
+        if (!record.IsOccupied || record.Version != entity.Version) return 0;
+        var arch = record.Archetype!;
+        if (!arch.TryGetComponentIndex(type, out var col)) return 0;
+        return arch._columnVersions?[col] ?? 0;
+    }
+
+    /// <summary>
+    /// Activates change tracking for component <typeparamref name="T"/> and returns a
+    /// <see cref="ChangeQuery{T}"/> cursor. Safe to call multiple times; idempotent.
+    /// </summary>
+    public ChangeQuery<T> Track<T>() where T : unmanaged
+    {
+        ActivateTracking(Component<T>.ComponentType);
+        var query = new ChangeQuery<T>(this);
+        RegisterChangeQuery(query);
+        return query;
+    }
+
+    internal void ActivateTracking(ComponentType type)
+    {
+        if (!_anyTrackingActive)
+        {
+            _anyTrackingActive = true;
+            foreach (var arch in _archetypes.Values)
+                ActivateArchetypeTracking(arch);
+        }
+        else
+        {
+            foreach (var arch in _archetypes.Values)
+                if (arch.ContainsComponent(type))
+                    ActivateArchetypeTracking(arch);
+        }
+    }
+
+    private void ActivateArchetypeTracking(Core.Archetype arch)
+    {
+        if (arch._anyTrackingActive) return;
+        arch._anyTrackingActive = true;
+        arch._columnVersions = new long[arch._elementSizes!.Length];
+    }
 
     /// <summary>
     /// Adds a child to a parent.
@@ -424,6 +505,9 @@ public sealed partial class World : IDisposable
         }
 
         archetype = new Archetype(signature, ResolveComponentTypes(signature), _chunkCapacity);
+        archetype._owner = this;
+        if (_anyTrackingActive)
+            ActivateArchetypeTracking(archetype);
         _archetypes.Add(signature, archetype);
         CacheArchetypeByMaskIfCanonical(signature, archetype);
         PublishArchetypeSnapshot(archetype);
@@ -1052,6 +1136,7 @@ public sealed partial class World : IDisposable
 #endif
         record.Archetype = archetype;
         record.RowIndex = rowIndex;
+        AppendTransition(entity, null, archetype);
         return rowIndex;
     }
 

@@ -2,13 +2,30 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-07-06 (架构审阅知识库校准：CommandStreamCore 边界、Add 语义、baseline 提醒)
+updated: 2026-07-06 (架构审阅知识库校准 + long cursor + ClearTransitionLog 服务器安全)
 ---
 # Knowledge Base Changelog
 
 > 这个页面只记录**重大架构变更和知识库校准事件**，供追溯。
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
 
+
+## 2026-07-06 新增 Change Tracking 知识库
+
+- **新增 Change Tracking 子系统知识页**：`kb-change-tracking.md`，覆盖 `Track<T>` / `ChangeQuery<T>` / `ModifiedChunks` / `Transitions`。per-(archetype,column) long 版本号 + old→new signature transition log。Get=read/Set=write 契约。tracking-off 零回归（门禁绿）。详见 `kb-change-tracking.md`，设计决策见 `kb-design-rationale.md` §2.11，push-event 误判见 §3.10。
+- **`kb-design-rationale.md`** §2 新增 2.11 Change Tracking 子系统决策，§3 新增 3.10 push-event 误判（原 3.10 防御性检查顺移至 3.11），front matter 日期同步更新。
+- **`INDEX.md`** 模块地图新增 MiniArch.Core Change Tracking 行，快速入口新增"反应式 / 变更追踪"区。
+- **`kb-changelog.md`** 本条目。
+
+## 2026-07-06 ChangeQuery\<T\> fluent filter（With/Without/WithAny）
+
+- **ChangeQuery\<T\> 增加 fluent filter（With/Without/WithAny）**：支持复合签名变更追踪。`QueryCache.Matches` 改 `internal`。Transitions 语义从"组件有无"升级为"签名匹配集进出"。详见 `kb-change-tracking.md`。
+
+## 2026-07-06 long cursor + ClearTransitionLog — 服务器长运行安全
+
+- **ChangeQuery._transitionCursor int→long**：修复 2B 回绕风险（100 ops/s 下约 8 个月溢出）。long 消除该风险，服务器可无限期连续运行。
+- **World.ClearTransitionLog() 新增**：List.Clear() 复用内部数组（零 GC），cursor 通过 generation counter + clamp 自动 reset。用户需在每帧所有消费者 drain 完 transitions 后调用，以 bound 内存。
+- 不调用 ClearTransitionLog 则 log 单调增长（100 ops/s ≈ 207 MB/天），调用则每帧归零。
 
 ## 2026-07-06 架构审阅知识库校准
 
@@ -227,5 +244,14 @@ Apply advisor 轮次审阅发现，补充 3 项：
 - **FrameDelta 热路径 struct 大幅缩小**（Movement +50% / Attack +29%）
 - **ComponentMask 扩展为 512-bit**（8 × `ulong`），覆盖 component id 0..511 的快速匹配
 - **新增分段存储模式**：Archetype 超过阈值后自动切换为多 Segment 模式（详见 `kb-chunk-storage.md`）
+
+## 2026-07-06 transition log 重构：per-ChangeQuery 私有 + dispatch via IChangeQuery.OnTransition
+
+- **transition log 从 World 共享重构为 per-ChangeQuery 私有**：每个 `ChangeQuery<T>` 持有自己的 `List<Transition>`。World 在结构操作时通过 `IChangeQuery.OnTransition` 将变更 dispatch 到所有注册的 query（`List<WeakReference<IChangeQuery>>`），每个 query 独立 filter 后存入自己的 log。
+- **Entered/Exited 在 dispatch 时确定**（不在消费时）：预过滤，log 只存匹配的 `Transition`（12B/条），不存全量 `TransitionEntry`。
+- **Transitions() auto-clear**：drain 时 `ToArray()` + `List.Clear()` 复用内部数组，零 GC。无需 `ClearTransitionLog()`。
+- **TransitionEntry 删除**：旧 `(Entity, OldArchetype?, NewArchetype?)` 不再需要——Entered/Exited 在 dispatch 时已确定，不再存储 old/new archetype。
+- **ClearTransitionLog() 删除**：每个 query 自管 log，drain 即 clear，无需 world 级协调。
+- **服务器长运行安全 by design**：log 以 "drain 后清零" 为界，不再 "全 World 共享单调增长"。
 
 
