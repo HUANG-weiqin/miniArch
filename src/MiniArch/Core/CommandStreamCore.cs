@@ -461,6 +461,36 @@ public abstract class CommandStreamCore
         return d;
     }
 
+    /// <summary>
+    /// Writes the current snapshot into an existing <see cref="FrameDelta"/>,
+    /// reusing its internal buffer. After warmup (buffer sized), repeated
+    /// calls are zero-allocation —no new <see cref="FrameDelta"/> object header.
+    /// </summary>
+    /// <remarks>
+    /// Prefer this over <see cref="Snapshot"/> in hot loops where you hold a
+    /// persistent <c>FrameDelta</c> instance. Behavior is identical to
+    /// <see cref="Snapshot"/> except the result is written into <paramref name="target"/>.
+    /// <para/>
+    /// The caller must not mutate <paramref name="target"/> concurrently.
+    /// </remarks>
+    public void SnapshotInto(FrameDelta target)
+    {
+        SealParallelStores();
+        PruneStaleComponentCommands();
+        if (!_deferredEntities)
+        {
+            ResolveDeferredCreates();
+            target.Clear();
+            BuildDelta(target);
+            _pendingReplay = true;
+            return;
+        }
+        ThrowIfSnapshotHasImmediateEntities();
+        target.Clear();
+        BuildDelta(target);
+        _pendingReplay = true;
+    }
+
     // ── Replay ───────────────────────────────────────────────────────
 
     /// <summary>

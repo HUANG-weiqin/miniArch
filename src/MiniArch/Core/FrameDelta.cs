@@ -20,7 +20,7 @@ namespace MiniArch.Core;
 /// <item>
 /// <b>Placeholder delta</b> (multi-host lockstep): produced by
 /// <see cref="CommandStreamCore.Snapshot"/> when
-        /// <see cref="CommandStreamCore.DeferredEntities"/> is <c>true</c>. Each
+/// <see cref="CommandStreamCore.DeferredEntities"/> is <c>true</c>. Each
 /// replaying <see cref="World"/> assigns its own local ids by mapping
 /// <c>seq→local real</c>. Two hosts replaying the same delta will
 /// converge to identical world state even though entity ids may differ.
@@ -28,8 +28,8 @@ namespace MiniArch.Core;
 /// <item>
 /// <b>Real-id delta</b>: produced by
 /// <see cref="CommandStreamCore.SubmitAndSnapshotAsync"/> (always) or by
-        /// <see cref="CommandStreamCore.Snapshot"/> when
-        /// <see cref="CommandStreamCore.DeferredEntities"/> is <c>false</c>
+/// <see cref="CommandStreamCore.Snapshot"/> when
+/// <see cref="CommandStreamCore.DeferredEntities"/> is <c>false</c>
 /// (default). Ids are already resolved by the producer. Mirror clients
 /// must have synchronized id allocators (e.g. by replaying every frame
 /// since frame 0). The replay system enforces this
@@ -56,6 +56,17 @@ public sealed class FrameDelta
     internal byte[] _buffer = Array.Empty<byte>();
     internal int _length;
     internal int _opCount;
+
+    /// <summary>
+    /// Resets this delta for reuse. The internal buffer is kept (no shrink)
+    /// so the next <see cref="Deserialize"/> or <c>SnapshotInto</c>
+    /// can reuse capacity.
+    /// </summary>
+    internal void Clear()
+    {
+        _length = 0;
+        _opCount = 0;
+    }
 
     /// <summary>
     /// Gets the total number of operations in this delta.
