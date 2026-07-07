@@ -155,24 +155,56 @@ public sealed partial class World
         var world = archetype._owner;
         if (world is not null)
         {
-            if (world._singlePreviousQuery is { } q)
+            // Typed fast path: direct T[] array writes (same as hand-written manual code)
+            if (world._activeTypedTracker is ChangeTracker<T> tracker)
             {
-                // Fast path: inline capture, no dispatch
-                q.CaptureOld(entity, archetype, info.RowIndex);
-                archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
-                // Lazy New: read from live storage in Changes()
+                ref var cell = ref archetype.GetComponentRefAt<T>(componentIndex, info.RowIndex);
+
+                var id = entity.Id;
+
+                // Bounds check: grow if needed (rare path)
+                if ((uint)id >= (uint)tracker.IsDirty.Length)
+                    tracker.EnsureCapacity(id);
+
+                // Dirty check + capture
+                ref var dirty = ref tracker.IsDirty[id];
+                if (!dirty)
+                {
+                    dirty = true;
+                    var count = tracker.DirtyCount;
+                    if ((uint)count >= (uint)tracker.DirtyList.Length)
+                        tracker.EnsureDirtyListCapacity();
+                    tracker.DirtyList[count] = id;
+                    tracker.DirtyEntities[count] = entity;
+                    tracker.DirtyCount = count + 1;
+                    tracker.OldValues[id] = cell;
+                }
+                tracker.NewValues[id] = component;
+
+                // Direct write + mark dirty (skip second GetComponentRefAt in SetComponentAtTyped)
+                cell = component;
+                archetype.MarkColumnWrittenIfNeeded(componentIndex, info.RowIndex);
+                return;
             }
-            else if (world._anyPreviousTrackingActive)
+
+            if (world._anyPreviousTrackingActive)
             {
-                // Slow path: dispatch for multiple queries
-                world.DispatchBeforeWrite(entity, archetype, info.RowIndex);
-                archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
-                world.DispatchAfterWrite(entity, archetype, info.RowIndex);
+                // Slow path: dispatch for multiple queries or multi-type capture
+                if (world._singlePreviousQuery is { } q)
+                {
+                    q.CaptureOld(entity, archetype, info.RowIndex);
+                    archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
+                }
+                else
+                {
+                    world.DispatchBeforeWrite(entity, archetype, info.RowIndex);
+                    archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
+                    world.DispatchAfterWrite(entity, archetype, info.RowIndex);
+                }
+                return;
             }
-            else
-            {
-                archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
-            }
+
+            archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
             return;
         }
 

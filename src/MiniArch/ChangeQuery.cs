@@ -56,20 +56,21 @@ public sealed class ChangeQuery : IChangeQuery
     // Per-type cursor for ModifiedChunks<T>
     private readonly Dictionary<int, long> _valueCursors = new();
 
-    // Snapshot state: direct-indexed by entity ID (no Dictionary)
-    // Uses epoch + version to handle entity ID reuse safely.
-    private int _snapEpoch;               // incremented on drain/reset
-    private int[] _stampById = [];        // _stampById[id] == _snapEpoch → written this epoch
-    private int[] _versionById = [];      // entity version at time of first write
-    private int[] _slotById = [];         // slot index + 1 (0 = not dirty)
-    private Entity[] _dirtyList = [];     // ordered dirty entities, indexed by slot
-    private byte[] _oldValues = [];       // old values, indexed by slot * _snapshotSize
-    private byte[] _newValues = [];       // new values, indexed by slot * _snapshotSize
-    private int _snapCount;               // number of dirty entities
+    // Snapshot state: per-entity indexed arrays + dirty list for iteration
+    // Shadow: indexed by entity ID × _snapshotSize, stores old values
+    // Dirty tracking: _isDirty[id] + _dirtyEntities list for O(K) iteration
+    // Location: _dirtyArchetypes[_dirtyEntities[idx].Id], _dirtyRows[...] for Lazy New
+    private byte[] _shadowValues = [];       // old values, indexed by entity.Id * _snapshotSize
+    private bool[] _isDirty = [];             // _isDirty[id] → entity was written this tick
+    private int[] _dirtyList = [];            // ordered dirty entity IDs for O(K) iteration
+    private Core.Archetype?[] _dirtyArchetypes = []; // archetype per entity (indexed by entity.Id)
+    private int[] _dirtyRows = [];            // row per entity (indexed by entity.Id)
+    private Entity[] _dirtyEntityMap = [];    // entity per entity (indexed by entity.Id)
+    private int _dirtyCount;                  // number of dirty entities in _dirtyList
 
-    // Location storage for Lazy New (read New from live storage in Changes())
-    private Core.Archetype?[] _dirtyArchetypes = [];
-    private int[] _dirtyRow = [];
+    // Typed fast path: when single Capture<T> + Previous, use typed arrays
+    // instead of byte[] + archetype/row storage
+    private object? _typedTracker;  // ChangeTracker<T> (boxed generic)
 
     // Cached component index for hot path (avoids repeated TryGetComponentIndex)
     private Core.Archetype? _cachedArchetype;
@@ -77,6 +78,12 @@ public sealed class ChangeQuery : IChangeQuery
 
     // Reusable buffer for DrainModifiedChunks<T> (grown, never shrunk)
     private ChunkView[] _drainBuffer = [];
+
+    // Reusable buffers for DrainChanges() (grown, never shrunk)
+    private byte[] _drainData = [];
+    private EntityChange[] _drainResult = [];
+    private ComponentType[] _cachedTypesCopy = [];  // cached once, immutable after config
+    private int[] _cachedOffsetsCopy = [];           // cached once, immutable after config
 
     private int _worldGen;  // captured at construction; compared on self-heal
 
@@ -96,8 +103,16 @@ public sealed class ChangeQuery : IChangeQuery
         // Self-heal: world state was reset (RestoreState/Dispose).
         // Clear stale accumulations and re-register dispatch paths.
         _transitions.Clear();
-        _snapCount = 0;
-        _snapEpoch++;
+
+        // Reset dirty state
+        for (var i = 0; i < _dirtyCount; i++)
+        {
+            var id = _dirtyList[i];
+            if (id < _isDirty.Length)
+                _isDirty[id] = false;
+        }
+        _dirtyCount = 0;
+
         _cache = null;
         _consumed = false;
         _cachedArchetype = null;
@@ -119,27 +134,23 @@ public sealed class ChangeQuery : IChangeQuery
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void EnsureEntityCapacity(int id)
+    private void EnsureShadowCapacity(int id)
     {
-        if (id < _stampById.Length) return;
-        var newSize = Math.Max(id + 1, _stampById.Length == 0 ? 64 : _stampById.Length * 2);
-        Array.Resize(ref _stampById, newSize);
-        Array.Resize(ref _versionById, newSize);
-        Array.Resize(ref _slotById, newSize);
+        if (id < _isDirty.Length) return;
+        var newSize = Math.Max(id + 1, _isDirty.Length == 0 ? 64 : _isDirty.Length * 2);
+        Array.Resize(ref _isDirty, newSize);
+        Array.Resize(ref _shadowValues, newSize * _snapshotSize);
+        Array.Resize(ref _dirtyArchetypes, newSize);
+        Array.Resize(ref _dirtyRows, newSize);
+        Array.Resize(ref _dirtyEntityMap, newSize);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void EnsureSlotCapacity()
+    private void EnsureDirtyListCapacity()
     {
-        var needed = (_snapCount + 1) * _snapshotSize;
-        if (needed <= _oldValues.Length) return;
-        var newSize = Math.Max(needed, _oldValues.Length == 0 ? 256 : _oldValues.Length * 2);
-        Array.Resize(ref _oldValues, newSize);
-        Array.Resize(ref _newValues, newSize);
-        var slotSize = Math.Max(_snapCount + 1, _dirtyList.Length == 0 ? 64 : _dirtyList.Length * 2);
-        Array.Resize(ref _dirtyList, slotSize);
-        Array.Resize(ref _dirtyArchetypes, slotSize);
-        Array.Resize(ref _dirtyRow, slotSize);
+        if (_dirtyCount < _dirtyList.Length) return;
+        var newSize = Math.Max(_dirtyCount + 1, _dirtyList.Length == 0 ? 64 : _dirtyList.Length * 2);
+        Array.Resize(ref _dirtyList, newSize);
     }
 
     /// <summary>
@@ -173,6 +184,9 @@ public sealed class ChangeQuery : IChangeQuery
         if (!_valueCursors.ContainsKey(ct.Value))
             _valueCursors[ct.Value] = 0;
 
+        // Try to activate typed fast path (single type + Previous)
+        TryActivateTypedTracker<T>();
+
         return this;
     }
 
@@ -189,16 +203,71 @@ public sealed class ChangeQuery : IChangeQuery
         _hasPrevious = true;
         _world.ActivatePreviousTracking(this);
 
-        // Pre-allocate entity-indexed arrays to world capacity
+        // Pre-allocate shadow and dirty arrays to world capacity
         var cap = _world.EntityCapacity;
-        if (_stampById.Length < cap)
+        if (_isDirty.Length < cap)
         {
-            _stampById = new int[cap];
-            _versionById = new int[cap];
-            _slotById = new int[cap];
+            _isDirty = new bool[cap];
+            _shadowValues = new byte[cap * _snapshotSize];
+            _dirtyArchetypes = new Core.Archetype?[cap];
+            _dirtyRows = new int[cap];
+            _dirtyEntityMap = new Entity[cap];
+        }
+
+        // Try to activate typed fast path (in case Capture<T> was called before Previous)
+        // Note: tracker is also activated from Capture<T>() when Previous is already set
+        if (_capturedTypes.Count == 1)
+        {
+            // Need to call generic method with the captured type
+            // Use cached captured type info
+            ActivateTypedTrackerForCapturedType();
         }
 
         return this;
+    }
+
+    private void ActivateTypedTrackerForCapturedType()
+    {
+        // Single captured type — activate typed tracker
+        if (_typedTracker is not null) return;
+        if (!_hasPrevious || _capturedTypes.Count != 1) return;
+        if (_hasFilter) return;  // filters require byte[] path for structural changes
+
+        // Use the component type to create the right tracker
+        var capturedType = _capturedTypes[0];
+        if (!ComponentRegistry.Shared.TryGetType(capturedType, out var runtimeType))
+            return; // type not registered, skip typed tracker
+
+        var trackerType = typeof(ChangeTracker<>).MakeGenericType(runtimeType);
+        var tracker = Activator.CreateInstance(trackerType);
+        if (tracker is null) return;
+
+        // Pre-allocate
+        trackerType.GetMethod("EnsureCapacity")?.Invoke(tracker, [_world.EntityCapacity - 1]);
+
+        _typedTracker = tracker;
+        _world._activeTypedTracker = tracker;
+    }
+
+    /// <summary>
+    /// Activates the typed fast path when there's exactly one captured type
+    /// and Previous() is enabled. Creates a ChangeTracker&lt;T&gt; that stores
+    /// old/new values in typed T[] arrays, matching hand-written manual code.
+    /// </summary>
+    private void TryActivateTypedTracker<T>() where T : unmanaged
+    {
+        if (!_hasPrevious || _capturedTypes.Count != 1) return;
+        if (_typedTracker is not null) return;  // already activated
+        if (_hasFilter) return;  // filters require byte[] path for structural changes
+
+        // Create typed tracker
+        var tracker = new ChangeTracker<T>();
+
+        // Pre-allocate to world capacity
+        tracker.EnsureCapacity(_world.EntityCapacity - 1);
+
+        _typedTracker = tracker;
+        _world._activeTypedTracker = tracker;
     }
 
     /// <summary>
@@ -216,32 +285,30 @@ public sealed class ChangeQuery : IChangeQuery
         }
 
         var id = entity.Id;
-        EnsureEntityCapacity(id);
+        EnsureShadowCapacity(id);
 
-        // Already recorded this epoch?
-        if (_stampById[id] == _snapEpoch && _versionById[id] == entity.Version)
-            return;
+        // Already captured this tick? Skip.
+        if (_isDirty[id]) return;
+        _isDirty[id] = true;
 
-        // First write — allocate slot
-        EnsureSlotCapacity();
-        var slot = _snapCount++;
-        _stampById[id] = _snapEpoch;
-        _versionById[id] = entity.Version;
-        _slotById[id] = slot + 1;
-        _dirtyList[slot] = entity;
+        // Add to dirty list (just store entity ID — archetype/row indexed by id)
+        EnsureDirtyListCapacity();
+        _dirtyList[_dirtyCount++] = id;
 
-        // Store location for Lazy New
-        _dirtyArchetypes[slot] = archetype;
-        _dirtyRow[slot] = row;
+        // Store location for Lazy New (indexed by entity id)
+        EnsureShadowCapacity(id);  // ensure archetype/row arrays are big enough
+        _dirtyArchetypes[id] = archetype;
+        _dirtyRows[id] = row;
+        _dirtyEntityMap[id] = entity;
 
-        // Capture Old for all captured types
-        var oldOff = slot * _snapshotSize;
+        // Capture Old for all captured types into shadow[id]
+        var shadowOff = id * _snapshotSize;
         for (var i = 0; i < _capturedTypes.Count; i++)
         {
             if (archetype.TryGetComponentIndex(_capturedTypes[i], out var colIdx))
             {
                 var src = archetype.GetComponentBytes(colIdx, row);
-                src.CopyTo(new Span<byte>(_oldValues, oldOff + _offsets[i], _typeSizes[i]));
+                src.CopyTo(new Span<byte>(_shadowValues, shadowOff + _offsets[i], _typeSizes[i]));
             }
         }
 
@@ -257,37 +324,12 @@ public sealed class ChangeQuery : IChangeQuery
     /// <summary>
     /// Inline capture: read New from storage AFTER write. Called from ApplyTypedSet fast path.
     /// Skips filter/archetype checks — archetype cannot change during Set.
+    /// No-op with Lazy New (New is read in DrainChanges).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void CaptureNew(Entity entity, Core.Archetype archetype, int row)
     {
-        if (!_hasPrevious || _capturedTypes.Count == 0) return;
-
-        var id = entity.Id;
-        if (id >= _stampById.Length) return;
-        if (_stampById[id] != _snapEpoch || _versionById[id] != entity.Version) return;
-
-        var slot = _slotById[id] - 1;
-        var newOff = slot * _snapshotSize;
-
-        if (_capturedTypes.Count == 1 && _cachedArchetype == archetype)
-        {
-            // Fast path: single type, cached index
-            var src = archetype.GetComponentBytes(_cachedColIdx, row);
-            src.CopyTo(new Span<byte>(_newValues, newOff, _snapshotSize));
-        }
-        else
-        {
-            // Multi-type: iterate all captured types
-            for (var i = 0; i < _capturedTypes.Count; i++)
-            {
-                if (archetype.TryGetComponentIndex(_capturedTypes[i], out var colIdx))
-                {
-                    var src = archetype.GetComponentBytes(colIdx, row);
-                    src.CopyTo(new Span<byte>(_newValues, newOff + _offsets[i], _typeSizes[i]));
-                }
-            }
-        }
+        // Lazy New: no-op. New values are read from live storage in DrainChanges.
     }
 
     /// <summary>
@@ -439,55 +481,223 @@ public sealed class ChangeQuery : IChangeQuery
     {
         EnsureUsable();
         _consumed = true;
-        if (!_hasPrevious || _snapCount == 0)
+        if (!_hasPrevious)
             return [];
 
-        // Lazy New: read New values from live component storage
-        for (var i = 0; i < _snapCount; i++)
+        // Typed fast path: single Capture<T> + Previous
+        // Convert typed tracker data to EntityChange format for compatibility
+        if (_typedTracker is not null)
         {
-            var arch = _dirtyArchetypes[i];
-            if (arch is null) continue; // materialized already (structural escape)
-            var row = _dirtyRow[i];
-            var newOff = i * _snapshotSize;
-            for (var t = 0; t < _capturedTypes.Count; t++)
+            return DrainTypedTrackerToEntityChanges();
+        }
+
+        if (_dirtyCount == 0)
+            return [];
+
+        // Ensure types/offsets copies are cached
+        if (_cachedTypesCopy.Length == 0)
+        {
+            _cachedTypesCopy = _capturedTypes.ToArray();
+            _cachedOffsetsCopy = (int[])_offsets.Clone();
+        }
+
+        // Build result: Old from shadow, New from live storage
+        var data = new byte[_dirtyCount * _snapshotSize * 2];
+        var result = new EntityChange[_dirtyCount];
+        for (var i = 0; i < _dirtyCount; i++)
+        {
+            var id = _dirtyList[i];
+            var entity = _dirtyEntityMap[id];
+            var shadowOff = id * _snapshotSize;
+            var dstOff = i * _snapshotSize * 2;
+
+            // Copy Old from shadow
+            Buffer.BlockCopy(_shadowValues, shadowOff, data, dstOff, _snapshotSize);
+
+            // Read New from live storage (Lazy New)
+            var arch = _dirtyArchetypes[id];
+            if (arch is not null)
             {
-                if (arch.TryGetComponentIndex(_capturedTypes[t], out var colIdx))
+                var row = _dirtyRows[id];
+                for (var t = 0; t < _capturedTypes.Count; t++)
                 {
-                    var src = arch.GetComponentBytes(colIdx, row);
-                    src.CopyTo(new Span<byte>(_newValues, newOff + _offsets[t], _typeSizes[t]));
+                    if (arch.TryGetComponentIndex(_capturedTypes[t], out var colIdx))
+                    {
+                        var src = arch.GetComponentBytes(colIdx, row);
+                        src.CopyTo(new Span<byte>(data, dstOff + _snapshotSize + _offsets[t], _typeSizes[t]));
+                    }
+                }
+            }
+
+            result[i] = new EntityChange(
+                entity, data, dstOff, dstOff + _snapshotSize,
+                _snapshotSize, _cachedOffsetsCopy, _cachedTypesCopy);
+        }
+
+        // Reset dirty state
+        for (var i = 0; i < _dirtyCount; i++)
+            _isDirty[_dirtyList[i]] = false;
+        _dirtyCount = 0;
+        return result;
+    }
+
+    /// <summary>
+    /// Drains typed tracker data into EntityChange[] format for compatibility.
+    /// </summary>
+    private unsafe EntityChange[] DrainTypedTrackerToEntityChanges()
+    {
+        var drain = (IChangeTrackerDrain)_typedTracker!;
+        var count = drain.DirtyCount;
+        if (count == 0)
+            return [];
+
+        // Ensure types/offsets copies are cached
+        if (_cachedTypesCopy.Length == 0)
+        {
+            _cachedTypesCopy = _capturedTypes.ToArray();
+            _cachedOffsetsCopy = (int[])_offsets.Clone();
+        }
+
+        var data = new byte[count * _snapshotSize * 2];
+        var result = new EntityChange[count];
+
+        // Copy old/new from typed tracker to byte[]
+        drain.CopyOldNewTo(data, _snapshotSize);
+
+        // Fill result
+        var entities = drain.DirtyEntities;
+        for (var i = 0; i < count; i++)
+        {
+            var dstOff = i * _snapshotSize * 2;
+            result[i] = new EntityChange(
+                entities[i], data, dstOff, dstOff + _snapshotSize,
+                _snapshotSize, _cachedOffsetsCopy, _cachedTypesCopy);
+        }
+
+        // Reset typed tracker
+        drain.Reset();
+
+        return result;
+    }
+
+    /// <summary>
+    /// Zero-allocation variant of <see cref="Changes"/>.
+    /// Returns a span over an internal reusable buffer of old/new snapshot pairs.
+    /// The span is valid until the next call to any drain method on this
+    /// <see cref="ChangeQuery"/> instance.
+    /// <see cref="Previous"/> must have been enabled before enumeration started.
+    /// </summary>
+    public ReadOnlySpan<EntityChange> DrainChanges()
+    {
+        EnsureUsable();
+        _consumed = true;
+        if (!_hasPrevious || _dirtyCount == 0)
+            return ReadOnlySpan<EntityChange>.Empty;
+
+        // Ensure types/offsets copies are cached
+        if (_cachedTypesCopy.Length == 0)
+        {
+            _cachedTypesCopy = _capturedTypes.ToArray();
+            _cachedOffsetsCopy = (int[])_offsets.Clone();
+        }
+
+        // Ensure reusable data buffer capacity
+        var dataLen = _dirtyCount * _snapshotSize * 2;
+        if (_drainData.Length < dataLen)
+            _drainData = new byte[dataLen];
+
+        // Build result: Old from shadow, New from live storage
+        for (var i = 0; i < _dirtyCount; i++)
+        {
+            var id = _dirtyList[i];
+            var shadowOff = id * _snapshotSize;
+            var dstOff = i * _snapshotSize * 2;
+
+            // Copy Old from shadow
+            Buffer.BlockCopy(_shadowValues, shadowOff, _drainData, dstOff, _snapshotSize);
+
+            // Read New from live storage (Lazy New)
+            var arch = _dirtyArchetypes[id];
+            if (arch is not null)
+            {
+                var row = _dirtyRows[id];
+                for (var t = 0; t < _capturedTypes.Count; t++)
+                {
+                    if (arch.TryGetComponentIndex(_capturedTypes[t], out var colIdx))
+                    {
+                        var src = arch.GetComponentBytes(colIdx, row);
+                        src.CopyTo(new Span<byte>(_drainData, dstOff + _snapshotSize + _offsets[t], _typeSizes[t]));
+                    }
                 }
             }
         }
 
-        var data = new byte[_snapCount * _snapshotSize * 2];
-        for (var i = 0; i < _snapCount; i++)
-        {
-            var srcOff = i * _snapshotSize;
-            var dstOff = i * _snapshotSize * 2;
-            Buffer.BlockCopy(_oldValues, srcOff, data, dstOff, _snapshotSize);
-            Buffer.BlockCopy(_newValues, srcOff, data, dstOff + _snapshotSize, _snapshotSize);
-        }
+        // Ensure reusable result buffer capacity
+        if (_drainResult.Length < _dirtyCount)
+            _drainResult = new EntityChange[_dirtyCount];
 
-        var typesCopy = _capturedTypes.ToArray();
-        var offsetsCopy = (int[])_offsets.Clone();
-        var result = new EntityChange[_snapCount];
-        for (var i = 0; i < _snapCount; i++)
+        // Fill result buffer
+        for (var i = 0; i < _dirtyCount; i++)
         {
             var off = i * _snapshotSize * 2;
-            result[i] = new EntityChange(
-                _dirtyList[i], data, off, off + _snapshotSize,
-                _snapshotSize, offsetsCopy, typesCopy);
+            _drainResult[i] = new EntityChange(
+                _dirtyEntityMap[_dirtyList[i]], _drainData, off, off + _snapshotSize,
+                _snapshotSize, _cachedOffsetsCopy, _cachedTypesCopy);
         }
 
-        _snapCount = 0;
-        _snapEpoch++;
-        return result;
+        var count = _dirtyCount;
+
+        // Reset dirty state
+        for (var i = 0; i < _dirtyCount; i++)
+            _isDirty[_dirtyList[i]] = false;
+        _dirtyCount = 0;
+
+        return new ReadOnlySpan<EntityChange>(_drainResult, 0, count);
     }
+
+    /// <summary>
+    /// Typed fast-path drain for single Capture&lt;T&gt; + Previous.
+    /// Returns old/new pairs directly from typed arrays — no byte[] copies,
+    /// no archetype lookup, matching hand-written manual code performance.
+    /// </summary>
+    public ReadOnlySpan<TypedChange<T>> DrainTypedChanges<T>() where T : unmanaged
+    {
+        EnsureUsable();
+        _consumed = true;
+        if (!_hasPrevious || _typedTracker is not ChangeTracker<T> tracker)
+            return ReadOnlySpan<TypedChange<T>>.Empty;
+
+        if (tracker.DirtyCount == 0)
+            return ReadOnlySpan<TypedChange<T>>.Empty;
+
+        var count = tracker.DirtyCount;
+
+        // Ensure reusable buffer capacity
+        if (_typedChangeBuffer is not TypedChange<T>[] buf || buf.Length < count)
+            _typedChangeBuffer = new TypedChange<T>[count];
+        buf = (TypedChange<T>[])_typedChangeBuffer;
+
+        // Fill buffer: direct typed array reads (same as manual)
+        for (var i = 0; i < count; i++)
+        {
+            var id = tracker.DirtyList[i];
+            buf[i] = new TypedChange<T>(tracker.DirtyEntities[i], tracker.OldValues[id], tracker.NewValues[id]);
+        }
+
+        // Reset tracker
+        tracker.Reset();
+
+        return new ReadOnlySpan<TypedChange<T>>(buf, 0, count);
+    }
+
+    // Reusable buffer for DrainTypedChanges (grown, never shrunk)
+    private Array? _typedChangeBuffer;
 
     // ── IChangeQuery ──
 
     void IChangeQuery.OnBeforeWrite(Entity entity, Archetype archetype, int row)
     {
+        // Same logic as CaptureOld but without inline fast path
         if (!_hasPrevious || _capturedTypes.Count == 0) return;
 
         if (_hasFilter)
@@ -497,98 +707,67 @@ public sealed class ChangeQuery : IChangeQuery
         }
 
         var id = entity.Id;
-        EnsureEntityCapacity(id);
+        EnsureShadowCapacity(id);
 
-        // Check if this exact entity version was already recorded this epoch
-        if (_stampById[id] == _snapEpoch && _versionById[id] == entity.Version)
-            return;  // already recorded, keep first Old
+        // Already captured this tick? Skip.
+        if (_isDirty[id]) return;
+        _isDirty[id] = true;
 
-        // First write for this entity in this epoch
-        EnsureSlotCapacity();
-        var slot = _snapCount++;
-        _stampById[id] = _snapEpoch;
-        _versionById[id] = entity.Version;
-        _slotById[id] = slot + 1;
-        _dirtyList[slot] = entity;
+        // Add to dirty list
+        EnsureDirtyListCapacity();
+        _dirtyList[_dirtyCount++] = id;
 
-        // Capture Old
-        var oldOff = slot * _snapshotSize;
+        // Store location for Lazy New
+        _dirtyArchetypes[id] = archetype;
+        _dirtyRows[id] = row;
+        _dirtyEntityMap[id] = entity;
+
+        // Capture Old for all captured types into shadow[id]
+        var shadowOff = id * _snapshotSize;
         for (var i = 0; i < _capturedTypes.Count; i++)
         {
             if (archetype.TryGetComponentIndex(_capturedTypes[i], out var colIdx))
             {
                 var src = archetype.GetComponentBytes(colIdx, row);
-                src.CopyTo(new Span<byte>(_oldValues, oldOff + _offsets[i], _typeSizes[i]));
+                src.CopyTo(new Span<byte>(_shadowValues, shadowOff + _offsets[i], _typeSizes[i]));
             }
         }
     }
 
     void IChangeQuery.OnAfterWrite(Entity entity, Archetype archetype, int row)
     {
-        if (!_hasPrevious || _capturedTypes.Count == 0) return;
-
-        if (_hasFilter)
-        {
-            var cache = _cache ??= _world.Query(_filter).Advanced;
-            if (!cache.Matches(archetype)) return;
-        }
-
-        var id = entity.Id;
-        if (id >= _stampById.Length) return;
-        if (_stampById[id] != _snapEpoch || _versionById[id] != entity.Version) return;
-
-        var slot = _slotById[id] - 1;
-
-        // Capture New (always overwrite — we want the LAST value)
-        var newOff = slot * _snapshotSize;
-        for (var i = 0; i < _capturedTypes.Count; i++)
-        {
-            if (archetype.TryGetComponentIndex(_capturedTypes[i], out var colIdx))
-            {
-                var src = archetype.GetComponentBytes(colIdx, row);
-                src.CopyTo(new Span<byte>(_newValues, newOff + _offsets[i], _typeSizes[i]));
-            }
-        }
+        // Lazy New: no-op. New values are read from live storage in DrainChanges.
     }
 
     void IChangeQuery.OnBeforeTransition(Entity entity, Archetype archetype, int row)
     {
         if (!_hasPrevious || _capturedTypes.Count == 0) return;
 
-        // Materialize-on-escape: if entity is dirty from a previous Set,
-        // read New from live storage before structural change invalidates it.
+        // For structural changes, we always create a new entry (no dedup).
         var id = entity.Id;
-        if (id < _stampById.Length && _stampById[id] == _snapEpoch && _versionById[id] == entity.Version)
+        EnsureShadowCapacity(id);
+
+        // Always add to dirty list for structural changes
+        EnsureDirtyListCapacity();
+        _dirtyList[_dirtyCount++] = id;
+
+        // Store location for Lazy New
+        _dirtyArchetypes[id] = archetype;
+        _dirtyRows[id] = row;
+        _dirtyEntityMap[id] = entity;
+
+        // If entity was not dirty from Set, capture Old now.
+        if (!_isDirty[id])
         {
-            var slot = _slotById[id] - 1;
-            if (_dirtyArchetypes[slot] is not null)
+            _isDirty[id] = true;
+            var shadowOff = id * _snapshotSize;
+            for (var i = 0; i < _capturedTypes.Count; i++)
             {
-                // Entity is dirty from Set — materialize New now for all captured types
-                var newOff = slot * _snapshotSize;
-                for (var t = 0; t < _capturedTypes.Count; t++)
+                if (archetype.TryGetComponentIndex(_capturedTypes[i], out var colIdx))
                 {
-                    if (archetype.TryGetComponentIndex(_capturedTypes[t], out var colIdx))
-                    {
-                        var src = archetype.GetComponentBytes(colIdx, row);
-                        src.CopyTo(new Span<byte>(_newValues, newOff + _offsets[t], _typeSizes[t]));
-                    }
+                    var src = archetype.GetComponentBytes(colIdx, row);
+                    src.CopyTo(new Span<byte>(_shadowValues, shadowOff + _offsets[i], _typeSizes[i]));
                 }
-                _dirtyArchetypes[slot] = null; // mark as materialized
-            }
-        }
-
-        // Structural changes always get their own entry (not per-entity dedup)
-        EnsureSlotCapacity();
-        var newSlot = _snapCount++;
-        _dirtyList[newSlot] = entity;
-
-        var oldOff = newSlot * _snapshotSize;
-        for (var i = 0; i < _capturedTypes.Count; i++)
-        {
-            if (archetype.TryGetComponentIndex(_capturedTypes[i], out var colIdx))
-            {
-                var src = archetype.GetComponentBytes(colIdx, row);
-                src.CopyTo(new Span<byte>(_oldValues, oldOff + _offsets[i], _typeSizes[i]));
             }
         }
     }
@@ -618,25 +797,23 @@ public sealed class ChangeQuery : IChangeQuery
         else if (_hasPrevious && _capturedTypes.Count > 0)
         {
             // Transition did NOT match filter — roll back
-            if (_snapCount > 0)
-                _snapCount--;
+            if (_dirtyCount > 0)
+            {
+                var id = entity.Id;
+                if (id < _isDirty.Length)
+                    _isDirty[id] = false;
+                _dirtyCount--;
+            }
         }
     }
 
     private void WriteNewTransitionSnapshot(Entity entity, Archetype newArch)
     {
-        var slot = _snapCount - 1;
-
+        // Update the location for this entity (Old is already in shadow[id])
+        var id = entity.Id;
+        _dirtyArchetypes[id] = newArch;
         var record = _world.GetRecordFast(entity);
-        var newOff = slot * _snapshotSize;
-        for (var i = 0; i < _capturedTypes.Count; i++)
-        {
-            if (newArch.TryGetComponentIndex(_capturedTypes[i], out var colIdx))
-            {
-                var src = newArch.GetComponentBytes(colIdx, record.RowIndex);
-                src.CopyTo(new Span<byte>(_newValues, newOff + _offsets[i], _typeSizes[i]));
-            }
-        }
+        _dirtyRows[id] = record.RowIndex;
     }
 
     private static void ThrowFilterConsumed()

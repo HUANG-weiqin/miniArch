@@ -95,6 +95,7 @@ public sealed partial class World : IDisposable
     private bool _anyTrackingActive;                           // world-level gate
     internal bool _anyPreviousTrackingActive;                  // Previous() gate: skip dispatch when no snapshot query
     internal ChangeQuery? _singlePreviousQuery;                // fast path: exactly 1 query with Previous
+    internal object? _activeTypedTracker;                       // ChangeTracker<T> for single-type fast path (boxed generic)
 
     /// <summary>
     /// Creates a world.
@@ -351,6 +352,7 @@ public sealed partial class World : IDisposable
         if (arch._anyTrackingActive) return;
         arch._anyTrackingActive = true;
         arch._columnVersions = new long[arch._elementSizes!.Length];
+        arch._entityDirty = new bool[arch.Capacity];
     }
 
     /// <summary>
@@ -364,7 +366,24 @@ public sealed partial class World : IDisposable
         if (_singlePreviousQuery is null)
             _singlePreviousQuery = query;
         else
+        {
             _singlePreviousQuery = null; // multiple queries — disable fast path
+            _activeTypedTracker = null;  // disable typed tracker too
+        }
+    }
+
+    /// <summary>
+    /// Clears all per-entity dirty marks across all archetypes.
+    /// Call after consuming <see cref="ChangeQuery.DrainModifiedChunks{T}"/> to reset for the next tick.
+    /// </summary>
+    public void ClearDirtyMarks()
+    {
+        AssertNotDisposed();
+        foreach (var arch in _archetypes.Values)
+        {
+            if (arch._entityDirty is not null)
+                Array.Clear(arch._entityDirty);
+        }
     }
 
     /// <summary>

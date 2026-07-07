@@ -46,6 +46,13 @@ internal sealed partial class Archetype
     private readonly int _segmentBitShift;
     private readonly int _segmentMask;
 
+    // --- Per-entity dirty tracking ---
+    // Tracks which entities were written since the last ClearDirtyMarks().
+    // Allocated lazily when any change query with ModifiedChunks is active.
+    // Non-chunked: _entityDirty[row] = dirty
+    // Chunked: _entityDirty[globalRow] = dirty (global row = segIdx * segCap + localRow)
+    internal bool[]? _entityDirty;
+
     // --- Archetype metadata ---
     private readonly Signature _signature;
     private readonly Type[] _componentTypes;

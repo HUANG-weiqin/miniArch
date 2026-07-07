@@ -165,6 +165,14 @@ internal sealed partial class Archetype
             need -= _segmentCapacity;
         }
         InvalidateFlatEntityCache();
+
+        // Grow _entityDirty to cover new capacity
+        if (_entityDirty is not null)
+        {
+            var totalCapacity = _segmentCount * _segmentCapacity;
+            if (_entityDirty.Length < totalCapacity)
+                Array.Resize(ref _entityDirty, totalCapacity);
+        }
     }
 
     // ──────────────────────────────────────────────
@@ -208,6 +216,9 @@ internal sealed partial class Archetype
             _data = newData;
             _columnByteOffsets = newOffsets;
             _capacity = newCapacity;
+
+            if (_entityDirty is not null && _entityDirty.Length < newCapacity)
+                Array.Resize(ref _entityDirty, newCapacity);
         }
         else
         {
@@ -485,10 +496,29 @@ internal sealed partial class Archetype
     /// Must be inlineable — called on every write chokepoint hot path.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void MarkColumnWritten(int columnIndex)
+    private void MarkColumnWritten(int columnIndex, int row)
     {
         if (_anyTrackingActive)
+        {
             _columnVersions![columnIndex] = ++_owner!._writeEpoch;
+            if (_entityDirty is not null)
+                _entityDirty[row] = true;
+        }
+    }
+
+    /// <summary>
+    /// Public entry point for marking column written when caller already wrote
+    /// the value directly via ref (skipping SetComponentAtTyped's second lookup).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void MarkColumnWrittenIfNeeded(int columnIndex, int row)
+    {
+        if (_anyTrackingActive)
+        {
+            _columnVersions![columnIndex] = ++_owner!._writeEpoch;
+            if (_entityDirty is not null)
+                _entityDirty[row] = true;
+        }
     }
 
     [SkipLocalsInit]
@@ -497,7 +527,7 @@ internal sealed partial class Archetype
     {
         ref var target = ref GetComponentRefAt<T>(columnIndex, row);
         target = value;
-        MarkColumnWritten(columnIndex);
+        MarkColumnWritten(columnIndex, row);
     }
 
     /// <summary>
@@ -536,7 +566,7 @@ internal sealed partial class Archetype
         Unsafe.As<byte, T>(ref Unsafe.Add(
             ref MemoryMarshal.GetArrayDataReference(_data),
             byteOffset + row * Unsafe.SizeOf<T>())) = value;
-        MarkColumnWritten(columnIndex);
+        MarkColumnWritten(columnIndex, row);
     }
 
     /// <summary>
@@ -729,7 +759,7 @@ internal sealed partial class Archetype
         else
         {
             Unsafe.CopyBlockUnaligned(ref storage, ref *external, size);
-            MarkColumnWritten(columnIndex);
+            MarkColumnWritten(columnIndex, row);
         }
     }
 
