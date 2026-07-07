@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using MiniArch.Core;
 
@@ -243,7 +244,9 @@ public sealed class ChangeQuery : IChangeQuery
         if (tracker is null) return;
 
         // Pre-allocate
-        trackerType.GetMethod("EnsureCapacity")?.Invoke(tracker, [_world.EntityCapacity - 1]);
+        var cap = _world.EntityCapacity;
+        var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        trackerType.GetMethod("EnsureCapacity", flags)?.Invoke(tracker, [cap - 1]);
 
         _typedTracker = tracker;
         _world._activeTypedTracker = tracker;
@@ -543,11 +546,24 @@ public sealed class ChangeQuery : IChangeQuery
 
     /// <summary>
     /// Drains typed tracker data into EntityChange[] format for compatibility.
+    /// Uses reflection to dispatch to the generic implementation.
     /// </summary>
-    private unsafe EntityChange[] DrainTypedTrackerToEntityChanges()
+    private EntityChange[] DrainTypedTrackerToEntityChanges()
     {
-        var drain = (IChangeTrackerDrain)_typedTracker!;
-        var count = drain.DirtyCount;
+        if (!ComponentRegistry.Shared.TryGetType(_capturedTypes[0], out var runtimeType))
+            return [];
+
+        var method = typeof(ChangeQuery).GetMethod(
+            nameof(DrainTypedTrackerToEntityChangesGeneric),
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var generic = method.MakeGenericMethod(runtimeType);
+        return (EntityChange[])generic.Invoke(this, null)!;
+    }
+
+    private EntityChange[] DrainTypedTrackerToEntityChangesGeneric<T>() where T : unmanaged
+    {
+        var changes = DrainTypedChanges<T>();
+        var count = changes.Length;
         if (count == 0)
             return [];
 
@@ -558,24 +574,31 @@ public sealed class ChangeQuery : IChangeQuery
             _cachedOffsetsCopy = (int[])_offsets.Clone();
         }
 
+        var elemSize = Unsafe.SizeOf<T>();
         var data = new byte[count * _snapshotSize * 2];
         var result = new EntityChange[count];
 
-        // Copy old/new from typed tracker to byte[]
-        drain.CopyOldNewTo(data, _snapshotSize);
-
-        // Fill result
-        var entities = drain.DirtyEntities;
         for (var i = 0; i < count; i++)
         {
             var dstOff = i * _snapshotSize * 2;
+            ref readonly var change = ref changes[i];
+
+            // Copy Old
+            Unsafe.CopyBlockUnaligned(
+                ref data[dstOff],
+                ref Unsafe.As<T, byte>(ref Unsafe.AsRef(in change.Old)),
+                (uint)elemSize);
+
+            // Copy New
+            Unsafe.CopyBlockUnaligned(
+                ref data[dstOff + _snapshotSize],
+                ref Unsafe.As<T, byte>(ref Unsafe.AsRef(in change.New)),
+                (uint)elemSize);
+
             result[i] = new EntityChange(
-                entities[i], data, dstOff, dstOff + _snapshotSize,
+                change.Entity, data, dstOff, dstOff + _snapshotSize,
                 _snapshotSize, _cachedOffsetsCopy, _cachedTypesCopy);
         }
-
-        // Reset typed tracker
-        drain.Reset();
 
         return result;
     }
@@ -657,8 +680,8 @@ public sealed class ChangeQuery : IChangeQuery
 
     /// <summary>
     /// Typed fast-path drain for single Capture&lt;T&gt; + Previous.
-    /// Returns old/new pairs directly from typed arrays — no byte[] copies,
-    /// no archetype lookup, matching hand-written manual code performance.
+    /// Returns old/new pairs directly from the tracker's double-buffered
+    /// <see cref="TypedChange{T}"/>[] — zero copy, no construction overhead.
     /// </summary>
     public ReadOnlySpan<TypedChange<T>> DrainTypedChanges<T>() where T : unmanaged
     {
@@ -667,31 +690,8 @@ public sealed class ChangeQuery : IChangeQuery
         if (!_hasPrevious || _typedTracker is not ChangeTracker<T> tracker)
             return ReadOnlySpan<TypedChange<T>>.Empty;
 
-        if (tracker.DirtyCount == 0)
-            return ReadOnlySpan<TypedChange<T>>.Empty;
-
-        var count = tracker.DirtyCount;
-
-        // Ensure reusable buffer capacity
-        if (_typedChangeBuffer is not TypedChange<T>[] buf || buf.Length < count)
-            _typedChangeBuffer = new TypedChange<T>[count];
-        buf = (TypedChange<T>[])_typedChangeBuffer;
-
-        // Fill buffer: direct typed array reads (same as manual)
-        for (var i = 0; i < count; i++)
-        {
-            var id = tracker.DirtyList[i];
-            buf[i] = new TypedChange<T>(tracker.DirtyEntities[i], tracker.OldValues[id], tracker.NewValues[id]);
-        }
-
-        // Reset tracker
-        tracker.Reset();
-
-        return new ReadOnlySpan<TypedChange<T>>(buf, 0, count);
+        return tracker.Drain();
     }
-
-    // Reusable buffer for DrainTypedChanges (grown, never shrunk)
-    private Array? _typedChangeBuffer;
 
     // ── IChangeQuery ──
 

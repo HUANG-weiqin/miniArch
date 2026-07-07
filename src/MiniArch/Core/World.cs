@@ -1435,6 +1435,7 @@ public sealed partial class World : IDisposable
         _anyTrackingActive = false;
         _anyPreviousTrackingActive = false;
         _singlePreviousQuery = null;
+        _activeTypedTracker = null;
         foreach (var arch in _archetypes.Values)
         {
             arch._anyTrackingActive = false;

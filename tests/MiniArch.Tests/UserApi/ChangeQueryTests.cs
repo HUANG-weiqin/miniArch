@@ -44,6 +44,62 @@ public class ChangeQueryTests
         Assert.Empty(q.ModifiedChunks<Position>());
     }
 
+    [Fact]
+    public void Changes_single_capture_without_filter_reports_Set()
+    {
+        var world = new World();
+        var q = world.Track().Capture<Position>().Previous();
+        var e = world.Create(new Position(0, 0));
+
+        _ = q.Changes();
+
+        world.Set(e, new Position(1, 2));
+
+        var changes = q.Changes();
+        Assert.Single(changes);
+        Assert.Equal(e, changes[0].Entity);
+        Assert.Equal(new Position(0, 0), changes[0].Old.Get<Position>());
+        Assert.Equal(new Position(1, 2), changes[0].New.Get<Position>());
+    }
+
+    [Fact]
+    public void DrainTypedChanges_single_capture_keeps_first_old_and_last_new()
+    {
+        var world = new World();
+        var q = world.Track().Capture<Position>().Previous();
+        var e = world.Create(new Position(0, 0));
+
+        _ = q.DrainTypedChanges<Position>();
+
+        world.Set(e, new Position(1, 1));
+        world.Set(e, new Position(2, 3));
+
+        var changes = q.DrainTypedChanges<Position>();
+        Assert.Equal(1, changes.Length);
+        Assert.Equal(e, changes[0].Entity);
+        Assert.Equal(new Position(0, 0), changes[0].Old);
+        Assert.Equal(new Position(2, 3), changes[0].New);
+    }
+
+    [Fact]
+    public void DrainTypedChanges_span_survives_next_Set_until_next_drain()
+    {
+        var world = new World();
+        var q = world.Track().Capture<Position>().Previous();
+        var e = world.Create(new Position(0, 0));
+
+        _ = q.DrainTypedChanges<Position>();
+
+        world.Set(e, new Position(1, 1));
+        var changes = q.DrainTypedChanges<Position>();
+
+        world.Set(e, new Position(2, 2));
+
+        Assert.Equal(1, changes.Length);
+        Assert.Equal(new Position(0, 0), changes[0].Old);
+        Assert.Equal(new Position(1, 1), changes[0].New);
+    }
+
     // ── Transitions ────────────────────────────────────────────────
 
     [Fact]

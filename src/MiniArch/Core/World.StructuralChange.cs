@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 using MiniArch.Core;
 
@@ -155,35 +156,43 @@ public sealed partial class World
         var world = archetype._owner;
         if (world is not null)
         {
-            // Typed fast path: direct T[] array writes (same as hand-written manual code)
-            if (world._activeTypedTracker is ChangeTracker<T> tracker)
+            // Typed fast path: direct TypedChange<T>[] log writes.
+            if (world._activeTypedTracker is ChangeTracker<T> typedTracker)
             {
                 ref var cell = ref archetype.GetComponentRefAt<T>(componentIndex, info.RowIndex);
 
                 var id = entity.Id;
 
-                // Bounds check: grow if needed (rare path)
-                if ((uint)id >= (uint)tracker.IsDirty.Length)
-                    tracker.EnsureCapacity(id);
+                // Lazy grow entity-indexed array (rare path; ~once at startup).
+                if ((uint)id >= (uint)typedTracker.SlotByEntityPlusOne.Length)
+                    typedTracker.EnsureCapacity(id);
 
-                // Dirty check + capture
-                ref var dirty = ref tracker.IsDirty[id];
-                if (!dirty)
+                ref var slotPlusOne = ref MemoryMarshal.GetArrayDataReference(typedTracker.SlotByEntityPlusOne);
+                ref var localSlot = ref Unsafe.Add(ref slotPlusOne, id);
+                if (localSlot == 0)
                 {
-                    dirty = true;
-                    var count = tracker.DirtyCount;
-                    if ((uint)count >= (uint)tracker.DirtyList.Length)
-                        tracker.EnsureDirtyListCapacity();
-                    tracker.DirtyList[count] = id;
-                    tracker.DirtyEntities[count] = entity;
-                    tracker.DirtyCount = count + 1;
-                    tracker.OldValues[id] = cell;
-                }
-                tracker.NewValues[id] = component;
+                    var slot = typedTracker.DirtyCount;
 
-                // Direct write + mark dirty (skip second GetComponentRefAt in SetComponentAtTyped)
+                    // Lazy grow slot-indexed ActiveLog (rare path).
+                    if ((uint)slot >= (uint)typedTracker.ActiveLog.Length)
+                        typedTracker.EnsureLogCapacity(slot);
+
+                    typedTracker.ActiveLog[slot] = new TypedChange<T>(entity, cell, component);
+                    localSlot = slot + 1;
+                    typedTracker.DirtyCount++;
+                }
+                else
+                {
+                    // Repeat Set same tick: keep Old from first capture, update New.
+                    var slot = localSlot - 1;
+                    var existing = typedTracker.ActiveLog[slot];
+                    typedTracker.ActiveLog[slot] = new TypedChange<T>(entity, existing.Old, component);
+                }
+
+                // Direct write — typed tracker handles its own dirty bookkeeping,
+                // so skip archetype's MarkColumnWrittenIfNeeded (which only serves
+                // the byte[] fallback path's _columnVersions/_entityDirty).
                 cell = component;
-                archetype.MarkColumnWrittenIfNeeded(componentIndex, info.RowIndex);
                 return;
             }
 
