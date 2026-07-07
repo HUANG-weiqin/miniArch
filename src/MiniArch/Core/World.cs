@@ -324,36 +324,6 @@ public sealed partial class World : IDisposable
     }
 
     /// <summary>
-    /// Activates change tracking for component <typeparamref name="T"/> and returns a
-    /// <see cref="ChangeQuery{T}"/> cursor. Safe to call multiple times; idempotent.
-    /// </summary>
-    /// <example>
-    /// Track HP changes to update health bars each frame:
-    /// <code>
-    /// var hp = world.Track&lt;HP&gt;();
-    ///
-    /// foreach (var t in hp.Transitions())
-    ///     if (t.Kind == TransitionKind.Entered)
-    ///         SpawnHealthBar(t.Entity);
-    ///     else
-    ///         DestroyHealthBar(t.Entity);
-    ///
-    /// foreach (var chunk in hp.ModifiedChunks())
-    ///     foreach (ref var h in chunk.GetSpan&lt;HP&gt;())
-    ///         UpdateHealthBar(chunk.GetEntityId(ref h), h.Value);
-    /// </code>
-    /// The transition log is per-cursor and auto-clears on each <see cref="ChangeQuery{T}.Transitions"/>
-    /// call — no manual cleanup needed.
-    /// </example>
-    public ChangeQuery<T> Track<T>() where T : unmanaged
-    {
-        ActivateTracking(Component<T>.ComponentType);
-        var query = new ChangeQuery<T>(this);
-        RegisterChangeQuery(query);
-        return query;
-    }
-
-    /// <summary>
     /// Creates a multi-component change query. Register component types for value
     /// capture via <see cref="ChangeQuery.Capture{T}"/> and configure the filter
     /// with <c>With</c>/<c>Without</c>/<c>WithAny</c> before enumerating.

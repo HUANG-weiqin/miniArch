@@ -31,6 +31,7 @@
 | `Query(in QueryDescription)` | Create a query |
 | `Clone(Entity)` | Deep-copy an entity (including child subtree) |
 | `Clone()` | Materialize a new independent world (branching / checkpoint) |
+| `Track<T>()` | Activate change tracking for component `T`; returns a `ChangeQuery<T>` cursor |
 | `CaptureState()` | Save mutable state into an opaque handle for in-place rollback |
 | `RestoreState(WorldStateSnapshot)` | Revert world to a previously captured state |
 | `GetStats()` | Returns `WorldStats` |
@@ -99,6 +100,84 @@ public ReadOnlySpan<Entity> GetEntities()
 public Span<T> GetSpan<T>() where T : unmanaged
 public bool TryGetComponentIndex<T>(out int columnIndex) where T : unmanaged
 public Span<T> GetComponentSpanAt<T>(int columnIndex) where T : unmanaged
+```
+
+---
+
+## ChangeQuery\<T\>
+
+[`MiniArch`] Stateful cursor over changes to component `T`. Obtained via `World.Track<T>()`.
+
+Each `ModifiedChunks()` / `Transitions()` call auto-advances the cursor — subsequent calls return only new changes.
+
+```csharp
+public sealed class ChangeQuery<T> where T : unmanaged
+{
+    // Fluent filter (must be configured before first enumeration)
+    public ChangeQuery<T> With<TU>()                                    where TU : unmanaged;
+    public ChangeQuery<T> Without<TU>()                                 where TU : unmanaged;
+    public ChangeQuery<T> WithAny<TU>()                                 where TU : unmanaged;
+    public ChangeQuery<T> WithPreviousValues();
+
+    // Consumption (auto-advances cursor, auto-clears per call)
+    public IEnumerable<ChunkView> ModifiedChunks();
+    public IEnumerable<Transition> Transitions();
+    public IEnumerable<ValueChange<T>> Changes();
+}
+```
+
+| Method | Description |
+|---|---|
+| `With<TU>()` | Only track entities that also have component `TU` |
+| `Without<TU>()` | Exclude entities with component `TU` |
+| `WithAny<TU>()` | OR-match: track entities that also have at least one of the listed components |
+| `WithPreviousValues()` | Capture old+new values for each `Set<T>` write (enables `Changes()`) |
+| `ModifiedChunks()` | Chunks where `T` was written since last call, matching the filter |
+| `Transitions()` | Entities that entered/exited the tracked set (create/destroy/add/remove) |
+| `Changes()` | Old+new value pairs for each `Set<T>` write (requires `WithPreviousValues()`) |
+
+**Lifecycle:** Discard cursors after `WorldSnapshot.Load` / `World.RestoreState` — call `Track<T>()` again for a fresh cursor.
+
+**Zero overhead when unused:** No per-write cost until the first `Track<T>()` call. After that, each write to `T` increments a per-archetype-column version counter (a single `long` bump).
+
+---
+
+## Transition Types
+
+[`MiniArch`] Membership change records from `ChangeQuery<T>.Transitions()`.
+
+```csharp
+public enum TransitionKind { Entered, Exited }
+
+public enum TransitionCause { Created, Destroyed, Added, Removed }
+
+public readonly struct Transition
+{
+    public readonly TransitionCause Cause;
+    public readonly Entity Entity;
+    public bool IsEntered { get; }
+    public bool IsExited { get; }
+    public TransitionKind Kind { get; }
+}
+```
+
+- `TransitionKind` — simple enter/exit classification
+- `TransitionCause` — precise cause (`Created` vs `Added`, `Destroyed` vs `Removed`)
+- `Transition.IsEntered` / `Transition.IsExited` — derived convenience booleans
+
+---
+
+## ValueChange\<T\>
+
+[`MiniArch`] A before-and-after snapshot of a component write, produced by `ChangeQuery<T>.Changes()` when `WithPreviousValues()` was configured.
+
+```csharp
+public readonly struct ValueChange<T> where T : unmanaged
+{
+    public readonly Entity Entity;
+    public readonly T OldValue;
+    public readonly T NewValue;
+}
 ```
 
 ---

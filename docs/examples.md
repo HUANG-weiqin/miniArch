@@ -93,7 +93,68 @@ readonly record struct Position(float X, float Y);
 
 ---
 
-## 4. CommandStream
+## 4. Change Tracking (World.Track\<T\>)
+
+Detect which entities had their components written or changed membership since the last check. Perfect for UI systems (health bars, damage numbers) and reactive logic (trigger on `Entered`/`Exited`).
+
+```csharp
+using MiniArch;
+
+var world = new World();
+var player = world.Create(new Health(100), new Position(0, 0));
+var enemy = world.Create(new Health(50), new EnemyTag());
+world.Create(new Health(200), new EnemyTag(), new Dead());     // excluded by filter
+
+// ── Track HP changes on alive enemies only ──────────────────────────────
+var hp = world.Track<Health>().Without<Dead>().With<EnemyTag>();
+
+// Write some components to trigger tracking
+world.Set(player, new Health(80));   // excluded — no EnemyTag
+world.Set(enemy, new Health(30));    // tracked — value changed
+world.Destroy(enemy);                // tracked — transition Exited
+
+// ModifiedChunks: chunks where Health was written since last check
+foreach (var chunk in hp.ModifiedChunks())
+{
+    var healths = chunk.GetSpan<Health>();
+    var entities = chunk.GetEntities();
+    for (int i = 0; i < healths.Length; i++)
+        Console.WriteLine($"{entities[i]}: HP = {healths[i].Value}");
+}
+// Output: Entity(1, 1): HP = 30   (enemy's HP change, but entity is now dead...)
+
+// Transitions: membership changes (Entered / Exited)
+foreach (var t in hp.Transitions())
+    if (t.Kind == TransitionKind.Exited && t.Cause == TransitionCause.Destroyed)
+        Console.WriteLine($"{t.Entity} died — clean up UI");
+// Output: Entity(1, 1) died — clean up UI
+
+// ── WithPreviousValues: capture old value before Set ──────────────────
+var hpWithPrev = world.Track<Health>().WithPreviousValues();
+world.Set(player, new Health(70));
+
+foreach (var c in hpWithPrev.Changes())
+    Console.WriteLine($"{c.Entity}: {c.OldValue.Value} → {c.NewValue.Value}");
+// Output: Entity(0, 1): 80 → 70
+
+// ── Multi-cursor: independent cursors, same component ─────────────────
+var cursorA = world.Track<Health>();
+var cursorB = world.Track<Health>();
+world.Set(player, new Health(60));
+Console.WriteLine(cursorA.ModifiedChunks().Count()); // 1
+Console.WriteLine(cursorB.ModifiedChunks().Count()); // 1 — each cursor independently
+
+readonly record struct Health(int Value);
+readonly record struct Position(float X, float Y);
+readonly record struct EnemyTag;
+readonly record struct Dead;
+```
+
+> **Performance:** `Track<T>()` has **zero overhead** until the first call — no per-write branching cost. After activation, each write bumps a per-column `long` version counter. Use multiple cursors on the same component for independent consume-points (e.g., render system + network sync).
+
+---
+
+## 5. CommandStream
 
 Record deferred mutations and apply them in one batch. MiniArch's sole
 deferred recorder — flat byte stream, single-pass Set.
@@ -134,7 +195,7 @@ readonly record struct Health(int Value);
 
 ---
 
-## 5. Deterministic Replay (FrameDelta)
+## 6. Deterministic Replay (FrameDelta)
 
 Record world mutations in deferred mode (placeholder entities), then replay
 on the same world to produce identical state.
@@ -170,7 +231,7 @@ readonly record struct Health(int Value);
 
 ---
 
-## 6. Placeholder Resolution (EntitySlot)
+## 7. Placeholder Resolution (EntitySlot)
 
 In lockstep mode, new entities get placeholder IDs during recording that
 resolve to real IDs on Submit — ensuring deterministic ID assignment across hosts.
@@ -197,7 +258,7 @@ readonly record struct Health(int Value);
 
 ---
 
-## 7. EntitySlot Across Multiple Frames
+## 8. EntitySlot Across Multiple Frames
 
 An `EntitySlot` obtained from `Track()` persists across frames — you hold the same struct and its `.Value` keeps returning the real entity after each Submit, without re-registering.
 
@@ -234,7 +295,7 @@ readonly record struct Health(int Value);
 
 ---
 
-## 8. Forgetting `resolveSlots: true`
+## 9. Forgetting `resolveSlots: true`
 
 `Replay()` defaults to `resolveSlots: false`. If your delta contains placeholders that you tracked, the slot stays unresolved — you get back a placeholder `Entity(-1, …)` instead of the real entity.
 
@@ -279,7 +340,7 @@ readonly record struct Health(int Value);
 
 ---
 
-## 9. Rollback (CaptureState / RestoreState)
+## 10. Rollback (CaptureState / RestoreState)
 
 Zero-alloc in-place rollback for GGPO-style prediction. Handles are pooled.
 
@@ -307,7 +368,7 @@ readonly record struct Position(float X, float Y);
 
 ---
 
-## 10. WorldSnapshot (Binary Serialization)
+## 11. WorldSnapshot (Binary Serialization)
 
 Save and restore the entire world state.
 
@@ -333,7 +394,7 @@ Useful for replays, save files, and cross-process communication.
 
 ---
 
-## 11. Entity Hierarchy
+## 12. Entity Hierarchy
 
 Parent-child relationships with cascade destroy.
 
@@ -355,7 +416,7 @@ readonly record struct Position(float X, float Y);
 
 ---
 
-## 12. EntityAccessor (Batched Multi-Component Access)
+## 13. EntityAccessor (Batched Multi-Component Access)
 
 Access multiple components on the same entity without repeated lookups.
 
@@ -380,7 +441,7 @@ readonly record struct Armor(int Value);
 
 ---
 
-## 13. Parallel Chunk Iteration (IChunkForEach)
+## 14. Parallel Chunk Iteration (IChunkForEach)
 
 Multi-threaded chunk processing with zero-allocation via struct jobs.
 
@@ -436,7 +497,7 @@ struct SumJob : IChunkForEach
 
 ---
 
-## 14. Authority Server + Mirror Clients
+## 15. Authority Server + Mirror Clients
 
 A single source host (authority) records and applies commands locally, then distributes a **real-id delta** to mirror clients. Mirrors replay verbatim — their ID allocators stay synchronized because they replay every delta from frame 0.
 
@@ -483,7 +544,7 @@ readonly record struct Position(float X, float Y);
 
 ---
 
-## 15. P2P Lockstep Multi-Host
+## 16. P2P Lockstep Multi-Host
 
 Each peer owns an independent `World` + independent ID allocator. `DeferredEntities = true` makes `Create()` return **placeholder** entities (`Entity(-1, seq)`). Each peer `Snapshot`s a placeholder delta, exchanges deltas with all peers, then each replays every delta (including its own) in deterministic host-ID order.
 
@@ -561,7 +622,7 @@ readonly record struct Position(float X, float Y);
 
 ---
 
-## 16. Relay-Only Source Host
+## 17. Relay-Only Source Host
 
 The source records commands but **never applies them locally via `Submit`**. Instead it calls `Snapshot()` + `Clear()` to produce a delta without mutating its own world, then later `Replay`s its own delta alongside all peer deltas — guaranteeing the source follows exactly the same replay path as every other host.
 
@@ -603,7 +664,7 @@ readonly record struct Velocity(float X, float Y);
 
 ---
 
-## 17. Delta Wire Transport & Registry Handshake
+## 18. Delta Wire Transport & Registry Handshake
 
 Shows the full round-trip for shipping a `FrameDelta` over the network: `AsSpan()` for zero-copy wire format, `Deserialize()` on the receiving side, `Validate()` as defense-in-depth against malformed deltas (important for untrusted peers), and `ComponentSchema.Fingerprint()` to verify registry compatibility at connect time.
 
@@ -660,7 +721,7 @@ readonly record struct Health(int Value);
 
 ---
 
-## 18. Placeholder as Component Reference (Auto-Resolve)
+## 19. Placeholder as Component Reference (Auto-Resolve)
 
 The signature feature: **store a placeholder entity in another component's `Entity` field**. When the stream is `Submit`ed or `Replay`ed, `EntityFieldResolver` automatically rewrites the placeholder to the real entity — so a frame's `Create` + `Add` with cross-references "just works" without post-processing.
 
@@ -709,7 +770,7 @@ readonly record struct Follow
 
 ---
 
-## 19. Deferred Hierarchy + Clone Subtree
+## 20. Deferred Hierarchy + Clone Subtree
 
 Two unique deferred-entity capabilities combined: (1) `AddChild` between two **placeholders** — the parent-child intent is recorded and both sides resolve on Submit. (2) `CommandStream.Clone` deep-copies an entity plus all its hierarchy children as deferred placeholders — perfect for "spawn squad from template" in lockstep.
 
@@ -754,7 +815,7 @@ readonly record struct Health(int Value);
 
 ---
 
-## 20. Deferred Destroy / Cancel Pending
+## 21. Deferred Destroy / Cancel Pending
 
 Sometimes you record entities speculatively, then decide not to commit them. `CommandStream.Destroy` on a **placeholder** cancels that pending entity (marks the batch slot as canceled). If the placeholder has children via `AddChild`, the entire subtree is cancelled recursively.
 
@@ -796,7 +857,7 @@ readonly record struct Health(int Value);
 
 ---
 
-## 21. Pending Batch Fast Path + GetSingleton
+## 22. Pending Batch Fast Path + GetSingleton
 
 When you `Create` then `Add`/`Set` multiple components on the same entity in a `CommandStream`, all component data accumulates in the **pending batch buffer** — a single contiguous byte array. `Submit` materializes the entity **once** into the correct archetype, avoiding the per-`Add` archetype migration cost that the immediate `World` API would incur.
 
@@ -840,7 +901,7 @@ readonly record struct GameConfig { public int TickRate; }
 
 ---
 
-## 22. WithAny (OR-match) + Without (Exclusion)
+## 23. WithAny (OR-match) + Without (Exclusion)
 
 `QueryDescription` supports three filter types: `With<T>` (AND-required), `WithAny<T>` (OR-match — at least one of the listed types must be present), and `Without<T>` (exclusion). These compose freely.
 
@@ -886,7 +947,7 @@ readonly record struct Health(int Value);
 
 ---
 
-## 23. Multi-Frame Rollback Window (GGPO)
+## 24. Multi-Frame Rollback Window (GGPO)
 
 `World.CaptureState()` and `World.RestoreState()` support a ring-buffer rollback window of arbitrary depth — not just single-frame save/restore. Handles are pooled, achieving **zero allocation in steady state**.
 
@@ -933,7 +994,7 @@ readonly record struct Position(float X, float Y);
 
 ---
 
-## 24. World.Clone() Branching + Subtree Copy
+## 25. World.Clone() Branching + Subtree Copy
 
 `World.Clone()` creates a fully independent fork of the entire world — no shared internal arrays. Use it for speculative "what-if" simulation or as an alternative to `CaptureState`/`RestoreState` for long-lived checkpoints. `World.Clone(Entity)` deep-copies a single entity and its entire subtree.
 
@@ -973,7 +1034,7 @@ readonly record struct Health(int Value);
 
 ---
 
-## 25. ParallelRecording (Multi-Threaded Command Recording)
+## 26. ParallelRecording (Multi-Threaded Command Recording)
 
 When `CommandStream.ParallelRecording = true`, all `Create`, `Add`, `Set`, `Remove`, and `Destroy` calls become thread-safe. Useful when game systems run on multiple worker threads and each produces commands independently. `Submit` must still be single-threaded.
 

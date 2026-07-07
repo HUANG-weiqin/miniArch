@@ -46,6 +46,7 @@ readonly record struct Velocity(float X, float Y);
 ## Features
 
 - **Archetype ECS** — `World` / `Entity` / `QueryDescription` with chunk-level iteration
+- **Change Tracking** — `World.Track<T>()` cursors for reactive systems: modified chunks, membership transitions, old-value capture
 - **CommandStream** — deferred mutation recording; single-pass Set (12–48% faster than traditional command buffers)
 - **FrameDelta + Replay** — record self-contained deltas, replay on any world with deterministic ID validation
 - **CaptureState/RestoreState** — zero-alloc in-place rollback (GGPO-style at 60 fps)
