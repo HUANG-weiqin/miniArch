@@ -90,6 +90,7 @@ public sealed partial class World : IDisposable
 
     // ── Change tracking ─────────────────────────────────────────────
     internal long _writeEpoch;                                  // monotonic, long = no wraparound
+    internal volatile int _trackingGeneration;                 // incremented on RestoreState/Dispose for cursor self-heal
     private readonly List<WeakReference<Core.IChangeQuery>> _changeQueries = new();
     private bool _anyTrackingActive;                           // world-level gate
 
@@ -140,7 +141,12 @@ public sealed partial class World : IDisposable
         _stateSnapshotPool.Clear();
         _hierarchy.Reset();
         _createArchetypeCacheGeneration = int.MaxValue;
+
+        // Invalidate any remaining change queries
+        _trackingGeneration++;
     }
+
+    internal bool IsDisposed => _disposed;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void AssertNotDisposed()
@@ -316,6 +322,7 @@ public sealed partial class World : IDisposable
     /// </summary>
     public ChangeQuery Track()
     {
+        AssertNotDisposed();
         var query = new ChangeQuery(this);
         RegisterChangeQuery(query);
         return query;
@@ -1386,6 +1393,16 @@ public sealed partial class World : IDisposable
 
         // Invalidate all caches
         _createArchetypeCacheGeneration++;
+
+        // Reset change tracking — prediction-era accumulations are stale.
+        _trackingGeneration++;
+        _changeQueries.Clear();
+        _anyTrackingActive = false;
+        foreach (var arch in _archetypes.Values)
+        {
+            arch._anyTrackingActive = false;
+            arch._columnVersions = null;
+        }
 
         // Recycle snapshot to the pool for the next CaptureState.
         snapshot._isRecycled = true;

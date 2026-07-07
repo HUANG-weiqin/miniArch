@@ -211,4 +211,45 @@ public class ChangeTrackingInfrastructureTests
         var pos = world.Track().Capture<Position>().With<Position>();
         Assert.Empty(pos.Transitions());
     }
+
+    [Fact]
+    public void ChangeQuery_self_heals_after_RestoreState()
+    {
+        var world = new World();
+        var q = world.Track().Capture<Position>();
+        var e = world.Create(new Position(1, 1));
+
+        // Consume the creation transition
+        var t = q.Transitions();
+        Assert.Contains(t, tr => tr.Entity == e && tr.Kind == TransitionKind.Entered);
+
+        // Capture, then make prediction changes
+        var snap = world.CaptureState();
+        world.Set(e, new Position(99, 99));
+        Assert.NotEmpty(q.ModifiedChunks<Position>());
+
+        // Rollback — old cursor self-heals
+        world.RestoreState(snap);
+
+        // Self-healed: stale accumulations are cleared
+        Assert.Empty(q.Transitions());
+        Assert.Empty(q.ModifiedChunks<Position>());
+
+        // Post-restore writes are tracked correctly
+        world.Set(e, new Position(5, 5));
+        Assert.NotEmpty(q.ModifiedChunks<Position>());
+    }
+
+    [Fact]
+    public void ChangeQuery_stale_cursor_after_Dispose_throws()
+    {
+        var world = new World();
+        var q = world.Track().Capture<Position>();
+
+        world.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => q.Transitions());
+        Assert.Throws<ObjectDisposedException>(() => q.ModifiedChunks<Position>());
+        Assert.Throws<ObjectDisposedException>(() => q.Changes());
+    }
 }

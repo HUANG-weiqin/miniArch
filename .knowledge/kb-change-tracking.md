@@ -2,7 +2,7 @@
 title: Change Tracking（变更追踪）
 module: MiniArch.Core
 description: Track() + Capture<T> 游标驱动的原生变更追踪——ModifiedChunks<T> 管值写入、Transitions 管成员进出，Changes() 提供 Old/New 快照对
-updated: 2026-07-07
+updated: 2026-07-09
 ---
 
 # Change Tracking（变更追踪）
@@ -135,6 +135,6 @@ foreach (var c in q.Changes())
 - 批量 `chunk.GetSpan<T>()` 后改 span **不追踪**（同上）。
 - chunked 模式（>2MB archetype）下版本是 per-archetype，跨 segment 过报。
 - transition log / _snapBuffer 在 drain 时自动清零。不调用的 query 会增长——丢弃的 query 由 WeakReference 自动 prune。
-- snapshot restore 后 observer 状态重置。用户需重新 `world.Track()`。
+- `CaptureState`/`RestoreState` 后旧 cursor **自动自愈**（self-heal）：内部累积的 transition/value-change 清空，cursor 推进到当前 epoch，重新注册 dispatch 路径。用户无需重新 `Track()`。World.Dispose 后旧 cursor 会抛 `ObjectDisposedException`。
 - `.Capture<T>()` 必须在使用 `.With<T>()` 之前或之后调用——顺序无关。但必须赶在第一次枚举之前。
 - `Changes()` 返回的 `EntityChange[]` 内的 byte 数据是独立副本（从 `_snapBuffer` 克隆），可跨帧持有。

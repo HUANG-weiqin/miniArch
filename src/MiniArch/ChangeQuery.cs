@@ -12,10 +12,9 @@ namespace MiniArch;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Unlike <see cref="ChangeQuery{T}"/> (which tracks a single type), this
-/// query captures <b>any subset</b> of component values via
-/// <see cref="Capture{T}"/>. Filtering (With/Without/WithAny) is independent
-/// of capture — a captured type is NOT automatically added to the filter.
+/// Unlike single-type change queries, this query captures <b>any subset</b> of
+/// component values via <see cref="Capture{T}"/>. Filtering (With/Without/WithAny)
+/// is independent of capture — a captured type is NOT automatically added to the filter.
 /// </para>
 /// <para>
 /// Fluent methods throw <see cref="InvalidOperationException"/> if called
@@ -61,9 +60,41 @@ public sealed class ChangeQuery : IChangeQuery
     private readonly List<Entity> _snapEntities = new(); // parallel to _snapBuffer entries
     private int _snapCount;    // number of complete (Old+New) entries in buffer
 
+    private int _worldGen;  // captured at construction; compared on self-heal
+
     internal ChangeQuery(World world)
     {
         _world = world;
+        _worldGen = world._trackingGeneration;
+    }
+
+    private void EnsureUsable()
+    {
+        if (_world.IsDisposed)
+            throw new ObjectDisposedException(nameof(World));
+
+        if (_worldGen == _world._trackingGeneration) return;
+
+        // Self-heal: world state was reset (RestoreState/Dispose).
+        // Clear stale accumulations and re-register dispatch paths.
+        _transitions.Clear();
+        _snapCount = 0;
+        _snapEntities.Clear();
+        _cache = null;
+        _consumed = false;
+
+        // Reset per-type cursors to current epoch.
+        var epoch = _world.CurrentWriteEpoch;
+        // Struct enumerator, zero alloc. Fine at self-heal rate.
+        foreach (var key in _valueCursors.Keys)
+            _valueCursors[key] = epoch;
+
+        _worldGen = _world._trackingGeneration;
+
+        // Re-register to receive future dispatch events.
+        _world.RegisterChangeQuery(this);
+        foreach (var ct in _capturedTypes)
+            _world.ActivateTracking(ct);
     }
 
     /// <summary>
@@ -74,6 +105,7 @@ public sealed class ChangeQuery : IChangeQuery
     /// </summary>
     public ChangeQuery Capture<T>() where T : unmanaged
     {
+        EnsureUsable();
         if (_consumed)
             throw new InvalidOperationException("Cannot Capture after enumeration has started.");
         var ct = Component<T>.ComponentType;
@@ -106,6 +138,7 @@ public sealed class ChangeQuery : IChangeQuery
     /// </summary>
     public ChangeQuery Previous()
     {
+        EnsureUsable();
         if (_consumed)
             throw new InvalidOperationException("Cannot enable Previous after enumeration has started.");
         _hasPrevious = true;
@@ -117,6 +150,7 @@ public sealed class ChangeQuery : IChangeQuery
     /// </summary>
     public ChangeQuery With<TU>() where TU : unmanaged
     {
+        EnsureUsable();
         if (_consumed)
             throw new InvalidOperationException("Cannot modify filter after enumeration started.");
         _filter = _filter.With<TU>();
@@ -129,6 +163,7 @@ public sealed class ChangeQuery : IChangeQuery
     /// </summary>
     public ChangeQuery Without<TU>() where TU : unmanaged
     {
+        EnsureUsable();
         if (_consumed)
         {
             ThrowFilterConsumed();
@@ -144,6 +179,7 @@ public sealed class ChangeQuery : IChangeQuery
     /// </summary>
     public ChangeQuery WithAny<TU>() where TU : unmanaged
     {
+        EnsureUsable();
         if (_consumed)
         {
             ThrowFilterConsumed();
@@ -160,6 +196,7 @@ public sealed class ChangeQuery : IChangeQuery
     /// </summary>
     public IEnumerable<Transition> Transitions()
     {
+        EnsureUsable();
         _consumed = true;
         var result = _transitions.ToArray();
         _transitions.Clear();
@@ -177,6 +214,7 @@ public sealed class ChangeQuery : IChangeQuery
     /// </exception>
     public IEnumerable<ChunkView> ModifiedChunks<T>() where T : unmanaged
     {
+        EnsureUsable();
         _consumed = true;
         var ct = Component<T>.ComponentType;
         if (!_capturedTypes.Contains(ct))
@@ -213,6 +251,7 @@ public sealed class ChangeQuery : IChangeQuery
     /// </remarks>
     public EntityChange[] Changes()
     {
+        EnsureUsable();
         _consumed = true;
         if (!_hasPrevious || _snapCount == 0)
             return [];
