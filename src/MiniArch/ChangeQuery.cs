@@ -294,9 +294,14 @@ public sealed class ChangeQuery : IChangeQuery
         var oldOff = _snapCount * entryBytes;
         for (var i = 0; i < _capturedTypes.Count; i++)
         {
-            var colIdx = archetype.GetComponentIndexFast(_capturedTypes[i]);
-            var src = archetype.GetComponentBytes(colIdx, row);
-            src.CopyTo(new Span<byte>(_snapBuffer, oldOff + _offsets[i], _typeSizes[i]));
+            // Component may not exist in this archetype (e.g. Add path where
+            // old archetype lacks the new component). Leave zeros for missing types.
+            if (archetype.TryGetComponentIndex(_capturedTypes[i], out var colIdx))
+            {
+                var src = archetype.GetComponentBytes(colIdx, row);
+                src.CopyTo(new Span<byte>(_snapBuffer, oldOff + _offsets[i], _typeSizes[i]));
+            }
+            // else: leave zeros — buffer is already zeroed from allocation
         }
         _snapEntities.Add(entity);
         // OnAfterWrite will write New and increment _snapCount
@@ -314,9 +319,12 @@ public sealed class ChangeQuery : IChangeQuery
         var newOff = _snapCount * entryBytes + _snapshotSize;
         for (var i = 0; i < _capturedTypes.Count; i++)
         {
-            var colIdx = archetype.GetComponentIndexFast(_capturedTypes[i]);
-            var src = archetype.GetComponentBytes(colIdx, row);
-            src.CopyTo(new Span<byte>(_snapBuffer, newOff + _offsets[i], _typeSizes[i]));
+            if (archetype.TryGetComponentIndex(_capturedTypes[i], out var colIdx))
+            {
+                var src = archetype.GetComponentBytes(colIdx, row);
+                src.CopyTo(new Span<byte>(_snapBuffer, newOff + _offsets[i], _typeSizes[i]));
+            }
+            // else: leave zeros — component not present in this archetype
         }
         _snapCount++;
     }
@@ -332,9 +340,13 @@ public sealed class ChangeQuery : IChangeQuery
         var oldOff = _snapCount * entryBytes;
         for (var i = 0; i < _capturedTypes.Count; i++)
         {
-            var colIdx = archetype.GetComponentIndexFast(_capturedTypes[i]);
-            var src = archetype.GetComponentBytes(colIdx, row);
-            src.CopyTo(new Span<byte>(_snapBuffer, oldOff + _offsets[i], _typeSizes[i]));
+            // Old archetype may lack some captured types (e.g. Add path).
+            if (archetype.TryGetComponentIndex(_capturedTypes[i], out var colIdx))
+            {
+                var src = archetype.GetComponentBytes(colIdx, row);
+                src.CopyTo(new Span<byte>(_snapBuffer, oldOff + _offsets[i], _typeSizes[i]));
+            }
+            // else: leave zeros
         }
         _snapEntities.Add(entity);
         // OnTransition will write New and increment _snapCount if matched
@@ -385,9 +397,13 @@ public sealed class ChangeQuery : IChangeQuery
         var newOff = _snapCount * entryBytes + _snapshotSize;
         for (var i = 0; i < _capturedTypes.Count; i++)
         {
-            var colIdx = newArch.GetComponentIndexFast(_capturedTypes[i]);
-            var src = newArch.GetComponentBytes(colIdx, record.RowIndex);
-            src.CopyTo(new Span<byte>(_snapBuffer, newOff + _offsets[i], _typeSizes[i]));
+            // New archetype may lack some captured types (e.g. Remove path).
+            if (newArch.TryGetComponentIndex(_capturedTypes[i], out var colIdx))
+            {
+                var src = newArch.GetComponentBytes(colIdx, record.RowIndex);
+                src.CopyTo(new Span<byte>(_snapBuffer, newOff + _offsets[i], _typeSizes[i]));
+            }
+            // else: leave zeros — component was removed from this entity
         }
         _snapCount++;
     }

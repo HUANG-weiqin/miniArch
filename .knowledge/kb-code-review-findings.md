@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 健壮性审阅发现汇总——已确认的设计债、已验证的安全猜想、已排除的非 bug 猜想
-updated: 2026-07-06 (架构审阅校准: Validate size check 已补; RestoreState archetype snapshot 安全猜想记录; ResolveInPlace fail-fast 已实现)
+updated: 2026-07-07 (新增 B7: Previous() 快照捕获点缺少 captured type 守卫; kb-change-tracking 坑点已补充)
 ---
 # 代码审阅发现
 
@@ -163,6 +163,16 @@ updated: 2026-07-06 (架构审阅校准: Validate size check 已补; RestoreStat
     - 浸泡测试 `OpAddChild` 的循环检测增强为模拟 `ApplyHierarchy` 的排序顺序检测循环，防止违反库层级不变式的操作被记录。
 - **验证**: 浸泡测试 200000 帧 PASS + `HeroComing.Perf` 性能门禁通过 + 全部 695 个单元测试通过。
 
+### B7: `ChangeQuery.Previous()` 快照捕获点对缺失 captured type 崩溃
+
+- **位置**: `ChangeQuery.cs` 的 `OnBeforeWrite`、`OnAfterWrite`、`OnBeforeTransition`、`WriteNewTransitionSnapshot`
+- **症状**: 当 `.Previous()` 启用且 `.Capture<T>()` 注册的类型在当前 entity 的 archetype 中不存在时（例如 entity 有 `Position` 但无 `Mana`，而 `Mana` 被 capture），原代码使用 `GetComponentIndexFast` + `GetComponentBytes` 读取不存在的列 → `IndexOutOfRangeException` 或错读其他组件数据。
+- **根因**: 4 个快照捕获点使用 `GetComponentIndexFast`（无边界检查），假设所有 captured type 一定存在于匹配 archetype 中。实际存在 entity 通过 filter 匹配（`.With<HP>()`）但部分 captured type 不存在的场景（如 capture `Mana` + filter `With<HP>`，entity 只有 `Position,HP`）。
+- **触发场景**: `Track().Capture<Mana>().With<HP>().Previous()` 后，对一个有 `HP` 但无 `Mana` 的 entity 做 `Add<Velocity>`（结构变更触发 `OnBeforeTransition`），或其他写操作触发 `OnBeforeWrite`/`OnAfterWrite`/`WriteNewTransitionSnapshot`。
+- **修复**: 将 4 个点的 `GetComponentIndexFast` 替换为 `TryGetComponentIndex`，类型不存在时跳过字节拷贝，快照对应范围保持零值。
+- **回归测试**: `Previous_on_empty_world_then_Add_does_not_crash`、`Previous_on_empty_world_then_Set_does_not_crash`、`Previous_then_Remove_captured_component_keeps_zero_new_snapshot`
+- **验证**: 上述回归测试通过。HeroComing.Perf 门禁 MOV 1925/ATK 1179，内存稳定。
+
 ### 修复原则
 
-这些修复遵循**不变性原则**：Submit 路径和 Replay 路径必须在操作顺序和语义上一致。分歧（如排序差异、去重差异、释放差异）是 Submit/Replay 不一致的根因。库层不做过度防御（不静默吞非法操作），但语义上等价的操作（Add 已存在 = 写值）应被允许。
+这些修复遵循**不变性原则**：Submit 路径和 Replay 路径必须在操作顺序和语义上一致。分歧（如排序差异、去重差异、释放差异）是 Submit/Replay 不一致的根因。库层不做过度防御（不静默吞非法操作），但语义上等价的操作（Add 已存在 = 写值）应被允许。ChangeQuery 自身的修复遵循**防御性读取原则**：只要组件可能缺失，就必须使用 `TryGetComponentIndex` 而不是 `GetComponentIndexFast`。

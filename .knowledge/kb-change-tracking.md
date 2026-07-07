@@ -2,7 +2,7 @@
 title: Change Tracking（变更追踪）
 module: MiniArch.Core
 description: Track() + Capture<T> 游标驱动的原生变更追踪——ModifiedChunks<T> 管值写入、Transitions 管成员进出，Changes() 提供 Old/New 快照对
-updated: 2026-07-09
+updated: 2026-07-07
 ---
 
 # Change Tracking（变更追踪）
@@ -138,3 +138,4 @@ foreach (var c in q.Changes())
 - `CaptureState`/`RestoreState` 后旧 cursor **自动自愈**（self-heal）：内部累积的 transition/value-change 清空，cursor 推进到当前 epoch，重新注册 dispatch 路径。用户无需重新 `Track()`。World.Dispose 后旧 cursor 会抛 `ObjectDisposedException`。
 - `.Capture<T>()` 必须在使用 `.With<T>()` 之前或之后调用——顺序无关。但必须赶在第一次枚举之前。
 - `Changes()` 返回的 `EntityChange[]` 内的 byte 数据是独立副本（从 `_snapBuffer` 克隆），可跨帧持有。
+- `Previous()` 启用时，若某个 `.Capture<T>()` 注册的类型在当前 archetype 中不存在，快照的 Old/New 相应的 byte 范围保持为零值（0-initialized）。不会崩溃或读取错数据。这是通过 `TryGetComponentIndex` 的守卫实现的——所有 4 个快照捕获点（`OnBeforeWrite`、`OnAfterWrite`、`OnBeforeTransition`、`WriteNewTransitionSnapshot`）在读取前先检查组件是否存在，缺失则跳过拷贝。**注意**：`getComponentIndexFast` 不在这些守卫中，若在其他路径使用需自行保障。
