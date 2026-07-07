@@ -455,7 +455,7 @@ public sealed partial class World : IDisposable
                 $"Entity '{entity}' is not alive.");
         }
 
-        return new EntityAccessor(info.Archetype, info.RowIndex);
+        return new EntityAccessor(info.Archetype, info.RowIndex, entity);
     }
 
     /// <summary>

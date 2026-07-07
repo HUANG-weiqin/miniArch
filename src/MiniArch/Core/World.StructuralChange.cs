@@ -184,7 +184,12 @@ public sealed partial class World
     internal static unsafe void ApplyRawSet(Entity entity, EntityRecord info, ComponentType componentType, byte* source)
     {
         var archetype = info.Archetype!;
-        var componentIndex = archetype.GetComponentIndex(componentType);
+
+        if (!archetype.TryGetComponentIndex(componentType, out var componentIndex))
+        {
+            throw new InvalidOperationException(
+                $"Entity {entity} does not have component type {componentType.Value}.");
+        }
 
         // Previous-value capture for replay path — uses pre-registered typed
         // DispatchRaw on the bucket so T is known even from raw byte entries.

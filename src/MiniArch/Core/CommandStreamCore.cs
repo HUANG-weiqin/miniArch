@@ -2727,7 +2727,9 @@ public abstract class CommandStreamCore
                         if (arch != fastArch)
                         {
                             fastArch = arch;
-                            fastColIdx = arch.GetComponentIndex(compType);
+                            if (!arch.TryGetComponentIndex(compType, out fastColIdx))
+                                throw new InvalidOperationException(
+                                    $"Entity {entry.Entity} does not have component {typeof(T).Name}.");
                             fastByteOffset = arch.GetColumnByteOffset(fastColIdx);
                             fastIsChunked = arch.IsChunked;
                         }
@@ -2770,7 +2772,9 @@ public abstract class CommandStreamCore
                         if (arch != fastArch)
                         {
                             fastArch = arch;
-                            fastColIdx = arch.GetComponentIndex(compType);
+                            if (!arch.TryGetComponentIndex(compType, out fastColIdx))
+                                throw new InvalidOperationException(
+                                    $"Entity {entry.Entity} does not have component {typeof(T).Name}.");
                             fastByteOffset = arch.GetColumnByteOffset(fastColIdx);
                             fastIsChunked = arch.IsChunked;
                         }
@@ -2804,7 +2808,9 @@ public abstract class CommandStreamCore
                     if (arch != lastArchMixed)
                     {
                         lastArchMixed = arch;
-                        lastColIdx = arch.GetComponentIndex(compType);
+                        if (!arch.TryGetComponentIndex(compType, out lastColIdx))
+                            throw new InvalidOperationException(
+                                $"Entity {entry.Entity} does not have component {typeof(T).Name}.");
                         lastByteOffsetMixed = arch.GetColumnByteOffset(lastColIdx);
                         lastIsChunkedMixed = arch.IsChunked;
                     }
