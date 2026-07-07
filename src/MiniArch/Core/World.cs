@@ -222,10 +222,8 @@ public sealed partial class World : IDisposable
         _changeQueries.Add(new WeakReference<Core.IChangeQuery>(query));
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void AppendTransition(Entity e, Core.Archetype? old, Core.Archetype? @new)
     {
-        if (!_anyTrackingActive) return;
         for (var i = _changeQueries.Count - 1; i >= 0; i--)
         {
             var weakRef = _changeQueries[i];
@@ -1128,10 +1126,21 @@ public sealed partial class World : IDisposable
         else
         {
             // Fast path: no Entity refs in any component.
-            for (var i = 0; i < compCount; i++)
+            if (_anyTrackingActive)
             {
-                var colIdx = archetype.GetComponentIndexFast(types[i]);
-                archetype.WriteComponentRaw(colIdx, rowIndex, bufPtr + offsets[i]);
+                for (var i = 0; i < compCount; i++)
+                {
+                    var colIdx = archetype.GetComponentIndexFast(types[i]);
+                    archetype.WriteComponentRaw(colIdx, rowIndex, bufPtr + offsets[i]);
+                }
+            }
+            else
+            {
+                for (var i = 0; i < compCount; i++)
+                {
+                    var colIdx = archetype.GetComponentIndexFast(types[i]);
+                    archetype.WriteComponentRawNoTrack(colIdx, rowIndex, bufPtr + offsets[i]);
+                }
             }
         }
     }
@@ -1154,7 +1163,7 @@ public sealed partial class World : IDisposable
 #endif
         record.Archetype = archetype;
         record.RowIndex = rowIndex;
-        AppendTransition(entity, null, archetype);
+        if (_anyTrackingActive) AppendTransition(entity, null, archetype);
         return rowIndex;
     }
 
@@ -1182,10 +1191,21 @@ public sealed partial class World : IDisposable
     {
         var rowIndex = PlaceEntityInArchetype(entity, archetype);
 
-        for (var i = 0; i < types.Length; i++)
+        if (_anyTrackingActive)
         {
-            var colIdx = archetype.GetComponentIndexFast(types[i]);
-            archetype.WriteComponentRaw(colIdx, rowIndex, buffer + offsets[i]);
+            for (var i = 0; i < types.Length; i++)
+            {
+                var colIdx = archetype.GetComponentIndexFast(types[i]);
+                archetype.WriteComponentRaw(colIdx, rowIndex, buffer + offsets[i]);
+            }
+        }
+        else
+        {
+            for (var i = 0; i < types.Length; i++)
+            {
+                var colIdx = archetype.GetComponentIndexFast(types[i]);
+                archetype.WriteComponentRawNoTrack(colIdx, rowIndex, buffer + offsets[i]);
+            }
         }
     }
 

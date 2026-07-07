@@ -2713,26 +2713,53 @@ public abstract class CommandStreamCore
                 int fastByteOffset = 0;
                 bool fastIsChunked = false;
 
-                for (var i = 0; i < count; i++)
+                if (world.IsChangeTrackingActive)
                 {
-                    ref var entry = ref Unsafe.Add(ref entriesRef, i);
-                    var record = world.GetRecordFast(entry.Entity);
-#if DEBUG
-                    Debug.Assert(record.Archetype is not null && record.Version == entry.Entity.Version,
-                        $"GetRecordFast returned stale or unoccupied record for entity {entry.Entity}.");
-#endif
-                    var arch = record.Archetype!;
-                    if (arch != fastArch)
+                    for (var i = 0; i < count; i++)
                     {
-                        fastArch = arch;
-                        fastColIdx = arch.GetComponentIndex(compType);
-                        fastByteOffset = arch.GetColumnByteOffset(fastColIdx);
-                        fastIsChunked = arch.IsChunked;
+                        ref var entry = ref Unsafe.Add(ref entriesRef, i);
+                        var record = world.GetRecordFast(entry.Entity);
+#if DEBUG
+                        Debug.Assert(record.Archetype is not null && record.Version == entry.Entity.Version,
+                            $"GetRecordFast returned stale or unoccupied record for entity {entry.Entity}.");
+#endif
+                        var arch = record.Archetype!;
+                        if (arch != fastArch)
+                        {
+                            fastArch = arch;
+                            fastColIdx = arch.GetComponentIndex(compType);
+                            fastByteOffset = arch.GetColumnByteOffset(fastColIdx);
+                            fastIsChunked = arch.IsChunked;
+                        }
+                        if (!fastIsChunked)
+                            arch.SetComponentAtFlat<T>(fastColIdx, fastByteOffset, record.RowIndex, in entry.Value);
+                        else
+                            arch.SetComponentAtTyped(fastColIdx, record.RowIndex, in entry.Value);
                     }
-                    if (!fastIsChunked)
-                        arch.SetComponentAtFlat<T>(fastColIdx, fastByteOffset, record.RowIndex, in entry.Value);
-                    else
-                        arch.SetComponentAtTyped(fastColIdx, record.RowIndex, in entry.Value);
+                }
+                else
+                {
+                    for (var i = 0; i < count; i++)
+                    {
+                        ref var entry = ref Unsafe.Add(ref entriesRef, i);
+                        var record = world.GetRecordFast(entry.Entity);
+#if DEBUG
+                        Debug.Assert(record.Archetype is not null && record.Version == entry.Entity.Version,
+                            $"GetRecordFast returned stale or unoccupied record for entity {entry.Entity}.");
+#endif
+                        var arch = record.Archetype!;
+                        if (arch != fastArch)
+                        {
+                            fastArch = arch;
+                            fastColIdx = arch.GetComponentIndex(compType);
+                            fastByteOffset = arch.GetColumnByteOffset(fastColIdx);
+                            fastIsChunked = arch.IsChunked;
+                        }
+                        if (!fastIsChunked)
+                            arch.SetComponentAtFlatNoTrack<T>(fastColIdx, fastByteOffset, record.RowIndex, in entry.Value);
+                        else
+                            arch.SetComponentAtTypedNoTrack(fastColIdx, record.RowIndex, in entry.Value);
+                    }
                 }
                 return;
             }
