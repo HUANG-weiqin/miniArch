@@ -41,6 +41,10 @@ public ref struct EntityAccessor
     /// Assumes the component already exists on the entity (i.e. is part of the
     /// entity's archetype). For adding new components, use <c>CommandStream.Add&lt;T&gt;</c>.
     /// </summary>
+    /// <remarks>
+    /// This method does NOT capture previous values for <see cref="ChangeQuery{T}.WithPreviousValues"/>
+    /// — use <see cref="World.Set{T}"/> or CommandStream.Set when previous-value tracking is needed.
+    /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Set<T>(in T value) where T : unmanaged
     {

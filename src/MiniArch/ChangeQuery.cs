@@ -122,11 +122,17 @@ public sealed class ChangeQuery<T> : IChangeQuery, IValueChangeSink<T> where T :
     }
 
     /// <summary>
-    /// Enables per-write old-value capture. Each <see cref="World.Set{T}"/> on the tracked
+    /// Enables per-write old-value capture. Each <c>World.Set&lt;T&gt;</c> on the tracked
     /// type produces a <see cref="ValueChange{T}"/> record containing the value before and
     /// after the write. The records are auto-cleared on each <see cref="Changes"/> call.
     /// Throws <see cref="InvalidOperationException"/> if called after any enumeration.
     /// </summary>
+    /// <remarks>
+    /// Previous values are captured for <see cref="World.Set{T}"/>, CommandStream.Set,
+    /// and replay (FrameDelta) Set operations.
+    /// <see cref="EntityAccessor.Set{T}"/> does NOT trigger capture — use
+    /// <see cref="World.Set{T}"/> instead when previous values are needed.
+    /// </remarks>
     /// <example>
     /// <code>
     /// var hp = world.Track&lt;HP&gt;().WithPreviousValues();
@@ -148,11 +154,16 @@ public sealed class ChangeQuery<T> : IChangeQuery, IValueChangeSink<T> where T :
 
     /// <summary>
     /// Returns the <see cref="ValueChange{T}"/> records accumulated since the last
-    /// call. Each record holds the entity, the old value before <see cref="World.Set{T}"/>,
+    /// call. Each record holds the entity, the old value before <c>World.Set&lt;T&gt;</c>,
     /// and the new value. The internal buffer is auto-cleared after enumeration.
     /// Returns an empty array if no changes occurred or if <see cref="WithPreviousValues"/>
     /// was not configured.
     /// </summary>
+    /// <remarks>
+    /// Covers <c>World.Set&lt;T&gt;</c>, CommandStream.Set, and replay (FrameDelta) Set
+    /// operations. <see cref="EntityAccessor.Set{T}"/> does NOT produce records —
+    /// use <c>World.Set&lt;T&gt;</c> instead.
+    /// </remarks>
     /// <example>
     /// <code>
     /// foreach (var c in hp.Changes())

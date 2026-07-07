@@ -45,6 +45,10 @@ sealed class SoakRunner
     // component that was already removed in the same frame.
     readonly HashSet<(Entity E, int CompIdx)> _pendingRemoves = [];
 
+    // Per-frame pending add tracking: prevents recording Add for a component
+    // that was already added in the same frame (Add throws if component exists).
+    readonly HashSet<(Entity E, int CompIdx)> _pendingAdds = [];
+
     // Tracks all entities explicitly destroyed this frame, so we can skip
     // child destroys when the parent is also being destroyed (cascade will
     // handle the child).
@@ -140,6 +144,7 @@ sealed class SoakRunner
                 out var removeW, out var cloneW, out var addHierW, out var removeHierW);
 
             _pendingRemoves.Clear();
+            _pendingAdds.Clear();
             _pendingHierarchyChildren.Clear();
             _pendingHierarchyParents.Clear();
             _destroyedThisFrame.Clear();
@@ -372,10 +377,10 @@ sealed class SoakRunner
         if (!_source.IsAlive(e)) return;
 
         var t = _rng.Next(4);
-        if (t == 0 && !_source.Has<CompA>(e) && !_pendingRemoves.Contains((e, 0))) { var v = _rng.Next(); _stream.Add(e, new CompA(v)); AddRefA(e, v); _adds++; }
-        else if (t == 1 && !_source.Has<CompB>(e) && !_pendingRemoves.Contains((e, 1))) { var v = (long)_rng.Next(); _stream.Add(e, new CompB(v)); AddRefB(e, v); _adds++; }
-        else if (t == 2 && !_source.Has<CompC>(e) && !_pendingRemoves.Contains((e, 2))) { _stream.Add(e, new CompC((float)_rng.NextDouble(), (float)_rng.NextDouble())); _adds++; }
-        else if (t == 3 && !_source.Has<CompD>(e) && !_pendingRemoves.Contains((e, 3))) { _stream.Add(e, new CompD(_rng.Next(), _rng.Next(), _rng.Next(), _rng.Next(), _rng.Next(), _rng.Next(), _rng.Next(), _rng.Next())); _adds++; }
+        if (t == 0 && !_source.Has<CompA>(e) && !_pendingRemoves.Contains((e, 0)) && !_pendingAdds.Contains((e, 0))) { var v = _rng.Next(); _stream.Add(e, new CompA(v)); AddRefA(e, v); _adds++; _pendingAdds.Add((e, 0)); }
+        else if (t == 1 && !_source.Has<CompB>(e) && !_pendingRemoves.Contains((e, 1)) && !_pendingAdds.Contains((e, 1))) { var v = (long)_rng.Next(); _stream.Add(e, new CompB(v)); AddRefB(e, v); _adds++; _pendingAdds.Add((e, 1)); }
+        else if (t == 2 && !_source.Has<CompC>(e) && !_pendingRemoves.Contains((e, 2)) && !_pendingAdds.Contains((e, 2))) { _stream.Add(e, new CompC((float)_rng.NextDouble(), (float)_rng.NextDouble())); _adds++; _pendingAdds.Add((e, 2)); }
+        else if (t == 3 && !_source.Has<CompD>(e) && !_pendingRemoves.Contains((e, 3)) && !_pendingAdds.Contains((e, 3))) { _stream.Add(e, new CompD(_rng.Next(), _rng.Next(), _rng.Next(), _rng.Next(), _rng.Next(), _rng.Next(), _rng.Next(), _rng.Next())); _adds++; _pendingAdds.Add((e, 3)); }
         LogOp($"Add({e}) t={t}");
     }
 

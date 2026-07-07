@@ -179,8 +179,8 @@ public class ChangeTrackingInfrastructureTests
         var pos = world.Track<Position>();
         var e = world.Create(new Position(1, 1));
         pos.Transitions();  // drain
-        world.Add(e, new Position(2, 2));   // already has Position → in-place overwrite, no migration
-        Assert.Empty(pos.Transitions());
+        Assert.Throws<InvalidOperationException>(() => world.Add(e, new Position(2, 2)));
+        Assert.Empty(pos.Transitions());  // no transition produced (never reached the write)
     }
 
     [Fact]

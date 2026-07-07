@@ -1,11 +1,15 @@
 namespace MiniArch;
 
 /// <summary>
-/// Records a component value change: the entity whose component was <see cref="World.Set{T}"/>
-/// along with the value before and after the operation.
+/// Records a component value change: the entity whose component was set via
+/// <see cref="World"/>.<c>Set&lt;T&gt;</c> along with the value before and after the operation.
 /// Obtain via <see cref="ChangeQuery{T}.Changes"/> when tracking was configured with
 /// <see cref="ChangeQuery{T}.WithPreviousValues"/>.
 /// </summary>
+/// <remarks>
+/// Captures <c>World.Set&lt;T&gt;</c>, CommandStream.Set, and replay (FrameDelta) Set
+/// operations. <see cref="EntityAccessor.Set{T}"/> does not produce records.
+/// </remarks>
 /// <example>
 /// <code>
 /// foreach (var c in hp.Changes())

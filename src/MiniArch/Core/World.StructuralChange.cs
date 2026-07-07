@@ -102,9 +102,9 @@ public sealed partial class World
 
         if (archetype.TryGetComponentIndex(componentType, out var existingIdx))
         {
-            // Entity already has component — write value in-place
-            archetype.SetComponentAtTyped(existingIdx, info.RowIndex, in component);
-            return;
+            throw new InvalidOperationException(
+                $"Entity {entity} already has component type {componentType.Value}. " +
+                "Use Set<T> to overwrite, or remove the component first.");
         }
 
         if (!archetype.TryGetAddDestination(componentType, out var destination))
@@ -173,15 +173,9 @@ public sealed partial class World
         var archetype = info.Archetype!;
         if (archetype.TryGetComponentIndex(componentType, out var existingColIdx))
         {
-            // Entity already has component — write value in-place without
-            // moving the entity. This path matches how the component stores
-            // interact with Add on an entity that may have inherited the
-            // component from a prior frame or a clone: the Submit path's
-            // ApplyTypedAdd handles it by moving within the same archetype,
-            // but ApplyTypedAdd<T> throws (by design) and is not reached
-            // for this case. ApplyRawAdd is the only path that encounters it.
-            archetype.WriteComponentRaw(existingColIdx, info.RowIndex, source);
-            return;
+            throw new InvalidOperationException(
+                $"Replay Add: entity {entity} already has component type {componentType.Value}. " +
+                "The delta is invalid — use Set for overwrites, not Add.");
         }
         var destination = GetOrCreateAddDestinationArchetype(archetype, componentType);
         MoveEntityFromBytes(entity, info, destination, componentType, source);

@@ -121,13 +121,13 @@ public sealed class SubmitReplayParityTests
         deltas.Add(stream.Snapshot());
         stream.Submit();
 
-        // Frame 2: Add<Position> twice with different values
+        // Frame 2: Add<Position> then Set<Position> (Add only when absent)
         stream.Add(e, new Position(1, 2));
-        stream.Add(e, new Position(3, 4));
+        stream.Set(e, new Position(3, 4));
         deltas.Add(stream.Snapshot());
         stream.Submit();
 
-        // Verify: second Add overwrites (in-place when already present)
+        // Verify: Set overwrote after Add
         Assert.True(source.TryGet(e, out Position p));
         Assert.Equal(new Position(3, 4), p);
 
