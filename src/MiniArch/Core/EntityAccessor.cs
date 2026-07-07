@@ -42,7 +42,7 @@ public ref struct EntityAccessor
     /// entity's archetype). For adding new components, use <c>CommandStream.Add&lt;T&gt;</c>.
     /// </summary>
     /// <remarks>
-    /// This method does NOT capture previous values for <see cref="ChangeQuery{T}.WithPreviousValues"/>
+    /// This method does NOT capture previous values for <see cref="ChangeQuery.Previous"/>
     /// — use <see cref="World.Set{T}"/> or CommandStream.Set when previous-value tracking is needed.
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

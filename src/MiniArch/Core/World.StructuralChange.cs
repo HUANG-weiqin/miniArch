@@ -191,6 +191,10 @@ public sealed partial class World
                 $"Replay Add: entity {entity} already has component type {componentType.Value}. " +
                 "The delta is invalid — use Set for overwrites, not Add.");
         }
+
+        // Pre-hook: capture Old values before entity moves to new archetype
+        if (_anyTrackingActive) DispatchBeforeTransition(entity, archetype, info.RowIndex);
+
         var destination = GetOrCreateAddDestinationArchetype(archetype, componentType);
         MoveEntityFromBytes(entity, info, destination, componentType, source);
     }

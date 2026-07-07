@@ -44,7 +44,7 @@ public enum TransitionCause
 
 /// <summary>
 /// A single membership change: an entity either entered or exited the set defined
-/// by the change-query's filter since the last call to <see cref="ChangeQuery{T}.Transitions"/>.
+/// by the change-query's filter since the last call to <see cref="ChangeQuery.Transitions"/>.
 /// <see cref="Kind"/> is derived from <see cref="Cause"/> — use <see cref="Cause"/> for precision
 /// (e.g. distinguish <see cref="TransitionCause.Destroyed"/> from <see cref="TransitionCause.Removed"/>),
 /// or <see cref="Kind"/> for simple enter/exit checks.
