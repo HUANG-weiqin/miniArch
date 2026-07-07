@@ -36,40 +36,50 @@ public enum TransitionCause
     Created,
     /// <summary>Entity was destroyed while matching the filter.</summary>
     Destroyed,
-    /// <summary>A component was added that caused entry (or an excluded component was removed).</summary>
+    /// <summary>A component was added that caused entry (or an excluded component was removed — only when filter uses <c>Without&lt;&gt;</c>).</summary>
     Added,
-    /// <summary>A component was removed that caused exit (or an excluded component was added).</summary>
+    /// <summary>A component was removed that caused exit (or an excluded component was added — only when filter uses <c>Without&lt;&gt;</c>).</summary>
     Removed,
 }
 
 /// <summary>
 /// A single membership change: an entity either entered or exited the set defined
 /// by the change-query's filter since the last call to <see cref="ChangeQuery{T}.Transitions"/>.
+/// <see cref="Kind"/> is derived from <see cref="Cause"/> — use <see cref="Cause"/> for precision
+/// (e.g. distinguish <see cref="TransitionCause.Destroyed"/> from <see cref="TransitionCause.Removed"/>),
+/// or <see cref="Kind"/> for simple enter/exit checks.
 /// </summary>
 /// <example>
 /// <code>
 /// foreach (var t in hp.Transitions())
-///     if (t.Kind == TransitionKind.Entered)
-///         OnHpAdded(t.Entity);
+///     if (t.Cause == TransitionCause.Destroyed)
+///         CleanUp(t.Entity);          // entity gone
+///     else if (t.IsExited)
+///         HideHealthBar(t.Entity);    // still alive, just left set
 ///     else
-///         OnHpRemoved(t.Entity);
+///         ShowHealthBar(t.Entity);    // entered (Created or Added)
 /// </code>
 /// </example>
 public readonly struct Transition
 {
-    /// <summary>Entered or Exited.</summary>
-    public readonly TransitionKind Kind;
-
-    /// <summary>What structural change caused this transition.</summary>
+    /// <summary>What structural change caused this transition (authoritative field).</summary>
     public readonly TransitionCause Cause;
+
+    /// <summary>Derived convenience — true for <see cref="TransitionCause.Created"/> or <see cref="TransitionCause.Added"/>.</summary>
+    public bool IsEntered => Cause is TransitionCause.Created or TransitionCause.Added;
+
+    /// <summary>Derived convenience — true for <see cref="TransitionCause.Destroyed"/> or <see cref="TransitionCause.Removed"/>.</summary>
+    public bool IsExited => Cause is TransitionCause.Destroyed or TransitionCause.Removed;
+
+    /// <summary>Derived convenience — <see cref="TransitionKind.Entered"/> or <see cref="TransitionKind.Exited"/>.</summary>
+    public TransitionKind Kind => IsEntered ? TransitionKind.Entered : TransitionKind.Exited;
 
     /// <summary>The entity whose membership changed.</summary>
     public readonly Entity Entity;
 
     /// <summary>Creates a transition entry.</summary>
-    public Transition(TransitionKind kind, TransitionCause cause, Entity entity)
+    public Transition(TransitionCause cause, Entity entity)
     {
-        Kind = kind;
         Cause = cause;
         Entity = entity;
     }
