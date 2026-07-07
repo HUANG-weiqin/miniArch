@@ -512,42 +512,106 @@ public sealed class ChangeQuery : IChangeQuery
 
     // ── IChangeQuery ──
 
+    void IChangeQuery.OnBeforeWrite(Entity entity, Archetype archetype, int row)
+    {
+        if (!_hasPrevious || _capturedTypes.Count == 0) return;
+
+        EnsureSnapBufferCapacity();
+
+        // Write Old at (_snapCount * entryBytes)
+        var entryBytes = _snapshotSize * 2;
+        var oldOff = _snapCount * entryBytes;
+        for (var i = 0; i < _capturedTypes.Count; i++)
+        {
+            var colIdx = archetype.GetComponentIndexFast(_capturedTypes[i]);
+            var src = archetype.GetComponentBytes(colIdx, row);
+            src.CopyTo(new Span<byte>(_snapBuffer, oldOff + _offsets[i], _typeSizes[i]));
+        }
+        _snapEntities.Add(entity);
+        // OnAfterWrite will write New and increment _snapCount
+    }
+
+    void IChangeQuery.OnAfterWrite(Entity entity, Archetype archetype, int row)
+    {
+        if (!_hasPrevious || _capturedTypes.Count == 0) return;
+
+        var entryBytes = _snapshotSize * 2;
+        var newOff = _snapCount * entryBytes + _snapshotSize;
+        for (var i = 0; i < _capturedTypes.Count; i++)
+        {
+            var colIdx = archetype.GetComponentIndexFast(_capturedTypes[i]);
+            var src = archetype.GetComponentBytes(colIdx, row);
+            src.CopyTo(new Span<byte>(_snapBuffer, newOff + _offsets[i], _typeSizes[i]));
+        }
+        _snapCount++;
+    }
+
+    void IChangeQuery.OnBeforeTransition(Entity entity, Archetype archetype, int row)
+    {
+        if (!_hasPrevious || _capturedTypes.Count == 0) return;
+
+        EnsureSnapBufferCapacity();
+
+        // Write Old at (_snapCount * entryBytes)
+        var entryBytes = _snapshotSize * 2;
+        var oldOff = _snapCount * entryBytes;
+        for (var i = 0; i < _capturedTypes.Count; i++)
+        {
+            var colIdx = archetype.GetComponentIndexFast(_capturedTypes[i]);
+            var src = archetype.GetComponentBytes(colIdx, row);
+            src.CopyTo(new Span<byte>(_snapBuffer, oldOff + _offsets[i], _typeSizes[i]));
+        }
+        _snapEntities.Add(entity);
+        // OnTransition will write New and increment _snapCount if matched
+    }
+
     void IChangeQuery.OnTransition(Entity entity, Archetype? oldArchetype, Archetype? newArchetype)
     {
         _consumed = true;
         var cache = _cache ??= _world.Query(_filter).Advanced;
         var oldMatch = oldArchetype is { } o && cache.Matches(o);
         var newMatch = newArchetype is { } n && cache.Matches(n);
-        if (!oldMatch && newMatch)
+
+        if ((!oldMatch && newMatch) || (oldMatch && !newMatch))
         {
-            var cause = oldArchetype is null ? TransitionCause.Created : TransitionCause.Added;
+            // Matched: add transition entry
+            TransitionCause cause;
+            if (!oldMatch && newMatch)
+                cause = oldArchetype is null ? TransitionCause.Created : TransitionCause.Added;
+            else
+                cause = newArchetype is null ? TransitionCause.Destroyed : TransitionCause.Removed;
+
             _transitions.Add(new Transition(cause, entity));
-            if (_hasPrevious) CaptureTransition(entity);
+
+            // Capture snapshot pair only when BOTH old and new archetypes are
+            // non-null (Add or Remove). Created (old=null) and Destroyed
+            // (new=null) have no meaningful Old or New snapshot respectively.
+            if (_hasPrevious && oldArchetype is not null && newArchetype is not null)
+            {
+                WriteNewTransitionSnapshot(entity, newArchetype);
+            }
         }
-        else if (oldMatch && !newMatch)
+        else if (_hasPrevious && _capturedTypes.Count > 0)
         {
-            var cause = newArchetype is null ? TransitionCause.Destroyed : TransitionCause.Removed;
-            _transitions.Add(new Transition(cause, entity));
-            if (_hasPrevious) CaptureTransition(entity);
+            // Transition did NOT match filter, but we already called
+            // OnBeforeTransition which added an entity to _snapEntities.
+            // Roll back the entity list so Changes() indices stay correct.
+            if (_snapEntities.Count > 0)
+                _snapEntities.RemoveAt(_snapEntities.Count - 1);
         }
     }
 
-    private void CaptureTransition(Entity entity)
+    private void WriteNewTransitionSnapshot(Entity entity, Archetype newArch)
     {
-        // Old values were captured by OnBeforeTransition.
-        // New values need to be read after the entity moved.
+        // Old values were written by OnBeforeTransition at _snapCount * entryBytes.
+        // Now write New at _snapCount * entryBytes + _snapshotSize.
         var record = _world.GetRecordFast(entity);
-        var arch = record.Archetype;
-        if (arch is null) return;
-
-        EnsureSnapBufferCapacity();
-
         var entryBytes = _snapshotSize * 2;
         var newOff = _snapCount * entryBytes + _snapshotSize;
         for (var i = 0; i < _capturedTypes.Count; i++)
         {
-            var colIdx = arch.GetComponentIndexFast(_capturedTypes[i]);
-            var src = arch.GetComponentBytes(colIdx, record.RowIndex);
+            var colIdx = newArch.GetComponentIndexFast(_capturedTypes[i]);
+            var src = newArch.GetComponentBytes(colIdx, record.RowIndex);
             src.CopyTo(new Span<byte>(_snapBuffer, newOff + _offsets[i], _typeSizes[i]));
         }
         _snapCount++;
@@ -567,10 +631,4 @@ public sealed class ChangeQuery : IChangeQuery
             "Cannot modify the filter after ModifiedChunks<T>() or Transitions() has been called. " +
             "Configure With/Without/WithAny before the first enumeration.");
     }
-
-    // ── IChangeQuery pre/post hooks (implemented in Task 4) ──
-
-    void IChangeQuery.OnBeforeWrite(Entity entity, Archetype archetype, int row) { }
-    void IChangeQuery.OnAfterWrite(Entity entity, Archetype archetype, int row) { }
-    void IChangeQuery.OnBeforeTransition(Entity entity, Archetype archetype, int row) { }
 }
