@@ -2,7 +2,7 @@
 title: Change Tracking（变更追踪）
 module: MiniArch.Core
 description: Track() + Capture<T> 游标驱动的原生变更追踪——ModifiedChunks<T> 管值写入、Transitions 管成员进出，Changes() 提供 Old/New 快照对
-updated: 2026-07-07
+updated: 2026-07-07 (pending entity 最终状态契约：Changes() 不保留 CommandStream pending entity 的中间操作)
 ---
 
 # Change Tracking（变更追踪）
@@ -130,6 +130,12 @@ foreach (var c in q.Changes())
 ```
 
 ## 坑点
+
+- **Pending entity 的中间操作不产生 Changes() 条目**：通过 `CommandStream.Create()`/`Clone()` 创建的 pending entity，其所有 `Add`/`Set`/`Remove` 操作在 `Submit()`/`Snapshot()`/`Replay()` 时折叠为最终组件状态。这意味着：
+  - `Changes()` 不包含这些中间操作对应的 Old/New 快照。
+  - `Transitions()` 只反映最终 filter 匹配结果（Create+Add+Remove → 从未进入 filter）。
+  - Existing entity 的 `Add`/`Set`/`Remove`（通过 component store 路径）不受此影响，它们仍然产生独立的 Changes() 条目。
+  - 详见 `kb-command-stream.md`「Pending entity 最终状态契约」段。
 
 - `Get<T>` 返回 ref 后直接改字段**不追踪**（C# ref 无法拦截）。
 - 批量 `chunk.GetSpan<T>()` 后改 span **不追踪**（同上）。

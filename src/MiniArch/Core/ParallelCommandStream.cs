@@ -72,6 +72,12 @@ public sealed class ParallelCommandStream : CommandStreamCore
     /// Records an Add command for the specified component on the given entity.
     /// Thread-safe; checks pending batch under the lock, falls back to
     /// per-component concurrent store append.
+    /// <para/>
+    /// <b>Pending entity note:</b> If <paramref name="entity"/> is a pending
+    /// (Create'd but not yet Submit'd/Snapshot'd) entity, this Add is folded
+    /// with other Add/Set/Remove into the final materialized component
+    /// signature. Intermediate operations are <b>not</b> observable via
+    /// <c>Changes()</c> or <c>Transitions()</c>.
     /// </summary>
     public void Add<T>(Entity entity, T component) where T : unmanaged
     {
@@ -93,6 +99,9 @@ public sealed class ParallelCommandStream : CommandStreamCore
     /// Records a Set command for the specified component on the given entity.
     /// Thread-safe; checks pending batch under the lock, falls back to
     /// per-component concurrent store append.
+    /// <para/>
+    /// <b>Pending entity note:</b> Same folding semantics as <see cref="Add{T}"/>.
+    /// Multiple Sets on a pending entity collapse to the last value.
     /// </summary>
     public void Set<T>(Entity entity, T component) where T : unmanaged
     {
@@ -114,6 +123,10 @@ public sealed class ParallelCommandStream : CommandStreamCore
     /// Records a Remove command for the specified component type from the given entity.
     /// Thread-safe; checks pending batch under the lock, falls back to
     /// per-component concurrent store append.
+    /// <para/>
+    /// <b>Pending entity note:</b> Same folding semantics as <see cref="Add{T}"/>.
+    /// Remove on a pending entity is folded into the net component signature;
+    /// no intermediate Exited transition is produced.
     /// </summary>
     public void Remove<T>(Entity entity) where T : unmanaged
     {
