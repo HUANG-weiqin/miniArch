@@ -14,11 +14,11 @@ public class ChangeQueryTests
     public void ModifiedChunks_yields_chunk_after_Set()
     {
         var world = new World();
-        var hp = world.Track<Position>();
+        var q = world.Track().Capture<Position>().With<Position>();
         var e = world.Create(new Position(0, 0));
-        _ = hp.ModifiedChunks();                 // drain any setup noise
+        _ = q.ModifiedChunks<Position>();                 // drain any setup noise
         world.Set(e, new Position(1, 1));
-        var modified = hp.ModifiedChunks().ToList();
+        var modified = q.ModifiedChunks<Position>().ToList();
         Assert.NotEmpty(modified);
     }
 
@@ -26,22 +26,22 @@ public class ChangeQueryTests
     public void ModifiedChunks_empty_when_no_write_since_last_call()
     {
         var world = new World();
-        var hp = world.Track<Position>();
+        var q = world.Track().Capture<Position>().With<Position>();
         var e = world.Create(new Position(0, 0));
         world.Set(e, new Position(1, 1));
-        Assert.NotEmpty(hp.ModifiedChunks());    // first call sees the write
-        Assert.Empty(hp.ModifiedChunks());        // second call: cursor advanced, nothing new
+        Assert.NotEmpty(q.ModifiedChunks<Position>());    // first call sees the write
+        Assert.Empty(q.ModifiedChunks<Position>());        // second call: cursor advanced, nothing new
     }
 
     [Fact]
     public void ModifiedChunks_does_not_yield_for_unrelated_component_write()
     {
         var world = new World();
-        var pos = world.Track<Position>();
+        var q = world.Track().Capture<Position>().With<Position>();
         var e = world.Create(new Position(0, 0), new Velocity(0, 0));
-        _ = pos.ModifiedChunks();
+        _ = q.ModifiedChunks<Position>();
         world.Set(e, new Velocity(9, 9));        // Velocity written, not Position
-        Assert.Empty(pos.ModifiedChunks());
+        Assert.Empty(q.ModifiedChunks<Position>());
     }
 
     // ── Transitions ────────────────────────────────────────────────
@@ -50,9 +50,9 @@ public class ChangeQueryTests
     public void Transitions_yields_entered_on_create()
     {
         var world = new World();
-        var hp = world.Track<Position>();
+        var q = world.Track().Capture<Position>().With<Position>();
         var e = world.Create(new Position(0, 0));
-        var ts = hp.Transitions().ToList();
+        var ts = q.Transitions().ToList();
         Assert.Single(ts);
         Assert.Equal(TransitionKind.Entered, ts[0].Kind);
         Assert.Equal(e, ts[0].Entity);
@@ -62,7 +62,7 @@ public class ChangeQueryTests
     public void Transitions_yields_exited_on_destroy()
     {
         var world = new World();
-        var hp = world.Track<Position>();
+        var hp = world.Track().Capture<Position>().With<Position>();
         var e = world.Create(new Position(0, 0));
         _ = hp.Transitions();                    // drain create
         world.Destroy(e);
@@ -76,7 +76,7 @@ public class ChangeQueryTests
     public void Transitions_yields_entered_on_add_of_tracked_component()
     {
         var world = new World();
-        var pos = world.Track<Position>();
+        var pos = world.Track().Capture<Position>().With<Position>();
         var e = world.Create();                   // empty entity, no Position
         _ = pos.Transitions();                    // drain (no Position transition yet)
         world.Add(e, new Position(1, 1));         // gains Position -> Entered
@@ -90,7 +90,7 @@ public class ChangeQueryTests
     public void Transitions_yields_exited_on_remove_of_tracked_component()
     {
         var world = new World();
-        var pos = world.Track<Position>();
+        var pos = world.Track().Capture<Position>().With<Position>();
         var e = world.Create(new Position(1, 1));
         _ = pos.Transitions();
         world.Remove<Position>(e);                // loses Position -> Exited
@@ -104,12 +104,12 @@ public class ChangeQueryTests
     public void Transitions_preserves_remove_then_add_order()
     {
         var world = new World();
-        var vel = world.Track<Velocity>();
+        var q = world.Track().Capture<Velocity>().With<Velocity>();
         var e = world.Create(new Velocity(1, 1));
-        _ = vel.Transitions();
+        _ = q.Transitions();
         world.Remove<Velocity>(e);                // Exited
         world.Add(e, new Velocity(2, 2));         // Entered
-        var ts = vel.Transitions().ToList();
+        var ts = q.Transitions().ToList();
         Assert.Equal(2, ts.Count);
         Assert.Equal(TransitionKind.Exited, ts[0].Kind);
         Assert.Equal(TransitionKind.Entered, ts[1].Kind);
@@ -119,7 +119,7 @@ public class ChangeQueryTests
     public void Transitions_destroy_then_recreate_are_distinct_with_old_version()
     {
         var world = new World();
-        var hp = world.Track<Position>();
+        var hp = world.Track().Capture<Position>().With<Position>();
         var e1 = world.Create(new Position(1, 1));
         _ = hp.Transitions();
         world.Destroy(e1);
@@ -137,7 +137,7 @@ public class ChangeQueryTests
     public void Transitions_empty_after_drain_with_no_new_changes()
     {
         var world = new World();
-        var hp = world.Track<Position>();
+        var hp = world.Track().Capture<Position>().With<Position>();
         world.Create(new Position(1, 1));
         _ = hp.Transitions();
         Assert.Empty(hp.Transitions());

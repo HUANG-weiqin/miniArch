@@ -16,7 +16,7 @@ public class ChangeQueryFilterTests
     public void Without_basic_transition()
     {
         var world = new World();
-        var hp = world.Track<HP>().Without<Dead>();
+        var hp = world.Track().Capture<HP>().With<HP>().Without<Dead>();
 
         var e = world.Create(new HP(100));
         var ts = hp.Transitions().ToList();
@@ -43,7 +43,7 @@ public class ChangeQueryFilterTests
     public void With_filter_narrows_membership()
     {
         var world = new World();
-        var hp = world.Track<HP>().With<Enemy>();
+        var hp = world.Track().Capture<HP>().With<HP>().With<Enemy>();
 
         // Entity with HP but no Enemy → does not match filter
         var e = world.Create(new HP(100));
@@ -71,22 +71,22 @@ public class ChangeQueryFilterTests
     public void Without_filters_modified_chunks()
     {
         var world = new World();
-        var filtered = world.Track<HP>().Without<Dead>();
-        var unfiltered = world.Track<HP>();
+        var filtered = world.Track().Capture<HP>().With<HP>().Without<Dead>();
+        var unfiltered = world.Track().Capture<HP>().With<HP>();
 
         var e = world.Create(new HP(100));
-        _ = filtered.ModifiedChunks();    // drain
-        _ = unfiltered.ModifiedChunks();  // drain
+        _ = filtered.ModifiedChunks<HP>();    // drain
+        _ = unfiltered.ModifiedChunks<HP>();  // drain
 
         world.Add(e, new Dead());
         world.Set(e, new HP(50));
 
         // Filtered query: entity moved to {HP, Dead} → excluded by Without<Dead>
-        var filteredChunks = filtered.ModifiedChunks().ToList();
+        var filteredChunks = filtered.ModifiedChunks<HP>().ToList();
         Assert.Empty(filteredChunks);
 
         // Unfiltered query: sees the write in the {HP, Dead} archetype
-        var unfilteredChunks = unfiltered.ModifiedChunks().ToList();
+        var unfilteredChunks = unfiltered.ModifiedChunks<HP>().ToList();
         Assert.NotEmpty(unfilteredChunks);
     }
 
@@ -96,7 +96,7 @@ public class ChangeQueryFilterTests
     public void Default_filter_backward_compatible()
     {
         var world = new World();
-        var hp = world.Track<HP>();   // no fluent calls → default filter = With<HP>
+        var hp = world.Track().Capture<HP>().With<HP>();   // no fluent calls → default filter = With<HP>
 
         var e = world.Create(new HP(100));
         var ts = hp.Transitions().ToList();
@@ -116,8 +116,8 @@ public class ChangeQueryFilterTests
     public void Multiple_tracked_types_independent_filters()
     {
         var world = new World();
-        var filtered = world.Track<HP>().Without<Dead>();
-        var unfiltered = world.Track<HP>();
+        var filtered = world.Track().Capture<HP>().With<HP>().Without<Dead>();
+        var unfiltered = world.Track().Capture<HP>().With<HP>();
 
         var e = world.Create(new HP(100));
         var ts1 = filtered.Transitions().ToList();
@@ -139,7 +139,7 @@ public class ChangeQueryFilterTests
     {
         var world = new World();
         // Track HP entities that also have Enemy but do NOT have Dead
-        var query = world.Track<HP>().With<Enemy>().Without<Dead>();
+        var query = world.Track().Capture<HP>().With<HP>().With<Enemy>().Without<Dead>();
 
         // Entity {HP, Enemy} → matches filter
         var e1 = world.Create(new HP(100), new Enemy());
@@ -172,7 +172,7 @@ public class ChangeQueryFilterTests
     public void Transitions_auto_clears_after_drain()
     {
         var world = new World();
-        var hp = world.Track<HP>();
+        var hp = world.Track().Capture<HP>().With<HP>();
 
         // Create 3 entities with HP → cursor sees 3 Entered
         world.Create(new HP(10));
@@ -195,7 +195,7 @@ public class ChangeQueryFilterTests
     public void Undrained_entries_accumulate_then_clear_on_drain()
     {
         var world = new World();
-        var hp = world.Track<HP>();
+        var hp = world.Track().Capture<HP>().With<HP>();
 
         // Create 1 entity with HP — do NOT drain
         world.Create(new HP(10));
@@ -222,7 +222,7 @@ public class ChangeQueryFilterTests
     public void Multiple_drain_cycles_stable()
     {
         var world = new World();
-        var hp = world.Track<HP>();
+        var hp = world.Track().Capture<HP>().With<HP>();
         var totalSeen = 0;
 
         // Repeat 10 cycles: create 5, drain (auto-clears)
@@ -246,8 +246,8 @@ public class ChangeQueryFilterTests
     public void Two_cursors_independent_progress()
     {
         var world = new World();
-        var cursor1 = world.Track<HP>();
-        var cursor2 = world.Track<HP>();
+        var cursor1 = world.Track().Capture<HP>().With<HP>();
+        var cursor2 = world.Track().Capture<HP>().With<HP>();
 
         // Both see the same first entity
         var e1 = world.Create(new HP(100));
@@ -282,8 +282,8 @@ public class ChangeQueryFilterTests
     public void Two_cursors_staggered_consumption()
     {
         var world = new World();
-        var cursor1 = world.Track<HP>();
-        var cursor2 = world.Track<HP>();
+        var cursor1 = world.Track().Capture<HP>().With<HP>();
+        var cursor2 = world.Track().Capture<HP>().With<HP>();
 
         // Create 3 entities (3 Entered entries in log)
         world.Create(new HP(10));
@@ -317,8 +317,8 @@ public class ChangeQueryFilterTests
     public void Two_cursors_different_filters()
     {
         var world = new World();
-        var cursor1 = world.Track<HP>().Without<Dead>();
-        var cursor2 = world.Track<HP>();
+        var cursor1 = world.Track().Capture<HP>().With<HP>().Without<Dead>();
+        var cursor2 = world.Track().Capture<HP>().With<HP>();
 
         // Create entity {HP} → both see Entered
         var e = world.Create(new HP(100));
@@ -359,7 +359,7 @@ public class ChangeQueryFilterTests
     public void Cause_is_Created_on_Create()
     {
         var world = new World();
-        var hp = world.Track<HP>();
+        var hp = world.Track().Capture<HP>().With<HP>();
 
         world.Create(new HP(100));
         var t = hp.Transitions().Single();
@@ -371,7 +371,7 @@ public class ChangeQueryFilterTests
     public void Cause_is_Destroyed_on_Destroy()
     {
         var world = new World();
-        var hp = world.Track<HP>();
+        var hp = world.Track().Capture<HP>().With<HP>();
         var e = world.Create(new HP(100));
         hp.Transitions(); // drain
 
@@ -385,7 +385,7 @@ public class ChangeQueryFilterTests
     public void Cause_is_Added_on_Add_matching_component()
     {
         var world = new World();
-        var hp = world.Track<HP>().With<Enemy>();
+        var hp = world.Track().Capture<HP>().With<HP>().With<Enemy>();
         var e = world.Create(new HP(100)); // no Enemy yet
         hp.Transitions(); // drain
 
@@ -399,7 +399,7 @@ public class ChangeQueryFilterTests
     public void Cause_is_Removed_on_Remove_matching_component()
     {
         var world = new World();
-        var hp = world.Track<HP>();
+        var hp = world.Track().Capture<HP>().With<HP>();
         var e = world.Create(new HP(100));
         hp.Transitions(); // drain
 
@@ -415,28 +415,28 @@ public class ChangeQueryFilterTests
     public void PreviousValues_captures_old_and_new()
     {
         var world = new World();
-        var hp = world.Track<HP>().WithPreviousValues();
+        var hp = world.Track().Capture<HP>().With<HP>().Previous();
         var e = world.Create(new HP(100));
 
         world.Set(e, new HP(80));
         var cs = hp.Changes().ToList();
         Assert.Single(cs);
         Assert.Equal(e, cs[0].Entity);
-        Assert.Equal(100, cs[0].OldValue.Value);  // created with 100
-        Assert.Equal(80, cs[0].NewValue.Value);   // Set to 80
+        Assert.Equal(100, cs[0].Old.Get<HP>().Value);  // created with 100
+        Assert.Equal(80, cs[0].New.Get<HP>().Value);   // Set to 80
 
         world.Set(e, new HP(50));
         cs = hp.Changes().ToList();
         Assert.Single(cs);
-        Assert.Equal(80, cs[0].OldValue.Value);   // previous Set's new = this Set's old
-        Assert.Equal(50, cs[0].NewValue.Value);
+        Assert.Equal(80, cs[0].Old.Get<HP>().Value);   // previous Set's new = this Set's old
+        Assert.Equal(50, cs[0].New.Get<HP>().Value);
     }
 
     [Fact]
     public void Without_WithPreviousValues_no_capture()
     {
         var world = new World();
-        var hp = world.Track<HP>(); // no WithPreviousValues
+        var hp = world.Track().Capture<HP>().With<HP>(); // no WithPreviousValues
         var e = world.Create(new HP(100));
 
         world.Set(e, new HP(80));
@@ -447,7 +447,7 @@ public class ChangeQueryFilterTests
     public void PreviousValues_auto_clears()
     {
         var world = new World();
-        var hp = world.Track<HP>().WithPreviousValues();
+        var hp = world.Track().Capture<HP>().With<HP>().Previous();
         var e = world.Create(new HP(100));
 
         world.Set(e, new HP(80));
@@ -462,7 +462,7 @@ public class ChangeQueryFilterTests
     public void PreviousValues_multiple_sets_before_drain()
     {
         var world = new World();
-        var hp = world.Track<HP>().WithPreviousValues();
+        var hp = world.Track().Capture<HP>().With<HP>().Previous();
         var e = world.Create(new HP(100));
 
         world.Set(e, new HP(90));
@@ -471,19 +471,19 @@ public class ChangeQueryFilterTests
 
         var cs = hp.Changes().ToList();
         Assert.Equal(3, cs.Count);
-        Assert.Equal(100, cs[0].OldValue.Value);
-        Assert.Equal(90, cs[0].NewValue.Value);
-        Assert.Equal(90, cs[1].OldValue.Value);
-        Assert.Equal(80, cs[1].NewValue.Value);
-        Assert.Equal(80, cs[2].OldValue.Value);
-        Assert.Equal(70, cs[2].NewValue.Value);
+        Assert.Equal(100, cs[0].Old.Get<HP>().Value);
+        Assert.Equal(90, cs[0].New.Get<HP>().Value);
+        Assert.Equal(90, cs[1].Old.Get<HP>().Value);
+        Assert.Equal(80, cs[1].New.Get<HP>().Value);
+        Assert.Equal(80, cs[2].Old.Get<HP>().Value);
+        Assert.Equal(70, cs[2].New.Get<HP>().Value);
     }
 
     [Fact]
     public void PreviousValues_with_Without_filter_respected()
     {
         var world = new World();
-        var hp = world.Track<HP>().Without<Dead>().WithPreviousValues();
+        var hp = world.Track().Capture<HP>().With<HP>().Without<Dead>().Previous();
         var alive = world.Create(new HP(100));
         var dead = world.Create(new HP(100));
         world.Add(dead, new Dead());
@@ -492,7 +492,9 @@ public class ChangeQueryFilterTests
         world.Set(dead, new HP(80));   // {HP, Dead} doesn't match → skipped
 
         var cs = hp.Changes().ToList();
-        Assert.Single(cs);
-        Assert.Equal(alive, cs[0].Entity);
+        // Two entries: the transition from Add<Dead> on dead (entered {HP,!Dead}
+        // on Create, exited when Dead was added) and the Set on alive.
+        Assert.Equal(2, cs.Count);
+        Assert.Equal(dead, cs[0].Entity);  // Add<Dead> transition → captured Old/New
     }
 }

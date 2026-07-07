@@ -26,16 +26,16 @@ public sealed class ChangeTrackingReplayTests
         var cs = new CommandStream(world);
 
         // Track BEFORE consuming so the cursor is at epoch 0.
-        var tracker = world.Track<Position>();
+        var tracker = world.Track().Capture<Position>().With<Position>();
         // Drain initial noise: Create(new Position) bumps the column version.
-        _ = tracker.ModifiedChunks();
+        _ = tracker.ModifiedChunks<Position>();
         _ = tracker.Transitions();
 
         cs.Set(e, new Position(1, 1));
         cs.Submit();
 
         // Submit applies through SetComponentAtFlat/Typed which bumps version.
-        var modified = tracker.ModifiedChunks().ToList();
+        var modified = tracker.ModifiedChunks<Position>().ToList();
         Assert.NotEmpty(modified);
     }
 
@@ -54,14 +54,14 @@ public sealed class ChangeTrackingReplayTests
         // Host B: fresh world with matching entity + Track BEFORE replay
         var hostB = new World();
         var eB = hostB.Create(new Position(0, 0));
-        var tracker = hostB.Track<Position>();
-        _ = tracker.ModifiedChunks();
+        var tracker = hostB.Track().Capture<Position>().With<Position>();
+        _ = tracker.ModifiedChunks<Position>();
         _ = tracker.Transitions();
 
         new CommandStream(hostB).Replay(delta);
 
         // Replay applies through WriteComponentRaw which bumps version.
-        var modified = tracker.ModifiedChunks().ToList();
+        var modified = tracker.ModifiedChunks<Position>().ToList();
         Assert.NotEmpty(modified);
     }
 
@@ -77,7 +77,7 @@ public sealed class ChangeTrackingReplayTests
         var delta = cs.Snapshot();
 
         var hostB = new World();
-        var tracker = hostB.Track<Position>();
+        var tracker = hostB.Track().Capture<Position>().With<Position>();
         // No pre-existing entity on hostB; Replay creates it.
 
         new CommandStream(hostB).Replay(delta);
@@ -98,7 +98,7 @@ public sealed class ChangeTrackingReplayTests
 
         var hostB = new World();
         var eB = hostB.Create(new Position(1, 1));
-        var tracker = hostB.Track<Position>();
+        var tracker = hostB.Track().Capture<Position>().With<Position>();
         _ = tracker.Transitions(); // drain create transition
 
         new CommandStream(hostB).Replay(delta);
@@ -120,7 +120,7 @@ public sealed class ChangeTrackingReplayTests
 
         var hostB = new World();
         var eB = hostB.Create(new Position(0, 0));
-        var tracker = hostB.Track<Velocity>();
+        var tracker = hostB.Track().Capture<Velocity>().With<Velocity>();
         _ = tracker.Transitions(); // drain (no Velocity transition yet)
 
         new CommandStream(hostB).Replay(delta);
@@ -149,7 +149,7 @@ public sealed class ChangeTrackingReplayTests
 
         // Host B: Track BEFORE any replay.
         var hostB = new World();
-        var tracker = hostB.Track<Position>();
+        var tracker = hostB.Track().Capture<Position>().With<Position>();
 
         new CommandStream(hostB).Replay(delta1);
         new CommandStream(hostB).Replay(delta2);

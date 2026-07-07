@@ -20,7 +20,7 @@ public class ChangeTrackingInfrastructureTests
     public void Track_activates_tracking()
     {
         var world = new World();
-        var hp = world.Track<Position>();
+        var hp = world.Track().Capture<Position>().With<Position>();
         Assert.NotNull(hp);
         Assert.True(world.IsChangeTrackingActive);
     }
@@ -30,7 +30,7 @@ public class ChangeTrackingInfrastructureTests
     {
         var world = new World();
         var e = world.Create(new Position(0, 0));   // archetype exists before Track
-        var pos = world.Track<Position>();
+        var pos = world.Track().Capture<Position>().With<Position>();
         // activation should have retro-fitted the archetype holding Position
         Assert.True(world.IsChangeTrackingActive);
         // transition log should have one entry (from Create, which happened before Track,
@@ -42,7 +42,7 @@ public class ChangeTrackingInfrastructureTests
     public void Track_then_create_activates_new_archetype_from_birth()
     {
         var world = new World();
-        world.Track<Position>();
+        world.Track().Capture<Position>().With<Position>();
         var e = world.Create(new Position(0, 0));   // archetype created AFTER Track
         // no exception; archetype got activated in GetOrCreateArchetype
         Assert.True(world.IsChangeTrackingActive);
@@ -61,7 +61,7 @@ public class ChangeTrackingInfrastructureTests
     public void Set_advances_column_version_when_tracking_active()
     {
         var world = new World();
-        world.Track<Position>();
+        world.Track().Capture<Position>().With<Position>();
         var e = world.Create(new Position(0, 0));
         var v0 = world.DebugGetColumnVersion(e, Component<Position>.ComponentType);
         world.Set(e, new Position(5, 0));
@@ -82,7 +82,7 @@ public class ChangeTrackingInfrastructureTests
     public void Get_does_not_advance_version_even_when_tracking_active()
     {
         var world = new World();
-        world.Track<Position>();
+        world.Track().Capture<Position>().With<Position>();
         var e = world.Create(new Position(1, 0));
         world.Set(e, new Position(1, 0));
         var v = world.DebugGetColumnVersion(e, Component<Position>.ComponentType);
@@ -94,7 +94,7 @@ public class ChangeTrackingInfrastructureTests
     public void Set_on_one_column_does_not_advance_other_column()
     {
         var world = new World();
-        world.Track<Position>();
+        world.Track().Capture<Position>().With<Position>();
         var e = world.Create(new Position(0, 0), new Velocity(0, 0));
         var posV = world.DebugGetColumnVersion(e, Component<Position>.ComponentType);
         world.Set(e, new Velocity(1, 0));
@@ -105,7 +105,7 @@ public class ChangeTrackingInfrastructureTests
     public void EntityAccessor_Set_advances_version()
     {
         var world = new World();
-        world.Track<Position>();
+        world.Track().Capture<Position>().With<Position>();
         var e = world.Create(new Position(0, 0));
         var accessor = world.Access(e);
         var v0 = world.DebugGetColumnVersion(e, Component<Position>.ComponentType);
@@ -120,7 +120,7 @@ public class ChangeTrackingInfrastructureTests
     public void Create_appends_entered_transition()
     {
         var world = new World();
-        var pos = world.Track<Position>();
+        var pos = world.Track().Capture<Position>().With<Position>();
         var e = world.Create(new Position(0, 0));
         var ts = pos.Transitions().ToList();
         Assert.Single(ts);
@@ -132,7 +132,7 @@ public class ChangeTrackingInfrastructureTests
     public void Create_then_destroy_produces_entered_then_exited()
     {
         var world = new World();
-        var pos = world.Track<Position>();
+        var pos = world.Track().Capture<Position>().With<Position>();
         var e = world.Create(new Position(0, 0));
         pos.Transitions();  // drain create transition
         world.Destroy(e);
@@ -146,7 +146,7 @@ public class ChangeTrackingInfrastructureTests
     public void Add_produces_exited_when_filter_excludes_added_component()
     {
         var world = new World();
-        var pos = world.Track<Position>().Without<Velocity>();
+        var pos = world.Track().Capture<Position>().With<Position>().Without<Velocity>();
         var e = world.Create(new Position(0, 0));
         pos.Transitions();  // drain create
         world.Add(e, new Velocity(0, 0));
@@ -161,7 +161,7 @@ public class ChangeTrackingInfrastructureTests
     public void Remove_produces_entered_when_excluded_component_removed()
     {
         var world = new World();
-        var pos = world.Track<Position>().Without<Velocity>();
+        var pos = world.Track().Capture<Position>().With<Position>().Without<Velocity>();
         var e = world.Create(new Position(0, 0), new Velocity(0, 0));
         pos.Transitions();  // drain create (entity does not match filter — has Velocity)
         world.Remove<Velocity>(e);
@@ -176,7 +176,7 @@ public class ChangeTrackingInfrastructureTests
     public void Add_existing_component_does_not_append_transition()
     {
         var world = new World();
-        var pos = world.Track<Position>();
+        var pos = world.Track().Capture<Position>().With<Position>();
         var e = world.Create(new Position(1, 1));
         pos.Transitions();  // drain
         Assert.Throws<InvalidOperationException>(() => world.Add(e, new Position(2, 2)));
@@ -187,7 +187,7 @@ public class ChangeTrackingInfrastructureTests
     public void Clone_appends_entered_transition()
     {
         var world = new World();
-        var pos = world.Track<Position>();
+        var pos = world.Track().Capture<Position>().With<Position>();
         var src = world.Create(new Position(7, 7));
         pos.Transitions();  // drain create
         var clone = world.Clone(src);
@@ -208,7 +208,7 @@ public class ChangeTrackingInfrastructureTests
         world.Destroy(e);
 
         // Track after the fact — no dispatches happened before Track
-        var pos = world.Track<Position>();
+        var pos = world.Track().Capture<Position>().With<Position>();
         Assert.Empty(pos.Transitions());
     }
 }

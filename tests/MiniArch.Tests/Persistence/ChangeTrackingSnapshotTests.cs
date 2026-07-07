@@ -23,7 +23,7 @@ public sealed class ChangeTrackingSnapshotTests
     public void Snapshot_does_not_carry_transition_log()
     {
         var world = new World(chunkCapacity: 2);
-        var pos = world.Track<Position>();
+        var pos = world.Track().Capture<Position>().With<Position>();
         var e = world.Create(new Position(1, 1));
         Assert.NotEmpty(pos.Transitions());
 
@@ -32,7 +32,7 @@ public sealed class ChangeTrackingSnapshotTests
         stream.Position = 0;
 
         var loaded = WorldSnapshot.Load(stream);
-        var loadedPos = loaded.Track<Position>();
+        var loadedPos = loaded.Track().Capture<Position>().With<Position>();
         Assert.Empty(loadedPos.Transitions());
     }
 
@@ -45,7 +45,7 @@ public sealed class ChangeTrackingSnapshotTests
     public void Restored_world_starts_with_fresh_observer_state()
     {
         var world = new World(chunkCapacity: 2);
-        world.Track<Position>();
+        world.Track().Capture<Position>().With<Position>();
         var e = world.Create(new Position(1, 1));
         world.Set(e, new Position(2, 2));
         Assert.True(world.IsChangeTrackingActive);
@@ -59,7 +59,7 @@ public sealed class ChangeTrackingSnapshotTests
         Assert.Equal(0, loaded.CurrentWriteEpoch);
         Assert.False(loaded.IsChangeTrackingActive);
 
-        var loadedPos = loaded.Track<Position>();
+        var loadedPos = loaded.Track().Capture<Position>().With<Position>();
         Assert.Empty(loadedPos.Transitions());
     }
 
@@ -81,12 +81,12 @@ public sealed class ChangeTrackingSnapshotTests
         var loaded = WorldSnapshot.Load(stream);
 
         // re-obtain entity on loaded world (same id/version)
-        var tracker = loaded.Track<Position>();
+        var tracker = loaded.Track().Capture<Position>().With<Position>();
         Assert.True(loaded.IsChangeTrackingActive);
         Assert.Empty(tracker.Transitions());
 
         loaded.Set(e, new Position(2, 2));
-        var modified = tracker.ModifiedChunks().ToList();
+        var modified = tracker.ModifiedChunks<Position>().ToList();
         Assert.NotEmpty(modified);
     }
 }

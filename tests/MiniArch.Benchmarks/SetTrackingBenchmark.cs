@@ -1,11 +1,12 @@
 using BenchmarkDotNet.Attributes;
+using MiniArch;
 using MiniArch.Core;
 
 namespace MiniArchBenchmarks;
 
 /// <summary>
 /// Measures the overhead of change tracking on World.Set&lt;T&gt; and structural operations.
-/// Tracking OFF = baseline (default). Tracking ON = after Track&lt;Position&gt;().
+/// Tracking OFF = baseline (default). Tracking ON = after Track().Capture&lt;Position&gt;().
 /// </summary>
 public class SetTrackingBenchmark
 {
@@ -14,7 +15,7 @@ public class SetTrackingBenchmark
 
     private World _world = null!;
     private Entity[] _entities = null!;
-    private ChangeQuery<Position>? _tracker;
+    private ChangeQuery? _tracker;
 
     [Params(false, true)]
     public bool Tracked { get; set; }
@@ -30,7 +31,7 @@ public class SetTrackingBenchmark
             _entities[i] = _world.Create(new Position(i, i));
 
         if (Tracked)
-            _tracker = _world.Track<Position>();
+            _tracker = _world.Track().Capture<Position>().With<Position>();
     }
 
     [Benchmark(Description = "Set Position (10k ops)")]
@@ -48,7 +49,7 @@ public class SetTrackingBenchmark
     public void SetupCreateDestroy()
     {
         _world = new World();
-        _tracker = Tracked ? _world.Track<Position>() : null;
+        _tracker = Tracked ? _world.Track().Capture<Position>().With<Position>() : null;
     }
 
     [Benchmark(Description = "Create+Destroy entity (1k ops)")]
