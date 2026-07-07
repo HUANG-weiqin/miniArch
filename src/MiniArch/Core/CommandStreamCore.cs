@@ -2734,7 +2734,10 @@ public abstract class CommandStreamCore
                             fastIsChunked = arch.IsChunked;
                         }
 
-                        // Previous-value capture.
+                        // Pre-hook: capture Old values before write
+                        world.DispatchBeforeWrite(entry.Entity, arch, record.RowIndex);
+
+                        // Previous-value capture (bucket path).
                         var typeId = compType.Value;
                         var buckets = world._previousBuckets;
                         var bucket = buckets is not null && (uint)typeId < (uint)buckets.Length
@@ -2756,6 +2759,9 @@ public abstract class CommandStreamCore
                             else
                                 arch.SetComponentAtTyped(fastColIdx, record.RowIndex, in entry.Value);
                         }
+
+                        // Post-hook: capture New values after write
+                        world.DispatchAfterWrite(entry.Entity, arch, record.RowIndex);
                     }
                 }
                 else
@@ -2815,7 +2821,10 @@ public abstract class CommandStreamCore
                         lastIsChunkedMixed = arch.IsChunked;
                     }
 
-                    // Previous-value capture.
+                    // Pre-hook: capture Old values before write
+                    world.DispatchBeforeWrite(entry.Entity, arch, record.RowIndex);
+
+                    // Previous-value capture (bucket path).
                     var typeId = compType.Value;
                     var buckets = world._previousBuckets;
                     var bucket = buckets is not null && (uint)typeId < (uint)buckets.Length
@@ -2837,6 +2846,9 @@ public abstract class CommandStreamCore
                         else
                             arch.SetComponentAtTyped(lastColIdx, record.RowIndex, in entry.Value);
                     }
+
+                    // Post-hook: capture New values after write
+                    world.DispatchAfterWrite(entry.Entity, arch, record.RowIndex);
                 }
                 else
                 {
