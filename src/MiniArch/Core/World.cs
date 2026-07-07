@@ -353,6 +353,18 @@ public sealed partial class World : IDisposable
         return query;
     }
 
+    /// <summary>
+    /// Creates a multi-component change query. Register component types for value
+    /// capture via <see cref="ChangeQuery.Capture{T}"/> and configure the filter
+    /// with <c>With</c>/<c>Without</c>/<c>WithAny</c> before enumerating.
+    /// </summary>
+    public ChangeQuery Track()
+    {
+        var query = new ChangeQuery(this);
+        RegisterChangeQuery(query);
+        return query;
+    }
+
     internal void ActivateTracking(ComponentType type)
     {
         if (!_anyTrackingActive)
