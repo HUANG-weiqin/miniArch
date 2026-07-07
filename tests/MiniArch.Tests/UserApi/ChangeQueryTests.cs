@@ -8,73 +8,19 @@ public class ChangeQueryTests
     private readonly record struct Position(int X, int Y);
     private readonly record struct Velocity(int Dx, int Dy);
 
-    // ── ModifiedChunks ─────────────────────────────────────────────
-
     [Fact]
-    public void ModifiedChunks_yields_chunk_after_Set()
-    {
-        var world = new World();
-        var q = world.Track().Capture<Position>().With<Position>();
-        var e = world.Create(new Position(0, 0));
-        _ = q.ModifiedChunks<Position>();                 // drain any setup noise
-        world.Set(e, new Position(1, 1));
-        var modified = q.ModifiedChunks<Position>().ToList();
-        Assert.NotEmpty(modified);
-    }
-
-    [Fact]
-    public void ModifiedChunks_empty_when_no_write_since_last_call()
-    {
-        var world = new World();
-        var q = world.Track().Capture<Position>().With<Position>();
-        var e = world.Create(new Position(0, 0));
-        world.Set(e, new Position(1, 1));
-        Assert.NotEmpty(q.ModifiedChunks<Position>());    // first call sees the write
-        Assert.Empty(q.ModifiedChunks<Position>());        // second call: cursor advanced, nothing new
-    }
-
-    [Fact]
-    public void ModifiedChunks_does_not_yield_for_unrelated_component_write()
-    {
-        var world = new World();
-        var q = world.Track().Capture<Position>().With<Position>();
-        var e = world.Create(new Position(0, 0), new Velocity(0, 0));
-        _ = q.ModifiedChunks<Position>();
-        world.Set(e, new Velocity(9, 9));        // Velocity written, not Position
-        Assert.Empty(q.ModifiedChunks<Position>());
-    }
-
-    [Fact]
-    public void Changes_single_capture_without_filter_reports_Set()
+    public void ValueChanges_single_capture_keeps_first_old_and_last_new()
     {
         var world = new World();
         var q = world.Track().Capture<Position>().Previous();
         var e = world.Create(new Position(0, 0));
 
-        _ = q.Changes();
-
-        world.Set(e, new Position(1, 2));
-
-        var changes = q.Changes();
-        Assert.Single(changes);
-        Assert.Equal(e, changes[0].Entity);
-        Assert.Equal(new Position(0, 0), changes[0].Old.Get<Position>());
-        Assert.Equal(new Position(1, 2), changes[0].New.Get<Position>());
-    }
-
-    [Fact]
-    public void DrainTypedChanges_single_capture_keeps_first_old_and_last_new()
-    {
-        var world = new World();
-        var q = world.Track().Capture<Position>().Previous();
-        var e = world.Create(new Position(0, 0));
-
-        _ = q.DrainTypedChanges<Position>();
+        _ = q.ValueChanges<Position>();
 
         world.Set(e, new Position(1, 1));
         world.Set(e, new Position(2, 3));
 
-        var changes = q.DrainTypedChanges<Position>();
+        var changes = q.ValueChanges<Position>();
         Assert.Equal(1, changes.Length);
         Assert.Equal(e, changes[0].Entity);
         Assert.Equal(new Position(0, 0), changes[0].Old);
@@ -82,16 +28,16 @@ public class ChangeQueryTests
     }
 
     [Fact]
-    public void DrainTypedChanges_span_survives_next_Set_until_next_drain()
+    public void ValueChanges_span_survives_next_Set_until_next_drain()
     {
         var world = new World();
         var q = world.Track().Capture<Position>().Previous();
         var e = world.Create(new Position(0, 0));
 
-        _ = q.DrainTypedChanges<Position>();
+        _ = q.ValueChanges<Position>();
 
         world.Set(e, new Position(1, 1));
-        var changes = q.DrainTypedChanges<Position>();
+        var changes = q.ValueChanges<Position>();
 
         world.Set(e, new Position(2, 2));
 

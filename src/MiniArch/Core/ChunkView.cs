@@ -101,33 +101,6 @@ public readonly struct ChunkView
     }
 
     /// <summary>
-    /// Gets a dirty mask indicating which entities were written since the last
-    /// <see cref="World.ClearDirtyMarks"/> call. Returns a span of bools
-    /// parallel to <see cref="GetEntities"/> — <c>true</c> means dirty.
-    /// Returns an empty span if dirty tracking is not active on this archetype.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ReadOnlySpan<bool> GetDirtyMask()
-    {
-        if (_archetype._entityDirty is null)
-            return ReadOnlySpan<bool>.Empty;
-
-        if (_archetype.IsChunked)
-        {
-            // Chunked: dirty array is indexed by global row.
-            // Convert segment start to global row, then slice.
-            var segStart = _segmentIndex * _archetype.SegmentCapacity;
-            var count = Count;
-            return new ReadOnlySpan<bool>(_archetype._entityDirty, segStart + _startRow, count);
-        }
-        else
-        {
-            var count = Count;
-            return new ReadOnlySpan<bool>(_archetype._entityDirty, _startRow, count);
-        }
-    }
-
-    /// <summary>
     /// Tries to get the column index for component type <typeparamref name="T"/>.
     /// Returns true if the chunk's archetype includes this component type.
     /// </summary>

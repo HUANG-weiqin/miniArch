@@ -2,7 +2,7 @@ namespace MiniArch;
 
 /// <summary>
 /// Typed old/new pair for a single captured component type.
-/// Used by <see cref="ChangeQuery.DrainTypedChanges{T}"/> for zero-copy access.
+/// Used by <see cref="ChangeQuery.ValueChanges{T}"/> for zero-copy access.
 /// </summary>
 public readonly struct TypedChange<T> where T : unmanaged
 {

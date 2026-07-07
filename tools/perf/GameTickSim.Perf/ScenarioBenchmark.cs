@@ -2624,8 +2624,8 @@ public static class ScenarioBenchmark
     }
 
     /// <summary>
-    /// Variant B: ChangeQuery.DrainTypedChanges() with Previous() — typed fast path.
-    /// After Set: call DrainTypedChanges() to get typed Old/New pairs, compute delta.
+    /// Variant B: ChangeQuery.ValueChanges() with Previous() — typed fast path.
+    /// After Set: call ValueChanges() to get typed Old/New pairs, compute delta.
     /// Uses T[] arrays directly — no byte[] copies, matching hand-written code.
     /// </summary>
     static (double opsPerSec, long heapDeltaKB, int gen0) RunChangesOldNew(int entityCount, int updateCount, int ticksToRun)
@@ -2654,7 +2654,7 @@ public static class ScenarioBenchmark
             }
 
             // 2. Get Old/New pairs — typed fast path, zero-copy
-            var changes = trackQuery.DrainTypedChanges<Position>();
+            var changes = trackQuery.ValueChanges<Position>();
             for (var i = 0; i < changes.Length; i++)
             {
                 var dx = changes[i].New.X - changes[i].Old.X;

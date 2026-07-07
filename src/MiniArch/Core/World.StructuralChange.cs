@@ -118,9 +118,6 @@ public sealed partial class World
 
         var sourceArchetype = info.Archetype!;
 
-        // Pre-hook: capture Old values before entity moves out of source archetype
-        if (_anyTrackingActive) DispatchBeforeTransition(entity, sourceArchetype, info.RowIndex);
-
         var rowIdx = MoveEntityCore(entity, info, destination!);
         try
         {
@@ -132,7 +129,7 @@ public sealed partial class World
             throw;
         }
         FinishMoveEntity(entity, info, destination!, rowIdx);
-        if (_anyTrackingActive) AppendTransition(entity, sourceArchetype, destination!);
+        AppendTransition(entity, sourceArchetype, destination!);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -189,27 +186,9 @@ public sealed partial class World
                     typedTracker.ActiveLog[slot] = new TypedChange<T>(entity, existing.Old, component);
                 }
 
-                // Direct write — typed tracker handles its own dirty bookkeeping,
-                // so skip archetype's MarkColumnWrittenIfNeeded (which only serves
-                // the byte[] fallback path's _columnVersions/_entityDirty).
+                // Direct write — typed tracker handles its own dirty bookkeeping
+                // (column version tracking was removed from the archetype write path).
                 cell = component;
-                return;
-            }
-
-            if (world._anyPreviousTrackingActive)
-            {
-                // Slow path: dispatch for multiple queries or multi-type capture
-                if (world._singlePreviousQuery is { } q)
-                {
-                    q.CaptureOld(entity, archetype, info.RowIndex);
-                    archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
-                }
-                else
-                {
-                    world.DispatchBeforeWrite(entity, archetype, info.RowIndex);
-                    archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
-                    world.DispatchAfterWrite(entity, archetype, info.RowIndex);
-                }
                 return;
             }
 
@@ -231,9 +210,6 @@ public sealed partial class World
                 "The delta is invalid — use Set for overwrites, not Add.");
         }
 
-        // Pre-hook: capture Old values before entity moves to new archetype
-        if (_anyTrackingActive) DispatchBeforeTransition(entity, archetype, info.RowIndex);
-
         var destination = GetOrCreateAddDestinationArchetype(archetype, componentType);
         MoveEntityFromBytes(entity, info, destination, componentType, source);
     }
@@ -248,16 +224,7 @@ public sealed partial class World
                 $"Entity {entity} does not have component type {componentType.Value}.");
         }
 
-        var world = archetype._owner;
-        if (world is not null)
-        {
-            world.DispatchBeforeWrite(entity, archetype, info.RowIndex);
-            archetype.WriteComponentRaw(componentIndex, info.RowIndex, source);
-            world.DispatchAfterWrite(entity, archetype, info.RowIndex);
-            return;
-        }
-
-        archetype.WriteComponentRaw(componentIndex, info.RowIndex, source);
+        archetype.WriteComponentRawNoTrack(componentIndex, info.RowIndex, source);
     }
 
     private unsafe void MoveEntityFromBytes(
@@ -280,7 +247,7 @@ public sealed partial class World
             throw;
         }
         FinishMoveEntity(entity, sourceInfo, destination, rowIdx);
-        if (_anyTrackingActive) AppendTransition(entity, sourceArchetype, destination);
+        AppendTransition(entity, sourceArchetype, destination);
     }
 
     private Archetype GetOrCreateAddDestinationArchetype(Archetype source, ComponentType componentType)
@@ -318,11 +285,8 @@ public sealed partial class World
             destination!.CacheAddDestination(componentType, archetype);
         }
 
-        // Pre-hook: capture Old values before entity moves out
-        if (_anyTrackingActive) DispatchBeforeTransition(entity, archetype, info.RowIndex);
-
         MoveEntity(entity, info, destination!);
-        if (_anyTrackingActive) AppendTransition(entity, archetype, destination!);
+        AppendTransition(entity, archetype, destination!);
     }
 
 }

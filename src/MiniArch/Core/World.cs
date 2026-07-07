@@ -89,12 +89,8 @@ public sealed partial class World : IDisposable
     private bool _disposed;
 
     // ── Change tracking ─────────────────────────────────────────────
-    internal long _writeEpoch;                                  // monotonic, long = no wraparound
     internal volatile int _trackingGeneration;                 // incremented on RestoreState/Dispose for cursor self-heal
     private readonly List<WeakReference<Core.IChangeQuery>> _changeQueries = new();
-    private bool _anyTrackingActive;                           // world-level gate
-    internal bool _anyPreviousTrackingActive;                  // Previous() gate: skip dispatch when no snapshot query
-    internal ChangeQuery? _singlePreviousQuery;                // fast path: exactly 1 query with Previous
     internal object? _activeTypedTracker;                       // ChangeTracker<T> for single-type fast path (boxed generic)
 
     /// <summary>
@@ -222,10 +218,6 @@ public sealed partial class World : IDisposable
 
     internal int ArchetypeCacheGeneration => _createArchetypeCacheGeneration;
 
-    // ── Change tracking accessors ───────────────────────────────────
-    internal bool IsChangeTrackingActive => _anyTrackingActive;
-    internal long CurrentWriteEpoch => _writeEpoch;
-
     internal void RegisterChangeQuery(Core.IChangeQuery query)
     {
         _changeQueries.Add(new WeakReference<Core.IChangeQuery>(query));
@@ -248,77 +240,6 @@ public sealed partial class World : IDisposable
     }
 
     /// <summary>
-    /// Dispatches OnBeforeWrite to all registered change queries.
-    /// No-op when no change query is active (world-level gate).
-    /// </summary>
-    internal void DispatchBeforeWrite(Entity entity, Core.Archetype archetype, int row)
-    {
-        if (!_anyTrackingActive || !_anyPreviousTrackingActive) return;
-        for (var i = _changeQueries.Count - 1; i >= 0; i--)
-        {
-            if (_changeQueries[i].TryGetTarget(out var query))
-                query.OnBeforeWrite(entity, archetype, row);
-            else
-            {
-                _changeQueries[i] = _changeQueries[_changeQueries.Count - 1];
-                _changeQueries.RemoveAt(_changeQueries.Count - 1);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Dispatches OnAfterWrite to all registered change queries.
-    /// No-op when no change query is active (world-level gate).
-    /// </summary>
-    internal void DispatchAfterWrite(Entity entity, Core.Archetype archetype, int row)
-    {
-        if (!_anyTrackingActive || !_anyPreviousTrackingActive) return;
-        for (var i = _changeQueries.Count - 1; i >= 0; i--)
-        {
-            if (_changeQueries[i].TryGetTarget(out var query))
-                query.OnAfterWrite(entity, archetype, row);
-            else
-            {
-                _changeQueries[i] = _changeQueries[_changeQueries.Count - 1];
-                _changeQueries.RemoveAt(_changeQueries.Count - 1);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Dispatches OnBeforeTransition to all registered change queries.
-    /// No-op when no change query is active (world-level gate).
-    /// </summary>
-    internal void DispatchBeforeTransition(Entity entity, Core.Archetype archetype, int row)
-    {
-        if (!_anyTrackingActive) return;
-        for (var i = _changeQueries.Count - 1; i >= 0; i--)
-        {
-            if (_changeQueries[i].TryGetTarget(out var query))
-                query.OnBeforeTransition(entity, archetype, row);
-            else
-            {
-                _changeQueries[i] = _changeQueries[_changeQueries.Count - 1];
-                _changeQueries.RemoveAt(_changeQueries.Count - 1);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Debug/test helper: reads the current column version for a component on an entity.
-    /// Returns 0 if tracking is inactive or the entity does not have the component.
-    /// </summary>
-    internal long DebugGetColumnVersion(Entity entity, ComponentType type)
-    {
-        if ((uint)entity.Id >= (uint)_entitySlotCount) return 0;
-        ref var record = ref _records[entity.Id];
-        if (!record.IsOccupied || record.Version != entity.Version) return 0;
-        var arch = record.Archetype!;
-        if (!arch.TryGetComponentIndex(type, out var col)) return 0;
-        return arch._columnVersions?[col] ?? 0;
-    }
-
-    /// <summary>
     /// Creates a multi-component change query. Register component types for value
     /// capture via <see cref="ChangeQuery.Capture{T}"/> and configure the filter
     /// with <c>With</c>/<c>Without</c>/<c>WithAny</c> before enumerating.
@@ -329,61 +250,6 @@ public sealed partial class World : IDisposable
         var query = new ChangeQuery(this);
         RegisterChangeQuery(query);
         return query;
-    }
-
-    internal void ActivateTracking(ComponentType type)
-    {
-        if (!_anyTrackingActive)
-        {
-            _anyTrackingActive = true;
-            foreach (var arch in _archetypes.Values)
-                ActivateArchetypeTracking(arch);
-        }
-        else
-        {
-            foreach (var arch in _archetypes.Values)
-                if (arch.ContainsComponent(type))
-                    ActivateArchetypeTracking(arch);
-        }
-    }
-
-    private void ActivateArchetypeTracking(Core.Archetype arch)
-    {
-        if (arch._anyTrackingActive) return;
-        arch._anyTrackingActive = true;
-        arch._columnVersions = new long[arch._elementSizes!.Length];
-        arch._entityDirty = new bool[arch.Capacity];
-    }
-
-    /// <summary>
-    /// Signals that at least one <see cref="ChangeQuery"/> has enabled <see cref="ChangeQuery.Previous"/>.
-    /// Activates the <see cref="DispatchBeforeWrite"/>/<see cref="DispatchAfterWrite"/> hooks.
-    /// </summary>
-    internal void ActivatePreviousTracking(ChangeQuery query)
-    {
-        _anyPreviousTrackingActive = true;
-        // Fast path: track single query for inline capture
-        if (_singlePreviousQuery is null)
-            _singlePreviousQuery = query;
-        else
-        {
-            _singlePreviousQuery = null; // multiple queries — disable fast path
-            _activeTypedTracker = null;  // disable typed tracker too
-        }
-    }
-
-    /// <summary>
-    /// Clears all per-entity dirty marks across all archetypes.
-    /// Call after consuming <see cref="ChangeQuery.DrainModifiedChunks{T}"/> to reset for the next tick.
-    /// </summary>
-    public void ClearDirtyMarks()
-    {
-        AssertNotDisposed();
-        foreach (var arch in _archetypes.Values)
-        {
-            if (arch._entityDirty is not null)
-                Array.Clear(arch._entityDirty);
-        }
     }
 
     /// <summary>
@@ -603,8 +469,6 @@ public sealed partial class World : IDisposable
 
         archetype = new Archetype(signature, ResolveComponentTypes(signature), _chunkCapacity);
         archetype._owner = this;
-        if (_anyTrackingActive)
-            ActivateArchetypeTracking(archetype);
         _archetypes.Add(signature, archetype);
         CacheArchetypeByMaskIfCanonical(signature, archetype);
         PublishArchetypeSnapshot(archetype);
@@ -1206,22 +1070,10 @@ public sealed partial class World : IDisposable
         }
         else
         {
-            // Fast path: no Entity refs in any component.
-            if (_anyTrackingActive)
+            for (var i = 0; i < compCount; i++)
             {
-                for (var i = 0; i < compCount; i++)
-                {
-                    var colIdx = archetype.GetComponentIndexFast(types[i]);
-                    archetype.WriteComponentRaw(colIdx, rowIndex, bufPtr + offsets[i]);
-                }
-            }
-            else
-            {
-                for (var i = 0; i < compCount; i++)
-                {
-                    var colIdx = archetype.GetComponentIndexFast(types[i]);
-                    archetype.WriteComponentRawNoTrack(colIdx, rowIndex, bufPtr + offsets[i]);
-                }
+                var colIdx = archetype.GetComponentIndexFast(types[i]);
+                archetype.WriteComponentRawNoTrack(colIdx, rowIndex, bufPtr + offsets[i]);
             }
         }
     }
@@ -1244,7 +1096,7 @@ public sealed partial class World : IDisposable
 #endif
         record.Archetype = archetype;
         record.RowIndex = rowIndex;
-        if (_anyTrackingActive) AppendTransition(entity, null, archetype);
+        AppendTransition(entity, null, archetype);
         return rowIndex;
     }
 
@@ -1272,21 +1124,10 @@ public sealed partial class World : IDisposable
     {
         var rowIndex = PlaceEntityInArchetype(entity, archetype);
 
-        if (_anyTrackingActive)
+        for (var i = 0; i < types.Length; i++)
         {
-            for (var i = 0; i < types.Length; i++)
-            {
-                var colIdx = archetype.GetComponentIndexFast(types[i]);
-                archetype.WriteComponentRaw(colIdx, rowIndex, buffer + offsets[i]);
-            }
-        }
-        else
-        {
-            for (var i = 0; i < types.Length; i++)
-            {
-                var colIdx = archetype.GetComponentIndexFast(types[i]);
-                archetype.WriteComponentRawNoTrack(colIdx, rowIndex, buffer + offsets[i]);
-            }
+            var colIdx = archetype.GetComponentIndexFast(types[i]);
+            archetype.WriteComponentRawNoTrack(colIdx, rowIndex, buffer + offsets[i]);
         }
     }
 
@@ -1432,15 +1273,7 @@ public sealed partial class World : IDisposable
         // Reset change tracking — prediction-era accumulations are stale.
         _trackingGeneration++;
         _changeQueries.Clear();
-        _anyTrackingActive = false;
-        _anyPreviousTrackingActive = false;
-        _singlePreviousQuery = null;
         _activeTypedTracker = null;
-        foreach (var arch in _archetypes.Values)
-        {
-            arch._anyTrackingActive = false;
-            arch._columnVersions = null;
-        }
 
         // Recycle snapshot to the pool for the next CaptureState.
         snapshot._isRecycled = true;

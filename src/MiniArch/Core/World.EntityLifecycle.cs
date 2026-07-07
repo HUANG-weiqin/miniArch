@@ -208,9 +208,6 @@ public sealed partial class World
         var nextVersion = NextEntityVersion(entity);
         var arch = info.Archetype!;
 
-        // Pre-hook: capture Old values before entity is removed from storage
-        if (_anyTrackingActive) DispatchBeforeTransition(entity, arch, info.RowIndex);
-
         arch.RemoveAt(info.RowIndex, out var movedEntity);
         if (_hierarchy.HasAnyRelations(entity))
         {
@@ -229,7 +226,7 @@ public sealed partial class World
             movedRecord.RowIndex = info.RowIndex;
         }
 
-        if (_anyTrackingActive) AppendTransition(entity, arch, null);
+        AppendTransition(entity, arch, null);
     }
 
     private Entity CreateInArchetype(Archetype archetype, out int rowIndex)
@@ -240,7 +237,7 @@ public sealed partial class World
         ref var record = ref _records[id];
         record.Archetype = archetype;
         record.RowIndex = rowIndex;
-        if (_anyTrackingActive) AppendTransition(entity, null, archetype);
+        AppendTransition(entity, null, archetype);
         return entity;
     }
 

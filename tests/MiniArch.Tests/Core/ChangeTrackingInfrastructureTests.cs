@@ -9,112 +9,7 @@ public class ChangeTrackingInfrastructureTests
     private readonly record struct Position(int X, int Y);
     private readonly record struct Velocity(int X, int Y);
 
-    [Fact]
-    public void Tracking_is_inactive_by_default()
-    {
-        var world = new World();
-        Assert.False(world.IsChangeTrackingActive);
-    }
-
-    [Fact]
-    public void Track_activates_tracking()
-    {
-        var world = new World();
-        var hp = world.Track().Capture<Position>().With<Position>();
-        Assert.NotNull(hp);
-        Assert.True(world.IsChangeTrackingActive);
-    }
-
-    [Fact]
-    public void Track_activates_column_versions_on_existing_archetype()
-    {
-        var world = new World();
-        var e = world.Create(new Position(0, 0));   // archetype exists before Track
-        var pos = world.Track().Capture<Position>().With<Position>();
-        // activation should have retro-fitted the archetype holding Position
-        Assert.True(world.IsChangeTrackingActive);
-        // transition log should have one entry (from Create, which happened before Track,
-        // but Track retro-actively doesn't add entries — the create transition is there
-        // because Track doesn't retroactively apply to existing entities)
-    }
-
-    [Fact]
-    public void Track_then_create_activates_new_archetype_from_birth()
-    {
-        var world = new World();
-        world.Track().Capture<Position>().With<Position>();
-        var e = world.Create(new Position(0, 0));   // archetype created AFTER Track
-        // no exception; archetype got activated in GetOrCreateArchetype
-        Assert.True(world.IsChangeTrackingActive);
-    }
-
-    [Fact]
-    public void WriteEpoch_starts_at_zero()
-    {
-        var world = new World();
-        Assert.Equal(0, world.CurrentWriteEpoch);
-    }
-
-    // ── Task 2: per-column version bump on write chokepoints ──────────
-
-    [Fact]
-    public void Set_advances_column_version_when_tracking_active()
-    {
-        var world = new World();
-        world.Track().Capture<Position>().With<Position>();
-        var e = world.Create(new Position(0, 0));
-        var v0 = world.DebugGetColumnVersion(e, Component<Position>.ComponentType);
-        world.Set(e, new Position(5, 0));
-        var v1 = world.DebugGetColumnVersion(e, Component<Position>.ComponentType);
-        Assert.True(v1 > v0);
-    }
-
-    [Fact]
-    public void Set_does_not_advance_version_when_tracking_inactive()
-    {
-        var world = new World();   // no Track
-        var e = world.Create(new Position(0, 0));
-        world.Set(e, new Position(5, 0));
-        Assert.Equal(0, world.DebugGetColumnVersion(e, Component<Position>.ComponentType));
-    }
-
-    [Fact]
-    public void Get_does_not_advance_version_even_when_tracking_active()
-    {
-        var world = new World();
-        world.Track().Capture<Position>().With<Position>();
-        var e = world.Create(new Position(1, 0));
-        world.Set(e, new Position(1, 0));
-        var v = world.DebugGetColumnVersion(e, Component<Position>.ComponentType);
-        _ = world.Get<Position>(e);
-        Assert.Equal(v, world.DebugGetColumnVersion(e, Component<Position>.ComponentType));
-    }
-
-    [Fact]
-    public void Set_on_one_column_does_not_advance_other_column()
-    {
-        var world = new World();
-        world.Track().Capture<Position>().With<Position>();
-        var e = world.Create(new Position(0, 0), new Velocity(0, 0));
-        var posV = world.DebugGetColumnVersion(e, Component<Position>.ComponentType);
-        world.Set(e, new Velocity(1, 0));
-        Assert.Equal(posV, world.DebugGetColumnVersion(e, Component<Position>.ComponentType));
-    }
-
-    [Fact]
-    public void EntityAccessor_Set_advances_version()
-    {
-        var world = new World();
-        world.Track().Capture<Position>().With<Position>();
-        var e = world.Create(new Position(0, 0));
-        var accessor = world.Access(e);
-        var v0 = world.DebugGetColumnVersion(e, Component<Position>.ComponentType);
-        accessor.Set(new Position(9, 0));
-        var v1 = world.DebugGetColumnVersion(e, Component<Position>.ComponentType);
-        Assert.True(v1 > v0);
-    }
-
-    // ── Task 3: structural transition dispatch ───────────────────────
+    // ── structural transition dispatch ───────────────────────
 
     [Fact]
     public void Create_appends_entered_transition()
@@ -213,34 +108,6 @@ public class ChangeTrackingInfrastructureTests
     }
 
     [Fact]
-    public void ChangeQuery_self_heals_after_RestoreState()
-    {
-        var world = new World();
-        var q = world.Track().Capture<Position>();
-        var e = world.Create(new Position(1, 1));
-
-        // Consume the creation transition
-        var t = q.Transitions();
-        Assert.Contains(t, tr => tr.Entity == e && tr.Kind == TransitionKind.Entered);
-
-        // Capture, then make prediction changes
-        var snap = world.CaptureState();
-        world.Set(e, new Position(99, 99));
-        Assert.NotEmpty(q.ModifiedChunks<Position>());
-
-        // Rollback — old cursor self-heals
-        world.RestoreState(snap);
-
-        // Self-healed: stale accumulations are cleared
-        Assert.Empty(q.Transitions());
-        Assert.Empty(q.ModifiedChunks<Position>());
-
-        // Post-restore writes are tracked correctly
-        world.Set(e, new Position(5, 5));
-        Assert.NotEmpty(q.ModifiedChunks<Position>());
-    }
-
-    [Fact]
     public void ChangeQuery_stale_cursor_after_Dispose_throws()
     {
         var world = new World();
@@ -249,7 +116,5 @@ public class ChangeTrackingInfrastructureTests
         world.Dispose();
 
         Assert.Throws<ObjectDisposedException>(() => q.Transitions());
-        Assert.Throws<ObjectDisposedException>(() => q.ModifiedChunks<Position>());
-        Assert.Throws<ObjectDisposedException>(() => q.Changes());
     }
 }

@@ -46,13 +46,6 @@ internal sealed partial class Archetype
     private readonly int _segmentBitShift;
     private readonly int _segmentMask;
 
-    // --- Per-entity dirty tracking ---
-    // Tracks which entities were written since the last ClearDirtyMarks().
-    // Allocated lazily when any change query with ModifiedChunks is active.
-    // Non-chunked: _entityDirty[row] = dirty
-    // Chunked: _entityDirty[globalRow] = dirty (global row = segIdx * segCap + localRow)
-    internal bool[]? _entityDirty;
-
     // --- Archetype metadata ---
     private readonly Signature _signature;
     private readonly Type[] _componentTypes;
@@ -60,8 +53,6 @@ internal sealed partial class Archetype
     private Archetype?[] _addDestinationCache = Array.Empty<Archetype?>();
     private Archetype?[] _removeDestinationCache = Array.Empty<Archetype?>();
     internal World? _owner;                 // backref, set by World.GetOrCreateArchetype
-    internal bool _anyTrackingActive;       // gate on write path; false = zero-cost skip
-    internal long[]? _columnVersions;       // allocated lazily when tracking activated; len = _elementSizes.Length
     internal Archetype(Signature signature, Type[] componentTypes, int capacity = 4)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);

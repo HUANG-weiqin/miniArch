@@ -65,31 +65,6 @@ public class ChangeQueryFilterTests
         Assert.Equal(e, ts[0].Entity);
     }
 
-    // ── Without filters ModifiedChunks ─────────────────────────────
-
-    [Fact]
-    public void Without_filters_modified_chunks()
-    {
-        var world = new World();
-        var filtered = world.Track().Capture<HP>().With<HP>().Without<Dead>();
-        var unfiltered = world.Track().Capture<HP>().With<HP>();
-
-        var e = world.Create(new HP(100));
-        _ = filtered.ModifiedChunks<HP>();    // drain
-        _ = unfiltered.ModifiedChunks<HP>();  // drain
-
-        world.Add(e, new Dead());
-        world.Set(e, new HP(50));
-
-        // Filtered query: entity moved to {HP, Dead} → excluded by Without<Dead>
-        var filteredChunks = filtered.ModifiedChunks<HP>().ToList();
-        Assert.Empty(filteredChunks);
-
-        // Unfiltered query: sees the write in the {HP, Dead} archetype
-        var unfilteredChunks = unfiltered.ModifiedChunks<HP>().ToList();
-        Assert.NotEmpty(unfilteredChunks);
-    }
-
     // ── Default filter backward compatibility ──────────────────────
 
     [Fact]
@@ -166,7 +141,7 @@ public class ChangeQueryFilterTests
         Assert.Equal(e4, ts[0].Entity);
     }
 
-    // ── Auto-clear (replaces ClearTransitionLog) ────────────────────
+    // ── Auto-clear ────────────────────────────────────────────
 
     [Fact]
     public void Transitions_auto_clears_after_drain()
@@ -407,152 +382,5 @@ public class ChangeQueryFilterTests
         var t = hp.Transitions().Single();
         Assert.Equal(TransitionKind.Exited, t.Kind);
         Assert.Equal(TransitionCause.Removed, t.Cause);
-    }
-
-    // ── WithPreviousValues ───────────────────────────────────────────
-
-    [Fact]
-    public void PreviousValues_captures_old_and_new()
-    {
-        var world = new World();
-        var hp = world.Track().Capture<HP>().With<HP>().Previous();
-        var e = world.Create(new HP(100));
-
-        world.Set(e, new HP(80));
-        var cs = hp.Changes().ToList();
-        Assert.Single(cs);
-        Assert.Equal(e, cs[0].Entity);
-        Assert.Equal(100, cs[0].Old.Get<HP>().Value);  // created with 100
-        Assert.Equal(80, cs[0].New.Get<HP>().Value);   // Set to 80
-
-        world.Set(e, new HP(50));
-        cs = hp.Changes().ToList();
-        Assert.Single(cs);
-        Assert.Equal(80, cs[0].Old.Get<HP>().Value);   // previous Set's new = this Set's old
-        Assert.Equal(50, cs[0].New.Get<HP>().Value);
-    }
-
-    [Fact]
-    public void Without_WithPreviousValues_no_capture()
-    {
-        var world = new World();
-        var hp = world.Track().Capture<HP>().With<HP>(); // no WithPreviousValues
-        var e = world.Create(new HP(100));
-
-        world.Set(e, new HP(80));
-        Assert.Empty(hp.Changes());
-    }
-
-    [Fact]
-    public void PreviousValues_auto_clears()
-    {
-        var world = new World();
-        var hp = world.Track().Capture<HP>().With<HP>().Previous();
-        var e = world.Create(new HP(100));
-
-        world.Set(e, new HP(80));
-        Assert.Single(hp.Changes()); // drain + auto-clear
-        Assert.Empty(hp.Changes());  // nothing new
-
-        world.Set(e, new HP(50));
-        Assert.Single(hp.Changes()); // only the new Set
-    }
-
-    [Fact]
-    public void PreviousValues_multiple_sets_before_drain()
-    {
-        var world = new World();
-        var hp = world.Track().Capture<HP>().With<HP>().Previous();
-        var e = world.Create(new HP(100));
-
-        world.Set(e, new HP(90));
-        world.Set(e, new HP(80));
-        world.Set(e, new HP(70));
-
-        // Per-entity: only first Old and last New recorded
-        var cs = hp.Changes().ToList();
-        Assert.Single(cs);
-        Assert.Equal(100, cs[0].Old.Get<HP>().Value);
-        Assert.Equal(70, cs[0].New.Get<HP>().Value);
-    }
-
-    [Fact]
-    public void PreviousValues_with_Without_filter_respected()
-    {
-        var world = new World();
-        var hp = world.Track().Capture<HP>().With<HP>().Without<Dead>().Previous();
-        var alive = world.Create(new HP(100));
-        var dead = world.Create(new HP(100));
-        world.Add(dead, new Dead());
-
-        world.Set(alive, new HP(80));  // matches {HP, !Dead} → captured
-        world.Set(dead, new HP(80));   // {HP, Dead} doesn't match → skipped
-
-        var cs = hp.Changes().ToList();
-        // Two entries: the transition from Add<Dead> on dead (entered {HP,!Dead}
-        // on Create, exited when Dead was added) and the Set on alive.
-        Assert.Equal(2, cs.Count);
-        Assert.Equal(dead, cs[0].Entity);  // Add<Dead> transition → captured Old/New
-    }
-
-    // ── Regression: Previous() with empty world ────────────────────────
-
-    [Fact]
-    public void Previous_on_empty_world_then_Add_does_not_crash()
-    {
-        // Regression: Track().Capture<T>().Previous() on a world with
-        // zero archetypes, then Add<T>, caused OnBeforeTransition to call
-        // GetComponentIndexFast on an archetype that lacks the captured type.
-        // This Add must not throw — empty archetype lacks HP.
-        var world = new World();
-        var hp = world.Track().Capture<HP>().With<HP>().Previous();
-        var e = world.Create();
-        world.Add(e, new HP(100));
-        // Add transition matched filter → Old is zeros (no HP before add),
-        // New is HP(100).
-        var cs = hp.Changes().ToList();
-        Assert.Single(cs);
-        Assert.Equal(0, cs[0].Old.Get<HP>().Value);
-        Assert.Equal(100, cs[0].New.Get<HP>().Value);
-    }
-
-    [Fact]
-    public void Previous_on_empty_world_then_Set_does_not_crash()
-    {
-        // Regression: Set on entity after Previous() when the first archetype
-        // is created after Track() must not throw.
-        var world = new World();
-        var q = world.Track().Capture<HP>().With<HP>().Previous();
-        var e = world.Create(new HP(50));
-        world.Set(e, new HP(80));
-        var cs = q.Changes().ToList();
-        Assert.Single(cs);
-        Assert.Equal(50, cs[0].Old.Get<HP>().Value);
-        Assert.Equal(80, cs[0].New.Get<HP>().Value);
-    }
-
-    [Fact]
-    public void Previous_then_Remove_captured_component_keeps_zero_new_snapshot()
-    {
-        // Regression: structural Remove moves the entity into an archetype
-        // that no longer contains the captured type. New snapshot must be
-        // zero-initialized instead of reading a missing column.
-        var world = new World();
-        var q = world.Track().Capture<HP>().With<HP>().Previous();
-        var e = world.Create(new HP(50));
-        _ = q.Transitions();
-        _ = q.Changes();
-
-        world.Remove<HP>(e);
-
-        var ts = q.Transitions().ToList();
-        Assert.Single(ts);
-        Assert.Equal(TransitionKind.Exited, ts[0].Kind);
-
-        var cs = q.Changes().ToList();
-        Assert.Single(cs);
-        Assert.Equal(e, cs[0].Entity);
-        Assert.Equal(50, cs[0].Old.Get<HP>().Value);
-        Assert.Equal(0, cs[0].New.Get<HP>().Value);
     }
 }
