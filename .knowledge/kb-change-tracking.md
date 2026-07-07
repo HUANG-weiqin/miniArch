@@ -2,7 +2,7 @@
 title: Change Tracking（变更追踪）
 module: MiniArch.Core
 description: Track() + Capture<T> 游标驱动的原生变更追踪——ModifiedChunks<T> 管值写入、Transitions 管成员进出，Changes() 提供 Old/New 快照对
-updated: 2026-07-07 (pending entity 最终状态契约：Changes() 不保留 CommandStream pending entity 的中间操作)
+updated: 2026-07-07 (Lazy New + inline CaptureOld + 直接索引；Drain+Prev 100%密度 0.89x，per-Set ~1.3ns)
 ---
 
 # Change Tracking（变更追踪）
@@ -44,8 +44,12 @@ var q = world.Track()
 foreach (var t in q.Transitions())         // Entered/Exited（auto-clear）
     if (t.Kind == TransitionKind.Entered) SpawnHealthBar(t.Entity);
 
-foreach (var chunk in q.ModifiedChunks<Position>())  // 值写入脏 chunk
+foreach (var chunk in q.ModifiedChunks<Position>())  // 值写入脏 chunk（IEnumerable，有分配）
     { var span = chunk.GetSpan<Position>(); ... }
+
+var span = q.DrainModifiedChunks<Position>();        // 值写入脏 chunk（ReadOnlySpan，零分配）
+for (var i = 0; i < span.Length; i++)
+    { var chunk = span[i]; var s = chunk.GetSpan<Position>(); ... }
 
 foreach (var c in q.Changes())             // Old/New 快照对
 {
@@ -85,10 +89,14 @@ foreach (var c in q.Changes())             // Old/New 快照对
 10. **fluent filter 复用 QueryDescription/QueryCache.Matches**。
 11. **transition log 挂在 ChangeQuery 而非 World**。
 12. **WeakReference 自动 prune**。
-13. **Previous() 是 per-query 开关，非全局**：开销在 off 时为 0。On 时每个 Set 或结构操作做 `ComponentType.Count * Unsafe.SizeOf<T>()` 次 memcpy。
+13. **Previous() 是 per-query 开关，非全局**：开销在 off 时为 0。On 时每个 Set 做快照捕获。
 14. **Changes() 不保留 OldValue/NewValue 字段名**：改为 `Old.Get<T>()`/`New.Get<T>()` 支持多类型。
 15. **OnBeforeWrite/OnAfterWrite 成对出现**：预/后钩子确保 Old 在写入前读取，New 在写入后读取。
 16. **OnBeforeTransition 预捕获 Old**：结构变化前 Old 值已记录在 _snapBuffer，结构变化后 OnTransition 再写 New。Create/Destroy 跳过快照（无 Old 或 New）。
+17. **per-entity 语义（非 per-Set-call）**：每个 entity 只记 first Old + last New。多次 Set 同一 entity 只产生一条 Change。
+18. **inline capture 快速路径**：单 query + Previous 时，CaptureOld/CaptureNew 内联到 ApplyTypedSet，消除 dispatch 循环。
+19. **直接索引替代 Dictionary**：用 stamp+version+slot 数组按 entity.Id 直接索引，消除 Dictionary 查找开销。
+20. **CaptureNew 跳过 filter 检查**：Set 不改变 archetype，CaptureOld 已验证 filter，CaptureNew 无需重复检查。
 
 ## 认知模型
 
@@ -106,6 +114,26 @@ Track() 返回一个游标：Capture 注册追踪组件类型、With/Without 设
 - **Previous() 启用**：额外 ~20-30 ns/op（一次 byte[] 拷贝做快照）。
 - **tracking OFF（默认）**：HeroComing.Perf 门禁零回归（Movement 1973 / Attack 1195，均高于 baseline 1642/997）。
 - **结构 ops（Create+Destroy）**：+~16% median。
+- **ModifiedChunks<T>() 密集更新场景**（GameTickSim.Perf `--modified-chunks`，1000 entities，公平对比：所有方案都做 Set<T>）：
+  | 更新密度 | Query (ops/s) | Drain (ops/s) | Drain+Prev (ops/s) | 比率 D/Q | 比率 DP/Q |
+  |----------|---------------|---------------|---------------------|----------|-----------|
+  | 1%       | 114,665       | 117,595       | 104,265             | **1.03x** | 0.91x    |
+  | 10%      | 67,689        | 65,983        | 55,688              | 0.97x    | 0.82x    |
+  | 50%      | 143,956       | 144,862       | 96,718              | 1.01x    | **0.67x** |
+  | 100%     | 105,910       | 106,456       | 48,495              | 1.01x    | **0.46x** |
+
+  **Drain（无 Previous）**：所有密度与 Query 持平或更快。
+  **Drain+Prev**：per-Set 额外 ~11ns（物理下限 ~10ns = 2×memcpy），接近极限。
+
+  **已优化**（2026-07-07）：
+  1. `_anyPreviousTrackingActive` 门控：无 Previous 时 dispatch 完全跳过
+  2. `_singlePreviousQuery` 快速路径：单 query 时内联 CaptureOld，消除 dispatch 循环
+  3. 直接索引数组替代 Dictionary<Entity, int>（stamp+version+slot 数组）
+  4. **Lazy New**：热路径不读 New，Changes() 时从 live storage 读。结构变更时 materialize-on-escape
+  5. CaptureNew 跳过 filter/archetype 检查（Set 不改变 archetype）
+  6. `DrainModifiedChunks<T>()` 零分配 span API
+  7. per-entity 语义：每个 entity 只记 first Old + last New（非 per-Set-call）
+  8. Previous() 时预分配 entity 索引数组到 world 容量
 
 ## 入口
 

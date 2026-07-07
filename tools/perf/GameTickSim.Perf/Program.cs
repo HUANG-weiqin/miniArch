@@ -2,6 +2,12 @@ using System.Diagnostics;
 using MiniArchBenchmarks.GameTick;
 using GameTickSim;
 
+if (args.Length > 0 && args[0] == "--modified-chunks")
+{
+    ScenarioBenchmark.RunModifiedChunksDensityBenchmark();
+    return;
+}
+
 if (args.Length > 0 && args[0] == "--scenarios")
 {
     ScenarioBenchmark.RunAll(args.Length > 1 ? args[1] : null);

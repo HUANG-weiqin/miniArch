@@ -2486,4 +2486,232 @@ public static class ScenarioBenchmark
             Console.WriteLine($"  [Arch phase breakdown] Iterate: {iterateNs / archFreq / 1_000_000:F1}ms ({100.0 * iterateNs / totalNs:F1}%) | Create: {createNs / archFreq / 1_000_000:F1}ms ({100.0 * createNs / totalNs:F1}%) | DestroyScan: {destroyScanNs / archFreq / 1_000_000:F1}ms ({100.0 * destroyScanNs / totalNs:F1}%) | DestroyApply: {destroyApplyNs / archFreq / 1_000_000:F1}ms ({100.0 * destroyApplyNs / totalNs:F1}%) | Buff: {buffNs / archFreq / 1_000_000:F1}ms ({100.0 * buffNs / totalNs:F1}%)");
         }
     }
+
+    /// <summary>
+    /// Standalone benchmark: ModifiedChunks&lt;T&gt;() vs Query.GetChunks() at varying update densities.
+    /// Measures the tracking overhead from Set&lt;T&gt; + ModifiedChunks enumeration vs a plain full-scan query.
+    /// Invoked via --modified-chunks flag in Program.cs.
+    /// </summary>
+    public static void RunModifiedChunksDensityBenchmark()
+    {
+        const int entityCount = 1000;
+        const int ticksToRun = 5000;
+        var densities = new[] { 0.01, 0.10, 0.50, 1.00 };
+
+        Console.WriteLine("=== ModifiedChunks<T>() vs Query.GetChunks() Density Benchmark ===");
+        Console.WriteLine($"Entities: {entityCount}, Ticks: {ticksToRun}, Densities: 1%, 10%, 50%, 100%");
+        Console.WriteLine("All paths do Set<T> on N entities each tick (same tracking overhead).");
+        Console.WriteLine();
+
+        Console.WriteLine($"{"Density",8} | {"Query",10} | {"Drain",10} | {"Drain+Prev",10} | {"D/Q",8} | {"DP/Q",8} | {"GC Q",5} | {"GC D",4} | {"GC DP",5}");
+        Console.WriteLine(new string('-', 90));
+
+        foreach (var density in densities)
+        {
+            var updateCount = Math.Max(1, (int)(entityCount * density));
+
+            // ── Variant A: Set + Query.GetChunks() full scan (baseline) ──
+            var (qOps, qHeap, qGen0) = RunSetPlusQueryScan(entityCount, updateCount, ticksToRun);
+
+            // ── Variant B: Set + DrainModifiedChunks<T>() (no Previous) ──
+            var (drainOps, drainHeap, drainGen0) = RunDrainModifiedChunks(entityCount, updateCount, ticksToRun);
+
+            // ── Variant C: Set + DrainModifiedChunks<T>() with Previous() ──
+            var (dpOps, dpHeap, dpGen0) = RunDrainModifiedChunksWithPrevious(entityCount, updateCount, ticksToRun);
+
+            Console.WriteLine($"{density,7:P0} | {qOps,10:F0} | {drainOps,10:F0} | {dpOps,10:F0} | {drainOps/qOps,7:F2}x | {dpOps/qOps,7:F2}x | {qGen0,5} | {drainGen0,4} | {dpGen0,5}");
+
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("All variants: Set<T> N entities each tick, then enumerate.");
+        Console.WriteLine("  Query      = Query.GetChunks() full scan (no change tracking enumeration)");
+        Console.WriteLine("  Drain      = DrainModifiedChunks<T>() zero-alloc span (no Previous)");
+        Console.WriteLine("  Drain+Prev = DrainModifiedChunks<T>() with Previous() — captures Old/New per Set");
+    }
+
+    /// <summary>
+    /// Variant A: Set N entities + full-scan Query.GetChunks(). Same tracking overhead as other variants.
+    /// </summary>
+    static (double opsPerSec, long heapDeltaKB, int gen0) RunSetPlusQueryScan(int entityCount, int updateCount, int ticksToRun)
+    {
+        using var w = new MiniWorld();
+        var entities = new MiniArch.Entity[entityCount];
+        for (var i = 0; i < entityCount; i++)
+            entities[i] = w.Create(new Position { X = i, Y = i + 1, Z = i + 2 }, new Velocity { X = 1, Y = 0.5f });
+
+        // Activate tracking (same as other variants) but don't create a ChangeQuery
+        // that enumerates — we'll use Query.GetChunks() instead.
+        var trackQuery = w.Track().Capture<Position>();
+
+        var desc = new MiniArch.QueryDescription().With<Position>().With<Velocity>();
+
+        var updateIndices = new int[updateCount];
+        for (var i = 0; i < updateCount; i++)
+            updateIndices[i] = i;
+
+        int Tick()
+        {
+            var checksum = 0;
+
+            // 1. Set N entities (same as ModifiedChunks variant)
+            for (var i = 0; i < updateCount; i++)
+            {
+                var e = entities[updateIndices[i]];
+                w.Set(e, new Position { X = i, Y = i + 1, Z = i + 2 });
+            }
+
+            // 2. Enumerate via full scan (baseline) — read-only, same as other variants
+            foreach (var chunk in w.Query(desc).GetChunks())
+            {
+                var pos = chunk.GetSpan<Position>();
+                for (var row = 0; row < chunk.Count; row++)
+                    checksum += (int)(pos[row].X + pos[row].Y);
+            }
+            return checksum;
+        }
+
+        for (var i = 0; i < 20; i++) Tick();
+
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        var baselineHeap = GC.GetTotalMemory(true);
+        var gen0Base = GC.CollectionCount(0);
+
+        var sw = Stopwatch.StartNew();
+        for (var i = 0; i < ticksToRun; i++) Tick();
+        sw.Stop();
+
+        var opsPerSec = ticksToRun / sw.Elapsed.TotalSeconds;
+
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        var heapDeltaKB = (GC.GetTotalMemory(true) - baselineHeap) / 1024;
+        var gen0 = GC.CollectionCount(0) - gen0Base;
+
+        return (opsPerSec, heapDeltaKB, gen0);
+    }
+
+    static (double opsPerSec, long heapDeltaKB, int gen0) RunDrainModifiedChunks(int entityCount, int updateCount, int ticksToRun)
+    {
+        using var w = new MiniWorld();
+        var entities = new MiniArch.Entity[entityCount];
+        for (var i = 0; i < entityCount; i++)
+            entities[i] = w.Create(new Position { X = i, Y = i + 1, Z = i + 2 }, new Velocity { X = 1, Y = 0.5f });
+
+        // Set up change tracking query — NO Previous()
+        var trackQuery = w.Track().Capture<Position>();
+
+        // Pre-compute update indices (first N entities)
+        var updateIndices = new int[updateCount];
+        for (var i = 0; i < updateCount; i++)
+            updateIndices[i] = i;
+
+        int Tick()
+        {
+            var checksum = 0;
+
+            // 1. Modify the designated entities via Set<T> (triggers column version bump)
+            for (var i = 0; i < updateCount; i++)
+            {
+                var e = entities[updateIndices[i]];
+                w.Set(e, new Position { X = i, Y = i + 1, Z = i + 2 });
+            }
+
+            // 2. Enumerate via zero-alloc DrainModifiedChunks
+            var span = trackQuery.DrainModifiedChunks<Position>();
+            for (var ci = 0; ci < span.Length; ci++)
+            {
+                var chunk = span[ci];
+                var ents = chunk.GetEntities();
+                var pos = chunk.GetSpan<Position>();
+                for (var row = 0; row < chunk.Count; row++)
+                    checksum += (int)(pos[row].X + pos[row].Y);
+            }
+
+            return checksum;
+        }
+
+        // Warmup
+        for (var i = 0; i < 20; i++) Tick();
+
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        var baselineHeap = GC.GetTotalMemory(true);
+        var gen0Base = GC.CollectionCount(0);
+
+        var sw = Stopwatch.StartNew();
+        for (var i = 0; i < ticksToRun; i++) Tick();
+        sw.Stop();
+
+        var opsPerSec = ticksToRun / sw.Elapsed.TotalSeconds;
+
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        var heapDeltaKB = (GC.GetTotalMemory(true) - baselineHeap) / 1024;
+        var gen0 = GC.CollectionCount(0) - gen0Base;
+
+        return (opsPerSec, heapDeltaKB, gen0);
+    }
+
+    static (double opsPerSec, long heapDeltaKB, int gen0) RunDrainModifiedChunksWithPrevious(int entityCount, int updateCount, int ticksToRun)
+    {
+        using var w = new MiniWorld();
+        var entities = new MiniArch.Entity[entityCount];
+        for (var i = 0; i < entityCount; i++)
+            entities[i] = w.Create(new Position { X = i, Y = i + 1, Z = i + 2 }, new Velocity { X = 1, Y = 0.5f });
+
+        // Set up change tracking query WITH Previous()
+        var trackQuery = w.Track().Capture<Position>().Previous();
+
+        var updateIndices = new int[updateCount];
+        for (var i = 0; i < updateCount; i++)
+            updateIndices[i] = i;
+
+        int Tick()
+        {
+            var checksum = 0;
+
+            // 1. Set N entities (Previous triggers OnBeforeWrite/OnAfterWrite per Set)
+            for (var i = 0; i < updateCount; i++)
+            {
+                var e = entities[updateIndices[i]];
+                w.Set(e, new Position { X = i, Y = i + 1, Z = i + 2 });
+            }
+
+            // 2. Enumerate via DrainModifiedChunks — same read-only work as other variants
+            var span = trackQuery.DrainModifiedChunks<Position>();
+            for (var ci = 0; ci < span.Length; ci++)
+            {
+                var chunk = span[ci];
+                var pos = chunk.GetSpan<Position>();
+                for (var row = 0; row < chunk.Count; row++)
+                    checksum += (int)(pos[row].X + pos[row].Y);
+            }
+
+            return checksum;
+        }
+
+        for (var i = 0; i < 20; i++) Tick();
+
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        var baselineHeap = GC.GetTotalMemory(true);
+        var gen0Base = GC.CollectionCount(0);
+
+        var sw = Stopwatch.StartNew();
+        for (var i = 0; i < ticksToRun; i++) Tick();
+        sw.Stop();
+
+        var opsPerSec = ticksToRun / sw.Elapsed.TotalSeconds;
+
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        var heapDeltaKB = (GC.GetTotalMemory(true) - baselineHeap) / 1024;
+        var gen0 = GC.CollectionCount(0) - gen0Base;
+
+        return (opsPerSec, heapDeltaKB, gen0);
+    }
 }

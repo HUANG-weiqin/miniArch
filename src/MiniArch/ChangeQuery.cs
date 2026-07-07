@@ -51,14 +51,32 @@ public sealed class ChangeQuery : IChangeQuery
     private int[] _offsets = [];                     // precomputed byte offsets per captured type
     private int _snapshotSize;                        // sum of _typeSizes
     private QueryCache? _cache;
+    private bool _hasFilter;                          // false when no With/Without/WithAny → skip Matches()
 
     // Per-type cursor for ModifiedChunks<T>
     private readonly Dictionary<int, long> _valueCursors = new();
 
-    // Reusable snapshot write buffer (grown, never shrunk)
-    private byte[] _snapBuffer = new byte[1024];
-    private readonly List<Entity> _snapEntities = new(); // parallel to _snapBuffer entries
-    private int _snapCount;    // number of complete (Old+New) entries in buffer
+    // Snapshot state: direct-indexed by entity ID (no Dictionary)
+    // Uses epoch + version to handle entity ID reuse safely.
+    private int _snapEpoch;               // incremented on drain/reset
+    private int[] _stampById = [];        // _stampById[id] == _snapEpoch → written this epoch
+    private int[] _versionById = [];      // entity version at time of first write
+    private int[] _slotById = [];         // slot index + 1 (0 = not dirty)
+    private Entity[] _dirtyList = [];     // ordered dirty entities, indexed by slot
+    private byte[] _oldValues = [];       // old values, indexed by slot * _snapshotSize
+    private byte[] _newValues = [];       // new values, indexed by slot * _snapshotSize
+    private int _snapCount;               // number of dirty entities
+
+    // Location storage for Lazy New (read New from live storage in Changes())
+    private Core.Archetype?[] _dirtyArchetypes = [];
+    private int[] _dirtyRow = [];
+
+    // Cached component index for hot path (avoids repeated TryGetComponentIndex)
+    private Core.Archetype? _cachedArchetype;
+    private int _cachedColIdx;
+
+    // Reusable buffer for DrainModifiedChunks<T> (grown, never shrunk)
+    private ChunkView[] _drainBuffer = [];
 
     private int _worldGen;  // captured at construction; compared on self-heal
 
@@ -79,9 +97,10 @@ public sealed class ChangeQuery : IChangeQuery
         // Clear stale accumulations and re-register dispatch paths.
         _transitions.Clear();
         _snapCount = 0;
-        _snapEntities.Clear();
+        _snapEpoch++;
         _cache = null;
         _consumed = false;
+        _cachedArchetype = null;
 
         // Reset per-type cursors to current epoch.
         var epoch = _world.CurrentWriteEpoch;
@@ -95,6 +114,32 @@ public sealed class ChangeQuery : IChangeQuery
         _world.RegisterChangeQuery(this);
         foreach (var ct in _capturedTypes)
             _world.ActivateTracking(ct);
+        if (_hasPrevious)
+            _world.ActivatePreviousTracking(this);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void EnsureEntityCapacity(int id)
+    {
+        if (id < _stampById.Length) return;
+        var newSize = Math.Max(id + 1, _stampById.Length == 0 ? 64 : _stampById.Length * 2);
+        Array.Resize(ref _stampById, newSize);
+        Array.Resize(ref _versionById, newSize);
+        Array.Resize(ref _slotById, newSize);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void EnsureSlotCapacity()
+    {
+        var needed = (_snapCount + 1) * _snapshotSize;
+        if (needed <= _oldValues.Length) return;
+        var newSize = Math.Max(needed, _oldValues.Length == 0 ? 256 : _oldValues.Length * 2);
+        Array.Resize(ref _oldValues, newSize);
+        Array.Resize(ref _newValues, newSize);
+        var slotSize = Math.Max(_snapCount + 1, _dirtyList.Length == 0 ? 64 : _dirtyList.Length * 2);
+        Array.Resize(ref _dirtyList, slotSize);
+        Array.Resize(ref _dirtyArchetypes, slotSize);
+        Array.Resize(ref _dirtyRow, slotSize);
     }
 
     /// <summary>
@@ -142,7 +187,107 @@ public sealed class ChangeQuery : IChangeQuery
         if (_consumed)
             throw new InvalidOperationException("Cannot enable Previous after enumeration has started.");
         _hasPrevious = true;
+        _world.ActivatePreviousTracking(this);
+
+        // Pre-allocate entity-indexed arrays to world capacity
+        var cap = _world.EntityCapacity;
+        if (_stampById.Length < cap)
+        {
+            _stampById = new int[cap];
+            _versionById = new int[cap];
+            _slotById = new int[cap];
+        }
+
         return this;
+    }
+
+    /// <summary>
+    /// Inline capture: read Old from storage BEFORE write. Called from ApplyTypedSet fast path.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void CaptureOld(Entity entity, Core.Archetype archetype, int row)
+    {
+        if (!_hasPrevious || _capturedTypes.Count == 0) return;
+
+        if (_hasFilter)
+        {
+            var cache = _cache ??= _world.Query(_filter).Advanced;
+            if (!cache.Matches(archetype)) return;
+        }
+
+        var id = entity.Id;
+        EnsureEntityCapacity(id);
+
+        // Already recorded this epoch?
+        if (_stampById[id] == _snapEpoch && _versionById[id] == entity.Version)
+            return;
+
+        // First write — allocate slot
+        EnsureSlotCapacity();
+        var slot = _snapCount++;
+        _stampById[id] = _snapEpoch;
+        _versionById[id] = entity.Version;
+        _slotById[id] = slot + 1;
+        _dirtyList[slot] = entity;
+
+        // Store location for Lazy New
+        _dirtyArchetypes[slot] = archetype;
+        _dirtyRow[slot] = row;
+
+        // Capture Old for all captured types
+        var oldOff = slot * _snapshotSize;
+        for (var i = 0; i < _capturedTypes.Count; i++)
+        {
+            if (archetype.TryGetComponentIndex(_capturedTypes[i], out var colIdx))
+            {
+                var src = archetype.GetComponentBytes(colIdx, row);
+                src.CopyTo(new Span<byte>(_oldValues, oldOff + _offsets[i], _typeSizes[i]));
+            }
+        }
+
+        // Cache first type's index for CaptureNew fast path
+        if (_capturedTypes.Count == 1)
+        {
+            archetype.TryGetComponentIndex(_capturedTypes[0], out var ci);
+            _cachedArchetype = archetype;
+            _cachedColIdx = ci;
+        }
+    }
+
+    /// <summary>
+    /// Inline capture: read New from storage AFTER write. Called from ApplyTypedSet fast path.
+    /// Skips filter/archetype checks — archetype cannot change during Set.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void CaptureNew(Entity entity, Core.Archetype archetype, int row)
+    {
+        if (!_hasPrevious || _capturedTypes.Count == 0) return;
+
+        var id = entity.Id;
+        if (id >= _stampById.Length) return;
+        if (_stampById[id] != _snapEpoch || _versionById[id] != entity.Version) return;
+
+        var slot = _slotById[id] - 1;
+        var newOff = slot * _snapshotSize;
+
+        if (_capturedTypes.Count == 1 && _cachedArchetype == archetype)
+        {
+            // Fast path: single type, cached index
+            var src = archetype.GetComponentBytes(_cachedColIdx, row);
+            src.CopyTo(new Span<byte>(_newValues, newOff, _snapshotSize));
+        }
+        else
+        {
+            // Multi-type: iterate all captured types
+            for (var i = 0; i < _capturedTypes.Count; i++)
+            {
+                if (archetype.TryGetComponentIndex(_capturedTypes[i], out var colIdx))
+                {
+                    var src = archetype.GetComponentBytes(colIdx, row);
+                    src.CopyTo(new Span<byte>(_newValues, newOff + _offsets[i], _typeSizes[i]));
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -155,6 +300,7 @@ public sealed class ChangeQuery : IChangeQuery
             throw new InvalidOperationException("Cannot modify filter after enumeration started.");
         _filter = _filter.With<TU>();
         _cache = null;
+        _hasFilter = true;
         return this;
     }
 
@@ -171,6 +317,7 @@ public sealed class ChangeQuery : IChangeQuery
 
         _filter = _filter.Without<TU>();
         _cache = null;
+        _hasFilter = true;
         return this;
     }
 
@@ -187,6 +334,7 @@ public sealed class ChangeQuery : IChangeQuery
 
         _filter = _filter.WithAny<TU>();
         _cache = null;
+        _hasFilter = true;
         return this;
     }
 
@@ -241,6 +389,44 @@ public sealed class ChangeQuery : IChangeQuery
     }
 
     /// <summary>
+    /// Zero-allocation variant of <see cref="ModifiedChunks{T}"/>.
+    /// Returns a span over an internal reusable buffer. The span is valid until
+    /// the next call to any drain method on this <see cref="ChangeQuery"/> instance.
+    /// </summary>
+    public ReadOnlySpan<ChunkView> DrainModifiedChunks<T>() where T : unmanaged
+    {
+        EnsureUsable();
+        _consumed = true;
+        var ct = Component<T>.ComponentType;
+        if (!_capturedTypes.Contains(ct))
+            throw new InvalidOperationException(
+                $"Component {typeof(T).Name} was not captured. Call .Capture<{typeof(T).Name}>() first.");
+
+        var query = _world.Query(_filter);
+        var snapshotEpoch = _world.CurrentWriteEpoch;
+        var cursor = _valueCursors[ct.Value];
+        var chunks = query.GetChunks();
+        var count = 0;
+
+        // Ensure buffer capacity
+        if (_drainBuffer.Length < chunks.Length)
+            _drainBuffer = new ChunkView[chunks.Length];
+
+        for (var ci = 0; ci < chunks.Length; ci++)
+        {
+            var chunk = chunks[ci];
+            var arch = chunk.Archetype;
+            if (!arch.TryGetComponentIndex(ct, out var col))
+                continue;
+            var versions = arch._columnVersions;
+            if (versions is not null && versions[col] > cursor)
+                _drainBuffer[count++] = chunk;
+        }
+        _valueCursors[ct.Value] = snapshotEpoch;
+        return new ReadOnlySpan<ChunkView>(_drainBuffer, 0, count);
+    }
+
+    /// <summary>
     /// Returns all old/new snapshot pairs accumulated since the last call.
     /// <see cref="Previous"/> must have been enabled before enumeration started.
     /// Returns an empty array when no changes occurred.
@@ -256,24 +442,45 @@ public sealed class ChangeQuery : IChangeQuery
         if (!_hasPrevious || _snapCount == 0)
             return [];
 
-        var entryStride = _snapshotSize * 2;
-        var totalSize = _snapCount * entryStride;
-        var data = new byte[totalSize];
-        Buffer.BlockCopy(_snapBuffer, 0, data, 0, totalSize);
+        // Lazy New: read New values from live component storage
+        for (var i = 0; i < _snapCount; i++)
+        {
+            var arch = _dirtyArchetypes[i];
+            if (arch is null) continue; // materialized already (structural escape)
+            var row = _dirtyRow[i];
+            var newOff = i * _snapshotSize;
+            for (var t = 0; t < _capturedTypes.Count; t++)
+            {
+                if (arch.TryGetComponentIndex(_capturedTypes[t], out var colIdx))
+                {
+                    var src = arch.GetComponentBytes(colIdx, row);
+                    src.CopyTo(new Span<byte>(_newValues, newOff + _offsets[t], _typeSizes[t]));
+                }
+            }
+        }
+
+        var data = new byte[_snapCount * _snapshotSize * 2];
+        for (var i = 0; i < _snapCount; i++)
+        {
+            var srcOff = i * _snapshotSize;
+            var dstOff = i * _snapshotSize * 2;
+            Buffer.BlockCopy(_oldValues, srcOff, data, dstOff, _snapshotSize);
+            Buffer.BlockCopy(_newValues, srcOff, data, dstOff + _snapshotSize, _snapshotSize);
+        }
 
         var typesCopy = _capturedTypes.ToArray();
         var offsetsCopy = (int[])_offsets.Clone();
         var result = new EntityChange[_snapCount];
         for (var i = 0; i < _snapCount; i++)
         {
-            var off = i * entryStride;
+            var off = i * _snapshotSize * 2;
             result[i] = new EntityChange(
-                _snapEntities[i], data, off, off + _snapshotSize,
+                _dirtyList[i], data, off, off + _snapshotSize,
                 _snapshotSize, offsetsCopy, typesCopy);
         }
 
         _snapCount = 0;
-        _snapEntities.Clear();
+        _snapEpoch++;
         return result;
     }
 
@@ -283,73 +490,107 @@ public sealed class ChangeQuery : IChangeQuery
     {
         if (!_hasPrevious || _capturedTypes.Count == 0) return;
 
-        // Check filter: only capture writes matching the query's archetype filter
-        var cache = _cache ??= _world.Query(_filter).Advanced;
-        if (!cache.Matches(archetype)) return;
+        if (_hasFilter)
+        {
+            var cache = _cache ??= _world.Query(_filter).Advanced;
+            if (!cache.Matches(archetype)) return;
+        }
 
-        EnsureSnapBufferCapacity();
+        var id = entity.Id;
+        EnsureEntityCapacity(id);
 
-        // Write Old at (_snapCount * entryBytes)
-        var entryBytes = _snapshotSize * 2;
-        var oldOff = _snapCount * entryBytes;
+        // Check if this exact entity version was already recorded this epoch
+        if (_stampById[id] == _snapEpoch && _versionById[id] == entity.Version)
+            return;  // already recorded, keep first Old
+
+        // First write for this entity in this epoch
+        EnsureSlotCapacity();
+        var slot = _snapCount++;
+        _stampById[id] = _snapEpoch;
+        _versionById[id] = entity.Version;
+        _slotById[id] = slot + 1;
+        _dirtyList[slot] = entity;
+
+        // Capture Old
+        var oldOff = slot * _snapshotSize;
         for (var i = 0; i < _capturedTypes.Count; i++)
         {
-            // Component may not exist in this archetype (e.g. Add path where
-            // old archetype lacks the new component). Leave zeros for missing types.
             if (archetype.TryGetComponentIndex(_capturedTypes[i], out var colIdx))
             {
                 var src = archetype.GetComponentBytes(colIdx, row);
-                src.CopyTo(new Span<byte>(_snapBuffer, oldOff + _offsets[i], _typeSizes[i]));
+                src.CopyTo(new Span<byte>(_oldValues, oldOff + _offsets[i], _typeSizes[i]));
             }
-            // else: leave zeros — buffer is already zeroed from allocation
         }
-        _snapEntities.Add(entity);
-        // OnAfterWrite will write New and increment _snapCount
     }
 
     void IChangeQuery.OnAfterWrite(Entity entity, Archetype archetype, int row)
     {
         if (!_hasPrevious || _capturedTypes.Count == 0) return;
 
-        // Must mirror the filter check from OnBeforeWrite to stay in sync.
-        var cache = _cache ??= _world.Query(_filter).Advanced;
-        if (!cache.Matches(archetype)) return;
+        if (_hasFilter)
+        {
+            var cache = _cache ??= _world.Query(_filter).Advanced;
+            if (!cache.Matches(archetype)) return;
+        }
 
-        var entryBytes = _snapshotSize * 2;
-        var newOff = _snapCount * entryBytes + _snapshotSize;
+        var id = entity.Id;
+        if (id >= _stampById.Length) return;
+        if (_stampById[id] != _snapEpoch || _versionById[id] != entity.Version) return;
+
+        var slot = _slotById[id] - 1;
+
+        // Capture New (always overwrite — we want the LAST value)
+        var newOff = slot * _snapshotSize;
         for (var i = 0; i < _capturedTypes.Count; i++)
         {
             if (archetype.TryGetComponentIndex(_capturedTypes[i], out var colIdx))
             {
                 var src = archetype.GetComponentBytes(colIdx, row);
-                src.CopyTo(new Span<byte>(_snapBuffer, newOff + _offsets[i], _typeSizes[i]));
+                src.CopyTo(new Span<byte>(_newValues, newOff + _offsets[i], _typeSizes[i]));
             }
-            // else: leave zeros — component not present in this archetype
         }
-        _snapCount++;
     }
 
     void IChangeQuery.OnBeforeTransition(Entity entity, Archetype archetype, int row)
     {
         if (!_hasPrevious || _capturedTypes.Count == 0) return;
 
-        EnsureSnapBufferCapacity();
+        // Materialize-on-escape: if entity is dirty from a previous Set,
+        // read New from live storage before structural change invalidates it.
+        var id = entity.Id;
+        if (id < _stampById.Length && _stampById[id] == _snapEpoch && _versionById[id] == entity.Version)
+        {
+            var slot = _slotById[id] - 1;
+            if (_dirtyArchetypes[slot] is not null)
+            {
+                // Entity is dirty from Set — materialize New now for all captured types
+                var newOff = slot * _snapshotSize;
+                for (var t = 0; t < _capturedTypes.Count; t++)
+                {
+                    if (archetype.TryGetComponentIndex(_capturedTypes[t], out var colIdx))
+                    {
+                        var src = archetype.GetComponentBytes(colIdx, row);
+                        src.CopyTo(new Span<byte>(_newValues, newOff + _offsets[t], _typeSizes[t]));
+                    }
+                }
+                _dirtyArchetypes[slot] = null; // mark as materialized
+            }
+        }
 
-        // Write Old at (_snapCount * entryBytes)
-        var entryBytes = _snapshotSize * 2;
-        var oldOff = _snapCount * entryBytes;
+        // Structural changes always get their own entry (not per-entity dedup)
+        EnsureSlotCapacity();
+        var newSlot = _snapCount++;
+        _dirtyList[newSlot] = entity;
+
+        var oldOff = newSlot * _snapshotSize;
         for (var i = 0; i < _capturedTypes.Count; i++)
         {
-            // Old archetype may lack some captured types (e.g. Add path).
             if (archetype.TryGetComponentIndex(_capturedTypes[i], out var colIdx))
             {
                 var src = archetype.GetComponentBytes(colIdx, row);
-                src.CopyTo(new Span<byte>(_snapBuffer, oldOff + _offsets[i], _typeSizes[i]));
+                src.CopyTo(new Span<byte>(_oldValues, oldOff + _offsets[i], _typeSizes[i]));
             }
-            // else: leave zeros
         }
-        _snapEntities.Add(entity);
-        // OnTransition will write New and increment _snapCount if matched
     }
 
     void IChangeQuery.OnTransition(Entity entity, Archetype? oldArchetype, Archetype? newArchetype)
@@ -361,7 +602,6 @@ public sealed class ChangeQuery : IChangeQuery
 
         if ((!oldMatch && newMatch) || (oldMatch && !newMatch))
         {
-            // Matched: add transition entry
             TransitionCause cause;
             if (!oldMatch && newMatch)
                 cause = oldArchetype is null ? TransitionCause.Created : TransitionCause.Added;
@@ -370,9 +610,6 @@ public sealed class ChangeQuery : IChangeQuery
 
             _transitions.Add(new Transition(cause, entity));
 
-            // Capture snapshot pair only when BOTH old and new archetypes are
-            // non-null (Add or Remove). Created (old=null) and Destroyed
-            // (new=null) have no meaningful Old or New snapshot respectively.
             if (_hasPrevious && oldArchetype is not null && newArchetype is not null)
             {
                 WriteNewTransitionSnapshot(entity, newArchetype);
@@ -380,40 +617,26 @@ public sealed class ChangeQuery : IChangeQuery
         }
         else if (_hasPrevious && _capturedTypes.Count > 0)
         {
-            // Transition did NOT match filter, but we already called
-            // OnBeforeTransition which added an entity to _snapEntities.
-            // Roll back the entity list so Changes() indices stay correct.
-            if (_snapEntities.Count > 0)
-                _snapEntities.RemoveAt(_snapEntities.Count - 1);
+            // Transition did NOT match filter — roll back
+            if (_snapCount > 0)
+                _snapCount--;
         }
     }
 
     private void WriteNewTransitionSnapshot(Entity entity, Archetype newArch)
     {
-        // Old values were written by OnBeforeTransition at _snapCount * entryBytes.
-        // Now write New at _snapCount * entryBytes + _snapshotSize.
+        var slot = _snapCount - 1;
+
         var record = _world.GetRecordFast(entity);
-        var entryBytes = _snapshotSize * 2;
-        var newOff = _snapCount * entryBytes + _snapshotSize;
+        var newOff = slot * _snapshotSize;
         for (var i = 0; i < _capturedTypes.Count; i++)
         {
-            // New archetype may lack some captured types (e.g. Remove path).
             if (newArch.TryGetComponentIndex(_capturedTypes[i], out var colIdx))
             {
                 var src = newArch.GetComponentBytes(colIdx, record.RowIndex);
-                src.CopyTo(new Span<byte>(_snapBuffer, newOff + _offsets[i], _typeSizes[i]));
+                src.CopyTo(new Span<byte>(_newValues, newOff + _offsets[i], _typeSizes[i]));
             }
-            // else: leave zeros — component was removed from this entity
         }
-        _snapCount++;
-    }
-
-    private void EnsureSnapBufferCapacity()
-    {
-        var entryBytes = _snapshotSize * 2;
-        var needed = (_snapCount + 1) * entryBytes;
-        if (needed > _snapBuffer.Length)
-            Array.Resize(ref _snapBuffer, Math.Max(needed, _snapBuffer.Length * 2));
     }
 
     private static void ThrowFilterConsumed()

@@ -93,6 +93,8 @@ public sealed partial class World : IDisposable
     internal volatile int _trackingGeneration;                 // incremented on RestoreState/Dispose for cursor self-heal
     private readonly List<WeakReference<Core.IChangeQuery>> _changeQueries = new();
     private bool _anyTrackingActive;                           // world-level gate
+    internal bool _anyPreviousTrackingActive;                  // Previous() gate: skip dispatch when no snapshot query
+    internal ChangeQuery? _singlePreviousQuery;                // fast path: exactly 1 query with Previous
 
     /// <summary>
     /// Creates a world.
@@ -250,7 +252,7 @@ public sealed partial class World : IDisposable
     /// </summary>
     internal void DispatchBeforeWrite(Entity entity, Core.Archetype archetype, int row)
     {
-        if (!_anyTrackingActive) return;
+        if (!_anyTrackingActive || !_anyPreviousTrackingActive) return;
         for (var i = _changeQueries.Count - 1; i >= 0; i--)
         {
             if (_changeQueries[i].TryGetTarget(out var query))
@@ -269,7 +271,7 @@ public sealed partial class World : IDisposable
     /// </summary>
     internal void DispatchAfterWrite(Entity entity, Core.Archetype archetype, int row)
     {
-        if (!_anyTrackingActive) return;
+        if (!_anyTrackingActive || !_anyPreviousTrackingActive) return;
         for (var i = _changeQueries.Count - 1; i >= 0; i--)
         {
             if (_changeQueries[i].TryGetTarget(out var query))
@@ -349,6 +351,20 @@ public sealed partial class World : IDisposable
         if (arch._anyTrackingActive) return;
         arch._anyTrackingActive = true;
         arch._columnVersions = new long[arch._elementSizes!.Length];
+    }
+
+    /// <summary>
+    /// Signals that at least one <see cref="ChangeQuery"/> has enabled <see cref="ChangeQuery.Previous"/>.
+    /// Activates the <see cref="DispatchBeforeWrite"/>/<see cref="DispatchAfterWrite"/> hooks.
+    /// </summary>
+    internal void ActivatePreviousTracking(ChangeQuery query)
+    {
+        _anyPreviousTrackingActive = true;
+        // Fast path: track single query for inline capture
+        if (_singlePreviousQuery is null)
+            _singlePreviousQuery = query;
+        else
+            _singlePreviousQuery = null; // multiple queries — disable fast path
     }
 
     /// <summary>
@@ -1398,6 +1414,8 @@ public sealed partial class World : IDisposable
         _trackingGeneration++;
         _changeQueries.Clear();
         _anyTrackingActive = false;
+        _anyPreviousTrackingActive = false;
+        _singlePreviousQuery = null;
         foreach (var arch in _archetypes.Values)
         {
             arch._anyTrackingActive = false;

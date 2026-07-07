@@ -469,14 +469,11 @@ public class ChangeQueryFilterTests
         world.Set(e, new HP(80));
         world.Set(e, new HP(70));
 
+        // Per-entity: only first Old and last New recorded
         var cs = hp.Changes().ToList();
-        Assert.Equal(3, cs.Count);
+        Assert.Single(cs);
         Assert.Equal(100, cs[0].Old.Get<HP>().Value);
-        Assert.Equal(90, cs[0].New.Get<HP>().Value);
-        Assert.Equal(90, cs[1].Old.Get<HP>().Value);
-        Assert.Equal(80, cs[1].New.Get<HP>().Value);
-        Assert.Equal(80, cs[2].Old.Get<HP>().Value);
-        Assert.Equal(70, cs[2].New.Get<HP>().Value);
+        Assert.Equal(70, cs[0].New.Get<HP>().Value);
     }
 
     [Fact]

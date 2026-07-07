@@ -171,23 +171,17 @@ public sealed class ChangeTrackingAttackSurfaceTests
         Assert.Equal(9, cs[0].New.Get<Velocity>().Dx);
         Assert.Equal(9, cs[0].New.Get<Velocity>().Dy);
 
-        // Set both in sequence → 2 entries, no cross-contamination
+        // Set both in sequence → per-entity: 1 entry with first Old and last New
         world.Set(e, new Position(10, 10));
         world.Set(e, new Velocity(20, 20));
         cs = q.Changes().ToList();
-        Assert.Equal(2, cs.Count);
+        Assert.Single(cs);
 
         Assert.Equal(e, cs[0].Entity);
         Assert.Equal(5, cs[0].Old.Get<Position>().X);
         Assert.Equal(10, cs[0].New.Get<Position>().X);
         Assert.Equal(9, cs[0].Old.Get<Velocity>().Dx);
-        Assert.Equal(9, cs[0].New.Get<Velocity>().Dx);
-
-        Assert.Equal(e, cs[1].Entity);
-        Assert.Equal(10, cs[1].Old.Get<Position>().X);
-        Assert.Equal(10, cs[1].New.Get<Position>().X);
-        Assert.Equal(9, cs[1].Old.Get<Velocity>().Dx);
-        Assert.Equal(20, cs[1].New.Get<Velocity>().Dx);
+        Assert.Equal(20, cs[0].New.Get<Velocity>().Dx);
     }
 
     /// <summary>
@@ -377,8 +371,7 @@ public sealed class ChangeTrackingAttackSurfaceTests
 
     /// <summary>
     /// A9: Multiple Sets on the same entity without draining.
-    /// Changes() must return all entries in correct order with
-    /// proper Old→New chains across the sequence.
+    /// Per-entity: only first Old and last New recorded.
     /// </summary>
     [Fact]
     public void A9_Multiple_sets_before_drain_ordered_chain()
@@ -393,15 +386,11 @@ public sealed class ChangeTrackingAttackSurfaceTests
         world.Set(e, new HP(70));
 
         var cs = q.Changes().ToList();
-        Assert.Equal(3, cs.Count);
-        Assert.All(cs, c => Assert.Equal(e, c.Entity));
+        Assert.Single(cs);
+        Assert.Equal(e, cs[0].Entity);
 
         Assert.Equal(100, cs[0].Old.Get<HP>().Value);
-        Assert.Equal(90, cs[0].New.Get<HP>().Value);
-        Assert.Equal(90, cs[1].Old.Get<HP>().Value);
-        Assert.Equal(80, cs[1].New.Get<HP>().Value);
-        Assert.Equal(80, cs[2].Old.Get<HP>().Value);
-        Assert.Equal(70, cs[2].New.Get<HP>().Value);
+        Assert.Equal(70, cs[0].New.Get<HP>().Value);
 
         Assert.Empty(q.Changes());
     }
@@ -507,7 +496,8 @@ public sealed class ChangeTrackingAttackSurfaceTests
 
         world.Set(e, new HP(80));
         world.Set(e, new HP(60));
-        Assert.Equal(2, q.Changes().Length);
+        // Per-entity: only first Old and last New
+        Assert.Single(q.Changes());
 
         using var stream = new MemoryStream();
         WorldSnapshot.Save(stream, world);
@@ -740,15 +730,13 @@ public sealed class ChangeTrackingAttackSurfaceTests
         Assert.Equal(90, c2[0].Old.Get<HP>().Value);
         Assert.Equal(80, c2[0].New.Get<HP>().Value);
 
-        // Set 3 + Set 4 without draining
+        // Set 3 + Set 4 without draining → per-entity: 1 entry
         world.Set(e, new HP(70));
         world.Set(e, new HP(60));
         var c34 = q.Changes().ToList();
-        Assert.Equal(2, c34.Count);
+        Assert.Single(c34);
         Assert.Equal(80, c34[0].Old.Get<HP>().Value);
-        Assert.Equal(70, c34[0].New.Get<HP>().Value);
-        Assert.Equal(70, c34[1].Old.Get<HP>().Value);
-        Assert.Equal(60, c34[1].New.Get<HP>().Value);
+        Assert.Equal(60, c34[0].New.Get<HP>().Value);
 
         // Final drain: empty
         Assert.Empty(q.Changes());

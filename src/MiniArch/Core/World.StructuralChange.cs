@@ -155,9 +155,24 @@ public sealed partial class World
         var world = archetype._owner;
         if (world is not null)
         {
-            world.DispatchBeforeWrite(entity, archetype, info.RowIndex);
-            archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
-            world.DispatchAfterWrite(entity, archetype, info.RowIndex);
+            if (world._singlePreviousQuery is { } q)
+            {
+                // Fast path: inline capture, no dispatch
+                q.CaptureOld(entity, archetype, info.RowIndex);
+                archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
+                // Lazy New: read from live storage in Changes()
+            }
+            else if (world._anyPreviousTrackingActive)
+            {
+                // Slow path: dispatch for multiple queries
+                world.DispatchBeforeWrite(entity, archetype, info.RowIndex);
+                archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
+                world.DispatchAfterWrite(entity, archetype, info.RowIndex);
+            }
+            else
+            {
+                archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
+            }
             return;
         }
 
