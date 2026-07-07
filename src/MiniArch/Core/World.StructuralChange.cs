@@ -155,25 +155,8 @@ public sealed partial class World
         var world = archetype._owner;
         if (world is not null)
         {
-            // Pre-hook: capture Old values before write
             world.DispatchBeforeWrite(entity, archetype, info.RowIndex);
-
-            // Previous-value capture (old bucket path, kept for backward compat).
-            var typeId = componentType.Value;
-            var buckets = world._previousBuckets;
-            if (buckets is not null && (uint)typeId < (uint)buckets.Length && buckets[typeId] is { } b)
-            {
-                var bucket = (Core.ValueChangeBucket<T>)b;
-                var old = archetype.GetComponentRefAt<T>(componentIndex, info.RowIndex);
-                archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
-                bucket.Dispatch(entity, archetype, in old, in component);
-            }
-            else
-            {
-                archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
-            }
-
-            // Post-hook: capture New values after write (always fires)
+            archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
             world.DispatchAfterWrite(entity, archetype, info.RowIndex);
             return;
         }
@@ -212,22 +195,8 @@ public sealed partial class World
         var world = archetype._owner;
         if (world is not null)
         {
-            // Pre-hook: capture Old values before write
             world.DispatchBeforeWrite(entity, archetype, info.RowIndex);
-
-            // Previous-value capture for replay path.
-            var typeId = componentType.Value;
-            var buckets = world._previousBuckets;
-            if (buckets is not null && (uint)typeId < (uint)buckets.Length && buckets[typeId] is Core.IValueChangeBucket b && b.HasSinks)
-            {
-                b.DispatchRaw(entity, archetype, componentIndex, info.RowIndex, source);
-            }
-            else
-            {
-                archetype.WriteComponentRaw(componentIndex, info.RowIndex, source);
-            }
-
-            // Post-hook: capture New values after write (always fires)
+            archetype.WriteComponentRaw(componentIndex, info.RowIndex, source);
             world.DispatchAfterWrite(entity, archetype, info.RowIndex);
             return;
         }

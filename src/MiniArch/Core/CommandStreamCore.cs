@@ -2734,33 +2734,11 @@ public abstract class CommandStreamCore
                             fastIsChunked = arch.IsChunked;
                         }
 
-                        // Pre-hook: capture Old values before write
                         world.DispatchBeforeWrite(entry.Entity, arch, record.RowIndex);
-
-                        // Previous-value capture (bucket path).
-                        var typeId = compType.Value;
-                        var buckets = world._previousBuckets;
-                        var bucket = buckets is not null && (uint)typeId < (uint)buckets.Length
-                            ? (Core.ValueChangeBucket<T>?)buckets[typeId]
-                            : null;
-                        if (bucket is not null)
-                        {
-                            var old = arch.GetComponentRefAt<T>(fastColIdx, record.RowIndex);
-                            if (!fastIsChunked)
-                                arch.SetComponentAtFlat<T>(fastColIdx, fastByteOffset, record.RowIndex, in entry.Value);
-                            else
-                                arch.SetComponentAtTyped(fastColIdx, record.RowIndex, in entry.Value);
-                            bucket.Dispatch(entry.Entity, arch, in old, in entry.Value);
-                        }
+                        if (!fastIsChunked)
+                            arch.SetComponentAtFlat<T>(fastColIdx, fastByteOffset, record.RowIndex, in entry.Value);
                         else
-                        {
-                            if (!fastIsChunked)
-                                arch.SetComponentAtFlat<T>(fastColIdx, fastByteOffset, record.RowIndex, in entry.Value);
-                            else
-                                arch.SetComponentAtTyped(fastColIdx, record.RowIndex, in entry.Value);
-                        }
-
-                        // Post-hook: capture New values after write
+                            arch.SetComponentAtTyped(fastColIdx, record.RowIndex, in entry.Value);
                         world.DispatchAfterWrite(entry.Entity, arch, record.RowIndex);
                     }
                 }
@@ -2821,33 +2799,11 @@ public abstract class CommandStreamCore
                         lastIsChunkedMixed = arch.IsChunked;
                     }
 
-                    // Pre-hook: capture Old values before write
                     world.DispatchBeforeWrite(entry.Entity, arch, record.RowIndex);
-
-                    // Previous-value capture (bucket path).
-                    var typeId = compType.Value;
-                    var buckets = world._previousBuckets;
-                    var bucket = buckets is not null && (uint)typeId < (uint)buckets.Length
-                        ? (Core.ValueChangeBucket<T>?)buckets[typeId]
-                        : null;
-                    if (bucket is not null)
-                    {
-                        var old = arch.GetComponentRefAt<T>(lastColIdx, record.RowIndex);
-                        if (!lastIsChunkedMixed)
-                            arch.SetComponentAtFlat<T>(lastColIdx, lastByteOffsetMixed, record.RowIndex, in entry.Value);
-                        else
-                            arch.SetComponentAtTyped(lastColIdx, record.RowIndex, in entry.Value);
-                        bucket.Dispatch(entry.Entity, arch, in old, in entry.Value);
-                    }
+                    if (!lastIsChunkedMixed)
+                        arch.SetComponentAtFlat<T>(lastColIdx, lastByteOffsetMixed, record.RowIndex, in entry.Value);
                     else
-                    {
-                        if (!lastIsChunkedMixed)
-                            arch.SetComponentAtFlat<T>(lastColIdx, lastByteOffsetMixed, record.RowIndex, in entry.Value);
-                        else
-                            arch.SetComponentAtTyped(lastColIdx, record.RowIndex, in entry.Value);
-                    }
-
-                    // Post-hook: capture New values after write
+                        arch.SetComponentAtTyped(lastColIdx, record.RowIndex, in entry.Value);
                     world.DispatchAfterWrite(entry.Entity, arch, record.RowIndex);
                 }
                 else

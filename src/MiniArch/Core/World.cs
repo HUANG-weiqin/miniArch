@@ -92,7 +92,6 @@ public sealed partial class World : IDisposable
     internal long _writeEpoch;                                  // monotonic, long = no wraparound
     private readonly List<WeakReference<Core.IChangeQuery>> _changeQueries = new();
     private bool _anyTrackingActive;                           // world-level gate
-    internal Core.IValueChangeBucket?[]? _previousBuckets;     // lazily allocated on first WithPreviousValues
 
     /// <summary>
     /// Creates a world.
@@ -221,19 +220,6 @@ public sealed partial class World : IDisposable
     internal void RegisterChangeQuery(Core.IChangeQuery query)
     {
         _changeQueries.Add(new WeakReference<Core.IChangeQuery>(query));
-    }
-
-    internal Core.ValueChangeBucket<T> GetOrCreateValueChangeBucket<T>() where T : unmanaged
-    {
-        var typeId = Component<T>.ComponentType.Value;
-        if (_previousBuckets is null || typeId >= _previousBuckets.Length)
-        {
-            var newLen = _previousBuckets is null
-                ? Math.Max(typeId + 1, 4)
-                : Math.Max(typeId + 1, _previousBuckets.Length * 2);
-            Array.Resize(ref _previousBuckets, newLen);
-        }
-        return (Core.ValueChangeBucket<T>)(_previousBuckets[typeId] ??= new Core.ValueChangeBucket<T>());
     }
 
     private void AppendTransition(Entity e, Core.Archetype? old, Core.Archetype? @new)
