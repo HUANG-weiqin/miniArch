@@ -127,7 +127,7 @@ public sealed partial class World
             throw;
         }
         FinishMoveEntity(entity, info, destination!, rowIdx);
-        AppendTransition(entity, sourceArchetype, destination!);
+        if (_anyTrackingActive) AppendTransition(entity, sourceArchetype, destination!);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -200,7 +200,7 @@ public sealed partial class World
             throw;
         }
         FinishMoveEntity(entity, sourceInfo, destination, rowIdx);
-        AppendTransition(entity, sourceArchetype, destination);
+        if (_anyTrackingActive) AppendTransition(entity, sourceArchetype, destination);
     }
 
     private Archetype GetOrCreateAddDestinationArchetype(Archetype source, ComponentType componentType)
@@ -239,7 +239,7 @@ public sealed partial class World
         }
 
         MoveEntity(entity, info, destination!);
-        AppendTransition(entity, archetype, destination!);
+        if (_anyTrackingActive) AppendTransition(entity, archetype, destination!);
     }
 
 }
