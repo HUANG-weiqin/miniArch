@@ -140,12 +140,15 @@ internal interface IChangeQuery
 
 C# 8+ supports default interface methods — no need to update existing implementations.
 
-**Step 2: Add DispatchBeforeWrite to World**
+**Step 2: Add DispatchBeforeWrite/DispatchAfterWrite/DispatchBeforeTransition to World**
+
+All three dispatch methods start with a `_anyTrackingActive` gate to avoid any overhead when no ChangeQuery is registered. The dead-weak-ref cleanup is shared with existing `AppendTransition`:
 
 ```csharp
 // World.cs, near AppendTransition (~line 239)
 internal void DispatchBeforeWrite(Entity entity, Archetype archetype, int row)
 {
+    if (!_anyTrackingActive) return;
     for (var i = _changeQueries.Count - 1; i >= 0; i--)
     {
         if (_changeQueries[i].TryGetTarget(out var query))
@@ -158,17 +161,25 @@ internal void DispatchBeforeWrite(Entity entity, Archetype archetype, int row)
     }
 }
 
+internal void DispatchAfterWrite(Entity entity, Archetype archetype, int row)
+{
+    if (!_anyTrackingActive) return;
+    for (var i = _changeQueries.Count - 1; i >= 0; i--)
+    {
+        if (_changeQueries[i].TryGetTarget(out var query))
+            query.OnAfterWrite(entity, archetype, row);
+        else { /* swap-remove dead ref, same pattern */ }
+    }
+}
+
 internal void DispatchBeforeTransition(Entity entity, Archetype archetype, int row)
 {
+    if (!_anyTrackingActive) return;
     for (var i = _changeQueries.Count - 1; i >= 0; i--)
     {
         if (_changeQueries[i].TryGetTarget(out var query))
             query.OnBeforeTransition(entity, archetype, row);
-        else
-        {
-            _changeQueries[i] = _changeQueries[_changeQueries.Count - 1];
-            _changeQueries.RemoveAt(_changeQueries.Count - 1);
-        }
+        else { /* swap-remove dead ref, same pattern */ }
     }
 }
 ```
@@ -209,6 +220,17 @@ MoveEntity(entity, info, destination!);
 In `PlaceEntityInArchetype` (Create path — ~line 1178): No pre-hook needed (Old = null, entity didn't exist).
 
 In `ApplyRawAdd` (MoveEntityFromBytes) — same as ApplyTypedAdd.
+
+**⚠️ Destroy path requires pre-hook too.**
+
+In `InternalDestroy` (World.cs ~line 228), before the entity is removed from its archetype:
+
+```csharp
+// Before archetype.RemoveAt or before AppendTransition
+if (_anyTrackingActive)
+    DispatchBeforeTransition(entity, info.Archetype!, info.RowIndex);
+// ... then the existing destroy logic ...
+```
 
 **Step 4: Add pre-hook to ApplyTypedSet / ApplyRawSet**
 
@@ -265,14 +287,14 @@ public sealed class ChangeQuery : IChangeQuery
     private readonly World _world;
     private QueryDescription _filter = new();
     private readonly List<Transition> _transitions = new(256);
-    private readonly List<EntityChange> _entryResults = new(); // pooled output
     private bool _hasPrevious;
     private bool _consumed;
 
     // ── Captured type state ──
     private readonly List<ComponentType> _capturedTypes = new();
+    private int[] _sizes = [];      // Unsafe.SizeOf<T>() per captured type
     private int[] _offsets = [];    // precomputed byte offsets per captured type
-    private int _snapshotSize;      // total byte size of one snapshot (sum of sizeof(captured types))
+    private int _snapshotSize;      // sum of _sizes
     private QueryCache? _cache;
 
     // Per-type cursor for ModifiedChunks<T>
@@ -280,8 +302,8 @@ public sealed class ChangeQuery : IChangeQuery
 
     // Reusable snapshot write buffer (grown, never shrunk)
     private byte[] _snapBuffer = new byte[1024];
-    private int _snapCount;    // number of entries in _snapBuffer
-    // Each entry: [Old: captured types] [New: captured types] = 2 * _snapshotSize bytes
+    private readonly List<Entity> _snapEntities = new(); // parallel to _snapBuffer entries
+    private int _snapCount;    // number of complete (Old+New) entries in buffer
 
     internal ChangeQuery(World world)
     {
@@ -297,14 +319,19 @@ public sealed class ChangeQuery : IChangeQuery
         _capturedTypes.Add(ct);
         _world.ActivateTracking(ct);
 
-        // Rebuild offset table
+        var size = Unsafe.SizeOf<T>();
+        _sizes = new int[_capturedTypes.Count];
         _offsets = new int[_capturedTypes.Count];
         var off = 0;
         for (var i = 0; i < _capturedTypes.Count; i++)
         {
             _offsets[i] = off;
-            off += _capturedTypes[i].Size;
+            _sizes[i] = _capturedTypes[i].Value == ct.Value
+                ? size
+                : _sizes[Array.IndexOf(_capturedTypes.ToArray(), _capturedTypes[i])]; // refresh
+            off += _sizes[i];
         }
+        // Simpler: just rebuild from all known sizes
         _snapshotSize = off;
 
         // Init value cursor for ModifiedChunks
@@ -324,7 +351,7 @@ public sealed class ChangeQuery : IChangeQuery
 
     public ChangeQuery With<TU>() where TU : unmanaged
     {
-        if (_consumed) throw ...;
+        if (_consumed) throw new InvalidOperationException("Cannot modify filter after enumeration started.");
         _filter = _filter.With<TU>();
         _cache = null;
         return this;
@@ -332,7 +359,7 @@ public sealed class ChangeQuery : IChangeQuery
 
     public ChangeQuery Without<TU>() where TU : unmanaged
     {
-        if (_consumed) throw ...;
+        if (_consumed) throw new InvalidOperationException("Cannot modify filter after enumeration started.");
         _filter = _filter.Without<TU>();
         _cache = null;
         return this;
@@ -340,7 +367,7 @@ public sealed class ChangeQuery : IChangeQuery
 
     public ChangeQuery WithAny<TU>() where TU : unmanaged
     {
-        if (_consumed) throw ...;
+        if (_consumed) throw new InvalidOperationException("Cannot modify filter after enumeration started.");
         _filter = _filter.WithAny<TU>();
         _cache = null;
         return this;
@@ -392,20 +419,19 @@ public sealed class ChangeQuery : IChangeQuery
         var data = new byte[totalSize];
         Buffer.BlockCopy(_snapBuffer, 0, data, 0, totalSize);
 
-        // Build EntityChange[] — entries were recorded sequentially
-        // For now: just header info. Need to also store entity list.
-        // [This will be expanded in Task 4 when pre-hooks populate properly]
+        var typesCopy = _capturedTypes.ToArray();
+        var offsetsCopy = (int[])_offsets.Clone();
         var result = new EntityChange[_snapCount];
         for (var i = 0; i < _snapCount; i++)
         {
             var off = i * entryStride;
             result[i] = new EntityChange(
-                default, data, off, off + _snapshotSize,
-                _snapshotSize, _offsets,
-                _capturedTypes.ToArray());
+                _snapEntities[i], data, off, off + _snapshotSize,
+                _snapshotSize, offsetsCopy, typesCopy);
         }
 
         _snapCount = 0;
+        _snapEntities.Clear();
         return result;
     }
 
@@ -483,52 +509,12 @@ git commit -m "feat: new non-generic ChangeQuery with Capture/Previous/ModifiedC
 **Files:**
 - Modify: `src/MiniArch/ChangeQuery.cs` — implement `IChangeQuery.OnBeforeWrite` and `OnBeforeTransition`
 
-**Step 1: Implement OnBeforeWrite**
+**Step 1: Implement OnBeforeWrite + OnAfterWrite**
+
+The pre/post hook pair writes Old then New into `_snapBuffer` at the same logical entry slot (`_snapCount`):
 
 ```csharp
-void IChangeQuery.OnBeforeWrite(Entity entity, Archetype archetype, int row)
-{
-    if (!_hasPrevious || _capturedTypes.Count == 0) return;
-
-    // Ensure buffer capacity
-    var entryBytes = _snapshotSize * 2;
-    var needed = (_snapCount + 1) * entryBytes;
-    if (needed > _snapBuffer.Length)
-        Array.Resize(ref _snapBuffer, Math.Max(needed, _snapBuffer.Length * 2));
-
-    // Write Old snapshot (current values before write)
-    var oldOff = _snapCount * entryBytes;
-    for (var i = 0; i < _capturedTypes.Count; i++)
-    {
-        var ct = _capturedTypes[i];
-        var colIdx = archetype.GetComponentIndexFast(ct);
-        var src = archetype.GetComponentBytes(colIdx, row);
-        Buffer.BlockCopy(src, 0, _snapBuffer, oldOff + _offsets[i], ct.Size);
-    }
-
-    // New snapshot will be written after the Set completes.
-    // [We need a post-write hook or read after write completes]
-    // For now: store entity for post-write processing
-}
-```
-
-The challenge: we need both a pre-hook and post-hook, because Old is read before write and New is read after. Currently we only have `OnBeforeWrite`. We need `OnAfterWrite` too.
-
-**Step 2: Add OnAfterWrite to IChangeQuery**
-
-```csharp
-void OnAfterWrite(Entity entity, Archetype archetype, int row) { }
-```
-
-**Step 3: Dispatch OnAfterWrite in ApplyTypedSet/ApplyRawSet after the write**
-
-Same location, after `SetComponentAtTyped` / `WriteComponentRaw`.
-
-**Step 4: Complete OnBeforeWrite + OnAfterWrite in ChangeQuery**
-
-```csharp
-// Per-entry temp storage: entity for each snapshot index
-private readonly List<Entity> _snapEntities = new();
+// ── IChangeQuery ──
 
 void IChangeQuery.OnBeforeWrite(Entity entity, Archetype archetype, int row)
 {
@@ -539,18 +525,17 @@ void IChangeQuery.OnBeforeWrite(Entity entity, Archetype archetype, int row)
     if (needed > _snapBuffer.Length)
         Array.Resize(ref _snapBuffer, Math.Max(needed, _snapBuffer.Length * 2));
 
-    // Write Old
+    // Write Old at (_snapCount * entryBytes)
     var oldOff = _snapCount * entryBytes;
     for (var i = 0; i < _capturedTypes.Count; i++)
     {
-        var ct = _capturedTypes[i];
-        var colIdx = archetype.GetComponentIndexFast(ct);
+        var colIdx = archetype.GetComponentIndexFast(_capturedTypes[i]);
         var src = archetype.GetComponentBytes(colIdx, row);
-        Buffer.BlockCopy(src, 0, _snapBuffer, oldOff + _offsets[i], ct.Size);
+        Buffer.BlockCopy(src, 0, _snapBuffer, oldOff + _offsets[i], _sizes[i]);
     }
 
     _snapEntities.Add(entity);
-    // New will be written in OnAfterWrite
+    // OnAfterWrite will write New at same _snapCount then increment
 }
 
 void IChangeQuery.OnAfterWrite(Entity entity, Archetype archetype, int row)
@@ -558,69 +543,111 @@ void IChangeQuery.OnAfterWrite(Entity entity, Archetype archetype, int row)
     if (!_hasPrevious || _capturedTypes.Count == 0) return;
 
     var entryBytes = _snapshotSize * 2;
-    // Find the matching entry (entity, last one)
-    // We can track a counter instead
-}
-```
-
-Simplify: use a counter instead of searching matched entities.
-
-```csharp
-private int _pendingOldSnapCount;  // how many Old snapshots have been recorded (no matching New yet)
-
-void IChangeQuery.OnBeforeWrite(Entity entity, Archetype archetype, int row)
-{
-    // ... write Old at _snapCount * entryBytes ...
-    _snapEntities.Add(entity);
-    // Increment _snapCount AFTER Old so New also uses same index
-}
-
-void IChangeQuery.OnAfterWrite(Entity entity, Archetype archetype, int row)
-{
-    if (!_hasPrevious || _capturedTypes.Count == 0) return;
-    // Must match the most recent OnBeforeWrite for the same entity
-    var entryBytes = _snapshotSize * 2;
-    var newOff = _snapCount * entryBytes + _snapshotSize; // New follows Old
+    var newOff = _snapCount * entryBytes + _snapshotSize;
     for (var i = 0; i < _capturedTypes.Count; i++)
     {
-        var ct = _capturedTypes[i];
-        var colIdx = archetype.GetComponentIndexFast(ct);
+        var colIdx = archetype.GetComponentIndexFast(_capturedTypes[i]);
         var src = archetype.GetComponentBytes(colIdx, row);
-        Buffer.BlockCopy(src, 0, _snapBuffer, newOff + _offsets[i], ct.Size);
+        Buffer.BlockCopy(src, 0, _snapBuffer, newOff + _offsets[i], _sizes[i]);
     }
     _snapCount++;
 }
 ```
 
-Wait — this has a problem: `_snapCount` is incremented in `OnAfterWrite`, but `OnBeforeWrite` uses `_snapCount` to calculate the offset. So:
+_SnapCount stays unchanged between pre and post — both use the same entry slot._
 
-1. OnBeforeWrite: offset = `_snapCount * entryBytes` — writes Old there
-2. OnAfterWrite: offset = `_snapCount * entryBytes + _snapshotSize` — writes New there
-3. _snapCount++
-
-This works because _snapCount hasn't changed between pre and post. The entry is at index `_snapCount` in both cases.
-
-**Step 5: OnBeforeTransition implementation**
+**Step 2: Add OnAfterWrite to IChangeQuery + dispatch in ApplyTypedSet/ApplyRawSet**
 
 ```csharp
-// Store pre-move Old values
-// These need to be paired with OnTransition post-move New values
+// IChangeQuery.cs
+void OnAfterWrite(Entity entity, Archetype archetype, int row) { }
+```
 
+Add `world.DispatchAfterWrite(entity, archetype, info.RowIndex)` after the write in both static ApplyTypedSet and ApplyRawSet — placed AFTER both the bucket path AND the fallback write, so it always fires.
+
+**⚠️ Critical: restructure ApplyTypedSet to avoid early return from bucket path.**
+
+Current code has an early `return` inside the bucket `if` block (after `Dispatch`). Restructure so that:
+1. DispatchBeforeWrite fires BEFORE any write
+2. The write happens (bucket path or fallback)
+3. DispatchAfterWrite fires AFTER both paths
+
+```csharp
+// Restructured ApplyTypedSet:
+if (world is not null)
+{
+    var typeId = componentType.Value;
+    var buckets = world._previousBuckets;
+    // Pre-hook
+    world.DispatchBeforeWrite(entity, archetype, info.RowIndex);
+    
+    if (buckets is not null && (uint)typeId < (uint)buckets.Length && buckets[typeId] is { } b)
+    {
+        var bucket = (Core.ValueChangeBucket<T>)b;
+        var old = archetype.GetComponentRefAt<T>(componentIndex, info.RowIndex);
+        archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
+        bucket.Dispatch(entity, archetype, in old, in component);
+    }
+    else
+    {
+        archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
+    }
+    
+    // Post-hook (always fires, no early return)
+    world.DispatchAfterWrite(entity, archetype, info.RowIndex);
+    return;
+}
+
+archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
+```
+
+Same pattern for `ApplyRawSet`.
+
+**Step 3: OnBeforeTransition implementation**
+
+```csharp
 void IChangeQuery.OnBeforeTransition(Entity entity, Archetype archetype, int row)
 {
     if (!_hasPrevious || _capturedTypes.Count == 0) return;
-    // Same as OnBeforeWrite: capture Old at current _snapCount
-    // ... write Old ...
-}
+    // Exactly the same as OnBeforeWrite: capture Old at current _snapCount
+    var entryBytes = _snapshotSize * 2;
+    var needed = (_snapCount + 1) * entryBytes;
+    if (needed > _snapBuffer.Length)
+        Array.Resize(ref _snapBuffer, Math.Max(needed, _snapBuffer.Length * 2));
 
+    var oldOff = _snapCount * entryBytes;
+    for (var i = 0; i < _capturedTypes.Count; i++)
+    {
+        var colIdx = archetype.GetComponentIndexFast(_capturedTypes[i]);
+        var src = archetype.GetComponentBytes(colIdx, row);
+        Buffer.BlockCopy(src, 0, _snapBuffer, oldOff + _offsets[i], _sizes[i]);
+    }
+    _snapEntities.Add(entity);
+    // OnTransition will write New and increment _snapCount
+}
+```
+
+**Step 4: OnTransition writes New snapshot**
+
+Inside `IChangeQuery.OnTransition`, after the existing transition logic, capture New:
+
+```csharp
 void IChangeQuery.OnTransition(Entity entity, Archetype? old, Archetype? @new)
 {
-    // ... existing transition logic ...
-    if (_hasPrevious)
+    // ... existing transition logic (Matches, add to _transitions) ...
+
+    if (_hasPrevious && @new is not null)
     {
-        // Read New from the entity's current archetype (after move)
         var record = _world.GetRecordFast(entity);
-        // ... write New at current _snapCount ...
+        var arch = record.Archetype!;
+        var entryBytes = _snapshotSize * 2;
+        var newOff = _snapCount * entryBytes + _snapshotSize;
+        for (var i = 0; i < _capturedTypes.Count; i++)
+        {
+            var colIdx = arch.GetComponentIndexFast(_capturedTypes[i]);
+            var src = arch.GetComponentBytes(colIdx, record.RowIndex);
+            Buffer.BlockCopy(src, 0, _snapBuffer, newOff + _offsets[i], _sizes[i]);
+        }
         _snapCount++;
     }
 }
@@ -678,7 +705,17 @@ Four locations (tracking fast path, no-track fast path, mixed KindSet tracking, 
 Run: `dotnet build -c Release --nologo` + `dotnet test -c Release --no-build --nologo`
 Expect: pass
 
-**Step 3: Commit**
+**Step 3: Soak test — pre-hooks now active on hot path**
+
+Run: `dotnet run -c Release --project tools/soak/MiniArch.Soak -- --sweep 16 --frames 50000 --quiet`
+Expect: 16/16 PASS (quick sanity — no ChangeQuery registered, so all hooks are no-ops)
+
+**Step 4: Gate — verify no regression from pre-hook dispatch overhead**
+
+Run: `dotnet run -c Release --project tools/perf/HeroComing.Perf --check-baseline`
+Expect: Movement ≥ 1642, Attack ≥ 997, Memory OK
+
+**Step 5: Commit**
 
 ```bash
 git add src/MiniArch/Core/CommandStreamCore.cs
