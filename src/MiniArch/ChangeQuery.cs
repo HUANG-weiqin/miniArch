@@ -189,9 +189,15 @@ public sealed class ChangeQuery<T> : IChangeQuery where T : unmanaged
         var oldMatch = oldArchetype is { } o && cache.Matches(o);
         var newMatch = newArchetype is { } n && cache.Matches(n);
         if (!oldMatch && newMatch)
-            _transitions.Add(new Transition(TransitionKind.Entered, entity));
+        {
+            var cause = oldArchetype is null ? TransitionCause.Created : TransitionCause.Added;
+            _transitions.Add(new Transition(TransitionKind.Entered, cause, entity));
+        }
         else if (oldMatch && !newMatch)
-            _transitions.Add(new Transition(TransitionKind.Exited, entity));
+        {
+            var cause = newArchetype is null ? TransitionCause.Destroyed : TransitionCause.Removed;
+            _transitions.Add(new Transition(TransitionKind.Exited, cause, entity));
+        }
         // both match or neither match: membership unchanged -> skip
     }
 }
