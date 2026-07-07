@@ -408,4 +408,91 @@ public class ChangeQueryFilterTests
         Assert.Equal(TransitionKind.Exited, t.Kind);
         Assert.Equal(TransitionCause.Removed, t.Cause);
     }
+
+    // ── WithPreviousValues ───────────────────────────────────────────
+
+    [Fact]
+    public void PreviousValues_captures_old_and_new()
+    {
+        var world = new World();
+        var hp = world.Track<HP>().WithPreviousValues();
+        var e = world.Create(new HP(100));
+
+        world.Set(e, new HP(80));
+        var cs = hp.Changes().ToList();
+        Assert.Single(cs);
+        Assert.Equal(e, cs[0].Entity);
+        Assert.Equal(100, cs[0].OldValue.Value);  // created with 100
+        Assert.Equal(80, cs[0].NewValue.Value);   // Set to 80
+
+        world.Set(e, new HP(50));
+        cs = hp.Changes().ToList();
+        Assert.Single(cs);
+        Assert.Equal(80, cs[0].OldValue.Value);   // previous Set's new = this Set's old
+        Assert.Equal(50, cs[0].NewValue.Value);
+    }
+
+    [Fact]
+    public void Without_WithPreviousValues_no_capture()
+    {
+        var world = new World();
+        var hp = world.Track<HP>(); // no WithPreviousValues
+        var e = world.Create(new HP(100));
+
+        world.Set(e, new HP(80));
+        Assert.Empty(hp.Changes());
+    }
+
+    [Fact]
+    public void PreviousValues_auto_clears()
+    {
+        var world = new World();
+        var hp = world.Track<HP>().WithPreviousValues();
+        var e = world.Create(new HP(100));
+
+        world.Set(e, new HP(80));
+        Assert.Single(hp.Changes()); // drain + auto-clear
+        Assert.Empty(hp.Changes());  // nothing new
+
+        world.Set(e, new HP(50));
+        Assert.Single(hp.Changes()); // only the new Set
+    }
+
+    [Fact]
+    public void PreviousValues_multiple_sets_before_drain()
+    {
+        var world = new World();
+        var hp = world.Track<HP>().WithPreviousValues();
+        var e = world.Create(new HP(100));
+
+        world.Set(e, new HP(90));
+        world.Set(e, new HP(80));
+        world.Set(e, new HP(70));
+
+        var cs = hp.Changes().ToList();
+        Assert.Equal(3, cs.Count);
+        Assert.Equal(100, cs[0].OldValue.Value);
+        Assert.Equal(90, cs[0].NewValue.Value);
+        Assert.Equal(90, cs[1].OldValue.Value);
+        Assert.Equal(80, cs[1].NewValue.Value);
+        Assert.Equal(80, cs[2].OldValue.Value);
+        Assert.Equal(70, cs[2].NewValue.Value);
+    }
+
+    [Fact]
+    public void PreviousValues_with_Without_filter_respected()
+    {
+        var world = new World();
+        var hp = world.Track<HP>().Without<Dead>().WithPreviousValues();
+        var alive = world.Create(new HP(100));
+        var dead = world.Create(new HP(100));
+        world.Add(dead, new Dead());
+
+        world.Set(alive, new HP(80));  // matches {HP, !Dead} → captured
+        world.Set(dead, new HP(80));   // {HP, Dead} doesn't match → skipped
+
+        var cs = hp.Changes().ToList();
+        Assert.Single(cs);
+        Assert.Equal(alive, cs[0].Entity);
+    }
 }

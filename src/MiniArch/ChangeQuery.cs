@@ -34,15 +34,18 @@ namespace MiniArch;
 ///     foreach (ref var h in chunk.GetSpan&lt;HP&gt;())
 ///         UpdateDamageNumber(chunk.GetEntityId(ref h), h.Value);
 /// </code>
-public sealed class ChangeQuery<T> : IChangeQuery where T : unmanaged
+/// </example>
+public sealed class ChangeQuery<T> : IChangeQuery, IValueChangeSink<T> where T : unmanaged
 {
     private readonly World _world;
     private readonly ComponentType _type;
     private QueryDescription _filter;
     private readonly List<Transition> _transitions;
+    private readonly List<ValueChange<T>> _valueChanges;
     private Core.QueryCache? _cache;
     private long _valueCursor;
     private bool _consumed;
+    private bool _trackPrevious;
 
     internal ChangeQuery(World world)
     {
@@ -50,6 +53,7 @@ public sealed class ChangeQuery<T> : IChangeQuery where T : unmanaged
         _type = Component<T>.ComponentType;
         _filter = new QueryDescription().With<T>();
         _transitions = new List<Transition>(256);
+        _valueChanges = new List<ValueChange<T>>(256);
     }
 
     /// <summary>
@@ -115,6 +119,52 @@ public sealed class ChangeQuery<T> : IChangeQuery where T : unmanaged
         _filter = _filter.WithAny<TU>();
         _cache = null;
         return this;
+    }
+
+    /// <summary>
+    /// Enables per-write old-value capture. Each <see cref="World.Set{T}"/> on the tracked
+    /// type produces a <see cref="ValueChange{T}"/> record containing the value before and
+    /// after the write. The records are auto-cleared on each <see cref="Changes"/> call.
+    /// Throws <see cref="InvalidOperationException"/> if called after any enumeration.
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// var hp = world.Track&lt;HP&gt;().WithPreviousValues();
+    ///
+    /// foreach (var c in hp.Changes())
+    ///     ShowDamageNumber(c.Entity, c.OldValue.Value - c.NewValue.Value);
+    /// </code>
+    /// </example>
+    public ChangeQuery<T> WithPreviousValues()
+    {
+        if (_consumed)
+            throw new InvalidOperationException(
+                "Cannot enable previous-value tracking after enumeration has started.");
+        if (_trackPrevious) return this;
+        _trackPrevious = true;
+        _world.GetOrCreateValueChangeBucket<T>().Register(this);
+        return this;
+    }
+
+    /// <summary>
+    /// Returns the <see cref="ValueChange{T}"/> records accumulated since the last
+    /// call. Each record holds the entity, the old value before <see cref="World.Set{T}"/>,
+    /// and the new value. The internal buffer is auto-cleared after enumeration.
+    /// Returns an empty array if no changes occurred or if <see cref="WithPreviousValues"/>
+    /// was not configured.
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// foreach (var c in hp.Changes())
+    ///     AnimateDamage(c.Entity, c.OldValue.Value, c.NewValue.Value);
+    /// </code>
+    /// </example>
+    public IEnumerable<ValueChange<T>> Changes()
+    {
+        _consumed = true;
+        var result = _valueChanges.ToArray();
+        _valueChanges.Clear();
+        return result;
     }
 
     /// <summary>
@@ -199,5 +249,18 @@ public sealed class ChangeQuery<T> : IChangeQuery where T : unmanaged
             _transitions.Add(new Transition(cause, entity));
         }
         // both match or neither match: membership unchanged -> skip
+    }
+
+    // ── IValueChangeSink<T> ──────────────────────────────────────────
+
+    bool IValueChangeSink<T>.Matches(Core.Archetype archetype)
+    {
+        var cache = _cache ??= _world.Query(_filter).Advanced;
+        return cache.Matches(archetype);
+    }
+
+    void IValueChangeSink<T>.OnValueChange(Entity entity, in T oldValue, in T newValue)
+    {
+        _valueChanges.Add(new ValueChange<T>(entity, in oldValue, in newValue));
     }
 }

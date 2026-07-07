@@ -2731,10 +2731,29 @@ public abstract class CommandStreamCore
                             fastByteOffset = arch.GetColumnByteOffset(fastColIdx);
                             fastIsChunked = arch.IsChunked;
                         }
-                        if (!fastIsChunked)
-                            arch.SetComponentAtFlat<T>(fastColIdx, fastByteOffset, record.RowIndex, in entry.Value);
+
+                        // Previous-value capture.
+                        var typeId = compType.Value;
+                        var buckets = world._previousBuckets;
+                        var bucket = buckets is not null && (uint)typeId < (uint)buckets.Length
+                            ? (Core.ValueChangeBucket<T>?)buckets[typeId]
+                            : null;
+                        if (bucket is not null)
+                        {
+                            var old = arch.GetComponentRefAt<T>(fastColIdx, record.RowIndex);
+                            if (!fastIsChunked)
+                                arch.SetComponentAtFlat<T>(fastColIdx, fastByteOffset, record.RowIndex, in entry.Value);
+                            else
+                                arch.SetComponentAtTyped(fastColIdx, record.RowIndex, in entry.Value);
+                            bucket.Dispatch(entry.Entity, arch, in old, in entry.Value);
+                        }
                         else
-                            arch.SetComponentAtTyped(fastColIdx, record.RowIndex, in entry.Value);
+                        {
+                            if (!fastIsChunked)
+                                arch.SetComponentAtFlat<T>(fastColIdx, fastByteOffset, record.RowIndex, in entry.Value);
+                            else
+                                arch.SetComponentAtTyped(fastColIdx, record.RowIndex, in entry.Value);
+                        }
                     }
                 }
                 else
@@ -2789,10 +2808,29 @@ public abstract class CommandStreamCore
                         lastByteOffsetMixed = arch.GetColumnByteOffset(lastColIdx);
                         lastIsChunkedMixed = arch.IsChunked;
                     }
-                    if (!lastIsChunkedMixed)
-                        arch.SetComponentAtFlat<T>(lastColIdx, lastByteOffsetMixed, record.RowIndex, in entry.Value);
+
+                    // Previous-value capture.
+                    var typeId = compType.Value;
+                    var buckets = world._previousBuckets;
+                    var bucket = buckets is not null && (uint)typeId < (uint)buckets.Length
+                        ? (Core.ValueChangeBucket<T>?)buckets[typeId]
+                        : null;
+                    if (bucket is not null)
+                    {
+                        var old = arch.GetComponentRefAt<T>(lastColIdx, record.RowIndex);
+                        if (!lastIsChunkedMixed)
+                            arch.SetComponentAtFlat<T>(lastColIdx, lastByteOffsetMixed, record.RowIndex, in entry.Value);
+                        else
+                            arch.SetComponentAtTyped(lastColIdx, record.RowIndex, in entry.Value);
+                        bucket.Dispatch(entry.Entity, arch, in old, in entry.Value);
+                    }
                     else
-                        arch.SetComponentAtTyped(lastColIdx, record.RowIndex, in entry.Value);
+                    {
+                        if (!lastIsChunkedMixed)
+                            arch.SetComponentAtFlat<T>(lastColIdx, lastByteOffsetMixed, record.RowIndex, in entry.Value);
+                        else
+                            arch.SetComponentAtTyped(lastColIdx, record.RowIndex, in entry.Value);
+                    }
                 }
                 else
                 {

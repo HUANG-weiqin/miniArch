@@ -148,6 +148,22 @@ public sealed partial class World
                 $"Entity {entity} does not have component {typeof(T).Name}.");
         }
 
+        // Previous-value capture: read old value before write.
+        var world = archetype._owner;
+        if (world is not null)
+        {
+            var typeId = componentType.Value;
+            var buckets = world._previousBuckets;
+            if (buckets is not null && (uint)typeId < (uint)buckets.Length && buckets[typeId] is { } b)
+            {
+                var bucket = (Core.ValueChangeBucket<T>)b;
+                var old = archetype.GetComponentRefAt<T>(componentIndex, info.RowIndex);
+                archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
+                bucket.Dispatch(entity, archetype, in old, in component);
+                return;
+            }
+        }
+
         archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
     }
 
