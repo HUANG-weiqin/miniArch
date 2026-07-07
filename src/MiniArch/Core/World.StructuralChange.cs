@@ -116,6 +116,10 @@ public sealed partial class World
         }
 
         var sourceArchetype = info.Archetype!;
+
+        // Pre-hook: capture Old values before entity moves out of source archetype
+        if (_anyTrackingActive) DispatchBeforeTransition(entity, sourceArchetype, info.RowIndex);
+
         var rowIdx = MoveEntityCore(entity, info, destination!);
         try
         {
@@ -148,10 +152,13 @@ public sealed partial class World
                 $"Entity {entity} does not have component {typeof(T).Name}.");
         }
 
-        // Previous-value capture: read old value before write.
         var world = archetype._owner;
         if (world is not null)
         {
+            // Pre-hook: capture Old values before write
+            world.DispatchBeforeWrite(entity, archetype, info.RowIndex);
+
+            // Previous-value capture (old bucket path, kept for backward compat).
             var typeId = componentType.Value;
             var buckets = world._previousBuckets;
             if (buckets is not null && (uint)typeId < (uint)buckets.Length && buckets[typeId] is { } b)
@@ -160,8 +167,15 @@ public sealed partial class World
                 var old = archetype.GetComponentRefAt<T>(componentIndex, info.RowIndex);
                 archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
                 bucket.Dispatch(entity, archetype, in old, in component);
-                return;
             }
+            else
+            {
+                archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
+            }
+
+            // Post-hook: capture New values after write (always fires)
+            world.DispatchAfterWrite(entity, archetype, info.RowIndex);
+            return;
         }
 
         archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
@@ -191,18 +205,27 @@ public sealed partial class World
                 $"Entity {entity} does not have component type {componentType.Value}.");
         }
 
-        // Previous-value capture for replay path — uses pre-registered typed
-        // DispatchRaw on the bucket so T is known even from raw byte entries.
         var world = archetype._owner;
         if (world is not null)
         {
+            // Pre-hook: capture Old values before write
+            world.DispatchBeforeWrite(entity, archetype, info.RowIndex);
+
+            // Previous-value capture for replay path.
             var typeId = componentType.Value;
             var buckets = world._previousBuckets;
             if (buckets is not null && (uint)typeId < (uint)buckets.Length && buckets[typeId] is Core.IValueChangeBucket b && b.HasSinks)
             {
                 b.DispatchRaw(entity, archetype, componentIndex, info.RowIndex, source);
-                return;
             }
+            else
+            {
+                archetype.WriteComponentRaw(componentIndex, info.RowIndex, source);
+            }
+
+            // Post-hook: capture New values after write (always fires)
+            world.DispatchAfterWrite(entity, archetype, info.RowIndex);
+            return;
         }
 
         archetype.WriteComponentRaw(componentIndex, info.RowIndex, source);
@@ -265,6 +288,9 @@ public sealed partial class World
             archetype.CacheRemoveDestination(componentType, destination);
             destination!.CacheAddDestination(componentType, archetype);
         }
+
+        // Pre-hook: capture Old values before entity moves out
+        if (_anyTrackingActive) DispatchBeforeTransition(entity, archetype, info.RowIndex);
 
         MoveEntity(entity, info, destination!);
         if (_anyTrackingActive) AppendTransition(entity, archetype, destination!);

@@ -207,6 +207,10 @@ public sealed partial class World
         var info = RequireLocation(entity);
         var nextVersion = NextEntityVersion(entity);
         var arch = info.Archetype!;
+
+        // Pre-hook: capture Old values before entity is removed from storage
+        if (_anyTrackingActive) DispatchBeforeTransition(entity, arch, info.RowIndex);
+
         arch.RemoveAt(info.RowIndex, out var movedEntity);
         if (_hierarchy.HasAnyRelations(entity))
         {

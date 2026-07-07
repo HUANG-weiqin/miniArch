@@ -253,6 +253,63 @@ public sealed partial class World : IDisposable
     }
 
     /// <summary>
+    /// Dispatches OnBeforeWrite to all registered change queries.
+    /// No-op when no change query is active (world-level gate).
+    /// </summary>
+    internal void DispatchBeforeWrite(Entity entity, Core.Archetype archetype, int row)
+    {
+        if (!_anyTrackingActive) return;
+        for (var i = _changeQueries.Count - 1; i >= 0; i--)
+        {
+            if (_changeQueries[i].TryGetTarget(out var query))
+                query.OnBeforeWrite(entity, archetype, row);
+            else
+            {
+                _changeQueries[i] = _changeQueries[_changeQueries.Count - 1];
+                _changeQueries.RemoveAt(_changeQueries.Count - 1);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Dispatches OnAfterWrite to all registered change queries.
+    /// No-op when no change query is active (world-level gate).
+    /// </summary>
+    internal void DispatchAfterWrite(Entity entity, Core.Archetype archetype, int row)
+    {
+        if (!_anyTrackingActive) return;
+        for (var i = _changeQueries.Count - 1; i >= 0; i--)
+        {
+            if (_changeQueries[i].TryGetTarget(out var query))
+                query.OnAfterWrite(entity, archetype, row);
+            else
+            {
+                _changeQueries[i] = _changeQueries[_changeQueries.Count - 1];
+                _changeQueries.RemoveAt(_changeQueries.Count - 1);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Dispatches OnBeforeTransition to all registered change queries.
+    /// No-op when no change query is active (world-level gate).
+    /// </summary>
+    internal void DispatchBeforeTransition(Entity entity, Core.Archetype archetype, int row)
+    {
+        if (!_anyTrackingActive) return;
+        for (var i = _changeQueries.Count - 1; i >= 0; i--)
+        {
+            if (_changeQueries[i].TryGetTarget(out var query))
+                query.OnBeforeTransition(entity, archetype, row);
+            else
+            {
+                _changeQueries[i] = _changeQueries[_changeQueries.Count - 1];
+                _changeQueries.RemoveAt(_changeQueries.Count - 1);
+            }
+        }
+    }
+
+    /// <summary>
     /// Debug/test helper: reads the current column version for a component on an entity.
     /// Returns 0 if tracking is inactive or the entity does not have the component.
     /// </summary>
