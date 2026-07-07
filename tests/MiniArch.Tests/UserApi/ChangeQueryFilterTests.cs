@@ -352,4 +352,60 @@ public class ChangeQueryFilterTests
         ts2 = cursor2.Transitions().ToList();
         Assert.Empty(ts2);
     }
+
+    // ── TransitionCause ─────────────────────────────────────────────
+
+    [Fact]
+    public void Cause_is_Created_on_Create()
+    {
+        var world = new World();
+        var hp = world.Track<HP>();
+
+        world.Create(new HP(100));
+        var t = hp.Transitions().Single();
+        Assert.Equal(TransitionKind.Entered, t.Kind);
+        Assert.Equal(TransitionCause.Created, t.Cause);
+    }
+
+    [Fact]
+    public void Cause_is_Destroyed_on_Destroy()
+    {
+        var world = new World();
+        var hp = world.Track<HP>();
+        var e = world.Create(new HP(100));
+        hp.Transitions(); // drain
+
+        world.Destroy(e);
+        var t = hp.Transitions().Single();
+        Assert.Equal(TransitionKind.Exited, t.Kind);
+        Assert.Equal(TransitionCause.Destroyed, t.Cause);
+    }
+
+    [Fact]
+    public void Cause_is_Added_on_Add_matching_component()
+    {
+        var world = new World();
+        var hp = world.Track<HP>().With<Enemy>();
+        var e = world.Create(new HP(100)); // no Enemy yet
+        hp.Transitions(); // drain
+
+        world.Add(e, new Enemy()); // now {HP, Enemy} → matches filter
+        var t = hp.Transitions().Single();
+        Assert.Equal(TransitionKind.Entered, t.Kind);
+        Assert.Equal(TransitionCause.Added, t.Cause);
+    }
+
+    [Fact]
+    public void Cause_is_Removed_on_Remove_matching_component()
+    {
+        var world = new World();
+        var hp = world.Track<HP>();
+        var e = world.Create(new HP(100));
+        hp.Transitions(); // drain
+
+        world.Remove<HP>(e);
+        var t = hp.Transitions().Single();
+        Assert.Equal(TransitionKind.Exited, t.Kind);
+        Assert.Equal(TransitionCause.Removed, t.Cause);
+    }
 }
