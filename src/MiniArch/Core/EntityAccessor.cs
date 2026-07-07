@@ -17,13 +17,11 @@ public ref struct EntityAccessor
 {
     private readonly Archetype _archetype;
     private readonly int _row;
-    private readonly Entity _entity;
 
-    internal EntityAccessor(Archetype archetype, int row, Entity entity)
+    internal EntityAccessor(Archetype archetype, int row)
     {
         _archetype = archetype;
         _row = row;
-        _entity = entity;
     }
 
     /// <summary>
@@ -40,10 +38,9 @@ public ref struct EntityAccessor
 
     /// <summary>
     /// Writes a component value directly to the accessed entity.
-    /// Throws if the entity does not have the component.
-    /// For adding new components, use <c>CommandStream.Add&lt;T&gt;</c>.
+    /// Assumes the component already exists on the entity (i.e. is part of the
+    /// entity's archetype). For adding new components, use <c>CommandStream.Add&lt;T&gt;</c>.
     /// </summary>
-    /// <exception cref="InvalidOperationException">The entity does not have a component of type <typeparamref name="T"/>.</exception>
     /// <remarks>
     /// This method does NOT capture previous values for <see cref="ChangeQuery{T}.WithPreviousValues"/>
     /// — use <see cref="World.Set{T}"/> or CommandStream.Set when previous-value tracking is needed.
@@ -52,9 +49,6 @@ public ref struct EntityAccessor
     public void Set<T>(in T value) where T : unmanaged
     {
         var columnIndex = _archetype.GetComponentIndexFast(Component<T>.ComponentType);
-        if (columnIndex < 0)
-            throw new InvalidOperationException(
-                $"Entity {_entity} does not have component {typeof(T).Name}.");
         _archetype.SetComponentAtTyped(columnIndex, _row, in value);
     }
 
