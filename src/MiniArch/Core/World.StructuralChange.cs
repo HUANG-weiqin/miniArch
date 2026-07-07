@@ -190,9 +190,22 @@ public sealed partial class World
     internal static unsafe void ApplyRawSet(Entity entity, EntityRecord info, ComponentType componentType, byte* source)
     {
         var archetype = info.Archetype!;
-        // GetComponentIndex throws ArgumentException on missing component,
-        // matching the Submit path's mixed-kind Set behavior.
         var componentIndex = archetype.GetComponentIndex(componentType);
+
+        // Previous-value capture for replay path — uses pre-registered typed
+        // DispatchRaw on the bucket so T is known even from raw byte entries.
+        var world = archetype._owner;
+        if (world is not null)
+        {
+            var typeId = componentType.Value;
+            var buckets = world._previousBuckets;
+            if (buckets is not null && (uint)typeId < (uint)buckets.Length && buckets[typeId] is Core.IValueChangeBucket b && b.HasSinks)
+            {
+                b.DispatchRaw(entity, archetype, componentIndex, info.RowIndex, source);
+                return;
+            }
+        }
+
         archetype.WriteComponentRaw(componentIndex, info.RowIndex, source);
     }
 

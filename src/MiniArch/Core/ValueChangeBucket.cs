@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 
 namespace MiniArch.Core;
 
@@ -8,6 +9,7 @@ namespace MiniArch.Core;
 internal interface IValueChangeBucket
 {
     bool HasSinks { get; }
+    unsafe void DispatchRaw(Entity entity, Archetype archetype, int colIndex, int row, byte* source);
 }
 
 /// <summary>
@@ -40,6 +42,15 @@ internal sealed class ValueChangeBucket<T> : IValueChangeBucket where T : unmana
                 _sinks.RemoveAt(_sinks.Count - 1);
             }
         }
+    }
+
+    unsafe void IValueChangeBucket.DispatchRaw(Entity entity, Archetype archetype, int colIndex, int row, byte* source)
+    {
+        if (!HasSinks) return;
+        var old = archetype.GetComponentRefAt<T>(colIndex, row);
+        var newVal = Unsafe.ReadUnaligned<T>(source);
+        archetype.WriteComponentRaw(colIndex, row, source);
+        Dispatch(entity, archetype, in old, in newVal);
     }
 }
 
