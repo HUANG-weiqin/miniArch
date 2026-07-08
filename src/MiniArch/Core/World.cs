@@ -322,6 +322,39 @@ public sealed partial class World : IDisposable
     }
 
     /// <summary>
+    /// Creates an explicit dense shadow-diff tracker for component type
+    /// <typeparamref name="TComponent"/>, projected to <typeparamref name="TValue"/>
+    /// via <typeparamref name="TProjector"/>.
+    ///
+    /// <para>
+    /// Example usage:
+    /// <code>
+    /// var diff = world.CreateDenseValueDiff&lt;Position, int, PositionXProjector&gt;();
+    /// diff.Capture(world);
+    /// // ... mutate entities ...
+    /// var sink = new MySink();
+    /// diff.Drain(world, ref sink);
+    /// </code>
+    /// </para>
+    /// </summary>
+    /// <param name="query">Optional query filter. If null, defaults to
+    /// <c>new QueryDescription().With&lt;TComponent&gt;()</c>.
+    /// If provided, it is used as-is (no auto-add of TComponent).</param>
+    /// <param name="projector">Projector instance. Defaults to
+    /// <c>default(TProjector)</c>.</param>
+    public DenseValueDiff<TComponent, TValue, TProjector> CreateDenseValueDiff<TComponent, TValue, TProjector>(
+        QueryDescription? query = null,
+        TProjector projector = default)
+        where TComponent : unmanaged
+        where TValue : unmanaged, IEquatable<TValue>
+        where TProjector : struct, IValueProjector<TComponent, TValue>
+    {
+        AssertNotDisposed();
+        var q = query ?? new QueryDescription().With<TComponent>();
+        return new DenseValueDiff<TComponent, TValue, TProjector>(q, projector);
+    }
+
+    /// <summary>
     /// Adds a child to a parent.
     /// </summary>
     public void AddChild(Entity parent, Entity child)

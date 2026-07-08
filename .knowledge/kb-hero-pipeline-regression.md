@@ -1,8 +1,8 @@
 ---
 title: Hero Pipeline Regression Test
 module: HeroComing.Perf
-description: First-class regression gate for architecture changes — 30s timed throughput test; includes --compare-old-value-tracking (boundary-diff API vs dense/dict shadow-diff) and PipelineBenchmarkTests history reference
-updated: 2026-07-08 (boundary diff 后刷新 --compare-old-value-tracking 三路对比)
+description: First-class regression gate for architecture changes — 30s timed throughput test; includes --compare-old-value-tracking (boundary-diff API vs dense/dict shadow-diff vs explicit dense shadow-diff) and PipelineBenchmarkTests history reference
+updated: 2026-07-08 (新增 DenseValueDiff explicit diff 四路对比)
 ---
 # Hero Pipeline Regression Test
 
@@ -21,10 +21,11 @@ updated: 2026-07-08 (boundary diff 后刷新 --compare-old-value-tracking 三路
 - `--check-baseline`：读取本页阈值并作为门禁比较，低于阈值时进程返回非 0
 - `--update-baseline`：人工确认刷新基线时才写回本页，只替换 baseline/阈值区块
 - `--track-observer`：打开 `TrackValueChanges<T>()`，真实读取 `Old/New/Entity.Id` 到 checksum，避免 JIT 删除消费路径
-- `--compare-old-value-tracking`：独立对比三种 old/new 追踪策略；不能与 baseline/observer flags 组合：
+- `--compare-old-value-tracking`：独立对比四种 old/new 追踪策略；不能与 baseline/observer flags 组合：
   - `API`：`TrackValueChanges<T>()`
   - `ManualDense`：`entity.Id -> int[]` dense shadow-diff
   - `ManualDict`：`Dictionary<int,int>` shadow-diff
+  - `ExplicitDiff`：`World.CreateDenseValueDiff<TComponent,TValue,TProjector>()` 官方显式 dense shadow-diff（新增）
 
 ## 当前 baseline（2026-07-06）
 
@@ -70,28 +71,29 @@ dotnet run -c Release --project tests\MiniArch.Benchmarks -- profile-query --sce
 > - **作弊**：复用 `ModifierApplySystem` 已读取的 old value，无需自己扫描。
 > - 被用户驳回，因为可维护的比较应该代表"不能定位/拦截每个写入点"的通用代码。当前 shadow-diff 版本就是这一替代方案。
 >
-> 三策略的 `Entity.Id` / `Old` / `New` 都消费到 checksum（anti-JIT sink，值不跨策略一致）。
+> 四策略的 `Entity.Id` / `Old` / `New` 都消费到 checksum（anti-JIT sink，值不跨策略一致）。
 
-最新运行（2026-07-08，boundary diff 后，未刷新 baseline）：
+最新运行（2026-07-08，ExplicitDiff API 新增后，未刷新 baseline）：
 
-| Scenario | API rounds/s | ManualDense rounds/s | ManualDict rounds/s | API/Dense | API/Dict |
-|---|---|---|---|---|---|
-| Movement | 1595.4 | 1958.7 | 1916.9 | 0.814 | 0.832 |
-| Attack | 1003.4 | 1193.3 | 1190.8 | 0.841 | 0.843 |
+| Scenario | API rounds/s | ManualDense rounds/s | ManualDict rounds/s | ExplicitDiff rounds/s | Explicit/Dense | Explicit/Dict |
+|---|---|---|---|---|---|---|
+| Movement | 1569.8 | 1919.3 | 1859.4 | 1925.0 | 1.003 | 1.035 |
+| Attack | 977.5 | 1152.8 | 1137.9 | 1126.5 | 0.977 | 0.990 |
 
-注意：Movement 的 `changes/round` 三者都为 500。API 使用 baseline-to-current net diff；`PositionR` 的 no-op 写入不会产出变化条目。
+注意：Movement 的 `changes/round` 四者都为 500。API 使用 baseline-to-current net diff；`PositionR` 的 no-op 写入不会产出变化条目。ExplicitDiff 使用 dense shadow-diff，语义等价 ManualDense，性能达到 ≥0.977×。
 
-**结论**：API 保持在 ~0.81–0.84× `ManualDense`、~0.83–0.84× `ManualDict` 的 throughput。这说明：
+Baseline gate 同时通过（Movement 1983.4 ≥1642, Attack 1193.4 ≥997, 内存 OK），数据仅供门禁验证记录，不更新 baseline。
 
-- dict baseline 比 dense baseline 略慢，但没有数量级差距；在这两个 Hero 场景里它仍快于当前 API。
-- `TrackValueChanges<T>()` 的价值不是"必然比 shadow-diff scanner 更快"，而是：
-- **统一 API**：覆盖 `World.Set<T>`、`CommandStream.Set<T>`、`GetRef<T>` 直接写和 chunk span 直接写。
-- **Set 热路径隔离**：value tracking on/off 不改变 `Set<T>` / `CommandStream.Set<T>` 写入路径。
-- **net diff 语义**：A→B→A 自动取消，A→B→C 折叠为单条，消费端无需去重。
-- **低/零稳态分配**：预分配数组，稳态无 GC。
-- **无 no-observer 开销**：不调用时 registry 为 null；`Set<T>` 路径无 value-tracker 分支。
+**结论**：
 
-Dense / dict shadow-diff scanner 仍需要预知组件类型并管理快照生命周期，性能更高但在通用性、API 覆盖和集成成本上有代价。
+- **`ExplicitDiff`（`CreateDenseValueDiff<TComponent,TValue,TProjector>()`）达到 ManualDense 的 98–100% throughput**（Explicit/Dense 0.977–1.003），验证了官方显式 dense shadow diff 路线可行且高性能。
+- `API`（`TrackValueChanges<T>()`）仍约 0.81–0.84× ManualDense——这是 boundary diff 作为便利/透明 API 的折衷，不是性能路线。价值在于：
+  - **统一 API**：覆盖 `World.Set<T>`、`CommandStream.Set<T>`、`GetRef<T>` 直接写和 chunk span 直接写。
+  - **Set 热路径隔离**：value tracking on/off 不改变 `Set<T>` / `CommandStream.Set<T>` 写入路径。
+  - **net diff 语义**：A→B→A 自动取消，A→B→C 折叠为单条，消费端无需去重。
+  - **低/零稳态分配**：预分配数组，稳态无 GC。
+  - **无 no-observer 开销**：不调用时 registry 为 null；`Set<T>` 路径无 value-tracker 分支。
+- 需要最高吞吐的场景应使用 `CreateDenseValueDiff`（ExplicitDiff）；需要便利/自动语义的使用 `TrackValueChanges`（API）。二者独立共存。
 
 ### PipelineBenchmarkTests（历史参考，非门禁）
 

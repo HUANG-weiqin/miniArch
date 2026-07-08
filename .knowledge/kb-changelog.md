@@ -2,12 +2,28 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-07-08 (TrackValueChanges 改为 boundary diff；Set 热路径移除 value tracker 分支)
+updated: 2026-07-08 (新增 DenseValueDiff 显式 dense shadow diff API；TrackValueChanges 改为 boundary diff)
 ---
 # Knowledge Base Changelog
 
 > 这个页面只记录**重大架构变更和知识库校准事件**，供追溯。
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
+
+## 2026-07-08 DenseValueDiff explicit shadow diff API
+
+### 新增 World.CreateDenseValueDiff 显式密集 shadow diff
+
+- **价值**：提供与手写 ManualDense 等性能的官方 high-perf value diff API（实测 0.977–1.003× ManualDense，目标 ≥0.95×），解决 boundary diff（TrackValueChanges）性能不及 shadow-diff 的根本矛盾。新 API `CreateDenseValueDiff<TComponent,TValue,TProjector>(QueryDescription?, TProjector)` 返回 `DenseValueDiff`，三阶段 Capture/Drain/Clear 语义等价用户手写 pre/post dense shadow scan。
+- **实现**：`DenseValueDiff<TComponent,TValue,TProjector>` 持有 `TValue[]` 按 entity.Id 直索引的 shadow arrays；`Capture(World)` 扫描 query 填充 shadow；`Drain(World, ref TSink)` 再次扫描并调用 `IValueChangeSink<TValue>.OnChanged(entity, old, new)` 回调差异。`Clear()` 重置状态。
+- **新接口**：`IValueProjector<TComponent,TValue>`（组件→投影值）、`IValueChangeSink<TValue>`（diff 消费回调）。
+- **语义要点**：
+  - 默认 query（`null`）自动 `With<TComponent>()`；显式 query 不自动改写。
+  - 标准高性能循环是 `Capture -> Drain -> Clear`；连续 `Capture` 会先清上一轮 touched slots，避免离开 query 的旧 ID 污染新 baseline，但会多一个清理 pass。
+  - Add after Capture 可能按 default/stale slot 报 value diff；remove/destroy after Capture 不报告。
+  - 结构变化仍用 `TrackTransitions`；旧 `TrackValueChanges<T>()` 保留不动。
+- **性能路线**：从 boundary diff 转向官方 ManualDense API 化路线。需要便利/透明 API 的用 `TrackValueChanges`；需要最高吞吐的使用 `CreateDenseValueDiff`。二者独立共存。
+- **验证（2026-07-08）**：Release 全量测试通过（MiniArch.Tests 825 + HeroPipeline.Tests 5）；DenseValueDiff focused 20/20；soak 16/16 50k frames PASS。HeroComing.Perf 四路对比：Explicit/Dense 0.977–1.003，Explicit/Dict 0.990–1.035。Baseline 门禁 Movement 1983.4 / Attack 1193.4，内存 OK。
+- **新增/更新文件**：`src/MiniArch/ChangeTracking/DenseValueDiff.cs`、`src/MiniArch/ChangeTracking/IValueProjector.cs`、`src/MiniArch/ChangeTracking/IValueChangeSink.cs`；`src/MiniArch/Core/World.cs` 新增 `CreateDenseValueDiff` 入口。
 
 ## 2026-07-08 TrackValueChanges boundary diff 改造
 

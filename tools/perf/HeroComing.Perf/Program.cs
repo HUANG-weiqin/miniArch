@@ -378,12 +378,14 @@ void RunOldValueTrackingComparison()
     RunComparisonForScenario("Movement", CreateMoveRequests,
         static runtime => CreateMovementObserver(runtime),
         static runtime => CreateManualDenseMovementObserver(runtime),
-        static runtime => CreateManualDictMovementObserver(runtime));
+        static runtime => CreateManualDictMovementObserver(runtime),
+        static runtime => CreateExplicitDenseMovementObserver(runtime));
 
     RunComparisonForScenario("Attack", CreateAttackRequests,
         static runtime => CreateAttackObserver(runtime),
         static runtime => CreateManualDenseAttackObserver(runtime),
-        static runtime => CreateManualDictAttackObserver(runtime));
+        static runtime => CreateManualDictAttackObserver(runtime),
+        static runtime => CreateExplicitDenseAttackObserver(runtime));
 }
 
 void RunComparisonForScenario(
@@ -391,7 +393,8 @@ void RunComparisonForScenario(
     Action<MiniArchRuntime, List<Entity>, bool[]> createRequests,
     Func<MiniArchRuntime, TrackObserver> apiObserverFactory,
     Func<MiniArchRuntime, TrackObserver> manualDenseObserverFactory,
-    Func<MiniArchRuntime, TrackObserver> manualDictObserverFactory)
+    Func<MiniArchRuntime, TrackObserver> manualDictObserverFactory,
+    Func<MiniArchRuntime, TrackObserver> explicitDiffObserverFactory)
 {
     Console.WriteLine($">>> {name}");
     Console.WriteLine();
@@ -414,14 +417,23 @@ void RunComparisonForScenario(
         observerFactory: manualDictObserverFactory,
         displayName: $"{name}/ManualDict");
 
+    // 4) Explicit DenseValueDiff strategy — pre/post scan on its own scenario world
+    var explicitDiffResult = RunScenarioInternal(
+        name, createRequests,
+        observerFactory: explicitDiffObserverFactory,
+        displayName: $"{name}/ExplicitDiff");
+
     Console.WriteLine(
         $"  {name,-10} | {"Strategy",-12} | {"Rounds/s",10} | {"ms/round",9} | {"Rounds",7} | {"Heap Δ KB",10} | {"Changes",8} | {"Ch/Rd",7} | {"Checksum",12}");
     Console.WriteLine(new string('-', 102));
     double? apiChPerRd = null;
+    double? manualDenseThroughput = null;
+    double? explicitDiffThroughput = null;
     foreach (var (label, result) in new[] {
         ("API", apiResult),
         ("ManualDense", manualDenseResult),
-        ("ManualDict", manualDictResult) })
+        ("ManualDict", manualDictResult),
+        ("ExplicitDiff", explicitDiffResult) })
     {
         var (_, throughput, avgMs, totalRounds, heapDeltaKB, _, obs) = result;
         long changes = obs?.TotalChanges ?? 0;
@@ -429,11 +441,22 @@ void RunComparisonForScenario(
         double chPerRd = totalRounds > 0 ? (double)changes / totalRounds : 0;
         if (label == "API")
             apiChPerRd = chPerRd;
+        if (label == "ManualDense")
+            manualDenseThroughput = throughput;
+        if (label == "ExplicitDiff")
+            explicitDiffThroughput = throughput;
         Console.WriteLine(
             $"  {name,-10} | {label,-12} | {throughput,10:F1} | {avgMs,9:F3} | {totalRounds,7} | {heapDeltaKB,10:F1} | {changes,8} | {chPerRd,7:F2} | {checksum,12}");
 
         if (label != "API" && apiChPerRd.HasValue && Math.Abs(apiChPerRd.Value - chPerRd) > 0.01)
             Console.WriteLine($"  WARN: {name} changes/round differ materially (API={apiChPerRd:F2}, {label}={chPerRd:F2})");
+    }
+
+    if (manualDenseThroughput.HasValue && explicitDiffThroughput.HasValue)
+    {
+        double ratio = explicitDiffThroughput.Value / manualDenseThroughput.Value;
+        bool pass = ratio >= 0.95;
+        Console.WriteLine($"  Ratio: ExplicitDiff/ManualDense = {ratio:F3} {(pass ? "✅" : "❌")}");
     }
     Console.WriteLine("  Note: checksum is an anti-JIT-sink value, not expected to match across strategies or runs.");
     Console.WriteLine();
@@ -519,6 +542,57 @@ static TrackObserver CreateManualDictAttackObserver(MiniArchRuntime runtime)
         {
             hpTracker.BeforeRound();
         });
+}
+
+// --- Explicit DenseValueDiff observer factories ---
+
+static TrackObserver CreateExplicitDenseMovementObserver(MiniArchRuntime runtime)
+{
+    var world = runtime.World;
+    var posQDiff = world.CreateDenseValueDiff<PositionQValue, int, PositionQProjector>();
+    var posRDiff = world.CreateDenseValueDiff<PositionRValue, int, PositionRProjector>();
+
+    return TrackObserver.Create(
+        "Explicit dense diff (PositionQValue+PositionRValue)",
+        obs =>
+        {
+            var sinkQ = new ChecksumSink();
+            posQDiff.Drain(world, ref sinkQ);
+            obs.TotalChanges += sinkQ.TotalChanges;
+            obs.Checksum = HashCode.Combine(obs.Checksum, sinkQ.Checksum);
+
+            var sinkR = new ChecksumSink();
+            posRDiff.Drain(world, ref sinkR);
+            obs.TotalChanges += sinkR.TotalChanges;
+            obs.Checksum = HashCode.Combine(obs.Checksum, sinkR.Checksum);
+
+            posQDiff.Clear();
+            posRDiff.Clear();
+        },
+        () =>
+        {
+            posQDiff.Capture(world);
+            posRDiff.Capture(world);
+        });
+}
+
+static TrackObserver CreateExplicitDenseAttackObserver(MiniArchRuntime runtime)
+{
+    var world = runtime.World;
+    var hpDiff = world.CreateDenseValueDiff<CurrentHpValue, int, HpProjector>();
+
+    return TrackObserver.Create(
+        "Explicit dense diff (CurrentHpValue)",
+        obs =>
+        {
+            var sink = new ChecksumSink();
+            hpDiff.Drain(world, ref sink);
+            obs.TotalChanges += sink.TotalChanges;
+            obs.Checksum = HashCode.Combine(obs.Checksum, sink.Checksum);
+
+            hpDiff.Clear();
+        },
+        () => hpDiff.Capture(world));
 }
 
 // --- Knowledge page updater ---
@@ -797,4 +871,33 @@ file sealed class ManualDictionaryTracker<T> where T : unmanaged
     }
 
     public void Clear() => _oldValues.Clear();
+}
+
+// --- Explicit DenseValueDiff projector structs ---
+
+file readonly struct PositionQProjector : IValueProjector<PositionQValue, int>
+{
+    public int Project(in PositionQValue component) => component.Value;
+}
+
+file readonly struct PositionRProjector : IValueProjector<PositionRValue, int>
+{
+    public int Project(in PositionRValue component) => component.Value;
+}
+
+file readonly struct HpProjector : IValueProjector<CurrentHpValue, int>
+{
+    public int Project(in CurrentHpValue component) => component.Value;
+}
+
+file struct ChecksumSink : IValueChangeSink<int>
+{
+    public int TotalChanges;
+    public int Checksum;
+
+    public void OnChanged(Entity entity, int oldValue, int newValue)
+    {
+        TotalChanges++;
+        Checksum = HashCode.Combine(Checksum, entity.Id, oldValue, newValue);
+    }
 }
