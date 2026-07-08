@@ -1,5 +1,7 @@
 # 共享 per-Component 值追踪器设计
 
+> **Status 2026-07-08:** 历史中间设计。共享 per-component handle/API 保留，但这里的 dirty-log / slot 设计已被 boundary diff 取代：`ChangeTracker<T>` 保存 baseline，`.Changes` 扫描当前 world，`Set<T>` / `CommandStream.Set<T>` 不触达 value tracking。
+
 ## 现状问题分析
 
 ### 问题 1：每个 Query 单独持有 ChangeTracker，重复分配

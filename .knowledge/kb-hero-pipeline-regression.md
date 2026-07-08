@@ -1,8 +1,8 @@
 ---
 title: Hero Pipeline Regression Test
 module: HeroComing.Perf
-description: First-class regression gate for architecture changes — 30s timed throughput test; also covers PipelineBenchmarkTests (history reference)
-updated: 2026-07-06 (刷新 baseline: Movement 2052.7 / Attack 1246.8; 阈值同步)
+description: First-class regression gate for architecture changes — 30s timed throughput test; includes --compare-old-value-tracking (boundary-diff API vs dense/dict shadow-diff) and PipelineBenchmarkTests history reference
+updated: 2026-07-08 (boundary diff 后刷新 --compare-old-value-tracking 三路对比)
 ---
 # Hero Pipeline Regression Test
 
@@ -20,6 +20,11 @@ updated: 2026-07-06 (刷新 baseline: Movement 2052.7 / Attack 1246.8; 阈值同
 - 默认运行只测量并打印结果，不写 baseline
 - `--check-baseline`：读取本页阈值并作为门禁比较，低于阈值时进程返回非 0
 - `--update-baseline`：人工确认刷新基线时才写回本页，只替换 baseline/阈值区块
+- `--track-observer`：打开 `TrackValueChanges<T>()`，真实读取 `Old/New/Entity.Id` 到 checksum，避免 JIT 删除消费路径
+- `--compare-old-value-tracking`：独立对比三种 old/new 追踪策略；不能与 baseline/observer flags 组合：
+  - `API`：`TrackValueChanges<T>()`
+  - `ManualDense`：`entity.Id -> int[]` dense shadow-diff
+  - `ManualDict`：`Dictionary<int,int>` shadow-diff
 
 ## 当前 baseline（2026-07-06）
 
@@ -48,6 +53,45 @@ dotnet run -c Release --project tests\MiniArch.Benchmarks -- profile-query --sce
 已知热点路径见 `kb-cache-optimization.md` 热路径分析表 + `kb-query-invalidation.md`（`EnsureRefreshed` 快路径 vs `AppendNewArchetypes` 慢路径）。
 
 > **阈值说明**：baseline × 80% 四舍五入。随 baseline 刷新同步（当前：2052.7 × 80% ≈ 1642，1246.8 × 80% ≈ 997）。
+
+### `--compare-old-value-tracking` 设计说明（2026-07-08）
+
+这个模式用于回答两个问题：
+
+- 内建 `TrackValueChanges<T>()` 距离“同一 `Entity.Id` 模型下的最优手写 dense 方案”还有多远。
+- 如果用户不能直接依赖稠密 id，只想写更通用的 `Dictionary<int,int>` shadow-diff，API 相对这种方案如何。
+
+- **MiniArch API**：`World.TrackValueChanges<T>()` boundary diff；`Set<T>` / `CommandStream.Set<T>` 热路径不记录 old/new，`.Changes` 读取时扫描当前 world 并与 baseline 对比。
+- **ManualDense**：`ManualGenericTracker<T>` 扫描 `FrameView` 的 current values 快照，round 前后各扫一遍并在 round 后 diff 找出变化；用 `entity.Id -> int[]` dense 索引保存 old values。
+- **ManualDict**：`ManualDictionaryTracker<T>` 用同样的前后扫描流程，但 old values 存在 `Dictionary<int,int>`，代表不知道 id 稠密范围时的更通用手写方案。
+
+> **关于 slot-port manual tracker 的驳回**：之前实现了 Hero slot port 写入点记录 old/new 的版本（`ManualTrackerPort` 拦截 `IIntSlotPort.TryRead`+`Write`），该版本：
+> - **Hero 特有**：依赖 `IIntSlotPort`、`SlotKey`、`ModifierApplySystem` 的 read-before-write 模式。
+> - **作弊**：复用 `ModifierApplySystem` 已读取的 old value，无需自己扫描。
+> - 被用户驳回，因为可维护的比较应该代表"不能定位/拦截每个写入点"的通用代码。当前 shadow-diff 版本就是这一替代方案。
+>
+> 三策略的 `Entity.Id` / `Old` / `New` 都消费到 checksum（anti-JIT sink，值不跨策略一致）。
+
+最新运行（2026-07-08，boundary diff 后，未刷新 baseline）：
+
+| Scenario | API rounds/s | ManualDense rounds/s | ManualDict rounds/s | API/Dense | API/Dict |
+|---|---|---|---|---|---|
+| Movement | 1595.4 | 1958.7 | 1916.9 | 0.814 | 0.832 |
+| Attack | 1003.4 | 1193.3 | 1190.8 | 0.841 | 0.843 |
+
+注意：Movement 的 `changes/round` 三者都为 500。API 使用 baseline-to-current net diff；`PositionR` 的 no-op 写入不会产出变化条目。
+
+**结论**：API 保持在 ~0.81–0.84× `ManualDense`、~0.83–0.84× `ManualDict` 的 throughput。这说明：
+
+- dict baseline 比 dense baseline 略慢，但没有数量级差距；在这两个 Hero 场景里它仍快于当前 API。
+- `TrackValueChanges<T>()` 的价值不是"必然比 shadow-diff scanner 更快"，而是：
+- **统一 API**：覆盖 `World.Set<T>`、`CommandStream.Set<T>`、`GetRef<T>` 直接写和 chunk span 直接写。
+- **Set 热路径隔离**：value tracking on/off 不改变 `Set<T>` / `CommandStream.Set<T>` 写入路径。
+- **net diff 语义**：A→B→A 自动取消，A→B→C 折叠为单条，消费端无需去重。
+- **低/零稳态分配**：预分配数组，稳态无 GC。
+- **无 no-observer 开销**：不调用时 registry 为 null；`Set<T>` 路径无 value-tracker 分支。
+
+Dense / dict shadow-diff scanner 仍需要预知组件类型并管理快照生命周期，性能更高但在通用性、API 覆盖和集成成本上有代价。
 
 ### PipelineBenchmarkTests（历史参考，非门禁）
 

@@ -2492,8 +2492,8 @@ public static class ScenarioBenchmark
     /// Goal: track dirty entities and get Old/New values for processing.
     /// Tests two approaches at varying update densities:
     ///   Manual  = shadow array + full scan to find diffs (no API)
-    ///   Changes = ChangeQuery.ValueChanges&lt;Position&gt;() with Previous()
-    ///            — Old/New pairs, cleared via ClearChanges per tick
+    ///   Changes = TrackValueChanges&lt;Position&gt;()
+    ///            — Old/New pairs, cleared via ClearAll per tick
     /// Invoked via --modified-chunks flag in Program.cs.
     /// </summary>
     public static void RunModifiedChunksDensityBenchmark()
@@ -2516,7 +2516,7 @@ public static class ScenarioBenchmark
             // ── Variant A: Manual shadow array + full scan diff ──
             var (manualOps, manualHeap, manualGen0, manualBytes) = RunManualShadowDiff(entityCount, updateCount, ticksToRun);
 
-            // ── Variant B: ChangeQuery.ValueChanges<Position>() + ClearChanges<Position>() ──
+            // ── Variant B: TrackValueChanges<Position>() + ClearAll() ──
             var (changesOps, changesHeap, changesGen0, changesBytes) = RunChangesOldNew(entityCount, updateCount, ticksToRun);
 
             var manualKBpt = manualBytes / 1024.0 / ticksToRun;
@@ -2530,7 +2530,7 @@ public static class ScenarioBenchmark
         Console.WriteLine();
         Console.WriteLine("Both variants: same goal — find changed entities, read Old+New, compute delta.");
         Console.WriteLine("  Manual   = shadow Position[] before Set, full scan after to find diffs");
-        Console.WriteLine("  Changes  = ChangeQuery.Capture<Position>().Previous() → ValueChanges() Old/New pairs (ClearChanges per tick)");
+        Console.WriteLine("  Changes  = TrackValueChanges<Position>() → SharedValueChanges.Changes Old/New pairs (ClearAll per tick)");
 
         // Same-type consumer scaling section
         RunSameTypeConsumerScaling();
@@ -2632,9 +2632,9 @@ public static class ScenarioBenchmark
     }
 
     /// <summary>
-    /// Variant B: ChangeQuery.ValueChanges() with Previous() — typed fast path.
-    /// After Set: call ValueChanges() to get typed Old/New pairs, compute delta.
-    /// Clears via ClearChanges per tick to prevent cross-tick accumulation.
+    /// Variant B: TrackValueChanges() — typed fast path.
+    /// After Set: read SharedValueChanges.Changes to get typed Old/New pairs, compute delta.
+    /// Clears via ClearAll per tick to prevent cross-tick accumulation.
     /// Uses T[] arrays directly — no byte[] copies, matching hand-written code.
     /// </summary>
     static (double opsPerSec, long heapDeltaKB, int gen0, long bytesAllocated) RunChangesOldNew(int entityCount, int updateCount, int ticksToRun)
@@ -2644,8 +2644,8 @@ public static class ScenarioBenchmark
         for (var i = 0; i < entityCount; i++)
             entities[i] = w.Create(new Position { X = i, Y = i + 1, Z = i + 2 }, new Velocity { X = 1, Y = 0.5f });
 
-        // Set up change tracking with Previous() to capture Old/New
-        var trackQuery = w.Track().Capture<Position>().Previous();
+        // Set up value change tracking to capture Old/New
+        var positionChanges = w.TrackValueChanges<Position>();
 
         var updateIndices = new int[updateCount];
         for (var i = 0; i < updateCount; i++)
@@ -2662,8 +2662,8 @@ public static class ScenarioBenchmark
                 w.Set(entities[idx], new Position { X = i * 0.1f, Y = i * 0.2f, Z = i * 0.3f });
             }
 
-            // 2. Get Old/New pairs — typed fast path, zero-copy
-            var changes = trackQuery.ValueChanges<Position>();
+            // 2. Get Old/New pairs — zero-copy via Changes property
+            var changes = positionChanges.Changes;
             for (var i = 0; i < changes.Length; i++)
             {
                 var dx = changes[i].New.X - changes[i].Old.X;
@@ -2672,8 +2672,8 @@ public static class ScenarioBenchmark
                 checksum += (int)(dx + dy + dz);
             }
 
-            // 3. Clear before next tick (ValueChanges is non-destructive)
-            trackQuery.ClearChanges<Position>();
+            // 3. Clear before next tick (Changes is non-destructive)
+            positionChanges.ClearAll();
 
             return checksum;
         }
@@ -2705,7 +2705,7 @@ public static class ScenarioBenchmark
 
     /// <summary>
     /// Measures Set fanout cost when N queries share the same ChangeTracker&lt;T&gt;.
-    /// Creates N identical Track().Capture&lt;Position&gt;().Previous() queries,
+    /// Creates N identical TrackValueChanges&lt;Position&gt;() handles,
     /// runs the same Set workload, reads only first query to isolate fanout,
     /// and clears once per tick (shared tracker so one clear suffices).
     /// </summary>
@@ -2719,7 +2719,7 @@ public static class ScenarioBenchmark
         Console.WriteLine();
         Console.WriteLine("=== Same-Type Consumer Scaling ===");
         Console.WriteLine($"Entities: {entityCount}, Updates/tick: {updateCount}, Ticks: {ticksToRun}");
-        Console.WriteLine("Measures Set fanout cost when N Track().Capture<Position>().Previous() queries");
+        Console.WriteLine("Measures Set fanout cost when N TrackValueChanges<Position>() handles");
         Console.WriteLine("share the same shared tracker. Only first query is read; all cleared once per tick.");
         Console.WriteLine();
         Console.WriteLine($"{"Consumers",10} | {"ops/s",10} | {"KB/tick",8}");
@@ -2742,10 +2742,12 @@ public static class ScenarioBenchmark
         for (var i = 0; i < entityCount; i++)
             entities[i] = w.Create(new Position { X = i, Y = i + 1, Z = i + 2 }, new Velocity { X = 1, Y = 0.5f });
 
-        // Create N identical queries sharing the same tracker
-        var queries = new MiniArch.ChangeQuery[consumerCount];
+        // Create N identical handles sharing the same tracker
+        // In the shared model, all handles alias the same per-type tracker,
+        // so consumer count does not affect Set cost.
+        var handles = new MiniArch.SharedValueChanges<Position>[consumerCount];
         for (var i = 0; i < consumerCount; i++)
-            queries[i] = w.Track().Capture<Position>().Previous();
+            handles[i] = w.TrackValueChanges<Position>();
 
         var updateIndices = new int[updateCount];
         for (var i = 0; i < updateCount; i++)
@@ -2762,9 +2764,9 @@ public static class ScenarioBenchmark
                 w.Set(entities[idx], new Position { X = i * 0.1f, Y = i * 0.2f, Z = i * 0.3f });
             }
 
-            // Read only from first query (isolates Set fanout cost; reading all N would
-            // add O(N * changes) overhead from N ValueChanges enumerations)
-            var changes = queries[0].ValueChanges<Position>();
+            // Read from first handle; all N handles share the same tracker,
+            // so Set cost is O(1) regardless of consumer count.
+            var changes = handles[0].Changes;
             for (var i = 0; i < changes.Length; i++)
             {
                 var dx = changes[i].New.X - changes[i].Old.X;
@@ -2774,7 +2776,7 @@ public static class ScenarioBenchmark
             }
 
             // Clear once per tick; shared tracker means one Clear suffices for all N
-            queries[0].ClearChanges<Position>();
+            handles[0].ClearAll();
 
             return checksum;
         }

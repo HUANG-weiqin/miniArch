@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 健壮性审阅发现汇总——已确认的设计债、已验证的安全猜想、已排除的非 bug 猜想
-updated: 2026-07-08 (新增 shared value tracker 审阅修复：RestoreState 后观察者无需手动 re-arm)
+updated: 2026-07-08 (新增 boundary diff Replay raw Add baseline 回归修复)
 ---
 # 代码审阅发现
 
@@ -263,6 +263,15 @@ updated: 2026-07-08 (新增 shared value tracker 审阅修复：RestoreState 后
   - `SharedTrackerRegistry.ClearChanges()` 只清 pending value-change logs，保留已创建 tracker；Dispose 仍用 `Clear()` 移除 tracker 并置 null。
 - **回归测试**: `BUG_RestoreState_preserves_value_query_for_mutations_after_restore`、`BUG_RestoreState_preserves_filtered_transition_query_for_mutations_after_restore`
 - **验证**: Release 全量测试通过（MiniArch.Tests 818、HeroPipeline.Tests 5）；HeroComing.Perf baseline gate 通过（Movement 1940.1 / Attack 1189.0，内存 OK）；track-observer transitions=0、changes=0；MiniArch.Soak sweep 8/8 PASS。
+
+### B16: Replay raw Add 后同批 raw Set 漏掉 value diff baseline
+
+- **位置**: `World.StructuralChange.cs:157-168` `ApplyRawAdd` / `ChangeTracker.cs` boundary diff baseline 捕获
+- **症状**: 已存在实体在 delta replay 中先 `Add<T>(valueA)` 后 `Set<T>(valueB)`；`TrackValueChanges<T>()` 已启用时，`.Changes` 返回空，而 Submit typed path 会返回 `{ Old=valueA, New=valueB }`。
+- **根因**: boundary diff 改造后 typed Add 会 capture 初始 baseline，但 raw Replay Add 只迁移并写入 bytes；后续 raw Set 直接写当前值。读端扫描发现该 entity 无 baseline，于是把最终值 `valueB` 当作新 baseline，漏掉 Add 初值到 Set 终值的 diff。
+- **修复**: `IChangeTrackerControl` 增加 raw baseline capture；`ApplyRawAdd` 成功后按 component type 对已存在 tracker 写入 Add 初值 baseline。raw Set 与 `Set<T>` 热路径不查询 tracker。
+- **回归测试**: `BUG_Replay_existing_entity_add_then_set_tracks_value_from_add_baseline`
+- **验证**: 新增回归测试先 RED（Actual 0），修复后 GREEN。
 
 ### 修复原则
 

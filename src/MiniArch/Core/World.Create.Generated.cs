@@ -17,7 +17,7 @@ public sealed partial class World
         var componentType1 = GetComponentType<T1>();
         var archetype = GetOrCreateCreateArchetype<T1>(componentType1);
         var entity = CreateInArchetype(archetype, out var rowIndex);
-        archetype.SetComponentAtTyped(0, rowIndex, in component1);
+        SetCreatedComponent(archetype, rowIndex, componentType1, in component1);
         return entity;
     }
 
@@ -31,8 +31,8 @@ public sealed partial class World
         var componentType2 = GetComponentType<T2>();
         var archetype = GetOrCreateCreateArchetype<T1, T2>(componentType1, componentType2);
         var entity = CreateInArchetype(archetype, out var rowIndex);
-        archetype.SetComponentAtTyped(archetype.GetComponentIndexFast(componentType1), rowIndex, in component1);
-        archetype.SetComponentAtTyped(archetype.GetComponentIndexFast(componentType2), rowIndex, in component2);
+        SetCreatedComponent(archetype, rowIndex, componentType1, in component1);
+        SetCreatedComponent(archetype, rowIndex, componentType2, in component2);
         return entity;
     }
 
@@ -679,6 +679,9 @@ public sealed partial class World
     private static void SetCreatedComponent<T>(Archetype archetype, int rowIndex, ComponentType componentType, in T component) where T : unmanaged
     {
         archetype.SetComponentAtTyped(archetype.GetComponentIndexFast(componentType), rowIndex, in component);
+        var world = archetype._owner;
+        if (world?.SharedTrackers is not null)
+            world.CaptureTypedTrackerBaseline(archetype.GetEntity(rowIndex), componentType, in component);
     }
 
     private static class CreateArchetypeCache<T1>

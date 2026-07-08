@@ -91,19 +91,7 @@ public sealed partial class World : IDisposable
     // ── Change tracking ─────────────────────────────────────────────
     internal volatile int _trackingGeneration;                 // incremented on RestoreState/Dispose for cursor self-heal
     private readonly List<WeakReference<Core.IChangeQuery>> _changeQueries = new();
-    internal SharedTrackerRegistry? SharedTrackers;            // null when no observer has created a tracker; lazy-created via GetOrCreateSharedTrackers()
-
-    /// <summary>
-    /// Gets or creates the shared tracker registry. When no observer has
-    /// called <c>Previous()</c>, no registry is allocated — <see cref="SharedTrackers"/>
-    /// stays null and the fast no-track path is taken.
-    /// </summary>
-    internal SharedTrackerRegistry GetOrCreateSharedTrackers()
-    {
-        if (SharedTrackers is null)
-            SharedTrackers = new SharedTrackerRegistry();
-        return SharedTrackers;
-    }
+    internal SharedTrackerRegistry? SharedTrackers;            // null when no value tracking is armed
 
     /// <summary>
     /// Creates a world.
@@ -238,54 +226,31 @@ public sealed partial class World : IDisposable
         _changeQueries.Add(new WeakReference<Core.IChangeQuery>(query));
     }
 
-    internal void UnregisterChangeQuery(Core.IChangeQuery query)
-    {
-        for (var i = _changeQueries.Count - 1; i >= 0; i--)
-        {
-            var weakRef = _changeQueries[i];
-            if (!weakRef.TryGetTarget(out var liveQuery) || ReferenceEquals(liveQuery, query))
-            {
-                _changeQueries[i] = _changeQueries[_changeQueries.Count - 1];
-                _changeQueries.RemoveAt(_changeQueries.Count - 1);
-            }
-        }
-    }
-
-    private void ResetChangeQueriesAfterRestore()
-    {
-        for (var i = _changeQueries.Count - 1; i >= 0; i--)
-        {
-            var weakRef = _changeQueries[i];
-            if (weakRef.TryGetTarget(out var query))
-                query.OnWorldRestored(_trackingGeneration);
-            else
-            {
-                _changeQueries[i] = _changeQueries[_changeQueries.Count - 1];
-                _changeQueries.RemoveAt(_changeQueries.Count - 1);
-            }
-        }
-    }
-
     internal void ClearTypedTrackerSlots(int entityId, ComponentType? componentType = null)
     {
-        if (SharedTrackers is null) return;
+        var registry = SharedTrackers;
+        if (registry is null) return;
+
         if (componentType is not null)
-            SharedTrackers.ClearSlot(entityId, componentType.Value.Value);
+            registry.ClearSlot(entityId, componentType.Value.Value);
         else
-            SharedTrackers.ClearAllSlots(entityId);
+            registry.ClearAllSlots(entityId);
     }
 
-    /// <summary>
-    /// Clears all tracked value changes for component type <typeparamref name="T"/>.
-    /// After calling this, all queries sharing the tracker for <typeparamref name="T"/>
-    /// will see empty changes until the next Set.
-    /// </summary>
-    public void ClearChanges<T>() where T : unmanaged
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal unsafe void CaptureRawTrackerBaseline(Entity entity, ComponentType componentType, byte* source)
     {
-        AssertNotDisposed();
-        if (SharedTrackers is null) return;
-        var tracker = SharedTrackers.GetTracker<T>();
-        tracker?.Clear();
+        SharedTrackers?.CaptureBaselineRaw(entity, componentType.Value, source);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void CaptureTypedTrackerBaseline<T>(Entity entity, ComponentType componentType, in T component) where T : unmanaged
+    {
+        var registry = SharedTrackers;
+        if (registry is null || !registry.HasTracker(componentType.Value))
+            return;
+
+        registry.GetTracker<T>()?.CaptureBaseline(entity, in component);
     }
 
     private void AppendTransition(Entity e, Core.Archetype? old, Core.Archetype? @new)
@@ -305,18 +270,55 @@ public sealed partial class World : IDisposable
     }
 
     /// <summary>
-    /// Creates a multi-component change query. Register component types for value
-    /// capture via <see cref="ChangeQuery.Capture{T}"/> and configure the filter
-    /// with <c>With</c>/<c>Without</c>/<c>WithAny</c> before enumerating.
+    /// Arms boundary value tracking for component type <typeparamref name="T"/> and returns
+    /// a handle to the world-shared value diff.
+    /// <para/>
+    /// Call <see cref="SharedValueChanges{T}.Changes"/> for a non-destructive
+    /// view of current values that differ from the last baseline, and
+    /// <see cref="SharedValueChanges{T}.ClearAll"/> to move the baseline to now.
+    /// Multiple handles for the same <typeparamref name="T"/> alias the same baseline.
     /// </summary>
-    public ChangeQuery Track()
+    public SharedValueChanges<T> TrackValueChanges<T>() where T : unmanaged
     {
         AssertNotDisposed();
-        var query = new ChangeQuery(this);
-        // Registration is deferred — query.RegisterChangeQuery registers itself
-        // via EnsureTransitionRegistration when a filter (With/Without/WithAny)
-        // is configured. Capture-only without Previous is inert.
-        return query;
+        var registry = SharedTrackers;
+        if (registry is null)
+        {
+            registry = new SharedTrackerRegistry(this);
+            SharedTrackers = registry;
+        }
+
+        var tracker = registry.GetOrCreateTracker<T>(out var created);
+        tracker.PreSize(EntityCapacity - 1);
+        if (created)
+            tracker.CaptureAllBaselines();
+        return new SharedValueChanges<T>(this);
+    }
+
+    /// <summary>
+    /// Tracks structural transitions (Create/Destroy/Add/Remove) for entities
+    /// matching <paramref name="filter"/>.
+    /// <para/>
+    /// Call <see cref="TransitionLog.Transitions"/> for a non-destructive
+    /// live view, and <see cref="TransitionLog.Clear"/> to clear the log.
+    /// Each log is independent.
+    /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="filter"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="filter"/> has no components (empty filter).</exception>
+    public TransitionLog TrackTransitions(QueryDescription filter)
+    {
+        AssertNotDisposed();
+        ArgumentNullException.ThrowIfNull(filter);
+
+        if (filter.RequiredTypes.Count == 0 && filter.ExcludedTypes.Count == 0 && filter.AnyTypes.Count == 0)
+        {
+            throw new ArgumentException(
+                "TrackTransitions requires at least one component in the filter. " +
+                "Use .With<T>(), .Without<T>(), or .WithAny<T>() on the QueryDescription to specify a component.",
+                nameof(filter));
+        }
+
+        return new TransitionLog(this, filter);
     }
 
     /// <summary>
@@ -1339,8 +1341,20 @@ public sealed partial class World : IDisposable
 
         // Reset change tracking — prediction-era accumulations are stale.
         _trackingGeneration++;
-        ResetChangeQueriesAfterRestore();
-        SharedTrackers?.ClearChanges();
+        // Notify live change queries so they can self-heal and stay registered.
+        for (var i = _changeQueries.Count - 1; i >= 0; i--)
+        {
+            if (_changeQueries[i].TryGetTarget(out var query))
+                query.OnWorldRestored(_trackingGeneration);
+            else
+            {
+                // Swap-remove dead weak ref (O(1)).
+                _changeQueries[i] = _changeQueries[_changeQueries.Count - 1];
+                _changeQueries.RemoveAt(_changeQueries.Count - 1);
+            }
+        }
+
+        SharedTrackers?.ResetAll();
 
         // Recycle snapshot to the pool for the next CaptureState.
         snapshot._isRecycled = true;

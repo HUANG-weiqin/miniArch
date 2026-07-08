@@ -1,6 +1,7 @@
 # Shared Value Tracker Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **Status 2026-07-08:** Historical intermediate plan. The shared per-component handle/API survived, but the dirty-log implementation described below was superseded by boundary diff (`ChangeTracker<T>` stores baselines and `.Changes` scans current world state; `Set<T>` / `CommandStream.Set<T>` do not touch value tracking).
 
 **Goal:** 将 ChangeTracker\<T\> 从 per-query 拥有改为 world 共享，使 ValueChanges\<T\>() 变为非消耗性只读操作，添加显式 ClearChanges\<T\>() API，消除重复 Set fanout 和弱引用生命周期复杂度。
 

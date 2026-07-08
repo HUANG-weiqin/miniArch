@@ -3,7 +3,8 @@ namespace MiniArch;
 /// <summary>Indicates whether an entity entered or exited a tracked set.</summary>
 /// <example>
 /// <code>
-/// foreach (var t in hp.Transitions())
+/// var log = world.TrackTransitions(new QueryDescription().With&lt;HP&gt;());
+/// foreach (var t in log.Transitions)
 ///     if (t.Kind == TransitionKind.Entered)
 ///         SpawnHealthBar(t.Entity);
 ///     else
@@ -23,7 +24,8 @@ public enum TransitionKind
 /// </summary>
 /// <example>
 /// <code>
-/// foreach (var t in hp.Transitions())
+/// var log = world.TrackTransitions(new QueryDescription().With&lt;HP&gt;());
+/// foreach (var t in log.Transitions)
 ///     if (t.Kind == TransitionKind.Exited &amp;&amp; t.Cause == TransitionCause.Destroyed)
 ///         DestroyHealthBar(t.Entity);   // entity gone, clean up completely
 ///     else if (t.Kind == TransitionKind.Exited)
@@ -44,14 +46,14 @@ public enum TransitionCause
 
 /// <summary>
 /// A single membership change: an entity either entered or exited the set defined
-/// by the change-query's filter since the last call to <see cref="ChangeQuery.Transitions"/>.
+/// by the transition log's filter since the last call to <see cref="TransitionLog.Clear"/>.
 /// <see cref="Kind"/> is derived from <see cref="Cause"/> — use <see cref="Cause"/> for precision
 /// (e.g. distinguish <see cref="TransitionCause.Destroyed"/> from <see cref="TransitionCause.Removed"/>),
 /// or <see cref="Kind"/> for simple enter/exit checks.
 /// </summary>
 /// <example>
 /// <code>
-/// foreach (var t in hp.Transitions())
+/// foreach (var t in log.Transitions)
 ///     if (t.Cause == TransitionCause.Destroyed)
 ///         CleanUp(t.Entity);          // entity gone
 ///     else if (t.IsExited)

@@ -1,10 +1,10 @@
 namespace MiniArch;
 
 /// <summary>
-/// Typed old/new pair for a single captured component type.
-/// Used by <see cref="ChangeQuery.ValueChanges{T}"/> for zero-copy access.
+/// Old/new pair for a single component value change.
+/// Used by <see cref="SharedValueChanges{T}.Changes"/> for zero-copy access.
 /// </summary>
-public readonly struct TypedChange<T> where T : unmanaged
+public readonly struct ValueChange<T> where T : unmanaged
 {
     /// <summary>The entity whose component changed.</summary>
     public readonly Entity Entity;
@@ -15,7 +15,7 @@ public readonly struct TypedChange<T> where T : unmanaged
     /// <summary>The component value after the change.</summary>
     public readonly T New;
 
-    internal TypedChange(Entity entity, T old, T @new)
+    internal ValueChange(Entity entity, T old, T @new)
     {
         Entity = entity;
         Old = old;

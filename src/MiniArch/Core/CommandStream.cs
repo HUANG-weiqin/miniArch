@@ -42,8 +42,8 @@ public sealed class CommandStream : CommandStreamCore
     /// (Create'd but not yet Submit'd/Snapshot'd) entity, this Add is recorded
     /// in the batch buffer and folded with any other Add/Set/Remove on the same
     /// entity into the final materialized component signature. Intermediate
-    /// operations are <b>not</b> observable via <c>Changes()</c> or
-    /// <c>Transitions()</c> — only the net final state is materialized.
+    /// operations are <b>not</b> observable via <see cref="SharedValueChanges{T}.Changes"/>
+    /// or <see cref="TransitionLog.Transitions"/> — only the net final state is materialized.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Add<T>(Entity entity, T component) where T : unmanaged
@@ -63,8 +63,8 @@ public sealed class CommandStream : CommandStreamCore
     /// <para/>
     /// <b>Pending entity note:</b> Same folding semantics as <see cref="Add{T}"/>.
     /// For pending entities, multiple Set invocations are collapsed to the last
-    /// value during materialization; no intermediate <c>Changes()</c> entries
-    /// are produced.
+    /// value during materialization; no intermediate <see cref="SharedValueChanges{T}.Changes"/>
+    /// entries are produced.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Set<T>(Entity entity, T component) where T : unmanaged
@@ -85,7 +85,7 @@ public sealed class CommandStream : CommandStreamCore
     /// <b>Pending entity note:</b> Same folding semantics as <see cref="Add{T}"/>.
     /// For pending entities, Remove is recorded in the batch buffer. If the same
     /// entity was also Add'd the same type, the net effect during materialization
-    /// may eliminate the type entirely; no intermediate <c>Transitions()</c>
+    /// may eliminate the type entirely; no intermediate <see cref="TransitionLog.Transitions"/>
     /// (Entered followed by Exited) are observable.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -6,49 +6,57 @@ namespace MiniArch;
 internal interface IChangeTrackerControl
 {
     ComponentType ComponentType { get; }
-
-    void Clear();
-
     void ClearSlot(int entityId);
+    unsafe void CaptureBaselineRaw(Entity entity, byte* source);
+    void Clear();
 }
 
 /// <summary>
-/// Typed change tracker for a single component type. Uses double-buffered
-/// <see cref="TypedChange{T}"/>[] as the write log:
-///   - <see cref="ActiveLog"/> is the current-tick append log (slot-indexed).
-///   - <see cref="SpareLog"/> receives the drained buffer on swap.
-///   - <see cref="SlotByEntityPlusOne"/>[entity.Id] — 0 means clean,
-///     (slot+1) means dirty with that slot; merges IsDirty/SlotByEntity into
-///     one int[] to halve random writes on the Set hot path.
-///   - Clear() uses a single Array.Clear call instead of a per-entry loop
-///     (native memset is faster than a managed loop for this size range).
-///   - Pre-sized to entity capacity at creation; no runtime allocation in steady state.
+/// Typed boundary-diff tracker for a single component type. It keeps a
+/// per-entity baseline and scans the current world when changes are read.
+/// This keeps Set&lt;T&gt; and CommandStream.Set&lt;T&gt; completely free of value
+/// tracking work.
 /// </summary>
 internal sealed class ChangeTracker<T> : IChangeTrackerControl where T : unmanaged
 {
-    // ── Double-buffered TypedChange<T> logs ──
-    // ActiveLog: written into during current tick; swapped to SpareLog on drain.
-    internal TypedChange<T>[] ActiveLog = [];
-    internal TypedChange<T>[] SpareLog = [];
-    internal int DirtyCount;
+    private static readonly QueryDescription Query = new QueryDescription().With<T>();
 
-    // ── Merged entity-indexed array ──
-    // 0 = clean; slot+1 = dirty and the ActiveLog slot.
-    internal int[] SlotByEntityPlusOne = [];
+    private readonly World _world;
+
+    // BaselineValues[entityId] = value at last ClearAll/arming/structural add.
+    // BaselineVersions[entityId] == 0 means no baseline for that entity slot.
+    internal T[] BaselineValues = [];
+    internal int[] BaselineVersions = [];
+
+    internal ValueChange<T>[] ChangesBuffer = [];
+    internal int ChangeCount;
+
+    internal ChangeTracker(World world)
+    {
+        _world = world;
+    }
 
     ComponentType IChangeTrackerControl.ComponentType => Component<T>.ComponentType;
 
-    void IChangeTrackerControl.Clear() => Clear();
-
     void IChangeTrackerControl.ClearSlot(int entityId)
     {
-        if ((uint)entityId < (uint)SlotByEntityPlusOne.Length)
-            SlotByEntityPlusOne[entityId] = 0;
+        if ((uint)entityId < (uint)BaselineVersions.Length)
+            BaselineVersions[entityId] = 0;
+
+        ChangeCount = 0;
     }
+
+    unsafe void IChangeTrackerControl.CaptureBaselineRaw(Entity entity, byte* source)
+    {
+        var value = Unsafe.ReadUnaligned<T>(source);
+        CaptureBaseline(entity, in value);
+    }
+
+    void IChangeTrackerControl.Clear() => Clear();
 
     /// <summary>
     /// Pre-allocate all internal buffers to handle up to <paramref name="maxEntityId"/>
-    /// entities, eliminating runtime allocations during steady-state operation.
+    /// entities.
     /// </summary>
     internal void PreSize(int maxEntityId)
     {
@@ -56,71 +64,112 @@ internal sealed class ChangeTracker<T> : IChangeTrackerControl where T : unmanag
             return;
 
         var size = Math.Max(maxEntityId + 1, 64);
-        if (size <= SlotByEntityPlusOne.Length)
+        if (size <= BaselineVersions.Length)
             return;
 
-        Array.Resize(ref SlotByEntityPlusOne, size);
-        Array.Resize(ref ActiveLog, size);
-        Array.Resize(ref SpareLog, size);
+        Array.Resize(ref BaselineValues, size);
+        Array.Resize(ref BaselineVersions, size);
+        Array.Resize(ref ChangesBuffer, size);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void EnsureEntityCapacity(int maxEntityId)
     {
-        if (maxEntityId < SlotByEntityPlusOne.Length)
+        if (maxEntityId < BaselineVersions.Length)
             return;
 
-        var newSize = Math.Max(maxEntityId + 1, SlotByEntityPlusOne.Length == 0 ? 64 : SlotByEntityPlusOne.Length * 2);
-        Array.Resize(ref SlotByEntityPlusOne, newSize);
+        var newSize = Math.Max(maxEntityId + 1, BaselineVersions.Length == 0 ? 64 : BaselineVersions.Length * 2);
+        Array.Resize(ref BaselineValues, newSize);
+        Array.Resize(ref BaselineVersions, newSize);
 
-        // SpareLog may still back the span returned by the previous drain.
-        // Grow the active writer only; the spare buffer can catch up after the next swap.
-        if (ActiveLog.Length < newSize)
-            Array.Resize(ref ActiveLog, newSize);
+        if (ChangesBuffer.Length < newSize)
+            Array.Resize(ref ChangesBuffer, newSize);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void EnsureLogCapacity(int slot)
+    private void EnsureChangeCapacity(int slot)
     {
-        if (slot < ActiveLog.Length) return;
-        var newSize = Math.Max(slot + 1, ActiveLog.Length == 0 ? 64 : ActiveLog.Length * 2);
-        Array.Resize(ref ActiveLog, newSize);
+        if (slot < ChangesBuffer.Length) return;
+        var newSize = Math.Max(slot + 1, ChangesBuffer.Length == 0 ? 64 : ChangesBuffer.Length * 2);
+        Array.Resize(ref ChangesBuffer, newSize);
     }
 
     /// <summary>
-    /// Returns a read-only view of the current tick's changes.
-    /// Non-destructive: does not swap buffers or clear dirty flags.
-    /// The returned span is valid until the next Clear() call.
+    /// Captures the current value as baseline without recording a change.
+    /// Used by structural creation/addition paths so a later value mutation can
+    /// diff against the component's initial value without touching Set&lt;T&gt;.
     /// </summary>
-    internal ReadOnlySpan<TypedChange<T>> Read()
+    internal void CaptureBaseline(Entity entity, in T value)
     {
-        var count = DirtyCount;
-        if (count == 0) return ReadOnlySpan<TypedChange<T>>.Empty;
-        return new ReadOnlySpan<TypedChange<T>>(ActiveLog, 0, count);
+        EnsureEntityCapacity(entity.Id);
+        BaselineValues[entity.Id] = value;
+        BaselineVersions[entity.Id] = entity.Version;
+        ChangeCount = 0;
     }
 
     /// <summary>
-    /// Clears all dirty state: swaps buffers, resets DirtyCount,
-    /// and clears SlotByEntityPlusOne via Array.Clear (native memset).
-    /// After Clear(), Read() returns empty until the next Set.
+    /// Non-destructive read-only view of changes from baseline to current world state.
+    /// </summary>
+    internal ReadOnlySpan<ValueChange<T>> Read()
+    {
+        RebuildChanges();
+        var count = ChangeCount;
+        if (count == 0) return ReadOnlySpan<ValueChange<T>>.Empty;
+        return new ReadOnlySpan<ValueChange<T>>(ChangesBuffer, 0, count);
+    }
+
+    /// <summary>
+    /// Moves the baseline to the current world state.
     /// </summary>
     internal void Clear()
     {
-        var count = DirtyCount;
-        if (count == 0) return;
-
-        // Current write log becomes spare; spare becomes active (no data loss)
-        var drained = ActiveLog;
-        ActiveLog = SpareLog;
-        SpareLog = drained;
-
-        // Clear all SlotByEntityPlusOne entries via Array.Clear (memset).
-        // A per-dirty-entry loop would be slower due to random-access writes.
-        // The condition (count < Length) incorrectly skipped clearing when
-        // count == Length; always clear the full array for correctness.
-        Array.Clear(SlotByEntityPlusOne, 0, SlotByEntityPlusOne.Length);
-
-        DirtyCount = 0;
+        CaptureAllBaselines();
+        ChangeCount = 0;
     }
 
+    internal void CaptureAllBaselines()
+    {
+        if (BaselineVersions.Length > 0)
+            Array.Clear(BaselineVersions, 0, BaselineVersions.Length);
+
+        foreach (var chunk in _world.Query(in Query).GetChunks())
+        {
+            var values = chunk.GetSpan<T>();
+            var entities = chunk.GetEntities();
+            for (var i = 0; i < chunk.Count; i++)
+                CaptureBaseline(entities[i], in values[i]);
+        }
+    }
+
+    private void RebuildChanges()
+    {
+        ChangeCount = 0;
+        foreach (var chunk in _world.Query(in Query).GetChunks())
+        {
+            var values = chunk.GetSpan<T>();
+            var entities = chunk.GetEntities();
+            for (var i = 0; i < chunk.Count; i++)
+            {
+                var entity = entities[i];
+                ref var value = ref values[i];
+                EnsureEntityCapacity(entity.Id);
+
+                if (BaselineVersions[entity.Id] != entity.Version)
+                {
+                    BaselineValues[entity.Id] = value;
+                    BaselineVersions[entity.Id] = entity.Version;
+                    continue;
+                }
+
+                var oldValue = BaselineValues[entity.Id];
+                if (EqualityComparer<T>.Default.Equals(oldValue, value))
+                    continue;
+
+                var slot = ChangeCount;
+                EnsureChangeCapacity(slot);
+                ChangesBuffer[slot] = new ValueChange<T>(entity, oldValue, value);
+                ChangeCount++;
+            }
+        }
+    }
 }

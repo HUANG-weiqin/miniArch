@@ -1,54 +1,53 @@
-using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 
 namespace MiniArch.Core;
 
 /// <summary>
 /// World-owned registry of ChangeTracker&lt;T&gt; instances.
-/// One tracker per component type; shared by all ChangeQuery consumers.
+/// One tracker per component type; shared by all consumers.
 /// Uses Component&lt;T&gt;.ComponentType.Value as a dense index.
 /// Non-thread-safe (matches World's threading model).
 /// </summary>
 internal sealed class SharedTrackerRegistry
 {
+    private readonly World _world;
+
     // Growable array indexed by componentType.Value.
     // null = no tracker for that type.
     private IChangeTrackerControl?[] _trackers = new IChangeTrackerControl?[32];
 
-    // Fast-path: true when at least one tracker exists. Avoids the array
-    // access and type lookup in GetTracker<T> when no tracking is active.
-    internal bool _hasTrackers;
+    internal IChangeTrackerControl?[] RawArray => _trackers;
+
+    internal SharedTrackerRegistry(World world)
+    {
+        _world = world;
+    }
 
     /// <summary>
-    /// Read-only check for whether any tracker exists at all.
-    /// When false, no component type has a tracker, so callers can
-    /// skip the generic GetTracker&lt;T&gt;() call entirely.
+    /// Returns true if any tracker exists for the given type id.
     /// </summary>
-    internal bool HasAnyTrackers => _hasTrackers;
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool HasTracker(int typeId)
+    {
+        return (uint)typeId < (uint)_trackers.Length && _trackers[typeId] is not null;
+    }
 
-    // ── Single tracker API ──────────────────────────────────────────
-
+    /// <summary>
+    /// Gets the typed tracker for T, or null if no tracker exists.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ChangeTracker<T>? GetTracker<T>() where T : unmanaged
     {
-        if (!_hasTrackers) return null;
         var typeId = Component<T>.ComponentType.Value;
         if ((uint)typeId < (uint)_trackers.Length)
-        {
-            var tracker = _trackers[typeId];
-            if (tracker is not null)
-                return Unsafe.As<ChangeTracker<T>>(tracker);
-        }
+            return _trackers[typeId] as ChangeTracker<T>;
         return null;
     }
 
     /// <summary>
-    /// Gets or creates the shared <see cref="ChangeTracker{T}"/> for component type T.
-    /// When <paramref name="entityCapacity"/> is positive, the tracker is pre-sized
-    /// to handle entity IDs up to <c>entityCapacity - 1</c>, eliminating the initial
-    /// growth allocations on first Set.
+    /// Gets or creates a tracker for T.
     /// </summary>
-    internal ChangeTracker<T> GetOrCreateTracker<T>(int entityCapacity = -1) where T : unmanaged
+    internal ChangeTracker<T> GetOrCreateTracker<T>(out bool created) where T : unmanaged
     {
         var typeId = Component<T>.ComponentType.Value;
         if ((uint)typeId >= (uint)_trackers.Length)
@@ -56,57 +55,58 @@ internal sealed class SharedTrackerRegistry
 
         if (_trackers[typeId] is ChangeTracker<T> existing)
         {
-            if (entityCapacity > 0)
-                existing.PreSize(entityCapacity - 1);
-            _hasTrackers = true;
+            created = false;
             return existing;
         }
 
-        var tracker = new ChangeTracker<T>();
+        var tracker = new ChangeTracker<T>(_world);
         _trackers[typeId] = tracker;
-        _hasTrackers = true;
-
-        // Pre-size to avoid initial growth on first Set
-        if (entityCapacity > 0)
-            tracker.PreSize(entityCapacity - 1);
-
+        created = true;
         return tracker;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal bool HasTracker(int typeId)
-    {
-        return (uint)typeId < (uint)_trackers.Length && _trackers[typeId] is not null;
-    }
-
-    // ── Lifecycle ───────────────────────────────────────────────────
+    internal ChangeTracker<T> GetOrCreateTracker<T>() where T : unmanaged
+        => GetOrCreateTracker<T>(out _);
 
     /// <summary>
-    /// Clears all trackers. Called on Dispose and RestoreState.
+    /// Resets all trackers by moving baselines to current world state.
+    /// Keeps trackers alive for post-restore mutations. Used by RestoreState.
     /// </summary>
-    internal void Clear()
-    {
-        Array.Clear(_trackers, 0, _trackers.Length);
-        _hasTrackers = false;
-    }
-
-    /// <summary>
-    /// Clears pending value-change logs but keeps tracker registrations alive.
-    /// Used by RestoreState so existing queries keep observing mutations that
-    /// happen immediately after rollback.
-    /// </summary>
-    internal void ClearChanges()
+    internal void ResetAll()
     {
         for (var i = 0; i < _trackers.Length; i++)
             _trackers[i]?.Clear();
     }
 
+    /// <summary>
+    /// Clears all tracker references (used by Dispose).
+    /// </summary>
+    internal void Clear()
+    {
+        Array.Clear(_trackers, 0, _trackers.Length);
+    }
+
+    /// <summary>
+    /// Clears the slot for entityId in the tracker for the given component type.
+    /// </summary>
     internal void ClearSlot(int entityId, int typeId)
     {
         if ((uint)typeId < (uint)_trackers.Length && _trackers[typeId] is { } tracker)
             tracker.ClearSlot(entityId);
     }
 
+    /// <summary>
+    /// Captures a raw component value as the baseline for an existing tracker.
+    /// </summary>
+    internal unsafe void CaptureBaselineRaw(Entity entity, int typeId, byte* source)
+    {
+        if ((uint)typeId < (uint)_trackers.Length && _trackers[typeId] is { } tracker)
+            tracker.CaptureBaselineRaw(entity, source);
+    }
+
+    /// <summary>
+    /// Clears the slot for entityId in all trackers.
+    /// </summary>
     internal void ClearAllSlots(int entityId)
     {
         for (var i = 0; i < _trackers.Length; i++)

@@ -959,7 +959,8 @@ public sealed class TrickyEdgeCaseTests
         Assert.Throws<ObjectDisposedException>(() => world.RemoveChild(default));
         Assert.Throws<ObjectDisposedException>(() => world.Has<Position>(default));
         Assert.Throws<ObjectDisposedException>(() => world.TryGetParent(default, out _));
-        Assert.Throws<ObjectDisposedException>(() => world.Track());
+        Assert.Throws<ObjectDisposedException>(() => world.TrackValueChanges<Position>());
+        Assert.Throws<ObjectDisposedException>(() => world.TrackTransitions(new QueryDescription().With<Position>()));
     }
 #endif
 }

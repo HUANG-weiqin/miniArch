@@ -2,36 +2,76 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-07-08 (Change Tracking shared value tracker + RestoreState observer continuity)
+updated: 2026-07-08 (TrackValueChanges 改为 boundary diff；Set 热路径移除 value tracker 分支)
 ---
 # Knowledge Base Changelog
 
 > 这个页面只记录**重大架构变更和知识库校准事件**，供追溯。
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
 
+## 2026-07-08 TrackValueChanges boundary diff 改造
 
-## 2026-07-08 Change Tracking shared value tracker
+### 值变更改为 baseline-to-current 扫描
 
-- **ValueChanges<T>() 语义改为非破坏性读**：读取不再自动 drain / clear；用户必须调用 `ChangeQuery.ClearChanges<T>()` 或 `World.ClearChanges<T>()` 显式清空 dirty log。
-- **World-owned per-component shared tracker**：同一个 world + component type 只有一个 `ChangeTracker<T>`；多个相同 `Track().Capture<T>().Previous()` query 共享同一 log，`Set<T>` 不再随 consumer 数 fanout。
-- **no-tracking fast path 恢复为 lazy/null**：`SharedTrackerRegistry` 不再由 `World` 构造时常驻分配；只有 `Previous()` value observer 创建 tracker 时才 lazy 创建。capture-only/no `Previous()`/no filter query 不注册 transitions、不创建 tracker。该修复将 HeroComing no-observer Movement 从约 1836 恢复到约 1941。
+- **价值**：`TrackValueChanges<T>()` 保持 public API 不变，但内部不再在 `World.Set<T>()` / `CommandStream.Set<T>()` 热路径记录 old/new。`.Changes` 读取时扫描当前 world，与 per-entity baseline 对比，返回 net diff。
+- **语义升级**：因为追踪的是 baseline 与当前值差异，而不是 Set 调用日志，`GetRef<T>` 直接写和 chunk span 直接写现在也会被捕获。
+- **生命周期**：`TrackValueChanges<T>()` 首次创建 tracker 时捕获当前 baseline；`ClearAll()` 推进 baseline；Create/Add 初始值作为 baseline；Remove/Destroy 清对应 baseline。Replay raw Add 成功后也 capture baseline，确保同批 Add→Set 输出 `{ Old=AddValue, New=SetValue }`。
+- **新增/更新测试**：`TrackValueChanges_captures_GetRef_direct_write`、`TrackValueChanges_captures_chunk_span_direct_write`、`BUG_Replay_existing_entity_add_then_set_tracks_value_from_add_baseline`。
+- **性能目标**：tracking off/on 不改变 `Set<T>` / `CommandStream.Set<T>` 写入路径；读取成本移动到 `.Changes` / `.ClearAll()` 的 O(拥有 T 的实体数) 扫描。Hero 对比数据见 `kb-hero-pipeline-regression.md`。
+
+## 2026-07-08 Net value diff 语义 + swap-remove cancelation（中间方案，已被 boundary diff 取代）
+
+### 值变更语义改为 net value diff
+
+- **价值**：`TrackValueChanges<T>()` 现在报告 net 值变动而非 `Set<T>` 调用日志：
+  - A→A：无条目（no-op skip，已在之前的 TEMP 实验中验证，正式化）。
+  - A→B→C：只有一条 `{ Old=A, New=C }`（已有行为不变）。
+  - A→B→A：条目被 swap-remove 取消（**新增**，等价于无变更）。
+- **实现**：在 `RecordValueChange` 的 repeat-Set 路径中，当 latest `New` 等于 first `Old` 时执行 O(1) swap-remove：清当前 entity slot，将最后 dirty 条目移入空位并更新被移 entity 的 slot 指针，`DirtyCount--`。
+- **新增测试**：
+  - `TrackValueChanges_ignores_noop_set`：A→A 无条目（此前已通过 TEMP skip，正式确认）。
+  - `TrackValueChanges_removes_change_when_value_returns_to_original`：A→B→A 条目取消。
+  - `TrackValueChanges_revert_via_CommandStream`：CommandStream 路径的 revert 取消。
+  - `TrackValueChanges_partial_revert_keeps_other_entities`：一个 entity revert 不影响其他 entity 的条目。
+- **验证（2026-07-08）**：全量测试通过（MiniArch.Tests 797 → 801），Hero 门禁通过，GameTickSim 无退化。
+
+## 2026-07-08 Breaking-change 公共 API 重设计 + shared value tracker
+
+### 公共 API 重设计（breaking change）
+
+- **旧 API 全部移除**：`World.Track()`、`ChangeQuery`、`Capture<T>()`、`Previous()`、`ChangeQuery.ValueChanges<T>()`、`ChangeQuery.ClearChanges<T>()`、`World.ClearChanges<T>()`。
+- **`TypedChange<T>` 重命名为 `ValueChange<T>`**。
+- **新 API 入口**：
+  - `World.TrackValueChanges<T>()` → `SharedValueChanges<T>`：值变更。`.Changes`（非破坏性读 span）、`.ClearAll()`（清空 world-shared log）。
+  - `World.TrackTransitions(QueryDescription filter)` → `TransitionLog`：结构变更。`.Transitions`（非破坏性读 span）、`.Clear()`（清空本 log）。filter 非空，空则抛 `ArgumentException`。
+- **API 简化目标**：取消暧昧的 `Track().Capture<T>().Previous()` 链式调用，替换为两个意图清晰的独立入口。value 不再依赖 query/capture/filter 组合自动化转型。
+- **源文件变更**：删除 `ChangeQuery.cs`、`TypedChange.cs`；新增 `SharedValueChanges.cs`、`TransitionLog.cs`、`ValueChange.cs`。
+- **内部运行模型不变**：仍使用 world-shared per-type `ChangeTracker<T>`（lazy/null `SharedTrackerRegistry`）、per-TrackTransitions `List<Transition>` + `IChangeQuery.OnTransition` dispatch。性能零回归。
+- **测试迁移**：所有旧 API 测试迁移到新 API；新增 `ValueChangeLogTests` 覆盖 `TrackValueChanges<T>` 语义；`TransitionLogTests` 覆盖 `TrackTransitions` 语义。Perf harness 同步（`HeroComing.Perf --track-observer` 改为 `TrackValueChanges<T>()`；`GameTickSim.Perf modified-chunks` 改用 `TrackValueChanges<Position>()`）。
+- **验证（2026-07-08，数值由 boss 最终确认）**：Release 全量测试通过（MiniArch.Tests N=?、HeroPipeline.Tests 5）；HeroComing.Perf 门禁通过（Movement ≥1642 / Attack ≥997，内存 OK）；`--track-observer` 稳定；MiniArch.Soak sweep 8/8 PASS。
+
+### Shared value tracker 运行模型（旧条目，保留历史——此处 API 名为旧版 Capture/Previous，非最终 TrackValueChanges/Changes/ClearAll）
+
+- **`Changes` 语义改为非破坏性读**（当时称 `ValueChanges<T>()`）：读取不再自动 drain / clear；用户必须显式清空 dirty log。
+- **World-owned per-component shared tracker**：同一个 world + component type 只有一个 `ChangeTracker<T>`；多个 handle 共享同一 log，`Set<T>` 不再随 consumer 数 fanout。
+- **no-tracking fast path 恢复为 lazy/null**：`SharedTrackerRegistry` 不再由 `World` 构造时常驻分配；只有需要 old-value observer 创建 tracker 时才 lazy 创建。无 tracker 的场景不注册 transitions、不创建 tracker。该修复将 HeroComing no-observer Movement 从约 1836 恢复到约 1941。
 - **热路径收敛**：`SharedTrackerRegistry.GetTracker<T>()` 按 `ComponentType.Value` 直索引；`CommandStream.Set` 只在该组件类型存在 shared tracker 时走 typed tracking，否则保持 no-track fast path。
-- **正确性补强**：新增/更新测试覆盖 `.Previous().Capture<T>()` 顺序、query 类型隔离、query-level clear 不越权、world-level clear disposed guard、RestoreState 清 stale tracker、destroy/id reuse 不串脏、shared tracker 复用后按最新 world capacity 补 pre-size。
-- **RestoreState observer 连续性修复**：旧 query 是 live cursor，rollback 后不应要求用户先读一次来 re-arm；因此 RestoreState 改为清空 prediction-era changes 但保留 transition 注册和 shared value tracker，使第一批 post-restore mutation 也被捕获。
-- **Perf harness 同步**：`GameTickSim.Perf --modified-chunks` 改为每 tick `ClearChanges<T>()`，并新增 1/2/8 同类型 consumer scaling；`HeroComing.Perf --track-observer` 改为 capture-only/no `Previous()`，因为 Hero observer 不使用 old value。
+- **正确性补强**：新增/更新测试覆盖 handle 生命周期顺序、类型隔离、clear 不越权、disposed guard、RestoreState 清 stale tracker、destroy/id reuse 不串脏、shared tracker 复用后按最新 world capacity 补 pre-size。
+- **RestoreState observer 连续性修复**：旧 handle 是 live cursor，rollback 后不应要求用户先读一次来 re-arm；因此 RestoreState 改为清空 prediction-era changes 但保留 transition 注册和 shared value tracker，使第一批 post-restore mutation 也被捕获。
+- **Perf harness 同步**：`GameTickSim.Perf --modified-chunks` 改为每 tick `ClearAll()`，并新增 1/2/8 同类型 consumer scaling；`HeroComing.Perf --track-observer` 改为不含 old-value 读取（只读 Entity.Id 到 checksum）。
 - **验证**：Release 全量测试通过（MiniArch.Tests 818、HeroPipeline.Tests 5）；最终 HeroComing.Perf 门禁 no-observer Movement 1940.1 / Attack 1189.0（阈值 1642 / 997，内存 OK），capture-only observer Movement 1924.5 / Attack 1156.6，transitions=0、changes=0；MiniArch.Soak sweep 8/8 PASS；GameTickSim modified-chunks 跑完。
 
 
-## 2026-07-06 新增 Change Tracking 知识库
+## 2026-07-06 新增 Change Tracking 知识库（旧版 API：Track/ChangeQuery/Capture/Previous）
 
-- **新增 Change Tracking 子系统知识页**：`kb-change-tracking.md`，覆盖 `Track<T>` / `ChangeQuery<T>` / `ModifiedChunks` / `Transitions`。per-(archetype,column) long 版本号 + old→new signature transition log。Get=read/Set=write 契约。tracking-off 零回归（门禁绿）。详见 `kb-change-tracking.md`，设计决策见 `kb-design-rationale.md` §2.11，push-event 误判见 §3.10。
+- **新增 Change Tracking 子系统知识页**：`kb-change-tracking.md`，覆盖变更追踪核心概念。Get=read/Set=write 契约。tracking-off 零回归（门禁绿）。详见 `kb-change-tracking.md`，设计决策见 `kb-design-rationale.md` §2.11，push-event 误判见 §3.10。
 - **`kb-design-rationale.md`** §2 新增 2.11 Change Tracking 子系统决策，§3 新增 3.10 push-event 误判（原 3.10 防御性检查顺移至 3.11），front matter 日期同步更新。
 - **`INDEX.md`** 模块地图新增 MiniArch.Core Change Tracking 行，快速入口新增"反应式 / 变更追踪"区。
 - **`kb-changelog.md`** 本条目。
 
-## 2026-07-06 ChangeQuery\<T\> fluent filter（With/Without/WithAny）
+## 2026-07-06 ChangeQuery\<T\> fluent filter（旧版 ChangeQuery\<T\>，现被 TransitionLog 取代）
 
-- **ChangeQuery\<T\> 增加 fluent filter（With/Without/WithAny）**：支持复合签名变更追踪。`QueryCache.Matches` 改 `internal`。Transitions 语义从"组件有无"升级为"签名匹配集进出"。详见 `kb-change-tracking.md`。
+- **ChangeQuery\<T\> 增加 fluent filter（With/Without/WithAny）**（旧版 API，已由 `TrackTransitions(QueryDescription)` + `TransitionLog` 取代）：支持复合签名变更追踪。`QueryCache.Matches` 改 `internal`。Transitions 语义从"组件有无"升级为"签名匹配集进出"。详见 `kb-change-tracking.md`。
 
 ## 2026-07-06 long cursor + ClearTransitionLog — 服务器长运行安全
 
@@ -257,13 +297,13 @@ Apply advisor 轮次审阅发现，补充 3 项：
 - **ComponentMask 扩展为 512-bit**（8 × `ulong`），覆盖 component id 0..511 的快速匹配
 - **新增分段存储模式**：Archetype 超过阈值后自动切换为多 Segment 模式（详见 `kb-chunk-storage.md`）
 
-## 2026-07-06 transition log 重构：per-ChangeQuery 私有 + dispatch via IChangeQuery.OnTransition
+## 2026-07-06 transition log 重构（旧版 ChangeQuery，最终 API 为 TrackTransitions + TransitionLog）
 
-- **transition log 从 World 共享重构为 per-ChangeQuery 私有**：每个 `ChangeQuery<T>` 持有自己的 `List<Transition>`。World 在结构操作时通过 `IChangeQuery.OnTransition` 将变更 dispatch 到所有注册的 query（`List<WeakReference<IChangeQuery>>`），每个 query 独立 filter 后存入自己的 log。
+- **transition log 从 World 共享重构为 per-ChangeQuery 私有**（旧版 API，已由 `TrackTransitions(QueryDescription)` + `TransitionLog` 取代）：每个 `ChangeQuery<T>` 持有自己的 `List<Transition>`。World 在结构操作时通过 `IChangeQuery.OnTransition` 将变更 dispatch 到所有注册的 query（`List<WeakReference<IChangeQuery>>`），每个 query 独立 filter 后存入自己的 log。
 - **Entered/Exited 在 dispatch 时确定**（不在消费时）：预过滤，log 只存匹配的 `Transition`（12B/条），不存全量 `TransitionEntry`。
-- **Transitions() auto-clear**：drain 时 `ToArray()` + `List.Clear()` 复用内部数组，零 GC。无需 `ClearTransitionLog()`。
+- **Transitions() auto-clear**（旧版 API，现为 `.Transitions` 属性非破坏性读 + 显式 `.Clear()`）：drain 时 `ToArray()` + `List.Clear()` 复用内部数组，零 GC。无需 `ClearTransitionLog()`。
 - **TransitionEntry 删除**：旧 `(Entity, OldArchetype?, NewArchetype?)` 不再需要——Entered/Exited 在 dispatch 时已确定，不再存储 old/new archetype。
-- **ClearTransitionLog() 删除**：每个 query 自管 log，drain 即 clear，无需 world 级协调。
+- **ClearTransitionLog() 删除**：每个 log 自管 buffer，drain 即 clear，无需 world 级协调。
 - **服务器长运行安全 by design**：log 以 "drain 后清零" 为界，不再 "全 World 共享单调增长"。
 
 

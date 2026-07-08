@@ -1,4 +1,3 @@
-using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -25,26 +24,19 @@ public sealed partial class World
     public void Set<T>(Entity entity, T component) where T : unmanaged
     {
         AssertNotDisposed();
-        var componentType = GetComponentType<T>();
-        ApplyTypedSetFast(entity, componentType, in component);
+        ApplyTypedSetFast(entity, GetComponentType<T>(), in component);
     }
 
     /// <summary>
-    /// Fast-path Set that inlines entity validation and component lookup into a
-    /// single <see cref="MethodImplOptions.AggressiveInlining"/> method, avoiding
-    /// the intermediate call chain (RequireLocation → static ApplyTypedSet) and
-    /// their throw paths that prevent JIT inlining.
-    /// Throws are delegated to a <see cref="MethodImplOptions.NoInlining"/> helper
-    /// so the JIT sees the hot path as throw-free and inlines it aggressively.
+    /// Direct hot path for World.Set&lt;T&gt;. Value tracking is boundary-diff based,
+    /// so this path only validates and writes the component cell.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void ApplyTypedSetFast<T>(Entity entity, ComponentType componentType, in T component) where T : unmanaged
     {
-        var eid = entity.Id;
-        AssertValidEntityId(eid, entity);
-        // Unsafe.Add avoids the bounds check that _records[eid] would insert;
-        // AssertValidEntityId already guarantees eid is in range.
-        ref var record = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_records), eid);
+        var id = entity.Id;
+        AssertValidEntityId(id, entity);
+        ref var record = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_records), id);
         if (!record.IsOccupied || record.Version != entity.Version)
             ThrowStaleEntity(entity);
 
@@ -53,16 +45,9 @@ public sealed partial class World
             ThrowComponentNotFound<T>(entity);
 
         ref var cell = ref archetype.GetComponentRefAt<T>(componentIndex, record.RowIndex);
-
-        // Single tracker (null when no observer has created one)
-        var tracker = SharedTrackers?.GetTracker<T>();
-        if (tracker is not null)
-            RecordTypedChange(tracker, entity, eid, ref cell, in component);
-
         cell = component;
     }
 
-    [DoesNotReturn]
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void ThrowComponentNotFound<T>(Entity entity)
     {
@@ -172,6 +157,7 @@ public sealed partial class World
             throw;
         }
         FinishMoveEntity(entity, info, destination!, rowIdx);
+        CaptureTypedTrackerBaseline(entity, componentType, in component);
         AppendTransition(entity, sourceArchetype, destination!);
     }
 
@@ -193,84 +179,7 @@ public sealed partial class World
                 $"Entity {entity} does not have component {typeof(T).Name}.");
         }
 
-        var world = archetype._owner;
-        if (world is not null)
-        {
-            ref var cell = ref archetype.GetComponentRefAt<T>(componentIndex, info.RowIndex);
-            var id = entity.Id;
-
-            // Direct tracker lookup via shared registry — O(1), no list iteration.
-            // Null when no observer has created a tracker — matches no-observer fast path.
-            var tracker = world.SharedTrackers?.GetTracker<T>();
-            if (tracker is not null)
-                RecordTypedChange(tracker, entity, id, ref cell, in component);
-
-            // Write component value
-            cell = component;
-            return;
-        }
-
         archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
-    }
-
-    /// <summary>
-    /// Overload used by <see cref="CommandStreamCore.ComponentStore{T}.ApplyToWorld"/> when
-    /// the tracker has already been fetched once outside the inner loop. Skips the
-    /// redundant <see cref="SharedTrackerRegistry.GetTracker{T}"/> call.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static void ApplyTypedSet<T>(Entity entity, EntityRecord info, ComponentType componentType, in T component, ChangeTracker<T>? tracker) where T : unmanaged
-    {
-        var archetype = info.Archetype!;
-
-        if (!archetype.TryGetComponentIndex(componentType, out var componentIndex))
-        {
-            throw new InvalidOperationException(
-                $"Entity {entity} does not have component {typeof(T).Name}.");
-        }
-
-        var world = archetype._owner;
-        if (world is not null)
-        {
-            ref var cell = ref archetype.GetComponentRefAt<T>(componentIndex, info.RowIndex);
-            var id = entity.Id;
-
-            if (tracker is not null)
-                RecordTypedChange(tracker, entity, id, ref cell, in component);
-
-            // Write component value
-            cell = component;
-            return;
-        }
-
-        archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static void RecordTypedChange<T>(ChangeTracker<T> typedTracker, Entity entity, int entityId, ref T cell, in T component)
-        where T : unmanaged
-    {
-        typedTracker.EnsureEntityCapacity(entityId);
-
-        ref var slotPlusOne = ref MemoryMarshal.GetArrayDataReference(typedTracker.SlotByEntityPlusOne);
-        ref var localSlot = ref Unsafe.Add(ref slotPlusOne, entityId);
-        if (localSlot == 0)
-        {
-            var slot = typedTracker.DirtyCount;
-
-            // Lazy grow slot-indexed ActiveLog (rare path; ~once at startup).
-            if ((uint)slot >= (uint)typedTracker.ActiveLog.Length)
-                typedTracker.EnsureLogCapacity(slot);
-
-            typedTracker.ActiveLog[slot] = new TypedChange<T>(entity, cell, component);
-            localSlot = slot + 1;
-            typedTracker.DirtyCount++;
-            return;
-        }
-
-        // Repeat Set same tick: keep Old from first capture, update New.
-        var existing = typedTracker.ActiveLog[localSlot - 1];
-        typedTracker.ActiveLog[localSlot - 1] = new TypedChange<T>(entity, existing.Old, component);
     }
 
     // Raw-byte paths: ReplayCore dispatches Add/Set ops here.
@@ -286,6 +195,7 @@ public sealed partial class World
 
         var destination = GetOrCreateAddDestinationArchetype(archetype, componentType);
         MoveEntityFromBytes(entity, info, destination, componentType, source);
+        CaptureRawTrackerBaseline(entity, componentType, source);
     }
 
     internal static unsafe void ApplyRawSet(Entity entity, EntityRecord info, ComponentType componentType, byte* source)
