@@ -2505,20 +2505,22 @@ public static class ScenarioBenchmark
         Console.WriteLine($"Entities: {entityCount}, Ticks: {ticksToRun}, Densities: 1%, 10%, 50%, 100%");
         Console.WriteLine("Goal: track dirty entities, read Old+New values, compute delta.");
         Console.WriteLine();
-        Console.WriteLine($"{"Density",8} | {"Manual",10} | {"Changes",10} | {"C/M",8} | {"GC M",5} | {"GC C",4}");
-        Console.WriteLine(new string('-', 60));
+        Console.WriteLine($"{"Density",8} | {"Manual",10} | {"Changes",10} | {"C/M",8} | {"Alloc M",8} | {"Alloc C",8}");
+        Console.WriteLine(new string('-', 75));
 
         foreach (var density in densities)
         {
             var updateCount = Math.Max(1, (int)(entityCount * density));
 
             // ── Variant A: Manual shadow array + full scan diff ──
-            var (manualOps, manualHeap, manualGen0) = RunManualShadowDiff(entityCount, updateCount, ticksToRun);
+            var (manualOps, manualHeap, manualGen0, manualBytes) = RunManualShadowDiff(entityCount, updateCount, ticksToRun);
 
             // ── Variant B: ChangeQuery.DrainChanges() with Previous() ──
-            var (changesOps, changesHeap, changesGen0) = RunChangesOldNew(entityCount, updateCount, ticksToRun);
+            var (changesOps, changesHeap, changesGen0, changesBytes) = RunChangesOldNew(entityCount, updateCount, ticksToRun);
 
-            Console.WriteLine($"{density,7:P0} | {manualOps,10:F0} | {changesOps,10:F0} | {changesOps/manualOps,7:F2}x | {manualGen0,5} | {changesGen0,4}");
+            var manualKBpt = manualBytes / 1024.0 / ticksToRun;
+            var changesKBpt = changesBytes / 1024.0 / ticksToRun;
+            Console.WriteLine($"{density,7:P0} | {manualOps,10:F0} | {changesOps,10:F0} | {changesOps/manualOps,7:F2}x | {manualKBpt,8:F2} | {changesKBpt,8:F2}");
 
             GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
             GC.WaitForPendingFinalizers();
@@ -2536,7 +2538,7 @@ public static class ScenarioBenchmark
     /// On Set: capture old to shadow, add to dirty list.
     /// After Set: iterate dirty list, read current, compute delta.
     /// </summary>
-    static (double opsPerSec, long heapDeltaKB, int gen0) RunManualShadowDiff(int entityCount, int updateCount, int ticksToRun)
+    static (double opsPerSec, long heapDeltaKB, int gen0, long bytesAllocated) RunManualShadowDiff(int entityCount, int updateCount, int ticksToRun)
     {
         using var w = new MiniWorld();
         var entities = new MiniArch.Entity[entityCount];
@@ -2608,19 +2610,21 @@ public static class ScenarioBenchmark
         GC.WaitForPendingFinalizers();
         var baselineHeap = GC.GetTotalMemory(true);
         var gen0Base = GC.CollectionCount(0);
+        var allocBefore = GC.GetAllocatedBytesForCurrentThread();
 
         var sw = Stopwatch.StartNew();
         for (var i = 0; i < ticksToRun; i++) Tick();
         sw.Stop();
 
         var opsPerSec = ticksToRun / sw.Elapsed.TotalSeconds;
+        var bytesAllocated = GC.GetAllocatedBytesForCurrentThread() - allocBefore;
 
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         GC.WaitForPendingFinalizers();
         var heapDeltaKB = (GC.GetTotalMemory(true) - baselineHeap) / 1024;
         var gen0 = GC.CollectionCount(0) - gen0Base;
 
-        return (opsPerSec, heapDeltaKB, gen0);
+        return (opsPerSec, heapDeltaKB, gen0, bytesAllocated);
     }
 
     /// <summary>
@@ -2628,7 +2632,7 @@ public static class ScenarioBenchmark
     /// After Set: call ValueChanges() to get typed Old/New pairs, compute delta.
     /// Uses T[] arrays directly — no byte[] copies, matching hand-written code.
     /// </summary>
-    static (double opsPerSec, long heapDeltaKB, int gen0) RunChangesOldNew(int entityCount, int updateCount, int ticksToRun)
+    static (double opsPerSec, long heapDeltaKB, int gen0, long bytesAllocated) RunChangesOldNew(int entityCount, int updateCount, int ticksToRun)
     {
         using var w = new MiniWorld();
         var entities = new MiniArch.Entity[entityCount];
@@ -2671,18 +2675,20 @@ public static class ScenarioBenchmark
         GC.WaitForPendingFinalizers();
         var baselineHeap = GC.GetTotalMemory(true);
         var gen0Base = GC.CollectionCount(0);
+        var allocBefore = GC.GetAllocatedBytesForCurrentThread();
 
         var sw = Stopwatch.StartNew();
         for (var i = 0; i < ticksToRun; i++) Tick();
         sw.Stop();
 
         var opsPerSec = ticksToRun / sw.Elapsed.TotalSeconds;
+        var bytesAllocated = GC.GetAllocatedBytesForCurrentThread() - allocBefore;
 
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         GC.WaitForPendingFinalizers();
         var heapDeltaKB = (GC.GetTotalMemory(true) - baselineHeap) / 1024;
         var gen0 = GC.CollectionCount(0) - gen0Base;
 
-        return (opsPerSec, heapDeltaKB, gen0);
+        return (opsPerSec, heapDeltaKB, gen0, bytesAllocated);
     }
 }

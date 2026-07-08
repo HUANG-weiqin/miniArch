@@ -2708,6 +2708,17 @@ public abstract class CommandStreamCore
             // Kind branch and the lastArch invalidation that Add/Remove require.
             if (_allSetKind)
             {
+                if (world._typedTrackers is not null)
+                {
+                    for (var i = 0; i < count; i++)
+                    {
+                        ref var entry = ref Unsafe.Add(ref entriesRef, i);
+                        var record = world.GetRecordFast(entry.Entity);
+                        World.ApplyTypedSet(entry.Entity, record, compType, in entry.Value);
+                    }
+                    return;
+                }
+
                 Archetype? fastArch = null;
                 int fastColIdx = -1;
                 int fastByteOffset = 0;
@@ -2756,6 +2767,12 @@ public abstract class CommandStreamCore
 
                 if (entry.Kind == KindSet)
                 {
+                    if (world._typedTrackers is not null)
+                    {
+                        World.ApplyTypedSet(entry.Entity, record, compType, in entry.Value);
+                        continue;
+                    }
+
                     var arch = record.Archetype!;
                     if (arch != lastArchMixed)
                     {

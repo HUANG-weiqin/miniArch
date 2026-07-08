@@ -91,7 +91,8 @@ public sealed partial class World : IDisposable
     // ── Change tracking ─────────────────────────────────────────────
     internal volatile int _trackingGeneration;                 // incremented on RestoreState/Dispose for cursor self-heal
     private readonly List<WeakReference<Core.IChangeQuery>> _changeQueries = new();
-    internal object? _activeTypedTracker;                       // ChangeTracker<T> for single-type fast path (boxed generic)
+    internal List<WeakReference<IChangeTrackerControl>>? _typedTrackers;   // weakly-held typed fast-path trackers
+    internal WeakReference<IChangeTrackerControl>? _singleTypedTracker;     // fast path when exactly one tracker is live
 
     /// <summary>
     /// Creates a world.
@@ -140,6 +141,9 @@ public sealed partial class World : IDisposable
         _stateSnapshotPool.Clear();
         _hierarchy.Reset();
         _createArchetypeCacheGeneration = int.MaxValue;
+        _changeQueries.Clear();
+        _typedTrackers = null;
+        _singleTypedTracker = null;
 
         // Invalidate any remaining change queries
         _trackingGeneration++;
@@ -221,6 +225,107 @@ public sealed partial class World : IDisposable
     internal void RegisterChangeQuery(Core.IChangeQuery query)
     {
         _changeQueries.Add(new WeakReference<Core.IChangeQuery>(query));
+    }
+
+    internal void UnregisterChangeQuery(Core.IChangeQuery query)
+    {
+        for (var i = _changeQueries.Count - 1; i >= 0; i--)
+        {
+            var weakRef = _changeQueries[i];
+            if (!weakRef.TryGetTarget(out var liveQuery) || ReferenceEquals(liveQuery, query))
+            {
+                _changeQueries[i] = _changeQueries[_changeQueries.Count - 1];
+                _changeQueries.RemoveAt(_changeQueries.Count - 1);
+            }
+        }
+    }
+
+    internal void AddTypedTracker(IChangeTrackerControl tracker)
+    {
+        var weakTracker = new WeakReference<IChangeTrackerControl>(tracker);
+        var trackers = _typedTrackers;
+        if (trackers is null)
+        {
+            _typedTrackers = new List<WeakReference<IChangeTrackerControl>>(1) { weakTracker };
+            _singleTypedTracker = weakTracker;
+            return;
+        }
+
+        for (var i = trackers.Count - 1; i >= 0; i--)
+        {
+            if (!trackers[i].TryGetTarget(out _))
+                RemoveTypedTrackerAt(trackers, i);
+        }
+
+        trackers.Add(weakTracker);
+        UpdateTypedTrackerFastPath(trackers);
+    }
+
+    internal void RemoveTypedTracker(IChangeTrackerControl tracker)
+    {
+        var trackers = _typedTrackers;
+        if (trackers is null) return;
+
+        for (var i = trackers.Count - 1; i >= 0; i--)
+        {
+            if (!trackers[i].TryGetTarget(out var liveTracker) || ReferenceEquals(liveTracker, tracker))
+                RemoveTypedTrackerAt(trackers, i);
+        }
+
+        UpdateTypedTrackerFastPath(trackers);
+    }
+
+    internal void ClearTypedTrackerSlots(int entityId, ComponentType? componentType = null)
+    {
+        var trackers = _typedTrackers;
+        if (trackers is null) return;
+
+        for (var i = trackers.Count - 1; i >= 0; i--)
+        {
+            if (!trackers[i].TryGetTarget(out var tracker))
+            {
+                RemoveTypedTrackerAt(trackers, i);
+                continue;
+            }
+
+            if (componentType is null || tracker.ComponentType == componentType.Value)
+                tracker.ClearSlot(entityId);
+        }
+
+        UpdateTypedTrackerFastPath(trackers);
+    }
+
+    internal void PruneDeadTypedTrackers()
+    {
+        var trackers = _typedTrackers;
+        if (trackers is null) return;
+
+        for (var i = trackers.Count - 1; i >= 0; i--)
+        {
+            if (!trackers[i].TryGetTarget(out _))
+                RemoveTypedTrackerAt(trackers, i);
+        }
+
+        UpdateTypedTrackerFastPath(trackers);
+    }
+
+    private static void RemoveTypedTrackerAt(List<WeakReference<IChangeTrackerControl>> trackers, int index)
+    {
+        trackers[index] = trackers[trackers.Count - 1];
+        trackers.RemoveAt(trackers.Count - 1);
+    }
+
+    private void UpdateTypedTrackerFastPath(List<WeakReference<IChangeTrackerControl>> trackers)
+    {
+        if (trackers.Count == 0)
+        {
+            _typedTrackers = null;
+            _singleTypedTracker = null;
+            return;
+        }
+
+        _typedTrackers = trackers;
+        _singleTypedTracker = trackers.Count == 1 ? trackers[0] : null;
     }
 
     private void AppendTransition(Entity e, Core.Archetype? old, Core.Archetype? @new)
@@ -1273,7 +1378,8 @@ public sealed partial class World : IDisposable
         // Reset change tracking — prediction-era accumulations are stale.
         _trackingGeneration++;
         _changeQueries.Clear();
-        _activeTypedTracker = null;
+        _typedTrackers = null;
+        _singleTypedTracker = null;
 
         // Recycle snapshot to the pool for the next CaptureState.
         snapshot._isRecycled = true;

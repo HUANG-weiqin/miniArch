@@ -217,6 +217,7 @@ public sealed partial class World
         ref var record = ref _records[entity.Id];
         record = default;
         record.Version = nextVersion;
+        ClearTypedTrackerSlots(entity.Id);
         PushFreeIdUnsafe(entity.Id, nextVersion);
 
         if (movedEntity.IsValid)

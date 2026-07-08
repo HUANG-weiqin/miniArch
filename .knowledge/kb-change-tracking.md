@@ -1,8 +1,8 @@
 ---
 title: Change Tracking（变更追踪）
 module: MiniArch.Core
-description: Track() + Capture<T> 游标驱动的原生变更追踪——ModifiedChunks<T> 管值写入、Transitions 管成员进出，Changes()/DrainTypedChanges<T> 提供 Old/New 快照对
-updated: 2026-07-08 (DrainTypedChanges<T> 双缓冲 TypedChange 日志；1%≈1.0x、10%≈1.6x、50/100%≈1.1x 手写 dirty-list)
+description: Track() + Capture<T> 的轻量变更追踪——Transitions() 管结构变化，ValueChanges<T>() 管 value-only 单类型 Previous 值变化
+updated: 2026-07-08 (value-only query 与 transitions 正式拆分；CommandStream.Set 接回 typed tracking；补回 single-tracker Set<T> 快路)
 ---
 
 # Change Tracking（变更追踪）
@@ -10,61 +10,63 @@ updated: 2026-07-08 (DrainTypedChanges<T> 双缓冲 TypedChange 日志；1%≈1.
 ## 这个模块是干什么的
 
 - 这个模块负责：
-  - 给用户一个 `world.Track()` 返回的 `ChangeQuery` 游标对象，通过 `.Capture<T>()` 注册需要值快照的组件类型。三类枚举：`ModifiedChunks<T>()`（被 Set<T> 写过的 chunk，值变更）、`Transitions()`（进入/离开筛选集的实体，结构变更）、`Changes()`（+ `.Previous()` 后提供 Old/New 快照）。
-  - 游标全内化，用户不接触任何版本号。不调用枚举方法的开销等于一条 bool 分支。
+  - 给用户一个 `world.Track()` 返回的 `ChangeQuery` 游标对象，通过 `.Capture<T>()` 注册关注的组件类型。
+  - `Transitions()`：追踪实体是否进入/离开 query filter（Create/Destroy/Add/Remove 导致的结构变化）。
+  - `ValueChanges<T>()`：在 **恰好一个 `Capture<T>` + `Previous()` + 无 filter** 时，返回单类型 Old/New 变更对；这是一个 **value-only observer**，不会再收集 transitions。
 - 这个模块不负责：
   - 追踪通过 `Get<T>` 返回 ref 后直接改字段的变更——C# ref 无法拦截，想追踪值变更必须走 `Set<T>`。
   - 跨帧存储变更历史（transition log 是 ephemeral 渲染层状态，非确定 sim 状态）。
+  - 多 capture / 带 filter 的值级 Old/New 组合结果；当前只保留单类型 typed fast path。
 
 ## 架构
 
 - 核心组成：
-  - **值变更机制**：per-(Archetype, componentColumn) 的 `long` 版本号，在 Archetype 的 3 个写入 chokepoint（`SetComponentAtTyped`、`SetComponentAtFlat`、`WriteComponentRaw`）处 bump。全局 `World._writeEpoch`（long，无回绕）作单调时钟。
-  - **结构变更机制**：每个 `ChangeQuery` 持有自己的 `List<Transition>`（只存匹配的 Entered/Exited，预过滤）。World 在每个结构操作时通过 `IChangeQuery.OnTransition` 将变更 dispatch 到所有注册的 query（`List<WeakReference<IChangeQuery>>`），每个 query 独立 filter 后存入自己的 log。
-  - **快照捕获机制**：当 `.Previous()` 启用时，`ChangeQuery` 实现 `IChangeQuery.OnBeforeWrite`/`OnAfterWrite`/`OnBeforeTransition` 来捕获 Old/New 快照。Set 路径通过 `World.DispatchBeforeWrite`/`DispatchAfterWrite`；结构路径通过 `World.DispatchBeforeTransition` + `AppendTransition`。快照数据存于 `_snapBuffer`（byte[]，分 Old/New 两半），在 `Changes()` 调用时物化为 `EntityChange[]`。5 个 hook 点：`ApplyTypedSet`、`ApplyRawSet`、`CommandStream.ApplyToWorld`（Set-only fast 和 mixed-kind 两条路径）、`ApplyTypedAdd`、`RemoveBoxed`、`DestroySingle`。
-  - **ChangeQuery**（非泛型）：由 `.Capture<T>()` 注册组件类型列表。`_transitions`（自有 log）、`_snapBuffer` + `_snapEntities`（快照数据）、`_valueCursors`（per-type ModifiedChunks 游标）。
-  - **Typed fast path**：单 `.Capture<T>()` + `.Previous()` + 无 filter 时启用 `ChangeTracker<T>`。Set 热路径直接追加到双缓冲 `TypedChange<T>[]` 日志；`DrainTypedChanges<T>()` 只做 buffer swap 并返回 `ReadOnlySpan<TypedChange<T>>`，不再物化 byte[] 或二次构造结果数组。
-  - **全局 gate**：`Archetype._anyTrackingActive` / `World._anyTrackingActive`。无人 Track 时所有 hook 是一条预测不命中的 bool 分支，零成本。
+  - **结构变更机制**：每个 `ChangeQuery` 持有自己的 `List<Transition>`。World 在 Create/Destroy/Add/Remove 时通过 `IChangeQuery.OnTransition` 分发到所有注册 query（`List<WeakReference<IChangeQuery>>`），query 自己做 filter 匹配并写入 log。
+  - **typed 值变更机制**：满足 typed fast path 契约时启用 `ChangeTracker<T>`。它由：
+    - `SlotByEntityPlusOne[id]`：`0=clean`，`slot+1=dirty 且对应 ActiveLog 的槽位`
+    - `ActiveLog` / `SpareLog`：双缓冲 `TypedChange<T>[]`
+    - `DirtyCount`：当前 drain 周期内已记录的条目数
+  - **生命周期管理**：
+    - query 强引用自己的 `_typedTracker`
+    - world 只用 `WeakReference<IChangeTrackerControl>` 持有 tracker，避免被遗弃 query 泄漏成幽灵 tracker
+    - 当且仅当 live typed tracker 恰好 1 个时，world 额外缓存一个 `_singleTypedTracker` weak ref，`Set<T>` 可跳过 `List` 遍历直接命中该 tracker
+    - query 配置变化（加 filter / 第二 capture）会撤销 typed fast path
+    - 纯 `ValueChanges<T>()` query 会从 `World._changeQueries` 退订；加 filter / 第二 capture 后再重新订阅 transitions
+    - `RestoreState()` 后旧 query 通过 `_trackingGeneration` 自愈：清 stale 状态并按当前配置重建 tracker
+  - **边界修复**：
+    - world 扩容后，`ApplyTypedSet` 先 `EnsureEntityCapacity(id)` 再按 `entity.Id` 直索引，避免创建 query 之后继续长大时越界
+    - destroy 会清该 id 在所有 typed tracker 中的 slot；remove 某组件只清该组件对应 tracker 的 slot，避免 id 复用或 remove+add+set 把两段生命周期串成同一条 change
 - 数据流 / 控制流：
-  - 写入路径（Set / CommandStream Submit / Replay）→ pre-hook `DispatchBeforeWrite` → Archetype 写入方法 bump 列版本号 → post-hook `DispatchAfterWrite` → `ChangeQuery.OnBeforeWrite`/`OnAfterWrite` 捕获 Old/New 快照
-  - typed 单类型路径：`World.Set<T>` → `ChangeTracker<T>.ActiveLog[slot] = TypedChange<T>(entity, old, new)` → 用户 `DrainTypedChanges<T>()` → swap `ActiveLog/SpareLog` → 清 `SlotByEntityPlusOne[id]`。
-  - 结构路径（Create/Destroy/Add/Remove）→ `DispatchBeforeTransition`（捕获 Old 快照）→ 实体迁移 → `AppendTransition`（`IChangeQuery.OnTransition` 检查 filter → 匹配的追加到 `_transitions` + 捕获 New 快照）
-  - 用户调用 `Transitions()` drain（auto-clear）；`ModifiedChunks<T>()` 查询列版本游标；`Changes()` 物化快照数据
+  - 值路径：`World.Set<T>` → 若只有 1 个 live typed tracker 则直达 `_singleTypedTracker`，否则遍历 live typed trackers → `slot==0` 时写入第一份 `Old` + 当前 `New`，`slot!=0` 时仅更新最后一份 `New` → 用户 `ValueChanges<T>()` drain 时 swap `ActiveLog/SpareLog`
+  - `CommandStream.Set<T>` 路径：`ComponentStore<T>.ApplyToWorld()` 在 **存在 typed tracker 时** 改走 `World.ApplyTypedSet<T>`，保证 `Submit()` 落地的 Set 也能进入 `ValueChanges<T>()`；无人 tracking 时仍保留 `*NoTrack` 快路径
+  - 结构路径：仅对已订阅 transitions 的 query 生效。Create/Destroy/Add/Remove → `AppendTransition` → query 做 old/new archetype filter 匹配 → 记录 Entered/Exited
+  - 用户调用 `Transitions()` / `ValueChanges<T>()` 都是 drain 语义；返回后旧累积被清空
 
 ## 公共 API
 
 ```csharp
-// ── 入口 ──
-var q = world.Track()
-    .Capture<Position>()       // 注册 Position 为快照追踪类型（可多次调用）
-    .Capture<Velocity>()
-    .With<Player>()            // 筛选举例：只追踪 With<Player>
-    .Without<Dead>()           //                 且 Without<Dead>
-    .Previous();               // 启用 Old/New 快照捕获
+var transitions = world.Track()
+    .Capture<Position>()
+    .With<Position>();
 
-// ── 枚举 ──
-foreach (var t in q.Transitions())         // Entered/Exited（auto-clear）
+var valueChanges = world.Track()
+    .Capture<Position>()
+    .Previous();
+
+foreach (var t in transitions.Transitions())
     if (t.Kind == TransitionKind.Entered) SpawnHealthBar(t.Entity);
 
-foreach (var chunk in q.ModifiedChunks<Position>())  // 值写入脏 chunk（IEnumerable，有分配）
-    { var span = chunk.GetSpan<Position>(); ... }
-
-var span = q.DrainModifiedChunks<Position>();        // 值写入脏 chunk（ReadOnlySpan，零分配）
+var span = valueChanges.ValueChanges<Position>();
 for (var i = 0; i < span.Length; i++)
-    { var chunk = span[i]; var s = chunk.GetSpan<Position>(); ... }
-
-foreach (var c in q.Changes())             // Old/New 快照对
 {
-    ref readonly var oldPos = ref c.Old.Get<Position>();
-    ref readonly var newPos = ref c.New.Get<Position>();
-    // c.Entity, c.Old.Get<HP>().Value, c.New.Get<Velocity>().Dx
+    ref readonly var c = ref span[i];
+    UpdatePosition(c.Entity, c.Old, c.New);
 }
 ```
 
 ### 类型
 
-- `EntityChange`：Old/New 快照对。`.Old`/`.New` 返回 `EntitySnapshot`（ref struct）。
-- `EntitySnapshot`：通过 `.Get<T>()` 读取捕获的组件值。`.Has<T>()` 检查是否包含。
+- `TypedChange<T>`：单组件 Old/New 快照对，包含 `Entity`、`Old`、`New`。
 - `Transition`：实体进入/退出 filter 事件。`.Kind`（Entered/Exited）、`.Cause`（Created/Destroyed/Added/Removed）。
 
 ### Fluent Filter API
@@ -73,37 +75,28 @@ foreach (var c in q.Changes())             // Old/New 快照对
 
 **语义要点**：
 - `.Capture<T>()` 只注册组件类型做快照——**不**自动添加到 filter。需要显式调用 `.With<T>()` 做筛选。
-- `ModifiedChunks<T>()` 要求 T 必须先被 `.Capture<T>()` 注册。
 - `Transitions()` 只对 `._filter` 匹配的实体生效。
-- `Changes()` 的 filter 检查在 `OnBeforeWrite`/`OnAfterWrite` 中进行——只捕获匹配 archetype 的写入。
+- `ValueChanges<T>()` 只有在 **单 capture + `Previous()` + 无 filter** 时才有值；其余配置直接返回空 span。
+- `ValueChanges<T>()` 是 **per-entity** 语义：同一 drain 周期内多次 `Set<T>` 只保留 first `Old` + last `New`。
+- **单 capture + `Previous()` + 无 filter** 的 query 是 value-only：`Transitions()` 永远为空。想同时看结构变化，必须单独再建一个 query。
 
 ## 决策
 
-1. **Get=read/Set=write 契约**：值追踪只挂 Set；Get 拿 ref 不追踪（C# ref 无法拦截）。
-2. **per-archetype 列版本非 per-segment**：同上。
-3. **instrument 在 Archetype 3 个写入方法**：所有写入路径的公共底。
-4. **Capture<T> 分解为独立注册**：不再隐式添加 With<T> 到 filter。Capture 和 With 职责分离。
-5. **transition log 记 old→new signature 转移，Entered/Exited 在 dispatch 时确定**：同上。
-6. **ModifiedChunks/Transitions/Changes 急切物化**：保证"调用即推进游标"语义。
-7. **long epoch 无回绕**。
-8. **transition log 不序列化、不 checksum**。
-9. **Transitions() auto-clear**。
-10. **fluent filter 复用 QueryDescription/QueryCache.Matches**。
-11. **transition log 挂在 ChangeQuery 而非 World**。
-12. **WeakReference 自动 prune**。
-13. **Previous() 是 per-query 开关，非全局**：开销在 off 时为 0。On 时每个 Set 做快照捕获。
-14. **Changes() 不保留 OldValue/NewValue 字段名**：改为 `Old.Get<T>()`/`New.Get<T>()` 支持多类型。
-15. **OnBeforeWrite/OnAfterWrite 成对出现**：预/后钩子确保 Old 在写入前读取，New 在写入后读取。
-16. **OnBeforeTransition 预捕获 Old**：结构变化前 Old 值已记录在 _snapBuffer，结构变化后 OnTransition 再写 New。Create/Destroy 跳过快照（无 Old 或 New）。
-17. **per-entity 语义（非 per-Set-call）**：每个 entity 只记 first Old + last New。多次 Set 同一 entity 只产生一条 Change。
-18. **inline capture 快速路径**：单 query + Previous 时，CaptureOld/CaptureNew 内联到 ApplyTypedSet，消除 dispatch 循环。
-19. **直接索引替代 Dictionary**：用 stamp+version+slot 数组按 entity.Id 直接索引，消除 Dictionary 查找开销。
-20. **CaptureNew 跳过 filter 检查**：Set 不改变 archetype，CaptureOld 已验证 filter，CaptureNew 无需重复检查。
-21. **`DrainTypedChanges<T>()` 使用双缓冲 `TypedChange<T>[]` append log**：相比 entity-indexed Old/New + bitset，最终结果本来就要以 `TypedChange<T>` 暴露；在 Set 时直接写结果 log，drain 只 swap，避免 `DrainTypedChanges<T>()` 再构造一份中间数组。`SlotByEntityPlusOne[id]` 同时表示 dirty 与 slot，保持 first Old + last New 语义并减少随机写。
+1. **只保留两种公开枚举**：`Transitions()` 管结构变化，`ValueChanges<T>()` 管单类型值变化。
+2. **Get=read / Set=write 契约**：值追踪只挂 `Set<T>`；`Get<T>` 拿 ref 后修改不追踪。
+3. **typed fast path 只服务精确契约**：恰好一个 capture、开 `Previous()`、且无 filter；否则宁可返回空，也不做半兼容路径。
+4. **直接索引数组替代 Dictionary**：按 `entity.Id` 直索引 `SlotByEntityPlusOne`，换取更低热路径成本。
+5. **双缓冲 `TypedChange<T>[]`**：Set 时直接写最终暴露格式；drain 只做 buffer swap，不二次构造结果。
+6. **world 弱引用持有 tracker**：query 拥有 tracker 生命周期，world 只负责热路径分发与 dead-ref prune。
+7. **单 tracker 恢复直达快路**：保留弱引用语义，但在 live tracker 恰好 1 个时缓存一个 weak ref，避免每次 `Set<T>` 都走 `List<WeakReference<...>>` 分发。
+8. **配置变化立即撤销 fast path**：加 filter / 第二 capture 后，typed tracker 直接下线，避免语义漂移。
+9. **显式切断生命周期边界**：destroy/remove 成功后清 slot，避免 id 复用和 remove+add 跨生命周期串脏。
+10. **RestoreState 自愈重建，不复用旧 buffer**：旧 query 继续可用，但必须丢弃 prediction-era 脏数据并重新挂回 world。
+11. **value observer 与 transition observer 解耦**：纯 `ValueChanges<T>()` query 不再默认附带全量 structural observer，避免高 churn 场景下 transition log / `ToArray()` 噪音淹没真正的值变化成本。
 
 ## 认知模型
 
-Track() 返回一个游标：Capture 注册追踪组件类型、With/Without 设筛选、Previous 开快照。值写入 bump 列版本、结构变更进 transition log、快照成对写入 byte buffer。
+`Track()` 返回一个游标：`Capture<T>()` 决定关注的组件，`With/Without/WithAny` 决定结构 filter，`Previous()` 尝试打开 typed fast path。结构变化写 `Transition`；值变化在满足契约时直接写 `TypedChange<T>[]`。
 
 常见误解：
 - **误解**：`Get<T>` 后改字段会触发变更追踪。→ 实际不会，C# ref 无法拦截，必须走 `Set<T>`。
@@ -113,38 +106,38 @@ Track() 返回一个游标：Capture 注册追踪组件类型、With/Without 设
 ## 性能特征
 
 实测，Ryzen 7 5700X3D / .NET 8 Release：
-- **tracking OFF（默认）**：HeroComing.Perf 门禁应零回归；任何 `src/MiniArch/` 架构改动仍必须跑 `HeroComing.Perf --check-baseline`。
-- **普通 `Changes()` 多类型/带 filter 路径**：仍使用 byte[] shadow + Lazy New，优先保证兼容结构变更与多 capture。
-- **单类型无 filter 的 `DrainTypedChanges<T>()` 路径**：使用双缓冲 `TypedChange<T>[]` append log，热路径不写 byte[]、不构造 drain buffer。
-- **GameTickSim.Perf `--modified-chunks`（100K entities, 500 ticks；Manual=手写 shadow+dirty-list，Changes=`Capture<Position>().Previous().DrainTypedChanges<Position>()`）**：
-  | 更新密度 | C/M 典型范围 | 结论 |
-  |----------|--------------|------|
-  | 1%       | 1.00x–1.12x  | 与手写持平或略快 |
-  | 10%      | 1.57x–1.86x  | 明显快于手写 |
-  | 50%      | 1.09x–1.14x  | 快于手写 |
-  | 100%     | 1.09x–1.15x  | 快于手写 |
+- **tracking OFF（默认）**：任何 `src/MiniArch/` 架构改动仍必须跑 `HeroComing.Perf --check-baseline`。
+- **单类型无 filter 的 `ValueChanges<T>()` 路径**：使用双缓冲 `TypedChange<T>[]` append log；稳态 `0.00 KB/tick`。
+- **GameTickSim.Perf（100K entities, 500 ticks；Manual=手写 shadow+dirty-list，Changes=`Capture<Position>().Previous().ValueChanges<Position>()`）**：
+  | 更新密度 | Manual | Changes | C/M | Alloc M | Alloc C |
+  |----------|--------|---------|-----|---------|---------|
+  | 1%       | 13146  | 10466   | 0.80x | 0.00 KB | 0.00 KB |
+  | 10%      | 5411   | 6288    | 1.16x | 0.00 KB | 0.00 KB |
+  | 50%      | 1523   | 1758    | 1.15x | 0.00 KB | 0.00 KB |
+  | 100%     | 748    | 879     | 1.18x | 0.00 KB | 0.00 KB |
 
-  **已优化**：
-  1. `_anyPreviousTrackingActive` 门控：无 Previous 时 dispatch 完全跳过
-  2. `_singlePreviousQuery` 快速路径：单 query 时内联 CaptureOld，消除 dispatch 循环
-  3. 直接索引数组替代 Dictionary<Entity, int>（stamp+version+slot 数组）
-  4. **Lazy New**：热路径不读 New，Changes() 时从 live storage 读。结构变更时 materialize-on-escape
-  5. CaptureNew 跳过 filter/archetype 检查（Set 不改变 archetype）
-  6. `DrainModifiedChunks<T>()` 零分配 span API
-  7. per-entity 语义：每个 entity 只记 first Old + last New（非 per-Set-call）
-  8. Previous() 时预分配 entity 索引数组到 world 容量
-  9. `DrainTypedChanges<T>()` 直接返回双缓冲 `TypedChange<T>[]`；`SlotByEntityPlusOne[id]` 合并 dirty flag 与 slot map，减少随机写
+  **关键原因**：
+  1. `SlotByEntityPlusOne[id]` 直接索引，避免 Dictionary/hash
+  2. `TypedChange<T>[]` 双缓冲，drain 不二次分配
+  3. `World._singleTypedTracker` 让单 observer 场景避开 weak-ref 列表遍历
+  4. `PreSize` + `EnsureEntityCapacity` 让 world 扩容后仍保持安全
+  5. `destroy/remove` 清 slot，保证 first `Old` + last `New` 只在同一生命周期内成立
+
+- **HeroComing.Perf 旁路 observer 实验（`--track-observer`，2026-07-08）**：
+  - 旧实现（拆分前）：挂 `Track().Capture<T>().Previous()` observer 后，Movement `1338.1 rounds/s`，Attack `981.2 rounds/s`；`transitions` 极大且会带来额外堆分配/保留噪音
+  - 新实现（value-only 拆分后）：Movement `1829.3 rounds/s`，Attack `1167.7 rounds/s`；`transitions=0`，`Heap delta` 恢复稳定，Gen0/1/2 回到 `3/3/3`
+  - 结论：Hero 场景里先前的“大堆分配”主因不是 `TypedChange<T>[]`，而是 value observer 被强行捆绑了 transitions。拆分后，剩下的成本才主要反映真实的 value tracking 开销
 
 ## 入口
 
 - `src/MiniArch/ChangeQuery.cs`：`ChangeQuery` 公共 API（非泛型 + 泛型 `ChangeQuery<T>` 已移除）
-- `src/MiniArch/EntityChange.cs`：`EntityChange` / `EntitySnapshot` 类型定义
 - `src/MiniArch/Transition.cs`：`Transition` / `TransitionKind` 类型定义
 - `World.Track()`：入口方法
-- `Core/World.cs`：`DispatchBeforeWrite`/`DispatchAfterWrite`/`DispatchBeforeTransition` 实现
-- `Core/IChangeQuery.cs`：`OnBeforeWrite`/`OnAfterWrite`/`OnBeforeTransition` 默认方法
-- `Core/World.StructuralChange.cs`：pre-hook 调用点（ApplyTypedAdd、RemoveBoxed、ApplyTypedSet/ApplyRawSet）
-- `src/MiniArch/ChangeTracker.cs`：单类型无 filter 的 `DrainTypedChanges<T>()` typed fast path（双缓冲 `TypedChange<T>[]`）
+- `Core/World.cs`：query / tracker 注册、弱引用 prune、`RestoreState()` 自愈 generation
+- `Core/IChangeQuery.cs`：仅保留 `OnTransition`
+- `Core/World.StructuralChange.cs`：`Set<T>` 的 typed fast path、`RemoveBoxed()` 的 slot 清理
+- `Core/World.EntityLifecycle.cs`：`DestroySingle()` 的 slot 清理
+- `src/MiniArch/ChangeTracker.cs`：单类型无 filter 的 `ValueChanges<T>()` typed fast path（双缓冲 `TypedChange<T>[]`）
 
 最小示例：
 ```csharp
@@ -161,18 +154,17 @@ foreach (var c in q.Changes())
 ## 坑点
 
 - **Pending entity 的中间操作不产生 Changes() 条目**：通过 `CommandStream.Create()`/`Clone()` 创建的 pending entity，其所有 `Add`/`Set`/`Remove` 操作在 `Submit()`/`Snapshot()`/`Replay()` 时折叠为最终组件状态。这意味着：
-  - `Changes()` 不包含这些中间操作对应的 Old/New 快照。
+  - `ValueChanges<T>()` 不包含这些中间操作对应的 Old/New 快照。
   - `Transitions()` 只反映最终 filter 匹配结果（Create+Add+Remove → 从未进入 filter）。
   - Existing entity 的 `Add`/`Set`/`Remove`（通过 component store 路径）不受此影响，它们仍然产生独立的 Changes() 条目。
   - 详见 `kb-command-stream.md`「Pending entity 最终状态契约」段。
 
 - `Get<T>` 返回 ref 后直接改字段**不追踪**（C# ref 无法拦截）。
 - 批量 `chunk.GetSpan<T>()` 后改 span **不追踪**（同上）。
-- chunked 模式（>2MB archetype）下版本是 per-archetype，跨 segment 过报。
-- transition log / _snapBuffer 在 drain 时自动清零。不调用的 query 会增长——丢弃的 query 由 WeakReference 自动 prune。
+- `Transitions()` 在 drain 时自动清零；typed tracker 由 query 强持有、world 弱引用持有，丢弃 query 后会在后续写入时自动 prune。
 - `CaptureState`/`RestoreState` 后旧 cursor **自动自愈**（self-heal）：内部累积的 transition/value-change 清空，cursor 推进到当前 epoch，重新注册 dispatch 路径。用户无需重新 `Track()`。World.Dispose 后旧 cursor 会抛 `ObjectDisposedException`。
 - `.Capture<T>()` 必须在使用 `.With<T>()` 之前或之后调用——顺序无关。但必须赶在第一次枚举之前。
-- `Changes()` 返回的 `EntityChange[]` 内的 byte 数据是独立副本（从 `_snapBuffer` 克隆），可跨帧持有。
-- `DrainTypedChanges<T>()` 返回的是双缓冲 `TypedChange<T>[]` 的 span：drain 后下一次 Set 不会覆盖刚返回的 span，但下一次 drain 会让旧 span 失效。不要改成单缓冲；否则用户在 drain 后、下一次 drain 前继续读 span 会被新 Set 覆盖。
-- typed fast path 也必须保持 `Changes()` 兼容：无 filter 单 Capture 会启用 `ChangeTracker<T>`，因此 `Changes()` 不能只看 byte[] shadow 路径；通过 `ComponentRegistry.Shared.TryGetType` + `MakeGenericMethod` 调度到 `DrainTypedChanges<T>()` 再遍历构造 `EntityChange[]`（删除了 `IChangeTrackerDrain` 接口）。
-- `Previous()` 启用时，若某个 `.Capture<T>()` 注册的类型在当前 archetype 中不存在，快照的 Old/New 相应的 byte 范围保持为零值（0-initialized）。不会崩溃或读取错数据。这是通过 `TryGetComponentIndex` 的守卫实现的——所有 4 个快照捕获点（`OnBeforeWrite`、`OnAfterWrite`、`OnBeforeTransition`、`WriteNewTransitionSnapshot`）在读取前先检查组件是否存在，缺失则跳过拷贝。**注意**：`getComponentIndexFast` 不在这些守卫中，若在其他路径使用需自行保障。
+- `ValueChanges<T>()` 返回的是双缓冲 `TypedChange<T>[]` 的 span：drain 后下一次 `Set<T>` 不会覆盖刚返回的 span，但**下一次 drain 会让旧 span 失效**。不要改成单缓冲。
+- world 在 query 创建后继续扩容是允许的：typed tracker 会在 `Set<T>` 时按 `entity.Id` 补扩容；但为了保护上一帧返回的 span，增长时只会扩当前写 buffer，不会立刻动 `SpareLog`。
+- 加了 filter 或第二个 capture 后，typed fast path 会被撤销，`ValueChanges<T>()` 直接返回空 span。这不是退化成慢路径，而是当前 API 契约本身。
+- 纯 `ValueChanges<T>()` query **不再收到 transitions**。如果你既想看值变化又想看结构变化，要建两个 query，而不是复用同一个 query。

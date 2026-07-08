@@ -5,6 +5,7 @@ using Hero.Ecs;
 using Hero.GameplayEcs.Bootstrap;
 using Hero.GameplayEcs.Characters.Actions;
 using Hero.GameplayEcs.Characters.Attack;
+using Hero.GameplayEcs.Characters.Components;
 using Hero.GameplayEcs.Characters.Movement;
 using Hero.GameplayEcs.Characters.Spawn;
 using Hero.Tests.Fixtures;
@@ -19,16 +20,19 @@ const int ReportInterval = 100;
 const int WarmupRounds = 50;
 const string UpdateBaselineArg = "--update-baseline";
 const string CheckBaselineArg = "--check-baseline";
+const string TrackObserverArg = "--track-observer";
 const string HelpArg = "--help";
 
 var updateBaseline = args.Contains(UpdateBaselineArg, StringComparer.OrdinalIgnoreCase);
 var checkBaseline = args.Contains(CheckBaselineArg, StringComparer.OrdinalIgnoreCase);
+var trackObserver = args.Contains(TrackObserverArg, StringComparer.OrdinalIgnoreCase);
 var showHelp = args.Contains(HelpArg, StringComparer.OrdinalIgnoreCase) ||
                args.Contains("-h", StringComparer.OrdinalIgnoreCase);
 var knownArgs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 {
     UpdateBaselineArg,
     CheckBaselineArg,
+    TrackObserverArg,
     HelpArg,
     "-h"
 };
@@ -48,11 +52,19 @@ if (unknownArgs.Length > 0)
     return;
 }
 
+if (trackObserver && (checkBaseline || updateBaseline))
+{
+    Console.Error.WriteLine($"{TrackObserverArg} cannot be combined with {CheckBaselineArg} or {UpdateBaselineArg}.");
+    PrintUsage();
+    Environment.ExitCode = 2;
+    return;
+}
+
 Console.WriteLine("=== HeroComing ECS Performance Test ===");
 Console.WriteLine($"Characters: {CharacterCount}");
 Console.WriteLine($"Grid:       {GridWidth}x{GridHeight}");
 Console.WriteLine($"Duration:   {DurationSeconds}s per scenario");
-Console.WriteLine($"Mode:       measure{(checkBaseline ? " + check baseline" : "")}{(updateBaseline ? " + update baseline" : "")}");
+Console.WriteLine($"Mode:       measure{(checkBaseline ? " + check baseline" : "")}{(updateBaseline ? " + update baseline" : "")}{(trackObserver ? " + track observer" : "")}");
 Console.WriteLine();
 
 var results = new List<(string name, double throughput, double avgMs, int totalRounds, double heapDeltaKB, bool memoryStable)>();
@@ -99,6 +111,7 @@ void PrintUsage()
     Console.WriteLine("Options:");
     Console.WriteLine("  --check-baseline   Compare results against thresholds in .knowledge/kb-hero-pipeline-regression.md.");
     Console.WriteLine("  --update-baseline  Update the baseline block in .knowledge/kb-hero-pipeline-regression.md.");
+    Console.WriteLine("  --track-observer   Attach Track().Previous().ValueChanges<T>() observers to hot components.");
     Console.WriteLine("  --help             Show this help.");
 }
 
@@ -143,12 +156,14 @@ void PrintUsage()
     Console.WriteLine($"Spawned {CharacterCount} characters, found {players.Count} players.");
 
     var playerMembership = BuildPlayerMembership(players);
+    var observer = trackObserver ? CreateTrackObserver(name, runtime.World) : null;
 
     // Warmup
     for (int i = 0; i < WarmupRounds; i++)
     {
         createRequests(runtime, players, playerMembership);
         fixture.StepUntilStable();
+        observer?.Drain();
     }
 
     GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
@@ -171,6 +186,7 @@ void PrintUsage()
     {
         createRequests(runtime, players, playerMembership);
         fixture.StepUntilStable();
+        observer?.Drain();
         totalRounds++;
 
         if (totalRounds % ReportInterval == 0)
@@ -219,6 +235,8 @@ void PrintUsage()
     Console.WriteLine($"  Avg time/round: {avgTimePerRound:F3}ms");
     Console.WriteLine($"  Heap delta:     {heapDeltaKB:F1} KB");
     Console.WriteLine($"  GC Gen0/1/2:    {finalGen0}/{finalGen1}/{finalGen2}");
+    if (observer is not null)
+        Console.WriteLine($"  Track observer: {observer.Description}, transitions={observer.TotalTransitions}, changes={observer.TotalChanges}, checksum={observer.Checksum}");
     Console.WriteLine(memoryStable ? "  OK: Memory stable" : "  WARN: Memory growing");
     Console.WriteLine();
 
@@ -267,6 +285,62 @@ bool[] BuildPlayerMembership(List<Entity> players)
         membership[player.Id] = true;
 
     return membership;
+}
+
+TrackObserver CreateTrackObserver(string scenarioName, World world)
+{
+    return scenarioName switch
+    {
+        "Movement" => TrackObserver.Create(
+            "PositionQValue + PositionRValue",
+            world,
+            static world =>
+            {
+                var q = world.Track().Capture<PositionQValue>().Previous();
+                var r = world.Track().Capture<PositionRValue>().Previous();
+                return observer =>
+                {
+                    DrainTransitions(q, observer);
+                    DrainTransitions(r, observer);
+                    DrainChanges(q.ValueChanges<PositionQValue>(), observer, static value => value.Value);
+                    DrainChanges(r.ValueChanges<PositionRValue>(), observer, static value => value.Value);
+                };
+            }),
+        "Attack" => TrackObserver.Create(
+            "CurrentHpValue",
+            world,
+            static world =>
+            {
+                var hp = world.Track().Capture<CurrentHpValue>().Previous();
+                return observer =>
+                {
+                    DrainTransitions(hp, observer);
+                    DrainChanges(hp.ValueChanges<CurrentHpValue>(), observer, static value => value.Value);
+                };
+            }),
+        _ => throw new InvalidOperationException($"Unknown scenario '{scenarioName}' for track observer."),
+    };
+}
+
+static void DrainTransitions(ChangeQuery query, TrackObserver observer)
+{
+    foreach (var transition in query.Transitions())
+    {
+        observer.TotalTransitions++;
+        observer.Checksum += transition.Entity.Id * 11L;
+    }
+}
+
+static void DrainChanges<T>(ReadOnlySpan<TypedChange<T>> changes, TrackObserver observer, Func<T, int> getValue) where T : unmanaged
+{
+    observer.TotalChanges += changes.Length;
+    for (var i = 0; i < changes.Length; i++)
+    {
+        ref readonly var change = ref changes[i];
+        observer.Checksum += change.Entity.Id * 17L;
+        observer.Checksum += getValue(change.Old) * 31L;
+        observer.Checksum += getValue(change.New) * 37L;
+    }
 }
 
 // --- Knowledge page updater ---
@@ -393,4 +467,28 @@ string? FindKnowledgePage()
         dir = Path.GetDirectoryName(dir);
     }
     return null;
+}
+
+file sealed class TrackObserver
+{
+    private readonly Action<TrackObserver> _drain;
+
+    private TrackObserver(string description, Action<TrackObserver> drain)
+    {
+        Description = description;
+        _drain = drain;
+    }
+
+    public string Description { get; }
+
+    public long TotalChanges { get; set; }
+
+    public long TotalTransitions { get; set; }
+
+    public long Checksum { get; set; }
+
+    public void Drain() => _drain(this);
+
+    public static TrackObserver Create(string description, World world, Func<World, Action<TrackObserver>> factory)
+        => new(description, factory(world));
 }

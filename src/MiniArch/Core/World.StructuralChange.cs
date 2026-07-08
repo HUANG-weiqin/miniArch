@@ -153,50 +153,82 @@ public sealed partial class World
         var world = archetype._owner;
         if (world is not null)
         {
-            // Typed fast path: direct TypedChange<T>[] log writes.
-            if (world._activeTypedTracker is ChangeTracker<T> typedTracker)
+            ref var cell = ref archetype.GetComponentRefAt<T>(componentIndex, info.RowIndex);
+            var id = entity.Id;
+
+            var singleTracker = world._singleTypedTracker;
+            if (singleTracker is not null)
             {
-                ref var cell = ref archetype.GetComponentRefAt<T>(componentIndex, info.RowIndex);
-
-                var id = entity.Id;
-
-                // Lazy grow entity-indexed array (rare path; ~once at startup).
-                if ((uint)id >= (uint)typedTracker.SlotByEntityPlusOne.Length)
-                    typedTracker.EnsureCapacity(id);
-
-                ref var slotPlusOne = ref MemoryMarshal.GetArrayDataReference(typedTracker.SlotByEntityPlusOne);
-                ref var localSlot = ref Unsafe.Add(ref slotPlusOne, id);
-                if (localSlot == 0)
+                if (!singleTracker.TryGetTarget(out var liveTracker))
                 {
-                    var slot = typedTracker.DirtyCount;
-
-                    // Lazy grow slot-indexed ActiveLog (rare path).
-                    if ((uint)slot >= (uint)typedTracker.ActiveLog.Length)
-                        typedTracker.EnsureLogCapacity(slot);
-
-                    typedTracker.ActiveLog[slot] = new TypedChange<T>(entity, cell, component);
-                    localSlot = slot + 1;
-                    typedTracker.DirtyCount++;
+                    world.PruneDeadTypedTrackers();
                 }
                 else
                 {
-                    // Repeat Set same tick: keep Old from first capture, update New.
-                    var slot = localSlot - 1;
-                    var existing = typedTracker.ActiveLog[slot];
-                    typedTracker.ActiveLog[slot] = new TypedChange<T>(entity, existing.Old, component);
-                }
+                    if (liveTracker is ChangeTracker<T> typedTracker)
+                        RecordTypedChange(typedTracker, entity, id, ref cell, in component);
 
-                // Direct write — typed tracker handles its own dirty bookkeeping
-                // (column version tracking was removed from the archetype write path).
-                cell = component;
-                return;
+                    // Single-tracker mode can exit immediately even when the
+                    // tracker watches a different component type.
+                    cell = component;
+                    return;
+                }
             }
 
-            archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
+            // Typed fast path: iterate all typed trackers and write to matching ones.
+            var trackers = world._typedTrackers;
+            if (trackers is not null)
+            {
+                for (var i = trackers.Count - 1; i >= 0; i--)
+                {
+                    if (!trackers[i].TryGetTarget(out var tracker))
+                    {
+                        trackers[i] = trackers[trackers.Count - 1];
+                        trackers.RemoveAt(trackers.Count - 1);
+                        continue;
+                    }
+
+                    if (tracker is ChangeTracker<T> typedTracker)
+                        RecordTypedChange(typedTracker, entity, id, ref cell, in component);
+                }
+
+                world.UpdateTypedTrackerFastPath(trackers);
+            }
+
+            // Write component value — one unconditional write replaces the
+            // conditional cell=component + archetype.SetComponentAtTyped branching.
+            cell = component;
             return;
         }
 
         archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void RecordTypedChange<T>(ChangeTracker<T> typedTracker, Entity entity, int entityId, ref T cell, in T component)
+        where T : unmanaged
+    {
+        typedTracker.EnsureEntityCapacity(entityId);
+
+        ref var slotPlusOne = ref MemoryMarshal.GetArrayDataReference(typedTracker.SlotByEntityPlusOne);
+        ref var localSlot = ref Unsafe.Add(ref slotPlusOne, entityId);
+        if (localSlot == 0)
+        {
+            var slot = typedTracker.DirtyCount;
+
+            // Lazy grow slot-indexed ActiveLog (rare path; ~once at startup).
+            if ((uint)slot >= (uint)typedTracker.ActiveLog.Length)
+                typedTracker.EnsureLogCapacity(slot);
+
+            typedTracker.ActiveLog[slot] = new TypedChange<T>(entity, cell, component);
+            localSlot = slot + 1;
+            typedTracker.DirtyCount++;
+            return;
+        }
+
+        // Repeat Set same tick: keep Old from first capture, update New.
+        var existing = typedTracker.ActiveLog[localSlot - 1];
+        typedTracker.ActiveLog[localSlot - 1] = new TypedChange<T>(entity, existing.Old, component);
     }
 
     // Raw-byte paths: ReplayCore dispatches Add/Set ops here.
@@ -286,6 +318,7 @@ public sealed partial class World
         }
 
         MoveEntity(entity, info, destination!);
+        ClearTypedTrackerSlots(entity.Id, componentType);
         AppendTransition(entity, archetype, destination!);
     }
 
