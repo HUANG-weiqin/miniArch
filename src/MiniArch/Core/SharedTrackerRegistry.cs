@@ -90,6 +90,17 @@ internal sealed class SharedTrackerRegistry
         _hasTrackers = false;
     }
 
+    /// <summary>
+    /// Clears pending value-change logs but keeps tracker registrations alive.
+    /// Used by RestoreState so existing queries keep observing mutations that
+    /// happen immediately after rollback.
+    /// </summary>
+    internal void ClearChanges()
+    {
+        for (var i = 0; i < _trackers.Length; i++)
+            _trackers[i]?.Clear();
+    }
+
     internal void ClearSlot(int entityId, int typeId)
     {
         if ((uint)typeId < (uint)_trackers.Length && _trackers[typeId] is { } tracker)

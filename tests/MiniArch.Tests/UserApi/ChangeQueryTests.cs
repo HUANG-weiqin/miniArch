@@ -625,6 +625,27 @@ public class ChangeQueryTests
         Assert.Equal(0, velQ.ValueChanges<Velocity>().Length);
     }
 
+    [Fact]
+    public void World_ClearChanges_only_clears_requested_component_type()
+    {
+        using var world = new World();
+        var posQ = world.Track().Capture<Position>().Previous();
+        var velQ = world.Track().Capture<Velocity>().Previous();
+        var e = world.Create(new Position(0, 0), new Velocity(1, 2));
+
+        world.Set(e, new Position(10, 20));
+        world.Set(e, new Velocity(30, 40));
+
+        Assert.Equal(1, posQ.ValueChanges<Position>().Length);
+        Assert.Equal(1, velQ.ValueChanges<Velocity>().Length);
+
+        world.ClearChanges<Position>();
+
+        Assert.Equal(0, posQ.ValueChanges<Position>().Length);
+        Assert.Equal(1, velQ.ValueChanges<Velocity>().Length);
+        Assert.Equal(new Velocity(30, 40), velQ.ValueChanges<Velocity>()[0].New);
+    }
+
     // ── Bug fix: Previous() before Capture<T> order ─────────────────────
 
     [Fact]
@@ -755,6 +776,31 @@ public class ChangeQueryTests
 
         Assert.True(tracker.SlotByEntityPlusOne.Length >= capacity,
             $"SlotByEntityPlusOne.Length={tracker.SlotByEntityPlusOne.Length} < EntityCapacity={capacity}");
+    }
+
+    [Fact]
+    public void Clear_then_high_id_set_after_world_growth_grows_active_log()
+    {
+        using var world = new World(entityCapacity: 64);
+        var q = world.Track().Capture<Position>().Previous();
+        var low = world.Create(new Position(0, 0));
+
+        world.Set(low, new Position(1, 1));
+        q.ClearChanges<Position>();
+
+        Entity high = default;
+        for (var i = 0; i < 65; i++)
+            high = world.Create(new Position(i, i));
+
+        Assert.True(world.EntityCapacity > 64, $"EntityCapacity should have grown past 64, was {world.EntityCapacity}");
+
+        world.Set(high, new Position(999, 999));
+
+        var changes = q.ValueChanges<Position>();
+        Assert.Equal(1, changes.Length);
+        Assert.Equal(high, changes[0].Entity);
+        Assert.Equal(new Position(64, 64), changes[0].Old);
+        Assert.Equal(new Position(999, 999), changes[0].New);
     }
 
     private static ChangeTracker<T>? GetSharedTracker<T>(World world) where T : unmanaged

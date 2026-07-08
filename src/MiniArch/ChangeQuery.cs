@@ -322,6 +322,15 @@ public sealed class ChangeQuery : IChangeQuery
         }
     }
 
+    void IChangeQuery.OnWorldRestored(int trackingGeneration)
+    {
+        _transitions.Clear();
+        _consumed = false;
+        _cache = null;
+        _worldGen = trackingGeneration;
+        _transitionRegistered = true;
+    }
+
     private static void ThrowFilterConsumed()
     {
         throw new InvalidOperationException(

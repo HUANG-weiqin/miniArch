@@ -7,6 +7,8 @@ internal interface IChangeTrackerControl
 {
     ComponentType ComponentType { get; }
 
+    void Clear();
+
     void ClearSlot(int entityId);
 }
 
@@ -35,6 +37,8 @@ internal sealed class ChangeTracker<T> : IChangeTrackerControl where T : unmanag
     internal int[] SlotByEntityPlusOne = [];
 
     ComponentType IChangeTrackerControl.ComponentType => Component<T>.ComponentType;
+
+    void IChangeTrackerControl.Clear() => Clear();
 
     void IChangeTrackerControl.ClearSlot(int entityId)
     {

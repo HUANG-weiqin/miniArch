@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 健壮性审阅发现汇总——已确认的设计债、已验证的安全猜想、已排除的非 bug 猜想
-updated: 2026-07-08 (新增 shared value tracker 审阅修复：类型隔离、lazy registry/no-observer 回归修复)
+updated: 2026-07-08 (新增 shared value tracker 审阅修复：RestoreState 后观察者无需手动 re-arm)
 ---
 # 代码审阅发现
 
@@ -246,10 +246,23 @@ updated: 2026-07-08 (新增 shared value tracker 审阅修复：类型隔离、l
 - **修复**:
   - `World.Track()` 不再立即注册 query；只有 `.With/.Without/.WithAny` 设置 filter 后才注册 transitions。
   - capture-only/no `Previous()`/no filter query 变为 inert cursor。
-  - `SharedTrackerRegistry` 改为 lazy/null，只有 `Previous()` 创建 value tracker 时才分配；RestoreState/Dispose 清空并置 null。
+  - `SharedTrackerRegistry` 改为 lazy/null，只有 `Previous()` 创建 value tracker 时才分配；Dispose 清空并置 null。RestoreState 只清 pending changes，保留仍存活观察者的 tracker。
   - `CommandStreamCore.ComponentStore<T>.ApplyToWorld()` 在 registry 为 null 时直接走内联 no-track loop；tracked loop 留在独立 helper。
 - **回归测试**: `Capture_only_without_Previous_is_inert`；既有 `ValueChanges_nontracking_query_does_not_interfere` 覆盖 no-tracker 干扰边界。
 - **验证**: ChangeQuery / ChangeTrackingSnapshot / 全量 MiniArch.Tests 通过；HeroComing.Perf 单次样本 no-observer Movement 1941.4 / Attack 1200.6，capture-only observer Movement 1999.0 / Attack 1204.0。
+
+### B15: `RestoreState()` 后旧 observer 需要手动读取 re-arm，否则漏掉第一批 post-restore mutation
+
+- **位置**: `World.RestoreState()` / `ChangeQuery.EnsureUsable()` / `SharedTrackerRegistry.Clear()`
+- **症状**:
+  1. value query：`RestoreState()` 后如果用户没有先调用 `ValueChanges<T>()` 触发 self-heal，而是直接 `Set<T>`，这次 post-restore Set 不会进入 tracker。
+  2. transition query：`RestoreState()` 清空 `_changeQueries` 后，旧 filter query 不再注册；restore 后第一次 Create/Add/Remove/Destroy 发生在下一次 `Transitions()` 前时会被漏掉。
+- **根因**: restore 把 observer runtime state 当作可完全丢弃的缓存处理；但旧 `ChangeQuery` 是用户持有的 live cursor，语义上不应要求用户在 rollback 后手动 re-arm。lazy self-heal 只能修复“先读后写”，不能修复“先写后读”。
+- **修复**:
+  - `RestoreState()` 不再清空 transition observer 列表，而是对 live query 调用 `OnWorldRestored()`：清 stale transition/cache，推进 generation，并保留注册。
+  - `SharedTrackerRegistry.ClearChanges()` 只清 pending value-change logs，保留已创建 tracker；Dispose 仍用 `Clear()` 移除 tracker 并置 null。
+- **回归测试**: `BUG_RestoreState_preserves_value_query_for_mutations_after_restore`、`BUG_RestoreState_preserves_filtered_transition_query_for_mutations_after_restore`
+- **验证**: Release 全量测试通过（MiniArch.Tests 818、HeroPipeline.Tests 5）；HeroComing.Perf baseline gate 通过（Movement 1940.1 / Attack 1189.0，内存 OK）；track-observer transitions=0、changes=0；MiniArch.Soak sweep 8/8 PASS。
 
 ### 修复原则
 

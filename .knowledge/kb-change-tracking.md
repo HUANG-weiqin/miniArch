@@ -2,7 +2,7 @@
 title: Change Tracking（变更追踪）
 module: MiniArch.Core
 description: Track() + Capture<T> 的轻量变更追踪——Transitions() 管结构变化，ValueChanges<T>() 管 lazy world-shared 单类型 Previous 值变化
-updated: 2026-07-08 (SharedTrackerRegistry 改为 lazy/null；capture-only no Previous/no filter 为 inert；Hero baseline 恢复)
+updated: 2026-07-08 (RestoreState 保留观察者注册并清空 prediction-era 变更；shared tracker 仍保持 lazy/null 空状态)
 ---
 
 # Change Tracking（变更追踪）
@@ -34,7 +34,7 @@ updated: 2026-07-08 (SharedTrackerRegistry 改为 lazy/null；capture-only no Pr
     - query 配置变化（加 filter / 第二 capture）会让该 query 失去 typed value 视图；world 已创建的 shared tracker 可继续服务其它同类型 query
     - 纯 `ValueChanges<T>()` query 会从 `World._changeQueries` 退订；加 filter 后再重新订阅 transitions
     - `Track().Capture<T>()` 如果没有 `Previous()` 且没有 filter，是 inert cursor：不注册 transitions、不创建 tracker、不影响 Set/Submit 热路径
-    - `RestoreState()` 后 registry 被清空并置 null，旧 query 通过 `_trackingGeneration` 自愈：清 stale 状态并按当前配置重建 shared tracker
+    - `RestoreState()` 后不会拆掉仍存活的观察者：transition query 立即清掉 prediction-era log 并保留注册；shared registry 只清 pending changes、保留已创建 tracker，避免 restore 后第一批 mutation 因“尚未读取 query 自愈”而丢失。`Dispose()` 才清 registry 并置 null
   - **边界修复**：
     - world 扩容后，`ApplyTypedSet` 先 `EnsureEntityCapacity(id)` 再按 `entity.Id` 直索引，避免创建 query 之后继续长大时越界
     - destroy 会清该 id 在所有 typed tracker 中的 slot；remove 某组件只清该组件对应 tracker 的 slot，避免 id 复用或 remove+add+set 把两段生命周期串成同一条 change
@@ -99,7 +99,7 @@ valueChanges.ClearChanges<Position>();
 8. **类型匹配严格**：query captured `Position` 时，`ValueChanges<Velocity>()` 和 `ClearChanges<Velocity>()` 对该 query 都是 no-op / empty，即使 world 里已有 `Velocity` shared tracker。
 9. **配置变化立即撤销 query 的 typed value 视图**：加 filter / 第二 capture 后，`ValueChanges<T>()` 直接返回空，避免语义漂移。
 10. **显式切断生命周期边界**：destroy/remove 成功后清 slot，避免 id 复用和 remove+add 跨生命周期串脏。
-11. **RestoreState 自愈重建，不复用旧 buffer**：旧 query 继续可用，但必须丢弃 prediction-era 脏数据并重新挂回 world shared registry。
+11. **RestoreState 不要求手动 re-arm query**：旧 query 继续可用；restore 时立即丢弃 prediction-era transition/value-change，但保留 observer/tracker 注册，所以 restore 后第一批 mutation 也必须被观察到。
 12. **value observer 与 transition observer 解耦**：纯 `ValueChanges<T>()` query 不再默认附带全量 structural observer，避免高 churn 场景下 transition log / `ToArray()` 噪音淹没真正的值变化成本。
 13. **no-tracking 空状态必须是 null**：`SharedTrackerRegistry` 不能常驻在每个 World 上。实测常驻 registry 会让 HeroComing no-observer Movement 从接近 1950 掉到约 1836；改回 lazy/null 后恢复到约 1941。
 

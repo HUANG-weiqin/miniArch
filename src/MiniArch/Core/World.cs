@@ -251,6 +251,21 @@ public sealed partial class World : IDisposable
         }
     }
 
+    private void ResetChangeQueriesAfterRestore()
+    {
+        for (var i = _changeQueries.Count - 1; i >= 0; i--)
+        {
+            var weakRef = _changeQueries[i];
+            if (weakRef.TryGetTarget(out var query))
+                query.OnWorldRestored(_trackingGeneration);
+            else
+            {
+                _changeQueries[i] = _changeQueries[_changeQueries.Count - 1];
+                _changeQueries.RemoveAt(_changeQueries.Count - 1);
+            }
+        }
+    }
+
     internal void ClearTypedTrackerSlots(int entityId, ComponentType? componentType = null)
     {
         if (SharedTrackers is null) return;
@@ -1324,9 +1339,8 @@ public sealed partial class World : IDisposable
 
         // Reset change tracking — prediction-era accumulations are stale.
         _trackingGeneration++;
-        _changeQueries.Clear();
-        SharedTrackers?.Clear();
-        SharedTrackers = null;
+        ResetChangeQueriesAfterRestore();
+        SharedTrackers?.ClearChanges();
 
         // Recycle snapshot to the pool for the next CaptureState.
         snapshot._isRecycled = true;

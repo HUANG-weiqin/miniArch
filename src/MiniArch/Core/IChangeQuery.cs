@@ -13,4 +13,11 @@ internal interface IChangeQuery
     /// appends a Transition if membership changed.
     /// </summary>
     void OnTransition(Entity entity, Archetype? oldArchetype, Archetype? newArchetype);
+
+    /// <summary>
+    /// Called when the world rolls back to a captured state. Implementations
+    /// must drop prediction-era observer state while preserving registration so
+    /// mutations immediately after restore are still observed.
+    /// </summary>
+    void OnWorldRestored(int trackingGeneration);
 }
