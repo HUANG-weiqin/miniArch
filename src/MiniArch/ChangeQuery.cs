@@ -7,8 +7,8 @@ namespace MiniArch;
 /// <summary>
 /// Multi-component change query. Obtained via <see cref="World.Track()"/>.
 /// Tracks structural transitions (create/destroy/add/remove) and, when
-/// <see cref="Previous"/> is enabled, captures old/new snapshots via
-/// the typed fast path (single Capture&lt;T&gt; + Previous → ValueChanges&lt;T&gt;).
+/// <see cref="Previous"/> is enabled, captures old/new snapshots for the
+/// single captured type (Capture&lt;T&gt; + Previous → ValueChanges&lt;T&gt;).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -49,8 +49,7 @@ public sealed class ChangeQuery : IChangeQuery
     private QueryCache? _cache;
     private bool _hasFilter;                          // false when no With/Without/WithAny → skip Matches()
 
-    // Typed fast path: when single Capture<T> + Previous, use typed arrays
-    private IChangeTrackerControl? _typedTracker;
+    // Transition registration state
     private bool _transitionRegistered = true;
 
     private int _worldGen;  // captured at construction; compared on self-heal
@@ -59,6 +58,9 @@ public sealed class ChangeQuery : IChangeQuery
     {
         _world = world;
         _worldGen = world._trackingGeneration;
+        // Do NOT register for transitions until a filter is configured.
+        // Capture-only without filter is inert — no structural transitions possible.
+        _transitionRegistered = false;
     }
 
     private void EnsureUsable()
@@ -75,13 +77,15 @@ public sealed class ChangeQuery : IChangeQuery
         _worldGen = _world._trackingGeneration;
         _transitionRegistered = false;
 
-        // Recreate typed fast-path state against the reset world.
-        DeactivateTypedTracker();
-        RefreshTypedTrackerActivation();
+        // Re-create shared tracker if needed (RestoreState cleared the registry).
+        EnsureTrackerCreatedForCapturedType();
+
+        // Re-establish transition registration.
+        RefreshTransitionRegistration();
     }
 
     private bool IsValueOnlyTypedObserver =>
-        _hasPrevious && !_hasFilter && _capturedTypes.Count == 1 && _typedTracker is not null;
+        _hasPrevious && !_hasFilter && _capturedTypes.Count == 1;
 
     private void EnsureTransitionRegistration()
     {
@@ -100,10 +104,19 @@ public sealed class ChangeQuery : IChangeQuery
 
     private void RefreshTransitionRegistration()
     {
-        if (IsValueOnlyTypedObserver)
-            DisableTransitionRegistration();
-        else
+        if (_hasFilter)
+        {
+            // Filter present → transitions can match entities entering/exiting the filter.
             EnsureTransitionRegistration();
+        }
+        else
+        {
+            // No filter: without With/Without/WithAny, transitions would always
+            // match everything and produce no entered/exited entries.
+            // Value-only observers (Previous + single capture) also don't
+            // collect transitions — they serve ValueChanges<T> only.
+            DisableTransitionRegistration();
+        }
     }
 
     /// <summary>
@@ -120,12 +133,13 @@ public sealed class ChangeQuery : IChangeQuery
         if (_capturedTypes.Contains(ct)) return this;
         _capturedTypes.Add(ct);
 
-        if (_capturedTypes.Count == 1)
-            TryActivateTypedTracker<T>();
-        else
-            DeactivateTypedTracker();
-
         RefreshTransitionRegistration();
+
+        // If Previous() was already called (and _hasPrevious is true), the tracker
+        // must be created now — Previous() couldn't create it because _capturedTypes
+        // was empty at the time.
+        if (_hasPrevious && !_hasFilter && _capturedTypes.Count == 1)
+            EnsureTrackerCreatedForCapturedType();
 
         return this;
     }
@@ -142,70 +156,31 @@ public sealed class ChangeQuery : IChangeQuery
         if (_consumed)
             throw new InvalidOperationException("Cannot enable Previous after enumeration has started.");
         _hasPrevious = true;
-        RefreshTypedTrackerActivation();
 
+        // Ensure the shared tracker exists for single-Capture + Previous + no-filter case.
+        EnsureTrackerCreatedForCapturedType();
+
+        RefreshTransitionRegistration();
         return this;
     }
 
-    private void RefreshTypedTrackerActivation()
+    /// <summary>
+    /// Ensures the shared tracker exists in the world registry for the
+    /// single captured type when Previous is enabled and no filter is set.
+    /// </summary>
+    private void EnsureTrackerCreatedForCapturedType()
     {
-        if (_hasPrevious && !_hasFilter && _capturedTypes.Count == 1)
-            ActivateTypedTrackerForCapturedType();
-        else
-            DeactivateTypedTracker();
+        if (!_hasPrevious || _capturedTypes.Count != 1 || _hasFilter) return;
 
-        RefreshTransitionRegistration();
-    }
-
-    private void DeactivateTypedTracker()
-    {
-        if (_typedTracker is null) return;
-        _world.RemoveTypedTracker(_typedTracker);
-        _typedTracker = null;
-    }
-
-    private void ActivateTypedTrackerForCapturedType()
-    {
-        // Single captured type — activate typed tracker
-        if (_typedTracker is not null) return;
-        if (!_hasPrevious || _capturedTypes.Count != 1) return;
-        if (_hasFilter) return;  // filters disable the typed fast path
-
-        // Use the component type to create the right tracker
         var capturedType = _capturedTypes[0];
         if (!ComponentRegistry.Shared.TryGetType(capturedType, out var runtimeType))
-            return; // type not registered, skip typed tracker
+            return;
 
-        // Use reflection to create ChangeTracker<T> and pre-size it
-        var trackerType = typeof(ChangeTracker<>).MakeGenericType(runtimeType);
-        var tracker = Activator.CreateInstance(trackerType);
-        if (tracker is not IChangeTrackerControl typedTracker) return;
-
-        // Pre-size to world capacity
-        var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-        trackerType.GetMethod("PreSize", flags)?.Invoke(tracker, [_world.EntityCapacity - 1]);
-
-        _typedTracker = typedTracker;
-        _world.AddTypedTracker(typedTracker);
-    }
-
-    /// <summary>
-    /// Activates the typed fast path when there's exactly one captured type
-    /// and Previous() is enabled. Creates a ChangeTracker&lt;T&gt; that stores
-    /// old/new values in typed T[] arrays, matching hand-written manual code.
-    /// </summary>
-    private void TryActivateTypedTracker<T>() where T : unmanaged
-    {
-        if (!_hasPrevious || _capturedTypes.Count != 1) return;
-        if (_typedTracker is not null) return;  // already activated
-        if (_hasFilter) return;  // filters disable the typed fast path
-
-        // Create typed tracker and pre-size to world capacity
-        var tracker = new ChangeTracker<T>();
-        tracker.PreSize(_world.EntityCapacity - 1);
-
-        _typedTracker = tracker;
-        _world.AddTypedTracker(tracker);
+        // Use reflection to call GetOrCreateTracker<T>(entityCapacity) on the shared registry.
+        // GetOrCreateSharedTrackers creates the registry lazily — no allocation in no-observer worlds.
+        var method = typeof(SharedTrackerRegistry).GetMethod(
+            "GetOrCreateTracker", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!;
+        method.MakeGenericMethod(runtimeType).Invoke(_world.GetOrCreateSharedTrackers(), new object[] { _world.EntityCapacity });
     }
 
     /// <summary>
@@ -215,11 +190,12 @@ public sealed class ChangeQuery : IChangeQuery
     {
         EnsureUsable();
         if (_consumed)
-            throw new InvalidOperationException("Cannot modify filter after enumeration started.");
+        {
+            ThrowFilterConsumed();
+        }
         _filter = _filter.With<TU>();
         _cache = null;
         _hasFilter = true;
-        DeactivateTypedTracker();
         RefreshTransitionRegistration();
         return this;
     }
@@ -238,7 +214,6 @@ public sealed class ChangeQuery : IChangeQuery
         _filter = _filter.Without<TU>();
         _cache = null;
         _hasFilter = true;
-        DeactivateTypedTracker();
         RefreshTransitionRegistration();
         return this;
     }
@@ -257,7 +232,6 @@ public sealed class ChangeQuery : IChangeQuery
         _filter = _filter.WithAny<TU>();
         _cache = null;
         _hasFilter = true;
-        DeactivateTypedTracker();
         RefreshTransitionRegistration();
         return this;
     }
@@ -283,18 +257,48 @@ public sealed class ChangeQuery : IChangeQuery
 
     /// <summary>
     /// Returns old/new value change pairs for single Capture&lt;T&gt; + Previous.
-    /// Pairs come from the tracker's double-buffered <see cref="TypedChange{T}"/>[]
-    /// — zero copy, no construction overhead. Symmetric to <see cref="Transitions"/>
-    /// (which covers structural changes).
+    /// Pairs come from the world-owned shared tracker's double-buffered
+    /// <see cref="TypedChange{T}"/>[] — zero copy, no construction overhead.
+    /// Non-destructive: repeated calls return the same data until
+    /// <see cref="ClearChanges{T}"/> is called.
+    /// Symmetric to <see cref="Transitions"/> (which covers structural changes).
     /// </summary>
     public ReadOnlySpan<TypedChange<T>> ValueChanges<T>() where T : unmanaged
     {
         EnsureUsable();
         _consumed = true;
-        if (!_hasPrevious || _typedTracker is not ChangeTracker<T> tracker)
+        if (!_hasPrevious || _hasFilter || _capturedTypes.Count != 1)
             return ReadOnlySpan<TypedChange<T>>.Empty;
+        // Only return data when T exactly matches the single captured component type.
+        if (_capturedTypes[0] != Component<T>.ComponentType)
+            return ReadOnlySpan<TypedChange<T>>.Empty;
+        var registry = _world.SharedTrackers;
+        if (registry is null)
+            return ReadOnlySpan<TypedChange<T>>.Empty;
+        var tracker = registry.GetTracker<T>();
+        if (tracker is null)
+            return ReadOnlySpan<TypedChange<T>>.Empty;
+        return tracker.Read();
+    }
 
-        return tracker.Drain();
+    /// <summary>
+    /// Clears all tracked value changes for component type <typeparamref name="T"/>.
+    /// This is a global clear for the component type: all queries sharing the same
+    /// tracker will see empty changes after this call.
+    /// </summary>
+    public void ClearChanges<T>() where T : unmanaged
+    {
+        EnsureUsable();
+        // Scoped: only acts when T matches the query's single captured type + Previous + no filter.
+        // World.ClearChanges<T> remains global (no scoping check).
+        if (!_hasPrevious || _hasFilter || _capturedTypes.Count != 1)
+            return;
+        if (_capturedTypes[0] != Component<T>.ComponentType)
+            return;
+        var registry = _world.SharedTrackers;
+        if (registry is null) return;
+        var tracker = registry.GetTracker<T>();
+        tracker?.Clear();
     }
 
     // ── IChangeQuery ──
@@ -321,7 +325,7 @@ public sealed class ChangeQuery : IChangeQuery
     private static void ThrowFilterConsumed()
     {
         throw new InvalidOperationException(
-            "Cannot modify the filter after Transitions() has been called. " +
+            "Cannot modify the filter after enumeration has started. " +
             "Configure With/Without/WithAny before the first enumeration.");
     }
 }

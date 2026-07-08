@@ -2,12 +2,23 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-07-06 (架构审阅知识库校准 + long cursor + ClearTransitionLog 服务器安全)
+updated: 2026-07-08 (Change Tracking shared value tracker + lazy no-tracking fast path)
 ---
 # Knowledge Base Changelog
 
 > 这个页面只记录**重大架构变更和知识库校准事件**，供追溯。
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
+
+
+## 2026-07-08 Change Tracking shared value tracker
+
+- **ValueChanges<T>() 语义改为非破坏性读**：读取不再自动 drain / clear；用户必须调用 `ChangeQuery.ClearChanges<T>()` 或 `World.ClearChanges<T>()` 显式清空 dirty log。
+- **World-owned per-component shared tracker**：同一个 world + component type 只有一个 `ChangeTracker<T>`；多个相同 `Track().Capture<T>().Previous()` query 共享同一 log，`Set<T>` 不再随 consumer 数 fanout。
+- **no-tracking fast path 恢复为 lazy/null**：`SharedTrackerRegistry` 不再由 `World` 构造时常驻分配；只有 `Previous()` value observer 创建 tracker 时才 lazy 创建。capture-only/no `Previous()`/no filter query 不注册 transitions、不创建 tracker。该修复将 HeroComing no-observer Movement 从约 1836 恢复到约 1941。
+- **热路径收敛**：`SharedTrackerRegistry.GetTracker<T>()` 按 `ComponentType.Value` 直索引；`CommandStream.Set` 只在该组件类型存在 shared tracker 时走 typed tracking，否则保持 no-track fast path。
+- **正确性补强**：新增/更新测试覆盖 `.Previous().Capture<T>()` 顺序、query 类型隔离、query-level clear 不越权、world-level clear disposed guard、RestoreState 清 stale tracker、destroy/id reuse 不串脏、shared tracker 复用后按最新 world capacity 补 pre-size。
+- **Perf harness 同步**：`GameTickSim.Perf --modified-chunks` 改为每 tick `ClearChanges<T>()`，并新增 1/2/8 同类型 consumer scaling；`HeroComing.Perf --track-observer` 改为 capture-only/no `Previous()`，因为 Hero observer 不使用 old value。
+- **验证**：Release 全量测试通过（MiniArch.Tests 813、HeroPipeline.Tests 5）；最终 HeroComing.Perf 门禁 no-observer Movement 1958.1 / Attack 1214.5（阈值 1642 / 997，内存 OK），capture-only observer Movement 1988.4 / Attack 1180.9，transitions=0、changes=0。
 
 
 ## 2026-07-06 新增 Change Tracking 知识库

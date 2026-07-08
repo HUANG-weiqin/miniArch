@@ -35,4 +35,21 @@ public sealed class ChangeTrackingSnapshotTests
         var loadedPos = loaded.Track().Capture<Position>().With<Position>();
         Assert.Empty(loadedPos.Transitions());
     }
+
+    [Fact]
+    public void RestoreState_clears_tracked_changes()
+    {
+        using var world = new World();
+        var q = world.Track().Capture<Position>().Previous();
+        var e = world.Create(new Position(1, 2));
+
+        var snap = world.CaptureState();
+
+        world.Set(e, new Position(10, 20));
+        Assert.Equal(1, q.ValueChanges<Position>().Length);
+
+        world.RestoreState(snap);
+        // After restore, the query should self-heal and see no changes
+        Assert.Equal(0, q.ValueChanges<Position>().Length);
+    }
 }

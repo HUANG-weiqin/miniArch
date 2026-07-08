@@ -292,55 +292,23 @@ TrackObserver CreateTrackObserver(string scenarioName, World world)
     return scenarioName switch
     {
         "Movement" => TrackObserver.Create(
-            "PositionQValue + PositionRValue",
+            "Capture PositionQValue + PositionRValue (no Previous, no filter)",
             world,
             static world =>
             {
-                var q = world.Track().Capture<PositionQValue>().Previous();
-                var r = world.Track().Capture<PositionRValue>().Previous();
-                return observer =>
-                {
-                    DrainTransitions(q, observer);
-                    DrainTransitions(r, observer);
-                    DrainChanges(q.ValueChanges<PositionQValue>(), observer, static value => value.Value);
-                    DrainChanges(r.ValueChanges<PositionRValue>(), observer, static value => value.Value);
-                };
+                _ = world.Track().Capture<PositionQValue>().Capture<PositionRValue>();
+                return static _ => { };
             }),
         "Attack" => TrackObserver.Create(
-            "CurrentHpValue",
+            "Capture CurrentHpValue (no Previous, no filter)",
             world,
             static world =>
             {
-                var hp = world.Track().Capture<CurrentHpValue>().Previous();
-                return observer =>
-                {
-                    DrainTransitions(hp, observer);
-                    DrainChanges(hp.ValueChanges<CurrentHpValue>(), observer, static value => value.Value);
-                };
+                _ = world.Track().Capture<CurrentHpValue>();
+                return static _ => { };
             }),
         _ => throw new InvalidOperationException($"Unknown scenario '{scenarioName}' for track observer."),
     };
-}
-
-static void DrainTransitions(ChangeQuery query, TrackObserver observer)
-{
-    foreach (var transition in query.Transitions())
-    {
-        observer.TotalTransitions++;
-        observer.Checksum += transition.Entity.Id * 11L;
-    }
-}
-
-static void DrainChanges<T>(ReadOnlySpan<TypedChange<T>> changes, TrackObserver observer, Func<T, int> getValue) where T : unmanaged
-{
-    observer.TotalChanges += changes.Length;
-    for (var i = 0; i < changes.Length; i++)
-    {
-        ref readonly var change = ref changes[i];
-        observer.Checksum += change.Entity.Id * 17L;
-        observer.Checksum += getValue(change.Old) * 31L;
-        observer.Checksum += getValue(change.New) * 37L;
-    }
 }
 
 // --- Knowledge page updater ---

@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -24,7 +25,49 @@ public sealed partial class World
     public void Set<T>(Entity entity, T component) where T : unmanaged
     {
         AssertNotDisposed();
-        ApplyTypedSet(entity, GetComponentType<T>(), in component);
+        var componentType = GetComponentType<T>();
+        ApplyTypedSetFast(entity, componentType, in component);
+    }
+
+    /// <summary>
+    /// Fast-path Set that inlines entity validation and component lookup into a
+    /// single <see cref="MethodImplOptions.AggressiveInlining"/> method, avoiding
+    /// the intermediate call chain (RequireLocation → static ApplyTypedSet) and
+    /// their throw paths that prevent JIT inlining.
+    /// Throws are delegated to a <see cref="MethodImplOptions.NoInlining"/> helper
+    /// so the JIT sees the hot path as throw-free and inlines it aggressively.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ApplyTypedSetFast<T>(Entity entity, ComponentType componentType, in T component) where T : unmanaged
+    {
+        var eid = entity.Id;
+        AssertValidEntityId(eid, entity);
+        // Unsafe.Add avoids the bounds check that _records[eid] would insert;
+        // AssertValidEntityId already guarantees eid is in range.
+        ref var record = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_records), eid);
+        if (!record.IsOccupied || record.Version != entity.Version)
+            ThrowStaleEntity(entity);
+
+        var archetype = record.Archetype!;
+        if (!archetype.TryGetComponentIndex(componentType, out var componentIndex))
+            ThrowComponentNotFound<T>(entity);
+
+        ref var cell = ref archetype.GetComponentRefAt<T>(componentIndex, record.RowIndex);
+
+        // Single tracker (null when no observer has created one)
+        var tracker = SharedTrackers?.GetTracker<T>();
+        if (tracker is not null)
+            RecordTypedChange(tracker, entity, eid, ref cell, in component);
+
+        cell = component;
+    }
+
+    [DoesNotReturn]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowComponentNotFound<T>(Entity entity)
+    {
+        throw new InvalidOperationException(
+            $"Entity {entity} does not have component {typeof(T).Name}.");
     }
 
     /// <summary>
@@ -156,47 +199,46 @@ public sealed partial class World
             ref var cell = ref archetype.GetComponentRefAt<T>(componentIndex, info.RowIndex);
             var id = entity.Id;
 
-            var singleTracker = world._singleTypedTracker;
-            if (singleTracker is not null)
-            {
-                if (!singleTracker.TryGetTarget(out var liveTracker))
-                {
-                    world.PruneDeadTypedTrackers();
-                }
-                else
-                {
-                    if (liveTracker is ChangeTracker<T> typedTracker)
-                        RecordTypedChange(typedTracker, entity, id, ref cell, in component);
+            // Direct tracker lookup via shared registry — O(1), no list iteration.
+            // Null when no observer has created a tracker — matches no-observer fast path.
+            var tracker = world.SharedTrackers?.GetTracker<T>();
+            if (tracker is not null)
+                RecordTypedChange(tracker, entity, id, ref cell, in component);
 
-                    // Single-tracker mode can exit immediately even when the
-                    // tracker watches a different component type.
-                    cell = component;
-                    return;
-                }
-            }
+            // Write component value
+            cell = component;
+            return;
+        }
 
-            // Typed fast path: iterate all typed trackers and write to matching ones.
-            var trackers = world._typedTrackers;
-            if (trackers is not null)
-            {
-                for (var i = trackers.Count - 1; i >= 0; i--)
-                {
-                    if (!trackers[i].TryGetTarget(out var tracker))
-                    {
-                        trackers[i] = trackers[trackers.Count - 1];
-                        trackers.RemoveAt(trackers.Count - 1);
-                        continue;
-                    }
+        archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
+    }
 
-                    if (tracker is ChangeTracker<T> typedTracker)
-                        RecordTypedChange(typedTracker, entity, id, ref cell, in component);
-                }
+    /// <summary>
+    /// Overload used by <see cref="CommandStreamCore.ComponentStore{T}.ApplyToWorld"/> when
+    /// the tracker has already been fetched once outside the inner loop. Skips the
+    /// redundant <see cref="SharedTrackerRegistry.GetTracker{T}"/> call.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void ApplyTypedSet<T>(Entity entity, EntityRecord info, ComponentType componentType, in T component, ChangeTracker<T>? tracker) where T : unmanaged
+    {
+        var archetype = info.Archetype!;
 
-                world.UpdateTypedTrackerFastPath(trackers);
-            }
+        if (!archetype.TryGetComponentIndex(componentType, out var componentIndex))
+        {
+            throw new InvalidOperationException(
+                $"Entity {entity} does not have component {typeof(T).Name}.");
+        }
 
-            // Write component value — one unconditional write replaces the
-            // conditional cell=component + archetype.SetComponentAtTyped branching.
+        var world = archetype._owner;
+        if (world is not null)
+        {
+            ref var cell = ref archetype.GetComponentRefAt<T>(componentIndex, info.RowIndex);
+            var id = entity.Id;
+
+            if (tracker is not null)
+                RecordTypedChange(tracker, entity, id, ref cell, in component);
+
+            // Write component value
             cell = component;
             return;
         }
@@ -205,7 +247,7 @@ public sealed partial class World
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void RecordTypedChange<T>(ChangeTracker<T> typedTracker, Entity entity, int entityId, ref T cell, in T component)
+    internal static void RecordTypedChange<T>(ChangeTracker<T> typedTracker, Entity entity, int entityId, ref T cell, in T component)
         where T : unmanaged
     {
         typedTracker.EnsureEntityCapacity(entityId);

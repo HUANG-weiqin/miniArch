@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 健壮性审阅发现汇总——已确认的设计债、已验证的安全猜想、已排除的非 bug 猜想
-updated: 2026-07-08 (新增 B8-B12: typed ChangeTracker 自愈/配置失效/world 扩容/id 复用；CommandStream.Set 未进入 typed tracking)
+updated: 2026-07-08 (新增 shared value tracker 审阅修复：类型隔离、lazy registry/no-observer 回归修复)
 ---
 # 代码审阅发现
 
@@ -218,6 +218,38 @@ updated: 2026-07-08 (新增 B8-B12: typed ChangeTracker 自愈/配置失效/worl
 - **修复**: 仅当 `world._typedTrackers` 非空时，`CommandStream` 的 Set 路径改走 `World.ApplyTypedSet<T>`；无人 tracking 时保留原 no-track 快路径，默认 baseline 不变
 - **回归测试**: `BUG_ValueChanges_captures_CommandStream_Set_writes`
 - **验证**: 回归测试通过
+
+### B13: shared `ChangeTracker<T>` 切换后的 API / 预分配回归
+
+- **位置**: `ChangeQuery.cs` / `SharedTrackerRegistry.cs` / `World.cs`
+- **症状**: shared tracker 初版实现中存在 4 个回归风险：
+  1. `.Previous().Capture<T>()` 顺序不创建 tracker，`ValueChanges<T>()` 永远为空。
+  2. `ValueChanges<T>()` 未检查 T 是否等于 query 唯一 captured type，可能读到另一个 query 创建的同类型 world tracker。
+  3. `ChangeQuery.ClearChanges<T>()` 未按 query captured type 限定，可能越权清掉其它组件类型的 shared tracker。
+  4. `SharedTrackerRegistry.GetOrCreateTracker<T>()` 创建或复用 tracker 时未 `PreSize(world.EntityCapacity - 1)`，首个 `Set<T>` 重新分配，破坏稳态零分配预期。
+- **根因**: 从 per-query tracker 切到 world-shared tracker 后，原先由 `_typedTracker is ChangeTracker<T>` 隐式提供的类型隔离和由 `TryActivateTypedTracker<T>` 提供的预分配语义被移除，但初版未显式补回。
+- **修复**:
+  - `Capture<T>()` 在 `_hasPrevious` 已为 true 且仍满足单 capture/no filter 时创建 shared tracker。
+  - `ValueChanges<T>()` / `ChangeQuery.ClearChanges<T>()` 均要求 T 等于唯一 captured type。
+  - `World.ClearChanges<T>()` 增加 `AssertNotDisposed()`。
+  - `SharedTrackerRegistry.GetOrCreateTracker<T>(entityCapacity)` 创建/复用时调用 `PreSize(entityCapacity - 1)`。
+- **回归测试**: `ValueChanges_previous_before_capture_order_tracks_values`、`ValueChanges_for_uncaptured_type_returns_empty_even_when_other_tracker_exists`、`ClearChanges_for_uncaptured_type_does_not_clear_other_tracker`、`World_ClearChanges_throws_after_dispose`、`Shared_tracker_PreSize_called_on_creation`、`Shared_tracker_PreSize_called_when_reused_after_world_growth`。
+- **验证**: focused `ValueChanges|ClearChanges`、全量 Release 测试、HeroComing perf gate、HeroComing `--track-observer`、soak smoke 均通过。
+
+### B14: capture-only query 常驻 transition 注册 / shared registry 常驻导致 Hero 基线回退
+
+- **位置**: `World.Track()` / `ChangeQuery.RefreshTransitionRegistration()` / `World.SharedTrackers` / `CommandStreamCore.ComponentStore<T>.ApplyToWorld()`
+- **症状**:
+  1. `Track().Capture<T>()` 不开 `Previous()`、不加 filter 时仍被 `World.Track()` 立即注册为 transition observer，高 churn 场景处理上亿次无意义 transition。
+  2. shared tracker 初版让每个 `World` 常驻分配 `SharedTrackerRegistry`，no-observer `CommandStream` 也必须经 registry 判断，HeroComing no-observer Movement 从接近 1950 掉到约 1836。
+- **根因**: Capture 不是 filter，但旧注册逻辑把 cursor 创建等同于 transition 订阅；同时把“没有 tracking”表示为“空 registry 对象”而不是旧版 direct-null fast path，破坏 no-track 空状态。
+- **修复**:
+  - `World.Track()` 不再立即注册 query；只有 `.With/.Without/.WithAny` 设置 filter 后才注册 transitions。
+  - capture-only/no `Previous()`/no filter query 变为 inert cursor。
+  - `SharedTrackerRegistry` 改为 lazy/null，只有 `Previous()` 创建 value tracker 时才分配；RestoreState/Dispose 清空并置 null。
+  - `CommandStreamCore.ComponentStore<T>.ApplyToWorld()` 在 registry 为 null 时直接走内联 no-track loop；tracked loop 留在独立 helper。
+- **回归测试**: `Capture_only_without_Previous_is_inert`；既有 `ValueChanges_nontracking_query_does_not_interfere` 覆盖 no-tracker 干扰边界。
+- **验证**: ChangeQuery / ChangeTrackingSnapshot / 全量 MiniArch.Tests 通过；HeroComing.Perf 单次样本 no-observer Movement 1941.4 / Attack 1200.6，capture-only observer Movement 1999.0 / Attack 1204.0。
 
 ### 修复原则
 

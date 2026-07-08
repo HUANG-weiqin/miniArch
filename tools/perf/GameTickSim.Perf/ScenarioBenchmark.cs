@@ -2492,7 +2492,8 @@ public static class ScenarioBenchmark
     /// Goal: track dirty entities and get Old/New values for processing.
     /// Tests two approaches at varying update densities:
     ///   Manual  = shadow array + full scan to find diffs (no API)
-    ///   Changes = ChangeQuery.DrainChanges() with Previous() — Old/New pairs
+    ///   Changes = ChangeQuery.ValueChanges&lt;Position&gt;() with Previous()
+    ///            — Old/New pairs, cleared via ClearChanges per tick
     /// Invoked via --modified-chunks flag in Program.cs.
     /// </summary>
     public static void RunModifiedChunksDensityBenchmark()
@@ -2515,7 +2516,7 @@ public static class ScenarioBenchmark
             // ── Variant A: Manual shadow array + full scan diff ──
             var (manualOps, manualHeap, manualGen0, manualBytes) = RunManualShadowDiff(entityCount, updateCount, ticksToRun);
 
-            // ── Variant B: ChangeQuery.DrainChanges() with Previous() ──
+            // ── Variant B: ChangeQuery.ValueChanges<Position>() + ClearChanges<Position>() ──
             var (changesOps, changesHeap, changesGen0, changesBytes) = RunChangesOldNew(entityCount, updateCount, ticksToRun);
 
             var manualKBpt = manualBytes / 1024.0 / ticksToRun;
@@ -2529,7 +2530,10 @@ public static class ScenarioBenchmark
         Console.WriteLine();
         Console.WriteLine("Both variants: same goal — find changed entities, read Old+New, compute delta.");
         Console.WriteLine("  Manual   = shadow Position[] before Set, full scan after to find diffs");
-        Console.WriteLine("  Changes  = ChangeQuery.Capture<Position>().Previous() → DrainChanges() Old/New pairs");
+        Console.WriteLine("  Changes  = ChangeQuery.Capture<Position>().Previous() → ValueChanges() Old/New pairs (ClearChanges per tick)");
+
+        // Same-type consumer scaling section
+        RunSameTypeConsumerScaling();
     }
 
     /// <summary>
@@ -2630,6 +2634,7 @@ public static class ScenarioBenchmark
     /// <summary>
     /// Variant B: ChangeQuery.ValueChanges() with Previous() — typed fast path.
     /// After Set: call ValueChanges() to get typed Old/New pairs, compute delta.
+    /// Clears via ClearChanges per tick to prevent cross-tick accumulation.
     /// Uses T[] arrays directly — no byte[] copies, matching hand-written code.
     /// </summary>
     static (double opsPerSec, long heapDeltaKB, int gen0, long bytesAllocated) RunChangesOldNew(int entityCount, int updateCount, int ticksToRun)
@@ -2666,6 +2671,10 @@ public static class ScenarioBenchmark
                 var dz = changes[i].New.Z - changes[i].Old.Z;
                 checksum += (int)(dx + dy + dz);
             }
+
+            // 3. Clear before next tick (ValueChanges is non-destructive)
+            trackQuery.ClearChanges<Position>();
+
             return checksum;
         }
 
@@ -2690,5 +2699,100 @@ public static class ScenarioBenchmark
         var gen0 = GC.CollectionCount(0) - gen0Base;
 
         return (opsPerSec, heapDeltaKB, gen0, bytesAllocated);
+    }
+
+    // ── Same-type consumer scaling ─────────────────────────────────────
+
+    /// <summary>
+    /// Measures Set fanout cost when N queries share the same ChangeTracker&lt;T&gt;.
+    /// Creates N identical Track().Capture&lt;Position&gt;().Previous() queries,
+    /// runs the same Set workload, reads only first query to isolate fanout,
+    /// and clears once per tick (shared tracker so one clear suffices).
+    /// </summary>
+    static void RunSameTypeConsumerScaling()
+    {
+        const int entityCount = 100_000;
+        const int updateCount = 50_000;
+        const int ticksToRun = 500;
+        var consumerCounts = new[] { 1, 2, 8 };
+
+        Console.WriteLine();
+        Console.WriteLine("=== Same-Type Consumer Scaling ===");
+        Console.WriteLine($"Entities: {entityCount}, Updates/tick: {updateCount}, Ticks: {ticksToRun}");
+        Console.WriteLine("Measures Set fanout cost when N Track().Capture<Position>().Previous() queries");
+        Console.WriteLine("share the same shared tracker. Only first query is read; all cleared once per tick.");
+        Console.WriteLine();
+        Console.WriteLine($"{"Consumers",10} | {"ops/s",10} | {"KB/tick",8}");
+        Console.WriteLine(new string('-', 33));
+
+        foreach (var consumerCount in consumerCounts)
+        {
+            var (opsPerSec, bytesAllocated) = RunConsumerScaling(entityCount, updateCount, consumerCount, ticksToRun);
+            var kbPerTick = bytesAllocated / 1024.0 / ticksToRun;
+            Console.WriteLine($"{consumerCount,10} | {opsPerSec,10:F0} | {kbPerTick,8:F2}");
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+        }
+    }
+
+    static (double opsPerSec, long bytesAllocated) RunConsumerScaling(int entityCount, int updateCount, int consumerCount, int ticksToRun)
+    {
+        using var w = new MiniWorld();
+        var entities = new MiniArch.Entity[entityCount];
+        for (var i = 0; i < entityCount; i++)
+            entities[i] = w.Create(new Position { X = i, Y = i + 1, Z = i + 2 }, new Velocity { X = 1, Y = 0.5f });
+
+        // Create N identical queries sharing the same tracker
+        var queries = new MiniArch.ChangeQuery[consumerCount];
+        for (var i = 0; i < consumerCount; i++)
+            queries[i] = w.Track().Capture<Position>().Previous();
+
+        var updateIndices = new int[updateCount];
+        for (var i = 0; i < updateCount; i++)
+            updateIndices[i] = i;
+
+        int Tick()
+        {
+            var checksum = 0;
+
+            // Set N entities
+            for (var i = 0; i < updateCount; i++)
+            {
+                var idx = updateIndices[i];
+                w.Set(entities[idx], new Position { X = i * 0.1f, Y = i * 0.2f, Z = i * 0.3f });
+            }
+
+            // Read only from first query (isolates Set fanout cost; reading all N would
+            // add O(N * changes) overhead from N ValueChanges enumerations)
+            var changes = queries[0].ValueChanges<Position>();
+            for (var i = 0; i < changes.Length; i++)
+            {
+                var dx = changes[i].New.X - changes[i].Old.X;
+                var dy = changes[i].New.Y - changes[i].Old.Y;
+                var dz = changes[i].New.Z - changes[i].Old.Z;
+                checksum += (int)(dx + dy + dz);
+            }
+
+            // Clear once per tick; shared tracker means one Clear suffices for all N
+            queries[0].ClearChanges<Position>();
+
+            return checksum;
+        }
+
+        // Warmup
+        for (var i = 0; i < 20; i++) Tick();
+
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        var allocBefore = GC.GetAllocatedBytesForCurrentThread();
+
+        var sw = Stopwatch.StartNew();
+        for (var i = 0; i < ticksToRun; i++) Tick();
+        sw.Stop();
+
+        var opsPerSec = ticksToRun / sw.Elapsed.TotalSeconds;
+        var bytesAllocated = GC.GetAllocatedBytesForCurrentThread() - allocBefore;
+
+        return (opsPerSec, bytesAllocated);
     }
 }

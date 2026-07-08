@@ -18,6 +18,8 @@ internal interface IChangeTrackerControl
 ///   - <see cref="SlotByEntityPlusOne"/>[entity.Id] — 0 means clean,
 ///     (slot+1) means dirty with that slot; merges IsDirty/SlotByEntity into
 ///     one int[] to halve random writes on the Set hot path.
+///   - Clear() uses a single Array.Clear call instead of a per-entry loop
+///     (native memset is faster than a managed loop for this size range).
 ///   - Pre-sized to entity capacity at creation; no runtime allocation in steady state.
 /// </summary>
 internal sealed class ChangeTracker<T> : IChangeTrackerControl where T : unmanaged
@@ -58,6 +60,7 @@ internal sealed class ChangeTracker<T> : IChangeTrackerControl where T : unmanag
         Array.Resize(ref SpareLog, size);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void EnsureEntityCapacity(int maxEntityId)
     {
         if (maxEntityId < SlotByEntityPlusOne.Length)
@@ -81,44 +84,39 @@ internal sealed class ChangeTracker<T> : IChangeTrackerControl where T : unmanag
     }
 
     /// <summary>
-    /// Drain the current tick's changes: swap buffers, clear dirty flags,
-    /// return a span over the completed log (valid until next drain).
+    /// Returns a read-only view of the current tick's changes.
+    /// Non-destructive: does not swap buffers or clear dirty flags.
+    /// The returned span is valid until the next Clear() call.
     /// </summary>
-    internal ReadOnlySpan<TypedChange<T>> Drain()
+    internal ReadOnlySpan<TypedChange<T>> Read()
     {
         var count = DirtyCount;
         if (count == 0) return ReadOnlySpan<TypedChange<T>>.Empty;
-
-        // Current write log becomes the drained result
-        var drained = ActiveLog;
-
-        // Swap: spare becomes active for next tick
-        ActiveLog = SpareLog;
-        SpareLog = drained;
-
-        // Clear SlotByEntityPlusOne for drained entities
-        for (var i = 0; i < count; i++)
-            SlotByEntityPlusOne[drained[i].Entity.Id] = 0;
-
-        DirtyCount = 0;
-        return new ReadOnlySpan<TypedChange<T>>(drained, 0, count);
+        return new ReadOnlySpan<TypedChange<T>>(ActiveLog, 0, count);
     }
 
     /// <summary>
-    /// Reset dirty state for next tick (swap + clear, no return value).
+    /// Clears all dirty state: swaps buffers, resets DirtyCount,
+    /// and clears SlotByEntityPlusOne via Array.Clear (native memset).
+    /// After Clear(), Read() returns empty until the next Set.
     /// </summary>
-    internal void Reset()
+    internal void Clear()
     {
         var count = DirtyCount;
         if (count == 0) return;
 
+        // Current write log becomes spare; spare becomes active (no data loss)
         var drained = ActiveLog;
         ActiveLog = SpareLog;
         SpareLog = drained;
 
-        for (var i = 0; i < count; i++)
-            SlotByEntityPlusOne[drained[i].Entity.Id] = 0;
+        // Clear all SlotByEntityPlusOne entries via Array.Clear (memset).
+        // A per-dirty-entry loop would be slower due to random-access writes.
+        // The condition (count < Length) incorrectly skipped clearing when
+        // count == Length; always clear the full array for correctness.
+        Array.Clear(SlotByEntityPlusOne, 0, SlotByEntityPlusOne.Length);
 
         DirtyCount = 0;
     }
+
 }

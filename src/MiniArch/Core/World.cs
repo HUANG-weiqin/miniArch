@@ -91,8 +91,19 @@ public sealed partial class World : IDisposable
     // ── Change tracking ─────────────────────────────────────────────
     internal volatile int _trackingGeneration;                 // incremented on RestoreState/Dispose for cursor self-heal
     private readonly List<WeakReference<Core.IChangeQuery>> _changeQueries = new();
-    internal List<WeakReference<IChangeTrackerControl>>? _typedTrackers;   // weakly-held typed fast-path trackers
-    internal WeakReference<IChangeTrackerControl>? _singleTypedTracker;     // fast path when exactly one tracker is live
+    internal SharedTrackerRegistry? SharedTrackers;            // null when no observer has created a tracker; lazy-created via GetOrCreateSharedTrackers()
+
+    /// <summary>
+    /// Gets or creates the shared tracker registry. When no observer has
+    /// called <c>Previous()</c>, no registry is allocated — <see cref="SharedTrackers"/>
+    /// stays null and the fast no-track path is taken.
+    /// </summary>
+    internal SharedTrackerRegistry GetOrCreateSharedTrackers()
+    {
+        if (SharedTrackers is null)
+            SharedTrackers = new SharedTrackerRegistry();
+        return SharedTrackers;
+    }
 
     /// <summary>
     /// Creates a world.
@@ -142,8 +153,8 @@ public sealed partial class World : IDisposable
         _hierarchy.Reset();
         _createArchetypeCacheGeneration = int.MaxValue;
         _changeQueries.Clear();
-        _typedTrackers = null;
-        _singleTypedTracker = null;
+        SharedTrackers?.Clear();
+        SharedTrackers = null;
 
         // Invalidate any remaining change queries
         _trackingGeneration++;
@@ -240,92 +251,26 @@ public sealed partial class World : IDisposable
         }
     }
 
-    internal void AddTypedTracker(IChangeTrackerControl tracker)
-    {
-        var weakTracker = new WeakReference<IChangeTrackerControl>(tracker);
-        var trackers = _typedTrackers;
-        if (trackers is null)
-        {
-            _typedTrackers = new List<WeakReference<IChangeTrackerControl>>(1) { weakTracker };
-            _singleTypedTracker = weakTracker;
-            return;
-        }
-
-        for (var i = trackers.Count - 1; i >= 0; i--)
-        {
-            if (!trackers[i].TryGetTarget(out _))
-                RemoveTypedTrackerAt(trackers, i);
-        }
-
-        trackers.Add(weakTracker);
-        UpdateTypedTrackerFastPath(trackers);
-    }
-
-    internal void RemoveTypedTracker(IChangeTrackerControl tracker)
-    {
-        var trackers = _typedTrackers;
-        if (trackers is null) return;
-
-        for (var i = trackers.Count - 1; i >= 0; i--)
-        {
-            if (!trackers[i].TryGetTarget(out var liveTracker) || ReferenceEquals(liveTracker, tracker))
-                RemoveTypedTrackerAt(trackers, i);
-        }
-
-        UpdateTypedTrackerFastPath(trackers);
-    }
-
     internal void ClearTypedTrackerSlots(int entityId, ComponentType? componentType = null)
     {
-        var trackers = _typedTrackers;
-        if (trackers is null) return;
-
-        for (var i = trackers.Count - 1; i >= 0; i--)
-        {
-            if (!trackers[i].TryGetTarget(out var tracker))
-            {
-                RemoveTypedTrackerAt(trackers, i);
-                continue;
-            }
-
-            if (componentType is null || tracker.ComponentType == componentType.Value)
-                tracker.ClearSlot(entityId);
-        }
-
-        UpdateTypedTrackerFastPath(trackers);
+        if (SharedTrackers is null) return;
+        if (componentType is not null)
+            SharedTrackers.ClearSlot(entityId, componentType.Value.Value);
+        else
+            SharedTrackers.ClearAllSlots(entityId);
     }
 
-    internal void PruneDeadTypedTrackers()
+    /// <summary>
+    /// Clears all tracked value changes for component type <typeparamref name="T"/>.
+    /// After calling this, all queries sharing the tracker for <typeparamref name="T"/>
+    /// will see empty changes until the next Set.
+    /// </summary>
+    public void ClearChanges<T>() where T : unmanaged
     {
-        var trackers = _typedTrackers;
-        if (trackers is null) return;
-
-        for (var i = trackers.Count - 1; i >= 0; i--)
-        {
-            if (!trackers[i].TryGetTarget(out _))
-                RemoveTypedTrackerAt(trackers, i);
-        }
-
-        UpdateTypedTrackerFastPath(trackers);
-    }
-
-    private static void RemoveTypedTrackerAt(List<WeakReference<IChangeTrackerControl>> trackers, int index)
-    {
-        trackers[index] = trackers[trackers.Count - 1];
-        trackers.RemoveAt(trackers.Count - 1);
-    }
-
-    private void UpdateTypedTrackerFastPath(List<WeakReference<IChangeTrackerControl>> trackers)
-    {
-        if (trackers.Count == 0)
-        {
-            _typedTrackers = null;
-            _singleTypedTracker = null;
-            return;
-        }
-
-        _typedTrackers = trackers;
-        _singleTypedTracker = trackers.Count == 1 ? trackers[0] : null;
+        AssertNotDisposed();
+        if (SharedTrackers is null) return;
+        var tracker = SharedTrackers.GetTracker<T>();
+        tracker?.Clear();
     }
 
     private void AppendTransition(Entity e, Core.Archetype? old, Core.Archetype? @new)
@@ -353,7 +298,9 @@ public sealed partial class World : IDisposable
     {
         AssertNotDisposed();
         var query = new ChangeQuery(this);
-        RegisterChangeQuery(query);
+        // Registration is deferred — query.RegisterChangeQuery registers itself
+        // via EnsureTransitionRegistration when a filter (With/Without/WithAny)
+        // is configured. Capture-only without Previous is inert.
         return query;
     }
 
@@ -1378,8 +1325,8 @@ public sealed partial class World : IDisposable
         // Reset change tracking — prediction-era accumulations are stale.
         _trackingGeneration++;
         _changeQueries.Clear();
-        _typedTrackers = null;
-        _singleTypedTracker = null;
+        SharedTrackers?.Clear();
+        SharedTrackers = null;
 
         // Recycle snapshot to the pool for the next CaptureState.
         snapshot._isRecycled = true;

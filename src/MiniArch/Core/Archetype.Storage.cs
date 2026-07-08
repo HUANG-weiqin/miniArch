@@ -489,8 +489,7 @@ internal sealed partial class Archetype
     }
 
     /// <summary>
-    /// Write-only variant with no tracking overhead. Used on the hot path when
-    /// <see cref="World.IsChangeTrackingActive"/> is false. No version bump, no field load.
+    /// Write-only variant used by no-track hot paths. No version bump, no field load.
     /// </summary>
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -507,6 +506,25 @@ internal sealed partial class Archetype
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal int GetColumnByteOffset(int columnIndex) => _columnByteOffsets[columnIndex];
+
+    /// <summary>
+    /// Returns a managed reference to the component at the given row, using a
+    /// pre-computed byte offset. Skips the <see cref="IsChunked"/> branch and
+    /// per-call array lookups for <c>_columnByteOffsets</c> and <c>_elementSizes</c>.
+    /// <para/>
+    /// <b>Precondition:</b> the archetype must be non-chunked
+    /// (<see cref="IsChunked"/> = false). The caller is responsible for checking
+    /// <see cref="IsChunked"/> once and caching the result.
+    /// Supports read-then-write patterns (e.g. change-tracking read old + write new).
+    /// </summary>
+    [SkipLocalsInit]
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal ref T GetFlatComponentRefAt<T>(int byteOffset, int row) where T : unmanaged
+    {
+        return ref Unsafe.As<byte, T>(ref Unsafe.Add(
+            ref MemoryMarshal.GetArrayDataReference(_data),
+            byteOffset + row * Unsafe.SizeOf<T>()));
+    }
 
     /// <summary>
     /// Sets a component value using a pre-computed byte offset, skipping the
@@ -527,8 +545,7 @@ internal sealed partial class Archetype
     }
 
     /// <summary>
-    /// Flat write-only variant with no tracking overhead. Used on the hot path when
-    /// <see cref="World.IsChangeTrackingActive"/> is false. No version bump, no field load.
+    /// Flat write-only variant used by no-track hot paths. No version bump, no field load.
     /// </summary>
     [SkipLocalsInit]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

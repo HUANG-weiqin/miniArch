@@ -2703,22 +2703,108 @@ public abstract class CommandStreamCore
             var count = _count;
             var compType = Component<T>.ComponentType;
             ref var entriesRef = ref MemoryMarshal.GetArrayDataReference(_entries);
+            var sharedTrackers = world.SharedTrackers;
 
-            // Set-only fast path: every entry is KindSet, so we skip the per-entry
-            // Kind branch and the lastArch invalidation that Add/Remove require.
-            if (_allSetKind)
+            // Fast null gate: when no observer created a tracker, SharedTrackers
+            // is null — skip the entire registry lookup and inline the no-track
+            // loop. This matches the abeb no-observer code shape exactly.
+            // If the registry exists but is empty (after RestoreState/Dispose),
+            // also skip per-type GetTracker<T>() dispatch.
+            if (sharedTrackers is null || !sharedTrackers.HasAnyTrackers)
             {
-                if (world._typedTrackers is not null)
+                // Zero trackers globally: all stores go no-track, unconditionally.
+                // No-track loops are inlined here (not in helpers) so the JIT sees
+                // them as part of ApplyToWorld, matching the abeb code shape.
+                if (_allSetKind)
                 {
+                    // Inline no-track set-only loop (abeb shape)
+                    Archetype? fastArch = null;
+                    int fastColIdx = -1;
+                    int fastByteOffset = 0;
+                    bool fastIsChunked = false;
+
                     for (var i = 0; i < count; i++)
                     {
                         ref var entry = ref Unsafe.Add(ref entriesRef, i);
                         var record = world.GetRecordFast(entry.Entity);
-                        World.ApplyTypedSet(entry.Entity, record, compType, in entry.Value);
+#if DEBUG
+                        Debug.Assert(record.Archetype is not null && record.Version == entry.Entity.Version,
+                            $"GetRecordFast returned stale or unoccupied record for entity {entry.Entity}.");
+#endif
+                        var arch = record.Archetype!;
+                        if (arch != fastArch)
+                        {
+                            fastArch = arch;
+                            if (!arch.TryGetComponentIndex(compType, out fastColIdx))
+                                throw new InvalidOperationException(
+                                    $"Entity {entry.Entity} does not have component {typeof(T).Name}.");
+                            fastByteOffset = arch.GetColumnByteOffset(fastColIdx);
+                            fastIsChunked = arch.IsChunked;
+                        }
+                        if (!fastIsChunked)
+                            arch.SetComponentAtFlatNoTrack<T>(fastColIdx, fastByteOffset, record.RowIndex, in entry.Value);
+                        else
+                            arch.SetComponentAtTypedNoTrack(fastColIdx, record.RowIndex, in entry.Value);
                     }
                     return;
                 }
 
+                // Inline no-track mixed loop (abeb shape)
+                Archetype? lastArchMixed = null;
+                int lastColIdx = -1;
+                int lastByteOffsetMixed = 0;
+                bool lastIsChunkedMixed = false;
+
+                for (var i = 0; i < count; i++)
+                {
+                    ref var entry = ref Unsafe.Add(ref entriesRef, i);
+                    var record = world.GetRecordFast(entry.Entity);
+#if DEBUG
+                    Debug.Assert(record.Archetype is not null && record.Version == entry.Entity.Version,
+                        $"GetRecordFast returned stale or unoccupied record for entity {entry.Entity}.");
+#endif
+
+                    if (entry.Kind == KindSet)
+                    {
+                        var arch = record.Archetype!;
+                        if (arch != lastArchMixed)
+                        {
+                            lastArchMixed = arch;
+                            if (!arch.TryGetComponentIndex(compType, out lastColIdx))
+                                throw new InvalidOperationException(
+                                    $"Entity {entry.Entity} does not have component {typeof(T).Name}.");
+                            lastByteOffsetMixed = arch.GetColumnByteOffset(lastColIdx);
+                            lastIsChunkedMixed = arch.IsChunked;
+                        }
+
+                        if (!lastIsChunkedMixed)
+                            arch.SetComponentAtFlatNoTrack<T>(lastColIdx, lastByteOffsetMixed, record.RowIndex, in entry.Value);
+                        else
+                            arch.SetComponentAtTypedNoTrack(lastColIdx, record.RowIndex, in entry.Value);
+                    }
+                    else
+                    {
+                        lastArchMixed = null;
+                        if (entry.Kind == KindAdd)
+                            world.ApplyTypedAdd(entry.Entity, record, compType, in entry.Value);
+                        else
+                            world.RemoveBoxed(entry.Entity, record, compType);
+                    }
+                }
+                return;
+            }
+
+            // ── Trackers exist globally: check per-type ──
+            if (_allSetKind)
+            {
+                var tracker = sharedTrackers.GetTracker<T>();
+                if (tracker is not null)
+                {
+                    ApplySetOnlyTrackedToWorld(world, tracker);
+                    return;
+                }
+
+                // No-track set-only loop inline (no helper call — JIT code shape)
                 Archetype? fastArch = null;
                 int fastColIdx = -1;
                 int fastByteOffset = 0;
@@ -2750,7 +2836,117 @@ public abstract class CommandStreamCore
                 return;
             }
 
-            // Mixed-kind path: full Kind dispatch + archetype cache invalidation.
+            // Mixed-kind path: may have Set + Add/Remove.
+            var mixedTracker = sharedTrackers.GetTracker<T>();
+            if (mixedTracker is not null)
+            {
+                ApplyMixedTrackedToWorld(world, mixedTracker);
+                return;
+            }
+
+            // No-track mixed loop inline (no helper call — JIT code shape)
+            {
+                Archetype? lastArchMixed = null;
+                int lastColIdx = -1;
+                int lastByteOffsetMixed = 0;
+                bool lastIsChunkedMixed = false;
+
+                for (var i = 0; i < count; i++)
+                {
+                    ref var entry = ref Unsafe.Add(ref entriesRef, i);
+                    var record = world.GetRecordFast(entry.Entity);
+#if DEBUG
+                    Debug.Assert(record.Archetype is not null && record.Version == entry.Entity.Version,
+                        $"GetRecordFast returned stale or unoccupied record for entity {entry.Entity}.");
+#endif
+
+                    if (entry.Kind == KindSet)
+                    {
+                        var arch = record.Archetype!;
+                        if (arch != lastArchMixed)
+                        {
+                            lastArchMixed = arch;
+                            if (!arch.TryGetComponentIndex(compType, out lastColIdx))
+                                throw new InvalidOperationException(
+                                    $"Entity {entry.Entity} does not have component {typeof(T).Name}.");
+                            lastByteOffsetMixed = arch.GetColumnByteOffset(lastColIdx);
+                            lastIsChunkedMixed = arch.IsChunked;
+                        }
+
+                        if (!lastIsChunkedMixed)
+                            arch.SetComponentAtFlatNoTrack<T>(lastColIdx, lastByteOffsetMixed, record.RowIndex, in entry.Value);
+                        else
+                            arch.SetComponentAtTypedNoTrack(lastColIdx, record.RowIndex, in entry.Value);
+                    }
+                    else
+                    {
+                        lastArchMixed = null;
+                        if (entry.Kind == KindAdd)
+                            world.ApplyTypedAdd(entry.Entity, record, compType, in entry.Value);
+                        else
+                            world.RemoveBoxed(entry.Entity, record, compType);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Set-only path with a shared tracker: read old value via ref cell,
+        /// record the change, then write the new value.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void ApplySetOnlyTrackedToWorld(World world, ChangeTracker<T> tracker)
+        {
+            var count = _count;
+            var compType = Component<T>.ComponentType;
+            ref var entriesRef = ref MemoryMarshal.GetArrayDataReference(_entries);
+
+            Archetype? cachedArch = null;
+            int cachedCol = -1;
+            int cachedByteOffset = 0;
+            bool cachedIsChunked = false;
+
+            for (var i = 0; i < count; i++)
+            {
+                ref var entry = ref Unsafe.Add(ref entriesRef, i);
+                var record = world.GetRecordFast(entry.Entity);
+                var arch = record.Archetype!;
+
+                if (arch != cachedArch)
+                {
+                    cachedArch = arch;
+                    cachedCol = arch.GetComponentIndexFast(compType);
+                    cachedByteOffset = arch.GetColumnByteOffset(cachedCol);
+                    cachedIsChunked = arch.IsChunked;
+                }
+
+                var eid = entry.Entity.Id;
+                if (!cachedIsChunked)
+                {
+                    ref var cell = ref arch.GetFlatComponentRefAt<T>(cachedByteOffset, record.RowIndex);
+                    World.RecordTypedChange(tracker, entry.Entity, eid, ref cell, in entry.Value);
+                    cell = entry.Value;
+                }
+                else
+                {
+                    ref var cell = ref arch.GetComponentRefAt<T>(cachedCol, record.RowIndex);
+                    World.RecordTypedChange(tracker, entry.Entity, eid, ref cell, in entry.Value);
+                    cell = entry.Value;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Mixed-kind path with a shared tracker: set path records changes;
+        /// Add/Remove handled as before.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private void ApplyMixedTrackedToWorld(World world, ChangeTracker<T> tracker)
+        {
+            var count = _count;
+            var compType = Component<T>.ComponentType;
+            ref var entriesRef = ref MemoryMarshal.GetArrayDataReference(_entries);
+
             Archetype? lastArchMixed = null;
             int lastColIdx = -1;
             int lastByteOffsetMixed = 0;
@@ -2767,12 +2963,6 @@ public abstract class CommandStreamCore
 
                 if (entry.Kind == KindSet)
                 {
-                    if (world._typedTrackers is not null)
-                    {
-                        World.ApplyTypedSet(entry.Entity, record, compType, in entry.Value);
-                        continue;
-                    }
-
                     var arch = record.Archetype!;
                     if (arch != lastArchMixed)
                     {
@@ -2784,10 +2974,19 @@ public abstract class CommandStreamCore
                         lastIsChunkedMixed = arch.IsChunked;
                     }
 
+                    var eid = entry.Entity.Id;
                     if (!lastIsChunkedMixed)
-                        arch.SetComponentAtFlatNoTrack<T>(lastColIdx, lastByteOffsetMixed, record.RowIndex, in entry.Value);
+                    {
+                        ref var cell = ref arch.GetFlatComponentRefAt<T>(lastByteOffsetMixed, record.RowIndex);
+                        World.RecordTypedChange(tracker, entry.Entity, eid, ref cell, in entry.Value);
+                        cell = entry.Value;
+                    }
                     else
-                        arch.SetComponentAtTypedNoTrack(lastColIdx, record.RowIndex, in entry.Value);
+                    {
+                        ref var cell = ref arch.GetComponentRefAt<T>(lastColIdx, record.RowIndex);
+                        World.RecordTypedChange(tracker, entry.Entity, eid, ref cell, in entry.Value);
+                        cell = entry.Value;
+                    }
                 }
                 else
                 {
