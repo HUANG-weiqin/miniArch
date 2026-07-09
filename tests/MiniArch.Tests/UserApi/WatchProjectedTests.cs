@@ -165,8 +165,6 @@ public class WatchProjectedTests
     public void Explicit_query_filters_which_entities_match()
     {
         using var world = new World();
-        int projection(Entity e, Position p) => p.X;
-
         var watch = world.Watch<Position, int, PositionXHandler>(
             new QueryDescription().With<Position>());
         watch.Handler = new PositionXHandler();

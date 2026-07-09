@@ -174,7 +174,7 @@ public class ChangeQueryTests
         world.Set(e, new Position(10, 20));
 
         watch.Diff(world);
-        Assert.Equal(1, watch.Handler.Changes.Count);
+        Assert.Single(watch.Handler.Changes);
 
         watch.Diff(world); // repeat
         Assert.Equal(2, watch.Handler.Changes.Count);
@@ -260,12 +260,12 @@ public class ChangeQueryTests
 
         world.Set(e, new Position(10, 20));
         watch.Diff(world);
-        Assert.Equal(1, watch.Handler.Changes.Count);
+        Assert.Single(watch.Handler.Changes);
 
         // Destroy after diff: entity no longer exists, next diff won't find it
         world.Destroy(e);
         watch.Diff(world);
-        Assert.Equal(1, watch.Handler.Changes.Count); // still 1 (old change) + no new ones
+        Assert.Single(watch.Handler.Changes); // still 1 (old change) + no new ones
     }
 
     // ── World growth ─────────────────────────────────────────────
@@ -353,7 +353,7 @@ public class ChangeQueryTests
 
         world.Set(e1, new Position(1, 1));
         watch.Diff(world);
-        Assert.Equal(1, watch.Handler.Changes.Count);
+        Assert.Single(watch.Handler.Changes);
 
         // Fresh handler: the new baseline should only produce the next diff
         watch.Handler = new PositionHandler(0);

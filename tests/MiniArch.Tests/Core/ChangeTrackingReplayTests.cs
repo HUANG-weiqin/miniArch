@@ -145,7 +145,7 @@ public sealed class ChangeTrackingReplayTests
         // After replay, entity should have Velocity=2
         // Watch diff should report old=default, new=Velocity(2,2) since
         // the entity was created without Velocity and Snapshot captured that.
-        Assert.Equal(1, watch.Handler.Changes.Count);
+        Assert.Single(watch.Handler.Changes);
     }
 
     // ── Create + Destroy across two deltas ─────────────────────────
