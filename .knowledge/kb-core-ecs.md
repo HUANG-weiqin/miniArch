@@ -69,7 +69,7 @@ updated: 2026-07-09
 |------|---------|---------|
 | World | `MiniArch.World` | `new World()` |
 | Entity | `MiniArch.Entity` | `world.Create<T>()` |
-| Query 描述 | `MiniArch.QueryDescription` | `new QueryDescription().With<T>()` |
+| Query 描述 | `MiniArch.QueryDescription` | `new QueryDescription().With<T>()` / `.Exact()`（精确 archetype 匹配） |
 | Query facade | `MiniArch.Query` (public struct) | `world.Query(desc)` → `GetChunks()` / `ForEachChunk` |
 | 零分配 chunk job | `MiniArch.IChunkForEach` (public interface) | `query.ForEachChunk<TForEach>(ref job)` |
 | Chunk 视图 | `ChunkView` (public readonly struct) | `chunk.GetSpan<T>()` |
@@ -83,6 +83,7 @@ updated: 2026-07-09
 - typed query 家族（`Query<T>`、`Query<T1,T2>` 等）已移除
 - builder 风格 `World.Query()...Build()` 已移除
 - `OrderByEntityId()` / `OrderByComponent<T>(Comparison<T>)` 在 `MiniArch.Query` facade 上提供，不缓存排序结果（每次枚举租 `ArrayPool` 排序）。`OrderByComponent<T>` 批量线性扫描组件值后排序，避免 per-comparison `world.Get` 开销
+- `QueryDescription.Exact()` 启用精确 archetype 匹配（Flecs `Strict()` 等价）：只匹配 archetype 组件集合**严格等于** required 集合的实体。`WithAny<T>()` 在 exact 模式下被忽略。实现见 `Core/QueryCache.Matches()` 中的 count 检查。
 
 **坑点：**
 - `MiniArch.Query` 是 struct wrapper，不能用于 identity 断言
