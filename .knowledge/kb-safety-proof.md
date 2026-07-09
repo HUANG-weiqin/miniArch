@@ -2,7 +2,7 @@
 title: MiniArch ECS 库安全证明
 module: Proof
 description: 全维度库安全证明——224 个随机种子、500 万帧、713 个测试、15 条代码路径审计
-updated: 2026-07-06
+updated: 2026-07-09
 ---
 # MiniArch ECS 库安全证明
 

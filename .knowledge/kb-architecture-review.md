@@ -2,7 +2,7 @@
 title: Architecture Mechanistic Review
 module: MiniArch.Core
 description: Mechanistic insight of the entire miniArch ECS library — one-line truths, subsystem breakdown, data flows, known issues, and design tensions. Links to per-subsystem kb pages for depth.
-updated: 2026-07-06 (CommandStreamCore mutator boundary + Add/Set/Remove semantics calibrated)
+updated: 2026-07-09
 ---
 # Architecture Mechanistic Review
 

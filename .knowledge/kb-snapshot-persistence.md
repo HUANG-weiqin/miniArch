@@ -2,7 +2,7 @@
 title: Snapshot Persistence
 module: MiniArch.Core Snapshot
 description: Full-world snapshot save/load design for unmanaged components (WorldSnapshot.Save/Load, Clone, CaptureState/RestoreState), plus Checksum double mode
-updated: 2026-07-03 (坑点修正 CaptureState/CommandStream 交互描述，实测确认 `Clear()` 复位 `_deferredSeq`)
+updated: 2026-07-09
 ---
 # Snapshot Persistence
 

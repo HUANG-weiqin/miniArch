@@ -2,7 +2,7 @@
 title: Hero Pipeline Regression Test
 module: HeroComing.Perf
 description: First-class regression gate for architecture changes — 30s timed throughput test; PipelineBenchmarkTests history reference (old --track-observer / --compare-old-value-tracking removed with old change tracking API)
-updated: 2026-07-09 (删除 --track-observer / --compare-old-value-tracking；旧 change tracking API 已删除)
+updated: 2026-07-09
 ---
 # Hero Pipeline Regression Test
 

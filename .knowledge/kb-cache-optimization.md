@@ -2,7 +2,7 @@
 title: Cache & Memory Optimization Review
 module: MiniArch.Core
 description: Memory layout, cache behavior analysis, applied optimizations, and remaining opportunities for the ECS runtime
-updated: 2026-07-05 (补 CommandStream store cache / dirty flags Hero perf 微优化)
+updated: 2026-07-09
 ---
 # Cache & Memory Optimization Review
 

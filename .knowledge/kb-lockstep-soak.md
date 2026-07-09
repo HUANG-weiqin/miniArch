@@ -2,7 +2,7 @@
 title: 多 host Lockstep 浸泡测试 — 网络同步收敛证明
 module: LockstepSoak
 description: N host placeholder lockstep 长周期随机操作收敛验证器——所有 host 全走 Replay 路径，每帧跨 host CanonicalChecksum 字节级比对。补齐单 host soak（Submit vs Replay 双路径）无法覆盖的 DeferredEntities=true 多 host 交错收敛性。
-updated: 2026-07-06
+updated: 2026-07-09
 ---
 # 多 host Lockstep 浸泡测试 — 网络同步收敛证明
 

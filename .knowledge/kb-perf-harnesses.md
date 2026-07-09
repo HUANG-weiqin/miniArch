@@ -2,7 +2,7 @@
 title: Performance Harnesses Disambiguation
 module: Meta
 description: Matrix of the 6 performance harnesses in miniArch — what each measures, current baselines, and which one is the regression gate
-updated: 2026-07-09 (补 WatchApi.Perf 秒级 Watch API 专项吞吐/分配验证，消歧矩阵由 5→6)
+updated: 2026-07-09
 ---
 # Performance Harnesses Disambiguation
 

@@ -2,7 +2,7 @@
 title: Lockstep Playbook
 module: Meta
 description: End-to-end guide for implementing lockstep multiplayer on miniArch — from recording commands to peer synchronization and divergence detection
-updated: 2026-07-04 (World.TryResolvePlaceholder → internal, 改指 EntitySlot)
+updated: 2026-07-09
 ---
 # Lockstep Playbook
 

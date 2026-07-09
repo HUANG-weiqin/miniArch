@@ -2,7 +2,7 @@
 title: 并行 Query 迭代
 module: MiniArch.Core Query
 description: ChunkView 作为并行工作单元的并行 query 迭代 API、安全模型、性能特征
-updated: 2026-07-04 (修正并行 struct 共享语义的文档描述)
+updated: 2026-07-09
 ---
 # 并行 Query 迭代
 

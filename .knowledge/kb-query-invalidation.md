@@ -2,7 +2,7 @@
 title: Query Invalidation System
 module: MiniArch.Core Query
 description: Two-stage incremental query invalidation — archetype count gate, append-only scan of new archetypes, per-archetype chunk-view-shape refresh
-updated: 2026-07-05 (修正单 segment 晋升：_archetypeExpectedViews 记录 view shape 而非纯 segment 数)
+updated: 2026-07-09
 ---
 # Query Invalidation System
 

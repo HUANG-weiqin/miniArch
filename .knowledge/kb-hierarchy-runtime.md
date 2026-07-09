@@ -2,7 +2,7 @@
 title: Hierarchy Runtime
 module: MiniArch.Core Hierarchy
 description: Runtime-owned parent-child relations, cascade destroy semantics, and snapshot restore behavior
-updated: 2026-06-30 (hierarchy API 重命名: Link/Unlink → AddChild/RemoveChild; 零分配 EnumerateChildren/HasChildren 替代 GetChildren)
+updated: 2026-07-09
 ---
 # Hierarchy Runtime
 

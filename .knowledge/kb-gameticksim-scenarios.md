@@ -2,7 +2,7 @@
 title: GameTickSim Scenarios
 module: GameTickSim.Perf
 description: GameTickSim isolated scenario benchmarks and BulletHell workload design rules
-updated: 2026-06-30 (修正 front matter module 格式与路径漂移)
+updated: 2026-07-09
 ---
 # GameTickSim Scenarios
 

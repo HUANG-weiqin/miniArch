@@ -2,7 +2,7 @@
 title: MiniArch.Diagnostics 诊断工具
 module: MiniArch.Diagnostics
 description: ECS 世界的状态诊断工具集：比对、校验、检查、探查
-updated: 2026-07-05
+updated: 2026-07-09
 ---
 
 # MiniArch.Diagnostics 诊断工具

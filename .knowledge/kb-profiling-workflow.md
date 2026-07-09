@@ -2,7 +2,7 @@
 title: Profiling Workflow
 module: Workspace
 description: Reusable CPU sampling workflow for locating MiniArch hotspots without instrumenting runtime hot paths
-updated: 2026-06-30 (修正脚本/共享基础设施路径漂移)
+updated: 2026-07-09
 ---
 # Profiling Workflow
 

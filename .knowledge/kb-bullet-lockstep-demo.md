@@ -2,7 +2,7 @@
 title: BulletLockstep Demo — 多 host 弹幕游戏集成测试
 module: samples.BulletLockstep.Demo
 description: 用真实弹幕游戏场景端到端压测 miniArch 全部公共能力（placeholder lockstep / archetype 迁移 / hierarchy / chunked storage / 持久化 / 回滚）。沉淀 demo 中验证过的 lockstep 用法模式与踩过的坑。
-updated: 2026-07-04 (删除 Concat 相关坑点)
+updated: 2026-07-09
 ---
 
 # BulletLockstep Demo — 多 host 弹幕游戏集成测试

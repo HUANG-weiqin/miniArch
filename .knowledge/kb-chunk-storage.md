@@ -2,7 +2,7 @@
 title: Chunk 存储
 module: MiniArch.Core
 description: Archetype 存储架构 — 单块模式（默认）和分段模式（阈值后自动切换），包括 SoA 布局、跨段 swap-remove、查询分段迭代
-updated: 2026-07-05 (修正 AssertSegmentInvariants 不变量：非空段连续在前，非"非末段必须满"；段内空洞合法)
+updated: 2026-07-09
 ---
 # Chunk 存储
 

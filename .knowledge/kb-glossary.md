@@ -2,7 +2,7 @@
 title: Glossary
 module: Meta
 description: Terms and acronyms used across the miniArch knowledge base
-updated: 2026-06-30 (补 HeroComing.Perf 参数语义)
+updated: 2026-07-09
 ---
 # Glossary
 

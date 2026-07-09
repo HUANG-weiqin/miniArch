@@ -2,7 +2,7 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-07-09 (M6: dead code deletion round + Watch API pull-event 模型替换旧 Change Tracking 全部接口；WatchApi.Perf 秒级发布验证)
+updated: 2026-07-09
 ---
 # Knowledge Base Changelog
 

@@ -50,6 +50,7 @@ updated: 2026-07-09
 | `UserApi/UserQueryTests.cs` | 普通 API 契约、OrderByEntityId/OrderByComponent |
 | `PublicApiSentinelTests.cs` | 公共 API 冻结哨兵：反射枚举 MiniArch 程序集 public surface，与签入快照对比，意外 API 变更导致测试失败 |
 | `CrossFeatureParityTests.cs` | M3 交叉特性矩阵：CommandStream+Hierarchy、+DeferredEntities、+Watch、Replay+Snapshot、Snapshot+Hierarchy、Watch+RestoreState、三路 Submit→Snapshot→RestoreState→Replay |
+| `Core/SubmitReplayRestoreParityTests.cs` | M4 Submit/Replay/Restore 三路收敛——9 种模式（Create+Add、Set、Remove+Add 同组件、Add+Remove 同组件、Hierarchy+cascade destroy、create/cancel churn、Clone+mutate、Add+Set+Remove 同组件、高密度混合 burst）字节级 checksum 一致 |
 
 ## PublicApiSentinel
 

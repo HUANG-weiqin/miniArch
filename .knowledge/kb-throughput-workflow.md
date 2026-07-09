@@ -2,7 +2,7 @@
 title: Throughput Workflow
 module: Workspace
 description: Reusable fixed-duration throughput comparison workflow for MiniArch and Arch workloads
-updated: 2026-06-30 (修正脚本/共享基础设施路径漂移)
+updated: 2026-07-09
 ---
 # Throughput Workflow
 

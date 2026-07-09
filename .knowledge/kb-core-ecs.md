@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-07-06 (Add/Set/Remove 当前语义校准: Add ensure+overwrite, Set strict, Remove no-op)
+updated: 2026-07-09
 ---
 # MiniArch Core ECS
 

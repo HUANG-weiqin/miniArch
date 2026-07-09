@@ -2,7 +2,7 @@
 title: MiniArch vs Arch vs DefaultEcs 横向对比
 module: MiniArch.Benchmarks
 description: MiniArch 与其他 C# ECS 架构的吞吐量、内存稳定性、结构操作压力对比
-updated: 2026-06-30 (修正 tools/perf 路径; 失效机制改为增量 append)
+updated: 2026-07-09
 ---
 # MiniArch vs Arch vs DefaultEcs 横向对比
 

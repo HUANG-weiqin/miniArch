@@ -2,7 +2,7 @@
 title: 设计决策总纲 — 为什么是这样而不是那样
 module: Meta
 description: 集中解释 miniArch 每个子系统的设计选择、被拒绝的替代方案及其原因，以及常见"优化提案"为什么是误判。新人必读，读完这个再碰代码。
-updated: 2026-07-09 (§2.11 全文重写：Watch pull-event 模型替换旧 TrackValueChanges/TransitionLog/DenseValueDiff 拆分)
+updated: 2026-07-09
 ---
 # 设计决策总纲
 
