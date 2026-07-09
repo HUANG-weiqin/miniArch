@@ -90,6 +90,7 @@ updated: 2026-07-09
 | S6 | EntityFieldResolver struct layout 变化导致 offset 缓存失效 | ❌ 非 bug。`Marshal.OffsetOf` 实时查 CLR，缓存按 `ComponentType.Value` 索引，类型→ID 映射不可变 | 代码走读 `EntityFieldResolver.cs:70-103` |
 | S7 | `RestoreState` 不回退 `_archetypeSnapshot` 导致 query 看不到 capture 后创建的新 archetype | ❌ 非 bug。capture 后创建新 archetype 时当前 `_archetypeSnapshot` 已经由 `PublishArchetypeSnapshot` 追加；restore 后这些 archetype 作为空壳保留，QueryCache 看到空 chunk/entity count 不影响正确性。archetype 永不删除是 QueryCache append-only 失效机制的基础 | 代码走读 `World.cs:1205-1228` + `World.QueryCache.cs:127-140` + `QueryCache.cs:103-126` |
 | S8 | `CommandStream` 对 pending entity 的 `Create+Add/Set/Remove` 应产生中间 `Changes()` / `Transitions()` | ❌ 非 bug。pending batch 的契约就是只保留最终 materialized state；同一 pending entity 上的 Add/Set/Remove 在 Submit/Snapshot/Replay 前折叠为最终组件签名。中间操作不会作为独立 write/transition 事件暴露；只有 final state 创建时的最终 filter 匹配结果可观察 | 代码走读 `WritePendingComponent` / `MarkBatchComponentRemoved` → `DeduplicateBatchChain` / `MaterializeFromBatchBuffer` / `EmitCreateFromBatch` + 契约测试 `A6/A7/B16/B16b` |
+| S9 | **M4 变质对等扫描**：Submit/Replay/Restore 三路收敛验证——9 个模式共 9 个测试全 PASS，零分歧 | ✅ 无歧 — Submit/Replay/Restore 收敛。测试覆盖：P1 (Create+Add)、P2 (Set)、P3 (Remove+Add 同组件)、P4 (Add+Remove 同组件)、P5 (Hierarchy+cascade destroy)、P6 (create/cancel churn B5/B6 territory)、P7 (Clone+mutate)、P8 (Add+Set+Remove 同组件)、P9 (高密度混合 burst)。Restore 路径验证：所有模式 CaptureState 后 RestoreState 正确回滚到 pre-mutation 状态。3 路字节级 checksum 一致 | 运行 `SubmitReplayRestoreParityTests` 9 个测试，`dotnet test -c Release` 869+5 全 PASS |
 
 ---
 
