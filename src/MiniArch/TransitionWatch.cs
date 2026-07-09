@@ -25,6 +25,8 @@ namespace MiniArch;
 /// the stored epoch against the current snapshot/current epoch gives O(1) membership.
 /// No per-Diff clearing is needed — consecutive snapshots replace the baseline by
 /// bumping the snapshot epoch, so old marks become stale automatically.
+/// Epoch counters are 64-bit (<see cref="long"/>), effectively eliminating overflow
+/// risk on long-running servers.
 /// </para>
 /// </remarks>
 public sealed class TransitionWatch<THandler>
@@ -32,15 +34,15 @@ public sealed class TransitionWatch<THandler>
 {
     private Entity[] _snapshotEntities = [];
     private int _snapshotCount;
-    private int[] _snapshotMarks = [];
-    private int _snapshotEpoch;
+    private long[] _snapshotMarks = [];
+    private long _snapshotEpoch;
     private readonly QueryDescription _query;
     private THandler _handler;
     private bool _hasSnapshot;
 
     // Reusable state for Diff — zero per-call heap allocation (except array growth).
-    private int[] _currentMarks = [];
-    private int _currentEpoch;
+    private long[] _currentMarks = [];
+    private long _currentEpoch;
     private Entity[] _currentEntities = [];
     private int _currentCount;
 
@@ -72,14 +74,8 @@ public sealed class TransitionWatch<THandler>
     {
         ArgumentNullException.ThrowIfNull(world);
 
-        // Bump snapshot epoch; if it wraps, reset marks to zero.
-        unchecked { _snapshotEpoch++; }
-        if (_snapshotEpoch == 0)
-        {
-            Array.Clear(_snapshotMarks);
-            _snapshotEpoch = 1;
-        }
-
+        // 64-bit epoch never overflows in practice; just bump.
+        _snapshotEpoch++;
         _snapshotCount = 0;
 
         foreach (var chunk in world.Query(in _query).GetChunks())
@@ -114,13 +110,8 @@ public sealed class TransitionWatch<THandler>
             throw new InvalidOperationException(
                 "TransitionWatch.Diff requires a prior Snapshot call. Call Snapshot(World) before Diff.");
 
-        // Bump current epoch; if it wraps, reset marks to zero.
-        unchecked { _currentEpoch++; }
-        if (_currentEpoch == 0)
-        {
-            Array.Clear(_currentMarks);
-            _currentEpoch = 1;
-        }
+        // 64-bit epoch never overflows in practice; just bump.
+        _currentEpoch++;
 
         // Phase 1: Scan current query into reusable _currentMarks and _currentEntities.
         // No pre-clear needed: the epoch bump above invalidates all previous marks.
@@ -186,7 +177,7 @@ public sealed class TransitionWatch<THandler>
     // ── Mark helpers (small, inlineable) ─────────────────────────
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void EnsureMarkCapacity(ref int[] marks, int id)
+    private static void EnsureMarkCapacity(ref long[] marks, int id)
     {
         if ((uint)id >= (uint)marks.Length)
         {

@@ -2,12 +2,12 @@
 title: Change Tracking（变更追踪）
 module: MiniArch.Core
 description: World.Watch pull-event 模型：ChangeWatch/TransitionWatch Snapshot+Diff 两阶段扫描；struct handler 回调；零 per-write 成本；TransitionWatch 使用 dense epoch marks（已选定）；旧 TrackValueChanges/TransitionLog/DenseValueDiff/IValueProjector/IValueChangeSink 已删除
-updated: 2026-07-09 (WatchApi.Perf 秒级发布验证；TransitionWatch dense epoch marks)
+updated: 2026-07-09 (WatchApi.Perf 秒级发布验证；TransitionWatch dense epoch marks；epoch 计数器改为 64-bit long 消除溢出风险)
 ---
 
 # Change Tracking（变更追踪）
 
-> 2026-07-09: TransitionWatch membership 从 bitset 改为 dense epoch marks。每个 id 存储最近一次被标记的 epoch 值；epoch bump 自动使旧标记失效，无需 per-Diff 清除。`WatchApi.Perf` 2s warmup + 5s measure 验证所有 Watch 场景稳态 `0 alloc/op`。
+> 2026-07-09: TransitionWatch membership 使用 dense epoch marks（int[] → long[]，64-bit epoch 消除溢出风险）。每个 id 存储最近一次被标记的 epoch 值；epoch bump 自动使旧标记失效，无需 per-Diff 清除，无 `Array.Clear` 尖峰。`WatchApi.Perf` 2s warmup + 5s measure 验证所有 Watch 场景稳态 `0 alloc/op`。
 
 ## 这个模块是干什么的
 
@@ -89,7 +89,7 @@ handler.Count = 0;
 6. **无 per-consumer cursor 管理**：Watch 不维护消费游标，不自动推进 baseline。消费端完全控制何时 `Snapshot`（推进 baseline）。
 7. **删除旧 API，无兼容层**：旧 `TrackValueChanges`/`TrackTransitions`/`CreateDenseValueDiff`/`SharedValueChanges`/`TransitionLog`/`DenseValueDiff` 全部删除。旧 consumer 须迁移到 Watch API。
 8. **默认 query vs 显式 query**：`ChangeWatch` 的 `query` 参数可选，`null` 时自动 `.With<TComponent>()`。`TransitionWatch` 的 filter 必填，空时抛 `ArgumentException`。
-9. **Dense epoch marks 替代 bitset**：`TransitionWatch` 的 membership 使用 `int[]` dense array（按 `entity.Id` 直索引）。每个 id 存储最后被标记的 epoch 值；Snapshot/Diff 时递增对应 epoch 并写入，比较 mark == epoch 即可判断成员资格。**不**需要 per-Diff 清除——epoch bump 自动使旧标记失效。溢出时（`int` wrap to 0）`Array.Clear` 整表并重置为 1。稳态 Diff 零 heap allocation。
+9. **Dense epoch marks 替代 bitset**：`TransitionWatch` 的 membership 使用 `long[]` dense array（按 `entity.Id` 直索引）。每个 id 存储最后被标记的 epoch 值；Snapshot/Diff 时递增对应 epoch 并写入，比较 mark == epoch 即可判断成员资格。**不**需要 per-Diff 清除——epoch bump 自动使旧标记失效。Epoch 计数器为 64-bit（`long`），无限寿命——服务器运行几十年不会溢出，无 `Array.Clear` 尖峰。稳态 Diff 零 heap allocation。
 
 ## 认知模型
 
@@ -102,8 +102,8 @@ handler.Count = 0;
 - **热路径零成本**：`Watch` 创建不做任何 world 注册（无 registry、无 type lookup、无数组预分配 fallocate）。写入路径无任何 watch 分支。
 - **`Snapshot`**：O(当前匹配 query 的实体数) 扫描 + baseline 存储。每个实体一次 `_oldValues[id] = value`（或 `handler.Project(component)`）。
 - **`Diff`**：O(当前匹配 query 的实体数) 扫描 + O(entities) 值比较 + O(diffs) 回调。
-- **空间**：每个 `ChangeWatch` 持有 `_oldValues`（按 `entity.Id` 索引）、`_touchedIds`（上次触及 id）、`_buffer`（diff buffer）。`TransitionWatch` 持有 `_snapshotEntities[]` + `_snapshotMarks` (int[]) + `_currentMarks` (int[]) + `_currentEntities[]` + `_buffer`。Dense epoch 比 bitset 内存多 16×（int vs bit），但 cache 友好且避免 per-Diff 清除。
-- **稳态 GC**：内部数组按需增长，增长后不再缩小；稳态 `Snapshot`+`Diff` 循环零堆分配。Dense epoch `int[]` 在 warmup 后不再 reallocate（max entity id 稳定）。
+- **空间**：每个 `ChangeWatch` 持有 `_oldValues`（按 `entity.Id` 索引）、`_touchedIds`（上次触及 id）、`_buffer`（diff buffer）。`TransitionWatch` 持有 `_snapshotEntities[]` + `_snapshotMarks` (long[]) + `_currentMarks` (long[]) + `_currentEntities[]` + `_buffer`。Dense epoch 比 bitset 内存多 32×（long vs bit），但 64-bit epoch 消除溢出风险且无 `Array.Clear` 尖峰。
+- **稳态 GC**：内部数组按需增长，增长后不再缩小；稳态 `Snapshot`+`Diff` 循环零堆分配。Dense epoch `long[]` 在 warmup 后不再 reallocate（max entity id 稳定）。
 - **多 watch 同组件**：互不干扰，各自持有独立的 baseline arrays。不共享状态，不 fanout。
 
 ### WatchApi.Perf 发布验证（2026-07-09）
@@ -127,7 +127,7 @@ dotnet run -c Release --project tools/perf/WatchApi.Perf -- --entity-count 10000
 | transition-all-exited | 1,698.4 | 0 B |
 | transition-churn-1pct | 7,447.8 | 0 B |
 
-**决策**：TransitionWatch 使用 dense epoch marks（int[] 按 entity.Id 索引）作为 membership 判定。空间换时间：int 标记比 bitset 多 16× 内存，但避免 per-Diff 清除，稳态零分配，在当前 ECS dense-id 模型下性能最优。
+**决策**：TransitionWatch 使用 dense epoch marks（long[] 按 entity.Id 索引）作为 membership 判定。空间换时间：long 标记比 bitset 多 32× 内存，但 epoch bump 避免 per-Diff 清除，64-bit epoch 保证服务器无限运行不溢出，稳态零分配，在当前 ECS dense-id 模型下性能最优。
 
 ## 入口
 
