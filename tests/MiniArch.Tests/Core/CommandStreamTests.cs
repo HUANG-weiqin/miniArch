@@ -36,6 +36,53 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
+    public void EntityCount_excludes_reserved_pending_entities()
+    {
+        var world = new World();
+
+        // Empty world: EntityCount == 0
+        Assert.Equal(0, world.EntityCount);
+
+        // Create a live entity directly
+        var alive = world.Create();
+        Assert.True(world.IsAlive(alive));
+        Assert.Equal(1, world.EntityCount);
+
+        // Reserve an entity via CommandStream (before Submit)
+        var stream = new CommandStream(world);
+        var reserved = stream.Create();
+        Assert.False(world.IsAlive(reserved));
+
+        // Reserved entity must NOT increase EntityCount
+        Assert.Equal(1, world.EntityCount);
+
+        // Submit materializes the reserved entity
+        stream.Submit();
+
+        // Now EntityCount should include it
+        Assert.Equal(2, world.EntityCount);
+    }
+
+    [Fact]
+    public void RestoreState_recomputes_reserved_count_after_pending_reservation()
+    {
+        var world = new World();
+        var live = world.Create();
+        var snapshot = world.CaptureState();
+
+        var stream = new CommandStream(world);
+        var reserved = stream.Create();
+
+        Assert.False(world.IsAlive(reserved));
+        Assert.Equal(1, world.EntityCount);
+
+        world.RestoreState(snapshot);
+
+        Assert.True(world.IsAlive(live));
+        Assert.Equal(1, world.EntityCount);
+    }
+
+    [Fact]
     public void Submit_applies_existing_entity_commands_and_allows_reuse()
     {
         var world = new World();

@@ -63,8 +63,8 @@ public sealed partial class World : IDisposable
     /// </summary>
     internal int ReservedReleaseEpoch;
 
-#if DEBUG
     internal int _reservedCount;
+#if DEBUG
     internal int _deferredEpoch;
 #endif
 
@@ -135,6 +135,7 @@ public sealed partial class World : IDisposable
         _entitySlotCount = 0;
         _records = Array.Empty<EntityRecord>();
         _freeIdCount = 0;
+        _reservedCount = 0;
         _destroyVisitedGen = [];
         _destroyCurrentGen = 0;
         _replayPlaceholderMap = [];
@@ -175,11 +176,7 @@ public sealed partial class World : IDisposable
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
         {
-#if DEBUG
             return _entitySlotCount - _freeIdCount - _reservedCount;
-#else
-            return _entitySlotCount - _freeIdCount;
-#endif
         }
     }
 
@@ -1106,13 +1103,11 @@ public sealed partial class World : IDisposable
     {
         var rowIndex = archetype.AddEntity(entity);
         ref var record = ref _records[entity.Id];
-#if DEBUG
         // Only decrement if the entity was in reserved state
         // (Archetype==null, Version matches). Malformed deltas that Create
         // without a prior Reserve skip the increment, so don't decrement.
         if (!record.IsOccupied && record.Version == entity.Version)
             _reservedCount--;
-#endif
         record.Archetype = archetype;
         record.RowIndex = rowIndex;
         return rowIndex;
@@ -1275,6 +1270,14 @@ public sealed partial class World : IDisposable
         for (var i = 0; i < snapshot.FreeIdCount; i++)
             _freeIds[i] = new RecycledEntity(snapshot.FreeEntities[i].Id, snapshot.FreeEntities[i].Version);
         _freeIdCount = snapshot.FreeIdCount;
+
+        var occupiedCount = 0;
+        for (var i = 0; i < _entitySlotCount; i++)
+        {
+            if (_records[i].IsOccupied)
+                occupiedCount++;
+        }
+        _reservedCount = _entitySlotCount - _freeIdCount - occupiedCount;
 
         // Reset all archetypes to empty, then restore backed-up ones.
         // This handles prediction-created archetypes that have no backup.

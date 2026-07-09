@@ -109,7 +109,9 @@ updated: 2026-07-09
 - ~~**ICommandRecorder 保留**~~ — 已删除（YAGNI）。测试层直接使用 `CommandStream`
 - **Edge cache 内联**：增删目标缓存直接挂在 Archetype 上（`Archetype?[]` 按 componentId 直索引），无需独立 ArchetypeEdges 对象
 - **迁移拷贝内联**：`CopySharedComponentsFrom` 直接在 Archetype 上实现，无需 MigrationPlan class
-- 热路径安全检查（bounds check、capacity check、`AssertNotDisposed`、`AssertAlive` 等）包裹 `[Conditional("DEBUG")]`，Release 下零开销。这是有意设计：将这些检查改为常开会为每个 public API 增加分支，在没有明确契约变更和 perf 证明前保持 DEBUG-only
+- `EntityCount` 在所有构建配置下都只统计 **alive entity**；reserved pending id 不计入结果
+- **用户可触发的防御性检查**（如 `AssertNotDisposed`、`AssertAlive`、`GetRecordFast` 的 id/版本校验）在 Release 常开。`kb-design-rationale.md` §3.11 已用 Release benchmark 证明这些检查零可测成本，不能再把它们误改回 DEBUG-only
+- **内部结构不变量检查**（如 `ChunkView.AssertValid`、`Archetype.AssertSegmentInvariants`）才使用 `[Conditional("DEBUG")]` / `Debug.Assert`。划分原则：用户错误 fail-fast，内部一致性只在 Debug 审计
 - `[SkipLocalsInit]` + `AggressiveInlining` + `Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), offset)` 消除 JIT 边界检查
 - Entity version 和 location 合并存储在 `EntityRecord[] _records`：`(Archetype, RowIndex, Version)` 16 字节紧凑布局
 - flat byte storage 只面向 unmanaged 组件；含托管引用组件在 storage 构造时 fail fast

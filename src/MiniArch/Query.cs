@@ -132,7 +132,7 @@ public readonly struct Query
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void ForEachChunk<TForEach>(ref TForEach forEach)
-        where TForEach : IChunkForEach
+        where TForEach : struct, IChunkForEach
     {
         var chunks = _query.GetChunkViewSpan();
         for (var i = 0; i < chunks.Length; i++)
@@ -177,7 +177,7 @@ public readonly struct Query
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void ForEachChunkParallel<TForEach>(TForEach forEach)
-        where TForEach : IChunkForEach
+        where TForEach : struct, IChunkForEach
     {
         var chunks = _query.GetChunkViewArray(out var count);
         if (count == 0)

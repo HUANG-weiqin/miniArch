@@ -655,9 +655,9 @@ struct: MiniArch.OrderedEntityQuery
   Method: GetEnumerator() -> MiniArch.OrderedEntityEnumerator
 struct: MiniArch.Query
   Method: ForEachChunk(MiniArch.ChunkAction action) -> System.Void
-  Method: ForEachChunk(ref TForEach& forEach) -> System.Void where TForEach : MiniArch.IChunkForEach
+  Method: ForEachChunk(ref TForEach& forEach) -> System.Void where TForEach : struct, MiniArch.IChunkForEach, System.ValueType
   Method: ForEachChunkParallel(MiniArch.ChunkAction action) -> System.Void
-  Method: ForEachChunkParallel(TForEach forEach) -> System.Void where TForEach : MiniArch.IChunkForEach
+  Method: ForEachChunkParallel(TForEach forEach) -> System.Void where TForEach : struct, MiniArch.IChunkForEach, System.ValueType
   Method: GetChunks() -> System.ReadOnlySpan<MiniArch.ChunkView>
   Method: GetEnumerator() -> MiniArch.QueryEnumerator
   Method: OrderByComponent(System.Collections.Generic.IComparer<T> comparer) -> MiniArch.OrderedComponentQuery<T> where T : struct, System.ValueType

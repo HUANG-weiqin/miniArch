@@ -246,6 +246,7 @@ public sealed class WorldLifecycleTests
         var world = new World(chunkCapacity: 4);
         var firstBatch = new Entity[6];
         world.CreateMany(firstBatch);
+        Assert.Equal(6, world.EntityCount);
 
         for (var i = 0; i < firstBatch.Length; i++)
         {
@@ -254,6 +255,7 @@ public sealed class WorldLifecycleTests
 
         var recycledBatch = new Entity[6];
         world.CreateMany(recycledBatch);
+        Assert.Equal(6, world.EntityCount);
 
         var ids = recycledBatch.Select(entity => entity.Id).OrderBy(id => id).ToArray();
         Assert.Equal(new[] { 0, 1, 2, 3, 4, 5 }, ids);
