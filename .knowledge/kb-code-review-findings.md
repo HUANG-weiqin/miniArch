@@ -283,3 +283,40 @@ updated: 2026-07-09
 ### 修复原则
 
 这些修复遵循**不变性原则**：Submit 路径和 Replay 路径必须在操作顺序和语义上一致。分歧（如排序差异、去重差异、释放差异）是 Submit/Replay 不一致的根因。库层不做过度防御（不静默吞非法操作），但语义上等价的操作（Add 已存在 = 写值）应被允许。ChangeQuery 自身的修复遵循**防御性读取原则**：只要组件可能缺失，就必须使用 `TryGetComponentIndex` 而不是 `GetComponentIndexFast`。
+
+---
+
+## M5 热路径防御/成本删除审计（2026-07-09）
+
+### 审计范围
+
+`src/MiniArch/Core/` 全量 core 文件（~9500 LOC），重点扫描：
+- Dictionary/HashSet 在每帧热路径中的使用
+- `if (condition) throw` 检查在 10000+/帧循环中
+- 范围/索引检查的完全冗余
+
+### 基线数据
+
+```
+Scenario           |   Rounds/s |   ms/round |   Rounds |  Heap Δ KB |   Memory
+Movement           |     1877.6 |      0.533 |    56328 |    -3012.8 |       OK
+Attack             |     1133.6 |      0.882 |    34009 |    -2910.2 |       OK
+```
+
+### 已检查的候选及裁决
+
+| # | 位置 | 猜想 | 结论 | 验证 |
+|---|------|------|------|------|
+| M5-1 | `FrameDelta.cs:227-228` `Validate()` 内 `new HashSet<Entity>()` (x2) + line 322 `new HashSet<int>()` | 这些 HashSet 在 Validate 调用时分配，如果在每帧回放前调用则为每帧分配 | ❌ 非热路径。`Validate()` 的文档明确标注"对不受信任的 delta，在 Replay 前调用"。在 lockstep 常态下，本地生成的 delta 跳过 Validate。两个 HashSet 的存在是有意的防御设计，每帧路径不调用 | 代码走读：`Validate()` 注释 + 无从 `ReplayCore` 调用 Validate 的调用图 |
+| M5-2 | `World.cs:38-57` `_archetypes` / `_archetypeByMask` / `_archetypeByHash` / `_replayCreateCounts` Dictionary | 每帧 archetype 查找中 Dictionary 查找开销 | ❌ 非热点。`_archetypeByMask`（热路径）是 canonical mask 的 O(1) Dictionary 查找，`_replayCreateCounts` 在 `PreScanForCapacity` 中重用（热稳定后零分配）。`_archetypes` 仅在冷启动或罕见的高 ID 组件路径上访问 | 代码走读 + §3.7（Signature 分配已缓存） |
+| M5-3 | `World.cs:84-85` `_queryFiltersByDescription` / `_queries` Dictionary | 每次 query 迭代前从 Dictionary 查 QueryCache 的开销 | ❌ 非热点。这些 Dictionary 仅用于 query 创建/恢复，每帧的 `GetChunkViewSpan`/`GetArchetypeSpan` 直接访问缓存的 `_snapshotChunkViews`/`_snapshotArchetypes` 数组，不涉及 Dictionary 查找 | 代码走读 `QueryCache.cs:103-126` |
+| M5-4 | `CommandStreamCore.cs:2942` `FrozenState.HierarchyByChild` Dictionary`<Entity, HierarchyIntent>` | Submit/Snapshot 路径上的 Dictionary 迭代 | ❌ 条件性使用。仅在帧内有 AddChild/RemoveChild 操作时填充。`.Clear()` 在 `SwapOutState` 中每帧重置，无累积。字典大小 = 每帧的分层操作数，典型值为 0-10 | 代码走读：`SwapOutState` line 981 `_frozen.HierarchyByChild.Clear()` |
+| M5-5 | `Archetype.Storage.cs:233-275` `AllocateRows()` 分块路径扫描所有 segment 查找可用容量 | 线性扫描 segment 在 archetype 有很多 segment 时浪费 | ❌ 非热点。`AllocateRows` 在实体创建/迁移时调用，而非每帧查询迭代。`_segmentCapacity` 目标为 2MB/segment，因此大多数 archetype 保持 1 段。扫描仅发生在实体分配时（远不频繁于查询） | 代码走读 + `TargetSegmentBytes` 定义（2MB） |
+| M5-6 | `World.StructuralChange.cs:34-49` `ApplyTypedSetFast` 中的 `AssertAlive` / `TryGetComponentIndex` | defense 检查在每实体热路径中的开销 | ❌ 已证明零成本（§3.11）。`Get<T>`/`GetRef<T>` 的 defense 检查在 2026-07-06 benchmark 中显示 <2% 噪声。`TryGetComponentIndex` 是功能性的（决定写入列位置），非防御性的 | `kb-design-rationale.md` §3.11 基准 |
+| M5-7 | `ComponentStore.cs` `ApplyToWorld` set-only fast path 中每实体 `GetRecordFast` 调用 | `GetRecordFast` 的范围/版本检查开销 | ❌ 已证明零成本（§3.11）。`GetRecordFast` 使用与 `Get<T>` 相同的轻量检查 | `kb-design-rationale.md` §3.11 基准 |
+| M5-8 | `EntityFieldResolver.cs:167-192` `ResolveInPlace` fail-fast 检查（seq OOB、resolved.Id < 0） | 在 Replay Add/Set 路径上触发异常的 defense 检查 | ❌ 未触及。硬约束明确禁止移除："DO NOT remove: EntityFieldResolver fail-fast"。这些检查会捕获静默数据损坏 | 任务指令 |
+| M5-9 | `World.cs:368-388` `Get<T>` / `GetRef<T>` 中的 `AssertNotDisposed` + `AssertAlive` | defense 检查的开销 | ❌ 未触及。硬约束明确禁止移除 §3.11："DO NOT remove: Get<T>/GetRef<T>/GetRecordFast checks (already proven zero-cost)" | 任务指令 + `kb-design-rationale.md` §3.11 |
+
+### 裁决：跳过——无候选在证据筛选下存活
+
+在检查的 9 个候选中，有 4 个是冷路径/结构变更路径，2 个已被 §3.11 确认为零成本，2 个因硬约束而被排除，1 个是有条件使用但未过度分配。库的热点（`QueryCache` 中的查询迭代、`Archetype.Storage` 中的 chunk span 访问、`ComponentStore.ApplyToWorld` 中的组件写入）已无不必要的 Dictionary/HashSet 操作或冗余 defense 检查。
