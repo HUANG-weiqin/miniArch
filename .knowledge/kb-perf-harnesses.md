@@ -19,7 +19,7 @@ miniArch 有 **6 套独立的性能测试工具**，它们用相似的词汇（r
 | **SubmitAndSnapshotAsync 内联测量** | `kb-cache-optimization.md` "SubmitAndSnapshotAsync 双缓冲池化" | CommandStream async submit+snapshot 稳态吞吐 | rounds/s | Movement-Stream 1818 / Attack-Stream 1101 | ❌ 优化验证 | `kb-cache-optimization.md` |
 | **GameTickSim.Perf** | `tools/perf/GameTickSim.Perf` | 场景化三方对比（MiniArch vs Arch vs DefaultEcs） | ticks/s | 见各场景 | ❌ 竞品对比 | `kb-gameticksim-scenarios.md` |
 | **CommandStream.Profile** | `tools/perf/CommandStream.Profile` | CommandStream 专剖：6 个微场景，含 record/submit/snapshot/clear 分阶段 | ticks/s | 无固定 baseline | ❌ CPU sampling 辅助 | `kb-command-stream.md` |
-| **WatchApi.Perf** | `tools/perf/WatchApi.Perf` | Watch API 专项：ChangeWatch/Projected/TransitionWatch 秒级吞吐、steady-state allocation、membership 候选内核 | ops/s | 见 `kb-change-tracking.md` WatchApi.Perf 段 | ❌ API 发布/优化验证 | `kb-change-tracking.md` |
+| **WatchApi.Perf** | `tools/perf/WatchApi.Perf` | Watch API 专项：ChangeWatch/Projected/TransitionWatch 秒级吞吐、steady-state allocation、发布验证 | ops/s | 见 `kb-change-tracking.md` WatchApi.Perf 段 | ❌ API 发布/优化验证 | `kb-change-tracking.md` |
 
 ## 如何选择
 
@@ -28,7 +28,7 @@ miniArch 有 **6 套独立的性能测试工具**，它们用相似的词汇（r
 ├── 架构变更后验证没退化 → HeroComing.Perf --check-baseline（唯一门禁）
 ├── 对比 MiniArch vs Arch/DefaultEcs/Friflo → GameTickSim.Perf
 ├── 验证 CommandStream 优化效果 → SubmitAndSnapshotAsync 内联测量
-├── 验证 Watch API 吞吐/分配/数据结构选择 → WatchApi.Perf
+├── 验证 Watch API 吞吐/分配发布状态 → WatchApi.Perf
 ├── 微观 per-operation 分析 → PipelineBenchmarkTests
 ├── 聚焦 CommandStream 热点定位 → CommandStream.Profile + dotnet-trace
 └── CPU 采样找其他热点 → 见 kb-profiling-workflow.md（不是 harness，是工具）

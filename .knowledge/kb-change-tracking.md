@@ -1,7 +1,7 @@
 ---
 title: Change Tracking（变更追踪）
 module: MiniArch.Core
-description: World.Watch pull-event 模型：ChangeWatch/TransitionWatch Snapshot+Diff 两阶段扫描；struct handler 回调；零 per-write 成本；TransitionWatch 使用 dense epoch marks；旧 TrackValueChanges/TransitionLog/DenseValueDiff/IValueProjector/IValueChangeSink 已删除
+description: World.Watch pull-event 模型：ChangeWatch/TransitionWatch Snapshot+Diff 两阶段扫描；struct handler 回调；零 per-write 成本；TransitionWatch 使用 dense epoch marks（已选定）；旧 TrackValueChanges/TransitionLog/DenseValueDiff/IValueProjector/IValueChangeSink 已删除
 updated: 2026-07-09 (WatchApi.Perf 秒级发布验证；TransitionWatch dense epoch marks)
 ---
 
@@ -127,7 +127,7 @@ dotnet run -c Release --project tools/perf/WatchApi.Perf -- --entity-count 10000
 | transition-all-exited | 1,698.4 | 0 B |
 | transition-churn-1pct | 7,447.8 | 0 B |
 
-候选 membership kernel 同场景对比（churn）：HashSet 4,697.6 ops/s，bitset 27,765.3 ops/s，dense epoch 30,313.2 ops/s。结论：dense epoch 在当前 ECS dense-id 模型下是发布实现；它比 bitset 多用内存（int mark vs bit），但避免 per-Diff 清除，实际 `TransitionWatch` nochange/churn 比 bitset 分别约 +40%/+45%。
+**决策**：TransitionWatch 使用 dense epoch marks（int[] 按 entity.Id 索引）作为 membership 判定。空间换时间：int 标记比 bitset 多 16× 内存，但避免 per-Diff 清除，稳态零分配，在当前 ECS dense-id 模型下性能最优。
 
 ## 入口
 
