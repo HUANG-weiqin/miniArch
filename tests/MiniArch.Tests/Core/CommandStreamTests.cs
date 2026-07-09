@@ -2448,34 +2448,6 @@ public sealed class CommandStreamTests
         var unclassified = allFields.Where(f => !nonSwapped.Contains(f) && !swapped.Contains(f)).ToList();
         Assert.Empty(unclassified);
     }
-
-    [Fact]
-    public void BUG_submit_prevalidates_reserved_pending_slots_before_materialize()
-    {
-        var world = new World();
-        var stream = new CommandStream(world);
-
-        // Record two pending creates with distinguishable components.
-        var entity1 = stream.Create();
-        stream.Add(entity1, new Position(1, 2));
-        var entity2 = stream.Create();
-        stream.Add(entity2, new Velocity(3, 4));
-
-        Assert.False(world.IsAlive(entity1));
-        Assert.False(world.IsAlive(entity2));
-
-        // Corrupt entity1's reserved slot by releasing it externally.
-        // This simulates the slot no longer being reserved before Submit.
-        world.ReleaseReservedEntity(entity1);
-
-        // Submit must throw before any materialization occurs.
-        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
-        Assert.Contains("reserved", ex.Message, StringComparison.OrdinalIgnoreCase);
-
-        // Assert no entities were materialized —pre-validation fired before side effects.
-        Assert.False(world.IsAlive(entity1));
-        Assert.False(world.IsAlive(entity2));
-    }
 }
 
 // ── Deferred Create ──────────────────────────────────────────────

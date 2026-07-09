@@ -18,16 +18,19 @@ updated: 2026-07-09
 
 ## 设计债 (P2)
 
-### #1: CommandStream.Submit() 无事务回滚 (R11) ✅ 已修复
+### #1: CommandStream.Submit() 无事务回滚 (R11) ⏭️ 跳过
 
 - **模式**: R11 部分修改
-- **位置**: `CommandStreamCore.cs:443-474` Submit(), `CommandStreamCore.cs:548-578` PreValidatePendingSlots, `World.cs:1144-1153` IsSlotReserved
+- **位置**: `CommandStreamCore.cs:334-359` Submit()
 - **缺失的安全条件**: `MaterializeAllPending` 成功但后续 `ApplyHierarchy`/`ApplyComponentStores`/`ApplyDestroys` 失败时，已 materialize 的实体无法回滚
 - **真实风险**: 低。该异常仅在 CommandStream 内部数据不一致时触发，正常用户路径不可达
 - **建议修复**: 在 materialize 前预验证所有 slot 为 reserved 状态（defense-in-depth）
-- **修复方案**: 在 `Submit()` 和 `SubmitFromFrozen()` 的 materialize 前增加 `PreValidatePendingSlots()`，扫描所有非 cancelled pending batch 的 slot 是否仍为 reserved 状态；若 slot 已不再是 reserved（`IsOccupied` 或 `Version` 不匹配），则立即抛 `InvalidOperationException`。新增 `World.IsSlotReserved(Entity)` 作为检查 helper，internal 不增加 public API。
-- **回归测试**: `BUG_submit_prevalidates_reserved_pending_slots_before_materialize`（`CommandStreamTests.cs`）
-- **验证**: `dotnet test -c Release` 845/845 pass，HeroComing.Perf: Movement 1886-1959 r/s, Attack 1149-1194 r/s，内存稳定
+- **M2 尝试（2026-07-09）**:
+  - 实现了 `PreValidatePendingSlots()` + epoch guard（扫描所有非 cancelled pending batch 的 slot 是否仍为 reserved）
+  - 回归测试 `BUG_submit_prevalidates_reserved_pending_slots_before_materialize` 验证正常
+  - **HeroComing.Perf 严格门禁失败**：Movement 1878-1964 r/s（通过 ≥1900），Attack 1165-1185 r/s（未达 ≥1200）
+  - 尝试 epoch guard 优化后 Attack 仍低于 1200。因 Attack 瓶颈在 archetype/query 遍历而非 PreValidatePendingSlots，且无法在一次 focused correction 内恢复至 ≥1200，M2 已回退
+- **后续**: 若未来有 perf budget 改善或查询系统优化提升了 Attack 基线，可重新尝试此修复
 
 ### #2: EntityFieldResolver 静默跳过未决占位符 (R8) ✅ 已修复
 

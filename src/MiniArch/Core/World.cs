@@ -1142,18 +1142,6 @@ public sealed partial class World : IDisposable
         }
     }
 
-    /// <summary>
-    /// Checks whether the given entity is still in reserved (pre-materialization)
-    /// state: the slot is not occupied and its version matches the entity handle.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal bool IsSlotReserved(Entity entity)
-    {
-        if ((uint)entity.Id >= (uint)_entitySlotCount) return false;
-        ref var record = ref _records[entity.Id];
-        return !record.IsOccupied && record.Version == entity.Version;
-    }
-
 
     // ──────────────────────────────────────────────
     //  Tier 1 in-memory rollback snapshot

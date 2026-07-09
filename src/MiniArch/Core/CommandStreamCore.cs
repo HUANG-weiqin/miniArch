@@ -461,7 +461,6 @@ public abstract class CommandStreamCore
             // shadow's after Replay.
             AlignCancelledBatchFreeListOrder();
             ResolveDeferredCreates();
-            PreValidatePendingSlots();
             MaterializeAllPending();
             ApplyHierarchy();
             ApplyComponentStores();
@@ -544,37 +543,6 @@ public abstract class CommandStreamCore
         if (_hasStoreCommands)
             return true;
         return false;
-    }
-
-    /// <summary>
-    /// Pre-validates that all non-cancelled pending batches still have their slots
-    /// in reserved state before any materialization occurs. Throws
-    /// <see cref="InvalidOperationException"/> if a slot is no longer reserved,
-    /// preventing partial materialization without rollback.
-    /// </summary>
-    /// <remarks>
-    /// This is defense-in-depth. In normal use, reserved slots stay reserved until
-    /// materialized. The check guards against external corruption or internal
-    /// inconsistency (e.g. a slot released by mistake between recording and submit).
-    /// Cancelled batches are intentionally skipped —their reservations may have
-    /// been released by design.
-    /// </remarks>
-    private void PreValidatePendingSlots() => PreValidatePendingSlots(_frozen);
-
-    private void PreValidatePendingSlots(FrozenState frozen)
-    {
-        for (var i = 0; i < frozen.PendingBatchCount; i++)
-        {
-            if (frozen.BatchCanceled[i]) continue;
-            var entity = frozen.BatchEntities[i];
-            if (entity.Id < 0) continue; // deferred placeholder —not yet resolved
-            if (!_world.IsSlotReserved(entity))
-            {
-                throw new InvalidOperationException(
-                    $"Pending entity {entity} (batch {i}) is no longer in reserved state. " +
-                    "Cannot materialize a slot that is not reserved.");
-            }
-        }
     }
 
     private void MaterializeAllPending()
@@ -982,7 +950,6 @@ public abstract class CommandStreamCore
     private void SubmitFromFrozen(FrozenState frozen)
     {
         // Order matches Submit and BuildDelta: Create —Hierarchy —Ops —Destroy.
-        PreValidatePendingSlots(frozen);
         for (var i = 0; i < frozen.PendingBatchCount; i++)
         {
             if (frozen.BatchCanceled[i]) continue;
