@@ -20,22 +20,16 @@ const int ReportInterval = 100;
 const int WarmupRounds = 50;
 const string UpdateBaselineArg = "--update-baseline";
 const string CheckBaselineArg = "--check-baseline";
-const string TrackObserverArg = "--track-observer";
-const string CompareOldValueTrackingArg = "--compare-old-value-tracking";
 const string HelpArg = "--help";
 
 var updateBaseline = args.Contains(UpdateBaselineArg, StringComparer.OrdinalIgnoreCase);
 var checkBaseline = args.Contains(CheckBaselineArg, StringComparer.OrdinalIgnoreCase);
-var trackObserver = args.Contains(TrackObserverArg, StringComparer.OrdinalIgnoreCase);
-var compareOldValueTracking = args.Contains(CompareOldValueTrackingArg, StringComparer.OrdinalIgnoreCase);
 var showHelp = args.Contains(HelpArg, StringComparer.OrdinalIgnoreCase) ||
                args.Contains("-h", StringComparer.OrdinalIgnoreCase);
 var knownArgs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 {
     UpdateBaselineArg,
     CheckBaselineArg,
-    TrackObserverArg,
-    CompareOldValueTrackingArg,
     HelpArg,
     "-h"
 };
@@ -55,34 +49,12 @@ if (unknownArgs.Length > 0)
     return;
 }
 
-if (trackObserver && (checkBaseline || updateBaseline))
-{
-    Console.Error.WriteLine($"{TrackObserverArg} cannot be combined with {CheckBaselineArg} or {UpdateBaselineArg}.");
-    PrintUsage();
-    Environment.ExitCode = 2;
-    return;
-}
-
-if (compareOldValueTracking && (checkBaseline || updateBaseline || trackObserver))
-{
-    Console.Error.WriteLine($"{CompareOldValueTrackingArg} cannot be combined with {CheckBaselineArg}, {UpdateBaselineArg}, or {TrackObserverArg}.");
-    PrintUsage();
-    Environment.ExitCode = 2;
-    return;
-}
-
 Console.WriteLine("=== HeroComing ECS Performance Test ===");
 Console.WriteLine($"Characters: {CharacterCount}");
 Console.WriteLine($"Grid:       {GridWidth}x{GridHeight}");
 Console.WriteLine($"Duration:   {DurationSeconds}s per scenario");
-Console.WriteLine($"Mode:       measure{(checkBaseline ? " + check baseline" : "")}{(updateBaseline ? " + update baseline" : "")}{(trackObserver ? " + track observer" : "")}{(compareOldValueTracking ? " + compare old-value-tracking" : "")}");
+Console.WriteLine($"Mode:       measure{(checkBaseline ? " + check baseline" : "")}{(updateBaseline ? " + update baseline" : "")}");
 Console.WriteLine();
-
-if (compareOldValueTracking)
-{
-    RunOldValueTrackingComparison();
-    return;
-}
 
 var results = new List<(string name, double throughput, double avgMs, int totalRounds, double heapDeltaKB, bool memoryStable)>();
 
@@ -128,9 +100,7 @@ void PrintUsage()
     Console.WriteLine("Options:");
     Console.WriteLine("  --check-baseline   Compare results against thresholds in .knowledge/kb-hero-pipeline-regression.md.");
     Console.WriteLine("  --update-baseline  Update the baseline block in .knowledge/kb-hero-pipeline-regression.md.");
-    Console.WriteLine("  --track-observer            Attach TrackValueChanges<T>() observers to hot components.");
-    Console.WriteLine("  --compare-old-value-tracking Compare MiniArch TrackValueChanges vs manual dense/dict shadow-diff trackers.");
-    Console.WriteLine("  --help                      Show this help.");
+    Console.WriteLine("  --help           Show this help.");
 }
 
 // --- Scenario runner ---
@@ -138,17 +108,13 @@ void PrintUsage()
 (string name, double throughput, double avgMs, int totalRounds, double heapDeltaKB, bool memoryStable) RunScenario(
     string name, Action<MiniArchRuntime, List<Entity>, bool[]> createRequests)
 {
-    var r = RunScenarioInternal(name, createRequests, null, null);
-    return (r.name, r.throughput, r.avgMs, r.totalRounds, r.heapDeltaKB, r.memoryStable);
+    return RunScenarioInternal(name, createRequests);
 }
 
-(string name, double throughput, double avgMs, int totalRounds, double heapDeltaKB, bool memoryStable, TrackObserver? observer) RunScenarioInternal(
-    string name, Action<MiniArchRuntime, List<Entity>, bool[]> createRequests,
-    Func<MiniArchRuntime, TrackObserver>? observerFactory,
-    string? displayName)
+(string name, double throughput, double avgMs, int totalRounds, double heapDeltaKB, bool memoryStable) RunScenarioInternal(
+    string name, Action<MiniArchRuntime, List<Entity>, bool[]> createRequests)
 {
-    string headerName = displayName ?? name;
-    Console.WriteLine($"--- {headerName} ---");
+    Console.WriteLine($"--- {name} ---");
 
     var fixture = new CharacterTestFixture();
     fixture.AddCoreSystems();
@@ -184,19 +150,13 @@ void PrintUsage()
     Console.WriteLine($"Spawned {CharacterCount} characters, found {players.Count} players.");
 
     var playerMembership = BuildPlayerMembership(players);
-    var observer = observerFactory is not null
-        ? observerFactory(runtime)
-        : (trackObserver ? CreateTrackObserver(name, runtime) : null);
 
     // Warmup
     for (int i = 0; i < WarmupRounds; i++)
     {
-        observer?.BeforeRound();
         createRequests(runtime, players, playerMembership);
         fixture.StepUntilStable();
-        observer?.Drain();
     }
-    observer?.ResetMetrics();
 
     GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
     GC.WaitForPendingFinalizers();
@@ -216,10 +176,8 @@ void PrintUsage()
 
     while (sw.ElapsedMilliseconds < DurationSeconds * 1000L)
     {
-        observer?.BeforeRound();
         createRequests(runtime, players, playerMembership);
         fixture.StepUntilStable();
-        observer?.Drain();
         totalRounds++;
 
         if (totalRounds % ReportInterval == 0)
@@ -268,12 +226,10 @@ void PrintUsage()
     Console.WriteLine($"  Avg time/round: {avgTimePerRound:F3}ms");
     Console.WriteLine($"  Heap delta:     {heapDeltaKB:F1} KB");
     Console.WriteLine($"  GC Gen0/1/2:    {finalGen0}/{finalGen1}/{finalGen2}");
-    if (observer is not null)
-        Console.WriteLine($"  Observer: {observer.Description}, changes={observer.TotalChanges}, checksum={observer.Checksum}");
     Console.WriteLine(memoryStable ? "  OK: Memory stable" : "  WARN: Memory growing");
     Console.WriteLine();
 
-    return (headerName, avgThroughput, avgTimePerRound, totalRounds, heapDeltaKB, memoryStable, observer);
+    return (name, avgThroughput, avgTimePerRound, totalRounds, heapDeltaKB, memoryStable);
 }
 
 // --- Request creators ---
@@ -318,281 +274,6 @@ bool[] BuildPlayerMembership(List<Entity> players)
         membership[player.Id] = true;
 
     return membership;
-}
-
-TrackObserver CreateTrackObserver(string scenarioName, MiniArchRuntime runtime)
-{
-    return scenarioName switch
-    {
-        "Movement" => CreateMovementObserver(runtime),
-        "Attack" => CreateAttackObserver(runtime),
-        _ => throw new InvalidOperationException($"Unknown scenario '{scenarioName}' for track observer."),
-    };
-}
-
-static TrackObserver CreateMovementObserver(MiniArchRuntime runtime)
-{
-    var posQ = runtime.World.TrackValueChanges<PositionQValue>();
-    var posR = runtime.World.TrackValueChanges<PositionRValue>();
-    return TrackObserver.Create(
-        "Track PositionQValue + PositionRValue (value tracking)",
-        obs =>
-        {
-            DrainValueChanges(posQ.Changes, obs, static v => v.Value);
-            posQ.ClearAll();
-            DrainValueChanges(posR.Changes, obs, static v => v.Value);
-            posR.ClearAll();
-        });
-}
-
-static TrackObserver CreateAttackObserver(MiniArchRuntime runtime)
-{
-    var hp = runtime.World.TrackValueChanges<CurrentHpValue>();
-    return TrackObserver.Create(
-        "Track CurrentHpValue (value tracking)",
-        obs =>
-        {
-            DrainValueChanges(hp.Changes, obs, static v => v.Value);
-            hp.ClearAll();
-        });
-}
-
-// --- Value change drain helper ---
-
-static void DrainValueChanges<T>(ReadOnlySpan<ValueChange<T>> changes, TrackObserver obs, Func<T, int> toInt) where T : unmanaged
-{
-    foreach (ref readonly var change in changes)
-    {
-        obs.TotalChanges++;
-        obs.Checksum = HashCode.Combine(obs.Checksum, change.Entity.Id, toInt(change.Old), toInt(change.New));
-    }
-}
-// --- Old-value tracking comparison runner ---
-
-void RunOldValueTrackingComparison()
-{
-    Console.WriteLine();
-    Console.WriteLine("=== Old-Value Tracking Comparison ===");
-    Console.WriteLine();
-
-    RunComparisonForScenario("Movement", CreateMoveRequests,
-        static runtime => CreateMovementObserver(runtime),
-        static runtime => CreateManualDenseMovementObserver(runtime),
-        static runtime => CreateManualDictMovementObserver(runtime),
-        static runtime => CreateExplicitDenseMovementObserver(runtime));
-
-    RunComparisonForScenario("Attack", CreateAttackRequests,
-        static runtime => CreateAttackObserver(runtime),
-        static runtime => CreateManualDenseAttackObserver(runtime),
-        static runtime => CreateManualDictAttackObserver(runtime),
-        static runtime => CreateExplicitDenseAttackObserver(runtime));
-}
-
-void RunComparisonForScenario(
-    string name,
-    Action<MiniArchRuntime, List<Entity>, bool[]> createRequests,
-    Func<MiniArchRuntime, TrackObserver> apiObserverFactory,
-    Func<MiniArchRuntime, TrackObserver> manualDenseObserverFactory,
-    Func<MiniArchRuntime, TrackObserver> manualDictObserverFactory,
-    Func<MiniArchRuntime, TrackObserver> explicitDiffObserverFactory)
-{
-    Console.WriteLine($">>> {name}");
-    Console.WriteLine();
-
-    // 1) MiniArch API strategy — fresh world with TrackValueChanges
-    var apiResult = RunScenarioInternal(
-        name, createRequests,
-        observerFactory: apiObserverFactory,
-        displayName: $"{name}/API");
-
-    // 2) Manual generic shadow-diff strategy — fresh world with pre/post scan
-    var manualDenseResult = RunScenarioInternal(
-        name, createRequests,
-        observerFactory: manualDenseObserverFactory,
-        displayName: $"{name}/ManualDense");
-
-    // 3) Manual dictionary shadow-diff strategy — fresh world with pre/post scan
-    var manualDictResult = RunScenarioInternal(
-        name, createRequests,
-        observerFactory: manualDictObserverFactory,
-        displayName: $"{name}/ManualDict");
-
-    // 4) Explicit DenseValueDiff strategy — pre/post scan on its own scenario world
-    var explicitDiffResult = RunScenarioInternal(
-        name, createRequests,
-        observerFactory: explicitDiffObserverFactory,
-        displayName: $"{name}/ExplicitDiff");
-
-    Console.WriteLine(
-        $"  {name,-10} | {"Strategy",-12} | {"Rounds/s",10} | {"ms/round",9} | {"Rounds",7} | {"Heap Δ KB",10} | {"Changes",8} | {"Ch/Rd",7} | {"Checksum",12}");
-    Console.WriteLine(new string('-', 102));
-    double? apiChPerRd = null;
-    double? manualDenseThroughput = null;
-    double? explicitDiffThroughput = null;
-    foreach (var (label, result) in new[] {
-        ("API", apiResult),
-        ("ManualDense", manualDenseResult),
-        ("ManualDict", manualDictResult),
-        ("ExplicitDiff", explicitDiffResult) })
-    {
-        var (_, throughput, avgMs, totalRounds, heapDeltaKB, _, obs) = result;
-        long changes = obs?.TotalChanges ?? 0;
-        long checksum = obs?.Checksum ?? 0;
-        double chPerRd = totalRounds > 0 ? (double)changes / totalRounds : 0;
-        if (label == "API")
-            apiChPerRd = chPerRd;
-        if (label == "ManualDense")
-            manualDenseThroughput = throughput;
-        if (label == "ExplicitDiff")
-            explicitDiffThroughput = throughput;
-        Console.WriteLine(
-            $"  {name,-10} | {label,-12} | {throughput,10:F1} | {avgMs,9:F3} | {totalRounds,7} | {heapDeltaKB,10:F1} | {changes,8} | {chPerRd,7:F2} | {checksum,12}");
-
-        if (label != "API" && apiChPerRd.HasValue && Math.Abs(apiChPerRd.Value - chPerRd) > 0.01)
-            Console.WriteLine($"  WARN: {name} changes/round differ materially (API={apiChPerRd:F2}, {label}={chPerRd:F2})");
-    }
-
-    if (manualDenseThroughput.HasValue && explicitDiffThroughput.HasValue)
-    {
-        double ratio = explicitDiffThroughput.Value / manualDenseThroughput.Value;
-        bool pass = ratio >= 0.95;
-        Console.WriteLine($"  Ratio: ExplicitDiff/ManualDense = {ratio:F3} {(pass ? "✅" : "❌")}");
-    }
-    Console.WriteLine("  Note: checksum is an anti-JIT-sink value, not expected to match across strategies or runs.");
-    Console.WriteLine();
-}
-
-// --- Manual shadow-diff observer factories ---
-
-static TrackObserver CreateManualDenseMovementObserver(MiniArchRuntime runtime)
-{
-    var frame = runtime.CurrentFrame;
-    var posQTracker = new ManualGenericTracker<PositionQValue>(frame, static v => v.Value);
-    var posRTracker = new ManualGenericTracker<PositionRValue>(frame, static v => v.Value);
-
-    return TrackObserver.Create(
-        "Manual dense shadow diff (PositionQValue+PositionRValue)",
-        obs =>
-        {
-            posQTracker.Drain(obs);
-            posRTracker.Drain(obs);
-            posQTracker.Clear();
-            posRTracker.Clear();
-        },
-        () =>
-        {
-            posQTracker.BeforeRound();
-            posRTracker.BeforeRound();
-        });
-}
-
-static TrackObserver CreateManualDenseAttackObserver(MiniArchRuntime runtime)
-{
-    var frame = runtime.CurrentFrame;
-    var hpTracker = new ManualGenericTracker<CurrentHpValue>(frame, static v => v.Value);
-
-    return TrackObserver.Create(
-        "Manual dense shadow diff (CurrentHpValue)",
-        obs =>
-        {
-            hpTracker.Drain(obs);
-            hpTracker.Clear();
-        },
-        () =>
-        {
-            hpTracker.BeforeRound();
-        });
-}
-
-static TrackObserver CreateManualDictMovementObserver(MiniArchRuntime runtime)
-{
-    var frame = runtime.CurrentFrame;
-    var posQTracker = new ManualDictionaryTracker<PositionQValue>(frame, static v => v.Value);
-    var posRTracker = new ManualDictionaryTracker<PositionRValue>(frame, static v => v.Value);
-
-    return TrackObserver.Create(
-        "Manual dict shadow diff (PositionQValue+PositionRValue)",
-        obs =>
-        {
-            posQTracker.Drain(obs);
-            posRTracker.Drain(obs);
-            posQTracker.Clear();
-            posRTracker.Clear();
-        },
-        () =>
-        {
-            posQTracker.BeforeRound();
-            posRTracker.BeforeRound();
-        });
-}
-
-static TrackObserver CreateManualDictAttackObserver(MiniArchRuntime runtime)
-{
-    var frame = runtime.CurrentFrame;
-    var hpTracker = new ManualDictionaryTracker<CurrentHpValue>(frame, static v => v.Value);
-
-    return TrackObserver.Create(
-        "Manual dict shadow diff (CurrentHpValue)",
-        obs =>
-        {
-            hpTracker.Drain(obs);
-            hpTracker.Clear();
-        },
-        () =>
-        {
-            hpTracker.BeforeRound();
-        });
-}
-
-// --- Explicit DenseValueDiff observer factories ---
-
-static TrackObserver CreateExplicitDenseMovementObserver(MiniArchRuntime runtime)
-{
-    var world = runtime.World;
-    var posQDiff = world.CreateDenseValueDiff<PositionQValue, int, PositionQProjector>();
-    var posRDiff = world.CreateDenseValueDiff<PositionRValue, int, PositionRProjector>();
-
-    return TrackObserver.Create(
-        "Explicit dense diff (PositionQValue+PositionRValue)",
-        obs =>
-        {
-            var sinkQ = new ChecksumSink();
-            posQDiff.Drain(world, ref sinkQ);
-            obs.TotalChanges += sinkQ.TotalChanges;
-            obs.Checksum = HashCode.Combine(obs.Checksum, sinkQ.Checksum);
-
-            var sinkR = new ChecksumSink();
-            posRDiff.Drain(world, ref sinkR);
-            obs.TotalChanges += sinkR.TotalChanges;
-            obs.Checksum = HashCode.Combine(obs.Checksum, sinkR.Checksum);
-
-            posQDiff.Clear();
-            posRDiff.Clear();
-        },
-        () =>
-        {
-            posQDiff.Capture(world);
-            posRDiff.Capture(world);
-        });
-}
-
-static TrackObserver CreateExplicitDenseAttackObserver(MiniArchRuntime runtime)
-{
-    var world = runtime.World;
-    var hpDiff = world.CreateDenseValueDiff<CurrentHpValue, int, HpProjector>();
-
-    return TrackObserver.Create(
-        "Explicit dense diff (CurrentHpValue)",
-        obs =>
-        {
-            var sink = new ChecksumSink();
-            hpDiff.Drain(world, ref sink);
-            obs.TotalChanges += sink.TotalChanges;
-            obs.Checksum = HashCode.Combine(obs.Checksum, sink.Checksum);
-
-            hpDiff.Clear();
-        },
-        () => hpDiff.Capture(world));
 }
 
 // --- Knowledge page updater ---
@@ -721,183 +402,4 @@ string? FindKnowledgePage()
     return null;
 }
 
-file sealed class TrackObserver
-{
-    private readonly Action<TrackObserver> _drain;
-    private readonly Action _beforeRound;
 
-    private TrackObserver(string description, Action<TrackObserver> drain, Action beforeRound)
-    {
-        Description = description;
-        _drain = drain;
-        _beforeRound = beforeRound;
-    }
-
-    public string Description { get; }
-
-    public long TotalChanges { get; set; }
-
-    public long Checksum { get; set; }
-
-    public void BeforeRound() => _beforeRound();
-
-    public void Drain() => _drain(this);
-
-    public void ResetMetrics()
-    {
-        TotalChanges = 0;
-        Checksum = 0;
-    }
-
-    public static TrackObserver Create(string description, Action<TrackObserver> drain)
-        => new(description, drain, () => { });
-
-    public static TrackObserver Create(string description, Action<TrackObserver> drain, Action beforeRound)
-        => new(description, drain, beforeRound);
-}
-
-// --- Manual generic shadow-diff tracker: scans FrameView before/after round ---
-
-file sealed class ManualGenericTracker<T> where T : unmanaged
-{
-    private readonly FrameView _frame;
-    private readonly Func<T, int> _toInt;
-    private int[] _oldValues = Array.Empty<int>();
-    private int[] _touchedEntities = Array.Empty<int>();
-    private int _touchedCount;
-
-    public ManualGenericTracker(FrameView frame, Func<T, int> toInt)
-    {
-        _frame = frame;
-        _toInt = toInt;
-    }
-
-    public void BeforeRound()
-    {
-        _touchedCount = 0;
-        var query = new QueryDescription().With<T>();
-        foreach (var chunk in _frame.ChunkQuery(query).GetChunks())
-        {
-            var span = chunk.GetSpan<T>();
-            var entities = chunk.GetEntities();
-            for (int i = 0; i < chunk.Count; i++)
-            {
-                int entityId = entities[i].Id;
-                int value = _toInt(span[i]);
-
-                if (entityId >= _oldValues.Length)
-                    Array.Resize(ref _oldValues, Math.Max(entityId + 1, _oldValues.Length * 2));
-                _oldValues[entityId] = value;
-
-                if (_touchedCount >= _touchedEntities.Length)
-                    Array.Resize(ref _touchedEntities, Math.Max(_touchedCount + 1, _touchedEntities.Length * 2));
-                _touchedEntities[_touchedCount++] = entityId;
-            }
-        }
-    }
-
-    public void Drain(TrackObserver obs)
-    {
-        var query = new QueryDescription().With<T>();
-        foreach (var chunk in _frame.ChunkQuery(query).GetChunks())
-        {
-            var span = chunk.GetSpan<T>();
-            var entities = chunk.GetEntities();
-            for (int i = 0; i < chunk.Count; i++)
-            {
-                int entityId = entities[i].Id;
-                int oldVal = entityId < _oldValues.Length ? _oldValues[entityId] : 0;
-                int newVal = _toInt(span[i]);
-
-                if (oldVal != newVal)
-                {
-                    obs.TotalChanges++;
-                    obs.Checksum = HashCode.Combine(obs.Checksum, entityId, oldVal, newVal);
-                }
-            }
-        }
-    }
-
-    public void Clear()
-    {
-        for (int i = 0; i < _touchedCount; i++)
-            _oldValues[_touchedEntities[i]] = 0;
-        _touchedCount = 0;
-    }
-}
-
-file sealed class ManualDictionaryTracker<T> where T : unmanaged
-{
-    private readonly FrameView _frame;
-    private readonly Func<T, int> _toInt;
-    private readonly Dictionary<int, int> _oldValues = [];
-
-    public ManualDictionaryTracker(FrameView frame, Func<T, int> toInt)
-    {
-        _frame = frame;
-        _toInt = toInt;
-    }
-
-    public void BeforeRound()
-    {
-        var query = new QueryDescription().With<T>();
-        foreach (var chunk in _frame.ChunkQuery(query).GetChunks())
-        {
-            var span = chunk.GetSpan<T>();
-            var entities = chunk.GetEntities();
-            for (int i = 0; i < chunk.Count; i++)
-                _oldValues[entities[i].Id] = _toInt(span[i]);
-        }
-    }
-
-    public void Drain(TrackObserver obs)
-    {
-        var query = new QueryDescription().With<T>();
-        foreach (var chunk in _frame.ChunkQuery(query).GetChunks())
-        {
-            var span = chunk.GetSpan<T>();
-            var entities = chunk.GetEntities();
-            for (int i = 0; i < chunk.Count; i++)
-            {
-                int entityId = entities[i].Id;
-                int newVal = _toInt(span[i]);
-                if (_oldValues.TryGetValue(entityId, out int oldVal) && oldVal != newVal)
-                {
-                    obs.TotalChanges++;
-                    obs.Checksum = HashCode.Combine(obs.Checksum, entityId, oldVal, newVal);
-                }
-            }
-        }
-    }
-
-    public void Clear() => _oldValues.Clear();
-}
-
-// --- Explicit DenseValueDiff projector structs ---
-
-file readonly struct PositionQProjector : IValueProjector<PositionQValue, int>
-{
-    public int Project(in PositionQValue component) => component.Value;
-}
-
-file readonly struct PositionRProjector : IValueProjector<PositionRValue, int>
-{
-    public int Project(in PositionRValue component) => component.Value;
-}
-
-file readonly struct HpProjector : IValueProjector<CurrentHpValue, int>
-{
-    public int Project(in CurrentHpValue component) => component.Value;
-}
-
-file struct ChecksumSink : IValueChangeSink<int>
-{
-    public int TotalChanges;
-    public int Checksum;
-
-    public void OnChanged(Entity entity, int oldValue, int newValue)
-    {
-        TotalChanges++;
-        Checksum = HashCode.Combine(Checksum, entity.Id, oldValue, newValue);
-    }
-}

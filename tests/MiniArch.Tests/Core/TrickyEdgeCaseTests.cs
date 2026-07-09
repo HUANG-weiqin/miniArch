@@ -770,6 +770,12 @@ public sealed class TrickyEdgeCaseTests
         Assert.False(worldB.TryGet(entityA, out Position _));
     }
 
+    // Minimal handler for dispose test
+    private struct DestructiveWatchHandler : IChangeHandler<Position>
+    {
+        public void OnChange(World world, Entity entity, in Position oldValue, in Position newValue) { }
+    }
+
     // ══════════════════════════════════════════════════════—
     // Helpers
     // ══════════════════════════════════════════════════════—
@@ -959,8 +965,8 @@ public sealed class TrickyEdgeCaseTests
         Assert.Throws<ObjectDisposedException>(() => world.RemoveChild(default));
         Assert.Throws<ObjectDisposedException>(() => world.Has<Position>(default));
         Assert.Throws<ObjectDisposedException>(() => world.TryGetParent(default, out _));
-        Assert.Throws<ObjectDisposedException>(() => world.TrackValueChanges<Position>());
-        Assert.Throws<ObjectDisposedException>(() => world.TrackTransitions(new QueryDescription().With<Position>()));
+        Assert.Throws<ObjectDisposedException>(() => world.Watch<Position, DestructiveWatchHandler>());
+        Assert.Throws<ObjectDisposedException>(() => world.Watch<DestructiveWatchHandler>(new QueryDescription().With<Position>()));
     }
 #endif
 }

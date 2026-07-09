@@ -679,9 +679,6 @@ public sealed partial class World
     private static void SetCreatedComponent<T>(Archetype archetype, int rowIndex, ComponentType componentType, in T component) where T : unmanaged
     {
         archetype.SetComponentAtTyped(archetype.GetComponentIndexFast(componentType), rowIndex, in component);
-        var world = archetype._owner;
-        if (world?.SharedTrackers is not null)
-            world.CaptureTypedTrackerBaseline(archetype.GetEntity(rowIndex), componentType, in component);
     }
 
     private static class CreateArchetypeCache<T1>

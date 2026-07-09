@@ -1,6 +1,6 @@
 namespace MiniArchBenchmarks;
 
-public struct Position
+public struct Position : System.IEquatable<Position>
 {
     public Position(int x, int y)
     {
@@ -10,6 +10,12 @@ public struct Position
 
     public int X;
     public int Y;
+
+    public readonly bool Equals(Position other) => X == other.X && Y == other.Y;
+    public override readonly bool Equals(object? obj) => obj is Position p && Equals(p);
+    public override readonly int GetHashCode() => HashCode.Combine(X, Y);
+    public static bool operator ==(Position left, Position right) => left.Equals(right);
+    public static bool operator !=(Position left, Position right) => !left.Equals(right);
 }
 
 public struct Velocity

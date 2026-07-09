@@ -88,11 +88,6 @@ public sealed partial class World : IDisposable
 
     private bool _disposed;
 
-    // ── Change tracking ─────────────────────────────────────────────
-    internal volatile int _trackingGeneration;                 // incremented on RestoreState/Dispose for cursor self-heal
-    private readonly List<WeakReference<Core.IChangeQuery>> _changeQueries = new();
-    internal SharedTrackerRegistry? SharedTrackers;            // null when no value tracking is armed
-
     /// <summary>
     /// Creates a world.
     /// </summary>
@@ -140,12 +135,6 @@ public sealed partial class World : IDisposable
         _stateSnapshotPool.Clear();
         _hierarchy.Reset();
         _createArchetypeCacheGeneration = int.MaxValue;
-        _changeQueries.Clear();
-        SharedTrackers?.Clear();
-        SharedTrackers = null;
-
-        // Invalidate any remaining change queries
-        _trackingGeneration++;
     }
 
     internal bool IsDisposed => _disposed;
@@ -221,137 +210,58 @@ public sealed partial class World : IDisposable
 
     internal int ArchetypeCacheGeneration => _createArchetypeCacheGeneration;
 
-    internal void RegisterChangeQuery(Core.IChangeQuery query)
+    /// <summary>
+    /// Creates a <see cref="ChangeWatch{TComponent, THandler}"/> that tracks value changes
+    /// for component type <typeparamref name="TComponent"/>.
+    /// </summary>
+    /// <param name="query">Optional query filter. If null, defaults to
+    /// <c>new QueryDescription().With&lt;TComponent&gt;()</c>.
+    /// If provided, it is used as-is.</param>
+    public ChangeWatch<TComponent, THandler> Watch<TComponent, THandler>(QueryDescription? query = null)
+        where TComponent : unmanaged, IEquatable<TComponent>
+        where THandler : struct, IChangeHandler<TComponent>
     {
-        _changeQueries.Add(new WeakReference<Core.IChangeQuery>(query));
-    }
-
-    internal void ClearTypedTrackerSlots(int entityId, ComponentType? componentType = null)
-    {
-        var registry = SharedTrackers;
-        if (registry is null) return;
-
-        if (componentType is not null)
-            registry.ClearSlot(entityId, componentType.Value.Value);
-        else
-            registry.ClearAllSlots(entityId);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal unsafe void CaptureRawTrackerBaseline(Entity entity, ComponentType componentType, byte* source)
-    {
-        SharedTrackers?.CaptureBaselineRaw(entity, componentType.Value, source);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void CaptureTypedTrackerBaseline<T>(Entity entity, ComponentType componentType, in T component) where T : unmanaged
-    {
-        var registry = SharedTrackers;
-        if (registry is null || !registry.HasTracker(componentType.Value))
-            return;
-
-        registry.GetTracker<T>()?.CaptureBaseline(entity, in component);
-    }
-
-    private void AppendTransition(Entity e, Core.Archetype? old, Core.Archetype? @new)
-    {
-        for (var i = _changeQueries.Count - 1; i >= 0; i--)
-        {
-            var weakRef = _changeQueries[i];
-            if (weakRef.TryGetTarget(out var query))
-                query.OnTransition(e, old, @new);
-            else
-            {
-                // Swap-remove dead weak ref (O(1)).
-                _changeQueries[i] = _changeQueries[_changeQueries.Count - 1];
-                _changeQueries.RemoveAt(_changeQueries.Count - 1);
-            }
-        }
+        AssertNotDisposed();
+        var q = query ?? new QueryDescription().With<TComponent>();
+        return new ChangeWatch<TComponent, THandler>(q, default);
     }
 
     /// <summary>
-    /// Arms boundary value tracking for component type <typeparamref name="T"/> and returns
-    /// a handle to the world-shared value diff.
-    /// <para/>
-    /// Call <see cref="SharedValueChanges{T}.Changes"/> for a non-destructive
-    /// view of current values that differ from the last baseline, and
-    /// <see cref="SharedValueChanges{T}.ClearAll"/> to move the baseline to now.
-    /// Multiple handles for the same <typeparamref name="T"/> alias the same baseline.
+    /// Creates a projected <see cref="ChangeWatch{TComponent, TValue, THandler}"/> that tracks
+    /// projected value changes for component type <typeparamref name="TComponent"/>.
     /// </summary>
-    public SharedValueChanges<T> TrackValueChanges<T>() where T : unmanaged
+    /// <param name="query">Optional query filter. If null, defaults to
+    /// <c>new QueryDescription().With&lt;TComponent&gt;()</c>.
+    /// If provided, it is used as-is.</param>
+    public ChangeWatch<TComponent, TValue, THandler> Watch<TComponent, TValue, THandler>(QueryDescription? query = null)
+        where TComponent : unmanaged
+        where TValue : unmanaged, IEquatable<TValue>
+        where THandler : struct, IChangeHandler<TComponent, TValue>
     {
         AssertNotDisposed();
-        var registry = SharedTrackers;
-        if (registry is null)
-        {
-            registry = new SharedTrackerRegistry(this);
-            SharedTrackers = registry;
-        }
-
-        var tracker = registry.GetOrCreateTracker<T>(out var created);
-        tracker.PreSize(EntityCapacity - 1);
-        if (created)
-            tracker.CaptureAllBaselines();
-        return new SharedValueChanges<T>(this);
+        var q = query ?? new QueryDescription().With<TComponent>();
+        return new ChangeWatch<TComponent, TValue, THandler>(q, default);
     }
 
     /// <summary>
-    /// Tracks structural transitions (Create/Destroy/Add/Remove) for entities
-    /// matching <paramref name="filter"/>.
-    /// <para/>
-    /// Call <see cref="TransitionLog.Transitions"/> for a non-destructive
-    /// live view, and <see cref="TransitionLog.Clear"/> to clear the log.
-    /// Each log is independent.
+    /// Creates a <see cref="TransitionWatch{THandler}"/> that tracks structural transitions
+    /// (entities entering/exiting <paramref name="filter"/>).
     /// </summary>
-    /// <exception cref="ArgumentNullException"><paramref name="filter"/> is null.</exception>
-    /// <exception cref="ArgumentException"><paramref name="filter"/> has no components (empty filter).</exception>
-    public TransitionLog TrackTransitions(QueryDescription filter)
+    /// <exception cref="ArgumentException"><paramref name="filter"/> is empty.</exception>
+    public TransitionWatch<THandler> Watch<THandler>(QueryDescription filter)
+        where THandler : struct, ITransitionHandler
     {
         AssertNotDisposed();
-        ArgumentNullException.ThrowIfNull(filter);
 
         if (filter.RequiredTypes.Count == 0 && filter.ExcludedTypes.Count == 0 && filter.AnyTypes.Count == 0)
         {
             throw new ArgumentException(
-                "TrackTransitions requires at least one component in the filter. " +
+                "TransitionWatch filter requires at least one component. " +
                 "Use .With<T>(), .Without<T>(), or .WithAny<T>() on the QueryDescription to specify a component.",
                 nameof(filter));
         }
 
-        return new TransitionLog(this, filter);
-    }
-
-    /// <summary>
-    /// Creates an explicit dense shadow-diff tracker for component type
-    /// <typeparamref name="TComponent"/>, projected to <typeparamref name="TValue"/>
-    /// via <typeparamref name="TProjector"/>.
-    ///
-    /// <para>
-    /// Example usage:
-    /// <code>
-    /// var diff = world.CreateDenseValueDiff&lt;Position, int, PositionXProjector&gt;();
-    /// diff.Capture(world);
-    /// // ... mutate entities ...
-    /// var sink = new MySink();
-    /// diff.Drain(world, ref sink);
-    /// </code>
-    /// </para>
-    /// </summary>
-    /// <param name="query">Optional query filter. If null, defaults to
-    /// <c>new QueryDescription().With&lt;TComponent&gt;()</c>.
-    /// If provided, it is used as-is (no auto-add of TComponent).</param>
-    /// <param name="projector">Projector instance. Defaults to
-    /// <c>default(TProjector)</c>.</param>
-    public DenseValueDiff<TComponent, TValue, TProjector> CreateDenseValueDiff<TComponent, TValue, TProjector>(
-        QueryDescription? query = null,
-        TProjector projector = default)
-        where TComponent : unmanaged
-        where TValue : unmanaged, IEquatable<TValue>
-        where TProjector : struct, IValueProjector<TComponent, TValue>
-    {
-        AssertNotDisposed();
-        var q = query ?? new QueryDescription().With<TComponent>();
-        return new DenseValueDiff<TComponent, TValue, TProjector>(q, projector);
+        return new TransitionWatch<THandler>(filter, default);
     }
 
     /// <summary>
@@ -1175,7 +1085,7 @@ public sealed partial class World : IDisposable
             for (var i = 0; i < compCount; i++)
             {
                 var colIdx = archetype.GetComponentIndexFast(types[i]);
-                archetype.WriteComponentRawNoTrack(colIdx, rowIndex, bufPtr + offsets[i]);
+                archetype.WriteComponentRaw(colIdx, rowIndex, bufPtr + offsets[i]);
             }
         }
     }
@@ -1198,7 +1108,6 @@ public sealed partial class World : IDisposable
 #endif
         record.Archetype = archetype;
         record.RowIndex = rowIndex;
-        AppendTransition(entity, null, archetype);
         return rowIndex;
     }
 
@@ -1229,7 +1138,7 @@ public sealed partial class World : IDisposable
         for (var i = 0; i < types.Length; i++)
         {
             var colIdx = archetype.GetComponentIndexFast(types[i]);
-            archetype.WriteComponentRawNoTrack(colIdx, rowIndex, buffer + offsets[i]);
+            archetype.WriteComponentRaw(colIdx, rowIndex, buffer + offsets[i]);
         }
     }
 
@@ -1371,23 +1280,6 @@ public sealed partial class World : IDisposable
 
         // Invalidate all caches
         _createArchetypeCacheGeneration++;
-
-        // Reset change tracking — prediction-era accumulations are stale.
-        _trackingGeneration++;
-        // Notify live change queries so they can self-heal and stay registered.
-        for (var i = _changeQueries.Count - 1; i >= 0; i--)
-        {
-            if (_changeQueries[i].TryGetTarget(out var query))
-                query.OnWorldRestored(_trackingGeneration);
-            else
-            {
-                // Swap-remove dead weak ref (O(1)).
-                _changeQueries[i] = _changeQueries[_changeQueries.Count - 1];
-                _changeQueries.RemoveAt(_changeQueries.Count - 1);
-            }
-        }
-
-        SharedTrackers?.ResetAll();
 
         // Recycle snapshot to the pool for the next CaptureState.
         snapshot._isRecycled = true;

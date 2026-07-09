@@ -704,12 +704,6 @@ internal sealed partial class Archetype
         => CopyComponentRaw(columnIndex, row, source, read: false);
 
     /// <summary>
-    /// Raw write-only variant with no tracking overhead.
-    /// </summary>
-    internal unsafe void WriteComponentRawNoTrack(int columnIndex, int row, byte* source)
-        => CopyComponentRawNoTrack(columnIndex, row, source);
-
-    /// <summary>
     /// Returns a read-only span over the raw bytes of a single component cell.
     /// Zero-allocation; the span points directly into the archetype's backing store.
     /// </summary>
@@ -734,13 +728,6 @@ internal sealed partial class Archetype
         {
             Unsafe.CopyBlockUnaligned(ref storage, ref *external, size);
         }
-    }
-
-    private unsafe void CopyComponentRawNoTrack(int columnIndex, int row, byte* external)
-    {
-        ref var storage = ref GetColumnRef(this, columnIndex, row, _elementSizes[columnIndex]);
-        var size = (uint)_elementSizes[columnIndex];
-        Unsafe.CopyBlockUnaligned(ref storage, ref *external, size);
     }
 
     internal void CopyColumnsFrom(Archetype source, int count)

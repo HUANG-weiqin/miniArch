@@ -77,7 +77,7 @@ public sealed class ParallelCommandStream : CommandStreamCore
     /// (Create'd but not yet Submit'd/Snapshot'd) entity, this Add is folded
     /// with other Add/Set/Remove into the final materialized component
     /// signature. Intermediate operations are <b>not</b> observable via
-    /// <see cref="SharedValueChanges{T}.Changes"/> or <see cref="TransitionLog.Transitions"/>.
+    /// <c>ChangeWatch&lt;,&gt;.Diff</c> or <c>TransitionWatch&lt;&gt;.Diff</c>.
     /// </summary>
     public void Add<T>(Entity entity, T component) where T : unmanaged
     {

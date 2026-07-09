@@ -157,8 +157,6 @@ public sealed partial class World
             throw;
         }
         FinishMoveEntity(entity, info, destination!, rowIdx);
-        CaptureTypedTrackerBaseline(entity, componentType, in component);
-        AppendTransition(entity, sourceArchetype, destination!);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -195,7 +193,6 @@ public sealed partial class World
 
         var destination = GetOrCreateAddDestinationArchetype(archetype, componentType);
         MoveEntityFromBytes(entity, info, destination, componentType, source);
-        CaptureRawTrackerBaseline(entity, componentType, source);
     }
 
     internal static unsafe void ApplyRawSet(Entity entity, EntityRecord info, ComponentType componentType, byte* source)
@@ -208,7 +205,7 @@ public sealed partial class World
                 $"Entity {entity} does not have component type {componentType.Value}.");
         }
 
-        archetype.WriteComponentRawNoTrack(componentIndex, info.RowIndex, source);
+        archetype.WriteComponentRaw(componentIndex, info.RowIndex, source);
     }
 
     private unsafe void MoveEntityFromBytes(
@@ -231,7 +228,6 @@ public sealed partial class World
             throw;
         }
         FinishMoveEntity(entity, sourceInfo, destination, rowIdx);
-        AppendTransition(entity, sourceArchetype, destination);
     }
 
     private Archetype GetOrCreateAddDestinationArchetype(Archetype source, ComponentType componentType)
@@ -270,8 +266,6 @@ public sealed partial class World
         }
 
         MoveEntity(entity, info, destination!);
-        ClearTypedTrackerSlots(entity.Id, componentType);
-        AppendTransition(entity, archetype, destination!);
     }
 
 }

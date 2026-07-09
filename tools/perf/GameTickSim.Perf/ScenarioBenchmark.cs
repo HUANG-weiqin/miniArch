@@ -2491,9 +2491,9 @@ public static class ScenarioBenchmark
     /// Standalone benchmark: Real-world change tracking scenarios.
     /// Goal: track dirty entities and get Old/New values for processing.
     /// Tests two approaches at varying update densities:
-    ///   Manual  = shadow array + full scan to find diffs (no API)
-    ///   Changes = TrackValueChanges&lt;Position&gt;()
-    ///            — Old/New pairs, cleared via ClearAll per tick
+    ///   Manual = shadow array + full scan to find diffs (no API)
+    ///   Watch  = <c>World.Watch&lt;Position, Handler&gt;()</c>
+    ///            — Snapshot/Diff lifecycle per tick
     /// Invoked via --modified-chunks flag in Program.cs.
     /// </summary>
     public static void RunModifiedChunksDensityBenchmark()
@@ -2506,7 +2506,7 @@ public static class ScenarioBenchmark
         Console.WriteLine($"Entities: {entityCount}, Ticks: {ticksToRun}, Densities: 1%, 10%, 50%, 100%");
         Console.WriteLine("Goal: track dirty entities, read Old+New values, compute delta.");
         Console.WriteLine();
-        Console.WriteLine($"{"Density",8} | {"Manual",10} | {"Changes",10} | {"C/M",8} | {"Alloc M",8} | {"Alloc C",8}");
+        Console.WriteLine($"{"Density",8} | {"Manual",10} | {"Watch",10} | {"W/M",8} | {"Alloc M",8} | {"Alloc W",8}");
         Console.WriteLine(new string('-', 75));
 
         foreach (var density in densities)
@@ -2516,8 +2516,8 @@ public static class ScenarioBenchmark
             // ── Variant A: Manual shadow array + full scan diff ──
             var (manualOps, manualHeap, manualGen0, manualBytes) = RunManualShadowDiff(entityCount, updateCount, ticksToRun);
 
-            // ── Variant B: TrackValueChanges<Position>() + ClearAll() ──
-            var (changesOps, changesHeap, changesGen0, changesBytes) = RunChangesOldNew(entityCount, updateCount, ticksToRun);
+            // ── Variant B: Watch<Position, Handler>() + Snapshot/Diff ──
+            var (changesOps, changesHeap, changesGen0, changesBytes) = RunWatchPosition(entityCount, updateCount, ticksToRun);
 
             var manualKBpt = manualBytes / 1024.0 / ticksToRun;
             var changesKBpt = changesBytes / 1024.0 / ticksToRun;
@@ -2529,8 +2529,8 @@ public static class ScenarioBenchmark
 
         Console.WriteLine();
         Console.WriteLine("Both variants: same goal — find changed entities, read Old+New, compute delta.");
-        Console.WriteLine("  Manual   = shadow Position[] before Set, full scan after to find diffs");
-        Console.WriteLine("  Changes  = TrackValueChanges<Position>() → SharedValueChanges.Changes Old/New pairs (ClearAll per tick)");
+        Console.WriteLine("  Manual = shadow Position[] before Set, full scan after to find diffs");
+        Console.WriteLine("  Watch  = World.Watch<Position, Handler>() → Snapshot/Diff Old/New pairs per tick");
 
         // Same-type consumer scaling section
         RunSameTypeConsumerScaling();
@@ -2632,20 +2632,21 @@ public static class ScenarioBenchmark
     }
 
     /// <summary>
-    /// Variant B: TrackValueChanges() — typed fast path.
-    /// After Set: read SharedValueChanges.Changes to get typed Old/New pairs, compute delta.
-    /// Clears via ClearAll per tick to prevent cross-tick accumulation.
-    /// Uses T[] arrays directly — no byte[] copies, matching hand-written code.
+    /// Variant B: <c>World.Watch&lt;Position, PositionWatchHandler&gt;()</c> — pull-based diff.
+    /// Before tick: Snapshot stores baseline. After Set: Diff finds changed entities
+    /// and fires the handler with Old/New pairs.
+    /// Uses Snapshot per tick to reset baseline for the next tick.
     /// </summary>
-    static (double opsPerSec, long heapDeltaKB, int gen0, long bytesAllocated) RunChangesOldNew(int entityCount, int updateCount, int ticksToRun)
+    static (double opsPerSec, long heapDeltaKB, int gen0, long bytesAllocated) RunWatchPosition(int entityCount, int updateCount, int ticksToRun)
     {
         using var w = new MiniWorld();
         var entities = new MiniArch.Entity[entityCount];
         for (var i = 0; i < entityCount; i++)
             entities[i] = w.Create(new Position { X = i, Y = i + 1, Z = i + 2 }, new Velocity { X = 1, Y = 0.5f });
 
-        // Set up value change tracking to capture Old/New
-        var positionChanges = w.TrackValueChanges<Position>();
+        // Set up Watch for Position value changes
+        var positionWatch = w.Watch<Position, PositionWatchHandler>();
+        positionWatch.Handler = new PositionWatchHandler();
 
         var updateIndices = new int[updateCount];
         for (var i = 0; i < updateCount; i++)
@@ -2653,27 +2654,22 @@ public static class ScenarioBenchmark
 
         int Tick()
         {
-            var checksum = 0;
+            // Snapshot baseline before mutations
+            positionWatch.Snapshot(w);
 
-            // 1. Set N entities (same as other variants)
+            // 1. Set N entities
             for (var i = 0; i < updateCount; i++)
             {
                 var idx = updateIndices[i];
                 w.Set(entities[idx], new Position { X = i * 0.1f, Y = i * 0.2f, Z = i * 0.3f });
             }
 
-            // 2. Get Old/New pairs — zero-copy via Changes property
-            var changes = positionChanges.Changes;
-            for (var i = 0; i < changes.Length; i++)
-            {
-                var dx = changes[i].New.X - changes[i].Old.X;
-                var dy = changes[i].New.Y - changes[i].Old.Y;
-                var dz = changes[i].New.Z - changes[i].Old.Z;
-                checksum += (int)(dx + dy + dz);
-            }
+            // 2. Diff — fires handler with Old/New pairs
+            positionWatch.Diff(w);
 
-            // 3. Clear before next tick (Changes is non-destructive)
-            positionChanges.ClearAll();
+            // 3. Consume handler state to prevent dead-code elimination
+            var handler = positionWatch.Handler;
+            var checksum = handler.Checksum;
 
             return checksum;
         }
@@ -2704,10 +2700,9 @@ public static class ScenarioBenchmark
     // ── Same-type consumer scaling ─────────────────────────────────────
 
     /// <summary>
-    /// Measures Set fanout cost when N queries share the same ChangeTracker&lt;T&gt;.
-    /// Creates N identical TrackValueChanges&lt;Position&gt;() handles,
-    /// runs the same Set workload, reads only first query to isolate fanout,
-    /// and clears once per tick (shared tracker so one clear suffices).
+    /// Measures per-tick overhead of independent <c>ChangeWatch</c> handles.
+    /// Each consumer gets its own Watch handle; all Snapshot+Diff once per tick.
+    /// Independent watches means each tick does a full scan per handle.
     /// </summary>
     static void RunSameTypeConsumerScaling()
     {
@@ -2719,8 +2714,8 @@ public static class ScenarioBenchmark
         Console.WriteLine();
         Console.WriteLine("=== Same-Type Consumer Scaling ===");
         Console.WriteLine($"Entities: {entityCount}, Updates/tick: {updateCount}, Ticks: {ticksToRun}");
-        Console.WriteLine("Measures Set fanout cost when N TrackValueChanges<Position>() handles");
-        Console.WriteLine("share the same shared tracker. Only first query is read; all cleared once per tick.");
+        Console.WriteLine("Measures per-tick overhead when N independent Watch<Position, Handler>() handles");
+        Console.WriteLine("each Snapshot+Diff once per tick.");
         Console.WriteLine();
         Console.WriteLine($"{"Consumers",10} | {"ops/s",10} | {"KB/tick",8}");
         Console.WriteLine(new string('-', 33));
@@ -2742,12 +2737,13 @@ public static class ScenarioBenchmark
         for (var i = 0; i < entityCount; i++)
             entities[i] = w.Create(new Position { X = i, Y = i + 1, Z = i + 2 }, new Velocity { X = 1, Y = 0.5f });
 
-        // Create N identical handles sharing the same tracker
-        // In the shared model, all handles alias the same per-type tracker,
-        // so consumer count does not affect Set cost.
-        var handles = new MiniArch.SharedValueChanges<Position>[consumerCount];
+        // Create N independent Watch handles
+        var handles = new MiniArch.ChangeWatch<Position, PositionWatchHandler>[consumerCount];
         for (var i = 0; i < consumerCount; i++)
-            handles[i] = w.TrackValueChanges<Position>();
+        {
+            handles[i] = w.Watch<Position, PositionWatchHandler>();
+            handles[i].Handler = new PositionWatchHandler();
+        }
 
         var updateIndices = new int[updateCount];
         for (var i = 0; i < updateCount; i++)
@@ -2757,6 +2753,10 @@ public static class ScenarioBenchmark
         {
             var checksum = 0;
 
+            // Snapshot all handles before mutations
+            for (var hi = 0; hi < consumerCount; hi++)
+                handles[hi].Snapshot(w);
+
             // Set N entities
             for (var i = 0; i < updateCount; i++)
             {
@@ -2764,19 +2764,12 @@ public static class ScenarioBenchmark
                 w.Set(entities[idx], new Position { X = i * 0.1f, Y = i * 0.2f, Z = i * 0.3f });
             }
 
-            // Read from first handle; all N handles share the same tracker,
-            // so Set cost is O(1) regardless of consumer count.
-            var changes = handles[0].Changes;
-            for (var i = 0; i < changes.Length; i++)
-            {
-                var dx = changes[i].New.X - changes[i].Old.X;
-                var dy = changes[i].New.Y - changes[i].Old.Y;
-                var dz = changes[i].New.Z - changes[i].Old.Z;
-                checksum += (int)(dx + dy + dz);
-            }
+            // Diff all handles (each independent watch does a full scan)
+            for (var hi = 0; hi < consumerCount; hi++)
+                handles[hi].Diff(w);
 
-            // Clear once per tick; shared tracker means one Clear suffices for all N
-            handles[0].ClearAll();
+            // Consume handler state from first handle
+            checksum = handles[0].Handler.Checksum;
 
             return checksum;
         }
@@ -2796,5 +2789,20 @@ public static class ScenarioBenchmark
         var bytesAllocated = GC.GetAllocatedBytesForCurrentThread() - allocBefore;
 
         return (opsPerSec, bytesAllocated);
+    }
+}
+
+// Local handler struct to prevent JIT dead-code elimination.
+// Position is a record struct and auto-implements IEquatable<Position>.
+// Uses fully qualified MiniArch types to avoid ambiguity with DefaultEcs.
+file struct PositionWatchHandler : MiniArch.IChangeHandler<Position>
+{
+    public int TotalChanges;
+    public int Checksum;
+
+    public void OnChange(MiniArch.World world, MiniArch.Entity entity, in Position oldValue, in Position newValue)
+    {
+        TotalChanges++;
+        Checksum = HashCode.Combine(Checksum, entity.Id, (int)(oldValue.X + oldValue.Y + oldValue.Z), (int)(newValue.X + newValue.Y + newValue.Z));
     }
 }

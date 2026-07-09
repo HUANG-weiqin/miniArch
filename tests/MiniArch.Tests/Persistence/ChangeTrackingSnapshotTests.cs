@@ -6,56 +6,77 @@ using Xunit;
 namespace MiniArchTests.Persistence;
 
 /// <summary>
-/// Verifies that snapshot save/load correctly resets observer state:
-/// transition logs are ephemeral snapshot state, but live in-memory handles
-/// remain armed across RestoreState.
+/// Verifies that snapshot save/load behavior with the new Watch API.
 /// </summary>
 public sealed class ChangeTrackingSnapshotTests
 {
     private readonly record struct Position(int X, int Y);
 
+    private struct TransitionRecorder : ITransitionHandler
+    {
+        public System.Collections.Generic.List<(Entity, TransitionKind)> Changes;
+
+        public TransitionRecorder(int _)
+        {
+            Changes = new System.Collections.Generic.List<(Entity, TransitionKind)>();
+        }
+
+        public void OnChange(World world, Entity entity, TransitionKind kind)
+        {
+            Changes.Add((entity, kind));
+        }
+    }
+
     /// <summary>
-    /// The per-log transition list is not part of the snapshot serialization.
-    /// After save+load, a new Track returns a fresh log with an empty list even if
-    /// the original world had entries.
+    /// TransitionWatch state is not persisted across save/load.
+    /// After save+load, a fresh watch starts empty.
     /// </summary>
     [Fact]
-    public void Snapshot_does_not_carry_transition_log()
+    public void Snapshot_does_not_carry_transition_watch()
     {
         var world = new World(chunkCapacity: 2);
-        var log = world.TrackTransitions(new QueryDescription().With<Position>());
+        var watch = world.Watch<TransitionRecorder>(new QueryDescription().With<Position>());
+        watch.Handler = new TransitionRecorder(0);
+        watch.Snapshot(world);
         var e = world.Create(new Position(1, 1));
-        Assert.NotEmpty(log.Transitions.ToArray());
+        watch.Diff(world);
+        Assert.NotEmpty(watch.Handler.Changes);
 
         using var stream = new MemoryStream();
         WorldSnapshot.Save(stream, world);
         stream.Position = 0;
 
         var loaded = WorldSnapshot.Load(stream);
-        var loadedLog = loaded.TrackTransitions(new QueryDescription().With<Position>());
-        Assert.Empty(loadedLog.Transitions.ToArray());
+        var loadedWatch = loaded.Watch<TransitionRecorder>(new QueryDescription().With<Position>());
+        loadedWatch.Handler = new TransitionRecorder(0);
+        loadedWatch.Snapshot(loaded);
+        loadedWatch.Diff(loaded);
+        Assert.Empty(loadedWatch.Handler.Changes);
 
         world.Dispose();
     }
 
     [Fact]
-    public void RestoreState_preserves_transition_log_for_post_restore_mutations()
+    public void RestoreState_preserves_watch_for_post_restore_mutations()
     {
         var world = new World(chunkCapacity: 2);
-        var log = world.TrackTransitions(new QueryDescription().With<Position>());
+        var watch = world.Watch<TransitionRecorder>(new QueryDescription().With<Position>());
+        watch.Handler = new TransitionRecorder(0);
         var snapshot = world.CaptureState();
 
+        watch.Snapshot(world);
         world.Create(new Position(1, 1));
-        Assert.NotEmpty(log.Transitions.ToArray());
+        watch.Diff(world);
+        Assert.NotEmpty(watch.Handler.Changes);
 
         world.RestoreState(snapshot);
-        Assert.Empty(log.Transitions.ToArray());
-
+        watch.Handler = new TransitionRecorder(0);
+        watch.Snapshot(world);
         var entity = world.Create(new Position(2, 2));
-        var transition = Assert.Single(log.Transitions.ToArray());
-        Assert.Equal(entity, transition.Entity);
-        Assert.Equal(TransitionCause.Created, transition.Cause);
-        Assert.Equal(TransitionKind.Entered, transition.Kind);
+        watch.Diff(world);
+        var change = Assert.Single(watch.Handler.Changes);
+        Assert.Equal(entity, change.Item1);
+        Assert.Equal(TransitionKind.Entered, change.Item2);
 
         world.Dispose();
     }
