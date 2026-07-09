@@ -1,163 +1,123 @@
 ---
 title: Change Tracking（变更追踪）
 module: MiniArch.Core
-description: TrackValueChanges<T>() 使用 boundary diff（baseline-to-current 扫描）返回 SharedValueChanges<T>；CreateDenseValueDiff<TComponent,TValue,TProjector>() 返回 DenseValueDiff 高吞吐显式 shadow diff；Set/CommandStream.Set 热路径不触达 value tracking；TrackTransitions(QueryDescription) 返回 TransitionLog 结构成员变更日志
-updated: 2026-07-08 (新增 DenseValueDiff 显式 dense shadow diff API; 补齐 null guard / stale slot 文档)
+description: World.Watch pull-event 模型：ChangeWatch/TransitionWatch Snapshot+Diff 两阶段扫描；struct handler 回调；零 per-write 成本；旧 TrackValueChanges/TransitionLog/DenseValueDiff/IValueProjector/IValueChangeSink 已删除
+updated: 2026-07-09
 ---
 
 # Change Tracking（变更追踪）
 
 ## 这个模块是干什么的
 
-- `World.TrackValueChanges<T>()` → `SharedValueChanges<T>`：对比上次 baseline 与当前 world 中所有 `T` 值，返回 `ReadOnlySpan<ValueChange<T>>` 的 Old/New net diff。
-- `World.CreateDenseValueDiff<TComponent,TValue,TProjector>(QueryDescription?, TProjector)` → `DenseValueDiff<TComponent,TValue,TProjector>`：高吞吐显式 pre/post dense shadow diff，性能接近手写 ManualDense 方案（≥95%）。
-- `World.TrackTransitions(QueryDescription filter)` → `TransitionLog`：追踪实体因 Create/Destroy/Add/Remove 导致的 filter 成员进入/退出事件。
-- `.Changes` / `.Transitions` 都是非破坏性读；必须显式调用 `.ClearAll()` / `.Clear()` 推进消费边界。
-- 这个模块不保存跨帧历史；它是渲染层/观察层状态，不是确定性 sim 状态。
+- `World.Watch<TComponent, THandler>(QueryDescription?)` → `ChangeWatch<TComponent, THandler>`：值变更追踪。`Snapshot(World)` 记录 baseline，`Diff(World)` 扫描当前 world、比较 baseline、回调 `IChangeHandler.OnChange`。
+- `World.Watch<TComponent, TValue, THandler>(QueryDescription?)` → `ChangeWatch<TComponent, TValue, THandler>`：投影值变更追踪。handler 同时负责投影（`Project`）和消费（`OnChange`），比较在投影值上做。
+- `World.Watch<THandler>(QueryDescription)` → `TransitionWatch<THandler>`：结构变更追踪。`Snapshot(World)` 记录当前 filter 成员，`Diff(World)` 对比前后成员集，回调 `ITransitionHandler.OnChange`（Entered/Exited）。
+- Watch 是纯 pull-event 模型：不拦截 `Set`/`Add`/`Remove`，不写 dirty log，不维护 per-type 注册表。
+- 这个模块不保存跨帧历史；它只基于 baseline 快照的 snapshot/diff 两阶段模式工作。
 
 ## 架构
 
-- **值变更机制**：world lazy 创建 `SharedTrackerRegistry`，按 `ComponentType.Value` 持有唯一 `ChangeTracker<T>`。同一组件类型的所有 `SharedValueChanges<T>` handle 共享同一个 baseline。
-- **ChangeTracker<T> 状态**：
-  - `BaselineValues[entity.Id]`：上次 arm / `ClearAll()` / structural add 时记录的值。
-  - `BaselineVersions[entity.Id]`：baseline 对应的 entity version；`0` 表示无 baseline。
-  - `ChangesBuffer[]`：`.Changes` 读取时扫描 world 后临时填充的 `ValueChange<T>` 输出。
-- **值路径控制流**：
-  - `TrackValueChanges<T>()` 首次创建 tracker 时扫描当前 world，建立 baseline，不回溯之前的写入。
-  - `SharedValueChanges<T>.Changes` 扫描当前 world 的 `T`，与 baseline 比较，生成 net diff。
-  - `SharedValueChanges<T>.ClearAll()` 扫描当前 world，把当前值设为新 baseline，并清空输出。
-  - `World.Set<T>()` 和 `CommandStream.Set<T>()` 完全不查询 tracker、不写 log、不读 baseline。
-- **结构路径控制流**：Create/Destroy/Add/Remove → `AppendTransition` → 每个 `TransitionLog` 做 old/new archetype filter 匹配 → 记录 Entered/Exited。
-- **生命周期边界**：Destroy 清该 entity 在所有 value tracker 中的 baseline；Remove<T> 清该组件 tracker 的 baseline；Add<T>/Create<T...> 若 tracker 已存在，会把新组件初始值作为 baseline（不记录 value change）；Replay raw Add 也会为已有 tracker 捕获 Add 初值 baseline。
-- **RestoreState**：value tracker 保留注册但把 baseline 移到恢复后的当前 world；transition log 清 stale 数据但保持注册。
+- **值变更**：`ChangeWatch` 内部持有 `TComponent[] _oldValues`（按 `entity.Id` 直索引的 dense array）和 `int[] _touchedIds`（记录上次 snapshot 触及的 id 列表）。
+  - `Snapshot(World)`：查询 world → 遍历 chunk → 记录每个实体的当前值到 `_oldValues`，同时用 `_touchedIds` 标记哪些 id 有了 baseline。
+  - `Diff(World)`：再次查询 world → 遍历 chunk → 对每个实体，比较当前值与 `_oldValues[id]`（若 id 未触及则 `default`）→ 差异收集到 `_buffer[]` → 缓冲区稳定后逐条回调 handler。
+- **投影值变更**：`ChangeWatch<TComponent, TValue, THandler>` 与值变更结构相同，但 baseline 存储的是 `TValue[]`，SnapShot 时调用 `handler.Project(component)`，Diff 时再次调用 `Project()` 并比较 `TValue` 是否相等。
+- **结构变更**：`TransitionWatch` 内部持有 `Entity[] _snapshotEntities`（上次 snapshot 的成员列表）和 `HashSet<int> _currentIds` + `Entity[] _currentEntities`（复用 buffer）。
+  - `Snapshot(World)`：遍历 query → 记录匹配实体到 `_snapshotEntities`。
+  - `Diff(World)`：扫描当前 → 用 HashSet 快速查 Exited（snapshot 中有、当前无）→ 线性扫描查 Entered（当前有、snapshot 中无）→ 缓冲区稳定后回调。
+- **生命周期**：Watch 不与 world 注册（无 SharedTrackerRegistry、无 IChangeQuery dispatch）。`Snapshot`/`Diff` 通过 `world.Query()` 读取当前状态。World dispose 后调用 `Snapshot`/`Diff` 抛 `ObjectDisposedException`。
 
 ## 公共 API
 
 ```csharp
-var positions = world.TrackValueChanges<Position>();
-
-foreach (ref readonly var c in positions.Changes)
-    UpdatePosition(c.Entity, c.Old, c.New);
-
-positions.ClearAll();
-
-var visible = world.TrackTransitions(
-    new QueryDescription()
-        .With<Renderable>()
-        .Without<Hidden>());
-
-foreach (var t in visible.Transitions)
+// ── Value change watch ────────────────────────────────────────────────
+struct HpHandler : IChangeHandler<Health>
 {
-    if (t.Kind == TransitionKind.Entered) SpawnHealthBar(t.Entity);
-    else DestroyHealthBar(t.Entity);
+    public int Count;
+    public void OnChange(World world, Entity entity, in Health oldValue, in Health newValue)
+    {
+        Count++;
+        UpdateHealthBar(entity, oldValue, newValue);
+    }
 }
 
-visible.Clear();
+var watch = world.Watch<Health, HpHandler>(
+    new QueryDescription().With<Health>().With<EnemyTag>());
+watch.Snapshot(world);
+// ... mutate ...
+watch.Diff(world);
+
+// ── Transition watch ──────────────────────────────────────────────────
+struct SpawnHandler : ITransitionHandler
+{
+    public void OnChange(World world, Entity entity, TransitionKind kind)
+    {
+        if (kind == TransitionKind.Entered) SpawnHealthBar(entity);
+        else DestroyHealthBar(entity);
+    }
+}
+
+var tWatch = world.Watch<SpawnHandler>(
+    new QueryDescription().With<Renderable>().Without<Hidden>());
+tWatch.Snapshot(world);
+// ... mutate ...
+tWatch.Diff(world);
+
+// ── Handler mutation via ref ──────────────────────────────────────────
+ref var handler = ref watch.Handler;  // mutate struct in-place
+handler.Count = 0;
 ```
 
 ## 语义要点
 
-- `TrackValueChanges<T>()` 是 **baseline-to-current net value diff**，不是 `Set<T>` 调用日志。
-- `.Changes` 会看见任何让当前 `T` 值不同于 baseline 的写法：
-  - `World.Set<T>()`
-  - `CommandStream.Set<T>()`
-  - `world.GetRef<T>()` 返回 ref 后直接赋值
-  - `chunk.GetSpan<T>()` / `GetComponentSpanAt<T>()` 直接写
-- `A -> B -> C` 只返回 `Old=A, New=C`。
-- `A -> B -> A` 返回空。
-- no-op `A -> A` 返回空。
-- Create/Add/Remove/Destroy 本身不是 value change；它们由 `TrackTransitions` 表达。Add/Create 后如果组件又被改值，baseline 是 Add/Create 的初始值。
-- Existing entity 的 Replay Add→Set 与 Submit Add→Set 对齐：Add 初值是 baseline，后续 Set 终值不同则输出一条 value diff。
-- 多个同类型 `SharedValueChanges<T>` handle 共享同一个 baseline；任意一个调用 `.ClearAll()` 会影响所有同类型 handle。
-- `default(SharedValueChanges<T>)` 是 inert：`.Changes` 返回空，`.ClearAll()` 是 no-op。
+- `Snapshot` 记录的是 **当时** 的 world 状态快照。`Snapshot` 后任何改变（Set/Add/Remove/Destroy）在下一次 `Diff` 中被发现。
+- `Diff` 是 **非破坏性读**：同一 baseline 可多次调用 `Diff`，每次产生相同回调（除非 world 继续变化）。
+- `Snapshot` 再次调用推进 baseline：旧 baseline 被丢弃，新 baseline 在当前 world 状态建立。
+- 两阶段安全：`Diff` 先把所有 diff 收集到内部 `_buffer[]`，再逐条回调。handler 可以在 `OnChange` 中安全地 mutate world（如 spawn entity），不会破坏 diff 迭代。
+- **Stale slot 语义**：`Snapshot` 时未触及的 entity slot（从未出现在 query 中）在 `Diff` 中若匹配 query，oldValue 为 `default`。Entity 被 Destroy/Remove 后，`Diff` 不会报告（因为当前扫描找不到它）。
+- **id-based 语义（TransitionWatch）**：Destroy 后同 id 新实体（LIFO 复用）若匹配 filter，视为同一实体，不报 Exited+Entered。此设计有意简化——需要精确结构语义的场景应使用跨帧的 id+version 追踪。
+- 旧 `TrackValueChanges<T>()`、`TrackTransitions(QueryDescription)`、`SharedValueChanges<T>`、`TransitionLog`、`CreateDenseValueDiff`、`DenseValueDiff`、`IValueProjector`、`IValueChangeSink`、`ChangeTracker<T>`、`SharedTrackerRegistry`、`IChangeQuery` 已全部删除，无兼容 shim。
 
 ## 决策
 
-1. **不影响 Set 热路径**：value tracking 从 write-time tracker 改为 read-time/boundary diff。`Set<T>` 不再有 `SharedTrackers` null check、type lookup、baseline compare、dirty slot 写入。
-2. **接受语义升级**：因为不再拦截写入点，value tracking 追踪的是“值是否变了”，不是“谁调用了 Set”。因此 ref/span 直接写现在也会被捕获。
-3. **保持 shared per-type baseline**：同一 world + component type 只有一个 `ChangeTracker<T>`，多 handle 不 fanout。
-4. **结构和值分离**：Add/Remove/Create/Destroy 用 `TransitionLog`；value tracker 只在组件存在于 baseline 与当前世界时输出 Old/New。
-5. **不做 per-consumer cursor**：`.ClearAll()` 是该类型的全局 baseline 推进。需要独立消费进度时再新增能力。
-6. **no-tracking 空状态仍为 null**：无人调用 `TrackValueChanges<T>()` 时 `World.SharedTrackers == null`，默认 world 不持有 registry。
+1. **纯 pull-event，不拦截写入**：Watch 不注册到 World，不拦截 `Set`/`Add`/`Remove`。写入热路径零额外分支。代价是 `Diff` 做全量扫描——这是 pull 模型的固有成本。
+2. **两阶段回调安全**：所有 diff 先收集到 buffer，再回调 handler。允许 handler 在 `OnChange` 中 mutate world（如 spawn entity），不破坏迭代稳定性。
+3. **dense array 直索引**：`_oldValues[id]` 是 O(1) 直访问。ID 密集时空间局部性极好；稀疏时浪费少量内存但性能仍可接受（已压缩到 touched slot 清理）。
+4. **无世界级注册表**：旧架构的 `SharedTrackerRegistry`、`IChangeQuery dispatch`、`ChangeTracker<T>` 全部删除。每个 Watch 独立管理自己的 dense arrays，互不干扰，多 watch 不会 fanout 写入成本。
+5. **struct handler 零分配回调**：`IChangeHandler`/`ITransitionHandler` 是 struct 接口约束，JIT 去虚化，回调零分配。`ref THandler Handler` 属性支持外部 mutate handler 字段。
+6. **无 per-consumer cursor 管理**：Watch 不维护消费游标，不自动推进 baseline。消费端完全控制何时 `Snapshot`（推进 baseline）。
+7. **删除旧 API，无兼容层**：旧 `TrackValueChanges`/`TrackTransitions`/`CreateDenseValueDiff`/`SharedValueChanges`/`TransitionLog`/`DenseValueDiff` 全部删除。旧 consumer 须迁移到 Watch API。
+8. **默认 query vs 显式 query**：`ChangeWatch` 的 `query` 参数可选，`null` 时自动 `.With<TComponent>()`。`TransitionWatch` 的 filter 必填，空时抛 `ArgumentException`。
 
 ## 认知模型
 
-- `TrackValueChanges<T>()` 像“拍一张 T 组件快照”。
-- `.Changes` 像“现在再拍一张，和上次快照做 diff”。
-- `.ClearAll()` 像“把当前画面设为新快照”。
-- `TrackTransitions(filter)` 像“在 filter 集合门口装一个门禁”，只记录实体进出集合。
-
-## DenseValueDiff Explicit Shadow Diff
-
-`World.CreateDenseValueDiff<TComponent,TValue,TProjector>(QueryDescription?, TProjector)` 是新增的高吞吐显式 value diff 路径。
-
-### 语义
-
-- 等价用户自己写 `ManualDense` 前后两次扫描 + diff：`Capture(World)` 拍快照，`Drain(World, ref TSink)` 对比当前值并向 `IValueChangeSink<TValue>` 输出变化。
-- 标准高性能循环是 `Capture -> Drain -> Clear`。连续调用 `Capture` 不会保留离开 query 的旧 slot：它会先清上一轮 touched dense slots，再建立新 baseline；这条路径正确但多一个清理 pass，热路径应显式 `Clear()`。
-- 默认 query（`null`）自动 `With<TComponent>()`；显式 query 不自动改写，用户精确控制扫描范围。
-- Add after Capture 可能按 default/stale slot 报 value diff；remove/destroy after Capture 不报告。
-- **Destroy+recreate stale slot**：Destroy 后再 Create（LIFO 复用相同 ID），Drain 可能按该 ID 的旧 slot 值报告 diff（`Old=前一实体的旧值，New=新实体的当前值`，`Entity=新实体`）。这是 DenseValueDiff 的 intentional dense shadow 语义（version 不检查），不是 bug。需要精确结构语义应使用 `TrackTransitions`。
-- Capture/Drain 在最开头抛 `ArgumentNullException` 若 world 为 null；world dispose 后调用会由内部 `world.Query()` 抛 `ObjectDisposedException`。
-- 结构变化仍用 `TrackTransitions`。
-- 旧 `TrackValueChanges<T>()` 保留不动（便利/透明 API，net diff 语义）。
-
-### 接口
-
-```csharp
-public interface IValueProjector<TComponent, TValue>
-{
-    TValue Project(in TComponent component);
-}
-
-public interface IValueChangeSink<TValue>
-{
-    void OnChanged(Entity entity, TValue oldValue, TValue newValue);
-}
-```
-
-### 性能目标
-
-`DenseValueDiff` 达到等价 ManualDense 方案的 **≥95% throughput**（验证通过，见 `kb-hero-pipeline-regression.md` `--compare-old-value-tracking` 四路对比）。
-
-### 决策
-
-1. **官方 ManualDense API 化路线**：从 boundary diff（TrackValueChanges）转向提供与手写 shadow-diff 等性能的官方 API。边界 diff 保留为便利/透明选项。
-2. **Capture/Drain/Clear 三阶段**：Capture 创建一致快照，Drain 输出 diff，Clear 清理状态。不自动推进 baseline，消费端完全控制进度。
-3. **IValueProjector 分离投影逻辑**：组件格式与投影值解耦，用户可投影任意子字段/计算值，无需 flat 组件。
-4. **IValueChangeSink 回调**：Drain 期间每条 diff 同步回调，避免一次性分配输出数组。
-5. **与 TrackValueChanges 共存**：二者独立注册，互不干扰。TrackValueChanges 用 shared registry + boundary diff；DenseValueDiff 用 per-handle dense shadow arrays。
-6. **查询精确控制**：显式 query 不自动加 `With<TComponent>()`，支持多组件复合过滤。默认 query 方便常见单组件场景。
+- 把 `ChangeWatch` 看作**手动拍照对比**：拍一张（`Snapshot`），再拍一张（`Diff`），看哪里不一样。
+- 把 `TransitionWatch` 看作**集合进出日志**：记录集合当前成员（`Snapshot`），下次查看谁进来谁出去（`Diff`）。
+- 与旧模型（world 注册、intercept 写入、自动消费）的核心区别是**显式两阶段**：baseline 推进、diff 触发、回调消费全部由用户显式控制。
 
 ## 性能特征
 
-- **Set 热路径**：tracking on/off 对 `World.Set<T>()` 与 `CommandStream.Set<T>()` 的写入路径没有 value-tracking 分支差异。
-- **读取成本**：`.Changes` 是 O(当前拥有 T 的实体数) 扫描；`.ClearAll()` 也是 O(当前拥有 T 的实体数) baseline 重建。
-- **空间成本**：每个 tracked component type 持有按 `entity.Id` 直索引的 baseline arrays 和一个复用的 `ValueChange<T>[]` 输出 buffer。
-- **多消费者**：同类型多 handle 共享 baseline 和输出 buffer，不增加 Set 成本。
-- **DenseValueDiff**：per-handle 独立 shadow arrays（`TValue[]` by entity.Id），Capture O(实体数)，Drain O(实体数)。无共享状态，多 handle 完全独立。
-- **DenseValueDiff 连续 Capture**：若不先 `Clear()` 就再次 `Capture()`，会额外清理上一轮 touched slots；这是为了避免旧 entity ID stale slot 污染新 baseline。高吞吐循环应调用 `Clear()`，避免把清理成本隐藏在下一次 `Capture()`。
-- **HeroComing.Perf**：最新四路对比见 `kb-hero-pipeline-regression.md` 的 `--compare-old-value-tracking` 段。
+- **热路径零成本**：`Watch` 创建不做任何 world 注册（无 registry、无 type lookup、无数组预分配 fallocate）。写入路径无任何 watch 分支。
+- **`Snapshot`**：O(当前匹配 query 的实体数) 扫描 + baseline 存储。每个实体一次 `_oldValues[id] = value`（或 `handler.Project(component)`）。
+- **`Diff`**：O(当前匹配 query 的实体数) 扫描 + O(entities) 值比较 + O(diffs) 回调。
+- **空间**：每个 `ChangeWatch` 持有 `_oldValues`（按 `entity.Id` 索引）、`_touchedIds`（上次触及 id）、`_buffer`（diff buffer）。`TransitionWatch` 持有 `_snapshotEntities[]` + `_currentIds` HashSet + `_currentEntities[]` + `_buffer`。
+- **稳态 GC**：内部数组按需增长，增长后不再缩小；稳态 `Snapshot`+`Diff` 循环零堆分配。
+- **多 watch 同组件**：互不干扰，各自持有独立的 baseline arrays。不共享状态，不 fanout。
 
 ## 入口
 
-- `src/MiniArch/ChangeTracker.cs`：baseline-to-current 扫描与输出 buffer。
-- `src/MiniArch/SharedValueChanges.cs`：public value diff handle。
-- `src/MiniArch/ChangeTracking/DenseValueDiff.cs`：DenseValueDiff Capture/Drain/Clear 实现。
-- `src/MiniArch/ChangeTracking/IValueProjector.cs`：IValueProjector 接口定义。
-- `src/MiniArch/ChangeTracking/IValueChangeSink.cs`：IValueChangeSink 接口定义。
-- `src/MiniArch/Core/SharedTrackerRegistry.cs`：world-owned per-component tracker 注册表。
-- `src/MiniArch/Core/World.cs`：`TrackValueChanges<T>()`、`TrackTransitions(...)`、`CreateDenseValueDiff(...)`、tracker baseline 生命周期。
-- `src/MiniArch/Core/World.StructuralChange.cs`：Add/Remove 生命周期 baseline 处理；Set 不触达 value tracking。
-- `src/MiniArch/Core/World.Create.Generated.cs`：Create 初始组件 baseline capture。
-- `src/MiniArch/Core/World.EntityLifecycle.cs`：Destroy baseline 清理。
-- `src/MiniArch/TransitionLog.cs`：结构变更 log。
+- `src/MiniArch/ChangeWatch.cs`：值变更 watch 实现（Snapshot/Diff/两阶段 buffer）。
+- `src/MiniArch/ChangeWatch.Projected.cs`：投影值变更 watch 实现。
+- `src/MiniArch/TransitionWatch.cs`：结构变更 watch 实现。
+- `src/MiniArch/IChangeHandler.cs`：`IChangeHandler<TComponent>` 和 `IChangeHandler<TComponent, TValue>` 接口。
+- `src/MiniArch/ITransitionHandler.cs`：`ITransitionHandler` 接口 + `TransitionKind` 枚举。
+- `src/MiniArch/Core/World.cs`：`World.Watch<TComponent, THandler>()`、`World.Watch<TComponent, TValue, THandler>()`、`World.Watch<THandler>(QueryDescription)` 入口。
 
 ## 坑点
 
-- `.Changes` 每次读取都会重建输出 buffer；需要长期保存结果时自行 copy。
-- `ClearAll()` 是全局 baseline 推进，不是当前 handle 私有消费。
-- Pending entity 的 batch 内中间 Add/Set/Remove 仍按 CommandStream 最终状态契约折叠；它们不是独立 value/transition 事件。
-- `TrackTransitions(QueryDescription)` 要求 filter 非空；空 filter 抛 `ArgumentException`。
-- `CaptureState`/`RestoreState` 后旧 handle/log 自动自愈；用户无需重新 arm。
-- `World.Dispose` 后旧 handle/log 会抛 `ObjectDisposedException`。
+- `Diff` 前必须先调用 `Snapshot`，否则抛 `InvalidOperationException`。
+- `Snapshot` 推进 baseline 后，旧 baseline 永久丢失（无法回退）。
+- Stale slot 的 `oldValue` 是 `default`——注意 `default` 与实际值的混淆。
+- TransitionWatch 是 id-based：Destroy+Create 同 id 复用不报 Exited+Entered。需要精确 version 语义时需自行记录。
+- TransitionWatch 的 Entered 扫描是 O(n²) 最坏情况（`_snapshotEntities` 线性扫描不含 `_currentIds` 的实体）。数据量大时注意性能。
+- `Handler` 是 ref 返回的 struct 引用，不要缓存到局部变量后跨 `Diff`/`Snapshot` 使用（可能因数组 resize 变为 dangling ref）。
+- `World` dispose 后调用 `Snapshot`/`Diff` 抛 `ObjectDisposedException`。

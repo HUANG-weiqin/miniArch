@@ -93,9 +93,9 @@ readonly record struct Position(float X, float Y);
 
 ---
 
-## 4. Change Tracking (World.Track\<T\>)
+## 4. Change Tracking (Watch Pull-Event API)
 
-Detect which entities had their components written or changed membership since the last check. Perfect for UI systems (health bars, damage numbers) and reactive logic (trigger on `Entered`/`Exited`).
+Detect value changes and structural transitions using the pull-event Watch API. Perfect for UI systems (health bars, damage numbers) and reactive logic (trigger on `Entered`/`Exited`).
 
 ```csharp
 using MiniArch;
@@ -103,46 +103,61 @@ using MiniArch;
 var world = new World();
 var player = world.Create(new Health(100), new Position(0, 0));
 var enemy = world.Create(new Health(50), new EnemyTag());
-world.Create(new Health(200), new EnemyTag(), new Dead());     // excluded by filter
 
-// ── Track HP changes on alive enemies only ──────────────────────────────
-var hp = world.Track<Health>().Without<Dead>().With<EnemyTag>();
+// ── ChangeWatch: track Health value changes on alive enemies ───────────
+// Handler struct accumulates old/new pairs for later processing.
+struct HealthChangeHandler : IChangeHandler<Health>
+{
+    public int ChangeCount;
+    public void OnChange(World world, Entity entity, in Health oldValue, in Health newValue)
+    {
+        ChangeCount++;
+        Console.WriteLine($"{entity}: {oldValue.Value} → {newValue.Value}");
+    }
+}
 
-// Write some components to trigger tracking
+var hpWatch = world.Watch<Health, HealthChangeHandler>(
+    new QueryDescription().With<Health>().With<EnemyTag>().Without<Dead>());
+hpWatch.Snapshot(world);
+
 world.Set(player, new Health(80));   // excluded — no EnemyTag
 world.Set(enemy, new Health(30));    // tracked — value changed
-world.Destroy(enemy);                // tracked — transition Exited
 
-// ModifiedChunks: chunks where Health was written since last check
-foreach (var chunk in hp.ModifiedChunks())
+hpWatch.Diff(world);
+// Output: Entity(1, 1): 50 → 30
+Console.WriteLine($"Changes: {hpWatch.Handler.ChangeCount}"); // 1
+
+// ── TransitionWatch: detect entities entering/exiting a filter ────────
+struct UIRemovalHandler : ITransitionHandler
 {
-    var healths = chunk.GetSpan<Health>();
-    var entities = chunk.GetEntities();
-    for (int i = 0; i < healths.Length; i++)
-        Console.WriteLine($"{entities[i]}: HP = {healths[i].Value}");
+    public int ExitedCount;
+    public void OnChange(World world, Entity entity, TransitionKind kind)
+    {
+        if (kind == TransitionKind.Exited) ExitedCount++;
+        Console.WriteLine($"{entity} {kind}");
+    }
 }
-// Output: Entity(1, 1): HP = 30   (enemy's HP change, but entity is now dead...)
 
-// Transitions: membership changes (Entered / Exited)
-foreach (var t in hp.Transitions())
-    if (t.Kind == TransitionKind.Exited && t.Cause == TransitionCause.Destroyed)
-        Console.WriteLine($"{t.Entity} died — clean up UI");
-// Output: Entity(1, 1) died — clean up UI
+var tWatch = world.Watch<UIRemovalHandler>(
+    new QueryDescription().With<Health>().With<EnemyTag>());
+tWatch.Snapshot(world);
 
-// ── WithPreviousValues: capture old value before Set ──────────────────
-var hpWithPrev = world.Track<Health>().WithPreviousValues();
-world.Set(player, new Health(70));
+world.Destroy(enemy);    // enemy exits the tracked set
+world.Set(player, new Health(70)); // value-only; no transition
 
-foreach (var c in hpWithPrev.Changes())
-    Console.WriteLine($"{c.Entity}: {c.OldValue.Value} → {c.NewValue.Value}");
-// Output: Entity(0, 1): 80 → 70
+tWatch.Diff(world);
+// Output: Entity(1, 1) Exited
 
-// ── Multi-cursor: independent cursors, same component ─────────────────
-var cursorA = world.Track<Health>();
-var cursorB = world.Track<Health>();
+// ── Handler mutation via ref ──────────────────────────────────────────
+ref var handler = ref hpWatch.Handler;
+Console.WriteLine($"Before reset: {handler.ChangeCount}"); // 1
+handler.ChangeCount = 0;
+
+// ── Snapshot again to advance baseline ────────────────────────────────
+hpWatch.Snapshot(world);  // re-baseline at current values
 world.Set(player, new Health(60));
-Console.WriteLine(cursorA.ModifiedChunks().Count()); // 1
-Console.WriteLine(cursorB.ModifiedChunks().Count()); // 1 — each cursor independently
+hpWatch.Diff(world);
+Console.WriteLine($"After re-baseline: {hpWatch.Handler.ChangeCount}"); // 0 (player excluded by filter)
 
 readonly record struct Health(int Value);
 readonly record struct Position(float X, float Y);
@@ -150,7 +165,44 @@ readonly record struct EnemyTag;
 readonly record struct Dead;
 ```
 
-> **Performance:** `Track<T>()` has **zero overhead** until the first call — no per-write branching cost. After activation, each write bumps a per-column `long` version counter. Use multiple cursors on the same component for independent consume-points (e.g., render system + network sync).
+> **Performance:** Watch types have **zero overhead** when unused — no per-write branching cost, no registry allocation. `Snapshot` scans the matching entities once; `Diff` rescans and dispatches callbacks. After warm-up, steady-state cycles allocate zero heap memory.
+
+---
+
+## 4b. Projected ChangeWatch
+
+When you want to track only a specific field or a computed value from a component, use the projected variant.
+
+```csharp
+using MiniArch;
+
+var world = new World();
+var entity = world.Create(new Position(10, 20));
+
+// Project only the X coordinate from Position
+struct XProjector : IChangeHandler<Position, float>
+{
+    public int ChangeCount;
+    public float Project(in Position pos) => pos.X;
+    public void OnChange(World world, Entity entity, float oldValue, float newValue)
+    {
+        ChangeCount++;
+        Console.WriteLine($"{entity}: X {oldValue} → {newValue}");
+    }
+}
+
+var watch = world.Watch<Position, float, XProjector>();
+watch.Snapshot(world);
+
+world.Set(entity, new Position(15, 20)); // X changed: 10 → 15
+world.Set(entity, new Position(15, 30)); // only Y changed; no callback
+
+watch.Diff(world);
+// Output: Entity(0, 1): X 10 → 15
+Console.WriteLine($"Changes: {watch.Handler.ChangeCount}"); // 1
+
+readonly record struct Position(float X, float Y);
+```
 
 ---
 

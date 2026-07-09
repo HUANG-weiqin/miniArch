@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream/ParallelCommandStream typed-store append-only recorder, compatible with FrameDelta. The per-entity deduplicating CommandBuffer was removed (YAGNI) — CommandStream is now the sole recorder.
-updated: 2026-07-08 (pending entity 最终状态契约同步 TrackValueChanges boundary diff / TrackTransitions 新 API)
+updated: 2026-07-09 (pending entity 最终状态契约同步 Watch API)
 ---
 # Command Stream Runtime
 
@@ -41,11 +41,11 @@ updated: 2026-07-08 (pending entity 最终状态契约同步 TrackValueChanges b
 - `Create()` 在 `DeferredEntities=false` 时使用 `World.ReserveDeferredEntityUnsafe()` 分配 real id；`DeferredEntities=true` 时返回 placeholder，不碰 World id allocator。
 - 组件数据按 typed value 记录，`Submit()` 直接写 typed value，`Snapshot()` 再转成 `FrameDelta` 所需 raw bytes。
 - component `Add/Set` 按类型批处理，不承诺与 `Remove/Destroy` 的严格全局追加顺序；同帧冲突命令的净效果由调用方负责。
-- **Pending entity 最终状态契约**：通过 `Create()`/`Clone()` 创建的 pending entity，其 batch 内所有 `Add`/`Set`/`Remove` 操作在 `Submit()`/`Snapshot()`/`Replay()` 前**折叠为最终 materialized state**。这意味着中间操作不会产生独立的 `TrackValueChanges<T>()` value entry 或 `TrackTransitions(...)` membership transition——实体被直接以最终组件签名的形态创建。具体表现：
-  - `SharedValueChanges<T>.Changes` 在 Submit/Snapshot/Replay 后不包含 pending entity 的中间 Set 快照。
-  - `TransitionLog.Transitions` 只反映实体的最终 filter 匹配状态，不反映 batch 内的中间结构变化（如 Add 后马上 Remove → 实体从未进入 filter）。
+- **Pending entity 最终状态契约**：通过 `Create()`/`Clone()` 创建的 pending entity，其 batch 内所有 `Add`/`Set`/`Remove` 操作在 `Submit()`/`Snapshot()`/`Replay()` 前**折叠为最终 materialized state**。这意味着中间操作不会产生独立的 `ChangeWatch.Diff` value change 或 `TransitionWatch.Diff` membership transition——实体被直接以最终组件签名的形态创建。具体表现：
+  - `ChangeWatch.Diff` 在 Submit/Snapshot/Replay 后不包含 pending entity 的中间 Set 快照（Watch 不注册 world；但 `Diff` 扫描时当前值是其最终 materialized 状态，与 baseline 对比的差异只反映最终值与 snapshot 的差异）。
+  - `TransitionWatch.Diff` 只反映实体的最终 filter 匹配状态，不反映 batch 内的中间结构变化（如 Add 后马上 Remove → 实体从未进入 filter）。
   - 此行为适用于所有消费路径：`Submit()`（单机）、`Snapshot()` + `Replay()`（跨 world）、`SubmitAndSnapshotAsync()`。
-  - 对 existing entity 的 `Add`/`Set`/`Remove`（通过 component store 路径）不受此影响——existing entity 的最终当前值会被 `TrackValueChanges<T>()` 在 `.Changes` 扫描时与 baseline 对比，结构成员变化会进入 matching `TransitionLog`。
+  - 对 existing entity 的 `Add`/`Set`/`Remove`（通过 component store 路径）不受此影响——existing entity 的最终当前值会被 `ChangeWatch.Diff` 在扫描时与 baseline 对比，结构成员变化会进入 `TransitionWatch.Diff`。
 - created entity 组件在 record 时分流，避免提交时 O(created × commands) 扫描整条日志。
 - created materialize 使用小型 archetype cache，避免每个 spawn 反复分配 signature/type array。
 - `SubmitAndSnapshotAsync` 使用 FrozenState 双缓冲池（`_spareFrozen`/`_pendingFrozen`），稳态零分配。

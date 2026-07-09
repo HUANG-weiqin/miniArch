@@ -31,7 +31,9 @@
 | `Query(in QueryDescription)` | Create a query |
 | `Clone(Entity)` | Deep-copy an entity (including child subtree) |
 | `Clone()` | Materialize a new independent world (branching / checkpoint) |
-| `Track<T>()` | Activate change tracking for component `T`; returns a `ChangeQuery<T>` cursor |
+| `Watch<TComponent,THandler>(QueryDescription?)` | Create a value-change watch for component `TComponent`; returns `ChangeWatch<TComponent, THandler>` |
+| `Watch<TComponent,TValue,THandler>(QueryDescription?)` | Create a projected value-change watch; returns `ChangeWatch<TComponent, TValue, THandler>` |
+| `Watch<THandler>(QueryDescription)` | Create a structural-transition watch; returns `TransitionWatch<THandler>` |
 | `CaptureState()` | Save mutable state into an opaque handle for in-place rollback |
 | `RestoreState(WorldStateSnapshot)` | Revert world to a previously captured state |
 | `GetStats()` | Returns `WorldStats` |
@@ -104,81 +106,141 @@ public Span<T> GetComponentSpanAt<T>(int columnIndex) where T : unmanaged
 
 ---
 
-## ChangeQuery\<T\>
+## ChangeWatch\<TComponent, THandler\>
 
-[`MiniArch`] Stateful cursor over changes to component `T`. Obtained via `World.Track<T>()`.
-
-Each `ModifiedChunks()` / `Transitions()` call auto-advances the cursor — subsequent calls return only new changes.
+[`MiniArch`] A pull-based watch that tracks value changes for component type `TComponent` by comparing the current world state against the last `Snapshot`. Obtained via `World.Watch<TComponent, THandler>()`.
 
 ```csharp
-public sealed class ChangeQuery<T> where T : unmanaged
+public sealed class ChangeWatch<TComponent, THandler>
+    where TComponent : unmanaged, IEquatable<TComponent>
+    where THandler : struct, IChangeHandler<TComponent>
 {
-    // Fluent filter (must be configured before first enumeration)
-    public ChangeQuery<T> With<TU>()                                    where TU : unmanaged;
-    public ChangeQuery<T> Without<TU>()                                 where TU : unmanaged;
-    public ChangeQuery<T> WithAny<TU>()                                 where TU : unmanaged;
-    public ChangeQuery<T> WithPreviousValues();
-
-    // Consumption (auto-advances cursor, auto-clears per call)
-    public IEnumerable<ChunkView> ModifiedChunks();
-    public IEnumerable<Transition> Transitions();
-    public IEnumerable<ValueChange<T>> Changes();
+    public ref THandler Handler { get; }
+    public void Snapshot(World world);
+    public void Diff(World world);
 }
 ```
 
-| Method | Description |
+| Member | Description |
 |---|---|
-| `With<TU>()` | Only track entities that also have component `TU` |
-| `Without<TU>()` | Exclude entities with component `TU` |
-| `WithAny<TU>()` | OR-match: track entities that also have at least one of the listed components |
-| `WithPreviousValues()` | Capture old+new values for each `Set<T>` write (enables `Changes()`) |
-| `ModifiedChunks()` | Chunks where `T` was written since last call, matching the filter |
-| `Transitions()` | Entities that entered/exited the tracked set (create/destroy/add/remove) |
-| `Changes()` | Old+new value pairs for each `Set<T>` write (requires `WithPreviousValues()`) |
-
-**Lifecycle:** Discard cursors after `WorldSnapshot.Load` / `World.RestoreState` — call `Track<T>()` again for a fresh cursor.
-
-**Zero overhead when unused:** No per-write cost until the first `Track<T>()` call. After that, each write to `T` increments a per-archetype-column version counter (a single `long` bump).
+| `Handler` | Gets/sets the handler struct. Mutations affect subsequent `Diff` calls. |
+| `Snapshot(World)` | Records a baseline of all matching entities' component values. Must be called before `Diff`. |
+| `Diff(World)` | Scans the world; for each entity whose value differs from baseline, collects the diff into an internal buffer, then dispatches `IChangeHandler.OnChange` callbacks (two-phase safety). |
 
 ---
 
-## Transition Types
+## ChangeWatch\<TComponent, TValue, THandler\> (Projected)
 
-[`MiniArch`] Membership change records from `ChangeQuery<T>.Transitions()`.
+[`MiniArch`] A pull-based watch that tracks *projected* value changes — the handler both projects component data into a tracked value and receives change callbacks. Obtained via `World.Watch<TComponent, TValue, THandler>()`.
+
+```csharp
+public sealed class ChangeWatch<TComponent, TValue, THandler>
+    where TComponent : unmanaged
+    where TValue : unmanaged, IEquatable<TValue>
+    where THandler : struct, IChangeHandler<TComponent, TValue>
+{
+    public ref THandler Handler { get; }
+    public void Snapshot(World world);
+    public void Diff(World world);
+}
+```
+
+Same Snapshot/Diff lifecycle as the non-projected variant, but comparison is done on the projected `TValue` rather than the raw `TComponent`.
+
+---
+
+## TransitionWatch\<THandler\>
+
+[`MiniArch`] A pull-based watch that tracks structural transitions (entities entering/exiting a query filter). Obtained via `World.Watch<THandler>(QueryDescription)`.
+
+```csharp
+public sealed class TransitionWatch<THandler>
+    where THandler : struct, ITransitionHandler
+{
+    public ref THandler Handler { get; }
+    public void Snapshot(World world);
+    public void Diff(World world);
+}
+```
+
+| Member | Description |
+|---|---|
+| `Handler` | Gets/sets the handler struct. |
+| `Snapshot(World)` | Records which entities currently match the filter. |
+| `Diff(World)` | Compares current entities against snapshot; dispatches `ITransitionHandler.OnChange` for each entity that entered or exited. |
+
+---
+
+## IChangeHandler\<TComponent\>
+
+[`MiniArch`] Handler interface for `ChangeWatch<TComponent, THandler>`.
+
+```csharp
+public interface IChangeHandler<TComponent>
+    where TComponent : unmanaged, IEquatable<TComponent>
+{
+    void OnChange(World world, Entity entity, in TComponent oldValue, in TComponent newValue);
+}
+```
+
+---
+
+## IChangeHandler\<TComponent, TValue\>
+
+[`MiniArch`] Handler interface for projected `ChangeWatch<TComponent, TValue, THandler>`.
+
+```csharp
+public interface IChangeHandler<TComponent, TValue>
+    where TComponent : unmanaged
+    where TValue : unmanaged, IEquatable<TValue>
+{
+    TValue Project(in TComponent component);
+    void OnChange(World world, Entity entity, TValue oldValue, TValue newValue);
+}
+```
+
+- `Project` — transforms a component into the tracked value (e.g. extract a single field)
+- `OnChange` — called during `Diff` for each entity whose projected value changed
+
+---
+
+## ITransitionHandler
+
+[`MiniArch`] Handler interface for `TransitionWatch<THandler>`.
+
+```csharp
+public interface ITransitionHandler
+{
+    void OnChange(World world, Entity entity, TransitionKind kind);
+}
+```
+
+Where `TransitionKind` is:
 
 ```csharp
 public enum TransitionKind { Entered, Exited }
-
-public enum TransitionCause { Created, Destroyed, Added, Removed }
-
-public readonly struct Transition
-{
-    public readonly TransitionCause Cause;
-    public readonly Entity Entity;
-    public bool IsEntered { get; }
-    public bool IsExited { get; }
-    public TransitionKind Kind { get; }
-}
 ```
-
-- `TransitionKind` — simple enter/exit classification
-- `TransitionCause` — precise cause (`Created` vs `Added`, `Destroyed` vs `Removed`)
-- `Transition.IsEntered` / `Transition.IsExited` — derived convenience booleans
 
 ---
 
-## ValueChange\<T\>
+## Snapshot/Diff Pull-Event Semantics
 
-[`MiniArch`] A before-and-after snapshot of a component write, produced by `ChangeQuery<T>.Changes()` when `WithPreviousValues()` was configured.
+All Watch types follow the same pull-event model:
 
-```csharp
-public readonly struct ValueChange<T> where T : unmanaged
-{
-    public readonly Entity Entity;
-    public readonly T OldValue;
-    public readonly T NewValue;
-}
-```
+1. **Snapshot** records a baseline of the current world state for the tracked component or query filter.
+2. **Diff** rescans the world, compares against the baseline, and dispatches callbacks for changes.
+
+Key properties:
+
+| Property | Description |
+|---|---|
+| **No per-write cost** | Watch types do not intercept `Set`/`Add`/`Remove`. Zero cost when not used. |
+| **Two-phase callback safety** | `Diff` collects all changes into a buffer before dispatching any callbacks. A handler that mutates the world during `OnChange` (e.g. spawning a health bar entity) does not corrupt the diff iteration. |
+| **Stale slot semantics** | An entity slot that was never populated at `Snapshot` time reports `default` as the old value. Entities removed/destroyed after `Snapshot` are not reported (the current scan cannot find them). |
+| **No automatic baseline advance** | Multiple `Diff` calls against the same `Snapshot` repeat the same callbacks. Call `Snapshot` again to advance the baseline. |
+| **Handler mutation via `ref`** | Access `ref watch.Handler` to mutate the handler struct between `Snapshot`/`Diff` calls (e.g. toggle an accumulation flag). |
+| **Allocation** | Internal arrays grow as needed; after warm-up, steady-state `Snapshot`+`Diff` cycles allocate zero heap memory (no per-call GC allocations). |
+| **Filter flexibility** | `ChangeWatch` accepts an optional `QueryDescription` for multi-component filtering. `TransitionWatch` requires a non-empty `QueryDescription` filter (throws `ArgumentException` for empty). |
 
 ---
 

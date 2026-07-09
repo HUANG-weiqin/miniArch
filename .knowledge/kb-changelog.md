@@ -2,12 +2,53 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-07-08 (新增 DenseValueDiff 显式 dense shadow diff API；TrackValueChanges 改为 boundary diff)
+updated: 2026-07-09 (Watch API pull-event 模型替换旧 Change Tracking 全部接口)
 ---
 # Knowledge Base Changelog
 
 > 这个页面只记录**重大架构变更和知识库校准事件**，供追溯。
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
+
+## 2026-07-09 Watch API pull-event 模型重构
+
+### 删除旧 Change Tracking 全部 API，替换为 Watch pull-event 模型
+
+- **价值**：彻底消除旧架构的 world 侵入式设计（`SharedTrackerRegistry` 注册表、`IChangeQuery` transition dispatch、`ChangeTracker<T>` per-type 共享 tracker、`Set` 热路径的 registry 查询分支）。新模型 zero per-write cost，watch 不在 world 注册任何资源。同时消除「两套 value diff API（TrackValueChanges + CreateDenseValueDiff）」的冗余，统一为 `ChangeWatch` 一个入口。
+- **删除文件**（零兼容 shim，旧 consumer 需迁移）：
+  - `src/MiniArch/SharedValueChanges.cs`（旧 `SharedValueChanges<T>` 值变更 handle）
+  - `src/MiniArch/TransitionLog.cs`（旧 `TransitionLog` 结构变更 log）
+  - `src/MiniArch/Core/SharedTrackerRegistry.cs`（world-owned per-component tracker 注册表）
+  - `src/MiniArch/Core/ChangeTracker.cs`（per-type change tracker，baseline + diff 扫描）
+  - `src/MiniArch/Core/IChangeQuery.cs`（transition dispatch 内部接口）
+  - `src/MiniArch/ChangeTracking/DenseValueDiff.cs`（旧 `DenseValueDiff` 显式 dense shadow diff）
+  - `src/MiniArch/ChangeTracking/IValueProjector.cs`（旧 `IValueProjector` 接口）
+  - `src/MiniArch/ChangeTracking/IValueChangeSink.cs`（旧 `IValueChangeSink` 接口）
+  - `src/MiniArch/ValueChange.cs`（旧 `ValueChange<T>` 结构体）
+  - `src/MiniArch/Transition.cs`（旧 `Transition` 结构体 + `TransitionCause` 枚举）
+- **新增文件**：
+  - `src/MiniArch/ChangeWatch.cs`：`ChangeWatch<TComponent, THandler>` 值变更 watch
+  - `src/MiniArch/ChangeWatch.Projected.cs`：`ChangeWatch<TComponent, TValue, THandler>` 投影值变更 watch
+  - `src/MiniArch/TransitionWatch.cs`：`TransitionWatch<THandler>` 结构变更 watch
+  - `src/MiniArch/IChangeHandler.cs`：`IChangeHandler<TComponent>` / `IChangeHandler<TComponent, TValue>` 接口
+  - `src/MiniArch/ITransitionHandler.cs`：`ITransitionHandler` 接口 + `TransitionKind` 枚举
+- **新 API 入口**：
+  - `World.Watch<TComponent, THandler>(QueryDescription?)` → `ChangeWatch`（值变更）
+  - `World.Watch<TComponent, TValue, THandler>(QueryDescription?)` → 投影 `ChangeWatch`（投影值变更）
+  - `World.Watch<THandler>(QueryDescription)` → `TransitionWatch`（结构变更）
+- **语义差异**：
+  - 旧：world-shared per-type 注册 + `Changes` 自动扫描与 buffer replay
+  - 新：per-watch 独立 dense arrays + `Snapshot` 拍 baseline + `Diff` 两阶段（收集→回调）
+  - 旧：`TrackValueChanges`/`CreateDenseValueDiff` 两个独立入口
+  - 新：单个 `Watch<TComponent, THandler>` 入口 + 可选投影 `Watch<TComponent, TValue, THandler>`
+  - 旧：`TransitionLog` + `IChangeQuery.OnTransition` dispatch + `Clear()`
+  - 新：`TransitionWatch` Snapshot/Diff id-based 集合对比 + Handler 回调
+  - 旧：`Set`/`Add`/`Remove` 热路径有 registry 查询分支
+  - 新：写入路径零 watch 成本
+- **验证**（TODO：Phase 9 运行）：
+  - Release 全量测试通过
+  - HeroComing.Perf 门禁通过（≥1642/≥997）
+  - MiniArch.Soak 全 PASS
+- **新增/更新文件**：`docs/api.md`、`docs/examples.md`、`.knowledge/kb-change-tracking.md`（全文重写）、`.knowledge/kb-design-rationale.md`（§2.11 更新）、`.knowledge/kb-hero-pipeline-regression.md`（删除 `--track-observer`/`--compare-old-value-tracking`）、`.knowledge/kb-command-stream.md`（pending entity 契约更新）、`.knowledge/INDEX.md`（描述更新）
 
 ## 2026-07-08 DenseValueDiff explicit shadow diff API
 
