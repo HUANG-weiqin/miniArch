@@ -729,6 +729,66 @@ public sealed class TrickyEdgeCaseTests
     }
 
     [Fact]
+    public void OrderByEntityId_cache_invalidates_on_entity_creation()
+    {
+        var world = new World();
+        for (var i = 0; i < 5; i++)
+            world.Create(new Position(i, i));
+
+        var description = new QueryDescription().With<Position>();
+        var orderedQuery = world.Query(in description).OrderByEntityId();
+
+        // First enumeration — primes the cache
+        var firstPass = new List<Entity>();
+        foreach (var e in orderedQuery) firstPass.Add(e);
+
+        // Add more entities — cache must invalidate (count changes)
+        for (var i = 0; i < 5; i++)
+            world.Create(new Position(i + 100, 0));
+
+        // Second enumeration — should see all 10 entities in order
+        var secondPass = new List<Entity>();
+        foreach (var e in orderedQuery) secondPass.Add(e);
+
+        Assert.Equal(10, secondPass.Count);
+        for (var i = 1; i < secondPass.Count; i++)
+            Assert.True(secondPass[i - 1].Id <= secondPass[i].Id);
+    }
+
+    [Fact]
+    public void OrderByEntityId_cache_invalidates_on_entity_destruction()
+    {
+        var world = new World();
+        var entities = new Entity[10];
+        for (var i = 0; i < 10; i++)
+            entities[i] = world.Create(new Position(i, i));
+
+        var description = new QueryDescription().With<Position>();
+        var orderedQuery = world.Query(in description).OrderByEntityId();
+
+        // First enumeration — primes the cache
+        var firstPass = new List<Entity>();
+        foreach (var e in orderedQuery) firstPass.Add(e);
+        Assert.Equal(10, firstPass.Count);
+
+        // Destroy the first 3 entities — cache must invalidate
+        for (var i = 0; i < 3; i++)
+            world.Destroy(entities[i]);
+
+        // Second enumeration — should see 7 entities
+        var secondPass = new List<Entity>();
+        foreach (var e in orderedQuery) secondPass.Add(e);
+
+        Assert.Equal(7, secondPass.Count);
+        for (var i = 1; i < secondPass.Count; i++)
+            Assert.True(secondPass[i - 1].Id <= secondPass[i].Id);
+
+        // Verify destroyed entities are gone
+        foreach (var e in secondPass)
+            Assert.True(e.Id >= 3);
+    }
+
+    [Fact]
     public void Query_Advanced_property_returns_valid_core_query()
     {
         var world = new World();

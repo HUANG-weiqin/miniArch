@@ -341,4 +341,111 @@ internal sealed class QueryCache
         }
         return builder.ToMask();
     }
+
+    // ──────────────────────────────────────────────
+    //  Fingerprint sort cache (for OrderByEntityId)
+    //  Pure-function validation: reads archetype entity storage
+    //  directly, no separate scratch buffer needed.
+    // ──────────────────────────────────────────────
+
+    // SplitMix64 golden ratio constant.
+    private const ulong SplitMix64K = 0x9E3779B97F4A7C15UL;
+
+    /// <summary>
+    /// Cached result of materialize + sort by <see cref="Entity.Id"/>.
+    /// Validated by count pre-check + salted SplitMix64 fingerprint.
+    /// Stores ascending order; descending enumeration reverses iteration direction.
+    /// </summary>
+    private sealed class EntityIdSortCache
+    {
+        public Entity[] Entities = null!;
+        public int Count;
+        public ulong Fingerprint;
+    }
+
+    private EntityIdSortCache? _entityIdSortCache;
+    // Random salt per QueryCache instance prevents deterministic structural collisions.
+    // Non-deterministic across runs, but collision probability is 2^-64 per access,
+    // which is acceptable for debug UI / serialization use case.
+    private readonly ulong _salt = (ulong)Random.Shared.NextInt64() | 1UL;
+
+    /// <summary>
+    /// Tries to retrieve the cached sorted entity array.
+    /// Validates cache by count pre-check + fingerprint.
+    /// On hit: returns cached sorted entities.
+    /// On miss: returns false; caller must materialize + sort + call SetEntityIdSortCache.
+    /// </summary>
+    internal bool TryGetEntityIdSortCache(
+        Archetype[] archetypes, int archCount, int currentCount,
+        out Entity[] entities, out int count)
+    {
+        entities = null!;
+        count = 0;
+
+        var cache = _entityIdSortCache;
+        if (cache is null)
+            return false;
+
+        // ── Count pre-check (fast-fail for structural changes) ──
+        if (currentCount != cache.Count)
+            return false;
+
+        // ── Fingerprint validation (reads directly from archetypes) ──
+        if (ComputeFingerprint(archetypes, archCount) != cache.Fingerprint)
+            return false;
+
+        // HIT
+        entities = cache.Entities;
+        count = currentCount;
+        return true;
+    }
+
+    /// <summary>
+    /// Replaces the sort cache with a new sorted array and its fingerprint.
+    /// Caller provides a sorted ascending array; ownership transfers to the cache.
+    /// Must NOT be a pool-rented array.
+    /// </summary>
+    internal void SetEntityIdSortCache(
+        Archetype[] archetypes, int archCount, int currentCount,
+        Entity[] sortedEntities)
+    {
+        _entityIdSortCache = new EntityIdSortCache
+        {
+            Entities = sortedEntities,
+            Count = currentCount,
+            Fingerprint = ComputeFingerprint(archetypes, archCount)
+        };
+    }
+
+    /// <summary>
+    /// Reads all entities from matched archetypes and returns a salted SplitMix64
+    /// fingerprint. Zero allocation — reads directly from archetype storage.
+    /// Input: matched Archetype[] (already snapshotted by caller).
+    /// Output: 64-bit fingerprint. No scratch buffer needed.
+    /// </summary>
+    private ulong ComputeFingerprint(Archetype[] archetypes, int archCount)
+    {
+        var salt = _salt;
+        ulong fp = 0;
+
+        for (var a = 0; a < archCount; a++)
+        {
+            var arch = archetypes[a];
+            var storage = arch.GetEntityStorageUnsafe();
+            var rowCount = arch.EntityCount;
+
+            for (var r = 0; r < rowCount; r++)
+            {
+                ref readonly var e = ref storage[r];
+                var seed = ((ulong)(uint)e.Id | ((ulong)(uint)e.Version << 32)) ^ salt;
+                var x = seed + SplitMix64K;
+                var z = x;
+                z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9UL;
+                z = (z ^ (z >> 27)) * 0x94D049BB133111EBUL;
+                fp ^= z ^ (z >> 31);
+            }
+        }
+
+        return fp;
+    }
 }

@@ -382,6 +382,12 @@ public readonly struct OrderedEntityQuery
 
 /// <summary>
 /// Struct enumerator over entities sorted by <see cref="Entity.Id"/>.
+/// Uses fingerprint-based sort cache on the QueryCache:
+///   - count pre-check (fast-fail for structural changes)
+///   - salted SplitMix64 fingerprint for identity changes
+///   - hit: returns cached sorted array, no allocation
+///   - miss: materialize + sort + cache
+/// Cache stores ascending; descending iterates in reverse.
 /// </summary>
 public struct OrderedEntityEnumerator : IDisposable
 {
@@ -411,32 +417,41 @@ public struct OrderedEntityEnumerator : IDisposable
 
     /// <summary>
     /// Advances to the next sorted entity.
+    /// Descending direction iterates backward from the end,
+    /// so no Array.Reverse is needed.
     /// </summary>
     public bool MoveNext()
     {
         if (!_initialized)
             Initialize();
 
-        _index++;
-        if (_index >= _count)
-            return false;
+        if (_descending)
+        {
+            _index--;
+            if (_index < 0)
+                return false;
+        }
+        else
+        {
+            _index++;
+            if (_index >= _count)
+                return false;
+        }
 
         _current = _entities![_index];
         return true;
     }
 
     /// <summary>
-    /// Returns the rented sort buffer.
+    /// Releases this enumerator's reference to the entity array.
+    /// The array itself is owned by the QueryCache (cached sort result).
     /// </summary>
     public void Dispose()
     {
-        var entities = _entities;
-        if (entities is null)
-            return;
-
         _entities = null;
         _count = 0;
-        ArrayPool<Entity>.Shared.Return(entities);
+        _index = -1;
+        _current = default;
     }
 
     private void Initialize()
@@ -451,7 +466,18 @@ public struct OrderedEntityEnumerator : IDisposable
         if (count == 0)
             return;
 
-        var entities = ArrayPool<Entity>.Shared.Rent(count);
+        // ── Try fingerprint cache ──
+        if (_query.TryGetEntityIdSortCache(archetypes, archetypeCount, count,
+                out var cachedEntities, out var cachedCount))
+        {
+            _entities = cachedEntities;
+            _count = cachedCount;
+            _index = _descending ? cachedCount : -1;
+            return;
+        }
+
+        // ── Miss: materialize + sort (ascending, for cache) ──
+        var entities = GC.AllocateUninitializedArray<Entity>(count);
         _entities = entities;
         _count = count;
 
@@ -465,11 +491,12 @@ public struct OrderedEntityEnumerator : IDisposable
             entityIndex += rowCount;
         }
 
-        // Entity record struct implements IComparable<Entity> comparing (Id, Version).
         Array.Sort(entities, 0, count);
 
-        if (_descending)
-            Array.Reverse(entities, 0, count);
+        // Store ascending in cache (descending handled by MoveNext direction)
+        _query.SetEntityIdSortCache(archetypes, archetypeCount, count, entities);
+
+        _index = _descending ? count : -1;
     }
 }
 
