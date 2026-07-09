@@ -49,6 +49,7 @@ updated: 2026-07-09
 | `Persistence/WorldCloneTests.cs` | 内存直拷克隆 |
 | `UserApi/UserQueryTests.cs` | 普通 API 契约、OrderByEntityId/OrderByComponent |
 | `PublicApiSentinelTests.cs` | 公共 API 冻结哨兵：反射枚举 MiniArch 程序集 public surface，与签入快照对比，意外 API 变更导致测试失败 |
+| `CrossFeatureParityTests.cs` | M3 交叉特性矩阵：CommandStream+Hierarchy、+DeferredEntities、+Watch、Replay+Snapshot、Snapshot+Hierarchy、Watch+RestoreState、三路 Submit→Snapshot→RestoreState→Replay |
 
 ## PublicApiSentinel
 
