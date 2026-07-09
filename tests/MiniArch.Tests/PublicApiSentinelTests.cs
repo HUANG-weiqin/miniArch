@@ -343,7 +343,9 @@ public sealed class PublicApiSentinelTests
             {
                 if (field.FieldType.IsEnum)
                 {
-                    valueStr = $" = {field.Name}";
+                    // Include numeric underlying value for enum literals
+                    var numericValue = Convert.ToInt64(value);
+                    valueStr = $" = {field.Name} ({numericValue})";
                 }
                 else if (field.FieldType == typeof(string))
                 {
@@ -383,6 +385,8 @@ public sealed class PublicApiSentinelTests
         // Parameter modifiers
         if (parameter.IsOut)
             parts.Add("out");
+        else if (parameter.IsIn)
+            parts.Add("in");
         else if (parameter.ParameterType.IsByRef)
             parts.Add("ref");
         
@@ -469,7 +473,7 @@ class: MiniArch.Core.CommandStreamCore
 struct: MiniArch.Core.EntityAccessor
   Method: Get() -> T& where T : struct, System.ValueType
   Method: Has() -> System.Boolean where T : struct, System.ValueType
-  Method: Set(ref T& value) -> System.Void where T : struct, System.ValueType
+  Method: Set(in T& value) -> System.Void where T : struct, System.ValueType
 struct: MiniArch.Core.EntitySlot
   Property: HasValue -> System.Boolean [get; ]
   Property: Value -> MiniArch.Entity [get; ]
@@ -509,9 +513,9 @@ class: MiniArch.Diagnostics.ComponentDiff
   Property: ComponentType -> System.Type [get; ]
   Property: Kind -> MiniArch.Diagnostics.ComponentDiffKind [get; ]
 enum: MiniArch.Diagnostics.ComponentDiffKind
-  Field: OnlyInA -> MiniArch.Diagnostics.ComponentDiffKind [static, literal] = OnlyInA
-  Field: OnlyInB -> MiniArch.Diagnostics.ComponentDiffKind [static, literal] = OnlyInB
-  Field: ValueDifferent -> MiniArch.Diagnostics.ComponentDiffKind [static, literal] = ValueDifferent
+  Field: OnlyInA -> MiniArch.Diagnostics.ComponentDiffKind [static, literal] = OnlyInA (0)
+  Field: OnlyInB -> MiniArch.Diagnostics.ComponentDiffKind [static, literal] = OnlyInB (1)
+  Field: ValueDifferent -> MiniArch.Diagnostics.ComponentDiffKind [static, literal] = ValueDifferent (2)
   Field: value__ -> System.Int32
 struct: MiniArch.Diagnostics.ComponentInfo
   Property: RawBytes -> System.Byte[] [get; ]
@@ -527,9 +531,9 @@ class: MiniArch.Diagnostics.EntityDiff
   Property: Kind -> MiniArch.Diagnostics.EntityDiffKind [get; ]
   Property: VersionMismatch -> System.Boolean [get; ]
 enum: MiniArch.Diagnostics.EntityDiffKind
-  Field: Different -> MiniArch.Diagnostics.EntityDiffKind [static, literal] = Different
-  Field: OnlyInA -> MiniArch.Diagnostics.EntityDiffKind [static, literal] = OnlyInA
-  Field: OnlyInB -> MiniArch.Diagnostics.EntityDiffKind [static, literal] = OnlyInB
+  Field: Different -> MiniArch.Diagnostics.EntityDiffKind [static, literal] = Different (2)
+  Field: OnlyInA -> MiniArch.Diagnostics.EntityDiffKind [static, literal] = OnlyInA (0)
+  Field: OnlyInB -> MiniArch.Diagnostics.EntityDiffKind [static, literal] = OnlyInB (1)
   Field: value__ -> System.Int32
 class: MiniArch.Diagnostics.EntityDump
   Method: Describe(MiniArch.World world, MiniArch.Entity entity) -> MiniArch.Diagnostics.EntityReport
@@ -557,32 +561,32 @@ class: MiniArch.Diagnostics.FreeSlotDiff
   Property: VersionA -> System.Int32 [get; ]
   Property: VersionB -> System.Int32 [get; ]
 enum: MiniArch.Diagnostics.FreeSlotDiffKind
-  Field: ExtraInA -> MiniArch.Diagnostics.FreeSlotDiffKind [static, literal] = ExtraInA
-  Field: ExtraInB -> MiniArch.Diagnostics.FreeSlotDiffKind [static, literal] = ExtraInB
-  Field: OrderMismatch -> MiniArch.Diagnostics.FreeSlotDiffKind [static, literal] = OrderMismatch
-  Field: VersionMismatch -> MiniArch.Diagnostics.FreeSlotDiffKind [static, literal] = VersionMismatch
+  Field: ExtraInA -> MiniArch.Diagnostics.FreeSlotDiffKind [static, literal] = ExtraInA (2)
+  Field: ExtraInB -> MiniArch.Diagnostics.FreeSlotDiffKind [static, literal] = ExtraInB (3)
+  Field: OrderMismatch -> MiniArch.Diagnostics.FreeSlotDiffKind [static, literal] = OrderMismatch (1)
+  Field: VersionMismatch -> MiniArch.Diagnostics.FreeSlotDiffKind [static, literal] = VersionMismatch (0)
   Field: value__ -> System.Int32
 class: MiniArch.Diagnostics.HierarchyDiff
   Method: ToString() -> System.String
   Property: ParentIdA -> System.Int32 [get; ]
   Property: ParentIdB -> System.Int32 [get; ]
 enum: MiniArch.Diagnostics.ValidationCategory
-  Field: Archetype -> MiniArch.Diagnostics.ValidationCategory [static, literal] = Archetype
-  Field: EntitySlot -> MiniArch.Diagnostics.ValidationCategory [static, literal] = EntitySlot
-  Field: FreeList -> MiniArch.Diagnostics.ValidationCategory [static, literal] = FreeList
-  Field: Hierarchy -> MiniArch.Diagnostics.ValidationCategory [static, literal] = Hierarchy
+  Field: Archetype -> MiniArch.Diagnostics.ValidationCategory [static, literal] = Archetype (3)
+  Field: EntitySlot -> MiniArch.Diagnostics.ValidationCategory [static, literal] = EntitySlot (0)
+  Field: FreeList -> MiniArch.Diagnostics.ValidationCategory [static, literal] = FreeList (1)
+  Field: Hierarchy -> MiniArch.Diagnostics.ValidationCategory [static, literal] = Hierarchy (2)
   Field: value__ -> System.Int32
 enum: MiniArch.Diagnostics.ValidationCode
-  Field: ArchetypeEntityCount -> MiniArch.Diagnostics.ValidationCode [static, literal] = ArchetypeEntityCount
-  Field: AsymmetricParent -> MiniArch.Diagnostics.ValidationCode [static, literal] = AsymmetricParent
-  Field: DuplicateEntityId -> MiniArch.Diagnostics.ValidationCode [static, literal] = DuplicateEntityId
-  Field: FreeListDuplicate -> MiniArch.Diagnostics.ValidationCode [static, literal] = FreeListDuplicate
-  Field: FreeListOccupied -> MiniArch.Diagnostics.ValidationCode [static, literal] = FreeListOccupied
-  Field: HierarchyCycle -> MiniArch.Diagnostics.ValidationCode [static, literal] = HierarchyCycle
-  Field: OrphanedChild -> MiniArch.Diagnostics.ValidationCode [static, literal] = OrphanedChild
-  Field: OrphanedSlot -> MiniArch.Diagnostics.ValidationCode [static, literal] = OrphanedSlot
-  Field: SlotCapacityWarning -> MiniArch.Diagnostics.ValidationCode [static, literal] = SlotCapacityWarning
-  Field: SlotCollision -> MiniArch.Diagnostics.ValidationCode [static, literal] = SlotCollision
+  Field: ArchetypeEntityCount -> MiniArch.Diagnostics.ValidationCode [static, literal] = ArchetypeEntityCount (6)
+  Field: AsymmetricParent -> MiniArch.Diagnostics.ValidationCode [static, literal] = AsymmetricParent (4)
+  Field: DuplicateEntityId -> MiniArch.Diagnostics.ValidationCode [static, literal] = DuplicateEntityId (7)
+  Field: FreeListDuplicate -> MiniArch.Diagnostics.ValidationCode [static, literal] = FreeListDuplicate (3)
+  Field: FreeListOccupied -> MiniArch.Diagnostics.ValidationCode [static, literal] = FreeListOccupied (2)
+  Field: HierarchyCycle -> MiniArch.Diagnostics.ValidationCode [static, literal] = HierarchyCycle (9)
+  Field: OrphanedChild -> MiniArch.Diagnostics.ValidationCode [static, literal] = OrphanedChild (5)
+  Field: OrphanedSlot -> MiniArch.Diagnostics.ValidationCode [static, literal] = OrphanedSlot (0)
+  Field: SlotCapacityWarning -> MiniArch.Diagnostics.ValidationCode [static, literal] = SlotCapacityWarning (8)
+  Field: SlotCollision -> MiniArch.Diagnostics.ValidationCode [static, literal] = SlotCollision (1)
   Field: value__ -> System.Int32
 struct: MiniArch.Diagnostics.ValidationIssue
   Method: ToString() -> System.String
@@ -594,8 +598,8 @@ struct: MiniArch.Diagnostics.ValidationResult
   Property: IsValid -> System.Boolean [get; ]
   Property: Issues -> System.Collections.ObjectModel.ReadOnlyCollection<MiniArch.Diagnostics.ValidationIssue> [get; ]
 enum: MiniArch.Diagnostics.ValidationSeverity
-  Field: Error -> MiniArch.Diagnostics.ValidationSeverity [static, literal] = Error
-  Field: Warning -> MiniArch.Diagnostics.ValidationSeverity [static, literal] = Warning
+  Field: Error -> MiniArch.Diagnostics.ValidationSeverity [static, literal] = Error (0)
+  Field: Warning -> MiniArch.Diagnostics.ValidationSeverity [static, literal] = Warning (1)
   Field: value__ -> System.Int32
 class: MiniArch.Diagnostics.WorldDiff
   Method: Compare(MiniArch.World worldA, MiniArch.World worldB) -> MiniArch.Diagnostics.WorldDiffResult
@@ -629,10 +633,10 @@ struct: MiniArch.Entity
   Operator: op_Equality(MiniArch.Entity, MiniArch.Entity) -> System.Boolean
   Operator: op_Inequality(MiniArch.Entity, MiniArch.Entity) -> System.Boolean
 interface: MiniArch.IChangeHandler`1 where TComponent : struct, System.ValueType, System.IEquatable<TComponent>
-  Method: OnChange(MiniArch.World world, MiniArch.Entity entity, ref TComponent& oldValue, ref TComponent& newValue) -> System.Void
+  Method: OnChange(MiniArch.World world, MiniArch.Entity entity, in TComponent& oldValue, in TComponent& newValue) -> System.Void
 interface: MiniArch.IChangeHandler`2 where TComponent : struct, System.ValueType, TValue : struct, System.ValueType, System.IEquatable<TValue>
   Method: OnChange(MiniArch.World world, MiniArch.Entity entity, TValue oldValue, TValue newValue) -> System.Void
-  Method: Project(ref TComponent& component) -> TValue
+  Method: Project(in TComponent& component) -> TValue
 interface: MiniArch.IChunkForEach
   Method: OnChunk(MiniArch.ChunkView chunk) -> System.Void
 interface: MiniArch.ITransitionHandler
@@ -679,8 +683,8 @@ struct: MiniArch.QueryEnumerator
   Method: MoveNext() -> System.Boolean
   Property: Current -> MiniArch.Entity [get; ]
 enum: MiniArch.TransitionKind
-  Field: Entered -> MiniArch.TransitionKind [static, literal] = Entered
-  Field: Exited -> MiniArch.TransitionKind [static, literal] = Exited
+  Field: Entered -> MiniArch.TransitionKind [static, literal] = Entered (0)
+  Field: Exited -> MiniArch.TransitionKind [static, literal] = Exited (1)
   Field: value__ -> System.Int32
 class: MiniArch.TransitionWatch`1 where THandler : struct, MiniArch.ITransitionHandler, System.ValueType
   Method: Diff(MiniArch.World world) -> System.Void
@@ -725,7 +729,7 @@ class: MiniArch.World
   Method: Has(MiniArch.Entity entity) -> System.Boolean where T : struct, System.ValueType
   Method: HasChildren(MiniArch.Entity entity) -> System.Boolean
   Method: IsAlive(MiniArch.Entity entity) -> System.Boolean
-  Method: Query(ref MiniArch.QueryDescription& description) -> MiniArch.Query
+  Method: Query(in MiniArch.QueryDescription& description) -> MiniArch.Query
   Method: Remove(MiniArch.Entity entity) -> System.Void where T : struct, System.ValueType
   Method: RemoveChild(MiniArch.Entity child) -> System.Void
   Method: RestoreState(MiniArch.Core.WorldStateSnapshot snapshot) -> System.Void

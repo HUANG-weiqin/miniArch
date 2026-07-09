@@ -2,7 +2,7 @@
 title: Test Workflow
 module: MiniArch.Tests
 description: How the test suite, query profiling, snapshot benchmarks, and structural-change benchmarks are organized and how to run them
-updated: 2026-07-09 (PublicApiSentinelTests 新增)
+updated: 2026-07-09
 ---
 # Test Workflow
 
@@ -49,6 +49,20 @@ updated: 2026-07-09 (PublicApiSentinelTests 新增)
 | `Persistence/WorldCloneTests.cs` | 内存直拷克隆 |
 | `UserApi/UserQueryTests.cs` | 普通 API 契约、OrderByEntityId/OrderByComponent |
 | `PublicApiSentinelTests.cs` | 公共 API 冻结哨兵：反射枚举 MiniArch 程序集 public surface，与签入快照对比，意外 API 变更导致测试失败 |
+
+## PublicApiSentinel
+
+**What failure means:** The test reflects MiniArch's public API surface and compares it against an embedded baseline. A failure means the public API surface has changed (types, methods, properties, fields, etc.).
+
+**Accidental API change => revert source change:** If you did not intend to change the public API, revert the source change that caused the failure.
+
+**Intentional API change requires human approval then regenerate baseline:** If the change is intentional, get human approval, then regenerate the baseline:
+
+1. Set environment variable `GENERATE_API_BASELINE=1`.
+2. Run `dotnet test -c Release --filter "PublicApiSentinel"`.
+3. The test generates a file `PublicApiBaseline.txt` in the test output directory.
+4. Copy the generated baseline content to replace the `EmbeddedBaseline` string in `tests/MiniArch.Tests/PublicApiSentinelTests.cs`.
+5. Commit the updated baseline with your intentional API change.
 
 ## 决策
 
