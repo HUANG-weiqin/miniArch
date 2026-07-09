@@ -2,7 +2,7 @@
 title: Architecture Mechanistic Review
 module: MiniArch.Core
 description: Mechanistic insight of the entire miniArch ECS library — one-line truths, subsystem breakdown, data flows, known issues, and design tensions. Links to per-subsystem kb pages for depth.
-updated: 2026-07-09
+updated: 2026-07-09 (修正: World partial 5 文件, Add strict throw, IsMaskCanonical 行号, QueryCache 路径)
 ---
 # Architecture Mechanistic Review
 
@@ -33,7 +33,7 @@ Archetype (单块 byte[] 或多 Segment，按列排布所有组件数据)
   ↓
 QueryCache (archetype/chunk 快照 + 两段式失效: archetypeCount + per-archetype segment count)
   ↓
-World (拆分为 7 个 partial 文件，编排一切)
+World (拆分为 5 个 partial 文件，编排一切)
   ↓
 CommandStream (typed store 录制器) → FrameDelta (packed byte[] + varint op 流) → World.Replay
 HierarchyTable (side-table, SoA 邻接表)
@@ -67,7 +67,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 | `_archetypes: Dict<Signature, Archetype>` | 创建 archetype 主路径 | O(1) 哈希 |
 | `_archetypeByMask: Dict<ComponentMask, Archetype>` | Replay 路径零分配查找（仅 cache canonical mask） | O(1) 哈希 |
 
-`_archetypeByMask` 只 cache "canonical" mask（popcount == component count，即所有 id < 512）。高 id archetype 故意不进 mask cache，避免不同 signature 在 mask 上碰撞。`IsMaskCanonical`（`World.cs:406`）做这个不变式检查。
+`_archetypeByMask` 只 cache "canonical" mask（popcount == component count，即所有 id < 512）。高 id archetype 故意不进 mask cache，避免不同 signature 在 mask 上碰撞。`IsMaskCanonical`（`World.cs:514`）做这个不变式检查。
 
 > **历史**：曾存在第三层 `TryGetArchetype(types)` 线性扫描 fallback，用于兼容 CommandStream 早期版本未排序的 signature。CommandStream materialize 改为显式排序后该 fallback 变死代码，已于 2026-06-29 删除。
 
@@ -93,7 +93,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 
 ### 6. Query 系统
 - `QueryDescription`（`Type` 集合）→ `QueryFilter`（`ComponentType` 集合）→ `QueryCache`（archetype + chunk view 快照，`internal sealed class`）
-- **两段式失效**（`Core/Query.cs:104-128`）：
+- **两段式失效**（`Core/QueryCache.cs:103-126`）：
   - 快路径：`World.ArchetypeCount == _lastArchetypeCount` → 不扫
   - 慢路径 A：archetype 数量变 → `Refresh`（append-only 扫新 archetype）
   - 慢路径 B：matched archetype segment count 变（chunked 增长）→ `RefreshViewsOnly`（不重做 match，只重建 ChunkView）
@@ -103,7 +103,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
   - `ForEachChunk(ChunkAction)` / `ForEachChunkParallel(ChunkAction)`：基于 delegate，缓存 delegate 时零分配
   - `ForEachChunk<TForEach>(ref TForEach)` / `ForEachChunkParallel<TForEach>(TForEach)`：基于 `IChunkForEach` struct 接口（`src/MiniArch/Query.cs:196`），JIT 特化去虚化、零分配。`ref` 路径支持 stateful accumulator；by-value 路径供并行 worker 拷贝（不能用 `in` 因 Parallel.For lambda 不允许捕获 ref-like 参数）
 - `ForEachChunkParallel` 在 chunks < threads 时自动按 entity 子区间拆分，`[ThreadStatic] t_partitions` 避免每次分配
-- 代码位置：`Core/Query.cs`（`QueryCache` internal class）+ `Query.cs`（`MiniArch.Query` facade + `IChunkForEach`）+ `World.QueryCache.cs`
+- 代码位置：`Core/QueryCache.cs`（`QueryCache` internal class）+ `Query.cs`（`MiniArch.Query` facade + `IChunkForEach`）+ `World.QueryCache.cs`
 
 ### 7. Hierarchy
 - side-table SoA 邻接表：`_parentByChild[id]` 直索引 + `_firstChild[id]` → `_childNext[slot]` → -1 链表 + slot free list
@@ -134,14 +134,12 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - 两种 entity-id 模式（placeholder vs real），wire format 相同，由 `CommandStream.DeferredEntities` flag 控制 producer 行为
 
 ### 10. World（编排者）
-- 拆分为 7 个 partial 文件：
-  - `World.cs`：字段 + TryGet/Get/Has + Clone + Replay + archetype lookup
+- 拆分为 5 个 partial 文件：
+  - `World.cs`：字段 + TryGet/Get/Has + Clone + Replay + archetype lookup + Checksum/CaptureState/RestoreState + snapshot bridge methods（`AddChildFromSnapshot`、`SetSnapshot*`、`WriteFreeList`/`ReadFreeList`/`CopyFreeIdsFrom`、`FreeList`、`ValidateSnapshotEntitySlot`）
   - `World.EntityLifecycle.cs`：Create/Destroy + free list + 版本管理
-  - `World.SnapshotBridge.cs`：snapshot/clone 用的 internal backdoor（`Reset`、`AddChildFromSnapshot`、`SetSnapshot*`、`WriteFreeList`/`ReadFreeList`/`CopyFreeIdsFrom`、`FreeList`、`ValidateSnapshotEntitySlot`）
   - `World.Create.Generated.cs`：泛型重载 + `GetSingleton<T>`
   - `World.QueryCache.cs`：Query 缓存管理
-  - `World.StructuralChange.cs`：Add/Set/Remove（当前语义：`Add` ensure+overwrite，`Set` 缺失时抛异常，`Remove` 缺失时 no-op；CommandStream/Replay 同样把 Add 解释为 ensure+overwrite——详见 `kb-design-rationale.md` §2.9）
-  - `World.Checksum.cs`：`Checksum()` / `CanonicalChecksum()` 双模式（详见 `kb-snapshot-persistence.md` Checksum 段）
+  - `World.StructuralChange.cs`：Add/Set/Remove（当前语义：`Add` strict throw，`Set` 缺失时抛异常，`Remove` 缺失时 no-op；详见 `kb-design-rationale.md` §2.9）
 - 结构变更核心：查 `EntityRecord` → 算目标签名 → edge cache → `MoveEntityCore`（带 catch rollback）+ `FinishMoveEntity` 分离，便于批量 materialize 复用
 
 ### 已删除的子系统
@@ -170,10 +168,10 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - Per-filter 跟踪用代码复杂度换噪音级 CPU 时间
 - 详见 `kb-design-rationale.md` §2.8 及 §3.1
 
-### P3. Add/Set/Remove 语义 — 已校准（Add ensure+overwrite, Set strict）
-- `Add<T>` 已存在时覆盖值，缺失时添加；`Set<T>` 缺失时抛异常；`Remove<T>` 缺失时 no-op
-- 这是 Submit/Replay parity 的真实语义：Clone 后同帧重复 Add 同组件必须收敛（见 `kb-code-review-findings.md` B1/B4）
-- 性能影响为零——`TryGetComponentIndex` 无论 strict/upsert/ensure 都需要
+### P3. Add/Set/Remove 语义 — strict Add（已校准）
+- `Add<T>` strict throw（已存在时抛异常）；`Set<T>` strict throw（不存在时抛异常）；`Remove<T>` 缺失时 no-op
+- B1/B4（Clone 后同帧重复 Add）已通过 CommandStream 的 batch dedup 在 materialize 前去重解决，不再需要 World.Add 覆盖
+- `TryGetComponentIndex` 是语义分支本身——Add 必须先判断存在性，不是多余防御
 - 详见 `kb-core-ecs.md` 决策段 + `kb-design-rationale.md` §2.9
 
 ### P3b. CaptureState/RestoreState — 已修复
@@ -200,7 +198,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 | 全局 Registry vs World 隔离 | 全局 | 真实游戏场景正确；省一层间接 |
 | 单线程写入 vs 并行读取 | 单线程写 | archetype ECS 经典约束 |
 | Hierarchy 一等公民 vs 组件 | side-table | 正确性 > 表达力 |
-| 大文件 vs partial 拆分 | partial 7 文件 | 按职责分组，保持编译单元聚焦 |
+| 大文件 vs partial 拆分 | partial 5 文件 | 按职责分组，保持编译单元聚焦 |
 | 直索引 edge cache vs bounded cache | 直索引 `Archetype?[]` | O(1) 查找，简单可靠；稀疏 id 场景的代价已被承认 |
 | CommandBuffer per-entity 去重 vs CommandStream typed store | CommandStream（独存） | 实测更快，去重语义无真实消费者，YAGNI |
 | FrameDelta IR 折叠 vs 简单拼接 | 简单 byte 拼接 | 折叠状态机的复杂度转嫁到跨帧 id 回收 bug 上得不偿失；Array.Copy 简洁正确 |
