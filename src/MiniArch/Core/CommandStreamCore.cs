@@ -1622,7 +1622,7 @@ public abstract class CommandStreamCore
     // ── Bit helpers ───────────────────────────────────────────────────
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool TrySetBit(ref ulong b0, ref ulong b1, ref ulong b2, ref ulong b3,
+    internal static bool TrySetBit(ref ulong b0, ref ulong b1, ref ulong b2, ref ulong b3,
                                   ref ulong b4, ref ulong b5, ref ulong b6, ref ulong b7, int id)
     {
         if (id < 64)      return TrySetBitInLane(ref b0, id);
@@ -1632,7 +1632,8 @@ public abstract class CommandStreamCore
         if (id < 320)     return TrySetBitInLane(ref b4, id - 256);
         if (id < 384)     return TrySetBitInLane(ref b5, id - 320);
         if (id < 448)     return TrySetBitInLane(ref b6, id - 384);
-        return TrySetBitInLane(ref b7, id - 448);
+        if (id < 512)     return TrySetBitInLane(ref b7, id - 448);
+        return false;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

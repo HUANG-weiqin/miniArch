@@ -3428,4 +3428,144 @@ public sealed class DeferredCreateTests
                 $"ParallelCommandStream should expose '{name}'");
         }
     }
+
+    // ── TrySetBit regression (ids outside 0..511) ─────────────────────
+
+    /// <summary>
+    /// <see cref="CommandStreamCore.TrySetBit"/> must NOT accept <c>id >= 512</c>.
+    /// Previously the last branch (<c>id &lt; 448</c>) fell through to
+    /// <c>TrySetBitInLane(ref b7, id - 448)</c> without a 512 guard. Since C#
+    /// masks ulong shift counts to the lower 6 bits, <c>1UL &lt;&lt; (id - 448)</c>
+    /// wraps for <c>id - 448 >= 64</c>, aliasing ids 512..575 into bits 0..63
+    /// of b7 — the same range as 448..511.
+    /// </summary>
+    [Fact]
+    public void TrySetBit_rejects_ids_512_and_above()
+    {
+        ulong b0 = 0, b1 = 0, b2 = 0, b3 = 0;
+        ulong b4 = 0, b5 = 0, b6 = 0, b7 = 0;
+
+        // id 512: first value past the 512-bit boundary
+        Assert.False(CommandStreamCore.TrySetBit(
+            ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 512));
+        Assert.Equal(0UL, b7);  // must not alias to bit 0 of b7
+
+        // id 513: verify it doesn't alias to bit 1 of b7 either
+        Assert.False(CommandStreamCore.TrySetBit(
+            ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 513));
+        Assert.Equal(0UL, b7);
+
+        // id 575: last value before id - 448 = 127, still wraps
+        Assert.False(CommandStreamCore.TrySetBit(
+            ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 575));
+        Assert.Equal(0UL, b7);
+
+        // id 576: id - 448 = 128 => 1UL << 128 => 1UL << 0 (wraps 64-bit)
+        Assert.False(CommandStreamCore.TrySetBit(
+            ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 576));
+        Assert.Equal(0UL, b7);
+
+        // id 1024: far outside, should also be rejected
+        Assert.False(CommandStreamCore.TrySetBit(
+            ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 1024));
+        Assert.Equal(0UL, b7);
+    }
+
+    /// <summary>
+    /// Ensures that valid ids in the 448..511 range (the lane that was
+    /// vulnerable to aliasing) still work correctly after the fix.
+    /// </summary>
+    [Fact]
+    public void TrySetBit_accepts_ids_448_to_511()
+    {
+        ulong b0 = 0, b1 = 0, b2 = 0, b3 = 0;
+        ulong b4 = 0, b5 = 0, b6 = 0, b7 = 0;
+
+        // Set bit 448 (bit 0 of b7)
+        Assert.True(CommandStreamCore.TrySetBit(
+            ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 448));
+        Assert.Equal(1UL << 0, b7);
+
+        // Set bit 511 (bit 63 of b7)
+        Assert.True(CommandStreamCore.TrySetBit(
+            ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 511));
+        Assert.Equal((1UL << 0) | (1UL << 63), b7);
+
+        // Set bit 480 (bit 32 of b7) — middle of the lane
+        Assert.True(CommandStreamCore.TrySetBit(
+            ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 480));
+        Assert.Equal((1UL << 0) | (1UL << 32) | (1UL << 63), b7);
+
+        // id 512 again after valid bits are set — must NOT touch b7
+        Assert.False(CommandStreamCore.TrySetBit(
+            ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 512));
+        Assert.Equal((1UL << 0) | (1UL << 32) | (1UL << 63), b7);
+    }
+
+    /// <summary>
+    /// Verifies that TrySetBit correctly returns false (already set)
+    /// for duplicate calls, including the boundary at 511.
+    /// </summary>
+    [Fact]
+    public void TrySetBit_detects_already_set_at_boundaries()
+    {
+        ulong b0 = 0, b1 = 0, b2 = 0, b3 = 0;
+        ulong b4 = 0, b5 = 0, b6 = 0, b7 = 0;
+
+        // Set id 0 (first bit in b0)
+        Assert.True(CommandStreamCore.TrySetBit(
+            ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 0));
+        Assert.False(CommandStreamCore.TrySetBit(
+            ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 0));
+
+        // Set id 63 (last bit in b0)
+        Assert.True(CommandStreamCore.TrySetBit(
+            ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 63));
+        Assert.False(CommandStreamCore.TrySetBit(
+            ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 63));
+
+        // Set id 447 (last bit in b6)
+        Assert.True(CommandStreamCore.TrySetBit(
+            ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 447));
+        Assert.False(CommandStreamCore.TrySetBit(
+            ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 447));
+
+        // Set id 511 (last valid bit in b7)
+        Assert.True(CommandStreamCore.TrySetBit(
+            ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 511));
+        Assert.False(CommandStreamCore.TrySetBit(
+            ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 511));
+
+        // Verify all expected bits are set
+        Assert.Equal((1UL << 0) | (1UL << 63), b0);
+        Assert.Equal(1UL << 63, b6);
+        Assert.Equal(1UL << 63, b7);
+    }
+
+    /// <summary>
+    /// Regression: mask corruption for ComponentType.Value >= 512 simulated
+    /// through the MaskBuilder + ComponentMask APIs. This mirrors what
+    /// MaterializeFromBatchBuffer does with TrySetBit, and verifies that
+    /// setting a high id does not alias into the 448..511 range.
+    /// </summary>
+    [Fact]
+    public void MaskBuilder_setting_high_id_does_not_alias_into_b7()
+    {
+        var builder = new MaskBuilder();
+
+        // Set a bit well past 511 — must not touch any b7 bits.
+        builder.SetBit(512);
+        Assert.Equal(0UL, builder.B7);
+        Assert.Equal(0, builder.BitsSet); // BitsSet tracks only 0..511
+
+        // Set a real bit in b7 (id 448) to confirm the lane still works.
+        builder.SetBit(448);
+        Assert.Equal(1UL << 0, builder.B7);
+        Assert.Equal(1, builder.BitsSet);
+
+        // Set id 512 again — must not affect b7 or BitsSet.
+        builder.SetBit(512);
+        Assert.Equal(1UL << 0, builder.B7);
+        Assert.Equal(1, builder.BitsSet);
+    }
 }

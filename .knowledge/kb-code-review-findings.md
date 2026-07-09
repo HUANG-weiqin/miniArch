@@ -7,6 +7,8 @@ updated: 2026-07-09
 
 > **M2 re-apply (2026-07-09)**: Epoch guard added — `World.ReservedReleaseEpoch` + `CommandStreamCore._submitEpoch` fast-path avoids O(N) pending-slot scan when no release has occurred since last sync. HeroComing.Perf: Movement 1902.1, Attack 1125.6, memory stable. Baseline gate (≥1642/≥997) passes.
 
+> **Contract calibration (2026-07-09)**: Current code/test contract is strict Add: `World.Add<T>` throws when the entity already has `T` (`TrickyEdgeCaseTests.Add_component_that_already_exists_throws`). Older B1/B4 notes are historical context and must not be read as the current Add-as-overwrite contract.
+
 # 代码审阅发现
 
 > 审阅前必读。包含已确认的设计债、已验证安全猜想、以及被排除的非 bug 猜想。
@@ -50,6 +52,16 @@ updated: 2026-07-09
 - **缺失的安全条件**: Delta 回放中途失败时无法回滚已执行操作
 - **真实风险**: 低。用户应通过 `FrameDelta.Validate()` 预校验——这已在文档中。`FrameDelta.Validate` 现在已校验 component data 大小与 schema 一致性；剩余风险是 replay 中途失败仍无法回滚，且 allocator/free-list 兼容性只能由从 frame 0 replay 或 snapshot bootstrap 保证
 - **建议修复**: 强化文档约束；如需进一步 harden，可增加 replay 前 dry-run/target-world compatibility check，但当前 ROI 低
+
+### #4: TrySetBit 未对 id >= 512 做守卫导致 mask 别名折叠 ✅ 已修复
+
+- **模式**: 边界缺失守卫
+- **位置**: `CommandStreamCore.cs:1625-1636` TrySetBit
+- **原始缺陷**: `TrySetBit` 最后一个分支（`id < 448` 后的 `return TrySetBitInLane(ref b7, id - 448)`）未检查 `id < 512`。C# 对 `ulong` 的移位操作将移位计数掩码到低 6 位，导致 `id = 512..575` 的 `1UL << (id - 448)` 等价于 `1UL << ((id - 448) & 63)`，错误地别名到 b7 的 0..63 位（即 id 448..511 的范围）。这使 `MaterializeFromBatchBuffer` 中构建的 `ComponentMask` 被损坏：当实体使用 id >= 512 的组件时，mask 可能错误地匹配到 448-511 区间的原型，导致实体被分配到完全错误的 archetype。
+- **真实风险**: 中。仅影响 `ComponentType.Value >= 512` 的组件（需要 513+ 个组件类型注册）。低 id 组件的热路径完全不受影响（`id < 448` 的分支不变）。调用方 `DeduplicateBatchChain` 已有正确守卫；`MaterializeFromBatchBuffer` 依赖 `TrySetBit` 的守卫。
+- **修复方案**: 在最后分支增加 `if (id < 512) return TrySetBitInLane(ref b7, id - 448); return false;`。将 `TrySetBit` 改为 `internal static` 以便直接测试。
+- **回归测试**: `TrySetBit_rejects_ids_512_and_above`、`TrySetBit_accepts_ids_448_to_511`、`TrySetBit_detects_already_set_at_boundaries`、`MaskBuilder_setting_high_id_does_not_alias_into_b7`
+- **验证**: `dotnet test -c Release` 872/872 pass，HeroComing.Perf: Movement 1870.2 r/s, Attack 1172.9 r/s，内存稳定
 
 ---
 
