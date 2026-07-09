@@ -97,7 +97,7 @@ updated: 2026-07-09
 - 用 `ComponentType` 而不是直接用 `Type` 作为运行时 key
 - 用 `Signature` 作为 archetype key，保证等价组件集合落在同一个 storage family
 - Set/Add 的原地写入路径优先走 flat byte storage + component id → 列索引 direct map
-- `World.Add<T>` 是 ensure+overwrite（组件不存在时添加，已存在时原地覆盖）；`World.Set<T>` 是严格 Set（组件不存在时抛异常）；`World.Remove<T>` 对缺失组件 no-op。CommandStream 和 Replay 路径同样把 `DeltaOpKind.Add` 解释为 ensure+overwrite，以保证 Clone 后重复 Add 等场景 Submit/Replay 收敛
+- `World.Add<T>` 是 strict Add（组件不存在时添加，已存在时抛异常）；`World.Set<T>` 是严格 Set（组件不存在时抛异常）；`World.Remove<T>` 对缺失组件 no-op。重复写已有组件必须走 `Set<T>`。当前契约由 `TrickyEdgeCaseTests.Add_component_that_already_exists_throws` 覆盖。
 - `World` 的 entity metadata 需要显式容量管理，不依赖 `List<T>` 自然扩容
 - `default(Entity)` 不合法；真实实体从 `Version = 1` 起步
 - 单实体带组件创建直接落到目标签名 archetype，不经过 `Create → Add` 迁移链
@@ -167,7 +167,7 @@ world.Destroy(e);
 - `Create<T...>` 如果复用 `Add` 迁移路径，会留下中间态 archetype
 - `CreateMany` 不能退化成外部循环调 `Create`
 - Edge cache 用 `Archetype?[]` 按 componentId 直索引，当组件 ID 稀疏时数组可能膨胀
-- Add/Set/Remove 不是全 strict：`Add<T>` 组件已存在时覆盖，`Set<T>` 组件不存在时抛异常，`Remove<T>` 组件不存在时 no-op（详见 `kb-design-rationale.md` §2.9）
+- Add/Set/Remove 的当前语义：`Add<T>` 组件已存在时抛异常，`Set<T>` 组件不存在时抛异常，`Remove<T>` 组件不存在时 no-op（详见 `kb-design-rationale.md` §2.9）
 - Query 快照是非原子的，安全性依赖 volatile publish + "world 无并发写"前提
 - `IsAlive` 必须和 `TryGetLocation` 共用同一条 version/location 校验链
 - 性能验证必须看 Arch 对照数据，不能只看自己变快
