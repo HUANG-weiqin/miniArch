@@ -73,7 +73,7 @@ public sealed class TransitionWatch<THandler>
         ArgumentNullException.ThrowIfNull(world);
 
         // Bump snapshot epoch; if it wraps, reset marks to zero.
-        _snapshotEpoch++;
+        unchecked { _snapshotEpoch++; }
         if (_snapshotEpoch == 0)
         {
             Array.Clear(_snapshotMarks);
@@ -115,7 +115,7 @@ public sealed class TransitionWatch<THandler>
                 "TransitionWatch.Diff requires a prior Snapshot call. Call Snapshot(World) before Diff.");
 
         // Bump current epoch; if it wraps, reset marks to zero.
-        _currentEpoch++;
+        unchecked { _currentEpoch++; }
         if (_currentEpoch == 0)
         {
             Array.Clear(_currentMarks);
