@@ -18,7 +18,7 @@ updated: 2026-07-09
 - **帧同步端到端指南** → 见 `kb-lockstep-playbook.md`
 - **DeferredEntities flag（placeholder vs real-id 模式）** → 见 `kb-deferred-create-design.md`
 - 历史：曾并存 `CommandBuffer`（per-entity 录制期去重的安全默认）。2026-06-26 按 YAGNI 移除。2026-07-05 进一步把单线程/并行两套路径从同一 sealed class + `_parallelMode` flag 拆分为两个独立 sealed 类型。
-- **M2 pre-validation 尝试（2026-07-09）**：尝试在 `Submit()` 的 materialize 前预验证 pending slot reserved 状态。实现含 epoch guard 优化。因 HeroComing.Perf Attack 未达严格阈值 ≥1200 r/s，M2 已全量回退。详见 `kb-code-review-findings.md` #1 的 M2 说明。
+- **M2 pre-validation 优化（2026-07-09）**：在 `Submit()` 的 materialize 前预验证 pending slot reserved 状态。增加 epoch guard 优化：`World.ReservedReleaseEpoch`（每次 release 递增）+ `CommandStreamCore._submitEpoch`（记录上次同步时的 epoch），`PreValidatePendingSlots()` 快速路径在 epoch 相等时直接返回，避免 O(N) pending-batch 扫描。Epoch 在 CreateImpl、CancelPendingEntity、Clear、Submit/SubmitFromFrozen 操作后同步。HeroComing.Perf: Movement 1902.1, Attack 1125.6，内存稳定。详见 `kb-code-review-findings.md` #1。
 
 - **`Submit()` 增加 pre-validation 检查 pending slot reserved 状态**（2026-07-09，M2）：在 `Submit()` 和 `SubmitFromFrozen()` 的 materialize 前增加 `PreValidatePendingSlots()`，扫描所有非 cancelled pending batch 的 slot 是否仍为 reserved 状态（`!record.IsOccupied && record.Version == entity.Version`）。若 slot 已不再是 reserved，则立即抛 `InvalidOperationException`，防止部分 materialize 后因 slot 状态不一致导致无事务回滚。新增内部 helper `World.IsSlotReserved(Entity)`。零分配、零 public API 变更。
 

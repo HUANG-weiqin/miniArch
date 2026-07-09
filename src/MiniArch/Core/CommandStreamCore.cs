@@ -43,6 +43,11 @@ public abstract class CommandStreamCore
     protected int _batchCompTotal;
     protected int _batchBufLen;
 
+    // Epoch guard: tracks _world.ReservedReleaseEpoch at the last known
+    // consistent state. PreValidatePendingSlots fast-path compares this against
+    // _world.ReservedReleaseEpoch to skip the O(N) scan when no release has occurred.
+    private int _submitEpoch;
+
     // Local archetype cache keyed by ComponentMask.
     protected const int MaskCacheSize = 8;
     private protected MaskCacheSlot[] _maskCache = [];
@@ -192,6 +197,7 @@ public abstract class CommandStreamCore
         if (entity.Id >= _pendingBatchMax) _pendingBatchMax = entity.Id + 1;
         _lastCreated = entity;
         _lastCreatedBatch = batchIdx;
+        _submitEpoch = _world.ReservedReleaseEpoch;
         return entity;
     }
 
@@ -462,6 +468,7 @@ public abstract class CommandStreamCore
             AlignCancelledBatchFreeListOrder();
             ResolveDeferredCreates();
             PreValidatePendingSlots();
+            _submitEpoch = _world.ReservedReleaseEpoch;
             MaterializeAllPending();
             ApplyHierarchy();
             ApplyComponentStores();
@@ -563,6 +570,11 @@ public abstract class CommandStreamCore
 
     private void PreValidatePendingSlots(FrozenState frozen)
     {
+        // Fast path: no release has happened since our last epoch sync,
+        // so all pending slots are still guaranteed to be reserved.
+        if (_world.ReservedReleaseEpoch == _submitEpoch)
+            return;
+
         for (var i = 0; i < frozen.PendingBatchCount; i++)
         {
             if (frozen.BatchCanceled[i]) continue;
@@ -983,6 +995,7 @@ public abstract class CommandStreamCore
     {
         // Order matches Submit and BuildDelta: Create —Hierarchy —Ops —Destroy.
         PreValidatePendingSlots(frozen);
+        _submitEpoch = _world.ReservedReleaseEpoch;
         for (var i = 0; i < frozen.PendingBatchCount; i++)
         {
             if (frozen.BatchCanceled[i]) continue;
@@ -1417,6 +1430,7 @@ public abstract class CommandStreamCore
                     _frozen.BatchCanceled[batchIdx] = true;
                     _frozen.CancelledBatchCount++;
                     _frozen.HierarchyByChild.Remove(entity);
+                    _submitEpoch = _world.ReservedReleaseEpoch;
                 }
             }
         }
@@ -2089,6 +2103,7 @@ public abstract class CommandStreamCore
         _frozen.HierarchyByChild.Clear();
         _hasStoreCommands = false;
         _hasParallelStoreWrites = false;
+        _submitEpoch = _world.ReservedReleaseEpoch;
 #if DEBUG
         _pendingBatchDeferredEpoch = [];
         _world._deferredEpoch++;

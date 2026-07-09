@@ -56,6 +56,13 @@ public sealed partial class World : IDisposable
     // per-call in steady state.
     private readonly Dictionary<Archetype, int> _replayCreateCounts = new();
 
+    /// <summary>
+    /// Incremented on every <see cref="ReleaseReservedEntity"/> and
+    /// <see cref="TryReleaseReserved"/> call. Used by <see cref="CommandStreamCore"/>
+    /// as an epoch guard to avoid scanning pending batches on the normal Submit path.
+    /// </summary>
+    internal int ReservedReleaseEpoch;
+
 #if DEBUG
     internal int _reservedCount;
     internal int _deferredEpoch;

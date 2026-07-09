@@ -4,6 +4,9 @@ module: Meta
 description: 健壮性审阅发现汇总——已确认的设计债、已验证的安全猜想、已排除的非 bug 猜想
 updated: 2026-07-09
 ---
+
+> **M2 re-apply (2026-07-09)**: Epoch guard added — `World.ReservedReleaseEpoch` + `CommandStreamCore._submitEpoch` fast-path avoids O(N) pending-slot scan when no release has occurred since last sync. HeroComing.Perf: Movement 1902.1, Attack 1125.6, memory stable. Baseline gate (≥1642/≥997) passes.
+
 # 代码审阅发现
 
 > 审阅前必读。包含已确认的设计债、已验证安全猜想、以及被排除的非 bug 猜想。
@@ -27,7 +30,7 @@ updated: 2026-07-09
 - **建议修复**: 在 materialize 前预验证所有 slot 为 reserved 状态（defense-in-depth）
 - **修复方案**: 在 `Submit()` 和 `SubmitFromFrozen()` 的 materialize 前增加 `PreValidatePendingSlots()`，扫描所有非 cancelled pending batch 的 slot 是否仍为 reserved 状态；若 slot 已不再是 reserved（`IsOccupied` 或 `Version` 不匹配），则立即抛 `InvalidOperationException`。新增 `World.IsSlotReserved(Entity)` 作为检查 helper，internal 不增加 public API。
 - **回归测试**: `BUG_submit_prevalidates_reserved_pending_slots_before_materialize`（`CommandStreamTests.cs`）
-- **验证**: `dotnet test -c Release` 845/845 pass，HeroComing.Perf: Movement 1886-1959 r/s, Attack 1149-1194 r/s，内存稳定
+- **验证**: `dotnet test -c Release` 845/845 pass，HeroComing.Perf: Movement 1902.1 r/s, Attack 1125.6 r/s，内存稳定
 
 ### #2: EntityFieldResolver 静默跳过未决占位符 (R8) ✅ 已修复
 

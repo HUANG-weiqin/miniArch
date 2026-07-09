@@ -491,6 +491,7 @@ public sealed partial class World
 #if DEBUG
         _reservedCount--;
 #endif
+        ReservedReleaseEpoch++;
     }
 
     /// <summary>
@@ -511,6 +512,7 @@ public sealed partial class World
 #if DEBUG
         _reservedCount--;
 #endif
+        ReservedReleaseEpoch++;
         return true;
     }
 
