@@ -23,9 +23,9 @@ updated: 2026-07-09 (WatchApi.Perf 秒级发布验证；TransitionWatch dense ep
   - `Snapshot(World)`：查询 world → 遍历 chunk → 记录每个实体的当前值到 `_oldValues`，同时用 `_touchedIds` 标记哪些 id 有了 baseline。
   - `Diff(World)`：再次查询 world → 遍历 chunk → 对每个实体，比较当前值与 `_oldValues[id]`（若 id 未触及则 `default`）→ 差异收集到 `_buffer[]` → 缓冲区稳定后逐条回调 handler。
 - **投影值变更**：`ChangeWatch<TComponent, TValue, THandler>` 与值变更结构相同，但 baseline 存储的是 `TValue[]`，Snapshot 时调用 `handler.Project(component)`，Diff 时再次调用 `Project()` 并比较 `TValue` 是否相等。
-- **结构变更**：`TransitionWatch` 内部持有 `Entity[] _snapshotEntities` + `int[] _snapshotMarks`（按 `entity.Id` 索引的 dense epoch 标记）和 `int[] _currentMarks` + `Entity[] _currentEntities`（复用 buffer）。
-  - `Snapshot(World)`：递增 `_snapshotEpoch`（溢出时 `Array.Clear` 并重置为 1）→ 遍历 query → 对每个实体 `EnsureMarkCapacity` → `_snapshotMarks[id] = _snapshotEpoch` → 存储到 `_snapshotEntities`。
-  - `Diff(World)`：递增 `_currentEpoch`（同样溢出处理）→ 遍历当前 query → `_currentMarks[id] = _currentEpoch` → 存储到 `_currentEntities` → Exited：`_currentMarks[id] != _currentEpoch` → Entered：`_snapshotMarks[id] != _snapshotEpoch` → 无 per-Diff 清除，两阶段回调。
+- **结构变更**：`TransitionWatch` 内部持有 `Entity[] _snapshotEntities` + `long[] _snapshotMarks`（按 `entity.Id` 索引的 dense epoch 标记）和 `long[] _currentMarks` + `Entity[] _currentEntities`（复用 buffer）。
+  - `Snapshot(World)`：递增 64-bit `_snapshotEpoch`（不溢出，无 per-Diff 清除）→ 遍历 query → 对每个实体 `EnsureMarkCapacity` → `_snapshotMarks[id] = _snapshotEpoch` → 存储到 `_snapshotEntities`。
+  - `Diff(World)`：递增 64-bit `_currentEpoch` → 遍历当前 query → `_currentMarks[id] = _currentEpoch` → 存储到 `_currentEntities` → Exited：`_currentMarks[id] != _currentEpoch` → Entered：`_snapshotMarks[id] != _snapshotEpoch` → 无 per-Diff 清除，两阶段回调。
 - **生命周期**：Watch 不与 world 注册（无 SharedTrackerRegistry、无 IChangeQuery dispatch）。`Snapshot`/`Diff` 通过 `world.Query()` 读取当前状态。World dispose 后调用 `Snapshot`/`Diff` 抛 `ObjectDisposedException`。
 
 ## 公共 API

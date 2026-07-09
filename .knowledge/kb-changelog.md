@@ -42,7 +42,7 @@ updated: 2026-07-09 (Watch API pull-event 模型替换旧 Change Tracking 全部
   - 旧：`TrackValueChanges`/`CreateDenseValueDiff` 两个独立入口
   - 新：单个 `Watch<TComponent, THandler>` 入口 + 可选投影 `Watch<TComponent, TValue, THandler>`
   - 旧：`TransitionLog` + `IChangeQuery.OnTransition` dispatch + `Clear()`
-  - 新：`TransitionWatch` Snapshot/Diff id-based 集合对比 + Handler 回调；内部 membership 使用 dense epoch marks（`int[]` by entity id），稳态零 per-Diff 分配
+  - 新：`TransitionWatch` Snapshot/Diff id-based 集合对比 + Handler 回调；内部 membership 使用 dense epoch marks（`long[]` by entity id），64-bit epoch 不溢出，稳态零 per-Diff 分配
   - 旧：`Set`/`Add`/`Remove` 热路径有 registry 查询分支
   - 新：写入路径零 watch 成本
 - **验证（2026-07-09）**：
