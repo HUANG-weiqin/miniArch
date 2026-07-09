@@ -25,6 +25,7 @@ public sealed class TransitionWatch<THandler>
 {
     private Entity[] _snapshotEntities = [];
     private int _snapshotCount;
+    private HashSet<int> _snapshotIds = [];
     private readonly QueryDescription _query;
     private THandler _handler;
     private bool _hasSnapshot;
@@ -63,15 +64,18 @@ public sealed class TransitionWatch<THandler>
         ArgumentNullException.ThrowIfNull(world);
 
         _snapshotCount = 0;
+        _snapshotIds.Clear();
 
         foreach (var chunk in world.Query(in _query).GetChunks())
         {
             var entities = chunk.GetEntities();
             for (var i = 0; i < chunk.Count; i++)
             {
+                var entity = entities[i];
+                _snapshotIds.Add(entity.Id);
                 if (_snapshotCount >= _snapshotEntities.Length)
                     Array.Resize(ref _snapshotEntities, Math.Max(_snapshotCount + 1, _snapshotEntities.Length * 2));
-                _snapshotEntities[_snapshotCount++] = entities[i];
+                _snapshotEntities[_snapshotCount++] = entity;
             }
         }
 
@@ -128,29 +132,19 @@ public sealed class TransitionWatch<THandler>
         }
 
         // Phase 2b: Entered — current entities whose id is not in snapshot.
-        // Linear scan over _snapshotEntities (no per-Diff HashSet allocation).
+        // O(1) lookup via _snapshotIds HashSet (populated during Snapshot).
         for (var ci = 0; ci < _currentCount; ci++)
         {
-            var id = _currentEntities[ci].Id;
-            var found = false;
-            for (var si = 0; si < _snapshotCount; si++)
+            if (_snapshotIds.Contains(_currentEntities[ci].Id))
+                continue;
+
+            if (bufferCount >= _buffer.Length)
+                Array.Resize(ref _buffer, Math.Max(bufferCount + 1, _buffer.Length * 2));
+            _buffer[bufferCount++] = new TransitionEntry
             {
-                if (_snapshotEntities[si].Id == id)
-                {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found)
-            {
-                if (bufferCount >= _buffer.Length)
-                    Array.Resize(ref _buffer, Math.Max(bufferCount + 1, _buffer.Length * 2));
-                _buffer[bufferCount++] = new TransitionEntry
-                {
-                    Entity = _currentEntities[ci],
-                    Kind = TransitionKind.Entered
-                };
-            }
+                Entity = _currentEntities[ci],
+                Kind = TransitionKind.Entered
+            };
         }
 
         // Phase 3: dispatch callbacks.

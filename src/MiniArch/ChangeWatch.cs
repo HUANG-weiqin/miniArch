@@ -129,7 +129,7 @@ public sealed class ChangeWatch<TComponent, THandler>
 
                 var newVal = values[i];
 
-                if (EqualityComparer<TComponent>.Default.Equals(oldVal, newVal))
+                if (oldVal.Equals(newVal))
                     continue;
 
                 if (bufferCount >= _buffer.Length)

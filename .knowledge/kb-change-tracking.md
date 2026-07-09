@@ -21,9 +21,9 @@ updated: 2026-07-09
   - `Snapshot(World)`：查询 world → 遍历 chunk → 记录每个实体的当前值到 `_oldValues`，同时用 `_touchedIds` 标记哪些 id 有了 baseline。
   - `Diff(World)`：再次查询 world → 遍历 chunk → 对每个实体，比较当前值与 `_oldValues[id]`（若 id 未触及则 `default`）→ 差异收集到 `_buffer[]` → 缓冲区稳定后逐条回调 handler。
 - **投影值变更**：`ChangeWatch<TComponent, TValue, THandler>` 与值变更结构相同，但 baseline 存储的是 `TValue[]`，SnapShot 时调用 `handler.Project(component)`，Diff 时再次调用 `Project()` 并比较 `TValue` 是否相等。
-- **结构变更**：`TransitionWatch` 内部持有 `Entity[] _snapshotEntities`（上次 snapshot 的成员列表）和 `HashSet<int> _currentIds` + `Entity[] _currentEntities`（复用 buffer）。
-  - `Snapshot(World)`：遍历 query → 记录匹配实体到 `_snapshotEntities`。
-  - `Diff(World)`：扫描当前 → 用 HashSet 快速查 Exited（snapshot 中有、当前无）→ 线性扫描查 Entered（当前有、snapshot 中无）→ 缓冲区稳定后回调。
+- **结构变更**：`TransitionWatch` 内部持有 `Entity[] _snapshotEntities`（上次 snapshot 的成员列表）、`HashSet<int> _snapshotIds`（snapshot 实体 id 集合、用于 Entered 检测）和 `HashSet<int> _currentIds` + `Entity[] _currentEntities`（复用 buffer）。
+  - `Snapshot(World)`：遍历 query → 记录匹配实体到 `_snapshotEntities`，同时填充 `_snapshotIds`。
+  - `Diff(World)`：扫描当前 → 用 `_currentIds` HashSet 快速查 Exited（snapshot 中有、当前无）→ 用 `_snapshotIds` HashSet 快速查 Entered（当前有、snapshot 中无）→ 缓冲区稳定后回调。
 - **生命周期**：Watch 不与 world 注册（无 SharedTrackerRegistry、无 IChangeQuery dispatch）。`Snapshot`/`Diff` 通过 `world.Query()` 读取当前状态。World dispose 后调用 `Snapshot`/`Diff` 抛 `ObjectDisposedException`。
 
 ## 公共 API
@@ -118,6 +118,6 @@ handler.Count = 0;
 - `Snapshot` 推进 baseline 后，旧 baseline 永久丢失（无法回退）。
 - Stale slot 的 `oldValue` 是 `default`——注意 `default` 与实际值的混淆。
 - TransitionWatch 是 id-based：Destroy+Create 同 id 复用不报 Exited+Entered。需要精确 version 语义时需自行记录。
-- TransitionWatch 的 Entered 扫描是 O(n²) 最坏情况（`_snapshotEntities` 线性扫描不含 `_currentIds` 的实体）。数据量大时注意性能。
+- TransitionWatch 的 Entered 和 Exited 扫描均为 O(n)（使用 `_snapshotIds` 和 `_currentIds` HashSet 进行 O(1) 包含检测）。无 per-Diff 分配。
 - `Handler` 是 ref 返回的 struct 引用，不要缓存到局部变量后跨 `Diff`/`Snapshot` 使用（可能因数组 resize 变为 dangling ref）。
 - `World` dispose 后调用 `Snapshot`/`Diff` 抛 `ObjectDisposedException`。

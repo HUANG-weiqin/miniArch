@@ -148,7 +148,7 @@ public class WatchApiTests
     }
 
     [Fact]
-    public void ChangeWatch_add_after_Snapshot_reports_stale_old()
+    public void ChangeWatch_destroy_recreate_reports_stale_old()
     {
         using var world = new World();
         var handler = new PositionChangeHandler(0);
