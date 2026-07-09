@@ -56,7 +56,7 @@ int SegmentEntityCapacity = perEntity > 0 ? Math.Max(16, TargetSegmentBytes / pe
 - `Archetype.cs`：字段、`Segment` 内部结构体、常量
 - `Archetype.Storage.cs`：存储操作（EnsureCapacity、AddEntity、RemoveAt、组件读写等）
 - `ChunkView.cs`：public readonly struct 视图，非分段下包裹 Archetype，分段下包裹 Segment
-- `Query.cs（Core）`：内部查询实现，分段下每个 Segment 产生一个 ChunkView
+- `Core/QueryCache.cs`：内部查询实现，分段下每个 Segment 产生一个 ChunkView
 
 ### 2.5 ChunkView 的分段适配
 
@@ -149,7 +149,7 @@ RemoveAt(globalRow):
 - **行号映射用除法而非二分**：所有段**容量**等长（`Entities.Length == segCap`），`globalRow / segCap` 即可定位段号。段内 `Count` 可不满（空洞合法，见 §3.6）
 - **`ChunkView.Count` 总是读 Archetype 实时计数**：避免因 CommandBuffer 延迟提交导致的 stale count 问题（2026-06-13 bugfix）
 - **不支持托管引用组件**：`flat byte[]` 不含 GC 跟踪，在 Archetype 构造时 fail fast
-- **`AddEntity = AllocateRows(1) + WriteEntityAt`**：分配和写入分离设计。`AllocateRows` 负责扩容/模式切换后分配行号，`WriteEntityAt` 负责写入实体标识。每个方法独立读取 `IsChunked`，消除了老代码中 "EnsureCapacity 可能切换模式→调用方必须重检" 的 bug 类。代码位置：`Archetype.Storage.cs:162-173`
+- **`AddEntity = AllocateRows(1) + WriteEntityAt`**：分配和写入分离设计。`AllocateRows` 负责扩容/模式切换后分配行号，`WriteEntityAt` 负责写入实体标识。每个方法独立读取 `IsChunked`，消除了老代码中 "EnsureCapacity 可能切换模式→调用方必须重检" 的 bug 类。代码位置：`Archetype.Storage.cs:222-226`
 - **`ConvertToChunked` 统一拷贝路径**：旧 fast path（`_capacity == _segmentCapacity` 时零拷贝包装平坦数组）已删除。理由：分段 invariant（`Entities.Length == _segmentCapacity`、列偏移基于 `_segmentCapacity`）在所有路径一致执行，消除一个模式分支。
 
 ## 认知模型

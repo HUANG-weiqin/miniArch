@@ -28,17 +28,17 @@ updated: 2026-07-09
   - `WorldValidator.cs` — 不变量检查，输出 `ValidationResult`
   - `EntityDump.cs` — 实体状态探查，输出 `EntityReport`
   - `WorldDigest.cs` — 分域哈希，输出 `WorldDigestResult`
-  - 所有结果类型在各自独立的 `*Result.cs` 文件中
+  - 结果类型在各自独立的 `*Result.cs` 文件中（`WorldDiffResult` 在 `WorldDiff.cs` 内，其余均独立文件）
 - 数据流：
   - 所有工具是纯函数（`static` 方法），输入 `World`，输出不可变结果
-  - 使用 `System.Security.Cryptography.SHA256.HashData(Stream)` 替代 `IncrementalHash`（后者在 System.IO.Hashing 8.x 中被移除）
+  - 使用 `System.Security.Cryptography.SHA256.HashData(Stream)`（`HashBuilder` 内部 `MemoryStream` + `SHA256.HashData(Stream)`）而非 `IncrementalHash`——`IncrementalHash` 仍可用（`System.Security.Cryptography`），但 `MemoryStream` 方式对诊断场景更简洁
   - 内部通过 `HashBuilder` 类（`MemoryStream` + `SHA256.HashData`）累积数据
 
 ## 决策
 
 - **同一程序集**：Diagnostics 放在 `src/MiniArch/Diagnostics/` 目录下，与核心代码同程序集，可以直接访问 `internal` 类型（`EntityRecord`、`Archetype`、`HierarchyTable` 等），无需 `InternalsVisibleTo`
 - **Namespace 即文档**：`MiniArch.Diagnostics` 命名空间本身就传达了"这是 debug 工具"的信息，热路径代码不会意外引用
-- **`HashBuilder` 替代 `IncrementalHash`**：`System.IO.Hashing` 8.0.0 移除了 `IncrementalHash`，改用 `MemoryStream` + `SHA256.HashData()`，在诊断场景下性能差异可忽略
+- **`HashBuilder` 替代 `IncrementalHash`**：使用 `MemoryStream` + `SHA256.HashData(Stream)` 而非 `IncrementalHash`（`IncrementalHash` 在 `System.Security.Cryptography` 中仍可用，但 `MemoryStream` 方式对累加再算的场景更简洁），在诊断场景下性能差异可忽略
 - **结果不可变**：所有列表字段用 `ReadOnlyCollection<T>` 包装，防止误修改
 - **确定性**：所有哈希按 entity ID 排序后再计算，保证相同逻辑状态 → 相同输出
 

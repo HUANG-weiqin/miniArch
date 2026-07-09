@@ -1,12 +1,12 @@
 ---
 title: MiniArch ECS 库安全证明
 module: Proof
-description: 全维度库安全证明——224 个随机种子、500 万帧、713 个测试、15 条代码路径审计
+description: 全维度库安全证明——224 个随机种子、500 万帧、878 个测试、15 条代码路径审计
 updated: 2026-07-09
 ---
 # MiniArch ECS 库安全证明
 
-> **结论**：MiniArch ECS 库已达到发布级正确性。5 个维度的系统测试（224 seed × 5M+ 帧）全部 PASS，6 个发现的 bug 已全部修复并回归，15 条 Submit/Replay 代码路径逐一审计确认一致。
+> **结论**：MiniArch ECS 库已达到发布级正确性。5 个维度的系统测试（224 diversity sweep seed × 5M+ 帧）全部 PASS，6 个浸泡发现的 bug（B1-B6）加 10 个代码审阅发现的 bug（B7-B16）已全部修复并回归，15 条 Submit/Replay 代码路径逐一审计确认一致。
 
 ---
 
@@ -14,13 +14,13 @@ updated: 2026-07-09
 
 | 指标 | 数值 |
 |------|------|
-| 测试 seed 总数 | **224**（32 + 64 + 128，包含不同区间） |
+| 测试 seed 总数 | **224 diversity sweep**（32 + 64 + 128，包含不同区间）+ 长时/边界/鲁棒补充 seed |
 | 测试操作总量 | ~**1200 万次**（224 seed × 100K 帧 × ~5 ops/f） |
 | 最长单次运行 | **5,000,000 帧**（3 分 55 秒），无泄漏 |
-| 单元测试数 | **713**（708 + 5 pipeline），0 失败 |
-| 发现的库级 bug | **6**（B1-B6），全部修复并回归 |
+| 单元测试数 | **878**（873 MiniArch.Tests + 5 HeroPipeline.Tests），0 失败 |
+| 发现的库级 bug | **16**（B1-B6 浸泡发现 + B7-B16 代码审阅发现），全部修复并回归 |
 | 代码审计路径 | **15 条 Submit vs Replay 操作路径**，零分歧 |
-| Perf 回归门禁 | Movement **2086** rounds/s，Attack **1256** rounds/s，超阈值 |
+| Perf 回归门禁 | Movement **2052.7** rounds/s，Attack **1246.8** rounds/s，超阈值（详见 kb-hero-pipeline-regression.md） |
 
 ---
 
@@ -92,7 +92,7 @@ Key insight：5M 帧后 managed 62MB（来自测试 harness 的 oracle Dictionar
 
 ### 3.3 确定性与可重现性
 
-同 seed 两次运行，最终 `CanonicalChecksum` 字节级一致：
+同 seed 两次运行，最终 `CanonicalChecksum` 字节级一致（示例 checksum 值可能随 CRC 种子或序列化布局调整而变化，此处仅为演示格式）：
 
 ```
 Run 1: 969BAEF15780D5081C45CA22A6547CB06A7B5775443687B10D00FAB8800DE267
@@ -100,7 +100,7 @@ Run 2: 969BAEF15780D5081C45CA22A6547CB06A7B5775443687B10D00FAB8800DE267
 DETERMINISM: PASS (checksums match)
 ```
 
-Key insight：**库是完全确定的。** 两次运行不依赖任何非确定性状态（hash seed、allocator 行为、线程调度等）。
+Key insight：**库是完全确定的。** 两次运行不依赖任何非确定性状态（hash seed、allocator 行为、线程调度等）。Checksum 精确值会因 CRC 种子或序列化布局的微小变化而改变，但"两次运行一致"这一性质具有确定性保证。
 
 ### 3.4 边界压力
 

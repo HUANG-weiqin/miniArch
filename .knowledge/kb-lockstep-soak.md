@@ -170,7 +170,7 @@ dotnet run -c Release --project tools/lockstep-soak/MiniArch.LockstepSoak -- --f
 
 退出码：0 = PASS，1 = FAIL（含诊断）。
 
-## 证明矩阵（2026-07-06）
+## 证明矩阵（2026-07-09）
 
 ### 结论：全维度 PASS — 41 seed × 1,090,000 帧零 desync
 
@@ -183,7 +183,7 @@ dotnet run -c Release --project tools/lockstep-soak/MiniArch.LockstepSoak -- --f
 | 多 host 8 | `--sweep 4 --frames 10000 --hosts 8` | 4 | 40K | ✅ | 2-4/0-3/0-2 |
 | Long-run | `--seed 42 --frames 50000 --hosts 4 --validate-interval 10`（全 6 phase） | 1 | 50K | ✅ | 5/1/0 |
 | 阴性对照 | host[1] 跳过 delta[2] | — | 1 | ✅ 第 1 帧抓到 desync |
-| Determinism | 同 config 跑两次 | — | — | ✅ 字节级一致 |
+| Determinism | 同 config 跑两次（`--determinism --frames 2000 --hosts 3`） | — | — | ✅ 字节级一致（host[0] 最终 CanonicalChecksum 匹配） |
 
 **总计：41 seed × 1.09M 帧，零 desync。** Boundary 域 16 seed × 800K 帧高强度覆盖 cancel+reorder 路径。8 host 拓扑（最重）也稳定。
 

@@ -6,7 +6,7 @@ updated: 2026-07-09
 ---
 # 浸泡测试（Soak Test）— 库安全证明
 
-> `tools/soak/MiniArch.Soak/` — 通过长时间随机操作序列验证 Submit 与 Replay 两条路径的世界状态收敛一致性。已发现并修复 **6 个库级 bug**，当前 **259 seed × 6.4M+ 帧全 PASS**。
+> `tools/soak/MiniArch.Soak/` — 通过长时间随机操作序列验证 Submit 与 Replay 两条路径的世界状态收敛一致性。已发现并修复 **6 个库级 bug（B1-B6）**，另有 **B7-B16 来自代码审阅**（详见 kb-code-review-findings.md）。当前 **259 seed × 6.4M+ 帧全 PASS**（含 224 diversity sweep + 长时/边界/鲁棒等补充 seed）。
 
 ## 这个测试是干什么的
 
@@ -61,9 +61,9 @@ Sweep 模式下每个 seed 独立报告 GC/alloc（per-seed baseline），第一
 | **Boundary: Extreme Density** | ops/f=100, 100K 帧 | ✅ PASS |
 | **Boundary: Version Rollover** | cap=10 floor=1, 500K 帧 | ✅ PASS (353K creates, gen0=8) |
 | **Robustness Tests** | 19 wire-fuzz + adversarial | ✅ 全 PASS |
-| **Architecture Regression** | HeroComing.Perf gate | ✅ Movement 2086, Attack 1256 |
+| **Architecture Regression** | HeroComing.Perf gate | ✅ 见 kb-hero-pipeline-regression.md（当前 baseline Movement 2052.7, Attack 1246.8） |
 
-**总计：259 个不同 seed，全部 PASS。6.4M 帧无内存泄漏。**
+**总计：259 个不同 seed（224 diversity sweep + 长时/边界/鲁棒补充），全部 PASS。6.4M 帧无内存泄漏。**
 
 ### 内存与 GC 特征
 
@@ -74,14 +74,14 @@ Sweep 模式下每个 seed 独立报告 GC/alloc（per-seed baseline），第一
 
 ## 发现的历史性 bug
 
-浸泡测试已发现 **6 个库级 bug**，全部是 Submit 与 Replay 两条路径的操作顺序/跳过逻辑不一致导致的：
+浸泡测试已发现 **6 个库级 bug（B1-B6）**，全部是 Submit 与 Replay 两条路径的操作顺序/跳过逻辑不一致导致的。另有 **B7-B16 来自代码审阅**（详见 kb-code-review-findings.md）。
 
 | # | bug | 根因 | 修复 | 发现方式 |
 |---|-----|------|------|---------|
-| B1 | `ApplyRawAdd` 重复 Add 抛异常 | Replay 路径无去重 | 已有时原地写值 | 默认配置 |
+| B1 | `ApplyRawAdd` 重复 Add 抛异常 | Replay 路径无去重 | **历史修复**：`ApplyRawAdd` 改为覆盖写入（内部分支，非公 API）；当前 `World.Add<T>` 公 API 为 strict Add（已存在抛异常） | 默认配置 |
 | B2 | `Clear` 不释放已取消 batch 实体 | Submit 路径跳过释放 | 始终释放 | 默认配置 |
 | B3 | `ApplyHierarchyToWorld` 排序不同 | 字典 vs Entity.Id 排序 | 统一排序 | 默认配置 |
-| B4 | `ApplyTypedAdd` 重复 Add 抛异常（Submit） | Clone+Add 路径 | 已有时原地写值 | 默认配置 |
+| B4 | `ApplyTypedAdd` 重复 Add 抛异常（Submit） | Clone+Add 路径 | **历史修复**：`ApplyTypedAdd` 改为覆盖写入（内部分支，非公 API）；当前 `World.Add<T>` 公 API 为 strict Add（已存在抛异常） | 默认配置 |
 | B5 | Replay free-list 顺序分歧 | `RemoveFromFreeList` swap-remove 破坏 survivor 顺序 | shift-remove (Array.Copy) | **cap=100 ops/f=50** |
 | B6 | Cancelled batch free-list 顺序分歧 | record 阶段按 destroy 顺序 push，wire 按 batch 创建顺序 emit | `AlignCancelledBatchFreeListOrder` | **cap=100 ops/f=50** |
 

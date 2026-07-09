@@ -66,6 +66,6 @@ updated: 2026-07-09
 
 | 术语 | 定义 |
 |------|------|
-| **HeroComing.Perf** | 唯一的回归门禁工具。30s 固定时长吞吐量测试；门禁用 `--check-baseline`，人工刷新基线用 `--update-baseline`。Movement ≥1210 / Attack ≥767 rounds/s。 |
+| **HeroComing.Perf** | 唯一的回归门禁工具。30s 固定时长吞吐量测试；门禁用 `--check-baseline`，人工刷新基线用 `--update-baseline`。当前阈值 Movement ≥1642 / Attack ≥997 rounds/s（详见 [kb-hero-pipeline-regression.md](kb-hero-pipeline-regression.md)）。 |
 | **rounds/s** | 每秒完整游戏帧数（500 players + 500 enemies，含 query+command+submit 全链路）。 |
 | **cycles/s** | PipelineBenchmarkTests 的 per-operation cycle 计数。与 rounds/s 是不同 harness，不可跨工具比较。 |

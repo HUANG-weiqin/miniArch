@@ -10,7 +10,7 @@ updated: 2026-07-09
 ## 这个模块是干什么的
 
 - `samples/BulletLockstep.Demo/` 是 miniArch 的**端到端集成测试项目**，用真实弹幕游戏场景把库的全部公共能力走一遍
-- 9 个 slice，每个 slice 端到端可跑（1000 帧 fuzz），所有 host `CanonicalChecksum` 字节级一致才算 PASS
+- 8 个 slice（2-9），每个 slice 端到端可跑（1000 帧 fuzz），所有 host `CanonicalChecksum` 字节级一致才算 PASS
 - 这个模块**不负责**：
   - 渲染（永远不做）
   - 真实网络栈（in-process byte[] 交换）
@@ -22,7 +22,7 @@ updated: 2026-07-09
 
 | 拓扑 | slice | 库能力 |
 |---|---|---|
-| **P2P placeholder lockstep** | 1-7, 9 | `DeferredEntities=true`，每 host 独立 World + 独立 id allocator，placeholder delta 交换 |
+| **P2P placeholder lockstep** | 2-7, 9 | `DeferredEntities=true`，每 host 独立 World + 独立 id allocator，placeholder delta 交换 |
 | **Authority + Mirror** | 8 | `DeferredEntities=false`，1 个权威 host 用 `SubmitAndSnapshotAsync`，M 个 mirror replay real-id delta |
 
 ### 每帧时序（P2P 模式）
@@ -103,8 +103,10 @@ hits 按 `(bulletFiredBy, bulletSpawnFrame, playerHostId)` 排序后应用 damag
 
 ## 性能参考（4 host × 1000 帧 standard 模式）
 
+下表仅列出已测量 slice；Slice 3（hierarchy 全链路 + CommandStream record）和 Slice 9（Phase A deterministic replay + clone）暂未单独测量。
+
 | Slice | 配置 | 单帧 | GC | 备注 |
-|---|---|---|---|---|
+|---|---|---|---|---|---|
 | 2 | 仅子弹 | 0.6 ms | 12/0/0 | 基线 |
 | 4 | +玩家 archetype 迁移 | 0.9 ms | 13/0/0 | |
 | 5 | +Boss +hierarchy +homing | 0.6 ms | 13/0/0 | |

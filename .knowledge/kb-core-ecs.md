@@ -18,7 +18,7 @@ updated: 2026-07-09
 ## 架构
 
 - 核心组成（文件拆分为 partial 类）：
-  - **World partial 文件族（7 个）**：详见 `kb-architecture-review.md` §10
+   - **World partial 文件族（5 个）**：详见 `kb-architecture-review.md` §10
   - **Archetype partial 文件族（3 个）**：
     - `Archetype.cs`：字段声明、构造函数、metadata 属性（EntityCount/Capacity/ComponentTypes）、edge cache（add/remove destination）、component index resolution
     - `Archetype.Storage.cs`：存储操作（EnsureCapacity、AddEntity、AllocateRows、WriteEntityAt、RemoveAt、component read/write span、CopySharedComponentsFrom、CreateStorage、CopySmall）
@@ -26,11 +26,11 @@ updated: 2026-07-09
   - `ChunkView.cs`：**public** readonly struct 视图，直接包裹 Archetype（给用户 batch API 用）
   - `Signature.cs`：组件集合键（排序 `ComponentType[]` + `ComponentMask` 512-bit bitmask）
   - `ComponentMask.cs`：512-bit bitmask（8 × `ulong`），加速 signature 匹配
-  - `ComponentColumnMap.cs`：`component id → column index` 映射的共享 helper
-  - `QueryFilter.cs`：query filter 的内部执行形状
+   - `QueryFilter.cs`：query filter 的内部执行形状
   - `QueryComponentSet.cs`：排序组件集合（仅 `CreateFrom` 批量入口）
   - `QueryDescription.cs`：可跨 world 复用的 query 描述，保存 world-agnostic 的 `Type` 集合
-  - `Query.cs`：archetype 过滤和 chunk 遍历、单版本号全局快照失效；定义 `internal sealed class QueryCache`（用户面是 `MiniArch.Query` struct facade）
+   - `Query.cs`：`MiniArch.Query` 用户面 struct facade，包装 `Core.QueryCache` 提供 `GetChunks()` / `ForEachChunk` 等迭代入口
+   - `Core/QueryCache.cs`：`internal sealed class`，负责 archetype 过滤和 chunk 快照缓存、两段式失效
   - `ComponentRegistry.cs`：全局 `Type ↔ ComponentType` 双向映射（copy-on-write）；`GetFingerprint()` 算 SHA-256 指纹供跨进程握手
   - `ComponentSchema.cs`：**public** 静态门面，`Fingerprint()` 返回注册表 SHA-256 指纹——调试期版本兼容性校验工具
   - `ComponentType.cs`：`int` wrapper
@@ -39,9 +39,7 @@ updated: 2026-07-09
   - `EntityRecord.cs`：`(Archetype, RowIndex, Version)` 16 字节，合并版本与位置
   - `EntityAccessor.cs`：ref struct，一次 entity 定位后直读/直写多个组件（跳过重复的 `_records` 查找）
   - `WorldStats.cs`：`WorldStats`（全局诊断快照）+ `ArchetypeStats`（单 archetype 快照），纯按需推算、零新增状态
-  - `EntityBatchRange.cs`：批量创建/克隆的连续范围记录
-  - `ManagedReferenceCheck.cs`：托管引用检测
-  - `SpanHelper.cs`：排序+去重、hash 合并等 span 工具
+   - `ManagedReferenceCheck.cs`：托管引用检测
   - `HierarchyTable.cs`：`World` 持有的 runtime side-table parent-child 关系
 
 - **已删除**：
@@ -79,7 +77,7 @@ updated: 2026-07-09
 | 注册表指纹 | `MiniArch.ComponentSchema` (public static) | `ComponentSchema.Fingerprint()` |
 
 **关键分层边界：**
-- `MiniArch.Core.QueryCache`（原 `Core.Query`，2026-06-30 重命名）是 `internal sealed class`（`Core/Query.cs:11`），用户不能接触。重命名消除了 public struct `MiniArch.Query` 与 internal class `Core.Query` 的命名空间碰撞
+- `MiniArch.Core.QueryCache`（原 `Core.Query`，2026-06-30 重命名）是 `internal sealed class`（`Core/QueryCache.cs:11`），用户不能接触。重命名消除了 public struct `MiniArch.Query` 与 internal class `Core.Query` 的命名空间碰撞
 - `MiniArch.Query.Advanced` 是 `internal`，**用户层无 advanced 入口**——batch/parallel 已在 `MiniArch.Query` 上直接提供
 - EachSpan API 已删除，统一走 `ChunkView.GetSpan<T>()`
 - typed query 家族（`Query<T>`、`Query<T1,T2>` 等）已移除

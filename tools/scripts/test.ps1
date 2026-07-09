@@ -5,7 +5,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $project = Join-Path $repoRoot "tests\MiniArch.Tests\MiniArch.Tests.csproj"
 
 $args = @(

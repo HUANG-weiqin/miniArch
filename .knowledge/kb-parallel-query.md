@@ -208,10 +208,10 @@ cs.Submit();
 ## 入口
 
 - **API 实现**：`src/MiniArch/Query.cs` 的 `ForEachChunk` / `ForEachChunkParallel` / `ChunkAction`
-- **底层 chunk 数组访问**：`src/MiniArch/Core/Query.cs:GetChunkViewArray()`（新增，给并行入口用）
-- **chunk 视图来源**：`src/MiniArch/Core/Query.cs:GetChunkViewSpan()` 和 `EnsureRefreshed()`
+- **底层 chunk 数组访问**：`src/MiniArch/Core/QueryCache.cs:GetChunkViewArray()`（新增，给并行入口用）
+- **chunk 视图来源**：`src/MiniArch/Core/QueryCache.cs:GetChunkViewSpan()` 和 `EnsureRefreshed()`
 - **不相交内存保证依据**：`src/MiniArch/Core/ChunkView.cs:GetSpan<T>()` + `kb-chunk-storage.md`
-- **正确性/竞态测试**：`tests/MiniArch.Tests/Core/ParallelQueryTests.cs`（14 个测试）
+- **正确性/竞态测试**：`tests/MiniArch.Tests/Core/ParallelQueryTests.cs`（18 个测试）
 - **vs Arch 对比 benchmark**：`tests/MiniArch.Benchmarks/ParallelQueryBenchmarks.cs`
 
 ## 坑点

@@ -21,7 +21,8 @@ updated: 2026-07-09
 - 核心组成：
   - `tools/perf/GameTickSim.Perf/ScenarioBenchmark.cs`：`RunAll` 注册孤立场景，并按 MiniArch、DefaultEcs、Arch 三方同构执行。
   - `tests/SharedInfrastructure/MiniArch.SharedInfrastructure/GameTickComponents.cs`：三方 benchmark 共享组件定义，避免输入结构不一致。
-  - `MeasureTimed`：固定 2 秒 warmup，然后按场景自己的 `durationSeconds` 测量 ops/s、ms/op、heap delta 和 GC。
+  - `MeasureTimed`：`RunAll` 模式下固定 2 秒 warmup，然后按场景自己的 `durationSeconds` 测量 ops/s、ms/op、heap delta 和 GC。
+  - `Program.cs --scenarios` 直接入口使用固定 20 tick warmup（`GameTickScenario.cs:7`），不经过 `MeasureTimed` 的秒级 warmup。
 - 数据流 / 控制流：
   - `Program.cs --scenarios <name>` 进入 `ScenarioBenchmark.RunAll`。
   - 每个场景内部创建三套 world，用同一随机种子生成同构实体流。
@@ -29,12 +30,9 @@ updated: 2026-07-09
 
 ## 决策
 
-- BulletHell 系列保留逐级载荷，而不是覆盖旧场景：
+- BulletHell 系列保留逐级载荷：
   - `K-BulletHell` 测高频创建、移动、碰撞扫描和销毁。
   - `L-BulletHellBuffs` 在 K 的基础上测 buff 结构性 Add/Remove 和 archetype fragmentation。
-  - `M-BulletHellWarfare` 增加 3 boss、homing、minion AI、多目标碰撞、4 状态独立 timer 和更高 create/destroy 压力。
-- 多状态不要复用单个 `StatusTimer`。同一实体可能同时有 Burning/Poisoned/Frozen/Shocked，所以 M 场景使用 `BurningTimer`、`PoisonedTimer`、`FrozenTimer`、`ShockedTimer` 分别移除对应 tag。
-- Player bullet 在 M 场景不加 `Damage` 组件，而用固定 `playerBulletDamage`。这样 `With<Position>().With<Damage>()` 仍只代表 enemy bullet，避免 enemy/player projectile query 互相污染。
 - 三方实现优先保持输入结构一致；允许 API 形态不同，但随机调用顺序、创建数量和组件组合应尽量对齐。
 
 ## 认知模型
@@ -55,7 +53,7 @@ updated: 2026-07-09
   - `tests/SharedInfrastructure/MiniArch.SharedInfrastructure/GameTickComponents.cs`：新增场景组件必须先在共享组件项目里定义。
   - `tools/perf/GameTickSim.Perf/Program.cs`：`--scenarios` 单场景入口。
 - 修 bug，先看：
-  - `RunBulletHell`、`RunBulletHellBuffs`、`RunBulletHellWarfare`：BulletHell 系列应先确认 query 选择是否互相污染。
+  - `RunBulletHell`、`RunBulletHellBuffs`：BulletHell 系列应先确认 query 选择是否互相污染。
   - `MeasureTimed`：确认测量时长、warmup 和 GC 口径是否符合当前结论。
 
 ## 坑点

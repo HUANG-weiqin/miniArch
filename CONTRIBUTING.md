@@ -24,7 +24,7 @@ Any change to `src/MiniArch/` requires a performance regression check:
 dotnet run -c Release --project tools/perf/HeroComing.Perf --check-baseline
 ```
 
-Check that throughput is above thresholds (Movement ≥1210 rounds/s, Attack ≥767 rounds/s) and memory is stable. Thresholds track 80% of the baseline in `.knowledge/kb-hero-pipeline-regression.md`.
+Check that throughput is above thresholds (Movement ≥1642 rounds/s, Attack ≥997 rounds/s) and memory is stable. Thresholds track 80% of the baseline in `.knowledge/kb-hero-pipeline-regression.md`.
 Normal gate runs do not update the baseline; pass `--update-baseline` only when intentionally refreshing the recorded baseline.
 
 ## Project Structure

@@ -760,6 +760,6 @@ struct: MiniArch.WorldStats
         }
 
         // Otherwise use the embedded baseline.
-        return EmbeddedBaseline;
+        return EmbeddedBaseline.ReplaceLineEndings("\n");
     }
 }

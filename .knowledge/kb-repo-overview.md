@@ -58,7 +58,7 @@ dotnet run -c Release --project tools/perf/HeroComing.Perf --check-baseline
 ## 入口
 
 - 第一次读：`README.md` → `.knowledge/INDEX.md` → `.knowledge/_template.md`
-- 修协作入口：`tools/scripts/verify.ps1`
+- 协作验证入口：`tools/scripts/verify.ps1`
 
 ## 坑点
 

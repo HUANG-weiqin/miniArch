@@ -12,8 +12,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
-$project = Join-Path $repoRoot "benchmarks\MiniArch.Benchmarks\MiniArch.Benchmarks.csproj"
+$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
+$project = Join-Path $repoRoot "tests\MiniArch.Benchmarks\MiniArch.Benchmarks.csproj"
 
 if ($Mode -eq "command-buffer") {
     $args = @(

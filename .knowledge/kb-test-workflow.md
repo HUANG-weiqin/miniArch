@@ -16,41 +16,70 @@ updated: 2026-07-09
 
 ## 测试组织
 
-| 测试文件 | 覆盖范围 |
+按目录分组，每组简要描述覆盖范围。具体文件列表会随开发变化，本表只维护分组级别描述，详细文件以 `tests/MiniArch.Tests/` 实际目录为准。
+
+| 分组 | 覆盖范围 |
 |---|---|
-| `Core/WorldLifecycleTests.cs` | 实体生命周期、version、free-list、EnsureCapacity、CreateMany、带组件 Create<T...>、GetSingleton<T>() |
-| `Core/WorldStructuralChangeTests.cs` | Add/Set/Remove/Destroy 的 structural semantics |
-| `Core/WorldStatsTests.cs` | WorldStats / ArchetypeStats 诊断快照 |
-| `Core/EntityTests.cs` | Entity 句柄契约 |
-| `Core/ChunkTests.cs` | 存储密度、并发只读、引用类型列清尾槽位 |
-| `Core/ChunkColumnIndexTests.cs` | Column index 查找正确性 |
-| `Core/ArchetypeTests.cs` | chunk 复用、non-full chunk tracking、chunked 模式 |
-| `Core/CommandStreamTests.cs` | Submit/Snapshot、cross-world replay、concurrent recording、Clone、struct 缩小后的正确性、SwapOutState 字段分类契约 |
-| `Core/CommandBufferParityTests.cs` | MiniArch/Arch 共享结构命令 parity（文件名沿用历史，实际比对的是 CommandStream）|
-| `Core/CommandBufferGamePerfTests.cs` | 真实游戏循环稳态 perf（CommandStream）|
-| `Core/QueryTests.cs` | 缓存与并发读取、冷热路径 |
-| `Core/QueryFilterTests.cs` | 链式 filter 和 builder 契约 |
-| `Core/QueryComponentSetTests.cs` | ComponentSet 创建/排序契约 |
-| `Core/ParallelQueryTests.cs` | ForEachChunk / ForEachChunkParallel 安全性与加速比 |
-| `Core/EntityAccessorTests.cs` | EntityAccessor ref struct 契约 |
-| `Core/IntegrationTests.cs` | 最完整的端到端例子 |
-| `Core/FrameDeltaDeterminismTests.cs` | 跨 world replay 决定性、Submit vs Replay 收敛、序列化 round-trip 字节级一致性 |
+| **Core/** | |
+| `WorldLifecycleTests` | 实体生命周期、version、free-list、EnsureCapacity、CreateMany、带组件 Create\<T...\>、GetSingleton\<T\>() |
+| `WorldStructuralChangeTests` | Add/Set/Remove/Destroy 的 structural semantics |
+| `WorldStatsTests` | WorldStats / ArchetypeStats 诊断快照 |
+| `EntityTests` | Entity 句柄契约 |
+| `EntitySlotTests` | EntitySlot 分配/回收契约 |
+| `ChunkTests` | 存储密度、并发只读、引用类型列清尾槽位 |
+| `ChunkColumnIndexTests` | Column index 查找正确性 |
+| `ArchetypeTests` | chunk 复用、non-full chunk tracking、chunked 模式 |
+| `ComponentSchemaTests` | ComponentSchema 构造/比较 |
+| `ComponentRegistryTests` | Registry 注册/查找 |
+| `SignatureTests` | Signature 构造/比较/Contains |
+| `QueryTests` | 缓存与并发读取、冷热路径 |
+| `QueryFilterTests` | 链式 filter 和 builder 契约 |
+| `QueryComponentSetTests` | ComponentSet 创建/排序契约 |
+| `ParallelQueryTests` | ForEachChunk / ForEachChunkParallel 安全性与加速比 |
+| `EntityAccessorTests` | EntityAccessor ref struct 契约 |
+| `CommandStreamTests` | Submit/Snapshot、cross-world replay、concurrent recording、Clone、struct 缩小后的正确性、SwapOutState 字段分类契约 |
+| `CommandBufferParityTests` | MiniArch/Arch 共享结构命令 parity（文件名沿用历史，实际比对的是 CommandStream） |
+| `CommandBufferGamePerfTests` | 真实游戏循环稳态 perf（CommandStream） |
+| `FrameDeltaTests` | FrameDelta 创建、序列化、等号/哈希 |
+| `FrameDeltaDeterminismTests` | 跨 world replay 决定性（相同 delta → 相同最终状态）；Submit 与 Replay 收敛 |
+| `FrameDeltaAttackSurfaceTests` | 非法/边界 delta 的容错与防御 |
+| `SubmitReplayParityTests` | Submit → Replay 字节级 parity |
+| `SubmitReplayRestoreParityTests` | 三路收敛（9 种模式）字节级 checksum 一致 |
+| `ChangeTrackingInfrastructureTests` | ChangeTracking 内部基础设施契约 |
+| `ChangeTrackingReplayTests` | 变化追踪 replay 的正确性 |
+| `ChildrenEnumerableTests` | ChildrenEnumerable 枚举契约 |
+| `EntityCloneTests` | Clone 语义 |
+| `ThroughputRunnerTests` | 参数解析和汇总契约 |
+| `QueryProfilingRunnerTests` | Profiling runner 构造契约 |
+| `ComplexQueryBenchmarkScenarioTests` | Benchmark world shape 和命中比例 |
+| `IntegrationTests` | 最完整的端到端例子 |
+| `TrickyEdgeCaseTests` | 边界/边缘情况；DEBUG 安全检查 |
+| `RobustnessTests` | 异常路径和错误输入的健壮性 |
+| `IntMathTests` | 整数平方根 `IntMath.Isqrt` 边界覆盖 |
+| **Persistence/** | |
+| `WorldSnapshotTests` | Round-trip、free slot version、unsupported component、Tier 1 in-memory rollback |
+| `WorldCloneTests` | 内存直拷克隆 |
+| `WorldDiffTests` | World diff 生成/应用契约 |
+| `NetworkSyncTests` | 网络同步场景的 delta 交换 |
+| `ChangeTrackingSnapshotTests` | 变化追踪 + 快照的组合 |
+| **PropertyBased/** | |
+| `SerializationRoundtripPropertyTests` | FsCheck 属性测试：Save/Load roundtrip canonical checksum |
+| `ReplayConvergencePropertyTests` | FsCheck：随机操作序列 replay 收敛 |
+| `KnownLimitationTests` | FsCheck：已知限制的文档化行为 |
+| **UserApi/** | |
+| `UserQueryTests` | 普通 API 契约、OrderByEntityId/OrderByComponent |
+| `WatchApiTests` | Watch/ChangeWatch/TransitionWatch 发布验证 |
+| `WatchProjectedTests` | ProjectedChangeWatch 行为契约 |
+| `ChangeQueryTests` | ChangeQuery 构造/过滤/迭代 |
+| `ChangeQueryFilterTests` | ChangeQuery 链式 filter 契约 |
+| **Diagnostics/** | |
+| `WorldValidatorTests` | World 一致性校验 |
+| `WorldDigestTests` | World digest 计算/比较 |
+| `EntityDumpTests` | Entity 内容 dump |
+| **根目录** | |
+| `PublicApiSentinelTests` | 公共 API 冻结哨兵 |
+| `CrossFeatureParityTests` | M3 交叉特性矩阵 |
 | ~~`Core/DebugMetricsTests.cs`~~ | **已删除** — DebugMetrics 子系统已移除 |
-| `Core/ThroughputRunnerTests.cs` | 参数解析和汇总契约 |
-| `Core/QueryProfilingRunnerTests.cs` | Profiling runner 构造契约 |
-| `Core/ComplexQueryBenchmarkScenarioTests.cs` | Benchmark world shape 和命中比例 |
-| `Core/SignatureTests.cs` | Signature 构造/比较/Contains |
-| `Core/ComponentRegistryTests.cs` | Registry 注册/查找 |
-| `Core/EntityCloneTests.cs` | Clone 语义 |
-| `Core/TrickyEdgeCaseTests.cs` | 边界/边缘情况；DEBUG 安全检查（Set/Add/Destroy 越界 + Get/GetRef 活性） |
-| `Core/IntMathTests.cs` | 整数平方根 `IntMath.Isqrt` 边界覆盖（0/1/2/3/4/15/16/int.MaxValue） |
-| `PropertyBased/SerializationRoundtripPropertyTests.cs` | FsCheck 属性测试：Save/Load roundtrip 保持 canonical checksum（200 次随机 iteration） |
-| `Persistence/WorldSnapshotTests.cs` | Round-trip、free slot version、unsupported component、Tier 1 in-memory rollback（含 chunked archetype 跨 segment 回滚 + prediction 后 segment 增长回滚） |
-| `Persistence/WorldCloneTests.cs` | 内存直拷克隆 |
-| `UserApi/UserQueryTests.cs` | 普通 API 契约、OrderByEntityId/OrderByComponent |
-| `PublicApiSentinelTests.cs` | 公共 API 冻结哨兵：反射枚举 MiniArch 程序集 public surface，与签入快照对比，意外 API 变更导致测试失败 |
-| `CrossFeatureParityTests.cs` | M3 交叉特性矩阵：CommandStream+Hierarchy、+DeferredEntities、+Watch、Replay+Snapshot、Snapshot+Hierarchy、Watch+RestoreState、三路 Submit→Snapshot→RestoreState→Replay |
-| `Core/SubmitReplayRestoreParityTests.cs` | M4 Submit/Replay/Restore 三路收敛——9 种模式（Create+Add、Set、Remove+Add 同组件、Add+Remove 同组件、Hierarchy+cascade destroy、create/cancel churn、Clone+mutate、Add+Set+Remove 同组件、高密度混合 burst）字节级 checksum 一致 |
 
 ## PublicApiSentinel
 

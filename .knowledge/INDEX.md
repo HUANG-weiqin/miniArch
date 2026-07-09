@@ -1,3 +1,10 @@
+---
+title: Knowledge Index
+module: KnowledgeIndex
+description: .knowledge 知识库导航、模块地图与必读入口
+updated: 2026-07-09
+---
+
 # Knowledge Index
 
 `.knowledge/` 是当前默认的模块知识库。这里按"先读什么、再读什么"的方式组织。
@@ -13,7 +20,7 @@
 | MiniArch.Core（ECS 运行时） | `kb-core-ecs.md`、`kb-architecture-review.md`、`kb-chunk-storage.md`、`kb-cache-optimization.md` |
 | MiniArch.Core CommandStream | `kb-command-stream.md`、`kb-deferred-create-design.md` |
 | MiniArch.Core Query | `kb-query-invalidation.md`、`kb-parallel-query.md` |
-| MiniArch.Core Change Tracking | `kb-change-tracking.md`（World.Watch pull-event 模型：ChangeWatch/TransitionWatch Snapshot+Diff；为什么不是 push event） |
+| MiniArch.Core ChangeTracking | `kb-change-tracking.md`（World.Watch pull-event 模型：ChangeWatch/TransitionWatch Snapshot+Diff；为什么不是 push event） |
 | MiniArch.Core Snapshot | `kb-snapshot-persistence.md` |
 | MiniArch.Core Hierarchy | `kb-hierarchy-runtime.md` |
 | MiniArch.Diagnostics（诊断工具） | `kb-ecs-diagnostics.md`（WorldDiff、WorldValidator、EntityDump、WorldDigest） |
@@ -22,13 +29,13 @@
 | MiniArch.Benchmarks（对比数据） | `kb-ecs-comparison.md` |
 | HeroPipeline.Tests | 合并到 `kb-hero-pipeline-regression.md` "PipelineBenchmarkTests" 段 |
 | HeroComing.Perf（回归门禁） | `kb-hero-pipeline-regression.md` |
-| **浸没测试（必读）** | **`kb-soak-test.md`**（**🚨 这个测试存在！所有 miniArch 改动后应运行** — 长周期随机操作正确性验证器，已发现 6 个 Submit/Replay 不一致 bug） |
+| **浸没测试（必读）** | **`kb-soak-test.md`**（**🚨 这个测试存在！所有 miniArch 改动后应运行** — 长周期随机操作正确性验证器，已发现 6 个 Submit/Replay 不一致 bug（B1-B6），另有 B7-B16 来自代码审阅） |
 | **多 host 同步浸没测试** | **`kb-lockstep-soak.md`**（🚨 N host placeholder lockstep 收敛证明 — 补齐单 host soak 无法覆盖的 DeferredEntities=true 多 host 交错收敛性） |
 | **安全证明报告** | **`kb-safety-proof.md`**（2026-07-06 正式库安全证明——224 seed × 5M 帧全 PASS，15 条代码路径审计零分歧） |
 | GameTickSim.Perf（场景基准） | `kb-gameticksim-scenarios.md` |
 | CommandStreamGame.Perf（CommandStream 真实游戏稳态压测） | `kb-commandstream-game-perf.md` |
 | WatchApi.Perf（Watch API 专项吞吐/分配） | `kb-change-tracking.md`、`kb-perf-harnesses.md` |
-| samples/BulletLockstep.Demo（多 host 弹幕游戏集成测试） | `kb-bullet-lockstep-demo.md`（9 个 slice 端到端压测库全部公共能力：placeholder lockstep / archetype 迁移 / hierarchy / chunked / 持久化 / 回滚） |
+| samples/BulletLockstep.Demo（多 host 弹幕游戏集成测试） | `kb-bullet-lockstep-demo.md`（8 个 slice（2-9）端到端压测库全部公共能力：placeholder lockstep / archetype 迁移 / hierarchy / chunked / 持久化 / 回滚） |
 
 ## 快速入口
 

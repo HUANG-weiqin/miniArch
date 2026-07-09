@@ -271,9 +271,9 @@ Apply advisor 轮次审阅发现，补充 3 项：
 
 外部 review 出的三项高优改动全部落地（A1 + E1/E2 + B3）：
 
-- **A1：`MiniArch.Core.Query` → `MiniArch.Core.QueryCache`**（internal 重命名，免门禁）。消除 public struct `MiniArch.Query` 与 internal class `Core.Query` 的命名空间碰撞。涉及 `Core/Query.cs` 类定义、`Core/QueryIterators.cs`、`Query.cs` facade、`World.QueryCache.cs`、`World.cs` 字段类型、19 个 test/benchmark 文件的 `using MiniQuery = ...` 别名。
+- **A1：`MiniArch.Core.Query` → `MiniArch.Core.QueryCache`**（internal 重命名，免门禁）。消除 public struct `MiniArch.Query` 与 internal class `Core.Query` 的命名空间碰撞。涉及当时的 `Core/Query.cs` 类定义（当前为 `Core/QueryCache.cs`）、`Core/QueryIterators.cs`、`Query.cs` facade、`World.QueryCache.cs`、`World.cs` 字段类型、19 个 test/benchmark 文件的 `using MiniQuery = ...` 别名。
 - **E1+E2：`WorldStateSnapshot` 生命周期 + rollback 池**。原 `_stateSnapshotSpare` 单 slot 改为 `Stack<WorldStateSnapshot>` 池；新增 `IsRecycled` 公共属性；`RestoreState` 对已 recycled 的 snapshot 抛 `InvalidOperationException`（修复原静默状态污染 bug）；支持 GGPO 多帧深度回滚窗口稳态零 GC。新增 4 个测试覆盖：recycled 标志、double-restore throw、多帧乱序 restore、稳态池复用。
-- **B3：`IChunkForEach` 接口**（`src/MiniArch/Query.cs:196`）。新增 `Query.ForEachChunk<TForEach>(ref TForEach)` 和 `ForEachChunkParallel<TForEach>(TForEach)`，零分配 + JIT 特化去虚化。保留原 delegate API。同步重构：抽出 `BuildEntityRangePartitions` helper 让 delegate/IChunkForEach 两套并行入口共用 partitioning。
+- **B3：`IChunkForEach` 接口**（`src/MiniArch/Query.cs`，当前接口声明在 `IChunkForEach` 段）。新增 `Query.ForEachChunk<TForEach>(ref TForEach)` 和 `ForEachChunkParallel<TForEach>(TForEach)`，零分配 + JIT 特化去虚化。保留原 delegate API。同步重构：抽出 `BuildEntityRangePartitions` helper 让 delegate/IChunkForEach 两套并行入口共用 partitioning。
 - **`EntityInfo` 从公共 API 删除**：`RowIndex` 对用户无用（`Archetype` 是 internal 字段且无意义），改 `internal`。`World.TryGetEntityVersion(Entity, out int)` 作为公共替代。`TryGetLocation` 改 `internal`。涉及 `EntityInfo.cs`、`World.EntityLifecycle.cs`、`docs/README.md`、`kb-core-ecs.md`。
 - **CHANGELOG**：新增 2.2.0 条目。
 - **kb 同步**：`kb-architecture-review.md`（§4b 新增"回滚快照池"、§6 Query 系统更新、P3b 新增"已修复"段）、`kb-core-ecs.md`（用户 API 分层表加 IChunkForEach 行、命名说明改为 QueryCache）、`kb-snapshot-persistence.md`（WorldStateSnapshot 生命周期段全新）、`kb-parallel-query.md`（API 段加 IChunkForEach、决策段重写、不做的事表更新）。
@@ -282,7 +282,7 @@ Apply advisor 轮次审阅发现，补充 3 项：
 
 基于 6 个 agent 再次审计的反馈，做了以下增量修复：
 
-- **阈值对齐**：Movement 阈值 1209→1210（1512.5 × 80% = 1210.0，此前 1209 是舍入误差）。涉及 AGENTS.md、CONTRIBUTING.md、kb-hero-pipeline-regression.md、kb-glossary.md。
+- **阈值对齐（历史记录）**：当时 Movement 阈值 1209→1210（1512.5 × 80% = 1210.0，此前 1209 是舍入误差）。当前门禁阈值以后续 `kb-hero-pipeline-regression.md` 为准。
 - **`kb-hero-pipeline-regression.md` 加"如果失败"段**：门禁失败时直接给出 profiling 命令和热点路径索引。
 - **`kb-profiling-workflow.md` 脆路径修复**：硬编码 DLL 路径改为 `dotnet run --project`；加交叉链接到 `kb-cache-optimization.md` 热路径分析表和 `kb-query-invalidation.md`。
 - **`kb-architecture-review.md` O1-O5 加链接**：每条可优化点现在指向对应的 kb 页。
@@ -325,7 +325,7 @@ Apply advisor 轮次审阅发现，补充 3 项：
 
 ## 2026-06-30 文档单一事实来源收敛
 
-- **性能阈值对齐**：AGENTS.md 与 CONTRIBUTING.md 的回归阈值统一指向 `kb-hero-pipeline-regression.md` 的 80% baseline（Movement ≥1210 / Attack ≥767 rounds/s，后修正为精确值 1210）。此前 AGENTS.md 写 1407/854、CONTRIBUTING.md 写 866/200 均已过期。
+- **性能阈值对齐（历史记录）**：AGENTS.md 与 CONTRIBUTING.md 的回归阈值统一指向当时 `kb-hero-pipeline-regression.md` 的 80% baseline（Movement ≥1210 / Attack ≥767 rounds/s，后修正为精确值 1210）。当前门禁阈值以后续 `kb-hero-pipeline-regression.md` 和 `AGENTS.md` 为准；此前 AGENTS.md 写 1407/854、CONTRIBUTING.md 写 866/200 均已过期。
 - **回滚路径文档纠偏**：README/AGENTS 历史把 `World.Clone()` 推荐为回滚方案，但 2026-06-29 起真正的高频回滚路径是 `CaptureState/RestoreState`。现 README Frame-Sync 示例、Features、When-to-Use 表、`docs/comparison.md`、`docs/README.md`、`World.Clone()` XML doc 均已区分二者职责。`World.Clone()` 现定位为"分支/独立副本"。
 - **`kb-snapshot-persistence` 补 WorldStateSnapshot 段**：澄清三套状态复制机制（WorldSnapshot / WorldClone / WorldStateSnapshot）职责正交。
 

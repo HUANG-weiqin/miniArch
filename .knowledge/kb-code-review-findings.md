@@ -9,6 +9,8 @@ updated: 2026-07-09
 
 > **Contract calibration (2026-07-09)**: Current code/test contract is strict Add: `World.Add<T>` throws when the entity already has `T` (`TrickyEdgeCaseTests.Add_component_that_already_exists_throws`). Older B1/B4 notes are historical context and must not be read as the current Add-as-overwrite contract.
 
+> **Verification count policy (2026-07-09)**: Historical bug entries no longer preserve stale exact totals such as `673/695/845/872` because those counts rot on every test addition. Phrases like "当时全量测试通过" mean the original fix was full-suite green at that time; the current audit re-verified the suite as MiniArch.Tests 873/873 + HeroPipeline.Tests 5/5 PASS.
+
 # 代码审阅发现
 
 > 审阅前必读。包含已确认的设计债、已验证安全猜想、以及被排除的非 bug 猜想。
@@ -32,7 +34,7 @@ updated: 2026-07-09
 - **建议修复**: 在 materialize 前预验证所有 slot 为 reserved 状态（defense-in-depth）
 - **修复方案**: 在 `Submit()` 和 `SubmitFromFrozen()` 的 materialize 前增加 `PreValidatePendingSlots()`，扫描所有非 cancelled pending batch 的 slot 是否仍为 reserved 状态；若 slot 已不再是 reserved（`IsOccupied` 或 `Version` 不匹配），则立即抛 `InvalidOperationException`。新增 `World.IsSlotReserved(Entity)` 作为检查 helper，internal 不增加 public API。
 - **回归测试**: `BUG_submit_prevalidates_reserved_pending_slots_before_materialize`（`CommandStreamTests.cs`）
-- **验证**: `dotnet test -c Release` 845/845 pass，HeroComing.Perf: Movement 1902.1 r/s, Attack 1125.6 r/s，内存稳定
+- **验证**: 全量 Release 测试通过，HeroComing.Perf: Movement 1902.1 r/s, Attack 1125.6 r/s，内存稳定
 
 ### #2: EntityFieldResolver 静默跳过未决占位符 (R8) ✅ 已修复
 
@@ -61,7 +63,7 @@ updated: 2026-07-09
 - **真实风险**: 中。仅影响 `ComponentType.Value >= 512` 的组件（需要 513+ 个组件类型注册）。低 id 组件的热路径完全不受影响（`id < 448` 的分支不变）。调用方 `DeduplicateBatchChain` 已有正确守卫；`MaterializeFromBatchBuffer` 依赖 `TrySetBit` 的守卫。
 - **修复方案**: 在最后分支增加 `if (id < 512) return TrySetBitInLane(ref b7, id - 448); return false;`。将 `TrySetBit` 改为 `internal static` 以便直接测试。
 - **回归测试**: `TrySetBit_rejects_ids_512_and_above`、`TrySetBit_accepts_ids_448_to_511`、`TrySetBit_detects_already_set_at_boundaries`、`MaskBuilder_setting_high_id_does_not_alias_into_b7`
-- **验证**: `dotnet test -c Release` 872/872 pass，HeroComing.Perf: Movement 1870.2 r/s, Attack 1172.9 r/s，内存稳定
+- **验证**: 全量 Release 测试通过，HeroComing.Perf: Movement 1870.2 r/s, Attack 1172.9 r/s，内存稳定
 
 ---
 
@@ -102,7 +104,7 @@ updated: 2026-07-09
 | S6 | EntityFieldResolver struct layout 变化导致 offset 缓存失效 | ❌ 非 bug。`Marshal.OffsetOf` 实时查 CLR，缓存按 `ComponentType.Value` 索引，类型→ID 映射不可变 | 代码走读 `EntityFieldResolver.cs:70-103` |
 | S7 | `RestoreState` 不回退 `_archetypeSnapshot` 导致 query 看不到 capture 后创建的新 archetype | ❌ 非 bug。capture 后创建新 archetype 时当前 `_archetypeSnapshot` 已经由 `PublishArchetypeSnapshot` 追加；restore 后这些 archetype 作为空壳保留，QueryCache 看到空 chunk/entity count 不影响正确性。archetype 永不删除是 QueryCache append-only 失效机制的基础 | 代码走读 `World.cs:1205-1228` + `World.QueryCache.cs:127-140` + `QueryCache.cs:103-126` |
 | S8 | `CommandStream` 对 pending entity 的 `Create+Add/Set/Remove` 应产生中间 `Changes()` / `Transitions()` | ❌ 非 bug。pending batch 的契约就是只保留最终 materialized state；同一 pending entity 上的 Add/Set/Remove 在 Submit/Snapshot/Replay 前折叠为最终组件签名。中间操作不会作为独立 write/transition 事件暴露；只有 final state 创建时的最终 filter 匹配结果可观察 | 代码走读 `WritePendingComponent` / `MarkBatchComponentRemoved` → `DeduplicateBatchChain` / `MaterializeFromBatchBuffer` / `EmitCreateFromBatch` + 契约测试 `A6/A7/B16/B16b` |
-| S9 | **M4 变质对等扫描**：Submit/Replay/Restore 三路收敛验证——9 个模式共 9 个测试全 PASS，零分歧 | ✅ 无歧 — Submit/Replay/Restore 收敛。测试覆盖：P1 (Create+Add)、P2 (Set)、P3 (Remove+Add 同组件)、P4 (Add+Remove 同组件)、P5 (Hierarchy+cascade destroy)、P6 (create/cancel churn B5/B6 territory)、P7 (Clone+mutate)、P8 (Add+Set+Remove 同组件)、P9 (高密度混合 burst)。Restore 路径验证：所有模式 CaptureState 后 RestoreState 正确回滚到 pre-mutation 状态。3 路字节级 checksum 一致 | 运行 `SubmitReplayRestoreParityTests` 9 个测试，`dotnet test -c Release` 869+5 全 PASS |
+| S9 | **M4 变质对等扫描**：Submit/Replay/Restore 三路收敛验证——9 个模式共 9 个测试全 PASS，零分歧 | ✅ 无歧 — Submit/Replay/Restore 收敛。测试覆盖：P1 (Create+Add)、P2 (Set)、P3 (Remove+Add 同组件)、P4 (Add+Remove 同组件)、P5 (Hierarchy+cascade destroy)、P6 (create/cancel churn B5/B6 territory)、P7 (Clone+mutate)、P8 (Add+Set+Remove 同组件)、P9 (高密度混合 burst)。Restore 路径验证：所有模式 CaptureState 后 RestoreState 正确回滚到 pre-mutation 状态。3 路字节级 checksum 一致 | 运行 `SubmitReplayRestoreParityTests` 9 个测试，全量 Release 测试通过 |
 
 ---
 
@@ -126,7 +128,7 @@ updated: 2026-07-09
 - **根因**: Submit 路径 `ApplyTypedAdd` 通过 `PruneStaleComponentCommands` 去重，Replay 路径无等价去重
 - **触发场景**: Clone 继承组件后同一帧又 Add 同一组件 → delta 含重复 Add
 - **修复**: 实体已有组件时原地写值而不是抛异常（Add 语义是"确保实体带该组件"）
-- **验证**: 浸泡测试 20000 帧 PASS + 测试 `Add_component_that_already_exists_overwrites_value`
+- **验证**: 浸泡测试 20000 帧 PASS（历史，ApplyRawAdd/ApplyTypedAdd 内部覆盖行为）；当前 `World.Add<T>` 公 API 为 strict Add，测试 `TrickyEdgeCaseTests.Add_component_that_already_exists_throws` 验证已存在时抛异常
 
 ### B2: `Clear` 不释放已取消 batch 的预留实体
 
@@ -135,7 +137,7 @@ updated: 2026-07-09
 - **根因**: `Clear(releaseReserved: false)` 跳过已取消 batch 的实体（未调用 `ReleaseReservedEntity`），但 ReplayCore 始终释放 → 两路径 FreeList 分歧
 - **触发场景**: `Create` → `Destroy`（取消 batch）后实体 slot 永久残留为"reserved"状态
 - **修复**: 取消的 batch 无论 `releaseReserved` 标志都释放
-- **验证**: 浸泡测试 PASS + 全部 673 现存测试通过
+- **验证**: 浸泡测试 PASS + 当时全量测试通过
 
 ### B3: `ApplyHierarchyToWorld` 与 `EmitHierarchyToDelta` 层级操作顺序不同
 
@@ -152,7 +154,7 @@ updated: 2026-07-09
 - **根因**: Submit 流程中 MaterializeCreates（含 Clone 的组件）先运行，然后 ComponentStore 的 Add 操作运行 → 组件已存在
 - **触发场景**: 浸泡测试中 OpClone 后紧接 OpAdd 同一组件
 - **修复**: 与 B1 相同：实体已有组件时原地写值而不是抛异常
-- **验证**: 浸泡测试 20000 帧 PASS + 测试 `Add_component_that_already_exists_overwrites_value`
+- **验证**: 浸泡测试 20000 帧 PASS（历史，ApplyRawAdd/ApplyTypedAdd 内部覆盖行为）；当前 `World.Add<T>` 公 API 为 strict Add，测试 `TrickyEdgeCaseTests.Add_component_that_already_exists_throws` 验证已存在时抛异常
 
 ### B5: `EnsureReplayReservation` swap-remove 导致 FreeList 顺序分歧（Submit vs Replay）
 
@@ -165,7 +167,7 @@ updated: 2026-07-09
 - **详细机制**：见 `tests/MiniArch.Tests/Core/FrameDeltaDeterminismTests.cs` 中 `Submit_and_Replay_free_list_diverges_with_multi_cancel` 测试的 XML doc。核心序列：Create 3 entities（消耗 free-list 顶部 3 个 slot），Cancel 其中 2 个（Push back 到栈顶），然后 Submit vs Replay 在帧结束后 survivor 条目的数组顺序不同。
 - **触发条件**：需要单帧内 2+ 个 pending entity 被取消，且 free-list 上至少 2 个幸存条目（即 frame 结束后 free-list 非空）。浸泡测试高 ops/frame + 小 entity cap 时容易命中：Create 耗尽 free-list、Cancel 回填、survivor 因 swap-remove 顺序错乱。
 - **修复建议**：`RemoveFromFreeList` 不应使用 swap-remove。改为从末尾线性扫描找到匹配项后，直接递减 `_freeIdCount`（用末尾元素覆盖匹配项，而不是反过来）。但调用方 `EnsureReplayReservation` 需要保证匹配的实体确实在 free-list 上且其位置不影响正确性。或者让 `EnsureReplayReservation` 走统一的 `PopFreeIdUnsafe()` + 版本校验，但需处理 Reserve 要求指定实体而非任意实体的问题。
-- **回归测试**：`Submit_and_Replay_free_list_diverges_with_multi_cancel`（目前 FAIL，修复后应通过）
+- **回归测试**：`Submit_and_Replay_free_list_diverges_with_multi_cancel`（已修复，当前 PASS）
 - **确认**: 推翻"cascade destroy ordering"假说；根因在 free-list 的 swap-remove vs LIFO pop，而非层级级联顺序。
 
 ### B6: `CancelPendingEntity` 录制期 push 顺序与 Replay 期 Release 顺序不同（修复后仍存在二次分歧）
@@ -181,7 +183,7 @@ updated: 2026-07-09
   - **副作用**: batch 顺序对齐改变了后续帧的 entity ID 分配（free-list pop 顺序不同），间接触发了已存在的级联销毁顺序问题和层级循环检测问题。为此额外修复：
     - `ApplyDestroys` 和 `SubmitFromFrozen` 在销毁前检查 `IsAlive`（与 Replay 路径一致），防止已级联销毁的 entity 再次销毁报错。
     - 浸泡测试 `OpAddChild` 的循环检测增强为模拟 `ApplyHierarchy` 的排序顺序检测循环，防止违反库层级不变式的操作被记录。
-- **验证**: 浸泡测试 200000 帧 PASS + `HeroComing.Perf` 性能门禁通过 + 全部 695 个单元测试通过。
+- **验证**: 浸泡测试 200000 帧 PASS + `HeroComing.Perf` 性能门禁通过 + 当时全量单元测试通过。
 
 ### B7: `ChangeQuery.Previous()` 快照捕获点对缺失 captured type 崩溃
 
@@ -199,8 +201,8 @@ updated: 2026-07-09
 - **症状**: 旧 query 在 `RestoreState()` 后继续使用时，`ValueChanges<T>()` 先 drain 出 restore 前的脏数据；后续新的 `Set<T>` 又完全不再进入该 tracker
 - **根因**: `RestoreState()` 清空了 `world._typedTrackers`，但 `ChangeQuery.EnsureUsable()` 的 self-heal 只重注册 transition query，没有清空并重建 `_typedTracker`
 - **修复**: self-heal 时显式 `DeactivateTypedTracker()`，随后按当前 query 配置重新激活 typed tracker
-- **回归测试**: `BUG_ValueChanges_query_survives_RestoreState_without_stale_or_lost_tracking`
-- **验证**: 回归测试通过
+- **回归测试**: `X_Watch_RestoreState_ValueTrackingSurvivesRestore` (CrossFeatureParityTests.cs:567)、`X_Watch_RestoreState_TransitionTrackingSurvivesRestore` (608)、`RestoreState_preserves_watch_for_post_restore_mutations` (ChangeTrackingSnapshotTests.cs:60)
+- **验证**: 回归测试通过（Watch API 等价覆盖）
 
 ### B9: typed fast path 激活后继续加 filter / 第二个 capture，`ValueChanges<T>()` 仍返回旧 tracker 数据
 
@@ -208,8 +210,8 @@ updated: 2026-07-09
 - **症状**: `Track().Capture<Position>().Previous()` 先激活 typed tracker 后，再 `.With<Position>()` 或 `.Capture<Velocity>()`，query 已不满足单 capture + 无 filter 契约，但 `ValueChanges<Position>()` 仍继续返回数据
 - **根因**: typed tracker 只有“激活”逻辑，没有“失效撤销”逻辑；query 配置变化后旧 tracker 仍挂在 world 上继续接收 `Set<T>`
 - **修复**: 引入 `DeactivateTypedTracker()` / `RefreshTypedTrackerActivation()`；filter 和第二 capture 会撤销 typed fast path
-- **回归测试**: `BUG_ValueChanges_deactivates_when_filter_is_added_after_activation`、`BUG_ValueChanges_deactivates_when_second_capture_is_added_after_activation`
-- **验证**: 两个回归测试通过
+- **回归测试**: 无直接等价测试——旧 typed fast path 方案（`ValueChanges<T>` / `Track().Capture<T>().Previous()`）已由 Watch API 取代。Watch API 中 `ChangeWatch` / `TransitionWatch` 的激活状态由 `Watch()` 时刻的快照决定，不存在"激活后改配置"的场景。此风险已被架构设计消除。
+- **验证**: 不再适用（旧 API 已删除）
 
 ### B10: query 创建后 world 继续扩容，typed tracker 的 entity 索引数组不跟随增长
 
@@ -217,7 +219,7 @@ updated: 2026-07-09
 - **症状**: query 在 `EntityCapacity=64` 时创建，world 后续创建到第 65 个实体再 `Set<T>`，`SlotByEntityPlusOne[id]` 越界，最终在 `ValueChanges<T>()` drain 时触发 `IndexOutOfRangeException`
 - **根因**: tracker 只在激活时 `PreSize()` 一次；后续 `Set<T>` 直接用 `Unsafe.Add` 按 `entity.Id` 索引，没有按 world 增长补扩容
 - **修复**: `ApplyTypedSet` 在访问 slot 前调用 `typedTracker.EnsureEntityCapacity(id)`；该方法只增长当前写 buffer，不动可能仍被用户 span 持有的 `SpareLog`
-- **回归测试**: `BUG_ValueChanges_handles_world_growth_after_query_creation`
+- **回归测试**: `Watch_handles_world_growth_after_arming` (ChangeQueryTests.cs:274)
 - **验证**: 回归测试通过
 
 ### B11: destroyed entity 的旧 slot 未清，id 复用后被误判为同一实体的二次 Set
@@ -226,7 +228,7 @@ updated: 2026-07-09
 - **症状**: 同一 drain 周期内，实体 A `Set<T>` 后被销毁，再复用相同 id 创建实体 B 并 `Set<T>`，`ValueChanges<T>()` 只返回 1 条，且把 A 的 `Old` 与 B 的 `New` 错拼到一起
 - **根因**: `SlotByEntityPlusOne` 只按 `entity.Id` 建索引；destroy / remove 成功后没有及时把该 slot 清零，后续同 id 写入走了“重复 Set”分支
 - **修复**: destroy 时清所有 typed tracker 的该 id slot；remove 某组件时只清对应 component tracker 的 slot，避免 remove+add+set 跨组件生命周期串脏
-- **回归测试**: `BUG_ValueChanges_does_not_merge_destroyed_entity_with_reused_id`
+- **回归测试**: `Destroy_and_id_reuse_does_not_leak_stale_change` (ChangeQueryTests.cs:346)、`ChangeWatch_destroy_recreate_reports_stale_old` (WatchApiTests.cs:151)、`ChangeWatch_destroy_recreate_stale_slot_reported` (WatchApiTests.cs:199)
 - **验证**: 回归测试通过
 
 ### B12: `CommandStream.Set` 的 set-only / mixed Set 路径绕过 typed tracking
@@ -235,7 +237,7 @@ updated: 2026-07-09
 - **症状**: `world.Track().Capture<T>().Previous().ValueChanges<T>()` 能看到直接 `world.Set<T>()` 的写入，但看不到 `CommandStream.Set()` 经 `Submit()` 落地的写入；Hero pipeline 这类大量经 `CommandStream` 改值的场景中，observer 的 `changes=0`
 - **根因**: `ApplyToWorld` 的 set-only fast path 和 mixed Set 分支都直接调用 `SetComponentAtFlatNoTrack` / `SetComponentAtTypedNoTrack`，完全绕过 `World.ApplyTypedSet<T>`，因此 typed tracker 从未收到 CommandStream 的 Set 写入
 - **修复**: 仅当 `world._typedTrackers` 非空时，`CommandStream` 的 Set 路径改走 `World.ApplyTypedSet<T>`；无人 tracking 时保留原 no-track 快路径，默认 baseline 不变
-- **回归测试**: `BUG_ValueChanges_captures_CommandStream_Set_writes`
+- **回归测试**: `Watch_captures_CommandStream_Set` (ChangeQueryTests.cs:66)
 - **验证**: 回归测试通过
 
 ### B13: shared `ChangeTracker<T>` 切换后的 API / 预分配回归
@@ -252,8 +254,8 @@ updated: 2026-07-09
   - `ValueChanges<T>()` / `ChangeQuery.ClearChanges<T>()` 均要求 T 等于唯一 captured type。
   - `World.ClearChanges<T>()` 增加 `AssertNotDisposed()`。
   - `SharedTrackerRegistry.GetOrCreateTracker<T>(entityCapacity)` 创建/复用时调用 `PreSize(entityCapacity - 1)`。
-- **回归测试**: `ValueChanges_previous_before_capture_order_tracks_values`、`ValueChanges_for_uncaptured_type_returns_empty_even_when_other_tracker_exists`、`ClearChanges_for_uncaptured_type_does_not_clear_other_tracker`、`World_ClearChanges_throws_after_dispose`、`Shared_tracker_PreSize_called_on_creation`、`Shared_tracker_PreSize_called_when_reused_after_world_growth`。
-- **验证**: focused `ValueChanges|ClearChanges`、全量 Release 测试、HeroComing perf gate、HeroComing `--track-observer`、soak smoke 均通过。
+- **回归测试**: 无直接等价测试——旧 `ValueChanges<T>` / `ClearChanges<T>` / `SharedTrackerRegistry` API 已全部被 Watch API 取代。Watch API 中每个 `ChangeWatch<T>` 独立持有 tracker，类型隔离和预分配由 watch 创建逻辑天然保证。此风险已被架构设计消除。
+- **验证**: 不再适用（旧 API 已删除）
 
 ### B14: capture-only query 常驻 transition 注册 / shared registry 常驻导致 Hero 基线回退
 
@@ -267,8 +269,8 @@ updated: 2026-07-09
   - capture-only/no `Previous()`/no filter query 变为 inert cursor。
   - `SharedTrackerRegistry` 改为 lazy/null，只有 `Previous()` 创建 value tracker 时才分配；Dispose 清空并置 null。RestoreState 只清 pending changes，保留仍存活观察者的 tracker。
   - `CommandStreamCore.ComponentStore<T>.ApplyToWorld()` 在 registry 为 null 时直接走内联 no-track loop；tracked loop 留在独立 helper。
-- **回归测试**: `Capture_only_without_Previous_is_inert`；既有 `ValueChanges_nontracking_query_does_not_interfere` 覆盖 no-tracker 干扰边界。
-- **验证**: ChangeQuery / ChangeTrackingSnapshot / 全量 MiniArch.Tests 通过；HeroComing.Perf 单次样本 no-observer Movement 1941.4 / Attack 1200.6，capture-only observer Movement 1999.0 / Attack 1204.0。
+- **回归测试**: 无直接等价测试——旧 capture-only/inert query 概念及 `Track()` / `ValueChanges_nontracking_query_does_not_interfere` 均随旧 API 删除。Watch API 中 `Watch<T>()` 创建即为 active watch，无惰性 cursor 机制。此风险已被架构设计消除。
+- **验证**: 不再适用（旧 API 已删除）
 
 ### B15: `RestoreState()` 后旧 observer 需要手动读取 re-arm，否则漏掉第一批 post-restore mutation
 
@@ -280,16 +282,16 @@ updated: 2026-07-09
 - **修复**:
   - `RestoreState()` 不再清空 transition observer 列表，而是对 live query 调用 `OnWorldRestored()`：清 stale transition/cache，推进 generation，并保留注册。
   - `SharedTrackerRegistry.ClearChanges()` 只清 pending value-change logs，保留已创建 tracker；Dispose 仍用 `Clear()` 移除 tracker 并置 null。
-- **回归测试**: `BUG_RestoreState_preserves_value_query_for_mutations_after_restore`、`BUG_RestoreState_preserves_filtered_transition_query_for_mutations_after_restore`
-- **验证**: Release 全量测试通过（MiniArch.Tests 818、HeroPipeline.Tests 5）；HeroComing.Perf baseline gate 通过（Movement 1940.1 / Attack 1189.0，内存 OK）；track-observer transitions=0、changes=0；MiniArch.Soak sweep 8/8 PASS。
+- **回归测试**: `X_Watch_RestoreState_ValueTrackingSurvivesRestore` (CrossFeatureParityTests.cs:567)、`X_Watch_RestoreState_TransitionTrackingSurvivesRestore` (608)、`X_Watch_RestoreState_NoStaleTransitionsAfterRestore` (642)、`RestoreState_preserves_watch_for_post_restore_mutations` (ChangeTrackingSnapshotTests.cs:60)
+- **验证**: Release 全量测试通过；HeroComing.Perf baseline gate 通过（Movement 1940.1 / Attack 1189.0，内存 OK）；MiniArch.Soak sweep 8/8 PASS。
 
 ### B16: Replay raw Add 后同批 raw Set 漏掉 value diff baseline（历史——旧 API 已删除）
 
-- **位置**: `World.StructuralChange.cs:157-168` `ApplyRawAdd` / `ChangeTracker.cs` boundary diff baseline 捕获（旧文件，2026-07-09 随 Watch 重构删除）
+- **位置**: `World.StructuralChange.cs` `ApplyRawAdd` / `ChangeTracker.cs` boundary diff baseline 捕获（旧文件，2026-07-09 随 Watch 重构删除，具体行号已不可用）
 - **症状**: 已存在实体在 delta replay 中先 `Add<T>(valueA)` 后 `Set<T>(valueB)`；旧 `TrackValueChanges<T>()` 已启用时，`.Changes` 返回空，而 Submit typed path 会返回 `{ Old=valueA, New=valueB }`。
 - **根因**: old boundary diff 改造后 typed Add 会 capture 初始 baseline，但 raw Replay Add 只迁移并写入 bytes；后续 raw Set 直接写当前值。读端扫描发现该 entity 无 baseline，于是把最终值 `valueB` 当作新 baseline，漏掉 Add 初值到 Set 终值的 diff。**此 API 已被 Watch pull-event 模型取代，不影响当前行为**。
 - **修复**: `IChangeTrackerControl` 增加 raw baseline capture；`ApplyRawAdd` 成功后按 component type 对已存在 tracker 写入 Add 初值 baseline。raw Set 与 `Set<T>` 热路径不查询 tracker。
-- **回归测试**: `BUG_Replay_existing_entity_add_then_set_tracks_value_from_add_baseline`（测试文件可能已随旧 API 删除或迁移）
+- **回归测试**: `BUG_Replay_existing_entity_add_then_set_tracks_value_from_add_baseline`（测试文件已随旧 API 删除，不可用）
 - **验证**: 新增回归测试先 RED（Actual 0），修复后 GREEN。
 
 ### 修复原则

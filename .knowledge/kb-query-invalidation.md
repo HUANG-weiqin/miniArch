@@ -21,7 +21,7 @@ updated: 2026-07-09
   - **`Query._refreshLock`**：double-check locking 用于并发只读场景
   - **`Query._archetypeExpectedViews[]`**：跟踪每个匹配 archetype 的 chunk view shape（non-chunked = -1；chunked = SegmentCount），检测分段增长和 non-chunked → single-segment chunked 晋升
 
-- **两段式失效**（`src/MiniArch/Core/Query.cs:105-128` `EnsureRefreshed`）：
+- **两段式失效**（`src/MiniArch/Core/QueryCache.cs:102-126` `EnsureRefreshed`）：
   1. 快路径：`_world.ArchetypeCount == _lastArchetypeCount` → 跳过 archetype 匹配阶段
   2. 慢路径 A：archetype 数量变 → `Refresh()` → `AppendNewArchetypes()`（**只扫 `_lastArchetypeCount` 之后的新 archetype**，append 到现有快照）
   3. 慢路径 B：已有匹配 archetype 的 view shape 变（chunked 增长，或 non-chunked 晋升为 single-segment chunked）→ `RefreshViewsOnly()`（不重做 match，只重建 ChunkView）
@@ -55,7 +55,7 @@ updated: 2026-07-09
 
 ## 入口
 
-- `src/MiniArch/Core/Query.cs`：`EnsureRefreshed()`、`Refresh()`、`AppendNewArchetypes()`、`RefreshViewsOnly()`
+- `src/MiniArch/Core/QueryCache.cs`：`EnsureRefreshed()`、`Refresh()`、`AppendNewArchetypes()`、`RefreshViewsOnly()`
 - `src/MiniArch/Core/World.QueryCache.cs`：Query 缓存管理、archetype snapshot 发布
 - `src/MiniArch/Core/World.cs`：`ArchetypeCount` 属性
 

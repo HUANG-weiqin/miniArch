@@ -71,8 +71,8 @@ world.RestoreState(ring[k+3]); // 可继续乱序 restore
 
 ## Checksum 双模式
 
-- **`world.Checksum()`**（`World.Checksum.cs:11` → `WorldSnapshot.cs:159`）：快，依赖同构造路径（archetype 顺序、swap-remove 历史一致）。输入：所有 slot version + 非空 archetype + hierarchy。不包含 free list。用于同 delta 序列驱动的 peer 间检测分叉。
-- **`world.CanonicalChecksum()`**（`World.Checksum.cs:20` → `WorldSnapshot.cs:221`）：慢，逻辑等价的世界在不同构造路径下产同一 hash。输入：仅活实体（id+version+组件）+ hierarchy + free list。排序后的规范输出。用于不同路径（replay / snapshot-load / 手工构造）的世界间比较。
+- **`world.Checksum()`**（`World.cs:1316` → `WorldSnapshot.ComputeChecksum`, `WorldSnapshot.cs:221`）：快，依赖同构造路径（archetype 顺序、swap-remove 历史一致）。输入：所有 slot version + 非空 archetype + hierarchy。不包含 free list。用于同 delta 序列驱动的 peer 间检测分叉。
+- **`world.CanonicalChecksum()`**（`World.cs:1325` → `WorldSnapshot.ComputeCanonicalChecksum`, `WorldSnapshot.cs:300`）：慢，逻辑等价的世界在不同构造路径下产同一 hash。输入：仅活实体（id+version+组件）+ hierarchy + free list。排序后的规范输出。用于不同路径（replay / snapshot-load / 手工构造）的世界间比较。
 
 ### Padding 字节安全
 Archetype 存储使用 `GC.AllocateArray`（零初始化）分配，组件 struct padding 确定为 0，避免跨 peer 因未初始化内存产生 hash 差异。
@@ -89,7 +89,7 @@ Archetype 存储使用 `GC.AllocateArray`（零初始化）分配，组件 struc
 - 两个 checksum 不适用于含托管引用组件的 world（构造时已 fail fast）。
 
 ### 入口
-- `src/MiniArch/World.Checksum.cs`、`src/MiniArch/Core/WorldSnapshot.cs:159-271`
+- `src/MiniArch/Core/WorldSnapshot.cs:221-300`
 - `tests/MiniArch.Tests/Persistence/WorldSnapshotTests.cs`
 
 ### CRC32 尾部校验（v4 格式）
@@ -127,7 +127,7 @@ v3 格式仍可读且跳过 CRC 校验。
 - `struct` 不一定是 `unmanaged`
 - 跨版本类型名变化直接失配（当前不压缩、无校验和）
 - internal 重建 API 分布在 World 的多个 partial 文件中，修改时需确认编译范围
-- **`CaptureState` 后使用 `CommandStream.Record` 再 `RestoreState` 是安全的**：`Clear()` 会重置 `_deferredSeq = 0`（见 `CommandStream.cs:1436`），`RestoreState` 恢复 World 的 entity allocator 状态。实测验证过：capture → stream record+snapshot+replay → restore → 重复同一序列 → checksum 一致。坑点不在 `_deferredSeq`，而在以下场景：
+- **`CaptureState` 后使用 `CommandStream.Record` 再 `RestoreState` 是安全的**：`Clear()` 会重置 `_deferredSeq = 0`（见 `CommandStreamCore.cs:2074`），`RestoreState` 恢复 World 的 entity allocator 状态。实测验证过：capture → stream record+snapshot+replay → restore → 重复同一序列 → checksum 一致。坑点不在 `_deferredSeq`，而在以下场景：
   - **`RestoreState` 后如果继续录制而不 `Clear`**：`_deferredSeq` 不会自动回退（它不在 World 里）。但在正常 GGPO 流程中，`RestoreState` 后应该是重新录制修正后的输入，此时先 `Clear()` 再 `Record` 即可。
   - **`CaptureState` 前后 `CommandStream` 的 pending batch 状态**（`_frozen.PendingBatch`、`_frozen.PendingBatchCount` 等）不在 World 内，不被 capture/restore。如果 capture 前 stream 有未 snapshot 的 batch，restore 后这些 batch 会残留。**建议 capture 前先 `Snapshot()` + `Clear()` 确保 stream 干净。**
 - **推荐模式**：

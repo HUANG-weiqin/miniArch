@@ -2,7 +2,7 @@
 title: Architecture Mechanistic Review
 module: MiniArch.Core
 description: Mechanistic insight of the entire miniArch ECS library — one-line truths, subsystem breakdown, data flows, known issues, and design tensions. Links to per-subsystem kb pages for depth.
-updated: 2026-07-09 (修正: World partial 5 文件, Add strict throw, IsMaskCanonical 行号, QueryCache 路径)
+updated: 2026-07-09
 ---
 # Architecture Mechanistic Review
 
@@ -33,7 +33,7 @@ Archetype (单块 byte[] 或多 Segment，按列排布所有组件数据)
   ↓
 QueryCache (archetype/chunk 快照 + 两段式失效: archetypeCount + per-archetype segment count)
   ↓
-World (拆分为 5 个 partial 文件，编排一切)
+World (拆分为 5 个 partial 文件，三层 archetype 查找，编排一切)
   ↓
 CommandStream (typed store 录制器) → FrameDelta (packed byte[] + varint op 流) → World.Replay
 HierarchyTable (side-table, SoA 邻接表)
@@ -60,14 +60,15 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
   - `ConvertToChunked` 统一拷贝路径（原零拷贝 fast path 已删）：总是分配标准 Segment，逐段拷贝实体和列数据
 - `ChunkView`（public readonly struct）对用户屏蔽底层模式差异，`ForEachChunkParallel` 也透明
 - 代码位置：`Archetype.cs`（字段/metadata）+ `Archetype.Storage.cs`（存储操作）+ `Archetype.TestHooks.cs`（`*ForTesting` 内部方法，与生产职责分离）
+### 3. Archetype lookup（三层）
 
-### 3. Archetype lookup（两层）
 | Lookup | 触发场景 | 复杂度 |
 |---|---|---|
 | `_archetypes: Dict<Signature, Archetype>` | 创建 archetype 主路径 | O(1) 哈希 |
 | `_archetypeByMask: Dict<ComponentMask, Archetype>` | Replay 路径零分配查找（仅 cache canonical mask） | O(1) 哈希 |
+| `_archetypeByHash: Dict<int, List<Archetype>>` | 非 canonical mask 哈希旁路（组件 id ≥ 512） | O(1) + 桶内线性扫描 |
 
-`_archetypeByMask` 只 cache "canonical" mask（popcount == component count，即所有 id < 512）。高 id archetype 故意不进 mask cache，避免不同 signature 在 mask 上碰撞。`IsMaskCanonical`（`World.cs:514`）做这个不变式检查。
+`_archetypeByMask` 只 cache "canonical" mask（popcount == component count，即所有 id < 512）。高 id archetype 故意不进 mask cache，避免不同 signature 在 mask 上碰撞。`IsMaskCanonical`（`World.cs:514`）做这个不变式检查。对于非 canonical mask（含 id ≥ 512 的组件），`_archetypeByHash` 提供基于 hash 的旁路查找，避免每次分配 Signature 对象。
 
 > **历史**：曾存在第三层 `TryGetArchetype(types)` 线性扫描 fallback，用于兼容 CommandStream 早期版本未排序的 signature。CommandStream materialize 改为显式排序后该 fallback 变死代码，已于 2026-06-29 删除。
 
@@ -83,7 +84,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - `RestoreState(snap)`：校验 `snap._isRecycled == false`（已 recycled 则 `InvalidOperationException` fail-fast）；恢复后 `_isRecycled = true`、`Clear()`、Push 回池
 - 池容量自我稳定在峰值并发使用量 → GGPO 多帧窗口（N 帧预测+乱序 restore）稳态零 GC
 - 历史问题：原单 spare 设计下，连着两次 `CaptureState` 不 restore 时第二次必分配；重复 restore 同一 snapshot 静默污染 world 状态。两个问题都被池 + IsRecycled 修复
-- 代码位置：`World.cs:902-1015` + `WorldStateSnapshot.cs:34-99`
+- 代码位置：`World.cs:1179-1307` + `WorldStateSnapshot.cs:34-99`
 
 ### 5. 组件类型系统
 - `ComponentType` = `internal readonly record struct` 包 int；用户侧只见 `<T>` 泛型
@@ -101,7 +102,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - 用户层 `MiniArch.Query` 是 struct facade：`GetChunks()` 零拷贝、`ForEachChunk` / `ForEachChunkParallel`、`OrderByEntityId` + `OrderByComponent<T>` 走 `ArrayPool`
 - 两类 chunk 迭代入口：
   - `ForEachChunk(ChunkAction)` / `ForEachChunkParallel(ChunkAction)`：基于 delegate，缓存 delegate 时零分配
-  - `ForEachChunk<TForEach>(ref TForEach)` / `ForEachChunkParallel<TForEach>(TForEach)`：基于 `IChunkForEach` struct 接口（`src/MiniArch/Query.cs:196`），JIT 特化去虚化、零分配。`ref` 路径支持 stateful accumulator；by-value 路径供并行 worker 拷贝（不能用 `in` 因 Parallel.For lambda 不允许捕获 ref-like 参数）
+-   `ForEachChunk<TForEach>(ref TForEach)` / `ForEachChunkParallel<TForEach>(TForEach)`：基于 `IChunkForEach` struct 接口（`Query.cs:288`），JIT 特化去虚化、零分配。`ref` 路径支持 stateful accumulator；by-value 路径供并行 worker 拷贝（不能用 `in` 因 Parallel.For lambda 不允许捕获 ref-like 参数）
 - `ForEachChunkParallel` 在 chunks < threads 时自动按 entity 子区间拆分，`[ThreadStatic] t_partitions` 避免每次分配
 - 代码位置：`Core/QueryCache.cs`（`QueryCache` internal class）+ `Query.cs`（`MiniArch.Query` facade + `IChunkForEach`）+ `World.QueryCache.cs`
 
@@ -220,7 +221,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - 第一次理解整体：本文档 → 各 `kb-*.md`（按 `INDEX.md` 路标）
 - 改存储：`kb-chunk-storage.md` + `Archetype.cs` / `Archetype.Storage.cs`
 - 改录制/同步：`kb-command-stream.md` + `CommandStream.cs` / `FrameDelta.cs`
-- 改 query：`kb-query-invalidation.md` + `kb-parallel-query.md` + `Core/Query.cs`
+- 改 query：`kb-query-invalidation.md` + `kb-parallel-query.md` + `Core/QueryCache.cs`
 - 改 hierarchy：`kb-hierarchy-runtime.md` + `HierarchyTable.cs`
 - 改持久化：`kb-snapshot-persistence.md` + `WorldSnapshot.cs`
 

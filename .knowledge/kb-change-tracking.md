@@ -1,7 +1,7 @@
 ---
 title: Change Tracking（变更追踪）
-module: MiniArch.Core
-description: World.Watch pull-event 模型：ChangeWatch/TransitionWatch Snapshot+Diff 两阶段扫描；struct handler 回调；零 per-write 成本；TransitionWatch 使用 dense epoch marks（已选定）；旧 TrackValueChanges/TransitionLog/DenseValueDiff/IValueProjector/IValueChangeSink 已删除
+module: MiniArch.Core ChangeTracking
+description: World.Watch pull-event 模型：ChangeWatch/TransitionWatch Snapshot+Diff 两阶段扫描；struct handler 回调；零 per-write 成本；TransitionWatch 使用 dense epoch marks。
 updated: 2026-07-09
 ---
 

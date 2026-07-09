@@ -71,3 +71,5 @@ dotnet run -c Release --project tests\MiniArch.Benchmarks -- profile-query --sce
 | Full Card Play to Armor | 13,685 |
 
 **架构**：`tests/HeroPipeline.Tests/PipelineBenchmarkTests.cs` + `Fixtures/CoreTestFixture.cs`。源码按原始命名空间（`Hero.*`）原样拷贝，使用 `Microsoft.NET.Sdk` 而非 `Godot.NET.Sdk`。数据日期 2026-05-29。**不跨工具比较 cycles/s 与 rounds/s**。
+
+> 注：上表各测试命名仍为 `_20Seconds`（如 `Movement_20Seconds`），但实际运行时长约 3 秒（`sw.ElapsedMilliseconds < 3000`）。该命名是历史遗留，数值无变化时仍可用于 before/after 对比，但不应理解为 20 秒测量周期。
