@@ -8,6 +8,8 @@ public sealed class UserQueryTests
 {
     private readonly record struct Position(int X, int Y);
     private readonly record struct Velocity(int X, int Y);
+    private readonly record struct TagA;
+    private readonly record struct TagB;
 
     [Fact]
     public void Description_based_single_component_query_can_be_enumerated_directly_with_foreach()
@@ -264,6 +266,93 @@ public sealed class UserQueryTests
 
         Assert.Equal(6, standalone.Count);
         Assert.Equal(standalone, outerEntities);
+    }
+
+    [Fact]
+    public void Exact_query_matches_only_exact_archetype()
+    {
+        var world = new World();
+        var desc = new QueryDescription().With<Position>().Exact();
+
+        var onlyPosition = world.Create(new Position(1, 2));
+        var positionAndVelocity = world.Create(new Position(3, 4), new Velocity(5, 6));
+
+        var seen = new List<Entity>();
+        foreach (var entity in world.Query(in desc))
+            seen.Add(entity);
+
+        Assert.Single(seen);
+        Assert.Equal(onlyPosition, seen[0]);
+    }
+
+    [Fact]
+    public void Exact_query_with_multi_component_matches_only_that_combination()
+    {
+        var world = new World();
+        var desc = new QueryDescription().With<Position>().With<Velocity>().Exact();
+
+        var both = world.Create(new Position(1, 2), new Velocity(3, 4));
+        world.Create(new Position(5, 6));                 // only Position
+        world.Create(new Position(7, 8), new Velocity(9, 10), new TagA()); // extra component
+
+        var seen = new List<Entity>();
+        foreach (var entity in world.Query(in desc))
+            seen.Add(entity);
+
+        Assert.Single(seen);
+        Assert.Equal(both, seen[0]);
+    }
+
+    [Fact]
+    public void Exact_query_without_still_works()
+    {
+        var world = new World();
+        var desc = new QueryDescription().With<Position>().Without<Velocity>().Exact();
+
+        var onlyPosition = world.Create(new Position(1, 2));
+        world.Create(new Position(3, 4), new Velocity(5, 6));
+
+        var seen = new List<Entity>();
+        foreach (var entity in world.Query(in desc))
+            seen.Add(entity);
+
+        Assert.Single(seen);
+        Assert.Equal(onlyPosition, seen[0]);
+    }
+
+    [Fact]
+    public void Exact_query_ignores_with_any()
+    {
+        var world = new World();
+        var desc = new QueryDescription().With<Position>().WithAny<TagA>().WithAny<TagB>().Exact();
+
+        var onlyPosition = world.Create(new Position(1, 2));
+        world.Create(new Position(3, 4), new TagA());
+        world.Create(new Position(5, 6), new TagB());
+
+        var seen = new List<Entity>();
+        foreach (var entity in world.Query(in desc))
+            seen.Add(entity);
+
+        Assert.Single(seen);
+        Assert.Equal(onlyPosition, seen[0]);
+    }
+
+    [Fact]
+    public void Exact_empty_description_matches_only_empty_archetype()
+    {
+        var world = new World();
+        var desc = new QueryDescription().Exact();
+
+        var empty = world.Create();
+        world.Create(new Position(1, 2));
+
+        var seen = new List<Entity>();
+        foreach (var entity in world.Query(in desc))
+            seen.Add(entity);
+
+        Assert.Single(seen);
+        Assert.Equal(empty, seen[0]);
     }
 
     private static int Sum(World world, Query query)

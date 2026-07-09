@@ -19,6 +19,7 @@ internal sealed class QueryCache
     private readonly ComponentMask _requiredMask;
     private readonly ComponentMask _excludedMask;
     private readonly ComponentMask _anyMask;
+    private readonly bool _exact;
 
     // Unique matched archetypes (no duplicates, for entity enumeration).
     private Archetype[] _snapshotArchetypes = [];
@@ -42,6 +43,7 @@ internal sealed class QueryCache
         _requiredMask = ComputeFilterMask(filter.Required.AsSpan());
         _excludedMask = ComputeFilterMask(filter.Excluded.AsSpan());
         _anyMask = ComputeFilterMask(filter.Any.AsSpan());
+        _exact = filter.Exact;
     }
 
     internal static QueryCache Create(World world, in QueryDescription description)
@@ -298,6 +300,10 @@ internal sealed class QueryCache
             if ((uint)required[i].Value >= 512 && !archetype.Signature.Contains(required[i]))
                 return false;
         }
+
+        // Exact: archetype must have exactly the required components (no extras).
+        if (_exact && archetype.Signature.Count != required.Length)
+            return false;
 
         var excluded = _filter.Excluded.AsSpan();
         for (var i = 0; i < excluded.Length; i++)

@@ -95,7 +95,8 @@ public sealed partial class World
             var candidate = new QueryFilter(
                 CreateQueryComponentSet(description.GetRequiredTypes()),
                 CreateQueryComponentSet(description.GetExcludedTypes()),
-                CreateQueryComponentSet(description.GetAnyTypes()));
+                CreateQueryComponentSet(description.GetAnyTypes()),
+                exact: description.IsExact);
             var updated = new Dictionary<QueryDescription, QueryFilter>(snapshot)
             {
                 [description] = candidate

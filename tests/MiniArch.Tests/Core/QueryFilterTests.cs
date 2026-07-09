@@ -138,6 +138,56 @@ public sealed class QueryFilterTests
         Assert.Equal(1, GetCachedQueryCount(world));
     }
 
+    [Fact]
+    public void Exact_query_ignores_with_any_and_clears_any_set()
+    {
+        var world = new World();
+        var description = new QueryDescription()
+            .With<Position>()
+            .WithAny<TagA>()
+            .WithAny<TagB>()
+            .Exact();
+
+        var query = MiniQueryCache.Create(world, in description);
+
+        Assert.Equal(0, query.Filter.Any.Count);
+        Assert.True(query.Filter.Exact);
+    }
+
+    [Fact]
+    public void Exact_query_does_not_reuse_non_exact_query_cache()
+    {
+        var world = new World();
+        var exactDesc = new QueryDescription().With<Position>().Exact();
+        var nonExactDesc = new QueryDescription().With<Position>();
+
+        var exactQuery = MiniQueryCache.Create(world, in exactDesc);
+        var nonExactQuery = MiniQueryCache.Create(world, in nonExactDesc);
+
+        Assert.NotSame(exactQuery, nonExactQuery);
+    }
+
+    [Fact]
+    public void Exact_equals_without_exact_are_different()
+    {
+        var exact = new QueryDescription().With<Position>().Exact();
+        var nonExact = new QueryDescription().With<Position>();
+
+        Assert.NotEqual(exact, nonExact);
+        Assert.NotEqual(exact.GetHashCode(), nonExact.GetHashCode());
+    }
+
+    [Fact]
+    public void Exact_with_any_after_exact_is_noop_and_descriptions_are_equal()
+    {
+        var exact = new QueryDescription().With<Position>().Exact();
+        var exactThenAny = new QueryDescription().With<Position>().Exact().WithAny<TagA>();
+
+        Assert.Equal(exact, exactThenAny);
+        Assert.Equal(exact.GetHashCode(), exactThenAny.GetHashCode());
+        Assert.Empty(exactThenAny.AnyTypes);
+    }
+
     private static int GetCachedQueryCount(World world)
     {
         var field = typeof(World).GetField("_queries", BindingFlags.Instance | BindingFlags.NonPublic);

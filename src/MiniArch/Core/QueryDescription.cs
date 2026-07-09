@@ -10,6 +10,7 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
     private readonly QueryDescriptionTypeSet _required;
     private readonly QueryDescriptionTypeSet _excluded;
     private readonly QueryDescriptionTypeSet _any;
+    private readonly bool _exact;
 
     /// <summary>
     /// Gets required component types.
@@ -27,12 +28,19 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
     public IReadOnlyList<Type> AnyTypes => _any.GetTypes();
 
     /// <summary>
+    /// Gets whether this description uses exact archetype matching.
+    /// When true, only archetypes whose component set exactly equals
+    /// the required set (no more, no less) are matched.
+    /// </summary>
+    public bool IsExact => _exact;
+
+    /// <summary>
     /// Adds a required type.
     /// </summary>
     public QueryDescription With<T>() where T : unmanaged
     {
         var required = _required.Add(typeof(T));
-        return required.Equals(_required) ? this : new QueryDescription(required, _excluded, _any);
+        return required.Equals(_required) ? this : new QueryDescription(required, _excluded, _any, _exact);
     }
 
     /// <summary>
@@ -41,16 +49,31 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
     public QueryDescription Without<T>() where T : unmanaged
     {
         var excluded = _excluded.Add(typeof(T));
-        return excluded.Equals(_excluded) ? this : new QueryDescription(_required, excluded, _any);
+        return excluded.Equals(_excluded) ? this : new QueryDescription(_required, excluded, _any, _exact);
     }
 
     /// <summary>
-    /// Adds an any-match type.
+    /// Adds an any-match type. Has no effect when <see cref="Exact"/> is enabled.
     /// </summary>
     public QueryDescription WithAny<T>() where T : unmanaged
     {
+        if (_exact) return this;
         var any = _any.Add(typeof(T));
-        return any.Equals(_any) ? this : new QueryDescription(_required, _excluded, any);
+        return any.Equals(_any) ? this : new QueryDescription(_required, _excluded, any, _exact);
+    }
+
+    /// <summary>
+    /// Enables exact archetype matching on this description.
+    /// Only archetypes whose component set exactly equals the required set
+    /// will match. Any previously declared <see cref="WithAny{T}"/> components
+    /// are stripped since they have no effect in exact mode; subsequent calls
+    /// to <see cref="WithAny{T}"/> on an exact description are no-ops.
+    /// <see cref="Without{T}"/> continues to work (though it is normally
+    /// redundant since the count check already excludes extra components).
+    /// </summary>
+    public QueryDescription Exact()
+    {
+        return _exact ? this : new QueryDescription(_required, _excluded, default, exact: true);
     }
 
     /// <summary>
@@ -58,7 +81,8 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
     /// </summary>
     public bool Equals(QueryDescription other) => _required.Equals(other._required)
         && _excluded.Equals(other._excluded)
-        && _any.Equals(other._any);
+        && _any.Equals(other._any)
+        && _exact == other._exact;
 
     /// <summary>
     /// Compares against an object.
@@ -66,9 +90,9 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
     public override bool Equals(object? obj) => obj is QueryDescription other && Equals(other);
 
     /// <summary>
-    /// Gets the hash code computed from the three type sets.
+    /// Gets the hash code computed from the three type sets and exact flag.
     /// </summary>
-    public override int GetHashCode() => HashCode.Combine(_required, _excluded, _any);
+    public override int GetHashCode() => HashCode.Combine(_required, _excluded, _any, _exact);
 
     /// <summary>
     /// Returns whether two query descriptions are equal.
@@ -86,11 +110,12 @@ public readonly struct QueryDescription : IEquatable<QueryDescription>
 
     internal ReadOnlySpan<Type> GetAnyTypes() => _any.AsSpan();
 
-    private QueryDescription(QueryDescriptionTypeSet required, QueryDescriptionTypeSet excluded, QueryDescriptionTypeSet any)
+    private QueryDescription(QueryDescriptionTypeSet required, QueryDescriptionTypeSet excluded, QueryDescriptionTypeSet any, bool exact = false)
     {
         _required = required;
         _excluded = excluded;
         _any = any;
+        _exact = exact;
     }
 
     private readonly struct QueryDescriptionTypeSet : IEquatable<QueryDescriptionTypeSet>
