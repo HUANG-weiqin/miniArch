@@ -670,12 +670,14 @@ struct: MiniArch.Query
 struct: MiniArch.QueryDescription
   Method: Equals(MiniArch.QueryDescription other) -> System.Boolean
   Method: Equals(System.Object obj) -> System.Boolean
+  Method: Exact() -> MiniArch.QueryDescription
   Method: GetHashCode() -> System.Int32
   Method: With() -> MiniArch.QueryDescription where T : struct, System.ValueType
   Method: WithAny() -> MiniArch.QueryDescription where T : struct, System.ValueType
   Method: Without() -> MiniArch.QueryDescription where T : struct, System.ValueType
   Property: AnyTypes -> System.Collections.Generic.IReadOnlyList<System.Type> [get; ]
   Property: ExcludedTypes -> System.Collections.Generic.IReadOnlyList<System.Type> [get; ]
+  Property: IsExact -> System.Boolean [get; ]
   Property: RequiredTypes -> System.Collections.Generic.IReadOnlyList<System.Type> [get; ]
   Operator: op_Equality(MiniArch.QueryDescription, MiniArch.QueryDescription) -> System.Boolean
   Operator: op_Inequality(MiniArch.QueryDescription, MiniArch.QueryDescription) -> System.Boolean
