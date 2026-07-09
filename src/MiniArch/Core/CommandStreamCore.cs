@@ -2764,10 +2764,8 @@ public abstract class CommandStreamCore
                 {
                     ref var entry = ref Unsafe.Add(ref entriesRef, i);
                     var record = world.GetRecordFast(entry.Entity);
-#if DEBUG
                     Debug.Assert(record.Archetype is not null && record.Version == entry.Entity.Version,
                         $"GetRecordFast returned stale or unoccupied record for entity {entry.Entity}.");
-#endif
                     var arch = record.Archetype!;
                     if (arch != fastArch)
                     {
@@ -2796,10 +2794,8 @@ public abstract class CommandStreamCore
             {
                 ref var entry = ref Unsafe.Add(ref entriesRef, i);
                 var record = world.GetRecordFast(entry.Entity);
-#if DEBUG
                 Debug.Assert(record.Archetype is not null && record.Version == entry.Entity.Version,
                     $"GetRecordFast returned stale or unoccupied record for entity {entry.Entity}.");
-#endif
 
                 if (entry.Kind == KindSet)
                 {

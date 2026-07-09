@@ -54,6 +54,7 @@ updated: 2026-07-09
 - **缺失的安全条件**: Delta 回放中途失败时无法回滚已执行操作
 - **真实风险**: 低。用户应通过 `FrameDelta.Validate()` 预校验——这已在文档中。`FrameDelta.Validate` 现在已校验 component data 大小与 schema 一致性；剩余风险是 replay 中途失败仍无法回滚，且 allocator/free-list 兼容性只能由从 frame 0 replay 或 snapshot bootstrap 保证
 - **建议修复**: 强化文档约束；如需进一步 harden，可增加 replay 前 dry-run/target-world compatibility check，但当前 ROI 低
+- **当前状态**: 2026-07-09 评估：接受现状，不修。其他 3 个 P2 已全部修复，此为唯一残留 P2。风险已被 `FrameDelta.Validate()` + 文档约束覆盖。
 
 ### #4: TrySetBit 未对 id >= 512 做守卫导致 mask 别名折叠 ✅ 已修复
 
