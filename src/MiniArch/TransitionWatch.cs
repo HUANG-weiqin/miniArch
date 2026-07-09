@@ -19,19 +19,28 @@ namespace MiniArch;
 /// If an entity is destroyed and a new entity is created at the same id (with the same
 /// filter match), no net transition is reported (id-based semantics for simplicity).
 /// </para>
+/// <para>
+/// Membership is tracked via dense epoch arrays keyed by entity.Id, avoiding per-Diff
+/// heap allocation after warmup. Each id stores the last epoch it was touched; comparing
+/// the stored epoch against the current snapshot/current epoch gives O(1) membership.
+/// No per-Diff clearing is needed — consecutive snapshots replace the baseline by
+/// bumping the snapshot epoch, so old marks become stale automatically.
+/// </para>
 /// </remarks>
 public sealed class TransitionWatch<THandler>
     where THandler : struct, ITransitionHandler
 {
     private Entity[] _snapshotEntities = [];
     private int _snapshotCount;
-    private HashSet<int> _snapshotIds = [];
+    private int[] _snapshotMarks = [];
+    private int _snapshotEpoch;
     private readonly QueryDescription _query;
     private THandler _handler;
     private bool _hasSnapshot;
 
     // Reusable state for Diff — zero per-call heap allocation (except array growth).
-    private HashSet<int> _currentIds = [];
+    private int[] _currentMarks = [];
+    private int _currentEpoch;
     private Entity[] _currentEntities = [];
     private int _currentCount;
 
@@ -63,8 +72,15 @@ public sealed class TransitionWatch<THandler>
     {
         ArgumentNullException.ThrowIfNull(world);
 
+        // Bump snapshot epoch; if it wraps, reset marks to zero.
+        _snapshotEpoch++;
+        if (_snapshotEpoch == 0)
+        {
+            Array.Clear(_snapshotMarks);
+            _snapshotEpoch = 1;
+        }
+
         _snapshotCount = 0;
-        _snapshotIds.Clear();
 
         foreach (var chunk in world.Query(in _query).GetChunks())
         {
@@ -72,7 +88,9 @@ public sealed class TransitionWatch<THandler>
             for (var i = 0; i < chunk.Count; i++)
             {
                 var entity = entities[i];
-                _snapshotIds.Add(entity.Id);
+                EnsureMarkCapacity(ref _snapshotMarks, entity.Id);
+                _snapshotMarks[entity.Id] = _snapshotEpoch;
+
                 if (_snapshotCount >= _snapshotEntities.Length)
                     Array.Resize(ref _snapshotEntities, Math.Max(_snapshotCount + 1, _snapshotEntities.Length * 2));
                 _snapshotEntities[_snapshotCount++] = entity;
@@ -96,8 +114,16 @@ public sealed class TransitionWatch<THandler>
             throw new InvalidOperationException(
                 "TransitionWatch.Diff requires a prior Snapshot call. Call Snapshot(World) before Diff.");
 
-        // Phase 1: scan current query, populate reusable _currentIds and _currentEntities.
-        _currentIds.Clear();
+        // Bump current epoch; if it wraps, reset marks to zero.
+        _currentEpoch++;
+        if (_currentEpoch == 0)
+        {
+            Array.Clear(_currentMarks);
+            _currentEpoch = 1;
+        }
+
+        // Phase 1: Scan current query into reusable _currentMarks and _currentEntities.
+        // No pre-clear needed: the epoch bump above invalidates all previous marks.
         _currentCount = 0;
 
         foreach (var chunk in world.Query(in _query).GetChunks())
@@ -106,7 +132,8 @@ public sealed class TransitionWatch<THandler>
             for (var i = 0; i < chunk.Count; i++)
             {
                 var entity = entities[i];
-                _currentIds.Add(entity.Id);
+                EnsureMarkCapacity(ref _currentMarks, entity.Id);
+                _currentMarks[entity.Id] = _currentEpoch;
 
                 if (_currentCount >= _currentEntities.Length)
                     Array.Resize(ref _currentEntities, Math.Max(_currentCount + 1, _currentEntities.Length * 2));
@@ -116,26 +143,27 @@ public sealed class TransitionWatch<THandler>
 
         var bufferCount = 0;
 
-        // Phase 2a: Exited — snapshot entities whose id is not in current (fast HashSet lookup).
+        // Phase 2a: Exited — snapshot entities not marked with current epoch.
         for (var si = 0; si < _snapshotCount; si++)
         {
-            if (!_currentIds.Contains(_snapshotEntities[si].Id))
+            var id = _snapshotEntities[si].Id;
+            if ((uint)id < (uint)_currentMarks.Length && _currentMarks[id] == _currentEpoch)
+                continue;
+
+            if (bufferCount >= _buffer.Length)
+                Array.Resize(ref _buffer, Math.Max(bufferCount + 1, _buffer.Length * 2));
+            _buffer[bufferCount++] = new TransitionEntry
             {
-                if (bufferCount >= _buffer.Length)
-                    Array.Resize(ref _buffer, Math.Max(bufferCount + 1, _buffer.Length * 2));
-                _buffer[bufferCount++] = new TransitionEntry
-                {
-                    Entity = _snapshotEntities[si],
-                    Kind = TransitionKind.Exited
-                };
-            }
+                Entity = _snapshotEntities[si],
+                Kind = TransitionKind.Exited
+            };
         }
 
-        // Phase 2b: Entered — current entities whose id is not in snapshot.
-        // O(1) lookup via _snapshotIds HashSet (populated during Snapshot).
+        // Phase 2b: Entered — current entities not marked with snapshot epoch.
         for (var ci = 0; ci < _currentCount; ci++)
         {
-            if (_snapshotIds.Contains(_currentEntities[ci].Id))
+            var id = _currentEntities[ci].Id;
+            if ((uint)id < (uint)_snapshotMarks.Length && _snapshotMarks[id] == _snapshotEpoch)
                 continue;
 
             if (bufferCount >= _buffer.Length)
@@ -147,11 +175,23 @@ public sealed class TransitionWatch<THandler>
             };
         }
 
-        // Phase 3: dispatch callbacks.
+        // Phase 3: dispatch callbacks (collected buffer is stable, safe for handler to mutate world).
         for (var i = 0; i < bufferCount; i++)
         {
             ref var entry = ref _buffer[i];
             _handler.OnChange(world, entry.Entity, entry.Kind);
+        }
+    }
+
+    // ── Mark helpers (small, inlineable) ─────────────────────────
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void EnsureMarkCapacity(ref int[] marks, int id)
+    {
+        if ((uint)id >= (uint)marks.Length)
+        {
+            var newSize = Math.Max(id + 1, marks.Length * 2);
+            Array.Resize(ref marks, newSize);
         }
     }
 }

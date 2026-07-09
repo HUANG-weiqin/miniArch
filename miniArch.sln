@@ -27,6 +27,10 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "perf", "perf", "{6CC231E6-5
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CommandStream.Profile", "tools\perf\CommandStream.Profile\CommandStream.Profile.csproj", "{C904D913-CB1F-4E4C-9D9B-07CBA420AAB6}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "perf", "perf", "{EBB92CCF-A784-4DFD-BA37-86DD25340310}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WatchApi.Perf", "tools\perf\WatchApi.Perf\WatchApi.Perf.csproj", "{53B01B7F-7358-42DE-983C-C72F3A391F59}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -69,6 +73,10 @@ Global
 		{C904D913-CB1F-4E4C-9D9B-07CBA420AAB6}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{C904D913-CB1F-4E4C-9D9B-07CBA420AAB6}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{C904D913-CB1F-4E4C-9D9B-07CBA420AAB6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{53B01B7F-7358-42DE-983C-C72F3A391F59}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{53B01B7F-7358-42DE-983C-C72F3A391F59}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{53B01B7F-7358-42DE-983C-C72F3A391F59}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{53B01B7F-7358-42DE-983C-C72F3A391F59}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -79,5 +87,6 @@ Global
 		{4888A783-86D5-479B-8A83-F45921B61FBB} = {ECD22EC6-A041-4F54-90F2-CA207F66BB3F}
 		{6CC231E6-5C62-4676-978B-7D456804158A} = {A989F849-EE38-4F2D-BAF5-DFC5F396D6CD}
 		{C904D913-CB1F-4E4C-9D9B-07CBA420AAB6} = {6CC231E6-5C62-4676-978B-7D456804158A}
+		{53B01B7F-7358-42DE-983C-C72F3A391F59} = {EBB92CCF-A784-4DFD-BA37-86DD25340310}
 	EndGlobalSection
 EndGlobal

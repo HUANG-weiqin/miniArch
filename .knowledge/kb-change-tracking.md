@@ -1,11 +1,13 @@
 ---
 title: Change Tracking（变更追踪）
 module: MiniArch.Core
-description: World.Watch pull-event 模型：ChangeWatch/TransitionWatch Snapshot+Diff 两阶段扫描；struct handler 回调；零 per-write 成本；旧 TrackValueChanges/TransitionLog/DenseValueDiff/IValueProjector/IValueChangeSink 已删除
-updated: 2026-07-09
+description: World.Watch pull-event 模型：ChangeWatch/TransitionWatch Snapshot+Diff 两阶段扫描；struct handler 回调；零 per-write 成本；TransitionWatch 使用 dense epoch marks；旧 TrackValueChanges/TransitionLog/DenseValueDiff/IValueProjector/IValueChangeSink 已删除
+updated: 2026-07-09 (WatchApi.Perf 秒级发布验证；TransitionWatch dense epoch marks)
 ---
 
 # Change Tracking（变更追踪）
+
+> 2026-07-09: TransitionWatch membership 从 bitset 改为 dense epoch marks。每个 id 存储最近一次被标记的 epoch 值；epoch bump 自动使旧标记失效，无需 per-Diff 清除。`WatchApi.Perf` 2s warmup + 5s measure 验证所有 Watch 场景稳态 `0 alloc/op`。
 
 ## 这个模块是干什么的
 
@@ -20,10 +22,10 @@ updated: 2026-07-09
 - **值变更**：`ChangeWatch` 内部持有 `TComponent[] _oldValues`（按 `entity.Id` 直索引的 dense array）和 `int[] _touchedIds`（记录上次 snapshot 触及的 id 列表）。
   - `Snapshot(World)`：查询 world → 遍历 chunk → 记录每个实体的当前值到 `_oldValues`，同时用 `_touchedIds` 标记哪些 id 有了 baseline。
   - `Diff(World)`：再次查询 world → 遍历 chunk → 对每个实体，比较当前值与 `_oldValues[id]`（若 id 未触及则 `default`）→ 差异收集到 `_buffer[]` → 缓冲区稳定后逐条回调 handler。
-- **投影值变更**：`ChangeWatch<TComponent, TValue, THandler>` 与值变更结构相同，但 baseline 存储的是 `TValue[]`，SnapShot 时调用 `handler.Project(component)`，Diff 时再次调用 `Project()` 并比较 `TValue` 是否相等。
-- **结构变更**：`TransitionWatch` 内部持有 `Entity[] _snapshotEntities`（上次 snapshot 的成员列表）、`HashSet<int> _snapshotIds`（snapshot 实体 id 集合、用于 Entered 检测）和 `HashSet<int> _currentIds` + `Entity[] _currentEntities`（复用 buffer）。
-  - `Snapshot(World)`：遍历 query → 记录匹配实体到 `_snapshotEntities`，同时填充 `_snapshotIds`。
-  - `Diff(World)`：扫描当前 → 用 `_currentIds` HashSet 快速查 Exited（snapshot 中有、当前无）→ 用 `_snapshotIds` HashSet 快速查 Entered（当前有、snapshot 中无）→ 缓冲区稳定后回调。
+- **投影值变更**：`ChangeWatch<TComponent, TValue, THandler>` 与值变更结构相同，但 baseline 存储的是 `TValue[]`，Snapshot 时调用 `handler.Project(component)`，Diff 时再次调用 `Project()` 并比较 `TValue` 是否相等。
+- **结构变更**：`TransitionWatch` 内部持有 `Entity[] _snapshotEntities` + `int[] _snapshotMarks`（按 `entity.Id` 索引的 dense epoch 标记）和 `int[] _currentMarks` + `Entity[] _currentEntities`（复用 buffer）。
+  - `Snapshot(World)`：递增 `_snapshotEpoch`（溢出时 `Array.Clear` 并重置为 1）→ 遍历 query → 对每个实体 `EnsureMarkCapacity` → `_snapshotMarks[id] = _snapshotEpoch` → 存储到 `_snapshotEntities`。
+  - `Diff(World)`：递增 `_currentEpoch`（同样溢出处理）→ 遍历当前 query → `_currentMarks[id] = _currentEpoch` → 存储到 `_currentEntities` → Exited：`_currentMarks[id] != _currentEpoch` → Entered：`_snapshotMarks[id] != _snapshotEpoch` → 无 per-Diff 清除，两阶段回调。
 - **生命周期**：Watch 不与 world 注册（无 SharedTrackerRegistry、无 IChangeQuery dispatch）。`Snapshot`/`Diff` 通过 `world.Query()` 读取当前状态。World dispose 后调用 `Snapshot`/`Diff` 抛 `ObjectDisposedException`。
 
 ## 公共 API
@@ -87,6 +89,7 @@ handler.Count = 0;
 6. **无 per-consumer cursor 管理**：Watch 不维护消费游标，不自动推进 baseline。消费端完全控制何时 `Snapshot`（推进 baseline）。
 7. **删除旧 API，无兼容层**：旧 `TrackValueChanges`/`TrackTransitions`/`CreateDenseValueDiff`/`SharedValueChanges`/`TransitionLog`/`DenseValueDiff` 全部删除。旧 consumer 须迁移到 Watch API。
 8. **默认 query vs 显式 query**：`ChangeWatch` 的 `query` 参数可选，`null` 时自动 `.With<TComponent>()`。`TransitionWatch` 的 filter 必填，空时抛 `ArgumentException`。
+9. **Dense epoch marks 替代 bitset**：`TransitionWatch` 的 membership 使用 `int[]` dense array（按 `entity.Id` 直索引）。每个 id 存储最后被标记的 epoch 值；Snapshot/Diff 时递增对应 epoch 并写入，比较 mark == epoch 即可判断成员资格。**不**需要 per-Diff 清除——epoch bump 自动使旧标记失效。溢出时（`int` wrap to 0）`Array.Clear` 整表并重置为 1。稳态 Diff 零 heap allocation。
 
 ## 认知模型
 
@@ -99,9 +102,32 @@ handler.Count = 0;
 - **热路径零成本**：`Watch` 创建不做任何 world 注册（无 registry、无 type lookup、无数组预分配 fallocate）。写入路径无任何 watch 分支。
 - **`Snapshot`**：O(当前匹配 query 的实体数) 扫描 + baseline 存储。每个实体一次 `_oldValues[id] = value`（或 `handler.Project(component)`）。
 - **`Diff`**：O(当前匹配 query 的实体数) 扫描 + O(entities) 值比较 + O(diffs) 回调。
-- **空间**：每个 `ChangeWatch` 持有 `_oldValues`（按 `entity.Id` 索引）、`_touchedIds`（上次触及 id）、`_buffer`（diff buffer）。`TransitionWatch` 持有 `_snapshotEntities[]` + `_currentIds` HashSet + `_currentEntities[]` + `_buffer`。
-- **稳态 GC**：内部数组按需增长，增长后不再缩小；稳态 `Snapshot`+`Diff` 循环零堆分配。
+- **空间**：每个 `ChangeWatch` 持有 `_oldValues`（按 `entity.Id` 索引）、`_touchedIds`（上次触及 id）、`_buffer`（diff buffer）。`TransitionWatch` 持有 `_snapshotEntities[]` + `_snapshotMarks` (int[]) + `_currentMarks` (int[]) + `_currentEntities[]` + `_buffer`。Dense epoch 比 bitset 内存多 16×（int vs bit），但 cache 友好且避免 per-Diff 清除。
+- **稳态 GC**：内部数组按需增长，增长后不再缩小；稳态 `Snapshot`+`Diff` 循环零堆分配。Dense epoch `int[]` 在 warmup 后不再 reallocate（max entity id 稳定）。
 - **多 watch 同组件**：互不干扰，各自持有独立的 baseline arrays。不共享状态，不 fanout。
+
+### WatchApi.Perf 发布验证（2026-07-09）
+
+命令：
+
+```bash
+dotnet run -c Release --project tools/perf/WatchApi.Perf -- --entity-count 10000 --warmup-seconds 2 --duration-seconds 5
+```
+
+结果（10k entities，2s warmup + 5s measure）：
+
+| Scenario | ops/s | alloc/op |
+|---|---:|---:|
+| change-quick-nochange | 15,973.8 | 0 B |
+| change-quick-allchanged | 4,206.6 | 0 B |
+| change-projected-nochange | 15,768.7 | 0 B |
+| change-projected-allchanged | 4,013.7 | 0 B |
+| transition-nochange | 11,137.5 | 0 B |
+| transition-all-entered | 1,838.2 | 0 B |
+| transition-all-exited | 1,698.4 | 0 B |
+| transition-churn-1pct | 7,447.8 | 0 B |
+
+候选 membership kernel 同场景对比（churn）：HashSet 4,697.6 ops/s，bitset 27,765.3 ops/s，dense epoch 30,313.2 ops/s。结论：dense epoch 在当前 ECS dense-id 模型下是发布实现；它比 bitset 多用内存（int mark vs bit），但避免 per-Diff 清除，实际 `TransitionWatch` nochange/churn 比 bitset 分别约 +40%/+45%。
 
 ## 入口
 
@@ -116,8 +142,8 @@ handler.Count = 0;
 
 - `Diff` 前必须先调用 `Snapshot`，否则抛 `InvalidOperationException`。
 - `Snapshot` 推进 baseline 后，旧 baseline 永久丢失（无法回退）。
-- Stale slot 的 `oldValue` 是 `default`——注意 `default` 与实际值的混淆。
+- Stale slot 的 `oldValue` 来自 dense slot：该 id 在 Snapshot 时未触及时是 `default`；若 Snapshot 时曾匹配、之后 Destroy+Create 复用同 id，则可能是前一实体的 snapshot 值。
 - TransitionWatch 是 id-based：Destroy+Create 同 id 复用不报 Exited+Entered。需要精确 version 语义时需自行记录。
-- TransitionWatch 的 Entered 和 Exited 扫描均为 O(n)（使用 `_snapshotIds` 和 `_currentIds` HashSet 进行 O(1) 包含检测）。无 per-Diff 分配。
+- TransitionWatch 的 Entered 和 Exited 扫描均为 O(n)（使用 `_snapshotMarks` 和 `_currentMarks` dense epoch 标记进行 O(1) 成员检测）。Warmup 后无 per-Diff 分配。
 - `Handler` 是 ref 返回的 struct 引用，不要缓存到局部变量后跨 `Diff`/`Snapshot` 使用（可能因数组 resize 变为 dangling ref）。
 - `World` dispose 后调用 `Snapshot`/`Diff` 抛 `ObjectDisposedException`。

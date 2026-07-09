@@ -8,7 +8,7 @@
 
 | 模块 | 知识页 |
 |---|---|
-| **入门 / 导航** | `kb-design-rationale.md`（**新人必读**：为什么是这样而不是那样）、`kb-glossary.md`（术语表）、`kb-perf-harnesses.md`（4 套 perf harness 消歧）、`kb-lockstep-playbook.md`（帧同步端到端 spine） |
+| **入门 / 导航** | `kb-design-rationale.md`（**新人必读**：为什么是这样而不是那样）、`kb-glossary.md`（术语表）、`kb-perf-harnesses.md`（perf harness 消歧）、`kb-lockstep-playbook.md`（帧同步端到端 spine） |
 | Workspace（仓库导航/脚本/流程） | `kb-repo-overview.md`、`kb-profiling-workflow.md`、`kb-throughput-workflow.md` |
 | MiniArch.Core（ECS 运行时） | `kb-core-ecs.md`、`kb-architecture-review.md`、`kb-chunk-storage.md`、`kb-cache-optimization.md` |
 | MiniArch.Core CommandStream | `kb-command-stream.md`、`kb-deferred-create-design.md` |
@@ -27,6 +27,7 @@
 | **安全证明报告** | **`kb-safety-proof.md`**（2026-07-06 正式库安全证明——224 seed × 5M 帧全 PASS，15 条代码路径审计零分歧） |
 | GameTickSim.Perf（场景基准） | `kb-gameticksim-scenarios.md` |
 | CommandStreamGame.Perf（CommandStream 真实游戏稳态压测） | `kb-commandstream-game-perf.md` |
+| WatchApi.Perf（Watch API 专项吞吐/分配） | `kb-change-tracking.md`、`kb-perf-harnesses.md` |
 | samples/BulletLockstep.Demo（多 host 弹幕游戏集成测试） | `kb-bullet-lockstep-demo.md`（9 个 slice 端到端压测库全部公共能力：placeholder lockstep / archetype 迁移 / hierarchy / chunked / 持久化 / 回滚） |
 
 ## 快速入口
@@ -46,6 +47,7 @@
 - **固定时长吞吐量对比** → `kb-throughput-workflow.md`
 - **多 host 弹幕游戏集成测试** → `kb-bullet-lockstep-demo.md`
 - **回归门禁** → `kb-hero-pipeline-regression.md`
+- **Watch API 专项吞吐/分配** → `kb-change-tracking.md`（WatchApi.Perf 段）
 - **Cache/内存优化** → `kb-cache-optimization.md`
 
 **帧同步 / 网络**：

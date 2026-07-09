@@ -2,7 +2,7 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-07-09 (Watch API pull-event 模型替换旧 Change Tracking 全部接口)
+updated: 2026-07-09 (Watch API pull-event 模型替换旧 Change Tracking 全部接口；WatchApi.Perf 秒级发布验证)
 ---
 # Knowledge Base Changelog
 
@@ -31,6 +31,7 @@ updated: 2026-07-09 (Watch API pull-event 模型替换旧 Change Tracking 全部
   - `src/MiniArch/TransitionWatch.cs`：`TransitionWatch<THandler>` 结构变更 watch
   - `src/MiniArch/IChangeHandler.cs`：`IChangeHandler<TComponent>` / `IChangeHandler<TComponent, TValue>` 接口
   - `src/MiniArch/ITransitionHandler.cs`：`ITransitionHandler` 接口 + `TransitionKind` 枚举
+  - `tools/perf/WatchApi.Perf`：Watch API 专项秒级吞吐/分配验证工具
 - **新 API 入口**：
   - `World.Watch<TComponent, THandler>(QueryDescription?)` → `ChangeWatch`（值变更）
   - `World.Watch<TComponent, TValue, THandler>(QueryDescription?)` → 投影 `ChangeWatch`（投影值变更）
@@ -41,13 +42,15 @@ updated: 2026-07-09 (Watch API pull-event 模型替换旧 Change Tracking 全部
   - 旧：`TrackValueChanges`/`CreateDenseValueDiff` 两个独立入口
   - 新：单个 `Watch<TComponent, THandler>` 入口 + 可选投影 `Watch<TComponent, TValue, THandler>`
   - 旧：`TransitionLog` + `IChangeQuery.OnTransition` dispatch + `Clear()`
-  - 新：`TransitionWatch` Snapshot/Diff id-based 集合对比 + Handler 回调
+  - 新：`TransitionWatch` Snapshot/Diff id-based 集合对比 + Handler 回调；内部 membership 使用 dense epoch marks（`int[]` by entity id），稳态零 per-Diff 分配
   - 旧：`Set`/`Add`/`Remove` 热路径有 registry 查询分支
   - 新：写入路径零 watch 成本
-- **验证**（TODO：Phase 9 运行）：
-  - Release 全量测试通过
-  - HeroComing.Perf 门禁通过（≥1642/≥997）
-  - MiniArch.Soak 全 PASS
+- **验证（2026-07-09）**：
+  - Release build 通过（0 errors；仅 2 个既有 xUnit1031 warning）
+  - Release tests 通过：MiniArch.Tests 837，HeroPipeline.Tests 5
+  - 旧 API 残留搜索在 `src tests/MiniArch.Tests tests/MiniArch.Benchmarks tools/perf` 范围 0 hits
+  - HeroComing.Perf 门禁通过（Movement 1984.0 ≥1642，Attack 1208.4 ≥997，memory OK；不更新 baseline）
+  - WatchApi.Perf 秒级发布验证（10k entities，2s warmup + 5s measure）：ChangeWatch/Projected/TransitionWatch 全场景 `0 alloc/op`；TransitionWatch dense epoch nochange 11,137.5 ops/s，churn-1pct 7,447.8 ops/s
 - **新增/更新文件**：`docs/api.md`、`docs/examples.md`、`.knowledge/kb-change-tracking.md`（全文重写）、`.knowledge/kb-design-rationale.md`（§2.11 更新）、`.knowledge/kb-hero-pipeline-regression.md`（删除 `--track-observer`/`--compare-old-value-tracking`）、`.knowledge/kb-command-stream.md`（pending entity 契约更新）、`.knowledge/INDEX.md`（描述更新）
 
 ## 2026-07-08 DenseValueDiff explicit shadow diff API

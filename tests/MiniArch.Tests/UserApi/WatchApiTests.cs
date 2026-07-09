@@ -429,6 +429,56 @@ public class WatchApiTests
     }
 
     // ═══════════════════════════════════════════════════════════════
+    //  Allocation test: after warmup, steady-state alloc = 0
+    // ═══════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void TransitionWatch_allocates_zero_per_iteration_after_warmup()
+    {
+        // Warm up the watch so internal arrays are stable-sized, then measure
+        // a tight Snapshot+Diff loop for zero allocation.
+        const int entityCount = 100;
+        const int warmup = 50;
+        const int iterations = 100;
+
+        using var world = new World();
+        for (var i = 0; i < entityCount; i++)
+            world.Create(new Position(0, 0));
+
+        var handler = new TransitionRecorder(0);
+        var watch = world.Watch<TransitionRecorder>(new QueryDescription().With<Position>());
+        watch.Handler = handler;
+
+        // Warmup — stabilize bitset and entity array sizes
+        for (var w = 0; w < warmup; w++)
+        {
+            watch.Snapshot(world);
+            watch.Diff(world);
+        }
+
+        // Force full GC to clean up any prior noise before measurement
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+
+        var beforeBytes = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < iterations; i++)
+        {
+            watch.Snapshot(world);
+            watch.Diff(world);
+        }
+
+        var afterBytes = GC.GetAllocatedBytesForCurrentThread();
+        var allocated = afterBytes - beforeBytes;
+
+        // Allow tiny noise (e.g. xUnit framework accounting), but 0 is expected.
+        // If this becomes flaky, bump threshold or remove — steady-state alloc
+        // is already verified by WatchApi.Perf tools.
+        Assert.True(allocated <= 32,
+            $"Expected ≤32 B allocated after warmup, got {allocated} B over {iterations} iterations");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
     //  Mutation safety: OnChange can mutate world without corruption
     // ═══════════════════════════════════════════════════════════════
 
