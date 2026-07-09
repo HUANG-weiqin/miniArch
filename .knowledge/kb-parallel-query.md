@@ -122,7 +122,7 @@ cs.Submit();
   query.ForEachChunk(chunk => { /* ... */ });  // ← 每次 call 都 new Delegate
   ```
   换成 struct + interface 后 JIT 跨泛型特化，零分配 + 内层调用去虚化。
-- **设计取舍**：没有像 Arch/Friflo 那样提供 `IForEach<T1,T2>` typed span 接口。ChunkView 内部的 `GetSpan<T>()` 已经只做 1 次 colIdx 查找 + 1 次 IsChunked 分支（每 chunk 而非每 entity），typed 接口能省的常数有限。YAGNI：用户用例出现 typed 收益后再加。
+- **设计取舍**：没有像 Arch/Friflo 那样提供 `IForEach<T1,T2>` typed span 接口。ChunkView 内部的 `GetSpan<T>()` 已经只做 1 次 colIdx 查找 + 1 次 IsChunked 分支（每 chunk 而非每 entity），typed 接口能省的常数有限。2026-07-09 已验证 typed entity ref loop / `IForEach<T1,T2,...>` 方向：query-pressure 三方对比没有达到比 Arch/Friflo 最优写法高 ≥10% 的公共 API 门槛，详见 `kb-design-rationale.md` §3.12。
 - **顺序 vs 并行的参数模式**：顺序用 `ref TForEach`（job 字段跨 chunk 可见，支持 accumulator）；并行用 by-value `TForEach`（struct 被值捕获进 `Parallel.For` 闭包——所有 worker 共享同一 captured copy。在 `OnChunk` 中 mutate struct 字段对闭包 copy 构成 data race，且调用方变量不会被更新。要产生可见结果，应写到外部共享引用状态、线程本地状态并显式合并，或使用线程安全 collector。并行不能用 `in`/`ref`，因为 `Parallel.For` 的 lambda 无法捕获 ref-like 参数）。
 
 ### 历史：为什么用 delegate 起步
@@ -232,5 +232,5 @@ cs.Submit();
 | `IJob` / `JobHandle` 依赖链 | `Parallel.For` 足够；自定义线程池是另一个项目 |
 | 自动 Read/Write 冲突检测 | Arch/Friflo 都没做，痛度不够 |
 | 并行结构变更 | 复杂度爆炸，收益为负（cache 争用） |
-| `IForEach<T1,T2,...>` typed span 接口 | ChunkView.GetSpan 已是 per-chunk 而非 per-entity 开销；先证明 typed 收益再加 |
+| `IForEach<T1,T2,...>` typed span / typed ref Query 接口 | 已做 2026-07-09 query-pressure 三方对比；MiniArch typed-ref 未比 Arch/Friflo 最优写法高 ≥10%，公共 API 复杂度不值得。详见 `kb-design-rationale.md` §3.12 |
 | SIMD query 匹配 | query 匹配已经用 512-bit mask，瓶颈不在这 |
