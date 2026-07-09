@@ -771,9 +771,10 @@ public sealed class TrickyEdgeCaseTests
     }
 
     // Minimal handler for dispose test
-    private struct DestructiveWatchHandler : IChangeHandler<Position>
+    private struct DestructiveWatchHandler : IChangeHandler<Position>, ITransitionHandler
     {
         public void OnChange(World world, Entity entity, in Position oldValue, in Position newValue) { }
+        public void OnChange(World world, Entity entity, TransitionKind kind) { }
     }
 
     // ══════════════════════════════════════════════════════—

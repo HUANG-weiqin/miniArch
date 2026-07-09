@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 健壮性审阅发现汇总——已确认的设计债、已验证的安全猜想、已排除的非 bug 猜想
-updated: 2026-07-09
+updated: 2026-07-09 (M6: dead code deletion round — 15 lines removed)
 ---
 
 > **M2 re-apply (2026-07-09)**: Epoch guard added — `World.ReservedReleaseEpoch` + `CommandStreamCore._submitEpoch` fast-path avoids O(N) pending-slot scan when no release has occurred since last sync. HeroComing.Perf: Movement 1902.1, Attack 1125.6, memory stable. Baseline gate (≥1642/≥997) passes.
@@ -320,3 +320,17 @@ Attack             |     1133.6 |      0.882 |    34009 |    -2910.2 |       OK
 ### 裁决：跳过——无候选在证据筛选下存活
 
 在检查的 9 个候选中，有 4 个是冷路径/结构变更路径，2 个已被 §3.11 确认为零成本，2 个因硬约束而被排除，1 个是有条件使用但未过度分配。库的热点（`QueryCache` 中的查询迭代、`Archetype.Storage` 中的 chunk span 访问、`ComponentStore.ApplyToWorld` 中的组件写入）已无不必要的 Dictionary/HashSet 操作或冗余 defense 检查。
+
+---
+
+## M6 — YAGNI / Dead Code Deletion Round (2026-07-09)
+
+Removed 15 lines of dead code from `src/MiniArch/` (zero callers confirmed via `deadcode.ps1` + manual rg verification):
+
+| Symbol | File | Type | Lines |
+|--------|------|------|-------|
+| `Archetype.ContainsComponent` | `Core/Archetype.cs:183` | `internal` method | 3 |
+| `FrozenState.AssertWritable` + `_isReadOnly` | `Core/CommandStreamCore.cs:2953-2961` | `internal` method + field under `#if DEBUG` | 12 |
+
+**Retained with explanation**: None — both candidates confirmed dead and deleted.
+**Perf gate**: Exempt per AGENTS.md §5a (pure dead code removal, zero IL change impact on runtime paths).

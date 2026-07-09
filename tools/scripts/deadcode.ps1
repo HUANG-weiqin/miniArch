@@ -141,7 +141,8 @@ function Find-Unused {
 
         $refs = Get-ReferenceCount -Name $name -DefFile $file
         if ($refs -eq 0) {
-            $rel = [System.IO.Path]::GetRelativePath($repoRoot, $file)
+            $rel = $file
+            try { $rel = [System.IO.Path]::GetRelativePath($repoRoot, $file) } catch { }
             $global:hasIssues = $true
             Write-Host "  UNUSED  $Label $name" -ForegroundColor Red
             Write-Host "          at $rel : line $line" -ForegroundColor DarkRed

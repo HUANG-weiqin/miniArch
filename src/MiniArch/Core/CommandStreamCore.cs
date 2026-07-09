@@ -926,7 +926,6 @@ public abstract class CommandStreamCore
 
 #if DEBUG
         // Reclaimed — will become the active _frozen on next SwapOutState.
-        _spareFrozen._isReadOnly = false;
         foreach (var store in _spareFrozen.Stores)
             if (store is not null) store._isReadOnly = false;
 #endif
@@ -983,7 +982,6 @@ public abstract class CommandStreamCore
 #if DEBUG
         // The swapped-out state is now read-only — neither SubmitFromFrozen
         // nor the background BuildFromFrozen task should mutate it.
-        frozen._isReadOnly = true;
         foreach (var store in frozen.Stores)
             if (store is not null) store._isReadOnly = true;
 #endif
@@ -2949,16 +2947,6 @@ public abstract class CommandStreamCore
         public Entity[] BatchEntities;
         public bool[] BatchCanceled;
         public int CancelledBatchCount;
-
-#if DEBUG
-        internal bool _isReadOnly;
-
-        internal void AssertWritable()
-        {
-            if (_isReadOnly)
-                throw new InvalidOperationException("Attempt to mutate a frozen FrozenState");
-        }
-#endif
 
         public FrozenState(int storeCount)
         {

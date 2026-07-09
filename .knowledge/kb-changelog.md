@@ -2,12 +2,22 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-07-09 (Watch API pull-event 模型替换旧 Change Tracking 全部接口；WatchApi.Perf 秒级发布验证)
+updated: 2026-07-09 (M6: dead code deletion round + Watch API pull-event 模型替换旧 Change Tracking 全部接口；WatchApi.Perf 秒级发布验证)
 ---
 # Knowledge Base Changelog
 
 > 这个页面只记录**重大架构变更和知识库校准事件**，供追溯。
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
+
+## 2026-07-09 M6 — YAGNI / Dead Code Deletion Round
+
+### 删除 15 行死代码
+
+- **`Archetype.ContainsComponent(ComponentType)`**（`Core/Archetype.cs`，3 行）：零调用 internal wrapper 方法（底层 `TryGetComponentIndex` 仍存在，退化 0）。
+- **`FrozenState.AssertWritable()` + `_isReadOnly`**（`Core/CommandStreamCore.cs`，12 行）：`#if DEBUG` 守卫的 internal 断言方法及字段，零调用；同时清理两处对应写入站（FrozenState 只写不读；`ComponentStore._isReadOnly` 保留）。
+- **附带修复**：`TrickyEdgeCaseTests.DestructiveWatchHandler` 补 `ITransitionHandler` 实现（修复 pre-existing CS0315 build error）；`deadcode.ps1` `GetRelativePath` 添加 PowerShell fallback。
+- **验证**：`dotnet build -c Release` 0 errors；`dotnet test -c Release` MiniArch.Tests 869 全 PASS + HeroPipeline.Tests 5 PASS；perf gate 豁免（§5a 死代码删除）。
+- **无性能影响**：删除的代码都不在运行时热路径中；`ComponentStore._isReadOnly` 的 `Debug.Assert` 读不受影响。
 
 ## 2026-07-09 Watch API pull-event 模型重构
 

@@ -179,9 +179,6 @@ internal sealed partial class Archetype
     internal int GetComponentIndexFast(ComponentType component) =>
         _componentIdToColumnIndex[component.Value];
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal bool ContainsComponent(ComponentType type) => TryGetComponentIndex(type, out _);
-
     private static int[] BuildColumnMap(Signature signature)
     {
         var maxComponentId = -1;
