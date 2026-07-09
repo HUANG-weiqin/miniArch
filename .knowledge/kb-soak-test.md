@@ -2,11 +2,11 @@
 title: 浸泡测试（Soak Test）— 库安全证明
 module: Soak
 description: 长周期 ECS 正确性验证器——随机操作序列 + Submit/Replay 双路径校验 + 多维度安全证明矩阵
-updated: 2026-07-06
+updated: 2026-07-09
 ---
 # 浸泡测试（Soak Test）— 库安全证明
 
-> `tools/soak/MiniArch.Soak/` — 通过长时间随机操作序列验证 Submit 与 Replay 两条路径的世界状态收敛一致性。已发现并修复 **6 个库级 bug**，当前 **224 seed × 5M+ 帧全 PASS**。
+> `tools/soak/MiniArch.Soak/` — 通过长时间随机操作序列验证 Submit 与 Replay 两条路径的世界状态收敛一致性。已发现并修复 **6 个库级 bug**，当前 **259 seed × 6.4M+ 帧全 PASS**。
 
 ## 这个测试是干什么的
 
@@ -44,7 +44,7 @@ updated: 2026-07-06
 
 Sweep 模式下每个 seed 独立报告 GC/alloc（per-seed baseline），第一个 FAIL 立即停止。
 
-## 库安全证明矩阵（2026-07-06）
+## 库安全证明矩阵（2026-07-09）
 
 ### 结论：全维度 PASS
 
@@ -53,17 +53,17 @@ Sweep 模式下每个 seed 独立报告 GC/alloc（per-seed baseline），第一
 | **Diversity Sweep** | 32 seed (1234567+) × 100K 帧 | ✅ 32/32 PASS |
 | **Diversity Sweep** | 64 seed (42+) × 100K 帧 | ✅ 64/64 PASS |
 | **Diversity Sweep** | 128 seed (1000+) × 50K 帧 | ✅ 128/128 PASS |
-| **Long-Run Stability** | 3 seed × 1M 帧 | ✅ 全 PASS (gen0 73-78, managed 14-27MB) |
+| **Long-Run Stability M7** | 3 seed × 1M 帧 (42, 1234567, 987654) | ✅ 全 PASS (gen0 46-52, managed 39-82MB) |
 | **Ultra-Long Run** | 1 seed × 5M 帧 | ✅ PASS (gen2=154, managed=62MB, 3min55s) |
 | **Determinism** | 同 seed 跑 2 次 | ✅ 字节级一致 (969BAEF1...) |
-| **Boundary: Tiny World** | cap=100 ops/f=50, 200K 帧 | ✅ PASS |
+| **Boundary M7: Tiny World** | seed=111 cap=100 ops/f=50, 200K 帧 | ✅ PASS |
 | **Boundary: Huge World** | cap=50000, 100K 帧 | ✅ PASS (peak 50004 ent) |
 | **Boundary: Extreme Density** | ops/f=100, 100K 帧 | ✅ PASS |
 | **Boundary: Version Rollover** | cap=10 floor=1, 500K 帧 | ✅ PASS (353K creates, gen0=8) |
 | **Robustness Tests** | 19 wire-fuzz + adversarial | ✅ 全 PASS |
 | **Architecture Regression** | HeroComing.Perf gate | ✅ Movement 2086, Attack 1256 |
 
-**总计：224 个不同 seed，全部 PASS。5M 帧无内存泄漏。**
+**总计：259 个不同 seed，全部 PASS。6.4M 帧无内存泄漏。**
 
 ### 内存与 GC 特征
 
