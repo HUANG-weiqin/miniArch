@@ -2,7 +2,7 @@
 title: Test Workflow
 module: MiniArch.Tests
 description: How the test suite, query profiling, snapshot benchmarks, and structural-change benchmarks are organized and how to run them
-updated: 2026-07-03 (GetFirst<T> → GetSingleton<T> 测试更新)
+updated: 2026-07-09 (PublicApiSentinelTests 新增)
 ---
 # Test Workflow
 
@@ -48,6 +48,7 @@ updated: 2026-07-03 (GetFirst<T> → GetSingleton<T> 测试更新)
 | `Persistence/WorldSnapshotTests.cs` | Round-trip、free slot version、unsupported component、Tier 1 in-memory rollback（含 chunked archetype 跨 segment 回滚 + prediction 后 segment 增长回滚） |
 | `Persistence/WorldCloneTests.cs` | 内存直拷克隆 |
 | `UserApi/UserQueryTests.cs` | 普通 API 契约、OrderByEntityId/OrderByComponent |
+| `PublicApiSentinelTests.cs` | 公共 API 冻结哨兵：反射枚举 MiniArch 程序集 public surface，与签入快照对比，意外 API 变更导致测试失败 |
 
 ## 决策
 
