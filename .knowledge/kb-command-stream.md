@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream/ParallelCommandStream typed-store append-only recorder, compatible with FrameDelta. The per-entity deduplicating CommandBuffer was removed (YAGNI) — CommandStream is now the sole recorder.
-updated: 2026-07-09 (pending entity 最终状态契约同步 Watch API)
+updated: 2026-07-09
 ---
 # Command Stream Runtime
 
@@ -18,6 +18,8 @@ updated: 2026-07-09 (pending entity 最终状态契约同步 Watch API)
 - **帧同步端到端指南** → 见 `kb-lockstep-playbook.md`
 - **DeferredEntities flag（placeholder vs real-id 模式）** → 见 `kb-deferred-create-design.md`
 - 历史：曾并存 `CommandBuffer`（per-entity 录制期去重的安全默认）。2026-06-26 按 YAGNI 移除。2026-07-05 进一步把单线程/并行两套路径从同一 sealed class + `_parallelMode` flag 拆分为两个独立 sealed 类型。
+
+- **`Submit()` 增加 pre-validation 检查 pending slot reserved 状态**（2026-07-09，M2）：在 `Submit()` 和 `SubmitFromFrozen()` 的 materialize 前增加 `PreValidatePendingSlots()`，扫描所有非 cancelled pending batch 的 slot 是否仍为 reserved 状态（`!record.IsOccupied && record.Version == entity.Version`）。若 slot 已不再是 reserved，则立即抛 `InvalidOperationException`，防止部分 materialize 后因 slot 状态不一致导致无事务回滚。新增内部 helper `World.IsSlotReserved(Entity)`。零分配、零 public API 变更。
 
 ## 架构
 
