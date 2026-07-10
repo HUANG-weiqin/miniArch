@@ -85,6 +85,15 @@ updated: 2026-07-11
 | Archetype 级清空 | `World.Clear(in QueryDescription)` | 最快路径：直接 reset 匹配 archetype，~4× vs for-loop；**无 cascade** |
 | 注册表指纹 | `MiniArch.ComponentSchema` (public static) | `ComponentSchema.Fingerprint()` |
 
+### 销毁 API 选用指南
+
+| API | 输入 | 级联 | 性能（vs for-loop） | 什么时候用 |
+|-----|------|------|-------------------|-----------|
+| `Destroy(Entity)` | 单个 entity | ✅ | 1×（基准） | 销毁单个实体 |
+| `DestroyMany(Span<Entity>)` | entity 数组 | ✅ 父子去重 | 1.3-1.5×（级联）<br>1.6-2.3×（平坦） | 有一批 entity handle 要销毁，可能含父子关系 |
+| `Destroy(in QueryDescription)` | query | ✅ | 1.4-2.3× | 按组件条件销毁所有匹配实体，需要级联 |
+| `Clear(in QueryDescription)` | query | ❌ | 3-4× vs for<br>1.5-2× vs Destroy(query) | 场景卸载、archetype 回收——确保 query 内无实体在非 query archetype 中有子节点 |
+
 **关键分层边界：**
 - `MiniArch.Core.QueryCache`（原 `Core.Query`，2026-06-30 重命名）是 `internal sealed class`（`Core/QueryCache.cs:11`），用户不能接触。重命名消除了 public struct `MiniArch.Query` 与 internal class `Core.Query` 的命名空间碰撞
 - `MiniArch.Query.Advanced` 是 `internal`，**用户层无 advanced 入口**——batch/parallel 已在 `MiniArch.Query` 上直接提供
