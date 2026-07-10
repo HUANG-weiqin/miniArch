@@ -706,6 +706,7 @@ class: MiniArch.World
   Method: CanonicalChecksum() -> System.Byte[]
   Method: CaptureState() -> MiniArch.Core.WorldStateSnapshot
   Method: Checksum() -> System.Byte[]
+  Method: Clear(in MiniArch.QueryDescription& description) -> System.Void
   Method: Clone() -> MiniArch.World
   Method: Clone(MiniArch.Entity source) -> MiniArch.Entity
   Method: Create() -> MiniArch.Entity
@@ -727,6 +728,8 @@ class: MiniArch.World
   Method: Create(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13, T14 component14, T15 component15, T16 component16) -> MiniArch.Entity where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, T5 : struct, System.ValueType, T6 : struct, System.ValueType, T7 : struct, System.ValueType, T8 : struct, System.ValueType, T9 : struct, System.ValueType, T10 : struct, System.ValueType, T11 : struct, System.ValueType, T12 : struct, System.ValueType, T13 : struct, System.ValueType, T14 : struct, System.ValueType, T15 : struct, System.ValueType, T16 : struct, System.ValueType
   Method: CreateMany(System.Span<MiniArch.Entity> entities) -> System.Void
   Method: Destroy(MiniArch.Entity entity) -> System.Void
+  Method: Destroy(in MiniArch.QueryDescription& description) -> System.Void
+  Method: DestroyMany(System.ReadOnlySpan<MiniArch.Entity> entities) -> System.Void
   Method: Dispose() -> System.Void
   Method: EnsureCapacity(System.Int32 entityCapacity) -> System.Void
   Method: EnumerateChildren(MiniArch.Entity parent) -> MiniArch.ChildrenEnumerable

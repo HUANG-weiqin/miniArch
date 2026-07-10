@@ -15,7 +15,8 @@ namespace MiniArch;
 /// <b>Threading model</b> (read the following before touching a World from
 /// multiple threads):
 /// <list type="bullet">
-/// <item><b>Structural changes</b> —<see cref="Create"/>, <see cref="Destroy"/>,
+/// <item><b>Structural changes</b> —<see cref="Create"/>, <see cref="Destroy(Entity)"/>,
+/// <see cref="DestroyMany(ReadOnlySpan{Entity})"/>, <see cref="Destroy(in QueryDescription)"/>,
 /// <see cref="Add{T}"/>, <see cref="Set{T}"/>, <see cref="Remove{T}"/>,
 /// <see cref="AddChild"/>, <see cref="Clone(Entity)"/> —are <b>not</b> thread-safe
 /// and must be issued from a single thread (typically the main game thread)
@@ -55,6 +56,21 @@ public sealed partial class World : IDisposable
     // allocations). Cleared at the start of every Replay call; never allocated
     // per-call in steady state.
     private readonly Dictionary<Archetype, int> _replayCreateCounts = new();
+
+    // Reused scratch for batched destroy grouping. Structural mutation is single-threaded,
+    // so the World can own this scratch just like _destroyOrderScratch.
+    private int[] _destroyRowMarks = [];
+    private int _destroyRowMarkGen;
+
+    // World-owned scratch arrays for DestroyMany, pre-sized to entityCapacity and grown
+    // on demand — zero per-call allocation in steady state (no ArrayPool overhead).
+    private Archetype[] _destroyGroupArchetypes = [];
+    private int[] _destroyGroupCounts = [];
+    private int[] _destroyGroupFirstCandidate = [];
+    private int[] _destroyCandidateNext = [];
+    private int[] _destroyCandidateRows = [];
+    private int[] _destroyCompactRows = [];
+    private bool[] _destroyFullGroups = [];
 
     /// <summary>
     /// Incremented on every <see cref="ReleaseReservedEntity"/> and
@@ -115,7 +131,15 @@ public sealed partial class World : IDisposable
         _entitySlotCount = 0;
         _freeIds = entityCapacity == 0 ? Array.Empty<RecycledEntity>() : new RecycledEntity[entityCapacity];
         _destroyVisitedGen = entityCapacity == 0 ? [] : new int[entityCapacity];
+        _destroyRowMarks = entityCapacity == 0 ? [] : new int[entityCapacity];
         _destroyOrderScratch = new List<Entity>(entityCapacity);
+        _destroyGroupArchetypes = new Archetype[entityCapacity];
+        _destroyGroupCounts = new int[entityCapacity];
+        _destroyGroupFirstCandidate = new int[entityCapacity];
+        _destroyCandidateNext = new int[entityCapacity];
+        _destroyCandidateRows = new int[entityCapacity];
+        _destroyCompactRows = new int[entityCapacity];
+        _destroyFullGroups = new bool[entityCapacity];
     }
 
     /// <summary>
@@ -129,6 +153,15 @@ public sealed partial class World : IDisposable
         _archetypeByMask.Clear();
         _archetypeByHash.Clear();
         _replayCreateCounts.Clear();
+        _destroyRowMarks = [];
+        _destroyRowMarkGen = 0;
+        _destroyGroupArchetypes = [];
+        _destroyGroupCounts = [];
+        _destroyGroupFirstCandidate = [];
+        _destroyCandidateNext = [];
+        _destroyCandidateRows = [];
+        _destroyCompactRows = [];
+        _destroyFullGroups = [];
         _queryFiltersByDescription.Clear();
         _queries.Clear();
         _archetypeSnapshot = Array.Empty<Archetype>();
@@ -1346,6 +1379,15 @@ public sealed partial class World : IDisposable
         _archetypeByMask.Clear();
         _archetypeByHash.Clear();
         _replayCreateCounts.Clear();
+        _destroyRowMarks = [];
+        _destroyRowMarkGen = 0;
+        _destroyGroupArchetypes = [];
+        _destroyGroupCounts = [];
+        _destroyGroupFirstCandidate = [];
+        _destroyCandidateNext = [];
+        _destroyCandidateRows = [];
+        _destroyCompactRows = [];
+        _destroyFullGroups = [];
         _replayPlaceholderMap = [];
         _replayMapCount = 0;
         _archetypeSnapshot = Array.Empty<Archetype>();

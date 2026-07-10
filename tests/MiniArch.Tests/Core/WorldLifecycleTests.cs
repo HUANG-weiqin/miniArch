@@ -1,5 +1,6 @@
 using System.Runtime.ExceptionServices;
 using MiniArch.Core;
+using MiniArch.Diagnostics;
 using MiniArch.Tests.Core.TestSupport;
 using MiniQueryCache = MiniArch.Core.QueryCache;
 
@@ -546,6 +547,234 @@ public sealed class WorldLifecycleTests
     }
 
     [Fact]
+    public void DestroyMany_matches_guarded_for_destroy_by_checksum_diff_and_validator()
+    {
+        var expected = BuildDestroyProofWorld(out var expectedEntities);
+        var actual = BuildDestroyProofWorld(out var actualEntities);
+
+        var expectedInput = BuildDestroyManyProofInput(expectedEntities);
+        var actualInput = BuildDestroyManyProofInput(actualEntities);
+
+        foreach (var entity in expectedInput)
+        {
+            if (expected.IsAlive(entity))
+                expected.Destroy(entity);
+        }
+
+        actual.DestroyMany(actualInput);
+
+        AssertWorldsIdentical(expected, actual);
+    }
+
+    [Fact]
+    public void DestroyMany_full_archetype_clear_matches_loop_and_reuses_same_ids()
+    {
+        var expected = BuildFlatPositionWorld(out var expectedPositions);
+        var actual = BuildFlatPositionWorld(out var actualPositions);
+
+        foreach (var entity in expectedPositions)
+            expected.Destroy(entity);
+
+        actual.DestroyMany(actualPositions);
+
+        AssertWorldsIdentical(expected, actual);
+
+        var expectedRecreated = new Entity[expectedPositions.Length];
+        var actualRecreated = new Entity[actualPositions.Length];
+        for (var i = 0; i < expectedRecreated.Length; i++)
+        {
+            expectedRecreated[i] = expected.Create(new Position(i, -i));
+            actualRecreated[i] = actual.Create(new Position(i, -i));
+        }
+
+        Assert.Equal(expectedRecreated, actualRecreated);
+        AssertWorldsIdentical(expected, actual);
+    }
+
+    [Fact]
+    public void DestroyMany_chunked_partial_archetype_matches_loop_checksum()
+    {
+        var expected = BuildChunkedPositionWorld(out var expectedPositions);
+        var actual = BuildChunkedPositionWorld(out var actualPositions);
+
+        var expectedInput = new[]
+        {
+            expectedPositions[1], expectedPositions[4], expectedPositions[7], expectedPositions[10]
+        };
+        var actualInput = new[]
+        {
+            actualPositions[1], actualPositions[4], actualPositions[7], actualPositions[10]
+        };
+
+        foreach (var entity in expectedInput)
+            expected.Destroy(entity);
+
+        actual.DestroyMany(actualInput);
+
+        AssertWorldsIdentical(expected, actual);
+    }
+
+    [Fact]
+    public void DestroyMany_multi_segment_partial_archetype_matches_loop_checksum()
+    {
+        var expected = BuildMultiSegmentWideWorld(out var expectedEntities, out var segmentCapacity);
+        var actual = BuildMultiSegmentWideWorld(out var actualEntities, out var actualSegmentCapacity);
+        Assert.Equal(segmentCapacity, actualSegmentCapacity);
+
+        var rows = new[]
+        {
+            1,
+            segmentCapacity - 1,
+            segmentCapacity,
+            segmentCapacity + 1,
+            expectedEntities.Length - 2
+        };
+
+        var expectedInput = rows.Select(row => expectedEntities[row]).ToArray();
+        var actualInput = rows.Select(row => actualEntities[row]).ToArray();
+
+        foreach (var entity in expectedInput)
+            expected.Destroy(entity);
+
+        actual.DestroyMany(actualInput);
+
+        AssertWorldsIdentical(expected, actual);
+    }
+
+    [Fact]
+    public void Destroy_query_matches_materialized_query_destroy_loop_with_cascade()
+    {
+        var expected = BuildDestroyProofWorld(out _);
+        var actual = BuildDestroyProofWorld(out _);
+        var description = new QueryDescription().With<Position>();
+
+        var targets = new List<Entity>();
+        foreach (var entity in expected.Query(in description))
+            targets.Add(entity);
+
+        foreach (var entity in targets)
+        {
+            if (expected.IsAlive(entity))
+                expected.Destroy(entity);
+        }
+
+        actual.Destroy(in description);
+
+        AssertWorldsIdentical(expected, actual);
+    }
+
+    [Fact]
+    public void Destroy_query_multi_segment_archetype_matches_materialized_loop()
+    {
+        var expected = BuildMultiSegmentWideWorld(out _, out _);
+        var actual = BuildMultiSegmentWideWorld(out _, out _);
+        var description = new QueryDescription().With<C1>();
+
+        var targets = new List<Entity>();
+        foreach (var entity in expected.Query(in description))
+            targets.Add(entity);
+
+        foreach (var entity in targets)
+        {
+            if (expected.IsAlive(entity))
+                expected.Destroy(entity);
+        }
+
+        actual.Destroy(in description);
+
+        AssertWorldsIdentical(expected, actual);
+    }
+
+    [Fact]
+    public void Clear_destroys_all_matched_and_preserves_survivors()
+    {
+        var expected = new World(entityCapacity: 64);
+        var actual = new World(entityCapacity: 64);
+        var desc = new QueryDescription().With<Position>();
+
+        // Entities with Position (will be destroyed).
+        for (var i = 0; i < 30; i++)
+        {
+            expected.Create(new Position(i, i + 1), new Velocity(i + 2, i + 3));
+            actual.Create(new Position(i, i + 1), new Velocity(i + 2, i + 3));
+        }
+
+        // Survivors without Position.
+        for (var i = 0; i < 10; i++)
+        {
+            expected.Create(new Velocity(i + 100, i + 200));
+            actual.Create(new Velocity(i + 100, i + 200));
+        }
+
+        expected.Destroy(in desc);
+        actual.Clear(in desc);
+
+        AssertWorldsIdentical(expected, actual);
+    }
+
+    [Fact]
+    public void Clear_multi_archetype_matches_safe_destroy()
+    {
+        var expected = new World(entityCapacity: 256);
+        var actual = new World(entityCapacity: 256);
+        var desc = new QueryDescription().With<Position>();
+
+        for (var arch = 0; arch < 6; arch++)
+        {
+            for (var i = 0; i < 40; i++)
+            {
+                var p = new Position(i, i + 1);
+                var v = new Velocity(i + 2, i + 3);
+                var a = new C1(i + 4);
+
+                switch (arch)
+                {
+                    case 0: expected.Create(p); actual.Create(p); break;
+                    case 1: expected.Create(p, v); actual.Create(p, v); break;
+                    case 2: expected.Create(p, a); actual.Create(p, a); break;
+                    case 3: expected.Create(p, v, a); actual.Create(p, v, a); break;
+                    case 4: expected.Create(p, v, a, new C2(i)); actual.Create(p, v, a, new C2(i)); break;
+                    default: expected.Create(v); actual.Create(v); break; // survivor
+                }
+            }
+        }
+
+        expected.Destroy(in desc);
+        actual.Clear(in desc);
+
+        AssertWorldsIdentical(expected, actual);
+    }
+
+    [Fact]
+    public void Clear_allows_id_recycling()
+    {
+        var world = new World(entityCapacity: 32);
+        var desc = new QueryDescription().With<Position>();
+
+        var first = world.Create(new Position(1, 2));
+        world.Create(new Position(3, 4));
+        world.Clear(in desc);
+
+        // After dispose, IDs should be recycled.
+        var recycled = world.Create(new Position(5, 6));
+        Assert.True(recycled.Id <= first.Id + 1,
+            $"Expected ID recycling, got {recycled.Id} after first entity had ID {first.Id}");
+        Assert.True(world.IsAlive(recycled));
+    }
+
+    [Fact]
+    public void Clear_with_no_matches_is_noop()
+    {
+        var world = new World();
+        var velocityEntity = world.Create(new Velocity(1, 2));
+
+        var desc = new QueryDescription().With<Position>();
+        world.Clear(in desc); // no match, should not throw
+
+        Assert.True(world.TryGetLocation(velocityEntity, out _));
+    }
+
+    [Fact]
     public void Warmed_destroy_cascade_path_does_not_allocate()
     {
         RunOnDedicatedThread(() =>
@@ -673,6 +902,150 @@ public sealed class WorldLifecycleTests
         world.AddChild(root, child);
         world.AddChild(child, grandChild);
         world.Destroy(root);
+    }
+
+    private static World BuildDestroyProofWorld(out Entity[] entities)
+    {
+        var world = new World(chunkCapacity: 4, entityCapacity: 32);
+
+        var root = world.Create(new Position(1, 10));
+        var child = world.Create(new Velocity(2, 20));
+        var grandChild = world.Create(new C1(300));
+        var sibling = world.Create(new Position(4, 40), new Velocity(4, 400));
+        var positionLeaf = world.Create(new Position(5, 50));
+        var positionSurvivor = world.Create(new Position(6, 60));
+        var velocityLeaf = world.Create(new Velocity(7, 70));
+        var unrelatedSurvivor = world.Create(new C2(800));
+        var stale = world.Create(new C3(900));
+
+        world.AddChild(root, child);
+        world.AddChild(child, grandChild);
+        world.AddChild(root, sibling);
+
+        world.Destroy(stale);
+
+        entities =
+        [
+            root,
+            child,
+            grandChild,
+            sibling,
+            positionLeaf,
+            positionSurvivor,
+            velocityLeaf,
+            unrelatedSurvivor,
+            stale
+        ];
+
+        return world;
+    }
+
+    private static Entity[] BuildDestroyManyProofInput(Entity[] entities)
+    {
+        return
+        [
+            entities[1], // child before parent: proves loop-order cascade parity
+            entities[8], // stale/dead handle must be skipped
+            entities[4], // childless leaf batched with others
+            entities[0], // parent cascades remaining subtree
+            entities[1], // duplicate already killed by earlier input
+            entities[6], // different archetype childless leaf
+            entities[4]  // duplicate childless leaf
+        ];
+    }
+
+    private static World BuildFlatPositionWorld(out Entity[] positions)
+    {
+        var world = new World(chunkCapacity: 128, entityCapacity: 64);
+        positions = new Entity[32];
+        for (var i = 0; i < positions.Length; i++)
+            positions[i] = world.Create(new Position(i, i * 10));
+
+        world.Create(new Velocity(100, 200));
+        return world;
+    }
+
+    private static World BuildChunkedPositionWorld(out Entity[] positions)
+    {
+        var world = new World(chunkCapacity: 4, entityCapacity: 32);
+        positions = new Entity[12];
+        for (var i = 0; i < positions.Length; i++)
+            positions[i] = world.Create(new Position(i, i * 10));
+
+        Assert.True(world.TryGetLocation(positions[0], out var info));
+        info.Archetype.ForceChunkedForTesting();
+        Assert.True(info.Archetype.IsChunked);
+        return world;
+    }
+
+    private static World BuildMultiSegmentWideWorld(out Entity[] entities, out int segmentCapacity)
+    {
+        var world = new World(entityCapacity: 1);
+        var first = CreateWideEntity(world, 0);
+        Assert.True(world.TryGetLocation(first, out var info));
+        var archetype = info.Archetype;
+        segmentCapacity = archetype.SegmentCapacity;
+
+        var count = segmentCapacity + 128;
+        world.EnsureCapacity(count);
+        entities = new Entity[count];
+        entities[0] = first;
+
+        for (var i = 1; i < entities.Length; i++)
+            entities[i] = CreateWideEntity(world, i);
+
+        Assert.True(archetype.IsChunked);
+        Assert.True(archetype.SegmentCount > 1);
+        return world;
+    }
+
+    private static Entity CreateWideEntity(World world, int value)
+    {
+        return world.Create(
+            new C1(value + 1), new C2(value + 2), new C3(value + 3), new C4(value + 4),
+            new C5(value + 5), new C6(value + 6), new C7(value + 7), new C8(value + 8),
+            new C9(value + 9), new C10(value + 10), new C11(value + 11), new C12(value + 12),
+            new C13(value + 13), new C14(value + 14), new C15(value + 15), new C16(value + 16));
+    }
+
+    private static void AssertWorldsIdentical(World expected, World actual)
+    {
+        AssertValidWorld(expected);
+        AssertValidWorld(actual);
+
+        var diff = WorldDiff.Compare(expected, actual);
+        Assert.True(diff.AreIdentical,
+            $"Entity diffs: {diff.EntityDiffs.Count}; free-list diff: {diff.FreeListDiff is not null}");
+
+        var expectedDigest = WorldDigest.Compute(expected);
+        var actualDigest = WorldDigest.Compute(actual);
+        Assert.Equal(expectedDigest.Occupancy, actualDigest.Occupancy);
+        Assert.Equal(expectedDigest.FreeList, actualDigest.FreeList);
+        Assert.Equal(expectedDigest.Hierarchy, actualDigest.Hierarchy);
+        AssertEqualComponentDigests(expectedDigest, actualDigest);
+
+        // Do not compare WorldDigest.Total here: it includes PerArchetype physical
+        // row-order hashes. Batched unordered hole-fill remove is allowed to produce a
+        // different dense storage order than sequential swap-remove, while the
+        // canonical checksum and WorldDiff still prove identical logical state
+        // and identical future id reuse through FreeList.
+
+        Assert.Equal(expected.CanonicalChecksum(), actual.CanonicalChecksum());
+    }
+
+    private static void AssertEqualComponentDigests(WorldDigestResult expected, WorldDigestResult actual)
+    {
+        Assert.Equal(expected.PerComponent.Keys.OrderBy(type => type.FullName).ToArray(),
+            actual.PerComponent.Keys.OrderBy(type => type.FullName).ToArray());
+
+        foreach (var componentType in expected.PerComponent.Keys)
+            Assert.Equal(expected.PerComponent[componentType], actual.PerComponent[componentType]);
+    }
+
+    private static void AssertValidWorld(World world)
+    {
+        var validation = WorldValidator.Validate(world);
+        Assert.True(validation.IsValid, string.Join(Environment.NewLine, validation.Issues));
     }
 
     [Fact]

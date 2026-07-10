@@ -8,10 +8,10 @@ namespace MiniArch.Diagnostics;
 /// the heavier <see cref="WorldDiff.Compare"/>.
 /// </summary>
 /// <remarks>
-/// All hashes are deterministic (same logical state → same digest).
+/// All hashes are deterministic for the same internal world layout.
 /// The <see cref="Total"/> hash is a combination of all domain hashes,
-/// NOT equivalent to <see cref="World.Checksum"/> (which may include
-/// additional internal layout details).
+/// including physical per-archetype row-order data. It is NOT equivalent to
+/// layout-independent <see cref="World.CanonicalChecksum"/>.
 /// </remarks>
 public readonly struct WorldDigestResult
 {

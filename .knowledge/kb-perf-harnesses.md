@@ -1,8 +1,8 @@
 ---
 title: Performance Harnesses Disambiguation
 module: Meta
-description: Matrix of the 6 performance harnesses in miniArch — what each measures, current baselines, and which one is the regression gate
-updated: 2026-07-09
+description: Matrix of the 7 performance harnesses in miniArch — what each measures, current baselines, and which one is the regression gate
+updated: 2026-07-10
 ---
 # Performance Harnesses Disambiguation
 
@@ -20,6 +20,7 @@ miniArch 有 **多套性能测试工具**，以下矩阵记录主要工具。它
 | **GameTickSim.Perf** | `tools/perf/GameTickSim.Perf` | 场景化三方对比（MiniArch vs Arch vs DefaultEcs） | ticks/s | 见各场景 | ❌ 竞品对比 | `kb-gameticksim-scenarios.md` |
 | **CommandStream.Profile** | `tools/perf/CommandStream.Profile` | CommandStream 专剖：6 个微场景，含 record/submit/snapshot/clear 分阶段 | ticks/s | 无固定 baseline | ❌ CPU sampling 辅助 | `kb-command-stream.md` |
 | **WatchApi.Perf** | `tools/perf/WatchApi.Perf` | Watch API 专项：ChangeWatch/Projected/TransitionWatch 秒级吞吐、steady-state allocation、发布验证 | ops/s | 见 `kb-change-tracking.md` WatchApi.Perf 段 | ❌ API 发布/优化验证 | `kb-change-tracking.md` |
+| **DestroyMany.Perf** | `tools/perf/DestroyMany.Perf` | `DestroyMany` / `Destroy(query)` / `Clear(query)` vs guarded `for Destroy`，稳态吞吐 + steady-state alloc + threshold sweep + correctness verify | speedup / us/op | 2026-07-10 稳态：full dense 1.9×；query 2.3×；Clear 4.0×；cascade 1.4×；sweep crossover ≈30% | ❌ API 专项证明 | `kb-core-ecs.md` |
 
 ## 如何选择
 
@@ -29,6 +30,7 @@ miniArch 有 **多套性能测试工具**，以下矩阵记录主要工具。它
 ├── 对比 MiniArch vs Arch/DefaultEcs/Friflo → GameTickSim.Perf
 ├── 验证 CommandStream 优化效果 → SubmitAndSnapshotAsync 内联测量
 ├── 验证 Watch API 吞吐/分配发布状态 → WatchApi.Perf
+├── 证明 DestroyMany/Destroy(query) 快于 guarded for Destroy → DestroyMany.Perf
 ├── 微观 per-operation 分析 → PipelineBenchmarkTests
 ├── 聚焦 CommandStream 热点定位 → CommandStream.Profile + dotnet-trace
 └── CPU 采样找其他热点 → 见 kb-profiling-workflow.md（不是 harness，是工具）
@@ -42,6 +44,7 @@ miniArch 有 **多套性能测试工具**，以下矩阵记录主要工具。它
 - **GameTickSim ticks/s** ≈ 各场景自定义（Combat 3274、ParticleStorm 1691 等），每个场景测量不同的 workload 组合
 - **CommandStream.Profile ticks/s** ≈ 同一 workload 内的 ticks/s 可比对；不同 workload 的数字差异由 record 密度/结构变更频率决定
 - **WatchApi.Perf ops/s** ≈ 每秒执行 Watch scenario operation 的次数（如一次 `Diff`，或 churn 场景中的 mutation + `Diff` + `Snapshot`），用于同一 scenario 内 before/after 比较，不与 Hero rounds/s 比较
+- **DestroyMany.Perf speedup** ≈ 同一 world shape 下 guarded `for Destroy` 总耗时 / batch API 总耗时；setup 不计时，适合证明 Destroy batch API 本身，不可和 Hero rounds/s 比。
 
 > **关键**：不要跨 harness 比较数字。同 harness 内的 before/after 对比才有意义。
 
@@ -65,6 +68,9 @@ dotnet run -c Release --project tools/perf/CommandStream.Profile -- --scenario c
 
 # Watch API 专项吞吐/分配验证（秒级 warmup + measure）
 dotnet run -c Release --project tools/perf/WatchApi.Perf -- --entity-count 10000 --warmup-seconds 2 --duration-seconds 5
+
+# DestroyMany / Destroy(query) API 专项证明（内置 correctness verify）
+dotnet run -c Release --project tools/perf/DestroyMany.Perf
 
 # 详细 workflow 见各 KB 页
 ```
