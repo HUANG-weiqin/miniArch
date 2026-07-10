@@ -172,7 +172,7 @@ internal static class Program
         finally
         {
             safe.World.Dispose();
-            unsafeWorld.World.Dispose();
+            clearWorld.World.Dispose();
         }
     }
 
