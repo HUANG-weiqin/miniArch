@@ -292,11 +292,14 @@ public sealed partial class World
     /// <summary>
     /// Returns whether an entity is alive.
     /// </summary>
+    /// <remarks>
+    /// Intentionally omits <see cref="AssertNotDisposed"/>: after Dispose,
+    /// <c>_entitySlotCount</c> is 0 so the bounds check returns false for all
+    /// IDs — semantically correct (nothing is alive) without the branch overhead.
+    /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool IsAlive(Entity entity)
     {
-        AssertNotDisposed();
-
         if ((uint)entity.Id >= (uint)_entitySlotCount)
             return false;
 
