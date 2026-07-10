@@ -102,7 +102,128 @@ internal static class Program
             Console.WriteLine();
         }
 
+        PrintSteadyStateAlloc();
+
         return allPassed ? 0 : 1;
+    }
+
+    // Demonstrates that batch allocation drops to zero when the same World is
+    // reused (as in a real game loop). The throughput benchmarks above create a
+    // fresh World per iteration, which forces QueryCache creation every time.
+    private static void PrintSteadyStateAlloc()
+    {
+        const int iterations = 200;
+
+        Console.WriteLine("steady-state alloc (same World reused, after cache warmup)");
+        Console.WriteLine();
+
+        // --- batch: Destroy(query), 1 archetype ---
+        SteadyStateRun("batch   Destroy(query) [1 archetype]",
+            QueryEntities, PopulateQueryEntities, world => world.Destroy(in PositionQuery),
+            iterations);
+
+        // --- batch: Destroy(query), 16 archetypes ---
+        SteadyStateRun($"batch   Destroy(query) [{MultiArchCount} archetypes]",
+            MultiArchTotal, PopulateMultiArchetypeEntities, world => world.Destroy(in PositionQuery),
+            iterations);
+
+        // --- for-loop baseline (always allocates List<Entity>) ---
+        SteadyStateRun("forloop Destroy(query) [1 archetype]",
+            QueryEntities, PopulateQueryEntities,
+            world => DestroyPositionQueryWithMaterializedLoop(world, []),
+            iterations);
+
+        Console.WriteLine();
+    }
+
+    private static void SteadyStateRun(
+        string label, int entityCount,
+        Action<World> populate,
+        Action<World> destroy,
+        int iterations)
+    {
+        var world = new World(entityCapacity: entityCount + 16);
+        populate(world);
+        // Add distractors (entities without Position, not matched by query).
+        for (var i = 0; i < 16; i++)
+            world.Create(new Velocity(-i, i));
+        // Prime caches: first destroy creates QueryCache / warms JIT.
+        destroy(world);
+        // After destroy, all matched entities are in the free-list.
+        // Repopulate reuses archetype storage + recycles IDs — no growth alloc.
+
+        var totalAlloc = 0L;
+        var totalTicks = 0L;
+
+        for (var i = 0; i < iterations; i++)
+        {
+            populate(world);
+
+            var beforeAlloc = GC.GetAllocatedBytesForCurrentThread();
+            var start = Stopwatch.GetTimestamp();
+            destroy(world);
+            totalTicks += Stopwatch.GetTimestamp() - start;
+            totalAlloc += GC.GetAllocatedBytesForCurrentThread() - beforeAlloc;
+        }
+
+        var ms = (double)totalTicks / Stopwatch.Frequency * 1000;
+        var usPerOp = ms * 1000 / iterations;
+        var bPerOp = (double)totalAlloc / iterations;
+
+        Console.WriteLine($"  {label}");
+        Console.WriteLine($"    alloc {bPerOp,8:F1} B/op | {usPerOp,8:F1} us/op");
+        world.Dispose();
+    }
+
+    private static void PopulateQueryEntities(World world)
+    {
+        for (var i = 0; i < QueryEntities; i++)
+        {
+            world.Create(
+                new Position(i, i + 1),
+                new Velocity(i + 2, i + 3),
+                new A(i + 4),
+                new B(i + 5),
+                new C(i + 6),
+                new D(i + 7));
+        }
+    }
+
+    private static void PopulateMultiArchetypeEntities(World world)
+    {
+        for (var arch = 0; arch < MultiArchCount; arch++)
+        {
+            for (var i = 0; i < MultiArchEntitiesPer; i++)
+            {
+                var id = arch * MultiArchEntitiesPer + i;
+                var p = new Position(id, id + 1);
+                var v = new Velocity(id + 2, id + 3);
+                var a = new A(id + 4);
+                var b = new B(id + 5);
+                var c = new C(id + 6);
+                var d = new D(id + 7);
+
+                switch (arch)
+                {
+                    case 0: world.Create(p); break;
+                    case 1: world.Create(p, v); break;
+                    case 2: world.Create(p, a); break;
+                    case 3: world.Create(p, b); break;
+                    case 4: world.Create(p, c); break;
+                    case 5: world.Create(p, d); break;
+                    case 6: world.Create(p, v, a); break;
+                    case 7: world.Create(p, v, b); break;
+                    case 8: world.Create(p, v, c); break;
+                    case 9: world.Create(p, v, d); break;
+                    case 10: world.Create(p, a, b); break;
+                    case 11: world.Create(p, a, c); break;
+                    case 12: world.Create(p, b, c, d); break;
+                    case 13: world.Create(p, v, a, b); break;
+                    case 14: world.Create(p, v, a, b, c); break;
+                    default: world.Create(p, v, a, b, c, d); break;
+                }
+            }
+        }
     }
 
     private static void VerifyEquivalent(Scenario scenario)
