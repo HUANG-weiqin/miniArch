@@ -34,6 +34,32 @@
 3. 如果 competent dense user 在 <50 行内就能达到同等正确性与性能，默认 No-Go。
 4. 如果 serialization 不能成为清晰价值主张，v1 不纳入 serialization，只评估 runtime host-local map。
 
+## 运行 (M2)
+
+```bash
+# 默认参数（100k entities, 3 reps, 1 warmup）
+dotnet run -c Release --project tools/perf/ManagedEntityMap.ValueLab
+
+# 验收命令（10k entities）
+dotnet run -c Release --project tools/perf/ManagedEntityMap.ValueLab -- --entity-count 10000 --repetitions 3
+
+# 仅正确性检查（M3 实现，M2 退出 0）
+dotnet run -c Release --project tools/perf/ManagedEntityMap.ValueLab -- --correctness-only
+```
+
+选项：
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `--entity-count` | 100000 | World 中创建的 entity 数 |
+| `--repetitions` | 3 | 每操作测量次数（取平均） |
+| `--warmup` | 1 | 测量前的预热轮数 |
+| `--mapping-ratio` | 1.0 | 被映射的 entity 比例 |
+| `--destroy-ratio` | 0.1 | Align 测试中销毁的 entity 比例 |
+| `--operation-mix` | all | 操作组合（M2 仅支持 all） |
+| `--correctness-only` | — | 占位，M3 实现正确性测试 |
+| `--help` | — | 显示帮助 |
+
 ## API/语义边界
 
 - host-local / optional / non-deterministic / non-thread-safe。
