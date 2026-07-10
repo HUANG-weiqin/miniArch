@@ -2,7 +2,7 @@
 title: Performance Harnesses Disambiguation
 module: Meta
 description: Matrix of the 7 performance harnesses in miniArch — what each measures, current baselines, and which one is the regression gate
-updated: 2026-07-10
+updated: 2026-07-11
 ---
 # Performance Harnesses Disambiguation
 
@@ -20,7 +20,7 @@ miniArch 有 **多套性能测试工具**，以下矩阵记录主要工具。它
 | **GameTickSim.Perf** | `tools/perf/GameTickSim.Perf` | 场景化三方对比（MiniArch vs Arch vs DefaultEcs） | ticks/s | 见各场景 | ❌ 竞品对比 | `kb-gameticksim-scenarios.md` |
 | **CommandStream.Profile** | `tools/perf/CommandStream.Profile` | CommandStream 专剖：6 个微场景，含 record/submit/snapshot/clear 分阶段 | ticks/s | 无固定 baseline | ❌ CPU sampling 辅助 | `kb-command-stream.md` |
 | **WatchApi.Perf** | `tools/perf/WatchApi.Perf` | Watch API 专项：ChangeWatch/Projected/TransitionWatch 秒级吞吐、steady-state allocation、发布验证 | ops/s | 见 `kb-change-tracking.md` WatchApi.Perf 段 | ❌ API 发布/优化验证 | `kb-change-tracking.md` |
-| **DestroyMany.Perf** | `tools/perf/DestroyMany.Perf` | `DestroyMany` / `Destroy(query)` / `Clear(query)` vs guarded `for Destroy`，稳态吞吐 + steady-state alloc + threshold sweep + correctness verify | speedup / us/op | 2026-07-10 稳态：full dense 1.9×；query 2.3×；Clear 4.0×；cascade 1.4×；sweep crossover ≈30% | ❌ API 专项证明 | `kb-core-ecs.md` |
+| **DestroyMany.Perf** | `tools/perf/DestroyMany.Perf` | `Destroy(ReadOnlySpan<Entity>)` / `Destroy(query)` / `Clear(query)` vs guarded `for Destroy`，稳态吞吐 + steady-state alloc + threshold sweep + correctness verify | speedup / us/op | 2026-07-10 稳态：full dense 1.9×；query 2.3×；Clear 4.0×；cascade 1.4×；sweep crossover ≈30% | ❌ API 专项证明 | `kb-core-ecs.md` |
 
 ## 如何选择
 
@@ -30,7 +30,7 @@ miniArch 有 **多套性能测试工具**，以下矩阵记录主要工具。它
 ├── 对比 MiniArch vs Arch/DefaultEcs/Friflo → GameTickSim.Perf
 ├── 验证 CommandStream 优化效果 → SubmitAndSnapshotAsync 内联测量
 ├── 验证 Watch API 吞吐/分配发布状态 → WatchApi.Perf
-├── 证明 DestroyMany/Destroy(query) 快于 guarded for Destroy → DestroyMany.Perf
+├── 证明 Destroy(ReadOnlySpan<Entity>)/Destroy(query) 快于 guarded for Destroy → DestroyMany.Perf
 ├── 微观 per-operation 分析 → PipelineBenchmarkTests
 ├── 聚焦 CommandStream 热点定位 → CommandStream.Profile + dotnet-trace
 └── CPU 采样找其他热点 → 见 kb-profiling-workflow.md（不是 harness，是工具）
@@ -69,7 +69,7 @@ dotnet run -c Release --project tools/perf/CommandStream.Profile -- --scenario c
 # Watch API 专项吞吐/分配验证（秒级 warmup + measure）
 dotnet run -c Release --project tools/perf/WatchApi.Perf -- --entity-count 10000 --warmup-seconds 2 --duration-seconds 5
 
-# DestroyMany / Destroy(query) API 专项证明（内置 correctness verify）
+# Destroy(ReadOnlySpan<Entity>) / Destroy(query) API 专项证明（内置 correctness verify）
 dotnet run -c Release --project tools/perf/DestroyMany.Perf
 
 # 详细 workflow 见各 KB 页

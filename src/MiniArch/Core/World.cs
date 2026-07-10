@@ -16,7 +16,7 @@ namespace MiniArch;
 /// multiple threads):
 /// <list type="bullet">
 /// <item><b>Structural changes</b> —<see cref="Create"/>, <see cref="Destroy(Entity)"/>,
-/// <see cref="DestroyMany(ReadOnlySpan{Entity})"/>, <see cref="Destroy(in QueryDescription)"/>,
+/// <see cref="Destroy(ReadOnlySpan{Entity})"/>, <see cref="Destroy(in QueryDescription)"/>,
 /// <see cref="Add{T}"/>, <see cref="Set{T}"/>, <see cref="Remove{T}"/>,
 /// <see cref="AddChild"/>, <see cref="Clone(Entity)"/> —are <b>not</b> thread-safe
 /// and must be issued from a single thread (typically the main game thread)
@@ -62,7 +62,7 @@ public sealed partial class World : IDisposable
     private int[] _destroyRowMarks = [];
     private int _destroyRowMarkGen;
 
-    // World-owned scratch arrays for DestroyMany, pre-sized to entityCapacity and grown
+    // World-owned scratch arrays for batch destroy, pre-sized to entityCapacity and grown
     // on demand — zero per-call allocation in steady state (no ArrayPool overhead).
     private Archetype[] _destroyGroupArchetypes = [];
     private int[] _destroyGroupCounts = [];

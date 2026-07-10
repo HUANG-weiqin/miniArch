@@ -10,7 +10,7 @@ internal readonly record struct EntityBatchRange(int StartRow, int Count);
 
 public sealed partial class World
 {
-    // Below this count, DestroyMany falls back to individual Destroy calls.
+    // Below this count, Destroy falls back to individual Destroy calls.
     // The batch machinery (gen tracking, scratch arrays, archetype grouping)
     // costs ~0.4 us fixed; at R <= 8 that overhead exceeds the per-entity savings
     // from bulk storage operations. Semantic equivalence is guaranteed by the
@@ -89,7 +89,7 @@ public sealed partial class World
     /// </para>
     /// <para><b>When to use:</b> destroying a single entity.</para>
     /// <para><b>When NOT to use:</b> destroying many entities — use
-    /// <see cref="DestroyMany(ReadOnlySpan{Entity})"/> for batch optimization,
+    /// <see cref="Destroy(ReadOnlySpan{Entity})"/> for batch optimization,
     /// or <see cref="Clear(in QueryDescription)"/> for archetype-level teardown.</para>
     /// </remarks>
     public void Destroy(Entity entity)
@@ -143,7 +143,7 @@ public sealed partial class World
     /// For query-based destroy, see <see cref="Destroy(in QueryDescription)"/>.
     /// For archetype-level teardown without cascade, see <see cref="Clear(in QueryDescription)"/>.</para>
     /// </remarks>
-    public void DestroyMany(ReadOnlySpan<Entity> entities)
+    public void Destroy(ReadOnlySpan<Entity> entities)
     {
         AssertNotDisposed();
         var length = entities.Length;
@@ -188,7 +188,7 @@ public sealed partial class World
     /// <remarks>
     /// <para>
     /// Matching entities are first materialized from the query snapshot, then destroyed with the
-    /// same cascade and batching rules as <see cref="DestroyMany(ReadOnlySpan{Entity})"/>.
+    /// same cascade and batching rules as <see cref="Destroy(ReadOnlySpan{Entity})"/>.
     /// Descendants are destroyed even when they do not match the query.
     /// </para>
     /// <para><b>When to use:</b> destroying all entities matching a component set,

@@ -2,7 +2,7 @@
 title: Hierarchy Runtime
 module: MiniArch.Core Hierarchy
 description: Runtime-owned parent-child relations, cascade destroy semantics, and snapshot restore behavior
-updated: 2026-07-10
+updated: 2026-07-11
 ---
 # Hierarchy Runtime
 
@@ -19,7 +19,7 @@ updated: 2026-07-10
 - `TryGetParent(child, out parent)`
 - `EnumerateChildren(parent)` → `ChildrenEnumerable`（public readonly struct，零分配 foreach）
 - `HasChildren(entity)` → O(1) 布尔查询
-- `DestroyMany(ReadOnlySpan<Entity>)` / `Destroy(QueryDescription)` → 仍使用 child-first cascade destroy；同批父子输入去重，dead/stale entity skip
+- `Destroy(ReadOnlySpan<Entity>)` / `Destroy(QueryDescription)` → 仍使用 child-first cascade destroy；同批父子输入去重，dead/stale entity skip
 
 > 已删除 `GetChildren → List<Entity>`：与 `EnumerateChildren` 概念重复，违反"概念唯一"。
 > 需要 List 的调用方写 `new List<Entity>(world.EnumerateChildren(parent))` 或 foreach 收集。
@@ -30,7 +30,7 @@ updated: 2026-07-10
   - `src/MiniArch/Core/HierarchyTable.cs`：runtime-owned 关系表（邻接链表：`_parentByChild[id]` + `_firstChild[id]` + free-list 复用 slot）
   - `src/MiniArch/Core/ChildrenEnumerable.cs`：public readonly struct + struct enumerator（`MiniArch` 命名空间），零分配遍历孩子
   - `src/MiniArch/Core/World.cs`（主文件）：对外 API（`AddChild`、`EnumerateChildren`、`HasChildren`、`Destroy` 级联）、destroy 集成
-  - `src/MiniArch/Core/World.EntityLifecycle.cs`：`DestroyMany` / `Destroy(query)` 先收集 child-first destroy order，再批量移除 storage，最后按 destroy order 清理 hierarchy relations
+  - `src/MiniArch/Core/World.EntityLifecycle.cs`：`Destroy(ReadOnlySpan<Entity>)` / `Destroy(query)` 先收集 child-first destroy order，再批量移除 storage，最后按 destroy order 清理 hierarchy relations
   - `src/MiniArch/Core/WorldSnapshot.cs`：hierarchy AddChild 的持久化读写
 
 ## 决策

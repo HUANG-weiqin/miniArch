@@ -34,7 +34,7 @@ internal static class Program
                 FullClearEntities,
                 BuildFullClearWorld,
                 DestroyWithGuardedLoop,
-                DestroyWithDestroyMany,
+                DestroyWithBatchDestroy,
                 MinSpeedup: 1.20),
             new Scenario(
                 "Destroy(query) Position [1 archetype]",
@@ -55,21 +55,21 @@ internal static class Program
                 CascadeRoots,
                 BuildCascadeForestWorld,
                 DestroyWithGuardedLoop,
-                DestroyWithDestroyMany,
+                DestroyWithBatchDestroy,
                 MinSpeedup: 1.20),
             new Scenario(
                 "partial cascade forest",
                 PartialCascadeRoots / 2,
                 BuildPartialCascadeForestWorld,
                 DestroyWithGuardedLoop,
-                DestroyWithDestroyMany,
+                DestroyWithBatchDestroy,
                 MinSpeedup: 1.05),
             new Scenario(
                 "sparse: 4 of 50000",
                 SparseKill,
                 BuildSparseWorld,
                 DestroyWithGuardedLoop,
-                DestroyWithDestroyMany,
+                DestroyWithBatchDestroy,
                 MinSpeedup: 0.0),
         };
 
@@ -373,13 +373,13 @@ internal static class Program
         {
             Func<WorldSetup> setup = () => BuildSweepWorld(SweepM, R);
             var sweepScenario = new Scenario($"sweep R={R}", R, setup,
-                DestroyWithGuardedLoop, DestroyWithDestroyMany, 0);
+                DestroyWithGuardedLoop, DestroyWithBatchDestroy, 0);
 
             // Correctness check.
             VerifyEquivalent(sweepScenario);
 
             var baseline = RunForDuration(sweepScenario, DestroyWithGuardedLoop, SweepSeconds);
-            var batch = RunForDuration(sweepScenario, DestroyWithDestroyMany, SweepSeconds);
+            var batch = RunForDuration(sweepScenario, DestroyWithBatchDestroy, SweepSeconds);
             var speedup = batch.OpsPerSecond / baseline.OpsPerSecond;
             var density = (double)R / SweepM;
 
@@ -647,9 +647,9 @@ internal static class Program
         }
     }
 
-    private static void DestroyWithDestroyMany(World world, Entity[] targets)
+    private static void DestroyWithBatchDestroy(World world, Entity[] targets)
     {
-        world.DestroyMany(targets);
+        world.Destroy(targets);
     }
 
     private static void DestroyPositionQueryWithMaterializedLoop(World world, Entity[] _)

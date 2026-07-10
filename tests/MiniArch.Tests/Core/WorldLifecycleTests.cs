@@ -561,7 +561,7 @@ public sealed class WorldLifecycleTests
                 expected.Destroy(entity);
         }
 
-        actual.DestroyMany(actualInput);
+        actual.Destroy(actualInput);
 
         AssertWorldsIdentical(expected, actual);
     }
@@ -575,7 +575,7 @@ public sealed class WorldLifecycleTests
         foreach (var entity in expectedPositions)
             expected.Destroy(entity);
 
-        actual.DestroyMany(actualPositions);
+        actual.Destroy(actualPositions);
 
         AssertWorldsIdentical(expected, actual);
 
@@ -609,7 +609,7 @@ public sealed class WorldLifecycleTests
         foreach (var entity in expectedInput)
             expected.Destroy(entity);
 
-        actual.DestroyMany(actualInput);
+        actual.Destroy(actualInput);
 
         AssertWorldsIdentical(expected, actual);
     }
@@ -636,7 +636,7 @@ public sealed class WorldLifecycleTests
         foreach (var entity in expectedInput)
             expected.Destroy(entity);
 
-        actual.DestroyMany(actualInput);
+        actual.Destroy(actualInput);
 
         AssertWorldsIdentical(expected, actual);
     }
