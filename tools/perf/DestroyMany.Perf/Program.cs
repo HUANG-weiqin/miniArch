@@ -103,9 +103,132 @@ internal static class Program
         }
 
         PrintSteadyStateAlloc();
+        PrintDisposeQueryUnsafePerf(ref allPassed);
         PrintThresholdSweep(ref allPassed);
 
         return allPassed ? 0 : 1;
+    }
+
+    // Compares three approaches for query-based bulk destroy:
+    //   1. for-loop: materialize query → Destroy each
+    //   2. Destroy(query): safe batch (collect → group → compact → kill)
+    //   3. DisposeQueryUnsafe(query): archetype-level reset, no collection
+    private static void PrintDisposeQueryUnsafePerf(ref bool allPassed)
+    {
+        const int Seconds = 3;
+
+        Console.WriteLine("DisposeQueryUnsafe — archetype-level bulk destroy (no hierarchy)");
+        Console.WriteLine();
+
+        // Correctness: DisposeQueryUnsafe must produce same surviving-entity set
+        // as Destroy(query) when there is no hierarchy.
+        VerifyDisposeQueryUnsafe(BuildQueryWorld, QueryEntities, "1 archetype");
+        VerifyDisposeQueryUnsafe(BuildMultiArchetypeWorld, MultiArchTotal, $"{MultiArchCount} archetypes");
+
+        // 1 archetype
+        BenchmarkDestroy("DisposeQueryUnsafe [1 archetype]",
+            QueryEntities, BuildQueryWorld,
+            world => DestroyPositionQueryWithMaterializedLoop(world, []),
+            world => world.Destroy(in PositionQuery),
+            world => world.DisposeQueryUnsafe(in PositionQuery),
+            Seconds, ref allPassed);
+
+        // 16 archetypes
+        BenchmarkDestroy($"DisposeQueryUnsafe [{MultiArchCount} archetypes]",
+            MultiArchTotal, BuildMultiArchetypeWorld,
+            world => DestroyPositionQueryWithMaterializedLoop(world, []),
+            world => world.Destroy(in PositionQuery),
+            world => world.DisposeQueryUnsafe(in PositionQuery),
+            Seconds, ref allPassed);
+
+        Console.WriteLine();
+    }
+
+    private static void VerifyDisposeQueryUnsafe(Func<WorldSetup> setup, int expectedEntities, string label)
+    {
+        var safe = setup();
+        var unsafeWorld = setup();
+
+        try
+        {
+            safe.World.Destroy(in PositionQuery);
+            unsafeWorld.World.DisposeQueryUnsafe(in PositionQuery);
+
+            var safeValidation = WorldValidator.Validate(safe.World);
+            var unsafeValidation = WorldValidator.Validate(unsafeWorld.World);
+            if (!safeValidation.IsValid || !unsafeValidation.IsValid)
+                throw new InvalidOperationException($"DisposeQueryUnsafe [{label}]: invalid world.");
+
+            // Surviving entities (without Position) must be identical.
+            var safeSurvivors = safe.World.CanonicalChecksum();
+            var unsafeSurvivors = unsafeWorld.World.CanonicalChecksum();
+            if (!safeSurvivors.SequenceEqual(unsafeSurvivors))
+                throw new InvalidOperationException($"DisposeQueryUnsafe [{label}]: checksum mismatch.");
+
+            // All destroyed entities must be dead.
+            foreach (var entity in safe.World.Query(in PositionQuery))
+                throw new InvalidOperationException($"DisposeQueryUnsafe [{label}]: entity still alive after destroy.");
+        }
+        finally
+        {
+            safe.World.Dispose();
+            unsafeWorld.World.Dispose();
+        }
+    }
+
+    private static void BenchmarkDestroy(
+        string label, int entityCount, Func<WorldSetup> setup,
+        Action<World> forLoop, Action<World> safeBatch, Action<World> unsafeBatch,
+        int seconds, ref bool allPassed)
+    {
+        // Warmup
+        WarmupAction(setup, forLoop, 1);
+        WarmupAction(setup, safeBatch, 1);
+        WarmupAction(setup, unsafeBatch, 1);
+
+        var forResult = MeasureAction(setup, forLoop, seconds);
+        var safeResult = MeasureAction(setup, safeBatch, seconds);
+        var unsafeResult = MeasureAction(setup, unsafeBatch, seconds);
+
+        Console.WriteLine($"  {label} ({entityCount:N0} entities)");
+        Console.WriteLine($"    for-loop           : {forResult.UsPerOp,8:F1} us/op | alloc {forResult.BytesPerOp,8:F1} B/op");
+        Console.WriteLine($"    Destroy(query)     : {safeResult.UsPerOp,8:F1} us/op | {forResult.UsPerOp / safeResult.UsPerOp,5:F2}x vs for");
+        Console.WriteLine($"    DisposeQueryUnsafe : {unsafeResult.UsPerOp,8:F1} us/op | {forResult.UsPerOp / unsafeResult.UsPerOp,5:F2}x vs for | {safeResult.UsPerOp / unsafeResult.UsPerOp,5:F2}x vs safe");
+    }
+
+    private static void WarmupAction(Func<WorldSetup> setup, Action<World> action, int seconds)
+    {
+        var deadline = Stopwatch.GetTimestamp() + seconds * Stopwatch.Frequency;
+        while (Stopwatch.GetTimestamp() < deadline)
+        {
+            var s = setup();
+            action(s.World);
+            s.World.Dispose();
+        }
+    }
+
+    private static Measurement MeasureAction(Func<WorldSetup> setup, Action<World> action, int seconds)
+    {
+        var deadline = Stopwatch.GetTimestamp() + seconds * Stopwatch.Frequency;
+        var ops = 0;
+        var ticks = 0L;
+        var allocBytes = 0L;
+
+        while (Stopwatch.GetTimestamp() < deadline)
+        {
+            var s = setup();
+            var beforeAlloc = GC.GetAllocatedBytesForCurrentThread();
+            var start = Stopwatch.GetTimestamp();
+            action(s.World);
+            var end = Stopwatch.GetTimestamp();
+            ticks += end - start;
+            allocBytes += GC.GetAllocatedBytesForCurrentThread() - beforeAlloc;
+            s.World.Dispose();
+            ops++;
+        }
+
+        var ms = (double)ticks / Stopwatch.Frequency * 1000;
+        return new Measurement(ops, ms, allocBytes);
     }
 
     // Demonstrates that batch allocation drops to zero when the same World is

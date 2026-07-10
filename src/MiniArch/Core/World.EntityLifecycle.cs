@@ -210,6 +210,65 @@ public sealed partial class World
         }
     }
 
+    /// <summary>
+    /// Destroys ALL entities in ALL archetypes matching <paramref name="description"/>.
+    /// This is the fastest bulk destroy path: skips per-entity collection, grouping,
+    /// dedup, and compaction entirely — directly resets each matched archetype.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Unsafe trade-offs:</b></para>
+    /// <list type="bullet">
+    /// <item>No cascade to children in non-matched archetypes — they become
+    /// orphans (detectable by version mismatch in <see cref="IsAlive"/>).</item>
+    /// <item>Hierarchy state of disposed entities is cleared (child slots freed),
+    /// but parents' child lists are not updated — stale references are harmless
+    /// after version bump.</item>
+    /// </list>
+    /// <para><b>Caller must ensure</b> no entity in matched archetypes has children
+    /// that must survive outside the query.</para>
+    /// </remarks>
+    public void DisposeQueryUnsafe(in QueryDescription description)
+    {
+        AssertNotDisposed();
+
+        var query = GetAdvancedQuery(in description);
+        var archetypes = query.GetArchetypeSpan();
+        if (archetypes.Length == 0)
+            return;
+
+        // Single pass: count total entities for free-list capacity
+        var totalKill = 0;
+        for (var i = 0; i < archetypes.Length; i++)
+            totalKill += archetypes[i].EntityCount;
+
+        if (totalKill == 0)
+            return;
+
+        EnsureFreeIdCapacity(_freeIdCount + totalKill);
+
+        for (var ai = 0; ai < archetypes.Length; ai++)
+        {
+            var archetype = archetypes[ai];
+            var entities = archetype.GetEntities();
+
+            for (var i = 0; i < entities.Length; i++)
+            {
+                var entity = entities[i];
+                var nextVersion = NextEntityVersion(entity);
+
+                _hierarchy.ClearHierarchyState(entity);
+
+                ref var record = ref _records[entity.Id];
+                record = default;
+                record.Version = nextVersion;
+
+                _freeIds[_freeIdCount++] = new RecycledEntity(entity.Id, nextVersion);
+            }
+
+            archetype.ResetCount();
+        }
+    }
+
     internal bool TryGetLocation(Entity entity, out EntityInfo info)
     {
         AssertNotDisposed();
@@ -720,6 +779,19 @@ public sealed partial class World
         }
 
         _freeIds[_freeIdCount++] = new RecycledEntity(id, version);
+    }
+
+    private void EnsureFreeIdCapacity(int required)
+    {
+        if (_freeIds.Length >= required)
+            return;
+
+        var newCapacity = _freeIds.Length;
+        if (newCapacity == 0)
+            newCapacity = 4;
+        while (newCapacity < required)
+            newCapacity *= 2;
+        Array.Resize(ref _freeIds, newCapacity);
     }
 
     private RecycledEntity PopFreeIdUnsafe()

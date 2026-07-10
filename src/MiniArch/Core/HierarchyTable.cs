@@ -180,6 +180,34 @@ internal sealed class HierarchyTable
         }
     }
 
+    /// <summary>
+    /// Clears the entity's own hierarchy pointers and frees its child slots,
+    /// without unlinking from its parent's child list.
+    /// </summary>
+    /// <remarks>
+    /// Used by <see cref="World.DisposeQueryUnsafe"/> for bulk archetype-level
+    /// destroy. The parent's stale child reference becomes harmless once the
+    /// entity's version is bumped (version-mismatch → IsAlive returns false).
+    /// </remarks>
+    internal void ClearHierarchyState(Entity entity)
+    {
+        var id = entity.Id;
+        if (id < 0 || id >= _parentByChild.Length)
+            return;
+
+        _parentByChild[id] = NoEntity;
+
+        var slot = _firstChild[id];
+        _firstChild[id] = NoSlot;
+
+        while (slot >= 0)
+        {
+            var next = _childSlots[slot].Next;
+            FreeChildSlot(slot);
+            slot = next;
+        }
+    }
+
     public void RemoveDestroyed(Entity entity)
     {
         if (entity.Id < 0 || entity.Id >= _parentByChild.Length)

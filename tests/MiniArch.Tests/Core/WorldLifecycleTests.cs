@@ -686,6 +686,95 @@ public sealed class WorldLifecycleTests
     }
 
     [Fact]
+    public void DisposeQueryUnsafe_destroys_all_matched_and_preserves_survivors()
+    {
+        var expected = new World(entityCapacity: 64);
+        var actual = new World(entityCapacity: 64);
+        var desc = new QueryDescription().With<Position>();
+
+        // Entities with Position (will be destroyed).
+        for (var i = 0; i < 30; i++)
+        {
+            expected.Create(new Position(i, i + 1), new Velocity(i + 2, i + 3));
+            actual.Create(new Position(i, i + 1), new Velocity(i + 2, i + 3));
+        }
+
+        // Survivors without Position.
+        for (var i = 0; i < 10; i++)
+        {
+            expected.Create(new Velocity(i + 100, i + 200));
+            actual.Create(new Velocity(i + 100, i + 200));
+        }
+
+        expected.Destroy(in desc);
+        actual.DisposeQueryUnsafe(in desc);
+
+        AssertWorldsIdentical(expected, actual);
+    }
+
+    [Fact]
+    public void DisposeQueryUnsafe_multi_archetype_matches_safe_destroy()
+    {
+        var expected = new World(entityCapacity: 256);
+        var actual = new World(entityCapacity: 256);
+        var desc = new QueryDescription().With<Position>();
+
+        for (var arch = 0; arch < 6; arch++)
+        {
+            for (var i = 0; i < 40; i++)
+            {
+                var p = new Position(i, i + 1);
+                var v = new Velocity(i + 2, i + 3);
+                var a = new C1(i + 4);
+
+                switch (arch)
+                {
+                    case 0: expected.Create(p); actual.Create(p); break;
+                    case 1: expected.Create(p, v); actual.Create(p, v); break;
+                    case 2: expected.Create(p, a); actual.Create(p, a); break;
+                    case 3: expected.Create(p, v, a); actual.Create(p, v, a); break;
+                    case 4: expected.Create(p, v, a, new C2(i)); actual.Create(p, v, a, new C2(i)); break;
+                    default: expected.Create(v); actual.Create(v); break; // survivor
+                }
+            }
+        }
+
+        expected.Destroy(in desc);
+        actual.DisposeQueryUnsafe(in desc);
+
+        AssertWorldsIdentical(expected, actual);
+    }
+
+    [Fact]
+    public void DisposeQueryUnsafe_allows_id_recycling()
+    {
+        var world = new World(entityCapacity: 32);
+        var desc = new QueryDescription().With<Position>();
+
+        var first = world.Create(new Position(1, 2));
+        world.Create(new Position(3, 4));
+        world.DisposeQueryUnsafe(in desc);
+
+        // After dispose, IDs should be recycled.
+        var recycled = world.Create(new Position(5, 6));
+        Assert.True(recycled.Id <= first.Id + 1,
+            $"Expected ID recycling, got {recycled.Id} after first entity had ID {first.Id}");
+        Assert.True(world.IsAlive(recycled));
+    }
+
+    [Fact]
+    public void DisposeQueryUnsafe_with_no_matches_is_noop()
+    {
+        var world = new World();
+        var velocityEntity = world.Create(new Velocity(1, 2));
+
+        var desc = new QueryDescription().With<Position>();
+        world.DisposeQueryUnsafe(in desc); // no match, should not throw
+
+        Assert.True(world.TryGetLocation(velocityEntity, out _));
+    }
+
+    [Fact]
     public void Warmed_destroy_cascade_path_does_not_allocate()
     {
         RunOnDedicatedThread(() =>
