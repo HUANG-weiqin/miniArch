@@ -1137,6 +1137,11 @@ internal sealed partial class Archetype
     {
         if (!ManagedReferenceCheck.IsManaged(type))
         {
+            // Enum layout is fixed by its primitive underlying type. Reflection
+            // reports LayoutKind.Auto, but there are no fields to reorder.
+            if (type.IsEnum)
+                return;
+
             // LayoutKind.Auto lets the CLR reorder fields for optimal alignment.
             // Two hosts running different JIT versions or CPU architectures may
             // reorder differently, producing different byte layouts for the same

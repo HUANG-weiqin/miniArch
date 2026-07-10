@@ -1092,7 +1092,29 @@ public sealed class TrickyEdgeCaseTests
         Assert.Equal(new Position(42, 99), p);
     }
 
+    /// <summary>
+    /// Verify that enum components are accepted. Enums have a fixed primitive
+    /// underlying layout and cannot reorder fields, even though reflection reports
+    /// LayoutKind.Auto for enum types.
+    /// </summary>
+    [Fact]
+    public void Enum_component_accepted_normally()
+    {
+        var world = new World();
+        var entity = world.Create();
+
+        world.Add(entity, TestEnum.Beta);
+        Assert.True(world.TryGet(entity, out TestEnum value));
+        Assert.Equal(TestEnum.Beta, value);
+    }
+
     // ── Test types for LayoutKind.Auto vulnerability ──
+
+    private enum TestEnum
+    {
+        Alpha = 0,
+        Beta = 1
+    }
 
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Auto)]
     private struct AutoLayoutByte
