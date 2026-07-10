@@ -211,23 +211,50 @@ public sealed partial class World
     }
 
     /// <summary>
-    /// Destroys ALL entities in ALL archetypes matching <paramref name="description"/>.
-    /// This is the fastest bulk destroy path: skips per-entity collection, grouping,
-    /// dedup, and compaction entirely — directly resets each matched archetype.
+    /// Clears all entities from every archetype matching <paramref name="description"/>.
     /// </summary>
     /// <remarks>
-    /// <para><b>Unsafe trade-offs:</b></para>
-    /// <list type="bullet">
-    /// <item>No cascade to children in non-matched archetypes — they become
-    /// orphans (detectable by version mismatch in <see cref="IsAlive"/>).</item>
-    /// <item>Hierarchy state of disposed entities is cleared (child slots freed),
-    /// but parents' child lists are not updated — stale references are harmless
-    /// after version bump.</item>
+    /// <para>
+    /// Unlike <see cref="Destroy(in QueryDescription)"/>, which collects and
+    /// processes individual entities (cascade, dedup, compaction), this method
+    /// resets each matched archetype directly. It is significantly faster
+    /// (~4× vs for-loop, ~2× vs <c>Destroy(query)</c>) but makes three
+    /// simplifying assumptions the caller must understand:
+    /// </para>
+    /// <list type="number">
+    /// <item>
+    /// <b>No hierarchy cascade.</b> Entities in matched archetypes that have
+    /// children in <i>non-matched</i> archetypes will leave those children
+    /// orphaned. The orphaned children remain alive but their parent reference
+    /// becomes stale — <see cref="IsAlive(Entity)"/> on the dead parent handle
+    /// returns <c>false</c>, but <see cref="TryGetParent"/> will still report
+    /// the old handle. Do not use this method if matched entities may have
+    /// descendants outside the query.
+    /// </item>
+    /// <item>
+    /// <b>No hierarchy unlink from parents.</b> If an entity being cleared has
+    /// a parent that survives (in a non-matched archetype), the parent's child
+    /// list retains a stale slot. The slot is never freed, causing a minor
+    /// memory leak in the hierarchy slot pool. <see cref="HasChildren"/> may
+    /// return <c>true</c> for the parent until it is itself destroyed.
+    /// </item>
+    /// <item>
+    /// <b>No per-entity validation.</b> All entities in matched archetypes are
+    /// killed unconditionally. This is safe because a query always matches
+    /// entire archetypes, but means the caller cannot exclude specific entities.
+    /// </item>
     /// </list>
-    /// <para><b>Caller must ensure</b> no entity in matched archetypes has children
-    /// that must survive outside the query.</para>
+    /// <para>
+    /// <b>When to use:</b> bulk scene teardown, archetype recycling, stress
+    /// tests — any scenario where you are certain no hierarchy crosses the
+    /// query boundary.
+    /// </para>
+    /// <para>
+    /// <b>When NOT to use:</b> use <see cref="Destroy(in QueryDescription)"/>
+    /// instead if any matched entity might have children outside the query.
+    /// </para>
     /// </remarks>
-    public void DisposeQueryUnsafe(in QueryDescription description)
+    public void Clear(in QueryDescription description)
     {
         AssertNotDisposed();
 

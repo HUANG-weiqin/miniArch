@@ -103,71 +103,71 @@ internal static class Program
         }
 
         PrintSteadyStateAlloc();
-        PrintDisposeQueryUnsafePerf(ref allPassed);
+        PrintClearPerf(ref allPassed);
         PrintThresholdSweep(ref allPassed);
 
         return allPassed ? 0 : 1;
     }
 
-    // Compares three approaches for query-based bulk destroy:
+    // Compares three approaches for query-based bulk entity removal:
     //   1. for-loop: materialize query → Destroy each
     //   2. Destroy(query): safe batch (collect → group → compact → kill)
-    //   3. DisposeQueryUnsafe(query): archetype-level reset, no collection
-    private static void PrintDisposeQueryUnsafePerf(ref bool allPassed)
+    //   3. Clear(query): archetype-level reset, no collection
+    private static void PrintClearPerf(ref bool allPassed)
     {
         const int Seconds = 3;
 
-        Console.WriteLine("DisposeQueryUnsafe — archetype-level bulk destroy (no hierarchy)");
+        Console.WriteLine("Clear(query) — archetype-level bulk entity removal (no hierarchy)");
         Console.WriteLine();
 
-        // Correctness: DisposeQueryUnsafe must produce same surviving-entity set
+        // Correctness: Clear must produce same surviving-entity set
         // as Destroy(query) when there is no hierarchy.
-        VerifyDisposeQueryUnsafe(BuildQueryWorld, QueryEntities, "1 archetype");
-        VerifyDisposeQueryUnsafe(BuildMultiArchetypeWorld, MultiArchTotal, $"{MultiArchCount} archetypes");
+        VerifyClear(BuildQueryWorld, QueryEntities, "1 archetype");
+        VerifyClear(BuildMultiArchetypeWorld, MultiArchTotal, $"{MultiArchCount} archetypes");
 
         // 1 archetype
-        BenchmarkDestroy("DisposeQueryUnsafe [1 archetype]",
+        BenchmarkDestroy("Clear [1 archetype]",
             QueryEntities, BuildQueryWorld,
             world => DestroyPositionQueryWithMaterializedLoop(world, []),
             world => world.Destroy(in PositionQuery),
-            world => world.DisposeQueryUnsafe(in PositionQuery),
+            world => world.Clear(in PositionQuery),
             Seconds, ref allPassed);
 
         // 16 archetypes
-        BenchmarkDestroy($"DisposeQueryUnsafe [{MultiArchCount} archetypes]",
+        BenchmarkDestroy($"Clear [{MultiArchCount} archetypes]",
             MultiArchTotal, BuildMultiArchetypeWorld,
             world => DestroyPositionQueryWithMaterializedLoop(world, []),
             world => world.Destroy(in PositionQuery),
-            world => world.DisposeQueryUnsafe(in PositionQuery),
+            world => world.Clear(in PositionQuery),
             Seconds, ref allPassed);
 
         Console.WriteLine();
     }
 
-    private static void VerifyDisposeQueryUnsafe(Func<WorldSetup> setup, int expectedEntities, string label)
+    private static void VerifyClear(Func<WorldSetup> setup, int expectedEntities, string label)
     {
         var safe = setup();
-        var unsafeWorld = setup();
+        var clearWorld = setup();
 
         try
         {
             safe.World.Destroy(in PositionQuery);
-            unsafeWorld.World.DisposeQueryUnsafe(in PositionQuery);
+            clearWorld.World.Clear(in PositionQuery);
 
             var safeValidation = WorldValidator.Validate(safe.World);
-            var unsafeValidation = WorldValidator.Validate(unsafeWorld.World);
-            if (!safeValidation.IsValid || !unsafeValidation.IsValid)
-                throw new InvalidOperationException($"DisposeQueryUnsafe [{label}]: invalid world.");
+            var clearValidation = WorldValidator.Validate(clearWorld.World);
+            if (!safeValidation.IsValid || !clearValidation.IsValid)
+                throw new InvalidOperationException($"Clear [{label}]: invalid world.");
 
             // Surviving entities (without Position) must be identical.
             var safeSurvivors = safe.World.CanonicalChecksum();
-            var unsafeSurvivors = unsafeWorld.World.CanonicalChecksum();
-            if (!safeSurvivors.SequenceEqual(unsafeSurvivors))
-                throw new InvalidOperationException($"DisposeQueryUnsafe [{label}]: checksum mismatch.");
+            var clearSurvivors = clearWorld.World.CanonicalChecksum();
+            if (!safeSurvivors.SequenceEqual(clearSurvivors))
+                throw new InvalidOperationException($"Clear [{label}]: checksum mismatch.");
 
-            // All destroyed entities must be dead.
+            // All cleared entities must be dead.
             foreach (var entity in safe.World.Query(in PositionQuery))
-                throw new InvalidOperationException($"DisposeQueryUnsafe [{label}]: entity still alive after destroy.");
+                throw new InvalidOperationException($"Clear [{label}]: entity still alive after clear.");
         }
         finally
         {
@@ -193,7 +193,7 @@ internal static class Program
         Console.WriteLine($"  {label} ({entityCount:N0} entities)");
         Console.WriteLine($"    for-loop           : {forResult.UsPerOp,8:F1} us/op | alloc {forResult.BytesPerOp,8:F1} B/op");
         Console.WriteLine($"    Destroy(query)     : {safeResult.UsPerOp,8:F1} us/op | {forResult.UsPerOp / safeResult.UsPerOp,5:F2}x vs for");
-        Console.WriteLine($"    DisposeQueryUnsafe : {unsafeResult.UsPerOp,8:F1} us/op | {forResult.UsPerOp / unsafeResult.UsPerOp,5:F2}x vs for | {safeResult.UsPerOp / unsafeResult.UsPerOp,5:F2}x vs safe");
+        Console.WriteLine($"    Clear(query)       : {unsafeResult.UsPerOp,8:F1} us/op | {forResult.UsPerOp / unsafeResult.UsPerOp,5:F2}x vs for | {safeResult.UsPerOp / unsafeResult.UsPerOp,5:F2}x vs safe");
     }
 
     private static void WarmupAction(Func<WorldSetup> setup, Action<World> action, int seconds)

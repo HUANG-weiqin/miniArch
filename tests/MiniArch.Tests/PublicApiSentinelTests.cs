@@ -706,6 +706,7 @@ class: MiniArch.World
   Method: CanonicalChecksum() -> System.Byte[]
   Method: CaptureState() -> MiniArch.Core.WorldStateSnapshot
   Method: Checksum() -> System.Byte[]
+  Method: Clear(in MiniArch.QueryDescription& description) -> System.Void
   Method: Clone() -> MiniArch.World
   Method: Clone(MiniArch.Entity source) -> MiniArch.Entity
   Method: Create() -> MiniArch.Entity
@@ -730,7 +731,6 @@ class: MiniArch.World
   Method: Destroy(in MiniArch.QueryDescription& description) -> System.Void
   Method: DestroyMany(System.ReadOnlySpan<MiniArch.Entity> entities) -> System.Void
   Method: Dispose() -> System.Void
-  Method: DisposeQueryUnsafe(in MiniArch.QueryDescription& description) -> System.Void
   Method: EnsureCapacity(System.Int32 entityCapacity) -> System.Void
   Method: EnumerateChildren(MiniArch.Entity parent) -> MiniArch.ChildrenEnumerable
   Method: Get(MiniArch.Entity entity) -> T where T : struct, System.ValueType

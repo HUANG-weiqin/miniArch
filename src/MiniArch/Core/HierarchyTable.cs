@@ -185,7 +185,7 @@ internal sealed class HierarchyTable
     /// without unlinking from its parent's child list.
     /// </summary>
     /// <remarks>
-    /// Used by <see cref="World.DisposeQueryUnsafe"/> for bulk archetype-level
+    /// Used by <see cref="World.Clear(in MiniArch.QueryDescription)"/> for bulk archetype-level
     /// destroy. The parent's stale child reference becomes harmless once the
     /// entity's version is bumped (version-mismatch → IsAlive returns false).
     /// </remarks>

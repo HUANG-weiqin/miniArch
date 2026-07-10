@@ -686,7 +686,7 @@ public sealed class WorldLifecycleTests
     }
 
     [Fact]
-    public void DisposeQueryUnsafe_destroys_all_matched_and_preserves_survivors()
+    public void Clear_destroys_all_matched_and_preserves_survivors()
     {
         var expected = new World(entityCapacity: 64);
         var actual = new World(entityCapacity: 64);
@@ -707,13 +707,13 @@ public sealed class WorldLifecycleTests
         }
 
         expected.Destroy(in desc);
-        actual.DisposeQueryUnsafe(in desc);
+        actual.Clear(in desc);
 
         AssertWorldsIdentical(expected, actual);
     }
 
     [Fact]
-    public void DisposeQueryUnsafe_multi_archetype_matches_safe_destroy()
+    public void Clear_multi_archetype_matches_safe_destroy()
     {
         var expected = new World(entityCapacity: 256);
         var actual = new World(entityCapacity: 256);
@@ -740,20 +740,20 @@ public sealed class WorldLifecycleTests
         }
 
         expected.Destroy(in desc);
-        actual.DisposeQueryUnsafe(in desc);
+        actual.Clear(in desc);
 
         AssertWorldsIdentical(expected, actual);
     }
 
     [Fact]
-    public void DisposeQueryUnsafe_allows_id_recycling()
+    public void Clear_allows_id_recycling()
     {
         var world = new World(entityCapacity: 32);
         var desc = new QueryDescription().With<Position>();
 
         var first = world.Create(new Position(1, 2));
         world.Create(new Position(3, 4));
-        world.DisposeQueryUnsafe(in desc);
+        world.Clear(in desc);
 
         // After dispose, IDs should be recycled.
         var recycled = world.Create(new Position(5, 6));
@@ -763,13 +763,13 @@ public sealed class WorldLifecycleTests
     }
 
     [Fact]
-    public void DisposeQueryUnsafe_with_no_matches_is_noop()
+    public void Clear_with_no_matches_is_noop()
     {
         var world = new World();
         var velocityEntity = world.Create(new Velocity(1, 2));
 
         var desc = new QueryDescription().With<Position>();
-        world.DisposeQueryUnsafe(in desc); // no match, should not throw
+        world.Clear(in desc); // no match, should not throw
 
         Assert.True(world.TryGetLocation(velocityEntity, out _));
     }
