@@ -1128,6 +1128,80 @@ readonly record struct Position(float X, float Y);
 
 ---
 
+## 8. Component Bucket Query
+
+Group entities by a component value using `ComponentBucketQuery<T>`. Safely copy results into a caller-provided `Span<Entity>` — no stale-span risks, zero allocation in steady state.
+
+```csharp
+using MiniArch;
+using System.Buffers;
+
+var world = new World();
+
+// Create 10k entities split across 4 CardZone values
+var random = new Random(42);
+var card = new Entity[10_000];
+for (var i = 0; i < card.Length; i++)
+    card[i] = world.Create(new CardZone(i % 4));
+
+// Construct the query — scope covers all entities with CardZone.
+using var query = new ComponentBucketQuery<CardZone>(world);
+
+// ── Count ────────────────────────────────────────────────────────
+int hand = query.Count(new CardZone(0));
+int deck = query.Count(new CardZone(1));
+Console.WriteLine($"Hand: {hand}, Deck: {deck}");
+
+// ── Get with ArrayPool (safe, zero-alloc) ────────────────────────
+int total = query.Count(new CardZone(2));
+Entity[] pool = ArrayPool<Entity>.Shared.Rent(total);
+int written = query.Get(new CardZone(2), pool);
+foreach (var e in pool.AsSpan(0, written))
+    Console.WriteLine($"  Id={e.Id}");
+ArrayPool<Entity>.Shared.Return(pool);
+
+// ── Get with stackalloc (convenient for small results) ────────────
+Span<Entity> buf = stackalloc Entity[64];
+written = query.Get(new CardZone(3), buf);
+Console.WriteLine($"Zone 3: {written} entities");
+
+// ── TryGet ───────────────────────────────────────────────────────
+if (query.TryGet(new CardZone(0), buf, out int n))
+    Console.WriteLine($"Zone 0: {n} entities (via TryGet)");
+
+// Non-existent key returns false.
+Console.WriteLine($"Zone 99 exists? {query.ContainsKey(new CardZone(99))}");
+
+// ── Auto-freshness — no Refresh() needed ─────────────────────────
+// Move the first 100 zone-0 cards to zone 1.
+int moved = 0;
+for (int i = 0; i < card.Length && moved < 100; i++)
+{
+    if (world.GetRef<CardZone>(card[i]).Value == 0)
+    {
+        world.Set(card[i], new CardZone(1));
+        moved++;
+    }
+}
+// Next read automatically reflects the change.
+Console.WriteLine($"Zone 0 after move: {query.Count(new CardZone(0))} (was {hand})");
+Console.WriteLine($"Zone 1 after move: {query.Count(new CardZone(1))} (was {deck})");
+
+// ── Clear — resets internal state, re-query on next read ─────────
+query.Clear();
+Console.WriteLine($"Zone 0 after Clear: {query.Count(new CardZone(0))}");
+
+readonly record struct CardZone(int Value);
+```
+
+> **Key points:**
+> - `Get` and `TryGet` write into the span **you** provide — no internal buffer, no stale-span trap.
+> - `Count` and `ContainsKey` always do a direct world scan; they do not touch the callback buffer.
+> - Every public read re-scans the world for the requested key — correctness is deterministic.
+> - Zero GC in steady state when the caller buffer is reused.
+
+---
+
 ## Next
 
 - Full API signatures → [api.md](api.md)
