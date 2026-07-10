@@ -1030,6 +1030,95 @@ public sealed class TrickyEdgeCaseTests
         Assert.Throws<ObjectDisposedException>(() => world.Watch<DestructiveWatchHandler>(new QueryDescription().With<Position>()));
     }
 #endif
+
+    // ══════════════════════════════════════════════════════—
+    // Category 8: LayoutKind.Auto Determinism Enforcement
+    // ══════════════════════════════════════════════════════—
+
+    /// <summary>
+    /// Components with [StructLayout(LayoutKind.Auto)] must be rejected at
+    /// storage time. LayoutKind.Auto lets the CLR reorder fields for optimal
+    /// alignment. Two hosts running different JIT versions or different CPU
+    /// architectures may reorder differently, producing different byte layouts
+    /// for the same struct. Since Archetype stores components as raw bytes and
+    /// CanonicalChecksum hashes those bytes directly, cross-host lockstep would
+    /// silently diverge.
+    ///
+    /// This test verifies the fix: LayoutKind.Auto components throw
+    /// NotSupportedException when added to the world.
+    /// </summary>
+    [Fact]
+    public void Layoutkind_auto_component_rejected_for_determinism()
+    {
+        var world = new World();
+        var entity = world.Create();
+
+        // AutoLayoutByte has LayoutKind.Auto, no Entity fields, no managed refs.
+        // The fix rejects it at storage time to enforce cross-host determinism.
+        Assert.Throws<NotSupportedException>(() => world.Add(entity, new AutoLayoutByte(1, 2, 3)));
+    }
+
+    /// <summary>
+    /// Verify that LayoutKind.Sequential components are still accepted.
+    /// Only LayoutKind.Auto is rejected; Sequential and Explicit are fine.
+    /// </summary>
+    [Fact]
+    public void Layoutkind_sequential_component_accepted_normally()
+    {
+        var world = new World();
+        var entity = world.Create();
+
+        // SequentialLayoutMixed has LayoutKind.Sequential — must work fine.
+        world.Add(entity, new SequentialLayoutMixed(1, 2, 3));
+        Assert.True(world.TryGet(entity, out SequentialLayoutMixed value));
+        Assert.Equal(1, value.A);
+        Assert.Equal(2, value.B);
+        Assert.Equal(3, value.C);
+    }
+
+    /// <summary>
+    /// Verify that record struct components (which default to Sequential)
+    /// are still accepted. This covers the common case.
+    /// </summary>
+    [Fact]
+    public void Record_struct_component_accepted_normally()
+    {
+        var world = new World();
+        var entity = world.Create();
+
+        // Position is a record struct — defaults to LayoutKind.Sequential.
+        world.Add(entity, new Position(42, 99));
+        Assert.True(world.TryGet(entity, out Position p));
+        Assert.Equal(new Position(42, 99), p);
+    }
+
+    // ── Test types for LayoutKind.Auto vulnerability ──
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Auto)]
+    private struct AutoLayoutByte
+    {
+        public byte A;
+        public byte B;
+        public byte C;
+        public AutoLayoutByte(byte a, byte b, byte c) { A = a; B = b; C = c; }
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Auto)]
+    private struct AutoLayoutMixed
+    {
+        public byte A;
+        public int B;
+        public short C;
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct SequentialLayoutMixed
+    {
+        public byte A;
+        public int B;
+        public short C;
+        public SequentialLayoutMixed(byte a, int b, short c) { A = a; B = b; C = c; }
+    }
 }
 
 

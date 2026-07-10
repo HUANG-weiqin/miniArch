@@ -1136,7 +1136,24 @@ internal sealed partial class Archetype
     private static void ThrowIfManagedComponent(Type type)
     {
         if (!ManagedReferenceCheck.IsManaged(type))
+        {
+            // LayoutKind.Auto lets the CLR reorder fields for optimal alignment.
+            // Two hosts running different JIT versions or CPU architectures may
+            // reorder differently, producing different byte layouts for the same
+            // struct. Since Archetype stores components as raw bytes and
+            // CanonicalChecksum hashes those bytes directly, cross-host lockstep
+            // would silently diverge. Reject Auto layout to enforce determinism.
+            var layout = type.StructLayoutAttribute;
+            if (layout is not null && layout.Value == LayoutKind.Auto)
+            {
+                throw new NotSupportedException(
+                    $"Component {type.FullName ?? type.Name} uses LayoutKind.Auto, " +
+                    "which allows the CLR to reorder fields. This breaks cross-host " +
+                    "determinism because different hosts may produce different byte " +
+                    "layouts. Apply [StructLayout(LayoutKind.Sequential)] to the type.");
+            }
             return;
+        }
 
         throw new NotSupportedException(
             $"Component {type.FullName ?? type.Name} contains managed references " +
