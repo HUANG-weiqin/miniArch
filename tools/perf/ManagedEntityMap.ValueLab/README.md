@@ -43,7 +43,7 @@ dotnet run -c Release --project tools/perf/ManagedEntityMap.ValueLab
 # 验收命令（10k entities）
 dotnet run -c Release --project tools/perf/ManagedEntityMap.ValueLab -- --entity-count 10000 --repetitions 3
 
-# 仅正确性检查（M3 实现，M2 退出 0）
+# 正确性红队矩阵
 dotnet run -c Release --project tools/perf/ManagedEntityMap.ValueLab -- --correctness-only
 ```
 
@@ -57,8 +57,12 @@ dotnet run -c Release --project tools/perf/ManagedEntityMap.ValueLab -- --correc
 | `--mapping-ratio` | 1.0 | 被映射的 entity 比例 |
 | `--destroy-ratio` | 0.1 | Align 测试中销毁的 entity 比例 |
 | `--operation-mix` | all | 操作组合（M2 仅支持 all） |
-| `--correctness-only` | — | 占位，M3 实现正确性测试 |
+| `--correctness-only` | — | 运行正确性红队矩阵；Naive/Raw 的预期 FAIL 作为证据，不让进程失败 |
 | `--help` | — | 显示帮助 |
+
+## 正确性红队场景 (M3)
+
+`--correctness-only` 覆盖：ZombieBeforeAlign、SlotReuseOldHandle、SlotReuseAfterSetNew、AlignClearsZombie、RemoveDoesNotDestroyWorld、InvalidEntitySafety、NullPolicy。门禁规则：`CompDict`、`CompDenseUser`、`ProtoMap` 必须全部 PASS；`NaiveDict` 和 `RawDenseUnsafe` 的 FAIL 记录为用户手写/unsafe 上界的错误证据。
 
 ## API/语义边界
 

@@ -50,7 +50,7 @@ for (int i = 0; i < args.Length; i++)
 
 if (correctnessOnly)
 {
-    Console.WriteLine("Correctness scenarios are implemented in M3.");
+    RunCorrectnessScenarios();
     return;
 }
 
@@ -329,6 +329,229 @@ void Measure(string opName, IManagedEntityMap<Payload> map, Action prep, Action 
     Console.WriteLine($"  {mapName,-15} {opName,-13} {opsPerSec,10:F1} ops/s  {nsPerOp,8:F1} ns/op  alloc={allocPerOp,9:F1}B  GC({avgGen0:F1},{avgGen1:F1},{avgGen2:F1})  ret={retainedKB,7:F2}KB");
 }
 
+void RunCorrectnessScenarios()
+{
+    Console.WriteLine("=== ManagedEntityMap ValueLab M3 Correctness Matrix ===");
+    Console.WriteLine();
+
+    var mapFactories = new (string Name, bool RequiredPass, Func<World, IManagedEntityMap<Payload>> Create)[]
+    {
+        ("NaiveDict", false, _ => new NaiveDictionaryMap<Payload>()),
+        ("CompDict", true, world => new CompetentDictionaryMap<Payload>(world)),
+        ("RawDenseUnsafe", false, _ => new RawDenseUnsafeMap<Payload>()),
+        ("CompDenseUser", true, world => new CompetentDenseUserMap<Payload>(world)),
+        ("ProtoMap", true, world => new ManagedEntityMapPrototype<Payload>(world)),
+    };
+
+    var scenarios = new (string Name, Func<Func<World, IManagedEntityMap<Payload>>, CorrectnessResult> Run)[]
+    {
+        ("ZombieBeforeAlign", ZombieBeforeAlign),
+        ("SlotReuseOldHandle", SlotReuseOldHandle),
+        ("SlotReuseAfterSetNew", SlotReuseAfterSetNew),
+        ("AlignClearsZombie", AlignClearsZombie),
+        ("RemoveDoesNotDestroyWorld", RemoveDoesNotDestroyWorld),
+        ("InvalidEntitySafety", InvalidEntitySafety),
+        ("NullPolicy", NullPolicy),
+    };
+
+    var cells = new Dictionary<(string Scenario, string Map), CorrectnessResult>();
+    var requiredFailures = new List<string>();
+
+    foreach (var (scenarioName, scenario) in scenarios)
+    {
+        foreach (var (mapName, requiredPass, create) in mapFactories)
+        {
+            CorrectnessResult result;
+            try
+            {
+                result = scenario(create);
+            }
+            catch (Exception ex)
+            {
+                result = CorrectnessResult.Fail($"unexpected {ex.GetType().Name}: {ex.Message}");
+            }
+
+            cells[(scenarioName, mapName)] = result;
+            if (requiredPass && !result.Pass)
+                requiredFailures.Add($"{scenarioName}/{mapName}: {result.Reason}");
+        }
+    }
+
+    Console.Write("| Scenario |");
+    foreach (var (mapName, _, _) in mapFactories)
+        Console.Write($" {mapName} |");
+    Console.WriteLine();
+
+    Console.Write("|---|");
+    foreach (var _ in mapFactories)
+        Console.Write("---|");
+    Console.WriteLine();
+
+    foreach (var (scenarioName, _) in scenarios)
+    {
+        Console.Write($"| {scenarioName} |");
+        foreach (var (mapName, _, _) in mapFactories)
+        {
+            var result = cells[(scenarioName, mapName)];
+            var label = result.Pass ? "PASS" : $"FAIL: {result.Reason}";
+            Console.Write($" {label} |");
+        }
+        Console.WriteLine();
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("Expected failures in NaiveDict/RawDenseUnsafe are evidence, not harness failure.");
+    Console.WriteLine("CompDict, CompDenseUser, and ProtoMap are required to PASS every scenario.");
+
+    if (requiredFailures.Count > 0)
+    {
+        Console.WriteLine();
+        Console.WriteLine("Required implementation failures:");
+        foreach (var failure in requiredFailures)
+            Console.WriteLine($"- {failure}");
+        Environment.ExitCode = 1;
+    }
+    else
+    {
+        Console.WriteLine();
+        Console.WriteLine("PASS: all required correct implementations passed.");
+    }
+
+    static CorrectnessResult ZombieBeforeAlign(Func<World, IManagedEntityMap<Payload>> create)
+    {
+        using var world = new World();
+        var map = create(world);
+        var entity = world.Create();
+        map.Set(entity, new Payload { Value = 1 });
+        world.Destroy(entity);
+
+        var tryGetFalse = !map.TryGet(entity, out _);
+        var getThrows = Throws(() => map.Get(entity));
+        return tryGetFalse && getThrows
+            ? CorrectnessResult.Ok()
+            : CorrectnessResult.Fail("zombie visible before Align");
+    }
+
+    static CorrectnessResult SlotReuseOldHandle(Func<World, IManagedEntityMap<Payload>> create)
+    {
+        using var world = new World();
+        var map = create(world);
+        var oldEntity = world.Create();
+        map.Set(oldEntity, new Payload { Value = 1 });
+        world.Destroy(oldEntity);
+        var newEntity = world.Create();
+
+        if (newEntity.Id != oldEntity.Id)
+            return CorrectnessResult.Fail("world did not reuse slot");
+
+        var oldFalse = !map.TryGet(oldEntity, out _);
+        var newFalse = !map.TryGet(newEntity, out _);
+        return oldFalse && newFalse
+            ? CorrectnessResult.Ok()
+            : CorrectnessResult.Fail("old or unset new handle visible");
+    }
+
+    static CorrectnessResult SlotReuseAfterSetNew(Func<World, IManagedEntityMap<Payload>> create)
+    {
+        using var world = new World();
+        var map = create(world);
+        var oldEntity = world.Create();
+        map.Set(oldEntity, new Payload { Value = 1 });
+        world.Destroy(oldEntity);
+        var newEntity = world.Create();
+        var newPayload = new Payload { Value = 2 };
+        map.Set(newEntity, newPayload);
+
+        var oldFalse = !map.TryGet(oldEntity, out _);
+        var newTrue = map.TryGet(newEntity, out var value) && ReferenceEquals(value, newPayload);
+        return oldFalse && newTrue
+            ? CorrectnessResult.Ok()
+            : CorrectnessResult.Fail("old handle or new binding incorrect");
+    }
+
+    static CorrectnessResult AlignClearsZombie(Func<World, IManagedEntityMap<Payload>> create)
+    {
+        using var world = new World();
+        var map = create(world);
+        var entity = world.Create();
+        map.Set(entity, new Payload { Value = 1 });
+        world.Destroy(entity);
+        map.Align();
+
+        var countZero = map.Count == 0;
+        var tryGetFalse = !map.TryGet(entity, out _);
+        return countZero && tryGetFalse
+            ? CorrectnessResult.Ok()
+            : CorrectnessResult.Fail($"zombie retained count={map.Count}");
+    }
+
+    static CorrectnessResult RemoveDoesNotDestroyWorld(Func<World, IManagedEntityMap<Payload>> create)
+    {
+        using var world = new World();
+        var map = create(world);
+        var entity = world.Create();
+        map.Set(entity, new Payload { Value = 1 });
+
+        var removed = map.Remove(entity);
+        var alive = world.IsAlive(entity);
+        var absent = !map.TryGet(entity, out _);
+        return removed && alive && absent
+            ? CorrectnessResult.Ok()
+            : CorrectnessResult.Fail("remove failed or destroyed world entity");
+    }
+
+    static CorrectnessResult InvalidEntitySafety(Func<World, IManagedEntityMap<Payload>> create)
+    {
+        using var world = new World();
+        var map = create(world);
+        var invalids = new[]
+        {
+            default,
+            new Entity(-2, 1),
+            new Entity(-1, 0),
+            new Entity(10_000, 1),
+        };
+
+        foreach (var entity in invalids)
+        {
+            if (Throws(() => map.TryGet(entity, out _)))
+                return CorrectnessResult.Fail($"TryGet threw for {entity}");
+            if (map.TryGet(entity, out _))
+                return CorrectnessResult.Fail($"TryGet true for {entity}");
+            if (!Throws(() => map.Get(entity)))
+                return CorrectnessResult.Fail($"Get did not throw for {entity}");
+            if (!Throws(() => map.Set(entity, new Payload { Value = 9 })))
+                return CorrectnessResult.Fail($"Set accepted {entity}");
+        }
+
+        return CorrectnessResult.Ok();
+    }
+
+    static CorrectnessResult NullPolicy(Func<World, IManagedEntityMap<Payload>> create)
+    {
+        using var world = new World();
+        var map = create(world);
+        var entity = world.Create();
+
+        return Throws(() => map.Set(entity, null!))
+            ? CorrectnessResult.Ok()
+            : CorrectnessResult.Fail("Set(null) accepted");
+    }
+
+    static bool Throws(Action action)
+    {
+        try
+        {
+            action();
+            return false;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+}
+
 void PrintUsage()
 {
     Console.WriteLine("Usage: dotnet run -c Release --project tools/perf/ManagedEntityMap.ValueLab [options]");
@@ -352,6 +575,12 @@ record struct BenchResult(
     double AllocBytesPerOp,
     int Gen0, int Gen1, int Gen2,
     double RetainedKB);
+
+readonly record struct CorrectnessResult(bool Pass, string Reason)
+{
+    public static CorrectnessResult Ok() => new(true, "");
+    public static CorrectnessResult Fail(string reason) => new(false, reason);
+}
 
 // ────────────────────────────────────────────────────────────────
 // Sealed managed payload
@@ -407,6 +636,8 @@ sealed class CompetentDictionaryMap<T> : IManagedEntityMap<T> where T : class
 
     public void Set(Entity entity, T value)
     {
+        if (value is null)
+            throw new ArgumentNullException(nameof(value));
         if (!_world.IsAlive(entity))
             throw new InvalidOperationException($"Entity {entity} is not alive.");
         _dict[entity.Id] = new Entry(value, entity.Version);
@@ -566,6 +797,8 @@ sealed class CompetentDenseUserMap<T> : IManagedEntityMap<T> where T : class
 
     public void Set(Entity entity, T value)
     {
+        if (value is null)
+            throw new ArgumentNullException(nameof(value));
         if (!_world.IsAlive(entity))
             throw new InvalidOperationException($"Entity {entity} is not alive.");
         EnsureCapacity(entity.Id);
