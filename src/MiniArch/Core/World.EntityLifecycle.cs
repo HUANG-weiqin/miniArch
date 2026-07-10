@@ -950,7 +950,9 @@ public sealed partial class World
             Array.Resize(ref _destroyRowMarks, Math.Max(entityCount, _destroyRowMarks.Length * 2));
         }
 
-        EnsureDestroyBatchCapacity(entityCount);
+        // Note: batch scratch arrays (_destroyGroupArchetypes, etc.) are sized
+        // lazily in EnsureDestroyBatchCapacity(destroyCount) — only as large as
+        // the actual destroy batch, not the total entity slot count.
     }
 
     private void EnsureDestroyBatchCapacity(int count)
