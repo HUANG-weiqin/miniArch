@@ -657,8 +657,10 @@ public sealed class ArchetypeTests
         // capacity: 4096 > segCap/2 → _capacity*2 > segCap triggers promotion.
         var archetype = new Archetype(new Signature(comp), [typeof(Component1024)], capacity: 4096);
 
+#pragma warning disable xUnit1031 // intentional deadlock detection test
         var task = Task.Run(() => archetype.AllocateRows(5000));
         var completed = task.Wait(TimeSpan.FromSeconds(3));
+#pragma warning restore xUnit1031
 
         Assert.True(completed,
             "ReserveRows(5000) did not complete within 3s — it is deadlocked. " +

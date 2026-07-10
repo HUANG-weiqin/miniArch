@@ -213,8 +213,10 @@ public sealed class WorldCloneTests
             world.Add(e, new Component16k { Value = i });
         }
 
+#pragma warning disable xUnit1031 // intentional deadlock detection test
         var task = Task.Run(() => world.Clone());
         var completed = task.Wait(TimeSpan.FromSeconds(3));
+#pragma warning restore xUnit1031
 
         Assert.True(completed,
             "World.Clone() did not complete within 3s — it is deadlocked in " +

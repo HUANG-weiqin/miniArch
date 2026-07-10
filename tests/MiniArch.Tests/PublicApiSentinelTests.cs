@@ -247,8 +247,10 @@ public sealed class PublicApiSentinelTests
         return constraints.Count > 0 ? $"where {string.Join(", ", constraints)}" : string.Empty;
     }
 
-    private static string FormatType(Type type)
+    private static string FormatType(Type? type)
     {
+        if (type is null)
+            return "?";
         if (type == null)
             return "null";
 
