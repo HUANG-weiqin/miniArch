@@ -1,5 +1,24 @@
 # Changelog
 
+## 3.0.0 (2026-07-10)
+
+- **Breaking: Change tracking replaced with Watch API** — `ChangeTracker`/`ValueTracker`/`IChangeTracker` removed, replaced by `ChangeWatch<TComponent, THandler>` / `ChangeWatch<TComponent, TValue, THandler>` / `TransitionWatch<THandler>` pull-event model. See `kb-change-tracking.md`.
+- **Breaking: `LayoutKind.Auto` struct components rejected** — `World.Add`/`Set` now throws on components with `LayoutKind.Auto` packing, guaranteeing cross-host determinism. See `kb-determinism-proof.md`.
+- **Breaking: Enum components now accepted** — `LayoutKind.Sequential` enum components are now valid; previously they were incorrectly rejected.
+- **New: `Exact()` strict archetype matching** — `QueryDescription.Exact()` modifier for queries that must match the exact archetype signature, not a superset.
+- **New: `ComponentBucketQuery<T>`** — deterministic per-key component value query: caller provides `Span<TKey>` and `Span<Entity>`, receives matching entities in query order. Zero core intrusion, zero allocation after setup.
+- **New: Fingerprint sort cache** — `OrderByEntityId` sorts by archetype fingerprint hash instead of entity id comparison, keeping sort as a pure function in `Chunk`.
+- **Perf: `Exact()` archetype pre-filter** — skips archetype scanning when exact match is set.
+- **Perf: M2 prevalidate pending submit slots** — earlier detection of slot exhaustion with epoch-guard optimization.
+- **Test: Public API sentinel** — automated tracking of public API surface changes.
+- **Test: M3 cross-feature parity matrix** — structural/query/hierarchy/snapshot cross-feature coverage.
+- **Test: M4 metamorphic parity** — Submit vs Replay vs Restore three-way convergence.
+- **Test: M7 soak pressure matrix** — 32×100K + 3×1M + boundary soak all PASS.
+- **Docs: Full knowledge base consistency audit** — 24 `.knowledge/` pages, CONTRIBUTING, 6 scripts updated.
+- **Docs: Managed entity sidecar evaluation** — No-Go verdict: prototype beats dictionary but doesn't beat competent dense user enough to justify new public API. Full report at `docs/plans/2026-07-10-managed-entity-sidecar-value-report.md`.
+- **Chore: Dead code cleanup** — M6 removed 15 lines of unused code; redundant `#if DEBUG` around `Debug.Assert` removed.
+- **Chore: Warnings resolved** — pre-existing test warnings fixed.
+
 ## 2.3.0 (2026-07-05)
 
 - **Refactor: CommandStream split** — `CommandStream` split into `SingleThreadCommandStream` (single writer) and `ParallelCommandStream` (thread-safe). Mutators changed from `abstract`+`override` to `new` (non-virtual), eliminating virtual dispatch overhead in hot paths. Parallel arrays replaced with struct arrays for cache locality.
