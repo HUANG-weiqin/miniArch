@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-07-10
+updated: 2026-07-11
 ---
 # MiniArch Core ECS
 
@@ -60,7 +60,13 @@ updated: 2026-07-10
 - **Archetype 支持单块和分段两种存储模式**（详见 `kb-chunk-storage.md`）：存储为 Archetype 直持的 `_data: byte[]`（单块）或 `_segments: Segment[]`（分段），通过 `_columnByteOffsets[column] + row * _elementSizes[column]` 定位元素
 - Archetype 按需线性增长：`EnsureCapacity`（`Archetype.Storage.cs`）按 double 策略扩容，每列 `CopyBlockUnaligned` 整列搬移
 - `World.Create/Destroy` 热路径无锁（单线程 world mutation 前提）；`World.ReserveDeferredEntity` 保留锁（供 defering entity 使用）；`World.ReserveDeferredEntityUnsafe` 无锁变体要求调用方保证无并发 reserve/write（CommandStream 单线程路径用此跳过 lock）
-- `World.DestroyMany(ReadOnlySpan<Entity>)` / `World.Destroy(QueryDescription)` 先收集与 guarded `for Destroy` 等价的 child-first destroy order（dead/stale handle skip、重复输入去重、父子同批不双删），再按 archetype 批量移除 storage：全 archetype 命中走 `ResetCount()`，partial 命中走无序 hole-fill bulk remove（尾部 survivor 填前部 dead row），最后按原 destroy order 清理 hierarchy/record/free-list，保持 logical state 与 future id reuse 和普通循环一致。
+- `World.DestroyMany(ReadOnlySpan<Entity>)` / `World.Destroy(QueryDescription)` 先收集与 guarded `for Destroy` 等价的 child-first destroy order（dead/stale handle skip、重复输入去重、父子同批不双删），再按 archetype 批量移除 storage。存储策略按密度 R/M 分三路：
+  - R ≤ 8（SmallDestroyThreshold）：直接走逐个 `Destroy`（batch 机制固定开销 ~0.4μs 不值得）
+  - R == M：`ResetCount()` O(1)
+  - R×5 < M（稀疏 <20%）：per-entity `RemoveAt`（从 entity record 查当前 row，swap-remove，更新 moved record）——与 for-loop 同算法但用 batch 收集的实体
+  - R×5 ≥ M（密集 ≥20%）：单遍 hole-fill compact（尾部 survivor 填前部 dead row）
+  - 经验 crossover（batch 打平 for-loop）≈30% 密度；≥50% batch 稳定领先
+- `World.Clear(QueryDescription)` 是最快的批量销毁路径（~4× vs for-loop，~2× vs Destroy(query)）：跳过 collection/grouping/compaction 全部步骤，直接遍历匹配 archetype → kill record + push free-list → ResetCount。**不级联子节点**、不反向 unlink parent——caller 必须确保 query 边界不被 hierarchy 跨越
 
 ### 用户 API 分层（`MiniArch` namespace）
 
@@ -76,6 +82,7 @@ updated: 2026-07-10
 | Chunk 视图 | `ChunkView` (public readonly struct) | `chunk.GetSpan<T>()` |
 | Singleton 实体查找 | `World.GetSingleton<T>()` | `world.GetSingleton<T>()`（找唯一含 T 的实体，O(archetypes)） |
 | 批量销毁 | `World.DestroyMany(ReadOnlySpan<Entity>)` / `World.Destroy(QueryDescription)` | 批量 entity span 或 query 匹配；级联销毁、dead skip、内部批量 remove |
+| Archetype 级清空 | `World.Clear(in QueryDescription)` | 最快路径：直接 reset 匹配 archetype，~4× vs for-loop；**无 cascade** |
 | 注册表指纹 | `MiniArch.ComponentSchema` (public static) | `ComponentSchema.Fingerprint()` |
 
 **关键分层边界：**
@@ -113,7 +120,9 @@ updated: 2026-07-10
 - **迁移拷贝内联**：`CopySharedComponentsFrom` 直接在 Archetype 上实现，无需 MigrationPlan class
 - `EntityCount` 在所有构建配置下都只统计 **alive entity**；reserved pending id 不计入结果
 - `DestroyMany` / `Destroy(query)` 的正确性标准是 logical world state：`CanonicalChecksum`、`WorldDiff`、`WorldValidator` 以及 `WorldDigest` 的 occupancy/free-list/hierarchy/per-component 域与 guarded `for Destroy` 一致。由于 partial batch remove 使用无序 hole-fill，物理 archetype row order 可不同；默认 query 顺序不属于语义承诺，需稳定顺序时使用 `OrderByEntityId()` 等显式排序。
-- **用户可触发的防御性检查**（如 `AssertNotDisposed`、`AssertAlive`、`GetRecordFast` 的 id/版本校验）在 Release 常开。`kb-design-rationale.md` §3.11 已用 Release benchmark 证明这些检查零可测成本，不能再把它们误改回 DEBUG-only
+- **用户可触发的防御性检查**（如 `AssertNotDisposed`、`AssertAlive`、`GetRecordFast` 的 id/版本校验）在 Release 常开。`kb-design-rationale.md` §3.11 已用 Release benchmark 证明这些检查零可测成本，不能再把它们误改回 DEBUG-only。**唯一例外：`IsAlive`** — 见下条
+- **IsAlive 不含 AssertNotDisposed**：Dispose 后 `_entitySlotCount = 0` 使 bounds check 永远返回 false，语义正确（无活实体）且省一个分支。其他公共方法（Create/Destroy/Get 等）仍保留 `AssertNotDisposed`——它们在 disposed World 上会静默损坏状态
+- **Clear 命名而非 DestroyAll/DisposeQueryUnsafe**：`Clear` 诚实描述行为（清空 archetype 容器），与 `List<T>.Clear()` 语义一致；与 `Destroy*` 家族（逐实体处理）区分
 - **内部结构不变量检查**（如 `ChunkView.AssertValid`、`Archetype.AssertSegmentInvariants`）才使用 `[Conditional("DEBUG")]` / `Debug.Assert`。划分原则：用户错误 fail-fast，内部一致性只在 Debug 审计
 - `[SkipLocalsInit]` + `AggressiveInlining` + `Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), offset)` 消除 JIT 边界检查
 - Entity version 和 location 合并存储在 `EntityRecord[] _records`：`(Archetype, RowIndex, Version)` 16 字节紧凑布局
@@ -180,6 +189,11 @@ world.Destroy(e);
 - `GetSingleton<T>()` 取代了旧的 `GetFirst<T>()`：旧 API 用 `CreateArchetypeCache<T>` 缓存只命中单组件 `{T}` 原型；新 API 全量扫描，不再依赖该缓存
 - DebugMetrics 相关的 `#if DEBUG` 计数累加语句已全部删除，不应再引用
 - **同帧 `World.Destroy(e)` + `World.Create()` 的 id 回收与 version 一致性**（**理论风险，当前串行单线程路径安全，但修改时要小心**）：Destroy 把 `(id, version)` 推回 free-list 并对 `EntityRecord[id]` 做 swap-remove + version bump；Create 从 free-list 弹 id 并写新 `EntityRecord[id]`。两者必须严格串行且 Destroy 的 swap-remove 必须先于 Create 的 slot 写入，否则新实体可能读到被销毁实体的旧 `(Archetype, RowIndex)` 或 stale version。验证链：`World.EntityLifecycle.cs:Destroy` → `Archetype.Storage.cs:RemoveAt`（swap-remove）→ free-list push → `World.EntityLifecycle.cs:Create` → free-list pop。**当前在单线程串行调用下安全**（Destroy 的 version bump + swap-remove 在 Create 读 free-list 前完成），但引入 CommandStream 批量 materialize、多线程或 `Destroy` callback 嵌套 `Create` 时可能被打破。**回归测试入口**：`tests/MiniArch.Tests/Core/WorldLifecycleTests.cs`（`Destroy_recycles_ids_safely` 覆盖同帧 id+version 正确性；`Destroy_and_recreate_cycle_preserves_correct_versions_across_many_iterations` 在 `TrickyEdgeCaseTests.cs` 覆盖 100 次循环的版本单调性）
-- `DestroyMany.Perf`（`dotnet run -c Release --project tools/perf/DestroyMany.Perf`）稳态证明（热机 2s + 测量 3s，只测 destroy 阶段）相对 guarded `for Destroy`：full dense 1.53×、query 1.91×、full cascade 1.42×、partial cascade 1.36×（2026-07-10 本机 Release 数据）。多 segment/chunk 正确性由 `WorldLifecycleTests.DestroyMany_multi_segment_partial_archetype_matches_loop_checksum` 与 `Destroy_query_multi_segment_archetype_matches_materialized_loop` 覆盖：用 16 组件宽 archetype 把 segment 数推到 >1，再跨 segment 边界删除并与 guarded loop 比对。
+- `DestroyMany.Perf`（`dotnet run -c Release --project tools/perf/DestroyMany.Perf`）稳态证明（热机 2s + 测量 3s，只测 destroy 阶段）。2026-07-10 本机 Release 数据：
+  - **Throughput（M=50000，6 场景）**：full dense 1.9×、query[1 arch] 2.3×、query[16 arch] 1.6×、full cascade 1.4×、partial cascade 1.5×、sparse 4/50000 ~0.8×（R≤8 走 fast path ≈ for-loop）
+  - **Clear(query)（M=40000）**：1 archetype **4.0× vs for**、**2.0× vs Destroy(query)**；16 archetypes **3.8× vs for**、**2.0× vs Destroy(query)**
+  - **Threshold sweep**：R≤8 fast path；R<M/5 per-entity RemoveAt（sparse）；R≥M/5 hole-fill compact（dense）。Batch crossover ≈30% 密度，≥50% 稳定领先
+  - **Steady-state alloc（World 复用）**：batch Destroy(query) 0.0 B/op；for-loop ~1 MB/op
+  - 多 segment/chunk 正确性由 `WorldLifecycleTests.DestroyMany_multi_segment_partial_archetype_matches_loop_checksum` 与 `Destroy_query_multi_segment_archetype_matches_materialized_loop` 覆盖
 - **ArrayPool 稳态陷阱**：早期版本用 `ArrayPool.Rent/Return` ×7 做 scratch。冷启动测试（8 次迭代）因 JIT 编译成本掩盖了 ArrayPool 开销，显示 2-3× 加速。稳态测试（热机后跑 3 秒）揭示 7×Rent/Return + `clearArray(Archetype[])` 全量清零 + Dictionary 首次分配使 batch 比 for-loop 还慢（0.88×）。改用 World 构造函数预分配 scratch + 线性扫描 archetype 后，稳态 1.4-1.9×。教训：**不要用冷启动迭代数太少的方式测 batch API，ArrayPool 开销在 JIT 热了之后才显现。**
 

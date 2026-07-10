@@ -20,7 +20,7 @@ miniArch 有 **多套性能测试工具**，以下矩阵记录主要工具。它
 | **GameTickSim.Perf** | `tools/perf/GameTickSim.Perf` | 场景化三方对比（MiniArch vs Arch vs DefaultEcs） | ticks/s | 见各场景 | ❌ 竞品对比 | `kb-gameticksim-scenarios.md` |
 | **CommandStream.Profile** | `tools/perf/CommandStream.Profile` | CommandStream 专剖：6 个微场景，含 record/submit/snapshot/clear 分阶段 | ticks/s | 无固定 baseline | ❌ CPU sampling 辅助 | `kb-command-stream.md` |
 | **WatchApi.Perf** | `tools/perf/WatchApi.Perf` | Watch API 专项：ChangeWatch/Projected/TransitionWatch 秒级吞吐、steady-state allocation、发布验证 | ops/s | 见 `kb-change-tracking.md` WatchApi.Perf 段 | ❌ API 发布/优化验证 | `kb-change-tracking.md` |
-| **DestroyMany.Perf** | `tools/perf/DestroyMany.Perf` | `DestroyMany` / `Destroy(query)` vs guarded `for Destroy`，稳态吞吐（热机 2s + 测量 3s），只测 destroy 阶段，内置 checksum/diff 正确性验证 | speedup / us/op | 2026-07-10 稳态：full dense 1.53×；query 1.91×；full cascade 1.42×；partial cascade 1.36× | ❌ API 专项证明 | `kb-core-ecs.md` |
+| **DestroyMany.Perf** | `tools/perf/DestroyMany.Perf` | `DestroyMany` / `Destroy(query)` / `Clear(query)` vs guarded `for Destroy`，稳态吞吐 + steady-state alloc + threshold sweep + correctness verify | speedup / us/op | 2026-07-10 稳态：full dense 1.9×；query 2.3×；Clear 4.0×；cascade 1.4×；sweep crossover ≈30% | ❌ API 专项证明 | `kb-core-ecs.md` |
 
 ## 如何选择
 
