@@ -103,6 +103,7 @@ internal static class Program
         }
 
         PrintSteadyStateAlloc();
+        PrintThresholdSweep(ref allPassed);
 
         return allPassed ? 0 : 1;
     }
@@ -225,6 +226,80 @@ internal static class Program
             }
         }
     }
+
+    // Sweep R around the SmallDestroyThreshold to prove that above the
+    // threshold, batch is always faster than for-loop (speedup > 1.0).
+    private static void PrintThresholdSweep(ref bool allPassed)
+    {
+        const int SweepM = 50_000;
+        // Test both sparse and dense regimes.
+        int[] sweepRs = [4, 8, 9, 16, 64, 256, 512, 5_000, 10_000, 15_000, 25_000, 40_000];
+        const int SweepSeconds = 1;
+        var assertCrossover = SweepM / 2; // 50% — batch reliably beats for-loop above this
+
+        Console.WriteLine($"threshold sweep (M={SweepM:N0}, {SweepSeconds}s per measurement)");
+        Console.WriteLine($"  R <= 8        → fast path (individual Destroy, same as for-loop)");
+        Console.WriteLine($"  R < {SweepM/5,5}     → sparse (per-entity RemoveAt)");
+        Console.WriteLine($"  {SweepM/5,5}..{assertCrossover,5}   → transition (break-even ≈ 30%)");
+        Console.WriteLine($"  R >= {assertCrossover,5}     → dense (hole-fill compact, batch wins)");
+        Console.WriteLine();
+        Console.WriteLine($"  {"R",6} {"R/M",6} {"for μs",10} {"batch μs",10} {"speedup",8}  note");
+        Console.WriteLine($"  {"─",6} {"─",6} {"─",10} {"─",10} {"─",8}  {"─",20}");
+
+        foreach (var R in sweepRs)
+        {
+            Func<WorldSetup> setup = () => BuildSweepWorld(SweepM, R);
+            var sweepScenario = new Scenario($"sweep R={R}", R, setup,
+                DestroyWithGuardedLoop, DestroyWithDestroyMany, 0);
+
+            // Correctness check.
+            VerifyEquivalent(sweepScenario);
+
+            var baseline = RunForDuration(sweepScenario, DestroyWithGuardedLoop, SweepSeconds);
+            var batch = RunForDuration(sweepScenario, DestroyWithDestroyMany, SweepSeconds);
+            var speedup = batch.OpsPerSecond / baseline.OpsPerSecond;
+            var density = (double)R / SweepM;
+
+            string note;
+            if (R <= 8) note = "fast path";
+            else if (R < SweepM / 5) note = "sparse";
+            else if (R < assertCrossover) note = "transition";
+            else note = "dense";
+
+            Console.WriteLine($"  {R,6} {density,5:P0} {baseline.UsPerOp,10:F2} {batch.UsPerOp,10:F2} {speedup,8:F2}  {note}");
+
+            // For dense R (>= 50%), batch must be >= 1.0x.
+            if (R >= assertCrossover && speedup < 1.0)
+            {
+                allPassed = false;
+                Console.WriteLine($"         FAIL: R={R} is dense (>= M/2), expected speedup >= 1.0x");
+            }
+        }
+
+        Console.WriteLine();
+    }
+
+    private static WorldSetup BuildSweepWorld(int m, int r)
+    {
+        var world = new World(entityCapacity: m);
+        var all = new Entity[m];
+        for (var i = 0; i < m; i++)
+        {
+            all[i] = world.Create(
+                new Position(i, i + 1),
+                new Velocity(i + 2, i + 3),
+                new A(i + 4),
+                new B(i + 5),
+                new C(i + 6),
+                new D(i + 7));
+        }
+
+        var targets = new Entity[r];
+        for (var i = 0; i < r; i++)
+            targets[i] = all[(int)((long)i * m / r)];
+        return new WorldSetup(world, targets);
+    }
+
 
     private static void VerifyEquivalent(Scenario scenario)
     {

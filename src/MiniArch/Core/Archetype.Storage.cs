@@ -381,18 +381,9 @@ internal sealed partial class Archetype
             return;
         }
 
-        // Sparse fast path: when removing R rows from an archetype with M rows,
-        // hole-fill scans O(M) but individual RemoveAt is O(R²) for the sort +
-        // O(R) calls. Scan cost per row (~1 cycle) matches sort cost per
-        // comparison (~1 cycle), so crossover is M ≈ R². Below that, individual
-        // descending remove wins — no archetype scan at all.
-        var rSq = (long)rowsToRemove.Length * rowsToRemove.Length;
-        if (_count > rSq)
-        {
-            RemoveRowsDescending(rowsToRemove, records);
-            return;
-        }
-
+        // Caller (CompactPartiallyDestroyedArchetypes) already routes sparse
+        // groups to per-entity RemoveAt. This path is only reached for dense
+        // groups (R ≥ M/5), where a single-pass hole-fill scan is optimal.
         for (var i = 0; i < rowsToRemove.Length; i++)
         {
             rowMarks[rowsToRemove[i]] = markGen;
@@ -405,42 +396,6 @@ internal sealed partial class Archetype
         }
 
         CompactRemoveRowsFlat(rowsToRemove.Length, rowMarks, markGen, records);
-    }
-
-    // Removes rows in descending order so earlier (higher-index) removals
-    // don't shift later (lower-index) rows. Uses a tiny stackalloc buffer +
-    // insertion sort — R is small (bounded by the M > R² threshold).
-    private void RemoveRowsDescending(ReadOnlySpan<int> rowsToRemove, EntityRecord[] records)
-    {
-        Span<int> sorted = stackalloc int[rowsToRemove.Length];
-        rowsToRemove.CopyTo(sorted);
-        InsertionSortDescending(sorted);
-
-        for (var i = 0; i < sorted.Length; i++)
-        {
-            RemoveAt(sorted[i], out var movedEntity);
-            if (movedEntity.IsValid)
-            {
-                ref var movedRecord = ref records[movedEntity.Id];
-                movedRecord.Archetype = this;
-                movedRecord.RowIndex = sorted[i];
-            }
-        }
-    }
-
-    private static void InsertionSortDescending(Span<int> values)
-    {
-        for (var i = 1; i < values.Length; i++)
-        {
-            var key = values[i];
-            var j = i - 1;
-            while (j >= 0 && values[j] < key)
-            {
-                values[j + 1] = values[j];
-                j--;
-            }
-            values[j + 1] = key;
-        }
     }
 
     private void CompactRemoveRowsFlat(int removeCount, int[] rowMarks, int markGen, EntityRecord[] records)

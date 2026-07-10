@@ -10,6 +10,13 @@ internal readonly record struct EntityBatchRange(int StartRow, int Count);
 
 public sealed partial class World
 {
+    // Below this count, DestroyMany falls back to individual Destroy calls.
+    // The batch machinery (gen tracking, scratch arrays, archetype grouping)
+    // costs ~0.4 us fixed; at R <= 8 that overhead exceeds the per-entity savings
+    // from bulk storage operations. Semantic equivalence is guaranteed by the
+    // child-first cascade order in Destroy.
+    internal const int SmallDestroyThreshold = 8;
+
     /// <summary>
     /// Creates an empty entity.
     /// </summary>
@@ -127,15 +134,29 @@ public sealed partial class World
     public void DestroyMany(ReadOnlySpan<Entity> entities)
     {
         AssertNotDisposed();
-        if (entities.Length == 0)
+        var length = entities.Length;
+        if (length == 0)
         {
+            return;
+        }
+
+        // Small batches: skip the collection/grouping machinery and destroy
+        // individually. Semantic equivalence holds because Destroy's child-first
+        // cascade produces the same free-list order as the batch path.
+        if (length <= SmallDestroyThreshold)
+        {
+            for (var i = 0; i < length; i++)
+            {
+                if (IsAlive(entities[i]))
+                    Destroy(entities[i]);
+            }
             return;
         }
 
         BeginDestroyCollection();
         try
         {
-            for (var i = 0; i < entities.Length; i++)
+            for (var i = 0; i < length; i++)
             {
                 CollectDestroyRootIfAlive(entities[i]);
             }
@@ -454,14 +475,43 @@ public sealed partial class World
                 continue;
             }
 
+            var archetype = groupArchetypes[groupIndex];
+            var entityCount = archetype.EntityCount;
+            var removeCount = groupCounts[groupIndex];
+
+            // Sparse: per-entity RemoveAt using current entity record lookups.
+            // O(R) — no archetype scan, no sort. Same algorithm as guarded
+            // for-loop: look up current row from record, RemoveAt, update
+            // moved entity's record. Each RemoveAt is O(1) swap-remove.
+            //
+            // Crossover at R ≈ M/5: per-entity costs R×~40 cycles (RemoveAt +
+            // record lookup + update), dense scan costs M×~2 cycles + R×~30.
+            // 40R = 2M + 30R → R = M/5.
+            if ((long)removeCount * 5 < entityCount)
+            {
+                for (var ci = groupFirstCandidateIndices[groupIndex]; ci >= 0; ci = candidateNextIndices[ci])
+                {
+                    ref var record = ref _records[_destroyOrderScratch[ci].Id];
+                    var row = record.RowIndex;
+                    archetype.RemoveAt(row, out var movedEntity);
+                    if (movedEntity.IsValid)
+                    {
+                        ref var movedRecord = ref _records[movedEntity.Id];
+                        movedRecord.Archetype = archetype;
+                        movedRecord.RowIndex = row;
+                    }
+                }
+                continue;
+            }
+
+            // Dense: single-pass hole-fill compact. O(M) scan.
             var rowCount = 0;
             for (var candidateIndex = groupFirstCandidateIndices[groupIndex]; candidateIndex >= 0; candidateIndex = candidateNextIndices[candidateIndex])
             {
                 compactRows[rowCount++] = candidateRows[candidateIndex];
             }
 
-            var archetype = groupArchetypes[groupIndex];
-            var markGen = NextDestroyRowMarkGen(archetype.EntityCount);
+            var markGen = NextDestroyRowMarkGen(entityCount);
             archetype.CompactRemoveRows(compactRows.AsSpan(0, rowCount), _destroyRowMarks, markGen, _records);
         }
     }
