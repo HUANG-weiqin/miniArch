@@ -368,6 +368,113 @@ internal sealed partial class Archetype
         return true;
     }
 
+    internal void CompactRemoveRows(ReadOnlySpan<int> rowsToRemove, int[] rowMarks, int markGen, EntityRecord[] records)
+    {
+        if (rowsToRemove.Length == 0)
+        {
+            return;
+        }
+
+        if (rowsToRemove.Length == _count)
+        {
+            ResetCount();
+            return;
+        }
+
+        for (var i = 0; i < rowsToRemove.Length; i++)
+        {
+            rowMarks[rowsToRemove[i]] = markGen;
+        }
+
+        if (IsChunked)
+        {
+            CompactRemoveRowsChunked(rowsToRemove.Length, rowMarks, markGen, records);
+            return;
+        }
+
+        CompactRemoveRowsFlat(rowsToRemove.Length, rowMarks, markGen, records);
+    }
+
+    private void CompactRemoveRowsFlat(int removeCount, int[] rowMarks, int markGen, EntityRecord[] records)
+    {
+        var oldCount = _count;
+        var newCount = oldCount - removeCount;
+        var tail = oldCount - 1;
+
+        for (var row = 0; row < newCount; row++)
+        {
+            if (rowMarks[row] != markGen)
+            {
+                continue;
+            }
+
+            while (rowMarks[tail] == markGen)
+            {
+                tail--;
+            }
+
+            var entity = _entities[tail];
+            _entities[row] = entity;
+            CopyRemovedRow(row, tail);
+
+            ref var record = ref records[entity.Id];
+            record.Archetype = this;
+            record.RowIndex = row;
+            tail--;
+        }
+
+        Array.Clear(_entities, newCount, oldCount - newCount);
+        _count = newCount;
+    }
+
+    private void CompactRemoveRowsChunked(int removeCount, int[] rowMarks, int markGen, EntityRecord[] records)
+    {
+        var oldCount = _count;
+        var newCount = oldCount - removeCount;
+        var tail = oldCount - 1;
+
+        for (var row = 0; row < newCount; row++)
+        {
+            if (rowMarks[row] != markGen)
+            {
+                continue;
+            }
+
+            while (rowMarks[tail] == markGen)
+            {
+                tail--;
+            }
+
+            var (srcSegIdx, srcLocalRow) = GetSegmentAndLocal(tail);
+            var (dstSegIdx, dstLocalRow) = GetSegmentAndLocal(row);
+            var entity = _segments[srcSegIdx].Entities[srcLocalRow];
+
+            _segments[dstSegIdx].Entities[dstLocalRow] = entity;
+            CopySegmentColumn(srcSegIdx, srcLocalRow, dstSegIdx, dstLocalRow);
+
+            ref var record = ref records[entity.Id];
+            record.Archetype = this;
+            record.RowIndex = row;
+            tail--;
+        }
+
+        for (var row = newCount; row < oldCount; row++)
+        {
+            var (segIdx, localRow) = GetSegmentAndLocal(row);
+            _segments[segIdx].Entities[localRow] = default;
+        }
+
+        _count = newCount;
+        for (var segIdx = 0; segIdx < _segmentCount; segIdx++)
+        {
+            var remaining = newCount - segIdx * _segmentCapacity;
+            _segments[segIdx].Count = remaining <= 0 ? 0 : Math.Min(remaining, _segmentCapacity);
+        }
+
+        InvalidateFlatEntityCache();
+        AssertSegmentInvariants();
+    }
+
     // ──────────────────────────────────────────────
     //  Entity access
     // ──────────────────────────────────────────────

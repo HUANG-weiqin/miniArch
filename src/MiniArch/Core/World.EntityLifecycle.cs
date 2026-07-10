@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+﻿using System.Buffers;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -115,6 +115,83 @@ public sealed partial class World
         }
     }
 
+    /// <summary>
+    /// Destroys multiple entities in one structural batch. Stale/dead handles are skipped.
+    /// </summary>
+    /// <remarks>
+    /// The destroy order is identical to running <c>if (world.IsAlive(e)) world.Destroy(e)</c>
+    /// for each supplied entity: hierarchy cascades are collected child-first, duplicates are
+    /// ignored after their first destruction, and free-list order is preserved. Storage removal
+    /// is then grouped per archetype so full-archetype clears use <c>ResetCount</c> and partial
+    /// clears use unordered hole-fill compaction.
+    /// </remarks>
+    public void DestroyMany(ReadOnlySpan<Entity> entities)
+    {
+        AssertNotDisposed();
+        if (entities.Length == 0)
+        {
+            return;
+        }
+
+        BeginDestroyCollection();
+        try
+        {
+            for (var i = 0; i < entities.Length; i++)
+            {
+                CollectDestroyRootIfAlive(entities[i]);
+            }
+
+            DestroyCollectedEntities();
+        }
+        catch
+        {
+            _destroyOrderScratch.Clear();
+            _destroyGroupIndexByArchetype.Clear();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Destroys all entities matching <paramref name="description"/> in one structural batch.
+    /// </summary>
+    /// <remarks>
+    /// Matching entities are first materialized from the query snapshot, then destroyed with the
+    /// same cascade and batching rules as <see cref="DestroyMany(ReadOnlySpan{Entity})"/>.
+    /// Descendants are destroyed even when they do not match the query.
+    /// </remarks>
+    public void Destroy(in QueryDescription description)
+    {
+        AssertNotDisposed();
+
+        var query = GetAdvancedQuery(in description);
+        var archetypes = query.GetArchetypeSpan();
+        if (archetypes.Length == 0)
+        {
+            return;
+        }
+
+        BeginDestroyCollection();
+        try
+        {
+            for (var archetypeIndex = 0; archetypeIndex < archetypes.Length; archetypeIndex++)
+            {
+                var entities = archetypes[archetypeIndex].GetEntities();
+                for (var row = 0; row < entities.Length; row++)
+                {
+                    CollectDestroyRootIfAlive(entities[row]);
+                }
+            }
+
+            DestroyCollectedEntities();
+        }
+        catch
+        {
+            _destroyOrderScratch.Clear();
+            _destroyGroupIndexByArchetype.Clear();
+            throw;
+        }
+    }
+
     internal bool TryGetLocation(Entity entity, out EntityInfo info)
     {
         AssertNotDisposed();
@@ -205,10 +282,210 @@ public sealed partial class World
     private void DestroySingle(Entity entity)
     {
         var info = RequireLocation(entity);
-        var nextVersion = NextEntityVersion(entity);
         var arch = info.Archetype!;
 
         arch.RemoveAt(info.RowIndex, out var movedEntity);
+        KillEntityRecord(entity);
+
+        if (movedEntity.IsValid)
+        {
+            ref var movedRecord = ref _records[movedEntity.Id];
+            movedRecord.Archetype = info.Archetype;
+            movedRecord.RowIndex = info.RowIndex;
+        }
+    }
+
+    private void BeginDestroyCollection()
+    {
+        _destroyOrderScratch.Clear();
+
+        if (++_destroyCurrentGen == 0)
+        {
+            Array.Clear(_destroyVisitedGen);
+            _destroyCurrentGen = 1;
+        }
+
+        EnsureDestroyScratchCapacity(_entitySlotCount);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool IsMarkedForDestroy(int entityId)
+    {
+        return (uint)entityId < (uint)_destroyVisitedGen.Length &&
+               _destroyVisitedGen[entityId] == _destroyCurrentGen;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void MarkForDestroy(int entityId)
+    {
+        if ((uint)entityId < (uint)_destroyVisitedGen.Length)
+        {
+            _destroyVisitedGen[entityId] = _destroyCurrentGen;
+        }
+    }
+
+    private void CollectDestroyRootIfAlive(Entity entity)
+    {
+        if (!IsAlive(entity))
+        {
+            return;
+        }
+
+        if (IsMarkedForDestroy(entity.Id))
+        {
+            return;
+        }
+
+        if (_hierarchy.HasChildren(this, entity))
+        {
+            _hierarchy.CollectDestroySubtree(this, entity, _destroyVisitedGen, _destroyCurrentGen, _destroyOrderScratch);
+            return;
+        }
+
+        MarkForDestroy(entity.Id);
+        _destroyOrderScratch.Add(entity);
+    }
+
+    private void DestroyCollectedEntities()
+    {
+        var destroyCount = _destroyOrderScratch.Count;
+        if (destroyCount == 0)
+        {
+            _destroyOrderScratch.Clear();
+            return;
+        }
+
+        var groupArchetypes = ArrayPool<Archetype>.Shared.Rent(destroyCount);
+        var groupCounts = ArrayPool<int>.Shared.Rent(destroyCount);
+        var groupFirstCandidateIndices = ArrayPool<int>.Shared.Rent(destroyCount);
+        var candidateNextIndices = ArrayPool<int>.Shared.Rent(destroyCount);
+        var candidateRows = ArrayPool<int>.Shared.Rent(destroyCount);
+        var compactRows = ArrayPool<int>.Shared.Rent(destroyCount);
+        var fullGroups = ArrayPool<bool>.Shared.Rent(destroyCount);
+        var groupCount = 0;
+
+        try
+        {
+            _destroyGroupIndexByArchetype.Clear();
+
+            for (var i = 0; i < destroyCount; i++)
+            {
+                var entity = _destroyOrderScratch[i];
+                var info = RequireLocation(entity);
+                var archetype = info.Archetype!;
+
+                if (!_destroyGroupIndexByArchetype.TryGetValue(archetype, out var groupIndex))
+                {
+                    groupIndex = groupCount++;
+                    _destroyGroupIndexByArchetype.Add(archetype, groupIndex);
+                    groupArchetypes[groupIndex] = archetype;
+                    groupCounts[groupIndex] = 0;
+                    groupFirstCandidateIndices[groupIndex] = -1;
+                }
+
+                groupCounts[groupIndex]++;
+                candidateRows[i] = info.RowIndex;
+                candidateNextIndices[i] = groupFirstCandidateIndices[groupIndex];
+                groupFirstCandidateIndices[groupIndex] = i;
+            }
+
+            MarkAndResetFullyDestroyedArchetypes(
+                groupArchetypes.AsSpan(0, groupCount),
+                groupCounts.AsSpan(0, groupCount),
+                fullGroups.AsSpan(0, groupCount));
+
+            CompactPartiallyDestroyedArchetypes(
+                groupArchetypes.AsSpan(0, groupCount),
+                groupCounts.AsSpan(0, groupCount),
+                groupFirstCandidateIndices.AsSpan(0, groupCount),
+                candidateNextIndices,
+                candidateRows,
+                fullGroups.AsSpan(0, groupCount),
+                compactRows);
+
+            for (var i = 0; i < destroyCount; i++)
+            {
+                KillEntityRecord(_destroyOrderScratch[i]);
+            }
+        }
+        finally
+        {
+            _destroyGroupIndexByArchetype.Clear();
+            _destroyOrderScratch.Clear();
+            ArrayPool<Archetype>.Shared.Return(groupArchetypes, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<Archetype>());
+            ArrayPool<int>.Shared.Return(groupCounts);
+            ArrayPool<int>.Shared.Return(groupFirstCandidateIndices);
+            ArrayPool<int>.Shared.Return(candidateNextIndices);
+            ArrayPool<int>.Shared.Return(candidateRows);
+            ArrayPool<int>.Shared.Return(compactRows);
+            ArrayPool<bool>.Shared.Return(fullGroups);
+        }
+    }
+
+    private static void MarkAndResetFullyDestroyedArchetypes(
+        ReadOnlySpan<Archetype> groupArchetypes,
+        ReadOnlySpan<int> groupCounts,
+        Span<bool> fullGroups)
+    {
+        for (var i = 0; i < groupArchetypes.Length; i++)
+        {
+            var archetype = groupArchetypes[i];
+            var isFullGroup = groupCounts[i] == archetype.EntityCount;
+            fullGroups[i] = isFullGroup;
+            if (isFullGroup)
+            {
+                archetype.ResetCount();
+            }
+        }
+    }
+
+    private void CompactPartiallyDestroyedArchetypes(
+        ReadOnlySpan<Archetype> groupArchetypes,
+        ReadOnlySpan<int> groupCounts,
+        ReadOnlySpan<int> groupFirstCandidateIndices,
+        int[] candidateNextIndices,
+        int[] candidateRows,
+        ReadOnlySpan<bool> fullGroups,
+        int[] compactRows)
+    {
+        for (var groupIndex = 0; groupIndex < groupArchetypes.Length; groupIndex++)
+        {
+            if (fullGroups[groupIndex])
+            {
+                continue;
+            }
+
+            var rowCount = 0;
+            for (var candidateIndex = groupFirstCandidateIndices[groupIndex]; candidateIndex >= 0; candidateIndex = candidateNextIndices[candidateIndex])
+            {
+                compactRows[rowCount++] = candidateRows[candidateIndex];
+            }
+
+            var archetype = groupArchetypes[groupIndex];
+            var markGen = NextDestroyRowMarkGen(archetype.EntityCount);
+            archetype.CompactRemoveRows(compactRows.AsSpan(0, rowCount), _destroyRowMarks, markGen, _records);
+        }
+    }
+
+    private int NextDestroyRowMarkGen(int rowCapacity)
+    {
+        if (_destroyRowMarks.Length < rowCapacity)
+        {
+            Array.Resize(ref _destroyRowMarks, rowCapacity);
+        }
+
+        if (++_destroyRowMarkGen == 0)
+        {
+            Array.Clear(_destroyRowMarks);
+            _destroyRowMarkGen = 1;
+        }
+
+        return _destroyRowMarkGen;
+    }
+
+    private void KillEntityRecord(Entity entity)
+    {
+        var nextVersion = NextEntityVersion(entity);
         if (_hierarchy.HasAnyRelations(entity))
         {
             _hierarchy.RemoveDestroyed(entity);
@@ -218,13 +495,6 @@ public sealed partial class World
         record = default;
         record.Version = nextVersion;
         PushFreeIdUnsafe(entity.Id, nextVersion);
-
-        if (movedEntity.IsValid)
-        {
-            ref var movedRecord = ref _records[movedEntity.Id];
-            movedRecord.Archetype = info.Archetype;
-            movedRecord.RowIndex = info.RowIndex;
-        }
     }
 
     private Entity CreateInArchetype(Archetype archetype, out int rowIndex)
@@ -505,6 +775,11 @@ public sealed partial class World
         if (_destroyVisitedGen.Length < entityCount)
         {
             Array.Resize(ref _destroyVisitedGen, Math.Max(entityCount, _destroyVisitedGen.Length * 2));
+        }
+
+        if (_destroyRowMarks.Length < entityCount)
+        {
+            Array.Resize(ref _destroyRowMarks, Math.Max(entityCount, _destroyRowMarks.Length * 2));
         }
     }
 

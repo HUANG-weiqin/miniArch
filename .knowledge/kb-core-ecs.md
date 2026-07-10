@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-07-09
+updated: 2026-07-10
 ---
 # MiniArch Core ECS
 
@@ -60,6 +60,7 @@ updated: 2026-07-09
 - **Archetype 支持单块和分段两种存储模式**（详见 `kb-chunk-storage.md`）：存储为 Archetype 直持的 `_data: byte[]`（单块）或 `_segments: Segment[]`（分段），通过 `_columnByteOffsets[column] + row * _elementSizes[column]` 定位元素
 - Archetype 按需线性增长：`EnsureCapacity`（`Archetype.Storage.cs`）按 double 策略扩容，每列 `CopyBlockUnaligned` 整列搬移
 - `World.Create/Destroy` 热路径无锁（单线程 world mutation 前提）；`World.ReserveDeferredEntity` 保留锁（供 defering entity 使用）；`World.ReserveDeferredEntityUnsafe` 无锁变体要求调用方保证无并发 reserve/write（CommandStream 单线程路径用此跳过 lock）
+- `World.DestroyMany(ReadOnlySpan<Entity>)` / `World.Destroy(QueryDescription)` 先收集与 guarded `for Destroy` 等价的 child-first destroy order（dead/stale handle skip、重复输入去重、父子同批不双删），再按 archetype 批量移除 storage：全 archetype 命中走 `ResetCount()`，partial 命中走无序 hole-fill bulk remove（尾部 survivor 填前部 dead row），最后按原 destroy order 清理 hierarchy/record/free-list，保持 logical state 与 future id reuse 和普通循环一致。
 
 ### 用户 API 分层（`MiniArch` namespace）
 
@@ -74,6 +75,7 @@ updated: 2026-07-09
 | 零分配 chunk job | `MiniArch.IChunkForEach` (public interface) | `query.ForEachChunk<TForEach>(ref job)` |
 | Chunk 视图 | `ChunkView` (public readonly struct) | `chunk.GetSpan<T>()` |
 | Singleton 实体查找 | `World.GetSingleton<T>()` | `world.GetSingleton<T>()`（找唯一含 T 的实体，O(archetypes)） |
+| 批量销毁 | `World.DestroyMany(ReadOnlySpan<Entity>)` / `World.Destroy(QueryDescription)` | 批量 entity span 或 query 匹配；级联销毁、dead skip、内部批量 remove |
 | 注册表指纹 | `MiniArch.ComponentSchema` (public static) | `ComponentSchema.Fingerprint()` |
 
 **关键分层边界：**
@@ -110,6 +112,7 @@ updated: 2026-07-09
 - **Edge cache 内联**：增删目标缓存直接挂在 Archetype 上（`Archetype?[]` 按 componentId 直索引），无需独立 ArchetypeEdges 对象
 - **迁移拷贝内联**：`CopySharedComponentsFrom` 直接在 Archetype 上实现，无需 MigrationPlan class
 - `EntityCount` 在所有构建配置下都只统计 **alive entity**；reserved pending id 不计入结果
+- `DestroyMany` / `Destroy(query)` 的正确性标准是 logical world state：`CanonicalChecksum`、`WorldDiff`、`WorldValidator` 以及 `WorldDigest` 的 occupancy/free-list/hierarchy/per-component 域与 guarded `for Destroy` 一致。由于 partial batch remove 使用无序 hole-fill，物理 archetype row order 可不同；默认 query 顺序不属于语义承诺，需稳定顺序时使用 `OrderByEntityId()` 等显式排序。
 - **用户可触发的防御性检查**（如 `AssertNotDisposed`、`AssertAlive`、`GetRecordFast` 的 id/版本校验）在 Release 常开。`kb-design-rationale.md` §3.11 已用 Release benchmark 证明这些检查零可测成本，不能再把它们误改回 DEBUG-only
 - **内部结构不变量检查**（如 `ChunkView.AssertValid`、`Archetype.AssertSegmentInvariants`）才使用 `[Conditional("DEBUG")]` / `Debug.Assert`。划分原则：用户错误 fail-fast，内部一致性只在 Debug 审计
 - `[SkipLocalsInit]` + `AggressiveInlining` + `Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data), offset)` 消除 JIT 边界检查
@@ -177,4 +180,5 @@ world.Destroy(e);
 - `GetSingleton<T>()` 取代了旧的 `GetFirst<T>()`：旧 API 用 `CreateArchetypeCache<T>` 缓存只命中单组件 `{T}` 原型；新 API 全量扫描，不再依赖该缓存
 - DebugMetrics 相关的 `#if DEBUG` 计数累加语句已全部删除，不应再引用
 - **同帧 `World.Destroy(e)` + `World.Create()` 的 id 回收与 version 一致性**（**理论风险，当前串行单线程路径安全，但修改时要小心**）：Destroy 把 `(id, version)` 推回 free-list 并对 `EntityRecord[id]` 做 swap-remove + version bump；Create 从 free-list 弹 id 并写新 `EntityRecord[id]`。两者必须严格串行且 Destroy 的 swap-remove 必须先于 Create 的 slot 写入，否则新实体可能读到被销毁实体的旧 `(Archetype, RowIndex)` 或 stale version。验证链：`World.EntityLifecycle.cs:Destroy` → `Archetype.Storage.cs:RemoveAt`（swap-remove）→ free-list push → `World.EntityLifecycle.cs:Create` → free-list pop。**当前在单线程串行调用下安全**（Destroy 的 version bump + swap-remove 在 Create 读 free-list 前完成），但引入 CommandStream 批量 materialize、多线程或 `Destroy` callback 嵌套 `Create` 时可能被打破。**回归测试入口**：`tests/MiniArch.Tests/Core/WorldLifecycleTests.cs`（`Destroy_recycles_ids_safely` 覆盖同帧 id+version 正确性；`Destroy_and_recreate_cycle_preserves_correct_versions_across_many_iterations` 在 `TrickyEdgeCaseTests.cs` 覆盖 100 次循环的版本单调性）
+- `DestroyMany.Perf`（`dotnet run -c Release --project tools/perf/DestroyMany.Perf`）证明 setup 外的销毁阶段相对 guarded `for Destroy`：full dense 2.85×、query 3.63×、full cascade 1.68×、partial cascade 2.91×（2026-07-10 本机 Release 数据）。该工具启动时先跑 canonical checksum + WorldDiff + WorldValidator 等价验证。多 segment/chunk 正确性由 `WorldLifecycleTests.DestroyMany_multi_segment_partial_archetype_matches_loop_checksum` 与 `Destroy_query_multi_segment_archetype_matches_materialized_loop` 覆盖：用 16 组件宽 archetype 把 segment 数推到 >1，再跨 segment 边界删除并与 guarded loop 比对。
 

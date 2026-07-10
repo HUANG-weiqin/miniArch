@@ -2,7 +2,7 @@
 title: MiniArch.Diagnostics 诊断工具
 module: MiniArch.Diagnostics
 description: ECS 世界的状态诊断工具集：比对、校验、检查、探查
-updated: 2026-07-09
+updated: 2026-07-10
 ---
 
 # MiniArch.Diagnostics 诊断工具
@@ -54,3 +54,4 @@ updated: 2026-07-09
 - `Signature` 类型没有 `[i]` 索引器，需要使用 `.AsSpan()` 才能按索引访问
 - `Position`/`Velocity` 等测试组件在各测试文件中各自定义为 `file readonly record struct`，不是共享的
 - `WorldValidator` 检测 pending 保留时使用 `EntitySlotCount > occupied + freeCount` 发出 Warning 而非 Error（因为有保留是合法状态）
+- `WorldDigest.Total` 包含 `PerArchetype` 物理 row-order hash；batch destroy 与普通 loop 可能得到相同 logical state / free-list / component values 但不同 dense storage row order。比较 layout-independent 世界态时用 `World.CanonicalChecksum()` + `WorldDiff.Compare()`，或只比较 `WorldDigest` 的 Occupancy/FreeList/Hierarchy/PerComponent 域。

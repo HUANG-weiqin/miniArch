@@ -15,7 +15,8 @@ namespace MiniArch;
 /// <b>Threading model</b> (read the following before touching a World from
 /// multiple threads):
 /// <list type="bullet">
-/// <item><b>Structural changes</b> —<see cref="Create"/>, <see cref="Destroy"/>,
+/// <item><b>Structural changes</b> —<see cref="Create"/>, <see cref="Destroy(Entity)"/>,
+/// <see cref="DestroyMany(ReadOnlySpan{Entity})"/>, <see cref="Destroy(in QueryDescription)"/>,
 /// <see cref="Add{T}"/>, <see cref="Set{T}"/>, <see cref="Remove{T}"/>,
 /// <see cref="AddChild"/>, <see cref="Clone(Entity)"/> —are <b>not</b> thread-safe
 /// and must be issued from a single thread (typically the main game thread)
@@ -55,6 +56,12 @@ public sealed partial class World : IDisposable
     // allocations). Cleared at the start of every Replay call; never allocated
     // per-call in steady state.
     private readonly Dictionary<Archetype, int> _replayCreateCounts = new();
+
+    // Reused scratch for batched destroy grouping. Structural mutation is single-threaded,
+    // so the World can own this scratch just like _destroyOrderScratch.
+    private readonly Dictionary<Archetype, int> _destroyGroupIndexByArchetype = new();
+    private int[] _destroyRowMarks = [];
+    private int _destroyRowMarkGen;
 
     /// <summary>
     /// Incremented on every <see cref="ReleaseReservedEntity"/> and
@@ -115,6 +122,7 @@ public sealed partial class World : IDisposable
         _entitySlotCount = 0;
         _freeIds = entityCapacity == 0 ? Array.Empty<RecycledEntity>() : new RecycledEntity[entityCapacity];
         _destroyVisitedGen = entityCapacity == 0 ? [] : new int[entityCapacity];
+        _destroyRowMarks = entityCapacity == 0 ? [] : new int[entityCapacity];
         _destroyOrderScratch = new List<Entity>(entityCapacity);
     }
 
@@ -129,6 +137,9 @@ public sealed partial class World : IDisposable
         _archetypeByMask.Clear();
         _archetypeByHash.Clear();
         _replayCreateCounts.Clear();
+        _destroyGroupIndexByArchetype.Clear();
+        _destroyRowMarks = [];
+        _destroyRowMarkGen = 0;
         _queryFiltersByDescription.Clear();
         _queries.Clear();
         _archetypeSnapshot = Array.Empty<Archetype>();
@@ -1346,6 +1357,9 @@ public sealed partial class World : IDisposable
         _archetypeByMask.Clear();
         _archetypeByHash.Clear();
         _replayCreateCounts.Clear();
+        _destroyGroupIndexByArchetype.Clear();
+        _destroyRowMarks = [];
+        _destroyRowMarkGen = 0;
         _replayPlaceholderMap = [];
         _replayMapCount = 0;
         _archetypeSnapshot = Array.Empty<Archetype>();

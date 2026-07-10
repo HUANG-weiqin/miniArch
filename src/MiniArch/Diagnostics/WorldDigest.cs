@@ -5,7 +5,9 @@ namespace MiniArch.Diagnostics;
 /// <summary>
 /// Computes per-domain SHA-256 hashes for a <see cref="World"/>, enabling
 /// rapid narrowing of lockstep divergence before running the heavier
-/// <see cref="WorldDiff.Compare"/>.
+/// <see cref="WorldDiff.Compare"/>. The total hash includes physical
+/// per-archetype row-order data; use <see cref="World.CanonicalChecksum"/>
+/// when comparing layout-independent logical state.
 /// </summary>
 public static class WorldDigest
 {
