@@ -23,16 +23,12 @@ namespace MiniArch;
 /// <para>
 /// <b>Thread safety</b>: not thread-safe. Intended for single-threaded game-loop use.
 /// </para>
-/// <para>
-/// <b>Dispose</b>: marks the instance as disposed. Safe to call multiple times.
-/// </para>
 /// </remarks>
-public sealed class ComponentBucketQuery<TComponent> : IDisposable
+public sealed class ComponentBucketQuery<TComponent>
     where TComponent : unmanaged, IEquatable<TComponent>
 {
     private readonly World _world;
     private readonly QueryDescription _scope;
-    private bool _disposed;
 
     /// <summary>
     /// Creates a query over all entities that have <typeparamref name="TComponent"/>.
@@ -75,8 +71,6 @@ public sealed class ComponentBucketQuery<TComponent> : IDisposable
     /// </summary>
     public int Count(TComponent key)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-
         var query = _world.Query(in _scope);
         var chunks = query.GetChunks();
 
@@ -101,8 +95,6 @@ public sealed class ComponentBucketQuery<TComponent> : IDisposable
     /// </summary>
     public bool ContainsKey(TComponent key)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-
         var query = _world.Query(in _scope);
         var chunks = query.GetChunks();
 
@@ -129,8 +121,6 @@ public sealed class ComponentBucketQuery<TComponent> : IDisposable
     /// <returns>The number of matching entities written to <paramref name="destination"/>.</returns>
     public int Get(TComponent key, Span<Entity> destination)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-
         var written = 0;
         var query = _world.Query(in _scope);
         var chunks = query.GetChunks();
@@ -163,8 +153,6 @@ public sealed class ComponentBucketQuery<TComponent> : IDisposable
     /// </summary>
     public bool TryGet(TComponent key, Span<Entity> destination, out int written)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-
         written = 0;
         var query = _world.Query(in _scope);
         var chunks = query.GetChunks();
@@ -189,20 +177,4 @@ public sealed class ComponentBucketQuery<TComponent> : IDisposable
         return written > 0;
     }
 
-    /// <summary>
-    /// Clears internal state. Does not affect the world.
-    /// </summary>
-    public void Clear()
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        // No internal state to clear.
-    }
-
-    /// <summary>
-    /// Disposes this query, marking it as invalid for further use.
-    /// </summary>
-    public void Dispose()
-    {
-        _disposed = true;
-    }
 }

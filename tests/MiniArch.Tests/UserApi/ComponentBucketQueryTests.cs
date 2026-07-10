@@ -25,7 +25,7 @@ public sealed class ComponentBucketQueryTests
     public void Default_scope_is_With_TComponent()
     {
         using var world = new World();
-        using var query = new ComponentBucketQuery<CardZone>(world);
+        var query = new ComponentBucketQuery<CardZone>(world);
 
         var e1 = world.Create(new CardZone(1));
         var e2 = world.Create(new CardZone(2));
@@ -50,7 +50,7 @@ public sealed class ComponentBucketQueryTests
         using var world = new World();
         // Scope that only requires Health (not CardZone).
         var scope = new QueryDescription().With<Health>();
-        using var query = new ComponentBucketQuery<CardZone>(world, scope);
+        var query = new ComponentBucketQuery<CardZone>(world, scope);
 
         // Entities with CardZone + Health should be indexed.
         var e1 = world.Create(new CardZone(10), new Health(100));
@@ -68,7 +68,7 @@ public sealed class ComponentBucketQueryTests
     public void Get_returns_correctly_bucketed()
     {
         using var world = new World();
-        using var query = new ComponentBucketQuery<CardZone>(world);
+        var query = new ComponentBucketQuery<CardZone>(world);
 
         var e1 = world.Create(new CardZone(1));
         var e2 = world.Create(new CardZone(2));
@@ -98,7 +98,7 @@ public sealed class ComponentBucketQueryTests
     public void World_Set_is_auto_detected()
     {
         using var world = new World();
-        using var query = new ComponentBucketQuery<CardZone>(world);
+        var query = new ComponentBucketQuery<CardZone>(world);
 
         var e = world.Create(new CardZone(1));
         Assert.Equal(1, query.Count(new CardZone(1)));
@@ -117,7 +117,7 @@ public sealed class ComponentBucketQueryTests
     public void GetRef_inplace_mutation_is_auto_detected()
     {
         using var world = new World();
-        using var query = new ComponentBucketQuery<CardZone>(world);
+        var query = new ComponentBucketQuery<CardZone>(world);
 
         var e = world.Create(new CardZone(1));
         Assert.Equal(1, query.Count(new CardZone(1)));
@@ -136,7 +136,7 @@ public sealed class ComponentBucketQueryTests
     public void Chunk_GetSpan_mutation_is_auto_detected()
     {
         using var world = new World();
-        using var query = new ComponentBucketQuery<CardZone>(world);
+        var query = new ComponentBucketQuery<CardZone>(world);
 
         var e1 = world.Create(new CardZone(1));
         var e2 = world.Create(new CardZone(2));
@@ -165,7 +165,7 @@ public sealed class ComponentBucketQueryTests
     public void Destroy_entity_auto_removes()
     {
         using var world = new World();
-        using var query = new ComponentBucketQuery<CardZone>(world);
+        var query = new ComponentBucketQuery<CardZone>(world);
 
         var e1 = world.Create(new CardZone(1));
         var e2 = world.Create(new CardZone(1));
@@ -186,7 +186,7 @@ public sealed class ComponentBucketQueryTests
     public void Entity_id_reuse_does_not_pollute()
     {
         using var world = new World();
-        using var query = new ComponentBucketQuery<CardZone>(world);
+        var query = new ComponentBucketQuery<CardZone>(world);
 
         var e1 = world.Create(new CardZone(42));
         int originalId = e1.Id;
@@ -210,7 +210,7 @@ public sealed class ComponentBucketQueryTests
     public void ContainsKey_returns_correctly()
     {
         using var world = new World();
-        using var query = new ComponentBucketQuery<CardZone>(world);
+        var query = new ComponentBucketQuery<CardZone>(world);
 
         _ = world.Create(new CardZone(1));
         _ = world.Create(new CardZone(2));
@@ -224,7 +224,7 @@ public sealed class ComponentBucketQueryTests
     public void Count_returns_correctly()
     {
         using var world = new World();
-        using var query = new ComponentBucketQuery<CardZone>(world);
+        var query = new ComponentBucketQuery<CardZone>(world);
 
         _ = world.Create(new CardZone(10));
         _ = world.Create(new CardZone(10));
@@ -235,63 +235,13 @@ public sealed class ComponentBucketQueryTests
         Assert.Equal(0, query.Count(new CardZone(99)));
     }
 
-    // ── 10. Clear / Dispose ─────────────────────────────────────────
-
-    [Fact]
-    public void Clear_resets_cache_then_auto_refreshes_on_next_read()
-    {
-        using var world = new World();
-        using var query = new ComponentBucketQuery<CardZone>(world);
-
-        var e1 = world.Create(new CardZone(1));
-        _ = world.Create(new CardZone(2));
-
-        // First read verifies state.
-        Assert.Equal(1, query.Count(new CardZone(1)));
-
-        // Clear is a no-op (no internal state), but should not throw.
-        query.Clear();
-
-        // After changing the world, Clear + auto-refresh still sees the latest state.
-        world.Set(e1, new CardZone(3));
-        Assert.Equal(0, query.Count(new CardZone(1))); // e1 was changed
-        Assert.Equal(1, query.Count(new CardZone(3))); // e1 is now zone 3
-        Assert.Equal(1, query.Count(new CardZone(2))); // e2 unchanged
-    }
-
-    [Fact]
-    public void Dispose_can_be_called_multiple_times()
-    {
-        using var world = new World();
-        var query = new ComponentBucketQuery<CardZone>(world);
-
-        _ = world.Create(new CardZone(1));
-
-        query.Dispose();
-        query.Dispose(); // second dispose — should not throw
-    }
-
-    [Fact]
-    public void Operations_after_dispose_throw()
-    {
-        using var world = new World();
-        var query = new ComponentBucketQuery<CardZone>(world);
-        query.Dispose();
-
-        Assert.Throws<ObjectDisposedException>(() => query.Get(new CardZone(1), Buffer));
-        Assert.Throws<ObjectDisposedException>(() => query.TryGet(new CardZone(1), Buffer, out _));
-        Assert.Throws<ObjectDisposedException>(() => query.ContainsKey(new CardZone(1)));
-        Assert.Throws<ObjectDisposedException>(() => query.Count(new CardZone(1)));
-        Assert.Throws<ObjectDisposedException>(() => query.Clear());
-    }
-
-    // ── 11. TryGet ──────────────────────────────────────────────────
+    // ── 10. TryGet ──────────────────────────────────────────────────
 
     [Fact]
     public void TryGet_returns_false_for_nonexistent_key()
     {
         using var world = new World();
-        using var query = new ComponentBucketQuery<CardZone>(world);
+        var query = new ComponentBucketQuery<CardZone>(world);
 
         Assert.False(query.TryGet(new CardZone(99), Buffer, out _));
     }
@@ -300,7 +250,7 @@ public sealed class ComponentBucketQueryTests
     public void TryGet_returns_true_for_existing_key()
     {
         using var world = new World();
-        using var query = new ComponentBucketQuery<CardZone>(world);
+        var query = new ComponentBucketQuery<CardZone>(world);
 
         var e = world.Create(new CardZone(5));
         var result = query.TryGet(new CardZone(5), Buffer, out int count);
@@ -316,7 +266,7 @@ public sealed class ComponentBucketQueryTests
     public void CardZone_scenario()
     {
         using var world = new World();
-        using var query = new ComponentBucketQuery<CardZone>(world);
+        var query = new ComponentBucketQuery<CardZone>(world);
 
         // Simulate card game: entities belong to zones like Hand, Deck, Graveyard.
         var hand = world.Create(new CardZone(0));

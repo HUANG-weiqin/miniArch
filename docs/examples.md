@@ -1145,7 +1145,7 @@ for (var i = 0; i < card.Length; i++)
     card[i] = world.Create(new CardZone(i % 4));
 
 // Construct the query — scope covers all entities with CardZone.
-using var query = new ComponentBucketQuery<CardZone>(world);
+var query = new ComponentBucketQuery<CardZone>(world);
 
 // ── Count ────────────────────────────────────────────────────────
 int hand = query.Count(new CardZone(0));
@@ -1186,10 +1186,6 @@ for (int i = 0; i < card.Length && moved < 100; i++)
 // Next read automatically reflects the change.
 Console.WriteLine($"Zone 0 after move: {query.Count(new CardZone(0))} (was {hand})");
 Console.WriteLine($"Zone 1 after move: {query.Count(new CardZone(1))} (was {deck})");
-
-// ── Clear — resets internal state, re-query on next read ─────────
-query.Clear();
-Console.WriteLine($"Zone 0 after Clear: {query.Count(new CardZone(0))}");
 
 readonly record struct CardZone(int Value);
 ```

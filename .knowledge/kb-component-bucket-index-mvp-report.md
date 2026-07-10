@@ -11,8 +11,8 @@ updated: 2026-07-10
 
 1. **API 定型：确定性 per-key scan。** `ComponentBucketQuery<TComponent>` 每次 public read 从真实 World 对请求 key 做 deterministic scan，不使用 hash/fingerprint/count fast-path/dirty mode/AutoFreshness。正确性在调用时刻是确定性的，无概率 false negative。
 2. **零 core 入侵。** 完全在 MiniArch.Core 之上构建，只使用 World 公开 API，不修改 `src/MiniArch/Core/` 任何代码。
-3. **API 精简到最低必要面。** 公开类型 `ComponentBucketQuery<TComponent>`，方法：构造函数、`Get`、`TryGet`、`ContainsKey`、`Count`、`Clear`、`Dispose`。`Refresh()` 已删除——每次操作自验证，无需刷新入口。
-4. **无内部 buffer 架构。** `Get/TryGet` 不再维护内部 `Entity[]` 缓存，改为直接写入调用者提供的 `Span<Entity>`。无 Bucket class，无 Dictionary，无 `_buffer`/`_count` 字段。调用者控制内存生命周期，消除 span 过期风险。`Count/ContainsKey` 直接扫描不写入 span。`Clear()` 为轻量操作。
+3. **API 精简到最低必要面。** 公开类型 `ComponentBucketQuery<TComponent>`，方法：构造函数、`Get`、`TryGet`、`ContainsKey`、`Count`。`Refresh()` 已删除——每次操作自验证，无需刷新入口。`IDisposable` 不必要——无内部状态需要释放。
+4. **无内部 buffer 架构。** `Get/TryGet` 不再维护内部 `Entity[]` 缓存，改为直接写入调用者提供的 `Span<Entity>`。无 Bucket class，无 Dictionary，无 `_buffer`/`_count` 字段。调用者控制内存生命周期，消除 span 过期风险。`Count/ContainsKey` 直接扫描不写入 span。无 `Clear`、无 `Dispose`。
 5. **Correctness 全通过：** 16 个专项测试 + 900 MiniArch 回归 + 5 HeroPipeline 全部通过。确定性正确性模型已在测试中验证。
 6. **性能定位：**
     - CountOnly：BucketQuery 远快于 ManualExpanded（~8×~10×，因 `Count(key)` 直接 per-key scan，不全量建桶；ManualExpanded 每轮全量建桶）。
@@ -53,7 +53,7 @@ updated: 2026-07-10
 - **调用者提供 span 替代内部 buffer。** 不再维护内部 `Entity[]` 缓存。调用者通过 `Span<Entity>` 提供输出缓冲区，控制内存生命周期。消除 span 过期风险，简化内部状态管理。
 - **零 core 入侵优先。** `ComponentBucketQuery` 不修改任何 `src/MiniArch/Core/` 代码，保持 core 的纯净和稳定性。
 - **构造函数冷路径优化。** 使用 `scope.GetRequiredTypes()` 代替 `RequiredTypes.ToArray()`，避免冷启动时不必要的数组分配。
-- **极简 API。** 只暴露一个泛型类型、两个构造重载（无 scope / 带 scope）、四个读方法（Get/TryGet/ContainsKey/Count）、Clear/Dispose。降低学习和使用成本。
+- **极简 API。** 只暴露一个泛型类型、两个构造重载（无 scope / 带 scope）、四个读方法（Get/TryGet/ContainsKey/Count）。不实现 IDisposable——无内部资源需要释放。降低学习和使用成本。
 
 ## 认知模型
 
