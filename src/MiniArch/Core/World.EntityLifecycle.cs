@@ -81,10 +81,16 @@ public sealed partial class World
     /// Destroys an entity and, if it has children, its entire descendant subtree.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Destruction cascades through the hierarchy in post-order (children before
     /// parent) so that no orphaned child is left behind. If the entity has no
     /// children, only itself is destroyed. Call <see cref="RemoveChild"/> first if
     /// you need to destroy a parent while preserving its subtree.
+    /// </para>
+    /// <para><b>When to use:</b> destroying a single entity.</para>
+    /// <para><b>When NOT to use:</b> destroying many entities — use
+    /// <see cref="DestroyMany(ReadOnlySpan{Entity})"/> for batch optimization,
+    /// or <see cref="Clear(in QueryDescription)"/> for archetype-level teardown.</para>
     /// </remarks>
     public void Destroy(Entity entity)
     {
@@ -125,11 +131,17 @@ public sealed partial class World
     /// Destroys multiple entities in one structural batch. Stale/dead handles are skipped.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The destroy order is identical to running <c>if (world.IsAlive(e)) world.Destroy(e)</c>
     /// for each supplied entity: hierarchy cascades are collected child-first, duplicates are
     /// ignored after their first destruction, and free-list order is preserved. Storage removal
     /// is then grouped per archetype so full-archetype clears use <c>ResetCount</c> and partial
     /// clears use unordered hole-fill compaction.
+    /// </para>
+    /// <para><b>When to use:</b> you have a batch of entity handles to destroy and want the
+    /// storage optimization (1.3-2.3× vs for-loop). Hierarchy cascade is preserved.
+    /// For query-based destroy, see <see cref="Destroy(in QueryDescription)"/>.
+    /// For archetype-level teardown without cascade, see <see cref="Clear(in QueryDescription)"/>.</para>
     /// </remarks>
     public void DestroyMany(ReadOnlySpan<Entity> entities)
     {
@@ -174,9 +186,14 @@ public sealed partial class World
     /// Destroys all entities matching <paramref name="description"/> in one structural batch.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Matching entities are first materialized from the query snapshot, then destroyed with the
     /// same cascade and batching rules as <see cref="DestroyMany(ReadOnlySpan{Entity})"/>.
     /// Descendants are destroyed even when they do not match the query.
+    /// </para>
+    /// <para><b>When to use:</b> destroying all entities matching a component set,
+    /// when hierarchy cascade is needed. See <see cref="Clear(in QueryDescription)"/>
+    /// for a faster variant without cascade.</para>
     /// </remarks>
     public void Destroy(in QueryDescription description)
     {
