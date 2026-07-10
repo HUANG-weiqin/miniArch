@@ -902,6 +902,7 @@ sealed class ManagedEntityMapPrototype<T> : IManagedEntityMap<T> where T : class
     private T?[] _values = [];
     private int[] _versions = [];
     private int _count;
+    private int _maxTouchedExclusive;
 
     public ManagedEntityMapPrototype(World world, int initialCapacity = 256)
     {
@@ -934,6 +935,7 @@ sealed class ManagedEntityMapPrototype<T> : IManagedEntityMap<T> where T : class
         bool wasEmpty = ver == 0;
         _values[entity.Id] = value;
         ver = entity.Version;
+        _maxTouchedExclusive = Math.Max(_maxTouchedExclusive, entity.Id + 1);
         if (wasEmpty) _count++;
     }
 
@@ -975,7 +977,7 @@ sealed class ManagedEntityMapPrototype<T> : IManagedEntityMap<T> where T : class
 
     public void Align()
     {
-        for (int i = 0; i < _versions.Length; i++)
+        for (int i = 0; i < _maxTouchedExclusive; i++)
         {
             if (_versions[i] != 0)
             {
@@ -988,24 +990,23 @@ sealed class ManagedEntityMapPrototype<T> : IManagedEntityMap<T> where T : class
                 }
             }
         }
+
+        while (_maxTouchedExclusive > 0 && _versions[_maxTouchedExclusive - 1] == 0)
+            _maxTouchedExclusive--;
     }
 
     public void Clear()
     {
-        Array.Clear(_values, 0, _values.Length);
-        Array.Clear(_versions, 0, _versions.Length);
+        Array.Clear(_values, 0, _maxTouchedExclusive);
+        Array.Clear(_versions, 0, _maxTouchedExclusive);
         _count = 0;
+        _maxTouchedExclusive = 0;
     }
 
     public void TrimExcess()
     {
-        int maxId = -1;
-        for (int i = 0; i < _versions.Length; i++)
-        {
-            if (_versions[i] != 0) maxId = i;
-        }
-        int targetSize = maxId + 1;
-        if (targetSize < _values.Length && targetSize > 0)
+        var targetSize = _maxTouchedExclusive;
+        if (targetSize < _values.Length)
         {
             Array.Resize(ref _values, targetSize);
             Array.Resize(ref _versions, targetSize);
