@@ -9,6 +9,8 @@ internal static class Program
     private const int QueryEntities = 40_000;
     private const int CascadeRoots = 15_000;
     private const int PartialCascadeRoots = 20_000;
+    private const int SparseTotal = 50_000;
+    private const int SparseKill = 4;
 
     private const int WarmupSeconds = 2;
     private const int MeasureSeconds = 3;
@@ -52,6 +54,13 @@ internal static class Program
                 DestroyWithGuardedLoop,
                 DestroyWithDestroyMany,
                 MinSpeedup: 1.05),
+            new Scenario(
+                "sparse: 4 of 50000",
+                SparseKill,
+                BuildSparseWorld,
+                DestroyWithGuardedLoop,
+                DestroyWithDestroyMany,
+                MinSpeedup: 0.0),
         };
 
         var allPassed = true;
@@ -231,6 +240,29 @@ internal static class Program
                 roots[i / 2] = root;
         }
         return new WorldSetup(world, roots);
+    }
+
+    private static WorldSetup BuildSparseWorld()
+    {
+        var world = new World(entityCapacity: SparseTotal);
+        var all = new Entity[SparseTotal];
+        for (var i = 0; i < SparseTotal; i++)
+        {
+            all[i] = world.Create(
+                new Position(i, i + 1),
+                new Velocity(i + 2, i + 3),
+                new A(i + 4),
+                new B(i + 5),
+                new C(i + 6),
+                new D(i + 7));
+        }
+        // Kill 4 spread across the archetype: first, near-middle, near-end, last.
+        var targets = new Entity[SparseKill];
+        targets[0] = all[0];
+        targets[1] = all[SparseTotal / 3];
+        targets[2] = all[(SparseTotal * 2) / 3];
+        targets[3] = all[SparseTotal - 1];
+        return new WorldSetup(world, targets);
     }
 
     // ─── Destroy actions ───
