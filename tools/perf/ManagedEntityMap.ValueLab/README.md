@@ -64,6 +64,24 @@ dotnet run -c Release --project tools/perf/ManagedEntityMap.ValueLab -- --correc
 
 `--correctness-only` 覆盖：ZombieBeforeAlign、SlotReuseOldHandle、SlotReuseAfterSetNew、AlignClearsZombie、RemoveDoesNotDestroyWorld、InvalidEntitySafety、NullPolicy。门禁规则：`CompDict`、`CompDenseUser`、`ProtoMap` 必须全部 PASS；`NaiveDict` 和 `RawDenseUnsafe` 的 FAIL 记录为用户手写/unsafe 上界的错误证据。
 
+## 序列化探索 (M5)
+
+结论：**serialization 不进 v1**。如果 runtime map 也无法证明库级价值，则 serialization 不应单独把该 API 推成 Go；如果后续另起实现计划，serialization 只作为 v2 codec/remap 能力评估。
+
+必须回答的问题：
+
+| 问题 | 结论 |
+|---|---|
+| 是否需要用户 codec？ | 是。库不知道 `T` 的资源系统、生命周期和兼容性。 |
+| 最小 codec 形态 | `IManagedEntityMapCodec<T>`：`Write(BinaryWriter,T)` + `Read(BinaryReader)`，且由用户注册/传入。 |
+| MapSnapshot 存什么？ | 最小逻辑项是 `(entity.Id, entity.Version, payload)`。id/version 绑定的是同一 World snapshot 的 slot 语义。 |
+| WorldSnapshot load 后能否直接 bind？ | miniArch `WorldSnapshot.Save/Load` 保留 slot version/free-list 语义；与同一 World snapshot 同步保存/加载时可直接按 id/version bind。 |
+| 如果有 entity remap？ | 需要显式 remap table；v1 不应引入，因为 remap 语义依赖具体 load/clone/网络层。 |
+| 跨 host managed value 是否确定性？ | 不承诺。sidecar 是 host-local restore，不参与 lockstep/checksum/replay。 |
+| Godot/Unity 对象怎么存？ | codec 存 asset id/path/GUID，不存对象引用本身；库只编排，不理解资源系统。 |
+
+建议：若未来 Go，v1 只做 runtime `ManagedEntityMap<T>`；serialization API 等 runtime 价值被证明后再设计。否则会把 sidecar 从“简单 host-local map”扩张成半个资源持久化框架。
+
 ## API/语义边界
 
 - host-local / optional / non-deterministic / non-thread-safe。
