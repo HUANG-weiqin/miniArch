@@ -1,5 +1,4 @@
-﻿using System.Buffers;
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -146,7 +145,6 @@ public sealed partial class World
         catch
         {
             _destroyOrderScratch.Clear();
-            _destroyGroupIndexByArchetype.Clear();
             throw;
         }
     }
@@ -187,7 +185,6 @@ public sealed partial class World
         catch
         {
             _destroyOrderScratch.Clear();
-            _destroyGroupIndexByArchetype.Clear();
             throw;
         }
     }
@@ -355,71 +352,73 @@ public sealed partial class World
             return;
         }
 
-        var groupArchetypes = ArrayPool<Archetype>.Shared.Rent(destroyCount);
-        var groupCounts = ArrayPool<int>.Shared.Rent(destroyCount);
-        var groupFirstCandidateIndices = ArrayPool<int>.Shared.Rent(destroyCount);
-        var candidateNextIndices = ArrayPool<int>.Shared.Rent(destroyCount);
-        var candidateRows = ArrayPool<int>.Shared.Rent(destroyCount);
-        var compactRows = ArrayPool<int>.Shared.Rent(destroyCount);
-        var fullGroups = ArrayPool<bool>.Shared.Rent(destroyCount);
+        EnsureDestroyBatchCapacity(destroyCount);
+
+        var groupArchetypes = _destroyGroupArchetypes;
+        var groupCounts = _destroyGroupCounts;
+        var groupFirstCandidateIndices = _destroyGroupFirstCandidate;
+        var candidateNextIndices = _destroyCandidateNext;
+        var candidateRows = _destroyCandidateRows;
+        var compactRows = _destroyCompactRows;
+        var fullGroups = _destroyFullGroups;
         var groupCount = 0;
 
-        try
+        for (var i = 0; i < destroyCount; i++)
         {
-            _destroyGroupIndexByArchetype.Clear();
+            var entity = _destroyOrderScratch[i];
+            var info = RequireLocation(entity);
+            var archetype = info.Archetype!;
 
-            for (var i = 0; i < destroyCount; i++)
+            // Linear scan: groupCount is typically 1-3, so this beats a Dictionary
+            // and allocates nothing.
+            var groupIndex = -1;
+            for (var j = 0; j < groupCount; j++)
             {
-                var entity = _destroyOrderScratch[i];
-                var info = RequireLocation(entity);
-                var archetype = info.Archetype!;
-
-                if (!_destroyGroupIndexByArchetype.TryGetValue(archetype, out var groupIndex))
+                if (ReferenceEquals(groupArchetypes[j], archetype))
                 {
-                    groupIndex = groupCount++;
-                    _destroyGroupIndexByArchetype.Add(archetype, groupIndex);
-                    groupArchetypes[groupIndex] = archetype;
-                    groupCounts[groupIndex] = 0;
-                    groupFirstCandidateIndices[groupIndex] = -1;
+                    groupIndex = j;
+                    break;
                 }
-
-                groupCounts[groupIndex]++;
-                candidateRows[i] = info.RowIndex;
-                candidateNextIndices[i] = groupFirstCandidateIndices[groupIndex];
-                groupFirstCandidateIndices[groupIndex] = i;
             }
-
-            MarkAndResetFullyDestroyedArchetypes(
-                groupArchetypes.AsSpan(0, groupCount),
-                groupCounts.AsSpan(0, groupCount),
-                fullGroups.AsSpan(0, groupCount));
-
-            CompactPartiallyDestroyedArchetypes(
-                groupArchetypes.AsSpan(0, groupCount),
-                groupCounts.AsSpan(0, groupCount),
-                groupFirstCandidateIndices.AsSpan(0, groupCount),
-                candidateNextIndices,
-                candidateRows,
-                fullGroups.AsSpan(0, groupCount),
-                compactRows);
-
-            for (var i = 0; i < destroyCount; i++)
+            if (groupIndex < 0)
             {
-                KillEntityRecord(_destroyOrderScratch[i]);
+                groupIndex = groupCount++;
+                groupArchetypes[groupIndex] = archetype;
+                groupCounts[groupIndex] = 0;
+                groupFirstCandidateIndices[groupIndex] = -1;
             }
+
+            groupCounts[groupIndex]++;
+            candidateRows[i] = info.RowIndex;
+            candidateNextIndices[i] = groupFirstCandidateIndices[groupIndex];
+            groupFirstCandidateIndices[groupIndex] = i;
         }
-        finally
+
+        MarkAndResetFullyDestroyedArchetypes(
+            groupArchetypes.AsSpan(0, groupCount),
+            groupCounts.AsSpan(0, groupCount),
+            fullGroups.AsSpan(0, groupCount));
+
+        CompactPartiallyDestroyedArchetypes(
+            groupArchetypes.AsSpan(0, groupCount),
+            groupCounts.AsSpan(0, groupCount),
+            groupFirstCandidateIndices.AsSpan(0, groupCount),
+            candidateNextIndices,
+            candidateRows,
+            fullGroups.AsSpan(0, groupCount),
+            compactRows);
+
+        for (var i = 0; i < destroyCount; i++)
         {
-            _destroyGroupIndexByArchetype.Clear();
-            _destroyOrderScratch.Clear();
-            ArrayPool<Archetype>.Shared.Return(groupArchetypes, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<Archetype>());
-            ArrayPool<int>.Shared.Return(groupCounts);
-            ArrayPool<int>.Shared.Return(groupFirstCandidateIndices);
-            ArrayPool<int>.Shared.Return(candidateNextIndices);
-            ArrayPool<int>.Shared.Return(candidateRows);
-            ArrayPool<int>.Shared.Return(compactRows);
-            ArrayPool<bool>.Shared.Return(fullGroups);
+            KillEntityRecord(_destroyOrderScratch[i]);
         }
+
+        // Clear archetype references so they can be GC'd if the archetype is
+        // later removed from the world. Value-type arrays (int/bool) are
+        // overwritten on next use and don't need clearing.
+        Array.Clear(groupArchetypes, 0, groupCount);
+
+        _destroyOrderScratch.Clear();
     }
 
     private static void MarkAndResetFullyDestroyedArchetypes(
@@ -781,6 +780,24 @@ public sealed partial class World
         {
             Array.Resize(ref _destroyRowMarks, Math.Max(entityCount, _destroyRowMarks.Length * 2));
         }
+
+        EnsureDestroyBatchCapacity(entityCount);
+    }
+
+    private void EnsureDestroyBatchCapacity(int count)
+    {
+        if (_destroyGroupArchetypes.Length >= count) return;
+
+        var newLen = Math.Max(count, _destroyGroupArchetypes.Length * 2);
+        if (newLen < 16) newLen = 16;
+
+        Array.Resize(ref _destroyGroupArchetypes, newLen);
+        Array.Resize(ref _destroyGroupCounts, newLen);
+        Array.Resize(ref _destroyGroupFirstCandidate, newLen);
+        Array.Resize(ref _destroyCandidateNext, newLen);
+        Array.Resize(ref _destroyCandidateRows, newLen);
+        Array.Resize(ref _destroyCompactRows, newLen);
+        Array.Resize(ref _destroyFullGroups, newLen);
     }
 
     private void EnsureReplayReservation(Entity entity)

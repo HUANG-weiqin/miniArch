@@ -9,46 +9,45 @@ internal static class Program
     private const int QueryEntities = 40_000;
     private const int CascadeRoots = 15_000;
     private const int PartialCascadeRoots = 20_000;
-    private const int Iterations = 8;
+
+    private const int WarmupSeconds = 2;
+    private const int MeasureSeconds = 3;
 
     private static readonly QueryDescription PositionQuery = new QueryDescription().With<Position>();
 
     private static int Main()
     {
-        Console.WriteLine("DestroyMany.Perf — Release-only destroy phase comparison");
-        Console.WriteLine("Setup is outside timed region. Baseline is guarded for Destroy.");
+        Console.WriteLine("DestroyMany.Perf — steady-state throughput (warmup {0}s + measure {1}s)",
+            WarmupSeconds, MeasureSeconds);
+        Console.WriteLine("Only the destroy phase is timed; setup/dispose is outside.");
         Console.WriteLine();
 
         var scenarios = new[]
         {
             new Scenario(
-                "DestroyMany full dense archetype",
+                "full dense archetype",
                 FullClearEntities,
-                Iterations,
                 BuildFullClearWorld,
                 DestroyWithGuardedLoop,
                 DestroyWithDestroyMany,
                 MinSpeedup: 1.20),
             new Scenario(
-                "Destroy(query) full Position query",
+                "Destroy(query) Position",
                 QueryEntities,
-                Iterations,
                 BuildQueryWorld,
                 DestroyPositionQueryWithMaterializedLoop,
                 DestroyPositionQuery,
                 MinSpeedup: 1.20),
             new Scenario(
-                "DestroyMany cascade forest",
+                "full cascade forest",
                 CascadeRoots,
-                Iterations,
                 BuildCascadeForestWorld,
                 DestroyWithGuardedLoop,
                 DestroyWithDestroyMany,
                 MinSpeedup: 1.20),
             new Scenario(
-                "DestroyMany partial cascade forest",
+                "partial cascade forest",
                 PartialCascadeRoots / 2,
-                Iterations,
                 BuildPartialCascadeForestWorld,
                 DestroyWithGuardedLoop,
                 DestroyWithDestroyMany,
@@ -59,22 +58,26 @@ internal static class Program
         foreach (var scenario in scenarios)
         {
             VerifyEquivalent(scenario);
-            Warmup(scenario);
 
-            var baseline = Measure(scenario, scenario.Baseline);
-            var batch = Measure(scenario, scenario.Batch);
-            var speedup = baseline.Elapsed.TotalMilliseconds / batch.Elapsed.TotalMilliseconds;
+            Console.Write("  warmup... ");
+            RunForDuration(scenario, scenario.Baseline, WarmupSeconds);
+            RunForDuration(scenario, scenario.Batch, WarmupSeconds);
+            Console.WriteLine("done");
+
+            var baseline = RunForDuration(scenario, scenario.Baseline, MeasureSeconds);
+            var batch = RunForDuration(scenario, scenario.Batch, MeasureSeconds);
+            var speedup = batch.OpsPerSecond / baseline.OpsPerSecond;
 
             Console.WriteLine($"{scenario.Name}");
-            Console.WriteLine($"  entities      : {scenario.EntityCount:N0}");
-            Console.WriteLine($"  for Destroy   : {baseline.Elapsed.TotalMilliseconds,9:F3} ms total | {baseline.MicrosecondsPerIteration,9:F3} us/iter | alloc {baseline.AllocatedBytesPerIteration,8:F0} B/iter");
-            Console.WriteLine($"  batch API     : {batch.Elapsed.TotalMilliseconds,9:F3} ms total | {batch.MicrosecondsPerIteration,9:F3} us/iter | alloc {batch.AllocatedBytesPerIteration,8:F0} B/iter");
-            Console.WriteLine($"  speedup       : {speedup,9:F2}x");
+            Console.WriteLine($"  entities   : {scenario.EntityCount:N0}");
+            Console.WriteLine($"  for Destroy : {baseline.OpsPerSecond,9:F1} ops/s | {baseline.UsPerOp,8:F1} us/op | alloc {baseline.BytesPerOp,6:F1} B/op");
+            Console.WriteLine($"  batch API   : {batch.OpsPerSecond,9:F1} ops/s | {batch.UsPerOp,8:F1} us/op | alloc {batch.BytesPerOp,6:F1} B/op");
+            Console.WriteLine($"  speedup     : {speedup,9:F2}x");
 
             if (speedup < scenario.MinSpeedup)
             {
                 allPassed = false;
-                Console.WriteLine($"  FAIL          : expected >= {scenario.MinSpeedup:F2}x");
+                Console.WriteLine($"  FAIL        : expected >= {scenario.MinSpeedup:F2}x");
             }
 
             Console.WriteLine();
@@ -96,21 +99,15 @@ internal static class Program
             var expectedValidation = WorldValidator.Validate(expected.World);
             var actualValidation = WorldValidator.Validate(actual.World);
             if (!expectedValidation.IsValid || !actualValidation.IsValid)
-            {
                 throw new InvalidOperationException($"{scenario.Name}: invalid world after destroy.");
-            }
 
             if (!expected.World.CanonicalChecksum().SequenceEqual(actual.World.CanonicalChecksum()))
-            {
                 throw new InvalidOperationException($"{scenario.Name}: canonical checksum mismatch.");
-            }
 
             var diff = WorldDiff.Compare(expected.World, actual.World);
             if (!diff.AreIdentical)
-            {
                 throw new InvalidOperationException(
                     $"{scenario.Name}: diff mismatch. EntityDiffs={diff.EntityDiffs.Count}, FreeListDiff={diff.FreeListDiff is not null}");
-            }
         }
         finally
         {
@@ -119,40 +116,39 @@ internal static class Program
         }
     }
 
-    private static void Warmup(Scenario scenario)
+    private static Measurement RunForDuration(Scenario scenario, DestroyAction action, int seconds)
     {
-        for (var i = 0; i < 2; i++)
-        {
-            var baseline = scenario.Setup();
-            scenario.Baseline(baseline.World, baseline.Targets);
-            baseline.World.Dispose();
+        var deadline = Stopwatch.GetTimestamp() + seconds * Stopwatch.Frequency;
+        var ops = 0;
+        var destroyTicks = 0L;
+        var destroyAlloc = 0L;
 
-            var batch = scenario.Setup();
-            scenario.Batch(batch.World, batch.Targets);
-            batch.World.Dispose();
-        }
-    }
+        // First op to settle JIT — not counted.
+        var primed = scenario.Setup();
+        action(primed.World, primed.Targets);
+        primed.World.Dispose();
 
-    private static Measurement Measure(Scenario scenario, DestroyAction action)
-    {
-        var stopwatch = new Stopwatch();
-        long allocatedBytes = 0;
-
-        for (var i = 0; i < scenario.Iterations; i++)
+        while (Stopwatch.GetTimestamp() < deadline)
         {
             var setup = scenario.Setup();
 
-            var beforeAllocated = GC.GetAllocatedBytesForCurrentThread();
-            stopwatch.Start();
+            var beforeAlloc = GC.GetAllocatedBytesForCurrentThread();
+            var start = Stopwatch.GetTimestamp();
             action(setup.World, setup.Targets);
-            stopwatch.Stop();
-            allocatedBytes += GC.GetAllocatedBytesForCurrentThread() - beforeAllocated;
+            var end = Stopwatch.GetTimestamp();
+            destroyTicks += end - start;
+            destroyAlloc += GC.GetAllocatedBytesForCurrentThread() - beforeAlloc;
 
             setup.World.Dispose();
+            ops++;
         }
 
-        return new Measurement(stopwatch.Elapsed, allocatedBytes, scenario.Iterations);
+        var destroyMs = (double)destroyTicks / Stopwatch.Frequency * 1000;
+
+        return new Measurement(ops, destroyMs, destroyAlloc);
     }
+
+    // ─── World builders ───
 
     private static WorldSetup BuildFullClearWorld()
     {
@@ -168,7 +164,6 @@ internal static class Program
                 new C(i + 6),
                 new D(i + 7));
         }
-
         return new WorldSetup(world, targets);
     }
 
@@ -185,10 +180,8 @@ internal static class Program
                 new C(i + 6),
                 new D(i + 7));
         }
-
         for (var i = 0; i < 16; i++)
             world.Create(new Velocity(-i, i));
-
         return new WorldSetup(world, []);
     }
 
@@ -200,29 +193,18 @@ internal static class Program
         for (var i = 0; i < roots.Length; i++)
         {
             var root = world.Create(
-                new Position(i, i + 1),
-                new Velocity(i + 2, i + 3),
-                new A(i),
-                new B(i),
-                new C(i),
-                new D(i));
+                new Position(i, i + 1), new Velocity(i + 2, i + 3),
+                new A(i), new B(i), new C(i), new D(i));
             var child = world.Create(
                 new Position(i + 4, i + 5),
-                new A(i + 6),
-                new B(i + 7),
-                new C(i + 8),
-                new D(i + 9));
+                new A(i + 6), new B(i + 7), new C(i + 8), new D(i + 9));
             var grandChild = world.Create(
                 new Velocity(i + 10, i + 11),
-                new A(i + 12),
-                new B(i + 13),
-                new C(i + 14),
-                new D(i + 15));
+                new A(i + 12), new B(i + 13), new C(i + 14), new D(i + 15));
             world.AddChild(root, child);
             world.AddChild(child, grandChild);
             roots[i] = root;
         }
-
         return new WorldSetup(world, roots);
     }
 
@@ -234,41 +216,31 @@ internal static class Program
         for (var i = 0; i < PartialCascadeRoots; i++)
         {
             var root = world.Create(
-                new Position(i, i + 1),
-                new Velocity(i + 2, i + 3),
-                new A(i),
-                new B(i),
-                new C(i),
-                new D(i));
+                new Position(i, i + 1), new Velocity(i + 2, i + 3),
+                new A(i), new B(i), new C(i), new D(i));
             var child = world.Create(
                 new Position(i + 4, i + 5),
-                new A(i + 6),
-                new B(i + 7),
-                new C(i + 8),
-                new D(i + 9));
+                new A(i + 6), new B(i + 7), new C(i + 8), new D(i + 9));
             var grandChild = world.Create(
                 new Velocity(i + 10, i + 11),
-                new A(i + 12),
-                new B(i + 13),
-                new C(i + 14),
-                new D(i + 15));
+                new A(i + 12), new B(i + 13), new C(i + 14), new D(i + 15));
             world.AddChild(root, child);
             world.AddChild(child, grandChild);
 
             if ((i & 1) == 0)
                 roots[i / 2] = root;
         }
-
         return new WorldSetup(world, roots);
     }
+
+    // ─── Destroy actions ───
 
     private static void DestroyWithGuardedLoop(World world, Entity[] targets)
     {
         for (var i = 0; i < targets.Length; i++)
         {
-            var entity = targets[i];
-            if (world.IsAlive(entity))
-                world.Destroy(entity);
+            if (world.IsAlive(targets[i]))
+                world.Destroy(targets[i]);
         }
     }
 
@@ -285,9 +257,8 @@ internal static class Program
 
         for (var i = 0; i < targets.Count; i++)
         {
-            var entity = targets[i];
-            if (world.IsAlive(entity))
-                world.Destroy(entity);
+            if (world.IsAlive(targets[i]))
+                world.Destroy(targets[i]);
         }
     }
 
@@ -296,12 +267,13 @@ internal static class Program
         world.Destroy(in PositionQuery);
     }
 
+    // ─── Types ───
+
     private delegate void DestroyAction(World world, Entity[] targets);
 
     private readonly record struct Scenario(
         string Name,
         int EntityCount,
-        int Iterations,
         Func<WorldSetup> Setup,
         DestroyAction Baseline,
         DestroyAction Batch,
@@ -309,10 +281,11 @@ internal static class Program
 
     private readonly record struct WorldSetup(World World, Entity[] Targets);
 
-    private readonly record struct Measurement(TimeSpan Elapsed, long AllocatedBytes, int Iterations)
+    private readonly record struct Measurement(int Ops, double DestroyMs, long AllocatedBytes)
     {
-        public double MicrosecondsPerIteration => Elapsed.TotalMicroseconds / Iterations;
-        public double AllocatedBytesPerIteration => (double)AllocatedBytes / Iterations;
+        public double OpsPerSecond => Ops / (DestroyMs / 1000);
+        public double UsPerOp => DestroyMs * 1000 / Ops;
+        public double BytesPerOp => (double)AllocatedBytes / Ops;
     }
 
     private readonly record struct Position(int X, int Y);
