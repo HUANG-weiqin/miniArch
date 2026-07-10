@@ -449,6 +449,13 @@ struct: MiniArch.ChunkView
   Method: GetSpan() -> System.Span<T> where T : struct, System.ValueType
   Method: TryGetComponentIndex(out System.Int32& columnIndex) -> System.Boolean where T : struct, System.ValueType
   Property: Count -> System.Int32 [get; ]
+class: MiniArch.ComponentBucketQuery`1 where TComponent : struct, System.ValueType, System.IEquatable<TComponent>
+  Method: Clear() -> System.Void
+  Method: ContainsKey(TComponent key) -> System.Boolean
+  Method: Count(TComponent key) -> System.Int32
+  Method: Dispose() -> System.Void
+  Method: Get(TComponent key, System.Span<MiniArch.Entity> destination) -> System.Int32
+  Method: TryGet(TComponent key, System.Span<MiniArch.Entity> destination, out System.Int32& written) -> System.Boolean
 class: MiniArch.ComponentSchema
   Method: Fingerprint() -> System.Byte[]
 class: MiniArch.Core.CommandStream : MiniArch.Core.CommandStreamCore

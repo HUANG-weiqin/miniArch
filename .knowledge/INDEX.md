@@ -2,7 +2,7 @@
 title: Knowledge Index
 module: KnowledgeIndex
 description: .knowledge 知识库导航、模块地图与必读入口
-updated: 2026-07-09
+updated: 2026-07-10
 ---
 
 # Knowledge Index
@@ -17,14 +17,14 @@ updated: 2026-07-09
 |---|---|
 | **入门 / 导航** | `kb-design-rationale.md`（**新人必读**：为什么是这样而不是那样）、`kb-glossary.md`（术语表）、`kb-perf-harnesses.md`（perf harness 消歧）、`kb-lockstep-playbook.md`（帧同步端到端 spine） |
 | Workspace（仓库导航/脚本/流程） | `kb-repo-overview.md`、`kb-profiling-workflow.md`、`kb-throughput-workflow.md` |
-| MiniArch.Core（ECS 运行时） | `kb-core-ecs.md`、`kb-architecture-review.md`、`kb-chunk-storage.md`、`kb-cache-optimization.md` |
+| MiniArch.Core（ECS 运行时） | `kb-core-ecs.md`、`kb-architecture-review.md`、`kb-chunk-storage.md`、`kb-cache-optimization.md`、`kb-partition-prototype-report.md` |
 | MiniArch.Core CommandStream | `kb-command-stream.md`、`kb-deferred-create-design.md` |
 | MiniArch.Core Query | `kb-query-invalidation.md`、`kb-parallel-query.md` |
 | MiniArch.Core ChangeTracking | `kb-change-tracking.md`（World.Watch pull-event 模型：ChangeWatch/TransitionWatch Snapshot+Diff；为什么不是 push event） |
 | MiniArch.Core Snapshot | `kb-snapshot-persistence.md` |
 | MiniArch.Core Hierarchy | `kb-hierarchy-runtime.md` |
 | MiniArch.Diagnostics（诊断工具） | `kb-ecs-diagnostics.md`（WorldDiff、WorldValidator、EntityDump、WorldDigest） |
-| MiniArch（用户 API 分层） | 合并到 `kb-core-ecs.md` "用户 API 分层" 段 |
+| MiniArch（用户 API 分层） | `kb-component-bucket-index-mvp-report.md`（ComponentBucketQuery MVP 最终报告——确定性 per-key scan、调用者提供 span 模式、零 core 入侵、正确性模型与性能矩阵） |
 | MiniArch.Tests（测试组织） | `kb-test-workflow.md` |
 | MiniArch.Benchmarks（对比数据） | `kb-ecs-comparison.md` |
 | HeroPipeline.Tests | 合并到 `kb-hero-pipeline-regression.md` "PipelineBenchmarkTests" 段 |
