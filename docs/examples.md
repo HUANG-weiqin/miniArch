@@ -1198,6 +1198,180 @@ readonly record struct CardZone(int Value);
 
 ---
 
+## 9. Hierarchy
+
+Parent-child relationships with `AddChild`, `RemoveChild`, `TryGetParent`, `EnumerateChildren`. Destroying a parent cascades to all children.
+
+```csharp
+using MiniArch;
+
+var world = new World();
+var root = world.Create(new Health(100));
+var left = world.Create(new Health(50));
+var right = world.Create(new Health(25));
+
+// Build tree: root → { left, right }
+world.AddChild(root, left);
+world.AddChild(root, right);
+
+// Query parent
+bool found = world.TryGetParent(left, out Entity parent);
+Console.WriteLine($"left's parent: {parent} (found={found})");
+
+// Enumerate children (zero-alloc, no allocation per call)
+foreach (var child in world.EnumerateChildren(root))
+    Console.WriteLine($"child: {child}, hp: {world.Get<Health>(child).Value}");
+
+// Destroy cascades: destroying root also destroys left and right
+world.Destroy(root);
+Console.WriteLine($"root alive? {world.IsAlive(root)}");     // False
+Console.WriteLine($"left alive? {world.IsAlive(left)}");     // False
+
+readonly record struct Health(int Value);
+```
+
+> **Note:** Hierarchy is parent→child only (no child→parent pointer stored).
+> - `EnumerateChildren` is a zero-allocation `IEnumerable<Entity>` (struct enumerator).
+> - `HasChildren(Entity)` is O(1).
+> - Parent is always destroyed before children (depth-first). Children become rootless — they do *not* inherit the parent's components.
+
+---
+
+## 10. World Snapshot
+
+Save and load the entire world state.
+
+```csharp
+using MiniArch;
+
+var world = new World();
+var e = world.Create(new Position(1, 2), new Health(100));
+
+// Save snapshot to a byte stream
+using var stream = new MemoryStream();
+WorldSnapshot.Save(stream, world);
+Console.WriteLine($"Snapshot size: {stream.Length} bytes");
+
+// Simulate corruption
+world.Set(e, new Position(99, 99));
+Console.WriteLine($"After mutation: {world.Get<Position>(e)}"); // Position(99, 99)
+
+// Load snapshot back
+stream.Position = 0;
+using var restored = WorldSnapshot.Load(stream);
+Console.WriteLine($"After restore: {restored.Get<Position>(e)}"); // Position(1, 2)
+
+readonly record struct Position(float X, float Y);
+readonly record struct Health(int Value);
+```
+
+> **Note:** `WorldSnapshot.Load` creates a **new** `World` instance. It does not modify the source world. For in-place rollback without allocation, see `CaptureState` / `RestoreState` below.
+
+---
+
+## 11. In-Place Rollback
+
+Save and restore mutable world state without allocation. Useful for GGPO-style rollback networking.
+
+```csharp
+using MiniArch;
+
+var world = new World();
+var e = world.Create(new Position(10, 20));
+
+// Capture current state (lightweight, no allocation beyond the handle)
+var snap = world.CaptureState();
+
+// Mutate
+world.Set(e, new Position(99, 99));
+((Position[]) [new Position(30, 40)])[0] = world.Get<Position>(e);
+Console.WriteLine($"Before rollback: {world.Get<Position>(e)}"); // Position(99, 99)
+
+// Roll back to captured state
+world.RestoreState(snap);
+Console.WriteLine($"After rollback: {world.Get<Position>(e)}");  // Position(10, 20)
+
+// snap is now consumed — calling RestoreState again throws.
+// Call CaptureState again for another checkpoint.
+
+readonly record struct Position(float X, float Y);
+```
+
+> **Rules:**
+> - A `WorldStateSnapshot` can be restored **once**. After restore, call `CaptureState()` again for a new checkpoint.
+> - Snapshots are tied to the `World` that produced them. Restoring on a different `World` instance throws.
+> - The snapshot captures entity records, free list, archetypes, component data, and hierarchy. It does not capture `CommandStream` state — clear your stream before capture.
+
+---
+
+## 12. World.Clone
+
+Deep-clone an entire world into an independent copy.
+
+```csharp
+using MiniArch;
+
+var world = new World();
+world.Create(new Position(1, 1), new Health(100));
+world.Create(new Position(2, 2), new Health(50));
+
+// Clone creates a fully independent world
+using var clone = world.Clone();
+
+// Mutate original
+var query = world.Query(new QueryDescription().With<Health>());
+foreach (var chunk in query.GetChunks())
+{
+    var hp = chunk.GetSpan<Health>();
+    for (int i = 0; i < hp.Length; i++)
+        hp[i] = new Health(hp[i].Value - 10);
+}
+
+// Clone is unaffected
+var cloneQuery = clone.Query(new QueryDescription().With<Health>());
+foreach (var chunk in cloneQuery.GetChunks())
+{
+    var hp = chunk.GetSpan<Health>();
+    Console.WriteLine($"Clone HP: {hp[0].Value}"); // Still 100, 50
+}
+
+readonly record struct Position(float X, float Y);
+readonly record struct Health(int Value);
+```
+
+---
+
+## 13. EntityAccessor
+
+Batch multiple component operations on the same entity without repeated archetype lookups.
+
+```csharp
+using MiniArch;
+
+var world = new World();
+var e = world.Create(new Position(0, 0), new Health(100), new Mana(50));
+
+// Accessor caches the archetype+row, so each subsequent Get/Set/Has is cheaper
+var accessor = world.Access(e);
+ref var pos = ref accessor.GetRef<Position>();
+pos = new Position(pos.X + 10, pos.Y + 10);
+
+accessor.Set(new Health(accessor.Get<Health>().Value - 20));
+accessor.Set(new Mana(accessor.Get<Mana>().Value + 10));
+
+// Must discard accessor before any structural change (Add/Remove)
+Console.WriteLine($"pos={world.Get<Position>(e)} health={world.Get<Health>(e)} mana={world.Get<Mana>(e)}");
+
+// ⚠️ After Add/Remove, the entity may move to a different archetype.
+// The old accessor is invalid — call world.Access() again.
+
+readonly record struct Position(float X, float Y);
+readonly record struct Health(int Value);
+readonly record struct Mana(int Value);
+```
+
+---
+
 ## Next
 
 - Full API signatures → [api.md](api.md)

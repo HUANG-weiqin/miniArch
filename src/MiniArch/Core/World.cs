@@ -157,10 +157,20 @@ public sealed partial class World : IDisposable
     private void AssertAlive(Entity entity)
     {
         if ((uint)entity.Id >= (uint)_entitySlotCount)
-            throw new InvalidOperationException($"Entity {entity} is not alive.");
+            throw new InvalidOperationException(
+                $"Entity {entity} is not alive: id {entity.Id} exceeds current slot count ({_entitySlotCount}). " +
+                "This entity was never created or the handle is corrupt. " +
+                "Use World.IsAlive() before accessing an entity if you are unsure.");
         ref var record = ref _records[entity.Id];
-        if (!record.IsOccupied || record.Version != entity.Version)
-            throw new InvalidOperationException($"Entity {entity} is not alive.");
+        if (!record.IsOccupied)
+            throw new InvalidOperationException(
+                $"Entity {entity} is not alive: slot {entity.Id} is not occupied. " +
+                "The entity may have been destroyed. Use World.IsAlive() to check.");
+        if (record.Version != entity.Version)
+            throw new InvalidOperationException(
+                $"Entity {entity} is not alive: version mismatch (current: {record.Version}, expected: {entity.Version}). " +
+                "The entity handle is stale—it was destroyed and the slot has been reused. " +
+                "Use World.IsAlive() to obtain a fresh entity handle.");
     }
 
     /// <summary>
@@ -401,7 +411,8 @@ public sealed partial class World : IDisposable
         if (!TryGetLocation(entity, out var info))
         {
             throw new InvalidOperationException(
-                $"Entity '{entity}' is not alive.");
+                $"Entity '{entity}' is not alive. " +
+                "Use World.IsAlive() to check before calling Access().");
         }
 
         return new EntityAccessor(info.Archetype, info.RowIndex);
