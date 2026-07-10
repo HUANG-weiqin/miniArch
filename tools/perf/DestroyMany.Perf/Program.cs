@@ -7,6 +7,9 @@ internal static class Program
 {
     private const int FullClearEntities = 50_000;
     private const int QueryEntities = 40_000;
+    private const int MultiArchCount = 16;
+    private const int MultiArchEntitiesPer = 2_500;
+    private const int MultiArchTotal = MultiArchCount * MultiArchEntitiesPer;
     private const int CascadeRoots = 15_000;
     private const int PartialCascadeRoots = 20_000;
     private const int SparseTotal = 50_000;
@@ -34,9 +37,16 @@ internal static class Program
                 DestroyWithDestroyMany,
                 MinSpeedup: 1.20),
             new Scenario(
-                "Destroy(query) Position",
+                "Destroy(query) Position [1 archetype]",
                 QueryEntities,
                 BuildQueryWorld,
+                DestroyPositionQueryWithMaterializedLoop,
+                DestroyPositionQuery,
+                MinSpeedup: 1.20),
+            new Scenario(
+                $"Destroy(query) Position [{MultiArchCount} archetypes]",
+                MultiArchTotal,
+                BuildMultiArchetypeWorld,
                 DestroyPositionQueryWithMaterializedLoop,
                 DestroyPositionQuery,
                 MinSpeedup: 1.20),
@@ -194,6 +204,48 @@ internal static class Program
         return new WorldSetup(world, []);
     }
 
+    private static WorldSetup BuildMultiArchetypeWorld()
+    {
+        var world = new World(entityCapacity: MultiArchTotal + 16);
+        for (var arch = 0; arch < MultiArchCount; arch++)
+        {
+            for (var i = 0; i < MultiArchEntitiesPer; i++)
+            {
+                var id = arch * MultiArchEntitiesPer + i;
+                var p = new Position(id, id + 1);
+                var v = new Velocity(id + 2, id + 3);
+                var a = new A(id + 4);
+                var b = new B(id + 5);
+                var c = new C(id + 6);
+                var d = new D(id + 7);
+
+                switch (arch)
+                {
+                    case 0: world.Create(p); break;
+                    case 1: world.Create(p, v); break;
+                    case 2: world.Create(p, a); break;
+                    case 3: world.Create(p, b); break;
+                    case 4: world.Create(p, c); break;
+                    case 5: world.Create(p, d); break;
+                    case 6: world.Create(p, v, a); break;
+                    case 7: world.Create(p, v, b); break;
+                    case 8: world.Create(p, v, c); break;
+                    case 9: world.Create(p, v, d); break;
+                    case 10: world.Create(p, a, b); break;
+                    case 11: world.Create(p, a, c); break;
+                    case 12: world.Create(p, b, c, d); break;
+                    case 13: world.Create(p, v, a, b); break;
+                    case 14: world.Create(p, v, a, b, c); break;
+                    default: world.Create(p, v, a, b, c, d); break;
+                }
+            }
+        }
+        // Distractor entities without Position — not matched by query.
+        for (var i = 0; i < 16; i++)
+            world.Create(new Velocity(-i, i));
+        return new WorldSetup(world, []);
+    }
+
     private static WorldSetup BuildCascadeForestWorld()
     {
         var world = new World(entityCapacity: CascadeRoots * 3);
@@ -283,7 +335,7 @@ internal static class Program
 
     private static void DestroyPositionQueryWithMaterializedLoop(World world, Entity[] _)
     {
-        var targets = new List<Entity>(QueryEntities);
+        var targets = new List<Entity>();
         foreach (var entity in world.Query(in PositionQuery))
             targets.Add(entity);
 
