@@ -15,7 +15,7 @@ updated: 2026-07-11
 
 | 模块 | 知识页 |
 |---|---|
-| **入门 / 导航** | `kb-design-rationale.md`（**新人必读**：为什么是这样而不是那样）、`kb-glossary.md`（术语表）、`kb-perf-harnesses.md`（perf harness 消歧）、`kb-lockstep-playbook.md`（帧同步端到端 spine） |
+| **入门 / 导航** | `kb-design-rationale.md`（**新人必读**：为什么是这样而不是那样）、`kb-glossary.md`（术语表）、`kb-perf-harnesses.md`（perf harness 消歧）、`kb-lockstep-playbook.md`（帧同步端到端 spine）、`kb-code-review-findings.md`（**审阅前必读**：已修复 bug 索引 + 已排除的非 bug 猜想） |
 | Workspace（仓库导航/脚本/流程） | `kb-repo-overview.md`、`kb-profiling-workflow.md`、`kb-throughput-workflow.md` |
 | MiniArch.Core（ECS 运行时） | `kb-core-ecs.md`、`kb-architecture-review.md`、`kb-chunk-storage.md`、`kb-cache-optimization.md`、`kb-partition-prototype-report.md` |
 | MiniArch.Core CommandStream | `kb-command-stream.md`、`kb-deferred-create-design.md` |
@@ -34,7 +34,9 @@ updated: 2026-07-11
 | **安全证明报告** | **`kb-safety-proof.md`**（2026-07-06 正式库安全证明——224 seed × 5M 帧全 PASS，15 条代码路径审计零分歧） |
 | **确定性证明（选型必读）** | **`kb-determinism-proof.md`**（2026-07-10 确定性审计报告——9 维度全通过，LayoutKind.Auto 拦截修复，含与其他 ECS 库的确定性对比和引用措辞） |
 | GameTickSim.Perf（场景基准） | `kb-gameticksim-scenarios.md` |
+| FrifloGameScenarios.Perf（15 场景跨 ECS 对比） | `kb-ecs-comparison.md`、`kb-perf-harnesses.md` |
 | CommandStreamGame.Perf（CommandStream 真实游戏稳态压测） | `kb-commandstream-game-perf.md` |
+| ParallelRecord.Perf（并行 CommandStream 录制扩展性测试） | `kb-perf-harnesses.md` |
 | WatchApi.Perf（Watch API 专项吞吐/分配） | `kb-change-tracking.md`、`kb-perf-harnesses.md` |
 | samples/BulletLockstep.Demo（多 host 弹幕游戏集成测试） | `kb-bullet-lockstep-demo.md`（8 个 slice（2-9）端到端压测库全部公共能力：placeholder lockstep / archetype 迁移 / hierarchy / chunked / 持久化 / 回滚） |
 

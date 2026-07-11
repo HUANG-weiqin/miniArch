@@ -121,7 +121,7 @@ updated: 2026-07-11
 - Query 并发读优先用 copy-on-write 快照发布，而不是加锁
 - Query snapshot 直接内联在 `Query` 上（`_snapshotArchetypes`、`_snapshotChunkViews`、`_lastArchetypeCount`）
 - **Archetype 支持单块/分段双模式**：单块模式下 Archetype = 1 个连续存储块；分段模式下 Archetype = N 个固定大小 Segment，详见 `kb-chunk-storage.md`
-- **World 拆分为 partial 文件**（按职责分组）：EntityLifecycle、Create.Generated、QueryCache、StructuralChange。主文件保留字段声明、component 读写、Clone、Replay、hierarchy
+- **World 拆分为 partial 文件**（按职责分组），详见 `kb-architecture-review.md` §10。主文件保留字段声明、component 读写、Clone、Replay、hierarchy
 - **Archetype 拆分为 partial 文件**：主文件保留字段/构造/metadata/edge cache/component index；Storage 文件负责所有存储操作
 - **DebugMetrics 已删除**：YAGNI 清理，不再维护 debug 计数器和报告 API。替代方案：`WorldStats`/`ArchetypeStats` 纯快照式诊断（`World.GetStats()`/`World.GetArchetypeStats()`），零新增状态、零热路径开销
 - ~~**ICommandRecorder 保留**~~ — 已删除（YAGNI）。测试层直接使用 `CommandStream`

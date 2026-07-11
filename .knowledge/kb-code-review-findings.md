@@ -115,7 +115,7 @@ updated: 2026-07-10
 - 历史上已修复的真 bug 和回归测试 → 见各 kb 页的"坑点"段 + 对应测试文件
 - 已知约束和设计权衡 → `kb-design-rationale.md`
 - 架构审视 → `kb-architecture-review.md`
-- 鲁棒性审阅技能 → `.agents/skills/robustness-review/SKILL.md`
+- 鲁棒性审阅技能 → 注：该技能为 agent 基础设施内置 skill（`robustness-review`），可通过 `skill` 工具加载。
 
 ---
 

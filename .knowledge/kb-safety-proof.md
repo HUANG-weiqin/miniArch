@@ -1,8 +1,8 @@
 ---
 title: MiniArch ECS 库安全证明
 module: Proof
-description: 全维度库安全证明——224 个随机种子、500 万帧、878 个测试、15 条代码路径审计
-updated: 2026-07-09
+description: 全维度库安全证明——224 个随机种子、500 万帧、全测试套件 PASS、15 条代码路径审计
+updated: 2026-07-11
 ---
 # MiniArch ECS 库安全证明
 
@@ -17,7 +17,7 @@ updated: 2026-07-09
 | 测试 seed 总数 | **224 diversity sweep**（32 + 64 + 128，包含不同区间）+ 长时/边界/鲁棒补充 seed |
 | 测试操作总量 | ~**1200 万次**（224 seed × 100K 帧 × ~5 ops/f） |
 | 最长单次运行 | **5,000,000 帧**（3 分 55 秒），无泄漏 |
-| 单元测试数 | **878**（873 MiniArch.Tests + 5 HeroPipeline.Tests），0 失败 |
+| 单元测试数 | **全测试套件 0 失败**（~941 MiniArch.Tests + 5 HeroPipeline.Tests，精确计数会随测试增减漂移，详见 `kb-code-review-findings.md`"不保留精确总数"策略） |
 | 发现的库级 bug | **16**（B1-B6 浸泡发现 + B7-B16 代码审阅发现），全部修复并回归 |
 | 代码审计路径 | **15 条 Submit vs Replay 操作路径**，零分歧 |
 | Perf 回归门禁 | Movement **2052.7** rounds/s，Attack **1246.8** rounds/s，超阈值（详见 kb-hero-pipeline-regression.md） |
