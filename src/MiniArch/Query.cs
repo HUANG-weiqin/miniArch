@@ -7,6 +7,29 @@ namespace MiniArch;
 /// <summary>
 /// Entity-only query facade that supports direct foreach enumeration
 /// and chunk-level batch access.
+///
+/// <para><b>Iteration order contract</b> (promoted to semantic guarantee):</para>
+/// <list type="bullet">
+///   <item><b>Archetype order</b> — matched archetypes are iterated in the
+///   order they were created in the <see cref="World"/>.</item>
+///   <item><b>Entity order within an archetype</b> — entities are iterated
+///   in their physical storage order: new entities are appended to the end;
+///   entity removal (Destroy / component removal) uses swap-remove (the last
+///   entity fills the vacated slot), which reorders survivors deterministically.</item>
+///   <item><b>All access paths consistent</b> — <c>foreach</c>,
+///   <see cref="GetChunks"/> → <see cref="ChunkView.GetEntities"/>,
+///   and <c>Advanced.GetArchetypeSpan</c> → <c>archetype.GetEntities</c>
+///   all produce the same entity order.</item>
+///   <item><b>Deterministic</b> — given the same sequence of structural
+///   changes, the iteration order is byte-for-byte identical (verified
+///   by <c>QueryOrderingTests</c>).</item>
+/// </list>
+/// <para>
+/// If you need an iteration order that is independent of structural change
+/// history, use <see cref="OrderByEntityId"/>,
+/// <see cref="OrderByEntityIdDescending"/>, or
+/// <see cref="OrderByComponent{T}(Comparison{T})"/>.
+/// </para>
 /// </summary>
 public readonly struct Query
 {

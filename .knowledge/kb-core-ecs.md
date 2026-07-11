@@ -128,7 +128,14 @@ updated: 2026-07-11
 - **Edge cache 内联**：增删目标缓存直接挂在 Archetype 上（`Archetype?[]` 按 componentId 直索引），无需独立 ArchetypeEdges 对象
 - **迁移拷贝内联**：`CopySharedComponentsFrom` 直接在 Archetype 上实现，无需 MigrationPlan class
 - `EntityCount` 在所有构建配置下都只统计 **alive entity**；reserved pending id 不计入结果
-- `Destroy(ReadOnlySpan<Entity>)` / `Destroy(query)` 的正确性标准是 logical world state：`CanonicalChecksum`、`WorldDiff`、`WorldValidator` 以及 `WorldDigest` 的 occupancy/free-list/hierarchy/per-component 域与 guarded `for Destroy` 一致。由于 partial batch remove 使用无序 hole-fill，物理 archetype row order 可不同；默认 query 顺序不属于语义承诺，需稳定顺序时使用 `OrderByEntityId()` 等显式排序。
+- **Query 迭代顺序契约**（2026-07-11 提升为语义承诺）：
+  - **Archetype 顺序** = archetype 创建顺序（首批匹配的 archetype 排在前面）
+  - **Entity 顺序（同一 archetype 内）** = entity 存储顺序（append 到末尾；删除用 swap-remove，末尾 survivor 补充到被删位置）
+  - **所有访问路径一致**：`foreach`、`GetChunks()` → `ChunkView.GetEntities()`、`GetArchetypeSpan()` → `archetype.GetEntities()` 三者顺序一致
+  - **确定性**：给定相同输入序列，顺序字节级一致。由 `QueryOrderingTests`（14 个测试）守护
+  - 如需不受结构变更历史影响的稳定顺序，使用 `OrderByEntityId()` / `OrderByEntityIdDescending()` / `OrderByComponent<T>()`
+  - 详见 `tests/MiniArch.Tests/Core/QueryOrderingTests.cs`
+- `Destroy(ReadOnlySpan<Entity>)` / `Destroy(query)` 的正确性标准是 logical world state：`CanonicalChecksum`、`WorldDiff`、`WorldValidator` 以及 `WorldDigest` 的 occupancy/free-list/hierarchy/per-component 域与 guarded `for Destroy` 一致。由于 partial batch remove 使用无序 hole-fill，物理 archetype row order 可不同。
 - **用户可触发的防御性检查**（如 `AssertNotDisposed`、`AssertAlive`、`GetRecordFast` 的 id/版本校验）在 Release 常开。`kb-design-rationale.md` §3.11 已用 Release benchmark 证明这些检查零可测成本，不能再把它们误改回 DEBUG-only。**唯一例外：`IsAlive`** — 见下条
 - **IsAlive 不含 AssertNotDisposed**：Dispose 后 `_entitySlotCount = 0` 使 bounds check 永远返回 false，语义正确（无活实体）且省一个分支。其他公共方法（Create/Destroy/Get 等）仍保留 `AssertNotDisposed`——它们在 disposed World 上会静默损坏状态
 - **Clear 命名而非 DestroyAll/DisposeQueryUnsafe**：`Clear` 诚实描述行为（清空 archetype 容器），与 `List<T>.Clear()` 语义一致；与 `Destroy*` 家族（逐实体处理）区分
