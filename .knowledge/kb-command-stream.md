@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream/ParallelCommandStream typed-store append-only recorder, compatible with FrameDelta. The per-entity deduplicating CommandBuffer was removed (YAGNI) — CommandStream is now the sole recorder.
-updated: 2026-07-11
+updated: 2026-07-12
 ---
 # Command Stream Runtime
 
@@ -52,7 +52,7 @@ updated: 2026-07-11
 - created entity 组件在 record 时分流，避免提交时 O(created × commands) 扫描整条日志。
 - created materialize 使用小型 archetype cache，避免每个 spawn 反复分配 signature/type array。
 - `SubmitAndSnapshotAsync` 使用 FrozenState 双缓冲池（`_spareFrozen`/`_pendingFrozen`），稳态零分配。
-- **CreateMany v2 bulk materialize（2026-07-11）**：`CreateManyCore` 录制完 per-entity pending batch 后，追加一个 `CreateManyGroup`（StartBatch/Count/ComponentCount + C1..C8 inline ComponentType）到 `FrozenState.CreateManyGroups`。Submit 的 `MaterializePendingBatches` 共享 helper 识别 group：precondition 满足时（chain 逆序匹配 group 类型、无 Removed、组件类型唯一且 id < 512）批量 `AllocateRows(liveCount)` + 预算 column index + pin BatchBuf 紧凑写入；否则 fallback 到 per-entity `MaterializePending`。Cancelled batch 跳过。Snapshot/Replay 不变（仍从 pending batch emit）。World 新增 `MaterializeReservedEntityAt(entity, archetype, row)` 处理已分配 row 的 entity 放置。Short benchmark: 30k×8c Submit `CreateMany` 9.41 ms / 17.68 MB vs per-entity 26.94 ms / 20.02 MB（约 2.9x）。重复组件类型必须 fallback，否则会破坏 pending batch 的 last-wins 语义；回归见 `BUG_CreateMany_duplicate_component_types_use_last_write`。
+- **CreateMany v2 bulk materialize（2026-07-11）**：`CreateManyCore` 录制完 per-entity pending batch 后，追加一个 `CreateManyGroup`（StartBatch/Count/ComponentCount + C1..C8 inline ComponentType）到 `FrozenState.CreateManyGroups`。Submit 的 `MaterializePendingBatches` 共享 helper 识别 group：precondition 满足时（chain 逆序匹配 group 类型、无 Removed、组件类型唯一且 id < 512）批量 `AllocateRows(liveCount)` + 预算 column index + pin BatchBuf 紧凑写入。**2026-07-12 改为 fast-fail**：任一 precondition 不满足立即抛 `InvalidOperationException`，防止创建后混用 `Set`/`Add`/`Remove` 导致静默降级（见 `ThrowCreateManyMismatch`）。`Destroy` 例外（仅设 `Canceled` 标记，兼容 fast path）。Cancelled batch 跳过。Snapshot/Replay 不变（仍从 pending batch emit）。World 新增 `MaterializeReservedEntityAt(entity, archetype, row)` 处理已分配 row 的 entity 放置。Short benchmark: 30k×8c Submit `CreateMany` 9.41 ms / 17.68 MB vs per-entity 26.94 ms / 20.02 MB（约 2.9x）。
 
 ### Clone 虚拟状态约束
 

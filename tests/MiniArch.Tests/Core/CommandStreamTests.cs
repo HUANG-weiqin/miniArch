@@ -1175,7 +1175,7 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
-    public void BUG_CreateMany_duplicate_component_types_use_last_write()
+    public void CreateMany_duplicate_component_types_throws()
     {
         var world = new World();
         var stream = new CommandStream(world);
@@ -1183,17 +1183,11 @@ public sealed class CommandStreamTests
 
         stream.CreateMany<Position, Position, DuplicatePositionCreateManyWriter>(
             entities, new DuplicatePositionCreateManyWriter());
-        Assert.True(stream.Submit());
-
-        for (var i = 0; i < entities.Length; i++)
-        {
-            Assert.True(world.TryGet(entities[i], out Position p));
-            Assert.Equal(new Position(i, i + 1000), p);
-        }
+        Assert.Throws<InvalidOperationException>(() => stream.Submit());
     }
 
     [Fact]
-    public void CreateMany_then_set_same_type_falls_back_and_uses_set_value()
+    public void CreateMany_then_set_on_same_entity_throws()
     {
         var world = new World();
         var stream = new CommandStream(world);
@@ -1202,15 +1196,7 @@ public sealed class CommandStreamTests
         stream.CreateMany<Position, Velocity, PositionVelocityCreateManyWriter>(
             entities, new PositionVelocityCreateManyWriter());
         stream.Set(entities[1], new Velocity(99, 100));
-        Assert.True(stream.Submit());
-
-        for (var i = 0; i < entities.Length; i++)
-        {
-            Assert.True(world.TryGet(entities[i], out Position p));
-            Assert.Equal(new Position(i, i + 1), p);
-            Assert.True(world.TryGet(entities[i], out Velocity v));
-            Assert.Equal(i == 1 ? new Velocity(99, 100) : new Velocity(i + 10, i + 20), v);
-        }
+        Assert.Throws<InvalidOperationException>(() => stream.Submit());
     }
 
     [Fact]
@@ -1231,29 +1217,15 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
-    public void CreateMany_then_remove_on_one_entity_falls_back_and_materializes()
+    public void CreateMany_then_remove_on_same_entity_throws()
     {
         var world = new World();
         var stream = new CommandStream(world);
         var entities = new Entity[5];
 
         stream.CreateMany<Position, PositionCreateManyWriter>(entities, new PositionCreateManyWriter());
-        // Remove Position from one entity: batch chain gets a Removed flag,
-        // fast-path precondition fails, per-entity fallback kicks in.
         stream.Remove<Position>(entities[2]);
-        Assert.True(stream.Submit());
-
-        for (var i = 0; i < entities.Length; i++)
-        {
-            Assert.True(world.IsAlive(entities[i]));
-            if (i == 2)
-                Assert.False(world.TryGet<Position>(entities[i], out _));
-            else
-            {
-                Assert.True(world.TryGet(entities[i], out Position p));
-                Assert.Equal(new Position(i, i + 1), p);
-            }
-        }
+        Assert.Throws<InvalidOperationException>(() => stream.Submit());
     }
 
     [Fact]

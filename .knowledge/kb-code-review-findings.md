@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 健壮性审阅发现汇总——已确认的设计债、已验证的安全猜想、已排除的非 bug 猜想
-updated: 2026-07-11
+updated: 2026-07-12
 ---
 
 > **M2 re-apply (2026-07-09)**: Epoch guard added — `World.ReservedReleaseEpoch` + `CommandStreamCore._submitEpoch` fast-path avoids O(N) pending-slot scan when no release has occurred since last sync. HeroComing.Perf: Movement 1902.1, Attack 1125.6, memory stable. Baseline gate (≥1642/≥997) passes.
@@ -305,14 +305,15 @@ updated: 2026-07-11
 - **回归测试**: `BUG_pending_clone_copies_from_resized_batch_buffer`：构造 `Position` + 24-byte `SignalPayloadField` 的 pending source，把 batch buffer 填到 4072 bytes，第二次复制 24-byte payload 时强制扩容。
 - **验证**: 回归测试先 RED（`ArgumentOutOfRangeException`），修复后 GREEN；`dotnet test -c Release`：MiniArch.Tests 951/951 + HeroPipeline.Tests 5/5 PASS；`HeroComing.Perf --check-baseline` Movement 1907.8 / Attack 1193.6，内存 OK；boundary soak 20,000 frames PASS。
 
-### B18: `CreateMany` bulk fast path 对重复组件类型违反 last-wins ✅ 已修复
+### B18: `CreateMany` bulk fast path 对重复组件类型违反 last-wins ✅ 已修复（已转为 fast-fail）
 
 - **位置**: `CommandStreamCore.cs` 的 `TryMaterializeCreateManyGroup`
 - **症状**: `CreateMany<Position, Position, TWriter>` 中 writer 先输出旧 `Position`、再输出新 `Position` 时，Submit fast path 最终保留旧值；per-entity fallback / Snapshot+Replay 语义则保留最后写入的新值。
 - **根因**: fast path 用 `MaskBuilder.BitsSet == componentCount` 证明类型唯一且 mask canonical，但 `MaskBuilder.SetBit` 对重复 id 仍递增 `BitsSet`。重复组件类型没有 fallback，bulk loop 按链表顺序写同一列两次，最后把旧值覆盖回去。
 - **修复**: fast path 改为用最终 mask 的 popcount（`World.IsMaskCanonical(mask, componentCount)`）作为前置条件；重复组件类型或 id >= 512 都 fallback 到 `MaterializePending`，复用现有 dedup last-wins 语义。
-- **回归测试**: `BUG_CreateMany_duplicate_component_types_use_last_write`。
-- **验证**: 回归测试先 RED（期望 `Position(i, i+1000)`，实际 `Position(i, -1)`），修复后 GREEN；`dotnet test -c Release --filter "CreateMany_"` 12/12 PASS。
+- **2026-07-12 升级为 fast-fail**：`TryMaterializeCreateManyGroup` 对任何 precondition 不满足（混合 Set/Add/Remove、重复组件类型）改为直接抛 `InvalidOperationException`，不再静默降级。这是有意识的设计变更——`CreateMany` 应一次性完成初始化，混用操作是 API 误用。
+- **回归测试**: `CreateMany_duplicate_component_types_throws`（已重命名）。
+- **验证**: `dotnet test -c Release --filter "CreateMany_"` 14/14 PASS（3 个旧 fallback 测试改为 `Assert.Throws<InvalidOperationException>`）。
 
 ### 修复原则
 

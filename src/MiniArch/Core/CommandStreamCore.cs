@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -1147,10 +1148,11 @@ public abstract partial class CommandStreamCore
     /// <see cref="Submit"/> (via <see cref="MaterializeAllPending"/>) and
     /// <see cref="SubmitAndSnapshotAsync"/> (via <see cref="SubmitFromFrozen"/>).
     /// Walks batches in order; when a <see cref="CreateManyGroup"/> starts at the
-    /// current batch index, it first tries the bulk fast path
-    /// (<see cref="TryMaterializeCreateManyGroup"/>). On failure it falls back to
-    /// the existing per-entity <see cref="MaterializePending"/>. Non-group batches
-    /// always use the per-entity path.
+    /// current batch index, it runs the bulk fast path
+    /// (<see cref="MaterializeCreateManyGroup"/>). Any entity in the group
+    /// that was modified with Set/Add/Remove after CreateMany is a programming
+    /// error —the method throws <see cref="InvalidOperationException"/>.
+    /// Non-group batches use the per-entity <see cref="MaterializePending"/>.
     /// </summary>
     private void MaterializePendingBatches(FrozenState frozen)
     {
@@ -1171,15 +1173,7 @@ public abstract partial class CommandStreamCore
 
             if (groupStart == batchIdx)
             {
-                if (!TryMaterializeCreateManyGroup(frozen, view, groupIdx))
-                {
-                    for (var j = 0; j < groupCount; j++)
-                    {
-                        var bIdx = batchIdx + j;
-                        if (!view.Canceled[bIdx])
-                            MaterializePending(view, view.Entities[bIdx], bIdx);
-                    }
-                }
+                MaterializeCreateManyGroup(frozen, view, groupIdx);
                 batchIdx += groupCount;
                 groupIdx++;
                 continue;
@@ -1191,16 +1185,34 @@ public abstract partial class CommandStreamCore
         }
     }
 
+    [DoesNotReturn]
+    private static void ThrowCreateManyMismatch(int groupIdx, int batchIdx)
+    {
+        throw new InvalidOperationException(
+            $"CreateMany group #{groupIdx} at batch {batchIdx} was modified " +
+            $"with Set/Add/Remove on one or more entities. " +
+            $"CreateMany requires all entities in the group to have the exact " +
+            $"same component set. Use per-entity Create() + Add() for heterogeneous initialization.");
+    }
+
+    [DoesNotReturn]
+    private static void ThrowCreateManyMaskFailure(int groupIdx)
+    {
+        throw new InvalidOperationException(
+            $"CreateMany group #{groupIdx} has invalid component type set: " +
+            $"duplicate component types or a component type id >= 512. " +
+            $"The writer struct must not emit duplicate component types.");
+    }
+
     /// <summary>
-    /// Attempts the CreateMany bulk materialization fast path for one group.
+    /// CreateMany bulk materialization fast path for one group.
     /// Preallocates all live rows via <see cref="Archetype.AllocateRows"/>,
     /// resolves the archetype once, then writes each entity's components in a
-    /// tight loop. Returns <c>true</c> if the group was fully handled (either
-    /// bulk-materialized or all-cancelled no-op). Returns <c>false</c> if any
-    /// precondition fails —the caller falls back to per-entity
-    /// <see cref="MaterializePending"/>.
+    /// tight loop. Throws <see cref="InvalidOperationException"/> if any entity
+    /// in the group was modified with Set/Add/Remove after the CreateMany call,
+    /// or if the writer contains duplicate component types.
     /// </summary>
-    private unsafe bool TryMaterializeCreateManyGroup(
+    private unsafe void MaterializeCreateManyGroup(
         FrozenState frozen, in PendingBatchView view, int groupIdx)
     {
         ref readonly var group = ref frozen.CreateManyGroups[groupIdx];
@@ -1212,29 +1224,31 @@ public abstract partial class CommandStreamCore
         FillGroupTypes(in group, groupTypes);
 
         // Verify preconditions on every non-cancelled batch in the group and
-        // count live entities. Any mismatch bails to the per-entity fallback.
+        // count live entities. Any mismatch is a programming error —fast-fail.
         var liveCount = 0;
         for (var i = 0; i < count; i++)
         {
             var batchIdx = startBatch + i;
             if (view.Canceled[batchIdx]) continue;
-            if (view.CompCounts[batchIdx] != componentCount) return false;
-            if (!ChainMatchesGroup(in view, batchIdx, groupTypes)) return false;
+            if (view.CompCounts[batchIdx] != componentCount)
+                ThrowCreateManyMismatch(groupIdx, batchIdx);
+            if (!ChainMatchesGroup(in view, batchIdx, groupTypes))
+                ThrowCreateManyMismatch(groupIdx, batchIdx);
             liveCount++;
         }
 
         if (liveCount == 0)
-            return true; // all cancelled —nothing to materialize
+            return; // all cancelled —nothing to materialize
 
         // Build mask once. If any id >= 512 or any component type is duplicated,
-        // the mask popcount will not equal componentCount. In both cases the
-        // fast path cannot preserve MaterializePending's deduplicating last-wins
-        // semantics, so bail to the per-entity fallback.
+        // the mask popcount will not equal componentCount. These are writer bugs
+        // (e.g. duplicate component types) —fast-fail.
         var builder = new MaskBuilder();
         for (var i = 0; i < componentCount; i++)
             builder.SetBit(groupTypes[i].Value);
         var mask = builder.ToMask();
-        if (!World.IsMaskCanonical(mask, componentCount)) return false;
+        if (!World.IsMaskCanonical(mask, componentCount))
+            ThrowCreateManyMaskFailure(groupIdx);
 
         var archetype = ResolveArchetype(mask, groupTypes);
 
@@ -1275,7 +1289,6 @@ public abstract partial class CommandStreamCore
             }
         }
 
-        return true;
     }
 
     /// <summary>
@@ -1735,7 +1748,7 @@ public abstract partial class CommandStreamCore
     /// <summary>
     /// Appends one <see cref="CreateManyGroup"/> describing the contiguous batch
     /// range just produced by a CreateMany call. The fast-path submit consumer
-    /// (<see cref="TryMaterializeCreateManyGroup"/>) uses this to bulk-allocate
+    /// (<see cref="MaterializeCreateManyGroup"/>) uses this to bulk-allocate
     /// rows and write components in a tight loop. Must only be called after the
     /// per-entity loop fully completed —if the writer throws midway, no group is
     /// appended and the partial pending entities fall back to per-entity
@@ -3117,7 +3130,7 @@ public abstract partial class CommandStreamCore
     /// <summary>
     /// Frozen record of one CreateMany call's contiguous batch range. Captured
     /// after the per-entity pending-batch writes succeed, and consumed only by
-    /// the submit fast path (<see cref="TryMaterializeCreateManyGroup"/>).
+    /// the submit fast path (<see cref="MaterializeCreateManyGroup"/>).
     /// Holds up to 8 component types inline so no per-group array is allocated.
     /// </summary>
     private protected struct CreateManyGroup
