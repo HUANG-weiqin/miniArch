@@ -8,8 +8,8 @@ namespace MiniArch;
 public sealed partial class World
 {
     /// <summary>
-    /// Ensures the entity has component <typeparamref name="T"/>. If the component
-    /// already exists, its value is overwritten in place.
+    /// Adds component <typeparamref name="T"/> to the entity.
+    /// Throws if the entity already has a component of this type.
     /// </summary>
     public void Add<T>(Entity entity, T component) where T : unmanaged
     {
