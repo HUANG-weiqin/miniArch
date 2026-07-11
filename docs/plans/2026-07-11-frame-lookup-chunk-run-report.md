@@ -45,10 +45,10 @@ Full run 摘要：
 
 | Scenario | CopyRowRefs rowComp | DirectForEach rowComp | RunForEach rowComp | Run / Copy | Run / Direct | Runs |
 |---|---:|---:|---:|---:|---:|---:|
-| small-q | 0.01ms | 0.01ms | 0.02ms | 2.25x | 1.31x | 94 |
-| realistic | 0.51ms | 15.31ms | 17.31ms | 34.15x | 1.13x | 122,065 |
-| hot | 60.42ms | 88.89ms | 62.95ms | 1.04x | 0.71x | 5,556,465 |
-| full-1m | 68.45ms | 136.48ms | 133.11ms | 1.94x | 0.98x | 12,204,355 |
+| small-q | 0.01ms | 0.01ms | 0.01ms | 2.27x | 1.55x | 88 |
+| realistic | 0.87ms | 11.28ms | 16.85ms | 19.29x | 1.49x | 121,984 |
+| hot | 88.79ms | 116.50ms | 95.53ms | 1.08x | 0.82x | 5,614,965 |
+| full-1m | 67.91ms | 118.82ms | 125.91ms | 1.85x | 1.06x | 12,203,843 |
 
 ## Why It Failed
 
@@ -60,7 +60,7 @@ callback count 高      =>  consumer 调用成本仍在
 额外 run 合并判断      =>  比 DirectForEach 更慢或接近
 ```
 
-在 `realistic` 中，50K rows / 4096 keys / random uniform 让同 key rows 几乎不连续。10K queries 总共产生 122,065 runs，run callback 没有真正 batch 起来。
+在 `realistic` 中，50K rows / 4096 keys / random uniform 让同 key rows 几乎不连续。10K queries 总共产生 121,984 runs，run callback 没有真正 batch 起来。
 
 在 `hot` 中，大量 key=0 的 rows 更容易相邻，所以 RunForEach 从 DirectForEach 88.89ms 改善到 62.95ms，接近 CopyRowRefs 60.42ms。但 hot 本来就是禁用区间，而且 entity-only baseline 在 hot 更强。
 

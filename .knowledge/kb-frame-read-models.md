@@ -39,7 +39,7 @@ updated: 2026-07-11
 - **不进 Core。** ValueLab 没有修改 `World/Archetype/QueryCache/CommandStream`；后续产品化仍应保持 0 core intrusion。
 - **不做完整关系代数 API。** 下一步只允许 1-3 组件 Rows、一个 Where、一个 KeyBy、一个 FrameLookup terminal。
 - **Direct ForEach 不作为 v1 形态。** full run 中 DirectForEach row component consume 慢于 `CopyRowRefs + manual consume`：realistic 约 13.41×，full-1m 约 1.98×。
-- **Chunk-run / batched consumer 不作为通用 v1 形态。** on-the-fly run 合并正确但 No-Go：realistic 中同 key rows 不连续，RunForEach 比 CopyRowRefs 慢约 34.15×；full-1m 慢约 1.94×。它只在 hot bucket 改善 DirectForEach，而 hot bucket 不是目标区间。
+- **Chunk-run / batched consumer 不作为通用 v1 形态。** on-the-fly run 合并正确但 No-Go：realistic 中同 key rows 不连续，RunForEach 比 CopyRowRefs 慢约 19.29×；full-1m 慢约 1.85×。它只在 hot bucket 改善 DirectForEach，而 hot bucket 不是目标区间。
 - **Linked rows 不产品化。** Build 快但读取跳跃，未找到胜出区间。
 - **hot bucket 不是已解决场景。** 单 key 大桶重复查询时 row-ref lookup 被重复大桶遍历拖垮；需要禁用说明或单独 entity-only specialization。
 
