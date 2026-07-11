@@ -24,7 +24,7 @@ updated: 2026-07-10
 | MiniArch.Core Snapshot | `kb-snapshot-persistence.md` |
 | MiniArch.Core Hierarchy | `kb-hierarchy-runtime.md` |
 | MiniArch.Diagnostics（诊断工具） | `kb-ecs-diagnostics.md`（WorldDiff、WorldValidator、EntityDump、WorldDigest） |
-| MiniArch（用户 API 分层） | `kb-component-bucket-index-mvp-report.md`（ComponentBucketQuery MVP 最终报告——确定性 per-key scan、调用者提供 span 模式、零 core 入侵、正确性模型与性能矩阵）、`kb-frame-read-models.md`（Frame Read Models ValueLab：Snapshot 内 Build 一次、多次按 key 只读查询；compact CSR 条件 Go，hot bucket/entity-only 禁用区间）、`kb-managed-entity-sidecar-evaluation.md`（Entity -> managed object sidecar 价值验证 No-Go：打败 dictionary 但未优于 competent dense user，serialization 不进 v1） |
+| MiniArch（用户 API 分层） | `kb-component-bucket-index-mvp-report.md`（ComponentBucketQuery MVP 最终报告——确定性 per-key scan、调用者提供 span 模式、零 core 入侵、正确性模型与性能矩阵）、`kb-frame-read-models.md`（Frame Read Models ValueLab / FrameLookup API Gate：compact CSR 本体成立；逐 row DirectForEach 发布形态 Conditional Hold，hot bucket/entity-only 禁用区间）、`kb-managed-entity-sidecar-evaluation.md`（Entity -> managed object sidecar 价值验证 No-Go：打败 dictionary 但未优于 competent dense user，serialization 不进 v1） |
 | MiniArch.Tests（测试组织） | `kb-test-workflow.md` |
 | MiniArch.Benchmarks（对比数据） | `kb-ecs-comparison.md` |
 | HeroPipeline.Tests | 合并到 `kb-hero-pipeline-regression.md` "PipelineBenchmarkTests" 段 |

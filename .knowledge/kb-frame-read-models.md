@@ -1,7 +1,7 @@
 ---
 title: Frame Read Models ValueLab
 module: MiniArch（用户 API 分层）
-description: Snapshot 内 Build 一次、查询多次的帧内派生索引 ValueLab 结论、适用区间、禁用区间与后续产品化边界
+description: Snapshot 内 Build 一次、查询多次的帧内派生索引 ValueLab 与 public API gate 结论、适用区间、禁用区间与后续产品化边界
 updated: 2026-07-11
 ---
 # Frame Read Models ValueLab
@@ -10,11 +10,12 @@ updated: 2026-07-11
 
 - 这个模块负责：
   - 记录 Frame Read Models ValueLab 的实测结论。
+  - 记录 FrameLookup public API gate 的进入/暂停结论。
   - 判断 Snapshot 内派生索引是否值得进入下一阶段产品化。
   - 固化适用区间、禁用区间、布局裁决。
 - 这个模块不负责：
   - 记录未实测的设计猜想。
-  - 定义生产 public API。
+  - 定义最终生产 public API。
   - 替代 `World.Query` 或自动 freshness tracking。
 
 ## 架构
@@ -22,6 +23,7 @@ updated: 2026-07-11
 - 核心组成：
   - `tools/perf/FrameReadModels.ValueLab/`：独立实验项目，不进入生产 API。
   - `CompactRowLookup<TKey>`：两遍 CSR，保存 `(chunkIndex,rowIndex)`。
+  - `CompactRowLookup<TKey>.ForEach(...)`：public API consume 形态探针；正确性通过但性能未过线。
   - `LinkedRowLookup<TKey>`：单遍 linked rows，对照布局。
   - `EntityArrayLookup<TKey>`：entity-only baseline。
   - `DenseIntCompactLookup`：有界 int key 特化候选。
@@ -32,8 +34,10 @@ updated: 2026-07-11
 ## 决策
 
 - **Conditional Go。** uniform / 高基数 / 组件读取场景值得继续产品化 compact CSR row-ref lookup。
+- **Public API Gate: Conditional Hold（2026-07-11）。** compact CSR 本体继续成立，但逐 row `ForEach(key, consumer)` 发布形态性能不过线，暂不进入 `src/MiniArch/`。
 - **不进 Core。** ValueLab 没有修改 `World/Archetype/QueryCache/CommandStream`；后续产品化仍应保持 0 core intrusion。
 - **不做完整关系代数 API。** 下一步只允许 1-3 组件 Rows、一个 Where、一个 KeyBy、一个 FrameLookup terminal。
+- **Direct ForEach 不作为 v1 形态。** full run 中 DirectForEach row component consume 慢于 `CopyRowRefs + manual consume`：realistic 约 13.41×，full-1m 约 1.98×。
 - **Linked rows 不产品化。** Build 快但读取跳跃，未找到胜出区间。
 - **hot bucket 不是已解决场景。** 单 key 大桶重复查询时 row-ref lookup 被重复大桶遍历拖垮；需要禁用说明或单独 entity-only specialization。
 
@@ -56,10 +60,13 @@ updated: 2026-07-11
   - `tools/perf/FrameReadModels.ValueLab/FrameReadModelCorrectness.cs`：正确性矩阵。
 - 产品化前先看：
   - `docs/plans/2026-07-11-frame-read-models.md`：原始边界、Go 门槛、判死线。
+  - `docs/plans/2026-07-11-frame-lookup-api-design.md`：M1 public API 契约草案（已被 M4 gate 部分否决）。
+  - `docs/plans/2026-07-11-frame-lookup-api-gate-report.md`：M4 Conditional Hold 决策与 DirectForEach 数据。
 
 ## 坑点
 
 - 不要把 ValueLab 原型直接复制进 public API；产品化必须重新 TDD。
+- 不要把逐 row DirectForEach 当成已验证发布形态；它正确但太慢，必须先重设计 consume 形态。
 - `TryBuildNoGrow` 失败必须保持目标为空，不能发布部分结果。
 - AutoGrow 后旧 view/span/enumerator 全部失效。
 - `ComponentBucketQuery` 是 per-key scan 基线；在 Q 达到上万时会回到 `Q × N`。
