@@ -16,6 +16,10 @@ public sealed class CommandStreamTests
     private readonly record struct Health(int Value);
     private readonly record struct SelfRef(Entity Target);
     private readonly record struct SignalPayloadField(long A, long B, long C);
+    private readonly record struct C4(int Value);
+    private readonly record struct C5(int Value);
+    private readonly record struct C6(int Value);
+    private readonly record struct C7(int Value);
 
     private readonly struct PositionCreateManyWriter : ICreateManyWriter<Position>
     {
@@ -30,6 +34,21 @@ public sealed class CommandStreamTests
         public void Write(int index, Entity entity, out SelfRef component1)
         {
             component1 = new SelfRef(entity);
+        }
+    }
+
+    private readonly struct EightComponentCreateManyWriter : ICreateManyWriter<Position, Velocity, Health, SignalPayloadField, C4, C5, C6, C7>
+    {
+        public void Write(int index, Entity entity, out Position c1, out Velocity c2, out Health c3, out SignalPayloadField c4, out C4 c5, out C5 c6, out C6 c7, out C7 c8)
+        {
+            c1 = new Position(index, index + 1);
+            c2 = new Velocity(index + 2, index + 3);
+            c3 = new Health(index + 4);
+            c4 = new SignalPayloadField(index, index + 1, index + 2);
+            c5 = new C4(index + 5);
+            c6 = new C5(index + 6);
+            c7 = new C6(index + 7);
+            c8 = new C7(index + 8);
         }
     }
 
@@ -1059,6 +1078,81 @@ public sealed class CommandStreamTests
             Assert.True(replica.IsAlive(entities[i]));
             Assert.True(replica.TryGet(entities[i], out Position p));
             Assert.Equal(new Position(i, i + 1), p);
+        }
+    }
+
+    [Fact]
+    public void CreateMany_deferred_submit_resolves_self_references()
+    {
+        var world = new World();
+        var stream = new CommandStream(world) { DeferredEntities = true };
+        var placeholders = new Entity[4];
+
+        stream.CreateMany<SelfRef, SelfRefCreateManyWriter>(placeholders, new SelfRefCreateManyWriter());
+
+        for (var i = 0; i < placeholders.Length; i++)
+            Assert.True(placeholders[i].IsPlaceholder);
+
+        Assert.True(stream.Submit());
+
+        var count = 0;
+        foreach (var chunk in world.Query(new QueryDescription().With<SelfRef>()).GetChunks())
+        {
+            var entities = chunk.GetEntities();
+            var refs = chunk.GetSpan<SelfRef>();
+            for (var i = 0; i < chunk.Count; i++)
+            {
+                Assert.Equal(entities[i], refs[i].Target);
+                count++;
+            }
+        }
+        Assert.Equal(4, count);
+    }
+
+    [Fact]
+    public void CreateMany_deferred_snapshot_replay_resolves_self_references()
+    {
+        var source = new World();
+        var stream = new CommandStream(source) { DeferredEntities = true };
+        var placeholders = new Entity[4];
+
+        stream.CreateMany<SelfRef, SelfRefCreateManyWriter>(placeholders, new SelfRefCreateManyWriter());
+        var delta = stream.Snapshot();
+        stream.Clear();
+
+        var replica = new World();
+        new CommandStream(replica).Replay(delta);
+
+        var count = 0;
+        foreach (var chunk in replica.Query(new QueryDescription().With<SelfRef>()).GetChunks())
+        {
+            var entities = chunk.GetEntities();
+            var refs = chunk.GetSpan<SelfRef>();
+            for (var i = 0; i < chunk.Count; i++)
+            {
+                Assert.Equal(entities[i], refs[i].Target);
+                count++;
+            }
+        }
+        Assert.Equal(4, count);
+    }
+
+    [Fact]
+    public void CreateMany_supports_eight_components()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+        var entities = new Entity[3];
+
+        stream.CreateMany<Position, Velocity, Health, SignalPayloadField, C4, C5, C6, C7, EightComponentCreateManyWriter>(entities, new EightComponentCreateManyWriter());
+        Assert.True(stream.Submit());
+
+        for (var i = 0; i < entities.Length; i++)
+        {
+            Assert.True(world.TryGet(entities[i], out Position p));
+            Assert.Equal(new Position(i, i + 1), p);
+            Assert.True(world.TryGet(entities[i], out C7 c7));
+            Assert.Equal(new C7(i + 8), c7);
         }
     }
 
