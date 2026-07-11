@@ -36,7 +36,7 @@ namespace MiniArch.Core;
 /// only supported within one stream.
 /// </para>
 /// </remarks>
-public sealed class ParallelCommandStream : CommandStreamCore
+public sealed partial class ParallelCommandStream : CommandStreamCore
 {
     /// <summary>
     /// Creates a new parallel command stream bound to <paramref name="world"/>.

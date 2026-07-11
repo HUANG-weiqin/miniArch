@@ -15,7 +15,7 @@ namespace MiniArch.Core;
 /// single-threaded hot path (record+submit per frame) this is the difference
 /// between a direct call and a guarded dispatch.
 /// </remarks>
-public sealed class CommandStream : CommandStreamCore
+public sealed partial class CommandStream : CommandStreamCore
 {
     /// <summary>
     /// Creates a new single-threaded command stream bound to <paramref name="world"/>.

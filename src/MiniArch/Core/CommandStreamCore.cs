@@ -22,7 +22,7 @@ namespace MiniArch.Core;
 // Visibility is public so that public sealed subclasses (CommandStream,
 // ParallelCommandStream) can derive from it. The class is abstract, so external
 // callers cannot instantiate it directly; all internal state stays inaccessible.
-public abstract class CommandStreamCore
+public abstract partial class CommandStreamCore
 {
     protected readonly World _world;
     // Pooled mutable buffer bundle. _frozen holds the current recording state;

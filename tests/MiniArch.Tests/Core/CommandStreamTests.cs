@@ -14,7 +14,24 @@ public sealed class CommandStreamTests
     private readonly record struct Position(int X, int Y);
     private readonly record struct Velocity(int X, int Y);
     private readonly record struct Health(int Value);
+    private readonly record struct SelfRef(Entity Target);
     private readonly record struct SignalPayloadField(long A, long B, long C);
+
+    private readonly struct PositionCreateManyWriter : ICreateManyWriter<Position>
+    {
+        public void Write(int index, Entity entity, out Position component1)
+        {
+            component1 = new Position(index, index + 1);
+        }
+    }
+
+    private readonly struct SelfRefCreateManyWriter : ICreateManyWriter<SelfRef>
+    {
+        public void Write(int index, Entity entity, out SelfRef component1)
+        {
+            component1 = new SelfRef(entity);
+        }
+    }
 
     [Fact]
     public void Submit_applies_created_entity_components_and_preserves_reserved_handle()
@@ -976,6 +993,74 @@ public sealed class CommandStreamTests
     // ══════════════════════════════════════════════════════════—
     // Batch operations
     // ══════════════════════════════════════════════════════════—
+
+    [Fact]
+    public void CreateMany_submit_creates_entities_with_components()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+        var entities = new Entity[4];
+
+        stream.CreateMany<Position, PositionCreateManyWriter>(entities, new PositionCreateManyWriter());
+
+        for (var i = 0; i < entities.Length; i++)
+            Assert.False(world.IsAlive(entities[i]));
+
+        Assert.True(stream.Submit());
+
+        for (var i = 0; i < entities.Length; i++)
+        {
+            Assert.True(world.IsAlive(entities[i]));
+            Assert.True(world.TryGet(entities[i], out Position p));
+            Assert.Equal(new Position(i, i + 1), p);
+        }
+    }
+
+    [Fact]
+    public void CreateMany_snapshot_replays_created_entities()
+    {
+        var source = new World();
+        var stream = new CommandStream(source);
+        var entities = new Entity[4];
+
+        stream.CreateMany<Position, PositionCreateManyWriter>(entities, new PositionCreateManyWriter());
+        var delta = stream.Snapshot();
+
+        for (var i = 0; i < entities.Length; i++)
+            Assert.False(source.IsAlive(entities[i]));
+
+        var replica = new World();
+        new CommandStream(replica).Replay(delta);
+
+        for (var i = 0; i < entities.Length; i++)
+        {
+            Assert.True(replica.IsAlive(entities[i]));
+            Assert.True(replica.TryGet(entities[i], out Position p));
+            Assert.Equal(new Position(i, i + 1), p);
+        }
+    }
+
+    [Fact]
+    public async Task CreateMany_submit_and_snapshot_async_includes_created_entities()
+    {
+        var source = new World();
+        var stream = new CommandStream(source);
+        var entities = new Entity[4];
+
+        stream.CreateMany<Position, PositionCreateManyWriter>(entities, new PositionCreateManyWriter());
+        var delta = await stream.SubmitAndSnapshotAsync();
+
+        var replica = new World();
+        new CommandStream(replica).Replay(delta);
+
+        for (var i = 0; i < entities.Length; i++)
+        {
+            Assert.True(source.IsAlive(entities[i]));
+            Assert.True(replica.IsAlive(entities[i]));
+            Assert.True(replica.TryGet(entities[i], out Position p));
+            Assert.Equal(new Position(i, i + 1), p);
+        }
+    }
 
     [Fact]
     public void Batch_create_N_entities_with_varied_components()
