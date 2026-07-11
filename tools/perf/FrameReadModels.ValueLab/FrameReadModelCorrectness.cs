@@ -1055,8 +1055,6 @@ internal static class FrameReadModelCorrectness
                 new Health(i * 3));
         }
 
-        var chunks = world.Query(query).GetChunks();
-
         if (layout == "CompactRow")
         {
             var lookup = CompactRowLookup<int>.Create(32, BulkN + 1);
