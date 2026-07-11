@@ -359,6 +359,37 @@ public sealed partial class World : IDisposable
     }
 
     /// <summary>
+    /// Returns true if <paramref name="entity"/> has no parent.
+    /// </summary>
+    public bool IsRoot(Entity entity)
+    {
+        AssertNotDisposed();
+        return IsAlive(entity) && !TryGetParent(entity, out _);
+    }
+
+    /// <summary>
+    /// Returns the depth of <paramref name="entity"/> in the hierarchy
+    /// (0 = root, 1 = child of root, etc.).
+    /// Returns -1 if the entity is not alive.
+    /// </summary>
+    public int GetDepth(Entity entity)
+    {
+        AssertNotDisposed();
+        return _hierarchy.Depth(this, entity);
+    }
+
+    /// <summary>
+    /// Returns a zero-allocation enumerable over the ancestors of
+    /// <paramref name="child"/>. Use <c>foreach</c> to iterate from
+    /// parent upward to the root.
+    /// </summary>
+    public AncestorEnumerable EnumerateAncestors(Entity child)
+    {
+        AssertNotDisposed();
+        return _hierarchy.EnumerateAncestors(this, child);
+    }
+
+    /// <summary>
     /// Tries to read a component directly from an entity.
     /// </summary>
     public bool TryGet<T>(Entity entity, out T component) where T : unmanaged
