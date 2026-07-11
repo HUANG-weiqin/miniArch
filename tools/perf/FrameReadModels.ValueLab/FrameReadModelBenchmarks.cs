@@ -10,6 +10,7 @@
 //   LinkedRowDsl      — LinkedRowLookup via Rows DSL
 //   CompactRowDsl     — CompactRowLookup via Rows DSL
 //   CompactRowDirectForEach — CompactRowLookup direct key consume (no CopyRowRefs)
+//   CompactRowRunForEach    — CompactRowLookup same-chunk run consume
 //   DenseIntDsl       — DenseIntCompactLookup via Rows DSL
 
 using System.Diagnostics;
@@ -218,6 +219,11 @@ internal static class FrameReadModelBenchmarks
                 world, chunks, queryKeys, entityBuf, sc);
             PrintRow(sc, "CompactRowDirectForEach", crDirect);
             allResults.Add((sc, "CompactRowDirectForEach", crDirect));
+
+            var crRun = MeasureCompactRunForEach(
+                world, chunks, queryKeys, entityBuf, sc);
+            PrintRow(sc, "CompactRowRunForEach", crRun);
+            allResults.Add((sc, "CompactRowRunForEach", crRun));
 
             var di = MeasureLookup<DenseIntCompactLookup>(
                 world, chunks, queryKeys, entityBuf, rowRefBuf, sc,
@@ -664,6 +670,95 @@ internal static class FrameReadModelBenchmarks
             entitySum, note);
     }
 
+    private static BenchResult MeasureCompactRunForEach(
+        World world, ReadOnlySpan<ChunkView> chunks, int[] queryKeys,
+        Entity[] entityBuf, Scenario sc)
+    {
+        var lookup = CompactRowLookup<int>.Create();
+
+        // ── Warm build via Rows DSL (same build shape as CompactRowDsl) ──
+        Rows<Cell, Position, Health>.From(world, QueryDesc)
+            .KeyBy<int, CellKeySelector3>()
+            .Into(ref lookup);
+
+        var warmConsumer = new HealthSumRunConsumer1();
+        foreach (var key in queryKeys)
+        {
+            var warmCount = lookup.CopyEntities(key, entityBuf, chunks);
+            lookup.ForEachRun<Health, HealthSumRunConsumer1>(key, chunks, ref warmConsumer);
+            for (var i = 0; i < warmCount; i++)
+                _ = world.Get<Health>(entityBuf[i]).Value;
+        }
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        // ── Measured build via Rows DSL ──
+        var allocBefore = GC.GetAllocatedBytesForCurrentThread();
+        var gen0Before = GC.CollectionCount(0);
+        var buildStart = Stopwatch.GetTimestamp();
+
+        Rows<Cell, Position, Health>.From(world, QueryDesc)
+            .KeyBy<int, CellKeySelector3>()
+            .Into(ref lookup);
+
+        var buildMs = ElapsedMs(buildStart);
+        var allocAfterBuild = GC.GetAllocatedBytesForCurrentThread();
+        var gen0AfterBuild = GC.CollectionCount(0);
+        var buildResult = lookup.LastResult;
+
+        // ── Entity path: keep old CopyEntities path for comparable entity timing ──
+        var entitySum = 0L;
+        var entityStart = Stopwatch.GetTimestamp();
+        foreach (var key in queryKeys)
+        {
+            var count = lookup.CopyEntities(key, entityBuf, chunks);
+            for (var i = 0; i < count; i++)
+                entitySum += entityBuf[i].Id;
+        }
+        var entityMs = ElapsedMs(entityStart);
+
+        // ── Row component path: same-chunk contiguous run consumer ──
+        var consumer = new HealthSumRunConsumer1();
+        var rowStart = Stopwatch.GetTimestamp();
+        foreach (var key in queryKeys)
+        {
+            lookup.ForEachRun<Health, HealthSumRunConsumer1>(key, chunks, ref consumer);
+        }
+        var rowMs = ElapsedMs(rowStart);
+
+        // ── Entity component path: CopyEntities + world.Get<Health> ──
+        var ecStart = Stopwatch.GetTimestamp();
+        foreach (var key in queryKeys)
+        {
+            var count = lookup.CopyEntities(key, entityBuf, chunks);
+            for (var i = 0; i < count; i++)
+                _ = world.Get<Health>(entityBuf[i]).Value;
+        }
+        var ecMs = ElapsedMs(ecStart);
+
+        var note = $"run-for-each; runs={consumer.RunCount}";
+
+        // Verify run consume matches entity component consume.
+        var ecSumCheck = 0L;
+        foreach (var key in queryKeys)
+        {
+            var count = lookup.CopyEntities(key, entityBuf, chunks);
+            for (var i = 0; i < count; i++)
+                ecSumCheck += world.Get<Health>(entityBuf[i]).Value;
+        }
+        if (consumer.Sum != ecSumCheck)
+            note += "; CHKSUM-MISMATCH";
+
+        return new BenchResult(
+            buildMs, entityMs, rowMs, ecMs,
+            allocAfterBuild - allocBefore, gen0AfterBuild - gen0Before,
+            buildResult.StoredRows, buildResult.DistinctKeys,
+            buildResult.MaxBucketSize, buildResult.Resized,
+            entitySum, note);
+    }
+
     // ────────────────────────────────────────────────────────────
     //  Common consume measurement (for IFrameLookup variants)
     // ────────────────────────────────────────────────────────────
@@ -814,9 +909,11 @@ internal static class FrameReadModelBenchmarks
             var rawCompact = default(BenchResult);
             var compactDsl = default(BenchResult);
             var compactDirect = default(BenchResult);
+            var compactRun = default(BenchResult);
             var hasRawCompact = false;
             var hasCompactDsl = false;
             var hasCompactDirect = false;
+            var hasCompactRun = false;
 
             var bestVariant = "";
             var secondVariant = "";
@@ -843,6 +940,11 @@ internal static class FrameReadModelBenchmarks
                 {
                     compactDirect = item.Result;
                     hasCompactDirect = true;
+                }
+                else if (string.Equals(item.Variant, "CompactRowRunForEach", StringComparison.Ordinal))
+                {
+                    compactRun = item.Result;
+                    hasCompactRun = true;
                 }
 
                 if (string.Equals(item.Variant, "RawRepeatedScan", StringComparison.Ordinal) ||
@@ -902,6 +1004,27 @@ internal static class FrameReadModelBenchmarks
             else
             {
                 Console.WriteLine("    DirectForEach vs CopyRows: N/A");
+            }
+
+            // 2c) Chunk-run ForEach vs CopyRowRefs and direct per-row ForEach.
+            if (hasCompactDsl && hasCompactRun && compactDsl.RowComponentMs > 0)
+            {
+                var runRatio = compactRun.RowComponentMs / compactDsl.RowComponentMs;
+                Console.WriteLine($"    RunForEach vs CopyRows:    {runRatio,6:F2}x  (run={compactRun.RowComponentMs,6:F2}ms vs copyRows={compactDsl.RowComponentMs,6:F2}ms)");
+            }
+            else
+            {
+                Console.WriteLine("    RunForEach vs CopyRows:    N/A");
+            }
+
+            if (hasCompactDirect && hasCompactRun && compactDirect.RowComponentMs > 0)
+            {
+                var runDirectRatio = compactRun.RowComponentMs / compactDirect.RowComponentMs;
+                Console.WriteLine($"    RunForEach vs Direct:      {runDirectRatio,6:F2}x  (run={compactRun.RowComponentMs,6:F2}ms vs direct={compactDirect.RowComponentMs,6:F2}ms)");
+            }
+            else
+            {
+                Console.WriteLine("    RunForEach vs Direct:      N/A");
             }
 
             // 3) Best totalRow among row-capable variants.
