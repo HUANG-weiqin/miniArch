@@ -424,7 +424,11 @@ public sealed class PublicApiSentinelTests
         return string.Join(" ", parts);
     }
 
-    private static readonly string EmbeddedBaseline = @"
+    private static readonly string EmbeddedBaseline = @"struct: MiniArch.AncestorEnumerable
+  Method: GetEnumerator() -> MiniArch.AncestorEnumerator
+struct: MiniArch.AncestorEnumerator
+  Method: MoveNext() -> System.Boolean
+  Property: Current -> MiniArch.Entity [get; ]
 struct: MiniArch.ArchetypeStats
   Property: Capacity -> System.Int32 [get; ]
   Property: ComponentTypes -> System.Collections.Generic.IReadOnlyList<System.Type> [get; ]
@@ -704,6 +708,7 @@ struct: MiniArch.QueryEnumerator
   Property: Current -> MiniArch.Entity [get; ]
 struct: MiniArch.RowRef
   Method: Component(System.ReadOnlySpan<MiniArch.ChunkView> chunks) -> T& where T : struct, System.ValueType
+  Method: Entity(System.ReadOnlySpan<MiniArch.ChunkView> chunks) -> MiniArch.Entity
 enum: MiniArch.TransitionKind
   Field: Entered -> MiniArch.TransitionKind [static, literal] = Entered (0)
   Field: Exited -> MiniArch.TransitionKind [static, literal] = Exited (1)
@@ -773,8 +778,7 @@ struct: MiniArch.WorldStats
   Property: ArchetypeCount -> System.Int32 [get; ]
   Property: EntityCapacity -> System.Int32 [get; ]
   Property: EntityCount -> System.Int32 [get; ]
-  Property: RecycledEntityCount -> System.Int32 [get; ]
-";
+  Property: RecycledEntityCount -> System.Int32 [get; ]";
 
     private static string GetExpectedBaseline()
     {

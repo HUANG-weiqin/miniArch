@@ -31,7 +31,7 @@ internal static class Program
     {
         var w = new World();
         var s = new CommandStream(w);
-        var e = w.Create();
+        var e = w.CreateEmpty();
         s.AddChild(e, s.Create());
         s.Destroy(s.Create());
         s.Snapshot();
@@ -42,7 +42,7 @@ internal static class Program
         var existing = new Entity[n];
         var world = new World();
         for (var i = 0; i < n; i++)
-            existing[i] = world.Create();
+            existing[i] = world.CreateEmpty();
 
         var pending = new Entity[n];
 
