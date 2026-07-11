@@ -14,6 +14,7 @@ public sealed class CommandStreamTests
     private readonly record struct Position(int X, int Y);
     private readonly record struct Velocity(int X, int Y);
     private readonly record struct Health(int Value);
+    private readonly record struct SignalPayloadField(long A, long B, long C);
 
     [Fact]
     public void Submit_applies_created_entity_components_and_preserves_reserved_handle()
@@ -1601,6 +1602,35 @@ public sealed class CommandStreamTests
         Assert.True(source.TryGet(clone, out Position p));
         Assert.Equal(new Position(1, 2), p);
         Assert.False(source.TryGet<Velocity>(clone, out _));
+    }
+
+    [Fact]
+    public void BUG_pending_clone_copies_from_resized_batch_buffer()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+
+        var source = stream.Create();
+        stream.Add(source, new SignalPayloadField(11, 12, 13));
+        stream.Add(source, new Position(1, 2));
+
+        // BatchBuf grows from 4096 bytes. Source payloads consume 32 bytes;
+        // 505 filler Position components bring the buffer to 4072 bytes.
+        // Copying the pending source then writes Position at 4072..4080 and
+        // forces a resize when copying the 24-byte SignalPayloadField.
+        for (var i = 0; i < 505; i++)
+        {
+            var filler = stream.Create();
+            stream.Add(filler, new Position(i, -i));
+        }
+
+        var clone = stream.Clone(source);
+        Assert.True(stream.Submit());
+
+        Assert.True(world.TryGet(clone, out Position position));
+        Assert.Equal(new Position(1, 2), position);
+        Assert.True(world.TryGet(clone, out SignalPayloadField payload));
+        Assert.Equal(new SignalPayloadField(11, 12, 13), payload);
     }
 
     [Fact]

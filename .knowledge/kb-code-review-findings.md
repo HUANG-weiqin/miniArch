@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 健壮性审阅发现汇总——已确认的设计债、已验证的安全猜想、已排除的非 bug 猜想
-updated: 2026-07-10
+updated: 2026-07-11
 ---
 
 > **M2 re-apply (2026-07-09)**: Epoch guard added — `World.ReservedReleaseEpoch` + `CommandStreamCore._submitEpoch` fast-path avoids O(N) pending-slot scan when no release has occurred since last sync. HeroComing.Perf: Movement 1902.1, Attack 1125.6, memory stable. Baseline gate (≥1642/≥997) passes.
@@ -295,6 +295,15 @@ updated: 2026-07-10
 - **修复**: `IChangeTrackerControl` 增加 raw baseline capture；`ApplyRawAdd` 成功后按 component type 对已存在 tracker 写入 Add 初值 baseline。raw Set 与 `Set<T>` 热路径不查询 tracker。
 - **回归测试**: `BUG_Replay_existing_entity_add_then_set_tracks_value_from_add_baseline`（测试文件已随旧 API 删除，不可用）
 - **验证**: 新增回归测试先 RED（Actual 0），修复后 GREEN。
+
+### B17: `CopyComponentsFromBatch` 在 BatchBuf 扩容后继续使用旧数组 ✅ 已修复
+
+- **位置**: `CommandStreamCore.cs` 的 `CopyComponentsFromBatch`
+- **症状**: 克隆 pending source 时，复制 batch 组件过程中如果 `ReserveBatchBufSpace` 触发 `_frozen.BatchBuf` 扩容，方法里循环前捕获的局部 `buf` 仍指向旧数组；随后用新 offset 写旧数组，可能抛 `ArgumentOutOfRangeException`。
+- **根因**: `Array.Resize(ref _frozen.BatchBuf, ...)` 会替换字段引用。旧数组虽仍有源 bytes，但 destination offset 是基于扩容后的 `_batchBufLen` 计算的，不能继续写旧数组。
+- **修复**: `CopyComponentsFromBatch` 在每次 `ReserveBatchBufSpace` 后重新读取 `_frozen.BatchBuf`，确保 source/destination span 都基于当前数组。
+- **回归测试**: `BUG_pending_clone_copies_from_resized_batch_buffer`：构造 `Position` + 24-byte `SignalPayloadField` 的 pending source，把 batch buffer 填到 4072 bytes，第二次复制 24-byte payload 时强制扩容。
+- **验证**: 回归测试先 RED（`ArgumentOutOfRangeException`），修复后 GREEN；`dotnet test -c Release`：MiniArch.Tests 951/951 + HeroPipeline.Tests 5/5 PASS；`HeroComing.Perf --check-baseline` Movement 1907.8 / Attack 1193.6，内存 OK；boundary soak 20,000 frames PASS。
 
 ### 修复原则
 

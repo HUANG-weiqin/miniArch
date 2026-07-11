@@ -29,7 +29,7 @@ updated: 2026-07-11
 | MiniArch.Benchmarks（对比数据） | `kb-ecs-comparison.md` |
 | HeroPipeline.Tests | 合并到 `kb-hero-pipeline-regression.md` "PipelineBenchmarkTests" 段 |
 | HeroComing.Perf（回归门禁） | `kb-hero-pipeline-regression.md` |
-| **浸没测试（必读）** | **`kb-soak-test.md`**（**🚨 这个测试存在！所有 miniArch 改动后应运行** — 长周期随机操作正确性验证器，已发现 6 个 Submit/Replay 不一致 bug（B1-B6），另有 B7-B16 来自代码审阅） |
+| **浸没测试（必读）** | **`kb-soak-test.md`**（**🚨 这个测试存在！所有 miniArch 改动后应运行** — 长周期随机操作正确性验证器，已发现 6 个 Submit/Replay 不一致 bug（B1-B6），另有 B7-B17 来自代码审阅 / 用户报告） |
 | **多 host 同步浸没测试** | **`kb-lockstep-soak.md`**（🚨 N host placeholder lockstep 收敛证明 — 补齐单 host soak 无法覆盖的 DeferredEntities=true 多 host 交错收敛性） |
 | **安全证明报告** | **`kb-safety-proof.md`**（2026-07-06 正式库安全证明——224 seed × 5M 帧全 PASS，15 条代码路径审计零分歧） |
 | **确定性证明（选型必读）** | **`kb-determinism-proof.md`**（2026-07-10 确定性审计报告——9 维度全通过，LayoutKind.Auto 拦截修复，含与其他 ECS 库的确定性对比和引用措辞） |

@@ -414,7 +414,6 @@ public abstract class CommandStreamCore
     {
         var head = _frozen.BatchHeads[srcBatchIdx];
         var comps = _frozen.BatchComps;
-        var buf = _frozen.BatchBuf;
         var rawCount = _frozen.BatchCompCounts[srcBatchIdx];
 
         int[]? pooledIndices = null;
@@ -430,6 +429,7 @@ public abstract class CommandStreamCore
             {
                 ref var comp = ref comps[indices[i]];
                 var offset = ReserveBatchBufSpace(comp.Size);
+                var buf = _frozen.BatchBuf;
                 buf.AsSpan(comp.Offset, comp.Size).CopyTo(new Span<byte>(buf, offset, comp.Size));
                 CommitBatchComponent(cloneBatchIdx, comp.Type, offset, comp.Size);
             }

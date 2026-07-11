@@ -2,11 +2,11 @@
 title: 浸泡测试（Soak Test）— 库安全证明
 module: Soak
 description: 长周期 ECS 正确性验证器——随机操作序列 + Submit/Replay 双路径校验 + 多维度安全证明矩阵
-updated: 2026-07-09
+updated: 2026-07-11
 ---
 # 浸泡测试（Soak Test）— 库安全证明
 
-> `tools/soak/MiniArch.Soak/` — 通过长时间随机操作序列验证 Submit 与 Replay 两条路径的世界状态收敛一致性。已发现并修复 **6 个库级 bug（B1-B6）**，另有 **B7-B16 来自代码审阅**（详见 kb-code-review-findings.md）。当前 **259 seed × 6.4M+ 帧全 PASS**（含 224 diversity sweep + 长时/边界/鲁棒等补充 seed）。
+> `tools/soak/MiniArch.Soak/` — 通过长时间随机操作序列验证 Submit 与 Replay 两条路径的世界状态收敛一致性。已发现并修复 **6 个库级 bug（B1-B6）**，另有 **B7-B17 来自代码审阅 / 用户报告**（详见 kb-code-review-findings.md）。当前 **259 seed × 6.4M+ 帧全 PASS**（含 224 diversity sweep + 长时/边界/鲁棒等补充 seed）。
 
 ## 这个测试是干什么的
 
@@ -74,7 +74,7 @@ Sweep 模式下每个 seed 独立报告 GC/alloc（per-seed baseline），第一
 
 ## 发现的历史性 bug
 
-浸泡测试已发现 **6 个库级 bug（B1-B6）**，全部是 Submit 与 Replay 两条路径的操作顺序/跳过逻辑不一致导致的。另有 **B7-B16 来自代码审阅**（详见 kb-code-review-findings.md）。
+浸泡测试已发现 **6 个库级 bug（B1-B6）**，全部是 Submit 与 Replay 两条路径的操作顺序/跳过逻辑不一致导致的。另有 **B7-B17 来自代码审阅 / 用户报告**（详见 kb-code-review-findings.md）。
 
 | # | bug | 根因 | 修复 | 发现方式 |
 |---|-----|------|------|---------|

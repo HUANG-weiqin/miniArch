@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream/ParallelCommandStream typed-store append-only recorder, compatible with FrameDelta. The per-entity deduplicating CommandBuffer was removed (YAGNI) — CommandStream is now the sole recorder.
-updated: 2026-07-09
+updated: 2026-07-11
 ---
 # Command Stream Runtime
 
@@ -173,6 +173,7 @@ HeroPipeline 回归测试涨幅：
   - **虚拟 hierarchy**：`GetVirtualChildren(parent)` = world children + pending AddChild（`intent.IsAdd && intent.Parent == parent`）- pending RemoveChild（`!intent.IsAdd` 不检查 Parent，因为 `RemoveChildCore` 存 `default(Entity)`）
   - **防环检测**：`CloneChildrenRecursive` 遍历时用 visited 集线性扫描，检测到虚拟 hierarchy 环则抛 `InvalidOperationException`
 - 同批次 Destroy(source) 后 Clone(source) 抛错；Clone(source) 后 Destroy(source) 不影响 clone
+- **pending source Clone 复制 batch buffer 时不能跨 `ReserveBatchBufSpace` 持有旧 `BatchBuf` 引用**（2026-07-11 修复）：`ReserveBatchBufSpace` 可能 `Array.Resize(ref _frozen.BatchBuf, ...)` 替换数组，`CopyComponentsFromBatch` 必须在 reserve 后重新读取 `_frozen.BatchBuf`。回归测试：`BUG_pending_clone_copies_from_resized_batch_buffer`。
 - `CommandStream` 不做 per-entity/per-component 去重；重复命令的净效果由调用方负责。
 - ~~**混合 World.Create（排序）与 CommandStream（未排序）可能产生重复 archetype**~~ **（已修复，保留作历史）**：早期 CommandStream 用 `Signature.CreateNormalized` 按 ADD 顺序存储不排序，与 `World.Create<T>` 的排序构造函数产生不同 Signature key。**当前 CommandStream materialize 两条路径都已排序**：统一通过 `SortAndDeduplicateComponents`（`CommandStreamCore.cs:1892`）排序去重。两者产出的 Signature 与 `World.Create<T>` 完全一致，不再有 archetype 重复。曾经的 fallback `World.TryGetArchetype` 已于 2026-06-29 作为死代码删除。
 - **CommandStream 支持对 pending entity 调用 Remove**（2026-06-10 修复）：同批次内通过 `Create()` 或 `Clone()` 创建的实体处于 pending 状态。对其调用 `Remove<T>()` 现在通过 `BatchedComponent.Removed` 标记正确移除组件。`CommandStreamTests.Remove_on_pending_clone_removes_component` 验证。
