@@ -64,6 +64,9 @@ internal readonly struct RowRef
         RowIndex = rowIndex;
     }
 
+    public ref T Component<T>(ReadOnlySpan<ChunkView> chunks) where T : unmanaged
+        => ref chunks[ChunkIndex].GetSpan<T>()[RowIndex];
+
     public override string ToString() => $"RowRef(c{ChunkIndex}, r{RowIndex})";
 }
 
