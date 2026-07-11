@@ -62,7 +62,7 @@ callback count 高      =>  consumer 调用成本仍在
 
 在 `realistic` 中，50K rows / 4096 keys / random uniform 让同 key rows 几乎不连续。10K queries 总共产生 121,984 runs，run callback 没有真正 batch 起来。
 
-在 `hot` 中，大量 key=0 的 rows 更容易相邻，所以 RunForEach 从 DirectForEach 88.89ms 改善到 62.95ms，接近 CopyRowRefs 60.42ms。但 hot 本来就是禁用区间，而且 entity-only baseline 在 hot 更强。
+在 `hot` 中，大量 key=0 的 rows 更容易相邻，所以 RunForEach 从 DirectForEach 116.50ms 改善到 95.53ms，接近但仍慢于 CopyRowRefs 88.79ms。但 hot 本来就是禁用区间，而且 entity-only baseline 在 hot 更强。
 
 ## API Decision
 
