@@ -64,6 +64,7 @@ internal static class FrameReadModelCorrectness
             ("EntityVsRowConsistency",   TestEntityVsRowConsistency),
             ("DirectForEachConsistency", TestDirectForEachConsistency),
             ("RunForEachConsistency",    TestRunForEachConsistency),
+            ("IndexerConsistency",       TestIndexerConsistency),
             ("AutoGrowMultiple",         TestAutoGrowMultiple),
             ("ClearRebuild",             TestClearRebuild),
             ("RebuildPublishesNewResult", TestRebuildPublishesNewResult),
@@ -1031,6 +1032,77 @@ internal static class FrameReadModelCorrectness
             for (var i = 0; i < healths.Length; i++)
                 Sum += healths[i].Value;
         }
+    }
+
+    /// <summary>
+    /// Public-shape probe: CompactRow/DenseInt indexer must return the same
+    /// RowRef values as CopyRowRefs.
+    /// </summary>
+    private static bool TestIndexerConsistency(string layout)
+    {
+        if (layout != "CompactRow" && layout != "DenseInt")
+            return true;
+
+        using var world = new World();
+        var query = new QueryDescription().With<Cell>().With<Position>().With<Health>();
+        _ = world.Query(query).GetChunks();
+
+        for (var i = 0; i < BulkN; i++)
+        {
+            world.Create(
+                new Cell(i % 17),
+                new Position(i, i * 2),
+                new Health(i * 3));
+        }
+
+        var chunks = world.Query(query).GetChunks();
+
+        if (layout == "CompactRow")
+        {
+            var lookup = CompactRowLookup<int>.Create(32, BulkN + 1);
+            Rows<Cell, Position, Health>.From(world, query)
+                .KeyBy<int, CellKeySelector3>()
+                .Into(ref lookup);
+
+            var refs = new RowRef[BulkN];
+            for (var key = 0; key < 17; key++)
+            {
+                var copyCount = lookup.CopyRowRefs(key, refs);
+                var span = lookup[key];
+
+                if (span.Length != copyCount) return false;
+                for (var i = 0; i < span.Length; i++)
+                {
+                    if (span[i].ChunkIndex != refs[i].ChunkIndex ||
+                        span[i].RowIndex != refs[i].RowIndex)
+                        return false;
+                }
+            }
+        }
+        else // DenseInt
+        {
+            var lookup = DenseIntCompactLookup.Create(64, BulkN + 1);
+            Rows<Cell, Position, Health>.From(world, query)
+                .KeyBy<int, CellKeySelector3>()
+                .Into(ref lookup);
+
+            var refs = new RowRef[BulkN];
+            for (var key = 0; key < 17; key++)
+            {
+                var copyCount = lookup.CopyRowRefs(key, refs);
+                var span = lookup[key];
+
+                if (span.Length != copyCount) return false;
+                for (var i = 0; i < span.Length; i++)
+                {
+                    if (span[i].ChunkIndex != refs[i].ChunkIndex ||
+                        span[i].RowIndex != refs[i].RowIndex)
+                        return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     /// <summary>10. AutoGrow: start small, let it resize multiple times.

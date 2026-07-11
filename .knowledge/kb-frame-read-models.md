@@ -71,7 +71,7 @@ updated: 2026-07-11
 - 不要把 ValueLab 原型直接复制进 public API；产品化必须重新 TDD。
 - 不要把逐 row DirectForEach 当成已验证发布形态；它正确但太慢，必须先重设计 consume 形态。
 - 不要把 chunk-run 当成自然解：uniform/high-cardinality 下同 key rows 分散，run 数接近 row 数，callback 仍近似 per-row。
-- `TryBuildNoGrow` 失败必须保持目标为空，不能发布部分结果。
+- `TryBuild` 失败必须保持目标为空，不能发布部分结果。
 - AutoGrow 后旧 view/span/enumerator 全部失效。
 - `ComponentBucketQuery` 是 per-key scan 基线；在 Q 达到上万时会回到 `Q × N`。
 - Dictionary baseline 会分配大量 `List<Entity>`，不能作为唯一胜利证据。
