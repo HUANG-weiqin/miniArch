@@ -5,6 +5,7 @@
 // Run:
 //   dotnet run -c Release --project tools/perf/FrameReadModels.ValueLab
 //   dotnet run -c Release --project tools/perf/FrameReadModels.ValueLab -- --correctness-only
+//   dotnet run -c Release --project tools/perf/FrameReadModels.ValueLab -- --correctness-only --n 1000000
 //   dotnet run -c Release --project tools/perf/FrameReadModels.ValueLab -- --quick
 //   dotnet run -c Release --project tools/perf/FrameReadModels.ValueLab -- --full
 
@@ -20,12 +21,15 @@ return;
 const string CorrectnessOnlyArg = "--correctness-only";
 const string QuickArg = "--quick";
 const string FullArg = "--full";
+const string NArg = "--n";
 const string HelpArg = "--help";
 
 var correctnessOnly = false;
 var quick = false;
 var full = false;
 var help = false;
+var nValue = 1000; // default test size
+var hasN = false;
 
 for (var i = 0; i < args.Length; i++)
 {
@@ -45,6 +49,26 @@ for (var i = 0; i < args.Length; i++)
     if (string.Equals(arg, FullArg, StringComparison.OrdinalIgnoreCase))
     {
         full = true;
+        continue;
+    }
+
+    if (string.Equals(arg, NArg, StringComparison.OrdinalIgnoreCase))
+    {
+        if (i + 1 >= args.Length)
+        {
+            Console.Error.WriteLine("ERROR: --n requires an integer argument.");
+            PrintUsage();
+            Environment.ExitCode = 2;
+            return;
+        }
+        if (!int.TryParse(args[i + 1], out nValue) || nValue <= 0)
+        {
+            Console.Error.WriteLine($"ERROR: invalid --n value: {args[i + 1]}");
+            Environment.ExitCode = 2;
+            return;
+        }
+        i++; // skip the value
+        hasN = true;
         continue;
     }
 
@@ -72,35 +96,43 @@ Console.WriteLine();
 
 if (correctnessOnly)
 {
+    if (hasN)
+    {
+        Console.WriteLine($"Using --n {nValue} for correctness tests");
+        FrameReadModelCorrectness.SetSize(nValue);
+    }
     RunCorrectnessOnly();
     return;
 }
 
 if (quick)
 {
-    Console.WriteLine("Mode: --quick (placeholder)");
+    Console.WriteLine("Mode: --quick (not yet implemented — runs correctness only)");
     Console.WriteLine();
-    FrameReadModelBenchmarks.RunQuick();
+    FrameReadModelCorrectness.SetSize(1000);
+    RunCorrectnessOnly();
     return;
 }
 
 if (full)
 {
-    Console.WriteLine("Mode: --full (placeholder)");
+    Console.WriteLine("Mode: --full (not yet implemented — runs correctness with 1M smoke)");
     Console.WriteLine();
-    FrameReadModelBenchmarks.RunFull();
+    FrameReadModelCorrectness.SetSize(1000000);
+    RunCorrectnessOnly();
     return;
 }
 
-// Default: run quick placeholder
-Console.WriteLine("Mode: default (runs --quick placeholder)");
+// Default: run correctness with quick size
+Console.WriteLine("Mode: default (runs correctness, quick size)");
 Console.WriteLine();
-FrameReadModelBenchmarks.RunQuick();
+FrameReadModelCorrectness.SetSize(1000);
+RunCorrectnessOnly();
 
 // ────────────────────────────────────────────────────────────────
 static void RunCorrectnessOnly()
 {
-    Console.WriteLine("Running correctness-only smoke tests...");
+    Console.WriteLine("Running correctness matrix...");
     Console.WriteLine();
 
     var pass = FrameReadModelCorrectness.RunAll();
@@ -123,9 +155,10 @@ static void PrintUsage()
     Console.WriteLine("Usage: dotnet run -c Release --project tools/perf/FrameReadModels.ValueLab [options]");
     Console.WriteLine();
     Console.WriteLine("Options:");
-    Console.WriteLine("  --correctness-only   Run smoke correctness tests (no performance measurement).");
-    Console.WriteLine("  --quick              Run abbreviated benchmark set (placeholder in skeleton).");
-    Console.WriteLine("  --full               Run comprehensive benchmark set (placeholder in skeleton).");
+    Console.WriteLine("  --correctness-only   Run correctness matrix (default: quick size = 1000).");
+    Console.WriteLine("  --n <int>            Set test entity count (default: 1000, smoke: 1000000).");
+    Console.WriteLine("  --quick              Run abbreviated benchmark set (placeholder).");
+    Console.WriteLine("  --full               Run comprehensive benchmark set (placeholder).");
     Console.WriteLine("  --help               Show this help.");
     Console.WriteLine();
     Console.WriteLine("This is a ValueLab: not public API, Release-only, read-only on MiniArch Core.");
