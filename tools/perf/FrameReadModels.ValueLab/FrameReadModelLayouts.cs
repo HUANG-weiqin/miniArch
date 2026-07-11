@@ -974,6 +974,72 @@ internal struct CompactRowLookup<TKey> : IFrameLookup<TKey>
         return count;
     }
 
+    public int ForEach<T1, TConsumer>(TKey key, ReadOnlySpan<ChunkView> chunks, ref TConsumer consumer)
+        where T1 : unmanaged
+        where TConsumer : struct, IFrameRowConsumer<T1>
+    {
+        var idx = FindSlot(key);
+        if (idx < 0) return 0;
+        var start = _keyStart[idx];
+        var count = _keyCount[idx];
+        for (var i = 0; i < count; i++)
+        {
+            ref readonly var rr = ref _flatRows[start + i];
+            ref readonly var chunk = ref chunks[rr.ChunkIndex];
+            var entities = chunk.GetEntities();
+            var c1 = chunk.GetSpan<T1>();
+            consumer.Accept(entities[rr.RowIndex], in c1[rr.RowIndex]);
+        }
+
+        return count;
+    }
+
+    public int ForEach<T1, T2, TConsumer>(TKey key, ReadOnlySpan<ChunkView> chunks, ref TConsumer consumer)
+        where T1 : unmanaged
+        where T2 : unmanaged
+        where TConsumer : struct, IFrameRowConsumer<T1, T2>
+    {
+        var idx = FindSlot(key);
+        if (idx < 0) return 0;
+        var start = _keyStart[idx];
+        var count = _keyCount[idx];
+        for (var i = 0; i < count; i++)
+        {
+            ref readonly var rr = ref _flatRows[start + i];
+            ref readonly var chunk = ref chunks[rr.ChunkIndex];
+            var entities = chunk.GetEntities();
+            var c1 = chunk.GetSpan<T1>();
+            var c2 = chunk.GetSpan<T2>();
+            consumer.Accept(entities[rr.RowIndex], in c1[rr.RowIndex], in c2[rr.RowIndex]);
+        }
+
+        return count;
+    }
+
+    public int ForEach<T1, T2, T3, TConsumer>(TKey key, ReadOnlySpan<ChunkView> chunks, ref TConsumer consumer)
+        where T1 : unmanaged
+        where T2 : unmanaged
+        where T3 : unmanaged
+        where TConsumer : struct, IFrameRowConsumer<T1, T2, T3>
+    {
+        var idx = FindSlot(key);
+        if (idx < 0) return 0;
+        var start = _keyStart[idx];
+        var count = _keyCount[idx];
+        for (var i = 0; i < count; i++)
+        {
+            ref readonly var rr = ref _flatRows[start + i];
+            ref readonly var chunk = ref chunks[rr.ChunkIndex];
+            var entities = chunk.GetEntities();
+            var c1 = chunk.GetSpan<T1>();
+            var c2 = chunk.GetSpan<T2>();
+            var c3 = chunk.GetSpan<T3>();
+            consumer.Accept(entities[rr.RowIndex], in c1[rr.RowIndex], in c2[rr.RowIndex], in c3[rr.RowIndex]);
+        }
+
+        return count;
+    }
+
     // ---- Scratch array helper ----
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

@@ -168,6 +168,27 @@ internal interface IFrameKeySelector<TKey, T1, T2, T3>
     TKey Select(Entity entity, in T1 c1, in T2 c2, in T3 c3);
 }
 
+internal interface IFrameRowConsumer<T1>
+    where T1 : unmanaged
+{
+    void Accept(Entity entity, in T1 c1);
+}
+
+internal interface IFrameRowConsumer<T1, T2>
+    where T1 : unmanaged
+    where T2 : unmanaged
+{
+    void Accept(Entity entity, in T1 c1, in T2 c2);
+}
+
+internal interface IFrameRowConsumer<T1, T2, T3>
+    where T1 : unmanaged
+    where T2 : unmanaged
+    where T3 : unmanaged
+{
+    void Accept(Entity entity, in T1 c1, in T2 c2, in T3 c3);
+}
+
 // ========================================================================
 //  Concrete operators
 // ========================================================================
@@ -261,6 +282,28 @@ internal readonly struct HealthValueKeySelector : IFrameKeySelector<int, Health>
 internal readonly struct CellKeySelector3 : IFrameKeySelector<int, Cell, Position, Health>
 {
     public int Select(Entity entity, in Cell c1, in Position c2, in Health c3) => c1.Value;
+}
+
+/// <summary>Sums Health.Value from a single-component row consumer.</summary>
+internal struct HealthSumConsumer1 : IFrameRowConsumer<Health>
+{
+    public long Sum;
+
+    public void Accept(Entity entity, in Health c1)
+    {
+        Sum += c1.Value;
+    }
+}
+
+/// <summary>Sums Health.Value from a 3-component row consumer.</summary>
+internal struct HealthSumConsumer3 : IFrameRowConsumer<Cell, Position, Health>
+{
+    public long Sum;
+
+    public void Accept(Entity entity, in Cell c1, in Position c2, in Health c3)
+    {
+        Sum += c3.Value;
+    }
 }
 
 // ========================================================================
