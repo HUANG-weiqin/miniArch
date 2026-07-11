@@ -31,6 +31,14 @@ public sealed class FrameLookup<TKey>
 
     private int[]? _scratchCounts;
 
+    /// <summary>
+    /// Creates an empty lookup with the specified initial capacity.
+    /// Internal storage is rounded up to the next power of two.
+    /// Call <see cref="EnsureCapacity"/> before <see cref="TryBuild{TSel}"/>
+    /// if you know the expected key/row counts in advance.
+    /// </summary>
+    /// <param name="initialKeyCapacity">Hint for the number of distinct keys (0 = default).</param>
+    /// <param name="initialRowCapacity">Hint for the total number of rows across all keys (0 = default).</param>
     public FrameLookup(int initialKeyCapacity = 0, int initialRowCapacity = 0)
     {
         _capacity = CeilPow2(Math.Max(initialKeyCapacity, DefaultKeyCapacity));
