@@ -37,6 +37,24 @@ public sealed class CommandStreamTests
         }
     }
 
+    private readonly struct DuplicatePositionCreateManyWriter : ICreateManyWriter<Position, Position>
+    {
+        public void Write(int index, Entity entity, out Position c1, out Position c2)
+        {
+            c1 = new Position(index, -1);
+            c2 = new Position(index, index + 1000);
+        }
+    }
+
+    private readonly struct PositionVelocityCreateManyWriter : ICreateManyWriter<Position, Velocity>
+    {
+        public void Write(int index, Entity entity, out Position c1, out Velocity c2)
+        {
+            c1 = new Position(index, index + 1);
+            c2 = new Velocity(index + 10, index + 20);
+        }
+    }
+
     private readonly struct EightComponentCreateManyWriter : ICreateManyWriter<Position, Velocity, Health, SignalPayloadField, C4, C5, C6, C7>
     {
         public void Write(int index, Entity entity, out Position c1, out Velocity c2, out Health c3, out SignalPayloadField c4, out C4 c5, out C5 c6, out C6 c7, out C7 c8)
@@ -1153,6 +1171,164 @@ public sealed class CommandStreamTests
             Assert.Equal(new Position(i, i + 1), p);
             Assert.True(world.TryGet(entities[i], out C7 c7));
             Assert.Equal(new C7(i + 8), c7);
+        }
+    }
+
+    [Fact]
+    public void BUG_CreateMany_duplicate_component_types_use_last_write()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+        var entities = new Entity[3];
+
+        stream.CreateMany<Position, Position, DuplicatePositionCreateManyWriter>(
+            entities, new DuplicatePositionCreateManyWriter());
+        Assert.True(stream.Submit());
+
+        for (var i = 0; i < entities.Length; i++)
+        {
+            Assert.True(world.TryGet(entities[i], out Position p));
+            Assert.Equal(new Position(i, i + 1000), p);
+        }
+    }
+
+    [Fact]
+    public void CreateMany_then_set_same_type_falls_back_and_uses_set_value()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+        var entities = new Entity[3];
+
+        stream.CreateMany<Position, Velocity, PositionVelocityCreateManyWriter>(
+            entities, new PositionVelocityCreateManyWriter());
+        stream.Set(entities[1], new Velocity(99, 100));
+        Assert.True(stream.Submit());
+
+        for (var i = 0; i < entities.Length; i++)
+        {
+            Assert.True(world.TryGet(entities[i], out Position p));
+            Assert.Equal(new Position(i, i + 1), p);
+            Assert.True(world.TryGet(entities[i], out Velocity v));
+            Assert.Equal(i == 1 ? new Velocity(99, 100) : new Velocity(i + 10, i + 20), v);
+        }
+    }
+
+    [Fact]
+    public void ParallelCommandStream_CreateMany_creates_entities()
+    {
+        var world = new World();
+        var stream = new ParallelCommandStream(world);
+        var entities = new Entity[4];
+
+        stream.CreateMany<Position, PositionCreateManyWriter>(entities, new PositionCreateManyWriter());
+        Assert.True(stream.Submit());
+
+        for (var i = 0; i < entities.Length; i++)
+        {
+            Assert.True(world.TryGet(entities[i], out Position p));
+            Assert.Equal(new Position(i, i + 1), p);
+        }
+    }
+
+    [Fact]
+    public void CreateMany_then_remove_on_one_entity_falls_back_and_materializes()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+        var entities = new Entity[5];
+
+        stream.CreateMany<Position, PositionCreateManyWriter>(entities, new PositionCreateManyWriter());
+        // Remove Position from one entity: batch chain gets a Removed flag,
+        // fast-path precondition fails, per-entity fallback kicks in.
+        stream.Remove<Position>(entities[2]);
+        Assert.True(stream.Submit());
+
+        for (var i = 0; i < entities.Length; i++)
+        {
+            Assert.True(world.IsAlive(entities[i]));
+            if (i == 2)
+                Assert.False(world.TryGet<Position>(entities[i], out _));
+            else
+            {
+                Assert.True(world.TryGet(entities[i], out Position p));
+                Assert.Equal(new Position(i, i + 1), p);
+            }
+        }
+    }
+
+    [Fact]
+    public void CreateMany_then_destroy_one_entity_materializes_only_survivors()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+        var entities = new Entity[6];
+
+        stream.CreateMany<Position, PositionCreateManyWriter>(entities, new PositionCreateManyWriter());
+        // Destroy one entity in the batch: its batch is cancelled, fast path
+        // skips it and materializes only live entities at consecutive rows.
+        stream.Destroy(entities[3]);
+        Assert.True(stream.Submit());
+
+        Assert.False(world.IsAlive(entities[3]));
+        var aliveCount = 0;
+        for (var i = 0; i < entities.Length; i++)
+        {
+            if (i == 3) continue;
+            Assert.True(world.IsAlive(entities[i]));
+            Assert.True(world.TryGet(entities[i], out Position p));
+            Assert.Equal(new Position(i, i + 1), p);
+            aliveCount++;
+        }
+        Assert.Equal(5, aliveCount);
+    }
+
+    [Fact]
+    public void CreateMany_empty_span_is_noop()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+        var entities = Array.Empty<Entity>();
+
+        stream.CreateMany<Position, PositionCreateManyWriter>(entities, new PositionCreateManyWriter());
+        Assert.False(stream.Submit()); // no commands recorded
+
+        Assert.Equal(0, world.EntityCount);
+    }
+
+    [Fact]
+    public void CreateMany_interleaved_with_single_create_materializes_all()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+
+        // Single create before CreateMany group
+        var single1 = stream.Create();
+        stream.Add(single1, new Velocity(10, 20));
+
+        var batch = new Entity[4];
+        stream.CreateMany<Position, PositionCreateManyWriter>(batch, new PositionCreateManyWriter());
+
+        // Single create after CreateMany group
+        var single2 = stream.Create();
+        stream.Add(single2, new Health(99));
+
+        Assert.True(stream.Submit());
+
+        // All entities materialized
+        Assert.True(world.IsAlive(single1));
+        Assert.True(world.IsAlive(single2));
+        for (var i = 0; i < batch.Length; i++)
+            Assert.True(world.IsAlive(batch[i]));
+
+        // Verify values
+        Assert.True(world.TryGet(single1, out Velocity v));
+        Assert.Equal(new Velocity(10, 20), v);
+        Assert.True(world.TryGet(single2, out Health h));
+        Assert.Equal(new Health(99), h);
+        for (var i = 0; i < batch.Length; i++)
+        {
+            Assert.True(world.TryGet(batch[i], out Position p));
+            Assert.Equal(new Position(i, i + 1), p);
         }
     }
 

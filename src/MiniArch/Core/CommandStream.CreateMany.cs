@@ -14,8 +14,8 @@ public interface ICreateManyWriter<T1> where T1 : unmanaged
     /// </summary>
     /// <param name="index">Zero-based index of the entity within the batch span.</param>
     /// <param name="entity">The just-reserved entity handle (not yet alive until Submit/Snapshot/Replay).</param>
-    /// <param name="component1">Output: the component value to attach to <paramref name="entity"/>.</param>
-    void Write(int index, Entity entity, out T1 component1);
+    /// <param name="c1">Output: the component value to attach to <paramref name="entity"/>.</param>
+    void Write(int index, Entity entity, out T1 c1);
 }
 
 /// <summary>
@@ -123,6 +123,9 @@ public abstract partial class CommandStreamCore
         where T1 : unmanaged
         where TWriter : struct, ICreateManyWriter<T1>
     {
+        if (entities.Length == 0) return;
+        var startBatch = _frozen.PendingBatchCount;
+        var t1 = CommandTypeInfo<T1>.Type;
         for (var i = 0; i < entities.Length; i++)
         {
             var entity = CreateCore();
@@ -131,6 +134,8 @@ public abstract partial class CommandStreamCore
             writer.Write(i, entity, out T1 c1);
             WritePendingComponent(batchIdx, c1);
         }
+        AppendCreateManyGroup(startBatch, entities.Length, 1,
+            t1, default, default, default, default, default, default, default);
     }
 
     /// <summary>
@@ -143,6 +148,10 @@ public abstract partial class CommandStreamCore
         where T2 : unmanaged
         where TWriter : struct, ICreateManyWriter<T1, T2>
     {
+        if (entities.Length == 0) return;
+        var startBatch = _frozen.PendingBatchCount;
+        var t1 = CommandTypeInfo<T1>.Type;
+        var t2 = CommandTypeInfo<T2>.Type;
         for (var i = 0; i < entities.Length; i++)
         {
             var entity = CreateCore();
@@ -152,6 +161,8 @@ public abstract partial class CommandStreamCore
             WritePendingComponent(batchIdx, c1);
             WritePendingComponent(batchIdx, c2);
         }
+        AppendCreateManyGroup(startBatch, entities.Length, 2,
+            t1, t2, default, default, default, default, default, default);
     }
 
     /// <summary>
@@ -165,6 +176,11 @@ public abstract partial class CommandStreamCore
         where T3 : unmanaged
         where TWriter : struct, ICreateManyWriter<T1, T2, T3>
     {
+        if (entities.Length == 0) return;
+        var startBatch = _frozen.PendingBatchCount;
+        var t1 = CommandTypeInfo<T1>.Type;
+        var t2 = CommandTypeInfo<T2>.Type;
+        var t3 = CommandTypeInfo<T3>.Type;
         for (var i = 0; i < entities.Length; i++)
         {
             var entity = CreateCore();
@@ -175,6 +191,8 @@ public abstract partial class CommandStreamCore
             WritePendingComponent(batchIdx, c2);
             WritePendingComponent(batchIdx, c3);
         }
+        AppendCreateManyGroup(startBatch, entities.Length, 3,
+            t1, t2, t3, default, default, default, default, default);
     }
 
     /// <summary>
@@ -189,6 +207,12 @@ public abstract partial class CommandStreamCore
         where T4 : unmanaged
         where TWriter : struct, ICreateManyWriter<T1, T2, T3, T4>
     {
+        if (entities.Length == 0) return;
+        var startBatch = _frozen.PendingBatchCount;
+        var t1 = CommandTypeInfo<T1>.Type;
+        var t2 = CommandTypeInfo<T2>.Type;
+        var t3 = CommandTypeInfo<T3>.Type;
+        var t4 = CommandTypeInfo<T4>.Type;
         for (var i = 0; i < entities.Length; i++)
         {
             var entity = CreateCore();
@@ -200,6 +224,8 @@ public abstract partial class CommandStreamCore
             WritePendingComponent(batchIdx, c3);
             WritePendingComponent(batchIdx, c4);
         }
+        AppendCreateManyGroup(startBatch, entities.Length, 4,
+            t1, t2, t3, t4, default, default, default, default);
     }
 
     /// <summary>
@@ -215,6 +241,13 @@ public abstract partial class CommandStreamCore
         where T5 : unmanaged
         where TWriter : struct, ICreateManyWriter<T1, T2, T3, T4, T5>
     {
+        if (entities.Length == 0) return;
+        var startBatch = _frozen.PendingBatchCount;
+        var t1 = CommandTypeInfo<T1>.Type;
+        var t2 = CommandTypeInfo<T2>.Type;
+        var t3 = CommandTypeInfo<T3>.Type;
+        var t4 = CommandTypeInfo<T4>.Type;
+        var t5 = CommandTypeInfo<T5>.Type;
         for (var i = 0; i < entities.Length; i++)
         {
             var entity = CreateCore();
@@ -227,6 +260,8 @@ public abstract partial class CommandStreamCore
             WritePendingComponent(batchIdx, c4);
             WritePendingComponent(batchIdx, c5);
         }
+        AppendCreateManyGroup(startBatch, entities.Length, 5,
+            t1, t2, t3, t4, t5, default, default, default);
     }
 
     /// <summary>
@@ -243,6 +278,14 @@ public abstract partial class CommandStreamCore
         where T6 : unmanaged
         where TWriter : struct, ICreateManyWriter<T1, T2, T3, T4, T5, T6>
     {
+        if (entities.Length == 0) return;
+        var startBatch = _frozen.PendingBatchCount;
+        var t1 = CommandTypeInfo<T1>.Type;
+        var t2 = CommandTypeInfo<T2>.Type;
+        var t3 = CommandTypeInfo<T3>.Type;
+        var t4 = CommandTypeInfo<T4>.Type;
+        var t5 = CommandTypeInfo<T5>.Type;
+        var t6 = CommandTypeInfo<T6>.Type;
         for (var i = 0; i < entities.Length; i++)
         {
             var entity = CreateCore();
@@ -256,6 +299,8 @@ public abstract partial class CommandStreamCore
             WritePendingComponent(batchIdx, c5);
             WritePendingComponent(batchIdx, c6);
         }
+        AppendCreateManyGroup(startBatch, entities.Length, 6,
+            t1, t2, t3, t4, t5, t6, default, default);
     }
 
     /// <summary>
@@ -273,6 +318,15 @@ public abstract partial class CommandStreamCore
         where T7 : unmanaged
         where TWriter : struct, ICreateManyWriter<T1, T2, T3, T4, T5, T6, T7>
     {
+        if (entities.Length == 0) return;
+        var startBatch = _frozen.PendingBatchCount;
+        var t1 = CommandTypeInfo<T1>.Type;
+        var t2 = CommandTypeInfo<T2>.Type;
+        var t3 = CommandTypeInfo<T3>.Type;
+        var t4 = CommandTypeInfo<T4>.Type;
+        var t5 = CommandTypeInfo<T5>.Type;
+        var t6 = CommandTypeInfo<T6>.Type;
+        var t7 = CommandTypeInfo<T7>.Type;
         for (var i = 0; i < entities.Length; i++)
         {
             var entity = CreateCore();
@@ -287,6 +341,8 @@ public abstract partial class CommandStreamCore
             WritePendingComponent(batchIdx, c6);
             WritePendingComponent(batchIdx, c7);
         }
+        AppendCreateManyGroup(startBatch, entities.Length, 7,
+            t1, t2, t3, t4, t5, t6, t7, default);
     }
 
     /// <summary>
@@ -305,6 +361,16 @@ public abstract partial class CommandStreamCore
         where T8 : unmanaged
         where TWriter : struct, ICreateManyWriter<T1, T2, T3, T4, T5, T6, T7, T8>
     {
+        if (entities.Length == 0) return;
+        var startBatch = _frozen.PendingBatchCount;
+        var t1 = CommandTypeInfo<T1>.Type;
+        var t2 = CommandTypeInfo<T2>.Type;
+        var t3 = CommandTypeInfo<T3>.Type;
+        var t4 = CommandTypeInfo<T4>.Type;
+        var t5 = CommandTypeInfo<T5>.Type;
+        var t6 = CommandTypeInfo<T6>.Type;
+        var t7 = CommandTypeInfo<T7>.Type;
+        var t8 = CommandTypeInfo<T8>.Type;
         for (var i = 0; i < entities.Length; i++)
         {
             var entity = CreateCore();
@@ -320,6 +386,8 @@ public abstract partial class CommandStreamCore
             WritePendingComponent(batchIdx, c7);
             WritePendingComponent(batchIdx, c8);
         }
+        AppendCreateManyGroup(startBatch, entities.Length, 8,
+            t1, t2, t3, t4, t5, t6, t7, t8);
     }
 }
 

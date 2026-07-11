@@ -606,16 +606,7 @@ public abstract partial class CommandStreamCore
     }
 
     private void MaterializeAllPending()
-    {
-        var view = new PendingBatchView(
-            _frozen.BatchCanceled, _frozen.BatchHeads, _frozen.BatchCompCounts,
-            _frozen.BatchComps, _frozen.BatchBuf, _frozen.BatchEntities, _frozen.PendingBatchCount);
-        for (var i = 0; i < _frozen.PendingBatchCount; i++)
-        {
-            if (_frozen.BatchCanceled[i]) continue;
-            MaterializePending(view, view.Entities[i], i);
-        }
-    }
+        => MaterializePendingBatches(_frozen);
 
     private void SealParallelStores()
     {
@@ -983,6 +974,7 @@ public abstract partial class CommandStreamCore
         _frozen.DestroyCount = 0;
         _frozen.PendingBatchCount = 0;
         _frozen.CancelledBatchCount = 0;
+        _frozen.CreateManyGroupCount = 0;
         _pendingBatchMin = int.MaxValue;
         _pendingBatchMax = 0;
         _batchCompTotal = 0;
@@ -1010,11 +1002,7 @@ public abstract partial class CommandStreamCore
         // Order matches Submit and BuildDelta: Create —Hierarchy —Ops —Destroy.
         PreValidatePendingSlots(frozen);
         _submitEpoch = _world.ReservedReleaseEpoch;
-        for (var i = 0; i < frozen.PendingBatchCount; i++)
-        {
-            if (frozen.BatchCanceled[i]) continue;
-            MaterializePending(frozen.Pending, frozen.BatchEntities[i], i);
-        }
+        MaterializePendingBatches(frozen);
 
         if (frozen.HierarchyByChild.Count > 0)
         {
@@ -1150,6 +1138,182 @@ public abstract partial class CommandStreamCore
             if (pooledTypes is not null) ArrayPool<ComponentType>.Shared.Return(pooledTypes);
             if (pooledOffsets is not null) ArrayPool<int>.Shared.Return(pooledOffsets);
         }
+    }
+
+    // ── CreateMany bulk materialization ──────────────────────────────
+
+    /// <summary>
+    /// Shared pending-batch materialization loop used by both
+    /// <see cref="Submit"/> (via <see cref="MaterializeAllPending"/>) and
+    /// <see cref="SubmitAndSnapshotAsync"/> (via <see cref="SubmitFromFrozen"/>).
+    /// Walks batches in order; when a <see cref="CreateManyGroup"/> starts at the
+    /// current batch index, it first tries the bulk fast path
+    /// (<see cref="TryMaterializeCreateManyGroup"/>). On failure it falls back to
+    /// the existing per-entity <see cref="MaterializePending"/>. Non-group batches
+    /// always use the per-entity path.
+    /// </summary>
+    private void MaterializePendingBatches(FrozenState frozen)
+    {
+        var view = new PendingBatchView(
+            frozen.BatchCanceled, frozen.BatchHeads, frozen.BatchCompCounts,
+            frozen.BatchComps, frozen.BatchBuf, frozen.BatchEntities, frozen.PendingBatchCount);
+        var groupIdx = 0;
+        var batchIdx = 0;
+        while (batchIdx < frozen.PendingBatchCount)
+        {
+            var groupStart = -1;
+            var groupCount = 0;
+            if (groupIdx < frozen.CreateManyGroupCount)
+            {
+                groupStart = frozen.CreateManyGroups[groupIdx].StartBatch;
+                groupCount = frozen.CreateManyGroups[groupIdx].Count;
+            }
+
+            if (groupStart == batchIdx)
+            {
+                if (!TryMaterializeCreateManyGroup(frozen, view, groupIdx))
+                {
+                    for (var j = 0; j < groupCount; j++)
+                    {
+                        var bIdx = batchIdx + j;
+                        if (!view.Canceled[bIdx])
+                            MaterializePending(view, view.Entities[bIdx], bIdx);
+                    }
+                }
+                batchIdx += groupCount;
+                groupIdx++;
+                continue;
+            }
+
+            if (!view.Canceled[batchIdx])
+                MaterializePending(view, view.Entities[batchIdx], batchIdx);
+            batchIdx++;
+        }
+    }
+
+    /// <summary>
+    /// Attempts the CreateMany bulk materialization fast path for one group.
+    /// Preallocates all live rows via <see cref="Archetype.AllocateRows"/>,
+    /// resolves the archetype once, then writes each entity's components in a
+    /// tight loop. Returns <c>true</c> if the group was fully handled (either
+    /// bulk-materialized or all-cancelled no-op). Returns <c>false</c> if any
+    /// precondition fails —the caller falls back to per-entity
+    /// <see cref="MaterializePending"/>.
+    /// </summary>
+    private unsafe bool TryMaterializeCreateManyGroup(
+        FrozenState frozen, in PendingBatchView view, int groupIdx)
+    {
+        ref readonly var group = ref frozen.CreateManyGroups[groupIdx];
+        var startBatch = group.StartBatch;
+        var count = group.Count;
+        var componentCount = group.ComponentCount;
+
+        Span<ComponentType> groupTypes = stackalloc ComponentType[componentCount];
+        FillGroupTypes(in group, groupTypes);
+
+        // Verify preconditions on every non-cancelled batch in the group and
+        // count live entities. Any mismatch bails to the per-entity fallback.
+        var liveCount = 0;
+        for (var i = 0; i < count; i++)
+        {
+            var batchIdx = startBatch + i;
+            if (view.Canceled[batchIdx]) continue;
+            if (view.CompCounts[batchIdx] != componentCount) return false;
+            if (!ChainMatchesGroup(in view, batchIdx, groupTypes)) return false;
+            liveCount++;
+        }
+
+        if (liveCount == 0)
+            return true; // all cancelled —nothing to materialize
+
+        // Build mask once. If any id >= 512 or any component type is duplicated,
+        // the mask popcount will not equal componentCount. In both cases the
+        // fast path cannot preserve MaterializePending's deduplicating last-wins
+        // semantics, so bail to the per-entity fallback.
+        var builder = new MaskBuilder();
+        for (var i = 0; i < componentCount; i++)
+            builder.SetBit(groupTypes[i].Value);
+        var mask = builder.ToMask();
+        if (!World.IsMaskCanonical(mask, componentCount)) return false;
+
+        var archetype = ResolveArchetype(mask, groupTypes);
+
+        // Precompute column indices once for all entities in the group.
+        Span<int> columnIndices = stackalloc int[componentCount];
+        for (var i = 0; i < componentCount; i++)
+            columnIndices[i] = archetype.GetComponentIndexFast(groupTypes[i]);
+
+        // Allocate all live rows in one shot.
+        var startRow = archetype.AllocateRows(liveCount);
+
+        fixed (byte* bufPtr = view.Buf)
+        {
+            var row = startRow;
+            for (var i = 0; i < count; i++)
+            {
+                var batchIdx = startBatch + i;
+                if (view.Canceled[batchIdx]) continue;
+
+                var entity = view.Entities[batchIdx];
+                _world.MaterializeReservedEntityAt(entity, archetype, row);
+
+                // Chain is in reverse write order (LIFO insertion):
+                //   head -> CN -> CN-1 -> ... -> C1 -> -1
+                // So columnIndices[componentCount-1] matches the first chain
+                // entry, columnIndices[componentCount-2] the next, etc.
+                var current = view.Heads[batchIdx];
+                var typeIdx = componentCount - 1;
+                while (current >= 0)
+                {
+                    ref var bc = ref view.Comps[current];
+                    archetype.WriteComponentRaw(columnIndices[typeIdx], row, bufPtr + bc.Offset);
+                    typeIdx--;
+                    current = bc.Next;
+                }
+
+                row++;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Copies the group's component types into the stack span (write order).
+    /// </summary>
+    private static void FillGroupTypes(in CreateManyGroup group, Span<ComponentType> types)
+    {
+        if (types.Length > 0) types[0] = group.C1;
+        if (types.Length > 1) types[1] = group.C2;
+        if (types.Length > 2) types[2] = group.C3;
+        if (types.Length > 3) types[3] = group.C4;
+        if (types.Length > 4) types[4] = group.C5;
+        if (types.Length > 5) types[5] = group.C6;
+        if (types.Length > 6) types[6] = group.C7;
+        if (types.Length > 7) types[7] = group.C8;
+    }
+
+    /// <summary>
+    /// Verifies that the batch's linked-list chain exactly matches the group's
+    /// component types in reverse write order with no <see cref="BatchedComponent.Removed"/>
+    /// entries. The chain was built by successive <see cref="CommitBatchComponent"/>
+    /// calls (LIFO head insertion), so walking from head yields
+    /// <c>groupTypes[N-1], groupTypes[N-2], ..., groupTypes[0]</c>.
+    /// </summary>
+    private static bool ChainMatchesGroup(in PendingBatchView view, int batchIdx,
+        ReadOnlySpan<ComponentType> groupTypes)
+    {
+        var componentCount = groupTypes.Length;
+        var current = view.Heads[batchIdx];
+        for (var i = componentCount - 1; i >= 0; i--)
+        {
+            if (current < 0) return false;
+            ref var bc = ref view.Comps[current];
+            if (bc.Removed) return false;
+            if (bc.Type != groupTypes[i]) return false;
+            current = bc.Next;
+        }
+        return current < 0;
     }
 
     private static void EmitPendingEntitiesToDelta(FrameDelta delta, in PendingBatchView view, bool deferredMode = false)
@@ -1564,6 +1728,33 @@ public abstract partial class CommandStreamCore
                 comp.Removed = true;
             current = comp.Next;
         }
+    }
+
+    // ── CreateMany group tracking ────────────────────────────────────
+
+    /// <summary>
+    /// Appends one <see cref="CreateManyGroup"/> describing the contiguous batch
+    /// range just produced by a CreateMany call. The fast-path submit consumer
+    /// (<see cref="TryMaterializeCreateManyGroup"/>) uses this to bulk-allocate
+    /// rows and write components in a tight loop. Must only be called after the
+    /// per-entity loop fully completed —if the writer throws midway, no group is
+    /// appended and the partial pending entities fall back to per-entity
+    /// materialization via <see cref="MaterializePending"/>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void AppendCreateManyGroup(int startBatch, int count, int componentCount,
+        ComponentType c1, ComponentType c2, ComponentType c3, ComponentType c4,
+        ComponentType c5, ComponentType c6, ComponentType c7, ComponentType c8)
+    {
+        EnsureCapacity(ref _frozen.CreateManyGroups, _frozen.CreateManyGroupCount, 16);
+        _frozen.CreateManyGroups[_frozen.CreateManyGroupCount++] = new CreateManyGroup
+        {
+            StartBatch = startBatch,
+            Count = count,
+            ComponentCount = componentCount,
+            C1 = c1, C2 = c2, C3 = c3, C4 = c4,
+            C5 = c5, C6 = c6, C7 = c7, C8 = c8,
+        };
     }
 
     // ── Archetype resolution ──────────────────────────────────────────
@@ -2109,6 +2300,7 @@ public abstract partial class CommandStreamCore
         _frozen.DestroyCount = 0;
         _frozen.PendingBatchCount = 0;
         _frozen.CancelledBatchCount = 0;
+        _frozen.CreateManyGroupCount = 0;
         _pendingBatchMin = int.MaxValue;
         _pendingBatchMax = 0;
         _batchCompTotal = 0;
@@ -2922,6 +3114,27 @@ public abstract partial class CommandStreamCore
         public int Next;
     }
 
+    /// <summary>
+    /// Frozen record of one CreateMany call's contiguous batch range. Captured
+    /// after the per-entity pending-batch writes succeed, and consumed only by
+    /// the submit fast path (<see cref="TryMaterializeCreateManyGroup"/>).
+    /// Holds up to 8 component types inline so no per-group array is allocated.
+    /// </summary>
+    private protected struct CreateManyGroup
+    {
+        public int StartBatch;
+        public int Count;
+        public int ComponentCount;
+        public ComponentType C1;
+        public ComponentType C2;
+        public ComponentType C3;
+        public ComponentType C4;
+        public ComponentType C5;
+        public ComponentType C6;
+        public ComponentType C7;
+        public ComponentType C8;
+    }
+
     private protected readonly struct PendingBatchView
     {
         public readonly bool[] Canceled;
@@ -2960,6 +3173,8 @@ public abstract partial class CommandStreamCore
         public Entity[] BatchEntities;
         public bool[] BatchCanceled;
         public int CancelledBatchCount;
+        public CreateManyGroup[] CreateManyGroups;
+        public int CreateManyGroupCount;
 
         public FrozenState(int storeCount)
         {
@@ -2976,6 +3191,8 @@ public abstract partial class CommandStreamCore
             BatchEntities = [];
             BatchCanceled = [];
             CancelledBatchCount = 0;
+            CreateManyGroups = [];
+            CreateManyGroupCount = 0;
         }
 
         public PendingBatchView Pending => new(

@@ -869,6 +869,24 @@ public sealed partial class World
     }
 
     /// <summary>
+    /// Places a previously-reserved entity into an archetype at an already-allocated
+    /// row. Used by the CommandStream CreateMany bulk materialization fast path,
+    /// which pre-allocates all rows via <see cref="Archetype.AllocateRows"/> and
+    /// then fills them in a tight loop. Performs the same record update and
+    /// reserved-count guard as <see cref="PlaceEntityInArchetype"/>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void MaterializeReservedEntityAt(Entity entity, Archetype archetype, int rowIndex)
+    {
+        archetype.WriteEntityAt(rowIndex, entity);
+        ref var record = ref _records[entity.Id];
+        if (!record.IsOccupied && record.Version == entity.Version)
+            _reservedCount--;
+        record.Archetype = archetype;
+        record.RowIndex = rowIndex;
+    }
+
+    /// <summary>
     /// Returns <c>entity.Version + 1</c>, wrapping to 1 on overflow past <see cref="int.MaxValue"/>.
     /// Must be called before any mutation (archetype RemoveAt, hierarchy cleanup, record write).
     /// </summary>

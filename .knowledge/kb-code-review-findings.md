@@ -305,6 +305,15 @@ updated: 2026-07-11
 - **回归测试**: `BUG_pending_clone_copies_from_resized_batch_buffer`：构造 `Position` + 24-byte `SignalPayloadField` 的 pending source，把 batch buffer 填到 4072 bytes，第二次复制 24-byte payload 时强制扩容。
 - **验证**: 回归测试先 RED（`ArgumentOutOfRangeException`），修复后 GREEN；`dotnet test -c Release`：MiniArch.Tests 951/951 + HeroPipeline.Tests 5/5 PASS；`HeroComing.Perf --check-baseline` Movement 1907.8 / Attack 1193.6，内存 OK；boundary soak 20,000 frames PASS。
 
+### B18: `CreateMany` bulk fast path 对重复组件类型违反 last-wins ✅ 已修复
+
+- **位置**: `CommandStreamCore.cs` 的 `TryMaterializeCreateManyGroup`
+- **症状**: `CreateMany<Position, Position, TWriter>` 中 writer 先输出旧 `Position`、再输出新 `Position` 时，Submit fast path 最终保留旧值；per-entity fallback / Snapshot+Replay 语义则保留最后写入的新值。
+- **根因**: fast path 用 `MaskBuilder.BitsSet == componentCount` 证明类型唯一且 mask canonical，但 `MaskBuilder.SetBit` 对重复 id 仍递增 `BitsSet`。重复组件类型没有 fallback，bulk loop 按链表顺序写同一列两次，最后把旧值覆盖回去。
+- **修复**: fast path 改为用最终 mask 的 popcount（`World.IsMaskCanonical(mask, componentCount)`）作为前置条件；重复组件类型或 id >= 512 都 fallback 到 `MaterializePending`，复用现有 dedup last-wins 语义。
+- **回归测试**: `BUG_CreateMany_duplicate_component_types_use_last_write`。
+- **验证**: 回归测试先 RED（期望 `Position(i, i+1000)`，实际 `Position(i, -1)`），修复后 GREEN；`dotnet test -c Release --filter "CreateMany_"` 12/12 PASS。
+
 ### 修复原则
 
 这些修复遵循**不变性原则**：Submit 路径和 Replay 路径必须在操作顺序和语义上一致。分歧（如排序差异、去重差异、释放差异）是 Submit/Replay 不一致的根因。库层不做过度防御（不静默吞非法操作），但语义上等价的操作（Add 已存在 = 写值）应被允许。ChangeQuery 自身的修复遵循**防御性读取原则**：只要组件可能缺失，就必须使用 `TryGetComponentIndex` 而不是 `GetComponentIndexFast`。

@@ -468,6 +468,14 @@ class: MiniArch.Core.CommandStream : MiniArch.Core.CommandStreamCore
   Method: AddChild(MiniArch.Entity parent, MiniArch.Entity child) -> System.Void
   Method: Clone(MiniArch.Entity source) -> MiniArch.Entity
   Method: Create() -> MiniArch.Entity
+  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1>, System.ValueType
+  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, T2 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1, T2>, System.ValueType
+  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1, T2, T3>, System.ValueType
+  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1, T2, T3, T4>, System.ValueType
+  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, T5 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1, T2, T3, T4, T5>, System.ValueType
+  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, T5 : struct, System.ValueType, T6 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1, T2, T3, T4, T5, T6>, System.ValueType
+  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, T5 : struct, System.ValueType, T6 : struct, System.ValueType, T7 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1, T2, T3, T4, T5, T6, T7>, System.ValueType
+  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, T5 : struct, System.ValueType, T6 : struct, System.ValueType, T7 : struct, System.ValueType, T8 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1, T2, T3, T4, T5, T6, T7, T8>, System.ValueType
   Method: Destroy(MiniArch.Entity entity) -> System.Void
   Method: Remove(MiniArch.Entity entity) -> System.Void where T : struct, System.ValueType
   Method: RemoveChild(MiniArch.Entity child) -> System.Void
@@ -500,11 +508,35 @@ class: MiniArch.Core.FrameDelta
   Property: IsEmpty -> System.Boolean [get; ]
   Field: MaxFrameBytes -> System.Int32 [static] = 16777216
   Field: MaxOpsPerFrame -> System.Int32 [static] = 1000000
+interface: MiniArch.Core.ICreateManyWriter`1 where T1 : struct, System.ValueType
+  Method: Write(System.Int32 index, MiniArch.Entity entity, out T1& c1) -> System.Void
+interface: MiniArch.Core.ICreateManyWriter`2 where T1 : struct, System.ValueType, T2 : struct, System.ValueType
+  Method: Write(System.Int32 index, MiniArch.Entity entity, out T1& c1, out T2& c2) -> System.Void
+interface: MiniArch.Core.ICreateManyWriter`3 where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType
+  Method: Write(System.Int32 index, MiniArch.Entity entity, out T1& c1, out T2& c2, out T3& c3) -> System.Void
+interface: MiniArch.Core.ICreateManyWriter`4 where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType
+  Method: Write(System.Int32 index, MiniArch.Entity entity, out T1& c1, out T2& c2, out T3& c3, out T4& c4) -> System.Void
+interface: MiniArch.Core.ICreateManyWriter`5 where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, T5 : struct, System.ValueType
+  Method: Write(System.Int32 index, MiniArch.Entity entity, out T1& c1, out T2& c2, out T3& c3, out T4& c4, out T5& c5) -> System.Void
+interface: MiniArch.Core.ICreateManyWriter`6 where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, T5 : struct, System.ValueType, T6 : struct, System.ValueType
+  Method: Write(System.Int32 index, MiniArch.Entity entity, out T1& c1, out T2& c2, out T3& c3, out T4& c4, out T5& c5, out T6& c6) -> System.Void
+interface: MiniArch.Core.ICreateManyWriter`7 where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, T5 : struct, System.ValueType, T6 : struct, System.ValueType, T7 : struct, System.ValueType
+  Method: Write(System.Int32 index, MiniArch.Entity entity, out T1& c1, out T2& c2, out T3& c3, out T4& c4, out T5& c5, out T6& c6, out T7& c7) -> System.Void
+interface: MiniArch.Core.ICreateManyWriter`8 where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, T5 : struct, System.ValueType, T6 : struct, System.ValueType, T7 : struct, System.ValueType, T8 : struct, System.ValueType
+  Method: Write(System.Int32 index, MiniArch.Entity entity, out T1& c1, out T2& c2, out T3& c3, out T4& c4, out T5& c5, out T6& c6, out T7& c7, out T8& c8) -> System.Void
 class: MiniArch.Core.ParallelCommandStream : MiniArch.Core.CommandStreamCore
   Method: Add(MiniArch.Entity entity, T component) -> System.Void where T : struct, System.ValueType
   Method: AddChild(MiniArch.Entity parent, MiniArch.Entity child) -> System.Void
   Method: Clone(MiniArch.Entity source) -> MiniArch.Entity
   Method: Create() -> MiniArch.Entity
+  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1>, System.ValueType
+  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, T2 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1, T2>, System.ValueType
+  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1, T2, T3>, System.ValueType
+  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1, T2, T3, T4>, System.ValueType
+  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, T5 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1, T2, T3, T4, T5>, System.ValueType
+  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, T5 : struct, System.ValueType, T6 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1, T2, T3, T4, T5, T6>, System.ValueType
+  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, T5 : struct, System.ValueType, T6 : struct, System.ValueType, T7 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1, T2, T3, T4, T5, T6, T7>, System.ValueType
+  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, T5 : struct, System.ValueType, T6 : struct, System.ValueType, T7 : struct, System.ValueType, T8 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1, T2, T3, T4, T5, T6, T7, T8>, System.ValueType
   Method: Destroy(MiniArch.Entity entity) -> System.Void
   Method: Remove(MiniArch.Entity entity) -> System.Void where T : struct, System.ValueType
   Method: RemoveChild(MiniArch.Entity child) -> System.Void
@@ -727,7 +759,6 @@ class: MiniArch.World
   Method: Clear(in MiniArch.QueryDescription& description) -> System.Void
   Method: Clone() -> MiniArch.World
   Method: Clone(MiniArch.Entity source) -> MiniArch.Entity
-  Method: Create() -> MiniArch.Entity
   Method: Create(T1 component1) -> MiniArch.Entity where T1 : struct, System.ValueType
   Method: Create(T1 component1, T2 component2) -> MiniArch.Entity where T1 : struct, System.ValueType, T2 : struct, System.ValueType
   Method: Create(T1 component1, T2 component2, T3 component3) -> MiniArch.Entity where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType
@@ -744,7 +775,7 @@ class: MiniArch.World
   Method: Create(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13, T14 component14) -> MiniArch.Entity where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, T5 : struct, System.ValueType, T6 : struct, System.ValueType, T7 : struct, System.ValueType, T8 : struct, System.ValueType, T9 : struct, System.ValueType, T10 : struct, System.ValueType, T11 : struct, System.ValueType, T12 : struct, System.ValueType, T13 : struct, System.ValueType, T14 : struct, System.ValueType
   Method: Create(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13, T14 component14, T15 component15) -> MiniArch.Entity where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, T5 : struct, System.ValueType, T6 : struct, System.ValueType, T7 : struct, System.ValueType, T8 : struct, System.ValueType, T9 : struct, System.ValueType, T10 : struct, System.ValueType, T11 : struct, System.ValueType, T12 : struct, System.ValueType, T13 : struct, System.ValueType, T14 : struct, System.ValueType, T15 : struct, System.ValueType
   Method: Create(T1 component1, T2 component2, T3 component3, T4 component4, T5 component5, T6 component6, T7 component7, T8 component8, T9 component9, T10 component10, T11 component11, T12 component12, T13 component13, T14 component14, T15 component15, T16 component16) -> MiniArch.Entity where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, T5 : struct, System.ValueType, T6 : struct, System.ValueType, T7 : struct, System.ValueType, T8 : struct, System.ValueType, T9 : struct, System.ValueType, T10 : struct, System.ValueType, T11 : struct, System.ValueType, T12 : struct, System.ValueType, T13 : struct, System.ValueType, T14 : struct, System.ValueType, T15 : struct, System.ValueType, T16 : struct, System.ValueType
-  Method: CreateMany(System.Span<MiniArch.Entity> entities) -> System.Void
+  Method: CreateEmpty() -> MiniArch.Entity
   Method: Destroy(MiniArch.Entity entity) -> System.Void
   Method: Destroy(System.ReadOnlySpan<MiniArch.Entity> entities) -> System.Void
   Method: Destroy(in MiniArch.QueryDescription& description) -> System.Void
@@ -795,8 +826,8 @@ struct: MiniArch.WorldStats
         // Use file if available (committed to repo, copied to output by csproj).
         string filePath = Path.Combine(AppContext.BaseDirectory, "PublicApiBaseline.txt");
         if (File.Exists(filePath))
-            return File.ReadAllText(filePath).ReplaceLineEndings("\n");
+            return File.ReadAllText(filePath).ReplaceLineEndings("\n").TrimEnd('\n');
 
-        return EmbeddedBaseline.ReplaceLineEndings("\n");
+        return EmbeddedBaseline.ReplaceLineEndings("\n").TrimEnd('\n');
     }
 }
