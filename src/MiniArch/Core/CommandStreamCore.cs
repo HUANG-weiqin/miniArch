@@ -425,6 +425,22 @@ public abstract class CommandStreamCore
             var idx = DeduplicateBatchChain(comps, head, indices);
 
             // Copy deduplicated components into clone's batch buffer
+            //
+            // SAFETY NOTES (two borrow-lifetime patterns):
+            //
+            // 1. buf (BatchBuf): ReserveBatchBufSpace may Array.Resize(ref _frozen.BatchBuf),
+            //    invalidating local buf captured before it.  Must rebind after the call.
+            //    → Fixed by capturing `var buf = _frozen.BatchBuf` *after* ReserveBatchBufSpace.
+            //
+            // 2. ref var comp + comps (BatchComps): CommitBatchComponent may EnsureCapacity
+            //    (ref _frozen.BatchComps), replacing the array.  The local `comps` and the
+            //    `ref var comp` then point to the old array.  Current code is safe because:
+            //    a) comp is *read* before CommitBatchComponent and *not used* after it;
+            //    b) next iteration reads source entries from old comps[indices[i]] — still
+            //       valid because Array.Resize copies old content and source entries are
+            //       never mutated by CommitBatchComponent.
+            //    **Do not** reorder or extend this loop body without considering both invalidation
+            //    sources.  If you must hold comp across either call, copy its fields as values.
             for (var i = 0; i < idx; i++)
             {
                 ref var comp = ref comps[indices[i]];
