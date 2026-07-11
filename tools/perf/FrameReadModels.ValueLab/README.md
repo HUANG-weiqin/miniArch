@@ -2,63 +2,49 @@
 
 ## 结论先行
 
-本实验探索 Frame Read Models：在 Snapshot 稳定后，从 `world.Query(desc).GetChunks()` 和组件 spans 构建帧内派生索引；Build 一次，随后执行大量只读按 key 查询。实验数据只用于判断这条能力是否值得产品化。
+这是 Frame Read Models 的独立 ValueLab：在 Snapshot 稳定后，从 `world.Query(desc).GetChunks()` 和组件 spans 构建帧内派生索引；Build 一次，随后执行大量只读按 key 查询。
 
-**这是一个 ValueLab，不是 public API。** 实验代码不进入 `src/MiniArch/`，修改 Core 需要单独的准备工作和同意。
+**当前结论：Conditional Go。** uniform / 高基数 / 组件读取场景中，compact CSR row-ref layout 明显优于重复扫描和 per-key scan；hot bucket 与纯 entity-only 场景不能只靠 row-ref CSR 硬吃，必须单独处理或标为禁用区间。
+
+**这不是 public API。** 实验代码不进入 `src/MiniArch/`，不修改 Core。
 
 ## 约束
 
-- **Release 构建**：AGENTS.md 性能基准铁律要求所有测量使用 `-c Release`。
-- **Debug 构建**：打印错误并以非 0 退出，防止意外使用错误配置的测量结果。
-- **禁止修改 Core**：不动 `src/MiniArch/**` 或 `tests/HeroPipeline.Tests/**`。
-- **只读模式**：对 MiniArch 的查询 API 只读调用，不做 structural change 测量（structural change 在其他 bench 中）。
+- 必须 `-c Release`。
+- Debug 构建运行会报错并返回非 0。
+- 禁止修改 `src/MiniArch/**` 或 `tests/HeroPipeline.Tests/**`。
+- 只读 Snapshot 模型：Build 后查询阶段不发生 World 修改。
+- Clear/Rebuild/Grow 后旧 BucketView、span、row-ref view、enumerator 全部失效。
 
 ## 运行
 
 ```bash
-# 默认：--quick placeholder
+# 默认：correctness quick size + quick perf
 dotnet run -c Release --project tools/perf/FrameReadModels.ValueLab
 
-# 正确性烟雾测试
+# 正确性矩阵
 dotnet run -c Release --project tools/perf/FrameReadModels.ValueLab -- --correctness-only
+dotnet run -c Release --project tools/perf/FrameReadModels.ValueLab -- --correctness-only --n 1000000
 
-# 缩写基准集（骨架阶段为 placeholder）
+# 性能矩阵
 dotnet run -c Release --project tools/perf/FrameReadModels.ValueLab -- --quick
-
-# 完整基准集（骨架阶段为 placeholder）
 dotnet run -c Release --project tools/perf/FrameReadModels.ValueLab -- --full
-
-# 帮助
-dotnet run -c Release --project tools/perf/FrameReadModels.ValueLab -- --help
 ```
 
-## 参数
+## 覆盖范围
 
-| 参数 | 说明 |
-|---|---|
-| `--correctness-only` | 运行烟雾正确性测试（使用真实 World + Query + GetChunks） |
-| `--quick` | 缩写基准集（骨架：占位打印） |
-| `--full` | 完整基准集（骨架：占位打印） |
-| `--help` | 显示帮助 |
+- 正确性：empty、single/multi/default/missing key、hot bucket、hash collision、multi archetype、chunked、Where 0/partial/100、scan order、entity vs row consistency、AutoGrow、Clear rebuild、NoGrow failure、1M smoke。
+- 性能布局：`EntityArrayLookup`、`LinkedRowLookup`、`CompactRowLookup`、`DenseIntCompactLookup`。
+- 基线：`RawRepeatedScan`、`ComponentBucketQuery<Cell>`、`Dictionary<int,List<Entity>>`、`RawSameCompact`。
 
-## 正确性烟雾测试
+## 最新实测摘要
 
-`--correctness-only` 运行三个场景：
+见 `docs/plans/2026-07-11-frame-read-models-report.md`。
 
-1. **SinglePosition**：创建 1 个带 Position 的实体，查询确认可读到。
-2. **PositionVelocity**：创建 10 个带 Position+Velocity 的实体，查询确认全部可读到。
-3. **MixedArchetypes**：创建两种 archetype（Position only + Position+Velocity），查询 Position 确认跨 archetype 正确聚合。
+关键结论：
 
-全部 PASS 则打印 `Correctness: PASS`。
-
-## 组件模型
-
-- `Position` (float X, Y)
-- `Velocity` (float Dx, Dy)
-
-仅用于布局实验，不是框架公共 API。
-
-## 安全
-
-- 不参与 lockstep、FrameDelta、Snapshot、Checksum、Replay。
-- host-local / optional / non-deterministic / non-thread-safe。
+- `CompactRowDsl` 在 `realistic`（50K / Q=10K / distinct=4096）总 row 成本约 2ms；重复扫描约 1.3s，ComponentBucketQuery 约 0.7s。
+- `CompactRowDsl` 在 `full-1m`（1M / Q=50K / distinct=4096）build + row consume 约 193ms，稳态 build 分配 0B。
+- chunk-row component read 比 `World.Get<Health>` 随机定位稳定快，full-1m 中约 0.25x。
+- `LinkedRow` 不值得产品化：读取跳跃明显。
+- hot bucket 场景 row-ref lookup 会被大桶重复遍历拖垮；不能作为通用胜利证据。
