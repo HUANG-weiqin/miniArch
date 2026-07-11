@@ -424,7 +424,12 @@ public sealed class PublicApiSentinelTests
         return string.Join(" ", parts);
     }
 
-    private static readonly string EmbeddedBaseline = @"struct: MiniArch.ArchetypeStats
+    private static readonly string EmbeddedBaseline = @"struct: MiniArch.AncestorEnumerable
+  Method: GetEnumerator() -> MiniArch.AncestorEnumerator
+struct: MiniArch.AncestorEnumerator
+  Method: MoveNext() -> System.Boolean
+  Property: Current -> MiniArch.Entity [get; ]
+struct: MiniArch.ArchetypeStats
   Property: Capacity -> System.Int32 [get; ]
   Property: ComponentTypes -> System.Collections.Generic.IReadOnlyList<System.Type> [get; ]
   Property: EntityCount -> System.Int32 [get; ]
@@ -732,15 +737,18 @@ class: MiniArch.World
   Method: Destroy(in MiniArch.QueryDescription& description) -> System.Void
   Method: Dispose() -> System.Void
   Method: EnsureCapacity(System.Int32 entityCapacity) -> System.Void
+  Method: EnumerateAncestors(MiniArch.Entity child) -> MiniArch.AncestorEnumerable
   Method: EnumerateChildren(MiniArch.Entity parent) -> MiniArch.ChildrenEnumerable
   Method: Get(MiniArch.Entity entity) -> T where T : struct, System.ValueType
   Method: GetArchetypeStats() -> MiniArch.ArchetypeStats[]
+  Method: GetDepth(MiniArch.Entity entity) -> System.Int32
   Method: GetRef(MiniArch.Entity entity) -> T& where T : struct, System.ValueType
   Method: GetSingleton() -> MiniArch.Entity where T : struct, System.ValueType
   Method: GetStats() -> MiniArch.WorldStats
   Method: Has(MiniArch.Entity entity) -> System.Boolean where T : struct, System.ValueType
   Method: HasChildren(MiniArch.Entity entity) -> System.Boolean
   Method: IsAlive(MiniArch.Entity entity) -> System.Boolean
+  Method: IsRoot(MiniArch.Entity entity) -> System.Boolean
   Method: Query(in MiniArch.QueryDescription& description) -> MiniArch.Query
   Method: Remove(MiniArch.Entity entity) -> System.Void where T : struct, System.ValueType
   Method: RemoveChild(MiniArch.Entity child) -> System.Void

@@ -403,6 +403,49 @@ internal sealed class HierarchyTable
         }
     }
 
+    // ──────────────────────────────────────────────
+    //  Ancestor queries (Depth, EnumerateAncestors)
+    // ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns the depth of the entity (0 = root, 1 = child of root, etc.).
+    /// Returns -1 if the entity is not alive in <paramref name="world"/>.
+    /// Each step uses <see cref="TryGetParent"/> to verify parent liveness,
+    /// so a dead or stale parent terminates the chain.
+    /// </summary>
+    internal int Depth(World world, Entity entity)
+    {
+        if (!world.IsAlive(entity))
+            return -1;
+
+        var depth = 0;
+        var current = entity;
+        var maxDepth = world.EntitySlotCount;
+        while (TryGetParent(world, current, out var parent))
+        {
+            depth++;
+            current = parent;
+
+            if (depth > maxDepth)
+            {
+                throw new InvalidOperationException(
+                    $"Hierarchy cycle detected: depth ({depth}) exceeded entity slot count ({maxDepth}).");
+            }
+        }
+
+        return depth;
+    }
+
+    /// <summary>
+    /// Returns a zero-allocation enumerable over the ancestors of <paramref name="child"/>.
+    /// The enumerable yields parent, grandparent, …, root.
+    /// Returns an empty enumerable if <paramref name="child"/> is not alive or has no parent.
+    /// </summary>
+    internal AncestorEnumerable EnumerateAncestors(World world, Entity child)
+    {
+        return new AncestorEnumerable(_parentByChild, world, child, world.EntitySlotCount);
+    }
+
     /// <summary>
     /// Directly assigns a parent to a child without validation.
     /// TEST-ONLY: used to inject cycles for diagnostics validation.
