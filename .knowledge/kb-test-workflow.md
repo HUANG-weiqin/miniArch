@@ -10,7 +10,7 @@ updated: 2026-07-09
 
 - 验证 ECS core 的行为，作为 typed-column / direct-index 重构后的行为回归网
 - 覆盖实体生命周期、chunk 存储、结构迁移和 query
-- 为 `CreateMany` 单独区分 append-only、recycled ids、mixed ids 三类场景
+- ~~为 `CreateMany` 单独区分 append-only、recycled ids、mixed ids 三类场景~~（`CreateMany` 已移除）
 - 提供 query 采样 profiling 的独立入口、固定时长 throughput runner、snapshot save/load benchmark
 - 用复杂 archetype 分布覆盖 query filter + traversal 的热路径
 
@@ -21,7 +21,7 @@ updated: 2026-07-09
 | 分组 | 覆盖范围 |
 |---|---|
 | **Core/** | |
-| `WorldLifecycleTests` | 实体生命周期、version、free-list、EnsureCapacity、CreateMany、带组件 Create\<T...\>、GetSingleton\<T\>() |
+| `WorldLifecycleTests` | 实体生命周期、version、free-list、EnsureCapacity、CreateEmpty、带组件 Create\<T...\>、GetSingleton\<T\>() |
 | `WorldStructuralChangeTests` | Add/Set/Remove/Destroy 的 structural semantics |
 | `WorldStatsTests` | WorldStats / ArchetypeStats 诊断快照 |
 | `EntityTests` | Entity 句柄契约 |
