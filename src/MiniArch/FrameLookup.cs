@@ -7,6 +7,21 @@ namespace MiniArch;
 /// pointing into chunk storage. Build once per frame from a stable World snapshot,
 /// then query any number of times.
 /// </summary>
+/// <remarks>
+/// <para>
+/// <b>Use when</b>: you need to query thousands of keys per frame (grid cells, teams, zones)
+/// and/or read component values from the results. The one-time <see cref="Build{T1,TSel}"/> cost
+/// is amortized across many subsequent key lookups.
+/// </para>
+/// <para>
+/// <b>Not for</b>: occasional single-key lookups (a few queries per frame).
+/// For that, use <see cref="ComponentBucketQuery{TComponent}"/> which requires no build step.
+/// </para>
+/// <para>
+/// <b>Lifetime</b>: Build per frame, query within the same frame's snapshot, then Clear or rebuild.
+/// Indexer results are valid until the next Build or Clear.
+/// </para>
+/// </remarks>
 public sealed class FrameLookup<TKey>
     where TKey : unmanaged, IEquatable<TKey>
 {

@@ -14,6 +14,15 @@ namespace MiniArch;
 /// to hold all results.
 /// </para>
 /// <para>
+/// <b>Use when</b>: you need occasional lookups by component value (a few keys per frame)
+/// and only need the entity handles. No build step required.
+/// </para>
+/// <para>
+/// <b>Not for</b>: high-frequency per-frame indexing (thousands of keys) or component value reads.
+/// For that, use <see cref="FrameLookup{TKey}"/> which pre-indexes once and then returns
+/// zero-copy <see cref="RowRef"/> spans for any number of key queries.
+/// </para>
+/// <para>
 /// <b>Freshness</b>: every public read method (<see cref="Get"/>, <see cref="TryGet"/>,
 /// <see cref="ContainsKey"/>, <see cref="Count"/>) performs a deterministic scan from the
 /// real World for the <b>requested key only</b>. Correctness is guaranteed — there are no
