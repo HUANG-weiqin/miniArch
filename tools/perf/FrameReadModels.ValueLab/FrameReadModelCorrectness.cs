@@ -63,6 +63,7 @@ internal static class FrameReadModelCorrectness
             ("ScanOrder",                TestScanOrder),
             ("EntityVsRowConsistency",   TestEntityVsRowConsistency),
             ("DirectForEachConsistency", TestDirectForEachConsistency),
+            ("RunForEachConsistency",    TestRunForEachConsistency),
             ("AutoGrowMultiple",         TestAutoGrowMultiple),
             ("ClearRebuild",             TestClearRebuild),
             ("RebuildPublishesNewResult", TestRebuildPublishesNewResult),
@@ -970,6 +971,66 @@ internal static class FrameReadModelCorrectness
 
         directSum = consumer.Sum;
         return directSum == copySum;
+    }
+
+    /// <summary>
+    /// Public-shape probe: CompactRow chunk-run ForEach must consume the same
+    /// component values as CopyRowRefs + manual span read, but with batched spans.
+    /// Other layouts do not implement chunk-run in this ValueLab.
+    /// </summary>
+    private static bool TestRunForEachConsistency(string layout)
+    {
+        if (layout != "CompactRow")
+            return true;
+
+        using var world = new World();
+        var query = new QueryDescription().With<Cell>().With<Position>().With<Health>();
+        _ = world.Query(query).GetChunks();
+
+        for (var i = 0; i < BulkN; i++)
+        {
+            world.Create(
+                new Cell(i % 17),
+                new Position(i, i * 2),
+                new Health(i * 3));
+        }
+
+        var chunks = world.Query(query).GetChunks();
+        var lookup = CompactRowLookup<int>.Create(32, BulkN + 1);
+        Rows<Cell, Position, Health>.From(world, query)
+            .KeyBy<int, CellKeySelector3>()
+            .Into(ref lookup);
+
+        var refs = new RowRef[BulkN];
+        long copySum = 0;
+        var consumer = new HealthRunSumConsumer();
+
+        for (var key = 0; key < 17; key++)
+        {
+            var count = lookup.CopyRowRefs(key, refs);
+            for (var i = 0; i < count; i++)
+            {
+                ref readonly var rr = ref refs[i];
+                copySum += chunks[rr.ChunkIndex].GetSpan<Health>()[rr.RowIndex].Value;
+            }
+
+            lookup.ForEachRun<Health, HealthRunSumConsumer>(key, chunks, ref consumer);
+        }
+
+        return consumer.Sum == copySum && consumer.RunCount > 0;
+    }
+
+    private struct HealthRunSumConsumer : IFrameRunConsumer<Health>
+    {
+        public long Sum;
+        public int RunCount;
+
+        public void Accept(ReadOnlySpan<Entity> entities, ReadOnlySpan<Health> healths)
+        {
+            RunCount++;
+            for (var i = 0; i < healths.Length; i++)
+                Sum += healths[i].Value;
+        }
     }
 
     /// <summary>10. AutoGrow: start small, let it resize multiple times.

@@ -189,6 +189,27 @@ internal interface IFrameRowConsumer<T1, T2, T3>
     void Accept(Entity entity, in T1 c1, in T2 c2, in T3 c3);
 }
 
+internal interface IFrameRunConsumer<T1>
+    where T1 : unmanaged
+{
+    void Accept(ReadOnlySpan<Entity> entities, ReadOnlySpan<T1> c1);
+}
+
+internal interface IFrameRunConsumer<T1, T2>
+    where T1 : unmanaged
+    where T2 : unmanaged
+{
+    void Accept(ReadOnlySpan<Entity> entities, ReadOnlySpan<T1> c1, ReadOnlySpan<T2> c2);
+}
+
+internal interface IFrameRunConsumer<T1, T2, T3>
+    where T1 : unmanaged
+    where T2 : unmanaged
+    where T3 : unmanaged
+{
+    void Accept(ReadOnlySpan<Entity> entities, ReadOnlySpan<T1> c1, ReadOnlySpan<T2> c2, ReadOnlySpan<T3> c3);
+}
+
 // ========================================================================
 //  Concrete operators
 // ========================================================================
@@ -303,6 +324,38 @@ internal struct HealthSumConsumer3 : IFrameRowConsumer<Cell, Position, Health>
     public void Accept(Entity entity, in Cell c1, in Position c2, in Health c3)
     {
         Sum += c3.Value;
+    }
+}
+
+/// <summary>Sums Health.Value from single-component chunk runs.</summary>
+internal struct HealthSumRunConsumer1 : IFrameRunConsumer<Health>
+{
+    public long Sum;
+    public int RunCount;
+
+    public void Accept(ReadOnlySpan<Entity> entities, ReadOnlySpan<Health> c1)
+    {
+        RunCount++;
+        for (var i = 0; i < c1.Length; i++)
+            Sum += c1[i].Value;
+    }
+}
+
+/// <summary>Sums Health.Value from 3-component chunk runs.</summary>
+internal struct HealthSumRunConsumer3 : IFrameRunConsumer<Cell, Position, Health>
+{
+    public long Sum;
+    public int RunCount;
+
+    public void Accept(
+        ReadOnlySpan<Entity> entities,
+        ReadOnlySpan<Cell> c1,
+        ReadOnlySpan<Position> c2,
+        ReadOnlySpan<Health> c3)
+    {
+        RunCount++;
+        for (var i = 0; i < c3.Length; i++)
+            Sum += c3[i].Value;
     }
 }
 
