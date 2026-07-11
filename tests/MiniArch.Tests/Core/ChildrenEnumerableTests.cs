@@ -8,7 +8,7 @@ public sealed class ChildrenEnumerableTests
     public void EnumerateChildren_on_entity_with_no_children_returns_empty()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
 
         var children = world.EnumerateChildren(entity).ToChildList();
 
@@ -19,8 +19,8 @@ public sealed class ChildrenEnumerableTests
     public void EnumerateChildren_with_single_child_returns_that_child()
     {
         var world = new World();
-        var parent = world.Create();
-        var child = world.Create();
+        var parent = world.CreateEmpty();
+        var child = world.CreateEmpty();
         world.AddChild(parent, child);
 
         var children = world.EnumerateChildren(parent).ToChildList();
@@ -33,10 +33,10 @@ public sealed class ChildrenEnumerableTests
     public void EnumerateChildren_with_multiple_children_returns_all()
     {
         var world = new World();
-        var parent = world.Create();
-        var child1 = world.Create();
-        var child2 = world.Create();
-        var child3 = world.Create();
+        var parent = world.CreateEmpty();
+        var child1 = world.CreateEmpty();
+        var child2 = world.CreateEmpty();
+        var child3 = world.CreateEmpty();
         world.AddChild(parent, child1);
         world.AddChild(parent, child2);
         world.AddChild(parent, child3);
@@ -53,9 +53,9 @@ public sealed class ChildrenEnumerableTests
     public void EnumerateChildren_skips_destroyed_child()
     {
         var world = new World();
-        var parent = world.Create();
-        var child1 = world.Create();
-        var child2 = world.Create();
+        var parent = world.CreateEmpty();
+        var child1 = world.CreateEmpty();
+        var child2 = world.CreateEmpty();
         world.AddChild(parent, child1);
         world.AddChild(parent, child2);
 
@@ -70,10 +70,10 @@ public sealed class ChildrenEnumerableTests
     public void EnumerateChildren_skips_only_destroyed_children()
     {
         var world = new World();
-        var parent = world.Create();
-        var child1 = world.Create();
-        var child2 = world.Create();
-        var child3 = world.Create();
+        var parent = world.CreateEmpty();
+        var child1 = world.CreateEmpty();
+        var child2 = world.CreateEmpty();
+        var child3 = world.CreateEmpty();
         world.AddChild(parent, child1);
         world.AddChild(parent, child2);
         world.AddChild(parent, child3);
@@ -90,9 +90,9 @@ public sealed class ChildrenEnumerableTests
     public void EnumerateChildren_returns_empty_after_all_children_destroyed()
     {
         var world = new World();
-        var parent = world.Create();
-        var child1 = world.Create();
-        var child2 = world.Create();
+        var parent = world.CreateEmpty();
+        var child1 = world.CreateEmpty();
+        var child2 = world.CreateEmpty();
         world.AddChild(parent, child1);
         world.AddChild(parent, child2);
 
@@ -107,8 +107,8 @@ public sealed class ChildrenEnumerableTests
     public void EnumerateChildren_is_zero_alloc()
     {
         var world = new World();
-        var parent = world.Create();
-        var child = world.Create();
+        var parent = world.CreateEmpty();
+        var child = world.CreateEmpty();
         world.AddChild(parent, child);
 
         // ChildrenEnumerable is a struct, GetEnumerator returns a struct
@@ -125,10 +125,10 @@ public sealed class ChildrenEnumerableTests
     public void Multiple_EnumerateChildren_calls_are_independent()
     {
         var world = new World();
-        var parent1 = world.Create();
-        var parent2 = world.Create();
-        var child1 = world.Create();
-        var child2 = world.Create();
+        var parent1 = world.CreateEmpty();
+        var parent2 = world.CreateEmpty();
+        var child1 = world.CreateEmpty();
+        var child2 = world.CreateEmpty();
         world.AddChild(parent1, child1);
         world.AddChild(parent2, child2);
 
@@ -145,12 +145,12 @@ public sealed class ChildrenEnumerableTests
     public void EnumerateChild_on_orphaned_entity_returns_empty()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
         world.Destroy(entity);
 
         // Entity is dead, but EnumerateChildren on any valid parent entity
         // that has no children should return empty regardless
-        var parent = world.Create();
+        var parent = world.CreateEmpty();
         var children = world.EnumerateChildren(parent).ToChildList();
         Assert.Empty(children);
     }
@@ -159,8 +159,8 @@ public sealed class ChildrenEnumerableTests
     public void EnumerateChildren_does_not_include_unrelated_child()
     {
         var world = new World();
-        var parent = world.Create();
-        var orphan = world.Create();
+        var parent = world.CreateEmpty();
+        var orphan = world.CreateEmpty();
         // orphan has no parent, so EnumerateChildren(parent) should not see it
 
         var children = world.EnumerateChildren(parent).ToChildList();
@@ -171,8 +171,8 @@ public sealed class ChildrenEnumerableTests
     public void EnumerateChildren_after_RemoveChild_does_not_include_removed()
     {
         var world = new World();
-        var parent = world.Create();
-        var child = world.Create();
+        var parent = world.CreateEmpty();
+        var child = world.CreateEmpty();
         world.AddChild(parent, child);
         world.RemoveChild(child);
 
@@ -184,9 +184,9 @@ public sealed class ChildrenEnumerableTests
     public void EnumerateChildren_after_child_reparented_to_another_parent_shows_under_new_parent()
     {
         var world = new World();
-        var parent1 = world.Create();
-        var parent2 = world.Create();
-        var child = world.Create();
+        var parent1 = world.CreateEmpty();
+        var parent2 = world.CreateEmpty();
+        var child = world.CreateEmpty();
 
         world.AddChild(parent1, child);
         world.AddChild(parent2, child);

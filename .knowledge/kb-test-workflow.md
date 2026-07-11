@@ -101,7 +101,7 @@ updated: 2026-07-09
 - 集成测试只保留一条完整迁移路径
 - 结构变化测试必须保留 `Set` 的 in-place 语义断言
 - command buffer 测试需要锁定 recording 不提前发布 layout 变化
-- CreateMany benchmark 必须把 fresh append-only、recycled ids、mixed ids 分开跑
+- ~~CreateMany benchmark 必须把 fresh append-only、recycled ids、mixed ids 分开跑~~（`CreateMany` 已移除）
 - query 并发测试必须覆盖热缓存和冷首次 materialize 两类场景
 - 零分配测试的 warmup 必须循环 ≥10 次（避免 Tier 1 升级的假分配）
 

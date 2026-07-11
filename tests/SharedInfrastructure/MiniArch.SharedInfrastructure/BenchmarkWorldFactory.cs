@@ -31,41 +31,13 @@ public static partial class BenchmarkWorldFactory
         return new ArchComplexQueryWorldState(world, entities);
     }
 
-    public static MiniCreateManyWorldState CreateMiniCreateManyRecycledWorld(int entityCount)
-    {
-        var world = new MiniWorld();
-        var created = new MiniEntity[entityCount];
-        world.CreateMany(created);
-
-        for (var i = 0; i < created.Length; i++)
-        {
-            world.Destroy(created[i]);
-        }
-
-        return new MiniCreateManyWorldState(world, new MiniEntity[entityCount]);
-    }
-
-    public static MiniCreateManyWorldState CreateMiniCreateManyMixedWorld(int entityCount)
-    {
-        var world = new MiniWorld();
-        var created = new MiniEntity[entityCount];
-        world.CreateMany(created);
-
-        for (var i = 0; i < entityCount / 2; i++)
-        {
-            world.Destroy(created[i]);
-        }
-
-        return new MiniCreateManyWorldState(world, new MiniEntity[entityCount]);
-    }
-
     public static MiniWorldState CreateMiniEmptyWorld(int entityCount)
     {
         var world = new MiniWorld();
         var entities = new MiniEntity[entityCount];
         for (var i = 0; i < entityCount; i++)
         {
-            entities[i] = world.Create();
+            entities[i] = world.CreateEmpty();
         }
 
         return new MiniWorldState(world, entities);
@@ -448,17 +420,6 @@ public sealed class ArchWorldState : IDisposable
     }
 }
 
-public sealed class MiniCreateManyWorldState
-{
-    public MiniCreateManyWorldState(MiniWorld world, MiniEntity[] buffer)
-    {
-        World = world;
-        Buffer = buffer;
-    }
-
-    public MiniWorld World;
-    public MiniEntity[] Buffer;
-}
 
 public sealed class ArchCreateManyWorldState : IDisposable
 {

@@ -50,7 +50,7 @@ updated: 2026-07-11
   - `World.Create<T...>` 为 `1..16` 个组件提供固定重载（`World.Create.Generated.cs`）；warmed 路径缓存在泛型 static cache（`CachedCreateArchetype`），O(1) 无分配
   - `World.GetSingleton<T>()` 扫描所有 archetype 返回唯一含 `T` 的实体（singleton 语义：0 或 >1 抛异常），O(archetypes) 冷路径
   - `World.EnsureCapacity` 负责提前扩好 entity metadata 存储
-  - `World.CreateMany` 先批量准备 entity id，再一次性落入空签名 archetype
+   - `World.CreateEmpty` 创建空实体（无组件），适用于运行期决定组件集合的场景
   - `Add/Remove`（`World.StructuralChange.cs`）先算目标签名，再通过 edge cache（`_addDestinationCache`/`_removeDestinationCache` `Archetype?[]` 按 componentId 直索引）找到目标 Archetype，用 `Archetype.CopySharedComponentsFrom` 搬迁共享组件
   - `Set` 在组件已存在时直接定位到 typed column 的 row，原地写回，不触发迁移
 - `EntityAccessor` 缓存 `(Archetype, RowIndex)`，后续 `Get<T>` / `Set<T>` / `Has<T>` 跳过 `_records` 查找和 version check
@@ -194,7 +194,6 @@ world.Destroy(e);
 - swap-remove 必须同时移动 entity 和每个组件列的对应 byte block（`Archetype.Storage.cs: RemoveAt`）
 - Archetype 扩容后 `_columnByteOffsets` 重新计算，`CopySharedComponentsFrom` 中每次拷贝都动态解析 offset，因此安全
 - `Create<T...>` 如果复用 `Add` 迁移路径，会留下中间态 archetype
-- `CreateMany` 不能退化成外部循环调 `Create`
 - Edge cache 用 `Archetype?[]` 按 componentId 直索引，当组件 ID 稀疏时数组可能膨胀
 - Add/Set/Remove 的当前语义：`Add<T>` 组件已存在时抛异常，`Set<T>` 组件不存在时抛异常，`Remove<T>` 组件不存在时 no-op（详见 `kb-design-rationale.md` §2.9）
 - Query 快照是非原子的，安全性依赖 volatile publish + "world 无并发写"前提

@@ -30,7 +30,7 @@ public sealed class SerializationRoundtripPropertyTests
         var world = new World();
         foreach (var def in defs)
         {
-            var e = world.Create();
+            var e = world.CreateEmpty();
             if (def.HasPosition)
                 world.Add(e, new Position(def.X, def.Y));
             if (def.HasVelocity)

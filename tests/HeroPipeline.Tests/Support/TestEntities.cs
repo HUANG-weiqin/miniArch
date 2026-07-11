@@ -18,7 +18,7 @@ internal static class TestEntities
     {
         ArgumentNullException.ThrowIfNull(world);
 
-        MiniArch.Entity entity = world.Create();
+        MiniArch.Entity entity = world.CreateEmpty();
 
         foreach (object component in components)
         {

@@ -361,7 +361,7 @@ public class WatchApiTests
         var handler = new TransitionRecorder(0);
         var watch = world.Watch<TransitionRecorder>(new QueryDescription().With<Position>());
         watch.Handler = handler;
-        var e = world.Create(); // empty, no Position
+        var e = world.CreateEmpty(); // empty, no Position
         watch.Snapshot(world);
         world.Add(e, new Position(0, 0));
         watch.Diff(world);

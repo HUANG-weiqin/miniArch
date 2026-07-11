@@ -16,10 +16,7 @@ public class StructuralChangeBenchmarks
     private MiniWorldState _miniAddState = null!;
     private ArchWorldState _archAddState = null!;
 
-    private MiniCreateManyWorldState _miniRecycledCreateManyState = null!;
     private ArchCreateManyWorldState _archRecycledCreateManyState = null!;
-
-    private MiniCreateManyWorldState _miniMixedCreateManyState = null!;
     private ArchCreateManyWorldState _archMixedCreateManyState = null!;
 
     private MiniWorldState _miniSetState = null!;
@@ -43,14 +40,8 @@ public class StructuralChangeBenchmarks
     [IterationSetup(Target = nameof(Arch_CreateMany_Entity_RecycledIds))]
     public void SetupArchRecycledCreateMany() => _archRecycledCreateManyState = BenchmarkWorldFactory.CreateArchCreateManyRecycledWorld(EntityCount);
 
-    [IterationSetup(Target = nameof(MiniArch_CreateMany_Entity_RecycledIds))]
-    public void SetupMiniRecycledCreateMany() => _miniRecycledCreateManyState = BenchmarkWorldFactory.CreateMiniCreateManyRecycledWorld(EntityCount);
-
     [IterationSetup(Target = nameof(Arch_CreateMany_Entity_MixedIds))]
     public void SetupArchMixedCreateMany() => _archMixedCreateManyState = BenchmarkWorldFactory.CreateArchCreateManyMixedWorld(EntityCount);
-
-    [IterationSetup(Target = nameof(MiniArch_CreateMany_Entity_MixedIds))]
-    public void SetupMiniMixedCreateMany() => _miniMixedCreateManyState = BenchmarkWorldFactory.CreateMiniCreateManyMixedWorld(EntityCount);
 
     [IterationSetup(Target = nameof(MiniArch_Set_Position))]
     public void SetupMiniSet() => _miniSetState = BenchmarkWorldFactory.CreateMiniWorldWithPosition(EntityCount);
@@ -101,7 +92,7 @@ public class StructuralChangeBenchmarks
         var world = new MiniArch.World();
         for (var i = 0; i < EntityCount; i++)
         {
-            world.Create();
+            world.CreateEmpty();
         }
     }
 
@@ -133,14 +124,6 @@ public class StructuralChangeBenchmarks
         world.Create(entities, Arch.Core.Signature.Null, EntityCount);
     }
 
-    [Benchmark(Description = "MiniArch create empty entities in bulk")]
-    public void MiniArch_CreateMany_Entity()
-    {
-        var world = new MiniArch.World();
-        var entities = new MiniEntity[EntityCount];
-        world.CreateMany(entities);
-    }
-
     [Benchmark(Description = "Arch create empty entities in bulk with recycled ids")]
     public void Arch_CreateMany_Entity_RecycledIds()
     {
@@ -148,25 +131,11 @@ public class StructuralChangeBenchmarks
         state.World.Create(state.Buffer, Arch.Core.Signature.Null, state.Buffer.Length);
     }
 
-    [Benchmark(Description = "MiniArch create empty entities in bulk with recycled ids")]
-    public void MiniArch_CreateMany_Entity_RecycledIds()
-    {
-        var state = _miniRecycledCreateManyState;
-        state.World.CreateMany(state.Buffer);
-    }
-
     [Benchmark(Description = "Arch create empty entities in bulk with mixed ids")]
     public void Arch_CreateMany_Entity_MixedIds()
     {
         var state = _archMixedCreateManyState;
         state.World.Create(state.Buffer, Arch.Core.Signature.Null, state.Buffer.Length);
-    }
-
-    [Benchmark(Description = "MiniArch create empty entities in bulk with mixed ids")]
-    public void MiniArch_CreateMany_Entity_MixedIds()
-    {
-        var state = _miniMixedCreateManyState;
-        state.World.CreateMany(state.Buffer);
     }
 
     [Benchmark(Description = "Arch add Position to empty entities")]
@@ -548,7 +517,7 @@ public class MixedStructuralChangeBenchmarks
 
             for (var i = 0; i < entityCount; i++)
             {
-                var entity = world.Create();
+                var entity = world.CreateEmpty();
                 emptyEntities.Add(entity);
             }
 
@@ -563,7 +532,7 @@ public class MixedStructuralChangeBenchmarks
             return new MixedMiniWorldState(world, CreateOperations(entityCount), positionedEntities, emptyEntities);
         }
 
-        protected override MiniEntity CreateEntity() => World.Create();
+        protected override MiniEntity CreateEntity() => World.CreateEmpty();
 
         protected override void AddPosition(MiniEntity entity, int stepIndex) => World.Add(entity, new Position(stepIndex, stepIndex));
 

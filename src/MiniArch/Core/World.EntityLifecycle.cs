@@ -6,8 +6,6 @@ using MiniArch.Core;
 
 namespace MiniArch;
 
-internal readonly record struct EntityBatchRange(int StartRow, int Count);
-
 public sealed partial class World
 {
     // Below this count, Destroy falls back to individual Destroy calls.
@@ -18,40 +16,15 @@ public sealed partial class World
     internal const int SmallDestroyThreshold = 8;
 
     /// <summary>
-    /// Creates an empty entity.
+    /// Creates an empty entity (no components). Use this when the component set
+    /// is not known at creation time — add components afterward via
+    /// <see cref="Add{T}"/>.
     /// </summary>
-    public Entity Create()
+    public Entity CreateEmpty()
     {
         AssertNotDisposed();
         var archetype = GetOrCreateArchetype(Signature.Empty)!;
         return CreateInArchetype(archetype, out _);
-    }
-
-    /// <summary>
-    /// Creates many empty entities.
-    /// </summary>
-    public void CreateMany(Span<Entity> entities)
-    {
-        AssertNotDisposed();
-        if (entities.Length == 0)
-        {
-            return;
-        }
-
-        if (_freeIdCount == 0)
-        {
-            CreateManyFresh(entities);
-            return;
-        }
-
-        var reusedCount = Math.Min(entities.Length, _freeIdCount);
-        var startId = AppendEntitySlots(entities.Length - reusedCount);
-
-        var archetype = GetOrCreateArchetype(Signature.Empty)!;
-        var startRow = archetype.AllocateRows(entities.Length);
-        Span<EntityBatchRange> ranges = stackalloc EntityBatchRange[1];
-        ranges[0] = new EntityBatchRange(startRow, entities.Length);
-        WriteCreatedEntitiesAndLocations(archetype, entities, ranges, reusedCount, startId);
     }
 
     /// <summary>
@@ -661,140 +634,6 @@ public sealed partial class World
         record.Archetype = archetype;
         record.RowIndex = rowIndex;
         return entity;
-    }
-
-    private int AppendEntitySlots(int newEntityCount)
-    {
-        var startId = _entitySlotCount;
-        if (newEntityCount == 0)
-        {
-            return startId;
-        }
-
-        var requiredCount = startId + newEntityCount;
-        EnsureBatchCapacity(requiredCount, newEntityCount);
-        EnsureEntityCapacity(requiredCount);
-        _entitySlotCount = requiredCount;
-        // Initialize new slots: version=1, location=empty
-        var newSlots = _records.AsSpan(startId, newEntityCount);
-        for (var i = 0; i < newSlots.Length; i++)
-        {
-            newSlots[i] = new EntityRecord { Version = 1 };
-        }
-        return startId;
-    }
-
-    private void EnsureBatchCapacity(int requiredCount, int batchCount)
-    {
-        if (_records.Length >= requiredCount)
-        {
-            return;
-        }
-
-        var targetCapacity = requiredCount + (batchCount / 2);
-        if (targetCapacity < requiredCount)
-        {
-            targetCapacity = requiredCount;
-        }
-
-        EnsureCapacity(targetCapacity);
-    }
-
-    private void CreateManyFresh(Span<Entity> entities)
-    {
-        var startId = AppendEntitySlots(entities.Length);
-
-        var archetype = GetOrCreateArchetype(Signature.Empty)!;
-        var startRow = archetype.AllocateRows(entities.Length);
-        Span<EntityBatchRange> ranges = stackalloc EntityBatchRange[1];
-        ranges[0] = new EntityBatchRange(startRow, entities.Length);
-        WriteCreatedEntitiesAndLocations(archetype, entities, ranges, 0, startId);
-    }
-
-    private void WriteCreatedEntitiesAndLocations(Archetype archetype, Span<Entity> entities, ReadOnlySpan<EntityBatchRange> ranges, int reusedCount, int startId)
-    {
-        if (archetype.IsChunked)
-            WriteCreatedEntitiesAndLocationsChunked(archetype, entities, ranges, reusedCount, startId);
-        else
-            WriteCreatedEntitiesAndLocationsFlat(archetype, entities, ranges, reusedCount, startId);
-    }
-
-    private void WriteCreatedEntitiesAndLocationsFlat(Archetype archetype, Span<Entity> entities, ReadOnlySpan<EntityBatchRange> ranges, int reusedCount, int startId)
-    {
-        var freeIds = _freeIds;
-        var freeIndex = _freeIdCount;
-        var entityIndex = 0;
-        var nextId = startId;
-
-        foreach (var range in ranges)
-        {
-            var chunkEntities = archetype.GetFlatReservedEntities(range.StartRow, range.Count);
-            var rowOffset = 0;
-
-            for (; rowOffset < range.Count && entityIndex < reusedCount; rowOffset++)
-            {
-                var recycled = freeIds[--freeIndex];
-                var entity = new Entity(recycled.Id, recycled.Version);
-                entities[entityIndex++] = entity;
-                chunkEntities[rowOffset] = entity;
-                ref var record = ref _records[entity.Id];
-                record.Archetype = archetype;
-                record.RowIndex = range.StartRow + rowOffset;
-            }
-
-            for (; rowOffset < range.Count; rowOffset++)
-            {
-                var entity = new Entity(nextId++, 1);
-                entities[entityIndex++] = entity;
-                chunkEntities[rowOffset] = entity;
-                ref var record = ref _records[entity.Id];
-                record.Archetype = archetype;
-                record.RowIndex = range.StartRow + rowOffset;
-            }
-        }
-
-        _freeIdCount = freeIndex;
-    }
-
-    // Chunked archetypes store rows across multiple segment arrays, so the
-    // single-Span fast path in the Flat variant does not apply. Fall back to
-    // per-row WriteEntityAt, which maps a global row to (segment, local) and
-    // works in both modes. Called only when an archetype has already been
-    // promoted to chunked storage (large entity counts on dense signatures).
-    private void WriteCreatedEntitiesAndLocationsChunked(Archetype archetype, Span<Entity> entities, ReadOnlySpan<EntityBatchRange> ranges, int reusedCount, int startId)
-    {
-        var freeIds = _freeIds;
-        var freeIndex = _freeIdCount;
-        var entityIndex = 0;
-        var nextId = startId;
-
-        foreach (var range in ranges)
-        {
-            var rowOffset = 0;
-
-            for (; rowOffset < range.Count && entityIndex < reusedCount; rowOffset++)
-            {
-                var recycled = freeIds[--freeIndex];
-                var entity = new Entity(recycled.Id, recycled.Version);
-                entities[entityIndex++] = entity;
-                archetype.WriteEntityAt(range.StartRow + rowOffset, entity);
-                ref var record = ref _records[entity.Id];
-                record.Archetype = archetype;
-                record.RowIndex = range.StartRow + rowOffset;
-            }
-
-            for (; rowOffset < range.Count; rowOffset++)
-            {
-                var entity = new Entity(nextId++, 1);
-                entities[entityIndex++] = entity;
-                archetype.WriteEntityAt(range.StartRow + rowOffset, entity);
-                ref var record = ref _records[entity.Id];
-                record.Archetype = archetype;
-                record.RowIndex = range.StartRow + rowOffset;
-            }
-        }
-
-        _freeIdCount = freeIndex;
     }
 
     private readonly object _entityIdLock = new();

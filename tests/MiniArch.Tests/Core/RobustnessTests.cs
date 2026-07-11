@@ -423,8 +423,8 @@ public sealed class RobustnessTests
     public void AddChild_on_dead_entity_throws()
     {
         var world = new World();
-        var parent = world.Create();
-        var child = world.Create();
+        var parent = world.CreateEmpty();
+        var child = world.CreateEmpty();
         world.Destroy(child);
 
         Assert.Throws<InvalidOperationException>(() => world.AddChild(parent, child));
@@ -482,9 +482,9 @@ public sealed class RobustnessTests
     public void AddChild_reparents_entity_correctly()
     {
         var world = new World();
-        var a = world.Create();
-        var b = world.Create();
-        var c = world.Create();
+        var a = world.CreateEmpty();
+        var b = world.CreateEmpty();
+        var c = world.CreateEmpty();
 
         // Attach B to A.
         world.AddChild(a, b);

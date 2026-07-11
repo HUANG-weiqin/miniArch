@@ -60,7 +60,7 @@ public sealed class TrickyEdgeCaseTests
 
         for (var cycle = 0; cycle < 100; cycle++)
         {
-            var entity = world.Create();
+            var entity = world.CreateEmpty();
             // Create→Destroy in a tight loop always reuses slot 0 (freed
             // immediately each iteration) with a monotonically increasing
             // version. Verifying both catches ABA-style recycling bugs.
@@ -77,7 +77,10 @@ public sealed class TrickyEdgeCaseTests
     {
         var world = new World(chunkCapacity: 4, entityCapacity: 100);
         var batch = new Entity[100];
-        world.CreateMany(batch);
+        for (var i = 0; i < batch.Length; i++)
+        {
+            batch[i] = world.CreateEmpty();
+        }
 
         var destroyed = new HashSet<int>();
         for (var i = 0; i < batch.Length; i += 2)
@@ -89,7 +92,7 @@ public sealed class TrickyEdgeCaseTests
         var recreated = new List<Entity>();
         for (var i = 0; i < 50; i++)
         {
-            recreated.Add(world.Create());
+            recreated.Add(world.CreateEmpty());
         }
 
         var reuseIds = recreated.Where(e => destroyed.Contains(e.Id)).ToList();
@@ -140,7 +143,7 @@ public sealed class TrickyEdgeCaseTests
     public void Add_component_that_already_exists_throws()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
 
         world.Add(entity, new Position(1, 2));
         Assert.Throws<InvalidOperationException>(() => world.Add(entity, new Position(99, 99)));
@@ -167,7 +170,7 @@ public sealed class TrickyEdgeCaseTests
     public void Rapid_add_remove_cycling_across_archetypes_does_not_corrupt_state()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
         var positionId = ComponentRegistry.Shared.GetOrCreate<Position>();
         var velocityId = ComponentRegistry.Shared.GetOrCreate<Velocity>();
         var healthId = ComponentRegistry.Shared.GetOrCreate<Health>();
@@ -291,7 +294,7 @@ public sealed class TrickyEdgeCaseTests
     public void Query_with_only_WithAny_matches_nothing_when_entities_have_no_components()
     {
         var world = new World();
-        world.Create();
+        world.CreateEmpty();
         var description = new QueryDescription().WithAny<Position>();
         var query = MiniQueryCache.Create(world, in description);
 
@@ -305,7 +308,7 @@ public sealed class TrickyEdgeCaseTests
         world.Create(new Position(1, 2));
         world.Create(new Velocity(3, 4));
         world.Create(new Position(5, 6), new Velocity(7, 8));
-        world.Create(); // empty entity, should not match
+        world.CreateEmpty(); // empty entity, should not match
         var description = new QueryDescription().WithAny<Position>();
         var query = MiniQueryCache.Create(world, in description);
 
@@ -318,7 +321,7 @@ public sealed class TrickyEdgeCaseTests
         var world = new World(chunkCapacity: 3);
         for (var i = 0; i < 10; i++)
         {
-            var entity = world.Create();
+            var entity = world.CreateEmpty();
             if (i % 2 == 0) world.Add(entity, new Position(i, i));
             if (i % 3 == 0) world.Add(entity, new Velocity(i, i));
         }
@@ -409,7 +412,7 @@ public sealed class TrickyEdgeCaseTests
     public void EnumerateChildren_on_entity_with_no_children_returns_empty()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
 
         var children = world.EnumerateChildren(entity).ToChildList();
 
@@ -421,7 +424,7 @@ public sealed class TrickyEdgeCaseTests
     public void TryGetParent_on_root_entity_returns_false()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
 
         Assert.False(world.TryGetParent(entity, out _));
     }
@@ -430,13 +433,13 @@ public sealed class TrickyEdgeCaseTests
     public void Destroy_child_then_recreate_entity_in_same_slot_should_not_inherit_parent()
     {
         var world = new World();
-        var parent = world.Create();
-        var child = world.Create();
+        var parent = world.CreateEmpty();
+        var child = world.CreateEmpty();
 
         world.AddChild(parent, child);
         world.Destroy(child);
 
-        var recycled = world.Create();
+        var recycled = world.CreateEmpty();
         Assert.Equal(child.Id, recycled.Id);
         Assert.NotEqual(child.Version, recycled.Version);
 
@@ -448,7 +451,7 @@ public sealed class TrickyEdgeCaseTests
     public void Destroy_entity_with_children_and_components_cleans_up_everything()
     {
         var world = new World();
-        var root = world.Create();
+        var root = world.CreateEmpty();
         var child = world.Create(new Position(1, 2), new Velocity(3, 4));
 
         world.AddChild(root, child);
@@ -464,10 +467,10 @@ public sealed class TrickyEdgeCaseTests
     public void Destroy_child_keeps_parent_and_siblings_alive()
     {
         var world = new World();
-        var parent = world.Create();
-        var child1 = world.Create();
-        var child2 = world.Create();
-        var child3 = world.Create();
+        var parent = world.CreateEmpty();
+        var child1 = world.CreateEmpty();
+        var child2 = world.CreateEmpty();
+        var child3 = world.CreateEmpty();
 
         world.AddChild(parent, child1);
         world.AddChild(parent, child2);
@@ -575,7 +578,7 @@ public sealed class TrickyEdgeCaseTests
     public void Archetype_with_entity_creation_and_removal_leaves_empty_archetype_visible_to_query()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
         world.Add(entity, new Position(1, 2));
         world.Remove<Position>(entity);
 
@@ -1051,7 +1054,7 @@ public sealed class TrickyEdgeCaseTests
     public void Layoutkind_auto_component_rejected_for_determinism()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
 
         // AutoLayoutByte has LayoutKind.Auto, no Entity fields, no managed refs.
         // The fix rejects it at storage time to enforce cross-host determinism.
@@ -1066,7 +1069,7 @@ public sealed class TrickyEdgeCaseTests
     public void Layoutkind_sequential_component_accepted_normally()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
 
         // SequentialLayoutMixed has LayoutKind.Sequential — must work fine.
         world.Add(entity, new SequentialLayoutMixed(1, 2, 3));
@@ -1084,7 +1087,7 @@ public sealed class TrickyEdgeCaseTests
     public void Record_struct_component_accepted_normally()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
 
         // Position is a record struct — defaults to LayoutKind.Sequential.
         world.Add(entity, new Position(42, 99));
@@ -1101,7 +1104,7 @@ public sealed class TrickyEdgeCaseTests
     public void Enum_component_accepted_normally()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
 
         world.Add(entity, TestEnum.Beta);
         Assert.True(world.TryGet(entity, out TestEnum value));

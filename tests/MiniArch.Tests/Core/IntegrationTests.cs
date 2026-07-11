@@ -13,7 +13,7 @@ public sealed class IntegrationTests
     public void Entity_can_move_between_archetypes_and_be_queried_with_final_values()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
 
         world.Add(entity, new Position(1, 2));
         world.Add(entity, new Velocity(3, 4));

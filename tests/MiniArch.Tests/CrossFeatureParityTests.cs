@@ -247,7 +247,7 @@ public sealed class CrossFeatureParityTests
         // Add a new component via CommandStream; Watch should detect the
         // transition from default to the new value.
         var world = new World();
-        var entity = world.Create(); // no Position initially
+        var entity = world.CreateEmpty(); // no Position initially
 
         var handler = new PositionHandler(0);
         var watch = world.Watch<Position, PositionHandler>();
@@ -344,7 +344,7 @@ public sealed class CrossFeatureParityTests
         // Hierarchy changes do not affect filter membership (components unchanged).
         // AddChild must NOT produce a transition for the child.
         var world = new World();
-        var parent = world.Create();
+        var parent = world.CreateEmpty();
         var child = world.Create(new Position(1, 2));
 
         var watch = world.Watch<TransitionRecorder>(
@@ -364,7 +364,7 @@ public sealed class CrossFeatureParityTests
         // Removing a child should NOT change filter membership for the child
         // (child still has Position). No transition expected.
         var world = new World();
-        var parent = world.Create();
+        var parent = world.CreateEmpty();
         var child = world.Create(new Position(1, 2));
         world.AddChild(parent, child);
 
@@ -385,7 +385,7 @@ public sealed class CrossFeatureParityTests
         // Destroy a parent with children; cascade should produce Exited
         // for all children that match the filter (children are destroyed).
         var world = new World();
-        var parent = world.Create();
+        var parent = world.CreateEmpty();
         var child1 = world.Create(new Position(1, 2));
         var child2 = world.Create(new Position(3, 4));
         var unrelated = world.Create(new Position(5, 6));
@@ -455,7 +455,7 @@ public sealed class CrossFeatureParityTests
     {
         // Load a world with hierarchy, then destroy root; cascade must work.
         var world = new World();
-        var root = world.Create();
+        var root = world.CreateEmpty();
         var child = world.Create(new Position(1, 2));
         world.AddChild(root, child);
 

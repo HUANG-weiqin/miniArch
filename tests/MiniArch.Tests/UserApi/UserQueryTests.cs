@@ -17,7 +17,7 @@ public sealed class UserQueryTests
         var world = new World();
         var description = new QueryDescription().With<Position>();
         var first = world.Create(new Position(1, 2));
-        world.Create();
+        world.CreateEmpty();
         var second = world.Create(new Position(3, 4));
 
         var seen = new List<(Entity Entity, Position Position)>();
@@ -344,7 +344,7 @@ public sealed class UserQueryTests
         var world = new World();
         var desc = new QueryDescription().Exact();
 
-        var empty = world.Create();
+        var empty = world.CreateEmpty();
         world.Create(new Position(1, 2));
 
         var seen = new List<Entity>();

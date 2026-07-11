@@ -14,9 +14,9 @@ public sealed class WorldCloneTests
     {
         var world = new World(chunkCapacity: 2);
 
-        var first = world.Create();
-        var second = world.Create();
-        var third = world.Create();
+        var first = world.CreateEmpty();
+        var second = world.CreateEmpty();
+        var third = world.CreateEmpty();
 
         world.Add(first, new Position(1, 2));
         world.Add(second, new Position(3, 4));
@@ -56,20 +56,20 @@ public sealed class WorldCloneTests
 
         for (var i = 0; i < positionOnly.Length; i++)
         {
-            positionOnly[i] = world.Create();
+            positionOnly[i] = world.CreateEmpty();
             world.Add(positionOnly[i], new Position(i, i + 10));
         }
 
         for (var i = 0; i < moving.Length; i++)
         {
-            moving[i] = world.Create();
+            moving[i] = world.CreateEmpty();
             world.Add(moving[i], new Position(i + 100, i + 110));
             world.Add(moving[i], new Velocity(i + 120, i + 130));
         }
 
         for (var i = 0; i < living.Length; i++)
         {
-            living[i] = world.Create();
+            living[i] = world.CreateEmpty();
             world.Add(living[i], new Health(i + 200));
         }
 
@@ -113,12 +113,12 @@ public sealed class WorldCloneTests
     public void Clone_preserves_free_slot_versions_for_reused_entity_ids()
     {
         var world = new World();
-        var original = world.Create();
+        var original = world.CreateEmpty();
 
         world.Destroy(original);
 
         var cloned = world.Clone();
-        var recreated = cloned.Create();
+        var recreated = cloned.CreateEmpty();
 
         Assert.Equal(original.Id, recreated.Id);
         Assert.Equal(original.Version + 1, recreated.Version);
@@ -130,9 +130,9 @@ public sealed class WorldCloneTests
     public void Clone_preserves_parent_and_children_relationships()
     {
         var world = new World();
-        var parent = world.Create();
-        var firstChild = world.Create();
-        var secondChild = world.Create();
+        var parent = world.CreateEmpty();
+        var firstChild = world.CreateEmpty();
+        var secondChild = world.CreateEmpty();
 
         world.AddChild(parent, firstChild);
         world.AddChild(parent, secondChild);
@@ -150,9 +150,9 @@ public sealed class WorldCloneTests
     public void Clone_restores_hierarchy_so_cascade_destroy_still_works()
     {
         var world = new World();
-        var root = world.Create();
-        var child = world.Create();
-        var grandChild = world.Create();
+        var root = world.CreateEmpty();
+        var child = world.CreateEmpty();
+        var grandChild = world.CreateEmpty();
 
         world.AddChild(root, child);
         world.AddChild(child, grandChild);
@@ -169,7 +169,7 @@ public sealed class WorldCloneTests
     public void Clone_produces_independent_copy()
     {
         var world = new World(chunkCapacity: 4);
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
         world.Add(entity, new Position(1, 2));
 
         var cloned = world.Clone();
@@ -209,7 +209,7 @@ public sealed class WorldCloneTests
         var world = new World();
         for (var i = 0; i < 200; i++)
         {
-            var e = world.Create();
+            var e = world.CreateEmpty();
             world.Add(e, new Component16k { Value = i });
         }
 
