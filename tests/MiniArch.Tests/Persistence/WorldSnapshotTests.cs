@@ -18,9 +18,9 @@ public sealed class WorldSnapshotTests
     {
         var world = new World(chunkCapacity: 2);
 
-        var first = world.Create();
-        var second = world.Create();
-        var third = world.Create();
+        var first = world.CreateEmpty();
+        var second = world.CreateEmpty();
+        var third = world.CreateEmpty();
 
         world.Add(first, new Position(1, 2));
         world.Add(second, new Position(3, 4));
@@ -64,20 +64,20 @@ public sealed class WorldSnapshotTests
 
         for (var i = 0; i < positionOnly.Length; i++)
         {
-            positionOnly[i] = world.Create();
+            positionOnly[i] = world.CreateEmpty();
             world.Add(positionOnly[i], new Position(i, i + 10));
         }
 
         for (var i = 0; i < moving.Length; i++)
         {
-            moving[i] = world.Create();
+            moving[i] = world.CreateEmpty();
             world.Add(moving[i], new Position(i + 100, i + 110));
             world.Add(moving[i], new Velocity(i + 120, i + 130));
         }
 
         for (var i = 0; i < living.Length; i++)
         {
-            living[i] = world.Create();
+            living[i] = world.CreateEmpty();
             world.Add(living[i], new Health(i + 200));
         }
 
@@ -126,7 +126,7 @@ public sealed class WorldSnapshotTests
     public void Snapshot_preserves_free_slot_versions_for_reused_entity_ids()
     {
         var world = new World();
-        var original = world.Create();
+        var original = world.CreateEmpty();
 
         world.Destroy(original);
 
@@ -135,7 +135,7 @@ public sealed class WorldSnapshotTests
         stream.Position = 0;
 
         var loaded = WorldSnapshot.Load(stream);
-        var recreated = loaded.Create();
+        var recreated = loaded.CreateEmpty();
 
         Assert.Equal(original.Id, recreated.Id);
         Assert.Equal(original.Version + 1, recreated.Version);
@@ -147,9 +147,9 @@ public sealed class WorldSnapshotTests
     public void Snapshot_preserves_parent_and_children_relationships()
     {
         var world = new World();
-        var parent = world.Create();
-        var firstChild = world.Create();
-        var secondChild = world.Create();
+        var parent = world.CreateEmpty();
+        var firstChild = world.CreateEmpty();
+        var secondChild = world.CreateEmpty();
 
         world.AddChild(parent, firstChild);
         world.AddChild(parent, secondChild);
@@ -171,9 +171,9 @@ public sealed class WorldSnapshotTests
     public void Snapshot_restores_hierarchy_so_cascade_destroy_still_works()
     {
         var world = new World();
-        var root = world.Create();
-        var child = world.Create();
-        var grandChild = world.Create();
+        var root = world.CreateEmpty();
+        var child = world.CreateEmpty();
+        var grandChild = world.CreateEmpty();
 
         world.AddChild(root, child);
         world.AddChild(child, grandChild);
@@ -196,9 +196,9 @@ public sealed class WorldSnapshotTests
         // Build a world where archetype internal rows are NOT in id order
         // (swap-remove on row 0 moves the last entity into the first slot).
         var world = new World();
-        var e0 = world.Create(); world.Add(e0, new Position(10, 20));
-        var e1 = world.Create(); world.Add(e1, new Position(30, 40));
-        var e2 = world.Create(); world.Add(e2, new Position(50, 60));
+        var e0 = world.CreateEmpty(); world.Add(e0, new Position(10, 20));
+        var e1 = world.CreateEmpty(); world.Add(e1, new Position(30, 40));
+        var e2 = world.CreateEmpty(); world.Add(e2, new Position(50, 60));
         world.Destroy(e0); // swap-remove: e2 moves to row 0 -> internal [e2, e1]
 
         using var stream = new MemoryStream();
@@ -219,9 +219,9 @@ public sealed class WorldSnapshotTests
     public void Save_is_idempotent_after_round_trip_with_non_canonical_internal_layout()
     {
         var world = new World();
-        var e0 = world.Create(); world.Add(e0, new Position(10, 20));
-        var e1 = world.Create(); world.Add(e1, new Position(30, 40));
-        var e2 = world.Create(); world.Add(e2, new Position(50, 60));
+        var e0 = world.CreateEmpty(); world.Add(e0, new Position(10, 20));
+        var e1 = world.CreateEmpty(); world.Add(e1, new Position(30, 40));
+        var e2 = world.CreateEmpty(); world.Add(e2, new Position(50, 60));
         world.Destroy(e0); // internal archetype rows: [e2, e1]
 
         using var stream1 = new MemoryStream();
@@ -240,8 +240,8 @@ public sealed class WorldSnapshotTests
     public void Checksum_is_stable_for_identical_worlds_and_differs_on_mutation()
     {
         var world = new World();
-        var e0 = world.Create(); world.Add(e0, new Position(1, 2));
-        var e1 = world.Create(); world.Add(e1, new Position(3, 4));
+        var e0 = world.CreateEmpty(); world.Add(e0, new Position(1, 2));
+        var e1 = world.CreateEmpty(); world.Add(e1, new Position(3, 4));
 
         var hash1 = world.Checksum();
         var hash2 = world.Checksum();
@@ -258,8 +258,8 @@ public sealed class WorldSnapshotTests
     public void Checksum_matches_across_save_load_round_trip()
     {
         var world = new World();
-        var e0 = world.Create(); world.Add(e0, new Position(1, 2));
-        var e1 = world.Create(); world.Add(e1, new Velocity(3, 4));
+        var e0 = world.CreateEmpty(); world.Add(e0, new Position(1, 2));
+        var e1 = world.CreateEmpty(); world.Add(e1, new Velocity(3, 4));
 
         var hashOriginal = world.Checksum();
 
@@ -293,8 +293,8 @@ public sealed class WorldSnapshotTests
         // The canonical hash is the right tool for comparing worlds that arrived at
         // the same logical state via different construction paths (live vs loaded).
         var world = new World();
-        var e0 = world.Create(); world.Add(e0, new Position(1, 2));
-        var e1 = world.Create(); world.Add(e1, new Velocity(3, 4));
+        var e0 = world.CreateEmpty(); world.Add(e0, new Position(1, 2));
+        var e1 = world.CreateEmpty(); world.Add(e1, new Velocity(3, 4));
         world.Destroy(e1);
         world.AddChild(e0, world.Create(new Health(9)));
 
@@ -350,8 +350,8 @@ public sealed class WorldSnapshotTests
     public void CanonicalChecksum_stable_for_identical_worlds_and_differs_on_mutation()
     {
         var world = new World();
-        var e0 = world.Create(); world.Add(e0, new Position(1, 2));
-        var e1 = world.Create(); world.Add(e1, new Position(3, 4));
+        var e0 = world.CreateEmpty(); world.Add(e0, new Position(1, 2));
+        var e1 = world.CreateEmpty(); world.Add(e1, new Position(3, 4));
 
         var hash1 = world.CanonicalChecksum();
         var hash2 = world.CanonicalChecksum();
@@ -385,13 +385,13 @@ public sealed class WorldSnapshotTests
         var loaded = WorldSnapshot.Load(stream);
 
         // Both worlds should allocate the same recycled ids in the same order.
-        var a = world.Create();
-        var b = world.Create();
-        var c = world.Create();
+        var a = world.CreateEmpty();
+        var b = world.CreateEmpty();
+        var c = world.CreateEmpty();
 
-        var la = loaded.Create();
-        var lb = loaded.Create();
-        var lc = loaded.Create();
+        var la = loaded.CreateEmpty();
+        var lb = loaded.CreateEmpty();
+        var lc = loaded.CreateEmpty();
 
         Assert.Equal(a.Id, la.Id);
         Assert.Equal(b.Id, lb.Id);
@@ -412,8 +412,8 @@ public sealed class WorldSnapshotTests
         world.Add(e2, new Velocity(7, 8));
         world.Destroy(e1);
 
-        var parent = world.Create();
-        var child = world.Create();
+        var parent = world.CreateEmpty();
+        var child = world.CreateEmpty();
         world.AddChild(parent, child);
 
         var checksumPre = world.Checksum();
@@ -1061,7 +1061,7 @@ public sealed class WorldSnapshotTests
 
         // Phase 1: create empty entity + BigPayload entity, force-chunk both
         // archetypes so they expose standard-capacity segments.
-        var empty = world.Create();
+        var empty = world.CreateEmpty();
         Assert.True(world.TryGetLocation(empty, out var emptyLoc));
         var archEmpty = emptyLoc.Archetype;
         archEmpty.ForceChunkedForTesting();    // segment arrays sized to 65536
@@ -1154,7 +1154,7 @@ public sealed class WorldSnapshotTests
         var world = new World();
         for (var i = 0; i < 100; i++)
         {
-            var e = world.Create();
+            var e = world.CreateEmpty();
             world.Add(e, new Component1024 { Value = i });
         }
 
@@ -1163,7 +1163,7 @@ public sealed class WorldSnapshotTests
         // Prediction: add enough to promote Component1024 archetype (segCap=2048).
         for (var i = 0; i < 4000; i++)
         {
-            var e = world.Create();
+            var e = world.CreateEmpty();
             world.Add(e, new Component1024 { Value = i + 1000 });
         }
 
@@ -1180,7 +1180,7 @@ public sealed class WorldSnapshotTests
         // Create enough entities with Component1024 to trigger chunked mode.
         for (var i = 0; i < 3000; i++)
         {
-            var e = world.Create();
+            var e = world.CreateEmpty();
             world.Add(e, new Component1024 { Value = i });
         }
 
@@ -1189,7 +1189,7 @@ public sealed class WorldSnapshotTests
         // Modify world.
         for (var i = 0; i < 1000; i++)
         {
-            var e = world.Create();
+            var e = world.CreateEmpty();
             world.Add(e, new Component1024 { Value = i + 9000 });
         }
 

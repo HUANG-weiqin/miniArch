@@ -516,7 +516,7 @@ static class Program
 
         // Extra entities that don't have MarkerComp (they enter during churn)
         for (var i = 0; i < churnCount; i++)
-            entities[entityCount + i] = world.Create(); // no MarkerComp
+            entities[entityCount + i] = world.CreateEmpty(); // no MarkerComp
 
         var handler = new TransHandler();
         var watch = world.Watch<TransHandler>(new QueryDescription().With<MarkerComp>());

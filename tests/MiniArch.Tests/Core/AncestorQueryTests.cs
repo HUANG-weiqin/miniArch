@@ -12,7 +12,7 @@ public sealed class AncestorQueryTests
     public void IsRoot_returns_true_for_entity_with_no_parent()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
 
         Assert.True(world.IsRoot(entity));
     }
@@ -21,8 +21,8 @@ public sealed class AncestorQueryTests
     public void IsRoot_returns_false_for_child_entity()
     {
         var world = new World();
-        var parent = world.Create();
-        var child = world.Create();
+        var parent = world.CreateEmpty();
+        var child = world.CreateEmpty();
         world.AddChild(parent, child);
 
         Assert.False(world.IsRoot(child));
@@ -32,7 +32,7 @@ public sealed class AncestorQueryTests
     public void IsRoot_returns_false_for_dead_entity()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
         world.Destroy(entity);
 
         Assert.False(world.IsRoot(entity));
@@ -42,9 +42,9 @@ public sealed class AncestorQueryTests
     public void IsRoot_returns_false_for_stale_handle()
     {
         var world = new World();
-        var original = world.Create();
+        var original = world.CreateEmpty();
         world.Destroy(original);
-        var recycled = world.Create();
+        var recycled = world.CreateEmpty();
         Assert.Equal(original.Id, recycled.Id);
 
         Assert.False(world.IsRoot(original));
@@ -54,8 +54,8 @@ public sealed class AncestorQueryTests
     public void IsRoot_returns_true_when_parent_is_destroyed()
     {
         var world = new World();
-        var parent = world.Create();
-        var child = world.Create();
+        var parent = world.CreateEmpty();
+        var child = world.CreateEmpty();
         world.AddChild(parent, child);
 
         // Remove child first (otherwise Destroy(parent) cascade-kills the child)
@@ -69,7 +69,7 @@ public sealed class AncestorQueryTests
     public void IsRoot_throws_after_world_disposed()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
         world.Dispose();
 
         Assert.Throws<ObjectDisposedException>(() => world.IsRoot(entity));
@@ -83,7 +83,7 @@ public sealed class AncestorQueryTests
     public void GetDepth_returns_0_for_root_entity()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
 
         Assert.Equal(0, world.GetDepth(entity));
     }
@@ -92,8 +92,8 @@ public sealed class AncestorQueryTests
     public void GetDepth_returns_1_for_direct_child()
     {
         var world = new World();
-        var parent = world.Create();
-        var child = world.Create();
+        var parent = world.CreateEmpty();
+        var child = world.CreateEmpty();
         world.AddChild(parent, child);
 
         Assert.Equal(0, world.GetDepth(parent));
@@ -104,10 +104,10 @@ public sealed class AncestorQueryTests
     public void GetDepth_returns_correct_depth_for_deep_chain()
     {
         var world = new World();
-        var e0 = world.Create(); // root
-        var e1 = world.Create(); // depth 1
-        var e2 = world.Create(); // depth 2
-        var e3 = world.Create(); // depth 3
+        var e0 = world.CreateEmpty(); // root
+        var e1 = world.CreateEmpty(); // depth 1
+        var e2 = world.CreateEmpty(); // depth 2
+        var e3 = world.CreateEmpty(); // depth 3
         world.AddChild(e0, e1);
         world.AddChild(e1, e2);
         world.AddChild(e2, e3);
@@ -122,7 +122,7 @@ public sealed class AncestorQueryTests
     public void GetDepth_returns_negative_1_for_dead_entity()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
         world.Destroy(entity);
 
         Assert.Equal(-1, world.GetDepth(entity));
@@ -132,9 +132,9 @@ public sealed class AncestorQueryTests
     public void GetDepth_returns_negative_1_for_stale_handle()
     {
         var world = new World();
-        var original = world.Create();
+        var original = world.CreateEmpty();
         world.Destroy(original);
-        var recycled = world.Create();
+        var recycled = world.CreateEmpty();
         Assert.Equal(original.Id, recycled.Id);
 
         Assert.Equal(-1, world.GetDepth(original));
@@ -144,7 +144,7 @@ public sealed class AncestorQueryTests
     public void GetDepth_throws_after_world_disposed()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
         world.Dispose();
 
         Assert.Throws<ObjectDisposedException>(() => world.GetDepth(entity));
@@ -158,7 +158,7 @@ public sealed class AncestorQueryTests
     public void EnumerateAncestors_on_root_entity_returns_empty()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
 
         Assert.Empty(world.EnumerateAncestors(entity).ToAncestorList());
     }
@@ -167,8 +167,8 @@ public sealed class AncestorQueryTests
     public void EnumerateAncestors_on_child_returns_parent()
     {
         var world = new World();
-        var parent = world.Create();
-        var child = world.Create();
+        var parent = world.CreateEmpty();
+        var child = world.CreateEmpty();
         world.AddChild(parent, child);
 
         var ancestors = world.EnumerateAncestors(child).ToAncestorList();
@@ -181,9 +181,9 @@ public sealed class AncestorQueryTests
     public void EnumerateAncestors_yields_parent_grandparent_root()
     {
         var world = new World();
-        var root = world.Create();
-        var mid = world.Create();
-        var leaf = world.Create();
+        var root = world.CreateEmpty();
+        var mid = world.CreateEmpty();
+        var leaf = world.CreateEmpty();
         world.AddChild(root, mid);
         world.AddChild(mid, leaf);
 
@@ -198,7 +198,7 @@ public sealed class AncestorQueryTests
     public void EnumerateAncestors_on_dead_entity_returns_empty()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
         world.Destroy(entity);
 
         Assert.Empty(world.EnumerateAncestors(entity).ToAncestorList());
@@ -208,9 +208,9 @@ public sealed class AncestorQueryTests
     public void EnumerateAncestors_on_stale_handle_returns_empty()
     {
         var world = new World();
-        var original = world.Create();
+        var original = world.CreateEmpty();
         world.Destroy(original);
-        var recycled = world.Create();
+        var recycled = world.CreateEmpty();
         Assert.Equal(original.Id, recycled.Id);
 
         Assert.Empty(world.EnumerateAncestors(original).ToAncestorList());
@@ -220,9 +220,9 @@ public sealed class AncestorQueryTests
     public void EnumerateAncestors_stops_at_destroyed_parent()
     {
         var world = new World();
-        var root = world.Create();
-        var mid = world.Create();
-        var leaf = world.Create();
+        var root = world.CreateEmpty();
+        var mid = world.CreateEmpty();
+        var leaf = world.CreateEmpty();
         world.AddChild(root, mid);
         world.AddChild(mid, leaf);
 
@@ -239,8 +239,8 @@ public sealed class AncestorQueryTests
     public void EnumerateAncestors_does_not_include_self()
     {
         var world = new World();
-        var parent = world.Create();
-        var child = world.Create();
+        var parent = world.CreateEmpty();
+        var child = world.CreateEmpty();
         world.AddChild(parent, child);
 
         var ancestors = world.EnumerateAncestors(child).ToAncestorList();
@@ -252,8 +252,8 @@ public sealed class AncestorQueryTests
     public void EnumerateAncestors_after_RemoveChild_returns_empty()
     {
         var world = new World();
-        var parent = world.Create();
-        var child = world.Create();
+        var parent = world.CreateEmpty();
+        var child = world.CreateEmpty();
         world.AddChild(parent, child);
         world.RemoveChild(child);
 
@@ -264,8 +264,8 @@ public sealed class AncestorQueryTests
     public void EnumerateAncestors_is_zero_alloc()
     {
         var world = new World();
-        var parent = world.Create();
-        var child = world.Create();
+        var parent = world.CreateEmpty();
+        var child = world.CreateEmpty();
         world.AddChild(parent, child);
 
         var enumerable = world.EnumerateAncestors(child);
@@ -283,8 +283,8 @@ public sealed class AncestorQueryTests
         // looking up _parentByChild[id]. A stale handle pointing to a reused
         // slot would otherwise read a different entity's parent.
         var world = new World();
-        var originalParent = world.Create();
-        var originalChild = world.Create();
+        var originalParent = world.CreateEmpty();
+        var originalChild = world.CreateEmpty();
         world.AddChild(originalParent, originalChild);
 
         // Destroy the child, freeing its slot
@@ -292,11 +292,11 @@ public sealed class AncestorQueryTests
         world.Destroy(originalChild);
 
         // Create a new entity that reuses the same slot directly
-        var replacement = world.Create();
+        var replacement = world.CreateEmpty();
         Assert.Equal(childId, replacement.Id);
 
         // Give replacement a different parent
-        var newParent = world.Create();
+        var newParent = world.CreateEmpty();
         world.AddChild(newParent, replacement);
 
         // The stale handle (originalChild) should yield no ancestors,
@@ -312,8 +312,8 @@ public sealed class AncestorQueryTests
     public void EnumerateAncestors_throws_on_hierarchy_cycle()
     {
         var world = new World();
-        var a = world.Create();
-        var b = world.Create();
+        var a = world.CreateEmpty();
+        var b = world.CreateEmpty();
 
         // Inject a cycle: A → B → A
         world.AddChild(a, b);
@@ -332,8 +332,8 @@ public sealed class AncestorQueryTests
     public void GetDepth_throws_on_hierarchy_cycle()
     {
         var world = new World();
-        var a = world.Create();
-        var b = world.Create();
+        var a = world.CreateEmpty();
+        var b = world.CreateEmpty();
 
         world.AddChild(a, b);
         world.Hierarchy.SetParentForTest(a, b);
@@ -349,7 +349,7 @@ public sealed class AncestorQueryTests
     public void EnumerateAncestors_throws_after_world_disposed()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
         world.Dispose();
 
         Assert.Throws<ObjectDisposedException>(() => world.EnumerateAncestors(entity));

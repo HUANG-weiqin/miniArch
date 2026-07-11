@@ -165,7 +165,7 @@ public sealed class ReplayConvergencePropertyTests
         var created = new List<Entity>(spec.Entities.Length);
         foreach (var e in spec.Entities)
         {
-            var entity = world.Create();
+            var entity = world.CreateEmpty();
             if ((e.CompMask & 1) != 0) world.Add(entity, new Position(e.X, e.Y));
             if ((e.CompMask & 2) != 0) world.Add(entity, new Velocity(e.Dx, e.Dy));
             if ((e.CompMask & 4) != 0) world.Add(entity, new Health(e.Hp));

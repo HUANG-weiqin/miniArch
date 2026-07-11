@@ -44,7 +44,7 @@ public sealed class CommandStreamTests
         Assert.Equal(0, world.EntityCount);
 
         // Create a live entity directly
-        var alive = world.Create();
+        var alive = world.CreateEmpty();
         Assert.True(world.IsAlive(alive));
         Assert.Equal(1, world.EntityCount);
 
@@ -67,7 +67,7 @@ public sealed class CommandStreamTests
     public void RestoreState_recomputes_reserved_count_after_pending_reservation()
     {
         var world = new World();
-        var live = world.Create();
+        var live = world.CreateEmpty();
         var snapshot = world.CaptureState();
 
         var stream = new CommandStream(world);
@@ -162,8 +162,8 @@ public sealed class CommandStreamTests
     public void Link_and_Unlink_apply_hierarchy_changes()
     {
         var world = new World();
-        var parent = world.Create();
-        var child = world.Create();
+        var parent = world.CreateEmpty();
+        var child = world.CreateEmpty();
         var stream = new CommandStream(world);
 
         stream.AddChild(parent, child);
@@ -181,7 +181,7 @@ public sealed class CommandStreamTests
     public void Link_skipped_for_destroyed_existing_entity()
     {
         var world = new World();
-        var parent = world.Create();
+        var parent = world.CreateEmpty();
         var child = world.Create(new Position(1, 2));
         var stream = new CommandStream(world);
 
@@ -329,8 +329,8 @@ public sealed class CommandStreamTests
     public async Task SubmitAndSnapshotAsync_includes_hierarchy_in_delta()
     {
         var world = new World();
-        var parent = world.Create();
-        var child = world.Create();
+        var parent = world.CreateEmpty();
+        var child = world.CreateEmpty();
         var stream = new CommandStream(world);
 
         stream.AddChild(parent, child);
@@ -385,7 +385,7 @@ public sealed class CommandStreamTests
     public void Snapshot_excludes_hierarchy_for_destroyed_child()
     {
         var world = new World();
-        var parent = world.Create();
+        var parent = world.CreateEmpty();
         var child = world.Create(new Position(1, 2));
         var stream = new CommandStream(world);
 
@@ -402,7 +402,7 @@ public sealed class CommandStreamTests
     public async Task SubmitAndSnapshotAsync_excludes_hierarchy_for_destroyed_child()
     {
         var world = new World();
-        var parent = world.Create();
+        var parent = world.CreateEmpty();
         var child = world.Create(new Position(1, 2));
         var stream = new CommandStream(world);
 
@@ -418,8 +418,8 @@ public sealed class CommandStreamTests
     public void Submit_skips_hierarchy_intent_for_destroyed_parent_even_when_destroy_is_recorded_first()
     {
         var world = new World();
-        var parent = world.Create();
-        var child = world.Create();
+        var parent = world.CreateEmpty();
+        var child = world.CreateEmpty();
         var stream = new CommandStream(world);
 
         stream.Destroy(parent);
@@ -434,7 +434,7 @@ public sealed class CommandStreamTests
     public void Snapshot_excludes_hierarchy_for_destroyed_created_child()
     {
         var world = new World();
-        var parent = world.Create();
+        var parent = world.CreateEmpty();
         var stream = new CommandStream(world);
 
         var child = stream.Create();
@@ -656,16 +656,16 @@ public sealed class CommandStreamTests
     public void CrossWorld_replay_link_and_unlink()
     {
         var source = new World();
-        var parent = source.Create();
-        var child = source.Create();
+        var parent = source.CreateEmpty();
+        var child = source.CreateEmpty();
         var stream = new CommandStream(source);
 
         stream.AddChild(parent, child);
         var delta = stream.Snapshot();
 
         var replica = new World();
-        var replicaParent = replica.Create();
-        var replicaChild = replica.Create();
+        var replicaParent = replica.CreateEmpty();
+        var replicaChild = replica.CreateEmpty();
         new CommandStream(replica).Replay(delta);
 
         Assert.True(replica.TryGetParent(replicaChild, out var p));
@@ -879,7 +879,7 @@ public sealed class CommandStreamTests
     public void Add_then_Remove_same_component_existing_entity()
     {
         var world = new World();
-        var e = world.Create();
+        var e = world.CreateEmpty();
         var stream = new CommandStream(world);
 
         stream.Add(e, new Position(1, 2));
@@ -1176,9 +1176,9 @@ public sealed class CommandStreamTests
             }
         }
         // AddChild and RemoveChild across different entities in same batch
-        var p1 = world.Create();
-        var c1 = world.Create();
-        var c2 = world.Create();
+        var p1 = world.CreateEmpty();
+        var c1 = world.CreateEmpty();
+        var c2 = world.CreateEmpty();
         stream.AddChild(p1, c1);
         stream.RemoveChild(c2); // RemoveChild on unlinked entity is tested separately
 
@@ -1292,8 +1292,8 @@ public sealed class CommandStreamTests
     public async Task SubmitAndSnapshotIntoAsync_includes_hierarchy_in_delta()
     {
         var world = new World();
-        var parent = world.Create();
-        var child = world.Create();
+        var parent = world.CreateEmpty();
+        var child = world.CreateEmpty();
         var stream = new CommandStream(world);
         var target = new FrameDelta();
 
@@ -1449,7 +1449,7 @@ public sealed class CommandStreamTests
         var tasks = new List<Task>();
         for (var i = 0; i < 5; i++)
         {
-            var e = world.Create();
+            var e = world.CreateEmpty();
             stream.Add(e, new Position(i, i));
             stream.Destroy(e);
             targets[i] = new FrameDelta();
@@ -2315,11 +2315,11 @@ public sealed class CommandStreamTests
     {
         var world = new World();
         var stream = new CommandStream(world);
-        var parent = world.Create();
+        var parent = world.CreateEmpty();
 
         async System.Threading.Tasks.Task RunFrame()
         {
-            var child = world.Create();
+            var child = world.CreateEmpty();
             stream.AddChild(parent, child);
             stream.Destroy(child);
             await stream.SubmitAndSnapshotAsync();
@@ -2345,7 +2345,7 @@ public sealed class CommandStreamTests
 
         async Task RunFrameAsync()
         {
-            var e = world.Create();
+            var e = world.CreateEmpty();
             stream.Destroy(e);
             await stream.SubmitAndSnapshotAsync();
         }
@@ -2392,7 +2392,7 @@ public sealed class CommandStreamTests
         var tasks = new List<Task<FrameDelta>>();
         for (var i = 0; i < 5; i++)
         {
-            var e = world.Create();
+            var e = world.CreateEmpty();
             stream.Add(e, new Position(i, i));
             stream.Destroy(e);
             tasks.Add(stream.SubmitAndSnapshotAsync());

@@ -16,13 +16,13 @@ public sealed class QueryTests
         var world = new World();
         var description = new QueryDescription().With<Position>();
 
-        var first = world.Create();
+        var first = world.CreateEmpty();
         world.Add(first, new Position(1, 1));
 
-        var second = world.Create();
+        var second = world.CreateEmpty();
         world.Add(second, new Velocity(2, 2));
 
-        var third = world.Create();
+        var third = world.CreateEmpty();
         world.Add(third, new Position(3, 3));
         world.Add(third, new Velocity(4, 4));
 
@@ -38,7 +38,7 @@ public sealed class QueryTests
     public void Repeated_queries_reuse_cached_matches_when_world_has_not_changed()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
         world.Add(entity, new Position(1, 1));
         var description = new QueryDescription().With<Position>();
 
@@ -59,9 +59,9 @@ public sealed class QueryTests
     {
         var world = new World(chunkCapacity: 1);
         var description = new QueryDescription().With<Position>();
-        var first = world.Create();
-        var second = world.Create();
-        var third = world.Create();
+        var first = world.CreateEmpty();
+        var second = world.CreateEmpty();
+        var third = world.CreateEmpty();
 
         world.Add(first, new Position(1, 1));
         world.Add(second, new Position(2, 2));
@@ -86,7 +86,7 @@ public sealed class QueryTests
         var description = new QueryDescription().With<Position>();
         for (var i = 0; i < 3; i++)
         {
-            var entity = world.Create();
+            var entity = world.CreateEmpty();
             world.Add(entity, new Position(i, i));
         }
 
@@ -231,7 +231,7 @@ public sealed class QueryTests
     public void Matching_archetypes_refresh_when_world_changes()
     {
         var world = new World(chunkCapacity: 1);
-        var first = world.Create();
+        var first = world.CreateEmpty();
         world.Add(first, new Position(1, 1));
         var description = new QueryDescription().With<Position>();
 
@@ -239,7 +239,7 @@ public sealed class QueryTests
         Assert.Single(query.MatchedArchetypes);
         Assert.Equal(1, query.RefreshCount);
 
-        var second = world.Create();
+        var second = world.CreateEmpty();
         world.Add(second, new Position(2, 2));
 
         Assert.Single(query.MatchedArchetypes);
@@ -382,13 +382,13 @@ public sealed class QueryTests
 
         for (var i = 0; i < 6; i++)
         {
-            var entity = world.Create();
+            var entity = world.CreateEmpty();
             world.Add(entity, new Position(i, i));
         }
 
         for (var i = 0; i < 6; i++)
         {
-            var entity = world.Create();
+            var entity = world.CreateEmpty();
             world.Add(entity, new Position(i + 6, i + 6));
             world.Add(entity, new Velocity(i, i));
         }
@@ -497,7 +497,7 @@ public sealed class QueryTests
         var world = new World(chunkCapacity: 4);
         for (var i = 0; i < 6; i++)
         {
-            var entity = world.Create();
+            var entity = world.CreateEmpty();
             world.Add(entity, new Position(i, i + 1));
             world.Add(entity, new Velocity(i + 2, i + 3));
         }
@@ -519,7 +519,7 @@ public sealed class QueryTests
         var world = new World(chunkCapacity: 4);
         for (var i = 0; i < 6; i++)
         {
-            var entity = world.Create();
+            var entity = world.CreateEmpty();
             world.Add(entity, new Position(i, i + 1));
             world.Add(entity, new Velocity(i + 2, i + 3));
         }
@@ -541,7 +541,7 @@ public sealed class QueryTests
         var world = new World(chunkCapacity: 4);
         for (var i = 0; i < 6; i++)
         {
-            var entity = world.Create();
+            var entity = world.CreateEmpty();
             world.Add(entity, new Position(i, i + 1));
             world.Add(entity, new Velocity(i + 2, i + 3));
         }

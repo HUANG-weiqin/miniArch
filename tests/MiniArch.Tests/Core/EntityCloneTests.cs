@@ -14,7 +14,7 @@ public sealed class EntityCloneTests
     public void Clone_empty_entity()
     {
         var world = new World();
-        var original = world.Create();
+        var original = world.CreateEmpty();
 
         var clone = world.Clone(original);
 
@@ -97,7 +97,7 @@ public sealed class EntityCloneTests
     public void Clone_no_hierarchy_link()
     {
         var world = new World();
-        var parent = world.Create();
+        var parent = world.CreateEmpty();
         var child = world.Create(new Position(1, 2));
         world.AddChild(parent, child);
 
@@ -179,7 +179,7 @@ public sealed class EntityCloneTests
     public void Deep_clone_root_has_no_parent()
     {
         var world = new World();
-        var grandparent = world.Create();
+        var grandparent = world.CreateEmpty();
         var parent = world.Create(new Position(1, 2));
         var child = world.Create(new Velocity(3, 4));
         world.AddChild(grandparent, parent);
@@ -264,7 +264,7 @@ public sealed class CommandBufferCloneTests
     public void Clone_empty_entity()
     {
         var world = new World();
-        var source = world.Create();
+        var source = world.CreateEmpty();
         var buffer = new CommandStream(world);
 
         var clone = buffer.Clone(source);
@@ -433,7 +433,7 @@ public sealed class CommandBufferCloneTests
     public void Deep_clone_root_has_no_parent_after_submit()
     {
         var world = new World();
-        var grandparent = world.Create();
+        var grandparent = world.CreateEmpty();
         var parent = world.Create(new Position(1, 2));
         world.AddChild(grandparent, parent);
         var buffer = new CommandStream(world);

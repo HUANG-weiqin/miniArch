@@ -8,9 +8,8 @@
 
 | Method | Description |
 |---|---|
-| `Create()` | Create empty entity |
+| `CreateEmpty()` | Create entity with no components |
 | `Create<T1..T16>(...)` | Create entity with 1–16 components |
-| `CreateMany(Span<Entity>)` | Batch create empty entities |
 | `Destroy(Entity)` | Remove entity (cascades through hierarchy) |
 | `IsAlive(Entity)` | Validate entity handle |
 | `EnsureCapacity(int)` | Pre-allocate entity slots |

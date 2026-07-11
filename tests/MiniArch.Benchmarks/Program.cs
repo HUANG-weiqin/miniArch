@@ -47,7 +47,7 @@ public static class Program
         }
 
         BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly)
-            .Run(args, MiniArchBenchmarkConfig.Create());
+            .Run(args, MiniArchBenchmarkConfig.CreateEmpty());
     }
 
     private static void RunCommandBufferBenchmarks(string[] args)

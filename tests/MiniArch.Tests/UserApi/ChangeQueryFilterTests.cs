@@ -106,7 +106,7 @@ public class ChangeQueryFilterTests
     {
         using var world = new World();
         var watch = Track(world);
-        var e = world.Create();
+        var e = world.CreateEmpty();
         watch.Snapshot(world);
         world.Add(e, new HP(50));
         watch.Diff(world);
@@ -201,7 +201,7 @@ public class ChangeQueryFilterTests
 
         var e1 = world.Create(new HP(10));
         var e2 = world.Create(new HP(20));
-        var e3 = world.Create(); // no HP
+        var e3 = world.CreateEmpty(); // no HP
         watch.Diff(world);
 
         Assert.Equal(2, watch.Handler.Changes.Count);

@@ -15,7 +15,7 @@ namespace MiniArch;
 /// <b>Threading model</b> (read the following before touching a World from
 /// multiple threads):
 /// <list type="bullet">
-/// <item><b>Structural changes</b> —<see cref="Create"/>, <see cref="Destroy(Entity)"/>,
+/// <item><b>Structural changes</b> —<see cref="CreateEmpty"/>, <see cref="Destroy(Entity)"/>,
 /// <see cref="Destroy(ReadOnlySpan{Entity})"/>, <see cref="Destroy(in QueryDescription)"/>,
 /// <see cref="Add{T}"/>, <see cref="Set{T}"/>, <see cref="Remove{T}"/>,
 /// <see cref="AddChild"/>, <see cref="Clone(Entity)"/> —are <b>not</b> thread-safe

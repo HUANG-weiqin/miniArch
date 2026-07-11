@@ -123,7 +123,7 @@ public sealed class FrameDeltaAttackSurfaceTests
         delta.Validate(); // passes —delta structure is fine
 
         var world = new World();
-        world.Create();
+        world.CreateEmpty();
         var ex = Assert.Throws<InvalidOperationException>(() => new CommandStream(world).Replay(delta));
         Assert.Contains("out of sync", ex.Message);
         // Allocator leaked (slot 1 consumed) — documented in the test above.
@@ -160,7 +160,7 @@ public sealed class FrameDeltaAttackSurfaceTests
         // WriteComponentRaw copies 8 bytes regardless of declared size=1,
         // reading the Destroy op's bytes as component data.
         var world = new World();
-        var e = world.Create();
+        var e = world.CreateEmpty();
         world.Add(e, new Position(100, 200));
 
         var posType = Component<Position>.ComponentType.Value;

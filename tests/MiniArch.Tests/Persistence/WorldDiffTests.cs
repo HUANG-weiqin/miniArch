@@ -140,13 +140,13 @@ public sealed class WorldDiffTests
     public void Hierarchy_diff_detected()
     {
         var worldA = new World();
-        var parentA = worldA.Create();
-        var childA = worldA.Create();
+        var parentA = worldA.CreateEmpty();
+        var childA = worldA.CreateEmpty();
         worldA.AddChild(parentA, childA);
 
         var worldB = new World();
-        var parentB = worldB.Create();
-        var childB = worldB.Create();
+        var parentB = worldB.CreateEmpty();
+        var childB = worldB.CreateEmpty();
 
         var diff = WorldDiff.Compare(worldA, worldB);
 
@@ -163,13 +163,13 @@ public sealed class WorldDiffTests
     public void Different_slot_counts_handled()
     {
         var worldA = new World();
-        worldA.Create(); // slot 0
-        worldA.Create(); // slot 1
+        worldA.CreateEmpty(); // slot 0
+        worldA.CreateEmpty(); // slot 1
 
         var worldB = new World();
-        worldB.Create();       // slot 0
-        var b2 = worldB.Create(); // slot 1
-        worldB.Create();       // slot 2
+        worldB.CreateEmpty();       // slot 0
+        var b2 = worldB.CreateEmpty(); // slot 1
+        worldB.CreateEmpty();       // slot 2
         worldB.Destroy(b2);
 
         var diff = WorldDiff.Compare(worldA, worldB);
@@ -185,19 +185,19 @@ public sealed class WorldDiffTests
     public void Free_list_diff_detected()
     {
         var worldA = new World();
-        var a = worldA.Create();
+        var a = worldA.CreateEmpty();
         worldA.Destroy(a);
 
         var worldB = new World();
-        var b = worldB.Create();
+        var b = worldB.CreateEmpty();
         worldB.Destroy(b);
 
         var diffSame = WorldDiff.Compare(worldA, worldB);
         Assert.Null(diffSame.FreeListDiff);
 
         var worldC = new World();
-        var c1 = worldC.Create();
-        var c2 = worldC.Create();
+        var c1 = worldC.CreateEmpty();
+        var c2 = worldC.CreateEmpty();
         worldC.Destroy(c2);
         worldC.Destroy(c1);
 
@@ -211,14 +211,14 @@ public sealed class WorldDiffTests
     {
         // A: slot 0 is free. EntitySlotCount = 1.
         var worldA = new World();
-        var a = worldA.Create();
+        var a = worldA.CreateEmpty();
         worldA.Destroy(a);
 
         // B: slot 0 is free, slot 1 is alive.
         // Same free list span [(0, v1)], but EntitySlotCount = 2.
         var worldB = new World();
-        var b0 = worldB.Create();  // slot 0
-        worldB.Create();            // slot 1 (EntitySlotCount → 2)
+        var b0 = worldB.CreateEmpty();  // slot 0
+        worldB.CreateEmpty();            // slot 1 (EntitySlotCount → 2)
         worldB.Destroy(b0);         // slot 0 free
 
         var diff = WorldDiff.Compare(worldA, worldB);
@@ -232,13 +232,13 @@ public sealed class WorldDiffTests
     public void Free_slot_same_id_different_version_detected()
     {
         var worldA = new World();
-        var a = worldA.Create();
+        var a = worldA.CreateEmpty();
         worldA.Destroy(a); // slot 0 free, v1
 
         var worldB = new World();
-        var b1 = worldB.Create();   // slot 0, v1
+        var b1 = worldB.CreateEmpty();   // slot 0, v1
         worldB.Destroy(b1);
-        var b2 = worldB.Create();   // slot 0 reused, v2
+        var b2 = worldB.CreateEmpty();   // slot 0 reused, v2
         worldB.Destroy(b2);          // slot 0 free, v2
 
         var diff = WorldDiff.Compare(worldA, worldB);
@@ -273,13 +273,13 @@ public sealed class WorldDiffTests
     public void Identical_worlds_with_hierarchy_are_identical()
     {
         var worldA = new World();
-        var parentA = worldA.Create();
-        var childA = worldA.Create();
+        var parentA = worldA.CreateEmpty();
+        var childA = worldA.CreateEmpty();
         worldA.AddChild(parentA, childA);
 
         var worldB = new World();
-        var parentB = worldB.Create();
-        var childB = worldB.Create();
+        var parentB = worldB.CreateEmpty();
+        var childB = worldB.CreateEmpty();
         worldB.AddChild(parentB, childB);
 
         var diff = WorldDiff.Compare(worldA, worldB);
@@ -291,12 +291,12 @@ public sealed class WorldDiffTests
     {
         var worldA = new World();
         worldA.Create<Position>(new Position(1, 2));
-        var parentA = worldA.Create();
+        var parentA = worldA.CreateEmpty();
         worldA.AddChild(parentA, new Entity(0, 1));
 
         var worldB = new World();
         worldB.Create<Position>(new Position(99, 100));
-        var parentB = worldB.Create();
+        var parentB = worldB.CreateEmpty();
 
         var diff = WorldDiff.Compare(worldA, worldB);
 

@@ -1354,7 +1354,7 @@ internal static class ThroughputCaseFactory
         var checksum = 0;
         for (var i = 0; i < count; i++)
         {
-            entities[i] = world.Create();
+            entities[i] = world.CreateEmpty();
             checksum += entities[i].Id;
         }
 

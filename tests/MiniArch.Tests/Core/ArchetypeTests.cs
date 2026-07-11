@@ -105,7 +105,7 @@ public sealed class ArchetypeTests
     public void Add_and_remove_transition_edges_are_cached_and_reused()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
 
         world.Add(entity, new Position(1, 1));
         Assert.True(world.TryGetLocation(entity, out var firstLocation));
@@ -121,7 +121,7 @@ public sealed class ArchetypeTests
     public void Transition_edges_handle_late_registered_component_ids()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
 
         world.Add(entity, new Position(1, 1));
         world.Remove<Position>(entity);

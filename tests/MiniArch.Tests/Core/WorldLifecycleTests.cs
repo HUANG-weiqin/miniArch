@@ -32,7 +32,7 @@ public sealed class WorldLifecycleTests
     {
         var world = new World();
 
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
 
         Assert.True(entity.IsValid);
         Assert.Equal(1, entity.Version);
@@ -45,10 +45,10 @@ public sealed class WorldLifecycleTests
     public void Destroy_recycles_ids_safely()
     {
         var world = new World();
-        var first = world.Create();
+        var first = world.CreateEmpty();
 
         world.Destroy(first);
-        var second = world.Create();
+        var second = world.CreateEmpty();
 
         Assert.Equal(first.Id, second.Id);
         Assert.NotEqual(first.Version, second.Version);
@@ -58,7 +58,7 @@ public sealed class WorldLifecycleTests
     public void Destroy_marks_the_entity_not_alive()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
 
         world.Destroy(entity);
 
@@ -69,10 +69,10 @@ public sealed class WorldLifecycleTests
     public void Version_mismatch_makes_stale_entities_invalid()
     {
         var world = new World();
-        var first = world.Create();
+        var first = world.CreateEmpty();
 
         world.Destroy(first);
-        var second = world.Create();
+        var second = world.CreateEmpty();
 
         Assert.False(world.IsAlive(first));
         Assert.False(world.TryGetLocation(first, out _));
@@ -84,7 +84,7 @@ public sealed class WorldLifecycleTests
     public void Entity_metadata_points_to_the_current_archetype_and_chunk_position()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
 
         world.Add(entity, new Position(1, 2));
         world.Add(entity, new Velocity(3, 4));
@@ -161,229 +161,13 @@ public sealed class WorldLifecycleTests
         Entity last = default;
         for (var i = 0; i < 512; i++)
         {
-            last = world.Create();
+            last = world.CreateEmpty();
         }
 
         Assert.Equal(512, world.EntityCapacity);
         Assert.True(last.IsValid);
         Assert.True(world.TryGetLocation(last, out var info));
         Assert.Equal(last.Version, info.Version);
-    }
-
-    [Fact]
-    public void CreateMany_fills_the_supplied_buffer_with_valid_entities()
-    {
-        var world = new World();
-        var entities = new Entity[8];
-
-        world.CreateMany(entities);
-
-        for (var i = 0; i < entities.Length; i++)
-        {
-            Assert.True(entities[i].IsValid);
-            Assert.Equal(i, entities[i].Id);
-            Assert.True(world.TryGetLocation(entities[i], out var info));
-            Assert.Equal(entities[i].Version, info.Version);
-        }
-    }
-
-    [Fact]
-    public void CreateMany_preserves_location_order_inside_the_empty_archetype()
-    {
-        var world = new World();
-        var entities = new Entity[16];
-
-        world.CreateMany(entities);
-
-        for (var i = 0; i < entities.Length; i++)
-        {
-            Assert.True(world.TryGetLocation(entities[i], out var info));
-            Assert.Equal(i, info.RowIndex);
-        }
-    }
-
-    [Fact]
-    public void CreateMany_preserves_chunk_and_row_progression_across_chunk_boundaries()
-    {
-        var world = new World(chunkCapacity: 4);
-        var entities = new Entity[10];
-
-        world.CreateMany(entities);
-
-        for (var i = 0; i < entities.Length; i++)
-        {
-            Assert.True(world.TryGetLocation(entities[i], out var info));
-            Assert.Equal(i, info.RowIndex);
-        }
-    }
-
-    [Fact]
-    public void CreateMany_appends_after_existing_empty_archetype_entities()
-    {
-        var world = new World(chunkCapacity: 4);
-        var firstBatch = new Entity[6];
-        var secondBatch = new Entity[5];
-
-        world.CreateMany(firstBatch);
-        world.CreateMany(secondBatch);
-
-        for (var i = 0; i < firstBatch.Length; i++)
-        {
-            Assert.True(world.TryGetLocation(firstBatch[i], out var info));
-            Assert.Equal(i, info.RowIndex);
-        }
-
-        for (var i = 0; i < secondBatch.Length; i++)
-        {
-            Assert.True(world.TryGetLocation(secondBatch[i], out var info));
-            var absoluteIndex = firstBatch.Length + i;
-            Assert.Equal(absoluteIndex, info.RowIndex);
-        }
-    }
-
-    [Fact]
-    public void CreateMany_reuses_destroyed_ids_with_incremented_versions()
-    {
-        var world = new World(chunkCapacity: 4);
-        var firstBatch = new Entity[6];
-        world.CreateMany(firstBatch);
-        Assert.Equal(6, world.EntityCount);
-
-        for (var i = 0; i < firstBatch.Length; i++)
-        {
-            world.Destroy(firstBatch[i]);
-        }
-
-        var recycledBatch = new Entity[6];
-        world.CreateMany(recycledBatch);
-        Assert.Equal(6, world.EntityCount);
-
-        var ids = recycledBatch.Select(entity => entity.Id).OrderBy(id => id).ToArray();
-        Assert.Equal(new[] { 0, 1, 2, 3, 4, 5 }, ids);
-
-        for (var i = 0; i < firstBatch.Length; i++)
-        {
-            Assert.False(world.TryGetLocation(firstBatch[i], out _));
-        }
-
-        foreach (var entity in recycledBatch)
-        {
-            Assert.Equal(2, entity.Version);
-            Assert.True(world.TryGetLocation(entity, out var info));
-            Assert.Equal(entity.Version, info.Version);
-        }
-    }
-
-    [Fact]
-    public void CreateMany_reuses_available_ids_before_allocating_new_ones()
-    {
-        var world = new World(chunkCapacity: 4);
-        var firstBatch = new Entity[6];
-        world.CreateMany(firstBatch);
-
-        world.Destroy(firstBatch[1]);
-        world.Destroy(firstBatch[4]);
-
-        var secondBatch = new Entity[4];
-        world.CreateMany(secondBatch);
-
-        var ids = secondBatch.Select(entity => entity.Id).OrderBy(id => id).ToArray();
-        Assert.Equal(new[] { 1, 4, 6, 7 }, ids);
-
-        foreach (var entity in secondBatch.Where(entity => entity.Id is 1 or 4))
-        {
-            Assert.Equal(2, entity.Version);
-            Assert.True(world.TryGetLocation(entity, out _));
-        }
-
-        foreach (var entity in secondBatch.Where(entity => entity.Id >= 6))
-        {
-            Assert.Equal(1, entity.Version);
-            Assert.True(world.TryGetLocation(entity, out _));
-        }
-    }
-
-    [Fact]
-    public void CreateMany_mixed_ids_reuses_available_rows_before_appending_new_capacity()
-    {
-        var world = new World(chunkCapacity: 4);
-        var firstBatch = new Entity[6];
-        world.CreateMany(firstBatch);
-
-        world.Destroy(firstBatch[1]);
-        world.Destroy(firstBatch[4]);
-
-        var secondBatch = new Entity[4];
-        world.CreateMany(secondBatch);
-
-        Assert.Equal(4, secondBatch[0].Id);
-        Assert.Equal(1, secondBatch[1].Id);
-        Assert.Equal(6, secondBatch[2].Id);
-        Assert.Equal(7, secondBatch[3].Id);
-
-        Assert.True(world.TryGetLocation(secondBatch[0], out var firstReused));
-        Assert.Equal(4, firstReused.RowIndex);
-
-        Assert.True(world.TryGetLocation(secondBatch[1], out var secondReused));
-        Assert.Equal(5, secondReused.RowIndex);
-
-        Assert.True(world.TryGetLocation(secondBatch[2], out var firstFresh));
-        Assert.Equal(6, firstFresh.RowIndex);
-
-        Assert.True(world.TryGetLocation(secondBatch[3], out var secondFresh));
-        Assert.Equal(7, secondFresh.RowIndex);
-    }
-
-    // Regression: CreateMany used to call archetype.GetReservedEntities, which
-    // throws when the archetype has been promoted to chunked storage. A batch
-    // create on an already-chunked archetype must not crash.
-    [Fact]
-    public void CreateMany_works_when_archetype_is_already_chunked()
-    {
-        var world = new World();
-        // Force the lazy empty archetype into existence, then promote it to
-        // chunked storage so we exercise the per-row write path.
-        var empty = world.GetOrCreateArchetype(Signature.Empty);
-        empty.ForceChunkedForTesting();
-        Assert.True(empty.IsChunked);
-
-        var batch = new Entity[5];
-        world.CreateMany(batch);
-
-        Assert.Equal(empty.EntityCount, batch.Length);
-        for (var i = 0; i < batch.Length; i++)
-        {
-            Assert.True(batch[i].IsValid);
-            Assert.True(world.TryGetLocation(batch[i], out var info));
-            Assert.Equal(empty, info.Archetype);
-            Assert.Equal(i, info.RowIndex);
-        }
-    }
-
-    // Regression: CreateMany with mixed recycled+fresh ids on a chunked
-    // archetype exercises both inner loops of the chunked write path.
-    [Fact]
-    public void CreateMany_on_chunked_archetype_mixes_recycled_and_fresh_ids()
-    {
-        var world = new World();
-        var seed = new Entity[4];
-        world.CreateMany(seed);
-        foreach (var e in seed) world.Destroy(e);
-
-        var empty = world.GetOrCreateArchetype(Signature.Empty);
-        empty.ForceChunkedForTesting();
-        Assert.True(empty.IsChunked);
-
-        var batch = new Entity[6];
-        world.CreateMany(batch);
-
-        // First 4 ids come from the free list (recycled), last 2 are fresh.
-        Assert.Equal(empty.EntityCount, batch.Length);
-        for (var i = 0; i < batch.Length; i++)
-        {
-            Assert.True(world.TryGetLocation(batch[i], out var info));
-            Assert.Equal(i, info.RowIndex);
-        }
     }
 
     [Fact]
@@ -422,9 +206,9 @@ public sealed class WorldLifecycleTests
     public void Link_stores_parent_relationship_and_children_list()
     {
         var world = new World();
-        var parent = world.Create();
-        var firstChild = world.Create();
-        var secondChild = world.Create();
+        var parent = world.CreateEmpty();
+        var firstChild = world.CreateEmpty();
+        var secondChild = world.CreateEmpty();
 
         world.AddChild(parent, firstChild);
         world.AddChild(parent, secondChild);
@@ -453,9 +237,9 @@ public sealed class WorldLifecycleTests
     public void Link_reparents_child_to_latest_parent()
     {
         var world = new World();
-        var firstParent = world.Create();
-        var secondParent = world.Create();
-        var child = world.Create();
+        var firstParent = world.CreateEmpty();
+        var secondParent = world.CreateEmpty();
+        var child = world.CreateEmpty();
 
         world.AddChild(firstParent, child);
         world.AddChild(secondParent, child);
@@ -470,7 +254,7 @@ public sealed class WorldLifecycleTests
     public void Link_rejects_self_link()
     {
         var world = new World();
-        var e = world.Create();
+        var e = world.CreateEmpty();
 
         Assert.Throws<InvalidOperationException>(() => world.AddChild(e, e));
     }
@@ -479,8 +263,8 @@ public sealed class WorldLifecycleTests
     public void Link_rejects_direct_cycle()
     {
         var world = new World();
-        var parent = world.Create();
-        var child = world.Create();
+        var parent = world.CreateEmpty();
+        var child = world.CreateEmpty();
 
         world.AddChild(parent, child);
         // child -> parent would close the cycle
@@ -491,9 +275,9 @@ public sealed class WorldLifecycleTests
     public void Link_rejects_indirect_cycle()
     {
         var world = new World();
-        var a = world.Create();
-        var b = world.Create();
-        var c = world.Create();
+        var a = world.CreateEmpty();
+        var b = world.CreateEmpty();
+        var c = world.CreateEmpty();
 
         world.AddChild(a, b);
         world.AddChild(b, c);
@@ -508,8 +292,8 @@ public sealed class WorldLifecycleTests
     public void AddChildFromSnapshot_rejects_cycle_in_restored_hierarchy()
     {
         var world = new World();
-        var parent = world.Create();
-        var child = world.Create();
+        var parent = world.CreateEmpty();
+        var child = world.CreateEmpty();
 
         // Establish a legitimate AddChild so a cycle is now possible.
         world.AddChildFromSnapshot(parent, child);
@@ -522,7 +306,7 @@ public sealed class WorldLifecycleTests
     public void AddChildFromSnapshot_rejects_self_link()
     {
         var world = new World();
-        var e = world.Create();
+        var e = world.CreateEmpty();
 
         Assert.Throws<InvalidOperationException>(() => world.AddChildFromSnapshot(e, e));
     }
@@ -531,9 +315,9 @@ public sealed class WorldLifecycleTests
     public void Destroy_parent_cascades_to_all_descendants()
     {
         var world = new World();
-        var root = world.Create();
-        var child = world.Create();
-        var grandChild = world.Create();
+        var root = world.CreateEmpty();
+        var child = world.CreateEmpty();
+        var grandChild = world.CreateEmpty();
 
         world.AddChild(root, child);
         world.AddChild(child, grandChild);
@@ -782,9 +566,9 @@ public sealed class WorldLifecycleTests
             WarmupDestroyCascadeAllocations();
 
             var world = new World();
-            var root = world.Create();
-            var child = world.Create();
-            var grandChild = world.Create();
+            var root = world.CreateEmpty();
+            var child = world.CreateEmpty();
+            var grandChild = world.CreateEmpty();
 
             world.AddChild(root, child);
             world.AddChild(child, grandChild);
@@ -866,13 +650,13 @@ public sealed class WorldLifecycleTests
     public void Reused_entity_slot_does_not_inherit_destroyed_relationship()
     {
         var world = new World();
-        var parent = world.Create();
-        var child = world.Create();
+        var parent = world.CreateEmpty();
+        var child = world.CreateEmpty();
 
         world.AddChild(parent, child);
         world.Destroy(child);
 
-        var replacement = world.Create();
+        var replacement = world.CreateEmpty();
 
         Assert.Equal(child.Id, replacement.Id);
         Assert.NotEqual(child.Version, replacement.Version);
@@ -884,8 +668,8 @@ public sealed class WorldLifecycleTests
     public void HasChildren_returns_false_for_stale_entity()
     {
         var world = new World();
-        var parent = world.Create();
-        var child = world.Create();
+        var parent = world.CreateEmpty();
+        var child = world.CreateEmpty();
         world.AddChild(parent, child);
         Assert.True(world.HasChildren(parent));
         world.Destroy(parent);
@@ -895,9 +679,9 @@ public sealed class WorldLifecycleTests
     private static void WarmupDestroyCascadeAllocations()
     {
         var world = new World();
-        var root = world.Create();
-        var child = world.Create();
-        var grandChild = world.Create();
+        var root = world.CreateEmpty();
+        var child = world.CreateEmpty();
+        var grandChild = world.CreateEmpty();
 
         world.AddChild(root, child);
         world.AddChild(child, grandChild);

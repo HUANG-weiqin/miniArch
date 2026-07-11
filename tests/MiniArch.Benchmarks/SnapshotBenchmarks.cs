@@ -51,7 +51,7 @@ public class SnapshotBenchmarks
 
         for (var index = 0; index < entityCount; index++)
         {
-            entities[index] = world.Create();
+            entities[index] = world.CreateEmpty();
         }
 
         for (var index = 0; index < entityCount; index++)

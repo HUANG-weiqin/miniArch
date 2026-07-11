@@ -45,7 +45,7 @@ public static class CommandBufferBenchmarkScenarioFactory
     public static MiniHierarchyCommandBufferState CreateMiniHierarchyState(int entityCount)
     {
         var world = new MiniWorld();
-        var parent = world.Create();
+        var parent = world.CreateEmpty();
         var children = new MiniEntity[entityCount];
 
         for (var i = 0; i < entityCount; i++)

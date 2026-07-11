@@ -13,7 +13,7 @@ public sealed class WorldStructuralChangeTests
     public void Add_moves_entity_to_destination_archetype()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
 
         world.Add(entity, new Position(1, 2));
 
@@ -26,7 +26,7 @@ public sealed class WorldStructuralChangeTests
     public void Set_updates_existing_component_in_place()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
 
         world.Add(entity, new Position(1, 2));
         Assert.True(world.TryGetLocation(entity, out var before));
@@ -43,7 +43,7 @@ public sealed class WorldStructuralChangeTests
     public void Set_only_mutates_the_target_component_when_multiple_components_are_present()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
 
         var positionId = ComponentRegistry.Shared.GetOrCreate<Position>();
         var velocityId = ComponentRegistry.Shared.GetOrCreate<Velocity>();
@@ -66,7 +66,7 @@ public sealed class WorldStructuralChangeTests
     public void Remove_moves_entity_back_to_smaller_archetype()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
 
         world.Add(entity, new Position(1, 2));
         world.Add(entity, new Velocity(3, 4));
@@ -91,7 +91,7 @@ public sealed class WorldStructuralChangeTests
 
         for (var i = 0; i < 1000; i++)
         {
-            var entity = world.Create();
+            var entity = world.CreateEmpty();
             world.Add(entity, new Position(i, i));
             entities.Add(entity);
 
@@ -121,7 +121,7 @@ public sealed class WorldStructuralChangeTests
     public void Set_missing_component_throws()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
 
         Assert.Throws<InvalidOperationException>(() => world.Set(entity, new Position(9, 9)));
     }
@@ -130,7 +130,7 @@ public sealed class WorldStructuralChangeTests
     public void Add_adds_and_Set_sets_existing()
     {
         var world = new World();
-        var entity = world.Create();
+        var entity = world.CreateEmpty();
 
         world.Add(entity, new Position(1, 2));
         world.Add(entity, new Velocity(3, 4));
