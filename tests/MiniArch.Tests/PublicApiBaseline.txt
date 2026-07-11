@@ -277,6 +277,7 @@ struct: MiniArch.QueryEnumerator
   Property: Current -> MiniArch.Entity [get; ]
 struct: MiniArch.RowRef
   Method: Component(System.ReadOnlySpan<MiniArch.ChunkView> chunks) -> T& where T : struct, System.ValueType
+  Method: Entity(System.ReadOnlySpan<MiniArch.ChunkView> chunks) -> MiniArch.Entity
 enum: MiniArch.TransitionKind
   Field: Entered -> MiniArch.TransitionKind [static, literal] = Entered (0)
   Field: Exited -> MiniArch.TransitionKind [static, literal] = Exited (1)

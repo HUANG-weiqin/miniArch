@@ -26,4 +26,9 @@ public readonly struct RowRef
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ref T Component<T>(ReadOnlySpan<ChunkView> chunks) where T : unmanaged
         => ref chunks[ChunkIndex].GetSpan<T>()[RowIndex];
+
+    /// <summary>Gets the entity stored at this row.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public Entity Entity(ReadOnlySpan<ChunkView> chunks)
+        => chunks[ChunkIndex].GetEntities()[RowIndex];
 }
