@@ -62,8 +62,10 @@ internal static class FrameReadModelCorrectness
             ("Where100Percent",          TestWhere100Percent),
             ("ScanOrder",                TestScanOrder),
             ("EntityVsRowConsistency",   TestEntityVsRowConsistency),
+            ("DirectForEachConsistency", TestDirectForEachConsistency),
             ("AutoGrowMultiple",         TestAutoGrowMultiple),
             ("ClearRebuild",             TestClearRebuild),
+            ("RebuildPublishesNewResult", TestRebuildPublishesNewResult),
             ("NoGrowEarlyFail",          TestNoGrowEarlyFail),
             ("NoGrowLateFail",           TestNoGrowLateFail),
         };
@@ -921,6 +923,55 @@ internal static class FrameReadModelCorrectness
         }
     }
 
+    /// <summary>
+    /// Public-shape probe: CompactRow direct ForEach must consume the same
+    /// component values as CopyRowRefs + manual span read.
+    /// Other layouts do not implement direct ForEach in this ValueLab.
+    /// </summary>
+    private static bool TestDirectForEachConsistency(string layout)
+    {
+        if (layout != "CompactRow")
+            return true;
+
+        using var world = new World();
+        var query = new QueryDescription().With<Cell>().With<Position>().With<Health>();
+        _ = world.Query(query).GetChunks();
+
+        for (var i = 0; i < BulkN; i++)
+        {
+            world.Create(
+                new Cell(i % 17),
+                new Position(i, i * 2),
+                new Health(i * 3));
+        }
+
+        var chunks = world.Query(query).GetChunks();
+        var lookup = CompactRowLookup<int>.Create(32, BulkN + 1);
+        Rows<Cell, Position, Health>.From(world, query)
+            .KeyBy<int, CellKeySelector3>()
+            .Into(ref lookup);
+
+        var refs = new RowRef[BulkN];
+        long copySum = 0;
+        long directSum;
+
+        var consumer = new HealthSumConsumer1();
+        for (var key = 0; key < 17; key++)
+        {
+            var count = lookup.CopyRowRefs(key, refs);
+            for (var i = 0; i < count; i++)
+            {
+                ref readonly var rr = ref refs[i];
+                copySum += chunks[rr.ChunkIndex].GetSpan<Health>()[rr.RowIndex].Value;
+            }
+
+            lookup.ForEach<Health, HealthSumConsumer1>(key, chunks, ref consumer);
+        }
+
+        directSum = consumer.Sum;
+        return directSum == copySum;
+    }
+
     /// <summary>10. AutoGrow: start small, let it resize multiple times.
     /// Verifies LastResult.Resized=true after a multi-grow build.</summary>
     private static bool TestAutoGrowMultiple(string layout)
@@ -1031,6 +1082,70 @@ internal static class FrameReadModelCorrectness
 
                 Rows<Team>.From(world, query).KeyBy<int, TeamKeySelector>().Into(ref lookup);
                 return lookup.GetRowCount(0) == firstCount && lookup.TotalRows == firstTotal;
+            }
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Publishing lifecycle probe: rebuilding the same lookup with a different
+    /// snapshot must replace the old published result. v1 exposes no row view,
+    /// span, or enumerator, so there is no user-holdable old view to invalidate.
+    /// </summary>
+    private static bool TestRebuildPublishesNewResult(string layout)
+    {
+        using var world1 = new World();
+        using var world2 = new World();
+        var query = new QueryDescription().With<Team>();
+        _ = world1.Query(query).GetChunks();
+        _ = world2.Query(query).GetChunks();
+
+        for (var i = 0; i < 32; i++)
+        {
+            var e = world1.Create();
+            world1.Add(e, new Team(1));
+        }
+
+        for (var i = 0; i < 48; i++)
+        {
+            var e = world2.Create();
+            world2.Add(e, new Team(2));
+        }
+
+        switch (layout)
+        {
+            case "EntityArray":
+            {
+                var lookup = EntityArrayLookup<int>.Create(8, 64);
+                Rows<Team>.From(world1, query).KeyBy<int, TeamKeySelector>().Into(ref lookup);
+                if (lookup.GetRowCount(1) != 32 || lookup.GetRowCount(2) != 0) return false;
+                Rows<Team>.From(world2, query).KeyBy<int, TeamKeySelector>().Into(ref lookup);
+                return lookup.GetRowCount(1) == 0 && lookup.GetRowCount(2) == 48 && lookup.TotalRows == 48;
+            }
+            case "LinkedRow":
+            {
+                var lookup = LinkedRowLookup<int>.Create(8, 64);
+                Rows<Team>.From(world1, query).KeyBy<int, TeamKeySelector>().Into(ref lookup);
+                if (lookup.GetRowCount(1) != 32 || lookup.GetRowCount(2) != 0) return false;
+                Rows<Team>.From(world2, query).KeyBy<int, TeamKeySelector>().Into(ref lookup);
+                return lookup.GetRowCount(1) == 0 && lookup.GetRowCount(2) == 48 && lookup.TotalRows == 48;
+            }
+            case "CompactRow":
+            {
+                var lookup = CompactRowLookup<int>.Create(8, 64);
+                Rows<Team>.From(world1, query).KeyBy<int, TeamKeySelector>().Into(ref lookup);
+                if (lookup.GetRowCount(1) != 32 || lookup.GetRowCount(2) != 0) return false;
+                Rows<Team>.From(world2, query).KeyBy<int, TeamKeySelector>().Into(ref lookup);
+                return lookup.GetRowCount(1) == 0 && lookup.GetRowCount(2) == 48 && lookup.TotalRows == 48;
+            }
+            case "DenseInt":
+            {
+                var lookup = DenseIntCompactLookup.Create(64, 64);
+                Rows<Team>.From(world1, query).KeyBy<int, TeamKeySelector>().Into(ref lookup);
+                if (lookup.GetRowCount(1) != 32 || lookup.GetRowCount(2) != 0) return false;
+                Rows<Team>.From(world2, query).KeyBy<int, TeamKeySelector>().Into(ref lookup);
+                return lookup.GetRowCount(1) == 0 && lookup.GetRowCount(2) == 48 && lookup.TotalRows == 48;
             }
             default:
                 return false;
