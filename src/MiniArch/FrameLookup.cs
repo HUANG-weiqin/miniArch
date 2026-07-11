@@ -10,7 +10,7 @@ namespace MiniArch;
 /// <remarks>
 /// <para>
 /// <b>Use when</b>: you need to query thousands of keys per frame (grid cells, teams, zones)
-/// and/or read component values from the results. The one-time <see cref="Build{T1,TSel}"/> cost
+/// and/or read component values from the results. The one-time <see cref="Build{TSel}"/> cost
 /// is amortized across many subsequent key lookups.
 /// </para>
 /// <para>
