@@ -3,11 +3,11 @@
 // Runs in Release config only (per AGENTS.md). Debug builds print an error and exit non-zero.
 //
 // Run:
-//   dotnet run -c Release --project tools/perf/FrameReadModels.ValueLab
+//   dotnet run -c Release --project tools/perf/FrameReadModels.ValueLab              (default: correctness + quick bench)
 //   dotnet run -c Release --project tools/perf/FrameReadModels.ValueLab -- --correctness-only
 //   dotnet run -c Release --project tools/perf/FrameReadModels.ValueLab -- --correctness-only --n 1000000
-//   dotnet run -c Release --project tools/perf/FrameReadModels.ValueLab -- --quick
-//   dotnet run -c Release --project tools/perf/FrameReadModels.ValueLab -- --full
+//   dotnet run -c Release --project tools/perf/FrameReadModels.ValueLab -- --quick   (quick bench only)
+//   dotnet run -c Release --project tools/perf/FrameReadModels.ValueLab -- --full    (full bench only)
 
 using FrameReadModels.ValueLab;
 
@@ -28,7 +28,7 @@ var correctnessOnly = false;
 var quick = false;
 var full = false;
 var help = false;
-var nValue = 1000; // default test size
+var nValue = 1000;
 var hasN = false;
 
 for (var i = 0; i < args.Length; i++)
@@ -46,12 +46,6 @@ for (var i = 0; i < args.Length; i++)
         continue;
     }
 
-    if (string.Equals(arg, FullArg, StringComparison.OrdinalIgnoreCase))
-    {
-        full = true;
-        continue;
-    }
-
     if (string.Equals(arg, NArg, StringComparison.OrdinalIgnoreCase))
     {
         if (i + 1 >= args.Length)
@@ -61,14 +55,22 @@ for (var i = 0; i < args.Length; i++)
             Environment.ExitCode = 2;
             return;
         }
+
         if (!int.TryParse(args[i + 1], out nValue) || nValue <= 0)
         {
             Console.Error.WriteLine($"ERROR: invalid --n value: {args[i + 1]}");
             Environment.ExitCode = 2;
             return;
         }
-        i++; // skip the value
+
         hasN = true;
+        i++;
+        continue;
+    }
+
+    if (string.Equals(arg, FullArg, StringComparison.OrdinalIgnoreCase))
+    {
+        full = true;
         continue;
     }
 
@@ -97,69 +99,71 @@ Console.WriteLine();
 if (correctnessOnly)
 {
     if (hasN)
-    {
         Console.WriteLine($"Using --n {nValue} for correctness tests");
-        FrameReadModelCorrectness.SetSize(nValue);
-    }
-    RunCorrectnessOnly();
+
+    FrameReadModelCorrectness.SetSize(nValue);
+    Console.WriteLine("Running correctness matrix...");
+    Console.WriteLine();
+    var correctnessPass = FrameReadModelCorrectness.RunAll();
+    Console.WriteLine();
+    Console.WriteLine(correctnessPass ? "Correctness: PASS" : "Correctness: FAIL");
+    if (!correctnessPass)
+        Environment.ExitCode = 1;
     return;
 }
 
 if (quick)
 {
-    Console.WriteLine("Mode: --quick (not yet implemented — runs correctness only)");
+    Console.WriteLine("Mode: --quick");
     Console.WriteLine();
-    FrameReadModelCorrectness.SetSize(1000);
-    RunCorrectnessOnly();
+    FrameReadModelBenchmarks.RunQuick();
     return;
 }
 
 if (full)
 {
-    Console.WriteLine("Mode: --full (not yet implemented — runs correctness with 1M smoke)");
+    Console.WriteLine("Mode: --full");
     Console.WriteLine();
-    FrameReadModelCorrectness.SetSize(1000000);
-    RunCorrectnessOnly();
+    FrameReadModelBenchmarks.RunFull();
     return;
 }
 
-// Default: run correctness with quick size
-Console.WriteLine("Mode: default (runs correctness, quick size)");
+// Default: correctness (quick size) then quick bench
+Console.WriteLine("Mode: default (correctness + quick benchmarks)");
+Console.WriteLine();
+
+// Correctness first
+Console.WriteLine("Running correctness matrix (quick size)...");
 Console.WriteLine();
 FrameReadModelCorrectness.SetSize(1000);
-RunCorrectnessOnly();
+var pass = FrameReadModelCorrectness.RunAll();
+Console.WriteLine();
+Console.WriteLine(pass ? "Correctness: PASS" : "Correctness: FAIL");
+Console.WriteLine();
 
-// ────────────────────────────────────────────────────────────────
-static void RunCorrectnessOnly()
+if (!pass)
 {
-    Console.WriteLine("Running correctness matrix...");
-    Console.WriteLine();
-
-    var pass = FrameReadModelCorrectness.RunAll();
-
-    Console.WriteLine();
-
-    if (pass)
-    {
-        Console.WriteLine("Correctness: PASS");
-    }
-    else
-    {
-        Console.Error.WriteLine("Correctness: FAIL");
-        Environment.ExitCode = 1;
-    }
+    Console.Error.WriteLine("Correctness failed — aborting benchmarks.");
+    Environment.ExitCode = 1;
+    return;
 }
 
+// Then quick benchmarks
+Console.WriteLine("Running quick benchmarks...");
+Console.WriteLine();
+FrameReadModelBenchmarks.RunQuick();
+
+// ────────────────────────────────────────────────────────────────
 static void PrintUsage()
 {
     Console.WriteLine("Usage: dotnet run -c Release --project tools/perf/FrameReadModels.ValueLab [options]");
     Console.WriteLine();
     Console.WriteLine("Options:");
-    Console.WriteLine("  --correctness-only   Run correctness matrix (default: quick size = 1000).");
-    Console.WriteLine("  --n <int>            Set test entity count (default: 1000, smoke: 1000000).");
-    Console.WriteLine("  --quick              Run abbreviated benchmark set (placeholder).");
-    Console.WriteLine("  --full               Run comprehensive benchmark set (placeholder).");
+    Console.WriteLine("  --quick              Run abbreviated benchmark set (3 scenarios).");
+    Console.WriteLine("  --full               Run comprehensive benchmark set (4 scenarios).");
+    Console.WriteLine("  --correctness-only   Run correctness matrix only.");
+    Console.WriteLine("  --n <int>            Entity count for correctness smoke (e.g. 1000000).");
     Console.WriteLine("  --help               Show this help.");
     Console.WriteLine();
-    Console.WriteLine("This is a ValueLab: not public API, Release-only, read-only on MiniArch Core.");
+    Console.WriteLine("Default: correctness (quick size) + quick benchmarks.");
 }

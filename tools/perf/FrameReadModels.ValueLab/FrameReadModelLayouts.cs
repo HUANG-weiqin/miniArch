@@ -161,6 +161,7 @@ internal struct EntityArrayLookup<TKey> : IFrameLookup<TKey>
                 var slot = FindOrCreateSlot(key, tempCounts, ref distinctKeys, ref maxBucket);
                 if (slot < 0) { Clear(); return false; }
                 tempCounts[slot]++;
+                if (tempCounts[slot] > maxBucket) maxBucket = tempCounts[slot];
             }
         }
 
@@ -260,6 +261,7 @@ internal struct EntityArrayLookup<TKey> : IFrameLookup<TKey>
                 var slot = FindOrCreateSlot(key, tempCounts, ref distinctKeys, ref maxBucket);
                 if (slot < 0) { Clear(); return false; }
                 tempCounts[slot]++;
+                if (tempCounts[slot] > maxBucket) maxBucket = tempCounts[slot];
             }
         }
 
@@ -362,6 +364,7 @@ internal struct EntityArrayLookup<TKey> : IFrameLookup<TKey>
                 var slot = FindOrCreateSlot(key, tempCounts, ref distinctKeys, ref maxBucket);
                 if (slot < 0) { Clear(); return false; }
                 tempCounts[slot]++;
+                if (tempCounts[slot] > maxBucket) maxBucket = tempCounts[slot];
             }
         }
 
@@ -1017,6 +1020,7 @@ internal struct CompactRowLookup<TKey> : IFrameLookup<TKey>
                 var slot = FindOrCreateSlot(key, tempCounts, ref distinctKeys, ref maxBucket);
                 if (slot < 0) { Clear(); return false; }
                 tempCounts[slot]++;
+                if (tempCounts[slot] > maxBucket) maxBucket = tempCounts[slot];
             }
         }
 
@@ -1117,6 +1121,7 @@ internal struct CompactRowLookup<TKey> : IFrameLookup<TKey>
                 var slot = FindOrCreateSlot(key, tempCounts, ref distinctKeys, ref maxBucket);
                 if (slot < 0) { Clear(); return false; }
                 tempCounts[slot]++;
+                if (tempCounts[slot] > maxBucket) maxBucket = tempCounts[slot];
             }
         }
 
@@ -1219,6 +1224,7 @@ internal struct CompactRowLookup<TKey> : IFrameLookup<TKey>
                 var slot = FindOrCreateSlot(key, tempCounts, ref distinctKeys, ref maxBucket);
                 if (slot < 0) { Clear(); return false; }
                 tempCounts[slot]++;
+                if (tempCounts[slot] > maxBucket) maxBucket = tempCounts[slot];
             }
         }
 

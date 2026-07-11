@@ -254,6 +254,15 @@ internal readonly struct HealthValueKeySelector : IFrameKeySelector<int, Health>
     public int Select(Entity entity, in Health c1) => c1.Value;
 }
 
+/// <summary>
+/// 3-arity selector extracting Cell.Value from Cell+Position+Health components.
+/// Used by the Rows DSL for 3-component queries in benchmarks.
+/// </summary>
+internal readonly struct CellKeySelector3 : IFrameKeySelector<int, Cell, Position, Health>
+{
+    public int Select(Entity entity, in Cell c1, in Position c2, in Health c3) => c1.Value;
+}
+
 // ========================================================================
 //  IFrameLookup<TKey> — unified build/read contract for all layouts
 // ========================================================================
