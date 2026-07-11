@@ -24,6 +24,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Content Include="PublicApiBaseline.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\tools\perf\CommandBufferGame.Perf\CommandBufferGame.Perf.csproj" />
     <ProjectReference Include="..\..\src\MiniArch\MiniArch.csproj" />
     <ProjectReference Include="..\..\samples\BulletLockstep.Demo\BulletLockstep.Demo.csproj" />
