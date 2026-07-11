@@ -1214,7 +1214,7 @@ internal static class FrameReadModelCorrectness
     }
 
     /// <summary>12a. NoGrow early fail: capacity too small for keys.
-    /// Uses TryBuildNoGrow directly (not Rows DSL).</summary>
+    /// Uses TryBuild directly (not Rows DSL).</summary>
     private static bool TestNoGrowEarlyFail(string layout)
     {
         using var world = new World();
@@ -1239,21 +1239,21 @@ internal static class FrameReadModelCorrectness
             case "EntityArray":
             {
                 var lookup = EntityArrayLookup<int>.Create(4, 64);
-                ok = lookup.TryBuildNoGrow<Team, PassAll<Team>, TeamKeySelector>(chunks, ref pred, ref sel);
+                ok = lookup.TryBuild<Team, PassAll<Team>, TeamKeySelector>(chunks, ref pred, ref sel);
                 totalRows = lookup.TotalRows;
                 break;
             }
             case "LinkedRow":
             {
                 var lookup = LinkedRowLookup<int>.Create(4, 64);
-                ok = lookup.TryBuildNoGrow<Team, PassAll<Team>, TeamKeySelector>(chunks, ref pred, ref sel);
+                ok = lookup.TryBuild<Team, PassAll<Team>, TeamKeySelector>(chunks, ref pred, ref sel);
                 totalRows = lookup.TotalRows;
                 break;
             }
             case "CompactRow":
             {
                 var lookup = CompactRowLookup<int>.Create(4, 64);
-                ok = lookup.TryBuildNoGrow<Team, PassAll<Team>, TeamKeySelector>(chunks, ref pred, ref sel);
+                ok = lookup.TryBuild<Team, PassAll<Team>, TeamKeySelector>(chunks, ref pred, ref sel);
                 totalRows = lookup.TotalRows;
                 break;
             }
@@ -1261,7 +1261,7 @@ internal static class FrameReadModelCorrectness
             {
                 // maxKeyValue=4 → only keys 0..4 fit; key 5+ causes out-of-range → fail.
                 var lookup = DenseIntCompactLookup.Create(4, 64);
-                ok = lookup.TryBuildNoGrow<Team, PassAll<Team>, TeamKeySelector>(chunks, ref pred, ref sel);
+                ok = lookup.TryBuild<Team, PassAll<Team>, TeamKeySelector>(chunks, ref pred, ref sel);
                 totalRows = lookup.TotalRows;
                 break;
             }
@@ -1297,28 +1297,28 @@ internal static class FrameReadModelCorrectness
             case "EntityArray":
             {
                 var lookup = EntityArrayLookup<int>.Create(8, 10);
-                ok = lookup.TryBuildNoGrow<Team, PassAll<Team>, TeamKeySelector>(chunks, ref pred, ref sel);
+                ok = lookup.TryBuild<Team, PassAll<Team>, TeamKeySelector>(chunks, ref pred, ref sel);
                 totalRows = lookup.TotalRows;
                 break;
             }
             case "LinkedRow":
             {
                 var lookup = LinkedRowLookup<int>.Create(8, 10);
-                ok = lookup.TryBuildNoGrow<Team, PassAll<Team>, TeamKeySelector>(chunks, ref pred, ref sel);
+                ok = lookup.TryBuild<Team, PassAll<Team>, TeamKeySelector>(chunks, ref pred, ref sel);
                 totalRows = lookup.TotalRows;
                 break;
             }
             case "CompactRow":
             {
                 var lookup = CompactRowLookup<int>.Create(8, 10);
-                ok = lookup.TryBuildNoGrow<Team, PassAll<Team>, TeamKeySelector>(chunks, ref pred, ref sel);
+                ok = lookup.TryBuild<Team, PassAll<Team>, TeamKeySelector>(chunks, ref pred, ref sel);
                 totalRows = lookup.TotalRows;
                 break;
             }
             case "DenseInt":
             {
                 var lookup = DenseIntCompactLookup.Create(8, 10);
-                ok = lookup.TryBuildNoGrow<Team, PassAll<Team>, TeamKeySelector>(chunks, ref pred, ref sel);
+                ok = lookup.TryBuild<Team, PassAll<Team>, TeamKeySelector>(chunks, ref pred, ref sel);
                 totalRows = lookup.TotalRows;
                 break;
             }

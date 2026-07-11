@@ -5,7 +5,7 @@
 //   RawRepeatedScan   — naive per-key chunk scan (N*Q <= 500M only)
 //   ComponentBucket   — ComponentBucketQuery<Cell> per-key scan baseline
 //   DictionaryList    — Dictionary<int, List<Entity>>
-//   RawSameCompact    — direct CompactRowLookup.BuildAutoGrow (no DSL overhead)
+//   RawSameCompact    — direct CompactRowLookup.Build (no DSL overhead)
 //   EntityArrayDsl    — EntityArrayLookup via Rows<Cell,Position,Health>.KeyBy().Into()
 //   LinkedRowDsl      — LinkedRowLookup via Rows DSL
 //   CompactRowDsl     — CompactRowLookup via Rows DSL
@@ -499,7 +499,7 @@ internal static class FrameReadModelBenchmarks
     }
 
     // ────────────────────────────────────────────────────────────
-    //  Variant: RawSameCompact (direct BuildAutoGrow)
+    //  Variant: RawSameCompact (direct Build)
     // ────────────────────────────────────────────────────────────
 
     private static BenchResult MeasureRawSameCompact(
@@ -511,7 +511,7 @@ internal static class FrameReadModelBenchmarks
         var s = KeySel;
 
         // ── Warm build (triggers growth) ──
-        compact.BuildAutoGrow<Cell, Position, Health, PassAll<Cell, Position, Health>, CellKeySelector3>(
+        compact.Build<Cell, Position, Health, PassAll<Cell, Position, Health>, CellKeySelector3>(
             chunks, ref p, ref s);
 
         GC.Collect();
@@ -524,7 +524,7 @@ internal static class FrameReadModelBenchmarks
         var buildStart = Stopwatch.GetTimestamp();
 
         compact.Clear();
-        compact.BuildAutoGrow<Cell, Position, Health, PassAll<Cell, Position, Health>, CellKeySelector3>(
+        compact.Build<Cell, Position, Health, PassAll<Cell, Position, Health>, CellKeySelector3>(
             chunks, ref p, ref s);
 
         var buildMs = ElapsedMs(buildStart);

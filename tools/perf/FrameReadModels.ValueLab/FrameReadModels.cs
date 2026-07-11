@@ -366,7 +366,7 @@ internal struct HealthSumRunConsumer3 : IFrameRunConsumer<Cell, Position, Health
 /// <summary>
 /// Common interface for frame-level derived lookups.
 /// All layouts implement this; the Rows DSL calls Into(ref TLookup) which
-/// dispatches to TryBuildNoGrow / BuildAutoGrow.
+/// dispatches to TryBuild / Build.
 /// </summary>
 internal interface IFrameLookup<TKey>
     where TKey : unmanaged, IEquatable<TKey>
@@ -383,7 +383,7 @@ internal interface IFrameLookup<TKey>
     /// Attempts a no-grow build. Returns false and leaves the lookup
     /// in a cleared (empty) state if capacity is insufficient.
     /// </summary>
-    bool TryBuildNoGrow<T1, TPred, TSel>(
+    bool TryBuild<T1, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where TPred : struct, IFramePredicate<T1>
@@ -393,7 +393,7 @@ internal interface IFrameLookup<TKey>
     /// Builds with automatic capacity growth. Always succeeds.
     /// If initial capacity is insufficient, grows internally.
     /// </summary>
-    void BuildAutoGrow<T1, TPred, TSel>(
+    void Build<T1, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where TPred : struct, IFramePredicate<T1>
@@ -401,14 +401,14 @@ internal interface IFrameLookup<TKey>
 
     // ---- 2-arity ----
 
-    bool TryBuildNoGrow<T1, T2, TPred, TSel>(
+    bool TryBuild<T1, T2, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where T2 : unmanaged
         where TPred : struct, IFramePredicate<T1, T2>
         where TSel : struct, IFrameKeySelector<TKey, T1, T2>;
 
-    void BuildAutoGrow<T1, T2, TPred, TSel>(
+    void Build<T1, T2, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where T2 : unmanaged
@@ -417,7 +417,7 @@ internal interface IFrameLookup<TKey>
 
     // ---- 3-arity ----
 
-    bool TryBuildNoGrow<T1, T2, T3, TPred, TSel>(
+    bool TryBuild<T1, T2, T3, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where T2 : unmanaged
@@ -425,7 +425,7 @@ internal interface IFrameLookup<TKey>
         where TPred : struct, IFramePredicate<T1, T2, T3>
         where TSel : struct, IFrameKeySelector<TKey, T1, T2, T3>;
 
-    void BuildAutoGrow<T1, T2, T3, TPred, TSel>(
+    void Build<T1, T2, T3, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where T2 : unmanaged
@@ -549,8 +549,8 @@ internal readonly struct RowsReady1<T1, TKey, TPred, TSel>
         var p = _predicate;
         var s = _selector;
 
-        if (!lookup.TryBuildNoGrow<T1, TPred, TSel>(chunks, ref p, ref s))
-            lookup.BuildAutoGrow<T1, TPred, TSel>(chunks, ref p, ref s);
+        if (!lookup.TryBuild<T1, TPred, TSel>(chunks, ref p, ref s))
+            lookup.Build<T1, TPred, TSel>(chunks, ref p, ref s);
     }
 }
 
@@ -646,8 +646,8 @@ internal readonly struct RowsReady2<T1, T2, TKey, TPred, TSel>
         var p = _predicate;
         var s = _selector;
 
-        if (!lookup.TryBuildNoGrow<T1, T2, TPred, TSel>(chunks, ref p, ref s))
-            lookup.BuildAutoGrow<T1, T2, TPred, TSel>(chunks, ref p, ref s);
+        if (!lookup.TryBuild<T1, T2, TPred, TSel>(chunks, ref p, ref s))
+            lookup.Build<T1, T2, TPred, TSel>(chunks, ref p, ref s);
     }
 }
 
@@ -716,8 +716,8 @@ internal readonly struct RowsReady3<T1, T2, T3, TKey, TPred, TSel>
         var p = _predicate;
         var s = _selector;
 
-        if (!lookup.TryBuildNoGrow<T1, T2, T3, TPred, TSel>(chunks, ref p, ref s))
-            lookup.BuildAutoGrow<T1, T2, T3, TPred, TSel>(chunks, ref p, ref s);
+        if (!lookup.TryBuild<T1, T2, T3, TPred, TSel>(chunks, ref p, ref s))
+            lookup.Build<T1, T2, T3, TPred, TSel>(chunks, ref p, ref s);
     }
 }
 

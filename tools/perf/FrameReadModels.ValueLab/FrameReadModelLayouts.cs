@@ -5,8 +5,8 @@
 // C  — CompactRowLookup<TKey>     : two-pass CSR count/prefix/stable scatter
 // DI — DenseIntCompactLookup      : bounded int dense count/prefix/stable scatter
 //
-// All use generation stamps for O(1) Clear. TryBuildNoGrow returns false
-// (with empty state) on insufficient capacity. BuildAutoGrow grows as needed
+// All use generation stamps for O(1) Clear. TryBuild returns false
+// (with empty state) on insufficient capacity. Build grows as needed
 // (while loop with max-attempt safety).
 
 using System.Runtime.CompilerServices;
@@ -133,7 +133,7 @@ internal struct EntityArrayLookup<TKey> : IFrameLookup<TKey>
 
     // ---- Build (1-arity) ----
 
-    public bool TryBuildNoGrow<T1, TPred, TSel>(
+    public bool TryBuild<T1, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where TPred : struct, IFramePredicate<T1>
@@ -204,7 +204,7 @@ internal struct EntityArrayLookup<TKey> : IFrameLookup<TKey>
         return true;
     }
 
-    public void BuildAutoGrow<T1, TPred, TSel>(
+    public void Build<T1, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where TPred : struct, IFramePredicate<T1>
@@ -213,7 +213,7 @@ internal struct EntityArrayLookup<TKey> : IFrameLookup<TKey>
         const int MaxAttempts = 16;
         for (var attempt = 0; attempt < MaxAttempts; attempt++)
         {
-            if (TryBuildNoGrow<T1, TPred, TSel>(chunks, ref pred, ref sel))
+            if (TryBuild<T1, TPred, TSel>(chunks, ref pred, ref sel))
             {
                 if (attempt > 0)
                     _lastResult = new BuildResult(_lastResult.MatchedRows, _lastResult.StoredRows,
@@ -227,12 +227,12 @@ internal struct EntityArrayLookup<TKey> : IFrameLookup<TKey>
             _scratchCounts = saved;
         }
         throw new InvalidOperationException(
-            "EntityArrayLookup.BuildAutoGrow failed after maximum attempts.");
+            "EntityArrayLookup.Build failed after maximum attempts.");
     }
 
     // ---- Build (2-arity) ----
 
-    public bool TryBuildNoGrow<T1, T2, TPred, TSel>(
+    public bool TryBuild<T1, T2, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where T2 : unmanaged
@@ -304,7 +304,7 @@ internal struct EntityArrayLookup<TKey> : IFrameLookup<TKey>
         return true;
     }
 
-    public void BuildAutoGrow<T1, T2, TPred, TSel>(
+    public void Build<T1, T2, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where T2 : unmanaged
@@ -314,7 +314,7 @@ internal struct EntityArrayLookup<TKey> : IFrameLookup<TKey>
         const int MaxAttempts = 16;
         for (var attempt = 0; attempt < MaxAttempts; attempt++)
         {
-            if (TryBuildNoGrow<T1, T2, TPred, TSel>(chunks, ref pred, ref sel))
+            if (TryBuild<T1, T2, TPred, TSel>(chunks, ref pred, ref sel))
             {
                 if (attempt > 0)
                     _lastResult = new BuildResult(_lastResult.MatchedRows, _lastResult.StoredRows,
@@ -328,12 +328,12 @@ internal struct EntityArrayLookup<TKey> : IFrameLookup<TKey>
             _scratchCounts = saved;
         }
         throw new InvalidOperationException(
-            "EntityArrayLookup.BuildAutoGrow failed after maximum attempts.");
+            "EntityArrayLookup.Build failed after maximum attempts.");
     }
 
     // ---- Build (3-arity) ----
 
-    public bool TryBuildNoGrow<T1, T2, T3, TPred, TSel>(
+    public bool TryBuild<T1, T2, T3, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where T2 : unmanaged
@@ -408,7 +408,7 @@ internal struct EntityArrayLookup<TKey> : IFrameLookup<TKey>
         return true;
     }
 
-    public void BuildAutoGrow<T1, T2, T3, TPred, TSel>(
+    public void Build<T1, T2, T3, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where T2 : unmanaged
@@ -419,7 +419,7 @@ internal struct EntityArrayLookup<TKey> : IFrameLookup<TKey>
         const int MaxAttempts = 16;
         for (var attempt = 0; attempt < MaxAttempts; attempt++)
         {
-            if (TryBuildNoGrow<T1, T2, T3, TPred, TSel>(chunks, ref pred, ref sel))
+            if (TryBuild<T1, T2, T3, TPred, TSel>(chunks, ref pred, ref sel))
             {
                 if (attempt > 0)
                     _lastResult = new BuildResult(_lastResult.MatchedRows, _lastResult.StoredRows,
@@ -433,7 +433,7 @@ internal struct EntityArrayLookup<TKey> : IFrameLookup<TKey>
             _scratchCounts = saved;
         }
         throw new InvalidOperationException(
-            "EntityArrayLookup.BuildAutoGrow failed after maximum attempts.");
+            "EntityArrayLookup.Build failed after maximum attempts.");
     }
 
     // ---- Private helpers ----
@@ -569,7 +569,7 @@ internal struct LinkedRowLookup<TKey> : IFrameLookup<TKey>
 
     // ---- Build (1-arity) ----
 
-    public bool TryBuildNoGrow<T1, TPred, TSel>(
+    public bool TryBuild<T1, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where TPred : struct, IFramePredicate<T1>
@@ -633,7 +633,7 @@ internal struct LinkedRowLookup<TKey> : IFrameLookup<TKey>
         return true;
     }
 
-    public void BuildAutoGrow<T1, TPred, TSel>(
+    public void Build<T1, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where TPred : struct, IFramePredicate<T1>
@@ -642,7 +642,7 @@ internal struct LinkedRowLookup<TKey> : IFrameLookup<TKey>
         const int MaxAttempts = 16;
         for (var attempt = 0; attempt < MaxAttempts; attempt++)
         {
-            if (TryBuildNoGrow<T1, TPred, TSel>(chunks, ref pred, ref sel))
+            if (TryBuild<T1, TPred, TSel>(chunks, ref pred, ref sel))
             {
                 if (attempt > 0)
                     _lastResult = new BuildResult(_lastResult.MatchedRows, _lastResult.StoredRows,
@@ -654,12 +654,12 @@ internal struct LinkedRowLookup<TKey> : IFrameLookup<TKey>
             this = Create(newKeyCap, newRowCap);
         }
         throw new InvalidOperationException(
-            "LinkedRowLookup.BuildAutoGrow failed after maximum attempts.");
+            "LinkedRowLookup.Build failed after maximum attempts.");
     }
 
     // ---- Build (2-arity) ----
 
-    public bool TryBuildNoGrow<T1, T2, TPred, TSel>(
+    public bool TryBuild<T1, T2, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where T2 : unmanaged
@@ -725,7 +725,7 @@ internal struct LinkedRowLookup<TKey> : IFrameLookup<TKey>
         return true;
     }
 
-    public void BuildAutoGrow<T1, T2, TPred, TSel>(
+    public void Build<T1, T2, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where T2 : unmanaged
@@ -735,7 +735,7 @@ internal struct LinkedRowLookup<TKey> : IFrameLookup<TKey>
         const int MaxAttempts = 16;
         for (var attempt = 0; attempt < MaxAttempts; attempt++)
         {
-            if (TryBuildNoGrow<T1, T2, TPred, TSel>(chunks, ref pred, ref sel))
+            if (TryBuild<T1, T2, TPred, TSel>(chunks, ref pred, ref sel))
             {
                 if (attempt > 0)
                     _lastResult = new BuildResult(_lastResult.MatchedRows, _lastResult.StoredRows,
@@ -747,12 +747,12 @@ internal struct LinkedRowLookup<TKey> : IFrameLookup<TKey>
             this = Create(newKeyCap, newRowCap);
         }
         throw new InvalidOperationException(
-            "LinkedRowLookup.BuildAutoGrow failed after maximum attempts.");
+            "LinkedRowLookup.Build failed after maximum attempts.");
     }
 
     // ---- Build (3-arity) ----
 
-    public bool TryBuildNoGrow<T1, T2, T3, TPred, TSel>(
+    public bool TryBuild<T1, T2, T3, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where T2 : unmanaged
@@ -820,7 +820,7 @@ internal struct LinkedRowLookup<TKey> : IFrameLookup<TKey>
         return true;
     }
 
-    public void BuildAutoGrow<T1, T2, T3, TPred, TSel>(
+    public void Build<T1, T2, T3, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where T2 : unmanaged
@@ -831,7 +831,7 @@ internal struct LinkedRowLookup<TKey> : IFrameLookup<TKey>
         const int MaxAttempts = 16;
         for (var attempt = 0; attempt < MaxAttempts; attempt++)
         {
-            if (TryBuildNoGrow<T1, T2, T3, TPred, TSel>(chunks, ref pred, ref sel))
+            if (TryBuild<T1, T2, T3, TPred, TSel>(chunks, ref pred, ref sel))
             {
                 if (attempt > 0)
                     _lastResult = new BuildResult(_lastResult.MatchedRows, _lastResult.StoredRows,
@@ -843,7 +843,7 @@ internal struct LinkedRowLookup<TKey> : IFrameLookup<TKey>
             this = Create(newKeyCap, newRowCap);
         }
         throw new InvalidOperationException(
-            "LinkedRowLookup.BuildAutoGrow failed after maximum attempts.");
+            "LinkedRowLookup.Build failed after maximum attempts.");
     }
 
     // ---- Private helpers ----
@@ -972,6 +972,16 @@ internal struct CompactRowLookup<TKey> : IFrameLookup<TKey>
         if (count > dest.Length) count = dest.Length;
         new ReadOnlySpan<RowRef>(_flatRows, start, count).CopyTo(dest);
         return count;
+    }
+
+    public ReadOnlySpan<RowRef> this[TKey key]
+    {
+        get
+        {
+            var idx = FindSlot(key);
+            if (idx < 0) return default;
+            return new ReadOnlySpan<RowRef>(_flatRows, _keyStart[idx], _keyCount[idx]);
+        }
     }
 
     public int ForEach<T1, TConsumer>(TKey key, ReadOnlySpan<ChunkView> chunks, ref TConsumer consumer)
@@ -1175,7 +1185,7 @@ internal struct CompactRowLookup<TKey> : IFrameLookup<TKey>
 
     // ---- Build (1-arity) ----
 
-    public bool TryBuildNoGrow<T1, TPred, TSel>(
+    public bool TryBuild<T1, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where TPred : struct, IFramePredicate<T1>
@@ -1247,7 +1257,7 @@ internal struct CompactRowLookup<TKey> : IFrameLookup<TKey>
         return true;
     }
 
-    public void BuildAutoGrow<T1, TPred, TSel>(
+    public void Build<T1, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where TPred : struct, IFramePredicate<T1>
@@ -1256,7 +1266,7 @@ internal struct CompactRowLookup<TKey> : IFrameLookup<TKey>
         const int MaxAttempts = 16;
         for (var attempt = 0; attempt < MaxAttempts; attempt++)
         {
-            if (TryBuildNoGrow<T1, TPred, TSel>(chunks, ref pred, ref sel))
+            if (TryBuild<T1, TPred, TSel>(chunks, ref pred, ref sel))
             {
                 if (attempt > 0)
                     _lastResult = new BuildResult(_lastResult.MatchedRows, _lastResult.StoredRows,
@@ -1270,12 +1280,12 @@ internal struct CompactRowLookup<TKey> : IFrameLookup<TKey>
             _scratchCounts = saved;
         }
         throw new InvalidOperationException(
-            "CompactRowLookup.BuildAutoGrow failed after maximum attempts.");
+            "CompactRowLookup.Build failed after maximum attempts.");
     }
 
     // ---- Build (2-arity) ----
 
-    public bool TryBuildNoGrow<T1, T2, TPred, TSel>(
+    public bool TryBuild<T1, T2, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where T2 : unmanaged
@@ -1347,7 +1357,7 @@ internal struct CompactRowLookup<TKey> : IFrameLookup<TKey>
         return true;
     }
 
-    public void BuildAutoGrow<T1, T2, TPred, TSel>(
+    public void Build<T1, T2, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where T2 : unmanaged
@@ -1357,7 +1367,7 @@ internal struct CompactRowLookup<TKey> : IFrameLookup<TKey>
         const int MaxAttempts = 16;
         for (var attempt = 0; attempt < MaxAttempts; attempt++)
         {
-            if (TryBuildNoGrow<T1, T2, TPred, TSel>(chunks, ref pred, ref sel))
+            if (TryBuild<T1, T2, TPred, TSel>(chunks, ref pred, ref sel))
             {
                 if (attempt > 0)
                     _lastResult = new BuildResult(_lastResult.MatchedRows, _lastResult.StoredRows,
@@ -1371,12 +1381,12 @@ internal struct CompactRowLookup<TKey> : IFrameLookup<TKey>
             _scratchCounts = saved;
         }
         throw new InvalidOperationException(
-            "CompactRowLookup.BuildAutoGrow failed after maximum attempts.");
+            "CompactRowLookup.Build failed after maximum attempts.");
     }
 
     // ---- Build (3-arity) ----
 
-    public bool TryBuildNoGrow<T1, T2, T3, TPred, TSel>(
+    public bool TryBuild<T1, T2, T3, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where T2 : unmanaged
@@ -1451,7 +1461,7 @@ internal struct CompactRowLookup<TKey> : IFrameLookup<TKey>
         return true;
     }
 
-    public void BuildAutoGrow<T1, T2, T3, TPred, TSel>(
+    public void Build<T1, T2, T3, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where T2 : unmanaged
@@ -1462,7 +1472,7 @@ internal struct CompactRowLookup<TKey> : IFrameLookup<TKey>
         const int MaxAttempts = 16;
         for (var attempt = 0; attempt < MaxAttempts; attempt++)
         {
-            if (TryBuildNoGrow<T1, T2, T3, TPred, TSel>(chunks, ref pred, ref sel))
+            if (TryBuild<T1, T2, T3, TPred, TSel>(chunks, ref pred, ref sel))
             {
                 if (attempt > 0)
                     _lastResult = new BuildResult(_lastResult.MatchedRows, _lastResult.StoredRows,
@@ -1476,7 +1486,7 @@ internal struct CompactRowLookup<TKey> : IFrameLookup<TKey>
             _scratchCounts = saved;
         }
         throw new InvalidOperationException(
-            "CompactRowLookup.BuildAutoGrow failed after maximum attempts.");
+            "CompactRowLookup.Build failed after maximum attempts.");
     }
 
     // ---- Private helpers ----
@@ -1594,6 +1604,15 @@ internal struct DenseIntCompactLookup : IFrameLookup<int>
         return count;
     }
 
+    public ReadOnlySpan<RowRef> this[int key]
+    {
+        get
+        {
+            if (!_initialized || (uint)key > (uint)_maxKeyValue) return default;
+            return new ReadOnlySpan<RowRef>(_rows, _prefix[key], _counts[key]);
+        }
+    }
+
     // ---- Scratch array helper ----
 
     private int[] GetScratchPos()
@@ -1609,7 +1628,7 @@ internal struct DenseIntCompactLookup : IFrameLookup<int>
 
     // ---- Build (1-arity) ----
 
-    public bool TryBuildNoGrow<T1, TPred, TSel>(
+    public bool TryBuild<T1, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where TPred : struct, IFramePredicate<T1>
@@ -1681,7 +1700,7 @@ internal struct DenseIntCompactLookup : IFrameLookup<int>
         return true;
     }
 
-    public void BuildAutoGrow<T1, TPred, TSel>(
+    public void Build<T1, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where TPred : struct, IFramePredicate<T1>
@@ -1690,7 +1709,7 @@ internal struct DenseIntCompactLookup : IFrameLookup<int>
         const int MaxAttempts = 16;
         for (var attempt = 0; attempt < MaxAttempts; attempt++)
         {
-            if (TryBuildNoGrow<T1, TPred, TSel>(chunks, ref pred, ref sel))
+            if (TryBuild<T1, TPred, TSel>(chunks, ref pred, ref sel))
             {
                 if (attempt > 0)
                     _lastResult = new BuildResult(_lastResult.MatchedRows, _lastResult.StoredRows,
@@ -1705,12 +1724,12 @@ internal struct DenseIntCompactLookup : IFrameLookup<int>
             _scratchPos = saved;
         }
         throw new InvalidOperationException(
-            "DenseIntCompactLookup.BuildAutoGrow failed after maximum attempts.");
+            "DenseIntCompactLookup.Build failed after maximum attempts.");
     }
 
     // ---- Build (2-arity) ----
 
-    public bool TryBuildNoGrow<T1, T2, TPred, TSel>(
+    public bool TryBuild<T1, T2, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where T2 : unmanaged
@@ -1782,7 +1801,7 @@ internal struct DenseIntCompactLookup : IFrameLookup<int>
         return true;
     }
 
-    public void BuildAutoGrow<T1, T2, TPred, TSel>(
+    public void Build<T1, T2, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where T2 : unmanaged
@@ -1792,7 +1811,7 @@ internal struct DenseIntCompactLookup : IFrameLookup<int>
         const int MaxAttempts = 16;
         for (var attempt = 0; attempt < MaxAttempts; attempt++)
         {
-            if (TryBuildNoGrow<T1, T2, TPred, TSel>(chunks, ref pred, ref sel))
+            if (TryBuild<T1, T2, TPred, TSel>(chunks, ref pred, ref sel))
             {
                 if (attempt > 0)
                     _lastResult = new BuildResult(_lastResult.MatchedRows, _lastResult.StoredRows,
@@ -1806,12 +1825,12 @@ internal struct DenseIntCompactLookup : IFrameLookup<int>
             _scratchPos = saved;
         }
         throw new InvalidOperationException(
-            "DenseIntCompactLookup.BuildAutoGrow failed after maximum attempts.");
+            "DenseIntCompactLookup.Build failed after maximum attempts.");
     }
 
     // ---- Build (3-arity) ----
 
-    public bool TryBuildNoGrow<T1, T2, T3, TPred, TSel>(
+    public bool TryBuild<T1, T2, T3, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where T2 : unmanaged
@@ -1886,7 +1905,7 @@ internal struct DenseIntCompactLookup : IFrameLookup<int>
         return true;
     }
 
-    public void BuildAutoGrow<T1, T2, T3, TPred, TSel>(
+    public void Build<T1, T2, T3, TPred, TSel>(
         ReadOnlySpan<ChunkView> chunks, ref TPred pred, ref TSel sel)
         where T1 : unmanaged
         where T2 : unmanaged
@@ -1897,7 +1916,7 @@ internal struct DenseIntCompactLookup : IFrameLookup<int>
         const int MaxAttempts = 16;
         for (var attempt = 0; attempt < MaxAttempts; attempt++)
         {
-            if (TryBuildNoGrow<T1, T2, T3, TPred, TSel>(chunks, ref pred, ref sel))
+            if (TryBuild<T1, T2, T3, TPred, TSel>(chunks, ref pred, ref sel))
             {
                 if (attempt > 0)
                     _lastResult = new BuildResult(_lastResult.MatchedRows, _lastResult.StoredRows,
@@ -1911,6 +1930,6 @@ internal struct DenseIntCompactLookup : IFrameLookup<int>
             _scratchPos = saved;
         }
         throw new InvalidOperationException(
-            "DenseIntCompactLookup.BuildAutoGrow failed after maximum attempts.");
+            "DenseIntCompactLookup.Build failed after maximum attempts.");
     }
 }
