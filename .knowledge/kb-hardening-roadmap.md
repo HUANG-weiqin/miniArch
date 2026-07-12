@@ -23,11 +23,10 @@ updated: 2026-07-12
 | **M8** | **恶意输入安全** | **P0** | 5 | FrameDelta、Snapshot、Replay |
 | **M3** | **栈安全** | **P1** | 2 | FrameDelta Replay、CommandStream |
 | **M9** | **API 输入验证** | **P0** | 10 | 所有 public API 入口 |
-| **M3** | **栈安全** | **P1** | 2 | FrameDelta Replay、CommandStream |
 | **M2** | **退化性能保护** | P2 | 2 | Destroy 分组、free list 扫描 |
 | **M6** | **并发安全契约** | P2 | 3 | Query 并行迭代、跨 CommandStream |
 | **M4** | **契约显式化** | P2 | 3 | Debug.Assert + 源代码注释约定 |
-| **M5** | **确定性与可观测性** | P2 | 5 | 文档、Diagnostic 工具、checksum |
+| **M5** | **确定性与可观测性** | P2 | 7 | 文档、Diagnostic 工具、checksum |
 | **M7** | **资源生命周期** | P3 | 2 | Dispose 清理 |
 
 ---
@@ -35,6 +34,14 @@ updated: 2026-07-12
 ## M1 — Int 溢出防线
 
 **目标**：在 .NET 单数组上限（`ArrayMaxLength ≈ 2.14 GB`）前，所有 `int` 运算不静默溢出。
+
+**M1 内部执行顺序**（按"是否会导致 crash/挂死"优先）：
+
+| 子优先级 | 条目 | 风险 |
+|----------|------|------|
+| 🔴 最先 | **M1.2**（除零崩溃）+ **M1.6**（无限循环）+ **M1.9**（符号溢出→crash） | 确定触发时进程崩溃/挂死 |
+| 🟡 其次 | **M1.4** + **M1.4.5** + **M1.5** + **M1.8**（防御性溢出） | 极值输入才触发，防御为主 |
+| 🟢 最后 | **M1.1**（long 化）+ **M1.3**（容量钳位） | 冷路径构造时，概率极低 |
 
 ### M1.1 `ComputeColumnLayout` long 化
 
@@ -164,6 +171,7 @@ private static int ComputeSegmentEntityCapacity(Type[] componentTypes)
 - `perEntity` 为 2 GB 时抛明确异常（非静默崩溃）
 - 所有 hot path 反汇编确认：无额外分支、无 `long` 运算、无 `checked` 区域（除 M1.4 外）
 - `dotnet test -c Release` 全通过 + `HeroComing.Perf --check-baseline`
+- `dotnet run -c Release --project tools/soak/MiniArch.Soak -- --sweep 32 --frames 50000 --quiet` 全 PASS（M1.2/M1.7 动到 `_segmentCapacity` 和 `GetSegmentAndLocal` 映射，soak 覆盖所有 archetype 读写路径）
 
 ---
 
@@ -360,7 +368,21 @@ M2.3 的注释**已添加**（之前 commit 已更新 `RemoveFromFreeList` 和 `
 - **改法**：改为显式 `BinaryPrimitives.WriteInt32LittleEndian(span, v)`（在 `System.IO.BinaryPrimitives` 中已定义，零分配）
 - **热路径**：❌ Snapshot Save/Load 冷路径
 
----
+### M5.6 NaN 对 checksum 的污染（文档警告）
+
+- **位置**：所有 checksum 路径（`FeedColumnData` / `FeedRowData` / `ComputeChecksum` / `CanonicalChecksum`）
+- **问题**：IEEE 754 NaN 有多种 bit pattern（正负 NaN、signaling/quiet NaN）。若用户组件含 `float`/`double` 字段且值为 NaN，不同路径生成的 hash 可能因 NaN 的 bit 表示不同而分歧。当前 checksum 路径直接将组件字节喂入 hash，不做 NaN 规范化
+- **改法（仅文档）**：在 `ComponentSchema` 注册入口或在 `README.md` 设计文档中加警告：「Component 字段中的 `float`/`double` 值应避免 NaN。NaN 的 IEEE 754 编码不止一种，可能导致多 host 间 checksum 不一致。若业务需要 NaN，调用方应自行规范化（如 `BitConverter.SingleToInt32Bits` + 统一 NaN pattern）」
+- **热路径**：N/A — 不改代码，纯文档
+- **不修运行时**：NaN 规范化需要在每次 `AppendData` 前逐 float/double 字段扫描——这在 checksum 热路径上不可接受。此项仅文档警告
+
+### M5.7 组件类型数量文档化上限
+
+- **位置**：`ComponentMask`（`CommandStreamCore.cs`）、组件注册入口
+- **问题**：`ComponentMask` 快路径覆盖 0-511（8×`ulong`），慢路径通过 `SlowMask`（`ulong[]` + `int Hash`）扩展，但未文档化上限。若用户注册极多组件类型（如 10000+），`SlowMask` 的 hash 碰撞概率上升、`ComponentStore<T>` 的 `StoreEntry<T>[]` 数组膨胀
+- **改法**：在 `ComponentRegistry` 或 `ComponentSchema.Fingerprint()` 入口处加文档化上限（建议 4096），并在注册时加 `Debug.Assert(componentCount <= 4096, ...)`
+- **热路径**：❌ 注册时冷路径
+- **关联条目**：M4.3（`ComponentStore<T>` inline 存储契约对此也有约束）
 
 ---
 
@@ -636,37 +658,28 @@ M2.3 的注释**已添加**（之前 commit 已更新 `RemoveFromFreeList` 和 `
 ## 执行顺序建议
 
 ```
-M1 (Integer overflow) + M8 (Security) + M9 (API validation) — 最危险，可并行
+M1 crash 子集 (1.2 除零 + 1.6 无限循环 + 1.9 符号溢出) — 确定触发时崩溃/挂死
   ↓
-M3 (Stack safety) — 不可恢复的 crash
+M3 (Stack safety) — 不可恢复的 StackOverflow
   ↓
-M6 (Concurrency contracts) — DEBUG 断言，易落地
+M1 防御子集 (1.1/1.3/1.4/1.4.5/1.5/1.7/1.8) — 极值输入才触发
   ↓
-M2 (Degenerate perf) — 影响可用性，按场景评估
-  ↓
-M4 (Memory safety assertions) — 防御性，可与 M1/M6 合批
-  ↓
-M5 (Observability) + M7 (Lifetime) — 收尾文档化
-```
-
-```
-M1 (Integer overflow) + M8 (Security) — 最危险，可并行
-  ↓
-M3 (Stack safety) — 不可恢复的 crash
+M8 (Malicious input) + M9 (API validation) — 可并行，安全网
   ↓
 M6 (Concurrency contracts) — DEBUG 断言，易落地
   ↓
-M2 (Degenerate perf) — 影响可用性，按场景评估
+M2 (Degenerate perf) — 文档化，不修代码
   ↓
-M4 (Memory safety assertions) — 防御性，可与 M1/M6 合批
+M4 (Contracts) — 注释 + DEBUG 断言
   ↓
 M5 (Observability) + M7 (Lifetime) — 收尾文档化
 ```
 
 **核心原则**：
+- Crash 类优先（M1.2/M1.6/M1.9/M3）——确定触发时进程直接挂，无兜底机会
+- 防御类其次（M1 其他 / M8 / M9）——极值/恶意输入才触发，但挂得干净
 - M6/M4 不改热路径，全用 `[Conditional("DEBUG")]` 断言
-- M2 在冷路径兜底
-- M1/M8 在冷路径前置校验
+- M2 在代码位置加注释即可，不修运行时
 - 所有条目修复后 `dotnet test -c Release` + `HeroComing.Perf --check-baseline` 必须通过
 
 ## 相关文件
