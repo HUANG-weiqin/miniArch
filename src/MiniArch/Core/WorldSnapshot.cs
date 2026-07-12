@@ -172,6 +172,32 @@ public static class WorldSnapshot
         var archetypeCount = reader.ReadInt32();
         var hierarchyLinkCount = reader.ReadInt32();
 
+        // Prevent OOM from malicious snapshots with excessive schema count.
+        // 64K component types is far beyond any realistic game; each entry
+        // would allocate a resolved Type reference in the schemaTypes array.
+        const int maxReasonableSchemas = 65536;
+        if (schemaCount < 0 || schemaCount > maxReasonableSchemas)
+            throw new InvalidDataException(
+                $"Snapshot schema count ({schemaCount}) is out of range. " +
+                $"Maximum allowed is {maxReasonableSchemas}.");
+
+        // Prevent OOM from malicious snapshots with excessive archetype count.
+        // 256K archetypes × minimum overhead ~64 bytes = ~16 MB — beyond any
+        // realistic component combinatorics.
+        const int maxReasonableArchetypes = 262144;
+        if (archetypeCount < 0 || archetypeCount > maxReasonableArchetypes)
+            throw new InvalidDataException(
+                $"Snapshot archetype count ({archetypeCount}) is out of range. " +
+                $"Maximum allowed is {maxReasonableArchetypes}.");
+
+        // Prevent OOM from malicious snapshots with excessive hierarchy links.
+        // Each link stores 2 ints; 256M links at 8 bytes/link = 2 GB worst case
+        // for the slot versions array alone. Cap at entitySlotCount (already bounded).
+        if (hierarchyLinkCount < 0 || hierarchyLinkCount > entitySlotCount)
+            throw new InvalidDataException(
+                $"Snapshot hierarchy link count ({hierarchyLinkCount}) is out of range. " +
+                $"Maximum allowed is {entitySlotCount} (entity slot count).");
+
         var slotVersions = new int[entitySlotCount];
         for (var index = 0; index < slotVersions.Length; index++)
         {
