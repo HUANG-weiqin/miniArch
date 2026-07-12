@@ -30,6 +30,10 @@ public sealed partial class World
     /// </exception>
     public Entity GetSingleton<T>() where T : unmanaged
     {
+        // NOTE: O(archetype_count) scan. Even with 100K archetypes this is < 1ms.
+        // Marked as cold path — callers should cache the result. Not worth caching
+        // internally (adds invalidation complexity on every archetype change).
+        // See .knowledge/kb-hardening-roadmap.md §M2.4.
         AssertNotDisposed();
         var componentType = Component<T>.ComponentType;
         Entity found = default;

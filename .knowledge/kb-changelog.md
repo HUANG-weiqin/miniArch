@@ -2,7 +2,7 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-07-09
+updated: 2026-07-12
 ---
 # Knowledge Base Changelog
 
@@ -375,5 +375,60 @@ Apply advisor 轮次审阅发现，补充 3 项：
 - **TransitionEntry 删除**：旧 `(Entity, OldArchetype?, NewArchetype?)` 不再需要——Entered/Exited 在 dispatch 时已确定，不再存储 old/new archetype。
 - **ClearTransitionLog() 删除**：每个 log 自管 buffer，drain 即 clear，无需 world 级协调。
 - **服务器长运行安全 by design**：log 以 "drain 后清零" 为界，不再 "全 World 共享单调增长"。
+
+## 2026-07-12 Hardening Roadmap M1-M9 批量执行
+
+遵循 `kb-hardening-roadmap.md` 的优先级顺序，批量落地以下加固条目：
+
+### M1 — Int 溢出防线（P0，全部落地）
+- **M1.1**：`ComputeColumnLayout` 加 `checked{}` 保护，溢出时抛 `OverflowException`
+- **M1.2**：`ComputeSegmentEntityCapacity` 重写：除零防护（perEntity=0 → 65536）、20-bit MaxSegCap 钳位、`RoundUpToPowerOf2` 在 (int) 转换前钳位防止截断为负
+- **M1.3**：Archetype 构造函数初始容量已在 M1.2 的上限钳位中覆盖
+- **M1.4**：5 处 `N * elemSize` 改为 `checked((uint)(N * elemSize))`（ConvertToChunked、EnsureCapacity flat 拷贝、RestoreFlatBackup 两路径、WorldStateSnapshot restore）
+- **M1.4.5**：`WriteColumnOrderedTo` 的 `new byte[count * size]` 和 `GetColumnBytes` 的 `count * elemSize` 用 `checked` 保护
+- **M1.5**：`ReserveBatchBufSpace` 加 `_batchBufLen > int.MaxValue - size` 溢出检测 + `ThrowBufferOverflow()`；`Array.Resize` 的 `* 2` 用 `Math.Min(..., 0x7FFFFFC7)` 钳位
+- **M1.6**：`GrowPendingBatchFor` 的 `while (newLen <= entityId) newLen *= 2` 加溢出兜底（`maxPendingBatch = 0x40000000`）
+- **M1.8**：`EnsureEntityCapacity` 和 `PushFreeIdUnsafe`/`EnsureFreeIdCapacity` 的倍增溢出用 `Math.Min(*2, maxArray)` 保护
+- **M1.9**：`ReadVarint` 解码循环后加 `if (result < 0) throw`，捕获 LEB128 编码值 > int.MaxValue 的符号溢出。5 个攻击面测试相应更新
+
+### M2 — 退化性能保护（注释落地）
+- `DestroyCollectedEntities` 添加 O(N×groupCount) 性能注释，附评估结论
+- `GetSingleton<T>` 添加 O(archetype_count) 冷路径注释
+
+### M3 — 栈安全（P1）
+- **M3.1**：`World.ReplayCreateOpCore` 的 `stackalloc byte[scratchSize]` 在 scratchSize > 256 时改用 `ArrayPool<byte>.Shared.Rent`
+- **M3.2**：`MaterializeCreateManyGroup` 的两个 `stackalloc ComponentType[componentCount]` 改为 `componentCount <= 64 ? stackalloc : ArrayPool.Rent`
+
+### M6 — 并发安全契约（Debug 断言 + 契约，不入侵 Release 热路径）
+- World 新增 `_structureChangeInProgress` 计数器 + `BeginStructChange/EndStructChange/AssertNoStructChange`（`[Conditional("DEBUG")]`）
+- 结构化变更入口（`CreateInArchetype`、`Destroy`、`Add<T>`、`Remove<T>`）包裹 Begin/End
+- Query 入口（`QueryCache.GetChunkViewSpan`）加 `AssertNoStructChange`
+
+### M8 — 恶意输入安全（P0）
+- **M8.2**：Replay 路径 `ReplayCreateOpCore` 加 `Debug.Assert` 检测 delta 声明的 dataSize 与 archetype.elementSize 一致
+- **M8.3**：`PreScanForCapacity` 的 `maxEntityId` 增长用 `Math.Min(id, Math.Max(_records.Length * 2, 65536))` 钳位
+- **M8.4**：`WorldSnapshot.Load` 的 `entitySlotCount` 加 `maxReasonableSlots = 256M` 上限检测
+- **M8.5**：`HierarchyTable.AddChildRestored` 加 Debug-only 循环层级检测（`IsAncestorOf` 上溯检查）
+
+### M9 — API 输入验证
+- **M9.1**：`ChunkView.GetSpan<T>` 加 `Debug.Assert` 检测组件存在性 + `AssertInitialized`
+- **M9.2**：`EntityAccessor.Get<T>/Set<T>` 加 `Debug.Assert` 检测组件 + 非 default 初始化
+- **M9.3**：`ChunkView` 加 `AssertInitialized` 方法
+- **M9.4**：`CommandStreamCore.Replay(FrameDelta)` 加 `ArgumentNullException.ThrowIfNull(delta)`
+- **M9.5**：`SubmitAndSnapshotIntoAsync` 加 `ArgumentNullException.ThrowIfNull(target)`
+- **M9.6**：`WorldSnapshot.Load` 加 `snapshotBytes.Length < 8` 截断流友好异常
+- **M9.7-M9.10**：XML doc 补充（`Remove<T>` 静默 no-op、`CommandStream.Add/Set/Remove` 静默丢弃、`EntityCount` 可能为负、Entity 无 World 关联）
+
+### M4 — 契约显式化
+- `Archetype.Storage` 新增 `AssertSegIdx` 方法 + `GetColumnRef` 静态方法加 segment 越界 Debug.Assert
+
+### M7 — 资源生命周期
+- **M7.1**：删除 `Archetype._owner` 死代码字段及 World.cs 中的赋值
+
+### 验证
+- `dotnet test -c Release`：MiniArch.Tests 964/964 PASS，HeroPipeline.Tests 5/5 PASS
+- `HeroComing.Perf --check-baseline`：Movement 1692.4 ≥ 1642，Attack 1103.3 ≥ 997，Memory OK
+- `MiniArch.Soak --sweep 8 --frames 10000`：8/8 PASS
+- 无性能退化（所有热路径改动仅在 DEBUG 下生效或为冷路径）
 
 

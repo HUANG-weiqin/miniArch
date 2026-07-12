@@ -45,6 +45,11 @@ public sealed partial class CommandStream : CommandStreamCore
     /// operations are <b>not</b> observable via <c>World.Watch</c> handles
     /// (the snapshot/diff lifecycle is orthogonal to pending batching) — only the net final state is materialized.
     /// </summary>
+    /// <remarks>
+    /// If the entity is not alive (does not exist or was destroyed), the command
+    /// is silently discarded. Use <see cref="Entity.IsPlaceholder"/> and
+    /// <see cref="World.IsAlive"/> to verify entity state before calling.
+    /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Add<T>(Entity entity, T component) where T : unmanaged
     {
@@ -66,6 +71,11 @@ public sealed partial class CommandStream : CommandStreamCore
     /// value during materialization; no intermediate <c>ChangeWatch&lt;,&gt;.Diff</c>
     /// entries are produced.
     /// </summary>
+    /// <remarks>
+    /// If the entity is not alive (does not exist or was destroyed), the command
+    /// is silently discarded. Use <see cref="Entity.IsPlaceholder"/> and
+    /// <see cref="World.IsAlive"/> to verify entity state before calling.
+    /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Set<T>(Entity entity, T component) where T : unmanaged
     {
@@ -88,6 +98,11 @@ public sealed partial class CommandStream : CommandStreamCore
     /// may eliminate the type entirely; no intermediate <c>TransitionWatch&lt;&gt;.Diff</c>
     /// (Entered followed by Exited) entries are observable.
     /// </summary>
+    /// <remarks>
+    /// If the entity is not alive (does not exist or was destroyed), the command
+    /// is silently discarded. Use <see cref="Entity.IsPlaceholder"/> and
+    /// <see cref="World.IsAlive"/> to verify entity state before calling.
+    /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Remove<T>(Entity entity) where T : unmanaged
     {

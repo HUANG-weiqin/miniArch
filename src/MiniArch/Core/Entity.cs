@@ -5,6 +5,11 @@ namespace MiniArch;
 /// </summary>
 /// <param name="Id">The entity slot id.</param>
 /// <param name="Version">The entity version.</param>
+/// <remarks>
+/// Entity has no World association. Using an Entity from one World in
+/// another World's APIs is undefined behavior —if the slot+version
+/// coincidentally match, operations silently affect the wrong entity.
+/// </remarks>
 public readonly record struct Entity(int Id, int Version) : IComparable<Entity>
 {
     /// <summary>

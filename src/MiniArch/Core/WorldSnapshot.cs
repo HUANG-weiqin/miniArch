@@ -112,6 +112,10 @@ public static class WorldSnapshot
         var snapshotOffset = 0;
 
         // Read magic + version using BinaryReader semantics (little-endian)
+        if (snapshotBytes.Length < 8)
+            throw new InvalidDataException(
+                $"Snapshot data is too short ({snapshotBytes.Length} bytes). " +
+                $"Expected at least 8 bytes for magic header + format version.");
         var magic = BitConverter.ToInt32(snapshotBytes, snapshotOffset); snapshotOffset += 4;
         if (magic != Magic)
             throw new InvalidDataException("Snapshot magic header does not match MiniArch snapshot format.");
@@ -154,6 +158,16 @@ public static class WorldSnapshot
 
         var chunkCapacity = reader.ReadInt32();
         var entitySlotCount = reader.ReadInt32();
+
+        // Prevent OOM from malicious snapshots specifying a huge slot count.
+        // 256M slots × 4 bytes/slot = ~1 GB for slot versions array, which is
+        // a practical upper bound for any realistic game world.
+        const int maxReasonableSlots = 256 * 1024 * 1024;
+        if (entitySlotCount < 0 || entitySlotCount > maxReasonableSlots)
+            throw new InvalidDataException(
+                $"Snapshot entity slot count ({entitySlotCount}) is out of range. " +
+                $"Maximum allowed is {maxReasonableSlots}.");
+
         var schemaCount = reader.ReadInt32();
         var archetypeCount = reader.ReadInt32();
         var hierarchyLinkCount = reader.ReadInt32();

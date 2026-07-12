@@ -52,7 +52,6 @@ internal sealed partial class Archetype
     private readonly int[] _componentIdToColumnIndex;
     private Archetype?[] _addDestinationCache = Array.Empty<Archetype?>();
     private Archetype?[] _removeDestinationCache = Array.Empty<Archetype?>();
-    internal World? _owner;                 // backref, set by World.GetOrCreateArchetype
     internal Archetype(Signature signature, Type[] componentTypes, int capacity = 4)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
@@ -135,6 +134,38 @@ internal sealed partial class Archetype
 
     private static int ComputeSegmentEntityCapacity(Type[] componentTypes)
     {
+        var perEntity = ComputeAlignedPerEntitySize(componentTypes);
+        if (perEntity > ArrayMaxLength)
+            ThrowEntityTooLarge(componentTypes, perEntity);
+
+        if (perEntity > 0)
+        {
+            // Lower bound: at least 1 entity per segment. The old floor of 16
+            // caused overflow when perEntity > 134 MB (16 * perEntity > ArrayMaxLength).
+            var raw = Math.Max(1, TargetSegmentBytes / perEntity);
+            var pow2Cap = BitOperations.RoundUpToPowerOf2((uint)raw);
+
+            // Must stay power-of-2, otherwise GetSegmentAndLocal SHR+AND mapping breaks.
+            const int MaxSegCap = 1 << 30; // 1,073,741,824
+
+            // ArrayMaxLength / perEntity is the absolute upper bound from .NET array limits.
+            // Round up to keep the power-of-2 invariant; clamp to MaxSegCap to prevent
+            // RoundUpToPowerOf2 from producing a value whose (int) cast would be negative.
+            var maxSegCapFromArray = ArrayMaxLength / perEntity;
+            var safeSegCapFromArray = (int)BitOperations.RoundUpToPowerOf2((uint)maxSegCapFromArray);
+            if (safeSegCapFromArray > MaxSegCap)
+                safeSegCapFromArray = MaxSegCap;
+
+            var clampedByArray = Math.Min((int)pow2Cap, safeSegCapFromArray);
+            return Math.Min(clampedByArray, MaxSegCap);
+        }
+
+        // Empty component list: no per-entity storage constraints, use large segment.
+        return 65536;
+    }
+
+    private static int ComputeAlignedPerEntitySize(Type[] componentTypes)
+    {
         var perEntity = 0;
         for (var i = 0; i < componentTypes.Length; i++)
         {
@@ -142,8 +173,19 @@ internal sealed partial class Archetype
             perEntity = AlignUp(perEntity, Math.Min(elemSize, 8));
             perEntity += elemSize;
         }
-        var raw = perEntity > 0 ? Math.Max(16, TargetSegmentBytes / perEntity) : 65536;
-        return (int)BitOperations.RoundUpToPowerOf2((uint)raw);
+        return perEntity;
+    }
+
+    private static void ThrowEntityTooLarge(Type[] componentTypes, int perEntity)
+    {
+        var sig = componentTypes.Length > 0
+            ? string.Join(", ", Array.ConvertAll(componentTypes, t => t.Name))
+            : "(empty)";
+        throw new InvalidOperationException(
+            $"Component storage exceeds .NET array limit. " +
+            $"Archetype signature [{sig}] has per-entity size {perEntity} bytes, " +
+            $"which exceeds the maximum array element count of {ArrayMaxLength}. " +
+            $"Reduce component sizes or split into smaller component types.");
     }
 
     internal struct Segment

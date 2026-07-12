@@ -582,7 +582,18 @@ public sealed class FrameDelta
                         $"Truncated FrameDelta: varint extends past end of buffer at offset {startPos}.");
                 var b = buf[_pos++];
                 result |= (b & 0x7F) << shift;
-                if ((b & 0x80) == 0) return result;
+                if ((b & 0x80) == 0)
+                {
+                    // LEB128 can encode unsigned values > int.MaxValue in 5 bytes.
+                    // When the high bit (bit 31) is set, result becomes negative,
+                    // which would cause downstream IndexOutOfRangeException or
+                    // corruption when used as an array index. Reject early.
+                    if (result < 0)
+                        throw new InvalidOperationException(
+                            $"Malformed FrameDelta: varint at offset {startPos} encodes a " +
+                            $"value that exceeds int.MaxValue (decoded as {result}).");
+                    return result;
+                }
                 shift += 7;
             }
             // 5 bytes consumed but continuation bit still set: the producer is

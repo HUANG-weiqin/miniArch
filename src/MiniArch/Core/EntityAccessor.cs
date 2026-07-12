@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace MiniArch.Core;
@@ -32,6 +33,12 @@ public ref struct EntityAccessor
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ref T Get<T>() where T : unmanaged
     {
+        Debug.Assert(_archetype is not null,
+            "EntityAccessor was default-initialized; use World.GetEntityAccessor() to obtain a valid accessor.");
+        Debug.Assert(_archetype.TryGetComponentIndex(Component<T>.ComponentType, out _),
+            $"EntityAccessor.Get<{typeof(T).Name}>(): the entity's archetype " +
+            $"does not contain component {typeof(T).Name}. Verify with Has<T>() " +
+            $"before calling Get<T>(), or use TryGet<T>().");
         var columnIndex = _archetype.GetComponentIndexFast(Component<T>.ComponentType);
         return ref _archetype.GetComponentRefAt<T>(columnIndex, _row);
     }
@@ -48,6 +55,12 @@ public ref struct EntityAccessor
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Set<T>(in T value) where T : unmanaged
     {
+        Debug.Assert(_archetype is not null,
+            "EntityAccessor was default-initialized; use World.GetEntityAccessor() to obtain a valid accessor.");
+        Debug.Assert(_archetype.TryGetComponentIndex(Component<T>.ComponentType, out _),
+            $"EntityAccessor.Set<{typeof(T).Name}>(): the entity's archetype " +
+            $"does not contain component {typeof(T).Name}. Verify with Has<T>() " +
+            $"before calling Set<T>(), or add the component first.");
         var columnIndex = _archetype.GetComponentIndexFast(Component<T>.ComponentType);
         _archetype.SetComponentAtTyped(columnIndex, _row, in value);
     }

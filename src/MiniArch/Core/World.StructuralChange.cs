@@ -14,7 +14,9 @@ public sealed partial class World
     public void Add<T>(Entity entity, T component) where T : unmanaged
     {
         AssertNotDisposed();
+        BeginStructChange();
         ApplyTypedAdd(entity, GetComponentType<T>(), in component);
+        EndStructChange();
     }
 
     /// <summary>
@@ -58,11 +60,17 @@ public sealed partial class World
     /// <summary>
     /// Removes a component from an entity.
     /// </summary>
+    /// <remarks>
+    /// If the entity does not have the component, this method silently returns
+    /// without throwing. Use <see cref="World.Has{T}"/> to check existence first.
+    /// </remarks>
     public void Remove<T>(Entity entity) where T : unmanaged
     {
         AssertNotDisposed();
+        BeginStructChange();
         var componentType = GetComponentType<T>();
         RemoveBoxed(entity, componentType);
+        EndStructChange();
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

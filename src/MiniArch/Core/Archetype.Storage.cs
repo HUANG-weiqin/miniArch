@@ -28,6 +28,15 @@ internal sealed partial class Archetype
     /// Collapses dual-mode knowledge (IsChunked check) to a single point.
     /// Must be inlined — hot path across archetype migration (CopyComponent).
     /// </summary>
+    [Conditional("DEBUG")]
+    private void AssertSegIdx(int segIdx)
+    {
+        Debug.Assert((uint)segIdx < (uint)_segmentCount,
+            $"segIdx={segIdx} >= _segmentCount={_segmentCount}. " +
+            $"GetSegmentAndLocal produced an out-of-range segment index. " +
+            $"This invariant broke: row must be < _count to guarantee segIdx < _segmentCount.");
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static ref byte GetColumnRef(Archetype arch, int columnIndex, int row, int elementSize)
     {
@@ -37,6 +46,9 @@ internal sealed partial class Archetype
                 arch._columnByteOffsets[columnIndex] + row * elementSize);
         }
         var (segIdx, localRow) = arch.GetSegmentAndLocal(row);
+        Debug.Assert((uint)segIdx < (uint)arch._segmentCount,
+            $"GetColumnRef: segIdx={segIdx} >= _segmentCount={arch._segmentCount}. " +
+            $"row={row} should guarantee segIdx < _segmentCount.");
         return ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(arch._segments[segIdx].Data),
             arch._columnByteOffsets[columnIndex] + localRow * elementSize);
     }
@@ -74,13 +86,13 @@ internal sealed partial class Archetype
             for (var col = 0; col < _elementSizes.Length; col++)
             {
                 var elemSize = _elementSizes[col];
-                var columnBytes = rowsInSeg * elemSize;
-                if (columnBytes <= 0) continue;
+                var byteCount = checked((uint)(rowsInSeg * elemSize));
+                if (byteCount == 0) continue;
                 ref var srcRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_data),
                     _columnByteOffsets[col] + segStart * elemSize);
                 ref var dstRef = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(segData),
                     segOffsets[col]);
-                Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, (uint)columnBytes);
+                Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, byteCount);
             }
 
             _segments[s] = new Segment
@@ -196,12 +208,12 @@ internal sealed partial class Archetype
             for (var col = 0; col < _elementSizes.Length; col++)
             {
                 var elemSize = _elementSizes[col];
-                var columnBytes = _count * elemSize;
-                if (columnBytes <= 0) continue;
+                var byteCount = checked((uint)(_count * elemSize));
+                if (byteCount == 0) continue;
 
                 ref var srcRef = ref _data[_columnByteOffsets[col]];
                 ref var dstRef = ref newData[newOffsets[col]];
-                Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, (uint)columnBytes);
+                Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, byteCount);
             }
 
             _entities = newEntities;
@@ -865,7 +877,7 @@ internal sealed partial class Archetype
         var size = _elementSizes[columnIndex];
         var count = sortedRows.Length;
         if (count == 0) return;
-        var buf = new byte[count * size];
+        var buf = new byte[checked((int)((uint)count * (uint)size))];
         fixed (byte* ptr = buf)
         {
             for (var i = 0; i < count; i++)
@@ -975,7 +987,8 @@ internal sealed partial class Archetype
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private Span<byte> GetColumnBytes(int columnIndex, int count)
     {
-        return _data.AsSpan(_columnByteOffsets[columnIndex], count * _elementSizes[columnIndex]);
+        return _data.AsSpan(_columnByteOffsets[columnIndex],
+            checked((int)((uint)count * (uint)_elementSizes[columnIndex])));
     }
 
     internal interface ISpanFeeder
@@ -1061,13 +1074,13 @@ internal sealed partial class Archetype
             for (var col = 0; col < _elementSizes.Length; col++)
             {
                 var elemSize = _elementSizes[col];
-                var columnBytes = count * elemSize;
-                if (columnBytes <= 0) continue;
+                var byteCount = checked((uint)(count * elemSize));
+                if (byteCount == 0) continue;
                 ref var srcRef = ref Unsafe.Add(
                     ref MemoryMarshal.GetArrayDataReference(srcData), srcOffsets[col]);
                 ref var dstRef = ref Unsafe.Add(
                     ref MemoryMarshal.GetArrayDataReference(_data), _columnByteOffsets[col]);
-                Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, (uint)columnBytes);
+                Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, byteCount);
             }
             _count = count;
             return;
@@ -1096,15 +1109,15 @@ internal sealed partial class Archetype
             for (var col = 0; col < _elementSizes.Length; col++)
             {
                 var elemSize = _elementSizes[col];
-                var columnBytes = take * elemSize;
-                if (columnBytes <= 0) continue;
+                var byteCount = checked((uint)(take * elemSize));
+                if (byteCount == 0) continue;
                 ref var srcRef = ref Unsafe.Add(
                     ref MemoryMarshal.GetArrayDataReference(srcData),
                     srcOffsets[col] + segStart * elemSize);
                 ref var dstRef = ref Unsafe.Add(
                     ref MemoryMarshal.GetArrayDataReference(seg.Data),
                     _columnByteOffsets[col]);
-                Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, (uint)columnBytes);
+                Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, byteCount);
             }
 
             seg.Count = take;
@@ -1225,15 +1238,18 @@ internal sealed partial class Archetype
     {
         var count = elementSizes.Length;
         var offsets = new int[count];
-        var totalBytes = 0;
-        for (var index = 0; index < count; index++)
+        checked
         {
-            var elementSize = elementSizes[index];
-            totalBytes = AlignUp(totalBytes, Math.Min(elementSize, 8));
-            offsets[index] = totalBytes;
-            totalBytes += elementSize * capacity;
+            var totalBytes = 0;
+            for (var index = 0; index < count; index++)
+            {
+                var elementSize = elementSizes[index];
+                totalBytes = AlignUp(totalBytes, Math.Min(elementSize, 8));
+                offsets[index] = totalBytes;
+                totalBytes += elementSize * capacity;
+            }
+            return (offsets, totalBytes);
         }
-        return (offsets, totalBytes);
     }
 
     private static byte[] CreateStorageBytes(

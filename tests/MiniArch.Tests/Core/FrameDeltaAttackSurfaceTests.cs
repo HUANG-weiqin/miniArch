@@ -200,8 +200,11 @@ public sealed class FrameDeltaAttackSurfaceTests
         buf.AddRange(V(-1)); // compCount = -1
         var delta = new FrameDelta { _buffer = buf.ToArray(), _length = buf.Count, _opCount = 2 };
 
+        // ReadVarint catches the negative value from unsigned LEB128 encoding
+        // of -1 before the "Negative component count" check runs.
         var ex = Assert.Throws<InvalidOperationException>(() => delta.Validate());
-        Assert.Contains("Negative component count", ex.Message);
+        Assert.True(ex.Message.Contains("Negative component count") || ex.Message.Contains("int.MaxValue"),
+            $"Expected message about 'Negative component count' or 'int.MaxValue', got: {ex.Message}");
     }
 
     // ══════════════════════════════════════════════════════════
@@ -302,15 +305,15 @@ public sealed class FrameDeltaAttackSurfaceTests
         // Entity(-2, 0): Id=-2 is neither a valid placeholder (must be -1)
         // nor a valid real entity (must be >= 0).
         // Wire: Reserve tag + id=-2 (unsigned LEB128: FE FF FF FF 0F) + ver=0
+        // ReadVarint now rejects the negative encoding during Deserialize,
+        // so FromWire itself throws before Validate is called.
         var wire = new byte[] {
             (byte)DeltaOpKind.Reserve,
-            0xFE, 0xFF, 0xFF, 0xFF, 0x0F,  // id = -2
+            0xFE, 0xFF, 0xFF, 0xFF, 0x0F,  // id = -2 (unsigned LEB128 of -2 exceeds int.MaxValue)
             0x00                              // version = 0
         };
-        var delta = FrameDelta.FromWire(wire);
-
-        var ex = Assert.Throws<InvalidOperationException>(() => delta.Validate());
-        Assert.Contains("Invalid entity id", ex.Message);
+        var ex = Assert.Throws<InvalidOperationException>(() => FrameDelta.FromWire(wire));
+        Assert.Contains("int.MaxValue", ex.Message);
     }
 
     [Fact]
@@ -375,8 +378,11 @@ public sealed class FrameDeltaAttackSurfaceTests
         buf.AddRange(V(1234)); // component type id
         buf.AddRange(V(-1));   // size = -1
         var decoder = new FrameDelta.OpDecoder(buf.ToArray(), buf.Count, 0);
+        // ReadVarint now catches negative values (from unsigned LEB128 of -1)
+        // at decode time rather than in SkipData. Both paths reject cleanly.
         var ex = Assert.Throws<InvalidOperationException>(() => decoder.SkipData());
-        Assert.Contains("negative", ex.Message);
+        Assert.True(ex.Message.Contains("negative") || ex.Message.Contains("int.MaxValue"),
+            $"Expected message about 'negative' or 'int.MaxValue', got: {ex.Message}");
     }
 
     [Fact]
@@ -385,8 +391,10 @@ public sealed class FrameDeltaAttackSurfaceTests
         var buf = new System.Collections.Generic.List<byte>();
         buf.AddRange(V(-1)); // compCount = -1
         var decoder = new FrameDelta.OpDecoder(buf.ToArray(), buf.Count, 0);
+        // ReadVarint now catches the negative encoding earlier.
         var ex = Assert.Throws<InvalidOperationException>(() => decoder.SkipCreatePayload());
-        Assert.Contains("negative", ex.Message);
+        Assert.True(ex.Message.Contains("negative") || ex.Message.Contains("int.MaxValue"),
+            $"Expected message about 'negative' or 'int.MaxValue', got: {ex.Message}");
     }
 
     [Fact]
@@ -395,10 +403,13 @@ public sealed class FrameDeltaAttackSurfaceTests
         var buf = new System.Collections.Generic.List<byte>();
         buf.AddRange(V(1));   // compCount = 1
         buf.AddRange(V(42));  // component type
-        buf.AddRange(V(-1));  // size = -1
+        buf.AddRange(V(-1));  // size = -1 (unsigned LEB128 exceeds int.MaxValue)
         var decoder = new FrameDelta.OpDecoder(buf.ToArray(), buf.Count, 0);
+        // ReadVarint now catches the negative encoding of -1 earlier,
+        // before SkipCreatePayload reaches its own negative check.
         var ex = Assert.Throws<InvalidOperationException>(() => decoder.SkipCreatePayload());
-        Assert.Contains("negative", ex.Message);
+        Assert.True(ex.Message.Contains("negative") || ex.Message.Contains("int.MaxValue"),
+            $"Expected message about 'negative' or 'int.MaxValue', got: {ex.Message}");
     }
 
     // ══════════════════════════════════════════════════════════

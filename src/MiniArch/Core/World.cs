@@ -111,6 +111,13 @@ public sealed partial class World : IDisposable
 
     private bool _disposed;
 
+#if DEBUG
+    // Tracks whether a structural change (Create/Destroy/Add/Set/Remove) is in
+    // progress. Used by AssertNoStructChange() to catch query iteration during
+    // structural changes in DEBUG builds. Single-threaded; no Interlocked needed.
+    private int _structureChangeInProgress;
+#endif
+
     /// <summary>
     /// Creates a world.
     /// </summary>
@@ -186,6 +193,33 @@ public sealed partial class World : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
     }
 
+    [Conditional("DEBUG")]
+    internal void BeginStructChange()
+    {
+#if DEBUG
+        _structureChangeInProgress++;
+#endif
+    }
+
+    [Conditional("DEBUG")]
+    internal void EndStructChange()
+    {
+#if DEBUG
+        _structureChangeInProgress--;
+#endif
+    }
+
+    [Conditional("DEBUG")]
+    internal void AssertNoStructChange()
+    {
+#if DEBUG
+        Debug.Assert(_structureChangeInProgress == 0,
+            "Structural change detected during query iteration! " +
+            "Query iteration and structural changes (Create/Destroy/Add/Set/Remove) " +
+            "must not overlap in the same thread. Snapshot the query before parallel work.");
+#endif
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void AssertAlive(Entity entity)
     {
@@ -214,6 +248,12 @@ public sealed partial class World : IDisposable
     /// <summary>
     /// Gets the number of currently alive entities.
     /// </summary>
+    /// <remarks>
+    /// This value is computed from internal counters and may be negative if
+    /// invariants are temporarily violated (e.g., during rollback or replay).
+    /// Use <c>Math.Max(0, world.EntityCount)</c> for display or allocation sizing.
+    /// This property is O(1) and allocation-free.
+    /// </remarks>
     public int EntityCount
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -559,7 +599,6 @@ public sealed partial class World : IDisposable
         }
 
         archetype = new Archetype(signature, ResolveComponentTypes(signature), _chunkCapacity);
-        archetype._owner = this;
         _archetypes.Add(signature, archetype);
         CacheArchetypeByMaskIfCanonical(signature, archetype);
         PublishArchetypeSnapshot(archetype);
@@ -982,15 +1021,19 @@ public sealed partial class World : IDisposable
                 {
                     // Reserve allocates new entity slots. Track the id so the
                     // _records array is pre-grown for the coming Create.
+                    // Cap per-PreScan growth to prevent OOM from malicious
+                    // Reserve(Entity(2B, 1)) pre-growing _records to 2B entries.
                     var id = scanner.Entity.Id;
-                    if (id >= 0 && id > maxEntityId) maxEntityId = id;
+                    if (id >= 0 && id > maxEntityId)
+                        maxEntityId = Math.Min(id, Math.Max(_records.Length * 2, 65536));
                     break;
                 }
 
                 case DeltaOpKind.Create:
                 {
                     var id = scanner.Entity.Id;
-                    if (id >= 0 && id > maxEntityId) maxEntityId = id;
+                    if (id >= 0 && id > maxEntityId)
+                        maxEntityId = Math.Min(id, Math.Max(_records.Length * 2, 65536));
 
                     var compCount = scanner.ReadVarint();
                     if (compCount <= 0) break;
@@ -1018,7 +1061,8 @@ public sealed partial class World : IDisposable
                 case DeltaOpKind.AddChild:
                 {
                     var parent = scanner.ReadExtraEntity();
-                    if (parent.Id >= 0 && parent.Id > maxEntityId) maxEntityId = parent.Id;
+                    if (parent.Id >= 0 && parent.Id > maxEntityId)
+                        maxEntityId = Math.Min(parent.Id, Math.Max(_records.Length * 2, 65536));
                     break;
                 }
 
@@ -1144,19 +1188,42 @@ public sealed partial class World : IDisposable
 
         if (scratchSize > 0)
         {
-            byte* scratch = stackalloc byte[scratchSize];
-            for (var i = 0; i < compCount; i++)
+            // Use ArrayPool for large component payloads (>256 bytes) to avoid
+            // StackOverflowException when a component is close to the 1 MB stack limit.
+            // Small payloads keep the fast stackalloc path for performance.
+            byte[]? pooledScratch = null;
+            try
             {
-                var colIdx = archetype.GetComponentIndexFast(types[i]);
-                var src = bufPtr + offsets[i];
-                if (EntityFieldResolver.GetOffsets(types[i]).Length > 0)
+                var scratchSpan = scratchSize > 256
+                    ? (pooledScratch = ArrayPool<byte>.Shared.Rent(scratchSize)).AsSpan(0, scratchSize)
+                    : stackalloc byte[scratchSize];
+
+                fixed (byte* scratch = scratchSpan)
                 {
-                    Unsafe.CopyBlockUnaligned(scratch, src, (uint)sizes[i]);
-                    EntityFieldResolver.ResolveInPlace(
-                        new Span<byte>(scratch, sizes[i]), types[i], placeholderMap);
-                    src = scratch;
+                    for (var i = 0; i < compCount; i++)
+                    {
+                        var colIdx = archetype.GetComponentIndexFast(types[i]);
+                        Debug.Assert(archetype._elementSizes[colIdx] == sizes[i],
+                            $"Replay component data size mismatch: delta declares {sizes[i]} bytes " +
+                            $"but archetype expects {archetype._elementSizes[colIdx]} bytes for " +
+                            $"component {types[i].Value}. FrameDelta.Validate() must be called " +
+                            $"before Replay() to prevent silent data corruption.");
+                        var src = bufPtr + offsets[i];
+                        if (EntityFieldResolver.GetOffsets(types[i]).Length > 0)
+                        {
+                            Unsafe.CopyBlockUnaligned(scratch, src, (uint)sizes[i]);
+                            EntityFieldResolver.ResolveInPlace(
+                                new Span<byte>(scratch, sizes[i]), types[i], placeholderMap);
+                            src = scratch;
+                        }
+                        archetype.WriteComponentRaw(colIdx, rowIndex, src);
+                    }
                 }
-                archetype.WriteComponentRaw(colIdx, rowIndex, src);
+            }
+            finally
+            {
+                if (pooledScratch is not null)
+                    ArrayPool<byte>.Shared.Return(pooledScratch);
             }
         }
         else
@@ -1164,6 +1231,11 @@ public sealed partial class World : IDisposable
             for (var i = 0; i < compCount; i++)
             {
                 var colIdx = archetype.GetComponentIndexFast(types[i]);
+                Debug.Assert(archetype._elementSizes[colIdx] == sizes[i],
+                    $"Replay component data size mismatch: delta declares {sizes[i]} bytes " +
+                    $"but archetype expects {archetype._elementSizes[colIdx]} bytes for " +
+                    $"component {types[i].Value}. FrameDelta.Validate() must be called " +
+                    $"before Replay() to prevent silent data corruption.");
                 archetype.WriteComponentRaw(colIdx, rowIndex, bufPtr + offsets[i]);
             }
         }

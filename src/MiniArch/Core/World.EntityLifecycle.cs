@@ -46,7 +46,8 @@ public sealed partial class World
     private void EnsureEntityCapacity(int requiredCount)
     {
         if (requiredCount <= _records.Length) return;
-        var newLength = Math.Max(requiredCount, _records.Length * 2);
+        const int maxArray = 0x7FFFFFC7;
+        var newLength = Math.Max(requiredCount, Math.Min(_records.Length * 2, maxArray));
         Array.Resize(ref _records, newLength);
     }
 
@@ -71,7 +72,9 @@ public sealed partial class World
 
         if (!_hierarchy.HasChildren(this, entity))
         {
+            BeginStructChange();
             DestroySingle(entity);
+            EndStructChange();
             return;
         }
 
@@ -81,6 +84,7 @@ public sealed partial class World
             _destroyCurrentGen = 1;
         }
 
+        BeginStructChange();
         try
         {
             _hierarchy.CollectDestroySubtree(this, entity, _destroyVisitedGen, _destroyCurrentGen, _destroyOrderScratch);
@@ -96,6 +100,7 @@ public sealed partial class World
         }
         finally
         {
+            EndStructChange();
             _destroyOrderScratch.Clear();
         }
     }
@@ -445,6 +450,12 @@ public sealed partial class World
 
     private void DestroyCollectedEntities()
     {
+        // NOTE: O(N × groupCount) scan. In practice groupCount is 1-3 (entities
+        // cluster in shared archetypes). At 100K entities × 1K archetypes this is
+        // ~10ms —acceptable for batch destroy (level unload, world reset).
+        // A Dictionary<Archetype,int> fallback (threshold 128) was evaluated but
+        // rejected: the code complexity of a mid-loop switch to Dictionary isn't
+        // worth the rare worst case. See .knowledge/kb-hardening-roadmap.md §M2.1.
         var destroyCount = _destroyOrderScratch.Count;
         if (destroyCount == 0)
         {
@@ -627,12 +638,14 @@ public sealed partial class World
 
     private Entity CreateInArchetype(Archetype archetype, out int rowIndex)
     {
+        BeginStructChange();
         var id = AcquireEntityIdUnsafe(out var version);
         var entity = new Entity(id, version);
         rowIndex = archetype.AddEntity(entity);
         ref var record = ref _records[id];
         record.Archetype = archetype;
         record.RowIndex = rowIndex;
+        EndStructChange();
         return entity;
     }
 
@@ -660,7 +673,9 @@ public sealed partial class World
     {
         if (_freeIdCount == _freeIds.Length)
         {
-            var newCapacity = _freeIds.Length == 0 ? 4 : _freeIds.Length * 2;
+            const int maxArray = 0x7FFFFFC7;
+            var newCapacity = Math.Min(
+                _freeIds.Length == 0 ? 4 : _freeIds.Length * 2, maxArray);
             Array.Resize(ref _freeIds, newCapacity);
         }
 
@@ -672,11 +687,15 @@ public sealed partial class World
         if (_freeIds.Length >= required)
             return;
 
+        const int maxArray = 0x7FFFFFC7;
         var newCapacity = _freeIds.Length;
         if (newCapacity == 0)
             newCapacity = 4;
         while (newCapacity < required)
+        {
+            if (newCapacity > maxArray / 2) { newCapacity = maxArray; break; }
             newCapacity *= 2;
+        }
         Array.Resize(ref _freeIds, newCapacity);
     }
 

@@ -745,6 +745,7 @@ public abstract partial class CommandStreamCore
     /// </remarks>
     public void Replay(FrameDelta delta, bool resolveSlots = false)
     {
+        ArgumentNullException.ThrowIfNull(delta);
         _world.ReplayCore(delta);
 
         if (resolveSlots)
@@ -848,6 +849,7 @@ public abstract partial class CommandStreamCore
     /// </returns>
     public Task SubmitAndSnapshotIntoAsync(FrameDelta target)
     {
+        ArgumentNullException.ThrowIfNull(target);
         PrepareStores();
         if (!HasAnyCommands())
         {
@@ -1196,6 +1198,15 @@ public abstract partial class CommandStreamCore
     }
 
     [DoesNotReturn]
+    private static void ThrowBufferOverflow()
+    {
+        throw new InvalidOperationException(
+            "CommandStream batch buffer overflow: total pending component data " +
+            "exceeds int.MaxValue. Reduce the number or size of batched components " +
+            "per frame.");
+    }
+
+    [DoesNotReturn]
     private static void ThrowCreateManyMaskFailure(int groupIdx)
     {
         throw new InvalidOperationException(
@@ -1220,75 +1231,93 @@ public abstract partial class CommandStreamCore
         var count = group.Count;
         var componentCount = group.ComponentCount;
 
-        Span<ComponentType> groupTypes = stackalloc ComponentType[componentCount];
-        FillGroupTypes(in group, groupTypes);
-
-        // Verify preconditions on every non-cancelled batch in the group and
-        // count live entities. Any mismatch is a programming error —fast-fail.
-        var liveCount = 0;
-        for (var i = 0; i < count; i++)
+        // Allocate scratch arrays. Use stackalloc for small counts (≤64) and
+        // ArrayPool for larger ones to avoid StackOverflowException.
+        const int MaxStackCount = 64;
+        ComponentType[]? pooledTypes = null;
+        int[]? pooledIndices = null;
+        Span<ComponentType> groupTypes = componentCount <= MaxStackCount
+            ? stackalloc ComponentType[componentCount]
+            : (pooledTypes = ArrayPool<ComponentType>.Shared.Rent(componentCount)).AsSpan(0, componentCount);
+        Span<int> columnIndices = componentCount <= MaxStackCount
+            ? stackalloc int[componentCount]
+            : (pooledIndices = ArrayPool<int>.Shared.Rent(componentCount)).AsSpan(0, componentCount);
+        try
         {
-            var batchIdx = startBatch + i;
-            if (view.Canceled[batchIdx]) continue;
-            if (view.CompCounts[batchIdx] != componentCount)
-                ThrowCreateManyMismatch(groupIdx, batchIdx);
-            if (!ChainMatchesGroup(in view, batchIdx, groupTypes))
-                ThrowCreateManyMismatch(groupIdx, batchIdx);
-            liveCount++;
-        }
+            FillGroupTypes(in group, groupTypes);
 
-        if (liveCount == 0)
-            return; // all cancelled —nothing to materialize
-
-        // Build mask once. If any id >= 512 or any component type is duplicated,
-        // the mask popcount will not equal componentCount. These are writer bugs
-        // (e.g. duplicate component types) —fast-fail.
-        var builder = new MaskBuilder();
-        for (var i = 0; i < componentCount; i++)
-            builder.SetBit(groupTypes[i].Value);
-        var mask = builder.ToMask();
-        if (!World.IsMaskCanonical(mask, componentCount))
-            ThrowCreateManyMaskFailure(groupIdx);
-
-        var archetype = ResolveArchetype(mask, groupTypes);
-
-        // Precompute column indices once for all entities in the group.
-        Span<int> columnIndices = stackalloc int[componentCount];
-        for (var i = 0; i < componentCount; i++)
-            columnIndices[i] = archetype.GetComponentIndexFast(groupTypes[i]);
-
-        // Allocate all live rows in one shot.
-        var startRow = archetype.AllocateRows(liveCount);
-
-        fixed (byte* bufPtr = view.Buf)
-        {
-            var row = startRow;
+            // Verify preconditions on every non-cancelled batch in the group and
+            // count live entities. Any mismatch is a programming error —fast-fail.
+            var liveCount = 0;
             for (var i = 0; i < count; i++)
             {
                 var batchIdx = startBatch + i;
                 if (view.Canceled[batchIdx]) continue;
+                if (view.CompCounts[batchIdx] != componentCount)
+                    ThrowCreateManyMismatch(groupIdx, batchIdx);
+                if (!ChainMatchesGroup(in view, batchIdx, groupTypes))
+                    ThrowCreateManyMismatch(groupIdx, batchIdx);
+                liveCount++;
+            }
 
-                var entity = view.Entities[batchIdx];
-                _world.MaterializeReservedEntityAt(entity, archetype, row);
+            if (liveCount == 0)
+                return; // all cancelled —nothing to materialize
 
-                // Chain is in reverse write order (LIFO insertion):
-                //   head -> CN -> CN-1 -> ... -> C1 -> -1
-                // So columnIndices[componentCount-1] matches the first chain
-                // entry, columnIndices[componentCount-2] the next, etc.
-                var current = view.Heads[batchIdx];
-                var typeIdx = componentCount - 1;
-                while (current >= 0)
+            // Build mask once. If any id >= 512 or any component type is duplicated,
+            // the mask popcount will not equal componentCount. These are writer bugs
+            // (e.g. duplicate component types) —fast-fail.
+            var builder = new MaskBuilder();
+            for (var i = 0; i < componentCount; i++)
+                builder.SetBit(groupTypes[i].Value);
+            var mask = builder.ToMask();
+            if (!World.IsMaskCanonical(mask, componentCount))
+                ThrowCreateManyMaskFailure(groupIdx);
+
+            var archetype = ResolveArchetype(mask, groupTypes);
+
+            // Precompute column indices once for all entities in the group.
+            for (var i = 0; i < componentCount; i++)
+                columnIndices[i] = archetype.GetComponentIndexFast(groupTypes[i]);
+
+            // Allocate all live rows in one shot.
+            var startRow = archetype.AllocateRows(liveCount);
+
+            fixed (byte* bufPtr = view.Buf)
+            {
+                var row = startRow;
+                for (var i = 0; i < count; i++)
                 {
-                    ref var bc = ref view.Comps[current];
-                    archetype.WriteComponentRaw(columnIndices[typeIdx], row, bufPtr + bc.Offset);
-                    typeIdx--;
-                    current = bc.Next;
-                }
+                    var batchIdx = startBatch + i;
+                    if (view.Canceled[batchIdx]) continue;
 
-                row++;
+                    var entity = view.Entities[batchIdx];
+                    _world.MaterializeReservedEntityAt(entity, archetype, row);
+
+                    // Chain is in reverse write order (LIFO insertion):
+                    //   head -> CN -> CN-1 -> ... -> C1 -> -1
+                    // So columnIndices[componentCount-1] matches the first chain
+                    // entry, columnIndices[componentCount-2] the next, etc.
+                    var current = view.Heads[batchIdx];
+                    var typeIdx = componentCount - 1;
+                    while (current >= 0)
+                    {
+                        ref var bc = ref view.Comps[current];
+                        archetype.WriteComponentRaw(columnIndices[typeIdx], row, bufPtr + bc.Offset);
+                        typeIdx--;
+                        current = bc.Next;
+                    }
+
+                    row++;
+                }
             }
         }
-
+        finally
+        {
+            if (pooledTypes is not null)
+                ArrayPool<ComponentType>.Shared.Return(pooledTypes);
+            if (pooledIndices is not null)
+                ArrayPool<int>.Shared.Return(pooledIndices);
+        }
     }
 
     /// <summary>
@@ -1538,8 +1567,15 @@ public abstract partial class CommandStreamCore
     {
         if (entityId < _frozen.PendingBatch.Length) return;
 
+        // Max reasonable size: .NET array limit is ~2.14B elements; cap growth
+        // below that to prevent overflow-induced infinite loop.
+        const int maxPendingBatch = 0x40000000; // ~1B entries
         var newLen = _frozen.PendingBatch.Length == 0 ? 64 : _frozen.PendingBatch.Length;
-        while (newLen <= entityId) newLen *= 2;
+        while (newLen <= entityId)
+        {
+            if (newLen > maxPendingBatch / 2) { newLen = maxPendingBatch; break; }
+            newLen *= 2;
+        }
         var next = new int[newLen];
         Array.Fill(next, -1);
         if (_frozen.PendingBatch.Length > 0)
@@ -1708,8 +1744,11 @@ public abstract partial class CommandStreamCore
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private protected int ReserveBatchBufSpace(int size)
     {
+        if (_batchBufLen > int.MaxValue - size)
+            ThrowBufferOverflow();
         if (_batchBufLen + size > _frozen.BatchBuf.Length)
-            Array.Resize(ref _frozen.BatchBuf, Math.Max(_batchBufLen + size, _frozen.BatchBuf.Length == 0 ? 4096 : _frozen.BatchBuf.Length * 2));
+            Array.Resize(ref _frozen.BatchBuf, Math.Max(_batchBufLen + size,
+                Math.Min(_frozen.BatchBuf.Length == 0 ? 4096 : _frozen.BatchBuf.Length * 2, 0x7FFFFFC7)));
         var offset = _batchBufLen;
         _batchBufLen += size;
         return offset;

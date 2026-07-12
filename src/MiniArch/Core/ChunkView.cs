@@ -61,18 +61,34 @@ public readonly struct ChunkView
     internal Core.Archetype Archetype => _archetype;
 
     /// <summary>Number of entities in this chunk (or slice).</summary>
-    public int Count => _rowCount >= 0
-        ? _rowCount
-        : _segmentIndex >= 0 ? _archetype.GetSegmentCount(_segmentIndex) : _archetype.EntityCount;
+    public int Count
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get
+        {
+            AssertInitialized();
+            return _rowCount >= 0
+                ? _rowCount
+                : _segmentIndex >= 0 ? _archetype.GetSegmentCount(_segmentIndex) : _archetype.EntityCount;
+        }
+    }
 
     /// <summary>Returns a sub-range view with the same backing storage.</summary>
     internal ChunkView Slice(int start, int length) =>
         new(_archetype, _segmentIndex, _startRow + start, length);
 
+    [Conditional("DEBUG")]
+    private void AssertInitialized()
+    {
+        Debug.Assert(_archetype is not null,
+            "ChunkView was default-initialized; use Query.GetChunks() to obtain a valid view.");
+    }
+
     /// <summary>Gets live entities as a span.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpan<Entity> GetEntities()
     {
+        AssertInitialized();
         ReadOnlySpan<Entity> full;
         if (_archetype.IsChunked)
             full = _archetype.GetSegmentEntities(_segmentIndex);
@@ -87,6 +103,12 @@ public readonly struct ChunkView
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Span<T> GetSpan<T>() where T : unmanaged
     {
+        AssertInitialized();
+        Debug.Assert(_archetype.TryGetComponentIndex(Component<T>.ComponentType, out _),
+            $"ChunkView.GetSpan<{typeof(T).Name}>() called on archetype without this component. " +
+            $"The chunk's archetype types: [{string.Join(", ", _archetype.ComponentTypes)}]. " +
+            $"Use ChunkView.TryGetComponentIndex<T>() to check before calling GetSpan<T>() " +
+            $"for optional components.");
         Span<T> full;
         if (_archetype.IsChunked)
         {
@@ -115,6 +137,7 @@ public readonly struct ChunkView
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Span<T> GetComponentSpanAt<T>(int columnIndex) where T : unmanaged
     {
+        AssertInitialized();
         Span<T> full;
         if (_archetype.IsChunked)
             full = _archetype.GetSegmentComponentSpan<T>(_segmentIndex, columnIndex);

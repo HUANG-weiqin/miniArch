@@ -322,8 +322,8 @@ internal struct ArchetypeBackupEntry
                 for (var col = 0; col < ColumnByteOffsets.Length; col++)
                 {
                     var elemSize = arch.ComponentElementSize(col);
-                    var columnBytes = entityCount * elemSize;
-                    if (columnBytes <= 0) continue;
+                    var byteCount = checked((uint)(entityCount * elemSize));
+                    if (byteCount == 0) continue;
 
                     ref var srcRef = ref Unsafe.Add(
                         ref MemoryMarshal.GetArrayDataReference(SegmentData[i]),
@@ -331,7 +331,7 @@ internal struct ArchetypeBackupEntry
                     ref var dstRef = ref Unsafe.Add(
                         ref MemoryMarshal.GetArrayDataReference(seg.Data),
                         arch.ColumnByteOffsets[col]);
-                    Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, (uint)columnBytes);
+                    Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, byteCount);
                 }
             }
             arch.SetCount(Count);

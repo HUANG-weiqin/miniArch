@@ -84,6 +84,7 @@ internal sealed class QueryCache
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ReadOnlySpan<ChunkView> GetChunkViewSpan()
     {
+        _world.AssertNoStructChange();
         EnsureRefreshed();
         return _snapshotChunkViews.AsSpan(0, _chunkViewCount);
     }
