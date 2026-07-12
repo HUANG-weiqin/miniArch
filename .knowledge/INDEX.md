@@ -2,7 +2,7 @@
 title: Knowledge Index
 module: KnowledgeIndex
 description: .knowledge 知识库导航、模块地图与必读入口
-updated: 2026-07-11
+updated: 2026-07-12
 ---
 
 # Knowledge Index
@@ -94,4 +94,5 @@ updated: 2026-07-11
 - **理解"为什么边界这么划"** → 各模块页的 `决策`
 
 - **架构变更历史** → `kb-changelog.md`（2026-07-01 代码硬化：isqrt / wire 预算 / CRC32 / PBT / Conditional / Entity.IsPlaceholder / SpanFeeder struct）
+- **加固路线图（必读）** → **`kb-hardening-roadmap.md`**（系统性攻击面分析 + 五阶段加固计划，新贡献者/审阅应先了解已知薄弱点）
 - **新增知识页** → 先看 `.knowledge/_template.md` 模板，再挂到上面的地图，再写模块正文
