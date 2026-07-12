@@ -24,7 +24,7 @@ updated: 2026-07-12
 | **M3** | **栈安全** | **P1** | 2 | FrameDelta Replay、CommandStream |
 | **M2** | **退化性能保护** | P2 | 4 | Destroy/Allocate/O(n²) |
 | **M6** | **并发安全契约** | P2 | 3 | Query 并行迭代、跨 CommandStream |
-| **M4** | **内存安全显式化** | P2 | 2 | Unsafe.Add Debug.Assert |
+| **M4** | **契约显式化** | P2 | 3 | Debug.Assert + 源代码注释约定 |
 | **M5** | **确定性与可观测性** | P2 | 5 | 文档、Diagnostic 工具、checksum |
 | **M7** | **资源生命周期** | P3 | 2 | Dispose 清理 |
 
@@ -223,9 +223,14 @@ private static int ComputeSegmentEntityCapacity(Type[] componentTypes)
 
 ---
 
-## M4 — 内存安全显式化
+## M4 — 契约显式化（源代码即契约）
 
-**目标**：将依赖不变量的隐式安全（pattern 3E）加上显式断言或防御。
+**目标**：将依赖不变量的隐式安全（pattern 3E）加上显式断言和源代码级契约，让读代码的人一眼就知道边界条件。
+
+### 原则
+- 不修运行时热路径
+- 用 `[Conditional("DEBUG")]` 断言检测契约违规
+- **注释写在声明处**，不是写在文档里——`/// <remarks>` 和行内 comment 直接在代码中说明「这个不变式成立的前提是什么」
 
 ### M4.1 `_segments[segIdx]` 越界防护
 
@@ -239,6 +244,40 @@ private static int ComputeSegmentEntityCapacity(Type[] componentTypes)
 - **位置**：`GetColumnRef`、`GetComponentSpanAt`、`SetComponentAtTyped` 等
 - **改法**：在 `Unsafe.Add` 前加 `Debug.Assert(row < _count)` 和 `Debug.Assert(columnIndex >= 0 && columnIndex < _columnByteOffsets.Length)`
 - **原则**：只在 `#if DEBUG` 中加，Release 无成本
+
+### M4.3 `ComponentStore<T>` inline 存储契约
+
+- **位置**：`CommandStreamCore.cs:2735-2760`（`ComponentStore<T>` / `StoreEntry<T>` / `LocalBuffer`）
+- **问题**：`StoreEntry<T>` 将 `T Value` inline 存储在数组中。`new StoreEntry<T>[256]` 时 `sizeof(T) × 256` 若超出可用内存则 OOM。这是一个架构约束——不是 bug，而是故意为之的性能设计
+- **改法（不修运行时，只加契约）**：
+
+  1. **在 `StoreEntry<T>` 声明处加注释**：
+  ```csharp
+  // T is stored inline (not boxed/pointer) for cache locality in ApplyToWorld.
+  // CONSTRAINT: sizeof(T) × InitialCapacity(256) must fit in available memory.
+  // For components larger than ~64 KB, prefer the pending-entity/BatchBuf path
+  // (stream.Create() + stream.Set(pending, ...)) which serializes into byte[]
+  // and avoids per-type inline arrays.
+  internal struct StoreEntry<T> where T : unmanaged { ... }
+  ```
+
+  2. **在 `LocalBuffer` 的 `new StoreEntry<T>[256]` 处加 DEBUG 断言**：
+  ```csharp
+  // sizeof(T) is a compile-time constant; the assert has zero runtime cost
+  // even in DEBUG — the JIT eliminates the dead branch.
+  Debug.Assert(sizeof(T) <= 65536,
+      $"ComponentStore<{typeof(T).Name}> initial capacity 256 × sizeof(T)={sizeof(T)} " +
+      $"requires {256L * sizeof(T) / (1024*1024)} MB. For larger components, " +
+      $"use the pending-entity path (BatchBuf).");
+  ```
+
+  3. **在 `_entries` 的 `EnsureStoreCapacity()` 加倍处加同样断言**：
+  ```csharp
+  Debug.Assert(sizeof(T) <= 65536, "..."同上"...");
+  ```
+
+- **效果**：DEBUG 下用户用超大 T 时立即得到明确错误并指明替代路径；Release 下零成本（`Debug.Assert` 消失，`sizeof(T)` 是常量表达式
+- **不修运行时**：这是架构约束，不是 bug。`StoreEntry<T>` inline 设计是刻意的性能取舍，不改。
 
 ---
 
