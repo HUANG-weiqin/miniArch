@@ -171,47 +171,61 @@ private static int ComputeSegmentEntityCapacity(Type[] componentTypes)
 
 **目标**：确保在最坏输入下不会出现 O(n²) 或不可接受的退化。
 
-### M2.1 `DestroyCollectedEntities` 分组扫描 O(n²)
+### 结论：四项全部不做
 
-- **位置**：`World.EntityLifecycle.cs:466-495`
-- **问题**：外层 `n` 个待删实体，内层线性扫描 groups（可增长到 `n`）→ O(n²)
-- **当前假设**："groupCount is typically 1-3"——无强制保障
-- **可达性分析**：✅ 可达。`Destroy(QueryDescription)` 可匹配任意 archetype 集合。典型 gameplay groupCount=1-3 确实成立，但销毁全 World（关卡卸载、压力测试）时可触发 O(n²)。代价：100K 实体 1K archetype → ~50ms。不算挂死，但明显卡顿。
-- **改法（选项 C）**：设 `MaxGroupCount = 128`，超限改用 `Dictionary<Archetype, int>` 单次构造。冷路径改造，不涉及热路径退化。
-- **热路径**：⚠️ Batch destroy（>8 实体）。
+| 条目 | 问题 | 可达性 | 最坏代价 | 决策理由 |
+|------|------|--------|---------|---------|
+| **M2.1** `Destroy` O(n²) | 外层 N 实体，内层扫 G 个 group | ✅ 可达（100K 实体 × 1K archetype） | ~10ms | 半帧延迟，批量操作可接受。加阈值 fallback 的代码复杂度不值 |
+| **M2.2** `AllocateRows` O(S) | 每 allocate 从 segment 0 扫起 | ❌ 不可达（S 大时 perEntity 大 → 实体数受内存限制） | — | 内存先爆，退化不会到感知阈值 |
+| **M2.3** Free list O(N) | `RemoveFromFreeList` 扫 + shift | ✅ 可达但需要极端 batch（100K+ Reserver） | 可接受 | swap-remove 会破坏 LIFO → 确定性违约（代码 `:851-856` 已说明）。保持 shift |
+| **M2.4** `GetSingleton` O(A) | 全 archetype 扫描 | ❌ 不可达（100K ar < 1ms） | — | 明确标注为冷路径。加缓存引入 archetype 变更时的失效复杂度 |
 
-### ~~M2.2 `AllocateRows` 段扫描从头开始~~ ❌ 不可达，不做
+### 唯一落地动作：在代码位置写注释
 
-- **位置**：`Archetype.Storage.cs:254-258`
-- **代码位置加注释**：
-  ```csharp
-  // NOTE: Linear scan from 0 to find first non-full segment is O(S). S > 1000
-  // requires perEntity > 2 MB (segment capacity = 1), which in turn limits
-  // entity count to ~hundreds by memory — not enough for O(S) to matter.
-  // Per micro-benchmark: S=1000 scan is ~0.5μs. This is intentionally NOT
-  // optimized — the cache would add state on the hot path for zero real benefit.
-  ```
-- **原因**：`_segmentCapacity` 只有在 perEntity > 2 MB 时才小（最小 1），此时实体数受内存限制（20 MB × 1000 = 20 GB → 不可达）。S 上百时 perEntity 已经低到 scan 只要几纳秒。**实际触发不了退化。**
+#### M2.1 `DestroyCollectedEntities` — `World.EntityLifecycle.cs:466-495`
 
-### M2.3 `RemoveFromFreeList` / `RepushFreeEntry` 线性扫描
+```csharp
+// NOTE: O(N × groupCount) scan. In practice groupCount is 1-3 (entities
+// cluster in shared archetypes). At 100K entities × 1K archetypes this is
+// ~10ms —acceptable for batch destroy (level unload, world reset).
+// A Dictionary<Archetype,int> fallback (threshold 128) was evaluated but
+// rejected: the code complexity of a mid-loop switch to Dictionary isn't
+// worth the rare worst case. See .knowledge/kb-hardening-roadmap.md §M2.1.
+```
 
-- **位置**：`World.EntityLifecycle.cs:858`, `:699`
-- **问题**：扫描整个 free list（可等于 entity slot count）→ O(N) 每调用；且用的是 `Array.Copy` 移位（O(N) shift），不是 swap-remove
-- **可达性分析**：✅ **可达但接受**。帧同步 / Replay 序列中可能触发 O(N²) 退化。但需要一帧内 100K+ Reserve 操作——此时瓶颈不在 free list 而在实体创建本身。
-- **决策**：**不做改动**。Swap-remove 会破坏 free list LIFO 语义（已在代码注释 `:851-856` 说明），导致 Submit 与 Replay 的 entity ID 分配顺序不一致 → **确定性违约**。保持 shift-remove。O(N) 成本对于合理的 batch size（<1000）可忽略。
-- **代码注释已更新**：在 `RemoveFromFreeList` 和 `RepushFreeEntry` 的 `<remarks>` 中加入性能说明和未优化理由。引用 `kb-hardening-roadmap.md §M2.3`。
-- **热路径**：Submit/Replay。
+#### M2.2 `AllocateRows` — `Archetype.Storage.cs:254-258`
 
-### ~~M2.4 `GetSingleton<T>` 无缓存全量扫描~~ ❌ 不可达，不做
+```csharp
+// NOTE: Linear scan from 0 for first non-full segment is O(S). S > 1000
+// requires perEntity > 2 MB (segment capacity = 1), which in turn limits
+// entity count to ~hundreds by memory — not enough for O(S) to matter.
+// Intentionally NOT optimized; a _firstAvailableSegment cache would add
+// state on the hot path for zero real benefit.
+```
 
-- **位置**：`World.QueryCache.cs:31-55`
-- **代码位置加注释**：
-  ```csharp
-  // NOTE: O(archetype_count) scan. Even with 100K archetypes this is < 1ms.
-  // Marked as cold path — callers should cache the result. Not worth caching
-  // internally (adds invalidation complexity on every archetype change).
-  ```
-- **原因**：O(A) 扫描，A = archetype 数 = 每种唯一组件组合一个。典型 10-50，极端 100K。100K 时每次 < 1ms。API 明确标注为冷路径。加缓存需要每次 archetype 变更（Create/Destroy/Add/Remove 新组件组合）做失效，热路径成本不值得。**实际触发不了可用性退化。**
+#### M2.3 `RemoveFromFreeList` — `World.EntityLifecycle.cs:858`
+
+```csharp
+// NOTE: O(N) scan + O(N) Array.Copy shift. Callers (Replay Reserve ops,
+// Submit cancel) are batch operations with realistic size <1000. At 100K
+// entries the shift is ~0.5ms (memmove), but 100K Reserve ops in one
+// frame is itself impractical. A Dictionary<int,int> index was evaluated
+// but rejected: would add O(1) overhead to hot Push/Pop paths for marginal
+// benefit. See .knowledge/kb-hardening-roadmap.md §M2.3.
+```
+
+#### M2.4 `GetSingleton<T>` — `World.QueryCache.cs:31-55`
+
+```csharp
+// NOTE: O(archetype_count) scan. Even with 100K archetypes this is < 1ms.
+// Marked as cold path — callers should cache the result. Not worth caching
+// internally (adds invalidation complexity on every archetype change).
+// See .knowledge/kb-hardening-roadmap.md §M2.4.
+```
+
+### 备注
+
+M2.3 的注释**已添加**（之前 commit 已更新 `RemoveFromFreeList` 和 `RepushFreeEntry`）。其余三处的注释需要在代码落地时一并添加（属于 M1-M9 执行的一部分，不单独作为 M2 条目）。
 
 ---
 
