@@ -2,6 +2,7 @@ using System.IO;
 using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Threading;
+using MiniArch;
 using MiniArch.Core;
 using MiniArch.Tests.Core.TestSupport;
 
@@ -1200,6 +1201,164 @@ public sealed class WorldSnapshotTests
 
         world.RestoreState(snap2); // restore from pool-recycled arrays
         Assert.Equal(3000, world.EntityCount);
+    }
+
+    [Fact]
+    public void Export_and_Import_round_trips_schema_independent_of_world()
+    {
+        var world = new World();
+        var entity = world.CreateEmpty();
+        world.Add<Position>(entity, new Position(0, 0));
+        world.Add<Velocity>(entity, new Velocity(0, 0));
+        world.Add<Health>(entity, new Health(0));
+
+        // Export: pure schema — no entity data, no world state
+        var schemaBytes = ComponentSchema.Export();
+        Assert.NotNull(schemaBytes);
+        Assert.True(schemaBytes.Length > 0, "Schema should not be empty");
+
+        // Import: resolve type names back to Type objects
+        var schemaTypes = ComponentSchema.Import(schemaBytes);
+
+        // Every registered type is present exactly once
+        Assert.Contains(typeof(Position), schemaTypes);
+        Assert.Contains(typeof(Velocity), schemaTypes);
+        Assert.Contains(typeof(Health), schemaTypes);
+        Assert.Equal(1, schemaTypes.Count(t => t == typeof(Position)));
+
+        world.Dispose();
+    }
+
+    [Fact]
+    public void Importing_same_schema_twice_is_idempotent()
+    {
+        var world = new World();
+        var entity = world.CreateEmpty();
+        world.Add<Position>(entity, new Position(0, 0));
+
+        var schemaBytes = ComponentSchema.Export();
+
+        // First import
+        var first = ComponentSchema.Import(schemaBytes);
+        // Second import — types already registered
+        var second = ComponentSchema.Import(schemaBytes);
+
+        // Same Type[] content
+        Assert.Equal(first, second);
+
+        world.Dispose();
+    }
+
+    [Fact]
+    public void Schema_import_rejects_corrupt_data()
+    {
+        // Bad magic: first 4 bytes should be 0x4D435343
+        var badMagic = new byte[] { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0 };
+        _ = Assert.Throws<InvalidDataException>(() => ComponentSchema.Import(badMagic));
+
+        // Unsupported format version
+        using (var ms = new MemoryStream())
+        using (var writer = new BinaryWriter(ms, Encoding.UTF8))
+        {
+            writer.Write(0x4D435343); // magic
+            writer.Write(999);        // bogus version
+            writer.Write(0);          // count
+            writer.Flush();
+            _ = Assert.Throws<InvalidDataException>(() => ComponentSchema.Import(ms.ToArray()));
+        }
+
+        // Truncated (count says 10 but no data follows)
+        using (var ms = new MemoryStream())
+        using (var writer = new BinaryWriter(ms, Encoding.UTF8))
+        {
+            writer.Write(0x4D435343); // magic
+            writer.Write(1);          // version
+            writer.Write(10);         // count — but no strings follow
+            writer.Flush();
+            _ = Assert.Throws<InvalidDataException>(() => ComponentSchema.Import(ms.ToArray()));
+        }
+
+        // Negative count
+        using (var ms = new MemoryStream())
+        using (var writer = new BinaryWriter(ms, Encoding.UTF8))
+        {
+            writer.Write(0x4D435343);
+            writer.Write(1);
+            writer.Write(-1);
+            writer.Flush();
+            _ = Assert.Throws<InvalidDataException>(() => ComponentSchema.Import(ms.ToArray()));
+        }
+
+        // Empty byte array (EndOfStreamException → InvalidDataException)
+        _ = Assert.Throws<InvalidDataException>(() => ComponentSchema.Import(Array.Empty<byte>()));
+
+        // Trailing bytes
+        var goodBytes = ComponentSchema.Export();
+        var padded = goodBytes.Concat(new byte[] { 1, 2, 3 }).ToArray();
+        _ = Assert.Throws<InvalidDataException>(() => ComponentSchema.Import(padded));
+    }
+
+    [Fact]
+    public void Schema_import_rejects_unresolvable_type()
+    {
+        using var ms = new MemoryStream();
+        using var writer = new BinaryWriter(ms, Encoding.UTF8);
+        writer.Write(0x4D435343); // magic
+        writer.Write(1);          // version
+        writer.Write(1);          // count
+        writer.Write("Some.NonExistent.Type, FakeAssembly");
+        writer.Flush();
+        _ = Assert.Throws<InvalidDataException>(() => ComponentSchema.Import(ms.ToArray()));
+    }
+
+    [Fact]
+    public void Schema_import_rejects_duplicate_type()
+    {
+        using var ms = new MemoryStream();
+        using var writer = new BinaryWriter(ms, Encoding.UTF8);
+        writer.Write(0x4D435343); // magic
+        writer.Write(1);          // version
+        writer.Write(2);          // count — two entries, same name
+        var typeName = typeof(Position).AssemblyQualifiedName!;
+        writer.Write(typeName);
+        writer.Write(typeName);
+        writer.Flush();
+        _ = Assert.Throws<InvalidDataException>(() => ComponentSchema.Import(ms.ToArray()));
+    }
+
+    [Fact]
+    public void Schema_import_rejects_generic_type()
+    {
+        using var ms = new MemoryStream();
+        using var writer = new BinaryWriter(ms, Encoding.UTF8);
+        writer.Write(0x4D435343);
+        writer.Write(1);
+        writer.Write(1);
+        // An open generic type (not a concrete component)
+        writer.Write(typeof(List<>).AssemblyQualifiedName!);
+        writer.Flush();
+        _ = Assert.Throws<InvalidDataException>(() => ComponentSchema.Import(ms.ToArray()));
+    }
+
+    [Fact]
+    public void Schema_import_handles_empty_schema()
+    {
+        using var ms = new MemoryStream();
+        using var writer = new BinaryWriter(ms, Encoding.UTF8);
+        writer.Write(0x4D435343); // magic
+        writer.Write(1);          // version
+        writer.Write(0);          // count = 0 → empty schema
+        writer.Flush();
+
+        var types = ComponentSchema.Import(ms.ToArray());
+        Assert.NotNull(types);
+        Assert.Empty(types);
+    }
+
+    [Fact]
+    public void Schema_import_null_throws_argument_null()
+    {
+        _ = Assert.Throws<ArgumentNullException>(() => ComponentSchema.Import(null!));
     }
 
     private readonly struct NoOpFeeder : Archetype.ISpanFeeder

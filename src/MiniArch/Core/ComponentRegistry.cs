@@ -60,6 +60,18 @@ internal sealed class ComponentRegistry
     internal int ComponentTypeCount => Volatile.Read(ref _snapshot).IdToType.Length;
 
     /// <summary>
+    /// Returns all registered types in registration order.
+    /// Index in the returned array is the <see cref="ComponentType.Value"/>.
+    /// </summary>
+    internal Type[] GetRegisteredTypes()
+    {
+        var snapshot = Volatile.Read(ref _snapshot);
+        var result = new Type[snapshot.IdToType.Length];
+        Array.Copy(snapshot.IdToType, result, result.Length);
+        return result;
+    }
+
+    /// <summary>
     /// Tries to get the type for an id.
     /// </summary>
     public bool TryGetType(ComponentType id, out Type type)

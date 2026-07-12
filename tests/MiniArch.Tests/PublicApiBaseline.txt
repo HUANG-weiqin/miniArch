@@ -36,7 +36,9 @@ class: MiniArch.ComponentBucketQuery`1 where TComponent : struct, System.ValueTy
   Method: Get(TComponent key, System.Span<MiniArch.Entity> destination) -> System.Int32
   Method: TryGet(TComponent key, System.Span<MiniArch.Entity> destination, out System.Int32& written) -> System.Boolean
 class: MiniArch.ComponentSchema
+  Method: Export() -> System.Byte[]
   Method: Fingerprint() -> System.Byte[]
+  Method: Import(System.Byte[] data) -> System.Type[]
 class: MiniArch.Core.CommandStream : MiniArch.Core.CommandStreamCore
   Method: Add(MiniArch.Entity entity, T component) -> System.Void where T : struct, System.ValueType
   Method: AddChild(MiniArch.Entity parent, MiniArch.Entity child) -> System.Void
