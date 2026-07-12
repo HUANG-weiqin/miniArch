@@ -197,11 +197,10 @@ private static int ComputeSegmentEntityCapacity(Type[] componentTypes)
 
 - **位置**：`World.EntityLifecycle.cs:858`, `:699`
 - **问题**：扫描整个 free list（可等于 entity slot count）→ O(N) 每调用；且用的是 `Array.Copy` 移位（O(N) shift），不是 swap-remove
-- **可达性分析**：✅ **可达**。帧同步 / Replay 序列：帧 1 Create 100K 实体，帧 2 Destroy 全部 → free list = 100K，帧 3 Replay 帧 1 的 100K Reserve → 每个 Reserve 扫 100K → **5B 次操作 → 秒级卡顿**。这是真实 lockstep 场景。
-- **改法（见下文讨论）**：
-  - **必做**：`Array.Copy` 移位改为 swap-remove（消除 O(N) shift，与 archetype.RemoveAt 模式一致）
-  - **可选**：加 lazy `Dictionary<int, int>` 索引消除 O(N) scan（仅在第一个 `RemoveFromFreeList` 或 `RepushFreeEntry` 调用时构建）
-- **热路径**：Submit/Replay。`RemoveFromFreeList` 在 `EnsureReplayReservation` 中调用（Replay 路径），`RepushFreeEntry` 在 cancel pending entity 时调用（Submit 路径）。
+- **可达性分析**：✅ **可达但接受**。帧同步 / Replay 序列中可能触发 O(N²) 退化。但需要一帧内 100K+ Reserve 操作——此时瓶颈不在 free list 而在实体创建本身。
+- **决策**：**不做改动**。Swap-remove 会破坏 free list LIFO 语义（已在代码注释 `:851-856` 说明），导致 Submit 与 Replay 的 entity ID 分配顺序不一致 → **确定性违约**。保持 shift-remove。O(N) 成本对于合理的 batch size（<1000）可忽略。
+- **代码注释已更新**：在 `RemoveFromFreeList` 和 `RepushFreeEntry` 的 `<remarks>` 中加入性能说明和未优化理由。引用 `kb-hardening-roadmap.md §M2.3`。
+- **热路径**：Submit/Replay。
 
 ### ~~M2.4 `GetSingleton<T>` 无缓存全量扫描~~ ❌ 不可达，不做
 

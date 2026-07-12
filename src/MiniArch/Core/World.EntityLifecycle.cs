@@ -695,6 +695,11 @@ public sealed partial class World
     /// Used by <see cref="CommandStreamCore.Submit"/> to align the free-list order
     /// of cancelled pending entities with the batch-order Release ops emitted in
     /// the wire. See B6 in <c>kb-code-review-findings.md</c>.
+    /// <para/>
+    /// <b>Performance note:</b> O(N) scan + O(N) shift. Same rationale as
+    /// <see cref="RemoveFromFreeList"/> —a Dictionary index was evaluated but
+    /// rejected. Realistic cancel batch size per frame is &lt;1000; beyond that
+    /// the frame itself is already too heavy. Keep as-is.
     /// </remarks>
     internal void RepushFreeEntry(int id, int version)
     {
@@ -854,6 +859,15 @@ public sealed partial class World
     /// reorder survivors and diverge from Submit's free-list state when
     /// Reserve+Release are interleaved within one frame (cancelled pending
     /// entities). Shift keeps Replay's free-list order identical to Submit's.
+    /// <para/>
+    /// <b>Performance note:</b> O(N) scan + O(N) Array.Copy shift. This is
+    /// intentionally NOT optimized with a Dictionary index —the callers
+    /// (Replay Reserve ops, Submit cancel) are batch operations where
+    /// realistic batch size is &lt;1000 per frame. At 100K entries the shift
+    /// is ~0.5ms (memmove), but 100K Reserve ops in one frame is itself
+    /// impractical. A Dictionary index would add O(1) overhead to the hot
+    /// Push/Pop paths for marginal benefit. Keep as-is.
+    /// See .knowledge/kb-hardening-roadmap.md §M2.3.
     /// </remarks>
     private void RemoveFromFreeList(Entity entity)
     {
