@@ -24,7 +24,7 @@ updated: 2026-07-12
 | **M3** | **栈安全** | **P1** | 2 | FrameDelta Replay、CommandStream |
 | **M9** | **API 输入验证** | **P0** | 10 | 所有 public API 入口 |
 | **M3** | **栈安全** | **P1** | 2 | FrameDelta Replay、CommandStream |
-| **M2** | **退化性能保护** | P2 | 4 | Destroy/Allocate/O(n²) |
+| **M2** | **退化性能保护** | P2 | 2 | Destroy 分组、free list 扫描 |
 | **M6** | **并发安全契约** | P2 | 3 | Query 并行迭代、跨 CommandStream |
 | **M4** | **契约显式化** | P2 | 3 | Debug.Assert + 源代码注释约定 |
 | **M5** | **确定性与可观测性** | P2 | 5 | 文档、Diagnostic 工具、checksum |
@@ -176,32 +176,43 @@ private static int ComputeSegmentEntityCapacity(Type[] componentTypes)
 - **位置**：`World.EntityLifecycle.cs:466-495`
 - **问题**：外层 `n` 个待删实体，内层线性扫描 groups（可增长到 `n`）→ O(n²)
 - **当前假设**："groupCount is typically 1-3"——无强制保障
-- **改法（选项）**：
-  - A: 固定大小数组 + 超过阈值改用 `Dictionary<Archetype, int>` 单次构造
-  - B: 对 destroy 输入按 archetype 预排序后一次扫描——O(n log n) 最坏
-  - C: 设上限 `MaxGroupCount = 128`，超限改用 Dictionary
-- **热路径**：⚠️ Batch destroy（>8 实体）
+- **可达性分析**：✅ 可达。`Destroy(QueryDescription)` 可匹配任意 archetype 集合。典型 gameplay groupCount=1-3 确实成立，但销毁全 World（关卡卸载、压力测试）时可触发 O(n²)。代价：100K 实体 1K archetype → ~50ms。不算挂死，但明显卡顿。
+- **改法（选项 C）**：设 `MaxGroupCount = 128`，超限改用 `Dictionary<Archetype, int>` 单次构造。冷路径改造，不涉及热路径退化。
+- **热路径**：⚠️ Batch destroy（>8 实体）。
 
-### M2.2 `AllocateRows` 段扫描从头开始
+### ~~M2.2 `AllocateRows` 段扫描从头开始~~ ❌ 不可达，不做
 
 - **位置**：`Archetype.Storage.cs:254-258`
-- **问题**：每次 `AllocateRows` 从 segment 0 开始扫描找非满段 → O(S) 每 allocate，S 可达数十万
-- **改法**：缓存最后一个已知非满段索引 `_firstAvailableSegment`，或扫描从上一次位置开始
-- **热路径**：⚠️ 实体创建
+- **代码位置加注释**：
+  ```csharp
+  // NOTE: Linear scan from 0 to find first non-full segment is O(S). S > 1000
+  // requires perEntity > 2 MB (segment capacity = 1), which in turn limits
+  // entity count to ~hundreds by memory — not enough for O(S) to matter.
+  // Per micro-benchmark: S=1000 scan is ~0.5μs. This is intentionally NOT
+  // optimized — the cache would add state on the hot path for zero real benefit.
+  ```
+- **原因**：`_segmentCapacity` 只有在 perEntity > 2 MB 时才小（最小 1），此时实体数受内存限制（20 MB × 1000 = 20 GB → 不可达）。S 上百时 perEntity 已经低到 scan 只要几纳秒。**实际触发不了退化。**
 
 ### M2.3 `RemoveFromFreeList` / `RepushFreeEntry` 线性扫描
 
 - **位置**：`World.EntityLifecycle.cs:858`, `:699`
-- **问题**：扫描整个 free list（可等于 entity slot count）→ O(N) 每调用
-- **改法**：free list 改为按 id 排序或用延迟批量清除策略（不在正常路径做反查）
-- **热路径**：Submit/Replay
+- **问题**：扫描整个 free list（可等于 entity slot count）→ O(N) 每调用；且用的是 `Array.Copy` 移位（O(N) shift），不是 swap-remove
+- **可达性分析**：✅ **可达**。帧同步 / Replay 序列：帧 1 Create 100K 实体，帧 2 Destroy 全部 → free list = 100K，帧 3 Replay 帧 1 的 100K Reserve → 每个 Reserve 扫 100K → **5B 次操作 → 秒级卡顿**。这是真实 lockstep 场景。
+- **改法（见下文讨论）**：
+  - **必做**：`Array.Copy` 移位改为 swap-remove（消除 O(N) shift，与 archetype.RemoveAt 模式一致）
+  - **可选**：加 lazy `Dictionary<int, int>` 索引消除 O(N) scan（仅在第一个 `RemoveFromFreeList` 或 `RepushFreeEntry` 调用时构建）
+- **热路径**：Submit/Replay。`RemoveFromFreeList` 在 `EnsureReplayReservation` 中调用（Replay 路径），`RepushFreeEntry` 在 cancel pending entity 时调用（Submit 路径）。
 
-### M2.4 `GetSingleton<T>` 无缓存全量扫描
+### ~~M2.4 `GetSingleton<T>` 无缓存全量扫描~~ ❌ 不可达，不做
 
 - **位置**：`World.QueryCache.cs:31-55`
-- **问题**：O(A) 全 archetype 扫描，A 可上千
-- **改法**：加 `_cachedSingleton: (Archetype, int)` 缓存，在对应 archetype 的实体数归零或结构变更时失效
-- **热路径**：❌ 标记为冷路径但易误用
+- **代码位置加注释**：
+  ```csharp
+  // NOTE: O(archetype_count) scan. Even with 100K archetypes this is < 1ms.
+  // Marked as cold path — callers should cache the result. Not worth caching
+  // internally (adds invalidation complexity on every archetype change).
+  ```
+- **原因**：O(A) 扫描，A = archetype 数 = 每种唯一组件组合一个。典型 10-50，极端 100K。100K 时每次 < 1ms。API 明确标注为冷路径。加缓存需要每次 archetype 变更（Create/Destroy/Add/Remove 新组件组合）做失效，热路径成本不值得。**实际触发不了可用性退化。**
 
 ---
 
