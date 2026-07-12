@@ -22,6 +22,8 @@ updated: 2026-07-12
 | **M1** | **int 溢出防线** | **P0** | 9 | 存储层、CommandStream、序列化、FrameDelta |
 | **M8** | **恶意输入安全** | **P0** | 5 | FrameDelta、Snapshot、Replay |
 | **M3** | **栈安全** | **P1** | 2 | FrameDelta Replay、CommandStream |
+| **M9** | **API 输入验证** | **P0** | 10 | 所有 public API 入口 |
+| **M3** | **栈安全** | **P1** | 2 | FrameDelta Replay、CommandStream |
 | **M2** | **退化性能保护** | P2 | 4 | Destroy/Allocate/O(n²) |
 | **M6** | **并发安全契约** | P2 | 3 | Query 并行迭代、跨 CommandStream |
 | **M4** | **契约显式化** | P2 | 3 | Debug.Assert + 源代码注释约定 |
@@ -445,7 +447,127 @@ private static int ComputeSegmentEntityCapacity(Type[] componentTypes)
 
 ---
 
+## M9 — API 输入口系统性验证
+
+**目标**：对所有用户可见的 public API 入口做系统性输入验证。对于造成热路径退化的，用 `Debug.Assert` + 源代码契约保护。
+
+### 原则
+- 所有 public 方法**必须**对 null 参数抛 `ArgumentNullException`（参考 `ChangeWatch`/`WorldSnapshot` 的模式）
+- 所有 `int` 参数在用作数组大小时必须有**合理上限**（不一定是硬上限，而是防止 OOM 的挡板）
+- `default(ChunkView)` / `default(EntityAccessor)` / `default(QueryDescriptor)` 等零值 struct 必须有 `Debug.Assert` 或文档说明
+- **BUG 直接修**（对合法输入崩溃的），**契约用注释写在声明处**
+
+### 审计发现的 BUG（必须修，非契约）
+
+#### M9.1 `ChunkView.GetSpan<T>()` / `GetComponentSpanAt<T>()` 未检查组件存在性
+
+- **位置**：`ChunkView.cs:88-101, 116-124`
+- **问题**：`GetComponentIndexFast(Component<T>.ComponentType)` 当 T 不在 archetype 中时返回 `-1`（`_componentIdToColumnIndex[id]` 的默认值），然后 `_elementSizes[-1]` → `IndexOutOfRangeException`
+- **不修运行时（热路径）**：
+  ```csharp
+  // 在 GetSpan<T>() 前+后：
+  Debug.Assert(_archetype.TryGetComponentIndex(Component<T>.ComponentType, out _),
+      $"ChunkView.GetSpan<{typeof(T).Name}>() called on archetype without this component.");
+  ```
+- **修复文档**：在 `<remarks>` 中说明「只应在通过 Query 筛选过的 chunk 上调用，或先调 `TryGetComponentIndex<T>()`」
+- **热路径**：⚠️ `GetSpan<T>` 是每帧迭代热路径——只加 `Debug.Assert`
+
+#### M9.2 `EntityAccessor.Get<T>()` / `Set<T>()` 同模式
+
+- **位置**：`EntityAccessor.cs:35, 51`
+- **问题**：同 `GetComponentIndexFast` 未检查
+- **改法**：同上 `Debug.Assert`
+- **热路径**：⚠️ `Debug.Assert` 只在 DEBUG
+
+#### M9.3 `default(ChunkView)` / `default(EntityAccessor)` NRE
+
+- **位置**：`ChunkView.cs`, `EntityAccessor.cs`
+- **问题**：`ref struct` 可以被 `default` 初始化，`_archetype` 为 null → `NullReferenceException`
+- **改法**：每个 public 方法入口加：
+  ```csharp
+  [Conditional("DEBUG")]
+  private void AssertInitialized() =>
+      Debug.Assert(_archetype is not null, "ChunkView was default-initialized; use Query.GetChunks() to obtain a valid view.");
+  ```
+- **热路径**：⚠️ `[Conditional("DEBUG")]`——Release 零成本
+
+#### M9.4 `CommandStreamCore.Replay(FrameDelta)` null 参数
+
+- **位置**：`CommandStreamCore.cs:746-752`
+- **问题**：`delta` 直接解引用，无 null 检查
+- **改法**：加 `ArgumentNullException.ThrowIfNull(delta)`
+- **热路径**：❌ Replay 冷路径
+
+#### M9.5 `CommandStreamCore.SubmitAndSnapshotIntoAsync(FrameDelta)` null 参数
+
+- **位置**：`CommandStreamCore.cs:849`
+- **问题**：`target.Clear()` 前无 null 检查
+- **改法**：同上，`ArgumentNullException.ThrowIfNull(target)`
+- **热路径**：❌ 异步 snapshot 冷路径
+
+#### M9.6 `WorldSnapshot.Load(Stream)` 截断流保护
+
+- **位置**：`WorldSnapshot.cs:115-118`
+- **问题**：`BitConverter.ToInt32(snapshotBytes, 0)` 当 `snapshotBytes.Length < 4` 时抛 `ArgumentOutOfRangeException`，没有包装成有意义的错误消息
+- **改法**：
+  ```csharp
+  if (snapshotBytes.Length < 8)
+      throw new InvalidDataException($"Snapshot data is too short ({snapshotBytes.Length} bytes). Expected at least 8 bytes for header.");
+  ```
+- **热路径**：❌ Load 冷路径
+
+### 契约缺口（文档/注释修复，不修代码）
+
+#### M9.7 `Remove<T>()` 缺失组件时静默 no-op
+
+- **位置**：`World.StructuralChange.cs:202`
+- **问题**：当 entity 不含组件 T 时，`Remove<T>` 静默返回。用户可能误以为移除了组件
+- **改法**：在 XML doc 的 `<remarks>` 中注明：「组件不存在时不抛异常，静默 no-op。调用前可用 `Has<T>()` 确认」
+
+#### M9.8 CommandStream `Add/Set/Remove<T>` 对不存在实体静默丢弃
+
+- **位置**：`CommandStream.cs:57, 78, 100`
+- **问题**：`!_world.IsAlive(entity)` → 静默丢弃，不通知用户
+- **改法**：在 XML doc 的 `<remarks>` 中注明：「如果 entity 不存在或非 alive，命令被静默丢弃。可用 `Entity.IsPlaceholder` 确认」
+
+#### M9.9 `World.EntityCount` 可能返回负数
+
+- **位置**：`World.cs:213`
+- **问题**：`_entitySlotCount - _freeIdCount - _reservedCount` 在内部不变量被破坏时可为负
+- **改法**：`Math.Max(0, ...)` 或在 `<remarks>` 中注明「仅用于诊断，可能小于实际存活数量」
+
+### 架构设计限制（不修，文档化）
+
+#### M9.10 跨 World 实体污染
+
+- **位置**：全局——`Entity` 结构体不关联所属 World
+- **问题**：`Entity(Id, Version)` 只通过 `(slot, version)` 配对鉴别。World A 的实体可能恰好在 World B 中有相同 `(Id, Version)` → 静默操作到错误实体
+- **改法**：**不修**。将 World 标识嵌入 Entity 会破坏值类型语义（16→24 字节，失去 `IComparable<Entity>` 的简单性）。在 `Entity` 的 XML doc 中加 `<remarks>`：
+  ```xml
+  /// <remarks>
+  /// Entity has no World association. Using an Entity from one World in
+  /// another World's APIs is undefined behavior —if the slot+version
+  /// coincidentally match, operations silently affect the wrong entity.
+  /// </remarks>
+  ```
+
+---
+
 ## 执行顺序建议
+
+```
+M1 (Integer overflow) + M8 (Security) + M9 (API validation) — 最危险，可并行
+  ↓
+M3 (Stack safety) — 不可恢复的 crash
+  ↓
+M6 (Concurrency contracts) — DEBUG 断言，易落地
+  ↓
+M2 (Degenerate perf) — 影响可用性，按场景评估
+  ↓
+M4 (Memory safety assertions) — 防御性，可与 M1/M6 合批
+  ↓
+M5 (Observability) + M7 (Lifetime) — 收尾文档化
+```
 
 ```
 M1 (Integer overflow) + M8 (Security) — 最危险，可并行
