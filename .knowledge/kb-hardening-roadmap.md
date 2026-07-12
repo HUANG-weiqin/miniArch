@@ -239,12 +239,26 @@ private static int ComputeSegmentEntityCapacity(Type[] componentTypes)
 - **位置**：`Archetype.Storage.cs` 多处（GetColumnRef chunked 分支、SetComponentAtTyped chunked 分支等）
 - **问题**：`GetSegmentAndLocal(row)` 后直接用 `_segments[segIdx]`，无显式越界检查
 - **不变式**：`row < _count` → `segIdx = row >> shift ≤ (_count - 1) >> shift < _segmentCount`
-- **排查**：哪些调用点之前没有加 `Debug.Assert(segIdx < _segmentCount)`？加上 `[Conditional("DEBUG")]` 断言
+- **排查**：哪些调用点之前没有加 `Debug.Assert`？加上 `[Conditional("DEBUG")]` 断言，**必须带消息字符串**：
+  ```csharp
+  Debug.Assert(segIdx < _segmentCount,
+      $"segIdx={segIdx} >= _segmentCount={_segmentCount}. " +
+      $"GetSegmentAndLocal({row}) returned out-of-range segment index. " +
+      $"This invariant broke: row {row} < _count {_count} should guarantee segIdx < _segmentCount.");
+  ```
 
 ### M4.2 热路径列偏移运算加 `Debug.Assert`
 
 - **位置**：`GetColumnRef`、`GetComponentSpanAt`、`SetComponentAtTyped` 等
-- **改法**：在 `Unsafe.Add` 前加 `Debug.Assert(row < _count)` 和 `Debug.Assert(columnIndex >= 0 && columnIndex < _columnByteOffsets.Length)`
+- **改法**：在 `Unsafe.Add` 前加带消息的 `Debug.Assert`：
+  ```csharp
+  Debug.Assert(row < _count,
+      $"row={row} >= _count={_count}. Entity row index out of range. " +
+      $"This indicates a stale EntityRecord.RowIndex or a corrupted _count.");
+  Debug.Assert((uint)columnIndex < (uint)_columnByteOffsets.Length,
+      $"columnIndex={columnIndex} >= _columnByteOffsets.Length={_columnByteOffsets.Length}. " +
+      $"Component column index out of range. This component type may not belong to this archetype.");
+  ```
 - **原则**：只在 `#if DEBUG` 中加，Release 无成本
 
 ### M4.3 `ComponentStore<T>` inline 存储契约
@@ -275,7 +289,10 @@ private static int ComputeSegmentEntityCapacity(Type[] componentTypes)
 
   3. **在 `_entries` 的 `EnsureStoreCapacity()` 加倍处加同样断言**：
   ```csharp
-  Debug.Assert(sizeof(T) <= 65536, "..."同上"...");
+  Debug.Assert(sizeof(T) <= 65536,
+      $"ComponentStore<{typeof(T).Name}> ensure capacity: sizeof(T)={sizeof(T)} > 64 KB. " +
+      $"For large components, use the pending-entity path (BatchBuf) instead of " +
+      $"ComponentStore which stores T inline in StoreEntry<T>[] arrays.");
   ```
 
 - **效果**：DEBUG 下用户用超大 T 时立即得到明确错误并指明替代路径；Release 下零成本（`Debug.Assert` 消失，`sizeof(T)` 是常量表达式
@@ -338,7 +355,10 @@ private static int ComputeSegmentEntityCapacity(Type[] componentTypes)
 - **改法**：在 `World` 上加 **`_structureChangeInProgress` `int` 计数器**（volatile 或 `int` 原子）：
   - `BeginStructChange()` → `Interlocked.Increment`（或单线程 `++`，因为所有结构变更已经是单线程）
   - `EndStructChange()` → `Interlocked.Decrement`
-  - `AssertNoStructChange()` → `[Conditional("DEBUG")] Debug.Assert(_structureChangeInProgress == 0)`
+  - `AssertNoStructChange()` → `[Conditional("DEBUG")] Debug.Assert(_structureChangeInProgress == 0,
+        "Structural change detected during query iteration! " +
+        "Query iteration and structural changes (Create/Destroy/Add/Set/Remove) " +
+        "must not overlap in the same thread. Snapshot the query before parallel work.")`
 - **调用点**：
   - `Query.ForEachChunkParallel` 入口处加 `AssertNoStructChange()`
   - 所有 `*Enumerator.MoveNext()` `GetChunks()` 入口加 `AssertNoStructChange()`
@@ -361,7 +381,13 @@ private static int ComputeSegmentEntityCapacity(Type[] componentTypes)
 
 - **位置**：`WorldSnapshot.cs:29-30`（`_csEntries`, `_csRelations`）
 - **问题**：checksum callback 内再调 checksum → 内层 `Clear()` 清空外层正在排序的列表 → 数据损坏
-- **改法**：`[Conditional("DEBUG")]` 在 `_csEntries.Clear()` 前检查 `_inComputeChecksum` flag，抛明确异常
+- **改法**：`[Conditional("DEBUG")]` 在 `_csEntries.Clear()` 前检查 `_inComputeChecksum` flag，抛明确异常：
+  ```csharp
+  Debug.Assert(!_inComputeChecksum,
+      "Reentrant call to ComputeChecksum or ComputeCanonicalChecksum detected. " +
+      "These methods are not reentrant: the checksum callback must not trigger " +
+      "another checksum computation.");
+  ```
 - **热路径**：❌ Diagnostic 冷路径
 
 ---
@@ -383,7 +409,16 @@ private static int ComputeSegmentEntityCapacity(Type[] componentTypes)
 
 - **位置**：全局
 - **问题**：`World.Dispose()` 后，用户持有的 `QueryEnumerator` 仍有旧 archetype 引用。迭代可能返回数据
-- **改法**：在 `QueryEnumerator.MoveNext()` 加 `[Conditional("DEBUG")]` 的 `_world.AssertNotDisposed()` 检查
+- **改法**：在 `QueryEnumerator.MoveNext()` 加 `[Conditional("DEBUG")]` 的 `_world.AssertNotDisposed()` 检查。`AssertNotDisposed` 本身应带消息：
+  ```csharp
+  [Conditional("DEBUG")]
+  internal void AssertNotDisposed()
+  {
+      Debug.Assert(!_disposed,
+          "This World has been disposed. Query enumerator from a disposed World " +
+          "returns stale data. Ensure all queries complete before World.Dispose().");
+  }
+  ```
 - **热路径**：⚠️ `[Conditional("DEBUG")]` 只在 Debug 生效，Release 零成本
 
 ### M7.3 `ArrayPool.Return` 遍历确认
@@ -414,7 +449,14 @@ private static int ComputeSegmentEntityCapacity(Type[] componentTypes)
   - 在 `ReplayCore` 入口处（`World.cs:737`）增加 `delta.ValidateAsync(world)` 调用，失败则抛异常。这样所有 replay 入口自动校验
   - Validate 是 O(n) 扫描，但在网络帧同步场景下 delta 本就不大（典型 < 1MB），可接受
 - **改法（选项 B，最小）**：
-  - 在 `WriteComponentRaw` 中加 `Debug.Assert(dataSize == _elementSizes[columnIndex])`——只在 Debug 检测
+  - 在 `WriteComponentRaw` 中加带消息的 `Debug.Assert`：
+  ```csharp
+  Debug.Assert(dataSize == _elementSizes[columnIndex],
+      $"Remote component data size ({dataSize}) != local element size " +
+      $"({_elementSizes[columnIndex]}) for component column {columnIndex}. " +
+      "FrameDelta.Validate() must be called before Replay() to prevent " +
+      "silent data corruption from size mismatch.");
+  ```
 - **热路径**：❌ Replay 冷路径
 
 ### M8.3 `PreScanForCapacity` 恶意 OOM 防护
@@ -442,7 +484,13 @@ private static int ComputeSegmentEntityCapacity(Type[] componentTypes)
 - **位置**：`HierarchyTable.cs:28-29`（`AddChildRestored`）
 - **问题**：Snapshot restore 用 `AddChildRestored` 绕过 `ValidateAddChild`。恶意快照可构建循环层级
 - **后果**：`CollectDestroySubtree` 有 `_destroyVisitedGen` 防无限循环，所以不会栈溢出，但 `RemoveChild` 等操作行为可能错误
-- **改法**：在 `AddChildRestored` 中加 `Debug.Assert(!ValidateAddChild(world, parent, child))` 反证——快照中不应有循环，若有则在调试期发现
+- **改法**：在 `AddChildRestored` 中加带消息的 `Debug.Assert` 反证——快照中不应有循环，若有则在调试期发现：
+  ```csharp
+  Debug.Assert(!ValidateAddChild(world, parent, child),
+      $"Snapshot restore created a hierarchy cycle: parent={parent}, child={child}. " +
+      "Cycle-free hierarchy is a snapshot invariant; malformed snapshots " +
+      "should be rejected during Load().");
+  ```
 - **热路径**：❌ Restore 冷路径
 
 ---
@@ -463,11 +511,13 @@ private static int ComputeSegmentEntityCapacity(Type[] componentTypes)
 
 - **位置**：`ChunkView.cs:88-101, 116-124`
 - **问题**：`GetComponentIndexFast(Component<T>.ComponentType)` 当 T 不在 archetype 中时返回 `-1`（`_componentIdToColumnIndex[id]` 的默认值），然后 `_elementSizes[-1]` → `IndexOutOfRangeException`
-- **不修运行时（热路径）**：
+- **不修运行时（热路径）**——`Debug.Assert` 必须带消息说明：
   ```csharp
-  // 在 GetSpan<T>() 前+后：
   Debug.Assert(_archetype.TryGetComponentIndex(Component<T>.ComponentType, out _),
-      $"ChunkView.GetSpan<{typeof(T).Name}>() called on archetype without this component.");
+      $"ChunkView.GetSpan<{typeof(T).Name}>() called on archetype without this component. " +
+      $"The chunk's archetype component types: [{string.Join(", ", _archetype.ComponentTypes)}]. " +
+      $"Use ChunkView.TryGetComponentIndex<T>() to check before calling GetSpan<T>() " +
+      $"for optional components.");
   ```
 - **修复文档**：在 `<remarks>` 中说明「只应在通过 Query 筛选过的 chunk 上调用，或先调 `TryGetComponentIndex<T>()`」
 - **热路径**：⚠️ `GetSpan<T>` 是每帧迭代热路径——只加 `Debug.Assert`
@@ -476,7 +526,13 @@ private static int ComputeSegmentEntityCapacity(Type[] componentTypes)
 
 - **位置**：`EntityAccessor.cs:35, 51`
 - **问题**：同 `GetComponentIndexFast` 未检查
-- **改法**：同上 `Debug.Assert`
+- **改法**：同上 `Debug.Assert`（消息写明实体 + 组件上下文）：
+  ```csharp
+  Debug.Assert(_archetype.TryGetComponentIndex(Component<T>.ComponentType, out _),
+      $"EntityAccessor.Get<{typeof(T).Name}>(): the entity's archetype " +
+      $"does not contain component {typeof(T).Name}. Verify with Has<T>() " +
+      $"before calling Get<T>(), or use TryGet<T>().");
+  ```
 - **热路径**：⚠️ `Debug.Assert` 只在 DEBUG
 
 #### M9.3 `default(ChunkView)` / `default(EntityAccessor)` NRE
