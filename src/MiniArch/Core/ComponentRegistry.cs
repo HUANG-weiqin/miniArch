@@ -113,7 +113,7 @@ internal sealed class ComponentRegistry
         hash.AppendData(BitConverter.GetBytes(idToType.Length));
         foreach (var type in idToType)
         {
-            var name = type.FullName ?? type.Name;
+            var name = ComponentSchemaCodec.GetSchemaName(type);
             var nameBytes = Encoding.UTF8.GetBytes(name);
             hash.AppendData(BitConverter.GetBytes(nameBytes.Length));
             hash.AppendData(nameBytes);

@@ -1551,19 +1551,27 @@ public sealed partial class World : IDisposable
 
     internal void ReadFreeList(System.IO.BinaryReader reader)
     {
-        _freeIdCount = reader.ReadInt32();
-        if (_freeIds.Length < _freeIdCount)
-            Array.Resize(ref _freeIds, _freeIdCount);
-        for (var i = 0; i < _freeIdCount; i++)
+        var freeIdCount = reader.ReadInt32();
+        if (freeIdCount < 0 || freeIdCount > _entitySlotCount)
+        {
+            throw new System.IO.InvalidDataException(
+                $"Snapshot free-list count ({freeIdCount}) is out of range [0, {_entitySlotCount}].");
+        }
+
+        if (_freeIds.Length < freeIdCount)
+            Array.Resize(ref _freeIds, freeIdCount);
+        for (var i = 0; i < freeIdCount; i++)
         {
             var id = reader.ReadInt32();
             var version = reader.ReadInt32();
             if ((uint)id >= (uint)_entitySlotCount)
-                throw new InvalidOperationException(
+                throw new System.IO.InvalidDataException(
                     $"Corrupt snapshot: free-list entity id {id} is out of range " +
                     $"(entity slot count: {_entitySlotCount}).");
             _freeIds[i] = new RecycledEntity(id, version);
         }
+
+        _freeIdCount = freeIdCount;
     }
 
     internal void CopyFreeIdsFrom(World source)

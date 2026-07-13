@@ -63,7 +63,7 @@ public static class WorldSnapshot
 
         foreach (var schemaEntry in schemaEntries)
         {
-            bodyWriter.Write(schemaEntry.SchemaName);
+            ComponentSchemaCodec.WriteSchemaName(bodyWriter, schemaEntry.SchemaName);
         }
 
         foreach (var archetype in persistedArchetypes)
@@ -152,103 +152,142 @@ public static class WorldSnapshot
             Buffer.BlockCopy(snapshotBytes, snapshotOffset, bodyBytes, 0, bodyBytes.Length);
         }
 
-        // Parse body bytes using BinaryReader over a MemoryStream
-        using var bodyStream = new MemoryStream(bodyBytes);
-        using var reader = new BinaryReader(bodyStream, Encoding.UTF8, leaveOpen: true);
-
-        var chunkCapacity = reader.ReadInt32();
-        var entitySlotCount = reader.ReadInt32();
-
-        // Prevent OOM from malicious snapshots specifying a huge slot count.
-        // 256M slots × 4 bytes/slot = ~1 GB for slot versions array, which is
-        // a practical upper bound for any realistic game world.
-        const int maxReasonableSlots = 256 * 1024 * 1024;
-        if (entitySlotCount < 0 || entitySlotCount > maxReasonableSlots)
-            throw new InvalidDataException(
-                $"Snapshot entity slot count ({entitySlotCount}) is out of range. " +
-                $"Maximum allowed is {maxReasonableSlots}.");
-
-        var schemaCount = reader.ReadInt32();
-        var archetypeCount = reader.ReadInt32();
-        var hierarchyLinkCount = reader.ReadInt32();
-
-        // Prevent OOM from malicious snapshots with excessive schema count.
-        // 64K component types is far beyond any realistic game; each entry
-        // would allocate a resolved Type reference in the schemaTypes array.
-        const int maxReasonableSchemas = 65536;
-        if (schemaCount < 0 || schemaCount > maxReasonableSchemas)
-            throw new InvalidDataException(
-                $"Snapshot schema count ({schemaCount}) is out of range. " +
-                $"Maximum allowed is {maxReasonableSchemas}.");
-
-        // Prevent OOM from malicious snapshots with excessive archetype count.
-        // 256K archetypes × minimum overhead ~64 bytes = ~16 MB — beyond any
-        // realistic component combinatorics.
-        const int maxReasonableArchetypes = 262144;
-        if (archetypeCount < 0 || archetypeCount > maxReasonableArchetypes)
-            throw new InvalidDataException(
-                $"Snapshot archetype count ({archetypeCount}) is out of range. " +
-                $"Maximum allowed is {maxReasonableArchetypes}.");
-
-        // Prevent OOM from malicious snapshots with excessive hierarchy links.
-        // Each link stores 2 ints; 256M links at 8 bytes/link = 2 GB worst case
-        // for the slot versions array alone. Cap at entitySlotCount (already bounded).
-        if (hierarchyLinkCount < 0 || hierarchyLinkCount > entitySlotCount)
-            throw new InvalidDataException(
-                $"Snapshot hierarchy link count ({hierarchyLinkCount}) is out of range. " +
-                $"Maximum allowed is {entitySlotCount} (entity slot count).");
-
-        var slotVersions = new int[entitySlotCount];
-        for (var index = 0; index < slotVersions.Length; index++)
+        try
         {
-            slotVersions[index] = reader.ReadInt32();
-        }
+            // Parse body bytes using BinaryReader over a MemoryStream
+            using var bodyStream = new MemoryStream(bodyBytes);
+            using var reader = new BinaryReader(bodyStream, Encoding.UTF8, leaveOpen: true);
 
-        var schemaTypes = new Type[schemaCount];
-        for (var index = 0; index < schemaTypes.Length; index++)
-        {
-            var schemaName = reader.ReadString();
-            var componentType = Type.GetType(schemaName, throwOnError: true)!;
-            EnsureSnapshotSupported(componentType);
-            schemaTypes[index] = componentType;
-        }
+            var chunkCapacity = reader.ReadInt32();
+            var entitySlotCount = reader.ReadInt32();
 
-        var world = new World(chunkCapacity, entitySlotCount);
-        world.Reset(entitySlotCount);
+            if (chunkCapacity <= 0)
+                throw new InvalidDataException($"Snapshot chunk capacity ({chunkCapacity}) must be positive.");
 
-        for (var index = 0; index < slotVersions.Length; index++)
-        {
-            world.SetSnapshotEntityVersion(index, slotVersions[index]);
-        }
-
-        var schemaComponentTypes = new ComponentType[schemaTypes.Length];
-        for (var index = 0; index < schemaTypes.Length; index++)
-        {
-            schemaComponentTypes[index] = ComponentRegistry.Shared.GetOrCreate(schemaTypes[index]);
-        }
-
-        for (var archetypeIndex = 0; archetypeIndex < archetypeCount; archetypeIndex++)
-        {
-            ReadArchetype(reader, world, schemaComponentTypes, slotVersions);
-        }
-
-        for (var linkIndex = 0; linkIndex < hierarchyLinkCount; linkIndex++)
-        {
-            var childId = reader.ReadInt32();
-            var parentId = reader.ReadInt32();
-            if ((uint)childId >= (uint)slotVersions.Length)
+            // Prevent OOM from malicious snapshots specifying a huge slot count.
+            // 256M slots × 4 bytes/slot = ~1 GB for slot versions array, which is
+            // a practical upper bound for any realistic game world.
+            const int maxReasonableSlots = 256 * 1024 * 1024;
+            if (entitySlotCount < 0 || entitySlotCount > maxReasonableSlots)
                 throw new InvalidDataException(
-                    $"Hierarchy child id {childId} out of range [0, {slotVersions.Length}) in snapshot.");
-            if ((uint)parentId >= (uint)slotVersions.Length)
-                throw new InvalidDataException(
-                    $"Hierarchy parent id {parentId} out of range [0, {slotVersions.Length}) in snapshot.");
-            var child = new Entity(childId, slotVersions[childId]);
-            var parent = new Entity(parentId, slotVersions[parentId]);
-            world.AddChildFromSnapshot(parent, child);
-        }
+                    $"Snapshot entity slot count ({entitySlotCount}) is out of range. " +
+                    $"Maximum allowed is {maxReasonableSlots}.");
 
-        world.ReadFreeList(reader);
-        return world;
+            var schemaCount = reader.ReadInt32();
+            var archetypeCount = reader.ReadInt32();
+            var hierarchyLinkCount = reader.ReadInt32();
+
+            // Prevent OOM from malicious snapshots with excessive schema count.
+            // 64K component types is far beyond any realistic game; each entry
+            // would allocate a resolved Type reference in the schemaTypes array.
+            const int maxReasonableSchemas = 65536;
+            if (schemaCount < 0 || schemaCount > maxReasonableSchemas)
+                throw new InvalidDataException(
+                    $"Snapshot schema count ({schemaCount}) is out of range. " +
+                    $"Maximum allowed is {maxReasonableSchemas}.");
+
+            // Prevent OOM from malicious snapshots with excessive archetype count.
+            // 256K archetypes × minimum overhead ~64 bytes = ~16 MB — beyond any
+            // realistic component combinatorics.
+            const int maxReasonableArchetypes = 262144;
+            if (archetypeCount < 0 || archetypeCount > maxReasonableArchetypes)
+                throw new InvalidDataException(
+                    $"Snapshot archetype count ({archetypeCount}) is out of range. " +
+                    $"Maximum allowed is {maxReasonableArchetypes}.");
+
+            // Prevent OOM from malicious snapshots with excessive hierarchy links.
+            // Each link stores 2 ints; 256M links at 8 bytes/link = 2 GB worst case
+            // for the slot versions array alone. Cap at entitySlotCount (already bounded).
+            if (hierarchyLinkCount < 0 || hierarchyLinkCount > entitySlotCount)
+                throw new InvalidDataException(
+                    $"Snapshot hierarchy link count ({hierarchyLinkCount}) is out of range. " +
+                    $"Maximum allowed is {entitySlotCount} (entity slot count).");
+
+            var slotVersions = new int[entitySlotCount];
+            for (var index = 0; index < slotVersions.Length; index++)
+            {
+                slotVersions[index] = reader.ReadInt32();
+            }
+
+            var schemaTypes = new Type[schemaCount];
+            var seenSchemaNames = new HashSet<string>(StringComparer.Ordinal);
+            var seenSchemaTypes = new HashSet<Type>();
+            for (var index = 0; index < schemaTypes.Length; index++)
+            {
+                var schemaName = ComponentSchemaCodec.ReadSchemaName(reader, nameof(WorldSnapshot));
+                if (!seenSchemaNames.Add(schemaName))
+                    throw new InvalidDataException($"Duplicate schema type name in WorldSnapshot: '{schemaName}'.");
+
+                var componentType = ComponentSchemaCodec.ResolveSchemaType(schemaName, nameof(WorldSnapshot));
+                if (!seenSchemaTypes.Add(componentType))
+                {
+                    throw new InvalidDataException(
+                        $"Duplicate component type in WorldSnapshot after resolution: " +
+                        $"'{schemaName}' resolves to '{ComponentSchemaCodec.GetDisplayName(componentType)}'.");
+                }
+
+                ComponentSchemaCodec.EnsureImportableComponentType(componentType, schemaName, nameof(WorldSnapshot));
+                EnsureSnapshotSupported(componentType);
+                schemaTypes[index] = componentType;
+            }
+
+            var payloadOffset = reader.BaseStream.Position;
+            ValidateSnapshotPayload(reader, schemaTypes, slotVersions, archetypeCount, hierarchyLinkCount);
+            reader.BaseStream.Position = payloadOffset;
+
+            var world = new World(chunkCapacity, entitySlotCount);
+            world.Reset(entitySlotCount);
+
+            for (var index = 0; index < slotVersions.Length; index++)
+            {
+                world.SetSnapshotEntityVersion(index, slotVersions[index]);
+            }
+
+            var schemaComponentTypes = new ComponentType[schemaTypes.Length];
+            for (var index = 0; index < schemaTypes.Length; index++)
+            {
+                schemaComponentTypes[index] = ComponentRegistry.Shared.GetOrCreate(schemaTypes[index]);
+            }
+
+            var loadedEntityIds = new HashSet<int>();
+            for (var archetypeIndex = 0; archetypeIndex < archetypeCount; archetypeIndex++)
+            {
+                ReadArchetype(reader, world, schemaComponentTypes, slotVersions, loadedEntityIds);
+            }
+
+            for (var linkIndex = 0; linkIndex < hierarchyLinkCount; linkIndex++)
+            {
+                var childId = reader.ReadInt32();
+                var parentId = reader.ReadInt32();
+                if ((uint)childId >= (uint)slotVersions.Length)
+                    throw new InvalidDataException(
+                        $"Hierarchy child id {childId} out of range [0, {slotVersions.Length}) in snapshot.");
+                if ((uint)parentId >= (uint)slotVersions.Length)
+                    throw new InvalidDataException(
+                        $"Hierarchy parent id {parentId} out of range [0, {slotVersions.Length}) in snapshot.");
+                var child = new Entity(childId, slotVersions[childId]);
+                var parent = new Entity(parentId, slotVersions[parentId]);
+                world.AddChildFromSnapshot(parent, child);
+            }
+
+            world.ReadFreeList(reader);
+            if (reader.BaseStream.Position != reader.BaseStream.Length)
+            {
+                throw new InvalidDataException(
+                    $"WorldSnapshot has {reader.BaseStream.Length - reader.BaseStream.Position} " +
+                    "unexpected trailing byte(s).");
+            }
+
+            return world;
+        }
+        catch (EndOfStreamException ex)
+        {
+            throw new InvalidDataException("WorldSnapshot data is truncated or malformed.", ex);
+        }
+        catch (OverflowException ex)
+        {
+            throw new InvalidDataException("WorldSnapshot numeric field is too large or malformed.", ex);
+        }
     }
 
     /// <summary>
@@ -427,7 +466,7 @@ public static class WorldSnapshot
                 }
 
                 EnsureSnapshotSupported(componentType);
-                entries.Add(new SchemaEntry(componentType, GetSchemaName(componentType), -1));
+                entries.Add(new SchemaEntry(componentType, ComponentSchemaCodec.GetSchemaName(componentType), -1));
             }
         }
 
@@ -479,35 +518,249 @@ public static class WorldSnapshot
         }
     }
 
+    private static void ValidateSnapshotPayload(
+        BinaryReader reader,
+        Type[] schemaTypes,
+        int[] slotVersions,
+        int archetypeCount,
+        int hierarchyLinkCount)
+    {
+        var loadedEntityIds = new HashSet<int>();
+
+        for (var archetypeIndex = 0; archetypeIndex < archetypeCount; archetypeIndex++)
+        {
+            ValidateArchetypePayload(reader, schemaTypes, slotVersions, loadedEntityIds);
+        }
+
+        ValidateHierarchyPayload(reader, slotVersions, loadedEntityIds, hierarchyLinkCount);
+        ValidateFreeListPayload(reader, slotVersions, loadedEntityIds);
+
+        if (reader.BaseStream.Position != reader.BaseStream.Length)
+        {
+            throw new InvalidDataException(
+                $"WorldSnapshot has {reader.BaseStream.Length - reader.BaseStream.Position} " +
+                "unexpected trailing byte(s).");
+        }
+    }
+
+    private static void ValidateArchetypePayload(
+        BinaryReader reader,
+        Type[] schemaTypes,
+        int[] slotVersions,
+        HashSet<int> loadedEntityIds)
+    {
+        var componentCount = reader.ReadInt32();
+        if (componentCount < 0 || componentCount > schemaTypes.Length)
+        {
+            throw new InvalidDataException(
+                $"Snapshot archetype component count ({componentCount}) is out of range [0, {schemaTypes.Length}].");
+        }
+
+        var fileOrderedComponentTypes = new Type[componentCount];
+        var seenComponentTypes = new HashSet<Type>();
+        for (var componentIndex = 0; componentIndex < componentCount; componentIndex++)
+        {
+            var schemaIndex = reader.ReadInt32();
+            if ((uint)schemaIndex >= (uint)schemaTypes.Length)
+            {
+                throw new InvalidDataException(
+                    $"Snapshot archetype schema index {schemaIndex} is out of range [0, {schemaTypes.Length}).");
+            }
+
+            var componentType = schemaTypes[schemaIndex];
+            if (!seenComponentTypes.Add(componentType))
+            {
+                throw new InvalidDataException(
+                    $"Snapshot archetype contains duplicate component schema index {schemaIndex}.");
+            }
+
+            fileOrderedComponentTypes[componentIndex] = componentType;
+        }
+
+        var rowCount = reader.ReadInt32();
+        if (rowCount < 0 || rowCount > slotVersions.Length)
+        {
+            throw new InvalidDataException(
+                $"Snapshot archetype entity count ({rowCount}) is out of range [0, {slotVersions.Length}].");
+        }
+
+        for (var row = 0; row < rowCount; row++)
+        {
+            var entityId = reader.ReadInt32();
+            ValidateLoadedEntityId(entityId, slotVersions, loadedEntityIds);
+        }
+
+        for (var fileColumnIndex = 0; fileColumnIndex < fileOrderedComponentTypes.Length; fileColumnIndex++)
+        {
+            var byteCount = GetColumnPayloadByteCount(rowCount, fileOrderedComponentTypes[fileColumnIndex]);
+            SkipBytes(reader, byteCount);
+        }
+    }
+
+    private static long GetColumnPayloadByteCount(int rowCount, Type componentType)
+    {
+        return checked((long)rowCount * ComponentSizeCache.GetSize(componentType));
+    }
+
+    private static void ValidateLoadedEntityId(int entityId, int[] slotVersions, HashSet<int> loadedEntityIds)
+    {
+        if ((uint)entityId >= (uint)slotVersions.Length)
+            throw new InvalidDataException(
+                $"Entity id {entityId} out of range [0, {slotVersions.Length}) in snapshot.");
+        if (slotVersions[entityId] <= 0)
+            throw new InvalidDataException(
+                $"Entity id {entityId} has non-positive version {slotVersions[entityId]} in snapshot slot table.");
+        if (!loadedEntityIds.Add(entityId))
+            throw new InvalidDataException($"Duplicate entity id {entityId} in snapshot archetype rows.");
+    }
+
+    private static void ValidateHierarchyPayload(
+        BinaryReader reader,
+        int[] slotVersions,
+        HashSet<int> loadedEntityIds,
+        int hierarchyLinkCount)
+    {
+        var parentByChild = new Dictionary<int, int>();
+        for (var linkIndex = 0; linkIndex < hierarchyLinkCount; linkIndex++)
+        {
+            var childId = reader.ReadInt32();
+            var parentId = reader.ReadInt32();
+            ValidateHierarchyEndpoint("child", childId, slotVersions, loadedEntityIds);
+            ValidateHierarchyEndpoint("parent", parentId, slotVersions, loadedEntityIds);
+
+            if (childId == parentId)
+                throw new InvalidDataException($"Hierarchy relation for entity id {childId} cannot parent an entity to itself.");
+            if (parentByChild.ContainsKey(childId))
+                throw new InvalidDataException($"Hierarchy child id {childId} appears more than once in snapshot.");
+            if (WouldCreateHierarchyCycle(childId, parentId, parentByChild))
+                throw new InvalidDataException($"Hierarchy relation child={childId}, parent={parentId} creates a cycle.");
+
+            parentByChild[childId] = parentId;
+        }
+    }
+
+    private static void ValidateHierarchyEndpoint(
+        string role,
+        int entityId,
+        int[] slotVersions,
+        HashSet<int> loadedEntityIds)
+    {
+        if ((uint)entityId >= (uint)slotVersions.Length)
+            throw new InvalidDataException(
+                $"Hierarchy {role} id {entityId} out of range [0, {slotVersions.Length}) in snapshot.");
+        if (!loadedEntityIds.Contains(entityId))
+            throw new InvalidDataException($"Hierarchy {role} id {entityId} is not a live entity in snapshot.");
+    }
+
+    private static bool WouldCreateHierarchyCycle(int childId, int parentId, Dictionary<int, int> parentByChild)
+    {
+        var current = parentId;
+        while (true)
+        {
+            if (current == childId)
+                return true;
+            if (!parentByChild.TryGetValue(current, out current))
+                return false;
+        }
+    }
+
+    private static void ValidateFreeListPayload(
+        BinaryReader reader,
+        int[] slotVersions,
+        HashSet<int> loadedEntityIds)
+    {
+        var freeIdCount = reader.ReadInt32();
+        if (freeIdCount < 0 || freeIdCount > slotVersions.Length)
+        {
+            throw new InvalidDataException(
+                $"Snapshot free-list count ({freeIdCount}) is out of range [0, {slotVersions.Length}].");
+        }
+
+        var seenFreeIds = new HashSet<int>();
+        for (var i = 0; i < freeIdCount; i++)
+        {
+            var id = reader.ReadInt32();
+            var version = reader.ReadInt32();
+            if ((uint)id >= (uint)slotVersions.Length)
+                throw new InvalidDataException(
+                    $"Corrupt snapshot: free-list entity id {id} is out of range " +
+                    $"(entity slot count: {slotVersions.Length}).");
+            if (!seenFreeIds.Add(id))
+                throw new InvalidDataException($"Duplicate free-list entity id {id} in snapshot.");
+            if (loadedEntityIds.Contains(id))
+                throw new InvalidDataException($"Free-list entity id {id} is also present as a live entity in snapshot.");
+            if (version <= 0)
+                throw new InvalidDataException($"Free-list entity id {id} has non-positive version {version} in snapshot.");
+            if (version != slotVersions[id])
+                throw new InvalidDataException(
+                    $"Free-list entity id {id} version {version} does not match slot version {slotVersions[id]}.");
+        }
+    }
+
+    private static void SkipBytes(BinaryReader reader, long byteCount)
+    {
+        var stream = reader.BaseStream;
+        var remaining = stream.Length - stream.Position;
+        if (byteCount > remaining)
+        {
+            throw new InvalidDataException(
+                $"Snapshot component payload is truncated: expected {byteCount} byte(s), got {remaining}.");
+        }
+
+        stream.Position += byteCount;
+    }
+
     private static void ReadArchetype(
         BinaryReader reader,
         World world,
         ComponentType[] schemaComponentTypes,
-        int[] slotVersions)
+        int[] slotVersions,
+        HashSet<int> loadedEntityIds)
     {
         var componentCount = reader.ReadInt32();
+        if (componentCount < 0 || componentCount > schemaComponentTypes.Length)
+        {
+            throw new InvalidDataException(
+                $"Snapshot archetype component count ({componentCount}) is out of range [0, {schemaComponentTypes.Length}].");
+        }
+
         var fileOrderedComponentTypes = new ComponentType[componentCount];
+        var seenComponentTypes = new HashSet<ComponentType>();
 
         for (var componentIndex = 0; componentIndex < componentCount; componentIndex++)
         {
             var schemaIndex = reader.ReadInt32();
-            fileOrderedComponentTypes[componentIndex] = schemaComponentTypes[schemaIndex];
+            if ((uint)schemaIndex >= (uint)schemaComponentTypes.Length)
+            {
+                throw new InvalidDataException(
+                    $"Snapshot archetype schema index {schemaIndex} is out of range [0, {schemaComponentTypes.Length}).");
+            }
+
+            var componentType = schemaComponentTypes[schemaIndex];
+            if (!seenComponentTypes.Add(componentType))
+            {
+                throw new InvalidDataException(
+                    $"Snapshot archetype contains duplicate component schema index {schemaIndex}.");
+            }
+
+            fileOrderedComponentTypes[componentIndex] = componentType;
         }
 
         var archetype = world.GetOrCreateArchetype(new Signature(fileOrderedComponentTypes));
         var rowCount = reader.ReadInt32();
 
-        if (rowCount < 0)
-            throw new InvalidDataException($"Negative entity count {rowCount} in snapshot.");
+        if (rowCount < 0 || rowCount > slotVersions.Length)
+        {
+            throw new InvalidDataException(
+                $"Snapshot archetype entity count ({rowCount}) is out of range [0, {slotVersions.Length}].");
+        }
 
         var entities = new Entity[rowCount];
 
         for (var row = 0; row < rowCount; row++)
         {
             var entityId = reader.ReadInt32();
-            if ((uint)entityId >= (uint)slotVersions.Length)
-                throw new InvalidDataException(
-                    $"Entity id {entityId} out of range [0, {slotVersions.Length}) in snapshot.");
+            ValidateLoadedEntityId(entityId, slotVersions, loadedEntityIds);
             entities[row] = new Entity(entityId, slotVersions[entityId]);
         }
 
@@ -558,53 +811,27 @@ public static class WorldSnapshot
         archetype.ReadColumnFrom(reader, columnIndex, count);
     }
 
-    private static string GetSchemaName(Type componentType)
-    {
-        return componentType.AssemblyQualifiedName ?? componentType.FullName ?? componentType.Name;
-    }
-
     private static void EnsureSnapshotSupported(Type componentType)
     {
-        if (TryFindManagedMemberType(componentType, out var managedType))
+        if (componentType.ContainsGenericParameters || componentType.IsByRefLike)
         {
             throw new NotSupportedException(
-                $"Component {componentType.FullName ?? componentType.Name} is not supported by WorldSnapshot because it contains managed member type {managedType.Name.ToLowerInvariant()}.");
+                $"Component {ComponentSchemaCodec.GetDisplayName(componentType)} is not supported by WorldSnapshot because it does not satisfy the unmanaged component constraint.");
+        }
+
+        if (ComponentSchemaCodec.TryFindManagedMemberType(componentType, out var managedType))
+        {
+            throw new NotSupportedException(
+                $"Component {ComponentSchemaCodec.GetDisplayName(componentType)} is not supported by WorldSnapshot because it contains managed member type {ComponentSchemaCodec.GetDisplayName(managedType)}.");
+        }
+
+        if (!ComponentSchemaCodec.SatisfiesUnmanagedConstraint(componentType))
+        {
+            throw new NotSupportedException(
+                $"Component {ComponentSchemaCodec.GetDisplayName(componentType)} is not supported by WorldSnapshot because it does not satisfy the unmanaged component constraint.");
         }
 
         _ = GetColumnCodec(componentType);
-    }
-
-    private static bool TryFindManagedMemberType(Type type, out Type managedType)
-    {
-        if (!type.IsValueType)
-        {
-            managedType = type;
-            return true;
-        }
-
-        if (type.IsPrimitive || type.IsEnum || type.IsPointer)
-        {
-            managedType = null!;
-            return false;
-        }
-
-        foreach (var field in type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
-        {
-            var fieldType = field.FieldType;
-            if (!fieldType.IsValueType)
-            {
-                managedType = fieldType;
-                return true;
-            }
-
-            if (TryFindManagedMemberType(fieldType, out managedType))
-            {
-                return true;
-            }
-        }
-
-        managedType = null!;
-        return false;
     }
 
     private delegate void ColumnWriter(BinaryWriter writer, Archetype archetype, int columnIndex, ReadOnlySpan<int> sortedRows);

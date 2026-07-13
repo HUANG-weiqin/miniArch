@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 健壮性审阅发现汇总——已确认的设计债、已验证的安全猜想、已排除的非 bug 猜想
-updated: 2026-07-12
+updated: 2026-07-13
 ---
 
 > **M2 re-apply (2026-07-09)**: Epoch guard added — `World.ReservedReleaseEpoch` + `CommandStreamCore._submitEpoch` fast-path avoids O(N) pending-slot scan when no release has occurred since last sync. HeroComing.Perf: Movement 1902.1, Attack 1125.6, memory stable. Baseline gate (≥1642/≥997) passes.
@@ -65,6 +65,22 @@ updated: 2026-07-12
 - **修复方案**: 在最后分支增加 `if (id < 512) return TrySetBitInLane(ref b7, id - 448); return false;`。将 `TrySetBit` 改为 `internal static` 以便直接测试。
 - **回归测试**: `TrySetBit_rejects_ids_512_and_above`、`TrySetBit_accepts_ids_448_to_511`、`TrySetBit_detects_already_set_at_boundaries`、`MaskBuilder_setting_high_id_does_not_alias_into_b7`
 - **验证**: 全量 Release 测试通过，HeroComing.Perf: Movement 1870.2 r/s, Attack 1172.9 r/s，内存稳定
+
+### #5: ComponentSchema Export/Import 新接口边界审阅（P2）✅ 已修复
+
+- **模式**: 序列化 schema 边界防御 / 概念唯一 / public boundary validation
+- **位置**: `ComponentSchema.cs` `Import` / `GetSchemaName`，`ComponentRegistry.cs` `ComputeFingerprintBytes`，`WorldSnapshot.cs` `GetSchemaName`
+- **缺失的安全条件**:
+  1. `Fingerprint()` 使用 `Type.FullName`，而 `Export()` / `WorldSnapshot` 使用 `AssemblyQualifiedName`，同名不同程序集/版本可能得到相同握手 hash。
+  2. `GetSchemaName` 在 `ComponentSchema` 与 `WorldSnapshot` 各维护一份，违反“概念唯一”，后续格式漂移不会被编译器发现。
+  3. `Import` 只按字符串去重，未按解析后的 `Type` 去重；不同别名可解析为同一类型。
+  4. `Import` 未验证解析出的类型是否符合 miniArch 组件约束（public 组件 API 均为 `where T : unmanaged`），恶意 schema 可把 `string` / class / managed-field struct 注册进全局 `ComponentRegistry.Shared`。
+  5. `Import` 使用 `BinaryReader.ReadString()`，没有 schema name 字节长度上限；不可信 blob 可触发大分配或非 `InvalidDataException` 的异常路径。
+- **修复方案**: 新增 `ComponentSchemaCodec` 作为 internal 单一事实来源：统一 schema name（AQN）、bounded UTF-8 string reader/writer、resolved `Type` 去重、`unmanaged` 组件约束验证。`ComponentSchema`、`WorldSnapshot`、`ComponentRegistry.GetFingerprint` 全部改用该 codec。`Import` 仍保持“全量验证后统一注册”。
+- **外部入口同步硬化**: `WorldSnapshot.Load` 同步拒绝非组件 schema type、重复 schema name / resolved type、超长 schema name、v3 trailing bytes、非法 chunk capacity、非法 free-list count/id/version/duplicate/live-overlap、非法 hierarchy endpoint/duplicate child/cycle、非法 archetype component count/schema index/重复 component、非法 row count/重复 entity id/非正 live version。
+- **事务边界**: `WorldSnapshot.Load` 先 dry-validate 完整 payload（archetype payload 长度、hierarchy、free-list、trailing bytes）再调用 `ComponentRegistry.Shared.GetOrCreate`，避免后续 payload 无效时污染全局 registry；截断 body 统一包装为 `InvalidDataException`。
+- **回归测试**: `Fingerprint_differs_for_same_full_name_in_different_assemblies`、`Schema_import_rejects_class_type`、`Schema_import_rejects_managed_field_struct`、`Schema_import_rejects_duplicate_resolved_type`、`Schema_import_rejects_overlong_type_name_without_large_allocation`、`Snapshot_load_rejects_*` hardening 测试组、`Snapshot_load_rejects_truncated_v3_body_as_invalid_data`、`Snapshot_load_does_not_register_schema_type_when_later_payload_is_invalid`。
+- **验证**: 2026-07-13 `dotnet test -c Release --no-restore`：MiniArch.Tests 1013/1013 + HeroPipeline.Tests 5/5 PASS；`dotnet run -c Release --project tools/perf/HeroComing.Perf --check-baseline`：Movement 1902.3 / Attack 1186.5，Memory OK。
 
 ---
 

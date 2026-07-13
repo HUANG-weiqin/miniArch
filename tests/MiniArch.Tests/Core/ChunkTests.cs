@@ -203,7 +203,7 @@ public sealed class ChunkTests
     [Fact]
     public void Flat_storage_rejects_managed_reference_components()
     {
-        var registry = ComponentRegistry.Shared;
+        var registry = new ComponentRegistry();
         var label = registry.GetOrCreate<Label>();
         var signature = new Signature(label);
 

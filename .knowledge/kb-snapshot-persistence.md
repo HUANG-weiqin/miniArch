@@ -2,7 +2,7 @@
 title: Snapshot Persistence
 module: MiniArch.Core Snapshot
 description: Full-world snapshot save/load design for unmanaged components (WorldSnapshot.Save/Load, Clone, CaptureState/RestoreState), plus Checksum double mode
-updated: 2026-07-09
+updated: 2026-07-13
 ---
 # Snapshot Persistence
 
@@ -101,6 +101,19 @@ v3 格式仍可读且跳过 CRC 校验。
 格式结构：`[magic:4][version=4:4][body:...][crc32:4]`。body 通过 `MemoryStream` 缓冲后再算 CRC，
 避免直接写入输出流后无法追加尾部。对低频 Save 操作可接受的单次分配。
 
+### Schema codec 与外部读入防御（2026-07-13）
+
+`ComponentSchema.Export/Import` 与 `WorldSnapshot.Save/Load` 共享 `ComponentSchemaCodec`：
+
+- schema type name 单一事实来源：`AssemblyQualifiedName ?? FullName ?? Name`。
+- `Fingerprint()` 也使用同一 schema name，避免同名不同程序集/版本的握手 hash 碰撞。
+- schema name 读取使用有界 UTF-8 reader（当前上限 16KB），不再裸用 `BinaryReader.ReadString()`。
+- 外部读入 schema 时必须满足 miniArch 组件约束：resolved `Type` 唯一、无 open generic、value type、非 by-ref-like、无托管字段、满足 `unmanaged` generic constraint。
+- `WorldSnapshot.Load` 额外拒绝：重复 schema、截断 body、v3 trailing bytes、非法 chunk capacity、非法 free-list count/id/version/duplicate/live-overlap、非法 hierarchy endpoint/duplicate child/cycle、非法 archetype component count/schema index/重复 component、非法 row count/重复 entity id/非正 live version。
+- `WorldSnapshot.Load` 的 schema 解析与 payload 构建分两阶段：先 dry-validate 完整 body，再注册 schema type / 构建 `World`，避免后续 payload 无效时污染 `ComponentRegistry.Shared`。
+
+结论：`Import` / `Load` 是不可信输入边界，错误必须统一 fail-fast 为 `InvalidDataException`，且在完成全量验证前不得污染 `ComponentRegistry.Shared`。
+
 ## 决策
 
 - 不把运行时 `Chunk._data` 当作持久化格式——snapshot 按逻辑列写入
@@ -126,6 +139,7 @@ v3 格式仍可读且跳过 CRC 校验。
 - 读档复用 `GetWritableChunk` 会挤压重排快照 chunk 边界
 - `struct` 不一定是 `unmanaged`
 - 跨版本类型名变化直接失配（当前不压缩、无校验和）
+- schema/type 表是外部输入边界；不要绕过 `ComponentSchemaCodec` 直接 `ReadString()` / `Type.GetType(..., throwOnError: true)`。
 - internal 重建 API 分布在 World 的多个 partial 文件中，修改时需确认编译范围
 - **`CaptureState` 后使用 `CommandStream.Record` 再 `RestoreState` 是安全的**：`Clear()` 会重置 `_deferredSeq = 0`（见 `CommandStreamCore.cs:2074`），`RestoreState` 恢复 World 的 entity allocator 状态。实测验证过：capture → stream record+snapshot+replay → restore → 重复同一序列 → checksum 一致。坑点不在 `_deferredSeq`，而在以下场景：
   - **`RestoreState` 后如果继续录制而不 `Clear`**：`_deferredSeq` 不会自动回退（它不在 World 里）。但在正常 GGPO 流程中，`RestoreState` 后应该是重新录制修正后的输入，此时先 `Clear()` 再 `Record` 即可。

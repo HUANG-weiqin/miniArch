@@ -1,5 +1,7 @@
 using MiniArch;
 using MiniArch.Core;
+using System.Reflection;
+using System.Reflection.Emit;
 
 namespace MiniArchTests.Core;
 
@@ -92,5 +94,42 @@ public sealed class ComponentSchemaTests
         var fp2 = reg.GetFingerprint();
 
         Assert.NotEqual(fp1, fp2);
+    }
+
+    [Fact]
+    public void Fingerprint_differs_for_same_full_name_in_different_assemblies()
+    {
+        var leftType = DefineDynamicValueType("MiniArch.SchemaFingerprint.Left");
+        var rightType = DefineDynamicValueType("MiniArch.SchemaFingerprint.Right");
+
+        Assert.Equal(leftType.FullName, rightType.FullName);
+        Assert.NotEqual(leftType.AssemblyQualifiedName, rightType.AssemblyQualifiedName);
+
+        var left = new ComponentRegistry();
+        left.GetOrCreate(leftType);
+
+        var right = new ComponentRegistry();
+        right.GetOrCreate(rightType);
+
+        Assert.NotEqual(left.GetFingerprint(), right.GetFingerprint());
+    }
+
+    private static Type DefineDynamicValueType(string assemblyName)
+    {
+        var assemblyBuilder = AssemblyBuilder.DefineDynamicAssembly(
+            new AssemblyName(assemblyName),
+            AssemblyBuilderAccess.Run);
+        var moduleBuilder = assemblyBuilder.DefineDynamicModule(assemblyName);
+        var typeBuilder = moduleBuilder.DefineType(
+            "Game.Position",
+            TypeAttributes.Public |
+            TypeAttributes.Sealed |
+            TypeAttributes.SequentialLayout |
+            TypeAttributes.AnsiClass |
+            TypeAttributes.BeforeFieldInit,
+            typeof(ValueType));
+
+        typeBuilder.DefineField("X", typeof(int), FieldAttributes.Public);
+        return typeBuilder.CreateTypeInfo()!.AsType();
     }
 }

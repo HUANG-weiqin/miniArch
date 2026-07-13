@@ -13,6 +13,8 @@ public sealed class WorldSnapshotTests
     private readonly record struct Position(int X, int Y);
     private readonly record struct Velocity(int X, int Y);
     private readonly record struct Health(int Value);
+    private readonly record struct ManagedReferenceComponent(string Name);
+    private readonly record struct PartialMutationComponent(int Value);
 
     [Fact]
     public void Unmanaged_world_can_round_trip_preserving_entity_metadata_values_and_archetype_membership()
@@ -1359,6 +1361,325 @@ public sealed class WorldSnapshotTests
     public void Schema_import_null_throws_argument_null()
     {
         _ = Assert.Throws<ArgumentNullException>(() => ComponentSchema.Import(null!));
+    }
+
+    [Fact]
+    public void Schema_import_rejects_class_type()
+    {
+        var data = BuildComponentSchemaBlob(typeof(string).AssemblyQualifiedName!);
+
+        _ = Assert.Throws<InvalidDataException>(() => ComponentSchema.Import(data));
+    }
+
+    [Fact]
+    public void Schema_import_rejects_managed_field_struct()
+    {
+        var data = BuildComponentSchemaBlob(typeof(ManagedReferenceComponent).AssemblyQualifiedName!);
+
+        _ = Assert.Throws<InvalidDataException>(() => ComponentSchema.Import(data));
+    }
+
+    [Fact]
+    public void Schema_import_rejects_duplicate_resolved_type()
+    {
+        var data = BuildComponentSchemaBlob(
+            typeof(int).FullName!,
+            typeof(int).AssemblyQualifiedName!);
+
+        _ = Assert.Throws<InvalidDataException>(() => ComponentSchema.Import(data));
+    }
+
+    [Fact]
+    public void Schema_import_rejects_overlong_type_name_without_large_allocation()
+    {
+        var data = BuildComponentSchemaBlobWithRawStringByteLength(1024 * 1024);
+
+        var ex = Assert.Throws<InvalidDataException>(() => ComponentSchema.Import(data));
+        Assert.Contains("exceeds", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Snapshot_load_rejects_class_schema_type_as_invalid_data()
+    {
+        var data = BuildV3SnapshotWithSchemaNames(typeof(string).AssemblyQualifiedName!);
+
+        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+    }
+
+    [Fact]
+    public void Snapshot_load_rejects_managed_field_schema_type_as_invalid_data()
+    {
+        var data = BuildV3SnapshotWithSchemaNames(typeof(ManagedReferenceComponent).AssemblyQualifiedName!);
+
+        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+    }
+
+    [Fact]
+    public void Snapshot_load_rejects_duplicate_resolved_schema_type()
+    {
+        var data = BuildV3SnapshotWithSchemaNames(
+            typeof(int).FullName!,
+            typeof(int).AssemblyQualifiedName!);
+
+        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+    }
+
+    [Fact]
+    public void Snapshot_load_rejects_overlong_schema_name_without_large_allocation()
+    {
+        var data = BuildV3SnapshotWithRawSchemaStringByteLength(1024 * 1024);
+
+        var ex = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+        Assert.Contains("exceeds", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Snapshot_load_rejects_v3_trailing_bytes()
+    {
+        var data = BuildV3SnapshotWithSchemaNames();
+        var padded = data.Concat(new byte[] { 1, 2, 3 }).ToArray();
+
+        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(padded)));
+    }
+
+    [Fact]
+    public void Snapshot_load_rejects_non_positive_chunk_capacity_as_invalid_data()
+    {
+        var data = BuildV3Snapshot(chunkCapacity: 0);
+
+        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+    }
+
+    [Fact]
+    public void Snapshot_load_rejects_negative_free_list_count()
+    {
+        var data = BuildV3SnapshotWithRawFreeList(writer => writer.Write(-1));
+
+        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+    }
+
+    [Fact]
+    public void Snapshot_load_rejects_free_list_count_above_entity_slots()
+    {
+        var data = BuildV3SnapshotWithRawFreeList(writer => writer.Write(5));
+
+        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+    }
+
+    [Fact]
+    public void Snapshot_load_rejects_free_list_id_out_of_range_as_invalid_data()
+    {
+        var data = BuildV3SnapshotWithRawFreeList(writer =>
+        {
+            writer.Write(1);
+            writer.Write(99);
+            writer.Write(1);
+        });
+
+        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+    }
+
+    [Fact]
+    public void Snapshot_load_rejects_negative_archetype_component_count()
+    {
+        var data = BuildV3SnapshotWithRawArchetype(writer => writer.Write(-1));
+
+        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+    }
+
+    [Fact]
+    public void Snapshot_load_rejects_archetype_schema_index_out_of_range()
+    {
+        var data = BuildV3SnapshotWithRawArchetype(
+            writer =>
+            {
+                writer.Write(1);
+                writer.Write(99);
+            },
+            typeof(int).AssemblyQualifiedName!);
+
+        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+    }
+
+    [Fact]
+    public void Snapshot_load_rejects_duplicate_archetype_component_type()
+    {
+        var data = BuildV3SnapshotWithRawArchetype(
+            writer =>
+            {
+                writer.Write(2);
+                writer.Write(0);
+                writer.Write(0);
+            },
+            typeof(int).AssemblyQualifiedName!);
+
+        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+    }
+
+    [Fact]
+    public void Snapshot_load_rejects_archetype_row_count_above_entity_slots()
+    {
+        var data = BuildV3SnapshotWithRawArchetype(writer =>
+        {
+            writer.Write(0); // component count
+            writer.Write(5); // row count > entitySlotCount(4)
+        });
+
+        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+    }
+
+    [Fact]
+    public void Snapshot_load_rejects_duplicate_entity_id_in_archetype_rows()
+    {
+        var data = BuildV3SnapshotWithRawArchetype(writer =>
+        {
+            writer.Write(0); // component count
+            writer.Write(2); // row count
+            writer.Write(1);
+            writer.Write(1);
+        });
+
+        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+    }
+
+    [Fact]
+    public void Snapshot_load_rejects_truncated_v3_body_as_invalid_data()
+    {
+        var data = new byte[]
+        {
+            0x43, 0x52, 0x41, 0x4D, // magic 0x4D415243 little-endian
+            0x03, 0x00, 0x00, 0x00, // v3
+            0x10, 0x00, 0x00, 0x00, // chunkCapacity
+        };
+
+        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+    }
+
+    [Fact]
+    public void Snapshot_load_does_not_register_schema_type_when_later_payload_is_invalid()
+    {
+        var schemaType = typeof(PartialMutationComponent);
+        Assert.DoesNotContain(schemaType, ComponentRegistry.Shared.GetRegisteredTypes());
+
+        var data = BuildV3SnapshotWithRawArchetype(
+            writer =>
+            {
+                writer.Write(0); // component count
+                writer.Write(5); // invalid row count > entitySlotCount(4)
+            },
+            schemaType.AssemblyQualifiedName!);
+
+        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+
+        Assert.DoesNotContain(schemaType, ComponentRegistry.Shared.GetRegisteredTypes());
+    }
+
+    private static byte[] BuildComponentSchemaBlob(params string[] schemaNames)
+    {
+        using var ms = new MemoryStream();
+        using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
+        writer.Write(0x4D435343);
+        writer.Write(1);
+        writer.Write(schemaNames.Length);
+        foreach (var name in schemaNames)
+            ComponentSchemaCodec.WriteSchemaName(writer, name);
+        writer.Flush();
+        return ms.ToArray();
+    }
+
+    private static byte[] BuildComponentSchemaBlobWithRawStringByteLength(int byteLength)
+    {
+        using var ms = new MemoryStream();
+        using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
+        writer.Write(0x4D435343);
+        writer.Write(1);
+        writer.Write(1);
+        writer.Flush();
+        Write7BitEncodedInt(ms, byteLength);
+        return ms.ToArray();
+    }
+
+    private static byte[] BuildV3SnapshotWithSchemaNames(params string[] schemaNames)
+    {
+        using var ms = new MemoryStream();
+        using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
+        WriteV3SnapshotHeader(writer, schemaNames.Length, archetypeCount: 0);
+        foreach (var name in schemaNames)
+            ComponentSchemaCodec.WriteSchemaName(writer, name);
+        writer.Write(0); // free list length
+        writer.Flush();
+        return ms.ToArray();
+    }
+
+    private static byte[] BuildV3SnapshotWithRawSchemaStringByteLength(int byteLength)
+    {
+        using var ms = new MemoryStream();
+        using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
+        WriteV3SnapshotHeader(writer, schemaCount: 1, archetypeCount: 0);
+        writer.Flush();
+        Write7BitEncodedInt(ms, byteLength);
+        return ms.ToArray();
+    }
+
+    private static byte[] BuildV3Snapshot(int chunkCapacity = 16)
+    {
+        using var ms = new MemoryStream();
+        using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
+        WriteV3SnapshotHeader(writer, schemaCount: 0, archetypeCount: 0, chunkCapacity: chunkCapacity);
+        writer.Write(0); // free list length
+        writer.Flush();
+        return ms.ToArray();
+    }
+
+    private static byte[] BuildV3SnapshotWithRawFreeList(Action<BinaryWriter> writeFreeList)
+    {
+        using var ms = new MemoryStream();
+        using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
+        WriteV3SnapshotHeader(writer, schemaCount: 0, archetypeCount: 0);
+        writeFreeList(writer);
+        writer.Flush();
+        return ms.ToArray();
+    }
+
+    private static byte[] BuildV3SnapshotWithRawArchetype(Action<BinaryWriter> writeArchetype, params string[] schemaNames)
+    {
+        using var ms = new MemoryStream();
+        using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
+        WriteV3SnapshotHeader(writer, schemaNames.Length, archetypeCount: 1);
+        foreach (var name in schemaNames)
+            ComponentSchemaCodec.WriteSchemaName(writer, name);
+        writeArchetype(writer);
+        writer.Write(0); // free list length
+        writer.Flush();
+        return ms.ToArray();
+    }
+
+    private static void WriteV3SnapshotHeader(
+        BinaryWriter writer,
+        int schemaCount,
+        int archetypeCount,
+        int chunkCapacity = 16)
+    {
+        writer.Write(0x4D415243); // magic
+        writer.Write(3);          // v3 (no CRC)
+        writer.Write(chunkCapacity);
+        writer.Write(4);          // entitySlotCount
+        writer.Write(schemaCount);
+        writer.Write(archetypeCount);
+        writer.Write(0);          // hierarchyLinkCount
+        for (var i = 0; i < 4; i++) writer.Write(0); // slot versions
+    }
+
+    private static void Write7BitEncodedInt(Stream stream, int value)
+    {
+        var remaining = (uint)value;
+        while (remaining >= 0x80)
+        {
+            stream.WriteByte((byte)(remaining | 0x80));
+            remaining >>= 7;
+        }
+
+        stream.WriteByte((byte)remaining);
     }
 
     private readonly struct NoOpFeeder : Archetype.ISpanFeeder

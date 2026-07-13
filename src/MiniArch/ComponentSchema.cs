@@ -41,10 +41,10 @@ namespace MiniArch;
 ///     assembly version or type layout, type resolution may fail.
 ///   </description></item>
 ///   <item><description>
-///     <see cref="Import"/> does <b>not</b> validate that types are serializable
-///     (unmanaged structs). The returned <c>Type[]</c> is a pure schema index
-///     mapping; serialization constraints are enforced by <c>WorldSnapshot</c>
-///     at save/load time.
+///     <see cref="Import"/> validates the same unmanaged component type boundary
+///     used by MiniArch's public component APIs. The returned <c>Type[]</c> is a
+///     pure schema index mapping; binary payload compatibility is still enforced
+///     by <c>WorldSnapshot</c> at save/load time.
 ///   </description></item>
 /// </list>
 /// </para>
@@ -133,7 +133,7 @@ public static class ComponentSchema
         writer.Write(FormatVersion);
         writer.Write(types.Length);
         foreach (var type in types)
-            writer.Write(GetSchemaName(type));
+            ComponentSchemaCodec.WriteSchemaName(writer, type);
         writer.Flush();
         return ms.ToArray();
     }
@@ -189,10 +189,16 @@ public static class ComponentSchema
     ///     Duplicate type name → <see cref="InvalidDataException"/>.
     ///   </description></item>
     ///   <item><description>
-    ///     Type contains generic parameters → <see cref="InvalidDataException"/>.
+    ///     Duplicate resolved type → <see cref="InvalidDataException"/>.
     ///   </description></item>
     ///   <item><description>
     ///     Type name cannot be resolved → <see cref="InvalidDataException"/>.
+    ///   </description></item>
+    ///   <item><description>
+    ///     Type is not an unmanaged component type → <see cref="InvalidDataException"/>.
+    ///   </description></item>
+    ///   <item><description>
+    ///     Schema name length is over the bounded UTF-8 limit → <see cref="InvalidDataException"/>.
     ///   </description></item>
     ///   <item><description>
     ///     Truncated data or unexpected trailing bytes → <see cref="InvalidDataException"/>.
@@ -208,7 +214,7 @@ public static class ComponentSchema
     /// <exception cref="ArgumentNullException"><paramref name="data"/> is null.</exception>
     /// <exception cref="InvalidDataException">
     /// The schema blob is malformed, truncated, has an unsupported version,
-    /// or contains unresolvable types.
+    /// or contains unresolvable/non-component types.
     /// </exception>
     public static Type[] Import(byte[] data)
     {
@@ -242,11 +248,12 @@ public static class ComponentSchema
             }
 
             var types = new Type[count];
-            var seenNames = new HashSet<string>();
+            var seenNames = new HashSet<string>(StringComparer.Ordinal);
+            var seenTypes = new HashSet<Type>();
 
             for (var i = 0; i < count; i++)
             {
-                var name = reader.ReadString();
+                var name = ComponentSchemaCodec.ReadSchemaName(reader, nameof(ComponentSchema));
 
                 // Reject duplicate type names
                 if (!seenNames.Add(name))
@@ -255,22 +262,16 @@ public static class ComponentSchema
                         $"Duplicate type name in ComponentSchema: '{name}'.");
                 }
 
-                // Resolve via Type.GetType (no throw — we provide the error message)
-                var type = Type.GetType(name, throwOnError: false);
-                if (type is null)
+                var type = ComponentSchemaCodec.ResolveSchemaType(name, nameof(ComponentSchema));
+
+                if (!seenTypes.Add(type))
                 {
                     throw new InvalidDataException(
-                        $"ComponentSchema: Could not resolve type '{name}'. " +
-                        $"Ensure the defining assembly is loaded and the name is correct.");
+                        $"Duplicate component type in ComponentSchema after resolution: " +
+                        $"'{name}' resolves to '{ComponentSchemaCodec.GetDisplayName(type)}'.");
                 }
 
-                // Reject generic parameter placeholders (can never be components)
-                if (type.ContainsGenericParameters)
-                {
-                    throw new InvalidDataException(
-                        $"ComponentSchema: Type '{name}' contains open generic parameters " +
-                        $"and cannot be used as a component type.");
-                }
+                ComponentSchemaCodec.EnsureImportableComponentType(type, name, nameof(ComponentSchema));
 
                 types[i] = type;
             }
@@ -296,14 +297,5 @@ public static class ComponentSchema
             throw new InvalidDataException(
                 "ComponentSchema data is truncated or malformed.", ex);
         }
-    }
-
-    /// <summary>
-    /// Returns the serializable name for a component type.
-    /// (Keep in sync with WorldSnapshot.GetSchemaName — identical logic.)
-    /// </summary>
-    private static string GetSchemaName(Type componentType)
-    {
-        return componentType.AssemblyQualifiedName ?? componentType.FullName ?? componentType.Name;
     }
 }
