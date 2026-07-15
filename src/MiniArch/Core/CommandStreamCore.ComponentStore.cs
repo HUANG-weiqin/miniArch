@@ -162,7 +162,7 @@ public abstract partial class CommandStreamCore
             World world, int[] generations, byte[] presence, int epoch, bool cacheSetRows);
         public abstract void ApplyToWorld(World world);
         public abstract void EmitToDelta(FrameDelta delta);
-        public abstract void PruneStaleCommands(World world);
+        public abstract bool PruneStaleCommands(World world);
         public abstract void Clear();
         public abstract void ReplacePlaceholders(Entity[] resolveMap);
         public abstract void SealParallelWrites();
@@ -379,7 +379,7 @@ public abstract partial class CommandStreamCore
             }
         }
 
-        public override void PruneStaleCommands(World world)
+        public override bool PruneStaleCommands(World world)
         {
             var write = 0;
             var allSetKind = true;
@@ -401,6 +401,7 @@ public abstract partial class CommandStreamCore
 
             _count = write;
             _allSetKind = allSetKind;
+            return write != 0;
         }
 
         // ── Private helpers ──

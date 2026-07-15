@@ -2462,7 +2462,7 @@ public sealed class CommandStreamTests
         stream.Set(staleSource, new Velocity(9, 9));
 
         var delta = stream.Snapshot();
-        stream.Submit();
+        Assert.False(stream.Submit());
         new CommandStream(replica).Replay(FrameDelta.FromWire(delta.AsSpan()));
 
         Assert.True(source.TryGet(recycledSource, out Velocity srcVelocity));
@@ -2515,7 +2515,7 @@ public sealed class CommandStreamTests
         stream.Remove<Health>(staleSource);
 
         var delta = stream.Snapshot();
-        stream.Submit();
+        Assert.False(stream.Submit());
         new CommandStream(replica).Replay(FrameDelta.FromWire(delta.AsSpan()));
 
         Assert.True(source.TryGet(recycledSource, out Velocity srcVelocity));
@@ -2555,7 +2555,7 @@ public sealed class CommandStreamTests
         Assert.NotEqual(replicaVictim.Version, replicaRecycled.Version);
 
         var delta = stream.Snapshot();
-        stream.Submit();
+        Assert.False(stream.Submit());
         new CommandStream(replica).Replay(FrameDelta.FromWire(delta.AsSpan()));
 
         Assert.True(source.TryGet(sourceRecycled, out Position srcPosition));

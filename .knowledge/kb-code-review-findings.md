@@ -43,8 +43,9 @@ CommandStream 的 pending/component/hierarchy/async preflight 已修复已知“
 | `BUG_async_submit_preflights_invalid_component_before_worker_handoff` | async API 在契约失败前 swap/start worker | active state 上先 preflight，后 handoff；立即登记 frozen/task ownership |
 | `BUG_async_into_preflights_invalid_component_before_worker_handoff` | preflight 失败仍可能改写复用 target | preflight 通过前不启动 target writer |
 | `BUG_debug_structural_scope_recovers_after_exception` | Debug `BeginStructChange/EndStructChange` 异常后计数残留 | Debug 配对使用 `try/finally`；Release 业务路径不增加异常区 |
+| `BUG_stale_existing_entity_set_is_skipped_so_submit_matches_replay` | liveness 后移后 stale-only store 已被 prune，但旧 dirty flag 仍让 `Submit()` 错报已执行工作 | `PruneStaleCommands` 同步返回剩余命令状态；single/parallel、record 时 stale/consume 前 stale 均断言 `Submit()==false` |
 
-`Existing_entity_component_liveness_is_decided_when_the_stream_is_consumed` 是 consume-time 契约测试，不是旧实现 bug 的 witness：record 时不读 World，consume 时按完整 `(Id, Version)` 统一 prune；stale/ID-reuse 安全由既有 `BUG_stale_*` 测试守卫。
+`Existing_entity_component_liveness_is_decided_when_the_stream_is_consumed` 是 consume-time 契约测试，不是旧实现 bug 的 witness：record 时不读 World，consume 时按完整 `(Id, Version)` 统一 prune；stale/ID-reuse 安全与 stale-only 返回值由 `BUG_stale_*`、delayed stale 和 parallel stale 测试共同守卫。
 
 ### 仍在当前代码中生效的历史修复
 

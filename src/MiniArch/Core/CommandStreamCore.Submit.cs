@@ -521,8 +521,15 @@ public abstract partial class CommandStreamCore
 
     private void PruneStaleComponentCommands()
     {
+        var hasStoreCommands = false;
         foreach (var store in _frozen.Stores)
-            store?.PruneStaleCommands(_world);
+        {
+            if (store is null)
+                continue;
+
+            hasStoreCommands |= store.PruneStaleCommands(_world);
+        }
+        _hasStoreCommands = hasStoreCommands;
     }
 
     /// <summary>
