@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream/ParallelCommandStream typed-store append-only recorder, compatible with FrameDelta. The per-entity deduplicating CommandBuffer was removed (YAGNI) — CommandStream is now the sole recorder.
-updated: 2026-07-12
+updated: 2026-07-15
 ---
 # Command Stream Runtime
 
@@ -12,7 +12,7 @@ updated: 2026-07-12
 - **两个公开类型**：
   - `CommandStream`（单线程默认）：所有 mutator 直接调用，无锁、无非虚拟化开销
   - `ParallelCommandStream`：所有 mutator 在 `_storeCreateLock` 内，可多线程并发录制
-- 共享层是 `public abstract class CommandStreamCore`，承载所有 emit/submit/snapshot/replay/async/ComponentStore/FrozenState 等共享逻辑
+- 共享层是 `public abstract partial class CommandStreamCore`；record/clone/clear 主干与 hierarchy、pending、component-store、submit/async 分区共同组成同一个运行时类型
 - append-only：`Add/Set/Remove` 按组件类型分片记录 typed value，不做录制期去重；同帧冲突命令的净效果由调用方负责
 - `Submit()` 消费当前批次后自动清空，允许下一帧复用同一实例
 - **帧同步端到端指南** → 见 `kb-lockstep-playbook.md`
@@ -25,7 +25,7 @@ updated: 2026-07-12
 ## 架构
 
 - 核心组成：
-  - `src/MiniArch/Core/CommandStreamCore.cs`：`public abstract` base，所有共享字段、emit/submit/snapshot/replay 逻辑、ComponentStore/FrozenState/HierarchyIntent 等嵌套类型
+  - `src/MiniArch/Core/CommandStreamCore.cs` + `CommandStreamCore.{Hierarchy,Pending,ComponentStore,Submit}.cs`：同一个 `public abstract partial` base，按职责拆分共享状态与消费逻辑；拆分前后关键 canonical IL 与 JIT 内联边界相同
   - `src/MiniArch/Core/CommandStream.cs`：`public sealed`，单线程默认。9 个 mutator 是子类自己的 `public` 非虚拟方法
   - `src/MiniArch/Core/ParallelCommandStream.cs`：`public sealed`，并行实现。9 个 mutator 是子类自己的 `public` 非虚拟方法，按需用 lock 包裹共享 helper
   - `src/MiniArch/Core/FrameDelta.cs`：帧快照 IR，可保留并重放到同步 world
@@ -44,6 +44,7 @@ updated: 2026-07-12
 - `Create()` 在 `DeferredEntities=false` 时使用 `World.ReserveDeferredEntityUnsafe()` 分配 real id；`DeferredEntities=true` 时返回 placeholder，不碰 World id allocator。
 - 组件数据按 typed value 记录，`Submit()` 直接写 typed value，`Snapshot()` 再转成 `FrameDelta` 所需 raw bytes。
 - component `Add/Set` 按类型批处理，不承诺与 `Remove/Destroy` 的严格全局追加顺序；同帧冲突命令的净效果由调用方负责。
+- **Existing component command 的存活契约是 consume-time**：`Add/Set/Remove` 录制 existing handle 时不读取 World；`Submit`、`Snapshot`、`SnapshotInto` 与两个 async consume 入口统一在 `PrepareStores()` 中按完整 `Entity(Id, Version)` prune stale command。pending/foreign placeholder 仍在 record 阶段用本地 `IsPlaceholder` 分流。
 - **Pending entity 最终状态契约**：通过 `Create()`/`Clone()` 创建的 pending entity，其 batch 内所有 `Add`/`Set`/`Remove` 操作在 `Submit()`/`Snapshot()`/`Replay()` 前**折叠为最终 materialized state**。这意味着中间操作不会产生独立的 `ChangeWatch.Diff` value change 或 `TransitionWatch.Diff` membership transition——实体被直接以最终组件签名的形态创建。具体表现：
   - `ChangeWatch.Diff` 在 Submit/Snapshot/Replay 后不包含 pending entity 的中间 Set 快照（Watch 不注册 world；但 `Diff` 扫描时当前值是其最终 materialized 状态，与 baseline 对比的差异只反映最终值与 snapshot 的差异）。
   - `TransitionWatch.Diff` 只反映实体的最终 filter 匹配状态，不反映 batch 内的中间结构变化（如 Add 后马上 Remove → 实体从未进入 filter）。
@@ -186,7 +187,7 @@ HeroPipeline 回归测试涨幅：
   - CommandStream 的 `ComponentStore<T>.ApplyToWorld` 与 `.EmitToDelta` 都按相同 `_kinds` 数组顺序遍历，Submit 与 Replay 行为一致。
   - 验证：`Submit_on_source_equals_Replay_on_replica_for_safe_patterns` (`FrameDeltaDeterminismTests.cs:55`) 用 `BuildComplexScenario` 覆盖多样命令组合；`Submit_link_and_set_on_same_child_same_frame_converges_with_replay` / `Submit_link_parent_then_destroy_parent_same_frame_converges_with_replay` / `Submit_unlink_then_set_same_frame_converges_with_replay` 等针对性测试（`FrameDeltaDeterminismTests.cs:592` 起）覆盖所有同帧组合。
 - **Cancelled pending create 的单遍 emit 约束**（2026-06-30 修复）：`EmitPendingEntitiesToDelta` 必须保留每个 batch `Reserve + Release/Create` 的单遍顺序，不能退回“先所有 Reserve、再 Release/Create”。原因是同帧取消的 reserved id 可能被后续 `Create()` 复用，Replay 端必须先看到旧 id 的 `Release` 才能预定复用 id。副作用是 `Release` 会污染 free list，后续 fresh `Reserve(Entity(slotCount), v1)` 不能走普通 `ReserveDeferredEntity()`（它会先 pop free list），而应只在 `id == _entitySlotCount && version == 1` 时直接创建 fresh slot；`id > _entitySlotCount` 仍表示 replay 历史分叉，必须抛错。回归：`Pending_cancel_after_later_create_does_not_diverge_replay_allocator`、短 seed sweep `0..5000/65535/999999/int.MaxValue`、长程 seed `42`。
-- **Component command 对 stale entity 必须在“录制期 + 消费前”双层过滤**（2026-06-30 立规矩，2026-07-06 回归修复）：两类 stale 都要防：① 录制当下已 stale 的 existing entity；② 录制时 alive，但在 `Submit`/`Snapshot`/`SubmitAndSnapshotAsync` 前被 direct world 改动变 stale 的 existing entity。若不处理，`Submit()` 会按 `Id` 命中已复用的新实体并误改数据，而 `Replay()` 会在 `RequireLocation` 上按旧 version 抛错，导致消费链分叉。当前规则：record 阶段仅允许 pending entity 或 `world.IsAlive(entity)` 的 existing entity 进入 component store；consume 前再统一 prune 掉“录制后才变 stale”的 existing component commands。回归：`BUG_stale_existing_entity_set_is_skipped_so_submit_matches_replay`、`BUG_existing_entity_that_becomes_stale_before_consume_is_skipped_so_submit_matches_replay`、`Parallel_recording_skips_stale_existing_entity_component_commands`、`Parallel_recording_keeps_pending_create_component_commands`、`SubmitAndSnapshotAsync_skips_existing_entity_commands_that_become_stale_before_consume`。
+- **Component command 对 stale entity 统一在消费前过滤**（2026-06-30 首次修复，2026-07-15 收敛契约）：两类 stale 都要防：① 录制当下已 stale 的 existing entity；② 录制时 alive，但在 consume 前被 direct world 改动变 stale 的 existing entity。所有消费入口都先走 `PrepareStores()`，`ComponentStore<T>.PruneStaleCommands(world)` 按完整 `Entity(Id, Version)` 丢弃两类 stale，因此不会按复用 Id 误改新实体，Snapshot/Replay 也与 Submit 收敛。record 阶段的 `World.IsAlive` 是重复读且只能覆盖第一类，现已删除；如果 rollback 令 handle 在 consume 时重新 alive，命令按 consume-time 契约生效。回归：`Existing_entity_component_liveness_is_decided_when_the_stream_is_consumed`、`BUG_stale_existing_entity_set_is_skipped_so_submit_matches_replay`、`BUG_existing_entity_that_becomes_stale_before_consume_is_skipped_so_submit_matches_replay`、`Parallel_recording_skips_stale_existing_entity_component_commands`、`Parallel_recording_keeps_pending_create_component_commands`、`SubmitAndSnapshotAsync_skips_existing_entity_commands_that_become_stale_before_consume`。
 
 - **`ComponentStore.EmitToDelta` 删除冗余 `_kinds[i]` 二次检查**（2026-07-02）：`switch (_kinds[i]) { case KindAdd: case KindSet: ... if (_kinds[i] == KindAdd) ... }` 中，switch 已匹配 KindAdd/KindSet，内部又读一次 `_kinds[i]` 来区分两者。拆分为独立 `case KindAdd:` / `case KindSet:`，消除一次数组 read + 分支。Attack +0.8%，Movement 噪声。注意：拆分后 `case KindAdd` 和 `case KindSet` 的 `fixed` 块内不能共享 `ptr` 变量，各自独立声明。
 
@@ -199,18 +200,18 @@ HeroPipeline 回归测试涨幅：
 - **`EnsureCapacity` 在 `Archetype.AddEntity` 中的副作用已消除**（2026-07-02 发现，2026-07-05 修复）：旧 `AddEntity` 非 chunked 路径调用 `EnsureCapacity(_count + 1)`，该方法在 `_capacity * 2 > _segmentCapacity` 时会 `ConvertToChunked()`，将 `_entities = null!` 并设置模式切换。旧代码在 `EnsureCapacity` 之后用 `if (!_isChunked)` 守卫，看似"冗余"的 `else` 分支实际是 conversion 后的安全 fallback。**修复**：`AddEntity` 重构为 `AllocateRows(1) + WriteEntityAt`，每个方法各自单次读 `IsChunked`（现为 `_segments is not null` 派生属性），EnsureCapacity 的模式切换副作用被封装在 AllocateRows 内部，调用方不再需要重检。**教训保留：在有副作用的调用之后，不能假设类型状态不变。**
 
 - **Hero perf CommandStream record/submit 微优化（2026-07-05）**：只改 `src/MiniArch/Core/`，未改 HeroPipeline 业务逻辑。保留项：
-  - `CommandStream.Set<T>` 单线程路径改为先走 `_world.IsAlive(entity)`，alive existing entity 直接 append；pending/reserved entity 不是 alive，仍落到 pending-batch fallback。收益主要来自 mixed frame 中 existing Set 跳过 `TryGetPendingBatch`。
+  - 历史优化曾让 `CommandStream.Set<T>` 先走 `_world.IsAlive(entity)`；当前实现恢复 pending-first 分流，并在 2026-07-15 删除 record-time alive read，统一由 consume-time prune 负责。
   - `GetOrCreateStore<T>()` 增加 2-slot LRU cache（按 component type id），命中时跳过 `_frozen.Stores` 数组访问/resize/null 检查；`SwapOutState()` 重置 cache，避免 async frozen state 写错对象。`existing-set` proxy 从约 10.4k ticks/s 提升到约 12.8k ticks/s（单机单轮，噪声存在）。
   - 增加 `_hasStoreCommands` / `_hasParallelStoreWrites` dirty flags：无 component-store 命令时 `Submit()` 不再为 `SealParallelStores()` / `HasAnyCommands()` 扫整张 `Stores`；parallel 写入仍通过 `_hasParallelStoreWrites` 强制 seal。
   - `ComponentStore<T>.ApplyToWorld` 将 `Component<T>.ComponentType` hoist 到循环外，避免依赖 JIT 对 generic static 的 CSE。
-  - `World.GetRecordFast(entity)` 用于 `ApplyToWorld`：record 阶段 `Set/Add/Remove` 已做 alive validation，submit 阶段可跳过重复 bounds/version/occupied 检查，只做 direct `_records[entity.Id]` 读取；`record.Archetype is null` 仍作为防御性 skip。`existing-set` proxy 约 12.55k → 13.05k（Hero 噪声内）。
+  - `World.GetRecordFast(entity)` 用于 `ApplyToWorld`：consume-time prune 已验证完整 handle，严格 Submit 的 component preflight 随后缓存 Set row；Apply 可直接读取缓存或 record。`existing-set` proxy 约 12.55k → 13.05k（历史数据，Hero 噪声内）。
   - `Archetype.SetComponentAtFlat<T>(byteOffset, row, value)` + `GetColumnByteOffset()`：`ApplyToWorld` 在 archetype cache miss 时缓存 column byte offset 和 `IsChunked`，非 chunked 热路径每条 Set 不再重复跑 `IsChunked` 分支、`_columnByteOffsets[columnIndex]`/`_elementSizes[columnIndex]` 数组访问和 runtime `row * elementSize`。`existing-set` proxy 约 13.05k → 15.5k~16.3k。
   - `ComponentStore<T>` 增加 `_allSetKind`，当 store 全是 `KindSet` 时走 Set-only fast path：跳过每条 entry 的 `Kind` 分支和 Add/Remove cache invalidation；与 `SetComponentAtFlat` 累计后 `existing-set` proxy 约 17.6k~18.0k。
   - 最终 fresh 验证：`dotnet test -c Release` 627 + 5 全通过；`HeroComing.Perf --check-baseline` 通过（Movement 2003.5 r/s, Attack 1253.9 r/s, memory OK）。
   - 追加验证（SetComponentAtFlat + Set-only 后）：`dotnet test -c Release` 674 + 5 全通过；`HeroComing.Perf --check-baseline` 单独运行通过（Movement 2104.5 r/s, Attack 1268.1 r/s, memory OK）。
   - 已否定/回退：2-slot cache 的 no-promotion 变体。它对 A/B 交替可能少写 cache 字段，但对 A/B/C 混合局部性不如 LRU；现有数据不能证明收益，保留 LRU。
   - 已否定/回退：last-entity `IsAlive` cache。对严格 `Set<Q>(e); Set<R>(e)` 可能有用，但 `existing-set` proxy 每次不同 entity，额外比较/写 cache 导致约 -17% 回归。
-  - 已否定/回退：默认 `Add/Set/Remove` 直接跳过 `IsAlive`。即使 submit 路径可在 `GetRecordFast` 增加 version guard 跳过 stale/recycled entity，`Snapshot()`/`EmitToDelta()` 没有 `World` 参数，无法过滤 stale command；安全折中（record id-range + apply version guard）性能也未优于现状。
+  - **2026-07-15 推翻旧结论**：当前 `Snapshot()`/`SnapshotInto()` 与 async 入口都在 emit 前调用带 World 的 `PrepareStores()`，所以旧版“Snapshot 无法过滤 stale”前提已失效。删除单线程/并行 `Add/Set/Remove` 的 record-time `World.IsAlive` 后，`existing-set` 三次中位数 11036.2 → 11759.0 ticks/s（+6.5%），`snapshot-only` 72284.8 → 74160.9（+2.6%）；完整 determinism/stale/ID-recycle 测试与 Hero baseline 通过。
 
 ## CommandStream vs Friflo: Record 阶段瓶颈分析（2026-06-13，历史——移除 CommandBuffer 的依据）
 

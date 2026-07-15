@@ -78,6 +78,8 @@ public sealed partial class ParallelCommandStream : CommandStreamCore
     /// with other Add/Set/Remove into the final materialized component
     /// signature. Intermediate operations are <b>not</b> observable via
     /// <c>ChangeWatch&lt;,&gt;.Diff</c> or <c>TransitionWatch&lt;&gt;.Diff</c>.
+    /// Existing-entity liveness is evaluated when the stream is consumed;
+    /// recording does not read the entity's current world state.
     /// </summary>
     public void Add<T>(Entity entity, T component) where T : unmanaged
     {
@@ -89,7 +91,7 @@ public sealed partial class ParallelCommandStream : CommandStreamCore
                 return;
             }
 
-            if (entity.IsPlaceholder || !_world.IsAlive(entity))
+            if (entity.IsPlaceholder)
                 return;
         }
         GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindAdd);
@@ -102,6 +104,8 @@ public sealed partial class ParallelCommandStream : CommandStreamCore
     /// <para/>
     /// <b>Pending entity note:</b> Same folding semantics as <see cref="Add{T}"/>.
     /// Multiple Sets on a pending entity collapse to the last value.
+    /// Existing-entity liveness is evaluated when the stream is consumed;
+    /// recording does not read the entity's current world state.
     /// </summary>
     public void Set<T>(Entity entity, T component) where T : unmanaged
     {
@@ -113,7 +117,7 @@ public sealed partial class ParallelCommandStream : CommandStreamCore
                 return;
             }
 
-            if (entity.IsPlaceholder || !_world.IsAlive(entity))
+            if (entity.IsPlaceholder)
                 return;
         }
         GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindSet);
@@ -127,6 +131,8 @@ public sealed partial class ParallelCommandStream : CommandStreamCore
     /// <b>Pending entity note:</b> Same folding semantics as <see cref="Add{T}"/>.
     /// Remove on a pending entity is folded into the net component signature;
     /// no intermediate Exited transition is produced.
+    /// Existing-entity liveness is evaluated when the stream is consumed;
+    /// recording does not read the entity's current world state.
     /// </summary>
     public void Remove<T>(Entity entity) where T : unmanaged
     {
@@ -138,7 +144,7 @@ public sealed partial class ParallelCommandStream : CommandStreamCore
                 return;
             }
 
-            if (entity.IsPlaceholder || !_world.IsAlive(entity))
+            if (entity.IsPlaceholder)
                 return;
         }
         GetOrCreateStoreParallel<T>().AppendConcurrent(entity, default!, KindRemove);

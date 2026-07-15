@@ -140,6 +140,25 @@ HeroComing.Perf: Movement 1780.1, Attack 1066.8, Memory OK
 - `ExistingSetScenario.RunTick` 拆分后仍为 `3 / 41 / 15` 个 inlinees，1808 bytes；record loop 内仍无 `Set<T>`、`GetOrCreateStore<T>`、`Append` 调用。
 - `ComponentStore<Position>.ApplyToWorld` 拆分后仍为 `62 / 59 / 8` 个 inlinees，3472 bytes。
 
+## Existing component command 的 consume-time liveness
+
+候选只删除 `CommandStream` / `ParallelCommandStream` 的 `Add/Set/Remove` record-time `World.IsAlive`；pending/foreign placeholder 的本地分流保留。所有消费入口继续通过 `PrepareStores()` → `PruneStaleCommands(world)` 按完整 `(Id, Version)` 过滤 stale command。
+
+新增 `Existing_entity_component_liveness_is_decided_when_the_stream_is_consumed`：handle 在 record 时 dead、rollback restore 后在 consume 时重新 alive，Submit 与 Snapshot→Replay 都必须执行命令并收敛。修改前该测试 RED（`Submit()` 返回 false），修改后转绿。既有 record-time stale、delayed stale、parallel stale、async stale/ID reuse 回归同时通过。
+
+测量纪律：修改后必须先显式 `dotnet build -c Release tools/perf/CommandStream.Profile/CommandStream.Profile.csproj`。第一轮误用了未刷新的 profiler output（`--no-build`），样本已全部丢弃；下表仅包含重建后的独占进程结果。
+
+| Scenario | 候选前中位数 | 候选后三次 | 候选后中位数 | 变化 |
+|---|---:|---|---:|---:|
+| `existing-set` | 11036.2 | 12029.6 / 11759.0 / 11623.1 | 11759.0 | +6.55% |
+| `existing-add-remove` | 2410.8 | 2466.7 / 2427.5 / 2147.8 | 2427.5 | +0.69% |
+| `snapshot-only` | 72284.8 | 73693.2 / 74160.9 / 74283.8 | 74160.9 | +2.60% |
+
+- `existing-set` record 占比从约 65.3% 降至约 63%，端到端收益稳定；未把成本转移为 submit/snapshot 回归。
+- JIT：`ExistingSetScenario.RunTick` 仍完全内联 record 三层，inlinees 从 `3 / 41 / 15` 降为 `3 / 37 / 14`，代码从 1808 降至 1738 bytes；record loop 仅在末尾调用 `Submit()`。
+- Release：`MiniArch.Tests` 1040 / 1040，`HeroPipeline.Tests` 5 / 5。
+- Hero gate：Movement 1741.9 rounds/s，Attack 1041.3 rounds/s，Memory OK，baseline 未更新。
+
 ## 最终验证
 
 Pending. 最终 commit 上填写：

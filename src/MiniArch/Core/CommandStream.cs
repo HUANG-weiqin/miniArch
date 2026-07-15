@@ -46,9 +46,9 @@ public sealed partial class CommandStream : CommandStreamCore
     /// (the snapshot/diff lifecycle is orthogonal to pending batching) — only the net final state is materialized.
     /// </summary>
     /// <remarks>
-    /// If the entity is not alive (does not exist or was destroyed), the command
-    /// is silently discarded. Use <see cref="Entity.IsPlaceholder"/> and
-    /// <see cref="World.IsAlive"/> to verify entity state before calling.
+    /// Existing-entity liveness is evaluated when the stream is consumed. The
+    /// command is silently discarded if the entity is not alive at that point.
+    /// Recording does not read the entity's current world state.
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Add<T>(Entity entity, T component) where T : unmanaged
@@ -57,7 +57,7 @@ public sealed partial class CommandStream : CommandStreamCore
         {
             WritePendingComponent(batchIdx, component);
         }
-        else if (!entity.IsPlaceholder && _world.IsAlive(entity))
+        else if (!entity.IsPlaceholder)
         {
             GetOrCreateStore<T>().Append(entity, component, KindAdd);
         }
@@ -72,9 +72,9 @@ public sealed partial class CommandStream : CommandStreamCore
     /// entries are produced.
     /// </summary>
     /// <remarks>
-    /// If the entity is not alive (does not exist or was destroyed), the command
-    /// is silently discarded. Use <see cref="Entity.IsPlaceholder"/> and
-    /// <see cref="World.IsAlive"/> to verify entity state before calling.
+    /// Existing-entity liveness is evaluated when the stream is consumed. The
+    /// command is silently discarded if the entity is not alive at that point.
+    /// Recording does not read the entity's current world state.
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Set<T>(Entity entity, T component) where T : unmanaged
@@ -83,7 +83,7 @@ public sealed partial class CommandStream : CommandStreamCore
         {
             WritePendingComponent(batchIdx, component);
         }
-        else if (!entity.IsPlaceholder && _world.IsAlive(entity))
+        else if (!entity.IsPlaceholder)
         {
             GetOrCreateStore<T>().Append(entity, component, KindSet);
         }
@@ -99,9 +99,9 @@ public sealed partial class CommandStream : CommandStreamCore
     /// (Entered followed by Exited) entries are observable.
     /// </summary>
     /// <remarks>
-    /// If the entity is not alive (does not exist or was destroyed), the command
-    /// is silently discarded. Use <see cref="Entity.IsPlaceholder"/> and
-    /// <see cref="World.IsAlive"/> to verify entity state before calling.
+    /// Existing-entity liveness is evaluated when the stream is consumed. The
+    /// command is silently discarded if the entity is not alive at that point.
+    /// Recording does not read the entity's current world state.
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Remove<T>(Entity entity) where T : unmanaged
@@ -110,7 +110,7 @@ public sealed partial class CommandStream : CommandStreamCore
         {
             MarkBatchComponentRemoved(batchIdx, CommandTypeInfo<T>.Type);
         }
-        else if (!entity.IsPlaceholder && _world.IsAlive(entity))
+        else if (!entity.IsPlaceholder)
         {
             GetOrCreateStore<T>().AppendRemove(entity);
         }

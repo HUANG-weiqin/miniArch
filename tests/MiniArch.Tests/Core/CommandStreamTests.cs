@@ -2473,6 +2473,29 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
+    public void Existing_entity_component_liveness_is_decided_when_the_stream_is_consumed()
+    {
+        var source = new World();
+        var replica = new World();
+        var sourceEntity = source.Create(new Position(1, 1));
+        var replicaEntity = replica.Create(new Position(1, 1));
+        var restorePoint = source.CaptureState();
+
+        source.Destroy(sourceEntity);
+        var stream = new CommandStream(source);
+        stream.Set(sourceEntity, new Position(9, 9));
+
+        source.RestoreState(restorePoint);
+        var delta = stream.Snapshot();
+        Assert.True(stream.Submit());
+        new CommandStream(replica).Replay(FrameDelta.FromWire(delta.AsSpan()));
+
+        Assert.Equal(new Position(9, 9), source.Get<Position>(sourceEntity));
+        Assert.Equal(new Position(9, 9), replica.Get<Position>(replicaEntity));
+        AssertIdenticalWorlds(source, replica, "consume-time component liveness after restore");
+    }
+
+    [Fact]
     public void Parallel_recording_skips_stale_existing_entity_component_commands()
     {
         var source = new World();
