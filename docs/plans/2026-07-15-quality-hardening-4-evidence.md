@@ -119,6 +119,27 @@ HeroComing.Perf: Movement 1780.1, Attack 1066.8, Memory OK
 
 拆分后必须重新检查上述调用边界；不能只凭“同一 partial class 理论上 IL 不变”跳过实测。
 
+## CommandStreamCore 拆分后验证
+
+拆分仅把同一 `partial class` 的成员迁移到 `Hierarchy`、`Pending`、`ComponentStore`、`Submit` 四个文件，未修改方法体。Release 独占进程、`warmup=3s`、`measure=10s`，每个场景 3 次；曾有一次与测试并跑的 `existing-set` 样本受到 CPU 争用，已丢弃且不计入下表。
+
+| Scenario | 拆分前中位数 | 拆分后三次 | 拆分后中位数 | 变化 |
+|---|---:|---|---:|---:|
+| `existing-set` | 10867.6 | 11036.2 / 11052.0 / 10890.1 | 11036.2 | +1.55% |
+| `existing-add-remove` | 2265.9 | 2344.1 / 2467.1 / 2410.8 | 2410.8 | +6.39% |
+| `create-small4` | 3588.0 | 3605.4 / 3616.5 / 3544.0 | 3605.4 | +0.49% |
+| `create-duplicates` | 3592.1 | 3813.4 / 3564.3 / 3574.6 | 3574.6 | -0.49% |
+| `create-destroy` | 20678.5 | 20691.3 / 20683.8 / 20337.8 | 20683.8 | +0.03% |
+| `snapshot-only` | 72021.6 | 72536.0 / 71068.0 / 72284.8 | 72284.8 | +0.37% |
+
+结论：六个工作负载均无稳定退化；正向波动只视为“未退化”证据，不宣称机械拆分带来性能收益。
+
+- `CommandStreamTests` + `FrameDeltaDeterminismTests`：158 / 158。
+- `MiniArch.Tests`：1039 / 1039；`HeroPipeline.Tests`：5 / 5。
+- 上表 8 个关键方法的 canonical IL SHA256 与拆分前逐项完全相同。
+- `ExistingSetScenario.RunTick` 拆分后仍为 `3 / 41 / 15` 个 inlinees，1808 bytes；record loop 内仍无 `Set<T>`、`GetOrCreateStore<T>`、`Append` 调用。
+- `ComponentStore<Position>.ApplyToWorld` 拆分后仍为 `62 / 59 / 8` 个 inlinees，3472 bytes。
+
 ## 最终验证
 
 Pending. 最终 commit 上填写：
