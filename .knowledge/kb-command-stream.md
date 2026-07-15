@@ -123,6 +123,8 @@ dotnet run -c Release --no-build --project tools/perf/CommandStream.Profile -- -
 
 2026-07-15 consume-time liveness 候选的有效 A/B：`existing-set` 中位数 11036.2 → 11759.0 ticks/s（+6.5%），`snapshot-only` 72284.8 → 74160.9（+2.6%）；JIT record loop 保持完整内联。完整数据见本轮 evidence 文档。
 
+consume prune 必须同时刷新 stream 的 store-dirty 汇总。若 stale-only entries 全被删除，`Submit()` 返回 `false`、Snapshot 为空，async 路径不应因旧 `_hasStoreCommands` 启动无效工作；single/parallel 与 consume 前 ID reuse 回归共同守卫该契约。
+
 ## 认知模型
 
 把 CommandStream 看成“append-only intent + 单次消费裁决”，不是 World 的事务镜像：

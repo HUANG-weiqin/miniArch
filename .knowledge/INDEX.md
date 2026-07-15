@@ -68,7 +68,7 @@ updated: 2026-07-15
 
 **帧同步 / 网络**：
 - **端到端帧同步指南** → `kb-lockstep-playbook.md`
-- **多 host lockstep 收敛证明** → `kb-lockstep-soak.md`
+- **多 host lockstep 收敛验证** → `kb-lockstep-soak.md`
 - **CommandStream** → `kb-command-stream.md`
 - **Deferred Create 多 host 设计** → `kb-deferred-create-design.md`
 - **Checksum 双模式** → `kb-snapshot-persistence.md`（Checksum 双模式段）

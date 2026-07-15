@@ -1,5 +1,16 @@
 # Changelog
 
+## 4.0.0 (2026-07-15)
+
+- **Breaking: unsafe chunk column API made explicit** — `ChunkView.GetComponentSpanAt<T>` is now `UnsafeGetComponentSpanAt<T>`; the cached index must come from the same archetype and is invalid after structural change. Debug validates the type/index pair, Release keeps the opt-in unchecked fast path.
+- **Breaking: redundant entity sentinel removed** — `Entity.IsUnmappedSentinel` was removed; use the single `IsPlaceholder` representation for deferred entities.
+- **Harden: archetype growth commits last** — segment-capacity arithmetic is checked and storage migration completes before publishing new capacity/segment fields.
+- **Harden: CommandStream preflight** — component presence, hierarchy overlay, pending slots, and async ownership are validated before allocator/materialization or worker handoff. This narrows known partial-submit paths but is not a general rollback transaction.
+- **Perf: component liveness decided at consume time** — single and parallel record paths no longer repeat `World.IsAlive` for existing Add/Set/Remove commands. Consume-time pruning still uses the full `(Id, Version)` handle; stale-only streams correctly report no submitted work.
+- **Refactor: split `CommandStreamCore` partials** — hierarchy, pending batches, component stores, and submit/async code moved into focused files. Canonical IL/JIT anchors and Release profiler gates were checked before and after the split.
+- **Fix: Debug structural scope recovery** — structural mutation scopes now restore their debug counter through exceptions.
+- **Verification: lockstep soak made trustworthy and faster** — same-frame component presence, tracked placeholder resolution, CompA/CompB mutation checks, record-time exception reporting, and configurable `--checksum-interval` were added; obsolete historical “proof” claims were retired.
+
 ## 3.6.0 (2026-07-15)
 
 - **New: `ComponentSchema.Export()` / `Import()`** — cross-process schema handshake for determinism across peers. Authoritative peer exports the ordered list of registered component types as a portable `byte[]` blob; joining peer imports it to build a schema-index → type mapping. Subsequent wire messages can reference components by schema index instead of process-local `ComponentType.Value`, which may differ between peers.

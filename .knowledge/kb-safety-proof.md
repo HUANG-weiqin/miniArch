@@ -25,19 +25,21 @@ updated: 2026-07-15
 
 ### 当前复验快照
 
-验证 runtime commit：`21660c3`（2026-07-15）。
+验证 runtime commit：`a4df7df`；lockstep verifier commit：`c453049`（2026-07-15）。
 
 | 门禁 | 当前结果 |
 |---|---|
 | `MiniArch.Tests` Release | 1040 / 1040 PASS |
 | `HeroPipeline.Tests` Release | 5 / 5 PASS |
 | CommandStream + FrameDelta determinism focused | 158 / 158 PASS（CommandStreamCore 拆分点） |
-| HeroComing Movement | 1741.9 rounds/s，阈值 1642 |
-| HeroComing Attack | 1041.3 rounds/s，阈值 997 |
-| HeroComing memory | OK；baseline 未更新 |
+| single-host soak | sweep 32 × 100,000 PASS；determinism 200,000 帧两次 checksum 相同 |
+| multi-host lockstep | 逐帧 checksum witness 10,000 PASS；8 × 10,000 diversity PASS；8 × 50,000 高密度 PASS；oracle checks 均 >0 |
+| HeroComing Movement | 连续三次 1783.1 / 1746.7 / 1760.0 rounds/s，阈值 1642 |
+| HeroComing Attack | 连续三次 1003.0 / 1096.7 / 1075.7 rounds/s，阈值 997 |
+| HeroComing memory | 三次均 OK；baseline 未更新 |
 
-本轮完整 sweep/determinism/lockstep soak 与三次 Hero 结果写入
-`docs/plans/2026-07-15-quality-hardening-4-evidence.md`；该文档是本次发布候选的逐次证据源。
+逐次参数、曾失败并重启连续计数的 Hero 样本、perf A/B 与 API diff 写入
+`docs/plans/2026-07-15-quality-hardening-4-evidence.md`；该文档是本次发布候选的证据账本。
 
 ### 历史压力证据
 

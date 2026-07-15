@@ -2,9 +2,9 @@
 
 ## 结论
 
-这是质量硬化分支的证据账本，不是性能 baseline。起点 Release build 与全部测试通过；CommandStream 六个场景已完成三次采样。HeroComing 在同一代码上出现一红两绿，证明当前机器噪声足以跨越门槛，最终闭环必须要求连续多次通过，不能使用单次幸运结果。
+这是质量硬化分支的最终证据账本，不是性能 baseline。候选已通过 Release 全测试、单主机 32-seed soak、200,000 帧双跑确定性、multi-host lockstep 与 HeroComing 连续三次门禁，可以作为 4.0 发布候选；没有运行 `--update-baseline`。
 
-当前文档已记录起点与 `pre-split` 锚点。最终结果、API diff、soak 与 lockstep 证据将在对应任务完成后追加；禁止用本文件运行或暗示 `--update-baseline`。
+结论有两个边界：lockstep verifier 提供高强度差分/变异校验，不等于形式化证明；CommandStream preflight 显著缩小部分提交面，但 Replay 仍不是普遍回滚事务。HeroComing 初始三次中有一次 Attack 低于门槛，连续计数清零后重新取得三次连续 PASS，失败样本保留在本文。
 
 ## 环境与代码点
 
@@ -14,6 +14,8 @@
 - CPU: AMD Ryzen 7 5700X3D 8-Core Processor
 - Branch: `codex/quality-hardening-4`
 - Baseline commit: `5b9ca0cb48a250dc3be3e1b7a6039eab78e41357`
+- Final runtime commit: `a4df7df`
+- Final lockstep verifier commit: `c453049`
 - Configuration: Release；CommandStream warmup 3s / measure 10s；每场景独立进程
 
 ## 起点构建与测试
@@ -161,13 +163,95 @@ HeroComing.Perf: Movement 1780.1, Attack 1066.8, Memory OK
 
 ## 最终验证
 
-Pending. 最终 commit 上填写：
+### Release 构建与测试
 
-- focused/full tests；
-- single-host soak；
-- determinism soak；
-- multi-host lockstep soak；
-- CommandStream before/pre-split/after；
-- HeroComing 连续三次门禁；
-- public API diff；
-- 已修复 bug、文档修正、保留 unsafe 契约和明确非目标。
+```text
+dotnet build -c Release --no-restore miniArch.sln
+0 warnings, 0 errors
+
+dotnet test -c Release --no-build miniArch.sln
+MiniArch.Tests: 1040 passed
+HeroPipeline.Tests: 5 passed
+Exit code: 0
+```
+
+针对 stale-only dirty 汇总的 3 个回归先 RED（`Submit()` 实际返回 `true`），修复后 3 / 3 PASS；全套结果如上。
+
+### Single-host soak 与确定性
+
+最终 runtime 上执行：
+
+```powershell
+dotnet run -c Release --project tools/soak/MiniArch.Soak -- --sweep 32 --frames 100000
+dotnet run -c Release --project tools/soak/MiniArch.Soak -- --determinism --frames 200000
+```
+
+- sweep：32 / 32 PASS，每个 seed 100,000 帧，约 334k–336k operations。
+- determinism run 1：`12DBCA33984E019C200B6D4C766AABA2048F33055D9017688D4C4A6BC20B4A75`。
+- determinism run 2：`12DBCA33984E019C200B6D4C766AABA2048F33055D9017688D4C4A6BC20B4A75`。
+- 结论：200,000 帧两次 checksum 完全相同，DETERMINISM PASS。
+
+### Multi-host lockstep verifier
+
+`--checksum-interval` 与 `--validate-interval` 独立：前者控制全状态 checksum，后者控制轻量 CompA/CompB mutation oracle。默认 `--checksum-interval 1`，仍是逐帧最强门禁；长跑可显式降频，最终帧始终校验。降频可能漏掉随后重新收敛的瞬态差异，因此不能替代逐帧 witness。
+
+| Workload | Checksum | Result | Evidence |
+|---|---:|---|---|
+| 原始 witness：seed 1234567，4 hosts，10,000 frames，8 ops/frame | 每帧 | PASS | 130,865 aggregate ops；121,648 oracle checks；Gen2=0 |
+| diversity：8 seeds × 10,000 frames，4 hosts | 每 100 帧 | 8 / 8 PASS | 每 seed 约 113k–134k oracle checks |
+| 高密度：8 seeds × 50,000 frames，4 hosts，50 ops/frame，cap=100 | 每 100 帧 | 8 / 8 PASS | 总计约 24.78M ops；每 seed 9,150–12,700 oracle checks |
+| determinism：2 × 2,000 frames，3 hosts | 每 100 帧 | PASS | checksum 均为 `E9F55D78887795DC5BAEF9FB111B6804E47CF497525465C62D23D57C582CB5C3`；每次 23,480 oracle checks |
+
+原版 verifier 在 seed 1234567 / frame 413 曾因同帧 presence 跟踪不完整生成重复 strict Add；同一失败可在 3.6 baseline `7cde430` 复现，所以这是测试生成器 bug，不是 MiniArch runtime bug。修复包括：按实体/组件跟踪同帧 presence、解析 placeholder 模型键、补齐 clone presence、禁止吞掉 clone 异常，并以非零 mutation oracle checks 作为硬门禁。
+
+### CommandStream 最终性能与 stale-only 修正
+
+最终六场景相对拆分锚点均在 ±3% 内；existing 热路径仍保留 consume-time liveness 的主要收益。
+
+| Scenario | 拆分锚点中位数 | 最终中位数 | 变化 |
+|---|---:|---:|---:|
+| `existing-set` | 11036.2 | 11654.7 | +5.60% |
+| `existing-add-remove` | 2410.8 | 2393.9 | -0.70% |
+| `create-small4` | 3605.4 | 3515.6 | -2.49% |
+| `create-duplicates` | 3574.6 | 3512.5 | -1.74% |
+| `create-destroy` | 20683.8 | 20672.8 | -0.05% |
+| `snapshot-only` | 72284.8 | 71665.8 | -0.86% |
+
+review 发现 consume prune 删除所有 stale entries 后仍遗留 `_hasStoreCommands=true`，使空提交错误返回 `true` 并可能启动无效 async 工作。修复后 `PruneStaleCommands` 同时刷新 dirty 汇总。同期 A/B 的 `snapshot-only` 中位数从旧汇总行为 65068.6 升至修复后 66444.1（+2.1%）；因此没有用绝对跨时段波动归因。
+
+### HeroComing 连续门禁
+
+最终 runtime 的首个三次序列：
+
+| Run | Movement | Attack | Memory | Result |
+|---|---:|---:|---|---|
+| 1 | 1821.0 | 1073.3 | OK | PASS |
+| 2 | 1827.1 | 1047.5 | OK | PASS |
+| 3 | 1666.3 | 976.2 | OK | FAIL（Attack < 997） |
+
+失败后清零连续计数；只读进程检查同时看到 Godot、ChatGPT/Citrix 活跃，说明机器噪声是合理解释，但失败样本不据此删除。重新开始的连续序列：
+
+| Consecutive run | Movement | Attack | Memory | Result |
+|---|---:|---:|---|---|
+| 1 | 1783.1 | 1003.0 | OK | PASS |
+| 2 | 1746.7 | 1096.7 | OK | PASS |
+| 3 | 1760.0 | 1075.7 | OK | PASS |
+
+Movement 门槛 1642，Attack 门槛 997；最终连续 3 / 3 PASS，内存均稳定。没有运行 `--update-baseline`。
+
+### Public API diff
+
+相对 3.6 baseline 的有意 breaking diff 仅为：
+
+- `ChunkView.GetComponentSpanAt<T>(int)` → `UnsafeGetComponentSpanAt<T>(int)`；Release 继续保留用户显式选择的 unchecked 高速路径，XML 明确 cached column index 的来源与失效条件，Debug 校验 type/index pair。
+- 删除冗余 `Entity.IsUnmappedSentinel`；deferred entity 统一使用 `IsPlaceholder`。
+- assembly version：3.6 → 4.0。
+
+### 收口分类
+
+- runtime bug：segment capacity 溢出/提交顺序、结构 scope 异常恢复、stale-only dirty 汇总均已修复并有回归。
+- 预防性硬化：component/hierarchy/pending/async preflight 在副作用前拒绝已知非法输入。
+- 性能改动：existing Add/Set/Remove 的 record-time `World.IsAlive` 被移除，完整 `(Id, Version)` liveness 只在 consume prune 裁决；placeholder 路由与 Clone 的 record-time 捕获不属于重复检查，保留。
+- verifier bug：原始重复 strict Add 来自 lockstep generator，已修；不冒充 runtime bug。
+- 文档/API：危险高速 API 未删除，只做诚实局部改名和 XML 契约；过时 proof 用语已降级为 verification/evidence。
+- 非目标：Replay 不是通用事务回滚；并行冲突顺序由调用方保证；World 仍要求独占结构写入。
