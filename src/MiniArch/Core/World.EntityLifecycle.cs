@@ -638,6 +638,9 @@ public sealed partial class World
 
     private Entity CreateInArchetype(Archetype archetype, out int rowIndex)
     {
+        // Storage growth can allocate and copy. Complete it before consuming an
+        // entity id so a preparation failure cannot expose a half-created record.
+        archetype.EnsureCapacity(archetype.EntityCount + 1);
         BeginStructChange();
         var id = AcquireEntityIdUnsafe(out var version);
         var entity = new Entity(id, version);

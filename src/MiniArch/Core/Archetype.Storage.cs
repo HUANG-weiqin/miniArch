@@ -71,8 +71,7 @@ internal sealed partial class Archetype
     {
         var segOffsets = ComputeColumnLayout(_elementSizes, _segmentCapacity).Offsets;
         var segCount = Math.Max(1, (_count + _segmentCapacity - 1) / _segmentCapacity);
-        _segments = new Segment[segCount];
-        _segmentCount = segCount;
+        var segments = new Segment[segCount];
 
         for (var s = 0; s < segCount; s++)
         {
@@ -95,7 +94,7 @@ internal sealed partial class Archetype
                 Unsafe.CopyBlockUnaligned(ref dstRef, ref srcRef, byteCount);
             }
 
-            _segments[s] = new Segment
+            segments[s] = new Segment
             {
                 Entities = segEntities,
                 Data = segData,
@@ -103,6 +102,11 @@ internal sealed partial class Archetype
             };
         }
 
+        // Publish the new representation only after every segment has been
+        // allocated and populated. Until this point the flat representation
+        // remains complete and observable.
+        _segments = segments;
+        _segmentCount = segCount;
         _columnByteOffsets = segOffsets;
         _entities = null!;
         _data = null!;
