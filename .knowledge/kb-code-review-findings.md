@@ -1,426 +1,113 @@
 ---
 title: 代码审阅发现
 module: Meta
-description: 健壮性审阅发现汇总——已确认的设计债、已验证的安全猜想、已排除的非 bug 猜想
+description: 审阅前必读的当前风险、已修复真 bug 回归索引与已排除非 bug 猜想；只保留结论和验证入口
 updated: 2026-07-15
 ---
-
-> **M2 re-apply (2026-07-09)**: Epoch guard added — `World.ReservedReleaseEpoch` + `CommandStreamCore._submitEpoch` fast-path avoids O(N) pending-slot scan when no release has occurred since last sync. HeroComing.Perf: Movement 1902.1, Attack 1125.6, memory stable. Baseline gate (≥1642/≥997) passes.
-
-> **Contract calibration (2026-07-09)**: Current code/test contract is strict Add: `World.Add<T>` throws when the entity already has `T` (`TrickyEdgeCaseTests.Add_component_that_already_exists_throws`). Older B1/B4 notes are historical context and must not be read as the current Add-as-overwrite contract.
-
-> **Verification count policy (2026-07-09)**: Historical bug entries no longer preserve stale exact totals such as `673/695/845/872` because those counts rot on every test addition. Phrases like "当时全量测试通过" mean the original fix was full-suite green at that time; the current audit re-verified the suite as MiniArch.Tests 873/873 + HeroPipeline.Tests 5/5 PASS.
-
 # 代码审阅发现
 
-> 审阅前必读。包含已确认的设计债、已验证安全猜想、以及被排除的非 bug 猜想。
-
-## 审阅历史
-
-| 日期 | 类型 | 审阅者 | 范围 |
-|------|------|--------|------|
-| 2026-07-06 | 鲁棒性审阅 | Boss Agent (GPT-5.5) | 全量核心模块 (11 modules, ~8000 LOC) |
-
----
-
-## 设计债 (P2)
-
-### #1: CommandStream.Submit() 无事务回滚 (R11) ✅ 已修复
-
-- **模式**: R11 部分修改
-- **位置**: `CommandStreamCore.cs:443-474` Submit(), `CommandStreamCore.cs:548-578` PreValidatePendingSlots, `World.cs:1144-1153` IsSlotReserved
-- **缺失的安全条件**: `MaterializeAllPending` 成功但后续 `ApplyHierarchy`/`ApplyComponentStores`/`ApplyDestroys` 失败时，已 materialize 的实体无法回滚
-- **真实风险**: 低。该异常仅在 CommandStream 内部数据不一致时触发，正常用户路径不可达
-- **建议修复**: 在 materialize 前预验证所有 slot 为 reserved 状态（defense-in-depth）
-- **修复方案**: 在 `Submit()` 和 `SubmitFromFrozen()` 的 materialize 前增加 `PreValidatePendingSlots()`，扫描所有非 cancelled pending batch 的 slot 是否仍为 reserved 状态；若 slot 已不再是 reserved（`IsOccupied` 或 `Version` 不匹配），则立即抛 `InvalidOperationException`。新增 `World.IsSlotReserved(Entity)` 作为检查 helper，internal 不增加 public API。
-- **回归测试**: `BUG_submit_prevalidates_reserved_pending_slots_before_materialize`（`CommandStreamTests.cs`）
-- **验证**: 全量 Release 测试通过，HeroComing.Perf: Movement 1902.1 r/s, Attack 1125.6 r/s，内存稳定
-
-### #2: EntityFieldResolver 静默跳过未决占位符 (R8) ✅ 已修复
-
-- **模式**: R8 静默截断
-- **位置**: `EntityFieldResolver.cs:174-189` ResolveInPlace（修复时 line numbers 已变）
-- **原始缺陷**: 当 `seq >= resolveMap.Length` 或 `resolved.Id < 0` 时，不返回错误也不记录日志，死占位符 Entity(-1, seq) 残留于组件数据
-- **修复方案**: 直接在 `ResolveInPlace` 中 fail-fast 抛 `InvalidOperationException`，消息含 seq 值。签名不变（仍 `void`）。不改调用方。
-- **后续保护**:
-  - 两个红测试（seq OOB、resolved.Id < 0）直接测试 `EntityFieldResolver.ResolveInPlace`
-  - 现有集成测试 `Submit_resolves_embedded_Entity_ref_after_Destroy_pending` 已从"验证静默跳过"改为"验证抛出 `InvalidOperationException`"
-- **真实风险（修复前）**: 低-中。需要恶意 FrameDelta（占位符引用无对应 Reserve）。正常 lockstep 场景不可达
-
-### #3: ReplayCore 无事务语义 (R11)
-
-- **模式**: R11 部分修改
-- **位置**: `World.EntityLifecycle.cs` ReplayCore
-- **缺失的安全条件**: Delta 回放中途失败时无法回滚已执行操作
-- **真实风险**: 低。用户应通过 `FrameDelta.Validate()` 预校验——这已在文档中。`FrameDelta.Validate` 现在已校验 component data 大小与 schema 一致性；剩余风险是 replay 中途失败仍无法回滚，且 allocator/free-list 兼容性只能由从 frame 0 replay 或 snapshot bootstrap 保证
-- **建议修复**: 强化文档约束；如需进一步 harden，可增加 replay 前 dry-run/target-world compatibility check，但当前 ROI 低
-- **当前状态**: 2026-07-09 评估：接受现状，不修。其他 3 个 P2 已全部修复，此为唯一残留 P2。风险已被 `FrameDelta.Validate()` + 文档约束覆盖。
-
-### #4: TrySetBit 未对 id >= 512 做守卫导致 mask 别名折叠 ✅ 已修复
-
-- **模式**: 边界缺失守卫
-- **位置**: `CommandStreamCore.cs:1625-1636` TrySetBit
-- **原始缺陷**: `TrySetBit` 最后一个分支（`id < 448` 后的 `return TrySetBitInLane(ref b7, id - 448)`）未检查 `id < 512`。C# 对 `ulong` 的移位操作将移位计数掩码到低 6 位，导致 `id = 512..575` 的 `1UL << (id - 448)` 等价于 `1UL << ((id - 448) & 63)`，错误地别名到 b7 的 0..63 位（即 id 448..511 的范围）。这使 `MaterializeFromBatchBuffer` 中构建的 `ComponentMask` 被损坏：当实体使用 id >= 512 的组件时，mask 可能错误地匹配到 448-511 区间的原型，导致实体被分配到完全错误的 archetype。
-- **真实风险**: 中。仅影响 `ComponentType.Value >= 512` 的组件（需要 513+ 个组件类型注册）。低 id 组件的热路径完全不受影响（`id < 448` 的分支不变）。调用方 `DeduplicateBatchChain` 已有正确守卫；`MaterializeFromBatchBuffer` 依赖 `TrySetBit` 的守卫。
-- **修复方案**: 在最后分支增加 `if (id < 512) return TrySetBitInLane(ref b7, id - 448); return false;`。将 `TrySetBit` 改为 `internal static` 以便直接测试。
-- **回归测试**: `TrySetBit_rejects_ids_512_and_above`、`TrySetBit_accepts_ids_448_to_511`、`TrySetBit_detects_already_set_at_boundaries`、`MaskBuilder_setting_high_id_does_not_alias_into_b7`
-- **验证**: 全量 Release 测试通过，HeroComing.Perf: Movement 1870.2 r/s, Attack 1172.9 r/s，内存稳定
-
-### #5: ComponentSchema Export/Import 新接口边界审阅（P2）✅ 已修复
-
-- **模式**: 序列化 schema 边界防御 / 概念唯一 / public boundary validation
-- **位置**: `ComponentSchema.cs` `Import` / `GetSchemaName`，`ComponentRegistry.cs` `ComputeFingerprintBytes`，`WorldSnapshot.cs` `GetSchemaName`
-- **缺失的安全条件**:
-  1. `Fingerprint()` 使用 `Type.FullName`，而 `Export()` / `WorldSnapshot` 使用 `AssemblyQualifiedName`，同名不同程序集/版本可能得到相同握手 hash。
-  2. `GetSchemaName` 在 `ComponentSchema` 与 `WorldSnapshot` 各维护一份，违反“概念唯一”，后续格式漂移不会被编译器发现。
-  3. `Import` 只按字符串去重，未按解析后的 `Type` 去重；不同别名可解析为同一类型。
-  4. `Import` 未验证解析出的类型是否符合 miniArch 组件约束（public 组件 API 均为 `where T : unmanaged`），恶意 schema 可把 `string` / class / managed-field struct 注册进全局 `ComponentRegistry.Shared`。
-  5. `Import` 使用 `BinaryReader.ReadString()`，没有 schema name 字节长度上限；不可信 blob 可触发大分配或非 `InvalidDataException` 的异常路径。
-- **修复方案**: 新增 `ComponentSchemaCodec` 作为 internal 单一事实来源：统一 schema name（AQN）、bounded UTF-8 string reader/writer、resolved `Type` 去重、`unmanaged` 组件约束验证。`ComponentSchema`、`WorldSnapshot`、`ComponentRegistry.GetFingerprint` 全部改用该 codec。`Import` 仍保持“全量验证后统一注册”。
-- **外部入口同步硬化**: `WorldSnapshot.Load` 同步拒绝非组件 schema type、重复 schema name / resolved type、超长 schema name、v3 trailing bytes、非法 chunk capacity、非法 free-list count/id/version/duplicate/live-overlap、非法 hierarchy endpoint/duplicate child/cycle、非法 archetype component count/schema index/重复 component、非法 row count/重复 entity id/非正 live version。
-- **事务边界**: `WorldSnapshot.Load` 先 dry-validate 完整 payload（archetype payload 长度、hierarchy、free-list、trailing bytes）再调用 `ComponentRegistry.Shared.GetOrCreate`，避免后续 payload 无效时污染全局 registry；截断 body 统一包装为 `InvalidDataException`。
-- **回归测试**: `Fingerprint_differs_for_same_full_name_in_different_assemblies`、`Schema_import_rejects_class_type`、`Schema_import_rejects_managed_field_struct`、`Schema_import_rejects_duplicate_resolved_type`、`Schema_import_rejects_overlong_type_name_without_large_allocation`、`Snapshot_load_rejects_*` hardening 测试组、`Snapshot_load_rejects_truncated_v3_body_as_invalid_data`、`Snapshot_load_does_not_register_schema_type_when_later_payload_is_invalid`。
-- **验证**: 2026-07-13 `dotnet test -c Release --no-restore`：MiniArch.Tests 1013/1013 + HeroPipeline.Tests 5/5 PASS；`dotnet run -c Release --project tools/perf/HeroComing.Perf --check-baseline`：Movement 1902.3 / Attack 1186.5，Memory OK。
-
-### #6: CommandStream 组件错误会留下部分提交 ✅ 已修复
-
-- **模式**: R11 部分修改 / 跨 store 结构失效
-- **位置**: `CommandStreamCore.Submit()`、`PreflightComponentStores()`、`ComponentStore<T>.PreflightValidate()`
-- **原始缺陷**: 无效 Add、Set 或重复 Add 直到 `ApplyComponentStores()` 才抛错；此时 pending entity 已 materialize，且更早的 component store 也可能已经修改 World，形成“Submit 抛异常但 World 已部分变化”。
-- **修复方案**: 在任何 free-list、pending materialize 或 World 组件修改前，按录制顺序模拟每个 component store 的 presence 状态。Add 要求不存在，Set 要求存在，Remove 保持现有幂等 no-op 契约。纯 Set 且全部 store 都无 Add/Remove 时，预检缓存统一 archetype 的 row 索引供 Apply 复用；任一 store 含结构命令则禁用 row 缓存，防止跨 store 迁移后使用旧位置。
-- **回归测试**: `BUG_submit_preflights_invalid_add_before_materializing_pending`、`BUG_submit_preflights_invalid_set_before_materializing_pending`、`BUG_submit_preflights_repeated_add_before_any_world_mutation`、`BUG_set_preflight_row_cache_is_disabled_when_any_store_is_structural`；既有 `Determinism_survives_id_recycling` 同时守卫 Submit 与 Snapshot→Replay 的跨 store 对等性。
-- **验证**: 2026-07-15 Release：MiniArch.Tests 1034/1034、HeroPipeline.Tests 5/5；CommandStream.Profile 长测 `existing-set` 10834.1 ticks/s（同时段原版 11036.7，-1.8%）、`existing-add-remove` 2406.8（起点中位数 2398.5）；HeroComing.Perf Movement 1727.0、Attack 1046.2、Memory OK。
-- **确定性约束**: 位置缓存、批处理和跨 store 重排必须先证明 Submit 与 Snapshot→Replay 状态一致。任何结构 store 都可能迁移实体并使其他 store 的 row cache 失效；不得以热路径收益放宽这一契约。
-
-### #7: CommandStream hierarchy 循环会在 materialize 后失败 ✅ 已修复
-
-- **模式**: R11 部分修改 / 最终 overlay 循环
-- **位置**: `CommandStreamCore.Submit()`、`PreflightHierarchyOverlay()`、`ApplyHierarchyToWorld()`
-- **原始缺陷**: AddChild/RemoveChild 只在 Apply 时调用 World 校验。若本帧 hierarchy intent 与现有 parent 链共同形成循环，Submit 会先 materialize pending entity，再在 AddChild 时抛错；较早的 hierarchy intent 也可能已经写入 World。
-- **修复方案**: 在 allocator 对齐、deferred resolve 和 pending materialize 之前，对最终 `HierarchyByChild` overlay 做只读 parent-chain 追踪。被本帧销毁的 endpoint 沿用既有 skip 语义；其余 endpoint 必须在当前 World 或非取消 pending batch 中存在；self-parent、overlay cycle、现有链 + overlay cycle 均 fail-fast。
-- **回归测试**: `BUG_submit_preflights_hierarchy_overlay_cycle_before_world_mutation`、`BUG_submit_preflights_hierarchy_cycle_through_existing_parent_chain`、`BUG_submit_preflights_deferred_hierarchy_cycle_before_reserving_ids`。
-- **验证**: 2026-07-15 Release：MiniArch.Tests 1037/1037、HeroPipeline.Tests 5/5；CommandStream.Profile `existing-set` 10980.1 ticks/s；HeroComing.Perf Movement 1688.0、Attack 1090.1、Memory OK。
-- **确定性约束**: hierarchy 预检、Submit 应用和 Snapshot→Replay 必须使用同一 intent skip/cycle 契约；涉及排序或 placeholder resolve 顺序的后续改动必须先跑 hierarchy evolution 与 replay parity 测试。
-
-### #8: CommandStream 异步提交在契约失败前启动 worker ✅ 已修复
-
-- **模式**: R11 部分修改 / frozen state 所有权提前移交
-- **位置**: `CommandStreamCore.SubmitAndSnapshotAsync()`、`SubmitAndSnapshotIntoAsync()`、`PrepareAsyncHandoff()`
-- **原始缺陷**: 两个异步 API 先 `SwapOutState()` 并启动后台 delta worker，再同步调用 `SubmitFromFrozen()`。严格 Add/Set 或 hierarchy 契约失败时，pending entity 可能已 materialize，`SubmitAndSnapshotIntoAsync` 的复用 target 也会被 worker 改写；且 `_pendingFrozen` / `_pendingTask` 要到 Submit 成功后才登记，异常时失去 frozen state 的回收所有权。
-- **修复方案**: 在 active state 仍由调用线程独占时执行 pending slot、component stores、hierarchy overlay 全部预检；通过后才对齐 free-list、resolve placeholders、swap 并启动 worker。worker 创建后立即登记 frozen/task 所有权；若后续内部 Submit 异常，先观察 worker 完成再回收 frozen state，同时保留同步 Submit 异常。
-- **回归测试**: `BUG_async_submit_preflights_invalid_component_before_worker_handoff`、`BUG_async_into_preflights_invalid_component_before_worker_handoff`，覆盖同步抛错、World 不变、target wire bytes 不变、reservation 释放和 stream 可复用。
-- **验证**: 2026-07-15 Release：CommandStream + FrameDelta determinism 158/158、MiniArch.Tests 1039/1039、HeroPipeline.Tests 5/5；CommandStream.Profile 长测 `existing-set` 10976.9 ticks/s（改前 10980.1，测量噪声内）；HeroComing.Perf Movement 1721.9、Attack 1059.5、Memory OK。
-- **确定性约束**: 异步路径不得把“本地拒绝的 frame”交给 delta worker；contract preflight、allocator 对齐、placeholder resolve 和 worker handoff 的顺序属于 Submit 与 Snapshot→Replay 收敛契约。
-
-### #9: Debug structural-change 计数在异常后残留 ✅ 已修复
-
-- **模式**: Debug 诊断状态泄漏 / 非异常安全配对
-- **位置**: `World.StructuralChange.cs` Add/Remove、`World.EntityLifecycle.cs` Destroy/CreateInArchetype、`World.cs` `_structureChangeInProgress`
-- **原始缺陷**: 部分 `BeginStructChange()` / `EndStructChange()` 依赖正常返回配对。duplicate Add、stale Destroy 等路径在两者之间抛错时，Debug 计数永久大于零，使后续 `AssertNoStructChange()` 误报结构变更仍在进行。
-- **修复方案**: 所有原先无保护的配对在 Debug 编译下使用 `try/finally`；Release 编译继续只保留原业务语句，不引入异常区或额外运行时分支。已有 hierarchy destroy 的 `try/finally` 保持不变。
-- **回归测试**: `BUG_debug_structural_scope_recovers_after_exception`，先触发 duplicate Add，再验证计数归零并完成下一次合法 Remove。
-- **验证**: 2026-07-15：Debug WorldStructuralChangeTests 8/8；Release MiniArch.Tests 1039/1039、HeroPipeline.Tests 5/5；HeroComing.Perf Movement 1780.1、Attack 1066.8、Memory OK。
-
----
-
-## 已验证安全的模式 (P3)
-
-### #4: QueryCache 形状检测捕获 Archetype 平坦→分段晋升 (R5+R6+R13)
-
-- **位置**: `QueryCache.cs:103-126` EnsureRefreshed + `Archetype.Storage.cs:58-100` ConvertToChunked
-- **猜想**: 非分块 ChunkView(-1) 在 archetype 晋升为分块后访问 `_data`（已设 null）→ NRE
-- **结论**: ✅ 已验证安全（单线程）。`EnsureRefreshed` 在快路径 #2 通过 `ExpectedViewShape(arch) != _archetypeExpectedViews[i]` 检测形状变化（-1 → SegmentCount），触发 `RefreshViewsOnly()` under lock 全量重建。并发场景下的竞争窗口是已文档化的"查询期间禁止结构变更"约束，不是实现缺陷
-- **验证**: 代码走读 `QueryCache.cs:113-125` + `ChunkView.cs:85-98`
-
-### #5: Archetype Edge Cache 无需失效机制 (R14)
-
-- **位置**: `Archetype.cs:107-122` TryGetAddDestination / TryGetRemoveDestination
-- **猜想**: Edge cache 不检查 generation 计数器，新 archetype 创建后旧缓存项可能指向过时目标
-- **结论**: ✅ 已验证安全。`(SourceArchetype, AddComponentX) → DestinationArchetype` 映射由签名算术决定，签名不可变且 archetype 永不删除 → 映射永久正确。`Reset()` 时旧 archetype 全部重建，旧缓存随对象 GC。代码中不存在失效逻辑是正确设计，不是遗漏
-- **验证**: 代码走读 `Archetype.cs:107-122` + 全量搜索 `_addDestinationCache` 引用（仅 6 处，无失效/清除代码） + `World.cs:1227-1266` generation 计数器仅用于泛型静态 `CachedCreateArchetype`
-
-### #6: ChunkView 内部引用有效性 (R13)
-
-- **位置**: `ChunkView.cs:85-98` GetSpan<T>()
-- **猜想**: ChunkView 返回 Span<T> 指向 Archetype 内部 byte[]，结构变更后 Span 变悬空
-- **结论**: ⚠️ 契约约束，非实现缺陷。XML doc 明确禁止跨结构变更持有 ChunkView。违反时最可能的结果是 NRE 或 IndexOutOfRangeException（fail-fast），而非静默错读。QueryCache 在每次 EnsureRefreshed 时重建视图
-- **验证**: XML doc `ChunkView.cs:14-19` + QueryCache 重建逻辑
-
----
-
-## 安全猜想（已调查，非 bug）
-
-| # | 猜想 | 调查结果 | 验证方式 |
-|---|------|----------|----------|
-| S1 | `HierarchyTable.RemoveDestroyed` 中 `_firstChild` 未重置导致 ID 回收后继承旧链表 | ❌ 非 bug。第 199 行显式 `_firstChild[entity.Id] = NoSlot`，已缓存的局部变量 `slot` 继续遍历 | 代码走读 `HierarchyTable.cs:183-214` |
-| S2 | `Archetype.RemoveAt` 分块模式跨段 swap-remove 产生空洞破坏段连续不变式 | ❌ 非 bug。始终与最后一个非空段交换，`AssertSegmentInvariants` (DEBUG) 验证"非空段连续在前" | 代码走读 `Archetype.Storage.cs:333-369` |
-| S3 | `World.Destroy` 子树中间节点 hierarchy 清理不全 | ❌ 非 bug。后序遍历 + `DestroySingle` 中每节点调自己的 `RemoveDestroyed`，子节点先清理 → 父节点轮到时链表已空 | 代码走读 `World.EntityLifecycle.cs:83-229` |
-| S4 | `Archetype.RemoveAt` 残留组件数据在 ID 复用时泄露 | ❌ 非 bug。Archetype 内同组件集合保证新实体迁入时全量覆写。`Count` 边界阻止读取 | 设计分析 |
-| S5 | `Archetype._cachedFlatEntities` 世代计数器 `long` 溢出 | ❌ 非 bug。需 2^63 次布局变更，物理不可能 | 数值分析 |
-| S6 | EntityFieldResolver struct layout 变化导致 offset 缓存失效 | ❌ 非 bug。`Marshal.OffsetOf` 实时查 CLR，缓存按 `ComponentType.Value` 索引，类型→ID 映射不可变 | 代码走读 `EntityFieldResolver.cs:70-103` |
-| S7 | `RestoreState` 不回退 `_archetypeSnapshot` 导致 query 看不到 capture 后创建的新 archetype | ❌ 非 bug。capture 后创建新 archetype 时当前 `_archetypeSnapshot` 已经由 `PublishArchetypeSnapshot` 追加；restore 后这些 archetype 作为空壳保留，QueryCache 看到空 chunk/entity count 不影响正确性。archetype 永不删除是 QueryCache append-only 失效机制的基础 | 代码走读 `World.cs:1205-1228` + `World.QueryCache.cs:127-140` + `QueryCache.cs:103-126` |
-| S8 | `CommandStream` 对 pending entity 的 `Create+Add/Set/Remove` 应产生中间 `Changes()` / `Transitions()` | ❌ 非 bug。pending batch 的契约就是只保留最终 materialized state；同一 pending entity 上的 Add/Set/Remove 在 Submit/Snapshot/Replay 前折叠为最终组件签名。中间操作不会作为独立 write/transition 事件暴露；只有 final state 创建时的最终 filter 匹配结果可观察 | 代码走读 `WritePendingComponent` / `MarkBatchComponentRemoved` → `DeduplicateBatchChain` / `MaterializeFromBatchBuffer` / `EmitCreateFromBatch` + 契约测试 `A6/A7/B16/B16b` |
-| S9 | **M4 变质对等扫描**：Submit/Replay/Restore 三路收敛验证——9 个模式共 9 个测试全 PASS，零分歧 | ✅ 无歧 — Submit/Replay/Restore 收敛。测试覆盖：P1 (Create+Add)、P2 (Set)、P3 (Remove+Add 同组件)、P4 (Add+Remove 同组件)、P5 (Hierarchy+cascade destroy)、P6 (create/cancel churn B5/B6 territory)、P7 (Clone+mutate)、P8 (Add+Set+Remove 同组件)、P9 (高密度混合 burst)。Restore 路径验证：所有模式 CaptureState 后 RestoreState 正确回滚到 pre-mutation 状态。3 路字节级 checksum 一致 | 运行 `SubmitReplayRestoreParityTests` 9 个测试，全量 Release 测试通过 |
-| S10 | `CompactRemoveRowsFlat` 的 hole-fill 可能在 live prefix 留下 stale source entity 引用 | ❌ 非 bug。每个被填的 hole（`row < newCount`）只会从原 tail suffix（`tail >= newCount`）取 survivor；所有 source tail slots 都落在最终 `[newCount, oldCount)` dead zone，并被 `Array.Clear(_entities, newCount, oldCount - newCount)` 清掉。`tail` 循环结束后可能小于 `newCount` 只是计数游标回退，不代表 stale source 位于 live prefix。 | 代码走读 `Archetype.Storage.cs:398-428` 的 prefix holes vs suffix survivors 不变量；`DestroyMany_chunked_partial_archetype_matches_loop_checksum` 与 `DestroyMany_matches_guarded_for_destroy_by_checksum_diff_and_validator` 覆盖 partial remove logical parity |
-
----
-
-## 交叉引用
-
-- 历史上已修复的真 bug 和回归测试 → 见各 kb 页的"坑点"段 + 对应测试文件
-- 已知约束和设计权衡 → `kb-design-rationale.md`
-- 架构审视 → `kb-architecture-review.md`
-- 鲁棒性审阅技能 → 注：该技能为 agent 基础设施内置 skill（`robustness-review`），可通过 `skill` 工具加载。
-
----
-
-## 浸泡测试发现的 bug（已验证已修复）
-
-浸泡测试 `tools/soak/MiniArch.Soak/` 通过长周期 Submit/Replay 随机操作序列验证正确性。以下是发现的库级 bug：
-
-### B1: `ApplyRawAdd` 重复 Add 抛异常（Replay 路径）
-
-- **位置**: `World.StructuralChange.cs:152` `ApplyRawAdd`
-- **症状**: ReplayCore 处理 delta 中的 Add 操作时，如果实体已有该组件则抛异常
-- **根因**: Submit 路径 `ApplyTypedAdd` 通过 `PruneStaleComponentCommands` 去重，Replay 路径无等价去重
-- **触发场景**: Clone 继承组件后同一帧又 Add 同一组件 → delta 含重复 Add
-- **修复**: 实体已有组件时原地写值而不是抛异常（Add 语义是"确保实体带该组件"）
-- **验证**: 浸泡测试 20000 帧 PASS（历史，ApplyRawAdd/ApplyTypedAdd 内部覆盖行为）；当前 `World.Add<T>` 公 API 为 strict Add，测试 `TrickyEdgeCaseTests.Add_component_that_already_exists_throws` 验证已存在时抛异常
-
-### B2: `Clear` 不释放已取消 batch 的预留实体
-
-- **位置**: `CommandStreamCore.cs:1515` `Clear`
-- **症状**: FreeList 分裂，总数正确但 free slots + occupied slots ≠ 总 slot 数
-- **根因**: `Clear(releaseReserved: false)` 跳过已取消 batch 的实体（未调用 `ReleaseReservedEntity`），但 ReplayCore 始终释放 → 两路径 FreeList 分歧
-- **触发场景**: `Create` → `Destroy`（取消 batch）后实体 slot 永久残留为"reserved"状态
-- **修复**: 取消的 batch 无论 `releaseReserved` 标志都释放
-- **验证**: 浸泡测试 PASS + 当时全量测试通过
-
-### B3: `ApplyHierarchyToWorld` 与 `EmitHierarchyToDelta` 层级操作顺序不同
-
-- **位置**: `CommandStreamCore.cs:951` `ApplyHierarchyToWorld`
-- **症状**: 同一帧内多个 AddChild/RemoveChild 产生不同循环检测/跳过结果
-- **根因**: `ApplyHierarchyToWorld` 按字典迭代（插入顺序），`EmitHierarchyToDelta` 按 `HierarchyComparer` (Entity.Id) 排序 → 某些操作序列下 Submit 看到循环而 Replay 不报，或反之
-- **修复**: `ApplyHierarchyToWorld` 也使用 `HierarchyComparer` 排序
-- **验证**: 浸泡测试 PASS
-
-### B4: `ApplyTypedAdd` 重复 Add 抛异常（Submit 路径）
-
-- **位置**: `World.StructuralChange.cs:100-107` `ApplyTypedAdd<T>`
-- **症状**: Submit 时 Clone 创建的实体已有组件，ComponentStore 的 Add 操作试图再次添加 → 抛异常
-- **根因**: Submit 流程中 MaterializeCreates（含 Clone 的组件）先运行，然后 ComponentStore 的 Add 操作运行 → 组件已存在
-- **触发场景**: 浸泡测试中 OpClone 后紧接 OpAdd 同一组件
-- **修复**: 与 B1 相同：实体已有组件时原地写值而不是抛异常
-- **验证**: 浸泡测试 20000 帧 PASS（历史，ApplyRawAdd/ApplyTypedAdd 内部覆盖行为）；当前 `World.Add<T>` 公 API 为 strict Add，测试 `TrickyEdgeCaseTests.Add_component_that_already_exists_throws` 验证已存在时抛异常
-
-### B5: `EnsureReplayReservation` swap-remove 导致 FreeList 顺序分歧（Submit vs Replay）
-
-- **位置**: `World.EntityLifecycle.cs:549-560` `RemoveFromFreeList` / `World.EntityLifecycle.cs:423-426` `PopFreeIdUnsafe`
-- **症状**: Submit 与 Replay 产生不同的 free-list 顺序；alive entities 集合完全一致，但 free-list 上已回收 slot 的顺序不同。最终 CanonicalChecksum 因 free-list 顺序不匹配而报错。浸泡测试 `--seed 111 --entity-cap 100 --entity-floor 10 --ops-per-frame 50` 在单帧高频操作下触发。
-- **根因**: 同一帧内多个 pending entity 被 Create 后部分被 Cancel（Destroy）时，Submit 路径与 Replay 路径对 free-list 的移除方式不同：
-  - **Submit 录制期**：`CreateImpl()` → `AcquireEntityIdUnsafe()` → `PopFreeIdUnsafe()` 始终从 free-list **末尾**（栈顶）LIFO 弹出，不改变剩余条目的相对顺序。
-  - **Replay 期**：`EnsureReplayReservation()` (Case 1) → `RemoveFromFreeList(entity)` 从 free-list **任意位置**扫描匹配的 `(id, version)`，找到后执行 **swap-remove**（用末尾元素覆盖匹配位置，再递减 count）。当匹配的实体不在末尾时，末尾元素被 swap 到中间，改变了 free-list 的内存顺序。
-  - 当同一帧内有 2+ 个 pending entity 被取消并重新被后续 Create 消费时，Replay 路径的 swap-remove 级联改变那些**在帧结束时幸存**的 free-list 条目的顺序，而 Submit 路径的 LIFO pop 不会产生这种重排。
-- **详细机制**：见 `tests/MiniArch.Tests/Core/FrameDeltaDeterminismTests.cs` 中 `Submit_and_Replay_free_list_diverges_with_multi_cancel` 测试的 XML doc。核心序列：Create 3 entities（消耗 free-list 顶部 3 个 slot），Cancel 其中 2 个（Push back 到栈顶），然后 Submit vs Replay 在帧结束后 survivor 条目的数组顺序不同。
-- **触发条件**：需要单帧内 2+ 个 pending entity 被取消，且 free-list 上至少 2 个幸存条目（即 frame 结束后 free-list 非空）。浸泡测试高 ops/frame + 小 entity cap 时容易命中：Create 耗尽 free-list、Cancel 回填、survivor 因 swap-remove 顺序错乱。
-- **修复建议**：`RemoveFromFreeList` 不应使用 swap-remove。改为从末尾线性扫描找到匹配项后，直接递减 `_freeIdCount`（用末尾元素覆盖匹配项，而不是反过来）。但调用方 `EnsureReplayReservation` 需要保证匹配的实体确实在 free-list 上且其位置不影响正确性。或者让 `EnsureReplayReservation` 走统一的 `PopFreeIdUnsafe()` + 版本校验，但需处理 Reserve 要求指定实体而非任意实体的问题。
-- **回归测试**：`Submit_and_Replay_free_list_diverges_with_multi_cancel`（已修复，当前 PASS）
-- **确认**: 推翻"cascade destroy ordering"假说；根因在 free-list 的 swap-remove vs LIFO pop，而非层级级联顺序。
-
-### B6: `CancelPendingEntity` 录制期 push 顺序与 Replay 期 Release 顺序不同（修复后仍存在二次分歧）
-
-- **位置**: `CommandStreamCore.cs:1096` `CancelPendingEntity` / `World.EntityLifecycle.cs:449` `ReleaseReservedEntity`
-- **症状**: 浸泡测试 `--seed 111 --entity-cap 100 --entity-floor 10 --ops-per-frame 50 --frames 5000` 在 frame ~1839 报 CanonicalChecksum mismatch——occupancy 一致但 free-list 上 2 个相邻条目互换位置（如 9(v54) 与 121(v9)）。
-- **根因**: B5 的 shift-remove 修复后，仍有第二条分歧路径：
-  - **录制期**：`CancelPendingEntity` 在用户 Destroy 调用时立即调用 `ReleaseReservedEntity` → `PushFreeIdUnsafe`，将废 slot 追加到 free-list 末尾。push 顺序是**用户销毁顺序**。
-  - **Replay 期**：`EmitPendingEntitiesToDelta` 按 batch 索引（创建顺序）发射 `Reserve+Release` 对。Release 处理 `ReleaseReservedEntity` → `PushFreeIdUnsafe`，push 顺序是**batch 创建顺序**。
-  - 当同一帧内 pending entity 的创建顺序与销毁顺序不同时（如创建 A 再创建 B，但销毁 B 再销毁 A），两个路径的 free-list 末尾条目顺序相反——相邻两条目互换。
-- **触发场景**: 浸泡测试中 `Clone(76)→9` 创建 entity 9、`Create(121)` 创建 entity 121，然后 `Destroy(9)`、`Destroy(121)` 依次调用。batch 创建顺序为 [15, ..., 121, 9, ...]，销毁顺序为 9 先于 121。录制期 push 顺序为 9(v54)、121(v9)；Replay 期的 Release 顺序为 121(v9)、9(v54)。最终 free-list 上 9 与 121 互换。
-- **修复**: 在 `Submit()` 开始时调用 `AlignCancelledBatchFreeListOrder()`，遍历已取消的 batch（按 batch 创建顺序），对每个仍留在 free-list 中的 cancelled entity 执行 `RepushFreeEntry`（从当前位置移除并重新 append 到末尾）。这使源 world 的 free-list 在 `ApplyDestroys`（push 常规销毁）之前与 Replay 路径的 free-list 一致。
-  - **副作用**: batch 顺序对齐改变了后续帧的 entity ID 分配（free-list pop 顺序不同），间接触发了已存在的级联销毁顺序问题和层级循环检测问题。为此额外修复：
-    - `ApplyDestroys` 和 `SubmitFromFrozen` 在销毁前检查 `IsAlive`（与 Replay 路径一致），防止已级联销毁的 entity 再次销毁报错。
-    - 浸泡测试 `OpAddChild` 的循环检测增强为模拟 `ApplyHierarchy` 的排序顺序检测循环，防止违反库层级不变式的操作被记录。
-- **验证**: 浸泡测试 200000 帧 PASS + `HeroComing.Perf` 性能门禁通过 + 当时全量单元测试通过。
-
-### B7: `ChangeQuery.Previous()` 快照捕获点对缺失 captured type 崩溃
-
-- **位置**: `ChangeQuery.cs` 的 `OnBeforeWrite`、`OnAfterWrite`、`OnBeforeTransition`、`WriteNewTransitionSnapshot`
-- **症状**: 当 `.Previous()` 启用且 `.Capture<T>()` 注册的类型在当前 entity 的 archetype 中不存在时（例如 entity 有 `Position` 但无 `Mana`，而 `Mana` 被 capture），原代码使用 `GetComponentIndexFast` + `GetComponentBytes` 读取不存在的列 → `IndexOutOfRangeException` 或错读其他组件数据。
-- **根因**: 4 个快照捕获点使用 `GetComponentIndexFast`（无边界检查），假设所有 captured type 一定存在于匹配 archetype 中。实际存在 entity 通过 filter 匹配（`.With<HP>()`）但部分 captured type 不存在的场景（如 capture `Mana` + filter `With<HP>`，entity 只有 `Position,HP`）。
-- **触发场景**: `Track().Capture<Mana>().With<HP>().Previous()` 后，对一个有 `HP` 但无 `Mana` 的 entity 做 `Add<Velocity>`（结构变更触发 `OnBeforeTransition`），或其他写操作触发 `OnBeforeWrite`/`OnAfterWrite`/`WriteNewTransitionSnapshot`。
-- **修复**: 将 4 个点的 `GetComponentIndexFast` 替换为 `TryGetComponentIndex`，类型不存在时跳过字节拷贝，快照对应范围保持零值。
-- **回归测试**: `Previous_on_empty_world_then_Add_does_not_crash`、`Previous_on_empty_world_then_Set_does_not_crash`、`Previous_then_Remove_captured_component_keeps_zero_new_snapshot`
-- **验证**: 上述回归测试通过。HeroComing.Perf 门禁 MOV 1925/ATK 1179，内存稳定。
-
-### B8: `RestoreState()` 后旧 `ChangeQuery` 的 typed tracker 未自愈
-
-- **位置**: `ChangeQuery.cs:64-83` `EnsureUsable` / `World.cs:1273-1276` `RestoreState`
-- **症状**: 旧 query 在 `RestoreState()` 后继续使用时，`ValueChanges<T>()` 先 drain 出 restore 前的脏数据；后续新的 `Set<T>` 又完全不再进入该 tracker
-- **根因**: `RestoreState()` 清空了 `world._typedTrackers`，但 `ChangeQuery.EnsureUsable()` 的 self-heal 只重注册 transition query，没有清空并重建 `_typedTracker`
-- **修复**: self-heal 时显式 `DeactivateTypedTracker()`，随后按当前 query 配置重新激活 typed tracker
-- **回归测试**: `X_Watch_RestoreState_ValueTrackingSurvivesRestore` (CrossFeatureParityTests.cs:567)、`X_Watch_RestoreState_TransitionTrackingSurvivesRestore` (608)、`RestoreState_preserves_watch_for_post_restore_mutations` (ChangeTrackingSnapshotTests.cs:60)
-- **验证**: 回归测试通过（Watch API 等价覆盖）
-
-### B9: typed fast path 激活后继续加 filter / 第二个 capture，`ValueChanges<T>()` 仍返回旧 tracker 数据
-
-- **位置**: `ChangeQuery.cs:90-104` `Capture<T>` / `ChangeQuery.cs:186-231` `With/Without/WithAny`
-- **症状**: `Track().Capture<Position>().Previous()` 先激活 typed tracker 后，再 `.With<Position>()` 或 `.Capture<Velocity>()`，query 已不满足单 capture + 无 filter 契约，但 `ValueChanges<Position>()` 仍继续返回数据
-- **根因**: typed tracker 只有“激活”逻辑，没有“失效撤销”逻辑；query 配置变化后旧 tracker 仍挂在 world 上继续接收 `Set<T>`
-- **修复**: 引入 `DeactivateTypedTracker()` / `RefreshTypedTrackerActivation()`；filter 和第二 capture 会撤销 typed fast path
-- **回归测试**: 无直接等价测试——旧 typed fast path 方案（`ValueChanges<T>` / `Track().Capture<T>().Previous()`）已由 Watch API 取代。Watch API 中 `ChangeWatch` / `TransitionWatch` 的激活状态由 `Watch()` 时刻的快照决定，不存在"激活后改配置"的场景。此风险已被架构设计消除。
-- **验证**: 不再适用（旧 API 已删除）
-
-### B10: query 创建后 world 继续扩容，typed tracker 的 entity 索引数组不跟随增长
-
-- **位置**: `World.StructuralChange.cs:159-197` `ApplyTypedSet` / `ChangeTracker.cs:61-79`
-- **症状**: query 在 `EntityCapacity=64` 时创建，world 后续创建到第 65 个实体再 `Set<T>`，`SlotByEntityPlusOne[id]` 越界，最终在 `ValueChanges<T>()` drain 时触发 `IndexOutOfRangeException`
-- **根因**: tracker 只在激活时 `PreSize()` 一次；后续 `Set<T>` 直接用 `Unsafe.Add` 按 `entity.Id` 索引，没有按 world 增长补扩容
-- **修复**: `ApplyTypedSet` 在访问 slot 前调用 `typedTracker.EnsureEntityCapacity(id)`；该方法只增长当前写 buffer，不动可能仍被用户 span 持有的 `SpareLog`
-- **回归测试**: `Watch_handles_world_growth_after_arming` (ChangeQueryTests.cs:274)
-- **验证**: 回归测试通过
-
-### B11: destroyed entity 的旧 slot 未清，id 复用后被误判为同一实体的二次 Set
-
-- **位置**: `World.EntityLifecycle.cs:205-230` `DestroySingle` / `World.StructuralChange.cs:282-301` `RemoveBoxed`
-- **症状**: 同一 drain 周期内，实体 A `Set<T>` 后被销毁，再复用相同 id 创建实体 B 并 `Set<T>`，`ValueChanges<T>()` 只返回 1 条，且把 A 的 `Old` 与 B 的 `New` 错拼到一起
-- **根因**: `SlotByEntityPlusOne` 只按 `entity.Id` 建索引；destroy / remove 成功后没有及时把该 slot 清零，后续同 id 写入走了“重复 Set”分支
-- **修复**: destroy 时清所有 typed tracker 的该 id slot；remove 某组件时只清对应 component tracker 的 slot，避免 remove+add+set 跨组件生命周期串脏
-- **回归测试**: `Destroy_and_id_reuse_does_not_leak_stale_change` (ChangeQueryTests.cs:346)、`ChangeWatch_destroy_recreate_reports_stale_old` (WatchApiTests.cs:151)、`ChangeWatch_destroy_recreate_stale_slot_reported` (WatchApiTests.cs:199)
-- **验证**: 回归测试通过
-
-### B12: `CommandStream.Set` 的 set-only / mixed Set 路径绕过 typed tracking
-
-- **位置**: `CommandStreamCore.cs:2701-2783` `ComponentStore<T>.ApplyToWorld`
-- **症状**: `world.Track().Capture<T>().Previous().ValueChanges<T>()` 能看到直接 `world.Set<T>()` 的写入，但看不到 `CommandStream.Set()` 经 `Submit()` 落地的写入；Hero pipeline 这类大量经 `CommandStream` 改值的场景中，observer 的 `changes=0`
-- **根因**: `ApplyToWorld` 的 set-only fast path 和 mixed Set 分支都直接调用 `SetComponentAtFlatNoTrack` / `SetComponentAtTypedNoTrack`，完全绕过 `World.ApplyTypedSet<T>`，因此 typed tracker 从未收到 CommandStream 的 Set 写入
-- **修复**: 仅当 `world._typedTrackers` 非空时，`CommandStream` 的 Set 路径改走 `World.ApplyTypedSet<T>`；无人 tracking 时保留原 no-track 快路径，默认 baseline 不变
-- **回归测试**: `Watch_captures_CommandStream_Set` (ChangeQueryTests.cs:66)
-- **验证**: 回归测试通过
-
-### B13: shared `ChangeTracker<T>` 切换后的 API / 预分配回归
-
-- **位置**: `ChangeQuery.cs` / `SharedTrackerRegistry.cs` / `World.cs`
-- **症状**: shared tracker 初版实现中存在 4 个回归风险：
-  1. `.Previous().Capture<T>()` 顺序不创建 tracker，`ValueChanges<T>()` 永远为空。
-  2. `ValueChanges<T>()` 未检查 T 是否等于 query 唯一 captured type，可能读到另一个 query 创建的同类型 world tracker。
-  3. `ChangeQuery.ClearChanges<T>()` 未按 query captured type 限定，可能越权清掉其它组件类型的 shared tracker。
-  4. `SharedTrackerRegistry.GetOrCreateTracker<T>()` 创建或复用 tracker 时未 `PreSize(world.EntityCapacity - 1)`，首个 `Set<T>` 重新分配，破坏稳态零分配预期。
-- **根因**: 从 per-query tracker 切到 world-shared tracker 后，原先由 `_typedTracker is ChangeTracker<T>` 隐式提供的类型隔离和由 `TryActivateTypedTracker<T>` 提供的预分配语义被移除，但初版未显式补回。
-- **修复**:
-  - `Capture<T>()` 在 `_hasPrevious` 已为 true 且仍满足单 capture/no filter 时创建 shared tracker。
-  - `ValueChanges<T>()` / `ChangeQuery.ClearChanges<T>()` 均要求 T 等于唯一 captured type。
-  - `World.ClearChanges<T>()` 增加 `AssertNotDisposed()`。
-  - `SharedTrackerRegistry.GetOrCreateTracker<T>(entityCapacity)` 创建/复用时调用 `PreSize(entityCapacity - 1)`。
-- **回归测试**: 无直接等价测试——旧 `ValueChanges<T>` / `ClearChanges<T>` / `SharedTrackerRegistry` API 已全部被 Watch API 取代。Watch API 中每个 `ChangeWatch<T>` 独立持有 tracker，类型隔离和预分配由 watch 创建逻辑天然保证。此风险已被架构设计消除。
-- **验证**: 不再适用（旧 API 已删除）
-
-### B14: capture-only query 常驻 transition 注册 / shared registry 常驻导致 Hero 基线回退
-
-- **位置**: `World.Track()` / `ChangeQuery.RefreshTransitionRegistration()` / `World.SharedTrackers` / `CommandStreamCore.ComponentStore<T>.ApplyToWorld()`
-- **症状**:
-  1. `Track().Capture<T>()` 不开 `Previous()`、不加 filter 时仍被 `World.Track()` 立即注册为 transition observer，高 churn 场景处理上亿次无意义 transition。
-  2. shared tracker 初版让每个 `World` 常驻分配 `SharedTrackerRegistry`，no-observer `CommandStream` 也必须经 registry 判断，HeroComing no-observer Movement 从接近 1950 掉到约 1836。
-- **根因**: Capture 不是 filter，但旧注册逻辑把 cursor 创建等同于 transition 订阅；同时把“没有 tracking”表示为“空 registry 对象”而不是旧版 direct-null fast path，破坏 no-track 空状态。
-- **修复**:
-  - `World.Track()` 不再立即注册 query；只有 `.With/.Without/.WithAny` 设置 filter 后才注册 transitions。
-  - capture-only/no `Previous()`/no filter query 变为 inert cursor。
-  - `SharedTrackerRegistry` 改为 lazy/null，只有 `Previous()` 创建 value tracker 时才分配；Dispose 清空并置 null。RestoreState 只清 pending changes，保留仍存活观察者的 tracker。
-  - `CommandStreamCore.ComponentStore<T>.ApplyToWorld()` 在 registry 为 null 时直接走内联 no-track loop；tracked loop 留在独立 helper。
-- **回归测试**: 无直接等价测试——旧 capture-only/inert query 概念及 `Track()` / `ValueChanges_nontracking_query_does_not_interfere` 均随旧 API 删除。Watch API 中 `Watch<T>()` 创建即为 active watch，无惰性 cursor 机制。此风险已被架构设计消除。
-- **验证**: 不再适用（旧 API 已删除）
-
-### B15: `RestoreState()` 后旧 observer 需要手动读取 re-arm，否则漏掉第一批 post-restore mutation
-
-- **位置**: `World.RestoreState()` / `ChangeQuery.EnsureUsable()` / `SharedTrackerRegistry.Clear()`
-- **症状**:
-  1. value query：`RestoreState()` 后如果用户没有先调用 `ValueChanges<T>()` 触发 self-heal，而是直接 `Set<T>`，这次 post-restore Set 不会进入 tracker。
-  2. transition query：`RestoreState()` 清空 `_changeQueries` 后，旧 filter query 不再注册；restore 后第一次 Create/Add/Remove/Destroy 发生在下一次 `Transitions()` 前时会被漏掉。
-- **根因**: restore 把 observer runtime state 当作可完全丢弃的缓存处理；但旧 `ChangeQuery` 是用户持有的 live cursor，语义上不应要求用户在 rollback 后手动 re-arm。lazy self-heal 只能修复“先读后写”，不能修复“先写后读”。
-- **修复**:
-  - `RestoreState()` 不再清空 transition observer 列表，而是对 live query 调用 `OnWorldRestored()`：清 stale transition/cache，推进 generation，并保留注册。
-  - `SharedTrackerRegistry.ClearChanges()` 只清 pending value-change logs，保留已创建 tracker；Dispose 仍用 `Clear()` 移除 tracker 并置 null。
-- **回归测试**: `X_Watch_RestoreState_ValueTrackingSurvivesRestore` (CrossFeatureParityTests.cs:567)、`X_Watch_RestoreState_TransitionTrackingSurvivesRestore` (608)、`X_Watch_RestoreState_NoStaleTransitionsAfterRestore` (642)、`RestoreState_preserves_watch_for_post_restore_mutations` (ChangeTrackingSnapshotTests.cs:60)
-- **验证**: Release 全量测试通过；HeroComing.Perf baseline gate 通过（Movement 1940.1 / Attack 1189.0，内存 OK）；MiniArch.Soak sweep 8/8 PASS。
-
-### B16: Replay raw Add 后同批 raw Set 漏掉 value diff baseline（历史——旧 API 已删除）
-
-- **位置**: `World.StructuralChange.cs` `ApplyRawAdd` / `ChangeTracker.cs` boundary diff baseline 捕获（旧文件，2026-07-09 随 Watch 重构删除，具体行号已不可用）
-- **症状**: 已存在实体在 delta replay 中先 `Add<T>(valueA)` 后 `Set<T>(valueB)`；旧 `TrackValueChanges<T>()` 已启用时，`.Changes` 返回空，而 Submit typed path 会返回 `{ Old=valueA, New=valueB }`。
-- **根因**: old boundary diff 改造后 typed Add 会 capture 初始 baseline，但 raw Replay Add 只迁移并写入 bytes；后续 raw Set 直接写当前值。读端扫描发现该 entity 无 baseline，于是把最终值 `valueB` 当作新 baseline，漏掉 Add 初值到 Set 终值的 diff。**此 API 已被 Watch pull-event 模型取代，不影响当前行为**。
-- **修复**: `IChangeTrackerControl` 增加 raw baseline capture；`ApplyRawAdd` 成功后按 component type 对已存在 tracker 写入 Add 初值 baseline。raw Set 与 `Set<T>` 热路径不查询 tracker。
-- **回归测试**: `BUG_Replay_existing_entity_add_then_set_tracks_value_from_add_baseline`（测试文件已随旧 API 删除，不可用）
-- **验证**: 新增回归测试先 RED（Actual 0），修复后 GREEN。
-
-### B17: `CopyComponentsFromBatch` 在 BatchBuf 扩容后继续使用旧数组 ✅ 已修复
-
-- **位置**: `CommandStreamCore.cs` 的 `CopyComponentsFromBatch`
-- **症状**: 克隆 pending source 时，复制 batch 组件过程中如果 `ReserveBatchBufSpace` 触发 `_frozen.BatchBuf` 扩容，方法里循环前捕获的局部 `buf` 仍指向旧数组；随后用新 offset 写旧数组，可能抛 `ArgumentOutOfRangeException`。
-- **根因**: `Array.Resize(ref _frozen.BatchBuf, ...)` 会替换字段引用。旧数组虽仍有源 bytes，但 destination offset 是基于扩容后的 `_batchBufLen` 计算的，不能继续写旧数组。
-- **修复**: `CopyComponentsFromBatch` 在每次 `ReserveBatchBufSpace` 后重新读取 `_frozen.BatchBuf`，确保 source/destination span 都基于当前数组。
-- **回归测试**: `BUG_pending_clone_copies_from_resized_batch_buffer`：构造 `Position` + 24-byte `SignalPayloadField` 的 pending source，把 batch buffer 填到 4072 bytes，第二次复制 24-byte payload 时强制扩容。
-- **验证**: 回归测试先 RED（`ArgumentOutOfRangeException`），修复后 GREEN；`dotnet test -c Release`：MiniArch.Tests 951/951 + HeroPipeline.Tests 5/5 PASS；`HeroComing.Perf --check-baseline` Movement 1907.8 / Attack 1193.6，内存 OK；boundary soak 20,000 frames PASS。
-
-### B18: `CreateMany` bulk fast path 对重复组件类型违反 last-wins ✅ 已修复（已转为 fast-fail）
-
-- **位置**: `CommandStreamCore.cs` 的 `TryMaterializeCreateManyGroup`
-- **症状**: `CreateMany<Position, Position, TWriter>` 中 writer 先输出旧 `Position`、再输出新 `Position` 时，Submit fast path 最终保留旧值；per-entity fallback / Snapshot+Replay 语义则保留最后写入的新值。
-- **根因**: fast path 用 `MaskBuilder.BitsSet == componentCount` 证明类型唯一且 mask canonical，但 `MaskBuilder.SetBit` 对重复 id 仍递增 `BitsSet`。重复组件类型没有 fallback，bulk loop 按链表顺序写同一列两次，最后把旧值覆盖回去。
-- **修复**: fast path 改为用最终 mask 的 popcount（`World.IsMaskCanonical(mask, componentCount)`）作为前置条件；重复组件类型或 id >= 512 都 fallback 到 `MaterializePending`，复用现有 dedup last-wins 语义。
-- **2026-07-12 升级为 fast-fail**：`TryMaterializeCreateManyGroup` 对任何 precondition 不满足（混合 Set/Add/Remove、重复组件类型）改为直接抛 `InvalidOperationException`，不再静默降级。这是有意识的设计变更——`CreateMany` 应一次性完成初始化，混用操作是 API 误用。
-- **回归测试**: `CreateMany_duplicate_component_types_throws`（已重命名）。
-- **验证**: `dotnet test -c Release --filter "CreateMany_"` 14/14 PASS（3 个旧 fallback 测试改为 `Assert.Throws<InvalidOperationException>`）。
-
-### 修复原则
-
-这些修复遵循**不变性原则**：Submit 路径和 Replay 路径必须在操作顺序和语义上一致。分歧（如排序差异、去重差异、释放差异）是 Submit/Replay 不一致的根因。库层不做过度防御（不静默吞非法操作），但语义上等价的操作（Add 已存在 = 写值）应被允许。ChangeQuery 自身的修复遵循**防御性读取原则**：只要组件可能缺失，就必须使用 `TryGetComponentIndex` 而不是 `GetComponentIndexFast`。
-
----
-
-## M5 热路径防御/成本删除审计（2026-07-09）
-
-### 审计范围
-
-`src/MiniArch/Core/` 全量 core 文件（~9500 LOC），重点扫描：
-- Dictionary/HashSet 在每帧热路径中的使用
-- `if (condition) throw` 检查在 10000+/帧循环中
-- 范围/索引检查的完全冗余
-
-### 基线数据
-
-```
-Scenario           |   Rounds/s |   ms/round |   Rounds |  Heap Δ KB |   Memory
-Movement           |     1877.6 |      0.533 |    56328 |    -3012.8 |       OK
-Attack             |     1133.6 |      0.882 |    34009 |    -2910.2 |       OK
-```
-
-### 已检查的候选及裁决
-
-| # | 位置 | 猜想 | 结论 | 验证 |
-|---|------|------|------|------|
-| M5-1 | `FrameDelta.cs:227-228` `Validate()` 内 `new HashSet<Entity>()` (x2) + line 322 `new HashSet<int>()` | 这些 HashSet 在 Validate 调用时分配，如果在每帧回放前调用则为每帧分配 | ❌ 非热路径。`Validate()` 的文档明确标注"对不受信任的 delta，在 Replay 前调用"。在 lockstep 常态下，本地生成的 delta 跳过 Validate。两个 HashSet 的存在是有意的防御设计，每帧路径不调用 | 代码走读：`Validate()` 注释 + 无从 `ReplayCore` 调用 Validate 的调用图 |
-| M5-2 | `World.cs:38-57` `_archetypes` / `_archetypeByMask` / `_archetypeByHash` / `_replayCreateCounts` Dictionary | 每帧 archetype 查找中 Dictionary 查找开销 | ❌ 非热点。`_archetypeByMask`（热路径）是 canonical mask 的 O(1) Dictionary 查找，`_replayCreateCounts` 在 `PreScanForCapacity` 中重用（热稳定后零分配）。`_archetypes` 仅在冷启动或罕见的高 ID 组件路径上访问 | 代码走读 + §3.7（Signature 分配已缓存） |
-| M5-3 | `World.cs:84-85` `_queryFiltersByDescription` / `_queries` Dictionary | 每次 query 迭代前从 Dictionary 查 QueryCache 的开销 | ❌ 非热点。这些 Dictionary 仅用于 query 创建/恢复，每帧的 `GetChunkViewSpan`/`GetArchetypeSpan` 直接访问缓存的 `_snapshotChunkViews`/`_snapshotArchetypes` 数组，不涉及 Dictionary 查找 | 代码走读 `QueryCache.cs:103-126` |
-| M5-4 | `CommandStreamCore.cs:2942` `FrozenState.HierarchyByChild` Dictionary`<Entity, HierarchyIntent>` | Submit/Snapshot 路径上的 Dictionary 迭代 | ❌ 条件性使用。仅在帧内有 AddChild/RemoveChild 操作时填充。`.Clear()` 在 `SwapOutState` 中每帧重置，无累积。字典大小 = 每帧的分层操作数，典型值为 0-10 | 代码走读：`SwapOutState` line 981 `_frozen.HierarchyByChild.Clear()` |
-| M5-5 | `Archetype.Storage.cs:233-275` `AllocateRows()` 分块路径扫描所有 segment 查找可用容量 | 线性扫描 segment 在 archetype 有很多 segment 时浪费 | ❌ 非热点。`AllocateRows` 在实体创建/迁移时调用，而非每帧查询迭代。`_segmentCapacity` 目标为 2MB/segment，因此大多数 archetype 保持 1 段。扫描仅发生在实体分配时（远不频繁于查询） | 代码走读 + `TargetSegmentBytes` 定义（2MB） |
-| M5-6 | `World.StructuralChange.cs:34-49` `ApplyTypedSetFast` 中的 `AssertAlive` / `TryGetComponentIndex` | defense 检查在每实体热路径中的开销 | ❌ 已证明零成本（§3.11）。`Get<T>`/`GetRef<T>` 的 defense 检查在 2026-07-06 benchmark 中显示 <2% 噪声。`TryGetComponentIndex` 是功能性的（决定写入列位置），非防御性的 | `kb-design-rationale.md` §3.11 基准 |
-| M5-7 | `ComponentStore.cs` `ApplyToWorld` set-only fast path 中每实体 `GetRecordFast` 调用 | `GetRecordFast` 的范围/版本检查开销 | ❌ 已证明零成本（§3.11）。`GetRecordFast` 使用与 `Get<T>` 相同的轻量检查 | `kb-design-rationale.md` §3.11 基准 |
-| M5-8 | `EntityFieldResolver.cs:167-192` `ResolveInPlace` fail-fast 检查（seq OOB、resolved.Id < 0） | 在 Replay Add/Set 路径上触发异常的 defense 检查 | ❌ 未触及。硬约束明确禁止移除："DO NOT remove: EntityFieldResolver fail-fast"。这些检查会捕获静默数据损坏 | 任务指令 |
-| M5-9 | `World.cs:368-388` `Get<T>` / `GetRef<T>` 中的 `AssertNotDisposed` + `AssertAlive` | defense 检查的开销 | ❌ 未触及。硬约束明确禁止移除 §3.11："DO NOT remove: Get<T>/GetRef<T>/GetRecordFast checks (already proven zero-cost)" | 任务指令 + `kb-design-rationale.md` §3.11 |
-
-### 裁决：跳过——无候选在证据筛选下存活
-
-在检查的 9 个候选中，有 4 个是冷路径/结构变更路径，2 个已被 §3.11 确认为零成本，2 个因硬约束而被排除，1 个是有条件使用但未过度分配。库的热点（`QueryCache` 中的查询迭代、`Archetype.Storage` 中的 chunk span 访问、`ComponentStore.ApplyToWorld` 中的组件写入）已无不必要的 Dictionary/HashSet 操作或冗余 defense 检查。
-
----
-
-## M6 — YAGNI / Dead Code Deletion Round (2026-07-09)
-
-Removed 15 lines of dead code from `src/MiniArch/` (zero callers confirmed via `deadcode.ps1` + manual rg verification):
-
-| Symbol | File | Type | Lines |
-|--------|------|------|-------|
-| `Archetype.ContainsComponent` | `Core/Archetype.cs:183` | `internal` method | 3 |
-| `FrozenState.AssertWritable` + `_isReadOnly` | `Core/CommandStreamCore.cs:2953-2961` | `internal` method + field under `#if DEBUG` | 12 |
-
-**Retained with explanation**: None — both candidates confirmed dead and deleted.
-**Perf gate**: Exempt per AGENTS.md §5a (pure dead code removal, zero IL change impact on runtime paths).
+## 这个模块是干什么的
+
+- 审阅前先查本页，避免重复报告已经修复或已证伪的问题。
+- 真 bug 只记录 witness、修复边界和回归测试；推理细节留在代码/测试。
+- 非 bug 必须保留“位置 / 猜想 / 结论 / 验证”四字段。
+- 不保存会随提交漂移的全套测试总数、旧行号或一次性性能数字；当前门禁看本轮 evidence 与 `kb-safety-proof.md`。
+
+## 当前未修风险
+
+### Replay 没有通用事务回滚（P2，接受现状）
+
+- **位置**：`World.EntityLifecycle.cs` 的 Replay/ReplayCore 路径。
+- **边界**：`FrameDelta.Validate()` 能在 Replay 前拒绝结构损坏的 wire，但不能证明 target World 与 delta 历史兼容；若 Replay 中途发生 target-world 契约错误或灾难性异常，已执行操作不会自动回滚。
+- **当前策略**：不可信 wire 先 Validate；peer 从共同 snapshot/frame 0 沿完整历史 replay；需要强事务的调用方在外层使用 World snapshot/checkpoint。
+- **不做**：本轮不引入通用 dry-run shadow World 或 rollback journal。
+
+CommandStream 的 pending/component/hierarchy/async preflight 已修复已知“用户契约错误导致部分提交”路径，但它不把 Submit 或 Replay 提升为灾难性异常下的通用事务。
+
+## 已修复的真 bug 索引
+
+### 2026-07-15 quality hardening
+
+| 回归测试 | 位置 / witness | 修复边界 |
+|---|---|---|
+| `BUG_single_byte_archetype_promotes_past_chunk_capacity` | `Archetype.Storage` 单字节列翻倍时 `int` 乘法溢出，可能越过 segment capacity | checked/long 容量预算；超过 flat 上限时 promotion，提交字段前先完成可能抛错的准备 |
+| `BUG_bool_archetype_promotes_past_chunk_capacity` | `bool` 列同族溢出 | 同上 |
+| `BUG_single_byte_tag_archetype_promotes_past_chunk_capacity` | 多个单字节列同族溢出 | 同上 |
+| `BUG_submit_preflights_invalid_add_before_materializing_pending` | strict Add 到 Apply 才失败，pending 已 materialize | allocator/materialize 前模拟 component presence |
+| `BUG_submit_preflights_invalid_set_before_materializing_pending` | strict Set 到 Apply 才失败 | 同上 |
+| `BUG_submit_preflights_repeated_add_before_any_world_mutation` | 同 store 重复 Add 在中途失败 | preflight 按录制顺序更新虚拟 presence |
+| `BUG_set_preflight_row_cache_is_disabled_when_any_store_is_structural` | 一个 store 迁移实体后，另一 store 使用旧 row cache | 任一 component store 结构化时全局禁用 Set row cache |
+| `BUG_submit_preflights_hierarchy_overlay_cycle_before_world_mutation` | final hierarchy overlay 形成 cycle，较早操作已落地 | materialize/apply 前验证最终 parent overlay |
+| `BUG_submit_preflights_hierarchy_cycle_through_existing_parent_chain` | overlay 与当前 World parent chain 合成 cycle | 同上 |
+| `BUG_submit_preflights_deferred_hierarchy_cycle_before_reserving_ids` | deferred placeholder cycle 在 real-id reserve 后才失败 | placeholder 阶段直接验证 overlay |
+| `BUG_async_submit_preflights_invalid_component_before_worker_handoff` | async API 在契约失败前 swap/start worker | active state 上先 preflight，后 handoff；立即登记 frozen/task ownership |
+| `BUG_async_into_preflights_invalid_component_before_worker_handoff` | preflight 失败仍可能改写复用 target | preflight 通过前不启动 target writer |
+| `BUG_debug_structural_scope_recovers_after_exception` | Debug `BeginStructChange/EndStructChange` 异常后计数残留 | Debug 配对使用 `try/finally`；Release 业务路径不增加异常区 |
+
+`Existing_entity_component_liveness_is_decided_when_the_stream_is_consumed` 是 consume-time 契约测试，不是旧实现 bug 的 witness：record 时不读 World，consume 时按完整 `(Id, Version)` 统一 prune；stale/ID-reuse 安全由既有 `BUG_stale_*` 测试守卫。
+
+### 仍在当前代码中生效的历史修复
+
+| 索引 / 回归 | 原缺陷 | 当前修复边界 |
+|---|---|---|
+| EntityFieldResolver unresolved placeholder tests | OOB/unmapped placeholder 被静默留在组件字段 | `ResolveInPlace` fail-fast，错误含 sequence |
+| `TrySetBit_rejects_ids_512_and_above` 等 | id ≥512 被 C# shift mask 别名到 lane 7 | 最后一 lane 显式 `<512` guard |
+| `Snapshot_load_rejects_*`、schema import tests | schema/payload 无界读取、重复/非法 type、验证后期污染 registry | `ComponentSchemaCodec` 有界解析；Load 全量 dry-validate 后再注册/构建 |
+| `BUG_pending_clone_copies_from_resized_batch_buffer` | `Array.Resize` 后继续写旧 BatchBuf 引用 | reserve 后重新读取当前 buffer |
+| `CreateMany_duplicate_component_types_throws` | bulk path 重复类型破坏 last-wins | CreateMany 初始化前置条件不满足时 fast-fail |
+
+### soak 发现的 Submit/Replay 分歧（B1-B6）
+
+| # | 结论 | 当前防线 |
+|---|---|---|
+| B1/B4 | 历史内部 raw/typed Add 处理不同，Clone+Add 可分叉 | 当前 public/CommandStream Add 均为 strict Add；preflight 与 Replay 契约测试守卫，不再把“Add 已存在=覆盖”当公共语义 |
+| B2 | cancelled pending batch 清理遗漏 reservation | Clear/consume 释放 reservation 的回归测试 |
+| B3 | hierarchy Apply 与 emit 迭代顺序不同 | 两路共享确定性 comparer/overlay 语义 |
+| B5 | replay free-list 任意位置 swap-remove 改变 survivor 顺序 | 指定 reservation 的 free-list removal 保序 |
+| B6 | record-time cancel push 顺序与 wire Release 顺序不同 | `AlignCancelledBatchFreeListOrder()` 按 batch 顺序重排 |
+
+### 已删除子系统的历史 bug（B7-B16）
+
+B7-B16 属于旧 `ChangeQuery` / `Track().Capture().Previous()` / shared tracker 路径。该 API 和相关 registry/dispatch 文件已删除，当前 Watch 是独立 `Snapshot(World)` → `Diff(World)` pull 模型。这些条目不再作为当前代码的审阅依据；当前覆盖看 `WatchApiTests`、`WatchProjectedTests`、`ChangeTrackingSnapshotTests` 与 `CrossFeatureParityTests`。
+
+## 已验证安全的模式（非 bug）
+
+| 位置 | 猜想 | 结论 | 验证 |
+|---|---|---|---|
+| `QueryCache.EnsureRefreshed` + `Archetype.Storage.ConvertToChunked` | flat ChunkView 在 archetype promotion 后读到空 `_data` | 非 bug（单线程契约）。expected view shape 从 flat 变 segment count 时重建 views；并发结构写仍被禁止 | `EnsureRefreshed` shape 分支 + QueryCache/ChunkView tests |
+| `Archetype` add/remove destination cache | 新 archetype 创建后 edge cache 需要失效 | 非 bug。source signature 与 component op 唯一决定 destination；signature 不变、archetype 不删除 | 搜索 `_addDestinationCache/_removeDestinationCache` + reset 路径 |
+| `ChunkView.GetSpan` / `UnsafeGetComponentSpanAt` | 返回 span 跨结构变更后仍应有效 | 非 bug，是借用期契约。结构变更后 view/span/column index 全部失效；Unsafe 违约可静默错写 | `ChunkView` XML + Debug mismatch tests |
+| `HierarchyTable.RemoveDestroyed` | `_firstChild` 未重置，ID 复用继承旧链 | 非 bug。先保存 slot 再把 `_firstChild[id]` 置 NoSlot，局部 slot 继续释放链 | `HierarchyTable.RemoveDestroyed` 代码走读 |
+| `Archetype.RemoveAt` chunked | 跨 segment swap-remove 留空洞 | 非 bug。只与最后非空 segment 的尾实体交换，Debug invariant 守卫连续性 | `AssertSegmentInvariants` + chunked destroy tests |
+| `World.Destroy` hierarchy | 子树中间节点清理不全 | 非 bug。后序遍历，child 先 `RemoveDestroyed`，parent 后处理 | hierarchy cascade tests |
+| `Archetype.RemoveAt` dead bytes | ID 复用会读到旧组件值 | 非 bug。`Count` 隔离 dead zone，新实体迁入时全列覆写 | storage tests + validator |
+| `EntityFieldResolver` offset cache | struct layout 后续变化使缓存失效 | 非 bug。运行进程内 Type→ComponentType 与 CLR layout 固定，offset 首次按实际 type 计算 | `EntityFieldResolver` 代码走读 |
+| `RestoreState` 保留 capture 后创建的空 archetype | query 会把空壳当活数据 | 非 bug。archetype append-only，QueryCache 可见但 entity count 为 0 | restore/query tests |
+| pending `Create+Add/Set/Remove` | 应暴露每个中间 Watch event | 非 bug。pending batch 契约只 materialize 最终状态 | pending Watch/transition parity tests |
+| `CompactRemoveRowsFlat` hole-fill | live prefix 留下 stale source entity | 非 bug。hole 只由 tail suffix survivor 填；最终 dead suffix 清零 | batch destroy checksum/diff/validator tests |
+
+## 决策
+
+- public `World.Add<T>` 与 CommandStream Add 是 strict Add；已存在时抛异常。`Set<T>` 要求已存在，`Remove<T>` 缺失为 no-op。
+- Submit 与 Snapshot→Replay 的操作顺序、stale filtering、placeholder resolve 和 allocator 演化属于确定性契约。
+- 用户可触发的公共边界要 fail-fast；只有已经由同一 consume 阶段证明过的内部热路径才可使用 unchecked helper。
+- 修复具体 bug 后要做同族 pattern scan；新增真 bug 必须有 `BUG_` witness，再把索引写回本页。
+
+## 认知模型
+
+本页是“结论路由表”，不是 changelog。需要推理细节时按测试名和 symbol 跳到代码；不要在这里复制提交过程或保存已删除实现的逐行历史。
+
+## 入口
+
+- CommandStream 当前契约：`kb-command-stream.md`
+- 存储：`kb-chunk-storage.md`
+- Watch：`kb-change-tracking.md`
+- 当前验证范围：`kb-safety-proof.md`
+- 运行审阅前：先搜索本页中的测试名、symbol 和猜想关键词
+
+## 坑点
+
+- “某个 preflight 已修复”不等于整个 Submit/Replay 具有事务回滚。
+- 旧测试数、旧行号和旧性能样本会漂移；只把它们当历史，不作为当前完成证据。
+- 已删除 API 的 bug 不应继续驱动当前设计；先确认 symbol 仍存在。
+- 确定性问题经常表现为 logical entities 相同但 free-list/order/checksum 不同，不能只比 EntityCount。

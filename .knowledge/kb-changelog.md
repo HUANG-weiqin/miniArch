@@ -2,7 +2,7 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-07-12
+updated: 2026-07-15
 ---
 # Knowledge Base Changelog
 
@@ -301,9 +301,9 @@ Apply advisor 轮次审阅发现，补充 3 项：
 - **新建 `kb-perf-harnesses.md`**：4 套 perf harness 的消歧矩阵（PipelineBenchmarkTests / HeroComing.Perf / SubmitAndSnapshotAsync / GameTickSim）。
 - **新建 `kb-lockstep-playbook.md`**：端到端帧同步 spine 页，整合 5 个碎片化页面的导航。
 - **新建 `kb-glossary.md`**：术语表（GGPO/SoA/LEB128/Tier 等）。
-- **去冗余**：World partial 文件列表权威源只在 `kb-architecture-review.md`，其他页改为链接；Merge 历史只在 `kb-frame-delta-merge.md`。
-- **跨链接修复**：`kb-command-stream.md` → `kb-frame-delta-merge.md` / `kb-deferred-create-design.md` 互链；perf 页面互联。
-- **合并墓碑页**：`kb-debug-metrics.md` 合并到 `kb-architecture-review.md` 已删除子系统段。
+- **去冗余**：World partial 文件列表权威源只在 `kb-architecture-review.md`，其他页改为链接；FrameDelta Merge 历史后来合并回 CommandStream 页。
+- **跨链接修复**：CommandStream / Deferred Create 互链；perf 页面互联。
+- **合并墓碑页**：DebugMetrics 历史合并到 `kb-architecture-review.md` 已删除子系统段。
 - **`kb-core-ecs.md` 补坑点**：同帧 `World.Destroy + World.Create` 的 id 回收/version 一致性。
 - **`kb-chunk-storage.md` 加 Storage Invariants 集中段**。
 
@@ -321,7 +321,7 @@ Apply advisor 轮次审阅发现，补充 3 项：
 - **残留漂移修复**：`kb-architecture-review` partial 计数 6→7 + 行号修正；`kb-command-stream` ReplayCore 行号 450→481 + 测试名修正；`kb-core-ecs` 补 World.SnapshotBridge/Checksum + Archetype.TestHooks 到 partial 列表。
 
 > 教训：`kb-architecture-review.md` 末尾警告的"曾经存在的 kb 文档落后于代码演进"在本次审阅中被实证——多页错误描述持续了 1–3 个月。后续架构变更必须同步更新对应 kb 页（AGENTS.md §4 已强制）。
-> 同日新建 `kb-checksum.md`（从 kb-snapshot-persistence 拆出——后合并回）、`kb-frame-delta-merge.md`（后合并回 kb-command-stream），补全知识覆盖空白。
+> 同日曾拆分 Checksum 与 FrameDelta Merge 专题页，后来分别合并回 Snapshot Persistence 与 CommandStream，避免重复事实源。
 
 ## 2026-06-30 文档单一事实来源收敛
 
@@ -362,7 +362,7 @@ Apply advisor 轮次审阅发现，补充 3 项：
 - **World 拆分为 partial 文件**：World.cs + World.EntityLifecycle.cs + World.Create.Generated.cs + World.QueryCache.cs + World.StructuralChange.cs
 - **Archetype 拆分为 partial 文件**：Archetype.cs（字段/metadata）+ Archetype.Storage.cs（存储操作）
 - **Edge cache 使用直索引 `Archetype?[]`**（按 componentId 直索引，O(1) 查找）
-- **DebugMetrics 整个子系统已删除**（kb-debug-metrics.md 保留作为历史记录）
+- **DebugMetrics 整个子系统已删除**（历史结论已合并回架构页）
 - **FrameDelta 热路径 struct 大幅缩小**（Movement +50% / Attack +29%）
 - **ComponentMask 扩展为 512-bit**（8 × `ulong`），覆盖 component id 0..511 的快速匹配
 - **新增分段存储模式**：Archetype 超过阈值后自动切换为多 Segment 模式（详见 `kb-chunk-storage.md`）

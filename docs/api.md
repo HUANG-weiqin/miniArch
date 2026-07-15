@@ -11,6 +11,9 @@
 | `CreateEmpty()` | Create entity with no components |
 | `Create<T1..T16>(...)` | Create entity with 1–16 components |
 | `Destroy(Entity)` | Remove entity (cascades through hierarchy) |
+| `Destroy(ReadOnlySpan<Entity>)` | Remove a batch of entities, cascading through each hierarchy subtree |
+| `Destroy(in QueryDescription)` | Remove every matching entity with normal hierarchy cleanup |
+| `Clear(in QueryDescription)` | Fast bulk removal without hierarchy cascade; use only when no hierarchy edge crosses the cleared set |
 | `IsAlive(Entity)` | Validate entity handle |
 | `EnsureCapacity(int)` | Pre-allocate entity slots |
 | `Add<T>(Entity, T)` | Add a component |
@@ -66,6 +69,7 @@ public readonly record struct Entity(int Id, int Version)
 | `With<T>()` | Include required component |
 | `Without<T>()` | Exclude entities with this component |
 | `WithAny<T>()` | OR-match: include entities that have this component |
+| `Exact()` | Match only archetypes whose component set is exactly the required set |
 
 ---
 
@@ -100,8 +104,13 @@ public int Count { get; }
 public ReadOnlySpan<Entity> GetEntities()
 public Span<T> GetSpan<T>() where T : unmanaged
 public bool TryGetComponentIndex<T>(out int columnIndex) where T : unmanaged
-public Span<T> GetComponentSpanAt<T>(int columnIndex) where T : unmanaged
+public Span<T> UnsafeGetComponentSpanAt<T>(int columnIndex) where T : unmanaged
 ```
+
+`UnsafeGetComponentSpanAt<T>` is an opt-in hot-path API. The index must come from
+`TryGetComponentIndex<T>` on the same chunk/archetype and is invalid after any
+structural change. Debug builds reject a mismatched index; Release builds leave it
+unchecked. Prefer `GetSpan<T>` unless profiling proves the cached-index path matters.
 
 ---
 
@@ -246,26 +255,42 @@ Key properties:
 
 ## CommandStream
 
-[`MiniArch.Core`] The sole deferred mutation recorder. Flat byte stream, single-pass Set.
+[`MiniArch.Core`] Single-threaded deferred mutation recorder. Component mutations are
+appended to typed stores and consumed as one deterministic batch.
 
 | Member | Description |
 |---|---|
 | `Create()` | Record entity creation |
 | `Track(Entity)` | Returns `EntitySlot` that auto-resolves placeholder→real on Submit/Replay |
-| `Add<T>(Entity, T)` | Record component addition |
-| `Set<T>(Entity, T)` | Record component value change |
-| `Remove<T>(Entity)` | Record component removal |
+| `Add<T>(Entity, T)` | Record component addition; existing-entity liveness is decided when the stream is consumed |
+| `Set<T>(Entity, T)` | Record component value change; existing-entity liveness is decided when the stream is consumed |
+| `Remove<T>(Entity)` | Record component removal; existing-entity liveness is decided when the stream is consumed |
 | `Destroy(Entity)` | Record entity destruction |
 | `AddChild(Entity, Entity)` | Record hierarchy addition |
 | `RemoveChild(Entity)` | Record hierarchy removal |
 | `Clone(Entity)` | Record entity deep-copy |
 | `Submit()` | Apply all recorded changes synchronously |
 | `Snapshot()` | Produce a `FrameDelta` without applying |
+| `SnapshotInto(FrameDelta)` | Produce a delta into a reusable target |
 | `Replay(FrameDelta, Boolean)` | Apply a delta to produce identical state; `true` resolves tracked `EntitySlot`s |
 | `SubmitAndSnapshotAsync()` | Pipelined: main thread submits, background builds delta |
+| `SubmitAndSnapshotIntoAsync(FrameDelta)` | Pipelined submit into a reusable delta target |
 | `Clear()` | Discard recorded commands without applying |
-| `ParallelRecording` | Enable multi-threaded recording on this stream |
 | `DeferredEntities` | Enable placeholder entity IDs for lockstep mode |
+
+---
+
+## ParallelCommandStream
+
+[`MiniArch.Core`] Multi-threaded recorder with the same consume APIs and liveness
+contract as `CommandStream`. Record methods may be called concurrently on one stream;
+`Submit`, `Snapshot`, `Replay`, and async handoff remain exclusive and must run only
+after all record workers finish. Conflicting writes to the same entity from different
+threads have no deterministic order, and multiple streams must not record concurrently
+against the same `World`.
+
+Use `CommandStream` for single-threaded recording because it avoids the parallel
+stream's lock cost.
 
 ---
 
@@ -285,6 +310,9 @@ public readonly struct EntitySlot
 Obtained via `CommandStream.Track(Entity)`. Before Submit, `Value` returns the placeholder;
 after Submit or Replay, `Value` returns the resolved real entity.
 
+Each tracked placeholder owns a slot registration. `EntitySlot` is an external handle;
+it cannot be stored as an ECS component.
+
 ---
 
 ## FrameDelta
@@ -293,9 +321,15 @@ after Submit or Replay, `Value` returns the resolved real entity.
 
 | Member | Description |
 |---|---|
+| `MaxFrameBytes` | Maximum accepted wire size (16 MiB) |
+| `MaxOpsPerFrame` | Maximum accepted operation count (1,000,000) |
 | `DeltaCount` | Total number of delta entries |
 | `HasEntity(Entity)` | Check if an entity is referenced |
 | `IsEmpty` | Whether the delta has no entries |
+| `AsSpan()` | Expose the packed wire bytes without copying |
+| `Deserialize(ReadOnlySpan<byte>)` | Validate and copy wire bytes into a reusable delta |
+| `FromWire(ReadOnlySpan<byte>)` | Allocate a delta from wire bytes |
+| `Validate()` | Validate an untrusted delta's internal state machine and payloads |
 
 ---
 
@@ -327,6 +361,9 @@ world.RestoreState(handle);           // revert, handle auto-recycled to pool
 
 Only supports unmanaged component types.
 
+Current v4 snapshots include a CRC32 integrity check. This detects corruption; it is
+not a cross-version schema compatibility guarantee.
+
 ---
 
 ## EntityAccessor
@@ -350,6 +387,8 @@ bool hasArmor = accessor.Has<Armor>();
 | Method | Description |
 |---|---|
 | `Fingerprint()` | Returns `byte[]` — 32-byte SHA-256 of the global `ComponentRegistry` (id→type mapping) |
+| `Export()` | Export the registered component schema as a portable type-name blob |
+| `Import(byte[])` | Resolve and register an exported schema, returning types in schema order |
 
 ```csharp
 var fp = ComponentSchema.Fingerprint();
@@ -403,6 +442,9 @@ struct SumJob : IChunkForEach
 - `default(Entity)` is invalid; real entities start at `Version = 1`
 - `World.IsAlive(entity)` is the authoritative validity check
 - `Destroy()` cascades through the hierarchy subtree
+- `Clear(query)` is a deliberately fast non-cascading primitive; use `Destroy(query)` unless the caller can prove no hierarchy edge crosses the cleared set
+- `UnsafeGetComponentSpanAt<T>` trusts a same-archetype cached column index in Release and must be locally justified by profiling
+- `CommandStream.Add<T>` is strict at consume time: adding a component already present on a surviving entity throws before mutation begins
 - `Set<T>()` throws if the entity does not have the component; use `Add<T>()` to add a new component
 - `WorldSnapshot` only supports unmanaged component types
 - `World.RestoreState(snapshot)` throws if `snapshot.IsRecycled` is `true`
@@ -414,8 +456,9 @@ struct SumJob : IChunkForEach
 | API | Semantics | Notes |
 |---|---|---|
 | `Query` / ordered queries | MT-Read | World must not mutate concurrently |
-| `CommandStream` recording (non-parallel) | Single-threaded | Default mode (`ParallelRecording = false`) |
-| `CommandStream` recording (parallel) | MT-Record | Enable `ParallelRecording = true`; Submit still exclusive |
+| `CommandStream` recording | Single-threaded | No concurrent callers |
+| `ParallelCommandStream` recording | MT-Record | One stream; conflicting same-entity writes have no deterministic cross-thread order |
 | `CommandStream.Submit()` | Exclusive | Single-threaded |
-| `SubmitAndSnapshotAsync()` | Pipelined | Main: Submit; Background: BuildDelta |
+| `ParallelCommandStream.Submit()` | Exclusive | Call only after all record workers finish |
+| `SubmitAndSnapshotAsync()` | Pipelined | Submit is synchronous; delta construction completes in the returned task |
 | `World` mutation API | Not concurrent | No concurrent writes |

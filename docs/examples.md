@@ -1086,9 +1086,11 @@ readonly record struct Health(int Value);
 
 ---
 
-## 26. ParallelRecording (Multi-Threaded Command Recording)
+## 26. ParallelCommandStream (Multi-Threaded Command Recording)
 
-When `CommandStream.ParallelRecording = true`, all `Create`, `Add`, `Set`, `Remove`, and `Destroy` calls become thread-safe. Useful when game systems run on multiple worker threads and each produces commands independently. `Submit` must still be single-threaded.
+`ParallelCommandStream` makes `Create`, `Add`, `Set`, `Remove`, `Destroy`, and the
+other record methods thread-safe. It is useful when game systems run on multiple
+workers and each produces commands independently. Consumption remains exclusive.
 
 ```csharp
 using MiniArch;
@@ -1103,7 +1105,7 @@ for (var i = 0; i < 10_000; i++)
 spawnStream.Submit();
 
 // ── Multi-threaded recording ─────────────────────────────────────────
-var stream = new CommandStream(world) { ParallelRecording = true };
+var stream = new ParallelCommandStream(world);
 
 Parallel.For(0, 10_000, i =>
 {
@@ -1111,7 +1113,6 @@ Parallel.For(0, 10_000, i =>
     stream.Add(new Entity(i, 1), new Position(i, i * 2));
 });
 
-stream.ParallelRecording = false; // back to single-threaded
 stream.Submit();
 
 // All updates applied
@@ -1121,10 +1122,10 @@ readonly record struct Position(float X, float Y);
 ```
 
 > **Rules:**
-> - Enable `ParallelRecording` before the parallel section, disable after. Do not toggle while multiple threads are recording.
-> - Do **not** record concurrently into **multiple** `CommandStream` instances targeting the same `World` — only one stream may be in parallel mode per world.
-> - `Submit` must be single-threaded and exclusive. It is not concurrent-safe.
-> - Parallel `Set`/`Add` on existing entities uses per-component-type concurrent append stores (lock-free for `Add`/`Set`; `Destroy`/`Create` are lock-protected). Entity creation in parallel mode uses a shared lock (`_storeCreateLock`) — acceptable because creates are typically a small fraction of total commands.
+> - Use one `ParallelCommandStream` per `World`; do not record concurrently through multiple streams targeting the same world.
+> - Finish all record workers before `Submit`, `Snapshot`, `Replay`, or async handoff. These consume operations are exclusive.
+> - Avoid conflicting commands for the same entity across threads. Their merge order is not deterministic.
+> - Prefer `CommandStream` when recording is single-threaded; it has no parallel lock cost.
 
 ---
 

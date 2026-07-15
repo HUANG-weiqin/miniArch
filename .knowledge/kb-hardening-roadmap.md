@@ -2,7 +2,7 @@
 title: Hardening Roadmap
 module: Meta
 description: 系统性的健壮性加固路线图——从 int 溢出、退化性能、内存安全到确定性保障，按里程碑组织
-updated: 2026-07-12
+updated: 2026-07-15
 ---
 
 > **实施状态：** 2026-07-12 完成 M1-M9 全部代码落地。详细信息见 `kb-changelog.md` §2026-07-12。
@@ -54,7 +54,7 @@ updated: 2026-07-12
   - 结果 > `ArrayMaxLength` 时抛明确异常（"Component storage exceeds .NET array limit"）
   - 新增 `AlignUp64(long, int)`
 - **热路径**：❌ 只冷路径（构造/扩容）
-- **参见**：`kb-hardening-m1-design.md`（方案细节）
+- 方案细节已收敛到本页，避免维护独立的阶段性设计页。
 
 ### M1.2 `ComputeSegmentEntityCapacity` 下限降为 1 + 上限钳位（含 M1.7 合并）
 
@@ -283,7 +283,7 @@ M2.3 的注释**已添加**（之前 commit 已更新 `RemoveFromFreeList` 和 `
 
 ### M4.2 热路径列偏移运算加 `Debug.Assert`
 
-- **位置**：`GetColumnRef`、`GetComponentSpanAt`、`SetComponentAtTyped` 等
+- **位置**：`GetColumnRef`、`GetFlatComponentSpanAt`、`SetComponentAtTyped` 等
 - **改法**：在 `Unsafe.Add` 前加带消息的 `Debug.Assert`：
   ```csharp
   Debug.Assert(row < _count,
@@ -555,7 +555,7 @@ M2.3 的注释**已添加**（之前 commit 已更新 `RemoveFromFreeList` 和 `
 
 ### 审计发现的 BUG（必须修，非契约）
 
-#### M9.1 `ChunkView.GetSpan<T>()` / `GetComponentSpanAt<T>()` 未检查组件存在性
+#### M9.1 `ChunkView.GetSpan<T>()` / `UnsafeGetComponentSpanAt<T>()` 契约诊断
 
 - **位置**：`ChunkView.cs:88-101, 116-124`
 - **问题**：`GetComponentIndexFast(Component<T>.ComponentType)` 当 T 不在 archetype 中时返回 `-1`（`_componentIdToColumnIndex[id]` 的默认值），然后 `_elementSizes[-1]` → `IndexOutOfRangeException`

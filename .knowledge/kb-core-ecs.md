@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-07-11
+updated: 2026-07-15
 ---
 # MiniArch Core ECS
 
@@ -10,7 +10,7 @@ updated: 2026-07-11
 
 - 创建、销毁和迁移实体
 - 管理 entity metadata 容量和批量创建
-- 给 command buffer 提供 deferred entity reservation、structural mutation 和 batch replay 挂接点
+- 给 CommandStream 提供 deferred entity reservation、structural mutation 和 batch replay 挂接点
 - 维护签名到 archetype 的映射，用 chunk 做 dense SoA 存储
 - 让 `Set` 走 typed-column / direct-index 的原地写入路径
 - 让 query 先按 archetype 过滤，再按 chunk 迭代
@@ -80,6 +80,7 @@ updated: 2026-07-11
 | Query facade | `MiniArch.Query` (public struct) | `world.Query(desc)` → `GetChunks()` / `ForEachChunk` |
 | 零分配 chunk job | `MiniArch.IChunkForEach` (public interface) | `query.ForEachChunk<TForEach>(ref job)` |
 | Chunk 视图 | `ChunkView` (public readonly struct) | `chunk.GetSpan<T>()` |
+| 预解析列高速访问 | `ChunkView.UnsafeGetComponentSpanAt<T>()` | index 必须来自同一 chunk/archetype 的 `TryGetComponentIndex<T>`；完整契约以 XML 为准 |
 | Singleton 实体查找 | `World.GetSingleton<T>()` | `world.GetSingleton<T>()`（找唯一含 T 的实体，O(archetypes)） |
 | 批量销毁 | `World.Destroy(ReadOnlySpan<Entity>)` / `World.Destroy(QueryDescription)` | 批量 entity span 或 query 匹配；级联销毁、dead skip、内部批量 remove |
 | Archetype 级清空 | `World.Clear(in QueryDescription)` | 最快路径：直接 reset 匹配 archetype，~4× vs for-loop；**无 cascade** |
@@ -106,7 +107,8 @@ updated: 2026-07-11
 **坑点：**
 - `MiniArch.Query` 是 struct wrapper，不能用于 identity 断言
 - `EachSpan` 引用会编译失败——改用 `chunk.GetSpan<T>()`
-- `GetChunks()` 返回的 `ChunkView` 是 readonly struct，不能长期持有
+- `GetChunks()` 返回的 `ChunkView` 是 readonly struct，不能跨结构变更长期持有
+- `UnsafeGetComponentSpanAt<T>(columnIndex)` 在 Release 不验证类型匹配；index/type/archetype 任一错配都可能静默覆写其他列，安全默认使用 `GetSpan<T>()`
 - `GetSingleton<T>()` 是 O(archetypes) 全量扫描，仅用于"全局唯一组件"（设置/状态），不适合热路径；多实体访问走 Query
 
 ## 决策
@@ -136,7 +138,7 @@ updated: 2026-07-11
   - 如需不受结构变更历史影响的稳定顺序，使用 `OrderByEntityId()` / `OrderByEntityIdDescending()` / `OrderByComponent<T>()`
   - 详见 `tests/MiniArch.Tests/Core/QueryOrderingTests.cs`
 - `Destroy(ReadOnlySpan<Entity>)` / `Destroy(query)` 的正确性标准是 logical world state：`CanonicalChecksum`、`WorldDiff`、`WorldValidator` 以及 `WorldDigest` 的 occupancy/free-list/hierarchy/per-component 域与 guarded `for Destroy` 一致。由于 partial batch remove 使用无序 hole-fill，物理 archetype row order 可不同。
-- **用户可触发的防御性检查**（如 `AssertNotDisposed`、`AssertAlive`、`GetRecordFast` 的 id/版本校验）在 Release 常开。`kb-design-rationale.md` §3.11 已用 Release benchmark 证明这些检查零可测成本，不能再把它们误改回 DEBUG-only。**唯一例外：`IsAlive`** — 见下条
+- **用户可触发的 public boundary 检查**（如 `AssertNotDisposed`、`AssertAlive`、Restore 跨 World 校验）在 Release 常开。internal helper 只有在同一控制流的前序阶段已建立不变量时才可省略部分重复检查；具体分层见 `kb-design-rationale.md` §3.11。
 - **IsAlive 不含 AssertNotDisposed**：Dispose 后 `_entitySlotCount = 0` 使 bounds check 永远返回 false，语义正确（无活实体）且省一个分支。其他公共方法（Create/Destroy/Get 等）仍保留 `AssertNotDisposed`——它们在 disposed World 上会静默损坏状态
 - **Clear 命名而非 DestroyAll/DisposeQueryUnsafe**：`Clear` 诚实描述行为（清空 archetype 容器），与 `List<T>.Clear()` 语义一致；与 `Destroy*` 家族（逐实体处理）区分
 - **内部结构不变量检查**（如 `ChunkView.AssertValid`、`Archetype.AssertSegmentInvariants`）才使用 `[Conditional("DEBUG")]` / `Debug.Assert`。划分原则：用户错误 fail-fast，内部一致性只在 Debug 审计
@@ -160,7 +162,7 @@ var world = new World();
 var e = world.Create<Position, Velocity>();
 
 // 3. 组件读写
-ref var pos = ref world.Get<Position>(e);
+ref var pos = ref world.GetRef<Position>(e);
 pos.X += 1;
 
 // 4. 结构变更
@@ -196,6 +198,7 @@ world.Destroy(e);
 - `Create<T...>` 如果复用 `Add` 迁移路径，会留下中间态 archetype
 - Edge cache 用 `Archetype?[]` 按 componentId 直索引，当组件 ID 稀疏时数组可能膨胀
 - Add/Set/Remove 的当前语义：`Add<T>` 组件已存在时抛异常，`Set<T>` 组件不存在时抛异常，`Remove<T>` 组件不存在时 no-op（详见 `kb-design-rationale.md` §2.9）
+- `Clear(query)` 是调用方承担 hierarchy 边界的高速 API；不确定是否存在跨 query parent/child 时，必须改用会级联并去重的 `Destroy(query)`
 - Query 快照是非原子的，安全性依赖 volatile publish + "world 无并发写"前提
 - `IsAlive` 必须和 `TryGetLocation` 共用同一条 version/location 校验链
 - 性能验证必须看 Arch 对照数据，不能只看自己变快

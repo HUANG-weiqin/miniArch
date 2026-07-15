@@ -2,7 +2,7 @@
 title: Snapshot Persistence
 module: MiniArch.Core Snapshot
 description: Full-world snapshot save/load design for unmanaged components (WorldSnapshot.Save/Load, Clone, CaptureState/RestoreState), plus Checksum double mode
-updated: 2026-07-13
+updated: 2026-07-15
 ---
 # Snapshot Persistence
 
@@ -138,10 +138,10 @@ v3 格式仍可读且跳过 CRC 校验。
 - 只存活体 entity version 导致读档后复用旧 id 时版本回退
 - 读档复用 `GetWritableChunk` 会挤压重排快照 chunk 边界
 - `struct` 不一定是 `unmanaged`
-- 跨版本类型名变化直接失配（当前不压缩、无校验和）
+- 跨版本类型名变化会导致 schema 解析/握手失配；v4 snapshot 有尾部 CRC32，v3 兼容读取没有 CRC。CRC 只能检测字节损坏，不能提供跨版本 schema 兼容。
 - schema/type 表是外部输入边界；不要绕过 `ComponentSchemaCodec` 直接 `ReadString()` / `Type.GetType(..., throwOnError: true)`。
 - internal 重建 API 分布在 World 的多个 partial 文件中，修改时需确认编译范围
-- **`CaptureState` 后使用 `CommandStream.Record` 再 `RestoreState` 是安全的**：`Clear()` 会重置 `_deferredSeq = 0`（见 `CommandStreamCore.cs:2074`），`RestoreState` 恢复 World 的 entity allocator 状态。实测验证过：capture → stream record+snapshot+replay → restore → 重复同一序列 → checksum 一致。坑点不在 `_deferredSeq`，而在以下场景：
+- **World rollback 不包含 CommandStream state**：`RestoreState` 只恢复 World 的 storage、allocator 与 hierarchy；stream 的 pending batch、typed stores、placeholder sequence 与 async frozen state 都不在 snapshot 中。`Clear()` 会重置 stream 的 pending/deferred 状态。实测的安全流程是 capture → consume/clear stream → restore → clear stream → 重新录制。坑点在以下场景：
   - **`RestoreState` 后如果继续录制而不 `Clear`**：`_deferredSeq` 不会自动回退（它不在 World 里）。但在正常 GGPO 流程中，`RestoreState` 后应该是重新录制修正后的输入，此时先 `Clear()` 再 `Record` 即可。
   - **`CaptureState` 前后 `CommandStream` 的 pending batch 状态**（`_frozen.PendingBatch`、`_frozen.PendingBatchCount` 等）不在 World 内，不被 capture/restore。如果 capture 前 stream 有未 snapshot 的 batch，restore 后这些 batch 会残留。**建议 capture 前先 `Snapshot()` + `Clear()` 确保 stream 干净。**
 - **推荐模式**：

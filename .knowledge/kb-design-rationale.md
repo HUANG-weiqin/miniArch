@@ -2,7 +2,7 @@
 title: 设计决策总纲 — 为什么是这样而不是那样
 module: Meta
 description: 集中解释 miniArch 每个子系统的设计选择、被拒绝的替代方案及其原因，以及常见"优化提案"为什么是误判。新人必读，读完这个再碰代码。
-updated: 2026-07-09
+updated: 2026-07-15
 ---
 # 设计决策总纲
 
@@ -25,14 +25,14 @@ miniArch 的全部设计都从这三条硬约束推导出来。
 ### 1.1 实体操作必须是 O(1) 直接数组下标
 
 ```csharp
-EntityRecord record = _records[entity.Id];  // 一条 LEADS，~0.3ns
+EntityRecord record = _records[entity.Id];  // 直接索引，不走稀疏映射
 ```
 
 这意味着 Entity.Id 必须是 `_records` 数组的密集下标。稀疏映射（Dictionary、二分查找）在热路径上会付出 10-30x 延迟代价。第三条约束（lockstep 多 host）会与这条约束产生张力——这是整个库最核心的设计张力。
 
 ### 1.2 热路径零 GC
 
-- 所有 struct 字段必须是 `unmanaged` 类型，不能持有引用类型字段（GC write barrier 的代价远超预期——见 `kb-command-stream.md` §Struct 缩小）。
+- 所有进入 archetype storage 的组件类型必须满足 `unmanaged`；运行时辅助对象可以持有数组/引用，但热循环不得产生每帧临时分配。
 - 所有数组一次性分配，按 doubling 策略扩容。
 - 查询结果通过 Span 零拷贝返回，不创建 `List<T>` 包装。
 
@@ -267,35 +267,22 @@ Watch 不向 World 注册、不拦截 `Set`/`Add`/`Remove`、不维护 per-type 
 
 **为什么不对**：(1) handler 是任意用户代码，在 mutation 热路径执行——读 `DateTime.Now` 等 host-local 状态立即破坏 §1.3 锁步确定性。(2) handler 分配（closure/LINQ/lambda）破坏 §1.2 热路径零 GC。(3) 概念唯一：FrameDelta 已是所有 mutation 的完整日志，"组件被 Add 了"已被表示为 delta 里那条 Add op，再建一套并行回调通知是同一事实的两个表示。(4) 对渲染层这个主要场景反而更差：回调在逻辑更新中途触发（entity 可能下一行就 destroy），必须排队留到渲染阶段处理=重新发明轮询；且散落回调 cache 敌友性差于批量 chunk 遍历。
 
-**正确做法**：pull 式变更检测——Track\<T> 游标 + ModifiedChunks/Transitions。确定性安全（mutation 只 bump 派生数据）、零 GC（纯 int/long）、cache 友好（chunk 批量）。详见 `kb-change-tracking.md`。
+**正确做法**：pull 式 Watch——调用方显式 `Snapshot(World)`，需要时 `Diff(World)` 批量扫描并在收集完成后回调。World mutation 热路径不注册 observer、不 bump watch 状态。详见 `kb-change-tracking.md`。
 
 ### 3.11 "防御性检查删掉，Release 模式全速跑"
 
-**提案**：`Get<T>()` 中的实体存活检查（ID bounds + 版本号 + 占用位）、`GetRecordFast` 中的 ID 越界检查、`RestoreState` 中的跨世界检查等，在 Release 模式下跳过，因为"每次调用多几条指令"。
+**错误提案**：不区分层次，把所有检查一律改成 DEBUG-only；或者反过来，因“安全”在 record、preflight、apply 每层重复读取同一 World 状态。
 
-**实测证据（2026-07-06，HeroComing.Perf 30s + CommandBuffer throughput-cb 3s）：**
+**当前分层**：
 
-| 基准 | 无检查 | 全部检查 | 差异 |
-|------|--------|---------|------|
-| HeroComing Movement (r/s) | 2117 | 2084 | **-1.6%** ±1.6% 噪声 |
-| HeroComing Attack (r/s) | 1300 | 1227 | **-5.6%** ±5.9% 噪声 |
-| CommandBuffer 1000/CreateHeavy (ops/s) | 11987 | 11581 | **-3.4%** ±3.5% 噪声 |
-| CommandBuffer 10000/DenseExisting (ops/s) | 962 | 925 | **-3.8%** ±10.5% 噪声 |
+- public `Get/GetRef/Add/Set/Remove/Destroy/RestoreState` 保留 Release fail-fast；这些入口直接面对用户 handle/生命周期，不能依赖隐藏前置条件。
+- `Unsafe*` API 通过名字和 XML 把前置条件交给调用方，Release 故意不重复验证。
+- internal hot helper 只有在同一控制流的前序阶段已经建立不变量时才可减少检查。例如 `GetRecordFast` 仍检查 disposed/id range，但 version/occupied 由 consume-time prune 保证。
+- 便宜的本地分类检查与读取 World 状态的安全检查不是一类；是否重复必须沿数据流逐项证明。
 
-**所有差异都在正常运行噪声范围内。添加检查后零可测性能下降。**
+**2026-07-15 反例**：CommandStream record 的 `World.IsAlive` 与所有消费入口的 `PruneStaleCommands(world)` 重复。删除 record-time World read、把存活语义统一到 consume 后，`existing-set` 三次中位数提升 6.5%，stale/ID-reuse/Submit→Replay 回归全过。说明“所有防御检查都零成本”同样是错误的绝对结论。
 
-**为什么**：每次 `Get<T>()` 增加的开销：
-1. 1 次 `_disposed` bool 读取（已 L1 缓存）
-2. 1 次 uint 范围比较（`entity.Id >= _entitySlotCount`）
-3. 1 次 `record.IsOccupied` 空值检查
-4. 1 次 `record.Version == entity.Version` 比较
-5. 1 条从不执行的分支（正确代码永不触发异常）
-
-CPU 分支预测器将未触发分支的成本融合为零。额外指令与周围逻辑融合（同一条 cache line），不额外产生 cache miss。结论已由 6 次独立运行 × 2 套基准测试 × 2 个场景确认。
-
-**提案拒绝理由**：这些检查对用户可见的正确性有可测收益（将 4 个"静默数据损坏"场景转化为 `InvalidOperationException` + 1 个"灾难性跨世界恢复"被拦截），但对性能的代价为**零可测影响**。删掉它们是在用正确性换不存在性能收益。
-
-**建议**：在 hot path（`Get<T>` / `GetRef<T>`、`GetRecordFast`）上保持无条件检查；在 cold path（结构变更的 `AssertValidRow`、原型创建的 `AssertPositiveElementSize`）上更应保持无条件。此条适用所有"删防御换速度"的同类提案。**先跑基准再说话。**
+**判定标准**：先说明检查保护的时间点和失败模式，再找是否已有更晚的统一裁决；只有正确性测试、确定性测试与独占 Release A/B 同时通过才删除。不能从一个已证实冗余的检查推广到所有公共边界。
 
 ### 3.12 "Typed ref Query / `IForEach<T1,T2,...>` 能显著提高 Query 上限"
 
@@ -324,13 +311,13 @@ HeroComing.Perf 真实场景也验证过：把同一机制试套到 `CollisionSy
 
 ## 4. 真正的待办项
 
-没有剩余“应做的大重构/性能优化”。O1-O5 已全部评估并解决或拒绝：
+没有已获证据支持的“大重构”待办。O1-O5 已评估并解决或拒绝：
 
 - O4（FrozenState 字段对调）→ 已完成。`FrozenState` 是被整体换出/回收的引用对象；`SwapOutState` 做单次对象引用交换，不再逐字段 swap，消除了字段漏交换这类 bug。
 - O1/O3/O5 → 已评估，不值得做（见 §3.1、§3.6、§3.8）
 - O2 → 已有 `CachedCreateArchetype` + edge cache 解决（见 §3.7）
 
-库处于维护期。剩余工作是补测试覆盖、完善文档，以及处理 `kb-code-review-findings.md` 中记录的少量 P2 defense-in-depth 设计债。
+当前明确残留是 Replay 无通用事务回滚；它是接受的 P2 边界，不应被文档成“已完全修复”。后续优化仍必须按 workload 重新举证，不能把本页历史拒绝当永久真理。
 
 ---
 
