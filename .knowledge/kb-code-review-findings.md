@@ -112,6 +112,15 @@ updated: 2026-07-15
 - **验证**: 2026-07-15 Release：CommandStream + FrameDelta determinism 158/158、MiniArch.Tests 1039/1039、HeroPipeline.Tests 5/5；CommandStream.Profile 长测 `existing-set` 10976.9 ticks/s（改前 10980.1，测量噪声内）；HeroComing.Perf Movement 1721.9、Attack 1059.5、Memory OK。
 - **确定性约束**: 异步路径不得把“本地拒绝的 frame”交给 delta worker；contract preflight、allocator 对齐、placeholder resolve 和 worker handoff 的顺序属于 Submit 与 Snapshot→Replay 收敛契约。
 
+### #9: Debug structural-change 计数在异常后残留 ✅ 已修复
+
+- **模式**: Debug 诊断状态泄漏 / 非异常安全配对
+- **位置**: `World.StructuralChange.cs` Add/Remove、`World.EntityLifecycle.cs` Destroy/CreateInArchetype、`World.cs` `_structureChangeInProgress`
+- **原始缺陷**: 部分 `BeginStructChange()` / `EndStructChange()` 依赖正常返回配对。duplicate Add、stale Destroy 等路径在两者之间抛错时，Debug 计数永久大于零，使后续 `AssertNoStructChange()` 误报结构变更仍在进行。
+- **修复方案**: 所有原先无保护的配对在 Debug 编译下使用 `try/finally`；Release 编译继续只保留原业务语句，不引入异常区或额外运行时分支。已有 hierarchy destroy 的 `try/finally` 保持不变。
+- **回归测试**: `BUG_debug_structural_scope_recovers_after_exception`，先触发 duplicate Add，再验证计数归零并完成下一次合法 Remove。
+- **验证**: 2026-07-15：Debug WorldStructuralChangeTests 8/8；Release MiniArch.Tests 1039/1039、HeroPipeline.Tests 5/5；HeroComing.Perf Movement 1780.1、Attack 1066.8、Memory OK。
+
 ---
 
 ## 已验证安全的模式 (P3)

@@ -73,8 +73,20 @@ public sealed partial class World
         if (!_hierarchy.HasChildren(this, entity))
         {
             BeginStructChange();
+#if DEBUG
+            try
+            {
+#endif
             DestroySingle(entity);
+#if DEBUG
+            }
+            finally
+            {
+                EndStructChange();
+            }
+#else
             EndStructChange();
+#endif
             return;
         }
 
@@ -641,14 +653,27 @@ public sealed partial class World
         // Storage growth can allocate and copy. Complete it before consuming an
         // entity id so a preparation failure cannot expose a half-created record.
         archetype.EnsureCapacity(archetype.EntityCount + 1);
+        Entity entity;
         BeginStructChange();
+#if DEBUG
+        try
+        {
+#endif
         var id = AcquireEntityIdUnsafe(out var version);
-        var entity = new Entity(id, version);
+        entity = new Entity(id, version);
         rowIndex = archetype.AddEntity(entity);
         ref var record = ref _records[id];
         record.Archetype = archetype;
         record.RowIndex = rowIndex;
+#if DEBUG
+        }
+        finally
+        {
+            EndStructChange();
+        }
+#else
         EndStructChange();
+#endif
         return entity;
     }
 

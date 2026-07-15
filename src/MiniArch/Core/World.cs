@@ -112,10 +112,12 @@ public sealed partial class World : IDisposable
     private bool _disposed;
 
 #if DEBUG
-    // Tracks whether a structural change (Create/Destroy/Add/Set/Remove) is in
+    // Tracks whether a structural change (Create/Destroy/Add/Remove) is in
     // progress. Used by AssertNoStructChange() to catch query iteration during
     // structural changes in DEBUG builds. Single-threaded; no Interlocked needed.
     private int _structureChangeInProgress;
+
+    internal int DebugStructureChangeInProgress => _structureChangeInProgress;
 #endif
 
     /// <summary>

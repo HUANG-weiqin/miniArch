@@ -15,8 +15,20 @@ public sealed partial class World
     {
         AssertNotDisposed();
         BeginStructChange();
+#if DEBUG
+        try
+        {
+#endif
         ApplyTypedAdd(entity, GetComponentType<T>(), in component);
+#if DEBUG
+        }
+        finally
+        {
+            EndStructChange();
+        }
+#else
         EndStructChange();
+#endif
     }
 
     /// <summary>
@@ -68,9 +80,21 @@ public sealed partial class World
     {
         AssertNotDisposed();
         BeginStructChange();
+#if DEBUG
+        try
+        {
+#endif
         var componentType = GetComponentType<T>();
         RemoveBoxed(entity, componentType);
+#if DEBUG
+        }
+        finally
+        {
+            EndStructChange();
+        }
+#else
         EndStructChange();
+#endif
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

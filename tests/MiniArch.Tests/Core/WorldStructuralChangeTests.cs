@@ -144,6 +144,21 @@ public sealed class WorldStructuralChangeTests
             : default);
     }
 
+#if DEBUG
+    [Fact]
+    public void BUG_debug_structural_scope_recovers_after_exception()
+    {
+        var world = new World();
+        var entity = world.Create(new Position(1, 2));
+
+        Assert.Throws<InvalidOperationException>(() => world.Add(entity, new Position(3, 4)));
+        Assert.Equal(0, world.DebugStructureChangeInProgress);
+
+        world.Remove<Position>(entity);
+        Assert.Equal(0, world.DebugStructureChangeInProgress);
+    }
+#endif
+
     private static Position GetComponentValue(World world, Entity entity)
     {
         Assert.True(world.TryGetLocation(entity, out var info));
