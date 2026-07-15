@@ -551,25 +551,6 @@ public abstract partial class CommandStreamCore
         }
     }
 
-    private void AlignCancelledBatchFreeListOrderForFrozen(FrozenState frozen)
-    {
-        if (frozen.CancelledBatchCount == 0)
-            return;
-
-        for (var i = 0; i < frozen.PendingBatchCount; i++)
-        {
-            if (!frozen.BatchCanceled[i])
-                continue;
-
-            var entity = frozen.BatchEntities[i];
-            if (entity.Id < 0)
-                continue;
-
-            var expectedVersion = entity.Version == int.MaxValue ? 1 : entity.Version + 1;
-            _world.RepushFreeEntry(entity.Id, expectedVersion);
-        }
-    }
-
     private bool HasAnyCommands()
     {
         if (_frozen.PendingBatchCount > 0 || _frozen.DestroyCount > 0 || _frozen.HierarchyByChild.Count > 0)
@@ -933,6 +914,7 @@ public abstract partial class CommandStreamCore
         if (!HasAnyCommands())
             return Task.FromResult(new FrameDelta());
 
+        PrepareAsyncHandoff();
         var frozen = SwapOutState();
 #if DEBUG
         _world._deferredEpoch++;
@@ -945,12 +927,9 @@ public abstract partial class CommandStreamCore
             s_buildFromFrozen, frozen, CancellationToken.None,
             TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
 
-        // Align free-list entries for cancelled batches to match the wire
-        // (batch) order before processing the frozen state.
-        AlignCancelledBatchFreeListOrderForFrozen(frozen);
-        SubmitFromFrozen(frozen);
         _pendingFrozen = frozen;
         _pendingTask = task;
+        SubmitFrozenWhileWorkerOwnsState(frozen, task);
         return task;
     }
 
@@ -997,6 +976,7 @@ public abstract partial class CommandStreamCore
             return Task.CompletedTask;
         }
 
+        PrepareAsyncHandoff();
         var frozen = SwapOutState();
 #if DEBUG
         _world._deferredEpoch++;
@@ -1006,13 +986,59 @@ public abstract partial class CommandStreamCore
             s_buildFromFrozenInto, (frozen, target), CancellationToken.None,
             TaskCreationOptions.DenyChildAttach, TaskScheduler.Default);
 
-        // Align free-list entries for cancelled batches to match the wire
-        // (batch) order before processing the frozen state.
-        AlignCancelledBatchFreeListOrderForFrozen(frozen);
-        SubmitFromFrozen(frozen);
         _pendingFrozen = frozen;
         _pendingTask = task;
+        SubmitFrozenWhileWorkerOwnsState(frozen, task);
         return task;
+    }
+
+    private void PrepareAsyncHandoff()
+    {
+        try
+        {
+            // Contract failures must be discovered while the commands are still
+            // owned by the calling thread. Starting the worker first would let it
+            // observe a frame that the local World rejects and would leave the
+            // detached FrozenState without tracked ownership when Submit throws.
+            PreValidatePendingSlots();
+            PreflightComponentStores(_frozen);
+            PreflightHierarchyOverlay(_world, _frozen);
+
+            // Keep allocator ordering identical to Submit/Replay before deferred
+            // placeholders are resolved into authoritative real ids.
+            AlignCancelledBatchFreeListOrder();
+            ResolveDeferredCreates();
+            PreValidatePendingSlots();
+        }
+        catch
+        {
+            Clear(releaseReserved: true);
+            throw;
+        }
+    }
+
+    private void SubmitFrozenWhileWorkerOwnsState(FrozenState frozen, Task worker)
+    {
+        try
+        {
+            SubmitFromFrozen(frozen);
+        }
+        catch
+        {
+            // The worker may still be reading frozen. Observe its completion before
+            // allowing the state to be recycled, while preserving the Submit error.
+            try
+            {
+                worker.GetAwaiter().GetResult();
+            }
+            catch
+            {
+                // Submit is the authoritative failure for this synchronous call.
+            }
+
+            TryReclaimPending();
+            throw;
+        }
     }
 
     private static readonly Func<object?, FrameDelta> s_buildFromFrozen =
@@ -1084,7 +1110,6 @@ public abstract partial class CommandStreamCore
     private FrozenState SwapOutState()
     {
         TryReclaimPending();
-        ResolveDeferredCreates();
 
         FrozenState frozen;
         if (_spareFrozen is { } spare)

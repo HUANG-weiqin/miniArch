@@ -1538,6 +1538,34 @@ public sealed class CommandStreamTests
         }
     }
 
+    [Fact]
+    public async Task BUG_async_submit_preflights_invalid_component_before_worker_handoff()
+    {
+        var world = new World();
+        var existing = world.Create(new Position(1, 2));
+        var stream = new CommandStream(world);
+
+        var pending = stream.Create();
+        stream.Add(pending, new Velocity(3, 4));
+        stream.Set(existing, new Velocity(5, 6));
+
+        void SubmitInvalidFrame() => _ = stream.SubmitAndSnapshotAsync();
+        Assert.Throws<InvalidOperationException>(SubmitInvalidFrame);
+
+        Assert.Equal(1, world.EntityCount);
+        Assert.False(world.IsAlive(pending));
+        Assert.False(world.TryGet<Velocity>(existing, out _));
+        Assert.True(WorldValidator.Validate(world).IsValid);
+
+        var replacement = stream.Create();
+        stream.Add(replacement, new Velocity(7, 8));
+        var delta = await stream.SubmitAndSnapshotAsync();
+
+        Assert.True(world.IsAlive(replacement));
+        Assert.Equal(new Velocity(7, 8), world.Get<Velocity>(replacement));
+        Assert.True(delta.HasEntity(replacement));
+    }
+
     // ══════════════════════════════════════════════════════════—
     // SubmitAndSnapshotIntoAsync — async submit+snapshot into existing target
     // ══════════════════════════════════════════════════════════—
@@ -1747,6 +1775,41 @@ public sealed class CommandStreamTests
             Assert.Equal(new Position(cycle, cycle + 1), p);
             Assert.True(target.HasEntity(e));
         }
+    }
+
+    [Fact]
+    public async Task BUG_async_into_preflights_invalid_component_before_worker_handoff()
+    {
+        var world = new World();
+        var existing = world.Create(new Position(1, 2));
+        var stream = new CommandStream(world);
+        var target = new FrameDelta();
+
+        var seed = stream.Create();
+        stream.Add(seed, new Position(3, 4));
+        await stream.SubmitAndSnapshotIntoAsync(target);
+        var originalWire = target.AsSpan().ToArray();
+
+        var pending = stream.Create();
+        stream.Add(pending, new Velocity(5, 6));
+        stream.Set(existing, new Velocity(7, 8));
+
+        void SubmitInvalidFrame() => _ = stream.SubmitAndSnapshotIntoAsync(target);
+        Assert.Throws<InvalidOperationException>(SubmitInvalidFrame);
+
+        Assert.Equal(originalWire, target.AsSpan().ToArray());
+        Assert.Equal(2, world.EntityCount);
+        Assert.False(world.IsAlive(pending));
+        Assert.False(world.TryGet<Velocity>(existing, out _));
+        Assert.True(WorldValidator.Validate(world).IsValid);
+
+        var replacement = stream.Create();
+        stream.Add(replacement, new Velocity(9, 10));
+        await stream.SubmitAndSnapshotIntoAsync(target);
+
+        Assert.True(world.IsAlive(replacement));
+        Assert.Equal(new Velocity(9, 10), world.Get<Velocity>(replacement));
+        Assert.True(target.HasEntity(replacement));
     }
 
     [Fact]

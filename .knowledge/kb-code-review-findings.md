@@ -102,6 +102,16 @@ updated: 2026-07-15
 - **验证**: 2026-07-15 Release：MiniArch.Tests 1037/1037、HeroPipeline.Tests 5/5；CommandStream.Profile `existing-set` 10980.1 ticks/s；HeroComing.Perf Movement 1688.0、Attack 1090.1、Memory OK。
 - **确定性约束**: hierarchy 预检、Submit 应用和 Snapshot→Replay 必须使用同一 intent skip/cycle 契约；涉及排序或 placeholder resolve 顺序的后续改动必须先跑 hierarchy evolution 与 replay parity 测试。
 
+### #8: CommandStream 异步提交在契约失败前启动 worker ✅ 已修复
+
+- **模式**: R11 部分修改 / frozen state 所有权提前移交
+- **位置**: `CommandStreamCore.SubmitAndSnapshotAsync()`、`SubmitAndSnapshotIntoAsync()`、`PrepareAsyncHandoff()`
+- **原始缺陷**: 两个异步 API 先 `SwapOutState()` 并启动后台 delta worker，再同步调用 `SubmitFromFrozen()`。严格 Add/Set 或 hierarchy 契约失败时，pending entity 可能已 materialize，`SubmitAndSnapshotIntoAsync` 的复用 target 也会被 worker 改写；且 `_pendingFrozen` / `_pendingTask` 要到 Submit 成功后才登记，异常时失去 frozen state 的回收所有权。
+- **修复方案**: 在 active state 仍由调用线程独占时执行 pending slot、component stores、hierarchy overlay 全部预检；通过后才对齐 free-list、resolve placeholders、swap 并启动 worker。worker 创建后立即登记 frozen/task 所有权；若后续内部 Submit 异常，先观察 worker 完成再回收 frozen state，同时保留同步 Submit 异常。
+- **回归测试**: `BUG_async_submit_preflights_invalid_component_before_worker_handoff`、`BUG_async_into_preflights_invalid_component_before_worker_handoff`，覆盖同步抛错、World 不变、target wire bytes 不变、reservation 释放和 stream 可复用。
+- **验证**: 2026-07-15 Release：CommandStream + FrameDelta determinism 158/158、MiniArch.Tests 1039/1039、HeroPipeline.Tests 5/5；CommandStream.Profile 长测 `existing-set` 10976.9 ticks/s（改前 10980.1，测量噪声内）；HeroComing.Perf Movement 1721.9、Attack 1059.5、Memory OK。
+- **确定性约束**: 异步路径不得把“本地拒绝的 frame”交给 delta worker；contract preflight、allocator 对齐、placeholder resolve 和 worker handoff 的顺序属于 Submit 与 Snapshot→Replay 收敛契约。
+
 ---
 
 ## 已验证安全的模式 (P3)
