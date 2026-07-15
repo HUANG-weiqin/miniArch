@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.6.0 (2026-07-15)
+
+- **New: `ComponentSchema.Export()` / `Import()`** — cross-process schema handshake for determinism across peers. Authoritative peer exports the ordered list of registered component types as a portable `byte[]` blob; joining peer imports it to build a schema-index → type mapping. Subsequent wire messages can reference components by schema index instead of process-local `ComponentType.Value`, which may differ between peers.
+- **Harden: External-boundary validation** — `ComponentSchema.Export/Import` and `WorldSnapshot.Load` hardened with input validation, size caps, and edge-case attack tests (null/empty/corrupt/max-size inputs).
+- **Harden: `WorldSnapshot.Load` overflow & size validation** — segment capacity overflow guard, component type limit enforcement, and comprehensive boundary tests.
+- **Public API: +2 methods** — `ComponentSchema.Export()` → `byte[]`, `ComponentSchema.Import(byte[] data)` → `Type[]`.
+- **Cleanup: CommandStream.CreateMany deduplication** — `ICreateManyWriter` constraint docs deduplicated, type vars hoisted before loop, stale `.gitignore` entry removed. Net −116 lines of code.
+
 ## 3.0.0 (2026-07-10)
 
 - **Breaking: Change tracking replaced with Watch API** — `ChangeTracker`/`ValueTracker`/`IChangeTracker` removed, replaced by `ChangeWatch<TComponent, THandler>` / `ChangeWatch<TComponent, TValue, THandler>` / `TransitionWatch<THandler>` pull-event model. See `kb-change-tracking.md`.
