@@ -8,6 +8,7 @@ namespace MiniArchTests.Core;
 
 public sealed class WorldLifecycleTests
 {
+    private readonly record struct ByteTag(byte Value);
     private readonly record struct Position(int X, int Y);
     private readonly record struct Velocity(int X, int Y);
     private readonly record struct C1(int Value);
@@ -26,6 +27,57 @@ public sealed class WorldLifecycleTests
     private readonly record struct C14(int Value);
     private readonly record struct C15(int Value);
     private readonly record struct C16(int Value);
+
+    [Fact]
+    public void BUG_single_byte_archetype_promotes_past_chunk_capacity()
+    {
+        using var world = new World(chunkCapacity: 128);
+        var entities = new Entity[129];
+
+        for (var i = 0; i < entities.Length; i++)
+            entities[i] = world.Create((byte)i);
+
+        Assert.Equal(entities.Length, world.EntityCount);
+        for (var i = 0; i < entities.Length; i++)
+            Assert.Equal((byte)i, world.Get<byte>(entities[i]));
+
+        var validation = WorldValidator.Validate(world);
+        Assert.True(validation.IsValid, validation.ToString());
+    }
+
+    [Fact]
+    public void BUG_bool_archetype_promotes_past_chunk_capacity()
+    {
+        using var world = new World(chunkCapacity: 128);
+        var entities = new Entity[129];
+
+        for (var i = 0; i < entities.Length; i++)
+            entities[i] = world.Create((i & 1) == 0);
+
+        Assert.Equal(entities.Length, world.EntityCount);
+        for (var i = 0; i < entities.Length; i++)
+            Assert.Equal((i & 1) == 0, world.Get<bool>(entities[i]));
+
+        var validation = WorldValidator.Validate(world);
+        Assert.True(validation.IsValid, validation.ToString());
+    }
+
+    [Fact]
+    public void BUG_single_byte_tag_archetype_promotes_past_chunk_capacity()
+    {
+        using var world = new World(chunkCapacity: 128);
+        var entities = new Entity[129];
+
+        for (var i = 0; i < entities.Length; i++)
+            entities[i] = world.Create(new ByteTag((byte)i));
+
+        Assert.Equal(entities.Length, world.EntityCount);
+        for (var i = 0; i < entities.Length; i++)
+            Assert.Equal(new ByteTag((byte)i), world.Get<ByteTag>(entities[i]));
+
+        var validation = WorldValidator.Validate(world);
+        Assert.True(validation.IsValid, validation.ToString());
+    }
 
     [Fact]
     public void Create_returns_a_valid_entity()

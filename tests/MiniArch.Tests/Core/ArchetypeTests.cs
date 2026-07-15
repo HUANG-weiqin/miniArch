@@ -5,6 +5,29 @@ namespace MiniArchTests.Core;
 
 public sealed class ArchetypeTests
 {
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(65_536)]
+    [InlineData(0x3FFFFFFF)]
+    [InlineData(0x7FFFFFC7)]
+    public void Segment_entity_capacity_is_positive_power_of_two_within_array_limit(int perEntityBytes)
+    {
+        var capacity = Archetype.ComputeSegmentEntityCapacityForSize(perEntityBytes);
+
+        Assert.InRange(capacity, 1, 1 << 30);
+        Assert.Equal(0, capacity & (capacity - 1));
+        Assert.True((long)capacity * perEntityBytes <= 0x7FFFFFC7L);
+    }
+
+    [Fact]
+    public void Segment_entity_capacity_rejects_component_storage_above_array_limit()
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => Archetype.ComputeSegmentEntityCapacityForSize(int.MaxValue));
+    }
+
     private readonly record struct Position(int X, int Y);
     private readonly record struct Velocity(int X, int Y);
     private readonly record struct Health(int Value);

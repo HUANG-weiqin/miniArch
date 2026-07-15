@@ -131,6 +131,7 @@ internal sealed partial class Archetype
     // Target 2 MB per segment: large enough for L3 cache residency,
     // small enough that allocation and GC compaction are near-instant.
     private const int TargetSegmentBytes = 2 * 1024 * 1024;
+    private const int MaxSegmentEntityCapacity = 1 << 30;
 
     private static int ComputeSegmentEntityCapacity(Type[] componentTypes)
     {
@@ -138,30 +139,30 @@ internal sealed partial class Archetype
         if (perEntity > ArrayMaxLength)
             ThrowEntityTooLarge(componentTypes, perEntity);
 
-        if (perEntity > 0)
-        {
-            // Lower bound: at least 1 entity per segment. The old floor of 16
-            // caused overflow when perEntity > 134 MB (16 * perEntity > ArrayMaxLength).
-            var raw = Math.Max(1, TargetSegmentBytes / perEntity);
-            var pow2Cap = BitOperations.RoundUpToPowerOf2((uint)raw);
+        return ComputeSegmentEntityCapacityForSize(perEntity);
+    }
 
-            // Must stay power-of-2, otherwise GetSegmentAndLocal SHR+AND mapping breaks.
-            const int MaxSegCap = 1 << 30; // 1,073,741,824
-
-            // ArrayMaxLength / perEntity is the absolute upper bound from .NET array limits.
-            // Round up to keep the power-of-2 invariant; clamp to MaxSegCap to prevent
-            // RoundUpToPowerOf2 from producing a value whose (int) cast would be negative.
-            var maxSegCapFromArray = ArrayMaxLength / perEntity;
-            var safeSegCapFromArray = (int)BitOperations.RoundUpToPowerOf2((uint)maxSegCapFromArray);
-            if (safeSegCapFromArray > MaxSegCap)
-                safeSegCapFromArray = MaxSegCap;
-
-            var clampedByArray = Math.Min((int)pow2Cap, safeSegCapFromArray);
-            return Math.Min(clampedByArray, MaxSegCap);
-        }
+    internal static int ComputeSegmentEntityCapacityForSize(int perEntityBytes)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(perEntityBytes);
+        if (perEntityBytes > ArrayMaxLength)
+            throw new InvalidOperationException(
+                $"Component storage requires {perEntityBytes} bytes per entity, " +
+                $"which exceeds the maximum array element count of {ArrayMaxLength}.");
 
         // Empty component list: no per-entity storage constraints, use large segment.
-        return 65536;
+        if (perEntityBytes == 0)
+            return 65536;
+
+        // Both limits stay unsigned until after clamping. In particular,
+        // RoundUpToPowerOf2(ArrayMaxLength) is 0x80000000, which becomes negative
+        // if cast to int before the clamp.
+        var target = BitOperations.RoundUpToPowerOf2(
+            (uint)Math.Max(1, TargetSegmentBytes / perEntityBytes));
+        var maxByArray = (uint)(ArrayMaxLength / perEntityBytes);
+        var safeByArray = 1u << BitOperations.Log2(maxByArray);
+        var capacity = Math.Min(target, Math.Min(safeByArray, (uint)MaxSegmentEntityCapacity));
+        return checked((int)capacity);
     }
 
     private static int ComputeAlignedPerEntitySize(Type[] componentTypes)
