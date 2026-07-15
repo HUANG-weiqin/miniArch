@@ -131,18 +131,42 @@ public readonly struct ChunkView
         _archetype.TryGetComponentIndex(Component<T>.ComponentType, out columnIndex);
 
     /// <summary>
-    /// Gets a component span at a pre-resolved column index.
-    /// Use with <see cref="TryGetComponentIndex{T}"/> for efficient optional component access.
+    /// Unsafely gets a component span at a pre-resolved column index without Release checks.
     /// </summary>
+    /// <remarks>
+    /// <b>Unsafe contract:</b> <paramref name="columnIndex"/> must come from
+    /// <see cref="TryGetComponentIndex{T}"/> on this same chunk/archetype for the same
+    /// <typeparamref name="T"/>. Do not reuse the index with another component type,
+    /// another archetype, or after any structural change. Debug builds reject a mismatched
+    /// type or column; Release builds intentionally omit those checks. Violating this
+    /// contract is undefined behavior and may overwrite unrelated component rows.
+    /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public Span<T> GetComponentSpanAt<T>(int columnIndex) where T : unmanaged
+    public Span<T> UnsafeGetComponentSpanAt<T>(int columnIndex) where T : unmanaged
     {
-        AssertInitialized();
+        ValidateUnsafeColumnAccess<T>(columnIndex);
         Span<T> full;
         if (_archetype.IsChunked)
             full = _archetype.GetSegmentComponentSpan<T>(_segmentIndex, columnIndex);
         else
             full = _archetype.GetFlatComponentSpanAt<T>(columnIndex);
         return _rowCount >= 0 ? full.Slice(_startRow, _rowCount) : full;
+    }
+
+    [Conditional("DEBUG")]
+    private void ValidateUnsafeColumnAccess<T>(int columnIndex) where T : unmanaged
+    {
+        if (_archetype is null)
+            throw new InvalidOperationException(
+                "ChunkView was default-initialized; use Query.GetChunks() to obtain a valid view.");
+        if ((uint)columnIndex >= (uint)_archetype.ComponentTypes.Count)
+            throw new ArgumentOutOfRangeException(nameof(columnIndex), columnIndex,
+                "Column index is outside this chunk's archetype.");
+
+        var actualType = _archetype.ComponentTypes[columnIndex];
+        if (actualType != typeof(T))
+            throw new InvalidOperationException(
+                $"Column {columnIndex} contains {actualType.Name}, not {typeof(T).Name}. " +
+                $"Resolve the index with TryGetComponentIndex<{typeof(T).Name}>() on this same ChunkView.");
     }
 }

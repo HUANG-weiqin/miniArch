@@ -25,10 +25,10 @@ delegate: MiniArch.ChunkAction : System.MulticastDelegate [System.Runtime.Serial
   Method: EndInvoke(System.IAsyncResult result) -> System.Void
   Method: Invoke(MiniArch.ChunkView chunk) -> System.Void
 struct: MiniArch.ChunkView
-  Method: GetComponentSpanAt(System.Int32 columnIndex) -> System.Span<T> where T : struct, System.ValueType
   Method: GetEntities() -> System.ReadOnlySpan<MiniArch.Entity>
   Method: GetSpan() -> System.Span<T> where T : struct, System.ValueType
   Method: TryGetComponentIndex(out System.Int32& columnIndex) -> System.Boolean where T : struct, System.ValueType
+  Method: UnsafeGetComponentSpanAt(System.Int32 columnIndex) -> System.Span<T> where T : struct, System.ValueType
   Property: Count -> System.Int32 [get; ]
 class: MiniArch.ComponentBucketQuery`1 where TComponent : struct, System.ValueType, System.IEquatable<TComponent>
   Method: ContainsKey(TComponent key) -> System.Boolean
@@ -247,7 +247,6 @@ struct: MiniArch.Entity
   Method: ToString() -> System.String
   Property: Id -> System.Int32 [get; set; ]
   Property: IsPlaceholder -> System.Boolean [get; ]
-  Property: IsUnmappedSentinel -> System.Boolean [get; ]
   Property: IsValid -> System.Boolean [get; ]
   Property: Version -> System.Int32 [get; set; ]
   Operator: op_Equality(MiniArch.Entity, MiniArch.Entity) -> System.Boolean

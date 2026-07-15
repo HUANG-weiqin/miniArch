@@ -40,10 +40,10 @@ public sealed class ModifierApplySystem : ISystem
             bool hasDelta = chunk.TryGetComponentIndex<DeltaModifier>(out int deltaColumn);
 
             ReadOnlySpan<SetModifier> setSpan = hasSet
-                ? chunk.GetComponentSpanAt<SetModifier>(setColumn)
+                ? chunk.UnsafeGetComponentSpanAt<SetModifier>(setColumn)
                 : default;
             ReadOnlySpan<DeltaModifier> deltaSpan = hasDelta
-                ? chunk.GetComponentSpanAt<DeltaModifier>(deltaColumn)
+                ? chunk.UnsafeGetComponentSpanAt<DeltaModifier>(deltaColumn)
                 : default;
 
             for (int i = 0; i < chunk.Count; i++)

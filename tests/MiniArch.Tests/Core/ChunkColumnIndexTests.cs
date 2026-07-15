@@ -9,6 +9,40 @@ public sealed class ChunkColumnIndexTests
     private readonly record struct Health(int Value);
 
     [Fact]
+    public void UnsafeGetComponentSpanAt_reads_a_matching_pre_resolved_column()
+    {
+        using var world = new World();
+        world.Create(new Position(1, 2), new Velocity(3, 4));
+        var query = world.Query(new QueryDescription().With<Position>().With<Velocity>());
+        var chunks = query.GetChunks();
+        Assert.Equal(1, chunks.Length);
+        var chunk = chunks[0];
+
+        Assert.True(chunk.TryGetComponentIndex<Position>(out var positionColumn));
+        var positions = chunk.UnsafeGetComponentSpanAt<Position>(positionColumn);
+
+        Assert.Equal(new Position(1, 2), Assert.Single(positions.ToArray()));
+    }
+
+#if DEBUG
+    [Fact]
+    public void UnsafeGetComponentSpanAt_rejects_a_mismatched_type_in_debug()
+    {
+        using var world = new World();
+        world.Create(new Position(1, 2), new Velocity(3, 4));
+        var query = world.Query(new QueryDescription().With<Position>().With<Velocity>());
+        var chunk = query.GetChunks()[0];
+
+        Assert.True(chunk.TryGetComponentIndex<Position>(out var positionColumn));
+
+        Assert.Throws<InvalidOperationException>(() =>
+        {
+            _ = chunk.UnsafeGetComponentSpanAt<Velocity>(positionColumn);
+        });
+    }
+#endif
+
+    [Fact]
     public void TryGetComponentIndex_SingleComponent_ReturnsSuccess()
     {
         var registry = new ComponentRegistry();

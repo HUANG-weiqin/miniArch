@@ -312,7 +312,7 @@ public interface IChunkForEach
 {
     /// <summary>
     /// Processes a single matched chunk. Reads/writes happen via
-    /// <see cref="ChunkView.GetSpan{T}"/> / <see cref="ChunkView.GetComponentSpanAt{T}"/>.
+    /// <see cref="ChunkView.GetSpan{T}"/> / <see cref="ChunkView.UnsafeGetComponentSpanAt{T}"/>.
     /// </summary>
     void OnChunk(ChunkView chunk);
 }
@@ -662,7 +662,7 @@ public struct OrderedComponentEnumerator<T> : IDisposable where T : unmanaged
             var valueIndex = index;
             foreach (var chunk in archetype.AsChunkViews())
             {
-                var componentSpan = chunk.GetComponentSpanAt<T>(columnIndex);
+                var componentSpan = chunk.UnsafeGetComponentSpanAt<T>(columnIndex);
                 componentSpan.CopyTo(values.AsSpan(valueIndex));
                 valueIndex += componentSpan.Length;
             }

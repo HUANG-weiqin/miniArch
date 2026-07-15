@@ -30,7 +30,7 @@ public readonly record struct Entity(int Id, int Version) : IComparable<Entity>
     /// Whether this entity is an unmapped sentinel (unoccupied slot in the
     /// placeholder-to-local mapping table). Sentinels have Id == -1 and Version == -1.
     /// </summary>
-    public bool IsUnmappedSentinel => Id == -1 && Version < 0;
+    internal bool IsUnmappedSentinel => Id == -1 && Version < 0;
 
     /// <summary>
     /// Returns a compact display string.
