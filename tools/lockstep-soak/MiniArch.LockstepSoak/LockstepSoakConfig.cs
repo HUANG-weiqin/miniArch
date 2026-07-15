@@ -9,6 +9,7 @@ sealed record LockstepSoakConfig
     public int EntityCap { get; init; } = 5000;
     public int EntityFloor { get; init; } = 200;
     public int DetailInterval { get; init; } = 1_000;
+    public int ChecksumInterval { get; init; } = 1;
     public int ValidateInterval { get; init; } = 100;
     public int CheckpointInterval { get; init; } = 10_000;
     public bool PauseOnFail { get; init; }
@@ -31,6 +32,7 @@ sealed record LockstepSoakConfig
                 case "--entity-cap" when i + 1 < args.Length: cfg = cfg with { EntityCap = int.Parse(args[++i]) }; break;
                 case "--entity-floor" when i + 1 < args.Length: cfg = cfg with { EntityFloor = int.Parse(args[++i]) }; break;
                 case "--detail-interval" when i + 1 < args.Length: cfg = cfg with { DetailInterval = int.Parse(args[++i]) }; break;
+                case "--checksum-interval" when i + 1 < args.Length: cfg = cfg with { ChecksumInterval = int.Parse(args[++i]) }; break;
                 case "--validate-interval" when i + 1 < args.Length: cfg = cfg with { ValidateInterval = int.Parse(args[++i]) }; break;
                 case "--checkpoint-interval" when i + 1 < args.Length: cfg = cfg with { CheckpointInterval = int.Parse(args[++i]) }; break;
                 case "--pause-on-fail": cfg = cfg with { PauseOnFail = true }; break;
@@ -50,7 +52,7 @@ sealed record LockstepSoakConfig
     private static void PrintHelp()
     {
         Console.WriteLine("""
-            MiniArch LockstepSoak — multi-host placeholder lockstep correctness proof.
+            MiniArch LockstepSoak — multi-host placeholder lockstep correctness verifier.
 
             Usage: MiniArch.LockstepSoak [options]
 
@@ -62,6 +64,7 @@ sealed record LockstepSoakConfig
               --entity-cap N         Max alive entities         (default: 5000)
               --entity-floor N       Min alive entities         (default: 200)
               --detail-interval N    Detail line every N frames (default: 1000)
+              --checksum-interval N  Cross-host checksum every N frames (default: 1; final frame always checked)
               --validate-interval N  Heavy validation every N frames (default: 100; 0=every frame)
               --checkpoint-interval N Checkpoint every N frames  (default: 10000)
               --pause-on-fail        Wait for keypress on fail  (default: off)

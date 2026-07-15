@@ -22,22 +22,24 @@ readonly record struct CompD(int V1, int V2, int V3, int V4, int V5, int V6, int
 readonly record struct OwnerTag(int HostId);
 
 /// <summary>
-/// Multi-host placeholder lockstep correctness prover.
+/// Multi-host placeholder lockstep correctness verifier.
 ///
 /// N independent hosts each record random ops into their own CommandStream
 /// (DeferredEntities=true), Snapshot() a placeholder delta, Clear(), then
 /// ALL hosts replay ALL N deltas in fixed hostId order. Cross-host
-/// CanonicalChecksum byte-level convergence is verified every frame.
+/// CanonicalChecksum byte-level convergence is verified at the configured
+/// interval and always on the final frame.
 ///
 /// Ownership is tracked via the OwnerTag component: each host operates only
 /// on entities it created (OwnerTag.HostId == host.HostId). This guarantees
 /// zero cross-host structural conflicts, so every delta is legal — no
 /// exceptions are swallowed during replay.
 ///
-/// This is a v1 tool. Known simplifications vs the full soak:
-///   - RefModel is tracked only on host[0] (spot-check every 100 frames).
-///     In a fully-converged lockstep all hosts produce identical state, so
-///     host[0]'s model is a sufficient oracle for shared-path bugs.
+/// This is a focused tool. Known simplifications vs the full soak:
+///   - The CompA/CompB mutation model is tracked only on host[0] and checks the
+///     full tracked set every 100 frames. Direct creates and clone roots are
+///     modeled from generated intent; recursive clone descendants are baselined
+///     when first observed, then checked against subsequent generated mutations.
 ///   - Same-frame Create→Set/Add/AddChild chaining is limited: OpAddChild
 ///     creates a child and links it in one call; other ops (Set/Add) target
 ///     only real entities from previous frames' replays.
@@ -65,7 +67,12 @@ sealed class LockstepSoakRunner
         public int PeakEntityCount;
 
         // Per-frame tracking
-        public readonly HashSet<Entity> PendingRemoves = [];
+        /// <summary>
+        /// Final component presence after this frame's queued Add/Remove intents.
+        /// World.Has only sees the frame-start state, so generation must consult
+        /// this overlay before emitting another strict component command.
+        /// </summary>
+        public readonly Dictionary<(Entity Entity, int ComponentKind), bool> PendingComponentPresence = [];
         public readonly HashSet<Entity> DestroyedThisFrame = [];
         public readonly HashSet<Entity> PendingHierarchyChildren = [];
         public readonly HashSet<Entity> PendingHierarchyParents = [];
@@ -95,9 +102,11 @@ sealed class LockstepSoakRunner
     long _runStartAlloc;
     int _runStartG0, _runStartG1, _runStartG2;
 
-    // Reference model — v1: tracked only on host[0]
-    sealed record RefState(int? A, long? B);
+    // Reference model — tracked only on host[0]. EntitySlot keeps deferred
+    // placeholder keys resolvable after the source host replays its own delta.
+    sealed record RefState(EntitySlot Slot, int? A, long? B);
     readonly Dictionary<Entity, RefState> _refModel = [];
+    long _refChecks;
 
     const int MaxOpLog = 64;
 
@@ -169,7 +178,7 @@ sealed class LockstepSoakRunner
                 AdjustOpWeights(phase, totalCount, out var createW, out var destroyW, out var addW, out var setW,
                     out var removeW, out var cloneW, out var addHierW, out var removeHierW);
 
-                host.PendingRemoves.Clear();
+                host.PendingComponentPresence.Clear();
                 host.PendingHierarchyChildren.Clear();
                 host.PendingHierarchyParents.Clear();
                 host.DestroyedThisFrame.Clear();
@@ -178,7 +187,17 @@ sealed class LockstepSoakRunner
 
                 var opsThisFrame = host.Rng.Next(1, _cfg.MaxOpsPerFrame + 1);
                 for (var op = 0; op < opsThisFrame; op++)
-                    RandomOp(host, createW, destroyW, addW, setW, removeW, cloneW, addHierW, removeHierW);
+                {
+                    try
+                    {
+                        RandomOp(host, createW, destroyW, addW, setW, removeW, cloneW, addHierW, removeHierW);
+                    }
+                    catch (Exception ex)
+                    {
+                        FailWithException(frame, phase, "Phase 1 (Record)", ex);
+                        return false;
+                    }
+                }
 
                 // Peak = real owned + placeholders created this frame
                 host.PeakEntityCount = Math.Max(host.PeakEntityCount, host.Alive.Count + host.CreatedThisFrame.Count);
@@ -201,17 +220,19 @@ sealed class LockstepSoakRunner
             {
                 for (var h = 0; h < _cfg.HostCount; h++)
                     for (var d = 0; d < _cfg.HostCount; d++)
-                        _hosts[h].Stream.Replay(deltas[d]);
+                        _hosts[h].Stream.Replay(deltas[d], resolveSlots: h == d);
             }
             catch (Exception ex)
             {
-                FailWithException(frame, phase, ex);
+                FailWithException(frame, phase, "Phase 3 (Replay)", ex);
                 return false;
             }
 
             // Track delta bytes (from host[0]'s delta as representative)
             if (deltas[0] is not null)
                 _frameDeltaBytes += deltas[0].AsSpan().Length;
+
+            ResolveRefModelEntities();
 
             // Phase 4: Verification
             if (!Verify(frame, phase)) return false;
@@ -233,6 +254,12 @@ sealed class LockstepSoakRunner
                     Console.Write($"\r  [{frame,7}]  ent={_hosts[0].Alive.Count,5}\r");
                 }
             }
+        }
+        if (_refChecks == 0)
+        {
+            Fail(_cfg.TotalFrames, SoakPhase.Cooldown,
+                "RefModel executed zero checks; the mutation oracle is inactive.");
+            return false;
         }
         return true;
     }
@@ -282,7 +309,11 @@ sealed class LockstepSoakRunner
             {
                 var owner = host.World.Get<OwnerTag>(entity);
                 if (owner.HostId == host.HostId)
+                {
                     host.Alive.Add(entity);
+                    if (host.HostId == 0)
+                        EnsureRefState(host, entity);
+                }
             }
         }
     }
@@ -394,14 +425,13 @@ sealed class LockstepSoakRunner
         for (var i = 0; i < compCount; i++)
         {
             var t = host.Rng.Next(4);
-            if (t == 0 && !aV.HasValue) { var v = host.Rng.Next(); host.Stream.Add(e, new CompA(v)); aV = v; }
-            else if (t == 1 && !bV.HasValue) { var v = (long)host.Rng.Next(); host.Stream.Add(e, new CompB(v)); bV = v; }
-            else if (t == 2) { host.Stream.Add(e, new CompC((float)host.Rng.NextDouble(), (float)host.Rng.NextDouble())); }
-            else if (t == 3) { host.Stream.Add(e, new CompD(host.Rng.Next(), host.Rng.Next(), host.Rng.Next(), host.Rng.Next(), host.Rng.Next(), host.Rng.Next(), host.Rng.Next(), host.Rng.Next())); }
+            if (t == 0 && !HasVirtualComponent<CompA>(host, e, t)) { var v = host.Rng.Next(); host.Stream.Add(e, new CompA(v)); SetVirtualPresence(host, e, t, true); aV = v; }
+            else if (t == 1 && !HasVirtualComponent<CompB>(host, e, t)) { var v = (long)host.Rng.Next(); host.Stream.Add(e, new CompB(v)); SetVirtualPresence(host, e, t, true); bV = v; }
+            else if (t == 2 && !HasVirtualComponent<CompC>(host, e, t)) { host.Stream.Add(e, new CompC((float)host.Rng.NextDouble(), (float)host.Rng.NextDouble())); SetVirtualPresence(host, e, t, true); }
+            else if (t == 3 && !HasVirtualComponent<CompD>(host, e, t)) { host.Stream.Add(e, new CompD(host.Rng.Next(), host.Rng.Next(), host.Rng.Next(), host.Rng.Next(), host.Rng.Next(), host.Rng.Next(), host.Rng.Next(), host.Rng.Next())); SetVirtualPresence(host, e, t, true); }
         }
         // RefModel: track CompA/CompB values on host[0] only
-        if (host.HostId == 0)
-            _refModel[e] = new RefState(aV, bV);
+        TrackRefEntity(host, e, aV, bV);
         LogOp(host, $"Create({e}) comps={compCount}");
         host.Creates++;
         _peakEntityCount = Math.Max(_peakEntityCount, host.Alive.Count + host.CreatedThisFrame.Count);
@@ -415,10 +445,9 @@ sealed class LockstepSoakRunner
         if (isPl)
         {
             // Destroy placeholder = cancel creation (covers B5/B6 cancel+reorder path)
+            RemoveRefSubtree(host, e);
             host.Stream.Destroy(e);
             host.CreatedThisFrame.Remove(e);
-            if (host.HostId == 0)
-                _refModel.Remove(e);
             LogOp(host, $"Destroy({e}) placeholder cancel");
             host.Destroys++;
             return;
@@ -426,12 +455,11 @@ sealed class LockstepSoakRunner
 
         // Real entity destroy
         if (host.PendingHierarchyChildren.Contains(e)) return;
-        if (HasAncestorDestroyedThisFrame(host, e)) return;
+        if (HasDestroyedVirtualAncestor(host, e)) return;
         host.Alive.Remove(e);
         host.DestroyedThisFrame.Add(e);
+        RemoveRefSubtree(host, e);
         host.Stream.Destroy(e);
-        if (host.HostId == 0)
-            _refModel.Remove(e);
         LogOp(host, $"Destroy({e})");
         host.Destroys++;
     }
@@ -443,12 +471,13 @@ sealed class LockstepSoakRunner
         // Placeholders aren't in the world yet — skip IsAlive check.
         // Real entities must still be alive.
         if (!isPl && !host.World.IsAlive(e)) return;
+        if (IsScheduledForDestroy(host, e)) return;
 
         var t = host.Rng.Next(4);
-        if (t == 0 && !host.World.Has<CompA>(e) && !host.PendingRemoves.Contains(e)) { var v = host.Rng.Next(); host.Stream.Add(e, new CompA(v)); AddRefA(host, e, v); host.Adds++; }
-        else if (t == 1 && !host.World.Has<CompB>(e) && !host.PendingRemoves.Contains(e)) { var v = (long)host.Rng.Next(); host.Stream.Add(e, new CompB(v)); AddRefB(host, e, v); host.Adds++; }
-        else if (t == 2 && !host.World.Has<CompC>(e) && !host.PendingRemoves.Contains(e)) { host.Stream.Add(e, new CompC((float)host.Rng.NextDouble(), (float)host.Rng.NextDouble())); host.Adds++; }
-        else if (t == 3 && !host.World.Has<CompD>(e) && !host.PendingRemoves.Contains(e)) { host.Stream.Add(e, new CompD(host.Rng.Next(), host.Rng.Next(), host.Rng.Next(), host.Rng.Next(), host.Rng.Next(), host.Rng.Next(), host.Rng.Next(), host.Rng.Next())); host.Adds++; }
+        if (t == 0 && !HasVirtualComponent<CompA>(host, e, t)) { var v = host.Rng.Next(); host.Stream.Add(e, new CompA(v)); SetVirtualPresence(host, e, t, true); AddRefA(host, e, v); host.Adds++; }
+        else if (t == 1 && !HasVirtualComponent<CompB>(host, e, t)) { var v = (long)host.Rng.Next(); host.Stream.Add(e, new CompB(v)); SetVirtualPresence(host, e, t, true); AddRefB(host, e, v); host.Adds++; }
+        else if (t == 2 && !HasVirtualComponent<CompC>(host, e, t)) { host.Stream.Add(e, new CompC((float)host.Rng.NextDouble(), (float)host.Rng.NextDouble())); SetVirtualPresence(host, e, t, true); host.Adds++; }
+        else if (t == 3 && !HasVirtualComponent<CompD>(host, e, t)) { host.Stream.Add(e, new CompD(host.Rng.Next(), host.Rng.Next(), host.Rng.Next(), host.Rng.Next(), host.Rng.Next(), host.Rng.Next(), host.Rng.Next(), host.Rng.Next())); SetVirtualPresence(host, e, t, true); host.Adds++; }
         LogOp(host, $"Add({e}) t={t}");
     }
 
@@ -457,11 +486,12 @@ sealed class LockstepSoakRunner
         var (found, e, isPl) = PickTarget(host);
         if (!found) return;
         if (!isPl && !host.World.IsAlive(e)) return;
+        if (IsScheduledForDestroy(host, e)) return;
 
         var t = host.Rng.Next(3);
-        if (t == 0 && host.World.Has<CompA>(e) && !host.PendingRemoves.Contains(e)) { var v = host.Rng.Next(); host.Stream.Set(e, new CompA(v)); AddRefA(host, e, v); host.Sets++; }
-        else if (t == 1 && host.World.Has<CompB>(e) && !host.PendingRemoves.Contains(e)) { var v = (long)host.Rng.Next(); host.Stream.Set(e, new CompB(v)); AddRefB(host, e, v); host.Sets++; }
-        else if (t == 2 && host.World.Has<CompC>(e) && !host.PendingRemoves.Contains(e)) { host.Stream.Set(e, new CompC((float)host.Rng.NextDouble(), (float)host.Rng.NextDouble())); host.Sets++; }
+        if (t == 0 && HasVirtualComponent<CompA>(host, e, t)) { var v = host.Rng.Next(); host.Stream.Set(e, new CompA(v)); AddRefA(host, e, v); host.Sets++; }
+        else if (t == 1 && HasVirtualComponent<CompB>(host, e, t)) { var v = (long)host.Rng.Next(); host.Stream.Set(e, new CompB(v)); AddRefB(host, e, v); host.Sets++; }
+        else if (t == 2 && HasVirtualComponent<CompC>(host, e, t)) { host.Stream.Set(e, new CompC((float)host.Rng.NextDouble(), (float)host.Rng.NextDouble())); host.Sets++; }
         LogOp(host, $"Set({e}) t={t}");
     }
 
@@ -470,15 +500,35 @@ sealed class LockstepSoakRunner
         var (found, e, isPl) = PickTarget(host);
         if (!found || isPl) return;
         if (!host.World.IsAlive(e)) return;
+        if (IsScheduledForDestroy(host, e)) return;
 
         var t = host.Rng.Next(4);
         var migrated = false;
-        if (t == 0 && host.World.Has<CompA>(e)) { host.Stream.Remove<CompA>(e); RemoveRefA(host, e); migrated = true; host.PendingRemoves.Add(e); }
-        else if (t == 1 && host.World.Has<CompB>(e)) { host.Stream.Remove<CompB>(e); RemoveRefB(host, e); migrated = true; host.PendingRemoves.Add(e); }
-        else if (t == 2 && host.World.Has<CompC>(e)) { host.Stream.Remove<CompC>(e); migrated = true; host.PendingRemoves.Add(e); }
-        else if (t == 3 && host.World.Has<CompD>(e)) { host.Stream.Remove<CompD>(e); migrated = true; host.PendingRemoves.Add(e); }
+        if (t == 0 && HasVirtualComponent<CompA>(host, e, t)) { host.Stream.Remove<CompA>(e); SetVirtualPresence(host, e, t, false); RemoveRefA(host, e); migrated = true; }
+        else if (t == 1 && HasVirtualComponent<CompB>(host, e, t)) { host.Stream.Remove<CompB>(e); SetVirtualPresence(host, e, t, false); RemoveRefB(host, e); migrated = true; }
+        else if (t == 2 && HasVirtualComponent<CompC>(host, e, t)) { host.Stream.Remove<CompC>(e); SetVirtualPresence(host, e, t, false); migrated = true; }
+        else if (t == 3 && HasVirtualComponent<CompD>(host, e, t)) { host.Stream.Remove<CompD>(e); SetVirtualPresence(host, e, t, false); migrated = true; }
         if (migrated) { host.Removes++; host.Migrations++; }
         LogOp(host, $"Remove({e}) t={t}");
+    }
+
+    static bool HasVirtualComponent<T>(HostState host, Entity entity, int componentKind)
+        where T : unmanaged
+    {
+        if (host.PendingComponentPresence.TryGetValue((entity, componentKind), out var isPresent))
+            return isPresent;
+        return host.World.Has<T>(entity);
+    }
+
+    static void SetVirtualPresence(HostState host, Entity entity, int componentKind, bool isPresent)
+        => host.PendingComponentPresence[(entity, componentKind)] = isPresent;
+
+    static void InitializeClonePresence(HostState host, Entity source, Entity clone)
+    {
+        SetVirtualPresence(host, clone, 0, HasVirtualComponent<CompA>(host, source, 0));
+        SetVirtualPresence(host, clone, 1, HasVirtualComponent<CompB>(host, source, 1));
+        SetVirtualPresence(host, clone, 2, HasVirtualComponent<CompC>(host, source, 2));
+        SetVirtualPresence(host, clone, 3, HasVirtualComponent<CompD>(host, source, 3));
     }
 
     void OpClone(HostState host)
@@ -486,30 +536,31 @@ sealed class LockstepSoakRunner
         var (found, e, isPl) = PickTarget(host);
         if (!found || isPl) return;
         if (!host.World.IsAlive(e)) return;
-        try
-        {
-            var clone = host.Stream.Clone(e);
-            // Cloned entity gets the cloning host's OwnerTag
-            host.Stream.Add(clone, new OwnerTag(host.HostId));
-            host.CreatedThisFrame.Add(clone);
-            LogOp(host, $"Clone({e})\u2192({clone})");
-            host.Clones++;
-        }
-        catch
-        {
-            // Clone can fail if source dies between check and clone — ignore
-        }
+        if (IsScheduledForDestroy(host, e)) return;
+
+        var sourceRef = host.HostId == 0 ? EnsureRefState(host, e) : null;
+        var clone = host.Stream.Clone(e);
+        InitializeClonePresence(host, e, clone);
+        // Cloned entity gets the cloning host's OwnerTag.
+        host.Stream.Add(clone, new OwnerTag(host.HostId));
+        host.CreatedThisFrame.Add(clone);
+        if (sourceRef is not null)
+            TrackRefEntity(host, clone, sourceRef.A, sourceRef.B);
+        LogOp(host, $"Clone({e})\u2192({clone})");
+        host.Clones++;
     }
 
     void OpAddChild(HostState host)
     {
         if (host.Alive.Count == 0) return;
         var parent = host.Alive[host.Rng.Next(host.Alive.Count)];
+        if (IsScheduledForDestroy(host, parent)) return;
 
         // Create a new child entity for hierarchy linking
         var child = host.Stream.Create();
         host.Stream.Add(child, new OwnerTag(host.HostId));
         host.CreatedThisFrame.Add(child);
+        TrackRefEntity(host, child, null, null);
 
         // Check for cycles — uses pending intents from stream
         if (WouldCreateCycle(host, parent, child))
@@ -530,6 +581,7 @@ sealed class LockstepSoakRunner
     {
         var (found, e, isPl) = PickTarget(host);
         if (!found || isPl) return;
+        if (IsScheduledForDestroy(host, e)) return;
         host.Stream.RemoveChild(e);
         LogOp(host, $"RemoveChild({e})");
         host.RemoveHier++;
@@ -597,44 +649,147 @@ sealed class LockstepSoakRunner
 
     // ── Hierarchy helpers ────────────────────────────────────────
 
-    bool HasAncestorDestroyedThisFrame(HostState host, Entity e)
+    bool IsScheduledForDestroy(HostState host, Entity entity)
+        => host.DestroyedThisFrame.Contains(entity) || HasDestroyedVirtualAncestor(host, entity);
+
+    bool HasDestroyedVirtualAncestor(HostState host, Entity entity)
     {
-        var cur = e;
-        while (host.World.TryGetParent(cur, out var parent))
+        var current = entity;
+        var limit = host.World.EntityCount + host.PendingHierarchyChildren.Count + 1;
+        for (var i = 0; i < limit && TryGetVirtualParent(host, current, out var parent); i++)
         {
             if (host.DestroyedThisFrame.Contains(parent))
                 return true;
-            cur = parent;
+            current = parent;
         }
         return false;
     }
 
-    // ── Reference model helpers (host[0] only, v1 simplification) ─
+    static bool TryGetVirtualParent(HostState host, Entity child, out Entity parent)
+    {
+        if (host.Stream.ActiveHierarchyForTesting is
+                IDictionary<Entity, CommandStreamCore.HierarchyIntent> pending &&
+            pending.TryGetValue(child, out var intent))
+        {
+            if (intent.IsAdd)
+            {
+                parent = intent.Parent;
+                return true;
+            }
+
+            parent = default;
+            return false;
+        }
+
+        if (!child.IsPlaceholder)
+            return host.World.TryGetParent(child, out parent);
+
+        parent = default;
+        return false;
+    }
+
+    // ── Reference model helpers (host[0] only) ──────────────────
+
+    void TrackRefEntity(HostState host, Entity entity, int? a, long? b)
+    {
+        if (host.HostId != 0) return;
+        if (!_refModel.TryAdd(entity, new RefState(host.Stream.Track(entity), a, b)))
+            throw new InvalidOperationException($"RefModel already tracks entity {entity}.");
+    }
+
+    RefState EnsureRefState(HostState host, Entity entity)
+    {
+        if (host.HostId != 0)
+            throw new InvalidOperationException("RefModel is only maintained for host[0].");
+        if (_refModel.TryGetValue(entity, out var existing))
+            return existing;
+        if (entity.IsPlaceholder || !host.World.IsAlive(entity))
+            throw new InvalidOperationException($"RefModel cannot initialize unresolved entity {entity}.");
+
+        int? a = host.World.TryGet(entity, out CompA actualA) ? actualA.Value : null;
+        long? b = host.World.TryGet(entity, out CompB actualB) ? actualB.Value : null;
+        var state = new RefState(host.Stream.Track(entity), a, b);
+        _refModel.Add(entity, state);
+        return state;
+    }
+
+    void ResolveRefModelEntities()
+    {
+        if (_refModel.Count == 0) return;
+
+        List<(Entity Placeholder, Entity Real, RefState State)>? resolved = null;
+        foreach (var (entity, state) in _refModel)
+        {
+            if (!entity.IsPlaceholder) continue;
+            var real = state.Slot.Value;
+            if (real.IsPlaceholder)
+                throw new InvalidOperationException($"RefModel slot for {entity} was not resolved by local replay.");
+            (resolved ??= []).Add((entity, real, state));
+        }
+
+        if (resolved is null) return;
+        foreach (var (placeholder, real, state) in resolved)
+        {
+            _refModel.Remove(placeholder);
+            if (!_refModel.TryAdd(real, state))
+                throw new InvalidOperationException($"RefModel resolution collided on real entity {real}.");
+        }
+    }
+
+    void RemoveRefSubtree(HostState host, Entity root)
+    {
+        if (host.HostId != 0 || _refModel.Count == 0) return;
+
+        List<Entity>? removed = null;
+        foreach (var entity in _refModel.Keys)
+        {
+            if (IsVirtualDescendantOrSelf(host, entity, root))
+                (removed ??= []).Add(entity);
+        }
+
+        if (removed is null) return;
+        foreach (var entity in removed)
+            _refModel.Remove(entity);
+    }
+
+    static bool IsVirtualDescendantOrSelf(HostState host, Entity entity, Entity root)
+    {
+        var current = entity;
+        var limit = host.World.EntityCount + host.PendingHierarchyChildren.Count + 1;
+        for (var i = 0; i < limit; i++)
+        {
+            if (current == root) return true;
+            if (!TryGetVirtualParent(host, current, out current)) return false;
+        }
+        throw new InvalidOperationException($"Virtual hierarchy walk exceeded its bound from {entity} to {root}.");
+    }
 
     void AddRefA(HostState host, Entity e, int v)
     {
         if (host.HostId != 0) return;
-        if (_refModel.TryGetValue(e, out var s)) _refModel[e] = s with { A = v };
-        else _refModel[e] = new RefState(v, null);
+        var state = EnsureRefState(host, e);
+        _refModel[e] = state with { A = v };
     }
 
     void AddRefB(HostState host, Entity e, long v)
     {
         if (host.HostId != 0) return;
-        if (_refModel.TryGetValue(e, out var s)) _refModel[e] = s with { B = v };
-        else _refModel[e] = new RefState(null, v);
+        var state = EnsureRefState(host, e);
+        _refModel[e] = state with { B = v };
     }
 
     void RemoveRefA(HostState host, Entity e)
     {
         if (host.HostId != 0) return;
-        if (_refModel.TryGetValue(e, out var s)) _refModel[e] = s with { A = null };
+        var state = EnsureRefState(host, e);
+        _refModel[e] = state with { A = null };
     }
 
     void RemoveRefB(HostState host, Entity e)
     {
         if (host.HostId != 0) return;
-        if (_refModel.TryGetValue(e, out var s)) _refModel[e] = s with { B = null };
+        var state = EnsureRefState(host, e);
+        _refModel[e] = state with { B = null };
     }
 
     // ── Verification ─────────────────────────────────────────────
@@ -652,15 +807,20 @@ sealed class LockstepSoakRunner
             }
         }
 
-        // 2. CanonicalChecksum — every frame (core proof)
-        var refCs = _hosts[0].World.CanonicalChecksum();
-        for (var h = 1; h < _cfg.HostCount; h++)
+        // 2. CanonicalChecksum — configurable for long runs, always on final frame.
+        var doChecksum = frame == _cfg.TotalFrames ||
+            _cfg.ChecksumInterval <= 1 || frame % _cfg.ChecksumInterval == 0;
+        if (doChecksum)
         {
-            var cs = _hosts[h].World.CanonicalChecksum();
-            if (!refCs.AsSpan().SequenceEqual(cs))
+            var refCs = _hosts[0].World.CanonicalChecksum();
+            for (var h = 1; h < _cfg.HostCount; h++)
             {
-                DumpDesync(frame, phase, h, refCs, cs);
-                return false;
+                var cs = _hosts[h].World.CanonicalChecksum();
+                if (!refCs.AsSpan().SequenceEqual(cs))
+                {
+                    DumpDesync(frame, phase, h, refCs, cs);
+                    return false;
+                }
             }
         }
 
@@ -679,22 +839,37 @@ sealed class LockstepSoakRunner
             }
         }
 
-        // 4. RefModel spot-check (host[0] only, every 100 frames)
-        if (_refModel.Count > 0 && frame % 100 == 0)
+        // 4. RefModel mutation oracle (host[0] only, full tracked set every 100 frames).
+        if (_refModel.Count > 0 && (frame == _cfg.TotalFrames || frame % 100 == 0))
         {
-            var sample = _refModel.Keys.Take(10).ToList();
-            foreach (var e in sample)
+            foreach (var (entity, state) in _refModel)
             {
-                if (!_hosts[0].World.IsAlive(e)) continue;
-                var st = _refModel[e];
-                if (st.A.HasValue && (!_hosts[0].World.Has<CompA>(e) || _hosts[0].World.Get<CompA>(e).Value != st.A.Value))
+                _refChecks++;
+                if (!_hosts[0].World.IsAlive(entity))
                 {
-                    Fail(frame, phase, $"RefModel mismatch on host[0]: entity {e} CompA expected={st.A.Value} actual={(_hosts[0].World.Has<CompA>(e) ? _hosts[0].World.Get<CompA>(e).Value.ToString() : "missing")}");
+                    Fail(frame, phase, $"RefModel expected entity {entity} to be alive.");
                     return false;
                 }
-                if (st.B.HasValue && (!_hosts[0].World.Has<CompB>(e) || _hosts[0].World.Get<CompB>(e).Value != st.B.Value))
+
+                var hasA = _hosts[0].World.Has<CompA>(entity);
+                if (hasA != state.A.HasValue ||
+                    (hasA && _hosts[0].World.Get<CompA>(entity).Value != state.A!.Value))
                 {
-                    Fail(frame, phase, $"RefModel mismatch on host[0]: entity {e} CompB expected={st.B.Value} actual={(_hosts[0].World.Has<CompB>(e) ? _hosts[0].World.Get<CompB>(e).Value.ToString() : "missing")}");
+                    Fail(frame, phase,
+                        $"RefModel mismatch on host[0]: entity {entity} CompA " +
+                        $"expected={(state.A.HasValue ? state.A.Value : "missing")} " +
+                        $"actual={(hasA ? _hosts[0].World.Get<CompA>(entity).Value : "missing")}");
+                    return false;
+                }
+
+                var hasB = _hosts[0].World.Has<CompB>(entity);
+                if (hasB != state.B.HasValue ||
+                    (hasB && _hosts[0].World.Get<CompB>(entity).Value != state.B!.Value))
+                {
+                    Fail(frame, phase,
+                        $"RefModel mismatch on host[0]: entity {entity} CompB " +
+                        $"expected={(state.B.HasValue ? state.B.Value : "missing")} " +
+                        $"actual={(hasB ? _hosts[0].World.Get<CompB>(entity).Value : "missing")}");
                     return false;
                 }
             }
@@ -705,12 +880,12 @@ sealed class LockstepSoakRunner
 
     // ── Exception diagnostic ─────────────────────────────────────
 
-    void FailWithException(int frame, SoakPhase phase, Exception ex)
+    void FailWithException(int frame, SoakPhase phase, string stage, Exception ex)
     {
         var sb = new System.Text.StringBuilder();
         sb.AppendLine($"  {new string('\u2550', 56)}");
         sb.AppendLine($"  FAIL  frame={frame}  phase={PhaseName(phase)}");
-        sb.AppendLine($"  EXCEPTION in Phase 3 (Replay): {ex.GetType().Name}");
+        sb.AppendLine($"  EXCEPTION in {stage}: {ex.GetType().Name}");
         sb.AppendLine($"  Message: {ex.Message}");
         if (!string.IsNullOrEmpty(ex.StackTrace))
         {
@@ -1137,6 +1312,7 @@ sealed class LockstepSoakRunner
         Console.WriteLine($"  migrations      {totMigrations,8}");
         Console.WriteLine($"  peak entities   {peakEnt,8}");
         Console.WriteLine($"  oracle tracked  {refModelCount,8}");
+        Console.WriteLine($"  oracle checks   {_refChecks,8}");
         Console.WriteLine();
         Console.WriteLine("  memory & gc");
         Console.WriteLine($"    gen0  {GC.CollectionCount(0) - _runStartG0,5}  managed  {GC.GetTotalMemory(false) >> 20,3}MB");
