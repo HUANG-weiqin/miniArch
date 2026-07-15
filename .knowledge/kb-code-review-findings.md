@@ -92,6 +92,16 @@ updated: 2026-07-15
 - **验证**: 2026-07-15 Release：MiniArch.Tests 1034/1034、HeroPipeline.Tests 5/5；CommandStream.Profile 长测 `existing-set` 10834.1 ticks/s（同时段原版 11036.7，-1.8%）、`existing-add-remove` 2406.8（起点中位数 2398.5）；HeroComing.Perf Movement 1727.0、Attack 1046.2、Memory OK。
 - **确定性约束**: 位置缓存、批处理和跨 store 重排必须先证明 Submit 与 Snapshot→Replay 状态一致。任何结构 store 都可能迁移实体并使其他 store 的 row cache 失效；不得以热路径收益放宽这一契约。
 
+### #7: CommandStream hierarchy 循环会在 materialize 后失败 ✅ 已修复
+
+- **模式**: R11 部分修改 / 最终 overlay 循环
+- **位置**: `CommandStreamCore.Submit()`、`PreflightHierarchyOverlay()`、`ApplyHierarchyToWorld()`
+- **原始缺陷**: AddChild/RemoveChild 只在 Apply 时调用 World 校验。若本帧 hierarchy intent 与现有 parent 链共同形成循环，Submit 会先 materialize pending entity，再在 AddChild 时抛错；较早的 hierarchy intent 也可能已经写入 World。
+- **修复方案**: 在 allocator 对齐、deferred resolve 和 pending materialize 之前，对最终 `HierarchyByChild` overlay 做只读 parent-chain 追踪。被本帧销毁的 endpoint 沿用既有 skip 语义；其余 endpoint 必须在当前 World 或非取消 pending batch 中存在；self-parent、overlay cycle、现有链 + overlay cycle 均 fail-fast。
+- **回归测试**: `BUG_submit_preflights_hierarchy_overlay_cycle_before_world_mutation`、`BUG_submit_preflights_hierarchy_cycle_through_existing_parent_chain`、`BUG_submit_preflights_deferred_hierarchy_cycle_before_reserving_ids`。
+- **验证**: 2026-07-15 Release：MiniArch.Tests 1037/1037、HeroPipeline.Tests 5/5；CommandStream.Profile `existing-set` 10980.1 ticks/s；HeroComing.Perf Movement 1688.0、Attack 1090.1、Memory OK。
+- **确定性约束**: hierarchy 预检、Submit 应用和 Snapshot→Replay 必须使用同一 intent skip/cycle 契约；涉及排序或 placeholder resolve 顺序的后续改动必须先跑 hierarchy evolution 与 replay parity 测试。
+
 ---
 
 ## 已验证安全的模式 (P3)

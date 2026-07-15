@@ -3032,6 +3032,72 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
+    public void BUG_submit_preflights_hierarchy_overlay_cycle_before_world_mutation()
+    {
+        using var world = new World();
+        var a = world.Create(new Position(1, 1));
+        var b = world.Create(new Position(2, 2));
+        var stream = new CommandStream(world);
+        var pending = stream.Create();
+        stream.Add(pending, new Velocity(3, 4));
+        stream.AddChild(a, b);
+        stream.AddChild(b, a);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+
+        Assert.Contains("cycle", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, world.EntityCount);
+        Assert.False(world.IsAlive(pending));
+        Assert.False(world.TryGetParent(a, out _));
+        Assert.False(world.TryGetParent(b, out _));
+        Assert.True(WorldValidator.Validate(world).IsValid);
+    }
+
+    [Fact]
+    public void BUG_submit_preflights_hierarchy_cycle_through_existing_parent_chain()
+    {
+        using var world = new World();
+        var root = world.Create(new Position(1, 1));
+        var child = world.Create(new Position(2, 2));
+        world.AddChild(root, child);
+        var stream = new CommandStream(world);
+        var pending = stream.Create();
+        stream.Add(pending, new Velocity(3, 4));
+        stream.AddChild(child, root);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+
+        Assert.Contains("cycle", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, world.EntityCount);
+        Assert.False(world.IsAlive(pending));
+        Assert.True(world.TryGetParent(child, out var actualParent));
+        Assert.Equal(root, actualParent);
+        Assert.False(world.TryGetParent(root, out _));
+        Assert.True(WorldValidator.Validate(world).IsValid);
+    }
+
+    [Fact]
+    public void BUG_submit_preflights_deferred_hierarchy_cycle_before_reserving_ids()
+    {
+        using var world = new World();
+        var stream = new CommandStream(world) { DeferredEntities = true };
+        var a = stream.Create();
+        var b = stream.Create();
+        stream.Add(a, new Position(1, 1));
+        stream.Add(b, new Position(2, 2));
+        stream.AddChild(a, b);
+        stream.AddChild(b, a);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+
+        Assert.Contains("cycle", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, world.EntityCount);
+        Assert.False(world.IsAlive(a));
+        Assert.False(world.IsAlive(b));
+        Assert.True(WorldValidator.Validate(world).IsValid);
+    }
+
+    [Fact]
     public void BUG_submit_preflights_repeated_add_before_any_world_mutation()
     {
         using var world = new World();

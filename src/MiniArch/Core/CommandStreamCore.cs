@@ -490,6 +490,7 @@ public abstract partial class CommandStreamCore
             // shadow's after Replay.
             PreValidatePendingSlots();
             PreflightComponentStores(_frozen);
+            PreflightHierarchyOverlay(_world, _frozen);
             AlignCancelledBatchFreeListOrder();
             ResolveDeferredCreates();
             PreValidatePendingSlots();
@@ -693,6 +694,97 @@ public abstract partial class CommandStreamCore
     private void ApplyHierarchy()
     {
         ApplyHierarchyToWorld(_world, _frozen);
+    }
+
+    private static void PreflightHierarchyOverlay(World world, FrozenState frozen)
+    {
+        if (frozen.HierarchyByChild.Count == 0)
+            return;
+
+        var maxSteps = Math.Max(
+            1,
+            world.EntitySlotCount + frozen.PendingBatchCount + frozen.HierarchyByChild.Count + 1);
+
+        foreach (var (child, intent) in frozen.HierarchyByChild)
+        {
+            if (IsDestroyedThisFrame(child, frozen))
+                continue;
+
+            if (!WillExistAfterMaterialization(world, frozen, child))
+                throw new InvalidOperationException($"Child {child} is stale or unknown.");
+
+            if (!intent.IsAdd)
+                continue;
+
+            var parent = intent.Parent;
+            if (IsDestroyedThisFrame(parent, frozen))
+                continue;
+
+            if (!WillExistAfterMaterialization(world, frozen, parent))
+                throw new InvalidOperationException($"Parent {parent} is stale or unknown.");
+            if (parent == child)
+                throw new InvalidOperationException("Parent and child must be different entities.");
+
+            var current = parent;
+            for (var steps = 0; ; steps++)
+            {
+                if (current == child)
+                {
+                    throw new InvalidOperationException(
+                        "Parent-child relations must not create cycles.");
+                }
+                if (steps >= maxSteps)
+                {
+                    throw new InvalidOperationException(
+                        "Hierarchy cycle detected while validating the final command overlay.");
+                }
+
+                if (!TryGetOverlayParent(world, frozen, current, out current))
+                    break;
+            }
+        }
+    }
+
+    private static bool TryGetOverlayParent(
+        World world,
+        FrozenState frozen,
+        Entity child,
+        out Entity parent)
+    {
+        if (frozen.HierarchyByChild.TryGetValue(child, out var intent) &&
+            !IsDestroyedThisFrame(child, frozen))
+        {
+            if (!intent.IsAdd)
+            {
+                parent = default;
+                return false;
+            }
+
+            if (!IsDestroyedThisFrame(intent.Parent, frozen))
+            {
+                parent = intent.Parent;
+                return true;
+            }
+        }
+
+        return world.TryGetParent(child, out parent);
+    }
+
+    private static bool WillExistAfterMaterialization(
+        World world,
+        FrozenState frozen,
+        Entity entity)
+    {
+        if (world.IsAlive(entity))
+            return true;
+
+        for (var i = 0; i < frozen.PendingBatchCount; i++)
+        {
+            if (!frozen.BatchCanceled[i] && frozen.BatchEntities[i] == entity)
+                return true;
+        }
+
+        return false;
     }
 
     // ── Snapshot / SubmitAndSnapshotAsync ─────────────────────────────
