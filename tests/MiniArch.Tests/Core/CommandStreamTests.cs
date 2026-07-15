@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using MiniArch.Core;
+using MiniArch.Diagnostics;
 using MiniQueryCache = MiniArch.Core.QueryCache;
 using MiniArch.Tests.Core.TestSupport;
 
@@ -2838,6 +2839,9 @@ public sealed class CommandStreamTests
             "_replayTrackedBySeq",
             "_replayTrackedMaxSeq",
             "_pendingReplay",
+            "_preflightGenerations",
+            "_preflightPresence",
+            "_preflightEpoch",
         };
 
         // _frozen and _spareFrozen are the two halves of the state-object swap;
@@ -2879,6 +2883,189 @@ public sealed class CommandStreamTests
         // Assert no entities were materialized —pre-validation fired before side effects.
         Assert.False(world.IsAlive(entity1));
         Assert.False(world.IsAlive(entity2));
+    }
+
+    [Fact]
+    public void BUG_submit_preflights_invalid_add_before_materializing_pending()
+    {
+        using var world = new World();
+        var existing = world.Create(new Position(1, 2));
+        var stream = new CommandStream(world);
+        var pending = stream.Create();
+        stream.Add(pending, new Velocity(3, 4));
+        stream.Add(existing, new Position(9, 9));
+
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+
+        Assert.Contains("already has component", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, world.EntityCount);
+        Assert.False(world.IsAlive(pending));
+        Assert.Equal(new Position(1, 2), world.Get<Position>(existing));
+        Assert.True(WorldValidator.Validate(world).IsValid);
+    }
+
+    [Fact]
+    public void BUG_submit_preflights_invalid_set_before_materializing_pending()
+    {
+        using var world = new World();
+        var existing = world.Create(new Position(1, 2));
+        var stream = new CommandStream(world);
+        var pending = stream.Create();
+        stream.Add(pending, new Velocity(3, 4));
+        stream.Set(existing, new Velocity(9, 9));
+
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+
+        Assert.Contains("does not have component", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, world.EntityCount);
+        Assert.False(world.IsAlive(pending));
+        Assert.Equal(new Position(1, 2), world.Get<Position>(existing));
+        Assert.False(world.Has<Velocity>(existing));
+        Assert.True(WorldValidator.Validate(world).IsValid);
+    }
+
+    [Fact]
+    public void Submit_revalidates_recorded_set_after_component_is_removed()
+    {
+        using var world = new World();
+        var existing = world.Create(new Position(1, 2));
+        var stream = new CommandStream(world);
+        var pending = stream.Create();
+        stream.Add(pending, new Velocity(3, 4));
+        stream.Set(existing, new Position(9, 9));
+
+        world.Remove<Position>(existing);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+
+        Assert.Contains("does not have component", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, world.EntityCount);
+        Assert.False(world.IsAlive(pending));
+        Assert.False(world.Has<Position>(existing));
+        Assert.True(WorldValidator.Validate(world).IsValid);
+    }
+
+    [Fact]
+    public void Submit_revalidates_recorded_set_after_missing_component_is_added()
+    {
+        using var world = new World();
+        var existing = world.Create(new Position(1, 2));
+        var stream = new CommandStream(world);
+        stream.Set(existing, new Velocity(9, 9));
+
+        world.Add(existing, new Velocity(3, 4));
+
+        Assert.True(stream.Submit());
+        Assert.Equal(new Velocity(9, 9), world.Get<Velocity>(existing));
+        Assert.Equal(new Position(1, 2), world.Get<Position>(existing));
+        Assert.True(WorldValidator.Validate(world).IsValid);
+    }
+
+    [Fact]
+    public void Submit_missing_remove_is_a_noop_and_still_materializes_pending()
+    {
+        using var world = new World();
+        var existing = world.Create(new Position(1, 2));
+        var stream = new CommandStream(world);
+        var pending = stream.Create();
+        stream.Add(pending, new Velocity(3, 4));
+        stream.Remove<Velocity>(existing);
+
+        Assert.True(stream.Submit());
+
+        Assert.Equal(2, world.EntityCount);
+        Assert.True(world.IsAlive(pending));
+        Assert.Equal(new Velocity(3, 4), world.Get<Velocity>(pending));
+        Assert.Equal(new Position(1, 2), world.Get<Position>(existing));
+        Assert.False(world.Has<Velocity>(existing));
+        Assert.True(WorldValidator.Validate(world).IsValid);
+    }
+
+    [Fact]
+    public void Submit_component_preflight_simulates_add_set_remove_in_recording_order()
+    {
+        using var world = new World();
+        var existing = world.Create(new Position(1, 2));
+        var stream = new CommandStream(world);
+
+        stream.Add(existing, new Health(10));
+        stream.Set(existing, new Health(20));
+        stream.Remove<Health>(existing);
+
+        Assert.True(stream.Submit());
+        Assert.False(world.Has<Health>(existing));
+        Assert.Equal(new Position(1, 2), world.Get<Position>(existing));
+        Assert.True(WorldValidator.Validate(world).IsValid);
+    }
+
+    [Fact]
+    public void Submit_component_preflight_simulates_set_remove_add_set_in_recording_order()
+    {
+        using var world = new World();
+        var existing = world.Create(new Position(1, 2));
+        var stream = new CommandStream(world);
+
+        stream.Set(existing, new Position(3, 4));
+        stream.Remove<Position>(existing);
+        stream.Add(existing, new Position(5, 6));
+        stream.Set(existing, new Position(7, 8));
+
+        Assert.True(stream.Submit());
+        Assert.Equal(new Position(7, 8), world.Get<Position>(existing));
+        Assert.True(WorldValidator.Validate(world).IsValid);
+    }
+
+    [Fact]
+    public void BUG_set_preflight_row_cache_is_disabled_when_any_store_is_structural()
+    {
+        using var world = new World();
+        var existing = world.Create(new Health(10));
+        var stream = new CommandStream(world);
+
+        stream.Set(existing, new Health(20));
+        stream.Add(existing, new Position(3, 4));
+
+        Assert.True(stream.Submit());
+        Assert.Equal(new Health(20), world.Get<Health>(existing));
+        Assert.Equal(new Position(3, 4), world.Get<Position>(existing));
+        Assert.True(WorldValidator.Validate(world).IsValid);
+    }
+
+    [Fact]
+    public void BUG_submit_preflights_repeated_add_before_any_world_mutation()
+    {
+        using var world = new World();
+        var existing = world.Create(new Position(1, 2));
+        var stream = new CommandStream(world);
+        var pending = stream.Create();
+        stream.Add(pending, new Velocity(3, 4));
+        stream.Add(existing, new Health(10));
+        stream.Add(existing, new Health(20));
+
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+
+        Assert.Contains("already has component", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, world.EntityCount);
+        Assert.False(world.IsAlive(pending));
+        Assert.False(world.Has<Health>(existing));
+        Assert.Equal(new Position(1, 2), world.Get<Position>(existing));
+        Assert.True(WorldValidator.Validate(world).IsValid);
+    }
+
+    [Fact]
+    public void Submit_repeated_remove_is_idempotent()
+    {
+        using var world = new World();
+        var existing = world.Create(new Position(1, 2), new Velocity(3, 4));
+        var stream = new CommandStream(world);
+
+        stream.Remove<Velocity>(existing);
+        stream.Remove<Velocity>(existing);
+
+        Assert.True(stream.Submit());
+        Assert.False(world.Has<Velocity>(existing));
+        Assert.Equal(new Position(1, 2), world.Get<Position>(existing));
+        Assert.True(WorldValidator.Validate(world).IsValid);
     }
 }
 

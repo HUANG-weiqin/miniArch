@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 健壮性审阅发现汇总——已确认的设计债、已验证的安全猜想、已排除的非 bug 猜想
-updated: 2026-07-13
+updated: 2026-07-15
 ---
 
 > **M2 re-apply (2026-07-09)**: Epoch guard added — `World.ReservedReleaseEpoch` + `CommandStreamCore._submitEpoch` fast-path avoids O(N) pending-slot scan when no release has occurred since last sync. HeroComing.Perf: Movement 1902.1, Attack 1125.6, memory stable. Baseline gate (≥1642/≥997) passes.
@@ -81,6 +81,16 @@ updated: 2026-07-13
 - **事务边界**: `WorldSnapshot.Load` 先 dry-validate 完整 payload（archetype payload 长度、hierarchy、free-list、trailing bytes）再调用 `ComponentRegistry.Shared.GetOrCreate`，避免后续 payload 无效时污染全局 registry；截断 body 统一包装为 `InvalidDataException`。
 - **回归测试**: `Fingerprint_differs_for_same_full_name_in_different_assemblies`、`Schema_import_rejects_class_type`、`Schema_import_rejects_managed_field_struct`、`Schema_import_rejects_duplicate_resolved_type`、`Schema_import_rejects_overlong_type_name_without_large_allocation`、`Snapshot_load_rejects_*` hardening 测试组、`Snapshot_load_rejects_truncated_v3_body_as_invalid_data`、`Snapshot_load_does_not_register_schema_type_when_later_payload_is_invalid`。
 - **验证**: 2026-07-13 `dotnet test -c Release --no-restore`：MiniArch.Tests 1013/1013 + HeroPipeline.Tests 5/5 PASS；`dotnet run -c Release --project tools/perf/HeroComing.Perf --check-baseline`：Movement 1902.3 / Attack 1186.5，Memory OK。
+
+### #6: CommandStream 组件错误会留下部分提交 ✅ 已修复
+
+- **模式**: R11 部分修改 / 跨 store 结构失效
+- **位置**: `CommandStreamCore.Submit()`、`PreflightComponentStores()`、`ComponentStore<T>.PreflightValidate()`
+- **原始缺陷**: 无效 Add、Set 或重复 Add 直到 `ApplyComponentStores()` 才抛错；此时 pending entity 已 materialize，且更早的 component store 也可能已经修改 World，形成“Submit 抛异常但 World 已部分变化”。
+- **修复方案**: 在任何 free-list、pending materialize 或 World 组件修改前，按录制顺序模拟每个 component store 的 presence 状态。Add 要求不存在，Set 要求存在，Remove 保持现有幂等 no-op 契约。纯 Set 且全部 store 都无 Add/Remove 时，预检缓存统一 archetype 的 row 索引供 Apply 复用；任一 store 含结构命令则禁用 row 缓存，防止跨 store 迁移后使用旧位置。
+- **回归测试**: `BUG_submit_preflights_invalid_add_before_materializing_pending`、`BUG_submit_preflights_invalid_set_before_materializing_pending`、`BUG_submit_preflights_repeated_add_before_any_world_mutation`、`BUG_set_preflight_row_cache_is_disabled_when_any_store_is_structural`；既有 `Determinism_survives_id_recycling` 同时守卫 Submit 与 Snapshot→Replay 的跨 store 对等性。
+- **验证**: 2026-07-15 Release：MiniArch.Tests 1034/1034、HeroPipeline.Tests 5/5；CommandStream.Profile 长测 `existing-set` 10834.1 ticks/s（同时段原版 11036.7，-1.8%）、`existing-add-remove` 2406.8（起点中位数 2398.5）；HeroComing.Perf Movement 1727.0、Attack 1046.2、Memory OK。
+- **确定性约束**: 位置缓存、批处理和跨 store 重排必须先证明 Submit 与 Snapshot→Replay 状态一致。任何结构 store 都可能迁移实体并使其他 store 的 row cache 失效；不得以热路径收益放宽这一契约。
 
 ---
 

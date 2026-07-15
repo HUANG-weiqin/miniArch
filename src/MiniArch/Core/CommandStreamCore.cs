@@ -75,6 +75,12 @@ public abstract partial class CommandStreamCore
     private bool _hasStoreCommands;
     private bool _hasParallelStoreWrites;
 
+    // Reused by component preflight. Each typed store gets a fresh epoch, so
+    // presence state is isolated per component type without clearing the arrays.
+    private int[] _preflightGenerations = [];
+    private byte[] _preflightPresence = [];
+    private int _preflightEpoch;
+
     // Lock used by <see cref="ParallelCommandStream"/> for serializing mutators
     // that touch shared FrozenState arrays. Single-threaded subclasses never
     // acquire it; the field exists so protected helpers can take it when needed.
@@ -482,6 +488,8 @@ public abstract partial class CommandStreamCore
             // Release ops in batch (creation) order. The batch-order realignment
             // below corrects this divergence so the source's free-list matches the
             // shadow's after Replay.
+            PreValidatePendingSlots();
+            PreflightComponentStores(_frozen);
             AlignCancelledBatchFreeListOrder();
             ResolveDeferredCreates();
             PreValidatePendingSlots();
@@ -625,6 +633,46 @@ public abstract partial class CommandStreamCore
         {
             if (store?.HasCommands == true)
                 store.ApplyToWorld(_world);
+        }
+    }
+
+    private void PreflightComponentStores(FrozenState frozen)
+    {
+        var cacheSetRows = true;
+        foreach (var store in frozen.Stores)
+        {
+            if (store?.HasStructuralCommands == true)
+            {
+                cacheSetRows = false;
+                break;
+            }
+        }
+
+        var required = _world.EntitySlotCount;
+        if (_preflightGenerations.Length < required)
+        {
+            var newLength = Math.Max(required, Math.Max(16, _preflightGenerations.Length * 2));
+            Array.Resize(ref _preflightGenerations, newLength);
+            Array.Resize(ref _preflightPresence, newLength);
+        }
+
+        foreach (var store in frozen.Stores)
+        {
+            if (store?.HasCommands != true)
+                continue;
+
+            if (_preflightEpoch == int.MaxValue)
+            {
+                Array.Clear(_preflightGenerations);
+                _preflightEpoch = 1;
+            }
+            else
+            {
+                _preflightEpoch++;
+            }
+
+            store.PreflightValidate(
+                _world, _preflightGenerations, _preflightPresence, _preflightEpoch, cacheSetRows);
         }
     }
 
@@ -2751,6 +2799,9 @@ public abstract partial class CommandStreamCore
     private protected abstract class ComponentStore
     {
         public abstract bool HasCommands { get; }
+        public abstract bool HasStructuralCommands { get; }
+        public abstract void PreflightValidate(
+            World world, int[] generations, byte[] presence, int epoch, bool cacheSetRows);
         public abstract void ApplyToWorld(World world);
         public abstract void EmitToDelta(FrameDelta delta);
         public abstract void PruneStaleCommands(World world);
@@ -2780,6 +2831,13 @@ public abstract partial class CommandStreamCore
         // ── Kind tracking: enables a branchless Set-only fast path in ApplyToWorld ──
         // _allSetKind is true only when every entry in this store has Kind == KindSet.
         private bool _allSetKind = true;
+
+        // Set-only preflight caches row locations. When all entries share one
+        // archetype, Apply reuses these rows instead of reading entity records a
+        // second time after validation.
+        private int[] _preflightSetRows = [];
+        private Archetype? _preflightSetArchetype;
+        private bool _preflightSetRowsValid;
 
         // ── Per-thread local buffers — write path (parallel recording) ──
         private sealed class LocalBuffer
@@ -2845,6 +2903,7 @@ public abstract partial class CommandStreamCore
         // ── Public API ──
 
         public override bool HasCommands => _count > 0 || _hasLocalWrites != 0;
+        public override bool HasStructuralCommands => HasCommands && !_allSetKind;
 
         public void Append(Entity entity, in T value, byte kind)
         {
@@ -2952,6 +3011,8 @@ public abstract partial class CommandStreamCore
         {
             _count = 0;
             _allSetKind = true;
+            _preflightSetArchetype = null;
+            _preflightSetRowsValid = false;
             if (_hasLocalWrites != 0)
             {
                 foreach (var local in _locals.Values)
@@ -3005,6 +3066,97 @@ public abstract partial class CommandStreamCore
 
         // ── Read-only consumers (must be called AFTER SealParallelWrites) ──
 
+        public override void PreflightValidate(
+            World world, int[] generations, byte[] presence, int epoch, bool cacheSetRows)
+        {
+            var count = _count;
+            var compType = Component<T>.ComponentType;
+            ref var entriesRef = ref MemoryMarshal.GetArrayDataReference(_entries);
+            _preflightSetArchetype = null;
+            _preflightSetRowsValid = false;
+
+            // Set-only is the dominant gameplay path. It does not need virtual
+            // state because Set never changes presence. Cache row indices while
+            // validating so the uniform-archetype Apply path does not read every
+            // entity record again.
+            if (_allSetKind)
+            {
+                if (cacheSetRows && _preflightSetRows.Length < count)
+                    Array.Resize(ref _preflightSetRows, Math.Max(count, Math.Max(256, _preflightSetRows.Length * 2)));
+
+                Archetype? lastArchetype = null;
+                var lastHasComponent = false;
+                var uniformArchetype = true;
+                for (var i = 0; i < count; i++)
+                {
+                    ref var entry = ref Unsafe.Add(ref entriesRef, i);
+                    var record = world.GetRecordFast(entry.Entity);
+                    var archetype = record.Archetype!;
+                    if (cacheSetRows)
+                        _preflightSetRows[i] = record.RowIndex;
+                    if (archetype != lastArchetype)
+                    {
+                        if (lastArchetype is not null)
+                            uniformArchetype = false;
+                        lastArchetype = archetype;
+                        lastHasComponent = archetype.TryGetComponentIndex(compType, out _);
+                    }
+
+                    if (!lastHasComponent)
+                        throw new InvalidOperationException(
+                            $"Entity {entry.Entity} does not have component {typeof(T).Name}.");
+                }
+
+                if (cacheSetRows)
+                {
+                    _preflightSetArchetype = uniformArchetype ? lastArchetype : null;
+                    _preflightSetRowsValid = true;
+                }
+                return;
+            }
+
+            for (var i = 0; i < count; i++)
+            {
+                ref var entry = ref Unsafe.Add(ref entriesRef, i);
+                var entityId = entry.Entity.Id;
+                Debug.Assert((uint)entityId < (uint)generations.Length,
+                    $"Preflight entity id {entityId} is outside scratch capacity {generations.Length}.");
+
+                if (generations[entityId] != epoch)
+                {
+                    var record = world.GetRecordFast(entry.Entity);
+                    generations[entityId] = epoch;
+                    presence[entityId] = record.Archetype!.TryGetComponentIndex(compType, out _)
+                        ? (byte)1
+                        : (byte)0;
+                }
+
+                var isPresent = presence[entityId] != 0;
+                if (entry.Kind == KindAdd)
+                {
+                    if (isPresent)
+                    {
+                        throw new InvalidOperationException(
+                            $"Entity {entry.Entity} already has component type {compType.Value}. " +
+                            "Use Set<T> to overwrite, or remove the component first.");
+                    }
+                    presence[entityId] = 1;
+                }
+                else if (entry.Kind == KindSet)
+                {
+                    if (!isPresent)
+                        throw new InvalidOperationException(
+                            $"Entity {entry.Entity} does not have component {typeof(T).Name}.");
+                }
+                else
+                {
+                    // Remove is intentionally idempotent: missing components are
+                    // a no-op in World.Remove<T> and CommandStream preserves it.
+                    presence[entityId] = 0;
+                }
+            }
+        }
+
         public override void ApplyToWorld(World world)
         {
             var count = _count;
@@ -3015,6 +3167,36 @@ public abstract partial class CommandStreamCore
             // Kind branch and the lastArch invalidation that Add/Remove require.
             if (_allSetKind)
             {
+                if (_preflightSetRowsValid && _preflightSetArchetype is { } validatedArch)
+                {
+                    if (!validatedArch.TryGetComponentIndex(compType, out var validatedColIdx))
+                    {
+                        throw new InvalidOperationException(
+                            $"Preflight cache lost component {typeof(T).Name}.");
+                    }
+
+                    var validatedByteOffset = validatedArch.GetColumnByteOffset(validatedColIdx);
+                    if (!validatedArch.IsChunked)
+                    {
+                        for (var i = 0; i < count; i++)
+                        {
+                            ref var entry = ref Unsafe.Add(ref entriesRef, i);
+                            validatedArch.SetComponentAtFlatNoTrack<T>(
+                                validatedColIdx, validatedByteOffset, _preflightSetRows[i], in entry.Value);
+                        }
+                    }
+                    else
+                    {
+                        for (var i = 0; i < count; i++)
+                        {
+                            ref var entry = ref Unsafe.Add(ref entriesRef, i);
+                            validatedArch.SetComponentAtTypedNoTrack(
+                                validatedColIdx, _preflightSetRows[i], in entry.Value);
+                        }
+                    }
+                    return;
+                }
+
                 Archetype? fastArch = null;
                 int fastColIdx = -1;
                 int fastByteOffset = 0;
