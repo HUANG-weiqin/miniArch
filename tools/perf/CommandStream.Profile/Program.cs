@@ -104,7 +104,8 @@ internal static class BenchmarkRunner
         var measureEnd = Stopwatch.GetTimestamp() + (long)measureSec * Stopwatch.Frequency;
         long totalRecordNs = 0, totalSubmitNs = 0, totalSnapshotNs = 0, totalClearNs = 0;
         long tickCount = 0;
-        long startMem = 0, endMem = 0;
+        var startMem = GC.GetTotalMemory(false);
+        var endMem = startMem;
         var startGc = GC.CollectionCount(0);
         var nextSample = Stopwatch.GetTimestamp() + SampleIntervalTicks;
 
@@ -158,9 +159,9 @@ internal static class PhaseTimer
     public static long Start() => Stopwatch.GetTimestamp();
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static long EndNs(long start)
+    public static long ElapsedNs(long start, long end)
     {
-        var elapsed = Stopwatch.GetTimestamp() - start;
+        var elapsed = end - start;
         return elapsed * 1_000_000L / Stopwatch.Frequency;
     }
 }
@@ -217,13 +218,79 @@ internal sealed class ExistingSetScenario : IScenario
         _stream.Submit();
         var t2 = PhaseTimer.Start();
 
-        return (PhaseTimer.EndNs(t0), PhaseTimer.EndNs(t1), 0, PhaseTimer.EndNs(t2));
+        return (PhaseTimer.ElapsedNs(t0, t1), PhaseTimer.ElapsedNs(t1, t2), 0, 0);
     }
 
     public void Dispose()
     {
         _world.Dispose();
     }
+}
+
+// ===================================================================
+// Scenario: existing-set-multi
+// Record Set<Position> across several interleaved archetypes, then Submit.
+// ===================================================================
+internal sealed class ExistingSetMultiScenario : IScenario
+{
+    private const int EntityCount = 10_000;
+
+    private readonly World _world;
+    private readonly CommandStream _stream;
+    private readonly Entity[] _entities;
+    private int _tick;
+
+    public string Name => "existing-set-multi";
+    public string Description => $"Record+Submit Set<Position> on {EntityCount} entities across 4 interleaved archetypes";
+    public int LiveCount => _entities.Length;
+
+    public long Checksum
+    {
+        get
+        {
+            long h = 0;
+            for (var i = 0; i < _entities.Length && i < 100; i++)
+                h = HashCode.Combine(h, _world.Get<Position>(_entities[i]).X);
+            return h;
+        }
+    }
+
+    public ExistingSetMultiScenario()
+    {
+        _world = new World();
+        _stream = new CommandStream(_world);
+        _entities = new Entity[EntityCount];
+        for (var i = 0; i < EntityCount; i++)
+        {
+            _entities[i] = (i & 3) switch
+            {
+                0 => _world.Create(new Position { X = i, Y = i * 2 }),
+                1 => _world.Create(new Position { X = i, Y = i * 2 }, new Velocity { X = 1, Y = -1 }),
+                2 => _world.Create(new Position { X = i, Y = i * 2 }, new Health { Value = 100 }),
+                _ => _world.Create(
+                    new Position { X = i, Y = i * 2 },
+                    new Velocity { X = 1, Y = -1 },
+                    new Health { Value = 100 }),
+            };
+        }
+    }
+
+    public (long recordNs, long submitNs, long snapshotNs, long clearNs) RunTick()
+    {
+        _tick++;
+
+        var t0 = PhaseTimer.Start();
+        for (var i = 0; i < _entities.Length; i++)
+            _stream.Set(_entities[i], new Position { X = _tick + i, Y = _tick - i });
+        var t1 = PhaseTimer.Start();
+
+        _stream.Submit();
+        var t2 = PhaseTimer.Start();
+
+        return (PhaseTimer.ElapsedNs(t0, t1), PhaseTimer.ElapsedNs(t1, t2), 0, 0);
+    }
+
+    public void Dispose() => _world.Dispose();
 }
 
 // ===================================================================
@@ -283,7 +350,7 @@ internal sealed class ExistingAddRemoveScenario : IScenario
         _stream.Submit();
         var t2 = PhaseTimer.Start();
 
-        return (PhaseTimer.EndNs(t0), PhaseTimer.EndNs(t1), 0, PhaseTimer.EndNs(t2));
+        return (PhaseTimer.ElapsedNs(t0, t1), PhaseTimer.ElapsedNs(t1, t2), 0, 0);
     }
 
     public void Dispose()
@@ -331,7 +398,7 @@ internal sealed class CreateSmall4Scenario : IScenario
         _stream.Submit();
         var t2 = PhaseTimer.Start();
 
-        return (PhaseTimer.EndNs(t0), PhaseTimer.EndNs(t1), 0, PhaseTimer.EndNs(t2));
+        return (PhaseTimer.ElapsedNs(t0, t1), PhaseTimer.ElapsedNs(t1, t2), 0, 0);
     }
 
     public void Dispose()
@@ -379,7 +446,7 @@ internal sealed class CreateDuplicatesScenario : IScenario
         _stream.Submit();
         var t2 = PhaseTimer.Start();
 
-        return (PhaseTimer.EndNs(t0), PhaseTimer.EndNs(t1), 0, PhaseTimer.EndNs(t2));
+        return (PhaseTimer.ElapsedNs(t0, t1), PhaseTimer.ElapsedNs(t1, t2), 0, 0);
     }
 
     public void Dispose()
@@ -445,7 +512,7 @@ internal sealed class CreateDestroyScenario : IScenario
         _stream.Submit();
         var t2 = PhaseTimer.Start();
 
-        return (PhaseTimer.EndNs(t0), PhaseTimer.EndNs(t1), 0, PhaseTimer.EndNs(t2));
+        return (PhaseTimer.ElapsedNs(t0, t1), PhaseTimer.ElapsedNs(t1, t2), 0, 0);
     }
 
     public void Dispose()
@@ -501,7 +568,11 @@ internal sealed class SnapshotOnlyScenario : IScenario
         _stream.Clear();
         var t3 = PhaseTimer.Start();
 
-        return (PhaseTimer.EndNs(t0), 0, PhaseTimer.EndNs(t1), PhaseTimer.EndNs(t2));
+        return (
+            PhaseTimer.ElapsedNs(t0, t1),
+            0,
+            PhaseTimer.ElapsedNs(t1, t2),
+            PhaseTimer.ElapsedNs(t2, t3));
     }
 
     public void Dispose()
@@ -522,24 +593,16 @@ public static class Program
         if (opts.List)
         {
             Console.WriteLine("Available scenarios:");
-            foreach (var s in Registry.All.OrderBy(s => s.Name))
-                Console.WriteLine($"  {s.Name,-24} {s.Description}");
+            foreach (var factory in Registry.All)
+            {
+                using var scenario = factory();
+                Console.WriteLine($"  {scenario.Name,-24} {scenario.Description}");
+            }
             Console.WriteLine();
             Console.WriteLine("Run all:  dotnet run -c Release --project tools/perf/CommandStream.Profile");
             Console.WriteLine("Run one:  dotnet run -c Release --project tools/perf/CommandStream.Profile -- --scenario create-small4");
             Console.WriteLine("Profile:  dotnet run -c Release --project tools/perf/CommandStream.Profile -- --scenario create-small4 --profile-ready-file profile.pid --attach-delay 3");
             return;
-        }
-
-        var all = Registry.All.ToArray();
-        var scenarios = string.IsNullOrEmpty(opts.Scenario)
-            ? all
-            : all.Where(s => s.Name == opts.Scenario).ToArray();
-
-        if (scenarios.Length == 0)
-        {
-            Console.Error.WriteLine($"Unknown scenario '{opts.Scenario}'. Use --list to see available scenarios.");
-            Environment.Exit(1);
         }
 
         // Print PID and optionally signal external profiler
@@ -560,14 +623,33 @@ public static class Program
         Console.WriteLine($"{"Scenario",-24} {"Ticks/s",10} {"ms/tick",9} {"Record%",8} {"Submit%",9} {"Snap%",8} {"Clear%",8} {"Live",8} {"Heap Δ",10} {"GC",6}");
         Console.WriteLine(new string('-', 108));
 
-        foreach (var scenario in scenarios)
+        var matched = false;
+        var firstScenario = true;
+        foreach (var factory in Registry.All)
         {
-            using var sc = scenario;
-            var result = BenchmarkRunner.Run(sc, opts.WarmupSec, opts.MeasureSec);
+            if (!firstScenario)
+            {
+                GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+                GC.WaitForPendingFinalizers();
+            }
+            firstScenario = false;
+
+            using var scenario = factory();
+            if (!string.IsNullOrEmpty(opts.Scenario) && scenario.Name != opts.Scenario)
+                continue;
+
+            matched = true;
+            var result = BenchmarkRunner.Run(scenario, opts.WarmupSec, opts.MeasureSec);
             Console.WriteLine(
                 $"{result.Name,-24} {result.TicksPerSecond,10:F1} {result.MillisecondsPerTick,9:F4} " +
                 $"{result.RecordPercent,7:F1}% {result.SubmitPercent,7:F1}% {result.SnapshotPercent,7:F1}% {result.ClearPercent,7:F1}% " +
                 $"{result.LiveCount,8:N0} {FormatBytes(result.HeapDelta),10} {result.GcCount,6}");
+        }
+
+        if (!matched)
+        {
+            Console.Error.WriteLine($"Unknown scenario '{opts.Scenario}'. Use --list to see available scenarios.");
+            Environment.ExitCode = 1;
         }
     }
 
@@ -586,16 +668,17 @@ public static class Program
 // ===================================================================
 internal static class Registry
 {
-    public static IEnumerable<IScenario> All
+    public static IEnumerable<Func<IScenario>> All
     {
         get
         {
-            yield return new ExistingSetScenario();
-            yield return new ExistingAddRemoveScenario();
-            yield return new CreateSmall4Scenario();
-            yield return new CreateDuplicatesScenario();
-            yield return new CreateDestroyScenario();
-            yield return new SnapshotOnlyScenario();
+            yield return static () => new ExistingSetScenario();
+            yield return static () => new ExistingSetMultiScenario();
+            yield return static () => new ExistingAddRemoveScenario();
+            yield return static () => new CreateSmall4Scenario();
+            yield return static () => new CreateDuplicatesScenario();
+            yield return static () => new CreateDestroyScenario();
+            yield return static () => new SnapshotOnlyScenario();
         }
     }
 }

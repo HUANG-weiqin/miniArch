@@ -57,6 +57,14 @@ public sealed class FrameDelta
     internal int _length;
     internal int _opCount;
 
+    internal void EnsureCapacity(int capacityHint)
+    {
+        if (capacityHint <= _buffer.Length)
+            return;
+
+        Array.Resize(ref _buffer, Math.Min(capacityHint, MaxFrameBytes));
+    }
+
     /// <summary>
     /// Resets this delta for reuse. The internal buffer is kept (no shrink)
     /// so the next <see cref="Deserialize"/> or <c>SnapshotInto</c>

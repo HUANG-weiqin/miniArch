@@ -72,21 +72,7 @@ public sealed partial class World
 
         if (!_hierarchy.HasChildren(this, entity))
         {
-            BeginStructChange();
-#if DEBUG
-            try
-            {
-#endif
-            DestroySingle(entity);
-#if DEBUG
-            }
-            finally
-            {
-                EndStructChange();
-            }
-#else
-            EndStructChange();
-#endif
+            DestroyAliveLeaf(entity, RequireLocation(entity));
             return;
         }
 
@@ -115,6 +101,39 @@ public sealed partial class World
             EndStructChange();
             _destroyOrderScratch.Clear();
         }
+    }
+
+    internal void DestroyIfAlive(Entity entity)
+    {
+        if (!TryGetAliveRecord(entity, out var info))
+            return;
+
+        if (_hierarchy.HasChildrenUnchecked(entity))
+        {
+            Destroy(entity);
+            return;
+        }
+
+        DestroyAliveLeaf(entity, info);
+    }
+
+    private void DestroyAliveLeaf(Entity entity, EntityRecord info)
+    {
+        BeginStructChange();
+#if DEBUG
+        try
+        {
+#endif
+        DestroySingle(entity, info);
+#if DEBUG
+        }
+        finally
+        {
+            EndStructChange();
+        }
+#else
+        EndStructChange();
+#endif
     }
 
     /// <summary>
@@ -341,6 +360,20 @@ public sealed partial class World
         return record.IsOccupied && record.Version == entity.Version;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool TryGetAliveRecord(Entity entity, out EntityRecord record)
+    {
+        if ((uint)entity.Id >= (uint)_entitySlotCount)
+        {
+            record = default;
+            return false;
+        }
+
+        ref var data = ref MemoryMarshal.GetArrayDataReference(_records);
+        record = Unsafe.Add(ref data, entity.Id);
+        return record.IsOccupied && record.Version == entity.Version;
+    }
+
     private void AssertValidEntityId(int id, Entity entity)
     {
         if ((uint)id >= (uint)_entitySlotCount)
@@ -395,7 +428,11 @@ public sealed partial class World
 
     private void DestroySingle(Entity entity)
     {
-        var info = RequireLocation(entity);
+        DestroySingle(entity, RequireLocation(entity));
+    }
+
+    private void DestroySingle(Entity entity, EntityRecord info)
+    {
         var arch = info.Archetype!;
 
         arch.RemoveAt(info.RowIndex, out var movedEntity);

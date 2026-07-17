@@ -122,6 +122,10 @@ internal sealed class HierarchyTable
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool HasChildrenUnchecked(Entity entity) =>
+        (uint)entity.Id < (uint)_firstChild.Length && _firstChild[entity.Id] >= 0;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool HasAnyRelations(Entity entity)
     {
         if ((uint)entity.Id >= (uint)_parentByChild.Length ||

@@ -16,7 +16,7 @@ public abstract partial class CommandStreamCore
     /// </summary>
     public bool Submit()
     {
-        PrepareStores();
+        PrepareStores(buildSetLocationCache: true);
         if (!HasAnyCommands())
             return false;
 
@@ -165,15 +165,7 @@ public abstract partial class CommandStreamCore
 
     private void PreflightComponentStores(FrozenState frozen)
     {
-        var cacheSetRows = true;
-        foreach (var store in frozen.Stores)
-        {
-            if (store?.HasStructuralCommands == true)
-            {
-                cacheSetRows = false;
-                break;
-            }
-        }
+        var useSetLocationCache = CanReuseSetLocationCache(frozen);
 
         var required = _world.EntitySlotCount;
         if (_preflightGenerations.Length < required)
@@ -199,7 +191,7 @@ public abstract partial class CommandStreamCore
             }
 
             store.PreflightValidate(
-                _world, _preflightGenerations, _preflightPresence, _preflightEpoch, cacheSetRows);
+                _world, _preflightGenerations, _preflightPresence, _preflightEpoch, useSetLocationCache);
         }
     }
 
@@ -209,11 +201,8 @@ public abstract partial class CommandStreamCore
         {
             var entity = _frozen.DestroyEntities[i];
             // The entity may already have been cascade-destroyed if a parent
-            // earlier in the DestroyEntities array was destroyed (DestroySingle
-            // recursively destroys all descendants). Check liveness to match
-            // the Replay path, which also guards with IsAlive.
-            if (_world.IsAlive(entity))
-                _world.Destroy(entity);
+            // earlier in the DestroyEntities array was destroyed.
+            _world.DestroyIfAlive(entity);
         }
     }
 
@@ -254,12 +243,14 @@ public abstract partial class CommandStreamCore
         {
             ResolveDeferredCreates();
             var delta = new FrameDelta();
+            delta.EnsureCapacity(GetSnapshotCapacityHint());
             BuildDelta(delta);
             _pendingReplay = true;
             return delta;
         }
         ThrowIfSnapshotHasImmediateEntities();
         var d = new FrameDelta();
+        d.EnsureCapacity(GetSnapshotCapacityHint());
         BuildDelta(d);
         _pendingReplay = true;
         return d;
@@ -359,7 +350,7 @@ public abstract partial class CommandStreamCore
     /// </remarks>
     public Task<FrameDelta> SubmitAndSnapshotAsync()
     {
-        PrepareStores();
+        PrepareStores(buildSetLocationCache: true);
         if (!HasAnyCommands())
             return Task.FromResult(new FrameDelta());
 
@@ -418,7 +409,7 @@ public abstract partial class CommandStreamCore
     public Task SubmitAndSnapshotIntoAsync(FrameDelta target)
     {
         ArgumentNullException.ThrowIfNull(target);
-        PrepareStores();
+        PrepareStores(buildSetLocationCache: true);
         if (!HasAnyCommands())
         {
             target.Clear();
@@ -519,7 +510,23 @@ public abstract partial class CommandStreamCore
             delta.AddDestroy(_frozen.DestroyEntities[i]);
     }
 
-    private void PruneStaleComponentCommands()
+    private int GetSnapshotCapacityHint()
+    {
+        long estimate = 0;
+        foreach (var store in _frozen.Stores)
+        {
+            if (store?.HasCommands != true)
+                continue;
+
+            estimate += store.ComponentDeltaCapacityHint;
+            if (estimate >= FrameDelta.MaxFrameBytes)
+                return FrameDelta.MaxFrameBytes;
+        }
+
+        return (int)estimate;
+    }
+
+    private void PrepareComponentStoresForConsume(bool buildSetLocationCache)
     {
         var hasStoreCommands = false;
         foreach (var store in _frozen.Stores)
@@ -527,7 +534,7 @@ public abstract partial class CommandStreamCore
             if (store is null)
                 continue;
 
-            hasStoreCommands |= store.PruneStaleCommands(_world);
+            hasStoreCommands |= store.PrepareForConsume(_world, buildSetLocationCache);
         }
         _hasStoreCommands = hasStoreCommands;
     }
@@ -538,10 +545,25 @@ public abstract partial class CommandStreamCore
     /// SubmitAndSnapshotIntoAsync operation. Not needed before Replay (no recording
     /// state to prepare).
     /// </summary>
-    private void PrepareStores()
+    private void PrepareStores(bool buildSetLocationCache = false)
     {
         SealParallelStores();
-        PruneStaleComponentCommands();
+        buildSetLocationCache &= CanReuseSetLocationCache(_frozen);
+        PrepareComponentStoresForConsume(buildSetLocationCache);
+    }
+
+    private static bool CanReuseSetLocationCache(FrozenState frozen)
+    {
+        // A Set-only component store never migrates rows. If any store contains
+        // Add/Remove, applying that earlier store can move entities before a
+        // later store consumes its cached rows, so row reuse is disabled globally.
+        foreach (var store in frozen.Stores)
+        {
+            if (store?.HasStructuralCommands == true)
+                return false;
+        }
+
+        return true;
     }
 
     private void TryReclaimPending()
@@ -644,8 +666,7 @@ public abstract partial class CommandStreamCore
             var entity = frozen.DestroyEntities[i];
             // Guard against cascade-destroyed entities (parent destroyed
             // before child in the array). Matches Replay path semantics.
-            if (_world.IsAlive(entity))
-                _world.Destroy(entity);
+            _world.DestroyIfAlive(entity);
         }
     }
 

@@ -2,7 +2,7 @@
 title: Performance Harnesses Disambiguation
 module: Meta
 description: Matrix of the 7 performance harnesses in miniArch — what each measures, current baselines, and which one is the regression gate
-updated: 2026-07-11
+updated: 2026-07-17
 ---
 # Performance Harnesses Disambiguation
 
@@ -19,7 +19,7 @@ miniArch 有 **多套性能测试工具**，以下矩阵记录主要工具。它
 | **SubmitAndSnapshotAsync 内联测量** | `kb-cache-optimization.md` "SubmitAndSnapshotAsync 双缓冲池化" | CommandStream async submit+snapshot 稳态吞吐 | rounds/s | Movement-Stream 1818 / Attack-Stream 1101 | ❌ 优化验证 | `kb-cache-optimization.md` |
 | **GameTickSim.Perf** | `tools/perf/GameTickSim.Perf` | 场景化三方对比（MiniArch vs Arch vs DefaultEcs） | ticks/s | 见各场景 | ❌ 竞品对比 | `kb-gameticksim-scenarios.md` |
 | **FrifloGameScenarios.Perf** | `tools/perf/FrifloGameScenarios.Perf` | 15 场景跨 ECS 对比（MiniArch vs Friflo 3.x vs Arch 2.x），含子弹地狱/MMO/RPG/AI 等 | ticks/s | 见各场景 | ❌ 竞品对比 | `kb-ecs-comparison.md` |
-| **CommandStream.Profile** | `tools/perf/CommandStream.Profile` | CommandStream 专剖：6 个微场景，含 record/submit/snapshot/clear 分阶段 | ticks/s | 无固定 baseline | ❌ CPU sampling 辅助 | `kb-command-stream.md` |
+| **CommandStream.Profile** | `tools/perf/CommandStream.Profile` | CommandStream 专剖：7 个微场景，含 existing-set-multi 与 record/submit/snapshot/clear 分阶段 | ticks/s | 无固定 baseline | ❌ CPU sampling 辅助 | `kb-command-stream.md` |
 | **ParallelRecord.Perf** | `tools/perf/ParallelRecord.Perf` | 并行 CommandStream 录制扩展性测试——顺序 vs 并行，3 种配置，含分区策略比较 | ops/s | 无固定 baseline | ❌ 设计验证 | `kb-command-stream.md` |
 | **WatchApi.Perf** | `tools/perf/WatchApi.Perf` | Watch API 专项：ChangeWatch/Projected/TransitionWatch 秒级吞吐、steady-state allocation、发布验证 | ops/s | 见 `kb-change-tracking.md` WatchApi.Perf 段 | ❌ API 发布/优化验证 | `kb-change-tracking.md` |
 | **DestroyMany.Perf** | `tools/perf/DestroyMany.Perf` | `Destroy(ReadOnlySpan<Entity>)` / `Destroy(query)` / `Clear(query)` vs guarded `for Destroy`，稳态吞吐 + steady-state alloc + threshold sweep + correctness verify | speedup / us/op | 2026-07-10 稳态：full dense 1.9×；query 2.3×；Clear 4.0×；cascade 1.4×；sweep crossover ≈30% | ❌ API 专项证明 | `kb-core-ecs.md` |

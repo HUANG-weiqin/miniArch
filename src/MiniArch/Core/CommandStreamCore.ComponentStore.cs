@@ -158,11 +158,12 @@ public abstract partial class CommandStreamCore
     {
         public abstract bool HasCommands { get; }
         public abstract bool HasStructuralCommands { get; }
+        public abstract int ComponentDeltaCapacityHint { get; }
         public abstract void PreflightValidate(
-            World world, int[] generations, byte[] presence, int epoch, bool cacheSetRows);
+            World world, int[] generations, byte[] presence, int epoch, bool useSetLocationCache);
         public abstract void ApplyToWorld(World world);
         public abstract void EmitToDelta(FrameDelta delta);
-        public abstract bool PruneStaleCommands(World world);
+        public abstract bool PrepareForConsume(World world, bool buildSetLocationCache);
         public abstract void Clear();
         public abstract void ReplacePlaceholders(Entity[] resolveMap);
         public abstract void SealParallelWrites();
@@ -182,6 +183,17 @@ public abstract partial class CommandStreamCore
 
     private protected sealed class ComponentStore<T> : ComponentStore where T : unmanaged
     {
+        // Conservative Add/Set wire overhead hint: op tag + entity + component
+        // type + data-length varints. Exact sizing still belongs to FrameDelta.
+        private const int ComponentDeltaHeaderCapacityHint = 8;
+
+        private enum SetLocationCacheKind : byte
+        {
+            None,
+            UniformArchetype,
+            PerEntryArchetype,
+        }
+
         // ── Main (merged) storage — read path ──
         private StoreEntry<T>[] _entries = [];
         private int _count;
@@ -190,12 +202,13 @@ public abstract partial class CommandStreamCore
         // _allSetKind is true only when every entry in this store has Kind == KindSet.
         private bool _allSetKind = true;
 
-        // Set-only preflight caches row locations. When all entries share one
-        // archetype, Apply reuses these rows instead of reading entity records a
-        // second time after validation.
-        private int[] _preflightSetRows = [];
-        private Archetype? _preflightSetArchetype;
-        private bool _preflightSetRowsValid;
+        // Set-only consume cache. When no component store contains Add/Remove,
+        // pruning can safely capture each entity's current row/archetype and
+        // Apply can reuse those locations without reading EntityRecord again.
+        private int[] _setLocationRows = [];
+        private Archetype?[] _setLocationArchetypes = [];
+        private Archetype? _setLocationUniformArchetype;
+        private SetLocationCacheKind _setLocationCacheKind;
 
         // ── Per-thread local buffers — write path (parallel recording) ──
         private sealed class LocalBuffer
@@ -262,6 +275,14 @@ public abstract partial class CommandStreamCore
 
         public override bool HasCommands => _count > 0 || _hasLocalWrites != 0;
         public override bool HasStructuralCommands => HasCommands && !_allSetKind;
+        public override int ComponentDeltaCapacityHint
+        {
+            get
+            {
+                var estimate = _count * (Unsafe.SizeOf<T>() + (long)ComponentDeltaHeaderCapacityHint);
+                return estimate >= int.MaxValue ? int.MaxValue : (int)estimate;
+            }
+        }
 
         public void Append(Entity entity, in T value, byte kind)
         {
@@ -369,8 +390,7 @@ public abstract partial class CommandStreamCore
         {
             _count = 0;
             _allSetKind = true;
-            _preflightSetArchetype = null;
-            _preflightSetRowsValid = false;
+            ResetSetLocationCache();
             if (_hasLocalWrites != 0)
             {
                 foreach (var local in _locals.Values)
@@ -379,7 +399,15 @@ public abstract partial class CommandStreamCore
             }
         }
 
-        public override bool PruneStaleCommands(World world)
+        public override bool PrepareForConsume(World world, bool buildSetLocationCache)
+        {
+            ResetSetLocationCache();
+            return buildSetLocationCache && _allSetKind
+                ? PruneStaleAndBuildSetLocationCache(world)
+                : PruneStaleCommands(world);
+        }
+
+        private bool PruneStaleCommands(World world)
         {
             var write = 0;
             var allSetKind = true;
@@ -404,6 +432,62 @@ public abstract partial class CommandStreamCore
             return write != 0;
         }
 
+        private bool PruneStaleAndBuildSetLocationCache(World world)
+        {
+            EnsureSetLocationRowCapacity(_count);
+
+            var write = 0;
+            Archetype? uniformArchetype = null;
+            var cachePerEntryArchetype = false;
+
+            for (var read = 0; read < _count; read++)
+            {
+                ref var entry = ref _entries[read];
+                if (entry.Entity.IsPlaceholder ||
+                    !world.TryGetAliveRecord(entry.Entity, out var record))
+                    continue;
+
+                if (write != read)
+                    _entries[write] = entry;
+
+                var archetype = record.Archetype!;
+                _setLocationRows[write] = record.RowIndex;
+
+                if (write == 0)
+                {
+                    uniformArchetype = archetype;
+                }
+                else if (!cachePerEntryArchetype && archetype != uniformArchetype)
+                {
+                    EnsureSetLocationArchetypeCapacity(_count);
+                    Array.Fill(_setLocationArchetypes, uniformArchetype, 0, write);
+                    cachePerEntryArchetype = true;
+                }
+
+                if (cachePerEntryArchetype)
+                    _setLocationArchetypes[write] = archetype;
+
+                write++;
+            }
+
+            _count = write;
+            if (write == 0)
+                return false;
+
+            if (cachePerEntryArchetype)
+            {
+                _setLocationCacheKind = SetLocationCacheKind.PerEntryArchetype;
+                _setLocationUniformArchetype = null;
+            }
+            else
+            {
+                _setLocationCacheKind = SetLocationCacheKind.UniformArchetype;
+                _setLocationUniformArchetype = uniformArchetype;
+            }
+
+            return true;
+        }
+
         // ── Private helpers ──
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -423,56 +507,133 @@ public abstract partial class CommandStreamCore
             Array.Resize(ref _entries, newLen);
         }
 
+        private void ResetSetLocationCache()
+        {
+            _setLocationCacheKind = SetLocationCacheKind.None;
+            _setLocationUniformArchetype = null;
+        }
+
+        private void EnsureSetLocationRowCapacity(int required)
+        {
+            if (_setLocationRows.Length >= required) return;
+            Array.Resize(ref _setLocationRows,
+                Math.Max(required, Math.Max(256, _setLocationRows.Length * 2)));
+        }
+
+        private void EnsureSetLocationArchetypeCapacity(int required)
+        {
+            if (_setLocationArchetypes.Length >= required) return;
+            Array.Resize(ref _setLocationArchetypes,
+                Math.Max(required, Math.Max(256, _setLocationArchetypes.Length * 2)));
+        }
+
         // ── Read-only consumers (must be called AFTER SealParallelWrites) ──
 
         public override void PreflightValidate(
-            World world, int[] generations, byte[] presence, int epoch, bool cacheSetRows)
+            World world, int[] generations, byte[] presence, int epoch, bool useSetLocationCache)
+        {
+            if (_allSetKind)
+            {
+                PreflightSetOnly(world, useSetLocationCache);
+                return;
+            }
+
+            PreflightMixed(world, generations, presence, epoch);
+        }
+
+        private void PreflightSetOnly(World world, bool useSetLocationCache)
+        {
+            var count = _count;
+            var compType = Component<T>.ComponentType;
+            if (useSetLocationCache && TryPreflightSetLocationCache(count, compType))
+                return;
+
+            ResetSetLocationCache();
+            if (useSetLocationCache)
+                EnsureSetLocationRowCapacity(count);
+
+            ref var entriesRef = ref MemoryMarshal.GetArrayDataReference(_entries);
+            Archetype? lastArchetype = null;
+            var lastHasComponent = false;
+            var uniformArchetype = true;
+
+            for (var i = 0; i < count; i++)
+            {
+                ref var entry = ref Unsafe.Add(ref entriesRef, i);
+                var record = world.GetRecordFast(entry.Entity);
+                var archetype = record.Archetype!;
+
+                if (useSetLocationCache)
+                    _setLocationRows[i] = record.RowIndex;
+
+                if (archetype != lastArchetype)
+                {
+                    if (lastArchetype is not null)
+                        uniformArchetype = false;
+                    lastArchetype = archetype;
+                    lastHasComponent = archetype.TryGetComponentIndex(compType, out _);
+                }
+
+                if (!lastHasComponent)
+                    throw new InvalidOperationException(
+                        $"Entity {entry.Entity} does not have component {typeof(T).Name}.");
+            }
+
+            if (useSetLocationCache && count > 0 && uniformArchetype)
+            {
+                _setLocationCacheKind = SetLocationCacheKind.UniformArchetype;
+                _setLocationUniformArchetype = lastArchetype;
+            }
+        }
+
+        private bool TryPreflightSetLocationCache(int count, ComponentType compType)
+        {
+            if (count == 0)
+                return true;
+
+            if (_setLocationCacheKind == SetLocationCacheKind.UniformArchetype)
+            {
+                var archetype = _setLocationUniformArchetype ?? throw new InvalidOperationException(
+                    $"Set location cache lost component {typeof(T).Name}.");
+                if (!archetype.TryGetComponentIndex(compType, out _))
+                    throw new InvalidOperationException(
+                        $"Entity {_entries[0].Entity} does not have component {typeof(T).Name}.");
+                return true;
+            }
+
+            if (_setLocationCacheKind != SetLocationCacheKind.PerEntryArchetype)
+                return false;
+
+            Archetype? cachedLastArchetype = null;
+            var cachedLastHasComponent = false;
+            ref var entriesRef = ref MemoryMarshal.GetArrayDataReference(_entries);
+            ref var archetypesRef = ref MemoryMarshal.GetArrayDataReference(_setLocationArchetypes);
+
+            for (var i = 0; i < count; i++)
+            {
+                var archetype = Unsafe.Add(ref archetypesRef, i)!;
+                if (archetype != cachedLastArchetype)
+                {
+                    cachedLastArchetype = archetype;
+                    cachedLastHasComponent = archetype.TryGetComponentIndex(compType, out _);
+                }
+
+                if (!cachedLastHasComponent)
+                {
+                    ref var entry = ref Unsafe.Add(ref entriesRef, i);
+                    throw new InvalidOperationException(
+                        $"Entity {entry.Entity} does not have component {typeof(T).Name}.");
+                }
+            }
+
+            return true;
+        }
+
+        private void PreflightMixed(World world, int[] generations, byte[] presence, int epoch)
         {
             var count = _count;
             var compType = Component<T>.ComponentType;
             ref var entriesRef = ref MemoryMarshal.GetArrayDataReference(_entries);
-            _preflightSetArchetype = null;
-            _preflightSetRowsValid = false;
-
-            // Set-only is the dominant gameplay path. It does not need virtual
-            // state because Set never changes presence. Cache row indices while
-            // validating so the uniform-archetype Apply path does not read every
-            // entity record again.
-            if (_allSetKind)
-            {
-                if (cacheSetRows && _preflightSetRows.Length < count)
-                    Array.Resize(ref _preflightSetRows, Math.Max(count, Math.Max(256, _preflightSetRows.Length * 2)));
-
-                Archetype? lastArchetype = null;
-                var lastHasComponent = false;
-                var uniformArchetype = true;
-                for (var i = 0; i < count; i++)
-                {
-                    ref var entry = ref Unsafe.Add(ref entriesRef, i);
-                    var record = world.GetRecordFast(entry.Entity);
-                    var archetype = record.Archetype!;
-                    if (cacheSetRows)
-                        _preflightSetRows[i] = record.RowIndex;
-                    if (archetype != lastArchetype)
-                    {
-                        if (lastArchetype is not null)
-                            uniformArchetype = false;
-                        lastArchetype = archetype;
-                        lastHasComponent = archetype.TryGetComponentIndex(compType, out _);
-                    }
-
-                    if (!lastHasComponent)
-                        throw new InvalidOperationException(
-                            $"Entity {entry.Entity} does not have component {typeof(T).Name}.");
-                }
-
-                if (cacheSetRows)
-                {
-                    _preflightSetArchetype = uniformArchetype ? lastArchetype : null;
-                    _preflightSetRowsValid = true;
-                }
-                return;
-            }
 
             for (var i = 0; i < count; i++)
             {
@@ -518,72 +679,135 @@ public abstract partial class CommandStreamCore
 
         public override void ApplyToWorld(World world)
         {
-            var count = _count;
-            var compType = Component<T>.ComponentType;
-            ref var entriesRef = ref MemoryMarshal.GetArrayDataReference(_entries);
-
-            // Set-only fast path: every entry is KindSet, so we skip the per-entry
-            // Kind branch and the lastArch invalidation that Add/Remove require.
             if (_allSetKind)
             {
-                if (_preflightSetRowsValid && _preflightSetArchetype is { } validatedArch)
-                {
-                    if (!validatedArch.TryGetComponentIndex(compType, out var validatedColIdx))
-                    {
-                        throw new InvalidOperationException(
-                            $"Preflight cache lost component {typeof(T).Name}.");
-                    }
+                ApplySetOnly(world);
+                return;
+            }
 
-                    var validatedByteOffset = validatedArch.GetColumnByteOffset(validatedColIdx);
-                    if (!validatedArch.IsChunked)
-                    {
-                        for (var i = 0; i < count; i++)
-                        {
-                            ref var entry = ref Unsafe.Add(ref entriesRef, i);
-                            validatedArch.SetComponentAtFlatNoTrack<T>(
-                                validatedColIdx, validatedByteOffset, _preflightSetRows[i], in entry.Value);
-                        }
-                    }
-                    else
-                    {
-                        for (var i = 0; i < count; i++)
-                        {
-                            ref var entry = ref Unsafe.Add(ref entriesRef, i);
-                            validatedArch.SetComponentAtTypedNoTrack(
-                                validatedColIdx, _preflightSetRows[i], in entry.Value);
-                        }
-                    }
-                    return;
-                }
+            ApplyMixed(world);
+        }
 
-                Archetype? fastArch = null;
-                int fastColIdx = -1;
-                int fastByteOffset = 0;
-                bool fastIsChunked = false;
+        private void ApplySetOnly(World world)
+        {
+            var count = _count;
+            var compType = Component<T>.ComponentType;
 
+            if (_setLocationCacheKind == SetLocationCacheKind.UniformArchetype)
+            {
+                ApplyUniformSetLocationCache(count, compType);
+                return;
+            }
+
+            if (_setLocationCacheKind == SetLocationCacheKind.PerEntryArchetype)
+            {
+                ApplyPerEntrySetLocationCache(count, compType);
+                return;
+            }
+
+            ApplySetOnlyUncached(world, count, compType);
+        }
+
+        private void ApplyUniformSetLocationCache(int count, ComponentType compType)
+        {
+            var arch = _setLocationUniformArchetype ?? throw new InvalidOperationException(
+                $"Set location cache lost component {typeof(T).Name}.");
+            if (!arch.TryGetComponentIndex(compType, out var colIdx))
+                throw new InvalidOperationException(
+                    $"Set location cache lost component {typeof(T).Name}.");
+
+            ref var entriesRef = ref MemoryMarshal.GetArrayDataReference(_entries);
+            ref var rowsRef = ref MemoryMarshal.GetArrayDataReference(_setLocationRows);
+
+            if (!arch.IsChunked)
+            {
+                ref var targetColumn = ref arch.GetFlatComponentRef<T>(colIdx);
                 for (var i = 0; i < count; i++)
                 {
                     ref var entry = ref Unsafe.Add(ref entriesRef, i);
-                    var record = world.GetRecordFast(entry.Entity);
-                    Debug.Assert(record.Archetype is not null && record.Version == entry.Entity.Version,
-                        $"GetRecordFast returned stale or unoccupied record for entity {entry.Entity}.");
-                    var arch = record.Archetype!;
-                    if (arch != fastArch)
-                    {
-                        fastArch = arch;
-                        if (!arch.TryGetComponentIndex(compType, out fastColIdx))
-                            throw new InvalidOperationException(
-                                $"Entity {entry.Entity} does not have component {typeof(T).Name}.");
-                        fastByteOffset = arch.GetColumnByteOffset(fastColIdx);
-                        fastIsChunked = arch.IsChunked;
-                    }
-                    if (!fastIsChunked)
-                        arch.SetComponentAtFlatNoTrack<T>(fastColIdx, fastByteOffset, record.RowIndex, in entry.Value);
-                    else
-                        arch.SetComponentAtTypedNoTrack(fastColIdx, record.RowIndex, in entry.Value);
+                    var row = Unsafe.Add(ref rowsRef, i);
+                    Unsafe.Add(ref targetColumn, row) = entry.Value;
                 }
                 return;
             }
+
+            for (var i = 0; i < count; i++)
+            {
+                ref var entry = ref Unsafe.Add(ref entriesRef, i);
+                var row = Unsafe.Add(ref rowsRef, i);
+                arch.SetComponentAtTypedNoTrack(colIdx, row, in entry.Value);
+            }
+        }
+
+        private void ApplyPerEntrySetLocationCache(int count, ComponentType compType)
+        {
+            Archetype? cachedArch = null;
+            var cachedColIdx = -1;
+            var cachedByteOffset = 0;
+            var cachedIsChunked = false;
+            ref var entriesRef = ref MemoryMarshal.GetArrayDataReference(_entries);
+            ref var rowsRef = ref MemoryMarshal.GetArrayDataReference(_setLocationRows);
+            ref var archetypesRef = ref MemoryMarshal.GetArrayDataReference(_setLocationArchetypes);
+
+            for (var i = 0; i < count; i++)
+            {
+                ref var entry = ref Unsafe.Add(ref entriesRef, i);
+                var arch = Unsafe.Add(ref archetypesRef, i)!;
+                if (arch != cachedArch)
+                {
+                    cachedArch = arch;
+                    if (!arch.TryGetComponentIndex(compType, out cachedColIdx))
+                        throw new InvalidOperationException(
+                            $"Set location cache lost component {typeof(T).Name}.");
+                    cachedByteOffset = arch.GetColumnByteOffset(cachedColIdx);
+                    cachedIsChunked = arch.IsChunked;
+                }
+
+                var row = Unsafe.Add(ref rowsRef, i);
+                if (!cachedIsChunked)
+                    arch.SetComponentAtFlatNoTrack<T>(cachedColIdx, cachedByteOffset, row, in entry.Value);
+                else
+                    arch.SetComponentAtTypedNoTrack(cachedColIdx, row, in entry.Value);
+            }
+        }
+
+        private void ApplySetOnlyUncached(World world, int count, ComponentType compType)
+        {
+            Archetype? fastArch = null;
+            int fastColIdx = -1;
+            int fastByteOffset = 0;
+            bool fastIsChunked = false;
+            ref var entriesRef = ref MemoryMarshal.GetArrayDataReference(_entries);
+
+            for (var i = 0; i < count; i++)
+            {
+                ref var entry = ref Unsafe.Add(ref entriesRef, i);
+                var record = world.GetRecordFast(entry.Entity);
+                Debug.Assert(record.Archetype is not null && record.Version == entry.Entity.Version,
+                    $"GetRecordFast returned stale or unoccupied record for entity {entry.Entity}.");
+                var arch = record.Archetype!;
+                if (arch != fastArch)
+                {
+                    fastArch = arch;
+                    if (!arch.TryGetComponentIndex(compType, out fastColIdx))
+                        throw new InvalidOperationException(
+                            $"Entity {entry.Entity} does not have component {typeof(T).Name}.");
+                    fastByteOffset = arch.GetColumnByteOffset(fastColIdx);
+                    fastIsChunked = arch.IsChunked;
+                }
+
+                if (!fastIsChunked)
+                    arch.SetComponentAtFlatNoTrack<T>(fastColIdx, fastByteOffset, record.RowIndex, in entry.Value);
+                else
+                    arch.SetComponentAtTypedNoTrack(fastColIdx, record.RowIndex, in entry.Value);
+            }
+        }
+
+        private void ApplyMixed(World world)
+        {
+            var count = _count;
+            var compType = Component<T>.ComponentType;
+            ref var entriesRef = ref MemoryMarshal.GetArrayDataReference(_entries);
 
             // Mixed-kind path: full Kind dispatch + archetype cache invalidation.
             Archetype? lastArchMixed = null;

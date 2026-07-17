@@ -2473,6 +2473,60 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
+    public void Submit_destroy_skips_stale_handle_without_destroying_recycled_entity()
+    {
+        using var world = new World();
+        var stale = world.Create(new Position(1, 1));
+        var stream = new CommandStream(world);
+        stream.Destroy(stale);
+
+        world.Destroy(stale);
+        var recycled = world.Create(new Position(2, 2));
+
+        Assert.True(stream.Submit());
+        Assert.True(world.IsAlive(recycled));
+        Assert.Equal(new Position(2, 2), world.Get<Position>(recycled));
+    }
+
+    [Fact]
+    public void Submit_set_only_cache_handles_multiple_archetypes()
+    {
+        using var world = new World();
+        var positionOnly = world.Create(new Position(1, 1));
+        var positionAndVelocity = world.Create(new Position(2, 2), new Velocity(3, 3));
+        var stream = new CommandStream(world);
+
+        stream.Set(positionOnly, new Position(10, 10));
+        stream.Set(positionAndVelocity, new Position(20, 20));
+
+        Assert.True(stream.Submit());
+        Assert.Equal(new Position(10, 10), world.Get<Position>(positionOnly));
+        Assert.Equal(new Position(20, 20), world.Get<Position>(positionAndVelocity));
+    }
+
+    [Fact]
+    public void Submit_set_only_cache_compacts_stale_middle_entry()
+    {
+        using var world = new World();
+        var first = world.Create(new Position(1, 1));
+        var stale = world.Create(new Position(2, 2));
+        var last = world.Create(new Position(3, 3));
+        var stream = new CommandStream(world);
+
+        stream.Set(first, new Position(10, 10));
+        stream.Set(stale, new Position(20, 20));
+        stream.Set(last, new Position(30, 30));
+
+        world.Destroy(stale);
+        var replacement = world.Create(new Position(99, 99));
+
+        Assert.True(stream.Submit());
+        Assert.Equal(new Position(10, 10), world.Get<Position>(first));
+        Assert.Equal(new Position(30, 30), world.Get<Position>(last));
+        Assert.Equal(new Position(99, 99), world.Get<Position>(replacement));
+    }
+
+    [Fact]
     public void Existing_entity_component_liveness_is_decided_when_the_stream_is_consumed()
     {
         var source = new World();
