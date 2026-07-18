@@ -292,12 +292,12 @@ public static class WorldSnapshot
 
     /// <summary>
     /// Computes a deterministic SHA-256 checksum of the live world state.
-    /// Hashes non-empty archetypes in creation order with entity IDs sorted
-    /// within each archetype. Does NOT include empty archetypes or free-list
-    /// state (use <see cref="ComputeCanonicalChecksum"/> for that).
+    /// Hashes non-empty archetypes in signature-sorted order with entity IDs
+    /// sorted within each archetype. Does NOT include empty archetypes or
+    /// free-list state (use <see cref="ComputeCanonicalChecksum"/> for that).
     /// <para/>
     /// Stable across peers driven by the same delta sequence: peers naturally
-    /// share archetype creation order and entity layout. Use to detect state
+    /// share archetype signature order and entity layout. Use to detect state
     /// divergence between lockstep peers.
     /// <para/>
     /// For cross-path comparison (e.g. live world vs snapshot-loaded world),
@@ -434,10 +434,9 @@ public static class WorldSnapshot
 
     private static List<Archetype> CollectPersistedArchetypes(World world)
     {
-        // Archetypes are collected in creation order (world.Archetypes = _archetypeSnapshot)
-        // so that Save→Load preserves the query iteration order (semantic contract).
-        // Empty archetypes are preserved: they affect future query order if entities of that
-        // signature are created later.
+        // Archetypes are collected in signature-sorted order
+        // (world.Archetypes = _archetypeSnapshot, sorted by PublishArchetypeSnapshot).
+        // Empty archetypes are preserved because they affect future query order.
         var archetypes = new List<Archetype>(world.Archetypes.Length);
         foreach (var archetype in world.Archetypes)
         {
@@ -448,7 +447,7 @@ public static class WorldSnapshot
     }
 
     /// <summary>
-    /// Collects non-empty archetypes in creation order for checksum computation.
+    /// Collects non-empty archetypes in signature-sorted order for checksum computation.
     /// Empty archetypes are excluded because they carry no entity data and may be
     /// transient artifacts (e.g. mutation phases during rollback windows) that
     /// shouldn't affect the checksum identity.

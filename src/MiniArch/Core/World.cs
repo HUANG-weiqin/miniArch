@@ -1461,9 +1461,9 @@ public sealed partial class World : IDisposable
 
     /// <summary>
     /// Computes a SHA-256 checksum of live entity state.
-    /// Hashes non-empty archetypes in creation order; entity IDs are sorted
-    /// within each archetype. Does NOT include empty archetypes or free-list
-    /// state. Stable across peers driven by the same delta sequence.
+    /// Hashes non-empty archetypes in signature-sorted order; entity IDs are
+    /// sorted within each archetype. Does NOT include empty archetypes or
+    /// free-list state. Stable across peers driven by the same delta sequence.
     /// For cross-path comparison, use <see cref="CanonicalChecksum"/>.
     /// Returns 32 raw bytes; use
     /// <c>Convert.ToHexString(world.Checksum())</c> for a hex string.

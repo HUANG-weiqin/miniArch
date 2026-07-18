@@ -1,8 +1,8 @@
 ---
 title: Query Invalidation System
 module: MiniArch.Core Query
-description: Two-stage incremental query invalidation — archetype count gate, append-only scan of new archetypes, per-archetype chunk-view-shape refresh
-updated: 2026-07-09
+description: Sorted archetype snapshot + full-scan cache rebuild on count change, per-archetype chunk-view-shape refresh for chunked growth
+updated: 2026-07-19
 ---
 # Query Invalidation System
 
@@ -10,7 +10,7 @@ updated: 2026-07-09
 
 - 检测 Query 匹配的 archetype 集合是否发生变化
 - 决定何时刷新 Query 的快照（archetype + chunk view 列表）
-- 变化时**只扫新增 archetype**（append-only），不重扫已匹配的旧 archetype
+- 变化时**全量重建**而非增量 append（archetype 创建是冷路径，全量扫描可接受）
 
 ## 架构
 
@@ -21,19 +21,17 @@ updated: 2026-07-09
   - **`Query._refreshLock`**：double-check locking 用于并发只读场景
   - **`Query._archetypeExpectedViews[]`**：跟踪每个匹配 archetype 的 chunk view shape（non-chunked = -1；chunked = SegmentCount），检测分段增长和 non-chunked → single-segment chunked 晋升
 
-- **两段式失效**（`src/MiniArch/Core/QueryCache.cs:102-126` `EnsureRefreshed`）：
+- **两段式失效**（`src/MiniArch/Core/QueryCache.cs:105-129` `EnsureRefreshed`）：
   1. 快路径：`_world.ArchetypeCount == _lastArchetypeCount` → 跳过 archetype 匹配阶段
-  2. 慢路径 A：archetype 数量变 → `Refresh()` → `AppendNewArchetypes()`（**只扫 `_lastArchetypeCount` 之后的新 archetype**，append 到现有快照）
+  2. 慢路径 A：archetype 数量变 → `Refresh()` → `RebuildCache()`（**全量扫描 0..N**，archetype 排序插入可能出现在任何位置，不再支持 append-only）
   3. 慢路径 B：已有匹配 archetype 的 view shape 变（chunked 增长，或 non-chunked 晋升为 single-segment chunked）→ `RefreshViewsOnly()`（不重做 match，只重建 ChunkView）
-  4. 如果 archetype 数量变化和已有 view shape 变化同时发生，`AppendNewArchetypes()` 会先检查旧匹配项 shape 漂移，必要时先 `RebuildChunkViews()`，再 append 新匹配 archetype
 
 - 数据流：
-  1. 新 Archetype 创建时 `PublishArchetypeSnapshot()` 原子替换更大的 archetype 数组
+  1. 新 Archetype 创建时 `PublishArchetypeSnapshot()` 按 signature 排序插入（`FindInsertIndex` 二分查找 + 分段 `Array.Copy`），原子替换更大的 archetype 数组
   2. Query 访问 `MatchedArchetypes`/`GetChunkSpan()` 时调用 `EnsureRefreshed()`
   3. `if (_world.ArchetypeCount != _lastArchetypeCount)` 数量变化则进入 `Refresh()`
   4. 已有匹配 archetype 的 view shape 变化也触发 `RefreshViewsOnly()`；注意 non-chunked 和 single-segment chunked 的 view 数都为 1，但 `ChunkView` 内部 segment index 分别是 -1 / 0，必须刷新
-  5. `Refresh()` 下用 lock double-check → `AppendNewArchetypes()`
-  6. `AppendNewArchetypes()` 从 `start = _lastArchetypeCount` 起线性扫描到 `currentArchetypeCount`，匹配的追加进 `_snapshotArchetypes`；append 前会补齐旧匹配项的 view shape 刷新，避免首帧返回 stale ChunkView
+  5. `Refresh()` 下用 lock double-check → `RebuildCache()`（全量扫描 0..N，一次 pass 计数 + 计算 view 数，二次 pass 填充快照，三次 clear trailing）
 
 - Chunk 快照：每个匹配的 archetype 贡献 1 个 chunk（单块模式）或 N 个 chunk（分段模式，每个 Segment 一个 ChunkView）。
 
