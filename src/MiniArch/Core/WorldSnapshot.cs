@@ -453,8 +453,9 @@ public static class WorldSnapshot
     /// shouldn't affect the checksum identity.
     /// <para/>
     /// Unlike Save (which uses <see cref="CollectPersistedArchetypes"/>), empty
-    /// archetypes are filtered here. This is necessary because <see cref="RestoreState"/>
-    /// does not remove mutation-created empty archetypes, so including them would
+    /// archetypes are filtered here. This is necessary because
+    /// <c>World.RestoreState</c> does not remove mutation-created empty archetypes,
+    /// so including them would
     /// cause pre-capture and post-restore checksums to differ.
     /// </summary>
     private static List<Archetype> CollectChecksumArchetypes(World world)
