@@ -137,20 +137,19 @@ public sealed partial class World
         // This eliminates order sensitivity to Clone (which may skip empty
         // archetypes), RestoreState (which leaves mutation-created artifacts),
         // and any other path that produces a different creation order.
-        while (true)
-        {
-            var snapshot = Volatile.Read(ref _archetypeSnapshot);
-            var idx = FindInsertIndex(archetype.Signature, snapshot.AsSpan(0, snapshot.Length));
-            var updated = new Archetype[snapshot.Length + 1];
-            Array.Copy(snapshot, 0, updated, 0, idx);
-            Array.Copy(snapshot, idx, updated, idx + 1, snapshot.Length - idx);
-            updated[idx] = archetype;
-            AssertSnapshotSorted(updated);
-            if (ReferenceEquals(Interlocked.CompareExchange(ref _archetypeSnapshot, updated, snapshot), snapshot))
-            {
-                return;
-            }
-        }
+        //
+        // Volatile.Write is sufficient here: structural mutations are single-
+        // threaded, so there is never concurrent contention on the snapshot
+        // array. Volatile.Write paired with Volatile.Read on the consumer side
+        // guarantees release/acquire semantics without the misleading CAS loop.
+        var snapshot = Volatile.Read(ref _archetypeSnapshot);
+        var idx = FindInsertIndex(archetype.Signature, snapshot.AsSpan(0, snapshot.Length));
+        var updated = new Archetype[snapshot.Length + 1];
+        Array.Copy(snapshot, 0, updated, 0, idx);
+        Array.Copy(snapshot, idx, updated, idx + 1, snapshot.Length - idx);
+        updated[idx] = archetype;
+        AssertSnapshotSorted(updated);
+        Volatile.Write(ref _archetypeSnapshot, updated);
     }
 
     [Conditional("DEBUG")]
