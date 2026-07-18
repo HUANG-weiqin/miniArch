@@ -16,12 +16,10 @@ internal static class WorldClone
 
         foreach (var srcArch in source.Archetypes)
         {
-            if (srcArch.EntityCount == 0)
-            {
-                continue;
-            }
-
             var dstArch = target.GetOrCreateArchetype(srcArch.Signature);
+
+            if (srcArch.EntityCount == 0)
+                continue; // created but empty —archetype order preserved
 
             var entities = srcArch.GetEntities();
             var startRow = dstArch.AllocateRows(entities.Length);

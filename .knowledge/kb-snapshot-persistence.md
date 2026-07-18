@@ -2,7 +2,7 @@
 title: Snapshot Persistence
 module: MiniArch.Core Snapshot
 description: Full-world snapshot save/load design for unmanaged components (WorldSnapshot.Save/Load, Clone, CaptureState/RestoreState), plus Checksum double mode
-updated: 2026-07-15
+updated: 2026-07-19
 ---
 # Snapshot Persistence
 
@@ -71,8 +71,8 @@ world.RestoreState(ring[k+3]); // 可继续乱序 restore
 
 ## Checksum 双模式
 
-- **`world.Checksum()`**（`World.cs:1316` → `WorldSnapshot.ComputeChecksum`, `WorldSnapshot.cs:221`）：快，依赖同构造路径（archetype 顺序、swap-remove 历史一致）。输入：所有 slot version + 非空 archetype + hierarchy。不包含 free list。用于同 delta 序列驱动的 peer 间检测分叉。
-- **`world.CanonicalChecksum()`**（`World.cs:1325` → `WorldSnapshot.ComputeCanonicalChecksum`, `WorldSnapshot.cs:300`）：慢，逻辑等价的世界在不同构造路径下产同一 hash。输入：仅活实体（id+version+组件）+ hierarchy + free list。排序后的规范输出。用于不同路径（replay / snapshot-load / 手工构造）的世界间比较。
+- **`world.Checksum()`**（`World.cs:1316` → `WorldSnapshot.ComputeChecksum`）：快，**非空 archetype 按创建顺序**；entry Id 在 archetype 内排序；输入：所有 slot version + 非空 archetype data + hierarchy；**不含 free list**。用于同 delta 序列驱动的 peer 间检测分叉。
+- **`world.CanonicalChecksum()`**（`World.cs:1325` → `WorldSnapshot.ComputeCanonicalChecksum`）：慢，**所有活 entity 按 Id 全局排序**。输入：仅活 entity（id+version+组件）+ hierarchy + **free list**。用于跨不同构造路径（replay / snapshot-load / 手工构造 / Clone）的世界间逻辑等价比较。
 
 ### Padding 字节安全
 Archetype 存储使用 `GC.AllocateArray`（零初始化）分配，组件 struct padding 确定为 0，避免跨 peer 因未初始化内存产生 hash 差异。
@@ -121,7 +121,11 @@ v3 格式仍可读且跳过 CRC 校验。
 - 存档写组件类型的稳定字符串标识，不写运行时 `ComponentType.Value`
 - 存档写 entity slot versions（不只活体 entity version）
 - load 不能通过 `Add/Set/Remove` 回放世界——那会破坏 chunk 边界
-- **Save 字节规范化（2026-06-21）**：`CollectPersistedArchetypes` 按 signature 字典序排序 archetype；`WriteArchetype` 内按 entity.Id 升序排 row index，column payload 同步按排序后 row 顺序写。这样 Save 字节不再依赖 archetype 字典迭代顺序和 archetype 内部 row 顺序（受 swap-remove 影响），可在"逻辑等价但内部路径不同"的两个 world 上产生相同字节 → SHA256/XXHash64 等可用作 client-server diverge 校验。Load 不变（按字节顺序恢复，自然规范化）。冷路径性能略降（每个 component 逐 row 拷贝而非批量写），但 Save 不在游戏循环热路径上。
+- **Save 字节规范化（2026-07-19 修订）**：`WriteArchetype` 内按 entity.Id 升序排 row index，column payload 同步按排序后 row 顺序写，使 Save 字节不再依赖 archetype 内部 row 顺序（受 swap-remove 影响）。但 `CollectPersistedArchetypes` **不再**按 signature 排序 archetype——archetype 以创建顺序保存，使 Save→Load 后 query 迭代顺序不变（query 顺序是语义契约）。空 archetype 也保留，避免未来创建该签名的实体时改变 query 顺序。  
+  - `ComputeChecksum` 独立走 `CollectChecksumArchetypes`：过滤空 archetype（含 transient mutation 产物），但**不排序**（因为 `WorldClone.Clone` 也已保留空 archetype 顺序，checksum 不再需要为构造路径差异做归一化）。  
+  - `CanonicalChecksum` 负责跨不同构造路径的逻辑等价比较，见本章 Checksum 双模式段。  
+  - `WorldClone.Clone` 同步修复：不再跳过空 archetype，保证 clone 后的 world 与源 world 的 archetype 顺序一致。  
+  - 见 `kb-core-ecs.md` §Query 迭代顺序契约。
 
 ## 认知模型
 

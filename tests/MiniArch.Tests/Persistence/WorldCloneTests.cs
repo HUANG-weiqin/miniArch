@@ -189,6 +189,41 @@ public sealed class WorldCloneTests
         Assert.NotNull(cloned);
     }
 
+    [Fact]
+    public void Clone_preserves_empty_archetypes_and_their_creation_order()
+    {
+        var world = new World();
+
+        // Create three archetypes, empty the middle one.
+        var e0 = world.Create(new Position(1, 2));
+        var e1 = world.Create(new Velocity(3, 4));
+        var e2 = world.Create(new Health(5));
+        world.Destroy(e1); // {Velocity} becomes empty
+
+        var cloned = world.Clone();
+
+        // Clone must preserve all archetypes (including empty) in the same order.
+        Assert.Equal(world.Archetypes.Length, cloned.Archetypes.Length);
+        for (var i = 0; i < world.Archetypes.Length; i++)
+        {
+            var srcSig = world.Archetypes[i].Signature.AsSpan();
+            var dstSig = cloned.Archetypes[i].Signature.AsSpan();
+            Assert.True(srcSig.SequenceEqual(dstSig),
+                $"Archetype at index {i} differs after Clone.");
+        }
+
+        // Creating a new {Velocity} entity in the clone should restore the same
+        // query order as if the original world had never destroyed e1.
+        var newVy = cloned.Create(new Velocity(6, 7));
+        Assert.True(cloned.IsAlive(newVy));
+
+        // Entity data should match.
+
+        // Sanity: the empty archetype was preserved and non-empty ones copied.
+        Assert.Equal(new Position(1, 2), GetComponent<Position>(cloned, e0));
+        Assert.Equal(new Health(5), GetComponent<Health>(cloned, e2));
+    }
+
     // BUG ( witness for ReserveRows deadlock, via the public World.Clone API ):
     // Clone() calls dstArch.ReserveRows(entities.Length) on a freshly created
     // archetype whose _capacity == chunkCapacity (default 128). For a component

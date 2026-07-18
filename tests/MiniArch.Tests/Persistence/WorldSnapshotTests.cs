@@ -240,6 +240,146 @@ public sealed class WorldSnapshotTests
     }
 
     [Fact]
+    public void Save_load_preserves_archetype_creation_order()
+    {
+        // Archetype creation order must be preserved across Save→Load because
+        // query iteration order depends on archetype creation order (semantic contract).
+        // This test uses signatures where sort-by-ComponentType.Value differs from
+        // creation order —a real test that the old sort-by-signature behavior would fail.
+        var world = new World();
+
+        // Position=0, Velocity=1, Health=2 (registered by prior tests in this class)
+        // Creation order: {Position, Health} → {Position, Velocity}
+        // Sort by Value:  {Position, Velocity}[0,1] before {Position, Health}[0,2]
+        world.Create(new Position(10, 20), new Health(100));
+        world.Create(new Position(30, 40), new Velocity(1, 2));
+
+        // Record original archetype signatures in query iteration order.
+        var desc = new QueryDescription().With<Position>();
+        var originalChunks = world.Query(in desc).GetChunks();
+        var originalCount = originalChunks.Length;
+
+        using var stream = new MemoryStream();
+        WorldSnapshot.Save(stream, world);
+        stream.Position = 0;
+        var loaded = WorldSnapshot.Load(stream);
+
+        var loadedChunks = loaded.Query(in desc).GetChunks();
+        Assert.Equal(originalCount, loadedChunks.Length);
+
+        // Each chunk's Archetype.Signature must match in order.
+        for (var i = 0; i < originalCount; i++)
+        {
+            var origSig = originalChunks[i].Archetype.Signature.AsSpan();
+            var loadedSig = loadedChunks[i].Archetype.Signature.AsSpan();
+            Assert.True(origSig.SequenceEqual(loadedSig),
+                $"Archetype at index {i} differs after Save→Load.");
+        }
+    }
+
+    [Fact]
+    public void Save_load_preserves_empty_archetypes()
+    {
+        var world = new World();
+
+        // Create three distinct signatures. Destroy all entities of one to
+        // create an empty archetype. Empty archetypes must survive Save→Load
+        // so that future creation of that signature doesn't change query order.
+        world.Create(new Position(1, 2));     // archetype {Position}
+        world.Create(new Health(3));           // archetype {Health}
+        var temp = world.Create(new Velocity(4, 5)); // archetype {Velocity}
+        world.Destroy(temp);                   // {Velocity} becomes empty
+
+        // Capture original signatures at each position (store as arrays for comparison)
+        var origArchs = world.Archetypes;
+        Assert.Equal(3, origArchs.Length);
+        var origSigs = new ComponentType[3][];
+        for (var i = 0; i < 3; i++)
+            origSigs[i] = origArchs[i].Signature.AsSpan().ToArray();
+
+        // Sanity: the last archetype ({Velocity}) is empty
+        Assert.Equal(0, origArchs[2].EntityCount);
+        Assert.True(origArchs[0].EntityCount > 0);
+        Assert.True(origArchs[1].EntityCount > 0);
+
+        using var stream = new MemoryStream();
+        WorldSnapshot.Save(stream, world);
+        stream.Position = 0;
+        var loaded = WorldSnapshot.Load(stream);
+
+        // All three archetypes exist at the same positions
+        var loadedArchs = loaded.Archetypes;
+        Assert.Equal(3, loadedArchs.Length);
+        for (var i = 0; i < 3; i++)
+        {
+            Assert.True(((ReadOnlySpan<ComponentType>)origSigs[i]).SequenceEqual(loadedArchs[i].Signature.AsSpan()),
+                $"Archetype at index {i} has different signature after Save→Load.");
+            Assert.Equal(origArchs[i].EntityCount, loadedArchs[i].EntityCount);
+        }
+
+        // Creating a new entity with the empty archetype's signature should
+        // preserve query order: {Position} → {Velocity} → {Health}.
+        var newVy = loaded.Create(new Velocity(6, 7));
+        var query = loaded.Query(new QueryDescription().With<Velocity>());
+        var chunks = query.GetChunks();
+        Assert.Equal(1, chunks.Length);
+        Assert.Equal(new Velocity(6, 7), GetComponent<Velocity>(loaded, newVy));
+    }
+
+    [Fact]
+    public void Save_is_idempotent_after_round_trip_with_empty_archetypes()
+    {
+        var world = new World();
+        var e0 = world.Create(new Position(10, 20));
+        var e1 = world.Create(new Velocity(30, 40));
+        world.Destroy(e1); // {Velocity} becomes empty
+
+        using var stream1 = new MemoryStream();
+        WorldSnapshot.Save(stream1, world);
+
+        stream1.Position = 0;
+        var loaded = WorldSnapshot.Load(stream1);
+
+        using var stream2 = new MemoryStream();
+        WorldSnapshot.Save(stream2, loaded);
+
+        // Second save must be byte-identical to the first despite empty archetype.
+        Assert.Equal(stream1.ToArray(), stream2.ToArray());
+    }
+
+    [Fact]
+    public void Snapshot_with_only_empty_archetypes_round_trips()
+    {
+        var world = new World();
+
+        // Create then destroy each entity so every archetype is empty.
+        var a = world.Create(new Position(1, 2));
+        var b = world.Create(new Velocity(3, 4));
+        var c = world.Create(new Health(5));
+        world.Destroy(a);
+        world.Destroy(b);
+        world.Destroy(c);
+
+        Assert.Equal(3, world.Archetypes.Length);
+        Assert.All(world.Archetypes, a => Assert.Equal(0, a.EntityCount));
+
+        using var stream = new MemoryStream();
+        WorldSnapshot.Save(stream, world);
+        stream.Position = 0;
+        var loaded = WorldSnapshot.Load(stream);
+
+        Assert.Equal(3, loaded.Archetypes.Length);
+        for (var i = 0; i < 3; i++)
+        {
+            Assert.Equal(0, loaded.Archetypes[i].EntityCount);
+            Assert.True(
+                world.Archetypes[i].Signature.AsSpan().SequenceEqual(
+                    loaded.Archetypes[i].Signature.AsSpan()),
+                $"Archetype {i} signature differs after round-trip.");
+        }
+    }
+
+    [Fact]
     public void Checksum_is_stable_for_identical_worlds_and_differs_on_mutation()
     {
         var world = new World();

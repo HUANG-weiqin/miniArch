@@ -2,12 +2,30 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-07-15
+updated: 2026-07-19
 ---
 # Knowledge Base Changelog
 
 > 这个页面只记录**重大架构变更和知识库校准事件**，供追溯。
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
+
+## 2026-07-19 Save archetype 排序违反 query 顺序契约 + Clone 跳过空 archetype
+
+### 问题
+`WorldSnapshot.Save` 的 `CollectPersistedArchetypes` 按 signature 排序+过滤空 archetype，导致：
+- Save→Load 后 query 迭代顺序变为签名字典序（违反语义承诺）
+- 空 archetype 丢失，影响未来实体创建的 query 顺序
+
+### 修复（3 文件 + 3 测试 + 文档）
+- `WorldClone.Clone`：不再跳过空 archetype（根因）
+- `WorldSnapshot.CollectPersistedArchetypes`（Save）：去排序 + 去空过滤
+- `WorldSnapshot.CollectChecksumArchetypes`（Checksum 用）：仅过滤空，不排序
+- `CompareArchetypesBySignature` 删除（再无使用者）
+- `kb-snapshot-persistence.md` + `kb-code-review-findings.md` + `kb-changelog.md` 更新
+- 新增 `Save_load_preserves_archetype_creation_order`、`Save_load_preserves_empty_archetypes`、`Clone_preserves_empty_archetypes_and_their_creation_order`
+
+### 验证
+1046 全绿，snapshot/clone/checksum/order 全部回归通过。
 
 ## 2026-07-09 M6 — YAGNI / Dead Code Deletion Round
 

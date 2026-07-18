@@ -291,17 +291,24 @@ public static class WorldSnapshot
     }
 
     /// <summary>
-    /// Computes a deterministic SHA-256 checksum of the world state.
-    /// For lockstep scenarios (same delta sequence replayed on all peers)
-    /// this is stable: archetype creation order, swap-remove history, and
-    /// slot allocation all match between peers driven by identical inputs.
-    /// Use to detect state divergence between peers.
+    /// Computes a deterministic SHA-256 checksum of the live world state.
+    /// Hashes non-empty archetypes in creation order with entity IDs sorted
+    /// within each archetype. Does NOT include empty archetypes or free-list
+    /// state (use <see cref="ComputeCanonicalChecksum"/> for that).
+    /// <para/>
+    /// Stable across peers driven by the same delta sequence: peers naturally
+    /// share archetype creation order and entity layout. Use to detect state
+    /// divergence between lockstep peers.
+    /// <para/>
+    /// For cross-path comparison (e.g. live world vs snapshot-loaded world),
+    /// use <see cref="ComputeCanonicalChecksum"/> which sorts all entities by
+    /// id globally and includes the free list.
     /// </summary>
     public static byte[] ComputeChecksum(World world)
     {
         ArgumentNullException.ThrowIfNull(world);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var persisted = CollectPersistedArchetypes(world);
+        var persisted = CollectChecksumArchetypes(world);
 
         AppendInt(hash, world.EntitySlotCount);
         AppendInt(hash, persisted.Count);
@@ -370,11 +377,15 @@ public static class WorldSnapshot
 
     /// <summary>
     /// Computes a canonical SHA-256 checksum of the world's <b>logical state</b>:
-    /// alive entities (id + version), their components (type + value),
-    /// hierarchy relations, and free-list entries (id + version). Two worlds with
-    /// the same logical content produce the same hash regardless of internal
-    /// layout, slot count, or archetype organisation. Slower than
-    /// <see cref="ComputeChecksum"/>.
+    /// alive entities (id + version sorted globally by entity.Id), their
+    /// components (type + value), hierarchy relations, and free-list entries
+    /// (id + version). Two worlds with the same logical content produce the
+    /// same hash regardless of internal layout, slot count, archetype order,
+    /// or empty archetypes. Slower than <see cref="ComputeChecksum"/>.
+    /// <para/>
+    /// Use this when comparing worlds that arrived at the same logical state
+    /// via different construction paths (e.g. live world vs snapshot-loaded
+    /// world, or two sessions with different entity creation histories).
     /// </summary>
     public static byte[] ComputeCanonicalChecksum(World world)
     {
@@ -423,30 +434,41 @@ public static class WorldSnapshot
 
     private static List<Archetype> CollectPersistedArchetypes(World world)
     {
-        var archetypes = new List<Archetype>();
+        // Archetypes are collected in creation order (world.Archetypes = _archetypeSnapshot)
+        // so that Save→Load preserves the query iteration order (semantic contract).
+        // Empty archetypes are preserved: they affect future query order if entities of that
+        // signature are created later.
+        var archetypes = new List<Archetype>(world.Archetypes.Length);
         foreach (var archetype in world.Archetypes)
         {
-            if (archetype.EntityCount > 0)
-            {
-                archetypes.Add(archetype);
-            }
+            archetypes.Add(archetype);
         }
 
-        archetypes.Sort(CompareArchetypesBySignature);
         return archetypes;
     }
 
-    private static int CompareArchetypesBySignature(Archetype a, Archetype b)
+    /// <summary>
+    /// Collects non-empty archetypes in creation order for checksum computation.
+    /// Empty archetypes are excluded because they carry no entity data and may be
+    /// transient artifacts (e.g. mutation phases during rollback windows) that
+    /// shouldn't affect the checksum identity.
+    /// <para/>
+    /// Unlike Save (which uses <see cref="CollectPersistedArchetypes"/>), empty
+    /// archetypes are filtered here. This is necessary because <see cref="RestoreState"/>
+    /// does not remove mutation-created empty archetypes, so including them would
+    /// cause pre-capture and post-restore checksums to differ.
+    /// </summary>
+    private static List<Archetype> CollectChecksumArchetypes(World world)
     {
-        var sa = a.Signature.AsSpan();
-        var sb = b.Signature.AsSpan();
-        var n = Math.Min(sa.Length, sb.Length);
-        for (var i = 0; i < n; i++)
+        var archetypes = new List<Archetype>(world.Archetypes.Length);
+        foreach (var archetype in world.Archetypes)
         {
-            var cmp = sa[i].Value.CompareTo(sb[i].Value);
-            if (cmp != 0) return cmp;
+            if (archetype.EntityCount == 0)
+                continue;
+            archetypes.Add(archetype);
         }
-        return sa.Length.CompareTo(sb.Length);
+
+        return archetypes;
     }
 
     private static List<SchemaEntry> BuildSchemaEntries(World world, IReadOnlyList<Archetype> archetypes)

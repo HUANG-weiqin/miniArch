@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 审阅前必读的当前风险、已修复真 bug 回归索引与已排除非 bug 猜想；只保留结论和验证入口
-updated: 2026-07-15
+updated: 2026-07-19
 ---
 # 代码审阅发现
 
@@ -70,6 +70,14 @@ CommandStream 的 pending/component/hierarchy/async preflight 已修复已知“
 ### 已删除子系统的历史 bug（B7-B16）
 
 B7-B16 属于旧 `ChangeQuery` / `Track().Capture().Previous()` / shared tracker 路径。该 API 和相关 registry/dispatch 文件已删除，当前 Watch 是独立 `Snapshot(World)` → `Diff(World)` pull 模型。这些条目不再作为当前代码的审阅依据；当前覆盖看 `WatchApiTests`、`WatchProjectedTests`、`ChangeTrackingSnapshotTests` 与 `CrossFeatureParityTests`。
+
+### 2026-07-19 Save archetype 排序违反 query 顺序契约 + Clone 跳过空 archetype
+
+| 回归测试 | 问题 | 修复 |
+|---------|------|------|
+| `Save_load_preserves_archetype_creation_order` | `CollectPersistedArchetypes` 按 signature 排序绕过空 archetype，导致 Save→Load 后 query 迭代顺序改变（违反语义承诺）。空 archetype 也被丢弃，影响未来实体创建的 query 顺序 | 去掉排序和空过滤。`ComputeChecksum` 独立走 `CollectChecksumArchetypes`（仅过滤空不做排序） |
+| `Save_load_preserves_empty_archetypes` | 同上 | 同上 |
+| `Clone_preserves_empty_archetypes_and_their_creation_order` | `WorldClone.Clone` 跳过空 archetype，导致 clone 后的 world 与源 world 的 archetype 快照不同，这是 Save 排序的根本原因 | Clone 不再跳过空 archetype：对所有源 archetype 都调用 `GetOrCreateArchetype`，仅在 `EntityCount==0` 时跳过数据拷贝 |
 
 ## 已验证安全的模式（非 bug）
 

@@ -1460,9 +1460,12 @@ public sealed partial class World : IDisposable
     private readonly record struct CloneWork(Entity Source, Entity CloneEntity);
 
     /// <summary>
-    /// Computes a SHA-256 checksum of the entire world state.
-    /// Stable across peers driven by the same delta sequence — use to detect
-    /// lockstep divergence. Returns 32 raw bytes; use
+    /// Computes a SHA-256 checksum of live entity state.
+    /// Hashes non-empty archetypes in creation order; entity IDs are sorted
+    /// within each archetype. Does NOT include empty archetypes or free-list
+    /// state. Stable across peers driven by the same delta sequence.
+    /// For cross-path comparison, use <see cref="CanonicalChecksum"/>.
+    /// Returns 32 raw bytes; use
     /// <c>Convert.ToHexString(world.Checksum())</c> for a hex string.
     /// </summary>
     public byte[] Checksum() => Core.WorldSnapshot.ComputeChecksum(this);
@@ -1470,8 +1473,9 @@ public sealed partial class World : IDisposable
     /// <summary>
     /// Computes a canonical SHA-256 checksum that is identical for any two
     /// worlds with the same logical state, regardless of how they were built
-    /// (replay, snapshot-load, or manual construction). Slower than
-    /// <see cref="Checksum"/>; use only for comparing worlds from different
+    /// (replay, snapshot-load, manual construction, or Clone). Sorts all
+    /// entities globally by Id, includes free-list entries. Slower than
+    /// <see cref="Checksum"/>; use for comparing worlds from different
     /// construction paths (e.g. client snapshot vs server live state).
     /// </summary>
     public byte[] CanonicalChecksum() => Core.WorldSnapshot.ComputeCanonicalChecksum(this);
