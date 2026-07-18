@@ -121,11 +121,9 @@ v3 格式仍可读且跳过 CRC 校验。
 - 存档写组件类型的稳定字符串标识，不写运行时 `ComponentType.Value`
 - 存档写 entity slot versions（不只活体 entity version）
 - load 不能通过 `Add/Set/Remove` 回放世界——那会破坏 chunk 边界
-- **Save 字节规范化（2026-07-19 修订）**：`WriteArchetype` 内按 entity.Id 升序排 row index，column payload 同步按排序后 row 顺序写，使 Save 字节不再依赖 archetype 内部 row 顺序（受 swap-remove 影响）。但 `CollectPersistedArchetypes` **不再**按 signature 排序 archetype——archetype 以创建顺序保存，使 Save→Load 后 query 迭代顺序不变（query 顺序是语义契约）。空 archetype 也保留，避免未来创建该签名的实体时改变 query 顺序。  
-  - `ComputeChecksum` 独立走 `CollectChecksumArchetypes`：过滤空 archetype（含 transient mutation 产物），但**不排序**（因为 `WorldClone.Clone` 也已保留空 archetype 顺序，checksum 不再需要为构造路径差异做归一化）。  
-  - `CanonicalChecksum` 负责跨不同构造路径的逻辑等价比较，见本章 Checksum 双模式段。  
-  - `WorldClone.Clone` 同步修复：不再跳过空 archetype，保证 clone 后的 world 与源 world 的 archetype 顺序一致。  
-  - 见 `kb-core-ecs.md` §Query 迭代顺序契约。
+- **Save 字节规范化（2026-07-19 排序插入）**：`WriteArchetype` 内按 entity.Id 升序排 row index，column payload 同步按排序后 row 顺序写。archetype 本身通过 `PublishArchetypeSnapshot` 按 signature 排序插入（见 `kb-core-ecs.md` §Query 迭代顺序契约），因此 `_archetypeSnapshot` 本身就是按 `ComponentType.Value` 排序的——Save 自然产生规范化输出，无需额外排序。空 archetype 保留，且因排序插入，RestoreState 遗留的空 archetype 自动出现在正确签名位置。  
+  - `ComputeChecksum` 独立走 `CollectChecksumArchetypes`：过滤空 archetype（RestoreState 瞬态产物），不排序。  
+  - `CanonicalChecksum` 负责跨不同构造路径的逻辑等价比较，见 Checksum 双模式段。
 
 ## 认知模型
 

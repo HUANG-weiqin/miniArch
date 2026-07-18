@@ -6,7 +6,7 @@ namespace MiniArchTests.Core;
 /// <summary>
 /// 验证 Query 迭代顺序契约：
 ///
-/// 1. Archetype 顺序 = archetype 创建顺序
+/// 1. Archetype 顺序 = 按 signature（ComponentType.Value）排序
 /// 2. Entity 顺序（同一 archetype 内） = entity 存储顺序（append 到末尾；删除用 swap-remove）
 /// 3. 所有访问路径（foreach / GetChunks / GetArchetypeSpan）产生一致顺序
 /// 4. 给定相同输入序列，顺序是确定性的
@@ -319,8 +319,8 @@ public sealed class QueryOrderingTests
         // Archetype A: {Position} — a0, then b1 (appended)
 
         var query = world.Query(new QueryDescription().With<Position>());
-        // Order: B first (b0), then A (a0, b1)
-        Assert.Equal([b0, a0, b1], CollectEntities(query));
+        // Order (sorted by signature): {Position} (A: a0, b1), then {Position, Velocity} (B: b0)
+        Assert.Equal([a0, b1, b0], CollectEntities(query));
     }
 
     // ──────────────────────────────────────────────

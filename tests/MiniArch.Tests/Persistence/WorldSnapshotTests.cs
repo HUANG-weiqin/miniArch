@@ -240,17 +240,15 @@ public sealed class WorldSnapshotTests
     }
 
     [Fact]
-    public void Save_load_preserves_archetype_creation_order()
+    public void Save_load_preserves_archetype_signature_order()
     {
-        // Archetype creation order must be preserved across Save→Load because
-        // query iteration order depends on archetype creation order (semantic contract).
-        // This test uses signatures where sort-by-ComponentType.Value differs from
-        // creation order —a real test that the old sort-by-signature behavior would fail.
+        // Query iteration order = archetype signature order (sorted by
+        // ComponentType.Value), not creation order. Save→Load must preserve
+        // this sorted order.
         var world = new World();
 
-        // Position=0, Velocity=1, Health=2 (registered by prior tests in this class)
-        // Creation order: {Position, Health} → {Position, Velocity}
-        // Sort by Value:  {Position, Velocity}[0,1] before {Position, Health}[0,2]
+        // Create archetypes in non-sorted order. After sorted insertion,
+        // they'll be in signature order regardless of creation sequence.
         world.Create(new Position(10, 20), new Health(100));
         world.Create(new Position(30, 40), new Velocity(1, 2));
 
@@ -290,35 +288,40 @@ public sealed class WorldSnapshotTests
         var temp = world.Create(new Velocity(4, 5)); // archetype {Velocity}
         world.Destroy(temp);                   // {Velocity} becomes empty
 
-        // Capture original signatures at each position (store as arrays for comparison)
+        // Archetypes are now sorted by signature. Capture original state.
         var origArchs = world.Archetypes;
         Assert.Equal(3, origArchs.Length);
-        var origSigs = new ComponentType[3][];
-        for (var i = 0; i < 3; i++)
-            origSigs[i] = origArchs[i].Signature.AsSpan().ToArray();
 
-        // Sanity: the last archetype ({Velocity}) is empty
-        Assert.Equal(0, origArchs[2].EntityCount);
-        Assert.True(origArchs[0].EntityCount > 0);
-        Assert.True(origArchs[1].EntityCount > 0);
+        // Verify the {Velocity} archetype is empty.
+        var emptySig = ComponentRegistry.Shared.GetOrCreate<Velocity>();
+        var origEmptyArch = origArchs.FirstOrDefault(a =>
+            a.Signature.AsSpan().Length == 1 && a.Signature.AsSpan()[0] == emptySig);
+        Assert.NotNull(origEmptyArch);
+        Assert.Equal(0, origEmptyArch.EntityCount);
+
+        // Count non-empty archetypes.
+        var nonEmpty = 0;
+        foreach (var a in origArchs)
+            if (a.EntityCount > 0) nonEmpty++;
+        Assert.Equal(2, nonEmpty);
 
         using var stream = new MemoryStream();
         WorldSnapshot.Save(stream, world);
         stream.Position = 0;
         var loaded = WorldSnapshot.Load(stream);
 
-        // All three archetypes exist at the same positions
+        // All three archetypes still exist, in the same sorted order.
         var loadedArchs = loaded.Archetypes;
         Assert.Equal(3, loadedArchs.Length);
         for (var i = 0; i < 3; i++)
         {
-            Assert.True(((ReadOnlySpan<ComponentType>)origSigs[i]).SequenceEqual(loadedArchs[i].Signature.AsSpan()),
+            Assert.True(origArchs[i].Signature.AsSpan().SequenceEqual(loadedArchs[i].Signature.AsSpan()),
                 $"Archetype at index {i} has different signature after Save→Load.");
             Assert.Equal(origArchs[i].EntityCount, loadedArchs[i].EntityCount);
         }
 
         // Creating a new entity with the empty archetype's signature should
-        // preserve query order: {Position} → {Velocity} → {Health}.
+        // restore its entity count to 1.
         var newVy = loaded.Create(new Velocity(6, 7));
         var query = loaded.Query(new QueryDescription().With<Velocity>());
         var chunks = query.GetChunks();

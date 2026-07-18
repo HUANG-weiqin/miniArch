@@ -130,8 +130,9 @@ updated: 2026-07-15
 - **Edge cache 内联**：增删目标缓存直接挂在 Archetype 上（`Archetype?[]` 按 componentId 直索引），无需独立 ArchetypeEdges 对象
 - **迁移拷贝内联**：`CopySharedComponentsFrom` 直接在 Archetype 上实现，无需 MigrationPlan class
 - `EntityCount` 在所有构建配置下都只统计 **alive entity**；reserved pending id 不计入结果
-- **Query 迭代顺序契约**（2026-07-11 提升为语义承诺）：
-  - **Archetype 顺序** = archetype 创建顺序（首批匹配的 archetype 排在前面）
+- **Query 迭代顺序契约**（2026-07-19 由"创建顺序"升级为"签名排序"）：
+  - **Archetype 顺序** = 按 **Signature 中 ComponentType.Value 字典序**排序，前缀相同则短签名在前。`PublishArchetypeSnapshot` 执行排序插入（O(N) 数组拷贝 + O(log N) 二分查找）。archetype 创建是冷路径，排序开销可忽略。
+  - 该顺序消除了对创建历史的依赖，使 Save→Load、Clone、RestoreState 后的 query 顺序完全由当前签名集合决定。
   - **Entity 顺序（同一 archetype 内）** = entity 存储顺序（append 到末尾；删除用 swap-remove，末尾 survivor 补充到被删位置）
   - **所有访问路径一致**：`foreach`、`GetChunks()` → `ChunkView.GetEntities()`、`GetArchetypeSpan()` → `archetype.GetEntities()` 三者顺序一致
   - **确定性**：给定相同输入序列，顺序字节级一致。由 `QueryOrderingTests`（14 个测试）守护

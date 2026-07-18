@@ -174,20 +174,22 @@ updated: 2026-07-11
 ### 10. Query 迭代顺序确定性
 
 **机制**：Query 迭代顺序由存储物理决定：
-- `QueryCache._snapshotArchetypes` 按 archetype 创建顺序 append（`AppendNewArchetypes` 从 `_lastArchetypeCount` 往后只增量扫描）
+- `_archetypeSnapshot` 按 signature 排序（`PublishArchetypeSnapshot` 执行排序插入，`FindInsertIndex` 二分查找插入点），不再依赖创建历史。这消除了 Save→Load、Clone、RestoreState 等路径的顺序差异。
+- `QueryCache.RebuildCache` 全量扫描 `_world.Archetypes`，按排序后的世界顺序重建匹配列表和 chunk views。
 - 同一 archetype 内 entity 按存储顺序（`_entities[]` 或 segment 内的 `Entities[]`）遍历
 - 新 entity append 到末尾；entity 删除用 swap-remove（末尾 survivor 补充到被删位置），reorder 本身确定性
 - 所有访问路径（foreach / GetChunks / GetArchetypeSpan）共享同一底层快照数组
 
-**保证**：给定相同结构变更序列，entity 物理排列完全确定 → query 遍历顺序完全确定。
+**保证**：给定相同结构变更序列，entity 物理排列完全确定 → query 遍历顺序完全确定。且与创建历史解耦——仅由当前组件签名集合决定。
 
 **代码位置**：
-- `QueryCache.cs:193-263`（AppendNewArchetypes——增量 append）
+- `World.QueryCache.cs:132-146`（PublishArchetypeSnapshot——排序插入）
+- `QueryCache.cs:194-264`（RebuildCache——全量重建）
 - `Archetype.Storage.cs:222-227`（AddEntity——append 到末尾）
 - `Archetype.Storage.cs:301-369`（RemoveAt——swap-remove，确定性重排）
 
 **测试链接**：
-- `tests/MiniArch.Tests/Core/QueryOrderingTests.cs`（14 个测试，2026-07-11 新增）
+- `tests/MiniArch.Tests/Core/QueryOrderingTests.cs`（13+ 个测试，2026-07-19 按签名顺序更新）
 
 ### 9. Placeholder E2E 确定性
 

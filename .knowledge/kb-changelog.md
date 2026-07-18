@@ -27,6 +27,15 @@ updated: 2026-07-19
 ### 验证
 1046 全绿，snapshot/clone/checksum/order 全部回归通过。
 
+### 2026-07-19 跟进：archetype 排序插入替代追加
+
+将 `PublishArchetypeSnapshot` 从尾部追加改为按 signature 排序插入。根因：RestoreState 遗留的空 archetype 会因追加到末尾改变 query 顺序。排序插入使 archetype 顺序纯由签名决定，完全消除创建历史依赖。
+- `World.QueryCache.cs`：`PublishArchetypeSnapshot` 排序插入 + `FindInsertIndex` 二分查找 + `CompareSignatures` 比较
+- `QueryCache.cs`：`AppendNewArchetypes` 改为 `RebuildCache` 全量重建（archetype 创建是冷路径，全量扫描可接受）
+- `QueryOrderingTests`：14 个测试已按签名顺序更新（从"创建顺序"升级为"签名顺序"）
+- 性能门禁：Movement 1766.8 / Attack 1112.2，内存 OK
+- 1048 全绿
+
 ## 2026-07-09 M6 — YAGNI / Dead Code Deletion Round
 
 ### 删除 15 行死代码

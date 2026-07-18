@@ -5,8 +5,10 @@ namespace MiniArch.Core;
 using MiniArch;
 
 /// <summary>
-/// Cached archetype query with incremental append-only invalidation.
-/// Archetypes are never removed, so we only scan newly added ones.
+/// Cached archetype query with sorted-by-signature snapshot invalidation.
+/// Archetypes are never removed; the world's _archetypeSnapshot is always
+/// sorted by Signature.ComponentType.Value. Matched archetypes are rebuilt
+/// from scratch on any count change (cold path).
 /// </summary>
 internal sealed class QueryCache
 {
@@ -133,7 +135,10 @@ internal sealed class QueryCache
     {
         lock (_refreshLock)
         {
-            AppendNewArchetypes(_world.ArchetypeCount);
+            // Double-check: another thread may have refreshed while we waited.
+            if (_world.ArchetypeCount == Volatile.Read(ref _lastArchetypeCount))
+                return;
+            RebuildCache(_world.ArchetypeCount);
             Interlocked.Increment(ref _refreshCount);
         }
     }
@@ -191,38 +196,31 @@ internal sealed class QueryCache
             Volatile.Write(ref _archetypeExpectedViews[i], ExpectedViewShape(_snapshotArchetypes[i]));
     }
 
-    private void AppendNewArchetypes(int currentArchetypeCount)
+    private void RebuildCache(int currentArchetypeCount)
     {
-        var archetypes = _world.Archetypes;
-        var start = _lastArchetypeCount < 0 ? 0 : _lastArchetypeCount;
+        var archetypes = _world.Archetypes; // sorted by signature
 
-        if (ExistingViewShapeChanged())
-            RebuildChunkViews();
-
-        // ── Incremental append: only scan new archetypes ──
-        // Existing matched archetypes are already in the snapshot; we only
-        // need to test archetypes added since the last refresh.
-        var newMatchCount = 0;
-        for (var i = start; i < currentArchetypeCount; i++)
+        // Full scan: archetypes are sorted by signature and may have been
+        // inserted at any position (not append-only). Archetype creation is
+        // a cold path, so the O(archetypeCount) scan is acceptable.
+        var matchCount = 0;
+        for (var i = 0; i < currentArchetypeCount; i++)
         {
             if (Matches(archetypes[i]))
-                newMatchCount++;
+                matchCount++;
         }
 
-        var totalUnique = _matchedArchetypeCount + newMatchCount;
-
-        // Grow arrays if needed.
-        if (_snapshotArchetypes.Length < totalUnique)
+        // Resize arrays.
+        if (_snapshotArchetypes.Length < matchCount)
         {
-            var newLen = Math.Max(totalUnique, _snapshotArchetypes.Length == 0 ? 4 : _snapshotArchetypes.Length * 2);
+            var newLen = Math.Max(matchCount, _snapshotArchetypes.Length == 0 ? 4 : _snapshotArchetypes.Length * 2);
             Array.Resize(ref _snapshotArchetypes, newLen);
         }
-        if (_archetypeExpectedViews.Length < totalUnique)
-            Array.Resize(ref _archetypeExpectedViews, Math.Max(totalUnique, _archetypeExpectedViews.Length == 0 ? 4 : _archetypeExpectedViews.Length * 2));
+        if (_archetypeExpectedViews.Length < matchCount)
+            Array.Resize(ref _archetypeExpectedViews, Math.Max(matchCount, _archetypeExpectedViews.Length == 0 ? 4 : _archetypeExpectedViews.Length * 2));
 
-        // Count total views (existing + new).
-        var totalViews = _chunkViewCount;
-        for (var i = start; i < currentArchetypeCount; i++)
+        var totalViews = 0;
+        for (var i = 0; i < currentArchetypeCount; i++)
         {
             var a = archetypes[i];
             if (!Matches(a)) continue;
@@ -235,10 +233,10 @@ internal sealed class QueryCache
             Array.Resize(ref _snapshotChunkViews, newLen);
         }
 
-        // Append new matching archetypes + their chunk views.
-        var ai = _matchedArchetypeCount;
-        var ci = _chunkViewCount;
-        for (var i = start; i < currentArchetypeCount; i++)
+        // Rebuild matched archetypes and chunk views in world order.
+        var ai = 0;
+        var ci = 0;
+        for (var i = 0; i < currentArchetypeCount; i++)
         {
             var a = archetypes[i];
             if (!Matches(a)) continue;
@@ -258,20 +256,15 @@ internal sealed class QueryCache
             ai++;
         }
 
+        // Clear trailing slots (previous entries beyond new matchCount).
+        for (var i = matchCount; i < _matchedArchetypeCount; i++)
+            _snapshotArchetypes[i] = null!;
+        for (var i = matchCount; i < _matchedArchetypeCount; i++)
+            _archetypeExpectedViews[i] = NonChunkedShape;
+
         Volatile.Write(ref _chunkViewCount, ci);
         Volatile.Write(ref _matchedArchetypeCount, ai);
         Volatile.Write(ref _lastArchetypeCount, currentArchetypeCount);
-    }
-
-    private bool ExistingViewShapeChanged()
-    {
-        for (var i = 0; i < _matchedArchetypeCount; i++)
-        {
-            if (ExpectedViewShape(_snapshotArchetypes[i]) != _archetypeExpectedViews[i])
-                return true;
-        }
-
-        return false;
     }
 
     private const int NonChunkedShape = -1;

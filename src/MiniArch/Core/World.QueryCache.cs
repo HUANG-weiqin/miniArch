@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using MiniArch.Core;
 
 namespace MiniArch;
@@ -131,13 +132,20 @@ public sealed partial class World
 
     private void PublishArchetypeSnapshot(Archetype archetype)
     {
+        // Sorted insertion by signature so that query iteration order is a
+        // deterministic function of component types, not of creation history.
+        // This eliminates order sensitivity to Clone (which may skip empty
+        // archetypes), RestoreState (which leaves mutation-created artifacts),
+        // and any other path that produces a different creation order.
         while (true)
         {
             var snapshot = Volatile.Read(ref _archetypeSnapshot);
+            var idx = FindInsertIndex(archetype.Signature, snapshot.AsSpan(0, snapshot.Length));
             var updated = new Archetype[snapshot.Length + 1];
-            Array.Copy(snapshot, updated, snapshot.Length);
-            updated[^1] = archetype;
-
+            Array.Copy(snapshot, 0, updated, 0, idx);
+            Array.Copy(snapshot, idx, updated, idx + 1, snapshot.Length - idx);
+            updated[idx] = archetype;
+            AssertSnapshotSorted(updated);
             if (ReferenceEquals(Interlocked.CompareExchange(ref _archetypeSnapshot, updated, snapshot), snapshot))
             {
                 return;
@@ -145,4 +153,46 @@ public sealed partial class World
         }
     }
 
+    [Conditional("DEBUG")]
+    private void AssertSnapshotSorted(Archetype[] snapshot)
+    {
+        for (var i = 1; i < snapshot.Length; i++)
+            Debug.Assert(CompareSignatures(snapshot[i - 1].Signature, snapshot[i].Signature) <= 0,
+                $"Archetype snapshot is not sorted at index {i}.");
+    }
+
+    /// <summary>
+    /// Binary search for the sorted insertion point of a signature in the
+    /// archetype snapshot. Returns the index at which to insert.
+    /// </summary>
+    private static int FindInsertIndex(Signature signature, ReadOnlySpan<Archetype> snapshot)
+    {
+        int lo = 0, hi = snapshot.Length;
+        while (lo < hi)
+        {
+            var mid = lo + (hi - lo) / 2;
+            if (CompareSignatures(signature, snapshot[mid].Signature) < 0)
+                hi = mid;
+            else
+                lo = mid + 1;
+        }
+        return lo;
+    }
+
+    /// <summary>
+    /// Lexicographic comparison of two Signatures by ComponentType.Value.
+    /// Shorter signature sorts before longer when all elements are equal.
+    /// </summary>
+    private static int CompareSignatures(Signature a, Signature b)
+    {
+        var sa = a.AsSpan();
+        var sb = b.AsSpan();
+        var n = Math.Min(sa.Length, sb.Length);
+        for (var i = 0; i < n; i++)
+        {
+            var cmp = sa[i].Value.CompareTo(sb[i].Value);
+            if (cmp != 0) return cmp;
+        }
+        return sa.Length.CompareTo(sb.Length);
+    }
 }
