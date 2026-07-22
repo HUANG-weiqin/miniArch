@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream 与 ParallelCommandStream 的 typed-store 录制、consume-time 校验、Submit/Snapshot/Replay 确定性及 async ownership 契约
-updated: 2026-07-17
+updated: 2026-07-22
 ---
 # Command Stream Runtime
 
@@ -103,6 +103,19 @@ Set-only 且全 store 无结构命令时，`PrepareForConsume` 在 prune stale e
 | `DeferredEntities=true` | `Entity(-1, seq)` placeholder | placeholder delta | 独立 World 的多 host lockstep |
 
 placeholder 只在当前 stream/batch 内有效。跨帧持有解析结果使用 `EntitySlot` + `Track()`；不要手写 placeholder→real map。
+
+### FrameDelta 结构验证边界
+
+不可信 wire 在 Replay 前必须调用 `FrameDelta.Validate()`。验证器保证 delta 自身满足：
+
+- 每个 `Reserve` 都在同一 delta 内以 `Create` 或 `Release` 结束；
+- placeholder 与同 delta 中被 reserve 的 real entity 不能在 `Create` 前成为操作目标，release 后也不能再被操作；
+- public operation entity 的 real version 必须大于 0；
+- Create/Add/Set/Remove 引用的 component type 必须已注册，payload 大小必须匹配；
+- component payload 内的 placeholder `Entity` 字段必须已有前置 Reserve 映射；
+- Create payload 内的 component type 不重复。
+
+这些是 wire 自身契约，不证明 target World allocator/free-list 与该历史兼容，也不提供 Replay rollback。
 
 ## 性能门禁
 

@@ -6,10 +6,10 @@ namespace MiniArchTests.Core;
 /// <summary>
 /// Hostile-wire / attack-surface tests for FrameDelta replay.
 ///
-/// Design: <see cref="FrameDelta.Validate()"/> is the defense boundary —
-/// it walks the delta once and rejects structural violations with clear errors.
-/// After Validate passes, <see cref="World.Replay"/> is safe because the delta
-/// conforms to the wire format contract.
+/// Design: <see cref="FrameDelta.Validate()"/> is the wire-structure defense
+/// boundary: it walks the delta once and rejects structural violations with
+/// clear errors. Target-World allocator compatibility remains a separate replay
+/// precondition and is not made transactional by validation.
 ///
 /// These tests document:
 ///   A) <c>delta.Validate()</c> → throws (malformed delta rejected)
@@ -24,6 +24,7 @@ public sealed class FrameDeltaAttackSurfaceTests
 {
     private readonly record struct Position(int X, int Y);
     private readonly record struct Health(int Value);
+    private readonly record struct Linked(Entity Target);
 
     // ── helpers ──────────────────────────────────────────────────────────
 
@@ -119,7 +120,10 @@ public sealed class FrameDeltaAttackSurfaceTests
     {
         // Validate() only checks delta structure, not world allocator state.
         // The allocator-advance-before-throw is still a World.Replay issue.
-        var delta = FrameDelta.FromWire([(byte)DeltaOpKind.Reserve, .. Enc(new Entity(5, 1))]);
+        var entity = new Entity(5, 1);
+        var delta = FrameDelta.FromWire([
+            (byte)DeltaOpKind.Reserve, .. Enc(entity),
+            (byte)DeltaOpKind.Create, .. Enc(entity), 0x00]);
         delta.Validate(); // passes —delta structure is fine
 
         var world = new World();
@@ -295,6 +299,67 @@ public sealed class FrameDeltaAttackSurfaceTests
         Assert.Contains("without preceding Reserve", ex.Message);
     }
 
+    [Fact]
+    public void BUG_Validate_rejects_unterminated_reservation()
+    {
+        var delta = FrameDelta.FromWire([(byte)DeltaOpKind.Reserve, .. Enc(new Entity(0, 1))]);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => delta.Validate());
+        Assert.Contains("terminal", ex.Message);
+    }
+
+    [Fact]
+    public void BUG_Validate_rejects_placeholder_use_before_create()
+    {
+        var positionType = Component<Position>.ComponentType.Value;
+        var placeholder = new Entity(-1, 0);
+        var buf = new System.Collections.Generic.List<byte>();
+        buf.AddRange([(byte)DeltaOpKind.Reserve, .. Enc(placeholder)]);
+        buf.AddRange([(byte)DeltaOpKind.Add, .. Enc(placeholder)]);
+        buf.AddRange(V(positionType));
+        buf.AddRange(V(8));
+        buf.AddRange(new byte[8]);
+        buf.AddRange([(byte)DeltaOpKind.Create, .. Enc(placeholder), 0x00]);
+        var delta = FrameDelta.FromWire(buf.ToArray());
+
+        var ex = Assert.Throws<InvalidOperationException>(() => delta.Validate());
+        Assert.Contains("before Create", ex.Message);
+    }
+
+    [Fact]
+    public void BUG_Validate_rejects_unknown_remove_component_type()
+    {
+        var buf = new System.Collections.Generic.List<byte>();
+        buf.AddRange([(byte)DeltaOpKind.Remove, .. Enc(new Entity(0, 1))]);
+        buf.AddRange(V(int.MaxValue));
+        var delta = FrameDelta.FromWire(buf.ToArray());
+
+        var ex = Assert.Throws<InvalidOperationException>(() => delta.Validate());
+        Assert.Contains("Unknown component type", ex.Message);
+    }
+
+    [Fact]
+    public void BUG_Validate_rejects_unreserved_embedded_placeholder()
+    {
+        var owner = new Entity(-1, 0);
+        var missingTarget = new Entity(-1, 1);
+        var linkedType = Component<Linked>.ComponentType.Value;
+        var payload = new Linked(missingTarget);
+        var payloadBytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(
+            System.Runtime.InteropServices.MemoryMarshal.CreateReadOnlySpan(ref payload, 1));
+
+        var buf = new System.Collections.Generic.List<byte>();
+        buf.AddRange([(byte)DeltaOpKind.Reserve, .. Enc(owner)]);
+        buf.AddRange([(byte)DeltaOpKind.Create, .. Enc(owner), 0x01]);
+        buf.AddRange(V(linkedType));
+        buf.AddRange(V(payloadBytes.Length));
+        buf.AddRange(payloadBytes.ToArray());
+        var delta = FrameDelta.FromWire(buf.ToArray());
+
+        var ex = Assert.Throws<InvalidOperationException>(() => delta.Validate());
+        Assert.Contains("embedded placeholder", ex.Message);
+    }
+
     // ══════════════════════════════════════════════════════════
     //  8. Placeholder entity shape + seq validation
     // ══════════════════════════════════════════════════════════
@@ -329,6 +394,15 @@ public sealed class FrameDeltaAttackSurfaceTests
 
         var ex = Assert.Throws<InvalidOperationException>(() => delta.Validate());
         Assert.Contains("exceeds max", ex.Message);
+    }
+
+    [Fact]
+    public void BUG_Validate_rejects_zero_version_real_entity()
+    {
+        var delta = FrameDelta.FromWire([(byte)DeltaOpKind.Destroy, .. Enc(new Entity(0, 0))]);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => delta.Validate());
+        Assert.Contains("version", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     // ══════════════════════════════════════════════════════════

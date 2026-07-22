@@ -45,6 +45,11 @@ CommandStream 的 pending/component/hierarchy/async preflight 已修复已知“
 | `BUG_failed_projected_Snapshot_invalidates_partial_baseline_and_recovers` | projected `Snapshot` 的 `Project` 中途抛异常后，`_hasSnapshot` 仍保留 true，后续 Diff 会读取已清理/半写的 baseline | Snapshot 开始收集前 invalidate baseline；只有完整成功才发布，异常后必须重新 Snapshot，operation guard 可恢复 |
 | `BUG_Snapshot_load_rejects_duplicate_archetype_signature` | 不可信 snapshot 可声明两个归一化后相同的 archetype signature；Load 会静默合并，无法精确重建 payload 声明的 world 结构，重存也不再规范等价 | dry-validate 以 schema index 构造归一化 signature 并全局去重，在注册 schema 或构建 World 前拒绝重复 |
 | `BUG_snapshot_round_trip_preserves_reserved_entity_count` / `BUG_clone_preserves_reserved_entity_count` | World 含 CommandStream 预留但未 materialize 的 slot 时，Load/Clone 复制 records/free list 却把 `_reservedCount` 留为 0，导致 `EntityCount` 把 reservation 误报为活实体 | 所有重建路径从 slot count − free count − occupied count 统一推导 reservation；Reset 先清旧计数 |
+| `BUG_Validate_rejects_unterminated_reservation` | `FrameDelta.Validate` 接受只有 Reserve、没有 Create/Release 的 delta；Replay 后留下无 owner 的永久 reservation | Validate 结束时要求 reserved set 为空 |
+| `BUG_Validate_rejects_placeholder_use_before_create` | placeholder 已 Reserve 但尚未 Create 时被 Add/Set/层级/Destroy 使用，Validate 仍通过；Replay 在 reservation 落地后失败 | Validate 对所有操作 endpoint 检查 lifecycle state；existing real entity 仍可直接操作 |
+| `BUG_Validate_rejects_unknown_remove_component_type` | Remove 是唯一未验证 component registry 的 component op，未知 type id 可绕过 Validate | Remove 与 Create/Add/Set 统一拒绝未注册 type id |
+| `BUG_Validate_rejects_zero_version_real_entity` | primary/parent real entity 的 version=0 不属于有效运行时 handle，却被 Validate 当作合法 shape | placeholder 允许 seq=0；real entity version 必须为正 |
+| `BUG_Validate_rejects_unreserved_embedded_placeholder` | Create/Add/Set payload 的 Entity 字段可引用从未 Reserve 的 placeholder；Validate 通过后 Replay 会在已 materialize owner 后失败 | dry validation 按注册 type 的 Entity field offset 扫 payload，placeholder 必须已有前置 Reserve |
 
 ### 2026-07-15 quality hardening
 

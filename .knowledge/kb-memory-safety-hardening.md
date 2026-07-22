@@ -2,7 +2,7 @@
 title: 内存安全硬化 — 抗 OOM / 栈溢出 / 算术溢出
 module: MiniArch.Core
 description: ECS 运行时在对抗性输入下的内存安全防护——int 溢出防线、栈安全、恶意输入拦截、API 验证。每一层有测试证明。
-updated: 2026-07-12
+updated: 2026-07-22
 ---
 
 # 内存安全硬化
@@ -54,7 +54,7 @@ updated: 2026-07-12
 | 层 | 防护 | 触发条件 |
 |----|------|----------|
 | **L1: Wire 解码** | `ReadVarint` 负数/5 字节截断检测 | 每个 varint 读取 |
-| **L2: Delta 验证** | `Validate()` 状态机检查（Reserve→Create、组件大小匹配） | `delta.Validate()` 调用 |
+| **L2: Delta 验证** | `Validate()` 状态机检查（Reserve 必须终结、Create 前不可操作、entity shape、全 op type/schema 与组件大小匹配） | `delta.Validate()` 调用 |
 | **L3: PreScan** | entity ID clamp + archetype 预计数 | `Replay` 主 pass 前扫描 |
 | **L4: 存储分配** | `ComputeSegmentEntityCapacity` 安全容量、`checked` 算术 | 新 archetype / segment |
 | **L5: Snapshot Load** | 元数据 cap + CRC | `WorldSnapshot.Load` |
@@ -114,6 +114,11 @@ updated: 2026-07-12
 | 空 stream | 同上 | ✅ `SnapshotLoad_rejects_empty_stream` |
 | FrameDelta 截断 wire | `InvalidOperationException` + 实例重置 | ✅ `Deserialize_truncated_wire_never_crashes_and_cleans_state`（已有） |
 | FrameDelta 随机 garbage | `ArgumentException` 或 `InvalidOperationException` | ✅ `Deserialize_random_garbage_never_crashes`（已有） |
+| Reserve 无 Create/Release 终结 | `Validate()` 拒绝泄漏 reservation 的不完整状态机 | ✅ `BUG_Validate_rejects_unterminated_reservation` |
+| placeholder 在 Create 前被操作 | `Validate()` 拒绝 replay 中途失败并留下 reservation | ✅ `BUG_Validate_rejects_placeholder_use_before_create` |
+| real entity version 为 0 | `ValidateEntityShape()` 拒绝非运行时 handle | ✅ `BUG_Validate_rejects_zero_version_real_entity` |
+| Remove 引用未注册 component id | 与 Create/Add/Set 一致地验证 registry | ✅ `BUG_Validate_rejects_unknown_remove_component_type` |
+| component 内嵌未 Reserve 的 placeholder | payload dry validation 扫描 Entity 字段并拒绝缺失映射 | ✅ `BUG_Validate_rejects_unreserved_embedded_placeholder` |
 
 ## 认知模型
 

@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace MiniArch.Core;
 
@@ -203,8 +204,9 @@ public sealed class FrameDelta
 
     /// <summary>
     /// Validates structural integrity of this FrameDelta. Throws if the delta
-    /// is malformed —missing Reserve for Create, component data size mismatch,
-    /// negative counts, duplicate component types, unknown type ids, or
+    /// is malformed —missing or unterminated reservations, operations targeting
+    /// placeholders before Create, unresolved embedded placeholders, component
+    /// data size mismatch, duplicate component types, unknown type ids, or
     /// invalid entity shapes.
     ///
     /// Call before <see cref="CommandStreamCore.Replay(FrameDelta, bool)"/> for deltas
@@ -215,6 +217,7 @@ public sealed class FrameDelta
     /// Walks the entire delta once (same cost as deserialization). Uses the
     /// global <see cref="ComponentRegistry"/> to resolve type sizes.
     /// Per-entity state machine: Reserve → Create|Release (terminal per entity).
+    /// Every reservation must reach a terminal operation within the same delta.
     /// <para/>
     /// <b>Limitations:</b> Validate only checks the delta's internal state
     /// machine (Reserve → Create|Release ordering, payload sizes). It does
@@ -234,6 +237,7 @@ public sealed class FrameDelta
         // "terminal" = created or released (can no longer be reserved again).
         var reserved = new HashSet<Entity>();
         var terminal = new HashSet<Entity>();
+        var created = new HashSet<Entity>();
 
         while (decoder.MoveNext())
         {
@@ -267,35 +271,71 @@ public sealed class FrameDelta
                         throw new InvalidOperationException(
                             $"Create for entity {decoder.Entity} without preceding Reserve.");
                     terminal.Add(decoder.Entity);
-                    ValidateCreatePayload(ref decoder);
+                    created.Add(decoder.Entity);
+                    ValidateCreatePayload(ref decoder, reserved, terminal);
                     break;
                 }
 
                 case DeltaOpKind.Add:
                 case DeltaOpKind.Set:
-                    ValidateComponentData(ref decoder);
+                    ValidateOperationTargetState(decoder.Entity, reserved, terminal, created);
+                    ValidateComponentData(ref decoder, reserved, terminal);
                     break;
 
                 case DeltaOpKind.Remove:
-                    decoder.ReadComponentType();
+                    ValidateOperationTargetState(decoder.Entity, reserved, terminal, created);
+                    ValidateComponentType(decoder.ReadComponentType().Value);
                     break;
 
                 case DeltaOpKind.AddChild:
                 {
+                    ValidateOperationTargetState(decoder.Entity, reserved, terminal, created);
                     var parent = decoder.ReadExtraEntity();
                     ValidateEntityShape(parent);
+                    ValidateOperationTargetState(parent, reserved, terminal, created);
                     break;
                 }
 
                 case DeltaOpKind.RemoveChild:
                 case DeltaOpKind.Destroy:
-                    // No extra payload beyond what MoveNext consumed.
+                    ValidateOperationTargetState(decoder.Entity, reserved, terminal, created);
                     break;
 
                 default:
                     // MoveNext already rejects unknown op kinds.
                     break;
             }
+        }
+
+        if (reserved.Count != 0)
+        {
+            throw new InvalidOperationException(
+                $"FrameDelta contains {reserved.Count} Reserve operation(s) without a terminal Create or Release.");
+        }
+    }
+
+    private static void ValidateOperationTargetState(
+        Entity entity,
+        HashSet<Entity> reserved,
+        HashSet<Entity> terminal,
+        HashSet<Entity> created)
+    {
+        if (reserved.Contains(entity))
+        {
+            throw new InvalidOperationException(
+                $"Operation targets reserved entity {entity} before Create.");
+        }
+
+        if (terminal.Contains(entity) && !created.Contains(entity))
+        {
+            throw new InvalidOperationException(
+                $"Operation targets released entity {entity}.");
+        }
+
+        if (entity.IsPlaceholder && !created.Contains(entity))
+        {
+            throw new InvalidOperationException(
+                $"Operation targets placeholder {entity} without preceding Reserve and Create.");
         }
     }
 
@@ -317,9 +357,16 @@ public sealed class FrameDelta
         if (entity.Id < -1)
             throw new InvalidOperationException(
                 $"Invalid entity id {entity.Id}: only -1 (placeholder) and >= 0 are valid.");
+
+        if (entity.Version <= 0)
+            throw new InvalidOperationException(
+                $"Invalid real entity version {entity.Version}: versions must be positive.");
     }
 
-    private static void ValidateCreatePayload(ref OpDecoder decoder)
+    private static void ValidateCreatePayload(
+        ref OpDecoder decoder,
+        HashSet<Entity> reserved,
+        HashSet<Entity> terminal)
     {
         var compCount = decoder.ReadVarint();
         if (compCount < 0)
@@ -341,16 +388,49 @@ public sealed class FrameDelta
                     $"Negative data size for component type id {typeId}.");
 
             ValidateComponentSize(typeId, dataSize);
-            decoder.ReadBytes(dataSize);
+            var data = decoder.ReadBytes(dataSize);
+            ValidateEmbeddedPlaceholders(new ComponentType(typeId), data, reserved, terminal);
         }
     }
 
-    private static void ValidateComponentData(ref OpDecoder decoder)
+    private static void ValidateComponentData(
+        ref OpDecoder decoder,
+        HashSet<Entity> reserved,
+        HashSet<Entity> terminal)
     {
         var typeId = decoder.ReadVarint();
         var dataSize = decoder.ReadVarint();
         ValidateComponentSize(typeId, dataSize);
-        decoder.ReadBytes(dataSize);
+        var data = decoder.ReadBytes(dataSize);
+        ValidateEmbeddedPlaceholders(new ComponentType(typeId), data, reserved, terminal);
+    }
+
+    private static void ValidateEmbeddedPlaceholders(
+        ComponentType componentType,
+        ReadOnlySpan<byte> data,
+        HashSet<Entity> reserved,
+        HashSet<Entity> terminal)
+    {
+        foreach (var offset in EntityFieldResolver.GetOffsets(componentType))
+        {
+            var entity = MemoryMarshal.Read<Entity>(data[offset..]);
+            if (!entity.IsPlaceholder)
+                continue;
+
+            ValidateEntityShape(entity);
+            if (!reserved.Contains(entity) && !terminal.Contains(entity))
+            {
+                throw new InvalidOperationException(
+                    $"Component type id {componentType.Value} references embedded placeholder " +
+                    $"{entity} without a preceding Reserve.");
+            }
+        }
+    }
+
+    private static void ValidateComponentType(int typeId)
+    {
+        if (!ComponentRegistry.Shared.TryGetType(new ComponentType(typeId), out _))
+            throw new InvalidOperationException($"Unknown component type id {typeId}.");
     }
 
     private static void ValidateComponentSize(int typeId, int dataSize)
