@@ -489,7 +489,7 @@ public sealed partial class World
             return cachedArchetype;
         }
 
-        var archetype = GetOrCreateArchetype(new Signature(componentType1, componentType2));
+        var archetype = GetOrCreateUniqueCreateArchetype(2, componentType1, componentType2);
         CreateArchetypeCache<T1, T2>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
         return archetype;
     }
@@ -502,7 +502,7 @@ public sealed partial class World
             return cached;
         }
 
-        var archetype = GetOrCreateArchetype(new Signature(ct1, ct2, ct3));
+        var archetype = GetOrCreateUniqueCreateArchetype(3, ct1, ct2, ct3);
         CreateArchetypeCache<T1, T2, T3>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
         return archetype;
     }
@@ -515,7 +515,7 @@ public sealed partial class World
             return cached;
         }
 
-        var archetype = GetOrCreateArchetype(new Signature(ct1, ct2, ct3, ct4));
+        var archetype = GetOrCreateUniqueCreateArchetype(4, ct1, ct2, ct3, ct4);
         CreateArchetypeCache<T1, T2, T3, T4>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
         return archetype;
     }
@@ -528,7 +528,7 @@ public sealed partial class World
             return cached;
         }
 
-        var archetype = GetOrCreateArchetype(new Signature(ct1, ct2, ct3, ct4, ct5));
+        var archetype = GetOrCreateUniqueCreateArchetype(5, ct1, ct2, ct3, ct4, ct5);
         CreateArchetypeCache<T1, T2, T3, T4, T5>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
         return archetype;
     }
@@ -541,7 +541,7 @@ public sealed partial class World
             return cached;
         }
 
-        var archetype = GetOrCreateArchetype(new Signature(ct1, ct2, ct3, ct4, ct5, ct6));
+        var archetype = GetOrCreateUniqueCreateArchetype(6, ct1, ct2, ct3, ct4, ct5, ct6);
         CreateArchetypeCache<T1, T2, T3, T4, T5, T6>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
         return archetype;
     }
@@ -554,7 +554,7 @@ public sealed partial class World
             return cached;
         }
 
-        var archetype = GetOrCreateArchetype(new Signature(ct1, ct2, ct3, ct4, ct5, ct6, ct7));
+        var archetype = GetOrCreateUniqueCreateArchetype(7, ct1, ct2, ct3, ct4, ct5, ct6, ct7);
         CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
         return archetype;
     }
@@ -567,7 +567,7 @@ public sealed partial class World
             return cached;
         }
 
-        var archetype = GetOrCreateArchetype(new Signature(ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8));
+        var archetype = GetOrCreateUniqueCreateArchetype(8, ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8);
         CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
         return archetype;
     }
@@ -580,7 +580,7 @@ public sealed partial class World
             return cached;
         }
 
-        var archetype = GetOrCreateArchetype(new Signature(ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9));
+        var archetype = GetOrCreateUniqueCreateArchetype(9, ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9);
         CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
         return archetype;
     }
@@ -593,7 +593,7 @@ public sealed partial class World
             return cached;
         }
 
-        var archetype = GetOrCreateArchetype(new Signature(ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9, ct10));
+        var archetype = GetOrCreateUniqueCreateArchetype(10, ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9, ct10);
         CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
         return archetype;
     }
@@ -606,7 +606,7 @@ public sealed partial class World
             return cached;
         }
 
-        var archetype = GetOrCreateArchetype(new Signature(ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9, ct10, ct11));
+        var archetype = GetOrCreateUniqueCreateArchetype(11, ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9, ct10, ct11);
         CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
         return archetype;
     }
@@ -619,7 +619,7 @@ public sealed partial class World
             return cached;
         }
 
-        var archetype = GetOrCreateArchetype(new Signature(ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9, ct10, ct11, ct12));
+        var archetype = GetOrCreateUniqueCreateArchetype(12, ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9, ct10, ct11, ct12);
         CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
         return archetype;
     }
@@ -632,7 +632,7 @@ public sealed partial class World
             return cached;
         }
 
-        var archetype = GetOrCreateArchetype(new Signature(ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9, ct10, ct11, ct12, ct13));
+        var archetype = GetOrCreateUniqueCreateArchetype(13, ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9, ct10, ct11, ct12, ct13);
         CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
         return archetype;
     }
@@ -645,7 +645,7 @@ public sealed partial class World
             return cached;
         }
 
-        var archetype = GetOrCreateArchetype(new Signature(ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9, ct10, ct11, ct12, ct13, ct14));
+        var archetype = GetOrCreateUniqueCreateArchetype(14, ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9, ct10, ct11, ct12, ct13, ct14);
         CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
         return archetype;
     }
@@ -658,7 +658,7 @@ public sealed partial class World
             return cached;
         }
 
-        var archetype = GetOrCreateArchetype(new Signature(ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9, ct10, ct11, ct12, ct13, ct14, ct15));
+        var archetype = GetOrCreateUniqueCreateArchetype(15, ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9, ct10, ct11, ct12, ct13, ct14, ct15);
         CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
         return archetype;
     }
@@ -671,9 +671,20 @@ public sealed partial class World
             return cached;
         }
 
-        var archetype = GetOrCreateArchetype(new Signature(ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9, ct10, ct11, ct12, ct13, ct14, ct15, ct16));
+        var archetype = GetOrCreateUniqueCreateArchetype(16, ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9, ct10, ct11, ct12, ct13, ct14, ct15, ct16);
         CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
         return archetype;
+    }
+
+    private Archetype GetOrCreateUniqueCreateArchetype(
+        int expectedComponentCount,
+        params ComponentType[] componentTypes)
+    {
+        var signature = new Signature(componentTypes);
+        if (signature.Count != expectedComponentCount)
+            throw new InvalidOperationException("World.Create component types must be unique.");
+
+        return GetOrCreateArchetype(signature);
     }
 
     private static void SetCreatedComponent<T>(Archetype archetype, int rowIndex, ComponentType componentType, in T component) where T : unmanaged

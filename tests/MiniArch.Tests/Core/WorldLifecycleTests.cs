@@ -172,6 +172,17 @@ public sealed class WorldLifecycleTests
     }
 
     [Fact]
+    public void BUG_Create_duplicate_component_types_throws_before_world_mutation()
+    {
+        using var world = new World();
+
+        Assert.Throws<InvalidOperationException>(
+            () => world.Create(new Position(1, 2), new Position(3, 4)));
+
+        Assert.Equal(0, world.EntityCount);
+    }
+
+    [Fact]
     public void Create_supports_up_to_sixteen_components_without_intermediate_archetypes()
     {
         var world = new World();
