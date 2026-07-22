@@ -51,6 +51,8 @@ CommandStream 的 pending/component/hierarchy/async preflight 已修复已知“
 | `BUG_Validate_rejects_zero_version_real_entity` | primary/parent real entity 的 version=0 不属于有效运行时 handle，却被 Validate 当作合法 shape | placeholder 允许 seq=0；real entity version 必须为正 |
 | `BUG_Validate_rejects_unreserved_embedded_placeholder` | Create/Add/Set payload 的 Entity 字段可引用从未 Reserve 的 placeholder；Validate 通过后 Replay 会在已 materialize owner 后失败 | dry validation 按注册 type 的 Entity field offset 扫 payload，placeholder 必须已有前置 Reserve |
 | `BUG_nested_ForEachChunkParallel_does_not_overwrite_outer_partitions` | 外层并行 query 捕获调用线程的 ThreadStatic partition buffer；同线程 callback 嵌套另一个并行 query 会覆写该 buffer，使外层后续 worker 处理内层 World 的 chunk | 可复用 buffer 增加调用期 lease；同线程重入改用独立 fallback buffer，`finally` 释放 lease；非重入稳态路径不新增分配 |
+| `BUG_hash_properties_do_not_expose_mutable_result_storage` / `BUG_hash_dictionaries_do_not_expose_mutable_result_storage` | `WorldDigestResult` 虽是 readonly struct，但公开 getter 直接返回内部 `byte[]`；`ReadOnlyDictionary` 也不保护 value array，调用方可改坏已返回结果 | 保持公共 `byte[]` API，所有 hash getter 返回 defensive copy，字典 getter 返回 value 深复制的只读快照 |
+| `BUG_ComponentInfo_raw_bytes_do_not_expose_mutable_report_storage` | `ComponentInfo.RawBytes` 直接暴露报告内部数组，违背 Diagnostics“输出不可变”契约 | 私有持有原始 bytes，getter 返回 defensive copy；`EntityReport.ToString` 每组件只取一次副本 |
 
 ### 2026-07-15 quality hardening
 

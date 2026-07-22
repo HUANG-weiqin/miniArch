@@ -2,7 +2,7 @@
 title: MiniArch.Diagnostics 诊断工具
 module: MiniArch.Diagnostics
 description: ECS 世界的状态诊断工具集：比对、校验、检查、探查
-updated: 2026-07-10
+updated: 2026-07-22
 ---
 
 # MiniArch.Diagnostics 诊断工具
@@ -39,7 +39,7 @@ updated: 2026-07-10
 - **同一程序集**：Diagnostics 放在 `src/MiniArch/Diagnostics/` 目录下，与核心代码同程序集，可以直接访问 `internal` 类型（`EntityRecord`、`Archetype`、`HierarchyTable` 等），无需 `InternalsVisibleTo`
 - **Namespace 即文档**：`MiniArch.Diagnostics` 命名空间本身就传达了"这是 debug 工具"的信息，热路径代码不会意外引用
 - **`HashBuilder` 替代 `IncrementalHash`**：使用 `MemoryStream` + `SHA256.HashData(Stream)` 而非 `IncrementalHash`（`IncrementalHash` 在 `System.Security.Cryptography` 中仍可用，但 `MemoryStream` 方式对累加再算的场景更简洁），在诊断场景下性能差异可忽略
-- **结果不可变**：所有列表字段用 `ReadOnlyCollection<T>` 包装，防止误修改
+- **结果不可变**：列表字段用 `ReadOnlyCollection<T>` 包装；公共签名必须保留 `byte[]` 的 hash/raw bytes 通过 getter 返回 defensive copy，hash 字典同时深复制 value array，不能只用 `ReadOnlyDictionary` 包装可变数组
 - **确定性**：所有哈希按 entity ID 排序后再计算，保证相同逻辑状态 → 相同输出
 
 ## 入口
@@ -55,3 +55,4 @@ updated: 2026-07-10
 - `Position`/`Velocity` 等测试组件在各测试文件中各自定义为 `file readonly record struct`，不是共享的
 - `WorldValidator` 检测 pending 保留时使用 `EntitySlotCount > occupied + freeCount` 发出 Warning 而非 Error（因为有保留是合法状态）
 - `WorldDigest.Total` 包含 `PerArchetype` 物理 row-order hash；batch destroy 与普通 loop 可能得到相同 logical state / free-list / component values 但不同 dense storage row order。比较 layout-independent 世界态时用 `World.CanonicalChecksum()` + `WorldDiff.Compare()`，或只比较 `WorldDigest` 的 Occupancy/FreeList/Hierarchy/PerComponent 域。
+- `WorldDigestResult` 与 `ComponentInfo` 的 byte-array getter 每次返回副本；Diagnostics 本就不是热路径，不要缓存并期待引用相等，按内容比较。

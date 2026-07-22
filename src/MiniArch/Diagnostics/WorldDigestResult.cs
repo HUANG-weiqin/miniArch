@@ -15,23 +15,30 @@ namespace MiniArch.Diagnostics;
 /// </remarks>
 public readonly struct WorldDigestResult
 {
-    /// <summary>Combined hash of all domains.</summary>
-    public byte[] Total { get; }
+    private readonly byte[]? _total;
+    private readonly byte[]? _occupancy;
+    private readonly byte[]? _freeList;
+    private readonly byte[]? _hierarchy;
+    private readonly Dictionary<Type, byte[]>? _perComponent;
+    private readonly Dictionary<int, byte[]>? _perArchetype;
 
-    /// <summary>Hash of alive entity IDs and versions (sorted by ID).</summary>
-    public byte[] Occupancy { get; }
+    /// <summary>Gets a defensive copy of the combined hash of all domains.</summary>
+    public byte[] Total => CopyHash(_total);
 
-    /// <summary>Hash of free-list entries (ID, version).</summary>
-    public byte[] FreeList { get; }
+    /// <summary>Gets a defensive copy of the hash of alive entity IDs and versions (sorted by ID).</summary>
+    public byte[] Occupancy => CopyHash(_occupancy);
 
-    /// <summary>Hash of parent-child relations.</summary>
-    public byte[] Hierarchy { get; }
+    /// <summary>Gets a defensive copy of the hash of free-list entries (ID, version).</summary>
+    public byte[] FreeList => CopyHash(_freeList);
 
-    /// <summary>One hash per component type covering all values of that type.</summary>
-    public IReadOnlyDictionary<Type, byte[]> PerComponent { get; }
+    /// <summary>Gets a defensive copy of the hash of parent-child relations.</summary>
+    public byte[] Hierarchy => CopyHash(_hierarchy);
 
-    /// <summary>One hash per non-empty archetype (signature + entity data).</summary>
-    public IReadOnlyDictionary<int, byte[]> PerArchetype { get; }
+    /// <summary>Gets a defensive snapshot of component-type hashes.</summary>
+    public IReadOnlyDictionary<Type, byte[]> PerComponent => CopyHashes(_perComponent);
+
+    /// <summary>Gets a defensive snapshot of non-empty archetype hashes.</summary>
+    public IReadOnlyDictionary<int, byte[]> PerArchetype => CopyHashes(_perArchetype);
 
     internal WorldDigestResult(
         byte[] total,
@@ -41,12 +48,27 @@ public readonly struct WorldDigestResult
         Dictionary<Type, byte[]> perComponent,
         Dictionary<int, byte[]> perArchetype)
     {
-        Total = total;
-        Occupancy = occupancy;
-        FreeList = freeList;
-        Hierarchy = hierarchy;
-        PerComponent = new ReadOnlyDictionary<Type, byte[]>(perComponent);
-        PerArchetype = new ReadOnlyDictionary<int, byte[]>(perArchetype);
+        _total = total;
+        _occupancy = occupancy;
+        _freeList = freeList;
+        _hierarchy = hierarchy;
+        _perComponent = perComponent;
+        _perArchetype = perArchetype;
+    }
+
+    private static byte[] CopyHash(byte[]? hash)
+        => hash is null ? null! : (byte[])hash.Clone();
+
+    private static IReadOnlyDictionary<TKey, byte[]> CopyHashes<TKey>(Dictionary<TKey, byte[]>? hashes)
+        where TKey : notnull
+    {
+        if (hashes is null)
+            return null!;
+
+        var copy = new Dictionary<TKey, byte[]>(hashes.Count, hashes.Comparer);
+        foreach (var (key, hash) in hashes)
+            copy.Add(key, (byte[])hash.Clone());
+        return new ReadOnlyDictionary<TKey, byte[]>(copy);
     }
 }
 

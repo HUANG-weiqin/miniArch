@@ -66,8 +66,9 @@ public readonly struct EntityReport
             sb.AppendLine("  Components:");
             foreach (var c in Components)
             {
-                var hex = c.RawBytes is not null
-                    ? BitConverter.ToString(c.RawBytes).Replace("-", " ")
+                var rawBytes = c.RawBytes;
+                var hex = rawBytes is not null
+                    ? BitConverter.ToString(rawBytes).Replace("-", " ")
                     : "(unreadable)";
                 sb.AppendLine($"    {c.Type.Name} ({c.SizeBytes} B): {hex}");
             }
@@ -99,19 +100,21 @@ public readonly struct ArchetypeInfo
 /// <summary>Single component value on an entity.</summary>
 public readonly struct ComponentInfo
 {
+    private readonly byte[]? _rawBytes;
+
     /// <summary>The component type.</summary>
     public Type Type { get; }
 
     /// <summary>Size in bytes (0 for zero-sized components).</summary>
     public int SizeBytes { get; }
 
-    /// <summary>Raw bytes of the component value. Null when unreadable.</summary>
-    public byte[]? RawBytes { get; }
+    /// <summary>Gets a defensive copy of the component value bytes. Null when unreadable.</summary>
+    public byte[]? RawBytes => _rawBytes is null ? null : (byte[])_rawBytes.Clone();
 
     internal ComponentInfo(Type type, int sizeBytes, byte[]? rawBytes)
     {
         Type = type;
         SizeBytes = sizeBytes;
-        RawBytes = rawBytes;
+        _rawBytes = rawBytes;
     }
 }

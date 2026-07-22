@@ -70,6 +70,20 @@ public class EntityDumpTests
     }
 
     [Fact]
+    public void BUG_ComponentInfo_raw_bytes_do_not_expose_mutable_report_storage()
+    {
+        using var world = new World();
+        var entity = world.Create(new Position(10, 20));
+        var report = EntityDump.Describe(world, entity);
+        var component = Assert.Single(report.Components);
+        var expected = component.RawBytes!.ToArray();
+
+        component.RawBytes![0] ^= 0xFF;
+
+        Assert.Equal(expected, component.RawBytes);
+    }
+
+    [Fact]
     public void Describe_Hierarchy_HasParentAndChildren()
     {
         using var world = new World();

@@ -20,6 +20,47 @@ public class WorldDigestTests
     }
 
     [Fact]
+    public void BUG_hash_properties_do_not_expose_mutable_result_storage()
+    {
+        using var world = new World();
+        world.Create(new Position(1, 2));
+        var digest = WorldDigest.Compute(world);
+
+        var expectedTotal = digest.Total.ToArray();
+        var expectedOccupancy = digest.Occupancy.ToArray();
+        var expectedFreeList = digest.FreeList.ToArray();
+        var expectedHierarchy = digest.Hierarchy.ToArray();
+
+        digest.Total[0] ^= 0xFF;
+        digest.Occupancy[0] ^= 0xFF;
+        digest.FreeList[0] ^= 0xFF;
+        digest.Hierarchy[0] ^= 0xFF;
+
+        Assert.Equal(expectedTotal, digest.Total);
+        Assert.Equal(expectedOccupancy, digest.Occupancy);
+        Assert.Equal(expectedFreeList, digest.FreeList);
+        Assert.Equal(expectedHierarchy, digest.Hierarchy);
+    }
+
+    [Fact]
+    public void BUG_hash_dictionaries_do_not_expose_mutable_result_storage()
+    {
+        using var world = new World();
+        world.Create(new Position(1, 2));
+        var digest = WorldDigest.Compute(world);
+        var archetypeKey = Assert.Single(digest.PerArchetype.Keys);
+
+        var expectedComponent = digest.PerComponent[typeof(Position)].ToArray();
+        var expectedArchetype = digest.PerArchetype[archetypeKey].ToArray();
+
+        digest.PerComponent[typeof(Position)][0] ^= 0xFF;
+        digest.PerArchetype[archetypeKey][0] ^= 0xFF;
+
+        Assert.Equal(expectedComponent, digest.PerComponent[typeof(Position)]);
+        Assert.Equal(expectedArchetype, digest.PerArchetype[archetypeKey]);
+    }
+
+    [Fact]
     public void SameWorlds_SameDigest()
     {
         using var w1 = new World();
