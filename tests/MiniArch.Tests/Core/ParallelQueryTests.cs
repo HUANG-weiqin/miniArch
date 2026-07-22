@@ -3,11 +3,16 @@ using MiniArch.Core;
 
 namespace MiniArchTests.Core;
 
+[CollectionDefinition(nameof(ThreadPoolSensitiveCollection), DisableParallelization = true)]
+public sealed class ThreadPoolSensitiveCollection;
+
+[Collection(nameof(ThreadPoolSensitiveCollection))]
 public sealed class ParallelQueryTests
 {
     private readonly record struct Position(int X, int Y);
     private readonly record struct Velocity(int X, int Y);
     private readonly record struct Health(int Value);
+    private readonly record struct VisitMarker(int World, int Index);
 
     // ================================================================
     //  ForEachChunk (sequential)
@@ -276,6 +281,68 @@ public sealed class ParallelQueryTests
         var query = world.Query(in desc);
 
         Assert.Throws<ArgumentNullException>(() => query.ForEachChunkParallel(null!));
+    }
+
+    [Fact]
+    public void BUG_nested_ForEachChunkParallel_does_not_overwrite_outer_partitions()
+    {
+        if (Environment.ProcessorCount < 2)
+            return;
+
+        ThreadPool.GetMinThreads(out var originalMinWorkers, out var originalMinIo);
+        ThreadPool.GetMaxThreads(out var originalMaxWorkers, out var originalMaxIo);
+
+        try
+        {
+            Assert.True(ThreadPool.SetMinThreads(1, originalMinIo));
+            Assert.True(ThreadPool.SetMaxThreads(2, originalMaxIo));
+
+            var rowCount = Environment.ProcessorCount * 2;
+            var outerWorld = new World();
+            var innerWorld = new World();
+            for (var i = 0; i < rowCount; i++)
+            {
+                outerWorld.Create(new VisitMarker(1, i));
+                innerWorld.Create(new VisitMarker(2, i));
+            }
+
+            var description = new QueryDescription().With<VisitMarker>();
+            var outerQuery = outerWorld.Query(in description);
+            var innerQuery = innerWorld.Query(in description);
+            var callerThread = Environment.CurrentManagedThreadId;
+            var nested = 0;
+            var foreignRows = 0;
+            var visits = new int[rowCount];
+
+            outerQuery.ForEachChunkParallel(chunk =>
+            {
+                if (Environment.CurrentManagedThreadId == callerThread &&
+                    Interlocked.CompareExchange(ref nested, 1, 0) == 0)
+                {
+                    innerQuery.ForEachChunkParallel(static _ => { });
+                }
+
+                foreach (ref readonly var marker in chunk.GetSpan<VisitMarker>())
+                {
+                    if (marker.World != 1)
+                    {
+                        Interlocked.Increment(ref foreignRows);
+                        continue;
+                    }
+
+                    Interlocked.Increment(ref visits[marker.Index]);
+                }
+            });
+
+            Assert.Equal(1, nested);
+            Assert.Equal(0, foreignRows);
+            Assert.All(visits, count => Assert.Equal(1, count));
+        }
+        finally
+        {
+            Assert.True(ThreadPool.SetMaxThreads(originalMaxWorkers, originalMaxIo));
+            Assert.True(ThreadPool.SetMinThreads(originalMinWorkers, originalMinIo));
+        }
     }
 
     // ================================================================

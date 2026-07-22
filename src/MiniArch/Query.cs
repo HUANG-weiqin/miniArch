@@ -213,29 +213,35 @@ public readonly struct Query
             return;
         }
 
-        BuildEntityRangePartitions(chunks, count, threads, out var partitionArray, out var partitionCount);
-        if (partitionCount == 0)
-            return;
-        if (partitionCount == 1)
+        var partitionArray = AcquirePartitionBuffer(threads, out var usesReusableBuffer);
+        try
         {
-            forEach.OnChunk(partitionArray[0]);
-            return;
-        }
+            var partitionCount = BuildEntityRangePartitions(chunks, count, threads, partitionArray);
+            if (partitionCount == 0)
+                return;
+            if (partitionCount == 1)
+            {
+                forEach.OnChunk(partitionArray[0]);
+                return;
+            }
 
-        Parallel.For(0, partitionCount, i => forEach.OnChunk(partitionArray[i]));
+            Parallel.For(0, partitionCount, i => forEach.OnChunk(partitionArray[i]));
+        }
+        finally
+        {
+            if (usesReusableBuffer)
+                t_partitionBufferInUse = false;
+        }
     }
 
     // Splits chunks into N entity-range subviews when chunk count is below
     // processor count, so Parallel.For still has enough independent units
-    // of work. Returns the pooled buffer (caller owns lifetime via
-    // ThreadStatic reuse) and the live count via out parameters.
-    private static void BuildEntityRangePartitions(
-        ChunkView[] chunks, int count, int threads,
-        out ChunkView[] partitionArray, out int partitionCount)
+    // of work. Returns the live partition count written to the destination.
+    private static int BuildEntityRangePartitions(
+        ChunkView[] chunks, int count, int threads, ChunkView[] partitions)
     {
         var subPerChunk = Math.Max(1, threads / count);
-        partitionArray = GetPartitionBuffer(threads);
-        var pIdx = 0;
+        var partitionCount = 0;
         for (var i = 0; i < count; i++)
         {
             var entities = chunks[i].Count;
@@ -247,25 +253,38 @@ public readonly struct Query
             {
                 var size = per + (j < rem ? 1 : 0);
                 if (size > 0)
-                    partitionArray[pIdx++] = chunks[i].Slice(start, size);
+                    partitions[partitionCount++] = chunks[i].Slice(start, size);
                 start += size;
             }
         }
 
-        partitionCount = pIdx;
+        return partitionCount;
     }
 
     [ThreadStatic]
     private static ChunkView[]? t_partitions;
 
-    private static ChunkView[] GetPartitionBuffer(int minLength)
+    [ThreadStatic]
+    private static bool t_partitionBufferInUse;
+
+    private static ChunkView[] AcquirePartitionBuffer(int minLength, out bool usesReusableBuffer)
     {
-        var arr = t_partitions;
-        if (arr is not null && arr.Length >= minLength)
-            return arr;
-        arr = new ChunkView[minLength];
-        t_partitions = arr;
-        return arr;
+        if (t_partitionBufferInUse)
+        {
+            usesReusableBuffer = false;
+            return new ChunkView[minLength];
+        }
+
+        var partitions = t_partitions;
+        if (partitions is null || partitions.Length < minLength)
+        {
+            partitions = new ChunkView[minLength];
+            t_partitions = partitions;
+        }
+
+        t_partitionBufferInUse = true;
+        usesReusableBuffer = true;
+        return partitions;
     }
 
     /// <summary>

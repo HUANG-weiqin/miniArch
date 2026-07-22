@@ -50,6 +50,7 @@ CommandStream 的 pending/component/hierarchy/async preflight 已修复已知“
 | `BUG_Validate_rejects_unknown_remove_component_type` | Remove 是唯一未验证 component registry 的 component op，未知 type id 可绕过 Validate | Remove 与 Create/Add/Set 统一拒绝未注册 type id |
 | `BUG_Validate_rejects_zero_version_real_entity` | primary/parent real entity 的 version=0 不属于有效运行时 handle，却被 Validate 当作合法 shape | placeholder 允许 seq=0；real entity version 必须为正 |
 | `BUG_Validate_rejects_unreserved_embedded_placeholder` | Create/Add/Set payload 的 Entity 字段可引用从未 Reserve 的 placeholder；Validate 通过后 Replay 会在已 materialize owner 后失败 | dry validation 按注册 type 的 Entity field offset 扫 payload，placeholder 必须已有前置 Reserve |
+| `BUG_nested_ForEachChunkParallel_does_not_overwrite_outer_partitions` | 外层并行 query 捕获调用线程的 ThreadStatic partition buffer；同线程 callback 嵌套另一个并行 query 会覆写该 buffer，使外层后续 worker 处理内层 World 的 chunk | 可复用 buffer 增加调用期 lease；同线程重入改用独立 fallback buffer，`finally` 释放 lease；非重入稳态路径不新增分配 |
 
 ### 2026-07-15 quality hardening
 
@@ -123,6 +124,9 @@ B7-B16 属于旧 `ChangeQuery` / `Track().Capture().Previous()` / shared tracker
 | `Destroy(ReadOnlySpan<Entity>)` 大批量分支 / `Destroy(query)` | 输入 span 也可能别名 archetype 存储，删除会覆写尚未读取的 handle | 非 bug。两条路径都在任何 storage mutation 前完整收集 destroy roots；只有已修复的小批量逐个删除分支需要输入快照 | `BeginDestroyCollection` → collect loop → `DestroyCollectedEntities` 代码走读 |
 | `HierarchyTable.ClearHierarchyState` + surviving parent | parent 的 stale child slot 之后会被复用并指向无关活实体 | 非 bug。该 parent slot 没有被 `FreeChildSlot`，因此不会复用；方法只释放被清实体自己的 child-list slots，并先把自己的 `_firstChild` 断开 | `ClearHierarchyState` 与 `RemoveDestroyed` 对照走读；`World.Clear` XML 明示 stale-slot 边界 |
 | 内部 dynamic archetype 构建 / Snapshot Load | `Signature` 去重也会掩盖重复类型，应像 public `World.Create` 一律抛错 | 非 bug。dynamic set 运算有意 canonicalize；Snapshot payload 在构建前已逐 archetype 拒绝重复 schema index。只有 direct generic Create 声称每个参数都是独立组件 | `GetOrCreateArchetype(ReadOnlySpan<ComponentType>)` / `ValidateArchetypePayload` 代码走读；CreateMany duplicate 测试 |
+| `Query.ForEachChunk` / entity query callback 嵌套同一只读 query | 内层 `EnsureRefreshed` 重入 refresh lock 会死锁或改坏外层枚举状态 | 非 bug。Monitor lock 同线程可重入，每次枚举器/Span 都持有独立迭代状态；前提仍是回调内不做结构变更 | 嵌套控制流走读 + QueryCache double-check；parallel scratch 的独立缺陷由对应 `BUG_` 测试守卫 |
+| `OrderedComponentEnumerator` comparison 内嵌套排序 | 内外排序会共享 comparer 或 pooled buffers 并互相改写 | 非 bug。`ComparisonCache.Acquire` 每次创建不可变 comparer，每个 enumerator 独立租用和持有 buffer | `OrderedComponentEnumerator.Initialize` / `ComparisonCache<T>` 生命周期走读 |
+| `WorldSnapshot` checksum / `WorldValidator` 的 ThreadStatic collections | 与 parallel partition 同族，会在同线程重入时被覆写 | 非 bug。collection 活跃期间没有调用用户 delegate、虚 comparer、外部 Stream 或其他可重入边界；公共方法同步返回后才可能再次进入 | checksum feeder/排序/层级枚举与 validator 全控制流走读；唯一跨用户 callback 的 ThreadStatic partition 已单独修复 |
 
 ## 决策
 
