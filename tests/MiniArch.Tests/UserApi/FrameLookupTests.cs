@@ -87,6 +87,39 @@ public sealed class FrameLookupTests
     }
 
     [Fact]
+    public void BUG_full_lookup_missing_key_returns_empty_span()
+    {
+        using var world = new World();
+        var query = new QueryDescription().With<GridCell>();
+
+        for (var i = 0; i < 16; i++)
+            world.Create(new GridCell(i, 0));
+
+        var lookup = new FrameLookup<(int X, int Y)>();
+        Assert.True(lookup.TryBuild(world, query, new CellKeySelector()));
+        Assert.Equal(16, lookup.KeyCount);
+
+        Assert.Equal(0, lookup[(16, 0)].Length);
+    }
+
+    [Fact]
+    public void BUG_generation_wrap_does_not_make_empty_slots_look_occupied()
+    {
+        using var world = new World();
+        var query = new QueryDescription().With<GridCell>();
+        world.Create(new GridCell(1, 0));
+
+        var lookup = new FrameLookup<(int X, int Y)>();
+        var generation = lookup.GetType().GetField(
+            "_generation",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        generation.SetValue(lookup, -1);
+
+        Assert.True(lookup.TryBuild(world, query, new CellKeySelector()));
+        Assert.Equal(1, lookup[(1, 0)].Length);
+    }
+
+    [Fact]
     public void Empty_world_returns_zero()
     {
         using var world = new World();

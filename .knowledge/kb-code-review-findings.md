@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 审阅前必读的当前风险、已修复真 bug 回归索引与已排除非 bug 猜想；只保留结论和验证入口
-updated: 2026-07-19
+updated: 2026-07-22
 ---
 # 代码审阅发现
 
@@ -25,6 +25,13 @@ updated: 2026-07-19
 CommandStream 的 pending/component/hierarchy/async preflight 已修复已知“用户契约错误导致部分提交”路径，但它不把 Submit 或 Replay 提升为灾难性异常下的通用事务。
 
 ## 已修复的真 bug 索引
+
+### 2026-07-22 全面审阅
+
+| 回归测试 | 位置 / witness | 修复边界 |
+|---|---|---|
+| `BUG_full_lookup_missing_key_returns_empty_span` | `FrameLookup.FindSlot` 在开放寻址表恰好占满时查找不存在 key，没有空 stamp 可终止，进入无限循环 | 探测回到起点时返回未命中 |
+| `BUG_generation_wrap_does_not_make_empty_slots_look_occupied` | `FrameLookup.Clear` 的 generation 回绕为 0 后与零初始化 stamp 混淆，非默认 key 的首次插入无限探测 | generation 命中 0 时清空 stamp 并从 1 重新开始 |
 
 ### 2026-07-15 quality hardening
 

@@ -75,7 +75,12 @@ public sealed class FrameLookup<TKey>
     /// <summary>Resets all stored data. Internal capacity is preserved.</summary>
     public void Clear()
     {
-        _generation++;
+        _generation = unchecked(_generation + 1);
+        if (_generation == 0)
+        {
+            Array.Clear(_stamps);
+            _generation = 1;
+        }
         _totalRows = 0;
         _keyCountTotal = 0;
     }
@@ -216,12 +221,15 @@ public sealed class FrameLookup<TKey>
     {
         var mask = (uint)(_capacity - 1);
         var idx = (uint)key.GetHashCode() & mask;
-        while (true)
+        var start = idx;
+        do
         {
             if (_stamps[idx] != _generation) return -1;
             if (EqualityComparer<TKey>.Default.Equals(_keys[idx], key)) return (int)idx;
             idx = (idx + 1) & mask;
-        }
+        } while (idx != start);
+
+        return -1;
     }
 
     private int FindOrCreateSlot(TKey key, int[] tempCounts, ref int distinctKeys)
