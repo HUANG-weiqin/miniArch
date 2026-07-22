@@ -191,27 +191,6 @@ public sealed partial class World
         FinishMoveEntity(entity, info, destination!, rowIdx);
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void ApplyTypedSet<T>(Entity entity, ComponentType componentType, in T component) where T : unmanaged
-    {
-        var info = RequireLocation(entity);
-        ApplyTypedSet(entity, info, componentType, in component);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static void ApplyTypedSet<T>(Entity entity, EntityRecord info, ComponentType componentType, in T component) where T : unmanaged
-    {
-        var archetype = info.Archetype!;
-
-        if (!archetype.TryGetComponentIndex(componentType, out var componentIndex))
-        {
-            throw new InvalidOperationException(
-                $"Entity {entity} does not have component {typeof(T).Name}.");
-        }
-
-        archetype.SetComponentAtTyped(componentIndex, info.RowIndex, in component);
-    }
-
     // Raw-byte paths: ReplayCore dispatches Add/Set ops here.
     internal unsafe void ApplyRawAdd(Entity entity, EntityRecord info, ComponentType componentType, byte* source)
     {
