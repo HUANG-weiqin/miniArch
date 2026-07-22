@@ -1420,13 +1420,7 @@ public sealed partial class World : IDisposable
             _freeIds[i] = new RecycledEntity(snapshot.FreeEntities[i].Id, snapshot.FreeEntities[i].Version);
         _freeIdCount = snapshot.FreeIdCount;
 
-        var occupiedCount = 0;
-        for (var i = 0; i < _entitySlotCount; i++)
-        {
-            if (_records[i].IsOccupied)
-                occupiedCount++;
-        }
-        _reservedCount = _entitySlotCount - _freeIdCount - occupiedCount;
+        RecalculateReservedCount();
 
         // Reset all archetypes to empty, then restore backed-up ones.
         // This handles prediction-created archetypes that have no backup.
@@ -1504,6 +1498,7 @@ public sealed partial class World : IDisposable
         _queries.Clear();
         _createArchetypeCacheGeneration++;
         _freeIdCount = 0;
+        _reservedCount = 0;
         _destroyVisitedGen = [];
         _destroyCurrentGen = 0;
         _hierarchy.Reset();
@@ -1587,6 +1582,18 @@ public sealed partial class World : IDisposable
             Array.Resize(ref _freeIds, count);
         Array.Copy(source._freeIds, _freeIds, count);
         _freeIdCount = count;
+    }
+
+    internal void RecalculateReservedCount()
+    {
+        var occupiedCount = 0;
+        for (var i = 0; i < _entitySlotCount; i++)
+        {
+            if (_records[i].IsOccupied)
+                occupiedCount++;
+        }
+
+        _reservedCount = _entitySlotCount - _freeIdCount - occupiedCount;
     }
 
     private void ValidateSnapshotEntitySlot(int entityId)

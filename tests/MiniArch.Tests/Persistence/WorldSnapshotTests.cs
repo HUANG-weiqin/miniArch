@@ -126,6 +126,31 @@ public sealed class WorldSnapshotTests
 
 
     [Fact]
+    public void BUG_snapshot_round_trip_preserves_reserved_entity_count()
+    {
+        using var world = new World();
+        var stream = new CommandStream(world);
+        var reserved = stream.Create();
+
+        try
+        {
+            Assert.Equal(0, world.EntityCount);
+
+            using var snapshot = new MemoryStream();
+            WorldSnapshot.Save(snapshot, world);
+            snapshot.Position = 0;
+            using var loaded = WorldSnapshot.Load(snapshot);
+
+            Assert.Equal(world.EntityCount, loaded.EntityCount);
+            Assert.False(loaded.IsAlive(reserved));
+        }
+        finally
+        {
+            stream.Clear();
+        }
+    }
+
+    [Fact]
     public void Snapshot_preserves_free_slot_versions_for_reused_entity_ids()
     {
         var world = new World();
@@ -1660,6 +1685,30 @@ public sealed class WorldSnapshotTests
     }
 
     [Fact]
+    public void BUG_Snapshot_load_rejects_duplicate_archetype_signature()
+    {
+        var data = BuildV3SnapshotWithRawArchetypes(
+            2,
+            writer =>
+            {
+                writer.Write(2); // first component count
+                writer.Write(0);
+                writer.Write(1);
+                writer.Write(0); // first row count
+                writer.Write(2); // same signature in reverse file order
+                writer.Write(1);
+                writer.Write(0);
+                writer.Write(0); // second row count
+            },
+            typeof(int).AssemblyQualifiedName!,
+            typeof(long).AssemblyQualifiedName!);
+
+        var exception = Assert.Throws<InvalidDataException>(
+            () => WorldSnapshot.Load(new MemoryStream(data)));
+        Assert.Contains("duplicate archetype signature", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Snapshot_load_rejects_archetype_row_count_above_entity_slots()
     {
         var data = BuildV3SnapshotWithRawArchetype(writer =>
@@ -1786,12 +1835,20 @@ public sealed class WorldSnapshotTests
 
     private static byte[] BuildV3SnapshotWithRawArchetype(Action<BinaryWriter> writeArchetype, params string[] schemaNames)
     {
+        return BuildV3SnapshotWithRawArchetypes(1, writeArchetype, schemaNames);
+    }
+
+    private static byte[] BuildV3SnapshotWithRawArchetypes(
+        int archetypeCount,
+        Action<BinaryWriter> writeArchetypes,
+        params string[] schemaNames)
+    {
         using var ms = new MemoryStream();
         using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
-        WriteV3SnapshotHeader(writer, schemaNames.Length, archetypeCount: 1);
+        WriteV3SnapshotHeader(writer, schemaNames.Length, archetypeCount);
         foreach (var name in schemaNames)
             ComponentSchemaCodec.WriteSchemaName(writer, name);
-        writeArchetype(writer);
+        writeArchetypes(writer);
         writer.Write(0); // free list length
         writer.Flush();
         return ms.ToArray();

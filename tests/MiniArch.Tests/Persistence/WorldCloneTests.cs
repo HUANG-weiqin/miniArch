@@ -110,6 +110,26 @@ public sealed class WorldCloneTests
     }
 
     [Fact]
+    public void BUG_clone_preserves_reserved_entity_count()
+    {
+        using var world = new World();
+        var stream = new CommandStream(world);
+        var reserved = stream.Create();
+
+        try
+        {
+            using var cloned = world.Clone();
+
+            Assert.Equal(world.EntityCount, cloned.EntityCount);
+            Assert.False(cloned.IsAlive(reserved));
+        }
+        finally
+        {
+            stream.Clear();
+        }
+    }
+
+    [Fact]
     public void Clone_preserves_free_slot_versions_for_reused_entity_ids()
     {
         var world = new World();

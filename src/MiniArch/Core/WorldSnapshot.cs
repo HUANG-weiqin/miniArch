@@ -271,6 +271,7 @@ public static class WorldSnapshot
             }
 
             world.ReadFreeList(reader);
+            world.RecalculateReservedCount();
             if (reader.BaseStream.Position != reader.BaseStream.Length)
             {
                 throw new InvalidDataException(
@@ -548,10 +549,16 @@ public static class WorldSnapshot
         int hierarchyLinkCount)
     {
         var loadedEntityIds = new HashSet<int>();
+        var loadedArchetypeSignatures = new HashSet<Signature>();
 
         for (var archetypeIndex = 0; archetypeIndex < archetypeCount; archetypeIndex++)
         {
-            ValidateArchetypePayload(reader, schemaTypes, slotVersions, loadedEntityIds);
+            ValidateArchetypePayload(
+                reader,
+                schemaTypes,
+                slotVersions,
+                loadedEntityIds,
+                loadedArchetypeSignatures);
         }
 
         ValidateHierarchyPayload(reader, slotVersions, loadedEntityIds, hierarchyLinkCount);
@@ -569,7 +576,8 @@ public static class WorldSnapshot
         BinaryReader reader,
         Type[] schemaTypes,
         int[] slotVersions,
-        HashSet<int> loadedEntityIds)
+        HashSet<int> loadedEntityIds,
+        HashSet<Signature> loadedArchetypeSignatures)
     {
         var componentCount = reader.ReadInt32();
         if (componentCount < 0 || componentCount > schemaTypes.Length)
@@ -579,6 +587,7 @@ public static class WorldSnapshot
         }
 
         var fileOrderedComponentTypes = new Type[componentCount];
+        var signatureComponents = new ComponentType[componentCount];
         var seenComponentTypes = new HashSet<Type>();
         for (var componentIndex = 0; componentIndex < componentCount; componentIndex++)
         {
@@ -597,7 +606,11 @@ public static class WorldSnapshot
             }
 
             fileOrderedComponentTypes[componentIndex] = componentType;
+            signatureComponents[componentIndex] = new ComponentType(schemaIndex);
         }
+
+        if (!loadedArchetypeSignatures.Add(new Signature(signatureComponents)))
+            throw new InvalidDataException("Snapshot contains a duplicate archetype signature.");
 
         var rowCount = reader.ReadInt32();
         if (rowCount < 0 || rowCount > slotVersions.Length)

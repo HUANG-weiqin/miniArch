@@ -39,6 +39,7 @@ internal static class WorldClone
         }
 
         target.CopyFreeIdsFrom(source);
+        target.RecalculateReservedCount();
         return target;
     }
 }

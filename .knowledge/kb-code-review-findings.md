@@ -43,6 +43,8 @@ CommandStream 的 pending/component/hierarchy/async preflight 已修复已知“
 | `BUG_Create_duplicate_component_types_throws_before_world_mutation` | 直接 `World.Create<T1,T2,...>` 传入重复组件类型时 `Signature` 静默去重，随后同一列被写两次并返回少于声明数量的组件集合 | arity 2..16 的 cache-miss 路径统一比较 normalized signature count；重复类型在分配 entity 前 fast-fail |
 | `BUG_ChangeWatch_reentrant_Diff_throws_and_recovers` / `BUG_TransitionWatch_reentrant_Diff_throws_and_recovers` | handler 对同一个 watch 嵌套 Diff 会覆写外层复用 buffer/epoch 状态，导致重复或错误 callback | 三种 watch 的 Snapshot/Diff 统一增加实例级重入 guard，并用 `finally` 保证异常后恢复；不同 watch 仍可组合 |
 | `BUG_failed_projected_Snapshot_invalidates_partial_baseline_and_recovers` | projected `Snapshot` 的 `Project` 中途抛异常后，`_hasSnapshot` 仍保留 true，后续 Diff 会读取已清理/半写的 baseline | Snapshot 开始收集前 invalidate baseline；只有完整成功才发布，异常后必须重新 Snapshot，operation guard 可恢复 |
+| `BUG_Snapshot_load_rejects_duplicate_archetype_signature` | 不可信 snapshot 可声明两个归一化后相同的 archetype signature；Load 会静默合并，无法精确重建 payload 声明的 world 结构，重存也不再规范等价 | dry-validate 以 schema index 构造归一化 signature 并全局去重，在注册 schema 或构建 World 前拒绝重复 |
+| `BUG_snapshot_round_trip_preserves_reserved_entity_count` / `BUG_clone_preserves_reserved_entity_count` | World 含 CommandStream 预留但未 materialize 的 slot 时，Load/Clone 复制 records/free list 却把 `_reservedCount` 留为 0，导致 `EntityCount` 把 reservation 误报为活实体 | 所有重建路径从 slot count − free count − occupied count 统一推导 reservation；Reset 先清旧计数 |
 
 ### 2026-07-15 quality hardening
 

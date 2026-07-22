@@ -2,7 +2,7 @@
 title: Snapshot Persistence
 module: MiniArch.Core Snapshot
 description: Full-world snapshot save/load design for unmanaged components (WorldSnapshot.Save/Load, Clone, CaptureState/RestoreState), plus Checksum double mode
-updated: 2026-07-19
+updated: 2026-07-22
 ---
 # Snapshot Persistence
 
@@ -40,6 +40,7 @@ updated: 2026-07-19
 - `World.CaptureState/RestoreState`：原地 raw 数组拷贝，**池化句柄复用**，稳态零 GC；产物是**绑定源 World 的句柄**
 - 前两者共享同一套 internal 重建 API（`world.Reset(slotCount)`, `SetSnapshotEntityVersion()`, `SetSnapshotLocation()`）；后者独立走 `WorldStateSnapshot` + `ArchetypeBackupEntry` + `HierarchyTable.CaptureState/RestoreState`
 - v3 起 free list 直接序列化/反序列化（`WriteFreeList`/`ReadFreeList`），不再通过扫描 record 重建。Clone 用 `CopyFreeIdsFrom` 内存直拷。
+- Reservation 不单独序列化：slot 必为 occupied、free 或 reserved 三者之一；Load、Clone、RestoreState 都在 records/free list 就位后用 `slotCount - freeCount - occupiedCount` 推导 `_reservedCount`。这样即使 snapshot/clone 发生在 CommandStream 已预留 real id、尚未 materialize 的窗口，`EntityCount` 仍与源 World 一致。
 
 ### WorldStateSnapshot 生命周期（2026-06-30 重写）
 
@@ -71,7 +72,7 @@ world.RestoreState(ring[k+3]); // 可继续乱序 restore
 
 ## Checksum 双模式
 
-- **`world.Checksum()`**（`World.cs:1316` → `WorldSnapshot.ComputeChecksum`）：快，**非空 archetype 按创建顺序**；entry Id 在 archetype 内排序；输入：所有 slot version + 非空 archetype data + hierarchy；**不含 free list**。用于同 delta 序列驱动的 peer 间检测分叉。
+- **`world.Checksum()`**（`World.cs:1316` → `WorldSnapshot.ComputeChecksum`）：快，**非空 archetype 按 signature 顺序**；entity Id 列表在 archetype 内排序，但 component bytes 仍按物理 row 顺序输入；输入：所有 slot version + 非空 archetype data + hierarchy；**不含 free list**。用于同 delta 序列驱动的 peer 间检测分叉。
 - **`world.CanonicalChecksum()`**（`World.cs:1325` → `WorldSnapshot.ComputeCanonicalChecksum`）：慢，**所有活 entity 按 Id 全局排序**。输入：仅活 entity（id+version+组件）+ hierarchy + **free list**。用于跨不同构造路径（replay / snapshot-load / 手工构造 / Clone）的世界间逻辑等价比较。
 
 ### Padding 字节安全
@@ -84,7 +85,7 @@ Archetype 存储使用 `GC.AllocateArray`（零初始化）分配，组件 struc
 - **Padding 零初始化保证在 storage 层而非 checksum 层**：storage 层分配即确定，不做则 hash 不可靠。
 
 ### 坑点
-- `Checksum` 依赖同构造路径：不同 archetype 创建顺序/swap-remove 历史 → 不同 hash。逻辑相等但路径不同的 world 会误报。
+- `Checksum` 依赖同布局演化路径：archetype 已按 signature 排序，不再依赖创建顺序；但不同 swap-remove/物理 row 历史仍会产生不同 hash。逻辑相等但布局路径不同的 world 可能误报。
 - `CanonicalChecksum` 仍依赖 `ComponentType.Value` 进程内一致性：跨进程比较时双方 `ComponentRegistry` 注册顺序必须一致。
 - 两个 checksum 不适用于含托管引用组件的 world（构造时已 fail fast）。
 
@@ -109,7 +110,8 @@ v3 格式仍可读且跳过 CRC 校验。
 - `Fingerprint()` 也使用同一 schema name，避免同名不同程序集/版本的握手 hash 碰撞。
 - schema name 读取使用有界 UTF-8 reader（当前上限 16KB），不再裸用 `BinaryReader.ReadString()`。
 - 外部读入 schema 时必须满足 miniArch 组件约束：resolved `Type` 唯一、无 open generic、value type、非 by-ref-like、无托管字段、满足 `unmanaged` generic constraint。
-- `WorldSnapshot.Load` 额外拒绝：重复 schema、截断 body、v3 trailing bytes、非法 chunk capacity、非法 free-list count/id/version/duplicate/live-overlap、非法 hierarchy endpoint/duplicate child/cycle、非法 archetype component count/schema index/重复 component、非法 row count/重复 entity id/非正 live version。
+- `WorldSnapshot.Load` 额外拒绝：重复 schema、截断 body、v3 trailing bytes、非法 chunk capacity、非法 free-list count/id/version/duplicate/live-overlap、非法 hierarchy endpoint/duplicate child/cycle、非法 archetype component count/schema index/重复 component、跨 archetype 重复 signature、非法 row count/重复 entity id/非正 live version。
+- dry-validate 使用 schema index 构造归一化 signature 并跨 archetype 去重；不能依赖实际构建阶段的 `GetOrCreateArchetype` 静默合并 malformed payload，因为这会让 Load 后的可观察 archetype 结构和重存字节偏离输入声明。
 - `WorldSnapshot.Load` 的 schema 解析与 payload 构建分两阶段：先 dry-validate 完整 body，再注册 schema type / 构建 `World`，避免后续 payload 无效时污染 `ComponentRegistry.Shared`。
 
 结论：`Import` / `Load` 是不可信输入边界，错误必须统一 fail-fast 为 `InvalidDataException`，且在完成全量验证前不得污染 `ComponentRegistry.Shared`。
