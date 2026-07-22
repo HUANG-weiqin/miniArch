@@ -260,6 +260,36 @@ public sealed class ComponentBucketQueryTests
         Assert.Equal(e, Buffer[0]);
     }
 
+    [Fact]
+    public void Short_destination_reports_total_match_count()
+    {
+        using var world = new World();
+        var query = new ComponentBucketQuery<CardZone>(world);
+        var first = world.Create(new CardZone(5));
+        world.Create(new CardZone(5));
+        world.Create(new CardZone(5));
+        Span<Entity> destination = stackalloc Entity[1];
+
+        var totalMatches = query.Get(new CardZone(5), destination);
+
+        Assert.Equal(3, totalMatches);
+        Assert.Equal(first, destination[0]);
+    }
+
+    [Fact]
+    public void Empty_destination_still_reports_matches()
+    {
+        using var world = new World();
+        var query = new ComponentBucketQuery<CardZone>(world);
+        world.Create(new CardZone(5));
+        world.Create(new CardZone(5));
+
+        var found = query.TryGet(new CardZone(5), Span<Entity>.Empty, out var totalMatches);
+
+        Assert.True(found);
+        Assert.Equal(2, totalMatches);
+    }
+
     // ── 12. CardZone scenario — single-component zone ───────────────
 
     [Fact]

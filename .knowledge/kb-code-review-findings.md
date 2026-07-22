@@ -85,13 +85,13 @@ CommandStream 的 pending/component/hierarchy/async preflight 已修复已知“
 
 B7-B16 属于旧 `ChangeQuery` / `Track().Capture().Previous()` / shared tracker 路径。该 API 和相关 registry/dispatch 文件已删除，当前 Watch 是独立 `Snapshot(World)` → `Diff(World)` pull 模型。这些条目不再作为当前代码的审阅依据；当前覆盖看 `WatchApiTests`、`WatchProjectedTests`、`ChangeTrackingSnapshotTests` 与 `CrossFeatureParityTests`。
 
-### 2026-07-19 Save archetype 排序违反 query 顺序契约 + Clone 跳过空 archetype
+### 2026-07-19 Query 顺序升级为签名排序
 
 | 回归测试 | 问题 | 修复 |
 |---------|------|------|
-| `Save_load_preserves_archetype_creation_order` | `CollectPersistedArchetypes` 按 signature 排序绕过空 archetype，导致 Save→Load 后 query 迭代顺序改变（违反语义承诺）。空 archetype 也被丢弃，影响未来实体创建的 query 顺序 | 去掉排序和空过滤。`ComputeChecksum` 独立走 `CollectChecksumArchetypes`（仅过滤空不做排序） |
-| `Save_load_preserves_empty_archetypes` | 同上 | 同上 |
-| `Clone_preserves_empty_archetypes_and_their_creation_order` | `WorldClone.Clone` 跳过空 archetype，导致 clone 后的 world 与源 world 的 archetype 快照不同，这是 Save 排序的根本原因 | Clone 不再跳过空 archetype：对所有源 archetype 都调用 `GetOrCreateArchetype`，仅在 `EntityCount==0` 时跳过数据拷贝 |
+| `Query_iterates_archetypes_in_signature_order` / `Save_load_preserves_archetype_signature_order` | archetype 创建历史会让逻辑等价 World 的 query 顺序分叉 | `_archetypeSnapshot` 按 `Signature` 字典序插入；Save→Load 后仍由签名唯一决定顺序 |
+| `Save_load_preserves_empty_archetypes` | Snapshot 丢弃空 archetype 会改变可观察的 World 结构 | Save/Load 保留空 archetype；checksum 仍可独立过滤空 archetype |
+| `Clone_preserves_empty_archetypes_and_their_signature_order` | Clone 跳过空 archetype会改变可观察的 World 结构 | Clone 为每个源 archetype 建立目标 archetype，仅对空 archetype 跳过数据拷贝 |
 
 ## 已验证安全的模式（非 bug）
 
@@ -108,6 +108,7 @@ B7-B16 属于旧 `ChangeQuery` / `Track().Capture().Previous()` / shared tracker
 | `RestoreState` 保留 capture 后创建的空 archetype | query 会把空壳当活数据 | 非 bug。archetype append-only，QueryCache 可见但 entity count 为 0 | restore/query tests |
 | pending `Create+Add/Set/Remove` | 应暴露每个中间 Watch event | 非 bug。pending batch 契约只 materialize 最终状态 | pending Watch/transition parity tests |
 | `CompactRemoveRowsFlat` hole-fill | live prefix 留下 stale source entity | 非 bug。hole 只由 tail suffix survivor 填；最终 dead suffix 清零 | batch destroy checksum/diff/validator tests |
+| `ComponentBucketQuery.Get/TryGet` + short destination | 返回值大于 destination 长度看似“写入计数”越界 | 非 bug。实现有意返回总匹配数并只写入前缀，用一次扫描同时报告截断；XML、参数名和知识页已与该契约对齐 | `Short_destination_reports_total_match_count` / `Empty_destination_still_reports_matches` |
 
 ## 决策
 

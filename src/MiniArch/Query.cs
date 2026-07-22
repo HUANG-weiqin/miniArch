@@ -10,8 +10,8 @@ namespace MiniArch;
 ///
 /// <para><b>Iteration order contract</b> (promoted to semantic guarantee):</para>
 /// <list type="bullet">
-///   <item><b>Archetype order</b> — matched archetypes are iterated in the
-///   order they were created in the <see cref="World"/>.</item>
+///   <item><b>Archetype order</b> — matched archetypes are sorted
+///   lexicographically by their component-type signatures.</item>
 ///   <item><b>Entity order within an archetype</b> — entities are iterated
 ///   in their physical storage order: new entities are appended to the end;
 ///   entity removal (Destroy / component removal) uses swap-remove (the last

@@ -134,8 +134,8 @@ public sealed partial class World
     {
         // Sorted insertion by signature so that query iteration order is a
         // deterministic function of component types, not of creation history.
-        // This eliminates order sensitivity to Clone (which may skip empty
-        // archetypes), RestoreState (which leaves mutation-created artifacts),
+        // This eliminates order sensitivity to Clone, RestoreState (which can
+        // leave mutation-created empty archetypes),
         // and any other path that produces a different creation order.
         //
         // Volatile.Write is sufficient here: structural mutations are single-

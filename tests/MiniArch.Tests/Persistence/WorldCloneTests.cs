@@ -190,7 +190,7 @@ public sealed class WorldCloneTests
     }
 
     [Fact]
-    public void Clone_preserves_empty_archetypes_and_their_creation_order()
+    public void Clone_preserves_empty_archetypes_and_their_signature_order()
     {
         var world = new World();
 

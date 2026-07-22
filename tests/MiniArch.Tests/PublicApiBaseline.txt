@@ -34,7 +34,7 @@ class: MiniArch.ComponentBucketQuery`1 where TComponent : struct, System.ValueTy
   Method: ContainsKey(TComponent key) -> System.Boolean
   Method: Count(TComponent key) -> System.Int32
   Method: Get(TComponent key, System.Span<MiniArch.Entity> destination) -> System.Int32
-  Method: TryGet(TComponent key, System.Span<MiniArch.Entity> destination, out System.Int32& written) -> System.Boolean
+  Method: TryGet(TComponent key, System.Span<MiniArch.Entity> destination, out System.Int32& totalMatches) -> System.Boolean
 class: MiniArch.ComponentSchema
   Method: Export() -> System.Byte[]
   Method: Fingerprint() -> System.Byte[]

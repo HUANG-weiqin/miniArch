@@ -10,8 +10,8 @@ namespace MiniArch;
 /// <para>
 /// <b>Internal structure</b>: This type has no internal buffer. Each call to <see cref="Get"/>
 /// or <see cref="TryGet"/> scans the world for the requested key and writes matching entities
-/// into the caller-provided span. The caller is responsible for providing a span large enough
-/// to hold all results.
+/// into the caller-provided span. The returned total match count lets the caller detect when
+/// the span was too small and retry with a larger destination.
 /// </para>
 /// <para>
 /// <b>Use when</b>: you need occasional lookups by component value (a few keys per frame)
@@ -123,14 +123,18 @@ public sealed class ComponentBucketQuery<TComponent>
     }
 
     /// <summary>
-    /// Writes all entities whose <typeparamref name="TComponent"/> value equals <paramref name="key"/>
-    /// into <paramref name="destination"/> and returns the number of entities written.
-    /// If <paramref name="destination"/> is too small, only the first N matching entities are written.
+    /// Writes entities whose <typeparamref name="TComponent"/> value equals <paramref name="key"/>
+    /// into <paramref name="destination"/> and returns the total number of matches.
+    /// If <paramref name="destination"/> is too small, only the first
+    /// <c>destination.Length</c> matches are written.
     /// </summary>
-    /// <returns>The number of matching entities written to <paramref name="destination"/>.</returns>
+    /// <returns>
+    /// The total number of matching entities, which may exceed
+    /// <c>destination.Length</c>.
+    /// </returns>
     public int Get(TComponent key, Span<Entity> destination)
     {
-        var written = 0;
+        var totalMatches = 0;
         var query = _world.Query(in _scope);
         var chunks = query.GetChunks();
 
@@ -145,45 +149,25 @@ public sealed class ComponentBucketQuery<TComponent>
                 if (!components[i].Equals(key))
                     continue;
 
-                if (written < destination.Length)
-                    destination[written] = entities[i];
-                written++;
+                if (totalMatches < destination.Length)
+                    destination[totalMatches] = entities[i];
+                totalMatches++;
             }
         }
 
-        return written;
+        return totalMatches;
     }
 
     /// <summary>
     /// Tries to get entities whose <typeparamref name="TComponent"/> value equals <paramref name="key"/>.
-    /// Returns true when at least one entity was found.
-    /// Matching entities are written to <paramref name="destination"/> and the count is reported
-    /// via <paramref name="written"/>.
+    /// Returns true when at least one entity was found. The first matches are written to
+    /// <paramref name="destination"/>, while <paramref name="totalMatches"/> reports the total
+    /// number found and may exceed the destination length.
     /// </summary>
-    public bool TryGet(TComponent key, Span<Entity> destination, out int written)
+    public bool TryGet(TComponent key, Span<Entity> destination, out int totalMatches)
     {
-        written = 0;
-        var query = _world.Query(in _scope);
-        var chunks = query.GetChunks();
-
-        foreach (var chunk in chunks)
-        {
-            var entities = chunk.GetEntities();
-            var components = chunk.GetSpan<TComponent>();
-            var count = chunk.Count;
-
-            for (var i = 0; i < count; i++)
-            {
-                if (!components[i].Equals(key))
-                    continue;
-
-                if (written < destination.Length)
-                    destination[written] = entities[i];
-                written++;
-            }
-        }
-
-        return written > 0;
+        totalMatches = Get(key, destination);
+        return totalMatches > 0;
     }
 
 }

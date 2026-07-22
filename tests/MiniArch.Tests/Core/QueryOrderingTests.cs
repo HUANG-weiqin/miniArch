@@ -23,28 +23,22 @@ public sealed class QueryOrderingTests
     // ──────────────────────────────────────────────
 
     [Fact]
-    public void Query_iterates_archetypes_in_creation_order()
+    public void Query_iterates_archetypes_in_signature_order()
     {
         var world = new World();
 
-        // Archetype A: {Position} — created first (via first entity with Position)
-        var a1 = world.Create(new Position(1, 1));
-        var a2 = world.Create(new Position(2, 2));
-
-        // Archetype B: {Velocity} — created second (NOT matched, for padding)
-        world.Create(new Velocity(3, 3));
-
-        // Archetype C: {Position, Velocity} — created third
-        var c1 = world.Create(new Position(4, 4), new Velocity(5, 5));
+        // Create the longer signature first so creation order and signature
+        // order disagree. The shorter prefix signature must still sort first.
+        var combined = world.Create(new Position(1, 1), new Velocity(2, 2));
+        var positionOnly = world.Create(new Position(3, 3));
 
         var query = world.Query(new QueryDescription().With<Position>());
 
-        // Expected: A (a1, a2) then C (c1)
-        Assert.Equal([a1, a2, c1], CollectEntities(query));
+        Assert.Equal([positionOnly, combined], CollectEntities(query));
     }
 
     [Fact]
-    public void Query_iterates_archetypes_in_creation_order_complex()
+    public void Query_iterates_archetypes_in_signature_order_complex()
     {
         var world = new World();
 
@@ -56,8 +50,7 @@ public sealed class QueryOrderingTests
 
         var query = world.Query(new QueryDescription().With<Position>());
 
-        // All position entities in archetype creation order:
-        // Arch 0 (first created: a0, a1), then Arch 2 (second matching: c0)
+        // Signature order puts {Position} before {Position, Velocity}.
         Assert.Equal([a0, a1, c0], CollectEntities(query));
     }
 

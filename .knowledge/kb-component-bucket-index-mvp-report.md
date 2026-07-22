@@ -2,7 +2,7 @@
 title: ComponentBucketQuery MVP 验证报告
 module: MiniArch（用户 API 分层）
 description: ComponentBucketQuery MVP 最终报告——0 core intrusion、确定性 per-key scan、正确性模型、性能矩阵
-updated: 2026-07-10
+updated: 2026-07-22
 ---
 
 # ComponentBucketQuery MVP 验证报告
@@ -13,7 +13,7 @@ updated: 2026-07-10
 2. **零 core 入侵。** 完全在 MiniArch.Core 之上构建，只使用 World 公开 API，不修改 `src/MiniArch/Core/` 任何代码。
 3. **API 精简到最低必要面。** 公开类型 `ComponentBucketQuery<TComponent>`，方法：构造函数、`Get`、`TryGet`、`ContainsKey`、`Count`。`Refresh()` 已删除——每次操作自验证，无需刷新入口。`IDisposable` 不必要——无内部状态需要释放。
 4. **无内部 buffer 架构。** `Get/TryGet` 不再维护内部 `Entity[]` 缓存，改为直接写入调用者提供的 `Span<Entity>`。无 Bucket class，无 Dictionary，无 `_buffer`/`_count` 字段。调用者控制内存生命周期，消除 span 过期风险。`Count/ContainsKey` 直接扫描不写入 span。无 `Clear`、无 `Dispose`。
-5. **Correctness 全通过：** 16 个专项测试 + 900 MiniArch 回归 + 5 HeroPipeline 全部通过。确定性正确性模型已在测试中验证。
+5. **Correctness 有回归守卫：** 专项契约测试、MiniArch 全量测试和 HeroPipeline 门禁共同验证确定性正确性模型。
 6. **性能定位：**
     - CountOnly：BucketQuery 远快于 ManualExpanded（~8×~10×，因 `Count(key)` 直接 per-key scan，不全量建桶；ManualExpanded 每轮全量建桶）。
     - Read2/Write3：BucketQuery 优于 ManualExpanded（~1.1×~3.7×，因确定性 scan 只取请求 key，ManualExpanded 每轮全量建桶；P 越大优势越明显）。
@@ -42,7 +42,7 @@ updated: 2026-07-10
   - 构造函数 `ComponentBucketQuery<TComponent>(World world)` 和 `(World world, QueryDescription scope)`：必须传入 World；可选 scope 限定查询范围。构造函数使用 `scope.GetRequiredTypes()` 代替 `RequiredTypes.ToArray()` 避免冷路径分配。
   - 无内部缓存，无 `_buffer` 字段。
 - 数据流：
-  - `Get(key, destination)` → `_world.Query(_scope)` → 遍历 chunk → 比较 `TComponent` 值 → 写入 `destination` → 返回写入总数。
+  - `Get(key, destination)` → `_world.Query(_scope)` → 遍历 chunk → 比较 `TComponent` 值 → 最多写入 `destination.Length` 个实体 → 返回总匹配数（可大于 destination 长度，用于检测截断）。
   - `Count(key)` / `ContainsKey(key)` → 直接 `_world.Query(_scope)` → 遍历 chunk 计数/判断，不写入任何 span。
 - 事实源策略：分桶依据始终来自 `World.Query` 返回的真实组件值。不做假设、不做缓存推测。
 
@@ -57,7 +57,7 @@ updated: 2026-07-10
 
 ## 认知模型
 
-- 把 `ComponentBucketQuery` 理解为一个**按需扫描的桶查询器**：它不对 freshness 做任何假设，每次读调用都从 World 重新扫描请求 key。`Get/TryGet` 将匹配实体写入调用者提供的 `Span<Entity>`，返回写入计数。调用者负责提供足够大的缓冲区。
+- 把 `ComponentBucketQuery` 理解为一个**按需扫描的桶查询器**：它不对 freshness 做任何假设，每次读调用都从 World 重新扫描请求 key。`Get/TryGet` 最多写入 `destination.Length` 个实体，并返回/输出总匹配数；总数大于 span 长度即表示结果被截断。
 - 常见误解：
   - 比手动扫表快？→ CountOnly 场景因 `Count(key)` 直接 per-key scan，不全量建桶，远快于 ManualExpanded。Read2/Write3 在同一量级。`Get/TryGet` 无内部 buffer 复用，每次重新写入调用者提供的 span。性能可预测。
   - 替代 Query？→ 不，它构建在 Query 之上，为按值分桶场景提供便利。
@@ -70,10 +70,10 @@ updated: 2026-07-10
 - **确定性正确性：** 每次 public read 在调用时刻从真实 World 扫描请求 key，结果直接反映当前 world 中该 key 的全部实体。无缓存推测，无概率判断，无 false negative。
 - **约束条件：**
   1. 单线程 game-loop 使用。
-  2. 提供足够大的 `Span<Entity>` 以容纳查询结果。
+  2. 需要完整结果时，根据返回的总匹配数提供足够大的 `Span<Entity>`；较小 span 是合法的前缀读取。
 - 这些约束与 MiniArch.ECS 整体使用模式一致，不是额外负担。
 
-### 专项测试（16 项通过）
+### 专项契约测试
 
 覆盖：identity、add、remove、query isolation、multi-bucket、确定性正确性验证、边界条件。
 
