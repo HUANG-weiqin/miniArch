@@ -117,6 +117,8 @@ placeholder 只在当前 stream/batch 内有效。跨帧持有解析结果使用
 
 这些是 wire 自身契约，不证明 target World allocator/free-list 与该历史兼容，也不提供 Replay rollback。
 
+real-id Replay 的 reservation 只接受三种状态：matching free slot、同一 handle 已被 source producer 预留、或紧邻的 version-1 fresh slot。只有实际从 free list 取出或创建 fresh slot 才增加 `_reservedCount`；已预留 slot 不重复计数。其他 allocator 状态在任何 ID/reservation mutation 前 fail-fast。该局部原子性不等于后续 Replay 操作具有通用 rollback。
+
 ## 性能门禁
 
 先用专用 runner 判断 record/submit/snapshot/clear 哪段主导：
@@ -165,3 +167,4 @@ consume prune 必须同时刷新 stream 的 store-dirty 汇总。若 stale-only 
 - parallel 只表示录制可并发，不表示同一 World 可被多个 stream 并发 reserve/submit。
 - 自己生成的 local delta 只有在显式 `Replay(delta, resolveSlots: true)` 时解析本 stream 跟踪的 `EntitySlot`；网络反序列化副本没有本地 slot ownership。
 - `FrameDelta.Validate()` 是不可信 wire 的结构预检，不提供 target World rollback。
+- source 对自己的 real-id Snapshot 直接 Replay 时会复用 producer 已有 reservation；不要把“不在 free list”误判成需要再次增加 reservation。

@@ -786,7 +786,7 @@ public sealed partial class World
     /// the wire. See B6 in <c>kb-code-review-findings.md</c>.
     /// <para/>
     /// <b>Performance note:</b> O(N) scan + O(N) shift. Same rationale as
-    /// <see cref="RemoveFromFreeList"/> —a Dictionary index was evaluated but
+    /// <see cref="TryRemoveFromFreeList"/> —a Dictionary index was evaluated but
     /// rejected. Realistic cancel batch size per frame is &lt;1000; beyond that
     /// the frame itself is already too heavy. Keep as-is.
     /// </remarks>
@@ -910,8 +910,11 @@ public sealed partial class World
             !_records[entity.Id].IsOccupied &&
             _records[entity.Id].Version == entity.Version)
         {
-            RemoveFromFreeList(entity);
-            _reservedCount++;
+            // A source host may replay its own Snapshot before clearing the
+            // producer stream. In that case this exact slot is already reserved
+            // and therefore absent from the free list; do not count it twice.
+            if (TryRemoveFromFreeList(entity))
+                _reservedCount++;
             return;
         }
 
@@ -922,11 +925,9 @@ public sealed partial class World
             return;
         }
 
-        var reserved = ReserveDeferredEntity();
-        if (reserved != entity)
-        {
-            throw new InvalidOperationException($"Replay failed: expected to reserve entity {entity} but got {reserved} instead. The source and target worlds may be out of sync.");
-        }
+        throw new InvalidOperationException(
+            $"Replay failed: entity {entity} cannot be reserved from the target world's current allocator state. " +
+            "The source and target worlds may be out of sync.");
     }
 
     private void ReserveReplayFreshSlot(Entity entity)
@@ -958,7 +959,7 @@ public sealed partial class World
     /// Push/Pop paths for marginal benefit. Keep as-is.
     /// See .knowledge/kb-hardening-roadmap.md §M2.3.
     /// </remarks>
-    private void RemoveFromFreeList(Entity entity)
+    private bool TryRemoveFromFreeList(Entity entity)
     {
         for (var i = _freeIdCount - 1; i >= 0; i--)
         {
@@ -966,9 +967,11 @@ public sealed partial class World
             {
                 _freeIdCount--;
                 Array.Copy(_freeIds, i + 1, _freeIds, i, _freeIdCount - i);
-                return;
+                return true;
             }
         }
+
+        return false;
     }
 
     /// <summary>

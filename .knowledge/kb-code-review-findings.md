@@ -18,7 +18,7 @@ updated: 2026-07-22
 ### Replay 没有通用事务回滚（P2，接受现状）
 
 - **位置**：`World.EntityLifecycle.cs` 的 Replay/ReplayCore 路径。
-- **边界**：`FrameDelta.Validate()` 能在 Replay 前拒绝结构损坏的 wire，但不能证明 target World 与 delta 历史兼容；若 Replay 中途发生 target-world 契约错误或灾难性异常，已执行操作不会自动回滚。
+- **边界**：`FrameDelta.Validate()` 能在 Replay 前拒绝结构损坏的 wire，但不能证明 target World 与 delta 历史兼容；reservation 首步不兼容现已在 allocator mutation 前失败，但若 Replay 在后续操作中发生 target-world 契约错误或灾难性异常，已执行操作仍不会自动回滚。
 - **当前策略**：不可信 wire 先 Validate；peer 从共同 snapshot/frame 0 沿完整历史 replay；需要强事务的调用方在外层使用 World snapshot/checkpoint。
 - **不做**：本轮不引入通用 dry-run shadow World 或 rollback journal。
 
@@ -45,6 +45,8 @@ CommandStream 的 pending/component/hierarchy/async preflight 已修复已知“
 | `BUG_failed_projected_Snapshot_invalidates_partial_baseline_and_recovers` | projected `Snapshot` 的 `Project` 中途抛异常后，`_hasSnapshot` 仍保留 true，后续 Diff 会读取已清理/半写的 baseline | Snapshot 开始收集前 invalidate baseline；只有完整成功才发布，异常后必须重新 Snapshot，operation guard 可恢复 |
 | `BUG_Snapshot_load_rejects_duplicate_archetype_signature` | 不可信 snapshot 可声明两个归一化后相同的 archetype signature；Load 会静默合并，无法精确重建 payload 声明的 world 结构，重存也不再规范等价 | dry-validate 以 schema index 构造归一化 signature 并全局去重，在注册 schema 或构建 World 前拒绝重复 |
 | `BUG_snapshot_round_trip_preserves_reserved_entity_count` / `BUG_clone_preserves_reserved_entity_count` | World 含 CommandStream 预留但未 materialize 的 slot 时，Load/Clone 复制 records/free list 却把 `_reservedCount` 留为 0，导致 `EntityCount` 把 reservation 误报为活实体 | 所有重建路径从 slot count − free count − occupied count 统一推导 reservation；Reset 先清旧计数 |
+| `BUG_Replay_existing_reservation_does_not_double_count_reserved_entity` | source 对自己的 real-id `Snapshot` 直接 Replay 时，目标 slot 已由 producer 预留；Replay 仍重复增加 `_reservedCount`，materialize 后 alive entity 的 `EntityCount` 变为 0 | 只有从 free list 实际取回 slot 才增加 reservation；已预留的同一 handle 直接复用现有计数 |
+| `BUG_Replay_reservation_mismatch_does_not_consume_entity_id` / `BUG_Replay_stale_reservation_mismatch_does_not_consume_free_slot` | target allocator 与 real-id delta 不兼容时，Replay 先调用普通 reserve 消耗无关 fresh ID 或 stale-version free slot，再发现 handle 不匹配并抛错 | `EnsureReplayReservation` 只接受 matching free/reserved slot 或紧邻 fresh slot；其他状态在 allocator mutation 前 fail-fast |
 | `BUG_Validate_rejects_unterminated_reservation` | `FrameDelta.Validate` 接受只有 Reserve、没有 Create/Release 的 delta；Replay 后留下无 owner 的永久 reservation | Validate 结束时要求 reserved set 为空 |
 | `BUG_Validate_rejects_placeholder_use_before_create` | placeholder 已 Reserve 但尚未 Create 时被 Add/Set/层级/Destroy 使用，Validate 仍通过；Replay 在 reservation 落地后失败 | Validate 对所有操作 endpoint 检查 lifecycle state；existing real entity 仍可直接操作 |
 | `BUG_Validate_rejects_unknown_remove_component_type` | Remove 是唯一未验证 component registry 的 component op，未知 type id 可绕过 Validate | Remove 与 Create/Add/Set 统一拒绝未注册 type id |

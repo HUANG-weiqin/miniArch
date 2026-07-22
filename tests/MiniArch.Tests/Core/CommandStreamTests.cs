@@ -206,6 +206,59 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
+    public void BUG_Replay_existing_reservation_does_not_double_count_reserved_entity()
+    {
+        var world = new World();
+        var producer = new CommandStream(world);
+        var created = producer.Create();
+        producer.Add(created, new Position(1, 2));
+        var delta = producer.Snapshot();
+
+        Assert.Equal(0, world.EntityCount);
+
+        new CommandStream(world).Replay(delta);
+
+        Assert.True(world.IsAlive(created));
+        Assert.Equal(1, world.EntityCount);
+    }
+
+    [Fact]
+    public void BUG_Replay_reservation_mismatch_does_not_consume_entity_id()
+    {
+        var source = new World();
+        var producer = new CommandStream(source);
+        producer.Create();
+        var delta = producer.Snapshot();
+
+        var target = new World();
+        target.CreateEmpty();
+
+        Assert.Throws<InvalidOperationException>(() => new CommandStream(target).Replay(delta));
+
+        var next = target.CreateEmpty();
+        Assert.Equal(1, next.Id);
+    }
+
+    [Fact]
+    public void BUG_Replay_stale_reservation_mismatch_does_not_consume_free_slot()
+    {
+        var source = new World();
+        var producer = new CommandStream(source);
+        producer.Create();
+        var delta = producer.Snapshot();
+
+        var target = new World();
+        var stale = target.CreateEmpty();
+        target.Destroy(stale);
+
+        Assert.Throws<InvalidOperationException>(() => new CommandStream(target).Replay(delta));
+
+        var recycled = target.CreateEmpty();
+        Assert.Equal(stale.Id, recycled.Id);
+        Assert.Equal(stale.Version + 1, recycled.Version);
+    }
+
+    [Fact]
     public void Submit_returns_false_when_stream_is_empty()
     {
         var world = new World();

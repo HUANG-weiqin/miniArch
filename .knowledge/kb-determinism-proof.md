@@ -2,7 +2,7 @@
 title: 确定性证明 — Lockstep ECS 库级确定性验证
 module: DeterminismProof
 description: miniArch 确定性保证的完整证明矩阵——9 个审计维度、实证数据、测试链接、已知边界、LayoutKind.Auto 修复记录。面向选型决策者和审计者。
-updated: 2026-07-11
+updated: 2026-07-22
 ---
 
 # 确定性证明 — Lockstep ECS 库级确定性验证
@@ -196,7 +196,7 @@ updated: 2026-07-11
 **机制**：
 - Placeholder 创建：`Entity(-1, seq)` — seq = 递增计数器
 - Reserve 模式（deferred mode）：先 emit 全部 Reserve，再 emit 全部 Create → 保证 seq→real 映射在 Create payload 读取前已建立
-- Replay 路径：`ReplayCore` → `EnsureReplayReservation` 三条件（slot 重用 / fresh slot / alloc）→ `map[seq] = real`
+- Replay 路径：`ReplayCore` → `EnsureReplayReservation` 只接受 matching free/already-reserved slot 或紧邻 fresh slot；不兼容 allocator 在 mutation 前失败 → `map[seq] = real`
 - Entity ref 解析：`EntityFieldResolver.ResolveInPlace` 在 Replay 时自动解析 component 内的 Entity 字段
 - 不可变性保证：Replay 不 mutate delta buffer（对含 Entity fields 的 op 用 pooled scratch buffer）
 
@@ -206,10 +206,7 @@ updated: 2026-07-11
 - `tests/MiniArch.Tests/PropertyBased/KnownLimitationTests.cs` → `Deferred_link_then_destroy_BOTH_endpoints_replays_cleanly`
 
 **代码位置**：
-- `src/MiniArch/Core/World.cs:704-866`（ReplayCore）
-- `src/MiniArch/Core/World.cs:511-534`（EnsureReplayReservation）
-- `src/MiniArch/Core/World.cs:870-890`（EnsurePlaceholderMap）
-- `src/MiniArch/Core/World.cs:907-960`（PreScanForCapacity）
+- `src/MiniArch/Core/World.EntityLifecycle.cs`（ReplayCore / EnsureReplayReservation / EnsurePlaceholderMap / PreScanForCapacity）
 - `src/MiniArch/Core\EntityFieldResolver.cs:167-192`（ResolveInPlace）
 
 ---
