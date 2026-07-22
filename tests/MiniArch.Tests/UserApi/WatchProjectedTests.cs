@@ -64,6 +64,26 @@ public class WatchProjectedTests
         }
     }
 
+    private sealed class ThrowingProjectionState
+    {
+        public bool Throw;
+    }
+
+    private readonly struct ThrowingProjectionHandler(ThrowingProjectionState state) : IChangeHandler<Position, int>
+    {
+        public int Project(in Position component)
+        {
+            if (state.Throw)
+                throw new ApplicationException("Projection failed.");
+
+            return component.X;
+        }
+
+        public void OnChange(World world, Entity entity, int oldValue, int newValue)
+        {
+        }
+    }
+
     // ── Snapshot → Diff: basic sequence ─────────────────────────
 
     [Fact]
@@ -179,6 +199,27 @@ public class WatchProjectedTests
     }
 
     // ── Snapshot again resets baseline ───────────────────────────
+
+    [Fact]
+    public void BUG_failed_projected_Snapshot_invalidates_partial_baseline_and_recovers()
+    {
+        using var world = new World();
+        var state = new ThrowingProjectionState();
+        var watch = world.Watch<Position, int, ThrowingProjectionHandler>();
+        watch.Handler = new ThrowingProjectionHandler(state);
+        var entity = world.Create(new Position(10, 20));
+        watch.Snapshot(world);
+        world.Set(entity, new Position(30, 40));
+
+        state.Throw = true;
+        Assert.Throws<ApplicationException>(() => watch.Snapshot(world));
+        state.Throw = false;
+
+        Assert.Throws<InvalidOperationException>(() => watch.Diff(world));
+
+        watch.Snapshot(world);
+        watch.Diff(world);
+    }
 
     [Fact]
     public void Consecutive_Snapshot_resets_baseline()

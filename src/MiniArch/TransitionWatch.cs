@@ -39,6 +39,7 @@ public sealed class TransitionWatch<THandler>
     private readonly QueryDescription _query;
     private THandler _handler;
     private bool _hasSnapshot;
+    private bool _operationInProgress;
 
     // Reusable state for Diff — zero per-call heap allocation (except array growth).
     private long[] _currentMarks = [];
@@ -69,109 +70,141 @@ public sealed class TransitionWatch<THandler>
     /// Records which entities currently match the watch's query filter.
     /// Must be called before <see cref="Diff"/>.
     /// </summary>
+    /// <remarks>
+    /// If snapshot collection fails, the partial baseline is discarded and a successful
+    /// Snapshot is required before the next <see cref="Diff"/>.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">A Snapshot or Diff call is already in progress on this watch.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Snapshot(World world)
     {
         ArgumentNullException.ThrowIfNull(world);
+        BeginOperation();
+        _hasSnapshot = false;
 
-        // 64-bit epoch never overflows in practice; just bump.
-        _snapshotEpoch++;
-        _snapshotCount = 0;
-
-        foreach (var chunk in world.Query(in _query).GetChunks())
+        try
         {
-            var entities = chunk.GetEntities();
-            for (var i = 0; i < chunk.Count; i++)
+            // 64-bit epoch never overflows in practice; just bump.
+            _snapshotEpoch++;
+            _snapshotCount = 0;
+
+            foreach (var chunk in world.Query(in _query).GetChunks())
             {
-                var entity = entities[i];
-                EnsureMarkCapacity(ref _snapshotMarks, entity.Id);
-                _snapshotMarks[entity.Id] = _snapshotEpoch;
+                var entities = chunk.GetEntities();
+                for (var i = 0; i < chunk.Count; i++)
+                {
+                    var entity = entities[i];
+                    EnsureMarkCapacity(ref _snapshotMarks, entity.Id);
+                    _snapshotMarks[entity.Id] = _snapshotEpoch;
 
-                if (_snapshotCount >= _snapshotEntities.Length)
-                    Array.Resize(ref _snapshotEntities, Math.Max(_snapshotCount + 1, _snapshotEntities.Length * 2));
-                _snapshotEntities[_snapshotCount++] = entity;
+                    if (_snapshotCount >= _snapshotEntities.Length)
+                        Array.Resize(ref _snapshotEntities, Math.Max(_snapshotCount + 1, _snapshotEntities.Length * 2));
+                    _snapshotEntities[_snapshotCount++] = entity;
+                }
             }
-        }
 
-        _hasSnapshot = true;
+            _hasSnapshot = true;
+        }
+        finally
+        {
+            _operationInProgress = false;
+        }
     }
 
     /// <summary>
     /// Scans the current world and calls <see cref="ITransitionHandler.OnChange"/>
     /// for each entity that entered or exited the filter since the snapshot.
     /// </summary>
-    /// <exception cref="InvalidOperationException">Thrown if <see cref="Snapshot"/> has not been called.</exception>
+    /// <exception cref="InvalidOperationException">No snapshot exists, or a Snapshot or Diff call is already in progress on this watch.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Diff(World world)
     {
         ArgumentNullException.ThrowIfNull(world);
+        BeginOperation();
 
-        if (!_hasSnapshot)
-            throw new InvalidOperationException(
-                "TransitionWatch.Diff requires a prior Snapshot call. Call Snapshot(World) before Diff.");
-
-        // 64-bit epoch never overflows in practice; just bump.
-        _currentEpoch++;
-
-        // Phase 1: Scan current query into reusable _currentMarks and _currentEntities.
-        // No pre-clear needed: the epoch bump above invalidates all previous marks.
-        _currentCount = 0;
-
-        foreach (var chunk in world.Query(in _query).GetChunks())
+        try
         {
-            var entities = chunk.GetEntities();
-            for (var i = 0; i < chunk.Count; i++)
-            {
-                var entity = entities[i];
-                EnsureMarkCapacity(ref _currentMarks, entity.Id);
-                _currentMarks[entity.Id] = _currentEpoch;
+            if (!_hasSnapshot)
+                throw new InvalidOperationException(
+                    "TransitionWatch.Diff requires a prior Snapshot call. Call Snapshot(World) before Diff.");
 
-                if (_currentCount >= _currentEntities.Length)
-                    Array.Resize(ref _currentEntities, Math.Max(_currentCount + 1, _currentEntities.Length * 2));
-                _currentEntities[_currentCount++] = entity;
+            // 64-bit epoch never overflows in practice; just bump.
+            _currentEpoch++;
+
+            // Phase 1: Scan current query into reusable _currentMarks and _currentEntities.
+            // No pre-clear needed: the epoch bump above invalidates all previous marks.
+            _currentCount = 0;
+
+            foreach (var chunk in world.Query(in _query).GetChunks())
+            {
+                var entities = chunk.GetEntities();
+                for (var i = 0; i < chunk.Count; i++)
+                {
+                    var entity = entities[i];
+                    EnsureMarkCapacity(ref _currentMarks, entity.Id);
+                    _currentMarks[entity.Id] = _currentEpoch;
+
+                    if (_currentCount >= _currentEntities.Length)
+                        Array.Resize(ref _currentEntities, Math.Max(_currentCount + 1, _currentEntities.Length * 2));
+                    _currentEntities[_currentCount++] = entity;
+                }
+            }
+
+            var bufferCount = 0;
+
+            // Phase 2a: Exited — snapshot entities not marked with current epoch.
+            for (var si = 0; si < _snapshotCount; si++)
+            {
+                var id = _snapshotEntities[si].Id;
+                if ((uint)id < (uint)_currentMarks.Length && _currentMarks[id] == _currentEpoch)
+                    continue;
+
+                if (bufferCount >= _buffer.Length)
+                    Array.Resize(ref _buffer, Math.Max(bufferCount + 1, _buffer.Length * 2));
+                _buffer[bufferCount++] = new TransitionEntry
+                {
+                    Entity = _snapshotEntities[si],
+                    Kind = TransitionKind.Exited
+                };
+            }
+
+            // Phase 2b: Entered — current entities not marked with snapshot epoch.
+            for (var ci = 0; ci < _currentCount; ci++)
+            {
+                var id = _currentEntities[ci].Id;
+                if ((uint)id < (uint)_snapshotMarks.Length && _snapshotMarks[id] == _snapshotEpoch)
+                    continue;
+
+                if (bufferCount >= _buffer.Length)
+                    Array.Resize(ref _buffer, Math.Max(bufferCount + 1, _buffer.Length * 2));
+                _buffer[bufferCount++] = new TransitionEntry
+                {
+                    Entity = _currentEntities[ci],
+                    Kind = TransitionKind.Entered
+                };
+            }
+
+            // Phase 3: dispatch callbacks (collected buffer is stable, safe for handler to mutate world).
+            for (var i = 0; i < bufferCount; i++)
+            {
+                ref var entry = ref _buffer[i];
+                _handler.OnChange(world, entry.Entity, entry.Kind);
             }
         }
-
-        var bufferCount = 0;
-
-        // Phase 2a: Exited — snapshot entities not marked with current epoch.
-        for (var si = 0; si < _snapshotCount; si++)
+        finally
         {
-            var id = _snapshotEntities[si].Id;
-            if ((uint)id < (uint)_currentMarks.Length && _currentMarks[id] == _currentEpoch)
-                continue;
-
-            if (bufferCount >= _buffer.Length)
-                Array.Resize(ref _buffer, Math.Max(bufferCount + 1, _buffer.Length * 2));
-            _buffer[bufferCount++] = new TransitionEntry
-            {
-                Entity = _snapshotEntities[si],
-                Kind = TransitionKind.Exited
-            };
+            _operationInProgress = false;
         }
+    }
 
-        // Phase 2b: Entered — current entities not marked with snapshot epoch.
-        for (var ci = 0; ci < _currentCount; ci++)
-        {
-            var id = _currentEntities[ci].Id;
-            if ((uint)id < (uint)_snapshotMarks.Length && _snapshotMarks[id] == _snapshotEpoch)
-                continue;
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void BeginOperation()
+    {
+        if (_operationInProgress)
+            throw new InvalidOperationException(
+                "TransitionWatch does not support nested Snapshot or Diff calls on the same watch.");
 
-            if (bufferCount >= _buffer.Length)
-                Array.Resize(ref _buffer, Math.Max(bufferCount + 1, _buffer.Length * 2));
-            _buffer[bufferCount++] = new TransitionEntry
-            {
-                Entity = _currentEntities[ci],
-                Kind = TransitionKind.Entered
-            };
-        }
-
-        // Phase 3: dispatch callbacks (collected buffer is stable, safe for handler to mutate world).
-        for (var i = 0; i < bufferCount; i++)
-        {
-            ref var entry = ref _buffer[i];
-            _handler.OnChange(world, entry.Entity, entry.Kind);
-        }
+        _operationInProgress = true;
     }
 
     // ── Mark helpers (small, inlineable) ─────────────────────────

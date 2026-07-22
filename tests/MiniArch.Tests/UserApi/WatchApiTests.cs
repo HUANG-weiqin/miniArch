@@ -78,6 +78,46 @@ public class WatchApiTests
         }
     }
 
+    private sealed class ReentrantChangeState
+    {
+        public ChangeWatch<Position, ReentrantChangeHandler>? Watch;
+        public bool Reenter = true;
+        public int CallCount;
+    }
+
+    private readonly struct ReentrantChangeHandler(ReentrantChangeState state) : IChangeHandler<Position>
+    {
+        public void OnChange(World world, Entity entity, in Position oldValue, in Position newValue)
+        {
+            state.CallCount++;
+            if (!state.Reenter)
+                return;
+
+            state.Reenter = false;
+            state.Watch!.Diff(world);
+        }
+    }
+
+    private sealed class ReentrantTransitionState
+    {
+        public TransitionWatch<ReentrantTransitionHandler>? Watch;
+        public bool Reenter = true;
+        public int CallCount;
+    }
+
+    private readonly struct ReentrantTransitionHandler(ReentrantTransitionState state) : ITransitionHandler
+    {
+        public void OnChange(World world, Entity entity, TransitionKind kind)
+        {
+            state.CallCount++;
+            if (!state.Reenter)
+                return;
+
+            state.Reenter = false;
+            state.Watch!.Diff(world);
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════════
     //  ChangeWatch tests
     // ═══════════════════════════════════════════════════════════════
@@ -145,6 +185,24 @@ public class WatchApiTests
 
         watch.Diff(world); // second Diff against same baseline
         Assert.Equal(2, watch.Handler.CallCount);
+    }
+
+    [Fact]
+    public void BUG_ChangeWatch_reentrant_Diff_throws_and_recovers()
+    {
+        using var world = new World();
+        var state = new ReentrantChangeState();
+        var watch = world.Watch<Position, ReentrantChangeHandler>();
+        watch.Handler = new ReentrantChangeHandler(state);
+        state.Watch = watch;
+        var entity = world.Create(new Position(0, 0));
+        watch.Snapshot(world);
+        world.Set(entity, new Position(1, 1));
+
+        Assert.Throws<InvalidOperationException>(() => watch.Diff(world));
+
+        watch.Diff(world);
+        Assert.Equal(2, state.CallCount);
     }
 
     [Fact]
@@ -399,6 +457,23 @@ public class WatchApiTests
         // Same id in both snapshot (e1) and current (e2): id-based net semantics
         // yields no transition, per plan: "do not over-engineer version-aware sets"
         Assert.Equal(0, watch.Handler.CallCount);
+    }
+
+    [Fact]
+    public void BUG_TransitionWatch_reentrant_Diff_throws_and_recovers()
+    {
+        using var world = new World();
+        var state = new ReentrantTransitionState();
+        var watch = world.Watch<ReentrantTransitionHandler>(new QueryDescription().With<Position>());
+        watch.Handler = new ReentrantTransitionHandler(state);
+        state.Watch = watch;
+        watch.Snapshot(world);
+        world.Create(new Position(0, 0));
+
+        Assert.Throws<InvalidOperationException>(() => watch.Diff(world));
+
+        watch.Diff(world);
+        Assert.Equal(2, state.CallCount);
     }
 
     [Fact]

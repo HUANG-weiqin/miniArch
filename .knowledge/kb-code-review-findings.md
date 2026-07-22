@@ -41,6 +41,8 @@ CommandStream 的 pending/component/hierarchy/async preflight 已修复已知“
 | `BUG_constructor_rejects_invalid_capacity` / `BUG_EnsureCapacity_rejects_invalid_capacity` | 构造和 `EnsureCapacity` 未验证负数和超过 `MaxCapacity`（2^30）；`CeilPow2` 对大输入溢出 | 两个容量参数都限制在 0..`MaxCapacity`；`Build` 用饱和倍增并删除任意重试次数上限 |
 | `BUG_Destroy_small_aliasing_entity_span_consumes_original_handles` | 小批量 `Destroy(ReadOnlySpan<Entity>)` 逐个 swap-remove；输入若直接别名 `ChunkView.GetEntities()`，尚未读取的 handle 会被覆写或清零 | ≤8 个实体先 stackalloc 快照输入，再开始结构变更；大批量路径本就先完整收集后删除 |
 | `BUG_Create_duplicate_component_types_throws_before_world_mutation` | 直接 `World.Create<T1,T2,...>` 传入重复组件类型时 `Signature` 静默去重，随后同一列被写两次并返回少于声明数量的组件集合 | arity 2..16 的 cache-miss 路径统一比较 normalized signature count；重复类型在分配 entity 前 fast-fail |
+| `BUG_ChangeWatch_reentrant_Diff_throws_and_recovers` / `BUG_TransitionWatch_reentrant_Diff_throws_and_recovers` | handler 对同一个 watch 嵌套 Diff 会覆写外层复用 buffer/epoch 状态，导致重复或错误 callback | 三种 watch 的 Snapshot/Diff 统一增加实例级重入 guard，并用 `finally` 保证异常后恢复；不同 watch 仍可组合 |
+| `BUG_failed_projected_Snapshot_invalidates_partial_baseline_and_recovers` | projected `Snapshot` 的 `Project` 中途抛异常后，`_hasSnapshot` 仍保留 true，后续 Diff 会读取已清理/半写的 baseline | Snapshot 开始收集前 invalidate baseline；只有完整成功才发布，异常后必须重新 Snapshot，operation guard 可恢复 |
 
 ### 2026-07-15 quality hardening
 
