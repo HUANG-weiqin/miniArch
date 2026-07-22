@@ -41,6 +41,7 @@ updated: 2026-07-22
 - **`HashBuilder` 替代 `IncrementalHash`**：使用 `MemoryStream` + `SHA256.HashData(Stream)` 而非 `IncrementalHash`（`IncrementalHash` 在 `System.Security.Cryptography` 中仍可用，但 `MemoryStream` 方式对累加再算的场景更简洁），在诊断场景下性能差异可忽略
 - **结果不可变**：列表字段用 `ReadOnlyCollection<T>` 包装；公共签名必须保留 `byte[]` 的 hash/raw bytes 通过 getter 返回 defensive copy，hash 字典同时深复制 value array，不能只用 `ReadOnlyDictionary` 包装可变数组
 - **确定性**：所有哈希按 entity ID 排序后再计算，保证相同逻辑状态 → 相同输出
+- **Validator 必须双向取证**：entity record↔archetype row、child→parent↔parent→children 都从两种独立表示互相校验；不能从同一表读两次后把结果当成 bidirectional proof。bulk `World.Clear` 有意保留的 version-invalid hierarchy entry 不属于 live relation，不报错。
 
 ## 入口
 

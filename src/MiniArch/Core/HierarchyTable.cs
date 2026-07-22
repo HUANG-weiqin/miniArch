@@ -295,6 +295,10 @@ internal sealed class HierarchyTable
     public LiveRelationEnumerable EnumerateLiveRelations(World world)
         => new(this, world);
 
+    internal ReadOnlySpan<int> FirstChildSlots => _firstChild;
+
+    internal ReadOnlySpan<ChildSlot> ChildSlots => _childSlots.AsSpan(0, _childSlotCount);
+
     public readonly struct LiveRelationEnumerable(HierarchyTable table, World world)
     {
         private readonly HierarchyTable _table = table;

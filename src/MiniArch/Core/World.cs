@@ -289,6 +289,8 @@ public sealed partial class World : IDisposable
 
     internal int EntitySlotCount => _entitySlotCount;
 
+    internal int ReservedCount => _reservedCount;
+
     internal ReadOnlySpan<EntityRecord> EntityRecords => _records.AsSpan(0, _entitySlotCount);
 
     internal Archetype[] Archetypes => Volatile.Read(ref _archetypeSnapshot);

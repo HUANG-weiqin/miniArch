@@ -17,6 +17,7 @@ public static class WorldValidator
     [ThreadStatic] private static HashSet<(Archetype Archetype, int Row)>? _usedSlots;
     [ThreadStatic] private static HashSet<int>? _freeSeen;
     [ThreadStatic] private static HashSet<int>? _archSeen;
+    [ThreadStatic] private static HashSet<(Entity Parent, Entity Child)>? _forwardRelations;
     [ThreadStatic] private static HashSet<int>? _cycleChainVisited;
 
     /// <summary>
@@ -32,6 +33,7 @@ public static class WorldValidator
         (_usedSlots ??= []).Clear();
         (_freeSeen ??= []).Clear();
         (_archSeen ??= []).Clear();
+        (_forwardRelations ??= []).Clear();
 
         CheckEntitySlots(world, issues);
         CheckFreeList(world, issues);
@@ -61,6 +63,14 @@ public static class WorldValidator
                 continue;
             }
 
+            var storedEntity = rec.Archetype.GetEntities()[rec.RowIndex];
+            if (storedEntity.Id != id || storedEntity.Version != rec.Version)
+            {
+                issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.EntitySlot,
+                    ValidationCode.OrphanedSlot,
+                    $"Slot {id} (v{rec.Version}) points to row {rec.RowIndex}, which stores {storedEntity}."));
+            }
+
             // Slot collision: two occupied records share the same (archetype, row).
             if (!usedSlots.Add((rec.Archetype, rec.RowIndex)))
             {
@@ -81,18 +91,29 @@ public static class WorldValidator
         {
             var recycled = freeList[i];
 
-            // Free-list entry is still occupied.
-            if ((uint)recycled.Id < (uint)records.Length && records[recycled.Id].IsOccupied)
+            if ((uint)recycled.Id >= (uint)records.Length)
+            {
+                issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.FreeList,
+                    ValidationCode.OrphanedSlot,
+                    $"Recycled entity {recycled.Id} (v{recycled.Version}) has no entity slot."));
+            }
+            else if (records[recycled.Id].IsOccupied)
             {
                 issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.FreeList,
                     ValidationCode.FreeListOccupied,
                     $"Recycled entity {recycled.Id} (v{recycled.Version}) is still occupied."));
             }
+            else if (recycled.Version <= 0 || records[recycled.Id].Version != recycled.Version)
+            {
+                issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.FreeList,
+                    ValidationCode.OrphanedSlot,
+                    $"Recycled entity {recycled.Id} version {recycled.Version} does not match slot version {records[recycled.Id].Version}."));
+            }
 
             // Duplicate ID in free list.
             if (!seenIds.Add(recycled.Id))
             {
-                issues.Add(new ValidationIssue(ValidationSeverity.Warning, ValidationCategory.FreeList,
+                issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.FreeList,
                     ValidationCode.FreeListDuplicate,
                     $"Duplicate recycled entity ID {recycled.Id} in free list."));
             }
@@ -104,39 +125,70 @@ public static class WorldValidator
         var hierarchy = world.Hierarchy;
         var records = world.EntityRecords;
 
-        foreach (var (child, parent) in hierarchy.EnumerateLiveRelations(world))
+        var forwardRelations = _forwardRelations!;
+
+        // Check the forward direction first and index every live relation. Each
+        // live child must point back to the parent whose list contains it.
+        // Dead/stale children are intentionally
+        // ignored because bulk Clear may leave version-invalid forward entries.
+        var firstChildSlots = hierarchy.FirstChildSlots;
+        var childSlots = hierarchy.ChildSlots;
+        for (var parentId = 0; parentId < firstChildSlots.Length; parentId++)
         {
-            // Parent must exist.
-            if ((uint)parent.Id >= (uint)records.Length || !records[parent.Id].IsOccupied)
+            var slot = firstChildSlots[parentId];
+            var remaining = childSlots.Length;
+            while (slot >= 0)
             {
-                issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.Hierarchy,
-                    ValidationCode.OrphanedChild,
-                    $"Child {child} references dead/missing parent {parent}."));
-            }
-
-            // Child must exist.
-            if ((uint)child.Id >= (uint)records.Length || !records[child.Id].IsOccupied)
-            {
-                issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.Hierarchy,
-                    ValidationCode.OrphanedChild,
-                    $"Child {child} (parent {parent}) is not alive."));
-            }
-
-            // Bidirectional: child -> TryGetParent should return the same parent.
-            if (hierarchy.TryGetParent(world, child, out var actualParent))
-            {
-                if (actualParent.Id != parent.Id || actualParent.Version != parent.Version)
+                if ((uint)slot >= (uint)childSlots.Length || remaining-- == 0)
                 {
                     issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.Hierarchy,
                         ValidationCode.AsymmetricParent,
-                        $"Child {child} recorded parent {parent} but TryGetParent returns {actualParent}."));
+                        $"Parent slot {parentId} has an invalid or cyclic child-slot chain at index {slot}."));
+                    break;
                 }
+
+                var childSlot = childSlots[slot];
+                var child = childSlot.Entity;
+                if (world.IsAlive(child))
+                {
+                    if ((uint)parentId >= (uint)records.Length || !records[parentId].IsOccupied)
+                    {
+                        issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.Hierarchy,
+                            ValidationCode.OrphanedChild,
+                            $"Live child {child} appears in the child list of dead/missing parent slot {parentId}."));
+                    }
+                    else
+                    {
+                        var parent = new Entity(parentId, records[parentId].Version);
+                        if (!forwardRelations.Add((parent, child)))
+                        {
+                            issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.Hierarchy,
+                                ValidationCode.AsymmetricParent,
+                                $"Parent {parent} lists live child {child} more than once."));
+                            break;
+                        }
+
+                        if (!hierarchy.TryGetParent(world, child, out var actualParent) || actualParent != parent)
+                        {
+                            issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.Hierarchy,
+                                ValidationCode.AsymmetricParent,
+                                $"Parent {parent} lists child {child}, but the child points to {(actualParent == default ? "no live parent" : actualParent.ToString())}."));
+                        }
+                    }
+                }
+
+                slot = childSlot.Next;
             }
-            else
+        }
+
+        // Check the reverse direction against the independently-built forward index.
+        foreach (var (child, parent) in hierarchy.EnumerateLiveRelations(world))
+        {
+            if (!forwardRelations.Contains((parent, child)))
             {
                 issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.Hierarchy,
                     ValidationCode.AsymmetricParent,
-                    $"Child {child} recorded parent {parent} but TryGetParent finds none."));
+                    $"Child {child} records parent {parent}, but the parent's child list does not contain it."));
             }
         }
 
@@ -172,6 +224,7 @@ public static class WorldValidator
     private static void CheckArchetypes(World world, List<ValidationIssue> issues)
     {
         var seenEntityIds = _archSeen!;
+        var records = world.EntityRecords;
 
         foreach (var arch in world.Archetypes)
         {
@@ -189,34 +242,58 @@ public static class WorldValidator
             // Duplicate entity IDs across archetypes.
             for (var i = 0; i < entities.Length; i++)
             {
-                if (!seenEntityIds.Add(entities[i].Id))
+                var entity = entities[i];
+                if (!seenEntityIds.Add(entity.Id))
                 {
                     issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.Archetype,
                         ValidationCode.DuplicateEntityId,
-                        $"Entity {entities[i]} appears in multiple archetypes."));
+                        $"Entity {entity} appears in multiple archetypes."));
+                }
+
+                if ((uint)entity.Id >= (uint)records.Length)
+                {
+                    issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.EntitySlot,
+                        ValidationCode.OrphanedSlot,
+                        $"Archetype sig={arch.Signature} row {i} stores {entity}, which has no entity slot."));
+                    continue;
+                }
+
+                var record = records[entity.Id];
+                if (!record.IsOccupied || record.Version != entity.Version ||
+                    !ReferenceEquals(record.Archetype, arch) || record.RowIndex != i)
+                {
+                    issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.EntitySlot,
+                        ValidationCode.OrphanedSlot,
+                        $"Archetype sig={arch.Signature} row {i} stores {entity}, but its entity slot points elsewhere."));
                 }
             }
         }
 
         // Slot capacity warning.
         var occupiedCount = 0;
-        var records = world.EntityRecords;
         for (var i = 0; i < records.Length; i++)
         {
             if (records[i].IsOccupied) occupiedCount++;
         }
         var totalKnown = occupiedCount + world.FreeList.Length;
-        if (totalKnown < world.EntitySlotCount)
-        {
-            issues.Add(new ValidationIssue(ValidationSeverity.Warning, ValidationCategory.Archetype,
-                ValidationCode.SlotCapacityWarning,
-                $"EntitySlotCount={world.EntitySlotCount} > occupied({occupiedCount}) + free({world.FreeList.Length}) = {totalKnown}. Possible pending reservations."));
-        }
-        else if (totalKnown > world.EntitySlotCount)
+        var derivedReservedCount = world.EntitySlotCount - totalKnown;
+        if (derivedReservedCount < 0)
         {
             issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.Archetype,
                 ValidationCode.SlotCapacityWarning,
                 $"EntitySlotCount={world.EntitySlotCount} < occupied({occupiedCount}) + free({world.FreeList.Length}) = {totalKnown}. Free-list or slot tracking is corrupted."));
+        }
+        else if (derivedReservedCount != world.ReservedCount)
+        {
+            issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.Archetype,
+                ValidationCode.SlotCapacityWarning,
+                $"ReservedCount={world.ReservedCount} does not match slot-derived reservation count {derivedReservedCount}."));
+        }
+        else if (derivedReservedCount > 0)
+        {
+            issues.Add(new ValidationIssue(ValidationSeverity.Warning, ValidationCategory.Archetype,
+                ValidationCode.SlotCapacityWarning,
+                $"World has {derivedReservedCount} pending reservation(s)."));
         }
     }
 }
