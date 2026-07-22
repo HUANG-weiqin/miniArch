@@ -38,7 +38,8 @@ CommandStream 的 pending/component/hierarchy/async preflight 已修复已知“
 | `BUG_ensure_capacity_preserves_built_lookup` | `EnsureCapacity` 仅 `Array.Resize` 扩 table，没有 rehash live entries，扩后 indexer 返回错误位置 | 新局部 arrays 完整 rehash 后发布；异常保持旧结果 |
 | `BUG_stateful_struct_selector_uses_same_initial_state_for_both_passes` | `TryBuild` 两遍共用同一 `selector` 参数；可变 struct 的 `Select` 在第一遍中 mutate 自身，第二遍从不同状态开始导致找不到 key | 每遍独立拷贝原始 selector（`countSelector`/`scatterSelector`）；第二遍 slot<0 时抛明确 `InvalidOperationException`，外层 catch 后 `Clear` |
 | `BUG_failed_build_does_not_expose_partial_lookup` | `TryBuild` 中 `selector.Select`/`GetHashCode`/`Equals` 抛异常后，可能留下部分或旧的 lookup 数据 | `TryBuild` 用 `try/catch` 包裹 core，异常时 `Clear()` 后 `throw` |
-| `BUG_constructor_rejects_invalid_capacity` / `BUG_EnsureCapacity_rejects_invalid_capacity` | 构造和 `EnsureCapacity` 未验证负数和超过 `MaxCapacity`（=1&lt;&lt;30）；`CeilPow2` 对大输入溢出 | 两个容量参数都限制在 0..`MaxCapacity`；`Build` 用饱和倍增并删除任意重试次数上限 |
+| `BUG_constructor_rejects_invalid_capacity` / `BUG_EnsureCapacity_rejects_invalid_capacity` | 构造和 `EnsureCapacity` 未验证负数和超过 `MaxCapacity`（2^30）；`CeilPow2` 对大输入溢出 | 两个容量参数都限制在 0..`MaxCapacity`；`Build` 用饱和倍增并删除任意重试次数上限 |
+| `BUG_Destroy_small_aliasing_entity_span_consumes_original_handles` | 小批量 `Destroy(ReadOnlySpan<Entity>)` 逐个 swap-remove；输入若直接别名 `ChunkView.GetEntities()`，尚未读取的 handle 会被覆写或清零 | ≤8 个实体先 stackalloc 快照输入，再开始结构变更；大批量路径本就先完整收集后删除 |
 
 ### 2026-07-15 quality hardening
 
@@ -109,6 +110,8 @@ B7-B16 属于旧 `ChangeQuery` / `Track().Capture().Previous()` / shared tracker
 | pending `Create+Add/Set/Remove` | 应暴露每个中间 Watch event | 非 bug。pending batch 契约只 materialize 最终状态 | pending Watch/transition parity tests |
 | `CompactRemoveRowsFlat` hole-fill | live prefix 留下 stale source entity | 非 bug。hole 只由 tail suffix survivor 填；最终 dead suffix 清零 | batch destroy checksum/diff/validator tests |
 | `ComponentBucketQuery.Get/TryGet` + short destination | 返回值大于 destination 长度看似“写入计数”越界 | 非 bug。实现有意返回总匹配数并只写入前缀，用一次扫描同时报告截断；XML、参数名和知识页已与该契约对齐 | `Short_destination_reports_total_match_count` / `Empty_destination_still_reports_matches` |
+| `Destroy(ReadOnlySpan<Entity>)` 大批量分支 / `Destroy(query)` | 输入 span 也可能别名 archetype 存储，删除会覆写尚未读取的 handle | 非 bug。两条路径都在任何 storage mutation 前完整收集 destroy roots；只有已修复的小批量逐个删除分支需要输入快照 | `BeginDestroyCollection` → collect loop → `DestroyCollectedEntities` 代码走读 |
+| `HierarchyTable.ClearHierarchyState` + surviving parent | parent 的 stale child slot 之后会被复用并指向无关活实体 | 非 bug。该 parent slot 没有被 `FreeChildSlot`，因此不会复用；方法只释放被清实体自己的 child-list slots，并先把自己的 `_firstChild` 断开 | `ClearHierarchyState` 与 `RemoveDestroyed` 对照走读；`World.Clear` XML 明示 stale-slot 边界 |
 
 ## 决策
 

@@ -403,6 +403,25 @@ public sealed class WorldLifecycleTests
     }
 
     [Fact]
+    public void BUG_Destroy_small_aliasing_entity_span_consumes_original_handles()
+    {
+        using var world = new World();
+        var first = world.Create(new Position(1, 1));
+        var second = world.Create(new Position(2, 2));
+        var third = world.Create(new Position(3, 3));
+        var query = world.Query(new QueryDescription().With<Position>());
+        var chunks = query.GetChunks();
+        Assert.Equal(1, chunks.Length);
+
+        world.Destroy(chunks[0].GetEntities());
+
+        Assert.Equal(0, world.EntityCount);
+        Assert.False(world.IsAlive(first));
+        Assert.False(world.IsAlive(second));
+        Assert.False(world.IsAlive(third));
+    }
+
+    [Fact]
     public void DestroyMany_full_archetype_clear_matches_loop_and_reuses_same_ids()
     {
         var expected = BuildFlatPositionWorld(out var expectedPositions);

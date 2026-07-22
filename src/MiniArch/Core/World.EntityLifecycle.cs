@@ -166,10 +166,15 @@ public sealed partial class World
         // cascade produces the same free-list order as the batch path.
         if (length <= SmallDestroyThreshold)
         {
+            // The input may come directly from ChunkView.GetEntities(). Each
+            // Destroy can swap-remove into that backing array, so snapshot the
+            // handles before the first structural mutation.
+            Span<Entity> stableEntities = stackalloc Entity[length];
+            entities.CopyTo(stableEntities);
             for (var i = 0; i < length; i++)
             {
-                if (IsAlive(entities[i]))
-                    Destroy(entities[i]);
+                if (IsAlive(stableEntities[i]))
+                    Destroy(stableEntities[i]);
             }
             return;
         }
