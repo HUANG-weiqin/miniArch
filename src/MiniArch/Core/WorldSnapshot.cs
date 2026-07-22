@@ -105,16 +105,19 @@ public static class WorldSnapshot
             throw new ArgumentException("Snapshot stream must be readable.", nameof(stream));
         }
 
-        // Read entire stream into a byte array
+        // Read the stream once. Parse the body as a view over MemoryStream's
+        // backing buffer so large snapshots are not duplicated by ToArray and
+        // then duplicated again when separating the CRC trailer.
         using var ms = new MemoryStream();
         stream.CopyTo(ms);
-        var snapshotBytes = ms.ToArray();
+        var snapshotBytes = ms.GetBuffer();
+        var snapshotLength = checked((int)ms.Length);
         var snapshotOffset = 0;
 
         // Read magic + version using BinaryReader semantics (little-endian)
-        if (snapshotBytes.Length < 8)
+        if (snapshotLength < 8)
             throw new InvalidDataException(
-                $"Snapshot data is too short ({snapshotBytes.Length} bytes). " +
+                $"Snapshot data is too short ({snapshotLength} bytes). " +
                 $"Expected at least 8 bytes for magic header + format version.");
         var magic = BitConverter.ToInt32(snapshotBytes, snapshotOffset); snapshotOffset += 4;
         if (magic != Magic)
@@ -124,20 +127,17 @@ public static class WorldSnapshot
         if (formatVersion < 3 || formatVersion > FormatVersion)
             throw new InvalidDataException($"Unsupported snapshot format version {formatVersion}.");
 
-        byte[] bodyBytes;
+        int bodyLength;
         if (formatVersion >= 4)
         {
-            var bodyLen = snapshotBytes.Length - snapshotOffset - sizeof(uint);
-            if (bodyLen < 0)
+            bodyLength = snapshotLength - snapshotOffset - sizeof(uint);
+            if (bodyLength < 0)
                 throw new InvalidDataException("Snapshot too short for v4 format (missing CRC32 trailer).");
 
-            bodyBytes = new byte[bodyLen];
-            Buffer.BlockCopy(snapshotBytes, snapshotOffset, bodyBytes, 0, bodyLen);
-
-            var crcOffset = snapshotOffset + bodyLen;
+            var crcOffset = snapshotOffset + bodyLength;
             var storedCrc = BitConverter.ToUInt32(snapshotBytes, crcOffset);
-
-            var computedCrc = Crc32.HashToUInt32(bodyBytes);
+            var body = new ReadOnlySpan<byte>(snapshotBytes, snapshotOffset, bodyLength);
+            var computedCrc = Crc32.HashToUInt32(body);
             if (computedCrc != storedCrc)
             {
                 throw new InvalidDataException(
@@ -148,14 +148,13 @@ public static class WorldSnapshot
         else
         {
             // v3: no CRC, body is the rest of the stream
-            bodyBytes = new byte[snapshotBytes.Length - snapshotOffset];
-            Buffer.BlockCopy(snapshotBytes, snapshotOffset, bodyBytes, 0, bodyBytes.Length);
+            bodyLength = snapshotLength - snapshotOffset;
         }
 
         try
         {
-            // Parse body bytes using BinaryReader over a MemoryStream
-            using var bodyStream = new MemoryStream(bodyBytes);
+            using var bodyStream = new MemoryStream(
+                snapshotBytes, snapshotOffset, bodyLength, writable: false, publiclyVisible: false);
             using var reader = new BinaryReader(bodyStream, Encoding.UTF8, leaveOpen: true);
 
             var chunkCapacity = reader.ReadInt32();
@@ -202,6 +201,15 @@ public static class WorldSnapshot
                 throw new InvalidDataException(
                     $"Snapshot hierarchy link count ({hierarchyLinkCount}) is out of range. " +
                     $"Maximum allowed is {entitySlotCount} (entity slot count).");
+
+            var slotVersionByteCount = checked((long)entitySlotCount * sizeof(int));
+            var remainingBodyBytes = reader.BaseStream.Length - reader.BaseStream.Position;
+            if (slotVersionByteCount > remainingBodyBytes)
+            {
+                throw new InvalidDataException(
+                    $"Snapshot slot version table is truncated: expected {slotVersionByteCount} byte(s), " +
+                    $"got {remainingBodyBytes}.");
+            }
 
             var slotVersions = new int[entitySlotCount];
             for (var index = 0; index < slotVersions.Length; index++)

@@ -1735,6 +1735,33 @@ public sealed class WorldSnapshotTests
     }
 
     [Fact]
+    public void BUG_Snapshot_load_rejects_truncated_large_slot_table_before_allocation()
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true))
+        {
+            writer.Write(0x4D415243); // magic
+            writer.Write(3);          // format version
+            writer.Write(16);         // chunk capacity
+            writer.Write(5_000_000);  // slot count, but no version table follows
+            writer.Write(0);          // schema count
+            writer.Write(0);          // archetype count
+            writer.Write(0);          // hierarchy link count
+        }
+
+        var data = stream.ToArray();
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+
+        var exception = Assert.Throws<InvalidDataException>(
+            () => WorldSnapshot.Load(new MemoryStream(data, writable: false)));
+
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+        Assert.Contains("slot version table", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(allocated < 1_000_000,
+            $"Truncated header allocated {allocated:N0} bytes before rejection.");
+    }
+
+    [Fact]
     public void Snapshot_load_rejects_truncated_v3_body_as_invalid_data()
     {
         var data = new byte[]

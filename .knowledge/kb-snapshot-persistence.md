@@ -113,8 +113,10 @@ v3 格式仍可读且跳过 CRC 校验。
 - `WorldSnapshot.Load` 额外拒绝：重复 schema、截断 body、v3 trailing bytes、非法 chunk capacity、非法 free-list count/id/version/duplicate/live-overlap、非法 hierarchy endpoint/duplicate child/cycle、非法 archetype component count/schema index/重复 component、跨 archetype 重复 signature、非法 row count/重复 entity id/非正 live version。
 - dry-validate 使用 schema index 构造归一化 signature 并跨 archetype 去重；不能依赖实际构建阶段的 `GetOrCreateArchetype` 静默合并 malformed payload，因为这会让 Load 后的可观察 archetype 结构和重存字节偏离输入声明。
 - `WorldSnapshot.Load` 的 schema 解析与 payload 构建分两阶段：先 dry-validate 完整 body，再注册 schema type / 构建 `World`，避免后续 payload 无效时污染 `ComponentRegistry.Shared`。
+- header count 不能先驱动大分配再等待 `Read*` 发现 EOF：slot version table 在分配前用 long 计算所需字节并与剩余 body 对照，几十字节的恶意 header 不得诱发大数组。
+- Load 只保留输入的一份 `MemoryStream` backing buffer；v3/v4 body 以 offset/length view 解析，v4 CRC 直接对 span 计算，不再 `ToArray` 后再复制 body。峰值内存从约三份 snapshot 降为一份。
 
-结论：`Import` / `Load` 是不可信输入边界，错误必须统一 fail-fast 为 `InvalidDataException`，且在完成全量验证前不得污染 `ComponentRegistry.Shared`。
+结论：`Import` / `Load` 是不可信输入边界，错误必须统一 fail-fast 为 `InvalidDataException`，且在完成全量验证前不得污染 `ComponentRegistry.Shared`。持久化 Load 的非灾难性失败不会发布半构建 World；不承诺对任意大合法输入或 OOM 提供事务 rollback。
 
 ## 决策
 
