@@ -34,6 +34,11 @@ CommandStream 的 pending/component/hierarchy/async preflight 已修复已知“
 | `BUG_generation_wrap_does_not_make_empty_slots_look_occupied` | `FrameLookup.Clear` 的 generation 回绕为 0 后与零初始化 stamp 混淆，非默认 key 的首次插入无限探测 | generation 命中 0 时清空 stamp 并从 1 重新开始 |
 | `BUG_Describe_stale_handle_does_not_report_recycled_entity_as_alive` | `EntityDump.Describe` 只检查 slot occupied；ID 复用后会把 stale handle 报告成新实体且读取新组件 | alive 判定同时校验输入 handle version |
 | `BUG_ValidationResult_keeps_its_issues_after_later_validation` | `ValidationResult.Issues` 包装 `WorldValidator` 的 ThreadStatic 复用 List；下一次 Validate 会清空并改写旧结果 | 构造结果时复制 issue 数组，结果与 scratch 生命周期解耦 |
+| `BUG_full_lookup_accepts_additional_rows_for_existing_key` | `FindOrCreateSlot` 在 `distinctKeys >= _capacity` 时立即返回 -1，即使 key 已存在（开放寻址表满但 key 已在） | bounded probe 先匹配 existing key，绕一圈找不到才 -1 |
+| `BUG_ensure_capacity_preserves_built_lookup` | `EnsureCapacity` 仅 `Array.Resize` 扩 table，没有 rehash live entries，扩后 indexer 返回错误位置 | 新局部 arrays 完整 rehash 后发布；异常保持旧结果 |
+| `BUG_stateful_struct_selector_uses_same_initial_state_for_both_passes` | `TryBuild` 两遍共用同一 `selector` 参数；可变 struct 的 `Select` 在第一遍中 mutate 自身，第二遍从不同状态开始导致找不到 key | 每遍独立拷贝原始 selector（`countSelector`/`scatterSelector`）；第二遍 slot<0 时抛明确 `InvalidOperationException`，外层 catch 后 `Clear` |
+| `BUG_failed_build_does_not_expose_partial_lookup` | `TryBuild` 中 `selector.Select`/`GetHashCode`/`Equals` 抛异常后，可能留下部分或旧的 lookup 数据 | `TryBuild` 用 `try/catch` 包裹 core，异常时 `Clear()` 后 `throw` |
+| `BUG_constructor_rejects_invalid_capacity` / `BUG_EnsureCapacity_rejects_invalid_capacity` | 构造和 `EnsureCapacity` 未验证负数和超过 `MaxCapacity`（=1&lt;&lt;30）；`CeilPow2` 对大输入溢出 | 两个容量参数都限制在 0..`MaxCapacity`；`Build` 用饱和倍增并删除任意重试次数上限 |
 
 ### 2026-07-15 quality hardening
 

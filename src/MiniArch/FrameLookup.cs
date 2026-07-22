@@ -27,7 +27,9 @@ public sealed class FrameLookup<TKey>
 {
     private const int DefaultKeyCapacity = 16;
     private const int DefaultRowCapacity = 64;
-    private const int MaxGrowAttempts = 16;
+
+    /// <summary>Maximum representable capacity (power of two).</summary>
+    internal const int MaxCapacity = 1 << 30;
 
     // Hash table: key → slot
     private TKey[] _keys;
@@ -54,8 +56,13 @@ public sealed class FrameLookup<TKey>
     /// </summary>
     /// <param name="initialKeyCapacity">Hint for the number of distinct keys (0 = default).</param>
     /// <param name="initialRowCapacity">Hint for the total number of rows across all keys (0 = default).</param>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// A capacity is negative or exceeds <see cref="MaxCapacity"/>.
+    /// </exception>
     public FrameLookup(int initialKeyCapacity = 0, int initialRowCapacity = 0)
     {
+        ValidateCapacity(initialKeyCapacity, nameof(initialKeyCapacity));
+        ValidateCapacity(initialRowCapacity, nameof(initialRowCapacity));
         _capacity = CeilPow2(Math.Max(initialKeyCapacity, DefaultKeyCapacity));
         _rowCapacity = CeilPow2(Math.Max(initialRowCapacity, DefaultRowCapacity));
         _keys = new TKey[_capacity];
@@ -87,26 +94,53 @@ public sealed class FrameLookup<TKey>
 
     /// <summary>
     /// Ensures the lookup has at least the specified capacity.
-    /// Call before <see cref="TryBuild{TSel}"/> if you expect more than the default.
+    /// Existing build results (if any) are preserved: the key-table is rehashed
+    /// into the new capacity so that indexer spans remain valid.
+    /// Call before <see cref="TryBuild{TSel}"/> if you know the expected counts
+    /// in advance and want to avoid incremental growth during Build.
     /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// A capacity is negative or exceeds <see cref="MaxCapacity"/>.
+    /// </exception>
     public void EnsureCapacity(int minKeyCapacity, int minRowCapacity)
     {
-        if (CeilPow2(minKeyCapacity) > _capacity)
+        ValidateCapacity(minKeyCapacity, nameof(minKeyCapacity));
+        ValidateCapacity(minRowCapacity, nameof(minRowCapacity));
+
+        var newKeyCapacity = CeilPow2(Math.Max(minKeyCapacity, _capacity));
+        var newRowCapacity = CeilPow2(Math.Max(minRowCapacity, _rowCapacity));
+        if (newKeyCapacity == _capacity && newRowCapacity == _rowCapacity)
+            return;
+
+        var newKeys = _keys;
+        var newStamps = _stamps;
+        var newStarts = _keyStart;
+        var newCounts = _keyCount;
+
+        if (newKeyCapacity > _capacity)
         {
-            var newCap = CeilPow2(minKeyCapacity);
-            Array.Resize(ref _keys, newCap);
-            Array.Resize(ref _stamps, newCap);
-            Array.Resize(ref _keyStart, newCap);
-            Array.Resize(ref _keyCount, newCap);
-            _capacity = newCap;
+            newKeys = new TKey[newKeyCapacity];
+            newStamps = new int[newKeyCapacity];
+            newStarts = new int[newKeyCapacity];
+            newCounts = new int[newKeyCapacity];
+            Rehash(newKeyCapacity, newKeys, newStamps, newStarts, newCounts);
         }
 
-        if (CeilPow2(minRowCapacity) > _rowCapacity)
+        var newRows = _flatRows;
+        if (newRowCapacity > _rowCapacity)
         {
-            var newRowCap = CeilPow2(minRowCapacity);
-            Array.Resize(ref _flatRows, newRowCap);
-            _rowCapacity = newRowCap;
+            newRows = new RowRef[newRowCapacity];
+            Array.Copy(_flatRows, newRows, _totalRows);
         }
+
+        // Publish only after every allocation and rehash has succeeded.
+        _keys = newKeys;
+        _stamps = newStamps;
+        _keyStart = newStarts;
+        _keyCount = newCounts;
+        _capacity = newKeyCapacity;
+        _flatRows = newRows;
+        _rowCapacity = newRowCapacity;
     }
 
     /// <summary>
@@ -128,40 +162,68 @@ public sealed class FrameLookup<TKey>
 
     /// <summary>
     /// Builds the index from the world snapshot matching the query.
-    /// Always succeeds — grows internal storage if needed.
+    /// Grows internal storage as needed up to <see cref="MaxCapacity"/>.
     /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="world"/> is null.</exception>
+    /// <exception cref="InvalidOperationException">The data exceeds <see cref="MaxCapacity"/> and cannot be represented.</exception>
     public void Build<TSel>(World world, QueryDescription query, TSel selector = default)
         where TSel : struct, IFrameKeySelector<TKey>
     {
-        for (var attempt = 0; attempt < MaxGrowAttempts; attempt++)
+        ArgumentNullException.ThrowIfNull(world);
+
+        while (!TryBuild(world, query, selector))
         {
-            if (TryBuild(world, query, selector))
-                return;
+            var newKeyCap = _capacity >= MaxCapacity / 2 ? MaxCapacity : _capacity * 2;
+            var newRowCap = _rowCapacity >= MaxCapacity / 2 ? MaxCapacity : _rowCapacity * 2;
 
-            _capacity = Math.Max(_capacity * 2, DefaultKeyCapacity * 2);
-            _rowCapacity = Math.Max(_rowCapacity * 2, DefaultRowCapacity * 2);
-            var saved = _scratchCounts;
-            GrowArrays(_capacity, _rowCapacity);
-            _scratchCounts = saved;
+            if (newKeyCap <= _capacity && newRowCap <= _rowCapacity)
+                ThrowBuildFailed();
+
+            EnsureCapacity(newKeyCap, newRowCap);
         }
-
-        ThrowBuildFailed();
     }
 
     /// <summary>
     /// Tries to build using the current internal capacity.
     /// Returns false if capacity is exceeded — lookup is cleared on failure.
+    /// If the caller-supplied <paramref name="selector"/>,
+    /// <c>TKey.GetHashCode()</c>, or <c>IEquatable&lt;TKey&gt;.Equals()</c>
+    /// throws, the lookup is cleared and the exception is rethrown so that
+    /// partial state is never exposed.
     /// </summary>
+    /// <exception cref="ArgumentNullException"><paramref name="world"/> is null.</exception>
     public bool TryBuild<TSel>(World world, QueryDescription query, TSel selector = default)
         where TSel : struct, IFrameKeySelector<TKey>
     {
-        var q = world.Query(query);
+        ArgumentNullException.ThrowIfNull(world);
+
+        try
+        {
+            return TryBuildCore(world, query, selector);
+        }
+        catch
+        {
+            Clear();
+            throw;
+        }
+    }
+
+    private bool TryBuildCore<TSel>(World world, QueryDescription query, TSel selector)
+        where TSel : struct, IFrameKeySelector<TKey>
+    {
+        var q = world.Query(in query);
         var chunks = q.GetChunks();
         Clear();
 
         var tempCounts = GetScratchCounts();
         var distinctKeys = 0;
         var totalMatches = 0;
+
+        // Copy selector for each pass so that a mutable-struct selector
+        // (one whose Select mutates its own fields) produces the same
+        // sequence in both passes.
+        var countSelector = selector;
+        var scatterSelector = selector;
 
         // Pass 1: count per key
         for (var ci = 0; ci < chunks.Length; ci++)
@@ -171,14 +233,14 @@ public sealed class FrameLookup<TKey>
             for (var ri = 0; ri < chunk.Count; ri++)
             {
                 totalMatches++;
-                var key = selector.Select(entities[ri], chunks, ci, ri);
-                var slot = FindOrCreateSlot(key, tempCounts, ref distinctKeys);
+                var key = countSelector.Select(entities[ri], chunks, ci, ri);
+                var slot = FindOrCreateSlot(key, ref distinctKeys);
                 if (slot < 0) { Clear(); return false; }
                 tempCounts[slot]++;
             }
         }
 
-        if (distinctKeys > _capacity || totalMatches > _rowCapacity)
+        if (totalMatches > _rowCapacity)
         {
             Clear();
             return false;
@@ -201,8 +263,10 @@ public sealed class FrameLookup<TKey>
             var entities = chunk.GetEntities();
             for (var ri = 0; ri < chunk.Count; ri++)
             {
-                var key = selector.Select(entities[ri], chunks, ci, ri);
+                var key = scatterSelector.Select(entities[ri], chunks, ci, ri);
                 var slot = FindSlot(key);
+                if (slot < 0 || tempCounts[slot] <= 0)
+                    ThrowUnstableSelector();
                 var pos = _keyStart[slot] + _keyCount[slot] - tempCounts[slot];
                 tempCounts[slot]--;
                 _flatRows[pos] = new RowRef(ci, ri);
@@ -232,24 +296,37 @@ public sealed class FrameLookup<TKey>
         return -1;
     }
 
-    private int FindOrCreateSlot(TKey key, int[] tempCounts, ref int distinctKeys)
+    /// <summary>
+    /// Finds the slot for <paramref name="key"/>, creating it if absent.
+    /// Probes the existing entries first so that a key already in the table
+    /// is accepted even when <c>distinctKeys == _capacity</c>.
+    /// </summary>
+    private int FindOrCreateSlot(TKey key, ref int distinctKeys)
     {
-        if (distinctKeys >= _capacity) return -1;
         var mask = (uint)(_capacity - 1);
         var idx = (uint)key.GetHashCode() & mask;
-        while (true)
+        var start = idx;
+
+        do
         {
             if (_stamps[idx] != _generation)
             {
+                // Empty slot — insert here.
                 _stamps[idx] = _generation;
                 _keys[idx] = key;
                 distinctKeys++;
                 return (int)idx;
             }
             if (EqualityComparer<TKey>.Default.Equals(_keys[idx], key))
+            {
+                // Existing key — found.
                 return (int)idx;
+            }
             idx = (idx + 1) & mask;
-        }
+        } while (idx != start);
+
+        // Table is completely full (all slots occupied, key not found).
+        return -1;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -257,7 +334,7 @@ public sealed class FrameLookup<TKey>
     {
         if (_scratchCounts == null || _scratchCounts.Length < _capacity)
         {
-            _scratchCounts = new int[CeilPow2(_capacity)];
+            _scratchCounts = new int[_capacity];
         }
         else
         {
@@ -266,24 +343,56 @@ public sealed class FrameLookup<TKey>
         return _scratchCounts;
     }
 
-    private void GrowArrays(int newKeyCap, int newRowCap)
+    private void Rehash(
+        int newCapacity,
+        TKey[] newKeys,
+        int[] newStamps,
+        int[] newStarts,
+        int[] newCounts)
     {
-        Array.Resize(ref _keys, newKeyCap);
-        Array.Resize(ref _stamps, newKeyCap);
-        Array.Resize(ref _keyStart, newKeyCap);
-        Array.Resize(ref _keyCount, newKeyCap);
-        Array.Resize(ref _flatRows, newRowCap);
-        _capacity = newKeyCap;
-        _rowCapacity = newRowCap;
+        var mask = (uint)(newCapacity - 1);
+        for (var i = 0; i < _capacity; i++)
+        {
+            if (_stamps[i] != _generation)
+                continue;
+
+            var key = _keys[i];
+            var index = (uint)key.GetHashCode() & mask;
+            while (newStamps[index] == _generation)
+                index = (index + 1) & mask;
+
+            newStamps[index] = _generation;
+            newKeys[index] = key;
+            newStarts[index] = _keyStart[i];
+            newCounts[index] = _keyCount[i];
+        }
     }
 
     private static void ThrowBuildFailed() =>
         throw new InvalidOperationException(
-            $"FrameLookup<{typeof(TKey).Name}>.Build failed after maximum grow attempts.");
+            $"FrameLookup<{typeof(TKey).Name}>.Build failed: " +
+            $"both key and row capacities have reached the representable limit ({MaxCapacity}).");
+
+    private static void ThrowUnstableSelector() =>
+        throw new InvalidOperationException(
+            $"FrameLookup<{typeof(TKey).Name}>.TryBuild requires the selector to return " +
+            "the same key for each row in both build passes.");
+
+    private static void ValidateCapacity(int capacity, string paramName)
+    {
+        if ((uint)capacity > MaxCapacity)
+        {
+            throw new ArgumentOutOfRangeException(
+                paramName, capacity, $"Capacity must be between 0 and {MaxCapacity}.");
+        }
+    }
 
     private static int CeilPow2(int n)
     {
         if (n <= 0) return 1;
+        if (n > MaxCapacity)
+            throw new ArgumentOutOfRangeException(nameof(n), n,
+                $"Value exceeds maximum capacity of {MaxCapacity}.");
         n--;
         n |= n >> 1;
         n |= n >> 2;
