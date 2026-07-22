@@ -26,7 +26,7 @@ public static class EntityDump
 
         var record = records[id];
         var version = record.Version;
-        var isAlive = record.IsOccupied;
+        var isAlive = record.IsOccupied && record.Version == entity.Version;
 
         if (!isAlive)
         {

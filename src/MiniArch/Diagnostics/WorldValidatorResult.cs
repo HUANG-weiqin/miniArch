@@ -16,7 +16,7 @@ public readonly struct ValidationResult
 
     internal ValidationResult(List<ValidationIssue> issues)
     {
-        Issues = new ReadOnlyCollection<ValidationIssue>(issues);
+        Issues = Array.AsReadOnly(issues.ToArray());
         IsValid = issues.Count == 0;
     }
 }

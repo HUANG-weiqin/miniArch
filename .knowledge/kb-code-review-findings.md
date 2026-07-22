@@ -32,6 +32,8 @@ CommandStream 的 pending/component/hierarchy/async preflight 已修复已知“
 |---|---|---|
 | `BUG_full_lookup_missing_key_returns_empty_span` | `FrameLookup.FindSlot` 在开放寻址表恰好占满时查找不存在 key，没有空 stamp 可终止，进入无限循环 | 探测回到起点时返回未命中 |
 | `BUG_generation_wrap_does_not_make_empty_slots_look_occupied` | `FrameLookup.Clear` 的 generation 回绕为 0 后与零初始化 stamp 混淆，非默认 key 的首次插入无限探测 | generation 命中 0 时清空 stamp 并从 1 重新开始 |
+| `BUG_Describe_stale_handle_does_not_report_recycled_entity_as_alive` | `EntityDump.Describe` 只检查 slot occupied；ID 复用后会把 stale handle 报告成新实体且读取新组件 | alive 判定同时校验输入 handle version |
+| `BUG_ValidationResult_keeps_its_issues_after_later_validation` | `ValidationResult.Issues` 包装 `WorldValidator` 的 ThreadStatic 复用 List；下一次 Validate 会清空并改写旧结果 | 构造结果时复制 issue 数组，结果与 scratch 生命周期解耦 |
 
 ### 2026-07-15 quality hardening
 

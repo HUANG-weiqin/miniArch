@@ -18,6 +18,25 @@ public class WorldValidatorTests
     }
 
     [Fact]
+    public void BUG_ValidationResult_keeps_its_issues_after_later_validation()
+    {
+        using var world = new World();
+        var stream = new CommandStream(world);
+        stream.Create();
+
+        var withReservation = WorldValidator.Validate(world);
+        Assert.False(withReservation.IsValid);
+        Assert.Single(withReservation.Issues);
+
+        stream.Clear();
+        var quiescent = WorldValidator.Validate(world);
+
+        Assert.True(quiescent.IsValid);
+        Assert.Single(withReservation.Issues);
+        Assert.Equal(ValidationCode.SlotCapacityWarning, withReservation.Issues[0].Code);
+    }
+
+    [Fact]
     public void WorldWithEntities_NoIssues()
     {
         using var world = new World();

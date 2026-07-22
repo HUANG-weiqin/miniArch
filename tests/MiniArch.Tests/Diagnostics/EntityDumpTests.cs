@@ -28,6 +28,23 @@ public class EntityDumpTests
     }
 
     [Fact]
+    public void BUG_Describe_stale_handle_does_not_report_recycled_entity_as_alive()
+    {
+        using var world = new World();
+        var stale = world.Create(new Position(1, 2));
+        world.Destroy(stale);
+        var replacement = world.Create(new Position(3, 4));
+
+        Assert.Equal(stale.Id, replacement.Id);
+        Assert.NotEqual(stale.Version, replacement.Version);
+
+        var report = EntityDump.Describe(world, stale);
+
+        Assert.False(report.IsAlive);
+        Assert.Empty(report.Components);
+    }
+
+    [Fact]
     public void Describe_AliveEntity_HasComponents()
     {
         using var world = new World();

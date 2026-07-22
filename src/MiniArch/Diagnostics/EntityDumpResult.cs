@@ -92,11 +92,7 @@ public readonly struct ArchetypeInfo
     internal ArchetypeInfo(int entityCount, IReadOnlyList<Type> componentTypes)
     {
         EntityCount = entityCount;
-        // Copy to a mutable list so the ReadOnlyCollection owns the data.
-        var list = new List<Type>(componentTypes.Count);
-        for (var i = 0; i < componentTypes.Count; i++)
-            list.Add(componentTypes[i]);
-        ComponentTypes = new ReadOnlyCollection<Type>(list);
+        ComponentTypes = new ReadOnlyCollection<Type>(new List<Type>(componentTypes));
     }
 }
 
