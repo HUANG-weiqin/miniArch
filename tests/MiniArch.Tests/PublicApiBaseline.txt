@@ -123,7 +123,8 @@ class: MiniArch.Core.WorldSnapshot
   Method: ComputeChecksum(MiniArch.World world) -> System.Byte[]
   Method: Load(System.IO.Stream stream) -> MiniArch.World
   Method: Save(System.IO.Stream stream, MiniArch.World world) -> System.Void
-class: MiniArch.Core.WorldStateSnapshot
+struct: MiniArch.Core.WorldStateSnapshot
+  Method: Dispose() -> System.Void
   Property: IsRecycled -> System.Boolean [get; ]
 struct: MiniArch.Diagnostics.ArchetypeInfo
   Property: ComponentTypes -> System.Collections.ObjectModel.ReadOnlyCollection<System.Type> [get; ]

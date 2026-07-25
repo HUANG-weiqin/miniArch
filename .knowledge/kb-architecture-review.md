@@ -2,7 +2,7 @@
 title: Architecture Mechanistic Review
 module: MiniArch.Core
 description: Mechanistic insight of the entire miniArch ECS library — one-line truths, subsystem breakdown, data flows, known issues, and design tensions. Links to per-subsystem kb pages for depth.
-updated: 2026-07-09
+updated: 2026-07-25
 ---
 # Architecture Mechanistic Review
 
@@ -78,13 +78,14 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - ComponentMask：8 × ulong（id 0..511），手写 8-way 分支 JIT 友好；`MaskBuilder` 是 mutable counterpart，`BitsSet` 跟踪 canonical 性
 - Edge Cache：内联在 Archetype 上的 `Archetype?[] _addDestinationCache` / `_removeDestinationCache`，按 componentId 直索引
 
-### 4b. 回滚快照池（2026-06-30 新增）
-- `World._stateSnapshotPool: Stack<WorldStateSnapshot>`（替换原单 spare slot）
-- `CaptureState()`：池非空时 Pop，否则 `new`；填充数据后 `_isRecycled = false` 返回给调用者
-- `RestoreState(snap)`：校验 `snap._isRecycled == false`（已 recycled 则 `InvalidOperationException` fail-fast）；恢复后 `_isRecycled = true`、`Clear()`、Push 回池
-- 池容量自我稳定在峰值并发使用量 → GGPO 多帧窗口（N 帧预测+乱序 restore）稳态零 GC
-- 历史问题：原单 spare 设计下，连着两次 `CaptureState` 不 restore 时第二次必分配；重复 restore 同一 snapshot 静默污染 world 状态。两个问题都被池 + IsRecycled 修复
-- 代码位置：`World.cs:1179-1307` + `WorldStateSnapshot.cs:34-99`
+### 4b. 回滚快照池（2026-07-25 generation lease）
+- `World._stateSnapshotPool: Stack<WorldStateSnapshotPayload>` 只复用大数组 payload；公开 `WorldStateSnapshot` 是 readonly value lease（payload 引用 + capture generation）。
+- `CaptureState()`：Pop/创建 payload，递增 generation 并填充，返回零分配 value lease。
+- `RestoreState(lease)`：校验 live/generation/source World；恢复后回收 payload。旧 lease 即使 payload 被再次 Capture 也保持失效。
+- 未 Restore 的 checkpoint 由 `lease.Dispose()` 显式淘汰并回收 payload；滚动 ring 覆盖 slot 前必须 Dispose。
+- 池容量自我稳定在峰值并发使用量 → GGPO 多帧窗口（N 帧预测+乱序 restore/淘汰）稳态零 GC。
+- value lease 同时解决两类失败：double-restore，以及 class payload 复用后旧引用“复活”并消费新 snapshot 的 ABA；只在复用 class 内加字段无法区分别名。
+- 详细契约与测试索引以 `kb-snapshot-persistence.md` 为单一事实来源。
 
 ### 5. 组件类型系统
 - `ComponentType` = `internal readonly record struct` 包 int；用户侧只见 `<T>` 泛型
@@ -176,7 +177,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - 详见 `kb-core-ecs.md` 决策段 + `kb-design-rationale.md` §2.9
 
 ### P3b. CaptureState/RestoreState — 已修复
-- 2026-06-30 替换为 `Stack<WorldStateSnapshot>` 池 + `IsRecycled` 标志
+- 2026-07-25 改为 pooled payload + generation-stamped readonly value lease；同时保证 stale handle fail-fast 与稳态零 GC
 
 ### P5. EnsureReplayReservation O(n) free list 扫描 — 已评估，不构成热点
 - Reserve 路径在正常 replay 中不构成热点——每个实体只 Reserve 一次

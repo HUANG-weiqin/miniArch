@@ -133,7 +133,7 @@ public class WorldValidatorTests
         var entity = world.Create(new Position(1, 1));
         world.Destroy(entity);
         var snapshot = world.CaptureState();
-        snapshot.FreeEntities[0] = new FreeEntityEntry(99, entity.Version + 1);
+        snapshot.Payload.FreeEntities[0] = new FreeEntityEntry(99, entity.Version + 1);
         world.RestoreState(snapshot);
 
         var result = WorldValidator.Validate(world);
@@ -149,7 +149,7 @@ public class WorldValidatorTests
         var entity = world.Create(new Position(1, 1));
         world.Destroy(entity);
         var snapshot = world.CaptureState();
-        snapshot.FreeEntities[0] = new FreeEntityEntry(entity.Id, entity.Version + 2);
+        snapshot.Payload.FreeEntities[0] = new FreeEntityEntry(entity.Id, entity.Version + 2);
         world.RestoreState(snapshot);
 
         var result = WorldValidator.Validate(world);
@@ -167,7 +167,7 @@ public class WorldValidatorTests
         world.Destroy(first);
         world.Destroy(second);
         var snapshot = world.CaptureState();
-        snapshot.FreeEntities[1] = snapshot.FreeEntities[0];
+        snapshot.Payload.FreeEntities[1] = snapshot.Payload.FreeEntities[0];
         world.RestoreState(snapshot);
 
         var result = WorldValidator.Validate(world);
@@ -233,8 +233,8 @@ public class WorldValidatorTests
         var child = world.Create(new Position(1, 1));
         world.AddChild(parent, child);
         var snapshot = world.CaptureState();
-        var childSlot = snapshot.HierarchyFirstChild[parent.Id];
-        snapshot.HierarchyChildSlots[childSlot].Next = childSlot;
+        var childSlot = snapshot.Payload.HierarchyFirstChild[parent.Id];
+        snapshot.Payload.HierarchyChildSlots[childSlot].Next = childSlot;
         world.RestoreState(snapshot);
 
         var result = WorldValidator.Validate(world);
@@ -251,8 +251,9 @@ public class WorldValidatorTests
         var second = world.Create(new Position(2, 2));
         var snapshot = world.CaptureState();
 
-        (snapshot.Records[first.Id].RowIndex, snapshot.Records[second.Id].RowIndex) =
-            (snapshot.Records[second.Id].RowIndex, snapshot.Records[first.Id].RowIndex);
+        var payload = snapshot.Payload;
+        (payload.Records[first.Id].RowIndex, payload.Records[second.Id].RowIndex) =
+            (payload.Records[second.Id].RowIndex, payload.Records[first.Id].RowIndex);
         world.RestoreState(snapshot);
 
         var result = WorldValidator.Validate(world);

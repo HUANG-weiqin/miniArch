@@ -5,10 +5,11 @@ using System.Runtime.InteropServices;
 namespace MiniArch.Core;
 
 /// <summary>
-/// Opaque handle to a captured world state for <b>in-memory rollback only</b>.
-/// Obtain via <see cref="World.CaptureState"/>, restore via
-/// <see cref="World.RestoreState"/>. After restore the snapshot is recycled
-/// for the next capture, achieving <b>zero allocation in steady state</b>.
+/// Opaque value lease over a captured world state for <b>in-memory rollback
+/// only</b>. Obtain via <see cref="World.CaptureState"/>, restore via
+/// <see cref="World.RestoreState"/>. After restore the backing payload is
+/// recycled for the next capture, achieving <b>zero allocation in steady
+/// state</b>.
 /// <para/>
 /// Designed for GGPO-style frame rollback (60fps save/restore cycles at
 /// &lt;1000 entities). <b>NOT</b> for persistence or cross-process use:
@@ -23,11 +24,12 @@ namespace MiniArch.Core;
 /// <b>Lifecycle contract:</b>
 /// <list type="bullet">
 /// <item>A snapshot returned by <see cref="World.CaptureState"/> is owned by
-/// the caller until passed to <see cref="World.RestoreState"/>.</item>
+/// the caller until passed to <see cref="World.RestoreState"/> or released
+/// through <see cref="Dispose"/>.</item>
 /// <item>After <see cref="World.RestoreState"/>, <see cref="IsRecycled"/>
-/// becomes <c>true</c> and the snapshot is returned to the world's pool —
-/// any subsequent use (including a second <c>RestoreState</c>) will throw
-/// <see cref="InvalidOperationException"/>.</item>
+/// becomes <c>true</c> and the backing payload is returned to the world's pool.
+/// A subsequent <c>RestoreState</c> throws <see cref="InvalidOperationException"/>;
+/// <see cref="Dispose"/> remains an idempotent no-op.</item>
 /// <item>Multiple snapshots may be live simultaneously, supporting GGPO
 /// rollback windows deeper than 1 frame (capture N frames ahead, restore
 /// them out of order on misprediction).</item>
@@ -51,6 +53,8 @@ namespace MiniArch.Core;
 /// }
 /// // On misprediction at frame k, restore that frame and re-simulate forward:
 /// world.RestoreState(ring[k]);
+/// // Release any checkpoints that were not restored before replacing them:
+/// ring[other].Dispose();
 /// </code>
 /// Incorrect usage (use WorldSnapshot instead):
 /// <code>
@@ -58,9 +62,63 @@ namespace MiniArch.Core;
 /// // DON'T: send it over the network
 /// // DON'T: save it to a replay file
 /// // DON'T: call RestoreState twice on the same handle
+/// // DON'T: overwrite an unconsumed handle without disposing it
 /// </code>
 /// </remarks>
-public sealed class WorldStateSnapshot
+public readonly struct WorldStateSnapshot : IDisposable
+{
+    private readonly WorldStateSnapshotPayload? _payload;
+    private readonly ulong _generation;
+
+    internal WorldStateSnapshot(WorldStateSnapshotPayload payload, ulong generation)
+    {
+        _payload = payload;
+        _generation = generation;
+    }
+
+    /// <summary>
+    /// Gets whether this snapshot lease has been restored or is otherwise no
+    /// longer valid. The value remains <c>true</c> if its pooled payload is
+    /// later reused by another <see cref="World.CaptureState"/> call.
+    /// </summary>
+    public bool IsRecycled =>
+        _payload is null ||
+        _payload.IsRecycled ||
+        _payload.Generation != _generation ||
+        _payload.SourceWorld is null ||
+        _payload.SourceWorld.IsDisposed;
+
+    /// <summary>
+    /// Releases this snapshot without restoring its captured state. Disposing
+    /// an already restored, disposed, or stale copy has no effect.
+    /// </summary>
+    /// <remarks>
+    /// Call this when evicting an unconsumed snapshot from a rollback window.
+    /// The pooled payload can then be reused by a later capture.
+    /// </remarks>
+    public void Dispose()
+    {
+        if (TryGetLivePayload(out var payload) && payload.SourceWorld is { } world)
+            world.ReleaseStateSnapshot(this);
+    }
+
+    internal WorldStateSnapshotPayload Payload =>
+        _payload ?? throw new InvalidOperationException("The default snapshot has no payload.");
+
+    internal bool TryGetLivePayload(out WorldStateSnapshotPayload payload)
+    {
+        if (_payload is null || _payload.IsRecycled || _payload.Generation != _generation)
+        {
+            payload = null!;
+            return false;
+        }
+
+        payload = _payload;
+        return true;
+    }
+}
+
+internal sealed class WorldStateSnapshotPayload
 {
     internal EntityRecord[] Records = [];
     internal int EntitySlotCount;
@@ -78,24 +136,19 @@ public sealed class WorldStateSnapshot
     internal int HierarchyChildSlotCount;
     internal int HierarchyChildFreeList;
 
-    // Tracks lifecycle state. true when in the world's pool (or freshly
-    // constructed and not yet filled), false when handed to a caller via
-    // CaptureState. Set to true by RestoreState before returning to the pool.
-    // The internal field avoids a property backing field; the public property
-    // is the documented API.
-    internal bool _isRecycled = true;
+    internal bool IsRecycled = true;
+    internal ulong Generation;
+    internal World? SourceWorld;
 
-    internal World? _sourceWorld;
-
-    /// <summary>
-    /// Gets whether this snapshot has been recycled back to the world's pool.
-    /// <c>true</c> after <see cref="World.RestoreState"/> has been called on
-    /// this instance (or before it has ever been filled by
-    /// <see cref="World.CaptureState"/>). Any operation on a recycled
-    /// snapshot other than dropping the reference is undefined behaviour and
-    /// will throw on the World APIs.
-    /// </summary>
-    public bool IsRecycled => _isRecycled;
+    internal ulong BeginLease()
+    {
+        Clear();
+        Generation = unchecked(Generation + 1);
+        if (Generation == 0)
+            Generation = 1;
+        IsRecycled = false;
+        return Generation;
+    }
 
     internal void Clear()
     {
@@ -105,7 +158,17 @@ public sealed class WorldStateSnapshot
         HierarchyEntityCapacity = 0;
         HierarchyChildSlotCount = 0;
         HierarchyChildFreeList = -1;
-        _sourceWorld = null;
+        SourceWorld = null;
+    }
+
+    internal void ReleaseStorage()
+    {
+        Records = [];
+        FreeEntities = [];
+        ArchetypeBackups = [];
+        HierarchyParentByChild = [];
+        HierarchyFirstChild = [];
+        HierarchyChildSlots = [];
     }
 
     internal void EnsureRecordsCapacity(int capacity)

@@ -338,15 +338,16 @@ it cannot be stored as an ECS component.
 [`MiniArch`] In-place world rollback with zero-alloc steady-state.
 
 ```csharp
-var handle = world.CaptureState();    // save current state
+var snapshot = world.CaptureState();  // save current state
 // ... mutate world ...
-world.RestoreState(handle);           // revert, handle auto-recycled to pool
+world.RestoreState(snapshot);         // revert, payload returned to pool
 ```
 
-- **Zero-allocation** after warm-up (handles recycled from pool)
-- **Multiple handles** may be live simultaneously (GGPO-style multi-frame rollback window)
-- **`WorldStateSnapshot.IsRecycled`** — check if a handle has already been restored
-- `RestoreState` throws `InvalidOperationException` if the handle was already restored
+- **Zero-allocation** after warm-up (generation-stamped value leases over pooled payloads)
+- **Multiple snapshots** may be live simultaneously (GGPO-style multi-frame rollback window)
+- **`WorldStateSnapshot.Dispose()`** — release an unconsumed checkpoint without restoring it
+- **`WorldStateSnapshot.IsRecycled`** — check whether a lease is no longer valid
+- `RestoreState` throws `InvalidOperationException` if the lease was already consumed or belongs to another world
 
 ---
 

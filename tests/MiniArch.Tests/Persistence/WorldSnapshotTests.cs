@@ -938,6 +938,102 @@ public sealed class WorldSnapshotTests
     }
 
     [Fact]
+    public void BUG_recycled_snapshot_reference_is_not_reactivated_after_pool_reuse()
+    {
+        using var world = new World();
+        var entity = world.Create(new Position(0, 0));
+
+        var oldLease = world.CaptureState();
+        world.RestoreState(oldLease);
+
+        world.Set(entity, new Position(5, 0));
+        var freshLease = world.CaptureState();
+
+        Assert.Same(oldLease.Payload, freshLease.Payload);
+        Assert.True(oldLease.IsRecycled);
+        Assert.False(freshLease.IsRecycled);
+
+        oldLease.Dispose();
+        Assert.False(freshLease.IsRecycled);
+
+        world.Set(entity, new Position(9, 0));
+        Assert.Throws<InvalidOperationException>(() => world.RestoreState(oldLease));
+        Assert.Equal(new Position(9, 0), world.Get<Position>(entity));
+        Assert.False(freshLease.IsRecycled);
+
+        world.RestoreState(freshLease);
+        Assert.Equal(new Position(5, 0), world.Get<Position>(entity));
+    }
+
+    [Fact]
+    public void Default_snapshot_is_recycled_and_cannot_be_restored()
+    {
+        using var world = new World();
+        var snapshot = default(WorldStateSnapshot);
+
+        Assert.True(snapshot.IsRecycled);
+        Assert.Throws<InvalidOperationException>(() => world.RestoreState(snapshot));
+    }
+
+    [Fact]
+    public void Disposing_snapshot_recycles_payload_without_restoring_world()
+    {
+        using var world = new World();
+        var entity = world.Create(new Position(1, 0));
+        var snapshot = world.CaptureState();
+        var copy = snapshot;
+        var payload = snapshot.Payload;
+
+        world.Set(entity, new Position(2, 0));
+        snapshot.Dispose();
+
+        Assert.True(snapshot.IsRecycled);
+        Assert.True(copy.IsRecycled);
+        copy.Dispose();
+        Assert.Equal(new Position(2, 0), world.Get<Position>(entity));
+        Assert.Throws<InvalidOperationException>(() => world.RestoreState(snapshot));
+
+        var next = world.CaptureState();
+        Assert.Same(payload, next.Payload);
+        next.Dispose();
+    }
+
+    [Fact]
+    public void Cross_world_restore_failure_does_not_consume_source_snapshot()
+    {
+        using var source = new World();
+        using var target = new World();
+        source.Create(new Position(1, 0));
+        var snapshot = source.CaptureState();
+
+        Assert.Throws<InvalidOperationException>(() => target.RestoreState(snapshot));
+        Assert.False(snapshot.IsRecycled);
+
+        source.RestoreState(snapshot);
+        Assert.True(snapshot.IsRecycled);
+    }
+
+    [Fact]
+    public void Disposing_snapshot_after_world_disposal_releases_backing_storage()
+    {
+        var world = new World();
+        world.Create(new Position(1, 0));
+        var snapshot = world.CaptureState();
+        var payload = snapshot.Payload;
+        Assert.NotEmpty(payload.Records);
+
+        world.Dispose();
+        Assert.True(snapshot.IsRecycled);
+
+        snapshot.Dispose();
+        snapshot.Dispose();
+
+        Assert.Empty(payload.Records);
+        Assert.Empty(payload.ArchetypeBackups);
+        Assert.Empty(payload.HierarchyParentByChild);
+    }
+
+    [Fact]
     public void Multi_frame_rollback_window_round_trips_out_of_order()
     {
         // GGPO-style: capture N frames forward, then restore an earlier
@@ -998,30 +1094,70 @@ public sealed class WorldSnapshotTests
     public void Multi_frame_window_is_zero_alloc_in_steady_state()
     {
         // Warm the pool by running one full capture/restore cycle of depth N,
-        // then assert that a second identical cycle allocates no new
-        // WorldStateSnapshot instances. We detect this by counting how many
-        // times the constructor would run: each pooled CaptureState reuses
-        // an instance, so after warmup the pool depth covers the window.
+        // then assert that a second identical cycle reuses those payloads.
+        // WorldStateSnapshot itself is a value lease; the large payload is pooled.
         var world = new World();
         world.Create(new Position(7, 7));
 
         const int Depth = 6;
         var ring = new WorldStateSnapshot[Depth];
+        var payloads = new object?[Depth];
 
         // Warm-up: prime the pool.
-        for (var i = 0; i < Depth; i++) ring[i] = world.CaptureState();
-        for (var i = 0; i < Depth; i++) world.RestoreState(ring[i]);
-
-        // Steady state: every CaptureState must pop from the pool. We verify
-        // by checking reference identity against the warm-up handles, which
-        // were all returned to the pool.
         for (var i = 0; i < Depth; i++)
         {
-            var s = world.CaptureState();
-            Assert.True(Array.IndexOf(ring, s) >= 0,
-                "CaptureState should reuse a pooled instance in steady state.");
-            world.RestoreState(s);
+            ring[i] = world.CaptureState();
+            payloads[i] = ring[i].Payload;
         }
+        for (var i = 0; i < Depth; i++) world.RestoreState(ring[i]);
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < Depth; i++) ring[i] = world.CaptureState();
+        for (var i = 0; i < Depth; i++) world.RestoreState(ring[i]);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(0, allocated);
+        for (var i = 0; i < Depth; i++)
+        {
+            Assert.True(Array.IndexOf(payloads, ring[i].Payload) >= 0,
+                "CaptureState should reuse a pooled payload in steady state.");
+        }
+    }
+
+    [Fact]
+    public void BUG_rolling_snapshot_window_discards_old_payloads_without_allocation()
+    {
+        using var world = new World();
+        world.Create(new Position(7, 7));
+
+        const int Depth = 4;
+        var ring = new WorldStateSnapshot[Depth];
+
+        // Warm the payload pool and its Stack backing storage.
+        for (var i = 0; i < Depth; i++) ring[i] = world.CaptureState();
+        for (var i = 0; i < Depth; i++) ring[i].Dispose();
+        for (var i = 0; i < Depth; i++) ring[i] = world.CaptureState();
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var frame = 0; frame < 256; frame++)
+        {
+            var slot = frame % Depth;
+            ring[slot].Dispose();
+            ring[slot] = world.CaptureState();
+        }
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        for (var i = 0; i < Depth; i++) ring[i].Dispose();
+
+        Assert.Equal(0, allocated);
     }
 
     // ══════════════════════════════════════════════════════════?

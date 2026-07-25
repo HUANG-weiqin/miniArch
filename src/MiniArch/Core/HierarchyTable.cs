@@ -465,7 +465,7 @@ internal sealed class HierarchyTable
         _parentByChild[child.Id] = parent;
     }
 
-    internal void CaptureState(WorldStateSnapshot snapshot)
+    internal void CaptureState(WorldStateSnapshotPayload snapshot)
     {
         snapshot.EnsureHierarchyCapacity(_parentByChild.Length, _childSlotCount);
 
@@ -478,7 +478,7 @@ internal sealed class HierarchyTable
         snapshot.HierarchyChildFreeList = _childFreeList;
     }
 
-    internal void RestoreState(WorldStateSnapshot snapshot)
+    internal void RestoreState(WorldStateSnapshotPayload snapshot)
     {
         var entityCapacity = snapshot.HierarchyEntityCapacity;
         if (_parentByChild.Length != entityCapacity)

@@ -26,6 +26,10 @@ namespace MiniArch;
 /// may run in parallel with other readers, but <b>not</b> concurrent with a
 /// structural change. Snapshot the archetype list (via Query) before
 /// dispatching parallel work.</item>
+/// <item><b>Rollback snapshots</b> — <see cref="CaptureState"/>,
+/// <see cref="RestoreState"/>, and <see cref="WorldStateSnapshot.Dispose"/> are
+/// single-threaded lease operations and must not overlap any other access to
+/// the same World.</item>
     /// <item><c>ReserveDeferredEntity</c> takes a lock and is safe to call from
     /// background threads (e.g. async snapshot building); this is the only
     /// write path that is internally synchronized. Multiple <c>CommandStream</c>
@@ -1342,17 +1346,19 @@ public sealed partial class World : IDisposable
     //  Tier 1 in-memory rollback snapshot
     // ──────────────────────────────────────────────
 
-    // Pool of recycled WorldStateSnapshot instances. Each CaptureState pops
-    // one (or constructs a new one when empty); each RestoreState pushes the
-    // incoming snapshot back. Pool size self-stabilises at the peak number
+    // Pool of recycled snapshot payloads. Each CaptureState pops one (or
+    // constructs a new one when empty); each RestoreState pushes the payload
+    // back. Public WorldStateSnapshot values are generation-stamped leases,
+    // so stale copies cannot consume a payload after it is reused. Pool size
+    // self-stabilises at the peak number
     // of simultaneously live snapshots, so a GGPO-style N-frame rollback
     // window pays zero allocation in steady state.
     //
-    // Stack<WorldStateSnapshot> is chosen over a single spare slot so that
+    // A stack is chosen over a single spare slot so that
     // callers may capture multiple frames ahead before restoring them out of
     // order on misprediction - the previous single-spare design silently
     // broke at rollback depth > 1.
-    private readonly Stack<WorldStateSnapshot> _stateSnapshotPool = new();
+    private readonly Stack<WorldStateSnapshotPayload> _stateSnapshotPool = new();
 
     /// <summary>
     /// Captures the world's current mutable state into an opaque handle
@@ -1363,15 +1369,16 @@ public sealed partial class World : IDisposable
     /// (warm pool sized to peak concurrent usage) this method allocates zero
     /// GC memory. Suitable for GGPO-style 60fps frame save/restore cycles at
     /// &lt;1000 entities, including rollback windows deeper than 1 frame.
+    /// Restore the returned lease, or dispose it when evicting an unconsumed
+    /// checkpoint so its pooled payload can be reused.
     /// </summary>
     public WorldStateSnapshot CaptureState()
     {
         AssertNotDisposed();
         var snap = _stateSnapshotPool.Count > 0
             ? _stateSnapshotPool.Pop()
-            : new WorldStateSnapshot();
-        snap.Clear();
-        snap._isRecycled = false;
+            : new WorldStateSnapshotPayload();
+        var generation = snap.BeginLease();
 
         // Records
         snap.EnsureRecordsCapacity(_entitySlotCount);
@@ -1402,15 +1409,15 @@ public sealed partial class World : IDisposable
         // Hierarchy
         _hierarchy.CaptureState(snap);
 
-        snap._sourceWorld = this;
-        return snap;
+        snap.SourceWorld = this;
+        return new WorldStateSnapshot(snap, generation);
     }
 
     /// <summary>
     /// Restores the world to a previously captured state. The snapshot is
     /// recycled internally and should not be used after this call: its
     /// <see cref="WorldStateSnapshot.IsRecycled"/> flag becomes <c>true</c>
-    /// and it is returned to the world's pool for reuse by the next
+    /// and its payload is returned to the world's pool for reuse by the next
     /// <see cref="CaptureState"/>.
     /// <para/>
     /// After restore, all query caches and archetype transition caches are
@@ -1423,8 +1430,7 @@ public sealed partial class World : IDisposable
     public void RestoreState(WorldStateSnapshot snapshot)
     {
         AssertNotDisposed();
-        ArgumentNullException.ThrowIfNull(snapshot);
-        if (snapshot._isRecycled)
+        if (!snapshot.TryGetLivePayload(out var snap))
         {
             throw new InvalidOperationException(
                 "Cannot RestoreState: the snapshot has already been restored " +
@@ -1432,7 +1438,7 @@ public sealed partial class World : IDisposable
                 "obtain a fresh handle before restoring.");
         }
 
-        if (!ReferenceEquals(snapshot._sourceWorld, this))
+        if (!ReferenceEquals(snap.SourceWorld, this))
         {
             throw new InvalidOperationException(
                 "RestoreState: snapshot was captured from a different World instance. " +
@@ -1440,17 +1446,17 @@ public sealed partial class World : IDisposable
         }
 
         // Records
-        if (_records.Length < snapshot.EntitySlotCount)
-            Array.Resize(ref _records, snapshot.EntitySlotCount);
-        Array.Copy(snapshot.Records, _records, snapshot.EntitySlotCount);
-        _entitySlotCount = snapshot.EntitySlotCount;
+        if (_records.Length < snap.EntitySlotCount)
+            Array.Resize(ref _records, snap.EntitySlotCount);
+        Array.Copy(snap.Records, _records, snap.EntitySlotCount);
+        _entitySlotCount = snap.EntitySlotCount;
 
         // Free ids
-        if (_freeIds.Length < snapshot.FreeIdCount)
-            Array.Resize(ref _freeIds, snapshot.FreeIdCount);
-        for (var i = 0; i < snapshot.FreeIdCount; i++)
-            _freeIds[i] = new RecycledEntity(snapshot.FreeEntities[i].Id, snapshot.FreeEntities[i].Version);
-        _freeIdCount = snapshot.FreeIdCount;
+        if (_freeIds.Length < snap.FreeIdCount)
+            Array.Resize(ref _freeIds, snap.FreeIdCount);
+        for (var i = 0; i < snap.FreeIdCount; i++)
+            _freeIds[i] = new RecycledEntity(snap.FreeEntities[i].Id, snap.FreeEntities[i].Version);
+        _freeIdCount = snap.FreeIdCount;
 
         RecalculateReservedCount();
 
@@ -1459,14 +1465,14 @@ public sealed partial class World : IDisposable
         foreach (var arch in _archetypes.Values)
             arch.ResetCount();
 
-        for (var i = 0; i < snapshot.ArchetypeBackupCount; i++)
+        for (var i = 0; i < snap.ArchetypeBackupCount; i++)
         {
-            ref var entry = ref snapshot.ArchetypeBackups[i];
+            ref var entry = ref snap.ArchetypeBackups[i];
             entry.RestoreTo(entry.Archetype);
         }
 
         // Hierarchy
-        _hierarchy.RestoreState(snapshot);
+        _hierarchy.RestoreState(snap);
 
         // Clear replay state — stale after rollback.
         // ReplayCore rebuilds these from scratch on next replay;
@@ -1479,11 +1485,30 @@ public sealed partial class World : IDisposable
         _createArchetypeCacheGeneration++;
         MarkStructureChanged();
 
-        // Recycle snapshot to the pool for the next CaptureState.
-        snapshot._isRecycled = true;
-        snapshot.Clear();
-        _stateSnapshotPool.Push(snapshot);
+        RecycleStateSnapshotPayload(snap);
     }
+
+    internal void ReleaseStateSnapshot(WorldStateSnapshot snapshot)
+    {
+        if (!snapshot.TryGetLivePayload(out var snap) ||
+            !ReferenceEquals(snap.SourceWorld, this))
+        {
+            return;
+        }
+
+        RecycleStateSnapshotPayload(snap);
+    }
+
+    private void RecycleStateSnapshotPayload(WorldStateSnapshotPayload snapshot)
+    {
+        snapshot.IsRecycled = true;
+        snapshot.Clear();
+        if (_disposed)
+            snapshot.ReleaseStorage();
+        else
+            _stateSnapshotPool.Push(snapshot);
+    }
+
     private readonly record struct CloneWork(Entity Source, Entity CloneEntity);
 
     /// <summary>

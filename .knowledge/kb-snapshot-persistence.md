@@ -37,22 +37,25 @@ updated: 2026-07-25
 
 - `WorldSnapshot.Save/Load`：走二进制序列化，支持跨进程传输
 - `WorldClone.Clone`：纯内存直拷，跳过全部编解码，5-20× 快于 Snapshot 往返；产物是**新 World**
-- `World.CaptureState/RestoreState`：原地 raw 数组拷贝，**池化句柄复用**，稳态零 GC；产物是**绑定源 World 的句柄**。池化数组必须额外保存每类状态在 capture 时的逻辑长度；Restore 不得按可能更大的 backing-array capacity 复制。
+- `World.CaptureState/RestoreState`：原地 raw 数组拷贝，**池化 payload + value lease**，稳态零 GC；产物是**绑定源 World 且带 generation 的句柄**。池化数组必须额外保存每类状态在 capture 时的逻辑长度；Restore 不得按可能更大的 backing-array capacity 复制。
 - 前两者共享同一套 internal 重建 API（`world.Reset(slotCount)`, `SetSnapshotEntityVersion()`, `SetSnapshotLocation()`）；后者独立走 `WorldStateSnapshot` + `ArchetypeBackupEntry` + `HierarchyTable.CaptureState/RestoreState`
 - v3 起 free list 直接序列化/反序列化（`WriteFreeList`/`ReadFreeList`），不再通过扫描 record 重建。Clone 用 `CopyFreeIdsFrom` 内存直拷。
 - Reservation 不单独序列化：slot 必为 occupied、free 或 reserved 三者之一；Load、Clone、RestoreState 都在 records/free list 就位后用 `slotCount - freeCount - occupiedCount` 推导 `_reservedCount`。这样即使 snapshot/clone 发生在 CommandStream 已预留 real id、尚未 materialize 的窗口，`EntityCount` 仍与源 World 一致。
 
-### WorldStateSnapshot 生命周期（2026-06-30 重写）
+### WorldStateSnapshot 生命周期（2026-07-25 generation lease）
 
 **池化设计**：
-- `World._stateSnapshotPool: Stack<WorldStateSnapshot>`（替换原单 spare slot）
-- `CaptureState()`：池非空时 Pop（零分配），否则 `new WorldStateSnapshot()`（冷启动）；填充数据后 `_isRecycled = false`，返回给调用者
-- `RestoreState(snap)`：校验 `snap._isRecycled == false`（否则 `InvalidOperationException`），恢复 world 状态，置 `_isRecycled = true`，`Clear()`，Push 回池
-- 池容量自我稳定：连续 N 次 `CaptureState` 后乱序 restore，池就积累了 N 个 spare，下一轮 N 次 CaptureState 全部命中池 → 稳态零 GC
+- `World._stateSnapshotPool: Stack<WorldStateSnapshotPayload>` 只池化大数组 payload；公开 `WorldStateSnapshot` 是 readonly value lease，保存 payload 引用和 capture generation。
+- `CaptureState()`：池非空时 Pop payload（零分配），否则冷启动创建 payload；递增 generation、填充数据后返回 value lease。
+- `RestoreState(lease)`：同时校验 payload 存活、lease generation 与 payload 当前 generation、source World；恢复后把 payload 标记 recycled、`Clear()`、Push 回池。
+- `lease.Dispose()`：淘汰未消费 checkpoint 时不恢复 World，只回收 payload；对 default、已 restore/dispose 或 stale lease 幂等 no-op。滚动 ring 覆盖旧 slot 前必须 Dispose，否则 payload 仍由旧 lease 合法持有，不能复用。
+- 池容量自我稳定：连续 N 次 `CaptureState` 后，lease 通过 Restore 或 Dispose 归还，池就积累 N 个 payload；下一轮 N 次 CaptureState 全部命中池 → 稳态零 GC。
+- generation 是必需信息：若公开 handle 本身也是被复用的 class，旧引用与新引用指向同一对象，池复用会把旧引用重新变为 live；class 内再加 generation 仍无法区分两个别名。value lease 把捕获时 generation 固定在调用方副本中，同时保住零分配。
 
 **IsRecycled 公共属性**：
-- `WorldStateSnapshot.IsRecycled`：`true` 表示已 recycle 回池（不能再 RestoreState），`false` 表示调用者持有
-- 用途：调试断言、防止 double-restore bug。之前重复 restore 同一 snapshot 会**静默污染 world 状态**（restore 到上次 restore 时的状态），现在 fail-fast
+- `WorldStateSnapshot.IsRecycled`：默认 lease、已 Restore/Dispose 的 lease、generation 已过期的 stale lease、源 World 已 Dispose 的 lease 均为 `true`；当前 live lease 为 `false`。
+- World Dispose 后保留的 lease 仍可调用 `Dispose()`：此时 payload 不再回池，而是断开 SourceWorld 并释放大数组，避免 lease 继续保留整棵 World/池化内存。
+- 用途：调试断言、防止 double-restore 和 payload-reuse ABA。旧 lease 即使底层 payload 被下一次 Capture 复用也保持无效，不能消费新 lease。
 
 **支持 GGPO 多帧回滚窗口**：
 ```csharp
@@ -61,6 +64,8 @@ for (int i = 0; i < 8; i++) { ring[i] = world.CaptureState(); Simulate(); }
 // 检测到第 k 帧预测错误：
 world.RestoreState(ring[k]);  // 其他 ring[i] 仍 live
 world.RestoreState(ring[k+3]); // 可继续乱序 restore
+// 覆盖或丢弃未 restore 的 slot 前：
+ring[k+1].Dispose();
 ```
 之前单 spare 设计实质只支持 depth=1（>1 时第二次 CaptureState 强制分配），README 宣称的"GGPO-style 60fps"名实不符。本次修复让真实多帧窗口稳态零 GC。
 
@@ -68,7 +73,9 @@ world.RestoreState(ring[k+3]); // 可继续乱序 restore
 - `Restored_snapshot_is_marked_recycled`
 - `Restoring_same_snapshot_twice_throws`
 - `Multi_frame_rollback_window_round_trips_out_of_order`
-- `Multi_frame_window_is_zero_alloc_in_steady_state`（断言 CaptureState 复用 pooled 实例）
+- `Multi_frame_window_is_zero_alloc_in_steady_state`（断言 CaptureState 复用 pooled payload）
+- `BUG_recycled_snapshot_reference_is_not_reactivated_after_pool_reuse`（旧 generation lease 不能消费复用后的新 capture）
+- `BUG_rolling_snapshot_window_discards_old_payloads_without_allocation`（淘汰未 restore 的 lease 可回收 payload，滚动窗口稳态零分配）
 - `BUG_reused_larger_rollback_snapshot_does_not_restore_stale_hierarchy_tail`（池化 backing array 的 capacity 不得被当作 capture 时的 hierarchy 有效长度）
 
 ## Checksum 双模式

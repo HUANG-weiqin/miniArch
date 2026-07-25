@@ -394,7 +394,7 @@ readonly record struct Health(int Value);
 
 ## 10. Rollback (CaptureState / RestoreState)
 
-Zero-alloc in-place rollback for GGPO-style prediction. Handles are pooled.
+Zero-alloc in-place rollback for GGPO-style prediction. Value leases reference pooled payloads.
 
 ```csharp
 using MiniArch;
@@ -1001,7 +1001,7 @@ readonly record struct Health(int Value);
 
 ## 24. Multi-Frame Rollback Window (GGPO)
 
-`World.CaptureState()` and `World.RestoreState()` support a ring-buffer rollback window of arbitrary depth — not just single-frame save/restore. Handles are pooled, achieving **zero allocation in steady state**.
+`World.CaptureState()` and `World.RestoreState()` support a ring-buffer rollback window of arbitrary depth — not just single-frame save/restore. Payloads are pooled behind generation-stamped value leases, achieving **zero allocation in steady state**.
 
 ```csharp
 using MiniArch;
@@ -1029,20 +1029,24 @@ for (var frame = 0; frame < WindowDepth; frame++)
 Console.WriteLine(world.Get<Position>(new Entity(0, 1))); // Position(30, 0)
 
 // Restore ring[1] → revert to state BEFORE frame 1 mutation (Position(0,0))
-world.RestoreState(ring[1]); // handle recycled to pool
+world.RestoreState(ring[1]); // payload returned to pool
 Console.WriteLine(world.Get<Position>(new Entity(0, 1))); // Position(0, 0)
 
-// Recycled handle: IsRecycled is true; calling RestoreState again throws
+// Consumed lease: IsRecycled is true; calling RestoreState again throws
 Console.WriteLine(ring[1].IsRecycled); // True
 
 // ring[2] is still valid (captured at Position(10,0) before frame 2's Set)
 world.RestoreState(ring[2]);
 Console.WriteLine(world.Get<Position>(new Entity(0, 1))); // Position(10, 0)
 
+// Release checkpoints that were never restored.
+ring[0].Dispose();
+ring[3].Dispose();
+
 readonly record struct Position(float X, float Y);
 ```
 
-> **GGPO pattern:** Keep a ring buffer of `WorldStateSnapshot` handles. Each frame: `CaptureState()` (pushes the oldest slot back to the pool), simulate, check for misprediction. On misprediction: `RestoreState(ring[safeFrame])`, re-simulate with correct inputs. Zero GC after warm-up because handles are pooled (see `WorldStateSnapshot` lifecycle docs).
+> **GGPO pattern:** Keep a ring buffer of `WorldStateSnapshot` leases. Before overwriting a slot, call `ring[slot].Dispose()` to return an unconsumed payload to the pool, then assign `ring[slot] = world.CaptureState()`. On misprediction, `RestoreState(ring[safeFrame])` consumes that lease. Zero GC after warm-up because only payloads are pooled; stale value leases remain invalid even after payload reuse.
 
 ---
 
@@ -1300,6 +1304,7 @@ readonly record struct Position(float X, float Y);
 
 > **Rules:**
 > - A `WorldStateSnapshot` can be restored **once**. After restore, call `CaptureState()` again for a new checkpoint.
+> - Dispose an unconsumed snapshot before evicting or overwriting it; disposal returns its payload without restoring the world.
 > - Snapshots are tied to the `World` that produced them. Restoring on a different `World` instance throws.
 > - The snapshot captures entity records, free list, archetypes, component data, and hierarchy. It does not capture `CommandStream` state — clear your stream before capture.
 
