@@ -104,6 +104,7 @@ updated: 2026-07-25
 - ~~CreateMany benchmark 必须把 fresh append-only、recycled ids、mixed ids 分开跑~~（`CreateMany` 已移除）
 - query 并发测试必须覆盖热缓存和冷首次 materialize 两类场景
 - 零分配测试的 warmup 必须循环 ≥10 次（避免 Tier 1 升级的假分配）
+- 发布审计运行 `dotnet list miniArch.sln package --vulnerable --include-transitive`；测试工程使用 xunit 2.9.3+，避免旧 xunit 经 `NETStandard.Library 1.6.1` 带入已公告的 `System.Net.Http` / `System.Text.RegularExpressions 4.3.0`
 
 ## 认知模型
 
@@ -114,6 +115,7 @@ updated: 2026-07-25
 - 第一次读：`IntegrationTests.cs` → `CommandStreamTests.cs` → `WorldStructuralChangeTests.cs`
 - 修 bug：对应功能的测试文件
 - 运行测试：`tools/scripts/test.ps1` 或 `dotnet test`
+- 依赖漏洞：`dotnet list miniArch.sln package --vulnerable --include-transitive`
 - 运行 benchmark：`tools/scripts/benchmark.ps1` — 或 `dotnet run --project tests\MiniArch.Benchmarks -c Release -- command-buffer`
 
 ## 坑点

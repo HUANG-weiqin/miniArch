@@ -1,4 +1,3 @@
-using System.Linq;
 using MiniArch.Core;
 using MiniQueryCache = MiniArch.Core.QueryCache;
 
@@ -30,7 +29,7 @@ public sealed class IntegrationTests
 
         Assert.Equal(2, query.MatchedArchetypes.Count);
         // Both matching archetypes contribute a chunk (one empty, one with 1 entity).
-        Assert.Single(query.MatchedArchetypes.Where(c => c.EntityCount == 1));
+        Assert.Single(query.MatchedArchetypes, c => c.EntityCount == 1);
 
         Assert.Equal(entity, location.Archetype.GetEntity(location.RowIndex));
         Assert.Equal(new Position(9, 9), location.Archetype.GetComponentAt<Position>(location.Archetype.GetComponentIndex(positionId), location.RowIndex));
