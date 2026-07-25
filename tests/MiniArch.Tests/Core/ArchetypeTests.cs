@@ -681,7 +681,11 @@ public sealed class ArchetypeTests
         var archetype = new Archetype(new Signature(comp), [typeof(Component1024)], capacity: 4096);
 
 #pragma warning disable xUnit1031 // intentional deadlock detection test
-        var task = Task.Run(() => archetype.AllocateRows(5000));
+        var task = Task.Factory.StartNew(
+            () => archetype.AllocateRows(5000),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
         var completed = task.Wait(TimeSpan.FromSeconds(3));
 #pragma warning restore xUnit1031
 

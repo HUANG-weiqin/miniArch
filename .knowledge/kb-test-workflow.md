@@ -2,7 +2,7 @@
 title: Test Workflow
 module: MiniArch.Tests
 description: How the test suite, query profiling, snapshot benchmarks, and structural-change benchmarks are organized and how to run them
-updated: 2026-07-09
+updated: 2026-07-25
 ---
 # Test Workflow
 
@@ -128,4 +128,5 @@ updated: 2026-07-09
 - warmed query benchmark 需要 setup 阶段先 materialize 匹配 archetype
 - `FrameDelta` 跨 world replay 要求双方从同一初始态按相同 frame 顺序推进
 - 测试名要稳定，方便 agent 用 `--filter` 定位
+- 无限循环/死锁 witness 若用 `Task.Run + Wait(timeout)`，在 solution 多 testhost 并行占满 ThreadPool 时会误报；使用 `TaskCreationOptions.LongRunning` 的独立线程执行被测操作，timeout 只裁决真实无进展
 - DebugMetrics 相关测试已全部删除，不应再引用

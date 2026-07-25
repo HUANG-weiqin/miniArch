@@ -269,7 +269,11 @@ public sealed class WorldCloneTests
         }
 
 #pragma warning disable xUnit1031 // intentional deadlock detection test
-        var task = Task.Run(() => world.Clone());
+        var task = Task.Factory.StartNew(
+            () => world.Clone(),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
         var completed = task.Wait(TimeSpan.FromSeconds(3));
 #pragma warning restore xUnit1031
 
