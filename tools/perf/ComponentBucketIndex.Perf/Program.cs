@@ -404,7 +404,7 @@ PerfResult MeasureBucketQuery(int P, Func<World, ComponentBucketQuery<CardZone>,
 {
     using var world = new World();
     var entities = CreateEntities(world, P);
-    using var query = new ComponentBucketQuery<CardZone>(world);
+    var query = new ComponentBucketQuery<CardZone>(world);
     var buffer = new Entity[N]; // max possible entities for any single key
 
     for (int w = 0; w < Warmup; w++)
