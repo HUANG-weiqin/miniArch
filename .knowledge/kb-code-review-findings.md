@@ -32,6 +32,7 @@ CommandStream 的 pending/component/hierarchy/async preflight 已修复已知“
 |---|---|---|
 | `BUG_ChangeWatch_explicit_filter_requires_watched_component` / `BUG_projected_ChangeWatch_explicit_filter_requires_watched_component` | 两个 `World.Watch<TComponent...>(explicitQuery)` 重载原样保存显式 filter；当 filter 匹配不含被观察组件的 archetype 时，Snapshot 无条件 `GetSpan<TComponent>()` 并抛异常 | 显式 filter 统一追加 `With<TComponent>()`；额外约束保留，Watch 扫描的每个 archetype 都保证含目标列 |
 | `BUG_AddChildFromSnapshot_rejects_cycle_consistently_in_Debug` | `AddChildRestored` 在共享的无条件 `ValidateAddChild` 前重复执行 `Debug.Assert`；同一非法循环在 Release 抛契约异常，Debug 却先变成 testhost `DebugAssertException`，导致 Debug 全量门禁失败 | 删除重复 assert 与其私有遍历；restore 和普通 AddChild 统一由 `AddChildCore` 的 Release 常开验证拒绝循环 |
+| `BUG_reused_larger_rollback_snapshot_does_not_restore_stale_hierarchy_tail` | 较大的 pooled `WorldStateSnapshot` 被复用于较小 hierarchy 时只覆写前缀，Restore 却按 backing-array 长度复制；旧 parent/child 尾数据可附着到之后复用的同 ID/version 实体 | snapshot 单独保存 capture 时的 hierarchy entity capacity；Restore 只复制该逻辑长度，不能把池化数组 capacity 当有效状态长度 |
 
 ### 2026-07-22 全面审阅
 

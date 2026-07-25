@@ -2,7 +2,7 @@
 title: Snapshot Persistence
 module: MiniArch.Core Snapshot
 description: Full-world snapshot save/load design for unmanaged components (WorldSnapshot.Save/Load, Clone, CaptureState/RestoreState), plus Checksum double mode
-updated: 2026-07-22
+updated: 2026-07-25
 ---
 # Snapshot Persistence
 
@@ -37,7 +37,7 @@ updated: 2026-07-22
 
 - `WorldSnapshot.Save/Load`：走二进制序列化，支持跨进程传输
 - `WorldClone.Clone`：纯内存直拷，跳过全部编解码，5-20× 快于 Snapshot 往返；产物是**新 World**
-- `World.CaptureState/RestoreState`：原地 raw 数组拷贝，**池化句柄复用**，稳态零 GC；产物是**绑定源 World 的句柄**
+- `World.CaptureState/RestoreState`：原地 raw 数组拷贝，**池化句柄复用**，稳态零 GC；产物是**绑定源 World 的句柄**。池化数组必须额外保存每类状态在 capture 时的逻辑长度；Restore 不得按可能更大的 backing-array capacity 复制。
 - 前两者共享同一套 internal 重建 API（`world.Reset(slotCount)`, `SetSnapshotEntityVersion()`, `SetSnapshotLocation()`）；后者独立走 `WorldStateSnapshot` + `ArchetypeBackupEntry` + `HierarchyTable.CaptureState/RestoreState`
 - v3 起 free list 直接序列化/反序列化（`WriteFreeList`/`ReadFreeList`），不再通过扫描 record 重建。Clone 用 `CopyFreeIdsFrom` 内存直拷。
 - Reservation 不单独序列化：slot 必为 occupied、free 或 reserved 三者之一；Load、Clone、RestoreState 都在 records/free list 就位后用 `slotCount - freeCount - occupiedCount` 推导 `_reservedCount`。这样即使 snapshot/clone 发生在 CommandStream 已预留 real id、尚未 materialize 的窗口，`EntityCount` 仍与源 World 一致。
@@ -69,6 +69,7 @@ world.RestoreState(ring[k+3]); // 可继续乱序 restore
 - `Restoring_same_snapshot_twice_throws`
 - `Multi_frame_rollback_window_round_trips_out_of_order`
 - `Multi_frame_window_is_zero_alloc_in_steady_state`（断言 CaptureState 复用 pooled 实例）
+- `BUG_reused_larger_rollback_snapshot_does_not_restore_stale_hierarchy_tail`（池化 backing array 的 capacity 不得被当作 capture 时的 hierarchy 有效长度）
 
 ## Checksum 双模式
 

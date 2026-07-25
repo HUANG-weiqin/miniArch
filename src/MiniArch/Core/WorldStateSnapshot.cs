@@ -73,6 +73,7 @@ public sealed class WorldStateSnapshot
 
     internal Entity[] HierarchyParentByChild = [];
     internal int[] HierarchyFirstChild = [];
+    internal int HierarchyEntityCapacity;
     internal ChildSlot[] HierarchyChildSlots = [];
     internal int HierarchyChildSlotCount;
     internal int HierarchyChildFreeList;
@@ -101,6 +102,7 @@ public sealed class WorldStateSnapshot
         EntitySlotCount = 0;
         FreeIdCount = 0;
         ArchetypeBackupCount = 0;
+        HierarchyEntityCapacity = 0;
         HierarchyChildSlotCount = 0;
         HierarchyChildFreeList = -1;
         _sourceWorld = null;

@@ -959,6 +959,36 @@ public sealed class WorldSnapshotTests
     }
 
     [Fact]
+    public void BUG_reused_larger_rollback_snapshot_does_not_restore_stale_hierarchy_tail()
+    {
+        using var world = new World();
+
+        // Keep two live handles so the larger pooled instance can be reused
+        // while the current world has a zero-length hierarchy table.
+        var empty1 = world.CaptureState();
+        var oldParent = world.CreateEmpty();
+        var oldChild = world.CreateEmpty();
+        world.AddChild(oldParent, oldChild);
+        var withHierarchy = world.CaptureState();
+
+        world.RestoreState(empty1);
+        var empty2 = world.CaptureState();
+        world.RestoreState(withHierarchy);
+        world.RestoreState(empty2);
+
+        var keepTopPoolEntryLive = world.CaptureState();
+        var reusedLargerEntry = world.CaptureState();
+        world.RestoreState(reusedLargerEntry);
+
+        var newParent = world.CreateEmpty();
+        var newChild = world.CreateEmpty();
+
+        Assert.False(world.TryGetParent(newChild, out _));
+
+        world.RestoreState(keepTopPoolEntryLive);
+    }
+
+    [Fact]
     public void Multi_frame_window_is_zero_alloc_in_steady_state()
     {
         // Warm the pool by running one full capture/restore cycle of depth N,

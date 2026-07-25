@@ -473,19 +473,21 @@ internal sealed class HierarchyTable
         Array.Copy(_firstChild, snapshot.HierarchyFirstChild, _firstChild.Length);
         Array.Copy(_childSlots, snapshot.HierarchyChildSlots, _childSlotCount);
 
+        snapshot.HierarchyEntityCapacity = _parentByChild.Length;
         snapshot.HierarchyChildSlotCount = _childSlotCount;
         snapshot.HierarchyChildFreeList = _childFreeList;
     }
 
     internal void RestoreState(WorldStateSnapshot snapshot)
     {
-        if (_parentByChild.Length != snapshot.HierarchyParentByChild.Length)
+        var entityCapacity = snapshot.HierarchyEntityCapacity;
+        if (_parentByChild.Length != entityCapacity)
         {
-            _parentByChild = new Entity[snapshot.HierarchyParentByChild.Length];
-            _firstChild = new int[snapshot.HierarchyFirstChild.Length];
+            _parentByChild = new Entity[entityCapacity];
+            _firstChild = new int[entityCapacity];
         }
-        Array.Copy(snapshot.HierarchyParentByChild, _parentByChild, snapshot.HierarchyParentByChild.Length);
-        Array.Copy(snapshot.HierarchyFirstChild, _firstChild, snapshot.HierarchyFirstChild.Length);
+        Array.Copy(snapshot.HierarchyParentByChild, _parentByChild, entityCapacity);
+        Array.Copy(snapshot.HierarchyFirstChild, _firstChild, entityCapacity);
 
         if (_childSlots.Length < snapshot.HierarchyChildSlotCount)
             _childSlots = new ChildSlot[snapshot.HierarchyChildSlotCount];
