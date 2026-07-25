@@ -269,11 +269,11 @@ appended to typed stores and consumed as one deterministic batch.
 | `AddChild(Entity, Entity)` | Record hierarchy addition |
 | `RemoveChild(Entity)` | Record hierarchy removal |
 | `Clone(Entity)` | Record entity deep-copy |
-| `Submit()` | Apply all recorded changes synchronously |
-| `Snapshot()` | Produce a budget-validated `FrameDelta` without applying |
-| `SnapshotInto(FrameDelta)` | Produce into a reusable target; budget failure leaves the target unchanged |
+| `Submit()` | Apply all recorded changes synchronously after consume-time preflight |
+| `Snapshot()` | Produce a preflighted, budget-valid `FrameDelta` without applying |
+| `SnapshotInto(FrameDelta)` | Produce into a reusable target; preflight failure leaves the target unchanged |
 | `Replay(FrameDelta, Boolean)` | Apply a delta to produce identical state; `true` resolves tracked `EntitySlot`s |
-| `SubmitAndSnapshotAsync()` | Pipelined submit/build; frame budgets are checked before World submission |
+| `SubmitAndSnapshotAsync()` | Pipelined submit/build; contract and frame-budget checks run before World submission |
 | `SubmitAndSnapshotIntoAsync(FrameDelta)` | Pipelined submit into a reusable target; preflight failure preserves the target and applies no recorded mutations |
 | `Clear()` | Discard recorded commands without applying |
 | `DeferredEntities` | Enable placeholder entity IDs for lockstep mode |

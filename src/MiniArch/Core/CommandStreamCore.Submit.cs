@@ -14,6 +14,10 @@ public abstract partial class CommandStreamCore
     /// <summary>
     /// Applies all recorded commands to the world and returns true if any work was performed.
     /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// An effective component value references a cancelled or unknown deferred placeholder,
+    /// or another recorded command violates its consume-time contract.
+    /// </exception>
     public bool Submit()
     {
         PrepareStores(buildSetLocationCache: true);
@@ -33,6 +37,7 @@ public abstract partial class CommandStreamCore
             // Release ops in batch (creation) order. The batch-order realignment
             // below corrects this divergence so the source's free-list matches the
             // shadow's after Replay.
+            PreflightEmbeddedPlaceholders();
             PreValidatePendingSlots();
             PreflightComponentStores(_frozen);
             PreflightHierarchyOverlay(_world, _frozen);
@@ -206,6 +211,80 @@ public abstract partial class CommandStreamCore
         }
     }
 
+    private void PreflightEmbeddedPlaceholders()
+    {
+        var pending = _frozen.Pending;
+        var maxRawCount = 0;
+        for (var batchIdx = 0; batchIdx < pending.Count; batchIdx++)
+        {
+            if (!pending.Canceled[batchIdx])
+                maxRawCount = Math.Max(maxRawCount, pending.CompCounts[batchIdx]);
+        }
+
+        int[]? pooledIndices = null;
+        Span<int> indices = maxRawCount <= 64
+            ? stackalloc int[maxRawCount]
+            : (pooledIndices = ArrayPool<int>.Shared.Rent(maxRawCount)).AsSpan(0, maxRawCount);
+        try
+        {
+            for (var batchIdx = 0; batchIdx < pending.Count; batchIdx++)
+            {
+                if (pending.Canceled[batchIdx])
+                    continue;
+
+                var count = DeduplicateBatchChain(
+                    pending.Comps, pending.Heads[batchIdx], indices[..pending.CompCounts[batchIdx]]);
+                for (var i = 0; i < count; i++)
+                {
+                    ref var component = ref pending.Comps[indices[i]];
+                    var offsets = EntityFieldResolver.GetOffsets(component.Type);
+                    if (!offsets.IsEmpty)
+                    {
+                        PreflightEmbeddedPlaceholders(
+                            pending.Buf.AsSpan(component.Offset, component.Size),
+                            component.Type, offsets);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            if (pooledIndices is not null)
+                ArrayPool<int>.Shared.Return(pooledIndices);
+        }
+
+        foreach (var store in _frozen.Stores)
+        {
+            if (store?.HasCommands == true)
+                store.PreflightEmbeddedPlaceholders(this);
+        }
+    }
+
+    private void PreflightEmbeddedPlaceholders(
+        ReadOnlySpan<byte> data, ComponentType componentType, ReadOnlySpan<int> offsets)
+    {
+        foreach (var offset in offsets)
+        {
+            var entity = MemoryMarshal.Read<Entity>(data[offset..]);
+            if (!entity.IsPlaceholder)
+                continue;
+
+            var seq = entity.Version;
+            if ((uint)seq < (uint)_deferredSeq)
+            {
+                var batchIdx = _pendingBatchDeferredArr[seq];
+                if ((uint)batchIdx < (uint)_frozen.PendingBatchCount &&
+                    !_frozen.BatchCanceled[batchIdx])
+                {
+                    continue;
+                }
+            }
+
+            throw new InvalidOperationException(
+                $"Component type id {componentType.Value} references cancelled or unknown placeholder {entity}.");
+        }
+    }
+
     // ── Snapshot / SubmitAndSnapshotAsync ─────────────────────────────
 
     /// <summary>
@@ -237,7 +316,8 @@ public abstract partial class CommandStreamCore
     /// </para>
     /// </remarks>
     /// <exception cref="InvalidOperationException">
-    /// The recorded frame exceeds <see cref="FrameDelta.MaxFrameBytes"/> or
+    /// An effective component value references a cancelled or unknown deferred placeholder,
+    /// or the recorded frame exceeds <see cref="FrameDelta.MaxFrameBytes"/> or
     /// <see cref="FrameDelta.MaxOpsPerFrame"/>.
     /// </exception>
     public FrameDelta Snapshot()
@@ -245,7 +325,9 @@ public abstract partial class CommandStreamCore
         PrepareStores();
         if (_deferredEntities)
             ThrowIfSnapshotHasImmediateEntities();
-        else
+
+        PreflightEmbeddedPlaceholders();
+        if (!_deferredEntities)
             ResolveDeferredCreates();
 
         PreflightFrameDeltaBudget(_deferredEntities);
@@ -267,18 +349,23 @@ public abstract partial class CommandStreamCore
     /// <see cref="Snapshot"/> except the result is written into <paramref name="target"/>.
     /// <para/>
     /// The caller must not mutate <paramref name="target"/> concurrently.
-    /// If budget validation fails, the target remains unchanged.
+    /// If validation fails, the target remains unchanged.
     /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="target"/> is <c>null</c>.</exception>
     /// <exception cref="InvalidOperationException">
-    /// The recorded frame exceeds <see cref="FrameDelta.MaxFrameBytes"/> or
+    /// An effective component value references a cancelled or unknown deferred placeholder,
+    /// or the recorded frame exceeds <see cref="FrameDelta.MaxFrameBytes"/> or
     /// <see cref="FrameDelta.MaxOpsPerFrame"/>.
     /// </exception>
     public void SnapshotInto(FrameDelta target)
     {
+        ArgumentNullException.ThrowIfNull(target);
         PrepareStores();
         if (_deferredEntities)
             ThrowIfSnapshotHasImmediateEntities();
-        else
+
+        PreflightEmbeddedPlaceholders();
+        if (!_deferredEntities)
             ResolveDeferredCreates();
 
         PreflightFrameDeltaBudget(_deferredEntities);
@@ -450,6 +537,7 @@ public abstract partial class CommandStreamCore
             // owned by the calling thread. Starting the worker first would let it
             // observe a frame that the local World rejects and would leave the
             // detached FrozenState without tracked ownership when Submit throws.
+            PreflightEmbeddedPlaceholders();
             PreValidatePendingSlots();
             PreflightComponentStores(_frozen);
             PreflightHierarchyOverlay(_world, _frozen);

@@ -3873,11 +3873,8 @@ public sealed class DeferredCreateTests
     }
 
     [Fact]
-    public void Submit_resolves_embedded_Entity_ref_after_Destroy_pending()
+    public void BUG_Submit_rejects_cancelled_embedded_placeholder_before_allocator_mutation()
     {
-        // Deferred mode: A references B via component; B is then destroyed.
-        // The resolver must throw: A references B via an Entity field, but
-        // B's batch was cancelled so the placeholder cannot be resolved.
         var world = new World();
         var stream = MakeStream(world);
 
@@ -3886,7 +3883,91 @@ public sealed class DeferredCreateTests
         stream.Add(a, new Linked(0, b));
         stream.Destroy(b);
 
-        Assert.Throws<InvalidOperationException>(() => stream.Submit());
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+        Assert.Contains("cancelled or unknown placeholder", ex.Message);
+
+        var next = world.CreateEmpty();
+        Assert.Equal(new Entity(0, 1), next);
+    }
+
+    [Fact]
+    public void BUG_Snapshot_rejects_cancelled_embedded_placeholder_before_returning_delta()
+    {
+        using var world = new World();
+        var stream = MakeStream(world);
+
+        var a = stream.Create();
+        var b = stream.Create();
+        stream.Add(a, new Linked(0, b));
+        stream.Destroy(b);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Snapshot());
+        Assert.Contains("cancelled or unknown placeholder", ex.Message);
+    }
+
+    [Fact]
+    public void BUG_SnapshotInto_rejects_cancelled_embedded_placeholder_before_clearing_target()
+    {
+        using var world = new World();
+        var existing = world.CreateEmpty();
+        var stream = MakeStream(world);
+        var target = new FrameDelta();
+        target.AddDestroy(new Entity(123, 1));
+        var originalWire = target.AsSpan().ToArray();
+
+        var referenced = stream.Create();
+        stream.Add(existing, new Linked(0, referenced));
+        stream.Destroy(referenced);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.SnapshotInto(target));
+        Assert.Contains("cancelled or unknown placeholder", ex.Message);
+        Assert.Equal(originalWire, target.AsSpan().ToArray());
+    }
+
+    [Fact]
+    public void BUG_async_snapshot_rejects_cancelled_embedded_placeholder_before_handoff()
+    {
+        using var world = new World();
+        var stream = MakeStream(world);
+
+        var owner = stream.Create();
+        var referenced = stream.Create();
+        stream.Add(owner, new Linked(0, referenced));
+        stream.Destroy(referenced);
+
+        void SubmitInvalidFrame() => _ = stream.SubmitAndSnapshotAsync();
+        var ex = Assert.Throws<InvalidOperationException>(SubmitInvalidFrame);
+        Assert.Contains("cancelled or unknown placeholder", ex.Message);
+
+        var next = world.CreateEmpty();
+        Assert.Equal(new Entity(0, 1), next);
+    }
+
+    [Fact]
+    public void BUG_cancelled_placeholder_in_superseded_pending_value_is_ignored()
+    {
+        using var world = new World();
+        var stream = MakeStream(world);
+
+        var owner = stream.Create();
+        var supersededReference = stream.Create();
+        stream.Add(owner, new Linked(1, supersededReference));
+        stream.Set(owner, new Linked(2, owner));
+        stream.Destroy(supersededReference);
+
+        stream.Submit();
+
+        Assert.Equal(1, world.EntityCount);
+        var query = world.Query(new QueryDescription().With<Linked>());
+        var verified = false;
+        foreach (var chunk in query.GetChunks())
+        {
+            Assert.Equal(1, chunk.Count);
+            Assert.Equal(chunk.GetEntities()[0], chunk.GetSpan<Linked>()[0].Target);
+            Assert.Equal(2, chunk.GetSpan<Linked>()[0].Extra);
+            verified = true;
+        }
+        Assert.True(verified);
     }
 
     [Fact]

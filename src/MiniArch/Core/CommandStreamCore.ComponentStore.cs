@@ -164,6 +164,7 @@ public abstract partial class CommandStreamCore
         public abstract void AccumulateDeltaBudget(ref FrameDelta.Budget budget);
         public abstract void PreflightValidate(
             World world, int[] generations, byte[] presence, int epoch, bool useSetLocationCache);
+        public abstract void PreflightEmbeddedPlaceholders(CommandStreamCore stream);
         public abstract void ApplyToWorld(World world);
         public abstract void EmitToDelta(FrameDelta delta);
         public abstract bool PrepareForConsume(World world, bool buildSetLocationCache);
@@ -904,6 +905,25 @@ public abstract partial class CommandStreamCore
                         delta.AddRemove(_entries[i].Entity, compType);
                         break;
                 }
+            }
+        }
+
+        public override void PreflightEmbeddedPlaceholders(CommandStreamCore stream)
+        {
+            var typeId = Component<T>.ComponentType;
+            var offsets = EntityFieldResolver.GetOffsets(typeId);
+            if (offsets.IsEmpty)
+                return;
+
+            for (var i = 0; i < _count; i++)
+            {
+                ref var entry = ref _entries[i];
+                if (entry.Kind == KindRemove)
+                    continue;
+
+                var data = MemoryMarshal.AsBytes(
+                    MemoryMarshal.CreateReadOnlySpan(ref entry.Value, 1));
+                stream.PreflightEmbeddedPlaceholders(data, typeId, offsets);
             }
         }
 

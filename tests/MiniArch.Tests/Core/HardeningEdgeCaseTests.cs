@@ -491,6 +491,20 @@ public sealed class HardeningEdgeCaseTests
         Assert.IsType<ArgumentNullException>(ex);
     }
 
+    [Fact]
+    public void BUG_SnapshotInto_null_target_throws_before_resolving_deferred_entities()
+    {
+        using var world = new World();
+        var stream = new CommandStream(world) { DeferredEntities = true };
+        _ = stream.Create();
+        stream.DeferredEntities = false;
+
+        Assert.Throws<ArgumentNullException>(() => stream.SnapshotInto(null!));
+
+        var next = world.CreateEmpty();
+        Assert.Equal(new Entity(0, 1), next);
+    }
+
     // ══════════════════════════════════════════════════════════════════════
     // M9.5 — ArgumentNullException.ThrowIfNull for WorldSnapshot.Load
     // ══════════════════════════════════════════════════════════════════════

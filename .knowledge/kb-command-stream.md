@@ -50,8 +50,8 @@ Submit 与 BuildDelta 的阶段顺序统一为：Create → Hierarchy → Compon
 
 同批次 `Create/Clone` 返回的 pending entity，其 `Add/Set/Remove` 写入 batch side table，materialize 时只构造最终组件签名和值：
 
-- 中间 Add→Remove、重复 Set 不产生独立 Watch transition/value event。
-- `Destroy(pending)` 取消创建，并按确定性顺序释放 reservation。
+- 中间 Add→Remove、重复 Set 不产生独立 Watch transition/value event；placeholder resolve 与 emit/materialize 一样只读取 last-wins 后的有效值，superseded batch bytes 不参与语义。
+- `Destroy(pending)` 取消创建，并按确定性顺序释放 reservation；其他有效组件值若仍引用该 placeholder，会在 allocator/target/worker 变化前 fail-fast。
 - `CreateMany` 是一次性初始化 API；混合后续 Set/Add/Remove、重复组件类型等违反 fast-path 前置条件时 fail-fast，不静默降级。
 
 ### existing component command 在 consume 时判定存活
@@ -80,10 +80,12 @@ pending/foreign placeholder 的 `IsPlaceholder` 仍在 record 阶段用于本地
 
 `Submit()` 在 allocator/free-list/materialize/World mutation 前依次检查：
 
-1. pending slot 仍为 reserved；
-2. component store 的 strict presence：Add 必须缺失、Set 必须存在、Remove 缺失为 no-op；
-3. final hierarchy overlay 的 endpoint、自环与 parent-chain cycle；
-4. cancelled reservation 的 free-list 顺序对齐。
+1. pending 与 existing component store 的有效 Entity 字段不得引用 cancelled/unknown deferred placeholder；
+2. pending slot 仍为 reserved；
+3. component store 的 strict presence：Add 必须缺失、Set 必须存在、Remove 缺失为 no-op；
+4. final hierarchy overlay 的 endpoint、自环与 parent-chain cycle。
+
+通过全部 contract preflight 后才对齐 cancelled reservation 的 free-list 顺序并解析 deferred id。placeholder 检查使用与 materialize/emit 相同的 pending last-wins dedup，不能让已被后续 Set 覆盖的死值导致误拒绝。
 
 Hierarchy 的 preflight 检查最终 overlay，因此消费也必须按最终状态落地：先按 child id 解除所有有效 intent 涉及的旧链接，再按 child id 安装最终 Add。Snapshot wire 同样先发 RemoveChild、后发 AddChild；否则合法的父子方向反转会因 World 中尚未解除的旧边产生瞬时 cycle，导致 Submit/Replay 错误拒绝。
 
@@ -93,9 +95,9 @@ Set-only 且全 store 无结构命令时，`PrepareForConsume` 在 prune stale e
 
 ### async frozen-state ownership
 
-`SubmitAndSnapshotAsync` / `SubmitAndSnapshotIntoAsync` 在 active state 仍由调用线程独占时完成 contract preflight；placeholder resolve 后、swap/worker/本地 materialize 前，再完成 FrameDelta 整帧预算 preflight。worker 创建后立即登记 `_pendingFrozen/_pendingTask` ownership。若内部 Submit 随后失败，先观察 worker 完成再回收 frozen state，并保留原同步异常。
+`SubmitAndSnapshotAsync` / `SubmitAndSnapshotIntoAsync` 在 active state 仍由调用线程独占时完成 contract preflight（包括有效组件值中的 placeholder lifecycle）；placeholder resolve 后、swap/worker/本地 materialize 前，再完成 FrameDelta 整帧预算 preflight。worker 创建后立即登记 `_pendingFrozen/_pendingTask` ownership。若内部 Submit 随后失败，先观察 worker 完成再回收 frozen state，并保留原同步异常。
 
-因此“不被本地 Submit 或 FrameDelta 预算接受的 frame”不会先交给后台 worker，复用的 target 也不会在 preflight 失败时被改写。
+因此“不被本地 Submit、placeholder lifecycle 或 FrameDelta 预算接受的 frame”不会先交给后台 worker，复用的 target 也不会在 preflight 失败时被改写。
 
 ### deferred entity 两种模式
 
@@ -108,7 +110,7 @@ placeholder 只在当前 stream/batch 内有效。跨帧持有解析结果使用
 
 ### FrameDelta 结构与预算边界
 
-生产端与消费端共享硬上限：`MaxOpsPerFrame = 1_000_000`、`MaxFrameBytes = 16 MiB`。每个 `FrameDelta.Add*` 在写任何字节前精确检查完整 operation，避免超限时留下半条 op；`Snapshot` / `SnapshotInto` / 两条 async submit+snapshot 路径在改写 target、swap frozen state 或提交 World 前先判断整帧预算。
+生产端与消费端共享硬上限：`MaxOpsPerFrame = 1_000_000`、`MaxFrameBytes = 16 MiB`。每个 `FrameDelta.Add*` 在写任何字节前精确检查完整 operation，避免超限时留下半条 op；`Snapshot` / `SnapshotInto` / 两条 async submit+snapshot 路径在改写 target、swap frozen state 或提交 World 前先判断 embedded placeholder lifecycle 与整帧预算。因此 producer 不会返回随后被自身 `Validate()` 拒绝的 dangling-placeholder delta。
 
 常规帧先用 O(store 数) 的保守 upper bound 证明安全，只有接近上限时才精确扫描，因此 `snapshot-only` A/B（10k Set，Release，1s warmup + 3s measure，各 3 次中位数）保持 42909.3 → 43014.0 ticks/s（+0.2%，噪声内）。精确扫描与实际 writer 共用同一 sizing 规则，由 `Budget_matches_writer_for_every_operation_shape` 守卫。
 

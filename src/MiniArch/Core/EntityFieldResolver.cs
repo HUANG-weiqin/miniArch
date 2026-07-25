@@ -161,8 +161,8 @@ internal static class EntityFieldResolver
     /// <param name="data">Raw component data (mutable span).</param>
     /// <param name="typeId">Component type identifier.</param>
     /// <param name="resolveMap">
-    /// Table indexed by placeholder <c>seq (Version)</c> — elements with
-    /// <c>Id &gt;= 0</c> are the resolved real entity; others are skipped.
+    /// Table indexed by placeholder <c>seq (Version)</c>. Referenced entries must
+    /// contain a resolved real entity; missing or cancelled entries are rejected.
     /// </param>
     internal static void ResolveInPlace(Span<byte> data, ComponentType typeId, ReadOnlySpan<Entity> resolveMap)
     {

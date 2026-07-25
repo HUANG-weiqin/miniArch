@@ -650,7 +650,8 @@ public abstract partial class CommandStreamCore
     /// into <paramref name="indices"/> and returns the count.
     /// The caller must ensure <paramref name="indices"/> is large enough (upper bound is
     /// the raw component count for this batch — deduplication can only reduce it).
-    /// Shared by <see cref="MaterializeFromBatchBuffer"/> and <see cref="CopyComponentsFromBatch"/>.
+    /// Shared by materialization, clone, and placeholder preflight/resolution so those
+    /// pending consumers observe the same effective last-wins values.
     /// </summary>
     private static int DeduplicateBatchChain(
         BatchedComponent[] comps, int headIdx,
@@ -1028,23 +1029,43 @@ public abstract partial class CommandStreamCore
 
         ReplaceHierarchyPlaceholders(resolveMap);
 
-        // Resolve embedded Entity refs in pending-batch (created-entity) component data.
+        // Resolve embedded Entity refs only in each pending entity's effective
+        // last-wins component values. Superseded values are dead batch data and
+        // must not make an otherwise valid frame fail resolution.
         var resolveSpan = new ReadOnlySpan<Entity>(resolveMap);
+        var maxRawCount = 0;
         for (var i = 0; i < _frozen.PendingBatchCount; i++)
         {
-            if (_frozen.BatchCanceled[i]) continue;
-            var current = _frozen.BatchHeads[i];
-            while (current >= 0)
+            if (!_frozen.BatchCanceled[i])
+                maxRawCount = Math.Max(maxRawCount, _frozen.BatchCompCounts[i]);
+        }
+
+        int[]? pooledIndices = null;
+        Span<int> indices = maxRawCount <= 64
+            ? stackalloc int[maxRawCount]
+            : (pooledIndices = ArrayPool<int>.Shared.Rent(maxRawCount)).AsSpan(0, maxRawCount);
+        try
+        {
+            for (var i = 0; i < _frozen.PendingBatchCount; i++)
             {
-                ref var bc = ref _frozen.BatchComps[current];
-                if (!bc.Removed)
+                if (_frozen.BatchCanceled[i])
+                    continue;
+
+                var count = DeduplicateBatchChain(
+                    _frozen.BatchComps, _frozen.BatchHeads[i], indices[.._frozen.BatchCompCounts[i]]);
+                for (var j = 0; j < count; j++)
                 {
+                    ref var component = ref _frozen.BatchComps[indices[j]];
                     EntityFieldResolver.ResolveInPlace(
-                        new Span<byte>(_frozen.BatchBuf, bc.Offset, bc.Size),
-                        bc.Type, resolveSpan);
+                        new Span<byte>(_frozen.BatchBuf, component.Offset, component.Size),
+                        component.Type, resolveSpan);
                 }
-                current = bc.Next;
             }
+        }
+        finally
+        {
+            if (pooledIndices is not null)
+                ArrayPool<int>.Shared.Return(pooledIndices);
         }
 
         for (var i = 0; i < _frozen.DestroyCount; i++)
