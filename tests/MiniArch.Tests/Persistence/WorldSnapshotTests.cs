@@ -16,6 +16,12 @@ public sealed class WorldSnapshotTests
     private readonly record struct ManagedReferenceComponent(string Name);
     private readonly record struct PartialMutationComponent(int Value);
 
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Auto)]
+    private struct AutoLayoutComponent
+    {
+        public int Value;
+    }
+
     [Fact]
     public void Unmanaged_world_can_round_trip_preserving_entity_metadata_values_and_archetype_membership()
     {
@@ -1061,7 +1067,7 @@ public sealed class WorldSnapshotTests
     {
         // Build a minimal v3 snapshot: [magic:4][version=3:4][body...]
         // body contains: chunkCapacity=16, entitySlotCount=4, schemaCount=0,
-        // archetypeCount=0, hierarchyLinkCount=0, slotVersions(4x0)
+        // archetypeCount=0, hierarchyLinkCount=0, slotVersions(4x1)
         // + empty free list (0 length).
         using var ms = new MemoryStream();
         using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
@@ -1072,7 +1078,7 @@ public sealed class WorldSnapshotTests
         writer.Write(0);  // schemaCount
         writer.Write(0);  // archetypeCount
         writer.Write(0);  // hierarchyLinkCount
-        for (var i = 0; i < 4; i++) writer.Write(0); // slot versions
+        for (var i = 0; i < 4; i++) writer.Write(1); // reserved slot versions
         writer.Write(0);  // free list length
         writer.Flush();
 
@@ -1613,6 +1619,25 @@ public sealed class WorldSnapshotTests
     }
 
     [Fact]
+    public void BUG_snapshot_load_rejects_auto_layout_before_registration()
+    {
+        var type = typeof(AutoLayoutComponent);
+        Assert.DoesNotContain(type, ComponentRegistry.Shared.GetRegisteredTypes());
+
+        var snapshot = BuildV3SnapshotWithRawArchetype(
+            writer =>
+            {
+                writer.Write(1); // component count
+                writer.Write(0); // schema index
+                writer.Write(0); // row count
+            },
+            type.AssemblyQualifiedName!);
+        _ = Assert.Throws<InvalidDataException>(
+            () => WorldSnapshot.Load(new MemoryStream(snapshot)));
+        Assert.DoesNotContain(type, ComponentRegistry.Shared.GetRegisteredTypes());
+    }
+
+    [Fact]
     public void Snapshot_load_rejects_duplicate_resolved_schema_type()
     {
         var data = BuildV3SnapshotWithSchemaNames(
@@ -1646,6 +1671,52 @@ public sealed class WorldSnapshotTests
         var data = BuildV3Snapshot(chunkCapacity: 0);
 
         _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+    }
+
+    [Fact]
+    public void BUG_snapshot_load_rejects_oversized_chunk_capacity_before_archetype_allocation()
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true))
+        {
+            WriteV3SnapshotHeader(writer, schemaCount: 0, archetypeCount: 1, chunkCapacity: int.MaxValue);
+            writer.Write(0); // component count
+            writer.Write(0); // row count
+            writer.Write(0); // free list length
+        }
+
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        var exception = Assert.Throws<InvalidDataException>(
+            () => WorldSnapshot.Load(new MemoryStream(stream.ToArray(), writable: false)));
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+
+        Assert.Contains("chunk capacity", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(allocated < 1_000_000,
+            $"Oversized chunk capacity allocated {allocated:N0} bytes before rejection.");
+    }
+
+    [Fact]
+    public void BUG_snapshot_load_rejects_non_positive_reserved_slot_version()
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true))
+        {
+            writer.Write(0x4D415243); // magic
+            writer.Write(3);          // v3
+            writer.Write(16);         // chunk capacity
+            writer.Write(1);          // entity slot count
+            writer.Write(0);          // schema count
+            writer.Write(0);          // archetype count
+            writer.Write(0);          // hierarchy link count
+            writer.Write(0);          // invalid reserved slot version
+            writer.Write(0);          // free list length
+        }
+
+        var exception = Assert.Throws<InvalidDataException>(
+            () => WorldSnapshot.Load(new MemoryStream(stream.ToArray())));
+
+        Assert.Contains("slot 0", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("version", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -1924,7 +1995,7 @@ public sealed class WorldSnapshotTests
         writer.Write(schemaCount);
         writer.Write(archetypeCount);
         writer.Write(0);          // hierarchyLinkCount
-        for (var i = 0; i < 4; i++) writer.Write(0); // slot versions
+        for (var i = 0; i < 4; i++) writer.Write(1); // reserved slot versions
     }
 
     private static void Write7BitEncodedInt(Stream stream, int value)

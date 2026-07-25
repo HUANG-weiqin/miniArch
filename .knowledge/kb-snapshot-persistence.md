@@ -110,8 +110,8 @@ v3 格式仍可读且跳过 CRC 校验。
 - schema type name 单一事实来源：`AssemblyQualifiedName ?? FullName ?? Name`。
 - `Fingerprint()` 也使用同一 schema name，避免同名不同程序集/版本的握手 hash 碰撞。
 - schema name 读取使用有界 UTF-8 reader（当前上限 16KB），不再裸用 `BinaryReader.ReadString()`。
-- 外部读入 schema 时必须满足 miniArch 组件约束：resolved `Type` 唯一、无 open generic、value type、非 by-ref-like、无托管字段、满足 `unmanaged` generic constraint。
-- `WorldSnapshot.Load` 额外拒绝：重复 schema、截断 body、v3 trailing bytes、非法 chunk capacity、非法 free-list count/id/version/duplicate/live-overlap、非法 hierarchy endpoint/duplicate child/cycle、非法 archetype component count/schema index/重复 component、跨 archetype 重复 signature、非法 row count/重复 entity id/非正 live version。
+- 外部读入 schema 时必须满足 miniArch 组件约束：resolved `Type` 唯一、无 open generic、value type、非 by-ref-like、无托管字段、满足 `unmanaged` generic constraint。WorldSnapshot 还必须在 registry 注册前拒绝 enum 之外的 `LayoutKind.Auto`；`ComponentSchema` 是完整 registry handshake，可包含已经注册但 storage 不支持持久化的类型。
+- `WorldSnapshot.Load` 额外拒绝：重复 schema、截断 body、v3 trailing bytes、超出 `World.MaxChunkCapacity` 的 chunk capacity、任意 slot（含 reserved）的非正 version、非法 free-list count/id/version/duplicate/live-overlap、非法 hierarchy endpoint/duplicate child/cycle、非法 archetype component count/schema index/重复 component、跨 archetype重复 signature、非法 row count/重复 entity id。
 - dry-validate 使用 schema index 构造归一化 signature 并跨 archetype 去重；不能依赖实际构建阶段的 `GetOrCreateArchetype` 静默合并 malformed payload，因为这会让 Load 后的可观察 archetype 结构和重存字节偏离输入声明。
 - `WorldSnapshot.Load` 的 schema 解析与 payload 构建分两阶段：先 dry-validate 完整 body，再注册 schema type / 构建 `World`，避免后续 payload 无效时污染 `ComponentRegistry.Shared`。
 - header count 不能先驱动大分配再等待 `Read*` 发现 EOF：slot version table 在分配前用 long 计算所需字节并与剩余 body 对照，几十字节的恶意 header 不得诱发大数组。

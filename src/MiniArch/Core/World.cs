@@ -35,6 +35,7 @@ namespace MiniArch;
 public sealed partial class World : IDisposable
 {
     private const int DefaultChunkCapacity = 128;
+    internal const int MaxChunkCapacity = 1 << 20;
 
     private readonly Dictionary<Signature, Archetype> _archetypes = new();
     // Mask-keyed cache for zero-allocation archetype lookup on the Replay path.
@@ -125,9 +126,11 @@ public sealed partial class World : IDisposable
     /// </summary>
     public World(int chunkCapacity = DefaultChunkCapacity, int entityCapacity = 64)
     {
-        if (chunkCapacity <= 0)
+        if (chunkCapacity <= 0 || chunkCapacity > MaxChunkCapacity)
         {
-            throw new ArgumentOutOfRangeException(nameof(chunkCapacity), "Chunk capacity must be positive.");
+            throw new ArgumentOutOfRangeException(
+                nameof(chunkCapacity),
+                $"Chunk capacity must be in the range [1, {MaxChunkCapacity}].");
         }
 
         if (entityCapacity < 0)

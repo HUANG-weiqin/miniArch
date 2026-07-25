@@ -160,8 +160,9 @@ public static class WorldSnapshot
             var chunkCapacity = reader.ReadInt32();
             var entitySlotCount = reader.ReadInt32();
 
-            if (chunkCapacity <= 0)
-                throw new InvalidDataException($"Snapshot chunk capacity ({chunkCapacity}) must be positive.");
+            if (chunkCapacity <= 0 || chunkCapacity > World.MaxChunkCapacity)
+                throw new InvalidDataException(
+                    $"Snapshot chunk capacity ({chunkCapacity}) is out of range [1, {World.MaxChunkCapacity}].");
 
             // Prevent OOM from malicious snapshots specifying a huge slot count.
             // 256M slots × 4 bytes/slot = ~1 GB for slot versions array, which is
@@ -214,7 +215,13 @@ public static class WorldSnapshot
             var slotVersions = new int[entitySlotCount];
             for (var index = 0; index < slotVersions.Length; index++)
             {
-                slotVersions[index] = reader.ReadInt32();
+                var version = reader.ReadInt32();
+                if (version <= 0)
+                {
+                    throw new InvalidDataException(
+                        $"Snapshot entity slot {index} has non-positive version {version}.");
+                }
+                slotVersions[index] = version;
             }
 
             var schemaTypes = new Type[schemaCount];
@@ -235,6 +242,13 @@ public static class WorldSnapshot
                 }
 
                 ComponentSchemaCodec.EnsureImportableComponentType(componentType, schemaName, nameof(WorldSnapshot));
+                if (!componentType.IsEnum &&
+                    componentType.StructLayoutAttribute?.Value == LayoutKind.Auto)
+                {
+                    throw new InvalidDataException(
+                        $"WorldSnapshot: Type '{schemaName}' uses LayoutKind.Auto and cannot " +
+                        "be loaded as a deterministic component type.");
+                }
                 EnsureSnapshotSupported(componentType);
                 schemaTypes[index] = componentType;
             }

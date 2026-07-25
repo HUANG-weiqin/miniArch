@@ -332,7 +332,7 @@ public sealed class HardeningEdgeCaseTests
         writer.Write(0);          // schemaCount
         writer.Write(0);          // archetypeCount
         writer.Write(0);          // hierarchyLinkCount
-        for (var i = 0; i < 8; i++) writer.Write(0); // slot versions
+        for (var i = 0; i < 8; i++) writer.Write(1); // reserved slot versions
         writer.Write(0);          // free list length
         writer.Flush();
 

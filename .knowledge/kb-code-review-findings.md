@@ -34,6 +34,9 @@ CommandStream 的 pending/component/hierarchy/async preflight 已修复已知“
 | `BUG_AddChildFromSnapshot_rejects_cycle_consistently_in_Debug` | `AddChildRestored` 在共享的无条件 `ValidateAddChild` 前重复执行 `Debug.Assert`；同一非法循环在 Release 抛契约异常，Debug 却先变成 testhost `DebugAssertException`，导致 Debug 全量门禁失败 | 删除重复 assert 与其私有遍历；restore 和普通 AddChild 统一由 `AddChildCore` 的 Release 常开验证拒绝循环 |
 | `BUG_reused_larger_rollback_snapshot_does_not_restore_stale_hierarchy_tail` | 较大的 pooled `WorldStateSnapshot` 被复用于较小 hierarchy 时只覆写前缀，Restore 却按 backing-array 长度复制；旧 parent/child 尾数据可附着到之后复用的同 ID/version 实体 | snapshot 单独保存 capture 时的 hierarchy entity capacity；Restore 只复制该逻辑长度，不能把池化数组 capacity 当有效状态长度 |
 | `BUG_hierarchy_overlay_applies_final_acyclic_reparenting_without_transient_cycle` | preflight 接受最终无环 overlay，但 Submit/Replay 按 child id 直接 Add；父子方向反转时旧边尚未解除，`World.AddChild` 观察到瞬时 cycle 并抛错 | Submit 先 detach 全部有效 intent 的 child，再安装 Add；delta 同样先 emit RemoveChild phase、再 emit AddChild phase，保持两路收敛 |
+| `BUG_snapshot_load_rejects_oversized_chunk_capacity_before_archetype_allocation` | 数十字节 v3 payload 可声明 `int.MaxValue` chunk capacity 和一个空 archetype，dry validation 通过后尝试分配数 GB entity array | World 构造与 Snapshot Load 共享 `MaxChunkCapacity` 上限；不可信 header 在创建 World/archetype 前拒绝 |
+| `BUG_snapshot_load_rejects_auto_layout_before_registration` | Snapshot schema 接受 unmanaged `LayoutKind.Auto` struct，dry validation 后先注册到全局 registry，随后 Archetype storage 才拒绝 | Load 在 registry 注册/World 构建前以 `InvalidDataException` 拒绝 Auto-layout（enum 除外）；ComponentSchema 仍是完整 registry handshake，可包含已注册但不可持久化的类型 |
+| `BUG_snapshot_load_rejects_non_positive_reserved_slot_version` | slot version 只在 live row/free entry 上检查；既非 live 又非 free 的 reserved slot 可携带 0/负版本并被 Load 接受 | 读取 slot version table 时要求每个已存在 slot 的 version 都为正；三态后续校验不再遗漏 reserved |
 
 ### 2026-07-22 全面审阅
 
