@@ -1,5 +1,4 @@
-﻿using System.Diagnostics;
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 
 namespace MiniArch.Core;
 
@@ -27,15 +26,7 @@ internal sealed class HierarchyTable
         => AddChildCore(world, parent, child, removeFirst: true);
 
     public void AddChildRestored(World world, Entity parent, Entity child)
-    {
-        // Debug-only cycle detection: walk up from parent to ensure child is
-        // not an ancestor. Snapshot restore should never produce cycles; if a
-        // malicious snapshot does, this assert catches it in DEBUG builds.
-        Debug.Assert(!IsAncestorOf(child, parent),
-            $"Snapshot restore created a hierarchy cycle: parent=[{parent.Id},{parent.Version}], " +
-            $"child=[{child.Id},{child.Version}]. Cycle-free hierarchy is a snapshot invariant.");
-        AddChildCore(world, parent, child, removeFirst: false);
-    }
+        => AddChildCore(world, parent, child, removeFirst: false);
 
     private void AddChildCore(World world, Entity parent, Entity child, bool removeFirst)
     {
@@ -47,22 +38,6 @@ internal sealed class HierarchyTable
 
         _parentByChild[child.Id] = parent;
         AddChildToParent(parent.Id, child);
-    }
-
-    /// <summary>
-    /// Returns true if <paramref name="potentialAncestor"/> is an ancestor of
-    /// <paramref name="current"/> (walking up the parent chain).
-    /// </summary>
-    private bool IsAncestorOf(Entity potentialAncestor, Entity current)
-    {
-        while (current.Id >= 0 && current.Id < _parentByChild.Length)
-        {
-            var parent = _parentByChild[current.Id];
-            if (parent == NoEntity || parent == default) return false;
-            if (parent == potentialAncestor) return true;
-            current = parent;
-        }
-        return false;
     }
 
     public void RemoveChild(Entity child)

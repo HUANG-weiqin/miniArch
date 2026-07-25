@@ -2,7 +2,7 @@
 title: Hierarchy Runtime
 module: MiniArch.Core Hierarchy
 description: Runtime-owned parent-child relations, cascade destroy semantics, and snapshot restore behavior
-updated: 2026-07-11
+updated: 2026-07-25
 ---
 # Hierarchy Runtime
 
@@ -38,6 +38,7 @@ updated: 2026-07-11
 - hierarchy 保持为 World 持有的 runtime side table，不是 ECS component
 - destroy 语义固定为 cascade destroy（child-first），而非"父死子孤儿"
 - batch destroy 与单体 destroy 共用同一 hierarchy 语义；优化只改变 storage remove 方式，不改变最终 parent-child 关系和 free-list 顺序
+- 普通 `AddChild` 与 snapshot restore 的 `AddChildRestored` 都进入 `AddChildCore`，由同一套 Release 常开 `ValidateAddChild` 拒绝 stale handle、自链接和直接/间接循环；restore 只跳过 reparent 前的 `RemoveChild`
 - 复用 `default(Entity)` 作为"无 parent"值
 
 ## 认知模型

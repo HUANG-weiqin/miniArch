@@ -2,7 +2,7 @@
 title: 内存安全硬化 — 抗 OOM / 栈溢出 / 算术溢出
 module: MiniArch.Core
 description: ECS 运行时在对抗性输入下的内存安全防护——int 溢出防线、栈安全、恶意输入拦截、API 验证。每一层有测试证明。
-updated: 2026-07-22
+updated: 2026-07-25
 ---
 
 # 内存安全硬化
@@ -154,5 +154,5 @@ updated: 2026-07-22
 - 硬化不消除性能开销——segment 容量=1 时每 entity 分配一个独立数组，回滚备份也是数组级拷贝。这是安全价格，不是 bug
 - `snapshot schemaCount` cap 可能阻断极端（> 65536 组件类型）的用户，但这是合理的——如果你有 65536+ 组件类型，你的设计可能有问题
 - `ReadVarint` 在 `FromWire` 阶段就已经抛异常，不是 `Validate` 阶段。这意味着某些"按设计应该走到 Validate 才拒"的 wire 在解码阶段就被拒绝了，5 个现有测试因此更新了期望值
-- DEBUG-only 保护（`AssertNoStructChange`、层级循环检测）不会在 RELEASE 构建中触发。依赖这些保护的代码必须额外提供无条件 fallback 或者确保逻辑上不可能触发
+- DEBUG-only 保护（如 `AssertNoStructChange`）不会在 RELEASE 构建中触发。依赖这些保护的代码必须额外提供无条件 fallback 或者确保逻辑上不可能触发；层级 restore 的循环检测现已统一由 Release 常开的 `ValidateAddChild` 承担
 - `_records[entity.Id]` 在 replay main pass 中不经过 PreScan 的保护——PreScan 只防 OOM，不保证 array index 合法。必须在 PreScan 之后的 `PlaceEntityInArchetype` 中确保 `_records` 够大，或者始终使用 Validate()

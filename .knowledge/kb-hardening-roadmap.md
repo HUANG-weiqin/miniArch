@@ -2,7 +2,7 @@
 title: Hardening Roadmap
 module: Meta
 description: 系统性的健壮性加固路线图——从 int 溢出、退化性能、内存安全到确定性保障，按里程碑组织
-updated: 2026-07-15
+updated: 2026-07-25
 ---
 
 > **实施状态：** 2026-07-12 完成 M1-M9 全部代码落地。详细信息见 `kb-changelog.md` §2026-07-12。
@@ -529,16 +529,10 @@ M2.3 的注释**已添加**（之前 commit 已更新 `RemoveFromFreeList` 和 `
 
 ### M8.5 Snapshot hierarchy 循环防护
 
-- **位置**：`HierarchyTable.cs:28-29`（`AddChildRestored`）
-- **问题**：Snapshot restore 用 `AddChildRestored` 绕过 `ValidateAddChild`。恶意快照可构建循环层级
-- **后果**：`CollectDestroySubtree` 有 `_destroyVisitedGen` 防无限循环，所以不会栈溢出，但 `RemoveChild` 等操作行为可能错误
-- **改法**：在 `AddChildRestored` 中加带消息的 `Debug.Assert` 反证——快照中不应有循环，若有则在调试期发现：
-  ```csharp
-  Debug.Assert(!ValidateAddChild(world, parent, child),
-      $"Snapshot restore created a hierarchy cycle: parent={parent}, child={child}. " +
-      "Cycle-free hierarchy is a snapshot invariant; malformed snapshots " +
-      "should be rejected during Load().");
-  ```
+- **位置**：`HierarchyTable.AddChildRestored` → `AddChildCore` → `ValidateAddChild`
+- **当前结论**：restore 与普通 `AddChild` 已共用 Release 常开的 `ValidateAddChild`，恶意快照不能安装自链接或直接/间接循环。
+- **历史调整**：早期额外加过 Debug-only `IsAncestorOf` assert；共享验证补齐后它成为重复检查，并让 Debug 对同一用户错误先抛 `DebugAssertException`、Release 抛 `InvalidOperationException`。2026-07-25 删除重复 assert 和死 helper，以共享无条件验证为单一事实来源。
+- **回归**：`BUG_AddChildFromSnapshot_rejects_cycle_consistently_in_Debug` 同时在 Debug/Release 守卫异常契约。
 - **热路径**：❌ Restore 冷路径
 
 ---

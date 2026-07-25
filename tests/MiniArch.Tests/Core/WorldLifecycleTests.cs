@@ -352,7 +352,7 @@ public sealed class WorldLifecycleTests
     // meant a tampered snapshot could install a hierarchy cycle that later
     // hung CollectDestroySubtree. AddChildFromSnapshot must reject cycles too.
     [Fact]
-    public void AddChildFromSnapshot_rejects_cycle_in_restored_hierarchy()
+    public void BUG_AddChildFromSnapshot_rejects_cycle_consistently_in_Debug()
     {
         var world = new World();
         var parent = world.CreateEmpty();
