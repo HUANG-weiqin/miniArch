@@ -327,10 +327,10 @@ public abstract partial class CommandStreamCore
             ThrowIfSnapshotHasImmediateEntities();
 
         PreflightEmbeddedPlaceholders();
+        PreflightFrameDeltaBudget(_deferredEntities);
         if (!_deferredEntities)
             ResolveDeferredCreates();
 
-        PreflightFrameDeltaBudget(_deferredEntities);
         var delta = new FrameDelta();
         delta.EnsureCapacity(GetSnapshotCapacityHint());
         BuildDelta(delta);
@@ -365,10 +365,10 @@ public abstract partial class CommandStreamCore
             ThrowIfSnapshotHasImmediateEntities();
 
         PreflightEmbeddedPlaceholders();
+        PreflightFrameDeltaBudget(_deferredEntities);
         if (!_deferredEntities)
             ResolveDeferredCreates();
 
-        PreflightFrameDeltaBudget(_deferredEntities);
         target.Clear();
         BuildDelta(target);
         _pendingReplay = true;
@@ -542,12 +542,15 @@ public abstract partial class CommandStreamCore
             PreflightComponentStores(_frozen);
             PreflightHierarchyOverlay(_world, _frozen);
 
+            // Delta sizing is independent of placeholder resolution. Reject an
+            // oversized frame before free-list realignment or real-id reservation.
+            PreflightFrameDeltaBudget(deferredMode: false);
+
             // Keep allocator ordering identical to Submit/Replay before deferred
             // placeholders are resolved into authoritative real ids.
             AlignCancelledBatchFreeListOrder();
             ResolveDeferredCreates();
             PreValidatePendingSlots();
-            PreflightFrameDeltaBudget(deferredMode: false);
         }
         catch
         {

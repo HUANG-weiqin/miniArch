@@ -708,7 +708,9 @@ public sealed class CommandStreamTests
 
         using var world = new World();
         var entity = world.Create(new FrameBlob8K { Marker = -1 });
-        var stream = new CommandStream(world);
+        var stream = new CommandStream(world) { DeferredEntities = true };
+        _ = stream.Create();
+        stream.DeferredEntities = false;
         for (var i = 0; i < 2048; i++)
             stream.Set(entity, new FrameBlob8K { Marker = i });
 
@@ -716,15 +718,22 @@ public sealed class CommandStreamTests
         target.AddDestroy(new Entity(42, 1));
         var originalTarget = target.AsSpan().ToArray();
 
-        var snapshotEx = Assert.Throws<InvalidOperationException>(() => stream.SnapshotInto(target));
+        var snapshotEx = Assert.Throws<InvalidOperationException>(stream.Snapshot);
+        Assert.Contains("MaxFrameBytes", snapshotEx.Message);
+        Assert.Equal(new Entity(1, 1), world.CreateEmpty());
+        Assert.Equal(-1, world.Get<FrameBlob8K>(entity).Marker);
+
+        snapshotEx = Assert.Throws<InvalidOperationException>(() => stream.SnapshotInto(target));
         Assert.Contains("MaxFrameBytes", snapshotEx.Message);
         Assert.Equal(originalTarget, target.AsSpan().ToArray());
+        Assert.Equal(new Entity(2, 1), world.CreateEmpty());
         Assert.Equal(-1, world.Get<FrameBlob8K>(entity).Marker);
 
         void SubmitOversizedFrame() => _ = stream.SubmitAndSnapshotIntoAsync(target);
         var asyncEx = Assert.Throws<InvalidOperationException>(SubmitOversizedFrame);
         Assert.Contains("MaxFrameBytes", asyncEx.Message);
         Assert.Equal(originalTarget, target.AsSpan().ToArray());
+        Assert.Equal(new Entity(3, 1), world.CreateEmpty());
         Assert.Equal(-1, world.Get<FrameBlob8K>(entity).Marker);
 
         stream.Set(entity, new FrameBlob8K { Marker = 7 });

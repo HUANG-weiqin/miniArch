@@ -95,7 +95,7 @@ Set-only 且全 store 无结构命令时，`PrepareForConsume` 在 prune stale e
 
 ### async frozen-state ownership
 
-`SubmitAndSnapshotAsync` / `SubmitAndSnapshotIntoAsync` 在 active state 仍由调用线程独占时完成 contract preflight（包括有效组件值中的 placeholder lifecycle）；placeholder resolve 后、swap/worker/本地 materialize 前，再完成 FrameDelta 整帧预算 preflight。worker 创建后立即登记 `_pendingFrozen/_pendingTask` ownership。若内部 Submit 随后失败，先观察 worker 完成再回收 frozen state，并保留原同步异常。
+`SubmitAndSnapshotAsync` / `SubmitAndSnapshotIntoAsync` 在 active state 仍由调用线程独占时完成 contract preflight（包括有效组件值中的 placeholder lifecycle）与 FrameDelta 整帧预算 preflight；只有两者都通过，才允许 free-list 对齐、placeholder real-id resolve、state swap、worker 启动和本地 materialize。worker 创建后立即登记 `_pendingFrozen/_pendingTask` ownership。若内部 Submit 随后失败，先观察 worker 完成再回收 frozen state，并保留原同步异常。
 
 因此“不被本地 Submit、placeholder lifecycle 或 FrameDelta 预算接受的 frame”不会先交给后台 worker，复用的 target 也不会在 preflight 失败时被改写。
 
@@ -110,7 +110,7 @@ placeholder 只在当前 stream/batch 内有效。跨帧持有解析结果使用
 
 ### FrameDelta 结构与预算边界
 
-生产端与消费端共享硬上限：`MaxOpsPerFrame = 1_000_000`、`MaxFrameBytes = 16 MiB`。每个 `FrameDelta.Add*` 在写任何字节前精确检查完整 operation，避免超限时留下半条 op；`Snapshot` / `SnapshotInto` / 两条 async submit+snapshot 路径在改写 target、swap frozen state 或提交 World 前先判断 embedded placeholder lifecycle 与整帧预算。因此 producer 不会返回随后被自身 `Validate()` 拒绝的 dangling-placeholder delta。
+生产端与消费端共享硬上限：`MaxOpsPerFrame = 1_000_000`、`MaxFrameBytes = 16 MiB`。每个 `FrameDelta.Add*` 在写任何字节前精确检查完整 operation，避免超限时留下半条 op；`Snapshot` / `SnapshotInto` / 两条 async submit+snapshot 路径在 deferred id resolution、改写 target、swap frozen state 或提交 World 前先判断 embedded placeholder lifecycle 与整帧预算。因此 producer 不会返回随后被自身 `Validate()` 拒绝的 dangling-placeholder delta，预算失败也不会消费 allocator id/version。
 
 常规帧先用 O(store 数) 的保守 upper bound 证明安全，只有接近上限时才精确扫描，因此 `snapshot-only` A/B（10k Set，Release，1s warmup + 3s measure，各 3 次中位数）保持 42909.3 → 43014.0 ticks/s（+0.2%，噪声内）。精确扫描与实际 writer 共用同一 sizing 规则，由 `Budget_matches_writer_for_every_operation_shape` 守卫。
 
