@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Runtime.InteropServices;
 using Xunit;
 
 namespace MiniArchTests.UserApi;
@@ -15,6 +16,11 @@ public sealed class ComponentBucketQueryTests
     private readonly record struct Mana(int Value);
 
     private readonly record struct Tag;
+
+    [StructLayout(LayoutKind.Sequential, Size = 65536)]
+    private readonly struct LargeRow
+    {
+    }
 
     // Buffer large enough for all test scenarios (max ~5 entities per key).
     private static readonly Entity[] Buffer = new Entity[256];
@@ -288,6 +294,58 @@ public sealed class ComponentBucketQueryTests
 
         Assert.True(found);
         Assert.Equal(2, totalMatches);
+    }
+
+    [Fact]
+    public void BUG_Get_rejects_destination_that_aliases_component_storage()
+    {
+        using var world = new World();
+        var key = new Entity(100, 1);
+        world.Create(key);
+        world.Create(new Entity(200, 1));
+        var query = new ComponentBucketQuery<Entity>(world);
+        var chunks = world.Query(new QueryDescription().With<Entity>()).GetChunks();
+        var componentStorage = chunks[0].GetSpan<Entity>();
+
+        var threw = false;
+        try
+        {
+            query.Get(key, componentStorage[1..]);
+        }
+        catch (ArgumentException)
+        {
+            threw = true;
+        }
+
+        Assert.True(threw);
+    }
+
+    [Fact]
+    public void Get_preflights_later_component_chunks_before_writing()
+    {
+        using var world = new World(chunkCapacity: 2);
+        var key = new Entity(100, 1);
+        for (var i = 0; i < 33; i++)
+            world.Create(new Entity(100 + i, 1), default(LargeRow));
+
+        var query = new ComponentBucketQuery<Entity>(world);
+        var chunks = world.Query(new QueryDescription().With<Entity>()).GetChunks();
+        Assert.True(chunks.Length > 1);
+        var laterComponentStorage = chunks[^1].GetSpan<Entity>();
+        var originalValue = laterComponentStorage[0];
+
+        var threw = false;
+        try
+        {
+            query.Get(key, laterComponentStorage);
+        }
+        catch (ArgumentException)
+        {
+            threw = true;
+        }
+
+        Assert.True(threw);
+        Assert.Equal(originalValue, laterComponentStorage[0]);
     }
 
     // ── 12. CardZone scenario — single-component zone ───────────────

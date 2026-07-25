@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 namespace MiniArch;
 
 /// <summary>
@@ -132,11 +134,15 @@ public sealed class ComponentBucketQuery<TComponent>
     /// The total number of matching entities, which may exceed
     /// <c>destination.Length</c>.
     /// </returns>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="destination"/> overlaps the queried key-component storage.
+    /// </exception>
     public int Get(TComponent key, Span<Entity> destination)
     {
         var totalMatches = 0;
         var query = _world.Query(in _scope);
         var chunks = query.GetChunks();
+        ThrowIfDestinationOverlapsKeyStorage(chunks, destination);
 
         foreach (var chunk in chunks)
         {
@@ -164,10 +170,33 @@ public sealed class ComponentBucketQuery<TComponent>
     /// <paramref name="destination"/>, while <paramref name="totalMatches"/> reports the total
     /// number found and may exceed the destination length.
     /// </summary>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="destination"/> overlaps the queried key-component storage.
+    /// </exception>
     public bool TryGet(TComponent key, Span<Entity> destination, out int totalMatches)
     {
         totalMatches = Get(key, destination);
         return totalMatches > 0;
+    }
+
+    private static void ThrowIfDestinationOverlapsKeyStorage(
+        ReadOnlySpan<ChunkView> chunks,
+        Span<Entity> destination)
+    {
+        if (destination.IsEmpty)
+            return;
+
+        var destinationBytes = MemoryMarshal.AsBytes(destination);
+        foreach (var chunk in chunks)
+        {
+            var componentBytes = MemoryMarshal.AsBytes(chunk.GetSpan<TComponent>());
+            if (componentBytes.Overlaps(destinationBytes))
+            {
+                throw new ArgumentException(
+                    "Destination must not overlap the queried component storage.",
+                    nameof(destination));
+            }
+        }
     }
 
 }

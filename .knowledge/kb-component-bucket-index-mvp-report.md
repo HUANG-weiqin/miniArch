@@ -2,7 +2,7 @@
 title: ComponentBucketQuery MVP 验证报告
 module: MiniArch（用户 API 分层）
 description: ComponentBucketQuery MVP 最终报告——0 core intrusion、确定性 per-key scan、正确性模型、性能矩阵
-updated: 2026-07-22
+updated: 2026-07-25
 ---
 
 # ComponentBucketQuery MVP 验证报告
@@ -12,7 +12,7 @@ updated: 2026-07-22
 1. **API 定型：确定性 per-key scan。** `ComponentBucketQuery<TComponent>` 每次 public read 从真实 World 对请求 key 做 deterministic scan，不使用 hash/fingerprint/count fast-path/dirty mode/AutoFreshness。正确性在调用时刻是确定性的，无概率 false negative。
 2. **零 core 入侵。** 完全在 MiniArch.Core 之上构建，只使用 World 公开 API，不修改 `src/MiniArch/Core/` 任何代码。
 3. **API 精简到最低必要面。** 公开类型 `ComponentBucketQuery<TComponent>`，方法：构造函数、`Get`、`TryGet`、`ContainsKey`、`Count`。`Refresh()` 已删除——每次操作自验证，无需刷新入口。`IDisposable` 不必要——无内部状态需要释放。
-4. **无内部 buffer 架构。** `Get/TryGet` 不再维护内部 `Entity[]` 缓存，改为直接写入调用者提供的 `Span<Entity>`。无 Bucket class，无 Dictionary，无 `_buffer`/`_count` 字段。调用者控制内存生命周期，消除 span 过期风险。`Count/ContainsKey` 直接扫描不写入 span。无 `Clear`、无 `Dispose`。
+4. **无内部 buffer 架构。** `Get/TryGet` 不再维护内部 `Entity[]` 缓存，改为直接写入调用者提供的 `Span<Entity>`。无 Bucket class，无 Dictionary，无 `_buffer`/`_count` 字段。调用者控制内存生命周期，消除 span 过期风险。写入前会拒绝与查询 key 列重叠的 destination，避免输出覆写后续输入。`Count/ContainsKey` 直接扫描不写入 span。无 `Clear`、无 `Dispose`。
 5. **Correctness 有回归守卫：** 专项契约测试、MiniArch 全量测试和 HeroPipeline 门禁共同验证确定性正确性模型。
 6. **性能定位：**
     - CountOnly：BucketQuery 远快于 ManualExpanded（~8×~10×，因 `Count(key)` 直接 per-key scan，不全量建桶；ManualExpanded 每轮全量建桶）。
@@ -42,7 +42,7 @@ updated: 2026-07-22
   - 构造函数 `ComponentBucketQuery<TComponent>(World world)` 和 `(World world, QueryDescription scope)`：必须传入 World；可选 scope 限定查询范围。构造函数使用 `scope.GetRequiredTypes()` 代替 `RequiredTypes.ToArray()` 避免冷路径分配。
   - 无内部缓存，无 `_buffer` 字段。
 - 数据流：
-  - `Get(key, destination)` → `_world.Query(_scope)` → 遍历 chunk → 比较 `TComponent` 值 → 最多写入 `destination.Length` 个实体 → 返回总匹配数（可大于 destination 长度，用于检测截断）。
+  - `Get(key, destination)` → `_world.Query(_scope)` → 预检 destination 不与任何 key-component chunk 重叠 → 遍历 chunk → 比较 `TComponent` 值 → 最多写入 `destination.Length` 个实体 → 返回总匹配数（可大于 destination 长度，用于检测截断）。
   - `Count(key)` / `ContainsKey(key)` → 直接 `_world.Query(_scope)` → 遍历 chunk 计数/判断，不写入任何 span。
 - 事实源策略：分桶依据始终来自 `World.Query` 返回的真实组件值。不做假设、不做缓存推测。
 
@@ -150,6 +150,7 @@ updated: 2026-07-22
 ## 坑点
 
 - **调用者需确保 span 容量足够**：`Get/TryGet` 在 destination 耗尽时继续计数但不写入超出部分。调用者应使用 `Count` 预查或提供最大容量 span（如 `stackalloc Entity[maxCount]`）。
+- **destination 不得与 key 组件列重叠**：例如不能把 `ComponentBucketQuery<Entity>` 所查询 chunk 的 `GetSpan<Entity>()` 直接作为输出。实现会在任何写入前以 `ArgumentException` 拒绝，防止查询边读边改坏输入列。
 - **不是零开销抽象**：每次 `Get/TryGet` 遍历 scope 匹配的所有 chunk。在 entity 总数大量但请求 key 很少的场景下，遍历所有 chunk 仍有一定成本。
 - **没有自动 freshness tracking**：每次调用都从 World 重新扫描。这是使用约束，不是 bug。
 - **`Count/ContainsKey` 不写入 span**：每次调用都执行全扫描。如果调用者后续还要遍历同一 key 的实体，建议直接 `Get(key, span)` 并用返回值获取数量，避免 `Count` 后再 `Get` 双扫描。

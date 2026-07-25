@@ -39,6 +39,7 @@ CommandStream 的 pending/component/hierarchy/async preflight 已修复已知“
 | `BUG_snapshot_load_rejects_non_positive_reserved_slot_version` | slot version 只在 live row/free entry 上检查；既非 live 又非 free 的 reserved slot 可携带 0/负版本并被 Load 接受 | 读取 slot version table 时要求每个已存在 slot 的 version 都为正；三态后续校验不再遗漏 reserved |
 | `BUG_entity_query_rejects_structural_change_during_enumeration` / `BUG_entity_query_rejects_bulk_clear_during_enumeration` | entity foreach 缓存 archetype backing array 与旧 count；循环体 Destroy/swap-remove 后会跳过 survivor 或返回 `default(Entity)`，bulk Clear 也会使旧 count/row 失效 | World entity-storage structure version 覆盖 create/materialize/destroy/migrate/bulk-clear/restore；普通与 ordered enumerator 后续 MoveNext fail-fast，顺序 ForEachChunk 每 callback 后检查；裸 ChunkView/span 保留借用期契约 |
 | `BUG_accessor_rejects_use_after_another_entity_moves_its_cached_row` | `EntityAccessor` 只缓存 `(Archetype,row)`；同 archetype 另一实体被删除后 swap-remove，再创建实体填回旧 row，Accessor 会静默改写新实体 | Accessor 同时捕获 World structure version；后续 Get/Set/Has 在任何 entity-storage 结构变更后 fail-fast，已返回 ref 仍由借用期契约约束 |
+| `BUG_Get_rejects_destination_that_aliases_component_storage` | `ComponentBucketQuery<Entity>.Get` 可把查询 key 列自身的可写 span 当 destination；首个匹配写回实体 handle 后会改坏后续 key，并使“读”查询静默修改 World | 写入前按 byte range 预检所有 key-component chunk；任何重叠都以 `ArgumentException` fail-fast，非重叠路径仍直接写 caller span |
 
 ### 2026-07-22 全面审阅
 
@@ -154,6 +155,7 @@ B7-B16 属于旧 `ChangeQuery` / `Track().Capture().Previous()` / shared tracker
 | `WorldSnapshot` checksum / `WorldValidator` 的 ThreadStatic collections | 与 parallel partition 同族，会在同线程重入时被覆写 | 非 bug。collection 活跃期间没有调用用户 delegate、虚 comparer、外部 Stream 或其他可重入边界；公共方法同步返回后才可能再次进入 | checksum feeder/排序/层级枚举与 validator 全控制流走读；唯一跨用户 callback 的 ThreadStatic partition 已单独修复 |
 | `WorldDigest.CombineTypeDictHash` / `CombineIntDictHash` | Dictionary 枚举顺序未显式排序，逻辑相同的 digest total 可能分叉 | 非 bug（当前构造链）。component key 首次出现顺序由 signature-sorted archetype snapshot + signature component order 唯一决定；per-archetype key 按递增 index 插入；两个结果字典保留该确定性插入顺序 | `ComputePerComponentHashes` / `ComputePerArchetypeHashes` 的唯一插入点走读；相同 world 状态不存在不同插入历史 witness |
 | `WorldSnapshot.Load` / `World.RestoreState` | 恶意输入或错误 snapshot 在恢复中途抛错会留下对调用方可见的半恢复 World | 非 bug（非灾难性异常边界）。持久化 Load 在注册 schema/构建 World 前 dry-validate 完整 payload，构建的是未发布局部 World；in-memory snapshot 是绑定源 World 的 opaque trusted handle，public ownership/recycle 校验均在 mutation 前。仅 OOM/灾难性内部失败不承诺 rollback | Load 两阶段控制流、`Snapshot_load_does_not_register_schema_type_when_later_payload_is_invalid`、RestoreState source/recycle tests 与完整 persistence 回归 |
+| `CommandStream.Replay` 失败后的 `_replayTrackedBySeq` | 失败 Replay 残留 tracking 会在下一帧错误解析旧 `EntitySlot` | 非 bug。合法的下一帧 `Snapshot() → Clear()` 会以新 tracking 替换旧数组；异常后显式 `Clear()` 也会丢弃残留。只有把其他 stream 的 delta 配合 `resolveSlots:true` 才能复现错解析，但该调用违反“只解析本 stream 自己 delta”的契约 | 失败发生在 materialize 后的最小 delta + 下一帧同 stream Snapshot/Replay witness；`Snapshot`/`Clear` tracking 发布控制流走读 |
 
 ## 决策
 
