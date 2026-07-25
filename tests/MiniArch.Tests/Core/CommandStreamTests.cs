@@ -3225,6 +3225,36 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
+    public void BUG_hierarchy_overlay_applies_final_acyclic_reparenting_without_transient_cycle()
+    {
+        using var source = new World();
+        var sourceA = source.Create(new Position(1, 1));
+        var sourceB = source.Create(new Position(2, 2));
+        source.AddChild(sourceA, sourceB);
+
+        using var replica = new World();
+        var replicaA = replica.Create(new Position(1, 1));
+        var replicaB = replica.Create(new Position(2, 2));
+        replica.AddChild(replicaA, replicaB);
+
+        var stream = new CommandStream(source);
+        stream.AddChild(sourceB, sourceA);
+        stream.RemoveChild(sourceB);
+        var delta = stream.Snapshot();
+
+        Assert.True(stream.Submit());
+        new CommandStream(replica).Replay(delta);
+
+        Assert.True(source.TryGetParent(sourceA, out var sourceParent));
+        Assert.Equal(sourceB, sourceParent);
+        Assert.False(source.TryGetParent(sourceB, out _));
+        Assert.True(replica.TryGetParent(replicaA, out var replicaParent));
+        Assert.Equal(replicaB, replicaParent);
+        Assert.False(replica.TryGetParent(replicaB, out _));
+        Assert.Equal(source.CanonicalChecksum(), replica.CanonicalChecksum());
+    }
+
+    [Fact]
     public void BUG_submit_preflights_hierarchy_overlay_cycle_before_world_mutation()
     {
         using var world = new World();

@@ -148,20 +148,25 @@ public abstract partial class CommandStreamCore
             ((ICollection<KeyValuePair<Entity, HierarchyIntent>>)hierarchyByChild).CopyTo(sorted, 0);
             Array.Sort(sorted, 0, count, HierarchyComparer.Instance);
 
+            // Detach every affected child first. Applying an Add directly can
+            // observe the child's old relation and reject a transient cycle even
+            // though the fully recorded overlay is acyclic.
             for (var i = 0; i < count; i++)
             {
                 ref readonly var entry = ref sorted[i];
                 var (child, intent) = (entry.Key, entry.Value);
                 if (IsDestroyedThisFrame(child, frozen)) continue;
-                if (intent.IsAdd)
-                {
-                    if (IsDestroyedThisFrame(intent.Parent, frozen)) continue;
-                    delta.AddAddChild(intent.Parent, child);
-                }
-                else
-                {
-                    delta.AddRemoveChild(child);
-                }
+                if (intent.IsAdd && IsDestroyedThisFrame(intent.Parent, frozen)) continue;
+                delta.AddRemoveChild(child);
+            }
+
+            for (var i = 0; i < count; i++)
+            {
+                ref readonly var entry = ref sorted[i];
+                var (child, intent) = (entry.Key, entry.Value);
+                if (!intent.IsAdd || IsDestroyedThisFrame(child, frozen) ||
+                    IsDestroyedThisFrame(intent.Parent, frozen)) continue;
+                delta.AddAddChild(intent.Parent, child);
             }
         }
         finally
@@ -189,21 +194,24 @@ public abstract partial class CommandStreamCore
             ((ICollection<KeyValuePair<Entity, HierarchyIntent>>)frozen.HierarchyByChild).CopyTo(sorted, 0);
             Array.Sort(sorted, 0, count, HierarchyComparer.Instance);
 
+            // Match the final-overlay semantics checked by preflight: remove
+            // all replaced links before installing any new parent links.
             for (var i = 0; i < count; i++)
             {
                 ref readonly var entry = ref sorted[i];
                 var (child, intent) = (entry.Key, entry.Value);
                 if (IsDestroyedThisFrame(child, frozen)) continue;
+                if (intent.IsAdd && IsDestroyedThisFrame(intent.Parent, frozen)) continue;
+                world.RemoveChild(child);
+            }
 
-                if (intent.IsAdd)
-                {
-                    if (IsDestroyedThisFrame(intent.Parent, frozen)) continue;
-                    world.AddChild(intent.Parent, child);
-                }
-                else
-                {
-                    world.RemoveChild(child);
-                }
+            for (var i = 0; i < count; i++)
+            {
+                ref readonly var entry = ref sorted[i];
+                var (child, intent) = (entry.Key, entry.Value);
+                if (!intent.IsAdd || IsDestroyedThisFrame(child, frozen) ||
+                    IsDestroyedThisFrame(intent.Parent, frozen)) continue;
+                world.AddChild(intent.Parent, child);
             }
         }
         finally

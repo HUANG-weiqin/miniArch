@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream 与 ParallelCommandStream 的 typed-store 录制、consume-time 校验、Submit/Snapshot/Replay 确定性及 async ownership 契约
-updated: 2026-07-22
+updated: 2026-07-25
 ---
 # Command Stream Runtime
 
@@ -34,7 +34,7 @@ updated: 2026-07-22
 ```text
 Create/Clone ──→ pending batch ──→ materialize or emit Create
 Add/Set/Remove(existing) ──→ ComponentStore<T> ──→ prepare/prune → preflight → apply/emit
-AddChild/RemoveChild ──→ final hierarchy overlay ──→ preflight → apply/emit
+AddChild/RemoveChild ──→ final hierarchy overlay ──→ preflight → detach affected children → apply/emit final adds
 Destroy ──→ destroy list ──→ final phase
 ```
 
@@ -84,6 +84,8 @@ pending/foreign placeholder 的 `IsPlaceholder` 仍在 record 阶段用于本地
 2. component store 的 strict presence：Add 必须缺失、Set 必须存在、Remove 缺失为 no-op；
 3. final hierarchy overlay 的 endpoint、自环与 parent-chain cycle；
 4. cancelled reservation 的 free-list 顺序对齐。
+
+Hierarchy 的 preflight 检查最终 overlay，因此消费也必须按最终状态落地：先按 child id 解除所有有效 intent 涉及的旧链接，再按 child id 安装最终 Add。Snapshot wire 同样先发 RemoveChild、后发 AddChild；否则合法的父子方向反转会因 World 中尚未解除的旧边产生瞬时 cycle，导致 Submit/Replay 错误拒绝。
 
 Set-only 且全 store 无结构命令时，`PrepareForConsume` 在 prune stale entity 的同时构建 Set location cache，Apply 复用 row/archetype，避免第二次读取 `EntityRecord`。cache 是单一状态机：`None`、`UniformArchetype`、`PerEntryArchetype`。任一 component store 含 Add/Remove 时全局禁用 row cache，因为前一个 store 可能迁移实体。
 
