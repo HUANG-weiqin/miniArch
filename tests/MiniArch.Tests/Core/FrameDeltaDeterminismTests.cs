@@ -706,6 +706,60 @@ public sealed class FrameDeltaDeterminismTests
         Assert.Contains("MaxOpsPerFrame", ex.Message);
     }
 
+    [Fact]
+    public void Writer_rejects_oversized_operation_before_modifying_delta()
+    {
+        var delta = new FrameDelta();
+        delta.AddDestroy(new Entity(0, 1));
+        var originalBytes = delta.AsSpan().ToArray();
+        var originalLength = delta._length;
+        var originalCount = delta._opCount;
+        var components = new[]
+        {
+            new RawComponentValue(
+                new ComponentType(0), Array.Empty<byte>(), 0, FrameDelta.MaxFrameBytes),
+        };
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            delta.AddCreate(new Entity(1, 1), components));
+
+        Assert.Contains("MaxFrameBytes", ex.Message);
+        Assert.Equal(originalLength, delta._length);
+        Assert.Equal(originalCount, delta._opCount);
+        Assert.Equal(originalBytes, delta.AsSpan().ToArray());
+    }
+
+    [Fact]
+    public void Writer_rejects_operation_over_MaxOps_before_modifying_delta()
+    {
+        var delta = new FrameDelta();
+        delta.AddDestroy(new Entity(0, 1));
+        delta._opCount = FrameDelta.MaxOpsPerFrame;
+        var originalBytes = delta.AsSpan().ToArray();
+        var originalLength = delta._length;
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            delta.AddDestroy(new Entity(1, 1)));
+
+        Assert.Contains("MaxOpsPerFrame", ex.Message);
+        Assert.Equal(originalLength, delta._length);
+        Assert.Equal(FrameDelta.MaxOpsPerFrame, delta._opCount);
+        Assert.Equal(originalBytes, delta.AsSpan().ToArray());
+    }
+
+    [Fact]
+    public void Validate_rejects_internal_length_over_MaxFrameBytes()
+    {
+        var delta = new FrameDelta
+        {
+            _length = FrameDelta.MaxFrameBytes + 1,
+        };
+
+        var ex = Assert.Throws<InvalidOperationException>(delta.Validate);
+
+        Assert.Contains("MaxFrameBytes", ex.Message);
+    }
+
     // ══════════════════════════════════════════════════════════—
     // Bug reproduction: Submit vs Replay free-list divergence
     // ══════════════════════════════════════════════════════════—

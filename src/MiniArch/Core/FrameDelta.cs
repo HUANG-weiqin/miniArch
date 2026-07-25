@@ -231,6 +231,13 @@ public sealed class FrameDelta
     /// <exception cref="InvalidOperationException">The delta is structurally invalid.</exception>
     public void Validate()
     {
+        if (_length < 0 || _length > MaxFrameBytes)
+        {
+            throw new InvalidOperationException(
+                $"FrameDelta exceeds MaxFrameBytes budget ({_length} > {MaxFrameBytes}). " +
+                "Increase MaxFrameBytes or reduce frame payload.");
+        }
+
         var decoder = GetDecoder();
         // Per-entity state machine: state is implied by which set the entity
         // belongs to. "reserved" = reserved but not yet created/released.
@@ -447,11 +454,41 @@ public sealed class FrameDelta
 
     // ── Writer API (used by CommandStream) ─────────────────────────────
 
+    private void EnsureOperationCapacity(long operationBytes)
+    {
+        if (_opCount >= MaxOpsPerFrame)
+        {
+            throw new InvalidOperationException(
+                $"FrameDelta exceeds MaxOpsPerFrame budget ({MaxOpsPerFrame} ops). " +
+                "Increase MaxOpsPerFrame or reduce frame complexity.");
+        }
+
+        if (operationBytes < 0 || _length < 0 || _length > MaxFrameBytes ||
+            operationBytes > MaxFrameBytes - _length)
+        {
+            throw new InvalidOperationException(
+                $"FrameDelta exceeds MaxFrameBytes budget ({_length + operationBytes} > {MaxFrameBytes}). " +
+                "Increase MaxFrameBytes or reduce frame payload.");
+        }
+
+        Grow((int)operationBytes);
+    }
+
     private void Grow(int additionalBytes)
     {
+        if (additionalBytes < 0 || _length < 0 || _length > MaxFrameBytes - additionalBytes)
+        {
+            throw new InvalidOperationException(
+                $"FrameDelta exceeds MaxFrameBytes budget ({(long)_length + additionalBytes} > {MaxFrameBytes}). " +
+                "Increase MaxFrameBytes or reduce frame payload.");
+        }
+
         var needed = _length + additionalBytes;
         if (needed <= _buffer.Length) return;
-        var newSize = Math.Max(needed, Math.Max(_buffer.Length * 2, 256));
+        var doubled = _buffer.Length > MaxFrameBytes / 2
+            ? MaxFrameBytes
+            : _buffer.Length * 2;
+        var newSize = Math.Min(MaxFrameBytes, Math.Max(needed, Math.Max(doubled, 256)));
         Array.Resize(ref _buffer, newSize);
     }
 
@@ -475,6 +512,16 @@ public sealed class FrameDelta
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static uint EncodeEntityId(int id) => (uint)(id + 1);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int GetEntityWireSize(Entity entity)
+    {
+        var encodedId = EncodeEntityId(entity.Id);
+        return VarintSize((int)encodedId) + VarintSize(entity.Version);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int GetEntityOperationWireSize(Entity entity) => 1 + GetEntityWireSize(entity);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int DecodeEntityId(uint raw) => raw == 0 ? -1 : (int)(raw - 1);
@@ -503,6 +550,7 @@ public sealed class FrameDelta
 
     internal void AddReserve(Entity e)
     {
+        EnsureOperationCapacity(GetEntityOperationWireSize(e));
         WriteTag(DeltaOpKind.Reserve);
         WriteEntity(e);
         _opCount++;
@@ -510,6 +558,7 @@ public sealed class FrameDelta
 
     internal void AddRelease(Entity e)
     {
+        EnsureOperationCapacity(GetEntityOperationWireSize(e));
         WriteTag(DeltaOpKind.Release);
         WriteEntity(e);
         _opCount++;
@@ -517,17 +566,18 @@ public sealed class FrameDelta
 
     internal void AddCreate(Entity e, ReadOnlySpan<RawComponentValue> components)
     {
+        var operationBytes = 1L + GetEntityWireSize(e) + VarintSize(components.Length);
+        for (var i = 0; i < components.Length; i++)
+        {
+            ref readonly var c = ref components[i];
+            operationBytes += VarintSize(c.ComponentType.Value) + VarintSize(c.DataSize) + (long)c.DataSize;
+        }
+        EnsureOperationCapacity(operationBytes);
+
         WriteTag(DeltaOpKind.Create);
         WriteEntity(e);
         var pos = _length;
         var compCount = components.Length;
-        var size = VarintSize(compCount);
-        for (var i = 0; i < compCount; i++)
-        {
-            ref readonly var c = ref components[i];
-            size += VarintSize(c.ComponentType.Value) + VarintSize(c.DataSize) + c.DataSize;
-        }
-        Grow(size);
         WriteVarintAt(ref pos, compCount);
         for (var i = 0; i < compCount; i++)
         {
@@ -544,6 +594,7 @@ public sealed class FrameDelta
 
     internal void AddDestroy(Entity e)
     {
+        EnsureOperationCapacity(GetEntityOperationWireSize(e));
         WriteTag(DeltaOpKind.Destroy);
         WriteEntity(e);
         _opCount++;
@@ -551,6 +602,7 @@ public sealed class FrameDelta
 
     internal void AddAddChild(Entity parent, Entity child)
     {
+        EnsureOperationCapacity(1L + GetEntityWireSize(child) + GetEntityWireSize(parent));
         WriteTag(DeltaOpKind.AddChild);
         WriteEntity(child);
         WriteEntity(parent);
@@ -559,6 +611,7 @@ public sealed class FrameDelta
 
     internal void AddRemoveChild(Entity child)
     {
+        EnsureOperationCapacity(GetEntityOperationWireSize(child));
         WriteTag(DeltaOpKind.RemoveChild);
         WriteEntity(child);
         _opCount++;
@@ -566,6 +619,7 @@ public sealed class FrameDelta
 
     internal void AddRemove(Entity e, ComponentType t)
     {
+        EnsureOperationCapacity(1L + GetEntityWireSize(e) + VarintSize(t.Value));
         WriteTag(DeltaOpKind.Remove);
         WriteEntity(e);
         WriteComponentType(t);
@@ -580,6 +634,8 @@ public sealed class FrameDelta
 
     private unsafe void AddComponentDataUnsafe(DeltaOpKind kind, Entity e, ComponentType t, void* data, int size)
     {
+        EnsureOperationCapacity(
+            1L + GetEntityWireSize(e) + VarintSize(t.Value) + VarintSize(size) + size);
         WriteTag(kind);
         WriteEntity(e);
         WriteComponentType(t);
