@@ -112,14 +112,14 @@ public sealed class FrameDeltaAttackSurfaceTests
     }
 
     // ══════════════════════════════════════════════════════════
-    //  3. Reserve mismatch — allocator leak (Entity state, not delta validation)
+    //  3. Reserve mismatch — target allocator compatibility (not delta validation)
     // ══════════════════════════════════════════════════════════
 
     [Fact]
     public void Validate_does_not_check_allocator_state_so_reserve_mismatch_still_replay_rejects()
     {
         // Validate() only checks delta structure, not world allocator state.
-        // The allocator-advance-before-throw is still a World.Replay issue.
+        // Replay owns that boundary and must reject incompatibility atomically.
         var entity = new Entity(5, 1);
         var delta = FrameDelta.FromWire([
             (byte)DeltaOpKind.Reserve, .. Enc(entity),
@@ -130,7 +130,7 @@ public sealed class FrameDeltaAttackSurfaceTests
         world.CreateEmpty();
         var ex = Assert.Throws<InvalidOperationException>(() => new CommandStream(world).Replay(delta));
         Assert.Contains("out of sync", ex.Message);
-        // Allocator leaked (slot 1 consumed) — documented in the test above.
+        Assert.Equal(new Entity(1, 1), world.CreateEmpty());
     }
 
     // ══════════════════════════════════════════════════════════
