@@ -152,6 +152,25 @@ public class WatchApiTests
     }
 
     [Fact]
+    public void BUG_ChangeWatch_explicit_filter_requires_watched_component()
+    {
+        using var world = new World();
+        var healthOnly = world.Create(new Health(100));
+        var tracked = world.Create(new Position(1, 2), new Health(100));
+        var watch = world.Watch<Position, PositionChangeHandler>(
+            new QueryDescription().With<Health>());
+        watch.Handler = new PositionChangeHandler(0);
+
+        watch.Snapshot(world);
+        world.Set(tracked, new Position(3, 4));
+        watch.Diff(world);
+
+        Assert.True(world.IsAlive(healthOnly));
+        Assert.Equal(1, watch.Handler.CallCount);
+        Assert.Equal(tracked, watch.Handler.LastEntity);
+    }
+
+    [Fact]
     public void ChangeWatch_consecutive_Snapshot_clears_baseline()
     {
         using var world = new World();

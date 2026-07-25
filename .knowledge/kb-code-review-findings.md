@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 审阅前必读的当前风险、已修复真 bug 回归索引与已排除非 bug 猜想；只保留结论和验证入口
-updated: 2026-07-22
+updated: 2026-07-25
 ---
 # 代码审阅发现
 
@@ -25,6 +25,12 @@ updated: 2026-07-22
 CommandStream 的 pending/component/hierarchy/async preflight 已修复已知“用户契约错误导致部分提交”路径，但它不把 Submit 或 Replay 提升为灾难性异常下的通用事务。
 
 ## 已修复的真 bug 索引
+
+### 2026-07-25 发布前审阅
+
+| 回归测试 | 位置 / witness | 修复边界 |
+|---|---|---|
+| `BUG_ChangeWatch_explicit_filter_requires_watched_component` / `BUG_projected_ChangeWatch_explicit_filter_requires_watched_component` | 两个 `World.Watch<TComponent...>(explicitQuery)` 重载原样保存显式 filter；当 filter 匹配不含被观察组件的 archetype 时，Snapshot 无条件 `GetSpan<TComponent>()` 并抛异常 | 显式 filter 统一追加 `With<TComponent>()`；额外约束保留，Watch 扫描的每个 archetype 都保证含目标列 |
 
 ### 2026-07-22 全面审阅
 

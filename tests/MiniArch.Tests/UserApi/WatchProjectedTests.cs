@@ -104,6 +104,25 @@ public class WatchProjectedTests
     }
 
     [Fact]
+    public void BUG_projected_ChangeWatch_explicit_filter_requires_watched_component()
+    {
+        using var world = new World();
+        world.Create(new AliveTag());
+        var tracked = world.Create(new Position(10, 20), new AliveTag());
+        var watch = world.Watch<Position, int, PositionXHandler>(
+            new QueryDescription().With<AliveTag>());
+        watch.Handler = new PositionXHandler();
+
+        watch.Snapshot(world);
+        world.Set(tracked, new Position(30, 20));
+        watch.Diff(world);
+
+        Assert.Equal(1, watch.Handler.Changes);
+        Assert.Equal(10, watch.Handler.LastOld);
+        Assert.Equal(30, watch.Handler.LastNew);
+    }
+
+    [Fact]
     public void Snapshot_Diff_only_projected_field_triggers()
     {
         using var world = new World();

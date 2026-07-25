@@ -305,15 +305,14 @@ public sealed partial class World : IDisposable
     /// Creates a <see cref="ChangeWatch{TComponent, THandler}"/> that tracks value changes
     /// for component type <typeparamref name="TComponent"/>.
     /// </summary>
-    /// <param name="query">Optional query filter. If null, defaults to
-    /// <c>new QueryDescription().With&lt;TComponent&gt;()</c>.
-    /// If provided, it is used as-is.</param>
+    /// <param name="query">Optional additional query filter. The watched
+    /// <typeparamref name="TComponent"/> is always added as a required component.</param>
     public ChangeWatch<TComponent, THandler> Watch<TComponent, THandler>(QueryDescription? query = null)
         where TComponent : unmanaged, IEquatable<TComponent>
         where THandler : struct, IChangeHandler<TComponent>
     {
         AssertNotDisposed();
-        var q = query ?? new QueryDescription().With<TComponent>();
+        var q = (query ?? default).With<TComponent>();
         return new ChangeWatch<TComponent, THandler>(q, default);
     }
 
@@ -321,16 +320,15 @@ public sealed partial class World : IDisposable
     /// Creates a projected <see cref="ChangeWatch{TComponent, TValue, THandler}"/> that tracks
     /// projected value changes for component type <typeparamref name="TComponent"/>.
     /// </summary>
-    /// <param name="query">Optional query filter. If null, defaults to
-    /// <c>new QueryDescription().With&lt;TComponent&gt;()</c>.
-    /// If provided, it is used as-is.</param>
+    /// <param name="query">Optional additional query filter. The watched
+    /// <typeparamref name="TComponent"/> is always added as a required component.</param>
     public ChangeWatch<TComponent, TValue, THandler> Watch<TComponent, TValue, THandler>(QueryDescription? query = null)
         where TComponent : unmanaged
         where TValue : unmanaged, IEquatable<TValue>
         where THandler : struct, IChangeHandler<TComponent, TValue>
     {
         AssertNotDisposed();
-        var q = query ?? new QueryDescription().With<TComponent>();
+        var q = (query ?? default).With<TComponent>();
         return new ChangeWatch<TComponent, TValue, THandler>(q, default);
     }
 

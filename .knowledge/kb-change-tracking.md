@@ -2,7 +2,7 @@
 title: Change Tracking（变更追踪）
 module: MiniArch.Core ChangeTracking
 description: World.Watch pull-event 模型：ChangeWatch/TransitionWatch Snapshot+Diff 两阶段扫描；struct handler 回调；零 per-write 成本；TransitionWatch 使用 dense epoch marks。
-updated: 2026-07-15
+updated: 2026-07-25
 ---
 
 # Change Tracking（变更追踪）
@@ -89,7 +89,7 @@ handler.Count = 0;
 5. **struct handler 零分配回调**：`IChangeHandler`/`ITransitionHandler` 是 struct 接口约束，JIT 去虚化，回调零分配。`ref THandler Handler` 属性支持外部 mutate handler 字段。
 6. **无 per-consumer cursor 管理**：Watch 不维护消费游标，不自动推进 baseline。消费端完全控制何时 `Snapshot`（推进 baseline）。
 7. **删除旧 API，无兼容层**：旧 `TrackValueChanges`/`TrackTransitions`/`CreateDenseValueDiff`/`SharedValueChanges`/`TransitionLog`/`DenseValueDiff` 全部删除。旧 consumer 须迁移到 Watch API。
-8. **默认 query vs 显式 query**：`ChangeWatch` 的 `query` 参数可选，`null` 时自动 `.With<TComponent>()`。`TransitionWatch` 的 filter 必填，空时抛 `ArgumentException`。
+8. **默认 query vs 显式 query**：`ChangeWatch` 的 `query` 参数可选；无论是否显式传入，Watch 都会把 `.With<TComponent>()` 合并为 required 条件，保证内部读取的组件列存在，调用方传入的其他过滤条件保持不变。`TransitionWatch` 的 filter 必填，空时抛 `ArgumentException`。
 9. **Dense epoch marks 替代 bitset**：`TransitionWatch` 的 membership 使用 `long[]` dense array（按 `entity.Id` 直索引）。每个 id 存储最后被标记的 epoch 值；Snapshot/Diff 时递增对应 epoch 并写入，比较 mark == epoch 即可判断成员资格。**不**需要 per-Diff 清除——epoch bump 自动使旧标记失效。Epoch 计数器为 64-bit（`long`），无限寿命——服务器运行几十年不会溢出，无 `Array.Clear` 尖峰。稳态 Diff 零 heap allocation。
 10. **同 watch 不可重入**：Snapshot、扫描状态和 callback buffer 都是实例级复用内存；嵌套调用会覆写外层操作的状态，因此统一以实例级 operation guard 拒绝。guard 使用 `try/finally` 恢复，不增加稳态分配。不同 watch 仍可互相调用。
 11. **失败 Snapshot 使 baseline 失效**：不为罕见异常路径保留双份 dense arrays；投影或扫描失败后明确要求重新 Snapshot，避免暴露半写 baseline，同时保持正常路径的内存规模和零分配特征。
