@@ -135,9 +135,8 @@ updated: 2026-07-25
   - 该顺序消除了对创建历史的依赖，使 Save→Load、Clone、RestoreState 后的 query 顺序完全由当前签名集合决定。
   - **Entity 顺序（同一 archetype 内）** = entity 存储顺序（append 到末尾；删除用 swap-remove，末尾 survivor 补充到被删位置）
   - **所有访问路径一致**：`foreach`、`GetChunks()` → `ChunkView.GetEntities()`、`GetArchetypeSpan()` → `archetype.GetEntities()` 三者顺序一致
-  - **确定性**：给定相同输入序列，顺序字节级一致。由 `QueryOrderingTests`（16 个测试）守护
-  - entity-storage 结构变更会使已捕获的 row/count 失效：普通与 ordered entity enumerator 在后续 `MoveNext()` 以 World structure version fail-fast；顺序 `ForEachChunk` 在每个 callback 后检查。`GetChunks()` 返回的 view/span 仍遵守显式借用期，调用方必须先结束借用再 Create/Destroy/Clear/Add/Remove/RestoreState。
-  - `EntityAccessor` 使用同一 structure version 保护后续 `Get/Set/Has`，防止 swap-remove 后旧 row 静默指向其他实体；已返回的 component `ref` 无法拦截，仍必须在任何 entity-storage 结构变更前结束借用。
+  - **确定性**：给定相同输入序列，顺序字节级一致。由 `QueryOrderingTests`（14 个测试）守护
+  - entity enumerator、ChunkView/span 与 `EntityAccessor` 都是 unchecked borrow；借用期间禁止 Create/Destroy/Clear/Add/Remove/RestoreState。该约束不通过 World 全局版本或 Release 热路径检查兜底。
   - 如需不受结构变更历史影响的稳定顺序，使用 `OrderByEntityId()` / `OrderByEntityIdDescending()` / `OrderByComponent<T>()`
   - 详见 `tests/MiniArch.Tests/Core/QueryOrderingTests.cs`
 - `Destroy(ReadOnlySpan<Entity>)` / `Destroy(query)` 的正确性标准是 logical world state：`CanonicalChecksum`、`WorldDiff`、`WorldValidator` 以及 `WorldDigest` 的 occupancy/free-list/hierarchy/per-component 域与 guarded `for Destroy` 一致。由于 partial batch remove 使用无序 hole-fill，物理 archetype row order 可不同。
@@ -206,7 +205,7 @@ world.Destroy(e);
 - `IsAlive` 必须和 `TryGetLocation` 共用同一条 version/location 校验链
 - 性能验证必须看 Arch 对照数据，不能只看自己变快
 - `EntityAccessor` 是 ref struct，不可装箱、不可存字段、不可捕获在 lambda 中
-- 结构变更（Add/Remove）后 entity 可能换 archetype，此时已获取的 accessor 指向旧位置，必须丢弃
+- 任意 entity-storage 结构变更后 cached row/count 都可能失效；`EntityAccessor`、entity enumerator、ChunkView/span 必须在变更前结束借用，不应为违约调用给 World 增加全局版本状态或 Release 热路径检查
 - `GetSingleton<T>()` 取代了旧的 `GetFirst<T>()`：旧 API 用 `CreateArchetypeCache<T>` 缓存只命中单组件 `{T}` 原型；新 API 全量扫描，不再依赖该缓存
 - DebugMetrics 相关的 `#if DEBUG` 计数累加语句已全部删除，不应再引用
 - **同帧 `World.Destroy(e)` + `World.CreateEmpty()` 的 id 回收与 version 一致性**（**理论风险，当前串行单线程路径安全，但修改时要小心**）：Destroy 把 `(id, version)` 推回 free-list 并对 `EntityRecord[id]` 做 swap-remove + version bump；CreateEmpty 从 free-list 弹 id 并写新 `EntityRecord[id]`。两者必须严格串行且 Destroy 的 swap-remove 必须先于 CreateEmpty 的 slot 写入，否则新实体可能读到被销毁实体的旧 `(Archetype, RowIndex)` 或 stale version。验证链：`World.EntityLifecycle.cs:Destroy` → `Archetype.Storage.cs:RemoveAt`（swap-remove）→ free-list push → `World.EntityLifecycle.cs:CreateEmpty` → free-list pop。**当前在单线程串行调用下安全**（Destroy 的 version bump + swap-remove 在 Create 读 free-list 前完成），但引入 CommandStream 批量 materialize、多线程或 `Destroy` callback 嵌套 `Create` 时可能被打破。**回归测试入口**：`tests/MiniArch.Tests/Core/WorldLifecycleTests.cs`（`Destroy_recycles_ids_safely` 覆盖同帧 id+version 正确性；`Destroy_and_recreate_cycle_preserves_correct_versions_across_many_iterations` 在 `TrickyEdgeCaseTests.cs` 覆盖 100 次循环的版本单调性）

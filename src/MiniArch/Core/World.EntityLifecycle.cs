@@ -303,7 +303,6 @@ public sealed partial class World
             return;
 
         EnsureFreeIdCapacity(_freeIdCount + totalKill);
-        MarkStructureChanged();
 
         for (var ai = 0; ai < archetypes.Length; ai++)
         {
@@ -450,8 +449,6 @@ public sealed partial class World
             movedRecord.Archetype = info.Archetype;
             movedRecord.RowIndex = info.RowIndex;
         }
-
-        MarkStructureChanged();
     }
 
     private void BeginDestroyCollection()
@@ -587,7 +584,6 @@ public sealed partial class World
         Array.Clear(groupArchetypes, 0, groupCount);
 
         _destroyOrderScratch.Clear();
-        MarkStructureChanged();
     }
 
     private static void MarkAndResetFullyDestroyedArchetypes(
@@ -711,7 +707,6 @@ public sealed partial class World
         ref var record = ref _records[id];
         record.Archetype = archetype;
         record.RowIndex = rowIndex;
-        MarkStructureChanged();
 #if DEBUG
         }
         finally
@@ -995,7 +990,6 @@ public sealed partial class World
             _reservedCount--;
         record.Archetype = archetype;
         record.RowIndex = rowIndex;
-        MarkStructureChanged();
     }
 
     /// <summary>

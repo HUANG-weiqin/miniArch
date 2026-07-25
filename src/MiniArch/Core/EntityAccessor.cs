@@ -11,22 +11,18 @@ namespace MiniArch.Core;
 /// </summary>
 /// <remarks>
 /// This is a <c>ref struct</c> — stack-only, cannot be boxed, stored in fields,
-/// captured in lambdas, or used with async. Discard it, and any component refs
-/// obtained from it, before any entity-storage structural change
-/// (Create/Destroy/Clear/Add/Remove/RestoreState). Accessor method calls fail fast
-/// after such a change.
+/// captured in lambdas, or used with async. It is an unchecked borrow of a cached
+/// storage location. Discard it, and any component refs obtained from it, before
+/// Create/Destroy/Clear/Add/Remove/RestoreState or any other entity-storage
+/// structural change.
 /// </remarks>
 public ref struct EntityAccessor
 {
-    private readonly World? _world;
-    private readonly long _structureVersion;
     private readonly Archetype _archetype;
     private readonly int _row;
 
-    internal EntityAccessor(World world, Archetype archetype, int row)
+    internal EntityAccessor(Archetype archetype, int row)
     {
-        _world = world;
-        _structureVersion = world.StructureVersion;
         _archetype = archetype;
         _row = row;
     }
@@ -41,7 +37,6 @@ public ref struct EntityAccessor
     {
         Debug.Assert(_archetype is not null,
             "EntityAccessor was default-initialized; use World.GetEntityAccessor() to obtain a valid accessor.");
-        _world?.AssertStructureVersion(_structureVersion);
         Debug.Assert(_archetype.TryGetComponentIndex(Component<T>.ComponentType, out _),
             $"EntityAccessor.Get<{typeof(T).Name}>(): the entity's archetype " +
             $"does not contain component {typeof(T).Name}. Verify with Has<T>() " +
@@ -64,7 +59,6 @@ public ref struct EntityAccessor
     {
         Debug.Assert(_archetype is not null,
             "EntityAccessor was default-initialized; use World.GetEntityAccessor() to obtain a valid accessor.");
-        _world?.AssertStructureVersion(_structureVersion);
         Debug.Assert(_archetype.TryGetComponentIndex(Component<T>.ComponentType, out _),
             $"EntityAccessor.Set<{typeof(T).Name}>(): the entity's archetype " +
             $"does not contain component {typeof(T).Name}. Verify with Has<T>() " +
@@ -79,7 +73,6 @@ public ref struct EntityAccessor
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Has<T>() where T : unmanaged
     {
-        _world?.AssertStructureVersion(_structureVersion);
         return _archetype.TryGetComponentIndex(Component<T>.ComponentType, out _);
     }
 }

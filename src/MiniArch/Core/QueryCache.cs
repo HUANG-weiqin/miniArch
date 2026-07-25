@@ -55,8 +55,6 @@ internal sealed class QueryCache
 
     internal QueryFilter Filter => _filter;
 
-    internal World World => _world;
-
     internal int RefreshCount => Volatile.Read(ref _refreshCount);
 
     internal IReadOnlyList<Archetype> MatchedArchetypes
