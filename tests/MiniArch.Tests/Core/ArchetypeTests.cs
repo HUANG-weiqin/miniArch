@@ -1607,14 +1607,41 @@ public sealed class ArchetypeTests
     // cache clear). The check `_cachedFlatEntitiesGeneration != _flatEntitiesGeneration`
     // handles the "stale cache" case.
     //
-    // H4.5: Multi-thread safety: GetEntityStorageUnsafe is not atomic, but
-    // MiniArch is designed for single-threaded writes with parallel reads.
-    // A writer thread bumping generation during a reader's rebuild could
-    // cause the reader to return stale or partially-rebuilt data. However,
-    // MiniArch's query system holds references to ChunkViews (per-segment)
-    // rather than to the flat cache, so parallel readers don't call
-    // GetEntityStorageUnsafe on hot paths. Verified by design docs.
-    //
+    // H4.5: Structural writers remain single-threaded, but multiple readers may
+    // concurrently trigger the first chunked flat-cache build. The cache must be
+    // completely populated before its generation is published.
+    [Fact]
+    public async Task BUG_parallel_first_chunked_entity_cache_read_publishes_complete_storage()
+    {
+        const int count = 262_144;
+        const int workerCount = 8;
+        var archetype = new Archetype(Signature.Empty, Type.EmptyTypes, capacity: 4);
+        archetype.ForceChunkedForTesting();
+        archetype.AllocateRows(count);
+        for (var i = 0; i < count; i++)
+            archetype.WriteEntityAt(i, new Entity(i + 1, 1));
+
+        using var start = new Barrier(workerCount);
+        var workers = new Task<int>[workerCount];
+        for (var worker = 0; worker < workerCount; worker++)
+        {
+            workers[worker] = Task.Factory.StartNew(() =>
+            {
+                start.SignalAndWait();
+                var entities = archetype.GetEntityStorageUnsafe();
+                for (var i = 0; i < count; i++)
+                {
+                    if (entities[i] != new Entity(i + 1, 1))
+                        return i;
+                }
+                return -1;
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        }
+
+        var firstInvalidRows = await Task.WhenAll(workers);
+        Assert.All(firstInvalidRows, row => Assert.Equal(-1, row));
+    }
+
     // ── end of Round 4 tests ──
 
     // ──────────────────────────────────────────────

@@ -38,6 +38,7 @@ internal sealed partial class Archetype
     private long _flatEntitiesGeneration;
     private Entity[]? _cachedFlatEntities;
     private long _cachedFlatEntitiesGeneration = -1;
+    private object? _flatEntityCacheSync;
 
     // Fixed entity capacity per segment (power of two), computed from component sizes once.
     // All segments share the same capacity so column byte offsets are identical.

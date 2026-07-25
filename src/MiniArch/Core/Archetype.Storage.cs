@@ -518,22 +518,50 @@ internal sealed partial class Archetype
         if (!IsChunked)
             return _entities;
 
-        if (_cachedFlatEntitiesGeneration != _flatEntitiesGeneration)
+        var generation = _flatEntitiesGeneration;
+        if (Volatile.Read(ref _cachedFlatEntitiesGeneration) != generation)
+            return RebuildFlatEntityCache();
+
+        AssertFlatCacheConsistent();
+        return _cachedFlatEntities!;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private Entity[] RebuildFlatEntityCache()
+    {
+        var sync = Volatile.Read(ref _flatEntityCacheSync);
+        if (sync is null)
         {
-            if (_cachedFlatEntities is null || _cachedFlatEntities.Length < _count)
-                _cachedFlatEntities = new Entity[_count];
+            var created = new object();
+            sync = Interlocked.CompareExchange(ref _flatEntityCacheSync, created, null) ?? created;
+        }
+
+        lock (sync)
+        {
+            var generation = _flatEntitiesGeneration;
+            if (Volatile.Read(ref _cachedFlatEntitiesGeneration) == generation)
+            {
+                AssertFlatCacheConsistent();
+                return _cachedFlatEntities!;
+            }
+
+            var cache = _cachedFlatEntities;
+            if (cache is null || cache.Length < _count)
+                cache = new Entity[_count];
 
             var off = 0;
             for (var i = 0; i < _segmentCount; i++)
             {
                 var seg = _segments[i];
-                Array.Copy(seg.Entities, 0, _cachedFlatEntities, off, seg.Count);
+                Array.Copy(seg.Entities, 0, cache, off, seg.Count);
                 off += seg.Count;
             }
-            _cachedFlatEntitiesGeneration = _flatEntitiesGeneration;
+
+            _cachedFlatEntities = cache;
+            Volatile.Write(ref _cachedFlatEntitiesGeneration, generation);
+            AssertFlatCacheConsistent();
+            return cache;
         }
-        AssertFlatCacheConsistent();
-        return _cachedFlatEntities!;
     }
 
     [Conditional("DEBUG")]

@@ -370,7 +370,7 @@ internal sealed class QueryCache
         entities = null!;
         count = 0;
 
-        var cache = _entityIdSortCache;
+        var cache = Volatile.Read(ref _entityIdSortCache);
         if (cache is null)
             return false;
 
@@ -397,12 +397,13 @@ internal sealed class QueryCache
         Archetype[] archetypes, int archCount, int currentCount,
         Entity[] sortedEntities)
     {
-        _entityIdSortCache = new EntityIdSortCache
+        var cache = new EntityIdSortCache
         {
             Entities = sortedEntities,
             Count = currentCount,
             Fingerprint = ComputeFingerprint(archetypes, archCount)
         };
+        Volatile.Write(ref _entityIdSortCache, cache);
     }
 
     /// <summary>

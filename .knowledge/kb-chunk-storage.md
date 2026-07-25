@@ -2,7 +2,7 @@
 title: Chunk 存储
 module: MiniArch.Core
 description: Archetype 存储架构 — 单块模式（默认）和分段模式（阈值后自动切换），包括 SoA 布局、跨段 swap-remove、查询分段迭代
-updated: 2026-07-09
+updated: 2026-07-25
 ---
 # Chunk 存储
 
@@ -130,6 +130,8 @@ RemoveAt(globalRow):
 
 修复：引入 `_flatEntitiesGeneration` 计数器 + 缓存数组 `_cachedFlatEntities`。实体布局变更（AllocateRows/RemoveAt/WriteEntityAt/GrowChunked 等）时递增计数器；`GetEntityStorage()` 仅在计数器与缓存版本不匹配时重建平坦数组，否则返回缓存引用——零分配零拷贝。
 
+并行读契约要求首次/失效后的缓存构建也能安全发布。多个 reader 不得同时向共享 `_cachedFlatEntities` 边填充边发布 generation：后分配的空数组可能替换已填充数组，使另一个 reader 返回未完成内容。当前 miss 路径使用按需创建的私有同步对象串行重建，在锁内二次检查 generation，并以 `Volatile.Write` 最后发布 generation；hit 路径用 `Volatile.Read` 获取发布信号。同步对象只在 chunked cache 首次 miss 时分配，flat archetype 不增加对象分配。结构写仍严格禁止与 reader 并发。
+
 ### 3.6 真正的段不变量：非空段连续在前（2026-07-05 修正）
 
 > 曾误以为"除末段外所有段必须满（`Count == segCap`）"。这是**错误**的过强不变量，会把 `RemoveAt` 后的合法中间状态判为非法（commit `40165f7` 加此断言后打破 20 个测试）。正确不变量如下。
@@ -178,7 +180,7 @@ RemoveAt(globalRow):
 | **Padding 零初始化** | `GC.AllocateArray`（零初始化）分配，组件 struct padding 确定为 0 → checksum 安全 | `kb-snapshot-persistence.md` Checksum 段 | `WorldSnapshotTests` (checksum) / `FrameDeltaDeterminismTests` |
 | **段容量等长** | 所有段 `Entities.Length == SegmentEntityCapacity`（容量等长），`GetSegmentAndLocal` 用除法定位行号空间。段内 `Count` **可以** `< segCap`（RemoveAt 空洞，合法） | 本页 坑点 + §3.6 | `ArchetypeTests.Chunked_mode_*` / `AllocateRows_skips_empty_tail_segments_and_fills_first_available` |
 | **`IsChunked` 重检（历史）** | 曾经的坑：`EnsureCapacity` 可能切换模式，老 API 返回后须重检 `_isChunked`。已解决：`AddEntity = AllocateRows(1) + WriteEntityAt`，每个方法内部单次读取 `IsChunked` | 本页 决策 + 坑点（历史） | `ArchetypeTests` / `CommandStreamTests` (materialize 路径) |
-| **`_flatEntitiesGeneration` 失效** | 布局变更（AllocateRows/WriteEntityAt/RemoveAt/GrowChunked/RestoreFlatBackup/RebuildFlatEntities）时递增 | 本页 §3.5 | `ChunkTests.GetEntities` / `QueryEnumerator` 热路径 |
+| **`_flatEntitiesGeneration` 失效与发布** | 布局变更（AllocateRows/WriteEntityAt/RemoveAt/GrowChunked/RestoreFlatBackup/RebuildFlatEntities）时递增；并行 reader 的重建串行化，完整填充后才发布 generation | 本页 §3.5 | `ChunkTests.GetEntities` / `QueryEnumerator` 热路径 / `BUG_parallel_first_chunked_entity_cache_read_publishes_complete_storage` |
 | **RowIndex 全局性** | `EntityRecord.RowIndex` 始终是全局行号，模式透明 | 本页 认知模型 | `WorldStructuralChangeTests` / `IntegrationTests` |
 | **Load 不能走 Add/Set/Remove** | 否则会挤压重排快照 chunk 边界 | `kb-snapshot-persistence.md` 决策 | `WorldSnapshotTests` (save+load round-trip) |
 
