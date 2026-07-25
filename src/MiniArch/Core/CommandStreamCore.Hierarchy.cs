@@ -136,6 +136,20 @@ public abstract partial class CommandStreamCore
         return false;
     }
 
+    private static void AccumulateHierarchyDeltaBudget(
+        ref FrameDelta.Budget budget, FrozenState frozen)
+    {
+        foreach (var (child, intent) in frozen.HierarchyByChild)
+        {
+            if (IsDestroyedThisFrame(child, frozen)) continue;
+            if (intent.IsAdd && IsDestroyedThisFrame(intent.Parent, frozen)) continue;
+
+            budget.AddRemoveChild(child);
+            if (intent.IsAdd)
+                budget.AddAddChild(intent.Parent, child);
+        }
+    }
+
     private static void EmitHierarchyToDelta(FrameDelta delta, FrozenState frozen)
     {
         var hierarchyByChild = frozen.HierarchyByChild;

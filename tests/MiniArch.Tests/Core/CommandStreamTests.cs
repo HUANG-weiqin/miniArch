@@ -17,6 +17,13 @@ public sealed class CommandStreamTests
     private readonly record struct Health(int Value);
     private readonly record struct SelfRef(Entity Target);
     private readonly record struct SignalPayloadField(long A, long B, long C);
+
+    private unsafe struct FrameBlob8K
+    {
+        public int Marker;
+        public fixed byte Data[8188];
+    }
+
     private readonly record struct C4(int Value);
     private readonly record struct C5(int Value);
     private readonly record struct C6(int Value);
@@ -676,6 +683,53 @@ public sealed class CommandStreamTests
         var delta = stream.Snapshot();
 
         Assert.Contains(unknown, delta.DestroyedEntities());
+    }
+
+    [Fact]
+    public void BUG_Snapshot_rejects_more_than_MaxOpsPerFrame_before_writing_delta()
+    {
+        using var world = new World();
+        var entity = world.CreateEmpty();
+        var stream = new CommandStream(world);
+        for (var i = 0; i <= FrameDelta.MaxOpsPerFrame; i++)
+            stream.Destroy(entity);
+
+        var ex = Assert.Throws<InvalidOperationException>(stream.Snapshot);
+
+        Assert.Contains("MaxOpsPerFrame", ex.Message);
+        Assert.True(stream.Submit());
+        Assert.False(world.IsAlive(entity));
+    }
+
+    [Fact]
+    public void BUG_snapshot_paths_reject_MaxFrameBytes_before_target_or_world_mutation()
+    {
+        Assert.Equal(8192, Unsafe.SizeOf<FrameBlob8K>());
+
+        using var world = new World();
+        var entity = world.Create(new FrameBlob8K { Marker = -1 });
+        var stream = new CommandStream(world);
+        for (var i = 0; i < 2048; i++)
+            stream.Set(entity, new FrameBlob8K { Marker = i });
+
+        var target = new FrameDelta();
+        target.AddDestroy(new Entity(42, 1));
+        var originalTarget = target.AsSpan().ToArray();
+
+        var snapshotEx = Assert.Throws<InvalidOperationException>(() => stream.SnapshotInto(target));
+        Assert.Contains("MaxFrameBytes", snapshotEx.Message);
+        Assert.Equal(originalTarget, target.AsSpan().ToArray());
+        Assert.Equal(-1, world.Get<FrameBlob8K>(entity).Marker);
+
+        void SubmitOversizedFrame() => _ = stream.SubmitAndSnapshotIntoAsync(target);
+        var asyncEx = Assert.Throws<InvalidOperationException>(SubmitOversizedFrame);
+        Assert.Contains("MaxFrameBytes", asyncEx.Message);
+        Assert.Equal(originalTarget, target.AsSpan().ToArray());
+        Assert.Equal(-1, world.Get<FrameBlob8K>(entity).Marker);
+
+        stream.Set(entity, new FrameBlob8K { Marker = 7 });
+        Assert.True(stream.Submit());
+        Assert.Equal(7, world.Get<FrameBlob8K>(entity).Marker);
     }
 
     // ══════════════════════════════════════════════════════════—

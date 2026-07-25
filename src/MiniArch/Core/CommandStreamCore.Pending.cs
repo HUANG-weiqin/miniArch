@@ -294,13 +294,70 @@ public abstract partial class CommandStreamCore
         return current < 0;
     }
 
+    private static void AccumulatePendingEntitiesDeltaBudget(
+        ref FrameDelta.Budget budget, in PendingBatchView view, bool deferredMode)
+    {
+        var batchCanceled = view.Canceled;
+        var batchEntities = view.Entities;
+        var pendingBatchCount = view.Count;
+
+        if (deferredMode)
+        {
+            for (var i = 0; i < pendingBatchCount; i++)
+            {
+                if (!batchCanceled[i])
+                    budget.AddReserve(batchEntities[i]);
+            }
+
+            for (var i = 0; i < pendingBatchCount; i++)
+            {
+                if (!batchCanceled[i])
+                    AccumulateCreateDeltaBudget(ref budget, view, i);
+            }
+            return;
+        }
+
+        for (var i = 0; i < pendingBatchCount; i++)
+        {
+            var entity = batchEntities[i];
+            budget.AddReserve(entity);
+
+            if ((uint)i < (uint)batchCanceled.Length && batchCanceled[i])
+                budget.AddRelease(entity);
+            else
+                AccumulateCreateDeltaBudget(ref budget, view, i);
+        }
+    }
+
+    private static void AccumulateCreateDeltaBudget(
+        ref FrameDelta.Budget budget, in PendingBatchView view, int index)
+    {
+        var entity = view.Entities[index];
+        var rawCount = view.CompCounts[index];
+        if (rawCount == 0)
+        {
+            budget.AddCreate(entity, ReadOnlySpan<RawComponentValue>.Empty);
+            return;
+        }
+
+        var rented = ArrayPool<RawComponentValue>.Shared.Rent(rawCount);
+        var fillCount = 0;
+        try
+        {
+            var componentCount = CollectCreateComponents(view, index, rented, out fillCount);
+            budget.AddCreate(entity, rented.AsSpan(0, componentCount));
+        }
+        finally
+        {
+            if (fillCount > 0)
+                Array.Clear(rented, 0, fillCount);
+            ArrayPool<RawComponentValue>.Shared.Return(rented);
+        }
+    }
+
     private static void EmitPendingEntitiesToDelta(FrameDelta delta, in PendingBatchView view, bool deferredMode = false)
     {
         var batchCanceled = view.Canceled;
-        var batchHeads = view.Heads;
-        var batchCompCounts = view.CompCounts;
-        var batchComps = view.Comps;
-        var batchBuf = view.Buf;
         var batchEntities = view.Entities;
         var pendingBatchCount = view.Count;
 
@@ -348,15 +405,10 @@ public abstract partial class CommandStreamCore
         }
     }
 
-    private static void EmitCreateFromBatch(FrameDelta delta, in PendingBatchView view, int i)
+    private static void EmitCreateFromBatch(FrameDelta delta, in PendingBatchView view, int index)
     {
-        var batchBuf = view.Buf;
-        var batchHeads = view.Heads;
-        var batchCompCounts = view.CompCounts;
-        var batchComps = view.Comps;
-
-        var entity = view.Entities[i];
-        var rawCount = batchCompCounts[i];
+        var entity = view.Entities[index];
+        var rawCount = view.CompCounts[index];
         if (rawCount == 0)
         {
             delta.AddCreate(entity, ReadOnlySpan<RawComponentValue>.Empty);
@@ -367,32 +419,8 @@ public abstract partial class CommandStreamCore
         var fillCount = 0;
         try
         {
-            var outIdx = 0;
-            var current = batchHeads[i];
-            while (current >= 0)
-            {
-                ref var bc = ref batchComps[current];
-                if (!bc.Removed)
-                {
-                    rented[outIdx] = ReadRawFromBuf(batchBuf, bc);
-                    outIdx++;
-                    fillCount = outIdx; // update in real-time so exception cleanup clears all written slots
-                }
-                current = bc.Next;
-            }
-
-            if (outIdx == 0)
-            {
-                delta.AddCreate(entity, ReadOnlySpan<RawComponentValue>.Empty);
-                return;
-            }
-
-            // Sort and dedup only the filled portion.
-            var comps = rented.AsSpan(0, outIdx);
-            if (outIdx > 1)
-                outIdx = SortAndDeduplicateComponents(comps);
-
-            delta.AddCreate(entity, comps[..outIdx]);
+            var componentCount = CollectCreateComponents(view, index, rented, out fillCount);
+            delta.AddCreate(entity, rented.AsSpan(0, componentCount));
         }
         finally
         {
@@ -400,6 +428,28 @@ public abstract partial class CommandStreamCore
                 Array.Clear(rented, 0, fillCount);
             ArrayPool<RawComponentValue>.Shared.Return(rented);
         }
+    }
+
+    private static int CollectCreateComponents(
+        in PendingBatchView view, int index, RawComponentValue[] destination, out int fillCount)
+    {
+        var outputCount = 0;
+        fillCount = 0;
+        var current = view.Heads[index];
+        while (current >= 0)
+        {
+            ref var component = ref view.Comps[current];
+            if (!component.Removed)
+            {
+                destination[outputCount++] = ReadRawFromBuf(view.Buf, component);
+                fillCount = outputCount;
+            }
+            current = component.Next;
+        }
+
+        if (outputCount > 1)
+            outputCount = SortAndDeduplicateComponents(destination.AsSpan(0, outputCount));
+        return outputCount;
     }
 
 

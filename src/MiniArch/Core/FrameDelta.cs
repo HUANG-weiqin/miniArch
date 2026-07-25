@@ -41,16 +41,16 @@ namespace MiniArch.Core;
 public sealed class FrameDelta
 {
     /// <summary>
-    /// Maximum wire size for a single frame delta (16 MiB).
-    /// Prevents OOM from oversized or malicious wire data before allocation.
-    /// Callers may wrap the transport layer with a smaller budget.
+    /// Maximum produced or accepted wire size for a single frame delta (16 MiB).
+    /// Prevents local producers and untrusted wire data from exceeding the
+    /// frame memory budget. Callers may enforce a smaller transport budget.
     /// </summary>
     public static readonly int MaxFrameBytes = 16 * 1024 * 1024;
 
     /// <summary>
-    /// Maximum number of operations per frame delta (1 million).
-    /// Prevents runaway op-count from exhausting CPU in the decoder loop.
-    /// Callers may wrap the transport layer with a smaller budget.
+    /// Maximum produced or accepted operation count per frame delta (1 million).
+    /// Prevents local producers and untrusted wire data from exhausting CPU in
+    /// the decoder loop. Callers may enforce a smaller transport budget.
     /// </summary>
     public static readonly int MaxOpsPerFrame = 1_000_000;
 
@@ -454,6 +454,52 @@ public sealed class FrameDelta
 
     // ── Writer API (used by CommandStream) ─────────────────────────────
 
+    internal struct Budget
+    {
+        private long _byteCount;
+        private int _opCount;
+
+        internal int ByteCount => (int)_byteCount;
+        internal int OpCount => _opCount;
+
+        internal void AddReserve(Entity entity) => AddOperation(GetEntityOperationWireSize(entity));
+        internal void AddRelease(Entity entity) => AddOperation(GetEntityOperationWireSize(entity));
+        internal void AddDestroy(Entity entity) => AddOperation(GetEntityOperationWireSize(entity));
+        internal void AddRemoveChild(Entity child) => AddOperation(GetEntityOperationWireSize(child));
+
+        internal void AddAddChild(Entity parent, Entity child) =>
+            AddOperation(GetAddChildOperationWireSize(parent, child));
+
+        internal void AddRemove(Entity entity, ComponentType componentType) =>
+            AddOperation(GetRemoveOperationWireSize(entity, componentType));
+
+        internal void AddComponentData(Entity entity, ComponentType componentType, int dataSize) =>
+            AddOperation(GetComponentDataOperationWireSize(entity, componentType, dataSize));
+
+        internal void AddCreate(Entity entity, ReadOnlySpan<RawComponentValue> components) =>
+            AddOperation(GetCreateOperationWireSize(entity, components));
+
+        private void AddOperation(long operationBytes)
+        {
+            if (_opCount >= MaxOpsPerFrame)
+            {
+                throw new InvalidOperationException(
+                    $"FrameDelta exceeds MaxOpsPerFrame budget ({MaxOpsPerFrame} ops). " +
+                    "Increase MaxOpsPerFrame or reduce frame complexity.");
+            }
+
+            if (operationBytes < 0 || operationBytes > MaxFrameBytes - _byteCount)
+            {
+                throw new InvalidOperationException(
+                    $"FrameDelta exceeds MaxFrameBytes budget ({_byteCount + operationBytes} > {MaxFrameBytes}). " +
+                    "Increase MaxFrameBytes or reduce frame payload.");
+            }
+
+            _byteCount += operationBytes;
+            _opCount++;
+        }
+    }
+
     private void EnsureOperationCapacity(long operationBytes)
     {
         if (_opCount >= MaxOpsPerFrame)
@@ -524,6 +570,32 @@ public sealed class FrameDelta
     private static int GetEntityOperationWireSize(Entity entity) => 1 + GetEntityWireSize(entity);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int GetAddChildOperationWireSize(Entity parent, Entity child) =>
+        1 + GetEntityWireSize(child) + GetEntityWireSize(parent);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int GetRemoveOperationWireSize(Entity entity, ComponentType componentType) =>
+        1 + GetEntityWireSize(entity) + VarintSize(componentType.Value);
+
+    private static long GetComponentDataOperationWireSize(
+        Entity entity, ComponentType componentType, int dataSize) =>
+        1L + GetEntityWireSize(entity) + VarintSize(componentType.Value) +
+        VarintSize(dataSize) + dataSize;
+
+    private static long GetCreateOperationWireSize(
+        Entity entity, ReadOnlySpan<RawComponentValue> components)
+    {
+        var operationBytes = 1L + GetEntityWireSize(entity) + VarintSize(components.Length);
+        for (var i = 0; i < components.Length; i++)
+        {
+            ref readonly var component = ref components[i];
+            operationBytes += VarintSize(component.ComponentType.Value) +
+                VarintSize(component.DataSize) + (long)component.DataSize;
+        }
+        return operationBytes;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int DecodeEntityId(uint raw) => raw == 0 ? -1 : (int)(raw - 1);
 
     /// <summary>
@@ -566,13 +638,7 @@ public sealed class FrameDelta
 
     internal void AddCreate(Entity e, ReadOnlySpan<RawComponentValue> components)
     {
-        var operationBytes = 1L + GetEntityWireSize(e) + VarintSize(components.Length);
-        for (var i = 0; i < components.Length; i++)
-        {
-            ref readonly var c = ref components[i];
-            operationBytes += VarintSize(c.ComponentType.Value) + VarintSize(c.DataSize) + (long)c.DataSize;
-        }
-        EnsureOperationCapacity(operationBytes);
+        EnsureOperationCapacity(GetCreateOperationWireSize(e, components));
 
         WriteTag(DeltaOpKind.Create);
         WriteEntity(e);
@@ -602,7 +668,7 @@ public sealed class FrameDelta
 
     internal void AddAddChild(Entity parent, Entity child)
     {
-        EnsureOperationCapacity(1L + GetEntityWireSize(child) + GetEntityWireSize(parent));
+        EnsureOperationCapacity(GetAddChildOperationWireSize(parent, child));
         WriteTag(DeltaOpKind.AddChild);
         WriteEntity(child);
         WriteEntity(parent);
@@ -619,7 +685,7 @@ public sealed class FrameDelta
 
     internal void AddRemove(Entity e, ComponentType t)
     {
-        EnsureOperationCapacity(1L + GetEntityWireSize(e) + VarintSize(t.Value));
+        EnsureOperationCapacity(GetRemoveOperationWireSize(e, t));
         WriteTag(DeltaOpKind.Remove);
         WriteEntity(e);
         WriteComponentType(t);
@@ -634,8 +700,7 @@ public sealed class FrameDelta
 
     private unsafe void AddComponentDataUnsafe(DeltaOpKind kind, Entity e, ComponentType t, void* data, int size)
     {
-        EnsureOperationCapacity(
-            1L + GetEntityWireSize(e) + VarintSize(t.Value) + VarintSize(size) + size);
+        EnsureOperationCapacity(GetComponentDataOperationWireSize(e, t, size));
         WriteTag(kind);
         WriteEntity(e);
         WriteComponentType(t);

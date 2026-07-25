@@ -93,9 +93,9 @@ Set-only 且全 store 无结构命令时，`PrepareForConsume` 在 prune stale e
 
 ### async frozen-state ownership
 
-`SubmitAndSnapshotAsync` / `SubmitAndSnapshotIntoAsync` 在 active state 仍由调用线程独占时完成全部 preflight；通过后才 resolve、swap、启动 delta worker。worker 创建后立即登记 `_pendingFrozen/_pendingTask` ownership。若内部 Submit 随后失败，先观察 worker 完成再回收 frozen state，并保留原同步异常。
+`SubmitAndSnapshotAsync` / `SubmitAndSnapshotIntoAsync` 在 active state 仍由调用线程独占时完成 contract preflight；placeholder resolve 后、swap/worker/本地 materialize 前，再完成 FrameDelta 整帧预算 preflight。worker 创建后立即登记 `_pendingFrozen/_pendingTask` ownership。若内部 Submit 随后失败，先观察 worker 完成再回收 frozen state，并保留原同步异常。
 
-因此“不被本地 Submit 接受的 frame”不会先交给后台 worker，复用的 target 也不会在 preflight 失败时被改写。
+因此“不被本地 Submit 或 FrameDelta 预算接受的 frame”不会先交给后台 worker，复用的 target 也不会在 preflight 失败时被改写。
 
 ### deferred entity 两种模式
 
@@ -106,7 +106,11 @@ Set-only 且全 store 无结构命令时，`PrepareForConsume` 在 prune stale e
 
 placeholder 只在当前 stream/batch 内有效。跨帧持有解析结果使用 `EntitySlot` + `Track()`；不要手写 placeholder→real map。
 
-### FrameDelta 结构验证边界
+### FrameDelta 结构与预算边界
+
+生产端与消费端共享硬上限：`MaxOpsPerFrame = 1_000_000`、`MaxFrameBytes = 16 MiB`。每个 `FrameDelta.Add*` 在写任何字节前精确检查完整 operation，避免超限时留下半条 op；`Snapshot` / `SnapshotInto` / 两条 async submit+snapshot 路径在改写 target、swap frozen state 或提交 World 前先判断整帧预算。
+
+常规帧先用 O(store 数) 的保守 upper bound 证明安全，只有接近上限时才精确扫描，因此 `snapshot-only` A/B（10k Set，Release，1s warmup + 3s measure，各 3 次中位数）保持 42909.3 → 43014.0 ticks/s（+0.2%，噪声内）。精确扫描与实际 writer 共用同一 sizing 规则，由 `Budget_matches_writer_for_every_operation_shape` 守卫。
 
 不可信 wire 在 Replay 前必须调用 `FrameDelta.Validate()`。验证器保证 delta 自身满足：
 

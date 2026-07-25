@@ -159,6 +159,9 @@ public abstract partial class CommandStreamCore
         public abstract bool HasCommands { get; }
         public abstract bool HasStructuralCommands { get; }
         public abstract int ComponentDeltaCapacityHint { get; }
+        public abstract int DeltaOpCount { get; }
+        public abstract long DeltaByteUpperBound { get; }
+        public abstract void AccumulateDeltaBudget(ref FrameDelta.Budget budget);
         public abstract void PreflightValidate(
             World world, int[] generations, byte[] presence, int epoch, bool useSetLocationCache);
         public abstract void ApplyToWorld(World world);
@@ -183,8 +186,9 @@ public abstract partial class CommandStreamCore
 
     private protected sealed class ComponentStore<T> : ComponentStore where T : unmanaged
     {
-        // Conservative Add/Set wire overhead hint: op tag + entity + component
-        // type + data-length varints. Exact sizing still belongs to FrameDelta.
+        // Exact entity/type varints are at most 5 bytes each. The upper bound
+        // covers tag + entity + type + data length for Add/Set; Remove is smaller.
+        private const int MaximumComponentDeltaHeaderSize = 21;
         private const int ComponentDeltaHeaderCapacityHint = 8;
 
         private enum SetLocationCacheKind : byte
@@ -283,6 +287,9 @@ public abstract partial class CommandStreamCore
                 return estimate >= int.MaxValue ? int.MaxValue : (int)estimate;
             }
         }
+        public override int DeltaOpCount => _count;
+        public override long DeltaByteUpperBound =>
+            _count * (Unsafe.SizeOf<T>() + (long)MaximumComponentDeltaHeaderSize);
 
         public void Append(Entity entity, in T value, byte kind)
         {
@@ -847,6 +854,26 @@ public abstract partial class CommandStreamCore
                         world.ApplyTypedAdd(entry.Entity, record, compType, in entry.Value);
                     else
                         world.RemoveBoxed(entry.Entity, record, compType);
+                }
+            }
+        }
+
+        public override void AccumulateDeltaBudget(ref FrameDelta.Budget budget)
+        {
+            var componentType = Component<T>.ComponentType;
+            var size = Unsafe.SizeOf<T>();
+            for (var i = 0; i < _count; i++)
+            {
+                ref readonly var entry = ref _entries[i];
+                switch (entry.Kind)
+                {
+                    case KindAdd:
+                    case KindSet:
+                        budget.AddComponentData(entry.Entity, componentType, size);
+                        break;
+                    case KindRemove:
+                        budget.AddRemove(entry.Entity, componentType);
+                        break;
                 }
             }
         }

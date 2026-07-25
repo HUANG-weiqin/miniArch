@@ -236,24 +236,24 @@ public abstract partial class CommandStreamCore
     /// <see cref="Replay(FrameDelta, Boolean)"/> processes the same byte payload.
     /// </para>
     /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// The recorded frame exceeds <see cref="FrameDelta.MaxFrameBytes"/> or
+    /// <see cref="FrameDelta.MaxOpsPerFrame"/>.
+    /// </exception>
     public FrameDelta Snapshot()
     {
         PrepareStores();
-        if (!_deferredEntities)
-        {
+        if (_deferredEntities)
+            ThrowIfSnapshotHasImmediateEntities();
+        else
             ResolveDeferredCreates();
-            var delta = new FrameDelta();
-            delta.EnsureCapacity(GetSnapshotCapacityHint());
-            BuildDelta(delta);
-            _pendingReplay = true;
-            return delta;
-        }
-        ThrowIfSnapshotHasImmediateEntities();
-        var d = new FrameDelta();
-        d.EnsureCapacity(GetSnapshotCapacityHint());
-        BuildDelta(d);
+
+        PreflightFrameDeltaBudget(_deferredEntities);
+        var delta = new FrameDelta();
+        delta.EnsureCapacity(GetSnapshotCapacityHint());
+        BuildDelta(delta);
         _pendingReplay = true;
-        return d;
+        return delta;
     }
 
     /// <summary>
@@ -267,19 +267,21 @@ public abstract partial class CommandStreamCore
     /// <see cref="Snapshot"/> except the result is written into <paramref name="target"/>.
     /// <para/>
     /// The caller must not mutate <paramref name="target"/> concurrently.
+    /// If budget validation fails, the target remains unchanged.
     /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// The recorded frame exceeds <see cref="FrameDelta.MaxFrameBytes"/> or
+    /// <see cref="FrameDelta.MaxOpsPerFrame"/>.
+    /// </exception>
     public void SnapshotInto(FrameDelta target)
     {
         PrepareStores();
-        if (!_deferredEntities)
-        {
+        if (_deferredEntities)
+            ThrowIfSnapshotHasImmediateEntities();
+        else
             ResolveDeferredCreates();
-            target.Clear();
-            BuildDelta(target);
-            _pendingReplay = true;
-            return;
-        }
-        ThrowIfSnapshotHasImmediateEntities();
+
+        PreflightFrameDeltaBudget(_deferredEntities);
         target.Clear();
         BuildDelta(target);
         _pendingReplay = true;
@@ -348,6 +350,10 @@ public abstract partial class CommandStreamCore
     /// <see cref="DeferredEntities"/> set to <c>true</c> instead.
     /// </para>
     /// </remarks>
+    /// <exception cref="InvalidOperationException">
+    /// The recorded frame fails validation or exceeds a FrameDelta budget. The
+    /// failure occurs before the World is submitted.
+    /// </exception>
     public Task<FrameDelta> SubmitAndSnapshotAsync()
     {
         PrepareStores(buildSetLocationCache: true);
@@ -406,6 +412,10 @@ public abstract partial class CommandStreamCore
     /// <paramref name="target"/>. The submit (world apply) runs synchronously
     /// on the calling thread before the returned task.
     /// </returns>
+    /// <exception cref="InvalidOperationException">
+    /// The recorded frame fails validation or exceeds a FrameDelta budget. The
+    /// target remains unchanged and no recorded mutations are applied.
+    /// </exception>
     public Task SubmitAndSnapshotIntoAsync(FrameDelta target)
     {
         ArgumentNullException.ThrowIfNull(target);
@@ -449,6 +459,7 @@ public abstract partial class CommandStreamCore
             AlignCancelledBatchFreeListOrder();
             ResolveDeferredCreates();
             PreValidatePendingSlots();
+            PreflightFrameDeltaBudget(deferredMode: false);
         }
         catch
         {
@@ -508,6 +519,54 @@ public abstract partial class CommandStreamCore
 
         for (var i = 0; i < _frozen.DestroyCount; i++)
             delta.AddDestroy(_frozen.DestroyEntities[i]);
+    }
+
+    private void PreflightFrameDeltaBudget(bool deferredMode)
+    {
+        if (IsFrameDeltaWithinUpperBound(deferredMode))
+            return;
+
+        var budget = new FrameDelta.Budget();
+        AccumulatePendingEntitiesDeltaBudget(ref budget, _frozen.Pending, deferredMode);
+        AccumulateHierarchyDeltaBudget(ref budget, _frozen);
+
+        foreach (var store in _frozen.Stores)
+        {
+            if (store?.HasCommands == true)
+                store.AccumulateDeltaBudget(ref budget);
+        }
+
+        for (var i = 0; i < _frozen.DestroyCount; i++)
+            budget.AddDestroy(_frozen.DestroyEntities[i]);
+    }
+
+    private bool IsFrameDeltaWithinUpperBound(bool deferredMode)
+    {
+        var activePendingCount = _frozen.PendingBatchCount - _frozen.CancelledBatchCount;
+        var pendingOpCount = deferredMode
+            ? 2L * activePendingCount
+            : 2L * _frozen.PendingBatchCount;
+        var opCount = pendingOpCount + 2L * _frozen.HierarchyByChild.Count + _frozen.DestroyCount;
+
+        // Maximum encoded sizes: entity-only op = 11 bytes; Create = 16 bytes
+        // before component entries; AddChild = 21 bytes. Removed/duplicate batch
+        // components remain in the bound, which makes it conservative.
+        var byteCount = 27L * (deferredMode ? activePendingCount : _frozen.PendingBatchCount) +
+            _batchBufLen + 10L * _batchCompTotal +
+            32L * _frozen.HierarchyByChild.Count + 11L * _frozen.DestroyCount;
+
+        foreach (var store in _frozen.Stores)
+        {
+            if (store?.HasCommands != true)
+                continue;
+
+            opCount += store.DeltaOpCount;
+            byteCount += store.DeltaByteUpperBound;
+            if (opCount > FrameDelta.MaxOpsPerFrame || byteCount > FrameDelta.MaxFrameBytes)
+                return false;
+        }
+
+        return opCount <= FrameDelta.MaxOpsPerFrame && byteCount <= FrameDelta.MaxFrameBytes;
     }
 
     private int GetSnapshotCapacityHint()

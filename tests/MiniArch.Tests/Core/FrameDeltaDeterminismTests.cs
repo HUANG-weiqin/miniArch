@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using MiniArch.Core;
 using MiniArch.Tests.Core.TestSupport;
@@ -758,6 +760,48 @@ public sealed class FrameDeltaDeterminismTests
         var ex = Assert.Throws<InvalidOperationException>(delta.Validate);
 
         Assert.Contains("MaxFrameBytes", ex.Message);
+    }
+
+    [Fact]
+    public unsafe void Budget_matches_writer_for_every_operation_shape()
+    {
+        var first = new Entity(0, 1);
+        var second = new Entity(128, 2);
+        var componentType = Component<Position>.ComponentType;
+        var componentBytes = new byte[Unsafe.SizeOf<Position>()];
+        MemoryMarshal.Write(componentBytes, new Position(3, 4));
+        var components = new[]
+        {
+            new RawComponentValue(componentType, componentBytes, 0, componentBytes.Length),
+        };
+
+        var budget = new FrameDelta.Budget();
+        budget.AddReserve(first);
+        budget.AddRelease(first);
+        budget.AddCreate(first, components);
+        budget.AddAddChild(first, second);
+        budget.AddRemoveChild(second);
+        budget.AddComponentData(first, componentType, componentBytes.Length);
+        budget.AddComponentData(second, componentType, componentBytes.Length);
+        budget.AddRemove(second, componentType);
+        budget.AddDestroy(second);
+
+        var delta = new FrameDelta();
+        delta.AddReserve(first);
+        delta.AddRelease(first);
+        delta.AddCreate(first, components);
+        delta.AddAddChild(first, second);
+        delta.AddRemoveChild(second);
+        fixed (byte* data = componentBytes)
+        {
+            delta.AddAddUnsafe(first, componentType, data, componentBytes.Length);
+            delta.AddSetUnsafe(second, componentType, data, componentBytes.Length);
+        }
+        delta.AddRemove(second, componentType);
+        delta.AddDestroy(second);
+
+        Assert.Equal(budget.OpCount, delta.DeltaCount);
+        Assert.Equal(budget.ByteCount, delta.AsSpan().Length);
     }
 
     // ══════════════════════════════════════════════════════════—

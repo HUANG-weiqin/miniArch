@@ -270,11 +270,11 @@ appended to typed stores and consumed as one deterministic batch.
 | `RemoveChild(Entity)` | Record hierarchy removal |
 | `Clone(Entity)` | Record entity deep-copy |
 | `Submit()` | Apply all recorded changes synchronously |
-| `Snapshot()` | Produce a `FrameDelta` without applying |
-| `SnapshotInto(FrameDelta)` | Produce a delta into a reusable target |
+| `Snapshot()` | Produce a budget-validated `FrameDelta` without applying |
+| `SnapshotInto(FrameDelta)` | Produce into a reusable target; budget failure leaves the target unchanged |
 | `Replay(FrameDelta, Boolean)` | Apply a delta to produce identical state; `true` resolves tracked `EntitySlot`s |
-| `SubmitAndSnapshotAsync()` | Pipelined: main thread submits, background builds delta |
-| `SubmitAndSnapshotIntoAsync(FrameDelta)` | Pipelined submit into a reusable delta target |
+| `SubmitAndSnapshotAsync()` | Pipelined submit/build; frame budgets are checked before World submission |
+| `SubmitAndSnapshotIntoAsync(FrameDelta)` | Pipelined submit into a reusable target; preflight failure preserves the target and applies no recorded mutations |
 | `Clear()` | Discard recorded commands without applying |
 | `DeferredEntities` | Enable placeholder entity IDs for lockstep mode |
 
@@ -321,8 +321,8 @@ it cannot be stored as an ECS component.
 
 | Member | Description |
 |---|---|
-| `MaxFrameBytes` | Maximum accepted wire size (16 MiB) |
-| `MaxOpsPerFrame` | Maximum accepted operation count (1,000,000) |
+| `MaxFrameBytes` | Maximum produced or accepted wire size (16 MiB) |
+| `MaxOpsPerFrame` | Maximum produced or accepted operation count (1,000,000) |
 | `DeltaCount` | Total number of delta entries |
 | `HasEntity(Entity)` | Check if an entity is referenced |
 | `IsEmpty` | Whether the delta has no entries |
