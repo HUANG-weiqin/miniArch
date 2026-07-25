@@ -72,6 +72,44 @@ public sealed class QueryOrderingTests
     }
 
     [Fact]
+    public void BUG_entity_query_rejects_structural_change_during_enumeration()
+    {
+        var world = new World();
+        var first = world.Create(new Position(1, 1));
+        var survivor = world.Create(new Position(2, 2));
+        var query = world.Query(new QueryDescription().With<Position>());
+        var seen = new List<Entity>();
+
+        _ = Assert.Throws<InvalidOperationException>(() =>
+        {
+            foreach (var entity in query)
+            {
+                seen.Add(entity);
+                if (entity == first)
+                    world.Destroy(entity);
+            }
+        });
+
+        Assert.Equal([first], seen);
+        Assert.True(world.IsAlive(survivor));
+    }
+
+    [Fact]
+    public void BUG_entity_query_rejects_bulk_clear_during_enumeration()
+    {
+        var world = new World();
+        world.Create(new Position(1, 1));
+        world.Create(new Position(2, 2));
+        var description = new QueryDescription().With<Position>();
+        var enumerator = world.Query(description).GetEnumerator();
+
+        Assert.True(enumerator.MoveNext());
+        world.Clear(description);
+
+        _ = Assert.Throws<InvalidOperationException>(() => enumerator.MoveNext());
+    }
+
+    [Fact]
     public void Entity_order_preserved_across_archetype_capacity_doubling()
     {
         // Use small entity capacity so growth is frequent

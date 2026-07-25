@@ -141,6 +141,7 @@ public sealed partial class World
         ref var record = ref _records[entity.Id];
         record.Archetype = destination;
         record.RowIndex = destinationRowIndex;
+        MarkStructureChanged();
     }
 
     private void MoveEntity(Entity entity, EntityRecord sourceInfo, Archetype destination)

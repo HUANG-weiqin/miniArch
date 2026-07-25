@@ -111,6 +111,32 @@ public sealed class EntityAccessorTests
     }
 
     [Fact]
+    public void BUG_accessor_rejects_use_after_another_entity_moves_its_cached_row()
+    {
+        var world = new World();
+        var removed = world.Create(new Health(10));
+        var accessed = world.Create(new Health(20));
+        var accessor = world.Access(accessed);
+
+        world.Destroy(removed); // swap-moves accessed away from the cached row
+        var replacement = world.Create(new Health(30)); // occupies the cached row
+
+        var threw = false;
+        try
+        {
+            accessor.Set(new Health(99));
+        }
+        catch (InvalidOperationException)
+        {
+            threw = true;
+        }
+
+        Assert.True(threw);
+        Assert.Equal(20, world.Get<Health>(accessed).Value);
+        Assert.Equal(30, world.Get<Health>(replacement).Value);
+    }
+
+    [Fact]
     public void Access_mixed_get_and_set()
     {
         var world = new World();

@@ -30,6 +30,12 @@ namespace MiniArch;
 /// <see cref="OrderByEntityIdDescending"/>, or
 /// <see cref="OrderByComponent{T}(Comparison{T})"/>.
 /// </para>
+/// <para>
+/// Structural changes (Create/Destroy/Clear/Add/Remove/RestoreState) are not allowed
+/// during entity enumeration. A subsequent <c>MoveNext()</c> throws
+/// <see cref="InvalidOperationException"/> if the world structure changed.
+/// Collect entity handles first, then apply structural changes afterward.
+/// </para>
 /// </summary>
 public readonly struct Query
 {
@@ -110,7 +116,8 @@ public readonly struct Query
     /// <summary>
     /// Gets matched chunks as a span for batch component access.
     /// Use <c>foreach (var chunk in query.GetChunks())</c>.
-    /// Zero-copy, JIT-optimized span iteration.
+    /// Zero-copy, JIT-optimized span iteration. Do not perform structural
+    /// changes until the returned span and all derived spans are no longer used.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpan<ChunkView> GetChunks() => _query.GetChunkViewSpan();
@@ -132,8 +139,13 @@ public readonly struct Query
     {
         ArgumentNullException.ThrowIfNull(action);
         var chunks = _query.GetChunkViewSpan();
+        var world = _query.World;
+        var structureVersion = world.StructureVersion;
         for (var i = 0; i < chunks.Length; i++)
+        {
             action(chunks[i]);
+            world.AssertStructureVersion(structureVersion);
+        }
     }
 
     /// <summary>
@@ -158,8 +170,13 @@ public readonly struct Query
         where TForEach : struct, IChunkForEach
     {
         var chunks = _query.GetChunkViewSpan();
+        var world = _query.World;
+        var structureVersion = world.StructureVersion;
         for (var i = 0; i < chunks.Length; i++)
+        {
             forEach.OnChunk(chunks[i]);
+            world.AssertStructureVersion(structureVersion);
+        }
     }
 
     /// <summary>
@@ -341,6 +358,8 @@ public interface IChunkForEach
 /// </summary>
 public struct QueryEnumerator
 {
+    private readonly World? _world;
+    private readonly long _structureVersion;
     private readonly MiniArch.Core.Archetype[] _archetypes;
     private readonly int _archetypeCount;
     private int _archetypeIndex;
@@ -351,6 +370,8 @@ public struct QueryEnumerator
 
     internal QueryEnumerator(MiniArch.Core.QueryCache query)
     {
+        _world = query.World;
+        _structureVersion = _world.StructureVersion;
         _archetypes = query.GetArchetypeArray(out var archetypeCount);
         _archetypeCount = archetypeCount;
         _archetypeIndex = -1;
@@ -370,6 +391,8 @@ public struct QueryEnumerator
     /// </summary>
     public bool MoveNext()
     {
+        _world?.AssertStructureVersion(_structureVersion);
+
         while (true)
         {
             if (_entities is not null)
@@ -439,6 +462,7 @@ public struct OrderedEntityEnumerator : IDisposable
     private int _count;
     private int _index;
     private bool _initialized;
+    private long _structureVersion;
     private Entity _current;
 
     internal OrderedEntityEnumerator(MiniArch.Core.QueryCache query, bool descending)
@@ -449,6 +473,7 @@ public struct OrderedEntityEnumerator : IDisposable
         _count = 0;
         _index = -1;
         _initialized = false;
+        _structureVersion = query.World.StructureVersion;
         _current = default;
     }
 
@@ -466,6 +491,8 @@ public struct OrderedEntityEnumerator : IDisposable
     {
         if (!_initialized)
             Initialize();
+
+        _query.World.AssertStructureVersion(_structureVersion);
 
         if (_descending)
         {
@@ -579,6 +606,7 @@ public struct OrderedComponentEnumerator<T> : IDisposable where T : unmanaged
     private int _count;
     private int _index;
     private bool _initialized;
+    private long _structureVersion;
     private Entity _current;
 
     internal OrderedComponentEnumerator(MiniArch.Core.QueryCache query, Comparison<T> comparison, bool descending)
@@ -591,6 +619,7 @@ public struct OrderedComponentEnumerator<T> : IDisposable where T : unmanaged
         _count = 0;
         _index = -1;
         _initialized = false;
+        _structureVersion = query.World.StructureVersion;
         _current = default;
     }
 
@@ -606,6 +635,8 @@ public struct OrderedComponentEnumerator<T> : IDisposable where T : unmanaged
     {
         if (!_initialized)
             Initialize();
+
+        _query.World.AssertStructureVersion(_structureVersion);
 
         _index++;
         if (_index >= _count)

@@ -106,6 +106,7 @@ public sealed partial class World : IDisposable
     private int _freeIdCount;
 
     private volatile int _createArchetypeCacheGeneration;
+    private long _structureVersion;
     private readonly List<Entity> _destroyOrderScratch;
     private int[] _destroyVisitedGen = [];
     private int _destroyCurrentGen;
@@ -188,9 +189,36 @@ public sealed partial class World : IDisposable
         _stateSnapshotPool.Clear();
         _hierarchy.Reset();
         _createArchetypeCacheGeneration = int.MaxValue;
+        MarkStructureChanged();
     }
 
     internal bool IsDisposed => _disposed;
+
+    internal long StructureVersion => _structureVersion;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void MarkStructureChanged()
+    {
+        unchecked
+        {
+            _structureVersion++;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void AssertStructureVersion(long expectedVersion)
+    {
+        if (_structureVersion != expectedVersion)
+            ThrowStructureChangedDuringEnumeration();
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void ThrowStructureChangedDuringEnumeration()
+    {
+        throw new InvalidOperationException(
+            "Entity storage changed during enumeration. Collect entity handles before " +
+            "calling Create, Destroy, Clear, Add, Remove, or RestoreState.");
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void AssertNotDisposed()
@@ -511,8 +539,8 @@ public sealed partial class World : IDisposable
     /// calls on the returned accessor skip the entity lookup entirely.
     /// </summary>
     /// <remarks>
-    /// Discard the accessor before any structural change (Add/Remove) that may
-    /// move the entity to a different archetype.
+    /// Discard the accessor and any refs obtained from it before any entity-storage
+    /// structural change (Create/Destroy/Clear/Add/Remove/RestoreState).
     /// </remarks>
     public EntityAccessor Access(Entity entity)
     {
@@ -524,7 +552,7 @@ public sealed partial class World : IDisposable
                 "Use World.IsAlive() to check before calling Access().");
         }
 
-        return new EntityAccessor(info.Archetype, info.RowIndex);
+        return new EntityAccessor(this, info.Archetype, info.RowIndex);
     }
 
     /// <summary>
@@ -1262,6 +1290,7 @@ public sealed partial class World : IDisposable
             _reservedCount--;
         record.Archetype = archetype;
         record.RowIndex = rowIndex;
+        MarkStructureChanged();
         return rowIndex;
     }
 
@@ -1446,8 +1475,9 @@ public sealed partial class World : IDisposable
         _replayMapCount = 0;
         _replayCreateCounts.Clear();
 
-        // Invalidate all caches
+        // Invalidate all caches and active entity enumerators.
         _createArchetypeCacheGeneration++;
+        MarkStructureChanged();
 
         // Recycle snapshot to the pool for the next CaptureState.
         snapshot._isRecycled = true;
