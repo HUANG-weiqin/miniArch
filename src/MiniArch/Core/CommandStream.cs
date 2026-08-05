@@ -60,6 +60,7 @@ public sealed partial class CommandStream : CommandStreamCore
         else if (!entity.IsPlaceholder)
         {
             GetOrCreateStore<T>().Append(entity, component, KindAdd);
+            FlagFrameIfMayContainPlaceholder(component);
         }
     }
 
@@ -86,6 +87,7 @@ public sealed partial class CommandStream : CommandStreamCore
         else if (!entity.IsPlaceholder)
         {
             GetOrCreateStore<T>().Append(entity, component, KindSet);
+            FlagFrameIfMayContainPlaceholder(component);
         }
     }
 

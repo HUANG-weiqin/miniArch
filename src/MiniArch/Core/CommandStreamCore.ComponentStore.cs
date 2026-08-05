@@ -911,15 +911,25 @@ public abstract partial class CommandStreamCore
         public override void PreflightEmbeddedPlaceholders(CommandStreamCore stream)
         {
             var typeId = Component<T>.ComponentType;
-            var offsets = EntityFieldResolver.GetOffsets(typeId);
-            if (offsets.IsEmpty)
-                return;
+            ReadOnlySpan<int> offsets = default;
+            var offsetsResolved = false;
 
             for (var i = 0; i < _count; i++)
             {
                 ref var entry = ref _entries[i];
                 if (entry.Kind == KindRemove)
                     continue;
+
+                // Defer layout resolution until the first payload entry: Remove-only
+                // and empty stores must never fail on an unresolvable layout (their
+                // values are never resolved), regardless of what else is in the frame.
+                if (!offsetsResolved)
+                {
+                    offsets = EntityFieldResolver.GetOffsets(typeId);
+                    if (offsets.IsEmpty)
+                        return;
+                    offsetsResolved = true;
+                }
 
                 var data = MemoryMarshal.AsBytes(
                     MemoryMarshal.CreateReadOnlySpan(ref entry.Value, 1));
@@ -930,7 +940,8 @@ public abstract partial class CommandStreamCore
         public override void ReplacePlaceholders(Entity[] resolveMap)
         {
             var typeId = Component<T>.ComponentType;
-            var offsets = EntityFieldResolver.GetOffsets(typeId);
+            ReadOnlySpan<int> offsets = default;
+            var offsetsResolved = false;
             var dataSpan = new ReadOnlySpan<Entity>(resolveMap);
 
             for (var i = 0; i < _count; i++)
@@ -943,7 +954,18 @@ public abstract partial class CommandStreamCore
                     if (resolved.Id >= 0) entry.Entity = resolved;
                 }
 
-                if (offsets.Length > 0 && entry.Kind != KindRemove)
+                if (entry.Kind == KindRemove)
+                    continue;
+
+                // Defer layout resolution until the first payload entry so Remove-only
+                // and empty stores never fail here (their values are never resolved).
+                if (!offsetsResolved)
+                {
+                    offsets = EntityFieldResolver.GetOffsets(typeId);
+                    offsetsResolved = true;
+                }
+
+                if (!offsets.IsEmpty)
                 {
                     EntityFieldResolver.ResolveInPlace(
                         MemoryMarshal.AsBytes(new Span<T>(ref entry.Value)),

@@ -610,6 +610,19 @@ public abstract partial class CommandStreamCore
         _frozen.BatchHeads[batchIdx] = _batchCompTotal;
         _batchCompTotal++;
         _frozen.BatchCompCounts[batchIdx]++;
+
+        // Flag the frame when a written value may contain a placeholder ref, so the
+        // submit/snapshot preflight skips its full scan for placeholder-free frames.
+        // Conservative: dead/superseded values also set the flag; the preflight
+        // re-applies last-wins dedup before rejecting. MayContainPlaceholder never
+        // throws (layout-verification failures also set the flag and surface at
+        // the preflight's original timing, before any world/allocator mutation).
+        if (Volatile.Read(ref _frozen.MayNeedEmbeddedPlaceholderPreflight) == 0 &&
+            EntityFieldResolver.MayContainPlaceholder(
+                new ReadOnlySpan<byte>(_frozen.BatchBuf, offset, size), type))
+        {
+            Interlocked.Exchange(ref _frozen.MayNeedEmbeddedPlaceholderPreflight, 1);
+        }
     }
 
     private protected void MarkBatchComponentRemoved(int batchIdx, ComponentType targetType)

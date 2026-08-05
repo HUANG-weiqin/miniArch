@@ -213,6 +213,12 @@ public abstract partial class CommandStreamCore
 
     private void PreflightEmbeddedPlaceholders()
     {
+        // Fast path: the record path flags this frame only when a written value may
+        // contain a placeholder ref (or its layout could not be verified). A frame
+        // with no such value cannot fail this preflight, so skip the full scan.
+        if (Volatile.Read(ref _frozen.MayNeedEmbeddedPlaceholderPreflight) == 0)
+            return;
+
         var pending = _frozen.Pending;
         var maxRawCount = 0;
         for (var batchIdx = 0; batchIdx < pending.Count; batchIdx++)
@@ -767,6 +773,7 @@ public abstract partial class CommandStreamCore
         foreach (var store in _frozen.Stores)
             store?.Clear();
 
+        _frozen.MayNeedEmbeddedPlaceholderPreflight = 0;
         _frozen.DestroyCount = 0;
         _frozen.PendingBatchCount = 0;
         _frozen.CancelledBatchCount = 0;

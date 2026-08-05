@@ -95,6 +95,7 @@ public sealed partial class ParallelCommandStream : CommandStreamCore
                 return;
         }
         GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindAdd);
+        FlagFrameIfMayContainPlaceholder(component);
     }
 
     /// <summary>
@@ -121,6 +122,7 @@ public sealed partial class ParallelCommandStream : CommandStreamCore
                 return;
         }
         GetOrCreateStoreParallel<T>().AppendConcurrent(entity, component, KindSet);
+        FlagFrameIfMayContainPlaceholder(component);
     }
 
     /// <summary>

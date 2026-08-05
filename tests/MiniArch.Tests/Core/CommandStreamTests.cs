@@ -3979,6 +3979,126 @@ public sealed class DeferredCreateTests
         Assert.True(verified);
     }
 
+    // Nested Entity layout cannot be resolved by EntityFieldResolver. The record
+    // path must NOT throw for such values (the failure surfaces at Submit, before
+    // any mutation) and must NOT leave a false-negative placeholder marker that
+    // would let the command slip past the preflight.
+    private readonly record struct NestedTarget(Entity Target);
+
+    private readonly record struct OuterWithNested(int X, NestedTarget Nested);
+
+    [Fact]
+    public void BUG_nested_entity_record_does_not_throw_and_submit_rejects_before_mutation()
+    {
+        using var world = new World();
+        var stream = MakeStream(world);
+        var existing = world.CreateEmpty();
+
+        stream.Add(existing, new OuterWithNested(1, default));
+        Assert.True(world.IsAlive(existing));
+
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+        Assert.Contains("nested Entity field", ex.Message);
+
+        // The failed frame must not have consumed allocator ids or mutated the world.
+        Assert.False(world.Has<OuterWithNested>(existing));
+        var next = world.CreateEmpty();
+        Assert.Equal(new Entity(1, 1), next);
+    }
+
+    [Fact]
+    public void BUG_nested_entity_layout_failure_on_pending_batch_surfaces_at_submit()
+    {
+        using var world = new World();
+        var stream = MakeStream(world);
+        var p = stream.Create(); // placeholder
+
+        stream.Add(p, new OuterWithNested(1, default)); // must not throw at record
+
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+        Assert.Contains("nested Entity field", ex.Message);
+
+        var next = world.CreateEmpty();
+        Assert.Equal(new Entity(0, 1), next);
+    }
+
+    [Fact]
+    public void BUG_auto_layout_record_does_not_throw_but_submit_rejects_before_mutation()
+    {
+        using var world = new World();
+        var stream = MakeStream(world);
+        var existing = world.CreateEmpty();
+
+        stream.Add(existing, new BadLinked { X = 1, Target = default });
+
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+        Assert.Contains("LayoutKind.Auto", ex.Message);
+
+        var next = world.CreateEmpty();
+        Assert.Equal(new Entity(1, 1), next);
+    }
+
+    [Fact]
+    public void Remove_only_of_unresolvable_layout_type_is_applied_without_layout_scan()
+    {
+        using var world = new World();
+        var stream = MakeStream(world);
+        var existing = world.CreateEmpty();
+        world.Add(existing, new OuterWithNested(7, default));
+        Assert.True(world.Has<OuterWithNested>(existing));
+
+        // Remove carries no payload, so no placeholder resolution is needed; the
+        // record-time detector intentionally does not probe Remove and Submit
+        // succeeds even though OuterWithNested's layout cannot be resolved.
+        stream.Remove<OuterWithNested>(existing);
+        stream.Submit();
+
+        Assert.False(world.Has<OuterWithNested>(existing));
+    }
+
+    [Fact]
+    public void BUG_Remove_only_of_unresolvable_layout_is_not_affected_by_unrelated_placeholder_frame()
+    {
+        using var world = new World();
+        var stream = MakeStream(world);
+        var existing = world.CreateEmpty();
+        world.Add(existing, new OuterWithNested(7, default));
+
+        // Same frame: an unrelated valid placeholder ref forces the full preflight
+        // and deferred resolution; the Remove-only store of an unresolvable layout
+        // type must not make the frame fail (Remove carries no payload).
+        var owner = stream.Create();
+        var referenced = stream.Create();
+        stream.Add(owner, new Linked(0, referenced));
+        stream.Remove<OuterWithNested>(existing);
+
+        stream.Submit();
+
+        Assert.False(world.Has<OuterWithNested>(existing));
+        Assert.Equal(3, world.EntityCount); // existing + owner + referenced
+    }
+
+    [Fact]
+    public void BUG_Empty_unresolvable_layout_store_does_not_poison_later_deferred_frame()
+    {
+        using var world = new World();
+        var stream = MakeStream(world);
+        var existing = world.CreateEmpty();
+
+        // Frame 1: record an unresolvable-layout payload; Submit rejects and Clear
+        // leaves the (now empty) store object in the Stores array.
+        stream.Add(existing, new OuterWithNested(1, default));
+        Assert.Throws<InvalidOperationException>(() => stream.Submit());
+
+        // Frame 2: a deferred create forces resolve; the empty store must not be
+        // layout-scanned and must not poison the frame.
+        var e = stream.Create();
+        stream.Add(e, new Linked(0, e));
+        stream.Submit();
+
+        Assert.Equal(2, world.EntityCount); // existing + e
+    }
+
     [Fact]
     public void Submit_resolves_self_reference_in_pending_entity()
     {
