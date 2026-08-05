@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream 与 ParallelCommandStream 的 typed-store 录制、consume-time 校验、Submit/Snapshot/Replay 确定性及 async ownership 契约
-updated: 2026-07-25
+updated: 2026-08-05
 ---
 # Command Stream Runtime
 
@@ -86,6 +86,8 @@ pending/foreign placeholder 的 `IsPlaceholder` 仍在 record 阶段用于本地
 4. final hierarchy overlay 的 endpoint、自环与 parent-chain cycle。
 
 通过全部 contract preflight 后才对齐 cancelled reservation 的 free-list 顺序并解析 deferred id。placeholder 检查使用与 materialize/emit 相同的 pending last-wins dedup，不能让已被后续 Set 覆盖的死值导致误拒绝。
+
+> 实现注（2026-08-05，Advisor 两轮审阅后修订）：record 阶段在批写入咽喉点 `CommitBatchComponent` 与 store 路径（`CommandStream.Add/Set<T>`、`ParallelCommandStream.Add/Set<T>`）探测写入值是否可能含 placeholder，命中或布局不可验证（nested Entity / LayoutKind.Auto，`GetOffsets` 抛 InvalidOperationException）时置**帧级单调 flag** `FrozenState.MayNeedEmbeddedPlaceholderPreflight`（Interlocked.Exchange，首次命中后本帧不再探测）；`PreflightEmbeddedPlaceholders()` 首行 volatile 读 flag，0 直接 return，1 跑原全量逻辑。探测器只吞已知布局验证异常（不 catch-all，其他异常照常传播），保证不出现"命令已落库但标记为 false"的漏检；布局失败由 preflight 在原有时机、任何 mutation 前抛。帧间在 `Clear()`/`SwapOutState()` 复位。store 的 `PreflightEmbeddedPlaceholders`/`ReplacePlaceholders` 延迟到首个 payload entry 才取 offsets——Remove-only / 空 store 永不做布局扫描，不被同帧无关 placeholder 或 deferred Create 拖累。Remove-only 不再触发布局扫描是有意行为变更（Remove 无 payload，有契约测试）。
 
 Hierarchy 的 preflight 检查最终 overlay，因此消费也必须按最终状态落地：先按 child id 解除所有有效 intent 涉及的旧链接，再按 child id 安装最终 Add。Snapshot wire 同样先发 RemoveChild、后发 AddChild；否则合法的父子方向反转会因 World 中尚未解除的旧边产生瞬时 cycle，导致 Submit/Replay 错误拒绝。
 

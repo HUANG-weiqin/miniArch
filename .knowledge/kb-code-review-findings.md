@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 审阅前必读的当前风险、已修复真 bug 回归索引与已排除非 bug 猜想；只保留结论和验证入口
-updated: 2026-07-25
+updated: 2026-08-05
 ---
 # 代码审阅发现
 
@@ -25,6 +25,13 @@ updated: 2026-07-25
 CommandStream 的 pending/component/hierarchy/async preflight 已修复已知“用户契约错误导致部分提交”路径，但它不把 Submit 或 Replay 提升为灾难性异常下的通用事务。
 
 ## 已修复的真 bug 索引
+
+### 2026-08-05 placeholder preflight 优化审阅
+
+| 回归测试 | 位置 / witness | 修复边界 |
+|---|---|---|
+| `BUG_nested_entity_record_does_not_throw_and_submit_rejects_before_mutation` / `BUG_nested_entity_layout_failure_on_pending_batch_surfaces_at_submit` / `BUG_auto_layout_record_does_not_throw_but_submit_rejects_before_mutation` | 初版 record-time 探测在 `CommitBatchComponent`/`Append` 已落库后调用 `GetOffsets`，nested Entity / LayoutKind.Auto 在 record 期抛错；调用者捕获后 marker 仍 false，Submit 跳过 preflight，把已报告失败的 Add 悄悄应用 | 探测改为帧级单调 flag + `MayContainPlaceholder` 只吞已知布局异常返回 Unknown（置位），布局失败由 preflight 在原有时机、任何 mutation 前抛；record 期不再抛布局异常 |
+| `Remove_only_of_unresolvable_layout_type_is_applied_without_layout_scan`（契约，非 BUG）/ `BUG_Remove_only_of_unresolvable_layout_is_not_affected_by_unrelated_placeholder_frame` / `BUG_Empty_unresolvable_layout_store_does_not_poison_later_deferred_frame` | store `PreflightEmbeddedPlaceholders`/`ReplacePlaceholders` 在跳过 `KindRemove` 前无条件 `GetOffsets`；Remove-only/空 store 会被同帧无关 placeholder（flag=1 全量 preflight）或任意 deferred Create（`ReplacePlaceholders`）拖累而抛错，且后者发生在 allocator mutation 之后 | 两方法延迟到首个 payload entry 才取 offsets；Remove-only/空 store 永不做布局扫描。Remove 无 payload 不扫描是有意契约变更 |
 
 ### 2026-07-25 发布前审阅
 

@@ -2,7 +2,7 @@
 title: Hero Pipeline Regression Test
 module: HeroComing.Perf
 description: First-class regression gate for architecture changes — 30s timed throughput test; PipelineBenchmarkTests history reference (old --track-observer / --compare-old-value-tracking removed with old change tracking API)
-updated: 2026-07-11
+updated: 2026-08-05
 ---
 # Hero Pipeline Regression Test
 
@@ -11,6 +11,23 @@ updated: 2026-07-11
 - 架构变更的一等回归门禁——改完必须跑它，通过才能提交
 - 30 秒固定时长吞吐量测试，覆盖 movement + attack 两条链路
 - 检测内存泄漏（heap delta 必须稳定）
+
+## 已知的残余回退归因（2026-08-05，已修正）
+
+> **修正**：早先二分定位 `0fca3eb preflight embedded deferred placeholders`（2026-07-25）造成 ~13-16% 回退，后续发现该结论被 Windows Defender（`msmpeng` 周期性扫描）污染——同代码在不同时段测量波动可达 ±10-35%，`0fca3eb` 的"坏"测量恰落在污染窗口。当前认知：HEAD 相对 07-06 baseline 存在 ~5-10% 量级的真实差距，但精确量化在本机不可靠（需排除 repo 目录或等待干净窗口）。
+
+**已实施的优化（结构性候选，placeholder 校验语义保持、Remove-only 契约修正；2026-08-05 经 Advisor 两轮审阅）**：record 阶段在批写入咽喉点 `CommitBatchComponent` 和 store 路径（`CommandStream.Add/Set`、`ParallelCommandStream.Add/Set`）探测值是否可能含 placeholder；命中或布局不可验证（nested Entity / Auto-layout）时置**帧级单调 flag**，preflight 首行读 flag，0 直接 return，1 跑原全量逻辑。探测只吞已知布局异常（Unknown 也置位，由 preflight 在原有时机抛）。store 的 preflight/ReplacePlaceholders 延迟到首个 payload entry 才取 offsets，Remove-only/空 store 不被同帧无关 placeholder 或 deferred Create 拖累（P2）。Remove-only 不再触发布局扫描属有意行为变更（有契约测试）。`GetOffsets` 缓存发布顺序修复（slot 先写、外层后发，slot 读写改 Volatile）。`dotnet test` 1134/1134 通过，fuzz 11/11，门禁通过。
+
+> **性能结论口径**：这是"结构性候选 + 门禁通过 + 净性能未证明"——它删除 submit 全量扫描，但向 record 热路径加了探测（无 Entity 字段类型每次写入一次数组查表）；在本机（msmpeng 周期性干扰）无法给出干净 A/B，不能声称已证明的性能提升。
+
+## 运行前提（重要）
+
+**跑门禁前必须确认没有并发高 CPU 进程**（其他 perf 基准、`testhost`、`dotnet run` 的其它基准项目等），否则吞吐量会虚低 30-50%，造成假 FAIL。
+
+- 判断方法：`Get-Counter '\Process(*)\% Processor Time'` 检查非 idle 的高占用进程，或看任务管理器。
+- **`msmpeng`（Windows Defender 引擎）是本机周期性干扰源**（实测 34% CPU，周期几分钟，可造成同代码 ±10-35% 波动）：跑门禁前/中检查 `Get-Counter '\Process(msmpeng)\% Processor Time'`，>5% 就等 20-30s。
+- 2026-08-05 实测：`testhost`（139% CPU）并发时 HEAD 测出 1137-1183 / 616-667 rounds/s（假 FAIL）；进程消失后同一代码测得 1748-1753 / 1027 rounds/s，门禁 PASS。
+- 门禁输出出现"中途掉速"（前 1000 轮 ~1750 rounds/s 后段跌到 ~620-1000）也是并发干扰的信号，先清场再重跑。
 
 ## 架构
 
