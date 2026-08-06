@@ -15,18 +15,16 @@ public abstract partial class CommandStreamCore
     /// Validates that every command recorded this frame is legal. Executes the
     /// pure-validation stages of the submit preflight sequence in their original
     /// order: batch dedup scan + embedded placeholder lifecycle, component store
-    /// presence validation, hierarchy overlay cycle check, and cancelled-batch
-    /// free-list ordering. Idempotent: running <see cref="Validate"/> before
-    /// <see cref="Submit"/> does not change the result <see cref="Submit"/> produces.
+    /// presence validation, and hierarchy overlay cycle check. Idempotent: running
+    /// <see cref="Validate"/> before <see cref="Submit"/> does not change the result
+    /// <see cref="Submit"/> produces.
     /// </summary>
     /// <remarks>
     /// <para>
     /// Side effects are limited to idempotent internal preparation
     /// (<see cref="PrepareStores"/>: seal parallel writes, prune stale store
-    /// commands, set-location cache scratch) and the idempotent cancelled-batch
-    /// free-list realignment — the same preparation and realignment
-    /// <see cref="Submit"/> performs. No command is consumed and no world state
-    /// other than that idempotent free-list ordering is mutated.
+    /// commands, and build set-location cache scratch). No command is consumed
+    /// and no <see cref="World"/> state is mutated.
     /// </para>
     /// <para>
     /// Any invalid state throws <see cref="InvalidOperationException"/> at the
@@ -50,11 +48,10 @@ public abstract partial class CommandStreamCore
 
         // Order matches the pure-validation stages of Submit's preflight sequence:
         // embedded placeholder lifecycle (with last-wins batch dedup), component
-        // store presence, hierarchy overlay, cancelled-batch free-list ordering.
+        // store presence, then hierarchy overlay.
         PreflightEmbeddedPlaceholders(useFlagFastPath: false);
         PreflightComponentStores(_frozen);
         PreflightHierarchyOverlay(_world, _frozen);
-        AlignCancelledBatchFreeListOrder();
     }
 
     /// <summary>

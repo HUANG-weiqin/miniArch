@@ -80,7 +80,7 @@ pending/foreign placeholder 的 `IsPlaceholder` 仍在 record 阶段用于本地
 
 **默认语义：CommandStream / ParallelCommandStream 的 Submit/Snapshot/async 路径不做语义校验**（组件存在性、hierarchy 环等）。语义校验抽成公共 API `public void Validate()`（基类 `CommandStreamCore`，两子类继承；幂等、无副作用声明、首个违规处抛 `InvalidOperationException`，错误消息含实体 id + 组件类型）。
 
-- **`Validate()` 保证**：占位符生命周期（batch last-wins dedup + store lazy-offsets、deferred-aware）、组件 store strict presence（Add 必须缺失 / Set 必须存在 / Remove 缺失 no-op）、hierarchy overlay endpoint/自环/parent-chain 环。
+- **`Validate()` 保证**：占位符生命周期（batch last-wins dedup + store lazy-offsets、deferred-aware）、组件 store strict presence（Add 必须缺失 / Set 必须存在 / Remove 缺失 no-op）、hierarchy overlay endpoint/自环/parent-chain 环；只准备 stream 内部 scratch，不消费命令、不改 World/free-list。cancelled-batch free-list alignment 只在真正 consume 时执行。
 - **`Validate()` 不覆盖**：CreateMany 组一致性（Materialize 期 `ThrowCreateManyMismatch/MaskFailure` 抛）、slot reservation（Submit 内 `PreValidatePendingSlots` 防御性检查，A 类保留）、FrameDelta 预算（Submit/Snapshot 期 `PreflightFrameDeltaBudget`）。
 - **不调 Validate 的后果**：存在性/hierarchy 违规在 apply 期抛（消息统一 `"Entity {X} does not have component {T}."`），**部分应用**（前序 batch/store 已落地，reserved ids 由内部清理释放）；`SubmitAndSnapshotIntoAsync` 失败时 **target 内容未定义**（旧 "target remains unchanged" 承诺撤销，见 async 节）。
 

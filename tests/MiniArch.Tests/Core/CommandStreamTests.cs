@@ -3588,6 +3588,36 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
+    public void BUG_Validate_does_not_reorder_cancelled_batch_free_list()
+    {
+        using var validatedWorld = new World();
+        using var controlWorld = new World();
+        var validated = new CommandStream(validatedWorld);
+        var control = new CommandStream(controlWorld);
+
+        static void RecordReverseCancellation(CommandStream stream)
+        {
+            var first = stream.Create();
+            var second = stream.Create();
+            stream.Destroy(second);
+            stream.Destroy(first);
+        }
+
+        RecordReverseCancellation(validated);
+        RecordReverseCancellation(control);
+        var checksumBefore = validatedWorld.CanonicalChecksum();
+
+        validated.Validate();
+
+        // Validation may prepare stream scratch, but it must not reorder the
+        // World allocator when the caller later discards the valid frame.
+        Assert.Equal(checksumBefore, validatedWorld.CanonicalChecksum());
+        validated.Clear();
+        control.Clear();
+        Assert.Equal(controlWorld.CreateEmpty(), validatedWorld.CreateEmpty());
+    }
+
+    [Fact]
     public void Contract_Validate_passes_then_submit_applies_atomically()
     {
         using var world = new World();
