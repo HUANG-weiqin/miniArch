@@ -751,6 +751,7 @@ public abstract partial class CommandStreamCore
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void AppendDestroy(Entity entity)
     {
+        FlagFrameIfEntityEndpointNeedsPreflight(entity);
         EnsureCapacity(ref _frozen.DestroyEntities, _frozen.DestroyCount, 64);
         _frozen.DestroyEntities[_frozen.DestroyCount++] = entity;
     }
@@ -923,7 +924,7 @@ public abstract partial class CommandStreamCore
         _frozen.PendingBatchCount = 0;
         _frozen.CancelledBatchCount = 0;
         _frozen.CreateManyGroupCount = 0;
-        _frozen.MayNeedEmbeddedPlaceholderPreflight = 0;
+        _frozen.MayNeedEntityReferencePreflight = 0;
         _pendingBatchMin = int.MaxValue;
         _pendingBatchMax = 0;
         _batchCompTotal = 0;
@@ -1197,16 +1198,15 @@ public abstract partial class CommandStreamCore
         public Entity[] BatchEntities;
         public bool[] BatchCanceled;
         /// <summary>
-        /// Frame-level monotonic flag (0/1) set by the record path when any written
-        /// component value may contain a placeholder ref (or its layout cannot be
-        /// verified). When 0, the consume-side embedded-placeholder scan
-        /// (<see cref="CommandStreamCore.PreflightEmbeddedPlaceholders"/>) returns
-        /// immediately, skipping the full scan for placeholder-free frames.
-        /// Conservative: dead/superseded values also set it; the scan still applies
-        /// last-wins dedup before rejecting. Reset in <c>Clear</c>/
-        /// <c>SwapOutState</c>.
+        /// Frame-level monotonic flag (0/1) set by the record path when an explicit
+        /// entity endpoint or component value may require reference validation (or
+        /// a component layout cannot be verified). When 0, the consume-side scan
+        /// (<see cref="CommandStreamCore.PreflightEntityReferences"/>) returns
+        /// immediately. Conservative: dead/superseded values may also set it; each
+        /// scanner still applies its final-state rules before rejecting. Reset in
+        /// <c>Clear</c>/<c>SwapOutState</c>.
         /// </summary>
-        public int MayNeedEmbeddedPlaceholderPreflight;
+        public int MayNeedEntityReferencePreflight;
         public int CancelledBatchCount;
         public CreateManyGroup[] CreateManyGroups;
         public int CreateManyGroupCount;
@@ -1225,7 +1225,7 @@ public abstract partial class CommandStreamCore
             BatchBuf = [];
             BatchEntities = [];
             BatchCanceled = [];
-            MayNeedEmbeddedPlaceholderPreflight = 0;
+            MayNeedEntityReferencePreflight = 0;
             CancelledBatchCount = 0;
             CreateManyGroups = [];
             CreateManyGroupCount = 0;

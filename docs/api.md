@@ -283,9 +283,8 @@ appended to typed stores and consumed as one deterministic batch.
 component-presence or hierarchy-overlay validation. Call `Validate()` explicitly before
 consuming when fail-before-mutation semantics are required for those contracts.
 `Validate()` does not cover CreateMany group consistency, pending-slot invariants, or
-FrameDelta budgets; those remain consume-time checks. Mandatory embedded-placeholder /
-layout guards and frame-budget checks still run before deferred-id resolution or async
-worker handoff. Without explicit validation, `Submit`/async apply-time failures may
+FrameDelta budgets; those remain consume-time checks. Mandatory explicit/embedded Entity-reference, layout, and frame-budget guards still
+run before deferred-id resolution or async worker handoff. Without explicit validation, `Submit`/async apply-time failures may
 partially mutate the World, and an async reusable target is undefined once its worker
 has started.
 

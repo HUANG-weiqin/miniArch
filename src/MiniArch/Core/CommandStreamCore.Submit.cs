@@ -48,7 +48,7 @@ public abstract partial class CommandStreamCore
         // Keep a deterministic first-violation order: embedded placeholder
         // lifecycle (with last-wins batch dedup), component store presence,
         // then hierarchy overlay.
-        PreflightEmbeddedPlaceholders(useFlagFastPath: false);
+        PreflightEntityReferences(useFlagFastPath: false);
         PreflightComponentStores(_frozen);
         PreflightHierarchyOverlay(_world, _frozen);
     }
@@ -69,9 +69,10 @@ public abstract partial class CommandStreamCore
     /// </para>
     /// <para>
     /// One class of errors is still rejected atomically before any mutation:
-    /// component values referencing a cancelled or unknown deferred placeholder,
-    /// and unresolvable component layouts (nested <see cref="Entity"/> fields /
-    /// LayoutKind.Auto with Entity fields). These are rejected in the consume
+    /// invalid explicit entity endpoints, explicit or embedded references to a
+    /// cancelled/unknown deferred placeholder, and unresolvable component layouts
+    /// (nested <see cref="Entity"/> fields / LayoutKind.Auto with Entity fields).
+    /// These are rejected in the consume
     /// path —before id reservation, free-list realignment and materialization —
     /// with the same contract and message text as <see cref="Validate"/>, so a
     /// violating frame can never be applied locally or emitted into a
@@ -112,14 +113,14 @@ public abstract partial class CommandStreamCore
             // below corrects this divergence so the source's free-list matches the
             // shadow's after Replay.
             //
-            // Embedded-placeholder / layout rejection (T2.7) is flag-driven: the
-            // record path probes every written value (per-type static verdict) and
-            // sets a frame flag only when a value may reference a placeholder (or
-            // its layout is unresolvable). The scan below runs the full last-wins
+            // Entity-reference / layout rejection (T2.7) is flag-driven: the
+            // record path probes component values and explicit endpoints, setting
+            // a frame flag only when a reference may need validation (or a component
+            // layout is unresolvable). The scan below runs the full last-wins
             // pass only for flagged frames — before id reservation, free-list
             // realignment and materialization (atomic; failures consume no id).
             PreValidatePendingSlots();
-            PreflightEmbeddedPlaceholders();
+            PreflightEntityReferences();
             AlignCancelledBatchFreeListOrder();
             ResolveDeferredCreates();
             PreValidatePendingSlots();
@@ -290,14 +291,13 @@ public abstract partial class CommandStreamCore
         }
     }
 
-    private void PreflightEmbeddedPlaceholders(bool useFlagFastPath = true)
+    private void PreflightEntityReferences(bool useFlagFastPath = true)
     {
-        // T2.7: the record path flags this frame only when a written value may
-        // contain a placeholder ref (or its layout could not be verified). A frame
-        // with no such value cannot fail this preflight, so skip the full scan.
-        // Validate() passes useFlagFastPath: false — an explicit full scan.
+        // The record path flags only frames with a placeholder/invalid explicit
+        // endpoint, a component placeholder, or an unresolvable Entity layout.
+        // Validate() passes useFlagFastPath: false for an explicit full scan.
         if (useFlagFastPath &&
-            Volatile.Read(ref _frozen.MayNeedEmbeddedPlaceholderPreflight) == 0)
+            Volatile.Read(ref _frozen.MayNeedEntityReferencePreflight) == 0)
             return;
 
         RejectBatchEmbeddedPlaceholders();
@@ -306,6 +306,18 @@ public abstract partial class CommandStreamCore
         {
             if (store?.HasCommands == true)
                 store.PreflightEmbeddedPlaceholders(this);
+        }
+
+        RejectInvalidExplicitEntityReferences();
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private protected void FlagFrameIfEntityEndpointNeedsPreflight(Entity entity)
+    {
+        if (!entity.IsValid &&
+            Volatile.Read(ref _frozen.MayNeedEntityReferencePreflight) == 0)
+        {
+            Interlocked.Exchange(ref _frozen.MayNeedEntityReferencePreflight, 1);
         }
     }
 
@@ -327,7 +339,7 @@ public abstract partial class CommandStreamCore
         // Entity fields (the common case) pay one load + one perfectly predicted
         // branch. Types with Entity fields probe each field for a placeholder and
         // set the frame flag (monotonic, so probing stops after the first hit).
-        // Unresolvable layouts set HasEntityFields conservatively, so the submit-
+        // Unresolvable layouts set HasEntityFields conservatively, so the consume-
         // time scan runs and throws the layout error at its original timing.
         if (!FieldKinds<T>.HasEntityFields)
             return;
@@ -335,7 +347,7 @@ public abstract partial class CommandStreamCore
         var offsets = FieldKinds<T>.Offsets;
         if (offsets.Length == 0)
         {
-            Interlocked.Exchange(ref _frozen.MayNeedEmbeddedPlaceholderPreflight, 1);
+            Interlocked.Exchange(ref _frozen.MayNeedEntityReferencePreflight, 1);
             return;
         }
 
@@ -345,7 +357,7 @@ public abstract partial class CommandStreamCore
         {
             if (MemoryMarshal.Read<Entity>(bytes[offsets[i]..]).IsPlaceholder)
             {
-                Interlocked.Exchange(ref _frozen.MayNeedEmbeddedPlaceholderPreflight, 1);
+                Interlocked.Exchange(ref _frozen.MayNeedEntityReferencePreflight, 1);
                 return;
             }
         }
@@ -368,7 +380,7 @@ public abstract partial class CommandStreamCore
     private protected void FlagFrameIfMayContainPlaceholder(ComponentType type, ReadOnlySpan<byte> data)
     {
         // Monotonic flag: once set, later probes have nothing to add.
-        if (Volatile.Read(ref _frozen.MayNeedEmbeddedPlaceholderPreflight) == 1)
+        if (Volatile.Read(ref _frozen.MayNeedEntityReferencePreflight) == 1)
             return;
 
         ReadOnlySpan<int> offsets;
@@ -381,7 +393,7 @@ public abstract partial class CommandStreamCore
             // Unresolvable layout: conservative —force the frame scan, which
             // throws the layout error at its original timing (before any
             // world/allocator mutation), mirroring FieldKinds<T>.
-            Interlocked.Exchange(ref _frozen.MayNeedEmbeddedPlaceholderPreflight, 1);
+            Interlocked.Exchange(ref _frozen.MayNeedEntityReferencePreflight, 1);
             return;
         }
 
@@ -392,18 +404,50 @@ public abstract partial class CommandStreamCore
         {
             if (MemoryMarshal.Read<Entity>(data[offsets[i]..]).IsPlaceholder)
             {
-                Interlocked.Exchange(ref _frozen.MayNeedEmbeddedPlaceholderPreflight, 1);
+                Interlocked.Exchange(ref _frozen.MayNeedEntityReferencePreflight, 1);
                 return;
             }
         }
     }
 
-    // ── Consume-side embedded-placeholder / layout rejection (T2.5) ────
+    private void RejectInvalidExplicitEntityReferences()
+    {
+        for (var i = 0; i < _frozen.DestroyCount; i++)
+            RejectExplicitEntityReference(_frozen.DestroyEntities[i], "Destroy");
+
+        foreach (var (child, intent) in _frozen.HierarchyByChild)
+        {
+            RejectExplicitEntityReference(child, "Hierarchy child");
+            if (intent.IsAdd)
+                RejectExplicitEntityReference(intent.Parent, "Hierarchy parent");
+        }
+    }
+
+    private void RejectExplicitEntityReference(Entity entity, string role)
+    {
+        if (entity.IsPlaceholder)
+        {
+            if (TryGetPendingBatch(entity, out _))
+                return;
+
+            throw new InvalidOperationException(
+                $"{role} references cancelled or unknown placeholder {entity}.");
+        }
+
+        if (!entity.IsValid)
+        {
+            throw new InvalidOperationException(
+                $"{role} has invalid entity {entity}; real entities require Id >= 0 and Version > 0.");
+        }
+    }
+
+    // ── Consume-side entity-reference / layout rejection (T2.5) ──────
     //
     // Runs in the consume path (Submit / Snapshot / SnapshotInto / async handoff)
     // before any id reservation, free-list realignment, materialization, delta
-    // emission or worker handoff. Rejects: (a) component values referencing a
-    // cancelled or unknown deferred placeholder, and (b) component types whose
+    // emission or worker handoff. Rejects: (a) invalid explicit Destroy/hierarchy
+    // endpoints or their cancelled/unknown placeholders, (b) component values
+    // referencing a cancelled/unknown placeholder, and (c) component types whose
     // layout cannot be resolved (nested Entity / LayoutKind.Auto with Entity
     // fields) — the same contract and message text as Validate(). Because it runs
     // before ResolveDeferredCreates, a rejection consumes no allocator id/version
@@ -467,7 +511,7 @@ public abstract partial class CommandStreamCore
     /// value-scanned (per-type verdict cached in <see cref="_scanFieldKind"/>);
     /// the batch chain is walked head-first so only the newest non-removed value
     /// of each type is examined —matching materialize/emit last-wins semantics
-    /// without a second dedup pass. Shared by <see cref="PreflightEmbeddedPlaceholders"/>
+    /// without a second dedup pass. Shared by <see cref="PreflightEntityReferences"/>
     /// (Validate) and the consume entry points (Submit/Snapshot/async handoff).
     /// </summary>
     /// <remarks>
@@ -632,11 +676,11 @@ public abstract partial class CommandStreamCore
         if (_deferredEntities)
             ThrowIfSnapshotHasImmediateEntities();
 
-        // Embedded-placeholder / layout rejection (T2.7) is flag-driven: the
-        // record path sets the frame flag only for values that may reference a
-        // placeholder; the scan below runs only for flagged frames — before any
+        // Entity-reference / layout rejection (T2.7) is flag-driven: the record
+        // path flags component values or explicit endpoints that may need checking;
+        // the scan below runs only for flagged frames — before any
         // deferred resolution or delta emission (no divergence).
-        PreflightEmbeddedPlaceholders();
+        PreflightEntityReferences();
         PreflightFrameDeltaBudget(_deferredEntities);
         if (!_deferredEntities)
             ResolveDeferredCreates();
@@ -686,10 +730,10 @@ public abstract partial class CommandStreamCore
         if (_deferredEntities)
             ThrowIfSnapshotHasImmediateEntities();
 
-        // Embedded-placeholder / layout rejection (T2.7) is flag-driven: the
-        // scan below runs only for flagged frames — before any deferred
-        // resolution, target clear or delta emission.
-        PreflightEmbeddedPlaceholders();
+        // Entity-reference / layout rejection (T2.7) is flag-driven: the scan
+        // below runs only for flagged frames — before any deferred resolution,
+        // target clear or delta emission.
+        PreflightEntityReferences();
         PreflightFrameDeltaBudget(_deferredEntities);
         if (!_deferredEntities)
             ResolveDeferredCreates();
@@ -765,7 +809,7 @@ public abstract partial class CommandStreamCore
     /// <exception cref="InvalidOperationException">
     /// The recorded frame exceeds a FrameDelta budget (detected before the World is
     /// submitted), or a consume-time contract violation surfaces during submit.
-    /// Embedded-placeholder/layout violations are rejected before the submit/worker
+    /// Entity-reference/layout violations are rejected before the submit/worker
     /// handoff (atomically, no mutations); other consume-time violations may leave
     /// earlier commands applied. Call <see cref="Validate"/> first to reject the
     /// component-presence and hierarchy violations it covers before any mutation.
@@ -823,8 +867,8 @@ public abstract partial class CommandStreamCore
     /// </para>
     /// <para>
     /// <b>On failure, <paramref name="target"/> content is undefined.</b>
-    /// Embedded-placeholder/layout violations are rejected before the worker
-    /// starts and leave <paramref name="target"/> untouched; other consume-time
+    /// Entity-reference/layout violations are rejected before the worker starts
+    /// and leave <paramref name="target"/> untouched; other consume-time
     /// violations may clear or partially write <paramref name="target"/> (the
     /// worker may have begun building the delta before the failure surfaces).
     /// Treat <paramref name="target"/> as unusable after an exception.
@@ -838,7 +882,7 @@ public abstract partial class CommandStreamCore
     /// </returns>
     /// <exception cref="InvalidOperationException">
     /// The recorded frame exceeds a FrameDelta budget, or a consume-time contract
-    /// violation surfaces during submit. Embedded-placeholder/layout violations are
+    /// violation surfaces during submit. Entity-reference/layout violations are
     /// rejected before the submit/worker handoff (atomically, no mutations); other
     /// consume-time violations may leave earlier commands applied. Call
     /// <see cref="Validate"/> first to reject the component-presence and hierarchy
@@ -883,7 +927,7 @@ public abstract partial class CommandStreamCore
             // frame fails before free-list realignment, real-id reservation, state
             // swap and worker start), free-list alignment, and deferred resolution.
             PreValidatePendingSlots();
-            PreflightEmbeddedPlaceholders();
+            PreflightEntityReferences();
 
             // Reject an oversized frame before free-list realignment or real-id
             // reservation. Unresolved placeholder endpoints are conservatively
@@ -1127,7 +1171,7 @@ public abstract partial class CommandStreamCore
         foreach (var store in _frozen.Stores)
             store?.Clear();
 
-        _frozen.MayNeedEmbeddedPlaceholderPreflight = 0;
+        _frozen.MayNeedEntityReferencePreflight = 0;
         _frozen.DestroyCount = 0;
         _frozen.PendingBatchCount = 0;
         _frozen.CancelledBatchCount = 0;

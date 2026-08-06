@@ -25,14 +25,14 @@ updated: 2026-08-06
 
 ### 当前复验快照
 
-验证 runtime commit：`298880e`（2026-08-06；本页文档改动不改变 runtime）。
+验证 runtime tree：本页所在 commit（2026-08-06）。
 
 | 门禁 | 当前结果 |
 |---|---|
-| `MiniArch.Tests` Release | 1150 / 1150 PASS |
+| `MiniArch.Tests` Release | 1157 / 1157 PASS |
 | `HeroPipeline.Tests` Release | 5 / 5 PASS |
-| HeroComing Movement | 1984.6 rounds/s，阈值 1642 |
-| HeroComing Attack | 1178.9 rounds/s，阈值 997 |
+| HeroComing Movement | 1981.2 rounds/s，阈值 1642 |
+| HeroComing Attack | 1193.5 rounds/s，阈值 997 |
 | HeroComing memory | OK；baseline 未更新 |
 | single-host / multi-host soak | 本轮未复跑；只作为下节历史证据，不冒充当前 commit 结果 |
 
@@ -48,7 +48,7 @@ updated: 2026-08-06
 - **确定性是核心契约**：同样的初始状态、输入序列、组件注册顺序和合法调用时序，Submit 与 Snapshot→Replay 必须得到相同 logical state 与 allocator 演化。
 - **用版本化证据，不用绝对措辞**：禁止“完全正确”“已证明不存在同类 bug”“发布级正确性”之类无法由有限测试推出的结论。
 - **Checksum 是 oracle，不是事务机制**：它能发现结果分歧，不能撤销已经发生的部分修改。
-- **语义校验显式、能力守卫强制**：`CommandStream.Validate()` 显式检查 placeholder/layout、组件 presence 与 hierarchy overlay，且不改 World；默认 consume 不隐式执行 presence/hierarchy 校验。pending slot、embedded-placeholder/layout、FrameDelta 预算与 async ownership 仍在必须的 consume 边界强制守卫。两者都不是通用 rollback journal。
+- **语义校验显式、能力守卫强制**：`CommandStream.Validate()` 显式检查 placeholder/layout、组件 presence 与 hierarchy overlay，且不改 World；默认 consume 不隐式执行 presence/hierarchy 校验。pending slot、显式/embedded Entity 引用与布局、FrameDelta 预算、async ownership 仍在必须的 consume 边界强制守卫。两者都不是通用 rollback journal。
 
 ## 认知模型
 

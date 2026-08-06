@@ -606,7 +606,7 @@ public abstract partial class CommandStreamCore
     {
         // T2.7 record-path probe: flag the frame if this value may contain a
         // placeholder ref (per-type static verdict; probe never throws). The
-        // submit-time scan rejects flagged frames before any mutation.
+        // consume-time scan rejects flagged frames before any mutation.
         FlagFrameIfMayContainPlaceholder(component);
 
         var size = Unsafe.SizeOf<T>();

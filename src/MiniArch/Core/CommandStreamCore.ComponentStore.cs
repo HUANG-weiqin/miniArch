@@ -22,14 +22,14 @@ public abstract partial class CommandStreamCore
     /// fields (or layout unknown — conservative). Initialization is idempotent
     /// and race-tolerant (parallel recording may initialize concurrently; the
     /// verdict is identical). Layout resolution failures (nested Entity /
-    /// LayoutKind.Auto with Entity fields) are surfaced by the submit-time scan,
+    /// LayoutKind.Auto with Entity fields) are surfaced by the consume-time scan,
     /// not here —probing never throws.
     /// </summary>
     private protected static class FieldKinds<T> where T : unmanaged
     {
         // T2.8: readonly fields initialized once by the static ctor. The ctor never
         // throws —layout failures (nested Entity / LayoutKind.Auto with Entity
-        // fields) are surfaced by the submit-time scan, not here. readonly lets JIT
+        // fields) are surfaced by the consume-time scan, not here. readonly lets JIT
         // hoist/fold the single-field read in the probe helper.
         internal static readonly bool HasEntityFields;
         internal static readonly int[] Offsets;
@@ -44,7 +44,7 @@ public abstract partial class CommandStreamCore
             catch (InvalidOperationException)
             {
                 // Unresolvable layout: conservative —probe (force the frame scan),
-                // and let the submit-time scan throw the layout error at its
+                // and let the consume-time scan throw the layout error at its
                 // original timing (before any world/allocator mutation).
                 Offsets = [];
                 HasEntityFields = true;

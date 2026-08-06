@@ -4267,6 +4267,77 @@ public sealed class DeferredCreateTests
     }
 
     [Fact]
+    public void BUG_hierarchy_placeholder_is_rejected_before_submit_mutates_existing_relation()
+    {
+        using var world = new World();
+        var originalParent = world.CreateEmpty();
+        var child = world.CreateEmpty();
+        world.AddChild(originalParent, child);
+        var stream = MakeStream(world);
+
+        stream.AddChild(new Entity(-1, 123), child);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+        Assert.Contains("cancelled or unknown placeholder", ex.Message);
+        Assert.True(world.TryGetParent(child, out var actualParent));
+        Assert.Equal(originalParent, actualParent);
+    }
+
+    [Fact]
+    public void BUG_snapshot_rejects_unknown_hierarchy_placeholder_before_returning_delta()
+    {
+        using var world = new World();
+        var child = world.CreateEmpty();
+        var stream = MakeStream(world);
+
+        stream.AddChild(new Entity(-1, 123), child);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Snapshot());
+        Assert.Contains("cancelled or unknown placeholder", ex.Message);
+    }
+
+    [Fact]
+    public void Contract_superseded_invalid_hierarchy_parent_is_ignored()
+    {
+        using var world = new World();
+        var validParent = world.CreateEmpty();
+        var child = world.CreateEmpty();
+        var stream = MakeStream(world);
+
+        stream.AddChild(new Entity(-1, 123), child);
+        stream.AddChild(validParent, child);
+
+        var delta = stream.Snapshot();
+        delta.Validate();
+    }
+
+    [Fact]
+    public void BUG_snapshot_rejects_unknown_hierarchy_child_placeholder()
+    {
+        using var world = new World();
+        var stream = MakeStream(world);
+
+        stream.RemoveChild(new Entity(-1, 123));
+
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Snapshot());
+        Assert.Contains("cancelled or unknown placeholder", ex.Message);
+    }
+
+    [Theory]
+    [InlineData(-1, -1)]
+    [InlineData(-2, 1)]
+    [InlineData(0, 0)]
+    public void BUG_snapshot_rejects_invalid_explicit_entity_shapes(int id, int version)
+    {
+        using var world = new World();
+        var stream = new CommandStream(world);
+        stream.Destroy(new Entity(id, version));
+
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Snapshot());
+        Assert.Contains("invalid entity", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void BUG_SnapshotInto_rejects_cancelled_embedded_placeholder_before_clearing_target()
     {
         using var world = new World();

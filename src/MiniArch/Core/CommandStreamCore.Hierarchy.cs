@@ -11,7 +11,11 @@ public abstract partial class CommandStreamCore
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected void AddChildCore(Entity parent, Entity child)
-        => _frozen.HierarchyByChild[child] = new HierarchyIntent(true, parent);
+    {
+        FlagFrameIfEntityEndpointNeedsPreflight(parent);
+        FlagFrameIfEntityEndpointNeedsPreflight(child);
+        _frozen.HierarchyByChild[child] = new HierarchyIntent(true, parent);
+    }
 
     /// <summary>
     /// Core RemoveChild logic. Caller handles synchronization.
@@ -19,7 +23,10 @@ public abstract partial class CommandStreamCore
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     protected void RemoveChildCore(Entity child)
-        => _frozen.HierarchyByChild[child] = new HierarchyIntent(false, default);
+    {
+        FlagFrameIfEntityEndpointNeedsPreflight(child);
+        _frozen.HierarchyByChild[child] = new HierarchyIntent(false, default);
+    }
 
     private void ApplyHierarchy()
     {

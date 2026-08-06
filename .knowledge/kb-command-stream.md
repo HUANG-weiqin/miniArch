@@ -33,9 +33,9 @@ updated: 2026-08-06
 
 ```text
 Create/Clone ──→ pending batch ──→ materialize or emit Create
-Add/Set/Remove(existing) ──→ ComponentStore<T> ──→ prepare/prune → (flag 驱动占位符守卫) → apply/emit
-AddChild/RemoveChild ──→ final hierarchy overlay ──→ (语义校验可选：Validate) → detach affected children → apply/emit final adds
-Destroy ──→ destroy list ──→ final phase
+Add/Set/Remove(existing) ──→ ComponentStore<T> ──→ prepare/prune → (flag 驱动 Entity 引用守卫) → apply/emit
+AddChild/RemoveChild ──→ final hierarchy overlay ──→ endpoint wire 守卫 → (语义校验可选：Validate) → detach/apply
+Destroy ──→ destroy list ──→ entity-shape wire 守卫 → final phase
 ```
 
 Submit 与 BuildDelta 的阶段顺序统一为：Create → Hierarchy → Component Ops → Destroy。改变阶段或集合顺序前，必须证明 Submit 与 Snapshot→Replay 仍收敛且 free-list 演化一致。
@@ -86,12 +86,13 @@ pending/foreign placeholder 的 `IsPlaceholder` 仍在 record 阶段用于本地
 
 #### 库能力守卫（P0 裁决，不可移入 Validate）
 
-占位符引用（`Entity(-1, seq)`）与不可解析布局（nested Entity / LayoutKind.Auto + Entity 字段）**绝不落库**——这是 lockstep 分叉防线（P0#1/P0#2：源端静默写入 → 副本 Replay 的 `GetOffsets`/`ResolveInPlace` 抛 → 分叉），不是语义校验：
+未知/已取消占位符引用（`Entity(-1, seq)`）、非法显式 entity shape 与不可解析布局（nested Entity / LayoutKind.Auto + Entity 字段）**绝不落库/落 wire**——这是 lockstep 分叉防线（源端静默应用/发出 → 副本 Replay/`FrameDelta.Validate()` 拒绝），不是组件存在性或 hierarchy 环等语义校验：
 
 - **record 期泛型静态探测**：`FieldKinds<T>`（`static readonly bool HasEntityFields` + `static readonly int[] Offsets` + 静态 ctor，ctor 永不抛——布局失败保守置 `HasEntityFields=true`，由扫描器抛）；无 Entity 字段类型每值 1 次 static 读 + 1 分支。探测点 = `WritePendingComponent<T>`（batch 写前）+ `CommandStream/ParallelCommandStream.Add/Set<T>` 的 store 分支（5 处）。
 - **Clone raw 导入探测（非泛型）**：Clone 从 World/raw archetype 复制字节时无泛型类型可用，走 `FlagFrameIfMayContainPlaceholder(ComponentType, ReadOnlySpan<byte>)`：`GetOffsets` 成功仅在实际 top-level Entity 字段为 placeholder 时置 flag（值探测）；`InvalidOperationException`（nested Entity / LayoutKind.Auto + Entity 字段）保守置 flag 但 Clone 期不抛（布局错误由 consume 扫描器在原有时机抛）；flag 已为 1 直接返回。探测点 = 单线程 `CloneMaterializedComponents` 的 merger **最终有效 values**（不是 raw archetype 副本——避免被 store overlay 覆盖/移除的旧 world 值误报）+ 并行 `Clone` root 与 `CloneChildrenFromWorld` child 两个 raw copy 点，均在 raw bytes 复制完成后、`CommitBatchComponent` 前。`CopyComponentsFromBatch`（pending source clone）的字节源均由已探测的提交路径产生，无需重复探测；`WritePendingComponent`/store 泛型热路径不改。
-- **帧级 flag**：`FrozenState.MayNeedEmbeddedPlaceholderPreflight`（`Interlocked` 置位，`Clear`/`SwapOutState` 复位）。
-- **consume 扫描器**：Submit/Snapshot/SnapshotInto/PrepareAsyncHandoff 在 reserve/free-list/materialize/emit **前**调 `PreflightEmbeddedPlaceholders()`——首行 volatile 读 flag，0 直接 return；1 时全量扫（batch last-wins dedup：id<512 走固定 bitset、id≥512 与 materialize/emit 共用线性 fallback；store lazy-offsets；deferred-aware：同帧合法 placeholder 放行）。**原子拒绝**：失败不消耗 id/version（v1 保留）。
+- **显式 endpoint 探测**：AddChild/RemoveChild 的 placeholder/非法 shape 与 Destroy 的非法 shape 也置同一 flag；扫描 final hierarchy overlay（避免被后写覆盖的旧 intent 假拒绝）和 destroy list。合法 real 只做可内联 `Entity.IsValid` 分支，flag 已置位后不重复 locked exchange。
+- **帧级 flag**：`FrozenState.MayNeedEntityReferencePreflight`（`Interlocked` 置位，`Clear`/`SwapOutState` 复位）。
+- **consume 扫描器**：Submit/Snapshot/SnapshotInto/PrepareAsyncHandoff 在 reserve/free-list/materialize/emit **前**调 `PreflightEntityReferences()`——首行 volatile 读 flag，0 直接 return；1 时扫描 final explicit endpoints + component refs/layout（batch last-wins：id<512 走固定 bitset、id≥512 与 materialize/emit 共用线性 fallback；store lazy-offsets；deferred-aware：同帧合法 placeholder 放行）。**原子拒绝**：失败不消耗 id/version（v1 保留）、不先 detach hierarchy、不会发出本地 `FrameDelta.Validate()` 拒绝的 wire。
 - `Validate()` 绕过 flag 全量扫（`useFlagFastPath: false`，用户显式调用）。
 
 **历史**：preflight 序列（0fca3eb，2026-07-25 引入 Submit 隐式 4 项 preflight）→ 08-05 flag 优化（`MayContainPlaceholder` record 探测 + 帧级 flag）→ **08-06 语义校验抽为 `Validate()` + 守卫保留**（探测改 `FieldKinds<T>` 泛型静态，修复 P0#1/P0#2）。期间经历 T2.5（统一扫描器，-7.6%）、T2.6（融合进既有遍历，-5.4%）两版性能实验后定稿为 flag 驱动方案（-3~-6% 噪声带，门控 A/B 见 `kb-hero-pipeline-regression.md`）。
@@ -104,11 +105,11 @@ Set-only 且全 store 无结构命令时，`PrepareForConsume` 在 prune stale e
 
 ### async frozen-state ownership
 
-`SubmitAndSnapshotAsync` / `SubmitAndSnapshotIntoAsync` 在 active state 仍由调用线程独占时完成：flag 驱动占位符守卫（`PreflightEmbeddedPlaceholders()`，仅 flagged 帧全量扫）与 FrameDelta 整帧预算 preflight；real-id 输出中尚未 resolve 的 placeholder endpoint 按合法 Entity 最大 wire width（5B id + 5B version）计费。守卫失败时不消耗 id、不 handoff、不启动 worker。之后才允许 free-list 对齐、placeholder real-id resolve、state swap、worker 启动和本地 materialize。worker 创建后立即登记 `_pendingFrozen/_pendingTask` ownership。若内部 Submit 随后失败，先观察 worker 完成再回收 frozen state，并保留原同步异常。
+`SubmitAndSnapshotAsync` / `SubmitAndSnapshotIntoAsync` 在 active state 仍由调用线程独占时完成：flag 驱动 Entity 引用/布局守卫（`PreflightEntityReferences()`，仅 flagged 帧全量扫）与 FrameDelta 整帧预算 preflight；real-id 输出中尚未 resolve 的 placeholder endpoint 按合法 Entity 最大 wire width（5B id + 5B version）计费。守卫失败时不消耗 id、不 handoff、不启动 worker。之后才允许 free-list 对齐、placeholder real-id resolve、state swap、worker 启动和本地 materialize。worker 创建后立即登记 `_pendingFrozen/_pendingTask` ownership。若内部 Submit 随后失败，先观察 worker 完成再回收 frozen state，并保留原同步异常。
 
 async real-id 输出会省略仍是 placeholder 的 cancelled deferred batch：这类 Create 从未触碰 source allocator，因此不能为它发 Reserve+Release；immediate real-id cancellation 仍必须发 Reserve+Release，镜像 record 期已经发生的 reserve/release。
 
-因此“不被本地 Submit、占位符守卫或 FrameDelta 预算接受的 frame”不会先交给后台 worker。**target 语义（`SubmitAndSnapshotIntoAsync`）**：占位符/布局守卫失败发生在 `target.Clear()` 前 → target 未动；其他 consume 期错误（如存在性违规）可能已 Clear 或部分写入 → **失败时 target 内容未定义**（旧 “target remains unchanged” 承诺已撤销，由 `Contract_*` 测试锁定）。
+因此“不被本地 Submit、Entity 引用/布局守卫或 FrameDelta 预算接受的 frame”不会先交给后台 worker。**target 语义（`SubmitAndSnapshotIntoAsync`）**：mandatory 守卫失败发生在 `target.Clear()` 前 → target 未动；其他 consume 期错误（如存在性违规）可能已 Clear 或部分写入 → **失败时 target 内容未定义**（旧 “target remains unchanged” 承诺已撤销，由 `Contract_*` 测试锁定）。
 
 ### deferred entity 两种模式
 
@@ -121,7 +122,7 @@ placeholder 只在当前 stream/batch 内有效。跨帧持有解析结果使用
 
 ### FrameDelta 结构与预算边界
 
-生产端与消费端共享硬上限：`MaxOpsPerFrame = 1_000_000`、`MaxFrameBytes = 16 MiB`。每个 `FrameDelta.Add*` 在写任何字节前精确检查完整 operation，避免超限时留下半条 op；`Snapshot` / `SnapshotInto` / 两条 async submit+snapshot 路径在 deferred id resolution、改写 target、swap frozen state 或提交 World 前先跑 flag 驱动占位符守卫与整帧预算 preflight。real-id 模式无法在不修改 allocator 的前提下知道 placeholder 将得到多宽的 id/version，因此 pending Reserve/Create 与 hierarchy endpoint 预先按最大 10B Entity wire 计费。因此 producer 不会返回随后被副本 Replay 拒绝的 dangling-placeholder delta，预算失败也不会消费 allocator id/version。
+生产端与消费端共享硬上限：`MaxOpsPerFrame = 1_000_000`、`MaxFrameBytes = 16 MiB`。每个 `FrameDelta.Add*` 在写任何字节前精确检查完整 operation，避免超限时留下半条 op；`Snapshot` / `SnapshotInto` / 两条 async submit+snapshot 路径在 deferred id resolution、改写 target、swap frozen state 或提交 World 前先跑 flag 驱动 Entity 引用/布局守卫与整帧预算 preflight。real-id 模式无法在不修改 allocator 的前提下知道 placeholder 将得到多宽的 id/version，因此 pending Reserve/Create 与 hierarchy endpoint 预先按最大 10B Entity wire 计费。因此 producer 不会返回随后被副本 Replay 拒绝的 dangling-placeholder delta，预算失败也不会消费 allocator id/version。
 
 常规帧先用 O(store 数) 的保守 upper bound 证明安全，只有接近上限时才扫描，因此 `snapshot-only` A/B（10k Set，Release，1s warmup + 3s measure，各 3 次中位数）保持 42909.3 → 43014.0 ticks/s（+0.2%，噪声内）。已解析 endpoint 的扫描与实际 writer 共用 sizing 规则，由 `Budget_matches_writer_for_every_operation_shape` 守卫；未解析 real-id placeholder 则由 `Real_id_budget_uses_max_wire_width_for_unresolved_placeholder_endpoints` 锁定保守上界。
 
