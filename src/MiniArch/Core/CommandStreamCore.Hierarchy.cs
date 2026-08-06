@@ -137,16 +137,24 @@ public abstract partial class CommandStreamCore
     }
 
     private static void AccumulateHierarchyDeltaBudget(
-        ref FrameDelta.Budget budget, FrozenState frozen)
+        ref FrameDelta.Budget budget, FrozenState frozen, bool deferredMode)
     {
         foreach (var (child, intent) in frozen.HierarchyByChild)
         {
             if (IsDestroyedThisFrame(child, frozen)) continue;
             if (intent.IsAdd && IsDestroyedThisFrame(intent.Parent, frozen)) continue;
 
-            budget.AddRemoveChild(child);
+            // Real-id output is priced before deferred resolution. A placeholder
+            // endpoint can become any legal real id/version, so use the maximum
+            // encoded width and fail before touching the source allocator.
+            var useMaxChildWireSize = !deferredMode && child.IsPlaceholder;
+            budget.AddRemoveChild(child, useMaxChildWireSize);
             if (intent.IsAdd)
-                budget.AddAddChild(intent.Parent, child);
+            {
+                var useMaxParentWireSize = !deferredMode && intent.Parent.IsPlaceholder;
+                budget.AddAddChild(
+                    intent.Parent, child, useMaxParentWireSize, useMaxChildWireSize);
+            }
         }
     }
 

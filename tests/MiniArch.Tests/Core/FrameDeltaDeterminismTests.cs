@@ -763,6 +763,25 @@ public sealed class FrameDeltaDeterminismTests
     }
 
     [Fact]
+    public void Real_id_budget_uses_max_wire_width_for_unresolved_placeholder_endpoints()
+    {
+        var placeholder = new Entity(-1, 0);
+        var budget = new FrameDelta.Budget();
+
+        budget.AddReserve(placeholder, useMaxEntityWireSize: true);       // 1 + 10
+        budget.AddCreate(
+            placeholder, ReadOnlySpan<RawComponentValue>.Empty,
+            useMaxEntityWireSize: true);                                 // 1 + 10 + 1
+        budget.AddRemoveChild(placeholder, useMaxEntityWireSize: true);   // 1 + 10
+        budget.AddAddChild(
+            placeholder, placeholder,
+            useMaxParentWireSize: true, useMaxChildWireSize: true);       // 1 + 10 + 10
+
+        Assert.Equal(4, budget.OpCount);
+        Assert.Equal(55, budget.ByteCount);
+    }
+
+    [Fact]
     public unsafe void Budget_matches_writer_for_every_operation_shape()
     {
         var first = new Entity(0, 1);

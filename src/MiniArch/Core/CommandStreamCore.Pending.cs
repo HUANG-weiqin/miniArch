@@ -329,23 +329,30 @@ public abstract partial class CommandStreamCore
             if (canceled && entity.IsPlaceholder)
                 continue;
 
-            budget.AddReserve(entity);
+            // Real-id output is budgeted before deferred resolution so budget
+            // failure cannot consume allocator state. An unresolved placeholder
+            // may resolve to any legal id/version width; charge the 10-byte
+            // maximum for both endpoint occurrences.
+            var useMaxEntityWireSize = entity.IsPlaceholder;
+            budget.AddReserve(entity, useMaxEntityWireSize);
 
             if (canceled)
                 budget.AddRelease(entity);
             else
-                AccumulateCreateDeltaBudget(ref budget, view, i);
+                AccumulateCreateDeltaBudget(ref budget, view, i, useMaxEntityWireSize);
         }
     }
 
     private static void AccumulateCreateDeltaBudget(
-        ref FrameDelta.Budget budget, in PendingBatchView view, int index)
+        ref FrameDelta.Budget budget, in PendingBatchView view, int index,
+        bool useMaxEntityWireSize = false)
     {
         var entity = view.Entities[index];
         var rawCount = view.CompCounts[index];
         if (rawCount == 0)
         {
-            budget.AddCreate(entity, ReadOnlySpan<RawComponentValue>.Empty);
+            budget.AddCreate(
+                entity, ReadOnlySpan<RawComponentValue>.Empty, useMaxEntityWireSize);
             return;
         }
 
@@ -354,7 +361,8 @@ public abstract partial class CommandStreamCore
         try
         {
             var componentCount = CollectCreateComponents(view, index, rented, out fillCount);
-            budget.AddCreate(entity, rented.AsSpan(0, componentCount));
+            budget.AddCreate(
+                entity, rented.AsSpan(0, componentCount), useMaxEntityWireSize);
         }
         finally
         {

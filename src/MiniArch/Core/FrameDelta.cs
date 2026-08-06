@@ -456,6 +456,11 @@ public sealed class FrameDelta
 
     internal struct Budget
     {
+        // A real Entity endpoint contains two 5-byte varints at most (biased id
+        // and version). Real-id producers budget unresolved placeholders before
+        // touching the World allocator, so those endpoints use this width.
+        private const int MaxEntityWireSize = 10;
+
         private long _byteCount;
         private int _opCount;
 
@@ -463,12 +468,24 @@ public sealed class FrameDelta
         internal int OpCount => _opCount;
 
         internal void AddReserve(Entity entity) => AddOperation(GetEntityOperationWireSize(entity));
+
+        internal void AddReserve(Entity entity, bool useMaxEntityWireSize) =>
+            AddOperation(1 + GetBudgetEntityWireSize(entity, useMaxEntityWireSize));
+
         internal void AddRelease(Entity entity) => AddOperation(GetEntityOperationWireSize(entity));
         internal void AddDestroy(Entity entity) => AddOperation(GetEntityOperationWireSize(entity));
         internal void AddRemoveChild(Entity child) => AddOperation(GetEntityOperationWireSize(child));
 
+        internal void AddRemoveChild(Entity child, bool useMaxEntityWireSize) =>
+            AddOperation(1 + GetBudgetEntityWireSize(child, useMaxEntityWireSize));
+
         internal void AddAddChild(Entity parent, Entity child) =>
             AddOperation(GetAddChildOperationWireSize(parent, child));
+
+        internal void AddAddChild(
+            Entity parent, Entity child, bool useMaxParentWireSize, bool useMaxChildWireSize) =>
+            AddOperation(1L + GetBudgetEntityWireSize(child, useMaxChildWireSize) +
+                GetBudgetEntityWireSize(parent, useMaxParentWireSize));
 
         internal void AddRemove(Entity entity, ComponentType componentType) =>
             AddOperation(GetRemoveOperationWireSize(entity, componentType));
@@ -478,6 +495,19 @@ public sealed class FrameDelta
 
         internal void AddCreate(Entity entity, ReadOnlySpan<RawComponentValue> components) =>
             AddOperation(GetCreateOperationWireSize(entity, components));
+
+        internal void AddCreate(
+            Entity entity, ReadOnlySpan<RawComponentValue> components, bool useMaxEntityWireSize)
+        {
+            var operationBytes = GetCreateOperationWireSize(entity, components);
+            if (useMaxEntityWireSize)
+                operationBytes += MaxEntityWireSize - GetEntityWireSize(entity);
+            AddOperation(operationBytes);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int GetBudgetEntityWireSize(Entity entity, bool useMaxEntityWireSize) =>
+            useMaxEntityWireSize ? MaxEntityWireSize : GetEntityWireSize(entity);
 
         private void AddOperation(long operationBytes)
         {

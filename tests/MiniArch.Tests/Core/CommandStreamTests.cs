@@ -742,6 +742,61 @@ public sealed class CommandStreamTests
         Assert.Equal(7, world.Get<FrameBlob8K>(entity).Marker);
     }
 
+    [Fact]
+    public async Task BUG_real_id_budget_rejects_before_deferred_resolution()
+    {
+        Assert.Equal(8192, Unsafe.SizeOf<FrameBlob8K>());
+
+        static int VarintSize(int value)
+        {
+            if (value < 0) return 5;
+            if (value < 128) return 1;
+            if (value < 16384) return 2;
+            if (value < 2097152) return 3;
+            if (value < 268435456) return 4;
+            return 5;
+        }
+
+        // Real ids at and above 16,383 need a 3-byte encoded id. Deferred
+        // placeholders in this frame use only 1-2 bytes for their sequence.
+        // Fill the remaining budget with exact-size Set operations so the
+        // placeholder estimate fits but the resolved real-id wire does not.
+        const int realIdPadding = 16_383;
+        const int deferredCount = 5_000;
+        var placeholderBytes = 0;
+        for (var seq = 0; seq < deferredCount; seq++)
+            placeholderBytes += 5 + 2 * VarintSize(seq); // Reserve + empty Create
+
+        var componentType = Component<FrameBlob8K>.ComponentType;
+        var setWireBytes = 1 + 4 + VarintSize(componentType.Value) +
+            VarintSize(Unsafe.SizeOf<FrameBlob8K>()) + Unsafe.SizeOf<FrameBlob8K>();
+        var fillerCount = (FrameDelta.MaxFrameBytes - placeholderBytes) / setWireBytes;
+
+        using var world = new World();
+        for (var i = 0; i < realIdPadding; i++)
+            world.CreateEmpty();
+
+        var value = new FrameBlob8K { Marker = 7 };
+        var stream = new CommandStream(world) { DeferredEntities = true };
+        for (var i = 0; i < fillerCount; i++)
+        {
+            var entity = world.Create(value);
+            stream.Set(entity, value);
+        }
+        for (var i = 0; i < deferredCount; i++)
+            _ = stream.Create();
+
+        var countBefore = world.EntityCount;
+        var checksumBefore = world.CanonicalChecksum();
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await stream.SubmitAndSnapshotAsync());
+
+        Assert.Contains("MaxFrameBytes", ex.Message);
+        Assert.Equal(countBefore, world.EntityCount);
+        Assert.Equal(checksumBefore, world.CanonicalChecksum());
+        Assert.Equal(new Entity(countBefore, 1), world.CreateEmpty());
+    }
+
     // ══════════════════════════════════════════════════════════—
     // Cross-world replay
     // ══════════════════════════════════════════════════════════—

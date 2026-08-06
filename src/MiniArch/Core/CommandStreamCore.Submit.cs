@@ -885,8 +885,9 @@ public abstract partial class CommandStreamCore
             PreValidatePendingSlots();
             PreflightEmbeddedPlaceholders();
 
-            // Delta sizing is independent of placeholder resolution. Reject an
-            // oversized frame before free-list realignment or real-id reservation.
+            // Reject an oversized frame before free-list realignment or real-id
+            // reservation. Unresolved placeholder endpoints are conservatively
+            // priced at the maximum real Entity wire width.
             PreflightFrameDeltaBudget(deferredMode: false);
 
             // Keep allocator ordering identical to Submit/Replay before deferred
@@ -962,7 +963,7 @@ public abstract partial class CommandStreamCore
 
         var budget = new FrameDelta.Budget();
         AccumulatePendingEntitiesDeltaBudget(ref budget, _frozen.Pending, deferredMode);
-        AccumulateHierarchyDeltaBudget(ref budget, _frozen);
+        AccumulateHierarchyDeltaBudget(ref budget, _frozen, deferredMode);
 
         foreach (var store in _frozen.Stores)
         {
