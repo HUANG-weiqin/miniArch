@@ -355,6 +355,53 @@ public abstract partial class CommandStreamCore
         }
     }
 
+    /// <summary>
+    /// Non-generic record-path probe for raw/dynamic component values imported
+    /// into the batch buffer (Clone's archetype raw copy — see
+    /// <see cref="CommandStreamCore.CloneMaterializedComponents"/> and
+    /// <see cref="ParallelCommandStream.Clone"/>). Same contract as the generic
+    /// probe, but takes a <see cref="ComponentType"/> + raw bytes because Clone
+    /// copies bytes, not typed values. <see cref="EntityFieldResolver.GetOffsets"/>
+    /// success flags the frame only when an actual top-level Entity field holds a
+    /// placeholder; an unresolvable layout (nested Entity / LayoutKind.Auto with
+    /// Entity fields) is caught and flagged conservatively — probing never
+    /// throws, the consume-time scan surfaces the layout error at its original
+    /// timing (before any world/allocator mutation). Monotonic frame flag:
+    /// probing stops after the first hit.
+    /// </summary>
+    private protected void FlagFrameIfMayContainPlaceholder(ComponentType type, ReadOnlySpan<byte> data)
+    {
+        // Monotonic flag: once set, later probes have nothing to add.
+        if (Volatile.Read(ref _frozen.MayNeedEmbeddedPlaceholderPreflight) == 1)
+            return;
+
+        ReadOnlySpan<int> offsets;
+        try
+        {
+            offsets = EntityFieldResolver.GetOffsets(type);
+        }
+        catch (InvalidOperationException)
+        {
+            // Unresolvable layout: conservative —force the frame scan, which
+            // throws the layout error at its original timing (before any
+            // world/allocator mutation), mirroring FieldKinds<T>.
+            Interlocked.Exchange(ref _frozen.MayNeedEmbeddedPlaceholderPreflight, 1);
+            return;
+        }
+
+        if (offsets.IsEmpty)
+            return;
+
+        for (var i = 0; i < offsets.Length; i++)
+        {
+            if (MemoryMarshal.Read<Entity>(data[offsets[i]..]).IsPlaceholder)
+            {
+                Interlocked.Exchange(ref _frozen.MayNeedEmbeddedPlaceholderPreflight, 1);
+                return;
+            }
+        }
+    }
+
     // ── Consume-side embedded-placeholder / layout rejection (T2.5) ────
     //
     // Runs in the consume path (Submit / Snapshot / SnapshotInto / async handoff)

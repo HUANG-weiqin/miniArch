@@ -5023,4 +5023,108 @@ public sealed class DeferredCreateTests
         Assert.True(verified);
         Assert.True(delta.DeltaCount >= 2); // Reserve(a) + Reserve(b) + ...
     }
+
+    // ── P0: Clone raw archetype import bypasses the embedded-placeholder/layout guard ──
+    //
+    // The record-path probe (FieldKinds<T>) covers generic Add/Set and
+    // WritePendingComponent, but Clone imports raw component bytes straight from
+    // world archetype storage and commits them via CommitBatchComponent without
+    // any probe. Witness: a world component holding a top-level Entity(-1, seq)
+    // placeholder is silently materialized by default Submit / emitted into a
+    // delta whose Validate() rejects (lockstep divergence P0#1 via Clone); an
+    // unresolvable nested-Entity layout bypasses the layout guard the same way
+    // (P0#2 via Clone).
+
+    [Fact]
+    public void BUG_clone_imported_placeholder_is_rejected_by_default_submit()
+    {
+        using var world = new World();
+        var source = world.Create(new Linked(5, new Entity(-1, 0)));
+        var stream = new CommandStream(world); // non-deferred: Entity(-1,0) can never be a legal ref
+
+        stream.Clone(source);
+
+        // Default Submit (no Validate) must reject atomically — never persist the placeholder.
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+        Assert.Contains("cancelled or unknown placeholder", ex.Message);
+
+        // Nothing was materialized: only the source survives and its value is untouched.
+        Assert.Equal(1, world.EntityCount);
+        Assert.True(world.TryGet(source, out Linked sourceLinked));
+        Assert.Equal(new Linked(5, new Entity(-1, 0)), sourceLinked);
+    }
+
+    [Fact]
+    public void BUG_clone_imported_placeholder_is_rejected_by_default_snapshot()
+    {
+        using var world = new World();
+        var source = world.Create(new Linked(5, new Entity(-1, 0)));
+        var stream = new CommandStream(world);
+
+        stream.Clone(source);
+
+        // Default Snapshot (no Validate) must reject before emission — never produce
+        // a delta whose Validate() fails on any host.
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Snapshot());
+        Assert.Contains("cancelled or unknown placeholder", ex.Message);
+    }
+
+    [Fact]
+    public void BUG_clone_imports_nested_entity_layout_rejected_before_consume()
+    {
+        using var world = new World();
+        // Nested-Entity layouts are legal in world storage (only CommandStream
+        // placeholder resolution cannot handle them); Clone must not smuggle one
+        // past the consume-time layout guard.
+        var source = world.Create(new OuterWithNested(1, new NestedTarget(default)));
+        var stream = new CommandStream(world);
+
+        stream.Clone(source);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+        Assert.Contains("nested Entity field", ex.Message);
+        Assert.Equal(1, world.EntityCount);
+        Assert.True(world.TryGet(source, out OuterWithNested original));
+        Assert.Equal(1, original.X);
+
+        // Snapshot must reject the same frame before emission.
+        var snapshotStream = new CommandStream(world);
+        snapshotStream.Clone(source);
+        ex = Assert.Throws<InvalidOperationException>(() => snapshotStream.Snapshot());
+        Assert.Contains("nested Entity field", ex.Message);
+    }
+
+    [Fact]
+    public void BUG_parallel_clone_imported_placeholder_is_rejected_by_default_consume()
+    {
+        using var world = new World();
+        var source = world.Create(new Linked(5, new Entity(-1, 0)));
+
+        var submitStream = new ParallelCommandStream(world);
+        submitStream.Clone(source);
+        var ex = Assert.Throws<InvalidOperationException>(() => submitStream.Submit());
+        Assert.Contains("cancelled or unknown placeholder", ex.Message);
+        Assert.Equal(1, world.EntityCount);
+
+        var snapshotStream = new ParallelCommandStream(world);
+        snapshotStream.Clone(source);
+        ex = Assert.Throws<InvalidOperationException>(() => snapshotStream.Snapshot());
+        Assert.Contains("cancelled or unknown placeholder", ex.Message);
+    }
+
+    [Fact]
+    public void BUG_parallel_clone_imported_child_placeholder_is_rejected_by_default_submit()
+    {
+        using var world = new World();
+        var parent = world.Create(new Position(1, 2));
+        var child = world.Create(new Linked(5, new Entity(-1, 0)));
+        world.AddChild(parent, child);
+
+        var stream = new ParallelCommandStream(world);
+        stream.Clone(parent);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+        Assert.Contains("cancelled or unknown placeholder", ex.Message);
+        Assert.Equal(2, world.EntityCount);
+    }
 }

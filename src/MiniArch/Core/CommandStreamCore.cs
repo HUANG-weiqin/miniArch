@@ -377,6 +377,11 @@ public abstract partial class CommandStreamCore
 
             for (var i = 0; i < finalCount; i++)
             {
+                // Probe the merger's FINAL effective values (archetype raw copy +
+                // store overlay merged) — raw archetype bytes that an overlay
+                // supersedes or removes must not flag the frame (P0 via Clone).
+                FlagFrameIfMayContainPlaceholder(finalTypes[i],
+                    new ReadOnlySpan<byte>(_frozen.BatchBuf, finalOffsets[i], finalSizes[i]));
                 CommitBatchComponent(batchIdx, finalTypes[i], finalOffsets[i], finalSizes[i]);
             }
         }

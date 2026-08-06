@@ -250,6 +250,7 @@ public sealed partial class ParallelCommandStream : CommandStreamCore
                 var size = ComponentSizeCache.GetSize(ComponentRegistry.Shared.GetType(ct));
                 var offset = ReserveBatchBufSpace(size);
                 unsafe { fixed (byte* ptr = &_frozen.BatchBuf[offset]) archetype.ReadComponentRaw(i, sourceRow, ptr); }
+                FlagFrameIfMayContainPlaceholder(ct, new ReadOnlySpan<byte>(_frozen.BatchBuf, offset, size));
                 CommitBatchComponent(cloneBatchIdx, ct, offset, size);
             }
 
@@ -322,6 +323,7 @@ public sealed partial class ParallelCommandStream : CommandStreamCore
                     var size = ComponentSizeCache.GetSize(ComponentRegistry.Shared.GetType(ct));
                     var offset = ReserveBatchBufSpace(size);
                     unsafe { fixed (byte* ptr = &_frozen.BatchBuf[offset]) archetype.ReadComponentRaw(i, sourceRow, ptr); }
+                    FlagFrameIfMayContainPlaceholder(ct, new ReadOnlySpan<byte>(_frozen.BatchBuf, offset, size));
                     CommitBatchComponent(batchIdx, ct, offset, size);
                 }
                 AddChildCore(cloneParent, cloneChild);
