@@ -269,14 +269,25 @@ appended to typed stores and consumed as one deterministic batch.
 | `AddChild(Entity, Entity)` | Record hierarchy addition |
 | `RemoveChild(Entity)` | Record hierarchy removal |
 | `Clone(Entity)` | Record entity deep-copy |
-| `Submit()` | Apply all recorded changes synchronously after consume-time preflight |
-| `Snapshot()` | Produce a preflighted, budget-valid `FrameDelta` without applying |
-| `SnapshotInto(FrameDelta)` | Produce into a reusable target; preflight failure leaves the target unchanged |
+| `Validate()` | Check placeholder/layout, component-presence, and final hierarchy-overlay contracts without mutating the `World` |
+| `Submit()` | Apply recorded changes synchronously; apply-time contract failures may leave earlier commands applied |
+| `Snapshot()` | Produce a budget-valid `FrameDelta` without applying; semantic validation is opt-in |
+| `SnapshotInto(FrameDelta)` | Produce into a reusable target; mandatory guard/budget failure leaves the target unchanged |
 | `Replay(FrameDelta, Boolean)` | Apply a delta to produce identical state; `true` resolves tracked `EntitySlot`s |
-| `SubmitAndSnapshotAsync()` | Pipelined submit/build; contract and frame-budget checks run before World submission |
-| `SubmitAndSnapshotIntoAsync(FrameDelta)` | Pipelined submit into a reusable target; preflight failure preserves the target and applies no recorded mutations |
+| `SubmitAndSnapshotAsync()` | Submit synchronously and build a real-id delta in a worker; mandatory guards/budget run before handoff |
+| `SubmitAndSnapshotIntoAsync(FrameDelta)` | Reusable-target variant; after worker handoff, target content is undefined on failure |
 | `Clear()` | Discard recorded commands without applying |
 | `DeferredEntities` | Enable placeholder entity IDs for lockstep mode |
+
+`Submit`, `Snapshot`, and the async consume APIs do **not** implicitly run
+component-presence or hierarchy-overlay validation. Call `Validate()` explicitly before
+consuming when fail-before-mutation semantics are required for those contracts.
+`Validate()` does not cover CreateMany group consistency, pending-slot invariants, or
+FrameDelta budgets; those remain consume-time checks. Mandatory embedded-placeholder /
+layout guards and frame-budget checks still run before deferred-id resolution or async
+worker handoff. Without explicit validation, `Submit`/async apply-time failures may
+partially mutate the World, and an async reusable target is undefined once its worker
+has started.
 
 ---
 

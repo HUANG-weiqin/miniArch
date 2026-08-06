@@ -12,8 +12,7 @@ public abstract partial class CommandStreamCore
     // ── Submit ────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Validates that every command recorded this frame is legal. Executes the
-    /// pure-validation stages of the submit preflight sequence in their original
+    /// Runs the stream's explicit semantic validation stages in deterministic
     /// order: batch dedup scan + embedded placeholder lifecycle, component store
     /// presence validation, and hierarchy overlay cycle check. Idempotent: running
     /// <see cref="Validate"/> before <see cref="Submit"/> does not change the result
@@ -46,9 +45,9 @@ public abstract partial class CommandStreamCore
         if (!HasAnyCommands())
             return;
 
-        // Order matches the pure-validation stages of Submit's preflight sequence:
-        // embedded placeholder lifecycle (with last-wins batch dedup), component
-        // store presence, then hierarchy overlay.
+        // Keep a deterministic first-violation order: embedded placeholder
+        // lifecycle (with last-wins batch dedup), component store presence,
+        // then hierarchy overlay.
         PreflightEmbeddedPlaceholders(useFlagFastPath: false);
         PreflightComponentStores(_frozen);
         PreflightHierarchyOverlay(_world, _frozen);
@@ -65,8 +64,8 @@ public abstract partial class CommandStreamCore
     /// point instead of before any world mutation, and earlier commands may
     /// already be applied before the violation is detected (partial application;
     /// reserved ids are released by the internal cleanup). Call
-    /// <see cref="Validate"/> before <see cref="Submit"/> to detect all recorded
-    /// contract violations up front, at the first violation, without world mutation.
+    /// <see cref="Validate"/> before <see cref="Submit"/> to check its documented
+    /// semantic contracts up front, at the first violation, without world mutation.
     /// </para>
     /// <para>
     /// One class of errors is still rejected atomically before any mutation:
@@ -611,7 +610,7 @@ public abstract partial class CommandStreamCore
     /// no longer runs the contract preflights (component store presence, hierarchy
     /// overlay). A violating frame may therefore emit a delta whose replay fails on
     /// a receiving host. Call <see cref="Validate"/> before <see cref="Snapshot"/>
-    /// to reject all recorded contract violations up front.
+    /// to check the semantic contracts it covers up front.
     /// </para>
     /// <para>
     /// One class of errors is still rejected atomically before emission: component
@@ -664,7 +663,7 @@ public abstract partial class CommandStreamCore
     /// <b>Zero validation by default —with one opt-out.</b> <see cref="SnapshotInto"/>
     /// no longer runs the contract preflights (component store presence, hierarchy
     /// overlay). Call <see cref="Validate"/> before <see cref="SnapshotInto"/> to
-    /// reject all recorded contract violations up front.
+    /// check the semantic contracts it covers up front.
     /// </para>
     /// <para>
     /// One class of errors is still rejected atomically before emission: component
@@ -768,8 +767,8 @@ public abstract partial class CommandStreamCore
     /// submitted), or a consume-time contract violation surfaces during submit.
     /// Embedded-placeholder/layout violations are rejected before the submit/worker
     /// handoff (atomically, no mutations); other consume-time violations may leave
-    /// earlier commands applied. Call <see cref="Validate"/> before this method to
-    /// fail before any mutation.
+    /// earlier commands applied. Call <see cref="Validate"/> first to reject the
+    /// component-presence and hierarchy violations it covers before any mutation.
     /// </exception>
     public Task<FrameDelta> SubmitAndSnapshotAsync()
     {
@@ -842,7 +841,8 @@ public abstract partial class CommandStreamCore
     /// violation surfaces during submit. Embedded-placeholder/layout violations are
     /// rejected before the submit/worker handoff (atomically, no mutations); other
     /// consume-time violations may leave earlier commands applied. Call
-    /// <see cref="Validate"/> before this method to fail before any mutation.
+    /// <see cref="Validate"/> first to reject the component-presence and hierarchy
+    /// violations it covers before any mutation.
     /// </exception>
     public Task SubmitAndSnapshotIntoAsync(FrameDelta target)
     {
