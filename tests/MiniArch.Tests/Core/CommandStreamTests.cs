@@ -1665,11 +1665,20 @@ public sealed class CommandStreamTests
         stream.Add(pending, new Velocity(3, 4));
         stream.Set(existing, new Velocity(5, 6));
 
-        void SubmitInvalidFrame() => _ = stream.SubmitAndSnapshotAsync();
-        Assert.Throws<InvalidOperationException>(SubmitInvalidFrame);
-
+        // Validate rejects the invalid Set atomically, before any mutation.
+        var validateEx = Assert.Throws<InvalidOperationException>(() => stream.Validate());
+        Assert.Contains("does not have component", validateEx.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, world.EntityCount);
         Assert.False(world.IsAlive(pending));
+        Assert.False(world.TryGet<Velocity>(existing, out _));
+
+        // Zero-validation async submit throws synchronously at apply time, after
+        // materializing the pending entity (partial application).
+        void SubmitInvalidFrame() => _ = stream.SubmitAndSnapshotAsync();
+        var submitEx = Assert.Throws<InvalidOperationException>(SubmitInvalidFrame);
+        Assert.Contains("does not have component", submitEx.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, world.EntityCount);
+        Assert.True(world.IsAlive(pending));
         Assert.False(world.TryGet<Velocity>(existing, out _));
         Assert.True(WorldValidator.Validate(world).IsValid);
 
@@ -1910,12 +1919,23 @@ public sealed class CommandStreamTests
         stream.Add(pending, new Velocity(5, 6));
         stream.Set(existing, new Velocity(7, 8));
 
-        void SubmitInvalidFrame() => _ = stream.SubmitAndSnapshotIntoAsync(target);
-        Assert.Throws<InvalidOperationException>(SubmitInvalidFrame);
-
+        // Validate rejects atomically and leaves the target untouched.
+        var validateEx = Assert.Throws<InvalidOperationException>(() => stream.Validate());
+        Assert.Contains("does not have component", validateEx.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(originalWire, target.AsSpan().ToArray());
         Assert.Equal(2, world.EntityCount);
         Assert.False(world.IsAlive(pending));
+        Assert.False(world.TryGet<Velocity>(existing, out _));
+
+        // Zero-validation async submit throws at apply time. The worker has already
+        // overwritten the target with the invalid frame's delta (no longer guaranteed
+        // unchanged on failure), and the pending entity is materialized.
+        void SubmitInvalidFrame() => _ = stream.SubmitAndSnapshotIntoAsync(target);
+        var submitEx = Assert.Throws<InvalidOperationException>(SubmitInvalidFrame);
+        Assert.Contains("does not have component", submitEx.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.NotEqual(originalWire, target.AsSpan().ToArray());
+        Assert.Equal(3, world.EntityCount);
+        Assert.True(world.IsAlive(pending));
         Assert.False(world.TryGet<Velocity>(existing, out _));
         Assert.True(WorldValidator.Validate(world).IsValid);
 
@@ -3151,11 +3171,19 @@ public sealed class CommandStreamTests
         stream.Add(pending, new Velocity(3, 4));
         stream.Add(existing, new Position(9, 9));
 
-        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
-
+        // Validate rejects the invalid Add atomically, before any mutation.
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Validate());
         Assert.Contains("already has component", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, world.EntityCount);
         Assert.False(world.IsAlive(pending));
+        Assert.Equal(new Position(1, 2), world.Get<Position>(existing));
+
+        // Zero-validation Submit applies partially: the pending entity is
+        // materialized before the store apply throws the same violation.
+        var submitEx = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+        Assert.Contains("already has component", submitEx.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, world.EntityCount);
+        Assert.True(world.IsAlive(pending));
         Assert.Equal(new Position(1, 2), world.Get<Position>(existing));
         Assert.True(WorldValidator.Validate(world).IsValid);
     }
@@ -3170,11 +3198,19 @@ public sealed class CommandStreamTests
         stream.Add(pending, new Velocity(3, 4));
         stream.Set(existing, new Velocity(9, 9));
 
-        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
-
+        // Validate rejects the invalid Set atomically, before any mutation.
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Validate());
         Assert.Contains("does not have component", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, world.EntityCount);
         Assert.False(world.IsAlive(pending));
+        Assert.Equal(new Position(1, 2), world.Get<Position>(existing));
+        Assert.False(world.Has<Velocity>(existing));
+
+        // Zero-validation Submit applies partially before throwing at apply time.
+        var submitEx = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+        Assert.Contains("does not have component", submitEx.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, world.EntityCount);
+        Assert.True(world.IsAlive(pending));
         Assert.Equal(new Position(1, 2), world.Get<Position>(existing));
         Assert.False(world.Has<Velocity>(existing));
         Assert.True(WorldValidator.Validate(world).IsValid);
@@ -3192,11 +3228,19 @@ public sealed class CommandStreamTests
 
         world.Remove<Position>(existing);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
-
+        // Validate re-checks recorded commands against the current world and
+        // rejects the now-stale Set atomically.
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Validate());
         Assert.Contains("does not have component", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, world.EntityCount);
         Assert.False(world.IsAlive(pending));
+        Assert.False(world.Has<Position>(existing));
+
+        // Zero-validation Submit applies partially before throwing at apply time.
+        var submitEx = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+        Assert.Contains("does not have component", submitEx.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, world.EntityCount);
+        Assert.True(world.IsAlive(pending));
         Assert.False(world.Has<Position>(existing));
         Assert.True(WorldValidator.Validate(world).IsValid);
     }
@@ -3329,13 +3373,20 @@ public sealed class CommandStreamTests
         stream.AddChild(a, b);
         stream.AddChild(b, a);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
-
+        // Validate rejects the hierarchy cycle atomically, before any mutation.
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Validate());
         Assert.Contains("cycle", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(2, world.EntityCount);
         Assert.False(world.IsAlive(pending));
         Assert.False(world.TryGetParent(a, out _));
         Assert.False(world.TryGetParent(b, out _));
+
+        // Zero-validation Submit applies partially: pending is materialized and
+        // overlay links are installed before the cycle check throws at apply time.
+        var submitEx = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+        Assert.Contains("cycle", submitEx.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(3, world.EntityCount);
+        Assert.True(world.IsAlive(pending));
         Assert.True(WorldValidator.Validate(world).IsValid);
     }
 
@@ -3351,14 +3402,20 @@ public sealed class CommandStreamTests
         stream.Add(pending, new Velocity(3, 4));
         stream.AddChild(child, root);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
-
+        // Validate rejects the cycle (through the existing chain) atomically.
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Validate());
         Assert.Contains("cycle", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(2, world.EntityCount);
         Assert.False(world.IsAlive(pending));
         Assert.True(world.TryGetParent(child, out var actualParent));
         Assert.Equal(root, actualParent);
         Assert.False(world.TryGetParent(root, out _));
+
+        // Zero-validation Submit applies partially before throwing at apply time.
+        var submitEx = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+        Assert.Contains("cycle", submitEx.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(3, world.EntityCount);
+        Assert.True(world.IsAlive(pending));
         Assert.True(WorldValidator.Validate(world).IsValid);
     }
 
@@ -3374,11 +3431,19 @@ public sealed class CommandStreamTests
         stream.AddChild(a, b);
         stream.AddChild(b, a);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
-
+        // Validate rejects the deferred cycle atomically, before any mutation.
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Validate());
         Assert.Contains("cycle", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(0, world.EntityCount);
         Assert.False(world.IsAlive(a));
+        Assert.False(world.IsAlive(b));
+
+        // Zero-validation Submit resolves deferred ids, materializes the entities,
+        // then throws at hierarchy apply time —leaving the real entities created.
+        var submitEx = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+        Assert.Contains("cycle", submitEx.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, world.EntityCount);
+        Assert.False(world.IsAlive(a)); // placeholder handle, not the resolved real id
         Assert.False(world.IsAlive(b));
         Assert.True(WorldValidator.Validate(world).IsValid);
     }
@@ -3394,12 +3459,21 @@ public sealed class CommandStreamTests
         stream.Add(existing, new Health(10));
         stream.Add(existing, new Health(20));
 
-        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
-
+        // Validate rejects the repeated Add atomically, before any mutation.
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Validate());
         Assert.Contains("already has component", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, world.EntityCount);
         Assert.False(world.IsAlive(pending));
         Assert.False(world.Has<Health>(existing));
+        Assert.Equal(new Position(1, 2), world.Get<Position>(existing));
+
+        // Zero-validation Submit applies partially: pending is materialized and the
+        // first Add lands before the second Add throws at apply time.
+        var submitEx = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+        Assert.Contains("already has component", submitEx.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, world.EntityCount);
+        Assert.True(world.IsAlive(pending));
+        Assert.Equal(new Health(10), world.Get<Health>(existing));
         Assert.Equal(new Position(1, 2), world.Get<Position>(existing));
         Assert.True(WorldValidator.Validate(world).IsValid);
     }
@@ -3418,6 +3492,198 @@ public sealed class CommandStreamTests
         Assert.False(world.Has<Velocity>(existing));
         Assert.Equal(new Position(1, 2), world.Get<Position>(existing));
         Assert.True(WorldValidator.Validate(world).IsValid);
+    }
+
+    // ── Validate() contract tests ───────────────────────────────────
+    // Validate() rejects recorded contract violations atomically (before any
+    // mutation); zero-validation Submit applies partially and throws at apply
+    // time for existence-class violations. These tests lock the boundary.
+
+    [Fact]
+    public void Contract_Validate_rejects_invalid_add_before_mutation_and_world_unchanged()
+    {
+        using var world = new World();
+        var existing = world.Create(new Position(1, 2));
+        var stream = new CommandStream(world);
+        var pending = stream.Create();
+        stream.Add(pending, new Velocity(3, 4));
+        stream.Add(existing, new Position(9, 9));
+
+        var checksumBefore = world.CanonicalChecksum();
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Validate());
+        Assert.Contains("already has component", ex.Message, StringComparison.OrdinalIgnoreCase);
+
+        // World fully unchanged: checksum, entity count, reserved slot, components.
+        Assert.Equal(checksumBefore, world.CanonicalChecksum());
+        Assert.Equal(1, world.EntityCount);
+        Assert.False(world.IsAlive(pending));
+        Assert.Equal(new Position(1, 2), world.Get<Position>(existing));
+    }
+
+    [Fact]
+    public void Contract_Validate_rejects_set_on_missing_component_before_mutation()
+    {
+        using var world = new World();
+        var existing = world.Create(new Position(1, 2));
+        var stream = new CommandStream(world);
+        stream.Set(existing, new Velocity(9, 9));
+
+        var checksumBefore = world.CanonicalChecksum();
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Validate());
+        Assert.Contains("does not have component", ex.Message, StringComparison.OrdinalIgnoreCase);
+
+        Assert.Equal(checksumBefore, world.CanonicalChecksum());
+        Assert.False(world.Has<Velocity>(existing));
+        Assert.Equal(new Position(1, 2), world.Get<Position>(existing));
+        Assert.True(WorldValidator.Validate(world).IsValid);
+    }
+
+    [Fact]
+    public void Contract_Validate_rejects_hierarchy_cycle_before_mutation()
+    {
+        using var world = new World();
+        var a = world.Create(new Position(1, 1));
+        var b = world.Create(new Position(2, 2));
+        var stream = new CommandStream(world);
+        stream.AddChild(a, b);
+        stream.AddChild(b, a);
+
+        var checksumBefore = world.CanonicalChecksum();
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Validate());
+        Assert.Contains("cycle", ex.Message, StringComparison.OrdinalIgnoreCase);
+
+        Assert.Equal(checksumBefore, world.CanonicalChecksum());
+        Assert.False(world.TryGetParent(a, out _));
+        Assert.False(world.TryGetParent(b, out _));
+        Assert.True(WorldValidator.Validate(world).IsValid);
+    }
+
+    [Fact]
+    public void Contract_Validate_is_idempotent()
+    {
+        using var world = new World();
+        var stream = new CommandStream(world);
+        var e = stream.Create();
+        stream.Add(e, new Position(1, 2));
+        stream.Add(e, new Velocity(3, 4));
+
+        // Two Validate calls on a legal stream both pass, with zero side effects.
+        stream.Validate();
+        var checksumAfterFirst = world.CanonicalChecksum();
+        stream.Validate();
+        Assert.Equal(checksumAfterFirst, world.CanonicalChecksum());
+
+        // Validate+Submit on a legal stream produces the same world as plain Submit.
+        stream.Submit();
+        var validatedChecksum = world.CanonicalChecksum();
+
+        using var world2 = new World();
+        var stream2 = new CommandStream(world2);
+        var e2 = stream2.Create();
+        stream2.Add(e2, new Position(1, 2));
+        stream2.Add(e2, new Velocity(3, 4));
+        stream2.Submit();
+
+        Assert.Equal(validatedChecksum, world2.CanonicalChecksum());
+    }
+
+    [Fact]
+    public void Contract_Validate_passes_then_submit_applies_atomically()
+    {
+        using var world = new World();
+        var stream = new CommandStream(world);
+        var created = stream.Create();
+        stream.Add(created, new Position(1, 2));
+        var existing = world.Create(new Velocity(0, 0));
+        stream.Set(existing, new Velocity(3, 4));
+
+        stream.Validate(); // legal frame —must pass
+        Assert.True(stream.Submit());
+
+        Assert.True(world.IsAlive(created));
+        Assert.Equal(new Position(1, 2), world.Get<Position>(created));
+        Assert.Equal(new Velocity(3, 4), world.Get<Velocity>(existing));
+        Assert.True(WorldValidator.Validate(world).IsValid);
+    }
+
+    [Fact]
+    public void Contract_zero_validation_submit_applies_invalid_add_partially()
+    {
+        using var world = new World();
+        var existing = world.Create(new Position(1, 2));
+        var stream = new CommandStream(world);
+        var pending = stream.Create();
+        stream.Add(pending, new Velocity(3, 4));
+        stream.Add(existing, new Position(9, 9));
+
+        // No Validate() call: Submit applies the materializable part (pending
+        // entity) and then throws at apply time on the invalid Add.
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+        Assert.Contains("already has component", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, world.EntityCount);
+        Assert.True(world.IsAlive(pending));
+        Assert.Equal(new Position(1, 2), world.Get<Position>(existing));
+        Assert.True(WorldValidator.Validate(world).IsValid);
+    }
+
+    [Fact]
+    public void Contract_validate_does_not_cover_CreateMany_group_consistency()
+    {
+        var world = new World();
+        var stream = new CommandStream(world);
+        var entities = new Entity[3];
+
+        stream.CreateMany<Position, Velocity, PositionVelocityCreateManyWriter>(
+            entities, new PositionVelocityCreateManyWriter());
+        stream.Set(entities[1], new Velocity(99, 100));
+
+        // Group-consistency is a CreateMany fast-path precondition enforced at
+        // materialize (Submit), NOT part of Validate()'s contract.
+        stream.Validate();
+
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
+        Assert.Contains("CreateMany", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, world.EntityCount);
+    }
+
+    [Fact]
+    public void Contract_validate_does_not_cover_frame_delta_budget()
+    {
+        using var world = new World();
+        var entity = world.CreateEmpty();
+        var stream = new CommandStream(world);
+        for (var i = 0; i <= FrameDelta.MaxOpsPerFrame; i++)
+            stream.Destroy(entity);
+
+        // Frame-delta budget is a wire/snapshot limit, not a Validate() concern.
+        stream.Validate();
+
+        var ex = Assert.Throws<InvalidOperationException>(() => stream.Snapshot());
+        Assert.Contains("MaxOpsPerFrame", ex.Message);
+    }
+
+    [Fact]
+    public void Contract_last_wins_superseded_placeholder_value_is_accepted()
+    {
+        using var world = new World();
+        var stream = new CommandStream(world) { DeferredEntities = true };
+
+        var owner = stream.Create();
+        var supersededRef = stream.Create();
+        stream.Add(owner, new SelfRef(supersededRef)); // cancelled below
+        stream.Set(owner, new SelfRef(owner)); // last-wins —valid self reference
+        stream.Destroy(supersededRef);
+
+        // The superseded bad value must not fail Validate or Submit.
+        stream.Validate();
+        Assert.True(stream.Submit());
+
+        Assert.Equal(1, world.EntityCount);
+        foreach (var chunk in world.Query(new QueryDescription().With<SelfRef>()).GetChunks())
+        {
+            Assert.Equal(1, chunk.Count);
+            Assert.Equal(chunk.GetEntities()[0], chunk.GetSpan<SelfRef>()[0].Target);
+        }
     }
 }
 
@@ -4711,5 +4977,50 @@ public sealed class DeferredCreateTests
         builder.SetBit(512);
         Assert.Equal(1UL << 0, builder.B7);
         Assert.Equal(1, builder.BitsSet);
+    }
+
+    [Fact]
+    public void Contract_deferred_valid_placeholder_flow_not_rejected()
+    {
+        using var world = new World();
+        var stream = MakeStream(world);
+
+        var target = stream.Create();
+        stream.Add(target, new Health(42));
+        var owner = stream.Create();
+        stream.Add(owner, new Linked(100, target));
+
+        // A legal deferred frame (placeholder reference between pending entities)
+        // passes Validate and both consume paths: Snapshot and Submit.
+        stream.Validate();
+        var delta = stream.Snapshot();
+        Assert.True(stream.Submit());
+
+        // After deferred Submit, placeholder handles are stale; verify via query.
+        Entity? foundTarget = null;
+        foreach (var chunk in world.Query(new QueryDescription().With<Health>()).GetChunks())
+        {
+            var healths = chunk.GetSpan<Health>();
+            for (var i = 0; i < chunk.Count; i++)
+            {
+                if (healths[i].Value == 42)
+                    foundTarget = chunk.GetEntities()[i];
+            }
+        }
+        Assert.NotNull(foundTarget);
+
+        var verified = false;
+        foreach (var chunk in world.Query(new QueryDescription().With<Linked>()).GetChunks())
+        {
+            var linked = chunk.GetSpan<Linked>();
+            for (var i = 0; i < chunk.Count; i++)
+            {
+                Assert.Equal(100, linked[i].Extra);
+                Assert.Equal(foundTarget!.Value, linked[i].Target);
+                verified = true;
+            }
+        }
+        Assert.True(verified);
+        Assert.True(delta.DeltaCount >= 2); // Reserve(a) + Reserve(b) + ...
     }
 }

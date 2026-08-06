@@ -65,6 +65,7 @@ class: MiniArch.Core.CommandStreamCore
   Method: Submit() -> System.Boolean
   Method: SubmitAndSnapshotAsync() -> System.Threading.Tasks.Task<MiniArch.Core.FrameDelta>
   Method: SubmitAndSnapshotIntoAsync(MiniArch.Core.FrameDelta target) -> System.Threading.Tasks.Task
+  Method: Validate() -> System.Void
   Property: DeferredEntities -> System.Boolean [get; set; ]
 struct: MiniArch.Core.EntityAccessor
   Method: Get() -> T& where T : struct, System.ValueType

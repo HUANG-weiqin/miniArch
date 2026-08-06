@@ -205,16 +205,22 @@ public sealed class SubmitReplayParityTests
         // Capture delta BEFORE Submit (so we can Replay it later)
         var delta = stream.Snapshot();
 
-        // Submit path: throws because Set runs after Remove.
-        // Note: Submit throws ArgumentException (from GetComponentIndex inside
-        // ComponentStore.ApplyToWorld), while Replay throws InvalidOperationException
-        // (from ApplyRawSet's explicit guard). Both throw —neither silently accepts
+        // Validate path: rejects the invalid Set before any mutation.
+        var validateEx = Assert.Throws<InvalidOperationException>(() => stream.Validate());
+        Assert.Contains("does not have component", validateEx.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(source.IsAlive(e));
+
+        // Submit path: zero-validation Submit throws the same violation at apply
+        // time (Remove applied, Set rejected because the component no longer
+        // exists). Replay throws InvalidOperationException from ApplyRawSet's
+        // explicit guard. All three paths reject —neither silently accepts
         // the invalid operation —which is the critical property.
         var submitEx = Record.Exception(() => stream.Submit());
         Assert.NotNull(submitEx);
         Assert.True(
             submitEx is InvalidOperationException || submitEx is ArgumentException,
             $"Submit threw unexpected exception type: {submitEx.GetType().Name}: {submitEx.Message}");
+        Assert.Contains("does not have component", submitEx.Message, StringComparison.OrdinalIgnoreCase);
 
         // Replay path: must also throw (same reason)
         var shadow = new World();
@@ -225,7 +231,7 @@ public sealed class SubmitReplayParityTests
             shadowEx is InvalidOperationException,
             $"Replay threw unexpected exception type: {shadowEx.GetType().Name}: {shadowEx.Message}");
 
-        // Both paths throw —consistent behavior. No AssertWorldsMatch because
+        // All three paths throw —consistent behavior. No AssertWorldsMatch because
         // both worlds are in an exception-terminated (incomplete) state.
     }
 
