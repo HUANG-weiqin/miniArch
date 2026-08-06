@@ -9,7 +9,7 @@ namespace MiniArch.Core;
 /// <c>Set&lt;T&gt;</c>, <c>Remove&lt;T&gt;</c>, <c>Destroy</c>,
 /// <c>AddChild</c>, <c>RemoveChild</c>, <c>Clone</c>)
 /// can be invoked concurrently from multiple threads.
-/// <see cref="CommandStreamCore.Submit"/>, <see cref="CommandStreamCore.Snapshot"/>,
+/// <see cref="CommandStreamCore.Submit"/>, <see cref="CommandStreamCore.Validate"/>, <see cref="CommandStreamCore.Snapshot"/>,
 /// <see cref="CommandStreamCore.SnapshotInto"/>,
 /// <see cref="CommandStreamCore.SubmitAndSnapshotAsync"/>,
 /// <see cref="CommandStreamCore.SubmitAndSnapshotIntoAsync"/> and

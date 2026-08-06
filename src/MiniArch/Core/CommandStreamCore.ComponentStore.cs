@@ -13,6 +13,45 @@ public abstract partial class CommandStreamCore
         public static readonly ComponentType Type = Component<T>.ComponentType;
     }
 
+    /// <summary>
+    /// T2.7: per-type verdict cache for embedded-placeholder probing. Generic so
+    /// the component type is known at JIT compile time —the verdict is a static
+    /// field read (no array lookup, no bounds check), and the getter is
+    /// inlineable so JIT can hoist the read out of hot loops. States:
+    /// 0 = uninitialized, 1 = no top-level Entity fields (skip), 2 = has Entity
+    /// fields (or layout unknown — conservative). Initialization is idempotent
+    /// and race-tolerant (parallel recording may initialize concurrently; the
+    /// verdict is identical). Layout resolution failures (nested Entity /
+    /// LayoutKind.Auto with Entity fields) are surfaced by the submit-time scan,
+    /// not here —probing never throws.
+    /// </summary>
+    private protected static class FieldKinds<T> where T : unmanaged
+    {
+        // T2.8: readonly fields initialized once by the static ctor. The ctor never
+        // throws —layout failures (nested Entity / LayoutKind.Auto with Entity
+        // fields) are surfaced by the submit-time scan, not here. readonly lets JIT
+        // hoist/fold the single-field read in the probe helper.
+        internal static readonly bool HasEntityFields;
+        internal static readonly int[] Offsets;
+
+        static FieldKinds()
+        {
+            try
+            {
+                Offsets = EntityFieldResolver.GetOffsets(CommandTypeInfo<T>.Type).ToArray();
+                HasEntityFields = Offsets.Length > 0;
+            }
+            catch (InvalidOperationException)
+            {
+                // Unresolvable layout: conservative —probe (force the frame scan),
+                // and let the submit-time scan throw the layout error at its
+                // original timing (before any world/allocator mutation).
+                Offsets = [];
+                HasEntityFields = true;
+            }
+        }
+    }
+
     // ── Internal types ────────────────────────────────────────────────
 
     private protected const byte KindAdd = 0;
@@ -602,7 +641,7 @@ public abstract partial class CommandStreamCore
             if (_setLocationCacheKind == SetLocationCacheKind.UniformArchetype)
             {
                 var archetype = _setLocationUniformArchetype ?? throw new InvalidOperationException(
-                    $"Set location cache lost component {typeof(T).Name}.");
+                    $"Entity {_entries[0].Entity} does not have component {typeof(T).Name}.");
                 if (!archetype.TryGetComponentIndex(compType, out _))
                     throw new InvalidOperationException(
                         $"Entity {_entries[0].Entity} does not have component {typeof(T).Name}.");
@@ -719,10 +758,10 @@ public abstract partial class CommandStreamCore
         private void ApplyUniformSetLocationCache(int count, ComponentType compType)
         {
             var arch = _setLocationUniformArchetype ?? throw new InvalidOperationException(
-                $"Set location cache lost component {typeof(T).Name}.");
+                $"Entity {_entries[0].Entity} does not have component {typeof(T).Name}.");
             if (!arch.TryGetComponentIndex(compType, out var colIdx))
                 throw new InvalidOperationException(
-                    $"Set location cache lost component {typeof(T).Name}.");
+                    $"Entity {_entries[0].Entity} does not have component {typeof(T).Name}.");
 
             ref var entriesRef = ref MemoryMarshal.GetArrayDataReference(_entries);
             ref var rowsRef = ref MemoryMarshal.GetArrayDataReference(_setLocationRows);
@@ -766,7 +805,7 @@ public abstract partial class CommandStreamCore
                     cachedArch = arch;
                     if (!arch.TryGetComponentIndex(compType, out cachedColIdx))
                         throw new InvalidOperationException(
-                            $"Set location cache lost component {typeof(T).Name}.");
+                            $"Entity {entry.Entity} does not have component {typeof(T).Name}.");
                     cachedByteOffset = arch.GetColumnByteOffset(cachedColIdx);
                     cachedIsChunked = arch.IsChunked;
                 }
@@ -933,9 +972,11 @@ public abstract partial class CommandStreamCore
 
                 var data = MemoryMarshal.AsBytes(
                     MemoryMarshal.CreateReadOnlySpan(ref entry.Value, 1));
-                stream.PreflightEmbeddedPlaceholders(data, typeId, offsets);
+                stream.RejectEmbeddedPlaceholders(data, typeId, offsets, entry.Entity);
             }
         }
+
+
 
         public override void ReplacePlaceholders(Entity[] resolveMap)
         {

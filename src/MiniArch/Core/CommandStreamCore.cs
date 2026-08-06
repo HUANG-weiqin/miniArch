@@ -81,6 +81,14 @@ public abstract partial class CommandStreamCore
     private byte[] _preflightPresence = [];
     private int _preflightEpoch;
 
+    // Consume-side embedded-placeholder scan cache (T2.5). Per component type id:
+    // 0 = verdict unknown, 1 = no top-level Entity fields, 2 = has Entity fields.
+    // Monotonic per stream —component layouts are process-stable, so entries are
+    // written once and never cleared. Unresolvable layouts (nested Entity /
+    // LayoutKind.Auto with Entity fields) throw at verdict time —before any id
+    // reservation or world mutation.
+    private byte[] _scanFieldKind = [];
+
     // Lock used by <see cref="ParallelCommandStream"/> for serializing mutators
     // that touch shared FrozenState arrays. Single-threaded subclasses never
     // acquire it; the field exists so protected helpers can take it when needed.
@@ -731,25 +739,6 @@ public abstract partial class CommandStreamCore
 
     // ── Store management ──────────────────────────────────────────────
 
-    /// <summary>
-    /// Flags the active frame when a store-bound component value may contain a
-    /// placeholder ref (or its layout cannot be verified), so the submit/snapshot
-    /// preflight skips its full scan for placeholder-free frames. Never throws;
-    /// layout-verification failures surface at the preflight's original timing.
-    /// The flag is monotonic within a frame, so probing stops after the first hit.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private protected void FlagFrameIfMayContainPlaceholder<T>(in T value) where T : unmanaged
-    {
-        if (Volatile.Read(ref _frozen.MayNeedEmbeddedPlaceholderPreflight) == 0 &&
-            EntityFieldResolver.MayContainPlaceholder(
-                MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref Unsafe.AsRef(in value), 1)),
-                CommandTypeInfo<T>.Type))
-        {
-            Interlocked.Exchange(ref _frozen.MayNeedEmbeddedPlaceholderPreflight, 1);
-        }
-    }
-
     private protected ComponentStore<T> GetOrCreateStore<T>() where T : unmanaged
     {
         var id = CommandTypeInfo<T>.Type.Value;
@@ -1192,9 +1181,12 @@ public abstract partial class CommandStreamCore
         /// <summary>
         /// Frame-level monotonic flag (0/1) set by the record path when any written
         /// component value may contain a placeholder ref (or its layout cannot be
-        /// verified). When 0, <see cref="CommandStreamCore.PreflightEmbeddedPlaceholders"/>
-        /// skips the full scan entirely. Conservative: dead/superseded values also
-        /// set it; the preflight still applies last-wins dedup before rejecting.
+        /// verified). When 0, the consume-side embedded-placeholder scan
+        /// (<see cref="CommandStreamCore.PreflightEmbeddedPlaceholders"/>) returns
+        /// immediately, skipping the full scan for placeholder-free frames.
+        /// Conservative: dead/superseded values also set it; the scan still applies
+        /// last-wins dedup before rejecting. Reset in <c>Clear</c>/
+        /// <c>SwapOutState</c>.
         /// </summary>
         public int MayNeedEmbeddedPlaceholderPreflight;
         public int CancelledBatchCount;

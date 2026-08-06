@@ -12,11 +12,83 @@ public abstract partial class CommandStreamCore
     // ── Submit ────────────────────────────────────────────────────────
 
     /// <summary>
+    /// Validates that every command recorded this frame is legal. Executes the
+    /// pure-validation stages of the submit preflight sequence in their original
+    /// order: batch dedup scan + embedded placeholder lifecycle, component store
+    /// presence validation, hierarchy overlay cycle check, and cancelled-batch
+    /// free-list ordering. Idempotent: running <see cref="Validate"/> before
+    /// <see cref="Submit"/> does not change the result <see cref="Submit"/> produces.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Side effects are limited to idempotent internal preparation
+    /// (<see cref="PrepareStores"/>: seal parallel writes, prune stale store
+    /// commands, set-location cache scratch) and the idempotent cancelled-batch
+    /// free-list realignment — the same preparation and realignment
+    /// <see cref="Submit"/> performs. No command is consumed and no world state
+    /// other than that idempotent free-list ordering is mutated.
+    /// </para>
+    /// <para>
+    /// Any invalid state throws <see cref="InvalidOperationException"/> at the
+    /// first violation, with the violating entity id and/or component type in the
+    /// message.
+    /// </para>
+    /// <para>
+    /// <b>Not covered.</b> CreateMany group consistency (a group modified with
+    /// Set/Add/Remove after the CreateMany call, or a duplicate/mask-invalid
+    /// writer), slot-reservation state, and the FrameDelta budget
+    /// (<see cref="FrameDelta.MaxFrameBytes"/>/<see cref="FrameDelta.MaxOpsPerFrame"/>)
+    /// are checked by the consume path at their original timing, not by
+    /// <see cref="Validate"/>.
+    /// </para>
+    /// </remarks>
+    public void Validate()
+    {
+        PrepareStores(buildSetLocationCache: true);
+        if (!HasAnyCommands())
+            return;
+
+        // Order matches the pure-validation stages of Submit's preflight sequence:
+        // embedded placeholder lifecycle (with last-wins batch dedup), component
+        // store presence, hierarchy overlay, cancelled-batch free-list ordering.
+        PreflightEmbeddedPlaceholders(useFlagFastPath: false);
+        PreflightComponentStores(_frozen);
+        PreflightHierarchyOverlay(_world, _frozen);
+        AlignCancelledBatchFreeListOrder();
+    }
+
+    /// <summary>
     /// Applies all recorded commands to the world and returns true if any work was performed.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Zero validation by default —with one opt-out.</b> <see cref="Submit"/>
+    /// no longer runs the contract preflights (component store presence, hierarchy
+    /// overlay). Recorded-command errors surface at their apply-time consumption
+    /// point instead of before any world mutation, and earlier commands may
+    /// already be applied before the violation is detected (partial application;
+    /// reserved ids are released by the internal cleanup). Call
+    /// <see cref="Validate"/> before <see cref="Submit"/> to detect all recorded
+    /// contract violations up front, at the first violation, without world mutation.
+    /// </para>
+    /// <para>
+    /// One class of errors is still rejected atomically before any mutation:
+    /// component values referencing a cancelled or unknown deferred placeholder,
+    /// and unresolvable component layouts (nested <see cref="Entity"/> fields /
+    /// LayoutKind.Auto with Entity fields). These are rejected in the consume
+    /// path —before id reservation, free-list realignment and materialization —
+    /// with the same contract and message text as <see cref="Validate"/>, so a
+    /// violating frame can never be applied locally or emitted into a
+    /// <see cref="FrameDelta"/> that a replaying host would reject.
+    /// </para>
+    /// </remarks>
     /// <exception cref="InvalidOperationException">
-    /// An effective component value references a cancelled or unknown deferred placeholder,
-    /// or another recorded command violates its consume-time contract.
+    /// A recorded command violates its consume-time contract: a component value
+    /// references a cancelled or unknown deferred placeholder (rejected before
+    /// any mutation), an Add targets an existing component or a Set targets a
+    /// missing component, or a hierarchy entity is stale/unknown (these surface
+    /// at apply time, after earlier commands may have been applied). Use
+    /// <see cref="Validate"/> to fail before any mutation.
     /// </exception>
     public bool Submit()
     {
@@ -31,16 +103,27 @@ public abstract partial class CommandStreamCore
             // Keeping Submit and Snapshot aligned lets hosts use Submit on source and
             // Replay on replica without diverging for combined command patterns.
             //
+            // Validation (embedded placeholder lifecycle, component store presence,
+            // hierarchy overlay) is opt-in via Validate() — the default path runs
+            // zero preflight checks. What remains is the functional pipeline: the
+            // slot-reservation invariant check (defense-in-depth), free-list
+            // alignment, deferred resolution, then materialize/apply/destroy.
+            //
             // Before any free-list mutations, align the cancelled-batch entries to
             // match the wire emission order. CancelPendingEntity pushes free-list
             // entries in user destroy-order during recording, but Replay processes
             // Release ops in batch (creation) order. The batch-order realignment
             // below corrects this divergence so the source's free-list matches the
             // shadow's after Replay.
-            PreflightEmbeddedPlaceholders();
+            //
+            // Embedded-placeholder / layout rejection (T2.7) is flag-driven: the
+            // record path probes every written value (per-type static verdict) and
+            // sets a frame flag only when a value may reference a placeholder (or
+            // its layout is unresolvable). The scan below runs the full last-wins
+            // pass only for flagged frames — before id reservation, free-list
+            // realignment and materialization (atomic; failures consume no id).
             PreValidatePendingSlots();
-            PreflightComponentStores(_frozen);
-            PreflightHierarchyOverlay(_world, _frozen);
+            PreflightEmbeddedPlaceholders();
             AlignCancelledBatchFreeListOrder();
             ResolveDeferredCreates();
             PreValidatePendingSlots();
@@ -211,53 +294,17 @@ public abstract partial class CommandStreamCore
         }
     }
 
-    private void PreflightEmbeddedPlaceholders()
+    private void PreflightEmbeddedPlaceholders(bool useFlagFastPath = true)
     {
-        // Fast path: the record path flags this frame only when a written value may
+        // T2.7: the record path flags this frame only when a written value may
         // contain a placeholder ref (or its layout could not be verified). A frame
         // with no such value cannot fail this preflight, so skip the full scan.
-        if (Volatile.Read(ref _frozen.MayNeedEmbeddedPlaceholderPreflight) == 0)
+        // Validate() passes useFlagFastPath: false — an explicit full scan.
+        if (useFlagFastPath &&
+            Volatile.Read(ref _frozen.MayNeedEmbeddedPlaceholderPreflight) == 0)
             return;
 
-        var pending = _frozen.Pending;
-        var maxRawCount = 0;
-        for (var batchIdx = 0; batchIdx < pending.Count; batchIdx++)
-        {
-            if (!pending.Canceled[batchIdx])
-                maxRawCount = Math.Max(maxRawCount, pending.CompCounts[batchIdx]);
-        }
-
-        int[]? pooledIndices = null;
-        Span<int> indices = maxRawCount <= 64
-            ? stackalloc int[maxRawCount]
-            : (pooledIndices = ArrayPool<int>.Shared.Rent(maxRawCount)).AsSpan(0, maxRawCount);
-        try
-        {
-            for (var batchIdx = 0; batchIdx < pending.Count; batchIdx++)
-            {
-                if (pending.Canceled[batchIdx])
-                    continue;
-
-                var count = DeduplicateBatchChain(
-                    pending.Comps, pending.Heads[batchIdx], indices[..pending.CompCounts[batchIdx]]);
-                for (var i = 0; i < count; i++)
-                {
-                    ref var component = ref pending.Comps[indices[i]];
-                    var offsets = EntityFieldResolver.GetOffsets(component.Type);
-                    if (!offsets.IsEmpty)
-                    {
-                        PreflightEmbeddedPlaceholders(
-                            pending.Buf.AsSpan(component.Offset, component.Size),
-                            component.Type, offsets);
-                    }
-                }
-            }
-        }
-        finally
-        {
-            if (pooledIndices is not null)
-                ArrayPool<int>.Shared.Return(pooledIndices);
-        }
+        RejectBatchEmbeddedPlaceholders();
 
         foreach (var store in _frozen.Stores)
         {
@@ -266,29 +313,216 @@ public abstract partial class CommandStreamCore
         }
     }
 
-    private void PreflightEmbeddedPlaceholders(
-        ReadOnlySpan<byte> data, ComponentType componentType, ReadOnlySpan<int> offsets)
+    /// <summary>
+    /// T2.7 record-path probe: sets the frame flag when a written component value
+    /// may contain a placeholder ref (or its layout cannot be verified), so the
+    /// submit/snapshot scan skips its full pass for placeholder-free frames. Never
+    /// throws; layout-verification failures surface at the scan's original timing,
+    /// before any world/allocator mutation. Per-type verdict via
+    /// <see cref="FieldKinds{T}"/> —a static field read (no array lookup) —so the
+    /// placeholder-free hot path costs one hoistable read + one perfectly predicted
+    /// branch. The flag is monotonic within a frame, so probing stops after the
+    /// first hit.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private protected void FlagFrameIfMayContainPlaceholder<T>(in T data) where T : unmanaged
+    {
+        // T2.8: single readonly static field read per written value. Types without
+        // Entity fields (the common case) pay one load + one perfectly predicted
+        // branch. Types with Entity fields probe each field for a placeholder and
+        // set the frame flag (monotonic, so probing stops after the first hit).
+        // Unresolvable layouts set HasEntityFields conservatively, so the submit-
+        // time scan runs and throws the layout error at its original timing.
+        if (!FieldKinds<T>.HasEntityFields)
+            return;
+
+        var offsets = FieldKinds<T>.Offsets;
+        if (offsets.Length == 0)
+        {
+            Interlocked.Exchange(ref _frozen.MayNeedEmbeddedPlaceholderPreflight, 1);
+            return;
+        }
+
+        var bytes = MemoryMarshal.AsBytes(
+            MemoryMarshal.CreateReadOnlySpan(ref Unsafe.AsRef(in data), 1));
+        for (var i = 0; i < offsets.Length; i++)
+        {
+            if (MemoryMarshal.Read<Entity>(bytes[offsets[i]..]).IsPlaceholder)
+            {
+                Interlocked.Exchange(ref _frozen.MayNeedEmbeddedPlaceholderPreflight, 1);
+                return;
+            }
+        }
+    }
+
+    // ── Consume-side embedded-placeholder / layout rejection (T2.5) ────
+    //
+    // Runs in the consume path (Submit / Snapshot / SnapshotInto / async handoff)
+    // before any id reservation, free-list realignment, materialization, delta
+    // emission or worker handoff. Rejects: (a) component values referencing a
+    // cancelled or unknown deferred placeholder, and (b) component types whose
+    // layout cannot be resolved (nested Entity / LayoutKind.Auto with Entity
+    // fields) — the same contract and message text as Validate(). Because it runs
+    // before ResolveDeferredCreates, a rejection consumes no allocator id/version
+    // (the pre-T2.5 preflight boundary) and prevents source/replica divergence.
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void EnsureScanFieldKind(int id)
+    {
+        var arr = _scanFieldKind;
+        if ((uint)id < (uint)arr.Length)
+            return;
+        var newLen = arr.Length == 0 ? 64 : arr.Length;
+        while (newLen <= id) newLen *= 2;
+        Array.Resize(ref _scanFieldKind, newLen);
+    }
+
+    /// <summary>
+    /// True when <paramref name="embedded"/> is a placeholder created by this
+    /// frame's deferred Create (same stream, not cancelled) —still legal at
+    /// consume-entry time; it is replaced with a real id by
+    /// <see cref="ResolveDeferredCreates"/> before materialization/emission.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool IsValidDeferredPlaceholder(Entity embedded)
+    {
+        var seq = embedded.Version;
+        if ((uint)seq >= (uint)_deferredSeq)
+            return false;
+        var batchIdx = _pendingBatchDeferredArr[seq];
+        return (uint)batchIdx < (uint)_frozen.PendingBatchCount &&
+            !_frozen.BatchCanceled[batchIdx];
+    }
+
+    /// <summary>
+    /// Rejects a component value whose effective <see cref="Entity"/> fields
+    /// reference a cancelled or unknown deferred placeholder. Shared message
+    /// text with the store-level check, so Validate() and the consume path fail
+    /// identically. <paramref name="owner"/> is the entity the value belongs to.
+    /// </summary>
+    private void RejectEmbeddedPlaceholders(
+        ReadOnlySpan<byte> data, ComponentType componentType, ReadOnlySpan<int> offsets, Entity owner)
     {
         foreach (var offset in offsets)
         {
-            var entity = MemoryMarshal.Read<Entity>(data[offset..]);
-            if (!entity.IsPlaceholder)
+            var embedded = MemoryMarshal.Read<Entity>(data[offset..]);
+            if (!embedded.IsPlaceholder)
+                continue;
+            if (IsValidDeferredPlaceholder(embedded))
                 continue;
 
-            var seq = entity.Version;
-            if ((uint)seq < (uint)_deferredSeq)
-            {
-                var batchIdx = _pendingBatchDeferredArr[seq];
-                if ((uint)batchIdx < (uint)_frozen.PendingBatchCount &&
-                    !_frozen.BatchCanceled[batchIdx])
-                {
-                    continue;
-                }
-            }
-
             throw new InvalidOperationException(
-                $"Component type id {componentType.Value} references cancelled or unknown placeholder {entity}.");
+                $"Component type id {componentType.Value} on entity {owner} references " +
+                $"cancelled or unknown placeholder {embedded}.");
         }
+    }
+
+    /// <summary>
+    /// Scans every non-cancelled pending batch's effective last-wins component
+    /// values, rejecting cancelled/unknown embedded placeholder refs and
+    /// unresolvable layouts. Only Entity-field-bearing component types are
+    /// value-scanned (per-type verdict cached in <see cref="_scanFieldKind"/>);
+    /// the batch chain is walked head-first so only the newest non-removed value
+    /// of each type is examined —matching materialize/emit last-wins semantics
+    /// without a second dedup pass. Shared by <see cref="PreflightEmbeddedPlaceholders"/>
+    /// (Validate) and the consume entry points (Submit/Snapshot/async handoff).
+    /// </summary>
+    /// <remarks>
+    /// Performance: the hot loop is fully inlined (no helper calls per component)
+    /// — one bounds-checked byte read for the per-type verdict, then a value scan
+    /// only for Entity-field-bearing types. The verdict array is monotonic, so the
+    /// steady-state cost is one L1 read + one branch per batch component.
+    /// </remarks>
+    private void RejectBatchEmbeddedPlaceholders()
+    {
+        var pending = _frozen.Pending;
+        var comps = pending.Comps;
+        var buf = pending.Buf;
+        var batchCanceled = pending.Canceled;
+        var batchEntities = pending.Entities;
+        var kinds = _scanFieldKind;
+
+        for (var batchIdx = 0; batchIdx < pending.Count; batchIdx++)
+        {
+            if (batchCanceled[batchIdx])
+                continue;
+
+            var entity = batchEntities[batchIdx];
+            var current = pending.Heads[batchIdx];
+
+            // Last-wins: the chain head is the newest write; the first
+            // non-removed value of each Entity-field-bearing type is the
+            // effective one —older duplicates are superseded.
+            ulong s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0, s5 = 0, s6 = 0, s7 = 0;
+            while (current >= 0)
+            {
+                ref var comp = ref comps[current];
+                if (!comp.Removed)
+                {
+                    var id = comp.Type.Value;
+                    var kind = (uint)id < (uint)kinds.Length ? kinds[id] : (byte)0;
+                    if (kind == 0)
+                    {
+                        kind = JudgeAndCacheFieldKind(id, ref kinds);
+                        kinds = _scanFieldKind;
+                    }
+
+                    if (kind == 2)
+                    {
+                        if (id < 512 &&
+                            IsSeen(ref s0, ref s1, ref s2, ref s3,
+                                   ref s4, ref s5, ref s6, ref s7, id))
+                        {
+                            current = comp.Next;
+                            continue;
+                        }
+
+                        // Inline value scan: only Entity-field-bearing values reach
+                        // here; real references (the hot case) cost one read + one
+                        // branch before the continue.
+                        var offsets = EntityFieldResolver.GetOffsets(comp.Type);
+                        var data = buf.AsSpan(comp.Offset, comp.Size);
+                        foreach (var off in offsets)
+                        {
+                            var embedded = MemoryMarshal.Read<Entity>(data[off..]);
+                            if (!embedded.IsPlaceholder)
+                                continue;
+                            if (IsValidDeferredPlaceholder(embedded))
+                                continue;
+                            throw new InvalidOperationException(
+                                $"Component type id {comp.Type.Value} on entity {entity} references " +
+                                $"cancelled or unknown placeholder {embedded}.");
+                        }
+                    }
+                }
+                current = comp.Next;
+            }
+        }
+    }
+
+    private byte JudgeAndCacheFieldKind(int id, ref byte[] kinds)
+    {
+        // GetOffsets resolves and caches the layout; throws for nested Entity /
+        // LayoutKind.Auto with Entity fields (same contract as Validate()).
+        var kind = EntityFieldResolver.GetOffsets(new ComponentType(id)).IsEmpty ? (byte)1 : (byte)2;
+        EnsureScanFieldKind(id);
+        _scanFieldKind[id] = kind;
+        kinds = _scanFieldKind;
+        return kind;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool IsSeen(ref ulong s0, ref ulong s1, ref ulong s2, ref ulong s3,
+        ref ulong s4, ref ulong s5, ref ulong s6, ref ulong s7, int id)
+    {
+        if (id < 64)      { var bit = 1UL << id;        if ((s0 & bit) != 0) return true; s0 |= bit; return false; }
+        if (id < 128)     { var bit = 1UL << (id - 64);  if ((s1 & bit) != 0) return true; s1 |= bit; return false; }
+        if (id < 192)     { var bit = 1UL << (id - 128); if ((s2 & bit) != 0) return true; s2 |= bit; return false; }
+        if (id < 256)     { var bit = 1UL << (id - 192); if ((s3 & bit) != 0) return true; s3 |= bit; return false; }
+        if (id < 320)     { var bit = 1UL << (id - 256); if ((s4 & bit) != 0) return true; s4 |= bit; return false; }
+        if (id < 384)     { var bit = 1UL << (id - 320); if ((s5 & bit) != 0) return true; s5 |= bit; return false; }
+        if (id < 448)     { var bit = 1UL << (id - 384); if ((s6 & bit) != 0) return true; s6 |= bit; return false; }
+        var b7 = 1UL << (id - 448);                      if ((s7 & b7) != 0) return true; s7 |= b7; return false;
     }
 
     // ── Snapshot / SubmitAndSnapshotAsync ─────────────────────────────
@@ -320,11 +554,26 @@ public abstract partial class CommandStreamCore
     /// slots to resolve. World-state convergence is identical either way:
     /// <see cref="Replay(FrameDelta, Boolean)"/> processes the same byte payload.
     /// </para>
+    /// <para>
+    /// <b>Zero validation by default —with one opt-out.</b> <see cref="Snapshot"/>
+    /// no longer runs the contract preflights (component store presence, hierarchy
+    /// overlay). A violating frame may therefore emit a delta whose replay fails on
+    /// a receiving host. Call <see cref="Validate"/> before <see cref="Snapshot"/>
+    /// to reject all recorded contract violations up front.
+    /// </para>
+    /// <para>
+    /// One class of errors is still rejected atomically before emission: component
+    /// values referencing a cancelled or unknown deferred placeholder, and
+    /// unresolvable component layouts (nested <see cref="Entity"/> fields /
+    /// LayoutKind.Auto with Entity fields). These are rejected in the consume path
+    /// —before any deferred resolution, target clear or delta emission — so a
+    /// violating frame never produces a delta a replaying host would reject.
+    /// </para>
     /// </remarks>
     /// <exception cref="InvalidOperationException">
-    /// An effective component value references a cancelled or unknown deferred placeholder,
-    /// or the recorded frame exceeds <see cref="FrameDelta.MaxFrameBytes"/> or
-    /// <see cref="FrameDelta.MaxOpsPerFrame"/>.
+    /// The recorded frame exceeds <see cref="FrameDelta.MaxFrameBytes"/> or
+    /// <see cref="FrameDelta.MaxOpsPerFrame"/>, or a deferred placeholder cannot be
+    /// resolved in non-deferred mode.
     /// </exception>
     public FrameDelta Snapshot()
     {
@@ -332,6 +581,10 @@ public abstract partial class CommandStreamCore
         if (_deferredEntities)
             ThrowIfSnapshotHasImmediateEntities();
 
+        // Embedded-placeholder / layout rejection (T2.7) is flag-driven: the
+        // record path sets the frame flag only for values that may reference a
+        // placeholder; the scan below runs only for flagged frames — before any
+        // deferred resolution or delta emission (no divergence).
         PreflightEmbeddedPlaceholders();
         PreflightFrameDeltaBudget(_deferredEntities);
         if (!_deferredEntities)
@@ -355,13 +608,25 @@ public abstract partial class CommandStreamCore
     /// <see cref="Snapshot"/> except the result is written into <paramref name="target"/>.
     /// <para/>
     /// The caller must not mutate <paramref name="target"/> concurrently.
-    /// If validation fails, the target remains unchanged.
+    /// <para>
+    /// <b>Zero validation by default —with one opt-out.</b> <see cref="SnapshotInto"/>
+    /// no longer runs the contract preflights (component store presence, hierarchy
+    /// overlay). Call <see cref="Validate"/> before <see cref="SnapshotInto"/> to
+    /// reject all recorded contract violations up front.
+    /// </para>
+    /// <para>
+    /// One class of errors is still rejected atomically before emission: component
+    /// values referencing a cancelled or unknown deferred placeholder, and
+    /// unresolvable component layouts — so a violating frame never produces a delta
+    /// a replaying host would reject, and <paramref name="target"/> is left
+    /// untouched.
+    /// </para>
     /// </remarks>
     /// <exception cref="ArgumentNullException"><paramref name="target"/> is <c>null</c>.</exception>
     /// <exception cref="InvalidOperationException">
-    /// An effective component value references a cancelled or unknown deferred placeholder,
-    /// or the recorded frame exceeds <see cref="FrameDelta.MaxFrameBytes"/> or
-    /// <see cref="FrameDelta.MaxOpsPerFrame"/>.
+    /// The recorded frame exceeds <see cref="FrameDelta.MaxFrameBytes"/> or
+    /// <see cref="FrameDelta.MaxOpsPerFrame"/>, or a deferred placeholder cannot be
+    /// resolved in non-deferred mode.
     /// </exception>
     public void SnapshotInto(FrameDelta target)
     {
@@ -370,6 +635,9 @@ public abstract partial class CommandStreamCore
         if (_deferredEntities)
             ThrowIfSnapshotHasImmediateEntities();
 
+        // Embedded-placeholder / layout rejection (T2.7) is flag-driven: the
+        // scan below runs only for flagged frames — before any deferred
+        // resolution, target clear or delta emission.
         PreflightEmbeddedPlaceholders();
         PreflightFrameDeltaBudget(_deferredEntities);
         if (!_deferredEntities)
@@ -444,8 +712,12 @@ public abstract partial class CommandStreamCore
     /// </para>
     /// </remarks>
     /// <exception cref="InvalidOperationException">
-    /// The recorded frame fails validation or exceeds a FrameDelta budget. The
-    /// failure occurs before the World is submitted.
+    /// The recorded frame exceeds a FrameDelta budget (detected before the World is
+    /// submitted), or a consume-time contract violation surfaces during submit.
+    /// Embedded-placeholder/layout violations are rejected before the submit/worker
+    /// handoff (atomically, no mutations); other consume-time violations may leave
+    /// earlier commands applied. Call <see cref="Validate"/> before this method to
+    /// fail before any mutation.
     /// </exception>
     public Task<FrameDelta> SubmitAndSnapshotAsync()
     {
@@ -498,6 +770,14 @@ public abstract partial class CommandStreamCore
     /// an independent world, use <see cref="Snapshot"/> / <see cref="SnapshotInto"/>
     /// with <see cref="DeferredEntities"/> set to <c>true</c> instead.
     /// </para>
+    /// <para>
+    /// <b>On failure, <paramref name="target"/> content is undefined.</b>
+    /// Embedded-placeholder/layout violations are rejected before the worker
+    /// starts and leave <paramref name="target"/> untouched; other consume-time
+    /// violations may clear or partially write <paramref name="target"/> (the
+    /// worker may have begun building the delta before the failure surfaces).
+    /// Treat <paramref name="target"/> as unusable after an exception.
+    /// </para>
     /// </remarks>
     /// <returns>
     /// A <see cref="Task"/> that completes when the background delta-building
@@ -506,8 +786,11 @@ public abstract partial class CommandStreamCore
     /// on the calling thread before the returned task.
     /// </returns>
     /// <exception cref="InvalidOperationException">
-    /// The recorded frame fails validation or exceeds a FrameDelta budget. The
-    /// target remains unchanged and no recorded mutations are applied.
+    /// The recorded frame exceeds a FrameDelta budget, or a consume-time contract
+    /// violation surfaces during submit. Embedded-placeholder/layout violations are
+    /// rejected before the submit/worker handoff (atomically, no mutations); other
+    /// consume-time violations may leave earlier commands applied. Call
+    /// <see cref="Validate"/> before this method to fail before any mutation.
     /// </exception>
     public Task SubmitAndSnapshotIntoAsync(FrameDelta target)
     {
@@ -539,14 +822,16 @@ public abstract partial class CommandStreamCore
     {
         try
         {
-            // Contract failures must be discovered while the commands are still
-            // owned by the calling thread. Starting the worker first would let it
-            // observe a frame that the local World rejects and would leave the
-            // detached FrozenState without tracked ownership when Submit throws.
-            PreflightEmbeddedPlaceholders();
+            // validation is opt-in (Validate()) — the default async path runs zero
+            // preflight contract checks. What must still happen on the calling
+            // thread before the worker owns the state: the slot-reservation
+            // invariant check (defense-in-depth), the flag-driven embedded-
+            // placeholder / layout scan (T2.7, only for flagged frames — before
+            // any id reservation), the FrameDelta budget check (so an oversized
+            // frame fails before free-list realignment, real-id reservation, state
+            // swap and worker start), free-list alignment, and deferred resolution.
             PreValidatePendingSlots();
-            PreflightComponentStores(_frozen);
-            PreflightHierarchyOverlay(_world, _frozen);
+            PreflightEmbeddedPlaceholders();
 
             // Delta sizing is independent of placeholder resolution. Reject an
             // oversized frame before free-list realignment or real-id reservation.

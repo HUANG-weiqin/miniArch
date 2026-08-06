@@ -195,36 +195,4 @@ internal static class EntityFieldResolver
             }
         }
     }
-
-    /// <summary>
-    /// Returns true when the value may contain a placeholder ref and therefore needs
-    /// the submit/snapshot placeholder preflight: either an <see cref="Entity"/> field
-    /// is a placeholder, or the type's layout cannot be verified (nested Entity /
-    /// LayoutKind.Auto — <see cref="GetOffsets"/> throws). Never throws: layout
-    /// verification failures are surfaced by the preflight at its original timing,
-    /// before any world/allocator mutation.
-    /// </summary>
-    internal static bool MayContainPlaceholder(ReadOnlySpan<byte> data, ComponentType typeId)
-    {
-        ReadOnlySpan<int> offsets;
-        try
-        {
-            offsets = GetOffsets(typeId);
-        }
-        catch (InvalidOperationException)
-        {
-            return true; // layout unknown — conservative: run the full preflight
-        }
-        if (offsets.IsEmpty)
-            return false;
-
-        ref var dataRef = ref MemoryMarshal.GetReference(data);
-        for (var i = 0; i < offsets.Length; i++)
-        {
-            var entity = Unsafe.ReadUnaligned<Entity>(ref Unsafe.Add(ref dataRef, offsets[i]));
-            if (entity.IsPlaceholder)
-                return true;
-        }
-        return false;
-    }
 }
