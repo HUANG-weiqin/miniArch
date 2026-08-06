@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream 与 ParallelCommandStream 的 typed-store 录制、consume-time 校验、Submit/Snapshot/Replay 确定性及 async ownership 契约
-updated: 2026-08-05
+updated: 2026-08-06
 ---
 # Command Stream Runtime
 
@@ -33,8 +33,8 @@ updated: 2026-08-05
 
 ```text
 Create/Clone ──→ pending batch ──→ materialize or emit Create
-Add/Set/Remove(existing) ──→ ComponentStore<T> ──→ prepare/prune → preflight → apply/emit
-AddChild/RemoveChild ──→ final hierarchy overlay ──→ preflight → detach affected children → apply/emit final adds
+Add/Set/Remove(existing) ──→ ComponentStore<T> ──→ prepare/prune → (flag 驱动占位符守卫) → apply/emit
+AddChild/RemoveChild ──→ final hierarchy overlay ──→ (语义校验可选：Validate) → detach affected children → apply/emit final adds
 Destroy ──→ destroy list ──→ final phase
 ```
 
@@ -76,30 +76,36 @@ pending/foreign placeholder 的 `IsPlaceholder` 仍在 record 阶段用于本地
 - `Parallel_recording_skips_stale_existing_entity_component_commands`
 - `SubmitAndSnapshotAsync_skips_existing_entity_commands_that_become_stale_before_consume`
 
-### Submit preflight 与失败边界
+### 零校验契约与 `Validate()`（2026-08-06）
 
-`Submit()` 在 allocator/free-list/materialize/World mutation 前依次检查：
+**默认语义：CommandStream / ParallelCommandStream 的 Submit/Snapshot/async 路径不做语义校验**（组件存在性、hierarchy 环等）。语义校验抽成公共 API `public void Validate()`（基类 `CommandStreamCore`，两子类继承；幂等、无副作用声明、首个违规处抛 `InvalidOperationException`，错误消息含实体 id + 组件类型）。
 
-1. pending 与 existing component store 的有效 Entity 字段不得引用 cancelled/unknown deferred placeholder；
-2. pending slot 仍为 reserved；
-3. component store 的 strict presence：Add 必须缺失、Set 必须存在、Remove 缺失为 no-op；
-4. final hierarchy overlay 的 endpoint、自环与 parent-chain cycle。
+- **`Validate()` 保证**：占位符生命周期（batch last-wins dedup + store lazy-offsets、deferred-aware）、组件 store strict presence（Add 必须缺失 / Set 必须存在 / Remove 缺失 no-op）、hierarchy overlay endpoint/自环/parent-chain 环。
+- **`Validate()` 不覆盖**：CreateMany 组一致性（Materialize 期 `ThrowCreateManyMismatch/MaskFailure` 抛）、slot reservation（Submit 内 `PreValidatePendingSlots` 防御性检查，A 类保留）、FrameDelta 预算（Submit/Snapshot 期 `PreflightFrameDeltaBudget`）。
+- **不调 Validate 的后果**：存在性/hierarchy 违规在 apply 期抛（消息统一 `"Entity {X} does not have component {T}."`），**部分应用**（前序 batch/store 已落地，reserved ids 由内部清理释放）；`SubmitAndSnapshotIntoAsync` 失败时 **target 内容未定义**（旧 "target remains unchanged" 承诺撤销，见 async 节）。
 
-通过全部 contract preflight 后才对齐 cancelled reservation 的 free-list 顺序并解析 deferred id。placeholder 检查使用与 materialize/emit 相同的 pending last-wins dedup，不能让已被后续 Set 覆盖的死值导致误拒绝。
+#### 库能力守卫（P0 裁决，不可移入 Validate）
 
-> 实现注（2026-08-05，Advisor 两轮审阅后修订）：record 阶段在批写入咽喉点 `CommitBatchComponent` 与 store 路径（`CommandStream.Add/Set<T>`、`ParallelCommandStream.Add/Set<T>`）探测写入值是否可能含 placeholder，命中或布局不可验证（nested Entity / LayoutKind.Auto，`GetOffsets` 抛 InvalidOperationException）时置**帧级单调 flag** `FrozenState.MayNeedEmbeddedPlaceholderPreflight`（Interlocked.Exchange，首次命中后本帧不再探测）；`PreflightEmbeddedPlaceholders()` 首行 volatile 读 flag，0 直接 return，1 跑原全量逻辑。探测器只吞已知布局验证异常（不 catch-all，其他异常照常传播），保证不出现"命令已落库但标记为 false"的漏检；布局失败由 preflight 在原有时机、任何 mutation 前抛。帧间在 `Clear()`/`SwapOutState()` 复位。store 的 `PreflightEmbeddedPlaceholders`/`ReplacePlaceholders` 延迟到首个 payload entry 才取 offsets——Remove-only / 空 store 永不做布局扫描，不被同帧无关 placeholder 或 deferred Create 拖累。Remove-only 不再触发布局扫描是有意行为变更（Remove 无 payload，有契约测试）。
+占位符引用（`Entity(-1, seq)`）与不可解析布局（nested Entity / LayoutKind.Auto + Entity 字段）**绝不落库**——这是 lockstep 分叉防线（P0#1/P0#2：源端静默写入 → 副本 Replay 的 `GetOffsets`/`ResolveInPlace` 抛 → 分叉），不是语义校验：
 
-Hierarchy 的 preflight 检查最终 overlay，因此消费也必须按最终状态落地：先按 child id 解除所有有效 intent 涉及的旧链接，再按 child id 安装最终 Add。Snapshot wire 同样先发 RemoveChild、后发 AddChild；否则合法的父子方向反转会因 World 中尚未解除的旧边产生瞬时 cycle，导致 Submit/Replay 错误拒绝。
+- **record 期泛型静态探测**：`FieldKinds<T>`（`static readonly bool HasEntityFields` + `static readonly int[] Offsets` + 静态 ctor，ctor 永不抛——布局失败保守置 `HasEntityFields=true`，由扫描器抛）；无 Entity 字段类型每值 1 次 static 读 + 1 分支。探测点 = `WritePendingComponent<T>`（batch 写前）+ `CommandStream/ParallelCommandStream.Add/Set<T>` 的 store 分支（5 处）。
+- **帧级 flag**：`FrozenState.MayNeedEmbeddedPlaceholderPreflight`（`Interlocked` 置位，`Clear`/`SwapOutState` 复位）。
+- **consume 扫描器**：Submit/Snapshot/SnapshotInto/PrepareAsyncHandoff 在 reserve/free-list/materialize/emit **前**调 `PreflightEmbeddedPlaceholders()`——首行 volatile 读 flag，0 直接 return；1 时全量扫（batch last-wins dedup + store lazy-offsets，deferred-aware：同帧合法 placeholder 放行）。**原子拒绝**：失败不消耗 id/version（v1 保留）。
+- `Validate()` 绕过 flag 全量扫（`useFlagFastPath: false`，用户显式调用）。
 
-Set-only 且全 store 无结构命令时，`PrepareForConsume` 在 prune stale entity 的同时构建 Set location cache，Apply 复用 row/archetype，避免第二次读取 `EntityRecord`。cache 是单一状态机：`None`、`UniformArchetype`、`PerEntryArchetype`。任一 component store 含 Add/Remove 时全局禁用 row cache，因为前一个 store 可能迁移实体。
+**历史**：preflight 序列（0fca3eb，2026-07-25 引入 Submit 隐式 4 项 preflight）→ 08-05 flag 优化（`MayContainPlaceholder` record 探测 + 帧级 flag）→ **08-06 语义校验抽为 `Validate()` + 守卫保留**（探测改 `FieldKinds<T>` 泛型静态，修复 P0#1/P0#2）。期间经历 T2.5（统一扫描器，-7.6%）、T2.6（融合进既有遍历，-5.4%）两版性能实验后定稿为 flag 驱动方案（-3~-6% 噪声带，门控 A/B 见 `kb-hero-pipeline-regression.md`）。
 
-这些检查防止已知用户契约错误导致部分提交，但不是通用事务系统。灾难性异常或未建模的内部失败仍不承诺 rollback；Replay 也没有通用事务语义。
+hierarchy 消费按最终 overlay 落地：先按 child id 解除所有有效 intent 涉及的旧链接，再安装最终 Add；Snapshot wire 同样先 RemoveChild 后 AddChild（否则合法的父子方向反转会因 World 中尚未解除的旧边产生瞬时 cycle，导致 Submit/Replay 错误拒绝）。
+
+Set-only 且全 store 无结构命令时，`PrepareForConsume` 在 prune stale entity 的同时构建 Set location cache，Apply 复用 row/archetype，避免第二次读取 `EntityRecord`。cache 是单一状态机：`None`、`UniformArchetype`、`PerEntryArchetype`。任一 component store 含 Add/Remove 时全局禁用 row cache（`BUG_set_preflight_row_cache_is_disabled_when_any_store_is_structural`）。
+
+这些守卫防止已知用户契约错误导致 lockstep 分叉或部分提交，但不是通用事务系统。灾难性异常或未建模的内部失败仍不承诺 rollback；Replay 也没有通用事务语义。
 
 ### async frozen-state ownership
 
-`SubmitAndSnapshotAsync` / `SubmitAndSnapshotIntoAsync` 在 active state 仍由调用线程独占时完成 contract preflight（包括有效组件值中的 placeholder lifecycle）与 FrameDelta 整帧预算 preflight；只有两者都通过，才允许 free-list 对齐、placeholder real-id resolve、state swap、worker 启动和本地 materialize。worker 创建后立即登记 `_pendingFrozen/_pendingTask` ownership。若内部 Submit 随后失败，先观察 worker 完成再回收 frozen state，并保留原同步异常。
+`SubmitAndSnapshotAsync` / `SubmitAndSnapshotIntoAsync` 在 active state 仍由调用线程独占时完成：flag 驱动占位符守卫（`PreflightEmbeddedPlaceholders()`，仅 flagged 帧全量扫）与 FrameDelta 整帧预算 preflight；守卫失败时不消耗 id、不 handoff、不启动 worker。之后才允许 free-list 对齐、placeholder real-id resolve、state swap、worker 启动和本地 materialize。worker 创建后立即登记 `_pendingFrozen/_pendingTask` ownership。若内部 Submit 随后失败，先观察 worker 完成再回收 frozen state，并保留原同步异常。
 
-因此“不被本地 Submit、placeholder lifecycle 或 FrameDelta 预算接受的 frame”不会先交给后台 worker，复用的 target 也不会在 preflight 失败时被改写。
+因此“不被本地 Submit、占位符守卫或 FrameDelta 预算接受的 frame”不会先交给后台 worker。**target 语义（`SubmitAndSnapshotIntoAsync`）**：占位符/布局守卫失败发生在 `target.Clear()` 前 → target 未动；其他 consume 期错误（如存在性违规）可能已 Clear 或部分写入 → **失败时 target 内容未定义**（旧 “target remains unchanged” 承诺已撤销，由 `Contract_*` 测试锁定）。
 
 ### deferred entity 两种模式
 
@@ -112,7 +118,7 @@ placeholder 只在当前 stream/batch 内有效。跨帧持有解析结果使用
 
 ### FrameDelta 结构与预算边界
 
-生产端与消费端共享硬上限：`MaxOpsPerFrame = 1_000_000`、`MaxFrameBytes = 16 MiB`。每个 `FrameDelta.Add*` 在写任何字节前精确检查完整 operation，避免超限时留下半条 op；`Snapshot` / `SnapshotInto` / 两条 async submit+snapshot 路径在 deferred id resolution、改写 target、swap frozen state 或提交 World 前先判断 embedded placeholder lifecycle 与整帧预算。因此 producer 不会返回随后被自身 `Validate()` 拒绝的 dangling-placeholder delta，预算失败也不会消费 allocator id/version。
+生产端与消费端共享硬上限：`MaxOpsPerFrame = 1_000_000`、`MaxFrameBytes = 16 MiB`。每个 `FrameDelta.Add*` 在写任何字节前精确检查完整 operation，避免超限时留下半条 op；`Snapshot` / `SnapshotInto` / 两条 async submit+snapshot 路径在 deferred id resolution、改写 target、swap frozen state 或提交 World 前先跑 flag 驱动占位符守卫与整帧预算 preflight。因此 producer 不会返回随后被副本 Replay 拒绝的 dangling-placeholder delta，预算失败也不会消费 allocator id/version。
 
 常规帧先用 O(store 数) 的保守 upper bound 证明安全，只有接近上限时才精确扫描，因此 `snapshot-only` A/B（10k Set，Release，1s warmup + 3s measure，各 3 次中位数）保持 42909.3 → 43014.0 ticks/s（+0.2%，噪声内）。精确扫描与实际 writer 共用同一 sizing 规则，由 `Budget_matches_writer_for_every_operation_shape` 守卫。
 

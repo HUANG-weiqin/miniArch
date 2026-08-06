@@ -2,7 +2,7 @@
 title: Hero Pipeline Regression Test
 module: HeroComing.Perf
 description: First-class regression gate for architecture changes — 30s timed throughput test; PipelineBenchmarkTests history reference (old --track-observer / --compare-old-value-tracking removed with old change tracking API)
-updated: 2026-08-05
+updated: 2026-08-06
 ---
 # Hero Pipeline Regression Test
 
@@ -19,6 +19,10 @@ updated: 2026-08-05
 **已实施的优化（placeholder 校验语义保持、Remove-only 契约修正；2026-08-05 经 Advisor 两轮审阅，门控 A/B 实测 +7%/+13%）**：record 阶段在批写入咽喉点 `CommitBatchComponent` 和 store 路径（`CommandStream.Add/Set`、`ParallelCommandStream.Add/Set`）探测值是否可能含 placeholder；命中或布局不可验证（nested Entity / Auto-layout）时置**帧级单调 flag**，preflight 首行读 flag，0 直接 return，1 跑原全量逻辑。探测只吞已知布局异常（Unknown 也置位，由 preflight 在原有时机抛）。store 的 preflight/ReplacePlaceholders 延迟到首个 payload entry 才取 offsets，Remove-only/空 store 不被同帧无关 placeholder 或 deferred Create 拖累（P2）。Remove-only 不再触发布局扫描属有意行为变更（有契约测试）。`GetOffsets` 缓存发布顺序修复（slot 先写、外层后发，slot 读写改 Volatile）。`dotnet test` 1134/1134 通过，fuzz 11/11，门禁通过。
 
 > **性能结论口径（2026-08-05 门控 A/B 实测后更新）**：msmpeng 门控、同窗口交错测量（每版本 2 轮）：优化后相对未优化 HEAD **+7%/+13%**（Movement 1873-1922 vs 1768-1798；Attack 1110-1127 vs 988-1001）；相对 07-06 baseline 仍 -9%/-12%（baseline 2092-2104/1261-1290）。残余差距两部分：record 探测开销 ~4.6%（每组件一次 flag volatile 读 + offsets 数组查表）+ 269 提交系列其他成本 ~5%（E1 全移除 preflight 后仍比 baseline 低 ~5%）。
+
+> **性能结论口径（2026-08-06 零校验重构最终态，门控交错 A/B）**：T2.8（`Validate()` 抽取 + `FieldKinds<T>` 守卫）3 轮中位 **Movement 2032 / Attack 1205**；同窗口 baseline `c79f464`（零检查参考）2099/1278——守卫成本 **-3.2%/-5.7%**；相对 07-25 未优化 HEAD（1768-1798/988-1001）快 **13-15%**；相对 08-05 优化版 main（1873-1922/1110-1127）快 **5-8%**。门禁 80% 阈值（1642/997）余量 **+23%/+21%**。
+
+> **成本分解**：守卫（FieldKinds 探测 + flag 扫描器）~1-2%（每值 1 static 读 + 分支，仅 flagged 帧跑扫描）；`Validate()`/存在性校验抽离后 Submit 零语义校验的净收益 ~2-5%。验收线口径：07-06 baseline（2052.7/1246.8）是**含隐式 preflight 时代**的历史测量，任何"零语义校验 + 占位符守卫"实现都无法回到该值（T2 纯零检查单测 ~2044，仍在 -0.4% 噪声带内）——当前验收以门控 80% 阈值 + 同窗口 A/B 为准。
 
 ## 运行前提（重要）
 

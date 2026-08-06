@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 审阅前必读的当前风险、已修复真 bug 回归索引与已排除非 bug 猜想；只保留结论和验证入口
-updated: 2026-08-05
+updated: 2026-08-06
 ---
 # 代码审阅发现
 
@@ -22,9 +22,22 @@ updated: 2026-08-05
 - **当前策略**：不可信 wire 先 Validate；peer 从共同 snapshot/frame 0 沿完整历史 replay；需要强事务的调用方在外层使用 World snapshot/checkpoint。
 - **不做**：本轮不引入通用 dry-run shadow World 或 rollback journal。
 
-CommandStream 的 pending/component/hierarchy/async preflight 已修复已知“用户契约错误导致部分提交”路径，但它不把 Submit 或 Replay 提升为灾难性异常下的通用事务。
+CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）修复了 lockstep 分叉路径（P0#1/P0#2），`Validate()` 覆盖语义违规（存在性/hierarchy）；但零校验 Submit 的存在性违规在 apply 期抛（部分应用），且不把 Submit 或 Replay 提升为灾难性异常下的通用事务。
 
 ## 已修复的真 bug 索引
+
+### 2026-08-06 零校验重构审阅（T2 系列，Validate() + 库能力守卫）
+
+| 回归测试 | 位置 / witness | 修复边界 |
+|---|---|---|
+| P0#1：占位符静默落库分叉 | non-deferred 帧（`_deferredSeq==0`）伪造 `Entity(-1,seq)` 引用经 store/batch 静默写入 World；Snapshot 产出含坏值 delta；副本 Replay 的 Add/Set/Create op 端 `GetOffsets`+`ResolveInPlace` 抛 "Unresolved placeholder" → 源端静默、副本抛错 = **lockstep 分叉** | `FieldKinds<T>` 泛型静态探测（record 期 5 咽喉点，static readonly bool 1 读 1 分支）+ 帧级 flag + Submit/Snapshot/async 扫描器（reserve/materialize/emit 前原子拒绝，last-wins 语义）；占位符原子拒绝由已恢复的 8 个 `BUG_*` 测试锁定 |
+| P0#2：nested Entity 布局静默应用 | nested Entity 字段组件经 store/batch 静默落库（源端无 `GetOffsets`）；副本 Replay 端 `GetOffsets` → `ThrowIfNestedEntity` 抛 → 分叉 | 同上（探测保守置位；扫描器 `GetOffsets` 抛 `InvalidOperationException`，消息含 "nested Entity field"，reserve 前 v1 原子） |
+| LayoutKind.Auto：**非静默**（源端 Archetype 构造 `ThrowIfManagedComponent` 已兜底），仅错误类型/时机变化 | `BUG_auto_layout_record_does_not_throw_but_submit_rejects_before_mutation` | consume 扫描器 `GetOffsets` 先于 archetype 构造抛 `InvalidOperationException`（消息含 "LayoutKind.Auto"），恢复 T2 前异常类型契约 |
+| P2-2：async target 覆写（契约变更，非 bug） | `SubmitAndSnapshotIntoAsync` 失败时 target 可能已 Clear/部分写入（旧 "target remains unchanged" 承诺过强） | 撤销承诺，文档化 "target 内容未定义"；迁移后的 `BUG_async_into_preflights_invalid_component_before_worker_handoff`（target NotEqual 断言）锁定 |
+
+**契约测试索引（新增，2026-08-06）**：`Contract_*` 10 个（含 last-wins 不误杀、deferred 合法流放行、Remove-only 豁免、Validate 幂等/原子；占位符原子拒绝由已恢复的 8 个 `BUG_*` 锁定）+ `SubmitReplayParity` 1 个 + 9 个 BUG_ 测试迁移为双断言（Validate 原子拒绝 + Submit 部分应用/apply 期抛）。
+
+> 与旧机制的关系：08-05 段的 record 探测（`MayContainPlaceholder` + 帧级 flag）已被 **`FieldKinds<T>` 泛型静态探测**取代（同 flag 扫描器架构，探测判定从 offsets 数组查表改为 per-type static readonly 1 读）；"Submit 隐式 4 项 preflight"（2026-07-25 前）已失效——语义校验抽为 `Validate()`，Submit 默认零语义校验（存在性违规 apply 期抛 + 部分应用）。性能数据见 `kb-hero-pipeline-regression.md`。
 
 ### 2026-08-05 placeholder preflight 优化审阅
 
