@@ -972,15 +972,31 @@ public abstract partial class CommandStreamCore
     private bool IsFrameDeltaWithinUpperBound(bool deferredMode)
     {
         var activePendingCount = _frozen.PendingBatchCount - _frozen.CancelledBatchCount;
-        var pendingOpCount = deferredMode
-            ? 2L * activePendingCount
-            : 2L * _frozen.PendingBatchCount;
+        var emittedPendingCount = activePendingCount;
+        if (!deferredMode)
+        {
+            // Immediate cancelled batches emitted a real Reserve+Release and must
+            // stay in the bound. Cancelled deferred batches never touched the
+            // source allocator and remain placeholders after resolution, so the
+            // real-id writer omits them entirely.
+            emittedPendingCount = _frozen.PendingBatchCount;
+            if (_frozen.CancelledBatchCount != 0)
+            {
+                for (var i = 0; i < _frozen.PendingBatchCount; i++)
+                {
+                    if (_frozen.BatchCanceled[i] && _frozen.BatchEntities[i].IsPlaceholder)
+                        emittedPendingCount--;
+                }
+            }
+        }
+
+        var pendingOpCount = 2L * emittedPendingCount;
         var opCount = pendingOpCount + 2L * _frozen.HierarchyByChild.Count + _frozen.DestroyCount;
 
         // Maximum encoded sizes: entity-only op = 11 bytes; Create = 16 bytes
         // before component entries; AddChild = 21 bytes. Removed/duplicate batch
         // components remain in the bound, which makes it conservative.
-        var byteCount = 27L * (deferredMode ? activePendingCount : _frozen.PendingBatchCount) +
+        var byteCount = 27L * emittedPendingCount +
             _batchBufLen + 10L * _batchCompTotal +
             32L * _frozen.HierarchyByChild.Count + 11L * _frozen.DestroyCount;
 

@@ -106,6 +106,8 @@ Set-only 且全 store 无结构命令时，`PrepareForConsume` 在 prune stale e
 
 `SubmitAndSnapshotAsync` / `SubmitAndSnapshotIntoAsync` 在 active state 仍由调用线程独占时完成：flag 驱动占位符守卫（`PreflightEmbeddedPlaceholders()`，仅 flagged 帧全量扫）与 FrameDelta 整帧预算 preflight；守卫失败时不消耗 id、不 handoff、不启动 worker。之后才允许 free-list 对齐、placeholder real-id resolve、state swap、worker 启动和本地 materialize。worker 创建后立即登记 `_pendingFrozen/_pendingTask` ownership。若内部 Submit 随后失败，先观察 worker 完成再回收 frozen state，并保留原同步异常。
 
+async real-id 输出会省略仍是 placeholder 的 cancelled deferred batch：这类 Create 从未触碰 source allocator，因此不能为它发 Reserve+Release；immediate real-id cancellation 仍必须发 Reserve+Release，镜像 record 期已经发生的 reserve/release。
+
 因此“不被本地 Submit、占位符守卫或 FrameDelta 预算接受的 frame”不会先交给后台 worker。**target 语义（`SubmitAndSnapshotIntoAsync`）**：占位符/布局守卫失败发生在 `target.Clear()` 前 → target 未动；其他 consume 期错误（如存在性违规）可能已 Clear 或部分写入 → **失败时 target 内容未定义**（旧 “target remains unchanged” 承诺已撤销，由 `Contract_*` 测试锁定）。
 
 ### deferred entity 两种模式

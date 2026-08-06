@@ -4219,6 +4219,54 @@ public sealed class DeferredCreateTests
     }
 
     [Fact]
+    public async Task BUG_async_real_id_delta_omits_cancelled_deferred_batches()
+    {
+        using var source = new World();
+        using var replica = new World();
+        var stream = MakeStream(source);
+
+        var cancelled = stream.Create();
+        stream.Destroy(cancelled);
+        var live = stream.Create();
+        stream.Add(live, new Health(42));
+
+        var delta = await stream.SubmitAndSnapshotAsync();
+        delta.Validate();
+
+        // The async API emits a real-id delta. A cancelled placeholder never
+        // reserved a source-world id, so emitting Reserve+Release for it would
+        // advance only the replica allocator and make the following real Reserve fail.
+        Assert.False(delta.HasEntity(cancelled));
+        new CommandStream(replica).Replay(delta);
+
+        Assert.Equal(source.CanonicalChecksum(), replica.CanonicalChecksum());
+        Assert.Equal(source.CreateEmpty(), replica.CreateEmpty());
+    }
+
+    [Fact]
+    public void BUG_real_id_snapshot_omits_cancelled_deferred_batches()
+    {
+        using var source = new World();
+        using var replica = new World();
+        var stream = MakeStream(source);
+
+        var cancelled = stream.Create();
+        stream.Destroy(cancelled);
+        var live = stream.Create();
+        stream.Add(live, new Health(42));
+
+        // Switching to real-id output resolves the live placeholder but must not
+        // invent an allocator event for the cancelled placeholder.
+        stream.DeferredEntities = false;
+        var delta = stream.Snapshot();
+        delta.Validate();
+
+        Assert.False(delta.HasEntity(cancelled));
+        new CommandStream(replica).Replay(delta);
+        Assert.Equal(1, replica.EntityCount);
+    }
+
+    [Fact]
     public void BUG_cancelled_placeholder_in_superseded_pending_value_is_ignored()
     {
         using var world = new World();

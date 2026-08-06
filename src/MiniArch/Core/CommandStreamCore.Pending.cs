@@ -320,9 +320,18 @@ public abstract partial class CommandStreamCore
         for (var i = 0; i < pendingBatchCount; i++)
         {
             var entity = batchEntities[i];
+            var canceled = batchCanceled[i];
+
+            // A cancelled deferred batch never reserved a source-world id. In
+            // real-id output mode it therefore has no allocator event to mirror.
+            // ResolveDeferredCreates intentionally leaves its placeholder intact,
+            // which makes this distinction observable without extra state.
+            if (canceled && entity.IsPlaceholder)
+                continue;
+
             budget.AddReserve(entity);
 
-            if ((uint)i < (uint)batchCanceled.Length && batchCanceled[i])
+            if (canceled)
                 budget.AddRelease(entity);
             else
                 AccumulateCreateDeltaBudget(ref budget, view, i);
@@ -393,9 +402,18 @@ public abstract partial class CommandStreamCore
         for (var i = 0; i < pendingBatchCount; i++)
         {
             var entity = batchEntities[i];
+            var canceled = batchCanceled[i];
+
+            // Cancelled deferred batches are still placeholders after resolution
+            // because they never touched the source allocator. Emitting a
+            // placeholder Reserve+Release in an otherwise real-id delta would
+            // advance only the replica allocator and break convergence.
+            if (canceled && entity.IsPlaceholder)
+                continue;
+
             delta.AddReserve(entity);
 
-            if ((uint)i < (uint)batchCanceled.Length && batchCanceled[i])
+            if (canceled)
             {
                 delta.AddRelease(entity);
                 continue;
