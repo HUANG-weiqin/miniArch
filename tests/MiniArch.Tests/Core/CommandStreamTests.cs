@@ -1,5 +1,6 @@
 using System.IO;
 using System.Reflection;
+using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -5204,5 +5205,72 @@ public sealed class DeferredCreateTests
         var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
         Assert.Contains("cancelled or unknown placeholder", ex.Message);
         Assert.Equal(2, world.EntityCount);
+    }
+}
+
+[CollectionDefinition(HighComponentIdCollection.Name, DisableParallelization = true)]
+public sealed class HighComponentIdCollection
+{
+    public const string Name = "High component-id registry boundary";
+}
+
+[Collection(HighComponentIdCollection.Name)]
+public sealed class HighComponentIdCommandStreamTests
+{
+    private readonly record struct HighIdLink(Entity Target);
+
+    [Fact]
+    public void BUG_high_component_id_placeholder_scan_preserves_last_wins()
+    {
+        EnsureSharedRegistryHasAtLeast(512);
+        var highType = ComponentRegistry.Shared.GetOrCreate<HighIdLink>();
+        Assert.True(highType.Value >= 512);
+
+        RunLastWinsScenario();
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void RunLastWinsScenario()
+    {
+        using var world = new World();
+        var stream = new CommandStream(world) { DeferredEntities = true };
+        var owner = stream.Create();
+        var supersededReference = stream.Create();
+
+        stream.Add(owner, new HighIdLink(supersededReference));
+        stream.Set(owner, new HighIdLink(owner));
+        stream.Destroy(supersededReference);
+
+        // Only the newest value is materialized/emitted. The older value's
+        // cancelled placeholder must not participate in validation for high ids.
+        stream.Validate();
+        Assert.True(stream.Submit());
+
+        foreach (var chunk in world.Query(new QueryDescription().With<HighIdLink>()).GetChunks())
+        {
+            Assert.Equal(1, chunk.Count);
+            Assert.Equal(chunk.GetEntities()[0], chunk.GetSpan<HighIdLink>()[0].Target);
+            return;
+        }
+
+        Assert.Fail("Expected one HighIdLink entity.");
+    }
+
+    private static void EnsureSharedRegistryHasAtLeast(int count)
+    {
+        var assembly = AssemblyBuilder.DefineDynamicAssembly(
+            new AssemblyName("MiniArch.HighIdRegressionTypes"), AssemblyBuilderAccess.Run);
+        var module = assembly.DefineDynamicModule("Main");
+
+        while (ComponentRegistry.Shared.ComponentTypeCount < count)
+        {
+            var id = ComponentRegistry.Shared.ComponentTypeCount;
+            var builder = module.DefineType(
+                $"PaddingComponent{id}",
+                TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.SequentialLayout,
+                typeof(ValueType));
+            builder.DefineField("Value", typeof(int), FieldAttributes.Public);
+            ComponentRegistry.Shared.GetOrCreate(builder.CreateTypeInfo()!.AsType());
+        }
     }
 }

@@ -513,9 +513,17 @@ public abstract partial class CommandStreamCore
 
                     if (kind == 2)
                     {
-                        if (id < 512 &&
-                            IsSeen(ref s0, ref s1, ref s2, ref s3,
-                                   ref s4, ref s5, ref s6, ref s7, id))
+                        if (id < 512)
+                        {
+                            if (IsSeen(ref s0, ref s1, ref s2, ref s3,
+                                       ref s4, ref s5, ref s6, ref s7, id))
+                            {
+                                current = comp.Next;
+                                continue;
+                            }
+                        }
+                        else if (HasNewerEffectiveComponentType(
+                                     comps, pending.Heads[batchIdx], current, id))
                         {
                             current = comp.Next;
                             continue;

@@ -687,23 +687,36 @@ public abstract partial class CommandStreamCore
                         idx++;
                     }
                 }
-                else
+                else if (!HasNewerEffectiveComponentType(comps, headIdx, current, id))
                 {
-                    var seen = false;
-                    for (var j = 0; j < idx; j++)
-                    {
-                        if (comps[indices[j]].Type.Value == id) { seen = true; break; }
-                    }
-                    if (!seen)
-                    {
-                        indices[idx] = current;
-                        idx++;
-                    }
+                    indices[idx] = current;
+                    idx++;
                 }
             }
             current = comp.Next;
         }
         return idx;
+    }
+
+    /// <summary>
+    /// High component-id fallback shared by every head-first pending-batch
+    /// consumer. Returns true when a newer non-removed value of the same type
+    /// already appeared before <paramref name="currentIdx"/>. IDs below 512 use
+    /// the fixed bitset fast path instead.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static bool HasNewerEffectiveComponentType(
+        BatchedComponent[] components, int headIdx, int currentIdx, int typeId)
+    {
+        var scan = headIdx;
+        while (scan >= 0 && scan != currentIdx)
+        {
+            ref var component = ref components[scan];
+            if (!component.Removed && component.Type.Value == typeId)
+                return true;
+            scan = component.Next;
+        }
+        return false;
     }
 
     private static int SortAndDeduplicateComponents(Span<RawComponentValue> comps)
