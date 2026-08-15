@@ -4450,47 +4450,57 @@ public sealed class DeferredCreateTests
         Assert.True(verified);
     }
 
-    // Nested Entity layout cannot be resolved by EntityFieldResolver. The record
-    // path must NOT throw for such values (the failure surfaces at Submit, before
-    // any mutation) and must NOT leave a false-negative placeholder marker that
-    // would let the command slip past the preflight.
     private readonly record struct NestedTarget(Entity Target);
 
     private readonly record struct OuterWithNested(int X, NestedTarget Nested);
 
     [Fact]
-    public void BUG_nested_entity_record_does_not_throw_and_submit_rejects_before_mutation()
+    public void BUG_nested_entity_record_resolves_real_entity_and_submits()
     {
         using var world = new World();
-        var stream = MakeStream(world);
+        var stream = new CommandStream(world);
+        var target = world.CreateEmpty();
         var existing = world.CreateEmpty();
 
-        stream.Add(existing, new OuterWithNested(1, default));
-        Assert.True(world.IsAlive(existing));
+        stream.Add(existing, new OuterWithNested(1, new NestedTarget(target)));
+        stream.Set(existing, new OuterWithNested(2, new NestedTarget(target)));
+        Assert.True(stream.Submit());
 
-        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
-        Assert.Contains("nested Entity field", ex.Message);
-
-        // The failed frame must not have consumed allocator ids or mutated the world.
-        Assert.False(world.Has<OuterWithNested>(existing));
-        var next = world.CreateEmpty();
-        Assert.Equal(new Entity(1, 1), next);
+        Assert.True(world.IsAlive(target));
+        Assert.True(world.TryGet(existing, out OuterWithNested value));
+        Assert.Equal(2, value.X);
+        Assert.Equal(target, value.Nested.Target);
     }
 
     [Fact]
-    public void BUG_nested_entity_layout_failure_on_pending_batch_surfaces_at_submit()
+    public void BUG_nested_entity_pending_batch_resolves_placeholder_at_submit()
     {
         using var world = new World();
         var stream = MakeStream(world);
-        var p = stream.Create(); // placeholder
+        var target = stream.Create();
+        stream.Add(target, new Health(73));
+        var owner = stream.Create();
+        stream.Add(owner, new OuterWithNested(1, new NestedTarget(target)));
 
-        stream.Add(p, new OuterWithNested(1, default)); // must not throw at record
+        Assert.True(stream.Submit());
 
-        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
-        Assert.Contains("nested Entity field", ex.Message);
+        Entity realTarget = default;
+        foreach (var chunk in world.Query(new QueryDescription().With<Health>()).GetChunks())
+        {
+            var entities = chunk.GetEntities();
+            var health = chunk.GetSpan<Health>();
+            for (var i = 0; i < chunk.Count; i++)
+                if (health[i].Value == 73) realTarget = entities[i];
+        }
 
-        var next = world.CreateEmpty();
-        Assert.Equal(new Entity(0, 1), next);
+        Assert.NotEqual(default, realTarget);
+        foreach (var chunk in world.Query(new QueryDescription().With<OuterWithNested>()).GetChunks())
+        {
+            var values = chunk.GetSpan<OuterWithNested>();
+            Assert.Equal(1, chunk.Count);
+            Assert.Equal(1, values[0].X);
+            Assert.Equal(realTarget, values[0].Nested.Target);
+        }
     }
 
     [Fact]
@@ -4510,59 +4520,52 @@ public sealed class DeferredCreateTests
     }
 
     [Fact]
-    public void Remove_only_of_unresolvable_layout_type_is_applied_without_layout_scan()
+    public void Remove_only_missing_auto_layout_component_is_applied_without_layout_scan()
     {
         using var world = new World();
         var stream = MakeStream(world);
         var existing = world.CreateEmpty();
-        world.Add(existing, new OuterWithNested(7, default));
-        Assert.True(world.Has<OuterWithNested>(existing));
 
-        // Remove carries no payload, so no placeholder resolution is needed; the
-        // record-time detector intentionally does not probe Remove and Submit
-        // succeeds even though OuterWithNested's layout cannot be resolved.
-        stream.Remove<OuterWithNested>(existing);
+        // Remove carries no payload. A missing Auto-layout component therefore
+        // proves that the Remove-only path does not scan component bytes.
+        stream.Remove<BadLinked>(existing);
         stream.Submit();
 
-        Assert.False(world.Has<OuterWithNested>(existing));
+        Assert.False(world.Has<BadLinked>(existing));
     }
 
     [Fact]
-    public void BUG_Remove_only_of_unresolvable_layout_is_not_affected_by_unrelated_placeholder_frame()
+    public void BUG_Remove_only_missing_auto_layout_component_is_not_affected_by_unrelated_placeholder_frame()
     {
         using var world = new World();
         var stream = MakeStream(world);
         var existing = world.CreateEmpty();
-        world.Add(existing, new OuterWithNested(7, default));
 
-        // Same frame: an unrelated valid placeholder ref forces the full preflight
-        // and deferred resolution; the Remove-only store of an unresolvable layout
-        // type must not make the frame fail (Remove carries no payload).
+        // An unrelated valid placeholder reference forces preflight. The
+        // payload-free Remove of the Auto-layout type must remain harmless.
         var owner = stream.Create();
         var referenced = stream.Create();
         stream.Add(owner, new Linked(0, referenced));
-        stream.Remove<OuterWithNested>(existing);
+        stream.Remove<BadLinked>(existing);
 
         stream.Submit();
 
-        Assert.False(world.Has<OuterWithNested>(existing));
+        Assert.False(world.Has<BadLinked>(existing));
         Assert.Equal(3, world.EntityCount); // existing + owner + referenced
     }
 
     [Fact]
-    public void BUG_Empty_unresolvable_layout_store_does_not_poison_later_deferred_frame()
+    public void BUG_Empty_remove_only_auto_layout_store_does_not_poison_later_deferred_frame()
     {
         using var world = new World();
         var stream = MakeStream(world);
         var existing = world.CreateEmpty();
 
-        // Frame 1: record an unresolvable-layout payload; Submit rejects and Clear
-        // leaves the (now empty) store object in the Stores array.
-        stream.Add(existing, new OuterWithNested(1, default));
-        Assert.Throws<InvalidOperationException>(() => stream.Submit());
+        // Frame 1 leaves an empty Remove-only store entry after consumption.
+        stream.Remove<BadLinked>(existing);
+        stream.Submit();
 
-        // Frame 2: a deferred create forces resolve; the empty store must not be
-        // layout-scanned and must not poison the frame.
+        // Frame 2: deferred resolution must not scan the empty Remove-only store.
         var e = stream.Create();
         stream.Add(e, new Linked(0, e));
         stream.Submit();
@@ -5234,11 +5237,9 @@ public sealed class DeferredCreateTests
     // The record-path probe (FieldKinds<T>) covers generic Add/Set and
     // WritePendingComponent, but Clone imports raw component bytes straight from
     // world archetype storage and commits them via CommitBatchComponent without
-    // any probe. Witness: a world component holding a top-level Entity(-1, seq)
-    // placeholder is silently materialized by default Submit / emitted into a
-    // delta whose Validate() rejects (lockstep divergence P0#1 via Clone); an
-    // unresolvable nested-Entity layout bypasses the layout guard the same way
-    // (P0#2 via Clone).
+    // any probe. A top-level Entity(-1, seq) placeholder must remain rejected;
+    // nested Entity fields and InlineArray element offsets must instead be found
+    // and resolved during the same raw-import consume path.
 
     [Fact]
     public void BUG_clone_imported_placeholder_is_rejected_by_default_submit()
@@ -5275,28 +5276,24 @@ public sealed class DeferredCreateTests
     }
 
     [Fact]
-    public void BUG_clone_imports_nested_entity_layout_rejected_before_consume()
+    public void BUG_clone_imports_nested_entity_layout_and_deep_inline_values()
     {
         using var world = new World();
-        // Nested-Entity layouts are legal in world storage (only CommandStream
-        // placeholder resolution cannot handle them); Clone must not smuggle one
-        // past the consume-time layout guard.
-        var source = world.Create(new OuterWithNested(1, new NestedTarget(default)));
+        var target = world.CreateEmpty();
+        var source = world.Create(new OuterWithNested(1, new NestedTarget(target)));
+        var values = new RecordEntityInlineArray();
+        values[1] = new NestedEntityTarget(target);
+        world.Add(source, new DeepNestedEntityComponent(new NestedState(values)));
         var stream = new CommandStream(world);
 
-        stream.Clone(source);
+        var clone = stream.Clone(source);
+        Assert.True(stream.Submit());
 
-        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
-        Assert.Contains("nested Entity field", ex.Message);
-        Assert.Equal(1, world.EntityCount);
-        Assert.True(world.TryGet(source, out OuterWithNested original));
-        Assert.Equal(1, original.X);
-
-        // Snapshot must reject the same frame before emission.
-        var snapshotStream = new CommandStream(world);
-        snapshotStream.Clone(source);
-        ex = Assert.Throws<InvalidOperationException>(() => snapshotStream.Snapshot());
-        Assert.Contains("nested Entity field", ex.Message);
+        Assert.True(world.TryGet(clone, out OuterWithNested nested));
+        Assert.Equal(new OuterWithNested(1, new NestedTarget(target)), nested);
+        Assert.True(world.TryGet(clone, out DeepNestedEntityComponent deep));
+        Assert.Equal(target, deep.State.Values[1].Target);
+        Assert.True(world.IsAlive(target));
     }
 
     [Fact]
