@@ -818,7 +818,7 @@ readonly record struct Follow
 }
 ```
 
-> **Requirements:** The component type that holds an `Entity` field must use `[StructLayout(LayoutKind.Sequential)]` (or `LayoutKind.Explicit`). `LayoutKind.Auto` (the default for some .NET types) throws `InvalidOperationException`. Nested structs are NOT scanned — only direct `Entity` fields are discovered.
+> **Requirements:** The component type and every Entity-bearing nested value type must use `[StructLayout(LayoutKind.Sequential)]` or `LayoutKind.Explicit`. Entity references are discovered and resolved at arbitrary nesting depth, including record backing fields, generic wrappers, and `InlineArray` elements. `LayoutKind.Auto` is still rejected when its recursive graph contains an `Entity`; Auto layouts without Entity descendants are not rejected by this resolver.
 
 ---
 

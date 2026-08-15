@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream 与 ParallelCommandStream 的 typed-store 录制、consume-time 校验、Submit/Snapshot/Replay 确定性及 async ownership 契约
-updated: 2026-08-06
+updated: 2026-08-15
 ---
 # Command Stream Runtime
 
@@ -24,6 +24,7 @@ updated: 2026-08-06
 | `CommandStreamCore.cs` | 共享字段、record helper、clone、clear、deferred/frozen state |
 | `CommandStreamCore.Pending.cs` | pending batch、CreateMany materialize、placeholder resolve |
 | `CommandStreamCore.ComponentStore.cs` | typed entries、parallel merge、stale prune、preflight、apply/emit |
+| `EntityFieldResolver.cs` | Entity-bearing component graph validation、actual CLR offsets、InlineArray stride、in-place resolution |
 | `CommandStreamCore.Hierarchy.cs` | hierarchy intent、overlay preflight、apply/emit |
 | `CommandStreamCore.Submit.cs` | Submit/Snapshot/Replay、async handoff、consume preparation |
 
@@ -86,14 +87,20 @@ pending/foreign placeholder 的 `IsPlaceholder` 仍在 record 阶段用于本地
 
 #### 库能力守卫（P0 裁决，不可移入 Validate）
 
-未知/已取消占位符引用（`Entity(-1, seq)`）、非法显式 entity shape 与不可解析布局（nested Entity / LayoutKind.Auto + Entity 字段）**绝不落库/落 wire**——这是 lockstep 分叉防线（源端静默应用/发出 → 副本 Replay/`FrameDelta.Validate()` 拒绝），不是组件存在性或 hierarchy 环等语义校验：
+未知/已取消占位符引用（`Entity(-1, seq)`）、非法显式 entity shape 与真正不可解析布局（例如 Entity-bearing `LayoutKind.Auto`）**绝不落库/落 wire**——这是 lockstep 分叉防线（源端静默应用/发出 → 副本 Replay/`FrameDelta.Validate()` 拒绝），不是组件存在性或 hierarchy 环等语义校验。Nested Entity 本身合法，必须由 source 与 Replay 使用同一完整 offsets 合同发现并解析：
 
 - **record 期泛型静态探测**：`FieldKinds<T>`（`static readonly bool HasEntityFields` + `static readonly int[] Offsets` + 静态 ctor，ctor 永不抛——布局失败保守置 `HasEntityFields=true`，由扫描器抛）；无 Entity 字段类型每值 1 次 static 读 + 1 分支。探测点 = `WritePendingComponent<T>`（batch 写前）+ `CommandStream/ParallelCommandStream.Add/Set<T>` 的 store 分支（5 处）。
-- **Clone raw 导入探测（非泛型）**：Clone 从 World/raw archetype 复制字节时无泛型类型可用，走 `FlagFrameIfMayContainPlaceholder(ComponentType, ReadOnlySpan<byte>)`：`GetOffsets` 成功仅在实际 top-level Entity 字段为 placeholder 时置 flag（值探测）；`InvalidOperationException`（nested Entity / LayoutKind.Auto + Entity 字段）保守置 flag 但 Clone 期不抛（布局错误由 consume 扫描器在原有时机抛）；flag 已为 1 直接返回。探测点 = 单线程 `CloneMaterializedComponents` 的 merger **最终有效 values**（不是 raw archetype 副本——避免被 store overlay 覆盖/移除的旧 world 值误报）+ 并行 `Clone` root 与 `CloneChildrenFromWorld` child 两个 raw copy 点，均在 raw bytes 复制完成后、`CommitBatchComponent` 前。`CopyComponentsFromBatch`（pending source clone）的字节源均由已探测的提交路径产生，无需重复探测；`WritePendingComponent`/store 泛型热路径不改。
+- **Clone raw 导入探测（非泛型）**：Clone 从 World/raw archetype 复制字节时无泛型类型可用，走 `FlagFrameIfMayContainPlaceholder(ComponentType, ReadOnlySpan<byte>)`：`GetOffsets` 返回完整 nested/InlineArray offsets，仅在实际 Entity 字段为 placeholder 时置 flag（值探测）；真正布局失败（例如 Entity-bearing `LayoutKind.Auto`）保守置 flag 但 Clone 期不抛（布局错误由 consume 扫描器在原有时机抛）；flag 已为 1 直接返回。探测点 = 单线程 `CloneMaterializedComponents` 的 merger **最终有效 values**（不是 raw archetype 副本——避免被 store overlay 覆盖/移除的旧 world 值误报）+ 并行 `Clone` root 与 `CloneChildrenFromWorld` child 两个 raw copy 点，均在 raw bytes 复制完成后、`CommitBatchComponent` 前。`CopyComponentsFromBatch`（pending source clone）的字节源均由已探测的提交路径产生，无需重复探测；`WritePendingComponent`/store 泛型热路径不改。
 - **显式 endpoint 探测**：AddChild/RemoveChild 的 placeholder/非法 shape 与 Destroy 的非法 shape 也置同一 flag；扫描 final hierarchy overlay（避免被后写覆盖的旧 intent 假拒绝）和 destroy list。合法 real 只做可内联 `Entity.IsValid` 分支，flag 已置位后不重复 locked exchange。
 - **帧级 flag**：`FrozenState.MayNeedEntityReferencePreflight`（`Interlocked` 置位，`Clear`/`SwapOutState` 复位）。
-- **consume 扫描器**：Submit/Snapshot/SnapshotInto/PrepareAsyncHandoff 在 reserve/free-list/materialize/emit **前**调 `PreflightEntityReferences()`——首行 volatile 读 flag，0 直接 return；1 时扫描 final explicit endpoints + component refs/layout（batch last-wins：id<512 走固定 bitset、id≥512 与 materialize/emit 共用线性 fallback；store lazy-offsets；deferred-aware：同帧合法 placeholder 放行）。**原子拒绝**：失败不消耗 id/version（v1 保留）、不先 detach hierarchy、不会发出本地 `FrameDelta.Validate()` 拒绝的 wire。
+- **consume 扫描器**：Submit/Snapshot/SnapshotInto/PrepareAsyncHandoff 在 reserve/free-list/materialize/emit **前**调 `PreflightEntityReferences()`——首行 volatile 读 flag，0 直接 return；1 时扫描 final explicit endpoints + component refs/layout（batch last-wins：id<512 走固定 bitset、id≥512 与 materialize/emit 共用线性 fallback；store lazy-offsets；deferred-aware：同帧合法 placeholder 放行）。`GetOffsets` 返回完整 nested/InlineArray offsets；只有 Entity-bearing Auto 或真正无法解析的布局失败。**原子拒绝**：失败不消耗 id/version（v1 保留）、不先 detach hierarchy、不会发出本地 `FrameDelta.Validate()` 拒绝的 wire。
 - `Validate()` 绕过 flag 全量扫（`useFlagFastPath: false`，用户显式调用）。
+
+#### 5.2 nested Entity offsets 合同
+
+- cold scan 递归验证 Entity-bearing layout，再用实际 CLR managed field offsets 收集绝对偏移；InlineArray 使用 `ComponentSizeCache.GetSize(elementType)` 作为 stride，不使用 marshaling size。
+- 每条递归路径使用 recursion stack（进入 Add、finally Remove），结果排序、去重并验证 Entity range 位于 root component size 内；exact explicit alias 可去重，partial overlap 拒绝。
+- `CommandStream`、`Snapshot`、`FrameDelta.Validate()`、Replay、Clone 与 `ParallelCommandStream` 共享同一缓存 offsets。Nested Entity 不是天然非法；source 与 Replay 必须发现并解析同一完整 offsets 集合，否则会产生 lockstep 分叉。
 
 **历史**：preflight 序列（0fca3eb，2026-07-25 引入 Submit 隐式 4 项 preflight）→ 08-05 flag 优化（`MayContainPlaceholder` record 探测 + 帧级 flag）→ **08-06 语义校验抽为 `Validate()` + 守卫保留**（探测改 `FieldKinds<T>` 泛型静态，修复 P0#1/P0#2）。期间经历 T2.5（统一扫描器，-7.6%）、T2.6（融合进既有遍历，-5.4%）两版性能实验后定稿为 flag 驱动方案（-3~-6% 噪声带，门控 A/B 见 `kb-hero-pipeline-regression.md`）。
 

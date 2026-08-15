@@ -1,5 +1,12 @@
 # Changelog
 
+## 5.2.0 (2026-08-15)
+
+- **Nested Entity support** — unmanaged components now resolve Entity references at arbitrary depth through sequential/explicit structs, record private backing fields, generic wrappers, and InlineArray elements.
+- **Deterministic offsets** — cold scanning uses actual CLR field offsets and `ComponentSizeCache.GetSize` for InlineArray stride; source Submit/Snapshot/FrameDelta.Validate/Replay/Clone/Parallel consumers share the cached offsets.
+- **Fail-fast layout guards** — Entity-bearing LayoutKind.Auto graphs and invalid partially overlapping Entity ranges are rejected; exact explicit aliases are deduplicated.
+- **Perf** — steady-state paths add no managed allocation.
+
 ## 4.0.0 (2026-07-15)
 
 - **Breaking: unsafe chunk column API made explicit** — `ChunkView.GetComponentSpanAt<T>` is now `UnsafeGetComponentSpanAt<T>`; the cached index must come from the same archetype and is invalid after structural change. Debug validates the type/index pair, Release keeps the opt-in unchecked fast path.

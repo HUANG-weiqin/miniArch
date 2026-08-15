@@ -2,7 +2,7 @@
 title: Hero Pipeline Regression Test
 module: HeroComing.Perf
 description: First-class regression gate for architecture changes — 30s timed throughput test; PipelineBenchmarkTests history reference (old --track-observer / --compare-old-value-tracking removed with old change tracking API)
-updated: 2026-08-06
+updated: 2026-08-15
 ---
 # Hero Pipeline Regression Test
 
@@ -16,7 +16,7 @@ updated: 2026-08-06
 
 > **修正**：早先二分定位 `0fca3eb preflight embedded deferred placeholders`（2026-07-25）造成 ~13-16% 回退，后续发现该结论被 Windows Defender（`msmpeng` 周期性扫描）污染——同代码在不同时段测量波动可达 ±10-35%，`0fca3eb` 的"坏"测量恰落在污染窗口。当前认知：HEAD 相对 07-06 baseline 存在 ~5-10% 量级的真实差距，但精确量化在本机不可靠（需排除 repo 目录或等待干净窗口）。
 
-**已实施的优化（placeholder 校验语义保持、Remove-only 契约修正；2026-08-05 经 Advisor 两轮审阅，门控 A/B 实测 +7%/+13%）**：record 阶段在批写入咽喉点 `CommitBatchComponent` 和 store 路径（`CommandStream.Add/Set`、`ParallelCommandStream.Add/Set`）探测值是否可能含 placeholder；命中或布局不可验证（nested Entity / Auto-layout）时置**帧级单调 flag**，preflight 首行读 flag，0 直接 return，1 跑原全量逻辑。探测只吞已知布局异常（Unknown 也置位，由 preflight 在原有时机抛）。store 的 preflight/ReplacePlaceholders 延迟到首个 payload entry 才取 offsets，Remove-only/空 store 不被同帧无关 placeholder 或 deferred Create 拖累（P2）。Remove-only 不再触发布局扫描属有意行为变更（有契约测试）。`GetOffsets` 缓存发布顺序修复（slot 先写、外层后发，slot 读写改 Volatile）。`dotnet test` 1134/1134 通过，fuzz 11/11，门禁通过。
+**已实施的优化（placeholder 校验语义保持、Remove-only 契约修正；2026-08-05 经 Advisor 两轮审阅，门控 A/B 实测 +7%/+13%）**：record 阶段在批写入咽喉点 `CommitBatchComponent` 和 store 路径（`CommandStream.Add/Set`、`ParallelCommandStream.Add/Set`）探测值是否可能含 placeholder；命中或布局不可验证（Entity-bearing Auto-layout 或真正 unresolved layout）时置**帧级单调 flag**，preflight 首行读 flag，0 直接 return，1 跑原全量逻辑。探测只吞已知布局异常（Unknown 也置位，由 preflight 在原有时机抛）。store 的 preflight/ReplacePlaceholders 延迟到首个 payload entry 才取 offsets，Remove-only/空 store 不被同帧无关 placeholder 或 deferred Create 拖累（P2）。Remove-only 不再触发布局扫描属有意行为变更（有契约测试）。`GetOffsets` 缓存发布顺序修复（slot 先写、外层后发，slot 读写改 Volatile）。`dotnet test` 1134/1134 通过，fuzz 11/11，门禁通过。
 
 > **性能结论口径（2026-08-05 门控 A/B 实测后更新）**：msmpeng 门控、同窗口交错测量（每版本 2 轮）：优化后相对未优化 HEAD **+7%/+13%**（Movement 1873-1922 vs 1768-1798；Attack 1110-1127 vs 988-1001）；相对 07-06 baseline 仍 -9%/-12%（baseline 2092-2104/1261-1290）。残余差距两部分：record 探测开销 ~4.6%（每组件一次 flag volatile 读 + offsets 数组查表）+ 269 提交系列其他成本 ~5%（E1 全移除 preflight 后仍比 baseline 低 ~5%）。
 

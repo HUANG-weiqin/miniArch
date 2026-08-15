@@ -288,6 +288,12 @@ run before deferred-id resolution or async worker handoff. Without explicit vali
 partially mutate the World, and an async reusable target is undefined once its worker
 has started.
 
+### Embedded Entity component contract
+
+Unmanaged components may contain `Entity` references at arbitrary depth through sequential or explicit structs, record private backing fields, generic wrappers, and `InlineArray` elements. Nested structs are not intrinsically invalid. Submit, Snapshot, `FrameDelta.Validate()`, Replay, Clone, and `ParallelCommandStream` use the same complete cached offset set; source and replay must therefore share the same offset discovery contract or they can diverge.
+
+Entity-bearing `LayoutKind.Auto` graphs remain unsupported and fail fast. Exact overlapping explicit Entity ranges are deduplicated; partially overlapping Entity ranges are rejected rather than resolved ambiguously.
+
 ---
 
 ## ParallelCommandStream
