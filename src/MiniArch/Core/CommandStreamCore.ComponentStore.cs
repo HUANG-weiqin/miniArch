@@ -18,19 +18,19 @@ public abstract partial class CommandStreamCore
     /// the component type is known at JIT compile time —the verdict is a static
     /// field read (no array lookup, no bounds check), and the getter is
     /// inlineable so JIT can hoist the read out of hot loops. States:
-    /// 0 = uninitialized, 1 = no top-level Entity fields (skip), 2 = has Entity
-    /// fields (or layout unknown — conservative). Initialization is idempotent
+    /// 0 = uninitialized, 1 = no Entity references (skip), 2 = has Entity
+    /// references (or layout unknown — conservative). Initialization is idempotent
     /// and race-tolerant (parallel recording may initialize concurrently; the
-    /// verdict is identical). Layout resolution failures (nested Entity /
-    /// LayoutKind.Auto with Entity fields) are surfaced by the consume-time scan,
+    /// verdict is identical). Genuine layout resolution failures, such as an
+    /// Entity-bearing LayoutKind.Auto type, are surfaced by the consume-time scan,
     /// not here —probing never throws.
     /// </summary>
     private protected static class FieldKinds<T> where T : unmanaged
     {
         // T2.8: readonly fields initialized once by the static ctor. The ctor never
-        // throws —layout failures (nested Entity / LayoutKind.Auto with Entity
-        // fields) are surfaced by the consume-time scan, not here. readonly lets JIT
-        // hoist/fold the single-field read in the probe helper.
+        // throws —genuine layout failures (for example Entity-bearing
+        // LayoutKind.Auto) are surfaced by the consume-time scan, not here.
+        // readonly lets JIT hoist/fold the single-field read in the probe helper.
         internal static readonly bool HasEntityFields;
         internal static readonly int[] Offsets;
 

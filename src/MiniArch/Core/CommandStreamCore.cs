@@ -82,10 +82,10 @@ public abstract partial class CommandStreamCore
     private int _preflightEpoch;
 
     // Consume-side embedded-placeholder scan cache (T2.5). Per component type id:
-    // 0 = verdict unknown, 1 = no top-level Entity fields, 2 = has Entity fields.
+    // 0 = verdict unknown, 1 = no Entity references, 2 = has Entity references.
     // Monotonic per stream —component layouts are process-stable, so entries are
-    // written once and never cleared. Unresolvable layouts (nested Entity /
-    // LayoutKind.Auto with Entity fields) throw at verdict time —before any id
+    // written once and never cleared. Entity-bearing LayoutKind.Auto (or another
+    // genuinely unresolved layout) throws at verdict time —before any id
     // reservation or world mutation.
     private byte[] _scanFieldKind = [];
 

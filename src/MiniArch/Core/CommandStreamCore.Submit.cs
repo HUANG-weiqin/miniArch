@@ -70,8 +70,8 @@ public abstract partial class CommandStreamCore
     /// <para>
     /// One class of errors is still rejected atomically before any mutation:
     /// invalid explicit entity endpoints, explicit or embedded references to a
-    /// cancelled/unknown deferred placeholder, and unresolvable component layouts
-    /// (nested <see cref="Entity"/> fields / LayoutKind.Auto with Entity fields).
+    /// cancelled/unknown deferred placeholder, and genuinely unresolvable
+    /// component layouts (for example Entity-bearing LayoutKind.Auto).
     /// These are rejected in the consume
     /// path —before id reservation, free-list realignment and materialization —
     /// with the same contract and message text as <see cref="Validate"/>, so a
@@ -294,8 +294,9 @@ public abstract partial class CommandStreamCore
     private void PreflightEntityReferences(bool useFlagFastPath = true)
     {
         // The record path flags only frames with a placeholder/invalid explicit
-        // endpoint, a component placeholder, or an unresolvable Entity layout.
-        // Validate() passes useFlagFastPath: false for an explicit full scan.
+        // endpoint, a component placeholder, or a genuinely unresolvable Entity
+        // layout such as Entity-bearing LayoutKind.Auto. Validate() passes
+        // useFlagFastPath: false for an explicit full scan.
         if (useFlagFastPath &&
             Volatile.Read(ref _frozen.MayNeedEntityReferencePreflight) == 0)
             return;
@@ -370,9 +371,10 @@ public abstract partial class CommandStreamCore
     /// <see cref="ParallelCommandStream.Clone"/>). Same contract as the generic
     /// probe, but takes a <see cref="ComponentType"/> + raw bytes because Clone
     /// copies bytes, not typed values. <see cref="EntityFieldResolver.GetOffsets"/>
-    /// success flags the frame only when an actual top-level Entity field holds a
-    /// placeholder; an unresolvable layout (nested Entity / LayoutKind.Auto with
-    /// Entity fields) is caught and flagged conservatively — probing never
+    /// returns all Entity offsets, including nested value structs and InlineArray
+    /// elements; success flags the frame only when one of those fields holds a
+    /// placeholder. A genuine layout failure (for example Entity-bearing
+    /// LayoutKind.Auto) is caught and flagged conservatively — probing never
     /// throws, the consume-time scan surfaces the layout error at its original
     /// timing (before any world/allocator mutation). Monotonic frame flag:
     /// probing stops after the first hit.
@@ -390,7 +392,7 @@ public abstract partial class CommandStreamCore
         }
         catch (InvalidOperationException)
         {
-            // Unresolvable layout: conservative —force the frame scan, which
+            // Genuine layout failure: conservative —force the frame scan, which
             // throws the layout error at its original timing (before any
             // world/allocator mutation), mirroring FieldKinds<T>.
             Interlocked.Exchange(ref _frozen.MayNeedEntityReferencePreflight, 1);
@@ -448,9 +450,9 @@ public abstract partial class CommandStreamCore
     // emission or worker handoff. Rejects: (a) invalid explicit Destroy/hierarchy
     // endpoints or their cancelled/unknown placeholders, (b) component values
     // referencing a cancelled/unknown placeholder, and (c) component types whose
-    // layout cannot be resolved (nested Entity / LayoutKind.Auto with Entity
-    // fields) — the same contract and message text as Validate(). Because it runs
-    // before ResolveDeferredCreates, a rejection consumes no allocator id/version
+    // layout cannot be resolved (for example Entity-bearing LayoutKind.Auto) —
+    // the same contract and message text as Validate(). Because it runs before
+    // ResolveDeferredCreates, a rejection consumes no allocator id/version
     // (the pre-T2.5 preflight boundary) and prevents source/replica divergence.
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -597,8 +599,9 @@ public abstract partial class CommandStreamCore
 
     private byte JudgeAndCacheFieldKind(int id, ref byte[] kinds)
     {
-        // GetOffsets resolves and caches the layout; throws for nested Entity /
-        // LayoutKind.Auto with Entity fields (same contract as Validate()).
+        // GetOffsets resolves and caches all nested Entity offsets; it throws
+        // only when an Entity-bearing layout cannot be resolved (for example
+        // LayoutKind.Auto), with the same contract as Validate().
         var kind = EntityFieldResolver.GetOffsets(new ComponentType(id)).IsEmpty ? (byte)1 : (byte)2;
         EnsureScanFieldKind(id);
         _scanFieldKind[id] = kind;
@@ -659,9 +662,9 @@ public abstract partial class CommandStreamCore
     /// <para>
     /// One class of errors is still rejected atomically before emission: component
     /// values referencing a cancelled or unknown deferred placeholder, and
-    /// unresolvable component layouts (nested <see cref="Entity"/> fields /
-    /// LayoutKind.Auto with Entity fields). These are rejected in the consume path
-    /// —before any deferred resolution, target clear or delta emission — so a
+    /// genuinely unresolvable component layouts (for example Entity-bearing
+    /// LayoutKind.Auto). These are rejected in the consume path —before any
+    /// deferred resolution, target clear or delta emission — so a
     /// violating frame never produces a delta a replaying host would reject.
     /// </para>
     /// </remarks>

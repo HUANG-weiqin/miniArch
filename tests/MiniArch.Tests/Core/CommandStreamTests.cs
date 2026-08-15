@@ -5282,7 +5282,7 @@ public sealed class DeferredCreateTests
         var target = world.CreateEmpty();
         var source = world.Create(new OuterWithNested(1, new NestedTarget(target)));
         var values = new RecordEntityInlineArray();
-        values[1] = new NestedEntityTarget(target);
+        values[1] = new InlineEntityRecord(true, 0x52, target);
         world.Add(source, new DeepNestedEntityComponent(new NestedState(values)));
         var stream = new CommandStream(world);
 
@@ -5292,6 +5292,8 @@ public sealed class DeferredCreateTests
         Assert.True(world.TryGet(clone, out OuterWithNested nested));
         Assert.Equal(new OuterWithNested(1, new NestedTarget(target)), nested);
         Assert.True(world.TryGet(clone, out DeepNestedEntityComponent deep));
+        Assert.True(deep.State.Values[1].Enabled);
+        Assert.Equal(0x52, deep.State.Values[1].Kind);
         Assert.Equal(target, deep.State.Values[1].Target);
         Assert.True(world.IsAlive(target));
     }

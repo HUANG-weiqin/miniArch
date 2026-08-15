@@ -16,10 +16,12 @@ internal struct EntityReferenceInlineArray
     public Entity _element0;
 }
 
+internal readonly record struct InlineEntityRecord(bool Enabled, byte Kind, Entity Target);
+
 [InlineArray(2)]
 internal struct RecordEntityInlineArray
 {
-    public NestedEntityTarget _element0;
+    public InlineEntityRecord _element0;
 }
 
 internal readonly record struct InlineEntityComponent(EntityReferenceInlineArray Values);
@@ -46,11 +48,11 @@ internal struct ExplicitNestedLinks
     [FieldOffset(1)]
     public byte Kind;
 
-    [FieldOffset(8)]
-    public NestedEntityTarget First;
-
     [FieldOffset(16)]
     public NestedEntityTarget Second;
+
+    [FieldOffset(8)]
+    public NestedEntityTarget First;
 }
 
 internal readonly record struct MultiNestedEntityComponent(
@@ -70,6 +72,39 @@ internal struct ComponentWithAutoLayoutNestedEntity
 {
     public int X;
     public AutoLayoutNestedEntity Nested;
+}
+
+[StructLayout(LayoutKind.Auto)]
+internal struct AutoLayoutWithoutEntity
+{
+    public int Value;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct ComponentWithUnrelatedAutoLayout
+{
+    public AutoLayoutWithoutEntity Metadata;
+    public Entity Target;
+}
+
+[StructLayout(LayoutKind.Explicit, Size = 8)]
+internal struct DuplicateEntityOffsets
+{
+    [FieldOffset(0)]
+    public Entity First;
+
+    [FieldOffset(0)]
+    public Entity Second;
+}
+
+[StructLayout(LayoutKind.Explicit, Size = 12)]
+internal struct PartiallyOverlappingEntityOffsets
+{
+    [FieldOffset(0)]
+    public Entity First;
+
+    [FieldOffset(4)]
+    public Entity Second;
 }
 
 public sealed class NestedEntityComponentTests
@@ -93,6 +128,35 @@ public sealed class NestedEntityComponentTests
         Assert.True(world.TryGet(owner, out NestedEntityOuter value));
         Assert.Equal(2, value.X);
         Assert.Equal(target, value.Nested.Target);
+    }
+
+    [Fact]
+    public void Placeholder_free_nested_record_set_submit_allocates_nothing_after_warmup()
+    {
+        using var world = new World();
+        var target = world.CreateEmpty();
+        var owner = world.Create(new NestedEntityOuter(0, new NestedEntityTarget(target)));
+        var stream = new CommandStream(world);
+
+        for (var i = 0; i < 32; i++)
+        {
+            stream.Set(owner, new NestedEntityOuter(i, new NestedEntityTarget(target)));
+            Assert.True(stream.Submit());
+        }
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 256; i++)
+        {
+            stream.Set(owner, new NestedEntityOuter(i, new NestedEntityTarget(target)));
+            stream.Submit();
+        }
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(0, allocated);
+        Assert.Equal(target, world.Get<NestedEntityOuter>(owner).Nested.Target);
     }
 
     [Fact]
@@ -164,7 +228,7 @@ public sealed class NestedEntityComponentTests
         stream.Add(target, new NestedMarker(41));
         var owner = stream.Create();
         var values = new RecordEntityInlineArray();
-        values[1] = new NestedEntityTarget(target);
+        values[1] = new InlineEntityRecord(true, 0x42, target);
         stream.Add(owner, new InlineRecordComponent(values));
         stream.Add(owner, new NestedMarker(42));
 
@@ -173,6 +237,8 @@ public sealed class NestedEntityComponentTests
         var realTarget = FindMarkedEntity(world, 41);
         var realOwner = FindMarkedEntity(world, 42);
         Assert.True(world.TryGet(realOwner, out InlineRecordComponent value));
+        Assert.True(value.Values[1].Enabled);
+        Assert.Equal(0x42, value.Values[1].Kind);
         Assert.Equal(realTarget, value.Values[1].Target);
     }
 
@@ -185,7 +251,7 @@ public sealed class NestedEntityComponentTests
         stream.Add(target, new NestedMarker(51));
         var owner = stream.Create();
         var records = new RecordEntityInlineArray();
-        records[1] = new NestedEntityTarget(target);
+        records[1] = new InlineEntityRecord(true, 0x51, target);
         stream.Add(owner, new DeepNestedEntityComponent(new NestedState(records)));
         stream.Add(owner, new NestedMarker(52));
 
@@ -223,6 +289,12 @@ public sealed class NestedEntityComponentTests
             Assert.Equal(i * Unsafe.SizeOf<Entity>(), inlineOffsets[i]);
             Assert.InRange(inlineOffsets[i], 0, inlineSize - Unsafe.SizeOf<Entity>());
         }
+
+        var recordInlineType = Component<InlineRecordComponent>.ComponentType;
+        var recordInlineOffsets = EntityFieldResolver.GetOffsets(recordInlineType);
+        var recordSize = Unsafe.SizeOf<InlineEntityRecord>();
+        Assert.Equal(12, recordSize);
+        Assert.Equal([4, 4 + recordSize], recordInlineOffsets.ToArray());
 
         var value = new MultiNestedEntityComponent(
             new SequentialNestedLinks
@@ -278,7 +350,7 @@ public sealed class NestedEntityComponentTests
         stream.Add(owner, new InlineEntityComponent(entityValues));
 
         var recordValues = new RecordEntityInlineArray();
-        recordValues[1] = new NestedEntityTarget(target);
+        recordValues[1] = new InlineEntityRecord(true, 0x61, target);
         stream.Add(owner, new DeepNestedEntityComponent(new NestedState(recordValues)));
 
         var delta = stream.Snapshot();
@@ -304,6 +376,39 @@ public sealed class NestedEntityComponentTests
     }
 
     [Fact]
+    public void Replay_resolves_nested_placeholders_in_existing_add_and_set_ops()
+    {
+        using var source = new World();
+        using var replica = new World();
+        var sourceAddOwner = source.Create(new NestedMarker(81));
+        var replicaAddOwner = replica.Create(new NestedMarker(81));
+        var sourceSetOwner = source.Create(
+            new NestedMarker(82),
+            new NestedEntityOuter(0, new NestedEntityTarget(sourceAddOwner)));
+        var replicaSetOwner = replica.Create(
+            new NestedMarker(82),
+            new NestedEntityOuter(0, new NestedEntityTarget(replicaAddOwner)));
+        var stream = MakeStream(source);
+        var target = stream.Create();
+        stream.Add(target, new NestedMarker(83));
+        stream.Add(sourceAddOwner, new NestedEntityOuter(1, new NestedEntityTarget(target)));
+        stream.Set(sourceSetOwner, new NestedEntityOuter(2, new NestedEntityTarget(target)));
+
+        var delta = stream.Snapshot();
+        delta.Validate();
+        Assert.True(stream.Submit());
+        new CommandStream(replica).Replay(delta);
+
+        var sourceTarget = FindMarkedEntity(source, 83);
+        var replicaTarget = FindMarkedEntity(replica, 83);
+        Assert.Equal(sourceTarget, source.Get<NestedEntityOuter>(sourceAddOwner).Nested.Target);
+        Assert.Equal(sourceTarget, source.Get<NestedEntityOuter>(sourceSetOwner).Nested.Target);
+        Assert.Equal(replicaTarget, replica.Get<NestedEntityOuter>(replicaAddOwner).Nested.Target);
+        Assert.Equal(replicaTarget, replica.Get<NestedEntityOuter>(replicaSetOwner).Nested.Target);
+        Assert.Equal(source.CanonicalChecksum(), replica.CanonicalChecksum());
+    }
+
+    [Fact]
     public void ParallelCommandStream_resolves_deep_inline_nonzero_placeholder()
     {
         using var world = new World();
@@ -312,7 +417,7 @@ public sealed class NestedEntityComponentTests
         stream.Add(target, new NestedMarker(71));
         var owner = stream.Create();
         var values = new RecordEntityInlineArray();
-        values[1] = new NestedEntityTarget(target);
+        values[1] = new InlineEntityRecord(true, 0x71, target);
         stream.Add(owner, new DeepNestedEntityComponent(new NestedState(values)));
         stream.Add(owner, new NestedMarker(72));
 
@@ -324,6 +429,25 @@ public sealed class NestedEntityComponentTests
     }
 
     [Fact]
+    public void ParallelCommandStream_clone_preserves_nested_inline_entities()
+    {
+        using var world = new World();
+        var target = world.CreateEmpty();
+        var values = new RecordEntityInlineArray();
+        values[1] = new InlineEntityRecord(true, 0x72, target);
+        var source = world.Create(new DeepNestedEntityComponent(new NestedState(values)));
+        var stream = new ParallelCommandStream(world);
+
+        var clone = stream.Clone(source);
+        Assert.True(stream.Submit());
+
+        var cloned = world.Get<DeepNestedEntityComponent>(clone);
+        Assert.True(cloned.State.Values[1].Enabled);
+        Assert.Equal(0x72, cloned.State.Values[1].Kind);
+        Assert.Equal(target, cloned.State.Values[1].Target);
+    }
+
+    [Fact]
     public void Unknown_placeholder_in_deep_inline_array_is_rejected_before_mutation()
     {
         using var world = new World();
@@ -331,7 +455,7 @@ public sealed class NestedEntityComponentTests
         var stream = MakeStream(world);
         var owner = stream.Create();
         var values = new RecordEntityInlineArray();
-        values[1] = new NestedEntityTarget(new Entity(-1, 999));
+        values[1] = new InlineEntityRecord(true, 0x7F, new Entity(-1, 999));
         stream.Add(owner, new DeepNestedEntityComponent(new NestedState(values)));
 
         var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
@@ -355,6 +479,34 @@ public sealed class NestedEntityComponentTests
         Assert.Contains("cancelled or unknown placeholder", ex.Message);
         Assert.Equal(before, world.CanonicalChecksum());
         Assert.Equal(new Entity(0, 1), world.CreateEmpty());
+    }
+
+    [Fact]
+    public void Resolver_keeps_unrelated_auto_layout_subtree_out_of_entity_offsets()
+    {
+        var componentType = Component<ComponentWithUnrelatedAutoLayout>.ComponentType;
+        var offsets = EntityFieldResolver.GetOffsets(componentType);
+
+        Assert.Equal(1, offsets.Length);
+        Assert.InRange(offsets[0], 0,
+            Unsafe.SizeOf<ComponentWithUnrelatedAutoLayout>() - Unsafe.SizeOf<Entity>());
+    }
+
+    [Fact]
+    public void Resolver_deduplicates_exact_overlapping_entity_offsets()
+    {
+        Assert.Equal([0], EntityFieldResolver.GetOffsets(
+            Component<DuplicateEntityOffsets>.ComponentType).ToArray());
+        Assert.Equal([0], EntityFieldResolver.GetOffsets(
+            Component<Entity>.ComponentType).ToArray());
+    }
+
+    [Fact]
+    public void Resolver_rejects_partially_overlapping_entity_offsets()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            EntityFieldResolver.GetOffsets(Component<PartiallyOverlappingEntityOffsets>.ComponentType));
+        Assert.Contains("overlap", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
