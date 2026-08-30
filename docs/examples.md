@@ -1090,49 +1090,6 @@ readonly record struct Health(int Value);
 
 ---
 
-## 26. ParallelCommandStream (Multi-Threaded Command Recording)
-
-`ParallelCommandStream` makes `Create`, `Add`, `Set`, `Remove`, `Destroy`, and the
-other record methods thread-safe. It is useful when game systems run on multiple
-workers and each produces commands independently. Consumption remains exclusive.
-
-```csharp
-using MiniArch;
-using MiniArch.Core;
-using System.Threading.Tasks;
-
-var world = new World();
-// Pre-spawn entities via the fast pending-batch path
-var spawnStream = new CommandStream(world);
-for (var i = 0; i < 10_000; i++)
-    spawnStream.Create();
-spawnStream.Submit();
-
-// ── Multi-threaded recording ─────────────────────────────────────────
-var stream = new ParallelCommandStream(world);
-
-Parallel.For(0, 10_000, i =>
-{
-    // Each worker records a Position component for its assigned entity
-    stream.Add(new Entity(i, 1), new Position(i, i * 2));
-});
-
-stream.Submit();
-
-// All updates applied
-Console.WriteLine(world.Get<Position>(new Entity(9999, 1))); // Position(9999, 19998)
-
-readonly record struct Position(float X, float Y);
-```
-
-> **Rules:**
-> - Use one `ParallelCommandStream` per `World`; do not record concurrently through multiple streams targeting the same world.
-> - Finish all record workers before `Submit`, `Snapshot`, `Replay`, or async handoff. These consume operations are exclusive.
-> - Avoid conflicting commands for the same entity across threads. Their merge order is not deterministic.
-> - Prefer `CommandStream` when recording is single-threaded; it has no parallel lock cost.
-
----
-
 ## 8. Component Bucket Query
 
 Group entities by a component value using `ComponentBucketQuery<T>`. Safely copy results into a caller-provided `Span<Entity>` — no stale-span risks, zero allocation in steady state.

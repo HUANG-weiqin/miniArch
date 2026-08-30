@@ -8,7 +8,7 @@ namespace MiniArch.Core;
 /// </summary>
 /// <remarks>
 /// <b>Constraint:</b> The <see cref="Write"/> implementation <b>must not</b>
-/// call back into the same <see cref="CommandStream"/> / <see cref="ParallelCommandStream"/>
+/// call back into the same <see cref="CommandStream"/>
 /// (no <c>Create</c>, <c>Destroy</c>, <c>Add</c>, <c>Set</c>, <c>Remove</c>,
 /// <c>Submit</c>, <c>Snapshot</c>, or <c>Clear</c>). Doing so corrupts the
 /// recording state and produces undefined behavior.
@@ -117,17 +117,18 @@ public interface ICreateManyWriter<T1, T2, T3, T4, T5, T6, T7, T8>
     void Write(int index, Entity entity, out T1 c1, out T2 c2, out T3 c3, out T4 c4, out T5 c5, out T6 c6, out T7 c7, out T8 c8);
 }
 
-public abstract partial class CommandStreamCore
+public sealed partial class CommandStream
 {
     /// <summary>
-    /// Core batch-create logic for single-component entities. Reserves each
-    /// entity via <see cref="CreateCore"/>, invokes <paramref name="writer"/>
-    /// to compute its component, and records the component into the pending
-    /// batch buffer via <see cref="WritePendingComponent{T}"/>. Shared by both
-    /// subclasses; callers handle synchronization.
+    /// Batch-creates <c>entities.Length</c> entities, each with a single
+    /// component of type <typeparamref name="T1"/> computed by
+    /// <paramref name="writer"/>. The reserved handles are written back into
+    /// <paramref name="entities"/>. Equivalent to calling
+    /// <see cref="Create"/> + <see cref="Add{T}"/> per entity, but reads the
+    /// batch index directly instead of re-looking it up.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private protected void CreateManyCore<T1, TWriter>(Span<Entity> entities, TWriter writer)
+    public void CreateMany<T1, TWriter>(Span<Entity> entities, TWriter writer)
         where T1 : unmanaged
         where TWriter : struct, ICreateManyWriter<T1>
     {
@@ -147,11 +148,11 @@ public abstract partial class CommandStreamCore
     }
 
     /// <summary>
-    /// Core batch-create logic for two-component entities. Shared by both
-    /// subclasses; callers handle synchronization.
+    /// Batch-creates entities, each with two components computed by
+    /// <paramref name="writer"/>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private protected void CreateManyCore<T1, T2, TWriter>(Span<Entity> entities, TWriter writer)
+    public void CreateMany<T1, T2, TWriter>(Span<Entity> entities, TWriter writer)
         where T1 : unmanaged
         where T2 : unmanaged
         where TWriter : struct, ICreateManyWriter<T1, T2>
@@ -174,11 +175,11 @@ public abstract partial class CommandStreamCore
     }
 
     /// <summary>
-    /// Core batch-create logic for three-component entities. Shared by both
-    /// subclasses; callers handle synchronization.
+    /// Batch-creates entities, each with three components computed by
+    /// <paramref name="writer"/>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private protected void CreateManyCore<T1, T2, T3, TWriter>(Span<Entity> entities, TWriter writer)
+    public void CreateMany<T1, T2, T3, TWriter>(Span<Entity> entities, TWriter writer)
         where T1 : unmanaged
         where T2 : unmanaged
         where T3 : unmanaged
@@ -204,11 +205,11 @@ public abstract partial class CommandStreamCore
     }
 
     /// <summary>
-    /// Core batch-create logic for four-component entities. Shared by both
-    /// subclasses; callers handle synchronization.
+    /// Batch-creates entities, each with four components computed by
+    /// <paramref name="writer"/>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private protected void CreateManyCore<T1, T2, T3, T4, TWriter>(Span<Entity> entities, TWriter writer)
+    public void CreateMany<T1, T2, T3, T4, TWriter>(Span<Entity> entities, TWriter writer)
         where T1 : unmanaged
         where T2 : unmanaged
         where T3 : unmanaged
@@ -237,11 +238,11 @@ public abstract partial class CommandStreamCore
     }
 
     /// <summary>
-    /// Core batch-create logic for five-component entities. Shared by both
-    /// subclasses; callers handle synchronization.
+    /// Batch-creates entities, each with five components computed by
+    /// <paramref name="writer"/>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private protected void CreateManyCore<T1, T2, T3, T4, T5, TWriter>(Span<Entity> entities, TWriter writer)
+    public void CreateMany<T1, T2, T3, T4, T5, TWriter>(Span<Entity> entities, TWriter writer)
         where T1 : unmanaged
         where T2 : unmanaged
         where T3 : unmanaged
@@ -273,11 +274,11 @@ public abstract partial class CommandStreamCore
     }
 
     /// <summary>
-    /// Core batch-create logic for six-component entities. Shared by both
-    /// subclasses; callers handle synchronization.
+    /// Batch-creates entities, each with six components computed by
+    /// <paramref name="writer"/>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private protected void CreateManyCore<T1, T2, T3, T4, T5, T6, TWriter>(Span<Entity> entities, TWriter writer)
+    public void CreateMany<T1, T2, T3, T4, T5, T6, TWriter>(Span<Entity> entities, TWriter writer)
         where T1 : unmanaged
         where T2 : unmanaged
         where T3 : unmanaged
@@ -312,11 +313,11 @@ public abstract partial class CommandStreamCore
     }
 
     /// <summary>
-    /// Core batch-create logic for seven-component entities. Shared by both
-    /// subclasses; callers handle synchronization.
+    /// Batch-creates entities, each with seven components computed by
+    /// <paramref name="writer"/>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private protected void CreateManyCore<T1, T2, T3, T4, T5, T6, T7, TWriter>(Span<Entity> entities, TWriter writer)
+    public void CreateMany<T1, T2, T3, T4, T5, T6, T7, TWriter>(Span<Entity> entities, TWriter writer)
         where T1 : unmanaged
         where T2 : unmanaged
         where T3 : unmanaged
@@ -354,11 +355,11 @@ public abstract partial class CommandStreamCore
     }
 
     /// <summary>
-    /// Core batch-create logic for eight-component entities. Shared by both
-    /// subclasses; callers handle synchronization.
+    /// Batch-creates entities, each with eight components computed by
+    /// <paramref name="writer"/>.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private protected void CreateManyCore<T1, T2, T3, T4, T5, T6, T7, T8, TWriter>(Span<Entity> entities, TWriter writer)
+    public void CreateMany<T1, T2, T3, T4, T5, T6, T7, T8, TWriter>(Span<Entity> entities, TWriter writer)
         where T1 : unmanaged
         where T2 : unmanaged
         where T3 : unmanaged
@@ -396,249 +397,5 @@ public abstract partial class CommandStreamCore
         }
         AppendCreateManyGroup(startBatch, entities.Length, 8,
             t1, t2, t3, t4, t5, t6, t7, t8);
-    }
-}
-
-public sealed partial class CommandStream
-{
-    /// <summary>
-    /// Batch-creates <c>entities.Length</c> entities, each with a single
-    /// component of type <typeparamref name="T1"/> computed by
-    /// <paramref name="writer"/>. The reserved handles are written back into
-    /// <paramref name="entities"/>. Equivalent to calling
-    /// <see cref="Create"/> + <see cref="Add{T}"/> per entity, but reads the
-    /// batch index directly instead of re-looking it up.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void CreateMany<T1, TWriter>(Span<Entity> entities, TWriter writer)
-        where T1 : unmanaged
-        where TWriter : struct, ICreateManyWriter<T1>
-        => CreateManyCore<T1, TWriter>(entities, writer);
-
-    /// <summary>
-    /// Batch-creates entities, each with two components computed by
-    /// <paramref name="writer"/>.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void CreateMany<T1, T2, TWriter>(Span<Entity> entities, TWriter writer)
-        where T1 : unmanaged
-        where T2 : unmanaged
-        where TWriter : struct, ICreateManyWriter<T1, T2>
-        => CreateManyCore<T1, T2, TWriter>(entities, writer);
-
-    /// <summary>
-    /// Batch-creates entities, each with three components computed by
-    /// <paramref name="writer"/>.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void CreateMany<T1, T2, T3, TWriter>(Span<Entity> entities, TWriter writer)
-        where T1 : unmanaged
-        where T2 : unmanaged
-        where T3 : unmanaged
-        where TWriter : struct, ICreateManyWriter<T1, T2, T3>
-        => CreateManyCore<T1, T2, T3, TWriter>(entities, writer);
-
-    /// <summary>
-    /// Batch-creates entities, each with four components computed by
-    /// <paramref name="writer"/>.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void CreateMany<T1, T2, T3, T4, TWriter>(Span<Entity> entities, TWriter writer)
-        where T1 : unmanaged
-        where T2 : unmanaged
-        where T3 : unmanaged
-        where T4 : unmanaged
-        where TWriter : struct, ICreateManyWriter<T1, T2, T3, T4>
-        => CreateManyCore<T1, T2, T3, T4, TWriter>(entities, writer);
-
-    /// <summary>
-    /// Batch-creates entities, each with five components computed by
-    /// <paramref name="writer"/>.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void CreateMany<T1, T2, T3, T4, T5, TWriter>(Span<Entity> entities, TWriter writer)
-        where T1 : unmanaged
-        where T2 : unmanaged
-        where T3 : unmanaged
-        where T4 : unmanaged
-        where T5 : unmanaged
-        where TWriter : struct, ICreateManyWriter<T1, T2, T3, T4, T5>
-        => CreateManyCore<T1, T2, T3, T4, T5, TWriter>(entities, writer);
-
-    /// <summary>
-    /// Batch-creates entities, each with six components computed by
-    /// <paramref name="writer"/>.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void CreateMany<T1, T2, T3, T4, T5, T6, TWriter>(Span<Entity> entities, TWriter writer)
-        where T1 : unmanaged
-        where T2 : unmanaged
-        where T3 : unmanaged
-        where T4 : unmanaged
-        where T5 : unmanaged
-        where T6 : unmanaged
-        where TWriter : struct, ICreateManyWriter<T1, T2, T3, T4, T5, T6>
-        => CreateManyCore<T1, T2, T3, T4, T5, T6, TWriter>(entities, writer);
-
-    /// <summary>
-    /// Batch-creates entities, each with seven components computed by
-    /// <paramref name="writer"/>.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void CreateMany<T1, T2, T3, T4, T5, T6, T7, TWriter>(Span<Entity> entities, TWriter writer)
-        where T1 : unmanaged
-        where T2 : unmanaged
-        where T3 : unmanaged
-        where T4 : unmanaged
-        where T5 : unmanaged
-        where T6 : unmanaged
-        where T7 : unmanaged
-        where TWriter : struct, ICreateManyWriter<T1, T2, T3, T4, T5, T6, T7>
-        => CreateManyCore<T1, T2, T3, T4, T5, T6, T7, TWriter>(entities, writer);
-
-    /// <summary>
-    /// Batch-creates entities, each with eight components computed by
-    /// <paramref name="writer"/>.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void CreateMany<T1, T2, T3, T4, T5, T6, T7, T8, TWriter>(Span<Entity> entities, TWriter writer)
-        where T1 : unmanaged
-        where T2 : unmanaged
-        where T3 : unmanaged
-        where T4 : unmanaged
-        where T5 : unmanaged
-        where T6 : unmanaged
-        where T7 : unmanaged
-        where T8 : unmanaged
-        where TWriter : struct, ICreateManyWriter<T1, T2, T3, T4, T5, T6, T7, T8>
-        => CreateManyCore<T1, T2, T3, T4, T5, T6, T7, T8, TWriter>(entities, writer);
-}
-
-public sealed partial class ParallelCommandStream
-{
-    /// <summary>
-    /// Batch-creates <c>entities.Length</c> entities, each with a single
-    /// component of type <typeparamref name="T1"/> computed by
-    /// <paramref name="writer"/>. Thread-safe; serializes on the internal
-    /// create lock around the entire batch.
-    /// </summary>
-    public void CreateMany<T1, TWriter>(Span<Entity> entities, TWriter writer)
-        where T1 : unmanaged
-        where TWriter : struct, ICreateManyWriter<T1>
-    {
-        lock (_storeCreateLock)
-            CreateManyCore<T1, TWriter>(entities, writer);
-    }
-
-    /// <summary>
-    /// Batch-creates entities, each with two components. Thread-safe;
-    /// serializes on the internal create lock around the entire batch.
-    /// </summary>
-    public void CreateMany<T1, T2, TWriter>(Span<Entity> entities, TWriter writer)
-        where T1 : unmanaged
-        where T2 : unmanaged
-        where TWriter : struct, ICreateManyWriter<T1, T2>
-    {
-        lock (_storeCreateLock)
-            CreateManyCore<T1, T2, TWriter>(entities, writer);
-    }
-
-    /// <summary>
-    /// Batch-creates entities, each with three components. Thread-safe;
-    /// serializes on the internal create lock around the entire batch.
-    /// </summary>
-    public void CreateMany<T1, T2, T3, TWriter>(Span<Entity> entities, TWriter writer)
-        where T1 : unmanaged
-        where T2 : unmanaged
-        where T3 : unmanaged
-        where TWriter : struct, ICreateManyWriter<T1, T2, T3>
-    {
-        lock (_storeCreateLock)
-            CreateManyCore<T1, T2, T3, TWriter>(entities, writer);
-    }
-
-    /// <summary>
-    /// Batch-creates entities, each with four components. Thread-safe;
-    /// serializes on the internal create lock around the entire batch.
-    /// </summary>
-    public void CreateMany<T1, T2, T3, T4, TWriter>(Span<Entity> entities, TWriter writer)
-        where T1 : unmanaged
-        where T2 : unmanaged
-        where T3 : unmanaged
-        where T4 : unmanaged
-        where TWriter : struct, ICreateManyWriter<T1, T2, T3, T4>
-    {
-        lock (_storeCreateLock)
-            CreateManyCore<T1, T2, T3, T4, TWriter>(entities, writer);
-    }
-
-    /// <summary>
-    /// Batch-creates entities, each with five components. Thread-safe;
-    /// serializes on the internal create lock around the entire batch.
-    /// </summary>
-    public void CreateMany<T1, T2, T3, T4, T5, TWriter>(Span<Entity> entities, TWriter writer)
-        where T1 : unmanaged
-        where T2 : unmanaged
-        where T3 : unmanaged
-        where T4 : unmanaged
-        where T5 : unmanaged
-        where TWriter : struct, ICreateManyWriter<T1, T2, T3, T4, T5>
-    {
-        lock (_storeCreateLock)
-            CreateManyCore<T1, T2, T3, T4, T5, TWriter>(entities, writer);
-    }
-
-    /// <summary>
-    /// Batch-creates entities, each with six components. Thread-safe;
-    /// serializes on the internal create lock around the entire batch.
-    /// </summary>
-    public void CreateMany<T1, T2, T3, T4, T5, T6, TWriter>(Span<Entity> entities, TWriter writer)
-        where T1 : unmanaged
-        where T2 : unmanaged
-        where T3 : unmanaged
-        where T4 : unmanaged
-        where T5 : unmanaged
-        where T6 : unmanaged
-        where TWriter : struct, ICreateManyWriter<T1, T2, T3, T4, T5, T6>
-    {
-        lock (_storeCreateLock)
-            CreateManyCore<T1, T2, T3, T4, T5, T6, TWriter>(entities, writer);
-    }
-
-    /// <summary>
-    /// Batch-creates entities, each with seven components. Thread-safe;
-    /// serializes on the internal create lock around the entire batch.
-    /// </summary>
-    public void CreateMany<T1, T2, T3, T4, T5, T6, T7, TWriter>(Span<Entity> entities, TWriter writer)
-        where T1 : unmanaged
-        where T2 : unmanaged
-        where T3 : unmanaged
-        where T4 : unmanaged
-        where T5 : unmanaged
-        where T6 : unmanaged
-        where T7 : unmanaged
-        where TWriter : struct, ICreateManyWriter<T1, T2, T3, T4, T5, T6, T7>
-    {
-        lock (_storeCreateLock)
-            CreateManyCore<T1, T2, T3, T4, T5, T6, T7, TWriter>(entities, writer);
-    }
-
-    /// <summary>
-    /// Batch-creates entities, each with eight components. Thread-safe;
-    /// serializes on the internal create lock around the entire batch.
-    /// </summary>
-    public void CreateMany<T1, T2, T3, T4, T5, T6, T7, T8, TWriter>(Span<Entity> entities, TWriter writer)
-        where T1 : unmanaged
-        where T2 : unmanaged
-        where T3 : unmanaged
-        where T4 : unmanaged
-        where T5 : unmanaged
-        where T6 : unmanaged
-        where T7 : unmanaged
-        where T8 : unmanaged
-        where TWriter : struct, ICreateManyWriter<T1, T2, T3, T4, T5, T6, T7, T8>
-    {
-        lock (_storeCreateLock)
-            CreateManyCore<T1, T2, T3, T4, T5, T6, T7, T8, TWriter>(entities, writer);
     }
 }

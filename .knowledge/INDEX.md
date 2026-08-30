@@ -2,7 +2,7 @@
 title: Knowledge Index
 module: KnowledgeIndex
 description: .knowledge 知识库导航、模块地图与必读入口
-updated: 2026-07-15
+updated: 2026-08-29
 ---
 
 # Knowledge Index
@@ -37,7 +37,6 @@ updated: 2026-07-15
 | GameTickSim.Perf（场景基准） | `kb-gameticksim-scenarios.md` |
 | FrifloGameScenarios.Perf（15 场景跨 ECS 对比） | `kb-ecs-comparison.md`、`kb-perf-harnesses.md` |
 | CommandStreamGame.Perf（CommandStream 真实游戏稳态压测） | `kb-commandstream-game-perf.md` |
-| ParallelRecord.Perf（并行 CommandStream 录制扩展性测试） | `kb-perf-harnesses.md` |
 | WatchApi.Perf（Watch API 专项吞吐/分配） | `kb-change-tracking.md`、`kb-perf-harnesses.md` |
 | samples/BulletLockstep.Demo（多 host 弹幕游戏集成测试） | `kb-bullet-lockstep-demo.md`（8 个 slice（2-9）端到端压测库全部公共能力：placeholder lockstep / archetype 迁移 / hierarchy / chunked / 持久化 / 回滚） |
 

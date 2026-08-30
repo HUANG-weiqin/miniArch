@@ -290,23 +290,9 @@ has started.
 
 ### Embedded Entity component contract
 
-Unmanaged components may contain `Entity` references at arbitrary depth through sequential or explicit structs, record private backing fields, generic wrappers, and `InlineArray` elements. Nested structs are not intrinsically invalid. Submit, Snapshot, `FrameDelta.Validate()`, Replay, Clone, and `ParallelCommandStream` use the same complete cached offset set; source and replay must therefore share the same offset discovery contract or they can diverge.
+Unmanaged components may contain `Entity` references at arbitrary depth through sequential or explicit structs, record private backing fields, generic wrappers, and `InlineArray` elements. Nested structs are not intrinsically invalid. Submit, Snapshot, `FrameDelta.Validate()`, Replay, and Clone use the same complete cached offset set; source and replay must therefore share the same offset discovery contract or they can diverge.
 
 Entity-bearing `LayoutKind.Auto` graphs remain unsupported and fail fast. Exact overlapping explicit Entity ranges are deduplicated; partially overlapping Entity ranges are rejected rather than resolved ambiguously.
-
----
-
-## ParallelCommandStream
-
-[`MiniArch.Core`] Multi-threaded recorder with the same consume APIs and liveness
-contract as `CommandStream`. Record methods may be called concurrently on one stream;
-`Submit`, `Snapshot`, `Replay`, and async handoff remain exclusive and must run only
-after all record workers finish. Conflicting writes to the same entity from different
-threads have no deterministic order, and multiple streams must not record concurrently
-against the same `World`.
-
-Use `CommandStream` for single-threaded recording because it avoids the parallel
-stream's lock cost.
 
 ---
 
@@ -474,8 +460,6 @@ struct SumJob : IChunkForEach
 |---|---|---|
 | `Query` / ordered queries | MT-Read | World must not mutate concurrently |
 | `CommandStream` recording | Single-threaded | No concurrent callers |
-| `ParallelCommandStream` recording | MT-Record | One stream; conflicting same-entity writes have no deterministic cross-thread order |
 | `CommandStream.Submit()` | Exclusive | Single-threaded |
-| `ParallelCommandStream.Submit()` | Exclusive | Call only after all record workers finish |
 | `SubmitAndSnapshotAsync()` | Pipelined | Submit is synchronous; delta construction completes in the returned task |
 | `World` mutation API | Not concurrent | No concurrent writes |

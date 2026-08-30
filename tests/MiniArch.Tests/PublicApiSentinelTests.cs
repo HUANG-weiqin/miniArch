@@ -465,9 +465,10 @@ class: MiniArch.ComponentSchema
   Method: Export() -> System.Byte[]
   Method: Fingerprint() -> System.Byte[]
   Method: Import(System.Byte[] data) -> System.Type[]
-class: MiniArch.Core.CommandStream : MiniArch.Core.CommandStreamCore
+class: MiniArch.Core.CommandStream
   Method: Add(MiniArch.Entity entity, T component) -> System.Void where T : struct, System.ValueType
   Method: AddChild(MiniArch.Entity parent, MiniArch.Entity child) -> System.Void
+  Method: Clear() -> System.Void
   Method: Clone(MiniArch.Entity source) -> MiniArch.Entity
   Method: Create() -> MiniArch.Entity
   Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1>, System.ValueType
@@ -481,16 +482,15 @@ class: MiniArch.Core.CommandStream : MiniArch.Core.CommandStreamCore
   Method: Destroy(MiniArch.Entity entity) -> System.Void
   Method: Remove(MiniArch.Entity entity) -> System.Void where T : struct, System.ValueType
   Method: RemoveChild(MiniArch.Entity child) -> System.Void
-  Method: Set(MiniArch.Entity entity, T component) -> System.Void where T : struct, System.ValueType
-  Method: Track(MiniArch.Entity entity) -> MiniArch.Core.EntitySlot
-class: MiniArch.Core.CommandStreamCore
-  Method: Clear() -> System.Void
   Method: Replay(MiniArch.Core.FrameDelta delta, System.Boolean resolveSlots = False) -> System.Void
+  Method: Set(MiniArch.Entity entity, T component) -> System.Void where T : struct, System.ValueType
   Method: Snapshot() -> MiniArch.Core.FrameDelta
   Method: SnapshotInto(MiniArch.Core.FrameDelta target) -> System.Void
   Method: Submit() -> System.Boolean
   Method: SubmitAndSnapshotAsync() -> System.Threading.Tasks.Task<MiniArch.Core.FrameDelta>
   Method: SubmitAndSnapshotIntoAsync(MiniArch.Core.FrameDelta target) -> System.Threading.Tasks.Task
+  Method: Track(MiniArch.Entity entity) -> MiniArch.Core.EntitySlot
+  Method: Validate() -> System.Void
   Property: DeferredEntities -> System.Boolean [get; set; ]
 struct: MiniArch.Core.EntityAccessor
   Method: Get() -> T& where T : struct, System.ValueType
@@ -526,24 +526,6 @@ interface: MiniArch.Core.ICreateManyWriter`7 where T1 : struct, System.ValueType
   Method: Write(System.Int32 index, MiniArch.Entity entity, out T1& c1, out T2& c2, out T3& c3, out T4& c4, out T5& c5, out T6& c6, out T7& c7) -> System.Void
 interface: MiniArch.Core.ICreateManyWriter`8 where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, T5 : struct, System.ValueType, T6 : struct, System.ValueType, T7 : struct, System.ValueType, T8 : struct, System.ValueType
   Method: Write(System.Int32 index, MiniArch.Entity entity, out T1& c1, out T2& c2, out T3& c3, out T4& c4, out T5& c5, out T6& c6, out T7& c7, out T8& c8) -> System.Void
-class: MiniArch.Core.ParallelCommandStream : MiniArch.Core.CommandStreamCore
-  Method: Add(MiniArch.Entity entity, T component) -> System.Void where T : struct, System.ValueType
-  Method: AddChild(MiniArch.Entity parent, MiniArch.Entity child) -> System.Void
-  Method: Clone(MiniArch.Entity source) -> MiniArch.Entity
-  Method: Create() -> MiniArch.Entity
-  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1>, System.ValueType
-  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, T2 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1, T2>, System.ValueType
-  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1, T2, T3>, System.ValueType
-  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1, T2, T3, T4>, System.ValueType
-  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, T5 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1, T2, T3, T4, T5>, System.ValueType
-  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, T5 : struct, System.ValueType, T6 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1, T2, T3, T4, T5, T6>, System.ValueType
-  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, T5 : struct, System.ValueType, T6 : struct, System.ValueType, T7 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1, T2, T3, T4, T5, T6, T7>, System.ValueType
-  Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, T5 : struct, System.ValueType, T6 : struct, System.ValueType, T7 : struct, System.ValueType, T8 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1, T2, T3, T4, T5, T6, T7, T8>, System.ValueType
-  Method: Destroy(MiniArch.Entity entity) -> System.Void
-  Method: Remove(MiniArch.Entity entity) -> System.Void where T : struct, System.ValueType
-  Method: RemoveChild(MiniArch.Entity child) -> System.Void
-  Method: Set(MiniArch.Entity entity, T component) -> System.Void where T : struct, System.ValueType
-  Method: Track(MiniArch.Entity entity) -> MiniArch.Core.EntitySlot
 class: MiniArch.Core.WorldSnapshot
   Method: ComputeCanonicalChecksum(MiniArch.World world) -> System.Byte[]
   Method: ComputeChecksum(MiniArch.World world) -> System.Byte[]

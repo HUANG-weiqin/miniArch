@@ -409,45 +409,6 @@ public sealed class NestedEntityComponentTests
     }
 
     [Fact]
-    public void ParallelCommandStream_resolves_deep_inline_nonzero_placeholder()
-    {
-        using var world = new World();
-        var stream = new ParallelCommandStream(world) { DeferredEntities = true };
-        var target = stream.Create();
-        stream.Add(target, new NestedMarker(71));
-        var owner = stream.Create();
-        var values = new RecordEntityInlineArray();
-        values[1] = new InlineEntityRecord(true, 0x71, target);
-        stream.Add(owner, new DeepNestedEntityComponent(new NestedState(values)));
-        stream.Add(owner, new NestedMarker(72));
-
-        Assert.True(stream.Submit());
-
-        var realTarget = FindMarkedEntity(world, 71);
-        var realOwner = FindMarkedEntity(world, 72);
-        Assert.Equal(realTarget, world.Get<DeepNestedEntityComponent>(realOwner).State.Values[1].Target);
-    }
-
-    [Fact]
-    public void ParallelCommandStream_clone_preserves_nested_inline_entities()
-    {
-        using var world = new World();
-        var target = world.CreateEmpty();
-        var values = new RecordEntityInlineArray();
-        values[1] = new InlineEntityRecord(true, 0x72, target);
-        var source = world.Create(new DeepNestedEntityComponent(new NestedState(values)));
-        var stream = new ParallelCommandStream(world);
-
-        var clone = stream.Clone(source);
-        Assert.True(stream.Submit());
-
-        var cloned = world.Get<DeepNestedEntityComponent>(clone);
-        Assert.True(cloned.State.Values[1].Enabled);
-        Assert.Equal(0x72, cloned.State.Values[1].Kind);
-        Assert.Equal(target, cloned.State.Values[1].Target);
-    }
-
-    [Fact]
     public void Unknown_placeholder_in_deep_inline_array_is_rejected_before_mutation()
     {
         using var world = new World();

@@ -6,9 +6,9 @@ using System.Runtime.InteropServices;
 
 namespace MiniArch.Core;
 
-public abstract partial class CommandStreamCore
+public sealed partial class CommandStream
 {
-    private protected static class CommandTypeInfo<T> where T : unmanaged
+    private static class CommandTypeInfo<T> where T : unmanaged
     {
         public static readonly ComponentType Type = Component<T>.ComponentType;
     }
@@ -20,12 +20,11 @@ public abstract partial class CommandStreamCore
     /// inlineable so JIT can hoist the read out of hot loops. States:
     /// 0 = uninitialized, 1 = no Entity references (skip), 2 = has Entity
     /// references (or layout unknown — conservative). Initialization is idempotent
-    /// and race-tolerant (parallel recording may initialize concurrently; the
-    /// verdict is identical). Genuine layout resolution failures, such as an
+    /// and deterministic. Genuine layout resolution failures, such as an
     /// Entity-bearing LayoutKind.Auto type, are surfaced by the consume-time scan,
     /// not here —probing never throws.
     /// </summary>
-    private protected static class FieldKinds<T> where T : unmanaged
+    private static class FieldKinds<T> where T : unmanaged
     {
         // T2.8: readonly fields initialized once by the static ctor. The ctor never
         // throws —genuine layout failures (for example Entity-bearing
@@ -54,9 +53,9 @@ public abstract partial class CommandStreamCore
 
     // ── Internal types ────────────────────────────────────────────────
 
-    private protected const byte KindAdd = 0;
-    private protected const byte KindSet = 1;
-    private protected const byte KindRemove = 2;
+    private const byte KindAdd = 0;
+    private const byte KindSet = 1;
+    private const byte KindRemove = 2;
 
     /// <summary>
     /// Merges component store overlay entries directly into a flat array during Clone,
@@ -65,9 +64,9 @@ public abstract partial class CommandStreamCore
     /// Callbacks from <see cref="ComponentStore.ForEachEntityEntry"/> go straight into
     /// the caller's stackalloc (or pooled) arrays — no lambda closures, no temp lists.
     /// </summary>
-    private protected ref struct ComponentMerger
+    private ref struct ComponentMerger
     {
-        private readonly CommandStreamCore _core;
+        private readonly CommandStream _core;
         private Span<ComponentType> _types;
         private Span<int> _offsets;
         private Span<int> _sizes;
@@ -76,7 +75,7 @@ public abstract partial class CommandStreamCore
         private int[]? _rentedOffsets;
         private int[]? _rentedSizes;
 
-        public ComponentMerger(CommandStreamCore core,
+        public ComponentMerger(CommandStream core,
             Span<ComponentType> types, Span<int> offsets, Span<int> sizes,
             ref int count)
         {
@@ -193,7 +192,7 @@ public abstract partial class CommandStreamCore
         }
     }
 
-    private protected abstract class ComponentStore
+    private abstract class ComponentStore
     {
         public abstract bool HasCommands { get; }
         public abstract bool HasStructuralCommands { get; }
@@ -203,13 +202,12 @@ public abstract partial class CommandStreamCore
         public abstract void AccumulateDeltaBudget(ref FrameDelta.Budget budget);
         public abstract void PreflightValidate(
             World world, int[] generations, byte[] presence, int epoch, bool useSetLocationCache);
-        public abstract void PreflightEmbeddedPlaceholders(CommandStreamCore stream);
+        public abstract void PreflightEmbeddedPlaceholders(CommandStream stream);
         public abstract void ApplyToWorld(World world);
         public abstract void EmitToDelta(FrameDelta delta);
         public abstract bool PrepareForConsume(World world, bool buildSetLocationCache);
         public abstract void Clear();
         public abstract void ReplacePlaceholders(Entity[] resolveMap);
-        public abstract void SealParallelWrites();
         protected internal abstract void ForEachEntityEntry(Entity entity, ref ComponentMerger merger);
 
 #if DEBUG
@@ -224,7 +222,7 @@ public abstract partial class CommandStreamCore
         public T Value;
     }
 
-    private protected sealed class ComponentStore<T> : ComponentStore where T : unmanaged
+    private sealed class ComponentStore<T> : ComponentStore where T : unmanaged
     {
         // Exact entity/type varints are at most 5 bytes each. The upper bound
         // covers tag + entity + type + data length for Add/Set; Remove is smaller.
@@ -254,70 +252,9 @@ public abstract partial class CommandStreamCore
         private Archetype? _setLocationUniformArchetype;
         private SetLocationCacheKind _setLocationCacheKind;
 
-        // ── Per-thread local buffers — write path (parallel recording) ──
-        private sealed class LocalBuffer
-        {
-            public StoreEntry<T>[] Entries = new StoreEntry<T>[256];
-            public int Count;
-
-            /// <summary>Append one entry. Returns true if this was the first entry (buffer was empty).</summary>
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool Append(Entity entity, in T value, byte kind)
-            {
-                var i = Count;
-                if ((uint)i >= (uint)Entries.Length)
-                {
-                    var newLen = Entries.Length == 0 ? 256 : Entries.Length * 2;
-                    Array.Resize(ref Entries, newLen);
-                }
-
-                Entries[i] = new StoreEntry<T>
-                {
-                    Entity = entity,
-                    Kind = kind,
-                    Value = value,
-                };
-                Count = i + 1;
-                return i == 0;
-            }
-        }
-
-        // ── ThreadLocal storage (used for enumeration) ──
-        private readonly ThreadLocal<LocalBuffer> _locals =
-            new(() => new LocalBuffer(), trackAllValues: true);
-
-        // ── [ThreadStatic] front-cache: avoids ThreadLocal.Value lookup on hot path ──
-        private static int s_nextCacheId;
-        private readonly int _cacheId = Interlocked.Increment(ref s_nextCacheId);
-
-        [ThreadStatic] private static int t_cachedStoreId;
-        [ThreadStatic] private static LocalBuffer? t_cachedLocal;
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private LocalBuffer GetLocal()
-        {
-            if (t_cachedStoreId == _cacheId)
-            {
-                var local = t_cachedLocal;
-                if (local is not null) return local;
-            }
-            return GetLocalSlow();
-        }
-
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        private LocalBuffer GetLocalSlow()
-        {
-            var local = _locals.Value!;
-            t_cachedStoreId = _cacheId;
-            t_cachedLocal = local;
-            return local;
-        }
-
-        private volatile int _hasLocalWrites;
-
         // ── Public API ──
 
-        public override bool HasCommands => _count > 0 || _hasLocalWrites != 0;
+        public override bool HasCommands => _count > 0;
         public override bool HasStructuralCommands => HasCommands && !_allSetKind;
         public override int ComponentDeltaCapacityHint
         {
@@ -361,89 +298,11 @@ public abstract partial class CommandStreamCore
             _allSetKind = false;
         }
 
-        public void AppendConcurrent(Entity entity, in T value, byte kind)
-        {
-#if DEBUG
-            Debug.Assert(!_isReadOnly, "Cannot write to a read-only ComponentStore");
-#endif
-            var local = GetLocal();
-            if (local.Append(entity, value, kind))
-                _hasLocalWrites = 1;
-        }
-
-        public override void SealParallelWrites()
-        {
-            if (_hasLocalWrites == 0)
-                return;
-
-            // Parallel writes may contain non-Set kinds; conservatively disable fast path.
-            _allSetKind = false;
-
-            var locals = _locals.Values;
-
-            // Count total entries and find first non-empty local
-            int total = _count, nonEmpty = 0;
-            LocalBuffer? firstNonEmpty = null;
-            foreach (var local in locals)
-            {
-                if (local.Count > 0)
-                {
-                    total += local.Count;
-                    nonEmpty++;
-                    firstNonEmpty ??= local;
-                }
-            }
-
-            if (nonEmpty == 0)
-            {
-                _hasLocalWrites = 0;
-                return;
-            }
-
-            // Steal: when _entries is empty and only one writer, steal its array.
-            // This eliminates the Array.Copy entirely for the common single-writer case
-            // and also for cases where serial Append happened on an empty store followed
-            // by a single parallel writer.
-            if (_count == 0 && nonEmpty == 1)
-            {
-                var oldEntries = _entries;
-                _entries = firstNonEmpty!.Entries;
-                _count = firstNonEmpty.Count;
-                firstNonEmpty.Entries = oldEntries; // reuse old empty/small array
-                firstNonEmpty.Count = 0;
-                _hasLocalWrites = 0;
-                return;
-            }
-
-            // Normal merge: copy all local buffers into _entries
-            EnsureCapacity(total);
-
-            var dst = _count;
-            foreach (var local in locals)
-            {
-                var n = local.Count;
-                if (n == 0) continue;
-
-                Array.Copy(local.Entries, 0, _entries, dst, n);
-                dst += n;
-                local.Count = 0;
-            }
-
-            _count = dst;
-            _hasLocalWrites = 0;
-        }
-
         public override void Clear()
         {
             _count = 0;
             _allSetKind = true;
             ResetSetLocationCache();
-            if (_hasLocalWrites != 0)
-            {
-                foreach (var local in _locals.Values)
-                    local.Count = 0;
-                _hasLocalWrites = 0;
-            }
         }
 
         public override bool PrepareForConsume(World world, bool buildSetLocationCache)
@@ -538,15 +397,6 @@ public abstract partial class CommandStreamCore
         // ── Private helpers ──
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void EnsureCapacity(int required)
-        {
-            if ((uint)required <= (uint)_entries.Length) return;
-            var newLen = _entries.Length == 0 ? 256 : _entries.Length;
-            while (newLen < required) newLen *= 2;
-            Array.Resize(ref _entries, newLen);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void EnsureStoreCapacity()
         {
             if (_count < _entries.Length) return;
@@ -574,7 +424,7 @@ public abstract partial class CommandStreamCore
                 Math.Max(required, Math.Max(256, _setLocationArchetypes.Length * 2)));
         }
 
-        // ── Read-only consumers (must be called AFTER SealParallelWrites) ──
+        // ── Read-only consumers ──
 
         public override void PreflightValidate(
             World world, int[] generations, byte[] presence, int epoch, bool useSetLocationCache)
@@ -947,7 +797,7 @@ public abstract partial class CommandStreamCore
             }
         }
 
-        public override void PreflightEmbeddedPlaceholders(CommandStreamCore stream)
+        public override void PreflightEmbeddedPlaceholders(CommandStream stream)
         {
             var typeId = Component<T>.ComponentType;
             ReadOnlySpan<int> offsets = default;

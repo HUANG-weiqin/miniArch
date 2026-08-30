@@ -764,19 +764,6 @@ public sealed class CommandBufferCloneTests
     }
 
     [Fact]
-    public void Parallel_clone_pending_source_limitation_documented()
-    {
-        // NOTE: ParallelCommandStream does not support pending source Clone.
-        // This test verifies that materialized source Clone still works.
-        var world = new World();
-        var buffer = new ParallelCommandStream(world);
-        var source = world.Create(new Position(1, 2));
-        var clone = buffer.Clone(source);  // materialized, should work
-        buffer.Submit();
-        Assert.True(world.IsAlive(clone));
-    }
-
-    [Fact]
     public void Clone_materialized_source_does_not_allocate()
     {
         var world = new World();
@@ -932,16 +919,6 @@ public sealed class CommandBufferCloneTests
         Assert.Equal(new Position(9, 9), pos2);
     }
 
-    [Fact]
-    public void Parallel_clone_pending_source_throws()
-    {
-        var world = new World();
-        var buffer = new ParallelCommandStream(world);
-        var src = buffer.Create();
-        buffer.Add(src, new Position(1, 2));
-
-        Assert.Throws<NotSupportedException>(() => buffer.Clone(src));
-    }
 
     private static int CountEntities(MiniQueryCache query)
     {

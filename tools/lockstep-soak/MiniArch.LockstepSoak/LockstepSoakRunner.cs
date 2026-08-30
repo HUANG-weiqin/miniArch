@@ -593,7 +593,7 @@ sealed class LockstepSoakRunner
     {
         var intents = new List<(Entity Child, Entity Parent)>();
         var pending = host.Stream.ActiveHierarchyForTesting
-            as System.Collections.Generic.IDictionary<Entity, CommandStreamCore.HierarchyIntent>;
+            as System.Collections.Generic.IDictionary<Entity, CommandStream.HierarchyIntent>;
         if (pending is not null)
         {
             foreach (var kvp in pending)
@@ -668,7 +668,7 @@ sealed class LockstepSoakRunner
     static bool TryGetVirtualParent(HostState host, Entity child, out Entity parent)
     {
         if (host.Stream.ActiveHierarchyForTesting is
-                IDictionary<Entity, CommandStreamCore.HierarchyIntent> pending &&
+                IDictionary<Entity, CommandStream.HierarchyIntent> pending &&
             pending.TryGetValue(child, out var intent))
         {
             if (intent.IsAdd)

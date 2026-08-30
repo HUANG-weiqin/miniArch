@@ -461,7 +461,7 @@ sealed class SoakRunner
         // Collect existing pending Add intents plus the proposed one.
         var intents = new System.Collections.Generic.List<(Entity Child, Entity Parent)>();
         var pending = _stream.ActiveHierarchyForTesting
-            as System.Collections.Generic.IDictionary<Entity, Core.CommandStreamCore.HierarchyIntent>;
+            as System.Collections.Generic.IDictionary<Entity, Core.CommandStream.HierarchyIntent>;
         if (pending is not null)
         {
             foreach (var kvp in pending)

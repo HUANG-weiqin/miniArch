@@ -781,7 +781,7 @@ public sealed partial class World
     /// this is a no-op.
     /// </summary>
     /// <remarks>
-    /// Used by <see cref="CommandStreamCore.Submit"/> to align the free-list order
+    /// Used by <see cref="CommandStream.Submit"/> to align the free-list order
     /// of cancelled pending entities with the batch-order Release ops emitted in
     /// the wire. See B6 in <c>kb-code-review-findings.md</c>.
     /// <para/>

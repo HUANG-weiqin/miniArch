@@ -1373,23 +1373,6 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
-    public void ParallelCommandStream_CreateMany_creates_entities()
-    {
-        var world = new World();
-        var stream = new ParallelCommandStream(world);
-        var entities = new Entity[4];
-
-        stream.CreateMany<Position, PositionCreateManyWriter>(entities, new PositionCreateManyWriter());
-        Assert.True(stream.Submit());
-
-        for (var i = 0; i < entities.Length; i++)
-        {
-            Assert.True(world.TryGet(entities[i], out Position p));
-            Assert.Equal(new Position(i, i + 1), p);
-        }
-    }
-
-    [Fact]
     public void CreateMany_then_remove_on_same_entity_throws()
     {
         var world = new World();
@@ -2610,28 +2593,6 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
-    public void Parallel_recording_keeps_pending_create_component_commands()
-    {
-        var source = new World();
-        var replica = new World();
-        var stream = new ParallelCommandStream(source);
-
-        var created = stream.Create();
-        stream.Add(created, new Position(1, 2));
-        stream.Add(created, new Health(10));
-
-        var delta = stream.Snapshot();
-        stream.Submit();
-        new CommandStream(replica).Replay(FrameDelta.FromWire(delta.AsSpan()));
-
-        Assert.True(source.TryGet(created, out Position p));
-        Assert.Equal(new Position(1, 2), p);
-        Assert.True(source.TryGet(created, out Health h));
-        Assert.Equal(new Health(10), h);
-        AssertIdenticalWorlds(source, replica, "parallel pending create component commands");
-    }
-
-    [Fact]
     public void BUG_stale_existing_entity_set_is_skipped_so_submit_matches_replay()
     {
         var source = new World();
@@ -2742,42 +2703,6 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
-    public void Parallel_recording_skips_stale_existing_entity_component_commands()
-    {
-        var source = new World();
-        var replica = new World();
-
-        var staleSource = source.Create(new Position(1, 1));
-        source.Destroy(staleSource);
-        var recycledSource = source.Create(new Velocity(2, 2), new Health(3));
-
-        var staleReplica = replica.Create(new Position(1, 1));
-        replica.Destroy(staleReplica);
-        var recycledReplica = replica.Create(new Velocity(2, 2), new Health(3));
-
-        var stream = new ParallelCommandStream(source);
-        stream.Add(staleSource, new Position(9, 9));
-        stream.Set(staleSource, new Velocity(8, 8));
-        stream.Remove<Health>(staleSource);
-
-        var delta = stream.Snapshot();
-        Assert.False(stream.Submit());
-        new CommandStream(replica).Replay(FrameDelta.FromWire(delta.AsSpan()));
-
-        Assert.True(source.TryGet(recycledSource, out Velocity srcVelocity));
-        Assert.True(source.TryGet(recycledSource, out Health srcHealth));
-        Assert.True(replica.TryGet(recycledReplica, out Velocity replicaVelocity));
-        Assert.True(replica.TryGet(recycledReplica, out Health replicaHealth));
-        Assert.False(source.TryGet<Position>(recycledSource, out _));
-        Assert.False(replica.TryGet<Position>(recycledReplica, out _));
-        Assert.Equal(new Velocity(2, 2), srcVelocity);
-        Assert.Equal(new Velocity(2, 2), replicaVelocity);
-        Assert.Equal(new Health(3), srcHealth);
-        Assert.Equal(new Health(3), replicaHealth);
-        AssertIdenticalWorlds(source, replica, "parallel stale existing component commands should be skipped");
-    }
-
-    [Fact]
     public void BUG_existing_entity_that_becomes_stale_before_consume_is_skipped_so_submit_matches_replay()
     {
         var source = new World();
@@ -2809,35 +2734,6 @@ public sealed class CommandStreamTests
         Assert.Equal(new Position(2, 2), srcPosition);
         Assert.Equal(new Position(2, 2), replicaPosition);
         AssertIdenticalWorlds(source, replica, "delayed stale existing Set should be skipped");
-    }
-
-    [Fact]
-    public void BUG_parallel_destroy_on_pending_entity_does_not_cancel_like_single_threaded()
-    {
-        // Single-threaded: Destroy on a pending entity cancels it (never materialized)
-        // and cascades to pending descendants. Parallel mode should produce the same
-        // observable result.
-        var worldSt = new World();
-        var streamSt = new CommandStream(worldSt);
-        var parentSt = streamSt.Create();
-        var childSt = streamSt.Create();
-        streamSt.AddChild(parentSt, childSt);
-        streamSt.Destroy(parentSt);
-        streamSt.Submit();
-
-        // Parallel: same operations but using ParallelCommandStream
-        var worldPar = new World();
-        var streamPar = new ParallelCommandStream(worldPar);
-        var parentPar = streamPar.Create();
-        var childPar = streamPar.Create();
-        streamPar.AddChild(parentPar, childPar);
-        streamPar.Destroy(parentPar);
-        streamPar.Submit();
-
-        Assert.True(worldSt.EntityCount == 0,
-            $"Single-threaded: parent+child cancelled, expected 0 alive, got {worldSt.EntityCount}");
-        Assert.True(worldPar.EntityCount == 0,
-            $"Parallel: Destroy on pending should also cancel, expected 0 alive, got {worldPar.EntityCount}");
     }
 
     [Fact]
@@ -3140,7 +3036,7 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
-    public void SwapOutState_swaps_all_working_fields()
+    public void CommandStream_state_fields_are_explicitly_classified_for_async_handoff()
     {
         var allFields = typeof(CommandStream).GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
             .Select(f => f.Name)
@@ -3151,7 +3047,6 @@ public sealed class CommandStreamTests
             "_world",
             "_deferredEntities",
             "_pendingTask",
-            "_storeCreateLock",
             "_lastCreated",
             "_lastCreatedBatch",
             "_deferredSeq",
@@ -3161,11 +3056,18 @@ public sealed class CommandStreamTests
             "_pendingBatchMax",
             "_batchCompTotal",
             "_batchBufLen",
+            "_submitEpoch",
             "_maskCache",
             "_maskCacheCount",
             "_maskCacheGeneration",
             "_lastMask",
             "_lastMaskArchetype",
+            "_lastStoreId0",
+            "_lastStore0",
+            "_lastStoreId1",
+            "_lastStore1",
+            "_hasStoreCommands",
+            "_scanFieldKind",
             "_trackedBySeq",
             "_trackedMaxSeq",
             "_replayTrackedBySeq",
@@ -4727,73 +4629,6 @@ public sealed class DeferredCreateTests
         Assert.Contains("seq=2", ex.Message);
     }
 
-    // BUG REPROOF HYPOTHESIS: ComponentStore<T>.AppendConcurrent uses
-    // `_data.Length` as the gate for slot validity, but performs three
-    // independent Array.Resize calls (_data, _entities, _kinds) inside the
-    // resize lock. A concurrent appender that reads _data.Length after the
-    // first Resize but before the other two completes will exit the wait
-    // loop and write _entities[slot] / _kinds[slot] / _data[slot] into
-    // arrays that are still the old (shorter) length — producing either an
-    // IndexOutOfRangeException or a silent write into a discarded array.
-    //
-    // The test runs many trials; each trial hammers a fresh ComponentStore
-    // with parallel Set commands whose counts cross resize thresholds.
-    // A healthy implementation never throws and never loses a Set.
-    [Fact]
-    public void BUG_parallel_append_concurrent_resize_is_not_atomic()
-    {
-        var crashCount = 0;
-        var lossCount = 0;
-        var trials = 200;
-
-        for (var trial = 0; trial < trials; trial++)
-        {
-            var world = new World();
-            var entities = new Entity[1024];
-            for (var i = 0; i < entities.Length; i++)
-                entities[i] = world.Create(new Position(i, i));
-
-            var stream = new ParallelCommandStream(world);
-
-            Exception? crash = null;
-            try
-            {
-                Parallel.For(0, entities.Length, i =>
-                {
-                    stream.Set(entities[i], new Position(i + 1, i + 2));
-                });
-            }
-            catch (Exception ex)
-            {
-                crash = ex;
-            }
-
-            // Submit may also throw if the recorded state is corrupt.
-            try { stream.Submit(); }
-            catch (Exception ex) { crash = crash ?? ex; }
-
-            if (crash != null)
-            {
-                crashCount++;
-                continue;
-            }
-
-            for (var i = 0; i < entities.Length; i++)
-            {
-                if (!world.TryGet(entities[i], out Position p) ||
-                    p.X != i + 1 || p.Y != i + 2)
-                {
-                    lossCount++;
-                    break;
-                }
-            }
-        }
-
-        Assert.True(crashCount == 0 && lossCount == 0,
-            $"AppendConcurrent race: {crashCount}/{trials} trials crashed, " +
-            $"{lossCount}/{trials} trials lost data.");
-    }
-
     // CommandStream operations on entities in chunked archetypes.
     // All paths (Set/Add/Remove) must work when the entity's archetype
     // is chunked, as Materialize calls into the same World APIs.
@@ -4860,197 +4695,10 @@ public sealed class DeferredCreateTests
         return Convert.ToHexString(SHA256.HashData(span));
     }
 
-    // ────────────────────────────────────────────────────────────────────
-    //  ParallelCommandStream subclass coverage (reviewer P2)
-    //  These mirror single-threaded tests for Track / RemoveChild / Clone.
-    //  They exist to lock in the contract that ParallelCommandStream is a
-    //  drop-in for CommandStream on these APIs — not just the Add/Set/Remove
-    //  fast path that already had coverage.
-    // ────────────────────────────────────────────────────────────────────
-
-    [Fact]
-    public void ParallelCommandStream_Track_resolves_placeholder_after_Submit()
-    {
-        var world = new World();
-        var stream = new ParallelCommandStream(world) { DeferredEntities = true };
-
-        var placeholder = stream.Create();
-        Assert.True(placeholder.IsPlaceholder);
-
-        var slot = stream.Track(placeholder);
-        Assert.Equal(placeholder, slot.Value);
-
-        stream.Add(placeholder, new Position(7, 8));
-        Assert.True(stream.Submit());
-
-        // After Submit, the slot's Value must resolve to the real entity, not
-        // the placeholder. This is the same contract EntitySlotTests verifies
-        // for the single-threaded stream.
-        var resolved = slot.Value;
-        Assert.True(resolved.IsValid);
-        Assert.True(resolved.Id >= 0);
-        Assert.True(world.IsAlive(resolved));
-        Assert.True(world.TryGet(resolved, out Position p));
-        Assert.Equal(new Position(7, 8), p);
-    }
-
-    [Fact]
-    public void ParallelCommandStream_RemoveChild_detaches_recorded_parent_child()
-    {
-        var world = new World();
-        var stream = new ParallelCommandStream(world);
-
-        var parent = stream.Create();
-        var child = stream.Create();
-        stream.AddChild(parent, child);
-
-        // Detach before Submit — same recording session.
-        stream.RemoveChild(child);
-
-        Assert.True(stream.Submit());
-
-        Assert.True(world.IsAlive(parent));
-        Assert.True(world.IsAlive(child));
-        Assert.False(world.HasChildren(parent));
-        Assert.False(world.TryGetParent(child, out _));
-    }
-
-    [Fact]
-    public void ParallelCommandStream_Clone_deep_copies_subtree()
-    {
-        var world = new World();
-        // Source subtree exists in the live world before recording.
-        var parent = world.Create(new Position(5, 6));
-        var child1 = world.Create(new Velocity(1, 1));
-        var child2 = world.Create(new Health(50));
-        world.AddChild(parent, child1);
-        world.AddChild(parent, child2);
-
-        var stream = new ParallelCommandStream(world);
-        var clone = stream.Clone(parent);
-        Assert.True(stream.Submit());
-
-        Assert.True(world.IsAlive(clone));
-        Assert.True(world.TryGet(clone, out Position p));
-        Assert.Equal(new Position(5, 6), p);
-
-        var cloneChildren = new List<Entity>();
-        foreach (var c in world.Hierarchy.EnumerateChildren(world, clone))
-            cloneChildren.Add(c);
-
-        Assert.Equal(2, cloneChildren.Count);
-        // Clone's children must carry the same component data as the source children.
-        Assert.Contains(cloneChildren, c => world.TryGet(c, out Velocity _));
-        Assert.Contains(cloneChildren, c => world.TryGet(c, out Health _));
-    }
-
-    // ────────────────────────────────────────────────────────────────────
-    // ────────────────────────────────────────────────────────────────────
-    //  ParallelCommandStream pending-batch regression tests (CS10)
-    //  ParallelCommandStream.Add/Set/Remove on a pending-batch entity MUST
-    //  write to the batch buffer (like single-threaded CommandStream does),
-    //  NOT to the component store.  The store path materializes the entity
-    //  empty and then tries to ApplyToWorld, which throws when the component
-    //  doesn't exist on the entity.
-    // ────────────────────────────────────────────────────────────────────
-
-    [Fact]
-    public void ParallelCommandStream_Set_on_pending_entity_applies_component()
-    {
-        var world = new World();
-        var stream = new ParallelCommandStream(world);
-        var e = stream.Create();
-        stream.Set(e, new Position(1, 2));
-        Assert.True(stream.Submit());
-        Assert.True(world.TryGet(e, out Position p));
-        Assert.Equal(new Position(1, 2), p);
-    }
-
-    [Fact]
-    public void ParallelCommandStream_Add_on_pending_entity_does_not_throw_on_second_Add()
-    {
-        var world = new World();
-        var stream = new ParallelCommandStream(world);
-        var e = stream.Create();
-        stream.Add(e, new Position(1, 2));
-        stream.Add(e, new Position(3, 4)); // second Add on same pending entity
-        Assert.True(stream.Submit());
-        Assert.True(world.TryGet(e, out Position p));
-        Assert.Equal(new Position(3, 4), p); // last write wins
-    }
-
-    [Fact]
-    public void ParallelCommandStream_Remove_on_pending_entity_skips_component()
-    {
-        var world = new World();
-        var stream = new ParallelCommandStream(world);
-        var e = stream.Create();
-        // Add a component, then remove it before Submit — should not appear
-        stream.Add(e, new Position(1, 2));
-        stream.Remove<Position>(e);
-        Assert.True(stream.Submit());
-        Assert.True(world.IsAlive(e));
-        Assert.False(world.TryGet<Position>(e, out _));
-    }
-
-    [Fact]
-    public void ParallelCommandStream_Clone_then_Add_component_matches_single_threaded()
-    {
-        var world = new World();
-        // Source entity in the world
-        var src = world.Create(new Position(10, 20));
-        var stream = new ParallelCommandStream(world);
-        var clone = stream.Clone(src);
-        // Add an additional component that the source didn't have
-        stream.Add(clone, new Health(99));
-        Assert.True(stream.Submit());
-        Assert.True(world.IsAlive(clone));
-        Assert.True(world.TryGet(clone, out Position p));
-        Assert.Equal(new Position(10, 20), p);
-        Assert.True(world.TryGet(clone, out Health h));
-        Assert.Equal(new Health(99), h);
-    }
-
-    //  CommandStreamCore no longer exposes any recording mutators directly.
-    //  These methods live only on CommandStream and ParallelCommandStream.
-    //  This test prevents accidental reintroduction of the old public throw-stubs.
-    // ────────────────────────────────────────────────────────────────────
-
-    private static readonly string[] MutatorNames =
-    [
-        "Create", "Track", "Add", "Set", "Remove", "Destroy",
-        "AddChild", "RemoveChild", "Clone"
-    ];
-
-    [Fact]
-    public void CommandStreamCore_does_not_expose_recording_mutators()
-    {
-        var baseMethods = typeof(CommandStreamCore)
-            .GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
-            .Select(m => m.Name)
-            .ToHashSet();
-
-        var forbidden = MutatorNames.Where(m => baseMethods.Contains(m)).ToArray();
-        Assert.Empty(forbidden);
-
-        // Also verify the concrete types expose them.
-        foreach (var name in MutatorNames)
-        {
-            Assert.True(
-                typeof(CommandStream).GetMethod(name,
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance) is not null,
-                $"CommandStream should expose '{name}'");
-            Assert.True(
-                typeof(ParallelCommandStream).GetMethod(name,
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance) is not null,
-                $"ParallelCommandStream should expose '{name}'");
-        }
-    }
-
     // ── TrySetBit regression (ids outside 0..511) ─────────────────────
 
     /// <summary>
-    /// <see cref="CommandStreamCore.TrySetBit"/> must NOT accept <c>id >= 512</c>.
+    /// <see cref="CommandStream.TrySetBit"/> must NOT accept <c>id >= 512</c>.
     /// Previously the last branch (<c>id &lt; 448</c>) fell through to
     /// <c>TrySetBitInLane(ref b7, id - 448)</c> without a 512 guard. Since C#
     /// masks ulong shift counts to the lower 6 bits, <c>1UL &lt;&lt; (id - 448)</c>
@@ -5064,27 +4712,27 @@ public sealed class DeferredCreateTests
         ulong b4 = 0, b5 = 0, b6 = 0, b7 = 0;
 
         // id 512: first value past the 512-bit boundary
-        Assert.False(CommandStreamCore.TrySetBit(
+        Assert.False(CommandStream.TrySetBit(
             ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 512));
         Assert.Equal(0UL, b7);  // must not alias to bit 0 of b7
 
         // id 513: verify it doesn't alias to bit 1 of b7 either
-        Assert.False(CommandStreamCore.TrySetBit(
+        Assert.False(CommandStream.TrySetBit(
             ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 513));
         Assert.Equal(0UL, b7);
 
         // id 575: last value before id - 448 = 127, still wraps
-        Assert.False(CommandStreamCore.TrySetBit(
+        Assert.False(CommandStream.TrySetBit(
             ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 575));
         Assert.Equal(0UL, b7);
 
         // id 576: id - 448 = 128 => 1UL << 128 => 1UL << 0 (wraps 64-bit)
-        Assert.False(CommandStreamCore.TrySetBit(
+        Assert.False(CommandStream.TrySetBit(
             ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 576));
         Assert.Equal(0UL, b7);
 
         // id 1024: far outside, should also be rejected
-        Assert.False(CommandStreamCore.TrySetBit(
+        Assert.False(CommandStream.TrySetBit(
             ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 1024));
         Assert.Equal(0UL, b7);
     }
@@ -5100,22 +4748,22 @@ public sealed class DeferredCreateTests
         ulong b4 = 0, b5 = 0, b6 = 0, b7 = 0;
 
         // Set bit 448 (bit 0 of b7)
-        Assert.True(CommandStreamCore.TrySetBit(
+        Assert.True(CommandStream.TrySetBit(
             ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 448));
         Assert.Equal(1UL << 0, b7);
 
         // Set bit 511 (bit 63 of b7)
-        Assert.True(CommandStreamCore.TrySetBit(
+        Assert.True(CommandStream.TrySetBit(
             ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 511));
         Assert.Equal((1UL << 0) | (1UL << 63), b7);
 
         // Set bit 480 (bit 32 of b7) — middle of the lane
-        Assert.True(CommandStreamCore.TrySetBit(
+        Assert.True(CommandStream.TrySetBit(
             ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 480));
         Assert.Equal((1UL << 0) | (1UL << 32) | (1UL << 63), b7);
 
         // id 512 again after valid bits are set — must NOT touch b7
-        Assert.False(CommandStreamCore.TrySetBit(
+        Assert.False(CommandStream.TrySetBit(
             ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 512));
         Assert.Equal((1UL << 0) | (1UL << 32) | (1UL << 63), b7);
     }
@@ -5131,27 +4779,27 @@ public sealed class DeferredCreateTests
         ulong b4 = 0, b5 = 0, b6 = 0, b7 = 0;
 
         // Set id 0 (first bit in b0)
-        Assert.True(CommandStreamCore.TrySetBit(
+        Assert.True(CommandStream.TrySetBit(
             ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 0));
-        Assert.False(CommandStreamCore.TrySetBit(
+        Assert.False(CommandStream.TrySetBit(
             ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 0));
 
         // Set id 63 (last bit in b0)
-        Assert.True(CommandStreamCore.TrySetBit(
+        Assert.True(CommandStream.TrySetBit(
             ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 63));
-        Assert.False(CommandStreamCore.TrySetBit(
+        Assert.False(CommandStream.TrySetBit(
             ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 63));
 
         // Set id 447 (last bit in b6)
-        Assert.True(CommandStreamCore.TrySetBit(
+        Assert.True(CommandStream.TrySetBit(
             ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 447));
-        Assert.False(CommandStreamCore.TrySetBit(
+        Assert.False(CommandStream.TrySetBit(
             ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 447));
 
         // Set id 511 (last valid bit in b7)
-        Assert.True(CommandStreamCore.TrySetBit(
+        Assert.True(CommandStream.TrySetBit(
             ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 511));
-        Assert.False(CommandStreamCore.TrySetBit(
+        Assert.False(CommandStream.TrySetBit(
             ref b0, ref b1, ref b2, ref b3, ref b4, ref b5, ref b6, ref b7, 511));
 
         // Verify all expected bits are set
@@ -5298,39 +4946,6 @@ public sealed class DeferredCreateTests
         Assert.True(world.IsAlive(target));
     }
 
-    [Fact]
-    public void BUG_parallel_clone_imported_placeholder_is_rejected_by_default_consume()
-    {
-        using var world = new World();
-        var source = world.Create(new Linked(5, new Entity(-1, 0)));
-
-        var submitStream = new ParallelCommandStream(world);
-        submitStream.Clone(source);
-        var ex = Assert.Throws<InvalidOperationException>(() => submitStream.Submit());
-        Assert.Contains("cancelled or unknown placeholder", ex.Message);
-        Assert.Equal(1, world.EntityCount);
-
-        var snapshotStream = new ParallelCommandStream(world);
-        snapshotStream.Clone(source);
-        ex = Assert.Throws<InvalidOperationException>(() => snapshotStream.Snapshot());
-        Assert.Contains("cancelled or unknown placeholder", ex.Message);
-    }
-
-    [Fact]
-    public void BUG_parallel_clone_imported_child_placeholder_is_rejected_by_default_submit()
-    {
-        using var world = new World();
-        var parent = world.Create(new Position(1, 2));
-        var child = world.Create(new Linked(5, new Entity(-1, 0)));
-        world.AddChild(parent, child);
-
-        var stream = new ParallelCommandStream(world);
-        stream.Clone(parent);
-
-        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
-        Assert.Contains("cancelled or unknown placeholder", ex.Message);
-        Assert.Equal(2, world.EntityCount);
-    }
 }
 
 [CollectionDefinition(HighComponentIdCollection.Name, DisableParallelization = true)]

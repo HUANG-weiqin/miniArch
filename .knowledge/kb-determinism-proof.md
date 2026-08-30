@@ -2,7 +2,7 @@
 title: 确定性证明 — Lockstep ECS 库级确定性验证
 module: DeterminismProof
 description: miniArch 确定性保证的完整证明矩阵——9 个审计维度、实证数据、测试链接、已知边界、LayoutKind.Auto 修复记录。面向选型决策者和审计者。
-updated: 2026-07-22
+updated: 2026-08-29
 ---
 
 # 确定性证明 — Lockstep ECS 库级确定性验证
@@ -79,7 +79,7 @@ updated: 2026-07-22
 
 **机制**：Submit、Replay、BuildDelta 三个路径显式共享同一操作顺序：`Create → Hierarchy → Ops(Set/Add/Remove) → Destroy`。
 
-**保证**：注释显式声明 "Order matches Submit"（`CommandStreamCore.cs:994`、`CommandStreamCore.cs:1026`）。
+**保证**：Submit 与 BuildDelta 实现均显式保持相同阶段顺序。
 
 **守护**：
 - `AlignCancelledBatchFreeListOrder` 保证 cancelled batch 的 free-list entries 在 Submit 时对齐 wire 顺序
@@ -90,9 +90,8 @@ updated: 2026-07-22
 - `tests/MiniArch.Tests/Core/SubmitReplayRestoreParityTests.cs`（9 个测试，P1-P9 三路 parity）
 
 **代码位置**：
-- `src/MiniArch/Core/CommandStreamCore.cs:992-1022`（SubmitFromFrozen）
-- `src/MiniArch/Core/CommandStreamCore.cs:1024-1043`（BuildFromFrozen）
-- `src/MiniArch/Core/CommandStreamCore.cs:1139-1191`（EmitPendingEntitiesToDelta）
+- `src/MiniArch/Core/CommandStream.Submit.cs`（SubmitFromFrozen、BuildFromFrozen）
+- `src/MiniArch/Core/CommandStream.Pending.cs`（EmitPendingEntitiesToDelta）
 
 ### 4. Sort/Dedup 确定性
 

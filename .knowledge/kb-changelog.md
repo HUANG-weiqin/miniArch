@@ -2,12 +2,19 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-07-19
+updated: 2026-08-29
 ---
 # Knowledge Base Changelog
 
 > 这个页面只记录**重大架构变更和知识库校准事件**，供追溯。
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
+
+## 2026-08-29 删除并行 CommandStream 录制
+
+- 删除 `ParallelCommandStream`、并行 typed-store merge/seal/lock 状态及 `ParallelRecord.Perf`。
+- 删除只为共享两个 recorder 策略而存在的 `CommandStreamCore` public base；record 与 consume API 统一归属唯一的 `public sealed partial CommandStream`。
+- 保留 async `FrozenState` ownership、单线程 Clone 完整虚拟状态语义、Entity resolver 与 Query 并行只读迭代。
+- 同步公共 API 基线、测试、API/示例文档和相关知识页；历史 plans/audits 继续记录当时事实。
 
 ## 2026-07-19 Save archetype 排序违反 query 顺序契约 + Clone 跳过空 archetype
 

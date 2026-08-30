@@ -2,7 +2,7 @@
 title: Hardening Roadmap
 module: Meta
 description: 系统性的健壮性加固路线图——从 int 溢出、退化性能、内存安全到确定性保障，按里程碑组织
-updated: 2026-07-25
+updated: 2026-08-29
 ---
 
 > **实施状态：** 2026-07-12 完成 M1-M9 全部代码落地。详细信息见 `kb-changelog.md` §2026-07-12。
@@ -26,7 +26,7 @@ updated: 2026-07-25
 | **M3** | **栈安全** | **P1** | 2 | FrameDelta Replay、CommandStream |
 | **M9** | **API 输入验证** | **P0** | 10 | 所有 public API 入口 |
 | **M2** | **退化性能保护** | P2 | 2 | Destroy 分组、free list 扫描 |
-| **M6** | **并发安全契约** | P2 | 3 | Query 并行迭代、跨 CommandStream |
+| **M6** | **并发安全契约** | P2 | 2 | Query 并行迭代、checksum reentrancy |
 | **M4** | **契约显式化** | P2 | 3 | Debug.Assert + 源代码注释约定 |
 | **M5** | **确定性与可观测性** | P2 | 7 | 文档、Diagnostic 工具、checksum |
 | **M7** | **资源生命周期** | P3 | 2 | Dispose 清理 |
@@ -135,16 +135,16 @@ private static int ComputeSegmentEntityCapacity(Type[] componentTypes)
 - **改法**：`checked((int)((uint)count * (uint)size))`，溢出时抛明确异常而非静默 OOM
 - **热路径**：❌ Snapshot Save 冷路径
 
-### M1.5 `CommandStreamCore.ReserveBatchBufSpace` 溢出防护
+### M1.5 `CommandStream.ReserveBatchBufSpace` 溢出防护
 
-- **位置**：`CommandStreamCore.cs:1711`
+- **位置**：`CommandStream.Pending.cs`
 - **问题**：`_batchBufLen + size` 未检查溢出；`_batchBufLen += size` 累积可超过 `int.MaxValue`
 - **改法**：加 `if (_batchBufLen > int.MaxValue - size) ThrowBufferOverflow()`
 - **热路径**：⚠️ 每帧大量 SetComponent 走过这里，但检查只是单次 `if` + 抛出分支不会被预测
 
 ### M1.6 无限循环兜底
 
-- **位置**：`CommandStreamCore.cs:1542`（`GrowPendingBatchFor` 的 `while (newLen <= entityId) newLen *= 2;`）
+- **位置**：`CommandStream.Pending.cs`（`GrowPendingBatchFor` 的 `while (newLen <= entityId) newLen *= 2;`）
 - **风险**：`newLen` 溢变负后，循环永不终止
 - **改法**：`if (newLen > maxLen) { newLen = maxLen; break; }` 或在乘法后加 `if (newLen <= 0)` 检测
 
@@ -252,7 +252,7 @@ M2.3 的注释**已添加**（之前 commit 已更新 `RemoveFromFreeList` 和 `
 
 ### M3.2 `stackalloc ComponentType[componentCount]` 防护
 
-- **位置**：`CommandStreamCore.cs:1223, 1256`
+- **位置**：`CommandStream.Pending.cs`
 - **问题**：`componentCount` 来自 `CreateManyGroup`，当前 API 路径限制 ≤8，但字段本身是 `int`
 - **改法**：加 `if (componentCount > 64)` 改用 `ArrayPool.Rent`
 - **热路径**：❌ Submit 冷路径
@@ -297,7 +297,7 @@ M2.3 的注释**已添加**（之前 commit 已更新 `RemoveFromFreeList` 和 `
 
 ### M4.3 `ComponentStore<T>` inline 存储契约
 
-- **位置**：`CommandStreamCore.cs:2735-2760`（`ComponentStore<T>` / `StoreEntry<T>` / `LocalBuffer`）
+- **位置**：`CommandStream.ComponentStore.cs`（`ComponentStore<T>` / `StoreEntry<T>`）
 - **问题**：`StoreEntry<T>` 将 `T Value` inline 存储在数组中。`new StoreEntry<T>[256]` 时 `sizeof(T) × 256` 若超出可用内存则 OOM。这是一个架构约束——不是 bug，而是故意为之的性能设计
 - **改法（不修运行时，只加契约）**：
 
@@ -311,17 +311,7 @@ M2.3 的注释**已添加**（之前 commit 已更新 `RemoveFromFreeList` 和 `
   internal struct StoreEntry<T> where T : unmanaged { ... }
   ```
 
-  2. **在 `LocalBuffer` 的 `new StoreEntry<T>[256]` 处加 DEBUG 断言**：
-  ```csharp
-  // sizeof(T) is a compile-time constant; the assert has zero runtime cost
-  // even in DEBUG — the JIT eliminates the dead branch.
-  Debug.Assert(sizeof(T) <= 65536,
-      $"ComponentStore<{typeof(T).Name}> initial capacity 256 × sizeof(T)={sizeof(T)} " +
-      $"requires {256L * sizeof(T) / (1024*1024)} MB. For larger components, " +
-      $"use the pending-entity path (BatchBuf).");
-  ```
-
-  3. **在 `_entries` 的 `EnsureStoreCapacity()` 加倍处加同样断言**：
+  2. **在 `_entries` 的 `EnsureStoreCapacity()` 加倍处加同样断言**：
   ```csharp
   Debug.Assert(sizeof(T) <= 65536,
       $"ComponentStore<{typeof(T).Name}> ensure capacity: sizeof(T)={sizeof(T)} > 64 KB. " +
@@ -380,7 +370,7 @@ M2.3 的注释**已添加**（之前 commit 已更新 `RemoveFromFreeList` 和 `
 
 ### M5.7 组件类型数量文档化上限
 
-- **位置**：`ComponentMask`（`CommandStreamCore.cs`）、组件注册入口
+- **位置**：`ComponentMask.cs`、组件注册入口
 - **问题**：`ComponentMask` 快路径覆盖 0-511（8×`ulong`），慢路径通过 `SlowMask`（`ulong[]` + `int Hash`）扩展，但未文档化上限。若用户注册极多组件类型（如 10000+），`SlowMask` 的 hash 碰撞概率上升、`ComponentStore<T>` 的 `StoreEntry<T>[]` 数组膨胀
 - **改法**：在 `ComponentRegistry` 或 `ComponentSchema.Fingerprint()` 入口处加文档化上限（建议 4096），并在注册时加 `Debug.Assert(componentCount <= 4096, ...)`
 - **热路径**：❌ 注册时冷路径
@@ -393,7 +383,7 @@ M2.3 的注释**已添加**（之前 commit 已更新 `RemoveFromFreeList` 和 `
 **目标**：在单线程写 + 多线程读的契约下，用最小代价检测违规。**不在热路径加锁**，不入侵内核读写路径。
 
 ### 原则
-- 所有 `volatile`/`lock`/`ThreadLocal` 保持现状——它们已经正确
+- 保持现有并行 Query 与 async handoff 的同步边界，不给 World/CommandStream 写路径补锁
 - 不修改 `GetColumnRef`、`GetSpan<T>`、`MoveNext` 等热路径
 - 只加两样东西：**`[Conditional("DEBUG")]` 断言** + **文档明确契约**
 
@@ -413,17 +403,6 @@ M2.3 的注释**已添加**（之前 commit 已更新 `RemoveFromFreeList` 和 `
   - World 结构变更入口（`Create`/`Destroy`/`Add`/`Set`/`Remove`）加 `Begin/EndStructChange`
 - **热路径**：⚠️ `MoveNext()` 加的是 `[Conditional("DEBUG")]`——Release 零成本
 - **不入侵内核**：计数器在 `World` 层，`Archetype`/`ChunkView` 不感知
-
-### M6.2 跨 `ParallelCommandStream` 实体分配冲突
-
-- **位置**：`ParallelCommandStream.cs:50-179`
-- **问题**：两个 `ParallelCommandStream` 指向同一个 `World` 时，`_storeCreateLock`（流级别）无法互斥 `ReserveDeferredEntityUnsafe`（无锁）→ 实体 ID 分配静默冲突
-- **改法（方案 A，推荐）**：
-  - 将 `_entityIdLock` 从 `ReserveDeferredEntity` 提升为 World 级保护——所有实体分配路径（`ReserveDeferredEntity` + `ParallelCommandStream`）都经过同一把锁
-  - 代价：`ParallelCommandStream.Create` 多一次 `Monitor.Enter`（每帧实体创建次数有限，可接受）
-- **改法（方案 B，最小）**：
-  - 在 `ParallelCommandStream` 中检测 `_world._reservedCount` 在跨流场景下的不一致，抛明确异常
-- **热路径**：⚠️ 方案 A 加锁只在 `Create`/`Reserve` 路径，不涉及 `Set`/`Get` 热路径
 
 ### M6.3 `WorldSnapshot` ThreadStatic reentrancy 防护
 
@@ -589,16 +568,16 @@ M2.3 的注释**已添加**（之前 commit 已更新 `RemoveFromFreeList` 和 `
   ```
 - **热路径**：⚠️ `[Conditional("DEBUG")]`——Release 零成本
 
-#### M9.4 `CommandStreamCore.Replay(FrameDelta)` null 参数
+#### M9.4 `CommandStream.Replay(FrameDelta)` null 参数
 
-- **位置**：`CommandStreamCore.cs:746-752`
+- **位置**：`CommandStream.Submit.cs`
 - **问题**：`delta` 直接解引用，无 null 检查
 - **改法**：加 `ArgumentNullException.ThrowIfNull(delta)`
 - **热路径**：❌ Replay 冷路径
 
-#### M9.5 `CommandStreamCore.SubmitAndSnapshotIntoAsync(FrameDelta)` null 参数
+#### M9.5 `CommandStream.SubmitAndSnapshotIntoAsync(FrameDelta)` null 参数
 
-- **位置**：`CommandStreamCore.cs:849`
+- **位置**：`CommandStream.Submit.cs`
 - **问题**：`target.Clear()` 前无 null 检查
 - **改法**：同上，`ArgumentNullException.ThrowIfNull(target)`
 - **热路径**：❌ 异步 snapshot 冷路径

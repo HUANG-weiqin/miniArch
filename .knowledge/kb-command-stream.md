@@ -1,16 +1,15 @@
 ---
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
-description: CommandStream 与 ParallelCommandStream 的 typed-store 录制、consume-time 校验、Submit/Snapshot/Replay 确定性及 async ownership 契约
-updated: 2026-08-15
+description: CommandStream 的 typed-store 录制、consume-time 校验、Submit/Snapshot/Replay 确定性及 async ownership 契约
+updated: 2026-08-29
 ---
 # Command Stream Runtime
 
 ## 这个模块是干什么的
 
-- `CommandStream`：单线程、非虚拟、可内联的默认延迟录制器。
-- `ParallelCommandStream`：允许多个工作线程向同一个 stream 录制；consume 仍由单线程独占。
-- 两者共享 `CommandStreamCore` 的 Submit、Snapshot、Replay、pending materialize、hierarchy、component store 与 async lifecycle。
+- `CommandStream` 是单线程、sealed、可内联的延迟录制器，也是 Submit、Snapshot、Replay、pending materialize、hierarchy、component store 与 async lifecycle 的唯一 owner。
+- record 与 consume 都由调用线程独占；并行计算应在调用方汇总后交给一个 `CommandStream`。
 - `FrameDelta` 是可序列化操作序列；端到端帧同步见 `kb-lockstep-playbook.md`。
 
 ## 架构
@@ -19,16 +18,15 @@ updated: 2026-08-15
 
 | 文件 | 职责 |
 |---|---|
-| `CommandStream.cs` | 单线程 public mutator；existing component command 的无锁 append |
-| `ParallelCommandStream.cs` | 并行 public mutator；pending map 受锁保护、component store 使用 thread-local append |
-| `CommandStreamCore.cs` | 共享字段、record helper、clone、clear、deferred/frozen state |
-| `CommandStreamCore.Pending.cs` | pending batch、CreateMany materialize、placeholder resolve |
-| `CommandStreamCore.ComponentStore.cs` | typed entries、parallel merge、stale prune、preflight、apply/emit |
+| `CommandStream.cs` | 字段、record helper、clone、clear、deferred/frozen state |
+| `CommandStream.Record.cs` | public mutator；existing component command 的无锁 append |
+| `CommandStream.Pending.cs` | pending batch、CreateMany materialize、placeholder resolve |
+| `CommandStream.ComponentStore.cs` | typed entries、stale prune、preflight、apply/emit |
 | `EntityFieldResolver.cs` | Entity-bearing component graph validation、actual CLR offsets、InlineArray stride、in-place resolution |
-| `CommandStreamCore.Hierarchy.cs` | hierarchy intent、overlay preflight、apply/emit |
-| `CommandStreamCore.Submit.cs` | Submit/Snapshot/Replay、async handoff、consume preparation |
+| `CommandStream.Hierarchy.cs` | hierarchy intent、overlay preflight、apply/emit |
+| `CommandStream.Submit.cs` | Submit/Snapshot/Replay、async handoff、consume preparation |
 
-这些文件组成同一个 `public abstract partial class CommandStreamCore`。2026-07-15 拆分时逐项验证关键 canonical IL 与 JIT 内联边界不变；证据见 `docs/plans/2026-07-15-quality-hardening-4-evidence.md`。
+这些文件组成唯一的 `public sealed partial class CommandStream`。`FrozenState` 仍是必要的内部 async ownership 边界：active recording state 与后台只读 build state 不能合并。
 
 ### 数据流
 
@@ -43,9 +41,9 @@ Submit 与 BuildDelta 的阶段顺序统一为：Create → Hierarchy → Compon
 
 ## 决策
 
-### public mutator 只在 sealed 具体类型上
+### record 与 consume 只有一个 owner
 
-`Create/Track/Add/Set/Remove/Destroy/AddChild/RemoveChild/Clone` 不在 base 上公开。两个 sealed 子类各自提供 public 非虚拟方法并调用共享 `*Core` helper，避免 generic virtual mutator 无法可靠 devirtualize/inline。调用方必须持有 `CommandStream` 或 `ParallelCommandStream`，不能用 base 引用录制。
+`CommandStream` 直接拥有 `Create/Track/Add/Set/Remove/Destroy/AddChild/RemoveChild/Clone` 与全部 consume API。删除并行录制后，原本只为两个策略共享实现而存在的 public base 没有独立身份或生命周期，因此与并行 recorder 一并删除，不保留兼容 shim。
 
 ### pending entity 折叠为最终创建状态
 
@@ -61,7 +59,6 @@ Submit 与 BuildDelta 的阶段顺序统一为：Create → Hierarchy → Compon
 
 ```text
 PrepareStores()
-  → SealParallelStores()
   → ComponentStore<T>.PrepareForConsume(world, buildSetLocationCache)
 ```
 
@@ -74,12 +71,11 @@ pending/foreign placeholder 的 `IsPlaceholder` 仍在 record 阶段用于本地
 - `Existing_entity_component_liveness_is_decided_when_the_stream_is_consumed`
 - `BUG_stale_existing_entity_set_is_skipped_so_submit_matches_replay`
 - `BUG_existing_entity_that_becomes_stale_before_consume_is_skipped_so_submit_matches_replay`
-- `Parallel_recording_skips_stale_existing_entity_component_commands`
 - `SubmitAndSnapshotAsync_skips_existing_entity_commands_that_become_stale_before_consume`
 
 ### 零校验契约与 `Validate()`（2026-08-06）
 
-**默认语义：CommandStream / ParallelCommandStream 的 Submit/Snapshot/async 路径不做语义校验**（组件存在性、hierarchy 环等）。语义校验抽成公共 API `public void Validate()`（基类 `CommandStreamCore`，两子类继承；幂等、无副作用声明、首个违规处抛 `InvalidOperationException`，错误消息含实体 id + 组件类型）。
+**默认语义：CommandStream 的 Submit/Snapshot/async 路径不做语义校验**（组件存在性、hierarchy 环等）。语义校验由 `public void Validate()` 显式提供；它幂等、声明无副作用，并在首个违规处抛 `InvalidOperationException`（错误消息含实体 id + 组件类型）。
 
 - **`Validate()` 保证**：占位符生命周期（batch last-wins dedup + store lazy-offsets、deferred-aware）、组件 store strict presence（Add 必须缺失 / Set 必须存在 / Remove 缺失 no-op）、hierarchy overlay endpoint/自环/parent-chain 环；只准备 stream 内部 scratch，不消费命令、不改 World/free-list。cancelled-batch free-list alignment 只在真正 consume 时执行。
 - **`Validate()` 不覆盖**：CreateMany 组一致性（Materialize 期 `ThrowCreateManyMismatch/MaskFailure` 抛）、slot reservation（Submit 内 `PreValidatePendingSlots` 防御性检查，A 类保留）、FrameDelta 预算（Submit/Snapshot 期 `PreflightFrameDeltaBudget`）。
@@ -89,18 +85,18 @@ pending/foreign placeholder 的 `IsPlaceholder` 仍在 record 阶段用于本地
 
 未知/已取消占位符引用（`Entity(-1, seq)`）、非法显式 entity shape 与真正不可解析布局（例如 Entity-bearing `LayoutKind.Auto`）**绝不落库/落 wire**——这是 lockstep 分叉防线（源端静默应用/发出 → 副本 Replay/`FrameDelta.Validate()` 拒绝），不是组件存在性或 hierarchy 环等语义校验。Nested Entity 本身合法，必须由 source 与 Replay 使用同一完整 offsets 合同发现并解析：
 
-- **record 期泛型静态探测**：`FieldKinds<T>`（`static readonly bool HasEntityFields` + `static readonly int[] Offsets` + 静态 ctor，ctor 永不抛——布局失败保守置 `HasEntityFields=true`，由扫描器抛）；无 Entity 字段类型每值 1 次 static 读 + 1 分支。探测点 = `WritePendingComponent<T>`（batch 写前）+ `CommandStream/ParallelCommandStream.Add/Set<T>` 的 store 分支（5 处）。
-- **Clone raw 导入探测（非泛型）**：Clone 从 World/raw archetype 复制字节时无泛型类型可用，走 `FlagFrameIfMayContainPlaceholder(ComponentType, ReadOnlySpan<byte>)`：`GetOffsets` 返回完整 nested/InlineArray offsets，仅在实际 Entity 字段为 placeholder 时置 flag（值探测）；真正布局失败（例如 Entity-bearing `LayoutKind.Auto`）保守置 flag 但 Clone 期不抛（布局错误由 consume 扫描器在原有时机抛）；flag 已为 1 直接返回。探测点 = 单线程 `CloneMaterializedComponents` 的 merger **最终有效 values**（不是 raw archetype 副本——避免被 store overlay 覆盖/移除的旧 world 值误报）+ 并行 `Clone` root 与 `CloneChildrenFromWorld` child 两个 raw copy 点，均在 raw bytes 复制完成后、`CommitBatchComponent` 前。`CopyComponentsFromBatch`（pending source clone）的字节源均由已探测的提交路径产生，无需重复探测；`WritePendingComponent`/store 泛型热路径不改。
-- **显式 endpoint 探测**：AddChild/RemoveChild 的 placeholder/非法 shape 与 Destroy 的非法 shape 也置同一 flag；扫描 final hierarchy overlay（避免被后写覆盖的旧 intent 假拒绝）和 destroy list。合法 real 只做可内联 `Entity.IsValid` 分支，flag 已置位后不重复 locked exchange。
-- **帧级 flag**：`FrozenState.MayNeedEntityReferencePreflight`（`Interlocked` 置位，`Clear`/`SwapOutState` 复位）。
-- **consume 扫描器**：Submit/Snapshot/SnapshotInto/PrepareAsyncHandoff 在 reserve/free-list/materialize/emit **前**调 `PreflightEntityReferences()`——首行 volatile 读 flag，0 直接 return；1 时扫描 final explicit endpoints + component refs/layout（batch last-wins：id<512 走固定 bitset、id≥512 与 materialize/emit 共用线性 fallback；store lazy-offsets；deferred-aware：同帧合法 placeholder 放行）。`GetOffsets` 返回完整 nested/InlineArray offsets；只有 Entity-bearing Auto 或真正无法解析的布局失败。**原子拒绝**：失败不消耗 id/version（v1 保留）、不先 detach hierarchy、不会发出本地 `FrameDelta.Validate()` 拒绝的 wire。
+- **record 期泛型静态探测**：`FieldKinds<T>`（`static readonly bool HasEntityFields` + `static readonly int[] Offsets` + 静态 ctor，ctor 永不抛——布局失败保守置 `HasEntityFields=true`，由扫描器抛）；无 Entity 字段类型每值 1 次 static 读 + 1 分支。探测点 = `WritePendingComponent<T>`（batch 写前）+ `CommandStream.Add/Set<T>` 的 store 分支。
+- **Clone raw 导入探测（非泛型）**：Clone 从 World/raw archetype 复制字节时无泛型类型可用，走 `FlagFrameIfMayContainPlaceholder(ComponentType, ReadOnlySpan<byte>)`：`GetOffsets` 返回完整 nested/InlineArray offsets，仅在实际 Entity 字段为 placeholder 时置 flag（值探测）；真正布局失败（例如 Entity-bearing `LayoutKind.Auto`）保守置 flag但 Clone 期不抛（布局错误由 consume 扫描器在原有时机抛）；flag 已为 1 直接返回。探测点是 `CloneMaterializedComponents` merger 的**最终有效 values**，而不是可能被 store overlay 覆盖/移除的旧 World 值。`CopyComponentsFromBatch`（pending source clone）的字节源均由已探测的提交路径产生，无需重复探测。
+- **显式 endpoint 探测**：AddChild/RemoveChild 的 placeholder/非法 shape 与 Destroy 的非法 shape 也置同一 flag；扫描 final hierarchy overlay（避免被后写覆盖的旧 intent 假拒绝）和 destroy list。合法 real 只做可内联 `Entity.IsValid` 分支，flag 已置位后不重复写入。
+- **帧级 flag**：`FrozenState.MayNeedEntityReferencePreflight` 是单线程录制状态中的单调 `bool`，由 record 路径置位、`Clear`/`SwapOutState` 复位；async worker 不读取该字段。
+- **consume 扫描器**：Submit/Snapshot/SnapshotInto/PrepareAsyncHandoff 在 reserve/free-list/materialize/emit **前**调 `PreflightEntityReferences()`——首行读 flag，`false` 直接 return；`true` 时扫描 final explicit endpoints + component refs/layout（batch last-wins：id<512 走固定 bitset、id≥512 与 materialize/emit 共用线性 fallback；store lazy-offsets；deferred-aware：同帧合法 placeholder 放行）。`GetOffsets` 返回完整 nested/InlineArray offsets；只有 Entity-bearing Auto 或真正无法解析的布局失败。**原子拒绝**：失败不消耗 id/version（v1 保留）、不先 detach hierarchy、不会发出本地 `FrameDelta.Validate()` 拒绝的 wire。
 - `Validate()` 绕过 flag 全量扫（`useFlagFastPath: false`，用户显式调用）。
 
 #### 5.2 nested Entity offsets 合同
 
 - cold scan 递归验证 Entity-bearing layout，再用实际 CLR managed field offsets 收集绝对偏移；InlineArray 使用 `ComponentSizeCache.GetSize(elementType)` 作为 stride，不使用 marshaling size。
 - 每条递归路径使用 recursion stack（进入 Add、finally Remove），结果排序、去重并验证 Entity range 位于 root component size 内；exact explicit alias 可去重，partial overlap 拒绝。
-- `CommandStream`、`Snapshot`、`FrameDelta.Validate()`、Replay、Clone 与 `ParallelCommandStream` 共享同一缓存 offsets。Nested Entity 不是天然非法；source 与 Replay 必须发现并解析同一完整 offsets 集合，否则会产生 lockstep 分叉。
+- `CommandStream`、Snapshot、`FrameDelta.Validate()`、Replay 与 Clone 共享同一缓存 offsets。Nested Entity 不是天然非法；source 与 Replay 必须发现并解析同一完整 offsets 集合，否则会产生 lockstep 分叉。
 
 **历史**：preflight 序列（0fca3eb，2026-07-25 引入 Submit 隐式 4 项 preflight）→ 08-05 flag 优化（`MayContainPlaceholder` record 探测 + 帧级 flag）→ **08-06 语义校验抽为 `Validate()` + 守卫保留**（探测改 `FieldKinds<T>` 泛型静态，修复 P0#1/P0#2）。期间经历 T2.5（统一扫描器，-7.6%）、T2.6（融合进既有遍历，-5.4%）两版性能实验后定稿为 flag 驱动方案（-3~-6% 噪声带，门控 A/B 见 `kb-hero-pipeline-regression.md`）。
 
@@ -165,7 +161,9 @@ dotnet run -c Release --no-build --project tools/perf/CommandStream.Profile -- -
 
 2026-07-15 consume-time liveness 候选的有效 A/B：`existing-set` 中位数 11036.2 → 11759.0 ticks/s（+6.5%），`snapshot-only` 72284.8 → 74160.9（+2.6%）；JIT record loop 保持完整内联。完整数据见本轮 evidence 文档。
 
-consume prune 必须同时刷新 stream 的 store-dirty 汇总。若 stale-only entries 全被删除，`Submit()` 返回 `false`、Snapshot 为空，async 路径不应因旧 `_hasStoreCommands` 启动无效工作；single/parallel 与 consume 前 ID reuse 回归共同守卫该契约。
+2026-08-29 删除并行 recorder 后的简化 A/B：同时把预检 flag 去原子化并将 `CreateCore()` 折进 public `Create()` 时 Attack 门禁降至 840.7 rounds/s；回退两项后为 1246.8，随后只重做 flag 去原子化为 1206.8。故保留可内联的 `Create()` → `CreateCore()` 边界；在有更干净的独立证据前不再折叠。
+
+consume prune 必须同时刷新 stream 的 store-dirty 汇总。若 stale-only entries 全被删除，`Submit()` 返回 `false`、Snapshot 为空，async 路径不应因旧 `_hasStoreCommands` 启动无效工作；单线程 delayed-stale、async 与 consume 前 ID reuse 回归共同守卫该契约。
 
 ## 认知模型
 
@@ -178,11 +176,12 @@ consume prune 必须同时刷新 stream 的 store-dirty 汇总。若 stale-only 
 
 ## 入口
 
-- record：`CommandStream.cs`、`ParallelCommandStream.cs`
-- consume/preflight：`CommandStreamCore.Submit.cs`
-- typed store：`CommandStreamCore.ComponentStore.cs`
-- pending/CreateMany：`CommandStreamCore.Pending.cs`
-- hierarchy：`CommandStreamCore.Hierarchy.cs`
+- owner/state：`CommandStream.cs`
+- record：`CommandStream.Record.cs`
+- consume/preflight：`CommandStream.Submit.cs`
+- typed store：`CommandStream.ComponentStore.cs`
+- pending/CreateMany：`CommandStream.Pending.cs`
+- hierarchy：`CommandStream.Hierarchy.cs`
 - wire：`FrameDelta.cs`、`World.EntityLifecycle.cs` 的 Replay 路径
 - 测试：`tests/MiniArch.Tests/Core/CommandStreamTests.cs`、`FrameDeltaDeterminismTests.cs`
 
@@ -191,7 +190,7 @@ consume prune 必须同时刷新 stream 的 store-dirty 汇总。若 stale-only 
 - 不能把 `Snapshot()` 当作无 World 的纯 emit：它会使用 source World prune stale existing command。
 - 不能跨结构变更复用 preflight row、column index、ChunkView 或裸 span。
 - strict Add/Set/Remove 契约不能为吞吐放松；Remove 缺失保持幂等 no-op。
-- parallel 只表示录制可并发，不表示同一 World 可被多个 stream 并发 reserve/submit。
+- `CommandStream` 不支持并发调用；并行计算必须在调用方完成同步后再录制。
 - 自己生成的 local delta 只有在显式 `Replay(delta, resolveSlots: true)` 时解析本 stream 跟踪的 `EntitySlot`；网络反序列化副本没有本地 slot ownership。
 - `FrameDelta.Validate()` 是不可信 wire 的结构预检，不提供 target World rollback。
 - source 对自己的 real-id Snapshot 直接 Replay 时会复用 producer 已有 reservation；不要把“不在 free list”误判成需要再次增加 reservation。

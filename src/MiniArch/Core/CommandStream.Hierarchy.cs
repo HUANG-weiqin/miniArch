@@ -3,31 +3,8 @@ using System.Runtime.CompilerServices;
 
 namespace MiniArch.Core;
 
-public abstract partial class CommandStreamCore
+public sealed partial class CommandStream
 {
-    /// <summary>
-    /// Core AddChild logic. Caller handles synchronization.
-    /// Subclasses call this from their own public <c>AddChild</c> method.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    protected void AddChildCore(Entity parent, Entity child)
-    {
-        FlagFrameIfEntityEndpointNeedsPreflight(parent);
-        FlagFrameIfEntityEndpointNeedsPreflight(child);
-        _frozen.HierarchyByChild[child] = new HierarchyIntent(true, parent);
-    }
-
-    /// <summary>
-    /// Core RemoveChild logic. Caller handles synchronization.
-    /// Subclasses call this from their own public <c>RemoveChild</c> method.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    protected void RemoveChildCore(Entity child)
-    {
-        FlagFrameIfEntityEndpointNeedsPreflight(child);
-        _frozen.HierarchyByChild[child] = new HierarchyIntent(false, default);
-    }
-
     private void ApplyHierarchy()
     {
         ApplyHierarchyToWorld(_world, _frozen);

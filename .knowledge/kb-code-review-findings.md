@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 审阅前必读的当前风险、已修复真 bug 回归索引与已排除非 bug 猜想；只保留结论和验证入口
-updated: 2026-08-15
+updated: 2026-08-29
 ---
 # 代码审阅发现
 
@@ -29,7 +29,7 @@ CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）�
 ### 2026-08-15 nested Entity offset reconstruction
 
 - **结论**：nested Entity 是合法 unmanaged component contract；风险在于 source 与 Replay 使用不完整或不一致的 Entity offsets，导致 placeholder 解析分叉。5.2 通过递归 actual CLR offsets、InlineArray stride、recursion stack、sort/dedupe/bounds 统一发现路径解决。
-- **回归入口**：`NestedEntityComponentTests`（普通 nested、generic wrapper、InlineArray、深层、Snapshot/Replay、Clone、Parallel、Auto 与 placeholder 边界）以及 `BUG_nested_entity_record_resolves_real_entity_and_submits`、`BUG_nested_entity_pending_batch_resolves_placeholder_at_submit`、`BUG_clone_imports_nested_entity_layout_and_deep_inline_values`。
+- **回归入口**：`NestedEntityComponentTests`（普通 nested、generic wrapper、InlineArray、深层、Snapshot/Replay、Clone、Auto 与 placeholder 边界）以及 `BUG_nested_entity_record_resolves_real_entity_and_submits`、`BUG_nested_entity_pending_batch_resolves_placeholder_at_submit`、`BUG_clone_imports_nested_entity_layout_and_deep_inline_values`。
 - **历史边界**：Entity-bearing `LayoutKind.Auto` 与真正无法解析的布局仍 fail-fast；旧 P0#2/P0#3 是“漏扫导致 source/Replay 不一致”的防线，不是“nested 必须拒绝”的规则。
 
 ### 2026-08-06 零校验重构审阅（T2 系列，Validate() + 库能力守卫）
@@ -37,8 +37,8 @@ CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）�
 | 回归测试 | 位置 / witness | 修复边界 |
 |---|---|---|
 | P0#1：占位符静默落库分叉 | non-deferred 帧（`_deferredSeq==0`）伪造 `Entity(-1,seq)` 引用经 store/batch 静默写入 World；Snapshot 产出含坏值 delta；副本 Replay 的 Add/Set/Create op 端 `GetOffsets`+`ResolveInPlace` 抛 "Unresolved placeholder" → 源端静默、副本抛错 = **lockstep 分叉** | `FieldKinds<T>` 泛型静态探测（record 期 5 咽喉点，static readonly bool 1 读 1 分支）+ 帧级 flag + Submit/Snapshot/async 扫描器（reserve/materialize/emit 前原子拒绝，last-wins 语义）；占位符原子拒绝由已恢复的 8 个 `BUG_*` 测试锁定 |
-| P0#2：nested Entity offsets 漏扫导致分叉 | 历史实现只发现 top-level Entity；nested Entity 值可在 source 落库，但 Replay 端无法按同一完整 offsets 解析 | 5.2 `EntityFieldResolver` 递归验证并收集完整 actual CLR offsets；source、Snapshot、Validate、Replay、Clone、Parallel 共用缓存，Entity-bearing Auto 与真正无法解析的布局仍在 mutation 前拒绝 |
-| P0#3：Clone raw 导入绕过 marker fast path | World 组件中的 `Entity(-1,seq)` 占位符可经 `CommandStream.Clone` / `ParallelCommandStream.Clone` 的 raw `ReadComponentRaw→CommitBatchComponent` 导入 batch；泛型 record 探测（`FieldKinds<T>` + `WritePendingComponent`/store Add/Set）未覆盖 → 帧 flag 保持 0 → 旧实现可能静默导入 placeholder 或漏掉 nested 值，Snapshot 产出 `Validate()` 拒绝的 delta（P0#1/P0#2 的 Clone 变体） | 非泛型 raw 探测 `FlagFrameIfMayContainPlaceholder(ComponentType, ReadOnlySpan<byte>)` 使用 `GetOffsets` 检查任意深度 Entity 字段；Auto 或真正无法解析的布局保守置 flag，但在 consume 扫描器中才抛。探测点 = 单线程 `CloneMaterializedComponents` merger 的最终有效 values + 并行 `Clone` root / `CloneChildrenFromWorld` child raw copy；`CopyComponentsFromBatch`/`ComponentMerger.Add` 的字节源已由提交路径探测。回归测试：`BUG_clone_imported_placeholder_is_rejected_by_default_submit` / `BUG_clone_imported_placeholder_is_rejected_by_default_snapshot` / `BUG_clone_imports_nested_entity_layout_and_deep_inline_values` / `BUG_parallel_clone_imported_placeholder_is_rejected_by_default_consume` / `BUG_parallel_clone_imported_child_placeholder_is_rejected_by_default_submit` |
+| P0#2：nested Entity offsets 漏扫导致分叉 | 历史实现只发现 top-level Entity；nested Entity 值可在 source 落库，但 Replay 端无法按同一完整 offsets 解析 | 5.2 `EntityFieldResolver` 递归验证并收集完整 actual CLR offsets；source、Snapshot、Validate、Replay 与 Clone 共用缓存，Entity-bearing Auto 与真正无法解析的布局仍在 mutation 前拒绝 |
+| P0#3：Clone raw 导入绕过 marker fast path | World 组件中的 `Entity(-1,seq)` 占位符可经 `CommandStream.Clone` 的 raw `ReadComponentRaw→CommitBatchComponent` 导入 batch；泛型 record 探测（`FieldKinds<T>` + `WritePendingComponent`/store Add/Set）未覆盖 → 帧 flag 保持 0 → 旧实现可能静默导入 placeholder 或漏掉 nested 值，Snapshot 产出 `Validate()` 拒绝的 delta（P0#1/P0#2 的 Clone 变体） | 非泛型 raw 探测 `FlagFrameIfMayContainPlaceholder(ComponentType, ReadOnlySpan<byte>)` 使用 `GetOffsets` 检查任意深度 Entity 字段；Auto 或真正无法解析的布局保守置 flag，但在 consume 扫描器中才抛。探测点 = `CloneMaterializedComponents` merger 的最终有效 values；`CopyComponentsFromBatch`/`ComponentMerger.Add` 的字节源已由提交路径探测。回归测试：`BUG_clone_imported_placeholder_is_rejected_by_default_submit` / `BUG_clone_imported_placeholder_is_rejected_by_default_snapshot` / `BUG_clone_imports_nested_entity_layout_and_deep_inline_values` |
 | P0#4：async real-id delta 为已取消 deferred batch 伪造 allocator 事件 | `DeferredEntities=true` 下 pending Create 被取消时从未触碰 source allocator，`ResolveDeferredCreates` 也有意保留其 placeholder；但 async real-id writer 仍发 `Reserve(placeholder)→Release(placeholder)`，replica 会真实分配并释放一个 slot。若后面有 live Create，Replay 立即 reservation mismatch；即使全取消，下一次 Create 也出现 source `Entity(0,v1)` / replica `Entity(0,v2)` 分叉 | real-id budget、upper bound 与 writer 统一跳过 `BatchCanceled && BatchEntities[i].IsPlaceholder`；immediate real-id cancellation 仍保留 Reserve+Release 以镜像 source 已发生的 reserve/release。`BUG_async_real_id_delta_omits_cancelled_deferred_batches` / `BUG_real_id_snapshot_omits_cancelled_deferred_batches` 锁定 async 与切换模式 Snapshot 的 wire 均不含 cancelled placeholder，且 Replay 收敛、下一 id/version 一致 |
 | P0#5：显式 Entity endpoint 绕过 mandatory wire guard | 零语义校验后，AddChild/RemoveChild 的未知 placeholder 会被 Snapshot 写成 `FrameDelta.Validate()` 拒绝的 wire；Submit 先 detach child 再因 placeholder parent 抛错，留下 hierarchy 部分修改。Destroy 的 `Entity(-1,-1)`、id<-1、real version≤0 也会产出结构无效 delta | 将帧 flag 扩为 `MayNeedEntityReferencePreflight`；AddChild/RemoveChild 与 Destroy record 对 placeholder/非法 shape 置位，统一 `PreflightEntityReferences()` 在 allocator/World/target/worker 前验证 final hierarchy endpoint、destroy shape、embedded refs/layout。`BUG_hierarchy_placeholder_is_rejected_before_submit_mutates_existing_relation`、`BUG_snapshot_rejects_unknown_hierarchy_placeholder_before_returning_delta`、`BUG_snapshot_rejects_unknown_hierarchy_child_placeholder`、`BUG_snapshot_rejects_invalid_explicit_entity_shapes` 锁定 |
 | `BUG_real_id_budget_rejects_before_deferred_resolution` | real-id Snapshot/async 在 `ResolveDeferredCreates()` 前用 placeholder 的短 wire width 做“精确”预算；帧可先通过 preflight，resolve 消耗 source allocator，随后 worker writer 因真实 id varint 更宽而超 `MaxFrameBytes`。实测失败后 5000 个 deferred entity 已落进 World（18423→23423） | real-id budget 对尚未解析的 pending Reserve/Create 与 hierarchy parent/child endpoint 按合法 Entity 最大 wire width（5B id + 5B version）计费；仍在 resolve/free-list/worker/target/World mutation 前拒绝。边界回归用 3-byte real ids + 精确 filler 锁定 allocator/checksum 零变化，并单测 11/12/11/21B endpoint 计费 |
@@ -131,9 +131,9 @@ CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）�
 | `BUG_async_submit_preflights_invalid_component_before_worker_handoff` | async API 在契约失败前 swap/start worker | active state 上先 preflight，后 handoff；立即登记 frozen/task ownership |
 | `BUG_async_into_preflights_invalid_component_before_worker_handoff` | preflight 失败仍可能改写复用 target | preflight 通过前不启动 target writer |
 | `BUG_debug_structural_scope_recovers_after_exception` | Debug `BeginStructChange/EndStructChange` 异常后计数残留 | Debug 配对使用 `try/finally`；Release 业务路径不增加异常区 |
-| `BUG_stale_existing_entity_set_is_skipped_so_submit_matches_replay` | liveness 后移后 stale-only store 已被 prune，但旧 dirty flag 仍让 `Submit()` 错报已执行工作 | `PruneStaleCommands` 同步返回剩余命令状态；single/parallel、record 时 stale/consume 前 stale 均断言 `Submit()==false` |
+| `BUG_stale_existing_entity_set_is_skipped_so_submit_matches_replay` | liveness 后移后 stale-only store 已被 prune，但旧 dirty flag 仍让 `Submit()` 错报已执行工作 | `PruneStaleCommands` 同步返回剩余命令状态；record 时 stale、consume 前 stale 与 async 路径均断言无残余工作 |
 
-`Existing_entity_component_liveness_is_decided_when_the_stream_is_consumed` 是 consume-time 契约测试，不是旧实现 bug 的 witness：record 时不读 World，consume 时按完整 `(Id, Version)` 统一 prune；stale/ID-reuse 安全与 stale-only 返回值由 `BUG_stale_*`、delayed stale 和 parallel stale 测试共同守卫。
+`Existing_entity_component_liveness_is_decided_when_the_stream_is_consumed` 是 consume-time 契约测试，不是旧实现 bug 的 witness：record 时不读 World，consume 时按完整 `(Id, Version)` 统一 prune；stale/ID-reuse 安全与 stale-only 返回值由 `BUG_stale_*`、delayed stale 和 async 回归共同守卫。
 
 ### 仍在当前代码中生效的历史修复
 

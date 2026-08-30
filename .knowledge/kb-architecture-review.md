@@ -2,7 +2,7 @@
 title: Architecture Mechanistic Review
 module: MiniArch.Core
 description: Mechanistic insight of the entire miniArch ECS library — one-line truths, subsystem breakdown, data flows, known issues, and design tensions. Links to per-subsystem kb pages for depth.
-updated: 2026-07-25
+updated: 2026-08-29
 ---
 # Architecture Mechanistic Review
 
@@ -116,16 +116,13 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - 代码位置：`HierarchyTable.cs`
 
 ### 8. CommandStream（recorder 层）
-- **2026-07-05 拆分为两个公开 sealed 类型**：
-  - `CommandStream`：单线程默认，所有 mutator 直接调用，无锁、无非虚拟化开销
-  - `ParallelCommandStream`：mutator 在 `_storeCreateLock` 内（`Create`/`Track`/`Destroy`/`AddChild`/`RemoveChild`/`Clone` 全程 lock；`Add`/`Set`/`Remove` 在锁内判定 pending/alive，随后走 `GetOrCreateStoreParallel<T>().AppendConcurrent`，后者自身在 store 内部用 ThreadLocal buffer 实现并行）
-  - 共享层是 `public abstract CommandStreamCore`，承载所有 emit/submit/snapshot/replay/async 逻辑，以及 `CreateCore`/`DestroyCore` 等 `protected` helper
-  - 9 个 mutator（Create/Track/Add/Set/Remove/Destroy/AddChild/RemoveChild/Clone）**不**在 base class 上公开；只存在于两个 sealed 子类上。这样既避免 `abstract`+`override` generic virtual 热路径开销，也把“用 base 引用调用 mutator”的错误从运行时 throw 变成编译期不可调用（详见 `kb-design-rationale.md` §3.9）
-- per-component-type typed store（`ComponentStore<T>`：main `StoreEntry<T>[]` + ThreadLocal buffer）append-only 录制
+- 唯一 public recorder 是 `public sealed partial CommandStream`：record 与 consume API 由同一个 owner 管理，所有 mutator 直接调用且无锁
+- per-component-type typed store（`ComponentStore<T>`：main `StoreEntry<T>[]`）append-only 录制
 - created entity 走 pending batch（per-batch 单链表 `_batchHeads` → `BatchedComponent.Next`），materialize 时稳定排序+去重达到 last-wins
 - `Submit()` 直接写 typed value 到 World（零序列化）；`Snapshot()` 编译成 `FrameDelta`；`SubmitAndSnapshotAsync()` 双 buffer 池（`_spareFrozen` ↔ `_pendingFrozen`）稳态零分配
 - `DeferredEntities` flag：`false`（默认）`Create()` 立即分配 real id；`true` 返回 placeholder（多 host lockstep）
-- 历史：曾并存 per-entity 去重的 `CommandBuffer`（2026-06-26 YAGNI 删除）；曾是单 sealed class + `_parallelMode` flag（2026-07-05 拆分）
+- `CommandStream` 不支持并发调用；Query 的并行只读迭代是正交能力
+- 历史：per-entity 去重的 `CommandBuffer` 于 2026-06-26 YAGNI 删除；并行 recorder 及只为共享两种策略存在的 public base 于 2026-08-29 删除
 
 ### 9. FrameDelta（wire format 层）
 - 单一 `byte[] _buffer` + 时序排列的 op：`[1B tag][varint entityId][varint version][payload...]`

@@ -2,7 +2,7 @@
 title: 多 host Lockstep 浸泡测试 — 网络同步收敛验证
 module: LockstepSoak
 description: N host placeholder lockstep 长周期随机操作收敛验证器——所有 host 全走 Replay 路径，以可配置周期和最终帧 CanonicalChecksum 比对收敛，并用 per-frame component overlay 保证生成的 strict intent 合法。
-updated: 2026-07-15
+updated: 2026-08-29
 ---
 # 多 host Lockstep 浸泡测试 — 网络同步收敛验证
 
@@ -214,7 +214,7 @@ dotnet run -c Release --project tools/lockstep-soak/MiniArch.LockstepSoak -- --f
 ## 发布门禁（发布负责人决定）
 
 任何改动下列路径的变更，**发布前必须跑本工具的矩阵**（正确性门禁，区别于 `HeroComing.Perf` 的性能门禁）：
-- `CommandStream` / `CommandStreamCore`（record / Snapshot / Submit / Clear）
+- `CommandStream`（record / Snapshot / Submit / Clear）
 - `World.Replay` / `ReplayCore` / `EnsureReplayReservation`
 - `DeferredEntities` flag 相关分支（`CreateDeferredImpl` / `EmitPendingEntitiesToDelta` / `_replayPlaceholderMap`）
 - `EntityFieldResolver`（placeholder 字段自动解析）

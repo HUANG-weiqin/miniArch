@@ -2,7 +2,7 @@
 title: MiniArch 正确性验证报告
 module: Proof
 description: 版本化记录 MiniArch 的测试范围、执行命令、当前证据与明确未覆盖项；不把有限测试表述为绝对安全证明
-updated: 2026-08-06
+updated: 2026-08-29
 ---
 # MiniArch 正确性验证报告
 
@@ -70,7 +70,7 @@ updated: 2026-08-06
 - 默认 `Submit`/async consume 不做 component-presence 或 hierarchy-overlay 语义 preflight；未先显式调用 `Validate()` 时，apply-time 违规可能留下前序修改。`Validate()` 也不覆盖 CreateMany 组一致性、pending-slot 状态或 FrameDelta 预算。
 - 灾难性 `OutOfMemoryException`、进程终止、硬件故障不保证 rollback。
 - `Unsafe*` API 与 `Clear(query)` 依赖 XML 中的调用方前置条件；违反契约属于未定义/不安全使用。
-- World mutation 不支持并发写；并行录制必须使用单个 `ParallelCommandStream`，consume 仍独占。
+- World mutation 与 `CommandStream` 都不支持并发写；Query 的并行只读迭代必须与结构变更隔离。
 - `CanonicalChecksum` 不能替代跨版本 schema 握手；跨进程仍要求一致的组件注册/schema。
 
 ## 入口

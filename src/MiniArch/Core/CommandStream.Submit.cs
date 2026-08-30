@@ -7,7 +7,7 @@ using System.Runtime.InteropServices;
 
 namespace MiniArch.Core;
 
-public abstract partial class CommandStreamCore
+public sealed partial class CommandStream
 {
     // ── Submit ────────────────────────────────────────────────────────
 
@@ -21,8 +21,8 @@ public abstract partial class CommandStreamCore
     /// <remarks>
     /// <para>
     /// Side effects are limited to idempotent internal preparation
-    /// (<see cref="PrepareStores"/>: seal parallel writes, prune stale store
-    /// commands, and build set-location cache scratch). No command is consumed
+    /// (<see cref="PrepareStores"/>: prune stale store commands and build
+    /// set-location cache scratch). No command is consumed
     /// and no <see cref="World"/> state is mutated.
     /// </para>
     /// <para>
@@ -229,16 +229,6 @@ public abstract partial class CommandStreamCore
     private void MaterializeAllPending()
         => MaterializePendingBatches(_frozen);
 
-    private void SealParallelStores()
-    {
-        if (!_hasParallelStoreWrites)
-            return;
-        foreach (var store in _frozen.Stores)
-            store?.SealParallelWrites();
-        // Flag is consumed; reset so the next cycle starts clean.
-        _hasParallelStoreWrites = false;
-    }
-
     private void ApplyComponentStores()
     {
         foreach (var store in _frozen.Stores)
@@ -297,8 +287,7 @@ public abstract partial class CommandStreamCore
         // endpoint, a component placeholder, or a genuinely unresolvable Entity
         // layout such as Entity-bearing LayoutKind.Auto. Validate() passes
         // useFlagFastPath: false for an explicit full scan.
-        if (useFlagFastPath &&
-            Volatile.Read(ref _frozen.MayNeedEntityReferencePreflight) == 0)
+        if (useFlagFastPath && !_frozen.MayNeedEntityReferencePreflight)
             return;
 
         RejectBatchEmbeddedPlaceholders();
@@ -313,13 +302,10 @@ public abstract partial class CommandStreamCore
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private protected void FlagFrameIfEntityEndpointNeedsPreflight(Entity entity)
+    private void FlagFrameIfEntityEndpointNeedsPreflight(Entity entity)
     {
-        if (!entity.IsValid &&
-            Volatile.Read(ref _frozen.MayNeedEntityReferencePreflight) == 0)
-        {
-            Interlocked.Exchange(ref _frozen.MayNeedEntityReferencePreflight, 1);
-        }
+        if (!entity.IsValid && !_frozen.MayNeedEntityReferencePreflight)
+            _frozen.MayNeedEntityReferencePreflight = true;
     }
 
     /// <summary>
@@ -334,7 +320,7 @@ public abstract partial class CommandStreamCore
     /// first hit.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private protected void FlagFrameIfMayContainPlaceholder<T>(in T data) where T : unmanaged
+    private void FlagFrameIfMayContainPlaceholder<T>(in T data) where T : unmanaged
     {
         // T2.8: single readonly static field read per written value. Types without
         // Entity fields (the common case) pay one load + one perfectly predicted
@@ -342,13 +328,13 @@ public abstract partial class CommandStreamCore
         // set the frame flag (monotonic, so probing stops after the first hit).
         // Unresolvable layouts set HasEntityFields conservatively, so the consume-
         // time scan runs and throws the layout error at its original timing.
-        if (!FieldKinds<T>.HasEntityFields)
+        if (!FieldKinds<T>.HasEntityFields || _frozen.MayNeedEntityReferencePreflight)
             return;
 
         var offsets = FieldKinds<T>.Offsets;
         if (offsets.Length == 0)
         {
-            Interlocked.Exchange(ref _frozen.MayNeedEntityReferencePreflight, 1);
+            _frozen.MayNeedEntityReferencePreflight = true;
             return;
         }
 
@@ -358,7 +344,7 @@ public abstract partial class CommandStreamCore
         {
             if (MemoryMarshal.Read<Entity>(bytes[offsets[i]..]).IsPlaceholder)
             {
-                Interlocked.Exchange(ref _frozen.MayNeedEntityReferencePreflight, 1);
+                _frozen.MayNeedEntityReferencePreflight = true;
                 return;
             }
         }
@@ -367,8 +353,7 @@ public abstract partial class CommandStreamCore
     /// <summary>
     /// Non-generic record-path probe for raw/dynamic component values imported
     /// into the batch buffer (Clone's archetype raw copy — see
-    /// <see cref="CommandStreamCore.CloneMaterializedComponents"/> and
-    /// <see cref="ParallelCommandStream.Clone"/>). Same contract as the generic
+    /// <see cref="CloneMaterializedComponents"/>). Same contract as the generic
     /// probe, but takes a <see cref="ComponentType"/> + raw bytes because Clone
     /// copies bytes, not typed values. <see cref="EntityFieldResolver.GetOffsets"/>
     /// returns all Entity offsets, including nested value structs and InlineArray
@@ -379,10 +364,10 @@ public abstract partial class CommandStreamCore
     /// timing (before any world/allocator mutation). Monotonic frame flag:
     /// probing stops after the first hit.
     /// </summary>
-    private protected void FlagFrameIfMayContainPlaceholder(ComponentType type, ReadOnlySpan<byte> data)
+    private void FlagFrameIfMayContainPlaceholder(ComponentType type, ReadOnlySpan<byte> data)
     {
         // Monotonic flag: once set, later probes have nothing to add.
-        if (Volatile.Read(ref _frozen.MayNeedEntityReferencePreflight) == 1)
+        if (_frozen.MayNeedEntityReferencePreflight)
             return;
 
         ReadOnlySpan<int> offsets;
@@ -395,7 +380,7 @@ public abstract partial class CommandStreamCore
             // Genuine layout failure: conservative —force the frame scan, which
             // throws the layout error at its original timing (before any
             // world/allocator mutation), mirroring FieldKinds<T>.
-            Interlocked.Exchange(ref _frozen.MayNeedEntityReferencePreflight, 1);
+            _frozen.MayNeedEntityReferencePreflight = true;
             return;
         }
 
@@ -406,7 +391,7 @@ public abstract partial class CommandStreamCore
         {
             if (MemoryMarshal.Read<Entity>(data[offsets[i]..]).IsPlaceholder)
             {
-                Interlocked.Exchange(ref _frozen.MayNeedEntityReferencePreflight, 1);
+                _frozen.MayNeedEntityReferencePreflight = true;
                 return;
             }
         }
@@ -1097,14 +1082,13 @@ public abstract partial class CommandStreamCore
     }
 
     /// <summary>
-    /// Seals parallel stores then prunes stale component commands.
+    /// Prunes stale component commands before consumption.
     /// Must be called before any Submit/Snapshot/SnapshotInto/SubmitAndSnapshotAsync/
     /// SubmitAndSnapshotIntoAsync operation. Not needed before Replay (no recording
     /// state to prepare).
     /// </summary>
     private void PrepareStores(bool buildSetLocationCache = false)
     {
-        SealParallelStores();
         buildSetLocationCache &= CanReuseSetLocationCache(_frozen);
         PrepareComponentStoresForConsume(buildSetLocationCache);
     }
@@ -1174,7 +1158,7 @@ public abstract partial class CommandStreamCore
         foreach (var store in _frozen.Stores)
             store?.Clear();
 
-        _frozen.MayNeedEntityReferencePreflight = 0;
+        _frozen.MayNeedEntityReferencePreflight = false;
         _frozen.DestroyCount = 0;
         _frozen.PendingBatchCount = 0;
         _frozen.CancelledBatchCount = 0;
@@ -1188,7 +1172,6 @@ public abstract partial class CommandStreamCore
         _lastStoreId0 = -1; _lastStore0 = null;
         _lastStoreId1 = -1; _lastStore1 = null;
         _hasStoreCommands = false;
-        _hasParallelStoreWrites = false;
         _frozen.HierarchyByChild.Clear();
 
 #if DEBUG

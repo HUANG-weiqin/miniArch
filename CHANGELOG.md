@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Breaking: parallel command recording removed** — `ParallelCommandStream` and its dedicated performance harness were removed after the implementation failed to demonstrate a break-even workload. Use one single-threaded `CommandStream` per recording owner and merge work at the application boundary when needed.
+- **Breaking: redundant recorder base removed** — `CommandStreamCore` was folded into the sole sealed `CommandStream`; all record and consume APIs now have one owner.
+
 ## 5.2.0 (2026-08-15)
 
 - **Nested Entity support** — unmanaged components now resolve Entity references at arbitrary depth through sequential/explicit structs, record private backing fields, generic wrappers, and InlineArray elements.

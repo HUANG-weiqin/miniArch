@@ -7,7 +7,7 @@ using System.Runtime.InteropServices;
 
 namespace MiniArch.Core;
 
-public abstract partial class CommandStreamCore
+public sealed partial class CommandStream
 {
     // ── Pending entity materialization ─────────────────────────────────
 
@@ -503,7 +503,7 @@ public abstract partial class CommandStreamCore
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private protected bool TryGetPendingBatch(Entity entity, out int batchIdx)
+    private bool TryGetPendingBatch(Entity entity, out int batchIdx)
     {
         if (entity == _lastCreated && _lastCreatedBatch >= 0)
         {
@@ -602,7 +602,7 @@ public abstract partial class CommandStreamCore
     // ── Batch buffer helpers ──────────────────────────────────────────
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private protected void WritePendingComponent<T>(int batchIdx, T component) where T : unmanaged
+    private void WritePendingComponent<T>(int batchIdx, T component) where T : unmanaged
     {
         // T2.7 record-path probe: flag the frame if this value may contain a
         // placeholder ref (per-type static verdict; probe never throws). The
@@ -616,7 +616,7 @@ public abstract partial class CommandStreamCore
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private protected int ReserveBatchBufSpace(int size)
+    private int ReserveBatchBufSpace(int size)
     {
         if (_batchBufLen > int.MaxValue - size)
             ThrowBufferOverflow();
@@ -629,7 +629,7 @@ public abstract partial class CommandStreamCore
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private protected void CommitBatchComponent(int batchIdx, ComponentType type, int offset, int size)
+    private void CommitBatchComponent(int batchIdx, ComponentType type, int offset, int size)
     {
         EnsureCapacity(ref _frozen.BatchComps, _batchCompTotal, 256);
         _frozen.BatchComps[_batchCompTotal] = new BatchedComponent
@@ -644,7 +644,7 @@ public abstract partial class CommandStreamCore
         _frozen.BatchCompCounts[batchIdx]++;
     }
 
-    private protected void MarkBatchComponentRemoved(int batchIdx, ComponentType targetType)
+    private void MarkBatchComponentRemoved(int batchIdx, ComponentType targetType)
     {
         var current = _frozen.BatchHeads[batchIdx];
         while (current >= 0)
@@ -697,11 +697,7 @@ public abstract partial class CommandStreamCore
     /// <c>_lastMaskArchetype</c> are intentionally unsynchronized.
     /// This method is only called from the Submit/materialize path
     /// (<see cref="MaterializeFromBatchBuffer"/>), which is single-threaded
-    /// per <c>World</c>'s threading contract — <see cref="ParallelCommandStream"/>
-    /// covers the recording phase (append-only), not Submit.
-    /// If parallel materialization is ever added, the correct fix is to give
-    /// each worker its own local mask cache + serialize archetype creation,
-    /// NOT a lock around this cache.
+    /// per <c>World</c>'s threading contract.
     /// </remarks>
     private Archetype ResolveArchetype(ComponentMask mask, scoped ReadOnlySpan<ComponentType> types)
     {

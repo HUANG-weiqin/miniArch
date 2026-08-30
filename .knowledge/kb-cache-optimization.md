@@ -2,7 +2,7 @@
 title: Cache & Memory Optimization Review
 module: MiniArch.Core
 description: Memory layout, cache behavior analysis, applied optimizations, and remaining opportunities for the ECS runtime
-updated: 2026-07-09
+updated: 2026-08-29
 ---
 # Cache & Memory Optimization Review
 
@@ -82,7 +82,7 @@ struct EntityRecord {
 - 闭包消除：`Task.Run(() => ...)` → 静态委托 `s_buildFromFrozen` + `Task.Factory.StartNew`
 - **未消除的分配**（YAGNI 边界）：仅剩 `Task<FrameDelta>`（~80B，TAP 语义必需）和 `new FrameDelta()` 返回值
 
-**重要：FrozenState 边界。** 录制数据应放进 `FrozenState`，这样 async 路径只需交换对象引用；仅录制期/重置期使用、不被后台 worker 读取的标量（如 cache/dirty flags）才留在 `CommandStreamCore` 上，并必须在 `SwapOutState()` / `Clear()` 中重置。
+**重要：FrozenState 边界。** 录制数据应放进 `FrozenState`，这样 async 路径只需交换对象引用；仅录制期/重置期使用、不被后台 worker 读取的标量（如 cache/dirty flags）才直接留在 `CommandStream` 上，并必须在 `SwapOutState()` / `Clear()` 中重置。
 
 **回归门禁数据**（2026-06-22，见 `kb-commandstream-game-perf.md`）：
 - Movement-Stream: 1766 → 1818 rounds/s（+3%）
@@ -97,7 +97,7 @@ Hero perf 瓶颈继续推进时，保留了 4 个核心库内的低层微优化�
 
 - `CommandStream.Set<T>` alive-first：mixed frame 中 existing Set 跳过 pending-batch probe。
 - `GetOrCreateStore<T>()` 2-slot LRU cache：重复/交替组件类型少走 `Stores` 数组访问。
-- `_hasStoreCommands` / `_hasParallelStoreWrites` dirty flags：无命令 `Submit()` 少扫 store 表；parallel 写入仍 seal。
+- `_hasStoreCommands` dirty flag：无命令 `Submit()` 少扫 store 表。
 - `ComponentStore<T>.ApplyToWorld` hoist `Component<T>.ComponentType`。
 
 **结论**：收益主要在 CommandStream record path；`existing-set` proxy 有明确改善，full HeroComing 单轮有较大噪声但门禁通过。不要把 no-promotion cache 当作已验证优化——该变体已因证据不足回退。
