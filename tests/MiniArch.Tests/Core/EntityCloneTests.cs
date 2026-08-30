@@ -1,3 +1,4 @@
+using System.Reflection;
 using MiniArch.Core;
 using MiniArch.Tests.Core.TestSupport;
 using MiniQueryCache = MiniArch.Core.QueryCache;
@@ -240,6 +241,19 @@ public sealed class CommandBufferCloneTests
     private readonly record struct Position(int X, int Y);
     private readonly record struct Velocity(int X, int Y);
     private readonly record struct Health(int Value);
+    private readonly struct CloneMarker0 { }
+    private readonly struct CloneMarker1 { }
+    private readonly struct CloneMarker2 { }
+    private readonly struct CloneMarker3 { }
+    private readonly struct CloneMarker4 { }
+    private readonly struct CloneMarker5 { }
+    private readonly struct CloneMarker6 { }
+    private readonly struct CloneMarker7 { }
+    private readonly struct CloneMarker8 { }
+    private readonly struct CloneComponent<TLeft, TRight>
+        where TLeft : unmanaged
+        where TRight : unmanaged
+    { }
 
     [Fact]
     public void Clone_creates_deferred_entity_with_components()
@@ -698,6 +712,81 @@ public sealed class CommandBufferCloneTests
     }
 
     [Fact]
+    public void BUG_clone_preserves_more_than_32_direct_children()
+    {
+        var world = new World();
+        var root = world.Create(new Position(1, 2));
+        for (var i = 0; i < 33; i++)
+            world.AddChild(root, world.Create(new Health(i)));
+        var buffer = new CommandStream(world);
+
+        var clone = buffer.Clone(root);
+        buffer.Submit();
+
+        Assert.Equal(33, world.EnumerateChildren(clone).ToChildList().Count);
+    }
+
+    [Fact]
+    public void BUG_clone_grows_cycle_detection_for_more_than_32_descendants()
+    {
+        var world = new World();
+        var root = world.Create(new Position(0, 0));
+        var current = root;
+        for (var i = 0; i < 33; i++)
+        {
+            var child = world.Create(new Position(i + 1, i + 1));
+            world.AddChild(current, child);
+            current = child;
+        }
+        var buffer = new CommandStream(world);
+
+        var clone = buffer.Clone(root);
+        buffer.Submit();
+
+        var depth = 0;
+        current = clone;
+        while (world.HasChildren(current))
+        {
+            var children = world.EnumerateChildren(current).ToChildList();
+            Assert.Single(children);
+            current = children[0];
+            depth++;
+        }
+        Assert.Equal(33, depth);
+    }
+
+    [Fact]
+    public void BUG_clone_materialized_source_with_more_than_64_components()
+    {
+        var world = new World();
+        var source = world.CreateEmpty();
+        var markerTypes = new[]
+        {
+            typeof(CloneMarker0), typeof(CloneMarker1), typeof(CloneMarker2),
+            typeof(CloneMarker3), typeof(CloneMarker4), typeof(CloneMarker5),
+            typeof(CloneMarker6), typeof(CloneMarker7), typeof(CloneMarker8),
+        };
+        var addDefault = typeof(CommandBufferCloneTests).GetMethod(
+            nameof(AddDefaultComponent), BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        for (var i = 0; i < 65; i++)
+        {
+            var type = typeof(CloneComponent<,>).MakeGenericType(
+                markerTypes[i / markerTypes.Length], markerTypes[i % markerTypes.Length]);
+            addDefault.MakeGenericMethod(type).Invoke(null, [world, source]);
+        }
+        Assert.True(world.TryGetLocation(source, out var sourceInfo));
+        Assert.Equal(65, sourceInfo.Archetype.Signature.Count);
+        var buffer = new CommandStream(world);
+
+        var clone = buffer.Clone(source);
+        buffer.Submit();
+
+        Assert.True(world.TryGetLocation(clone, out var cloneInfo));
+        Assert.Same(sourceInfo.Archetype, cloneInfo.Archetype);
+    }
+
+    [Fact]
     public void Clone_pending_source_submit_equals_replay()
     {
         var world1 = new World();
@@ -919,6 +1008,11 @@ public sealed class CommandBufferCloneTests
         Assert.Equal(new Position(9, 9), pos2);
     }
 
+
+    private static void AddDefaultComponent<T>(World world, Entity entity) where T : unmanaged
+    {
+        world.Add(entity, default(T));
+    }
 
     private static int CountEntities(MiniQueryCache query)
     {

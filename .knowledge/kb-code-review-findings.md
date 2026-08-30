@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 审阅前必读的当前风险、已修复真 bug 回归索引与已排除非 bug 猜想；只保留结论和验证入口
-updated: 2026-08-29
+updated: 2026-08-30
 ---
 # 代码审阅发现
 
@@ -25,6 +25,14 @@ updated: 2026-08-29
 CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）修复了 lockstep 分叉路径（P0#1/P0#2），`Validate()` 覆盖语义违规（存在性/hierarchy）；nested Entity 现在由完整递归 offsets 合同支持，零校验 Submit 的存在性违规仍在 apply 期抛（部分应用），且不把 Submit 或 Replay 提升为灾难性异常下的通用事务。
 
 ## 已修复的真 bug 索引
+
+### 2026-08-30 CommandStream Clone 固定容量 scratch buffers
+
+| 回归测试 | 位置 / witness | 修复边界 |
+|---|---|---|
+| `BUG_clone_preserves_more_than_32_direct_children` | `GetVirtualChildren` 只写固定 32-slot buffer，容量满后静默忽略；包含 33 个直接 child 的合法 source 最终只克隆 32 个，违反 deep-clone 全子树契约 | virtual-child buffer 改为 `ArrayPool` 数组的 ref owner，写满时用既有 `GrowPooled` 扩容；同一数组在各 DFS 节点复用并由唯一 finally 归还 |
+| `BUG_clone_grows_cycle_detection_for_more_than_32_descendants` | Clone 的 visited buffer 固定租 32 slots，追加第 33 个 descendant 前不扩容，合法深树会抛 `IndexOutOfRangeException` | 每次 append 前按需增长 visited；cycle 检测、显式 DFS stack 与零稳态 GC 语义保持不变 |
+| `BUG_clone_materialized_source_with_more_than_64_components` | `CloneMaterializedComponents` 在构造会自动扩容的 merger 之前，先把 source archetype 全部 component 写入三组固定 `stackalloc[64]`；合法的第 65 个 component 会抛 `IndexOutOfRangeException` | ≤64 的常见路径继续 stackalloc；更大 archetype 的三组初始 scratch arrays 改从 `ArrayPool` 获取，并在唯一 finally 与 merger 自有增长数组分别归还 |
 
 ### 2026-08-15 nested Entity offset reconstruction
 

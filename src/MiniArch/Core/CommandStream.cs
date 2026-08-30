@@ -263,33 +263,45 @@ public sealed partial class CommandStream
         var sourceRow = info.RowIndex;
         var components = archetype.Signature.AsSpan();
 
-        // Step 1: stackalloc arrays for merged components (no heap List)
-        Span<ComponentType> mergedTypes = stackalloc ComponentType[64];
-        Span<int> mergedOffsets = stackalloc int[64];
-        Span<int> mergedSizes = stackalloc int[64];
+        // Step 1: keep the common path on the stack, but support larger archetypes.
+        ComponentType[]? pooledTypes = null;
+        int[]? pooledOffsets = null;
+        int[]? pooledSizes = null;
+        Span<ComponentType> mergedTypes = components.Length <= 64
+            ? stackalloc ComponentType[64]
+            : (pooledTypes = ArrayPool<ComponentType>.Shared.Rent(components.Length))
+                .AsSpan(0, components.Length);
+        Span<int> mergedOffsets = components.Length <= 64
+            ? stackalloc int[64]
+            : (pooledOffsets = ArrayPool<int>.Shared.Rent(components.Length))
+                .AsSpan(0, components.Length);
+        Span<int> mergedSizes = components.Length <= 64
+            ? stackalloc int[64]
+            : (pooledSizes = ArrayPool<int>.Shared.Rent(components.Length))
+                .AsSpan(0, components.Length);
         var count = 0;
-
-        for (var i = 0; i < components.Length; i++)
-        {
-            var ct = components[i];
-            var size = ComponentSizeCache.GetSize(ComponentRegistry.Shared.GetType(ct));
-            var offset = ReserveBatchBufSpace(size);
-            unsafe
-            {
-                fixed (byte* ptr = &_frozen.BatchBuf[offset])
-                    archetype.ReadComponentRaw(i, sourceRow, ptr);
-            }
-            mergedTypes[count] = ct;
-            mergedOffsets[count] = offset;
-            mergedSizes[count] = size;
-            count++;
-        }
 
         // Step 2: Create ONE ComponentMerger and scan all stores (no per-store OverlayCollector)
         var merger = new ComponentMerger(this, mergedTypes, mergedOffsets, mergedSizes, ref count);
 
         try
         {
+            for (var i = 0; i < components.Length; i++)
+            {
+                var ct = components[i];
+                var size = archetype._elementSizes[i];
+                var offset = ReserveBatchBufSpace(size);
+                unsafe
+                {
+                    fixed (byte* ptr = &_frozen.BatchBuf[offset])
+                        archetype.ReadComponentRaw(i, sourceRow, ptr);
+                }
+                mergedTypes[count] = ct;
+                mergedOffsets[count] = offset;
+                mergedSizes[count] = size;
+                count++;
+            }
+
             var stores = _frozen.Stores;
             for (var s = 0; s < stores.Length; s++)
             {
@@ -298,7 +310,7 @@ public sealed partial class CommandStream
                 store.ForEachEntityEntry(source, ref merger);
             }
 
-            // Step 3: Read final arrays from merger (may have grown past stackalloc)
+            // Step 3: Read final arrays from merger (may have grown past initial capacity)
             var finalTypes = merger.Types;
             var finalOffsets = merger.Offsets;
             var finalSizes = merger.Sizes;
@@ -317,6 +329,12 @@ public sealed partial class CommandStream
         finally
         {
             merger.ReturnRented();
+            if (pooledTypes is not null)
+                ArrayPool<ComponentType>.Shared.Return(pooledTypes);
+            if (pooledOffsets is not null)
+                ArrayPool<int>.Shared.Return(pooledOffsets);
+            if (pooledSizes is not null)
+                ArrayPool<int>.Shared.Return(pooledSizes);
         }
     }
 
@@ -397,7 +415,7 @@ public sealed partial class CommandStream
     /// and returns the count. Virtual children = world hierarchy children + pending AddChild
     /// intents - pending RemoveChild intents.
     /// </summary>
-    private int GetVirtualChildren(Entity parent, Span<Entity> buffer)
+    private int GetVirtualChildren(Entity parent, ref Entity[] buffer)
     {
         var count = 0;
 
@@ -406,8 +424,9 @@ public sealed partial class CommandStream
         {
             foreach (var child in _world.Hierarchy.EnumerateChildren(_world, parent))
             {
-                if (count < buffer.Length)
-                    buffer[count++] = child;
+                if (count == buffer.Length)
+                    GrowPooled(ref buffer, count);
+                buffer[count++] = child;
             }
         }
 
@@ -425,8 +444,12 @@ public sealed partial class CommandStream
                     {
                         if (buffer[i] == child) { alreadyPresent = true; break; }
                     }
-                    if (!alreadyPresent && count < buffer.Length)
+                    if (!alreadyPresent)
+                    {
+                        if (count == buffer.Length)
+                            GrowPooled(ref buffer, count);
                         buffer[count++] = child;
+                    }
                 }
             }
             else
@@ -460,9 +483,13 @@ public sealed partial class CommandStream
     /// </summary>
     private void CloneChildrenFromVirtualHierarchy(Entity sourceRoot, Entity cloneRoot)
     {
-        // Use ArrayPool buffer for virtual children (replaces heap List)
+        if (_frozen.HierarchyByChild.Count == 0 &&
+            !_world.Hierarchy.HasChildren(_world, sourceRoot))
+            return;
+
+        // Reuse one pooled buffer for each source node's virtual children.
         var childBuf = ArrayPool<Entity>.Shared.Rent(32);
-        var childCount = GetVirtualChildren(sourceRoot, childBuf.AsSpan());
+        var childCount = GetVirtualChildren(sourceRoot, ref childBuf);
         if (childCount == 0)
         {
             ArrayPool<Entity>.Shared.Return(childBuf);
@@ -479,9 +506,6 @@ public sealed partial class CommandStream
 
         try
         {
-            // Buffer for grandchildren (reused across iterations)
-            Span<Entity> gcBuf = stackalloc Entity[32];
-
             for (var ci = 0; ci < childCount; ci++)
             {
                 var child = childBuf[ci];
@@ -490,6 +514,8 @@ public sealed partial class CommandStream
                 if (Contains(visited, visitedCount, child))
                     throw new InvalidOperationException(
                         $"Clone detected a cycle in the virtual hierarchy at entity {child}.");
+                if (visitedCount == visited.Length)
+                    GrowPooled(ref visited, visitedCount);
                 visited[visitedCount++] = child;
 
                 if (stackCount >= stack.Length)
@@ -501,10 +527,6 @@ public sealed partial class CommandStream
                 cloneStack[stackCount] = cloneRoot;
                 stackCount++;
             }
-
-            // Return child buffer early since we've pushed all entries
-            ArrayPool<Entity>.Shared.Return(childBuf);
-            childBuf = null!;
 
             while (stackCount > 0)
             {
@@ -546,15 +568,17 @@ public sealed partial class CommandStream
                 AddChild(cloneParent, cloneChild);
 
                 // Enqueue grandchildren (virtual view)
-                var gcCount = GetVirtualChildren(srcChild, gcBuf);
+                var gcCount = GetVirtualChildren(srcChild, ref childBuf);
                 for (var gi = 0; gi < gcCount; gi++)
                 {
-                    var grandChild = gcBuf[gi];
+                    var grandChild = childBuf[gi];
 
                     // Cycle check via linear scan
                     if (Contains(visited, visitedCount, grandChild))
                         throw new InvalidOperationException(
                             $"Clone detected a cycle in the virtual hierarchy at entity {grandChild}.");
+                    if (visitedCount == visited.Length)
+                        GrowPooled(ref visited, visitedCount);
                     visited[visitedCount++] = grandChild;
 
                     if (stackCount >= stack.Length)
@@ -570,8 +594,7 @@ public sealed partial class CommandStream
         }
         finally
         {
-            if (childBuf is not null)
-                ArrayPool<Entity>.Shared.Return(childBuf);
+            ArrayPool<Entity>.Shared.Return(childBuf);
             ArrayPool<Entity>.Shared.Return(visited);
             ArrayPool<Entity>.Shared.Return(stack);
             ArrayPool<Entity>.Shared.Return(cloneStack);

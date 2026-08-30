@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream 的 typed-store 录制、consume-time 校验、Submit/Snapshot/Replay 确定性及 async ownership 契约
-updated: 2026-08-29
+updated: 2026-08-30
 ---
 # Command Stream Runtime
 
@@ -162,6 +162,10 @@ dotnet run -c Release --no-build --project tools/perf/CommandStream.Profile -- -
 2026-07-15 consume-time liveness 候选的有效 A/B：`existing-set` 中位数 11036.2 → 11759.0 ticks/s（+6.5%），`snapshot-only` 72284.8 → 74160.9（+2.6%）；JIT record loop 保持完整内联。完整数据见本轮 evidence 文档。
 
 2026-08-29 删除并行 recorder 后的简化 A/B：同时把预检 flag 去原子化并将 `CreateCore()` 折进 public `Create()` 时 Attack 门禁降至 840.7 rounds/s；回退两项后为 1246.8，随后只重做 flag 去原子化为 1206.8。故保留可内联的 `Create()` → `CreateCore()` 边界；在有更干净的独立证据前不再折叠。
+
+2026-08-30 Clone 低垂优化：materialized source 的 archetype 已按 signature column 保存 `_elementSizes`，Clone 不再为每个 component 重走 `ComponentType → Type → ComponentSizeCache` 的并发字典查询；没有 World children 且没有 hierarchy overlay 时，Clone 也不再租还临时 child buffer。Release、固定 CPU affinity、4 个 16B component、4096 clones/batch、100 批 warmup + 101 批取中位数、3 个独立进程的 record+submit 测量中，跨进程中位数由约 959.3 ns/clone 降至 661.8 ns/clone（-31.0%），其中 Clone record 由 600.4 降至 328.2 ns/clone（-45.3%），稳态仍为 0 B/clone。该收益只复用现有 owner 的元数据和空 hierarchy 判定，不新增缓存或公共表面。
+
+subtree Clone 的剩余主要成本不是 component copy：virtual hierarchy 需要 parent→children 观察，却反复扫描 child-keyed `HierarchyByChild`；同一批次重复克隆 subtree 时，前面 clone 生成的 hierarchy intent 也会扩大后续扫描。修复需要改变索引/ownership，而不是再加局部 cache；没有明确 subtree workload 与目标前不把它包装成“低垂优化”。children/visited 的 pooled buffer 现会按需增长，`>32` 宽树和深树不再截断或越界；materialized component scratch 在 `>64` components 时也转用池化数组，常见的 ≤64 路径仍保持 stackalloc。
 
 consume prune 必须同时刷新 stream 的 store-dirty 汇总。若 stale-only entries 全被删除，`Submit()` 返回 `false`、Snapshot 为空，async 路径不应因旧 `_hasStoreCommands` 启动无效工作；单线程 delayed-stale、async 与 consume 前 ID reuse 回归共同守卫该契约。
 
