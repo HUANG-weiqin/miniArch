@@ -8,7 +8,13 @@ namespace CommandStreamProfile;
 // ===================================================================
 // Command-line arguments
 // ===================================================================
-internal sealed record Options(string? Scenario, int WarmupSec, int MeasureSec, bool List, string? ProfileReadyFile, int AttachDelaySec)
+internal sealed record Options(
+    string? Scenario,
+    int WarmupSec,
+    int MeasureSec,
+    bool List,
+    string? ProfileReadyFile,
+    string? ProfileStopFile)
 {
     public static Options Parse(string[] args)
     {
@@ -17,7 +23,7 @@ internal sealed record Options(string? Scenario, int WarmupSec, int MeasureSec, 
         var measure = 5;
         var list = false;
         string? readyFile = null;
-        var attachDelay = 0;
+        string? stopFile = null;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -38,13 +44,13 @@ internal sealed record Options(string? Scenario, int WarmupSec, int MeasureSec, 
                 case "--profile-ready-file" when i + 1 < args.Length:
                     readyFile = args[++i];
                     break;
-                case "--attach-delay" when i + 1 < args.Length && int.TryParse(args[++i], out var d):
-                    attachDelay = Math.Max(0, d);
+                case "--profile-stop-file" when i + 1 < args.Length:
+                    stopFile = args[++i];
                     break;
             }
         }
 
-        return new Options(scenario, warmup, measure, list, readyFile, attachDelay);
+        return new Options(scenario, warmup, measure, list, readyFile, stopFile);
     }
 }
 
@@ -79,35 +85,46 @@ internal sealed record ScenarioResult(
     string Name,
     double TicksPerSecond,
     double MillisecondsPerTick,
+    double RecordMicrosecondsPerTick,
+    double SubmitMicrosecondsPerTick,
+    double SnapshotMicrosecondsPerTick,
+    double ClearMicrosecondsPerTick,
     double RecordPercent,
     double SubmitPercent,
     double SnapshotPercent,
     double ClearPercent,
     int LiveCount,
     long HeapDelta,
-    int GcCount);
+    int GcCount,
+    long Checksum);
 
 internal static class BenchmarkRunner
 {
-    private static readonly long SampleIntervalTicks = Stopwatch.Frequency / 100; // ~10ms samples
-
-    public static ScenarioResult Run(IScenario scenario, int warmupSec, int measureSec)
+    public static ScenarioResult Run(
+        IScenario scenario,
+        int warmupSec,
+        int measureSec,
+        string? profileReadyFile,
+        string? profileStopFile)
     {
-        var sw = new Stopwatch();
-
         // Warmup
         var warmupEnd = warmupSec > 0 ? Stopwatch.GetTimestamp() + (long)warmupSec * Stopwatch.Frequency : 0L;
         while (Stopwatch.GetTimestamp() < warmupEnd)
             scenario.RunTick();
 
+        var startMem = GC.GetTotalMemory(false);
+        var startGc = GC.CollectionCount(0);
+
+        // In trace mode the marker writes are deliberately inside the measured
+        // interval, so an accepted trace cannot contain samples outside it.
+        var measureStart = Stopwatch.GetTimestamp();
+        if (profileReadyFile != null)
+            File.WriteAllText(profileReadyFile, Environment.ProcessId.ToString());
+
         // Measure
-        var measureEnd = Stopwatch.GetTimestamp() + (long)measureSec * Stopwatch.Frequency;
+        var measureEnd = measureStart + (long)measureSec * Stopwatch.Frequency;
         long totalRecordNs = 0, totalSubmitNs = 0, totalSnapshotNs = 0, totalClearNs = 0;
         long tickCount = 0;
-        var startMem = GC.GetTotalMemory(false);
-        var endMem = startMem;
-        var startGc = GC.CollectionCount(0);
-        var nextSample = Stopwatch.GetTimestamp() + SampleIntervalTicks;
 
         while (Stopwatch.GetTimestamp() < measureEnd)
         {
@@ -117,21 +134,24 @@ internal static class BenchmarkRunner
             totalSnapshotNs += snNs;
             totalClearNs += cNs;
             tickCount++;
-
-            // Sample memory at roughly regular intervals (not per-tick to avoid overhead)
-            if (Stopwatch.GetTimestamp() >= nextSample)
-            {
-                endMem = GC.GetTotalMemory(false);
-                nextSample = Stopwatch.GetTimestamp() + SampleIntervalTicks;
-            }
         }
 
-        if (tickCount == 0)
-            return new ScenarioResult(scenario.Name, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        if (profileStopFile != null)
+            File.WriteAllText(profileStopFile, Stopwatch.GetTimestamp().ToString());
+        var measureStop = Stopwatch.GetTimestamp();
 
-        var elapsedSec = measureSec;
-        var ticksPerSec = tickCount / (double)elapsedSec;
-        var msPerTick = (elapsedSec * 1000.0) / tickCount;
+        if (tickCount == 0)
+            throw new InvalidOperationException("Measurement completed without executing a tick.");
+
+        var endMem = GC.GetTotalMemory(false);
+        var elapsedSec = (measureStop - measureStart) / (double)Stopwatch.Frequency;
+        var ticksPerSec = tickCount / elapsedSec;
+        var msPerTick = elapsedSec * 1000.0 / tickCount;
+
+        var recordUsPerTick = totalRecordNs / (double)tickCount / 1_000.0;
+        var submitUsPerTick = totalSubmitNs / (double)tickCount / 1_000.0;
+        var snapshotUsPerTick = totalSnapshotNs / (double)tickCount / 1_000.0;
+        var clearUsPerTick = totalClearNs / (double)tickCount / 1_000.0;
 
         var totalNs = totalRecordNs + totalSubmitNs + totalSnapshotNs + totalClearNs;
         var recordPct = totalNs > 0 ? totalRecordNs * 100.0 / totalNs : 0;
@@ -141,11 +161,13 @@ internal static class BenchmarkRunner
 
         var heapDelta = endMem - startMem;
         var gcCount = GC.CollectionCount(0) - startGc;
+        var checksum = scenario.Checksum;
 
         return new ScenarioResult(
             scenario.Name, ticksPerSec, msPerTick,
+            recordUsPerTick, submitUsPerTick, snapshotUsPerTick, clearUsPerTick,
             recordPct, submitPct, snapshotPct, clearPct,
-            scenario.LiveCount, heapDelta, gcCount);
+            scenario.LiveCount, heapDelta, gcCount, checksum);
     }
 }
 
@@ -154,7 +176,7 @@ internal static class BenchmarkRunner
 // ===================================================================
 internal static class PhaseTimer
 {
-    // High-precision wrappers — subtract the overhead of StartNew/Elapsed.
+    // High-precision timestamp wrappers for phase boundaries.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static long Start() => Stopwatch.GetTimestamp();
 
@@ -162,7 +184,8 @@ internal static class PhaseTimer
     public static long ElapsedNs(long start, long end)
     {
         var elapsed = end - start;
-        return elapsed * 1_000_000L / Stopwatch.Frequency;
+        return elapsed / Stopwatch.Frequency * 1_000_000_000L
+            + elapsed % Stopwatch.Frequency * 1_000_000_000L / Stopwatch.Frequency;
     }
 }
 
@@ -310,7 +333,19 @@ internal sealed class ExistingAddRemoveScenario : IScenario
     public string Description => $"Record+Submit Add/Remove<Velocity> on {EntityCount} entities alternating per tick";
     public int LiveCount => _entities.Length;
 
-    public long Checksum => _entities.Length;
+    public long Checksum
+    {
+        get
+        {
+            long h = 0;
+            for (var i = 0; i < _entities.Length && i < 100; i++)
+            {
+                var entity = _entities[i];
+                h = HashCode.Combine(h, entity.Id, entity.Version, _world.Has<Velocity>(entity));
+            }
+            return h;
+        }
+    }
 
     public ExistingAddRemoveScenario()
     {
@@ -361,25 +396,58 @@ internal sealed class ExistingAddRemoveScenario : IScenario
 
 // ===================================================================
 // Scenario: create-small4
-// Create and Add 4 small-id components per entity via mask path.
+// Create and Add 4 small-id components while replacing an entity pool.
 // ===================================================================
 internal sealed class CreateSmall4Scenario : IScenario
 {
+    private const int EntityPool = 2_000;
     private const int BatchSize = 500;
 
     private readonly World _world;
     private readonly CommandStream _stream;
+    private readonly Entity[] _pool;
+    private int _poolIndex;
 
     public string Name => "create-small4";
-    public string Description => $"Create {BatchSize} entities/tick with 4 small-id components (Position+Vitality+TagA+TagB)";
+    public string Description => $"Create {BatchSize} + destroy {BatchSize} existing entities/tick with 4 small-id components, {EntityPool} live";
     public int LiveCount => _world.EntityCount;
 
-    public long Checksum => _stream.GetHashCode();
+    public long Checksum
+    {
+        get
+        {
+            long h = 0;
+            for (var i = 0; i < _pool.Length && i < 100; i++)
+            {
+                var entity = _pool[i];
+                var position = _world.Get<Position>(entity);
+                h = HashCode.Combine(
+                    h,
+                    entity.Id,
+                    entity.Version,
+                    position.X,
+                    position.Y,
+                    _world.Get<Health>(entity).Value,
+                    _world.Has<TagA>(entity),
+                    _world.Has<TagB>(entity));
+            }
+            return h;
+        }
+    }
 
     public CreateSmall4Scenario()
     {
         _world = new World();
         _stream = new CommandStream(_world);
+        _pool = new Entity[EntityPool];
+        for (var i = 0; i < EntityPool; i++)
+        {
+            _pool[i] = _world.Create(
+                new Position { X = i, Y = -i },
+                new Health { Value = 100 },
+                new TagA(),
+                new TagB());
+        }
     }
 
     public (long recordNs, long submitNs, long snapshotNs, long clearNs) RunTick()
@@ -387,12 +455,17 @@ internal sealed class CreateSmall4Scenario : IScenario
         var t0 = PhaseTimer.Start();
         for (var i = 0; i < BatchSize; i++)
         {
-            var e = _stream.Create();
-            _stream.Add(e, new Position { X = i, Y = -i });
-            _stream.Add(e, new Health { Value = 100 });
-            _stream.Add(e, new TagA());
-            _stream.Add(e, new TagB());
+            var idx = (_poolIndex + i) % EntityPool;
+            var oldEntity = _pool[idx];
+            var newEntity = _stream.Create();
+            _stream.Add(newEntity, new Position { X = i, Y = -i });
+            _stream.Add(newEntity, new Health { Value = 100 });
+            _stream.Add(newEntity, new TagA());
+            _stream.Add(newEntity, new TagB());
+            _stream.Destroy(oldEntity);
+            _pool[idx] = newEntity;
         }
+        _poolIndex = (_poolIndex + BatchSize) % EntityPool;
         var t1 = PhaseTimer.Start();
 
         _stream.Submit();
@@ -409,25 +482,49 @@ internal sealed class CreateSmall4Scenario : IScenario
 
 // ===================================================================
 // Scenario: create-duplicates
-// Same component written twice to same pending entity → tests dedup path.
+// Same component written twice while replacing an entity pool.
 // ===================================================================
 internal sealed class CreateDuplicatesScenario : IScenario
 {
+    private const int EntityPool = 2_000;
     private const int BatchSize = 500;
 
     private readonly World _world;
     private readonly CommandStream _stream;
+    private readonly Entity[] _pool;
+    private int _poolIndex;
 
     public string Name => "create-duplicates";
-    public string Description => $"Create {BatchSize} entities/tick with overlapping Set<Position> to exercise dedup";
+    public string Description => $"Create {BatchSize} + destroy {BatchSize} existing entities/tick with overlapping Set<Position>, {EntityPool} live";
     public int LiveCount => _world.EntityCount;
 
-    public long Checksum => _stream.GetHashCode();
+    public long Checksum
+    {
+        get
+        {
+            long h = 0;
+            for (var i = 0; i < _pool.Length && i < 100; i++)
+            {
+                var entity = _pool[i];
+                var position = _world.Get<Position>(entity);
+                h = HashCode.Combine(h, entity.Id, entity.Version, position.X, position.Y);
+            }
+            return h;
+        }
+    }
 
     public CreateDuplicatesScenario()
     {
         _world = new World();
         _stream = new CommandStream(_world);
+        _pool = new Entity[EntityPool];
+        for (var i = 0; i < EntityPool; i++)
+        {
+            _pool[i] = _world.Create(
+                new Position { X = i + 1, Y = -i - 1 },
+                new TagA(),
+                new TagC());
+        }
     }
 
     public (long recordNs, long submitNs, long snapshotNs, long clearNs) RunTick()
@@ -435,12 +532,17 @@ internal sealed class CreateDuplicatesScenario : IScenario
         var t0 = PhaseTimer.Start();
         for (var i = 0; i < BatchSize; i++)
         {
-            var e = _stream.Create();
-            _stream.Add(e, new Position { X = i, Y = -i });
-            _stream.Set(e, new Position { X = i + 1, Y = -i - 1 }); // overwrite last-wins
-            _stream.Add(e, new TagA());
-            _stream.Add(e, new TagC());
+            var idx = (_poolIndex + i) % EntityPool;
+            var oldEntity = _pool[idx];
+            var newEntity = _stream.Create();
+            _stream.Add(newEntity, new Position { X = i, Y = -i });
+            _stream.Set(newEntity, new Position { X = i + 1, Y = -i - 1 }); // overwrite last-wins
+            _stream.Add(newEntity, new TagA());
+            _stream.Add(newEntity, new TagC());
+            _stream.Destroy(oldEntity);
+            _pool[idx] = newEntity;
         }
+        _poolIndex = (_poolIndex + BatchSize) % EntityPool;
         var t1 = PhaseTimer.Start();
 
         _stream.Submit();
@@ -474,7 +576,20 @@ internal sealed class CreateDestroyScenario : IScenario
     public string Description => $"Create {BatchSize} + destroy {BatchSize} existing per tick, steady-state";
     public int LiveCount => _world.EntityCount;
 
-    public long Checksum => _stream.GetHashCode();
+    public long Checksum
+    {
+        get
+        {
+            long h = 0;
+            for (var i = 0; i < _pool.Length && i < 100; i++)
+            {
+                var entity = _pool[i];
+                var position = _world.Get<Position>(entity);
+                h = HashCode.Combine(h, entity.Id, entity.Version, position.X, position.Y);
+            }
+            return h;
+        }
+    }
 
     public CreateDestroyScenario()
     {
@@ -533,13 +648,14 @@ internal sealed class SnapshotOnlyScenario : IScenario
     private readonly World _world;
     private readonly CommandStream _stream;
     private readonly Entity[] _entities;
+    private FrameDelta _lastSnapshot = new();
     private int _tick;
 
     public string Name => "snapshot-only";
     public string Description => $"Record {OpsPerTick} Set + Snapshot + Clear per tick (no Submit)";
     public int LiveCount => _entities.Length;
 
-    public long Checksum => _stream.GetHashCode();
+    public long Checksum => HashCode.Combine(_lastSnapshot.DeltaCount, _lastSnapshot.AsSpan().Length);
 
     public SnapshotOnlyScenario()
     {
@@ -562,7 +678,7 @@ internal sealed class SnapshotOnlyScenario : IScenario
             _stream.Set(_entities[i], new Position { X = _tick + i, Y = _tick - i });
         var t1 = PhaseTimer.Start();
 
-        _stream.Snapshot();
+        _lastSnapshot = _stream.Snapshot();
         var t2 = PhaseTimer.Start();
 
         _stream.Clear();
@@ -593,40 +709,37 @@ public static class Program
         if (opts.List)
         {
             Console.WriteLine("Available scenarios:");
-            foreach (var factory in Registry.All)
+            foreach (var registration in Registry.All)
             {
-                using var scenario = factory();
-                Console.WriteLine($"  {scenario.Name,-24} {scenario.Description}");
+                using var scenario = registration.Factory();
+                Console.WriteLine($"  {registration.Name,-24} {scenario.Description}");
             }
             Console.WriteLine();
             Console.WriteLine("Run all:  dotnet run -c Release --project tools/perf/CommandStream.Profile");
             Console.WriteLine("Run one:  dotnet run -c Release --project tools/perf/CommandStream.Profile -- --scenario create-small4");
-            Console.WriteLine("Profile:  dotnet run -c Release --project tools/perf/CommandStream.Profile -- --scenario create-small4 --profile-ready-file profile.pid --attach-delay 3");
+            Console.WriteLine("Profile:  dotnet run -c Release --project tools/perf/CommandStream.Profile -- --scenario create-small4 --profile-ready-file profile.pid");
             return;
         }
 
-        // Print PID and optionally signal external profiler
         Console.WriteLine($"Process ID: {Environment.ProcessId}");
-        if (opts.ProfileReadyFile != null)
-        {
-            File.WriteAllText(opts.ProfileReadyFile, Environment.ProcessId.ToString());
-            if (opts.AttachDelaySec > 0)
-            {
-                Console.WriteLine($"Waiting {opts.AttachDelaySec}s for profiler to attach...");
-                Thread.Sleep(opts.AttachDelaySec * 1000);
-            }
-        }
-
         Console.WriteLine();
         Console.WriteLine($"Warmup: {opts.WarmupSec}s, Measure: {opts.MeasureSec}s");
         Console.WriteLine();
-        Console.WriteLine($"{"Scenario",-24} {"Ticks/s",10} {"ms/tick",9} {"Record%",8} {"Submit%",9} {"Snap%",8} {"Clear%",8} {"Live",8} {"Heap Δ",10} {"GC",6}");
-        Console.WriteLine(new string('-', 108));
+        Console.WriteLine(
+            $"{"Scenario",-24} {"Ticks/s",10} {"ms/tick",9} " +
+            $"{"Rec us/t",9} {"Sub us/t",9} {"Snap us/t",9} {"Clr us/t",9} " +
+            $"{"Rec%",7} {"Sub%",7} {"Snap%",7} {"Clr%",7} {"Checksum",12} {"Live",8} {"Heap Δ",10} {"GC",4}");
+        Console.WriteLine(new string('-', 158));
 
         var matched = false;
         var firstScenario = true;
-        foreach (var factory in Registry.All)
+        var profileReadyFile = opts.ProfileReadyFile;
+        var profileStopFile = opts.ProfileStopFile;
+        foreach (var registration in Registry.All)
         {
+            if (!string.IsNullOrEmpty(opts.Scenario) && registration.Name != opts.Scenario)
+                continue;
+
             if (!firstScenario)
             {
                 GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
@@ -634,16 +747,22 @@ public static class Program
             }
             firstScenario = false;
 
-            using var scenario = factory();
-            if (!string.IsNullOrEmpty(opts.Scenario) && scenario.Name != opts.Scenario)
-                continue;
-
+            using var scenario = registration.Factory();
             matched = true;
-            var result = BenchmarkRunner.Run(scenario, opts.WarmupSec, opts.MeasureSec);
+            var result = BenchmarkRunner.Run(
+                scenario,
+                opts.WarmupSec,
+                opts.MeasureSec,
+                profileReadyFile,
+                profileStopFile);
+            profileReadyFile = null;
+            profileStopFile = null;
             Console.WriteLine(
                 $"{result.Name,-24} {result.TicksPerSecond,10:F1} {result.MillisecondsPerTick,9:F4} " +
-                $"{result.RecordPercent,7:F1}% {result.SubmitPercent,7:F1}% {result.SnapshotPercent,7:F1}% {result.ClearPercent,7:F1}% " +
-                $"{result.LiveCount,8:N0} {FormatBytes(result.HeapDelta),10} {result.GcCount,6}");
+                $"{result.RecordMicrosecondsPerTick,9:F3} {result.SubmitMicrosecondsPerTick,9:F3} " +
+                $"{result.SnapshotMicrosecondsPerTick,9:F3} {result.ClearMicrosecondsPerTick,9:F3} " +
+                $"{result.RecordPercent,6:F1}% {result.SubmitPercent,6:F1}% {result.SnapshotPercent,6:F1}% {result.ClearPercent,6:F1}% " +
+                $"{result.Checksum,12} {result.LiveCount,8:N0} {FormatBytes(result.HeapDelta),10} {result.GcCount,4}");
         }
 
         if (!matched)
@@ -668,17 +787,17 @@ public static class Program
 // ===================================================================
 internal static class Registry
 {
-    public static IEnumerable<Func<IScenario>> All
+    public static IEnumerable<(string Name, Func<IScenario> Factory)> All
     {
         get
         {
-            yield return static () => new ExistingSetScenario();
-            yield return static () => new ExistingSetMultiScenario();
-            yield return static () => new ExistingAddRemoveScenario();
-            yield return static () => new CreateSmall4Scenario();
-            yield return static () => new CreateDuplicatesScenario();
-            yield return static () => new CreateDestroyScenario();
-            yield return static () => new SnapshotOnlyScenario();
+            yield return ("existing-set", static () => new ExistingSetScenario());
+            yield return ("existing-set-multi", static () => new ExistingSetMultiScenario());
+            yield return ("existing-add-remove", static () => new ExistingAddRemoveScenario());
+            yield return ("create-small4", static () => new CreateSmall4Scenario());
+            yield return ("create-duplicates", static () => new CreateDuplicatesScenario());
+            yield return ("create-destroy", static () => new CreateDestroyScenario());
+            yield return ("snapshot-only", static () => new SnapshotOnlyScenario());
         }
     }
 }

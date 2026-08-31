@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream 的 typed-store 录制、consume-time 校验、Submit/Snapshot/Replay 确定性及 async ownership 契约
-updated: 2026-08-30
+updated: 2026-08-31
 ---
 # Command Stream Runtime
 
@@ -168,6 +168,22 @@ dotnet run -c Release --no-build --project tools/perf/CommandStream.Profile -- -
 subtree Clone 的剩余主要成本不是 component copy：virtual hierarchy 需要 parent→children 观察，却反复扫描 child-keyed `HierarchyByChild`；同一批次重复克隆 subtree 时，前面 clone 生成的 hierarchy intent 也会扩大后续扫描。修复需要改变索引/ownership，而不是再加局部 cache；没有明确 subtree workload 与目标前不把它包装成“低垂优化”。children/visited 的 pooled buffer 现会按需增长，`>32` 宽树和深树不再截断或越界；materialized component scratch 在 `>64` components 时也转用池化数组，常见的 ≤64 路径仍保持 stackalloc。
 
 consume prune 必须同时刷新 stream 的 store-dirty 汇总。若 stale-only entries 全被删除，`Submit()` 返回 `false`、Snapshot 为空，async 路径不应因旧 `_hasStoreCommands` 启动无效工作；单线程 delayed-stale、async 与 consume 前 ID reuse 回归共同守卫该契约。
+
+### 2026-08-31 当前热点复核
+
+设施修复前 Release 专项 runner 的三进程中位数：`existing-set` 约 13.9k ticks/s（record 58%、submit 42%），`existing-set-multi` 约 9.5k（record 41%、submit 59%），`existing-add-remove` 约 2.46k（record 10%、submit 90%），稳态 `create-destroy` 约 23.2k（record 27%、submit 73%）。纯 Set 的叶子采样只剩 direct apply 与 prune/cache build，继续改 record/JIT 形状的风险高；结构迁移的大头属于 `World`/`Archetype` owner，不应包装成 CommandStream 微优化。
+
+真实 `HeroComing.Perf` Movement 的 8 秒 CPU sampling 中，`CommandStream.Submit` inclusive 约 49.4%；其中 pending materialize 是最明确的 CommandStream 内部热点（`MaterializePendingBatches` inclusive 20.4%、`MaterializeFromBatchBuffer` 16.8%、`DeduplicateBatchChain` 2.5%），而 component store 下的 `ApplyTypedAdd` / `MoveEntityCore` / shared-column copy 是 World 存储迁移成本。当前优先证据方向因此是：
+
+1. 普通 homogeneous pending Create 是否能在 consume 期复用同一 schema/archetype/column metadata；先与已有 `CreateMany` bulk path 按真实小批量和 1k/10k 批量对照，未达到端到端门槛不新增自动分组状态。
+2. create-heavy Snapshot/async emit：当前 budget 与 emit 都逐实体 collect/sort，且逐实体租还 `RawComponentValue[]`；先补 workload，再判断是否只需 pass-local scratch 与 capacity hint。
+3. `Stores` 全表扫描只在 8/64/256 注册类型斜率成立时再引入 active-store 机制；无 store 帧可优先评估现有 `_hasStoreCommands` 的边界短路。
+
+同日审计发现旧 `CommandStream.Profile` 不能裁决小于约 5% 的差异：吞吐分母使用名义 `measureSec`，阶段计数的“ns”实际是 µs，测量循环周期调用 `GC.GetTotalMemory(false)`，`Checksum` 未被消费，单场景过滤仍会构造前序场景，trace ready 在 attach delay/warmup 之前；`create-small4` / `create-duplicates` 还会让 World 无界增长（短测曾达约 1490 万 / 1680 万 live entities、+769MB / +1465MB heap）。设施现已改用实际 elapsed 与正确的 ns→µs 输出，在热循环外测 heap 并消费结果 oracle，先按名字过滤，两个 create 场景改为 2000 live 的环形稳态；profile start/stop marker 也把 trace 限定在目标场景 warmup 后的 measurement 内。旧口径的所有 ticks/s 与新结果不得直接横比；未改变 workload 的场景，其旧 phase 百分比只依赖同一错误单位下的 phase sums，仍可作为方向性证据，两个 create 场景则连百分比也不可横比。
+
+CPU 频率与后台进程会让独立进程结果明显波动。候选 A/B 应使用同一 affinity、预构建二进制和 AB/BA 交错配对，至少 7 对；按每对 `candidate/baseline` 比值取中位，并要求至少 5/7 同方向。Defender 或其他后台负载污染的 pair 丢弃，单次更快不算证据。
+
+同日门禁参考值：Movement 1915.1 rounds/s、Attack 1168.8 rounds/s、heap stable，均通过 1642/997 阈值。该门禁只排除灾难性回退，不证明微优化成立。
 
 ## 认知模型
 
