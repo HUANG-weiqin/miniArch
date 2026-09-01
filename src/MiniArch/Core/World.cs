@@ -1302,6 +1302,21 @@ public sealed partial class World : IDisposable
     }
 
     /// <summary>
+    /// Materializes a reserved entity using caller-precomputed archetype columns.
+    /// </summary>
+    internal unsafe void MaterializeReservedEntityRawAtColumns(
+        Entity entity, Archetype archetype,
+        ReadOnlySpan<int> columnIndices,
+        ReadOnlySpan<int> offsets,
+        byte* buffer)
+    {
+        var rowIndex = PlaceEntityInArchetype(entity, archetype);
+
+        for (var i = 0; i < columnIndices.Length; i++)
+            archetype.WriteComponentRaw(columnIndices[i], rowIndex, buffer + offsets[i]);
+    }
+
+    /// <summary>
     /// Checks whether the given entity is still in reserved (pre-materialization)
     /// state: the slot is not occupied and its version matches the entity handle.
     /// </summary>

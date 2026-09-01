@@ -100,6 +100,42 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
+    public unsafe void Homogeneous_pending_run_preserves_direct_create_chunk_layout()
+    {
+        using var expectedWorld = new World(chunkCapacity: 16, entityCapacity: 4);
+        using var actualWorld = new World(chunkCapacity: 16, entityCapacity: 4);
+        var stream = new CommandStream(actualWorld);
+
+        for (var i = 0; i < 257; i++)
+        {
+            expectedWorld.Create(new FrameBlob8K { Marker = i });
+            var entity = stream.Create();
+            stream.Add(entity, new FrameBlob8K { Marker = i });
+        }
+
+        Assert.True(stream.Submit());
+
+        var description = new QueryDescription().With<FrameBlob8K>();
+        var expectedQuery = expectedWorld.Query(in description);
+        var actualQuery = actualWorld.Query(in description);
+        var expectedChunks = expectedQuery.GetChunks();
+        var actualChunks = actualQuery.GetChunks();
+
+        Assert.True(expectedChunks.Length > 1);
+        Assert.Equal(expectedChunks.Length, actualChunks.Length);
+        for (var i = 0; i < expectedChunks.Length; i++)
+        {
+            Assert.Equal(expectedChunks[i].Count, actualChunks[i].Count);
+            Assert.True(expectedChunks[i].GetEntities().SequenceEqual(actualChunks[i].GetEntities()));
+
+            var expectedComponents = expectedChunks[i].GetSpan<FrameBlob8K>();
+            var actualComponents = actualChunks[i].GetSpan<FrameBlob8K>();
+            for (var row = 0; row < expectedChunks[i].Count; row++)
+                Assert.Equal(expectedComponents[row].Marker, actualComponents[row].Marker);
+        }
+    }
+
+    [Fact]
     public void EntityCount_excludes_reserved_pending_entities()
     {
         var world = new World();

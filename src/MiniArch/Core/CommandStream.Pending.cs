@@ -79,6 +79,80 @@ public sealed partial class CommandStream
         }
     }
 
+    // Returns -1 when further probes for this raw count should be suppressed.
+    private unsafe int MaterializeSimplePendingRun(
+        in PendingBatchView view, int startBatch, int endBatch)
+    {
+        var componentCount = view.CompCounts[startBatch];
+        var nextBatch = startBatch + 1;
+        if (nextBatch >= endBatch ||
+            view.Canceled[nextBatch] ||
+            view.CompCounts[nextBatch] != componentCount)
+            return 0;
+        if (componentCount is <= 0 or > 512)
+            return -1;
+
+        Span<ComponentType> types = stackalloc ComponentType[componentCount];
+        Span<int> columnIndices = stackalloc int[componentCount];
+        Span<int> offsets = stackalloc int[componentCount];
+        var builder = new MaskBuilder();
+        var current = view.Heads[startBatch];
+        for (var typeIdx = componentCount - 1; typeIdx >= 0; typeIdx--)
+        {
+            if (current < 0)
+                return -1;
+
+            ref var component = ref view.Comps[current];
+            if (component.Removed || (uint)component.Type.Value >= 512u)
+                return -1;
+
+            types[typeIdx] = component.Type;
+            builder.SetBit(component.Type.Value);
+            current = component.Next;
+        }
+
+        var mask = builder.ToMask();
+        if (current >= 0 || !World.IsMaskCanonical(mask, componentCount))
+            return -1;
+
+        var runCount = 1;
+        for (var batchIdx = nextBatch; batchIdx < endBatch; batchIdx++)
+        {
+            if (view.Canceled[batchIdx] ||
+                view.CompCounts[batchIdx] != componentCount ||
+                !BatchChainMatchesTypes(in view, batchIdx, types))
+                break;
+            runCount++;
+        }
+
+        if (runCount == 1)
+            return -1;
+
+        var archetype = ResolveArchetype(mask, types);
+        for (var i = 0; i < componentCount; i++)
+            columnIndices[i] = archetype.GetComponentIndexFast(types[i]);
+
+        fixed (byte* bufPtr = view.Buf)
+        {
+            var runEnd = startBatch + runCount;
+            for (var batchIdx = startBatch; batchIdx < runEnd; batchIdx++)
+            {
+                current = view.Heads[batchIdx];
+                for (var typeIdx = componentCount - 1; typeIdx >= 0; typeIdx--)
+                {
+                    ref var component = ref view.Comps[current];
+                    offsets[typeIdx] = component.Offset;
+                    current = component.Next;
+                }
+
+                _world.MaterializeReservedEntityRawAtColumns(
+                    view.Entities[batchIdx], archetype, columnIndices, offsets, bufPtr);
+            }
+        }
+
+        return runCount;
+    }
+
     // ── CreateMany bulk materialization ──────────────────────────────
 
     /// <summary>
@@ -90,7 +164,8 @@ public sealed partial class CommandStream
     /// (<see cref="MaterializeCreateManyGroup"/>). Any entity in the group
     /// that was modified with Set/Add/Remove after CreateMany is a programming
     /// error —the method throws <see cref="InvalidOperationException"/>.
-    /// Non-group batches use the per-entity <see cref="MaterializePending"/>.
+    /// Homogeneous simple non-group runs share their materialization plan;
+    /// remaining non-group batches use <see cref="MaterializePending"/>.
     /// </summary>
     private void MaterializePendingBatches(FrozenState frozen)
     {
@@ -99,6 +174,7 @@ public sealed partial class CommandStream
             frozen.BatchComps, frozen.BatchBuf, frozen.BatchEntities, frozen.PendingBatchCount);
         var groupIdx = 0;
         var batchIdx = 0;
+        var blockedRawCount = -1;
         while (batchIdx < frozen.PendingBatchCount)
         {
             var groupStart = -1;
@@ -111,14 +187,36 @@ public sealed partial class CommandStream
 
             if (groupStart == batchIdx)
             {
+                blockedRawCount = -1;
                 MaterializeCreateManyGroup(frozen, view, groupIdx);
                 batchIdx += groupCount;
                 groupIdx++;
                 continue;
             }
 
-            if (!view.Canceled[batchIdx])
-                MaterializePending(view, view.Entities[batchIdx], batchIdx);
+            if (view.Canceled[batchIdx])
+            {
+                blockedRawCount = -1;
+                batchIdx++;
+                continue;
+            }
+
+            var rawCount = view.CompCounts[batchIdx];
+            if (rawCount != blockedRawCount)
+            {
+                blockedRawCount = -1;
+                var runEnd = groupStart >= 0 ? groupStart : view.Count;
+                var probeResult = MaterializeSimplePendingRun(view, batchIdx, runEnd);
+                if (probeResult > 0)
+                {
+                    batchIdx += probeResult;
+                    continue;
+                }
+                if (probeResult < 0)
+                    blockedRawCount = rawCount;
+            }
+
+            MaterializePending(view, view.Entities[batchIdx], batchIdx);
             batchIdx++;
         }
     }
@@ -191,7 +289,7 @@ public sealed partial class CommandStream
                 if (view.Canceled[batchIdx]) continue;
                 if (view.CompCounts[batchIdx] != componentCount)
                     ThrowCreateManyMismatch(groupIdx, batchIdx);
-                if (!ChainMatchesGroup(in view, batchIdx, groupTypes))
+                if (!BatchChainMatchesTypes(in view, batchIdx, groupTypes))
                     ThrowCreateManyMismatch(groupIdx, batchIdx);
                 liveCount++;
             }
@@ -272,23 +370,23 @@ public sealed partial class CommandStream
     }
 
     /// <summary>
-    /// Verifies that the batch's linked-list chain exactly matches the group's
+    /// Verifies that a batch's linked-list chain exactly matches the expected
     /// component types in reverse write order with no <see cref="BatchedComponent.Removed"/>
     /// entries. The chain was built by successive <see cref="CommitBatchComponent"/>
     /// calls (LIFO head insertion), so walking from head yields
-    /// <c>groupTypes[N-1], groupTypes[N-2], ..., groupTypes[0]</c>.
+    /// <c>expectedTypes[N-1], expectedTypes[N-2], ..., expectedTypes[0]</c>.
     /// </summary>
-    private static bool ChainMatchesGroup(in PendingBatchView view, int batchIdx,
-        ReadOnlySpan<ComponentType> groupTypes)
+    private static bool BatchChainMatchesTypes(in PendingBatchView view, int batchIdx,
+        ReadOnlySpan<ComponentType> expectedTypes)
     {
-        var componentCount = groupTypes.Length;
+        var componentCount = expectedTypes.Length;
         var current = view.Heads[batchIdx];
         for (var i = componentCount - 1; i >= 0; i--)
         {
             if (current < 0) return false;
             ref var bc = ref view.Comps[current];
             if (bc.Removed) return false;
-            if (bc.Type != groupTypes[i]) return false;
+            if (bc.Type != expectedTypes[i]) return false;
             current = bc.Next;
         }
         return current < 0;

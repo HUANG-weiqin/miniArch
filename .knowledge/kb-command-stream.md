@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream 的 typed-store 录制、consume-time 校验、Submit/Snapshot/Replay 确定性及 async ownership 契约
-updated: 2026-08-31
+updated: 2026-09-01
 ---
 # Command Stream Runtime
 
@@ -183,7 +183,28 @@ consume prune 必须同时刷新 stream 的 store-dirty 汇总。若 stale-only 
 
 CPU 频率与后台进程会让独立进程结果明显波动。候选 A/B 应使用同一 affinity、预构建二进制和 AB/BA 交错配对，至少 7 对；按每对 `candidate/baseline` 比值取中位，并要求至少 5/7 同方向。Defender 或其他后台负载污染的 pair 丢弃，单次更快不算证据。
 
-同日门禁参考值：Movement 1915.1 rounds/s、Attack 1168.8 rounds/s、heap stable，均通过 1642/997 阈值。该门禁只排除灾难性回退，不证明微优化成立。
+### 2026-09-01 homogeneous pending Create run
+
+普通 pending Create 现在只在 consume 期识别连续至少两个相同 simple schema 的 run，并复用一次 types、mask、archetype 与 column lookup。simple schema 要求 raw count 为 1..512、链长精确、无 Remove/duplicate/high-id，且有序 type 序列一致；cancel 与 CreateMany group 都是边界。不满足时仍走原 per-entity dedup/materialize。
+
+该优化不能把普通 run 改写成 CreateMany bulk allocation：`AllocateRows(runCount)` 与连续 `AllocateRows(1)` 在 flat→chunked 阈值附近可能形成不同、可由 `ChunkView` 观察的 segment 布局。World 因此只提供 internal raw-at-columns 写入入口，每个 entity 仍独立执行 `PlaceEntityInArchetype` 与 `AllocateRows(1)`。对应回归用 257 个 8 KiB component 跨过 flat→chunked 阈值，把 homogeneous pending Create 与同配置 direct Create 的 chunk/entity/component 布局逐段比较。
+
+失败 probe 也必须有界。首版对 duplicate schema 每批重复扫描，`create-duplicates` 中位回退约 16%；只抑制 invalid schema 后，相同 arity 但 schema 交替仍回退 11.0%（0/7）。最终只用 consume-pass local `blockedRawCount`：同 raw count 的完整 probe 一旦不能组成 run，后续 batch 暂走原路径；raw count 改变、cancel 或 CreateMany 边界时重置。它只会保守错失优化，不增加持久状态，也不改变语义。
+
+最终 Release、固定 `0x5555` affinity、AboveNormal、AB/BA 交错 7 对结果：
+
+| workload | paired median B/A | 同方向 | 裁决 |
+|---|---:|---:|---|
+| `create-small4` | 127.622% | 7/7 | 目标路径成立 |
+| `create-duplicates` | 100.738% | 5/7 | fallback 无回退 |
+| temporary `create-alternating4` guard | 99.921% | 3/7 | 回退已消除，噪声内 |
+| Hero Movement（单场景隔离） | 110.033% | 7/7 | 真实链路成立 |
+| Hero Attack（单场景隔离） | 106.181% | 7/7 | 无跨场景干扰后成立 |
+| CommandBufferGame Combat（首场景隔离） | 105.576% | 7/7 | 混合游戏 workload 无回退 |
+
+对照实验“只复用 dedup mask lanes”在 `create-small4` 为 99.51%、3/7，已丢弃；删除局部 bitset 工作不自动等于端到端收益。
+
+2026-08-31 门禁参考值：Movement 1915.1 rounds/s、Attack 1168.8 rounds/s、heap stable，均通过 1642/997 阈值。该门禁只排除灾难性回退，不证明微优化成立。
 
 ## 认知模型
 
