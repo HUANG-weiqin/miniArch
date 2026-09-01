@@ -1,9 +1,11 @@
 # Changelog
 
-## Unreleased
+## 5.3.0 (2026-09-01)
 
 - **Breaking: parallel command recording removed** — `ParallelCommandStream` and its dedicated performance harness were removed after the implementation failed to demonstrate a break-even workload. Use one single-threaded `CommandStream` per recording owner and merge work at the application boundary when needed.
 - **Breaking: redundant recorder base removed** — `CommandStreamCore` was folded into the sole sealed `CommandStream`; all record and consume APIs now have one owner.
+- **Perf: homogeneous pending Create plans are reused** — consecutive pending creates with the same simple schema share component metadata and archetype column lookup while preserving per-entity row allocation and chunk layout.
+- **Perf: profiling and regression measurement hardened** — CommandStream profiling now uses corrected elapsed-time, phase-unit, checksum, allocation, trace-boundary, and stable-workload measurements.
 
 ## 5.2.0 (2026-08-15)
 
