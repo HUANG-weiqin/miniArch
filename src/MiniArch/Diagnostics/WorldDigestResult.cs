@@ -9,9 +9,10 @@ namespace MiniArch.Diagnostics;
 /// </summary>
 /// <remarks>
 /// All hashes are deterministic for the same internal world layout.
-/// The <see cref="Total"/> hash is a combination of all domain hashes,
-/// including physical per-archetype row-order data. It is NOT equivalent to
-/// layout-independent <see cref="World.CanonicalChecksum"/>.
+/// The <see cref="Total"/> hash combines domain hashes that include physical
+/// per-archetype row order. It is not equivalent to
+/// <see cref="World.CanonicalChecksum"/>, which canonicalizes row order and CLR
+/// padding while also covering the exact v5 persistence state.
 /// </remarks>
 public readonly struct WorldDigestResult
 {

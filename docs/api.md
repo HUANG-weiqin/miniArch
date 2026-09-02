@@ -359,13 +359,20 @@ world.RestoreState(snapshot);         // revert, payload returned to pool
 
 | Method | Description |
 |---|---|
-| `Save(Stream, World)` | Serialize world to binary stream |
-| `Load(Stream)` | Deserialize and return a new `World` |
+| `Save(Stream, World)` | Write a canonical version-5 snapshot followed by CRC32 |
+| `Load(Stream)` | Strictly validate a v5 snapshot and return a new `World` |
+| `ComputeChecksum(World)` | Compute the legacy rollback/lockstep projection hash |
+| `ComputeCanonicalChecksum(World)` | Compute SHA-256 over the exact v5 payload, excluding its CRC trailer |
 
-Only supports unmanaged component types.
+Version 5 encodes unmanaged component **fields**, not raw CLR struct memory. Primitive
+values use fixed-width little-endian encoding; padding, offsets, alignment, declaration
+order, and runtime component registration ids are not part of the wire format. Nested
+unmanaged structs, fixed buffers, and inline arrays are supported. Pointer/native-sized,
+recursive, AutoLayout, managed, and overlapping shapes are rejected without a raw fallback.
 
-Current v4 snapshots include a CRC32 integrity check. This detects corruption; it is
-not a cross-version schema compatibility guarantee.
+`Load` accepts only v5; v3/v4 files must be regenerated or migrated by the application.
+CRC32 detects corruption but is not a schema-migration mechanism. Exact type identity and
+canonical field shape must match the local component type.
 
 ---
 

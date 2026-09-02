@@ -2,7 +2,7 @@
 title: MiniArch.Diagnostics 诊断工具
 module: MiniArch.Diagnostics
 description: ECS 世界的状态诊断工具集：比对、校验、检查、探查
-updated: 2026-07-22
+updated: 2026-09-02
 ---
 
 # MiniArch.Diagnostics 诊断工具
@@ -40,7 +40,7 @@ updated: 2026-07-22
 - **Namespace 即文档**：`MiniArch.Diagnostics` 命名空间本身就传达了"这是 debug 工具"的信息，热路径代码不会意外引用
 - **`HashBuilder` 替代 `IncrementalHash`**：使用 `MemoryStream` + `SHA256.HashData(Stream)` 而非 `IncrementalHash`（`IncrementalHash` 在 `System.Security.Cryptography` 中仍可用，但 `MemoryStream` 方式对累加再算的场景更简洁），在诊断场景下性能差异可忽略
 - **结果不可变**：列表字段用 `ReadOnlyCollection<T>` 包装；公共签名必须保留 `byte[]` 的 hash/raw bytes 通过 getter 返回 defensive copy，hash 字典同时深复制 value array，不能只用 `ReadOnlyDictionary` 包装可变数组
-- **确定性**：所有哈希按 entity ID 排序后再计算，保证相同逻辑状态 → 相同输出
+- **确定性边界**：各 domain hash 按其声明的稳定顺序计算；`WorldDigest.Total` 有意包含 physical archetype row order，因此只保证相同内部布局 → 相同输出，不代表任意“逻辑等价”world 都同 hash
 - **Validator 必须双向取证**：entity record↔archetype row、child→parent↔parent→children 都从两种独立表示互相校验；不能从同一表读两次后把结果当成 bidirectional proof。bulk `World.Clear` 有意保留的 version-invalid hierarchy entry 不属于 live relation，不报错。
 
 ## 入口
@@ -55,5 +55,5 @@ updated: 2026-07-22
 - `Signature` 类型没有 `[i]` 索引器，需要使用 `.AsSpan()` 才能按索引访问
 - `Position`/`Velocity` 等测试组件在各测试文件中各自定义为 `file readonly record struct`，不是共享的
 - `WorldValidator` 检测 pending 保留时使用 `EntitySlotCount > occupied + freeCount` 发出 Warning 而非 Error（因为有保留是合法状态）
-- `WorldDigest.Total` 包含 `PerArchetype` 物理 row-order hash；batch destroy 与普通 loop 可能得到相同 logical state / free-list / component values 但不同 dense storage row order。比较 layout-independent 世界态时用 `World.CanonicalChecksum()` + `WorldDiff.Compare()`，或只比较 `WorldDigest` 的 Occupancy/FreeList/Hierarchy/PerComponent 域。
+- `WorldDigest.Total` 包含 `PerArchetype` 物理 row-order hash；batch destroy 与普通 loop 可能得到相同 entity state / free-list / component values 但不同 dense storage row order。精确比较 v5 persistence state 可用 `World.CanonicalChecksum()`；它会忽略 row order/CLR padding，但仍观察 chunk capacity、empty archetypes、全部 slots 和 free-list 顺序。若这些持久化细节允许不同，应使用 `WorldDiff.Compare()` 与所需的 Occupancy/FreeList/Hierarchy/PerComponent 域，不要把 canonical hash 当成纯业务逻辑 hash。
 - `WorldDigestResult` 与 `ComponentInfo` 的 byte-array getter 每次返回副本；Diagnostics 本就不是热路径，不要缓存并期待引用相等，按内容比较。

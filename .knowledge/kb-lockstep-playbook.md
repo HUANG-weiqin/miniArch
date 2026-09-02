@@ -2,7 +2,7 @@
 title: Lockstep Playbook
 module: Meta
 description: End-to-end guide for implementing lockstep multiplayer on miniArch — from recording commands to peer synchronization and divergence detection
-updated: 2026-07-09
+updated: 2026-09-02
 ---
 # Lockstep Playbook
 
@@ -87,8 +87,9 @@ stream.DeferredEntities = true;  // Create() 返回 placeholder Entity(-1, seq)
 
 | 场景 | API | 详见 |
 |------|-----|------|
-| 同 delta 序列的 peer 间校验（标准 lockstep） | `world.Checksum()` | `kb-snapshot-persistence.md` Checksum 段 |
-| 不同构造路径的 world 间校验 | `world.CanonicalChecksum()` | `kb-snapshot-persistence.md` Checksum 段 |
+| 同 delta 序列的 peer 间校验（标准 lockstep rollback 投影） | `world.Checksum()` | `kb-snapshot-persistence.md` Checksum 段 |
+| 应具有精确 v5 persistence state 的 world 间校验 | `world.CanonicalChecksum()` | 同上；包含 chunk capacity、empty archetypes、全部 slots 与 free-list 顺序 |
+| 只要求业务 entity 等价，允许持久化细节不同 | `WorldDiff.Compare()` + 所需 domain digest | `kb-ecs-diagnostics.md` |
 
 ## 尚未解决的网络问题（OUT OF SCOPE）
 

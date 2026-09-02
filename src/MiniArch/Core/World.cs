@@ -1498,23 +1498,19 @@ public sealed partial class World : IDisposable
     private readonly record struct CloneWork(Entity Source, Entity CloneEntity);
 
     /// <summary>
-    /// Computes a SHA-256 checksum of live entity state.
-    /// Hashes non-empty archetypes in signature-sorted order; entity IDs are
-    /// sorted within each archetype. Does NOT include empty archetypes or
-    /// free-list state. Stable across peers driven by the same delta sequence.
-    /// For cross-path comparison, use <see cref="CanonicalChecksum"/>.
-    /// Returns 32 raw bytes; use
+    /// Computes the legacy SHA-256 lockstep projection of live entity state.
+    /// It excludes chunk capacity, empty archetypes, and free-list state, so it
+    /// is suitable for rollback parity where those persistence details may
+    /// differ. Returns 32 raw bytes; use
     /// <c>Convert.ToHexString(world.Checksum())</c> for a hex string.
     /// </summary>
     public byte[] Checksum() => Core.WorldSnapshot.ComputeChecksum(this);
 
     /// <summary>
-    /// Computes a canonical SHA-256 checksum that is identical for any two
-    /// worlds with the same logical state, regardless of how they were built
-    /// (replay, snapshot-load, manual construction, or Clone). Sorts all
-    /// entities globally by Id, includes free-list entries. Slower than
-    /// <see cref="Checksum"/>; use for comparing worlds from different
-    /// construction paths (e.g. client snapshot vs server live state).
+    /// Computes SHA-256 over the exact canonical version-5 snapshot payload,
+    /// excluding its CRC32 trailer. It includes chunk capacity, slot versions,
+    /// empty archetypes, hierarchy, and ordered free-list state; two worlds
+    /// match exactly when their canonical persistence payloads match.
     /// </summary>
     public byte[] CanonicalChecksum() => Core.WorldSnapshot.ComputeCanonicalChecksum(this);
 
@@ -1584,39 +1580,16 @@ public sealed partial class World : IDisposable
         _records[entity.Id].RowIndex = rowIndex;
     }
 
-    internal void WriteFreeList(System.IO.BinaryWriter writer)
+    internal void SetSnapshotFreeList(ReadOnlySpan<int> entityIds)
     {
-        writer.Write(_freeIdCount);
-        for (var i = 0; i < _freeIdCount; i++)
+        if (_freeIds.Length < entityIds.Length)
+            Array.Resize(ref _freeIds, entityIds.Length);
+        for (var index = 0; index < entityIds.Length; index++)
         {
-            writer.Write(_freeIds[i].Id);
-            writer.Write(_freeIds[i].Version);
+            var id = entityIds[index];
+            _freeIds[index] = new RecycledEntity(id, _records[id].Version);
         }
-    }
-
-    internal void ReadFreeList(System.IO.BinaryReader reader)
-    {
-        var freeIdCount = reader.ReadInt32();
-        if (freeIdCount < 0 || freeIdCount > _entitySlotCount)
-        {
-            throw new System.IO.InvalidDataException(
-                $"Snapshot free-list count ({freeIdCount}) is out of range [0, {_entitySlotCount}].");
-        }
-
-        if (_freeIds.Length < freeIdCount)
-            Array.Resize(ref _freeIds, freeIdCount);
-        for (var i = 0; i < freeIdCount; i++)
-        {
-            var id = reader.ReadInt32();
-            var version = reader.ReadInt32();
-            if ((uint)id >= (uint)_entitySlotCount)
-                throw new System.IO.InvalidDataException(
-                    $"Corrupt snapshot: free-list entity id {id} is out of range " +
-                    $"(entity slot count: {_entitySlotCount}).");
-            _freeIds[i] = new RecycledEntity(id, version);
-        }
-
-        _freeIdCount = freeIdCount;
+        _freeIdCount = entityIds.Length;
     }
 
     internal void CopyFreeIdsFrom(World source)

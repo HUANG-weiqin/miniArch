@@ -1,4 +1,6 @@
+using System.Buffers.Binary;
 using System.IO;
+using System.IO.Hashing;
 using System.Text;
 using MiniArch;
 using MiniArch.Core;
@@ -34,6 +36,35 @@ public sealed class HardeningEdgeCaseTests
             bytes.Add(b);
         } while (v != 0);
         return bytes.ToArray();
+    }
+
+    private static byte[] BuildV5Snapshot(
+        int chunkCapacity,
+        int slotCount,
+        int schemaCount,
+        int archetypeCount,
+        int hierarchyCount,
+        Action<BinaryWriter>? writePayload = null)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
+        writer.Write(0x4D415243);
+        writer.Write(5);
+        writer.Write(chunkCapacity);
+        writer.Write(slotCount);
+        writer.Write(schemaCount);
+        writer.Write(archetypeCount);
+        writer.Write(hierarchyCount);
+        writePayload?.Invoke(writer);
+        writer.Flush();
+
+        var headerAndPayload = stream.ToArray();
+        var snapshot = new byte[headerAndPayload.Length + sizeof(uint)];
+        headerAndPayload.CopyTo(snapshot, 0);
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            snapshot.AsSpan(headerAndPayload.Length),
+            Crc32.HashToUInt32(headerAndPayload));
+        return snapshot;
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -272,24 +303,15 @@ public sealed class HardeningEdgeCaseTests
     /// A malicious snapshot with entitySlotCount beyond the 256M limit must
     /// be rejected before allocating the slot-versions array (~1 GB / 256M).
     ///
-    /// Constructs a minimal v3 snapshot (no CRC) with slotCount = 300M.
+    /// Constructs a minimal v5 snapshot with a valid CRC and slotCount = 300M.
     /// </summary>
     [Fact]
     public void SnapshotLoad_rejects_entity_slot_count_over_256M()
     {
-        using var ms = new MemoryStream();
-        using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
-        writer.Write(0x4D415243); // magic
-        writer.Write(3);          // v3 (no CRC, simpler to construct)
-        writer.Write(16);         // chunkCapacity
-        writer.Write(300_000_001);// entitySlotCount > 256M limit → must be rejected
-        writer.Write(0);          // schemaCount
-        writer.Write(0);          // archetypeCount
-        writer.Write(0);          // hierarchyLinkCount
-        writer.Flush();
+        var snapshot = BuildV5Snapshot(16, 300_000_001, 0, 0, 0);
 
-        ms.Position = 0;
-        var ex = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(ms));
+        var ex = Assert.Throws<InvalidDataException>(
+            () => WorldSnapshot.Load(new MemoryStream(snapshot, writable: false)));
         Assert.Contains("out of range", ex.Message);
         Assert.Contains("300000001", ex.Message);
     }
@@ -300,19 +322,10 @@ public sealed class HardeningEdgeCaseTests
     [Fact]
     public void SnapshotLoad_rejects_negative_entity_slot_count()
     {
-        using var ms = new MemoryStream();
-        using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
-        writer.Write(0x4D415243); // magic
-        writer.Write(3);          // v3
-        writer.Write(16);         // chunkCapacity
-        writer.Write(-1);         // entitySlotCount < 0 → rejected
-        writer.Write(0);          // schemaCount
-        writer.Write(0);          // archetypeCount
-        writer.Write(0);          // hierarchyLinkCount
-        writer.Flush();
+        var snapshot = BuildV5Snapshot(16, -1, 0, 0, 0);
 
-        ms.Position = 0;
-        var ex = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(ms));
+        var ex = Assert.Throws<InvalidDataException>(
+            () => WorldSnapshot.Load(new MemoryStream(snapshot, writable: false)));
         Assert.Contains("out of range", ex.Message);
     }
 
@@ -323,22 +336,14 @@ public sealed class HardeningEdgeCaseTests
     [Fact]
     public void SnapshotLoad_accepts_reasonable_slot_count()
     {
-        using var ms = new MemoryStream();
-        using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
-        writer.Write(0x4D415243); // magic
-        writer.Write(3);          // v3
-        writer.Write(16);         // chunkCapacity
-        writer.Write(8);          // entitySlotCount = 8 (reasonable)
-        writer.Write(0);          // schemaCount
-        writer.Write(0);          // archetypeCount
-        writer.Write(0);          // hierarchyLinkCount
-        for (var i = 0; i < 8; i++) writer.Write(1); // reserved slot versions
-        writer.Write(0);          // free list length
-        writer.Flush();
+        var snapshot = BuildV5Snapshot(16, 8, 0, 0, 0, writer =>
+        {
+            for (var index = 0; index < 8; index++)
+                writer.Write(1);
+            writer.Write(0);
+        });
 
-        ms.Position = 0;
-        var world = WorldSnapshot.Load(ms);
-        Assert.NotNull(world);
+        using var world = WorldSnapshot.Load(new MemoryStream(snapshot, writable: false));
         Assert.Equal(8, world.EntitySlotCount);
     }
 
@@ -356,7 +361,7 @@ public sealed class HardeningEdgeCaseTests
     {
         using var ms = new MemoryStream(new byte[] { 0x00, 0x00, 0x00, 0x00 });
         var ex = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(ms));
-        Assert.Contains("too short", ex.Message);
+        Assert.Contains("truncated", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -367,7 +372,7 @@ public sealed class HardeningEdgeCaseTests
     {
         using var ms = new MemoryStream();
         var ex = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(ms));
-        Assert.Contains("too short", ex.Message);
+        Assert.Contains("truncated", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -381,19 +386,10 @@ public sealed class HardeningEdgeCaseTests
     [Fact]
     public void SnapshotLoad_rejects_excessive_schema_count()
     {
-        using var ms = new MemoryStream();
-        using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
-        writer.Write(0x4D415243); // magic
-        writer.Write(3);          // v3
-        writer.Write(16);         // chunkCapacity
-        writer.Write(1);          // entitySlotCount = 1 (passes)
-        writer.Write(100_000);    // schemaCount > 65536 → rejected
-        writer.Write(0);          // archetypeCount
-        writer.Write(0);          // hierarchyLinkCount
-        writer.Flush();
+        var snapshot = BuildV5Snapshot(16, 1, 100_000, 0, 0);
 
-        ms.Position = 0;
-        var ex = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(ms));
+        var ex = Assert.Throws<InvalidDataException>(
+            () => WorldSnapshot.Load(new MemoryStream(snapshot, writable: false)));
         Assert.Contains("schema count", ex.Message);
     }
 
@@ -404,19 +400,10 @@ public sealed class HardeningEdgeCaseTests
     [Fact]
     public void SnapshotLoad_rejects_excessive_archetype_count()
     {
-        using var ms = new MemoryStream();
-        using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
-        writer.Write(0x4D415243); // magic
-        writer.Write(3);          // v3
-        writer.Write(16);         // chunkCapacity
-        writer.Write(1);          // entitySlotCount = 1 (passes)
-        writer.Write(0);          // schemaCount
-        writer.Write(300_000);    // archetypeCount > 262144 → rejected
-        writer.Write(0);          // hierarchyLinkCount
-        writer.Flush();
+        var snapshot = BuildV5Snapshot(16, 1, 0, 300_000, 0);
 
-        ms.Position = 0;
-        var ex = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(ms));
+        var ex = Assert.Throws<InvalidDataException>(
+            () => WorldSnapshot.Load(new MemoryStream(snapshot, writable: false)));
         Assert.Contains("archetype count", ex.Message);
     }
 
@@ -427,20 +414,11 @@ public sealed class HardeningEdgeCaseTests
     [Fact]
     public void SnapshotLoad_rejects_excessive_hierarchy_link_count()
     {
-        using var ms = new MemoryStream();
-        using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
-        writer.Write(0x4D415243); // magic
-        writer.Write(3);          // v3
-        writer.Write(16);         // chunkCapacity
-        writer.Write(8);          // entitySlotCount = 8 (passes)
-        writer.Write(0);          // schemaCount
-        writer.Write(0);          // archetypeCount
-        writer.Write(9);          // hierarchyLinkCount > 8 → rejected
-        writer.Flush();
+        var snapshot = BuildV5Snapshot(16, 8, 0, 0, 9);
 
-        ms.Position = 0;
-        var ex = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(ms));
-        Assert.Contains("hierarchy link count", ex.Message);
+        var ex = Assert.Throws<InvalidDataException>(
+            () => WorldSnapshot.Load(new MemoryStream(snapshot, writable: false)));
+        Assert.Contains("hierarchy count", ex.Message);
     }
 
     /// <summary>
@@ -449,19 +427,10 @@ public sealed class HardeningEdgeCaseTests
     [Fact]
     public void SnapshotLoad_rejects_negative_metadata_counts()
     {
-        using var ms = new MemoryStream();
-        using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
-        writer.Write(0x4D415243); // magic
-        writer.Write(3);          // v3
-        writer.Write(16);         // chunkCapacity
-        writer.Write(1);          // entitySlotCount = 1 (passes)
-        writer.Write(-1);         // schemaCount < 0 → rejected
-        writer.Write(-1);         // archetypeCount < 0 → rejected
-        writer.Write(-1);         // hierarchyLinkCount < 0 → rejected
-        writer.Flush();
+        var snapshot = BuildV5Snapshot(16, 1, -1, -1, -1);
 
-        ms.Position = 0;
-        var ex = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(ms));
+        var ex = Assert.Throws<InvalidDataException>(
+            () => WorldSnapshot.Load(new MemoryStream(snapshot, writable: false)));
         Assert.Contains("out of range", ex.Message);
     }
 

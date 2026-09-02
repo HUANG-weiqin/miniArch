@@ -1,7 +1,12 @@
+using System.Buffers.Binary;
+using System.Diagnostics;
 using System.IO;
-using System.Runtime.ExceptionServices;
+using System.IO.Hashing;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
-using System.Threading;
 using MiniArch;
 using MiniArch.Core;
 using MiniArch.Tests.Core.TestSupport;
@@ -15,9 +20,71 @@ public sealed class WorldSnapshotTests
     private readonly record struct Health(int Value);
     private readonly record struct ManagedReferenceComponent(string Name);
     private readonly record struct PartialMutationComponent(int Value);
+    private readonly record struct NestedPayload(short Count, long Total);
+    private readonly record struct NestedComponent(byte Kind, NestedPayload Payload);
+    private readonly record struct InlineArrayComponent(IntInlineArray Values);
+    private readonly record struct RegistrationOrderA(int Value);
+    private readonly record struct RegistrationOrderB(long Value);
+    private readonly record struct FloatingPointComponent(float Single, double Double);
 
-    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Auto)]
+    private enum SnapshotMode : short
+    {
+        Disabled = 0,
+        Active = 7,
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PaddedComponent
+    {
+        public byte Tag;
+        public int Value;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeBoolComponent
+    {
+        public bool Enabled;
+        public byte Marker;
+    }
+
+    [InlineArray(3)]
+    private struct IntInlineArray
+    {
+        public int _element0;
+    }
+
+    private unsafe struct FixedBufferComponent
+    {
+        public int Count;
+        public fixed short Values[3];
+    }
+
+    private unsafe struct PointerComponent
+    {
+        public int* Value;
+    }
+
+    private struct NativeIntegerComponent
+    {
+        public IntPtr Signed;
+        public UIntPtr Unsigned;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    private struct OverlappingUnionComponent
+    {
+        [FieldOffset(0)] public int Integer;
+        [FieldOffset(0)] public float Single;
+    }
+
+    [StructLayout(LayoutKind.Auto)]
     private struct AutoLayoutComponent
+    {
+        public int Value;
+    }
+
+    [StructLayout(LayoutKind.Auto)]
+    private struct AutoLayoutLoadComponent
     {
         public int Value;
     }
@@ -271,39 +338,23 @@ public sealed class WorldSnapshotTests
     }
 
     [Fact]
-    public void Save_load_preserves_archetype_signature_order()
+    public void Save_writes_schema_identities_and_archetype_indices_in_ordinal_order()
     {
-        // Query iteration order = archetype signature order (sorted by
-        // ComponentType.Value), not creation order. Save→Load must preserve
-        // this sorted order.
-        var world = new World();
-
-        // Create archetypes in non-sorted order. After sorted insertion,
-        // they'll be in signature order regardless of creation sequence.
+        using var world = new World();
         world.Create(new Position(10, 20), new Health(100));
         world.Create(new Position(30, 40), new Velocity(1, 2));
 
-        // Record original archetype signatures in query iteration order.
-        var desc = new QueryDescription().With<Position>();
-        var originalChunks = world.Query(in desc).GetChunks();
-        var originalCount = originalChunks.Length;
+        var layout = ParseV5Snapshot(SaveToBytes(world));
+        var identities = layout.Schemas.Select(schema => schema.Identity).ToArray();
 
-        using var stream = new MemoryStream();
-        WorldSnapshot.Save(stream, world);
-        stream.Position = 0;
-        var loaded = WorldSnapshot.Load(stream);
-
-        var loadedChunks = loaded.Query(in desc).GetChunks();
-        Assert.Equal(originalCount, loadedChunks.Length);
-
-        // Each chunk's Archetype.Signature must match in order.
-        for (var i = 0; i < originalCount; i++)
+        Assert.Equal(identities.OrderBy(identity => identity, StringComparer.Ordinal), identities);
+        Assert.All(layout.Archetypes, archetype =>
         {
-            var origSig = originalChunks[i].Archetype.Signature.AsSpan();
-            var loadedSig = loadedChunks[i].Archetype.Signature.AsSpan();
-            Assert.True(origSig.SequenceEqual(loadedSig),
-                $"Archetype at index {i} differs after Save→Load.");
-        }
+            var schemaIndices = archetype.SchemaIndexOffsets
+                .Select(offset => ReadInt32(layout.Bytes, offset))
+                .ToArray();
+            Assert.Equal(schemaIndices.Order(), schemaIndices);
+        });
     }
 
     [Fact]
@@ -467,8 +518,8 @@ public sealed class WorldSnapshotTests
     [Fact]
     public void CanonicalChecksum_matches_across_save_load_round_trip()
     {
-        // The canonical hash is the right tool for comparing worlds that arrived at
-        // the same logical state via different construction paths (live vs loaded).
+        // Load reconstructs the exact v5 persistence state, so the live and loaded
+        // worlds must have the same canonical payload hash.
         var world = new World();
         var e0 = world.CreateEmpty(); world.Add(e0, new Position(1, 2));
         var e1 = world.CreateEmpty(); world.Add(e1, new Velocity(3, 4));
@@ -486,41 +537,27 @@ public sealed class WorldSnapshotTests
     }
 
     [Fact]
-    public void CanonicalChecksum_detects_free_list_divergence_ignored_by_checksum()
+    public void CanonicalChecksum_detects_free_list_order_ignored_by_checksum()
     {
-        // Hardening target (commit 8f1d517): two worlds with identical live
-        // entities/components/hierarchy but different free lists must hash
-        // differently under CanonicalChecksum. Plain Checksum() only sees
-        // slot-count + per-slot version, so two slot-compatible layouts with
-        // divergent free lists produce the same Checksum but must diverge
-        // under CanonicalChecksum (which appends every (id,version) free slot).
-        var a = new World();
-        var b = new World();
+        using var a = new World();
+        using var b = new World();
 
-        // Both worlds arrive at the same live state: one Position entity at id 0.
         a.Create(new Position(1, 2));
         b.Create(new Position(1, 2));
-
-        // Now diverge their free lists while keeping live state identical.
-        // World A: create id 1 then destroy it  —free list [1(v2)], slot count 2
-        // World B: create ids 1,2 then destroy both —free list [2(v2),1(v2)], slot count 3
-        // In both worlds the only alive entity is id 0 with Position(1,2), so
-        // live-state hashes must agree —but canonical (with free list) must not.
         var a1 = a.Create(new Velocity(0, 0));
-        a.Destroy(a1);
-
+        var a2 = a.Create(new Health(0));
         var b1 = b.Create(new Velocity(0, 0));
         var b2 = b.Create(new Health(0));
-        b.Destroy(b1);
+
+        // Slot versions, schemas, archetypes, and live state remain identical;
+        // only the order of otherwise identical free-list entries differs.
+        a.Destroy(a1);
+        a.Destroy(a2);
         b.Destroy(b2);
+        b.Destroy(b1);
 
-        // Sanity: identical live state.
-        Assert.Equal(1, a.EntityCount);
-        Assert.Equal(1, b.EntityCount);
-
-        var canonicalA = a.CanonicalChecksum();
-        var canonicalB = b.CanonicalChecksum();
-        Assert.NotEqual(canonicalA, canonicalB);
+        Assert.Equal(a.Checksum(), b.Checksum());
+        Assert.NotEqual(a.CanonicalChecksum(), b.CanonicalChecksum());
     }
 
     [Fact]
@@ -1160,171 +1197,289 @@ public sealed class WorldSnapshotTests
         Assert.Equal(0, allocated);
     }
 
-    // ══════════════════════════════════════════════════════════?
-    // CRC32 integrity (v4 format)
-    // ══════════════════════════════════════════════════════════?
+    // ══════════════════════════════════════════════════════════
+    // Canonical field wire format (v5)
+    // ══════════════════════════════════════════════════════════
 
     [Fact]
-    public void V4_snapshot_round_trip_preserves_checksum()
+    public void V5_snapshot_round_trip_preserves_checksum_and_header_integrity()
     {
-        var world = new World();
+        using var world = new World();
         world.Create(new Position(10, 20));
         world.Create(new Velocity(1, 2));
 
-        using var stream = new MemoryStream();
-        WorldSnapshot.Save(stream, world);
-        stream.Position = 0;
+        var bytes = SaveToBytes(world);
+        Assert.Equal(0x4D415243, ReadInt32(bytes, 0));
+        Assert.Equal(5, ReadInt32(bytes, 4));
+        Assert.Equal(
+            Crc32.HashToUInt32(bytes.AsSpan(0, bytes.Length - sizeof(uint))),
+            BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(bytes.Length - sizeof(uint))));
+        Assert.Equal(
+            SHA256.HashData(bytes.AsSpan(0, bytes.Length - sizeof(uint))),
+            world.CanonicalChecksum());
 
-        var loaded = WorldSnapshot.Load(stream);
+        using var loaded = WorldSnapshot.Load(new MemoryStream(bytes, writable: false));
         Assert.Equal(world.CanonicalChecksum(), loaded.CanonicalChecksum());
+        Assert.Equal(bytes, SaveToBytes(loaded));
     }
 
     [Fact]
-    public void V4_corrupted_snapshot_throws_InvalidDataException()
+    public void V5_primitive_payload_is_little_endian_and_preserves_floating_point_bits()
     {
-        var world = new World();
+        const int x = 0x01020304;
+        const int y = 0x11121314;
+        const int singleBits = unchecked((int)0x7FC12345u);
+        const long doubleBits = unchecked((long)0xFFF8000000001234UL);
+
+        using var world = new World();
+        var entity = world.Create(
+            new Position(x, y),
+            new FloatingPointComponent(
+                BitConverter.Int32BitsToSingle(singleBits),
+                BitConverter.Int64BitsToDouble(doubleBits)));
+        var bytes = SaveToBytes(world);
+        var layout = ParseV5Snapshot(bytes);
+        var columns = layout.Archetypes.SelectMany(archetype => archetype.Columns).ToArray();
+        var position = Assert.Single(columns, column => column.ComponentType == typeof(Position));
+        var floatingPoint = Assert.Single(columns, column => column.ComponentType == typeof(FloatingPointComponent));
+
+        Assert.Equal(
+            new byte[] { 0x04, 0x03, 0x02, 0x01, 0x14, 0x13, 0x12, 0x11 },
+            bytes.AsSpan(position.PayloadOffset, position.PayloadLength).ToArray());
+        Assert.Equal(
+            new byte[] { 0x34, 0x12, 0x00, 0x00, 0x00, 0x00, 0xF8, 0xFF, 0x45, 0x23, 0xC1, 0x7F },
+            bytes.AsSpan(floatingPoint.PayloadOffset, floatingPoint.PayloadLength).ToArray());
+
+        using var loaded = WorldSnapshot.Load(new MemoryStream(bytes, writable: false));
+        var restored = GetComponent<FloatingPointComponent>(loaded, entity);
+        Assert.Equal(singleBits, BitConverter.SingleToInt32Bits(restored.Single));
+        Assert.Equal(doubleBits, BitConverter.DoubleToInt64Bits(restored.Double));
+    }
+
+    [Fact]
+    public void V5_corrupted_snapshot_throws_InvalidDataException()
+    {
+        using var world = new World();
         world.Create(new Position(10, 20));
+        var bytes = SaveToBytes(world);
+        bytes[12] ^= 0x01;
 
-        using var stream = new MemoryStream();
-        WorldSnapshot.Save(stream, world);
-        var bytes = stream.ToArray();
+        var exception = Assert.Throws<InvalidDataException>(
+            () => WorldSnapshot.Load(new MemoryStream(bytes, writable: false)));
+        Assert.Contains("CRC", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
 
-        // Flip a byte in the body (after header, before CRC)
-        var bodyOffset = 8; // magic(4) + version(4)
-        bytes[bodyOffset + 4] ^= 0xFF;
+    [Theory]
+    [InlineData(3)]
+    [InlineData(4)]
+    public void Legacy_snapshot_versions_are_explicitly_rejected(int version)
+    {
+        using var world = new World();
+        var bytes = SaveToBytes(world);
+        WriteInt32(bytes, 4, version);
+        RewriteCrc(bytes);
 
-        using var corrupted = new MemoryStream(bytes);
-        var ex = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(corrupted));
-        Assert.Contains("CRC mismatch", ex.Message);
+        var exception = Assert.Throws<InvalidDataException>(
+            () => WorldSnapshot.Load(new MemoryStream(bytes, writable: false)));
+        Assert.Contains("version", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void V3_snapshot_without_CRC_loads_successfully()
+    public void V5_save_ignores_poisoned_clr_padding_and_round_trip_is_byte_idempotent()
     {
-        // Build a minimal v3 snapshot: [magic:4][version=3:4][body...]
-        // body contains: chunkCapacity=16, entitySlotCount=4, schemaCount=0,
-        // archetypeCount=0, hierarchyLinkCount=0, slotVersions(4x1)
-        // + empty free list (0 length).
-        using var ms = new MemoryStream();
-        using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
-        writer.Write(0x4D415243); // magic
-        writer.Write(3); // v3 (no CRC)
-        writer.Write(16); // chunkCapacity
-        writer.Write(4);  // entitySlotCount
-        writer.Write(0);  // schemaCount
-        writer.Write(0);  // archetypeCount
-        writer.Write(0);  // hierarchyLinkCount
-        for (var i = 0; i < 4; i++) writer.Write(1); // reserved slot versions
-        writer.Write(0);  // free list length
-        writer.Flush();
+        Assert.True(
+            Unsafe.SizeOf<PaddedComponent>() > sizeof(byte) + sizeof(int),
+            "The regression component must contain CLR padding.");
 
-        ms.Position = 0;
-        var world = WorldSnapshot.Load(ms);
-        Assert.NotNull(world);
-        Assert.Equal(4, world.EntitySlotCount);
+        using var first = new World();
+        using var second = new World();
+        var firstEntity = first.Create(new PaddedComponent { Tag = 7, Value = 123456 });
+        var secondEntity = second.Create(new PaddedComponent { Tag = 7, Value = 123456 });
+        PoisonPaddedComponent(first, firstEntity, 0xA5);
+        PoisonPaddedComponent(second, secondEntity, 0x5A);
+
+        Assert.Equal(GetComponent<PaddedComponent>(first, firstEntity).Value,
+            GetComponent<PaddedComponent>(second, secondEntity).Value);
+        Assert.NotEqual(GetRawComponentBytes<PaddedComponent>(first, firstEntity),
+            GetRawComponentBytes<PaddedComponent>(second, secondEntity));
+
+        var firstBytes = SaveToBytes(first);
+        var secondBytes = SaveToBytes(second);
+        Assert.Equal(firstBytes, secondBytes);
+        Assert.Equal(first.CanonicalChecksum(), second.CanonicalChecksum());
+
+        using var loaded = WorldSnapshot.Load(new MemoryStream(firstBytes, writable: false));
+        var component = GetComponent<PaddedComponent>(loaded, firstEntity);
+        Assert.Equal((byte)7, component.Tag);
+        Assert.Equal(123456, component.Value);
+        Assert.Equal(firstBytes, SaveToBytes(loaded));
     }
 
-    // ───────────────────────────────────────────────────────────────────
-    // Zero-allocation: Task 7 (SpanFeeder delegate -> ISpanFeeder struct)
-    // ───────────────────────────────────────────────────────────────────
-    //
-    // Task 7 replaced `internal delegate void SpanFeeder(ReadOnlySpan<byte>)`
-    // with a struct interface `ISpanFeeder` + generic `where TFeeder:struct`
-    // methods taking `ref TFeeder`. Before Task 7, every FeedColumnData /
-    // FeedRowData caller in ComputeChecksum / ComputeCanonicalChecksum passed
-    // `span => hash.AppendData(span)`, a closure that captured the
-    // IncrementalHash on the heap each call — i.e. one allocation per
-    // component column per archetype per checksum. The struct rewrite removes
-    // that allocation from the inner feeding loop.
-    //
-    // NOTE on scope: this makes the *per-column/per-row feeding path* zero
-    // alloc. The full ComputeChecksum/ComputeCanonicalChecksum methods still
-    // carry fixed per-call overhead (entity-id sort buffer, relations list)
-    // that does NOT scale with component data volume. The two tests below
-    // verify the inner-loop fix directly and prove allocation is independent
-    // of column count.
-
-    /// <summary>
-    /// FeedColumnData with a struct ISpanFeeder allocates zero bytes,
-    /// regardless of row count. This is the exact path Task 7 rewrote.
-    /// Asserts the literal inner-loop invariant.
-    /// </summary>
     [Fact]
-    public void FeedColumnData_with_struct_feeder_is_zero_alloc()
+    public unsafe void V5_round_trip_preserves_enum_nested_fixed_buffer_and_inline_array_fields()
     {
-        RunOnDedicatedThread(() =>
+        var inline = new IntInlineArray();
+        inline[0] = 11;
+        inline[1] = 22;
+        inline[2] = 33;
+        var fixedBuffer = new FixedBufferComponent { Count = 3 };
+        fixedBuffer.Values[0] = -4;
+        fixedBuffer.Values[1] = 5;
+        fixedBuffer.Values[2] = 6;
+
+        using var world = new World();
+        var entity = world.Create(
+            SnapshotMode.Active,
+            new NestedComponent(9, new NestedPayload(12, 3456789)),
+            fixedBuffer,
+            new InlineArrayComponent(inline));
+        var bytes = SaveToBytes(world);
+
+        using var loaded = WorldSnapshot.Load(new MemoryStream(bytes, writable: false));
+        Assert.Equal(SnapshotMode.Active, GetComponent<SnapshotMode>(loaded, entity));
+        Assert.Equal(
+            new NestedComponent(9, new NestedPayload(12, 3456789)),
+            GetComponent<NestedComponent>(loaded, entity));
+        var loadedFixed = GetComponent<FixedBufferComponent>(loaded, entity);
+        Assert.Equal(3, loadedFixed.Count);
+        Assert.Equal((short)-4, loadedFixed.Values[0]);
+        Assert.Equal((short)5, loadedFixed.Values[1]);
+        Assert.Equal((short)6, loadedFixed.Values[2]);
+        var loadedInline = GetComponent<InlineArrayComponent>(loaded, entity).Values;
+        Assert.Equal(11, loadedInline[0]);
+        Assert.Equal(22, loadedInline[1]);
+        Assert.Equal(33, loadedInline[2]);
+        Assert.Equal(bytes, SaveToBytes(loaded));
+    }
+
+    [Fact]
+    public void V5_save_normalizes_native_bool_storage_and_load_rejects_noncanonical_bool()
+    {
+        using var world = new World();
+        var entity = world.Create(new NativeBoolComponent { Enabled = true, Marker = 42 });
+        SetRawComponentByte<NativeBoolComponent>(world, entity, 0, 0x02);
+
+        var bytes = SaveToBytes(world);
+        var layout = ParseV5Snapshot(bytes);
+        var boolColumn = layout.Archetypes.SelectMany(archetype => archetype.Columns)
+            .Single(column => column.ComponentType == typeof(NativeBoolComponent));
+        Assert.Equal(1, bytes[boolColumn.PayloadOffset]);
+
+        using var loaded = WorldSnapshot.Load(new MemoryStream(bytes, writable: false));
+        var component = GetComponent<NativeBoolComponent>(loaded, entity);
+        Assert.True(component.Enabled);
+        Assert.Equal((byte)42, component.Marker);
+
+        bytes[boolColumn.PayloadOffset] = 2;
+        RewriteCrc(bytes);
+        _ = Assert.Throws<InvalidDataException>(
+            () => WorldSnapshot.Load(new MemoryStream(bytes, writable: false)));
+    }
+
+    [Fact]
+    public void Unsupported_component_shapes_fail_before_snapshot_bytes_are_published()
+    {
+        if (Environment.GetEnvironmentVariable(UnsupportedProbeEnvironmentVariable) is not null)
+            return;
+
+        foreach (var mode in new[] { "Pointer", "NativeInteger", "OverlappingUnion", "AutoLayout" })
+            RunUnsupportedComponentProbe(mode);
+    }
+
+    [Fact]
+    public unsafe void Unsupported_component_shape_probe()
+    {
+        var mode = Environment.GetEnvironmentVariable(UnsupportedProbeEnvironmentVariable);
+        if (mode is null)
+            return;
+
+        switch (mode)
         {
-            var world = new World();
-            for (var i = 0; i < 256; i++)
-                world.Create(new Position(i, i + 1));
-
-            var arch = world.Archetypes[0];
-            var feeder = new NoOpFeeder();
-
-            // Warmup (resolve JIT / method-table for the generic specialization).
-            arch.FeedColumnData(0, 256, ref feeder);
-
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
-
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            arch.FeedColumnData(0, 256, ref feeder);
-            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-            Assert.Equal(0, allocated);
-        });
+            case "Pointer":
+                AssertSaveNotSupported(new PointerComponent { Value = null });
+                break;
+            case "NativeInteger":
+                AssertSaveNotSupported(new NativeIntegerComponent
+                {
+                    Signed = new IntPtr(1),
+                    Unsigned = new UIntPtr(2),
+                });
+                break;
+            case "OverlappingUnion":
+                AssertSaveNotSupported(new OverlappingUnionComponent { Integer = 1 });
+                break;
+            case "AutoLayout":
+                using (var world = new World())
+                {
+                    _ = Assert.Throws<NotSupportedException>(
+                        () => world.Create(new AutoLayoutComponent { Value = 1 }));
+                }
+                break;
+            default:
+                throw new InvalidOperationException($"Unknown unsupported-component probe mode '{mode}'.");
+        }
     }
 
-    /// <summary>
-    /// End-to-end proof that Task 7 removed per-COLUMN allocation: two worlds
-    /// with identical entity/relation counts but different component-column
-    /// counts (1 vs 3) must allocate the same number of bytes in
-    /// ComputeCanonicalChecksum. If the closure had returned, the 3-column
-    /// world would allocate ~2 extra delegate captures.
-    /// </summary>
     [Fact]
-    public void ComputeCanonicalChecksum_allocation_does_not_scale_with_column_count()
+    public void Fresh_process_registration_order_produces_identical_v5_bytes_and_checksum()
     {
-        RunOnDedicatedThread(() =>
+        if (Environment.GetEnvironmentVariable(ProbeModeEnvironmentVariable) is not null)
+            return;
+
+        var directory = Path.Combine(Path.GetTempPath(), $"MiniArchSnapshot-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
         {
-            var worldA = new World();
-            for (var i = 0; i < 100; i++)
-                worldA.Create(new Position(i, i));              // 1 column
+            var ab = Path.Combine(directory, "ab.bin");
+            var ba = Path.Combine(directory, "ba.bin");
+            RunRegistrationOrderProbe("AB", ab);
+            RunRegistrationOrderProbe("BA", ba);
 
-            var worldB = new World();
-            for (var i = 0; i < 100; i++)
-                worldB.Create(new Position(i, i),               // 3 columns
-                              new Velocity(i, i),
-                              new Health(i));
+            Assert.Equal(File.ReadAllBytes(ab), File.ReadAllBytes(ba));
+            Assert.Equal(File.ReadAllBytes(ab + ".sha256"), File.ReadAllBytes(ba + ".sha256"));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
 
-            // Warmup both (resolve column codecs, JIT the generic feeders).
-            worldA.CanonicalChecksum();
-            worldB.CanonicalChecksum();
+    [Fact]
+    public void Fresh_process_registration_order_probe()
+    {
+        var mode = Environment.GetEnvironmentVariable(ProbeModeEnvironmentVariable);
+        if (mode is null)
+            return;
 
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
+        var output = Environment.GetEnvironmentVariable(ProbeOutputEnvironmentVariable)
+            ?? throw new InvalidOperationException("Snapshot probe output path is missing.");
+        using (var registrationWorld = new World())
+        {
+            if (mode == "AB")
+            {
+                registrationWorld.Create(new RegistrationOrderA(1));
+                registrationWorld.Create(new RegistrationOrderB(2));
+            }
+            else if (mode == "BA")
+            {
+                registrationWorld.Create(new RegistrationOrderB(2));
+                registrationWorld.Create(new RegistrationOrderA(1));
+            }
+            else
+            {
+                throw new InvalidOperationException($"Unknown snapshot probe mode '{mode}'.");
+            }
+        }
 
-            var beforeA = GC.GetAllocatedBytesForCurrentThread();
-            worldA.CanonicalChecksum();
-            var allocA = GC.GetAllocatedBytesForCurrentThread() - beforeA;
+        using var world = new World(chunkCapacity: 2);
+        var parent = world.Create(new RegistrationOrderA(10), new RegistrationOrderB(20));
+        var child = world.Create(new RegistrationOrderA(30));
+        world.AddChild(parent, child);
+        var recycled = world.Create(new RegistrationOrderB(40));
+        world.Destroy(recycled);
 
-            var beforeB = GC.GetAllocatedBytesForCurrentThread();
-            worldB.CanonicalChecksum();
-            var allocB = GC.GetAllocatedBytesForCurrentThread() - beforeB;
-
-            // Fixed per-call overhead is identical (same entity count, same
-            // relation count). The only column-dependent allocation source
-            // was the pre-Task-7 closure. After Task 7 the difference is 0.
-            // Tolerance of 8 bytes absorbs any measurement granularity; a
-            // regression would add ~64 bytes (closure display class) per
-            // extra column, well above the tolerance.
-            var delta = allocB - allocA;
-            Assert.True(delta <= 8,
-                $"Per-column allocation regressed: 3-column checksum allocated {delta} bytes " +
-                $"more than 1-column (allocA={allocA}, allocB={allocB}). Expected ~0.");
-        });
+        File.WriteAllBytes(output, SaveToBytes(world));
+        File.WriteAllBytes(output + ".sha256", world.CanonicalChecksum());
     }
 
     // BUG REPROOF: CaptureState stores a non-chunked backup; if the archetype
@@ -1739,254 +1894,243 @@ public sealed class WorldSnapshotTests
     }
 
     [Fact]
-    public void Snapshot_load_rejects_class_schema_type_as_invalid_data()
+    public void Snapshot_load_rejects_unsupported_schema_types_as_invalid_data()
     {
-        var data = BuildV3SnapshotWithSchemaNames(typeof(string).AssemblyQualifiedName!);
-
-        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
-    }
-
-    [Fact]
-    public void Snapshot_load_rejects_managed_field_schema_type_as_invalid_data()
-    {
-        var data = BuildV3SnapshotWithSchemaNames(typeof(ManagedReferenceComponent).AssemblyQualifiedName!);
-
-        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
-    }
-
-    [Fact]
-    public void BUG_snapshot_load_rejects_auto_layout_before_registration()
-    {
-        var type = typeof(AutoLayoutComponent);
-        Assert.DoesNotContain(type, ComponentRegistry.Shared.GetRegisteredTypes());
-
-        var snapshot = BuildV3SnapshotWithRawArchetype(
-            writer =>
-            {
-                writer.Write(1); // component count
-                writer.Write(0); // schema index
-                writer.Write(0); // row count
-            },
-            type.AssemblyQualifiedName!);
-        _ = Assert.Throws<InvalidDataException>(
-            () => WorldSnapshot.Load(new MemoryStream(snapshot)));
-        Assert.DoesNotContain(type, ComponentRegistry.Shared.GetRegisteredTypes());
+        var shape = GetSchemaShape<int>();
+        foreach (var type in new[]
+                 {
+                     typeof(string),
+                     typeof(ManagedReferenceComponent),
+                     typeof(AutoLayoutLoadComponent),
+                 })
+        {
+            var data = BuildV5SnapshotWithSchemas([(type.AssemblyQualifiedName!, shape)]);
+            _ = Assert.Throws<InvalidDataException>(
+                () => WorldSnapshot.Load(new MemoryStream(data, writable: false)));
+        }
     }
 
     [Fact]
     public void Snapshot_load_rejects_duplicate_resolved_schema_type()
     {
-        var data = BuildV3SnapshotWithSchemaNames(
-            typeof(int).FullName!,
-            typeof(int).AssemblyQualifiedName!);
+        var shape = GetSchemaShape<int>();
+        var data = BuildV5SnapshotWithSchemas(
+        [
+            (typeof(int).FullName!, shape),
+            (typeof(int).AssemblyQualifiedName!, shape),
+        ]);
 
-        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+        _ = Assert.Throws<InvalidDataException>(
+            () => WorldSnapshot.Load(new MemoryStream(data, writable: false)));
     }
 
     [Fact]
     public void Snapshot_load_rejects_overlong_schema_name_without_large_allocation()
     {
-        var data = BuildV3SnapshotWithRawSchemaStringByteLength(1024 * 1024);
-
-        var ex = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
-        Assert.Contains("exceeds", ex.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void Snapshot_load_rejects_v3_trailing_bytes()
-    {
-        var data = BuildV3SnapshotWithSchemaNames();
-        var padded = data.Concat(new byte[] { 1, 2, 3 }).ToArray();
-
-        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(padded)));
-    }
-
-    [Fact]
-    public void Snapshot_load_rejects_non_positive_chunk_capacity_as_invalid_data()
-    {
-        var data = BuildV3Snapshot(chunkCapacity: 0);
-
-        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
-    }
-
-    [Fact]
-    public void BUG_snapshot_load_rejects_oversized_chunk_capacity_before_archetype_allocation()
-    {
-        using var stream = new MemoryStream();
-        using (var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true))
-        {
-            WriteV3SnapshotHeader(writer, schemaCount: 0, archetypeCount: 1, chunkCapacity: int.MaxValue);
-            writer.Write(0); // component count
-            writer.Write(0); // row count
-            writer.Write(0); // free list length
-        }
-
-        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-        var exception = Assert.Throws<InvalidDataException>(
-            () => WorldSnapshot.Load(new MemoryStream(stream.ToArray(), writable: false)));
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
-
-        Assert.Contains("chunk capacity", exception.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.True(allocated < 1_000_000,
-            $"Oversized chunk capacity allocated {allocated:N0} bytes before rejection.");
-    }
-
-    [Fact]
-    public void BUG_snapshot_load_rejects_non_positive_reserved_slot_version()
-    {
-        using var stream = new MemoryStream();
-        using (var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true))
-        {
-            writer.Write(0x4D415243); // magic
-            writer.Write(3);          // v3
-            writer.Write(16);         // chunk capacity
-            writer.Write(1);          // entity slot count
-            writer.Write(0);          // schema count
-            writer.Write(0);          // archetype count
-            writer.Write(0);          // hierarchy link count
-            writer.Write(0);          // invalid reserved slot version
-            writer.Write(0);          // free list length
-        }
+        var data = BuildV5SnapshotWithRawSchemaNameLength(1024 * 1024);
 
         var exception = Assert.Throws<InvalidDataException>(
-            () => WorldSnapshot.Load(new MemoryStream(stream.ToArray())));
+            () => WorldSnapshot.Load(new MemoryStream(data, writable: false)));
+        Assert.Contains("length", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
 
-        Assert.Contains("slot 0", exception.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("version", exception.Message, StringComparison.OrdinalIgnoreCase);
+    [Theory]
+    [InlineData(0)]
+    [InlineData(int.MaxValue)]
+    public void Snapshot_load_rejects_invalid_chunk_capacity(int chunkCapacity)
+    {
+        using var world = new World();
+        var data = SaveToBytes(world);
+        WriteInt32(data, 8, chunkCapacity);
+        RewriteCrc(data);
+
+        _ = Assert.Throws<InvalidDataException>(
+            () => WorldSnapshot.Load(new MemoryStream(data, writable: false)));
     }
 
     [Fact]
-    public void Snapshot_load_rejects_negative_free_list_count()
+    public void Snapshot_load_rejects_non_positive_slot_version()
     {
-        var data = BuildV3SnapshotWithRawFreeList(writer => writer.Write(-1));
+        using var world = new World();
+        _ = world.CreateEmpty();
+        var data = SaveToBytes(world);
+        var layout = ParseV5Snapshot(data);
+        WriteInt32(data, layout.SlotVersionOffsets[0], 0);
+        RewriteCrc(data);
 
-        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+        _ = Assert.Throws<InvalidDataException>(
+            () => WorldSnapshot.Load(new MemoryStream(data, writable: false)));
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(1)]
+    public void Snapshot_load_rejects_invalid_free_list_count(int freeCount)
+    {
+        using var world = new World();
+        var data = SaveToBytes(world);
+        var layout = ParseV5Snapshot(data);
+        WriteInt32(data, layout.FreeCountOffset, freeCount);
+        RewriteCrc(data);
+
+        _ = Assert.Throws<InvalidDataException>(
+            () => WorldSnapshot.Load(new MemoryStream(data, writable: false)));
     }
 
     [Fact]
-    public void Snapshot_load_rejects_free_list_count_above_entity_slots()
+    public void Snapshot_load_rejects_free_id_out_of_range()
     {
-        var data = BuildV3SnapshotWithRawFreeList(writer => writer.Write(5));
+        using var world = new World();
+        var entity = world.CreateEmpty();
+        world.Destroy(entity);
+        var data = SaveToBytes(world);
+        var layout = ParseV5Snapshot(data);
+        WriteInt32(data, layout.FreeIdOffsets.Single(), layout.SlotVersionOffsets.Length);
+        RewriteCrc(data);
 
-        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+        _ = Assert.Throws<InvalidDataException>(
+            () => WorldSnapshot.Load(new MemoryStream(data, writable: false)));
     }
 
     [Fact]
-    public void Snapshot_load_rejects_free_list_id_out_of_range_as_invalid_data()
+    public void Snapshot_load_rejects_invalid_archetype_component_metadata()
     {
-        var data = BuildV3SnapshotWithRawFreeList(writer =>
-        {
-            writer.Write(1);
-            writer.Write(99);
-            writer.Write(1);
-        });
+        using var world = new World();
+        world.Create(new Position(1, 2), new Velocity(3, 4));
+        var original = SaveToBytes(world);
+        var layout = ParseV5Snapshot(original);
+        var archetype = layout.Archetypes.Single();
 
-        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+        var negativeCount = (byte[])original.Clone();
+        WriteInt32(negativeCount, archetype.ComponentCountOffset, -1);
+        RewriteCrc(negativeCount);
+        AssertInvalidSnapshot(negativeCount);
+
+        var outOfRangeIndex = (byte[])original.Clone();
+        WriteInt32(outOfRangeIndex, archetype.SchemaIndexOffsets[0], layout.Schemas.Count);
+        RewriteCrc(outOfRangeIndex);
+        AssertInvalidSnapshot(outOfRangeIndex);
+
+        var duplicateIndex = (byte[])original.Clone();
+        WriteInt32(
+            duplicateIndex,
+            archetype.SchemaIndexOffsets[1],
+            ReadInt32(duplicateIndex, archetype.SchemaIndexOffsets[0]));
+        RewriteCrc(duplicateIndex);
+        AssertInvalidSnapshot(duplicateIndex);
     }
 
     [Fact]
-    public void Snapshot_load_rejects_negative_archetype_component_count()
+    public void Snapshot_load_rejects_duplicate_archetype_signature()
     {
-        var data = BuildV3SnapshotWithRawArchetype(writer => writer.Write(-1));
+        using var world = new World();
+        var position = world.Create(new Position(1, 2));
+        var velocity = world.Create(new Velocity(3, 4));
+        world.Destroy(position);
+        world.Destroy(velocity);
+        var data = SaveToBytes(world);
+        var layout = ParseV5Snapshot(data);
+        Assert.Equal(2, layout.Archetypes.Count);
 
-        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+        WriteInt32(
+            data,
+            layout.Archetypes[1].SchemaIndexOffsets.Single(),
+            ReadInt32(data, layout.Archetypes[0].SchemaIndexOffsets.Single()));
+        RewriteCrc(data);
+
+        _ = Assert.Throws<InvalidDataException>(
+            () => WorldSnapshot.Load(new MemoryStream(data, writable: false)));
     }
 
     [Fact]
-    public void Snapshot_load_rejects_archetype_schema_index_out_of_range()
+    public void Snapshot_load_rejects_invalid_entity_rows()
     {
-        var data = BuildV3SnapshotWithRawArchetype(
-            writer =>
-            {
-                writer.Write(1);
-                writer.Write(99);
-            },
-            typeof(int).AssemblyQualifiedName!);
+        using var world = new World();
+        world.Create(new Position(1, 2));
+        world.Create(new Position(3, 4));
+        var original = SaveToBytes(world);
+        var layout = ParseV5Snapshot(original);
+        var archetype = layout.Archetypes.Single();
 
-        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+        var excessiveCount = (byte[])original.Clone();
+        WriteInt32(excessiveCount, archetype.RowCountOffset, layout.SlotVersionOffsets.Length + 1);
+        RewriteCrc(excessiveCount);
+        AssertInvalidSnapshot(excessiveCount);
+
+        var duplicateId = (byte[])original.Clone();
+        WriteInt32(
+            duplicateId,
+            archetype.EntityIdOffsets[1],
+            ReadInt32(duplicateId, archetype.EntityIdOffsets[0]));
+        RewriteCrc(duplicateId);
+        AssertInvalidSnapshot(duplicateId);
     }
 
     [Fact]
-    public void Snapshot_load_rejects_duplicate_archetype_component_type()
+    public void Snapshot_load_rejects_hierarchy_out_of_range_duplicate_child_and_cycle()
     {
-        var data = BuildV3SnapshotWithRawArchetype(
-            writer =>
-            {
-                writer.Write(2);
-                writer.Write(0);
-                writer.Write(0);
-            },
-            typeof(int).AssemblyQualifiedName!);
+        using var world = new World();
+        var root = world.CreateEmpty();
+        var child = world.CreateEmpty();
+        var grandChild = world.CreateEmpty();
+        world.AddChild(root, child);
+        world.AddChild(child, grandChild);
+        var original = SaveToBytes(world);
+        var layout = ParseV5Snapshot(original);
 
-        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+        var outOfRange = (byte[])original.Clone();
+        WriteInt32(outOfRange, layout.HierarchyLinks[0].ParentOffset, layout.SlotVersionOffsets.Length);
+        RewriteCrc(outOfRange);
+        AssertInvalidSnapshot(outOfRange);
+
+        var duplicateChild = (byte[])original.Clone();
+        WriteInt32(
+            duplicateChild,
+            layout.HierarchyLinks[1].ChildOffset,
+            ReadInt32(duplicateChild, layout.HierarchyLinks[0].ChildOffset));
+        RewriteCrc(duplicateChild);
+        AssertInvalidSnapshot(duplicateChild);
+
+        var cycle = (byte[])original.Clone();
+        var childLink = layout.HierarchyLinks.Single(link => ReadInt32(cycle, link.ChildOffset) == child.Id);
+        WriteInt32(cycle, childLink.ParentOffset, grandChild.Id);
+        RewriteCrc(cycle);
+        AssertInvalidSnapshot(cycle);
     }
 
     [Fact]
-    public void BUG_Snapshot_load_rejects_duplicate_archetype_signature()
+    public void Snapshot_load_rejects_corrupt_schema_shape_with_valid_crc()
     {
-        var data = BuildV3SnapshotWithRawArchetypes(
-            2,
-            writer =>
-            {
-                writer.Write(2); // first component count
-                writer.Write(0);
-                writer.Write(1);
-                writer.Write(0); // first row count
-                writer.Write(2); // same signature in reverse file order
-                writer.Write(1);
-                writer.Write(0);
-                writer.Write(0); // second row count
-            },
-            typeof(int).AssemblyQualifiedName!,
-            typeof(long).AssemblyQualifiedName!);
+        using var world = new World();
+        world.Create(new Position(1, 2));
+        var data = SaveToBytes(world);
+        var schema = ParseV5Snapshot(data).Schemas.Single();
+        Assert.True(schema.ShapeLength > 0);
+        data[schema.ShapeOffset] ^= 0xFF;
+        RewriteCrc(data);
 
-        var exception = Assert.Throws<InvalidDataException>(
-            () => WorldSnapshot.Load(new MemoryStream(data)));
-        Assert.Contains("duplicate archetype signature", exception.Message, StringComparison.OrdinalIgnoreCase);
+        AssertInvalidSnapshot(data);
     }
 
     [Fact]
-    public void Snapshot_load_rejects_archetype_row_count_above_entity_slots()
+    public void Snapshot_load_rejects_payload_truncation_and_trailing_bytes_with_valid_crc()
     {
-        var data = BuildV3SnapshotWithRawArchetype(writer =>
-        {
-            writer.Write(0); // component count
-            writer.Write(5); // row count > entitySlotCount(4)
-        });
+        using var world = new World();
+        world.Create(new Position(1, 2));
+        var original = SaveToBytes(world);
+        var column = ParseV5Snapshot(original).Archetypes.Single().Columns.Single();
 
-        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+        var truncated = RemovePayloadByte(original, column.PayloadOffset + column.PayloadLength - 1);
+        AssertInvalidSnapshot(truncated);
+
+        var trailing = InsertPayloadByte(original, original.Length - sizeof(uint), 0xCC);
+        AssertInvalidSnapshot(trailing);
     }
 
     [Fact]
-    public void Snapshot_load_rejects_duplicate_entity_id_in_archetype_rows()
+    public void Snapshot_load_rejects_truncated_large_slot_table_before_allocation()
     {
-        var data = BuildV3SnapshotWithRawArchetype(writer =>
-        {
-            writer.Write(0); // component count
-            writer.Write(2); // row count
-            writer.Write(1);
-            writer.Write(1);
-        });
-
-        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
-    }
-
-    [Fact]
-    public void BUG_Snapshot_load_rejects_truncated_large_slot_table_before_allocation()
-    {
-        using var stream = new MemoryStream();
-        using (var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true))
-        {
-            writer.Write(0x4D415243); // magic
-            writer.Write(3);          // format version
-            writer.Write(16);         // chunk capacity
-            writer.Write(5_000_000);  // slot count, but no version table follows
-            writer.Write(0);          // schema count
-            writer.Write(0);          // archetype count
-            writer.Write(0);          // hierarchy link count
-        }
-
-        var data = stream.ToArray();
+        var data = BuildV5HeaderOnlySnapshot(slotCount: 5_000_000);
         var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
 
         var exception = Assert.Throws<InvalidDataException>(
@@ -1999,33 +2143,20 @@ public sealed class WorldSnapshotTests
     }
 
     [Fact]
-    public void Snapshot_load_rejects_truncated_v3_body_as_invalid_data()
-    {
-        var data = new byte[]
-        {
-            0x43, 0x52, 0x41, 0x4D, // magic 0x4D415243 little-endian
-            0x03, 0x00, 0x00, 0x00, // v3
-            0x10, 0x00, 0x00, 0x00, // chunkCapacity
-        };
-
-        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
-    }
-
-    [Fact]
     public void Snapshot_load_does_not_register_schema_type_when_later_payload_is_invalid()
     {
         var schemaType = typeof(PartialMutationComponent);
         Assert.DoesNotContain(schemaType, ComponentRegistry.Shared.GetRegisteredTypes());
-
-        var data = BuildV3SnapshotWithRawArchetype(
-            writer =>
+        var data = BuildV5SnapshotWithSchemas(
+            [(schemaType.AssemblyQualifiedName!, GetSchemaShape<Health>())],
+            archetypeCount: 1,
+            writeArchetypes: writer =>
             {
-                writer.Write(0); // component count
-                writer.Write(5); // invalid row count > entitySlotCount(4)
-            },
-            schemaType.AssemblyQualifiedName!);
+                writer.Write(0);
+                writer.Write(5);
+            });
 
-        _ = Assert.Throws<InvalidDataException>(() => WorldSnapshot.Load(new MemoryStream(data)));
+        AssertInvalidSnapshot(data);
 
         Assert.DoesNotContain(schemaType, ComponentRegistry.Shared.GetRegisteredTypes());
     }
@@ -2055,84 +2186,416 @@ public sealed class WorldSnapshotTests
         return ms.ToArray();
     }
 
-    private static byte[] BuildV3SnapshotWithSchemaNames(params string[] schemaNames)
+    private const string ProbeModeEnvironmentVariable = "MINIARCH_SNAPSHOT_PROBE_MODE";
+    private const string ProbeOutputEnvironmentVariable = "MINIARCH_SNAPSHOT_PROBE_OUTPUT";
+    private const string UnsupportedProbeEnvironmentVariable = "MINIARCH_SNAPSHOT_UNSUPPORTED_PROBE";
+
+    private static byte[] SaveToBytes(World world)
     {
-        using var ms = new MemoryStream();
-        using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
-        WriteV3SnapshotHeader(writer, schemaNames.Length, archetypeCount: 0);
-        foreach (var name in schemaNames)
-            ComponentSchemaCodec.WriteSchemaName(writer, name);
-        writer.Write(0); // free list length
-        writer.Flush();
-        return ms.ToArray();
+        using var stream = new MemoryStream();
+        WorldSnapshot.Save(stream, world);
+        return stream.ToArray();
     }
 
-    private static byte[] BuildV3SnapshotWithRawSchemaStringByteLength(int byteLength)
+    private static void AssertInvalidSnapshot(byte[] data)
     {
-        using var ms = new MemoryStream();
-        using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
-        WriteV3SnapshotHeader(writer, schemaCount: 1, archetypeCount: 0);
-        writer.Flush();
-        Write7BitEncodedInt(ms, byteLength);
-        return ms.ToArray();
+        _ = Assert.Throws<InvalidDataException>(
+            () => WorldSnapshot.Load(new MemoryStream(data, writable: false)));
     }
 
-    private static byte[] BuildV3Snapshot(int chunkCapacity = 16)
+    private static void AssertSaveNotSupported<T>(T component) where T : unmanaged
     {
-        using var ms = new MemoryStream();
-        using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
-        WriteV3SnapshotHeader(writer, schemaCount: 0, archetypeCount: 0, chunkCapacity: chunkCapacity);
-        writer.Write(0); // free list length
-        writer.Flush();
-        return ms.ToArray();
+        using var world = new World();
+        world.Create(component);
+        using var stream = new MemoryStream();
+
+        _ = Assert.Throws<NotSupportedException>(() => WorldSnapshot.Save(stream, world));
+        Assert.Equal(0, stream.Length);
     }
 
-    private static byte[] BuildV3SnapshotWithRawFreeList(Action<BinaryWriter> writeFreeList)
+    private static byte[] GetSchemaShape<T>() where T : unmanaged
     {
-        using var ms = new MemoryStream();
-        using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
-        WriteV3SnapshotHeader(writer, schemaCount: 0, archetypeCount: 0);
-        writeFreeList(writer);
-        writer.Flush();
-        return ms.ToArray();
+        using var world = new World();
+        world.Create(default(T));
+        var layout = ParseV5Snapshot(SaveToBytes(world));
+        var schema = layout.Schemas.Single(entry => entry.ComponentType == typeof(T));
+        return layout.Bytes.AsSpan(schema.ShapeOffset, schema.ShapeLength).ToArray();
     }
 
-    private static byte[] BuildV3SnapshotWithRawArchetype(Action<BinaryWriter> writeArchetype, params string[] schemaNames)
+    private static byte[] BuildV5SnapshotWithSchemas(
+        (string Identity, byte[] Shape)[] schemas,
+        int archetypeCount = 0,
+        Action<BinaryWriter>? writeArchetypes = null)
     {
-        return BuildV3SnapshotWithRawArchetypes(1, writeArchetype, schemaNames);
-    }
-
-    private static byte[] BuildV3SnapshotWithRawArchetypes(
-        int archetypeCount,
-        Action<BinaryWriter> writeArchetypes,
-        params string[] schemaNames)
-    {
-        using var ms = new MemoryStream();
-        using var writer = new BinaryWriter(ms, Encoding.UTF8, leaveOpen: true);
-        WriteV3SnapshotHeader(writer, schemaNames.Length, archetypeCount);
-        foreach (var name in schemaNames)
-            ComponentSchemaCodec.WriteSchemaName(writer, name);
-        writeArchetypes(writer);
-        writer.Write(0); // free list length
-        writer.Flush();
-        return ms.ToArray();
-    }
-
-    private static void WriteV3SnapshotHeader(
-        BinaryWriter writer,
-        int schemaCount,
-        int archetypeCount,
-        int chunkCapacity = 16)
-    {
-        writer.Write(0x4D415243); // magic
-        writer.Write(3);          // v3 (no CRC)
-        writer.Write(chunkCapacity);
-        writer.Write(4);          // entitySlotCount
-        writer.Write(schemaCount);
+        var orderedSchemas = schemas.OrderBy(schema => schema.Identity, StringComparer.Ordinal).ToArray();
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
+        writer.Write(0x4D415243);
+        writer.Write(5);
+        writer.Write(16);
+        writer.Write(4);
+        writer.Write(orderedSchemas.Length);
         writer.Write(archetypeCount);
-        writer.Write(0);          // hierarchyLinkCount
-        for (var i = 0; i < 4; i++) writer.Write(1); // reserved slot versions
+        writer.Write(0);
+        for (var index = 0; index < 4; index++)
+            writer.Write(1);
+        foreach (var (identity, shape) in orderedSchemas)
+        {
+            var identityBytes = Encoding.UTF8.GetBytes(identity);
+            writer.Write(identityBytes.Length);
+            writer.Write(identityBytes);
+            writer.Write(shape.Length);
+            writer.Write(shape);
+        }
+        writeArchetypes?.Invoke(writer);
+        writer.Write(0);
+        writer.Flush();
+        return AppendCrc(stream.ToArray());
     }
+
+    private static byte[] BuildV5SnapshotWithRawSchemaNameLength(int byteLength)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
+        writer.Write(0x4D415243);
+        writer.Write(5);
+        writer.Write(16);
+        writer.Write(4);
+        writer.Write(1);
+        writer.Write(0);
+        writer.Write(0);
+        for (var index = 0; index < 4; index++)
+            writer.Write(1);
+        writer.Write(byteLength);
+        writer.Write(0);
+        writer.Flush();
+        return AppendCrc(stream.ToArray());
+    }
+
+    private static byte[] BuildV5HeaderOnlySnapshot(int slotCount)
+    {
+        using var stream = new MemoryStream();
+        using var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true);
+        writer.Write(0x4D415243);
+        writer.Write(5);
+        writer.Write(16);
+        writer.Write(slotCount);
+        writer.Write(0);
+        writer.Write(0);
+        writer.Write(0);
+        writer.Flush();
+        return AppendCrc(stream.ToArray());
+    }
+
+    private static byte[] AppendCrc(byte[] headerAndPayload)
+    {
+        var result = new byte[headerAndPayload.Length + sizeof(uint)];
+        headerAndPayload.CopyTo(result, 0);
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            result.AsSpan(headerAndPayload.Length),
+            Crc32.HashToUInt32(headerAndPayload));
+        return result;
+    }
+
+    private static void RewriteCrc(byte[] snapshot)
+    {
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            snapshot.AsSpan(snapshot.Length - sizeof(uint)),
+            Crc32.HashToUInt32(snapshot.AsSpan(0, snapshot.Length - sizeof(uint))));
+    }
+
+    private static byte[] RemovePayloadByte(byte[] snapshot, int offset)
+    {
+        var payloadLength = snapshot.Length - sizeof(uint);
+        Assert.InRange(offset, 0, payloadLength - 1);
+        var content = new byte[payloadLength - 1];
+        snapshot.AsSpan(0, offset).CopyTo(content);
+        snapshot.AsSpan(offset + 1, payloadLength - offset - 1).CopyTo(content.AsSpan(offset));
+        return AppendCrc(content);
+    }
+
+    private static byte[] InsertPayloadByte(byte[] snapshot, int offset, byte value)
+    {
+        var payloadLength = snapshot.Length - sizeof(uint);
+        Assert.InRange(offset, 0, payloadLength);
+        var content = new byte[payloadLength + 1];
+        snapshot.AsSpan(0, offset).CopyTo(content);
+        content[offset] = value;
+        snapshot.AsSpan(offset, payloadLength - offset).CopyTo(content.AsSpan(offset + 1));
+        return AppendCrc(content);
+    }
+
+    private static int ReadInt32(byte[] bytes, int offset) =>
+        BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(offset, sizeof(int)));
+
+    private static void WriteInt32(byte[] bytes, int offset, int value) =>
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(offset, sizeof(int)), value);
+
+    private static SnapshotLayout ParseV5Snapshot(byte[] bytes)
+    {
+        Assert.Equal(0x4D415243, ReadInt32(bytes, 0));
+        Assert.Equal(5, ReadInt32(bytes, 4));
+        var end = bytes.Length - sizeof(uint);
+        var offset = 8;
+        _ = ReadAndAdvance(bytes, ref offset);
+        var slotCount = ReadAndAdvance(bytes, ref offset);
+        var schemaCount = ReadAndAdvance(bytes, ref offset);
+        var archetypeCount = ReadAndAdvance(bytes, ref offset);
+        var hierarchyCount = ReadAndAdvance(bytes, ref offset);
+
+        var slotVersionOffsets = new int[slotCount];
+        for (var index = 0; index < slotVersionOffsets.Length; index++)
+        {
+            slotVersionOffsets[index] = offset;
+            offset += sizeof(int);
+        }
+
+        var schemas = new List<SnapshotSchemaLayout>(schemaCount);
+        for (var index = 0; index < schemaCount; index++)
+        {
+            var identityLength = ReadAndAdvance(bytes, ref offset);
+            var identity = Encoding.UTF8.GetString(bytes, offset, identityLength);
+            offset += identityLength;
+            var shapeLength = ReadAndAdvance(bytes, ref offset);
+            var shapeOffset = offset;
+            offset += shapeLength;
+            var componentType = Type.GetType(identity, throwOnError: true)!;
+            schemas.Add(new SnapshotSchemaLayout(
+                componentType,
+                identity,
+                shapeOffset,
+                shapeLength));
+        }
+
+        var archetypes = new List<SnapshotArchetypeLayout>(archetypeCount);
+        for (var index = 0; index < archetypeCount; index++)
+        {
+            var componentCountOffset = offset;
+            var componentCount = ReadAndAdvance(bytes, ref offset);
+            var schemaIndexOffsets = new int[componentCount];
+            var schemaIndices = new int[componentCount];
+            for (var componentIndex = 0; componentIndex < componentCount; componentIndex++)
+            {
+                schemaIndexOffsets[componentIndex] = offset;
+                schemaIndices[componentIndex] = ReadAndAdvance(bytes, ref offset);
+            }
+
+            var rowCountOffset = offset;
+            var rowCount = ReadAndAdvance(bytes, ref offset);
+            var entityIdOffsets = new int[rowCount];
+            for (var row = 0; row < rowCount; row++)
+            {
+                entityIdOffsets[row] = offset;
+                offset += sizeof(int);
+            }
+
+            var columns = new List<SnapshotColumnLayout>(componentCount);
+            foreach (var schemaIndex in schemaIndices)
+            {
+                var componentType = schemas[schemaIndex].ComponentType;
+                var payloadLength = checked(GetCanonicalWireWidth(componentType) * rowCount);
+                columns.Add(new SnapshotColumnLayout(componentType, offset, payloadLength));
+                offset += payloadLength;
+            }
+
+            archetypes.Add(new SnapshotArchetypeLayout(
+                componentCountOffset,
+                schemaIndexOffsets,
+                rowCountOffset,
+                entityIdOffsets,
+                columns));
+        }
+
+        var hierarchyLinks = new List<SnapshotHierarchyLayout>(hierarchyCount);
+        for (var index = 0; index < hierarchyCount; index++)
+        {
+            hierarchyLinks.Add(new SnapshotHierarchyLayout(offset, offset + sizeof(int)));
+            offset += 2 * sizeof(int);
+        }
+
+        var freeCountOffset = offset;
+        var freeCount = ReadAndAdvance(bytes, ref offset);
+        var freeIdOffsets = new int[freeCount];
+        for (var index = 0; index < freeCount; index++)
+        {
+            freeIdOffsets[index] = offset;
+            offset += sizeof(int);
+        }
+
+        Assert.Equal(end, offset);
+        return new SnapshotLayout(
+            bytes,
+            slotVersionOffsets,
+            schemas,
+            archetypes,
+            hierarchyLinks,
+            freeCountOffset,
+            freeIdOffsets);
+    }
+
+    private static int ReadAndAdvance(byte[] bytes, ref int offset)
+    {
+        var value = ReadInt32(bytes, offset);
+        offset += sizeof(int);
+        return value;
+    }
+
+    private static int GetCanonicalWireWidth(Type type)
+    {
+        if (type.IsEnum)
+            return GetCanonicalWireWidth(Enum.GetUnderlyingType(type));
+        if (type == typeof(bool) || type == typeof(byte) || type == typeof(sbyte))
+            return 1;
+        if (type == typeof(char) || type == typeof(short) || type == typeof(ushort))
+            return 2;
+        if (type == typeof(int) || type == typeof(uint) || type == typeof(float))
+            return 4;
+        if (type == typeof(long) || type == typeof(ulong) || type == typeof(double))
+            return 8;
+
+        var inlineArray = type.GetCustomAttribute<InlineArrayAttribute>();
+        var fields = type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        if (inlineArray is not null)
+        {
+            Assert.Single(fields);
+            return checked(inlineArray.Length * GetCanonicalWireWidth(fields[0].FieldType));
+        }
+
+        var width = 0;
+        foreach (var field in fields)
+        {
+            var fixedBuffer = field.GetCustomAttribute<FixedBufferAttribute>();
+            width = checked(width + (fixedBuffer is null
+                ? GetCanonicalWireWidth(field.FieldType)
+                : fixedBuffer.Length * GetCanonicalWireWidth(fixedBuffer.ElementType)));
+        }
+        return width;
+    }
+
+    private static byte[] GetRawComponentBytes<T>(World world, Entity entity) where T : unmanaged
+    {
+        Assert.True(world.TryGetLocation(entity, out var location));
+        var column = location.Archetype.GetComponentIndex(ComponentRegistry.Shared.GetOrCreate<T>());
+        return location.Archetype.GetComponentBytes(column, location.RowIndex).ToArray();
+    }
+
+    private static void SetRawComponentByte<T>(World world, Entity entity, int byteOffset, byte value)
+        where T : unmanaged
+    {
+        Assert.True(world.TryGetLocation(entity, out var location));
+        var column = location.Archetype.GetComponentIndex(ComponentRegistry.Shared.GetOrCreate<T>());
+        var bytes = location.Archetype.GetComponentBytes(column, location.RowIndex);
+        Assert.InRange(byteOffset, 0, bytes.Length - 1);
+        ref var first = ref MemoryMarshal.GetReference(bytes);
+        Unsafe.Add(ref first, byteOffset) = value;
+    }
+
+    private static void PoisonPaddedComponent(World world, Entity entity, byte value)
+    {
+        var valueOffset = Marshal.OffsetOf<PaddedComponent>(nameof(PaddedComponent.Value)).ToInt32();
+        for (var offset = sizeof(byte); offset < valueOffset; offset++)
+            SetRawComponentByte<PaddedComponent>(world, entity, offset, value);
+    }
+
+    private static void RunRegistrationOrderProbe(string mode, string output)
+    {
+        RunChildProbe(
+            nameof(Fresh_process_registration_order_probe),
+            mode,
+            (ProbeModeEnvironmentVariable, mode),
+            (ProbeOutputEnvironmentVariable, output));
+        Assert.True(File.Exists(output) && File.Exists(output + ".sha256"),
+            $"Snapshot probe {mode} did not publish both output files.");
+    }
+
+    private static void RunUnsupportedComponentProbe(string mode)
+    {
+        RunChildProbe(
+            nameof(Unsupported_component_shape_probe),
+            mode,
+            (UnsupportedProbeEnvironmentVariable, mode));
+    }
+
+    private static void RunChildProbe(
+        string methodName,
+        string displayName,
+        params (string Name, string Value)[] environment)
+    {
+        var project = FindTestProject();
+        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name ?? "Release";
+        var filter = $"FullyQualifiedName={typeof(WorldSnapshotTests).FullName}.{methodName}";
+        var startInfo = new ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = Path.GetDirectoryName(project)!,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add("test");
+        startInfo.ArgumentList.Add(project);
+        startInfo.ArgumentList.Add("--no-build");
+        startInfo.ArgumentList.Add("--configuration");
+        startInfo.ArgumentList.Add(configuration);
+        startInfo.ArgumentList.Add("--filter");
+        startInfo.ArgumentList.Add(filter);
+        foreach (var (name, value) in environment)
+            startInfo.Environment[name] = value;
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException($"Failed to start snapshot probe {displayName}.");
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(60_000))
+        {
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit();
+            Assert.Fail(
+                $"Snapshot probe {displayName} timed out.\nstdout:\n{stdout.GetAwaiter().GetResult()}\nstderr:\n{stderr.GetAwaiter().GetResult()}");
+        }
+
+        var standardOutput = stdout.GetAwaiter().GetResult();
+        var standardError = stderr.GetAwaiter().GetResult();
+        Assert.True(
+            process.ExitCode == 0,
+            $"Snapshot probe {displayName} failed with exit code {process.ExitCode}.\n" +
+            $"stdout:\n{standardOutput}\nstderr:\n{standardError}");
+    }
+
+    private static string FindTestProject()
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+        {
+            var candidate = Path.Combine(directory.FullName, "tests", "MiniArch.Tests", "MiniArch.Tests.csproj");
+            if (File.Exists(candidate))
+                return candidate;
+        }
+        throw new InvalidOperationException("Could not locate tests/MiniArch.Tests/MiniArch.Tests.csproj.");
+    }
+
+    private sealed record SnapshotLayout(
+        byte[] Bytes,
+        int[] SlotVersionOffsets,
+        IReadOnlyList<SnapshotSchemaLayout> Schemas,
+        IReadOnlyList<SnapshotArchetypeLayout> Archetypes,
+        IReadOnlyList<SnapshotHierarchyLayout> HierarchyLinks,
+        int FreeCountOffset,
+        int[] FreeIdOffsets);
+
+    private sealed record SnapshotSchemaLayout(
+        Type ComponentType,
+        string Identity,
+        int ShapeOffset,
+        int ShapeLength);
+
+    private sealed record SnapshotArchetypeLayout(
+        int ComponentCountOffset,
+        int[] SchemaIndexOffsets,
+        int RowCountOffset,
+        int[] EntityIdOffsets,
+        IReadOnlyList<SnapshotColumnLayout> Columns);
+
+    private sealed record SnapshotColumnLayout(Type ComponentType, int PayloadOffset, int PayloadLength);
+    private sealed record SnapshotHierarchyLayout(int ChildOffset, int ParentOffset);
 
     private static void Write7BitEncodedInt(Stream stream, int value)
     {
@@ -2144,23 +2607,5 @@ public sealed class WorldSnapshotTests
         }
 
         stream.WriteByte((byte)remaining);
-    }
-
-    private readonly struct NoOpFeeder : Archetype.ISpanFeeder
-    {
-        public void Feed(ReadOnlySpan<byte> span) { }
-    }
-
-    private static void RunOnDedicatedThread(Action action)
-    {
-        Exception? captured = null;
-        var thread = new Thread(() =>
-        {
-            try { action(); }
-            catch (Exception ex) { captured = ex; }
-        });
-        thread.Start();
-        thread.Join();
-        if (captured is not null) ExceptionDispatchInfo.Capture(captured).Throw();
     }
 }

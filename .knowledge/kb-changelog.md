@@ -2,12 +2,22 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-08-29
+updated: 2026-09-02
 ---
 # Knowledge Base Changelog
 
 > 这个页面只记录**重大架构变更和知识库校准事件**，供追溯。
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
+
+## 2026-09-02 WorldSnapshot v5 字段级 canonical 持久化
+
+- 破坏性删除 v3/v4 raw-memory snapshot reader/writer；公开入口不变，Load 只接受 v5。
+- 新增内部按 `Type` 缓存的 immutable component plan：schema 与 wire 仅描述 non-static instance fields、nested unmanaged structs、fixed buffers 和 inline arrays；primitive 固定宽度 little-endian，bool 规范化为 0/1；CLR offset/padding/pack 不入协议。
+- schema/archetype 顺序改用精确 `AssemblyQualifiedName` 与 schema index，不依赖 `ComponentType.Value`；fresh-process 测试证明不同注册顺序仍产生 byte-equal snapshot/checksum。
+- `Save` 与 `CanonicalChecksum` 共用 `WriteCanonicalWorld`；前者输出 `P + CRC32(P)`，后者输出 `SHA256(P)`。完整状态包含 chunk capacity、slot table、empty archetypes、hierarchy 和 ordered free list。
+- `Checksum()` 保留原 rollback/lockstep 投影，但 component values 也改为字段级编码；RestoreState parity 不再误用完整持久化 checksum。
+- Load 先校验 CRC 和全部 schema/payload/order/length/duplicate/trailing 不变量，再注册 runtime ids/构造 World；失败释放部分 World。
+- 更新 `kb-snapshot-persistence.md` 与 `kb-determinism-proof.md`，删除“清零 padding 即可安全 raw persistence”和“canonical 依赖注册顺序”的旧结论。
 
 ## 2026-08-29 删除并行 CommandStream 录制
 

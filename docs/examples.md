@@ -577,7 +577,8 @@ new CommandStream(mirror).Replay(delta);
 // All mirrors converge to identical logical state
 Console.WriteLine(mirror.Get<Position>(new Entity(0, 1))); // Position(100, 200)
 
-// Verify with canonical checksum (same logical state regardless of construction path)
+// Both worlds followed the same allocator/schema transitions, so their exact
+// v5 persistence state must match as well as their live entity state.
 byte[] authHash = authority.CanonicalChecksum();
 byte[] mirHash  = mirror.CanonicalChecksum();
 Console.WriteLine(Convert.ToHexString(authHash) == Convert.ToHexString(mirHash)); // True

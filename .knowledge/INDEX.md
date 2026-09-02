@@ -2,7 +2,7 @@
 title: Knowledge Index
 module: KnowledgeIndex
 description: .knowledge 知识库导航、模块地图与必读入口
-updated: 2026-08-29
+updated: 2026-09-02
 ---
 
 # Knowledge Index
@@ -21,7 +21,7 @@ updated: 2026-08-29
 | MiniArch.Core CommandStream | `kb-command-stream.md`、`kb-deferred-create-design.md` |
 | MiniArch.Core Query | `kb-query-invalidation.md`、`kb-parallel-query.md` |
 | MiniArch.Core ChangeTracking | `kb-change-tracking.md`（World.Watch pull-event 模型：ChangeWatch/TransitionWatch Snapshot+Diff；为什么不是 push event） |
-| MiniArch.Core Snapshot | `kb-snapshot-persistence.md` |
+| MiniArch.Core Snapshot | `kb-snapshot-persistence.md`（v5 字段级 canonical wire、严格 Load、双 checksum、Clone/CaptureState 边界） |
 | MiniArch.Core Hierarchy | `kb-hierarchy-runtime.md` |
 | MiniArch.Diagnostics（诊断工具） | `kb-ecs-diagnostics.md`（WorldDiff、WorldValidator、EntityDump、WorldDigest） |
 | MiniArch（用户 API 分层） | `kb-component-bucket-index-mvp-report.md`（ComponentBucketQuery MVP 最终报告——确定性 per-key scan、调用者提供 span 模式、零 core 入侵、正确性模型与性能矩阵）、`kb-frame-read-models.md`（Frame Read Models ValueLab / FrameLookup API Gate：compact CSR 本体成立；逐 row DirectForEach Conditional Hold；chunk-run 通用形态 No-Go；hot bucket/entity-only 禁用区间）、`kb-managed-entity-sidecar-evaluation.md`（Entity -> managed object sidecar 价值验证 No-Go：打败 dictionary 但未优于 competent dense user，serialization 不进 v1） |
@@ -33,7 +33,7 @@ updated: 2026-08-29
 | **多 host 同步浸没测试** | **`kb-lockstep-soak.md`**（🚨 N host placeholder lockstep 收敛验证 — 补齐单 host soak 无法覆盖的 DeferredEntities=true 多 host 交错收敛性） |
 | **正确性验证报告** | **`kb-safety-proof.md`**（版本化验证快照：当前测试/性能门禁、历史 soak 证据及明确的非保证边界） |
 | **内存安全硬化** | **`kb-memory-safety-hardening.md`**（2026-07-12 抗 OOM/栈溢出/算术溢出防御——M1-M9 硬化测试证明，**数据库场景必读**） |
-| **确定性证明（选型必读）** | **`kb-determinism-proof.md`**（2026-07-10 确定性审计报告——9 维度全通过，LayoutKind.Auto 拦截修复，含与其他 ECS 库的确定性对比和引用措辞） |
+| **确定性证明（选型必读）** | **`kb-determinism-proof.md`**（10 维确定性审计；v5 字段级 canonical checksum 跨进程/注册顺序稳定；含应用层边界） |
 | GameTickSim.Perf（场景基准） | `kb-gameticksim-scenarios.md` |
 | FrifloGameScenarios.Perf（15 场景跨 ECS 对比） | `kb-ecs-comparison.md`、`kb-perf-harnesses.md` |
 | CommandStreamGame.Perf（CommandStream 真实游戏稳态压测） | `kb-commandstream-game-perf.md` |
@@ -61,7 +61,7 @@ updated: 2026-08-29
 - **Cache/内存优化** → `kb-cache-optimization.md`
 
 **确定性 / 选型**：
-- **确定性审计报告（选型必读）** → `kb-determinism-proof.md`（9 维度审计 + 实证数据 + 引用措辞）
+- **确定性审计报告（选型必读）** → `kb-determinism-proof.md`（10 维审计 + v5 canonical persistence + 实证数据与边界）
 - **ECS 横向对比** → `kb-ecs-comparison.md`
 - **设计决策总纲** → `kb-design-rationale.md`
 

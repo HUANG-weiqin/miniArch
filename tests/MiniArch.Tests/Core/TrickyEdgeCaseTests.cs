@@ -1042,10 +1042,9 @@ public sealed class TrickyEdgeCaseTests
     /// Components with [StructLayout(LayoutKind.Auto)] must be rejected at
     /// storage time. LayoutKind.Auto lets the CLR reorder fields for optimal
     /// alignment. Two hosts running different JIT versions or different CPU
-    /// architectures may reorder differently, producing different byte layouts
-    /// for the same struct. Since Archetype stores components as raw bytes and
-    /// CanonicalChecksum hashes those bytes directly, cross-host lockstep would
-    /// silently diverge.
+    /// architectures may therefore interpret transferred native component cells
+    /// differently. WorldSnapshot v5 uses a field codec, but other raw-cell paths
+    /// still require a stable storage layout for cross-host lockstep.
     ///
     /// This test verifies the fix: LayoutKind.Auto components throw
     /// NotSupportedException when added to the world.

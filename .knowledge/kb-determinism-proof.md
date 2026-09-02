@@ -1,8 +1,8 @@
 ---
 title: 确定性证明 — Lockstep ECS 库级确定性验证
 module: DeterminismProof
-description: miniArch 确定性保证的完整证明矩阵——9 个审计维度、实证数据、测试链接、已知边界、LayoutKind.Auto 修复记录。面向选型决策者和审计者。
-updated: 2026-08-29
+description: miniArch 确定性保证的 10 维证明矩阵、实证数据与边界；含字段级 canonical checksum 和注册顺序边界
+updated: 2026-09-02
 ---
 
 # 确定性证明 — Lockstep ECS 库级确定性验证
@@ -33,7 +33,7 @@ updated: 2026-08-29
 | 4 | Sort/Dedup | ✅ 强确定 | 高 | sort key 唯一（entity id / component type id） |
 | 5 | Archetype byte layout | ✅ 强确定 | 高 | LayoutKind.Auto 拦截修复（2026-07-10） |
 | 6 | Varint/Hash | ✅ 强确定 | 高 | LEB128 + SHA-256 + CRC32（标准算法） |
-| 7 | CanonicalChecksum | ✅ 强确定 | 高 | sort by Id + raw byte feed + SHA-256 |
+| 7 | CanonicalChecksum | ✅ 强确定 | 高 | v5 canonical traversal + 字段级 LE codec + SHA-256 |
 | 8 | Soak 实证 | ✅ 证据级 | 极高 | 259 seed × 6.4M 帧 + 多 host lockstep soak |
 | 9 | Placeholder E2E | ✅ 强确定 | 高 | 两阶段 emit + scratch buffer + EntityFieldResolver |
 | 10 | **Query 迭代顺序** | ✅ **强确定** | **高** | **QueryOrderingTests 14 个测试 + 契约文档（2026-07-11 提升为语义承诺）** |
@@ -111,7 +111,7 @@ updated: 2026-08-29
 - `LayoutKind.Auto` → **被 `ThrowIfManagedComponent` 拒绝**（2026-07-10 修复）
 
 **修复记录**：
-- **漏洞**：`ThrowIfManagedComponent` 只检查 managed references，不检查 `LayoutKind.Auto`。含 `LayoutKind.Auto` 且无 Entity fields 的组件被静默接受。CLR 可重排字段 → 跨 host byte layout 不一致 → CanonicalChecksum 分歧。
+- **漏洞**：`ThrowIfManagedComponent` 只检查 managed references，不检查 `LayoutKind.Auto`。含 `LayoutKind.Auto` 且无 Entity fields 的组件被静默接受；CLR 可重排字段，导致 raw component-cell storage/FrameDelta 在不同 host 上被解释为不同逻辑字段。WorldSnapshot v5 的字段 codec 不读取 padding/布局，但共享存储边界仍必须拦截 Auto layout。
 - **修复**：在 `ThrowIfManagedComponent` 中增加 `LayoutKind.Auto` 检查，throw `NotSupportedException`。
 - **影响**：3 行核心代码，0 回归（902 测试全 PASS）。
 - **测试**：`tests/MiniArch.Tests/Core/TrickyEdgeCaseTests.cs` → `Layoutkind_auto_component_rejected_for_determinism` / `Layoutkind_sequential_component_accepted_normally` / `Record_struct_component_accepted_normally`
@@ -135,20 +135,23 @@ updated: 2026-08-29
 ### 7. CanonicalChecksum 确定性
 
 **机制**：
-- Entity 排序：`entries.Sort((a, b) => a.Entity.Id.CompareTo(b.Entity.Id))` — Id 唯一
-- Component 数据：`FeedRowData` 直接喂 raw bytes（不序列化）
-- Hierarchy：`relations.Sort((a, b) => a.ChildId.CompareTo(b.ChildId))` — Id 唯一
-- Free-list：按 array index 顺序
-- 计算方式：`IncrementalHash` + SHA-256
+- `CanonicalChecksum = SHA256(P(World))`；`P(World)` 与 `WorldSnapshot.Save` 使用完全相同的 `WriteCanonicalWorld` traversal，仅不包含 Save 的 CRC trailer。
+- schema 以精确 `AssemblyQualifiedName` ordinal 排序；archetype 以 schema-index signature 做 lexicographic 排序，不读取 `ComponentType.Value`。
+- 每个 archetype 内 entity id 严格升序，component values 跟随同一 row permutation；hierarchy 按 child id 升序；free list 保持 allocator stack 顺序。
+- component 不再喂 raw memory。缓存的字段计划按 field name ordinal 展开 nested unmanaged structs、fixed buffers 与 inline arrays，primitive 固定宽度 little-endian，bool 规范化为 0/1，完全忽略 CLR padding/offset/pack。
+- schema shape 同时进入 payload，字段增删/改名/改类型和 nested/array shape 变化都会改变或拒绝 checksum。
 
-**保证**：sort by Id + raw byte feed + SHA-256 的组合是 lockstep canonical checksum 的标准做法。
+**保证**：相同组件类型与完整持久化状态，即使 CLR padding 内容或 component 注册顺序不同，也得到相同 v5 bytes 与 canonical checksum。它观察 chunk capacity、slot table、empty archetypes、hierarchy 和 ordered free list；不是忽略存储状态的“业务逻辑等价”hash。
 
 **测试链接**：
-- `tests/MiniArch.Tests/Core/FrameDeltaDeterminismTests.cs`（30 个测试）
-- `tests/MiniArch.Tests/PropertyBased/ReplayConvergencePropertyTests.cs`（FsCheck 150-200 样本）
+- `tests/MiniArch.Tests/Persistence/WorldSnapshotTests.cs`（padding poison、注册顺序、fresh-process、round-trip、schema corruption）
+- `tests/MiniArch.Tests/Core/FrameDeltaDeterminismTests.cs`
+- `tests/MiniArch.Tests/PropertyBased/ReplayConvergencePropertyTests.cs`
 
 **代码位置**：
-- `src/MiniArch/Core/WorldSnapshot.cs:300-343`（ComputeCanonicalChecksum）
+- `src/MiniArch/Core/WorldSnapshot.cs`（`ComputeCanonicalChecksum` / `WriteCanonicalWorld` / component plan）
+
+`Checksum()` 是另一个有意保留的 rollback/lockstep 投影：它排除 chunk capacity、empty archetypes 和 free list，且保留 component physical-row order。RestoreState parity 使用它；不要把两个观察边界混为一谈。
 
 ### 8. Soak 实证
 
@@ -220,7 +223,7 @@ miniArch 的确定性保证**不覆盖**以下维度——这些是你们应用�
 | 跨平台 float 精度 | 不保证（同 byte 格式但运算结果可能不同） | 整数运算或所有 host 同平台 |
 | System 执行顺序 | 不约束（用户自己排序 Systems） | 确保 Systems 跨 host 同序 + 无 side effects |
 | 外部输入时序 | 不约束（lockstep 要求输入帧对齐） | 网络层保证输入帧对齐 |
-| 组件注册顺序 | 不约束（`ComponentRegistry.Shared` 全局单例） | 确保所有 host 启动时按相同顺序注册相同组件 |
+| 组件注册顺序 | v5 snapshot/canonical checksum 不依赖注册 id；FrameDelta wire/runtime signature 仍使用 registry id | 交换 FrameDelta 的 host 必须完成一致 schema handshake；仅比较 v5 canonical bytes/checksum 不要求相同注册顺序 |
 
 ---
 
@@ -242,7 +245,7 @@ miniArch 的确定性保证**不覆盖**以下维度——这些是你们应用�
 
 | 库 | 确定性验证 | Soak 测试 | 多 host lockstep | PBT | LayoutKind 检查 |
 |----|-----------|----------|-----------------|-----|----------------|
-| **miniArch** | ✅ 9/9 维度 | ✅ 259 seed × 6.4M 帧 | ✅ 4 host 每帧 checksum | ✅ FsCheck | ✅ 已拦截 |
+| **miniArch** | ✅ 10/10 维度 | ✅ 259 seed × 6.4M 帧 | ✅ 4 host 每帧 checksum | ✅ FsCheck | ✅ 已拦截 |
 | Unity DOTS NetCode | ✅ 有（Predicted + Ghost） | ✅（Unity 测试套件） | ✅ | ❌ | N/A（绑定 Unity） |
 | Friflo | ❌ 零 | ❌ | ❌ | ❌ | ❌ |
 | Arch | ❌ 零 | ❌ | ❌ | ❌ | ❌ |
@@ -261,7 +264,7 @@ miniArch 的确定性保证**不覆盖**以下维度——这些是你们应用�
 
 ### 长版
 
-> miniArch 的确定性保证覆盖 10 个维度：Entity ID 分配（LIFO free-list + shift-not-swap）、版本号（wrap-to-1）、Submit/Replay 顺序（Create→Hierarchy→Ops→Destroy）、Sort/Dedup（无 ties）、Archetype byte layout（LayoutKind.Auto 拦截）、Varint/Hash（LEB128 + SHA-256 + CRC32）、CanonicalChecksum（sort by Id + raw byte feed）、Soak 实证（259 seed × 6.4M 帧）、Placeholder E2E（两阶段 emit + scratch buffer）、**Query 迭代顺序（archetype 签名顺序 + entity 存储顺序，14 个测试守护）**。实证数据来自单 host soak（Submit vs Replay）、多 host lockstep soak（N host Replay 路径收敛）、三路 parity（Submit/Replay/Restore byte-equal）、FsCheck PBT、以及 QueryOrderingTests。已发现并修复 7 个确定性相关 bug（B1-B6 + LayoutKind.Auto）。float 运算确定性、系统执行顺序、外部输入时序等应用层维度不在 ECS 库的覆盖范围内。
+> miniArch 的确定性保证覆盖 10 个维度：Entity ID 分配（LIFO free-list + shift-not-swap）、版本号（wrap-to-1）、Submit/Replay 顺序（Create→Hierarchy→Ops→Destroy）、Sort/Dedup（无 ties）、Archetype byte layout（LayoutKind.Auto 拦截）、Varint/Hash（LEB128 + SHA-256 + CRC32）、CanonicalChecksum（v5 canonical traversal + 字段级 LE codec）、Soak 实证（259 seed × 6.4M 帧）、Placeholder E2E（两阶段 emit + scratch buffer）、**Query 迭代顺序（archetype 签名顺序 + entity 存储顺序，14 个测试守护）**。实证数据来自单 host soak（Submit vs Replay）、多 host lockstep soak（N host Replay 路径收敛）、三路 parity（Submit/Replay canonical 收敛 + Restore rollback 投影收敛）、FsCheck PBT、以及 QueryOrderingTests。已发现并修复 7 个确定性相关 bug（B1-B6 + LayoutKind.Auto）。float 运算确定性、系统执行顺序、外部输入时序等应用层维度不在 ECS 库的覆盖范围内。
 
 ---
 
@@ -270,8 +273,8 @@ miniArch 的确定性保证**不覆盖**以下维度——这些是你们应用�
 - 理解这个模块时，应该把它看成：**miniArch 确定性保证的"审计报告"**——不是设计文档，是实证数据汇总。
 - 最重要的抽象：
   - **Soak test**：长周期随机操作 + 双路径校验 → 发现 Submit/Replay 分歧
-  - **CanonicalChecksum**：sort by Id + raw byte feed + SHA-256 → 跨 host byte-equal 比较
-  - **三路 parity**：Submit / Replay / Restore 三条路径 byte-equal → 覆盖 rollback 场景
+  - **CanonicalChecksum**：完整 v5 persistence payload + 字段级 codec + SHA-256 → 跨 host/注册顺序 byte-equal 比较
+  - **三路 parity**：Submit/Replay 用 canonical persistence hash 收敛；Restore 用 legacy rollback projection 收敛 → 覆盖两种观察边界
 - 常见误解：
   - 「miniArch 处理了 float 运算确定性」——**错**。miniArch 直接存 IEEE 754 bytes，不转定点数。跨平台 float 运算确定性是应用层责任。
   - 「确定性 = 正确性」——**错**。Soak test 验证"同一输入 → 同一输出"，不验证"输出是否正确"（domain logic 的责任）。
@@ -287,4 +290,4 @@ miniArch 的确定性保证**不覆盖**以下维度——这些是你们应用�
 
 - **float 运算确定性是最大的外部风险**：miniArch 保证 byte-level 一致，但 `Position.X += Velocity.X * dt` 的运算结果在不同 CPU 上可能不同。你们必须自己处理这一点（定点数 / 同平台 / deterministic math lib）。
 - **System 执行顺序是第二大风险**：miniArch 不约束 Systems 的执行顺序。如果两个 host 的 Systems 顺序不同，即使 ECS 状态一致，游戏状态也会 diverge。
-- **组件注册顺序**：`ComponentRegistry.Shared` 全局单例，id 按注册顺序分配。如果两个 host 的注册顺序不同，component type id 不一致 → archetype signature 不一致 → checksum 分歧。确保所有 host 启动时按相同顺序注册相同组件。
+- **组件注册顺序边界**：`ComponentRegistry.Shared` 的 id 仍按注册顺序分配，因此 FrameDelta 交换方必须完成一致的 component schema handshake。`WorldSnapshot` v5 与 `CanonicalChecksum` 已改用精确类型 identity/schema index，不因注册顺序不同而分歧。

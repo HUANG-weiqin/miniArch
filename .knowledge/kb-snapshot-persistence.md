@@ -1,163 +1,210 @@
 ---
 title: Snapshot Persistence
 module: MiniArch.Core Snapshot
-description: Full-world snapshot save/load design for unmanaged components (WorldSnapshot.Save/Load, Clone, CaptureState/RestoreState), plus Checksum double mode
-updated: 2026-07-25
+description: WorldSnapshot v5 字段级 canonical 持久化、双 checksum 观察边界，以及 Clone/CaptureState 的职责分工
+updated: 2026-09-02
 ---
 # Snapshot Persistence
 
 ## 这个模块是干什么的
 
-- 把 `World` 的当前活体数据导出成紧凑二进制 snapshot
-- 从 snapshot 快速重建 archetype / chunk / entity metadata
-- 保留 entity slot version 语义（`default(Entity)` 非法，活体 `Version > 0`）
-- `Checksum()` / `CanonicalChecksum()` 双模式 peer 状态校验（见本章 Checksum 双模式段）
-
-## 三套状态复制机制（职责正交，不可互相替代）
-
-| 机制 | 产物 | 跨进程 | 用途 |
-|---|---|---|---|
-| `WorldSnapshot.Save/Load` | 版本化字节流 | ✅ | 持久化/网络/checksum |
-| `World.Clone()` (`WorldClone.Clone`) | 全新独立 `World` | ❌ | 分支模拟/独立副本/长生命周期 checkpoint |
-| `World.CaptureState/RestoreState` (`WorldStateSnapshot`) | opaque 句柄（绑定源 World） | ❌ | 高频原地回滚（GGPO 60fps，零分配稳态） |
-
-> **概念唯一性**：这三者看似都在"复制世界状态"，但产物形状不同（字节流 / 新 World / 原地句柄），
-> 各自服务于一个不可替代的场景。`Clone` 不应被推荐为高频回滚工具（每次产新 World），
-> `CaptureState` 不能跨进程（含 raw internal 数组）。任何文档把它们混用即为漂移。
+- `WorldSnapshot.Save/Load`：把完整 `World` 状态编码成可跨进程传输的 v5 字节流，并严格重建。
+- `World.Clone()`：创建独立的内存副本，不经过持久化格式。
+- `World.CaptureState/RestoreState`：为高频原地回滚保存绑定源 World 的 opaque lease。
+- `Checksum()` / `CanonicalChecksum()`：分别观察回滚/lockstep 投影和完整 v5 持久化状态。
 
 ## 架构
 
-- 核心组成：
-  - `src/MiniArch/Core/WorldSnapshot.cs`：snapshot 二进制读写入口
-  - `src/MiniArch/Core/WorldClone.cs`：内存直拷 World 克隆（零序列化）
-  - `src/MiniArch/Core/World.cs`（+ partial 文件）：slot version、location、free id 重建桥接点
-  - `src/MiniArch/Core/Archetype.cs` + `Archetype.Storage.cs`：按快照 chunk 精确导入实体批次
+核心入口：
 
-## WorldClone vs WorldSnapshot vs WorldStateSnapshot
+- `src/MiniArch/Core/WorldSnapshot.cs`：v5 writer/loader、字段计划、两个 checksum。
+- `src/MiniArch/Core/WorldClone.cs`：内存克隆。
+- `src/MiniArch/Core/World.cs`：slot version、location、free-list 与 reserved-count 重建桥接。
+- `src/MiniArch/Core/Archetype.Storage.cs`：提供单个 component cell 的只读/可写 byte span；持久化层不会整列 raw copy。
 
-- `WorldSnapshot.Save/Load`：走二进制序列化，支持跨进程传输
-- `WorldClone.Clone`：纯内存直拷，跳过全部编解码，5-20× 快于 Snapshot 往返；产物是**新 World**
-- `World.CaptureState/RestoreState`：原地 raw 数组拷贝，**池化 payload + value lease**，稳态零 GC；产物是**绑定源 World 且带 generation 的句柄**。池化数组必须额外保存每类状态在 capture 时的逻辑长度；Restore 不得按可能更大的 backing-array capacity 复制。
-- 前两者共享同一套 internal 重建 API（`world.Reset(slotCount)`, `SetSnapshotEntityVersion()`, `SetSnapshotLocation()`）；后者独立走 `WorldStateSnapshot` + `ArchetypeBackupEntry` + `HierarchyTable.CaptureState/RestoreState`
-- v3 起 free list 直接序列化/反序列化（`WriteFreeList`/`ReadFreeList`），不再通过扫描 record 重建。Clone 用 `CopyFreeIdsFrom` 内存直拷。
-- Reservation 不单独序列化：slot 必为 occupied、free 或 reserved 三者之一；Load、Clone、RestoreState 都在 records/free list 就位后用 `slotCount - freeCount - occupiedCount` 推导 `_reservedCount`。这样即使 snapshot/clone 发生在 CommandStream 已预留 real id、尚未 materialize 的窗口，`EntityCount` 仍与源 World 一致。
+### 三套状态复制机制
 
-### WorldStateSnapshot 生命周期（2026-07-25 generation lease）
+| 机制 | 产物 | 跨进程 | 主要用途 |
+|---|---|---|---|
+| `WorldSnapshot.Save/Load` | v5 canonical 字节流 / 新 `World` | ✅ | 存档、状态同步、replay checkpoint |
+| `World.Clone()` | 新的独立 `World` | ❌ | 分支模拟、长生命周期内存副本 |
+| `CaptureState/RestoreState` | 绑定源 World 与 generation 的 value lease | ❌ | 高频原地 rollback |
 
-**池化设计**：
-- `World._stateSnapshotPool: Stack<WorldStateSnapshotPayload>` 只池化大数组 payload；公开 `WorldStateSnapshot` 是 readonly value lease，保存 payload 引用和 capture generation。
-- `CaptureState()`：池非空时 Pop payload（零分配），否则冷启动创建 payload；递增 generation、填充数据后返回 value lease。
-- `RestoreState(lease)`：同时校验 payload 存活、lease generation 与 payload 当前 generation、source World；恢复后把 payload 标记 recycled、`Clear()`、Push 回池。
-- `lease.Dispose()`：淘汰未消费 checkpoint 时不恢复 World，只回收 payload；对 default、已 restore/dispose 或 stale lease 幂等 no-op。滚动 ring 覆盖旧 slot 前必须 Dispose，否则 payload 仍由旧 lease 合法持有，不能复用。
-- 池容量自我稳定：连续 N 次 `CaptureState` 后，lease 通过 Restore 或 Dispose 归还，池就积累 N 个 payload；下一轮 N 次 CaptureState 全部命中池 → 稳态零 GC。
-- generation 是必需信息：若公开 handle 本身也是被复用的 class，旧引用与新引用指向同一对象，池复用会把旧引用重新变为 live；class 内再加 generation 仍无法区分两个别名。value lease 把捕获时 generation 固定在调用方副本中，同时保住零分配。
+三者的状态边界不同，不能互换：`Clone` 每次创建新 World；`WorldStateSnapshot` 包含内部数组并绑定来源；只有 `WorldSnapshot` 是持久化协议。
 
-**IsRecycled 公共属性**：
-- `WorldStateSnapshot.IsRecycled`：默认 lease、已 Restore/Dispose 的 lease、generation 已过期的 stale lease、源 World 已 Dispose 的 lease 均为 `true`；当前 live lease 为 `false`。
-- World Dispose 后保留的 lease 仍可调用 `Dispose()`：此时 payload 不再回池，而是断开 SourceWorld 并释放大数组，避免 lease 继续保留整棵 World/池化内存。
-- 用途：调试断言、防止 double-restore 和 payload-reuse ABA。旧 lease 即使底层 payload 被下一次 Capture 复用也保持无效，不能消费新 lease。
+## v5 canonical 持久化
 
-**支持 GGPO 多帧回滚窗口**：
-```csharp
-var ring = new WorldStateSnapshot[8];
-for (int i = 0; i < 8; i++) { ring[i] = world.CaptureState(); Simulate(); }
-// 检测到第 k 帧预测错误：
-world.RestoreState(ring[k]);  // 其他 ring[i] 仍 live
-world.RestoreState(ring[k+3]); // 可继续乱序 restore
-// 覆盖或丢弃未 restore 的 slot 前：
-ring[k+1].Dispose();
+### 唯一字节域
+
+定义 `P(World)` 为 `WriteCanonicalWorld(world, sink)` 输出：
+
+```text
+P(World) = magic:LE32 + version(5):LE32 + canonical payload
+Save     = P(World) + CRC32(P(World)):LE32
+CanonicalChecksum = SHA256(P(World))
 ```
-之前单 spare 设计实质只支持 depth=1（>1 时第二次 CaptureState 强制分配），README 宣称的"GGPO-style 60fps"名实不符。本次修复让真实多帧窗口稳态零 GC。
 
-**测试覆盖**（`tests/MiniArch.Tests/Persistence/WorldSnapshotTests.cs`）：
-- `Restored_snapshot_is_marked_recycled`
-- `Restoring_same_snapshot_twice_throws`
-- `Multi_frame_rollback_window_round_trips_out_of_order`
-- `Multi_frame_window_is_zero_alloc_in_steady_state`（断言 CaptureState 复用 pooled payload）
-- `BUG_recycled_snapshot_reference_is_not_reactivated_after_pool_reuse`（旧 generation lease 不能消费复用后的新 capture）
-- `BUG_rolling_snapshot_window_discards_old_payloads_without_allocation`（淘汰未 restore 的 lease 可回收 payload，滚动窗口稳态零分配）
-- `BUG_reused_larger_rollback_snapshot_does_not_restore_stale_hierarchy_tail`（池化 backing array 的 capacity 不得被当作 capture 时的 hierarchy 有效长度）
+`Save` 与 `ComputeCanonicalChecksum` 调用同一 traversal，只替换 sink：前者边写 stream 边累计 CRC，后者增量喂给 SHA-256。两者都不物化完整 snapshot payload。
+
+v5 payload 依次包含：
+
+1. chunk capacity、slot count、schema count、archetype count、hierarchy count；
+2. 每个 slot 的 version；
+3. schema table：精确类型 identity 与 canonical schema shape；
+4. 全部 archetype（包括空 archetype）的 signature、升序 entity id 与字段级 component values；
+5. 按 child id 升序的 hierarchy relation；
+6. 保持实际 stack 顺序的 free-list entity ids。
+
+free-list 不重复保存 version；它由 slot version table 唯一推导。reservation 也不单独保存，Load 在 live/free 状态就位后由 `slotCount - liveCount - freeCount` 推导。
+
+### 与注册顺序无关的顺序
+
+canonical traversal 不使用运行时 `ComponentType.Value`：
+
+- schema：按精确 `Type.AssemblyQualifiedName` 做 ordinal 排序；identity 必须非空、唯一，UTF-8 最长 16 KiB；
+- archetype：先把 component 映射为 schema index，再按 index signature 做 lexicographic 排序；
+- archetype 内 row：按 `Entity.Id` 严格升序；对应 column values 使用同一 row permutation；
+- hierarchy：按 child id 升序；
+- free list：不排序，保留 allocator stack 顺序，因为它决定下一次 id 分配。
+
+因此，相同类型和完整持久化状态在不同进程、不同 component 注册顺序下产生相同 bytes/checksum。精确 assembly-qualified identity 仍意味着程序集名或版本发生变化属于 schema 变化，不承诺跨版本兼容。
+
+### 字段级 canonical component plan
+
+`WorldSnapshot` 以 `Type` 为 key，通过线程安全 cache 只构建一次 immutable `ComponentPlan`。首次构建使用反射发现 shape，并通过 `DynamicMethod` + `ldflda` 取得当前 CLR 中真正的 managed field offset；稳态写/读仅执行缓存的 leaf operations，不做 per-component 反射、boxing 或分配。
+
+持久化的逻辑字段集合与顺序：
+
+- 所有 non-static instance fields，包含 private fields 与 auto-property backing fields；
+- struct fields 按 field name 做 ordinal 排序，declaration order 不进入协议；
+- nested unmanaged structs 递归展开；
+- fixed buffer 与 `InlineArrayAttribute` 按声明长度展开元素；
+- schema shape 记录 field name、declared/nested nominal type、primitive kind 与 fixed/inline length。
+
+wire 规则：
+
+- `bool` 固定 1 byte；Save 将任意非零 CLR 表示规范化为 `1`，Load 只接受 `0` 或 `1`；
+- `sbyte/byte` 1 byte，`short/ushort/char` 2 bytes，`int/uint/float` 4 bytes，`long/ulong/double` 8 bytes；
+- 所有多字节 primitive 都是 little-endian；
+- enum 按 underlying primitive 编码；
+- `float` / `double` 保留 IEEE bit pattern，不做数值归一化。
+
+CLR alignment、实际 offset、pack、field declaration order、inter-field/tail padding 和 `Unsafe.SizeOf<T>()` 都不写入 wire/schema。offset 只用于在当前进程找到逻辑 leaf。因此两个 component 的逻辑字段相同但 padding bytes 不同，仍产生相同 snapshot bytes 和 checksum。
+
+以下 shape 无 canonical 表示，会在 `Save` 写第一个 byte 前以 `NotSupportedException` 拒绝；Load 对应包装为 `InvalidDataException`：
+
+- pointer、function pointer、`IntPtr`、`UIntPtr`；
+- open/by-ref/by-ref-like、含 managed reference 或其他非 closed-unmanaged shape；
+- `LayoutKind.Auto`；
+- 任意实际 field range overlap（包括 overlapping explicit layout）；
+- recursive value shape；
+- 非法 fixed buffer / inline array layout 或长度。
+
+不存在 raw-memory fallback。
+
+### Schema shape 是兼容门禁
+
+每个 schema row 保存：
+
+```text
+identityLength + exact AssemblyQualifiedName UTF-8
+shapeLength    + canonical schema-shape bytes
+```
+
+Load 解析 identity 后为本地 `Type` 构建同一个 plan，并要求 identity 与 shape byte-equal。字段增删、字段名或类型变化、nested nominal shape 变化、fixed/inline 长度变化都会拒绝。单纯 padding、offset、pack 或 declaration order 变化不会改变 shape。
+
+### 严格 Load 与往返不变量
+
+`Load` 只接受 version 5；v3、v4 和未知版本都抛 `InvalidDataException`。处理顺序：
+
+1. 把输入复制到单个 `MemoryStream` backing buffer；
+2. 验证最小长度、magic、version 和覆盖整个 `P(World)` 的 CRC32；
+3. 对 payload 做完整 dry validation；
+4. 只有全部合法后才注册 runtime component ids、创建 World 并反向执行同一 component plan；
+5. 构造阶段异常时 dispose 部分 World，不发布半构造结果。
+
+dry validation 覆盖有界 header counts、严格 UTF-8/identity、schema 顺序与重复、shape、archetype signature 顺序与重复、schema usage、row/id 重复和范围、component payload 长度与 bool wire、hierarchy endpoint/重复 child/cycle、free-list count/id/重复/live overlap，以及 trailing payload。
+
+核心不变量：
+
+```text
+Save(Load(Save(world))) == Save(world)   // byte-for-byte
+```
+
+CRC 只检测传输/存储损坏，不提供 schema migration 或兼容能力。Save 对 stream I/O 失败不承诺事务性回滚；调用方若需要原子文件替换，应先写临时文件再 rename。
 
 ## Checksum 双模式
 
-- **`world.Checksum()`**（`World.cs:1316` → `WorldSnapshot.ComputeChecksum`）：快，**非空 archetype 按 signature 顺序**；entity Id 列表在 archetype 内排序，但 component bytes 仍按物理 row 顺序输入；输入：所有 slot version + 非空 archetype data + hierarchy；**不含 free list**。用于同 delta 序列驱动的 peer 间检测分叉。
-- **`world.CanonicalChecksum()`**（`World.cs:1325` → `WorldSnapshot.ComputeCanonicalChecksum`）：慢，**所有活 entity 按 Id 全局排序**。输入：仅活 entity（id+version+组件）+ hierarchy + **free list**。用于跨不同构造路径（replay / snapshot-load / 手工构造 / Clone）的世界间逻辑等价比较。
+| API | 观察边界 | 适用场景 |
+|---|---|---|
+| `world.Checksum()` | slot versions、非空 archetypes、live hierarchy、字段级 component values；排除 chunk capacity、空 archetype、free list | 同 mutation/replay 路径的 rollback parity；保留旧投影语义 |
+| `world.CanonicalChecksum()` | 精确 `SHA256(P(World))`，即 v5 Save 除 CRC trailer 外的全部状态与 schema metadata | 判断完整持久化状态是否一致；跨进程/注册顺序比较 |
 
-### Padding 字节安全
-Archetype 存储使用 `GC.AllocateArray`（零初始化）分配，组件 struct padding 确定为 0，避免跨 peer 因未初始化内存产生 hash 差异。
+`Checksum()` 仍保留历史上的 path-sensitive 行为：archetype 内 entity id 列表独立排序，但 component values 保持物理 row order。逻辑值相同而 storage history 不同的 worlds 可能得到不同结果。它现在也使用字段计划，不再 hash raw component memory。
 
-### 决策
-- **双模式而非单模式**：Checksum 快且足够 lockstep 场景；CanonicalChecksum 慢但容不同路径。
-- **SHA-256 而非 XXHash64**：密码学安全 hash 避免对抗性 netcode 碰撞，且 hash 不在热路径。
-- **Free list 纳入 canonical**：fast 假设 delta 驱动 → free list 一致；canonical 用于不同路径 → free list 可能分叉。
-- **Padding 零初始化保证在 storage 层而非 checksum 层**：storage 层分配即确定，不做则 hash 不可靠。
+`CanonicalChecksum()` 包含 chunk capacity、所有 slot versions、empty archetypes、hierarchy 与有序 free list，所以它不是“忽略存储形状的业务逻辑等价”hash。例如 `RestoreState` 会把 capture 后才发现的 archetype 留在 World 中并清空；恢复前后的业务实体可相同，但 canonical checksum 会因多出的 empty archetype 改变。此类 rollback parity 应使用 `Checksum()`。
 
-### 坑点
-- `Checksum` 依赖同布局演化路径：archetype 已按 signature 排序，不再依赖创建顺序；但不同 swap-remove/物理 row 历史仍会产生不同 hash。逻辑相等但布局路径不同的 world 可能误报。
-- `CanonicalChecksum` 仍依赖 `ComponentType.Value` 进程内一致性：跨进程比较时双方 `ComponentRegistry` 注册顺序必须一致。
-- 两个 checksum 不适用于含托管引用组件的 world（构造时已 fail fast）。
+两个 checksum 都使用 SHA-256；它们不能替代版本/schema 协商，也不保证应用层 float 运算跨平台确定。
 
-### 入口
-- `src/MiniArch/Core/WorldSnapshot.cs:221-300`
-- `tests/MiniArch.Tests/Persistence/WorldSnapshotTests.cs`
+## WorldStateSnapshot 生命周期
 
-### CRC32 尾部校验（v4 格式）
+- `World._stateSnapshotPool` 只池化大数组 payload；公开 `WorldStateSnapshot` 是 readonly value lease，保存 payload 引用与 capture generation。
+- `CaptureState()` 从池取 payload 或冷启动创建，递增 generation 并填充数据。
+- `RestoreState(lease)` 校验 payload 存活、generation 与 source World；恢复后清理并归还池。
+- `lease.Dispose()` 丢弃 checkpoint 而不恢复；default、已消费或 stale lease 是幂等 no-op。
+- value lease 必须携带 generation：若复用公开 class handle，旧引用会与新引用别名同一对象，无法阻止 ABA。
+- 池化 backing arrays 必须保存 capture 时的逻辑长度；Restore 不能把较大 capacity 当作有效数据。
+- `IsRecycled` 对 default、已 Restore/Dispose、stale generation 或来源 World 已 Dispose 的 lease 返回 `true`。
 
-2026-07-01 新增：`WorldSnapshot.Save` 在写入所有 body 字节后追加 `Crc32.HashToUInt32` 校验值。
-`Load` 在 v4 格式下先验证 CRC 再解析 body，损坏时抛出 `InvalidDataException("CRC mismatch at offset ...")`。
-v3 格式仍可读且跳过 CRC 校验。
+支持多帧 rollback window：覆盖 ring slot 前先 `Dispose()` 未消费 lease；一轮 warm-up 后相同深度的 capture/restore/dispose 可复用 payload。
 
-格式结构：`[magic:4][version=4:4][body:...][crc32:4]`。body 通过 `MemoryStream` 缓冲后再算 CRC，
-避免直接写入输出流后无法追加尾部。对低频 Save 操作可接受的单次分配。
+```csharp
+var ring = new WorldStateSnapshot[8];
+for (var i = 0; i < ring.Length; i++)
+{
+    ring[i] = world.CaptureState();
+    Simulate();
+}
 
-### Schema codec 与外部读入防御（2026-07-13）
+world.RestoreState(ring[3]);
+ring[4].Dispose();
+```
 
-`ComponentSchema.Export/Import` 与 `WorldSnapshot.Save/Load` 共享 `ComponentSchemaCodec`：
-
-- schema type name 单一事实来源：`AssemblyQualifiedName ?? FullName ?? Name`。
-- `Fingerprint()` 也使用同一 schema name，避免同名不同程序集/版本的握手 hash 碰撞。
-- schema name 读取使用有界 UTF-8 reader（当前上限 16KB），不再裸用 `BinaryReader.ReadString()`。
-- 外部读入 schema 时必须满足 miniArch 组件约束：resolved `Type` 唯一、无 open generic、value type、非 by-ref-like、无托管字段、满足 `unmanaged` generic constraint。WorldSnapshot 还必须在 registry 注册前拒绝 enum 之外的 `LayoutKind.Auto`；`ComponentSchema` 是完整 registry handshake，可包含已经注册但 storage 不支持持久化的类型。
-- `WorldSnapshot.Load` 额外拒绝：重复 schema、截断 body、v3 trailing bytes、超出 `World.MaxChunkCapacity` 的 chunk capacity、任意 slot（含 reserved）的非正 version、非法 free-list count/id/version/duplicate/live-overlap、非法 hierarchy endpoint/duplicate child/cycle、非法 archetype component count/schema index/重复 component、跨 archetype重复 signature、非法 row count/重复 entity id。
-- dry-validate 使用 schema index 构造归一化 signature 并跨 archetype 去重；不能依赖实际构建阶段的 `GetOrCreateArchetype` 静默合并 malformed payload，因为这会让 Load 后的可观察 archetype 结构和重存字节偏离输入声明。
-- `WorldSnapshot.Load` 的 schema 解析与 payload 构建分两阶段：先 dry-validate 完整 body，再注册 schema type / 构建 `World`，避免后续 payload 无效时污染 `ComponentRegistry.Shared`。
-- header count 不能先驱动大分配再等待 `Read*` 发现 EOF：slot version table 在分配前用 long 计算所需字节并与剩余 body 对照，几十字节的恶意 header 不得诱发大数组。
-- Load 只保留输入的一份 `MemoryStream` backing buffer；v3/v4 body 以 offset/length view 解析，v4 CRC 直接对 span 计算，不再 `ToArray` 后再复制 body。峰值内存从约三份 snapshot 降为一份。
-
-结论：`Import` / `Load` 是不可信输入边界，错误必须统一 fail-fast 为 `InvalidDataException`，且在完成全量验证前不得污染 `ComponentRegistry.Shared`。持久化 Load 的非灾难性失败不会发布半构建 World；不承诺对任意大合法输入或 OOM 提供事务 rollback。
+`WorldStateSnapshot` 不包含 `CommandStream` pending batch、typed stores、placeholder sequence 或 async frozen state。录制 + 回滚流程应在 capture 前 `Snapshot()` + `Clear()` 排空 stream，restore 后再 `Clear()` 并重新录制。
 
 ## 决策
 
-- 不把运行时 `Chunk._data` 当作持久化格式——snapshot 按逻辑列写入
-- 第一版只支持 `unmanaged` 组件；含托管引用组件在 chunk 构造时 fail fast
-- 存档写组件类型的稳定字符串标识，不写运行时 `ComponentType.Value`
-- 存档写 entity slot versions（不只活体 entity version）
-- load 不能通过 `Add/Set/Remove` 回放世界——那会破坏 chunk 边界
-- **Save 字节规范化（2026-07-19 排序插入）**：`WriteArchetype` 内按 entity.Id 升序排 row index，column payload 同步按排序后 row 顺序写。archetype 本身通过 `PublishArchetypeSnapshot` 按 signature 排序插入（见 `kb-core-ecs.md` §Query 迭代顺序契约），因此 `_archetypeSnapshot` 本身就是按 `ComponentType.Value` 排序的——Save 自然产生规范化输出，无需额外排序。空 archetype 保留，且因排序插入，RestoreState 遗留的空 archetype 自动出现在正确签名位置。  
-  - `ComputeChecksum` 独立走 `CollectChecksumArchetypes`：过滤空 archetype（RestoreState 瞬态产物），不排序。  
-  - `CanonicalChecksum` 负责跨不同构造路径的逻辑等价比较，见 Checksum 双模式段。
+- 持久化的 owner 是逻辑字段，不是 `Chunk._data`；raw bytes 同时携带字段值与 CLR padding，不能作为稳定协议。
+- stable identity 和 schema shape 都是协议的一部分；runtime component id 仅用于本进程 storage。
+- Save、Load、canonical checksum 共用一个 component plan；Save 与 canonical checksum再共用一个 world traversal，避免两个“canonical”定义漂移。
+- 包含 empty archetypes 与 allocator 状态，因为目标是精确持久化/重存字节稳定，而不是只表示活实体。
+- v5 是破坏性替换，不保留 v3/v4 reader：错误地“兼容”旧 raw 格式会重新引入 padding 与注册顺序依赖。
+- `ComputeChecksum` 公共签名保留，但只保留原有观察投影；其 component bytes 也必须 canonical。
 
 ## 认知模型
 
-- "逻辑 chunk 导出格式"，而不是 "runtime chunk 内存镜像"
+- `WorldSnapshot v5` 是“**逻辑字段协议 + 完整 World 状态机快照**”，不是 runtime chunk 内存镜像。
+- `ComponentPlan` 是 Type 到 `(schema shape, ordered primitive leaves)` 的不可变编译结果。
+- CLR field offset 只回答“当前进程去哪里取/写值”；wire order 由 schema 决定，两者不能混为一谈。
+- `CanonicalChecksum` 是 Save payload 的另一种 sink，不是独立实现的近似 hash。
 
 ## 入口
 
 - `src/MiniArch/Core/WorldSnapshot.cs`
+- `src/MiniArch/Core/Archetype.Storage.cs`
+- `src/MiniArch/Core/World.cs`
 - `tests/MiniArch.Tests/Persistence/WorldSnapshotTests.cs`
-- `tests/MiniArch.Tests/Persistence/WorldCloneTests.cs`
+- `tests/MiniArch.Tests/Core/HardeningEdgeCaseTests.cs`
+- `tests/MiniArch.Tests/CrossFeatureParityTests.cs`
+- `tests/MiniArch.Tests/Core/SubmitReplayRestoreParityTests.cs`
 
 ## 坑点
 
-- 只存活体 entity version 导致读档后复用旧 id 时版本回退
-- 读档复用 `GetWritableChunk` 会挤压重排快照 chunk 边界
-- `struct` 不一定是 `unmanaged`
-- 跨版本类型名变化会导致 schema 解析/握手失配；v4 snapshot 有尾部 CRC32，v3 兼容读取没有 CRC。CRC 只能检测字节损坏，不能提供跨版本 schema 兼容。
-- schema/type 表是外部输入边界；不要绕过 `ComponentSchemaCodec` 直接 `ReadString()` / `Type.GetType(..., throwOnError: true)`。
-- internal 重建 API 分布在 World 的多个 partial 文件中，修改时需确认编译范围
-- **World rollback 不包含 CommandStream state**：`RestoreState` 只恢复 World 的 storage、allocator 与 hierarchy；stream 的 pending batch、typed stores、placeholder sequence 与 async frozen state 都不在 snapshot 中。`Clear()` 会重置 stream 的 pending/deferred 状态。实测的安全流程是 capture → consume/clear stream → restore → clear stream → 重新录制。坑点在以下场景：
-  - **`RestoreState` 后如果继续录制而不 `Clear`**：`_deferredSeq` 不会自动回退（它不在 World 里）。但在正常 GGPO 流程中，`RestoreState` 后应该是重新录制修正后的输入，此时先 `Clear()` 再 `Record` 即可。
-  - **`CaptureState` 前后 `CommandStream` 的 pending batch 状态**（`_frozen.PendingBatch`、`_frozen.PendingBatchCount` 等）不在 World 内，不被 capture/restore。如果 capture 前 stream 有未 snapshot 的 batch，restore 后这些 batch 会残留。**建议 capture 前先 `Snapshot()` + `Clear()` 确保 stream 干净。**
-- **推荐模式**：
-  - **纯 GGPO（无录制）**：`CaptureState` → 直接读写组件 → `RestoreState` → 重新跑系统。
-  - **录制 + 回滚**：capture 前先 `stream.Snapshot()` + `stream.Clear()` 排空，然后 `CaptureState()` → 录制/Replay/跑系统 → `RestoreState()` → `stream.Clear()` → 重新录制修正输入 → `Snapshot` → `Replay` → 跑系统。
+- 不要通过清零 padding 来“修复”持久化；padding 根本不属于协议。
+- 不要在 snapshot schema/order 中写 `ComponentType.Value`；它由进程内注册顺序分配。
+- 不要把 `CanonicalChecksum` 用作 RestoreState 的旧投影 parity；empty archetype 是其有意观察的状态。
+- 不要通过 `Add/Set/Remove` 回放 Load；必须直接重建 slot、archetype row、hierarchy 与 allocator 状态。
+- schema identity 变化会使旧文件不可读；v5 没有 migration registry。需要迁移时由应用在 MiniArch 边界外显式转换。
+- `struct` 不等于可持久化：managed references、native pointers、overlap 和 AutoLayout 都会被拒绝。
+- Load 是不可信输入边界；任何新字段都要同时加入 dry validation、construction 和 Save→Load→Save 回归。
+- `RestoreState` 只恢复 World，不恢复任何 `CommandStream` 状态。

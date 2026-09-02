@@ -1,5 +1,15 @@
 # Changelog
 
+## 6.0.0 (2026-09-02)
+
+- **Breaking: `WorldSnapshot` is now canonical format v5 only** — `Load` rejects v3, v4, and unknown versions with `InvalidDataException`. Existing snapshot files must be regenerated or migrated outside MiniArch.
+- Removed raw-memory component persistence and hashing. Snapshot values are encoded from cached field plans: all instance fields (including private/backing fields), nested unmanaged structs, fixed buffers, and inline arrays; primitives use fixed-width little-endian, booleans are canonical `0`/`1`, enums use their underlying type, and floating-point bit patterns are preserved.
+- Snapshot/schema bytes no longer contain CLR padding, offsets, alignment, pack, declaration order, or runtime `ComponentType.Value`; worlds with identical logical fields and v5 persistence state are stable across poisoned padding, processes, and component registration order.
+- `Save` and `ComputeCanonicalChecksum` now share the exact canonical world traversal. `Save` writes `payload + CRC32(payload)`; canonical checksum is SHA-256 of that same payload without the CRC trailer. The payload includes chunk capacity, all slot versions, schemas, empty archetypes, hierarchy, and ordered free-list state.
+- `Load` now validates CRC, exact type identity and field shape, ordering, lengths, duplicates, component values, hierarchy, free-list state, and trailing bytes before constructing a world; partially constructed worlds are disposed if construction fails.
+- `ComputeChecksum` / `World.Checksum()` keep their narrower rollback/lockstep projection for compatibility, but component values also use the canonical field codec. `CanonicalChecksum()` now explicitly means exact v5 persistence state, not storage-independent gameplay equivalence.
+- Unsupported canonical shapes fail fast: pointers/function pointers, native-sized integers, recursive shapes, managed/by-ref-like values, AutoLayout, and overlapping fields. No raw fallback is provided.
+
 ## 5.3.0 (2026-09-01)
 
 - **Breaking: parallel command recording removed** — `ParallelCommandStream` and its dedicated performance harness were removed after the implementation failed to demonstrate a break-even workload. Use one single-threaded `CommandStream` per recording owner and merge work at the application boundary when needed.

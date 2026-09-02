@@ -16,11 +16,12 @@ namespace MiniArchTests.Core;
 ///   Path B (Replay):   CommandStream → Snapshot → FrameDelta → Replay into
 ///                      fresh shadow world → canonical checksum (post-mutation)
 ///   Path C (Restore):  CaptureState before mutation → Submit → RestoreState →
-///                      canonical checksum (pre-mutation baseline)
+///                      rollback projection checksum (pre-mutation baseline)
 ///
 /// Convergence criteria:
-///   A == B  (Submit and Replay produce identical final state)
-///   C == pre-mutation baseline  (RestoreState correctly rolls back the mutation)
+///   A == B  (Submit and Replay produce identical persistence state)
+///   C == pre-mutation baseline  (RestoreState rolls back live state; newly
+///                                discovered empty archetypes are excluded)
 /// </summary>
 public sealed class SubmitReplayRestoreParityTests
 {
@@ -38,7 +39,7 @@ public sealed class SubmitReplayRestoreParityTests
     {
         // Base: empty world
         var world = new World();
-        var preChecksum = world.CanonicalChecksum();
+        var preP1Checksum = world.Checksum();
         var preSnap = world.CaptureState();
 
         // Path A: Submit — create entity with Position
@@ -56,7 +57,7 @@ public sealed class SubmitReplayRestoreParityTests
 
         // Path C: Restore — back to pre-mutation state
         world.RestoreState(preSnap);
-        Assert.Equal(preChecksum, world.CanonicalChecksum());
+        Assert.Equal(preP1Checksum, world.Checksum());
     }
 
     // ═══════════════════════════════════════════════════════════════╗
@@ -75,7 +76,7 @@ public sealed class SubmitReplayRestoreParityTests
         var baseDelta = setup.Snapshot();
         setup.Submit();
 
-        var preChecksum = world.CanonicalChecksum();
+        var preP2Checksum = world.Checksum();
         var preSnap = world.CaptureState();
 
         // Path A: Submit — Set Position to (99, 99)
@@ -93,7 +94,7 @@ public sealed class SubmitReplayRestoreParityTests
 
         // Path C: Restore to pre-mutation state
         world.RestoreState(preSnap);
-        Assert.Equal(preChecksum, world.CanonicalChecksum());
+        Assert.Equal(preP2Checksum, world.Checksum());
     }
 
     // ═══════════════════════════════════════════════════════════════╗
@@ -113,7 +114,7 @@ public sealed class SubmitReplayRestoreParityTests
         var baseDelta = setup.Snapshot();
         setup.Submit();
 
-        var preChecksum = world.CanonicalChecksum();
+        var preP3Checksum = world.Checksum();
         var preSnap = world.CaptureState();
 
         // Path A: Submit — Remove<Position> then Add<Position>(99, 99)
@@ -132,7 +133,7 @@ public sealed class SubmitReplayRestoreParityTests
 
         // Path C: Restore
         world.RestoreState(preSnap);
-        Assert.Equal(preChecksum, world.CanonicalChecksum());
+        Assert.Equal(preP3Checksum, world.Checksum());
     }
 
     // ═══════════════════════════════════════════════════════════════╗
@@ -150,7 +151,7 @@ public sealed class SubmitReplayRestoreParityTests
         var baseDelta = setup.Snapshot();
         setup.Submit();
 
-        var preChecksum = world.CanonicalChecksum();
+        var preP4Checksum = world.Checksum();
         var preSnap = world.CaptureState();
 
         // Path A: Submit — Add<Position>(42, 43) then Remove<Position>
@@ -169,7 +170,7 @@ public sealed class SubmitReplayRestoreParityTests
 
         // Path C: Restore
         world.RestoreState(preSnap);
-        Assert.Equal(preChecksum, world.CanonicalChecksum());
+        Assert.Equal(preP4Checksum, world.Checksum());
     }
 
     // ═══════════════════════════════════════════════════════════════╗
@@ -192,7 +193,7 @@ public sealed class SubmitReplayRestoreParityTests
         var baseDelta = setup.Snapshot();
         setup.Submit();
 
-        var preChecksum = world.CanonicalChecksum();
+        var preP5Checksum = world.Checksum();
         var preSnap = world.CaptureState();
 
         // Mutation: add D under B, then destroy A (cascade destroys B, C, D)
@@ -212,7 +213,7 @@ public sealed class SubmitReplayRestoreParityTests
 
         // Path C: Restore
         world.RestoreState(preSnap);
-        Assert.Equal(preChecksum, world.CanonicalChecksum());
+        Assert.Equal(preP5Checksum, world.Checksum());
     }
 
     // ═══════════════════════════════════════════════════════════════╗
@@ -290,7 +291,7 @@ public sealed class SubmitReplayRestoreParityTests
         var baseDelta = setup.Snapshot();
         setup.Submit();
 
-        var preChecksum = world.CanonicalChecksum();
+        var preP7Checksum = world.Checksum();
         var preSnap = world.CaptureState();
 
         // Mutation: clone A (deep, includes child), set clone's child component
@@ -312,7 +313,7 @@ public sealed class SubmitReplayRestoreParityTests
 
         // Path C: Restore
         world.RestoreState(preSnap);
-        Assert.Equal(preChecksum, world.CanonicalChecksum());
+        Assert.Equal(preP7Checksum, world.Checksum());
     }
 
     // ═══════════════════════════════════════════════════════════════╗
@@ -332,7 +333,7 @@ public sealed class SubmitReplayRestoreParityTests
         var baseDelta = setup.Snapshot();
         setup.Submit();
 
-        var preChecksum = world.CanonicalChecksum();
+        var preP8Checksum = world.Checksum();
         var preSnap = world.CaptureState();
 
         // Mutation: Add Position(1,2), Set Position(3,4) overwrites,
@@ -355,7 +356,7 @@ public sealed class SubmitReplayRestoreParityTests
 
         // Path C: Restore
         world.RestoreState(preSnap);
-        Assert.Equal(preChecksum, world.CanonicalChecksum());
+        Assert.Equal(preP8Checksum, world.Checksum());
     }
 
     // ═══════════════════════════════════════════════════════════════╗
@@ -386,7 +387,7 @@ public sealed class SubmitReplayRestoreParityTests
         var baseDelta = setup.Snapshot();
         setup.Submit();
 
-        var preChecksum = world.CanonicalChecksum();
+        var preP9Checksum = world.Checksum();
         var preSnap = world.CaptureState();
 
         // High-density frame (soak-like burst of ~15 ops)
@@ -432,7 +433,7 @@ public sealed class SubmitReplayRestoreParityTests
 
         // Path C: Restore
         world.RestoreState(preSnap);
-        Assert.Equal(preChecksum, world.CanonicalChecksum());
+        Assert.Equal(preP9Checksum, world.Checksum());
     }
 
     // ═══════════════════════════════════════════════════════════════╗

@@ -2,7 +2,7 @@
 title: MiniArch 正确性验证报告
 module: Proof
 description: 版本化记录 MiniArch 的测试范围、执行命令、当前证据与明确未覆盖项；不把有限测试表述为绝对安全证明
-updated: 2026-08-29
+updated: 2026-09-02
 ---
 # MiniArch 正确性验证报告
 
@@ -71,7 +71,7 @@ updated: 2026-08-29
 - 灾难性 `OutOfMemoryException`、进程终止、硬件故障不保证 rollback。
 - `Unsafe*` API 与 `Clear(query)` 依赖 XML 中的调用方前置条件；违反契约属于未定义/不安全使用。
 - World mutation 与 `CommandStream` 都不支持并发写；Query 的并行只读迭代必须与结构变更隔离。
-- `CanonicalChecksum` 不能替代跨版本 schema 握手；跨进程仍要求一致的组件注册/schema。
+- `CanonicalChecksum` 不能替代跨版本 schema 握手：v5 要求两端精确类型 identity 与字段 shape 一致，但 checksum/snapshot 本身不要求相同组件注册顺序。FrameDelta wire 仍使用 runtime component id，交换方必须先建立一致 registry schema。
 
 ## 入口
 

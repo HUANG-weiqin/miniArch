@@ -825,7 +825,11 @@ internal sealed partial class Archetype
     /// Zero-allocation; the span points directly into the archetype's backing store.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal ReadOnlySpan<byte> GetComponentBytes(int columnIndex, int row)
+    internal ReadOnlySpan<byte> GetComponentBytes(int columnIndex, int row) =>
+        GetWritableComponentBytes(columnIndex, row);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal Span<byte> GetWritableComponentBytes(int columnIndex, int row)
     {
         var elemSize = _elementSizes[columnIndex];
         if (!IsChunked)
@@ -860,46 +864,6 @@ internal sealed partial class Archetype
 
         for (var columnIndex = 0; columnIndex < componentCount; columnIndex++)
             CopyColumnFrom(source, columnIndex, count);
-    }
-
-    /// <summary>
-    /// Writes column payload for the rows in <paramref name="sortedRows"/> order.
-    /// Used by WorldSnapshot.Save to produce canonical byte layout independent
-    /// of archetype's internal row order (which is affected by swap-remove).
-    /// </summary>
-    internal unsafe void WriteColumnOrderedTo(BinaryWriter writer, int columnIndex, ReadOnlySpan<int> sortedRows)
-    {
-        var size = _elementSizes[columnIndex];
-        var count = sortedRows.Length;
-        if (count == 0) return;
-        var buf = new byte[checked((int)((uint)count * (uint)size))];
-        fixed (byte* ptr = buf)
-        {
-            for (var i = 0; i < count; i++)
-                ReadComponentRaw(columnIndex, sortedRows[i], ptr + i * size);
-        }
-        writer.Write(buf);
-    }
-
-    internal void ReadColumnFrom(BinaryReader reader, int columnIndex, int count)
-    {
-        if (!IsChunked)
-        {
-            reader.BaseStream.ReadExactly(GetColumnBytes(columnIndex, count));
-            return;
-        }
-        var size = _elementSizes[columnIndex];
-        var segIdx = 0;
-        var remaining = count;
-        while (remaining > 0)
-        {
-            var seg = _segments[segIdx];
-            var take = Math.Min(remaining, seg.Count);
-            var span = seg.Data.AsSpan(_columnByteOffsets[columnIndex], take * size);
-            reader.BaseStream.ReadExactly(span);
-            remaining -= take;
-            segIdx++;
-        }
     }
 
     internal Span<Entity> GetFlatReservedEntities(int startRow, int count)
@@ -976,38 +940,6 @@ internal sealed partial class Archetype
             default:
                 Unsafe.CopyBlockUnaligned(ref destination, ref source, (uint)size);
                 return;
-        }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private Span<byte> GetColumnBytes(int columnIndex, int count)
-    {
-        return _data.AsSpan(_columnByteOffsets[columnIndex],
-            checked((int)((uint)count * (uint)_elementSizes[columnIndex])));
-    }
-
-    internal interface ISpanFeeder
-    {
-        void Feed(ReadOnlySpan<byte> span);
-    }
-
-    internal void FeedColumnData<TFeeder>(int columnIndex, int rowCount, ref TFeeder append)
-        where TFeeder : struct, ISpanFeeder
-    {
-        var elemSize = _elementSizes[columnIndex];
-        if (IsChunked)
-        {
-            var remaining = rowCount;
-            for (var s = 0; s < _segmentCount && remaining > 0; s++)
-            {
-                var take = Math.Min(remaining, _segments[s].Count);
-                append.Feed(_segments[s].Data.AsSpan(_columnByteOffsets[columnIndex], take * elemSize));
-                remaining -= take;
-            }
-        }
-        else
-        {
-            append.Feed(_data.AsSpan(_columnByteOffsets[columnIndex], rowCount * elemSize));
         }
     }
 
@@ -1122,21 +1054,6 @@ internal sealed partial class Archetype
         _count = count;
         InvalidateFlatEntityCache();
         AssertSegmentInvariants();
-    }
-
-    internal void FeedRowData<TFeeder>(int columnIndex, int globalRow, ref TFeeder feed)
-        where TFeeder : struct, ISpanFeeder
-    {
-        var elemSize = _elementSizes[columnIndex];
-        if (IsChunked)
-        {
-            var (segIdx, localRow) = GetSegmentAndLocal(globalRow);
-            feed.Feed(_segments[segIdx].Data.AsSpan(_columnByteOffsets[columnIndex] + localRow * elemSize, elemSize));
-        }
-        else
-        {
-            feed.Feed(_data.AsSpan(_columnByteOffsets[columnIndex] + globalRow * elemSize, elemSize));
-        }
     }
 
     private unsafe void CopyColumnFrom(Archetype source, int columnIndex, int count)
@@ -1264,11 +1181,11 @@ internal sealed partial class Archetype
                 return;
 
             // LayoutKind.Auto lets the CLR reorder fields for optimal alignment.
-            // Two hosts running different JIT versions or CPU architectures may
-            // reorder differently, producing different byte layouts for the same
-            // struct. Since Archetype stores components as raw bytes and
-            // CanonicalChecksum hashes those bytes directly, cross-host lockstep
-            // would silently diverge. Reject Auto layout to enforce determinism.
+            // Archetype and command/delta paths store and copy native component
+            // cells, so host-specific field positions could assign different
+            // logical values after a raw cell transfer. WorldSnapshot v5 uses a
+            // field codec, but the shared storage boundary must remain safe for
+            // every raw-cell path. Reject Auto layout to enforce determinism.
             var layout = type.StructLayoutAttribute;
             if (layout is not null && layout.Value == LayoutKind.Auto)
             {

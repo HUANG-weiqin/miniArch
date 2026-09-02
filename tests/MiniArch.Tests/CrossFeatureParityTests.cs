@@ -284,9 +284,10 @@ public sealed class CrossFeatureParityTests
         var hostB = new World();
         new CommandStream(hostB).Replay(delta);
 
-        // Capture state after replay
+        // Capture the rollback projection after replay. RestoreState does not
+        // remove empty archetypes first discovered after this point.
         var snapshot = hostB.CaptureState();
-        var afterReplayChecksum = hostB.CanonicalChecksum();
+        var afterReplayChecksum = hostB.Checksum();
 
         // Mutate
         hostB.Set(e, new Position(99, 99));
@@ -295,7 +296,7 @@ public sealed class CrossFeatureParityTests
         // Restore
         hostB.RestoreState(snapshot);
 
-        Assert.Equal(afterReplayChecksum, hostB.CanonicalChecksum());
+        Assert.Equal(afterReplayChecksum, hostB.Checksum());
         Assert.True(hostB.TryGet(e, out Position p));
         Assert.Equal(new Position(1, 2), p);
         Assert.False(hostB.TryGet<Health>(e, out _));
@@ -319,7 +320,7 @@ public sealed class CrossFeatureParityTests
         new CommandStream(target).Replay(delta);
 
         var snap = target.CaptureState();
-        var checksum = target.CanonicalChecksum();
+        var checksum = target.Checksum();
 
         // Mutate hierarchy
         var newChild = target.Create(new Health(10));
@@ -328,7 +329,7 @@ public sealed class CrossFeatureParityTests
         // Restore
         target.RestoreState(snap);
 
-        Assert.Equal(checksum, target.CanonicalChecksum());
+        Assert.Equal(checksum, target.Checksum());
         Assert.True(target.TryGetParent(child, out var p));
         Assert.Equal(parent, p);
         Assert.Single(target.EnumerateChildren(parent).ToChildList());
