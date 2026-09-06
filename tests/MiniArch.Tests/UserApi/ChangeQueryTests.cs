@@ -343,7 +343,7 @@ public class ChangeQueryTests
     }
 
     [Fact]
-    public void Destroy_and_id_reuse_does_not_leak_stale_change()
+    public void BUG_ChangeWatch_recycled_entity_does_not_inherit_previous_generation_baseline()
     {
         using var world = new World(entityCapacity: 1);
         var watch = world.Watch<Position, PositionHandler>();
@@ -365,11 +365,9 @@ public class ChangeQueryTests
         Assert.NotEqual(e1, e2);
 
         watch.Diff(world);
-        // e1 was destroyed, recreated as e2 — current scan finds e2
-        // e2's value (100,100) differs from old baseline slot (1,1)
         var change = Assert.Single(watch.Handler.Changes);
         Assert.Equal(e2, change.Entity);
-        Assert.Equal(new Position(1, 1), change.Old);
+        Assert.Equal(default, change.Old);
         Assert.Equal(new Position(100, 100), change.New);
     }
 }

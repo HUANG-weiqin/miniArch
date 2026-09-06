@@ -2,7 +2,7 @@
 title: Snapshot Persistence
 module: MiniArch.Core Snapshot
 description: WorldSnapshot v5 字段级 canonical 持久化、双 checksum 观察边界，以及 Clone/CaptureState 的职责分工
-updated: 2026-09-02
+updated: 2026-09-06
 ---
 # Snapshot Persistence
 
@@ -137,10 +137,10 @@ CRC 只检测传输/存储损坏，不提供 schema migration 或兼容能力。
 
 | API | 观察边界 | 适用场景 |
 |---|---|---|
-| `world.Checksum()` | slot versions、非空 archetypes、live hierarchy、字段级 component values；排除 chunk capacity、空 archetype、free list | 同 mutation/replay 路径的 rollback parity；保留旧投影语义 |
+| `world.Checksum()` | slot versions、非空 archetypes、live hierarchy、按物理 row 保持 entity-to-component 关联的字段值；排除 chunk capacity、空 archetype、free list | 同 mutation/replay 路径的 rollback parity；保留物理 row 投影 |
 | `world.CanonicalChecksum()` | 精确 `SHA256(P(World))`，即 v5 Save 除 CRC trailer 外的全部状态与 schema metadata | 判断完整持久化状态是否一致；跨进程/注册顺序比较 |
 
-`Checksum()` 仍保留历史上的 path-sensitive 行为：archetype 内 entity id 列表独立排序，但 component values 保持物理 row order。逻辑值相同而 storage history 不同的 worlds 可能得到不同结果。它现在也使用字段计划，不再 hash raw component memory。
+`Checksum()` 保留 path-sensitive 行为：archetype 内 entity id 与 component values 都按同一物理 row 顺序写入，因此不会丢失“值属于哪个实体”的关联。逻辑值相同而 storage history 不同的 worlds 仍可能得到不同结果。它现在也使用字段计划，不再 hash raw component memory。
 
 `CanonicalChecksum()` 包含 chunk capacity、所有 slot versions、empty archetypes、hierarchy 与有序 free list，所以它不是“忽略存储形状的业务逻辑等价”hash。例如 `RestoreState` 会把 capture 后才发现的 archetype 留在 World 中并清空；恢复前后的业务实体可相同，但 canonical checksum 会因多出的 empty archetype 改变。此类 rollback parity 应使用 `Checksum()`。
 

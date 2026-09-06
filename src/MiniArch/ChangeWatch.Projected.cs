@@ -9,7 +9,8 @@ namespace MiniArch;
 /// </summary>
 /// <remarks>
 /// Call <see cref="Snapshot"/> to record a baseline. Then call <see cref="Diff"/> to discover
-/// entities whose projected value has changed since the baseline.
+/// entities whose projected value has changed since the baseline. A baseline applies only
+/// to the same <see cref="Entity.Id"/> and <see cref="Entity.Version"/> generation.
 /// </remarks>
 public sealed class ChangeWatch<TComponent, TValue, THandler>
     where TComponent : unmanaged
@@ -17,6 +18,7 @@ public sealed class ChangeWatch<TComponent, TValue, THandler>
     where THandler : struct, IChangeHandler<TComponent, TValue>
 {
     private TValue[] _oldValues = [];
+    private int[] _baselineVersions = [];
     private int[] _touchedIds = [];
     private int _touchedCount;
     private readonly QueryDescription _query;
@@ -66,7 +68,10 @@ public sealed class ChangeWatch<TComponent, TValue, THandler>
             {
                 var id = _touchedIds[i];
                 if ((uint)id < (uint)_oldValues.Length)
+                {
                     _oldValues[id] = default;
+                    _baselineVersions[id] = 0;
+                }
             }
             _touchedCount = 0;
 
@@ -79,9 +84,14 @@ public sealed class ChangeWatch<TComponent, TValue, THandler>
                     var entityId = entities[i].Id;
 
                     if ((uint)entityId >= (uint)_oldValues.Length)
-                        Array.Resize(ref _oldValues, Math.Max(entityId + 1, _oldValues.Length * 2));
+                    {
+                        var newLength = Math.Max(entityId + 1, _oldValues.Length * 2);
+                        Array.Resize(ref _oldValues, newLength);
+                        Array.Resize(ref _baselineVersions, newLength);
+                    }
 
                     _oldValues[entityId] = _handler.Project(components[i]);
+                    _baselineVersions[entityId] = entities[i].Version;
 
                     if (_touchedCount >= _touchedIds.Length)
                         Array.Resize(ref _touchedIds, Math.Max(_touchedCount + 1, _touchedIds.Length * 2));
@@ -125,9 +135,9 @@ public sealed class ChangeWatch<TComponent, TValue, THandler>
                     var entity = entities[i];
                     var entityId = entity.Id;
 
-                    var oldVal = (uint)entityId < (uint)_oldValues.Length
-                        ? _oldValues[entityId]
-                        : default;
+                    var hasBaseline = (uint)entityId < (uint)_oldValues.Length &&
+                        _baselineVersions[entityId] == entity.Version;
+                    var oldVal = hasBaseline ? _oldValues[entityId] : default;
 
                     var newVal = _handler.Project(components[i]);
 

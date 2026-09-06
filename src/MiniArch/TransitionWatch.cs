@@ -17,7 +17,7 @@ namespace MiniArch;
 /// </para>
 /// <para>
 /// If an entity is destroyed and a new entity is created at the same id (with the same
-/// filter match), no net transition is reported (id-based semantics for simplicity).
+/// filter match), the old generation exits and the new generation enters.
 /// </para>
 /// <para>
 /// Membership is tracked via dense epoch arrays keyed by entity.Id, avoiding per-Diff
@@ -35,6 +35,7 @@ public sealed class TransitionWatch<THandler>
     private Entity[] _snapshotEntities = [];
     private int _snapshotCount;
     private long[] _snapshotMarks = [];
+    private int[] _snapshotVersions = [];
     private long _snapshotEpoch;
     private readonly QueryDescription _query;
     private THandler _handler;
@@ -43,6 +44,7 @@ public sealed class TransitionWatch<THandler>
 
     // Reusable state for Diff — zero per-call heap allocation (except array growth).
     private long[] _currentMarks = [];
+    private int[] _currentVersions = [];
     private long _currentEpoch;
     private Entity[] _currentEntities = [];
     private int _currentCount;
@@ -95,7 +97,9 @@ public sealed class TransitionWatch<THandler>
                 {
                     var entity = entities[i];
                     EnsureMarkCapacity(ref _snapshotMarks, entity.Id);
+                    EnsureVersionCapacity(ref _snapshotVersions, entity.Id);
                     _snapshotMarks[entity.Id] = _snapshotEpoch;
+                    _snapshotVersions[entity.Id] = entity.Version;
 
                     if (_snapshotCount >= _snapshotEntities.Length)
                         Array.Resize(ref _snapshotEntities, Math.Max(_snapshotCount + 1, _snapshotEntities.Length * 2));
@@ -142,7 +146,9 @@ public sealed class TransitionWatch<THandler>
                 {
                     var entity = entities[i];
                     EnsureMarkCapacity(ref _currentMarks, entity.Id);
+                    EnsureVersionCapacity(ref _currentVersions, entity.Id);
                     _currentMarks[entity.Id] = _currentEpoch;
+                    _currentVersions[entity.Id] = entity.Version;
 
                     if (_currentCount >= _currentEntities.Length)
                         Array.Resize(ref _currentEntities, Math.Max(_currentCount + 1, _currentEntities.Length * 2));
@@ -156,7 +162,9 @@ public sealed class TransitionWatch<THandler>
             for (var si = 0; si < _snapshotCount; si++)
             {
                 var id = _snapshotEntities[si].Id;
-                if ((uint)id < (uint)_currentMarks.Length && _currentMarks[id] == _currentEpoch)
+                if ((uint)id < (uint)_currentMarks.Length &&
+                    _currentMarks[id] == _currentEpoch &&
+                    _currentVersions[id] == _snapshotEntities[si].Version)
                     continue;
 
                 if (bufferCount >= _buffer.Length)
@@ -171,8 +179,11 @@ public sealed class TransitionWatch<THandler>
             // Phase 2b: Entered — current entities not marked with snapshot epoch.
             for (var ci = 0; ci < _currentCount; ci++)
             {
-                var id = _currentEntities[ci].Id;
-                if ((uint)id < (uint)_snapshotMarks.Length && _snapshotMarks[id] == _snapshotEpoch)
+                var entity = _currentEntities[ci];
+                var id = entity.Id;
+                if ((uint)id < (uint)_snapshotMarks.Length &&
+                    _snapshotMarks[id] == _snapshotEpoch &&
+                    _snapshotVersions[id] == entity.Version)
                     continue;
 
                 if (bufferCount >= _buffer.Length)
@@ -216,6 +227,16 @@ public sealed class TransitionWatch<THandler>
         {
             var newSize = Math.Max(id + 1, marks.Length * 2);
             Array.Resize(ref marks, newSize);
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void EnsureVersionCapacity(ref int[] versions, int id)
+    {
+        if ((uint)id >= (uint)versions.Length)
+        {
+            var newSize = Math.Max(id + 1, versions.Length * 2);
+            Array.Resize(ref versions, newSize);
         }
     }
 }

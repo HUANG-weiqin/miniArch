@@ -16,6 +16,7 @@ namespace MiniArchTests.Persistence;
 public sealed class WorldSnapshotTests
 {
     private readonly record struct Position(int X, int Y);
+    private readonly record struct ChecksumTag;
     private readonly record struct Velocity(int X, int Y);
     private readonly record struct Health(int Value);
     private readonly record struct ManagedReferenceComponent(string Name);
@@ -498,6 +499,25 @@ public sealed class WorldSnapshotTests
 
         var hashLoaded = loaded.Checksum();
         Assert.Equal(hashOriginal, hashLoaded);
+    }
+
+    [Fact]
+    public void BUG_Checksum_preserves_entity_component_association_across_physical_row_order()
+    {
+        using var a = new World();
+        using var b = new World();
+
+        var a0 = a.Create(new Position(10, 0));
+        a.Create(new Position(20, 0));
+
+        var b0 = b.Create(new Position(20, 0));
+        b.Create(new Position(10, 0));
+        b.Add(b0, new ChecksumTag());
+        b.Remove<ChecksumTag>(b0);
+
+        Assert.Equal(new Position(10, 0), a.Get<Position>(a0));
+        Assert.Equal(new Position(20, 0), b.Get<Position>(b0));
+        Assert.NotEqual(a.Checksum(), b.Checksum());
     }
 
     // ──────────────────────────────────────────────

@@ -13,9 +13,9 @@ namespace MiniArch;
 /// calls against the same baseline repeat the same callbacks.
 /// </para>
 /// <para>
-/// Entities whose slot was never populated (stale slot) at <see cref="Snapshot"/> time
-/// are reported with the old value as <c>default</c>. Entities removed/destroyed after
-/// <see cref="Snapshot"/> are not reported because the current scan cannot find them.
+/// Entities without a matching <see cref="Entity.Id"/> and <see cref="Entity.Version"/>
+/// baseline are reported with the old value as <c>default</c>. Entities removed/destroyed
+/// after <see cref="Snapshot"/> are not reported because the current scan cannot find them.
 /// </para>
 /// </remarks>
 public sealed class ChangeWatch<TComponent, THandler>
@@ -23,6 +23,7 @@ public sealed class ChangeWatch<TComponent, THandler>
     where THandler : struct, IChangeHandler<TComponent>
 {
     private TComponent[] _oldValues = [];
+    private int[] _baselineVersions = [];
     private int[] _touchedIds = [];
     private int _touchedCount;
     private readonly QueryDescription _query;
@@ -77,7 +78,10 @@ public sealed class ChangeWatch<TComponent, THandler>
             {
                 var id = _touchedIds[i];
                 if ((uint)id < (uint)_oldValues.Length)
+                {
                     _oldValues[id] = default;
+                    _baselineVersions[id] = 0;
+                }
             }
             _touchedCount = 0;
 
@@ -89,11 +93,16 @@ public sealed class ChangeWatch<TComponent, THandler>
                 {
                     var entityId = entities[i].Id;
 
-                    // Ensure _oldValues is large enough
+                    // Ensure the value and identity baselines stay aligned.
                     if ((uint)entityId >= (uint)_oldValues.Length)
-                        Array.Resize(ref _oldValues, Math.Max(entityId + 1, _oldValues.Length * 2));
+                    {
+                        var newLength = Math.Max(entityId + 1, _oldValues.Length * 2);
+                        Array.Resize(ref _oldValues, newLength);
+                        Array.Resize(ref _baselineVersions, newLength);
+                    }
 
                     _oldValues[entityId] = values[i];
+                    _baselineVersions[entityId] = entities[i].Version;
 
                     // Record touched id
                     if (_touchedCount >= _touchedIds.Length)
@@ -139,9 +148,9 @@ public sealed class ChangeWatch<TComponent, THandler>
                     var entity = entities[i];
                     var entityId = entity.Id;
 
-                    var oldVal = (uint)entityId < (uint)_oldValues.Length
-                        ? _oldValues[entityId]
-                        : default;
+                    var hasBaseline = (uint)entityId < (uint)_oldValues.Length &&
+                        _baselineVersions[entityId] == entity.Version;
+                    var oldVal = hasBaseline ? _oldValues[entityId] : default;
 
                     var newVal = values[i];
 

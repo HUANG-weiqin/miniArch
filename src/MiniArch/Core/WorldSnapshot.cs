@@ -120,15 +120,11 @@ public static class WorldSnapshot
 
             var entityCount = entry.Archetype.EntityCount;
             WriteInt32(ref sink, entityCount);
-            var ids = new int[entityCount];
+            // Preserve physical-row sensitivity while keeping every component value
+            // associated with the entity in the same row.
             for (var row = 0; row < entityCount; row++)
-                ids[row] = entry.Archetype.GetEntity(row).Id;
-            Array.Sort(ids);
-            for (var index = 0; index < ids.Length; index++)
-                WriteInt32(ref sink, ids[index]);
+                WriteInt32(ref sink, entry.Archetype.GetEntity(row).Id);
 
-            // Preserve the existing projection: ids are sorted independently,
-            // while component values follow physical row order.
             for (var column = 0; column < entry.Columns.Length; column++)
             {
                 var component = entry.Columns[column];

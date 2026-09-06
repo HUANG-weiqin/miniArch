@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 审阅前必读的当前风险、已修复真 bug 回归索引与已排除非 bug 猜想；只保留结论和验证入口
-updated: 2026-09-02
+updated: 2026-09-06
 ---
 # 代码审阅发现
 
@@ -25,6 +25,14 @@ updated: 2026-09-02
 CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）修复了 lockstep 分叉路径（P0#1/P0#2），`Validate()` 覆盖语义违规（存在性/hierarchy）；nested Entity 现在由完整递归 offsets 合同支持，零校验 Submit 的存在性违规仍在 apply 期抛（部分应用），且不把 Submit 或 Replay 提升为灾难性异常下的通用事务。
 
 ## 已修复的真 bug 索引
+
+### 2026-09-06 Watch identity + legacy checksum association
+
+| 回归测试 | 位置 / witness | 修复边界 |
+|---|---|---|
+| `BUG_Checksum_preserves_entity_component_association_across_physical_row_order` | legacy `Checksum()` 先独立排序 entity id、再按 physical row 写 component，两个 world 可交换 entity→value 对应仍得到相同 hash | entity id 与全部 component column 保持同一 physical row 顺序；继续排除 empty archetype/free-list 等 legacy 观察域 |
+| `BUG_ChangeWatch_recycled_entity_does_not_inherit_previous_generation_baseline` / `BUG_ProjectedChangeWatch_recycled_entity_does_not_inherit_previous_generation_baseline` | baseline 仅按 id 保存，Destroy 后复用同 id 的新 Entity 会获得前一 generation 的 oldValue | dense value baseline 旁保存 version；仅完整 `(Id,Version)` 匹配时读取 oldValue，否则为 default |
+| `BUG_TransitionWatch_recycled_entity_reports_exit_and_enter` | membership 仅比较 id，Destroy+Create 同 id 被静默为无变化 | snapshot/current dense epoch membership 同时保存 version；不同 generation 输出旧 Exited 后新 Entered |
 
 ### 2026-08-30 CommandStream Clone 固定容量 scratch buffers
 

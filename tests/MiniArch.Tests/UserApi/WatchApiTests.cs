@@ -225,26 +225,6 @@ public class WatchApiTests
     }
 
     [Fact]
-    public void ChangeWatch_destroy_recreate_reports_stale_old()
-    {
-        using var world = new World();
-        var handler = new PositionChangeHandler(0);
-        var watch = world.Watch<Position, PositionChangeHandler>();
-        watch.Handler = handler;
-        var e = world.Create(new Position(0, 0));
-        watch.Snapshot(world);
-
-        // Destroy entity, add new entity at same id with a different value
-        world.Destroy(e);
-        var e2 = world.Create(new Position(100, 100));
-        watch.Diff(world);
-        // The old slot will show default(0,0) vs current (100,100)
-        // because Snapshot captured the old entity's value
-        Assert.Equal(1, watch.Handler.CallCount);
-        Assert.Equal(e2, watch.Handler.LastEntity);
-    }
-
-    [Fact]
     public void ChangeWatch_remove_after_Snapshot_not_reported()
     {
         using var world = new World();
@@ -270,24 +250,6 @@ public class WatchApiTests
         world.Destroy(e);
         watch.Diff(world);
         Assert.Equal(0, watch.Handler.CallCount);
-    }
-
-    [Fact]
-    public void ChangeWatch_destroy_recreate_stale_slot_reported()
-    {
-        using var world = new World(entityCapacity: 1);
-        var handler = new PositionChangeHandler(0);
-        var watch = world.Watch<Position, PositionChangeHandler>();
-        watch.Handler = handler;
-        var e1 = world.Create(new Position(0, 0));
-        watch.Snapshot(world);
-        world.Destroy(e1);
-        var e2 = world.Create(new Position(100, 100));
-        watch.Diff(world);
-        // The old slot (id 0) has old value=(0,0) from e1, current value=(100,100) from e2
-        // The reported entity should be e2 (current scan finds it)
-        Assert.Equal(1, watch.Handler.CallCount);
-        Assert.Equal(e2, watch.Handler.LastEntity);
     }
 
     [Fact]
@@ -462,7 +424,7 @@ public class WatchApiTests
     }
 
     [Fact]
-    public void TransitionWatch_net_entered_for_snapshot_exit_reenter()
+    public void BUG_TransitionWatch_recycled_entity_reports_exit_and_enter()
     {
         using var world = new World(entityCapacity: 1);
         var handler = new TransitionRecorder(0);
@@ -473,9 +435,8 @@ public class WatchApiTests
         world.Destroy(e1);
         var e2 = world.Create(new Position(100, 100));
         watch.Diff(world);
-        // Same id in both snapshot (e1) and current (e2): id-based net semantics
-        // yields no transition, per plan: "do not over-engineer version-aware sets"
-        Assert.Equal(0, watch.Handler.CallCount);
+
+        Assert.Equal([(e1, TransitionKind.Exited), (e2, TransitionKind.Entered)], watch.Handler.AllChanges);
     }
 
     [Fact]

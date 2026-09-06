@@ -320,7 +320,7 @@ public class WatchProjectedTests
     }
 
     [Fact]
-    public void Entity_added_after_snapshot_stale_old()
+    public void BUG_ProjectedChangeWatch_recycled_entity_does_not_inherit_previous_generation_baseline()
     {
         using var world = new World(entityCapacity: 1);
         var watch = world.Watch<Position, int, PositionXHandler>();
@@ -328,10 +328,12 @@ public class WatchProjectedTests
         var e1 = world.Create(new Position(10, 20));
         watch.Snapshot(world);
         world.Destroy(e1);
-        var e2 = world.Create(new Position(99, 99));
+        world.Create(new Position(99, 99));
         watch.Diff(world);
-        // Should report the change from old snapshot value (X=10) to new (X=99)
+
         Assert.Equal(1, watch.Handler.Changes);
+        Assert.Equal(0, watch.Handler.LastOld);
+        Assert.Equal(99, watch.Handler.LastNew);
     }
 
     [Fact]

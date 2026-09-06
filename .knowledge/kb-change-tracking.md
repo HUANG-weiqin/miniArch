@@ -2,7 +2,7 @@
 title: Change Tracking（变更追踪）
 module: MiniArch.Core ChangeTracking
 description: World.Watch pull-event 模型：ChangeWatch/TransitionWatch Snapshot+Diff 两阶段扫描；struct handler 回调；零 per-write 成本；TransitionWatch 使用 dense epoch marks。
-updated: 2026-07-25
+updated: 2026-09-06
 ---
 
 # Change Tracking（变更追踪）
@@ -19,13 +19,13 @@ updated: 2026-07-25
 
 ## 架构
 
-- **值变更**：`ChangeWatch` 内部持有 `TComponent[] _oldValues`（按 `entity.Id` 直索引的 dense array）和 `int[] _touchedIds`（记录上次 snapshot 触及的 id 列表）。
-  - `Snapshot(World)`：查询 world → 遍历 chunk → 记录每个实体的当前值到 `_oldValues`，同时用 `_touchedIds` 标记哪些 id 有了 baseline。
-  - `Diff(World)`：再次查询 world → 遍历 chunk → 对每个实体，比较当前值与 `_oldValues[id]`（若 id 未触及则 `default`）→ 差异收集到 `_buffer[]` → 缓冲区稳定后逐条回调 handler。
+- **值变更**：`ChangeWatch` 内部持有 `TComponent[] _oldValues`、同样按 `entity.Id` 直索引的 `int[] _baselineVersions` 和 `int[] _touchedIds`（记录上次 snapshot 触及的 id 列表）。
+  - `Snapshot(World)`：查询 world → 遍历 chunk → 记录每个实体的当前值与 `Entity.Version`，同时用 `_touchedIds` 标记 baseline。
+  - `Diff(World)`：仅当当前 `(Id, Version)` 匹配 baseline 时比较 `_oldValues[id]`；新 generation 的 oldValue 是 `default`。差异先收集到 `_buffer[]`，再逐条回调。
 - **投影值变更**：`ChangeWatch<TComponent, TValue, THandler>` 与值变更结构相同，但 baseline 存储的是 `TValue[]`，Snapshot 时调用 `handler.Project(component)`，Diff 时再次调用 `Project()` 并比较 `TValue` 是否相等。
-- **结构变更**：`TransitionWatch` 内部持有 `Entity[] _snapshotEntities` + `long[] _snapshotMarks`（按 `entity.Id` 索引的 dense epoch 标记）和 `long[] _currentMarks` + `Entity[] _currentEntities`（复用 buffer）。
-  - `Snapshot(World)`：递增 64-bit `_snapshotEpoch`（不溢出，无 per-Diff 清除）→ 遍历 query → 对每个实体 `EnsureMarkCapacity` → `_snapshotMarks[id] = _snapshotEpoch` → 存储到 `_snapshotEntities`。
-  - `Diff(World)`：递增 64-bit `_currentEpoch` → 遍历当前 query → `_currentMarks[id] = _currentEpoch` → 存储到 `_currentEntities` → Exited：`_currentMarks[id] != _currentEpoch` → Entered：`_snapshotMarks[id] != _snapshotEpoch` → 无 per-Diff 清除，两阶段回调。
+- **结构变更**：`TransitionWatch` 内部持有 snapshot/current `Entity[]`、`long[]` dense epoch marks 与 `int[]` version arrays。
+  - `Snapshot(World)`：递增 64-bit `_snapshotEpoch`（不溢出，无 per-Diff 清除）→ 记录每个成员的 epoch 与 version。
+  - `Diff(World)`：记录当前 epoch 与 version；只有 `(Id, Version)` 同时匹配才视为同一成员，否则先报告旧 generation Exited，再报告新 generation Entered。
 - **生命周期**：Watch 不与 world 注册（无 SharedTrackerRegistry、无 IChangeQuery dispatch）。`Snapshot`/`Diff` 通过 `world.Query()` 读取当前状态。World dispose 后调用 `Snapshot`/`Diff` 抛 `ObjectDisposedException`。
 
 ## 公共 API
@@ -76,15 +76,14 @@ handler.Count = 0;
 - `Snapshot` 再次调用推进 baseline：旧 baseline 被丢弃，新 baseline 在当前 world 状态建立。
 - 两阶段安全：`Diff` 先把所有 diff 收集到内部 `_buffer[]`，再逐条回调。handler 可以在 `OnChange` 中安全地 mutate world（如 spawn entity），不会破坏 diff 迭代；但不能在回调/投影期间对**同一个 watch** 嵌套调用 `Snapshot` 或 `Diff`，否则会 fast-fail。
 - Snapshot 异常安全：收集开始前旧 baseline 即失效；若 query 扫描或投影抛异常，partial baseline 不可观察，后续 `Diff` 会要求先成功 `Snapshot`。所有操作 guard 均在 `finally` 中释放，异常后 watch 可重试。
-- **Stale slot 语义**：`Snapshot` 时未触及的 entity slot（从未出现在 query 中）在 `Diff` 中若匹配 query，oldValue 为 `default`。Entity 被 Destroy/Remove 后，`Diff` 不会报告（因为当前扫描找不到它）。
-- **id-based 语义（TransitionWatch）**：Destroy 后同 id 新实体（LIFO 复用）若匹配 filter，视为同一实体，不报 Exited+Entered。此设计有意简化——需要精确结构语义的场景应使用跨帧的 id+version 追踪。
+- **generation 语义**：baseline 和 membership 使用完整 `(Entity.Id, Entity.Version)`。`Snapshot` 后新建或复用 id 的实体没有旧值 baseline，因此 oldValue 为 `default`；旧实体 Destroy/Remove 后值 Watch 不报告，因为当前扫描找不到它。TransitionWatch 对复用 id 报告旧 generation Exited 与新 generation Entered。
 - 旧 `TrackValueChanges<T>()`、`TrackTransitions(QueryDescription)`、`SharedValueChanges<T>`、`TransitionLog`、`CreateDenseValueDiff`、`DenseValueDiff`、`IValueProjector`、`IValueChangeSink`、`ChangeTracker<T>`、`SharedTrackerRegistry`、`IChangeQuery` 已全部删除，无兼容 shim。
 
 ## 决策
 
 1. **纯 pull-event，不拦截写入**：Watch 不注册到 World，不拦截 `Set`/`Add`/`Remove`。写入热路径零额外分支。代价是 `Diff` 做全量扫描——这是 pull 模型的固有成本。
 2. **两阶段回调安全**：所有 diff 先收集到 buffer，再回调 handler。允许 handler 在 `OnChange` 中 mutate world（如 spawn entity），不破坏迭代稳定性。
-3. **dense array 直索引**：`_oldValues[id]` 是 O(1) 直访问。ID 密集时空间局部性极好；稀疏时浪费少量内存但性能仍可接受（已压缩到 touched slot 清理）。
+3. **dense array 直索引 + version**：值与 version 均由 `entity.Id` O(1) 定位，再以 `Entity.Version` 确认 identity。ID 密集时空间局部性极好；稀疏时用额外 dense version array 换回完整实体身份。
 4. **无世界级注册表**：旧架构的 `SharedTrackerRegistry`、`IChangeQuery dispatch`、`ChangeTracker<T>` 全部删除。每个 Watch 独立管理自己的 dense arrays，互不干扰，多 watch 不会 fanout 写入成本。
 5. **struct handler 零分配回调**：`IChangeHandler`/`ITransitionHandler` 是 struct 接口约束，JIT 去虚化，回调零分配。`ref THandler Handler` 属性支持外部 mutate handler 字段。
 6. **无 per-consumer cursor 管理**：Watch 不维护消费游标，不自动推进 baseline。消费端完全控制何时 `Snapshot`（推进 baseline）。
@@ -105,7 +104,7 @@ handler.Count = 0;
 - **热路径零成本**：`Watch` 创建不做任何 world 注册（无 registry、无 type lookup、无数组预分配 fallocate）。写入路径无任何 watch 分支。
 - **`Snapshot`**：O(当前匹配 query 的实体数) 扫描 + baseline 存储。每个实体一次 `_oldValues[id] = value`（或 `handler.Project(component)`）。
 - **`Diff`**：O(当前匹配 query 的实体数) 扫描 + O(entities) 值比较 + O(diffs) 回调。
-- **空间**：每个 `ChangeWatch` 持有 `_oldValues`（按 `entity.Id` 索引）、`_touchedIds`（上次触及 id）、`_buffer`（diff buffer）。`TransitionWatch` 持有 `_snapshotEntities[]` + `_snapshotMarks` (long[]) + `_currentMarks` (long[]) + `_currentEntities[]` + `_buffer`。Dense epoch 比 bitset 内存多 32×（long vs bit），但 64-bit epoch 消除溢出风险且无 `Array.Clear` 尖峰。
+- **空间**：每个 `ChangeWatch` 持有 `_oldValues`、`_baselineVersions`（均按 `entity.Id` 索引）、`_touchedIds` 和 `_buffer`。`TransitionWatch` 持有 snapshot/current entities、epoch marks 与 version arrays、以及 `_buffer`。版本数组只在 Watch 实例内增长；World 写入路径仍无 Watch 状态。
 - **稳态 GC**：内部数组按需增长，增长后不再缩小；稳态 `Snapshot`+`Diff` 循环零堆分配。Dense epoch `long[]` 在 warmup 后不再 reallocate（max entity id 稳定）。
 - **多 watch 同组件**：互不干扰，各自持有独立的 baseline arrays。不共享状态，不 fanout。
 
@@ -132,6 +131,23 @@ dotnet run -c Release --project tools/perf/WatchApi.Perf -- --entity-count 10000
 
 **决策**：TransitionWatch 使用 dense epoch marks（long[] 按 entity.Id 索引）作为 membership 判定。空间换时间：long 标记比 bitset 多 32× 内存，但 epoch bump 避免 per-Diff 清除，64-bit epoch 保证服务器无限运行不溢出，稳态零分配，在当前 ECS dense-id 模型下性能最优。
 
+### Version identity A/B（2026-09-06）
+
+同机连续运行、10k entities、2s warmup + 5s measure；下表是一组未修改 main 与 version-aware worktree 的配对结果，方向性证据而非统计基线。所有场景仍为 `0 B/op`。
+
+| Scenario | main ops/s | version-aware ops/s | Δ |
+|---|---:|---:|---:|
+| change-quick-nochange | 17,575.6 | 15,366.7 | -12.6% |
+| change-quick-allchanged | 6,310.4 | 6,076.6 | -3.7% |
+| change-projected-nochange | 14,436.8 | 12,080.2 | -16.3% |
+| change-projected-allchanged | 5,552.5 | 5,495.7 | -1.0% |
+| transition-nochange | 9,754.6 | 8,913.7 | -8.6% |
+| transition-all-entered | 1,866.6 | 1,824.0 | -2.3% |
+| transition-all-exited | 1,816.5 | 1,856.3 | +2.2% |
+| transition-churn-1pct | 9,433.8 | 7,972.2 | -15.5% |
+
+新增 dense version metadata 使 cold-start 增长后保持零分配；完整 entity identity 的读取/写入成本主要落在无变化扫描。性能门禁 `HeroComing.Perf --check-baseline` 通过（Movement 2209.7、Attack 1166.5 rounds/s）。
+
 ## 入口
 
 - `src/MiniArch/ChangeWatch.cs`：值变更 watch 实现（Snapshot/Diff/两阶段 buffer）。
@@ -145,8 +161,8 @@ dotnet run -c Release --project tools/perf/WatchApi.Perf -- --entity-count 10000
 
 - `Diff` 前必须先调用 `Snapshot`，否则抛 `InvalidOperationException`。
 - 成功 `Snapshot` 推进 baseline 后，旧 baseline 永久丢失（无法回退）；失败 Snapshot 会使 baseline 失效，必须重试成功后才能 Diff。
-- Stale slot 的 `oldValue` 来自 dense slot：该 id 在 Snapshot 时未触及时是 `default`；若 Snapshot 时曾匹配、之后 Destroy+Create 复用同 id，则可能是前一实体的 snapshot 值。
-- TransitionWatch 是 id-based：Destroy+Create 同 id 复用不报 Exited+Entered。需要精确 version 语义时需自行记录。
+- `oldValue` 只属于完整 `(Id, Version)` baseline：该 identity 未在 Snapshot 时匹配时为 `default`；Destroy+Create 复用同 id 不会继承前一 generation 的值。
+- TransitionWatch 使用完整 entity identity：Destroy+Create 同 id 依次报告旧 generation Exited 和新 generation Entered。
 - TransitionWatch 的 Entered 和 Exited 扫描均为 O(n)（使用 `_snapshotMarks` 和 `_currentMarks` dense epoch 标记进行 O(1) 成员检测）。Warmup 后无 per-Diff 分配。
 - 同一 watch 的 `Snapshot`/`Diff` 不可嵌套；handler 需要组合其他追踪时使用另一个 watch。该 guard 解决单线程重入，不承诺 World 或 Watch 的并发线程安全。
 - `World` dispose 后调用 `Snapshot`/`Diff` 抛 `ObjectDisposedException`。

@@ -135,6 +135,8 @@ public sealed class ChangeWatch<TComponent, THandler>
 | `Snapshot(World)` | Records a baseline of all matching entities' component values. Must be called before `Diff`. |
 | `Diff(World)` | Scans the world; for each entity whose value differs from baseline, collects the diff into an internal buffer, then dispatches `IChangeHandler.OnChange` callbacks (two-phase safety). |
 
+A baseline belongs to the full `(Entity.Id, Entity.Version)` identity. A replacement entity that reuses an id receives `default` as its old value.
+
 ---
 
 ## ChangeWatch\<TComponent, TValue, THandler\> (Projected)
@@ -176,6 +178,8 @@ public sealed class TransitionWatch<THandler>
 | `Handler` | Gets/sets the handler struct. |
 | `Snapshot(World)` | Records which entities currently match the filter. |
 | `Diff(World)` | Compares current entities against snapshot; dispatches `ITransitionHandler.OnChange` for each entity that entered or exited. |
+
+Membership uses the full `(Entity.Id, Entity.Version)` identity. Reusing an id reports an exit for the old generation and an entry for the new one.
 
 ---
 
@@ -361,7 +365,7 @@ world.RestoreState(snapshot);         // revert, payload returned to pool
 |---|---|
 | `Save(Stream, World)` | Write a canonical version-5 snapshot followed by CRC32 |
 | `Load(Stream)` | Strictly validate a v5 snapshot and return a new `World` |
-| `ComputeChecksum(World)` | Compute the legacy rollback/lockstep projection hash |
+| `ComputeChecksum(World)` | Compute the legacy physical-row rollback projection hash, preserving entity-component association |
 | `ComputeCanonicalChecksum(World)` | Compute SHA-256 over the exact v5 payload, excluding its CRC trailer |
 
 Version 5 encodes unmanaged component **fields**, not raw CLR struct memory. Primitive
