@@ -3087,6 +3087,7 @@ public sealed class CommandStreamTests
             "_lastCreatedBatch",
             "_deferredSeq",
             "_pendingBatchDeferredArr",
+            "_pendingBatchDeferredEpoch",
             "_resolveMapPool",
             "_pendingBatchMin",
             "_pendingBatchMax",
