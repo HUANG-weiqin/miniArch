@@ -418,6 +418,25 @@ var branch = world.Clone();
 readonly record struct Position(float X, float Y);
 ```
 
+> **Contract — drain the `CommandStream` across rollback boundaries.** `RestoreState` reverts the
+> `World` only; it does not touch a `CommandStream`, and the stream cannot detect the rollback.
+> A `CommandStream` must therefore be empty when you call `CaptureState()`, and only an empty
+> stream may be used after `RestoreState()`. Drained means already consumed: `Submit()`, or
+> `Snapshot()` + `Clear()`.
+>
+> ```csharp
+> var rollback = world.CaptureState();   // stream is empty here
+> stream.Set(a, new Position(1, 1));
+> stream.Submit();                       // consumed -> drained
+>
+> world.RestoreState(rollback);          // re-simulate: reuse is safe, Submit drained it
+> stream = new CommandStream(world);      // but after an interrupted frame: discard, don't Clear()
+> ```
+>
+> `Clear()` is not a substitute for discarding after a rollback — it releases ids the rollback
+> already returned to the free list. Violating this fails silently (duplicate entity handles,
+> shifted versions). Full contract and symptom table → [docs/api.md — Rollback contract](api.md#contract-the-commandstream-must-be-drained-across-every-rollback-boundary).
+
 ---
 
 ## 11. WorldSnapshot (Binary Serialization)

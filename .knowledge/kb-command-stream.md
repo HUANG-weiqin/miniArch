@@ -1,8 +1,8 @@
 ---
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
-description: CommandStream 的 typed-store 录制、consume-time 校验、Submit/Snapshot/Replay 确定性及 async ownership 契约
-updated: 2026-09-01
+description: CommandStream 的 typed-store 录制、consume-time 校验、Submit/Snapshot/Replay 确定性、async ownership 与回滚排空契约
+updated: 2026-09-27
 ---
 # Command Stream Runtime
 
@@ -235,3 +235,4 @@ CPU 频率与后台进程会让独立进程结果明显波动。候选 A/B 应�
 - 自己生成的 local delta 只有在显式 `Replay(delta, resolveSlots: true)` 时解析本 stream 跟踪的 `EntitySlot`；网络反序列化副本没有本地 slot ownership。
 - `FrameDelta.Validate()` 是不可信 wire 的结构预检，不提供 target World rollback。
 - source 对自己的 real-id Snapshot 直接 Replay 时会复用 producer 已有 reservation；不要把“不在 free list”误判成需要再次增加 reservation。
+- `CommandStream` 不知道 World 被 `RestoreState` 回滚过。公开合同：`CaptureState()` 时 stream 必须为空，`RestoreState()` 后只允许用空 stream（被异常中断的帧恢复后丢弃并 `new CommandStream(world)`，不能用 `Clear()` 代替）；违反不报错但会产生重复 entity handle / version 错位。合同与症状表见 `docs/api.md` "Rollback contract"，实测细节见 `kb-snapshot-persistence.md`。

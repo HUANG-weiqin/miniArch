@@ -2,7 +2,7 @@
 title: Snapshot Persistence
 module: MiniArch.Core Snapshot
 description: WorldSnapshot v5 字段级 canonical 持久化、双 checksum 观察边界，以及 Clone/CaptureState 的职责分工
-updated: 2026-09-06
+updated: 2026-09-27
 ---
 # Snapshot Persistence
 
@@ -170,7 +170,26 @@ world.RestoreState(ring[3]);
 ring[4].Dispose();
 ```
 
-`WorldStateSnapshot` 不包含 `CommandStream` pending batch、typed stores、placeholder sequence 或 async frozen state。录制 + 回滚流程应在 capture 前 `Snapshot()` + `Clear()` 排空 stream，restore 后再 `Clear()` 并重新录制。
+`WorldStateSnapshot` 不包含 `CommandStream` pending batch、typed stores、placeholder sequence 或 async frozen state。
+
+### 公开合同：CommandStream 必须跨回滚排空
+
+> **`CaptureState()` 时 `CommandStream` 必须为空；`RestoreState()` 之后只允许使用空的 `CommandStream`。**
+
+这条**已升级为面向用户的公开合同**，写在 `docs/api.md` 的 "Contract: the `CommandStream` must be drained across every rollback boundary"（手册为准），“排空”= 已被消费（`Submit()`，或 `Snapshot()` + `Clear()`）。被异常中断的帧恢复后必须**丢弃旧 stream 并新建**；`Clear()` 不能代替丢弃。
+
+下表是实测（2026-09-27，probe 在仓库外 `E:/temp/RestoreProbe/`，场景 S1–S6）：
+
+| restore 后对旧 stream 的操作 | 实测结果 |
+|---|---|
+| 直接 `Submit()`（含 post-capture pending Create） | 不抛错，把已被回滚的 reservation 重新 materialize；free list 里的同一 `(id, version)` 随后被再次分配 → 同一 handle 两个 live row |
+| `Clear()` 后重新录制 | 也不安全：`TryReleaseReserved` / `RepushFreeEntry` 作用在回滚已释放的 slot 上 → version 多跳一位、free-list 顺序错位、残留 stale row |
+| 只含 store 命令（Set/Add existing） | 不损坏但静默重放：目标仍活且 version 相同则旧 intent 照常落地；目标已不存在则静默 prune（无异常） |
+| capture 前已 `Clear()`（或 `Submit` 已消费） | 安全：与从不回滚的对照 world 逐位一致 |
+
+World 侧则能被 `RestoreState` 完整恢复：`Checksum()` / `CanonicalChecksum()` / alive 集 / hierarchy / free-list 顺序均与从未 capture/restore 的对照 world 一致（但捕获后才发现的 empty archetype 仍留在 World 里，所以 parity 用 `Checksum()`）。
+
+根因：`CommandStream` 不知道 World 被回滚过。`PreValidatePendingSlots`（`CommandStream.Submit.cs`）唯一防线是 epoch 快速路径 `ReservedReleaseEpoch == _submitEpoch`，而 `RestoreState` 只调 `RecalculateReservedCount()`、**不推进 epoch**，所以该防线恰好在此场景被跳过。**已决定不改代码、不加字段**，由文档合同约束调用方。
 
 ## 决策
 
@@ -207,4 +226,5 @@ ring[4].Dispose();
 - schema identity 变化会使旧文件不可读；v5 没有 migration registry。需要迁移时由应用在 MiniArch 边界外显式转换。
 - `struct` 不等于可持久化：managed references、native pointers、overlap 和 AutoLayout 都会被拒绝。
 - Load 是不可信输入边界；任何新字段都要同时加入 dry validation、construction 和 Save→Load→Save 回归。
-- `RestoreState` 只恢复 World，不恢复任何 `CommandStream` 状态。
+- `RestoreState` 只恢复 World，不恢复任何 `CommandStream` 状态（合同见 `docs/api.md` 的 Rollback contract 段）。
+- 回滚后不要用 `Clear()` 丢弃旧 stream：它会对已被回滚释放的 slot 再释放一次（version / free-list 错位）；直接 `Submit()` 更糟，会复活已失效的 reservation 并产生重复 id。capture 前已排空的 stream 例外。

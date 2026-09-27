@@ -2,7 +2,7 @@
 title: Lockstep Playbook
 module: Meta
 description: End-to-end guide for implementing lockstep multiplayer on miniArch — from recording commands to peer synchronization and divergence detection
-updated: 2026-09-02
+updated: 2026-09-27
 ---
 # Lockstep Playbook
 
@@ -99,7 +99,7 @@ stream.DeferredEntities = true;  // Create() 返回 placeholder Entity(-1, seq)
 | 丢包/乱序重排 | ❌ | 调用方需按帧号排序后逐个 Replay |
 | Late-join / 断线重连 | ❌ | 无 checkpoint / id remap 机制 |
 | Divergent peer resync | ❌ | `EnsureReplayReservation` 抛异常而非尝试对齐 |
-| Client prediction + rollback | ⚠️ 有基础 | `CaptureState/RestoreState` 支持 GGPO 式原地回滚，但无 netcode 层集成 |
+| Client prediction + rollback | ⚠️ 有基础 | `CaptureState/RestoreState` 支持 GGPO 式原地回滚，但无 netcode 层集成；回滚必须遵守 CommandStream 排空合同（`docs/api.md` Rollback contract） |
 
 ## 相关页面
 
@@ -110,4 +110,4 @@ stream.DeferredEntities = true;  // Create() 返回 placeholder Entity(-1, seq)
 | 步骤 2c-2d 序列化 | `kb-command-stream.md`（AsSpan / FromWire / Deserialize） |
 | 步骤 2e replay | `kb-command-stream.md`（ReplayCore + EnsureReplayReservation） |
 | 步骤 2g checksum | `kb-snapshot-persistence.md`（Checksum 双模式段） |
-| Rollback 基础 | `kb-snapshot-persistence.md`（CaptureState/RestoreState） |
+| Rollback 基础 | `kb-snapshot-persistence.md`（CaptureState/RestoreState + 公开排空合同） |

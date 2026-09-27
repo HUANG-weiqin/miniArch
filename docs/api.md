@@ -283,6 +283,11 @@ appended to typed stores and consumed as one deterministic batch.
 | `Clear()` | Discard recorded commands without applying |
 | `DeferredEntities` | Enable placeholder entity IDs for lockstep mode |
 
+**Contract — drain across rollback boundaries.** A `CommandStream` must be empty at
+`World.CaptureState()` and only an empty stream may be used after `World.RestoreState()`; discard
+it (`new CommandStream(world)`) rather than `Clear()`-ing it after an interrupted frame. Violating
+this fails silently. See [Rollback contract](#contract-the-commandstream-must-be-drained-across-every-rollback-boundary).
+
 `Submit`, `Snapshot`, and the async consume APIs do **not** implicitly run
 component-presence or hierarchy-overlay validation. Call `Validate()` explicitly before
 consuming when fail-before-mutation semantics are required for those contracts.
@@ -354,6 +359,68 @@ world.RestoreState(snapshot);         // revert, payload returned to pool
 - **`WorldStateSnapshot.Dispose()`** — release an unconsumed checkpoint without restoring it
 - **`WorldStateSnapshot.IsRecycled`** — check whether a lease is no longer valid
 - `RestoreState` throws `InvalidOperationException` if the lease was already consumed or belongs to another world
+
+### Contract: the `CommandStream` must be drained across every rollback boundary
+
+> **A `CommandStream` must be empty when you call `CaptureState()`, and only an empty `CommandStream` may be used after `RestoreState()`.**
+
+`RestoreState` reverts the `World` and nothing else. A `CommandStream` holds recorded intents
+(pending batches, typed component stores, hierarchy overlay, destroy list, tracked
+`EntitySlot`s) that the rollback does **not** touch, and the stream cannot detect that its world
+was rolled back. Intent recorded *after* the capture therefore refers to entity reservations and
+slot versions that no longer exist.
+
+Drained means "already consumed": `Submit()`, or `Snapshot()` + `Clear()`.
+
+```csharp
+// ── Normal GGPO frame loop ──────────────────────────────────────────────
+CommandStream stream = new(world);   // long-lived, but empty at every rollback boundary
+var ring = new WorldStateSnapshot[8];
+
+// frame n
+ring[n % 8]?.Dispose();               // evict an unconsumed checkpoint first
+ring[n % 8] = world.CaptureState();   // stream is empty here   <-- contract
+stream.Set(a, new Position(nextX, nextY));
+stream.Submit();                      // consumed -> drained
+
+// misprediction at frame k -> rewind and re-simulate
+world.RestoreState(ring[k % 8]);      // safe: Submit() already drained the stream
+stream.Set(a, new Position(correctedX, correctedY));
+stream.Submit();
+
+// ── Exception recovery: a frame was interrupted mid-record ─────────────
+var checkpoint = world.CaptureState();  // stream is empty here   <-- contract
+try
+{
+    stream.Set(a, new Position(nextX, nextY));
+    stream.Create();                    // reserves an id...
+    Simulate();                         // ...and throws here
+    stream.Submit();
+}
+catch
+{
+    world.RestoreState(checkpoint);
+    stream = new CommandStream(world);  // discard — Clear() is NOT a substitute
+    throw;
+}
+```
+
+**After restoring a frame that was interrupted mid-record, discard the stream
+(`stream = new CommandStream(world)`).** `Clear()` does not discard it safely: `Clear()` releases
+the reserved ids of pending batches, and a rollback has already returned those ids to the free
+list — so the release bumps slot versions a second time and reorders the free list.
+
+**Violating this contract fails silently** — no exception, no diagnostic. Observed symptoms:
+
+| What you did after `RestoreState` | What happens |
+|---|---|
+| `Submit()` a stream that recorded `Create` after the capture | The rolled-back reservation is materialized again; the same `(Id, Version)` is later handed out by the free list → **two live entities sharing one handle** |
+| `Clear()`, then re-record | Slot versions jump an extra step and free-list order shifts → id/version sequence diverges from a never-rolled-back world, stale archetype rows remain |
+| `Submit()` a stream that only recorded `Add`/`Set` on existing entities | No corruption, but the discarded intent is silently re-applied (target alive, same version) or silently pruned (target gone) |
+
+Why this is a documented contract rather than a runtime check: the only guard,
+`CommandStream.PreValidatePendingSlots`, is epoch-based, and `RestoreState` does not advance
+`World.ReservedReleaseEpoch` — so the guard's fast path skips exactly this case.
 
 ---
 
@@ -462,6 +529,7 @@ struct SumJob : IChunkForEach
 - `Set<T>()` throws if the entity does not have the component; use `Add<T>()` to add a new component
 - `WorldSnapshot` only supports unmanaged component types
 - `World.RestoreState(snapshot)` throws if `snapshot.IsRecycled` is `true`
+- `CommandStream` must be drained across rollback boundaries: empty at `CaptureState()`, and discarded (`new CommandStream(world)`) after restoring a frame that was interrupted — see [Rollback contract](#contract-the-commandstream-must-be-drained-across-every-rollback-boundary)
 
 ---
 

@@ -49,7 +49,7 @@ readonly record struct Velocity(float X, float Y);
 - **Change Tracking** — `World.Watch<T>()` Snapshot/Diff observers for value changes and membership transitions
 - **CommandStream** — deferred mutation recording; single-pass Set (12–48% faster than traditional command buffers)
 - **FrameDelta + Replay** — record self-contained deltas, replay on any world with deterministic ID validation
-- **CaptureState/RestoreState** — zero-alloc in-place rollback (GGPO-style at 60 fps)
+- **CaptureState/RestoreState** — zero-alloc in-place rollback (GGPO-style at 60 fps); the `CommandStream` must be drained across rollback boundaries → [contract](docs/api.md#contract-the-commandstream-must-be-drained-across-every-rollback-boundary)
 - **WorldSnapshot** — binary world serialize/deserialize for replays and netcode
 - **Entity hierarchy** — `AddChild` / `RemoveChild` with cascade destroy
 - **Parallel iteration** — `ForEachChunkParallel` with struct-generic `IChunkForEach` (zero-alloc, JIT-devirtualised)
