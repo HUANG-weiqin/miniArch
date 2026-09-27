@@ -284,8 +284,8 @@ public sealed class CrossFeatureParityTests
         var hostB = new World();
         new CommandStream(hostB).Replay(delta);
 
-        // Capture the rollback projection after replay. RestoreState does not
-        // remove empty archetypes first discovered after this point.
+        // Capture the physical-row rollback projection after replay. RestoreState
+        // retains newly discovered archetypes, but empty ones do not affect either checksum.
         var snapshot = hostB.CaptureState();
         var afterReplayChecksum = hostB.Checksum();
 

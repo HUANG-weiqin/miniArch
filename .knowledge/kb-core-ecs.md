@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-09-02
+updated: 2026-09-28
 ---
 # MiniArch Core ECS
 
@@ -139,7 +139,7 @@ updated: 2026-09-02
   - entity enumerator、ChunkView/span 与 `EntityAccessor` 都是 unchecked borrow；借用期间禁止 Create/Destroy/Clear/Add/Remove/RestoreState。该约束不通过 World 全局版本或 Release 热路径检查兜底。
   - 如需不受结构变更历史影响的稳定顺序，使用 `OrderByEntityId()` / `OrderByEntityIdDescending()` / `OrderByComponent<T>()`
   - 详见 `tests/MiniArch.Tests/Core/QueryOrderingTests.cs`
-- `Destroy(ReadOnlySpan<Entity>)` / `Destroy(query)` 可用 `CanonicalChecksum`、`WorldDiff`、`WorldValidator` 以及 `WorldDigest` 的 occupancy/free-list/hierarchy/per-component 域与 guarded `for Destroy` 对照。partial batch remove 使用无序 hole-fill，因此物理 archetype row order 可不同；canonical hash 会忽略该 row order，但还会严格观察 chunk capacity、empty archetypes、全部 slots 与 free-list 顺序。若测试只要求业务 entity 等价而允许这些持久化细节不同，应以 `WorldDiff` 和相关 domain digest 为准。
+- `Destroy(ReadOnlySpan<Entity>)` / `Destroy(query)` 可用 `CanonicalChecksum`、`WorldDiff`、`WorldValidator` 以及 `WorldDigest` 的 occupancy/free-list/hierarchy/per-component 域与 guarded `for Destroy` 对照。partial batch remove 使用无序 hole-fill，因此物理 archetype row order 可不同；canonical hash 会忽略该 row order，但还会严格观察 chunk capacity、全部 slots 与 free-list 顺序（空原型不进 canonical 内容，残留空原型不构成差异）。若测试只要求业务 entity 等价而允许这些持久化细节不同，应以 `WorldDiff` 和相关 domain digest 为准。
 - **用户可触发的 public boundary 检查**（如 `AssertNotDisposed`、`AssertAlive`、Restore 跨 World 校验）在 Release 常开。internal helper 只有在同一控制流的前序阶段已建立不变量时才可省略部分重复检查；具体分层见 `kb-design-rationale.md` §3.11。
 - **IsAlive 不含 AssertNotDisposed**：Dispose 后 `_entitySlotCount = 0` 使 bounds check 永远返回 false，语义正确（无活实体）且省一个分支。其他公共方法（Create/Destroy/Get 等）仍保留 `AssertNotDisposed`——它们在 disposed World 上会静默损坏状态
 - **Clear 命名而非 DestroyAll/DisposeQueryUnsafe**：`Clear` 诚实描述行为（清空 archetype 容器），与 `List<T>.Clear()` 语义一致；与 `Destroy*` 家族（逐实体处理）区分

@@ -2,12 +2,23 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-09-02
+updated: 2026-09-28
 ---
 # Knowledge Base Changelog
 
 > 这个页面只记录**重大架构变更和知识库校准事件**，供追溯。
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
+
+## 2026-09-28 canonical 内容排除 empty archetype + RestoreState 不再作废 Create 缓存
+
+- canonical v5 payload（`Save` 与 `ComputeCanonicalChecksum` 共用的 `WriteCanonicalWorld`）只收录 `EntityCount > 0` 的原型，schema table 也只收这些原型实际用到的组件类型。
+  **supersedes** 下方 2026-09-02 条目中“完整状态包含 chunk capacity、slot table、empty archetypes、hierarchy 和 ordered free list”里的 empty archetypes 部分（那行保留为当时事实）。
+- 后果：只差空原型（回退残留，或创建后销毁某种组合）的 World，其 canonical checksum 与 Save 字节与从未出现过该组合的 World 一致。仍严格观察 chunk capacity、全部 slot versions、hierarchy 与 ordered free list；query 迭代顺序不受影响（由签名排序决定）。
+- 兼容性：旧 v5 payload（带空原型条目）仍可 Load；重存时规范化删除，**单向可读、原字节不保留**。
+- `WorldDigest.PerArchetype` 的 key 改为非空原型的稠密 ordinal（0 起连续），`Total` 不再因前置空原型变化；仍对物理 row order 敏感。`PerComponent` 早已跳空。
+- `World.RestoreState` 不再递增 `_createArchetypeCacheGeneration`：原型对象仍在 `_archetypes` 中，预热后“拍快照 → Create/Destroy → 退回 → 再 Create”稳态 0 分配；`World.Reset`（会清空 `_archetypes`）仍照常作废缓存。
+- 回归测试：`WorldSnapshotTests` 7 个（omits_empty_archetypes / only_empty_archetypes_round_trip / returns_to_capture_value_after_rollback / ignore_created_then_destroyed_signature / 空原型独占的不支持 shape / legacy_v5 全空与混合活/空两种 payload）、`WorldDigestTests.Empty_archetype_does_not_shift_breakdown_keys_or_total`、`RestoreCreateArchetypeCacheTests` 3 个。
+- 文档与知识页同步：`docs/api.md`、`README.md`、`CHANGELOG.md` 6.1.0、`kb-snapshot-persistence.md`、`kb-determinism-proof.md`、`kb-ecs-diagnostics.md`、`kb-core-ecs.md`、`kb-lockstep-playbook.md`、`kb-code-review-findings.md`。
 
 ## 2026-09-02 WorldSnapshot v5 字段级 canonical 持久化
 

@@ -355,6 +355,12 @@ world.RestoreState(snapshot);         // revert, payload returned to pool
 ```
 
 - **Zero-allocation** after warm-up (generation-stamped value leases over pooled payloads)
+- **Create caches survive a restore** — archetypes created after the capture are still in the
+  world, so re-creating the same component combinations after `RestoreState` stays
+  allocation-free in steady state. The internal whole-world reset path still invalidates
+  the cache, because it drops the archetypes themselves.
+- **`CanonicalChecksum()` after `RestoreState()` matches a world that was never rolled back**,
+  because the canonical payload ignores the empty archetypes the restore leaves behind.
 - **Multiple snapshots** may be live simultaneously (GGPO-style multi-frame rollback window)
 - **`WorldStateSnapshot.Dispose()`** — release an unconsumed checkpoint without restoring it
 - **`WorldStateSnapshot.IsRecycled`** — check whether a lease is no longer valid
@@ -433,17 +439,28 @@ Why this is a documented contract rather than a runtime check: the only guard,
 | `Save(Stream, World)` | Write a canonical version-5 snapshot followed by CRC32 |
 | `Load(Stream)` | Strictly validate a v5 snapshot and return a new `World` |
 | `ComputeChecksum(World)` | Compute the legacy physical-row rollback projection hash, preserving entity-component association |
-| `ComputeCanonicalChecksum(World)` | Compute SHA-256 over the exact v5 payload, excluding its CRC trailer |
+| `ComputeCanonicalChecksum(World)` | Compute SHA-256 over the exact v5 payload, excluding its CRC trailer; the payload covers non-empty archetypes only |
 
 Version 5 encodes unmanaged component **fields**, not raw CLR struct memory. Primitive
 values use fixed-width little-endian encoding; padding, offsets, alignment, declaration
 order, and runtime component registration ids are not part of the wire format. Nested
 unmanaged structs, fixed buffers, and inline arrays are supported. Pointer/native-sized,
-recursive, AutoLayout, managed, and overlapping shapes are rejected without a raw fallback.
+recursive, AutoLayout, managed, and overlapping shapes used by non-empty archetypes are
+rejected without a raw fallback. Types found only in empty archetypes are neither serialized
+nor schema-validated.
 
 `Load` accepts only v5; v3/v4 files must be regenerated or migrated by the application.
 CRC32 detects corruption but is not a schema-migration mechanism. Exact type identity and
 canonical field shape must match the local component type.
+
+The canonical payload describes **non-empty archetypes only**: an archetype left empty by
+`Destroy` or by `RestoreState` contributes neither an archetype entry nor a schema entry, so
+two worlds that differ only by such leftovers produce the same `CanonicalChecksum()` and the
+same `Save` bytes. Chunk capacity, every slot version, hierarchy edges, and the ordered free
+list are still part of the payload. Snapshots written by older v5 builds that *do* contain
+empty archetypes still load; re-saving such a world normalizes those entries away, so the
+original bytes are not preserved. `Checksum()` is unchanged — it already ignored empty
+archetypes.
 
 ---
 

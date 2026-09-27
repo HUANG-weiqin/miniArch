@@ -1407,8 +1407,9 @@ public sealed partial class World : IDisposable
     /// and its payload is returned to the world's pool for reuse by the next
     /// <see cref="CaptureState"/>.
     /// <para/>
-    /// After restore, all query caches and archetype transition caches are
-    /// invalidated and will rebuild on next use.
+    /// Archetypes are retained and reset in place, so cached create and
+    /// transition destinations remain valid. Query views refresh as needed
+    /// when their storage shape changes.
     /// </summary>
     /// <exception cref="InvalidOperationException">
     /// Thrown when <paramref name="snapshot"/> has already been restored
@@ -1468,9 +1469,6 @@ public sealed partial class World : IDisposable
         _replayMapCount = 0;
         _replayCreateCounts.Clear();
 
-        // Invalidate all caches
-        _createArchetypeCacheGeneration++;
-
         RecycleStateSnapshotPayload(snap);
     }
 
@@ -1499,9 +1497,9 @@ public sealed partial class World : IDisposable
 
     /// <summary>
     /// Computes the legacy SHA-256 lockstep projection of live entity state.
-    /// It excludes chunk capacity, empty archetypes, and free-list state, so it
-    /// is suitable for rollback parity where those persistence details may
-    /// differ. Returns 32 raw bytes; use
+    /// It excludes chunk capacity and free-list state, and skips empty
+    /// archetypes. Its physical-row projection is suitable for rollback parity.
+    /// Returns 32 raw bytes; use
     /// <c>Convert.ToHexString(world.Checksum())</c> for a hex string.
     /// </summary>
     public byte[] Checksum() => Core.WorldSnapshot.ComputeChecksum(this);
@@ -1509,8 +1507,9 @@ public sealed partial class World : IDisposable
     /// <summary>
     /// Computes SHA-256 over the exact canonical version-5 snapshot payload,
     /// excluding its CRC32 trailer. It includes chunk capacity, slot versions,
-    /// empty archetypes, hierarchy, and ordered free-list state; two worlds
-    /// match exactly when their canonical persistence payloads match.
+    /// non-empty archetypes and their component schemas, hierarchy, and ordered
+    /// free-list state; two worlds match exactly when their canonical persistence
+    /// payloads match.
     /// </summary>
     public byte[] CanonicalChecksum() => Core.WorldSnapshot.ComputeCanonicalChecksum(this);
 

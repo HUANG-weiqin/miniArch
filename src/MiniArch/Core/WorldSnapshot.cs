@@ -157,7 +157,7 @@ public static class WorldSnapshot
     private static void WriteCanonicalWorld<TSink>(ref TSink sink, World world)
         where TSink : struct, IByteSink
     {
-        // Complete type/shape validation and canonical sorting before Save emits
+        // Validate and sort persisted non-empty archetypes before Save emits
         // its first byte. The resulting model contains metadata only, never a
         // materialized snapshot payload.
         var layout = BuildCanonicalLayout(world);
@@ -222,9 +222,15 @@ public static class WorldSnapshot
     {
         var archetypes = world.Archetypes;
         var types = new HashSet<Type>();
+        var nonEmptyCount = 0;
         for (var archetypeIndex = 0; archetypeIndex < archetypes.Length; archetypeIndex++)
         {
-            var componentTypes = archetypes[archetypeIndex].ComponentTypes;
+            var archetype = archetypes[archetypeIndex];
+            if (archetype.EntityCount == 0)
+                continue;
+
+            nonEmptyCount++;
+            var componentTypes = archetype.ComponentTypes;
             for (var componentIndex = 0; componentIndex < componentTypes.Count; componentIndex++)
                 types.Add(componentTypes[componentIndex]);
         }
@@ -250,10 +256,14 @@ public static class WorldSnapshot
         for (var index = 0; index < schemas.Length; index++)
             schemaByType.Add(schemas[index].ComponentType, schemas[index]);
 
-        var canonicalArchetypes = new CanonicalArchetype[archetypes.Length];
+        var canonicalArchetypes = new CanonicalArchetype[nonEmptyCount];
+        var canonicalIndex = 0;
         for (var archetypeIndex = 0; archetypeIndex < archetypes.Length; archetypeIndex++)
         {
             var archetype = archetypes[archetypeIndex];
+            if (archetype.EntityCount == 0)
+                continue;
+
             var runtimeSignature = archetype.Signature.AsSpan();
             var componentTypes = archetype.ComponentTypes;
             var columns = new CanonicalColumn[runtimeSignature.Length];
@@ -265,7 +275,7 @@ public static class WorldSnapshot
             for (var row = 0; row < rows.Length; row++)
                 rows[row] = row;
             Array.Sort(rows, (left, right) => archetype.GetEntity(left).Id.CompareTo(archetype.GetEntity(right).Id));
-            canonicalArchetypes[archetypeIndex] = new CanonicalArchetype(archetype, columns, rows);
+            canonicalArchetypes[canonicalIndex++] = new CanonicalArchetype(archetype, columns, rows);
         }
 
         Array.Sort(canonicalArchetypes, static (left, right) => CompareSignatures(left.Columns, right.Columns));

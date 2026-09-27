@@ -2,7 +2,7 @@
 title: Knowledge Index
 module: KnowledgeIndex
 description: .knowledge 知识库导航、模块地图与必读入口
-updated: 2026-09-02
+updated: 2026-09-28
 ---
 
 # Knowledge Index
@@ -21,7 +21,7 @@ updated: 2026-09-02
 | MiniArch.Core CommandStream | `kb-command-stream.md`、`kb-deferred-create-design.md` |
 | MiniArch.Core Query | `kb-query-invalidation.md`、`kb-parallel-query.md` |
 | MiniArch.Core ChangeTracking | `kb-change-tracking.md`（World.Watch pull-event 模型：ChangeWatch/TransitionWatch Snapshot+Diff；为什么不是 push event） |
-| MiniArch.Core Snapshot | `kb-snapshot-persistence.md`（v5 字段级 canonical wire、严格 Load、双 checksum、Clone/CaptureState 边界） |
+| MiniArch.Core Snapshot | `kb-snapshot-persistence.md`（v5 字段级 canonical wire、canonical 只含非空原型、严格 Load、双 checksum、Clone/CaptureState 边界） |
 | MiniArch.Core Hierarchy | `kb-hierarchy-runtime.md` |
 | MiniArch.Diagnostics（诊断工具） | `kb-ecs-diagnostics.md`（WorldDiff、WorldValidator、EntityDump、WorldDigest） |
 | MiniArch（用户 API 分层） | `kb-component-bucket-index-mvp-report.md`（ComponentBucketQuery MVP 最终报告——确定性 per-key scan、调用者提供 span 模式、零 core 入侵、正确性模型与性能矩阵）、`kb-frame-read-models.md`（Frame Read Models ValueLab / FrameLookup API Gate：compact CSR 本体成立；逐 row DirectForEach Conditional Hold；chunk-run 通用形态 No-Go；hot bucket/entity-only 禁用区间）、`kb-managed-entity-sidecar-evaluation.md`（Entity -> managed object sidecar 价值验证 No-Go：打败 dictionary 但未优于 competent dense user，serialization 不进 v1） |

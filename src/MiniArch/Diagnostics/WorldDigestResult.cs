@@ -38,7 +38,7 @@ public readonly struct WorldDigestResult
     /// <summary>Gets a defensive snapshot of component-type hashes.</summary>
     public IReadOnlyDictionary<Type, byte[]> PerComponent => CopyHashes(_perComponent);
 
-    /// <summary>Gets a defensive snapshot of non-empty archetype hashes.</summary>
+    /// <summary>Gets a defensive snapshot of non-empty archetype hashes keyed by their dense ordinal.</summary>
     public IReadOnlyDictionary<int, byte[]> PerArchetype => CopyHashes(_perArchetype);
 
     internal WorldDigestResult(

@@ -20,8 +20,8 @@ namespace MiniArchTests.Core;
 ///
 /// Convergence criteria:
 ///   A == B  (Submit and Replay produce identical persistence state)
-///   C == pre-mutation baseline  (RestoreState rolls back live state; newly
-///                                discovered empty archetypes are excluded)
+///   C == pre-mutation baseline  (RestoreState rolls back live state; empty
+///                                archetypes do not affect either checksum)
 /// </summary>
 public sealed class SubmitReplayRestoreParityTests
 {

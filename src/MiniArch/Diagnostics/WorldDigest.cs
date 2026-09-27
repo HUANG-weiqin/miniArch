@@ -9,7 +9,7 @@ namespace MiniArch.Diagnostics;
 /// per-archetype row-order data. Use <see cref="World.CanonicalChecksum"/>
 /// when comparing exact v5 persistence state independently of physical row
 /// order and CLR padding; that hash also observes persistence-only state such
-/// as chunk capacity, empty archetypes, all slots, and free-list order.
+/// as chunk capacity, all slots, and free-list order, but excludes empty archetypes.
 /// </summary>
 public static class WorldDigest
 {
@@ -145,7 +145,7 @@ public static class WorldDigest
 
         foreach (var arch in world.Archetypes)
         {
-            if (arch is null || arch.EntityCount == 0) { idx++; continue; }
+            if (arch is null || arch.EntityCount == 0) continue;
 
             using var builder = new HashBuilder();
 

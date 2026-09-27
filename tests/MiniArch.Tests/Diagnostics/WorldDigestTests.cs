@@ -164,6 +164,30 @@ public class WorldDigestTests
     }
 
     [Fact]
+    public void Empty_archetype_does_not_shift_breakdown_keys_or_total()
+    {
+        using var withEmpty = new World();
+        using var withoutEmpty = new World();
+        withEmpty.Create(new Velocity(1, 2, 3));
+        withoutEmpty.Create(new Velocity(1, 2, 3));
+
+        // The empty signature sorts before every non-empty signature.
+        var emptySignature = withEmpty.CreateEmpty();
+        var existingSignature = withoutEmpty.Create(new Velocity(4, 5, 6));
+        withEmpty.Destroy(emptySignature);
+        withoutEmpty.Destroy(existingSignature);
+
+        Assert.Equal(2, withEmpty.Archetypes.Length);
+        Assert.Single(withoutEmpty.Archetypes);
+        var first = WorldDigest.Compute(withEmpty);
+        var second = WorldDigest.Compute(withoutEmpty);
+        Assert.Equal(first.Total, second.Total);
+        Assert.Equal(first.PerArchetype.Keys, second.PerArchetype.Keys);
+        Assert.Equal(first.PerArchetype[0], second.PerArchetype[0]);
+        Assert.Equal(first.PerComponent[typeof(Velocity)], second.PerComponent[typeof(Velocity)]);
+    }
+
+    [Fact]
     public void ArchetypeHashes_NotEmpty()
     {
         using var world = new World();

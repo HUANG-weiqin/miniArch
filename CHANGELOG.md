@@ -1,5 +1,15 @@
 # Changelog
 
+## 6.1.0 (2026-09-28)
+
+- **Changed: canonical v5 content covers non-empty archetypes only** — `WorldSnapshot.Save` and `ComputeCanonicalChecksum` share one `WriteCanonicalWorld` traversal, and both now skip archetypes with `EntityCount == 0`; the schema table likewise contains only the component types those non-empty archetypes actually use. Two worlds that differ only by empty archetypes (created then destroyed, or left behind by `RestoreState`) now produce the same `CanonicalChecksum()` and the same `Save` bytes as a world that never had that component combination. **Stored snapshots and canonical checksums of such worlds change value.** Types used only by empty archetypes are no longer serialized or schema-validated.
+- Old v5 snapshots that contain empty archetype entries still load unchanged. Re-saving such a world normalizes the empty entries away, so the original bytes are not preserved — old files are readable one way, not byte-stable.
+- Unchanged canonical fields: chunk capacity, every slot version, hierarchy relations, and the ordered free list. `Query` iteration order is unaffected — it is decided by signature sorting, not by which empty archetypes exist.
+- `World.Checksum()` (the legacy rollback/lockstep projection) is unchanged; it already excluded empty archetypes.
+- **Diagnostics: `WorldDigest.PerArchetype` keys are now dense ordinals over non-empty archetypes** (previously a leading empty archetype shifted every key). `WorldDigest.Total` therefore no longer changes because of empty archetypes, but remains sensitive to physical row order.
+- **Changed: `World.RestoreState` no longer invalidates the create-archetype cache** — archetypes created after the capture survive the restore, so the cached create plans still point at live archetypes. After warm-up, a capture → create → restore → re-create cycle is allocation-free. `World.Reset` still invalidates the cache because it drops the archetypes themselves.
+- Public API signatures unchanged.
+
 ## 6.0.0 (2026-09-02)
 
 - **Breaking: `WorldSnapshot` is now canonical format v5 only** — `Load` rejects v3, v4, and unknown versions with `InvalidDataException`. Existing snapshot files must be regenerated or migrated outside MiniArch.

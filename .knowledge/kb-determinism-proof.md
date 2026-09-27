@@ -1,8 +1,8 @@
 ---
 title: 确定性证明 — Lockstep ECS 库级确定性验证
 module: DeterminismProof
-description: miniArch 确定性保证的 10 维证明矩阵、实证数据与边界；含字段级 canonical checksum 和注册顺序边界
-updated: 2026-09-02
+description: miniArch 确定性保证的 10 维证明矩阵、实证数据与边界；含字段级 canonical checksum（只观察非空原型）和注册顺序边界
+updated: 2026-09-28
 ---
 
 # 确定性证明 — Lockstep ECS 库级确定性验证
@@ -141,7 +141,7 @@ updated: 2026-09-02
 - component 不再喂 raw memory。缓存的字段计划按 field name ordinal 展开 nested unmanaged structs、fixed buffers 与 inline arrays，primitive 固定宽度 little-endian，bool 规范化为 0/1，完全忽略 CLR padding/offset/pack。
 - schema shape 同时进入 payload，字段增删/改名/改类型和 nested/array shape 变化都会改变或拒绝 checksum。
 
-**保证**：相同组件类型与完整持久化状态，即使 CLR padding 内容或 component 注册顺序不同，也得到相同 v5 bytes 与 canonical checksum。它观察 chunk capacity、slot table、empty archetypes、hierarchy 和 ordered free list；不是忽略存储状态的“业务逻辑等价”hash。
+**保证**：相同组件类型与完整持久化状态，即使 CLR padding 内容或 component 注册顺序不同，也得到相同 v5 bytes 与 canonical checksum。它观察 chunk capacity、slot table、hierarchy 和 ordered free list；**不观察 empty archetype**（只收录非空原型及其用到的 schema），因此仍不是忽略存储形状的“业务逻辑等价”hash。
 
 **测试链接**：
 - `tests/MiniArch.Tests/Persistence/WorldSnapshotTests.cs`（padding poison、注册顺序、fresh-process、round-trip、schema corruption）
@@ -151,7 +151,7 @@ updated: 2026-09-02
 **代码位置**：
 - `src/MiniArch/Core/WorldSnapshot.cs`（`ComputeCanonicalChecksum` / `WriteCanonicalWorld` / component plan）
 
-`Checksum()` 是另一个有意保留的 rollback/lockstep 投影：它排除 chunk capacity、empty archetypes 和 free list，且保留 component physical-row order。RestoreState parity 使用它；不要把两个观察边界混为一谈。
+`Checksum()` 是另一个有意保留的 rollback/lockstep 投影：它排除 chunk capacity、empty archetypes 和 free list，且保留 component physical-row order。两者都是可用的 rollback parity 工具（canonical 自 2026-09-28 起也不再因空原型而分歧）；区别只在于观察边界，不要把它们当成同一个 hash 互换。
 
 ### 8. Soak 实证
 
@@ -273,8 +273,8 @@ miniArch 的确定性保证**不覆盖**以下维度——这些是你们应用�
 - 理解这个模块时，应该把它看成：**miniArch 确定性保证的"审计报告"**——不是设计文档，是实证数据汇总。
 - 最重要的抽象：
   - **Soak test**：长周期随机操作 + 双路径校验 → 发现 Submit/Replay 分歧
-  - **CanonicalChecksum**：完整 v5 persistence payload + 字段级 codec + SHA-256 → 跨 host/注册顺序 byte-equal 比较
-  - **三路 parity**：Submit/Replay 用 canonical persistence hash 收敛；Restore 用 legacy rollback projection 收敛 → 覆盖两种观察边界
+  - **CanonicalChecksum**：完整 v5 persistence payload（不含 empty archetypes）+ 字段级 codec + SHA-256 → 跨 host/注册顺序 byte-equal 比较
+  - **三路 parity**：Submit/Replay 用 canonical persistence hash 收敛；Restore 可用 canonical 与 legacy 投影双重收敛
 - 常见误解：
   - 「miniArch 处理了 float 运算确定性」——**错**。miniArch 直接存 IEEE 754 bytes，不转定点数。跨平台 float 运算确定性是应用层责任。
   - 「确定性 = 正确性」——**错**。Soak test 验证"同一输入 → 同一输出"，不验证"输出是否正确"（domain logic 的责任）。

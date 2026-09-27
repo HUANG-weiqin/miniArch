@@ -359,57 +359,37 @@ public sealed class WorldSnapshotTests
     }
 
     [Fact]
-    public void Save_load_preserves_empty_archetypes()
+    public void Save_load_omits_empty_archetypes_without_changing_query_order()
     {
-        var world = new World();
+        using var world = new World();
+        world.Create(new Position(1, 2));
+        world.Create(new Health(3));
+        var temp = world.Create(new Velocity(4, 5));
+        world.Destroy(temp);
+        Assert.Equal(3, world.Archetypes.Length);
 
-        // Create three distinct signatures. Destroy all entities of one to
-        // create an empty archetype. Empty archetypes must survive Save→Load
-        // so that future creation of that signature doesn't change query order.
-        world.Create(new Position(1, 2));     // archetype {Position}
-        world.Create(new Health(3));           // archetype {Health}
-        var temp = world.Create(new Velocity(4, 5)); // archetype {Velocity}
-        world.Destroy(temp);                   // {Velocity} becomes empty
+        var bytes = SaveToBytes(world);
+        var layout = ParseV5Snapshot(bytes);
+        Assert.Equal(2, layout.Archetypes.Count);
+        Assert.DoesNotContain(layout.Schemas, schema => schema.ComponentType == typeof(Velocity));
 
-        // Archetypes are now sorted by signature. Capture original state.
-        var origArchs = world.Archetypes;
-        Assert.Equal(3, origArchs.Length);
+        using var loaded = WorldSnapshot.Load(new MemoryStream(bytes, writable: false));
+        Assert.Equal(2, loaded.Archetypes.Length);
 
-        // Verify the {Velocity} archetype is empty.
-        var emptySig = ComponentRegistry.Shared.GetOrCreate<Velocity>();
-        var origEmptyArch = origArchs.FirstOrDefault(a =>
-            a.Signature.AsSpan().Length == 1 && a.Signature.AsSpan()[0] == emptySig);
-        Assert.NotNull(origEmptyArch);
-        Assert.Equal(0, origEmptyArch.EntityCount);
+        // The original world reuses an empty archetype; the loaded world creates
+        // it anew. Both insert the signature at the same sorted position.
+        var originalVelocity = world.Create(new Velocity(6, 7));
+        var loadedVelocity = loaded.Create(new Velocity(6, 7));
+        Assert.Equal(originalVelocity, loadedVelocity);
+        Assert.Equal(new Velocity(6, 7), GetComponent<Velocity>(loaded, loadedVelocity));
 
-        // Count non-empty archetypes.
-        var nonEmpty = 0;
-        foreach (var a in origArchs)
-            if (a.EntityCount > 0) nonEmpty++;
-        Assert.Equal(2, nonEmpty);
-
-        using var stream = new MemoryStream();
-        WorldSnapshot.Save(stream, world);
-        stream.Position = 0;
-        var loaded = WorldSnapshot.Load(stream);
-
-        // All three archetypes still exist, in the same sorted order.
-        var loadedArchs = loaded.Archetypes;
-        Assert.Equal(3, loadedArchs.Length);
-        for (var i = 0; i < 3; i++)
-        {
-            Assert.True(origArchs[i].Signature.AsSpan().SequenceEqual(loadedArchs[i].Signature.AsSpan()),
-                $"Archetype at index {i} has different signature after Save→Load.");
-            Assert.Equal(origArchs[i].EntityCount, loadedArchs[i].EntityCount);
-        }
-
-        // Creating a new entity with the empty archetype's signature should
-        // restore its entity count to 1.
-        var newVy = loaded.Create(new Velocity(6, 7));
-        var query = loaded.Query(new QueryDescription().With<Velocity>());
-        var chunks = query.GetChunks();
-        Assert.Equal(1, chunks.Length);
-        Assert.Equal(new Velocity(6, 7), GetComponent<Velocity>(loaded, newVy));
+        var originalOrder = new List<Entity>();
+        foreach (var entity in world.Query(new QueryDescription()))
+            originalOrder.Add(entity);
+        var loadedOrder = new List<Entity>();
+        foreach (var entity in loaded.Query(new QueryDescription()))
+            loadedOrder.Add(entity);
+        Assert.Equal(originalOrder, loadedOrder);
     }
 
     [Fact]
@@ -429,40 +409,155 @@ public sealed class WorldSnapshotTests
         using var stream2 = new MemoryStream();
         WorldSnapshot.Save(stream2, loaded);
 
-        // Second save must be byte-identical to the first despite empty archetype.
+        // The empty runtime archetype is omitted on both saves.
         Assert.Equal(stream1.ToArray(), stream2.ToArray());
     }
 
     [Fact]
-    public void Snapshot_with_only_empty_archetypes_round_trips()
+    public void Snapshot_with_only_empty_archetypes_round_trips_without_schemas_or_archetypes()
     {
-        var world = new World();
-
-        // Create then destroy each entity so every archetype is empty.
+        using var world = new World();
         var a = world.Create(new Position(1, 2));
         var b = world.Create(new Velocity(3, 4));
         var c = world.Create(new Health(5));
         world.Destroy(a);
         world.Destroy(b);
         world.Destroy(c);
-
         Assert.Equal(3, world.Archetypes.Length);
-        Assert.All(world.Archetypes, a => Assert.Equal(0, a.EntityCount));
 
-        using var stream = new MemoryStream();
-        WorldSnapshot.Save(stream, world);
-        stream.Position = 0;
-        var loaded = WorldSnapshot.Load(stream);
+        var bytes = SaveToBytes(world);
+        var layout = ParseV5Snapshot(bytes);
+        Assert.Empty(layout.Schemas);
+        Assert.Empty(layout.Archetypes);
 
-        Assert.Equal(3, loaded.Archetypes.Length);
-        for (var i = 0; i < 3; i++)
-        {
-            Assert.Equal(0, loaded.Archetypes[i].EntityCount);
-            Assert.True(
-                world.Archetypes[i].Signature.AsSpan().SequenceEqual(
-                    loaded.Archetypes[i].Signature.AsSpan()),
-                $"Archetype {i} signature differs after round-trip.");
-        }
+        using var loaded = WorldSnapshot.Load(new MemoryStream(bytes, writable: false));
+        Assert.Empty(loaded.Archetypes);
+        Assert.Equal(bytes, SaveToBytes(loaded));
+        Assert.Equal(world.CanonicalChecksum(), loaded.CanonicalChecksum());
+    }
+
+    [Fact]
+    public void CanonicalChecksum_returns_to_capture_value_after_new_archetype_is_rolled_back()
+    {
+        using var world = new World();
+        using var untouched = new World();
+        world.Create(new Position(1, 2));
+        untouched.Create(new Position(1, 2));
+        var before = world.CanonicalChecksum();
+
+        var snapshot = world.CaptureState();
+        world.Create(new Velocity(3, 4), new Health(5));
+        world.RestoreState(snapshot);
+
+        Assert.Equal(2, world.Archetypes.Length);
+        Assert.Equal(before, world.CanonicalChecksum());
+        Assert.Equal(untouched.CanonicalChecksum(), world.CanonicalChecksum());
+        Assert.Equal(SaveToBytes(untouched), SaveToBytes(world));
+    }
+
+    [Fact]
+    public void CanonicalChecksum_and_save_ignore_a_created_then_destroyed_signature()
+    {
+        using var history = new World();
+        using var untouched = new World();
+        history.Create(new Position(1, 2));
+        untouched.Create(new Position(1, 2));
+
+        var newSignature = history.Create(new Velocity(3, 4));
+        var existingSignature = untouched.Create(new Position(3, 4));
+        history.Destroy(newSignature);
+        untouched.Destroy(existingSignature);
+        Assert.Equal(2, history.Archetypes.Length);
+        Assert.Single(untouched.Archetypes);
+
+        Assert.Equal(untouched.CanonicalChecksum(), history.CanonicalChecksum());
+        Assert.Equal(SaveToBytes(untouched), SaveToBytes(history));
+    }
+
+    [Fact]
+    public void Save_ignores_unsupported_component_shape_used_only_by_empty_archetype()
+    {
+        using var world = new World();
+        var entity = world.Create(new NativeIntegerComponent { Signed = new IntPtr(1) });
+        world.Destroy(entity);
+
+        var layout = ParseV5Snapshot(SaveToBytes(world));
+        Assert.Empty(layout.Schemas);
+        Assert.Empty(layout.Archetypes);
+    }
+
+    [Fact]
+    public void Legacy_v5_payload_with_empty_archetype_loads_and_resaves_canonically()
+    {
+        var oldBytes = BuildV5SnapshotWithSchemas(
+            [(typeof(Velocity).AssemblyQualifiedName!, GetSchemaShape<Velocity>())],
+            archetypeCount: 1,
+            writeArchetypes: writer =>
+            {
+                writer.Write(1); // component count
+                writer.Write(0); // schema index
+                writer.Write(0); // row count
+            });
+
+        using var loaded = WorldSnapshot.Load(new MemoryStream(oldBytes, writable: false));
+        Assert.Single(loaded.Archetypes);
+        Assert.Equal(0, loaded.Archetypes[0].EntityCount);
+
+        var canonicalBytes = SaveToBytes(loaded);
+        Assert.NotEqual(oldBytes, canonicalBytes);
+        var layout = ParseV5Snapshot(canonicalBytes);
+        Assert.Empty(layout.Schemas);
+        Assert.Empty(layout.Archetypes);
+        using var reloaded = WorldSnapshot.Load(new MemoryStream(canonicalBytes, writable: false));
+        Assert.Equal(canonicalBytes, SaveToBytes(reloaded));
+    }
+
+    [Fact]
+    public void Legacy_v5_payload_with_live_and_empty_archetypes_preserves_live_data()
+    {
+        var orderedTypes = new[] { typeof(Position), typeof(Velocity) }
+            .OrderBy(type => type.AssemblyQualifiedName, StringComparer.Ordinal).ToArray();
+        var oldBytes = BuildV5SnapshotWithSchemas(
+            orderedTypes.Select(type => (
+                type.AssemblyQualifiedName!,
+                type == typeof(Position) ? GetSchemaShape<Position>() : GetSchemaShape<Velocity>()))
+                .ToArray(),
+            archetypeCount: 2,
+            writeArchetypes: writer =>
+            {
+                for (var schemaIndex = 0; schemaIndex < orderedTypes.Length; schemaIndex++)
+                {
+                    writer.Write(1); // component count
+                    writer.Write(schemaIndex);
+                    if (orderedTypes[schemaIndex] == typeof(Position))
+                    {
+                        writer.Write(1); // row count
+                        writer.Write(0); // entity id
+                        writer.Write(7); // Position.X
+                        writer.Write(8); // Position.Y
+                    }
+                    else
+                    {
+                        writer.Write(0); // row count
+                    }
+                }
+            },
+            slotCount: 1);
+
+        using var loaded = WorldSnapshot.Load(new MemoryStream(oldBytes, writable: false));
+        Assert.Equal(2, loaded.Archetypes.Length);
+        Assert.Equal(new Position(7, 8), loaded.Get<Position>(new Entity(0, 1)));
+
+        var canonicalBytes = SaveToBytes(loaded);
+        Assert.NotEqual(oldBytes, canonicalBytes);
+        var layout = ParseV5Snapshot(canonicalBytes);
+        Assert.Single(layout.Schemas);
+        Assert.Equal(typeof(Position), layout.Schemas[0].ComponentType);
+        Assert.Single(layout.Archetypes);
+
+        using var reloaded = WorldSnapshot.Load(new MemoryStream(canonicalBytes, writable: false));
+        Assert.Equal(new Position(7, 8), reloaded.Get<Position>(new Entity(0, 1)));
+        Assert.Equal(canonicalBytes, SaveToBytes(reloaded));
     }
 
     [Fact]
@@ -2044,10 +2139,8 @@ public sealed class WorldSnapshotTests
     public void Snapshot_load_rejects_duplicate_archetype_signature()
     {
         using var world = new World();
-        var position = world.Create(new Position(1, 2));
-        var velocity = world.Create(new Velocity(3, 4));
-        world.Destroy(position);
-        world.Destroy(velocity);
+        world.Create(new Position(1, 2));
+        world.Create(new Velocity(3, 4));
         var data = SaveToBytes(world);
         var layout = ParseV5Snapshot(data);
         Assert.Equal(2, layout.Archetypes.Count);
@@ -2058,8 +2151,9 @@ public sealed class WorldSnapshotTests
             ReadInt32(data, layout.Archetypes[0].SchemaIndexOffsets.Single()));
         RewriteCrc(data);
 
-        _ = Assert.Throws<InvalidDataException>(
+        var exception = Assert.Throws<InvalidDataException>(
             () => WorldSnapshot.Load(new MemoryStream(data, writable: false)));
+        Assert.Contains("signatures", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -2245,7 +2339,8 @@ public sealed class WorldSnapshotTests
     private static byte[] BuildV5SnapshotWithSchemas(
         (string Identity, byte[] Shape)[] schemas,
         int archetypeCount = 0,
-        Action<BinaryWriter>? writeArchetypes = null)
+        Action<BinaryWriter>? writeArchetypes = null,
+        int slotCount = 4)
     {
         var orderedSchemas = schemas.OrderBy(schema => schema.Identity, StringComparer.Ordinal).ToArray();
         using var stream = new MemoryStream();
@@ -2253,11 +2348,11 @@ public sealed class WorldSnapshotTests
         writer.Write(0x4D415243);
         writer.Write(5);
         writer.Write(16);
-        writer.Write(4);
+        writer.Write(slotCount);
         writer.Write(orderedSchemas.Length);
         writer.Write(archetypeCount);
         writer.Write(0);
-        for (var index = 0; index < 4; index++)
+        for (var index = 0; index < slotCount; index++)
             writer.Write(1);
         foreach (var (identity, shape) in orderedSchemas)
         {

@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 审阅前必读的当前风险、已修复真 bug 回归索引与已排除非 bug 猜想；只保留结论和验证入口
-updated: 2026-09-06
+updated: 2026-09-28
 ---
 # 代码审阅发现
 
@@ -180,7 +180,7 @@ B7-B16 属于旧 `ChangeQuery` / `Track().Capture().Previous()` / shared tracker
 | 回归测试 | 问题 | 修复 |
 |---------|------|------|
 | `Query_iterates_archetypes_in_signature_order` / `Save_load_preserves_archetype_signature_order` | archetype 创建历史会让逻辑等价 World 的 query 顺序分叉 | `_archetypeSnapshot` 按 `Signature` 字典序插入；Save→Load 后仍由签名唯一决定顺序 |
-| `Save_load_preserves_empty_archetypes` | Snapshot 丢弃空 archetype 会改变可观察的 World 结构 | Save/Load 保留空 archetype；checksum 仍可独立过滤空 archetype |
+| `Save_load_preserves_empty_archetypes`（**已被 superseded**：现为 `Save_load_omits_empty_archetypes_without_changing_query_order`） | Snapshot 丢弃空 archetype 会改变可观察的 World 结构 | 当时 Save/Load 保留空 archetype。2026-09-28 起 canonical Save 不再写空原型（`Clone` 仍保留）；其担心的 query 顺序依赖已由 2026-07-19 签名排序插入消除 |
 | `Clone_preserves_empty_archetypes_and_their_signature_order` | Clone 跳过空 archetype会改变可观察的 World 结构 | Clone 为每个源 archetype 建立目标 archetype，仅对空 archetype 跳过数据拷贝 |
 
 ## 已验证安全的模式（非 bug）
@@ -197,7 +197,10 @@ B7-B16 属于旧 `ChangeQuery` / `Track().Capture().Previous()` / shared tracker
 | `World.Destroy` hierarchy | 子树中间节点清理不全 | 非 bug。后序遍历，child 先 `RemoveDestroyed`，parent 后处理 | hierarchy cascade tests |
 | `Archetype.RemoveAt` dead bytes | ID 复用会读到旧组件值 | 非 bug。`Count` 隔离 dead zone，新实体迁入时全列覆写 | storage tests + validator |
 | `EntityFieldResolver` offset cache | struct layout 后续变化使缓存失效 | 非 bug。运行进程内 Type→ComponentType 与 CLR layout 固定，offset 首次按实际 type 计算 | `EntityFieldResolver` 代码走读 |
-| `RestoreState` 保留 capture 后创建的空 archetype | query 会把空壳当活数据 | 非 bug。archetype append-only，QueryCache 可见但 entity count 为 0 | restore/query tests |
+| `RestoreState` 保留 capture 后创建的空 archetype | query 会把空壳当活数据 | 非 bug。archetype append-only，QueryCache 可见但 entity count 为 0；canonical Save/Checksum 自 2026-09-28 起不观察空 archetype，所以残留空壳不改变 canonical 字节 | restore/query tests + `CanonicalChecksum_returns_to_capture_value_after_new_archetype_is_rolled_back` |
+| canonical `Save` 丢弃空 archetype / 旧 v5 payload 重存不保留原字节 | 往返丢失可观察的 World 结构，违反 `Save(Load(Save)) == Save(world)` | 非 bug。canonical 内容的定义是活实体 + 存储形状（chunk capacity、slot table、hierarchy、free list）；空原型不承载活数据。旧 payload 仍可 Load，重存得到规范化字节（单向可读）；`Save(Load(Save(x))) == Save(Load(x))` 仍成立；query 顺序由签名决定，与空原型无关 | `Save_load_omits_empty_archetypes_without_changing_query_order`、`Legacy_v5_payload_with_empty_archetype_loads_and_resaves_canonically`、`Snapshot_with_only_empty_archetypes_round_trips_without_schemas_or_archetypes`、`Legacy_v5_payload_with_live_and_empty_archetypes_preserves_live_data`、`Save_ignores_unsupported_component_shape_used_only_by_empty_archetype` |
+| `RestoreState` 不再递增 `_createArchetypeCacheGeneration` | 缓存会指向快照后新增、回退后被清空的原型 | 非 bug。`RestoreState` 清零再恢复实体数，原型对象仍在 `_archetypes`；只有 `World.Reset` 会移除原型，它仍照常作废缓存 | `RestoreCreateArchetypeCacheTests`（零分配 + 退回后复用同一原型 + Reset 仍失效） |
+| `CommandStream` Debug-only `_pendingBatchDeferredEpoch` / async handoff 字段分类测试 | 未分类字段可能应跟随 frozen state 转移 | 非行为 bug。该字段仅属 live stream 的 placeholder epoch 检查；handoff 前解析占位符，swap 后递增 epoch 并清空数组。原测试名单漏收它，应归为 `nonSwapped` | `CommandStream_state_fields_are_explicitly_classified_for_async_handoff` Debug/Release 回归；`CommandStream.Submit.cs` 两条 handoff 路径与 `FrozenState` 字段清单走读 |
 | pending `Create+Add/Set/Remove` | 应暴露每个中间 Watch event | 非 bug。pending batch 契约只 materialize 最终状态 | pending Watch/transition parity tests |
 | `CompactRemoveRowsFlat` hole-fill | live prefix 留下 stale source entity | 非 bug。hole 只由 tail suffix survivor 填；最终 dead suffix 清零 | batch destroy checksum/diff/validator tests |
 | `ComponentBucketQuery.Get/TryGet` + short destination | 返回值大于 destination 长度看似“写入计数”越界 | 非 bug。实现有意返回总匹配数并只写入前缀，用一次扫描同时报告截断；XML、参数名和知识页已与该契约对齐 | `Short_destination_reports_total_match_count` / `Empty_destination_still_reports_matches` |
