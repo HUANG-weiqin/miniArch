@@ -311,3 +311,6 @@ profiles/
 
 # Worktree workspaces
 .worktrees/
+
+# Local agent workbench state
+.piweb/
