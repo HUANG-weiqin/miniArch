@@ -84,6 +84,54 @@ public class WatchProjectedTests
         }
     }
 
+    private sealed class ProjectedCallbackState
+    {
+        public ChangeWatch<Position, int, ReplacingProjectedHandler>? Watch;
+        public int FirstCalls;
+        public int ReplacementCalls;
+    }
+
+    private readonly struct ReplacingProjectedHandler(ProjectedCallbackState state, bool replace) : IChangeHandler<Position, int>
+    {
+        public int Project(in Position component) => component.X;
+
+        public void OnChange(World world, Entity entity, int oldValue, int newValue)
+        {
+            if (replace)
+            {
+                state.FirstCalls++;
+                state.Watch!.Handler = new ReplacingProjectedHandler(state, false);
+            }
+            else
+            {
+                state.ReplacementCalls++;
+            }
+        }
+    }
+
+    private sealed class ReentrantProjectionState
+    {
+        public ChangeWatch<Position, int, ReentrantProjectionHandler>? Watch;
+        public World? World;
+        public bool Reenter;
+        public int Calls;
+    }
+
+    private readonly struct ReentrantProjectionHandler(ReentrantProjectionState state) : IChangeHandler<Position, int>
+    {
+        public int Project(in Position component)
+        {
+            if (state.Reenter)
+            {
+                state.Reenter = false;
+                state.Watch!.Snapshot(state.World!);
+            }
+            return component.X;
+        }
+
+        public void OnChange(World world, Entity entity, int oldValue, int newValue) => state.Calls++;
+    }
+
     // ── Snapshot → Diff: basic sequence ─────────────────────────
 
     [Fact]
@@ -238,6 +286,44 @@ public class WatchProjectedTests
 
         watch.Snapshot(world);
         watch.Diff(world);
+    }
+
+    [Fact]
+    public void Projected_handler_replacement_during_dispatch_applies_to_next_entry()
+    {
+        using var world = new World();
+        var state = new ProjectedCallbackState();
+        var watch = world.Watch<Position, int, ReplacingProjectedHandler>();
+        state.Watch = watch;
+        watch.Handler = new ReplacingProjectedHandler(state, true);
+        var first = world.Create(new Position(1, 0));
+        var second = world.Create(new Position(2, 0));
+        watch.Snapshot(world);
+        world.Set(first, new Position(3, 0));
+        world.Set(second, new Position(4, 0));
+
+        watch.Diff(world);
+
+        Assert.Equal(1, state.FirstCalls);
+        Assert.Equal(1, state.ReplacementCalls);
+    }
+
+    [Fact]
+    public void Projected_reentrant_Snapshot_during_projection_preserves_baseline_and_recovers()
+    {
+        using var world = new World();
+        var state = new ReentrantProjectionState { World = world };
+        var watch = world.Watch<Position, int, ReentrantProjectionHandler>();
+        state.Watch = watch;
+        watch.Handler = new ReentrantProjectionHandler(state);
+        var entity = world.Create(new Position(1, 0));
+        watch.Snapshot(world);
+        world.Set(entity, new Position(2, 0));
+        state.Reenter = true;
+
+        Assert.Throws<InvalidOperationException>(() => watch.Diff(world));
+        watch.Diff(world);
+        Assert.Equal(1, state.Calls);
     }
 
     [Fact]

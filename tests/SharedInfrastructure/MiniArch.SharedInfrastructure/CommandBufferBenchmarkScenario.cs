@@ -372,27 +372,6 @@ public static class CommandBufferBenchmarkScenarioFactory
         }
     }
 
-    /// <summary>
-    /// Resets the world to empty state and repopulates baseline entities.
-    /// Used to reuse World + CommandBuffer across benchmark iterations.
-    /// </summary>
-    public static void ResetMiniSharedState(MiniSharedCommandBufferState state, CommandBufferBenchmarkScenario scenario)
-    {
-        state.World.Reset(0);
-        if (scenario is not CommandBufferBenchmarkScenario.CreateHeavy)
-        {
-            CreateMiniBaselineEntities(state.World, state.ExistingEntities);
-        }
-    }
-
-    private static void CreateMiniBaselineEntities(MiniWorld world, MiniEntity[] entities)
-    {
-        for (var i = 0; i < entities.Length; i++)
-        {
-            entities[i] = world.Create(new BenchmarkPosition(i, i + 1), new BenchmarkVelocity(i + 2, i + 3), new BenchmarkHealth(100 + i));
-        }
-    }
-
     private static MiniEntity[] CreateMiniBaselineEntities(MiniWorld world, int entityCount)
     {
         var entities = new MiniEntity[entityCount];

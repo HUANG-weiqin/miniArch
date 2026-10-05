@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 审阅前必读的当前风险、已修复真 bug 回归索引与已排除非 bug 猜想；只保留结论和验证入口
-updated: 2026-09-28
+updated: 2026-10-05
 ---
 # 代码审阅发现
 
@@ -25,6 +25,14 @@ updated: 2026-09-28
 CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）修复了 lockstep 分叉路径（P0#1/P0#2），`Validate()` 覆盖语义违规（存在性/hierarchy）；nested Entity 现在由完整递归 offsets 合同支持，零校验 Submit 的存在性违规仍在 apply 期抛（部分应用），且不把 Submit 或 Replay 提升为灾难性异常下的通用事务。
 
 ## 已修复的真 bug 索引
+
+### 2026-10-05 Create 缓存与 fresh-world 初始化
+
+| 回归测试 | 位置 / witness | 修复边界 |
+|---|---|---|
+| `BUG_alternating_worlds_reuse_warmed_Create_archetypes_without_allocations` | 进程级 `CreateArchetypeCache<T...>.Entry` 在两个 World 交替 Create 时持续 miss/分配 | `World.Create.cs` 的泛型组合只持有 static 整数 ID，每个 World 独立缓存 archetype；预热后跨 World 交替 Create 零分配，静态侧不保留 World |
+| `BUG_snapshot_slot_initialization_rejects_reused_world_without_losing_archetypes` | 旧内部 `Reset` 可清掉用过的 World 的 archetype，而旧 snapshot 仍可能引用它；缓存与注册表脱节 | Load/Clone 只在新 World 调 `InitializeSnapshotSlots`；复用已有 World 时在 mutation 前拒绝，原 World 和 rollback snapshot 可继续使用。`RestoreState_preserves_warmed_create_caches_without_allocations` 保证回滚不清缓存 |
+| `BUG_snapshot_load_and_clone_keep_destroy_scratch_lazy` | 原 `Reset` 会释放构造时按总 slot 数预分配的 destroy scratch；改为新 World 初始化后，Load/Clone 曾长期保留这些不需的数组 | Load/Clone 从零容量 World 起步，`InitializeSnapshotSlots` 只扩 entity records/free list，批量 destroy scratch 仍按实际操作延迟分配 |
 
 ### 2026-09-06 Watch identity + legacy checksum association
 
@@ -199,7 +207,7 @@ B7-B16 属于旧 `ChangeQuery` / `Track().Capture().Previous()` / shared tracker
 | `EntityFieldResolver` offset cache | struct layout 后续变化使缓存失效 | 非 bug。运行进程内 Type→ComponentType 与 CLR layout 固定，offset 首次按实际 type 计算 | `EntityFieldResolver` 代码走读 |
 | `RestoreState` 保留 capture 后创建的空 archetype | query 会把空壳当活数据 | 非 bug。archetype append-only，QueryCache 可见但 entity count 为 0；canonical Save/Checksum 自 2026-09-28 起不观察空 archetype，所以残留空壳不改变 canonical 字节 | restore/query tests + `CanonicalChecksum_returns_to_capture_value_after_new_archetype_is_rolled_back` |
 | canonical `Save` 丢弃空 archetype / 旧 v5 payload 重存不保留原字节 | 往返丢失可观察的 World 结构，违反 `Save(Load(Save)) == Save(world)` | 非 bug。canonical 内容的定义是活实体 + 存储形状（chunk capacity、slot table、hierarchy、free list）；空原型不承载活数据。旧 payload 仍可 Load，重存得到规范化字节（单向可读）；`Save(Load(Save(x))) == Save(Load(x))` 仍成立；query 顺序由签名决定，与空原型无关 | `Save_load_omits_empty_archetypes_without_changing_query_order`、`Legacy_v5_payload_with_empty_archetype_loads_and_resaves_canonically`、`Snapshot_with_only_empty_archetypes_round_trips_without_schemas_or_archetypes`、`Legacy_v5_payload_with_live_and_empty_archetypes_preserves_live_data`、`Save_ignores_unsupported_component_shape_used_only_by_empty_archetype` |
-| `RestoreState` 不再递增 `_createArchetypeCacheGeneration` | 缓存会指向快照后新增、回退后被清空的原型 | 非 bug。`RestoreState` 清零再恢复实体数，原型对象仍在 `_archetypes`；只有 `World.Reset` 会移除原型，它仍照常作废缓存 | `RestoreCreateArchetypeCacheTests`（零分配 + 退回后复用同一原型 + Reset 仍失效） |
+| `RestoreState` 不清每 World Create 缓存 | 缓存会指向快照后新增、回退后被清空的原型 | 非 bug。`RestoreState` 清零再恢复实体数，原型对象仍在 `_archetypes`；Load/Clone 在新 World 初始化，不再对用过的 World 清空原型 | `RestoreCreateArchetypeCacheTests`（零分配 + 退回后复用同一原型）及 `BUG_snapshot_slot_initialization_rejects_reused_world_without_losing_archetypes` |
 | `CommandStream` Debug-only `_pendingBatchDeferredEpoch` / async handoff 字段分类测试 | 未分类字段可能应跟随 frozen state 转移 | 非行为 bug。该字段仅属 live stream 的 placeholder epoch 检查；handoff 前解析占位符，swap 后递增 epoch 并清空数组。原测试名单漏收它，应归为 `nonSwapped` | `CommandStream_state_fields_are_explicitly_classified_for_async_handoff` Debug/Release 回归；`CommandStream.Submit.cs` 两条 handoff 路径与 `FrozenState` 字段清单走读 |
 | pending `Create+Add/Set/Remove` | 应暴露每个中间 Watch event | 非 bug。pending batch 契约只 materialize 最终状态 | pending Watch/transition parity tests |
 | `CompactRemoveRowsFlat` hole-fill | live prefix 留下 stale source entity | 非 bug。hole 只由 tail suffix survivor 填；最终 dead suffix 清零 | batch destroy checksum/diff/validator tests |

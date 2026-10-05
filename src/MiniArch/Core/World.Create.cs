@@ -1,5 +1,3 @@
-using System.Diagnostics.CodeAnalysis;
-
 using MiniArch.Core;
 
 #nullable enable
@@ -468,211 +466,232 @@ public sealed partial class World
         return entity;
     }
 
+    private static int _nextCreateArchetypeCacheId = -1;
+    private Archetype?[] _createArchetypeCache = [];
+
+    private static int NextCreateArchetypeCacheId() => Interlocked.Increment(ref _nextCreateArchetypeCacheId);
+
+    private Archetype? GetCachedCreateArchetype(int id)
+    {
+        var cache = _createArchetypeCache;
+        return (uint)id < (uint)cache.Length ? cache[id] : null;
+    }
+
+    private void CacheCreateArchetype(int id, Archetype archetype)
+    {
+        if (id >= _createArchetypeCache.Length)
+            Array.Resize(ref _createArchetypeCache, Math.Max(id + 1, Math.Max(4, _createArchetypeCache.Length * 2)));
+
+        _createArchetypeCache[id] = archetype;
+    }
+
+    internal void ClearCreateArchetypeCache() => _createArchetypeCache = [];
+
     private Archetype GetOrCreateCreateArchetype<T1>(ComponentType componentType1)
     {
-        var entry = CreateArchetypeCache<T1>.Entry;
-        if (entry is not null && entry.TryGetArchetype(this, _createArchetypeCacheGeneration, out var cachedArchetype))
+        var cacheId = CreateArchetypeCache<T1>.Id;
+        if (GetCachedCreateArchetype(cacheId) is { } cachedArchetype)
         {
             return cachedArchetype;
         }
 
         var archetype = GetOrCreateArchetype(new Signature(componentType1));
-        CreateArchetypeCache<T1>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
+        CacheCreateArchetype(cacheId, archetype);
         return archetype;
     }
 
     private Archetype GetOrCreateCreateArchetype<T1, T2>(ComponentType componentType1, ComponentType componentType2)
     {
-        var entry = CreateArchetypeCache<T1, T2>.Entry;
-        if (entry is not null && entry.TryGetArchetype(this, _createArchetypeCacheGeneration, out var cachedArchetype))
+        var cacheId = CreateArchetypeCache<T1, T2>.Id;
+        if (GetCachedCreateArchetype(cacheId) is { } cachedArchetype)
         {
             return cachedArchetype;
         }
 
         var archetype = GetOrCreateUniqueCreateArchetype(2, componentType1, componentType2);
-        CreateArchetypeCache<T1, T2>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
+        CacheCreateArchetype(cacheId, archetype);
         return archetype;
     }
 
     private Archetype GetOrCreateCreateArchetype<T1, T2, T3>(ComponentType ct1, ComponentType ct2, ComponentType ct3)
     {
-        var entry = CreateArchetypeCache<T1, T2, T3>.Entry;
-        if (entry is not null && entry.TryGetArchetype(this, _createArchetypeCacheGeneration, out var cached))
+        var cacheId = CreateArchetypeCache<T1, T2, T3>.Id;
+        if (GetCachedCreateArchetype(cacheId) is { } cached)
         {
             return cached;
         }
 
         var archetype = GetOrCreateUniqueCreateArchetype(3, ct1, ct2, ct3);
-        CreateArchetypeCache<T1, T2, T3>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
+        CacheCreateArchetype(cacheId, archetype);
         return archetype;
     }
 
     private Archetype GetOrCreateCreateArchetype<T1, T2, T3, T4>(ComponentType ct1, ComponentType ct2, ComponentType ct3, ComponentType ct4)
     {
-        var entry = CreateArchetypeCache<T1, T2, T3, T4>.Entry;
-        if (entry is not null && entry.TryGetArchetype(this, _createArchetypeCacheGeneration, out var cached))
+        var cacheId = CreateArchetypeCache<T1, T2, T3, T4>.Id;
+        if (GetCachedCreateArchetype(cacheId) is { } cached)
         {
             return cached;
         }
 
         var archetype = GetOrCreateUniqueCreateArchetype(4, ct1, ct2, ct3, ct4);
-        CreateArchetypeCache<T1, T2, T3, T4>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
+        CacheCreateArchetype(cacheId, archetype);
         return archetype;
     }
 
     private Archetype GetOrCreateCreateArchetype<T1, T2, T3, T4, T5>(ComponentType ct1, ComponentType ct2, ComponentType ct3, ComponentType ct4, ComponentType ct5)
     {
-        var entry = CreateArchetypeCache<T1, T2, T3, T4, T5>.Entry;
-        if (entry is not null && entry.TryGetArchetype(this, _createArchetypeCacheGeneration, out var cached))
+        var cacheId = CreateArchetypeCache<T1, T2, T3, T4, T5>.Id;
+        if (GetCachedCreateArchetype(cacheId) is { } cached)
         {
             return cached;
         }
 
         var archetype = GetOrCreateUniqueCreateArchetype(5, ct1, ct2, ct3, ct4, ct5);
-        CreateArchetypeCache<T1, T2, T3, T4, T5>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
+        CacheCreateArchetype(cacheId, archetype);
         return archetype;
     }
 
     private Archetype GetOrCreateCreateArchetype<T1, T2, T3, T4, T5, T6>(ComponentType ct1, ComponentType ct2, ComponentType ct3, ComponentType ct4, ComponentType ct5, ComponentType ct6)
     {
-        var entry = CreateArchetypeCache<T1, T2, T3, T4, T5, T6>.Entry;
-        if (entry is not null && entry.TryGetArchetype(this, _createArchetypeCacheGeneration, out var cached))
+        var cacheId = CreateArchetypeCache<T1, T2, T3, T4, T5, T6>.Id;
+        if (GetCachedCreateArchetype(cacheId) is { } cached)
         {
             return cached;
         }
 
         var archetype = GetOrCreateUniqueCreateArchetype(6, ct1, ct2, ct3, ct4, ct5, ct6);
-        CreateArchetypeCache<T1, T2, T3, T4, T5, T6>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
+        CacheCreateArchetype(cacheId, archetype);
         return archetype;
     }
 
     private Archetype GetOrCreateCreateArchetype<T1, T2, T3, T4, T5, T6, T7>(ComponentType ct1, ComponentType ct2, ComponentType ct3, ComponentType ct4, ComponentType ct5, ComponentType ct6, ComponentType ct7)
     {
-        var entry = CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7>.Entry;
-        if (entry is not null && entry.TryGetArchetype(this, _createArchetypeCacheGeneration, out var cached))
+        var cacheId = CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7>.Id;
+        if (GetCachedCreateArchetype(cacheId) is { } cached)
         {
             return cached;
         }
 
         var archetype = GetOrCreateUniqueCreateArchetype(7, ct1, ct2, ct3, ct4, ct5, ct6, ct7);
-        CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
+        CacheCreateArchetype(cacheId, archetype);
         return archetype;
     }
 
     private Archetype GetOrCreateCreateArchetype<T1, T2, T3, T4, T5, T6, T7, T8>(ComponentType ct1, ComponentType ct2, ComponentType ct3, ComponentType ct4, ComponentType ct5, ComponentType ct6, ComponentType ct7, ComponentType ct8)
     {
-        var entry = CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8>.Entry;
-        if (entry is not null && entry.TryGetArchetype(this, _createArchetypeCacheGeneration, out var cached))
+        var cacheId = CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8>.Id;
+        if (GetCachedCreateArchetype(cacheId) is { } cached)
         {
             return cached;
         }
 
         var archetype = GetOrCreateUniqueCreateArchetype(8, ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8);
-        CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
+        CacheCreateArchetype(cacheId, archetype);
         return archetype;
     }
 
     private Archetype GetOrCreateCreateArchetype<T1, T2, T3, T4, T5, T6, T7, T8, T9>(ComponentType ct1, ComponentType ct2, ComponentType ct3, ComponentType ct4, ComponentType ct5, ComponentType ct6, ComponentType ct7, ComponentType ct8, ComponentType ct9)
     {
-        var entry = CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9>.Entry;
-        if (entry is not null && entry.TryGetArchetype(this, _createArchetypeCacheGeneration, out var cached))
+        var cacheId = CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9>.Id;
+        if (GetCachedCreateArchetype(cacheId) is { } cached)
         {
             return cached;
         }
 
         var archetype = GetOrCreateUniqueCreateArchetype(9, ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9);
-        CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
+        CacheCreateArchetype(cacheId, archetype);
         return archetype;
     }
 
     private Archetype GetOrCreateCreateArchetype<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>(ComponentType ct1, ComponentType ct2, ComponentType ct3, ComponentType ct4, ComponentType ct5, ComponentType ct6, ComponentType ct7, ComponentType ct8, ComponentType ct9, ComponentType ct10)
     {
-        var entry = CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>.Entry;
-        if (entry is not null && entry.TryGetArchetype(this, _createArchetypeCacheGeneration, out var cached))
+        var cacheId = CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>.Id;
+        if (GetCachedCreateArchetype(cacheId) is { } cached)
         {
             return cached;
         }
 
         var archetype = GetOrCreateUniqueCreateArchetype(10, ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9, ct10);
-        CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
+        CacheCreateArchetype(cacheId, archetype);
         return archetype;
     }
 
     private Archetype GetOrCreateCreateArchetype<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11>(ComponentType ct1, ComponentType ct2, ComponentType ct3, ComponentType ct4, ComponentType ct5, ComponentType ct6, ComponentType ct7, ComponentType ct8, ComponentType ct9, ComponentType ct10, ComponentType ct11)
     {
-        var entry = CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11>.Entry;
-        if (entry is not null && entry.TryGetArchetype(this, _createArchetypeCacheGeneration, out var cached))
+        var cacheId = CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11>.Id;
+        if (GetCachedCreateArchetype(cacheId) is { } cached)
         {
             return cached;
         }
 
         var archetype = GetOrCreateUniqueCreateArchetype(11, ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9, ct10, ct11);
-        CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
+        CacheCreateArchetype(cacheId, archetype);
         return archetype;
     }
 
     private Archetype GetOrCreateCreateArchetype<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12>(ComponentType ct1, ComponentType ct2, ComponentType ct3, ComponentType ct4, ComponentType ct5, ComponentType ct6, ComponentType ct7, ComponentType ct8, ComponentType ct9, ComponentType ct10, ComponentType ct11, ComponentType ct12)
     {
-        var entry = CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12>.Entry;
-        if (entry is not null && entry.TryGetArchetype(this, _createArchetypeCacheGeneration, out var cached))
+        var cacheId = CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12>.Id;
+        if (GetCachedCreateArchetype(cacheId) is { } cached)
         {
             return cached;
         }
 
         var archetype = GetOrCreateUniqueCreateArchetype(12, ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9, ct10, ct11, ct12);
-        CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
+        CacheCreateArchetype(cacheId, archetype);
         return archetype;
     }
 
     private Archetype GetOrCreateCreateArchetype<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13>(ComponentType ct1, ComponentType ct2, ComponentType ct3, ComponentType ct4, ComponentType ct5, ComponentType ct6, ComponentType ct7, ComponentType ct8, ComponentType ct9, ComponentType ct10, ComponentType ct11, ComponentType ct12, ComponentType ct13)
     {
-        var entry = CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13>.Entry;
-        if (entry is not null && entry.TryGetArchetype(this, _createArchetypeCacheGeneration, out var cached))
+        var cacheId = CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13>.Id;
+        if (GetCachedCreateArchetype(cacheId) is { } cached)
         {
             return cached;
         }
 
         var archetype = GetOrCreateUniqueCreateArchetype(13, ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9, ct10, ct11, ct12, ct13);
-        CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
+        CacheCreateArchetype(cacheId, archetype);
         return archetype;
     }
 
     private Archetype GetOrCreateCreateArchetype<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14>(ComponentType ct1, ComponentType ct2, ComponentType ct3, ComponentType ct4, ComponentType ct5, ComponentType ct6, ComponentType ct7, ComponentType ct8, ComponentType ct9, ComponentType ct10, ComponentType ct11, ComponentType ct12, ComponentType ct13, ComponentType ct14)
     {
-        var entry = CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14>.Entry;
-        if (entry is not null && entry.TryGetArchetype(this, _createArchetypeCacheGeneration, out var cached))
+        var cacheId = CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14>.Id;
+        if (GetCachedCreateArchetype(cacheId) is { } cached)
         {
             return cached;
         }
 
         var archetype = GetOrCreateUniqueCreateArchetype(14, ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9, ct10, ct11, ct12, ct13, ct14);
-        CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
+        CacheCreateArchetype(cacheId, archetype);
         return archetype;
     }
 
     private Archetype GetOrCreateCreateArchetype<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15>(ComponentType ct1, ComponentType ct2, ComponentType ct3, ComponentType ct4, ComponentType ct5, ComponentType ct6, ComponentType ct7, ComponentType ct8, ComponentType ct9, ComponentType ct10, ComponentType ct11, ComponentType ct12, ComponentType ct13, ComponentType ct14, ComponentType ct15)
     {
-        var entry = CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15>.Entry;
-        if (entry is not null && entry.TryGetArchetype(this, _createArchetypeCacheGeneration, out var cached))
+        var cacheId = CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15>.Id;
+        if (GetCachedCreateArchetype(cacheId) is { } cached)
         {
             return cached;
         }
 
         var archetype = GetOrCreateUniqueCreateArchetype(15, ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9, ct10, ct11, ct12, ct13, ct14, ct15);
-        CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
+        CacheCreateArchetype(cacheId, archetype);
         return archetype;
     }
 
     private Archetype GetOrCreateCreateArchetype<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16>(ComponentType ct1, ComponentType ct2, ComponentType ct3, ComponentType ct4, ComponentType ct5, ComponentType ct6, ComponentType ct7, ComponentType ct8, ComponentType ct9, ComponentType ct10, ComponentType ct11, ComponentType ct12, ComponentType ct13, ComponentType ct14, ComponentType ct15, ComponentType ct16)
     {
-        var entry = CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16>.Entry;
-        if (entry is not null && entry.TryGetArchetype(this, _createArchetypeCacheGeneration, out var cached))
+        var cacheId = CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16>.Id;
+        if (GetCachedCreateArchetype(cacheId) is { } cached)
         {
             return cached;
         }
 
         var archetype = GetOrCreateUniqueCreateArchetype(16, ct1, ct2, ct3, ct4, ct5, ct6, ct7, ct8, ct9, ct10, ct11, ct12, ct13, ct14, ct15, ct16);
-        CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16>.Entry = new CachedCreateArchetype(this, _createArchetypeCacheGeneration, archetype);
+        CacheCreateArchetype(cacheId, archetype);
         return archetype;
     }
 
@@ -694,110 +713,82 @@ public sealed partial class World
 
     private static class CreateArchetypeCache<T1>
     {
-        public static CachedCreateArchetype? Entry;
+        public static readonly int Id = NextCreateArchetypeCacheId();
     }
 
     private static class CreateArchetypeCache<T1, T2>
     {
-        public static CachedCreateArchetype? Entry;
+        public static readonly int Id = NextCreateArchetypeCacheId();
     }
 
     private static class CreateArchetypeCache<T1, T2, T3>
     {
-        public static CachedCreateArchetype? Entry;
+        public static readonly int Id = NextCreateArchetypeCacheId();
     }
 
     private static class CreateArchetypeCache<T1, T2, T3, T4>
     {
-        public static CachedCreateArchetype? Entry;
+        public static readonly int Id = NextCreateArchetypeCacheId();
     }
 
     private static class CreateArchetypeCache<T1, T2, T3, T4, T5>
     {
-        public static CachedCreateArchetype? Entry;
+        public static readonly int Id = NextCreateArchetypeCacheId();
     }
 
     private static class CreateArchetypeCache<T1, T2, T3, T4, T5, T6>
     {
-        public static CachedCreateArchetype? Entry;
+        public static readonly int Id = NextCreateArchetypeCacheId();
     }
 
     private static class CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7>
     {
-        public static CachedCreateArchetype? Entry;
+        public static readonly int Id = NextCreateArchetypeCacheId();
     }
 
     private static class CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8>
     {
-        public static CachedCreateArchetype? Entry;
+        public static readonly int Id = NextCreateArchetypeCacheId();
     }
 
     private static class CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9>
     {
-        public static CachedCreateArchetype? Entry;
+        public static readonly int Id = NextCreateArchetypeCacheId();
     }
 
     private static class CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>
     {
-        public static CachedCreateArchetype? Entry;
+        public static readonly int Id = NextCreateArchetypeCacheId();
     }
 
     private static class CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11>
     {
-        public static CachedCreateArchetype? Entry;
+        public static readonly int Id = NextCreateArchetypeCacheId();
     }
 
     private static class CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12>
     {
-        public static CachedCreateArchetype? Entry;
+        public static readonly int Id = NextCreateArchetypeCacheId();
     }
 
     private static class CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13>
     {
-        public static CachedCreateArchetype? Entry;
+        public static readonly int Id = NextCreateArchetypeCacheId();
     }
 
     private static class CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14>
     {
-        public static CachedCreateArchetype? Entry;
+        public static readonly int Id = NextCreateArchetypeCacheId();
     }
 
     private static class CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15>
     {
-        public static CachedCreateArchetype? Entry;
+        public static readonly int Id = NextCreateArchetypeCacheId();
     }
 
     private static class CreateArchetypeCache<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15, T16>
     {
-        public static CachedCreateArchetype? Entry;
-    }
-
-    private sealed class CachedCreateArchetype
-    {
-        private readonly WeakReference<World> _world;
-        private readonly WeakReference<Archetype> _archetype;
-
-        public CachedCreateArchetype(World world, int generation, Archetype archetype)
-        {
-            _world = new WeakReference<World>(world);
-            _archetype = new WeakReference<Archetype>(archetype);
-            Generation = generation;
-        }
-
-        public int Generation { get; }
-
-        public bool TryGetArchetype(World world, int generation, [NotNullWhen(true)] out Archetype? archetype)
-        {
-            archetype = null;
-            if (generation != Generation ||
-                !_world.TryGetTarget(out var cachedWorld) ||
-                !ReferenceEquals(cachedWorld, world))
-            {
-                return false;
-            }
-
-            return _archetype.TryGetTarget(out archetype);
-        }
+        public static readonly int Id = NextCreateArchetypeCacheId();
     }
 
 }

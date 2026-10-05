@@ -2,7 +2,7 @@
 title: Architecture Mechanistic Review
 module: MiniArch.Core
 description: Mechanistic insight of the entire miniArch ECS library — one-line truths, subsystem breakdown, data flows, known issues, and design tensions. Links to per-subsystem kb pages for depth.
-updated: 2026-08-29
+updated: 2026-10-05
 ---
 # Architecture Mechanistic Review
 
@@ -136,8 +136,8 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - 拆分为 5 个 partial 文件：
   - `World.cs`：字段 + TryGet/Get/Has + Clone + Replay + archetype lookup + Checksum/CaptureState/RestoreState + snapshot bridge methods（`AddChildFromSnapshot`、`SetSnapshot*`、`WriteFreeList`/`ReadFreeList`/`CopyFreeIdsFrom`、`FreeList`、`ValidateSnapshotEntitySlot`）
   - `World.EntityLifecycle.cs`：Create/Destroy + free list + 版本管理
-  - `World.Create.Generated.cs`：泛型重载 + `GetSingleton<T>`
-  - `World.QueryCache.cs`：Query 缓存管理
+  - `World.Create.cs`：手工维护的泛型 Create 重载 + 每 World archetype 缓存
+  - `World.QueryCache.cs`：Query 缓存管理 + `GetSingleton<T>`
   - `World.StructuralChange.cs`：Add/Set/Remove（当前语义：`Add` strict throw，`Set` 缺失时抛异常，`Remove` 缺失时 no-op；详见 `kb-design-rationale.md` §2.9）
 - 结构变更核心：查 `EntityRecord` → 算目标签名 → edge cache → `MoveEntityCore`（带 catch rollback）+ `FinishMoveEntity` 分离，便于批量 materialize 复用
 
@@ -185,7 +185,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 
 **O1-O5 已全部处理或拒绝**：
 - O1（Query 增量失效）、O3（swap-remove 大组件）、O5（free-list 反向索引）→ 已评估，不值得做（见 `kb-design-rationale.md` §3）
-- O2（Signature 分配）→ 已有 `CachedCreateArchetype` + edge cache 解决（见 `kb-design-rationale.md` §3.7）
+- O2（Signature 分配）→ 已有每 World Create archetype 缓存 + edge cache 解决（见 `kb-design-rationale.md` §3.7）
 - O4（FrozenState 字段对调）→ 已改为 `FrozenState` 引用对象整体换出/回收；`SwapOutState` 做单次对象引用交换，不再逐字段 swap
 
 库处于维护期：没有剩余“应做的大重构/性能优化”。仍存在少量 P2 级 defense-in-depth 设计债与已验证安全猜想，统一记录在 `kb-code-review-findings.md`，不要把它们解读为需要重开架构。

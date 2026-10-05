@@ -618,8 +618,8 @@ public static class WorldSnapshot
         World? world = null;
         try
         {
-            world = new World(validated.ChunkCapacity, validated.SlotCount);
-            world.Reset(validated.SlotCount);
+            world = new World(validated.ChunkCapacity, entityCapacity: 0);
+            world.InitializeSnapshotSlots(validated.SlotCount);
             for (var index = 0; index < slotVersions.Length; index++)
                 world.SetSnapshotEntityVersion(index, slotVersions[index]);
 

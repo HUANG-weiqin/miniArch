@@ -2,7 +2,7 @@
 title: 设计决策总纲 — 为什么是这样而不是那样
 module: Meta
 description: 集中解释 miniArch 每个子系统的设计选择、被拒绝的替代方案及其原因，以及常见"优化提案"为什么是误判。新人必读，读完这个再碰代码。
-updated: 2026-07-15
+updated: 2026-10-05
 ---
 # 设计决策总纲
 
@@ -243,7 +243,7 @@ Watch 不向 World 注册、不拦截 `Set`/`Add`/`Remove`、不维护 per-type 
 
 **提案**：Create/Add/Remove 时 `new Signature(types)` 每次堆分配，用池化或 interning 消掉。
 
-**为什么不对**：创建路径已有 `CachedCreateArchetype` 泛型静态缓存——同一组件组合的第二次 `Create<T...>` 直接命中缓存中提前存储的 Signature，零分配。Add/Remove 路径已有 edge cache——同一 archetype 迁移方向第二次命中缓存，零 `Signature.Add/Remove`。唯一分配场合是冷启动（每对组件组合 / 每对迁移方向只发生一次），冷缓存里一次 ~60B gen0 分配微不足道。
+**为什么不对**：创建路径按泛型组件组合取得静态整数 ID，再命中当前 World 的 archetype 数组；每个 World 对该组合预热后，重复或跨 World 交替 `Create<T...>` 均零分配。Add/Remove 路径已有 edge cache——同一 archetype 迁移方向第二次命中缓存，零 `Signature.Add/Remove`。分配只发生在每 World 的首次组合创建、数组扩容和新的迁移方向冷启动；高 ID 组合的每 World 数组扩张取舍见 `kb-cache-optimization.md`。
 
 ### 3.8 "chunk swap-remove 对大组件的代价"
 
@@ -315,7 +315,7 @@ HeroComing.Perf 真实场景也验证过：把同一机制试套到 `CollisionSy
 
 - O4（FrozenState 字段对调）→ 已完成。`FrozenState` 是被整体换出/回收的引用对象；`SwapOutState` 做单次对象引用交换，不再逐字段 swap，消除了字段漏交换这类 bug。
 - O1/O3/O5 → 已评估，不值得做（见 §3.1、§3.6、§3.8）
-- O2 → 已有 `CachedCreateArchetype` + edge cache 解决（见 §3.7）
+- O2 → 已有每 World Create archetype 缓存 + edge cache 解决（见 §3.7）
 
 当前明确残留是 Replay 无通用事务回滚；它是接受的 P2 边界，不应被文档成“已完全修复”。后续优化仍必须按 workload 重新举证，不能把本页历史拒绝当永久真理。
 

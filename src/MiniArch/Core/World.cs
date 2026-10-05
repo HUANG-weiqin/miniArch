@@ -191,6 +191,7 @@ public sealed partial class World : IDisposable
         _replayMapCount = 0;
         _stateSnapshotPool.Clear();
         _hierarchy.Reset();
+        ClearCreateArchetypeCache();
         _createArchetypeCacheGeneration = int.MaxValue;
     }
 
@@ -877,76 +878,45 @@ public sealed partial class World : IDisposable
                         break;
 
                     case DeltaOpKind.Add:
-                    {
-                        var entity = ResolveReplayEntity(decoder.Entity, map, mapLen);
-                        var comp = decoder.ReadComponentType();
-                        var dataSize = decoder.ReadVarint();
-                        var dataStart = decoder.CurrentPosition;
-                        _ = decoder.ReadBytes(dataSize);
-                        var src = bufPtr + dataStart;
-                        if (EntityFieldResolver.GetOffsets(comp).Length > 0)
-                        {
-                            // Cannot mutate the delta buffer (the same FrameDelta may be
-                            // replayed into multiple worlds). Use a pooled scratch buffer
-                            // instead of stackalloc to avoid per-op stack accumulation.
-                            var pooled = ArrayPool<byte>.Shared.Rent(dataSize);
-                            try
-                            {
-                                fixed (byte* pScratch = pooled)
-                                {
-                                    Unsafe.CopyBlockUnaligned(pScratch, src, (uint)dataSize);
-                                    EntityFieldResolver.ResolveInPlace(
-                                        new Span<byte>(pScratch, dataSize), comp,
-                                        new ReadOnlySpan<Entity>(map, 0, mapLen));
-                                    var loc = RequireLocation(entity);
-                                    ApplyRawAdd(entity, loc, comp, pScratch);
-                                }
-                            }
-                            finally
-                            {
-                                ArrayPool<byte>.Shared.Return(pooled);
-                            }
-                        }
-                        else
-                        {
-                            var loc = RequireLocation(entity);
-                            ApplyRawAdd(entity, loc, comp, src);
-                        }
-                        break;
-                    }
-
                     case DeltaOpKind.Set:
                     {
+                        var isAdd = decoder.Kind == DeltaOpKind.Add;
                         var entity = ResolveReplayEntity(decoder.Entity, map, mapLen);
                         var comp = decoder.ReadComponentType();
                         var dataSize = decoder.ReadVarint();
                         var dataStart = decoder.CurrentPosition;
                         _ = decoder.ReadBytes(dataSize);
                         var src = bufPtr + dataStart;
-                        if (EntityFieldResolver.GetOffsets(comp).Length > 0)
+
+                        // Entity references must be resolved in a copy: a FrameDelta can
+                        // be replayed into multiple worlds with different local IDs.
+                        var pooled = EntityFieldResolver.GetOffsets(comp).Length > 0
+                            ? ArrayPool<byte>.Shared.Rent(dataSize)
+                            : null;
+                        try
                         {
-                            var pooled = ArrayPool<byte>.Shared.Rent(dataSize);
-                            try
+                            fixed (byte* pScratch = pooled)
                             {
-                                fixed (byte* pScratch = pooled)
+                                if (pooled is not null)
                                 {
                                     Unsafe.CopyBlockUnaligned(pScratch, src, (uint)dataSize);
                                     EntityFieldResolver.ResolveInPlace(
                                         new Span<byte>(pScratch, dataSize), comp,
                                         new ReadOnlySpan<Entity>(map, 0, mapLen));
-                                    var loc = RequireLocation(entity);
-                                    ApplyRawSet(entity, loc, comp, pScratch);
+                                    src = pScratch;
                                 }
-                            }
-                            finally
-                            {
-                                ArrayPool<byte>.Shared.Return(pooled);
+
+                                var loc = RequireLocation(entity);
+                                if (isAdd)
+                                    ApplyRawAdd(entity, loc, comp, src);
+                                else
+                                    ApplyRawSet(entity, loc, comp, src);
                             }
                         }
-                        else
+                        finally
                         {
-                            var loc = RequireLocation(entity);
-                            ApplyRawSet(entity, loc, comp, src);
+                            if (pooled is not null)
+                                ArrayPool<byte>.Shared.Return(pooled);
                         }
                         break;
                     }
@@ -1513,44 +1483,19 @@ public sealed partial class World : IDisposable
     /// </summary>
     public byte[] CanonicalChecksum() => Core.WorldSnapshot.ComputeCanonicalChecksum(this);
 
-    internal void Reset(int entitySlotCount)
+    // Load and Clone call this only on a newly constructed World. Reusing a World
+    // would leave existing snapshots and caches pointing at discarded archetypes.
+    internal void InitializeSnapshotSlots(int entitySlotCount)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(entitySlotCount);
+        if (_entitySlotCount != 0 || _archetypes.Count != 0 ||
+            _queryFiltersByDescription.Count != 0 || _stateSnapshotPool.Count != 0)
+            throw new InvalidOperationException("Snapshot slots require a fresh World.");
 
-        _archetypes.Clear();
-        _archetypeByMask.Clear();
-        _archetypeByHash.Clear();
-        _replayCreateCounts.Clear();
-        _destroyRowMarks = [];
-        _destroyRowMarkGen = 0;
-        _destroyGroupArchetypes = [];
-        _destroyGroupCounts = [];
-        _destroyGroupFirstCandidate = [];
-        _destroyCandidateNext = [];
-        _destroyCandidateRows = [];
-        _destroyCompactRows = [];
-        _destroyFullGroups = [];
-        _replayPlaceholderMap = [];
-        _replayMapCount = 0;
-        _archetypeSnapshot = Array.Empty<Archetype>();
-        _queryFiltersByDescription.Clear();
-        _queries.Clear();
-        _createArchetypeCacheGeneration++;
-        _freeIdCount = 0;
-        _reservedCount = 0;
-        _destroyVisitedGen = [];
-        _destroyCurrentGen = 0;
-        _hierarchy.Reset();
-
-        _entitySlotCount = 0;
-        EnsureCapacity(entitySlotCount);
+        EnsureEntityCapacity(entitySlotCount);
         _entitySlotCount = entitySlotCount;
-        _records.AsSpan(0, entitySlotCount).Clear();
-
         if (_freeIds.Length < entitySlotCount)
-        {
             Array.Resize(ref _freeIds, entitySlotCount);
-        }
     }
 
     internal void AddChildFromSnapshot(Entity parent, Entity child)

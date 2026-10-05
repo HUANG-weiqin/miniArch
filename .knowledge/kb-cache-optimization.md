@@ -2,7 +2,7 @@
 title: Cache & Memory Optimization Review
 module: MiniArch.Core
 description: Memory layout, cache behavior analysis, applied optimizations, and remaining opportunities for the ECS runtime
-updated: 2026-08-29
+updated: 2026-10-05
 ---
 # Cache & Memory Optimization Review
 
@@ -12,6 +12,20 @@ MiniArch 的迭代热路径已经高度优化（pointer-bump、SoA、自适应 c
 
 > 已删除子系统的优化记录（CommandBuffer 去重排序、TryGetArchetype 线性扫描、ResolveArchetypeForSpan 4 槽缓存等）已移除——相关代码于 2026-06-26 (CommandBuffer) 和 2026-06-29 (TryGetArchetype 死代码) 删除。历史可查 git log。
 
+## 这个模块是干什么的
+
+- 记录 ECS 热路径的 cache 局部性、已验证优化与剩余取舍；不充当性能基准的单一事实来源（门禁见 `kb-hero-pipeline-regression.md`）。
+
+## 架构
+
+- `World.Create.cs` 的每个泛型组件组合持有一个进程级整数 ID；每个 World 用自己的 `Archetype?[]` 按 ID 缓存原型。预热后两个 World 交替 `Create` 均不分配，静态侧不持有 World 引用。
+- `RestoreState` 保留 archetype 对象和 Create 缓存；Load/Clone 从零容量 World 起步，只扩 snapshot slot 的 records/free list，不按总 slot 数预留批量 destroy scratch（`BUG_snapshot_load_and_clone_keep_destroy_scratch_lazy`）；`Dispose` 清理 World 的缓存数组。`World.ArchetypeCacheGeneration` 仍服务于 `CommandStream` 的 mask cache，不再参与 Create 缓存命中。
+
+## 决策
+
+- 用每 World 直索引数组消除进程级单槽在多 World 间互相驱逐；全局 ID 仅作进程内缓存键，不进入 wire、排序或 checksum。高 ID 组合可能使只使用少量组合的 World 也扩容到该 ID，这是已知内存取舍。
+- 不在 `RestoreState` 清缓存：回滚后 archetype 仍在 World 的 append-only 注册表中，清理反而会让稳态回滚重新分配。
+
 ## 内存布局总览
 
 ```
@@ -20,7 +34,8 @@ World (5 partial files — 详见 kb-architecture-review.md §10)
 ├── _archetypes: Dictionary<Signature, Archetype>
 ├── _archetypeByMask: Dictionary<ComponentMask, Archetype>  // canonical-only, Replay 零分配路径
 ├── _freeIds: RecycledEntity[]
-└── _createArchetypeCacheGeneration: int     // CreateArchetypeCache generation 失效
+├── _createArchetypeCache: Archetype?[]      // 每 World 的泛型 Create 缓存
+└── _createArchetypeCacheGeneration: int     // CommandStream mask cache 的失效标记
 
 Archetype (3 partial files — 详见 kb-core-ecs.md)
 ├── _data: byte[]              // SoA packed, all columns in ONE array (non-chunked mode)
@@ -122,7 +137,7 @@ Hero perf 瓶颈继续推进时，保留了 4 个核心库内的低层微优化�
 
 ## 坑点
 
-- **`World._createArchetypeCacheGeneration`**：CreateArchetypeCache generation 失效——新增 archetype 后递增
+- **`World._createArchetypeCacheGeneration`**：仍由 `CommandStream.ResolveArchetype` 读取；不再用于 `World.Create`，也不会在新增 archetype 后递增。
 - **Edge cache 直索引**：按 componentId 直索引，component ID 稀疏时数组可能膨胀（见 `kb-architecture-review.md` §P2）
 - **公共 API 薄转发必须加 `[AggressiveInlining]`**：遗漏会导致迭代退化 41%
 - **`Archetype.CreateStorage` 列对齐**：对齐从 8→64 会使每列浪费更多 padding（当前不做）
@@ -133,5 +148,6 @@ Hero perf 瓶颈继续推进时，保留了 4 个核心库内的低层微优化�
 - **看实体随机访问**：`World.cs` 的 `TryGetLocation()`、`World.StructuralChange.cs` 的 `FinishMoveEntity()`
 - **看 storage 布局**：`Archetype.Storage.cs` 的 `EnsureCapacity()`、`GetComponentRefAt<T>()`
 - **看迁移拷贝**：`Archetype.Storage.cs` 的 `CopySharedComponentsFrom()`、`CopySmall()`
+- **看 Create cache**：`World.Create.cs` 的 `CreateArchetypeCache<T...>.Id` / `GetCachedCreateArchetype()`；交替 World 零分配回归见 `MultiWorldCreateArchetypeCacheTests`
 - **看 edge cache**：`Archetype.cs` 的 `_addDestinationCache` / `_removeDestinationCache`
 - **看 FrozenState 池化**：`CommandStream.cs` 的 `SwapOutState()` / `TryReclaimPending()`

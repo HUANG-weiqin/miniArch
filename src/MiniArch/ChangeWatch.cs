@@ -1,5 +1,3 @@
-using System.Runtime.CompilerServices;
-
 namespace MiniArch;
 
 /// <summary>
@@ -22,29 +20,12 @@ public sealed class ChangeWatch<TComponent, THandler>
     where TComponent : unmanaged, IEquatable<TComponent>
     where THandler : struct, IChangeHandler<TComponent>
 {
-    private TComponent[] _oldValues = [];
-    private int[] _baselineVersions = [];
-    private int[] _touchedIds = [];
-    private int _touchedCount;
-    private readonly QueryDescription _query;
+    private ChangeWatchState<TComponent> _state;
     private THandler _handler;
-    private bool _hasSnapshot;
-    private bool _operationInProgress;
-
-    // Reusable buffer for collecting entries before dispatching callbacks.
-    // Grows as needed; cleared each Diff.
-    private Entry[] _buffer = [];
-
-    private struct Entry
-    {
-        public Entity Entity;
-        public TComponent OldValue;
-        public TComponent NewValue;
-    }
 
     internal ChangeWatch(QueryDescription query, THandler handler)
     {
-        _query = query;
+        _state = new ChangeWatchState<TComponent>(query);
         _handler = handler;
     }
 
@@ -64,132 +45,23 @@ public sealed class ChangeWatch<TComponent, THandler>
     /// <see cref="Snapshot"/> is required before the next <see cref="Diff"/>.
     /// </remarks>
     /// <exception cref="InvalidOperationException">A Snapshot or Diff call is already in progress on this watch.</exception>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void Snapshot(World world)
-    {
-        ArgumentNullException.ThrowIfNull(world);
-        BeginOperation();
-        _hasSnapshot = false;
-
-        try
-        {
-            // Clear previous touched slots to avoid stale values for recycled ids.
-            for (var i = 0; i < _touchedCount; i++)
-            {
-                var id = _touchedIds[i];
-                if ((uint)id < (uint)_oldValues.Length)
-                {
-                    _oldValues[id] = default;
-                    _baselineVersions[id] = 0;
-                }
-            }
-            _touchedCount = 0;
-
-            foreach (var chunk in world.Query(in _query).GetChunks())
-            {
-                var values = chunk.GetSpan<TComponent>();
-                var entities = chunk.GetEntities();
-                for (var i = 0; i < chunk.Count; i++)
-                {
-                    var entityId = entities[i].Id;
-
-                    // Ensure the value and identity baselines stay aligned.
-                    if ((uint)entityId >= (uint)_oldValues.Length)
-                    {
-                        var newLength = Math.Max(entityId + 1, _oldValues.Length * 2);
-                        Array.Resize(ref _oldValues, newLength);
-                        Array.Resize(ref _baselineVersions, newLength);
-                    }
-
-                    _oldValues[entityId] = values[i];
-                    _baselineVersions[entityId] = entities[i].Version;
-
-                    // Record touched id
-                    if (_touchedCount >= _touchedIds.Length)
-                        Array.Resize(ref _touchedIds, Math.Max(_touchedCount + 1, _touchedIds.Length * 2));
-                    _touchedIds[_touchedCount++] = entityId;
-                }
-            }
-
-            _hasSnapshot = true;
-        }
-        finally
-        {
-            _operationInProgress = false;
-        }
-    }
+    public void Snapshot(World world) =>
+        ChangeWatchCore.Snapshot<TComponent, TComponent, THandler, DirectPolicy>(world, ref _state, ref _handler);
 
     /// <summary>
     /// Scans the current world and calls <see cref="IChangeHandler{TComponent}.OnChange"/>
     /// for each entity whose component value differs from the snapshot baseline.
     /// </summary>
     /// <exception cref="InvalidOperationException">No snapshot exists, or a Snapshot or Diff call is already in progress on this watch.</exception>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void Diff(World world)
+    public void Diff(World world) =>
+        ChangeWatchCore.Diff<TComponent, TComponent, THandler, DirectPolicy>(world, ref _state, ref _handler);
+
+    private readonly struct DirectPolicy : IChangeWatchPolicy<TComponent, TComponent, THandler>
     {
-        ArgumentNullException.ThrowIfNull(world);
-        BeginOperation();
+        public static TComponent Project(ref THandler handler, in TComponent component) => component;
 
-        try
-        {
-            if (!_hasSnapshot)
-                throw new InvalidOperationException(
-                    "ChangeWatch.Diff requires a prior Snapshot call. Call Snapshot(World) before Diff.");
-
-            // Phase 1: collect diffs into buffer (avoids corruption if handler mutates world).
-            var bufferCount = 0;
-
-            foreach (var chunk in world.Query(in _query).GetChunks())
-            {
-                var values = chunk.GetSpan<TComponent>();
-                var entities = chunk.GetEntities();
-                for (var i = 0; i < chunk.Count; i++)
-                {
-                    var entity = entities[i];
-                    var entityId = entity.Id;
-
-                    var hasBaseline = (uint)entityId < (uint)_oldValues.Length &&
-                        _baselineVersions[entityId] == entity.Version;
-                    var oldVal = hasBaseline ? _oldValues[entityId] : default;
-
-                    var newVal = values[i];
-
-                    if (oldVal.Equals(newVal))
-                        continue;
-
-                    if (bufferCount >= _buffer.Length)
-                        Array.Resize(ref _buffer, Math.Max(bufferCount + 1, _buffer.Length * 2));
-
-                    _buffer[bufferCount] = new Entry
-                    {
-                        Entity = entity,
-                        OldValue = oldVal,
-                        NewValue = newVal
-                    };
-                    bufferCount++;
-                }
-            }
-
-            // Phase 2: dispatch callbacks (buffer is stable even if handler mutates world).
-            for (var i = 0; i < bufferCount; i++)
-            {
-                ref var entry = ref _buffer[i];
-                _handler.OnChange(world, entry.Entity, in entry.OldValue, in entry.NewValue);
-            }
-        }
-        finally
-        {
-            _operationInProgress = false;
-        }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void BeginOperation()
-    {
-        if (_operationInProgress)
-            throw new InvalidOperationException(
-                "ChangeWatch does not support nested Snapshot or Diff calls on the same watch.");
-
-        _operationInProgress = true;
+        public static void OnChange(ref THandler handler, World world, Entity entity,
+            in TComponent oldValue, in TComponent newValue) =>
+            handler.OnChange(world, entity, in oldValue, in newValue);
     }
 }

@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-09-28
+updated: 2026-10-05
 ---
 # MiniArch Core ECS
 
@@ -47,7 +47,7 @@ updated: 2026-09-28
 
 - 数据流 / 控制流：
   - `World` 创建实体后放入空签名 archetype（`World.EntityLifecycle.cs`）
-  - `World.Create<T...>` 为 `1..16` 个组件提供固定重载（`World.Create.Generated.cs`）；warmed 路径缓存在泛型 static cache（`CachedCreateArchetype`），O(1) 无分配
+  - `World.Create<T...>` 在 `World.Create.cs` 手工维护 `1..16` 个组件重载；泛型组合仅持有 static cache ID，archetype 缓存在每个 World 的数组里。各 World 预热后交替 Create 不再反复分配；Reset 已改为只供新 World 的 Load/Clone 初始化，RestoreState 保留已创建 archetype 和缓存（见 `kb-cache-optimization.md`）。
   - `World.GetSingleton<T>()` 扫描所有 archetype 返回唯一含 `T` 的实体（singleton 语义：0 或 >1 抛异常），O(archetypes) 冷路径
   - `World.EnsureCapacity` 负责提前扩好 entity metadata 存储
    - `World.CreateEmpty` 创建空实体（无组件），适用于运行期决定组件集合的场景

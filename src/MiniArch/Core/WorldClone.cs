@@ -5,8 +5,8 @@ internal static class WorldClone
     public static World Clone(World source)
     {
         var entitySlotCount = source.EntitySlotCount;
-        var target = new World(source.ChunkCapacity, entitySlotCount);
-        target.Reset(entitySlotCount);
+        var target = new World(source.ChunkCapacity, entityCapacity: 0);
+        target.InitializeSnapshotSlots(entitySlotCount);
 
         var sourceRecords = source.EntityRecords;
         for (var i = 0; i < sourceRecords.Length; i++)

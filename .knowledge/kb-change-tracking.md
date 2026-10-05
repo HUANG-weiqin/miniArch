@@ -2,7 +2,7 @@
 title: Change Tracking（变更追踪）
 module: MiniArch.Core ChangeTracking
 description: World.Watch pull-event 模型：ChangeWatch/TransitionWatch Snapshot+Diff 两阶段扫描；struct handler 回调；零 per-write 成本；TransitionWatch 使用 dense epoch marks。
-updated: 2026-09-06
+updated: 2026-10-05
 ---
 
 # Change Tracking（变更追踪）
@@ -19,10 +19,10 @@ updated: 2026-09-06
 
 ## 架构
 
-- **值变更**：`ChangeWatch` 内部持有 `TComponent[] _oldValues`、同样按 `entity.Id` 直索引的 `int[] _baselineVersions` 和 `int[] _touchedIds`（记录上次 snapshot 触及的 id 列表）。
-  - `Snapshot(World)`：查询 world → 遍历 chunk → 记录每个实体的当前值与 `Entity.Version`，同时用 `_touchedIds` 标记 baseline。
-  - `Diff(World)`：仅当当前 `(Id, Version)` 匹配 baseline 时比较 `_oldValues[id]`；新 generation 的 oldValue 是 `default`。差异先收集到 `_buffer[]`，再逐条回调。
-- **投影值变更**：`ChangeWatch<TComponent, TValue, THandler>` 与值变更结构相同，但 baseline 存储的是 `TValue[]`，Snapshot 时调用 `handler.Project(component)`，Diff 时再次调用 `Project()` 并比较 `TValue` 是否相等。
+- **值变更**：两个公开 `ChangeWatch` 包装共用内部 `ChangeWatchCore` 的 Snapshot/Diff 扫描与 `ChangeWatchState<TValue>`；编译期 struct 策略只决定直接取值/投影以及回调签名，公开 API 与 `ref Handler` 不变。共享状态持有按 `entity.Id` 直索引的 `OldValues`、`BaselineVersions` 和 `TouchedIds`（记录上次 snapshot 触及的 id 列表）。
+  - `Snapshot(World)`：查询 world → 遍历 chunk → 记录每个实体的当前值与 `Entity.Version`，同时用 `TouchedIds` 标记 baseline。
+  - `Diff(World)`：仅当当前 `(Id, Version)` 匹配 baseline 时比较 `OldValues[id]`；新 generation 的 oldValue 是 `default`。差异先收集到 `Buffer[]`，再逐条回调。
+- **投影值变更**：`ChangeWatch<TComponent, TValue, THandler>` 使用同一核心，baseline 是 `TValue[]`；Snapshot/Diff 经投影策略调用 `handler.Project(component)` 并比较投影值。
 - **结构变更**：`TransitionWatch` 内部持有 snapshot/current `Entity[]`、`long[]` dense epoch marks 与 `int[]` version arrays。
   - `Snapshot(World)`：递增 64-bit `_snapshotEpoch`（不溢出，无 per-Diff 清除）→ 记录每个成员的 epoch 与 version。
   - `Diff(World)`：记录当前 epoch 与 version；只有 `(Id, Version)` 同时匹配才视为同一成员，否则先报告旧 generation Exited，再报告新 generation Entered。
@@ -102,9 +102,9 @@ handler.Count = 0;
 ## 性能特征
 
 - **热路径零成本**：`Watch` 创建不做任何 world 注册（无 registry、无 type lookup、无数组预分配 fallocate）。写入路径无任何 watch 分支。
-- **`Snapshot`**：O(当前匹配 query 的实体数) 扫描 + baseline 存储。每个实体一次 `_oldValues[id] = value`（或 `handler.Project(component)`）。
+- **`Snapshot`**：O(当前匹配 query 的实体数) 扫描 + baseline 存储。每个实体一次 `OldValues[id] = value`（或 `handler.Project(component)`）。
 - **`Diff`**：O(当前匹配 query 的实体数) 扫描 + O(entities) 值比较 + O(diffs) 回调。
-- **空间**：每个 `ChangeWatch` 持有 `_oldValues`、`_baselineVersions`（均按 `entity.Id` 索引）、`_touchedIds` 和 `_buffer`。`TransitionWatch` 持有 snapshot/current entities、epoch marks 与 version arrays、以及 `_buffer`。版本数组只在 Watch 实例内增长；World 写入路径仍无 Watch 状态。
+- **空间**：每个 `ChangeWatch` 的共享状态持有 `OldValues`、`BaselineVersions`（均按 `entity.Id` 索引）、`TouchedIds` 和 `Buffer`。`TransitionWatch` 持有 snapshot/current entities、epoch marks 与 version arrays、以及 `_buffer`。版本数组只在 Watch 实例内增长；World 写入路径仍无 Watch 状态。
 - **稳态 GC**：内部数组按需增长，增长后不再缩小；稳态 `Snapshot`+`Diff` 循环零堆分配。Dense epoch `long[]` 在 warmup 后不再 reallocate（max entity id 稳定）。
 - **多 watch 同组件**：互不干扰，各自持有独立的 baseline arrays。不共享状态，不 fanout。
 
@@ -150,8 +150,8 @@ dotnet run -c Release --project tools/perf/WatchApi.Perf -- --entity-count 10000
 
 ## 入口
 
-- `src/MiniArch/ChangeWatch.cs`：值变更 watch 实现（Snapshot/Diff/两阶段 buffer）。
-- `src/MiniArch/ChangeWatch.Projected.cs`：投影值变更 watch 实现。
+- `src/MiniArch/ChangeWatch.cs`、`src/MiniArch/ChangeWatch.Projected.cs`：公开 API、handler 与直接值/投影策略。
+- `src/MiniArch/ChangeWatchCore.cs`：共享 Snapshot/Diff、baseline、generation 与两阶段 buffer。
 - `src/MiniArch/TransitionWatch.cs`：结构变更 watch 实现。
 - `src/MiniArch/IChangeHandler.cs`：`IChangeHandler<TComponent>` 和 `IChangeHandler<TComponent, TValue>` 接口。
 - `src/MiniArch/ITransitionHandler.cs`：`ITransitionHandler` 接口 + `TransitionKind` 枚举。

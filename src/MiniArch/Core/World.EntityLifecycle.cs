@@ -258,9 +258,9 @@ public sealed partial class World
     /// children in <i>non-matched</i> archetypes will leave those children
     /// orphaned. The orphaned children remain alive but their parent reference
     /// becomes stale — <see cref="IsAlive(Entity)"/> on the dead parent handle
-    /// returns <c>false</c>, but <see cref="TryGetParent"/> will still report
-    /// the old handle. Do not use this method if matched entities may have
-    /// descendants outside the query.
+    /// returns <c>false</c>, and <see cref="TryGetParent"/> also returns
+    /// <c>false</c> because it filters dead parent handles. Do not use this
+    /// method if matched entities may have descendants outside the query.
     /// </item>
     /// <item>
     /// <b>No hierarchy unlink from parents.</b> If an entity being cleared has

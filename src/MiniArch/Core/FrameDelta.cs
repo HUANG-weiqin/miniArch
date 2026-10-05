@@ -925,7 +925,8 @@ public sealed class FrameDelta
     // ── Entity scan ────────────────────────────────────────────────────
 
     /// <summary>
-    /// Checks whether this delta references <paramref name="entity"/>.
+    /// Checks whether <paramref name="entity"/> appears as an operation endpoint
+    /// (including an AddChild parent). Component payload Entity fields are not scanned.
     /// O(n) linear scan over every operation.
     /// </summary>
     public bool HasEntity(Entity entity)

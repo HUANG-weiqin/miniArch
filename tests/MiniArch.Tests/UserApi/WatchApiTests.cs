@@ -98,6 +98,29 @@ public class WatchApiTests
         }
     }
 
+    private sealed class ReplacingChangeState
+    {
+        public ChangeWatch<Position, ReplacingChangeHandler>? Watch;
+        public int FirstCalls;
+        public int ReplacementCalls;
+    }
+
+    private readonly struct ReplacingChangeHandler(ReplacingChangeState state, bool replace) : IChangeHandler<Position>
+    {
+        public void OnChange(World world, Entity entity, in Position oldValue, in Position newValue)
+        {
+            if (replace)
+            {
+                state.FirstCalls++;
+                state.Watch!.Handler = new ReplacingChangeHandler(state, false);
+            }
+            else
+            {
+                state.ReplacementCalls++;
+            }
+        }
+    }
+
     private sealed class ReentrantTransitionState
     {
         public TransitionWatch<ReentrantTransitionHandler>? Watch;
@@ -222,6 +245,26 @@ public class WatchApiTests
 
         watch.Diff(world);
         Assert.Equal(2, state.CallCount);
+    }
+
+    [Fact]
+    public void ChangeWatch_handler_replacement_during_dispatch_applies_to_next_entry()
+    {
+        using var world = new World();
+        var state = new ReplacingChangeState();
+        var watch = world.Watch<Position, ReplacingChangeHandler>();
+        state.Watch = watch;
+        watch.Handler = new ReplacingChangeHandler(state, true);
+        var first = world.Create(new Position(1, 1));
+        var second = world.Create(new Position(2, 2));
+        watch.Snapshot(world);
+        world.Set(first, new Position(3, 3));
+        world.Set(second, new Position(4, 4));
+
+        watch.Diff(world);
+
+        Assert.Equal(1, state.FirstCalls);
+        Assert.Equal(1, state.ReplacementCalls);
     }
 
     [Fact]

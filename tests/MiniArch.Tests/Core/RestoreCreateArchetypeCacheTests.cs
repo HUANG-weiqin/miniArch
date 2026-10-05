@@ -1,3 +1,5 @@
+using System.Reflection;
+
 using MiniArch.Core;
 
 namespace MiniArchTests.Core;
@@ -55,19 +57,56 @@ public sealed class RestoreCreateArchetypeCacheTests
     }
 
     [Fact]
-    public void Reset_invalidates_create_cache_for_cleared_archetypes()
+    public void BUG_snapshot_slot_initialization_rejects_reused_world_without_losing_archetypes()
     {
         using var world = new World();
-        var previous = world.Create(new ResetComponent(1));
-        Assert.True(world.TryGetLocation(previous, out var previousLocation));
+        var entity = world.Create(new ResetComponent(1));
+        Assert.True(world.TryGetLocation(entity, out var originalLocation));
+        var snapshot = world.CaptureState();
 
-        world.Reset(entitySlotCount: 0);
+        Assert.Throws<InvalidOperationException>(() => world.InitializeSnapshotSlots(0));
 
-        var current = world.Create(new ResetComponent(2));
+        Assert.Equal(new ResetComponent(1), world.Get<ResetComponent>(entity));
+        world.RestoreState(snapshot);
+        Assert.True(world.TryGetLocation(entity, out var restoredLocation));
+        Assert.Same(originalLocation.Archetype, restoredLocation.Archetype);
+    }
 
-        Assert.True(world.TryGetLocation(current, out var currentLocation));
-        Assert.NotSame(previousLocation.Archetype, currentLocation.Archetype);
-        Assert.Equal(new ResetComponent(2), world.Get<ResetComponent>(current));
+    [Fact]
+    public void BUG_snapshot_load_and_clone_keep_destroy_scratch_lazy()
+    {
+        using var source = new World(entityCapacity: 0);
+        var entities = new Entity[128];
+        for (var i = 0; i < entities.Length; i++)
+            entities[i] = source.CreateEmpty();
+        foreach (var entity in entities)
+            source.Destroy(entity);
+
+        using var clone = source.Clone();
+        using var stream = new MemoryStream();
+        WorldSnapshot.Save(stream, source);
+        stream.Position = 0;
+        using var loaded = WorldSnapshot.Load(stream);
+
+        Assert.Equal(entities.Length, clone.EntitySlotCount);
+        Assert.Equal(entities.Length, loaded.EntitySlotCount);
+        AssertDestroyScratchIsLazy(clone);
+        AssertDestroyScratchIsLazy(loaded);
+    }
+
+    private static void AssertDestroyScratchIsLazy(World world)
+    {
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        foreach (var name in new[] { "_destroyGroupArchetypes", "_destroyVisitedGen", "_destroyRowMarks" })
+        {
+            var field = typeof(World).GetField(name, flags);
+            Assert.NotNull(field);
+            Assert.Empty((Array)field.GetValue(world)!);
+        }
+
+        var orderField = typeof(World).GetField("_destroyOrderScratch", flags);
+        Assert.NotNull(orderField);
+        Assert.Equal(0, ((List<Entity>)orderField.GetValue(world)!).Capacity);
     }
 
     private static void RunRollbackCycle(World world)

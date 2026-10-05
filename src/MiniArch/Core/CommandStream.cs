@@ -1025,7 +1025,6 @@ public sealed partial class CommandStream
     }
 
     internal object? ActiveHierarchyForTesting => _frozen.HierarchyByChild;
-    internal object? ActiveFrozenForTesting => _pendingFrozen;
 
     // ── Helpers ───────────────────────────────────────────────────────
 
