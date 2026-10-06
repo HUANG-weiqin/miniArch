@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream 的 typed-store 录制、consume-time 校验、Submit/Snapshot/Replay 确定性、async ownership 与回滚排空契约
-updated: 2026-09-27
+updated: 2026-10-06
 ---
 # Command Stream Runtime
 
@@ -51,7 +51,7 @@ Submit 与 BuildDelta 的阶段顺序统一为：Create → Hierarchy → Compon
 
 - 中间 Add→Remove、重复 Set 不产生独立 Watch transition/value event；placeholder resolve 与 emit/materialize 一样只读取 last-wins 后的有效值，superseded batch bytes 不参与语义。
 - `Destroy(pending)` 取消创建，并按确定性顺序释放 reservation；其他有效组件值若仍引用该 placeholder，会在 allocator/target/worker 变化前 fail-fast。
-- `CreateMany` 是一次性初始化 API；混合后续 Set/Add/Remove、重复组件类型等违反 fast-path 前置条件时 fail-fast，不静默降级。
+- `CreateMany` 是一次性初始化 API；Submit materialize 对混合后续 Set/Add/Remove、重复组件类型等违反前置条件的输入 fail-fast。组件 ID ≥512 是合法输入：仅绕过 512-bit mask cache，由既有 non-canonical archetype resolver 处理；重复类型须独立检查，不能把非 canonical mask 当作非法输入。Snapshot 对重复类型仍有路径分歧，见 `kb-code-review-findings.md` 的当前未修风险。
 
 ### existing component command 在 consume 时判定存活
 
@@ -78,7 +78,7 @@ pending/foreign placeholder 的 `IsPlaceholder` 仍在 record 阶段用于本地
 **默认语义：CommandStream 的 Submit/Snapshot/async 路径不做语义校验**（组件存在性、hierarchy 环等）。语义校验由 `public void Validate()` 显式提供；它幂等、声明无副作用，并在首个违规处抛 `InvalidOperationException`（错误消息含实体 id + 组件类型）。
 
 - **`Validate()` 保证**：占位符生命周期（batch last-wins dedup + store lazy-offsets、deferred-aware）、组件 store strict presence（Add 必须缺失 / Set 必须存在 / Remove 缺失 no-op）、hierarchy overlay endpoint/自环/parent-chain 环；只准备 stream 内部 scratch，不消费命令、不改 World/free-list。cancelled-batch free-list alignment 只在真正 consume 时执行。
-- **`Validate()` 不覆盖**：CreateMany 组一致性（Materialize 期 `ThrowCreateManyMismatch/MaskFailure` 抛）、slot reservation（Submit 内 `PreValidatePendingSlots` 防御性检查，A 类保留）、FrameDelta 预算（Submit/Snapshot 期 `PreflightFrameDeltaBudget`）。
+- **`Validate()` 不覆盖**：CreateMany 组一致性（Materialize 期 `ThrowCreateManyMismatch` / `ThrowCreateManyDuplicateComponentType` 抛）、slot reservation（Submit 内 `PreValidatePendingSlots` 防御性检查，A 类保留）、FrameDelta 预算（Submit/Snapshot 期 `PreflightFrameDeltaBudget`）。
 - **不调 Validate 的后果**：存在性/hierarchy 违规在 apply 期抛（消息统一 `"Entity {X} does not have component {T}."`），**部分应用**（前序 batch/store 已落地，reserved ids 由内部清理释放）；`SubmitAndSnapshotIntoAsync` 失败时 **target 内容未定义**（旧 "target remains unchanged" 承诺撤销，见 async 节）。
 
 #### 库能力守卫（P0 裁决，不可移入 Validate）

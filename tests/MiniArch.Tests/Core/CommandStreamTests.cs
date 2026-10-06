@@ -4995,6 +4995,19 @@ public sealed class HighComponentIdCollection
 public sealed class HighComponentIdCommandStreamTests
 {
     private readonly record struct HighIdLink(Entity Target);
+    private readonly record struct HighIdValue(int Value);
+
+    private readonly struct HighIdCreateManyWriter : ICreateManyWriter<HighIdValue>
+    {
+        public void Write(int index, Entity entity, out HighIdValue component) =>
+            component = new HighIdValue(index + 1);
+    }
+
+    private readonly struct DuplicateHighIdCreateManyWriter : ICreateManyWriter<HighIdValue, HighIdValue>
+    {
+        public void Write(int index, Entity entity, out HighIdValue first, out HighIdValue second) =>
+            first = second = new HighIdValue(index + 1);
+    }
 
     [Fact]
     public void BUG_high_component_id_placeholder_scan_preserves_last_wins()
@@ -5004,6 +5017,37 @@ public sealed class HighComponentIdCommandStreamTests
         Assert.True(highType.Value >= 512);
 
         RunLastWinsScenario();
+    }
+
+    [Fact]
+    public void BUG_CreateMany_accepts_component_id_above_511()
+    {
+        EnsureSharedRegistryHasAtLeast(512);
+        Assert.True(ComponentRegistry.Shared.GetOrCreate<HighIdValue>().Value >= 512);
+
+        using var world = new World();
+        var stream = new CommandStream(world);
+        var entities = new Entity[3];
+        stream.CreateMany<HighIdValue, HighIdCreateManyWriter>(entities, new HighIdCreateManyWriter());
+
+        Assert.True(stream.Submit());
+        for (var i = 0; i < entities.Length; i++)
+            Assert.Equal(i + 1, world.Get<HighIdValue>(entities[i]).Value);
+    }
+
+    [Fact]
+    public void CreateMany_rejects_duplicate_high_component_id()
+    {
+        EnsureSharedRegistryHasAtLeast(512);
+        Assert.True(ComponentRegistry.Shared.GetOrCreate<HighIdValue>().Value >= 512);
+
+        using var world = new World();
+        var stream = new CommandStream(world);
+        var entities = new Entity[2];
+        stream.CreateMany<HighIdValue, HighIdValue, DuplicateHighIdCreateManyWriter>(
+            entities, new DuplicateHighIdCreateManyWriter());
+
+        Assert.Throws<InvalidOperationException>(() => stream.Submit());
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

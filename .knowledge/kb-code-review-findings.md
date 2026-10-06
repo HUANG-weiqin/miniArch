@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 审阅前必读的当前风险、已修复真 bug 回归索引与已排除非 bug 猜想；只保留结论和验证入口
-updated: 2026-10-05
+updated: 2026-10-06
 ---
 # 代码审阅发现
 
@@ -15,6 +15,11 @@ updated: 2026-10-05
 
 ## 当前未修风险
 
+### CreateMany 重复类型的 Snapshot/Submit 分歧（待独立回归）
+
+- **位置**：`CommandStream.Pending.cs` 的 CreateMany materialize 与 `CollectCreateComponents`，`CommandStream.Submit.cs` 的 `BuildDelta`。
+- **边界**：同类型写入两次时 Submit 会拒绝，Snapshot emit 路径却先排序去重再写 Create；这是原有路径分歧，**不由本次高组件 ID 修复引入**。尚需独立 `BUG_` 回归确认 Snapshot/async 的目标契约后另行修复，不将其误记为本次已修复项。
+
 ### Replay 没有通用事务回滚（P2，接受现状）
 
 - **位置**：`World.EntityLifecycle.cs` 的 Replay/ReplayCore 路径。
@@ -25,6 +30,12 @@ updated: 2026-10-05
 CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）修复了 lockstep 分叉路径（P0#1/P0#2），`Validate()` 覆盖语义违规（存在性/hierarchy）；nested Entity 现在由完整递归 offsets 合同支持，零校验 Submit 的存在性违规仍在 apply 期抛（部分应用），且不把 Submit 或 Replay 提升为灾难性异常下的通用事务。
 
 ## 已修复的真 bug 索引
+
+### 2026-10-06 CreateMany 高组件 ID
+
+| 回归测试 | 位置 / witness | 修复边界 |
+|---|---|---|
+| `BUG_CreateMany_accepts_component_id_above_511` / `CreateMany_rejects_duplicate_high_component_id` | `CommandStream.Pending.cs` 将 512-bit mask 的非 canonical（合法 global ID≥512）误判为 writer 重复类型；回归测试在现有禁并行 registry collection 中将 Shared 注册表填至 512 后复现 `Submit()` 错误抛出 | Materialize 独立检查重复类型，合法高 ID 交由既有 non-canonical archetype resolver；原共享注册表与 wire 格式不变 |
 
 ### 2026-10-05 Create 缓存与 fresh-world 初始化
 

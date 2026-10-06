@@ -241,12 +241,11 @@ public sealed partial class CommandStream
     }
 
     [DoesNotReturn]
-    private static void ThrowCreateManyMaskFailure(int groupIdx)
+    private static void ThrowCreateManyDuplicateComponentType(int groupIdx)
     {
         throw new InvalidOperationException(
-            $"CreateMany group #{groupIdx} has invalid component type set: " +
-            $"duplicate component types or a component type id >= 512. " +
-            $"The writer struct must not emit duplicate component types.");
+            $"CreateMany group #{groupIdx} contains duplicate component types. " +
+            "The writer struct must not emit duplicate component types.");
     }
 
     /// <summary>
@@ -297,16 +296,16 @@ public sealed partial class CommandStream
             if (liveCount == 0)
                 return; // all cancelled —nothing to materialize
 
-            // Build mask once. If any id >= 512 or any component type is duplicated,
-            // the mask popcount will not equal componentCount. These are writer bugs
-            // (e.g. duplicate component types) —fast-fail.
+            // A non-canonical mask can mean a valid id >= 512, so reject
+            // duplicate writer types independently before resolving the archetype.
             var builder = new MaskBuilder();
             for (var i = 0; i < componentCount; i++)
+            {
+                if (groupTypes[..i].Contains(groupTypes[i]))
+                    ThrowCreateManyDuplicateComponentType(groupIdx);
                 builder.SetBit(groupTypes[i].Value);
+            }
             var mask = builder.ToMask();
-            if (!World.IsMaskCanonical(mask, componentCount))
-                ThrowCreateManyMaskFailure(groupIdx);
-
             var archetype = ResolveArchetype(mask, groupTypes);
 
             // Precompute column indices once for all entities in the group.
