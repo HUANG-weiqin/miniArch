@@ -132,8 +132,8 @@ public sealed partial class World
 
     private void PublishArchetypeSnapshot(Archetype archetype)
     {
-        // Sorted insertion by signature so that query iteration order is a
-        // deterministic function of component types, not of creation history.
+        // Sorted insertion by component type identity so that query order is
+        // independent of registration and archetype creation history.
         // This eliminates order sensitivity to Clone, RestoreState (which can
         // leave mutation-created empty archetypes),
         // and any other path that produces a different creation order.
@@ -143,7 +143,7 @@ public sealed partial class World
         // array. Volatile.Write paired with Volatile.Read on the consumer side
         // guarantees release/acquire semantics without the misleading CAS loop.
         var snapshot = Volatile.Read(ref _archetypeSnapshot);
-        var idx = FindInsertIndex(archetype.Signature, snapshot.AsSpan(0, snapshot.Length));
+        var idx = FindInsertIndex(archetype, snapshot.AsSpan(0, snapshot.Length));
         var updated = new Archetype[snapshot.Length + 1];
         Array.Copy(snapshot, 0, updated, 0, idx);
         Array.Copy(snapshot, idx, updated, idx + 1, snapshot.Length - idx);
@@ -156,21 +156,23 @@ public sealed partial class World
     private void AssertSnapshotSorted(Archetype[] snapshot)
     {
         for (var i = 1; i < snapshot.Length; i++)
-            Debug.Assert(CompareSignatures(snapshot[i - 1].Signature, snapshot[i].Signature) <= 0,
+            Debug.Assert(CompareTypeNameSets(
+                GetSortedTypeNames(snapshot[i - 1]), GetSortedTypeNames(snapshot[i])) <= 0,
                 $"Archetype snapshot is not sorted at index {i}.");
     }
 
     /// <summary>
-    /// Binary search for the sorted insertion point of a signature in the
-    /// archetype snapshot. Returns the index at which to insert.
+    /// Binary search for the sorted insertion point of an archetype in the
+    /// snapshot. Returns the index at which to insert.
     /// </summary>
-    private static int FindInsertIndex(Signature signature, ReadOnlySpan<Archetype> snapshot)
+    private static int FindInsertIndex(Archetype archetype, ReadOnlySpan<Archetype> snapshot)
     {
+        var names = GetSortedTypeNames(archetype);
         int lo = 0, hi = snapshot.Length;
         while (lo < hi)
         {
             var mid = lo + (hi - lo) / 2;
-            if (CompareSignatures(signature, snapshot[mid].Signature) < 0)
+            if (CompareTypeNameSets(names, GetSortedTypeNames(snapshot[mid])) < 0)
                 hi = mid;
             else
                 lo = mid + 1;
@@ -178,20 +180,28 @@ public sealed partial class World
         return lo;
     }
 
-    /// <summary>
-    /// Lexicographic comparison of two Signatures by ComponentType.Value.
-    /// Shorter signature sorts before longer when all elements are equal.
-    /// </summary>
-    private static int CompareSignatures(Signature a, Signature b)
+    private static string[] GetSortedTypeNames(Archetype archetype)
     {
-        var sa = a.AsSpan();
-        var sb = b.AsSpan();
-        var n = Math.Min(sa.Length, sb.Length);
-        for (var i = 0; i < n; i++)
+        var types = archetype.ComponentTypes;
+        var names = new string[types.Count];
+        for (var i = 0; i < names.Length; i++)
+            names[i] = ComponentSchemaCodec.GetSchemaName(types[i]);
+        Array.Sort(names, StringComparer.Ordinal);
+        return names;
+    }
+
+    /// <summary>
+    /// Compares component identity sets, independent of runtime column order.
+    /// </summary>
+    private static int CompareTypeNameSets(ReadOnlySpan<string> left, ReadOnlySpan<string> right)
+    {
+        var count = Math.Min(left.Length, right.Length);
+        for (var i = 0; i < count; i++)
         {
-            var cmp = sa[i].Value.CompareTo(sb[i].Value);
-            if (cmp != 0) return cmp;
+            var comparison = StringComparer.Ordinal.Compare(left[i], right[i]);
+            if (comparison != 0)
+                return comparison;
         }
-        return sa.Length.CompareTo(sb.Length);
+        return left.Length.CompareTo(right.Length);
     }
 }

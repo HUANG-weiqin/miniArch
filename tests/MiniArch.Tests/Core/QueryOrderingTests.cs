@@ -4,19 +4,16 @@ using MiniQueryCache = MiniArch.Core.QueryCache;
 namespace MiniArchTests.Core;
 
 /// <summary>
-/// 验证 Query 迭代顺序契约：
-///
-/// 1. Archetype 顺序 = 按 signature（ComponentType.Value）排序
-/// 2. Entity 顺序（同一 archetype 内） = entity 存储顺序（append 到末尾；删除用 swap-remove）
-/// 3. 所有访问路径（foreach / GetChunks / GetArchetypeSpan）产生一致顺序
-/// 4. 给定相同输入序列，顺序是确定性的
-///
-/// 细节见 kb-core-ecs.md "Query 迭代顺序契约" 段。
+/// Verifies the Query iteration order contract:
+/// archetypes sort lexicographically by their sorted component type identities;
+/// entities within an archetype retain storage order; all query access paths agree.
 /// </summary>
 public sealed class QueryOrderingTests
 {
     private readonly record struct Position(int X, int Y);
     private readonly record struct Velocity(int X, int Y);
+    private readonly record struct AlphabeticalA(int Value);
+    private readonly record struct AlphabeticalB(int Value);
 
     // ──────────────────────────────────────────────
     //  Archetype 顺序
@@ -38,6 +35,17 @@ public sealed class QueryOrderingTests
     }
 
     [Fact]
+    public void Query_orders_multi_component_sets_by_identity_even_when_ids_are_reversed()
+    {
+        var world = new World();
+        var bOnly = world.Create(new AlphabeticalB(1));
+        var both = world.Create(new AlphabeticalB(2), new AlphabeticalA(2));
+        var aOnly = world.Create(new AlphabeticalA(3));
+
+        Assert.Equal([aOnly, both, bOnly], CollectEntities(world.Query(new QueryDescription())));
+    }
+
+    [Fact]
     public void Query_iterates_archetypes_in_signature_order_complex()
     {
         var world = new World();
@@ -50,7 +58,7 @@ public sealed class QueryOrderingTests
 
         var query = world.Query(new QueryDescription().With<Position>());
 
-        // Signature order puts {Position} before {Position, Velocity}.
+        // Type identity order puts {Position} before {Position, Velocity}.
         Assert.Equal([a0, a1, c0], CollectEntities(query));
     }
 
@@ -87,22 +95,16 @@ public sealed class QueryOrderingTests
     [Fact]
     public void Entity_order_preserved_across_chunk_promotion()
     {
-        // Create enough entities to trigger non-chunked → chunked promotion.
-        // Each entity: Position + Velocity = 16 bytes → segment capacity ~131072.
-        // To force chunking we'd need a huge number. Instead use a tiny
-        // per-entity size — create with Position only and fill many entities.
-        //
-        // However, chunk promotion depends on _segmentCapacity which is
-        // computed from component sizes. ForceChunkedForTesting is available
-        // for archetype-level tests. For an end-to-end test, we create enough
-        // entities to exceed the default capacity (4) × some growth factor.
-        // The test verifies order after promotion by checking chunk consistency.
         var world = new World();
         var entities = new List<Entity>();
         for (var i = 0; i < 50; i++)
             entities.Add(world.Create(new Position(i, i)));
 
         var query = world.Query(new QueryDescription().With<Position>());
+        _ = query.GetChunks().Length; // Cache the flat view before promotion.
+        var archetype = Assert.Single(world.Archetypes);
+        archetype.ForceChunkedForTesting();
+        Assert.True(archetype.IsChunked);
 
         // Get order from foreach
         var fromForeach = CollectEntities(query);

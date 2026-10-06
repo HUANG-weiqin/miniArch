@@ -5,9 +5,9 @@ namespace MiniArch.Core;
 using MiniArch;
 
 /// <summary>
-/// Cached archetype query with sorted-by-signature snapshot invalidation.
-/// Archetypes are never removed; the world's _archetypeSnapshot is always
-/// sorted by Signature.ComponentType.Value. Matched archetypes are rebuilt
+/// Cached archetype query with ordered world snapshot invalidation.
+/// Archetypes are never removed; the world's _archetypeSnapshot is ordered
+/// by stable component type identity sets. Matched archetypes are rebuilt
 /// from scratch on any count change (cold path).
 /// </summary>
 internal sealed class QueryCache

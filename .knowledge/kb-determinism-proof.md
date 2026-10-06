@@ -2,7 +2,7 @@
 title: 确定性证明 — Lockstep ECS 库级确定性验证
 module: DeterminismProof
 description: miniArch 确定性保证的 10 维证明矩阵、实证数据与边界；含字段级 canonical checksum（只观察非空原型）和注册顺序边界
-updated: 2026-09-28
+updated: 2026-10-06
 ---
 
 # 确定性证明 — Lockstep ECS 库级确定性验证
@@ -36,7 +36,7 @@ updated: 2026-09-28
 | 7 | CanonicalChecksum | ✅ 强确定 | 高 | v5 canonical traversal + 字段级 LE codec + SHA-256 |
 | 8 | Soak 实证 | ✅ 证据级 | 极高 | 259 seed × 6.4M 帧 + 多 host lockstep soak |
 | 9 | Placeholder E2E | ✅ 强确定 | 高 | 两阶段 emit + scratch buffer + EntityFieldResolver |
-| 10 | **Query 迭代顺序** | ✅ **强确定** | **高** | **QueryOrderingTests 14 个测试 + 契约文档（2026-07-11 提升为语义承诺）** |
+| 10 | **Query 迭代顺序** | ✅ **强确定** | **高** | **QueryOrderingTests + 跨进程 AB/BA 存档加载顺序回归；同 World 结构历史下不依赖其他 World 注册顺序** |
 
 **结论：10/10 维度全部通过，无已知遗留漏洞。**
 
@@ -175,23 +175,22 @@ updated: 2026-09-28
 
 ### 10. Query 迭代顺序确定性
 
-**机制**：Query 迭代顺序由存储物理决定：
-- `_archetypeSnapshot` 按 signature 排序（`PublishArchetypeSnapshot` 执行排序插入，`FindInsertIndex` 二分查找插入点），不再依赖创建历史。这消除了 Save→Load、Clone、RestoreState 等路径的顺序差异。
-- `QueryCache.RebuildCache` 全量扫描 `_world.Archetypes`，按排序后的世界顺序重建匹配列表和 chunk views。
-- 同一 archetype 内 entity 按存储顺序（`_entities[]` 或 segment 内的 `Entities[]`）遍历
-- 新 entity append 到末尾；entity 删除用 swap-remove（末尾 survivor 补充到被删位置），reorder 本身确定性
-- 所有访问路径（foreach / GetChunks / GetArchetypeSpan）共享同一底层快照数组
+**机制**：Query 先按 archetype 身份集合排序，再按各 archetype 的物理行顺序遍历：
+- `_archetypeSnapshot` 在新 archetype 发布时排序插入。比较器先把每个签名内的组件类型身份按 ordinal 排序，再比较身份序列；v5 可持久化类型采用精确 `AssemblyQualifiedName`。`Signature` 的运行时组件 ID 仍负责存储和匹配，不充当迭代排序键。
+- `QueryCache.RebuildCache` 按 `_world.Archetypes` 的顺序建立匹配 archetype 与 chunk views；稳态枚举不执行类型身份排序。
+- 同一 archetype 内 entity 按存储行顺序遍历；新实体 append，删除时 swap-remove。各访问路径（foreach / GetChunks / GetArchetypeSpan）保持同序。
 
-**保证**：给定相同结构变更序列，entity 物理排列完全确定 → query 遍历顺序完全确定。且与创建历史解耦——仅由当前组件签名集合决定。
+**保证与边界**：同一 v5 World 状态和本 World 后续结构变更序列下，即使其他 World 的存档先加载并改变共享 registry 的 ID 分配，默认 Query 顺序仍相同；依赖这一顺序的 `Clear(query)` / `Destroy(query)` 也不会因此改变 free-list 演化。不同的本 World 结构变更历史仍可产生不同物理行顺序；不承诺跨版本类型身份兼容，也不改变 FrameDelta 对注册顺序的要求。
 
 **代码位置**：
-- `World.QueryCache.cs:132-146`（PublishArchetypeSnapshot——排序插入）
-- `QueryCache.cs:194-264`（RebuildCache——全量重建）
-- `Archetype.Storage.cs:222-227`（AddEntity——append 到末尾）
-- `Archetype.Storage.cs:301-369`（RemoveAt——swap-remove，确定性重排）
+- `src/MiniArch/Core/World.QueryCache.cs`（PublishArchetypeSnapshot——稳定身份排序插入）
+- `src/MiniArch/Core/QueryCache.cs`（RebuildCache——按 World 顺序重建）
+- `src/MiniArch/Core/World.EntityLifecycle.cs`（Clear/Destroy(query)——消费 Query 顺序）
+- `src/MiniArch/Core/Archetype.Storage.cs`（AddEntity/RemoveAt——物理行顺序）
 
 **测试链接**：
-- `tests/MiniArch.Tests/Core/QueryOrderingTests.cs`（13+ 个测试，2026-07-19 按签名顺序更新）
+- `tests/MiniArch.Tests/Core/QueryOrderingTests.cs`（签名、物理行及访问路径顺序）
+- `tests/MiniArch.Tests/Persistence/WorldSnapshotTests.cs`（不同进程的 AB/BA 加载与 Clear→Create 回归）
 
 ### 9. Placeholder E2E 确定性
 
@@ -223,7 +222,7 @@ miniArch 的确定性保证**不覆盖**以下维度——这些是你们应用�
 | 跨平台 float 精度 | 不保证（同 byte 格式但运算结果可能不同） | 整数运算或所有 host 同平台 |
 | System 执行顺序 | 不约束（用户自己排序 Systems） | 确保 Systems 跨 host 同序 + 无 side effects |
 | 外部输入时序 | 不约束（lockstep 要求输入帧对齐） | 网络层保证输入帧对齐 |
-| 组件注册顺序 | v5 snapshot/canonical checksum 不依赖注册 id；FrameDelta wire/runtime signature 仍使用 registry id | 交换 FrameDelta 的 host 必须完成一致 schema handshake；仅比较 v5 canonical bytes/checksum 不要求相同注册顺序 |
+| 组件注册顺序 | v5 snapshot/canonical checksum 和默认 Query 的 archetype 顺序不依赖注册 id；FrameDelta wire/runtime signature 仍使用 registry id | 交换 FrameDelta 的 host 必须完成一致 schema handshake；v5 存档加载和默认 Query 不要求相同注册顺序 |
 
 ---
 
@@ -264,7 +263,7 @@ miniArch 的确定性保证**不覆盖**以下维度——这些是你们应用�
 
 ### 长版
 
-> miniArch 的确定性保证覆盖 10 个维度：Entity ID 分配（LIFO free-list + shift-not-swap）、版本号（wrap-to-1）、Submit/Replay 顺序（Create→Hierarchy→Ops→Destroy）、Sort/Dedup（无 ties）、Archetype byte layout（LayoutKind.Auto 拦截）、Varint/Hash（LEB128 + SHA-256 + CRC32）、CanonicalChecksum（v5 canonical traversal + 字段级 LE codec）、Soak 实证（259 seed × 6.4M 帧）、Placeholder E2E（两阶段 emit + scratch buffer）、**Query 迭代顺序（archetype 签名顺序 + entity 存储顺序，14 个测试守护）**。实证数据来自单 host soak（Submit vs Replay）、多 host lockstep soak（N host Replay 路径收敛）、三路 parity（Submit/Replay canonical 收敛 + Restore rollback 投影收敛）、FsCheck PBT、以及 QueryOrderingTests。已发现并修复 7 个确定性相关 bug（B1-B6 + LayoutKind.Auto）。float 运算确定性、系统执行顺序、外部输入时序等应用层维度不在 ECS 库的覆盖范围内。
+> miniArch 的确定性保证覆盖 10 个维度：Entity ID 分配（LIFO free-list + shift-not-swap）、版本号（wrap-to-1）、Submit/Replay 顺序（Create→Hierarchy→Ops→Destroy）、Sort/Dedup（无 ties）、Archetype byte layout（LayoutKind.Auto 拦截）、Varint/Hash（LEB128 + SHA-256 + CRC32）、CanonicalChecksum（v5 canonical traversal + 字段级 LE codec）、Soak 实证（259 seed × 6.4M 帧）、Placeholder E2E（两阶段 emit + scratch buffer）、**Query 迭代顺序（稳定类型身份集合顺序 + entity 存储顺序，含跨进程 AB/BA 存档回归）**。实证数据来自单 host soak（Submit vs Replay）、多 host lockstep soak（N host Replay 路径收敛）、三路 parity（Submit/Replay canonical 收敛 + Restore rollback 投影收敛）、FsCheck PBT、QueryOrderingTests 与 WorldSnapshotTests。B1-B6、LayoutKind.Auto 及跨 World 注册顺序影响 Query 的问题均已有回归。float 运算确定性、系统执行顺序、外部输入时序等应用层维度不在 ECS 库的覆盖范围内。
 
 ---
 
@@ -290,4 +289,4 @@ miniArch 的确定性保证**不覆盖**以下维度——这些是你们应用�
 
 - **float 运算确定性是最大的外部风险**：miniArch 保证 byte-level 一致，但 `Position.X += Velocity.X * dt` 的运算结果在不同 CPU 上可能不同。你们必须自己处理这一点（定点数 / 同平台 / deterministic math lib）。
 - **System 执行顺序是第二大风险**：miniArch 不约束 Systems 的执行顺序。如果两个 host 的 Systems 顺序不同，即使 ECS 状态一致，游戏状态也会 diverge。
-- **组件注册顺序边界**：`ComponentRegistry.Shared` 的 id 仍按注册顺序分配，因此 FrameDelta 交换方必须完成一致的 component schema handshake。`WorldSnapshot` v5 与 `CanonicalChecksum` 已改用精确类型 identity/schema index，不因注册顺序不同而分歧。
+- **组件注册顺序边界**：`ComponentRegistry.Shared` 的 id 仍按注册顺序分配，因此 FrameDelta 交换方必须完成一致的 component schema handshake。`WorldSnapshot` v5、`CanonicalChecksum` 与默认 Query 的 archetype 顺序改用稳定类型 identity，不因其他 World 的注册顺序不同而分歧；组件存储列和诊断中的运行时 ID 不是这一保证的一部分。

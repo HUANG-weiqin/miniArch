@@ -1597,6 +1597,82 @@ public sealed class WorldSnapshotTests
         File.WriteAllBytes(output + ".sha256", world.CanonicalChecksum());
     }
 
+    [Fact]
+    public void BUG_snapshot_load_order_preserves_default_query_and_clear_reuse_order()
+    {
+        if (Environment.GetEnvironmentVariable(QueryOrderProbeModeEnvironmentVariable) is not null)
+            return;
+
+        var directory = Path.Combine(Path.GetTempPath(), $"MiniArchQueryOrder-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var targetPath = Path.Combine(directory, "target.bin");
+            var preloadPath = Path.Combine(directory, "preload.bin");
+            using (var target = new World())
+            {
+                target.Create(new RegistrationOrderA(1));
+                target.Create(new RegistrationOrderA(2), new RegistrationOrderB(2));
+                target.Create(new RegistrationOrderB(3));
+                File.WriteAllBytes(targetPath, SaveToBytes(target));
+            }
+            using (var preload = new World())
+            {
+                preload.Create(new RegistrationOrderB(99));
+                File.WriteAllBytes(preloadPath, SaveToBytes(preload));
+            }
+
+            foreach (var mode in new[] { "AB", "BA" })
+            {
+                RunChildProbe(
+                    nameof(Fresh_process_snapshot_load_order_probe),
+                    mode,
+                    (QueryOrderProbeModeEnvironmentVariable, mode),
+                    (QueryOrderProbeTargetEnvironmentVariable, targetPath),
+                    (QueryOrderProbePreloadEnvironmentVariable, preloadPath));
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Fresh_process_snapshot_load_order_probe()
+    {
+        var mode = Environment.GetEnvironmentVariable(QueryOrderProbeModeEnvironmentVariable);
+        if (mode is null)
+            return;
+
+        var targetPath = Environment.GetEnvironmentVariable(QueryOrderProbeTargetEnvironmentVariable)
+            ?? throw new InvalidOperationException("Query order probe target archive path is missing.");
+        var preloadPath = Environment.GetEnvironmentVariable(QueryOrderProbePreloadEnvironmentVariable)
+            ?? throw new InvalidOperationException("Query order probe preload archive path is missing.");
+        if (mode != "AB" && mode != "BA")
+            throw new InvalidOperationException($"Unknown query order probe mode '{mode}'.");
+
+        using var firstArchive = File.OpenRead(mode == "AB" ? targetPath : preloadPath);
+        using var first = WorldSnapshot.Load(firstArchive);
+        using var secondArchive = File.OpenRead(mode == "AB" ? preloadPath : targetPath);
+        using var second = WorldSnapshot.Load(secondArchive);
+        var target = mode == "AB" ? first : second;
+
+        var order = new List<int>();
+        foreach (var entity in target.Query(new QueryDescription()))
+            order.Add(entity.Id);
+        Assert.Equal(new[] { 0, 1, 2 }, order);
+
+        var all = new QueryDescription();
+        target.Clear(in all);
+        Assert.Equal(new[] { 2, 1, 0 }, new[]
+        {
+            target.CreateEmpty().Id,
+            target.CreateEmpty().Id,
+            target.CreateEmpty().Id,
+        });
+    }
+
     // BUG REPROOF: CaptureState stores a non-chunked backup; if the archetype
     // is promoted to chunked storage between CaptureState and RestoreState
     // (e.g. a GGPO prediction frame creates enough entities to trigger
@@ -2302,6 +2378,9 @@ public sealed class WorldSnapshotTests
 
     private const string ProbeModeEnvironmentVariable = "MINIARCH_SNAPSHOT_PROBE_MODE";
     private const string ProbeOutputEnvironmentVariable = "MINIARCH_SNAPSHOT_PROBE_OUTPUT";
+    private const string QueryOrderProbeModeEnvironmentVariable = "MINIARCH_QUERY_ORDER_PROBE_MODE";
+    private const string QueryOrderProbeTargetEnvironmentVariable = "MINIARCH_QUERY_ORDER_PROBE_TARGET";
+    private const string QueryOrderProbePreloadEnvironmentVariable = "MINIARCH_QUERY_ORDER_PROBE_PRELOAD";
     private const string UnsupportedProbeEnvironmentVariable = "MINIARCH_SNAPSHOT_UNSUPPORTED_PROBE";
 
     private static byte[] SaveToBytes(World world)

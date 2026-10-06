@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-10-05
+updated: 2026-10-06
 ---
 # MiniArch Core ECS
 
@@ -101,7 +101,7 @@ updated: 2026-10-05
 - EachSpan API 已删除，统一走 `ChunkView.GetSpan<T>()`
 - typed query 家族（`Query<T>`、`Query<T1,T2>` 等）已移除
 - builder 风格 `World.Query()...Build()` 已移除
-- `OrderByEntityId()` / `OrderByComponent<T>(Comparison<T>)` 在 `MiniArch.Query` facade 上提供，不缓存排序结果（每次枚举租 `ArrayPool` 排序）。`OrderByComponent<T>` 批量线性扫描组件值后排序，避免 per-comparison `world.Get` 开销
+- `OrderByEntityId()` / `OrderByComponent<T>(Comparison<T>)` 在 `MiniArch.Query` facade 上提供。前者缓存排序结果，但每次枚举仍扫描实体校验 fingerprint，未命中时重新收集并排序；后者每次枚举租 `ArrayPool`，批量线性扫描组件值后排序，避免 per-comparison `world.Get` 开销
 - `QueryDescription.Exact()` 启用精确 archetype 匹配（Flecs `Strict()` 等价）：只匹配 archetype 组件集合**严格等于** required 集合的实体。`WithAny<T>()` 在 exact 模式下被忽略。实现见 `Core/QueryCache.Matches()` 中的 count 检查。
 
 **坑点：**
@@ -130,12 +130,12 @@ updated: 2026-10-05
 - **Edge cache 内联**：增删目标缓存直接挂在 Archetype 上（`Archetype?[]` 按 componentId 直索引），无需独立 ArchetypeEdges 对象
 - **迁移拷贝内联**：`CopySharedComponentsFrom` 直接在 Archetype 上实现，无需 MigrationPlan class
 - `EntityCount` 在所有构建配置下都只统计 **alive entity**；reserved pending id 不计入结果
-- **Query 迭代顺序契约**（2026-07-19 由"创建顺序"升级为"签名排序"）：
-  - **Archetype 顺序** = 按 **Signature 中 ComponentType.Value 字典序**排序，前缀相同则短签名在前。`PublishArchetypeSnapshot` 执行排序插入（O(N) 数组拷贝 + O(log N) 二分查找）。archetype 创建是冷路径，排序开销可忽略。
-  - 该顺序消除了对创建历史的依赖，使 Save→Load、Clone、RestoreState 后的 query 顺序完全由当前签名集合决定。
-  - **Entity 顺序（同一 archetype 内）** = entity 存储顺序（append 到末尾；删除用 swap-remove，末尾 survivor 补充到被删位置）
-  - **所有访问路径一致**：`foreach`、`GetChunks()` → `ChunkView.GetEntities()`、`GetArchetypeSpan()` → `archetype.GetEntities()` 三者顺序一致
-  - **确定性**：给定相同输入序列，顺序字节级一致。由 `QueryOrderingTests`（14 个测试）守护
+- **Query 迭代顺序契约**（2026-07-19 由"创建顺序"升级为"签名排序"；2026-10-06 改用稳定类型身份，消除跨 World 注册顺序干扰）：
+  - **Archetype 顺序** = 将每个签名内的组件类型身份按 ordinal 排序，再对身份序列做字典序比较，前缀相同则短签名在前。v5 可持久化类型的身份为精确 `AssemblyQualifiedName`；不得直接比较按运行时 `ComponentType.Value` 排列的成员。`PublishArchetypeSnapshot` 在新 archetype 发布时排序插入；原 `Signature`、组件列和 FrameDelta wire 仍使用运行时 ID。
+  - 该顺序消除了 archetype 创建历史及其他 World 组件注册顺序的影响；同一 v5 World 状态经 Save→Load、Clone、RestoreState 后，archetype 顺序由组件身份集合决定。
+  - **Entity 顺序（同一 archetype 内）** = entity 物理存储顺序（append 到末尾；删除用 swap-remove，末尾 survivor 补充到被删位置）；不同的本 World 结构变更历史仍可能改变行顺序。
+  - **所有访问路径一致**：`foreach`、`GetChunks()` → `ChunkView.GetEntities()`、`GetArchetypeSpan()` → `archetype.GetEntities()` 三者顺序一致。
+  - **确定性**：给定相同 World 状态与本 World 后续结构变更序列，其他 World 的存档加载先后不会改变默认 Query 顺序，也不会改变依赖该顺序的 `Clear(query)` / `Destroy(query)` 回收次序。见 `QueryOrderingTests` 与跨进程存档回归。
   - entity enumerator、ChunkView/span 与 `EntityAccessor` 都是 unchecked borrow；借用期间禁止 Create/Destroy/Clear/Add/Remove/RestoreState。该约束不通过 World 全局版本或 Release 热路径检查兜底。
   - 如需不受结构变更历史影响的稳定顺序，使用 `OrderByEntityId()` / `OrderByEntityIdDescending()` / `OrderByComponent<T>()`
   - 详见 `tests/MiniArch.Tests/Core/QueryOrderingTests.cs`

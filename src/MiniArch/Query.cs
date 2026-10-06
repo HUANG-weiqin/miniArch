@@ -11,7 +11,10 @@ namespace MiniArch;
 /// <para><b>Iteration order contract</b> (promoted to semantic guarantee):</para>
 /// <list type="bullet">
 ///   <item><b>Archetype order</b> — matched archetypes are sorted
-///   lexicographically by their component-type signatures.</item>
+///   lexicographically by their component type identities. Each signature's
+///   identities are sorted ordinally before comparison. For distinct type
+///   identities, unrelated worlds' component registration order does not
+///   affect this order.</item>
 ///   <item><b>Entity order within an archetype</b> — entities are iterated
 ///   in their physical storage order: new entities are appended to the end;
 ///   entity removal (Destroy / component removal) uses swap-remove (the last
@@ -20,9 +23,10 @@ namespace MiniArch;
 ///   <see cref="GetChunks"/> → <see cref="ChunkView.GetEntities"/>,
 ///   and <c>Advanced.GetArchetypeSpan</c> → <c>archetype.GetEntities</c>
 ///   all produce the same entity order.</item>
-///   <item><b>Deterministic</b> — given the same sequence of structural
-///   changes, the iteration order is byte-for-byte identical (verified
-///   by <c>QueryOrderingTests</c>).</item>
+///   <item><b>Deterministic</b> — given the same world state and sequence of
+///   structural changes, the iteration order is identical regardless of
+///   component registrations in other worlds (verified by
+///   <c>QueryOrderingTests</c> and <c>WorldSnapshotTests</c>).</item>
 /// </list>
 /// <para>
 /// If you need an iteration order that is independent of structural change

@@ -31,6 +31,12 @@ CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）�
 
 ## 已修复的真 bug 索引
 
+### 2026-10-06 跨 World 注册顺序影响默认 Query
+
+| 回归测试 | 位置 / witness | 修复边界 |
+|---|---|---|
+| `BUG_snapshot_load_order_preserves_default_query_and_clear_reuse_order` / `Query_orders_multi_component_sets_by_identity_even_when_ids_are_reversed` | `World.QueryCache.cs` 按共享 registry 的 `ComponentType.Value` 排 archetype；独立进程以 AB/BA 顺序加载不同 v5 存档时，同一 World 默认 Query 顺序反转，`Clear(query)` 的 free-list 回收次序及后续 Create ID 也可能分叉 | 仅在新 archetype 发布时按每个组件集合内部已排序的稳定类型身份序列插入；运行时 Signature、组件存储 ID、FrameDelta wire 和 Query 稳态枚举路径不变。同一 archetype 内仍按物理行顺序。 |
+
 ### 2026-10-06 CreateMany 高组件 ID
 
 | 回归测试 | 位置 / witness | 修复边界 |
@@ -198,7 +204,7 @@ B7-B16 属于旧 `ChangeQuery` / `Track().Capture().Previous()` / shared tracker
 
 | 回归测试 | 问题 | 修复 |
 |---------|------|------|
-| `Query_iterates_archetypes_in_signature_order` / `Save_load_preserves_archetype_signature_order` | archetype 创建历史会让逻辑等价 World 的 query 顺序分叉 | `_archetypeSnapshot` 按 `Signature` 字典序插入；Save→Load 后仍由签名唯一决定顺序 |
+| `Query_iterates_archetypes_in_signature_order` / `Save_load_preserves_archetype_signature_order` | archetype 创建历史会让逻辑等价 World 的 query 顺序分叉 | `_archetypeSnapshot` 排序插入，消除创建历史依赖；2026-10-06 又将排序键从运行时 ID 换为稳定类型身份集合，以消除跨 World 注册顺序依赖 |
 | `Save_load_preserves_empty_archetypes`（**已被 superseded**：现为 `Save_load_omits_empty_archetypes_without_changing_query_order`） | Snapshot 丢弃空 archetype 会改变可观察的 World 结构 | 当时 Save/Load 保留空 archetype。2026-09-28 起 canonical Save 不再写空原型（`Clone` 仍保留）；其担心的 query 顺序依赖已由 2026-07-19 签名排序插入消除 |
 | `Clone_preserves_empty_archetypes_and_their_signature_order` | Clone 跳过空 archetype会改变可观察的 World 结构 | Clone 为每个源 archetype 建立目标 archetype，仅对空 archetype 跳过数据拷贝 |
 
