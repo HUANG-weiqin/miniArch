@@ -1,5 +1,12 @@
 # Changelog
 
+## 6.2.0 (2026-10-06)
+
+- **Fix: default `Query` order no longer depends on other worlds' component registration or load order** — matched archetypes are ordered by the ordinally sorted set of stable component type identities, rather than process-local component IDs. Loading the same v5 world before or after another world now yields the same default query order. This **can change observable iteration order** versus 6.1.0; bulk `Clear(query)` / `Destroy(query)` can consequently recycle entity IDs in a different order. Entity order within each archetype still follows physical storage order.
+- **Fix: `CommandStream.CreateMany` accepts component IDs at or above 512** — a valid high-ID component no longer fails the duplicate-component check; genuinely duplicated writer component types are still rejected.
+- **Perf: generic `World.Create` archetype caches are per-world** — alternating creation in multiple warmed worlds reuses each world's archetype plans without per-call allocations.
+- The query ordering work happens when a new archetype is published; steady-state query enumeration adds no allocation, while loading many distinct archetypes can cost more time and temporary allocations. Public API signatures and the v5 snapshot format are unchanged. Runtime component IDs and the `FrameDelta` wire format are unchanged; cross-process `FrameDelta` replay still requires matching component registration/schema.
+
 ## 6.1.0 (2026-09-28)
 
 - **Changed: canonical v5 content covers non-empty archetypes only** — `WorldSnapshot.Save` and `ComputeCanonicalChecksum` share one `WriteCanonicalWorld` traversal, and both now skip archetypes with `EntityCount == 0`; the schema table likewise contains only the component types those non-empty archetypes actually use. Two worlds that differ only by empty archetypes (created then destroyed, or left behind by `RestoreState`) now produce the same `CanonicalChecksum()` and the same `Save` bytes as a world that never had that component combination. **Stored snapshots and canonical checksums of such worlds change value.** Types used only by empty archetypes are no longer serialized or schema-validated.
