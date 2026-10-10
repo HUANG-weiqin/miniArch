@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using MiniArch.Core;
@@ -30,7 +31,15 @@ public sealed class ParallelQueryAllocationTests
     [InlineData(1, true)]
     [InlineData(2, true)]
     [InlineData(3, true)]
-    public void BUG_parallel_query_steady_state_allocates_zero_bytes(int route, bool useStruct)
+    public Task BUG_parallel_query_steady_state_allocates_zero_bytes(int route, bool useStruct)
+        => RunAllocationChildAsync("matrix", route.ToString(CultureInfo.InvariantCulture),
+            useStruct ? "struct" : "delegate");
+
+    [Fact]
+    public Task BUG_nested_prebuilt_queries_preserve_rows_and_allocate_zero_bytes()
+        => RunAllocationChildAsync("nested");
+
+    internal static void MeasureSteadyState(int route, bool useStruct)
     {
         var (world, query, rows, _) = MakeQuery(route, 1);
         var counter = new RowCounter();
@@ -62,8 +71,7 @@ public sealed class ParallelQueryAllocationTests
         Assert.Equal(0, allocated);
     }
 
-    [Fact]
-    public void BUG_nested_prebuilt_queries_preserve_rows_and_allocate_zero_bytes()
+    internal static void MeasureNested()
     {
         var (outerWorld, outer, outerRows, outerChunks) = MakeQuery(3, 1);
         var (innerWorld, inner, innerRows, _) = MakeQuery(2, 2);
@@ -92,6 +100,55 @@ public sealed class ParallelQueryAllocationTests
         Assert.Equal(0, probe.WrongRows);
         Assert.Equal(0, allocated);
     }
+
+    private static async Task RunAllocationChildAsync(params string[] caseArguments)
+    {
+        var start = new ProcessStartInfo("dotnet")
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        start.ArgumentList.Add(typeof(ParallelQueryAllocationTests).Assembly.Location);
+        start.ArgumentList.Add("--parallel-query-allocation");
+        foreach (string argument in caseArguments)
+            start.ArgumentList.Add(argument);
+
+        using var child = Process.Start(start) ?? throw new InvalidOperationException("Allocation child did not start.");
+        Task<string> stdout = child.StandardOutput.ReadToEndAsync();
+        Task<string> stderr = child.StandardError.ReadToEndAsync();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        try
+        {
+            await child.WaitForExitAsync(timeout.Token);
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            if (!child.HasExited)
+            {
+                try { child.Kill(entireProcessTree: true); }
+                catch (InvalidOperationException) { } // The child exited between the check and Kill.
+            }
+            using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            try { await child.WaitForExitAsync(cleanup.Token); }
+            catch (OperationCanceledException) { }
+            throw new TimeoutException($"Allocation child timed out: {string.Join(' ', caseArguments)}\n{ChildResult(child, stdout, stderr)}");
+        }
+
+        try { await Task.WhenAll(stdout, stderr).WaitAsync(TimeSpan.FromSeconds(5)); }
+        catch (TimeoutException)
+        {
+            throw new TimeoutException($"Allocation child output timed out: {string.Join(' ', caseArguments)}\n{ChildResult(child, stdout, stderr)}");
+        }
+        Assert.True(child.ExitCode == 0,
+            $"Allocation child failed: {string.Join(' ', caseArguments)}\n{ChildResult(child, stdout, stderr)}");
+    }
+
+    private static string ChildResult(Process child, Task<string> stdout, Task<string> stderr)
+        => $"exit={(child.HasExited ? child.ExitCode.ToString(CultureInfo.InvariantCulture) : "still running")}\n" +
+           $"stdout:\n{(stdout.IsCompletedSuccessfully ? stdout.Result : "<stream not closed>")}\n" +
+           $"stderr:\n{(stderr.IsCompletedSuccessfully ? stderr.Result : "<stream not closed>")}";
 
     private static void DrainFinalizers()
     {

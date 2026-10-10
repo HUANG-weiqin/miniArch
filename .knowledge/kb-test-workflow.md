@@ -2,7 +2,7 @@
 title: Test Workflow
 module: MiniArch.Tests
 description: How the test suite, query profiling, snapshot benchmarks, and structural-change benchmarks are organized and how to run them
-updated: 2026-10-10
+updated: 2026-10-11
 ---
 # Test Workflow
 
@@ -36,6 +36,7 @@ updated: 2026-10-10
 | `QueryFilterTests` | 链式 filter 和 builder 契约 |
 | `QueryComponentSetTests` | ComponentSet 创建/排序契约 |
 | `ParallelQueryTests` | ForEachChunk / ForEachChunkParallel 安全性与加速比 |
+| `ParallelQueryAllocationTests` | 独立进程全线程 0 B、嵌套、同步 join/异常复用、线程池容量、上下文及引用生命周期 |
 | `EntityAccessorTests` | EntityAccessor ref struct 契约 |
 | `CommandStreamTests` | Submit/Snapshot、cross-world replay、concurrent recording、Clone、struct 缩小后的正确性、SwapOutState 字段分类契约 |
 | `CommandBufferParityTests` | MiniArch/Arch 共享结构命令 parity（文件名沿用历史，实际比对的是 CommandStream） |
@@ -81,6 +82,20 @@ updated: 2026-10-10
 | ~~`Core/DebugMetricsTests.cs`~~ | **已删除** — DebugMetrics 子系统已移除 |
 
 旧 `ChildrenEnumerableTests`、父子遍历/级联/子树克隆断言属于退役能力，不作为当前必跑的 API 测试入口；历史事实与迁移见 `kb-hierarchy-runtime.md`。非层级生命周期、普通 `Entity` 引用、placeholder、Query 与 Snapshot/Replay 覆盖仍须保留。
+
+## 并行分配测试的进程边界
+
+- `GC.GetTotalAllocatedBytes(true)` 会包含当前进程的所有托管线程；xUnit collection 禁止并行不等于停止 VSTest 的后台活动。计量库的跨线程分配时，不能把整个测试宿主视为无分配环境。
+- `MiniArch.Tests` 已由 Test SDK 生成为可执行 DLL；关闭 SDK 的空 `GenerateProgramFile`，由 `Program.cs` 提供窄入口。9 个分配测试启动同一 DLL 的独立进程，直接执行原测量主体，不再运行 VSTest；其余语义测试仍用原宿主。
+- 每个子进程仍测所有线程、严格要求 0 B，保留原预热与行覆盖断言；失败输出/退出码传回原用例，未知参数、异常、超时都失败。子进程不是 `dotnet test`，不重复引入测试宿主；不新增测量项目或放宽阈值。
+- 正常全套命令不变。单独检查某条测量（先 Release build）可用：
+
+```bash
+dotnet tests/MiniArch.Tests/bin/Release/net8.0/MiniArch.Tests.dll --parallel-query-allocation matrix 3 struct
+dotnet tests/MiniArch.Tests/bin/Release/net8.0/MiniArch.Tests.dll --parallel-query-allocation nested
+```
+
+实现与历史证据见 `kb-parallel-query.md`；不能把独立用例通过替代整个 suite 的结果。
 
 ## PublicApiSentinel
 

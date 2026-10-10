@@ -102,7 +102,7 @@ query.ForEachChunk(ref job);          // Sequential; field changes reach the cal
 - 缓存视图：`src/MiniArch/Core/QueryCache.cs`。
 - 区间与 span：[chunk storage](kb-chunk-storage.md)、`src/MiniArch/Core/ChunkView.cs`。
 - 原有覆盖：`tests/MiniArch.Tests/Core/ParallelQueryTests.cs`，包括每行覆盖、组件写入和同线程嵌套不覆写的历史 witness。
-- 零分配及生命周期：`tests/MiniArch.Tests/Core/ParallelQueryAllocationTests.cs`，包括跨线程字节、跨 T nested、异常后复用、并发调用、满 max1/max2 pool root、共享 struct copy、EC 读写恢复及弱引用回收。
+- 零分配及生命周期：`tests/MiniArch.Tests/Core/ParallelQueryAllocationTests.cs`，包括跨线程字节、跨 T nested、异常后复用、并发调用、满 max1/max2 pool root、共享 struct copy、EC 读写恢复及弱引用回收。分配用例由 `tests/MiniArch.Tests/Program.cs` 的独立进程入口执行；流程见 [测试工作流](kb-test-workflow.md)。
 - 真正的 S14：`dotnet run -c Release --project tools/perf/FrifloGameScenarios.Perf -- S14`；比较数字及限制集中在 [ECS 对比](kb-ecs-comparison.md)。
 - 缺陷索引：[代码审阅发现](kb-code-review-findings.md)。
 
@@ -111,7 +111,8 @@ query.ForEachChunk(ref job);          // Sequential; field changes reach the cal
 - 并行工作必须量 `GC.GetTotalAllocatedBytes(true)`，只量调用线程会漏 worker 分配；0 次 GC 也不能证明 0 B。
 - 2026-10-10 原实现独立探针：100K 同形 S14 每次约 3.8–4.3 KB 全线程分配；顺序 caller 为 0 B。根因是 closure/TPL，不是 S14 已缓存的 callback。
 - 修复后的公开入口独立探针覆盖默认及 `AsyncLocal=42` / `fr-FR`，cached delegate 与 struct 各 10K/20K 次；所有窗口 caller 和全线程均为原始 0 B。单 CPU 的公开路径 10K 次也为 0 B，未扣除控制组常数。
-- 单元分配回归预热 4096 次，再 `Collect → WaitForPendingFinalizers → Collect → WaitForPendingFinalizers`；度量区不输出、不构造 delegate、不做断言，最后严格断言总字节为 0。
+- 9 个分配回归在不运行 VSTest 宿主的独立进程中执行：预热 4096 次，再 `Collect → WaitForPendingFinalizers → Collect → WaitForPendingFinalizers`；度量区不输出、不构造 delegate、不做断言，32/16 次调用后仍严格断言全进程总字节为 0。VSTest 只检查子进程完成/退出码，语义用例仍在原宿主；不以 caller-only 计数漏掉 worker。
+- 2026-10-11 发布复验中，原宿主内 empty/struct 用例仍出现一次 352 B，具体分配栈未捕获；静态空路径不进入分发，独立 empty 与相邻 no-op 窗口均为 0 B。禁止把未归因的全宿主字节硬算成每次库分配，也不放宽 0 B；改为隔离宿主后，旧库的 9 个用例仍全部只因分配非零失败。证据：`artifacts/release-7.0.0/tests.log` 与 `artifacts/parallel-zeroalloc-20261010/child-process-20261011/`。
 - 历史短窗只预热 128 次且未排空 finalizer，曾出现位置和值均漂移的数百到数千字节；不能归因为固定 per-call 成本，也不能用任意容忍量或挑最小样本掩盖。修复的是稳态准备，不是 0 B 断言。
 - 证据目录：`artifacts/parallel-zeroalloc-20261010/`。真实 S14 与全套回归必须覆盖最终集成状态，不能只接受相似原型。
 
