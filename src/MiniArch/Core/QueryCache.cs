@@ -94,7 +94,8 @@ internal sealed class QueryCache
     /// <summary>
     /// Returns the underlying chunk-view snapshot array and live count.
     /// The array length may exceed <paramref name="count"/>; consumers must bound by <paramref name="count"/>.
-    /// Used by the public <c>MiniArch.Query.ForEachChunkParallel</c> to avoid span capture in lambdas (zero-alloc per call).
+    /// Parallel iteration borrows this cached array without allocating a copy.
+    /// Consumers must not retain it across structural changes.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal ChunkView[] GetChunkViewArray(out int count)

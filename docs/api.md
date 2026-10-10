@@ -476,12 +476,12 @@ if (!fp.AsSpan().SequenceEqual(peerFp))
 
 ## IChunkForEach (zero-alloc chunk iteration)
 
-[`MiniArch`] Implement `OnChunk(ChunkView)` on a `struct`; the JIT specialises the call site, removing delegate allocations.
+[`MiniArch`] Implement `OnChunk(ChunkView)` on a `struct`; the JIT specialises the call site, removing delegate allocations. Parallel iteration also reuses its dispatch state: cached delegates and struct jobs allocate no library objects after warming the calling thread, job type, nesting depth, and capacities. First use, growth, exceptions, and allocations made by callbacks or their execution-context notifications are not covered.
 
 ```csharp
 var job = new MoveJob();
 query.ForEachChunk(ref job);         // sequential; zero alloc
-query.ForEachChunkParallel(job);     // parallel; struct captured per worker
+query.ForEachChunkParallel(job);     // parallel; workers share one by-value copy
 
 // Type declaration (after top-level statements)
 readonly struct MoveJob : IChunkForEach

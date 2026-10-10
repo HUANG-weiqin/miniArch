@@ -199,11 +199,11 @@ public readonly struct Query
     /// <see cref="IChunkForEach.OnChunk"/> call is devirtualised to the
     /// concrete <typeparamref name="TForEach"/> type.
     /// <para>
-    /// <typeparamref name="TForEach"/> is passed by value and captured into the
-    /// <c>Parallel.For</c> closure — all workers share the same captured copy.
-    /// Mutating struct fields from <see cref="IChunkForEach.OnChunk"/> is a
-    /// data race on the closure copy and the caller's original variable is never
-    /// updated. To produce visible results, write to external shared state (e.g.
+    /// <typeparamref name="TForEach"/> is passed by value; all callbacks in a
+    /// parallel call share one copy. Mutating struct fields from
+    /// <see cref="IChunkForEach.OnChunk"/> is a data race on that copy and the
+    /// caller's original variable is never updated. To produce visible results,
+    /// write to external shared state (e.g.
     /// <c>ConcurrentBag&lt;T&gt;</c>), thread-local storage with explicit merge,
     /// or a thread-safe collector.
     /// </para>
@@ -213,88 +213,7 @@ public readonly struct Query
         where TForEach : struct, IChunkForEach
     {
         var chunks = _query.GetChunkViewArray(out var count);
-        if (count == 0)
-            return;
-
-        var threads = Environment.ProcessorCount;
-        if (count >= threads)
-        {
-            Parallel.For(0, count, i => forEach.OnChunk(chunks[i]));
-            return;
-        }
-
-        var partitionArray = AcquirePartitionBuffer(threads, out var usesReusableBuffer);
-        try
-        {
-            var partitionCount = BuildEntityRangePartitions(chunks, count, threads, partitionArray);
-            if (partitionCount == 0)
-                return;
-            if (partitionCount == 1)
-            {
-                forEach.OnChunk(partitionArray[0]);
-                return;
-            }
-
-            Parallel.For(0, partitionCount, i => forEach.OnChunk(partitionArray[i]));
-        }
-        finally
-        {
-            if (usesReusableBuffer)
-                t_partitionBufferInUse = false;
-        }
-    }
-
-    // Splits chunks into N entity-range subviews when chunk count is below
-    // processor count, so Parallel.For still has enough independent units
-    // of work. Returns the live partition count written to the destination.
-    private static int BuildEntityRangePartitions(
-        ChunkView[] chunks, int count, int threads, ChunkView[] partitions)
-    {
-        var subPerChunk = Math.Max(1, threads / count);
-        var partitionCount = 0;
-        for (var i = 0; i < count; i++)
-        {
-            var entities = chunks[i].Count;
-            if (entities == 0) continue;
-            var per = entities / subPerChunk;
-            var rem = entities % subPerChunk;
-            var start = 0;
-            for (var j = 0; j < subPerChunk; j++)
-            {
-                var size = per + (j < rem ? 1 : 0);
-                if (size > 0)
-                    partitions[partitionCount++] = chunks[i].Slice(start, size);
-                start += size;
-            }
-        }
-
-        return partitionCount;
-    }
-
-    [ThreadStatic]
-    private static ChunkView[]? t_partitions;
-
-    [ThreadStatic]
-    private static bool t_partitionBufferInUse;
-
-    private static ChunkView[] AcquirePartitionBuffer(int minLength, out bool usesReusableBuffer)
-    {
-        if (t_partitionBufferInUse)
-        {
-            usesReusableBuffer = false;
-            return new ChunkView[minLength];
-        }
-
-        var partitions = t_partitions;
-        if (partitions is null || partitions.Length < minLength)
-        {
-            partitions = new ChunkView[minLength];
-            t_partitions = partitions;
-        }
-
-        t_partitionBufferInUse = true;
-        usesReusableBuffer = true;
-        return partitions;
+        ParallelQueryRunner.Run(chunks, count, forEach);
     }
 
     /// <summary>
@@ -329,11 +248,10 @@ public delegate void ChunkAction(ChunkView chunk);
 /// (useful for accumulators).
 /// </para>
 /// <para>
-/// <b>Parallel usage</b> (by-value parameter): the struct is captured by value
-/// into the <c>Parallel.For</c> closure — all workers share the same captured
-/// copy. Mutating fields from <see cref="OnChunk"/> is a data race on the
-/// closure copy and the caller&#39;s variable is never updated. To produce visible
-/// results, write to external shared state, thread-local storage with explicit
+/// <b>Parallel usage</b> (by-value parameter): all callbacks in one parallel
+/// call share a copy of the struct. Mutating fields from <see cref="OnChunk"/>
+/// is a data race on that copy and the caller&#39;s variable is never updated.
+/// To produce visible results, write to external shared state, thread-local storage with explicit
 /// merge, or a thread-safe collector.
 /// </para>
 /// </remarks>

@@ -52,7 +52,7 @@ readonly record struct Velocity(float X, float Y);
 - **CaptureState/RestoreState** — zero-alloc in-place rollback (GGPO-style at 60 fps); after warm-up a capture → simulate → restore → re-create cycle still allocates nothing, and the restored world's canonical content matches a never-rolled-back world. Capture rejects outstanding real-id reservations; after restore, `Clear()` discards an old recorded `CommandStream` frame before that stream is reused → [contract](docs/api.md#contract-commandstream-frames-across-capturestate-and-restorestate)
 - **WorldSnapshot** — binary world serialize/deserialize for replays and netcode; the canonical payload and `CanonicalChecksum()` describe non-empty archetypes only, so archetypes left empty by `Destroy` or by a rollback do not change the bytes (older v5 files that still contain them load, and re-saving normalizes them away)
 - **Flat entities** — `Destroy(Entity)` affects only that entity; `Clone(Entity)` copies only its components. Ordinary `Entity` references in components remain supported. [Hierarchy removal and migration →](.knowledge/kb-hierarchy-runtime.md)
-- **Parallel iteration** — `ForEachChunkParallel` with struct-generic `IChunkForEach` (zero-alloc, JIT-devirtualised)
+- **Parallel iteration** — `ForEachChunkParallel` with cached delegates or struct-generic `IChunkForEach` (allocation-free after warmup; struct calls are JIT-devirtualised)
 - **World diagnostics** — `WorldDiff.Compare()` for lockstep divergence pinpointing, `WorldValidator.Validate()` for structural integrity, `EntityDump.Describe()` for per-entity state, `WorldDigest.Compute()` for per-domain checksum narrowing (`MiniArch.Diagnostics` namespace)
 
   ```csharp

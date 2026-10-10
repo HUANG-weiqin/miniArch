@@ -64,16 +64,16 @@ public static class Program
             Console.WriteLine();
         }
 
-        Console.WriteLine($"{"Scenario",-22} | {"Engine",-10} | {"Ops/s",12} | {"Checksum",12} | {"GC Gen0/1/2",12}");
-        Console.WriteLine(new string('-', 85));
+        Console.WriteLine($"{"Scenario",-22} | {"Engine",-10} | {"Ops/s",12} | {"Checksum",12} | {"GC Gen0/1/2",12} | {"Allocated B",14}");
+        Console.WriteLine(new string('-', 102));
 
         foreach (var (name, mini, friflo, arch) in scenarios)
         {
-            using (var s = mini()) { var r = RunTimed(s); Console.WriteLine($"{name,-22} | {"MiniArch",-10} | {r.OpsPerSec,12:F1} | {r.Checksum,12} | {r.GcCollections,12}"); }
+            using (var s = mini()) { var r = RunTimed(s); Console.WriteLine($"{name,-22} | {"MiniArch",-10} | {r.OpsPerSec,12:F1} | {r.Checksum,12} | {r.GcCollections,12} | {r.AllocatedBytes,14}"); }
             GC.Collect(2, GCCollectionMode.Forced, true, true); GC.WaitForPendingFinalizers();
-            using (var s = friflo()) { var r = RunTimed(s); Console.WriteLine($"{name,-22} | {"Friflo",-10} | {r.OpsPerSec,12:F1} | {r.Checksum,12} | {r.GcCollections,12}"); }
+            using (var s = friflo()) { var r = RunTimed(s); Console.WriteLine($"{name,-22} | {"Friflo",-10} | {r.OpsPerSec,12:F1} | {r.Checksum,12} | {r.GcCollections,12} | {r.AllocatedBytes,14}"); }
             GC.Collect(2, GCCollectionMode.Forced, true, true); GC.WaitForPendingFinalizers();
-            using (var s = arch()) { var r = RunTimed(s); Console.WriteLine($"{name,-22} | {"Arch",-10} | {r.OpsPerSec,12:F1} | {r.Checksum,12} | {r.GcCollections,12}"); }
+            using (var s = arch()) { var r = RunTimed(s); Console.WriteLine($"{name,-22} | {"Arch",-10} | {r.OpsPerSec,12:F1} | {r.Checksum,12} | {r.GcCollections,12} | {r.AllocatedBytes,14}"); }
             GC.Collect(2, GCCollectionMode.Forced, true, true); GC.WaitForPendingFinalizers();
             Console.WriteLine();
         }
@@ -86,15 +86,18 @@ public static class Program
         while (sw.Elapsed.TotalSeconds < WarmupSeconds) scenario.RunIteration();
         GC.Collect(2, GCCollectionMode.Forced, true, true); GC.WaitForPendingFinalizers();
         int g0 = GC.CollectionCount(0), g1 = GC.CollectionCount(1), g2 = GC.CollectionCount(2);
+        var allocatedBefore = GC.GetTotalAllocatedBytes(precise: true);
         sw.Restart(); long iters = 0; long ck = 0;
         while (sw.Elapsed.TotalSeconds < MeasureSeconds) { ck += scenario.RunIteration(); iters++; }
+        sw.Stop();
+        var allocatedBytes = GC.GetTotalAllocatedBytes(precise: true) - allocatedBefore;
         int d0 = GC.CollectionCount(0) - g0, d1 = GC.CollectionCount(1) - g1, d2 = GC.CollectionCount(2) - g2;
-        return new ScenarioResult(iters / sw.Elapsed.TotalSeconds, ck, $"{d0}/{d1}/{d2}");
+        return new ScenarioResult(iters / sw.Elapsed.TotalSeconds, ck, $"{d0}/{d1}/{d2}", allocatedBytes);
     }
 }
 
 public interface IGameScenario : IDisposable { void Warmup(int n); long RunIteration(); }
-public readonly record struct ScenarioResult(double OpsPerSec, long Checksum, string GcCollections);
+public readonly record struct ScenarioResult(double OpsPerSec, long Checksum, string GcCollections, long AllocatedBytes);
 
 // ============================================================================
 // S1: BulletHell — 100K entities, pure iteration throughput
