@@ -44,6 +44,27 @@ updated: 2026-10-10
 
 **覆盖限制**：async Restore 回归没有人为阻塞 worker，不能声称强制覆盖了两个 worker 同时未完成；其数据隔离另由 frozen-state 静态调用链审查支持。多 host 引用 oracle 只对 host0 直接 Create 的自引用断言，不是任意引用图模型。async soak 的跨线程分配计量无效，不采信其分配数字（见 `kb-soak-test.md`）。
 
+### 重构前后交错 A/B（2026-10-10）
+
+**结论**：本轮重构后的端到端吞吐中位数高于重构前：Movement **+10.9%**、Attack **+10.7%**。但旧版波动较大，且不是全机无干扰窗口；这些是本次观察值，不是稳定收益保证，也不能归因于某一项 core 优化。
+
+- A：重构前 `a98f4d3`，独立干净工作树；B：runtime `393ca72`（运行时 HEAD `0a36151`，后续差异仅文档）。
+- 同机 AMD Ryzen 7 5700X3D（8 核 / 16 逻辑 CPU）、.NET SDK 8.0.425，22:01–22:08 Europe/Paris。两版先串行 Release build，再按 **A1 → B1 → B2 → A2 → A3 → B3** 各启动独立进程；运行命令为 `dotnet run -c Release --no-build --no-restore --project tools/perf/HeroComing.Perf/HeroComing.Perf.csproj --check-baseline`。
+- 每场景仍是 500 players + 500 enemies、100×100 grid、50 轮预热后测量 30 秒。计时包含请求生成、`StepUntilStable()` 和原有每 100 轮诊断输出，不含建世界、spawn 与预热。旧 hierarchy owner 查找到 `ActionOwner` 的业务迁移在比较范围内；B 新增数量/效果守卫在计时外。独立源码核对未发现迁移导致少处理角色或跳过效果的证据。
+
+| 配对编号 | A Movement | B Movement | A Attack | B Attack |
+|---|---:|---:|---:|---:|
+| 1 | 1884.0 | 2048.3 | 1086.0 | 1202.1 |
+| 2（B 先跑） | 2001.0 | 2089.9 | 1140.4 | 1184.8 |
+| 3 | 1588.8 | 2135.9 | 964.1 | 1214.5 |
+| 中位数 | **1884.0** | **2089.9** | **1086.0** | **1202.1** |
+
+单位均为 rounds/s；变化按 `median(B) / median(A) - 1` 计算。三对 Movement 差异分别 +8.7% / +4.4% / +34.4%，Attack +10.7% / +3.9% / +26.0%，可见幅度并不稳定。未剔除 A3 或选择性保留较快结果。
+
+**门槛与限制**：B 三次全部 exit 0；A1/A2 exit 0，A3 两项低于原阈值 1642/997、exit 1，因此批次控制脚本也返回 1，不称“六次门禁全过”。12 个场景的 memory 均 OK，无异常中断，baseline 未改。每次运行前后采样仍见 Godot、Chrome、claude 活动，A3 前另见 dotnet 活动；采样不是运行全程跟踪，也不覆盖无权限读取 CPU 的进程，无法证明 A3 掉速的具体原因或全机无干扰。
+
+原始日志、各次退出码/时间、前后 CPU 采样、构建日志、DLL SHA256、解析后的 `metrics.json` 与执行脚本保存在本地 `artifacts/flat-command-20261010/ab-2157/`。
+
 ### 历史复验快照（2026-08-06）
 
 下表仅记录当时 runtime tree 的结果，不是本轮 flat 迁移的最终验收；本轮结果须以对应工作树和参数的实际门禁输出为准。
