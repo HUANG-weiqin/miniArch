@@ -2,7 +2,7 @@
 title: Repository Overview
 module: Workspace
 description: How to navigate the repo and where to start
-updated: 2026-07-09
+updated: 2026-10-11
 ---
 # Repository Overview
 
@@ -47,6 +47,9 @@ dotnet test miniArch.sln -c Release --filter "Chunked_mode_*"
 # 回归门禁（架构变更后必跑）
 dotnet run -c Release --project tools/perf/HeroComing.Perf --check-baseline
 
+# 从已提交的版本生成本地 NuGet 包（默认输出 artifacts/nuget）
+dotnet pack src/MiniArch/MiniArch.csproj -c Release
+
 # 生成知识库新页面前先看模板
 # .knowledge/_template.md
 ```
@@ -64,5 +67,7 @@ dotnet run -c Release --project tools/perf/HeroComing.Perf --check-baseline
 
 - 知识页改名后必须同步更新 `INDEX.md`
 - 脚本命令变化后必须同步更新 README
+- 包版本以 `src/MiniArch/MiniArch.csproj` 的 `VersionPrefix` 为单一来源，发布时同步 `CHANGELOG.md`；删除公共 API 属于 major 升级。
+- 本地包目录 `artifacts/nuget` 可直接注册为 folder feed。只打包不等于已验证消费：用独立 `PackageReference` 工程还原并运行 smoke，避免复用同版本旧缓存；包对应的 `v<version>` tag 必须指向已提交且经过验证的发布提交。本地发布不隐含远端 push。
 - 新增共享基础设施后，必须同步更新对应的知识页路径
 - World 和 Archetype 现在是 partial 类，修改时注意 partial 文件的编译范围
