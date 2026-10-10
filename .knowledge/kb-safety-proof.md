@@ -40,6 +40,8 @@ updated: 2026-10-10
 
 **性能证据限制**：团队 build/test/perf 已串行，外部 7 个 Python 高负载进程及两个 Godot 进程仍在运行，未取得全机干净窗口。同环境原始 `a98f4d3` 对照为 Movement 1771.9 / Attack 945.9，exit 1（Attack 未达阈值）。本轮只报告最终版的门槛检查通过，不据单轮有干扰数据声称性能提升、精确回退幅度或发布新 baseline。
 
+**同 runtime 追加复测（2026-10-10）**：再次运行 Release `HeroComing.Perf --check-baseline`，Movement **1974.4 rounds/s（0.506 ms/round）**、Attack **1236.9 rounds/s（0.808 ms/round）**，两项均过原阈值，memory OK，exit 0，未更新 baseline。日志：`artifacts/flat-command-20261010/perf-repeat-20261010-2124.log`。前后 CPU 采样未再见先前的满核 Python 负载，但 Godot 仍活跃；代码未变，不把相对前次的数值回升解释为代码提速。
+
 **覆盖限制**：async Restore 回归没有人为阻塞 worker，不能声称强制覆盖了两个 worker 同时未完成；其数据隔离另由 frozen-state 静态调用链审查支持。多 host 引用 oracle 只对 host0 直接 Create 的自引用断言，不是任意引用图模型。async soak 的跨线程分配计量无效，不采信其分配数字（见 `kb-soak-test.md`）。
 
 ### 历史复验快照（2026-08-06）
