@@ -2,21 +2,38 @@
 title: 跨 ECS 性能对比
 module: MiniArch.Benchmarks
 description: 版本化记录 MiniArch 与 Friflo、Arch、DefaultEcs 的场景测量；区分当前结果、历史数据与可比性限制
-updated: 2026-10-10
+updated: 2026-10-11
 ---
 # 跨 ECS 性能对比
 
 ## 这个模块是干什么的
 
 - 记录同一 harness、同一场景内的跨库测量，不把不同工具或日期的数据混算。
-- 当前 Friflo 复测显示各有强项，不能概括 MiniArch 全面领先。以下单轮数据不是稳定收益保证，也不是重构前后 A/B。
+- 各库各有强项，不能概括 MiniArch 全面领先。先列并行零分配修复后的 S14，再保留修复前完整一轮；这些单轮数据不是稳定收益保证，也不是受控 A/B。
 - `HeroComing.Perf` 是单库架构门禁，不是跨库比较；其结果见 `kb-hero-pipeline-regression.md`、`kb-safety-proof.md`。
 
 ## 架构
 
-### 当前 FrifloGameScenarios 复测（2026-10-10）
+### 并行零分配修复后的 S14（2026-10-10）
 
-- 入口：`tools/perf/FrifloGameScenarios.Perf`；MiniArch runtime `393ca72`（测量 HEAD `2e342c8`，后续仅文档），Friflo **3.6.0**、Arch **2.1.0**，不是对竞品最新版本的声明。
+- MiniArch 实现提交 `eed7b02`；实际运行原 `MiniParallelBulletHell` / Friflo / Arch 场景，不是相似探针。保持每库构造在外、10 秒预热、10 秒计时、MiniArch → Friflo → Arch 顺序及既有包版本。
+- harness 新增 `GC.GetTotalAllocatedBytes(true)` 计时窗前后差值；计时停止后取计数，输出/结果字符串在度量外。下面是原始全线程总字节，没有减控制组或四舍五入成 0。
+
+| 引擎 | 轮/s | GC Gen0/1/2 | 测量窗分配 B |
+|---|---:|---|---:|
+| MiniArch（修复后） | 26384.7 | 0/0/0 | 0 |
+| Friflo 3.6.0 | 9482.8 | 0/0/0 | 0 |
+| Arch 2.1.0 | 32002.2 | 28/0/0 | 1435565192 |
+
+**边界**：这里验证了 MiniArch 真正 S14 的稳态零分配；不是吞吐提速声明。此前单轮 MiniArch 为 30132.9 轮/s，本轮低约 12.4%；Friflo 本轮也明显低于此前。时间窗口不同，前后 750ms 采样仍见 node、Chrome、claude 等活动，没有全程无干扰证明；不可把这两轮直接当作稳定回归/收益或跨库排名。分区策略仍不同，见下方“决策”。
+
+**最终门禁**：Release solution build 0 warnings/errors；MiniArch.Tests 1115/1115、HeroPipeline.Tests 7/7，无 skip；单 CPU 的并行 focused 39/39；HeroComing check-baseline Movement 2104.4 / Attack 1107.2 轮/s、memory OK、exit 0，阈值及 baseline 未改。机制、初始化排除项与独立 10K/20K 字节探针见 `kb-parallel-query.md`。
+
+**证据**：23:50:28–23:53:13 Europe/Paris，`artifacts/parallel-zeroalloc-20261010/final/` 的 `s14.log`、`tests*.log`、`hero.log`、`exits.log`、环境及前后 CPU 日志。实际 S14 的 build/run 与 Hero 均显式 `-c Release`，完整运行 exit 0。
+
+### 修复前完整 FrifloGameScenarios 复测（2026-10-10）
+
+- 入口：`tools/perf/FrifloGameScenarios.Perf`；MiniArch runtime `393ca72`（测量 HEAD `2e342c8`，本组数据记录提交 `c37adb0`），Friflo **3.6.0**、Arch **2.1.0**，不是对竞品最新版本的声明。
 - AMD Ryzen 7 5700X3D（8 核 / 16 逻辑 CPU）、.NET SDK 8.0.425。Release build 0 warnings / 0 errors；默认完整一轮 **15 场景 × 3 库**，45 项齐全，结束标记存在、exit 0，无运行异常。
 - 每个实例先构造，再预热 10 秒、强制 GC，随后测量 10 秒 `RunIteration()`；各场景固定 **MiniArch → Friflo → Arch**，库间强制 GC。不是随机顺序或多轮统计；构造成本不在吞吐内。
 
@@ -109,7 +126,7 @@ MiniArch 全程堆内存 delta <4KB，零 GC；Arch 在 5.12M ops 时堆内存�
 ## 认知模型
 
 - 计时循环累计的 checksum 随迭代次数变化，不能直接比较跨库相等性；它不是功能正确性 oracle。
-- `GC Gen0/1/2` 是收集次数，不是分配字节数。尤其不能把 `0/0/0` 转写成“零分配”。
+- `GC Gen0/1/2` 是收集次数，不是分配字节数。尤其不能把 `0/0/0` 转写成“零分配”；新 `Allocated B` 列才是整个测量窗口的全进程分配差值。
 - 场景名是负载标签；不同场景一轮的工作量不同，不能相加吞吐量生成“总分”，也不与 Hero 的 rounds/s 混比。
 
 ## 入口

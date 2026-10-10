@@ -2,12 +2,19 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-10-10
+updated: 2026-10-11
 ---
 # Knowledge Base Changelog
 
 > 这个页面只记录**重大架构变更和知识库校准事件**，供追溯。
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
+
+## 2026-10-10 并行查询零分配校准
+
+- 修复 `ForEachChunkParallel` 缓存 callback / struct 后仍有 closure 和 TPL 分发分配的问题；自然 owner 改为复用原生 ThreadPool 工作项的 `ParallelQueryRunner`，不新增公共 Job API。
+- 统一 nested 的 0-worker 执行链，明确最后完成通知结束后才归还 lease；保留同步完成、异常后复用、ExecutionContext 与单 CPU 路由语义。
+- 纠正“缓存 delegate 即整条并行路径零分配”“单 chunk 无并行空间”等旧知识。稳态边界、所有权与回归入口见 `kb-parallel-query.md`；真实 S14 分配字节及比较限制见 `kb-ecs-comparison.md`。
+- Friflo 场景工具新增全进程 `Allocated B` 列，不再只凭 GC 次数判断分配。测量负载、依赖版本和 Hero baseline 未改。
 
 ## 2026-10-10 扁平实体、命令时间线与分配器状态收敛
 

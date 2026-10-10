@@ -1,240 +1,126 @@
 ---
 title: 并行 Query 迭代
 module: MiniArch.Core Query
-description: ChunkView 作为并行工作单元的并行 query 迭代 API、安全模型、性能特征
-updated: 2026-07-22
+description: ChunkView 并行迭代的零分配边界、调用状态所有权、同步完成与嵌套安全模型
+updated: 2026-10-11
 ---
 # 并行 Query 迭代
 
 ## 这个模块是干什么的
 
-- 这个模块负责：
-  - 把 query 匹配到的 `ChunkView` 数组切片分给多个线程并行处理
-  - 提供安全的"只读 + 组件值写入"并行入口（`ForEachChunkParallel`）
-  - 提供对照的单线程版本（`ForEachChunk`）作为基准和零分配快速路径
-- 这个模块不负责：
-  - System 调度（YAGNI，用户自己组织调用顺序）
-  - Job 依赖链 / JobHandle（`Parallel.For` 已经够用）
-  - 自动 Read/Write 冲突检测（Arch/Friflo 都没做，证明不痛）
-  - 并行结构变更（Add/Remove/Create/Destroy 仍走主线程 `CommandStream`）
+- `ForEachChunkParallel` 同步完成一批不相交的组件行工作；正常调用使用 .NET ThreadPool，调用线程也参与。
+- **稳态零分配**：缓存 `ChunkAction` 与 struct `IChunkForEach` 两条路径均复用库内分发状态。前提是调用线程、job 类型、嵌套深度、分区/worker 容量及运行时线程池已预热，回调自身不分配。
+- 首次使用、容量增长、异常，以及用户回调或其 `ExecutionContext` 变更通知的分配不在上述承诺内。
+- 不负责 System 调度、JobHandle/依赖图、自动读写冲突检测或并行结构变更；不新增公共 Job API，也不自建永久线程池。
 
 ## 架构
 
-### 核心思路
+### 单一入口与调用状态
 
-```
-Query.GetChunkViewArray()  →  ChunkView[0]  ChunkView[1]  ...  ChunkView[N-1]
-                                │              │                   │
-                                ▼              ▼                   ▼
-                            Thread 0       Thread 1            Thread N-1
-                                │              │                   │
-                                ▼              ▼                   ▼
-                          chunk.GetSpan<T>() 返回不相交的 Span<T>
-                          用户在 action 体内自由读写组件值
-```
-
-- **并行粒度**：ChunkView（一个 archetype 的一段，或非分段模式下整个 archetype）
-- **不相交保证**：不同 ChunkView 引用不同 `byte[]`（分段模式）或同 `byte[]` 不同列偏移范围（非分段模式）—— 两者都是不相交内存区域，并发写安全
-- **同实体不被两个线程处理**：`Parallel.For` 按 chunk 索引分区，一个 chunk 只给一个线程
-
-### API
-
-在 `public readonly struct MiniArch.Query`（`src/MiniArch/Query.cs`）上：
-
-```csharp
-public delegate void ChunkAction(ChunkView chunk);
-
-// Delegate-based（缓存 delegate 时零分配）：
-public void ForEachChunk(ChunkAction action);          // 顺序迭代
-public void ForEachChunkParallel(ChunkAction action);  // 并行迭代，组件值读写安全
-
-// IChunkForEach-based（消除 job delegate 分配 + JIT 特化去虚化）：
-public interface IChunkForEach {
-    void OnChunk(ChunkView chunk);
-}
-public void ForEachChunk<TForEach>(ref TForEach forEach)
-    where TForEach : IChunkForEach;            // 顺序；ref 支持有状态 job
-public void ForEachChunkParallel<TForEach>(TForEach forEach)
-    where TForEach : IChunkForEach;            // 并行；struct 被捕获进 Parallel.For 委托，所有 worker 共享同一实例
+```text
+Query.ForEachChunkParallel(ChunkAction)
+    → ActionChunkForEach adapter
+    → ForEachChunkParallel<TForEach>
+    → ParallelQueryRunner.Run
+    → borrow query views / build entity-range views
+    → lease state, capture context, queue reusable work items
+    → caller + workers consume disjoint partitions
+    → join and acknowledge final notification
+    → clear borrowed references and release state
 ```
 
-实现侧的关键决策：
-- `ForEachChunk` 直接对 `_query.GetChunkViewSpan()` 跑 `for` 循环，没有跨 lambda 分配。
-- `ForEachChunkParallel` 用 `_query.GetChunkViewArray(out var count)`（新增内部 API）拿到 underlying `ChunkView[]` 数组+count，因为 `ReadOnlySpan<T>` 无法被 lambda 捕获。
-- 并行入口：`Parallel.For(0, count, i => action(chunks[i]))`。
-- 共享 `BuildEntityRangePartitions` helper 处理"chunk 数 < 线程数"时的 entity 子区间拆分（delegate 和 IChunkForEach 路径共用）。
-- 分区数组在普通路径复用 ThreadStatic buffer；调用期间持有 lease。同一线程的 callback 若嵌套另一个 `ForEachChunkParallel`，内层使用独立 fallback buffer，避免覆写外层 `Parallel.For` 尚在读取的分区；`finally` 保证异常后释放 lease。
+- `Query.cs` 只负责公共入口与 delegate adapter；`ParallelQueryRunner.cs` 是唯一分区、分发及 lease owner。
+- `Core.Query.GetChunkViewArray(out count)` 返回缓存数组及有效长度；不能把数组容量当作 live count，也不能清空借来的数组。
+- 状态按**调用线程 + job 类型**缓存。同线程同类型重入租用链中的下一个空闲状态；不同调用不共用活动分区、job 或完成信号。
+- 直接 chunk 路由只借用 query 数组；实体子区间路由使用状态自己拥有的 split buffer。归还时清空 owned split views、job/delegate、context、异常引用，并断开 borrowed array 引用；缓存不能长期保活上一轮 World。
 
-### 典型用法
+### 分区与工作线程
 
-```csharp
-// 1. 纯值更新（最常见）
-var desc = new QueryDescription().With<Position>().With<Velocity>();
-var query = world.Query(in desc);
+- 匹配 chunk 数不少于处理器数时，每个 chunk 是一个工作单元。
+- chunk 较少时，沿各 chunk 的实体区间切成不重叠子视图，因此**单 archetype / 单 chunk 也能并行**。
+- caller 保留第 0 分区；其余分区通过共享递增索引领取，每行只属于一个分区。
+- 工作项是可复用的 `IThreadPoolWorkItem`，交给原生 ThreadPool；worker 数受分区、处理器和可用线程池容量约束。并行度与回调顺序不作固定保证。
+- callback 内嵌套的已建 query 使用 **0-worker 路由**，仍走同一准备、执行、上下文恢复及清理流程，避免线程池 worker 全部等待自己排入的内层工作。内层不保证另起并行。
 
-static void Move(ChunkView chunk)
-{
-    var positions = chunk.GetSpan<Position>();
-    var velocities = chunk.GetSpan<Velocity>();
-    for (var i = 0; i < positions.Length; i++)
-        positions[i] = new Position(positions[i].X + velocities[i].X,
-                                    positions[i].Y + velocities[i].Y);
-}
+### 完成边界
 
-query.ForEachChunkParallel(Move);  // 缓存 Move 避免每帧 lambda 分配
+- 成功或异常退出前，必须等所有已提交 worker 完成回调，不允许调用方已开始结构变更而旧 worker 仍在访问 World。
+- `_pending == 0` 或 `ManualResetEventSlim.IsSet` 都不足以许可状态复用：`Set()` 内部会先发布 `IsSet`，再完成通知。
+- 最后一个 worker 在 `Set()` 返回后发布尾部 acknowledgement。caller 看到它后才能清理状态、下次 `Reset()` 或归还 lease。
+- 部分提交失败也要等待已经提交的 worker；等待中的 `ThreadInterruptedException` 先记录，完成 join 后再传播。
+- 回调失败可停止尚未开始的分区；已完成的组件写入不回滚，不承诺事务。
 
-// 2. 需要结构变更：并行收集 → 主线程提交
-var toDestroy = new ConcurrentBag<Entity>();
-query.ForEachChunkParallel(static chunk =>
-{
-    var healths = chunk.GetSpan<Health>();
-    var entities = chunk.GetEntities();
-    for (var i = 0; i < chunk.Count; i++)
-        if (healths[i].Value <= 0)
-            toDestroy.Add(entities[i]);
-});
+### 上下文与值语义
 
-using var cs = new CommandStream(world);
-foreach (var e in toDestroy)
-    cs.Destroy(e);
-cs.Submit();
-```
+- 正常 flow 下，多分区执行用 `ExecutionContext.Capture()` 与缓存的 `ContextCallback`，caller 和 worker 都经 `ExecutionContext.Run()`；保留 `AsyncLocal` / culture 的流动及修改后的恢复。不会为此每轮构造 closure。
+- 调用方显式 `ExecutionContext.SuppressFlow()` 时，Capture 为 null，不向 workers 流动上下文；caller 上执行的 callback 修改可留在调用方。这与旧 TPL 的可达行为一致，不新增“抑制 flow 仍保证 caller 隔离”的承诺。成功/异常及 CPU1 的对照证据在 `baseline/suppress-flow/`，见缺陷索引的非 bug 条目。
+- 保留原路由边界：仅“chunk 少于处理器数、拆分后恰好一分区”的快路直接调用，异常及 ambient 修改直接传播。`count >= processorCount` 路由仍聚合异常，并在正常 flow 下隔离上下文；这也包括单 CPU 上的一个 chunk。
+- 并行 struct 参数按值传入，但**同一次调用中的所有 callback 共享这一份副本**，不是每个 worker 一份。并发修改其字段需外部同步；调用方原变量不回写。
+- 不承诺沿用旧 TPL 的 `TaskScheduler.Current`、Task identity 等实现细节。
 
 ## 决策
 
-### 为什么选 ChunkView 作为并行单元（而不是 entity）
+- 原 `Parallel.For` 每次调用创建内部调度对象；外部缓存 delegate 或换成 struct job，都不能消除这些对象。捕获 lambda 还使空查询/单分区提前返回时分配约 40 B。
+- 因此不在各调用方加缓存补丁：在同步并行入口的自然 owner 替换分发机制，使用平台工作项能力并复用本次调用状态。
+- 不改存储、query matching、公开签名及顺序 `ForEachChunk`；不为这个问题引入新线程池、依赖链或公共调度器。
+- nested 只是 workerCount 为 0 的同一执行流程，不另建一套 runner、异常处理或上下文模型。
+- 保留 delegate 的便利性与 struct 的 JIT 特化；typed entity/ref Query 的独立设计取舍见 [设计理由](kb-design-rationale.md)。
 
-- Archetype 的存储就是按 chunk 组织的，`GetChunkViewSpan()` 已存在，零新基础设施
-- 按 chunk 分区天然保证同一 entity 不会被两个线程处理
-- 按 entity 分区需要额外的 entity→thread 映射，违反 YAGNI
+## 认知模型
 
-### 为什么用 `Parallel.For` 而不是自定义线程池
+把它看成一次**借用稳定视图的同步批处理**，而不是后台 Job 生命周期：
 
-- `Parallel.For` 是 .NET 内置，零依赖
-- 自定义线程池（如 Arch 的 `ZeroAllocJobScheduler`）是另一个子系统的工程量
-- 实测在 chunk 数 ≥ 核心数时性能足够好
-- 如果未来 profiling 显示 `Parallel.For` 的 partitioner 开销大，再换——先证明收益再优化
+1. 调用方预先创建 query，保证执行期间无结构变更。
+2. 一次调用租用独立状态；它可以被多个线程读写，但不能同时属于下一次调用。
+3. 组件数据归 World，视图只是借用；分区、完成信号及 callback 副本归本次调用。
+4. 最后一次通知真正结束，才允许释放借用、清理引用和复用状态。
 
-### 为什么提供两套 API（delegate + IChunkForEach）
+### 公共用法
 
-- **delegate 路径**：保留是为了简洁。`Move` 是 static method 时 `query.ForEachChunkParallel(Move)` 编译器生成 static delegate，零分配。适合一次性脚本/原型。
-- **IChunkForEach 路径**：解决 inline lambda 不缓存场景的隐藏分配。用户每帧写：
-  ```csharp
-  query.ForEachChunk(chunk => { /* ... */ });  // ← 每次 call 都 new Delegate
-  ```
-  换成 struct + interface 后 JIT 跨泛型特化，零分配 + 内层调用去虚化。
-- **设计取舍**：没有像 Arch/Friflo 那样提供 `IForEach<T1,T2>` typed span 接口。ChunkView 内部的 `GetSpan<T>()` 已经只做 1 次 colIdx 查找 + 1 次 IsChunked 分支（每 chunk 而非每 entity），typed 接口能省的常数有限。2026-07-09 已验证 typed entity ref loop / `IForEach<T1,T2,...>` 方向：query-pressure 三方对比没有达到比 Arch/Friflo 最优写法高 ≥10% 的公共 API 门槛，详见 `kb-design-rationale.md` §3.12。
-- **顺序 vs 并行的参数模式**：顺序用 `ref TForEach`（job 字段跨 chunk 可见，支持 accumulator）；并行用 by-value `TForEach`（struct 被值捕获进 `Parallel.For` 闭包——所有 worker 共享同一 captured copy。在 `OnChunk` 中 mutate struct 字段对闭包 copy 构成 data race，且调用方变量不会被更新。要产生可见结果，应写到外部共享引用状态、线程本地状态并显式合并，或使用线程安全 collector。并行不能用 `in`/`ref`，因为 `Parallel.For` 的 lambda 无法捕获 ref-like 参数）。
+```csharp
+ChunkAction move = Move;
+query.ForEachChunkParallel(move);     // Reuse the delegate across frames.
 
-### 历史：为什么用 delegate 起步
+var job = new MoveJob();
+query.ForEachChunkParallel(job);      // One shared by-value copy per call.
+query.ForEachChunk(ref job);          // Sequential; field changes reach the caller.
+```
 
-- Arch 走 `IForEach` struct 是为了 JIT 内联，避开虚方法调度
-- 但 MiniArch 的 chunk API 让用户自己写内层 `for` 循环（遍历 `Span<T>`），delegate 调用只发生在外层（每 chunk 一次），不是热路径
-- IForEach 模式要求用户为每种组件组合定义 struct，API 复杂度高
-- **2026-06-30 落地**：profiling 在 inline-lambda-不缓存的真实使用模式下显示 delegate 分配是 GC 噪声来源，加 `IChunkForEach` 路径消除该路径上的全部分配
+使用 chunk 的 span 在内部循环中访问组件。若要累计结果，使用调用方拥有的线程安全 collector 或不冲突的输出区域；collector 的分配不是库内零分配的一部分。
 
-### 为什么 `ForEachChunkParallel` 内部用 `GetChunkViewArray` 而不是 `GetChunkViewSpan`
+### 安全边界
 
-- C# 限制：`ReadOnlySpan<T>`（ref struct）无法被 lambda 捕获
-- `Core.Query` 已持有 `ChunkView[] _snapshotChunkViews`，新增 `GetChunkViewArray(out int count)` 直接返回该数组+有效长度，零分配
-- 用户文档仍然只看到 `Query.ForEachChunkParallel` 公共 API
-
-### 为什么不做并行结构变更
-
-- 结构变更涉及 swap-remove + `_records` 写入 + archetype 迁移，多线程同时做这个需要锁或 CAS，复杂度爆炸
-- Arch 也不支持（明确文档警告）
-- Friflo 用 `CommandBuffer.Synced` 支持，但文档自己说"通常比单线程慢"（CPU cache 跨核争用）
-- **替代方案**：并行收集要变更的 entity id → 主线程走 `CommandStream` 批量提交。这才是真实游戏的正确模式
-
-### 为什么不做 Read/Write 注解
-
-- Unity ECS / Bevy 有 `[ReadOnly]` / `[WriteOnly]` + 自动依赖图
-- Arch 和 Friflo 都没做——证明在 C# ECS 圈子这个痛度不够
-- 用户自己保证不写冲突（同 entity 同组件不会被两个 chunk 同时处理，所以天然安全）
-
-## 安全模型
-
-### 允许在 `ForEachChunkParallel` 体内做的事
-
-| 操作 | 安全性 | 说明 |
-|---|---|---|
-| `chunk.GetSpan<T>()` 读 | ✅ 安全 | 不同 chunk 的 span 不相交 |
-| `chunk.GetSpan<T>()` 写 | ✅ 安全 | 同上，且同 entity 只在一个 chunk 内 |
-| `chunk.GetEntities()` 读 | ✅ 安全 | 只读 |
-| `chunk.TryGetComponentIndex<T>()` | ✅ 安全 | 只读 archetype 元数据 |
-| 收集 entity id 到线程安全容器 | ✅ 安全 | `ConcurrentBag<T>` 等 |
-| 嵌套已创建的并行 query | ⚠️ 条件安全 | 实现保证分区 buffer 不互相覆写；调用方仍须保证内外 query 不并发写同一组件行，且不得在 callback 内创建 query cache 或做结构变更 |
-
-### 禁止在 `ForEachChunkParallel` 体内做的事
-
-| 操作 | 后果 | 替代方案 |
-|---|---|---|
-| `world.Add/Set/Remove/Create/Destroy` | 数据竞争 + 可能崩（swap-remove 改变其他 chunk 引用） | 收集 entity id，结束后走 `CommandStream` |
-| `world.Get/GetRef/TryGet` | 安全但每次查 `_records[]` 有 false sharing 风险 | 用 `chunk.GetSpan<T>()` 代替 |
-| 修改 `QueryDescription` 或新建 query | 死锁或数据不一致 | 在并行前完成所有 query 创建 |
-
-### 实现侧的保证
-
-- `ForEachChunkParallel` 调用 `GetChunkViewArray()` 时会触发 `EnsureRefreshed()`——必须在并行开始前完成
-- 并行期间不递增 `_flatEntitiesGeneration`（前提：用户不违规做结构变更）
-- `ChunkView` 是 `readonly struct`，不可变，多个线程持有同一引用安全
-- ThreadStatic 分区 buffer 只允许一个活动调用复用；同线程重入使用独立数组，因此外层 worker 始终读取稳定的 `ChunkView` 值
-
-## 性能特征（实测，4 核 8 线程 i5-1135G7）
-
-工作负载：`Position += Velocity`（16 bytes/entity），单 archetype。
-
-| 实体数 | ForEachChunk (顺序) | ForEachChunkParallel | 加速比 | 说明 |
-|---|---|---|---|---|
-| 10K | 56 us | 77 us | 0.73x | 单 chunk，并行退化 |
-| 50K | 127 us | 96 us | 1.33x | 多 segment，开始有收益 |
-| 100K | 258 us | 284 us | 0.91x | 单 segment（100K < SegmentEntityCapacity=131072），并行退化 |
-
-**关键观察**：
-
-- **加速依赖 chunk 数 ≥ 核心数**。Position+Velocity（16 bytes/entity）的 `SegmentEntityCapacity = 131072`，所以 100K 实体在单 archetype 下只占 1 个 segment = 1 个 chunk = 没有并行空间。
-- **memory-bound 工作负载收益小**：`Position += Velocity` 是纯顺序读写，单核就能跑满内存带宽。计算密集或随机访问模式才能从并行获益。
-- **Arch 对照**：在同样工作负载下 Arch 的并行版本比顺序还慢（chunk 数少 + `Parallel.For` 开销 + GC 压力），MiniArch 的 `ForEachChunkParallel` 不输 Arch。
-
-### 何时并行有收益
-
-- ✅ 实体数 >> `SegmentEntityCapacity / componentSizeBytes`（多个 segment）
-- ✅ 多 archetype 匹配（每个 archetype 至少一个 chunk）
-- ✅ 每 chunk 工作量大（例如复杂计算、非线性内存访问）
-- ❌ 单 archetype + 实体数 < `SegmentEntityCapacity`（只有 1 chunk）
-- ❌ 工作负载是纯顺序 memory streaming（单核已饱和带宽）
-
-### 如何验证并行实际启动
-
-参考 `tests/MiniArch.Tests/Core/ParallelQueryTests.cs::ForEachChunkParallel_may_use_multiple_threads`——通过 chunked 模式强制生成 16+ segments，观察 `Environment.CurrentManagedThreadId` 出现多个不同值。
+- 可读写本分区 `chunk.GetSpan<T>()`，可读 entities/span 与 archetype 元数据。
+- 不相交分区只保证这一轮按分区访问不冲突；任意实体访问、外部共享状态或内外 query 重叠写入仍需调用方协调。
+- 不得并发 `Add/Remove/Create/Destroy/Clone/Restore` 等结构变更，也不得在 worker 中首次创建 query cache。预建内层 query 后可以嵌套读取。
+- 结构命令先收集到线程安全的调用方存储，等本调用返回后再由主线程录入/提交 `CommandStream`；不要让 workers 共写一个 stream。
 
 ## 入口
 
-- **API 实现**：`src/MiniArch/Query.cs` 的 `ForEachChunk` / `ForEachChunkParallel` / `ChunkAction`
-- **底层 chunk 数组访问**：`src/MiniArch/Core/QueryCache.cs:GetChunkViewArray()`（新增，给并行入口用）
-- **chunk 视图来源**：`src/MiniArch/Core/QueryCache.cs:GetChunkViewSpan()` 和 `EnsureRefreshed()`
-- **不相交内存保证依据**：`src/MiniArch/Core/ChunkView.cs:GetSpan<T>()` + `kb-chunk-storage.md`
-- **正确性/竞态测试**：`tests/MiniArch.Tests/Core/ParallelQueryTests.cs`
-- **vs Arch 对比 benchmark**：`tests/MiniArch.Benchmarks/ParallelQueryBenchmarks.cs`
+- 公共入口与 adapter：`src/MiniArch/Query.cs`。
+- 调用状态与分发：`src/MiniArch/ParallelQueryRunner.cs`。
+- 缓存视图：`src/MiniArch/Core/QueryCache.cs`。
+- 区间与 span：[chunk storage](kb-chunk-storage.md)、`src/MiniArch/Core/ChunkView.cs`。
+- 原有覆盖：`tests/MiniArch.Tests/Core/ParallelQueryTests.cs`，包括每行覆盖、组件写入和同线程嵌套不覆写的历史 witness。
+- 零分配及生命周期：`tests/MiniArch.Tests/Core/ParallelQueryAllocationTests.cs`，包括跨线程字节、跨 T nested、异常后复用、并发调用、满 max1/max2 pool root、共享 struct copy、EC 读写恢复及弱引用回收。
+- 真正的 S14：`dotnet run -c Release --project tools/perf/FrifloGameScenarios.Perf -- S14`；比较数字及限制集中在 [ECS 对比](kb-ecs-comparison.md)。
+- 缺陷索引：[代码审阅发现](kb-code-review-findings.md)。
+
+## 验证口径
+
+- 并行工作必须量 `GC.GetTotalAllocatedBytes(true)`，只量调用线程会漏 worker 分配；0 次 GC 也不能证明 0 B。
+- 2026-10-10 原实现独立探针：100K 同形 S14 每次约 3.8–4.3 KB 全线程分配；顺序 caller 为 0 B。根因是 closure/TPL，不是 S14 已缓存的 callback。
+- 修复后的公开入口独立探针覆盖默认及 `AsyncLocal=42` / `fr-FR`，cached delegate 与 struct 各 10K/20K 次；所有窗口 caller 和全线程均为原始 0 B。单 CPU 的公开路径 10K 次也为 0 B，未扣除控制组常数。
+- 单元分配回归预热 4096 次，再 `Collect → WaitForPendingFinalizers → Collect → WaitForPendingFinalizers`；度量区不输出、不构造 delegate、不做断言，最后严格断言总字节为 0。
+- 历史短窗只预热 128 次且未排空 finalizer，曾出现位置和值均漂移的数百到数千字节；不能归因为固定 per-call 成本，也不能用任意容忍量或挑最小样本掩盖。修复的是稳态准备，不是 0 B 断言。
+- 证据目录：`artifacts/parallel-zeroalloc-20261010/`。真实 S14 与全套回归必须覆盖最终集成状态，不能只接受相似原型。
 
 ## 坑点
 
-- **历史上容易出问题的地方**：
-  - 试图把 `ReadOnlySpan<ChunkView>` 直接捕获进 `Parallel.For` 的 lambda——C# 不允许 ref struct 跨 lambda 边界，必须用 underlying `ChunkView[]`
-  - 误以为"50K 实体一定能 4x 加速"——chunk 数决定并行度，单 archetype + 单 segment 时无并行空间
-  - 用 ThreadStatic 数组作跨 callback 生命周期的 scratch 却不标记占用——同线程重入会覆写外层仍在消费的分区；必须 lease + `finally`，或为重入调用提供独立存储
-- **容易误判的地方**：
-  - "并行一定比单线程快" —— chunk 数少或每 chunk 工作量小时并行开销可能超过收益
-  - "delegate 一定有分配" —— 缓存后零分配（实测 `ForEachChunk` 仅 134 B 来自 `Parallel.For` 的固定开销，用户缓存的 static delegate 本身零分配）
-  - "并行期间能 Add 组件" —— 错，结构变更必须延迟到并行结束后，否则 swap-remove 会破坏其他 chunk 引用
-
-## 不做的事（明确排除）
-
-| 能力 | 理由 |
-|---|---|
-| System 调度器 | YAGNI，用户自己组织 5 行代码 |
-| `IJob` / `JobHandle` 依赖链 | `Parallel.For` 足够；自定义线程池是另一个项目 |
-| 自动 Read/Write 冲突检测 | Arch/Friflo 都没做，痛度不够 |
-| 并行结构变更 | 复杂度爆炸，收益为负（cache 争用） |
-| `IForEach<T1,T2,...>` typed span / typed ref Query 接口 | 已做 2026-07-09 query-pressure 三方对比；MiniArch typed-ref 未比 Arch/Friflo 最优写法高 ≥10%，公共 API 复杂度不值得。详见 `kb-design-rationale.md` §3.12 |
-| SIMD query 匹配 | query 匹配已经用 512-bit mask，瓶颈不在这 |
+- 缓存 delegate / 使用 struct 只消除其自身的包装分配，不能推导底层调度也零分配。
+- 匹配了空 archetype 不等于没有匹配 view：原 `count >= processorCount` 路由会回调空 view，本次保留；不要随意统一成零回调。
+- ThreadStatic 只隔离线程，不自动隔离同线程重入；活动状态必须持有 lease。
+- 完成计数、唤醒等待者、许可复用是三个观察时点；不要用早期 `IsSet` 替代最后一个时点。
+- pooled state 必须清引用，但不得清空借来的 QueryCache 数组。
+- 并行不一定更快：小工作量、内存带宽饱和或线程池容量受限时，顺序可能更合适。用相同负载的 Release 测量，不按实体数直接推算加速比。
+- 这不是“整个库每个 API 都零分配”的声明；返回新对象、显式异步 `Task` 等接口有自己的分配边界。

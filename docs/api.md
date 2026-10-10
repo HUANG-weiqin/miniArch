@@ -478,6 +478,8 @@ if (!fp.AsSpan().SequenceEqual(peerFp))
 
 [`MiniArch`] Implement `OnChunk(ChunkView)` on a `struct`; the JIT specialises the call site, removing delegate allocations. Parallel iteration also reuses its dispatch state: cached delegates and struct jobs allocate no library objects after warming the calling thread, job type, nesting depth, and capacities. First use, growth, exceptions, and allocations made by callbacks or their execution-context notifications are not covered.
 
+Parallel calls normally flow and restore execution context. With explicit `ExecutionContext.SuppressFlow()`, callback changes on the calling thread can remain visible, as with the previous TPL path. The single-partition entity-split fast path also invokes directly. Nested queries may execute inline on the current callback thread.
+
 ```csharp
 var job = new MoveJob();
 query.ForEachChunk(ref job);         // sequential; zero alloc

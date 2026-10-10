@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 审阅前必读的当前风险、已修复真 bug 回归索引与已排除非 bug 猜想；只保留结论和验证入口
-updated: 2026-10-10
+updated: 2026-10-11
 ---
 # 代码审阅发现
 
@@ -25,6 +25,12 @@ updated: 2026-10-10
 CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）修复了 lockstep 分叉路径（P0#1/P0#2），`Validate()` 覆盖仍保留的组件存在性等语义违规；nested Entity 现在由完整递归 offsets 合同支持，零校验 Submit 的存在性违规仍在 apply 期抛（部分应用），且不把 Submit 或 Replay 提升为灾难性异常下的通用事务。
 
 ## 已修复的真 bug 索引
+
+### 2026-10-10 并行 Query 稳态分配
+
+| 回归测试 | 位置 / witness | 修复边界 |
+|---|---|---|
+| `ParallelQueryAllocationTests.BUG_parallel_query_steady_state_allocates_zero_bytes` / `BUG_nested_prebuilt_queries_preserve_rows_and_allocate_zero_bytes` | `Query.ForEachChunkParallel` 即使缓存 callback 或使用 struct，捕获 closure 与每次 `Parallel.For` 仍产生垃圾；空/单分区提前返回也分配，nested fallback 又分配数组 | `ParallelQueryRunner` 复用调用独占 state / 原生 ThreadPool 工作项，nested 以 0-worker 复用同一执行链；最后通知完成的 tail ack 后才清理引用和归还。预热后严格测全进程分配 0 B；上下文、异常 join/复用、并发及小池合同同文件守卫。初始化/增长/用户回调边界见 `kb-parallel-query.md` |
 
 ### 2026-10-10 CommandStream 回滚时间线与 CreateMany 消费一致性
 
@@ -157,7 +163,7 @@ CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）�
 | `BUG_Validate_rejects_unknown_remove_component_type` | Remove 是唯一未验证 component registry 的 component op，未知 type id 可绕过 Validate | Remove 与 Create/Add/Set 统一拒绝未注册 type id |
 | `BUG_Validate_rejects_zero_version_real_entity` | primary/当时的 parent endpoint real entity 的 version=0 不属于有效运行时 handle，却被 Validate 当作合法 shape；parent 子路径现已退役 | placeholder 允许 seq=0；real entity version 必须为正 |
 | `BUG_Validate_rejects_unreserved_embedded_placeholder` | Create/Add/Set payload 的 Entity 字段可引用从未 Reserve 的 placeholder；Validate 通过后 Replay 会在已 materialize owner 后失败 | dry validation 按注册 type 的 Entity field offset 扫 payload，placeholder 必须已有前置 Reserve |
-| `BUG_nested_ForEachChunkParallel_does_not_overwrite_outer_partitions` | 外层并行 query 捕获调用线程的 ThreadStatic partition buffer；同线程 callback 嵌套另一个并行 query 会覆写该 buffer，使外层后续 worker 处理内层 World 的 chunk | 可复用 buffer 增加调用期 lease；同线程重入改用独立 fallback buffer，`finally` 释放 lease；非重入稳态路径不新增分配 |
+| `BUG_nested_ForEachChunkParallel_does_not_overwrite_outer_partitions` | 外层并行 query 捕获调用线程的 ThreadStatic partition buffer；同线程 callback 嵌套另一个并行 query 会覆写该 buffer，使外层后续 worker 处理内层 World 的 chunk | 活动调用独占状态和分区，重入不得覆写；2026-10-10 保留该 witness，并由 `ParallelQueryRunner` 的可复用嵌套 lease 取代每次新建 fallback 数组。当前完成/复用边界见 `kb-parallel-query.md` |
 | `BUG_hash_properties_do_not_expose_mutable_result_storage` / `BUG_hash_dictionaries_do_not_expose_mutable_result_storage` | `WorldDigestResult` 虽是 readonly struct，但公开 getter 直接返回内部 `byte[]`；`ReadOnlyDictionary` 也不保护 value array，调用方可改坏已返回结果 | 保持公共 `byte[]` API，所有 hash getter 返回 defensive copy，字典 getter 返回 value 深复制的只读快照 |
 | `BUG_ComponentInfo_raw_bytes_do_not_expose_mutable_report_storage` | `ComponentInfo.RawBytes` 直接暴露报告内部数组，违背 Diagnostics“输出不可变”契约 | 私有持有原始 bytes，getter 返回 defensive copy；`EntityReport.ToString` 每组件只取一次副本 |
 
@@ -238,6 +244,8 @@ B7-B16 属于旧 `ChangeQuery` / `Track().Capture().Previous()` / shared tracker
 | `Destroy(ReadOnlySpan<Entity>)` 大批量分支 / `Destroy(query)` | 输入 span 也可能别名 archetype 存储，删除会覆写尚未读取的 handle | 非 bug。两条路径都在任何 storage mutation 前完整收集 destroy roots；只有已修复的小批量逐个删除分支需要输入快照 | `BeginDestroyCollection` → collect loop → `DestroyCollectedEntities` 代码走读 |
 | `HierarchyTable.ClearHierarchyState` + surviving parent（历史非 bug，能力退役） | parent 的 stale child slot 之后会被复用并指向无关活实体 | 非 bug。该 parent slot 没有被 `FreeChildSlot`，因此不会复用；方法只释放被清实体自己的 child-list slots，并先把自己的 `_firstChild` 断开 | `ClearHierarchyState` 与 `RemoveDestroyed` 对照走读；`World.Clear` XML 明示 stale-slot 边界 |
 | 内部 dynamic archetype 构建 / Snapshot Load | `Signature` 去重也会掩盖重复类型，应像 public `World.Create` 一律抛错 | 非 bug。dynamic set 运算有意 canonicalize；Snapshot payload 在构建前已逐 archetype 拒绝重复 schema index。只有 direct generic Create 声称每个参数都是独立组件 | `GetOrCreateArchetype(ReadOnlySpan<ComponentType>)` / `ValidateArchetypePayload` 代码走读；CreateMany duplicate 测试 |
+| `ParallelQueryRunner.RunCaller` 的 context=null 路径 | `SuppressFlow()` 下 callback 修改 AsyncLocal/culture 留在 caller，是否丢失旧 TPL 的隔离 | 非回归：旧 `Parallel.For` 在 caller 参与时同样保留修改，正常 flow 的恢复承诺不能扩为显式抑制 flow 后仍隔离。保留现状并明确文档边界 | `artifacts/parallel-zeroalloc-20261010/baseline/suppress-flow/`：Release 16CPU `run-default-3.log`、CPU1 main/满 max1 pool caller `run-cpu1-2.log`，成功/异常均实际观察 caller 参与，旧TPL与公开Query的scope内外值、flow flag、异常一致，exit0；旧TPL也可能将callback交给worker，不承诺固定caller参与次数 |
+| `CommandStream.Submit.cs` 的两个 `Task.Factory.StartNew(static..., state, ...)` | 缓存静态 callback 后仍创建 Task，是否也是并行 Query 的同族隐藏分配 | 不属于同一同步入口合同：这里显式返回异步 Task，保留其完成和多次 await 生命周期；本次不以零分配为由改公共返回类型，也不把整个库所有 API 宣称为 0 B | 全 `src/MiniArch` 搜索 `Parallel.For` / `Task.Run` / `Task.Factory` / `QueueUserWorkItem`，并对照 `SubmitAndSnapshotAsync` / `SubmitAndSnapshotIntoAsync` 的公开签名与静态 state handoff |
 | `Query.ForEachChunk` / entity query callback 嵌套同一只读 query | 内层 `EnsureRefreshed` 重入 refresh lock 会死锁或改坏外层枚举状态 | 非 bug。Monitor lock 同线程可重入，每次枚举器/Span 都持有独立迭代状态；前提仍是回调内不做结构变更 | 嵌套控制流走读 + QueryCache double-check；parallel scratch 的独立缺陷由对应 `BUG_` 测试守卫 |
 | `OrderedComponentEnumerator` comparison 内嵌套排序 | 内外排序会共享 comparer 或 pooled buffers 并互相改写 | 非 bug。`ComparisonCache.Acquire` 每次创建不可变 comparer，每个 enumerator 独立租用和持有 buffer | `OrderedComponentEnumerator.Initialize` / `ComparisonCache<T>` 生命周期走读 |
 | `WorldSnapshot` v5 canonical traversal / `WorldValidator` scratch state | 嵌套调用可能复用 scratch collections 并覆写外层排序/枚举状态 | 非 bug。v5 snapshot/checksum 的 schema、archetype、row scratch 为 per-call state，尤其 `Save` 跨外部 Stream 不使用 ThreadStatic 缓冲；旧 relation scratch 子路径已退役。WorldValidator 的 ThreadStatic collection 活跃期间不调用用户 delegate 或其他重入边界 | `BuildCanonicalLayout` / sink 控制流与 validator 的完整走读；`CollectRelations` 仅为历史入口 |
