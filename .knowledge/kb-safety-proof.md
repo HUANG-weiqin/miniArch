@@ -2,7 +2,7 @@
 title: MiniArch 正确性验证报告
 module: Proof
 description: 版本化记录 MiniArch 的测试范围、执行命令、当前证据与明确未覆盖项；不把有限测试表述为绝对安全证明
-updated: 2026-10-10
+updated: 2026-10-11
 ---
 # MiniArch 正确性验证报告
 
@@ -23,7 +23,45 @@ updated: 2026-10-10
 | 长程压力 | `MiniArch.Soak`、`MiniArch.LockstepSoak` | ID 复用、free-list、跨 host 是否长期漂移（层级相关历史覆盖已退役） |
 | 性能/内存 | `HeroComing.Perf --check-baseline` | runtime 改动是否跌破发布阈值或持续增内存 |
 
-### 当前复验快照（2026-10-10）
+### 当前复验快照（2026-10-11，层级遗留收敛）
+
+**必要的正确性与 Hero 门禁通过；补充 DestroyMany 基准不是全绿。** 验证源码原样提交为 `3cf43e7`：Query Destroy/Clear 共路、单体 Clone 局部收敛、移除无生产者的 Destroy-placeholder 分支，详见 `kb-hierarchy-runtime.md`。未升级版本、移动 `v7.0.0` 或重发包。
+
+| 验证 | 结果 |
+|---|---|
+| Solution Release build | 0 warnings / 0 errors，exit 0 |
+| Solution Release tests | MiniArch 1117 / 1117、HeroPipeline 7 / 7，0 skipped；包含独立子进程的全线程严格 0 B 并行 Query 回归，exit 0 |
+| Debug targeted tests | lifecycle、destroy scratch、entity/World Clone、invalid explicit shape 共 85 / 85，exit 0 |
+| 单 host 同步 soak | seed 111，20,000 帧，350,079 ops，exit 0 |
+| 单 host async soak | seed 111，5,000 帧，87,447 ops（7,832 Clone），exit 0 |
+| 4-host placeholder soak | seed 111，10,000 帧，587,460 ops，host0 oracle 1,186 checks，exit 0 |
+| BulletLockstep 实际 CLI 入口 | Slice 2–9 全部 exit 0；boss=False、weakpoints=0；chunked=True；持久化、async authority/mirror、Clone/rollback 阶段均通过 |
+| HeroComing Movement / Attack | **2079.5 / 1121.5 rounds/s**（0.481 / 0.892 ms/round），达到原阈值 1642 / 997，exit 0 |
+| HeroComing memory | 两场景均 OK；baseline 未更新 |
+| 非作者独立源码审阅 | 未发现本次变更引入的可达语义违例；不代替上述执行验证 |
+
+三个 soak 均为 cap=100、floor=20、ops-per-frame=50；完整命令与原始结果位于 `artifacts/flat-cleanup-20261011/verify.ps1`、`exits.log` 及同目录各步骤日志。验收在提交前的最终源码进行，runtime diff 的 git blob hash 为 `4e49271361a8790ad72a38cc1ff1031b922e8183`，随后没有 runtime 修改。当前 DLL SHA256 为 `AB9B629D078D8ECF4E2ACB1F487288F3276A5B91AD12E3F497261C95F3892271`；其构建版本仍带父提交 `bbc709b`，不能只凭版本字符串把它误认成已发布 DLL。
+
+#### 补充 DestroyMany 对照与未修边界
+
+`DestroyMany.Perf` 使用原场景、计时窗口与阈值。最终版和同一 harness 加载已发布 7.0.0 DLL 的对照**均 exit 1**；因此整串 `verify.ps1` 也保留 exit 1，不报告“所有基准通过”。失败项是本轮未改算法的 cold span 路径：
+
+| span 场景 / 最低 speedup | 已发布 7.0.0 | 本次清理 |
+|---|---:|---:|
+| 50K 全量 / ≥1.20× | 0.79× | 0.87× |
+| 50K 中删 25K / ≥1.00× | 0.88× | 0.73× |
+| 50K 中删 40K / ≥1.00× | 0.97× | 0.83× |
+
+吞吐循环每次新建 World，计时内的首次 span Destroy 包含约 **2.05 MB** scratch 分配（50K 全量场景）；它不等于复用 World 的预热后成本，不能据旧经验宣称 dense batch 始终领先。本次不重写 span 策略，也不改阈值/预热方式来掩盖失败。
+
+实际改动的 Query 路径通过原吞吐断言和 correctness oracle：40K 实体、1/16 原型的冷调用分别 **317.7 / 320.0 μs**，旧 DLL 为 799.1 / 742.1 μs；同 World 预热后本次为 **308.3 / 304.5 μs、0 B/op**。`Destroy(query)` 与 `Clear(query)` 同轮对照接近相等；新 scratch 回归直接证明首次 Query 删除不初始化 span scratch。这里只报告观察值，不从一组先后运行的数据承诺稳定提速或认定其他密度没有性能回退。
+
+- 对照脚本：`compare-released.ps1`；日志：`destroy-many.log`、`destroy-many-released7.log`。旧 DLL SHA256 `10805056ABFECAD68FEC609EFC150F37AFD1E2F871854691EA5B053FA19E3B13` 已校验；同一新版 harness 的“shared path”标题不描述旧 DLL 内部实现。
+- CPU 重任务串行，但前后采样仍见 Chrome/Godot/claude 活动，未取得全机独占窗口；未重新选择更快样本或刷新 baseline。
+- immediate `Create → Destroy → Destroy → Snapshot().Validate()` 在发布版和本次 DLL 均复现 released-entity 拒绝，属于预存未修风险，不是本次删除分支引入。证据与裁决只维护在 `kb-code-review-findings.md`。
+- async soak 的 thread-local 分配数字跨 await 不可用（本次也出现负数）；不采信它来证明零分配。零分配仍以对应严格回归的测量边界为准。其余覆盖限制仍适用下方“明确未覆盖/不承诺”。
+
+### 历史复验快照：扁平迁移（2026-10-10）
 
 验证 runtime：`393ca72`（扁平实体、命令时间线、free-list 版本单源与按需销毁 scratch）。完整命令、日志位置、兼容性见证和验收边界见 [执行与验收记录](../docs/plans/2026-10-10-flat-entities-command-pipeline.md)。
 
@@ -111,7 +149,7 @@ updated: 2026-10-10
 - `CommandStream.Replay` 没有通用事务回滚；不可信 delta 应先 `FrameDelta.Validate()`，但 target-world 兼容性或运行期失败仍可能在 replay 中途留下修改。
 - 默认 `Submit`/async consume 不做 component-presence 语义 preflight；未先显式调用 `Validate()` 时，apply-time 违规可能留下前序修改。`Validate()` 也不覆盖 CreateMany 组一致性、pending-slot 状态或 FrameDelta 预算。
 - 灾难性 `OutOfMemoryException`、进程终止、硬件故障不保证 rollback。
-- `Unsafe*` API 与 `Clear(query)` 依赖 XML 中的调用方前置条件；违反契约属于未定义/不安全使用。
+- `Unsafe*` API 依赖 XML 中的调用方前置条件；违反契约属于未定义/不安全使用。Query Destroy/Clear 都是普通结构变更，会使既有 view/span/accessor 借用失效。
 - World mutation 与 `CommandStream` 都不支持并发写；Query 的并行只读迭代必须与结构变更隔离。
 - `CanonicalChecksum` 不能替代跨版本 schema 握手：v5 要求两端精确类型 identity 与字段 shape 一致，但 checksum/snapshot 本身不要求相同组件注册顺序。FrameDelta wire 仍使用 runtime component id，交换方必须先建立一致 registry schema。
 
