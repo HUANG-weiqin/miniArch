@@ -2,7 +2,7 @@
 title: Deferred Create — Multi-Host Lockstep Design
 module: MiniArch.Core CommandStream
 description: DeferredEntities flag 让 Create/Clone 在 placeholder（多 host lockstep）和 immediate（单机/权威服务器）之间切换。Snapshot 按 flag 输出 placeholder delta 或 real-id delta；SubmitAndSnapshotAsync 始终输出 real-id delta。
-updated: 2026-10-10
+updated: 2026-10-11
 ---
 
 # Deferred Create — Multi-Host Lockstep Design
@@ -230,5 +230,5 @@ slot.Value  // real Entity ✅
 - **cancelled deferred vs cancelled immediate**：cancelled deferred emit 什么都不 emit（不占 id）；cancelled immediate emit Reserve+Release（占 id 槽位保持 host/replica 同步）。
 - **跨帧引用用真实 ID**：placeholder 不跨帧，但 `TryResolvePlaceholder()` 返回的真实 ID 可以跨帧直接存组件用。见决策 #3。
 - **`_replayPlaceholderMap` 跨帧清零**：`mapLen` 在 `ReplayCore` 入口重置为 0。如果不清零，上一帧的 stale mapping 会被 malformed delta 静默误用。
-- **Destroy 已取消的 deferred placeholder 必须是 no-op（非并行）**：`Destroy()` 的 `else` 分支调 `AppendDestroy`。当一个 deferred placeholder 的 batch 已被级联取消（`CancelPendingDescendants` 把它一起 cancel，或同一 placeholder 被第二次 `Destroy`），`TryGetPendingBatch` 返回 false → 落到 `else`。若不守护 `!entity.IsPlaceholder`，会把一个**没有对应 Reserve** 的 placeholder Destroy op 写进 delta，每个 replay 端都抛 "Unresolved placeholder entity"，而产生端自己不 replay 所以不报错——silent lockstep hazard。最小复现：同一个 deferred placeholder `Destroy` 两次（不需要 link）。修复在 `CommandStream.Destroy` 的 `else if (!entity.IsPlaceholder)` 守护；回归测试 `KnownLimitationTests.Deferred_destroy_twice_on_same_placeholder_cancels_cleanly` 与 `Deferred_link_then_destroy_BOTH_endpoints_replays_cleanly`。real entity（`Id >= 0`）的二次 destroy 不受影响（replay 端 `if (IsAlive)` 已是安全 no-op）。
-- **并行模式永不取消 batch（因此不受上一条影响）**：`Destroy` 并行分支只 `AppendDestroyConcurrent`，不走 `CancelPendingEntity`/`CancelPendingDescendants`。所以 deferred+并行下每个 batch 都 commit，placeholder destroy 在 `ResolveDeferredCreates` 时 resolve 成 real entity——delta 里永远不会有未 resolve 的 placeholder。代价：同一帧 create+destroy 在并行模式 emit `Reserve+Create+Destroy`（每个 replica 都先 create 再 destroy，浪费但正确收敛），而非非并行模式的"取消为空"。
+- **Destroy 已取消的 deferred placeholder 必须是 no-op**：`CommandStream.Destroy` 的 `else if (!entity.IsPlaceholder)` 保证未知/已取消 placeholder 不进入 Destroy 队列。`KnownLimitationTests.Deferred_destroy_twice_on_same_placeholder_cancels_cleanly` 覆盖重复取消。旧 `CancelPendingDescendants` / 并行录制分支已经退役，不能据其历史解析路径保留当前不可达分支。
+- **不能把 real-id 重复取消视为同一保证**：已发布 7.0.0 中，immediate `Create → Destroy → Destroy → Snapshot` 会生成 `Reserve + Release + Destroy`，`FrameDelta.Validate()` 拒绝 released entity。Replay 的 `IsAlive` no-op 不代表 wire 能通过 Validate。该预存问题未混入本轮清理；复现与状态见 `kb-code-review-findings.md` 的“当前未修风险”。

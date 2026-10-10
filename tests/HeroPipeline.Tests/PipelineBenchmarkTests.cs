@@ -344,7 +344,7 @@ public sealed class PipelineBenchmarkTests
     }
 
     private static MiniArch.Entity FindActionForOwner(
-        MiniArchRuntime runtime, FrameView frame, MiniArch.Entity parent, ActionKind kind)
+        MiniArchRuntime runtime, FrameView frame, MiniArch.Entity owner, ActionKind kind)
     {
         foreach (var chunk in frame.ChunkQuery(
             new MiniArch.QueryDescription().With<ActionEntity>().With<ActionKind>()).GetChunks())
@@ -353,14 +353,14 @@ public sealed class PipelineBenchmarkTests
             var entities = chunk.GetEntities();
             for (int i = 0; i < chunk.Count; i++)
             {
-                if (frame.Get<ActionOwner>(entities[i]).Value == parent
+                if (frame.Get<ActionOwner>(entities[i]).Value == owner
                     && kinds[i].Value == kind.Value)
                 {
                     return entities[i];
                 }
             }
         }
-        throw new InvalidOperationException($"No action of kind {kind.Value} owned by {parent} found.");
+        throw new InvalidOperationException($"No action of kind {kind.Value} owned by {owner} found.");
     }
 
 }

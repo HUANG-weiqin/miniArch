@@ -92,6 +92,24 @@ public sealed class FreeListAndDestroyScratchTests
     }
 
     [Fact]
+    public void Query_destroy_does_not_initialize_batch_destroy_scratch()
+    {
+        using var world = new World(entityCapacity: 32);
+        var description = new QueryDescription().With<MemoryToken>();
+        for (var i = 0; i < 12; i++)
+            world.Create(new MemoryToken(i));
+        var survivor = world.CreateEmpty();
+
+        world.Destroy(in description);
+
+        Assert.Equal(1, world.EntityCount);
+        Assert.True(world.IsAlive(survivor));
+        Assert.Equal(0, ScratchLength(world, "_destroyVisitedGen"));
+        Assert.Equal(0, ScratchLength(world, "_destroyGroupArchetypes"));
+        Assert.Equal(0, DestroyOrderCapacity(world));
+    }
+
+    [Fact]
     public void Destroy_scratch_is_lazy_and_tracks_slots_separately_from_candidates()
     {
         using var world = new World(entityCapacity: 16_384);

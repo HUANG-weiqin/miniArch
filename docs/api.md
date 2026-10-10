@@ -12,8 +12,8 @@
 | `Create<T1..T16>(...)` | Create entity with 1–16 components |
 | `Destroy(Entity)` | Remove only the specified entity |
 | `Destroy(ReadOnlySpan<Entity>)` | Remove the specified entities in a batch |
-| `Destroy(in QueryDescription)` | Remove entities matching the query |
-| `Clear(in QueryDescription)` | Fast bulk removal of matching entities |
+| `Destroy(in QueryDescription)` | Clear matching archetypes directly; same path as `Clear` |
+| `Clear(in QueryDescription)` | Clear matching archetypes directly; same behavior as query-based `Destroy` |
 | `IsAlive(Entity)` | Validate entity handle |
 | `EnsureCapacity(int)` | Pre-allocate entity slots |
 | `Add<T>(Entity, T)` | Add a component |

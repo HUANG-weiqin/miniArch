@@ -454,11 +454,6 @@ public sealed partial class World : IDisposable
     public Entity Clone(Entity source)
     {
         AssertNotDisposed();
-        return CloneSingle(source);
-    }
-
-    private Entity CloneSingle(Entity source)
-    {
         var sourceInfo = RequireLocation(source);
         var archetype = sourceInfo.Archetype!;
         var entity = CreateInArchetype(archetype, out var destRow);

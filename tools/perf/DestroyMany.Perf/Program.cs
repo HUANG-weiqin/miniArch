@@ -93,15 +93,13 @@ internal static class Program
         return allPassed ? 0 : 1;
     }
 
-    // Compares three approaches for query-based bulk entity removal:
-    //   1. for-loop: materialize query → Destroy each
-    //   2. Destroy(query): safe batch (collect → group → compact → kill)
-    //   3. Clear(query): archetype-level reset, no collection
+    // Compares a materialized loop with both query-removal entry points.
+    // Destroy(query) and Clear(query) share the same archetype-reset path.
     private static void PrintClearPerf(ref bool allPassed)
     {
         const int Seconds = 3;
 
-        Console.WriteLine("Clear(query) — archetype-level bulk entity removal");
+        Console.WriteLine("Destroy(query) / Clear(query) — shared archetype-level removal");
         Console.WriteLine();
 
         // Correctness: Clear must produce same surviving-entity set
@@ -162,22 +160,22 @@ internal static class Program
 
     private static void BenchmarkDestroy(
         string label, int entityCount, Func<WorldSetup> setup,
-        Action<World> forLoop, Action<World> safeBatch, Action<World> unsafeBatch,
+        Action<World> forLoop, Action<World> destroyQuery, Action<World> clearQuery,
         int seconds, ref bool allPassed)
     {
         // Warmup
         WarmupAction(setup, forLoop, 1);
-        WarmupAction(setup, safeBatch, 1);
-        WarmupAction(setup, unsafeBatch, 1);
+        WarmupAction(setup, destroyQuery, 1);
+        WarmupAction(setup, clearQuery, 1);
 
         var forResult = MeasureAction(setup, forLoop, seconds);
-        var safeResult = MeasureAction(setup, safeBatch, seconds);
-        var unsafeResult = MeasureAction(setup, unsafeBatch, seconds);
+        var destroyResult = MeasureAction(setup, destroyQuery, seconds);
+        var clearResult = MeasureAction(setup, clearQuery, seconds);
 
         Console.WriteLine($"  {label} ({entityCount:N0} entities)");
         Console.WriteLine($"    for-loop           : {forResult.UsPerOp,8:F1} us/op | alloc {forResult.BytesPerOp,8:F1} B/op");
-        Console.WriteLine($"    Destroy(query)     : {safeResult.UsPerOp,8:F1} us/op | {forResult.UsPerOp / safeResult.UsPerOp,5:F2}x vs for");
-        Console.WriteLine($"    Clear(query)       : {unsafeResult.UsPerOp,8:F1} us/op | {forResult.UsPerOp / unsafeResult.UsPerOp,5:F2}x vs for | {safeResult.UsPerOp / unsafeResult.UsPerOp,5:F2}x vs safe");
+        Console.WriteLine($"    Destroy(query)     : {destroyResult.UsPerOp,8:F1} us/op | {forResult.UsPerOp / destroyResult.UsPerOp,5:F2}x vs for");
+        Console.WriteLine($"    Clear(query)       : {clearResult.UsPerOp,8:F1} us/op | {forResult.UsPerOp / clearResult.UsPerOp,5:F2}x vs for | {destroyResult.UsPerOp / clearResult.UsPerOp,5:F2}x vs Destroy(query)");
     }
 
     private static void WarmupAction(Func<WorldSetup> setup, Action<World> action, int seconds)

@@ -137,16 +137,22 @@ public sealed partial class CommandStream
     public Entity Clone(Entity source)
     {
         ThrowIfStaleFrame();
-        if (IsSourceDestroyedThisFrame(source))
+        if (IsSourceQueuedForDestroy(source))
             throw new InvalidOperationException(
                 $"Cannot clone entity {source}: it was destroyed in the same batch.");
 
-        if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(source, out var srcBatchIdx))
-            return ClonePendingSource(source, srcBatchIdx);
-
-        if (!_world.TryGetLocation(source, out var location))
+        var srcBatchIdx = -1;
+        var sourceIsPending = _frozen.PendingBatchCount > 0 &&
+            TryGetPendingBatch(source, out srcBatchIdx);
+        EntityInfo location = default;
+        if (!sourceIsPending && !_world.TryGetLocation(source, out location))
             throw new InvalidOperationException($"Cannot clone entity {source}: it is no longer alive.");
 
-        return CloneImpl(source, location);
+        var clone = CreateCore();
+        if (sourceIsPending)
+            CopyComponentsFromBatch(srcBatchIdx, _lastCreatedBatch);
+        else
+            CloneMaterializedComponents(source, location, _lastCreatedBatch);
+        return clone;
     }
 }

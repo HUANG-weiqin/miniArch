@@ -61,7 +61,7 @@ public sealed partial class World
     {
         AssertNotDisposed();
 
-        DestroyAliveLeaf(entity, RequireLocation(entity));
+        DestroyAliveEntity(entity, RequireLocation(entity));
     }
 
     internal void DestroyIfAlive(Entity entity)
@@ -69,10 +69,10 @@ public sealed partial class World
         if (!TryGetAliveRecord(entity, out var info))
             return;
 
-        DestroyAliveLeaf(entity, info);
+        DestroyAliveEntity(entity, info);
     }
 
-    private void DestroyAliveLeaf(Entity entity, EntityRecord info)
+    private void DestroyAliveEntity(Entity entity, EntityRecord info)
     {
         BeginStructChange();
 #if DEBUG
@@ -138,7 +138,7 @@ public sealed partial class World
         {
             for (var i = 0; i < length; i++)
             {
-                CollectDestroyRootIfAlive(entities[i]);
+                CollectDestroyTargetIfAlive(entities[i]);
             }
 
             DestroyCollectedEntities();
@@ -151,66 +151,23 @@ public sealed partial class World
     }
 
     /// <summary>
-    /// Destroys all entities matching <paramref name="description"/> in one structural batch.
+    /// Destroys all entities matching <paramref name="description"/> by clearing their archetypes.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// Matching entities are first materialized from the query snapshot, then destroyed with the
-    /// same batching rules as <see cref="Destroy(ReadOnlySpan{Entity})"/>.
-    /// </para>
-    /// <para><b>When to use:</b> destroying all entities matching a component set.
-    /// See <see cref="Clear(in QueryDescription)"/> for a faster archetype-level teardown.</para>
+    /// Matching archetypes use the same direct reset path as <see cref="Clear(in QueryDescription)"/>.
     /// </remarks>
     public void Destroy(in QueryDescription description)
     {
-        AssertNotDisposed();
-
-        var query = GetAdvancedQuery(in description);
-        var archetypes = query.GetArchetypeSpan();
-        if (archetypes.Length == 0)
-        {
-            return;
-        }
-
-        var candidateCount = 0;
-        for (var i = 0; i < archetypes.Length; i++)
-            candidateCount += archetypes[i].EntityCount;
-        if (candidateCount == 0)
-            return;
-
-        BeginDestroyCollection(candidateCount);
-        try
-        {
-            for (var archetypeIndex = 0; archetypeIndex < archetypes.Length; archetypeIndex++)
-            {
-                var entities = archetypes[archetypeIndex].GetEntities();
-                for (var row = 0; row < entities.Length; row++)
-                {
-                    CollectDestroyRootIfAlive(entities[row]);
-                }
-            }
-
-            DestroyCollectedEntities();
-        }
-        catch
-        {
-            _destroyOrderScratch.Clear();
-            throw;
-        }
+        Clear(in description);
     }
 
     /// <summary>
     /// Clears all entities from every archetype matching <paramref name="description"/>.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// Unlike <see cref="Destroy(in QueryDescription)"/>, which collects and
-    /// processes individual entities (dedup, compaction), this method
-    /// resets each matched archetype directly. It is significantly faster
-    /// (~4× vs for-loop, ~2× vs <c>Destroy(query)</c>) and kills all matched entities.
-    /// </para>
-    /// No per-entity validation is performed: all entities in matched archetypes
-    /// are killed unconditionally. Use this for bulk teardown or archetype recycling.
+    /// This is also the path used by <see cref="Destroy(in QueryDescription)"/>:
+    /// entities in matching archetypes have their versions advanced and IDs recycled
+    /// before each archetype is reset. No per-entity validation is performed.
     /// </remarks>
     public void Clear(in QueryDescription description)
     {
@@ -400,7 +357,7 @@ public sealed partial class World
         }
     }
 
-    private void CollectDestroyRootIfAlive(Entity entity)
+    private void CollectDestroyTargetIfAlive(Entity entity)
     {
         if (!IsAlive(entity))
         {

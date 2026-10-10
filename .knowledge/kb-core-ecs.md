@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-10-10
+updated: 2026-10-11
 ---
 # MiniArch Core ECS
 
@@ -59,14 +59,14 @@ updated: 2026-10-10
 - **Archetype 支持单块和分段两种存储模式**（详见 `kb-chunk-storage.md`）：存储为 Archetype 直持的 `_data: byte[]`（单块）或 `_segments: Segment[]`（分段），通过 `_columnByteOffsets[column] + row * _elementSizes[column]` 定位元素
 - Archetype 按需线性增长：`EnsureCapacity`（`Archetype.Storage.cs`）按 double 策略扩容，每列 `CopyBlockUnaligned` 整列搬移
 - `World.Create/Destroy` 热路径无锁（单线程 world mutation 前提）；`World.ReserveDeferredEntity` 保留锁（供 defering entity 使用）；`World.ReserveDeferredEntityUnsafe` 无锁变体要求调用方保证无并发 reserve/write（CommandStream 单线程路径用此跳过 lock）
-- `World.Destroy(ReadOnlySpan<Entity>)` / `World.Destroy(QueryDescription)` 先收集与 guarded `for Destroy` 等价的显式目标（dead/stale handle skip、重复输入去重），再按 archetype 批量移除 storage。存储策略按密度 R/M 分三路：
+- `World.Destroy(ReadOnlySpan<Entity>)` 先收集与 guarded `for Destroy` 等价的显式目标（dead/stale handle skip、重复输入去重），再按 archetype 批量移除 storage。存储策略按密度 R/M 分三路：
   - R ≤ 8（SmallDestroyThreshold）：直接走逐个 `Destroy`（batch 机制固定开销 ~0.4μs 不值得）
   - R == M：`ResetCount()` O(1)
   - R×5 < M（稀疏 <20%）：per-entity `RemoveAt`（从 entity record 查当前 row，swap-remove，更新 moved record）——与 for-loop 同算法但用 batch 收集的实体
   - R×5 ≥ M（密集 ≥20%）：单遍 hole-fill compact（尾部 survivor 填前部 dead row）
   - 当前 scratch 按实际批次惰性增长：首批 visited 按 slotCount，order/group 按候选数，row marks 在 storage mutation 前按实际密集压缩涉及的最大 `Archetype.EntityCount` 扩容；ctor、Create、Replay slot growth、EnsureCapacity 不提前分配这些数组。首次使用可分配，预热后复用。`FreeListAndDestroyScratchTests` 覆盖 largeSlots/tinyBatch、重复目标、密集压缩及 warm 0B；本轮完整验收见 `kb-safety-proof.md`。
-  - 经验 crossover（batch 打平 for-loop）≈30% 密度；≥50% batch 稳定领先
-- `World.Clear(QueryDescription)` 是直接清空匹配 archetype 的批量路径（括号中为层级删除前的历史测量：~4× vs for-loop，~2× vs Destroy(query)）：跳过 collection/grouping/compaction 全部步骤，直接遍历匹配 archetype → kill record + push free-list → ResetCount。只销毁 query 匹配的实体，不扩展到组件所引用的其他实体
+  - 历史 crossover≈30%、≥50% batch 领先不是当前性能保证。每次创建新 World 的冷 span 调用还包含首次 scratch 分配；2026-10-11 `DestroyMany.Perf` 的 dense-span 断言在清理前后都失败，未降低阈值。当前证据见 `kb-safety-proof.md`。
+- `World.Destroy(in QueryDescription)` 与 `World.Clear(in QueryDescription)` 共用直接清空匹配 archetype 的路径：跳过 collection/grouping/compaction，按相同 archetype/row 顺序 kill record + push free-list，再 ResetCount。Query 会选中完整原型，无需 span 批次的额外 scratch；只销毁匹配实体，不扩展到组件所引用的其他实体。两个公开入口为兼容而保留，已没有快慢策略之分。
 
 ### 用户 API 分层（`MiniArch` namespace）
 
@@ -82,8 +82,8 @@ updated: 2026-10-10
 | Chunk 视图 | `ChunkView` (public readonly struct) | `chunk.GetSpan<T>()` |
 | 预解析列高速访问 | `ChunkView.UnsafeGetComponentSpanAt<T>()` | index 必须来自同一 chunk/archetype 的 `TryGetComponentIndex<T>`；完整契约以 XML 为准 |
 | Singleton 实体查找 | `World.GetSingleton<T>()` | `world.GetSingleton<T>()`（找唯一含 T 的实体，O(archetypes)） |
-| 批量销毁 | `World.Destroy(ReadOnlySpan<Entity>)` / `World.Destroy(QueryDescription)` | 批量 entity span 或 query 匹配；dead skip、内部批量 remove，不级联 |
-| Archetype 级清空 | `World.Clear(in QueryDescription)` | 最快路径：直接 reset 匹配 archetype（下述性能数据为历史测量） |
+| 批量销毁 | `World.Destroy(ReadOnlySpan<Entity>)` | 显式 entity span；dead/stale skip、去重、分组移除，不级联 |
+| Archetype 级清空 | `World.Destroy(in QueryDescription)` / `World.Clear(in QueryDescription)` | 同一实现：直接 reset 匹配 archetype |
 | 注册表指纹 | `MiniArch.ComponentSchema` (public static) | `ComponentSchema.Fingerprint()` |
 
 ### 销毁 API 选用指南
@@ -92,8 +92,8 @@ updated: 2026-10-10
 |-----|------|-------------|-----------|
 | `Destroy(Entity)` | 单个 entity | 指定实体 | 销毁单个实体 |
 | `Destroy(ReadOnlySpan<Entity>)` | entity 数组 | 显式提供的有效实体，重复目标去重 | 有一批 entity handle 要销毁 |
-| `Destroy(in QueryDescription)` | query | 匹配实体 | 按组件条件销毁 |
-| `Clear(in QueryDescription)` | query | 匹配 archetype 中的实体 | 快速清空匹配 archetype |
+| `Destroy(in QueryDescription)` | query | 匹配 archetype 中的实体 | 按组件条件批量销毁，与 Clear 同一路径 |
+| `Clear(in QueryDescription)` | query | 匹配 archetype 中的实体 | 与 Destroy(query) 相同的兼容入口 |
 
 本页下方 DestroyMany 吞吐数字是层级删除前的**历史测量**，不是本轮性能数据。
 

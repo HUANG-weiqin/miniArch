@@ -10,7 +10,7 @@ using Hero.GameplayEcs.Characters.Movement;
 
 namespace Hero.GameplayEcs.Characters.Actions;
 
-public delegate void CharacterActionPayloadTranslator(FrameContext context, MiniArch.Entity sourceRequest, MiniArch.Entity parent, ActionRuleId actionRuleId);
+public delegate void CharacterActionPayloadTranslator(FrameContext context, MiniArch.Entity sourceRequest, MiniArch.Entity owner, ActionRuleId actionRuleId);
 
 public sealed class CharacterActionTranslationTable
 {
@@ -23,14 +23,14 @@ public sealed class CharacterActionTranslationTable
         return this;
     }
 
-    public void Translate(ActionKind kind, FrameContext context, MiniArch.Entity sourceRequest, MiniArch.Entity parent, ActionRuleId actionRuleId)
+    public void Translate(ActionKind kind, FrameContext context, MiniArch.Entity sourceRequest, MiniArch.Entity owner, ActionRuleId actionRuleId)
     {
         if (!_translators.TryGetValue(kind, out CharacterActionPayloadTranslator? translator))
         {
             throw new InvalidOperationException($"Action kind '{kind.Value}' has no registered payload translator.");
         }
 
-        translator(context, sourceRequest, parent, actionRuleId);
+        translator(context, sourceRequest, owner, actionRuleId);
     }
 
     public static CharacterActionTranslationTable Create()
@@ -44,13 +44,13 @@ public sealed class CharacterActionTranslationTable
             .Register(CardActionKinds.Heal, TranslateHealPayload);
     }
 
-    private static void TranslateMovePayload(FrameContext context, MiniArch.Entity sourceRequest, MiniArch.Entity parent, ActionRuleId actionRuleId)
+    private static void TranslateMovePayload(FrameContext context, MiniArch.Entity sourceRequest, MiniArch.Entity owner, ActionRuleId actionRuleId)
     {
         FrameView frame = context.Frame;
 
         MiniArch.Entity request = context.Commands.Create();
         context.Commands.Add(request, new Request());
-        context.Commands.Add(request, new RequestTarget(parent));
+        context.Commands.Add(request, new RequestTarget(owner));
         context.Commands.Add(request, actionRuleId.Value);
         context.Commands.Add(request, RuleTier.Normal);
         context.Commands.Add(request, frame.Get<MoveIntent>(sourceRequest));
@@ -58,7 +58,7 @@ public sealed class CharacterActionTranslationTable
         context.Commands.Add(request, frame.Get<MoveDrValue>(sourceRequest));
     }
 
-    private static void TranslateAttackPayload(FrameContext context, MiniArch.Entity sourceRequest, MiniArch.Entity parent, ActionRuleId actionRuleId)
+    private static void TranslateAttackPayload(FrameContext context, MiniArch.Entity sourceRequest, MiniArch.Entity owner, ActionRuleId actionRuleId)
     {
         FrameView frame = context.Frame;
 
@@ -67,9 +67,9 @@ public sealed class CharacterActionTranslationTable
 
         MiniArch.Entity collisionRequest = context.Commands.Create();
         context.Commands.Add(collisionRequest, new Request());
-        context.Commands.Add(collisionRequest, new RequestTarget(parent));
+        context.Commands.Add(collisionRequest, new RequestTarget(owner));
         context.Commands.Add(collisionRequest, new CollisionRequest());
-        context.Commands.Add(collisionRequest, new CollisionOrigin(parent));
+        context.Commands.Add(collisionRequest, new CollisionOrigin(owner));
         context.Commands.Add(collisionRequest, new CollisionShape(CollisionShapeKind.Tile));
         context.Commands.Add(collisionRequest, new CollisionTargetQValue(targetQ));
         context.Commands.Add(collisionRequest, new CollisionTargetRValue(targetR));
@@ -81,13 +81,13 @@ public sealed class CharacterActionTranslationTable
         context.Commands.Add(swingEffect, new Effect());
         context.Commands.Add(swingEffect, CharacterAttackIds.SwingEffect);
         context.Commands.Add(swingEffect, new AttackSwingEffectMarker());
-        context.Commands.Add(swingEffect, new EffectSource(parent));
+        context.Commands.Add(swingEffect, new EffectSource(owner));
         context.Commands.Add(swingEffect, new AttackTargetQValue(targetQ));
         context.Commands.Add(swingEffect, new AttackTargetRValue(targetR));
         context.Commands.Add(swingEffect, new AttackPresentationKindValue(AttackPresentationKind.Melee));
     }
 
-    private static void TranslateDefendPayload(FrameContext context, MiniArch.Entity sourceRequest, MiniArch.Entity parent, ActionRuleId actionRuleId)
+    private static void TranslateDefendPayload(FrameContext context, MiniArch.Entity sourceRequest, MiniArch.Entity owner, ActionRuleId actionRuleId)
     {
         FrameView frame = context.Frame;
 
@@ -97,13 +97,13 @@ public sealed class CharacterActionTranslationTable
 
         MiniArch.Entity request = context.Commands.Create();
         context.Commands.Add(request, new Request());
-        context.Commands.Add(request, new RequestTarget(parent));
+        context.Commands.Add(request, new RequestTarget(owner));
         context.Commands.Add(request, actionRuleId.Value);
         context.Commands.Add(request, RuleTier.Normal);
         context.Commands.Add(request, armorAmount);
     }
 
-    private static void TranslateHealPayload(FrameContext context, MiniArch.Entity sourceRequest, MiniArch.Entity parent, ActionRuleId actionRuleId)
+    private static void TranslateHealPayload(FrameContext context, MiniArch.Entity sourceRequest, MiniArch.Entity owner, ActionRuleId actionRuleId)
     {
         FrameView frame = context.Frame;
 
@@ -113,7 +113,7 @@ public sealed class CharacterActionTranslationTable
 
         MiniArch.Entity request = context.Commands.Create();
         context.Commands.Add(request, new Request());
-        context.Commands.Add(request, new RequestTarget(parent));
+        context.Commands.Add(request, new RequestTarget(owner));
         context.Commands.Add(request, actionRuleId.Value);
         context.Commands.Add(request, RuleTier.Normal);
         context.Commands.Add(request, healAmount);

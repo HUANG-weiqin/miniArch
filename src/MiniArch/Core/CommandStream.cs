@@ -233,44 +233,11 @@ public sealed partial class CommandStream
         return batchIdx;
     }
 
-    private bool IsSourceDestroyedThisFrame(Entity source)
+    private bool IsSourceQueuedForDestroy(Entity source)
     {
         for (var i = 0; i < _frozen.DestroyCount; i++)
             if (_frozen.DestroyEntities[i] == source) return true;
-        if (_frozen.CancelledBatchCount == 0) return false;
-        for (var i = 0; i < _frozen.PendingBatchCount; i++)
-            if (_frozen.BatchCanceled[i] && _frozen.BatchEntities[i] == source) return true;
         return false;
-    }
-
-    private Entity CloneImpl(Entity source, EntityInfo info)
-    {
-        if (_deferredEntities)
-        {
-            var clone = CreateDeferredImpl();
-            // CreateDeferredImpl always allocates a batch slot and publishes it
-            // via _lastCreated, so TryGetPendingBatch must succeed. Check the
-            // return value explicitly instead of relying on the implicit
-            // invariant — a future change that stops setting _lastCreated would
-            // otherwise silently pass batchIdx = -1 into CloneComponents and
-            // corrupt the batch arrays.
-            if (!TryGetPendingBatch(clone, out var batchIdx))
-            {
-                throw new InvalidOperationException(
-                    $"Clone: deferred clone {clone} has no pending batch slot.");
-            }
-            CloneMaterializedComponents(source, info, batchIdx);
-            return clone;
-        }
-        return CloneImplImmediate(source, info);
-    }
-
-    private Entity CloneImplImmediate(Entity source, EntityInfo info)
-    {
-        var clone = CreateImpl();
-        var batchIdx = _frozen.PendingBatch[clone.Id];
-        CloneMaterializedComponents(source, info, batchIdx);
-        return clone;
     }
 
     /// <summary>
@@ -359,21 +326,7 @@ public sealed partial class CommandStream
         }
     }
 
-    private Entity ClonePendingSource(Entity source, int srcBatchIdx)
-    {
-        // Create clone entity (same deferred mode as source)
-        var clone = _deferredEntities ? CreateDeferredImpl() : CreateImpl();
-        var cloneBatchIdx = clone.Id >= 0
-            ? _frozen.PendingBatch[clone.Id]
-            : _pendingBatchDeferredArr[clone.Version];
-
-        // Copy components from source's batch chain into clone's batch
-        CopyComponentsFromBatch(source, srcBatchIdx, clone, cloneBatchIdx);
-
-        return clone;
-    }
-
-    private void CopyComponentsFromBatch(Entity source, int srcBatchIdx, Entity clone, int cloneBatchIdx)
+    private void CopyComponentsFromBatch(int srcBatchIdx, int cloneBatchIdx)
     {
         var head = _frozen.BatchHeads[srcBatchIdx];
         var comps = _frozen.BatchComps;
@@ -824,15 +777,6 @@ public sealed partial class CommandStream
                 ArrayPool<int>.Shared.Return(pooledIndices);
         }
 
-        for (var i = 0; i < _frozen.DestroyCount; i++)
-        {
-            ref var destroyed = ref _frozen.DestroyEntities[i];
-            if (destroyed.IsPlaceholder)
-            {
-                var real = resolveMap[destroyed.Version];
-                if (real.Id >= 0) destroyed = real;
-            }
-        }
         _resolveMapPool = resolveMap;
 
         // Resolve tracked EntitySlots using this resolve map.

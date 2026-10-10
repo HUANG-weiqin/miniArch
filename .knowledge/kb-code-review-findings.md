@@ -15,6 +15,12 @@ updated: 2026-10-11
 
 ## 当前未修风险
 
+### immediate pending 重复取消产生不可 Validate 的 delta（P2，预存未修）
+
+- **位置 / witness**：`CommandStream.Destroy` 的 pending 取消分支和 `EmitPendingEntitiesToDelta` / `EmitPrepared`。`DeferredEntities=false; e=Create(); Destroy(e); Destroy(e); Snapshot().Validate()` 在第二次 Destroy 进入 real-id 队列后，发出 `Reserve + Release + Destroy`，被 validator 以 released entity 拒绝。
+- **验证**：独立 `BUG_cancelled_immediate_destroy_twice.ps1` 对已发布 `7.0.0+bbc709b` DLL 复现，`DeltaCount=3`，`InvalidOperationException: Operation targets released entity Entity(0, v1)`，exit 1。日志 `artifacts/flat-cleanup-20261011/double-destroy-7.0.0-final.log`；DLL SHA256 与 release manifest 一致。本次清理后 DLL 在 `double-destroy-current.log` 得到相同结果。首次命名空间设置错误的日志不作证据。
+- **裁决**：这不是本轮删除 Clone 扫描/Destroy-placeholder 死分支引入的回归；本轮不改变重复取消、stale Destroy 或 wire 生命周期合同，另立修复。已纠正 `kb-deferred-create-design.md` 将 Replay no-op 等同于 delta 有效的说法。
+
 ### Replay 没有通用事务回滚（P2，接受现状）
 
 - **位置**：`World.EntityLifecycle.cs` 的 Replay/ReplayCore 路径。
@@ -241,7 +247,7 @@ B7-B16 属于旧 `ChangeQuery` / `Track().Capture().Previous()` / shared tracker
 | pending `Create+Add/Set/Remove` | 应暴露每个中间 Watch event | 非 bug。pending batch 契约只 materialize 最终状态 | pending Watch/transition parity tests |
 | `CompactRemoveRowsFlat` hole-fill | live prefix 留下 stale source entity | 非 bug。hole 只由 tail suffix survivor 填；最终 dead suffix 清零 | batch destroy checksum/diff/validator tests |
 | `ComponentBucketQuery.Get/TryGet` + short destination | 返回值大于 destination 长度看似“写入计数”越界 | 非 bug。实现有意返回总匹配数并只写入前缀，用一次扫描同时报告截断；XML、参数名和知识页已与该契约对齐 | `Short_destination_reports_total_match_count` / `Empty_destination_still_reports_matches` |
-| `Destroy(ReadOnlySpan<Entity>)` 大批量分支 / `Destroy(query)` | 输入 span 也可能别名 archetype 存储，删除会覆写尚未读取的 handle | 非 bug。两条路径都在任何 storage mutation 前完整收集 destroy roots；只有已修复的小批量逐个删除分支需要输入快照 | `BeginDestroyCollection` → collect loop → `DestroyCollectedEntities` 代码走读 |
+| `Destroy(ReadOnlySpan<Entity>)` 大批量分支 | 输入 span 也可能别名 archetype 存储，删除会覆写尚未读取的 handle | 非 bug。大批量分支在任何 storage mutation 前完整收集目标；已修复的小批量逐个删除分支使用输入快照。Query 无外部 span 输入，现直接清空匹配原型 | `BeginDestroyCollection` → collect loop → `DestroyCollectedEntities` 代码走读；alias/chunked lifecycle 回归 |
 | `HierarchyTable.ClearHierarchyState` + surviving parent（历史非 bug，能力退役） | parent 的 stale child slot 之后会被复用并指向无关活实体 | 非 bug。该 parent slot 没有被 `FreeChildSlot`，因此不会复用；方法只释放被清实体自己的 child-list slots，并先把自己的 `_firstChild` 断开 | `ClearHierarchyState` 与 `RemoveDestroyed` 对照走读；`World.Clear` XML 明示 stale-slot 边界 |
 | 内部 dynamic archetype 构建 / Snapshot Load | `Signature` 去重也会掩盖重复类型，应像 public `World.Create` 一律抛错 | 非 bug。dynamic set 运算有意 canonicalize；Snapshot payload 在构建前已逐 archetype 拒绝重复 schema index。只有 direct generic Create 声称每个参数都是独立组件 | `GetOrCreateArchetype(ReadOnlySpan<ComponentType>)` / `ValidateArchetypePayload` 代码走读；CreateMany duplicate 测试 |
 | `ParallelQueryRunner.RunCaller` 的 context=null 路径 | `SuppressFlow()` 下 callback 修改 AsyncLocal/culture 留在 caller，是否丢失旧 TPL 的隔离 | 非回归：旧 `Parallel.For` 在 caller 参与时同样保留修改，正常 flow 的恢复承诺不能扩为显式抑制 flow 后仍隔离。保留现状并明确文档边界 | `artifacts/parallel-zeroalloc-20261010/baseline/suppress-flow/`：Release 16CPU `run-default-3.log`、CPU1 main/满 max1 pool caller `run-cpu1-2.log`，成功/异常均实际观察 caller 参与，旧TPL与公开Query的scope内外值、flow flag、异常一致，exit0；旧TPL也可能将callback交给worker，不承诺固定caller参与次数 |
@@ -253,6 +259,9 @@ B7-B16 属于旧 `ChangeQuery` / `Track().Capture().Previous()` / shared tracker
 | `WorldSnapshot.Load` / `World.RestoreState` | 恶意输入或错误 snapshot 在恢复中途抛错会留下对调用方可见的半恢复 World | 非 bug（非灾难性异常边界）。持久化 Load 在注册 schema/构建 World 前 dry-validate 完整 payload，构建的是未发布局部 World；in-memory snapshot 是绑定源 World 的 opaque trusted handle，public ownership/recycle 校验均在 mutation 前。仅 OOM/灾难性内部失败不承诺 rollback | Load 两阶段控制流、`Snapshot_load_does_not_register_schema_type_when_later_payload_is_invalid`、RestoreState source/recycle tests 与完整 persistence 回归 |
 | `CommandStream.Replay` 失败后的 `_replayTrackedBySeq` | 失败 Replay 残留 tracking 会在下一帧错误解析旧 `EntitySlot` | 非 bug。合法的下一帧 `Snapshot() → Clear()` 会以新 tracking 替换旧数组；异常后显式 `Clear()` 也会丢弃残留。只有把其他 stream 的 delta 配合 `resolveSlots:true` 才能复现错解析，但该调用违反“只解析本 stream 自己 delta”的契约 | 失败发生在 materialize 后的最小 delta + 下一帧同 stream Snapshot/Replay witness；`Snapshot`/`Clear` tracking 发布控制流走读 |
 | `FrameDelta.Validate` embedded placeholder + `Reserve → Release` | component Entity 字段引用最终被 Release 的 placeholder 看似应因目标未 Create 而拒绝 | 非 bug。placeholder 在 Reserve 时已确定性映射成 real handle；component 允许保存之后失活的 Entity，正如它可保存后来 Destroy 的实体。Validate 只要求引用前存在可解析映射，不要求帧末存活 | `ReplayCore` 在 Reserve 写 placeholder map，Release 不抹映射；`ResolveInPlace` 解析成原 version，随后 slot version 前进使其成为普通 stale handle |
+| `World.Destroy(ReadOnlySpan<Entity>)` 的 visited/order/group scratch | 层级已删除，收集与去重是否都成了死成本 | 非 bug。显式 span 仍允许 duplicate/stale/dead handle、别名存储及部分 archetype 删除；只有 Query 全选原型路径可绕过这套机制 | 对照 `CollectDestroyTargetIfAlive` / `DestroyCollectedEntities`；`WorldLifecycleTests`、`FreeListAndDestroyScratchTests` 的 Release/Debug 回归通过，含新 Query 不初始化 scratch witness；实现见 `kb-hierarchy-runtime.md` |
+| `CommandStream.Clone` 不再扫描 cancelled-pending 表 | 不扫取消表就可能成功 Clone 已取消 source | 非 bug。成功取消会移除 pending 索引、real-id 释放并推进版本；Clone 后续两级查找仍拒绝。已删除取消表扫描，保留 queued existing Destroy 检查 | `CancelPendingEntity` → `ReleaseReservedEntity` → `TryGetPendingBatch`/`TryGetLocation` 走读；`Clone_throws_after_destroy_in_same_buffer` 与 immediate/deferred `Clone_throws_after_destroy_pending_source_in_same_buffer` 的 Release/Debug 回归通过，后者还检查 delta count/Validate 和无遗留 reservation |
+| `CommandStream.Destroy` → `DestroyEntities` | deferred consume 仍需替换这张队列中的 placeholder | 当前无此生产者：合法 pending Destroy 当场取消、未知 placeholder 不 Append。已删除 Destroy 专用 placeholder 分支/resolve 循环，仍保留非法 handle preflight 和组件内 placeholder 解析 | 全仓 producer/writer 搜索与独立源码审阅；`BUG_snapshot_rejects_invalid_explicit_entity_shapes` 的 Release/Debug 回归及同步/async/多 host soak 通过。最终范围见 `kb-safety-proof.md` |
 
 ## 决策
 

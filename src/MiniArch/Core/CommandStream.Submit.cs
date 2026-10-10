@@ -67,8 +67,8 @@ public sealed partial class CommandStream
     /// semantic contracts up front, at the first violation, without world mutation.
     /// </para>
     /// <para>
-    /// Mandatory producer checks reject invalid explicit entity endpoints,
-    /// explicit or embedded references to a cancelled/unknown deferred placeholder,
+    /// Mandatory producer checks reject invalid Destroy endpoints and component
+    /// references to a cancelled/unknown deferred placeholder,
     /// genuinely unresolvable component layouts (for example Entity-bearing
     /// LayoutKind.Auto), and inconsistent CreateMany groups.
     /// These are rejected in the consume path before deferred id reservation,
@@ -259,7 +259,7 @@ public sealed partial class CommandStream
 
     private void PreflightEntityReferences(bool useFlagFastPath = true)
     {
-        // The record path flags only frames with a placeholder/invalid explicit
+        // The record path flags only frames with an invalid explicit Destroy
         // endpoint, a component placeholder, or a genuinely unresolvable Entity
         // layout such as Entity-bearing LayoutKind.Auto. Validate() passes
         // useFlagFastPath: false for an explicit full scan.
@@ -274,7 +274,7 @@ public sealed partial class CommandStream
                 store.PreflightEmbeddedPlaceholders(this);
         }
 
-        RejectInvalidExplicitEntityReferences();
+        RejectInvalidDestroyEntities();
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -373,28 +373,14 @@ public sealed partial class CommandStream
         }
     }
 
-    private void RejectInvalidExplicitEntityReferences()
+    private void RejectInvalidDestroyEntities()
     {
         for (var i = 0; i < _frozen.DestroyCount; i++)
-            RejectExplicitEntityReference(_frozen.DestroyEntities[i], "Destroy");
-
-    }
-
-    private void RejectExplicitEntityReference(Entity entity, string role)
-    {
-        if (entity.IsPlaceholder)
         {
-            if (TryGetPendingBatch(entity, out _))
-                return;
-
-            throw new InvalidOperationException(
-                $"{role} references cancelled or unknown placeholder {entity}.");
-        }
-
-        if (!entity.IsValid)
-        {
-            throw new InvalidOperationException(
-                $"{role} has invalid entity {entity}; real entities require Id >= 0 and Version > 0.");
+            var entity = _frozen.DestroyEntities[i];
+            if (!entity.IsValid)
+                throw new InvalidOperationException(
+                    $"Destroy has invalid entity {entity}; real entities require Id >= 0 and Version > 0.");
         }
     }
 
@@ -403,7 +389,7 @@ public sealed partial class CommandStream
     // Runs in the consume path (Submit / Snapshot / SnapshotInto / async handoff)
     // before any id reservation, free-list realignment, materialization, delta
     // emission or worker handoff. Rejects: (a) invalid explicit Destroy
-    // endpoints or their cancelled/unknown placeholders, (b) component values
+    // endpoints, (b) component values
     // referencing a cancelled/unknown placeholder, and (c) component types whose
     // layout cannot be resolved (for example Entity-bearing LayoutKind.Auto) —
     // the same contract and message text as Validate(). Because it runs before

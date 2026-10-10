@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Simplify flat-entity removal:** `Destroy(in QueryDescription)` now shares `Clear`'s direct archetype-reset path, avoiding batch collection/grouping scratch while preserving entity-version and free-list order. Both public entry points remain available.
+- **Simplify CommandStream:** remove the redundant cancelled-source Clone scan and unreachable Destroy-placeholder handling; reuse the existing single-target create path for Clone. Invalid-handle preflight, component Entity-reference resolution, and pending/materialized component-copy semantics remain unchanged.
+
 ## 7.0.0 (2026-10-11)
 
 - **Fix: steady-state parallel query allocations.** `ForEachChunkParallel` now reuses native ThreadPool work items and per-call state instead of allocating a closure and TPL dispatch objects on every call. Cached delegates and struct jobs are allocation-free after warmup; first use, growth, exceptions, and user callback/context-notification allocations are excluded. Synchronous completion, nested calls, shared by-value struct state, and execution-context flow/restoration remain supported. Public API signatures are unchanged.

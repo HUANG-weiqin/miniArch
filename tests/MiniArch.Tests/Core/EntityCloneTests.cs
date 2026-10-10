@@ -432,16 +432,24 @@ public sealed class CommandBufferCloneTests
         Assert.Throws<InvalidOperationException>(() => buffer.Clone(source));
     }
 
-    [Fact]
-    public void Clone_throws_after_destroy_pending_source_in_same_buffer()
+    [Theory]
+    [InlineData(false, 2)]
+    [InlineData(true, 0)]
+    public void Clone_throws_after_destroy_pending_source_in_same_buffer(
+        bool deferredEntities, int expectedDeltaCount)
     {
-        var world = new World();
-        var buffer = new CommandStream(world);
+        using var world = new World();
+        var buffer = new CommandStream(world) { DeferredEntities = deferredEntities };
 
         var source = buffer.Create();
         buffer.Add(source, new Position(1, 2));
         buffer.Destroy(source);
+
         Assert.Throws<InvalidOperationException>(() => buffer.Clone(source));
+        var delta = buffer.Snapshot();
+        Assert.Equal(expectedDeltaCount, delta.DeltaCount);
+        delta.Validate();
+        using var checkpoint = world.CaptureState();
     }
 
     [Fact]
