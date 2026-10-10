@@ -5,7 +5,7 @@ namespace MiniArch.Diagnostics;
 /// <summary>
 /// Static validator that checks a <see cref="World"/> for structural
 /// invariant violations: entity slot consistency, free-list integrity,
-/// hierarchy bidirectionality, and archetype-level invariants.
+/// and archetype-level invariants.
 /// </summary>
 /// <remarks>
 /// Zero side-effects; all checks are read-only. Use in debug builds or
@@ -17,8 +17,6 @@ public static class WorldValidator
     [ThreadStatic] private static HashSet<(Archetype Archetype, int Row)>? _usedSlots;
     [ThreadStatic] private static HashSet<int>? _freeSeen;
     [ThreadStatic] private static HashSet<int>? _archSeen;
-    [ThreadStatic] private static HashSet<(Entity Parent, Entity Child)>? _forwardRelations;
-    [ThreadStatic] private static HashSet<int>? _cycleChainVisited;
 
     /// <summary>
     /// Runs all validation checks on <paramref name="world"/> and returns
@@ -33,11 +31,9 @@ public static class WorldValidator
         (_usedSlots ??= []).Clear();
         (_freeSeen ??= []).Clear();
         (_archSeen ??= []).Clear();
-        (_forwardRelations ??= []).Clear();
 
         CheckEntitySlots(world, issues);
         CheckFreeList(world, issues);
-        CheckHierarchy(world, issues);
         CheckArchetypes(world, issues);
 
         return new ValidationResult(issues);
@@ -89,134 +85,33 @@ public static class WorldValidator
 
         for (var i = 0; i < freeList.Length; i++)
         {
-            var recycled = freeList[i];
+            var id = freeList[i];
 
-            if ((uint)recycled.Id >= (uint)records.Length)
+            if ((uint)id >= (uint)world.EntitySlotCount)
             {
                 issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.FreeList,
                     ValidationCode.OrphanedSlot,
-                    $"Recycled entity {recycled.Id} (v{recycled.Version}) has no entity slot."));
+                    $"Recycled entity {id} has no entity slot."));
             }
-            else if (records[recycled.Id].IsOccupied)
+            else if (records[id].IsOccupied)
             {
                 issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.FreeList,
                     ValidationCode.FreeListOccupied,
-                    $"Recycled entity {recycled.Id} (v{recycled.Version}) is still occupied."));
+                    $"Recycled entity {id} (v{records[id].Version}) is still occupied."));
             }
-            else if (recycled.Version <= 0 || records[recycled.Id].Version != recycled.Version)
+            else if (records[id].Version <= 0)
             {
                 issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.FreeList,
                     ValidationCode.OrphanedSlot,
-                    $"Recycled entity {recycled.Id} version {recycled.Version} does not match slot version {records[recycled.Id].Version}."));
+                    $"Recycled entity {id} has invalid slot version {records[id].Version}."));
             }
 
             // Duplicate ID in free list.
-            if (!seenIds.Add(recycled.Id))
+            if (!seenIds.Add(id))
             {
                 issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.FreeList,
                     ValidationCode.FreeListDuplicate,
-                    $"Duplicate recycled entity ID {recycled.Id} in free list."));
-            }
-        }
-    }
-
-    private static void CheckHierarchy(World world, List<ValidationIssue> issues)
-    {
-        var hierarchy = world.Hierarchy;
-        var records = world.EntityRecords;
-
-        var forwardRelations = _forwardRelations!;
-
-        // Check the forward direction first and index every live relation. Each
-        // live child must point back to the parent whose list contains it.
-        // Dead/stale children are intentionally
-        // ignored because bulk Clear may leave version-invalid forward entries.
-        var firstChildSlots = hierarchy.FirstChildSlots;
-        var childSlots = hierarchy.ChildSlots;
-        for (var parentId = 0; parentId < firstChildSlots.Length; parentId++)
-        {
-            var slot = firstChildSlots[parentId];
-            var remaining = childSlots.Length;
-            while (slot >= 0)
-            {
-                if ((uint)slot >= (uint)childSlots.Length || remaining-- == 0)
-                {
-                    issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.Hierarchy,
-                        ValidationCode.AsymmetricParent,
-                        $"Parent slot {parentId} has an invalid or cyclic child-slot chain at index {slot}."));
-                    break;
-                }
-
-                var childSlot = childSlots[slot];
-                var child = childSlot.Entity;
-                if (world.IsAlive(child))
-                {
-                    if ((uint)parentId >= (uint)records.Length || !records[parentId].IsOccupied)
-                    {
-                        issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.Hierarchy,
-                            ValidationCode.OrphanedChild,
-                            $"Live child {child} appears in the child list of dead/missing parent slot {parentId}."));
-                    }
-                    else
-                    {
-                        var parent = new Entity(parentId, records[parentId].Version);
-                        if (!forwardRelations.Add((parent, child)))
-                        {
-                            issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.Hierarchy,
-                                ValidationCode.AsymmetricParent,
-                                $"Parent {parent} lists live child {child} more than once."));
-                            break;
-                        }
-
-                        if (!hierarchy.TryGetParent(world, child, out var actualParent) || actualParent != parent)
-                        {
-                            issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.Hierarchy,
-                                ValidationCode.AsymmetricParent,
-                                $"Parent {parent} lists child {child}, but the child points to {(actualParent == default ? "no live parent" : actualParent.ToString())}."));
-                        }
-                    }
-                }
-
-                slot = childSlot.Next;
-            }
-        }
-
-        // Check the reverse direction against the independently-built forward index.
-        foreach (var (child, parent) in hierarchy.EnumerateLiveRelations(world))
-        {
-            if (!forwardRelations.Contains((parent, child)))
-            {
-                issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.Hierarchy,
-                    ValidationCode.AsymmetricParent,
-                    $"Child {child} records parent {parent}, but the parent's child list does not contain it."));
-            }
-        }
-
-        // Cycle detection: walk parent chain from each live child.
-        var chainVisited = _cycleChainVisited ??= [];
-        chainVisited.Clear();
-
-        foreach (var (child, _) in hierarchy.EnumerateLiveRelations(world))
-        {
-            chainVisited.Clear();
-            var current = child;
-
-            while (true)
-            {
-                if (!chainVisited.Add(current.Id))
-                {
-                    issues.Add(new ValidationIssue(ValidationSeverity.Error, ValidationCategory.Hierarchy,
-                        ValidationCode.HierarchyCycle,
-                        $"Hierarchy cycle detected: entity {current} appears twice in the parent chain starting from {child}."));
-                    break;
-                }
-
-                if (!hierarchy.TryGetParent(world, current, out var next))
-                {
-                    break; // Reached root (no parent).
-                }
-
-                current = next;
+                    $"Duplicate recycled entity ID {id} in free list."));
             }
         }
     }

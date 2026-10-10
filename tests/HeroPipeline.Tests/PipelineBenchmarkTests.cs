@@ -74,7 +74,7 @@ public sealed class PipelineBenchmarkTests
         core.StepUntilStable();
 
         FrameView frame = runtime.CurrentFrame;
-        MiniArch.Entity action = FindActionChild(runtime, frame, player, CharacterActionKinds.Attack);
+        MiniArch.Entity action = FindActionForOwner(runtime, frame, player, CharacterActionKinds.Attack);
 
         // Warmup
         ExecuteSimpleAttackCycle(runtime, core, action, enemy);
@@ -118,6 +118,7 @@ public sealed class PipelineBenchmarkTests
         // Create a special attack card with built-in damage-to-armor trigger
         MiniArch.Entity triggerCard = TestEntities.Create(runtime.World,
             new ActionEntity(),
+            new ActionOwner(player),
             CardActionKinds.Attack,
             new ActionRuleId(CharacterAttackIds.AttackRule),
             new ActionPointCostValue(1),
@@ -125,10 +126,9 @@ public sealed class PipelineBenchmarkTests
             new CardOrderValue(0),
             new TriggerCondition(TriggerIds.DamageDealtBySelf),
             new TriggerAction(TriggerIds.GainArmorFromDamage));
-        runtime.World.AddChild(player, triggerCard);
 
         FrameView frame = runtime.CurrentFrame;
-        MiniArch.Entity action = FindActionChild(runtime, frame, player, CharacterActionKinds.Attack);
+        MiniArch.Entity action = FindActionForOwner(runtime, frame, player, CharacterActionKinds.Attack);
 
         // Warmup
         ExecuteAttackWithTriggerCycle(runtime, core, action, enemy, player);
@@ -183,6 +183,7 @@ public sealed class PipelineBenchmarkTests
         // Create a special attack card with built-in damage-to-armor trigger
         MiniArch.Entity triggerCard = TestEntities.Create(runtime.World,
             new ActionEntity(),
+            new ActionOwner(player),
             CardActionKinds.Attack,
             new ActionRuleId(CharacterAttackIds.AttackRule),
             new ActionPointCostValue(1),
@@ -190,7 +191,6 @@ public sealed class PipelineBenchmarkTests
             new CardOrderValue(0),
             new TriggerCondition(TriggerIds.DamageDealtBySelf),
             new TriggerAction(TriggerIds.GainArmorFromDamage));
-        runtime.World.AddChild(player, triggerCard);
         MiniArch.Entity context = TurnSerialBootstrap.CreateContext(runtime);
         TurnSerialBootstrap.Activate(runtime, context, player);
 
@@ -236,6 +236,7 @@ public sealed class PipelineBenchmarkTests
         // Create a special attack card with built-in damage-to-armor trigger
         MiniArch.Entity triggerCard = TestEntities.Create(runtime.World,
             new ActionEntity(),
+            new ActionOwner(player),
             CardActionKinds.Attack,
             new ActionRuleId(CharacterAttackIds.AttackRule),
             new ActionPointCostValue(1),
@@ -243,7 +244,6 @@ public sealed class PipelineBenchmarkTests
             new CardOrderValue(0),
             new TriggerCondition(TriggerIds.DamageDealtBySelf),
             new TriggerAction(TriggerIds.GainArmorFromDamage));
-        runtime.World.AddChild(player, triggerCard);
         MiniArch.Entity context = TurnSerialBootstrap.CreateContext(runtime);
         TurnSerialBootstrap.Activate(runtime, context, player);
 
@@ -343,7 +343,7 @@ public sealed class PipelineBenchmarkTests
         return ports;
     }
 
-    private static MiniArch.Entity FindActionChild(
+    private static MiniArch.Entity FindActionForOwner(
         MiniArchRuntime runtime, FrameView frame, MiniArch.Entity parent, ActionKind kind)
     {
         foreach (var chunk in frame.ChunkQuery(
@@ -353,14 +353,14 @@ public sealed class PipelineBenchmarkTests
             var entities = chunk.GetEntities();
             for (int i = 0; i < chunk.Count; i++)
             {
-                if (runtime.World.TryGetParent(entities[i], out MiniArch.Entity p) && p == parent
+                if (frame.Get<ActionOwner>(entities[i]).Value == parent
                     && kinds[i].Value == kind.Value)
                 {
                     return entities[i];
                 }
             }
         }
-        throw new InvalidOperationException($"No action child of kind {kind.Value} found.");
+        throw new InvalidOperationException($"No action of kind {kind.Value} owned by {parent} found.");
     }
 
 }

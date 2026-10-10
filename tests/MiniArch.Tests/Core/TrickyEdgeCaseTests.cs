@@ -405,91 +405,23 @@ public sealed class TrickyEdgeCaseTests
     }
 
     // ══════════════════════════════════════════════════════—
-    // Category 4: Hierarchy Edge Cases
+    // Category 4: Flat entity destruction
     // ══════════════════════════════════════════════════════—
 
     [Fact]
-    public void EnumerateChildren_on_entity_with_no_children_returns_empty()
+    public void Destroy_only_removes_the_specified_entity()
     {
-        var world = new World();
-        var entity = world.CreateEmpty();
+        using var world = new World();
+        var removed = world.Create(new Position(1, 2));
+        var survivor = world.Create(new Position(3, 4), new Velocity(5, 6));
 
-        var children = world.EnumerateChildren(entity).ToChildList();
+        world.Destroy(removed);
 
-        Assert.NotNull(children);
-        Assert.Empty(children);
+        Assert.False(world.IsAlive(removed));
+        Assert.True(world.IsAlive(survivor));
+        Assert.Equal(new Position(3, 4), world.Get<Position>(survivor));
+        Assert.Equal(new Velocity(5, 6), world.Get<Velocity>(survivor));
     }
-
-    [Fact]
-    public void TryGetParent_on_root_entity_returns_false()
-    {
-        var world = new World();
-        var entity = world.CreateEmpty();
-
-        Assert.False(world.TryGetParent(entity, out _));
-    }
-
-    [Fact]
-    public void Destroy_child_then_recreate_entity_in_same_slot_should_not_inherit_parent()
-    {
-        var world = new World();
-        var parent = world.CreateEmpty();
-        var child = world.CreateEmpty();
-
-        world.AddChild(parent, child);
-        world.Destroy(child);
-
-        var recycled = world.CreateEmpty();
-        Assert.Equal(child.Id, recycled.Id);
-        Assert.NotEqual(child.Version, recycled.Version);
-
-        Assert.False(world.TryGetParent(recycled, out _));
-        Assert.False(world.HasChildren(parent));
-    }
-
-    [Fact]
-    public void Destroy_entity_with_children_and_components_cleans_up_everything()
-    {
-        var world = new World();
-        var root = world.CreateEmpty();
-        var child = world.Create(new Position(1, 2), new Velocity(3, 4));
-
-        world.AddChild(root, child);
-        world.Destroy(root);
-
-        Assert.False(world.IsAlive(root));
-        Assert.False(world.IsAlive(child));
-        Assert.False(world.TryGet<Position>(child, out _));
-        Assert.False(world.TryGet<Velocity>(child, out _));
-    }
-
-    [Fact]
-    public void Destroy_child_keeps_parent_and_siblings_alive()
-    {
-        var world = new World();
-        var parent = world.CreateEmpty();
-        var child1 = world.CreateEmpty();
-        var child2 = world.CreateEmpty();
-        var child3 = world.CreateEmpty();
-
-        world.AddChild(parent, child1);
-        world.AddChild(parent, child2);
-        world.AddChild(parent, child3);
-
-        world.Destroy(child2);
-
-        Assert.True(world.IsAlive(parent));
-        Assert.True(world.IsAlive(child1));
-        Assert.False(world.IsAlive(child2));
-        Assert.True(world.IsAlive(child3));
-
-        var remainingChildren = world.EnumerateChildren(parent).ToChildList();
-        Assert.Equal(2, remainingChildren.Count);
-        Assert.Contains(child1, remainingChildren);
-        Assert.Contains(child3, remainingChildren);
-    }
-
-
 
     // ══════════════════════════════════════════════════════—
     // Category 6: Structural Integrity / Chunk Boundaries
@@ -1025,10 +957,7 @@ public sealed class TrickyEdgeCaseTests
         var world = new World();
         world.Dispose();
 
-        Assert.Throws<ObjectDisposedException>(() => world.AddChild(default, default));
-        Assert.Throws<ObjectDisposedException>(() => world.RemoveChild(default));
         Assert.Throws<ObjectDisposedException>(() => world.Has<Position>(default));
-        Assert.Throws<ObjectDisposedException>(() => world.TryGetParent(default, out _));
         Assert.Throws<ObjectDisposedException>(() => world.Watch<Position, DestructiveWatchHandler>());
         Assert.Throws<ObjectDisposedException>(() => world.Watch<DestructiveWatchHandler>(new QueryDescription().With<Position>()));
     }

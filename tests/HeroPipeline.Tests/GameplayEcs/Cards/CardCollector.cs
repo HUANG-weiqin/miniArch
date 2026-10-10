@@ -10,7 +10,8 @@ public static class CardCollector
     private static readonly MiniArch.QueryDescription CardQuery = new MiniArch.QueryDescription()
         .With<ActionEntity>()
         .With<CardZone>()
-        .With<CardOrderValue>();
+        .With<CardOrderValue>()
+        .With<ActionOwner>();
 
     public static List<(MiniArch.Entity Card, int Order)> CollectInZone(FrameView frame, MiniArch.Entity owner, CardZoneKind zone)
     {
@@ -20,6 +21,7 @@ public static class CardCollector
         {
             var zones = chunk.GetSpan<CardZone>();
             var orders = chunk.GetSpan<CardOrderValue>();
+            var owners = chunk.GetSpan<ActionOwner>();
             var entities = chunk.GetEntities();
             for (int i = 0; i < chunk.Count; i++)
             {
@@ -28,7 +30,7 @@ public static class CardCollector
                     continue;
                 }
 
-                if (!frame.TryGetParent(entities[i], out MiniArch.Entity parent) || parent != owner)
+                if (owners[i].Value != owner)
                 {
                     continue;
                 }
@@ -48,6 +50,7 @@ public static class CardCollector
         {
             var zones = chunk.GetSpan<CardZone>();
             var orders = chunk.GetSpan<CardOrderValue>();
+            var owners = chunk.GetSpan<ActionOwner>();
             var entities = chunk.GetEntities();
             for (int i = 0; i < chunk.Count; i++)
             {
@@ -57,11 +60,7 @@ public static class CardCollector
                 }
 
                 MiniArch.Entity card = entities[i];
-
-                if (!frame.TryGetParent(card, out MiniArch.Entity owner))
-                {
-                    continue;
-                }
+                MiniArch.Entity owner = owners[i].Value;
 
                 if (!result.TryGetValue(owner, out List<(MiniArch.Entity Card, int Order)>? list))
                 {

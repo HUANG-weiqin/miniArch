@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 审阅前必读的当前风险、已修复真 bug 回归索引与已排除非 bug 猜想；只保留结论和验证入口
-updated: 2026-10-06
+updated: 2026-10-10
 ---
 # 代码审阅发现
 
@@ -15,11 +15,6 @@ updated: 2026-10-06
 
 ## 当前未修风险
 
-### CreateMany 重复类型的 Snapshot/Submit 分歧（待独立回归）
-
-- **位置**：`CommandStream.Pending.cs` 的 CreateMany materialize 与 `CollectCreateComponents`，`CommandStream.Submit.cs` 的 `BuildDelta`。
-- **边界**：同类型写入两次时 Submit 会拒绝，Snapshot emit 路径却先排序去重再写 Create；这是原有路径分歧，**不由本次高组件 ID 修复引入**。尚需独立 `BUG_` 回归确认 Snapshot/async 的目标契约后另行修复，不将其误记为本次已修复项。
-
 ### Replay 没有通用事务回滚（P2，接受现状）
 
 - **位置**：`World.EntityLifecycle.cs` 的 Replay/ReplayCore 路径。
@@ -27,9 +22,20 @@ updated: 2026-10-06
 - **当前策略**：不可信 wire 先 Validate；peer 从共同 snapshot/frame 0 沿完整历史 replay；需要强事务的调用方在外层使用 World snapshot/checkpoint。
 - **不做**：本轮不引入通用 dry-run shadow World 或 rollback journal。
 
-CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）修复了 lockstep 分叉路径（P0#1/P0#2），`Validate()` 覆盖语义违规（存在性/hierarchy）；nested Entity 现在由完整递归 offsets 合同支持，零校验 Submit 的存在性违规仍在 apply 期抛（部分应用），且不把 Submit 或 Replay 提升为灾难性异常下的通用事务。
+CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）修复了 lockstep 分叉路径（P0#1/P0#2），`Validate()` 覆盖仍保留的组件存在性等语义违规；nested Entity 现在由完整递归 offsets 合同支持，零校验 Submit 的存在性违规仍在 apply 期抛（部分应用），且不把 Submit 或 Replay 提升为灾难性异常下的通用事务。
 
 ## 已修复的真 bug 索引
+
+### 2026-10-10 CommandStream 回滚时间线与 CreateMany 消费一致性
+
+| 回归测试 | 位置 / witness | 修复边界 |
+|---|---|---|
+| `CommandTimelineTests.BUG_Pure_set_frame_is_rejected_after_restore_at_every_consume_entry` / `BUG_Stale_clear_cannot_release_another_streams_identical_reservation` | 旧活跃帧在 Restore 后继续消费或 stale Clear 误释放被其他 stream 复用的同一 reservation | World 成功 Restore 推进时间线；consume 与 reserve/Clone/pending cancel 拒绝旧帧（普通 existing-entity record 可 append 但仍无法消费）；`Clear()` 只丢旧 buffers，可复用 stream |
+| `CommandTimelineTests.BUG_Capture_rejects_outstanding_reservations_without_recycling_an_existing_snapshot` | Capture 的 real-id reservation 边界 | 租借 snapshot payload 前拒绝仍被预留的 id，不把纯 Set/deferred-only 帧误判为必须排空 |
+| `CommandTimelineTests.BUG_CreateMany_group_contract_is_consistent_across_consumers` / `Fully_cancelled_CreateMany_group_does_not_require_a_live_archetype` | 旧 Submit 拒绝修改/重复 writer 类型，但 Snapshot emit 可先去重，产生差异 | 各 consume 入口共同 preflight live CreateMany group，在 apply/resolve/target clear 前拒绝；保留失败时的 reservation 清理，不承诺 allocator 回滚；全取消 group 跳过 live archetype 要求 |
+| `CommandTimelineTests.BUG_Recycled_frozen_pending_map_does_not_treat_live_entities_as_pending` | async SwapOutState 复用 frozen spare 时清零 `PendingBatchCount`，却保留稀疏 id→batch map；旧索引若落在新 pending id 范围，live source 的 Clone 丢 Position/抛错或 Set 静默丢失，曾使 async soak Clone 路径越界 | `TryGetPendingBatch` real lookup 先要求 `batchIdx < PendingBatchCount` 再验实体身份；不清整张 map、不改 dedup。Clone/Set 两分支回归；原失败种子的最终集成复验见 `kb-safety-proof.md` |
+
+**阅读边界（2026-10-10）**：下列历史行中涉及 `AddChild`/`RemoveChild`、`HierarchyTable`、层级诊断、子树克隆与父子循环的能力及对应测试已退役；这些 witness 保留供追溯，**不是当前 API 或仍应运行的测试目录**。组件内普通 `Entity` 引用、nested placeholder、非层级 Clone、异步/回滚/Query 的修复与覆盖仍有效。当前迁移单一入口：`kb-hierarchy-runtime.md`。
 
 ### 2026-10-06 跨 World 注册顺序影响默认 Query
 
@@ -59,12 +65,12 @@ CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）�
 | `BUG_ChangeWatch_recycled_entity_does_not_inherit_previous_generation_baseline` / `BUG_ProjectedChangeWatch_recycled_entity_does_not_inherit_previous_generation_baseline` | baseline 仅按 id 保存，Destroy 后复用同 id 的新 Entity 会获得前一 generation 的 oldValue | dense value baseline 旁保存 version；仅完整 `(Id,Version)` 匹配时读取 oldValue，否则为 default |
 | `BUG_TransitionWatch_recycled_entity_reports_exit_and_enter` | membership 仅比较 id，Destroy+Create 同 id 被静默为无变化 | snapshot/current dense epoch membership 同时保存 version；不同 generation 输出旧 Exited 后新 Entered |
 
-### 2026-08-30 CommandStream Clone 固定容量 scratch buffers
+### 2026-08-30 CommandStream Clone 固定容量 scratch buffers（部分层级测试退役）
 
 | 回归测试 | 位置 / witness | 修复边界 |
 |---|---|---|
-| `BUG_clone_preserves_more_than_32_direct_children` | `GetVirtualChildren` 只写固定 32-slot buffer，容量满后静默忽略；包含 33 个直接 child 的合法 source 最终只克隆 32 个，违反 deep-clone 全子树契约 | virtual-child buffer 改为 `ArrayPool` 数组的 ref owner，写满时用既有 `GrowPooled` 扩容；同一数组在各 DFS 节点复用并由唯一 finally 归还 |
-| `BUG_clone_grows_cycle_detection_for_more_than_32_descendants` | Clone 的 visited buffer 固定租 32 slots，追加第 33 个 descendant 前不扩容，合法深树会抛 `IndexOutOfRangeException` | 每次 append 前按需增长 visited；cycle 检测、显式 DFS stack 与零稳态 GC 语义保持不变 |
+| `BUG_clone_preserves_more_than_32_direct_children`（退役层级测试） | `GetVirtualChildren` 只写固定 32-slot buffer，容量满后静默忽略；包含 33 个直接 child 的合法 source 最终只克隆 32 个，违反 deep-clone 全子树契约 | virtual-child buffer 改为 `ArrayPool` 数组的 ref owner，写满时用既有 `GrowPooled` 扩容；同一数组在各 DFS 节点复用并由唯一 finally 归还 |
+| `BUG_clone_grows_cycle_detection_for_more_than_32_descendants`（退役层级测试） | Clone 的 visited buffer 固定租 32 slots，追加第 33 个 descendant 前不扩容，合法深树会抛 `IndexOutOfRangeException` | 每次 append 前按需增长 visited；cycle 检测、显式 DFS stack 与零稳态 GC 语义保持不变 |
 | `BUG_clone_materialized_source_with_more_than_64_components` | `CloneMaterializedComponents` 在构造会自动扩容的 merger 之前，先把 source archetype 全部 component 写入三组固定 `stackalloc[64]`；合法的第 65 个 component 会抛 `IndexOutOfRangeException` | ≤64 的常见路径继续 stackalloc；更大 archetype 的三组初始 scratch arrays 改从 `ArrayPool` 获取，并在唯一 finally 与 merger 自有增长数组分别归还 |
 
 ### 2026-08-15 nested Entity offset reconstruction
@@ -81,8 +87,8 @@ CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）�
 | P0#2：nested Entity offsets 漏扫导致分叉 | 历史实现只发现 top-level Entity；nested Entity 值可在 source 落库，但 Replay 端无法按同一完整 offsets 解析 | 5.2 `EntityFieldResolver` 递归验证并收集完整 actual CLR offsets；source、Snapshot、Validate、Replay 与 Clone 共用缓存，Entity-bearing Auto 与真正无法解析的布局仍在 mutation 前拒绝 |
 | P0#3：Clone raw 导入绕过 marker fast path | World 组件中的 `Entity(-1,seq)` 占位符可经 `CommandStream.Clone` 的 raw `ReadComponentRaw→CommitBatchComponent` 导入 batch；泛型 record 探测（`FieldKinds<T>` + `WritePendingComponent`/store Add/Set）未覆盖 → 帧 flag 保持 0 → 旧实现可能静默导入 placeholder 或漏掉 nested 值，Snapshot 产出 `Validate()` 拒绝的 delta（P0#1/P0#2 的 Clone 变体） | 非泛型 raw 探测 `FlagFrameIfMayContainPlaceholder(ComponentType, ReadOnlySpan<byte>)` 使用 `GetOffsets` 检查任意深度 Entity 字段；Auto 或真正无法解析的布局保守置 flag，但在 consume 扫描器中才抛。探测点 = `CloneMaterializedComponents` merger 的最终有效 values；`CopyComponentsFromBatch`/`ComponentMerger.Add` 的字节源已由提交路径探测。回归测试：`BUG_clone_imported_placeholder_is_rejected_by_default_submit` / `BUG_clone_imported_placeholder_is_rejected_by_default_snapshot` / `BUG_clone_imports_nested_entity_layout_and_deep_inline_values` |
 | P0#4：async real-id delta 为已取消 deferred batch 伪造 allocator 事件 | `DeferredEntities=true` 下 pending Create 被取消时从未触碰 source allocator，`ResolveDeferredCreates` 也有意保留其 placeholder；但 async real-id writer 仍发 `Reserve(placeholder)→Release(placeholder)`，replica 会真实分配并释放一个 slot。若后面有 live Create，Replay 立即 reservation mismatch；即使全取消，下一次 Create 也出现 source `Entity(0,v1)` / replica `Entity(0,v2)` 分叉 | real-id budget、upper bound 与 writer 统一跳过 `BatchCanceled && BatchEntities[i].IsPlaceholder`；immediate real-id cancellation 仍保留 Reserve+Release 以镜像 source 已发生的 reserve/release。`BUG_async_real_id_delta_omits_cancelled_deferred_batches` / `BUG_real_id_snapshot_omits_cancelled_deferred_batches` 锁定 async 与切换模式 Snapshot 的 wire 均不含 cancelled placeholder，且 Replay 收敛、下一 id/version 一致 |
-| P0#5：显式 Entity endpoint 绕过 mandatory wire guard | 零语义校验后，AddChild/RemoveChild 的未知 placeholder 会被 Snapshot 写成 `FrameDelta.Validate()` 拒绝的 wire；Submit 先 detach child 再因 placeholder parent 抛错，留下 hierarchy 部分修改。Destroy 的 `Entity(-1,-1)`、id<-1、real version≤0 也会产出结构无效 delta | 将帧 flag 扩为 `MayNeedEntityReferencePreflight`；AddChild/RemoveChild 与 Destroy record 对 placeholder/非法 shape 置位，统一 `PreflightEntityReferences()` 在 allocator/World/target/worker 前验证 final hierarchy endpoint、destroy shape、embedded refs/layout。`BUG_hierarchy_placeholder_is_rejected_before_submit_mutates_existing_relation`、`BUG_snapshot_rejects_unknown_hierarchy_placeholder_before_returning_delta`、`BUG_snapshot_rejects_unknown_hierarchy_child_placeholder`、`BUG_snapshot_rejects_invalid_explicit_entity_shapes` 锁定 |
-| `BUG_real_id_budget_rejects_before_deferred_resolution` | real-id Snapshot/async 在 `ResolveDeferredCreates()` 前用 placeholder 的短 wire width 做“精确”预算；帧可先通过 preflight，resolve 消耗 source allocator，随后 worker writer 因真实 id varint 更宽而超 `MaxFrameBytes`。实测失败后 5000 个 deferred entity 已落进 World（18423→23423） | real-id budget 对尚未解析的 pending Reserve/Create 与 hierarchy parent/child endpoint 按合法 Entity 最大 wire width（5B id + 5B version）计费；仍在 resolve/free-list/worker/target/World mutation 前拒绝。边界回归用 3-byte real ids + 精确 filler 锁定 allocator/checksum 零变化，并单测 11/12/11/21B endpoint 计费 |
+| P0#5：显式 Entity endpoint 绕过 mandatory wire guard（层级子路径退役，Destroy shape 守卫保留） | 零语义校验后，AddChild/RemoveChild 的未知 placeholder 会被 Snapshot 写成 `FrameDelta.Validate()` 拒绝的 wire；Submit 先 detach child 再因 placeholder parent 抛错，留下 hierarchy 部分修改。Destroy 的 `Entity(-1,-1)`、id<-1、real version≤0 也会产出结构无效 delta | 将帧 flag 扩为 `MayNeedEntityReferencePreflight`；AddChild/RemoveChild 与 Destroy record 对 placeholder/非法 shape 置位，统一 `PreflightEntityReferences()` 在 allocator/World/target/worker 前验证 final hierarchy endpoint、destroy shape、embedded refs/layout。`BUG_hierarchy_placeholder_is_rejected_before_submit_mutates_existing_relation`、`BUG_snapshot_rejects_unknown_hierarchy_placeholder_before_returning_delta`、`BUG_snapshot_rejects_unknown_hierarchy_child_placeholder`、`BUG_snapshot_rejects_invalid_explicit_entity_shapes` 锁定 |
+| `BUG_real_id_budget_rejects_before_deferred_resolution`（旧 hierarchy endpoint 计费案例退役；pending Reserve/Create 的预算边界保留） | real-id Snapshot/async 在 `ResolveDeferredCreates()` 前用 placeholder 的短 wire width 做“精确”预算；帧可先通过 preflight，resolve 消耗 source allocator，随后 worker writer 因真实 id varint 更宽而超 `MaxFrameBytes`。实测失败后 5000 个 deferred entity 已落进 World（18423→23423） | real-id budget 对尚未解析的 pending Reserve/Create 与 hierarchy parent/child endpoint 按合法 Entity 最大 wire width（5B id + 5B version）计费；仍在 resolve/free-list/worker/target/World mutation 前拒绝。边界回归用 3-byte real ids + 精确 filler 锁定 allocator/checksum 零变化，并单测 11/12/11/21B endpoint 计费 |
 | `BUG_high_component_id_placeholder_scan_preserves_last_wins` | `RejectBatchEmbeddedPlaceholders` 只对 component id `<512` 调 512-bit `IsSeen`；id≥512 时会扫描同类型全部历史值。旧的 superseded 值若引用 cancelled placeholder，Validate/Submit 会错误拒绝，而 materialize/emit 的 `DeduplicateBatchChain` 有 high-id fallback、只消费最新值 | 抽出 `HasNewerEffectiveComponentType` 作为所有 pending head-first consumer 的唯一 high-id 线性 fallback，scanner 与 `DeduplicateBatchChain` 共用。回归在禁并行 collection 中动态填充 shared registry 到 512 后验证，避免全局 registry 污染其它测试 |
 | `BUG_Validate_does_not_reorder_cancelled_batch_free_list` | `Validate()` 把 `AlignCancelledBatchFreeListOrder()` 当作“纯校验阶段”执行；real-id pending 按反向顺序取消后，Validate 会重排 World free list。随后 `Clear()` 丢弃 frame 仍永久改变下一次 Create 的 id，且 `CanonicalChecksum` 在 Validate 前后变化，违背无 World 副作用契约 | 从 `Validate()` 移除 allocator realignment；Submit 与 async handoff 仍在 consume 的确定性时机自行对齐。回归比较 Validate+Clear 与直接 Clear 的 checksum/下一 Entity 完全一致 |
 | LayoutKind.Auto：**非静默**（源端 Archetype 构造 `ThrowIfManagedComponent` 已兜底），仅错误类型/时机变化 | `BUG_auto_layout_record_does_not_throw_but_submit_rejects_before_mutation` | consume 扫描器 `GetOffsets` 先于 archetype 构造抛 `InvalidOperationException`（消息含 "LayoutKind.Auto"），恢复 T2 前异常类型契约 |
@@ -104,11 +110,11 @@ CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）�
 | 回归测试 | 位置 / witness | 修复边界 |
 |---|---|---|
 | `BUG_ChangeWatch_explicit_filter_requires_watched_component` / `BUG_projected_ChangeWatch_explicit_filter_requires_watched_component` | 两个 `World.Watch<TComponent...>(explicitQuery)` 重载原样保存显式 filter；当 filter 匹配不含被观察组件的 archetype 时，Snapshot 无条件 `GetSpan<TComponent>()` 并抛异常 | 显式 filter 统一追加 `With<TComponent>()`；额外约束保留，Watch 扫描的每个 archetype 都保证含目标列 |
-| `BUG_AddChildFromSnapshot_rejects_cycle_consistently_in_Debug` | `AddChildRestored` 在共享的无条件 `ValidateAddChild` 前重复执行 `Debug.Assert`；同一非法循环在 Release 抛契约异常，Debug 却先变成 testhost `DebugAssertException`，导致 Debug 全量门禁失败 | 删除重复 assert 与其私有遍历；restore 和普通 AddChild 统一由 `AddChildCore` 的 Release 常开验证拒绝循环 |
-| `BUG_reused_larger_rollback_snapshot_does_not_restore_stale_hierarchy_tail` | 较大的 pooled `WorldStateSnapshot` 被复用于较小 hierarchy 时只覆写前缀，Restore 却按 backing-array 长度复制；旧 parent/child 尾数据可附着到之后复用的同 ID/version 实体 | snapshot 单独保存 capture 时的 hierarchy entity capacity；Restore 只复制该逻辑长度，不能把池化数组 capacity 当有效状态长度 |
+| `BUG_AddChildFromSnapshot_rejects_cycle_consistently_in_Debug`（退役层级测试） | `AddChildRestored` 在共享的无条件 `ValidateAddChild` 前重复执行 `Debug.Assert`；同一非法循环在 Release 抛契约异常，Debug 却先变成 testhost `DebugAssertException`，导致 Debug 全量门禁失败 | 删除重复 assert 与其私有遍历；restore 和普通 AddChild 统一由 `AddChildCore` 的 Release 常开验证拒绝循环 |
+| `BUG_reused_larger_rollback_snapshot_does_not_restore_stale_hierarchy_tail`（退役层级测试；非层级 lease/逻辑长度不变量仍独立适用） | 较大的 pooled `WorldStateSnapshot` 被复用于较小 hierarchy 时只覆写前缀，Restore 却按 backing-array 长度复制；旧 parent/child 尾数据可附着到之后复用的同 ID/version 实体 | snapshot 单独保存 capture 时的 hierarchy entity capacity；Restore 只复制该逻辑长度，不能把池化数组 capacity 当有效状态长度 |
 | `BUG_recycled_snapshot_reference_is_not_reactivated_after_pool_reuse` | public snapshot class 自身被池复用；旧变量与新 capture 指向同一对象，`_isRecycled` 被重新置 false 后旧引用可消费新 snapshot，违背单次 lease 契约 | 池只保存 internal payload；公开 `WorldStateSnapshot` 改为 payload+generation 的 readonly value lease。旧 generation 即使 payload 复用也保持 recycled，且不牺牲稳态零 GC |
 | `BUG_rolling_snapshot_window_discards_old_payloads_without_allocation` | 多帧 ring 覆盖未 Restore 的 snapshot 时没有 release 入口；payload 永不回池，文档声称的 rolling-window steady-state zero GC 不成立 | value lease 实现幂等 `IDisposable`；淘汰 checkpoint 时只回收 payload、不恢复 World。Restore 与 Dispose 共享单一 recycle helper |
-| `BUG_hierarchy_overlay_applies_final_acyclic_reparenting_without_transient_cycle` | preflight 接受最终无环 overlay，但 Submit/Replay 按 child id 直接 Add；父子方向反转时旧边尚未解除，`World.AddChild` 观察到瞬时 cycle 并抛错 | Submit 先 detach 全部有效 intent 的 child，再安装 Add；delta 同样先 emit RemoveChild phase、再 emit AddChild phase，保持两路收敛 |
+| `BUG_hierarchy_overlay_applies_final_acyclic_reparenting_without_transient_cycle`（退役层级测试） | preflight 接受最终无环 overlay，但 Submit/Replay 按 child id 直接 Add；父子方向反转时旧边尚未解除，`World.AddChild` 观察到瞬时 cycle 并抛错 | Submit 先 detach 全部有效 intent 的 child，再安装 Add；delta 同样先 emit RemoveChild phase、再 emit AddChild phase，保持两路收敛 |
 | `Snapshot_load_rejects_invalid_chunk_capacity` | 不可信 v5 header 可声明 `int.MaxValue` chunk capacity；若只检查正数，构造 World/archetype 时会尝试巨量分配 | World 构造与 Snapshot Load 共享 `MaxChunkCapacity` 上限；完整 dry validation 在创建 World/archetype 前拒绝。v3/v4 已由 6.0 删除，不再保留旧格式 witness |
 | `Snapshot_load_rejects_unsupported_schema_types_as_invalid_data` | Snapshot schema 若接受 `LayoutKind.Auto`/managed/class shape 并先注册，随后 storage/codec 才拒绝，会污染进程级 registry | v5 Load 在 registry 注册/World 构建前构建并核对字段 plan，以 `InvalidDataException` 拒绝 unsupported shape |
 | `BUG_Snapshot_rejects_more_than_MaxOpsPerFrame_before_writing_delta` / `BUG_snapshot_paths_reject_MaxFrameBytes_before_target_or_world_mutation` | 本地 Snapshot/async producer 可生成超过接收侧 `MaxOpsPerFrame`/`MaxFrameBytes` 的 delta；自己的 Validate/FromWire 随后拒绝；非 deferred 输出还可能先 resolve real id，async 可能先提交 World 再让 worker 失败 | 所有 Add* 写前做完整 op 原子预算检查；所有 producer 在 deferred allocator resolution、target clear、frozen swap/worker 和 World materialize 前做整帧预算 preflight。常规帧用保守 upper bound O(store 数) 快速放行，近边界才精确扫描 |
@@ -127,7 +133,7 @@ CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）�
 | `BUG_generation_wrap_does_not_make_empty_slots_look_occupied` | `FrameLookup.Clear` 的 generation 回绕为 0 后与零初始化 stamp 混淆，非默认 key 的首次插入无限探测 | generation 命中 0 时清空 stamp 并从 1 重新开始 |
 | `BUG_Describe_stale_handle_does_not_report_recycled_entity_as_alive` | `EntityDump.Describe` 只检查 slot occupied；ID 复用后会把 stale handle 报告成新实体且读取新组件 | alive 判定同时校验输入 handle version |
 | `BUG_ValidationResult_keeps_its_issues_after_later_validation` | `ValidationResult.Issues` 包装 `WorldValidator` 的 ThreadStatic 复用 List；下一次 Validate 会清空并改写旧结果 | 构造结果时复制 issue 数组，结果与 scratch 生命周期解耦 |
-| `BUG_WorldValidator_detects_missing_forward_hierarchy_link` / `BUG_WorldValidator_detects_forward_hierarchy_link_to_wrong_parent` / `BUG_WorldValidator_detects_cyclic_child_slot_chain` | validator 从 child→parent 反向表枚举后又调用同一反向表的 `TryGetParent`，所谓双向检查是同源自证；缺失/错误 forward link 及 child-slot 环仍报告 valid | 先扫描 forward list 建 live relation set，再用独立 reverse 表交叉验证；重复、越界、环明确报错，bulk Clear 留下的 stale-version entry 仍忽略 |
+| `BUG_WorldValidator_detects_missing_forward_hierarchy_link` / `BUG_WorldValidator_detects_forward_hierarchy_link_to_wrong_parent` / `BUG_WorldValidator_detects_cyclic_child_slot_chain`（退役层级诊断测试） | validator 从 child→parent 反向表枚举后又调用同一反向表的 `TryGetParent`，所谓双向检查是同源自证；缺失/错误 forward link 及 child-slot 环仍报告 valid | 先扫描 forward list 建 live relation set，再用独立 reverse 表交叉验证；重复、越界、环明确报错，bulk Clear 留下的 stale-version entry 仍忽略 |
 | `BUG_WorldValidator_detects_record_to_archetype_row_mismatch` | occupied record 只验证 row 范围和 record 间不碰撞；两个 record 交换 row 后仍可通过，archetype row 也未回查 record | 同时验证 record→row 中的完整 Entity handle，以及每个 archetype row→record 的 version/archetype/row 映射 |
 | `BUG_WorldValidator_detects_out_of_range_free_list_entry` / `BUG_WorldValidator_detects_free_list_version_mismatch` | free-list 校验只看“若 ID 在范围内则不能 occupied”和 duplicate；越界 ID、非正/不匹配 version 可在计数碰巧相等时报告 valid | 每个 free entry 必须对应范围内的 unoccupied record 且 version 正数并完全相等 |
 | `BUG_WorldValidator_classifies_duplicate_free_id_as_error` | 同一 ID 出现两次会被 allocator 重复发放，属于确定性结构损坏，却被标成 Warning | `FreeListDuplicate` 提升为 Error；pending reservation 的容量差仍保留 Warning |
@@ -147,9 +153,9 @@ CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）�
 | `BUG_Replay_existing_reservation_does_not_double_count_reserved_entity` | source 对自己的 real-id `Snapshot` 直接 Replay 时，目标 slot 已由 producer 预留；Replay 仍重复增加 `_reservedCount`，materialize 后 alive entity 的 `EntityCount` 变为 0 | 只有从 free list 实际取回 slot 才增加 reservation；已预留的同一 handle 直接复用现有计数 |
 | `BUG_Replay_reservation_mismatch_does_not_consume_entity_id` / `BUG_Replay_stale_reservation_mismatch_does_not_consume_free_slot` | target allocator 与 real-id delta 不兼容时，Replay 先调用普通 reserve 消耗无关 fresh ID 或 stale-version free slot，再发现 handle 不匹配并抛错 | `EnsureReplayReservation` 只接受 matching free/reserved slot 或紧邻 fresh slot；其他状态在 allocator mutation 前 fail-fast |
 | `BUG_Validate_rejects_unterminated_reservation` | `FrameDelta.Validate` 接受只有 Reserve、没有 Create/Release 的 delta；Replay 后留下无 owner 的永久 reservation | Validate 结束时要求 reserved set 为空 |
-| `BUG_Validate_rejects_placeholder_use_before_create` | placeholder 已 Reserve 但尚未 Create 时被 Add/Set/层级/Destroy 使用，Validate 仍通过；Replay 在 reservation 落地后失败 | Validate 对所有操作 endpoint 检查 lifecycle state；existing real entity 仍可直接操作 |
+| `BUG_Validate_rejects_placeholder_use_before_create` | 历史实现中，placeholder 已 Reserve 但尚未 Create 时被 Add/Set/层级/Destroy 使用，Validate 仍通过；Replay 在 reservation 落地后失败。层级子路径现已退役，其他目标生命周期检查仍适用 | Validate 对所有操作 endpoint 检查 lifecycle state；existing real entity 仍可直接操作 |
 | `BUG_Validate_rejects_unknown_remove_component_type` | Remove 是唯一未验证 component registry 的 component op，未知 type id 可绕过 Validate | Remove 与 Create/Add/Set 统一拒绝未注册 type id |
-| `BUG_Validate_rejects_zero_version_real_entity` | primary/parent real entity 的 version=0 不属于有效运行时 handle，却被 Validate 当作合法 shape | placeholder 允许 seq=0；real entity version 必须为正 |
+| `BUG_Validate_rejects_zero_version_real_entity` | primary/当时的 parent endpoint real entity 的 version=0 不属于有效运行时 handle，却被 Validate 当作合法 shape；parent 子路径现已退役 | placeholder 允许 seq=0；real entity version 必须为正 |
 | `BUG_Validate_rejects_unreserved_embedded_placeholder` | Create/Add/Set payload 的 Entity 字段可引用从未 Reserve 的 placeholder；Validate 通过后 Replay 会在已 materialize owner 后失败 | dry validation 按注册 type 的 Entity field offset 扫 payload，placeholder 必须已有前置 Reserve |
 | `BUG_nested_ForEachChunkParallel_does_not_overwrite_outer_partitions` | 外层并行 query 捕获调用线程的 ThreadStatic partition buffer；同线程 callback 嵌套另一个并行 query 会覆写该 buffer，使外层后续 worker 处理内层 World 的 chunk | 可复用 buffer 增加调用期 lease；同线程重入改用独立 fallback buffer，`finally` 释放 lease；非重入稳态路径不新增分配 |
 | `BUG_hash_properties_do_not_expose_mutable_result_storage` / `BUG_hash_dictionaries_do_not_expose_mutable_result_storage` | `WorldDigestResult` 虽是 readonly struct，但公开 getter 直接返回内部 `byte[]`；`ReadOnlyDictionary` 也不保护 value array，调用方可改坏已返回结果 | 保持公共 `byte[]` API，所有 hash getter 返回 defensive copy，字典 getter 返回 value 深复制的只读快照 |
@@ -166,9 +172,9 @@ CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）�
 | `BUG_submit_preflights_invalid_set_before_materializing_pending` | strict Set 到 Apply 才失败 | 同上 |
 | `BUG_submit_preflights_repeated_add_before_any_world_mutation` | 同 store 重复 Add 在中途失败 | preflight 按录制顺序更新虚拟 presence |
 | `BUG_set_preflight_row_cache_is_disabled_when_any_store_is_structural` | 一个 store 迁移实体后，另一 store 使用旧 row cache | 任一 component store 结构化时全局禁用 Set row cache |
-| `BUG_submit_preflights_hierarchy_overlay_cycle_before_world_mutation` | final hierarchy overlay 形成 cycle，较早操作已落地 | materialize/apply 前验证最终 parent overlay |
-| `BUG_submit_preflights_hierarchy_cycle_through_existing_parent_chain` | overlay 与当前 World parent chain 合成 cycle | 同上 |
-| `BUG_submit_preflights_deferred_hierarchy_cycle_before_reserving_ids` | deferred placeholder cycle 在 real-id reserve 后才失败 | placeholder 阶段直接验证 overlay |
+| `BUG_submit_preflights_hierarchy_overlay_cycle_before_world_mutation`（退役层级测试） | final hierarchy overlay 形成 cycle，较早操作已落地 | materialize/apply 前验证最终 parent overlay |
+| `BUG_submit_preflights_hierarchy_cycle_through_existing_parent_chain`（退役层级测试） | overlay 与当前 World parent chain 合成 cycle | 同上 |
+| `BUG_submit_preflights_deferred_hierarchy_cycle_before_reserving_ids`（退役层级测试） | deferred placeholder cycle 在 real-id reserve 后才失败 | placeholder 阶段直接验证 overlay |
 | `BUG_async_submit_preflights_invalid_component_before_worker_handoff` | async API 在契约失败前 swap/start worker | active state 上先 preflight，后 handoff；立即登记 frozen/task ownership |
 | `BUG_async_into_preflights_invalid_component_before_worker_handoff` | preflight 失败仍可能改写复用 target | preflight 通过前不启动 target writer |
 | `BUG_debug_structural_scope_recovers_after_exception` | Debug `BeginStructChange/EndStructChange` 异常后计数残留 | Debug 配对使用 `try/finally`；Release 业务路径不增加异常区 |
@@ -192,7 +198,7 @@ CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）�
 |---|---|---|
 | B1/B4 | 历史内部 raw/typed Add 处理不同，Clone+Add 可分叉 | 当前 public/CommandStream Add 均为 strict Add；preflight 与 Replay 契约测试守卫，不再把“Add 已存在=覆盖”当公共语义 |
 | B2 | cancelled pending batch 清理遗漏 reservation | Clear/consume 释放 reservation 的回归测试 |
-| B3 | hierarchy Apply 与 emit 迭代顺序不同 | 两路共享确定性 comparer/overlay 语义 |
+| B3（退役层级能力） | hierarchy Apply 与 emit 迭代顺序不同 | 当时统一排序；当前无该 comparer/overlay 路径 |
 | B5 | replay free-list 任意位置 swap-remove 改变 survivor 顺序 | 指定 reservation 的 free-list removal 保序 |
 | B6 | record-time cancel push 顺序与 wire Release 顺序不同 | `AlignCancelledBatchFreeListOrder()` 按 batch 顺序重排 |
 
@@ -217,24 +223,24 @@ B7-B16 属于旧 `ChangeQuery` / `Track().Capture().Previous()` / shared tracker
 | `ChunkView.GetSpan` / `UnsafeGetComponentSpanAt` | 返回 span 跨结构变更后仍应有效 | 非 bug，是借用期契约。结构变更后 view/span/column index 全部失效；Unsafe 违约可静默错写 | `ChunkView` XML + Debug mismatch tests |
 | `EntityAccessor` 跨 entity-storage 结构变更复用 | cached `(Archetype,row)` 可能指向被 swap-remove 后占位的其他实体，应由 World structure version 在 Release fail-fast | 非 bug，是 Accessor 的 unchecked borrow 契约；为违约调用增加 World 字段与每次 Get/Set/Has 分支会侵入内核并破坏其跳过 record/version check 的目的 | `EntityAccessor` / `World.Access` XML、`kb-core-ecs.md` 热路径契约、`kb-hardening-roadmap.md` M6“只用文档与 Debug 断言”原则 |
 | entity query enumeration 期间结构变更 | cached backing array/count 可能跳过或重复实体，应在每次 MoveNext/ForEach callback 后用全局 version 检查 | 非 bug，是 entity enumerator 与 chunk span 的 unchecked borrow 契约；禁止在迭代期间结构变更，Release `MoveNext` 不增加全局状态读取与分支 | `Query` XML、`kb-core-ecs.md` 借用期契约、`kb-hardening-roadmap.md` M6 明令不修改 MoveNext 热路径 |
-| `HierarchyTable.RemoveDestroyed` | `_firstChild` 未重置，ID 复用继承旧链 | 非 bug。先保存 slot 再把 `_firstChild[id]` 置 NoSlot，局部 slot 继续释放链 | `HierarchyTable.RemoveDestroyed` 代码走读 |
+| `HierarchyTable.RemoveDestroyed`（历史非 bug，能力退役） | `_firstChild` 未重置，ID 复用继承旧链 | 非 bug。先保存 slot 再把 `_firstChild[id]` 置 NoSlot，局部 slot 继续释放链 | `HierarchyTable.RemoveDestroyed` 代码走读 |
 | `Archetype.RemoveAt` chunked | 跨 segment swap-remove 留空洞 | 非 bug。只与最后非空 segment 的尾实体交换，Debug invariant 守卫连续性 | `AssertSegmentInvariants` + chunked destroy tests |
-| `World.Destroy` hierarchy | 子树中间节点清理不全 | 非 bug。后序遍历，child 先 `RemoveDestroyed`，parent 后处理 | hierarchy cascade tests |
+| `World.Destroy` hierarchy（历史非 bug，级联已退役） | 子树中间节点清理不全 | 非 bug。后序遍历，child 先 `RemoveDestroyed`，parent 后处理 | hierarchy cascade tests |
 | `Archetype.RemoveAt` dead bytes | ID 复用会读到旧组件值 | 非 bug。`Count` 隔离 dead zone，新实体迁入时全列覆写 | storage tests + validator |
 | `EntityFieldResolver` offset cache | struct layout 后续变化使缓存失效 | 非 bug。运行进程内 Type→ComponentType 与 CLR layout 固定，offset 首次按实际 type 计算 | `EntityFieldResolver` 代码走读 |
 | `RestoreState` 保留 capture 后创建的空 archetype | query 会把空壳当活数据 | 非 bug。archetype append-only，QueryCache 可见但 entity count 为 0；canonical Save/Checksum 自 2026-09-28 起不观察空 archetype，所以残留空壳不改变 canonical 字节 | restore/query tests + `CanonicalChecksum_returns_to_capture_value_after_new_archetype_is_rolled_back` |
-| canonical `Save` 丢弃空 archetype / 旧 v5 payload 重存不保留原字节 | 往返丢失可观察的 World 结构，违反 `Save(Load(Save)) == Save(world)` | 非 bug。canonical 内容的定义是活实体 + 存储形状（chunk capacity、slot table、hierarchy、free list）；空原型不承载活数据。旧 payload 仍可 Load，重存得到规范化字节（单向可读）；`Save(Load(Save(x))) == Save(Load(x))` 仍成立；query 顺序由签名决定，与空原型无关 | `Save_load_omits_empty_archetypes_without_changing_query_order`、`Legacy_v5_payload_with_empty_archetype_loads_and_resaves_canonically`、`Snapshot_with_only_empty_archetypes_round_trips_without_schemas_or_archetypes`、`Legacy_v5_payload_with_live_and_empty_archetypes_preserves_live_data`、`Save_ignores_unsupported_component_shape_used_only_by_empty_archetype` |
+| canonical `Save` 丢弃空 archetype / 旧 v5 payload 重存不保留原字节 | 往返丢失可观察的 World 结构，违反 `Save(Load(Save)) == Save(world)` | 非 bug。canonical 内容的定义是活实体 + 存储形状（chunk capacity、slot table、固定为 0 的关系计数、free list）；空原型不承载活数据。旧**无层级** payload 仍可 Load，重存得到规范化字节（单向可读）；非零关系计数明确拒绝；`Save(Load(Save(x))) == Save(Load(x))` 仍成立；query 顺序由签名决定，与空原型无关 | `Save_load_omits_empty_archetypes_without_changing_query_order`、`Legacy_v5_payload_with_empty_archetype_loads_and_resaves_canonically`、`Snapshot_with_only_empty_archetypes_round_trips_without_schemas_or_archetypes`、`Legacy_v5_payload_with_live_and_empty_archetypes_preserves_live_data`、`Save_ignores_unsupported_component_shape_used_only_by_empty_archetype` |
 | `RestoreState` 不清每 World Create 缓存 | 缓存会指向快照后新增、回退后被清空的原型 | 非 bug。`RestoreState` 清零再恢复实体数，原型对象仍在 `_archetypes`；Load/Clone 在新 World 初始化，不再对用过的 World 清空原型 | `RestoreCreateArchetypeCacheTests`（零分配 + 退回后复用同一原型）及 `BUG_snapshot_slot_initialization_rejects_reused_world_without_losing_archetypes` |
 | `CommandStream` Debug-only `_pendingBatchDeferredEpoch` / async handoff 字段分类测试 | 未分类字段可能应跟随 frozen state 转移 | 非行为 bug。该字段仅属 live stream 的 placeholder epoch 检查；handoff 前解析占位符，swap 后递增 epoch 并清空数组。原测试名单漏收它，应归为 `nonSwapped` | `CommandStream_state_fields_are_explicitly_classified_for_async_handoff` Debug/Release 回归；`CommandStream.Submit.cs` 两条 handoff 路径与 `FrozenState` 字段清单走读 |
 | pending `Create+Add/Set/Remove` | 应暴露每个中间 Watch event | 非 bug。pending batch 契约只 materialize 最终状态 | pending Watch/transition parity tests |
 | `CompactRemoveRowsFlat` hole-fill | live prefix 留下 stale source entity | 非 bug。hole 只由 tail suffix survivor 填；最终 dead suffix 清零 | batch destroy checksum/diff/validator tests |
 | `ComponentBucketQuery.Get/TryGet` + short destination | 返回值大于 destination 长度看似“写入计数”越界 | 非 bug。实现有意返回总匹配数并只写入前缀，用一次扫描同时报告截断；XML、参数名和知识页已与该契约对齐 | `Short_destination_reports_total_match_count` / `Empty_destination_still_reports_matches` |
 | `Destroy(ReadOnlySpan<Entity>)` 大批量分支 / `Destroy(query)` | 输入 span 也可能别名 archetype 存储，删除会覆写尚未读取的 handle | 非 bug。两条路径都在任何 storage mutation 前完整收集 destroy roots；只有已修复的小批量逐个删除分支需要输入快照 | `BeginDestroyCollection` → collect loop → `DestroyCollectedEntities` 代码走读 |
-| `HierarchyTable.ClearHierarchyState` + surviving parent | parent 的 stale child slot 之后会被复用并指向无关活实体 | 非 bug。该 parent slot 没有被 `FreeChildSlot`，因此不会复用；方法只释放被清实体自己的 child-list slots，并先把自己的 `_firstChild` 断开 | `ClearHierarchyState` 与 `RemoveDestroyed` 对照走读；`World.Clear` XML 明示 stale-slot 边界 |
+| `HierarchyTable.ClearHierarchyState` + surviving parent（历史非 bug，能力退役） | parent 的 stale child slot 之后会被复用并指向无关活实体 | 非 bug。该 parent slot 没有被 `FreeChildSlot`，因此不会复用；方法只释放被清实体自己的 child-list slots，并先把自己的 `_firstChild` 断开 | `ClearHierarchyState` 与 `RemoveDestroyed` 对照走读；`World.Clear` XML 明示 stale-slot 边界 |
 | 内部 dynamic archetype 构建 / Snapshot Load | `Signature` 去重也会掩盖重复类型，应像 public `World.Create` 一律抛错 | 非 bug。dynamic set 运算有意 canonicalize；Snapshot payload 在构建前已逐 archetype 拒绝重复 schema index。只有 direct generic Create 声称每个参数都是独立组件 | `GetOrCreateArchetype(ReadOnlySpan<ComponentType>)` / `ValidateArchetypePayload` 代码走读；CreateMany duplicate 测试 |
 | `Query.ForEachChunk` / entity query callback 嵌套同一只读 query | 内层 `EnsureRefreshed` 重入 refresh lock 会死锁或改坏外层枚举状态 | 非 bug。Monitor lock 同线程可重入，每次枚举器/Span 都持有独立迭代状态；前提仍是回调内不做结构变更 | 嵌套控制流走读 + QueryCache double-check；parallel scratch 的独立缺陷由对应 `BUG_` 测试守卫 |
 | `OrderedComponentEnumerator` comparison 内嵌套排序 | 内外排序会共享 comparer 或 pooled buffers 并互相改写 | 非 bug。`ComparisonCache.Acquire` 每次创建不可变 comparer，每个 enumerator 独立租用和持有 buffer | `OrderedComponentEnumerator.Initialize` / `ComparisonCache<T>` 生命周期走读 |
-| `WorldSnapshot` v5 canonical traversal / `WorldValidator` scratch state | 嵌套调用可能复用 scratch collections 并覆写外层排序/枚举状态 | 非 bug。v5 snapshot/checksum 的 schema、archetype、row 与 relation scratch 全是 per-call state，尤其 `Save` 跨外部 Stream 不使用 ThreadStatic 缓冲；WorldValidator 的 ThreadStatic collection 活跃期间不调用用户 delegate 或其他重入边界 | `BuildCanonicalLayout` / `CollectRelations` / sink 控制流与 validator 的完整走读 |
+| `WorldSnapshot` v5 canonical traversal / `WorldValidator` scratch state | 嵌套调用可能复用 scratch collections 并覆写外层排序/枚举状态 | 非 bug。v5 snapshot/checksum 的 schema、archetype、row scratch 为 per-call state，尤其 `Save` 跨外部 Stream 不使用 ThreadStatic 缓冲；旧 relation scratch 子路径已退役。WorldValidator 的 ThreadStatic collection 活跃期间不调用用户 delegate 或其他重入边界 | `BuildCanonicalLayout` / sink 控制流与 validator 的完整走读；`CollectRelations` 仅为历史入口 |
 | `WorldDigest.CombineTypeDictHash` / `CombineIntDictHash` | Dictionary 枚举顺序未显式排序，逻辑相同的 digest total 可能分叉 | 非 bug（当前构造链）。component key 首次出现顺序由 signature-sorted archetype snapshot + signature component order 唯一决定；per-archetype key 按递增 index 插入；两个结果字典保留该确定性插入顺序 | `ComputePerComponentHashes` / `ComputePerArchetypeHashes` 的唯一插入点走读；相同 world 状态不存在不同插入历史 witness |
 | `WorldSnapshot.Load` / `World.RestoreState` | 恶意输入或错误 snapshot 在恢复中途抛错会留下对调用方可见的半恢复 World | 非 bug（非灾难性异常边界）。持久化 Load 在注册 schema/构建 World 前 dry-validate 完整 payload，构建的是未发布局部 World；in-memory snapshot 是绑定源 World 的 opaque trusted handle，public ownership/recycle 校验均在 mutation 前。仅 OOM/灾难性内部失败不承诺 rollback | Load 两阶段控制流、`Snapshot_load_does_not_register_schema_type_when_later_payload_is_invalid`、RestoreState source/recycle tests 与完整 persistence 回归 |
 | `CommandStream.Replay` 失败后的 `_replayTrackedBySeq` | 失败 Replay 残留 tracking 会在下一帧错误解析旧 `EntitySlot` | 非 bug。合法的下一帧 `Snapshot() → Clear()` 会以新 tracking 替换旧数组；异常后显式 `Clear()` 也会丢弃残留。只有把其他 stream 的 delta 配合 `resolveSlots:true` 才能复现错解析，但该调用违反“只解析本 stream 自己 delta”的契约 | 失败发生在 materialize 后的最小 delta + 下一帧同 stream Snapshot/Replay witness；`Snapshot`/`Clear` tracking 发布控制流走读 |

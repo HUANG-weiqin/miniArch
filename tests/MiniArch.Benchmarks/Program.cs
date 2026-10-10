@@ -60,7 +60,6 @@ public static class Program
             BenchmarkSwitcher.FromTypes(
             [
                 typeof(CommandBufferBenchmarks),
-                typeof(CommandBufferHierarchyBenchmarks),
             ]).Run(filteredArgs, MiniArchBenchmarkConfig.CreateCommandBufferConfig());
             return;
         }

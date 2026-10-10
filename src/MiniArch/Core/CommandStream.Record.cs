@@ -52,6 +52,7 @@ public sealed partial class CommandStream
         else if (!entity.IsPlaceholder)
         {
             GetOrCreateStore<T>().Append(entity, component, KindAdd);
+            StampRecordedFrame();
             FlagFrameIfMayContainPlaceholder(component);
         }
     }
@@ -79,6 +80,7 @@ public sealed partial class CommandStream
         else if (!entity.IsPlaceholder)
         {
             GetOrCreateStore<T>().Append(entity, component, KindSet);
+            StampRecordedFrame();
             FlagFrameIfMayContainPlaceholder(component);
         }
     }
@@ -107,6 +109,7 @@ public sealed partial class CommandStream
         else if (!entity.IsPlaceholder)
         {
             GetOrCreateStore<T>().AppendRemove(entity);
+            StampRecordedFrame();
         }
     }
 
@@ -118,8 +121,8 @@ public sealed partial class CommandStream
     {
         if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(entity, out _))
         {
+            ThrowIfStaleFrame();
             CancelPendingEntity(entity);
-            CancelPendingDescendants(entity);
         }
         else if (!entity.IsPlaceholder)
         {
@@ -128,32 +131,12 @@ public sealed partial class CommandStream
     }
 
     /// <summary>
-    /// Records an AddChild command establishing a parent-child relationship.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void AddChild(Entity parent, Entity child)
-    {
-        FlagFrameIfEntityEndpointNeedsPreflight(parent);
-        FlagFrameIfEntityEndpointNeedsPreflight(child);
-        _frozen.HierarchyByChild[child] = new HierarchyIntent(true, parent);
-    }
-
-    /// <summary>
-    /// Records a RemoveChild command detaching the entity from its parent.
-    /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void RemoveChild(Entity child)
-    {
-        FlagFrameIfEntityEndpointNeedsPreflight(child);
-        _frozen.HierarchyByChild[child] = new HierarchyIntent(false, default);
-    }
-
-    /// <summary>
-    /// Records a clone of the source entity, including all components and descendants,
-    /// using the stream's complete virtual state.
+    /// Records a clone of one source entity and its current component values,
+    /// including pending component changes.
     /// </summary>
     public Entity Clone(Entity source)
     {
+        ThrowIfStaleFrame();
         if (IsSourceDestroyedThisFrame(source))
             throw new InvalidOperationException(
                 $"Cannot clone entity {source}: it was destroyed in the same batch.");

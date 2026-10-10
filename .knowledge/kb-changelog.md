@@ -2,12 +2,20 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-09-28
+updated: 2026-10-10
 ---
 # Knowledge Base Changelog
 
 > 这个页面只记录**重大架构变更和知识库校准事件**，供追溯。
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
+
+## 2026-10-10 扁平实体、命令时间线与分配器状态收敛
+
+- 当前 `World`/`CommandStream` 不再提供父子层级、级联销毁或子树克隆；普通 `Entity` 组件引用仍在。旧版历史记录（含本页下方 hierarchy 段）只描述当时实现，不是当前 API 指南。
+- v5 保留关系计数字段但固定为 0；旧非零关系存档与旧关系 opcode 必须明确拒绝。需保留关系时先用旧版导出；迁移细节单一入口见 `kb-hierarchy-runtime.md`。
+- typed apply 与 wire emit 保持独立路径、共用 prepared-frame 规则；live CreateMany group 统一前检。成功 Restore 推进命令时间线，旧帧消费拒绝、旧帧 Clear 安全；异步冻结数据仍可产出历史 delta。合同见 `kb-command-stream.md` 与 `kb-snapshot-persistence.md`。
+- free-list 仅保留有序 id，record 是 version 唯一权威；销毁 scratch 按实际维度惰性扩容。见 `kb-core-ecs.md`。
+- 修复复用 async frozen state 后旧 pending-map 索引越过逻辑计数的缺口，保留 Clone/Set 回归。最终证据统一见 `kb-safety-proof.md`；不把下方历史测试/性能数当作本轮结果。
 
 ## 2026-09-28 canonical 内容排除 empty archetype + RestoreState 不再作废 Create 缓存
 

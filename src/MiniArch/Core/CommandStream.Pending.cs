@@ -157,13 +157,12 @@ public sealed partial class CommandStream
 
     /// <summary>
     /// Shared pending-batch materialization loop used by both
-    /// <see cref="Submit"/> (via <see cref="MaterializeAllPending"/>) and
+    /// <see cref="Submit"/> (via <see cref="ApplyPrepared"/>) and
     /// <see cref="SubmitAndSnapshotAsync"/> (via <see cref="SubmitFromFrozen"/>).
     /// Walks batches in order; when a <see cref="CreateManyGroup"/> starts at the
     /// current batch index, it runs the bulk fast path
-    /// (<see cref="MaterializeCreateManyGroup"/>). Any entity in the group
-    /// that was modified with Set/Add/Remove after CreateMany is a programming
-    /// error —the method throws <see cref="InvalidOperationException"/>.
+    /// (<see cref="MaterializeCreateManyGroup"/>). Group consistency is checked
+    /// by every consume entry before materialization or wire emission.
     /// Homogeneous simple non-group runs share their materialization plan;
     /// remaining non-group batches use <see cref="MaterializePending"/>.
     /// </summary>
@@ -221,6 +220,42 @@ public sealed partial class CommandStream
         }
     }
 
+    private static void ValidateCreateManyGroups(FrozenState frozen)
+    {
+        if (frozen.CreateManyGroupCount == 0)
+            return;
+
+        var view = frozen.Pending;
+        Span<ComponentType> types = stackalloc ComponentType[8];
+        for (var groupIdx = 0; groupIdx < frozen.CreateManyGroupCount; groupIdx++)
+        {
+            ref readonly var group = ref frozen.CreateManyGroups[groupIdx];
+            var groupTypes = types[..group.ComponentCount];
+            FillGroupTypes(in group, groupTypes);
+
+            var hasLiveEntity = false;
+            for (var i = 0; i < group.Count; i++)
+            {
+                var batchIdx = group.StartBatch + i;
+                if (view.Canceled[batchIdx])
+                    continue;
+                if (view.CompCounts[batchIdx] != group.ComponentCount ||
+                    !BatchChainMatchesTypes(in view, batchIdx, groupTypes))
+                    ThrowCreateManyMismatch(groupIdx, batchIdx);
+                hasLiveEntity = true;
+            }
+
+            if (!hasLiveEntity)
+                continue;
+
+            for (var i = 0; i < groupTypes.Length; i++)
+            {
+                if (groupTypes[..i].Contains(groupTypes[i]))
+                    ThrowCreateManyDuplicateComponentType(groupIdx);
+            }
+        }
+    }
+
     [DoesNotReturn]
     private static void ThrowCreateManyMismatch(int groupIdx, int batchIdx)
     {
@@ -249,12 +284,10 @@ public sealed partial class CommandStream
     }
 
     /// <summary>
-    /// CreateMany bulk materialization fast path for one group.
+    /// CreateMany bulk materialization fast path for one prevalidated group.
     /// Preallocates all live rows via <see cref="Archetype.AllocateRows"/>,
     /// resolves the archetype once, then writes each entity's components in a
-    /// tight loop. Throws <see cref="InvalidOperationException"/> if any entity
-    /// in the group was modified with Set/Add/Remove after the CreateMany call,
-    /// or if the writer contains duplicate component types.
+    /// tight loop.
     /// </summary>
     private unsafe void MaterializeCreateManyGroup(
         FrozenState frozen, in PendingBatchView view, int groupIdx)
@@ -279,32 +312,19 @@ public sealed partial class CommandStream
         {
             FillGroupTypes(in group, groupTypes);
 
-            // Verify preconditions on every non-cancelled batch in the group and
-            // count live entities. Any mismatch is a programming error —fast-fail.
             var liveCount = 0;
             for (var i = 0; i < count; i++)
             {
-                var batchIdx = startBatch + i;
-                if (view.Canceled[batchIdx]) continue;
-                if (view.CompCounts[batchIdx] != componentCount)
-                    ThrowCreateManyMismatch(groupIdx, batchIdx);
-                if (!BatchChainMatchesTypes(in view, batchIdx, groupTypes))
-                    ThrowCreateManyMismatch(groupIdx, batchIdx);
-                liveCount++;
+                if (!view.Canceled[startBatch + i])
+                    liveCount++;
             }
 
             if (liveCount == 0)
                 return; // all cancelled —nothing to materialize
 
-            // A non-canonical mask can mean a valid id >= 512, so reject
-            // duplicate writer types independently before resolving the archetype.
             var builder = new MaskBuilder();
             for (var i = 0; i < componentCount; i++)
-            {
-                if (groupTypes[..i].Contains(groupTypes[i]))
-                    ThrowCreateManyDuplicateComponentType(groupIdx);
                 builder.SetBit(groupTypes[i].Value);
-            }
             var mask = builder.ToMask();
             var archetype = ResolveArchetype(mask, groupTypes);
 
@@ -391,6 +411,10 @@ public sealed partial class CommandStream
         return current < 0;
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool ShouldEmitPendingBatch(bool canceled, Entity entity, bool deferredMode)
+        => deferredMode ? !canceled : !canceled || !entity.IsPlaceholder;
+
     private static void AccumulatePendingEntitiesDeltaBudget(
         ref FrameDelta.Budget budget, in PendingBatchView view, bool deferredMode)
     {
@@ -402,13 +426,13 @@ public sealed partial class CommandStream
         {
             for (var i = 0; i < pendingBatchCount; i++)
             {
-                if (!batchCanceled[i])
+                if (ShouldEmitPendingBatch(batchCanceled[i], batchEntities[i], deferredMode))
                     budget.AddReserve(batchEntities[i]);
             }
 
             for (var i = 0; i < pendingBatchCount; i++)
             {
-                if (!batchCanceled[i])
+                if (ShouldEmitPendingBatch(batchCanceled[i], batchEntities[i], deferredMode))
                     AccumulateCreateDeltaBudget(ref budget, view, i);
             }
             return;
@@ -423,7 +447,7 @@ public sealed partial class CommandStream
             // real-id output mode it therefore has no allocator event to mirror.
             // ResolveDeferredCreates intentionally leaves its placeholder intact,
             // which makes this distinction observable without extra state.
-            if (canceled && entity.IsPlaceholder)
+            if (!ShouldEmitPendingBatch(canceled, entity, deferredMode))
                 continue;
 
             // Real-id output is budgeted before deferred resolution so budget
@@ -490,14 +514,14 @@ public sealed partial class CommandStream
             // Pass 1: all Reserves for non-cancelled deferred entities.
             for (var i = 0; i < pendingBatchCount; i++)
             {
-                if (batchCanceled[i]) continue;
+                if (!ShouldEmitPendingBatch(batchCanceled[i], batchEntities[i], deferredMode)) continue;
                 delta.AddReserve(batchEntities[i]);
             }
 
             // Pass 2: all Creates for non-cancelled deferred entities.
             for (var i = 0; i < pendingBatchCount; i++)
             {
-                if (batchCanceled[i]) continue;
+                if (!ShouldEmitPendingBatch(batchCanceled[i], batchEntities[i], deferredMode)) continue;
                 EmitCreateFromBatch(delta, view, i);
             }
             return;
@@ -513,7 +537,7 @@ public sealed partial class CommandStream
             // because they never touched the source allocator. Emitting a
             // placeholder Reserve+Release in an otherwise real-id delta would
             // advance only the replica allocator and break convergence.
-            if (canceled && entity.IsPlaceholder)
+            if (!ShouldEmitPendingBatch(canceled, entity, deferredMode))
                 continue;
 
             delta.AddReserve(entity);
@@ -626,8 +650,10 @@ public sealed partial class CommandStream
             if ((uint)(id - _pendingBatchMin) < (uint)(_pendingBatchMax - _pendingBatchMin) &&
                 id < _frozen.PendingBatch.Length)
             {
+                // Recycled FrozenState retains sparse id mappings beyond the active count.
                 batchIdx = _frozen.PendingBatch[id];
-                if (batchIdx >= 0 && !_frozen.BatchCanceled[batchIdx] && _frozen.BatchEntities[batchIdx] == entity)
+                if ((uint)batchIdx < (uint)_frozen.PendingBatchCount &&
+                    !_frozen.BatchCanceled[batchIdx] && _frozen.BatchEntities[batchIdx] == entity)
                     return true;
             }
         }
@@ -672,7 +698,6 @@ public sealed partial class CommandStream
                     _frozen.BatchCompCounts[batchIdx] = 0;
                     _frozen.BatchCanceled[batchIdx] = true;
                     _frozen.CancelledBatchCount++;
-                    _frozen.HierarchyByChild.Remove(entity);
                     _submitEpoch = _world.ReservedReleaseEpoch;
                 }
             }
@@ -690,7 +715,6 @@ public sealed partial class CommandStream
                     _frozen.BatchCompCounts[batchIdx] = 0;
                     _frozen.BatchCanceled[batchIdx] = true;
                     _frozen.CancelledBatchCount++;
-                    _frozen.HierarchyByChild.Remove(entity);
                 }
             }
         }

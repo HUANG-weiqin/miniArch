@@ -11,8 +11,7 @@ public sealed partial class World
     // Below this count, Destroy falls back to individual Destroy calls.
     // The batch machinery (gen tracking, scratch arrays, archetype grouping)
     // costs ~0.4 us fixed; at R <= 8 that overhead exceeds the per-entity savings
-    // from bulk storage operations. Semantic equivalence is guaranteed by the
-    // child-first cascade order in Destroy.
+    // from bulk storage operations. Both paths preserve input destroy order.
     internal const int SmallDestroyThreshold = 8;
 
     /// <summary>
@@ -39,8 +38,6 @@ public sealed partial class World
         {
             Array.Resize(ref _records, entityCapacity);
         }
-
-        EnsureDestroyScratchCapacity(entityCapacity);
     }
 
     private void EnsureEntityCapacity(int requiredCount)
@@ -52,15 +49,9 @@ public sealed partial class World
     }
 
     /// <summary>
-    /// Destroys an entity and, if it has children, its entire descendant subtree.
+    /// Destroys only the specified entity.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// Destruction cascades through the hierarchy in post-order (children before
-    /// parent) so that no orphaned child is left behind. If the entity has no
-    /// children, only itself is destroyed. Call <see cref="RemoveChild"/> first if
-    /// you need to destroy a parent while preserving its subtree.
-    /// </para>
     /// <para><b>When to use:</b> destroying a single entity.</para>
     /// <para><b>When NOT to use:</b> destroying many entities — use
     /// <see cref="Destroy(ReadOnlySpan{Entity})"/> for batch optimization,
@@ -70,49 +61,13 @@ public sealed partial class World
     {
         AssertNotDisposed();
 
-        if (!_hierarchy.HasChildren(this, entity))
-        {
-            DestroyAliveLeaf(entity, RequireLocation(entity));
-            return;
-        }
-
-        if (++_destroyCurrentGen == 0)
-        {
-            Array.Clear(_destroyVisitedGen);
-            _destroyCurrentGen = 1;
-        }
-
-        BeginStructChange();
-        try
-        {
-            _hierarchy.CollectDestroySubtree(this, entity, _destroyVisitedGen, _destroyCurrentGen, _destroyOrderScratch);
-            if (_destroyOrderScratch.Count == 0)
-            {
-                throw new InvalidOperationException($"Cannot destroy entity {entity}: it is no longer alive. The entity may have already been destroyed.");
-            }
-
-            for (var index = 0; index < _destroyOrderScratch.Count; index++)
-            {
-                DestroySingle(_destroyOrderScratch[index]);
-            }
-        }
-        finally
-        {
-            EndStructChange();
-            _destroyOrderScratch.Clear();
-        }
+        DestroyAliveLeaf(entity, RequireLocation(entity));
     }
 
     internal void DestroyIfAlive(Entity entity)
     {
         if (!TryGetAliveRecord(entity, out var info))
             return;
-
-        if (_hierarchy.HasChildrenUnchecked(entity))
-        {
-            Destroy(entity);
-            return;
-        }
 
         DestroyAliveLeaf(entity, info);
     }
@@ -142,15 +97,15 @@ public sealed partial class World
     /// <remarks>
     /// <para>
     /// The destroy order is identical to running <c>if (world.IsAlive(e)) world.Destroy(e)</c>
-    /// for each supplied entity: hierarchy cascades are collected child-first, duplicates are
-    /// ignored after their first destruction, and free-list order is preserved. Storage removal
+    /// for each supplied entity: duplicates are ignored after their first destruction,
+    /// and free-list order is preserved. Storage removal
     /// is then grouped per archetype so full-archetype clears use <c>ResetCount</c> and partial
     /// clears use unordered hole-fill compaction.
     /// </para>
     /// <para><b>When to use:</b> you have a batch of entity handles to destroy and want the
-    /// storage optimization (1.3-2.3× vs for-loop). Hierarchy cascade is preserved.
-    /// For query-based destroy, see <see cref="Destroy(in QueryDescription)"/>.
-    /// For archetype-level teardown without cascade, see <see cref="Clear(in QueryDescription)"/>.</para>
+    /// storage optimization (1.3-2.3× vs for-loop). For query-based destroy,
+    /// see <see cref="Destroy(in QueryDescription)"/>. For archetype-level teardown,
+    /// see <see cref="Clear(in QueryDescription)"/>.</para>
     /// </remarks>
     public void Destroy(ReadOnlySpan<Entity> entities)
     {
@@ -162,8 +117,7 @@ public sealed partial class World
         }
 
         // Small batches: skip the collection/grouping machinery and destroy
-        // individually. Semantic equivalence holds because Destroy's child-first
-        // cascade produces the same free-list order as the batch path.
+        // individually. Both paths preserve the same free-list order.
         if (length <= SmallDestroyThreshold)
         {
             // The input may come directly from ChunkView.GetEntities(). Each
@@ -179,7 +133,7 @@ public sealed partial class World
             return;
         }
 
-        BeginDestroyCollection();
+        BeginDestroyCollection(Math.Min(length, _entitySlotCount));
         try
         {
             for (var i = 0; i < length; i++)
@@ -202,12 +156,10 @@ public sealed partial class World
     /// <remarks>
     /// <para>
     /// Matching entities are first materialized from the query snapshot, then destroyed with the
-    /// same cascade and batching rules as <see cref="Destroy(ReadOnlySpan{Entity})"/>.
-    /// Descendants are destroyed even when they do not match the query.
+    /// same batching rules as <see cref="Destroy(ReadOnlySpan{Entity})"/>.
     /// </para>
-    /// <para><b>When to use:</b> destroying all entities matching a component set,
-    /// when hierarchy cascade is needed. See <see cref="Clear(in QueryDescription)"/>
-    /// for a faster variant without cascade.</para>
+    /// <para><b>When to use:</b> destroying all entities matching a component set.
+    /// See <see cref="Clear(in QueryDescription)"/> for a faster archetype-level teardown.</para>
     /// </remarks>
     public void Destroy(in QueryDescription description)
     {
@@ -220,7 +172,13 @@ public sealed partial class World
             return;
         }
 
-        BeginDestroyCollection();
+        var candidateCount = 0;
+        for (var i = 0; i < archetypes.Length; i++)
+            candidateCount += archetypes[i].EntityCount;
+        if (candidateCount == 0)
+            return;
+
+        BeginDestroyCollection(candidateCount);
         try
         {
             for (var archetypeIndex = 0; archetypeIndex < archetypes.Length; archetypeIndex++)
@@ -247,43 +205,12 @@ public sealed partial class World
     /// <remarks>
     /// <para>
     /// Unlike <see cref="Destroy(in QueryDescription)"/>, which collects and
-    /// processes individual entities (cascade, dedup, compaction), this method
+    /// processes individual entities (dedup, compaction), this method
     /// resets each matched archetype directly. It is significantly faster
-    /// (~4× vs for-loop, ~2× vs <c>Destroy(query)</c>) but makes three
-    /// simplifying assumptions the caller must understand:
+    /// (~4× vs for-loop, ~2× vs <c>Destroy(query)</c>) and kills all matched entities.
     /// </para>
-    /// <list type="number">
-    /// <item>
-    /// <b>No hierarchy cascade.</b> Entities in matched archetypes that have
-    /// children in <i>non-matched</i> archetypes will leave those children
-    /// orphaned. The orphaned children remain alive but their parent reference
-    /// becomes stale — <see cref="IsAlive(Entity)"/> on the dead parent handle
-    /// returns <c>false</c>, and <see cref="TryGetParent"/> also returns
-    /// <c>false</c> because it filters dead parent handles. Do not use this
-    /// method if matched entities may have descendants outside the query.
-    /// </item>
-    /// <item>
-    /// <b>No hierarchy unlink from parents.</b> If an entity being cleared has
-    /// a parent that survives (in a non-matched archetype), the parent's child
-    /// list retains a stale slot. The slot is never freed, causing a minor
-    /// memory leak in the hierarchy slot pool. <see cref="HasChildren"/> may
-    /// return <c>true</c> for the parent until it is itself destroyed.
-    /// </item>
-    /// <item>
-    /// <b>No per-entity validation.</b> All entities in matched archetypes are
-    /// killed unconditionally. This is safe because a query always matches
-    /// entire archetypes, but means the caller cannot exclude specific entities.
-    /// </item>
-    /// </list>
-    /// <para>
-    /// <b>When to use:</b> bulk scene teardown, archetype recycling, stress
-    /// tests — any scenario where you are certain no hierarchy crosses the
-    /// query boundary.
-    /// </para>
-    /// <para>
-    /// <b>When NOT to use:</b> use <see cref="Destroy(in QueryDescription)"/>
-    /// instead if any matched entity might have children outside the query.
-    /// </para>
+    /// No per-entity validation is performed: all entities in matched archetypes
+    /// are killed unconditionally. Use this for bulk teardown or archetype recycling.
     /// </remarks>
     public void Clear(in QueryDescription description)
     {
@@ -314,13 +241,11 @@ public sealed partial class World
                 var entity = entities[i];
                 var nextVersion = NextEntityVersion(entity);
 
-                _hierarchy.ClearHierarchyState(entity);
-
                 ref var record = ref _records[entity.Id];
                 record = default;
                 record.Version = nextVersion;
 
-                _freeIds[_freeIdCount++] = new RecycledEntity(entity.Id, nextVersion);
+                _freeIds[_freeIdCount++] = entity.Id;
             }
 
             archetype.ResetCount();
@@ -431,11 +356,6 @@ public sealed partial class World
         throw new InvalidOperationException($"Entity {entity} is no longer alive. It may have been destroyed in a previous frame or the handle is stale.");
     }
 
-    private void DestroySingle(Entity entity)
-    {
-        DestroySingle(entity, RequireLocation(entity));
-    }
-
     private void DestroySingle(Entity entity, EntityRecord info)
     {
         var arch = info.Archetype!;
@@ -451,17 +371,17 @@ public sealed partial class World
         }
     }
 
-    private void BeginDestroyCollection()
+    private void BeginDestroyCollection(int candidateCapacity)
     {
         _destroyOrderScratch.Clear();
+        _destroyOrderScratch.EnsureCapacity(candidateCapacity);
+        EnsureDestroyVisitedCapacity(_entitySlotCount);
 
         if (++_destroyCurrentGen == 0)
         {
             Array.Clear(_destroyVisitedGen);
             _destroyCurrentGen = 1;
         }
-
-        EnsureDestroyScratchCapacity(_entitySlotCount);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -489,12 +409,6 @@ public sealed partial class World
 
         if (IsMarkedForDestroy(entity.Id))
         {
-            return;
-        }
-
-        if (_hierarchy.HasChildren(this, entity))
-        {
-            _hierarchy.CollectDestroySubtree(this, entity, _destroyVisitedGen, _destroyCurrentGen, _destroyOrderScratch);
             return;
         }
 
@@ -559,6 +473,16 @@ public sealed partial class World
             groupFirstCandidateIndices[groupIndex] = i;
         }
 
+        var maxCompactionRows = 0;
+        for (var i = 0; i < groupCount; i++)
+        {
+            var rowCount = groupArchetypes[i].EntityCount;
+            if (groupCounts[i] != rowCount && !UseSparseDestroy(groupCounts[i], rowCount))
+                maxCompactionRows = Math.Max(maxCompactionRows, rowCount);
+        }
+        if (_destroyRowMarks.Length < maxCompactionRows)
+            Array.Resize(ref _destroyRowMarks, maxCompactionRows);
+
         MarkAndResetFullyDestroyedArchetypes(
             groupArchetypes.AsSpan(0, groupCount),
             groupCounts.AsSpan(0, groupCount),
@@ -585,6 +509,9 @@ public sealed partial class World
 
         _destroyOrderScratch.Clear();
     }
+
+    private static bool UseSparseDestroy(int removeCount, int entityCount) =>
+        (long)removeCount * 5 < entityCount;
 
     private static void MarkAndResetFullyDestroyedArchetypes(
         ReadOnlySpan<Archetype> groupArchetypes,
@@ -631,7 +558,7 @@ public sealed partial class World
             // Crossover at R ≈ M/5: per-entity costs R×~40 cycles (RemoveAt +
             // record lookup + update), dense scan costs M×~2 cycles + R×~30.
             // 40R = 2M + 30R → R = M/5.
-            if ((long)removeCount * 5 < entityCount)
+            if (UseSparseDestroy(removeCount, entityCount))
             {
                 for (var ci = groupFirstCandidateIndices[groupIndex]; ci >= 0; ci = candidateNextIndices[ci])
                 {
@@ -655,18 +582,13 @@ public sealed partial class World
                 compactRows[rowCount++] = candidateRows[candidateIndex];
             }
 
-            var markGen = NextDestroyRowMarkGen(entityCount);
+            var markGen = NextDestroyRowMarkGen();
             archetype.CompactRemoveRows(compactRows.AsSpan(0, rowCount), _destroyRowMarks, markGen, _records);
         }
     }
 
-    private int NextDestroyRowMarkGen(int rowCapacity)
+    private int NextDestroyRowMarkGen()
     {
-        if (_destroyRowMarks.Length < rowCapacity)
-        {
-            Array.Resize(ref _destroyRowMarks, rowCapacity);
-        }
-
         if (++_destroyRowMarkGen == 0)
         {
             Array.Clear(_destroyRowMarks);
@@ -679,15 +601,10 @@ public sealed partial class World
     private void KillEntityRecord(Entity entity)
     {
         var nextVersion = NextEntityVersion(entity);
-        if (_hierarchy.HasAnyRelations(entity))
-        {
-            _hierarchy.RemoveDestroyed(entity);
-        }
-
         ref var record = ref _records[entity.Id];
         record = default;
         record.Version = nextVersion;
-        PushFreeIdUnsafe(entity.Id, nextVersion);
+        PushFreeIdUnsafe(entity.Id);
     }
 
     private Entity CreateInArchetype(Archetype archetype, out int rowIndex)
@@ -725,21 +642,20 @@ public sealed partial class World
     {
         if (_freeIdCount > 0)
         {
-            var recycled = PopFreeIdUnsafe();
-            version = recycled.Version;
-            return recycled.Id;
+            var recycledId = PopFreeIdUnsafe();
+            version = _records[recycledId].Version;
+            return recycledId;
         }
 
         var id = _entitySlotCount;
         EnsureEntityCapacity(_entitySlotCount + 1);
         _records[_entitySlotCount] = new EntityRecord { Version = 1 };
         _entitySlotCount++;
-        EnsureDestroyScratchCapacity(_entitySlotCount);
         version = 1;
         return id;
     }
 
-    private void PushFreeIdUnsafe(int id, int version)
+    private void PushFreeIdUnsafe(int id)
     {
         if (_freeIdCount == _freeIds.Length)
         {
@@ -749,7 +665,7 @@ public sealed partial class World
             Array.Resize(ref _freeIds, newCapacity);
         }
 
-        _freeIds[_freeIdCount++] = new RecycledEntity(id, version);
+        _freeIds[_freeIdCount++] = id;
     }
 
     private void EnsureFreeIdCapacity(int required)
@@ -769,16 +685,15 @@ public sealed partial class World
         Array.Resize(ref _freeIds, newCapacity);
     }
 
-    private RecycledEntity PopFreeIdUnsafe()
+    private int PopFreeIdUnsafe()
     {
         return _freeIds[--_freeIdCount];
     }
 
     /// <summary>
-    /// Removes the free-list entry <c>(id, version)</c> from its current position
-    /// and re-appends it at the end (preserving all other entries' relative order).
-    /// If no matching entry exists (the slot was reused by a subsequent Create),
-    /// this is a no-op.
+    /// Moves the free-list entry for <c>id</c> to the end, preserving the
+    /// relative order of other entries. Only moves the expected generation;
+    /// if the slot was reused or is absent from the free list, this is a no-op.
     /// </summary>
     /// <remarks>
     /// Used by <see cref="CommandStream.Submit"/> to align the free-list order
@@ -790,17 +705,20 @@ public sealed partial class World
     /// rejected. Realistic cancel batch size per frame is &lt;1000; beyond that
     /// the frame itself is already too heavy. Keep as-is.
     /// </remarks>
-    internal void RepushFreeEntry(int id, int version)
+    internal void RepushFreeEntry(int id, int expectedVersion)
     {
+        if ((uint)id >= (uint)_entitySlotCount || _records[id].Version != expectedVersion)
+            return;
+
         for (var i = 0; i < _freeIdCount; i++)
         {
-            if (_freeIds[i].Id == id && _freeIds[i].Version == version)
+            if (_freeIds[i] == id)
             {
                 // Remove from current position (shift survivors left).
                 _freeIdCount--;
                 Array.Copy(_freeIds, i + 1, _freeIds, i, _freeIdCount - i);
                 // Re-append at end.
-                PushFreeIdUnsafe(id, version);
+                PushFreeIdUnsafe(id);
                 return;
             }
         }
@@ -840,7 +758,7 @@ public sealed partial class World
 
         var nextVersion = NextEntityVersion(entity);
         record.Version = nextVersion;
-        PushFreeIdUnsafe(entity.Id, nextVersion);
+        PushFreeIdUnsafe(entity.Id);
         _reservedCount--;
         ReservedReleaseEpoch++;
     }
@@ -859,33 +777,16 @@ public sealed partial class World
 
         var nextVersion = NextEntityVersion(entity);
         record.Version = nextVersion;
-        PushFreeIdUnsafe(entity.Id, nextVersion);
+        PushFreeIdUnsafe(entity.Id);
         _reservedCount--;
         ReservedReleaseEpoch++;
         return true;
     }
 
-    private void EnsureDestroyScratchCapacity(int entityCount)
+    private void EnsureDestroyVisitedCapacity(int slotCount)
     {
-        if (entityCount <= 0)
-        {
-            return;
-        }
-
-        _destroyOrderScratch.EnsureCapacity(entityCount);
-        if (_destroyVisitedGen.Length < entityCount)
-        {
-            Array.Resize(ref _destroyVisitedGen, Math.Max(entityCount, _destroyVisitedGen.Length * 2));
-        }
-
-        if (_destroyRowMarks.Length < entityCount)
-        {
-            Array.Resize(ref _destroyRowMarks, Math.Max(entityCount, _destroyRowMarks.Length * 2));
-        }
-
-        // Note: batch scratch arrays (_destroyGroupArchetypes, etc.) are sized
-        // lazily in EnsureDestroyBatchCapacity(destroyCount) — only as large as
-        // the actual destroy batch, not the total entity slot count.
+        if (_destroyVisitedGen.Length < slotCount)
+            Array.Resize(ref _destroyVisitedGen, Math.Max(slotCount, _destroyVisitedGen.Length * 2));
     }
 
     private void EnsureDestroyBatchCapacity(int count)
@@ -935,7 +836,6 @@ public sealed partial class World
         EnsureEntityCapacity(entity.Id + 1);
         _records[entity.Id] = new EntityRecord { Version = entity.Version };
         _entitySlotCount = entity.Id + 1;
-        EnsureDestroyScratchCapacity(_entitySlotCount);
     }
 
     /// <remarks>
@@ -963,7 +863,7 @@ public sealed partial class World
     {
         for (var i = _freeIdCount - 1; i >= 0; i--)
         {
-            if (_freeIds[i].Id == entity.Id && _freeIds[i].Version == entity.Version)
+            if (_freeIds[i] == entity.Id && _records[entity.Id].Version == entity.Version)
             {
                 _freeIdCount--;
                 Array.Copy(_freeIds, i + 1, _freeIds, i, _freeIdCount - i);
@@ -994,13 +894,11 @@ public sealed partial class World
 
     /// <summary>
     /// Returns <c>entity.Version + 1</c>, wrapping to 1 on overflow past <see cref="int.MaxValue"/>.
-    /// Must be called before any mutation (archetype RemoveAt, hierarchy cleanup, record write).
+    /// Must be called before any mutation (archetype RemoveAt or record write).
     /// </summary>
     private static int NextEntityVersion(Entity entity)
     {
         return entity.Version == int.MaxValue ? 1 : entity.Version + 1;
     }
-
-    internal readonly record struct RecycledEntity(int Id, int Version);
 
 }

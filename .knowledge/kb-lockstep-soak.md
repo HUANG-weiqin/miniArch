@@ -2,7 +2,7 @@
 title: 多 host Lockstep 浸泡测试 — 网络同步收敛验证
 module: LockstepSoak
 description: N host placeholder lockstep 长周期随机操作收敛验证器——所有 host 全走 Replay 路径，以可配置周期和最终帧 CanonicalChecksum 比对收敛，并用 per-frame component overlay 保证生成的 strict intent 合法。
-updated: 2026-08-29
+updated: 2026-10-10
 ---
 # 多 host Lockstep 浸泡测试 — 网络同步收敛验证
 
@@ -13,11 +13,11 @@ updated: 2026-08-29
 - 核心职责：验证 **N 个独立 host 全部走 Replay 路径**时，跨 host `CanonicalChecksum` 字节级收敛。
   - 每 host 独立 World + 独立 id allocator + `CommandStream{DeferredEntities=true}`
   - 每帧：每 host record 随机 op → Snapshot 出 placeholder delta → Clear（relay 模式不 Submit）→ 所有 host 按固定 hostId 顺序串行 Replay 全部 N 个 delta；checksum 默认每帧比对，长跑可降频且最终帧强制比对
-  - 复用单 host soak 的 6 阶段相位（WarmUp/StableMutate/MigrationStorm/HierarchyStress/AllocatorChurn/Cooldown）+ 8 种 op 词汇
+  - 与单 host soak 互补；当前六阶段为 WarmUp (10%)、StableMutate (30%)、MigrationStorm (15%)、ComponentChurn (15%)、AllocatorChurn (20%)、Cooldown (10%)，六种 op 为 Create/Destroy/Add/Set/Remove/单实体 Clone；旧 `HierarchyStress` 与层级 op 已退役（见 `kb-soak-test.md`）
 - 这个测试**负责验证**：
   - `DeferredEntities=true` 整条分支（CreateDeferredImpl / EmitPendingEntitiesToDelta placeholder 分支 / EnsureReplayReservation / `_replayPlaceholderMap` 生命周期）的长期稳定性
   - N 个 delta 交错 Replay 时 **id allocator / free-list 跨 host 收敛**（B5/B6 类 cancel+reorder 分歧在多 host 下的表现）
-  - placeholder 同帧引用（EntityFieldResolver 自动解析）在多 host 下正确
+  - 直接 Create 的 `CompRef(Entity Target)` 自引用 placeholder 在 host[0] 上解析为自身 real id；其他 host 由 checksum 收敛覆盖，但这不是任意引用关系的完整 oracle
 - 这个测试**不负责**：
   - Submit vs Replay 双路径对比（那是单 host soak 的事，`kb-soak-test.md`）
   - 多 host 对**同一 real entity** 的并发结构变更（这是非法 lockstep 用法——见决策 #3，正确做法走确定性后处理系统，BulletLockstep demo 已覆盖）
@@ -29,7 +29,7 @@ updated: 2026-08-29
 |------|------|------|
 | **拓扑** | 1 source + 1 shadow | N host（默认 4，可配 2/8） |
 | **flag** | `DeferredEntities=false` | `DeferredEntities=true` |
-| **源路径** | source 走 `Submit()` | 所有 host 走 `Snapshot()` + `Clear()`（relay，不 Submit） |
+| **源路径** | source 走同步 Submit 或 `SubmitAndSnapshotAsync()` | 所有 host 走 `Snapshot()` + `Clear()`（relay，不 Submit） |
 | **副本路径** | shadow 走 `Replay()` | 所有 host（含产生者自己）走 `Replay()` |
 | **验证的性质** | 同一 host 两条代码路径收敛 | N host 全 Replay 路径收敛 |
 | **delta 交错** | 单 delta | N delta 每帧按 hostId 顺序串行 replay |
@@ -69,7 +69,7 @@ for frame in 1..TotalFrames:
 | EntityCount 跨 host | 每帧 | host[0].EntityCount vs 其余 |
 | CanonicalChecksum 跨 host | 每 ChecksumInterval（默认 1）+ 最终帧 | host[0] 字节 vs 其余；降频可能漏掉后来重新收敛的瞬时分歧，只用于扩大长跑覆盖 |
 | WorldValidator | 每 ValidateInterval（默认 100） | 每 host 结构不变量 |
-| CompA/CompB mutation oracle | 每 100 帧 + 最终帧 | host[0] 完整 tracked 集；同时校验 presence 和 value；累计检查数必须 >0 |
+| CompA/CompB + 创建自引用 oracle | 每 100 帧 + 最终帧 | host[0] 完整 tracked 集；CompA/B 校验 presence/value；直接 Create 的 `CompRef.Target == entity`，Clone 不强制此等式；累计检查数必须 >0 |
 | Checkpoint | 每 CheckpointInterval（默认 10000） | 跨 host WorldDiff + 每 host Snapshot 往返 + Clone 自洽 |
 
 ## 决策
@@ -98,16 +98,16 @@ record op 与 Phase 3 replay 都只在帧级捕获异常：打印 `FailWithExcep
 
 ### 决策 #4：op 目标池 = realOwned + createdThisFrame
 
-每 host 帧头 `RebuildAlive` 填充 realOwned（前序帧残留的本 host real entity）。`OpCreate` 把新 placeholder 追加到 `createdThisFrame`。所有 op（Destroy/Add/Set/Remove/Clone/AddChild/RemoveChild）从两者并集取。
+每 host 帧头 `RebuildAlive` 填充 realOwned（前序帧残留的本 host real entity）。`OpCreate` 把新 placeholder 追加到 `createdThisFrame`。非层级 op（Destroy/Add/Set/Remove/单实体 Clone 等）从两者并集取。
 
-- 对 realOwned 的 real entity：Destroy/Add/Set/Remove/Clone/AddChild 全部合法（本 host 独占）。
-- 对 createdThisFrame 的 placeholder：Add/Set/AddChild 合法（同帧引用，EntityFieldResolver 自动解析）；**Destroy 一个 placeholder = 同帧 cancel**（覆盖 B5/B6 cancel+reorder 路径）。
+- 对 realOwned 的 real entity：Destroy/Add/Set/Remove/单实体 Clone 可在本 host 所有权与组件契约下生成。
+- 对 createdThisFrame 的 placeholder：Add/Set 与普通组件 `Entity` 引用可同帧解析；**Destroy 一个 placeholder = 只取消该实体**（覆盖 B5/B6 cancel+reorder 路径）。
 
 placeholder（Id<0）跳过 `world.IsAlive` 检查（它还没 materialize）；real entity（Id>=0）才查 IsAlive。用 `Entity.IsPlaceholder` 区分。
 
 组件 presence 不能只读 frame-start `World.Has<T>`。同一帧稍早录制的 Add/Remove 尚未进入 World，生成器用 `PendingComponentPresence[(entity, componentKind)]` 表示最终虚拟 presence；Add/Set/Remove 都先查 overlay，再追加并更新 overlay。这既拒绝重复 Add，也允许 Remove→Add、Add→Set、Add→Remove 等合法序列。
 
-host0 对直接 Create、AddChild child 与 Clone root 调用 `Track(placeholder)`。source host replay 自己的 delta 时传 `resolveSlots:true`，随后把 mutation model 的 placeholder key 重映射为 real Entity。递归 clone 的内部 child 没有 public placeholder handle，第一次在下一帧观察到时从 World 建立 CompA/CompB baseline；之后的生成操作仍由 model 独立预测。因此这是**变更 oracle**，不是完整 World 形式化模型。
+host0 对直接 Create 与单实体 Clone 返回的 placeholder 调用 `Track(placeholder)`。source host replay 自己的 delta 时传 `resolveSlots:true`，随后把 mutation model 的 placeholder key 重映射为 real Entity。直接 Create 还写入 `CompRef(e)`，host0 的 oracle 只对这种新建实体验证 placeholder 解析后的自引用；Clone 复制来源引用，不应错误断言 clone 自引用。旧 AddChild child/递归 clone child 的跟踪路径随内置层级退役；此 oracle 不覆盖任意跨实体引用或完整 World 模型。
 
 `--checksum-interval N` 与 `--validate-interval N` 分离：前者控制跨 host checksum，后者只控制 WorldValidator。默认 checksum interval=1；长跑使用更大值能显著提速，但会牺牲瞬时分歧定位能力，最终帧始终强制 checksum。
 
@@ -131,7 +131,7 @@ host0 对直接 Create、AddChild child 与 Clone root 调用 `Track(placeholder
   - `PickTarget()`：目标池合并
   - `Verify()`：跨 host 校验
   - `Fail()`/`DumpDesync()`/`FailWithException()`：诊断输出
-- 改 op 词汇：`OpCreate`/`OpDestroy`/.../`OpRemoveChild`
+- 改 op 词汇：以当前 `LockstepSoakRunner.cs` 六种操作为准；`OpRemoveChild` 等旧层级 op 已退役
 - 跑：见下文用法
 
 ## 坑点
@@ -165,10 +165,10 @@ v1 实现为了让烟跑 PASS 犯了三个错，**让"PASS"变成"测得不够�
 
 ### 当前已知局限
 
-- **mutation model 仅 host[0] 的 CompA/CompB**：直接 create/clone root 从 intent 建模；递归 clone child 首次观察时从 World 建 baseline，因此不能宣称完整独立 oracle。它用于补抓 baseline 后所有 host 同步算错的 mutation/presence bug。
+- **mutation model 仅 host[0] 的 CompA/CompB 与直接 Create 自引用**：直接 create/单实体 clone 从 intent 建模，只有直接 Create 的 `CompRef.Target` 校验自引用；旧递归 clone child 的观察边界已退役。不能宣称完整独立 Ref/World oracle；它用于补抓所有 host 同步算错的 mutation/presence bug。
 - **real-entity 跨 host 操作未覆盖**：见决策 #2，这是设计选择不是缺陷（合法用法走确定性系统）。
 - **SubmitAndSnapshotAsync / Authority+Mirror 路径未覆盖**：本工具只测 P2P placeholder 模式。Authority 拓扑的 fuzz 是后续工作（BulletLockstep Slice 8 有手工覆盖）。
-- **EntityFieldResolver 组件字段自动解析**：本工具的测试组件（CompA/B/C/D/OwnerTag）不含 `Entity` 字段，故该路径不在 fuzz 内。已由定点测试 `NetworkSyncTests.T8_Entity_field_placeholder_resolves_across_hosts` 覆盖（多 host placeholder delta 交错下，组件 `Entity` 字段解析为 real id 且跨 host 一致）。如需 fuzz 覆盖，给测试组件加一个 `Entity` 字段即可。
+- **EntityFieldResolver 组件字段自动解析**：本工具的 `CompRef(Entity Target)` 覆盖直接 Create 的同帧自引用解析与 host0 定点 oracle；不覆盖任意跨实体/跨 host real target。另有 `NetworkSyncTests.T8_Entity_field_placeholder_resolves_across_hosts` 定点测试。
 
 ## 用法
 
@@ -209,7 +209,7 @@ dotnet run -c Release --project tools/lockstep-soak/MiniArch.LockstepSoak -- --f
 - 必须 `-c Release`（与 NuGet 包一致）
 - `entity-floor` 必须 < `entity-cap`，否则 cap/floor 调节矛盾
 - 不加进 `miniArch.sln`（独立 `dotnet run` 工具，与 soak 一致）
-- `InternalsVisibleTo("MiniArch.LockstepSoak")` 已在 `src/MiniArch/Properties/AssemblyInfo.cs`（访问 `ActiveHierarchyForTesting`）
+- 旧 `ActiveHierarchyForTesting` 属于退役层级探针，不是当前工具依赖。
 
 ## 发布门禁（发布负责人决定）
 

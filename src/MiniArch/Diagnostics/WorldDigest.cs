@@ -22,16 +22,15 @@ public static class WorldDigest
 
         var occupancyHash = ComputeOccupancyHash(world);
         var freeListHash = ComputeFreeListHash(world);
-        var hierarchyHash = ComputeHierarchyHash(world);
         var perComponent = ComputePerComponentHashes(world);
         var perArchetype = ComputePerArchetypeHashes(world);
 
         var totalHash = DigestHelper.CombineHashes(
-            occupancyHash, freeListHash, hierarchyHash,
+            occupancyHash, freeListHash,
             CombineTypeDictHash(perComponent),
             CombineIntDictHash(perArchetype));
 
-        return new WorldDigestResult(totalHash, occupancyHash, freeListHash, hierarchyHash,
+        return new WorldDigestResult(totalHash, occupancyHash, freeListHash,
             perComponent, perArchetype);
     }
 
@@ -63,30 +62,13 @@ public static class WorldDigest
         using var builder = new HashBuilder();
 
         var freeList = world.FreeList;
+        var records = world.EntityRecords;
         builder.Append(freeList.Length);
         for (var i = 0; i < freeList.Length; i++)
         {
-            builder.Append(freeList[i].Id);
-            builder.Append(freeList[i].Version);
-        }
-
-        return builder.GetHashAndReset();
-    }
-
-    private static byte[] ComputeHierarchyHash(World world)
-    {
-        using var builder = new HashBuilder();
-
-        var relations = new List<(int ChildId, int ParentId)>();
-        foreach (var (child, parent) in world.Hierarchy.EnumerateLiveRelations(world))
-            relations.Add((child.Id, parent.Id));
-        relations.Sort((a, b) => a.ChildId.CompareTo(b.ChildId));
-
-        builder.Append(relations.Count);
-        foreach (var (childId, parentId) in relations)
-        {
-            builder.Append(childId);
-            builder.Append(parentId);
+            var id = freeList[i];
+            builder.Append(id);
+            builder.Append(records[id].Version);
         }
 
         return builder.GetHashAndReset();

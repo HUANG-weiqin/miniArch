@@ -137,29 +137,6 @@ public sealed class WorldDiffTests
     }
 
     [Fact]
-    public void Hierarchy_diff_detected()
-    {
-        var worldA = new World();
-        var parentA = worldA.CreateEmpty();
-        var childA = worldA.CreateEmpty();
-        worldA.AddChild(parentA, childA);
-
-        var worldB = new World();
-        var parentB = worldB.CreateEmpty();
-        var childB = worldB.CreateEmpty();
-
-        var diff = WorldDiff.Compare(worldA, worldB);
-
-        Assert.False(diff.AreIdentical);
-
-        var ed = diff.EntityDiffs.Single(d => d.EntityId == 1);
-        Assert.Equal(EntityDiffKind.Different, ed.Kind);
-        Assert.NotNull(ed.HierarchyDiff);
-        Assert.Equal(0, ed.HierarchyDiff!.ParentIdA);
-        Assert.Equal(-1, ed.HierarchyDiff.ParentIdB);
-    }
-
-    [Fact]
     public void Different_slot_counts_handled()
     {
         var worldA = new World();
@@ -270,33 +247,15 @@ public sealed class WorldDiffTests
     }
 
     [Fact]
-    public void Identical_worlds_with_hierarchy_are_identical()
-    {
-        var worldA = new World();
-        var parentA = worldA.CreateEmpty();
-        var childA = worldA.CreateEmpty();
-        worldA.AddChild(parentA, childA);
-
-        var worldB = new World();
-        var parentB = worldB.CreateEmpty();
-        var childB = worldB.CreateEmpty();
-        worldB.AddChild(parentB, childB);
-
-        var diff = WorldDiff.Compare(worldA, worldB);
-        Assert.True(diff.AreIdentical);
-    }
-
-    [Fact]
-    public void Both_components_and_hierarchy_diff_reported_together()
+    public void Component_diff_is_reported_when_extra_entities_match()
     {
         var worldA = new World();
         worldA.Create<Position>(new Position(1, 2));
-        var parentA = worldA.CreateEmpty();
-        worldA.AddChild(parentA, new Entity(0, 1));
+        worldA.CreateEmpty();
 
         var worldB = new World();
         worldB.Create<Position>(new Position(99, 100));
-        var parentB = worldB.CreateEmpty();
+        worldB.CreateEmpty();
 
         var diff = WorldDiff.Compare(worldA, worldB);
 
@@ -304,9 +263,6 @@ public sealed class WorldDiffTests
         Assert.Equal(EntityDiffKind.Different, ed.Kind);
         Assert.Single(ed.ComponentDiffs);
         Assert.Equal(ComponentDiffKind.ValueDifferent, ed.ComponentDiffs[0].Kind);
-        Assert.NotNull(ed.HierarchyDiff);
-        Assert.Equal(1, ed.HierarchyDiff!.ParentIdA);
-        Assert.Equal(-1, ed.HierarchyDiff.ParentIdB);
     }
 
     [Fact]

@@ -17,6 +17,7 @@ public static class DeckBuilder
             MiniArch.Entity card = context.Commands.Create();
 
             context.Commands.Add(card, new ActionEntity());
+            context.Commands.Add(card, new ActionOwner(owner));
             context.Commands.Add(card, template.ActionKind);
             context.Commands.Add(card, new ActionRuleId(template.RuleId));
             context.Commands.Add(card, new ActionPointCostValue(template.ActionPointCost));
@@ -43,7 +44,6 @@ public static class DeckBuilder
                 context.Commands.Add(card, new CardTraitFinale());
             }
 
-            context.Commands.AddChild(owner, card);
         }
     }
 }

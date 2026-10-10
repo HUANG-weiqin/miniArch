@@ -2,7 +2,7 @@
 title: Knowledge Index
 module: KnowledgeIndex
 description: .knowledge 知识库导航、模块地图与必读入口
-updated: 2026-09-28
+updated: 2026-10-10
 ---
 
 # Knowledge Index
@@ -18,11 +18,11 @@ updated: 2026-09-28
 | **入门 / 导航** | `kb-design-rationale.md`（**新人必读**：为什么是这样而不是那样）、`kb-glossary.md`（术语表）、`kb-perf-harnesses.md`（perf harness 消歧）、`kb-lockstep-playbook.md`（帧同步端到端 spine）、`kb-code-review-findings.md`（**审阅前必读**：已修复 bug 索引 + 已排除的非 bug 猜想） |
 | Workspace（仓库导航/脚本/流程） | `kb-repo-overview.md`、`kb-profiling-workflow.md`、`kb-throughput-workflow.md` |
 | MiniArch.Core（ECS 运行时） | `kb-core-ecs.md`、`kb-architecture-review.md`、`kb-chunk-storage.md`、`kb-cache-optimization.md`、`kb-partition-prototype-report.md` |
-| MiniArch.Core CommandStream | `kb-command-stream.md`、`kb-deferred-create-design.md` |
+| MiniArch.Core CommandStream | `kb-command-stream.md`（typed/wire 共用规则、回滚时间线、异步冻结所有权）、`kb-deferred-create-design.md` |
 | MiniArch.Core Query | `kb-query-invalidation.md`、`kb-parallel-query.md` |
 | MiniArch.Core ChangeTracking | `kb-change-tracking.md`（World.Watch pull-event 模型：ChangeWatch/TransitionWatch Snapshot+Diff；为什么不是 push event） |
-| MiniArch.Core Snapshot | `kb-snapshot-persistence.md`（v5 字段级 canonical wire、canonical 只含非空原型、严格 Load、双 checksum、Clone/CaptureState 边界） |
-| MiniArch.Core Hierarchy | `kb-hierarchy-runtime.md` |
+| MiniArch.Core Snapshot | `kb-snapshot-persistence.md`（v5 canonical wire、严格 Load、双 checksum、版本单源 free-list 与 Capture/Restore 时间线） |
+| 已移除的内置层级 / 迁移 | `kb-hierarchy-runtime.md`（扁平实体、旧层级存档和 opcode 的明确拒绝边界） |
 | MiniArch.Diagnostics（诊断工具） | `kb-ecs-diagnostics.md`（WorldDiff、WorldValidator、EntityDump、WorldDigest） |
 | MiniArch（用户 API 分层） | `kb-component-bucket-index-mvp-report.md`（ComponentBucketQuery MVP 最终报告——确定性 per-key scan、调用者提供 span 模式、零 core 入侵、正确性模型与性能矩阵）、`kb-frame-read-models.md`（Frame Read Models ValueLab / FrameLookup API Gate：compact CSR 本体成立；逐 row DirectForEach Conditional Hold；chunk-run 通用形态 No-Go；hot bucket/entity-only 禁用区间）、`kb-managed-entity-sidecar-evaluation.md`（Entity -> managed object sidecar 价值验证 No-Go：打败 dictionary 但未优于 competent dense user，serialization 不进 v1） |
 | MiniArch.Tests（测试组织） | `kb-test-workflow.md` |
@@ -38,7 +38,7 @@ updated: 2026-09-28
 | FrifloGameScenarios.Perf（15 场景跨 ECS 对比） | `kb-ecs-comparison.md`、`kb-perf-harnesses.md` |
 | CommandStreamGame.Perf（CommandStream 真实游戏稳态压测） | `kb-commandstream-game-perf.md` |
 | WatchApi.Perf（Watch API 专项吞吐/分配） | `kb-change-tracking.md`、`kb-perf-harnesses.md` |
-| samples/BulletLockstep.Demo（多 host 弹幕游戏集成测试） | `kb-bullet-lockstep-demo.md`（8 个 slice（2-9）端到端压测库全部公共能力：placeholder lockstep / archetype 迁移 / hierarchy / chunked / 持久化 / 回滚） |
+| samples/BulletLockstep.Demo（多 host 弹幕游戏集成测试） | `kb-bullet-lockstep-demo.md`（8 个 slice（2-9）：placeholder lockstep / archetype 迁移 / 显式 Boss 场景清理 / chunked / 持久化 / 回滚；不是全部公共能力的穷尽证明） |
 
 ## 快速入口
 
@@ -77,7 +77,7 @@ updated: 2026-09-28
 - **Chunk 存储** → `kb-chunk-storage.md`
 - **Query 失效机制** → `kb-query-invalidation.md`
 - **并行 Query** → `kb-parallel-query.md`
-- **Hierarchy** → `kb-hierarchy-runtime.md`
+- **内置层级移除 / 旧数据迁移** → `kb-hierarchy-runtime.md`
 
 **反应式 / 变更追踪**：
 - **变更追踪（渲染层反应式）** → `kb-change-tracking.md`（World.Watch pull-event 模型：ChangeWatch/TransitionWatch Snapshot+Diff；为什么不是 push event 见 `kb-design-rationale.md` §3.10）

@@ -376,7 +376,7 @@ public sealed class HardeningEdgeCaseTests
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // Snapshot schemaCount / archetypeCount / hierarchyLinkCount caps
+    // Snapshot schema/archetype count caps and legacy relationship rejection
     // ══════════════════════════════════════════════════════════════════════
 
     /// <summary>
@@ -408,21 +408,20 @@ public sealed class HardeningEdgeCaseTests
     }
 
     /// <summary>
-    /// Malicious snapshot with hierarchyLinkCount beyond entitySlotCount
-    /// must be rejected (prevents OOM from excessive link processing).
+    /// Any nonzero legacy relationship count is unsupported by flat worlds.
     /// </summary>
     [Fact]
-    public void SnapshotLoad_rejects_excessive_hierarchy_link_count()
+    public void SnapshotLoad_rejects_nonzero_legacy_relationship_count()
     {
         var snapshot = BuildV5Snapshot(16, 8, 0, 0, 9);
 
         var ex = Assert.Throws<InvalidDataException>(
             () => WorldSnapshot.Load(new MemoryStream(snapshot, writable: false)));
-        Assert.Contains("hierarchy count", ex.Message);
+        Assert.Contains("hierarchy relation count", ex.Message);
     }
 
     /// <summary>
-    /// Negative schema/archetype/hierarchy counts must also be rejected.
+    /// Negative schema and archetype counts must also be rejected.
     /// </summary>
     [Fact]
     public void SnapshotLoad_rejects_negative_metadata_counts()

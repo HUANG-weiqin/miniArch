@@ -2,7 +2,7 @@
 title: Hardening Roadmap
 module: Meta
 description: 系统性的健壮性加固路线图——从 int 溢出、退化性能、内存安全到确定性保障，按里程碑组织
-updated: 2026-08-29
+updated: 2026-10-10
 ---
 
 > **实施状态：** 2026-07-12 完成 M1-M9 全部代码落地。详细信息见 `kb-changelog.md` §2026-07-12。
@@ -506,13 +506,10 @@ M2.3 的注释**已添加**（之前 commit 已更新 `RemoveFromFreeList` 和 `
 - **改法**：在 `Load` 中加 `if (entitySlotCount > maxReasonableSlots) throw`。上限可设为 `256 * 1024 * 1024`（约 2.6 亿实体，4 GB `EntityRecord[]`）或由用户配置
 - **热路径**：❌ Load 冷路径
 
-### M8.5 Snapshot hierarchy 循环防护
+### M8.5 历史：Snapshot hierarchy 循环防护（能力已退役）
 
-- **位置**：`HierarchyTable.AddChildRestored` → `AddChildCore` → `ValidateAddChild`
-- **当前结论**：restore 与普通 `AddChild` 已共用 Release 常开的 `ValidateAddChild`，恶意快照不能安装自链接或直接/间接循环。
-- **历史调整**：早期额外加过 Debug-only `IsAncestorOf` assert；共享验证补齐后它成为重复检查，并让 Debug 对同一用户错误先抛 `DebugAssertException`、Release 抛 `InvalidOperationException`。2026-07-25 删除重复 assert 和死 helper，以共享无条件验证为单一事实来源。
-- **回归**：`BUG_AddChildFromSnapshot_rejects_cycle_consistently_in_Debug` 同时在 Debug/Release 守卫异常契约。
-- **热路径**：❌ Restore 冷路径
+- 旧实现曾由 `HierarchyTable.AddChildRestored` → `AddChildCore` → `ValidateAddChild` 在 Release 拒绝非法循环；2026-07-25 删除了重复的 Debug-only `IsAncestorOf` assert。旧 `BUG_AddChildFromSnapshot_rejects_cycle_consistently_in_Debug` 只证明当时的异常契约，不是当前 API/测试入口。
+- 当前 v5 保留关系计数字段但要求 0；旧非零关系计数在构造 World 前拒绝。迁移边界见 `kb-hierarchy-runtime.md`。
 
 ---
 

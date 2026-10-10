@@ -55,23 +55,3 @@ public class CommandBufferBenchmarks
         CommandBufferBenchmarkScenarioFactory.RunArchSharedScenario(_archState, Scenario);
     }
 }
-
-public class CommandBufferHierarchyBenchmarks
-{
-    [Params(128, 1000, 10000)]
-    public int EntityCount { get; set; }
-
-    private MiniHierarchyCommandBufferState _state = null!;
-
-    [IterationSetup]
-    public void IterationSetup()
-    {
-        _state = CommandBufferBenchmarkScenarioFactory.CreateMiniHierarchyState(EntityCount);
-    }
-
-    [Benchmark(Description = "MiniArch command buffer hierarchy record+play")]
-    public void MiniArch_CommandBuffer_Hierarchy_RecordPlay()
-    {
-        CommandBufferBenchmarkScenarioFactory.RunMiniHierarchyScenario(_state);
-    }
-}

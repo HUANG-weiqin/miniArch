@@ -12,7 +12,7 @@
 | Query WithAny | ✅ | ❌ | ✅ | ❌ |
 | CommandBuffer / CommandStream | ✅ | ✅ | ✅ | ❌ |
 | Ref 返回组件访问 | ✅ | ✅ | ❌（值拷贝） | ❌ |
-| Entity 层次（AddChild/RemoveChild） | ✅ | ❌ | ✅ | ❌ |
+| 内置 Entity 父子层级 | ❌（扁平实体；[迁移说明](../.knowledge/kb-hierarchy-runtime.md)） | ❌ | ✅ | ❌ |
 | **帧同步（Lockstep）专属** | | | | |
 | **FrameDelta（帧增量）** | ✅ **独有** | ❌ | ❌ | ❌ |
 | **Snapshot() 提取可序列化增量** | ✅ **独有** | ❌ | ❌ | ❌ |

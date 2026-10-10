@@ -3,23 +3,29 @@ using MiniArch.Core;
 
 namespace BulletLockstep.Demo.Systems;
 
-// Updates each WeakPoint's Position from its parent Boss's Position +
-// LocalOffset. Reads parent via World.TryGetParent — exercises the
-// hierarchy runtime read path on every host.
-//
-// Iterate in PlayerTag.HostId-like deterministic order: there's no HostId on
-// weakpoints, so we sort by WeakPointTag.Index instead (the logical key that
-// is identical across hosts).
+// Updates each WeakPoint's Position from the encounter Boss's Position +
+// LocalOffset. Iterate in deterministic WeakPointTag.Index order.
 public static class WeakPointFollowSystem
 {
     private static readonly QueryDescription Query = new QueryDescription()
         .With<WeakPointTag>()
         .With<LocalOffset>();
+    private static readonly QueryDescription BossQuery = new QueryDescription().With<BossTag>();
 
     private static readonly List<(Entity E, int Index)> _buffer = new(32);
 
     public static void Run(World world)
     {
+        var bossPosition = default(Position);
+        var bossFound = false;
+        foreach (var boss in world.Query(in BossQuery))
+        {
+            bossPosition = world.Get<Position>(boss);
+            bossFound = true;
+            break;
+        }
+        if (!bossFound) return;
+
         _buffer.Clear();
         foreach (var e in world.Query(in Query))
         {
@@ -30,11 +36,8 @@ public static class WeakPointFollowSystem
 
         foreach (var (e, _) in _buffer)
         {
-            if (!world.TryGetParent(e, out var parent))
-                continue;
-            var parentPos = world.Get<Position>(parent);
             var offset = world.Get<LocalOffset>(e);
-            world.Set(e, new Position(parentPos.X + offset.Dx, parentPos.Y + offset.Dy));
+            world.Set(e, new Position(bossPosition.X + offset.Dx, bossPosition.Y + offset.Dy));
         }
     }
 }

@@ -312,41 +312,6 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
-    public void Link_and_Unlink_apply_hierarchy_changes()
-    {
-        var world = new World();
-        var parent = world.CreateEmpty();
-        var child = world.CreateEmpty();
-        var stream = new CommandStream(world);
-
-        stream.AddChild(parent, child);
-        Assert.True(stream.Submit());
-
-        Assert.True(world.TryGetParent(child, out var p));
-        Assert.Equal(parent, p);
-
-        stream.RemoveChild(child);
-        Assert.True(stream.Submit());
-        Assert.False(world.TryGetParent(child, out _));
-    }
-
-    [Fact]
-    public void Link_skipped_for_destroyed_existing_entity()
-    {
-        var world = new World();
-        var parent = world.CreateEmpty();
-        var child = world.Create(new Position(1, 2));
-        var stream = new CommandStream(world);
-
-        stream.AddChild(parent, child);
-        stream.Destroy(child);
-        Assert.True(stream.Submit());
-
-        Assert.False(world.IsAlive(child));
-        // Parent should have no children since child was destroyed before AddChild applied
-    }
-
-    [Fact]
     public void Clone_copies_all_components_to_created_entity()
     {
         var world = new World();
@@ -365,33 +330,6 @@ public sealed class CommandStreamTests
         // Source unchanged
         Assert.True(world.TryGet(entity, out Position sp));
         Assert.Equal(new Position(1, 2), sp);
-    }
-
-    [Fact]
-    public void Clone_deep_copies_children_hierarchy()
-    {
-        var world = new World();
-        var parent = world.Create(new Position(1, 2));
-        var child1 = world.Create(new Velocity(3, 4));
-        var child2 = world.Create(new Health(100));
-        world.AddChild(parent, child1);
-        world.AddChild(parent, child2);
-
-        var stream = new CommandStream(world);
-        var clone = stream.Clone(parent);
-        Assert.True(stream.Submit());
-
-        Assert.True(world.IsAlive(clone));
-        Assert.True(world.TryGet(clone, out Position p));
-        Assert.Equal(new Position(1, 2), p);
-
-        // Clone should have children
-        var cloneChildren = new List<Entity>();
-        foreach (var c in world.Hierarchy.EnumerateChildren(world, clone))
-        {
-            cloneChildren.Add(c);
-        }
-        Assert.Equal(2, cloneChildren.Count);
     }
 
     [Fact]
@@ -479,25 +417,6 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
-    public async Task SubmitAndSnapshotAsync_includes_hierarchy_in_delta()
-    {
-        var world = new World();
-        var parent = world.CreateEmpty();
-        var child = world.CreateEmpty();
-        var stream = new CommandStream(world);
-
-        stream.AddChild(parent, child);
-        var delta = await stream.SubmitAndSnapshotAsync();
-
-        // Verify AddChild was applied
-        Assert.True(world.TryGetParent(child, out var p));
-        Assert.Equal(parent, p);
-
-        // Verify delta contains AddChild command (need to check internal structure)
-        Assert.NotEmpty(delta.AddChildCommands());
-    }
-
-    [Fact]
     public void Snapshot_excludes_created_destroyed_entity_from_delta()
     {
         var world = new World();
@@ -532,74 +451,6 @@ public sealed class CommandStreamTests
         Assert.Contains(created, delta.ReservedEntities());
         Assert.Contains(created, delta.ReleasedEntities());
         Assert.DoesNotContain(created, delta.DestroyedEntities());
-    }
-
-    [Fact]
-    public void Snapshot_excludes_hierarchy_for_destroyed_child()
-    {
-        var world = new World();
-        var parent = world.CreateEmpty();
-        var child = world.Create(new Position(1, 2));
-        var stream = new CommandStream(world);
-
-        stream.AddChild(parent, child);
-        stream.Destroy(child);
-
-        var delta = stream.Snapshot();
-
-        // AddChild should be filtered out since child is destroyed
-        Assert.Empty(delta.AddChildCommands());
-    }
-
-    [Fact]
-    public async Task SubmitAndSnapshotAsync_excludes_hierarchy_for_destroyed_child()
-    {
-        var world = new World();
-        var parent = world.CreateEmpty();
-        var child = world.Create(new Position(1, 2));
-        var stream = new CommandStream(world);
-
-        stream.AddChild(parent, child);
-        stream.Destroy(child);
-
-        var delta = await stream.SubmitAndSnapshotAsync();
-
-        Assert.Empty(delta.AddChildCommands());
-    }
-
-    [Fact]
-    public void Submit_skips_hierarchy_intent_for_destroyed_parent_even_when_destroy_is_recorded_first()
-    {
-        var world = new World();
-        var parent = world.CreateEmpty();
-        var child = world.CreateEmpty();
-        var stream = new CommandStream(world);
-
-        stream.Destroy(parent);
-        stream.AddChild(parent, child);
-
-        Assert.True(stream.Submit());
-        Assert.False(world.IsAlive(parent));
-        Assert.False(world.TryGetParent(child, out _));
-    }
-
-    [Fact]
-    public void Snapshot_excludes_hierarchy_for_destroyed_created_child()
-    {
-        var world = new World();
-        var parent = world.CreateEmpty();
-        var stream = new CommandStream(world);
-
-        var child = stream.Create();
-        stream.Add(child, new Position(1, 2));
-        stream.AddChild(parent, child);
-        stream.Destroy(child);
-
-        var delta = stream.Snapshot();
-
-        // AddChild for created-then-destroyed child should be filtered
-        Assert.Empty(delta.AddChildCommands());
-        Assert.Contains(child, delta.ReleasedEntities());
     }
 
     // ══════════════════════════════════════════════════════════—
@@ -914,32 +765,6 @@ public sealed class CommandStreamTests
         new CommandStream(replica).Replay(delta);
 
         Assert.False(replica.IsAlive(replicaE));
-    }
-
-    [Fact]
-    public void CrossWorld_replay_link_and_unlink()
-    {
-        var source = new World();
-        var parent = source.CreateEmpty();
-        var child = source.CreateEmpty();
-        var stream = new CommandStream(source);
-
-        stream.AddChild(parent, child);
-        var delta = stream.Snapshot();
-
-        var replica = new World();
-        var replicaParent = replica.CreateEmpty();
-        var replicaChild = replica.CreateEmpty();
-        new CommandStream(replica).Replay(delta);
-
-        Assert.True(replica.TryGetParent(replicaChild, out var p));
-        Assert.Equal(replicaParent, p);
-
-        var stream2 = new CommandStream(source);
-        stream2.RemoveChild(child);
-        var delta2 = stream2.Snapshot();
-        new CommandStream(replica).Replay(delta2);
-        Assert.False(replica.TryGetParent(replicaChild, out _));
     }
 
     [Fact]
@@ -1695,18 +1520,10 @@ public sealed class CommandStreamTests
                 if ((i & 3) == 1) stream.Remove<Position>(e);
             }
         }
-        // AddChild and RemoveChild across different entities in same batch
-        var p1 = world.CreateEmpty();
-        var c1 = world.CreateEmpty();
-        var c2 = world.CreateEmpty();
-        stream.AddChild(p1, c1);
-        stream.RemoveChild(c2); // RemoveChild on unlinked entity is tested separately
-
         var delta = await stream.SubmitAndSnapshotAsync();
 
         Assert.False(world.IsAlive(entities[0])); // i=0 destroyed
         Assert.Equal(new Position(12, 22), world.TryGet(entities[2], out Position p2) ? p2 : default);
-        Assert.NotEmpty(delta.AddChildCommands());
         Assert.True(delta.DeltaCount > 0);
     }
 
@@ -1843,23 +1660,6 @@ public sealed class CommandStreamTests
         Assert.True(world.IsAlive(e));
         Assert.True(world.TryGet(e, out Position p));
         Assert.Equal(new Position(5, 6), p);
-    }
-
-    [Fact]
-    public async Task SubmitAndSnapshotIntoAsync_includes_hierarchy_in_delta()
-    {
-        var world = new World();
-        var parent = world.CreateEmpty();
-        var child = world.CreateEmpty();
-        var stream = new CommandStream(world);
-        var target = new FrameDelta();
-
-        stream.AddChild(parent, child);
-        await stream.SubmitAndSnapshotIntoAsync(target);
-
-        Assert.True(world.TryGetParent(child, out var p));
-        Assert.Equal(parent, p);
-        Assert.NotEmpty(target.AddChildCommands());
     }
 
     [Fact]
@@ -2121,36 +1921,6 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
-    public void Clone_deep_with_children_replay_cross_world()
-    {
-        var source = new World();
-        var parent = source.Create(new Position(1, 2));
-        var child1 = source.Create(new Velocity(3, 4));
-        var child2 = source.Create(new Health(100));
-        source.AddChild(parent, child1);
-        source.AddChild(parent, child2);
-        var stream = new CommandStream(source);
-
-        var clone = stream.Clone(parent);
-        var delta = stream.Snapshot();
-
-        var replica = new World();
-        var rParent = replica.Create(new Position(1, 2));
-        var rChild1 = replica.Create(new Velocity(3, 4));
-        var rChild2 = replica.Create(new Health(100));
-        replica.AddChild(rParent, rChild1);
-        replica.AddChild(rParent, rChild2);
-        new CommandStream(replica).Replay(delta);
-
-        Assert.True(replica.IsAlive(clone));
-        Assert.True(replica.TryGet(clone, out Position p));
-        Assert.Equal(new Position(1, 2), p);
-
-        var cloneChildren = replica.EnumerateChildren(clone).ToChildList();
-        Assert.Equal(2, cloneChildren.Count);
-    }
-
-    [Fact]
     public void Clone_mixed_with_other_commands_replay()
     {
         var source = new World();
@@ -2235,31 +2005,6 @@ public sealed class CommandStreamTests
         Assert.Equal(new SignalPayloadField(11, 12, 13), payload);
     }
 
-    [Fact]
-    public void Clone_deep_hierarchy_three_levels_replay()
-    {
-        var source = new World();
-        var grandparent = source.Create(new Position(1, 2));
-        var parent = source.Create(new Velocity(3, 4));
-        var child = source.Create(new Health(100));
-        source.AddChild(grandparent, parent);
-        source.AddChild(parent, child);
-        var stream = new CommandStream(source);
-
-        var clone = stream.Clone(grandparent);
-        Assert.True(stream.Submit());
-
-        Assert.True(source.IsAlive(clone));
-        Assert.True(source.TryGet(clone, out Position p));
-        Assert.Equal(new Position(1, 2), p);
-
-        // Clone should have nested children
-        var cloneChildren = source.EnumerateChildren(clone).ToChildList();
-        Assert.Single(cloneChildren);
-        var grandChildren = source.EnumerateChildren(cloneChildren[0]).ToChildList();
-        Assert.Single(grandChildren);
-    }
-
     // ══════════════════════════════════════════════════════════—
     // Multi-frame ordered replay
     // ══════════════════════════════════════════════════════════—
@@ -2278,13 +2023,11 @@ public sealed class CommandStreamTests
         var stream = new CommandStream(source);
         var survivors = new List<Entity>();
 
-        // Frame 1: seed world with diverse entities and hierarchy
+        // Frame 1: seed world with diverse entities.
         var a = stream.Create(); stream.Add(a, new Position(1, 2));
         var b = stream.Create(); stream.Add(b, new Position(3, 4)); stream.Add(b, new Velocity(5, 6));
         var c = stream.Create(); stream.Add(c, new Health(50));
         var d = stream.Create(); stream.Add(d, new Health(100));
-        stream.AddChild(a, b);
-        stream.AddChild(a, c);
         deltas.Add(stream.Snapshot());
         stream.Submit();
 
@@ -2299,7 +2042,6 @@ public sealed class CommandStreamTests
         // Frame 3: component cycling, create new
         stream.Add(d, new Position(55, 66));
         var f = stream.Create(); stream.Add(f, new Health(1));
-        stream.AddChild(a, f);
         deltas.Add(stream.Snapshot());
         stream.Submit();
 
@@ -2374,51 +2116,6 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
-    public void Multi_frame_replay_hierarchy_evolution()
-    {
-        var source = new World();
-        var deltas = new List<FrameDelta>();
-        var stream = new CommandStream(source);
-
-        // Frame 1: create tree A->B->C
-        var a = stream.Create(); stream.Add(a, new Position(1, 1));
-        var b = stream.Create(); stream.Add(b, new Position(2, 2));
-        var c = stream.Create(); stream.Add(c, new Position(3, 3));
-        stream.AddChild(a, b);
-        stream.AddChild(b, c);
-        deltas.Add(stream.Snapshot());
-        stream.Submit();
-
-        // Frame 2: restructure A->C and A->D, RemoveChild B
-        var d = stream.Create(); stream.Add(d, new Position(4, 4));
-        stream.RemoveChild(b);
-        stream.RemoveChild(c);
-        stream.AddChild(a, c);
-        stream.AddChild(a, d);
-        deltas.Add(stream.Snapshot());
-        stream.Submit();
-
-        // Frame 3: destroy leaf B
-        stream.Destroy(b);
-        deltas.Add(stream.Snapshot());
-        stream.Submit();
-
-        // Frame 4: destroy root A (cascades to children C, D)
-        stream.Destroy(a);
-        deltas.Add(stream.Snapshot());
-        stream.Submit();
-
-        var replica = new World();
-        foreach (var delta in deltas)
-            new CommandStream(replica).Replay(delta);
-
-        Assert.False(replica.IsAlive(a));
-        Assert.False(replica.IsAlive(b));
-        Assert.False(replica.IsAlive(c));
-        Assert.False(replica.IsAlive(d));
-    }
-
-    [Fact]
     public void Multi_frame_clone_replay_produces_identical_world()
     {
         var source = new World();
@@ -2426,10 +2123,9 @@ public sealed class CommandStreamTests
         var stream = new CommandStream(source);
         var tracked = new List<Entity>();
 
-        // Frame 1: seed with linked entities
+        // Frame 1: seed with two entities.
         var a = stream.Create(); stream.Add(a, new Position(1, 2));
         var b = stream.Create(); stream.Add(b, new Position(3, 4)); stream.Add(b, new Velocity(5, 6));
-        stream.AddChild(a, b);
         tracked.AddRange([a, b]);
         deltas.Add(stream.Snapshot());
         stream.Submit();
@@ -2716,26 +2412,20 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
-    public void Existing_entity_component_liveness_is_decided_when_the_stream_is_consumed()
+    public void Recorded_frame_is_rejected_after_restore_even_if_original_entity_is_alive()
     {
-        var source = new World();
-        var replica = new World();
-        var sourceEntity = source.Create(new Position(1, 1));
-        var replicaEntity = replica.Create(new Position(1, 1));
-        var restorePoint = source.CaptureState();
+        using var world = new World();
+        var entity = world.Create(new Position(1, 1));
+        var restorePoint = world.CaptureState();
 
-        source.Destroy(sourceEntity);
-        var stream = new CommandStream(source);
-        stream.Set(sourceEntity, new Position(9, 9));
+        world.Destroy(entity);
+        var stream = new CommandStream(world);
+        stream.Set(entity, new Position(9, 9));
 
-        source.RestoreState(restorePoint);
-        var delta = stream.Snapshot();
-        Assert.True(stream.Submit());
-        new CommandStream(replica).Replay(FrameDelta.FromWire(delta.AsSpan()));
-
-        Assert.Equal(new Position(9, 9), source.Get<Position>(sourceEntity));
-        Assert.Equal(new Position(9, 9), replica.Get<Position>(replicaEntity));
-        AssertIdenticalWorlds(source, replica, "consume-time component liveness after restore");
+        world.RestoreState(restorePoint);
+        Assert.Throws<InvalidOperationException>(() => stream.Snapshot());
+        Assert.Throws<InvalidOperationException>(() => stream.Submit());
+        Assert.Equal(new Position(1, 1), world.Get<Position>(entity));
     }
 
     [Fact]
@@ -2927,36 +2617,6 @@ public sealed class CommandStreamTests
         Assert.Equal(expected.TryGet(entity, out Health sh), actual.TryGet(entity, out Health rh));
         if (expected.TryGet(entity, out sh)) Assert.Equal(sh, rh);
 
-        Assert.Equal(expected.TryGetParent(entity, out var parentA), actual.TryGetParent(entity, out var parentB));
-        if (expected.TryGetParent(entity, out parentA))
-            Assert.Equal(parentA, parentB);
-    }
-
-    [Fact]
-    public async System.Threading.Tasks.Task SubmitAndSnapshotAsync_reuses_hierarchy_dictionary_in_steady_state()
-    {
-        var world = new World();
-        var stream = new CommandStream(world);
-        var parent = world.CreateEmpty();
-
-        async System.Threading.Tasks.Task RunFrame()
-        {
-            var child = world.CreateEmpty();
-            stream.AddChild(parent, child);
-            stream.Destroy(child);
-            await stream.SubmitAndSnapshotAsync();
-        }
-
-        for (var i = 0; i < 2; i++)
-            await RunFrame();
-
-        var hierarchyRef = stream.ActiveHierarchyForTesting;
-        Assert.NotNull(hierarchyRef);
-
-        await RunFrame();
-        await RunFrame();
-
-        Assert.Same(hierarchyRef, stream.ActiveHierarchyForTesting);
     }
 
     [Fact]
@@ -3028,50 +2688,6 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
-    public void Destroy_pending_entity_cascades_to_pending_descendants()
-    {
-        var world = new World();
-        var stream = new CommandStream(world);
-
-        var parent = stream.Create();
-        stream.Add(parent, new Position(1, 1));
-        var child = stream.Create();
-        stream.Add(child, new Position(2, 2));
-        var grandchild = stream.Create();
-        stream.Add(grandchild, new Position(3, 3));
-        stream.AddChild(parent, child);
-        stream.AddChild(child, grandchild);
-
-        stream.Destroy(parent);
-        stream.Submit();
-
-        Assert.False(world.IsAlive(parent));
-        Assert.False(world.IsAlive(child));
-        Assert.False(world.IsAlive(grandchild));
-    }
-
-    [Fact]
-    public void Destroy_pending_entity_does_not_destroy_existing_child()
-    {
-        // Existing (already-alive) child linked under a pending parent: when the
-        // pending parent is destroyed, the existing child stays alive. World's
-        // hierarchy doesn't know about the pending AddChild, so there's no cascade.
-        var world = new World();
-        var stream = new CommandStream(world);
-
-        var existingChild = world.Create(new Position(9, 9));
-        var parent = stream.Create();
-        stream.AddChild(parent, existingChild);
-
-        stream.Destroy(parent);
-        stream.Submit();
-
-        Assert.False(world.IsAlive(parent));
-        // Existing child survives -- it was never parented in the live world.
-        Assert.True(world.IsAlive(existingChild));
-    }
-
-    [Fact]
     public void CommandStream_state_fields_are_explicitly_classified_for_async_handoff()
     {
         var allFields = typeof(CommandStream).GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
@@ -3113,6 +2729,7 @@ public sealed class CommandStreamTests
             "_preflightGenerations",
             "_preflightPresence",
             "_preflightEpoch",
+            "_frameTimeline",
         };
 
         // _frozen and _spareFrozen are the two halves of the state-object swap;
@@ -3327,123 +2944,6 @@ public sealed class CommandStreamTests
     }
 
     [Fact]
-    public void BUG_hierarchy_overlay_applies_final_acyclic_reparenting_without_transient_cycle()
-    {
-        using var source = new World();
-        var sourceA = source.Create(new Position(1, 1));
-        var sourceB = source.Create(new Position(2, 2));
-        source.AddChild(sourceA, sourceB);
-
-        using var replica = new World();
-        var replicaA = replica.Create(new Position(1, 1));
-        var replicaB = replica.Create(new Position(2, 2));
-        replica.AddChild(replicaA, replicaB);
-
-        var stream = new CommandStream(source);
-        stream.AddChild(sourceB, sourceA);
-        stream.RemoveChild(sourceB);
-        var delta = stream.Snapshot();
-
-        Assert.True(stream.Submit());
-        new CommandStream(replica).Replay(delta);
-
-        Assert.True(source.TryGetParent(sourceA, out var sourceParent));
-        Assert.Equal(sourceB, sourceParent);
-        Assert.False(source.TryGetParent(sourceB, out _));
-        Assert.True(replica.TryGetParent(replicaA, out var replicaParent));
-        Assert.Equal(replicaB, replicaParent);
-        Assert.False(replica.TryGetParent(replicaB, out _));
-        Assert.Equal(source.CanonicalChecksum(), replica.CanonicalChecksum());
-    }
-
-    [Fact]
-    public void BUG_submit_preflights_hierarchy_overlay_cycle_before_world_mutation()
-    {
-        using var world = new World();
-        var a = world.Create(new Position(1, 1));
-        var b = world.Create(new Position(2, 2));
-        var stream = new CommandStream(world);
-        var pending = stream.Create();
-        stream.Add(pending, new Velocity(3, 4));
-        stream.AddChild(a, b);
-        stream.AddChild(b, a);
-
-        // Validate rejects the hierarchy cycle atomically, before any mutation.
-        var ex = Assert.Throws<InvalidOperationException>(() => stream.Validate());
-        Assert.Contains("cycle", ex.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(2, world.EntityCount);
-        Assert.False(world.IsAlive(pending));
-        Assert.False(world.TryGetParent(a, out _));
-        Assert.False(world.TryGetParent(b, out _));
-
-        // Zero-validation Submit applies partially: pending is materialized and
-        // overlay links are installed before the cycle check throws at apply time.
-        var submitEx = Assert.Throws<InvalidOperationException>(() => stream.Submit());
-        Assert.Contains("cycle", submitEx.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(3, world.EntityCount);
-        Assert.True(world.IsAlive(pending));
-        Assert.True(WorldValidator.Validate(world).IsValid);
-    }
-
-    [Fact]
-    public void BUG_submit_preflights_hierarchy_cycle_through_existing_parent_chain()
-    {
-        using var world = new World();
-        var root = world.Create(new Position(1, 1));
-        var child = world.Create(new Position(2, 2));
-        world.AddChild(root, child);
-        var stream = new CommandStream(world);
-        var pending = stream.Create();
-        stream.Add(pending, new Velocity(3, 4));
-        stream.AddChild(child, root);
-
-        // Validate rejects the cycle (through the existing chain) atomically.
-        var ex = Assert.Throws<InvalidOperationException>(() => stream.Validate());
-        Assert.Contains("cycle", ex.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(2, world.EntityCount);
-        Assert.False(world.IsAlive(pending));
-        Assert.True(world.TryGetParent(child, out var actualParent));
-        Assert.Equal(root, actualParent);
-        Assert.False(world.TryGetParent(root, out _));
-
-        // Zero-validation Submit applies partially before throwing at apply time.
-        var submitEx = Assert.Throws<InvalidOperationException>(() => stream.Submit());
-        Assert.Contains("cycle", submitEx.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(3, world.EntityCount);
-        Assert.True(world.IsAlive(pending));
-        Assert.True(WorldValidator.Validate(world).IsValid);
-    }
-
-    [Fact]
-    public void BUG_submit_preflights_deferred_hierarchy_cycle_before_reserving_ids()
-    {
-        using var world = new World();
-        var stream = new CommandStream(world) { DeferredEntities = true };
-        var a = stream.Create();
-        var b = stream.Create();
-        stream.Add(a, new Position(1, 1));
-        stream.Add(b, new Position(2, 2));
-        stream.AddChild(a, b);
-        stream.AddChild(b, a);
-
-        // Validate rejects the deferred cycle atomically, before any mutation.
-        var ex = Assert.Throws<InvalidOperationException>(() => stream.Validate());
-        Assert.Contains("cycle", ex.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(0, world.EntityCount);
-        Assert.False(world.IsAlive(a));
-        Assert.False(world.IsAlive(b));
-
-        // Zero-validation Submit resolves deferred ids, materializes the entities,
-        // then throws at hierarchy apply time —leaving the real entities created.
-        var submitEx = Assert.Throws<InvalidOperationException>(() => stream.Submit());
-        Assert.Contains("cycle", submitEx.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(2, world.EntityCount);
-        Assert.False(world.IsAlive(a)); // placeholder handle, not the resolved real id
-        Assert.False(world.IsAlive(b));
-        Assert.True(WorldValidator.Validate(world).IsValid);
-    }
-
-    [Fact]
     public void BUG_submit_preflights_repeated_add_before_any_world_mutation()
     {
         using var world = new World();
@@ -3530,26 +3030,6 @@ public sealed class CommandStreamTests
         Assert.Equal(checksumBefore, world.CanonicalChecksum());
         Assert.False(world.Has<Velocity>(existing));
         Assert.Equal(new Position(1, 2), world.Get<Position>(existing));
-        Assert.True(WorldValidator.Validate(world).IsValid);
-    }
-
-    [Fact]
-    public void Contract_Validate_rejects_hierarchy_cycle_before_mutation()
-    {
-        using var world = new World();
-        var a = world.Create(new Position(1, 1));
-        var b = world.Create(new Position(2, 2));
-        var stream = new CommandStream(world);
-        stream.AddChild(a, b);
-        stream.AddChild(b, a);
-
-        var checksumBefore = world.CanonicalChecksum();
-        var ex = Assert.Throws<InvalidOperationException>(() => stream.Validate());
-        Assert.Contains("cycle", ex.Message, StringComparison.OrdinalIgnoreCase);
-
-        Assert.Equal(checksumBefore, world.CanonicalChecksum());
-        Assert.False(world.TryGetParent(a, out _));
-        Assert.False(world.TryGetParent(b, out _));
         Assert.True(WorldValidator.Validate(world).IsValid);
     }
 
@@ -3869,7 +3349,6 @@ public sealed class DeferredCreateTests
         var stream = MakeStream(host);
         var a = stream.Create(); stream.Add(a, new Position(1, 2));
         var b = stream.Create(); stream.Add(b, new Position(3, 4)); stream.Add(b, new Velocity(5, 6));
-        stream.AddChild(a, b);
         var delta = stream.Snapshot();
         stream.Clear();
 
@@ -3927,37 +3406,6 @@ public sealed class DeferredCreateTests
         new CommandStream(replica).Replay(d2);
 
         Assert.Equal(2, CountEntities(replica));
-    }
-
-    [Fact]
-    public void Placeholder_hierarchy_replays_correctly()
-    {
-        var host = new World();
-        var stream = MakeStream(host);
-        var parent = stream.Create(); stream.Add(parent, new Position(0, 0));
-        var child = stream.Create(); stream.Add(child, new Position(1, 1));
-        stream.AddChild(parent, child);
-        var delta = stream.Snapshot();
-        stream.Clear();
-
-        var replica = new World();
-        new CommandStream(replica).Replay(delta);
-
-        Assert.Equal(2, CountEntities(replica));
-        // Find the parent (has Position 0,0) and verify it has children.
-        var hasHierarchy = false;
-        foreach (ref readonly var arch in MiniQueryCache.Create(replica, new QueryDescription()).GetArchetypeSpan())
-        {
-            foreach (var entity in arch.GetEntities())
-            {
-                if (replica.Get<Position>(entity).X == 0)
-                {
-                    Assert.True(replica.Hierarchy.HasChildren(replica, entity));
-                    hasHierarchy = true;
-                }
-            }
-        }
-        Assert.True(hasHierarchy, "Expected a parent entity with children after replay.");
     }
 
     [Fact]
@@ -4200,63 +3648,6 @@ public sealed class DeferredCreateTests
         var b = stream.Create();
         stream.Add(a, new Linked(0, b));
         stream.Destroy(b);
-
-        var ex = Assert.Throws<InvalidOperationException>(() => stream.Snapshot());
-        Assert.Contains("cancelled or unknown placeholder", ex.Message);
-    }
-
-    [Fact]
-    public void BUG_hierarchy_placeholder_is_rejected_before_submit_mutates_existing_relation()
-    {
-        using var world = new World();
-        var originalParent = world.CreateEmpty();
-        var child = world.CreateEmpty();
-        world.AddChild(originalParent, child);
-        var stream = MakeStream(world);
-
-        stream.AddChild(new Entity(-1, 123), child);
-
-        var ex = Assert.Throws<InvalidOperationException>(() => stream.Submit());
-        Assert.Contains("cancelled or unknown placeholder", ex.Message);
-        Assert.True(world.TryGetParent(child, out var actualParent));
-        Assert.Equal(originalParent, actualParent);
-    }
-
-    [Fact]
-    public void BUG_snapshot_rejects_unknown_hierarchy_placeholder_before_returning_delta()
-    {
-        using var world = new World();
-        var child = world.CreateEmpty();
-        var stream = MakeStream(world);
-
-        stream.AddChild(new Entity(-1, 123), child);
-
-        var ex = Assert.Throws<InvalidOperationException>(() => stream.Snapshot());
-        Assert.Contains("cancelled or unknown placeholder", ex.Message);
-    }
-
-    [Fact]
-    public void Contract_superseded_invalid_hierarchy_parent_is_ignored()
-    {
-        using var world = new World();
-        var validParent = world.CreateEmpty();
-        var child = world.CreateEmpty();
-        var stream = MakeStream(world);
-
-        stream.AddChild(new Entity(-1, 123), child);
-        stream.AddChild(validParent, child);
-
-        var delta = stream.Snapshot();
-        delta.Validate();
-    }
-
-    [Fact]
-    public void BUG_snapshot_rejects_unknown_hierarchy_child_placeholder()
-    {
-        using var world = new World();
-        var stream = MakeStream(world);
-
-        stream.RemoveChild(new Entity(-1, 123));
 
         var ex = Assert.Throws<InvalidOperationException>(() => stream.Snapshot());
         Assert.Contains("cancelled or unknown placeholder", ex.Message);

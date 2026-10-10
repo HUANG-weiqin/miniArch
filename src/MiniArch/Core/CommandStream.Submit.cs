@@ -14,7 +14,7 @@ public sealed partial class CommandStream
     /// <summary>
     /// Runs the stream's explicit semantic validation stages in deterministic
     /// order: batch dedup scan + embedded placeholder lifecycle, component store
-    /// presence validation, and hierarchy overlay cycle check. Idempotent: running
+    /// presence validation. Idempotent: running
     /// <see cref="Validate"/> before <see cref="Submit"/> does not change the result
     /// <see cref="Submit"/> produces.
     /// </summary>
@@ -32,25 +32,24 @@ public sealed partial class CommandStream
     /// </para>
     /// <para>
     /// <b>Not covered.</b> CreateMany group consistency (a group modified with
-    /// Set/Add/Remove after the CreateMany call, or a duplicate/mask-invalid
-    /// writer), slot-reservation state, and the FrameDelta budget
+    /// Set/Add/Remove after the CreateMany call, or duplicate writer component
+    /// types), slot-reservation state, and the FrameDelta budget
     /// (<see cref="FrameDelta.MaxFrameBytes"/>/<see cref="FrameDelta.MaxOpsPerFrame"/>)
-    /// are checked by the consume path at their original timing, not by
+    /// are checked by the consume path, not by
     /// <see cref="Validate"/>.
     /// </para>
     /// </remarks>
     public void Validate()
     {
+        ThrowIfStaleFrame();
         PrepareStores(buildSetLocationCache: true);
         if (!HasAnyCommands())
             return;
 
         // Keep a deterministic first-violation order: embedded placeholder
-        // lifecycle (with last-wins batch dedup), component store presence,
-        // then hierarchy overlay.
+        // lifecycle (with last-wins batch dedup), then component store presence.
         PreflightEntityReferences(useFlagFastPath: false);
         PreflightComponentStores(_frozen);
-        PreflightHierarchyOverlay(_world, _frozen);
     }
 
     /// <summary>
@@ -58,9 +57,9 @@ public sealed partial class CommandStream
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Zero validation by default —with one opt-out.</b> <see cref="Submit"/>
-    /// no longer runs the contract preflights (component store presence, hierarchy
-    /// overlay). Recorded-command errors surface at their apply-time consumption
+    /// <b>Component-presence validation is opt-in.</b> <see cref="Submit"/>
+    /// does not run the component store presence preflight. Recorded-command
+    /// errors surface at their apply-time consumption
     /// point instead of before any world mutation, and earlier commands may
     /// already be applied before the violation is detected (partial application;
     /// reserved ids are released by the internal cleanup). Call
@@ -68,13 +67,15 @@ public sealed partial class CommandStream
     /// semantic contracts up front, at the first violation, without world mutation.
     /// </para>
     /// <para>
-    /// One class of errors is still rejected atomically before any mutation:
-    /// invalid explicit entity endpoints, explicit or embedded references to a
-    /// cancelled/unknown deferred placeholder, and genuinely unresolvable
-    /// component layouts (for example Entity-bearing LayoutKind.Auto).
-    /// These are rejected in the consume
-    /// path —before id reservation, free-list realignment and materialization —
-    /// with the same contract and message text as <see cref="Validate"/>, so a
+    /// Mandatory producer checks reject invalid explicit entity endpoints,
+    /// explicit or embedded references to a cancelled/unknown deferred placeholder,
+    /// genuinely unresolvable component layouts (for example Entity-bearing
+    /// LayoutKind.Auto), and inconsistent CreateMany groups.
+    /// These are rejected in the consume path before deferred id reservation,
+    /// free-list realignment and materialization. Failure cleanup still releases
+    /// real ids reserved during recording; no allocator rollback is promised.
+    /// Entity-reference checks use the same contract as explicit validation,
+    /// including the message text from <see cref="Validate"/>, so a
     /// violating frame can never be applied locally or emitted into a
     /// <see cref="FrameDelta"/> that a replaying host would reject.
     /// </para>
@@ -82,13 +83,14 @@ public sealed partial class CommandStream
     /// <exception cref="InvalidOperationException">
     /// A recorded command violates its consume-time contract: a component value
     /// references a cancelled or unknown deferred placeholder (rejected before
-    /// any mutation), an Add targets an existing component or a Set targets a
-    /// missing component, or a hierarchy entity is stale/unknown (these surface
-    /// at apply time, after earlier commands may have been applied). Use
-    /// <see cref="Validate"/> to fail before any mutation.
+    /// deferred resolution and application), an Add targets an existing component or a Set targets a
+    /// missing component (these surface at apply time, after earlier commands
+    /// may have been applied). Use
+    /// <see cref="Validate"/> to preflight component presence without world mutation.
     /// </exception>
     public bool Submit()
     {
+        ThrowIfStaleFrame();
         PrepareStores(buildSetLocationCache: true);
         if (!HasAnyCommands())
             return false;
@@ -96,14 +98,12 @@ public sealed partial class CommandStream
         var submitted = false;
         try
         {
-            // Order matches BuildDelta: Create —Hierarchy —Ops —Destroy.
+            // Order matches EmitPrepared: Create —Ops —Destroy.
             // Keeping Submit and Snapshot aligned lets hosts use Submit on source and
             // Replay on replica without diverging for combined command patterns.
             //
-            // Validation (embedded placeholder lifecycle, component store presence,
-            // hierarchy overlay) is opt-in via Validate() — the default path runs
-            // zero preflight checks. What remains is the functional pipeline: the
-            // slot-reservation invariant check (defense-in-depth), free-list
+            // Component-presence validation is opt-in via Validate(). Mandatory
+            // slot, entity-reference and CreateMany checks run before free-list
             // alignment, deferred resolution, then materialize/apply/destroy.
             //
             // Before any free-list mutations, align the cancelled-batch entries to
@@ -118,17 +118,16 @@ public sealed partial class CommandStream
             // a frame flag only when a reference may need validation (or a component
             // layout is unresolvable). The scan below runs the full last-wins
             // pass only for flagged frames — before id reservation, free-list
-            // realignment and materialization (atomic; failures consume no id).
+            // realignment and materialization. The finally block retains the
+            // failure cleanup for reservations made during recording.
             PreValidatePendingSlots();
             PreflightEntityReferences();
+            ValidateCreateManyGroups(_frozen);
             AlignCancelledBatchFreeListOrder();
             ResolveDeferredCreates();
             PreValidatePendingSlots();
             _submitEpoch = _world.ReservedReleaseEpoch;
-            MaterializeAllPending();
-            ApplyHierarchy();
-            ApplyComponentStores();
-            ApplyDestroys();
+            ApplyPrepared(_frozen);
             submitted = true;
         }
         finally
@@ -158,7 +157,7 @@ public sealed partial class CommandStream
     /// been consumed by a later Create). The result: cancelled entities that
     /// survive to frame end in the free-list are ordered by batch index, matching
     /// the Replay's Release order. Regular destroys (non-pending) are pushed
-    /// later by <see cref="ApplyDestroys"/>, also in emit order.
+    /// later by <see cref="ApplyPrepared"/>, also in emit order.
     /// </remarks>
     private void AlignCancelledBatchFreeListOrder()
     {
@@ -183,7 +182,7 @@ public sealed partial class CommandStream
 
     private bool HasAnyCommands()
     {
-        if (_frozen.PendingBatchCount > 0 || _frozen.DestroyCount > 0 || _frozen.HierarchyByChild.Count > 0)
+        if (_frozen.PendingBatchCount > 0 || _frozen.DestroyCount > 0)
             return true;
         if (_hasStoreCommands)
             return true;
@@ -226,18 +225,6 @@ public sealed partial class CommandStream
         }
     }
 
-    private void MaterializeAllPending()
-        => MaterializePendingBatches(_frozen);
-
-    private void ApplyComponentStores()
-    {
-        foreach (var store in _frozen.Stores)
-        {
-            if (store?.HasCommands == true)
-                store.ApplyToWorld(_world);
-        }
-    }
-
     private void PreflightComponentStores(FrozenState frozen)
     {
         var useSetLocationCache = CanReuseSetLocationCache(frozen);
@@ -267,17 +254,6 @@ public sealed partial class CommandStream
 
             store.PreflightValidate(
                 _world, _preflightGenerations, _preflightPresence, _preflightEpoch, useSetLocationCache);
-        }
-    }
-
-    private void ApplyDestroys()
-    {
-        for (var i = 0; i < _frozen.DestroyCount; i++)
-        {
-            var entity = _frozen.DestroyEntities[i];
-            // The entity may already have been cascade-destroyed if a parent
-            // earlier in the DestroyEntities array was destroyed.
-            _world.DestroyIfAlive(entity);
         }
     }
 
@@ -402,12 +378,6 @@ public sealed partial class CommandStream
         for (var i = 0; i < _frozen.DestroyCount; i++)
             RejectExplicitEntityReference(_frozen.DestroyEntities[i], "Destroy");
 
-        foreach (var (child, intent) in _frozen.HierarchyByChild)
-        {
-            RejectExplicitEntityReference(child, "Hierarchy child");
-            if (intent.IsAdd)
-                RejectExplicitEntityReference(intent.Parent, "Hierarchy parent");
-        }
     }
 
     private void RejectExplicitEntityReference(Entity entity, string role)
@@ -432,7 +402,7 @@ public sealed partial class CommandStream
     //
     // Runs in the consume path (Submit / Snapshot / SnapshotInto / async handoff)
     // before any id reservation, free-list realignment, materialization, delta
-    // emission or worker handoff. Rejects: (a) invalid explicit Destroy/hierarchy
+    // emission or worker handoff. Rejects: (a) invalid explicit Destroy
     // endpoints or their cancelled/unknown placeholders, (b) component values
     // referencing a cancelled/unknown placeholder, and (c) component types whose
     // layout cannot be resolved (for example Entity-bearing LayoutKind.Auto) —
@@ -639,8 +609,8 @@ public sealed partial class CommandStream
     /// </para>
     /// <para>
     /// <b>Zero validation by default —with one opt-out.</b> <see cref="Snapshot"/>
-    /// no longer runs the contract preflights (component store presence, hierarchy
-    /// overlay). A violating frame may therefore emit a delta whose replay fails on
+    /// no longer runs the component store presence preflight. A violating frame
+    /// may therefore emit a delta whose replay fails on
     /// a receiving host. Call <see cref="Validate"/> before <see cref="Snapshot"/>
     /// to check the semantic contracts it covers up front.
     /// </para>
@@ -660,6 +630,7 @@ public sealed partial class CommandStream
     /// </exception>
     public FrameDelta Snapshot()
     {
+        ThrowIfStaleFrame();
         PrepareStores();
         if (_deferredEntities)
             ThrowIfSnapshotHasImmediateEntities();
@@ -669,13 +640,14 @@ public sealed partial class CommandStream
         // the scan below runs only for flagged frames — before any
         // deferred resolution or delta emission (no divergence).
         PreflightEntityReferences();
+        ValidateCreateManyGroups(_frozen);
         PreflightFrameDeltaBudget(_deferredEntities);
         if (!_deferredEntities)
             ResolveDeferredCreates();
 
         var delta = new FrameDelta();
         delta.EnsureCapacity(GetSnapshotCapacityHint());
-        BuildDelta(delta);
+        EmitPrepared(delta, _frozen, _deferredEntities);
         _pendingReplay = true;
         return delta;
     }
@@ -693,8 +665,8 @@ public sealed partial class CommandStream
     /// The caller must not mutate <paramref name="target"/> concurrently.
     /// <para>
     /// <b>Zero validation by default —with one opt-out.</b> <see cref="SnapshotInto"/>
-    /// no longer runs the contract preflights (component store presence, hierarchy
-    /// overlay). Call <see cref="Validate"/> before <see cref="SnapshotInto"/> to
+    /// no longer runs the component store presence preflight. Call
+    /// <see cref="Validate"/> before <see cref="SnapshotInto"/> to
     /// check the semantic contracts it covers up front.
     /// </para>
     /// <para>
@@ -714,6 +686,7 @@ public sealed partial class CommandStream
     public void SnapshotInto(FrameDelta target)
     {
         ArgumentNullException.ThrowIfNull(target);
+        ThrowIfStaleFrame();
         PrepareStores();
         if (_deferredEntities)
             ThrowIfSnapshotHasImmediateEntities();
@@ -722,12 +695,13 @@ public sealed partial class CommandStream
         // below runs only for flagged frames — before any deferred resolution,
         // target clear or delta emission.
         PreflightEntityReferences();
+        ValidateCreateManyGroups(_frozen);
         PreflightFrameDeltaBudget(_deferredEntities);
         if (!_deferredEntities)
             ResolveDeferredCreates();
 
         target.Clear();
-        BuildDelta(target);
+        EmitPrepared(target, _frozen, _deferredEntities);
         _pendingReplay = true;
     }
 
@@ -800,10 +774,11 @@ public sealed partial class CommandStream
     /// Entity-reference/layout violations are rejected before the submit/worker
     /// handoff (atomically, no mutations); other consume-time violations may leave
     /// earlier commands applied. Call <see cref="Validate"/> first to reject the
-    /// component-presence and hierarchy violations it covers before any mutation.
+    /// component-presence violations it covers before any mutation.
     /// </exception>
     public Task<FrameDelta> SubmitAndSnapshotAsync()
     {
+        ThrowIfStaleFrame();
         PrepareStores(buildSetLocationCache: true);
         if (!HasAnyCommands())
             return Task.FromResult(new FrameDelta());
@@ -873,12 +848,13 @@ public sealed partial class CommandStream
     /// violation surfaces during submit. Entity-reference/layout violations are
     /// rejected before the submit/worker handoff (atomically, no mutations); other
     /// consume-time violations may leave earlier commands applied. Call
-    /// <see cref="Validate"/> first to reject the component-presence and hierarchy
+    /// <see cref="Validate"/> first to reject the component-presence
     /// violations it covers before any mutation.
     /// </exception>
     public Task SubmitAndSnapshotIntoAsync(FrameDelta target)
     {
         ArgumentNullException.ThrowIfNull(target);
+        ThrowIfStaleFrame();
         PrepareStores(buildSetLocationCache: true);
         if (!HasAnyCommands())
         {
@@ -916,6 +892,7 @@ public sealed partial class CommandStream
             // swap and worker start), free-list alignment, and deferred resolution.
             PreValidatePendingSlots();
             PreflightEntityReferences();
+            ValidateCreateManyGroups(_frozen);
 
             // Reject an oversized frame before free-list realignment or real-id
             // reservation. Unresolved placeholder endpoints are conservatively
@@ -968,24 +945,19 @@ public sealed partial class CommandStream
         BuildFromFrozenInto(frozen, target);
     };
 
-    private void BuildDelta(FrameDelta delta)
+    private static void EmitPrepared(FrameDelta delta, FrozenState frozen, bool deferredMode)
     {
-        // Order matches Submit: Create —Hierarchy —Ops —Destroy.
-        EmitPendingEntitiesToDelta(delta, new PendingBatchView(
-            _frozen.BatchCanceled, _frozen.BatchHeads, _frozen.BatchCompCounts,
-            _frozen.BatchComps, _frozen.BatchBuf, _frozen.BatchEntities, _frozen.PendingBatchCount),
-            _deferredEntities);
+        // The wire and typed paths share the phase order, not a byte representation.
+        EmitPendingEntitiesToDelta(delta, frozen.Pending, deferredMode);
 
-        EmitHierarchyToDelta(delta, _frozen);
-
-        foreach (var store in _frozen.Stores)
+        foreach (var store in frozen.Stores)
         {
             if (store?.HasCommands == true)
                 store.EmitToDelta(delta);
         }
 
-        for (var i = 0; i < _frozen.DestroyCount; i++)
-            delta.AddDestroy(_frozen.DestroyEntities[i]);
+        for (var i = 0; i < frozen.DestroyCount; i++)
+            delta.AddDestroy(frozen.DestroyEntities[i]);
     }
 
     private void PreflightFrameDeltaBudget(bool deferredMode)
@@ -995,7 +967,6 @@ public sealed partial class CommandStream
 
         var budget = new FrameDelta.Budget();
         AccumulatePendingEntitiesDeltaBudget(ref budget, _frozen.Pending, deferredMode);
-        AccumulateHierarchyDeltaBudget(ref budget, _frozen, deferredMode);
 
         foreach (var store in _frozen.Stores)
         {
@@ -1022,21 +993,22 @@ public sealed partial class CommandStream
             {
                 for (var i = 0; i < _frozen.PendingBatchCount; i++)
                 {
-                    if (_frozen.BatchCanceled[i] && _frozen.BatchEntities[i].IsPlaceholder)
+                    if (!ShouldEmitPendingBatch(
+                            _frozen.BatchCanceled[i], _frozen.BatchEntities[i], deferredMode))
                         emittedPendingCount--;
                 }
             }
         }
 
         var pendingOpCount = 2L * emittedPendingCount;
-        var opCount = pendingOpCount + 2L * _frozen.HierarchyByChild.Count + _frozen.DestroyCount;
+        var opCount = pendingOpCount + _frozen.DestroyCount;
 
         // Maximum encoded sizes: entity-only op = 11 bytes; Create = 16 bytes
-        // before component entries; AddChild = 21 bytes. Removed/duplicate batch
+        // before component entries. Removed/duplicate batch
         // components remain in the bound, which makes it conservative.
         var byteCount = 27L * emittedPendingCount +
             _batchBufLen + 10L * _batchCompTotal +
-            32L * _frozen.HierarchyByChild.Count + 11L * _frozen.DestroyCount;
+            11L * _frozen.DestroyCount;
 
         foreach (var store in _frozen.Stores)
         {
@@ -1091,6 +1063,8 @@ public sealed partial class CommandStream
     {
         buildSetLocationCache &= CanReuseSetLocationCache(_frozen);
         PrepareComponentStoresForConsume(buildSetLocationCache);
+        if (!HasAnyCommands())
+            _frameTimeline = 0;
     }
 
     private static bool CanReuseSetLocationCache(FrozenState frozen)
@@ -1172,7 +1146,7 @@ public sealed partial class CommandStream
         _lastStoreId0 = -1; _lastStore0 = null;
         _lastStoreId1 = -1; _lastStore1 = null;
         _hasStoreCommands = false;
-        _frozen.HierarchyByChild.Clear();
+        _frameTimeline = 0;
 
 #if DEBUG
         // The swapped-out state is now read-only — neither SubmitFromFrozen
@@ -1186,15 +1160,15 @@ public sealed partial class CommandStream
 
     private void SubmitFromFrozen(FrozenState frozen)
     {
-        // Order matches Submit and BuildDelta: Create —Hierarchy —Ops —Destroy.
         PreValidatePendingSlots(frozen);
         _submitEpoch = _world.ReservedReleaseEpoch;
-        MaterializePendingBatches(frozen);
+        ApplyPrepared(frozen);
+    }
 
-        if (frozen.HierarchyByChild.Count > 0)
-        {
-            ApplyHierarchyToWorld(_world, frozen);
-        }
+    private void ApplyPrepared(FrozenState frozen)
+    {
+        // Match EmitPrepared: Create —Ops —Destroy.
+        MaterializePendingBatches(frozen);
 
         foreach (var store in frozen.Stores)
         {
@@ -1203,32 +1177,13 @@ public sealed partial class CommandStream
         }
 
         for (var i = 0; i < frozen.DestroyCount; i++)
-        {
-            var entity = frozen.DestroyEntities[i];
-            // Guard against cascade-destroyed entities (parent destroyed
-            // before child in the array). Matches Replay path semantics.
-            _world.DestroyIfAlive(entity);
-        }
+            _world.DestroyIfAlive(frozen.DestroyEntities[i]);
     }
 
     private static FrameDelta BuildFromFrozen(FrozenState frozen)
     {
-        // Order matches Submit: Create —Hierarchy —Ops —Destroy.
         var delta = new FrameDelta();
-
-        EmitPendingEntitiesToDelta(delta, frozen.Pending, deferredMode: false);
-
-        EmitHierarchyToDelta(delta, frozen);
-
-        foreach (var store in frozen.Stores)
-        {
-            if (store?.HasCommands == true)
-                store.EmitToDelta(delta);
-        }
-
-        for (var i = 0; i < frozen.DestroyCount; i++)
-            delta.AddDestroy(frozen.DestroyEntities[i]);
-
+        EmitPrepared(delta, frozen, deferredMode: false);
         return delta;
     }
 
@@ -1239,21 +1194,8 @@ public sealed partial class CommandStream
     /// </summary>
     private static void BuildFromFrozenInto(FrozenState frozen, FrameDelta target)
     {
-        // Order matches Submit: Create —Hierarchy —Ops —Destroy.
         target.Clear();
-
-        EmitPendingEntitiesToDelta(target, frozen.Pending, deferredMode: false);
-
-        EmitHierarchyToDelta(target, frozen);
-
-        foreach (var store in frozen.Stores)
-        {
-            if (store?.HasCommands == true)
-                store.EmitToDelta(target);
-        }
-
-        for (var i = 0; i < frozen.DestroyCount; i++)
-            target.AddDestroy(frozen.DestroyEntities[i]);
+        EmitPrepared(target, frozen, deferredMode: false);
     }
 
 }

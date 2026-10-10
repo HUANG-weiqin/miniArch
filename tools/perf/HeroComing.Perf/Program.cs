@@ -136,6 +136,8 @@ void PrintUsage()
 
     var players = new List<Entity>();
     var frame = runtime.CurrentFrame;
+    int spawnedEnemies = 0;
+    Entity attackTarget = default;
     var spawnQuery = new QueryDescription().With<SpawnKind>();
     foreach (var chunk in frame.ChunkQuery(spawnQuery).GetChunks())
     {
@@ -145,11 +147,26 @@ void PrintUsage()
         {
             if (kinds[i] == CharacterSpawnKinds.Player)
                 players.Add(entities[i]);
+            else if (kinds[i] == CharacterSpawnKinds.SandbagEnemy)
+            {
+                spawnedEnemies++;
+                if (frame.Get<PositionQValue>(entities[i]).Value == 0 &&
+                    frame.Get<PositionRValue>(entities[i]).Value == GridHeight / 2)
+                    attackTarget = entities[i];
+            }
         }
     }
+    if (players.Count != playerCount || spawnedEnemies != enemyCount)
+        throw new InvalidOperationException($"Expected {playerCount} players and {enemyCount} enemies; found {players.Count} and {spawnedEnemies}.");
     Console.WriteLine($"Spawned {CharacterCount} characters, found {players.Count} players.");
 
     var playerMembership = BuildPlayerMembership(players);
+    int initialPlayerQ = frame.Get<PositionQValue>(players[0]).Value;
+    if (name == "Attack")
+    {
+        if (attackTarget == default || CountAttackActions(frame, playerMembership) != playerCount)
+            throw new InvalidOperationException("Attack setup must provide one owned attack action per player and a target enemy.");
+    }
 
     // Warmup
     for (int i = 0; i < WarmupRounds; i++)
@@ -157,6 +174,10 @@ void PrintUsage()
         createRequests(runtime, players, playerMembership);
         fixture.StepUntilStable();
     }
+    if (name == "Movement" && runtime.CurrentFrame.Get<PositionQValue>(players[0]).Value <= initialPlayerQ)
+        throw new InvalidOperationException("Movement warmup did not move the player.");
+    if (name == "Attack" && runtime.CurrentFrame.Get<CurrentHpValue>(attackTarget).Value >= 100)
+        throw new InvalidOperationException("Attack warmup did not damage the target enemy.");
 
     GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
     GC.WaitForPendingFinalizers();
@@ -240,19 +261,39 @@ void CreateMoveRequests(MiniArchRuntime runtime, List<Entity> players, bool[] _)
         CharacterMovementBootstrap.CreateMoveRequest(runtime, player, 1, 0);
 }
 
+int CountAttackActions(FrameView frame, bool[] playerMembership)
+{
+    int count = 0;
+    var query = new QueryDescription().With<ActionEntity>().With<ActionKind>().With<ActionOwner>();
+    foreach (var chunk in frame.ChunkQuery(query).GetChunks())
+    {
+        var kinds = chunk.GetSpan<ActionKind>();
+        var owners = chunk.GetSpan<ActionOwner>();
+        for (int i = 0; i < chunk.Count; i++)
+        {
+            var owner = owners[i].Value;
+            if (kinds[i] == CharacterActionKinds.Attack &&
+                (uint)owner.Id < (uint)playerMembership.Length && playerMembership[owner.Id])
+                count++;
+        }
+    }
+    return count;
+}
+
 void CreateAttackRequests(MiniArchRuntime runtime, List<Entity> players, bool[] playerMembership)
 {
     var frame = runtime.CurrentFrame;
-    var actionQuery = new QueryDescription().With<ActionEntity>().With<ActionKind>();
+    var actionQuery = new QueryDescription().With<ActionEntity>().With<ActionKind>().With<ActionOwner>();
     foreach (var chunk in frame.ChunkQuery(actionQuery).GetChunks())
     {
         var kinds = chunk.GetSpan<ActionKind>();
+        var owners = chunk.GetSpan<ActionOwner>();
         var entities = chunk.GetEntities();
         for (int i = 0; i < chunk.Count; i++)
         {
+            var owner = owners[i].Value;
             if (kinds[i] == CharacterActionKinds.Attack &&
-                frame.TryGetParent(entities[i], out Entity parent) &&
-                (uint)parent.Id < (uint)playerMembership.Length && playerMembership[parent.Id])
+                (uint)owner.Id < (uint)playerMembership.Length && playerMembership[owner.Id])
             {
                 CharacterAttackBootstrap.CreateAttackRequest(runtime, entities[i], 0, GridHeight / 2);
             }

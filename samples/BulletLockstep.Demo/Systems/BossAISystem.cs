@@ -7,8 +7,8 @@ namespace BulletLockstep.Demo.Systems;
 //   - Advance PhaseFrame; every PhaseLength frames, bump Phase (cycles 0..2).
 //   - Drain 1 HP per frame from the boss (placeholder for "players damage
 //     boss" — real collision comes in Slice 6).
-//   - When Health.Cur <= 0: world.Destroy(boss). The library cascades the
-//     destroy through the hierarchy, removing all linked WeakPoints.
+//   - When Health.Cur <= 0: explicitly remove this encounter's indexed
+//     WeakPoints, then destroy the boss.
 //
 // Phase changes are recorded as a Set on AIPattern. Phase 0 -> 1 -> 2 -> 0
 // cycle is fully deterministic.
@@ -18,6 +18,7 @@ public static class BossAISystem
     private const int HpDrainPerFrame = 1;
 
     private static readonly QueryDescription Query = new QueryDescription().With<BossTag>();
+    private static readonly QueryDescription WeakPointQuery = new QueryDescription().With<WeakPointTag>();
 
     public static void Run(World world, int frame)
     {
@@ -40,7 +41,7 @@ public static class BossAISystem
 
             if (newHp == 0)
             {
-                // Cascade destroy — library destroys all linked children.
+                world.Destroy(in WeakPointQuery);
                 world.Destroy(boss);
             }
             // Only one boss expected; break out.

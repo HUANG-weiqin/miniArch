@@ -2,7 +2,7 @@
 title: 内存安全硬化 — 抗 OOM / 栈溢出 / 算术溢出
 module: MiniArch.Core
 description: ECS 运行时在对抗性输入下的内存安全防护——int 溢出防线、栈安全、恶意输入拦截、API 验证。每一层有测试证明。
-updated: 2026-07-25
+updated: 2026-10-10
 ---
 
 # 内存安全硬化
@@ -30,7 +30,7 @@ updated: 2026-07-25
   ├── WorldSnapshot 文件 ──────────→ entitySlotCount ≤ 256M
   │                                  schemaCount ≤ 65536
   │                                  archetypeCount ≤ 262144
-  │                                  hierarchyLinkCount ≤ entitySlotCount
+  │                                  v5 关系计数必须为 0（旧非零文件拒绝）
   │                                  CRC32 校验（v4 格式）
   ├── CommandStream 录制 ──────────→ ReserveBatchBufSpace 溢出检测
   │                                  GrowPendingBatchFor 无限循环防护
@@ -62,7 +62,7 @@ updated: 2026-07-25
 
 ## 攻击面验证矩阵
 
-所有条目有独立测试证明，位于 `HardeningEdgeCaseTests.cs`（20 个测试）。
+下表保留旧版 `HardeningEdgeCaseTests.cs` 的 20 个测试记录；层级专属项已退役，不可当作扁平版本的当前覆盖证明。
 
 ### 算术溢出
 
@@ -90,11 +90,11 @@ updated: 2026-07-25
 | `Reserve(Entity(100M, 1))` | PreScan 预分配 `_records[100M]` | clamp 到 `Math.Max(_records.Length*2, 65536)` | ✅ `Replay_reserve_with_huge_entity_id_does_not_oom` |
 | `Create(Entity(100M, 1))` | PreScan 同，主 pass `_records[100M]` 越界 | PreScan clamp + Validate "无 Reserve" 拒绝 | ✅ `Validate_rejects_create_with_huge_entity_id_without_reserve` |
 | `Destroy(Entity(100M, 1))` | PreScan 预分配 100M | PreScan 跳过非 alloc op（destroy 不跟踪 id） | ✅ `Destroy_with_huge_entity_id_does_not_oom_in_prescan`（已有） |
-| `AddChild parent=Entity(100M, 1)` | PreScan 预分配 | clamp 已覆盖 AddChild | —（同路径） |
+| 历史：`AddChild parent=Entity(100M, 1)` | PreScan 预分配 | 当时 clamp 覆盖此路径；层级 op 现已移除 | —（退役路径） |
 | Snapshot `entitySlotCount = 300M` | `new int[300M]` ≈ 1.2GB OOM | 上限 256M，`InvalidDataException` | ✅ `SnapshotLoad_rejects_entity_slot_count_over_256M` |
 | Snapshot `schemaCount = 100K` | `new Type[100K]` 分配前无检查 | 上限 65536 | ✅ `SnapshotLoad_rejects_excessive_schema_count` |
 | Snapshot `archetypeCount = 300K` | 30 万次循环分配 | 上限 262144 | ✅ `SnapshotLoad_rejects_excessive_archetype_count` |
-| Snapshot `hierarchyLinkCount = slotCnt+1` | 超量读取 | 上限 = entitySlotCount | ✅ `SnapshotLoad_rejects_excessive_hierarchy_link_count` |
+| Snapshot 非零关系计数 | 旧层级数据若被跳过会静默丢失 | v5 保留计数字段但只接受 0；非零在构造 World 前拒绝 | 历史 `SnapshotLoad_rejects_excessive_hierarchy_link_count` 仅证明旧上限，不能替代新的非零拒绝回归 |
 | Snapshot 负元数据 | — | `< 0` 一律拒绝 | ✅ `SnapshotLoad_rejects_negative_metadata_counts` |
 | CommandStream buffer 倍增 | 无上限 → `OutOfMemoryException` | `GrowPendingBatchFor` 上限 `0x40000000` | —（构造需~4GB 中间状态不可行） |
 
@@ -139,7 +139,7 @@ updated: 2026-07-25
   - entitySlotCount：256M 上限 = 1GB slot 表，覆盖所有现实场景
   - schemaCount：65536 上限 = 远多于任何游戏的组件类型数
   - archetypeCount：262144 上限 = 60 个组件类型的全组合数，实际 ≤ 几千
-  - hierarchyLinkCount：上限 = entitySlotCount，不可能需要超过实体数的链接
+  - v5 关系计数：固定为 0；旧非零文件明确拒绝，不能仅按旧 `entitySlotCount` 上限接受
 - **`Math.Max(_records.Length * 2, 65536)` 为什么取 65536**：最小 entity 容量 64（`EnsureCapacity` 下限），double 后 128，但 clamp 需要足够大以容纳合理 replay 行为。65536 = 64K 实体 ≈ 64K×28 字节记录 ≈ 1.8MB _records 数组——对空 world 是合理的一次性增长。
 - **为什么不用 `decimal` / `BigInteger`**：性能不可接受。`checked` 是零开销硬件指令；`uint` 转 `int` 配合 `Math.Min` 在 JIT 后是一条 CMOV。
 
@@ -154,5 +154,5 @@ updated: 2026-07-25
 - 硬化不消除性能开销——segment 容量=1 时每 entity 分配一个独立数组，回滚备份也是数组级拷贝。这是安全价格，不是 bug
 - `snapshot schemaCount` cap 可能阻断极端（> 65536 组件类型）的用户，但这是合理的——如果你有 65536+ 组件类型，你的设计可能有问题
 - `ReadVarint` 在 `FromWire` 阶段就已经抛异常，不是 `Validate` 阶段。这意味着某些"按设计应该走到 Validate 才拒"的 wire 在解码阶段就被拒绝了，5 个现有测试因此更新了期望值
-- DEBUG-only 保护（如 `AssertNoStructChange`）不会在 RELEASE 构建中触发。依赖这些保护的代码必须额外提供无条件 fallback 或者确保逻辑上不可能触发；层级 restore 的循环检测现已统一由 Release 常开的 `ValidateAddChild` 承担
+- DEBUG-only 保护（如 `AssertNoStructChange`）不会在 RELEASE 构建中触发。依赖这些保护的代码必须额外提供无条件 fallback 或者确保逻辑上不可能触发；旧层级 restore 的 `ValidateAddChild` 已随层级能力退役
 - `_records[entity.Id]` 在 replay main pass 中不经过 PreScan 的保护——PreScan 只防 OOM，不保证 array index 合法。必须在 PreScan 之后的 `PlaceEntityInArchetype` 中确保 `_records` 够大，或者始终使用 Validate()

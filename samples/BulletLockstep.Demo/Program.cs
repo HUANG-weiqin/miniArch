@@ -89,14 +89,14 @@ static int RunSlice4(int hostCount, int frameCount)
     return 0;
 }
 
-// ── Slice 5: hierarchy + Boss + cascade destroy ──────────────────────
-// Host 0 spawns Boss + 5 WeakPoints linked via World.AddChild at frame 0. Boss
-// drains HP deterministically; on death World.Destroy(boss) cascades through
-// the hierarchy, removing all weakpoints. Homing bullets target host players
+// ── Slice 5: Boss encounter + explicit weakpoint cleanup ─────────────
+// Host 0 spawns Boss + 5 indexed WeakPoints at frame 0. Boss drains HP
+// deterministically; its AI removes the encounter's weakpoints on death.
+// Homing bullets target host players
 // by PlayerTag.HostId (no cross-host entity references).
 static int RunSlice5(int hostCount, int frameCount)
 {
-    Console.WriteLine($"BulletLockstep Slice 5 (hierarchy + boss + cascade destroy)");
+    Console.WriteLine($"BulletLockstep Slice 5 (boss encounter + weakpoint cleanup)");
     Console.WriteLine($"  {hostCount} hosts, {frameCount} frames");
     Console.WriteLine();
 
@@ -111,12 +111,7 @@ static int RunSlice5(int hostCount, int frameCount)
 
     if (mismatch >= 0) return ReportFail(sim, mismatch);
 
-    Console.ForegroundColor = ConsoleColor.Green;
-    Console.WriteLine($"PASS: all {frameCount} frames consistent across {hostCount} hosts");
-    Console.ResetColor();
-    Report(sw, frameCount, gc, alloc, sim);
-
-    // Verify boss lived and died via cascade. Look at entity counts.
+    // Verify the boss and its weakpoints survive or die together.
     var bossAlive = false;
     var weakPointCount = 0;
     var bossDesc = new QueryDescription().With<BossTag>();
@@ -125,7 +120,18 @@ static int RunSlice5(int hostCount, int frameCount)
     foreach (var _ in sim.Hosts[0].World.Query(in wpDesc)) weakPointCount++;
     Console.WriteLine();
     Console.WriteLine($"  end state: boss alive={bossAlive}, weakpoints={weakPointCount}");
-    Console.WriteLine($"  (boss HP drain: {500} frames to die from full; cascade should clear weakpoints)");
+    Console.WriteLine("  (boss HP drain: 500 frames to die from full; AI clears weakpoints)");
+    var expectedAlive = frameCount > 0 && frameCount < 500;
+    if (bossAlive != expectedAlive || weakPointCount != (expectedAlive ? 5 : 0))
+    {
+        Console.Error.WriteLine("FAIL: boss encounter cleanup did not match the expected frame boundary");
+        return 1;
+    }
+
+    Console.ForegroundColor = ConsoleColor.Green;
+    Console.WriteLine($"PASS: all {frameCount} frames consistent across {hostCount} hosts");
+    Console.ResetColor();
+    Report(sw, frameCount, gc, alloc, sim);
     return 0;
 }
 

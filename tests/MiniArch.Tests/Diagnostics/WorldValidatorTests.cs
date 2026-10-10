@@ -61,17 +61,6 @@ public class WorldValidatorTests
     }
 
     [Fact]
-    public void WorldWithHierarchy_NoIssues()
-    {
-        using var world = new World();
-        var parent = world.Create(new Position(0, 0));
-        var child = world.Create(new Position(1, 1));
-        world.AddChild(parent, child);
-        var result = WorldValidator.Validate(world);
-        Assert.True(result.IsValid);
-    }
-
-    [Fact]
     public void MultipleArchetypes_NoIssues()
     {
         using var world = new World();
@@ -133,7 +122,7 @@ public class WorldValidatorTests
         var entity = world.Create(new Position(1, 1));
         world.Destroy(entity);
         var snapshot = world.CaptureState();
-        snapshot.Payload.FreeEntities[0] = new FreeEntityEntry(99, entity.Version + 1);
+        snapshot.Payload.FreeIds[0] = 99;
         world.RestoreState(snapshot);
 
         var result = WorldValidator.Validate(world);
@@ -143,13 +132,13 @@ public class WorldValidatorTests
     }
 
     [Fact]
-    public void BUG_WorldValidator_detects_free_list_version_mismatch()
+    public void BUG_WorldValidator_detects_invalid_free_slot_version()
     {
         using var world = new World();
         var entity = world.Create(new Position(1, 1));
         world.Destroy(entity);
         var snapshot = world.CaptureState();
-        snapshot.Payload.FreeEntities[0] = new FreeEntityEntry(entity.Id, entity.Version + 2);
+        snapshot.Payload.Records[entity.Id].Version = 0;
         world.RestoreState(snapshot);
 
         var result = WorldValidator.Validate(world);
@@ -167,7 +156,7 @@ public class WorldValidatorTests
         world.Destroy(first);
         world.Destroy(second);
         var snapshot = world.CaptureState();
-        snapshot.Payload.FreeEntities[1] = snapshot.Payload.FreeEntities[0];
+        snapshot.Payload.FreeIds[1] = snapshot.Payload.FreeIds[0];
         world.RestoreState(snapshot);
 
         var result = WorldValidator.Validate(world);
@@ -192,58 +181,6 @@ public class WorldValidatorTests
     }
 
     [Fact]
-    public void BUG_WorldValidator_detects_missing_forward_hierarchy_link()
-    {
-        using var world = new World();
-        var parent = world.Create(new Position(0, 0));
-        var child = world.Create(new Position(1, 1));
-
-        // Inject only the child-to-parent half of the relation.
-        world.Hierarchy.SetParentForTest(child, parent);
-
-        var result = WorldValidator.Validate(world);
-
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Issues, issue => issue.Code == ValidationCode.AsymmetricParent);
-    }
-
-    [Fact]
-    public void BUG_WorldValidator_detects_forward_hierarchy_link_to_wrong_parent()
-    {
-        using var world = new World();
-        var firstParent = world.Create(new Position(0, 0));
-        var secondParent = world.Create(new Position(1, 1));
-        var child = world.Create(new Position(2, 2));
-        world.AddChild(firstParent, child);
-
-        // Leave the child in firstParent's forward list but redirect its reverse link.
-        world.Hierarchy.SetParentForTest(child, secondParent);
-
-        var result = WorldValidator.Validate(world);
-
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Issues, issue => issue.Code == ValidationCode.AsymmetricParent);
-    }
-
-    [Fact]
-    public void BUG_WorldValidator_detects_cyclic_child_slot_chain()
-    {
-        using var world = new World();
-        var parent = world.Create(new Position(0, 0));
-        var child = world.Create(new Position(1, 1));
-        world.AddChild(parent, child);
-        var snapshot = world.CaptureState();
-        var childSlot = snapshot.Payload.HierarchyFirstChild[parent.Id];
-        snapshot.Payload.HierarchyChildSlots[childSlot].Next = childSlot;
-        world.RestoreState(snapshot);
-
-        var result = WorldValidator.Validate(world);
-
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Issues, issue => issue.Code == ValidationCode.AsymmetricParent);
-    }
-
-    [Fact]
     public void BUG_WorldValidator_detects_record_to_archetype_row_mismatch()
     {
         using var world = new World();
@@ -262,71 +199,4 @@ public class WorldValidatorTests
         Assert.Contains(result.Issues, issue => issue.Code == ValidationCode.OrphanedSlot);
     }
 
-    [Fact]
-    public void Bulk_clear_stale_hierarchy_entries_are_not_reported_as_live_asymmetry()
-    {
-        using var world = new World();
-        var removedParent = world.Create(new Position(0, 0));
-        var survivingChild = world.Create(new Velocity(1, 1, 1));
-        world.AddChild(removedParent, survivingChild);
-
-        var survivingParent = world.Create(new Velocity(2, 2, 2));
-        var removedChild = world.Create(new Position(3, 3));
-        world.AddChild(survivingParent, removedChild);
-
-        var description = new QueryDescription().With<Position>();
-        world.Clear(in description);
-
-        var result = WorldValidator.Validate(world);
-
-        Assert.True(result.IsValid);
-    }
-
-    [Fact]
-    public void HierarchyWithCycle_ReportsError()
-    {
-        using var world = new World();
-        var a = world.Create(new Position(0, 0));
-        var b = world.Create(new Position(1, 1));
-        var c = world.Create(new Position(2, 2));
-
-        // Inject a 3-cycle A -> B -> C -> A via test hook.
-        world.Hierarchy.SetParentForTest(b, a);
-        world.Hierarchy.SetParentForTest(c, b);
-        world.Hierarchy.SetParentForTest(a, c);
-
-        var result = WorldValidator.Validate(world);
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Issues, i => i.Code == ValidationCode.HierarchyCycle);
-    }
-
-    [Fact]
-    public void HierarchyWithSelfCycle_ReportsError()
-    {
-        using var world = new World();
-        var a = world.Create(new Position(0, 0));
-
-        // Inject self-cycle A -> A.
-        world.Hierarchy.SetParentForTest(a, a);
-
-        var result = WorldValidator.Validate(world);
-        Assert.False(result.IsValid);
-        Assert.Contains(result.Issues, i => i.Code == ValidationCode.HierarchyCycle);
-    }
-
-    [Fact]
-    public void HierarchyWithoutCycle_NoCycleError()
-    {
-        using var world = new World();
-        var parent = world.Create(new Position(0, 0));
-        var child = world.Create(new Position(1, 1));
-        var grandchild = world.Create(new Position(2, 2));
-
-        world.AddChild(parent, child);
-        world.AddChild(child, grandchild);
-
-        var result = WorldValidator.Validate(world);
-        Assert.True(result.IsValid);
-        Assert.DoesNotContain(result.Issues, i => i.Code == ValidationCode.HierarchyCycle);
-    }
 }

@@ -10,10 +10,10 @@
 |---|---|
 | `CreateEmpty()` | Create entity with no components |
 | `Create<T1..T16>(...)` | Create entity with 1–16 components |
-| `Destroy(Entity)` | Remove entity (cascades through hierarchy) |
-| `Destroy(ReadOnlySpan<Entity>)` | Remove a batch of entities, cascading through each hierarchy subtree |
-| `Destroy(in QueryDescription)` | Remove every matching entity with normal hierarchy cleanup |
-| `Clear(in QueryDescription)` | Fast bulk removal without hierarchy cascade; use only when no hierarchy edge crosses the cleared set |
+| `Destroy(Entity)` | Remove only the specified entity |
+| `Destroy(ReadOnlySpan<Entity>)` | Remove the specified entities in a batch |
+| `Destroy(in QueryDescription)` | Remove entities matching the query |
+| `Clear(in QueryDescription)` | Fast bulk removal of matching entities |
 | `IsAlive(Entity)` | Validate entity handle |
 | `EnsureCapacity(int)` | Pre-allocate entity slots |
 | `Add<T>(Entity, T)` | Add a component |
@@ -25,13 +25,8 @@
 | `Has<T>(Entity)` | Check component existence |
 | `GetSingleton<T>()` | Get single entity with component (throws if zero or >1) |
 | `Access(Entity)` | Returns `EntityAccessor` for batched operations |
-| `AddChild(Entity, Entity)` | Add child entity (parent-child hierarchy) |
-| `RemoveChild(Entity)` | Remove from hierarchy |
-| `TryGetParent(Entity, out Entity)` | Get parent |
-| `EnumerateChildren(Entity)` | Enumerate children (zero-alloc) |
-| `HasChildren(Entity)` | O(1) check for children |
 | `Query(in QueryDescription)` | Create a query |
-| `Clone(Entity)` | Deep-copy an entity (including child subtree) |
+| `Clone(Entity)` | Copy only the specified entity's components into a new entity |
 | `Clone()` | Materialize a new independent world (branching / checkpoint) |
 | `Watch<TComponent,THandler>(QueryDescription?)` | Create a value-change watch for component `TComponent`; returns `ChangeWatch<TComponent, THandler>` |
 | `Watch<TComponent,TValue,THandler>(QueryDescription?)` | Create a projected value-change watch; returns `ChangeWatch<TComponent, TValue, THandler>` |
@@ -270,10 +265,8 @@ appended to typed stores and consumed as one deterministic batch.
 | `Set<T>(Entity, T)` | Record component value change; existing-entity liveness is decided when the stream is consumed |
 | `Remove<T>(Entity)` | Record component removal; existing-entity liveness is decided when the stream is consumed |
 | `Destroy(Entity)` | Record entity destruction |
-| `AddChild(Entity, Entity)` | Record hierarchy addition |
-| `RemoveChild(Entity)` | Record hierarchy removal |
-| `Clone(Entity)` | Record entity deep-copy |
-| `Validate()` | Check placeholder/layout, component-presence, and final hierarchy-overlay contracts without mutating the `World` |
+| `Clone(Entity)` | Record a single-entity component copy |
+| `Validate()` | Check placeholder/layout and component-presence contracts without mutating the `World` |
 | `Submit()` | Apply recorded changes synchronously; apply-time contract failures may leave earlier commands applied |
 | `Snapshot()` | Produce a budget-valid `FrameDelta` without applying; semantic validation is opt-in |
 | `SnapshotInto(FrameDelta)` | Produce into a reusable target; mandatory guard/budget failure leaves the target unchanged |
@@ -283,19 +276,25 @@ appended to typed stores and consumed as one deterministic batch.
 | `Clear()` | Discard recorded commands without applying |
 | `DeferredEntities` | Enable placeholder entity IDs for lockstep mode |
 
-**Contract — drain across rollback boundaries.** A `CommandStream` must be empty at
-`World.CaptureState()` and only an empty stream may be used after `World.RestoreState()`; discard
-it (`new CommandStream(world)`) rather than `Clear()`-ing it after an interrupted frame. Violating
-this fails silently. See [Rollback contract](#contract-the-commandstream-must-be-drained-across-every-rollback-boundary).
+**Rollback contract.** `CaptureState()` rejects outstanding real-id reservations, not every
+recorded frame. A successful `RestoreState()` invalidates any still-recorded frame from the old
+timeline; consumption and further reservation/Clone/pending cancellation reject it until
+`Clear()` discards it. The same stream can then record a new frame. See [Rollback contract](#contract-commandstream-frames-across-capturestate-and-restorestate).
 
 `Submit`, `Snapshot`, and the async consume APIs do **not** implicitly run
-component-presence or hierarchy-overlay validation. Call `Validate()` explicitly before
-consuming when fail-before-mutation semantics are required for those contracts.
+component-presence validation. Call `Validate()` explicitly before
+consuming when fail-before-mutation semantics are required for that contract.
 `Validate()` does not cover CreateMany group consistency, pending-slot invariants, or
-FrameDelta budgets; those remain consume-time checks. Mandatory explicit/embedded Entity-reference, layout, and frame-budget guards still
-run before deferred-id resolution or async worker handoff. Without explicit validation, `Submit`/async apply-time failures may
-partially mutate the World, and an async reusable target is undefined once its worker
-has started.
+FrameDelta budgets; those remain consume-time checks. Modified CreateMany groups and duplicate
+writer component types are checked by every consume path before materialization, component
+application, deferred-id resolution or reusable-target clearing; fully cancelled groups need
+no live archetype. Failed Submit/async calls still discard the frame and can release real-id
+reservations made during recording; this is not a promise of allocator rollback. The resulting typed apply and wire emit
+share the same prepared Create → Component Ops → Destroy ordering. Mandatory
+explicit/embedded Entity-reference, layout, and frame-budget guards still run before
+deferred-id resolution or async worker handoff. These checks do not make Submit transactional:
+without explicit presence validation, later apply-time failures may leave earlier commands
+applied, and an async reusable target is undefined once its worker has started.
 
 ### Embedded Entity component contract
 
@@ -366,67 +365,41 @@ world.RestoreState(snapshot);         // revert, payload returned to pool
 - **`WorldStateSnapshot.IsRecycled`** — check whether a lease is no longer valid
 - `RestoreState` throws `InvalidOperationException` if the lease was already consumed or belongs to another world
 
-### Contract: the `CommandStream` must be drained across every rollback boundary
+### Contract: CommandStream frames across CaptureState and RestoreState
 
-> **A `CommandStream` must be empty when you call `CaptureState()`, and only an empty `CommandStream` may be used after `RestoreState()`.**
+`CaptureState()` rejects a World with outstanding real-id reservations (`InvalidOperationException`)
+**before** taking a snapshot lease. It does not require every stream to be empty: a pure
+`Set` frame, deferred-only draft, or fully cancelled draft may be captured, but stream buffers
+are not part of the checkpoint.
 
-`RestoreState` reverts the `World` and nothing else. A `CommandStream` holds recorded intents
-(pending batches, typed component stores, hierarchy overlay, destroy list, tracked
-`EntitySlot`s) that the rollback does **not** touch, and the stream cannot detect that its world
-was rolled back. Intent recorded *after* the capture therefore refers to entity reservations and
-slot versions that no longer exist.
-
-Drained means "already consumed": `Submit()`, or `Snapshot()` + `Clear()`.
+A successful `RestoreState()` advances the World's command timeline. A stream with an active
+frame recorded on the old timeline rejects `Validate()`, `Submit()`, `Snapshot()`,
+`SnapshotInto()`, both async consume entries, further reservation/Clone, and cancellation
+of a pending entity with `InvalidOperationException`, even if the original entity is still alive.
+Ordinary `Add`/`Set`/`Remove` on existing handles may append to the old frame, but cannot make
+it consumable. An empty stream can continue to be used. `Clear()` safely discards a stale frame
+without releasing a reservation that the restored World may have reassigned to another stream;
+the **same** stream can then
+record and consume a new frame. Do not submit or keep recording the old frame.
 
 ```csharp
-// ── Normal GGPO frame loop ──────────────────────────────────────────────
-CommandStream stream = new(world);   // long-lived, but empty at every rollback boundary
-var ring = new WorldStateSnapshot[8];
-
-// frame n
-ring[n % 8]?.Dispose();               // evict an unconsumed checkpoint first
-ring[n % 8] = world.CaptureState();   // stream is empty here   <-- contract
-stream.Set(a, new Position(nextX, nextY));
-stream.Submit();                      // consumed -> drained
-
-// misprediction at frame k -> rewind and re-simulate
-world.RestoreState(ring[k % 8]);      // safe: Submit() already drained the stream
-stream.Set(a, new Position(correctedX, correctedY));
+var checkpoint = world.CaptureState();
+stream.Set(entity, new Position(1, 1)); // no real-id reservation
+world.RestoreState(checkpoint);
+// stream.Submit();                      // throws: old recorded frame
+stream.Clear();                          // discard it safely
+stream.Set(entity, new Position(2, 2)); // new timeline, if entity is alive
 stream.Submit();
-
-// ── Exception recovery: a frame was interrupted mid-record ─────────────
-var checkpoint = world.CaptureState();  // stream is empty here   <-- contract
-try
-{
-    stream.Set(a, new Position(nextX, nextY));
-    stream.Create();                    // reserves an id...
-    Simulate();                         // ...and throws here
-    stream.Submit();
-}
-catch
-{
-    world.RestoreState(checkpoint);
-    stream = new CommandStream(world);  // discard — Clear() is NOT a substitute
-    throw;
-}
 ```
 
-**After restoring a frame that was interrupted mid-record, discard the stream
-(`stream = new CommandStream(world)`).** `Clear()` does not discard it safely: `Clear()` releases
-the reserved ids of pending batches, and a rollback has already returned those ids to the free
-list — so the release bumps slot versions a second time and reorders the free list.
-
-**Violating this contract fails silently** — no exception, no diagnostic. Observed symptoms:
-
-| What you did after `RestoreState` | What happens |
-|---|---|
-| `Submit()` a stream that recorded `Create` after the capture | The rolled-back reservation is materialized again; the same `(Id, Version)` is later handed out by the free list → **two live entities sharing one handle** |
-| `Clear()`, then re-record | Slot versions jump an extra step and free-list order shifts → id/version sequence diverges from a never-rolled-back world, stale archetype rows remain |
-| `Submit()` a stream that only recorded `Add`/`Set` on existing entities | No corruption, but the discarded intent is silently re-applied (target alive, same version) or silently pruned (target gone) |
-
-Why this is a documented contract rather than a runtime check: the only guard,
-`CommandStream.PreValidatePendingSlots`, is epoch-based, and `RestoreState` does not advance
-`World.ReservedReleaseEpoch` — so the guard's fast path skips exactly this case.
+`SubmitAndSnapshotAsync` applies to the World synchronously before returning its task; its
+wire-encoding worker may finish **after** a restore and still produce the earlier frame's
+historical delta. Await each returned task before using its delta; completion of one task does
+not imply that all earlier workers have finished. Explicit `Replay(delta)` of a saved historical
+delta remains permitted; the caller must ensure that the target World's history and allocator
+are compatible. `RestoreState()` does not make previously held `Entity` handles, refs, spans,
+or `EntitySlot.Value` safe to reuse across the rollback. A `Snapshot()` → `Clear()` → own
+`Replay(delta, resolveSlots: true)` flow can still resolve its registered slots after restore.
 
 ---
 
@@ -456,8 +429,13 @@ canonical field shape must match the local component type.
 The canonical payload describes **non-empty archetypes only**: an archetype left empty by
 `Destroy` or by `RestoreState` contributes neither an archetype entry nor a schema entry, so
 two worlds that differ only by such leftovers produce the same `CanonicalChecksum()` and the
-same `Save` bytes. Chunk capacity, every slot version, hierarchy edges, and the ordered free
-list are still part of the payload. Snapshots written by older v5 builds that *do* contain
+same `Save` bytes. Chunk capacity, every slot version, a hierarchy-count field fixed at zero,
+and the ordered free list are still part of the payload. Older v5 files with a zero hierarchy
+count remain readable; files with nonzero hierarchy counts are rejected rather than silently
+losing relations. Older FrameDelta `0x04`/`0x05` relationship operations are likewise rejected
+without changing the other opcode numbers or layouts. For migration, use an older
+hierarchy-capable version to export relations first ([details](../.knowledge/kb-hierarchy-runtime.md)).
+Snapshots written by older v5 builds that *do* contain
 empty archetypes still load; re-saving such a world normalizes those entries away, so the
 original bytes are not preserved. `Checksum()` is unchanged — it already ignored empty
 archetypes.
@@ -539,14 +517,13 @@ struct SumJob : IChunkForEach
 
 - `default(Entity)` is invalid; real entities start at `Version = 1`
 - `World.IsAlive(entity)` is the authoritative validity check
-- `Destroy()` cascades through the hierarchy subtree
-- `Clear(query)` is a deliberately fast non-cascading primitive; use `Destroy(query)` unless the caller can prove no hierarchy edge crosses the cleared set
+- `Destroy(Entity)` removes only that entity; bulk `Destroy` and `Clear(query)` remove their explicitly selected entities, not entities reached through component `Entity` references
 - `UnsafeGetComponentSpanAt<T>` trusts a same-archetype cached column index in Release and must be locally justified by profiling
-- `CommandStream.Add<T>` is strict at consume time: adding a component already present on a surviving entity throws before mutation begins
+- `CommandStream.Add<T>` is strict at consume time: adding a component already present on a surviving entity throws when that operation is applied; earlier commands in the same submit may already have mutated the World (call `Validate()` first for component-presence preflight)
 - `Set<T>()` throws if the entity does not have the component; use `Add<T>()` to add a new component
 - `WorldSnapshot` only supports unmanaged component types
 - `World.RestoreState(snapshot)` throws if `snapshot.IsRecycled` is `true`
-- `CommandStream` must be drained across rollback boundaries: empty at `CaptureState()`, and discarded (`new CommandStream(world)`) after restoring a frame that was interrupted — see [Rollback contract](#contract-the-commandstream-must-be-drained-across-every-rollback-boundary)
+- `CaptureState()` requires no outstanding real-id reservations; after `RestoreState()`, discard an old recorded frame with `CommandStream.Clear()` before reusing that stream — see [Rollback contract](#contract-commandstream-frames-across-capturestate-and-restorestate)
 
 ---
 

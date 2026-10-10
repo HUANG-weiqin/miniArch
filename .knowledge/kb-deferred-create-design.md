@@ -2,14 +2,14 @@
 title: Deferred Create — Multi-Host Lockstep Design
 module: MiniArch.Core CommandStream
 description: DeferredEntities flag 让 Create/Clone 在 placeholder（多 host lockstep）和 immediate（单机/权威服务器）之间切换。Snapshot 按 flag 输出 placeholder delta 或 real-id delta；SubmitAndSnapshotAsync 始终输出 real-id delta。
-updated: 2026-07-09
+updated: 2026-10-10
 ---
 
 # Deferred Create — Multi-Host Lockstep Design
 
 ## 这个模块是干什么的
 
-- 解决**多个 host 各自独立 World** 在帧同步（lockstep）下 Create/Clone 时 id 撞车的问题
+- 解决**多个 host 各自独立 World** 在帧同步（lockstep）下 Create/Clone 时 id 撞车的问题；`Clone(Entity)` 现在只复制该实体的组件，不再扩展为子树（迁移见 `kb-hierarchy-runtime.md`）
 - 通过 `CommandStream.DeferredEntities` flag 控制 `Create()`/`Clone()` 的行为：
   - `false`（默认）：立即从 World 分配 real id（单机快路径）
   - `true`：返回 placeholder `Entity(-1, seq)`，不碰任何 World（多 host lockstep）
@@ -77,7 +77,7 @@ updated: 2026-07-09
 - **每帧 `mapLen = 0` 重置**：防止上一帧的 stale mapping 泄漏到当前帧。`EnsurePlaceholderMap` 在首次 Reserve 时重新初始化所有 slot 为 `Entity(-1, -1)` sentinel
 - `ResolveReplayEntity(wireEntity, map, mapLen)`：`Id >= 0` 直接用（real-id delta）；`Id < 0` 查 map + bounds check（placeholder delta）
 - `Reserve` op with `Id < 0`：`ReserveDeferredEntityBatch()` 分配 local id + 写入 map
-- 所有其他 op（Create/Add/Set/AddChild/Destroy/...）的 entity 参数都走 `ResolveReplayEntity`
+- 所有其他 op（Create/Add/Set/Destroy/...）的 entity 参数都走 `ResolveReplayEntity`
 - `PreScanForCapacity` 跳过 placeholder entity（`Id < 0`）的 `maxEntityId` 追踪——它们的 real id 在 main pass 才分配
 - `World.Replay()` 返回 `void`。占位符解析通过 `World.TryResolvePlaceholder()` 完成（详见下文）
 

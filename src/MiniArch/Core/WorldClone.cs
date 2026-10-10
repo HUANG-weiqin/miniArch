@@ -33,11 +33,6 @@ internal static class WorldClone
             }
         }
 
-        foreach (var (child, parent) in source.Hierarchy.EnumerateLiveRelations(source))
-        {
-            target.AddChildFromSnapshot(parent, child);
-        }
-
         target.CopyFreeIdsFrom(source);
         target.RecalculateReservedCount();
         return target;

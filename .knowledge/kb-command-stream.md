@@ -1,14 +1,14 @@
 ---
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
-description: CommandStream 的 typed-store 录制、consume-time 校验、Submit/Snapshot/Replay 确定性、async ownership 与回滚排空契约
-updated: 2026-10-06
+description: CommandStream 的 typed-store 录制、consume-time 校验、Submit/Snapshot/Replay 确定性、async ownership 与回滚时间线契约
+updated: 2026-10-10
 ---
 # Command Stream Runtime
 
 ## 这个模块是干什么的
 
-- `CommandStream` 是单线程、sealed、可内联的延迟录制器，也是 Submit、Snapshot、Replay、pending materialize、hierarchy、component store 与 async lifecycle 的唯一 owner。
+- `CommandStream` 是单线程、sealed、可内联的延迟录制器，也是 Submit、Snapshot、Replay、pending materialize、component store 与 async lifecycle 的唯一 owner。
 - record 与 consume 都由调用线程独占；并行计算应在调用方汇总后交给一个 `CommandStream`。
 - `FrameDelta` 是可序列化操作序列；端到端帧同步见 `kb-lockstep-playbook.md`。
 
@@ -23,7 +23,6 @@ updated: 2026-10-06
 | `CommandStream.Pending.cs` | pending batch、CreateMany materialize、placeholder resolve |
 | `CommandStream.ComponentStore.cs` | typed entries、stale prune、preflight、apply/emit |
 | `EntityFieldResolver.cs` | Entity-bearing component graph validation、actual CLR offsets、InlineArray stride、in-place resolution |
-| `CommandStream.Hierarchy.cs` | hierarchy intent、overlay preflight、apply/emit |
 | `CommandStream.Submit.cs` | Submit/Snapshot/Replay、async handoff、consume preparation |
 
 这些文件组成唯一的 `public sealed partial class CommandStream`。`FrozenState` 仍是必要的内部 async ownership 边界：active recording state 与后台只读 build state 不能合并。
@@ -33,17 +32,16 @@ updated: 2026-10-06
 ```text
 Create/Clone ──→ pending batch ──→ materialize or emit Create
 Add/Set/Remove(existing) ──→ ComponentStore<T> ──→ prepare/prune → (flag 驱动 Entity 引用守卫) → apply/emit
-AddChild/RemoveChild ──→ final hierarchy overlay ──→ endpoint wire 守卫 → (语义校验可选：Validate) → detach/apply
 Destroy ──→ destroy list ──→ entity-shape wire 守卫 → final phase
 ```
 
-Submit 与 BuildDelta 的阶段顺序统一为：Create → Hierarchy → Component Ops → Destroy。改变阶段或集合顺序前，必须证明 Submit 与 Snapshot→Replay 仍收敛且 free-list 演化一致。
+Submit 的 typed apply (`ApplyPrepared`) 与 Snapshot/async 的 wire emit (`EmitPrepared`) 消费相同的已准备帧，阶段顺序统一为：Create → Component Ops → Destroy。改变阶段或集合顺序前，必须证明 Submit 与 Snapshot→Replay 仍收敛且 free-list 演化一致。
 
 ## 决策
 
 ### record 与 consume 只有一个 owner
 
-`CommandStream` 直接拥有 `Create/Track/Add/Set/Remove/Destroy/AddChild/RemoveChild/Clone` 与全部 consume API。删除并行录制后，原本只为两个策略共享实现而存在的 public base 没有独立身份或生命周期，因此与并行 recorder 一并删除，不保留兼容 shim。
+`CommandStream` 直接拥有 `Create/Track/Add/Set/Remove/Destroy/Clone` 与全部 consume API。删除并行录制后，原本只为两个策略共享实现而存在的 public base 没有独立身份或生命周期，因此与并行 recorder 一并删除，不保留兼容 shim。
 
 ### pending entity 折叠为最终创建状态
 
@@ -51,7 +49,7 @@ Submit 与 BuildDelta 的阶段顺序统一为：Create → Hierarchy → Compon
 
 - 中间 Add→Remove、重复 Set 不产生独立 Watch transition/value event；placeholder resolve 与 emit/materialize 一样只读取 last-wins 后的有效值，superseded batch bytes 不参与语义。
 - `Destroy(pending)` 取消创建，并按确定性顺序释放 reservation；其他有效组件值若仍引用该 placeholder，会在 allocator/target/worker 变化前 fail-fast。
-- `CreateMany` 是一次性初始化 API；Submit materialize 对混合后续 Set/Add/Remove、重复组件类型等违反前置条件的输入 fail-fast。组件 ID ≥512 是合法输入：仅绕过 512-bit mask cache，由既有 non-canonical archetype resolver 处理；重复类型须独立检查，不能把非 canonical mask 当作非法输入。Snapshot 对重复类型仍有路径分歧，见 `kb-code-review-findings.md` 的当前未修风险。
+- `CreateMany` 是一次性初始化 API；每个 consume 入口在 materialize、组件 apply、deferred-id resolution 或清空复用 delta target 之前，统一检查所有 live group 的组件集合是否仍匹配 writer 及 writer 类型是否重复。失败的 Submit/async 仍会清理帧并可能释放 record 期已有的 real-id reservation，不承诺 allocator 回滚。全部取消的 group 不要求 live archetype，也不触发重复类型拒绝。组件 ID ≥512 是合法输入：仅绕过 512-bit mask cache，由既有 non-canonical archetype resolver 处理；重复类型须独立检查，不能把非 canonical mask 当作非法输入。见 `CommandTimelineTests.BUG_CreateMany_group_contract_is_consistent_across_consumers` 与 `Fully_cancelled_CreateMany_group_does_not_require_a_live_archetype`。
 
 ### existing component command 在 consume 时判定存活
 
@@ -75,21 +73,21 @@ pending/foreign placeholder 的 `IsPlaceholder` 仍在 record 阶段用于本地
 
 ### 零校验契约与 `Validate()`（2026-08-06）
 
-**默认语义：CommandStream 的 Submit/Snapshot/async 路径不做语义校验**（组件存在性、hierarchy 环等）。语义校验由 `public void Validate()` 显式提供；它幂等、声明无副作用，并在首个违规处抛 `InvalidOperationException`（错误消息含实体 id + 组件类型）。
+**默认语义：CommandStream 的 Submit/Snapshot/async 路径不做语义校验**（组件存在性等）。语义校验由 `public void Validate()` 显式提供；它幂等、声明无副作用，并在首个违规处抛 `InvalidOperationException`（错误消息含实体 id + 组件类型）。
 
-- **`Validate()` 保证**：占位符生命周期（batch last-wins dedup + store lazy-offsets、deferred-aware）、组件 store strict presence（Add 必须缺失 / Set 必须存在 / Remove 缺失 no-op）、hierarchy overlay endpoint/自环/parent-chain 环；只准备 stream 内部 scratch，不消费命令、不改 World/free-list。cancelled-batch free-list alignment 只在真正 consume 时执行。
-- **`Validate()` 不覆盖**：CreateMany 组一致性（Materialize 期 `ThrowCreateManyMismatch` / `ThrowCreateManyDuplicateComponentType` 抛）、slot reservation（Submit 内 `PreValidatePendingSlots` 防御性检查，A 类保留）、FrameDelta 预算（Submit/Snapshot 期 `PreflightFrameDeltaBudget`）。
-- **不调 Validate 的后果**：存在性/hierarchy 违规在 apply 期抛（消息统一 `"Entity {X} does not have component {T}."`），**部分应用**（前序 batch/store 已落地，reserved ids 由内部清理释放）；`SubmitAndSnapshotIntoAsync` 失败时 **target 内容未定义**（旧 "target remains unchanged" 承诺撤销，见 async 节）。
+- **`Validate()` 保证**：占位符生命周期（batch last-wins dedup + store lazy-offsets、deferred-aware）、组件 store strict presence（Add 必须缺失 / Set 必须存在 / Remove 缺失 no-op）；只准备 stream 内部 scratch，不消费命令、不改 World/free-list。cancelled-batch free-list alignment 只在真正 consume 时执行。
+- **`Validate()` 不覆盖**：CreateMany 组一致性（各 consume 入口统一运行 `ValidateCreateManyGroups`，在 apply/resolve/target clear 前拒绝；仍保留失败清理）、slot reservation（Submit 内 `PreValidatePendingSlots` 防御性检查，A 类保留）、FrameDelta 预算（Submit/Snapshot 期 `PreflightFrameDeltaBudget`）。
+- **不调 Validate 的后果**：组件存在性违规在 apply 期抛（消息统一 `"Entity {X} does not have component {T}."`），**部分应用**（前序 batch/store 已落地，reserved ids 由内部清理释放）；`SubmitAndSnapshotIntoAsync` 失败时 **target 内容未定义**（旧 "target remains unchanged" 承诺撤销，见 async 节）。
 
 #### 库能力守卫（P0 裁决，不可移入 Validate）
 
-未知/已取消占位符引用（`Entity(-1, seq)`）、非法显式 entity shape 与真正不可解析布局（例如 Entity-bearing `LayoutKind.Auto`）**绝不落库/落 wire**——这是 lockstep 分叉防线（源端静默应用/发出 → 副本 Replay/`FrameDelta.Validate()` 拒绝），不是组件存在性或 hierarchy 环等语义校验。Nested Entity 本身合法，必须由 source 与 Replay 使用同一完整 offsets 合同发现并解析：
+未知/已取消占位符引用（`Entity(-1, seq)`）、非法显式 entity shape 与真正不可解析布局（例如 Entity-bearing `LayoutKind.Auto`）**绝不落库/落 wire**——这是 lockstep 分叉防线（源端静默应用/发出 → 副本 Replay/`FrameDelta.Validate()` 拒绝），不是组件存在性等语义校验。Nested Entity 本身合法，必须由 source 与 Replay 使用同一完整 offsets 合同发现并解析：
 
 - **record 期泛型静态探测**：`FieldKinds<T>`（`static readonly bool HasEntityFields` + `static readonly int[] Offsets` + 静态 ctor，ctor 永不抛——布局失败保守置 `HasEntityFields=true`，由扫描器抛）；无 Entity 字段类型每值 1 次 static 读 + 1 分支。探测点 = `WritePendingComponent<T>`（batch 写前）+ `CommandStream.Add/Set<T>` 的 store 分支。
 - **Clone raw 导入探测（非泛型）**：Clone 从 World/raw archetype 复制字节时无泛型类型可用，走 `FlagFrameIfMayContainPlaceholder(ComponentType, ReadOnlySpan<byte>)`：`GetOffsets` 返回完整 nested/InlineArray offsets，仅在实际 Entity 字段为 placeholder 时置 flag（值探测）；真正布局失败（例如 Entity-bearing `LayoutKind.Auto`）保守置 flag但 Clone 期不抛（布局错误由 consume 扫描器在原有时机抛）；flag 已为 1 直接返回。探测点是 `CloneMaterializedComponents` merger 的**最终有效 values**，而不是可能被 store overlay 覆盖/移除的旧 World 值。`CopyComponentsFromBatch`（pending source clone）的字节源均由已探测的提交路径产生，无需重复探测。
-- **显式 endpoint 探测**：AddChild/RemoveChild 的 placeholder/非法 shape 与 Destroy 的非法 shape 也置同一 flag；扫描 final hierarchy overlay（避免被后写覆盖的旧 intent 假拒绝）和 destroy list。合法 real 只做可内联 `Entity.IsValid` 分支，flag 已置位后不重复写入。
+- **显式 endpoint 探测**：Destroy 的非法 shape 置同一 flag；普通 `Entity` 组件引用仍走现有 resolver。合法 real 只做可内联 `Entity.IsValid` 分支，flag 已置位后不重复写入。
 - **帧级 flag**：`FrozenState.MayNeedEntityReferencePreflight` 是单线程录制状态中的单调 `bool`，由 record 路径置位、`Clear`/`SwapOutState` 复位；async worker 不读取该字段。
-- **consume 扫描器**：Submit/Snapshot/SnapshotInto/PrepareAsyncHandoff 在 reserve/free-list/materialize/emit **前**调 `PreflightEntityReferences()`——首行读 flag，`false` 直接 return；`true` 时扫描 final explicit endpoints + component refs/layout（batch last-wins：id<512 走固定 bitset、id≥512 与 materialize/emit 共用线性 fallback；store lazy-offsets；deferred-aware：同帧合法 placeholder 放行）。`GetOffsets` 返回完整 nested/InlineArray offsets；只有 Entity-bearing Auto 或真正无法解析的布局失败。**原子拒绝**：失败不消耗 id/version（v1 保留）、不先 detach hierarchy、不会发出本地 `FrameDelta.Validate()` 拒绝的 wire。
+- **consume 扫描器**：Submit/Snapshot/SnapshotInto/PrepareAsyncHandoff 在 reserve/free-list/materialize/emit **前**调 `PreflightEntityReferences()`——首行读 flag，`false` 直接 return；`true` 时扫描有效的显式目标与 component refs/layout（batch last-wins：id<512 走固定 bitset、id≥512 与 materialize/emit 共用线性 fallback；store lazy-offsets；deferred-aware：同帧合法 placeholder 放行）。`GetOffsets` 返回完整 nested/InlineArray offsets；只有 Entity-bearing Auto 或真正无法解析的布局失败。**原子拒绝**：失败不消耗 id/version（v1 保留）、不会发出本地 `FrameDelta.Validate()` 拒绝的 wire。
 - `Validate()` 绕过 flag 全量扫（`useFlagFastPath: false`，用户显式调用）。
 
 #### 5.2 nested Entity offsets 合同
@@ -100,15 +98,13 @@ pending/foreign placeholder 的 `IsPlaceholder` 仍在 record 阶段用于本地
 
 **历史**：preflight 序列（0fca3eb，2026-07-25 引入 Submit 隐式 4 项 preflight）→ 08-05 flag 优化（`MayContainPlaceholder` record 探测 + 帧级 flag）→ **08-06 语义校验抽为 `Validate()` + 守卫保留**（探测改 `FieldKinds<T>` 泛型静态，修复 P0#1/P0#2）。期间经历 T2.5（统一扫描器，-7.6%）、T2.6（融合进既有遍历，-5.4%）两版性能实验后定稿为 flag 驱动方案（-3~-6% 噪声带，门控 A/B 见 `kb-hero-pipeline-regression.md`）。
 
-hierarchy 消费按最终 overlay 落地：先按 child id 解除所有有效 intent 涉及的旧链接，再安装最终 Add；Snapshot wire 同样先 RemoveChild 后 AddChild（否则合法的父子方向反转会因 World 中尚未解除的旧边产生瞬时 cycle，导致 Submit/Replay 错误拒绝）。
-
 Set-only 且全 store 无结构命令时，`PrepareForConsume` 在 prune stale entity 的同时构建 Set location cache，Apply 复用 row/archetype，避免第二次读取 `EntityRecord`。cache 是单一状态机：`None`、`UniformArchetype`、`PerEntryArchetype`。任一 component store 含 Add/Remove 时全局禁用 row cache（`BUG_set_preflight_row_cache_is_disabled_when_any_store_is_structural`）。
 
 这些守卫防止已知用户契约错误导致 lockstep 分叉或部分提交，但不是通用事务系统。灾难性异常或未建模的内部失败仍不承诺 rollback；Replay 也没有通用事务语义。
 
 ### async frozen-state ownership
 
-`SubmitAndSnapshotAsync` / `SubmitAndSnapshotIntoAsync` 在 active state 仍由调用线程独占时完成：flag 驱动 Entity 引用/布局守卫（`PreflightEntityReferences()`，仅 flagged 帧全量扫）与 FrameDelta 整帧预算 preflight；real-id 输出中尚未 resolve 的 placeholder endpoint 按合法 Entity 最大 wire width（5B id + 5B version）计费。守卫失败时不消耗 id、不 handoff、不启动 worker。之后才允许 free-list 对齐、placeholder real-id resolve、state swap、worker 启动和本地 materialize。worker 创建后立即登记 `_pendingFrozen/_pendingTask` ownership。若内部 Submit 随后失败，先观察 worker 完成再回收 frozen state，并保留原同步异常。
+`SubmitAndSnapshotAsync` / `SubmitAndSnapshotIntoAsync` 在 active state 仍由调用线程独占时完成：flag 驱动 Entity 引用/布局守卫（`PreflightEntityReferences()`，仅 flagged 帧全量扫）与 FrameDelta 整帧预算 preflight；real-id 输出中尚未 resolve 的 pending Reserve/Create 端点按合法 Entity 最大 wire width（5B id + 5B version）计费。守卫失败时不消耗 id、不 handoff、不启动 worker。之后才允许 free-list 对齐、placeholder real-id resolve、state swap、worker 启动和本地 materialize。worker 创建后登记 `_pendingFrozen/_pendingTask` ownership；若内部 Submit 随后失败，先观察 worker 完成再回收 frozen state，并保留原同步异常。API 返回 task 前本地 apply 已同步完成；worker 可以跨 World.RestoreState 编码旧帧的历史 delta，且单一 `_pendingTask` 字段不表示所有在途 worker 已结束。
 
 async real-id 输出会省略仍是 placeholder 的 cancelled deferred batch：这类 Create 从未触碰 source allocator，因此不能为它发 Reserve+Release；immediate real-id cancellation 仍必须发 Reserve+Release，镜像 record 期已经发生的 reserve/release。
 
@@ -125,7 +121,9 @@ placeholder 只在当前 stream/batch 内有效。跨帧持有解析结果使用
 
 ### FrameDelta 结构与预算边界
 
-生产端与消费端共享硬上限：`MaxOpsPerFrame = 1_000_000`、`MaxFrameBytes = 16 MiB`。每个 `FrameDelta.Add*` 在写任何字节前精确检查完整 operation，避免超限时留下半条 op；`Snapshot` / `SnapshotInto` / 两条 async submit+snapshot 路径在 deferred id resolution、改写 target、swap frozen state 或提交 World 前先跑 flag 驱动 Entity 引用/布局守卫与整帧预算 preflight。real-id 模式无法在不修改 allocator 的前提下知道 placeholder 将得到多宽的 id/version，因此 pending Reserve/Create 与 hierarchy endpoint 预先按最大 10B Entity wire 计费。因此 producer 不会返回随后被副本 Replay 拒绝的 dangling-placeholder delta，预算失败也不会消费 allocator id/version。
+非层级 opcode 的数值/格式保持；旧 `0x04`/`0x05`（AddChild/RemoveChild）必须在可避免的 World 修改前明确拒绝，不能忽略或重编号。旧关系数据迁移见 `kb-hierarchy-runtime.md`。
+
+生产端与消费端共享硬上限：`MaxOpsPerFrame = 1_000_000`、`MaxFrameBytes = 16 MiB`。每个 `FrameDelta.Add*` 在写任何字节前精确检查完整 operation，避免超限时留下半条 op；`Snapshot` / `SnapshotInto` / 两条 async submit+snapshot 路径在 deferred id resolution、改写 target、swap frozen state 或提交 World 前先跑 flag 驱动 Entity 引用/布局守卫与整帧预算 preflight。real-id 模式无法在不修改 allocator 的前提下知道 placeholder 将得到多宽的 id/version，因此 尚未解析的 pending Reserve/Create 端点预先按最大 10B Entity wire 计费；组件 payload 仍按其固定字节尺寸计费。因此 producer 不会返回随后被副本 Replay 拒绝的 dangling-placeholder delta，预算失败也不会消费 allocator id/version。
 
 常规帧先用 O(store 数) 的保守 upper bound 证明安全，只有接近上限时才扫描，因此 `snapshot-only` A/B（10k Set，Release，1s warmup + 3s measure，各 3 次中位数）保持 42909.3 → 43014.0 ticks/s（+0.2%，噪声内）。已解析 endpoint 的扫描与实际 writer 共用 sizing 规则，由 `Budget_matches_writer_for_every_operation_shape` 守卫；未解析 real-id placeholder 则由 `Real_id_budget_uses_max_wire_width_for_unresolved_placeholder_endpoints` 锁定保守上界。
 
@@ -163,9 +161,9 @@ dotnet run -c Release --no-build --project tools/perf/CommandStream.Profile -- -
 
 2026-08-29 删除并行 recorder 后的简化 A/B：同时把预检 flag 去原子化并将 `CreateCore()` 折进 public `Create()` 时 Attack 门禁降至 840.7 rounds/s；回退两项后为 1246.8，随后只重做 flag 去原子化为 1206.8。故保留可内联的 `Create()` → `CreateCore()` 边界；在有更干净的独立证据前不再折叠。
 
-2026-08-30 Clone 低垂优化：materialized source 的 archetype 已按 signature column 保存 `_elementSizes`，Clone 不再为每个 component 重走 `ComponentType → Type → ComponentSizeCache` 的并发字典查询；没有 World children 且没有 hierarchy overlay 时，Clone 也不再租还临时 child buffer。Release、固定 CPU affinity、4 个 16B component、4096 clones/batch、100 批 warmup + 101 批取中位数、3 个独立进程的 record+submit 测量中，跨进程中位数由约 959.3 ns/clone 降至 661.8 ns/clone（-31.0%），其中 Clone record 由 600.4 降至 328.2 ns/clone（-45.3%），稳态仍为 0 B/clone。该收益只复用现有 owner 的元数据和空 hierarchy 判定，不新增缓存或公共表面。
+历史测量（2026-08-30，含现已退役的 hierarchy 分支）：materialized source 的 archetype 已按 signature column 保存 `_elementSizes`，当时的 Clone 减少了每个 component 的 `ComponentType → Type → ComponentSizeCache` 字典查询；当时无 World children 和 hierarchy overlay 的路径也避免临时 child buffer 租还。Release、固定 CPU affinity、4 个 16B component、4096 clones/batch、100 批 warmup + 101 批取中位数、3 个独立进程的 record+submit 测量中，跨进程中位数由约 959.3 ns/clone 降至 661.8 ns/clone（-31.0%），其中 Clone record 由 600.4 降至 328.2 ns/clone（-45.3%），稳态仍为 0 B/clone。该次测量不能作为扁平 Clone 的新性能声明。
 
-subtree Clone 的剩余主要成本不是 component copy：virtual hierarchy 需要 parent→children 观察，却反复扫描 child-keyed `HierarchyByChild`；同一批次重复克隆 subtree 时，前面 clone 生成的 hierarchy intent 也会扩大后续扫描。修复需要改变索引/ownership，而不是再加局部 cache；没有明确 subtree workload 与目标前不把它包装成“低垂优化”。children/visited 的 pooled buffer 现会按需增长，`>32` 宽树和深树不再截断或越界；materialized component scratch 在 `>64` components 时也转用池化数组，常见的 ≤64 路径仍保持 stackalloc。
+已退役的 subtree Clone 曾有以下历史成本（不适用于当前单实体 Clone）：virtual hierarchy 需要 parent→children 观察，却反复扫描 child-keyed `HierarchyByChild`；同一批次重复克隆 subtree 时，前面 clone 生成的 hierarchy intent 也会扩大后续扫描。当时若要继续优化需改变索引/ownership，而不是再加局部 cache；该需求现在已退役。当时 children/visited 的 pooled buffer 已可按需增长，`>32` 宽树和深树不再截断或越界；materialized component scratch 在 `>64` components 时也转用池化数组，常见的 ≤64 路径仍保持 stackalloc。
 
 consume prune 必须同时刷新 stream 的 store-dirty 汇总。若 stale-only entries 全被删除，`Submit()` 返回 `false`、Snapshot 为空，async 路径不应因旧 `_hasStoreCommands` 启动无效工作；单线程 delayed-stale、async 与 consume 前 ID reuse 回归共同守卫该契约。
 
@@ -222,7 +220,6 @@ CPU 频率与后台进程会让独立进程结果明显波动。候选 A/B 应�
 - consume/preflight：`CommandStream.Submit.cs`
 - typed store：`CommandStream.ComponentStore.cs`
 - pending/CreateMany：`CommandStream.Pending.cs`
-- hierarchy：`CommandStream.Hierarchy.cs`
 - wire：`FrameDelta.cs`、`World.EntityLifecycle.cs` 的 Replay 路径
 - 测试：`tests/MiniArch.Tests/Core/CommandStreamTests.cs`、`FrameDeltaDeterminismTests.cs`
 
@@ -235,4 +232,4 @@ CPU 频率与后台进程会让独立进程结果明显波动。候选 A/B 应�
 - 自己生成的 local delta 只有在显式 `Replay(delta, resolveSlots: true)` 时解析本 stream 跟踪的 `EntitySlot`；网络反序列化副本没有本地 slot ownership。
 - `FrameDelta.Validate()` 是不可信 wire 的结构预检，不提供 target World rollback。
 - source 对自己的 real-id Snapshot 直接 Replay 时会复用 producer 已有 reservation；不要把“不在 free list”误判成需要再次增加 reservation。
-- `CommandStream` 不知道 World 被 `RestoreState` 回滚过。公开合同：`CaptureState()` 时 stream 必须为空，`RestoreState()` 后只允许用空 stream（被异常中断的帧恢复后丢弃并 `new CommandStream(world)`，不能用 `Clear()` 代替）；违反不报错但会产生重复 entity handle / version 错位。合同与症状表见 `docs/api.md` "Rollback contract"，实测细节见 `kb-snapshot-persistence.md`。
+- `CaptureState()` 只拒绝尚有 real-id reservation 的 World，不要求每个 stream 为空。成功 `RestoreState()` 推进 World 命令时间线；旧活跃帧在消费、继续预留/Clone 或取消 pending entity 时抛 `InvalidOperationException`。existing-entity Add/Set/Remove 仍可 append，但旧帧无法消费。`Clear()` 安全丢弃旧 buffers 后，同一 stream 可重用；不要把跨 Restore 的 `Entity`/ref/span/`EntitySlot.Value` 视为仍有效。详见 `docs/api.md` Rollback contract 与 `kb-snapshot-persistence.md`。

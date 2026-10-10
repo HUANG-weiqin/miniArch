@@ -23,7 +23,7 @@ public sealed class LockstepSimulator
     public IReadOnlyList<LockstepHost> Hosts => _hosts;
     public bool SpawnPlayers { get; init; } = true;
 
-    // Slice 5: when true, host 0 also records a Boss + 5 linked WeakPoints in
+    // Slice 5: when true, host 0 also records a Boss + 5 indexed WeakPoints in
     // frame 0 init, and homing-bullet + boss + weakpoint-follow systems run.
     public bool SpawnBoss { get; init; } = false;
 
@@ -131,8 +131,8 @@ public sealed class LockstepSimulator
         if (!SpawnPlayers)
             return;
 
-        // Slice 5: boss AI + hierarchy follow. BossAISystem may Destroy the
-        // boss -> cascade removes weakpoints.
+        // Slice 5: boss AI + weakpoint follow. BossAISystem removes the
+        // encounter's weakpoints when the boss dies.
         if (SpawnBoss)
         {
             BossAISystem.Run(world, frame);

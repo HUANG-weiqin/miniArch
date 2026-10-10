@@ -70,10 +70,10 @@ public static class CharacterSpawnRegistrations
     {
         MiniArch.Entity action = context.Commands.Create();
         context.Commands.Add(action, new ActionEntity());
+        context.Commands.Add(action, new ActionOwner(entity));
         context.Commands.Add(action, kind);
         context.Commands.Add(action, new ActionRuleId(ruleId));
         context.Commands.Add(action, new ActionPointCostValue(1));
 
-        context.Commands.AddChild(entity, action);
     }
 }

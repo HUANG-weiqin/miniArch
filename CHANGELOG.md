@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Rollback safety:** `CaptureState()` rejects outstanding real-id reservations. A successful `RestoreState()` invalidates old recorded CommandStream frames; `Clear()` safely discards them without releasing reservations on the restored timeline, and the same stream can then be reused. Frozen async encoding may finish with a historical delta after restore; retained handles/refs/spans are not made safe by this guard.
+- **Command consistency:** typed apply and wire emit keep separate paths with shared prepared-frame rules. Every consume path rejects inconsistent live `CreateMany` groups and duplicate writer component types before application/resolution or target clearing; fully cancelled groups are skipped. Existing failure cleanup and non-transactional apply semantics remain.
+- **Fix:** a reused async frozen state's stale pending-map index could misclassify an existing entity as pending, dropping Clone components or Set commands, or causing an index error. Lookup now checks the logical pending-batch count before reading the entry.
+- **Memory:** World and rollback free lists store only ordered IDs, deriving versions from entity records. Batch-destroy scratch grows on demand by its actual slot/batch/archetype-row dimension instead of eagerly with World capacity; warmed reuse remains supported.
+- **Breaking: built-in entity hierarchy removed.** `World` and `CommandStream` no longer expose `AddChild`/`RemoveChild`, parent/children/ancestor traversal, cascade destroy, or subtree clone; hierarchy diagnostics are removed. `Destroy(Entity)` affects only that entity, and `Clone(Entity)` copies only that entity's components. Whole-World `Clone()` and ordinary component `Entity` references (including deferred placeholder resolution) remain.
+- **Wire compatibility is explicit:** v5 snapshot layout remains, with hierarchy count always 0; older v5 files without hierarchy remain readable, but nonzero hierarchy counts are rejected rather than discarded. Non-hierarchy FrameDelta opcode values and formats remain unchanged; old `0x04`/`0x05` AddChild/RemoveChild operations are rejected, not ignored or renumbered. Users needing old relationships must export/migrate them with a hierarchy-capable version before loading in the flat runtime. See [migration boundary](.knowledge/kb-hierarchy-runtime.md).
+
 ## 6.2.0 (2026-10-06)
 
 - **Fix: default `Query` order no longer depends on other worlds' component registration or load order** — matched archetypes are ordered by the ordinally sorted set of stable component type identities, rather than process-local component IDs. Loading the same v5 world before or after another world now yields the same default query order. This **can change observable iteration order** versus 6.1.0; bulk `Clear(query)` / `Destroy(query)` can consequently recycle entity IDs in a different order. Entity order within each archetype still follows physical storage order.

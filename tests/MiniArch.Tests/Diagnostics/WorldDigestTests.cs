@@ -16,7 +16,6 @@ public class WorldDigestTests
         Assert.Equal(d1.Total, d2.Total);
         Assert.Equal(d1.Occupancy, d2.Occupancy);
         Assert.Equal(d1.FreeList, d2.FreeList);
-        Assert.Equal(d1.Hierarchy, d2.Hierarchy);
     }
 
     [Fact]
@@ -29,17 +28,14 @@ public class WorldDigestTests
         var expectedTotal = digest.Total.ToArray();
         var expectedOccupancy = digest.Occupancy.ToArray();
         var expectedFreeList = digest.FreeList.ToArray();
-        var expectedHierarchy = digest.Hierarchy.ToArray();
 
         digest.Total[0] ^= 0xFF;
         digest.Occupancy[0] ^= 0xFF;
         digest.FreeList[0] ^= 0xFF;
-        digest.Hierarchy[0] ^= 0xFF;
 
         Assert.Equal(expectedTotal, digest.Total);
         Assert.Equal(expectedOccupancy, digest.Occupancy);
         Assert.Equal(expectedFreeList, digest.FreeList);
-        Assert.Equal(expectedHierarchy, digest.Hierarchy);
     }
 
     [Fact]
@@ -113,22 +109,6 @@ public class WorldDigestTests
 
         Assert.NotEqual(d1.FreeList, d2.FreeList);
         Assert.NotEqual(d1.Occupancy, d2.Occupancy);
-    }
-
-    [Fact]
-    public void HierarchyChange_HierarchyHashChanges()
-    {
-        using var world = new World();
-        var parent = world.Create(new Position(0, 0));
-        var child = world.Create(new Position(1, 1));
-        var d1 = WorldDigest.Compute(world);
-
-        world.AddChild(parent, child);
-        var d2 = WorldDigest.Compute(world);
-
-        Assert.NotEqual(d1.Hierarchy, d2.Hierarchy);
-        Assert.NotEqual(d1.Total, d2.Total);
-        Assert.Equal(d1.Occupancy, d2.Occupancy);
     }
 
     [Fact]

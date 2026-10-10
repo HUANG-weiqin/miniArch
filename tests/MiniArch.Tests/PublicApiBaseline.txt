@@ -1,8 +1,3 @@
-struct: MiniArch.AncestorEnumerable
-  Method: GetEnumerator() -> MiniArch.AncestorEnumerator
-struct: MiniArch.AncestorEnumerator
-  Method: MoveNext() -> System.Boolean
-  Property: Current -> MiniArch.Entity [get; ]
 struct: MiniArch.ArchetypeStats
   Property: Capacity -> System.Int32 [get; ]
   Property: ComponentTypes -> System.Collections.Generic.IReadOnlyList<System.Type> [get; ]
@@ -15,11 +10,6 @@ class: MiniArch.ChangeWatch`3 where TComponent : struct, System.ValueType, TValu
   Method: Diff(MiniArch.World world) -> System.Void
   Method: Snapshot(MiniArch.World world) -> System.Void
   Property: Handler -> THandler& [get; ]
-struct: MiniArch.ChildrenEnumerable
-  Method: GetEnumerator() -> MiniArch.ChildrenEnumerator
-struct: MiniArch.ChildrenEnumerator
-  Method: MoveNext() -> System.Boolean
-  Property: Current -> MiniArch.Entity [get; ]
 delegate: MiniArch.ChunkAction : System.MulticastDelegate [System.Runtime.Serialization.ISerializable]
   Method: BeginInvoke(MiniArch.ChunkView chunk, System.AsyncCallback callback, System.Object object) -> System.IAsyncResult
   Method: EndInvoke(System.IAsyncResult result) -> System.Void
@@ -41,7 +31,6 @@ class: MiniArch.ComponentSchema
   Method: Import(System.Byte[] data) -> System.Type[]
 class: MiniArch.Core.CommandStream
   Method: Add(MiniArch.Entity entity, T component) -> System.Void where T : struct, System.ValueType
-  Method: AddChild(MiniArch.Entity parent, MiniArch.Entity child) -> System.Void
   Method: Clear() -> System.Void
   Method: Clone(MiniArch.Entity source) -> MiniArch.Entity
   Method: Create() -> MiniArch.Entity
@@ -55,7 +44,6 @@ class: MiniArch.Core.CommandStream
   Method: CreateMany(System.Span<MiniArch.Entity> entities, TWriter writer) -> System.Void where T1 : struct, System.ValueType, T2 : struct, System.ValueType, T3 : struct, System.ValueType, T4 : struct, System.ValueType, T5 : struct, System.ValueType, T6 : struct, System.ValueType, T7 : struct, System.ValueType, T8 : struct, System.ValueType, TWriter : struct, MiniArch.Core.ICreateManyWriter<T1, T2, T3, T4, T5, T6, T7, T8>, System.ValueType
   Method: Destroy(MiniArch.Entity entity) -> System.Void
   Method: Remove(MiniArch.Entity entity) -> System.Void where T : struct, System.ValueType
-  Method: RemoveChild(MiniArch.Entity child) -> System.Void
   Method: Replay(MiniArch.Core.FrameDelta delta, System.Boolean resolveSlots = False) -> System.Void
   Method: Set(MiniArch.Entity entity, T component) -> System.Void where T : struct, System.ValueType
   Method: Snapshot() -> MiniArch.Core.FrameDelta
@@ -130,7 +118,6 @@ class: MiniArch.Diagnostics.EntityDiff
   Property: EntityA -> MiniArch.Entity [get; ]
   Property: EntityB -> MiniArch.Entity [get; ]
   Property: EntityId -> System.Int32 [get; ]
-  Property: HierarchyDiff -> MiniArch.Diagnostics.HierarchyDiff [get; ]
   Property: Kind -> MiniArch.Diagnostics.EntityDiffKind [get; ]
   Property: VersionMismatch -> System.Boolean [get; ]
 enum: MiniArch.Diagnostics.EntityDiffKind
@@ -143,11 +130,9 @@ class: MiniArch.Diagnostics.EntityDump
 struct: MiniArch.Diagnostics.EntityReport
   Method: ToString() -> System.String
   Property: Archetype -> System.Nullable<MiniArch.Diagnostics.ArchetypeInfo> [get; ]
-  Property: Children -> System.Collections.ObjectModel.ReadOnlyCollection<MiniArch.Entity> [get; ]
   Property: Components -> System.Collections.ObjectModel.ReadOnlyCollection<MiniArch.Diagnostics.ComponentInfo> [get; ]
   Property: Id -> System.Int32 [get; ]
   Property: IsAlive -> System.Boolean [get; ]
-  Property: Parent -> System.Nullable<MiniArch.Entity> [get; ]
   Property: Version -> System.Int32 [get; ]
 class: MiniArch.Diagnostics.FreeListDiff
   Method: ToString() -> System.String
@@ -169,26 +154,18 @@ enum: MiniArch.Diagnostics.FreeSlotDiffKind
   Field: OrderMismatch -> MiniArch.Diagnostics.FreeSlotDiffKind [static, literal] = OrderMismatch (1)
   Field: VersionMismatch -> MiniArch.Diagnostics.FreeSlotDiffKind [static, literal] = VersionMismatch (0)
   Field: value__ -> System.Int32
-class: MiniArch.Diagnostics.HierarchyDiff
-  Method: ToString() -> System.String
-  Property: ParentIdA -> System.Int32 [get; ]
-  Property: ParentIdB -> System.Int32 [get; ]
 enum: MiniArch.Diagnostics.ValidationCategory
-  Field: Archetype -> MiniArch.Diagnostics.ValidationCategory [static, literal] = Archetype (3)
+  Field: Archetype -> MiniArch.Diagnostics.ValidationCategory [static, literal] = Archetype (2)
   Field: EntitySlot -> MiniArch.Diagnostics.ValidationCategory [static, literal] = EntitySlot (0)
   Field: FreeList -> MiniArch.Diagnostics.ValidationCategory [static, literal] = FreeList (1)
-  Field: Hierarchy -> MiniArch.Diagnostics.ValidationCategory [static, literal] = Hierarchy (2)
   Field: value__ -> System.Int32
 enum: MiniArch.Diagnostics.ValidationCode
-  Field: ArchetypeEntityCount -> MiniArch.Diagnostics.ValidationCode [static, literal] = ArchetypeEntityCount (6)
-  Field: AsymmetricParent -> MiniArch.Diagnostics.ValidationCode [static, literal] = AsymmetricParent (4)
-  Field: DuplicateEntityId -> MiniArch.Diagnostics.ValidationCode [static, literal] = DuplicateEntityId (7)
+  Field: ArchetypeEntityCount -> MiniArch.Diagnostics.ValidationCode [static, literal] = ArchetypeEntityCount (4)
+  Field: DuplicateEntityId -> MiniArch.Diagnostics.ValidationCode [static, literal] = DuplicateEntityId (5)
   Field: FreeListDuplicate -> MiniArch.Diagnostics.ValidationCode [static, literal] = FreeListDuplicate (3)
   Field: FreeListOccupied -> MiniArch.Diagnostics.ValidationCode [static, literal] = FreeListOccupied (2)
-  Field: HierarchyCycle -> MiniArch.Diagnostics.ValidationCode [static, literal] = HierarchyCycle (9)
-  Field: OrphanedChild -> MiniArch.Diagnostics.ValidationCode [static, literal] = OrphanedChild (5)
   Field: OrphanedSlot -> MiniArch.Diagnostics.ValidationCode [static, literal] = OrphanedSlot (0)
-  Field: SlotCapacityWarning -> MiniArch.Diagnostics.ValidationCode [static, literal] = SlotCapacityWarning (8)
+  Field: SlotCapacityWarning -> MiniArch.Diagnostics.ValidationCode [static, literal] = SlotCapacityWarning (6)
   Field: SlotCollision -> MiniArch.Diagnostics.ValidationCode [static, literal] = SlotCollision (1)
   Field: value__ -> System.Int32
 struct: MiniArch.Diagnostics.ValidationIssue
@@ -214,7 +191,6 @@ class: MiniArch.Diagnostics.WorldDigest
   Method: Compute(MiniArch.World world) -> MiniArch.Diagnostics.WorldDigestResult
 struct: MiniArch.Diagnostics.WorldDigestResult
   Property: FreeList -> System.Byte[] [get; ]
-  Property: Hierarchy -> System.Byte[] [get; ]
   Property: Occupancy -> System.Byte[] [get; ]
   Property: PerArchetype -> System.Collections.Generic.IReadOnlyDictionary<System.Int32, System.Byte[]> [get; ]
   Property: PerComponent -> System.Collections.Generic.IReadOnlyDictionary<System.Type, System.Byte[]> [get; ]
@@ -310,7 +286,6 @@ class: MiniArch.TransitionWatch`1 where THandler : struct, MiniArch.ITransitionH
 class: MiniArch.World
   Method: Access(MiniArch.Entity entity) -> MiniArch.Core.EntityAccessor
   Method: Add(MiniArch.Entity entity, T component) -> System.Void where T : struct, System.ValueType
-  Method: AddChild(MiniArch.Entity parent, MiniArch.Entity child) -> System.Void
   Method: CanonicalChecksum() -> System.Byte[]
   Method: CaptureState() -> MiniArch.Core.WorldStateSnapshot
   Method: Checksum() -> System.Byte[]
@@ -339,25 +314,18 @@ class: MiniArch.World
   Method: Destroy(in MiniArch.QueryDescription& description) -> System.Void
   Method: Dispose() -> System.Void
   Method: EnsureCapacity(System.Int32 entityCapacity) -> System.Void
-  Method: EnumerateAncestors(MiniArch.Entity child) -> MiniArch.AncestorEnumerable
-  Method: EnumerateChildren(MiniArch.Entity parent) -> MiniArch.ChildrenEnumerable
   Method: Get(MiniArch.Entity entity) -> T where T : struct, System.ValueType
   Method: GetArchetypeStats() -> MiniArch.ArchetypeStats[]
-  Method: GetDepth(MiniArch.Entity entity) -> System.Int32
   Method: GetRef(MiniArch.Entity entity) -> T& where T : struct, System.ValueType
   Method: GetSingleton() -> MiniArch.Entity where T : struct, System.ValueType
   Method: GetStats() -> MiniArch.WorldStats
   Method: Has(MiniArch.Entity entity) -> System.Boolean where T : struct, System.ValueType
-  Method: HasChildren(MiniArch.Entity entity) -> System.Boolean
   Method: IsAlive(MiniArch.Entity entity) -> System.Boolean
-  Method: IsRoot(MiniArch.Entity entity) -> System.Boolean
   Method: Query(in MiniArch.QueryDescription& description) -> MiniArch.Query
   Method: Remove(MiniArch.Entity entity) -> System.Void where T : struct, System.ValueType
-  Method: RemoveChild(MiniArch.Entity child) -> System.Void
   Method: RestoreState(MiniArch.Core.WorldStateSnapshot snapshot) -> System.Void
   Method: Set(MiniArch.Entity entity, T component) -> System.Void where T : struct, System.ValueType
   Method: TryGet(MiniArch.Entity entity, out T& component) -> System.Boolean where T : struct, System.ValueType
-  Method: TryGetParent(MiniArch.Entity child, out MiniArch.Entity& parent) -> System.Boolean
   Method: Watch(MiniArch.QueryDescription filter) -> MiniArch.TransitionWatch<THandler> where THandler : struct, MiniArch.ITransitionHandler, System.ValueType
   Method: Watch(System.Nullable<MiniArch.QueryDescription> query = default) -> MiniArch.ChangeWatch<TComponent, THandler> where TComponent : struct, System.ValueType, System.IEquatable<TComponent>, THandler : struct, MiniArch.IChangeHandler<TComponent>, System.ValueType
   Method: Watch(System.Nullable<MiniArch.QueryDescription> query = default) -> MiniArch.ChangeWatch<TComponent, TValue, THandler> where TComponent : struct, System.ValueType, TValue : struct, System.ValueType, System.IEquatable<TValue>, THandler : struct, MiniArch.IChangeHandler<TComponent, TValue>, System.ValueType

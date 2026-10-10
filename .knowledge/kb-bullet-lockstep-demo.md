@@ -1,16 +1,16 @@
 ---
 title: BulletLockstep Demo — 多 host 弹幕游戏集成测试
 module: samples.BulletLockstep.Demo
-description: 用真实弹幕游戏场景端到端压测 miniArch 全部公共能力（placeholder lockstep / archetype 迁移 / hierarchy / chunked storage / 持久化 / 回滚）。沉淀 demo 中验证过的 lockstep 用法模式与踩过的坑。
-updated: 2026-07-09
+description: 真实弹幕场景的 placeholder lockstep、archetype 迁移、chunked storage、持久化与回滚集成用法；旧层级 slice 记录仅供追溯。
+updated: 2026-10-10
 ---
 
 # BulletLockstep Demo — 多 host 弹幕游戏集成测试
 
 ## 这个模块是干什么的
 
-- `samples/BulletLockstep.Demo/` 是 miniArch 的**端到端集成测试项目**，用真实弹幕游戏场景把库的全部公共能力走一遍
-- 8 个 slice（2-9），每个 slice 端到端可跑（1000 帧 fuzz），所有 host `CanonicalChecksum` 字节级一致才算 PASS
+- `samples/BulletLockstep.Demo/` 是 miniArch 的端到端集成测试项目；扁平实体版保留 Slice 2–9 的入口与场景，内置 hierarchy 行为已退役。Slice 5 改用唯一 `BossTag` 与五个 `WeakPointTag` 实体表示 boss encounter；这些是普通组件，不是父子关系。
+- 下方旧 slice 编号、覆盖与性能数据只记录**迁移前**配置，不作为当前场景数或本轮通过证据。保留的 lockstep 场景仍以所有 host `CanonicalChecksum` 一致为目标。
 - 这个模块**不负责**：
   - 渲染（永远不做）
   - 真实网络栈（in-process byte[] 交换）
@@ -18,9 +18,9 @@ updated: 2026-07-09
 
 ## 架构
 
-### 两种 host 拓扑
+### 两种 host 拓扑（当前保留 Slice 2–9）
 
-| 拓扑 | slice | 库能力 |
+| 拓扑 | Slice | 库能力 |
 |---|---|---|
 | **P2P placeholder lockstep** | 2-7, 9 | `DeferredEntities=true`，每 host 独立 World + 独立 id allocator，placeholder delta 交换 |
 | **Authority + Mirror** | 8 | `DeferredEntities=false`，1 个权威 host 用 `SubmitAndSnapshotAsync`，M 个 mirror replay real-id delta |
@@ -60,11 +60,15 @@ placeholder 只在 record 帧有效，跨帧 Set 长生命周期 entity 会带 h
 
 所有系统按 `PlayerTag.HostId` 或 `WeakPointTag.Index` 等逻辑键排序，保证多 host 应用顺序一致。
 
-### 决策 #4：位移用整型定点数（毫像素）
+### 决策 #4：Boss 与 weak points 是扁平实体
+
+Slice 5 在 host0 创建一个 `BossTag` 实体及五个 `WeakPointTag(Index)` 实体。`WeakPointFollowSystem` 查询唯一 boss 的位置，按 index 与 `LocalOffset` 更新弱点；Boss 血量归零时 `BossAISystem` 显式先销毁所有 weak points、再销毁 boss，不能依赖 `Destroy(boss)` 级联。Slice 2–9 其余场景入口继续保留。
+
+### 决策 #5：位移用整型定点数（毫像素）
 
 所有 Position/Velocity 用 `int`（单位 = 1/1000 pixel），完全规避 IEEE 754 跨硬件不确定性。
 
-### 决策 #5：CollisionSystem 按逻辑键排序 hits
+### 决策 #6：CollisionSystem 按逻辑键排序 hits
 
 hits 按 `(bulletFiredBy, bulletSpawnFrame, playerHostId)` 排序后应用 damage + destroy。entity id 在 placeholder 模式下跨 host 不同，**不能**用作排序键。
 
@@ -97,13 +101,13 @@ hits 按 `(bulletFiredBy, bulletSpawnFrame, playerHostId)` 排序后应用 damag
 
 ### 改这里时要特别小心
 
-- **`LockstepSimulator.RunSystems`**：系统顺序变化会立即破坏多 host 一致性。任何重排要先跑 Slice 2-9 全部回归。
+- **`LockstepSimulator.RunSystems`**：系统顺序变化会立即破坏多 host 一致性。任何重排要先跑迁移后保留的全部场景。
 - **`ReplaceHostWorld`**：会替换 `_hosts[i]` 引用，依赖 host 引用的外部代码会失效。
 - **`BulletLifetimeSystem` / `CollisionSystem` 等使用静态 buffer 的系统**：不能并发调用（simulator 是单线程模型）。
 
-## 性能参考（4 host × 1000 帧 standard 模式）
+## 历史性能参考（迁移前，4 host × 1000 帧 standard 模式）
 
-下表仅列出已测量 slice；Slice 3（hierarchy 全链路 + CommandStream record）和 Slice 9（Phase A deterministic replay + clone）暂未单独测量。
+下表仅列出迁移前当时已测量的 slice；旧 Slice 3（hierarchy 全链路 + CommandStream record）和 Slice 9（Phase A deterministic replay + clone）当时未单独测量。当前 Slice 2–9 保留，但表中旧 Slice 5 的 hierarchy 配置与性能数据不代表扁平版；本轮不以这些历史数字作为验收或性能声明。
 
 | Slice | 配置 | 单帧 | GC | 备注 |
 |---|---|---|---|---|---|

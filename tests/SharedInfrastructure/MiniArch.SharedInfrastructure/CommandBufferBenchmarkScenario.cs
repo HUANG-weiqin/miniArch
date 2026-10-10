@@ -42,22 +42,6 @@ public static class CommandBufferBenchmarkScenarioFactory
         return new ArchSharedCommandBufferState(world, existingEntities, entityCount, Math.Max(16, entityCount * 8));
     }
 
-    public static MiniHierarchyCommandBufferState CreateMiniHierarchyState(int entityCount)
-    {
-        var world = new MiniWorld();
-        var parent = world.CreateEmpty();
-        var children = new MiniEntity[entityCount];
-
-        for (var i = 0; i < entityCount; i++)
-        {
-            var child = world.Create(new BenchmarkPosition(i, i + 1), new BenchmarkVelocity(i + 2, i + 3), new BenchmarkHealth(100 + i));
-            world.AddChild(parent, child);
-            children[i] = child;
-        }
-
-        return new MiniHierarchyCommandBufferState(world, parent, children, Math.Max(16, entityCount * 8));
-    }
-
     public static void RunMiniSharedScenario(MiniSharedCommandBufferState state, CommandBufferBenchmarkScenario scenario)
     {
         switch (scenario)
@@ -117,40 +101,6 @@ public static class CommandBufferBenchmarkScenarioFactory
             default:
                 throw new ArgumentOutOfRangeException(nameof(scenario));
         }
-    }
-
-    public static void RunMiniHierarchyScenario(MiniHierarchyCommandBufferState state)
-    {
-        var buffer = new CommandStream(state.World);
-        var transientRoot = buffer.Create();
-
-        for (var i = 0; i < state.Children.Length; i++)
-        {
-            var child = state.Children[i];
-            buffer.Set(child, new BenchmarkPosition(i + 10, i + 11));
-            buffer.Set(child, new BenchmarkVelocity(i + 12, i + 13));
-
-            if ((i & 1) == 0)
-            {
-                buffer.AddChild(transientRoot, child);
-            }
-            else
-            {
-                buffer.RemoveChild(child);
-            }
-
-            if ((i & 3) == 0)
-            {
-                buffer.Add(child, new BenchmarkArmor(300 + i));
-            }
-
-            if ((i & 7) == 0)
-            {
-                buffer.Destroy(child);
-            }
-        }
-
-        buffer.Submit();
     }
 
     private static void RunMiniDenseExisting(MiniSharedCommandBufferState state)
@@ -546,25 +496,6 @@ public sealed class ArchSharedCommandBufferState : IDisposable
     {
         World.Dispose();
     }
-}
-
-public sealed class MiniHierarchyCommandBufferState
-{
-    public MiniHierarchyCommandBufferState(MiniWorld world, MiniEntity parent, MiniEntity[] children, int capacity)
-    {
-        World = world;
-        Parent = parent;
-        Children = children;
-        Capacity = capacity;
-    }
-
-    public MiniWorld World { get; }
-
-    public MiniEntity Parent { get; }
-
-    public MiniEntity[] Children { get; }
-
-    public int Capacity { get; }
 }
 
 public sealed class DefaultSharedCommandBufferState : IDisposable

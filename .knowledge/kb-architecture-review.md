@@ -2,7 +2,7 @@
 title: Architecture Mechanistic Review
 module: MiniArch.Core
 description: Mechanistic insight of the entire miniArch ECS library — one-line truths, subsystem breakdown, data flows, known issues, and design tensions. Links to per-subsystem kb pages for depth.
-updated: 2026-10-05
+updated: 2026-10-10
 ---
 # Architecture Mechanistic Review
 
@@ -36,15 +36,14 @@ QueryCache (archetype/chunk 快照 + 两段式失效: archetypeCount + per-arche
 World (拆分为 5 个 partial 文件，三层 archetype 查找，编排一切)
   ↓
 CommandStream (typed store 录制器) → FrameDelta (packed byte[] + varint op 流) → World.Replay
-HierarchyTable (side-table, SoA 邻接表)
 WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 ```
 
 ## 核心子系统
 
 ### 1. 实体身份 (Entity / Version / FreeList)
-- `Entity = (id, version)` 二元组；World 维护 `_records: EntityRecord[]` 单表 + `_freeIds: RecycledEntity[]` 栈式 free-list
-- 分配：free-list pop 或 `_entitySlotCount++`；销毁：`record.Version++` + 清空 location + free-list push
+- `Entity = (id, version)` 二元组；World 维护 `_records: EntityRecord[]`（唯一 version 权威）与 `_freeIds: int[]`（有序 LIFO id 栈）。不再存冗余 `RecycledEntity`/`FreeEntityEntry` version。
+- 分配：free-list pop 后从对应 record 读 version，或 `_entitySlotCount++`；销毁：`record.Version++` + 清空 location + free-list push id。LIFO 顺序不能由 records 推导；`RepushFreeEntry(expectedVersion)` 先核 record 的当前代际再保序移动，stale 取消不得扰动新代 id。
 - 两套 id 分配 API：`AcquireEntityIdUnsafe`（lock-free，主线程路径）vs `ReserveDeferredEntity`（加锁，CommandStream / 异步 snapshot 路径）
 - 代码位置：`World.EntityLifecycle.cs`
 
@@ -80,7 +79,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 
 ### 4b. 回滚快照池（2026-07-25 generation lease）
 - `World._stateSnapshotPool: Stack<WorldStateSnapshotPayload>` 只复用大数组 payload；公开 `WorldStateSnapshot` 是 readonly value lease（payload 引用 + capture generation）。
-- `CaptureState()`：Pop/创建 payload，递增 generation 并填充，返回零分配 value lease。
+- `CaptureState()`：无 real-id reservation 时 Pop/创建 payload，递增 generation 并填充，返回零分配 value lease；payload 的 free-list 也是有序 `int[]`，version 从 record 表唯一推导。
 - `RestoreState(lease)`：校验 live/generation/source World；恢复后回收 payload。旧 lease 即使 payload 被再次 Capture 也保持失效。
 - 未 Restore 的 checkpoint 由 `lease.Dispose()` 显式淘汰并回收 payload；滚动 ring 覆盖 slot 前必须 Dispose。
 - 池容量自我稳定在峰值并发使用量 → GGPO 多帧窗口（N 帧预测+乱序 restore/淘汰）稳态零 GC。
@@ -107,13 +106,9 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - `ForEachChunkParallel` 在 chunks < threads 时自动按 entity 子区间拆分，`[ThreadStatic] t_partitions` 避免每次分配
 - 代码位置：`Core/QueryCache.cs`（`QueryCache` internal class）+ `Query.cs`（`MiniArch.Query` facade + `IChunkForEach`）+ `World.QueryCache.cs`
 
-### 7. Hierarchy
-- side-table SoA 邻接表：`_parentByChild[id]` 直索引 + `_firstChild[id]` → `_childNext[slot]` → -1 链表 + slot free list
-- 子节点用 slot 而非 id 索引（一个 parent 可有多个 child）
-- `AddChild` vs `AddChildRestored` 区分：前者 `removeFirst=true`，后者跳过（snapshot 恢复时旧 parent 已清）
-- Destroy 子树：DFS 后序遍历（generation-counter `_destroyVisitedGen` 避免 O(n) 清零），逐个 `DestroySingle`
-- 同时提供 `GetChildren`（List alloc）和 `EnumerateChildren`（零分配 struct enumerator）
-- 代码位置：`HierarchyTable.cs`
+### 7. 扁平实体（原 Hierarchy 已移除）
+- `World` 不再持有关系表；销毁、单实体克隆不遍历实体关系。普通组件 `Entity` 引用仍是数据，不是内置所有权。
+- 旧文件/旧 delta 的拒绝与迁移边界见 `kb-hierarchy-runtime.md`，本页不重复协议细节。
 
 ### 8. CommandStream（recorder 层）
 - 唯一 public recorder 是 `public sealed partial CommandStream`：record 与 consume API 由同一个 owner 管理，所有 mutator 直接调用且无锁
@@ -126,7 +121,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 
 ### 9. FrameDelta（wire format 层）
 - 单一 `byte[] _buffer` + 时序排列的 op：`[1B tag][varint entityId][varint version][payload...]`
-- 9 种 op kind（`DeltaOpKind` 枚举 0x01-0x09），unknown byte 立即 throw 提示 version mismatch（lockstep fail-fast）
+- 非层级 opcode 的既有数值/格式保持；旧 `0x04`/`0x05` 关系操作明确拒绝，不重编号、不当 no-op（迁移边界见 `kb-hierarchy-runtime.md`）
 - Varint codec显式拒绝 5 字节 / 32 位溢出
 - `AsSpan()` 直接 `new(_buffer, 0, _length)` —— 零拷贝网络发送
 - `FromWire()` 一次性分配 + 走读计数；`Deserialize(wire)` 实例方法复用 `_buffer`，容量足时零 GC 分配
@@ -134,7 +129,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 
 ### 10. World（编排者）
 - 拆分为 5 个 partial 文件：
-  - `World.cs`：字段 + TryGet/Get/Has + Clone + Replay + archetype lookup + Checksum/CaptureState/RestoreState + snapshot bridge methods（`AddChildFromSnapshot`、`SetSnapshot*`、`WriteFreeList`/`ReadFreeList`/`CopyFreeIdsFrom`、`FreeList`、`ValidateSnapshotEntitySlot`）
+  - `World.cs`：字段 + TryGet/Get/Has + Clone + Replay + archetype lookup + Checksum/CaptureState/RestoreState + snapshot bridge methods（`SetSnapshot*`、`WriteFreeList`/`ReadFreeList`/`CopyFreeIdsFrom`、`FreeList`、`ValidateSnapshotEntitySlot`）
   - `World.EntityLifecycle.cs`：Create/Destroy + free list + 版本管理
   - `World.Create.cs`：手工维护的泛型 Create 重载 + 每 World archetype 缓存
   - `World.QueryCache.cs`：Query 缓存管理 + `GetSingleton<T>`
@@ -154,10 +149,8 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - component id 稀疏（如 max=10000 但只有 2 个组件）时数组浪费内存
 - 当前游戏场景下 component id 密集，trade-off 合理
 
-### P4. Hierarchy 作为 side-table 的表达力缺失
-- 无法在 query 中按层级关系过滤
-- 已评估 Parent 作为组件的方案——代价（级联销毁从 O(subtree) → O(N)、每次 AddChild 触发 archetype 迁移）远超收益
-- 详见 `kb-design-rationale.md` §2.4 及 §3.4
+### P4. 原 Hierarchy side-table 表达力缺失 — 能力已退役
+- 这是删除前的历史设计张力，不是当前待修问题；历史方案见 `kb-design-rationale.md` §2.4/§3.4，当前边界见 `kb-hierarchy-runtime.md`。
 
 ### --- 以下为已评估并解决或拒绝的条目 ---
 
@@ -196,7 +189,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 |---|---|---|
 | 全局 Registry vs World 隔离 | 全局 | 真实游戏场景正确；省一层间接 |
 | 单线程写入 vs 并行读取 | 单线程写 | archetype ECS 经典约束 |
-| Hierarchy 一等公民 vs 组件 | side-table | 正确性 > 表达力 |
+| 内置层级 vs 扁平实体 | 扁平实体 | 不承载通用父子关系；迁移见 `kb-hierarchy-runtime.md` |
 | 大文件 vs partial 拆分 | partial 5 文件 | 按职责分组，保持编译单元聚焦 |
 | 直索引 edge cache vs bounded cache | 直索引 `Archetype?[]` | O(1) 查找，简单可靠；稀疏 id 场景的代价已被承认 |
 | CommandBuffer per-entity 去重 vs CommandStream typed store | CommandStream（独存） | 实测更快，去重语义无真实消费者，YAGNI |
@@ -220,7 +213,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - 改存储：`kb-chunk-storage.md` + `Archetype.cs` / `Archetype.Storage.cs`
 - 改录制/同步：`kb-command-stream.md` + `CommandStream.cs` / `FrameDelta.cs`
 - 改 query：`kb-query-invalidation.md` + `kb-parallel-query.md` + `Core/QueryCache.cs`
-- 改 hierarchy：`kb-hierarchy-runtime.md` + `HierarchyTable.cs`
+- 迁移旧 hierarchy 调用方/数据：`kb-hierarchy-runtime.md`（不再有 runtime `HierarchyTable`）
 - 改持久化：`kb-snapshot-persistence.md` + `WorldSnapshot.cs`
 
 ## 坑点

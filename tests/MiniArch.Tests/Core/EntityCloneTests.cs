@@ -10,6 +10,7 @@ public sealed class EntityCloneTests
     private readonly record struct Position(int X, int Y);
     private readonly record struct Velocity(int X, int Y);
     private readonly record struct Health(int Value);
+    private readonly record struct EntityReference(Entity Target);
 
     [Fact]
     public void Clone_empty_entity()
@@ -94,17 +95,31 @@ public sealed class EntityCloneTests
         Assert.Equal(new Position(1, 2), pos);
     }
 
-    [Fact]
-    public void Clone_no_hierarchy_link()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Clone_preserves_ordinary_entity_reference_without_cloning_target(bool useCommandStream)
     {
-        var world = new World();
-        var parent = world.CreateEmpty();
-        var child = world.Create(new Position(1, 2));
-        world.AddChild(parent, child);
+        using var world = new World();
+        var target = world.Create(new Health(42));
+        var source = world.Create(new EntityReference(target));
 
-        var clone = world.Clone(child);
+        Entity clone;
+        if (useCommandStream)
+        {
+            var stream = new CommandStream(world);
+            clone = stream.Clone(source);
+            stream.Submit();
+        }
+        else
+        {
+            clone = world.Clone(source);
+        }
 
-        Assert.False(world.TryGetParent(clone, out _));
+        Assert.Equal(3, world.EntityCount);
+        Assert.True(world.TryGet(clone, out EntityReference reference));
+        Assert.Equal(target, reference.Target);
+        Assert.True(world.IsAlive(target));
     }
 
     [Fact]
@@ -136,104 +151,6 @@ public sealed class EntityCloneTests
         Assert.Equal(new Position(1, 2), pos2);
     }
 
-    [Fact]
-    public void Deep_clone_copies_children()
-    {
-        var world = new World();
-        var parent = world.Create(new Position(1, 2));
-        var child1 = world.Create(new Velocity(3, 4));
-        var child2 = world.Create(new Health(100));
-        world.AddChild(parent, child1);
-        world.AddChild(parent, child2);
-
-        var clone = world.Clone(parent);
-
-        var cloneChildren = world.EnumerateChildren(clone).ToChildList();
-        Assert.Equal(2, cloneChildren.Count);
-        Assert.Contains(cloneChildren, child => world.TryGet(child, out Velocity _));
-        Assert.Contains(cloneChildren, child => world.TryGet(child, out Health _));
-    }
-
-    [Fact]
-    public void Deep_clone_preserves_hierarchy()
-    {
-        var world = new World();
-        var root = world.Create(new Position(1, 2));
-        var mid = world.Create(new Velocity(3, 4));
-        var leaf = world.Create(new Health(100));
-        world.AddChild(root, mid);
-        world.AddChild(mid, leaf);
-
-        var clone = world.Clone(root);
-
-        var cloneMids = world.EnumerateChildren(clone).ToChildList();
-        Assert.Single(cloneMids);
-        var cloneMid = cloneMids[0];
-        Assert.True(world.TryGet(cloneMid, out Velocity _));
-
-        var cloneLeaves = world.EnumerateChildren(cloneMid).ToChildList();
-        Assert.Single(cloneLeaves);
-        Assert.True(world.TryGet(cloneLeaves[0], out Health _));
-    }
-
-    [Fact]
-    public void Deep_clone_root_has_no_parent()
-    {
-        var world = new World();
-        var grandparent = world.CreateEmpty();
-        var parent = world.Create(new Position(1, 2));
-        var child = world.Create(new Velocity(3, 4));
-        world.AddChild(grandparent, parent);
-        world.AddChild(parent, child);
-
-        var clone = world.Clone(parent);
-
-        Assert.False(world.TryGetParent(clone, out _));
-    }
-
-    [Fact]
-    public void Deep_clone_is_independent_from_original()
-    {
-        var world = new World();
-        var parent = world.Create(new Position(1, 2));
-        var child = world.Create(new Velocity(3, 4));
-        world.AddChild(parent, child);
-
-        var clone = world.Clone(parent);
-        world.Set(clone, new Position(99, 99));
-
-        Assert.True(world.TryGet(parent, out Position origPos));
-        Assert.Equal(new Position(1, 2), origPos);
-    }
-
-    [Fact]
-    public void Deep_clone_destroy_original_does_not_affect_clone()
-    {
-        var world = new World();
-        var parent = world.Create(new Position(1, 2));
-        var child = world.Create(new Velocity(3, 4));
-        world.AddChild(parent, child);
-
-        var clone = world.Clone(parent);
-        world.Destroy(parent);
-
-        Assert.True(world.IsAlive(clone));
-        Assert.Single(world.EnumerateChildren(clone).ToChildList());
-    }
-
-    [Fact]
-    public void Deep_clone_entity_without_children_works()
-    {
-        var world = new World();
-        var entity = world.Create(new Position(1, 2));
-
-        var clone = world.Clone(entity);
-
-        Assert.True(world.IsAlive(clone));
-        Assert.False(world.HasChildren(clone));
-        Assert.True(world.TryGet(clone, out Position pos));
-        Assert.Equal(new Position(1, 2), pos);
-    }
 }
 
 public sealed class CommandBufferCloneTests
@@ -405,66 +322,10 @@ public sealed class CommandBufferCloneTests
     }
 
     [Fact]
-    public void Deep_clone_copies_children_after_submit()
+    public void Clone_with_set_on_entity()
     {
         var world = new World();
         var parent = world.Create(new Position(1, 2));
-        var child1 = world.Create(new Velocity(3, 4));
-        var child2 = world.Create(new Health(100));
-        world.AddChild(parent, child1);
-        world.AddChild(parent, child2);
-        var buffer = new CommandStream(world);
-
-        var clone = buffer.Clone(parent);
-        buffer.Submit();
-
-        var cloneChildren = world.EnumerateChildren(clone).ToChildList();
-        Assert.Equal(2, cloneChildren.Count);
-    }
-
-    [Fact]
-    public void Deep_clone_preserves_hierarchy_after_submit()
-    {
-        var world = new World();
-        var root = world.Create(new Position(1, 2));
-        var mid = world.Create(new Velocity(3, 4));
-        var leaf = world.Create(new Health(100));
-        world.AddChild(root, mid);
-        world.AddChild(mid, leaf);
-        var buffer = new CommandStream(world);
-
-        var clone = buffer.Clone(root);
-        buffer.Submit();
-
-        var cloneMids = world.EnumerateChildren(clone).ToChildList();
-        Assert.Single(cloneMids);
-        var cloneLeaves = world.EnumerateChildren(cloneMids[0]).ToChildList();
-        Assert.Single(cloneLeaves);
-        Assert.True(world.TryGet(cloneLeaves[0], out Health _));
-    }
-
-    [Fact]
-    public void Deep_clone_root_has_no_parent_after_submit()
-    {
-        var world = new World();
-        var grandparent = world.CreateEmpty();
-        var parent = world.Create(new Position(1, 2));
-        world.AddChild(grandparent, parent);
-        var buffer = new CommandStream(world);
-
-        var clone = buffer.Clone(parent);
-        buffer.Submit();
-
-        Assert.False(world.TryGetParent(clone, out _));
-    }
-
-    [Fact]
-    public void Deep_clone_with_set_on_root()
-    {
-        var world = new World();
-        var parent = world.Create(new Position(1, 2));
-        var child = world.Create(new Velocity(3, 4));
-        world.AddChild(parent, child);
         var buffer = new CommandStream(world);
 
         var clone = buffer.Clone(parent);
@@ -473,16 +334,13 @@ public sealed class CommandBufferCloneTests
 
         Assert.True(world.TryGet(clone, out Position pos));
         Assert.Equal(new Position(99, 99), pos);
-        Assert.Single(world.EnumerateChildren(clone).ToChildList());
     }
 
     [Fact]
-    public void Deep_clone_with_remove_on_root()
+    public void Clone_with_remove_on_entity()
     {
         var world = new World();
         var parent = world.Create(new Position(1, 2), new Velocity(3, 4));
-        var child = world.Create(new Health(100));
-        world.AddChild(parent, child);
         var buffer = new CommandStream(world);
 
         var clone = buffer.Clone(parent);
@@ -492,7 +350,6 @@ public sealed class CommandBufferCloneTests
         Assert.False(world.TryGet<Position>(clone, out _));
         Assert.True(world.TryGet(clone, out Velocity vel));
         Assert.Equal(new Velocity(3, 4), vel);
-        Assert.Single(world.EnumerateChildren(clone).ToChildList());
     }
 
     [Fact]
@@ -606,7 +463,7 @@ public sealed class CommandBufferCloneTests
     }
 
     [Fact]
-    public void Deep_clone_destroy_cloned_entity_in_buffer()
+    public void Clone_destroy_cloned_entity_in_buffer()
     {
         var world = new World();
         var source = world.Create(new Position(1, 2));
@@ -617,142 +474,6 @@ public sealed class CommandBufferCloneTests
         buffer.Submit();
 
         Assert.False(world.IsAlive(clone));
-    }
-
-    [Fact]
-    public void Deep_clone_destroy_cloned_subtree_in_buffer_does_not_materialize_children()
-    {
-        var world = new World();
-        var source = world.Create(new Position(1, 2));
-        var child = world.Create(new Health(100));
-        world.AddChild(source, child);
-        var buffer = new CommandStream(world);
-
-        var clone = buffer.Clone(source);
-        buffer.Destroy(clone);
-        buffer.Submit();
-
-        Assert.False(world.IsAlive(clone));
-        var description = new QueryDescription().With<Health>();
-        Assert.Equal(1, CountEntities(MiniQueryCache.Create(world, in description)));
-    }
-
-    [Fact]
-    public void Clone_virtual_hierarchy_pending_AddChild_materialized_child()
-    {
-        var world = new World();
-        var father = world.Create(new Position(1, 2));       // materialized source
-        var son = world.Create(new Health(100));              // materialized existing
-        var buffer = new CommandStream(world);
-
-        buffer.AddChild(father, son);
-        var cloneFather = buffer.Clone(father);               // record-time snapshot
-        buffer.Submit();
-
-        // cloneFather should have a child (the clone of son)
-        var children = world.EnumerateChildren(cloneFather).ToChildList();
-        Assert.Single(children);
-        Assert.True(world.TryGet(children[0], out Health _));
-        // original son still has father as parent (not moved)
-        Assert.True(world.TryGetParent(son, out var origParent));
-        Assert.Equal(father, origParent);
-    }
-
-    [Fact]
-    public void Clone_virtual_hierarchy_RemoveChild_excludes_from_children()
-    {
-        var world = new World();
-        var parent = world.Create(new Position(1, 2));
-        var child = world.Create(new Health(100));
-        world.AddChild(parent, child);
-        var buffer = new CommandStream(world);
-
-        buffer.RemoveChild(child);
-        var clone = buffer.Clone(parent);
-        buffer.Submit();
-
-        // clone should have NO children (RemoveChild was pending)
-        Assert.False(world.HasChildren(clone));
-    }
-
-    [Fact]
-    public void Clone_virtual_hierarchy_pending_AddChild_pending_child()
-    {
-        var world = new World();
-        var buffer = new CommandStream(world);
-
-        var father = buffer.Create();
-        var son = buffer.Create();
-        buffer.Add(son, new Health(50));
-        buffer.AddChild(father, son);
-
-        var cloneFather = buffer.Clone(father);
-        buffer.Submit();
-
-        // cloneFather has a child (deep clone of son)
-        var children = world.EnumerateChildren(cloneFather).ToChildList();
-        Assert.Single(children);
-        Assert.True(world.TryGet(children[0], out Health h));
-        Assert.Equal(new Health(50), h);
-    }
-
-    [Fact]
-    public void Clone_virtual_hierarchy_cycle_throws()
-    {
-        var world = new World();
-        var buffer = new CommandStream(world);
-
-        var a = buffer.Create();
-        var b = buffer.Create();
-        buffer.AddChild(a, b);
-        // Create a cycle: b's parent = a (already), and a's parent = b
-        buffer.AddChild(b, a);
-
-        Assert.Throws<InvalidOperationException>(() => buffer.Clone(a));
-    }
-
-    [Fact]
-    public void BUG_clone_preserves_more_than_32_direct_children()
-    {
-        var world = new World();
-        var root = world.Create(new Position(1, 2));
-        for (var i = 0; i < 33; i++)
-            world.AddChild(root, world.Create(new Health(i)));
-        var buffer = new CommandStream(world);
-
-        var clone = buffer.Clone(root);
-        buffer.Submit();
-
-        Assert.Equal(33, world.EnumerateChildren(clone).ToChildList().Count);
-    }
-
-    [Fact]
-    public void BUG_clone_grows_cycle_detection_for_more_than_32_descendants()
-    {
-        var world = new World();
-        var root = world.Create(new Position(0, 0));
-        var current = root;
-        for (var i = 0; i < 33; i++)
-        {
-            var child = world.Create(new Position(i + 1, i + 1));
-            world.AddChild(current, child);
-            current = child;
-        }
-        var buffer = new CommandStream(world);
-
-        var clone = buffer.Clone(root);
-        buffer.Submit();
-
-        var depth = 0;
-        current = clone;
-        while (world.HasChildren(current))
-        {
-            var children = world.EnumerateChildren(current).ToChildList();
-            Assert.Single(children);
-            current = children[0];
-            depth++;
-        }
-        Assert.Equal(33, depth);
     }
 
     [Fact]
@@ -912,32 +633,6 @@ public sealed class CommandBufferCloneTests
     }
 
     [Fact]
-    public void Clone_with_children_does_not_allocate()
-    {
-        var world = new World();
-        var parent = world.Create(new Position(1, 2));
-        var child1 = world.Create(new Velocity(3, 4));
-        var child2 = world.Create(new Health(100));
-        world.AddChild(parent, child1);
-        world.AddChild(parent, child2);
-        var buffer = new CommandStream(world);
-
-        // Warm up
-        buffer.Clone(parent); buffer.Submit();
-        buffer.Clone(parent); buffer.Submit();
-
-        // Measure on same buffer
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        buffer.Clone(parent);
-        var after = GC.GetAllocatedBytesForCurrentThread();
-        var allocated = after - before;
-
-        Assert.True(allocated <= 1,
-            $"Clone_with_children allocated {allocated} bytes, expected ~0. " +
-            "Temporary Lists and lambda closures should be eliminated.");
-    }
-
-    [Fact]
     public void Clone_materialized_source_pending_Set_overlay()
     {
         var world = new World();
@@ -964,29 +659,6 @@ public sealed class CommandBufferCloneTests
         Assert.True(world.TryGet(clone, out Position _));
         Assert.True(world.TryGet(clone, out Velocity v));
         Assert.Equal(new Velocity(3, 4), v);
-    }
-
-    [Fact]
-    public void Deep_clone_preserves_hierarchy_in_buffer()
-    {
-        var world = new World();
-        var root = world.Create(new Position(1, 2));
-        var mid = world.Create(new Velocity(3, 4));
-        var leaf = world.Create(new Health(100));
-        world.AddChild(root, mid);
-        world.AddChild(mid, leaf);
-        var buffer = new CommandStream(world);
-        var clone = buffer.Clone(root);
-        buffer.Submit();
-
-        var cloneMids = world.EnumerateChildren(clone).ToChildList();
-        Assert.Single(cloneMids);
-        var cloneMid = cloneMids[0];
-        Assert.True(world.TryGet(cloneMid, out Velocity _));
-
-        var cloneLeaves = world.EnumerateChildren(cloneMid).ToChildList();
-        Assert.Single(cloneLeaves);
-        Assert.True(world.TryGet(cloneLeaves[0], out Health _));
     }
 
     [Fact]

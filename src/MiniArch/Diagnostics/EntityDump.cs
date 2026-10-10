@@ -4,7 +4,7 @@ namespace MiniArch.Diagnostics;
 
 /// <summary>
 /// Inspects a single entity's full state: alive status, version, archetype
-/// membership, component values, hierarchy relations.
+/// membership and component values.
 /// </summary>
 public static class EntityDump
 {
@@ -21,7 +21,7 @@ public static class EntityDump
         if ((uint)id >= (uint)records.Length)
         {
             return new EntityReport(false, id, entity.Version, null,
-                Array.Empty<ComponentInfo>(), null, Array.Empty<Entity>());
+                Array.Empty<ComponentInfo>());
         }
 
         var record = records[id];
@@ -31,7 +31,7 @@ public static class EntityDump
         if (!isAlive)
         {
             return new EntityReport(false, id, version, null,
-                Array.Empty<ComponentInfo>(), null, Array.Empty<Entity>());
+                Array.Empty<ComponentInfo>());
         }
 
         // Alive — read archetype info.
@@ -48,15 +48,6 @@ public static class EntityDump
             components.Add(new ComponentInfo(types[col], bytes.Length, bytes));
         }
 
-        // Hierarchy.
-        Entity? parent = null;
-        if (world.TryGetParent(entity, out var p))
-            parent = p;
-
-        var children = new List<Entity>();
-        foreach (var child in world.EnumerateChildren(entity))
-            children.Add(child);
-
-        return new EntityReport(true, id, version, archInfo, components, parent, children);
+        return new EntityReport(true, id, version, archInfo, components);
     }
 }

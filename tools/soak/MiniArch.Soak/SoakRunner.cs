@@ -5,7 +5,7 @@ using MiniArch.Diagnostics;
 
 namespace MiniArch.Soak;
 
-enum SoakPhase { WarmUp, StableMutate, MigrationStorm, HierarchyStress, AllocatorChurn, Cooldown }
+enum SoakPhase { WarmUp, StableMutate, MigrationStorm, ComponentChurn, AllocatorChurn, Cooldown }
 
 sealed class SoakRunner
 {
@@ -28,7 +28,7 @@ sealed class SoakRunner
     long _runStartAlloc;
     int _runStartG0, _runStartG1, _runStartG2;
 
-    long _creates, _destroys, _adds, _sets, _removes, _clones, _addHier, _removeHier;
+    long _creates, _destroys, _adds, _sets, _removes, _clones;
     long _migrations;
     int _peakEntityCount;
 
@@ -48,20 +48,6 @@ sealed class SoakRunner
     // Per-frame pending add tracking: prevents recording Add for a component
     // that was already added in the same frame (Add throws if component exists).
     readonly HashSet<(Entity E, int CompIdx)> _pendingAdds = [];
-
-    // Tracks all entities explicitly destroyed this frame, so we can skip
-    // child destroys when the parent is also being destroyed (cascade will
-    // handle the child).
-    readonly HashSet<Entity> _destroyedThisFrame = [];
-
-    // Tracks entities made children via AddChild this frame, so OpDestroy can
-    // skip them — destroying the parent cascade-destroys children, creating a
-    // duplicate destroy entry.
-    readonly HashSet<Entity> _pendingHierarchyChildren = [];
-
-    // Tracks entities used as parents in AddChild this frame, to prevent
-    // same-frame cycles (e.g., AddChild(A,B) then AddChild(B,A)).
-    readonly HashSet<Entity> _pendingHierarchyParents = [];
 
     readonly CommandStream _shadowStream;
 
@@ -141,18 +127,15 @@ sealed class SoakRunner
             var count = _alive.Count;
 
             AdjustOpWeights(phase, count, out var createW, out var destroyW, out var addW, out var setW,
-                out var removeW, out var cloneW, out var addHierW, out var removeHierW);
+                out var removeW, out var cloneW);
 
             _pendingRemoves.Clear();
             _pendingAdds.Clear();
-            _pendingHierarchyChildren.Clear();
-            _pendingHierarchyParents.Clear();
-            _destroyedThisFrame.Clear();
             _opLog.Clear();
             var beforeOps = GC.GetAllocatedBytesForCurrentThread();
             var opsThisFrame = _rng.Next(1, _cfg.MaxOpsPerFrame + 1);
             for (var op = 0; op < opsThisFrame; op++)
-                RandomOp(createW, destroyW, addW, setW, removeW, cloneW, addHierW, removeHierW);
+                RandomOp(createW, destroyW, addW, setW, removeW, cloneW);
             _frameOpsBytes += GC.GetAllocatedBytesForCurrentThread() - beforeOps;
 
             // Layer 0: Async submit + replay + validate
@@ -195,18 +178,16 @@ sealed class SoakRunner
 
             // Entity count regulation
             AdjustOpWeights(phase, count, out var createW, out var destroyW, out var addW, out var setW,
-                out var removeW, out var cloneW, out var addHierW, out var removeHierW);
+                out var removeW, out var cloneW);
 
             // Generate random operations
             _pendingRemoves.Clear();
-            _pendingHierarchyChildren.Clear();
-            _pendingHierarchyParents.Clear();
-            _destroyedThisFrame.Clear();
+            _pendingAdds.Clear();
             _opLog.Clear();
             var beforeOps = GC.GetAllocatedBytesForCurrentThread();
             var opsThisFrame = _rng.Next(1, _cfg.MaxOpsPerFrame + 1);
             for (var op = 0; op < opsThisFrame; op++)
-                RandomOp(createW, destroyW, addW, setW, removeW, cloneW, addHierW, removeHierW);
+                RandomOp(createW, destroyW, addW, setW, removeW, cloneW);
             _frameOpsBytes += GC.GetAllocatedBytesForCurrentThread() - beforeOps;
 
             // Layer 0: Submit + Replay + Validate
@@ -248,7 +229,7 @@ sealed class SoakRunner
             < 0.10 => SoakPhase.WarmUp,
             < 0.40 => SoakPhase.StableMutate,
             < 0.55 => SoakPhase.MigrationStorm,
-            < 0.70 => SoakPhase.HierarchyStress,
+            < 0.70 => SoakPhase.ComponentChurn,
             < 0.90 => SoakPhase.AllocatorChurn,
             _ => SoakPhase.Cooldown
         };
@@ -256,36 +237,36 @@ sealed class SoakRunner
 
     void AdjustOpWeights(SoakPhase phase, int count,
         out double createW, out double destroyW, out double addW, out double setW,
-        out double removeW, out double cloneW, out double addHierW, out double removeHierW)
+        out double removeW, out double cloneW)
     {
         // Default weights for StableMutate: balanced
         createW = 25; destroyW = 15; addW = 15; setW = 25;
-        removeW = 10; cloneW = 5; addHierW = 3; removeHierW = 2;
+        removeW = 10; cloneW = 10;
 
         if (phase == SoakPhase.WarmUp)
         {
             createW = 80; destroyW = 0; addW = 10; setW = 10;
-            removeW = 0; cloneW = 0; addHierW = 0; removeHierW = 0;
+            removeW = 0; cloneW = 0;
         }
         else if (phase == SoakPhase.MigrationStorm)
         {
             createW = 10; destroyW = 20; addW = 25; setW = 10;
-            removeW = 25; cloneW = 5; addHierW = 3; removeHierW = 2;
+            removeW = 25; cloneW = 10;
         }
-        else if (phase == SoakPhase.HierarchyStress)
+        else if (phase == SoakPhase.ComponentChurn)
         {
-            createW = 20; destroyW = 15; addW = 10; setW = 20;
-            removeW = 5; cloneW = 10; addHierW = 15; removeHierW = 5;
+            createW = 20; destroyW = 15; addW = 25; setW = 15;
+            removeW = 20; cloneW = 5;
         }
         else if (phase == SoakPhase.AllocatorChurn)
         {
             createW = 40; destroyW = 35; addW = 5; setW = 10;
-            removeW = 5; cloneW = 3; addHierW = 1; removeHierW = 1;
+            removeW = 5; cloneW = 5;
         }
         else // Cooldown
         {
             createW = 15; destroyW = 15; addW = 15; setW = 30;
-            removeW = 10; cloneW = 5; addHierW = 5; removeHierW = 5;
+            removeW = 10; cloneW = 15;
         }
 
         // Entity cap regulation: hard cap & hard floor
@@ -293,16 +274,16 @@ sealed class SoakRunner
         else if (count <= _cfg.EntityFloor && phase != SoakPhase.WarmUp) destroyW = 0;
 
         // Normalize weights
-        var total = createW + destroyW + addW + setW + removeW + cloneW + addHierW + removeHierW;
+        var total = createW + destroyW + addW + setW + removeW + cloneW;
         if (total > 0)
         {
             createW /= total; destroyW /= total; addW /= total; setW /= total;
-            removeW /= total; cloneW /= total; addHierW /= total; removeHierW /= total;
+            removeW /= total; cloneW /= total;
         }
     }
 
     void RandomOp(double createW, double destroyW, double addW, double setW,
-        double removeW, double cloneW, double addHierW, double removeHierW)
+        double removeW, double cloneW)
     {
         var roll = _rng.NextDouble();
         var cumulative = 0.0;
@@ -322,13 +303,7 @@ sealed class SoakRunner
         cumulative += removeW;
         if (roll < cumulative) { OpRemove(); return; }
 
-        cumulative += cloneW;
-        if (roll < cumulative) { OpClone(); return; }
-
-        cumulative += addHierW;
-        if (roll < cumulative) { OpAddChild(); return; }
-
-        OpRemoveChild();
+        OpClone();
     }
 
     void OpCreate()
@@ -357,12 +332,7 @@ sealed class SoakRunner
         // Pick from the back of _alive to avoid O(n) removal cost
         var idx = _rng.Next(_alive.Count);
         var e = _alive[idx];
-        if (_pendingHierarchyChildren.Contains(e)) return; // cascade-destroyed with parent
-        // If e has a parent ancestor that's already scheduled for destroy
-        // this frame, skip —the parent's cascade will handle e.
-        if (HasAncestorDestroyedThisFrame(e)) return;
         _alive.RemoveAt(idx);
-        _destroyedThisFrame.Add(e);
 
         _stream.Destroy(e);
         _refModel.Remove(e);
@@ -418,120 +388,10 @@ sealed class SoakRunner
         if (_alive.Count == 0) return;
         var source = _alive[_rng.Next(_alive.Count)];
         if (!_source.IsAlive(source)) return;
-        try
-        {
-            var clone = _stream.Clone(source);
-            _alive.Add(clone);
-            LogOp($"Clone({source})→({clone})");
-            _clones++;
-        }
-        catch { /* Clone can fail if source dies between the check and the clone — ignore */ }
-    }
-
-    void OpAddChild()
-    {
-        if (_alive.Count < 2) return;
-        var parent = _alive[_rng.Next(_alive.Count)];
-        var child = _alive[_rng.Next(_alive.Count)];
-        if (parent == child) return;
-        // Prevent cycles: child already made a parent, or parent already a child
-        if (_pendingHierarchyParents.Contains(child)) return;
-        if (_pendingHierarchyChildren.Contains(parent)) return;
-        // Walk up from parent; if we reach child, it would be a cycle.
-        // Check both the committed world hierarchy AND pending stream intents
-        // (AddChild intents that were recorded earlier in this frame but not yet
-        // applied). Pending intents are not visible in the world hierarchy until
-        // Submit runs ApplyHierarchy, so the walk must traverse both chains.
-        if (WouldCreateCycle(parent, child))
-            return;
-        _stream.AddChild(parent, child);
-        _pendingHierarchyChildren.Add(child);
-        _pendingHierarchyParents.Add(parent);
-        LogOp($"AddChild({parent}, {child})");
-        _addHier++;
-    }
-
-    /// <summary>
-    /// Simulates ApplyHierarchy's sorted-by-ChildId order to detect cycles
-    /// that would be thrown during <see cref="CommandStream.Submit"/>.
-    /// Includes the proposed new AddChild intent in the simulation.
-    /// </summary>
-    bool WouldCreateCycle(Entity parent, Entity child)
-    {
-        // Collect existing pending Add intents plus the proposed one.
-        var intents = new System.Collections.Generic.List<(Entity Child, Entity Parent)>();
-        var pending = _stream.ActiveHierarchyForTesting
-            as System.Collections.Generic.IDictionary<Entity, Core.CommandStream.HierarchyIntent>;
-        if (pending is not null)
-        {
-            foreach (var kvp in pending)
-            {
-                if (kvp.Value.IsAdd)
-                    intents.Add((kvp.Key, kvp.Value.Parent));
-            }
-        }
-        intents.Add((child, parent));
-
-        // Early exit: only the proposed intent —check the world hierarchy.
-        if (intents.Count <= 1)
-        {
-            var cur = parent;
-            while (cur.Id >= 0)
-            {
-                if (cur == child) return true;
-                if (!_source.TryGetParent(cur, out cur)) break;
-            }
-            return false;
-        }
-
-        // Sort by child.Entity.Id to match ApplyHierarchy order.
-        intents.Sort((a, b) => a.Child.Id.CompareTo(b.Child.Id));
-
-        // Simulate serial apply: local hierarchy tracking child→parent for
-        // entities modified by intents processed so far.
-        var localParent = new System.Collections.Generic.Dictionary<int, Entity>();
-        foreach (var (c, p) in intents)
-        {
-            // Walk from parent p up through (local + world) hierarchy.
-            // Check if any ancestor equals child c.
-            var seen = new System.Collections.Generic.HashSet<int>();
-            var cur = p;
-            while (cur.Id >= 0)
-            {
-                if (!seen.Add(cur.Id))
-                    break; // cycle in local state (shouldn't happen with correct simulation)
-                if (cur == c)
-                    return true;
-
-                // Next parent: check local first (intents processed earlier),
-                // then fall back to world hierarchy.
-                if (localParent.TryGetValue(cur.Id, out var nextP) && nextP.Id >= 0)
-                {
-                    cur = nextP;
-                }
-                else if (_source.TryGetParent(cur, out var worldP))
-                {
-                    cur = worldP;
-                }
-                else
-                {
-                    break;
-                }
-            }
-            // Record this intent as applied
-            localParent[c.Id] = p;
-        }
-        return false;
-    }
-
-
-    void OpRemoveChild()
-    {
-        if (_alive.Count == 0) return;
-        var child = _alive[_rng.Next(_alive.Count)];
-        _stream.RemoveChild(child);
-        LogOp($"RemoveChild({child})");
-        _removeHier++;
+        var clone = _stream.Clone(source);
+        _alive.Add(clone);
+        LogOp($"Clone({source})→({clone})");
+        _clones++;
     }
 
     // Reference model helpers
@@ -630,8 +490,8 @@ sealed class SoakRunner
                     var maxFree = Math.Max(srcFree.Length, shdFree.Length);
                     for (var i = 0; i < maxFree; i++)
                     {
-                        var src = i < srcFree.Length ? $"{srcFree[i].Id}(v{srcFree[i].Version})" : "(none)";
-                        var shd = i < shdFree.Length ? $"{shdFree[i].Id}(v{shdFree[i].Version})" : "(none)";
+                        var src = i < srcFree.Length ? $"{srcFree[i]}(v{_source.EntityRecords[srcFree[i]].Version})" : "(none)";
+                        var shd = i < shdFree.Length ? $"{shdFree[i]}(v{_shadow.EntityRecords[shdFree[i]].Version})" : "(none)";
                         var marker = src == shd ? "" : " ← MISMATCH";
                         freeDump.Append($"\n      [{i,3}] src={src,-16} shd={shd}{marker}");
                     }
@@ -753,8 +613,8 @@ sealed class SoakRunner
                 var maxFree = Math.Max(srcFree.Length, shdFree.Length);
                 for (var i = 0; i < maxFree; i++)
                 {
-                    var src = i < srcFree.Length ? $"{srcFree[i].Id}(v{srcFree[i].Version})" : "(none)";
-                    var shd = i < shdFree.Length ? $"{shdFree[i].Id}(v{shdFree[i].Version})" : "(none)";
+                    var src = i < srcFree.Length ? $"{srcFree[i]}(v{_source.EntityRecords[srcFree[i]].Version})" : "(none)";
+                    var shd = i < shdFree.Length ? $"{shdFree[i]}(v{_shadow.EntityRecords[shdFree[i]].Version})" : "(none)";
                     var marker = src == shd ? "" : " ← MISMATCH";
                     freeDump.Append($"\n      [{i,3}] src={src,-16} shd={shd}{marker}");
                 }
@@ -913,9 +773,8 @@ sealed class SoakRunner
         Console.WriteLine($"    create {_creates,8}  destroy {_destroys,8}");
         Console.WriteLine($"    add    {_adds,8}  set     {_sets,8}");
         Console.WriteLine($"    remove {_removes,8}  clone   {_clones,8}");
-        Console.WriteLine($"    addCh  {_addHier,8}  remCh   {_removeHier,8}");
         Console.WriteLine($"    ─────────────────────────────────────");
-        Console.WriteLine($"    total  {_creates + _destroys + _adds + _sets + _removes + _clones + _addHier + _removeHier,8}");
+        Console.WriteLine($"    total  {_creates + _destroys + _adds + _sets + _removes + _clones,8}");
         Console.WriteLine();
         Console.WriteLine($"  migrations      {_migrations,8}");
         Console.WriteLine($"  peak entities   {_peakEntityCount,8}");
@@ -956,7 +815,7 @@ sealed class SoakRunner
         SoakPhase.WarmUp => "warm_up",
         SoakPhase.StableMutate => "stable_mutate",
         SoakPhase.MigrationStorm => "migration_storm",
-        SoakPhase.HierarchyStress => "hierarchy_stress",
+        SoakPhase.ComponentChurn => "component_churn",
         SoakPhase.AllocatorChurn => "allocator_churn",
         SoakPhase.Cooldown => "cooldown",
         _ => "unknown"
@@ -974,24 +833,6 @@ sealed class SoakRunner
             _opLog.Add(desc);
     }
 
-    /// <summary>
-    /// Returns true if <paramref name="e"/> has a parent-chain ancestor that
-    /// is already in <see cref="_destroyedThisFrame"/> —meaning the parent's
-    /// cascade will destroy <paramref name="e"/>, so an explicit destroy
-    /// would be a duplicate.
-    /// </summary>
-    bool HasAncestorDestroyedThisFrame(Entity e)
-    {
-        var cur = e;
-        while (_source.TryGetParent(cur, out var parent))
-        {
-            if (_destroyedThisFrame.Contains(parent))
-                return true;
-            cur = parent;
-        }
-        return false;
-    }
-
     void Fail(int frame, SoakPhase phase, string reason)
     {
         Console.Error.WriteLine($"  {new string('═', 50)}");
@@ -999,7 +840,7 @@ sealed class SoakRunner
         Console.Error.WriteLine($"  {reason}");
         Console.Error.WriteLine($"  seed={_cfg.Seed}");
         Console.Error.WriteLine($"  alive={_alive.Count}  oracle={_refModel.Count}");
-        Console.Error.WriteLine($"  operations: C={_creates} D={_destroys} A={_adds} S={_sets} R={_removes} Cl={_clones} H+={_addHier} H-={_removeHier}");
+        Console.Error.WriteLine($"  operations: C={_creates} D={_destroys} A={_adds} S={_sets} R={_removes} Cl={_clones}");
         Console.Error.WriteLine($"  migrations={_migrations}  peak_ent={_peakEntityCount}");
 
         // Dump operation log
@@ -1045,8 +886,8 @@ sealed class SoakRunner
         var maxFree = Math.Max(srcFree.Length, shdFree.Length);
         for (var i = 0; i < maxFree; i++)
         {
-            var src = i < srcFree.Length ? $"{srcFree[i].Id}(v{srcFree[i].Version})" : "(none)";
-            var shd = i < shdFree.Length ? $"{shdFree[i].Id}(v{shdFree[i].Version})" : "(none)";
+            var src = i < srcFree.Length ? $"{srcFree[i]}(v{_source.EntityRecords[srcFree[i]].Version})" : "(none)";
+            var shd = i < shdFree.Length ? $"{shdFree[i]}(v{_shadow.EntityRecords[shdFree[i]].Version})" : "(none)";
             var marker = src == shd ? "" : " ← MISMATCH";
             Console.Error.WriteLine($"    [{i,3}] src={src,-16} shd={shd}{marker}");
         }

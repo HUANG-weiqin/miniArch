@@ -173,53 +173,6 @@ public sealed class SubmitReplayRestoreParityTests
         Assert.Equal(preP4Checksum, world.Checksum());
     }
 
-    // ═══════════════════════════════════════════════════════════════╗
-    // Pattern 5: Hierarchy AddChild + cascade destroy               ║
-    // Source: M3 Cell 1 (Hieararchy + CommandStream) + soak seed    ║
-    //         111 HierarchyStress phase                             ║
-    // ═══════════════════════════════════════════════════════════════╝
-
-    [Fact]
-    public void P5_Hierarchy_add_child_then_cascade_destroy_three_way_parity()
-    {
-        // Base: A → B → C (three-level hierarchy)
-        var world = new World();
-        var setup = new CommandStream(world);
-        var a = setup.Create(); setup.Add(a, new Position(0, 0));
-        var b = setup.Create(); setup.Add(b, new Position(1, 1));
-        var c = setup.Create(); setup.Add(c, new Position(2, 2));
-        setup.AddChild(a, b);
-        setup.AddChild(b, c);
-        var baseDelta = setup.Snapshot();
-        setup.Submit();
-
-        var preP5Checksum = world.Checksum();
-        var preSnap = world.CaptureState();
-
-        // Mutation: add D under B, then destroy A (cascade destroys B, C, D)
-        var stream = new CommandStream(world);
-        var d = stream.Create(); stream.Add(d, new Position(3, 3));
-        stream.AddChild(b, d);
-        stream.Destroy(a);
-        var delta = stream.Snapshot();
-        stream.Submit();
-        var submitChecksum = world.CanonicalChecksum();
-
-        // Path B: Replay
-        var shadow = new World();
-        new CommandStream(shadow).Replay(baseDelta);
-        new CommandStream(shadow).Replay(delta);
-        Assert.Equal(submitChecksum, shadow.CanonicalChecksum());
-
-        // Path C: Restore
-        world.RestoreState(preSnap);
-        Assert.Equal(preP5Checksum, world.Checksum());
-    }
-
-    // ═══════════════════════════════════════════════════════════════╗
-    // Pattern 6: Create/cancel churn (B5/B6 territory)              ║
-    // Source: soak seed 111 / cap=100 / ops/f=50 AllocatorChurn     ║
-    //          phase — multiple pending creates with cancellations  ║
     // ═══════════════════════════════════════════════════════════════╝
 
     [Fact]
@@ -282,25 +235,22 @@ public sealed class SubmitReplayRestoreParityTests
     [Fact]
     public void P7_Clone_then_mutate_three_way_parity()
     {
-        // Base: parent(A) → child(B), both with components
+        // Base: two independent entities with components
         var world = new World();
         var setup = new CommandStream(world);
         var a = setup.Create(); setup.Add(a, new Position(0, 0));
         var b = setup.Create(); setup.Add(b, new Velocity(1, 1));
-        setup.AddChild(a, b);
         var baseDelta = setup.Snapshot();
         setup.Submit();
 
         var preP7Checksum = world.Checksum();
         var preSnap = world.CaptureState();
 
-        // Mutation: clone A (deep, includes child), set clone's child component
+        // Mutation: clone A and change only the new entity.
         var stream = new CommandStream(world);
         var aClone = stream.Clone(a);
         stream.Set(aClone, new Position(99, 99));
-        var cloneChildren = world.EnumerateChildren(aClone).ToChildList();
-        foreach (var cc in cloneChildren)
-            stream.Add(cc, new Health(42));
+        stream.Add(aClone, new Health(42));
         var delta = stream.Snapshot();
         stream.Submit();
         var submitChecksum = world.CanonicalChecksum();
@@ -381,9 +331,6 @@ public sealed class SubmitReplayRestoreParityTests
         setup.Add(entities[2], new Health(50));
         setup.Add(entities[3], new Velocity(3, 4));
         setup.Add(entities[3], new Health(100));
-        // Hierarchy: e[0] → e[1], e[0] → e[2]
-        setup.AddChild(entities[0], entities[1]);
-        setup.AddChild(entities[0], entities[2]);
         var baseDelta = setup.Snapshot();
         setup.Submit();
 
@@ -411,12 +358,8 @@ public sealed class SubmitReplayRestoreParityTests
         var n2 = stream.Create();
         stream.Add(n2, new Health(42));
 
-        // Hierarchy: add n1 under e[0], add n2 under n1
-        stream.AddChild(entities[0], n1);
-        stream.AddChild(n1, n2);
-
-        // Clone e[0] (deep, includes children)
-        var clone = stream.Clone(entities[0]);
+        // Clone e[0] as one independent entity.
+        stream.Clone(entities[0]);
 
         // Remove Health from e[2]
         stream.Remove<Health>(entities[2]);

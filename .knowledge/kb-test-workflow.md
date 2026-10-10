@@ -2,7 +2,7 @@
 title: Test Workflow
 module: MiniArch.Tests
 description: How the test suite, query profiling, snapshot benchmarks, and structural-change benchmarks are organized and how to run them
-updated: 2026-07-25
+updated: 2026-10-10
 ---
 # Test Workflow
 
@@ -47,8 +47,7 @@ updated: 2026-07-25
 | `SubmitReplayRestoreParityTests` | 三路收敛（9 种模式）字节级 checksum 一致 |
 | `ChangeTrackingInfrastructureTests` | ChangeTracking 内部基础设施契约 |
 | `ChangeTrackingReplayTests` | 变化追踪 replay 的正确性 |
-| `ChildrenEnumerableTests` | ChildrenEnumerable 枚举契约 |
-| `EntityCloneTests` | Clone 语义 |
+| `EntityCloneTests` | 单实体组件 Clone 语义（旧子树克隆测试退役） |
 | `ThroughputRunnerTests` | 参数解析和汇总契约 |
 | `QueryProfilingRunnerTests` | Profiling runner 构造契约 |
 | `ComplexQueryBenchmarkScenarioTests` | Benchmark world shape 和命中比例 |
@@ -77,9 +76,11 @@ updated: 2026-07-25
 | `WorldDigestTests` | World digest 计算/比较 |
 | `EntityDumpTests` | Entity 内容 dump |
 | **根目录** | |
-| `PublicApiSentinelTests` | 公共 API 冻结哨兵 |
+| `PublicApiSentinelTests` | 公共 API 冻结哨兵（层级 API 删除是有意变更；基线由核心迁移同步） |
 | `CrossFeatureParityTests` | M3 交叉特性矩阵 |
 | ~~`Core/DebugMetricsTests.cs`~~ | **已删除** — DebugMetrics 子系统已移除 |
+
+旧 `ChildrenEnumerableTests`、父子遍历/级联/子树克隆断言属于退役能力，不作为当前必跑的 API 测试入口；历史事实与迁移见 `kb-hierarchy-runtime.md`。非层级生命周期、普通 `Entity` 引用、placeholder、Query 与 Snapshot/Replay 覆盖仍须保留。
 
 ## PublicApiSentinel
 

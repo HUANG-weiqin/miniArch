@@ -5,7 +5,7 @@ using MiniArch.Core;
 namespace MiniArch.Tests.Core.TestSupport;
 
 /// <summary>
-/// Test-only projection of a <see cref="FrameDelta"/> into the 9 typed lists
+/// Test-only projection of a <see cref="FrameDelta"/> into typed lists
 /// that earlier API versions exposed directly. Parsing is lazy and cached
 /// per-instance via <see cref="ConditionalWeakTable{TKey,TValue}"/>, so the
 /// production type stays unburdened.
@@ -16,8 +16,6 @@ internal static class FrameDeltaTestExtensions
     {
         public List<Entity> Reserved = new(16);
         public List<RawCreatedEntity> Created = new(16);
-        public List<AddChildCommand> AddChild = new(16);
-        public List<UnAddChildCommand> RemoveChild = new(16);
         public List<RawComponentCommand> Add = new(16);
         public List<RawComponentCommand> Set = new(16);
         public List<RawRemoveCommand> Remove = new(16);
@@ -68,15 +66,6 @@ internal static class FrameDeltaTestExtensions
                     p.Created.Add(new RawCreatedEntity(decoder.Entity, comps));
                     break;
                 }
-                case DeltaOpKind.AddChild:
-                {
-                    var parent = decoder.ReadExtraEntity();
-                    p.AddChild.Add(new AddChildCommand(parent, decoder.Entity));
-                    break;
-                }
-                case DeltaOpKind.RemoveChild:
-                    p.RemoveChild.Add(new UnAddChildCommand(decoder.Entity));
-                    break;
                 case DeltaOpKind.Add:
                 {
                     var comp = decoder.ReadComponentType();
@@ -115,8 +104,6 @@ internal static class FrameDeltaTestExtensions
 
     public static List<Entity> ReservedEntities(this FrameDelta delta) => Parse(delta).Reserved;
     public static List<RawCreatedEntity> CreatedEntities(this FrameDelta delta) => Parse(delta).Created;
-    public static List<AddChildCommand> AddChildCommands(this FrameDelta delta) => Parse(delta).AddChild;
-    public static List<UnAddChildCommand> UnAddChildCommands(this FrameDelta delta) => Parse(delta).RemoveChild;
     public static List<RawComponentCommand> AddCommands(this FrameDelta delta) => Parse(delta).Add;
     public static List<RawComponentCommand> SetCommands(this FrameDelta delta) => Parse(delta).Set;
     public static List<RawRemoveCommand> RemoveCommands(this FrameDelta delta) => Parse(delta).Remove;

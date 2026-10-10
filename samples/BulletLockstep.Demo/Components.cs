@@ -54,14 +54,12 @@ public readonly record struct Damage(int Amount);
 public readonly record struct Target(int HostId);
 public readonly record struct TurnRate(int MilliPixPerFrameSq);
 
-// ── Boss hierarchy (Slice 5) ──────────────────────────────────────────
-// Boss + WeakPoint form a parent/child hierarchy via World.AddChild. Destroying
-// the Boss cascades to all linked WeakPoints automatically.
+// ── Boss encounter (Slice 5) ──────────────────────────────────────────
+// A single boss and its indexed weak points are located by their gameplay tags.
 
 public readonly record struct BossTag();
 public readonly record struct AIPattern(int Phase, int PhaseFrame);
 public readonly record struct WeakPointTag(int Index);
-// LocalOffset positions a WeakPoint relative to its parent Boss. The
-// WeakPointFollowSystem reads boss Position + LocalOffset to update the
-// weakpoint's own Position every frame.
+// LocalOffset positions a WeakPoint relative to the encounter's Boss.
+// WeakPointFollowSystem reads boss Position + LocalOffset every frame.
 public readonly record struct LocalOffset(int Dx, int Dy);

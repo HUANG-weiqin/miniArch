@@ -161,9 +161,6 @@ public sealed class FrameDelta
                     case DeltaOpKind.Create:
                         decoder.SkipCreatePayload();
                         break;
-                    case DeltaOpKind.AddChild:
-                        decoder.ReadExtraEntity();
-                        break;
                 }
             }
         }
@@ -294,16 +291,6 @@ public sealed class FrameDelta
                     ValidateComponentType(decoder.ReadComponentType().Value);
                     break;
 
-                case DeltaOpKind.AddChild:
-                {
-                    ValidateOperationTargetState(decoder.Entity, reserved, terminal, created);
-                    var parent = decoder.ReadExtraEntity();
-                    ValidateEntityShape(parent);
-                    ValidateOperationTargetState(parent, reserved, terminal, created);
-                    break;
-                }
-
-                case DeltaOpKind.RemoveChild:
                 case DeltaOpKind.Destroy:
                     ValidateOperationTargetState(decoder.Entity, reserved, terminal, created);
                     break;
@@ -474,19 +461,6 @@ public sealed class FrameDelta
 
         internal void AddRelease(Entity entity) => AddOperation(GetEntityOperationWireSize(entity));
         internal void AddDestroy(Entity entity) => AddOperation(GetEntityOperationWireSize(entity));
-        internal void AddRemoveChild(Entity child) => AddOperation(GetEntityOperationWireSize(child));
-
-        internal void AddRemoveChild(Entity child, bool useMaxEntityWireSize) =>
-            AddOperation(1 + GetBudgetEntityWireSize(child, useMaxEntityWireSize));
-
-        internal void AddAddChild(Entity parent, Entity child) =>
-            AddOperation(GetAddChildOperationWireSize(parent, child));
-
-        internal void AddAddChild(
-            Entity parent, Entity child, bool useMaxParentWireSize, bool useMaxChildWireSize) =>
-            AddOperation(1L + GetBudgetEntityWireSize(child, useMaxChildWireSize) +
-                GetBudgetEntityWireSize(parent, useMaxParentWireSize));
-
         internal void AddRemove(Entity entity, ComponentType componentType) =>
             AddOperation(GetRemoveOperationWireSize(entity, componentType));
 
@@ -600,10 +574,6 @@ public sealed class FrameDelta
     private static int GetEntityOperationWireSize(Entity entity) => 1 + GetEntityWireSize(entity);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static int GetAddChildOperationWireSize(Entity parent, Entity child) =>
-        1 + GetEntityWireSize(child) + GetEntityWireSize(parent);
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static int GetRemoveOperationWireSize(Entity entity, ComponentType componentType) =>
         1 + GetEntityWireSize(entity) + VarintSize(componentType.Value);
 
@@ -696,23 +666,6 @@ public sealed class FrameDelta
         _opCount++;
     }
 
-    internal void AddAddChild(Entity parent, Entity child)
-    {
-        EnsureOperationCapacity(GetAddChildOperationWireSize(parent, child));
-        WriteTag(DeltaOpKind.AddChild);
-        WriteEntity(child);
-        WriteEntity(parent);
-        _opCount++;
-    }
-
-    internal void AddRemoveChild(Entity child)
-    {
-        EnsureOperationCapacity(GetEntityOperationWireSize(child));
-        WriteTag(DeltaOpKind.RemoveChild);
-        WriteEntity(child);
-        _opCount++;
-    }
-
     internal void AddRemove(Entity e, ComponentType t)
     {
         EnsureOperationCapacity(GetRemoveOperationWireSize(e, t));
@@ -791,6 +744,9 @@ public sealed class FrameDelta
             // that silently skips an op it does not understand will desync.
             // Failing fast surfaces version mismatches at the first unknown op
             // instead of producing a subtly corrupted world.
+            if (opByte is 0x04 or 0x05)
+                throw new InvalidOperationException(
+                    $"FrameDelta hierarchy op kind 0x{opByte:X2} at offset {_pos - 1} is no longer supported; built-in hierarchy support was removed.");
             if (opByte < 0x01 || opByte > 0x09)
                 throw new InvalidOperationException(
                     $"Unknown FrameDelta op kind 0x{opByte:X2} at offset {_pos - 1}. " +
@@ -839,17 +795,6 @@ public sealed class FrameDelta
             // encoding a value wider than 32 bits, or the stream is corrupt.
             throw new InvalidOperationException(
                 $"Malformed FrameDelta: varint exceeds 32-bit range at offset {startPos}.");
-        }
-
-        /// <summary>
-        /// Reads the extra entity (AddChild parent) from the buffer.
-        /// Only valid when <see cref="Kind"/> is <see cref="DeltaOpKind.AddChild"/>.
-        /// </summary>
-        public Entity ReadExtraEntity()
-        {
-            var id = DecodeEntityId((uint)ReadVarint());
-            var ver = ReadVarint();
-            return new Entity(id, ver);
         }
 
         /// <summary>
@@ -925,8 +870,8 @@ public sealed class FrameDelta
     // ── Entity scan ────────────────────────────────────────────────────
 
     /// <summary>
-    /// Checks whether <paramref name="entity"/> appears as an operation endpoint
-    /// (including an AddChild parent). Component payload Entity fields are not scanned.
+    /// Checks whether <paramref name="entity"/> appears as an operation endpoint.
+    /// Component payload Entity fields are not scanned.
     /// O(n) linear scan over every operation.
     /// </summary>
     public bool HasEntity(Entity entity)
@@ -937,9 +882,6 @@ public sealed class FrameDelta
             if (decoder.Entity.Equals(entity)) return true;
             switch (decoder.Kind)
             {
-                case DeltaOpKind.AddChild:
-                    if (decoder.ReadExtraEntity().Equals(entity)) return true;
-                    break;
                 case DeltaOpKind.Add:
                 case DeltaOpKind.Set:
                     decoder.SkipData();
@@ -952,7 +894,6 @@ public sealed class FrameDelta
                     break;
                 case DeltaOpKind.Reserve:
                 case DeltaOpKind.Release:
-                case DeltaOpKind.RemoveChild:
                 case DeltaOpKind.Destroy:
                     // No extra payload beyond the entity read by MoveNext.
                     break;
@@ -1004,8 +945,7 @@ internal enum DeltaOpKind : byte
     Reserve = 0x01,
     Release = 0x02,
     Create = 0x03,
-    AddChild = 0x04,
-    RemoveChild = 0x05,
+    // 0x04 and 0x05 were hierarchy operations; never reuse them.
     Add = 0x06,
     Set = 0x07,
     Remove = 0x08,

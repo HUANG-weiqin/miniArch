@@ -265,25 +265,6 @@ public sealed class WorldLifecycleTests
         Assert.Equal(1, query.GetArchetypeSpan().Length);
     }
 
-    [Fact]
-    public void Link_stores_parent_relationship_and_children_list()
-    {
-        var world = new World();
-        var parent = world.CreateEmpty();
-        var firstChild = world.CreateEmpty();
-        var secondChild = world.CreateEmpty();
-
-        world.AddChild(parent, firstChild);
-        world.AddChild(parent, secondChild);
-
-        Assert.True(world.TryGetParent(firstChild, out var resolvedParent));
-        Assert.Equal(parent, resolvedParent);
-
-        var children = world.EnumerateChildren(parent).ToChildList();
-        Assert.Equal(2, children.Count);
-        Assert.Equal([firstChild, secondChild], children.OrderBy(entity => entity.Id).ToArray());
-    }
-
     private static MiniQueryCache CreateQuery<T>(World world) where T : unmanaged
     {
         var description = new QueryDescription().With<T>();
@@ -294,103 +275,6 @@ public sealed class WorldLifecycleTests
     {
         var description = new QueryDescription().With<T1>().With<T2>();
         return MiniQueryCache.Create(world, in description);
-    }
-
-    [Fact]
-    public void Link_reparents_child_to_latest_parent()
-    {
-        var world = new World();
-        var firstParent = world.CreateEmpty();
-        var secondParent = world.CreateEmpty();
-        var child = world.CreateEmpty();
-
-        world.AddChild(firstParent, child);
-        world.AddChild(secondParent, child);
-
-        Assert.True(world.TryGetParent(child, out var resolvedParent));
-        Assert.Equal(secondParent, resolvedParent);
-        Assert.False(world.HasChildren(firstParent));
-        Assert.Equal([child], world.EnumerateChildren(secondParent).ToChildList());
-    }
-
-    [Fact]
-    public void Link_rejects_self_link()
-    {
-        var world = new World();
-        var e = world.CreateEmpty();
-
-        Assert.Throws<InvalidOperationException>(() => world.AddChild(e, e));
-    }
-
-    [Fact]
-    public void Link_rejects_direct_cycle()
-    {
-        var world = new World();
-        var parent = world.CreateEmpty();
-        var child = world.CreateEmpty();
-
-        world.AddChild(parent, child);
-        // child -> parent would close the cycle
-        Assert.Throws<InvalidOperationException>(() => world.AddChild(child, parent));
-    }
-
-    [Fact]
-    public void Link_rejects_indirect_cycle()
-    {
-        var world = new World();
-        var a = world.CreateEmpty();
-        var b = world.CreateEmpty();
-        var c = world.CreateEmpty();
-
-        world.AddChild(a, b);
-        world.AddChild(b, c);
-        // c -> a closes a three-deep cycle
-        Assert.Throws<InvalidOperationException>(() => world.AddChild(c, a));
-    }
-
-    // Regression: snapshot/clone restore path bypassed ValidateAddChild, which
-    // meant a tampered snapshot could install a hierarchy cycle that later
-    // hung CollectDestroySubtree. AddChildFromSnapshot must reject cycles too.
-    [Fact]
-    public void BUG_AddChildFromSnapshot_rejects_cycle_consistently_in_Debug()
-    {
-        var world = new World();
-        var parent = world.CreateEmpty();
-        var child = world.CreateEmpty();
-
-        // Establish a legitimate AddChild so a cycle is now possible.
-        world.AddChildFromSnapshot(parent, child);
-
-        // Attempt to close the cycle through the restore path.
-        Assert.Throws<InvalidOperationException>(() => world.AddChildFromSnapshot(child, parent));
-    }
-
-    [Fact]
-    public void AddChildFromSnapshot_rejects_self_link()
-    {
-        var world = new World();
-        var e = world.CreateEmpty();
-
-        Assert.Throws<InvalidOperationException>(() => world.AddChildFromSnapshot(e, e));
-    }
-
-    [Fact]
-    public void Destroy_parent_cascades_to_all_descendants()
-    {
-        var world = new World();
-        var root = world.CreateEmpty();
-        var child = world.CreateEmpty();
-        var grandChild = world.CreateEmpty();
-
-        world.AddChild(root, child);
-        world.AddChild(child, grandChild);
-
-        world.Destroy(root);
-
-        Assert.False(world.IsAlive(root));
-        Assert.False(world.IsAlive(child));
-        Assert.False(world.IsAlive(grandChild));
-        Assert.False(world.HasChildren(root));
     }
 
     [Fact]
@@ -508,7 +392,7 @@ public sealed class WorldLifecycleTests
     }
 
     [Fact]
-    public void Destroy_query_matches_materialized_query_destroy_loop_with_cascade()
+    public void Destroy_query_matches_materialized_query_destroy_loop()
     {
         var expected = BuildDestroyProofWorld(out _);
         var actual = BuildDestroyProofWorld(out _);
@@ -641,36 +525,6 @@ public sealed class WorldLifecycleTests
     }
 
     [Fact]
-    public void Warmed_destroy_cascade_path_does_not_allocate()
-    {
-        RunOnDedicatedThread(() =>
-        {
-            WarmupDestroyCascadeAllocations();
-
-            var world = new World();
-            var root = world.CreateEmpty();
-            var child = world.CreateEmpty();
-            var grandChild = world.CreateEmpty();
-
-            world.AddChild(root, child);
-            world.AddChild(child, grandChild);
-
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
-
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            world.Destroy(root);
-            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-
-            Assert.False(world.IsAlive(root));
-            Assert.False(world.IsAlive(child));
-            Assert.False(world.IsAlive(grandChild));
-            Assert.Equal(0, allocated);
-        });
-    }
-
-    [Fact]
     public void Warmed_create_with_components_does_not_allocate_for_archetype_lookup()
     {
         RunOnDedicatedThread(() =>
@@ -728,48 +582,6 @@ public sealed class WorldLifecycleTests
         Assert.True(world.IsAlive(entity));
     }
 
-    [Fact]
-    public void Reused_entity_slot_does_not_inherit_destroyed_relationship()
-    {
-        var world = new World();
-        var parent = world.CreateEmpty();
-        var child = world.CreateEmpty();
-
-        world.AddChild(parent, child);
-        world.Destroy(child);
-
-        var replacement = world.CreateEmpty();
-
-        Assert.Equal(child.Id, replacement.Id);
-        Assert.NotEqual(child.Version, replacement.Version);
-        Assert.False(world.TryGetParent(replacement, out _));
-        Assert.False(world.HasChildren(parent));
-    }
-
-    [Fact]
-    public void HasChildren_returns_false_for_stale_entity()
-    {
-        var world = new World();
-        var parent = world.CreateEmpty();
-        var child = world.CreateEmpty();
-        world.AddChild(parent, child);
-        Assert.True(world.HasChildren(parent));
-        world.Destroy(parent);
-        Assert.False(world.HasChildren(parent));
-    }
-
-    private static void WarmupDestroyCascadeAllocations()
-    {
-        var world = new World();
-        var root = world.CreateEmpty();
-        var child = world.CreateEmpty();
-        var grandChild = world.CreateEmpty();
-
-        world.AddChild(root, child);
-        world.AddChild(child, grandChild);
-        world.Destroy(root);
-    }
-
     private static World BuildDestroyProofWorld(out Entity[] entities)
     {
         var world = new World(chunkCapacity: 4, entityCapacity: 32);
@@ -783,10 +595,6 @@ public sealed class WorldLifecycleTests
         var velocityLeaf = world.Create(new Velocity(7, 70));
         var unrelatedSurvivor = world.Create(new C2(800));
         var stale = world.Create(new C3(900));
-
-        world.AddChild(root, child);
-        world.AddChild(child, grandChild);
-        world.AddChild(root, sibling);
 
         world.Destroy(stale);
 
@@ -810,13 +618,13 @@ public sealed class WorldLifecycleTests
     {
         return
         [
-            entities[1], // child before parent: proves loop-order cascade parity
+            entities[1], // mixed archetype input order
             entities[8], // stale/dead handle must be skipped
-            entities[4], // childless leaf batched with others
-            entities[0], // parent cascades remaining subtree
+            entities[4], // position entity batched with others
+            entities[0], // another archetype
             entities[1], // duplicate already killed by earlier input
-            entities[6], // different archetype childless leaf
-            entities[4]  // duplicate childless leaf
+            entities[6], // different archetype
+            entities[4]  // duplicate position entity
         ];
     }
 
@@ -887,7 +695,6 @@ public sealed class WorldLifecycleTests
         var actualDigest = WorldDigest.Compute(actual);
         Assert.Equal(expectedDigest.Occupancy, actualDigest.Occupancy);
         Assert.Equal(expectedDigest.FreeList, actualDigest.FreeList);
-        Assert.Equal(expectedDigest.Hierarchy, actualDigest.Hierarchy);
         AssertEqualComponentDigests(expectedDigest, actualDigest);
 
         // Do not compare WorldDigest.Total here: it includes PerArchetype physical
@@ -1043,57 +850,4 @@ public sealed class WorldLifecycleTests
         Assert.False(released);
     }
 
-    // Hierarchy operations (AddChild/RemoveChild/TryGetParent) on entities
-    // that belong to chunked archetypes. Hierarchy uses entity IDs, not
-    // row indices, so it should be safe regardless of storage mode.
-    [Fact]
-    public void Hierarchy_works_on_chunked_archetype_entities()
-    {
-        var world = new World(chunkCapacity: 4, entityCapacity: 4);
-
-        // Create enough entities with Position to force chunked promotion
-        var parents = new Entity[3];
-        for (var i = 0; i < parents.Length; i++)
-        {
-            parents[i] = world.Create(new Position(i, i * 10));
-        }
-
-        // Make children that share the same chunked archetype
-        var child1 = world.Create(new Position(100, 200));
-        var child2 = world.Create(new Position(300, 400));
-
-        // Ensure parent archetype is chunked
-        Assert.True(world.TryGetLocation(parents[0], out var info));
-        info.Archetype.ForceChunkedForTesting();
-        // Same archetype since all have Position only
-        Assert.True(info.Archetype.IsChunked);
-
-        // Also ensure children archetype is chunked
-        Assert.True(world.TryGetLocation(child1, out var childInfo));
-        Assert.Equal(info.Archetype, childInfo.Archetype);
-
-        // Hierarchy operations
-        world.AddChild(parents[0], child1);
-        world.AddChild(parents[0], child2);
-
-        Assert.True(world.TryGetParent(child1, out var resolvedParent));
-        Assert.Equal(parents[0], resolvedParent);
-
-        var children = world.EnumerateChildren(parents[0]).ToChildList();
-        Assert.Equal(2, children.Count);
-        Assert.Contains(child1, children);
-        Assert.Contains(child2, children);
-
-        // RemoveChild
-        world.RemoveChild(child1);
-        Assert.False(world.TryGetParent(child1, out _));
-        children = world.EnumerateChildren(parents[0]).ToChildList();
-        Assert.Single(children);
-        Assert.Equal(child2, children[0]);
-
-        // Destroy an entity in a chunked archetype that has children
-        world.AddChild(parents[1], child1);
-        world.Destroy(child1);
-        Assert.False(world.IsAlive(child1));
-    }
 }

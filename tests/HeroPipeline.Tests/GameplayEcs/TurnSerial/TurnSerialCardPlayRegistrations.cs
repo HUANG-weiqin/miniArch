@@ -101,11 +101,12 @@ public static class TurnSerialCardPlayRegistrations
         if (!frame.TryGet(card, out ActionEntity _) ||
             !frame.TryGet(card, out CardZone zone) ||
             zone.Value != CardZoneKind.Hand ||
-            !frame.TryGetParent(card, out owner))
+            !frame.TryGet(card, out ActionOwner actionOwner))
         {
             return false;
         }
 
+        owner = actionOwner.Value;
         return true;
     }
 

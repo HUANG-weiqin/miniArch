@@ -10,8 +10,6 @@ internal static class Program
     private const int MultiArchCount = 16;
     private const int MultiArchEntitiesPer = 2_500;
     private const int MultiArchTotal = MultiArchCount * MultiArchEntitiesPer;
-    private const int CascadeRoots = 15_000;
-    private const int PartialCascadeRoots = 20_000;
     private const int SparseTotal = 50_000;
     private const int SparseKill = 4;
 
@@ -50,20 +48,6 @@ internal static class Program
                 DestroyPositionQueryWithMaterializedLoop,
                 DestroyPositionQuery,
                 MinSpeedup: 1.20),
-            new Scenario(
-                "full cascade forest",
-                CascadeRoots,
-                BuildCascadeForestWorld,
-                DestroyWithGuardedLoop,
-                DestroyWithBatchDestroy,
-                MinSpeedup: 1.20),
-            new Scenario(
-                "partial cascade forest",
-                PartialCascadeRoots / 2,
-                BuildPartialCascadeForestWorld,
-                DestroyWithGuardedLoop,
-                DestroyWithBatchDestroy,
-                MinSpeedup: 1.05),
             new Scenario(
                 "sparse: 4 of 50000",
                 SparseKill,
@@ -117,11 +101,11 @@ internal static class Program
     {
         const int Seconds = 3;
 
-        Console.WriteLine("Clear(query) — archetype-level bulk entity removal (no hierarchy)");
+        Console.WriteLine("Clear(query) — archetype-level bulk entity removal");
         Console.WriteLine();
 
         // Correctness: Clear must produce same surviving-entity set
-        // as Destroy(query) when there is no hierarchy.
+        // as Destroy(query) for matching entities.
         VerifyClear(BuildQueryWorld, QueryEntities, "1 archetype");
         VerifyClear(BuildMultiArchetypeWorld, MultiArchTotal, $"{MultiArchCount} archetypes");
 
@@ -563,54 +547,6 @@ internal static class Program
         for (var i = 0; i < 16; i++)
             world.Create(new Velocity(-i, i));
         return new WorldSetup(world, []);
-    }
-
-    private static WorldSetup BuildCascadeForestWorld()
-    {
-        var world = new World(entityCapacity: CascadeRoots * 3);
-        var roots = new Entity[CascadeRoots];
-
-        for (var i = 0; i < roots.Length; i++)
-        {
-            var root = world.Create(
-                new Position(i, i + 1), new Velocity(i + 2, i + 3),
-                new A(i), new B(i), new C(i), new D(i));
-            var child = world.Create(
-                new Position(i + 4, i + 5),
-                new A(i + 6), new B(i + 7), new C(i + 8), new D(i + 9));
-            var grandChild = world.Create(
-                new Velocity(i + 10, i + 11),
-                new A(i + 12), new B(i + 13), new C(i + 14), new D(i + 15));
-            world.AddChild(root, child);
-            world.AddChild(child, grandChild);
-            roots[i] = root;
-        }
-        return new WorldSetup(world, roots);
-    }
-
-    private static WorldSetup BuildPartialCascadeForestWorld()
-    {
-        var world = new World(entityCapacity: PartialCascadeRoots * 3);
-        var roots = new Entity[PartialCascadeRoots / 2];
-
-        for (var i = 0; i < PartialCascadeRoots; i++)
-        {
-            var root = world.Create(
-                new Position(i, i + 1), new Velocity(i + 2, i + 3),
-                new A(i), new B(i), new C(i), new D(i));
-            var child = world.Create(
-                new Position(i + 4, i + 5),
-                new A(i + 6), new B(i + 7), new C(i + 8), new D(i + 9));
-            var grandChild = world.Create(
-                new Velocity(i + 10, i + 11),
-                new A(i + 12), new B(i + 13), new C(i + 14), new D(i + 15));
-            world.AddChild(root, child);
-            world.AddChild(child, grandChild);
-
-            if ((i & 1) == 0)
-                roots[i / 2] = root;
-        }
-        return new WorldSetup(world, roots);
     }
 
     private static WorldSetup BuildSparseWorld()

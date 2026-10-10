@@ -23,8 +23,7 @@ public static class WorldDiff
     /// <summary>
     /// Compares two worlds by slot index. Entities are matched by
     /// <see cref="Entity.Id"/> —this is correct for lockstep peers that
-    /// replay the same delta sequence. Free lists and hierarchy edges are
-    /// included in the comparison.
+    /// replay the same delta sequence. Free lists are included in the comparison.
     /// </summary>
     /// <exception cref="InvalidOperationException">
     /// Thrown when either world has pending entity reservations
@@ -71,10 +70,8 @@ public static class WorldDiff
             var verB = recB.Version;
 
             var componentDiffs = CompareComponents(recA, recB);
-            var hierarchyDiff = CompareHierarchy(worldA, worldB, id);
-
             var hasVersionMismatch = verA != verB;
-            var hasAnyDiff = hasVersionMismatch || componentDiffs.Count > 0 || hierarchyDiff is not null;
+            var hasAnyDiff = hasVersionMismatch || componentDiffs.Count > 0;
 
             if (!hasAnyDiff) continue;
 
@@ -82,8 +79,7 @@ public static class WorldDiff
                 id, EntityDiffKind.Different,
                 new Entity(id, verA), new Entity(id, verB),
                 hasVersionMismatch,
-                componentDiffs,
-                hierarchyDiff));
+                componentDiffs));
         }
 
         var freeListDiff = CompareFreeLists(worldA, worldB);
@@ -204,52 +200,39 @@ public static class WorldDiff
         return diffs;
     }
 
-    private static HierarchyDiff? CompareHierarchy(World worldA, World worldB, int childId)
-    {
-        var hasParentA = worldA.Hierarchy.TryGetParent(
-            worldA, new Entity(childId, GetRecord(worldA, childId).Version), out var parentA);
-        var hasParentB = worldB.Hierarchy.TryGetParent(
-            worldB, new Entity(childId, GetRecord(worldB, childId).Version), out var parentB);
-
-        var idA = hasParentA ? parentA.Id : -1;
-        var idB = hasParentB ? parentB.Id : -1;
-
-        if (idA == idB) return null;
-        return new HierarchyDiff(idA, idB);
-    }
-
     private static FreeListDiff? CompareFreeLists(World worldA, World worldB)
     {
         var freeA = worldA.FreeList;
         var freeB = worldB.FreeList;
 
-        if (freeA.Length == freeB.Length &&
-            worldA.EntitySlotCount == worldB.EntitySlotCount &&
-            MemoryExtensions.SequenceEqual(freeA, freeB))
-        {
-            return null;
-        }
-
+        var recordsA = worldA.EntityRecords;
+        var recordsB = worldB.EntityRecords;
         var diffs = new List<FreeSlotDiff>();
         var minLen = Math.Min(freeA.Length, freeB.Length);
 
         for (var i = 0; i < minLen; i++)
         {
-            var a = freeA[i];
-            var b = freeB[i];
-            if (a.Id == b.Id && a.Version == b.Version) continue;
+            var idA = freeA[i];
+            var idB = freeB[i];
+            var versionA = recordsA[idA].Version;
+            var versionB = recordsB[idB].Version;
+            if (idA == idB && versionA == versionB) continue;
 
-            if (a.Id != b.Id)
-                diffs.Add(new FreeSlotDiff(a.Id, FreeSlotDiffKind.OrderMismatch, a.Version, b.Version, b.Id));
+            if (idA != idB)
+                diffs.Add(new FreeSlotDiff(idA, FreeSlotDiffKind.OrderMismatch, versionA, versionB, idB));
             else
-                diffs.Add(new FreeSlotDiff(a.Id, FreeSlotDiffKind.VersionMismatch, a.Version, b.Version));
+                diffs.Add(new FreeSlotDiff(idA, FreeSlotDiffKind.VersionMismatch, versionA, versionB));
         }
 
         for (var i = minLen; i < freeA.Length; i++)
-            diffs.Add(new FreeSlotDiff(freeA[i].Id, FreeSlotDiffKind.ExtraInA, freeA[i].Version, 0));
+            diffs.Add(new FreeSlotDiff(freeA[i], FreeSlotDiffKind.ExtraInA, recordsA[freeA[i]].Version, 0));
 
         for (var i = minLen; i < freeB.Length; i++)
-            diffs.Add(new FreeSlotDiff(freeB[i].Id, FreeSlotDiffKind.ExtraInB, 0, freeB[i].Version));
+            diffs.Add(new FreeSlotDiff(freeB[i], FreeSlotDiffKind.ExtraInB, 0, recordsB[freeB[i]].Version));
+
+        if (diffs.Count == 0 && freeA.Length == freeB.Length &&
+            worldA.EntitySlotCount == worldB.EntitySlotCount)
+            return null;
 
         return new FreeListDiff(
             freeA.Length, freeB.Length,
@@ -272,7 +255,7 @@ public sealed class WorldDiffResult
     }
 
     /// <summary>
-    /// True when entity state, hierarchy, and free lists are identical
+    /// True when entity state and free lists are identical
     /// between the two worlds.
     /// </summary>
     public bool AreIdentical => _entityDiffs.Count == 0 && FreeListDiff is null;
@@ -335,19 +318,11 @@ public sealed class EntityDiff
     /// </summary>
     public IReadOnlyList<ComponentDiff> ComponentDiffs { get; }
 
-    /// <summary>
-    /// Hierarchy difference for this entity, or <c>null</c> when the
-    /// parent-child relationship is identical. Only meaningful when
-    /// <see cref="Kind"/> is <see cref="EntityDiffKind.Different"/>.
-    /// </summary>
-    public HierarchyDiff? HierarchyDiff { get; }
-
     internal EntityDiff(
         int entityId, EntityDiffKind kind,
         Entity entityA, Entity entityB,
         bool versionMismatch = false,
-        IReadOnlyList<ComponentDiff>? componentDiffs = null,
-        HierarchyDiff? hierarchyDiff = null)
+        IReadOnlyList<ComponentDiff>? componentDiffs = null)
     {
         EntityId = entityId;
         Kind = kind;
@@ -355,7 +330,6 @@ public sealed class EntityDiff
         EntityB = entityB;
         VersionMismatch = versionMismatch;
         ComponentDiffs = FreezeComponentDiffs(componentDiffs);
-        HierarchyDiff = hierarchyDiff;
     }
 
     private static ReadOnlyCollection<ComponentDiff> FreezeComponentDiffs(
@@ -387,8 +361,7 @@ public sealed class EntityDiff
             EntityDiffKind.Different => $"Entity {EntityId} differs " +
                 $"(v{EntityA.Version} vs v{EntityB.Version}" +
                 $"{(VersionMismatch ? " VERSION_MISMATCH" : "")}, " +
-                $"{ComponentDiffs.Count} component diffs" +
-                $"{(HierarchyDiff is not null ? ", hierarchy" : "")})",
+                $"{ComponentDiffs.Count} component diffs)",
             _ => $"Entity {EntityId}: {Kind}"
         };
     }
@@ -427,28 +400,6 @@ public sealed class ComponentDiff
     /// <inheritdoc/>
     public override string ToString() =>
         $"{ComponentType.Name}: {Kind}";
-}
-
-/// <summary>
-/// Parent-child difference for an entity that exists in both worlds.
-/// </summary>
-public sealed class HierarchyDiff
-{
-    /// <summary>Parent entity id in world A, or -1 if the entity has no parent in A.</summary>
-    public int ParentIdA { get; }
-
-    /// <summary>Parent entity id in world B, or -1 if the entity has no parent in B.</summary>
-    public int ParentIdB { get; }
-
-    internal HierarchyDiff(int parentIdA, int parentIdB)
-    {
-        ParentIdA = parentIdA;
-        ParentIdB = parentIdB;
-    }
-
-    /// <inheritdoc/>
-    public override string ToString() =>
-        $"Parent: {ParentIdA} (A) vs {ParentIdB} (B)";
 }
 
 /// <summary>

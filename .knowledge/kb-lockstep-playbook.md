@@ -2,7 +2,7 @@
 title: Lockstep Playbook
 module: Meta
 description: End-to-end guide for implementing lockstep multiplayer on miniArch — from recording commands to peer synchronization and divergence detection
-updated: 2026-09-28
+updated: 2026-10-10
 ---
 # Lockstep Playbook
 
@@ -62,17 +62,17 @@ stream.DeferredEntities = true;  // Create() 返回 placeholder Entity(-1, seq)
 
 > **关键**：所有 host 必须从 frame 0 完整重放。不支持断点续传/增量同步（见 `kb-command-stream.md` "关键约束"）。
 >
-> **Replay 后查询占位符对应的本地 real entity**：
+> **Replay 后查询自己创建的 placeholder 对应的本地 real entity**：
 > ```csharp
-> world.Replay(deltaA);
-> var slot = myStream.Track(myPlaceholder);  // auto-resolved on Replay
-> {
->     // real 在 host A/B/C 上都是同一个 Entity(3, 1)
->     // 直接存组件跨帧用
->     world.Set(tracker, new Target { Value = real });
-> }
+> var myPlaceholder = myStream.Create();
+> var slot = myStream.Track(myPlaceholder);   // Snapshot + Clear 前注册
+> var myDelta = myStream.Snapshot();
+> myStream.Clear();
+> myStream.Replay(myDelta, resolveSlots: true);
+> var real = slot.Value;                      // 当前 World 中解析后的 Entity
+> world.Set(tracker, new Target { Value = real });
 > ```
-> 详见 `kb-deferred-create-design.md` EntitySlot 节。
+> peer delta 不属于此 slot，不传 `resolveSlots: true`；详见 `kb-deferred-create-design.md` EntitySlot 节。
 
 ## 决定性行为
 
@@ -99,7 +99,7 @@ stream.DeferredEntities = true;  // Create() 返回 placeholder Entity(-1, seq)
 | 丢包/乱序重排 | ❌ | 调用方需按帧号排序后逐个 Replay |
 | Late-join / 断线重连 | ❌ | 无 checkpoint / id remap 机制 |
 | Divergent peer resync | ❌ | `EnsureReplayReservation` 抛异常而非尝试对齐 |
-| Client prediction + rollback | ⚠️ 有基础 | `CaptureState/RestoreState` 支持 GGPO 式原地回滚，但无 netcode 层集成；回滚必须遵守 CommandStream 排空合同（`docs/api.md` Rollback contract） |
+| Client prediction + rollback | ⚠️ 有基础 | `CaptureState/RestoreState` 支持 GGPO 式原地回滚，但无 netcode 层集成；Capture 拒绝 outstanding real-id reservation，Restore 后旧 CommandStream 帧须 `Clear()` 丢弃（`docs/api.md` Rollback contract） |
 
 ## 相关页面
 
@@ -110,4 +110,4 @@ stream.DeferredEntities = true;  // Create() 返回 placeholder Entity(-1, seq)
 | 步骤 2c-2d 序列化 | `kb-command-stream.md`（AsSpan / FromWire / Deserialize） |
 | 步骤 2e replay | `kb-command-stream.md`（ReplayCore + EnsureReplayReservation） |
 | 步骤 2g checksum | `kb-snapshot-persistence.md`（Checksum 双模式段） |
-| Rollback 基础 | `kb-snapshot-persistence.md`（CaptureState/RestoreState + 公开排空合同） |
+| Rollback 基础 | `kb-snapshot-persistence.md`（CaptureState/RestoreState + 命令时间线合同） |

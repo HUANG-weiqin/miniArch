@@ -34,11 +34,8 @@ public sealed class LockstepHost
     }
 
     // Frame 0 init. Every host records its own player. Host 0 additionally
-    // records the Boss + 5 WeakPoints + 5 AddChild ops. Because all hosts replay
-    // every host's frame-0 delta in fixed HostId order, every host ends up
-    // with: N players + 1 boss + 5 weakpoints, all hierarchically linked.
-    // The placeholder refs in AddChild() are valid because Create + AddChild happen
-    // in the same frame's record.
+    // records the Boss + 5 WeakPoints. Because all hosts replay every host's
+    // frame-0 delta in fixed HostId order, each host gets the same encounter.
     public void RecordInit(bool spawnBoss, bool scaleMode = false)
     {
         var player = Stream.Create();
@@ -48,10 +45,10 @@ public sealed class LockstepHost
         Stream.Add(player, new Health(1000, 1000));
 
         if (spawnBoss && HostId == 0)
-            RecordBossHierarchy(scaleMode);
+            RecordBossEncounter(scaleMode);
     }
 
-    private void RecordBossHierarchy(bool scaleMode)
+    private void RecordBossEncounter(bool scaleMode)
     {
         const int weakPointCount = 5;
         var boss = Stream.Create();
@@ -75,7 +72,6 @@ public sealed class LockstepHost
             Stream.Add(wp, new LocalOffset(
                 (int)(Math.Cos(angle) * 8000),
                 (int)(Math.Sin(angle) * 8000)));
-            Stream.AddChild(boss, wp);
         }
     }
 

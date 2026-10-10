@@ -18,7 +18,7 @@ namespace MiniArch;
 /// <item><b>Structural changes</b> —<see cref="CreateEmpty"/>, <see cref="Destroy(Entity)"/>,
 /// <see cref="Destroy(ReadOnlySpan{Entity})"/>, <see cref="Destroy(in QueryDescription)"/>,
 /// <see cref="Add{T}"/>, <see cref="Set{T}"/>, <see cref="Remove{T}"/>,
-/// <see cref="AddChild"/>, <see cref="Clone(Entity)"/> —are <b>not</b> thread-safe
+/// <see cref="Clone(Entity)"/> —are <b>not</b> thread-safe
 /// and must be issued from a single thread (typically the main game thread)
 /// or deferred through <c>CommandStream</c>.</item>
 /// <item><b>Reads</b> —<see cref="Has{T}"/>, <see cref="Get{T}"/>,
@@ -67,8 +67,7 @@ public sealed partial class World : IDisposable
     private int[] _destroyRowMarks = [];
     private int _destroyRowMarkGen;
 
-    // World-owned scratch arrays for batch destroy, pre-sized to entityCapacity and grown
-    // on demand — zero per-call allocation in steady state (no ArrayPool overhead).
+    // World-owned batch destroy scratch, allocated on first use and reused afterward.
     private Archetype[] _destroyGroupArchetypes = [];
     private int[] _destroyGroupCounts = [];
     private int[] _destroyGroupFirstCandidate = [];
@@ -83,6 +82,10 @@ public sealed partial class World : IDisposable
     /// as an epoch guard to avoid scanning pending batches on the normal Submit path.
     /// </summary>
     internal int ReservedReleaseEpoch;
+
+    // Not part of a snapshot: a restored allocator may reuse the same
+    // (id, version), but commands recorded on the old timeline must not.
+    internal ulong CommandTimeline = 1;
 
     internal int _reservedCount;
 #if DEBUG
@@ -99,14 +102,13 @@ public sealed partial class World : IDisposable
     // Snapshot by Replay() to populate the internal mapping for TryResolvePlaceholder.
     private int _replayMapCount;
 
-    private readonly HierarchyTable _hierarchy = new();
     private EntityRecord[] _records;
     private int _entitySlotCount;
     private Dictionary<QueryDescription, QueryFilter> _queryFiltersByDescription = new();
     private Dictionary<QueryFilter, MiniArch.Core.QueryCache> _queries = new();
     private Archetype[] _archetypeSnapshot = Array.Empty<Archetype>();
     private readonly int _chunkCapacity;
-    private RecycledEntity[] _freeIds;
+    private int[] _freeIds;
     private int _freeIdCount;
 
     private volatile int _createArchetypeCacheGeneration;
@@ -145,17 +147,8 @@ public sealed partial class World : IDisposable
         _chunkCapacity = chunkCapacity;
         _records = new EntityRecord[entityCapacity];
         _entitySlotCount = 0;
-        _freeIds = entityCapacity == 0 ? Array.Empty<RecycledEntity>() : new RecycledEntity[entityCapacity];
-        _destroyVisitedGen = entityCapacity == 0 ? [] : new int[entityCapacity];
-        _destroyRowMarks = entityCapacity == 0 ? [] : new int[entityCapacity];
-        _destroyOrderScratch = new List<Entity>(entityCapacity);
-        _destroyGroupArchetypes = new Archetype[entityCapacity];
-        _destroyGroupCounts = new int[entityCapacity];
-        _destroyGroupFirstCandidate = new int[entityCapacity];
-        _destroyCandidateNext = new int[entityCapacity];
-        _destroyCandidateRows = new int[entityCapacity];
-        _destroyCompactRows = new int[entityCapacity];
-        _destroyFullGroups = new bool[entityCapacity];
+        _freeIds = entityCapacity == 0 ? [] : new int[entityCapacity];
+        _destroyOrderScratch = new List<Entity>();
     }
 
     /// <summary>
@@ -190,7 +183,6 @@ public sealed partial class World : IDisposable
         _replayPlaceholderMap = [];
         _replayMapCount = 0;
         _stateSnapshotPool.Clear();
-        _hierarchy.Reset();
         ClearCreateArchetypeCache();
         _createArchetypeCacheGeneration = int.MaxValue;
     }
@@ -303,8 +295,6 @@ public sealed partial class World : IDisposable
 
     internal Archetype[] Archetypes => Volatile.Read(ref _archetypeSnapshot);
 
-    internal HierarchyTable Hierarchy => _hierarchy;
-
     internal int ArchetypeCount => Volatile.Read(ref _archetypeSnapshot).Length;
 
     internal int ArchetypeCacheGeneration => _createArchetypeCacheGeneration;
@@ -359,84 +349,6 @@ public sealed partial class World : IDisposable
         }
 
         return new TransitionWatch<THandler>(filter, default);
-    }
-
-    /// <summary>
-    /// Adds a child to a parent.
-    /// </summary>
-    public void AddChild(Entity parent, Entity child)
-    {
-        AssertNotDisposed();
-        _hierarchy.AddChild(this, parent, child);
-    }
-
-    /// <summary>
-    /// Removes a child.
-    /// </summary>
-    public void RemoveChild(Entity child)
-    {
-        AssertNotDisposed();
-        RequireLocation(child);
-        _hierarchy.RemoveChild(child);
-    }
-
-    /// <summary>
-    /// Tries to get a parent entity.
-    /// </summary>
-    public bool TryGetParent(Entity child, out Entity parent)
-    {
-        AssertNotDisposed();
-        return _hierarchy.TryGetParent(this, child, out parent);
-    }
-
-    /// <summary>
-    /// Returns a zero-allocation enumerable over the live children of
-    /// <paramref name="parent"/>. Use <c>foreach</c> to iterate.
-    /// </summary>
-    public ChildrenEnumerable EnumerateChildren(Entity parent)
-    {
-        AssertNotDisposed();
-        return _hierarchy.EnumerateChildren(this, parent);
-    }
-
-    /// <summary>
-    /// Whether <paramref name="entity"/> has at least one live child.
-    /// </summary>
-    public bool HasChildren(Entity entity)
-    {
-        AssertNotDisposed();
-        return _hierarchy.HasChildren(this, entity);
-    }
-
-    /// <summary>
-    /// Returns true if <paramref name="entity"/> has no parent.
-    /// </summary>
-    public bool IsRoot(Entity entity)
-    {
-        AssertNotDisposed();
-        return IsAlive(entity) && !TryGetParent(entity, out _);
-    }
-
-    /// <summary>
-    /// Returns the depth of <paramref name="entity"/> in the hierarchy
-    /// (0 = root, 1 = child of root, etc.).
-    /// Returns -1 if the entity is not alive.
-    /// </summary>
-    public int GetDepth(Entity entity)
-    {
-        AssertNotDisposed();
-        return _hierarchy.Depth(this, entity);
-    }
-
-    /// <summary>
-    /// Returns a zero-allocation enumerable over the ancestors of
-    /// <paramref name="child"/>. Use <c>foreach</c> to iterate from
-    /// parent upward to the root.
-    /// </summary>
-    public AncestorEnumerable EnumerateAncestors(Entity child)
-    {
-        AssertNotDisposed();
-        return _hierarchy.EnumerateAncestors(this, child);
     }
 
     /// <summary>
@@ -534,19 +446,15 @@ public sealed partial class World : IDisposable
     }
 
     /// <summary>
-    /// Deep-clones an entity and its entire child subtree.
-    /// All component data is copied into new entities in the same archetypes.
-    /// Parent-child relations within the subtree are preserved; the clone root has no parent.
+    /// Clones one entity and all of its component data into a new entity.
     /// </summary>
     /// <param name="source">The entity to clone. Must be alive.</param>
-    /// <returns>A new entity that is the root of the cloned subtree.</returns>
+    /// <returns>The cloned entity.</returns>
     /// <exception cref="InvalidOperationException">Thrown when <paramref name="source"/> is no longer alive.</exception>
     public Entity Clone(Entity source)
     {
         AssertNotDisposed();
-        var root = CloneSingle(source);
-        DeepCloneChildren(source, root);
-        return root;
+        return CloneSingle(source);
     }
 
     private Entity CloneSingle(Entity source)
@@ -558,36 +466,10 @@ public sealed partial class World : IDisposable
         return entity;
     }
 
-    private void DeepCloneChildren(Entity sourceRoot, Entity cloneRoot)
-    {
-        if (!_hierarchy.HasChildren(this, sourceRoot)) return;
-
-        var stack = ArrayPool<CloneWork>.Shared.Rent(16);
-        var stackCount = 0;
-        try
-        {
-            PushPooled(ref stack, ref stackCount, new CloneWork(sourceRoot, cloneRoot));
-            while (stackCount > 0)
-            {
-                var work = stack[--stackCount];
-                foreach (var child in _hierarchy.EnumerateChildren(this, work.Source))
-                {
-                    var cloneChild = CloneSingle(child);
-                    _hierarchy.AddChild(this, work.CloneEntity, cloneChild);
-                    PushPooled(ref stack, ref stackCount, new CloneWork(child, cloneChild));
-                }
-            }
-        }
-        finally
-        {
-            ArrayPool<CloneWork>.Shared.Return(stack);
-        }
-    }
-
     /// <summary>
     /// Creates an independent, <b>ID-preserving</b> deep copy of this world.
-    /// Entity IDs match the source exactly — component data, hierarchy, and
-    /// free list are deep-copied, but <see cref="Entity"/> references inside
+    /// Entity IDs match the source exactly — component data and free list are
+    /// deep-copied, but <see cref="Entity"/> references inside
     /// component fields carry the source world's IDs. If the clone is used
     /// with a different <see cref="World"/> instance (different ID space),
     /// those embedded references will be stale.
@@ -865,18 +747,6 @@ public sealed partial class World : IDisposable
                         break;
                     }
 
-                    case DeltaOpKind.AddChild:
-                    {
-                        var child = ResolveReplayEntity(decoder.Entity, map, mapLen);
-                        var parent = ResolveReplayEntity(decoder.ReadExtraEntity(), map, mapLen);
-                        AddChild(parent, child);
-                        break;
-                    }
-
-                    case DeltaOpKind.RemoveChild:
-                        RemoveChild(ResolveReplayEntity(decoder.Entity, map, mapLen));
-                        break;
-
                     case DeltaOpKind.Add:
                     case DeltaOpKind.Set:
                     {
@@ -1038,14 +908,6 @@ public sealed partial class World : IDisposable
                     break;
                 }
 
-                case DeltaOpKind.AddChild:
-                {
-                    var parent = scanner.ReadExtraEntity();
-                    if (parent.Id >= 0 && parent.Id > maxEntityId)
-                        maxEntityId = Math.Min(parent.Id, Math.Max(_records.Length * 2, 65536));
-                    break;
-                }
-
                 case DeltaOpKind.Add:
                 case DeltaOpKind.Set:
                     scanner.SkipData();
@@ -1055,7 +917,7 @@ public sealed partial class World : IDisposable
                     scanner.ReadComponentType();
                     break;
 
-                // Release / RemoveChild / Destroy: entity must already exist.
+                // Release / Destroy: entity must already exist.
                 // Do NOT track maxEntityId — prevents OOM from malicious
                 // Destroy(Entity(100M,1)) pre-growing _records.
             }
@@ -1332,6 +1194,10 @@ public sealed partial class World : IDisposable
     public WorldStateSnapshot CaptureState()
     {
         AssertNotDisposed();
+        if (_reservedCount != 0)
+            throw new InvalidOperationException(
+                "Cannot CaptureState while entity ids are reserved. Submit or Clear the pending reservations first.");
+
         var snap = _stateSnapshotPool.Count > 0
             ? _stateSnapshotPool.Pop()
             : new WorldStateSnapshotPayload();
@@ -1344,8 +1210,7 @@ public sealed partial class World : IDisposable
 
         // Free ids
         snap.EnsureFreeIdsCapacity(_freeIdCount);
-        for (var i = 0; i < _freeIdCount; i++)
-            snap.FreeEntities[i] = new FreeEntityEntry(_freeIds[i].Id, _freeIds[i].Version);
+        Array.Copy(_freeIds, snap.FreeIds, _freeIdCount);
         snap.FreeIdCount = _freeIdCount;
 
         // Per-archetype data
@@ -1362,9 +1227,6 @@ public sealed partial class World : IDisposable
             backupIdx++;
         }
         snap.ArchetypeBackupCount = backupIdx;
-
-        // Hierarchy
-        _hierarchy.CaptureState(snap);
 
         snap.SourceWorld = this;
         return new WorldStateSnapshot(snap, generation);
@@ -1403,6 +1265,8 @@ public sealed partial class World : IDisposable
                 "Snapshots are tied to their originating world and cannot be shared.");
         }
 
+        var nextTimeline = checked(CommandTimeline + 1);
+
         // Records
         if (_records.Length < snap.EntitySlotCount)
             Array.Resize(ref _records, snap.EntitySlotCount);
@@ -1412,8 +1276,7 @@ public sealed partial class World : IDisposable
         // Free ids
         if (_freeIds.Length < snap.FreeIdCount)
             Array.Resize(ref _freeIds, snap.FreeIdCount);
-        for (var i = 0; i < snap.FreeIdCount; i++)
-            _freeIds[i] = new RecycledEntity(snap.FreeEntities[i].Id, snap.FreeEntities[i].Version);
+        Array.Copy(snap.FreeIds, _freeIds, snap.FreeIdCount);
         _freeIdCount = snap.FreeIdCount;
 
         RecalculateReservedCount();
@@ -1429,9 +1292,6 @@ public sealed partial class World : IDisposable
             entry.RestoreTo(entry.Archetype);
         }
 
-        // Hierarchy
-        _hierarchy.RestoreState(snap);
-
         // Clear replay state — stale after rollback.
         // ReplayCore rebuilds these from scratch on next replay;
         // stale mappings from a pre-rollback replay must not survive.
@@ -1439,6 +1299,7 @@ public sealed partial class World : IDisposable
         _replayMapCount = 0;
         _replayCreateCounts.Clear();
 
+        CommandTimeline = nextTimeline;
         RecycleStateSnapshotPayload(snap);
     }
 
@@ -1463,8 +1324,6 @@ public sealed partial class World : IDisposable
             _stateSnapshotPool.Push(snapshot);
     }
 
-    private readonly record struct CloneWork(Entity Source, Entity CloneEntity);
-
     /// <summary>
     /// Computes the legacy SHA-256 lockstep projection of live entity state.
     /// It excludes chunk capacity and free-list state, and skips empty
@@ -1477,7 +1336,7 @@ public sealed partial class World : IDisposable
     /// <summary>
     /// Computes SHA-256 over the exact canonical version-5 snapshot payload,
     /// excluding its CRC32 trailer. It includes chunk capacity, slot versions,
-    /// non-empty archetypes and their component schemas, hierarchy, and ordered
+    /// non-empty archetypes and their component schemas, and ordered
     /// free-list state; two worlds match exactly when their canonical persistence
     /// payloads match.
     /// </summary>
@@ -1498,12 +1357,7 @@ public sealed partial class World : IDisposable
             Array.Resize(ref _freeIds, entitySlotCount);
     }
 
-    internal void AddChildFromSnapshot(Entity parent, Entity child)
-    {
-        _hierarchy.AddChildRestored(this, parent, child);
-    }
-
-    internal ReadOnlySpan<RecycledEntity> FreeList => _freeIds.AsSpan(0, _freeIdCount);
+    internal ReadOnlySpan<int> FreeList => _freeIds.AsSpan(0, _freeIdCount);
 
     internal void SetSnapshotEntityVersion(int entityId, int version)
     {
@@ -1528,11 +1382,7 @@ public sealed partial class World : IDisposable
     {
         if (_freeIds.Length < entityIds.Length)
             Array.Resize(ref _freeIds, entityIds.Length);
-        for (var index = 0; index < entityIds.Length; index++)
-        {
-            var id = entityIds[index];
-            _freeIds[index] = new RecycledEntity(id, _records[id].Version);
-        }
+        entityIds.CopyTo(_freeIds);
         _freeIdCount = entityIds.Length;
     }
 
@@ -1565,23 +1415,5 @@ public sealed partial class World : IDisposable
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void PushPooled<T>(ref T[] array, ref int count, T value)
-    {
-        if ((uint)count >= (uint)array.Length)
-            GrowPooled(ref array);
-        array[count++] = value;
-    }
-
-    private static void GrowPooled<T>(ref T[] array)
-    {
-        var next = ArrayPool<T>.Shared.Rent(array.Length == 0 ? 16 : array.Length * 2);
-        if (array.Length > 0)
-        {
-            Array.Copy(array, next, array.Length);
-            ArrayPool<T>.Shared.Return(array);
-        }
-        array = next;
-    }
 }
 

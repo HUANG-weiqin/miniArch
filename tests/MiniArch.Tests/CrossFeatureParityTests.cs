@@ -51,14 +51,13 @@ public sealed class CrossFeatureParityTests
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // Cell 1: CommandStream + Hierarchy
+    // Cell 1: CommandStream + flat lifecycle
     // ═══════════════════════════════════════════════════════════════
 
     [Fact]
-    public void X_CommandStream_Hierarchy_AddChildSubmitThenReplay()
+    public void X_CommandStream_FlatCreateSubmitThenReplay()
     {
-        // Build hierarchy via CommandStream, Submit, then Replay into shadow
-        // and verify both worlds have identical hierarchy and checksum.
+        // Create independent entities via CommandStream, then replay into a shadow world.
         var source = new World();
         var stream = new CommandStream(source);
 
@@ -66,16 +65,10 @@ public sealed class CrossFeatureParityTests
         stream.Add(parent, new Position(1, 2));
         var child = stream.Create();
         stream.Add(child, new Velocity(3, 4));
-        stream.AddChild(parent, child);
         var delta1 = stream.Snapshot();
         stream.Submit();
 
         // Source post-Submit assertions
-        Assert.True(source.TryGetParent(child, out var sourceParent));
-        Assert.Equal(parent, sourceParent);
-        var sourceChildren = source.EnumerateChildren(parent).ToChildList();
-        Assert.Single(sourceChildren);
-        Assert.Equal(child, sourceChildren[0]);
         Assert.True(source.TryGet(parent, out Position p));
         Assert.Equal(new Position(1, 2), p);
         Assert.True(source.TryGet(child, out Velocity v));
@@ -85,11 +78,8 @@ public sealed class CrossFeatureParityTests
         var shadow = new World();
         new CommandStream(shadow).Replay(delta1);
 
-        Assert.True(shadow.TryGetParent(child, out var shadowParent));
-        Assert.Equal(parent, shadowParent);
-        var shadowChildren = shadow.EnumerateChildren(parent).ToChildList();
-        Assert.Single(shadowChildren);
-        Assert.Equal(child, shadowChildren[0]);
+        Assert.True(shadow.TryGet(parent, out Position sp));
+        Assert.Equal(new Position(1, 2), sp);
         Assert.True(shadow.TryGet(child, out Velocity sv));
         Assert.Equal(new Velocity(3, 4), sv);
 
@@ -98,11 +88,9 @@ public sealed class CrossFeatureParityTests
     }
 
     [Fact]
-    public void X_CommandStream_Hierarchy_CascadeDestroyAcrossBatchBoundaries()
+    public void X_CommandStream_DestroyOneAcrossBatchBoundaries()
     {
-        // Frame 1: create parent with two children via CS, Submit.
-        // Frame 2: destroy parent via CS (cascade destroys children), Submit.
-        // Verify cascade and Replay convergence.
+        // Create three independent entities, then destroy only the specified one.
         var source = new World();
         var stream1 = new CommandStream(source);
 
@@ -112,15 +100,12 @@ public sealed class CrossFeatureParityTests
         stream1.Add(child1, new Position(10, 10));
         var child2 = stream1.Create();
         stream1.Add(child2, new Position(20, 20));
-        stream1.AddChild(parent, child1);
-        stream1.AddChild(parent, child2);
         var delta1 = stream1.Snapshot();
         stream1.Submit();
 
         Assert.True(source.IsAlive(parent));
         Assert.True(source.IsAlive(child1));
         Assert.True(source.IsAlive(child2));
-        Assert.Equal(2, source.EnumerateChildren(parent).ToChildList().Count);
 
         // Frame 2: destroy parent via a new stream
         var stream2 = new CommandStream(source);
@@ -129,8 +114,8 @@ public sealed class CrossFeatureParityTests
         stream2.Submit();
 
         Assert.False(source.IsAlive(parent));
-        Assert.False(source.IsAlive(child1));
-        Assert.False(source.IsAlive(child2));
+        Assert.True(source.IsAlive(child1));
+        Assert.True(source.IsAlive(child2));
 
         // Verify Replay of the same deltas produces identical state
         var shadow = new World();
@@ -138,8 +123,8 @@ public sealed class CrossFeatureParityTests
         new CommandStream(shadow).Replay(delta2);
 
         Assert.False(shadow.IsAlive(parent));
-        Assert.False(shadow.IsAlive(child1));
-        Assert.False(shadow.IsAlive(child2));
+        Assert.True(shadow.IsAlive(child1));
+        Assert.True(shadow.IsAlive(child2));
         Assert.Equal(source.CanonicalChecksum(), shadow.CanonicalChecksum());
     }
 
@@ -303,16 +288,15 @@ public sealed class CrossFeatureParityTests
     }
 
     [Fact]
-    public void X_Replay_Snapshot_RestoreStateWithHierarchy()
+    public void X_Replay_Snapshot_RestoreStateWithFlatEntities()
     {
-        // Replay a delta containing hierarchy, then CaptureState/RestoreState.
+        // Replay a flat delta, then capture and restore state.
         var source = new World();
         var stream = new CommandStream(source);
         var parent = stream.Create();
         stream.Add(parent, new Position(0, 0));
         var child = stream.Create();
         stream.Add(child, new Velocity(1, 1));
-        stream.AddChild(parent, child);
         var delta = stream.Snapshot();
         stream.Submit();
 
@@ -322,109 +306,59 @@ public sealed class CrossFeatureParityTests
         var snap = target.CaptureState();
         var checksum = target.Checksum();
 
-        // Mutate hierarchy
+        // Mutate the world after capture.
         var newChild = target.Create(new Health(10));
-        target.AddChild(parent, newChild);
+        target.Destroy(parent);
 
         // Restore
         target.RestoreState(snap);
 
         Assert.Equal(checksum, target.Checksum());
-        Assert.True(target.TryGetParent(child, out var p));
-        Assert.Equal(parent, p);
-        Assert.Single(target.EnumerateChildren(parent).ToChildList());
+        Assert.True(target.IsAlive(parent));
+        Assert.True(target.IsAlive(child));
+        Assert.False(target.IsAlive(newChild));
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // Cell 5: Hierarchy + ChangeTracking (Watch API)
+    // Cell 5: Flat lifecycle + ChangeTracking (Watch API)
     // ═══════════════════════════════════════════════════════════════
 
     [Fact]
-    public void X_Hierarchy_Watch_AddChildDoesNotTriggerTransition()
+    public void X_FlatDestroy_Watch_ProducesExitedOnlyForDestroyedEntity()
     {
-        // Hierarchy changes do not affect filter membership (components unchanged).
-        // AddChild must NOT produce a transition for the child.
-        var world = new World();
-        var parent = world.CreateEmpty();
-        var child = world.Create(new Position(1, 2));
-
-        var watch = world.Watch<TransitionRecorder>(
-            new QueryDescription().With<Position>());
-        watch.Handler = new TransitionRecorder(0);
-        watch.Snapshot(world);
-
-        world.AddChild(parent, child);
-
-        watch.Diff(world);
-        Assert.Empty(watch.Handler.Changes);
-    }
-
-    [Fact]
-    public void X_Hierarchy_Watch_RemoveChildDoesNotTriggerTransition()
-    {
-        // Removing a child should NOT change filter membership for the child
-        // (child still has Position). No transition expected.
-        var world = new World();
-        var parent = world.CreateEmpty();
-        var child = world.Create(new Position(1, 2));
-        world.AddChild(parent, child);
-
-        var watch = world.Watch<TransitionRecorder>(
-            new QueryDescription().With<Position>());
-        watch.Handler = new TransitionRecorder(0);
-        watch.Snapshot(world);
-
-        world.RemoveChild(child);
-
-        watch.Diff(world);
-        Assert.Empty(watch.Handler.Changes);
-    }
-
-    [Fact]
-    public void X_Hierarchy_Watch_CascadeDestroyProducesExitedForChildren()
-    {
-        // Destroy a parent with children; cascade should produce Exited
-        // for all children that match the filter (children are destroyed).
+        // Only the destroyed matching entity exits the watch.
         var world = new World();
         var parent = world.CreateEmpty();
         var child1 = world.Create(new Position(1, 2));
         var child2 = world.Create(new Position(3, 4));
         var unrelated = world.Create(new Position(5, 6));
-        world.AddChild(parent, child1);
-        world.AddChild(parent, child2);
 
         var watch = world.Watch<TransitionRecorder>(
             new QueryDescription().With<Position>());
         watch.Handler = new TransitionRecorder(0);
         watch.Snapshot(world);
 
+        world.Destroy(child1);
         world.Destroy(parent);
 
         watch.Diff(world);
-        // Both children should have Exited; unrelated survives.
-        Assert.Equal(2, watch.Handler.Changes.Count);
-        foreach (var (_, kind) in watch.Handler.Changes)
-            Assert.Equal(TransitionKind.Exited, kind);
-        var exitedEntities = watch.Handler.Changes
-            .Select(c => c.Item1).OrderBy(e => e.Id).ToArray();
-        Assert.Equal(child1, exitedEntities[0]);
-        Assert.Equal(child2, exitedEntities[1]);
+        var change = Assert.Single(watch.Handler.Changes);
+        Assert.Equal((child1, TransitionKind.Exited), change);
+        Assert.True(world.IsAlive(child2));
         Assert.True(world.IsAlive(unrelated));
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // Cell 6: Snapshot + Hierarchy
+    // Cell 6: Snapshot + flat lifecycle
     // ═══════════════════════════════════════════════════════════════
 
     [Fact]
-    public void X_Snapshot_Hierarchy_SaveLoadPreservesRelationships()
+    public void X_Snapshot_Flat_SaveLoadPreservesComponents()
     {
         var world = new World();
         var root = world.Create(new Position(1, 2));
         var mid = world.Create(new Position(3, 4));
         var leaf = world.Create(new Position(5, 6));
-        world.AddChild(root, mid);
-        world.AddChild(mid, leaf);
 
         using var ms = new MemoryStream();
         WorldSnapshot.Save(ms, world);
@@ -432,33 +366,21 @@ public sealed class CrossFeatureParityTests
 
         var loaded = WorldSnapshot.Load(ms);
 
-        // Check parent chain
-        Assert.True(loaded.TryGetParent(leaf, out var leafParent));
-        Assert.Equal(mid, leafParent);
-        Assert.True(loaded.TryGetParent(mid, out var midParent));
-        Assert.Equal(root, midParent);
-        Assert.False(loaded.TryGetParent(root, out _));
-
-        // Check children
-        var rootChildren = loaded.EnumerateChildren(root).ToChildList();
-        Assert.Single(rootChildren);
-        Assert.Equal(mid, rootChildren[0]);
-        var midChildren = loaded.EnumerateChildren(mid).ToChildList();
-        Assert.Single(midChildren);
-        Assert.Equal(leaf, midChildren[0]);
+        Assert.Equal(new Position(1, 2), loaded.Get<Position>(root));
+        Assert.Equal(new Position(3, 4), loaded.Get<Position>(mid));
+        Assert.Equal(new Position(5, 6), loaded.Get<Position>(leaf));
 
         // Canonical checksums must match
         Assert.Equal(world.CanonicalChecksum(), loaded.CanonicalChecksum());
     }
 
     [Fact]
-    public void X_Snapshot_Hierarchy_CascadeDestroyAfterLoadWorks()
+    public void X_Snapshot_Flat_DestroyAfterLoadPreservesOtherEntities()
     {
-        // Load a world with hierarchy, then destroy root; cascade must work.
+        // Destroying one loaded entity leaves the other loaded entity intact.
         var world = new World();
         var root = world.CreateEmpty();
         var child = world.Create(new Position(1, 2));
-        world.AddChild(root, child);
 
         using var ms = new MemoryStream();
         WorldSnapshot.Save(ms, world);
@@ -468,18 +390,18 @@ public sealed class CrossFeatureParityTests
         loaded.Destroy(root);
 
         Assert.False(loaded.IsAlive(root));
-        Assert.False(loaded.IsAlive(child));
+        Assert.True(loaded.IsAlive(child));
+        Assert.Equal(new Position(1, 2), loaded.Get<Position>(child));
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // Cell 7: DeferredEntities + Hierarchy
+    // Cell 7: DeferredEntities + flat replay
     // ═══════════════════════════════════════════════════════════════
 
     [Fact]
-    public void X_Deferred_Hierarchy_TreeViaTrackThenReplay()
+    public void X_Deferred_Flat_TrackThenReplay()
     {
         // Use DeferredEntities=true with Track() for auto-updating handles.
-        // Build hierarchy, Snapshot, Replay, verify checksums match.
         var source = new World();
         var stream = new CommandStream(source) { DeferredEntities = true };
 
@@ -487,7 +409,6 @@ public sealed class CrossFeatureParityTests
         stream.Add(slotParent.Value, new Position(100, 200));
         var slotChild = stream.Track(stream.Create());
         stream.Add(slotChild.Value, new Position(300, 400));
-        stream.AddChild(slotParent.Value, slotChild.Value);
 
         Assert.True(slotParent.Value.IsPlaceholder);
         Assert.True(slotChild.Value.IsPlaceholder);
@@ -495,13 +416,11 @@ public sealed class CrossFeatureParityTests
         var delta = stream.Snapshot();
         stream.Submit();
 
-        // Source post-Submit: slots resolved to real IDs, hierarchy intact
+        // Source post-Submit: slots resolve to independent real entities.
         Assert.False(slotParent.Value.IsPlaceholder);
         Assert.False(slotChild.Value.IsPlaceholder);
-        Assert.True(source.TryGetParent(slotChild.Value, out _));
-        var srcChildren = source.EnumerateChildren(slotParent.Value).ToChildList();
-        Assert.Single(srcChildren);
-        Assert.Equal(slotChild.Value, srcChildren[0]);
+        Assert.Equal(new Position(100, 200), source.Get<Position>(slotParent.Value));
+        Assert.Equal(new Position(300, 400), source.Get<Position>(slotChild.Value));
 
         // Shadow: Replay the placeholder delta
         var shadow = new World();
@@ -511,38 +430,32 @@ public sealed class CrossFeatureParityTests
         Assert.True(shadow.TryResolvePlaceholder(new Entity(-1, 0), out var shadowParent));
         Assert.True(shadow.TryResolvePlaceholder(new Entity(-1, 1), out var shadowChild));
 
-        Assert.True(shadow.TryGetParent(shadowChild, out var actualParent));
-        Assert.Equal(shadowParent, actualParent);
-        var shadowChildren = shadow.EnumerateChildren(shadowParent).ToChildList();
-        Assert.Single(shadowChildren);
-        Assert.Equal(shadowChild, shadowChildren[0]);
+        Assert.Equal(new Position(100, 200), shadow.Get<Position>(shadowParent));
+        Assert.Equal(new Position(300, 400), shadow.Get<Position>(shadowChild));
 
         Assert.Equal(source.CanonicalChecksum(), shadow.CanonicalChecksum());
     }
 
     [Fact]
-    public void X_Deferred_Hierarchy_DeepTreeViaTrackThenReplay()
+    public void X_Deferred_Flat_ThreeSlotsViaTrackThenReplay()
     {
-        // Build a 3-level deep tree with DeferredEntities=true + Track.
+        // Track three independent pending entities.
         var source = new World();
         var stream = new CommandStream(source) { DeferredEntities = true };
 
         var slotRoot = stream.Track(stream.Create());
         var slotMid = stream.Track(stream.Create());
         var slotLeaf = stream.Track(stream.Create());
-        // Only add component to leaf to differentiate
+        // Only the last entity has a component.
         stream.Add(slotLeaf.Value, new Health(99));
-        stream.AddChild(slotRoot.Value, slotMid.Value);
-        stream.AddChild(slotMid.Value, slotLeaf.Value);
 
         var delta = stream.Snapshot();
         stream.Submit();
 
         // Source
-        Assert.True(source.TryGetParent(slotLeaf.Value, out var leafP));
-        Assert.Equal(slotMid.Value, leafP);
-        Assert.True(source.TryGetParent(slotMid.Value, out var midP));
-        Assert.Equal(slotRoot.Value, midP);
+        Assert.True(source.IsAlive(slotRoot.Value));
+        Assert.True(source.IsAlive(slotMid.Value));
+        Assert.Equal(new Health(99), source.Get<Health>(slotLeaf.Value));
 
         // Shadow: Replay and resolve placeholders by seq
         var shadow = new World();
@@ -552,10 +465,9 @@ public sealed class CrossFeatureParityTests
         Assert.True(shadow.TryResolvePlaceholder(new Entity(-1, 1), out var sMid));
         Assert.True(shadow.TryResolvePlaceholder(new Entity(-1, 2), out var sLeaf));
 
-        Assert.True(shadow.TryGetParent(sLeaf, out var sLeafP));
-        Assert.Equal(sMid, sLeafP);
-        Assert.True(shadow.TryGetParent(sMid, out var sMidP));
-        Assert.Equal(sRoot, sMidP);
+        Assert.True(shadow.IsAlive(sRoot));
+        Assert.True(shadow.IsAlive(sMid));
+        Assert.Equal(new Health(99), shadow.Get<Health>(sLeaf));
 
         Assert.Equal(source.CanonicalChecksum(), shadow.CanonicalChecksum());
     }
@@ -692,7 +604,6 @@ public sealed class CrossFeatureParityTests
         stream1.Add(parent, new Position(1, 2));
         var child = stream1.Create();
         stream1.Add(child, new Velocity(3, 4));
-        stream1.AddChild(parent, child);
         stream1.Submit();
 
         // Capture this state
@@ -702,7 +613,7 @@ public sealed class CrossFeatureParityTests
         world.Create(new Health(100));
         var stream2 = new CommandStream(world);
         stream2.Set(child, new Velocity(99, 99));
-        stream2.Destroy(parent); // cascade destroys child
+        stream2.Destroy(parent);
         stream2.Submit();
 
         // Phase 3: RestoreState back to captured state
@@ -723,9 +634,10 @@ public sealed class CrossFeatureParityTests
         world.RestoreState(snap2);
         new CommandStream(world).Replay(delta);
 
-        // Final state — verify parent/child destroyed, extra2 alive
+        // Final state — only the specified entity was destroyed.
         Assert.False(world.IsAlive(parent));
-        Assert.False(world.IsAlive(child));
+        Assert.True(world.IsAlive(child));
+        Assert.Equal(new Velocity(99, 99), world.Get<Velocity>(child));
         Assert.True(world.TryGet(extra2, out Health h));
         Assert.Equal(new Health(100), h);
 
@@ -743,7 +655,6 @@ public sealed class CrossFeatureParityTests
             s1.Add(p, new Position(1, 2));
             var c = s1.Create();
             s1.Add(c, new Velocity(3, 4));
-            s1.AddChild(p, c);
             s1.Submit();
 
             var s2 = new CommandStream(expected);
@@ -758,26 +669,22 @@ public sealed class CrossFeatureParityTests
     }
 
     [Fact]
-    public void X_ThreeWay_HierarchySnapshotRestoreReplayConvergence()
+    public void X_ThreeWay_FlatSnapshotRestoreReplayConvergence()
     {
-        // Build hierarchy, CaptureState, mutate hierarchy, RestoreState,
-        // then apply same mutations via Replay. Verify checksums converge.
+        // CaptureState, mutate, restore, then replay equivalent commands.
         var world = new World();
 
-        // Initial tree: A → B → C
+        // Three independent entities.
         var a = world.Create(new Position(1, 1));
         var b = world.Create(new Position(2, 2));
         var c = world.Create(new Position(3, 3));
-        world.AddChild(a, b);
-        world.AddChild(b, c);
 
         var snap = world.CaptureState();
         var initialChecksum = world.CanonicalChecksum();
 
-        // Restructure: D added under A, B removed from A
-        var d = world.Create(new Position(4, 4));
-        world.AddChild(a, d);
-        world.RemoveChild(b); // B becomes root
+        // A direct world mutation is rolled back.
+        world.Create(new Position(4, 4));
+        world.Set(b, new Position(20, 20));
 
         world.RestoreState(snap);
         // Re-capture for second round
@@ -786,18 +693,15 @@ public sealed class CrossFeatureParityTests
         // Verify restoration
         Assert.Equal(initialChecksum, world.CanonicalChecksum());
         Assert.Equal(3, world.EntityCount);
-        Assert.True(world.TryGetParent(b, out var bp));
-        Assert.Equal(a, bp);
-        Assert.True(world.TryGetParent(c, out var cp));
-        Assert.Equal(b, cp);
-        Assert.False(world.TryGetParent(a, out _));
+        Assert.Equal(new Position(1, 1), world.Get<Position>(a));
+        Assert.Equal(new Position(2, 2), world.Get<Position>(b));
+        Assert.Equal(new Position(3, 3), world.Get<Position>(c));
 
-        // Apply same restructure via Submit
+        // Apply the same changes via Submit.
         var stream = new CommandStream(world);
         var d2 = stream.Create();
         stream.Add(d2, new Position(4, 4));
-        stream.AddChild(a, d2);
-        stream.RemoveChild(b);
+        stream.Set(b, new Position(20, 20));
         var delta = stream.Snapshot();
         stream.Submit();
 

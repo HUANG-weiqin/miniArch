@@ -25,7 +25,7 @@ public readonly struct ValidationResult
 public enum ValidationSeverity { Error, Warning }
 
 /// <summary>Which subsystem the issue belongs to.</summary>
-public enum ValidationCategory { EntitySlot, FreeList, Hierarchy, Archetype }
+public enum ValidationCategory { EntitySlot, FreeList, Archetype }
 
 /// <summary>Specific invariant that was violated.</summary>
 public enum ValidationCode
@@ -34,14 +34,9 @@ public enum ValidationCode
     SlotCollision,
     FreeListOccupied,
     FreeListDuplicate,
-    AsymmetricParent,
-    OrphanedChild,
     ArchetypeEntityCount,
     DuplicateEntityId,
     SlotCapacityWarning,
-
-    /// <summary>A parent-child cycle was detected in the hierarchy.</summary>
-    HierarchyCycle,
 }
 
 /// <summary>A single validation finding.</summary>

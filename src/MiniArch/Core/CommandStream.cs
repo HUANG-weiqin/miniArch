@@ -41,6 +41,25 @@ public sealed partial class CommandStream
     // _world.ReservedReleaseEpoch to skip the O(N) scan when no release has occurred.
     private int _submitEpoch;
 
+    // Zero means there is no recorded frame. A frame is stamped only after its
+    // first successful record; frozen worker output is independent of this stamp.
+    private ulong _frameTimeline;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void StampRecordedFrame()
+    {
+        if (_frameTimeline == 0)
+            _frameTimeline = _world.CommandTimeline;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void ThrowIfStaleFrame()
+    {
+        if (_frameTimeline != 0 && _frameTimeline != _world.CommandTimeline)
+            throw new InvalidOperationException(
+                "CommandStream contains commands recorded before World.RestoreState. Clear the old frame before recording or consuming commands.");
+    }
+
     // Local archetype cache keyed by ComponentMask.
     private const int MaskCacheSize = 8;
     private MaskCacheSlot[] _maskCache = [];
@@ -96,14 +115,6 @@ public sealed partial class CommandStream
     // When false (e.g. user abandons a frame), registrations are dropped.
     private bool _pendingReplay;
 
-    private static void GrowPooled<T>(ref T[] array, int count)
-    {
-        var grown = ArrayPool<T>.Shared.Rent(count * 2);
-        Array.Copy(array, grown, count);
-        ArrayPool<T>.Shared.Return(array);
-        array = grown;
-    }
-
     // ── Construction ───────────────────────────────────────────────────
 
     /// <summary>
@@ -153,7 +164,7 @@ public sealed partial class CommandStream
     // ── Record API ────────────────────────────────────────────────────
 
     /// <summary>
-    /// Shared create logic used by the public API, CreateMany, and subtree cloning.
+    /// Shared create logic used by the public API and CreateMany.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private Entity CreateCore() => _deferredEntities ? CreateDeferredImpl() : CreateImpl();
@@ -172,6 +183,7 @@ public sealed partial class CommandStream
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private Entity CreateImpl()
     {
+        ThrowIfStaleFrame();
         var entity = _world.ReserveDeferredEntityUnsafe();
         GrowPendingBatchFor(entity.Id);
         var batchIdx = AllocBatchSlot(entity);
@@ -181,12 +193,14 @@ public sealed partial class CommandStream
         _lastCreated = entity;
         _lastCreatedBatch = batchIdx;
         _submitEpoch = _world.ReservedReleaseEpoch;
+        StampRecordedFrame();
         return entity;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private Entity CreateDeferredImpl()
     {
+        ThrowIfStaleFrame();
         var seq = _deferredSeq++;
         var placeholder = new Entity(-1, seq);
         EnsureCapacity(ref _pendingBatchDeferredArr, seq, 64);
@@ -198,6 +212,7 @@ public sealed partial class CommandStream
         _pendingBatchDeferredArr[seq] = batchIdx;
         _lastCreated = placeholder;
         _lastCreatedBatch = batchIdx;
+        StampRecordedFrame();
         return placeholder;
     }
 
@@ -219,7 +234,14 @@ public sealed partial class CommandStream
     }
 
     private bool IsSourceDestroyedThisFrame(Entity source)
-        => IsDestroyedThisFrame(source, _frozen);
+    {
+        for (var i = 0; i < _frozen.DestroyCount; i++)
+            if (_frozen.DestroyEntities[i] == source) return true;
+        if (_frozen.CancelledBatchCount == 0) return false;
+        for (var i = 0; i < _frozen.PendingBatchCount; i++)
+            if (_frozen.BatchCanceled[i] && _frozen.BatchEntities[i] == source) return true;
+        return false;
+    }
 
     private Entity CloneImpl(Entity source, EntityInfo info)
     {
@@ -237,7 +259,7 @@ public sealed partial class CommandStream
                 throw new InvalidOperationException(
                     $"Clone: deferred clone {clone} has no pending batch slot.");
             }
-            CloneComponents(source, info, clone, batchIdx);
+            CloneMaterializedComponents(source, info, batchIdx);
             return clone;
         }
         return CloneImplImmediate(source, info);
@@ -247,15 +269,14 @@ public sealed partial class CommandStream
     {
         var clone = CreateImpl();
         var batchIdx = _frozen.PendingBatch[clone.Id];
-        CloneComponents(source, info, clone, batchIdx);
+        CloneMaterializedComponents(source, info, batchIdx);
         return clone;
     }
 
     /// <summary>
     /// Copies components from a materialized (world-archetype) source entity into the clone's
     /// batch buffer. Reads archetype storage + pending component store overlays via
-    /// <see cref="ComponentMerger"/>. Does NOT recurse into children — the caller is
-    /// responsible for that.
+    /// <see cref="ComponentMerger"/>.
     /// </summary>
     private void CloneMaterializedComponents(Entity source, EntityInfo info, int batchIdx)
     {
@@ -338,12 +359,6 @@ public sealed partial class CommandStream
         }
     }
 
-    private void CloneComponents(Entity source, EntityInfo info, Entity clone, int batchIdx)
-    {
-        CloneMaterializedComponents(source, info, batchIdx);
-        CloneChildrenFromVirtualHierarchy(source, clone);
-    }
-
     private Entity ClonePendingSource(Entity source, int srcBatchIdx)
     {
         // Create clone entity (same deferred mode as source)
@@ -354,9 +369,6 @@ public sealed partial class CommandStream
 
         // Copy components from source's batch chain into clone's batch
         CopyComponentsFromBatch(source, srcBatchIdx, clone, cloneBatchIdx);
-
-        // Clone children via virtual hierarchy view (world children + pending intents)
-        CloneChildrenFromVirtualHierarchy(source, clone);
 
         return clone;
     }
@@ -406,207 +418,6 @@ public sealed partial class CommandStream
             if (pooledIndices is not null)
                 ArrayPool<int>.Shared.Return(pooledIndices);
         }
-    }
-
-    // ── Clone helpers ─────────────────────────────────────────────────
-
-    /// <summary>
-    /// Writes the virtual children of <paramref name="parent"/> into <paramref name="buffer"/>
-    /// and returns the count. Virtual children = world hierarchy children + pending AddChild
-    /// intents - pending RemoveChild intents.
-    /// </summary>
-    private int GetVirtualChildren(Entity parent, ref Entity[] buffer)
-    {
-        var count = 0;
-
-        // 1. World real children
-        if (_world.Hierarchy.HasChildren(_world, parent))
-        {
-            foreach (var child in _world.Hierarchy.EnumerateChildren(_world, parent))
-            {
-                if (count == buffer.Length)
-                    GrowPooled(ref buffer, count);
-                buffer[count++] = child;
-            }
-        }
-
-        // 2. Pending HierarchyByChild intents: AddChild (if Parent matches) then RemoveChild
-        //    in a single pass. RemoveChild has no Parent filter — see note below.
-        foreach (var (child, intent) in _frozen.HierarchyByChild)
-        {
-            if (intent.IsAdd)
-            {
-                if (intent.Parent == parent)
-                {
-                    // Add if not already present (world children may already include it)
-                    var alreadyPresent = false;
-                    for (var i = 0; i < count; i++)
-                    {
-                        if (buffer[i] == child) { alreadyPresent = true; break; }
-                    }
-                    if (!alreadyPresent)
-                    {
-                        if (count == buffer.Length)
-                            GrowPooled(ref buffer, count);
-                        buffer[count++] = child;
-                    }
-                }
-            }
-            else
-            {
-                // NOTE: No intent.Parent == parent check here. In a single-parent hierarchy,
-                // RemoveChild always unlinks the child from its current parent regardless of
-                // which parent GetVirtualChildren is querying for. RemoveChild stores
-                // default(Entity) as Parent, so checking intent.Parent would be incorrect
-                // (it would never match any real parent and RemoveChild would be a no-op).
-                for (var i = 0; i < count; i++)
-                {
-                    if (buffer[i] == child)
-                    {
-                        // Shift remaining elements left
-                        for (var j = i; j < count - 1; j++)
-                            buffer[j] = buffer[j + 1];
-                        count--;
-                        break;
-                    }
-                }
-            }
-        }
-
-        return count;
-    }
-
-    /// <summary>
-    /// Clones all children of <paramref name="sourceRoot"/> under <paramref name="cloneRoot"/>
-    /// using the virtual hierarchy view (world children + pending AddChild intents − pending
-    /// RemoveChild intents). Iterative DFS with explicit stack — not recursive.
-    /// </summary>
-    private void CloneChildrenFromVirtualHierarchy(Entity sourceRoot, Entity cloneRoot)
-    {
-        if (_frozen.HierarchyByChild.Count == 0 &&
-            !_world.Hierarchy.HasChildren(_world, sourceRoot))
-            return;
-
-        // Reuse one pooled buffer for each source node's virtual children.
-        var childBuf = ArrayPool<Entity>.Shared.Rent(32);
-        var childCount = GetVirtualChildren(sourceRoot, ref childBuf);
-        if (childCount == 0)
-        {
-            ArrayPool<Entity>.Shared.Return(childBuf);
-            return;
-        }
-
-        // Cycle detection: visited set using ArrayPool + linear scan (typical pending entities < 64)
-        var visited = ArrayPool<Entity>.Shared.Rent(32);
-        var visitedCount = 0;
-
-        var stack = ArrayPool<Entity>.Shared.Rent(32);
-        var cloneStack = ArrayPool<Entity>.Shared.Rent(32);
-        var stackCount = 0;
-
-        try
-        {
-            for (var ci = 0; ci < childCount; ci++)
-            {
-                var child = childBuf[ci];
-
-                // Cycle check via linear scan
-                if (Contains(visited, visitedCount, child))
-                    throw new InvalidOperationException(
-                        $"Clone detected a cycle in the virtual hierarchy at entity {child}.");
-                if (visitedCount == visited.Length)
-                    GrowPooled(ref visited, visitedCount);
-                visited[visitedCount++] = child;
-
-                if (stackCount >= stack.Length)
-                {
-                    GrowPooled(ref stack, stackCount);
-                    GrowPooled(ref cloneStack, stackCount);
-                }
-                stack[stackCount] = child;
-                cloneStack[stackCount] = cloneRoot;
-                stackCount++;
-            }
-
-            while (stackCount > 0)
-            {
-                stackCount--;
-                var srcChild = stack[stackCount];
-                var cloneParent = cloneStack[stackCount];
-
-                var cloneChild = CreateCore();
-                int batchIdx;
-                if (_deferredEntities)
-                {
-                    // CreateCore (via CreateDeferredImpl) always allocates a batch slot
-                    // and sets _lastCreated, so TryGetPendingBatch must succeed. Check
-                    // the return value explicitly as a defensive invariant guard.
-                    if (!TryGetPendingBatch(cloneChild, out batchIdx))
-                    {
-                        throw new InvalidOperationException(
-                            $"Clone: deferred clone child {cloneChild} has no pending batch slot.");
-                    }
-                }
-                else
-                    batchIdx = _frozen.PendingBatch[cloneChild.Id];
-
-                // Check if child is a pending entity (same buffer)
-                if (_frozen.PendingBatchCount > 0 && TryGetPendingBatch(srcChild, out var srcChildBatchIdx))
-                {
-                    // Copy components from pending source batch
-                    CopyComponentsFromBatch(srcChild, srcChildBatchIdx, cloneChild, batchIdx);
-                }
-                else
-                {
-                    // Materialized child: read archetype + overlay scan (same as root)
-                    if (!_world.TryGetLocation(srcChild, out var childLocation))
-                        throw new InvalidOperationException(
-                            $"Clone failed: child entity {srcChild} has no location. " +
-                            "The source entity may be corrupted.");
-                    CloneMaterializedComponents(srcChild, childLocation, batchIdx);
-                }
-                AddChild(cloneParent, cloneChild);
-
-                // Enqueue grandchildren (virtual view)
-                var gcCount = GetVirtualChildren(srcChild, ref childBuf);
-                for (var gi = 0; gi < gcCount; gi++)
-                {
-                    var grandChild = childBuf[gi];
-
-                    // Cycle check via linear scan
-                    if (Contains(visited, visitedCount, grandChild))
-                        throw new InvalidOperationException(
-                            $"Clone detected a cycle in the virtual hierarchy at entity {grandChild}.");
-                    if (visitedCount == visited.Length)
-                        GrowPooled(ref visited, visitedCount);
-                    visited[visitedCount++] = grandChild;
-
-                    if (stackCount >= stack.Length)
-                    {
-                        GrowPooled(ref stack, stackCount);
-                        GrowPooled(ref cloneStack, stackCount);
-                    }
-                    stack[stackCount] = grandChild;
-                    cloneStack[stackCount] = cloneChild;
-                    stackCount++;
-                }
-            }
-        }
-        finally
-        {
-            ArrayPool<Entity>.Shared.Return(childBuf);
-            ArrayPool<Entity>.Shared.Return(visited);
-            ArrayPool<Entity>.Shared.Return(stack);
-            ArrayPool<Entity>.Shared.Return(cloneStack);
-        }
-    }
-
-    /// <summary>Linear scan for entity in span (allocation-free).</summary>
-    private static bool Contains(Span<Entity> span, int count, Entity entity)
-    {
-        for (var i = 0; i < count; i++)
-            if (span[i] == entity) return true;
-        return false;
     }
 
     /// <summary>
@@ -706,6 +517,7 @@ public sealed partial class CommandStream
         FlagFrameIfEntityEndpointNeedsPreflight(entity);
         EnsureCapacity(ref _frozen.DestroyEntities, _frozen.DestroyCount, 64);
         _frozen.DestroyEntities[_frozen.DestroyCount++] = entity;
+        StampRecordedFrame();
     }
 
     // ── Store management ──────────────────────────────────────────────
@@ -788,11 +600,14 @@ public sealed partial class CommandStream
 
     private void Clear(bool releaseReserved)
     {
+        // Restore can give the same (id, version) reservation to another stream;
+        // an old frame must drop its batches without releasing that reservation.
+        var stale = _frameTimeline != 0 && _frameTimeline != _world.CommandTimeline;
         foreach (var store in _frozen.Stores)
             store?.Clear();
 
         // Submit path: every non-cancelled batch entity has been materialized to
-        // alive by MaterializeAllPending, so TryReleaseReserved returns false and
+        // alive by ApplyPrepared, so TryReleaseReserved returns false and
         // we just drop the pending-batch index.
         // Snapshot/relay path (or Submit exception path): batch entities may still
         // be in the reserved state, so we release their ids back to the World's
@@ -810,13 +625,15 @@ public sealed partial class CommandStream
                 // TryReleaseReserved returns false; cancelled ones were never
                 // materialized and must be released to keep the free list in sync
                 // with ReplayCore's Release operation.
-                _world.TryReleaseReserved(entity);
+                if (!stale)
+                    _world.TryReleaseReserved(entity);
                 continue;
             }
-            if (releaseReserved) _world.TryReleaseReserved(entity);
+            if (releaseReserved && !stale)
+                _world.TryReleaseReserved(entity);
         }
         _deferredSeq = 0;
-        if (_pendingReplay)
+        if (_pendingReplay && !stale)
         {
             // Snapshot was called before Clear —preserve tracked registrations
             // so Replay() can resolve them after the underlying ReplayCore call.
@@ -832,6 +649,7 @@ public sealed partial class CommandStream
             _replayTrackedBySeq = null;
             _replayTrackedMaxSeq = 0;
         }
+        _pendingReplay = false;
         _trackedBySeq = [];
         _trackedMaxSeq = 0;
         _frozen.DestroyCount = 0;
@@ -845,8 +663,8 @@ public sealed partial class CommandStream
         _batchBufLen = 0;
         _lastCreated = default;
         _lastCreatedBatch = -1;
-        _frozen.HierarchyByChild.Clear();
         _hasStoreCommands = false;
+        _frameTimeline = 0;
         _submitEpoch = _world.ReservedReleaseEpoch;
 #if DEBUG
         _pendingBatchDeferredEpoch = [];
@@ -967,8 +785,6 @@ public sealed partial class CommandStream
         foreach (var store in _frozen.Stores)
             store?.ReplacePlaceholders(resolveMap);
 
-        ReplaceHierarchyPlaceholders(resolveMap);
-
         // Resolve embedded Entity refs only in each pending entity's effective
         // last-wins component values. Superseded values are dead batch data and
         // must not make an otherwise valid frame fail resolution.
@@ -1023,8 +839,6 @@ public sealed partial class CommandStream
         // _deferredSeq was reset to 0 above, so use resolveMap.Length as the bound.
         ResolveTrackedSlots(resolveMap, resolveMap.Length);
     }
-
-    internal object? ActiveHierarchyForTesting => _frozen.HierarchyByChild;
 
     // ── Helpers ───────────────────────────────────────────────────────
 
@@ -1100,7 +914,6 @@ public sealed partial class CommandStream
         public ComponentStore?[] Stores;
         public Entity[] DestroyEntities;
         public int DestroyCount;
-        public Dictionary<Entity, HierarchyIntent> HierarchyByChild;
         public int[] PendingBatch;
         public int PendingBatchCount;
         public int[] BatchHeads;
@@ -1128,7 +941,6 @@ public sealed partial class CommandStream
             Stores = new ComponentStore?[storeCount];
             DestroyEntities = [];
             DestroyCount = 0;
-            HierarchyByChild = new Dictionary<Entity, HierarchyIntent>();
             PendingBatch = [];
             PendingBatchCount = 0;
             BatchHeads = [];

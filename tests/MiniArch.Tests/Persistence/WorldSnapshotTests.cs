@@ -91,6 +91,46 @@ public sealed class WorldSnapshotTests
     }
 
     [Fact]
+    public void Legacy_flat_v5_snapshot_round_trips_byte_for_byte_and_preserves_allocator_order()
+    {
+        // Captured from the pre-removal v5 writer with no registered component schema.
+        var bytes = Convert.FromBase64String(
+            "Q1JBTQUAAAAIAAAAAwAAAAAAAAABAAAAAAAAAAEAAAACAAAAAQAAAAAAAAACAAAAAAAAAAIAAAABAAAAAQAAADGhmus=");
+
+        using var loaded = WorldSnapshot.Load(new MemoryStream(bytes, writable: false));
+
+        Assert.Equal(bytes, SaveToBytes(loaded));
+        Assert.Equal(new Entity(1, 2), loaded.CreateEmpty());
+    }
+
+    [Fact]
+    public void Legacy_v5_snapshot_with_relationships_is_explicitly_rejected()
+    {
+        // Captured from the pre-removal v5 writer with one parent-child link.
+        var bytes = Convert.FromBase64String(
+            "Q1JBTQUAAAAIAAAAAgAAAAAAAAABAAAAAQAAAAEAAAABAAAAAAAAAAIAAAAAAAAAAQAAAAEAAAAAAAAAAAAAAMCkrVs=");
+
+        var exception = Assert.Throws<InvalidDataException>(
+            () => WorldSnapshot.Load(new MemoryStream(bytes, writable: false)));
+        Assert.Contains("hierarchy relation count", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Legacy_flat_delta_replay_preserves_v5_snapshot_bytes_and_allocator_order()
+    {
+        // Captured from the pre-removal delta writer; no relationship opcodes.
+        var wire = Convert.FromBase64String("AQEBAgEBAQECAwECAAECAQMCAQA=");
+        var expected = Convert.FromBase64String(
+            "Q1JBTQUAAAAIAAAAAgAAAAAAAAABAAAAAAAAAAIAAAABAAAAAAAAAAIAAAAAAAAAAQAAAAAAAAAZ/hEo");
+        using var world = new World(chunkCapacity: 8);
+
+        new CommandStream(world).Replay(FrameDelta.FromWire(wire));
+
+        Assert.Equal(expected, SaveToBytes(world));
+        Assert.Equal(new Entity(2, 1), world.CreateEmpty());
+    }
+
+    [Fact]
     public void Unmanaged_world_can_round_trip_preserving_entity_metadata_values_and_archetype_membership()
     {
         var world = new World(chunkCapacity: 2);
@@ -243,53 +283,6 @@ public sealed class WorldSnapshotTests
         Assert.Equal(original.Version + 1, recreated.Version);
         Assert.False(loaded.TryGetLocation(original, out _));
         Assert.True(loaded.TryGetLocation(recreated, out _));
-    }
-
-    [Fact]
-    public void Snapshot_preserves_parent_and_children_relationships()
-    {
-        var world = new World();
-        var parent = world.CreateEmpty();
-        var firstChild = world.CreateEmpty();
-        var secondChild = world.CreateEmpty();
-
-        world.AddChild(parent, firstChild);
-        world.AddChild(parent, secondChild);
-
-        using var stream = new MemoryStream();
-        WorldSnapshot.Save(stream, world);
-        stream.Position = 0;
-
-        var loaded = WorldSnapshot.Load(stream);
-
-        Assert.True(loaded.TryGetParent(firstChild, out var resolvedParent));
-        Assert.Equal(parent, resolvedParent);
-        Assert.Equal(
-            [firstChild, secondChild],
-            loaded.EnumerateChildren(parent).ToChildList().OrderBy(entity => entity.Id).ToArray());
-    }
-
-    [Fact]
-    public void Snapshot_restores_hierarchy_so_cascade_destroy_still_works()
-    {
-        var world = new World();
-        var root = world.CreateEmpty();
-        var child = world.CreateEmpty();
-        var grandChild = world.CreateEmpty();
-
-        world.AddChild(root, child);
-        world.AddChild(child, grandChild);
-
-        using var stream = new MemoryStream();
-        WorldSnapshot.Save(stream, world);
-        stream.Position = 0;
-
-        var loaded = WorldSnapshot.Load(stream);
-        loaded.Destroy(root);
-
-        Assert.False(loaded.IsAlive(root));
-        Assert.False(loaded.IsAlive(child));
-        Assert.False(loaded.IsAlive(grandChild));
     }
 
     [Fact]
@@ -639,7 +632,7 @@ public sealed class WorldSnapshotTests
         var e0 = world.CreateEmpty(); world.Add(e0, new Position(1, 2));
         var e1 = world.CreateEmpty(); world.Add(e1, new Velocity(3, 4));
         world.Destroy(e1);
-        world.AddChild(e0, world.Create(new Health(9)));
+        world.Create(new Health(9));
 
         var hashOriginal = world.CanonicalChecksum();
 
@@ -743,7 +736,6 @@ public sealed class WorldSnapshotTests
 
         var parent = world.CreateEmpty();
         var child = world.CreateEmpty();
-        world.AddChild(parent, child);
 
         var checksumPre = world.Checksum();
         var snapshot = world.CaptureState();
@@ -753,7 +745,6 @@ public sealed class WorldSnapshotTests
         world.Destroy(e0);
         world.Add(fresh, new Position(9, 10));
         world.Remove<Velocity>(fresh);
-        world.RemoveChild(child);
         world.Destroy(parent);
 
         world.RestoreState(snapshot);
@@ -763,8 +754,8 @@ public sealed class WorldSnapshotTests
         Assert.True(world.IsAlive(e0));
         Assert.True(world.IsAlive(e2));
         Assert.False(world.IsAlive(e1));
-        Assert.True(world.TryGetParent(child, out var restoredParent));
-        Assert.Equal(parent, restoredParent);
+        Assert.True(world.IsAlive(parent));
+        Assert.True(world.IsAlive(child));
     }
 
     [Fact]
@@ -838,7 +829,6 @@ public sealed class WorldSnapshotTests
         var world = new World();
         var e0 = world.Create(new Position(1, 2));
         var e1 = world.Create(new Velocity(3, 4));
-        world.AddChild(e0, e1);
 
         var s1 = world.CaptureState();
         world.RestoreState(s1);
@@ -904,12 +894,11 @@ public sealed class WorldSnapshotTests
 
         // Mutate heavily: destroy several entities (triggers cross-segment swap-remove
         // that rewrites segment data), add a brand-new archetype (prediction frame),
-        // and AddChild a parent/child to perturb the hierarchy table.
+        // and create a new archetype.
         for (var i = 0; i < EntityCount; i += 5)
             world.Destroy(entities[i]);
-        var parent = world.Create(new Velocity(1, 1));
-        var child = world.Create(new Velocity(2, 2));
-        world.AddChild(parent, child);
+        world.Create(new Velocity(1, 1));
+        world.Create(new Velocity(2, 2));
         world.Create(new Health(7));
 
         world.RestoreState(snapshot);
@@ -1182,7 +1171,6 @@ public sealed class WorldSnapshotTests
 
         Assert.Empty(payload.Records);
         Assert.Empty(payload.ArchetypeBackups);
-        Assert.Empty(payload.HierarchyParentByChild);
     }
 
     [Fact]
@@ -1210,36 +1198,6 @@ public sealed class WorldSnapshotTests
         // ring[1] has been recycled into the pool.
         world.RestoreState(ring[3]);
         Assert.Equal(3, world.Get<Position>(e).X);
-    }
-
-    [Fact]
-    public void BUG_reused_larger_rollback_snapshot_does_not_restore_stale_hierarchy_tail()
-    {
-        using var world = new World();
-
-        // Keep two live handles so the larger pooled instance can be reused
-        // while the current world has a zero-length hierarchy table.
-        var empty1 = world.CaptureState();
-        var oldParent = world.CreateEmpty();
-        var oldChild = world.CreateEmpty();
-        world.AddChild(oldParent, oldChild);
-        var withHierarchy = world.CaptureState();
-
-        world.RestoreState(empty1);
-        var empty2 = world.CaptureState();
-        world.RestoreState(withHierarchy);
-        world.RestoreState(empty2);
-
-        var keepTopPoolEntryLive = world.CaptureState();
-        var reusedLargerEntry = world.CaptureState();
-        world.RestoreState(reusedLargerEntry);
-
-        var newParent = world.CreateEmpty();
-        var newChild = world.CreateEmpty();
-
-        Assert.False(world.TryGetParent(newChild, out _));
-
-        world.RestoreState(keepTopPoolEntryLive);
     }
 
     [Fact]
@@ -1587,9 +1545,8 @@ public sealed class WorldSnapshotTests
         }
 
         using var world = new World(chunkCapacity: 2);
-        var parent = world.Create(new RegistrationOrderA(10), new RegistrationOrderB(20));
-        var child = world.Create(new RegistrationOrderA(30));
-        world.AddChild(parent, child);
+        world.Create(new RegistrationOrderA(10), new RegistrationOrderB(20));
+        world.Create(new RegistrationOrderA(30));
         var recycled = world.Create(new RegistrationOrderB(40));
         world.Destroy(recycled);
 
@@ -2257,38 +2214,6 @@ public sealed class WorldSnapshotTests
     }
 
     [Fact]
-    public void Snapshot_load_rejects_hierarchy_out_of_range_duplicate_child_and_cycle()
-    {
-        using var world = new World();
-        var root = world.CreateEmpty();
-        var child = world.CreateEmpty();
-        var grandChild = world.CreateEmpty();
-        world.AddChild(root, child);
-        world.AddChild(child, grandChild);
-        var original = SaveToBytes(world);
-        var layout = ParseV5Snapshot(original);
-
-        var outOfRange = (byte[])original.Clone();
-        WriteInt32(outOfRange, layout.HierarchyLinks[0].ParentOffset, layout.SlotVersionOffsets.Length);
-        RewriteCrc(outOfRange);
-        AssertInvalidSnapshot(outOfRange);
-
-        var duplicateChild = (byte[])original.Clone();
-        WriteInt32(
-            duplicateChild,
-            layout.HierarchyLinks[1].ChildOffset,
-            ReadInt32(duplicateChild, layout.HierarchyLinks[0].ChildOffset));
-        RewriteCrc(duplicateChild);
-        AssertInvalidSnapshot(duplicateChild);
-
-        var cycle = (byte[])original.Clone();
-        var childLink = layout.HierarchyLinks.Single(link => ReadInt32(cycle, link.ChildOffset) == child.Id);
-        WriteInt32(cycle, childLink.ParentOffset, grandChild.Id);
-        RewriteCrc(cycle);
-        AssertInvalidSnapshot(cycle);
-    }
-
-    [Fact]
     public void Snapshot_load_rejects_corrupt_schema_shape_with_valid_crc()
     {
         using var world = new World();
@@ -2535,7 +2460,7 @@ public sealed class WorldSnapshotTests
         var slotCount = ReadAndAdvance(bytes, ref offset);
         var schemaCount = ReadAndAdvance(bytes, ref offset);
         var archetypeCount = ReadAndAdvance(bytes, ref offset);
-        var hierarchyCount = ReadAndAdvance(bytes, ref offset);
+        Assert.Equal(0, ReadAndAdvance(bytes, ref offset));
 
         var slotVersionOffsets = new int[slotCount];
         for (var index = 0; index < slotVersionOffsets.Length; index++)
@@ -2600,13 +2525,6 @@ public sealed class WorldSnapshotTests
                 columns));
         }
 
-        var hierarchyLinks = new List<SnapshotHierarchyLayout>(hierarchyCount);
-        for (var index = 0; index < hierarchyCount; index++)
-        {
-            hierarchyLinks.Add(new SnapshotHierarchyLayout(offset, offset + sizeof(int)));
-            offset += 2 * sizeof(int);
-        }
-
         var freeCountOffset = offset;
         var freeCount = ReadAndAdvance(bytes, ref offset);
         var freeIdOffsets = new int[freeCount];
@@ -2622,7 +2540,6 @@ public sealed class WorldSnapshotTests
             slotVersionOffsets,
             schemas,
             archetypes,
-            hierarchyLinks,
             freeCountOffset,
             freeIdOffsets);
     }
@@ -2771,7 +2688,6 @@ public sealed class WorldSnapshotTests
         int[] SlotVersionOffsets,
         IReadOnlyList<SnapshotSchemaLayout> Schemas,
         IReadOnlyList<SnapshotArchetypeLayout> Archetypes,
-        IReadOnlyList<SnapshotHierarchyLayout> HierarchyLinks,
         int FreeCountOffset,
         int[] FreeIdOffsets);
 
@@ -2789,7 +2705,6 @@ public sealed class WorldSnapshotTests
         IReadOnlyList<SnapshotColumnLayout> Columns);
 
     private sealed record SnapshotColumnLayout(Type ComponentType, int PayloadOffset, int PayloadLength);
-    private sealed record SnapshotHierarchyLayout(int ChildOffset, int ParentOffset);
 
     private static void Write7BitEncodedInt(Stream stream, int value)
     {

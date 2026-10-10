@@ -420,18 +420,6 @@ public sealed class RobustnessTests
     }
 
     [Fact]
-    public void AddChild_on_dead_entity_throws()
-    {
-        var world = new World();
-        var parent = world.CreateEmpty();
-        var child = world.CreateEmpty();
-        world.Destroy(child);
-
-        Assert.Throws<InvalidOperationException>(() => world.AddChild(parent, child));
-        Assert.Throws<InvalidOperationException>(() => world.AddChild(child, parent));
-    }
-
-    [Fact]
     public void Has_on_dead_entity_returns_false()
     {
         var world = new World();
@@ -474,35 +462,6 @@ public sealed class RobustnessTests
 
         Assert.False(world.TryGet<Velocity>(e, out _));
         Assert.False(world.TryGet<Health>(e, out _));
-    }
-
-    // ── B4: AddChild reparenting ──────────────────────────────
-
-    [Fact]
-    public void AddChild_reparents_entity_correctly()
-    {
-        var world = new World();
-        var a = world.CreateEmpty();
-        var b = world.CreateEmpty();
-        var c = world.CreateEmpty();
-
-        // Attach B to A.
-        world.AddChild(a, b);
-        Assert.True(world.TryGetParent(b, out var parent1));
-        Assert.Equal(a, parent1);
-
-        // Re-parent B from A to C.
-        world.AddChild(c, b);
-        Assert.True(world.TryGetParent(b, out var parent2));
-        Assert.Equal(c, parent2);
-
-        // A should no longer have children.
-        Assert.False(world.HasChildren(a));
-
-        // No duplicate or cycle — all entities still alive.
-        Assert.True(world.IsAlive(a));
-        Assert.True(world.IsAlive(b));
-        Assert.True(world.IsAlive(c));
     }
 
     // ── B5: Stale entity version detection ───────────────────

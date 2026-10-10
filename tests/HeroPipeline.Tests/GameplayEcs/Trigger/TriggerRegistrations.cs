@@ -2,6 +2,7 @@ using System;
 using Hero.Ecs;
 using Hero.GameplayEcs.Cards;
 using Hero.GameplayEcs.Characters.Attack;
+using Hero.GameplayEcs.Characters.Actions;
 using Hero.GameplayEcs.Characters.Defense;
 using Hero.GameplayEcs.Characters.Heal;
 using MiniArch.Core;
@@ -48,11 +49,12 @@ public static class TriggerRegistrations
 
     private static void ObserveDamageDealtBySelf(FrameView frame, MiniArch.Entity observerEntity, TriggerMatchDelegate onMatch)
     {
-        if (!frame.TryGetParent(observerEntity, out MiniArch.Entity owner))
+        if (!frame.TryGet(observerEntity, out ActionOwner actionOwner))
         {
             return;
         }
 
+        MiniArch.Entity owner = actionOwner.Value;
         foreach (var chunk in frame.ChunkQuery(DamageEffectQuery).GetChunks())
         {
             var effectIds = chunk.GetSpan<EffectId>();
@@ -100,7 +102,7 @@ public static class TriggerRegistrations
 
     private static void ActionGainArmorFromDamage(FrameContext ctx, MiniArch.Entity observerEntity, TriggerTargets targets)
     {
-        if (!ctx.Frame.TryGetParent(observerEntity, out MiniArch.Entity owner))
+        if (!ctx.Frame.TryGet(observerEntity, out ActionOwner actionOwner))
         {
             return;
         }
@@ -116,7 +118,7 @@ public static class TriggerRegistrations
             MiniArch.Entity effect = ctx.Commands.Create();
             ctx.Commands.Add(effect, new Effect());
             ctx.Commands.Add(effect, CharacterArmorIds.GainArmorEffect);
-            ctx.Commands.Add(effect, new EffectTarget(owner));
+            ctx.Commands.Add(effect, new EffectTarget(actionOwner.Value));
             ctx.Commands.Add(effect, new ArmorAmountValue(amountComp.Value));
         }
     }
@@ -126,7 +128,7 @@ public static class TriggerRegistrations
         // observerEntity is the card that was drawn
         // We need to heal the owner (participant who drew the card)
 
-        if (!ctx.Frame.TryGetParent(observerEntity, out MiniArch.Entity owner))
+        if (!ctx.Frame.TryGet(observerEntity, out ActionOwner actionOwner))
         {
             return;
         }
@@ -139,7 +141,7 @@ public static class TriggerRegistrations
             MiniArch.Entity effect = ctx.Commands.Create();
             ctx.Commands.Add(effect, new Effect());
             ctx.Commands.Add(effect, CharacterHealIds.HealEffect);
-            ctx.Commands.Add(effect, new EffectTarget(owner));
+            ctx.Commands.Add(effect, new EffectTarget(actionOwner.Value));
             ctx.Commands.Add(effect, healAmount);
         }
     }

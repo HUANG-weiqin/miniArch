@@ -2,7 +2,7 @@
 title: MiniArch 正确性验证报告
 module: Proof
 description: 版本化记录 MiniArch 的测试范围、执行命令、当前证据与明确未覆盖项；不把有限测试表述为绝对安全证明
-updated: 2026-09-02
+updated: 2026-10-10
 ---
 # MiniArch 正确性验证报告
 
@@ -20,21 +20,21 @@ updated: 2026-09-02
 |---|---|---|
 | 单元/回归 | `MiniArch.Tests`、`HeroPipeline.Tests` | 已知契约与历史 bug 是否回归 |
 | 双路径确定性 | Submit、Snapshot→Replay、CanonicalChecksum | 相同输入序列是否收敛 |
-| 长程压力 | `MiniArch.Soak`、`MiniArch.LockstepSoak` | ID 复用、free-list、hierarchy、跨 host 是否长期漂移 |
+| 长程压力 | `MiniArch.Soak`、`MiniArch.LockstepSoak` | ID 复用、free-list、跨 host 是否长期漂移（层级相关历史覆盖已退役） |
 | 性能/内存 | `HeroComing.Perf --check-baseline` | runtime 改动是否跌破发布阈值或持续增内存 |
 
-### 当前复验快照
+### 历史复验快照（2026-08-06）
 
-验证 runtime tree：本页所在 commit（2026-08-06）。
+下表仅记录当时 runtime tree 的结果，不是本轮 flat 迁移的最终验收；本轮结果须以对应工作树和参数的实际门禁输出为准。
 
-| 门禁 | 当前结果 |
+| 门禁 | 当时结果 |
 |---|---|
 | `MiniArch.Tests` Release | 1157 / 1157 PASS |
 | `HeroPipeline.Tests` Release | 5 / 5 PASS |
 | HeroComing Movement | 1981.2 rounds/s，阈值 1642 |
 | HeroComing Attack | 1193.5 rounds/s，阈值 997 |
 | HeroComing memory | OK；baseline 未更新 |
-| single-host / multi-host soak | 本轮未复跑；只作为下节历史证据，不冒充当前 commit 结果 |
+| single-host / multi-host soak | 当时未复跑；只作为下节历史证据，不冒充本轮 flat 迁移结果 |
 
 2026-07-15 发布候选的逐次参数、soak 与 perf 证据仍保存在
 `docs/plans/2026-07-15-quality-hardening-4-evidence.md`；它只证明当时列出的 commit 和参数。
@@ -48,7 +48,7 @@ updated: 2026-09-02
 - **确定性是核心契约**：同样的初始状态、输入序列、组件注册顺序和合法调用时序，Submit 与 Snapshot→Replay 必须得到相同 logical state 与 allocator 演化。
 - **用版本化证据，不用绝对措辞**：禁止“完全正确”“已证明不存在同类 bug”“发布级正确性”之类无法由有限测试推出的结论。
 - **Checksum 是 oracle，不是事务机制**：它能发现结果分歧，不能撤销已经发生的部分修改。
-- **语义校验显式、能力守卫强制**：`CommandStream.Validate()` 显式检查 placeholder/layout、组件 presence 与 hierarchy overlay，且不改 World；默认 consume 不隐式执行 presence/hierarchy 校验。pending slot、显式/embedded Entity 引用与布局、FrameDelta 预算、async ownership 仍在必须的 consume 边界强制守卫。两者都不是通用 rollback journal。
+- **语义校验显式、能力守卫强制**：`CommandStream.Validate()` 显式检查 placeholder/layout、组件 presence，且不改 World；默认 consume 不隐式执行 presence 校验。pending slot、显式/embedded Entity 引用与布局、FrameDelta 预算、async ownership 仍在必须的 consume 边界强制守卫。两者都不是通用 rollback journal。
 
 ## 认知模型
 
@@ -67,7 +67,7 @@ updated: 2026-09-02
 ### 明确未覆盖/不承诺
 
 - `CommandStream.Replay` 没有通用事务回滚；不可信 delta 应先 `FrameDelta.Validate()`，但 target-world 兼容性或运行期失败仍可能在 replay 中途留下修改。
-- 默认 `Submit`/async consume 不做 component-presence 或 hierarchy-overlay 语义 preflight；未先显式调用 `Validate()` 时，apply-time 违规可能留下前序修改。`Validate()` 也不覆盖 CreateMany 组一致性、pending-slot 状态或 FrameDelta 预算。
+- 默认 `Submit`/async consume 不做 component-presence 语义 preflight；未先显式调用 `Validate()` 时，apply-time 违规可能留下前序修改。`Validate()` 也不覆盖 CreateMany 组一致性、pending-slot 状态或 FrameDelta 预算。
 - 灾难性 `OutOfMemoryException`、进程终止、硬件故障不保证 rollback。
 - `Unsafe*` API 与 `Clear(query)` 依赖 XML 中的调用方前置条件；违反契约属于未定义/不安全使用。
 - World mutation 与 `CommandStream` 都不支持并发写；Query 的并行只读迭代必须与结构变更隔离。

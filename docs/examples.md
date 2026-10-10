@@ -418,24 +418,26 @@ var branch = world.Clone();
 readonly record struct Position(float X, float Y);
 ```
 
-> **Contract — drain the `CommandStream` across rollback boundaries.** `RestoreState` reverts the
-> `World` only; it does not touch a `CommandStream`, and the stream cannot detect the rollback.
-> A `CommandStream` must therefore be empty when you call `CaptureState()`, and only an empty
-> stream may be used after `RestoreState()`. Drained means already consumed: `Submit()`, or
-> `Snapshot()` + `Clear()`.
+> **CommandStream rollback contract.** `CaptureState()` rejects outstanding real-id reservations,
+> not every recorded command: pure `Set` and deferred-only frames can coexist with a checkpoint.
+> Once `RestoreState()` succeeds, an old active frame cannot be consumed; reservation, Clone and
+> pending cancellation reject it. Existing-entity commands may still append but remain stale.
+> Discard the frame with `Clear()`; the same stream can then record for the restored World.
 >
 > ```csharp
-> var rollback = world.CaptureState();   // stream is empty here
-> stream.Set(a, new Position(1, 1));
-> stream.Submit();                       // consumed -> drained
->
-> world.RestoreState(rollback);          // re-simulate: reuse is safe, Submit drained it
-> stream = new CommandStream(world);      // but after an interrupted frame: discard, don't Clear()
+> var stream = new CommandStream(world);
+> var rollback = world.CaptureState();
+> stream.Set(entity, new Position(1, 1));
+> world.RestoreState(rollback);
+> // stream.Submit();                    // throws: old timeline
+> stream.Clear();                        // safe even after restore
+> stream.Set(entity, new Position(2, 2));
+> stream.Submit();                       // new timeline
 > ```
 >
-> `Clear()` is not a substitute for discarding after a rollback — it releases ids the rollback
-> already returned to the free list. Violating this fails silently (duplicate entity handles,
-> shifted versions). Full contract and symptom table → [docs/api.md — Rollback contract](api.md#contract-the-commandstream-must-be-drained-across-every-rollback-boundary).
+> A live `Entity`, ref, span or `EntitySlot.Value` retained from before restore is not guaranteed
+> valid afterward; confirm identity against the restored World. Full contract →
+> [docs/api.md — Rollback contract](api.md#contract-commandstream-frames-across-capturestate-and-restorestate).
 
 ---
 
@@ -465,25 +467,27 @@ Useful for replays, save files, and cross-process communication.
 
 ---
 
-## 12. Entity Hierarchy
+## 12. Ordinary Entity References
 
-Parent-child relationships with cascade destroy.
+An `Entity` stored in a component is a reference, not an ownership edge. Destroying the target does not destroy or rewrite the referring entity.
 
 ```csharp
 using MiniArch;
 
 var world = new World();
-var parent = world.Create(new Position(0, 0));
-var child = world.Create(new Position(5, 5));
+var target = world.Create(new Position(0, 0));
+var follower = world.Create(new Follow(target));
 
-world.AddChild(parent, child);
-Console.WriteLine(world.TryGetParent(child, out Entity p)); // True, p == parent
-
-world.Destroy(parent);   // child is also destroyed (cascade)
-Console.WriteLine(world.IsAlive(child));  // False
+Console.WriteLine(world.Get<Follow>(follower).Target == target); // True
+world.Destroy(target);
+Console.WriteLine(world.IsAlive(follower)); // True — no cascade
+Console.WriteLine(world.IsAlive(world.Get<Follow>(follower).Target)); // False
 
 readonly record struct Position(float X, float Y);
+readonly record struct Follow(Entity Target);
 ```
+
+For old parent-child data and migration, see [the removal boundary](../.knowledge/kb-hierarchy-runtime.md).
 
 ---
 
@@ -842,54 +846,40 @@ readonly record struct Follow
 
 ---
 
-## 20. Deferred Hierarchy + Clone Subtree
+## 20. Deferred Single-Entity Clone + Entity Reference
 
-Two unique deferred-entity capabilities combined: (1) `AddChild` between two **placeholders** — the parent-child intent is recorded and both sides resolve on Submit. (2) `CommandStream.Clone` deep-copies an entity plus all its hierarchy children as deferred placeholders — perfect for "spawn squad from template" in lockstep.
+`CommandStream.Clone(entity)` copies that entity's components into one new entity. With `DeferredEntities=true`, it returns a placeholder; component `Entity` references to that placeholder resolve when the stream is consumed.
 
 ```csharp
 using MiniArch;
 using MiniArch.Core;
 
 var world = new World();
+var template = world.Create(new Position(500, 500), new Health(1000));
 var stream = new CommandStream(world) { DeferredEntities = true };
 
-// ── Hierarchy between two placeholders ─────────────────────────────────
-var boss = stream.Create();
-stream.Add(boss, new Position(500, 500));
-stream.Add(boss, new Health(1000));
-
-var weakPoint = stream.Create();
-stream.Add(weakPoint, new Position(500, 500));
-stream.Add(weakPoint, new Health(100));
-stream.AddChild(boss, weakPoint); // both are placeholders —resolved on Submit
-
+var clone = stream.Clone(template);        // one pending entity, not a subtree
+var cloneSlot = stream.Track(clone);
+var follower = stream.Create();
+var followerSlot = stream.Track(follower);
+stream.Add(follower, new Follow(clone)); // ordinary component reference to a placeholder
 stream.Submit();
 
-// boss = Entity(0,1), weakPoint = Entity(1,1); hierarchy established
-Console.WriteLine(world.TryGetParent(new Entity(1, 1), out Entity parent)); // True
-Console.WriteLine(parent == new Entity(0, 1));                              // True
-
-// ── Deferred Clone — deep-copy boss + entire subtree ──────────────────
-var cloneStream = new CommandStream(world) { DeferredEntities = true };
-var clone = cloneStream.Clone(new Entity(0, 1)); // returns placeholder
-cloneStream.Submit();
-
-// Clone is a new entity (Entity(2,1)) with all components + a child (Entity(3,1))
-Console.WriteLine(world.Get<Position>(new Entity(2, 1))); // Position(500, 500)
-Console.WriteLine(world.TryGetParent(new Entity(3, 1), out Entity p2)); // True
-Console.WriteLine(p2 == new Entity(2, 1));                              // True
+Console.WriteLine(world.Get<Position>(cloneSlot.Value)); // Position(500, 500)
+Console.WriteLine(world.Get<Follow>(followerSlot.Value).Target == cloneSlot.Value); // True
 
 readonly record struct Position(float X, float Y);
 readonly record struct Health(int Value);
+readonly record struct Follow(Entity Target);
 ```
 
-> **Tip:** `CommandStream.Clone` records the deep-copy as pending creation — in `DeferredEntities=true` mode the clone and all its descendants are placeholders. This guarantees deterministic ID assignment across all hosts replaying the same delta.
+> **Tip:** `EntitySlot` tracks a placeholder's resolved handle. It is not an ECS component or a parent-child relationship.
 
 ---
 
 ## 21. Deferred Destroy / Cancel Pending
 
-Sometimes you record entities speculatively, then decide not to commit them. `CommandStream.Destroy` on a **placeholder** cancels that pending entity (marks the batch slot as canceled). If the placeholder has children via `AddChild`, the entire subtree is cancelled recursively.
+Sometimes you record entities speculatively, then decide not to commit them. `CommandStream.Destroy` on a **placeholder** cancels only that pending entity (marks its batch slot as canceled). It does not cancel other entities that merely reference it.
 
 ```csharp
 using MiniArch;
@@ -907,25 +897,25 @@ stream.Destroy(maybe); // cancel the pending entity
 stream.Submit();
 Console.WriteLine(world.GetStats().EntityCount); // 0 — nothing materialized
 
-// ── Cascade cancellation: destroy a parent, children follow ───────────
-var parent = stream.Create();
-var child = stream.Create();
-stream.AddChild(parent, child);
-stream.Destroy(parent); // also cancels child recursively
+// ── Cancellation affects only the selected pending entity ────────────
+var cancelled = stream.Create();
+var kept = stream.Create();
+var keptSlot = stream.Track(kept);
+stream.Destroy(cancelled);
 stream.Submit();
-Console.WriteLine(world.GetStats().EntityCount); // 0
+Console.WriteLine(world.IsAlive(keptSlot.Value)); // True
 
 // ── Destroy existing (real) entity ────────────────────────────────────
-world.Create(new Health(1));
+var existing = world.Create(new Health(1));
 var destroyStream = new CommandStream(world);
-destroyStream.Destroy(new Entity(0, 1));
+destroyStream.Destroy(existing);
 destroyStream.Submit();
-Console.WriteLine(world.IsAlive(new Entity(0, 1))); // False
+Console.WriteLine(world.IsAlive(existing)); // False
 
 readonly record struct Health(int Value);
 ```
 
-> **Internals:** Cancelling a pending entity calls `CancelPendingDescendants` which BFS through every hierarchy entry where the entity is a parent, cancels all pending children, and removes `AddChild` intents for existing (non-pending) children. The batch slot is kept (so `PendingBatchCount` stays stable) but marked as cancelled — `Submit` and `BuildDelta` both skip cancelled batches.
+> **Note:** A cancelled pending creation does not materialize. If another effective component value still references its cancelled placeholder, consume-time Entity-reference validation rejects that frame; it never silently removes the reference.
 
 ---
 
@@ -1070,17 +1060,16 @@ readonly record struct Position(float X, float Y);
 
 ---
 
-## 25. World.Clone() Branching + Subtree Copy
+## 25. World.Clone() Branching + Single-Entity Copy
 
-`World.Clone()` creates a fully independent fork of the entire world — no shared internal arrays. Use it for speculative "what-if" simulation or as an alternative to `CaptureState`/`RestoreState` for long-lived checkpoints. `World.Clone(Entity)` deep-copies a single entity and its entire subtree.
+`World.Clone()` creates a fully independent fork of the entire world — no shared internal arrays. Use it for speculative "what-if" simulation or as an alternative to `CaptureState`/`RestoreState` for long-lived checkpoints. `World.Clone(Entity)` copies only that entity's components into one new entity.
 
 ```csharp
 using MiniArch;
 
 var world = new World();
 var player = world.Create(new Position(0, 0), new Health(100));
-var pet = world.Create(new Position(5, 5));
-world.AddChild(player, pet); // hierarchy: player → pet
+var pet = world.Create(new Position(5, 5)); // independent entity
 
 // ── Fork a speculative branch ─────────────────────────────────────────
 var branch = world.Clone(); // fully independent copy
@@ -1097,10 +1086,10 @@ Console.WriteLine(branch.Get<Position>(new Entity(0, 1))); // Position(50, 0)
 // Original world is untouched
 Console.WriteLine(world.Get<Position>(new Entity(0, 1))); // Position(0, 0)
 
-// ── Deep-copy a single entity + subtree ───────────────────────────────
-var standalonePet = world.Clone(pet); // new entity with Position(5, 5), no parent
-Console.WriteLine(world.TryGetParent(standalonePet, out _)); // False
-Console.WriteLine(world.Get<Position>(standalonePet));        // Position(5, 5)
+// ── Copy one entity's components, not other entities ──────────────────
+var standalonePet = world.Clone(pet);
+Console.WriteLine(world.Get<Position>(standalonePet)); // Position(5, 5)
+Console.WriteLine(world.IsAlive(player));               // True
 
 readonly record struct Position(float X, float Y);
 readonly record struct Health(int Value);
@@ -1180,42 +1169,29 @@ readonly record struct CardZone(int Value);
 
 ---
 
-## 9. Hierarchy
+## 9. Explicit Bulk Destroy
 
-Parent-child relationships with `AddChild`, `RemoveChild`, `TryGetParent`, `EnumerateChildren`. Destroying a parent cascades to all children.
+There is no implicit relationship between entities. Select every entity you intend to destroy.
 
 ```csharp
 using MiniArch;
 
 var world = new World();
-var root = world.Create(new Health(100));
+var leader = world.Create(new Health(100));
 var left = world.Create(new Health(50));
 var right = world.Create(new Health(25));
 
-// Build tree: root → { left, right }
-world.AddChild(root, left);
-world.AddChild(root, right);
+world.Destroy(new[] { left, right }); // explicit targets only
+Console.WriteLine(world.IsAlive(leader)); // True
+Console.WriteLine(world.IsAlive(left));   // False
 
-// Query parent
-bool found = world.TryGetParent(left, out Entity parent);
-Console.WriteLine($"left's parent: {parent} (found={found})");
-
-// Enumerate children (zero-alloc, no allocation per call)
-foreach (var child in world.EnumerateChildren(root))
-    Console.WriteLine($"child: {child}, hp: {world.Get<Health>(child).Value}");
-
-// Destroy cascades: destroying root also destroys left and right
-world.Destroy(root);
-Console.WriteLine($"root alive? {world.IsAlive(root)}");     // False
-Console.WriteLine($"left alive? {world.IsAlive(left)}");     // False
+world.Destroy(leader);
+Console.WriteLine(world.IsAlive(leader)); // False
 
 readonly record struct Health(int Value);
 ```
 
-> **Note:** Hierarchy is parent→child only (no child→parent pointer stored).
-> - `EnumerateChildren` is a zero-allocation `IEnumerable<Entity>` (struct enumerator).
-> - `HasChildren(Entity)` is O(1).
-> - Parent is always destroyed before children (depth-first). Children become rootless — they do *not* inherit the parent's components.
+If an application models a group, it owns selection and cleanup; MiniArch does not infer membership from ordinary `Entity` references.
 
 ---
 
@@ -1283,7 +1259,7 @@ readonly record struct Position(float X, float Y);
 > - A `WorldStateSnapshot` can be restored **once**. After restore, call `CaptureState()` again for a new checkpoint.
 > - Dispose an unconsumed snapshot before evicting or overwriting it; disposal returns its payload without restoring the world.
 > - Snapshots are tied to the `World` that produced them. Restoring on a different `World` instance throws.
-> - The snapshot captures entity records, free list, archetypes, component data, and hierarchy. It does not capture `CommandStream` state — clear your stream before capture.
+> - The in-memory snapshot captures entity records, free list, archetypes, and component data. It does not capture `CommandStream` state — clear your stream before capture.
 
 ---
 

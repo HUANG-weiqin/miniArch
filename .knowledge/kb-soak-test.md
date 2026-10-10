@@ -2,16 +2,16 @@
 title: 浸泡测试（Soak Test）— 库安全证明
 module: Soak
 description: 长周期 ECS 正确性验证器——随机操作序列 + Submit/Replay 双路径校验 + 多维度安全证明矩阵
-updated: 2026-07-11
+updated: 2026-10-10
 ---
 # 浸泡测试（Soak Test）— 库安全证明
 
-> `tools/soak/MiniArch.Soak/` — 通过长时间随机操作序列验证 Submit 与 Replay 两条路径的世界状态收敛一致性。已发现并修复 **6 个库级 bug（B1-B6）**，另有 **B7-B17 来自代码审阅 / 用户报告**（详见 kb-code-review-findings.md）。当前 **259 seed × 6.4M+ 帧全 PASS**（含 224 diversity sweep + 长时/边界/鲁棒等补充 seed）。
+> `tools/soak/MiniArch.Soak/` — 长时间随机操作验证 Submit 与 Replay 收敛。当前扁平生成器只产生 Create/Destroy/Add/Set/Remove/单实体 Clone。以下 **259 seed × 6.4M+ 帧 PASS** 等数字是层级删除前的历史批次，不是本轮扁平版本的复验结果；B1-B6 的历史索引见 `kb-code-review-findings.md`。本轮完整门禁结果另行记录，不用历史数字充当验收。
 
 ## 这个测试是干什么的
 
 - 核心职责：
-  - 随机生成 Create / Destroy / Add / Set / Remove / Clone / AddChild / RemoveChild 操作序列
+  - 随机生成 Create / Destroy / Add / Set / Remove / 单实体 Clone 操作序列；旧层级 op 已退役
   - 每帧执行 `CommandStream.Submit()` → 序列化为 `FrameDelta` → `Replay()` 到影子世界
   - 每帧校验：`WorldValidator` 结构不变量 + `CanonicalChecksum` 双世界一致 + `EntityCount` 对齐
   - 每 10000 帧执行全量 `WorldDiff` + `WorldSnapshot` 往返 + `World.Clone` 校验
@@ -23,11 +23,11 @@ updated: 2026-07-11
 ## 测试策略
 
 ```
-随机种子 → 影子世界 + 6 阶段操作权重
-  WarmUp (0-10%): 仅创建，无销毁
+当前扁平配置：随机种子 → 影子世界 + 6 阶段操作权重
+  WarmUp (0-10%): 创建为主
   StableMutate (10-40%): 均衡操作
   MigrationStorm (40-55%): 高频 Add/Remove（archetype 迁移）
-  HierarchyStress (55-70%): 高频 AddChild/RemoveChild
+  ComponentChurn (55-70%): 组件增删与值修改
   AllocatorChurn (70-90%): 高频 Create/Destroy（slot 回收+复用）
   Cooldown (90-100%): 慢速收敛
 ```
@@ -80,7 +80,7 @@ Sweep 模式下每个 seed 独立报告 GC/alloc（per-seed baseline），第一
 |---|-----|------|------|---------|
 | B1 | `ApplyRawAdd` 重复 Add 抛异常 | Replay 路径无去重 | **历史修复**：`ApplyRawAdd` 改为覆盖写入（内部分支，非公 API）；当前 `World.Add<T>` 公 API 为 strict Add（已存在抛异常） | 默认配置 |
 | B2 | `Clear` 不释放已取消 batch 实体 | Submit 路径跳过释放 | 始终释放 | 默认配置 |
-| B3 | `ApplyHierarchyToWorld` 排序不同 | 字典 vs Entity.Id 排序 | 统一排序 | 默认配置 |
+| B3（层级已退役） | `ApplyHierarchyToWorld` 排序不同 | 字典 vs Entity.Id 排序 | 当时统一排序；当前关系路径/对应测试退役 | 默认配置（历史） |
 | B4 | `ApplyTypedAdd` 重复 Add 抛异常（Submit） | Clone+Add 路径 | **历史修复**：`ApplyTypedAdd` 改为覆盖写入（内部分支，非公 API）；当前 `World.Add<T>` 公 API 为 strict Add（已存在抛异常） | 默认配置 |
 | B5 | Replay free-list 顺序分歧 | `RemoveFromFreeList` swap-remove 破坏 survivor 顺序 | shift-remove (Array.Copy) | **cap=100 ops/f=50** |
 | B6 | Cancelled batch free-list 顺序分歧 | record 阶段按 destroy 顺序 push，wire 按 batch 创建顺序 emit | `AlignCancelledBatchFreeListOrder` | **cap=100 ops/f=50** |
@@ -112,10 +112,10 @@ dotnet run -c Release --project tools/soak/MiniArch.Soak -- --seed 222 --entity-
 
 - 必须 `-c Release` 编译（与 NuGet 包一致）
 - 影子世界的 `CommandStream` + `FrameDelta` 全局复用（避免每帧分配）
-- 随机操作保证对库合法：`_pendingRemoves` 防 Remove+Set/Add、`_destroyedThisFrame`+`HasAncestorDestroyedThisFrame` 防级联销毁重复、`_pendingHierarchyParents`/`WouldCreateCycle` 防同帧循环
+- `--async` 的分配汇总不是有效性能证据：`SubmitAndValidateAsync` 跨 `await` 相减 `GC.GetAllocatedBytesForCurrentThread()`，线程切换会产生负值。这里只采信其 checksum/validator/oracle 正确性结果，不把该数值当作库的零分配或内存改善证明；计量修复不属于本轮扁平改造。
+- 当前生成器用 `_pendingAdds` / `_pendingRemoves` 控制同帧组件 presence；旧 `HasAncestorDestroyedThisFrame`、`_pendingHierarchyParents` / `WouldCreateCycle` 是退役层级路径，不属于当前六种 op。
 
 ## 后续增强方向
 
-- Oracle 扩展：当前只跟踪 CompA/CompB 值，可扩展到 CompC/CompD + hierarchy 关系
-- Async 路径：soak 只测 `Submit` + `SnapshotInto`，未覆盖 `SubmitAndSnapshotAsync` / `SubmitAndSnapshotIntoAsync` / `SubmitFromFrozen` 路径
-- 更深 hierarchy：当前 AddChild 只做浅层，深层嵌套（10+ 层）的级联销毁顺序可进一步压测
+- Oracle 扩展：CompA/CompB 值可扩展到 CompC/CompD；不再建议增加内置 hierarchy 关系 oracle。
+- Async 路径：当前 runner 有 `SubmitAndSnapshotAsync` 分支；`SubmitAndSnapshotIntoAsync` 未被本工具覆盖。

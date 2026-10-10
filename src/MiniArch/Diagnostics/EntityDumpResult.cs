@@ -22,26 +22,16 @@ public readonly struct EntityReport
     /// <summary>Component list, empty when the entity is dead.</summary>
     public ReadOnlyCollection<ComponentInfo> Components { get; }
 
-    /// <summary>Parent entity, null when no parent or entity is dead.</summary>
-    public Entity? Parent { get; }
-
-    /// <summary>Child entities, empty when no children or entity is dead.</summary>
-    public ReadOnlyCollection<Entity> Children { get; }
-
     internal EntityReport(
         bool isAlive, int id, int version,
         ArchetypeInfo? archetype,
-        IList<ComponentInfo> components,
-        Entity? parent,
-        IList<Entity> children)
+        IList<ComponentInfo> components)
     {
         IsAlive = isAlive;
         Id = id;
         Version = version;
         Archetype = archetype;
         Components = new ReadOnlyCollection<ComponentInfo>(components);
-        Parent = parent;
-        Children = new ReadOnlyCollection<Entity>(children);
     }
 
     /// <summary>
@@ -73,10 +63,6 @@ public readonly struct EntityReport
                 sb.AppendLine($"    {c.Type.Name} ({c.SizeBytes} B): {hex}");
             }
         }
-        if (Parent.HasValue)
-            sb.AppendLine($"  Parent: {Parent.Value}");
-        if (Children.Count > 0)
-            sb.AppendLine($"  Children: {string.Join(", ", Children)}");
         return sb.ToString().TrimEnd();
     }
 }

@@ -13,8 +13,8 @@ namespace MiniArch.Core;
 /// <para/>
 /// Designed for GGPO-style frame rollback (60fps save/restore cycles at
 /// &lt;1000 entities). <b>NOT</b> for persistence or cross-process use:
-/// it contains raw internal arrays (<c>EntityRecord[]</c>, archetype pointers,
-/// hierarchy arrays) that are tied to the current process memory layout.
+/// it contains raw internal arrays (<c>EntityRecord[]</c> and archetype pointers)
+/// that are tied to the current process memory layout.
 /// <para/>
 /// For persistence, checksums, or networking, use <see cref="WorldSnapshot"/>
 /// (<c>WorldSnapshot.Save</c> / <c>WorldSnapshot.Load</c>) instead, which
@@ -123,18 +123,11 @@ internal sealed class WorldStateSnapshotPayload
     internal EntityRecord[] Records = [];
     internal int EntitySlotCount;
 
-    internal FreeEntityEntry[] FreeEntities = [];
+    internal int[] FreeIds = [];
     internal int FreeIdCount;
 
     internal ArchetypeBackupEntry[] ArchetypeBackups = [];
     internal int ArchetypeBackupCount;
-
-    internal Entity[] HierarchyParentByChild = [];
-    internal int[] HierarchyFirstChild = [];
-    internal int HierarchyEntityCapacity;
-    internal ChildSlot[] HierarchyChildSlots = [];
-    internal int HierarchyChildSlotCount;
-    internal int HierarchyChildFreeList;
 
     internal bool IsRecycled = true;
     internal ulong Generation;
@@ -155,20 +148,14 @@ internal sealed class WorldStateSnapshotPayload
         EntitySlotCount = 0;
         FreeIdCount = 0;
         ArchetypeBackupCount = 0;
-        HierarchyEntityCapacity = 0;
-        HierarchyChildSlotCount = 0;
-        HierarchyChildFreeList = -1;
         SourceWorld = null;
     }
 
     internal void ReleaseStorage()
     {
         Records = [];
-        FreeEntities = [];
+        FreeIds = [];
         ArchetypeBackups = [];
-        HierarchyParentByChild = [];
-        HierarchyFirstChild = [];
-        HierarchyChildSlots = [];
     }
 
     internal void EnsureRecordsCapacity(int capacity)
@@ -179,8 +166,8 @@ internal sealed class WorldStateSnapshotPayload
 
     internal void EnsureFreeIdsCapacity(int capacity)
     {
-        if (FreeEntities.Length < capacity)
-            Array.Resize(ref FreeEntities, capacity);
+        if (FreeIds.Length < capacity)
+            Array.Resize(ref FreeIds, capacity);
     }
 
     internal void EnsureArchetypeBackupsCapacity(int capacity)
@@ -189,28 +176,6 @@ internal sealed class WorldStateSnapshotPayload
             Array.Resize(ref ArchetypeBackups, capacity);
     }
 
-    internal void EnsureHierarchyCapacity(int parentByChildLength, int childSlotCapacity)
-    {
-        if (HierarchyParentByChild.Length < parentByChildLength)
-            Array.Resize(ref HierarchyParentByChild, parentByChildLength);
-        if (HierarchyFirstChild.Length < parentByChildLength)
-            Array.Resize(ref HierarchyFirstChild, parentByChildLength);
-        if (HierarchyChildSlots.Length < childSlotCapacity)
-            Array.Resize(ref HierarchyChildSlots, childSlotCapacity);
-    }
-}
-
-internal readonly struct FreeEntityEntry
-{
-    public readonly int Id;
-    public readonly int Version;
-    public FreeEntityEntry(int id, int version) { Id = id; Version = version; }
-}
-
-internal struct ChildSlot
-{
-    public Entity Entity;
-    public int Next;
 }
 
 internal struct ArchetypeBackupEntry

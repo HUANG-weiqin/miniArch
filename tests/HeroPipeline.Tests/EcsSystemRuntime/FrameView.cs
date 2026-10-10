@@ -17,9 +17,6 @@ public sealed class FrameView
 
     public bool Exists(MiniArch.Entity entity) => _world.TryGetLocation(entity, out _);
 
-    public bool TryGetParent(MiniArch.Entity entity, out MiniArch.Entity parent) =>
-        _world.TryGetParent(entity, out parent);
-
     public MiniArchQuery Each(MiniArchQueryDescription description) =>
         _world.Query(in description);
 

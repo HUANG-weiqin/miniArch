@@ -28,13 +28,12 @@ public static class CharacterActionRegistrations
         ActionKind actionKind = frame.Get<ActionKind>(requestTarget.Target);
         ActionRuleId actionRuleId = frame.Get<ActionRuleId>(requestTarget.Target);
 
-        if (!context.Frame.TryGetParent(requestTarget.Target, out MiniArch.Entity parentCore))
+        if (!frame.TryGet(requestTarget.Target, out ActionOwner owner))
         {
             return;
         }
 
-        MiniArch.Entity parent = parentCore;
-        TranslationTable.Translate(actionKind, context, request, parent, actionRuleId);
+        TranslationTable.Translate(actionKind, context, request, owner.Value, actionRuleId);
     }
 }
 

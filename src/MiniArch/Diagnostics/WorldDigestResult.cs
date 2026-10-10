@@ -19,7 +19,6 @@ public readonly struct WorldDigestResult
     private readonly byte[]? _total;
     private readonly byte[]? _occupancy;
     private readonly byte[]? _freeList;
-    private readonly byte[]? _hierarchy;
     private readonly Dictionary<Type, byte[]>? _perComponent;
     private readonly Dictionary<int, byte[]>? _perArchetype;
 
@@ -32,9 +31,6 @@ public readonly struct WorldDigestResult
     /// <summary>Gets a defensive copy of the hash of free-list entries (ID, version).</summary>
     public byte[] FreeList => CopyHash(_freeList);
 
-    /// <summary>Gets a defensive copy of the hash of parent-child relations.</summary>
-    public byte[] Hierarchy => CopyHash(_hierarchy);
-
     /// <summary>Gets a defensive snapshot of component-type hashes.</summary>
     public IReadOnlyDictionary<Type, byte[]> PerComponent => CopyHashes(_perComponent);
 
@@ -45,14 +41,12 @@ public readonly struct WorldDigestResult
         byte[] total,
         byte[] occupancy,
         byte[] freeList,
-        byte[] hierarchy,
         Dictionary<Type, byte[]> perComponent,
         Dictionary<int, byte[]> perArchetype)
     {
         _total = total;
         _occupancy = occupancy;
         _freeList = freeList;
-        _hierarchy = hierarchy;
         _perComponent = perComponent;
         _perArchetype = perArchetype;
     }

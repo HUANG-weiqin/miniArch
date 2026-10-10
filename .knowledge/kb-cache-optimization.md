@@ -2,7 +2,7 @@
 title: Cache & Memory Optimization Review
 module: MiniArch.Core
 description: Memory layout, cache behavior analysis, applied optimizations, and remaining opportunities for the ECS runtime
-updated: 2026-10-05
+updated: 2026-10-10
 ---
 # Cache & Memory Optimization Review
 
@@ -33,7 +33,7 @@ World (5 partial files — 详见 kb-architecture-review.md §10)
 ├── _records: EntityRecord[]   // 16B/entity: (Archetype ref, RowIndex, Version)
 ├── _archetypes: Dictionary<Signature, Archetype>
 ├── _archetypeByMask: Dictionary<ComponentMask, Archetype>  // canonical-only, Replay 零分配路径
-├── _freeIds: RecycledEntity[]
+├── _freeIds: int[]          // 有序 LIFO id；version 唯一保存在 _records
 ├── _createArchetypeCache: Archetype?[]      // 每 World 的泛型 Create 缓存
 └── _createArchetypeCacheGeneration: int     // CommandStream mask cache 的失效标记
 

@@ -2,7 +2,7 @@
 title: MiniArch.Diagnostics 诊断工具
 module: MiniArch.Diagnostics
 description: ECS 世界的状态诊断工具集：比对、校验、检查、探查
-updated: 2026-09-28
+updated: 2026-10-10
 ---
 
 # MiniArch.Diagnostics 诊断工具
@@ -13,8 +13,8 @@ updated: 2026-09-28
   - 提供纯函数式的 ECS 世界诊断工具，不依赖外部库
   - `WorldDiff.Compare()` — 两个世界按 slot 逐 entity 比对，锁定 divergence 位置
   - `WorldValidator.Validate()` — 世界内部结构性不变量检查
-  - `EntityDump.Describe()` — 单个 entity 的全状态报告（组件类型/值、层级关系）
-  - `WorldDigest.Compute()` — 按状态域（occupancy、free-list、hierarchy、组件类型、archetype）分桶的 SHA-256 哈希，用于快速缩小 checksum mismatch 范围
+  - `EntityDump.Describe()` — 单个 entity 的状态报告（组件类型/值）
+  - `WorldDigest.Compute()` — 按状态域（occupancy、free-list、组件类型、archetype）分桶的 SHA-256 哈希，用于快速缩小 checksum mismatch 范围
 - 这个模块不负责：
   - 不负责网络层序列化/反序列化
   - 不负责 UI 展示（所有输出是纯数据 + `ToString()`）
@@ -36,12 +36,13 @@ updated: 2026-09-28
 
 ## 决策
 
-- **同一程序集**：Diagnostics 放在 `src/MiniArch/Diagnostics/` 目录下，与核心代码同程序集，可以直接访问 `internal` 类型（`EntityRecord`、`Archetype`、`HierarchyTable` 等），无需 `InternalsVisibleTo`
+- **同一程序集**：Diagnostics 放在 `src/MiniArch/Diagnostics/` 目录下，与核心代码同程序集，可以直接访问 `internal` 类型（`EntityRecord`、`Archetype` 等），无需 `InternalsVisibleTo`
 - **Namespace 即文档**：`MiniArch.Diagnostics` 命名空间本身就传达了"这是 debug 工具"的信息，热路径代码不会意外引用
 - **`HashBuilder` 替代 `IncrementalHash`**：使用 `MemoryStream` + `SHA256.HashData(Stream)` 而非 `IncrementalHash`（`IncrementalHash` 在 `System.Security.Cryptography` 中仍可用，但 `MemoryStream` 方式对累加再算的场景更简洁），在诊断场景下性能差异可忽略
 - **结果不可变**：列表字段用 `ReadOnlyCollection<T>` 包装；公共签名必须保留 `byte[]` 的 hash/raw bytes 通过 getter 返回 defensive copy，hash 字典同时深复制 value array，不能只用 `ReadOnlyDictionary` 包装可变数组
 - **确定性边界**：各 domain hash 按其声明的稳定顺序计算；`WorldDigest.Total` 有意包含 physical archetype row order，因此只保证相同内部布局 → 相同输出，不代表任意“逻辑等价”world 都同 hash。`PerArchetype` 的 key 是**非空原型的稠密 ordinal**（0 起连续），前导空原型不再整体平移 key。
-- **Validator 必须双向取证**：entity record↔archetype row、child→parent↔parent→children 都从两种独立表示互相校验；不能从同一表读两次后把结果当成 bidirectional proof。bulk `World.Clear` 有意保留的 version-invalid hierarchy entry 不属于 live relation，不报错。
+- **Validator 必须双向取证**：entity record↔archetype row 从两种独立表示互相校验；不能从同一表读两次后把结果当成 bidirectional proof。原层级诊断及其关系域已随内置层级退役（见 `kb-hierarchy-runtime.md`）。
+- **free-list 版本观察仍保留**：World free-list 仅保存有序 id 后，`WorldDiff.FreeListDiff.VersionMismatch` 与 `WorldDigest.FreeListHash` 仍从对应 `EntityRecord.Version` 取得代际；只删冗余内部表示，不删公开诊断合同。`FreeListAndDestroyScratchTests` 覆盖此边界。
 
 ## 入口
 
@@ -55,6 +56,6 @@ updated: 2026-09-28
 - `Signature` 类型没有 `[i]` 索引器，需要使用 `.AsSpan()` 才能按索引访问
 - `Position`/`Velocity` 等测试组件在各测试文件中各自定义为 `file readonly record struct`，不是共享的
 - `WorldValidator` 检测 pending 保留时使用 `EntitySlotCount > occupied + freeCount` 发出 Warning 而非 Error（因为有保留是合法状态）
-- `WorldDigest.Total` 包含 `PerArchetype` 物理 row-order hash；batch destroy 与普通 loop 可能得到相同 entity state / free-list / component values 但不同 dense storage row order。精确比较 v5 persistence state 可用 `World.CanonicalChecksum()`；它会忽略 row order/CLR padding 和空原型，但仍观察 chunk capacity、全部 slots 和 free-list 顺序。若这些持久化细节允许不同，应使用 `WorldDiff.Compare()` 与所需的 Occupancy/FreeList/Hierarchy/PerComponent 域，不要把 canonical hash 当成纯业务逻辑 hash。
+- `WorldDigest.Total` 包含 `PerArchetype` 物理 row-order hash；batch destroy 与普通 loop 可能得到相同 entity state / free-list / component values 但不同 dense storage row order。精确比较 v5 persistence state 可用 `World.CanonicalChecksum()`；它会忽略 row order/CLR padding 和空原型，但仍观察 chunk capacity、全部 slots 和 free-list 顺序。若这些持久化细节允许不同，应使用 `WorldDiff.Compare()` 与所需的 Occupancy/FreeList/PerComponent 域，不要把 canonical hash 当成纯业务逻辑 hash。
 - `WorldDigest.PerArchetype` / `Total` 忽略空原型（`PerComponent` 同样跳过）；但 key 编号只按非空原型稠密递增，所以“新增一个空原型”不会再让既有 key 整体错位，而“改变非空原型集合”仍会。
 - `WorldDigestResult` 与 `ComponentInfo` 的 byte-array getter 每次返回副本；Diagnostics 本就不是热路径，不要缓存并期待引用相等，按内容比较。

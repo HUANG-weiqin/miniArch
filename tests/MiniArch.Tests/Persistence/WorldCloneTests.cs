@@ -147,45 +147,6 @@ public sealed class WorldCloneTests
     }
 
     [Fact]
-    public void Clone_preserves_parent_and_children_relationships()
-    {
-        var world = new World();
-        var parent = world.CreateEmpty();
-        var firstChild = world.CreateEmpty();
-        var secondChild = world.CreateEmpty();
-
-        world.AddChild(parent, firstChild);
-        world.AddChild(parent, secondChild);
-
-        var cloned = world.Clone();
-
-        Assert.True(cloned.TryGetParent(firstChild, out var resolvedParent));
-        Assert.Equal(parent, resolvedParent);
-        Assert.Equal(
-            [firstChild, secondChild],
-            cloned.EnumerateChildren(parent).ToChildList().OrderBy(entity => entity.Id).ToArray());
-    }
-
-    [Fact]
-    public void Clone_restores_hierarchy_so_cascade_destroy_still_works()
-    {
-        var world = new World();
-        var root = world.CreateEmpty();
-        var child = world.CreateEmpty();
-        var grandChild = world.CreateEmpty();
-
-        world.AddChild(root, child);
-        world.AddChild(child, grandChild);
-
-        var cloned = world.Clone();
-        cloned.Destroy(root);
-
-        Assert.False(cloned.IsAlive(root));
-        Assert.False(cloned.IsAlive(child));
-        Assert.False(cloned.IsAlive(grandChild));
-    }
-
-    [Fact]
     public void Clone_produces_independent_copy()
     {
         var world = new World(chunkCapacity: 4);

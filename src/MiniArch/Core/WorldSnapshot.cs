@@ -97,7 +97,7 @@ public static class WorldSnapshot
 
     /// <summary>
     /// Computes the legacy lockstep projection checksum. It includes slot
-    /// versions, non-empty archetypes, live hierarchy, and component values,
+    /// versions, non-empty archetypes, and component values,
     /// but excludes chunk capacity, empty archetypes, and the free list.
     /// </summary>
     public static byte[] ComputeChecksum(World world)
@@ -137,7 +137,7 @@ public static class WorldSnapshot
             }
         }
 
-        WriteHierarchy(ref sink, world);
+        WriteInt32(ref sink, 0); // Preserve the flat v5 checksum layout.
         return hash.GetCurrentHash();
     }
 
@@ -168,7 +168,7 @@ public static class WorldSnapshot
         WriteInt32(ref sink, world.EntitySlotCount);
         WriteInt32(ref sink, layout.Schemas.Length);
         WriteInt32(ref sink, layout.Archetypes.Length);
-        WriteInt32(ref sink, layout.Relations.Length);
+        WriteInt32(ref sink, 0); // v5 relationship count remains present and empty.
 
         foreach (var record in world.EntityRecords)
             WriteInt32(ref sink, record.Version);
@@ -183,16 +183,10 @@ public static class WorldSnapshot
         for (var index = 0; index < layout.Archetypes.Length; index++)
             WriteCanonicalArchetype(ref sink, layout.Archetypes[index]);
 
-        for (var index = 0; index < layout.Relations.Length; index++)
-        {
-            WriteInt32(ref sink, layout.Relations[index].ChildId);
-            WriteInt32(ref sink, layout.Relations[index].ParentId);
-        }
-
         var freeList = world.FreeList;
         WriteInt32(ref sink, freeList.Length);
         for (var index = 0; index < freeList.Length; index++)
-            WriteInt32(ref sink, freeList[index].Id);
+            WriteInt32(ref sink, freeList[index]);
     }
 
     private static void WriteCanonicalArchetype<TSink>(ref TSink sink, CanonicalArchetype entry)
@@ -285,8 +279,7 @@ public static class WorldSnapshot
                 throw new InvalidOperationException("World contains duplicate archetype signatures.");
         }
 
-        var relations = CollectRelations(world);
-        return new CanonicalLayout(schemas, canonicalArchetypes, relations);
+        return new CanonicalLayout(schemas, canonicalArchetypes);
     }
 
     private static List<CanonicalArchetype> BuildChecksumArchetypes(World world)
@@ -337,27 +330,6 @@ public static class WorldSnapshot
                 return comparison;
         }
         return left.Length.CompareTo(right.Length);
-    }
-
-    private static (int ChildId, int ParentId)[] CollectRelations(World world)
-    {
-        var relations = new List<(int ChildId, int ParentId)>();
-        foreach (var (child, parent) in world.Hierarchy.EnumerateLiveRelations(world))
-            relations.Add((child.Id, parent.Id));
-        relations.Sort(static (left, right) => left.ChildId.CompareTo(right.ChildId));
-        return relations.ToArray();
-    }
-
-    private static void WriteHierarchy<TSink>(ref TSink sink, World world)
-        where TSink : struct, IByteSink
-    {
-        var relations = CollectRelations(world);
-        WriteInt32(ref sink, relations.Length);
-        for (var index = 0; index < relations.Length; index++)
-        {
-            WriteInt32(ref sink, relations[index].ChildId);
-            WriteInt32(ref sink, relations[index].ParentId);
-        }
     }
 
     private static ValidatedSnapshot ValidateCanonicalSnapshot(ReadOnlySpan<byte> payload)
@@ -462,7 +434,6 @@ public static class WorldSnapshot
                 throw new InvalidDataException($"Snapshot schema index {index} is not used by any archetype.");
         }
 
-        ValidateHierarchy(ref reader, hierarchyCount, liveSlots);
         ValidateFreeList(ref reader, slotCount, liveSlots);
         if (reader.Remaining != 0)
             throw new InvalidDataException($"WorldSnapshot has {reader.Remaining} unexpected trailing byte(s).");
@@ -485,8 +456,8 @@ public static class WorldSnapshot
             throw new InvalidDataException($"Snapshot schema count ({schemaCount}) is out of range [0, {MaxReasonableSchemas}].");
         if (archetypeCount < 0 || archetypeCount > MaxReasonableArchetypes)
             throw new InvalidDataException($"Snapshot archetype count ({archetypeCount}) is out of range [0, {MaxReasonableArchetypes}].");
-        if (hierarchyCount < 0 || hierarchyCount > slotCount)
-            throw new InvalidDataException($"Snapshot hierarchy count ({hierarchyCount}) is out of range [0, {slotCount}].");
+        if (hierarchyCount != 0)
+            throw new InvalidDataException($"Snapshot hierarchy relation count must be 0 because built-in hierarchy support was removed (found {hierarchyCount}).");
     }
 
     private static int[] ReadAndValidateSignature(
@@ -526,50 +497,6 @@ public static class WorldSnapshot
         return left.Length.CompareTo(right.Length);
     }
 
-    private static void ValidateHierarchy(
-        ref SnapshotReader reader,
-        int hierarchyCount,
-        bool[] liveSlots)
-    {
-        var parentByChild = new Dictionary<int, int>(hierarchyCount);
-        var previousChild = -1;
-        for (var index = 0; index < hierarchyCount; index++)
-        {
-            var child = reader.ReadInt32("hierarchy child id");
-            var parent = reader.ReadInt32("hierarchy parent id");
-            if (child <= previousChild)
-                throw new InvalidDataException("Snapshot hierarchy child ids must be strictly increasing.");
-            ValidateHierarchyEndpoint("child", child, liveSlots);
-            ValidateHierarchyEndpoint("parent", parent, liveSlots);
-            if (child == parent)
-                throw new InvalidDataException($"Hierarchy relation for entity id {child} cannot parent an entity to itself.");
-            if (WouldCreateHierarchyCycle(child, parent, parentByChild))
-                throw new InvalidDataException($"Hierarchy relation child={child}, parent={parent} creates a cycle.");
-            parentByChild.Add(child, parent);
-            previousChild = child;
-        }
-    }
-
-    private static void ValidateHierarchyEndpoint(string role, int entityId, bool[] liveSlots)
-    {
-        if ((uint)entityId >= (uint)liveSlots.Length)
-            throw new InvalidDataException($"Hierarchy {role} id {entityId} is out of range [0, {liveSlots.Length}).");
-        if (!liveSlots[entityId])
-            throw new InvalidDataException($"Hierarchy {role} id {entityId} is not a live entity in snapshot.");
-    }
-
-    private static bool WouldCreateHierarchyCycle(int child, int parent, Dictionary<int, int> parentByChild)
-    {
-        var current = parent;
-        while (true)
-        {
-            if (current == child)
-                return true;
-            if (!parentByChild.TryGetValue(current, out current))
-                return false;
-        }
-    }
-
     private static void ValidateFreeList(
         ref SnapshotReader reader,
         int slotCount,
@@ -600,7 +527,7 @@ public static class WorldSnapshot
         _ = reader.ReadInt32("entity slot count");
         var schemaCount = reader.ReadInt32("schema count");
         var archetypeCount = reader.ReadInt32("archetype count");
-        var hierarchyCount = reader.ReadInt32("hierarchy count");
+        _ = reader.ReadInt32("hierarchy count");
 
         var slotVersions = new int[validated.SlotCount];
         for (var index = 0; index < slotVersions.Length; index++)
@@ -625,15 +552,6 @@ public static class WorldSnapshot
 
             for (var archetypeIndex = 0; archetypeIndex < archetypeCount; archetypeIndex++)
                 ConstructArchetype(ref reader, world, validated.Schemas, runtimeTypes, slotVersions);
-
-            for (var index = 0; index < hierarchyCount; index++)
-            {
-                var childId = reader.ReadInt32("hierarchy child id");
-                var parentId = reader.ReadInt32("hierarchy parent id");
-                world.AddChildFromSnapshot(
-                    new Entity(parentId, slotVersions[parentId]),
-                    new Entity(childId, slotVersions[childId]));
-            }
 
             var freeCount = reader.ReadInt32("free-list count");
             var freeIds = new int[freeCount];
@@ -1369,10 +1287,7 @@ public static class WorldSnapshot
 
     private sealed record CanonicalColumn(SchemaEntry Schema, int RuntimeColumnIndex);
     private sealed record CanonicalArchetype(Archetype Archetype, CanonicalColumn[] Columns, int[] SortedRows);
-    private sealed record CanonicalLayout(
-        SchemaEntry[] Schemas,
-        CanonicalArchetype[] Archetypes,
-        (int ChildId, int ParentId)[] Relations);
+    private sealed record CanonicalLayout(SchemaEntry[] Schemas, CanonicalArchetype[] Archetypes);
     private sealed record ValidatedSnapshot(int ChunkCapacity, int SlotCount, SchemaEntry[] Schemas);
     private sealed record TypeDefinition(byte[] ShapeBytes, int WireWidth, int NativeSize, LeafOp[] Leaves);
     private readonly record struct LeafOp(int ManagedOffset, PrimitiveKind Kind);

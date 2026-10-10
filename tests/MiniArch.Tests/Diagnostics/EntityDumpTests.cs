@@ -84,27 +84,6 @@ public class EntityDumpTests
     }
 
     [Fact]
-    public void Describe_Hierarchy_HasParentAndChildren()
-    {
-        using var world = new World();
-        var parent = world.Create(new Position(0, 0));
-        var child1 = world.Create(new Position(1, 1));
-        var child2 = world.Create(new Position(2, 2));
-        world.AddChild(parent, child1);
-        world.AddChild(parent, child2);
-
-        var parentReport = EntityDump.Describe(world, parent);
-        Assert.True(parentReport.IsAlive);
-        Assert.Null(parentReport.Parent);
-        Assert.Equal(2, parentReport.Children.Count);
-
-        var childReport = EntityDump.Describe(world, child1);
-        Assert.True(childReport.IsAlive);
-        Assert.NotNull(childReport.Parent);
-        Assert.Equal(parent, childReport.Parent!.Value);
-    }
-
-    [Fact]
     public void Describe_ToString_NoException()
     {
         using var world = new World();

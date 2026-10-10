@@ -1,5 +1,4 @@
 using Hero.Ecs;
-using Hero.GameplayEcs.Characters.Actions;
 using Hero.GameplayEcs.Characters.Attack;
 using Hero.GameplayEcs.Characters.Components;
 using Hero.GameplayEcs.Characters.Slots;
@@ -9,10 +8,6 @@ namespace Hero.Tests;
 
 internal static class TestPipelineQueries
 {
-    internal static readonly MiniArch.QueryDescription ActionDescription = new MiniArch.QueryDescription()
-        .With<ActionEntity>()
-        .With<ActionKind>();
-
     internal static readonly MiniArch.QueryDescription RuleRequestDescription = new MiniArch.QueryDescription()
         .With<Request>()
         .With<RequestTarget>()
@@ -41,39 +36,6 @@ internal static class TestPipelineQueries
         }
 
         throw new InvalidOperationException("Runtime did not stabilize within the iteration limit.");
-    }
-
-    internal static MiniArch.Entity FindActionChild(
-        MiniArchRuntime runtime, FrameView frame, MiniArch.Entity parent,
-        ActionKind expectedKind, string debugName)
-    {
-        MiniArch.Entity action = default;
-
-        foreach (var chunk in frame.ChunkQuery(ActionDescription).GetChunks())
-        {
-            var kinds = chunk.GetSpan<ActionKind>();
-            var entities = chunk.GetEntities();
-            for (int i = 0; i < chunk.Count; i++)
-            {
-                if (kinds[i] != expectedKind)
-                {
-                    continue;
-                }
-
-                if (runtime.World.TryGetParent(entities[i], out MiniArch.Entity candidateParentCore) &&
-                    candidateParentCore == parent)
-                {
-                    action = entities[i];
-                }
-            }
-        }
-
-        if (action == default)
-        {
-            throw new Xunit.Sdk.XunitException($"Missing {debugName} action child.");
-        }
-
-        return action;
     }
 
     internal static int CountRuleRequests(FrameView frame, MiniArch.Entity target, RuleId ruleId)
