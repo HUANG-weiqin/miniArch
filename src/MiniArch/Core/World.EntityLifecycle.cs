@@ -103,7 +103,7 @@ public sealed partial class World
     /// clears use unordered hole-fill compaction.
     /// </para>
     /// <para><b>When to use:</b> you have a batch of entity handles to destroy and want the
-    /// storage optimization (1.3-2.3× vs for-loop). For query-based destroy,
+    /// grouped storage work. Performance depends on density and scratch warmup. For query-based destroy,
     /// see <see cref="Destroy(in QueryDescription)"/>. For archetype-level teardown,
     /// see <see cref="Clear(in QueryDescription)"/>.</para>
     /// </remarks>
@@ -193,18 +193,7 @@ public sealed partial class World
             var archetype = archetypes[ai];
             var entities = archetype.GetEntities();
 
-            for (var i = 0; i < entities.Length; i++)
-            {
-                var entity = entities[i];
-                var nextVersion = NextEntityVersion(entity);
-
-                ref var record = ref _records[entity.Id];
-                record = default;
-                record.Version = nextVersion;
-
-                _freeIds[_freeIdCount++] = entity.Id;
-            }
-
+            KillEntityRecords(entities);
             archetype.ResetCount();
         }
     }
@@ -402,7 +391,8 @@ public sealed partial class World
         for (var i = 0; i < destroyCount; i++)
         {
             var entity = _destroyOrderScratch[i];
-            var info = RequireLocation(entity);
+            // Collection verified liveness; only scratch changed before grouping.
+            ref readonly var info = ref _records[entity.Id];
             var archetype = info.Archetype!;
 
             // Linear scan: groupCount is typically 1-3, so this beats a Dictionary
@@ -440,6 +430,7 @@ public sealed partial class World
         if (_destroyRowMarks.Length < maxCompactionRows)
             Array.Resize(ref _destroyRowMarks, maxCompactionRows);
 
+        EnsureFreeIdCapacity(_freeIdCount + destroyCount);
         MarkAndResetFullyDestroyedArchetypes(
             groupArchetypes.AsSpan(0, groupCount),
             groupCounts.AsSpan(0, groupCount),
@@ -454,10 +445,7 @@ public sealed partial class World
             fullGroups.AsSpan(0, groupCount),
             compactRows);
 
-        for (var i = 0; i < destroyCount; i++)
-        {
-            KillEntityRecord(_destroyOrderScratch[i]);
-        }
+        KillEntityRecords(CollectionsMarshal.AsSpan(_destroyOrderScratch));
 
         // Clear archetype references so they can be GC'd if the archetype is
         // later removed from the world. Value-type arrays (int/bool) are
@@ -553,6 +541,20 @@ public sealed partial class World
         }
 
         return _destroyRowMarkGen;
+    }
+
+    // Bulk callers reserve the full free-list capacity before mutating storage.
+    private void KillEntityRecords(ReadOnlySpan<Entity> entities)
+    {
+        for (var i = 0; i < entities.Length; i++)
+        {
+            var entity = entities[i];
+            var nextVersion = NextEntityVersion(entity);
+            ref var record = ref _records[entity.Id];
+            record = default;
+            record.Version = nextVersion;
+            _freeIds[_freeIdCount++] = entity.Id;
+        }
     }
 
     private void KillEntityRecord(Entity entity)
@@ -748,18 +750,28 @@ public sealed partial class World
 
     private void EnsureDestroyBatchCapacity(int count)
     {
-        if (_destroyGroupArchetypes.Length >= count) return;
+        // Each group needs at least one candidate and one existing archetype.
+        var groupCapacity = Math.Min(count, _archetypes.Count);
+        if (_destroyGroupArchetypes.Length < groupCapacity)
+        {
+            var newLen = Math.Max(groupCapacity, _destroyGroupArchetypes.Length * 2);
+            if (newLen < 16) newLen = 16;
 
-        var newLen = Math.Max(count, _destroyGroupArchetypes.Length * 2);
-        if (newLen < 16) newLen = 16;
+            Array.Resize(ref _destroyGroupArchetypes, newLen);
+            Array.Resize(ref _destroyGroupCounts, newLen);
+            Array.Resize(ref _destroyGroupFirstCandidate, newLen);
+            Array.Resize(ref _destroyFullGroups, newLen);
+        }
 
-        Array.Resize(ref _destroyGroupArchetypes, newLen);
-        Array.Resize(ref _destroyGroupCounts, newLen);
-        Array.Resize(ref _destroyGroupFirstCandidate, newLen);
-        Array.Resize(ref _destroyCandidateNext, newLen);
-        Array.Resize(ref _destroyCandidateRows, newLen);
-        Array.Resize(ref _destroyCompactRows, newLen);
-        Array.Resize(ref _destroyFullGroups, newLen);
+        if (_destroyCandidateNext.Length < count)
+        {
+            var newLen = Math.Max(count, _destroyCandidateNext.Length * 2);
+            if (newLen < 16) newLen = 16;
+
+            Array.Resize(ref _destroyCandidateNext, newLen);
+            Array.Resize(ref _destroyCandidateRows, newLen);
+            Array.Resize(ref _destroyCompactRows, newLen);
+        }
     }
 
     private void EnsureReplayReservation(Entity entity)

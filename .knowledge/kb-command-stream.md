@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream 的 typed-store 录制、consume-time 校验、Submit/Snapshot/Replay 确定性、async ownership 与回滚时间线契约
-updated: 2026-10-10
+updated: 2026-10-11
 ---
 # Command Stream Runtime
 
@@ -48,7 +48,7 @@ Submit 的 typed apply (`ApplyPrepared`) 与 Snapshot/async 的 wire emit (`Emit
 同批次 `Create/Clone` 返回的 pending entity，其 `Add/Set/Remove` 写入 batch side table，materialize 时只构造最终组件签名和值：
 
 - 中间 Add→Remove、重复 Set 不产生独立 Watch transition/value event；placeholder resolve 与 emit/materialize 一样只读取 last-wins 后的有效值，superseded batch bytes 不参与语义。
-- `Destroy(pending)` 取消创建，并按确定性顺序释放 reservation；其他有效组件值若仍引用该 placeholder，会在 allocator/target/worker 变化前 fail-fast。
+- `Destroy(pending)` 取消创建，并按确定性顺序释放 reservation；取消后的句柄不能再作为命令目标。对这种非法序列，不承诺所有录制/消费入口统一容错，校验边界拒绝属于预期。其他有效组件值若仍引用该 placeholder，会在 allocator/target/worker 变化前 fail-fast。
 - `CreateMany` 是一次性初始化 API；每个 consume 入口在 materialize、组件 apply、deferred-id resolution 或清空复用 delta target 之前，统一检查所有 live group 的组件集合是否仍匹配 writer 及 writer 类型是否重复。失败的 Submit/async 仍会清理帧并可能释放 record 期已有的 real-id reservation，不承诺 allocator 回滚。全部取消的 group 不要求 live archetype，也不触发重复类型拒绝。组件 ID ≥512 是合法输入：仅绕过 512-bit mask cache，由既有 non-canonical archetype resolver 处理；重复类型须独立检查，不能把非 canonical mask 当作非法输入。见 `CommandTimelineTests.BUG_CreateMany_group_contract_is_consistent_across_consumers` 与 `Fully_cancelled_CreateMany_group_does_not_require_a_live_archetype`。
 
 ### existing component command 在 consume 时判定存活

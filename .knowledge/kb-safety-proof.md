@@ -23,7 +23,37 @@ updated: 2026-10-11
 | 长程压力 | `MiniArch.Soak`、`MiniArch.LockstepSoak` | ID 复用、free-list、跨 host 是否长期漂移（层级相关历史覆盖已退役） |
 | 性能/内存 | `HeroComing.Perf --check-baseline` | runtime 改动是否跌破发布阈值或持续增内存 |
 
-### 当前复验快照（2026-10-11，层级遗留收敛）
+### 当前复验快照（2026-10-11，冷 span scratch 与重复工作收敛）
+
+**过量 group scratch 已修复，正确性与原 Hero 门禁通过；冷 span 的全部速度断言尚未通过。** 本轮没有改算法阈值、增加公共 API 或更改 CommandStream 执行/验证逻辑；重复取消的最新合同裁决见 `kb-code-review-findings.md`。版本、`v7.0.0`、本地包与 baseline 均未改变。
+
+| 验证 | 最终结果 |
+|---|---|
+| Solution Release build / tests | build 0 warnings / 0 errors；MiniArch **1118 / 1118**、HeroPipeline **7 / 7**，0 skipped，含严格全线程分配回归，exit 0 |
+| Debug targeted tests | lifecycle、scratch、Clone、invalid shape 共 **86 / 86**，exit 0 |
+| 同步 / async / 4-host soak | seed 111，分别 20K / 5K / 10K 帧；350,079 / 87,447 / 587,460 ops；async 含 7,832 Clone，4-host oracle 1,186 checks，均 exit 0 |
+| BulletLockstep CLI | Slice 2–9 均 exit 0；chunked storage、持久化、async authority/mirror、Clone/rollback 均通过 |
+| HeroComing 原门禁 | **Movement 2008.1 / Attack 1167.0 rounds/s** ≥ 1642 / 997；两场景 memory OK，exit 0，未更新 baseline |
+| 容量回归与独立审阅 | 新 `BUG_Destroy_batch_group_scratch_tracks_archetypes_and_grows_when_needed` 在旧 DLL 真正 red（128 > 16），新版通过；非作者审阅未发现容量、alias、版本或 free-list 顺序回归 |
+
+`DestroyMany.Perf` 仍用原场景、窗口和断言，只纠正了“每次新建 World”不应标作 steady-state 的描述。下表是本轮先后运行的原始观察值，不是多轮 A/B 的稳定提升承诺：
+
+| Cold span 场景 | `5d6fe0c` 基准 | 最终源码 |
+|---|---:|---:|
+| full 50K：分配 B/op | 2,050,877 | **1,201,212**（约减少 41%） |
+| full 50K：batch μs / 相对 for 倍数 | 832.5 / 0.86× | **684.1 / 1.01×**（仍低于 1.20×） |
+| 删 25K / 50K：batch μs / 倍数 | 770.78 / 0.80× | **653.64 / 0.94×**（仍低于 1.00×） |
+| 删 40K / 50K：batch μs / 倍数 | 889.15 / 1.20× | **841.88 / 1.07×**（通过 1.00×） |
+
+因此最终 `destroy-many.log` 和整串 `final/verify.ps1` 都保留 **exit 1**。不降低阈值、不把冷成本移出计时，也不为追逐旧倍数再添加特殊快路径。剩余限制是冷 span 不能保证在所有密度领先单体循环，不影响本轮已验证的容量修正与生命周期合同。
+
+- 首版只分离 group/candidate 容量，实测已省约 0.85 MB，但 full batch 仍 828.5 μs；隔离副本的阶段探针确认 group 与 kill 仍占显著工作后，才复用已有 bulk kill 循环、消除 collection 后的重复 record 校验。探针仅用于诊断，未进入生产代码或替代原基准。
+- 同 World 复用的辅助 span 探针（40 warmups + 100 measured，同步线程口径）在 25K / 40K / 50K 三组均 **0 B/op**，最终 batch 为 764.42 / 779.43 / 393.74 μs；不把这些暖数据代替上述冷断言。共享 bulk helper 后 Query 的本次冷 1/16 原型观测为 63.8 / 64.3 μs，暖态 57.6 / 58.5 μs、0 B/op；没有改变 Query 的删除算法。
+- CPU 重任务串行，仍采样到外部 Chrome/Godot/claude 活动；未终止外部进程或挑更快样本。async soak 跨 await 的 thread-local 分配数仍不作零分配证据。
+- 证据根目录 `artifacts/destroy-scratch-20261011/`：`baseline.log`、`candidate-*.log`、`old-runtime-red.log`、`phases*.log`；最终完整命令与结果在 `final/verify.ps1`、`final/exits.log` 和同目录各步骤日志。
+- 最终 runtime 补丁指纹（`git hash-object`）为 `79e40e5a46e3a8d3ca80e6ddf8c98c7b9ff5fe54`；DLL SHA256 为 `6D5CD2BE5B5ECBCAA8520209F566D127D16DA82774019081EA53F8A0F3BFDC66`，已核对 src、测试、Hero 和 DestroyMany 输出副本一致。对照 DLL SHA256 为 `85DCD49432DCD64EDA756F1F3A437A53845FE36FB084355701AD7DF1E0F59044`。两者版本字符串都带父提交 `5d6fe0c`，应以哈希而非版本字符串区分。
+
+### 历史复验快照（2026-10-11，层级遗留收敛）
 
 **必要的正确性与 Hero 门禁通过；补充 DestroyMany 基准不是全绿。** 验证源码原样提交为 `3cf43e7`：Query Destroy/Clear 共路、单体 Clone 局部收敛、移除无生产者的 Destroy-placeholder 分支，详见 `kb-hierarchy-runtime.md`。未升级版本、移动 `v7.0.0` 或重发包。
 
@@ -58,7 +88,7 @@ updated: 2026-10-11
 
 - 对照脚本：`compare-released.ps1`；日志：`destroy-many.log`、`destroy-many-released7.log`。旧 DLL SHA256 `10805056ABFECAD68FEC609EFC150F37AFD1E2F871854691EA5B053FA19E3B13` 已校验；同一新版 harness 的“shared path”标题不描述旧 DLL 内部实现。
 - CPU 重任务串行，但前后采样仍见 Chrome/Godot/claude 活动，未取得全机独占窗口；未重新选择更快样本或刷新 baseline。
-- immediate `Create → Destroy → Destroy → Snapshot().Validate()` 在发布版和本次 DLL 均复现 released-entity 拒绝，属于预存未修风险，不是本次删除分支引入。证据与裁决只维护在 `kb-code-review-findings.md`。
+- immediate `Create → Destroy → Destroy → Snapshot().Validate()` 在发布版和本次 DLL 均复现 released-entity 拒绝。当时登记为未修风险；2026-10-11 用户明确取消后句柄不得继续作为命令目标，现排除为非法输入，不改运行时校验。最新裁决只维护在 `kb-code-review-findings.md`。
 - async soak 的 thread-local 分配数字跨 await 不可用（本次也出现负数）；不采信它来证明零分配。零分配仍以对应严格回归的测量边界为准。其余覆盖限制仍适用下方“明确未覆盖/不承诺”。
 
 ### 历史复验快照：扁平迁移（2026-10-10）

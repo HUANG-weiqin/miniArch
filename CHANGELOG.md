@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Reduce batch-destroy scratch:** archetype-group buffers now grow independently from per-entity candidate buffers. Bulk span deletion reuses Clear's record-kill loop with one free-list capacity reservation, and no longer revalidates records already verified during collection. Duplicate/stale handling, entity-version advancement, and free-list order are unchanged; warmed reuse stays allocation-free.
+- **Clarify cancelled pending handles:** a cancelled pending handle must not be reused as a command target. Historical deferred duplicate-cancel tolerance is not a general no-op guarantee; runtime validation is unchanged.
 - **Simplify flat-entity removal:** `Destroy(in QueryDescription)` now shares `Clear`'s direct archetype-reset path, avoiding batch collection/grouping scratch while preserving entity-version and free-list order. Both public entry points remain available.
 - **Simplify CommandStream:** remove the redundant cancelled-source Clone scan and unreachable Destroy-placeholder handling; reuse the existing single-target create path for Clone. Invalid-handle preflight, component Entity-reference resolution, and pending/materialized component-copy semantics remain unchanged.
 

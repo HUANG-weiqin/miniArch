@@ -13,11 +13,10 @@ public sealed class KnownLimitationTests
     private readonly record struct Position(int X, int Y);
 
     /// <summary>
-    /// A cancelled deferred placeholder must not emit another Destroy op:
-    /// destroying a deferred placeholder whose batch was already cancelled (here,
-    /// simply by a prior Destroy on the same placeholder) must be a no-op. Before
-    /// the Destroy fallthrough guard, the second Destroy emitted a placeholder
-    /// Destroy op and crashed replay with "Unresolved placeholder seq=0".
+    /// Pins the deferred recorder's existing tolerance for an invalid repeated
+    /// cancellation; this is not a general guarantee for cancelled-handle use.
+    /// Before the fallthrough guard, the second Destroy emitted an unresolved
+    /// placeholder op and crashed replay with "Unresolved placeholder seq=0".
     /// </summary>
     [Fact]
     public void Deferred_destroy_twice_on_same_placeholder_cancels_cleanly()

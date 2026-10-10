@@ -230,5 +230,5 @@ slot.Value  // real Entity ✅
 - **cancelled deferred vs cancelled immediate**：cancelled deferred emit 什么都不 emit（不占 id）；cancelled immediate emit Reserve+Release（占 id 槽位保持 host/replica 同步）。
 - **跨帧引用用真实 ID**：placeholder 不跨帧，但 `TryResolvePlaceholder()` 返回的真实 ID 可以跨帧直接存组件用。见决策 #3。
 - **`_replayPlaceholderMap` 跨帧清零**：`mapLen` 在 `ReplayCore` 入口重置为 0。如果不清零，上一帧的 stale mapping 会被 malformed delta 静默误用。
-- **Destroy 已取消的 deferred placeholder 必须是 no-op**：`CommandStream.Destroy` 的 `else if (!entity.IsPlaceholder)` 保证未知/已取消 placeholder 不进入 Destroy 队列。`KnownLimitationTests.Deferred_destroy_twice_on_same_placeholder_cancels_cleanly` 覆盖重复取消。旧 `CancelPendingDescendants` / 并行录制分支已经退役，不能据其历史解析路径保留当前不可达分支。
-- **不能把 real-id 重复取消视为同一保证**：已发布 7.0.0 中，immediate `Create → Destroy → Destroy → Snapshot` 会生成 `Reserve + Release + Destroy`，`FrameDelta.Validate()` 拒绝 released entity。Replay 的 `IsAlive` no-op 不代表 wire 能通过 Validate。该预存问题未混入本轮清理；复现与状态见 `kb-code-review-findings.md` 的“当前未修风险”。
+- **取消后不得继续把 pending 句柄作为命令目标**：immediate 与 deferred 都适用。非法序列在校验/消费边界被拒绝是允许的，不承诺各入口以相同方式容错，也不为它增加热路径跟踪。`Create → Destroy → Destroy → Snapshot().Validate()` 的 released-entity 异常已按此契约排除为非 bug，见 `kb-code-review-findings.md`。
+- **deferred 的当前容忍不是通用 no-op 保证**：`CommandStream.Destroy` 的 `else if (!entity.IsPlaceholder)` 阻止未知/已取消 placeholder 入队；`KnownLimitationTests.Deferred_destroy_twice_on_same_placeholder_cancels_cleanly` 保留这个历史 guard 的见证，不据此要求 immediate 非法输入也被接受。旧层级/并行录制解析路径已退役。

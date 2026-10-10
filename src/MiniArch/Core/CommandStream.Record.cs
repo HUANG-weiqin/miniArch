@@ -116,6 +116,11 @@ public sealed partial class CommandStream
     /// <summary>
     /// Records a Destroy command for the specified entity.
     /// </summary>
+    /// <remarks>
+    /// Destroying a pending entity cancels its creation. The cancelled handle must
+    /// not be used as a subsequent command target. Recording is not a full validity
+    /// check; invalid command sequences may be rejected during validation or consumption.
+    /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Destroy(Entity entity)
     {

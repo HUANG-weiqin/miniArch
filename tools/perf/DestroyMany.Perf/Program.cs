@@ -20,9 +20,9 @@ internal static class Program
 
     private static int Main()
     {
-        Console.WriteLine("DestroyMany.Perf — steady-state throughput (warmup {0}s + measure {1}s)",
+        Console.WriteLine("DestroyMany.Perf — cold-World throughput (JIT warmup {0}s + measure {1}s)",
             WarmupSeconds, MeasureSeconds);
-        Console.WriteLine("Only the destroy phase is timed; setup/dispose is outside.");
+        Console.WriteLine("Only the destroy phase is timed; each operation uses a new World with cold scratch.");
         Console.WriteLine();
 
         var scenarios = new[]
@@ -332,8 +332,8 @@ internal static class Program
         }
     }
 
-    // Sweep R around the SmallDestroyThreshold to prove that above the
-    // threshold, batch is always faster than for-loop (speedup > 1.0).
+    // Report cold-World costs across densities and check the original dense
+    // speedup thresholds without hiding first-use scratch allocation.
     private static void PrintThresholdSweep(ref bool allPassed)
     {
         const int SweepM = 50_000;
@@ -345,8 +345,8 @@ internal static class Program
         Console.WriteLine($"threshold sweep (M={SweepM:N0}, {SweepSeconds}s per measurement)");
         Console.WriteLine($"  R <= 8        → fast path (individual Destroy, same as for-loop)");
         Console.WriteLine($"  R < {SweepM/5,5}     → sparse (per-entity RemoveAt)");
-        Console.WriteLine($"  {SweepM/5,5}..{assertCrossover,5}   → transition (break-even ≈ 30%)");
-        Console.WriteLine($"  R >= {assertCrossover,5}     → dense (hole-fill compact, batch wins)");
+        Console.WriteLine($"  {SweepM/5,5}..{assertCrossover,5}   → dense compaction (no speedup assertion)");
+        Console.WriteLine($"  R >= {assertCrossover,5}     → dense compaction (checked against for-loop)");
         Console.WriteLine();
         Console.WriteLine($"  {"R",6} {"R/M",6} {"for μs",10} {"batch μs",10} {"speedup",8}  note");
         Console.WriteLine($"  {"─",6} {"─",6} {"─",10} {"─",10} {"─",8}  {"─",20}");

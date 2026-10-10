@@ -133,9 +133,51 @@ public sealed class FreeListAndDestroyScratchTests
         Assert.Equal(9, world.FreeList.Length);
         Assert.True(ScratchLength(world, "_destroyVisitedGen") >= world.EntitySlotCount);
         Assert.Equal(0, ScratchLength(world, "_destroyRowMarks"));
-        Assert.InRange(ScratchLength(world, "_destroyGroupArchetypes"), 10, 16);
+        Assert.InRange(ScratchLength(world, "_destroyGroupArchetypes"), 1, 16);
         Assert.InRange(DestroyOrderCapacity(world), 10, 16);
         Assert.True(world.IsAlive(entities[0]));
+        Assert.True(WorldValidator.Validate(world).IsValid);
+    }
+
+    [Fact]
+    public void BUG_Destroy_batch_group_scratch_tracks_archetypes_and_grows_when_needed()
+    {
+        using var world = new World(entityCapacity: 128);
+        var targets = new Entity[128];
+        for (var i = 0; i < targets.Length; i++)
+            targets[i] = world.Create(new MemoryToken(i));
+
+        world.Destroy(targets);
+
+        string[] groupScratch =
+        [
+            "_destroyGroupArchetypes", "_destroyGroupCounts",
+            "_destroyGroupFirstCandidate", "_destroyFullGroups"
+        ];
+        foreach (var field in groupScratch)
+            Assert.InRange(ScratchLength(world, field), 1, 16);
+        Assert.True(ScratchLength(world, "_destroyCandidateNext") >= targets.Length);
+        Assert.True(ScratchLength(world, "_destroyCandidateRows") >= targets.Length);
+        Assert.True(ScratchLength(world, "_destroyCompactRows") >= targets.Length);
+
+        const int groupCount = 20;
+        var grouped = new Entity[groupCount];
+        for (var i = 0; i < groupCount; i++)
+        {
+            var entity = world.CreateEmpty();
+            if ((i & 1) != 0) world.Add(entity, new MemoryToken(i));
+            if ((i & 2) != 0) world.Add(entity, i);
+            if ((i & 4) != 0) world.Add(entity, (long)i);
+            if ((i & 8) != 0) world.Add(entity, (short)i);
+            if ((i & 16) != 0) world.Add(entity, (byte)i);
+            grouped[i] = entity;
+        }
+
+        world.Destroy(grouped);
+
+        foreach (var field in groupScratch)
+            Assert.InRange(ScratchLength(world, field), groupCount, 32);
+        Assert.Equal(0, world.EntityCount);
         Assert.True(WorldValidator.Validate(world).IsValid);
     }
 
