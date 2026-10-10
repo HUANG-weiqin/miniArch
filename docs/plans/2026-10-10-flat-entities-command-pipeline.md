@@ -2,7 +2,7 @@
 
 日期：2026-10-10  
 起点：`a98f4d3`（MiniArch 6.2.0）  
-状态：执行中；用户已授权端到端实施、并行团队及独立工作树。
+状态：已实施并完成本轮验收；实现提交 `393ca72`。性能门槛通过，但未取得全机干净窗口，不作性能提升结论。
 
 ## 目标与完成定义
 
@@ -34,19 +34,19 @@ A/B 使用不同分支及工作树。跨责任修改由 Lead 裁决，不互相�
 
 ## 执行顺序
 
-- [ ] S0 保存起始状态证据，运行原始 Release 测试及性能门禁。
-- [ ] S1 A/B 并行完成层级能力与调用方迁移；新增旧格式明确拒绝回归测试，更新 public API sentinel。
-- [ ] S2 集成扁平核心，确认全项目可构建；再落实共同命令规则及独立 typed/wire 输出。
-- [ ] S3 落实最小回滚命令所有权边界与错误路径测试，含异步冻结/回收。
-- [ ] S4 依据独立不变量证明实施/拒绝两项内存候选，并记录理由。
-- [ ] S5 运行最终回归、独立审阅、修复后复跑受影响检查；同步知识库与迁移文档。
-- [ ] S6 检查外部改动仍原样保留，提交本任务所有权范围，报告最终证据与明确剩余限制。
+- [x] S0 保存起始状态证据，运行原始 Release 测试及性能门禁；原始 Attack 受干扰窗口下未过，不降低阈值。
+- [x] S1 A/B 完成层级能力与调用方迁移；真实旧格式 golden、明确拒绝回归与 public API sentinel 已更新。
+- [x] S2 集成扁平核心；共同命令规则保留独立 typed apply / wire emit。
+- [x] S3 最小命令时间线、旧帧拒绝/安全 Clear、异步冻结数据边界及回归已落实。
+- [x] S4 两项内存候选均采用：record 版本单源、按实际维度惰性 scratch；诊断合同与预热复用保留。
+- [x] S5 最终回归、独立审阅与受影响复测通过；API/知识库已同步，外部负载限制单列。
+- [x] S6 实现提交 `393ca72`；只提交本任务路径，外部 QueryPlan/知识页修改未纳入。
 
 ## 最小充分验证集
 
 1. `dotnet build -c Release miniArch.sln` + `dotnet test -c Release miniArch.sln`；新增针对性测试证明删除边界和回滚/分配器/命令收敛不变量。不能只删除失败测试来获得绿色。
 2. 单 host soak：正常种子覆盖，加小容量、高操作密度的 allocator churn（覆盖取消与回收顺序）。多 host soak：至少 4 hosts，验证 placeholder、普通 Entity 引用与跨 host 分配器收敛。这两层证明不同性质。
-3. BulletLockstep 示例：保留的每个场景运行，特别是持久化、回滚、Authority+Mirror async；Lead 亲自驱动一次真实控制台入口。项目无渲染，不额外创造 GUI。
+3. BulletLockstep 示例：保留的每个场景运行，特别是持久化、回滚、Authority+Mirror async；Lead 直接执行真实命令行入口。项目是非交互式 CLI、无渲染，后台 `dotnet run` 足够，不需要打开桌面窗口。
 4. 所有受迁移影响的工具/示例构建；保留调用方的真实行为断言，删除的层级场景在文档中明确标记。
 5. 必须运行 `dotnet run -c Release --project tools/perf/HeroComing.Perf --check-baseline`，Movement ≥1642、Attack ≥997 rounds/s，heap 不持续增长、无异常。性能测量独占窗口，不与 build/test/其他 perf 并发；禁止 `--update-baseline`。若失败先排除环境干扰，同窗口对比并仅撤回本任务失败单元，不使用全树 checkout/stash。
 6. 每个源码提交前覆盖对应性能门禁；最终集成态重新跑门禁。独立评审只报告具体可达违反契约的反例，不扩张需求。
@@ -60,4 +60,48 @@ A/B 使用不同分支及工作树。跨责任修改由 Lead 裁决，不互相�
 - 随后 CPU 采样发现 7 个外部 Python 进程各约 100% 单核负载，另有两个 Godot 进程合计约 60%。此轮没有干净测量窗口，不能归因于本任务（源码尚未改动），不以此降低门槛或刷新 baseline。已向用户请求方便时暂停外部计算；团队先继续开发和正确性测试，性能门禁在干净窗口重跑。
 - 初始外部修改保存在 `artifacts/flat-command-20261010/external-initial.patch` 与 `initial-status.txt`，仅用于保护/核对，不进入提交。
 
-后续填写各单元与最终集成状态的实际命令、退出码、结果、提交和有证据的范围调整。历史测试/性能记录不当作本轮验收。
+### 实现与集成裁决
+
+- `393ca72` 是唯一源码集成提交，包含核心、调用方、测试和合同文档；相对起点 `src/MiniArch/` 净减少 **1934 行**（含注释/空白）。没有重建通用 Parent 系统，也没有改变存储、线程、chunk 模型或包版本。
+- A 保留非层级 Clone/Destroy 与 Entity 引用，真实旧版 API 产生的 flat v5 / FrameDelta golden 在最终 suite 复验；旧非零关系 v5 和 `0x04` / `0x05` 明确拒绝。
+- B 保留 Bullet Slice 2–9；Boss encounter 显式清理业务实体。Hero 用 `ActionOwner` 普通组件，两个角色归属/攻击链测试保留 500+500 的完整门禁负载。只删除纯层级 benchmark 场景。
+- C 共用阶段/过滤/group 检查而非万能 IR；World 时间线只在成功 Restore 推进，不进 snapshot/wire。Capture 仅拒绝 real-id reservation；旧帧 Clear 不释放新时间线 reservation。失败 Submit/async 仍清理既有 reservation，group preflight 不是 allocator 事务。
+- 异步 soak 暴露的 pending-map 尾部复用缺口在原版也存在；Clone 分支先得到失败见证，再以 `batchIdx < PendingBatchCount` 最小修复，Clone/Set 两变体通过。未以修改 dedup 或跳过 Clone 掩盖错误。
+- D 的 free-list 与 rollback payload 只存有序 id，record 唯一持有版本；保持 LIFO、旧代 cancellation 防护和诊断版本观察。scratch 容量规划与执行共用 `UseSparseDestroy`，按 slot/batch/archetype row 各自维度增长。8B→4B 指数组元素，不是整个 World 内存减半。
+- 最终集成时补齐两种 soak 的 free-list 日志：版本从 record 派生，多 host 删除旧 pair 反射，使用已有内部访问。工具独立构建后复跑了对应 soak。
+- 非作者最终只读审阅未发现新可达违约；覆盖 timeline/Clear、worker 隔离、group/预算一致性、free-list 版本与顺序、scratch 容量、旧 wire 拒绝。无强制阻塞 worker 的测试，不声称确定覆盖多个未完成 worker。
+
+### 最终执行证据
+
+最终数值结果以 [正确性验证报告](../../.knowledge/kb-safety-proof.md#当前复验快照2026-10-10) 为单一汇总；本地完整日志位于 `artifacts/flat-command-20261010/`（原始日志不进入提交）。
+
+```bash
+dotnet build -c Release miniArch.sln --nologo
+dotnet test -c Release miniArch.sln --no-build --nologo
+
+dotnet run -c Release --no-build --project tools/soak/MiniArch.Soak -- --seed 111 --entity-cap 100 --entity-floor 20 --ops-per-frame 50 --frames 20000 --validate-interval 1 --quiet
+dotnet run -c Release --no-build --project tools/soak/MiniArch.Soak -- --seed 111 --entity-cap 100 --entity-floor 20 --ops-per-frame 50 --frames 5000 --async --validate-interval 1 --quiet
+dotnet run -c Release --no-build --project tools/lockstep-soak/MiniArch.LockstepSoak -- --seed 222 --hosts 4 --entity-cap 100 --entity-floor 20 --ops-per-frame 50 --frames 10000 --validate-interval 1 --checksum-interval 1 --quiet
+
+# Run every retained slice; Slice 5 must reach boss death, Slice 7 exercises scale.
+for slice in 2 3 4 5 6 7 8 9; do
+  frames=100
+  if [ "$slice" = 5 ]; then frames=520; fi
+  if [ "$slice" = 7 ]; then frames=200; fi
+  dotnet run -c Release --no-build --project samples/BulletLockstep.Demo -- "$slice" 4 "$frames"
+done
+
+dotnet run -c Release --project tools/perf/HeroComing.Perf --check-baseline
+```
+
+- 上述最终运行均 exit 0；`final-accepted-build.log` / `final-accepted-test.log` 覆盖最后的 XML/注释修正。该修正不改 IL，按 AGENTS §5a 不重复性能测量。
+- Soak/LockstepSoak/DestroyMany.Perf/HeroComing.Perf/BulletLockstep.Demo/CommandBufferGame.Perf 的独立 Release build 均 exit 0；对应 `final-*-build.log`。
+- soak 日志：`final-soak-sync.log`、`final-soak-async.log`、`final-lockstep.log`；八个 CLI 场景：`final-bullet-2.log` 到 `final-bullet-9.log`。可见 PowerShell 窗口并不增加受测路径；按用户要求停止了桌面操作，未将窗口尝试算作验收证据。
+- 性能最终日志：`perf-final-comparison.log`；先运行的原始 `a98f4d3` 对照为 `perf-original-comparison.log`，exit 1。`cpu-before-final-perf.log` 记录了外部负载仍存在；团队没有并发 build/test/perf，没有结束外部进程或更新 baseline。本轮通过原数值/内存门槛，不代表已经取得无干扰 benchmark。
+- `git diff --check` 通过。提交前用起始 patch 核对两份外部 KB 未变；INDEX 只暂存本任务条目，原 QueryPlan 两个新增条目留在工作树。`kb-query-language-value.md`、`docs/reports/`、`tools/perf/QueryPlan.ValueLab/` 仍未跟踪，未纳入本任务。
+
+### 明确保留的边界
+
+- 干净窗口下的重复、交错性能测量没有取得；不发布性能提升比例，不刷新历史阈值。
+- async soak 的 per-thread alloc 计数跨 await 可能为负，只采信正确性结果；不在本轮扩张为性能 harness 重做。
+- 不承诺任意 Entity/ref/span 跨 Restore 有效，不把有限测试当形式化证明；Replay 仍不提供通用事务回滚。

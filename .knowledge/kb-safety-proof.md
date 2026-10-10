@@ -23,6 +23,25 @@ updated: 2026-10-10
 | 长程压力 | `MiniArch.Soak`、`MiniArch.LockstepSoak` | ID 复用、free-list、跨 host 是否长期漂移（层级相关历史覆盖已退役） |
 | 性能/内存 | `HeroComing.Perf --check-baseline` | runtime 改动是否跌破发布阈值或持续增内存 |
 
+### 当前复验快照（2026-10-10）
+
+验证 runtime：`393ca72`（扁平实体、命令时间线、free-list 版本单源与按需销毁 scratch）。完整命令、日志位置、兼容性见证和验收边界见 [执行与验收记录](../docs/plans/2026-10-10-flat-entities-command-pipeline.md)。
+
+| 门禁 | 本轮结果 |
+|---|---|
+| Solution build / tests，Release | build 0 warnings / 0 errors；MiniArch 1095 / 1095、HeroPipeline 7 / 7，0 skipped，exit 0 |
+| 单 host 同步 soak | seed 111，20,000 帧，350,079 ops，exit 0 |
+| 单 host async soak | 原失败 seed 111，5,000 帧，87,447 ops（含 7,832 Clone），exit 0 |
+| 4-host placeholder soak | seed 222，10,000 帧，587,181 ops，host0 oracle 3,248 checks，exit 0 |
+| BulletLockstep 真实 CLI 入口 | Slice 2–9 全部 exit 0；Slice 5 最终 boss 已销毁、weakpoints 为 0；包含持久化、异步 mirror、回滚重放 |
+| HeroComing Movement / Attack | 1727.2 / 1031.2 rounds/s，达到原阈值 1642 / 997，exit 0 |
+| HeroComing memory | 两场景均 OK；未运行 `--update-baseline` |
+| 独立源码审阅 | 未发现新的已证实可达违约；不是对所有未来输入的证明 |
+
+**性能证据限制**：团队 build/test/perf 已串行，外部 7 个 Python 高负载进程及两个 Godot 进程仍在运行，未取得全机干净窗口。同环境原始 `a98f4d3` 对照为 Movement 1771.9 / Attack 945.9，exit 1（Attack 未达阈值）。本轮只报告最终版的门槛检查通过，不据单轮有干扰数据声称性能提升、精确回退幅度或发布新 baseline。
+
+**覆盖限制**：async Restore 回归没有人为阻塞 worker，不能声称强制覆盖了两个 worker 同时未完成；其数据隔离另由 frozen-state 静态调用链审查支持。多 host 引用 oracle 只对 host0 直接 Create 的自引用断言，不是任意引用图模型。async soak 的跨线程分配计量无效，不采信其分配数字（见 `kb-soak-test.md`）。
+
 ### 历史复验快照（2026-08-06）
 
 下表仅记录当时 runtime tree 的结果，不是本轮 flat 迁移的最终验收；本轮结果须以对应工作树和参数的实际门禁输出为准。
