@@ -69,5 +69,6 @@ dotnet pack src/MiniArch/MiniArch.csproj -c Release
 - 脚本命令变化后必须同步更新 README
 - 包版本以 `src/MiniArch/MiniArch.csproj` 的 `VersionPrefix` 为单一来源，发布时同步 `CHANGELOG.md`；删除公共 API 属于 major 升级。
 - 本地包目录 `artifacts/nuget` 可直接注册为 folder feed。只打包不等于已验证消费：用独立 `PackageReference` 工程还原并运行 smoke，避免复用同版本旧缓存；包对应的 `v<version>` tag 必须指向已提交且经过验证的发布提交。本地发布不隐含远端 push。
+- 显式授权 push 时，先确认目标分支可 fast-forward，再原子推送该分支与本次版本 tag；不使用 force 或 `--tags` 传播其他本地标签。核对远端 refs 与发布提交一致；Git push 不等于向 nuget.org 发布包。
 - 新增共享基础设施后，必须同步更新对应的知识页路径
 - World 和 Archetype 现在是 partial 类，修改时注意 partial 文件的编译范围
