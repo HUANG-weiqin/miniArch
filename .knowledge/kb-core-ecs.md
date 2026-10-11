@@ -66,7 +66,7 @@ updated: 2026-10-11
   - R×5 ≥ M（密集 ≥20%）：单遍 hole-fill compact（尾部 survivor 填前部 dead row）
   - 当前 scratch 按实际批次惰性增长：首批 visited 按 slotCount，order/candidate 按候选数，group 按 `min(候选数, 已登记 archetype 数)` 上界（保留最小容量与倍增余量），row marks 在 storage mutation 前按实际密集压缩涉及的最大 `Archetype.EntityCount` 扩容；ctor、Create、Replay slot growth、EnsureCapacity 不提前分配这些数组。首次使用可分配，预热后复用。`FreeListAndDestroyScratchTests` 覆盖 largeSlots/tinyBatch、重复目标、密集压缩及 warm 0B；本轮完整验收见 `kb-safety-proof.md`。
   - collect 已验活并去重，到 grouping 之间仅修改 scratch；因此 grouping 直接读 record，不重复执行 `RequireLocation` 校验。首次 storage mutation 前整批预留 free-list，compact 后与 Clear 共用 `KillEntityRecords` 循环，仍按原输入顺序推进版本和回收 ID。单体 Destroy 的 scope 与校验不变。
-  - 历史 crossover≈30%、≥50% batch 领先不是性能保证。每次创建新 World 的冷 span 调用还包含首次 scratch 分配；`DestroyMany.Perf` 的 dense-span 断言在 7.0.0 / `3cf43e7` 清理阶段均出现失败，原阈值仍保留。最新结果见 `kb-safety-proof.md`。
+  - 历史 crossover≈30%、≥50% batch 领先不是性能保证。每次创建新 World 的冷 span 调用仍计入首次 scratch 分配；`DestroyMany.Perf` 受检冷 span 已按扁平实现重定速度比底线，允许低于 1×，不再要求“必胜”。Query 与 Hero 门槛不变；校准规则、新旧阈值及历史失败原值见 `kb-safety-proof.md`。
 - `World.Destroy(in QueryDescription)` 与 `World.Clear(in QueryDescription)` 共用直接清空匹配 archetype 的路径：跳过 collection/grouping/compaction，按相同 archetype/row 顺序 kill record + push free-list，再 ResetCount。Query 会选中完整原型，无需 span 批次的额外 scratch；只销毁匹配实体，不扩展到组件所引用的其他实体。两个公开入口为兼容而保留，已没有快慢策略之分。
 
 ### 用户 API 分层（`MiniArch` namespace）

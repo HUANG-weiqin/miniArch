@@ -23,7 +23,33 @@ updated: 2026-10-11
 | 长程压力 | `MiniArch.Soak`、`MiniArch.LockstepSoak` | ID 复用、free-list、跨 host 是否长期漂移（层级相关历史覆盖已退役） |
 | 性能/内存 | `HeroComing.Perf --check-baseline` | runtime 改动是否跌破发布阈值或持续增内存 |
 
-### 当前复验快照（2026-10-11，冷 span scratch 与重复工作收敛）
+### 当前复验快照（2026-10-11，DestroyMany 冷 span 门槛重定标）
+
+**用户明确授权调整辅助 perf 门槛；本轮仅改变验收政策，不修改 ECS runtime，也不宣称新的提速。** `DestroyMany.Perf` 的 full 50K（旧 ≥1.20×）及 R/M ≥50% sweep（旧 ≥1.00×）改用共享 **≥0.65×** 冷 span 底线。Query 两场景仍 ≥1.20×；Hero 的 1642 / 997 和 baseline 不变。负载、计时窗口、首次 scratch 成本、correctness oracle、分配测量均未改。
+
+先冻结 `951c362` 原程序，事先确定“完整运行 3 轮，取三个受检场景中最低的速度比中位数 ×80%，再向下取 0.05 档”，保留全部样本，不选最快一轮：
+
+| 原程序场景 | 第 1 轮 | 第 2 轮 | 第 3 轮 | 中位数 |
+|---|---:|---:|---:|---:|
+| full 50K | 1.10× | 1.11× | 1.35× | 1.106319× |
+| R25K / 50K | 0.75× | 0.87× | 1.35× | **0.870359×** |
+| R40K / 50K | 1.43× | 1.27× | 1.45× | 1.433073× |
+| 原程序 exit code | **1** | **1** | **0** | 不改写历史判定 |
+
+最低中位数 `0.870359 × 0.80 = 0.696287`，向下取档得 **0.65**。full 比值用日志 ops/s 推导，sweep 用 for/batch μs 推导，避免只取两位小数的展示值。此底线是开发机上的**粗粒度报警线**，允许 batch 慢于 for-loop，不是“dense 必胜”或严格统计性能基线；校准前后 CPU 采样仍见 dotnet/Godot/Chrome 活动（例如第 2 轮后两个 Godot 合计约 16.6% 整机 CPU），不能据此声称获得全机独占或稳定性能置信区间。
+
+| 最终新政策验证 | 结果 |
+|---|---|
+| Solution Release build / tests | 0 warnings / 0 errors；MiniArch **1118 / 1118**、HeroPipeline **7 / 7**，0 skipped，均 exit 0 |
+| 完整 DestroyMany | **exit 0**；full / R25K / R40K 为 **1.12× / 1.10× / 1.29×**，均高于新底线 |
+| 未调整的 Query | 1/16 原型为 **19.28× / 13.77×**，均达到原 1.20×；暖态分配观测仍 0 B/op |
+| runtime / Hero 变更检查 | 源码无 diff；校准与最终运行的 MiniArch DLL SHA256 均为 `51A7DE6614CF7F4663178801788B4D632042CE349908163D2C2CE8C9C076894F`。本轮未重跑 Hero；最近必要门禁结果见下一节 |
+
+最终 full 的 1.12× 按旧 1.20× 仍会失败，**新 PASS 不能解释为新优化或旧标准已通过**。harness 的暖分配段是测量输出，不是新的零分配断言；严格分配承诺继续由完整测试中的相应回归保障。版本、包和 `v7.0.0` 未变。
+
+证据目录：`artifacts/destroy-thresholds-20261011/`；预定规则与三轮原始退出码在 `calibrate.ps1` / `calibration-exits.log`，结果在 `calibration-{1,2,3}.log` / `calibration-summary.json`，CPU 采样在 `cpu-*.log`。原 harness DLL SHA256 为 `C3DA34FA34380EE7128E5F16412B7E1D20B3D2D513BC557E31BBA992C35F3546`；最终执行命令与日志见 `verify.ps1`、`verification-exits.log`、`final-*.log`。
+
+### 历史复验快照（2026-10-11，冷 span scratch 与重复工作收敛）
 
 **过量 group scratch 已修复，正确性与原 Hero 门禁通过；冷 span 的全部速度断言尚未通过。** 本轮没有改算法阈值、增加公共 API 或更改 CommandStream 执行/验证逻辑；重复取消的最新合同裁决见 `kb-code-review-findings.md`。版本、`v7.0.0`、本地包与 baseline 均未改变。
 
