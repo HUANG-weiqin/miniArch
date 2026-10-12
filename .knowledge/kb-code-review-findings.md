@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 审阅前必读的当前风险、已修复真 bug 回归索引与已排除非 bug 猜想；只保留结论和验证入口
-updated: 2026-10-11
+updated: 2026-10-12
 ---
 # 代码审阅发现
 
@@ -15,6 +15,12 @@ updated: 2026-10-11
 
 ## 当前未修风险
 
+### Snapshot.Load 对输入流没有总字节预算（P2，待容量合同）
+
+- **位置**：`WorldSnapshot.Load(Stream)` 在检查 magic、version、CRC 和 v5 元数据前，先用 `stream.CopyTo(MemoryStream)` 读到 EOF。
+- **风险**：不可信或不终止的输入流可使缓冲区持续扩张，先耗尽内存；现有 slot/schema/archetype 数量限制只在完整复制后生效，不能约束这一步。
+- **决策边界**：目前没有公开文档、测试或生产调用证明 >256/512 MiB 存档应可加载，也没有有依据的默认总字节预算；`MaxReasonableSlots=256M` 仅限 slot 数，不能直接换算为文件预算。本轮不任意添加可能拒绝既有合法 v5 存档的上限；确定支持的最大存档规模后，应对 seekable/non-seekable 流均做有界读取与回归。此项是静态可达风险，尚无动态大流复现/修复。
+
 ### Replay 没有通用事务回滚（P2，接受现状）
 
 - **位置**：`World.EntityLifecycle.cs` 的 Replay/ReplayCore 路径。
@@ -25,6 +31,14 @@ updated: 2026-10-11
 CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）修复了 lockstep 分叉路径（P0#1/P0#2），`Validate()` 覆盖仍保留的组件存在性等语义违规；nested Entity 现在由完整递归 offsets 合同支持，零校验 Submit 的存在性违规仍在 apply 期抛（部分应用），且不把 Submit 或 Replay 提升为灾难性异常下的通用事务。
 
 ## 已修复的真 bug 索引
+
+### 2026-10-12 运行时生命周期与命令流审阅
+
+| 回归测试 | 位置 / witness | 修复边界 |
+|---|---|---|
+| `TrickyEdgeCaseTests.BUG_disposed_world_clone_does_not_silently_return_an_empty_world` / `BUG_disposed_world_snapshot_save_does_not_write_an_empty_world` / `BUG_disposed_world_checksums_do_not_report_an_empty_world` / `BUG_disposed_world_diagnostics_do_not_report_a_valid_empty_state` | `World.Dispose()` 清空内部状态后，`Clone`、`WorldSnapshot.Save`、双 checksum 和诊断/统计入口可把已销毁 World 当作有效空 World 输出 | 在会导出/证明完整 World 状态的入口先检查 disposed；Save 在写首字节前拒绝，原始 World 不被修改。`EntityCount`/`EntityCapacity` 等轻量计数属性不纳入状态导出合同 |
+| `CommandTimelineTests.BUG_Deferred_snapshot_rejects_cancelled_immediate_batches` | immediate Create→Destroy 仍改变 source allocator；随后切换 `DeferredEntities=true` 时，`Snapshot`/`SnapshotInto` 跳过已取消 batch，漏掉 Reserve+Release，下一帧 lockstep 分叉 | deferred snapshot 的混用守卫检查所有 immediate batch（含 canceled）；拒绝发生在 target 清空/emit 前；real-id 取消历史仍可正常发出 |
+| `FrameDeltaAttackSurfaceTests.BUG_Validate_rejects_operations_after_destroy` | 不可信 wire 在 Destroy 后对同一完整 Entity 再 Add/Set/Remove，旧 `Validate()` 放行，Replay 已销毁句柄时抛错并留下部分应用 | `Validate` 仅在本 delta 内按完整 `(Id,Version)` 追踪 Destroy 并拒绝后续非 Destroy 操作；`Repeated_existing_destroy_is_idempotent_in_local_and_imported_deltas` 保留重复 Destroy 幂等，`Validate_allows_operations_on_recycled_entity_with_new_version` 保留代际复用。目标 World 历史兼容与通用事务回滚仍不在此守卫内 |
 
 ### 2026-10-11 批量 Destroy 分组 scratch 过量分配
 
