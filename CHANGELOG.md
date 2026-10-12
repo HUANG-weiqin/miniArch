@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 7.2.0 (2026-10-12)
+
+- **Prevent deferred snapshot desynchronization:** `Snapshot` and `SnapshotInto` now reject a frame containing an immediate Create that was later cancelled, because its allocator Reserve+Release history cannot be omitted from a placeholder delta. Real-id cancellation deltas remain unchanged.
+- **Harden untrusted FrameDelta validation:** `Validate()` rejects Add/Set/Remove after Destroy of the same full entity handle. Repeated Destroy remains idempotent, and a recycled ID with a new version remains valid. FrameDelta wire format is unchanged.
+- **Reject disposed World state exports:** `Clone`, snapshot Save/checksums, and world diagnostics/statistics now throw `ObjectDisposedException` instead of reporting a valid empty world. Lightweight `EntityCount` and `EntityCapacity` properties are unchanged.
+
 ## 7.1.0 (2026-10-11)
 
 - **Recalibrate the DestroyMany cold-span check:** full-batch and ≥50%-density span samples now share a 0.65× floor versus the guarded loop, based on three fixed calibration runs. This is an acceptance-policy change, not a runtime speedup; query thresholds, workload, timing boundaries, correctness checks, allocation measurement, and the Hero gate are unchanged.
