@@ -90,6 +90,54 @@ public sealed class CommandTimelineTests
         Assert.Equal(new Position(3), world.Get<Position>(entity));
     }
 
+    [Theory]
+    [InlineData(ConsumeMode.Snapshot)]
+    [InlineData(ConsumeMode.SnapshotInto)]
+    public void BUG_Deferred_snapshot_rejects_cancelled_immediate_batches(ConsumeMode mode)
+    {
+        using var source = new World();
+        using var replica = new World();
+        var stream = new CommandStream(source);
+        var canceled = stream.Create();
+        stream.Destroy(canceled);
+        stream.DeferredEntities = true;
+
+        var target = new FrameDelta();
+        target.AddDestroy(new Entity(42, 1));
+        var targetBefore = target.AsSpan().ToArray();
+        var sourceBefore = source.CanonicalChecksum();
+        Assert.Throws<InvalidOperationException>(() =>
+        {
+            if (mode == ConsumeMode.Snapshot)
+                _ = stream.Snapshot();
+            else
+                stream.SnapshotInto(target);
+        });
+        Assert.Equal(targetBefore, target.AsSpan().ToArray());
+        Assert.Equal(sourceBefore, source.CanonicalChecksum());
+
+        // Real-id mode must still mirror the allocator events from cancellation.
+        stream.DeferredEntities = false;
+        var cancellation = stream.Snapshot();
+        Assert.Equal(2, cancellation.DeltaCount);
+        cancellation.Validate();
+        stream.Clear();
+        var replicaStream = new CommandStream(replica);
+        replicaStream.Replay(cancellation);
+        Assert.Equal(source.CanonicalChecksum(), replica.CanonicalChecksum());
+
+        stream.DeferredEntities = true;
+        var next = stream.Track(stream.Create());
+        var delta = stream.Snapshot();
+        delta.Validate();
+        stream.Clear();
+        stream.Replay(delta, resolveSlots: true);
+        replicaStream.Replay(delta);
+        Assert.Equal(new Entity(canceled.Id, canceled.Version + 1), next.Value);
+        Assert.Equal(source.CanonicalChecksum(), replica.CanonicalChecksum());
+        Assert.Equal(source.CreateEmpty(), replica.CreateEmpty());
+    }
+
     [Fact]
     public void Deferred_draft_can_be_captured_but_not_consumed_after_restore()
     {

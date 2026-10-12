@@ -326,6 +326,86 @@ public sealed class FrameDeltaAttackSurfaceTests
         Assert.Contains("before Create", ex.Message);
     }
 
+    [Theory]
+    [InlineData((byte)DeltaOpKind.Add, false)]
+    [InlineData((byte)DeltaOpKind.Set, false)]
+    [InlineData((byte)DeltaOpKind.Remove, false)]
+    [InlineData((byte)DeltaOpKind.Add, true)]
+    [InlineData((byte)DeltaOpKind.Set, true)]
+    [InlineData((byte)DeltaOpKind.Remove, true)]
+    public void BUG_Validate_rejects_operations_after_destroy(byte followingOp, bool placeholder)
+    {
+        using var world = new World();
+        var entity = placeholder ? new Entity(-1, 0) : world.Create(new Health(1));
+        var healthType = Component<Health>.ComponentType.Value;
+        var buf = new System.Collections.Generic.List<byte>();
+        if (placeholder)
+        {
+            buf.AddRange([(byte)DeltaOpKind.Reserve, .. Enc(entity)]);
+            buf.AddRange([(byte)DeltaOpKind.Create, .. Enc(entity), 0x00]);
+        }
+        buf.AddRange([(byte)DeltaOpKind.Destroy, .. Enc(entity)]);
+        buf.AddRange([followingOp, .. Enc(entity)]);
+        if (followingOp is (byte)DeltaOpKind.Add or (byte)DeltaOpKind.Set)
+        {
+            buf.AddRange(V(healthType));
+            buf.AddRange(V(4));
+            buf.AddRange(System.BitConverter.GetBytes(2));
+        }
+        else if (followingOp == (byte)DeltaOpKind.Remove)
+            buf.AddRange(V(healthType));
+
+        var delta = FrameDelta.FromWire(buf.ToArray());
+        var before = world.CanonicalChecksum();
+        var ex = Assert.Throws<InvalidOperationException>(() => delta.Validate());
+        Assert.Contains("destroyed entity", ex.Message);
+        Assert.Equal(before, world.CanonicalChecksum());
+    }
+
+    [Fact]
+    public void Repeated_existing_destroy_is_idempotent_in_local_and_imported_deltas()
+    {
+        using var source = new World();
+        using var replica = new World();
+        var entity = source.Create(new Health(1));
+        Assert.Equal(entity, replica.Create(new Health(1)));
+        var stream = new CommandStream(source);
+        stream.Destroy(entity);
+        stream.Destroy(entity);
+        var local = stream.Snapshot();
+        Assert.Equal(2, local.DeltaCount);
+        local.Validate();
+        var imported = FrameDelta.FromWire(local.AsSpan());
+        imported.Validate();
+
+        stream.Replay(local);
+        stream.Clear();
+        new CommandStream(replica).Replay(imported);
+        Assert.Equal(source.CanonicalChecksum(), replica.CanonicalChecksum());
+        Assert.Equal(source.CreateEmpty(), replica.CreateEmpty());
+    }
+
+    [Fact]
+    public void Validate_allows_operations_on_recycled_entity_with_new_version()
+    {
+        using var world = new World();
+        var old = world.Create(new Health(1));
+        var recycled = new Entity(old.Id, old.Version + 1);
+        var healthType = Component<Health>.ComponentType.Value;
+        var delta = FrameDelta.FromWire([
+            (byte)DeltaOpKind.Destroy, .. Enc(old),
+            (byte)DeltaOpKind.Reserve, .. Enc(recycled),
+            (byte)DeltaOpKind.Create, .. Enc(recycled), 0x00,
+            (byte)DeltaOpKind.Add, .. Enc(recycled), .. V(healthType), .. V(4),
+            .. System.BitConverter.GetBytes(2)]);
+
+        delta.Validate();
+        new CommandStream(world).Replay(delta);
+        Assert.False(world.IsAlive(old));
+        Assert.True(world.IsAlive(recycled));
+        Assert.Equal(new Health(2), world.Get<Health>(recycled));
+    }
+
     [Fact]
     public void BUG_Validate_rejects_unknown_remove_component_type()
     {

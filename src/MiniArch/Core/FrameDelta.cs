@@ -202,9 +202,9 @@ public sealed class FrameDelta
     /// <summary>
     /// Validates structural integrity of this FrameDelta. Throws if the delta
     /// is malformed —missing or unterminated reservations, operations targeting
-    /// placeholders before Create, unresolved embedded placeholders, component
-    /// data size mismatch, duplicate component types, unknown type ids, or
-    /// invalid entity shapes.
+    /// placeholders before Create, non-Destroy operations targeting entities after
+    /// Destroy, unresolved embedded placeholders, component data size mismatch,
+    /// duplicate component types, unknown type ids, or invalid entity shapes.
     ///
     /// Call before <see cref="CommandStream.Replay(FrameDelta, bool)"/> for deltas
     /// received over the network. Deltas produced locally by
@@ -213,12 +213,14 @@ public sealed class FrameDelta
     /// <remarks>
     /// Walks the entire delta once (same cost as deserialization). Uses the
     /// global <see cref="ComponentRegistry"/> to resolve type sizes.
-    /// Per-entity state machine: Reserve → Create|Release (terminal per entity).
+    /// Per-entity state machine: Reserve → Create|Release (terminal per reservation).
     /// Every reservation must reach a terminal operation within the same delta.
+    /// Destroy ends the target handle's lifetime within this delta; repeated
+    /// Destroy operations remain idempotent.
     /// <para/>
     /// <b>Limitations:</b> Validate only checks the delta's internal state
-    /// machine (Reserve → Create|Release ordering, payload sizes). It does
-    /// <b>not</b> verify that the target <see cref="World"/>'s allocator state
+    /// machine (Reserve → Create|Release ordering, Destroy lifetime, payload sizes).
+    /// It does <b>not</b> verify that the target <see cref="World"/>'s allocator state
     /// (free list, version counters) is compatible — a delta that passes
     /// <c>Validate()</c> may still cause <see cref="CommandStream.Replay(FrameDelta, bool)"/>
     /// to throw due to allocator mismatch. Use <see cref="FrameDelta"/> replay
@@ -242,10 +244,14 @@ public sealed class FrameDelta
         var reserved = new HashSet<Entity>();
         var terminal = new HashSet<Entity>();
         var created = new HashSet<Entity>();
+        var destroyed = new HashSet<Entity>();
 
         while (decoder.MoveNext())
         {
             ValidateEntityShape(decoder.Entity);
+            if (decoder.Kind != DeltaOpKind.Destroy && destroyed.Contains(decoder.Entity))
+                throw new InvalidOperationException(
+                    $"Operation targets destroyed entity {decoder.Entity}.");
 
             switch (decoder.Kind)
             {
@@ -293,6 +299,7 @@ public sealed class FrameDelta
 
                 case DeltaOpKind.Destroy:
                     ValidateOperationTargetState(decoder.Entity, reserved, terminal, created);
+                    destroyed.Add(decoder.Entity);
                     break;
 
                 default:

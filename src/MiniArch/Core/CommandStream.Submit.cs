@@ -723,7 +723,8 @@ public sealed partial class CommandStream
     {
         for (var i = 0; i < _frozen.PendingBatchCount; i++)
         {
-            if (_frozen.BatchCanceled[i]) continue;
+            // Cancelled immediate batches still advanced the source allocator;
+            // a placeholder delta cannot omit their Reserve+Release history.
             if (_frozen.BatchEntities[i].Id >= 0)
                 throw new InvalidOperationException(
                     "Snapshot() with DeferredEntities=true contains immediate entities. " +
