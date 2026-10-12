@@ -2,7 +2,7 @@
 title: Architecture Mechanistic Review
 module: MiniArch.Core
 description: Mechanistic insight of the entire miniArch ECS library — one-line truths, subsystem breakdown, data flows, known issues, and design tensions. Links to per-subsystem kb pages for depth.
-updated: 2026-10-10
+updated: 2026-10-12
 ---
 # Architecture Mechanistic Review
 
@@ -15,12 +15,12 @@ updated: 2026-10-10
 - 标注当前已知问题和可疑取舍，作为改动决策的入口
 - 不替代各 `kb-*.md` 页的详细实现记录——单一事实来源在那里
 
-## 全局一句话
+## 认知模型
 
 miniArch = 一张 entity→location 表 + 按组件集合分组的**可增长**密集 byte 存储 + 一套延迟命令录制器。
 所有功能都是这三个原语的组合。
 
-## 全局依赖图
+## 架构
 
 ```
 ComponentRegistry.Shared (进程内全局 Type↔id)
@@ -35,7 +35,7 @@ QueryCache (archetype/chunk 快照 + 两段式失效: archetypeCount + per-arche
   ↓
 World (拆分为 5 个 partial 文件，三层 archetype 查找，编排一切)
   ↓
-CommandStream (typed store 录制器) → FrameDelta (packed byte[] + varint op 流) → World.Replay
+CommandStream (typed store 录制器) → FrameDelta (packed byte[] + varint op 流) → CommandStream.Replay → World.ReplayCore (internal)
 WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 ```
 
@@ -93,10 +93,10 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - **跨进程约束**：`ComponentType.Value` 是进程内 int，FrameDelta wire 直接 varint 编码——跨进程使用必须双方 `ComponentRegistry` 注册顺序一致（见 `FrameDelta.AsSpan` XML doc）
 
 ### 6. Query 系统
-- `QueryDescription`（`Type` 集合）→ `QueryFilter`（`ComponentType` 集合）→ `QueryCache`（archetype + chunk view 快照，`internal sealed class`）
+- World 用唯一的 `Dictionary<QueryDescription, QueryCache>` 复用查询；miss 时才将 `Type` 集合编译为 `QueryFilter`，由 `QueryCache` 保存匹配数据及 archetype/chunk view 结果。发布与失效细节见 `kb-query-invalidation.md`。
 - **两段式失效**（`Core/QueryCache.cs:103-126`）：
   - 快路径：`World.ArchetypeCount == _lastArchetypeCount` → 不扫
-  - 慢路径 A：archetype 数量变 → `Refresh`（append-only 扫新 archetype）
+  - 慢路径 A：archetype 数量变 → `Refresh` / `RebuildCache`（全量匹配；World 的有序 archetype snapshot 会在中间插入，不能只扫尾部）
   - 慢路径 B：matched archetype segment count 变（chunked 增长）→ `RefreshViewsOnly`（不重做 match，只重建 ChunkView）
 - `Matches`：mask 预过滤 + `Signature.Contains` fallback for id ≥ 512
 - 用户层 `MiniArch.Query` 是 struct facade：`GetChunks()` 零拷贝、`ForEachChunk` / `ForEachChunkParallel`、`OrderByEntityId` + `OrderByComponent<T>` 走 `ArrayPool`
@@ -174,14 +174,34 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - 反向 HashSet 无实测收益
 - 详见 `kb-design-rationale.md` §3.6
 
-## 可优化点
+## 决策
+
+### 边界收紧与机制减法（2026-10-12）
+
+结论：减少同一状态的重复保存，不把不同观察合同硬并成一条通用路径。用户本轮只批准第 1 项；第 2、3 项保留为讨论记录，未实施、也不进入本轮计划。
+
+1. **已实施：World 的 Query 缓存由两张表减为一张。** `GetAdvancedQuery` 直接按描述复用 QueryCache；删除中间 filter 字典、一套 COW 发布循环和无 caller 的 filter 键等值/哈希成员。Filter 仍作为匹配数据存在，公共 API、两段失效与结果顺序不变；World 清理与 fresh-world slot guard 改查剩余缓存。并发等价描述共享和 query-only World 初始化拒绝已有合同测试，详细 owner/验证入口以 `kb-query-invalidation.md` 为准。
+2. **未选，本轮不做：为 Load 增加调用方字节预算。** `WorldSnapshot.Load(Stream)` 在解析前读到 EOF；风险单一入口见 `kb-code-review-findings.md` 的当前未修风险。候选为带 `maxBytes` 的重载，在复制阶段对 seekable/non-seekable 流执行同一预算，再复用原 CRC、dry validation 和 construction；预算含 header 与 CRC，不改 v5 格式。不凭空定 256/512 MiB 默认 cap，不改流式解析器。保留旧重载就仍保留无实用预算的入口，不能宣称风险已全局关闭；输入字节预算也不等于峰值 RAM 保证。验证边界：合法长度恰好成功、少 1 字节拒绝、非 seekable 超限停止、调用方 stream 不被关闭，以及既有往返/CRC 回归。
+3. **未选，且需单独批准破坏性合同：CommandStream 一帧内模式不变。** 当前 `DeferredEntities` 是自由 setter；仓内非初始化赋值只见于测试，但 true→false 后输出 real-id Snapshot 已有回归，不能当死路径删除。候选只允许空帧选模式，非空帧拒绝实际值变更；复用 `_frameTimeline`，不新增 mode 类型。这样可去掉 deferred Snapshot 的 immediate-batch 混用扫描，以及 real-id Snapshot 为帧中切换执行的 placeholder 转换；`ResolveDeferredCreates` 还清理旧 replay tracking，不能机械删掉此责任。两种 Create/输出语义及 async 始终 real-id 仍保留；取消 placeholder 的 emit 过滤不能删除。验证需覆盖双向拒绝、空帧/Clear 后允许、取消的 allocator parity、own/peer slot 解析与 async real-id 输出。外部调用未知，适合作为下一主版本候选，不作为 7.2 补丁。
+
+第 1 项验收包括等价/并发/热路零分配/fresh-world guard 的定向回归，以及 Release build/test、Hero baseline gate 与适用 soak。门禁只约束回退，不把删除一层查表宣称为已测得的吞吐提升。
+
+**不列为架构优先项的小清理**：`WorldClone` 可复用 `SetSnapshotFreeList(source.FreeList)` 后删除单 caller 的 `CopyFreeIdsFrom`；`FrameLookup` 的 `_capacity` / `_rowCapacity` 可分别由 `_keys.Length` / `_flatRows.Length` 推导。前者须保留 free-list 顺序，后者须保留 key/row 两个容量维度并验证热路径，不能为删字段合并两种容量。
+
+**本轮明确不做**：
+- 不把 typed Submit 改成 serialize + Replay；已有双路径的理由见 `kb-command-stream.md`。
+- 不合并 Save/Load、独立 Clone、同 World rollback lease，也不合并两种 checksum 投影；观察域见 `kb-snapshot-persistence.md`。
+- 不把 `Snapshot → Clear → Replay` 仅换成新参数/别名：那只是把 `_pendingReplay` 转嫁给调用方，未消除 slot 保存/解析责任。实际解析依据是显式 `resolveSlots` 与 stream 的注册状态；Snapshot XML 的旧 local-object marker 描述不能作为合同依据，见 `EntitySlotTests.Track_Replay_deserialized_delta_resolves_with_explicit_flag`。
+- 不给 async FrozenState 回收加队列/continuation；不删除 Query 的两段失效、borrow 边界或 Watch 的 pull baseline。
+
+### 已评估的历史性能提案
 
 **O1-O5 已全部处理或拒绝**：
 - O1（Query 增量失效）、O3（swap-remove 大组件）、O5（free-list 反向索引）→ 已评估，不值得做（见 `kb-design-rationale.md` §3）
 - O2（Signature 分配）→ 已有每 World Create archetype 缓存 + edge cache 解决（见 `kb-design-rationale.md` §3.7）
 - O4（FrozenState 字段对调）→ 已改为 `FrozenState` 引用对象整体换出/回收；`SwapOutState` 做单次对象引用交换，不再逐字段 swap
 
-库处于维护期：没有剩余“应做的大重构/性能优化”。仍存在少量 P2 级 defense-in-depth 设计债与已验证安全猜想，统一记录在 `kb-code-review-findings.md`，不要把它们解读为需要重开架构。
+没有证据要求重开整套架构。当前风险与已验证安全猜想统一记录在 `kb-code-review-findings.md`；上述候选按边界分别验证，不打包成通用框架重写。
 
 ## 设计张力
 

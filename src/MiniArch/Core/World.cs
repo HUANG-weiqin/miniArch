@@ -104,8 +104,7 @@ public sealed partial class World : IDisposable
 
     private EntityRecord[] _records;
     private int _entitySlotCount;
-    private Dictionary<QueryDescription, QueryFilter> _queryFiltersByDescription = new();
-    private Dictionary<QueryFilter, MiniArch.Core.QueryCache> _queries = new();
+    private Dictionary<QueryDescription, MiniArch.Core.QueryCache> _queries = new();
     private Archetype[] _archetypeSnapshot = Array.Empty<Archetype>();
     private readonly int _chunkCapacity;
     private int[] _freeIds;
@@ -171,7 +170,6 @@ public sealed partial class World : IDisposable
         _destroyCandidateRows = [];
         _destroyCompactRows = [];
         _destroyFullGroups = [];
-        _queryFiltersByDescription.Clear();
         _queries.Clear();
         _archetypeSnapshot = Array.Empty<Archetype>();
         _entitySlotCount = 0;
@@ -1348,7 +1346,7 @@ public sealed partial class World : IDisposable
     {
         ArgumentOutOfRangeException.ThrowIfNegative(entitySlotCount);
         if (_entitySlotCount != 0 || _archetypes.Count != 0 ||
-            _queryFiltersByDescription.Count != 0 || _stateSnapshotPool.Count != 0)
+            _queries.Count != 0 || _stateSnapshotPool.Count != 0)
             throw new InvalidOperationException("Snapshot slots require a fresh World.");
 
         EnsureEntityCapacity(entitySlotCount);

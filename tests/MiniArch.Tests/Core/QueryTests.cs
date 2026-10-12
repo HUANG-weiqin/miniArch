@@ -294,22 +294,32 @@ public sealed class QueryTests
     [Fact]
     public async Task Equivalent_queries_can_be_materialized_concurrently_before_the_cache_is_warmed()
     {
-        var expected = CaptureEnumeratedEntities(CreatePositionQuery(CreateWorldWithMatchingEntities()));
-        var world = CreateWorldWithMatchingEntities();
-        var description = new QueryDescription().With<Position>();
-        var start = new Barrier(9);
+        using var referenceWorld = CreateWorldWithMatchingEntities();
+        var referenceDescription = new QueryDescription().With<Position>().With<Velocity>();
+        var expected = CaptureEnumeratedEntities(MiniQueryCache.Create(referenceWorld, in referenceDescription));
+        using var world = CreateWorldWithMatchingEntities();
+        using var start = new Barrier(9);
         var tasks = Enumerable.Range(0, 8)
-            .Select(_ => Task.Run(() =>
+            .Select(index => Task.Run(() =>
             {
+                var description = index % 2 == 0
+                    ? new QueryDescription().With<Position>().With<Velocity>().WithAny<Position>().WithAny<Velocity>()
+                    : new QueryDescription().WithAny<Velocity>().WithAny<Position>().With<Velocity>().With<Position>();
                 start.SignalAndWait();
-                return CaptureEnumeratedEntities(MiniQueryCache.Create(world, in description));
+                var query = MiniQueryCache.Create(world, in description);
+                return (Query: query, Entities: CaptureEnumeratedEntities(query));
             }))
             .ToArray();
 
         start.SignalAndWait();
         var results = await Task.WhenAll(tasks);
 
-        Assert.All(results, actual => Assert.Equal(expected, actual));
+        Assert.All(results, actual =>
+        {
+            Assert.Same(results[0].Query, actual.Query);
+            Assert.Equal(expected, actual.Entities);
+        });
+        Assert.Equal(1, results[0].Query.RefreshCount);
         Assert.Equal(1, GetCachedQueryCount(world));
     }
 
@@ -343,6 +353,26 @@ public sealed class QueryTests
         Assert.NotSame(firstQuery, secondQuery);
         Assert.Equal(new[] { firstMatched }, CaptureEnumeratedEntities(firstQuery));
         Assert.Equal(new[] { secondMatched }, CaptureEnumeratedEntities(secondQuery));
+    }
+
+    [Fact]
+    public void Snapshot_slot_initialization_rejects_world_with_only_a_cached_query()
+    {
+        using var world = new World(entityCapacity: 0);
+        var description = new QueryDescription().With<Position>();
+        var query = MiniQueryCache.Create(world, in description);
+        Assert.Empty(query.MatchedArchetypes);
+        Assert.Equal(0, world.EntitySlotCount);
+        Assert.Equal(0, world.ArchetypeCount);
+        var before = world.CanonicalChecksum();
+
+        Assert.Throws<InvalidOperationException>(() => world.InitializeSnapshotSlots(1));
+
+        Assert.Equal(before, world.CanonicalChecksum());
+        Assert.Equal(0, world.EntitySlotCount);
+        Assert.Equal(0, world.ArchetypeCount);
+        Assert.Same(query, MiniQueryCache.Create(world, in description));
+        Assert.Empty(query.MatchedArchetypes);
     }
 
     [Fact]

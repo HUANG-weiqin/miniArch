@@ -61,53 +61,26 @@ public sealed partial class World
 
     internal MiniArch.Core.QueryCache GetAdvancedQuery(in QueryDescription description)
     {
-        return GetOrCreateQuery(GetOrCreateQueryFilter(description));
-    }
-
-    internal MiniArch.Core.QueryCache GetOrCreateQuery(QueryFilter filter)
-    {
         while (true)
         {
             var snapshot = Volatile.Read(ref _queries);
-            if (snapshot.TryGetValue(filter, out var query))
+            if (snapshot.TryGetValue(description, out var query))
             {
                 return query;
             }
 
-            var candidate = new MiniArch.Core.QueryCache(this, filter);
-            var updated = new Dictionary<QueryFilter, MiniArch.Core.QueryCache>(snapshot)
-            {
-                [filter] = candidate
-            };
-
-            if (ReferenceEquals(Interlocked.CompareExchange(ref _queries, updated, snapshot), snapshot))
-            {
-                return candidate;
-            }
-        }
-    }
-
-    private QueryFilter GetOrCreateQueryFilter(in QueryDescription description)
-    {
-        while (true)
-        {
-            var snapshot = Volatile.Read(ref _queryFiltersByDescription);
-            if (snapshot.TryGetValue(description, out var filter))
-            {
-                return filter;
-            }
-
-            var candidate = new QueryFilter(
+            var filter = new QueryFilter(
                 CreateQueryComponentSet(description.GetRequiredTypes()),
                 CreateQueryComponentSet(description.GetExcludedTypes()),
                 CreateQueryComponentSet(description.GetAnyTypes()),
                 exact: description.IsExact);
-            var updated = new Dictionary<QueryDescription, QueryFilter>(snapshot)
+            var candidate = new MiniArch.Core.QueryCache(this, filter);
+            var updated = new Dictionary<QueryDescription, MiniArch.Core.QueryCache>(snapshot)
             {
                 [description] = candidate
             };
 
-            if (ReferenceEquals(Interlocked.CompareExchange(ref _queryFiltersByDescription, updated, snapshot), snapshot))
+            if (ReferenceEquals(Interlocked.CompareExchange(ref _queries, updated, snapshot), snapshot))
             {
                 return candidate;
             }
