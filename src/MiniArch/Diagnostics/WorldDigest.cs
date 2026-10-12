@@ -19,6 +19,7 @@ public static class WorldDigest
     public static WorldDigestResult Compute(World world)
     {
         ArgumentNullException.ThrowIfNull(world);
+        world.AssertNotDisposed();
 
         var occupancyHash = ComputeOccupancyHash(world);
         var freeListHash = ComputeFreeListHash(world);

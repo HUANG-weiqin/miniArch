@@ -39,6 +39,7 @@ public static class WorldSnapshot
     {
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(world);
+        world.AssertNotDisposed();
         if (!stream.CanWrite)
             throw new ArgumentException("Snapshot stream must be writable.", nameof(stream));
 
@@ -103,6 +104,7 @@ public static class WorldSnapshot
     public static byte[] ComputeChecksum(World world)
     {
         ArgumentNullException.ThrowIfNull(world);
+        world.AssertNotDisposed();
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         var sink = new HashSink(hash);
         var archetypes = BuildChecksumArchetypes(world);
@@ -148,6 +150,7 @@ public static class WorldSnapshot
     public static byte[] ComputeCanonicalChecksum(World world)
     {
         ArgumentNullException.ThrowIfNull(world);
+        world.AssertNotDisposed();
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         var sink = new HashSink(hash);
         WriteCanonicalWorld(ref sink, world);

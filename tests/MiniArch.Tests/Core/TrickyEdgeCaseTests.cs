@@ -963,6 +963,57 @@ public sealed class TrickyEdgeCaseTests
     }
 #endif
 
+    [Fact]
+    public void BUG_disposed_world_clone_does_not_silently_return_an_empty_world()
+    {
+        var world = new World();
+        world.Create(new Position(1, 2));
+        world.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => world.Clone());
+    }
+
+    [Fact]
+    public void BUG_disposed_world_snapshot_save_does_not_write_an_empty_world()
+    {
+        var world = new World();
+        world.Create(new Position(1, 2));
+        world.Dispose();
+
+        using var stream = new MemoryStream();
+        Assert.Throws<ObjectDisposedException>(() => WorldSnapshot.Save(stream, world));
+        Assert.Equal(0, stream.Length);
+    }
+
+    [Fact]
+    public void BUG_disposed_world_checksums_do_not_report_an_empty_world()
+    {
+        var world = new World();
+        world.Create(new Position(1, 2));
+        world.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => world.Checksum());
+        Assert.Throws<ObjectDisposedException>(() => world.CanonicalChecksum());
+        Assert.Throws<ObjectDisposedException>(() => WorldSnapshot.ComputeChecksum(world));
+        Assert.Throws<ObjectDisposedException>(() => WorldSnapshot.ComputeCanonicalChecksum(world));
+    }
+
+    [Fact]
+    public void BUG_disposed_world_diagnostics_do_not_report_a_valid_empty_state()
+    {
+        var world = new World();
+        var entity = world.Create(new Position(1, 2));
+        var liveWorld = new World();
+        world.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => world.GetStats());
+        Assert.Throws<ObjectDisposedException>(() => world.GetArchetypeStats());
+        Assert.Throws<ObjectDisposedException>(() => MiniArch.Diagnostics.WorldValidator.Validate(world));
+        Assert.Throws<ObjectDisposedException>(() => MiniArch.Diagnostics.WorldDigest.Compute(world));
+        Assert.Throws<ObjectDisposedException>(() => MiniArch.Diagnostics.WorldDiff.Compare(world, liveWorld));
+        Assert.Throws<ObjectDisposedException>(() => MiniArch.Diagnostics.EntityDump.Describe(world, entity));
+    }
+
     // ══════════════════════════════════════════════════════—
     // Category 8: LayoutKind.Auto Determinism Enforcement
     // ══════════════════════════════════════════════════════—

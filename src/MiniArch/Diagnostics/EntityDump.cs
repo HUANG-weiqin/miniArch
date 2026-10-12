@@ -14,6 +14,7 @@ public static class EntityDump
     public static EntityReport Describe(World world, Entity entity)
     {
         ArgumentNullException.ThrowIfNull(world);
+        world.AssertNotDisposed();
 
         var id = entity.Id;
         var records = world.EntityRecords;

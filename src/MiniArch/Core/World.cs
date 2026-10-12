@@ -190,7 +190,7 @@ public sealed partial class World : IDisposable
     internal bool IsDisposed => _disposed;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void AssertNotDisposed()
+    internal void AssertNotDisposed()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
     }
@@ -268,13 +268,18 @@ public sealed partial class World : IDisposable
     /// <summary>
     /// Gets a snapshot of world-level statistics.
     /// </summary>
-    public WorldStats GetStats() => new(EntityCount, _records.Length, _freeIdCount, _archetypes.Count);
+    public WorldStats GetStats()
+    {
+        AssertNotDisposed();
+        return new WorldStats(EntityCount, _records.Length, _freeIdCount, _archetypes.Count);
+    }
 
     /// <summary>
     /// Gets archetype-level statistics for all archetypes.
     /// </summary>
     public ArchetypeStats[] GetArchetypeStats()
     {
+        AssertNotDisposed();
         var result = new ArchetypeStats[_archetypes.Count];
         var i = 0;
         foreach (var arch in _archetypes.Values)
@@ -463,19 +468,19 @@ public sealed partial class World : IDisposable
 
     /// <summary>
     /// Creates an independent, <b>ID-preserving</b> deep copy of this world.
-    /// Entity IDs match the source exactly — component data and free list are
-    /// deep-copied, but <see cref="Entity"/> references inside
-    /// component fields carry the source world's IDs. If the clone is used
-    /// with a different <see cref="World"/> instance (different ID space),
-    /// those embedded references will be stale.
+    /// Entity IDs, component data and free-list order are preserved. Embedded
+    /// <see cref="Entity"/> values therefore refer to the corresponding cloned
+    /// entities when those targets exist; they are not rewritten for an unrelated
+    /// <see cref="World"/> with a different ID space.
     /// <para/>
     /// For persistence or cross-process use, prefer
     /// <see cref="Core.WorldSnapshot.Save"/> / <see cref="Core.WorldSnapshot.Load"/>,
-    /// which remaps entity IDs for the target world.
+    /// which also preserve entity IDs in a newly constructed world.
     /// For in-memory rollback, use <see cref="CaptureState"/> / <see cref="RestoreState"/>.
     /// </summary>
     public World Clone()
     {
+        AssertNotDisposed();
         return WorldClone.Clone(this);
     }
 

@@ -25,6 +25,7 @@ public static class WorldValidator
     public static ValidationResult Validate(World world)
     {
         ArgumentNullException.ThrowIfNull(world);
+        world.AssertNotDisposed();
 
         var issues = _issues ??= [];
         issues.Clear();

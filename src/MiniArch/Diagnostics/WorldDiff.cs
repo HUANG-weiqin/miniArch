@@ -35,6 +35,8 @@ public static class WorldDiff
     {
         ArgumentNullException.ThrowIfNull(worldA);
         ArgumentNullException.ThrowIfNull(worldB);
+        worldA.AssertNotDisposed();
+        worldB.AssertNotDisposed();
 
         AssertNoPendingReservations(worldA);
         AssertNoPendingReservations(worldB);
