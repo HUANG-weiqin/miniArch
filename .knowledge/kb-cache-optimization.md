@@ -25,7 +25,7 @@ MiniArch 的迭代热路径已经高度优化（pointer-bump、SoA、自适应 c
 
 - 用每 World 直索引数组消除进程级单槽在多 World 间互相驱逐；全局 ID 仅作进程内缓存键，不进入 wire、排序或 checksum。高 ID 组合可能使只使用少量组合的 World 也扩容到该 ID，这是已知内存取舍。
 - 不在 `RestoreState` 清缓存：回滚后 archetype 仍在 World 的 append-only 注册表中，清理反而会让稳态回滚重新分配。
-- `OrderByEntityId()` 的排序缓存用 **fingerprint 形态**（`QueryCache.EntityIdSortCache` + 每次枚举扫描校验，见 `kb-core-ecs.md`），不是版本计数：今日 `Archetype` 没有版本计数，版本校验需要新增并在热路径维护状态，与“拒绝预计算”冲突。2026-07-09 的策略实验（harness 源码只在 `experiment/sort-cache-benchmark` 分支 `4522efa`，未合入 main）实测 VersionCache hit 3.3 ns vs FingerprintCache hit 176 µs@100K、fingerprint miss 比 NoCache 慢 10-18%——**该结论建立在“已有版本计数”的前提上**，不直接适用于今日约束。若 `OrderByEntityId` 出现在真实 profile 里，再用该 harness 重新权衡。
+- `OrderByEntityId()` 的排序缓存用 **fingerprint 形态**（`QueryCache.EntityIdSortCache`，每次枚举对匹配实体算 salted SplitMix64 校验，见 `kb-core-ecs.md`），而不是版本计数：今日 `Archetype` 没有可作为 entity-set 版本的全量计数——`Archetype._flatEntitiesGeneration` 只服务 chunked→flat 实体数组缓存（`GetEntityStorageUnsafe`），flat 模式下 `AllocateRows`/`WriteEntityAt` 都提前返回、不递增，用它校验排序缓存会产生 stale hit。2026-07-09 的策略实验（harness 源码只在 `experiment/sort-cache-benchmark` 分支 `4522efa`，未合入 main）实测 VersionCache hit 3.3 ns vs FingerprintCache hit 176 µs@100K、fingerprint miss 比 NoCache 慢 10-18%，但它的 VersionCache 是**模拟**的（源码注释：`In real ECS this would be Archetype.EntitySetVersion`）——要兑现该结论必须先新增并维护完整 entity-set 版本计数（含 flat 模式、迁移、restore 路径）。若 `OrderByEntityId` 出现在真实 profile 里，再用该 harness 重新权衡。
 
 ## 内存布局总览
 
