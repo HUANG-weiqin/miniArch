@@ -2,7 +2,7 @@
 title: Performance Harnesses Disambiguation
 module: Meta
 description: Matrix of the performance harnesses in miniArch — what each measures, current baselines, and which one is the regression gate
-updated: 2026-08-29
+updated: 2026-10-03
 ---
 # Performance Harnesses Disambiguation
 
@@ -23,6 +23,7 @@ miniArch 有 **多套性能测试工具**，以下矩阵记录主要工具。它
 | **WatchApi.Perf** | `tools/perf/WatchApi.Perf` | Watch API 专项：ChangeWatch/Projected/TransitionWatch 秒级吞吐、steady-state allocation、发布验证 | ops/s | 见 `kb-change-tracking.md` WatchApi.Perf 段 | ❌ API 发布/优化验证 | `kb-change-tracking.md` |
 | **ComponentBucketIndex.Perf** | `tools/perf/ComponentBucketIndex.Perf` | ComponentBucketQuery 与直接 scan / 手动全量建桶的 Count、Read、Write、freshness 对比 | rounds/s、B/round | 见 `kb-component-bucket-index-mvp-report.md` | ❌ API 专项证明 | `kb-component-bucket-index-mvp-report.md` |
 | **DestroyMany.Perf** | `tools/perf/DestroyMany.Perf` | `Destroy(ReadOnlySpan<Entity>)` / `Destroy(query)` / `Clear(query)` vs guarded `for Destroy`，稳态吞吐 + steady-state alloc + threshold sweep + correctness verify | speedup / us/op | 2026-07-10 稳态：full dense 1.9×；query 2.3×；Clear 4.0×；cascade 1.4×；sweep crossover ≈30% | ❌ API 专项证明 | `kb-core-ecs.md` |
+| **QueryPlan.ValueLab** | `tools/perf/QueryPlan.ValueLab` | 同语义投影、批量聚合、Top-K、逻辑 key 关联的手写候选策略；含每操作索引重建与输出，不含语言编译 | us/op、B/op | 见价值报告，非固定回归 baseline | ❌ 语言价值验证（未实现语言） | `kb-query-language-value.md` |
 
 ## 如何选择
 
@@ -34,6 +35,7 @@ miniArch 有 **多套性能测试工具**，以下矩阵记录主要工具。它
 ├── 验证 Watch API 吞吐/分配发布状态 → WatchApi.Perf
 ├── 验证 ComponentBucketQuery 的 scan/建桶性能定位 → ComponentBucketIndex.Perf
 ├── 证明 Destroy(ReadOnlySpan<Entity>)/Destroy(query) 快于 guarded for Destroy → DestroyMany.Perf
+├── 判断声明式查询层是否有策略选择价值 → QueryPlan.ValueLab（不是语言性能测试）
 ├── 微观 per-operation 分析 → PipelineBenchmarkTests
 ├── 聚焦 CommandStream 热点定位 → CommandStream.Profile + dotnet-trace
 └── CPU 采样找其他热点 → 见 kb-profiling-workflow.md（不是 harness，是工具）
@@ -82,6 +84,9 @@ dotnet run -c Release --project tools/perf/ComponentBucketIndex.Perf
 
 # Destroy(ReadOnlySpan<Entity>) / Destroy(query) API 专项证明（内置 correctness verify）
 dotnet run -c Release --project tools/perf/DestroyMany.Perf
+
+# 声明式查询层价值验证（手写候选策略，不是语言实现）
+dotnet run -c Release --project tools/perf/QueryPlan.ValueLab
 
 # 详细 workflow 见各 KB 页
 ```

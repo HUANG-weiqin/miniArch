@@ -20,6 +20,7 @@ updated: 2026-10-10
 | MiniArch.Core（ECS 运行时） | `kb-core-ecs.md`、`kb-architecture-review.md`、`kb-chunk-storage.md`、`kb-cache-optimization.md`、`kb-partition-prototype-report.md` |
 | MiniArch.Core CommandStream | `kb-command-stream.md`（typed/wire 共用规则、回滚时间线、异步冻结所有权）、`kb-deferred-create-design.md` |
 | MiniArch.Core Query | `kb-query-invalidation.md`、`kb-parallel-query.md` |
+| 声明式查询层价值验证（非语言实现） | `kb-query-language-value.md`（QueryPlan.ValueLab 正反例 + GodBrave 实际查询、既有规则 IR 与编译摊销；区分优化层价值与 SQL 文本必要性） |
 | MiniArch.Core ChangeTracking | `kb-change-tracking.md`（World.Watch pull-event 模型：ChangeWatch/TransitionWatch Snapshot+Diff；为什么不是 push event） |
 | MiniArch.Core Snapshot | `kb-snapshot-persistence.md`（v5 canonical wire、严格 Load、双 checksum、版本单源 free-list 与 Capture/Restore 时间线） |
 | 已移除的内置层级 / 迁移 | `kb-hierarchy-runtime.md`（扁平实体、旧层级存档和 opcode 的明确拒绝边界） |
@@ -78,6 +79,7 @@ updated: 2026-10-10
 - **Query 失效机制** → `kb-query-invalidation.md`
 - **并行 Query** → `kb-parallel-query.md`
 - **内置层级移除 / 旧数据迁移** → `kb-hierarchy-runtime.md`
+- **SQL 风格 / 声明式查询是否值得做** → `kb-query-language-value.md`（合成策略证据、GodBrave 真实需求与编译总账；不是已实现的语言 API）
 
 **反应式 / 变更追踪**：
 - **变更追踪（渲染层反应式）** → `kb-change-tracking.md`（World.Watch pull-event 模型：ChangeWatch/TransitionWatch Snapshot+Diff；为什么不是 push event 见 `kb-design-rationale.md` §3.10）
