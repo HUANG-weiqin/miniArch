@@ -6,9 +6,6 @@ namespace Hero.Ecs;
 
 public static class IntSlotPorts
 {
-    public static IReadOnlyDictionary<SlotKey, IIntSlotPort> Empty { get; } =
-        new ReadOnlyDictionary<SlotKey, IIntSlotPort>(new Dictionary<SlotKey, IIntSlotPort>());
-
     public static IReadOnlyDictionary<SlotKey, IIntSlotPort> Create(params (SlotKey Slot, IIntSlotPort Port)[] entries)
     {
         ArgumentNullException.ThrowIfNull(entries);
