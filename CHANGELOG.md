@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 7.2.1 (2026-10-15)
+
+- **Repack of the v7.2.0 tag:** this version rebuilds exactly the tree of tag `v7.2.0` and contains no functional changes of its own. The `MiniArch.7.2.0` package already in the local feed was packed from that tag plus one later commit (`69d6eda refactor: consolidate world query caching`), so its provenance did not match the tag. Pin `7.2.1` to consume the tag content with exact provenance.
+
 ## 7.2.0 (2026-10-12)
 
 - **Prevent deferred snapshot desynchronization:** `Snapshot` and `SnapshotInto` now reject a frame containing an immediate Create that was later cancelled, because its allocator Reserve+Release history cannot be omitted from a placeholder delta. Real-id cancellation deltas remain unchanged.
