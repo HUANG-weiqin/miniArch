@@ -2,7 +2,7 @@
 title: 设计决策总纲 — 为什么是这样而不是那样
 module: Meta
 description: 集中解释 miniArch 每个子系统的设计选择、被拒绝的替代方案及其原因，以及常见"优化提案"为什么是误判。新人必读，读完这个再碰代码。
-updated: 2026-10-05
+updated: 2026-10-14
 ---
 # 设计决策总纲
 
@@ -265,7 +265,7 @@ Watch 不向 World 注册、不拦截 `Set`/`Add`/`Remove`、不维护 per-type 
 
 **提案**：`world.OnChange<T>(handler)`，Set/Add/Remove 时内联触发 handler，让用户"注册 event 直接用"。
 
-**为什么不对**：(1) handler 是任意用户代码，在 mutation 热路径执行——读 `DateTime.Now` 等 host-local 状态立即破坏 §1.3 锁步确定性。(2) handler 分配（closure/LINQ/lambda）破坏 §1.2 热路径零 GC。(3) 概念唯一：FrameDelta 已是所有 mutation 的完整日志，"组件被 Add 了"已被表示为 delta 里那条 Add op，再建一套并行回调通知是同一事实的两个表示。(4) 对渲染层这个主要场景反而更差：回调在逻辑更新中途触发（entity 可能下一行就 destroy），必须排队留到渲染阶段处理=重新发明轮询；且散落回调 cache 敌友性差于批量 chunk 遍历。
+**为什么不对**：(1) handler 是任意用户代码，在 mutation 热路径执行——读 `DateTime.Now` 等 host-local 状态立即破坏 §1.3 锁步确定性。(2) handler 分配（closure/LINQ/lambda）破坏 §1.2 热路径零 GC。(3) 概念唯一：FrameDelta 已是 CommandStream 路径 mutation 的完整日志（World 直写不经过它，见 §3.13），"组件被 Add 了"已被表示为 delta 里那条 Add op，再建一套并行回调通知是同一事实的两个表示。(4) 对渲染层这个主要场景反而更差：回调在逻辑更新中途触发（entity 可能下一行就 destroy），必须排队留到渲染阶段处理=重新发明轮询；且散落回调 cache 敌友性差于批量 chunk 遍历。
 
 **正确做法**：pull 式 Watch——调用方显式 `Snapshot(World)`，需要时 `Diff(World)` 批量扫描并在收集完成后回调。World mutation 热路径不注册 observer、不 bump watch 状态。详见 `kb-change-tracking.md`。
 
@@ -306,6 +306,36 @@ HeroComing.Perf 真实场景也验证过：把同一机制试套到 `CollisionSy
 4. 实测没有达到 ≥10% 竞争优势，收益不足以支付 API 复杂度。
 
 **结论**：不做 typed span wrapper、typed entity ref loop、`IForEach<T1,T2,...>` Query 家族。未来若重新提出，必须先用代表性 query-pressure benchmark 证明：MiniArch 新 API 相比 Arch/Friflo 最优写法稳定高 **≥10%**，且至少一个真实场景能吃到收益。microbench 或只打赢天真 span 写法不算证据。
+
+### 3.13 "给 FrameDelta 生成 reverse delta 做回滚/撤销"
+
+**提案**：Replay/Submit 一帧时顺手产出逆向 delta，回滚时 Replay 它，让回滚代价随变更量增长，而不是随 World 大小增长。
+
+**结论**：当前模型下做不到"轻易"。正向 Replay 只要求每条 op 是确定性函数；逆向要求它在**可观察状态**上可逆。逆向所需的额外信息 = 正向擦除的信息 ∩ 可观察状态，而当前两者都很大：
+
+| 擦除点 | 位置 | 逆向为什么缺信息 |
+|---|---|---|
+| 值被覆盖或丢弃 | `ApplyRawSet`、`RemoveBoxed`、`KillEntityRecord` | delta 只带新值；旧值、被删组件和被销毁实体的整行数据只存在于 apply 前的 World |
+| 隐式效果 | 层级时代的级联（`CollectDestroySubtree`）与隐式解除旧父已随 2026-10-10 扁平化移除；现存批量路径 `World.Destroy(ReadOnlySpan<Entity>)`／`Clear(in QueryDescription)` 仍一次改 N 行（`Archetype.ResetCount()`/`CompactRemoveRows`），且不经过 wire | 1 条调用产生 N 个效果，逐条 op 的 wire 里没有这些效果 |
+| 条件 no-op | Replay 的 Destroy 先判 `IsAlive`；`Remove` 目标无该组件时静默返回（`World.StructuralChange`） | delta 不说明效果是否真的发生 |
+| 物理行序可观察 | `Archetype.RemoveAt` swap-remove、`CompactRemoveRows` hole-fill；Query 顺序契约 = 存储顺序 | 语义级"重建实体"会 append 到末尾，行序不同 → 重模拟分叉；必须记录 row 并做反向 swap |
+| 分配器历史 | LIFO free-list、`RepushFreeEntry`/`TryRemoveFromFreeList` 从中段移动、version++ | 逆向要 version--、按原位置插回；canonical 观察全部 slot version 与 free-list 顺序 |
+| version／时间线单调性被当作惰性失效 | `KillEntityRecords` 递增 slot version，`IsAlive` 靠版本比对过滤墓碑（`World.EntityLifecycle`）；`World.RestoreState` 递增 `CommandTimeline`，`CommandStream.ThrowIfStaleFrame` 拒绝回滚前录制的帧（`kb-command-stream.md`） | version／时间线回退会让墓碑与旧帧复活；这是 CommandStream 回滚/排空合同的根因，也说明回滚只能走显式 epoch，而不是“撤销版本号” |
+| 不是唯一写入通道 | World 直写 `Set`/`GetRef`/span（§2.5） | FrameDelta 不等于一帧的完整状态转移 |
+| world-agnostic 与 world-bound | placeholder 在各 replica 本地解析；旧值只存在于目标 World | reverse 只能由目标 World 在 apply 时生成，是另一种产物（undo journal），不是 FrameDelta |
+
+历史：2026-04-12 曾实现 `ReplayWithReverse`/`Rewind`（8e3c2ea），只恢复 entity 级公开状态；2026-05-25 随 FrameDelta 统一时删除（6692654）。之后 Query 顺序契约（2026-07）和 v5 canonical（free-list 顺序、全部 slot version）把物理历史纳入了可观察状态，语义级 reverse 已不足以对拍。2026-10-10 扁平化移除内置层级（393ca72）：级联与隐式解除旧父不再是擦除点，本表其余各行在当前 HEAD 上仍然成立。
+
+**要"轻易"支持，模型需要的变化**（缺任何一条，都会退化成"把存储引擎镜像实现一遍"）：
+
+1. 区分逻辑状态与表示：可观察状态只包含 slot/version、(entity, type)→值、allocator 与 free-list 顺序；行序、segment、容量和各类缓存要么是逻辑状态的纯函数（history-independent），要么明确声明不可观察。
+2. 闭合的可逆微操作集：所有公共操作和批量优化都编译成带 witness 的可逆原语（slot 分配/回收、row append/swap-remove、cell write）；逆向 = 日志倒序、逐条取逆。
+3. 单一写入通道：直写 span 需要写屏障（写意图 API，或 chunk 级 before-image）。
+4. 时间线 epoch：handle 持有方能检测到回退；不再依赖 version 单调性做惰性失效。（2026-10-10 已有帧级实现：`World.CommandTimeline` + `CommandStream.ThrowIfStaleFrame`；非 CommandStream 的持有方仍无守卫。）
+
+**替代方向**：如果目标只是"回滚代价与变更量成正比"，改动更小的做法是把存储改成定长页，按 epoch 写时复制、首次写入时保存页的 before-image（相当于增量版 `CaptureState`）。这一个机制同时覆盖直写、批量优化和物理布局，字节级恢复也满足现有确定性契约。前提是先证明目标 workload 每帧的脏数据远小于 World：移动类系统每帧改写大部分 Position 时，现有 `CaptureState` 的整块 memcpy 已接近最优。
+
+**当前做法**：回滚用 `CaptureState/RestoreState`（见 `kb-snapshot-persistence.md`），并遵守 CommandStream 排空合同。
 
 ---
 
