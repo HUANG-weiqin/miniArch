@@ -2,12 +2,20 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-10-11
+updated: 2026-10-15
 ---
 # Knowledge Base Changelog
 
 > 这个页面只记录**重大架构变更和知识库校准事件**，供追溯。
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
+
+## 2026-10-15 简化审计在扁平化后重推导：核心代码保持原样
+
+- 2026-08-28 审计（`review/repo-simplify-20260828`）的 Runtime 与“派生状态”部分**在扁平化（393ca72）与 query cache 收敛（69d6eda）之后不能照搬**：它改的 `CommandStreamCore.*` 等文件已改名/拆分。逐项重推后只落地仓库外围与测试侧，`src/MiniArch` 未动。
+- 已落地（非核心，`b9005b4`/`f06d0f1`）：24 个 csproj 的 `TargetFramework`/`ImplicitUsings`/`Nullable` 改由 `Directory.Build.props` 单点提供（`-t:Rebuild` 产物逐字节相同，0 IL 差异，免门禁）；`miniArch.sln` 删除重复 `perf` solution folder；`PublicApiSentinelTests` 删除 338 行内嵌 baseline（文件缺失改为显式失败，已用“破坏 baseline→失败”反向验证）；删零调用 `TestPipelineQueries.cs`、`IntSlotPorts.Empty`、`HexGeometry.Directions`。
+- **重推后判定“仍成立但不改”的候选**（记录以免重复推导）：`SetComponentAtTypedNoTrack` 与 `SetComponentAtTyped` 函数体逐字相同（`Archetype.Storage.cs`，4 处调用）；`FrameDelta` 内层 `Grow` 与 `EnsureOperationCapacity` 重复；零调用 `AssertSegIdx`/`GetFlatReservedEntities`/`World.GetEntityVersion`；decode 路径 5 处不可达负长度守卫；`Signature` 的 `IEnumerable`/`CopyToArray` 宽接口；`ComponentBucketQuery` ctor 手工 `hasRequired` 循环（可用幂等 `scope.With<T>()` 替代）；`EntityIdSortCache.Count`/`_exact`/双 clear、`FrameLookup._capacity`、`WorldStateSnapshot.SourceCapacity`、`QueryComponentSet` 的 dedup。共同理由：全部在冷路径，或纯概念收敛而没有独立收益证据。
+- **明确禁止的两类**：`FrameDelta.WriteDataUnsafe` 的内层 `Grow` 是 `Unsafe.CopyBlockUnaligned` 的安全网，删了会把“越界异常”变成未定义行为；`WorldValidator` 的 null/`EntityCount` 检查是 fail-safe 契约，`WorldSnapshot.BuildCanonicalLayout` 改即变 v5 canonical 字节。
+- 将来若重启该审计：先核对上一条“仍成立但不改”项是否已有新证据（真实热点或可测收益），不要仅凭“代码重复”就动核心。
 
 ## 2026-10-10 并行查询零分配校准
 
