@@ -16,6 +16,7 @@ updated: 2026-10-15
 - **重推后判定“仍成立但不改”的候选**（记录以免重复推导）：`SetComponentAtTypedNoTrack` 与 `SetComponentAtTyped` 函数体逐字相同（`Archetype.Storage.cs`，4 处调用）；`FrameDelta` 内层 `Grow` 与 `EnsureOperationCapacity` 重复；零调用 `AssertSegIdx`/`GetFlatReservedEntities`/`World.GetEntityVersion`；decode 路径 5 处不可达负长度守卫；`Signature` 的 `IEnumerable`/`CopyToArray` 宽接口；`ComponentBucketQuery` ctor 手工 `hasRequired` 循环（可用幂等 `scope.With<T>()` 替代）；`EntityIdSortCache.Count`/`_exact`/双 clear、`FrameLookup._capacity`、`WorldStateSnapshot.SourceCapacity`、`QueryComponentSet` 的 dedup。共同理由：全部在冷路径，或纯概念收敛而没有独立收益证据。
 - **明确禁止的两类**：`FrameDelta.WriteDataUnsafe` 的内层 `Grow` 是 `Unsafe.CopyBlockUnaligned` 的安全网，删了会把“越界异常”变成未定义行为；`WorldValidator` 的 null/`EntityCount` 检查是 fail-safe 契约，`WorldSnapshot.BuildCanonicalLayout` 改即变 v5 canonical 字节。
 - 将来若重启该审计：先核对上一条“仍成立但不改”项是否已有新证据（真实热点或可测收益），不要仅凭“代码重复”就动核心。
+- 分支/临时状态清理：`review/repo-simplify-20260828` 已删除（有效部分已落地、否决部分见上）；`experiment/sort-cache-benchmark` **保留**——它的 harness 与实验数据只存在于该分支（`4522efa`），且其结论与今日 fingerprint 形态存在未解冲突，见 `kb-cache-optimization.md` 决策段；3 个陈旧 stash 已 drop。
 
 ## 2026-10-10 并行查询零分配校准
 
