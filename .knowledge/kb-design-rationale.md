@@ -2,7 +2,7 @@
 title: 设计决策总纲 — 为什么是这样而不是那样
 module: Meta
 description: 集中解释 miniArch 每个子系统的设计选择、被拒绝的替代方案及其原因，以及常见"优化提案"为什么是误判。新人必读，读完这个再碰代码。
-updated: 2026-10-14
+updated: 2026-11-07
 ---
 # 设计决策总纲
 
@@ -93,17 +93,18 @@ lockstep 要求：N 个独立 host 的 World 在 replay 同一个 delta 序列�
 
 **结论**：DeferredEntities 是调和两条硬约束的唯一可行解。placeholder/real 两套模式的每一个分支都有来自这三条约束的硬理由。
 
-### 2.4 Hierarchy 作为 side-table 而非 Parent 组件
+### 2.4 扁平实体：库不管理父子关系
 
-**选择**：`HierarchyTable`——SoA 邻接表，通过 `_parentByChild[id]` O(1) 直索引、`_firstChild[id]` → `_next[slot]` 链表遍历孩子。
+**选择**：实体是扁平的。`Destroy(Entity)` 只销毁指定实体，`Clone(Entity)` 只复制它自己的组件。实体之间的关系由应用用普通 `Entity` 字段表达，生命周期也由应用决定。
 
 **考虑过的替代方案**：
 
 | 替代方案 | 为什么拒绝 |
 |---------|-----------|
-| Parent 做成组件 `struct Parent { Entity Value; }` | 级联销毁从 O(subtree) 变成 O(N) 全表扫描。每次 `AddChild` / `RemoveChild` 触发 archetype 迁移——有 100 个孩子的父节点要迁移 100 次。且 query 只过滤组件类型、不能按组件值过滤——所以即使 Parent 是组件也无法写 `With<Parent>().Where(p => p == target)` |
+| 内置层级 side-table（2026-10-10 前的 `HierarchyTable`，`393ca72` 移除） | 库要替应用决定所有权、级联销毁、子树克隆和序列化语义；这些规则因游戏而异，却要在 CommandStream、Snapshot、Replay 和诊断里各维护一份 |
+| 内置 `Parent` 组件 | 同样把所有权语义放回库里，只是换了存储形状；query 也只按组件类型过滤，不能按值找到某个父节点的孩子 |
 
-**取舍**：side-table 牺牲的是 query 表达力（无法从 query 系统里看到层级关系），换回的是级联销毁 O(subtree) 和零迁移。kb-architecture-review 里那句 "正确性 > 表达力" 就是基于这个计算。
+**取舍**：应用要自己维护反向索引和清理规则；库换回的是更少的隐式效果和更小的 wire/存档合同。迁移边界与旧存档的拒绝规则见 `kb-hierarchy-runtime.md`。
 
 ### 2.5 World 直写 + CommandStream 双路径
 
@@ -221,11 +222,11 @@ Watch 不向 World 注册、不拦截 `Set`/`Add`/`Remove`、不维护 per-type 
 
 **为什么不对**：wire 上 placeholder `Entity(-1, seq)` 的 Version 是 seq 而非真实 version——必须独立编码。运行时 `IsAlive` / `TryGetLocation` 需频繁单独读 Version——打包后每次提取要多一个 `>> 32`。且两个 int 在 struct layout 里已经是紧凑的 8 字节——打包不省任何空间。
 
-### 3.4 "Parent 做成组件"
+### 3.4 "把父子关系加回库里"
 
-**提案**：Parent 关系作为组件，通过 query 系统发现子实体。
+**提案**：重新提供内置 `Parent` 组件或层级表，让 query 或 `Destroy` 自动处理子实体。
 
-**为什么不对**：级联销毁变成每次在当前帧中执行一次完整查询定位子实体——O(N) 替代 O(subtree)。AddChild / RemoveChild 变成结构性组件增减——一次 100 孩子的父节点要迁移孩子实体通过父子关系的父/子集；每增删一个 parent 要迁移到不同 archetype。而当前 query 系统只按组件类型过滤，不能按组件值过滤——所以即使 Parent 成为组件，仍然不能用 `With<Parent>().Where(p == target)` 直接找到特定父节点的所有孩子，需要额外构建遍历机制。side-table 给出的是完整且高性能的层级访问，而不是寄望于 query 能力的扩展。
+**为什么不对**：§2.4 的扁平化正是为了让库不再拥有所有权语义。加回来会让级联、子树克隆和关系序列化重新进入 CommandStream、Snapshot 与 Replay 的合同。需要关系的应用用普通 `Entity` 字段加自己的索引即可，见 `kb-hierarchy-runtime.md`。
 
 ### 3.5 "统一 buffer——所有写入走 CommandStream"
 

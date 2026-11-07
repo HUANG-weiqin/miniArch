@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 审阅前必读的当前风险、已修复真 bug 回归索引与已排除非 bug 猜想；只保留结论和验证入口
-updated: 2026-10-12
+updated: 2026-11-07
 ---
 # 代码审阅发现
 
@@ -31,6 +31,12 @@ updated: 2026-10-12
 CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）修复了 lockstep 分叉路径（P0#1/P0#2），`Validate()` 覆盖仍保留的组件存在性等语义违规；nested Entity 现在由完整递归 offsets 合同支持，零校验 Submit 的存在性违规仍在 apply 期抛（部分应用），且不把 Submit 或 Replay 提升为灾难性异常下的通用事务。
 
 ## 已修复的真 bug 索引
+
+### 2026-11-07 Get/GetRef 缺组件报错
+
+| 回归测试 | 位置 / witness | 修复边界 |
+|---|---|---|
+| `RobustnessTests.BUG_Get_and_GetRef_missing_component_name_the_entity_and_type`（取代钉住旧异常类型的 `Get_component_not_present_throws`） | `World.Get<T>`/`GetRef<T>` 用 `GetComponentIndexFast` 直取列号；活实体缺 `T` 时 Release 只抛裸 `IndexOutOfRangeException`，不指明实体和组件。XML 注释还写“无版本/边界检查”，与实际的存活检查不符 | 与 `World.Set<T>` 共用 `TryGetComponentIndex` + `ThrowComponentNotFound<T>`，抛 `InvalidOperationException`（含实体与类型名）。只多一次可预测分支，抛出点不内联；`EntityAccessor` 与 `ChunkView.GetSpan` 仍是 Debug-only 断言的显式快路径（`kb-design-rationale.md` §3.11），不在本次范围 |
 
 ### 2026-10-12 运行时生命周期与命令流审阅
 

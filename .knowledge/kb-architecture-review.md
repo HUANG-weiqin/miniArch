@@ -2,7 +2,7 @@
 title: Architecture Mechanistic Review
 module: MiniArch.Core
 description: Mechanistic insight of the entire miniArch ECS library — one-line truths, subsystem breakdown, data flows, known issues, and design tensions. Links to per-subsystem kb pages for depth.
-updated: 2026-10-12
+updated: 2026-11-07
 ---
 # Architecture Mechanistic Review
 
@@ -150,7 +150,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 - 当前游戏场景下 component id 密集，trade-off 合理
 
 ### P4. 原 Hierarchy side-table 表达力缺失 — 能力已退役
-- 这是删除前的历史设计张力，不是当前待修问题；历史方案见 `kb-design-rationale.md` §2.4/§3.4，当前边界见 `kb-hierarchy-runtime.md`。
+- 这是删除前的历史设计张力，不是当前待修问题；扁平化的理由见 `kb-design-rationale.md` §2.4/§3.4，当前边界见 `kb-hierarchy-runtime.md`。
 
 ### --- 以下为已评估并解决或拒绝的条目 ---
 

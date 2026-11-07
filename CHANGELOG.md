@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Clear error for a missing component on `Get`/`GetRef`:** `World.Get<T>` and `World.GetRef<T>` on a live entity without `T` now throw `InvalidOperationException` naming the entity and the component type, the same error `World.Set<T>` already raises. They used to throw a bare `IndexOutOfRangeException`. Callers that caught `IndexOutOfRangeException` for this case must catch `InvalidOperationException` instead. `EntityAccessor.Get/Set` and `ChunkView.GetSpan` are unchanged.
+
 ## 7.2.0 (2026-10-12)
 
 - **Prevent deferred snapshot desynchronization:** `Snapshot` and `SnapshotInto` now reject a frame containing an immediate Create that was later cancelled, because its allocator Reserve+Release history cannot be omitted from a placeholder delta. Real-id cancellation deltas remain unchanged.

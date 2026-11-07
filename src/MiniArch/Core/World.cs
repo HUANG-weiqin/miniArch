@@ -396,9 +396,10 @@ public sealed partial class World : IDisposable
     }
 
     /// <summary>
-    /// Gets a component directly without version or bounds checks.
-    /// Use only when the entity is known to be alive and the component is known to exist.
+    /// Gets a component of a live entity. Use <see cref="TryGet{T}"/> when the
+    /// entity or the component may be absent.
     /// </summary>
+    /// <exception cref="InvalidOperationException">The entity is not alive, or it does not have a component of type <typeparamref name="T"/>.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public T Get<T>(Entity entity) where T : unmanaged
     {
@@ -406,13 +407,16 @@ public sealed partial class World : IDisposable
         AssertAlive(entity);
         ref var record = ref _records[entity.Id];
         var arch = record.Archetype!;
-        return arch.GetComponentAt<T>(arch.GetComponentIndexFast(GetComponentType<T>()), record.RowIndex);
+        if (!arch.TryGetComponentIndex(GetComponentType<T>(), out var componentIndex))
+            ThrowComponentNotFound<T>(entity);
+        return arch.GetComponentAt<T>(componentIndex, record.RowIndex);
     }
 
     /// <summary>
-    /// Gets a component by reference directly without version or bounds checks.
-    /// Use only when the entity is known to be alive and the component is known to exist.
+    /// Gets a component of a live entity by reference. The reference is invalid
+    /// after any structural change.
     /// </summary>
+    /// <exception cref="InvalidOperationException">The entity is not alive, or it does not have a component of type <typeparamref name="T"/>.</exception>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ref T GetRef<T>(Entity entity) where T : unmanaged
     {
@@ -420,7 +424,9 @@ public sealed partial class World : IDisposable
         AssertAlive(entity);
         ref var record = ref _records[entity.Id];
         var arch = record.Archetype!;
-        return ref arch.GetComponentRefAt<T>(arch.GetComponentIndexFast(GetComponentType<T>()), record.RowIndex);
+        if (!arch.TryGetComponentIndex(GetComponentType<T>(), out var componentIndex))
+            ThrowComponentNotFound<T>(entity);
+        return ref arch.GetComponentRefAt<T>(componentIndex, record.RowIndex);
     }
 
     /// <summary>

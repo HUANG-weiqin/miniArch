@@ -444,14 +444,26 @@ public sealed class RobustnessTests
     // ── B3: Get<T> on entity without that component ──────────
 
     [Fact]
-    public void Get_component_not_present_throws()
+    public void BUG_Get_and_GetRef_missing_component_name_the_entity_and_type()
     {
         var world = new World();
-        var e = world.Create(new Position(1, 2)); // No Velocity or Health
+        var positionOnly = world.Create(new Position(1, 2));
+        var velocityOnly = world.Create(new Velocity(3, 4));
 
-        // Get<T> assumes the component exists; when it doesn't,
-        // the column map returns -1 and the getter throws.
-        Assert.Throws<IndexOutOfRangeException>(() => world.Get<Velocity>(e));
+        // Whatever the registration order, one lookup falls past its archetype's
+        // column map and the other hits an absent slot inside it. Both used to
+        // surface as a bare IndexOutOfRangeException.
+        AssertComponentNotFound<Velocity>(() => world.Get<Velocity>(positionOnly), positionOnly);
+        AssertComponentNotFound<Position>(() => world.Get<Position>(velocityOnly), velocityOnly);
+        AssertComponentNotFound<Velocity>(() => _ = world.GetRef<Velocity>(positionOnly), positionOnly);
+        AssertComponentNotFound<Position>(() => _ = world.GetRef<Position>(velocityOnly), velocityOnly);
+    }
+
+    private static void AssertComponentNotFound<T>(Action read, Entity entity)
+    {
+        var ex = Assert.Throws<InvalidOperationException>(read);
+        Assert.Contains(entity.ToString(), ex.Message);
+        Assert.Contains(typeof(T).Name, ex.Message);
     }
 
     [Fact]
