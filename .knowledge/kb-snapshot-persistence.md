@@ -2,7 +2,7 @@
 title: Snapshot Persistence
 module: MiniArch.Core Snapshot
 description: WorldSnapshot v5 字段级 canonical 持久化（canonical 只含非空原型）、双 checksum 观察边界，以及 Clone/CaptureState 的职责分工
-updated: 2026-10-10
+updated: 2026-11-17
 ---
 # Snapshot Persistence
 
@@ -160,7 +160,7 @@ CRC 只检测传输/存储损坏，不提供 schema migration 或兼容能力。
 - `IsRecycled` 对 default、已 Restore/Dispose、stale generation 或来源 World 已 Dispose 的 lease 返回 `true`。
 
 - 支持多帧 rollback window：覆盖 ring slot 前先 `Dispose()` 未消费 lease；一轮 warm-up 后相同深度的 capture/restore/dispose 可复用 payload。
-- `RestoreState` 先将各原型实体数清零、再恢复快照中的活原型；原型对象仍留在 `_archetypes` 中，所以创建实体用的原型缓存保持有效：预热后“拍快照 → 用多种组合 Create/Destroy → 退回 → 再 Create”的稳态分配为 0 字节。`World.Reset` 走整体清空路径（会移除原型），仍照常作废该缓存。
+- `RestoreState` 先将各原型实体数清零、再恢复快照中的活原型；原型对象仍留在 `_archetypes` 中，所以创建实体用的原型缓存保持有效：预热后“拍快照 → 用多种组合 Create/Destroy → 退回 → 再 Create”的稳态分配为 0 字节。`World.Reset` 已于 2026-10-05（`08d507a`）删除；它当时会整体清空并作废该缓存，现在 Load/Clone 直接新建 World，`Dispose` 清状态。
 
 ```csharp
 var ring = new WorldStateSnapshot[8];

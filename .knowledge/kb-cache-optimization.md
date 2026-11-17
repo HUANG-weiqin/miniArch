@@ -2,7 +2,7 @@
 title: Cache & Memory Optimization Review
 module: MiniArch.Core
 description: Memory layout, cache behavior analysis, applied optimizations, and remaining opportunities for the ECS runtime
-updated: 2026-10-15
+updated: 2026-11-17
 ---
 # Cache & Memory Optimization Review
 
@@ -60,7 +60,7 @@ ChunkView (public readonly struct view, 直接包裹 Archetype 或其 Segment)
 | Entity Get/Set/Has | 取决于游戏逻辑 | ⚠️ `_records[id]` → 随机访问 |
 | Entity Create/Destroy | 取决于游戏逻辑 | ⚠️ 2 数组 × 2-4 次随机访问 |
 | Add/Remove component | 少见 | ⚠️ `Archetype.CopySharedComponentsFrom` |
-| Query invalidation check | 每查询每帧 1 次 | ✅ 两段式: archetypeCount int-compare + per-archetype segment count (详见 `kb-query-invalidation.md`) |
+| Query invalidation check | 每查询每帧 1 次 | ✅ 快路径: archetypeCount int-compare；未变时再按已匹配 archetype 检查 mode-aware view shape（chunked = SegmentCount / flat = -1）。不是固定两次 int 比较，详见 `kb-query-invalidation.md` |
 
 ## 已应用的优化
 
@@ -134,7 +134,7 @@ Hero perf 瓶颈继续推进时，保留了 4 个核心库内的低层微优化�
 | `CopySharedComponentsFrom` copy 排序 | **方案 A 值得做** | 排序开销极小，copy 时 cache 更友好 |
 | `EntityRecord` 压缩为无引用 metadata | **探索中** | 消除 8B Archetype 引用，但需间接寻址 |
 | NativeMemory + 64B alignment | **高天花板** | 单独替换 `byte[]` 不保证收益 |
-| MigrationPlan 小优化 | **低优先级** | |
+| ~~MigrationPlan 小优化~~ | **不存在** | 迁移拷贝已内联在 `Archetype.CopySharedComponentsFrom`，没有 MigrationPlan class |
 
 ## 坑点
 
@@ -145,7 +145,7 @@ Hero perf 瓶颈继续推进时，保留了 4 个核心库内的低层微优化�
 
 ## 入口
 
-- **看迭代热路径**：`Core/QueryCache.cs` 的 `EnsureRefreshed()` / `AppendNewArchetypes()`
+- **看迭代热路径**：`Core/QueryCache.cs` 的 `EnsureRefreshed()` / `RebuildCache()` / `RefreshViewsOnly()`
 - **看实体随机访问**：`World.cs` 的 `TryGetLocation()`、`World.StructuralChange.cs` 的 `FinishMoveEntity()`
 - **看 storage 布局**：`Archetype.Storage.cs` 的 `EnsureCapacity()`、`GetComponentRefAt<T>()`
 - **看迁移拷贝**：`Archetype.Storage.cs` 的 `CopySharedComponentsFrom()`、`CopySmall()`

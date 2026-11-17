@@ -2,7 +2,7 @@
 title: 多 host Lockstep 浸泡测试 — 网络同步收敛验证
 module: LockstepSoak
 description: N host placeholder lockstep 长周期随机操作收敛验证器——所有 host 全走 Replay 路径，以可配置周期和最终帧 CanonicalChecksum 比对收敛，并用 per-frame component overlay 保证生成的 strict intent 合法。
-updated: 2026-10-10
+updated: 2026-11-17
 ---
 # 多 host Lockstep 浸泡测试 — 网络同步收敛验证
 
@@ -20,7 +20,7 @@ updated: 2026-10-10
   - 直接 Create 的 `CompRef(Entity Target)` 自引用 placeholder 在 host[0] 上解析为自身 real id；其他 host 由 checksum 收敛覆盖，但这不是任意引用关系的完整 oracle
 - 这个测试**不负责**：
   - Submit vs Replay 双路径对比（那是单 host soak 的事，`kb-soak-test.md`）
-  - 多 host 对**同一 real entity** 的并发结构变更（这是非法 lockstep 用法——见决策 #3，正确做法走确定性后处理系统，BulletLockstep demo 已覆盖）
+  - 多 host 对**同一 real entity** 的并发结构变更（这是非法 lockstep 用法——见决策 #2，正确做法走确定性后处理系统，BulletLockstep demo 已覆盖）
   - 性能测量（那是 HeroComing.Perf 的事）
 
 ## 与单 host soak 的区别（关键）
@@ -215,7 +215,7 @@ dotnet run -c Release --project tools/lockstep-soak/MiniArch.LockstepSoak -- --f
 
 任何改动下列路径的变更，**发布前必须跑本工具的矩阵**（正确性门禁，区别于 `HeroComing.Perf` 的性能门禁）：
 - `CommandStream`（record / Snapshot / Submit / Clear）
-- `World.Replay` / `ReplayCore` / `EnsureReplayReservation`
+- `CommandStream.Replay` / internal `World.ReplayCore` / `EnsureReplayReservation`
 - `DeferredEntities` flag 相关分支（`CreateDeferredImpl` / `EmitPendingEntitiesToDelta` / `_replayPlaceholderMap`）
 - `EntityFieldResolver`（placeholder 字段自动解析）
 

@@ -2,7 +2,7 @@
 title: Knowledge Index
 module: KnowledgeIndex
 description: .knowledge 知识库导航、模块地图与必读入口
-updated: 2026-10-10
+updated: 2026-11-17
 ---
 
 # Knowledge Index
@@ -25,7 +25,7 @@ updated: 2026-10-10
 | MiniArch.Core Snapshot | `kb-snapshot-persistence.md`（v5 canonical wire、严格 Load、双 checksum、版本单源 free-list 与 Capture/Restore 时间线） |
 | 已移除的内置层级 / 迁移 | `kb-hierarchy-runtime.md`（扁平实体、旧层级存档和 opcode 的明确拒绝边界） |
 | MiniArch.Diagnostics（诊断工具） | `kb-ecs-diagnostics.md`（WorldDiff、WorldValidator、EntityDump、WorldDigest） |
-| MiniArch（用户 API 分层） | `kb-component-bucket-index-mvp-report.md`（ComponentBucketQuery MVP 最终报告——确定性 per-key scan、调用者提供 span 模式、零 core 入侵、正确性模型与性能矩阵）、`kb-frame-read-models.md`（Frame Read Models ValueLab / FrameLookup API Gate：compact CSR 本体成立；逐 row DirectForEach Conditional Hold；chunk-run 通用形态 No-Go；hot bucket/entity-only 禁用区间）、`kb-managed-entity-sidecar-evaluation.md`（Entity -> managed object sidecar 价值验证 No-Go：打败 dictionary 但未优于 competent dense user，serialization 不进 v1） |
+| MiniArch（用户 API 分层） | `kb-component-bucket-index-mvp-report.md`（ComponentBucketQuery MVP 最终报告——确定性 per-key scan、调用者提供 span 模式、零 core 入侵、正确性模型与性能矩阵）、`kb-frame-read-models.md`（Frame Read Models ValueLab / **FrameLookup&lt;TKey&gt; 已发布**：compact CSR 最小形态可用；逐 row DirectForEach、chunk-run、LinkedRow、DenseInt、EntityArray 均 No-Go；hot bucket/entity-only 禁用区间）、`kb-managed-entity-sidecar-evaluation.md`（Entity -> managed object sidecar 价值验证 No-Go：打败 dictionary 但未优于 competent dense user，serialization 不进 v1） |
 | MiniArch.Tests（测试组织） | `kb-test-workflow.md` |
 | MiniArch.Benchmarks（对比数据） | `kb-ecs-comparison.md` |
 | HeroPipeline.Tests | 合并到 `kb-hero-pipeline-regression.md` "PipelineBenchmarkTests" 段 |
@@ -37,7 +37,7 @@ updated: 2026-10-10
 | **确定性证明（选型必读）** | **`kb-determinism-proof.md`**（10 维确定性审计；v5 字段级 canonical checksum 跨进程/注册顺序稳定；含应用层边界） |
 | GameTickSim.Perf（场景基准） | `kb-gameticksim-scenarios.md` |
 | FrifloGameScenarios.Perf（15 场景跨 ECS 对比） | `kb-ecs-comparison.md`、`kb-perf-harnesses.md` |
-| CommandStreamGame.Perf（CommandStream 真实游戏稳态压测） | `kb-commandstream-game-perf.md` |
+| CommandBufferGame.Perf（CommandStream 真实游戏稳态压测；项目名沿用历史 `CommandBuffer`） | `kb-commandstream-game-perf.md` |
 | WatchApi.Perf（Watch API 专项吞吐/分配） | `kb-change-tracking.md`、`kb-perf-harnesses.md` |
 | samples/BulletLockstep.Demo（多 host 弹幕游戏集成测试） | `kb-bullet-lockstep-demo.md`（8 个 slice（2-9）：placeholder lockstep / archetype 迁移 / 显式 Boss 场景清理 / chunked / 持久化 / 回滚；不是全部公共能力的穷尽证明） |
 
@@ -95,6 +95,6 @@ updated: 2026-10-10
 - **排查行为偏差** → 各模块页的 `坑点` + 对应测试文件
 - **理解"为什么边界这么划"** → 各模块页的 `决策`
 
-- **架构变更历史** → `kb-changelog.md`（2026-07-01 代码硬化：isqrt / wire 预算 / CRC32 / PBT / Conditional / Entity.IsPlaceholder / SpanFeeder struct）
-- **加固路线图（必读）** → **`kb-hardening-roadmap.md`**（系统性攻击面分析 + 五阶段加固计划，新贡献者/审阅应先了解已知薄弱点）
+- **架构变更历史** → `kb-changelog.md`（按日期倒序的架构变更与知识库校准事件）
+- **加固路线图（必读）** → **`kb-hardening-roadmap.md`**（系统性攻击面分析 + M1–M9 里程碑；代码已全部落地，页面保留当时的攻击面与验证证据，行号/符号是历史快照）
 - **新增知识页** → 先看 `.knowledge/_template.md` 模板，再挂到上面的地图，再写模块正文

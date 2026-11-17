@@ -2,7 +2,7 @@
 title: Performance Harnesses Disambiguation
 module: Meta
 description: Matrix of the performance harnesses in miniArch — what each measures, current baselines, and which one is the regression gate
-updated: 2026-10-03
+updated: 2026-11-17
 ---
 # Performance Harnesses Disambiguation
 
@@ -22,7 +22,7 @@ miniArch 有 **多套性能测试工具**，以下矩阵记录主要工具。它
 | **CommandStream.Profile** | `tools/perf/CommandStream.Profile` | CommandStream 专剖：7 个微场景，含 existing-set-multi 与 record/submit/snapshot/clear 分阶段 | ticks/s | 无固定 baseline | ❌ CPU sampling 辅助 | `kb-command-stream.md` |
 | **WatchApi.Perf** | `tools/perf/WatchApi.Perf` | Watch API 专项：ChangeWatch/Projected/TransitionWatch 秒级吞吐、steady-state allocation、发布验证 | ops/s | 见 `kb-change-tracking.md` WatchApi.Perf 段 | ❌ API 发布/优化验证 | `kb-change-tracking.md` |
 | **ComponentBucketIndex.Perf** | `tools/perf/ComponentBucketIndex.Perf` | ComponentBucketQuery 与直接 scan / 手动全量建桶的 Count、Read、Write、freshness 对比 | rounds/s、B/round | 见 `kb-component-bucket-index-mvp-report.md` | ❌ API 专项证明 | `kb-component-bucket-index-mvp-report.md` |
-| **DestroyMany.Perf** | `tools/perf/DestroyMany.Perf` | `Destroy(ReadOnlySpan<Entity>)` / `Destroy(query)` / `Clear(query)` vs guarded `for Destroy`，稳态吞吐 + steady-state alloc + threshold sweep + correctness verify | speedup / us/op | 2026-07-10 稳态：full dense 1.9×；query 2.3×；Clear 4.0×；cascade 1.4×；sweep crossover ≈30% | ❌ API 专项证明 | `kb-core-ecs.md` |
+| **DestroyMany.Perf** | `tools/perf/DestroyMany.Perf` | `Destroy(ReadOnlySpan<Entity>)` / `Destroy(query)` / `Clear(query)` vs guarded `for Destroy`，稳态吞吐 + steady-state alloc + threshold sweep + correctness verify | speedup / us/op | 2026-07-10 稳态：full dense 1.9×；query 2.3×；Clear 4.0×；sweep crossover ≈30%（cascade 场景随层级退役删除）。现行验收：Query 两场景 ≥1.20×；full 与 R/M ≥50% 冷 span 共用 ≥0.65× 底线（见 `kb-safety-proof.md`） | ❌ API 专项证明 | `kb-core-ecs.md` |
 | **QueryPlan.ValueLab** | `tools/perf/QueryPlan.ValueLab` | 同语义投影、批量聚合、Top-K、逻辑 key 关联的手写候选策略；含每操作索引重建与输出，不含语言编译 | us/op、B/op | 见价值报告，非固定回归 baseline | ❌ 语言价值验证（未实现语言） | `kb-query-language-value.md` |
 
 ## 如何选择

@@ -2,13 +2,13 @@
 title: Lockstep Playbook
 module: Meta
 description: End-to-end guide for implementing lockstep multiplayer on miniArch — from recording commands to peer synchronization and divergence detection
-updated: 2026-10-10
+updated: 2026-11-17
 ---
 # Lockstep Playbook
 
 ## 结论
 
-这是帧同步的**导航 spine 页**——把分散在 5 个 kb 页中的信息串成一条线。每一步只给结论 + API 调用顺序，深度细节在各子页。
+这是帧同步的**导航 spine 页**——把分散在多个 kb 页中的信息串成一条线。每一步只给结论 + API 调用顺序，深度细节在各子页。
 
 ## 端到端流程
 
@@ -47,8 +47,8 @@ stream.DeferredEntities = true;  // Create() 返回 placeholder Entity(-1, seq)
 │   var deltaB = FrameDelta.FromWire(socketB.Recv());   │
 │                                                        │
 │ 2e. 按固定 host 顺序 replay                            │
-│   world.Replay(deltaA);  // placeholder→local id 映射  │
-│   world.Replay(deltaB);                                │
+│   stream.Replay(deltaA);  // placeholder→local id 映射 │
+│   stream.Replay(deltaB);  // World.Replay 已不是公开 API│
 │                                                        │
 │ 2f. 执行游戏逻辑（query + system）                      │
 │   foreach (var chunk in world.Query(desc).GetChunks())│
@@ -60,7 +60,7 @@ stream.DeferredEntities = true;  // Create() 返回 placeholder Entity(-1, seq)
 └────────────────────────────────────────────────────────┘
 ```
 
-> **关键**：所有 host 必须从 frame 0 完整重放。不支持断点续传/增量同步（见 `kb-command-stream.md` "关键约束"）。
+> **关键**：所有 host 必须从 frame 0 完整重放。不支持断点续传/增量同步（见 `kb-deferred-create-design.md` "约束"段与 `kb-command-stream.md` 的 consume 契约）。
 >
 > **Replay 后查询自己创建的 placeholder 对应的本地 real entity**：
 > ```csharp
@@ -79,7 +79,7 @@ stream.DeferredEntities = true;  // Create() 返回 placeholder Entity(-1, seq)
 | 性质 | 状态 | 验证测试 |
 |------|------|---------|
 | 同一 delta 序列重放到 N 个 world → 状态一致 | ✅ | `FrameDeltaDeterminismTests` |
-| Submit(源) == Replay(副本) | ✅（避开同帧 Remove+Add 同组件） | `Submit_*_converges_with_replay` |
+| Submit(源) == Replay(副本) | ✅（含同帧 Remove+Add 同组件） | `SubmitReplayParityTests`（如 `Remove_then_Add_same_component_same_frame`） |
 | 跨帧 id 回收正确 | ✅ | `CB_destroy_then_recycle_round_trip_preserves_id_allocation` |
 | Placeholder→local id 映射 | ✅ | `kb-deferred-create-design.md` ReplayCore 段 |
 
@@ -106,8 +106,8 @@ stream.DeferredEntities = true;  // Create() 返回 placeholder Entity(-1, seq)
 | 步骤 | 深度文档 |
 |------|---------|
 | 步骤 1 初始化 | `kb-deferred-create-design.md`（DeferredEntities flag 全貌） |
-| 步骤 2a-2b 录制+生成 delta | `kb-command-stream.md`（CommandStream API + FrameDelta wire format） |
+| 步骤 2a-2b 录制+生成 delta | `kb-command-stream.md`（CommandStream API + "FrameDelta 结构与预算边界"） |
 | 步骤 2c-2d 序列化 | `kb-command-stream.md`（AsSpan / FromWire / Deserialize） |
-| 步骤 2e replay | `kb-command-stream.md`（ReplayCore + EnsureReplayReservation） |
+| 步骤 2e replay | `kb-deferred-create-design.md`（Consumer 端 `ReplayCore` / `EnsureReplayReservation`） |
 | 步骤 2g checksum | `kb-snapshot-persistence.md`（Checksum 双模式段） |
 | Rollback 基础 | `kb-snapshot-persistence.md`（CaptureState/RestoreState + 命令时间线合同） |

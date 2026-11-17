@@ -2,7 +2,7 @@
 title: Command Stream Runtime
 module: MiniArch.Core CommandStream
 description: CommandStream 的 typed-store 录制、consume-time 校验、Submit/Snapshot/Replay 确定性、async ownership 与回滚时间线契约
-updated: 2026-10-11
+updated: 2026-11-17
 ---
 # Command Stream Runtime
 
@@ -21,6 +21,7 @@ updated: 2026-10-11
 | `CommandStream.cs` | 字段、record helper、clone、clear、deferred/frozen state |
 | `CommandStream.Record.cs` | public mutator；existing component command 的无锁 append |
 | `CommandStream.Pending.cs` | pending batch、CreateMany materialize、placeholder resolve |
+| `CommandStream.CreateMany.cs` | public `CreateMany` 重载（8 个），逐个走 `CreateCore()` |
 | `CommandStream.ComponentStore.cs` | typed entries、stale prune、preflight、apply/emit |
 | `EntityFieldResolver.cs` | Entity-bearing component graph validation、actual CLR offsets、InlineArray stride、in-place resolution |
 | `CommandStream.Submit.cs` | Submit/Snapshot/Replay、async handoff、consume preparation |
@@ -66,7 +67,6 @@ pending/foreign placeholder 的 `IsPlaceholder` 仍在 record 阶段用于本地
 
 回归入口：
 
-- `Existing_entity_component_liveness_is_decided_when_the_stream_is_consumed`
 - `BUG_stale_existing_entity_set_is_skipped_so_submit_matches_replay`
 - `BUG_existing_entity_that_becomes_stale_before_consume_is_skipped_so_submit_matches_replay`
 - `SubmitAndSnapshotAsync_skips_existing_entity_commands_that_become_stale_before_consume`
@@ -219,7 +219,8 @@ CPU 频率与后台进程会让独立进程结果明显波动。候选 A/B 应�
 - record：`CommandStream.Record.cs`
 - consume/preflight：`CommandStream.Submit.cs`
 - typed store：`CommandStream.ComponentStore.cs`
-- pending/CreateMany：`CommandStream.Pending.cs`
+- pending：`CommandStream.Pending.cs`
+- CreateMany public 重载：`CommandStream.CreateMany.cs`（materialize 仍在 Pending）
 - wire：`FrameDelta.cs`、`World.EntityLifecycle.cs` 的 Replay 路径
 - 测试：`tests/MiniArch.Tests/Core/CommandStreamTests.cs`、`FrameDeltaDeterminismTests.cs`
 

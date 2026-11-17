@@ -2,7 +2,7 @@
 title: Hero Pipeline Regression Test
 module: HeroComing.Perf
 description: First-class regression gate for architecture changes — 30s timed throughput test; PipelineBenchmarkTests history reference (old --track-observer / --compare-old-value-tracking removed with old change tracking API)
-updated: 2026-08-29
+updated: 2026-11-17
 ---
 # Hero Pipeline Regression Test
 
@@ -18,7 +18,7 @@ updated: 2026-08-29
 
 **已实施的优化（placeholder 校验语义保持、Remove-only 契约修正；2026-08-05 经 Advisor 两轮审阅，门控 A/B 实测 +7%/+13%）**：record 阶段在批写入咽喉点 `CommitBatchComponent` 和 `CommandStream.Add/Set` store 路径探测值是否可能含 placeholder；命中或布局不可验证（Entity-bearing Auto-layout 或真正 unresolved layout）时置**帧级单调 flag**，preflight 首行读 flag，0 直接 return，1 跑原全量逻辑。探测只吞已知布局异常（Unknown 也置位，由 preflight 在原有时机抛）。store 的 preflight/ReplacePlaceholders 延迟到首个 payload entry 才取 offsets，Remove-only/空 store 不被同帧无关 placeholder 或 deferred Create 拖累（P2）。Remove-only 不再触发布局扫描属有意行为变更（有契约测试）。`GetOffsets` 缓存发布顺序修复（slot 先写、外层后发，slot 读写改 Volatile）。`dotnet test` 1134/1134 通过，fuzz 11/11，门禁通过。
 
-> **性能结论口径（2026-08-05 门控 A/B 实测后更新）**：msmpeng 门控、同窗口交错测量（每版本 2 轮）：优化后相对未优化 HEAD **+7%/+13%**（Movement 1873-1922 vs 1768-1798；Attack 1110-1127 vs 988-1001）；相对 07-06 baseline 仍 -9%/-12%（baseline 2092-2104/1261-1290）。残余差距两部分：record 探测开销 ~4.6%（每组件一次 flag volatile 读 + offsets 数组查表）+ 269 提交系列其他成本 ~5%（E1 全移除 preflight 后仍比 baseline 低 ~5%）。
+> **性能结论口径（2026-08-05 门控 A/B 实测后更新）**：msmpeng 门控、同窗口交错测量（每版本 2 轮）：优化后相对未优化 HEAD **+7%/+13%**（Movement 1873-1922 vs 1768-1798；Attack 1110-1127 vs 988-1001）；相对 07-06 baseline 仍 -9%/-12%（此处 2092-2104/1261-1290 是**同窗口 A/B 实测的 baseline 机器区间**；登记 baseline 是下方表格的 2052.7/1246.8，两者不要混用）。残余差距两部分：record 探测开销 ~4.6%（每组件一次 flag volatile 读 + offsets 数组查表）+ 269 提交系列其他成本 ~5%（E1 全移除 preflight 后仍比 baseline 低 ~5%）。
 
 > **性能结论口径（2026-08-06 零校验重构最终态，门控交错 A/B）**：T2.8（`Validate()` 抽取 + `FieldKinds<T>` 守卫）3 轮中位 **Movement 2032 / Attack 1205**；同窗口 baseline `c79f464`（零检查参考）2099/1278——守卫成本 **-3.2%/-5.7%**；相对 07-25 未优化 HEAD（1768-1798/988-1001）快 **13-15%**；相对 08-05 优化版 main（1873-1922/1110-1127）快 **5-8%**。门禁 80% 阈值（1642/997）余量 **+23%/+21%**。
 
@@ -68,7 +68,7 @@ dotnet run -c Release --project tests\MiniArch.Benchmarks -- profile-query --sce
 dotnet run -c Release --project tests\MiniArch.Benchmarks -- profile-query --scenario with-all --temperature hot --entity-count 100000 --duration 8 --warmup 1
 ```
 
-已知热点路径见 `kb-cache-optimization.md` 热路径分析表 + `kb-query-invalidation.md`（`EnsureRefreshed` 快路径 vs `AppendNewArchetypes` 慢路径）。
+已知热点路径见 `kb-cache-optimization.md` 热路径分析表 + `kb-query-invalidation.md`（`EnsureRefreshed` 快路径 vs `RebuildCache` 慢路径）。
 
 > **阈值说明**：baseline × 80% 四舍五入。随 baseline 刷新同步（当前：2052.7 × 80% ≈ 1642，1246.8 × 80% ≈ 997）。
 

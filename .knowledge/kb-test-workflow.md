@@ -2,7 +2,7 @@
 title: Test Workflow
 module: MiniArch.Tests
 description: How the test suite, query profiling, snapshot benchmarks, and structural-change benchmarks are organized and how to run them
-updated: 2026-10-11
+updated: 2026-11-17
 ---
 # Test Workflow
 
@@ -16,7 +16,9 @@ updated: 2026-10-11
 
 ## 测试组织
 
-按目录分组，每组简要描述覆盖范围。具体文件列表会随开发变化，本表只维护分组级别描述，详细文件以 `tests/MiniArch.Tests/` 实际目录为准。
+按目录分组，每组简要描述覆盖范围。具体文件列表会随开发变化，本表只维护分组级别描述，详细文件以 `tests/MiniArch.Tests/` 实际目录为准。7.0 之后新增的 `CommandTimelineTests`、`FreeListAndDestroyScratchTests`、`HardeningEdgeCaseTests`、`NestedEntityComponentTests`、`QueryOrderingTests`、`MultiWorldCreateArchetypeCacheTests`、`RestoreCreateArchetypeCacheTests`、`UserApi/FrameLookupTests`、`UserApi/ComponentBucketQueryTests` 归入上表对应分组，不在此重复列行。
+
+> `tools/scripts/benchmark.ps1` 默认注入 `--filter *`；`MiniArch.Benchmarks` 的 `command-buffer` 分派需要 `args[0] == "command-buffer"`，所以走脚本默认参数时不会进入该分支——要跑它请直接用 `dotnet run -c Release --project tests/MiniArch.Benchmarks -- command-buffer ...`。
 
 | 分组 | 覆盖范围 |
 |---|---|
@@ -99,7 +101,7 @@ dotnet tests/MiniArch.Tests/bin/Release/net8.0/MiniArch.Tests.dll --parallel-que
 
 ## PublicApiSentinel
 
-**What failure means:** The test reflects MiniArch's public API surface and compares it against an embedded baseline. A failure means the public API surface has changed (types, methods, properties, fields, etc.).
+**What failure means:** The test reflects MiniArch's public API surface and compares it against the checked-in baseline file `tests/MiniArch.Tests/PublicApiBaseline.txt` (copied to the test output by `MiniArch.Tests.csproj`; a missing file fails explicitly instead of falling back to an embedded copy). A failure means the public API surface has changed (types, methods, properties, fields, etc.).
 
 **Accidental API change => revert source change:** If you did not intend to change the public API, revert the source change that caused the failure.
 
@@ -107,8 +109,8 @@ dotnet tests/MiniArch.Tests/bin/Release/net8.0/MiniArch.Tests.dll --parallel-que
 
 1. Set environment variable `GENERATE_API_BASELINE=1`.
 2. Run `dotnet test -c Release --filter "PublicApiSentinel"`.
-3. The test generates a file `PublicApiBaseline.txt` in the test output directory.
-4. Copy the generated baseline content to replace the `EmbeddedBaseline` string in `tests/MiniArch.Tests/PublicApiSentinelTests.cs`.
+3. The test generates `PublicApiBaseline.txt` in the test output directory.
+4. Copy that generated file over the checked-in `tests/MiniArch.Tests/PublicApiBaseline.txt`.
 5. Commit the updated baseline with your intentional API change.
 
 ## 决策

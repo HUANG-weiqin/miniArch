@@ -1,8 +1,8 @@
 ---
 title: Frame Read Models ValueLab
 module: MiniArch（用户 API 分层）
-description: Snapshot 内 Build 一次、查询多次的帧内派生索引 ValueLab 与 public API gate 结论、适用区间、禁用区间与后续产品化边界
-updated: 2026-07-11
+description: Snapshot 内 Build 一次、查询多次的帧内派生索引 ValueLab；FrameLookup<TKey> 已发布，记录适用/禁用区间与被否决的消费形态
+updated: 2026-11-17
 ---
 # Frame Read Models ValueLab
 
@@ -10,18 +10,18 @@ updated: 2026-07-11
 
 - 这个模块负责：
   - 记录 Frame Read Models ValueLab 的实测结论。
-  - 记录 FrameLookup public API gate 的进入/暂停结论。
-  - 判断 Snapshot 内派生索引是否值得进入下一阶段产品化。
+  - 记录 FrameLookup 的发布状态（已进入 `src/MiniArch/`）与被否决的消费形态。
+  - 判断 Snapshot 内派生索引在哪些区间值得用。
   - 固化适用区间、禁用区间、布局裁决。
 - 这个模块不负责：
   - 记录未实测的设计猜想。
-  - 定义最终生产 public API。
+  - 替代 `FrameLookup.cs` 的 XML/`PublicApiBaseline.txt`（public API 契约以那里为准）。
   - 替代 `World.Query` 或自动 freshness tracking。
 
 ## 架构
 
 - 核心组成：
-  - `tools/perf/FrameReadModels.ValueLab/`：独立实验项目，不进入生产 API。
+  - `tools/perf/FrameReadModels.ValueLab/`：独立实验项目，保留被否决形态的对照实现。
   - `CompactRowLookup<TKey>`：两遍 CSR，保存 `(chunkIndex,rowIndex)`。
   - `CompactRowLookup<TKey>.ForEach(...)`：public API consume 形态探针；正确性通过但性能未过线。
   - `CompactRowLookup<TKey>.ForEachRun(...)`：chunk-run/batched consume 探针；正确性通过但通用场景性能 No-Go。
@@ -35,10 +35,10 @@ updated: 2026-07-11
 ## 决策
 
 - **Conditional Go。** uniform / 高基数 / 组件读取场景值得继续产品化 compact CSR row-ref lookup。
-- **Public API Gate: Conditional Hold（2026-07-11）。** compact CSR 本体继续成立，但逐 row `ForEach(key, consumer)` 发布形态性能不过线，暂不进入 `src/MiniArch/`。
-- **不进 Core。** ValueLab 没有修改 `World/Archetype/QueryCache/CommandStream`；后续产品化仍应保持 0 core intrusion。
-- **不做完整关系代数 API。** 下一步只允许 1-3 组件 Rows、一个 Where、一个 KeyBy、一个 FrameLookup terminal。
-- **Direct ForEach 不作为 v1 形态。** full run 中 DirectForEach row component consume 慢于 `CopyRowRefs + manual consume`：realistic 约 13.41×，full-1m 约 1.98×。
+- **API 已发布（2026-07-11，`26eaec3`）。** 同日 M4 gate 先给出 Conditional Hold；随后发布的是最小形态：public `FrameLookup<TKey>`（`Build`/`TryBuild`/`this[key]`/`Clear`/`EnsureCapacity`）、`RowRef`、`IFrameKeySelector<TKey>`。**被否决的消费形态没有发布**：逐 row `ForEach(key, consumer)`、chunk-run/batched consumer、`LinkedRowLookup`、`DenseIntCompactLookup`、`EntityArrayLookup` 都留在 ValueLab。
+- **0 core intrusion 仍成立。** 产品 API 复用现有 `World.Query` + `ChunkView`，没有修改 `World/Archetype/QueryCache/CommandStream` 的内部路径。
+- **不做完整关系代数 API。** 发布形态就是 1-3 组件 Rows、一个 Where、一个 key selector、一个 `FrameLookup` terminal；扩展为通用 join/聚合需要新的 ValueLab 证据。
+- **Direct ForEach 不作为已发布形态。** full run 中 DirectForEach row component consume 慢于 `CopyRowRefs + manual consume`：realistic 约 13.41×，full-1m 约 1.98×。
 - **Chunk-run / batched consumer 不作为通用 v1 形态。** on-the-fly run 合并正确但 No-Go：realistic 中同 key rows 不连续，RunForEach 比 CopyRowRefs 慢约 19.29×；full-1m 慢约 1.85×。它只在 hot bucket 改善 DirectForEach，而 hot bucket 不是目标区间。
 - **Linked rows 不产品化。** Build 快但读取跳跃，未找到胜出区间。
 - **hot bucket 不是已解决场景。** 单 key 大桶重复查询时 row-ref lookup 被重复大桶遍历拖垮；需要禁用说明或单独 entity-only specialization。
@@ -60,15 +60,16 @@ updated: 2026-07-11
   - `docs/plans/2026-07-11-frame-read-models-report.md`：实测结论和数据。
   - `tools/perf/FrameReadModels.ValueLab/FrameReadModelBenchmarks.cs`：性能矩阵。
   - `tools/perf/FrameReadModels.ValueLab/FrameReadModelCorrectness.cs`：正确性矩阵。
-- 产品化前先看：
+- 当前 API 契约先看：`src/MiniArch/FrameLookup.cs`（XML doc）、`tests/MiniArch.Tests/PublicApiBaseline.txt`、`tests/MiniArch.Tests/UserApi/FrameLookupTests.cs`。
+- 历史裁决（**只作背景，不是当前状态**）：
   - `docs/plans/2026-07-11-frame-read-models.md`：原始边界、Go 门槛、判死线。
-  - `docs/plans/2026-07-11-frame-lookup-api-design.md`：M1 public API 契约草案（已被 M4 gate 部分否决）。
-  - `docs/plans/2026-07-11-frame-lookup-api-gate-report.md`：M4 Conditional Hold 决策与 DirectForEach 数据。
+  - `docs/plans/2026-07-11-frame-lookup-api-design.md`：M1 public API 契约草案（部分被 M4 gate 否决）。
+  - `docs/plans/2026-07-11-frame-lookup-api-gate-report.md`：M4 Conditional Hold 与 DirectForEach 数据（API 在 gate 之后发布）。
   - `docs/plans/2026-07-11-frame-lookup-chunk-run-report.md`：chunk-run / batched consumer No-Go 数据。
 
 ## 坑点
 
-- 不要把 ValueLab 原型直接复制进 public API；产品化必须重新 TDD。
+- 不要把 ValueLab 原型直接复制进 public API；已发布的是 `FrameLookup` 最小形态，其余原型仍只是实验代码。
 - 不要把逐 row DirectForEach 当成已验证发布形态；它正确但太慢，必须先重设计 consume 形态。
 - 不要把 chunk-run 当成自然解：uniform/high-cardinality 下同 key rows 分散，run 数接近 row 数，callback 仍近似 per-row。
 - `TryBuild` 失败必须保持目标为空，不能发布部分结果。

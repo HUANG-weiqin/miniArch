@@ -2,12 +2,25 @@
 title: Knowledge Base Changelog
 module: Meta
 description: Chronological log of significant changes to the miniArch knowledge base and architecture
-updated: 2026-10-15
+updated: 2026-11-17
 ---
 # Knowledge Base Changelog
 
 > 这个页面只记录**重大架构变更和知识库校准事件**，供追溯。
 > 当前状态请看 `INDEX.md` 和各 `kb-*.md` 页。
+
+## 2026-11-17 知识库维护：三组并行审计后的校准
+
+本次只改 `.knowledge/`，未改 `src/`/`tests/`，因此不触发 Hero 门禁。修正按证据类型分组：
+
+- **发布状态过期**：`kb-frame-read-models.md` 仍写 "Public API Gate: Conditional Hold / 暂不进入 `src/MiniArch/`"，但 `FrameLookup<TKey>` / `RowRef` / `IFrameKeySelector<TKey>` 已在同日 `26eaec3` 发布（`tests/MiniArch.Tests/PublicApiBaseline.txt` 有基线项）。改为“最小形态已发布”，保留被否决消费形态（DirectForEach / chunk-run / LinkedRow / DenseInt / EntityArray）的 No-Go 结论；`INDEX` 同步。
+- **符号/路径名漂移**：`World.Replay` 已在 2026-07-04 改为 internal，多个页面仍以 `world.Replay(...)` / `World.TryResolvePlaceholder(...)` 举例。统一改为 `CommandStream.Replay(..., resolveSlots:)` 与 `Track()` / `EntitySlot`；`CommandStream.CreateMany.cs` 补进 owner 表；`CommandStreamGame.Perf` → 实际项目 `CommandBufferGame.Perf`；`AppendNewArchetypes` / `GetEntityStorage` / `GetComponentSpan` → `RebuildCache` / `GetEntityStorageUnsafe` / `GetFlatComponentSpan`；删除不存在的 `MigrationPlan` 行与死测试名 `Existing_entity_component_liveness_is_decided_when_the_stream_is_consumed`。
+- **存储事实修正**：`kb-chunk-storage` 的段容量公式（`RoundUpToPowerOf2` + `ArrayMaxLength`/`MaxSegmentEntityCapacity` 夹取，无 16 下限）、行号映射（shift/mask 而非除法）、`EnsureRefreshed`（archetype 数变 → 全量 `RebuildCache`，不是增量追加）、`ChunkView.Count` 切片语义、`_flatEntitiesGeneration` 仅 chunked 递增；`kb-core-ecs` 的 `World.Reset`（已删）与 `chunk.Length`（不存在，应为 `Count`）。
+- **B 编号**：`INDEX` / `kb-soak-test` 引用 "B7-B17"，但 findings 只标到 B16。B17（`CopyComponentsFromBatch` 扩容后继续写旧 buffer）仍以测试名存在于“仍生效的历史修复”表；补 **B17** 标签而不是把引用改成 B16，因为 `BUG_pending_clone_copies_from_resized_batch_buffer` 与 `CommandStream.CopyComponentsFromBatch` 都还在。
+- **证据口径**：`kb-safety-proof` 的“当前复验快照（2026-10-11）”改为历史快照，说明它后来作为 7.1.0 发布，且 7.2.0 / HEAD 又有契约变化；`kb-determinism-proof` 把 259 seed 与 `--sweep 32` 分开叙述，测试数 13/9 改为 8/8（P5 不存在），行号改为符号定位；`kb-hero-pipeline-regression` 区分“登记 baseline 2052.7/1246.8”与“同窗口 A/B 实测 2092-2104/1261-1290”；`kb-perf-harnesses` 的 DestroyMany 补 0.65× 冷 span 底线并删 cascade 场景。
+- **流程页**：`kb-test-workflow` 的 PublicApiSentinel 改为签入文件 baseline（无 `EmbeddedBaseline`），并注明 `benchmark.ps1` 默认注入 `--filter *`、不会进入 `command-buffer` 分派；`kb-hardening-roadmap` 加阅读边界横幅（M1-M9 已落地，正文行号/符号是 2026-07 快照）；`kb-glossary` padding 词条改为“字段 codec 忽略 padding”。
+- **未改动的核对结论**：门禁阈值 1642/997 与登记 baseline 2052.7/1246.8 在多页一致；所有 `kb-*.md` 链接无悬空；`kb-repo-overview`、`kb-snapshot-persistence`、`kb-query-invalidation` 的事实抽查通过（仅修 query-invalidation 一处行号）。
+- 维护规则：proof / roadmap 类页面优先写符号名，不把行号当长期事实；只有改动 `src/MiniArch` 或 `tests/HeroPipeline.Tests` 才需要重跑 `HeroComing.Perf --check-baseline`。
 
 ## 2026-10-15 简化审计在扁平化后重推导：核心代码保持原样
 

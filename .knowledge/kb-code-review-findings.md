@@ -2,7 +2,7 @@
 title: 代码审阅发现
 module: Meta
 description: 审阅前必读的当前风险、已修复真 bug 回归索引与已排除非 bug 猜想；只保留结论和验证入口
-updated: 2026-11-07
+updated: 2026-11-17
 ---
 # 代码审阅发现
 
@@ -212,7 +212,7 @@ CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）�
 | `BUG_debug_structural_scope_recovers_after_exception` | Debug `BeginStructChange/EndStructChange` 异常后计数残留 | Debug 配对使用 `try/finally`；Release 业务路径不增加异常区 |
 | `BUG_stale_existing_entity_set_is_skipped_so_submit_matches_replay` | liveness 后移后 stale-only store 已被 prune，但旧 dirty flag 仍让 `Submit()` 错报已执行工作 | `PruneStaleCommands` 同步返回剩余命令状态；record 时 stale、consume 前 stale 与 async 路径均断言无残余工作 |
 
-`Existing_entity_component_liveness_is_decided_when_the_stream_is_consumed` 是 consume-time 契约测试，不是旧实现 bug 的 witness：record 时不读 World，consume 时按完整 `(Id, Version)` 统一 prune；stale/ID-reuse 安全与 stale-only 返回值由 `BUG_stale_*`、delayed stale 和 async 回归共同守卫。
+consume-time liveness 由 `BUG_stale_*`、delayed stale 和 async 回归共同守卫（旧名 `Existing_entity_component_liveness_is_decided_when_the_stream_is_consumed` 已不存在，勿引用）：record 时不读 World，consume 时按完整 `(Id, Version)` 统一 prune；stale/ID-reuse 安全与 stale-only 返回值同属这些契约测试。
 
 ### 仍在当前代码中生效的历史修复
 
@@ -221,7 +221,7 @@ CommandStream 的占位符/布局守卫（FieldKinds 探测 + flag 扫描器）�
 | EntityFieldResolver unresolved placeholder tests | OOB/unmapped placeholder 被静默留在组件字段 | `ResolveInPlace` fail-fast，错误含 sequence |
 | `TrySetBit_rejects_ids_512_and_above` 等 | id ≥512 被 C# shift mask 别名到 lane 7 | 最后一 lane 显式 `<512` guard |
 | `Snapshot_load_rejects_*`、schema import tests | schema/payload 无界读取、重复/非法 type、验证后期污染 registry | `ComponentSchemaCodec` 有界解析；Load 全量 dry-validate 后再注册/构建 |
-| `BUG_pending_clone_copies_from_resized_batch_buffer` | `Array.Resize` 后继续写旧 BatchBuf 引用 | reserve 后重新读取当前 buffer |
+| **B17** `BUG_pending_clone_copies_from_resized_batch_buffer` | `Array.Resize` 后继续写旧 BatchBuf 引用（`CommandStream.CopyComponentsFromBatch`；INDEX/soak 所称 B7-B17 的末项，2026-07-11 修复） | reserve 后重新读取当前 buffer |
 | `CreateMany_duplicate_component_types_throws` | bulk path 重复类型破坏 last-wins | CreateMany 初始化前置条件不满足时 fast-fail |
 
 ### soak 发现的 Submit/Replay 分歧（B1-B6）

@@ -2,7 +2,7 @@
 title: Deferred Create — Multi-Host Lockstep Design
 module: MiniArch.Core CommandStream
 description: DeferredEntities flag 让 Create/Clone 在 placeholder（多 host lockstep）和 immediate（单机/权威服务器）之间切换。Snapshot 按 flag 输出 placeholder delta 或 real-id delta；SubmitAndSnapshotAsync 始终输出 real-id delta。
-updated: 2026-10-11
+updated: 2026-11-17
 ---
 
 # Deferred Create — Multi-Host Lockstep Design
@@ -15,9 +15,9 @@ updated: 2026-10-11
   - `true`：返回 placeholder `Entity(-1, seq)`，不碰任何 World（多 host lockstep）
 - 这个模块**不负责**：
   - ~~跨网络传输~~ → 传输层未实现（`socket.Send` 是伪代码），见 `kb-lockstep-playbook.md` "尚未解决的网络问题"
-   - ~~序列化协议~~ → **已实现**，见 `kb-command-stream.md` "FrameDelta wire format" 段（`AsSpan()` / `FromWire()` / `Deserialize()` 开箱即用）
+  - ~~序列化协议~~ → **已实现**，见 `kb-command-stream.md` 的 "FrameDelta 结构与预算边界" 段（`AsSpan()` / `FromWire()` / `Deserialize()` 开箱即用）
   - host 间的时序协调（lockstep 框架的事）→ **端到端指南**见 `kb-lockstep-playbook.md`
-  - 跨帧的 entity 引用走真实 Entity ID（见 TryResolvePlaceholder 节）
+  - 跨帧的 entity 引用走真实 Entity ID（见下方 EntitySlot / `Track()` 节）
 
 ## 要应对的游戏用户场景
 
@@ -53,7 +53,7 @@ updated: 2026-10-11
 | 组件 | `DeferredEntities = false`（默认） | `DeferredEntities = true` |
 |---|---|---|
 | `Create()` | `CreateImpl()` → 立即 reserve real id | `CreateDeferredImpl()` → placeholder `Entity(-1, seq)` |
-| `Clone()` | `CloneImplImmediate()` → real id clone | deferred clone → placeholder |
+| `Clone()` | `CreateCore()` → `CreateImpl()`，real id clone | `CreateCore()` → `CreateDeferredImpl()`，placeholder |
 | `Snapshot()` | `ResolveDeferredCreates()` → real-id delta | placeholder delta（throw on immediate entities） |
 | `SubmitAndSnapshotAsync()` | real-id delta（始终，忽略 flag） | real-id delta（始终，忽略 flag） |
 | `Submit()` | 两种模式都正常工作（resolve → materialize） | |
@@ -67,7 +67,7 @@ updated: 2026-10-11
 
 ### Producer 端实现（CommandStream.cs）
 
-- `Snapshot()` 按 flag 分支：`!DeferredEntities` → `ResolveDeferredCreates()` + `BuildDelta()`；`DeferredEntities` → `ThrowIfSnapshotHasImmediateEntities()` + `BuildDelta()`
+- `Snapshot()` 按 flag 分支：`!DeferredEntities` → `ResolveDeferredCreates()` + `BuildFrameDelta()`；`DeferredEntities` → `ThrowIfSnapshotHasImmediateEntities()` + `BuildFrameDelta()`（async 路径的 build 入口是 `BuildFromFrozenInto`）
 - `EmitPendingEntitiesToDelta` 通过 `entity.Id < 0` 检查同时处理两种 entity：placeholder 跳过 cancelled 的（不 emit 任何 op），committed 的 emit `Reserve + Create`；immediate entity 正常 emit `Reserve + Create` with real id
 - `Submit()` 仍然调 `ResolveDeferredCreates()`——两种模式下 Submit 都正确
 
@@ -76,10 +76,10 @@ updated: 2026-10-11
 - `_replayPlaceholderMap`：`Entity[]` 按 placeholder seq 索引，存储 `seq → local real` 映射
 - **每帧 `mapLen = 0` 重置**：防止上一帧的 stale mapping 泄漏到当前帧。`EnsurePlaceholderMap` 在首次 Reserve 时重新初始化所有 slot 为 `Entity(-1, -1)` sentinel
 - `ResolveReplayEntity(wireEntity, map, mapLen)`：`Id >= 0` 直接用（real-id delta）；`Id < 0` 查 map + bounds check（placeholder delta）
-- `Reserve` op with `Id < 0`：`ReserveDeferredEntityBatch()` 分配 local id + 写入 map
+- `Reserve` op with `Id < 0`：`World.ReserveDeferredEntityUnsafe(...)` 分配 local id + 写入 map
 - 所有其他 op（Create/Add/Set/Destroy/...）的 entity 参数都走 `ResolveReplayEntity`
 - `PreScanForCapacity` 跳过 placeholder entity（`Id < 0`）的 `maxEntityId` 追踪——它们的 real id 在 main pass 才分配
-- `World.Replay()` 返回 `void`。占位符解析通过 `World.TryResolvePlaceholder()` 完成（详见下文）
+- 公开入口是 `CommandStream.Replay(FrameDelta, bool resolveSlots)`；`World.Replay` 已不是公开 API，内部落到 `World.ReplayCore`。用户侧占位符解析用 `CommandStream.Track()` 拿 `EntitySlot`（`World.TryResolvePlaceholder` 是 internal，仅测试可见）
 
 ### 历史 commit（已合入 main）
 
@@ -125,10 +125,10 @@ internal bool TryResolvePlaceholder(Entity placeholder, out Entity real);
 **已定**：`Resolve()` 返回的是真实 Entity ID。由于 allocator 由 replay 序列唯一驱动（所有 host replay 相同的 Reserve/Create/Release/Destroy 序列），**真实 Entity ID 跨 host 一致**，可以直接存组件跨帧使用。不需要保留 placeholder 或 mapping。
 
 ```csharp
-world.Replay(delta);
-if (world.TryResolvePlaceholder(placeholder, out var real))
+var slot = stream.Track(placeholder);   // Submit/Snapshot 前注册
+stream.Replay(delta, resolveSlots: true);
+var real = slot.Value;                  // real 在 host A/B/C 上都是 Entity(3, 1)
 {
-    // real 在 host A/B/C 上都是 Entity(3, 1)
     // 可以存到组件里，下帧拿出来用
     world.Set(foo, new Bar { Target = real });
 }
@@ -175,13 +175,13 @@ stream.Submit();  // 或 Snapshot() + Replay()
 | 已有实体引用新建实体 | ✅ | ✅ |
 | 自引用（A → A） | ✅ | ✅ |
 | Clone 出来的实体引用其他实体 | ✅（源组件的 ID 是实时的） | ✅ |
-| 被引用实体已取消 Destroy | ⚠️ placeholder 保持未解析（无对应实体） | ⚠️ 同上 |
+| 被引用实体已取消 Destroy | ❌ 抛 `InvalidOperationException`（"cancelled or unknown placeholder"，分配器修改前拒绝） | ❌ 同 Submit/`Validate` 契约 |
 
 ### 约束
 
 - 组件类型必须使用 `LayoutKind.Sequential`（C# 默认）。`LayoutKind.Auto` 会抛出 `InvalidOperationException`
-- 只扫描**直接** `Entity` 字段，不递归嵌套结构体
-- 跨帧引用不要用 placeholder，用 `TryResolvePlaceholder()` 拿真实 ID 后存组件
+- 递归扫描：嵌套 struct、record 私有 backing field、generic wrapper、`InlineArray` 元素都会展开（`EntityFieldResolver` 用 `recursionStack` 防环）；`LayoutKind.Auto` 的 Entity-bearing 图仍拒绝
+- 跨帧引用不要存 placeholder；用 `CommandStream.Track()` 的 `EntitySlot.Value`（或已解析的真实 `Entity`）存组件。`World.TryResolvePlaceholder` 是 internal
 
 ### 实现原理（概要）
 
@@ -215,7 +215,7 @@ foreach (var delta in allDeltas)
 slot.Value  // real Entity ✅
 ```
 
-`stream.Replay(delta, resolveSlots)` 包装了 `world.Replay(delta)`。对 own delta 传 `resolveSlots: true`，对 peer delta 用默认 `false`。用户通过外部 Envelope（`SourceHostId`）判断哪个是自己的。
+`stream.Replay(delta, resolveSlots)` 是公开入口（内部落到 internal `World.ReplayCore`）。对 own delta 传 `resolveSlots: true`，对 peer delta 用默认 `false`。用户通过外部 Envelope（`SourceHostId`）判断哪个是自己的。
 
 ### 约束
 
@@ -228,7 +228,7 @@ slot.Value  // real Entity ✅
 
 - **placeholder 失效契约**：Snapshot/Submit 后外部 placeholder 引用变成 stale。合法使用下不会触发（placeholder 仅在 record → Snapshot/Submit 之间有效）。
 - **cancelled deferred vs cancelled immediate**：cancelled deferred emit 什么都不 emit（不占 id）；cancelled immediate emit Reserve+Release（占 id 槽位保持 host/replica 同步）。
-- **跨帧引用用真实 ID**：placeholder 不跨帧，但 `TryResolvePlaceholder()` 返回的真实 ID 可以跨帧直接存组件用。见决策 #3。
+- **跨帧引用用真实 ID**：placeholder 不跨帧，但 `Track()` 得到的 `EntitySlot.Value`（解析后的真实 Entity）可以跨帧直接存组件用。见决策 #3。
 - **`_replayPlaceholderMap` 跨帧清零**：`mapLen` 在 `ReplayCore` 入口重置为 0。如果不清零，上一帧的 stale mapping 会被 malformed delta 静默误用。
 - **取消后不得继续把 pending 句柄作为命令目标**：immediate 与 deferred 都适用。非法序列在校验/消费边界被拒绝是允许的，不承诺各入口以相同方式容错，也不为它增加热路径跟踪。`Create → Destroy → Destroy → Snapshot().Validate()` 的 released-entity 异常已按此契约排除为非 bug，见 `kb-code-review-findings.md`。
 - **deferred 的当前容忍不是通用 no-op 保证**：`CommandStream.Destroy` 的 `else if (!entity.IsPlaceholder)` 阻止未知/已取消 placeholder 入队；`KnownLimitationTests.Deferred_destroy_twice_on_same_placeholder_cancels_cleanly` 保留这个历史 guard 的见证，不据此要求 immediate 非法输入也被接受。旧层级/并行录制解析路径已退役。

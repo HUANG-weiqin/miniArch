@@ -2,7 +2,7 @@
 title: Architecture Mechanistic Review
 module: MiniArch.Core
 description: Mechanistic insight of the entire miniArch ECS library — one-line truths, subsystem breakdown, data flows, known issues, and design tensions. Links to per-subsystem kb pages for depth.
-updated: 2026-11-07
+updated: 2026-11-17
 ---
 # Architecture Mechanistic Review
 
@@ -67,7 +67,7 @@ WorldSnapshot / WorldClone / WorldStateSnapshot (持久化 + 内存快照)
 | `_archetypeByMask: Dict<ComponentMask, Archetype>` | Replay 路径零分配查找（仅 cache canonical mask） | O(1) 哈希 |
 | `_archetypeByHash: Dict<int, List<Archetype>>` | 非 canonical mask 哈希旁路（组件 id ≥ 512） | O(1) + 桶内线性扫描 |
 
-`_archetypeByMask` 只 cache "canonical" mask（popcount == component count，即所有 id < 512）。高 id archetype 故意不进 mask cache，避免不同 signature 在 mask 上碰撞。`IsMaskCanonical`（`World.cs:514`）做这个不变式检查。对于非 canonical mask（含 id ≥ 512 的组件），`_archetypeByHash` 提供基于 hash 的旁路查找，避免每次分配 Signature 对象。
+`_archetypeByMask` 只 cache "canonical" mask（popcount == component count，即所有 id < 512）。高 id archetype 故意不进 mask cache，避免不同 signature 在 mask 上碰撞。`IsMaskCanonical`（`World.cs:522`）做这个不变式检查。对于非 canonical mask（含 id ≥ 512 的组件），`_archetypeByHash` 提供基于 hash 的旁路查找，避免每次分配 Signature 对象。
 
 > **历史**：曾存在第三层 `TryGetArchetype(types)` 线性扫描 fallback，用于兼容 CommandStream 早期版本未排序的 signature。CommandStream materialize 改为显式排序后该 fallback 变死代码，已于 2026-06-29 删除。
 

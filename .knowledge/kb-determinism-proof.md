@@ -2,7 +2,7 @@
 title: 确定性证明 — Lockstep ECS 库级确定性验证
 module: DeterminismProof
 description: miniArch 确定性保证的 10 维证明矩阵、实证数据与边界；含字段级 canonical checksum（只观察非空原型）和注册顺序边界
-updated: 2026-10-10
+updated: 2026-11-17
 ---
 
 # 确定性证明 — Lockstep ECS 库级确定性验证
@@ -38,7 +38,7 @@ updated: 2026-10-10
 | 9 | Placeholder E2E | ✅ 强确定 | 高 | 两阶段 emit + scratch buffer + EntityFieldResolver |
 | 10 | **Query 迭代顺序** | ✅ **强确定** | **高** | **QueryOrderingTests + 跨进程 AB/BA 存档加载顺序回归；同 World 结构历史下不依赖其他 World 注册顺序** |
 
-**结论：10/10 维度全部通过，无已知遗留漏洞。**
+**结论：10/10 维度在 2026-10 快照时全部通过，无已知遗留漏洞。** 该结论是历史快照，不是逐版本复验：B3 已随层级退役；B1/B4 当时内部 raw/typed Add 的“覆盖写入”后来收紧为公共 strict Add（见 `kb-code-review-findings.md` B1-B6 表）。
 
 ---
 
@@ -60,8 +60,8 @@ updated: 2026-10-10
 - `tests/MiniArch.Tests/Core/TrickyEdgeCaseTests.cs` → `Destroy_and_recreate_cycle_preserves_correct_versions_across_many_iterations`
 
 **代码位置**：
-- `src/MiniArch/Core/World.EntityLifecycle.cs:377-408`（AcquireEntityIdUnsafe / PushFreeIdUnsafe / PopFreeIdUnsafe）
-- `src/MiniArch/Core/World.EntityLifecycle.cs:556-567`（RemoveFromFreeList shift-not-swap）
+- `src/MiniArch/Core/World.EntityLifecycle.cs`（AcquireEntityIdUnsafe / PushFreeIdUnsafe / PopFreeIdUnsafe）
+- `src/MiniArch/Core/World.EntityLifecycle.cs`（RemoveFromFreeList shift-not-swap）
 
 ### 2. 版本号确定性
 
@@ -86,8 +86,8 @@ updated: 2026-10-10
 - `EmitPendingEntitiesToDelta` 的 deferred mode 两阶段 emit（Reserve 全部 → Create 全部）保证 placeholder→real 映射在 Create payload 读取前已建立
 
 **测试链接**：
-- `tests/MiniArch.Tests/Core/SubmitReplayParityTests.cs`（13 个测试，P1-P5 模式）
-- `tests/MiniArch.Tests/Core/SubmitReplayRestoreParityTests.cs`（9 个测试，P1-P9 三路 parity）
+- `tests/MiniArch.Tests/Core/SubmitReplayParityTests.cs`（8 个 `[Fact]`）
+- `tests/MiniArch.Tests/Core/SubmitReplayRestoreParityTests.cs`（8 个三路 parity：P1-P4、P6-P9；**没有 P5**）
 
 **代码位置**：
 - `src/MiniArch/Core/CommandStream.Submit.cs`（SubmitFromFrozen、BuildFromFrozen）
@@ -117,8 +117,8 @@ updated: 2026-10-10
 - **测试**：`tests/MiniArch.Tests/Core/TrickyEdgeCaseTests.cs` → `Layoutkind_auto_component_rejected_for_determinism` / `Layoutkind_sequential_component_accepted_normally` / `Record_struct_component_accepted_normally`
 
 **代码位置**：
-- `src/MiniArch/Core/Archetype.Storage.cs:1136-1155`（ThrowIfManagedComponent，含 LayoutKind.Auto 拦截）
-- `src/MiniArch/Core/Archetype.Storage.cs:1114-1127`（ComputeColumnLayout）
+- `src/MiniArch/Core/Archetype.Storage.cs`（ThrowIfManagedComponent，含 LayoutKind.Auto 拦截）
+- `src/MiniArch/Core/Archetype.Storage.cs`（ComputeColumnLayout）
 
 ### 6. Varint/Hash 确定性
 
@@ -128,9 +128,9 @@ updated: 2026-10-10
 - CRC32：IEEE 802.3 标准（`System.IO.Hashing.Crc32`），跨平台一致
 
 **代码位置**：
-- `src/MiniArch/Core/FrameDelta.cs:737-746`（WriteVarintAt）
-- `src/MiniArch/Core/WorldSnapshot.cs:224`（SHA-256）
-- `src/MiniArch/Core/WorldSnapshot.cs:86`（CRC32）
+- `src/MiniArch/Core/FrameDelta.cs`（WriteVarintAt）
+- `src/MiniArch/Core/WorldSnapshot.cs`（SHA-256）
+- `src/MiniArch/Core/WorldSnapshot.cs`（CRC32）
 
 ### 7. CanonicalChecksum 确定性
 
@@ -156,8 +156,8 @@ updated: 2026-10-10
 ### 8. Soak 实证
 
 **单 host soak**（Submit vs Replay 双路径）：
-- 命令：`dotnet run -c Release --project tools/soak/MiniArch.Soak -- --sweep 32 --frames 100000`
-- 结果：259 seed × 6.4M 帧全 PASS
+- 历史批次：259 seed × 6.4M 帧全 PASS（层级删除前）
+- 复验示例：`--sweep 32` 表示连续跑 32 个 seed，不是 259 seed；不要把示例命令与历史批次数混写
 - 发现并修复：6 个库级 bug（B1-B6）
 
 **多 host lockstep soak**（N host Replay 路径收敛）：
@@ -207,8 +207,8 @@ updated: 2026-10-10
 - `tests/MiniArch.Tests/Core/NestedEntityComponentTests.cs` → 普通 Entity 字段与 placeholder 解析回归（旧 `Deferred_link_then_destroy_BOTH_endpoints_replays_cleanly` 属于退役层级场景）
 
 **代码位置**：
-- `src/MiniArch/Core/World.EntityLifecycle.cs`（ReplayCore / EnsureReplayReservation / EnsurePlaceholderMap / PreScanForCapacity）
-- `src/MiniArch/Core\EntityFieldResolver.cs:167-192`（ResolveInPlace）
+- `src/MiniArch/Core/World.cs`（ReplayCore / EnsurePlaceholderMap / PreScanForCapacity）；`src/MiniArch/Core/World.EntityLifecycle.cs`（EnsureReplayReservation）
+- `src/MiniArch/Core/EntityFieldResolver.cs`（ResolveInPlace）
 
 ---
 
@@ -230,10 +230,10 @@ miniArch 的确定性保证**不覆盖**以下维度——这些是你们应用�
 
 | # | Bug | 根因 | 修复 | 发现方式 |
 |---|-----|------|------|---------|
-| B1 | `ApplyRawAdd` 重复 Add 抛异常 | Replay 路径无去重 | 改为覆盖写入 | 单 host soak |
+| B1 | `ApplyRawAdd` 重复 Add 抛异常 | Replay 路径无去重 | 当时内部路径改为覆盖写入；当前 public/CommandStream Add 已收紧为 strict Add（B1-B6 裁定见 `kb-code-review-findings.md`） | 单 host soak |
 | B2 | `Clear` 不释放已取消 batch 实体 | Submit 路径跳过释放 | 始终释放 | 单 host soak |
 | B3（层级能力已退役） | `ApplyHierarchyToWorld` 排序不同 | 字典 vs Entity.Id 排序 | 当时统一排序；对应关系实现/测试现已退役 | 单 host soak（历史） |
-| B4 | `ApplyTypedAdd` 重复 Add 抛异常 | Clone+Add 路径 | 改为覆盖写入 | 单 host soak |
+| B4 | `ApplyTypedAdd` 重复 Add 抛异常 | Clone+Add 路径 | 当时内部路径改为覆盖写入；当前公共语义是 strict Add | 单 host soak |
 | B5 | Replay free-list 顺序分歧 | `RemoveFromFreeList` swap-remove 破坏顺序 | shift-not-swap | 单 host soak（boundary config） |
 | B6 | Cancelled batch free-list 顺序分歧 | record 阶段按 destroy 顺序 push，wire 按 batch 创建顺序 emit | `AlignCancelledBatchFreeListOrder` | 单 host soak（boundary config） |
 | — | LayoutKind.Auto 跨 host 分歧 | `ThrowIfManagedComponent` 不检查 layout kind | 增加 LayoutKind.Auto 拦截 | 代码审计（2026-07-10） |

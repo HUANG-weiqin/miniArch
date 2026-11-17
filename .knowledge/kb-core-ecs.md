@@ -2,7 +2,7 @@
 title: MiniArch Core ECS
 module: MiniArch.Core
 description: Target ECS architecture for entities, archetypes, flat byte chunk storage, direct-index writes, signatures, and queries
-updated: 2026-10-11
+updated: 2026-11-17
 ---
 # MiniArch Core ECS
 
@@ -46,7 +46,7 @@ updated: 2026-10-11
 
 - 数据流 / 控制流：
   - `World` 创建实体后放入空签名 archetype（`World.EntityLifecycle.cs`）
-  - `World.Create<T...>` 在 `World.Create.cs` 手工维护 `1..16` 个组件重载；泛型组合仅持有 static cache ID，archetype 缓存在每个 World 的数组里。各 World 预热后交替 Create 不再反复分配；Reset 已改为只供新 World 的 Load/Clone 初始化，RestoreState 保留已创建 archetype 和缓存（见 `kb-cache-optimization.md`）。
+  - `World.Create<T...>` 在 `World.Create.cs` 手工维护 `1..16` 个组件重载；泛型组合仅持有 static cache ID，archetype 缓存在每个 World 的数组里。各 World 预热后交替 Create 不再反复分配；`World.Reset()` 已删除（2026-10-05），Load/Clone 改为新建 World，RestoreState 保留已创建 archetype 和缓存（见 `kb-cache-optimization.md`）。
   - `World.GetSingleton<T>()` 扫描所有 archetype 返回唯一含 `T` 的实体（singleton 语义：0 或 >1 抛异常），O(archetypes) 冷路径
   - `World.EnsureCapacity` 负责提前扩好 entity metadata 存储，不预建批量销毁 scratch
    - `World.CreateEmpty` 创建空实体（无组件），适用于运行期决定组件集合的场景
@@ -99,7 +99,7 @@ updated: 2026-10-11
 本页下方 DestroyMany 吞吐数字是层级删除前的**历史测量**，不是本轮性能数据。
 
 **关键分层边界：**
-- `MiniArch.Core.QueryCache`（原 `Core.Query`，2026-06-30 重命名）是 `internal sealed class`（`Core/QueryCache.cs:11`），用户不能接触。重命名消除了 public struct `MiniArch.Query` 与 internal class `Core.Query` 的命名空间碰撞
+- `MiniArch.Core.QueryCache`（原 `Core.Query`，2026-06-30 重命名）是 `internal sealed class`（`Core/QueryCache.cs:13`），用户不能接触。重命名消除了 public struct `MiniArch.Query` 与 internal class `Core.Query` 的命名空间碰撞
 - `MiniArch.Query.Advanced` 是 `internal`，**用户层无 advanced 入口**——batch/parallel 已在 `MiniArch.Query` 上直接提供
 - EachSpan API 已删除，统一走 `ChunkView.GetSpan<T>()`
 - typed query 家族（`Query<T>`、`Query<T1,T2>` 等）已移除
@@ -137,7 +137,7 @@ updated: 2026-10-11
   - **Archetype 顺序** = 将每个签名内的组件类型身份按 ordinal 排序，再对身份序列做字典序比较，前缀相同则短签名在前。v5 可持久化类型的身份为精确 `AssemblyQualifiedName`；不得直接比较按运行时 `ComponentType.Value` 排列的成员。`PublishArchetypeSnapshot` 在新 archetype 发布时排序插入；原 `Signature`、组件列和 FrameDelta wire 仍使用运行时 ID。
   - 该顺序消除了 archetype 创建历史及其他 World 组件注册顺序的影响；同一 v5 World 状态经 Save→Load、Clone、RestoreState 后，archetype 顺序由组件身份集合决定。
   - **Entity 顺序（同一 archetype 内）** = entity 物理存储顺序（append 到末尾；删除用 swap-remove，末尾 survivor 补充到被删位置）；不同的本 World 结构变更历史仍可能改变行顺序。
-  - **所有访问路径一致**：`foreach`、`GetChunks()` → `ChunkView.GetEntities()`、`GetArchetypeSpan()` → `archetype.GetEntities()` 三者顺序一致。
+  - **所有访问路径一致**：`foreach`、`GetChunks()` → `ChunkView.GetEntities()`、internal `GetArchetypeSpan()` → `archetype.GetEntities()` 三者顺序一致（`Query.Advanced` 与 `GetArchetypeSpan()` 都是 internal，用户层只有前两条）。
   - **确定性**：给定相同 World 状态与本 World 后续结构变更序列，其他 World 的存档加载先后不会改变默认 Query 顺序，也不会改变依赖该顺序的 `Clear(query)` / `Destroy(query)` 回收次序。见 `QueryOrderingTests` 与跨进程存档回归。
   - entity enumerator、ChunkView/span 与 `EntityAccessor` 都是 unchecked borrow；借用期间禁止 Create/Destroy/Clear/Add/Remove/RestoreState。该约束不通过 World 全局版本或 Release 热路径检查兜底。
   - 如需不受结构变更历史影响的稳定顺序，使用 `OrderByEntityId()` / `OrderByEntityIdDescending()` / `OrderByComponent<T>()`
@@ -178,7 +178,7 @@ var query = world.Query(new QueryDescription().With<Position>());
 foreach (var chunk in query.GetChunks())
 {
     var positions = chunk.GetSpan<Position>();
-    for (var i = 0; i < chunk.Length; i++)
+    for (var i = 0; i < chunk.Count; i++)
         positions[i].X += 1;
 }
 

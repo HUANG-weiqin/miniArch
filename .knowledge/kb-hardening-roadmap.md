@@ -2,10 +2,12 @@
 title: Hardening Roadmap
 module: Meta
 description: 系统性的健壮性加固路线图——从 int 溢出、退化性能、内存安全到确定性保障，按里程碑组织
-updated: 2026-10-10
+updated: 2026-11-17
 ---
 
 > **实施状态：** 2026-07-12 完成 M1-M9 全部代码落地。详细信息见 `kb-changelog.md` §2026-07-12。
+>
+> **阅读边界（2026-11-17 校准）：** 本页是当时的攻击面分析与加固记录，**不是当前代码导览**。下文所有 `文件:行号` 与部分成员名（如 `WriteColumnOrderedTo`、`GetColumnBytes`、`FeedColumnData`/`FeedRowData`、`_csEntries`）是 2026-07 的快照，其中一些符号已被后续重构删除或改名。要定位现行实现，请用符号名 `rg` 搜索或看对应模块的 `kb-*.md`；本页的结论与验证证据仍然有效。
 
 # Hardening Roadmap
 

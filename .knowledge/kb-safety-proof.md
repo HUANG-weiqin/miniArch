@@ -2,7 +2,7 @@
 title: MiniArch 正确性验证报告
 module: Proof
 description: 版本化记录 MiniArch 的测试范围、执行命令、当前证据与明确未覆盖项；不把有限测试表述为绝对安全证明
-updated: 2026-10-11
+updated: 2026-11-17
 ---
 # MiniArch 正确性验证报告
 
@@ -23,7 +23,9 @@ updated: 2026-10-11
 | 长程压力 | `MiniArch.Soak`、`MiniArch.LockstepSoak` | ID 复用、free-list、跨 host 是否长期漂移（层级相关历史覆盖已退役） |
 | 性能/内存 | `HeroComing.Perf --check-baseline` | runtime 改动是否跌破发布阈值或持续增内存 |
 
-### 当前复验快照（2026-10-11，DestroyMany 冷 span 门槛重定标）
+### 历史复验快照（2026-10-11，DestroyMany 冷 span 门槛重定标）
+
+> **标题中的“当前”只属于该日期。** 这次重定标随后作为 7.1.0 发布；7.2.0（2026-10-12）又改了 deferred snapshot 取消拒绝、`Validate()` 硬化与 disposed World 导出拒绝，HEAD（2026-11-08）改了 `Get/GetRef` 缺组件异常契约。最新版本与门禁状态以 `CHANGELOG.md` 和最近一次实际运行记录为准，本页只保留各日期快照。
 
 **用户明确授权调整辅助 perf 门槛；本轮仅改变验收政策，不修改 ECS runtime，也不宣称新的提速。** `DestroyMany.Perf` 的 full 50K（旧 ≥1.20×）及 R/M ≥50% sweep（旧 ≥1.00×）改用共享 **≥0.65×** 冷 span 底线。Query 两场景仍 ≥1.20×；Hero 的 1642 / 997 和 baseline 不变。负载、计时窗口、首次 scratch 成本、correctness oracle、分配测量均未改。
 

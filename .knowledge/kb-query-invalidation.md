@@ -2,7 +2,7 @@
 title: Query Invalidation System
 module: MiniArch.Core Query
 description: Sorted archetype snapshot + full-scan cache rebuild on count change, per-archetype chunk-view-shape refresh for chunked growth
-updated: 2026-10-12
+updated: 2026-11-17
 ---
 # Query Invalidation System
 
@@ -30,7 +30,7 @@ updated: 2026-10-12
   - **`QueryCache._refreshLock`**：double-check locking 用于并发只读场景
   - **`QueryCache._archetypeExpectedViews[]`**：跟踪每个匹配 archetype 的 chunk view shape（non-chunked = -1；chunked = SegmentCount），检测分段增长和 non-chunked → single-segment chunked 晋升
 
-- **两段式失效**（`src/MiniArch/Core/QueryCache.cs:105-129` `EnsureRefreshed`）：
+- **两段式失效**（`src/MiniArch/Core/QueryCache.cs:109-132` `EnsureRefreshed`）：
   1. 快路径：`_world.ArchetypeCount == _lastArchetypeCount` → 跳过 archetype 匹配阶段
   2. 慢路径 A：archetype 数量变 → `Refresh()` → `RebuildCache()`（**全量扫描 0..N**，archetype 排序插入可能出现在任何位置，不再支持 append-only）
   3. 慢路径 B：已有匹配 archetype 的 view shape 变（chunked 增长，或 non-chunked 晋升为 single-segment chunked）→ `RefreshViewsOnly()`（不重做 match，只重建 ChunkView）

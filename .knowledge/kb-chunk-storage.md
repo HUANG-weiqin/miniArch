@@ -2,7 +2,7 @@
 title: Chunk 存储
 module: MiniArch.Core
 description: Archetype 存储架构 — 单块模式（默认）和分段模式（阈值后自动切换），包括 SoA 布局、跨段 swap-remove、查询分段迭代
-updated: 2026-07-25
+updated: 2026-11-17
 ---
 # Chunk 存储
 
@@ -38,9 +38,12 @@ updated: 2026-07-25
 ### 2.2 阈值
 
 ```csharp
-// 每段目标 2 MB，实体数根据组件大小动态计算
+// 每段目标 2 MB，实体数根据组件大小动态计算（Archetype.ComputeSegmentEntityCapacityForSize）
 const int TargetSegmentBytes = 2 * 1024 * 1024;
-int SegmentEntityCapacity = perEntity > 0 ? Math.Max(16, TargetSegmentBytes / perEntity) : 65536;
+var target = BitOperations.RoundUpToPowerOf2((uint)Math.Max(1, TargetSegmentBytes / perEntityBytes));
+var safeByArray = 1u << BitOperations.Log2((uint)(ArrayMaxLength / perEntityBytes));
+SegmentEntityCapacity = checked((int)Math.Min(target, Math.Min(safeByArray, (uint)MaxSegmentEntityCapacity)));
+// perEntityBytes == 0 → 65536；容量总是 2 的幂，没有 16 下限
 // 当 capacity * 2 > SegmentEntityCapacity 时，触发分段切换
 // 例：Position (8 bytes) → 262144 entities/segment；Position+Velocity (16 bytes) → 131072 entities/segment
 ```
@@ -48,7 +51,7 @@ int SegmentEntityCapacity = perEntity > 0 ? Math.Max(16, TargetSegmentBytes / pe
 ### 2.3 行号映射
 
 - **单块模式**：行号 = 直接数组索引
-- **分段模式**：`globalRow / SegmentEntityCapacity` → 段索引，`globalRow - segIdx * SegmentEntityCapacity` → 段内行（段大小由组件布局动态决定）
+- **分段模式**：`GetSegmentAndLocal(globalRow) = (globalRow >> _segmentBitShift, globalRow & _segmentMask)` → 段索引 / 段内行。段容量是 2 的幂，因此用 shift/mask，不是除法
 - `EntityRecord.RowIndex` 始终存全局行号，不变
 
 ### 2.4 存储相关文件
@@ -61,17 +64,20 @@ int SegmentEntityCapacity = perEntity > 0 ? Math.Max(16, TargetSegmentBytes / pe
 ### 2.5 ChunkView 的分段适配
 
 ```csharp
-// segmentIndex = -1 表示单块模式，>= 0 表示分段模式中的特定段
-internal ChunkView(Archetype archetype, int segmentIndex = -1)
-public int Count =>
-    _segmentIndex >= 0
-        ? _archetype.GetSegmentCount(_segmentIndex)
-        : _archetype.EntityCount;
+// 简化示意；真实实现含切片重载与 DEBUG 断言，见 ChunkView.cs
+// segmentIndex == NonChunkedSegmentIndex(-1) 表示单块模式，>= 0 表示分段模式中的特定段
+internal ChunkView(Archetype archetype, int segmentIndex = NonChunkedSegmentIndex)
+public int Count => _rowCount >= 0
+    ? _rowCount
+    : _segmentIndex >= 0 ? _archetype.GetSegmentCount(_segmentIndex) : _archetype.EntityCount;
 public Span<T> GetSpan<T>() where T : unmanaged
 {
+    Span<T> full;
     if (_archetype.IsChunked)
-        return _archetype.GetSegmentComponentSpan<T>(_segmentIndex, colIdx);
-    return _archetype.GetComponentSpan<T>(Component<T>.ComponentType);
+        full = _archetype.GetSegmentComponentSpan<T>(_segmentIndex, colIdx);
+    else
+        full = _archetype.GetFlatComponentSpan<T>(Component<T>.ComponentType);
+    return _rowCount >= 0 ? full.Slice(_startRow, _rowCount) : full;
 }
 ```
 
@@ -119,16 +125,16 @@ RemoveAt(globalRow):
 ### 3.4 查询分段迭代
 
 `Query` 的 `EnsureRefreshed()` 检测：
-1. 全局 Archetype 数量变化 → 增量追加
-2. 已有匹配 Archetype 的 `SegmentCount` 变化 → 全量刷新
+1. 全局 Archetype 数量变化 → `Refresh()` → `RebuildCache()`（**全量扫描 0..N**；archetype 现在按签名排序插入，不再支持 append-only 尾扫）
+2. 已有匹配 Archetype 的 view shape 变化（chunked 增长 / 晋升）→ `RefreshViewsOnly()`，不重做匹配
 
 分段后的 Archetype 在匹配时，每个 Segment 被包装为一个独立的 ChunkView。
 
-### 3.5 GetEntityStorage 平坦缓存（2026-06-21）
+### 3.5 GetEntityStorageUnsafe 平坦缓存（2026-06-21）
 
-分段模式下 `GetEntityStorage()` 原来每次调用 `new Entity[_count]` + 逐段 `Array.Copy`，在 `QueryEnumerator.MoveNext()` 热路径上造成每帧分配。
+分段模式下 `GetEntityStorageUnsafe()` 原来每次调用 `new Entity[_count]` + 逐段 `Array.Copy`，在 `QueryEnumerator.MoveNext()` 热路径上造成每帧分配。
 
-修复：引入 `_flatEntitiesGeneration` 计数器 + 缓存数组 `_cachedFlatEntities`。实体布局变更（AllocateRows/RemoveAt/WriteEntityAt/GrowChunked 等）时递增计数器；`GetEntityStorage()` 仅在计数器与缓存版本不匹配时重建平坦数组，否则返回缓存引用——零分配零拷贝。
+修复：引入 `_flatEntitiesGeneration` 计数器 + 缓存数组 `_cachedFlatEntities`。分段模式的实体布局变更（chunked `AllocateRows`/`RemoveAt`/`WriteEntityAt`/`GrowChunked` 等）时递增计数器——flat 模式下 `AllocateRows`/`WriteEntityAt` 提前返回，**不递增**；`GetEntityStorageUnsafe()` 仅在计数器与缓存版本不匹配时重建平坦数组，否则返回缓存引用——零分配零拷贝。
 
 并行读契约要求首次/失效后的缓存构建也能安全发布。多个 reader 不得同时向共享 `_cachedFlatEntities` 边填充边发布 generation：后分配的空数组可能替换已填充数组，使另一个 reader 返回未完成内容。当前 miss 路径使用按需创建的私有同步对象串行重建，在锁内二次检查 generation，并以 `Volatile.Write` 最后发布 generation；hit 路径用 `Volatile.Read` 获取发布信号。同步对象只在 chunked cache 首次 miss 时分配，flat archetype 不增加对象分配。结构写仍严格禁止与 reader 并发。
 
@@ -147,11 +153,11 @@ RemoveAt(globalRow):
 ## 决策
 
 - **单块模式零退化**：`!IsChunked`（flat 模式）时所有路径和原先完全一致（只多一个分支预测）
-- **阈值按组件大小动态计算**：`SegmentEntityCapacity = Max(16, 2MB / bytesPerEntity)`，目标每段 2 MB。2MB 的选择基于：超过 85000 字节的 `byte[]` 分配在 LOH（大对象堆），而 2MB 远高于此但仍是可控的单次分配。更小的段（如 256KB）会增加 segment 数量和遍历开销；更大的段则减少遍历开销但增加单次晋升分配的峰值内存。2MB 是经验平衡点。
-- **行号映射用除法而非二分**：所有段**容量**等长（`Entities.Length == segCap`），`globalRow / segCap` 即可定位段号。段内 `Count` 可不满（空洞合法，见 §3.6）
-- **`ChunkView.Count` 总是读 Archetype 实时计数**：避免因 CommandBuffer 延迟提交导致的 stale count 问题（2026-06-13 bugfix）
+- **阈值按组件大小动态计算**：目标每段 2 MB，容量取 `RoundUpToPowerOf2(2MB / bytesPerEntity)` 再按 `ArrayMaxLength` 与 `MaxSegmentEntityCapacity` 夹取（无 16 下限；`bytesPerEntity == 0` 时为 65536）。2MB 的选择基于：超过 85000 字节的 `byte[]` 分配在 LOH（大对象堆），而 2MB 远高于此但仍是可控的单次分配。更小的段（如 256KB）会增加 segment 数量和遍历开销；更大的段则减少遍历开销但增加单次晋升分配的峰值内存。2MB 是经验平衡点。
+- **行号映射用 shift/mask 而非除法或二分**：所有段**容量**等长（`Entities.Length == segCap`），且 segCap 是 2 的幂，`globalRow >> shift` / `globalRow & mask` 即可定位。段内 `Count` 可不满（空洞合法，见 §3.6）
+- **`ChunkView.Count` 不缓存计数**：普通视图读 Archetype/segment 实时计数，切片视图读 `_rowCount`（`Slice()` 产生的子范围）。不要用字段缓存实体数，否则结构变更后会得到 stale count
 - **不支持托管引用组件**：`flat byte[]` 不含 GC 跟踪，在 Archetype 构造时 fail fast
-- **`AddEntity = AllocateRows(1) + WriteEntityAt`**：分配和写入分离设计。`AllocateRows` 负责扩容/模式切换后分配行号，`WriteEntityAt` 负责写入实体标识。每个方法独立读取 `IsChunked`，消除了老代码中 "EnsureCapacity 可能切换模式→调用方必须重检" 的 bug 类。代码位置：`Archetype.Storage.cs:222-226`
+- **`AddEntity = AllocateRows(1) + WriteEntityAt`**：分配和写入分离设计。`AllocateRows` 负责扩容/模式切换后分配行号，`WriteEntityAt` 负责写入实体标识。每个方法独立读取 `IsChunked`，消除了老代码中 "EnsureCapacity 可能切换模式→调用方必须重检" 的 bug 类。代码位置：`Archetype.Storage.cs` 的 `AllocateRows` / `WriteEntityAt`
 - **`ConvertToChunked` 统一拷贝路径**：旧 fast path（`_capacity == _segmentCapacity` 时零拷贝包装平坦数组）已删除。理由：分段 invariant（`Entities.Length == _segmentCapacity`、列偏移基于 `_segmentCapacity`）在所有路径一致执行，消除一个模式分支。
 
 ## 认知模型
@@ -163,7 +169,7 @@ RemoveAt(globalRow):
 ## 入口
 
 - **核心逻辑**：`Archetype.Storage.cs` 的 `EnsureCapacity()` / `AddEntity()` / `RemoveAt()`
-- **查询适配**：`Query.cs` 的 `AppendNewArchetypes()` + `ChunkView.cs`
+- **查询适配**：`QueryCache.cs` 的 `RebuildCache()` / `RefreshViewsOnly()` + `ChunkView.cs`
 - **测试**：`ArchetypeTests.cs` 的 `Chunked_mode_*` 测试方法
 
 ## Storage Invariants（集中参考）
@@ -174,21 +180,21 @@ RemoveAt(globalRow):
 | 不变量 | 描述 | 定义位置 | 相关测试 |
 |--------|------|---------|---------|
 | **Swap-remove 语义** | `RemoveAt(row)` 把最后一行移到被删行位置，`EntityRecord.RowIndex` 必须同步更新 | 本页 §3.3 + `kb-core-ecs.md` 坑点 | `ArchetypeTests` / `WorldStructuralChangeTests` |
-| **列偏移公式** | 元素定位 = `_columnByteOffsets[col] + row * _elementSizes[col]` | `kb-cache-optimization.md` 内存布局 | 几乎所有读组件的测试（`ChunkTests`, `QueryTests`, `QueryFilterTests`） |
+| **列偏移公式** | 元素定位 = `_columnByteOffsets[col] + row * _elementSizes[col]` | 本页 §2.5 与 `kb-core-ecs.md` 存储段 | 几乎所有读组件的测试（`ChunkTests`, `QueryTests`, `QueryFilterTests`） |
 | **容量增长** | 单块模式 doubling；超过 `_capacity * 2 > _segmentEntityCapacity` 时晋升为分段 | 本页 §2.2 + §3.1 | `ArchetypeTests` / `WorldLifecycleTests` |
 | **晋升单向** | chunked 模式不回退为单块 | `kb-architecture-review.md` §2 | `ArchetypeTests.Chunked_mode_*` |
-| **Padding 零初始化** | `GC.AllocateArray`（零初始化）分配，组件 struct padding 确定为 0 → checksum 安全 | `kb-snapshot-persistence.md` Checksum 段 | `WorldSnapshotTests` (checksum) / `FrameDeltaDeterminismTests` |
-| **段容量等长** | 所有段 `Entities.Length == SegmentEntityCapacity`（容量等长），`GetSegmentAndLocal` 用除法定位行号空间。段内 `Count` **可以** `< segCap`（RemoveAt 空洞，合法） | 本页 坑点 + §3.6 | `ArchetypeTests.Chunked_mode_*` / `AllocateRows_skips_empty_tail_segments_and_fills_first_available` |
+| **Padding 不参与 checksum** | 存储用 `GC.AllocateArray` 零初始化；v6 起 checksum 由字段级 codec 计算，显式忽略 padding/offset/pack，padding 内容变化不再改变 checksum | `kb-determinism-proof.md` §v5 字段 codec + `kb-snapshot-persistence.md` | `WorldSnapshotTests` (padding poison / checksum) / `FrameDeltaDeterminismTests` |
+| **段容量等长** | 所有段 `Entities.Length == SegmentEntityCapacity`（容量等长，2 的幂），`GetSegmentAndLocal` 用 shift/mask 定位行号空间。段内 `Count` **可以** `< segCap`（RemoveAt 空洞，合法） | 本页 §2.3 + §3.6 | `ArchetypeTests.Chunked_mode_*` / `AllocateRows_skips_empty_tail_segments_and_fills_first_available` |
 | **`IsChunked` 重检（历史）** | 曾经的坑：`EnsureCapacity` 可能切换模式，老 API 返回后须重检 `_isChunked`。已解决：`AddEntity = AllocateRows(1) + WriteEntityAt`，每个方法内部单次读取 `IsChunked` | 本页 决策 + 坑点（历史） | `ArchetypeTests` / `CommandStreamTests` (materialize 路径) |
-| **`_flatEntitiesGeneration` 失效与发布** | 布局变更（AllocateRows/WriteEntityAt/RemoveAt/GrowChunked/RestoreFlatBackup/RebuildFlatEntities）时递增；并行 reader 的重建串行化，完整填充后才发布 generation | 本页 §3.5 | `ChunkTests.GetEntities` / `QueryEnumerator` 热路径 / `BUG_parallel_first_chunked_entity_cache_read_publishes_complete_storage` |
+| **`_flatEntitiesGeneration` 失效与发布** | **分段模式下**布局变更（AllocateRows/WriteEntityAt/RemoveAt/GrowChunked/RestoreFlatBackup/RebuildFlatEntities）时递增；flat 模式提前返回、不递增（缓存不适用）。并行 reader 的重建串行化，完整填充后才发布 generation | 本页 §3.5 | `ChunkTests.GetEntities` / `QueryEnumerator` 热路径 / `BUG_parallel_first_chunked_entity_cache_read_publishes_complete_storage` |
 | **RowIndex 全局性** | `EntityRecord.RowIndex` 始终是全局行号，模式透明 | 本页 认知模型 | `WorldStructuralChangeTests` / `IntegrationTests` |
 | **Load 不能走 Add/Set/Remove** | 否则会挤压重排快照 chunk 边界 | `kb-snapshot-persistence.md` 决策 | `WorldSnapshotTests` (save+load round-trip) |
 
 ## 坑点
 
 - **(已解决)** `EnsureCapacity` 可能在非分段路径中将 Archetype **切换为分段模式**，老的 `ReserveRows` 和 `AddEntity` 必须在 `EnsureCapacity` 返回后重新检查 `_isChunked`（2026-06-13 bugfix）。当前代码已重构为 `AddEntity = AllocateRows(1) + WriteEntityAt`，每个方法内部单次读取 `IsChunked`，消除了调用方二次重检的 bug 类。历史记录保留供参考。
-- `ChunkView.Count` 不能用字段缓存实体计数，必须实时读取 Archetype，否则 CommandBuffer 延迟提交导致 chunk.Count 大于 span 长度 → IndexOutOfRangeException
-- `GetSegmentAndLocal` 假设所有段**容量**等长（`Entities.Length == SegmentEntityCapacity`），从而 `globalRow / segCap` 能定位段号。它**不**假设段都满——段内 `Count < segCap` 的空洞是合法中间状态（`RemoveAt` 产生，`AllocateRows` 按"填首个非满段"补上）。真正禁止的是"空段夹在非空段之间"（见下条 + §3.6），否则 `globalRow = _count` 的分配会与除法映射错位
+- `ChunkView.Count` 不能用字段缓存实体计数：普通视图必须实时读取 Archetype/segment（结构变更后缓存会大于实际 span → IndexOutOfRangeException），切片视图读自己的 `_rowCount`
+- `GetSegmentAndLocal` 假设所有段**容量**等长（`Entities.Length == SegmentEntityCapacity`），从而 `globalRow >> shift` / `globalRow & mask` 能定位段号。它**不**假设段都满——段内 `Count < segCap` 的空洞是合法中间状态（`RemoveAt` 产生，`AllocateRows` 按"填首个非满段"补上）。真正禁止的是"空段夹在非空段之间"（见下条 + §3.6），否则 `globalRow = _count` 的分配会与 shift/mask 映射错位
 
 ### DEBUG 不变式断言
 

@@ -2,7 +2,7 @@
 title: Glossary
 module: Meta
 description: Terms and acronyms used across the miniArch knowledge base
-updated: 2026-07-09
+updated: 2026-11-17
 ---
 # Glossary
 
@@ -26,7 +26,7 @@ updated: 2026-07-09
 |------|------|
 | **SoA** | Structure of Arrays。每个组件列存储在独立的连续 byte 区域，而不是 per-entity struct（AoS）。提高 cache 局部性。 |
 | **Swap-remove** | 删除行时把最后一行移到被删位置（O(1)），保持数据紧凑。需要同步更新 `EntityRecord.RowIndex`。 |
-| **Padding 字节** | C# struct 在内存中为对齐而填充的空隙字节。miniArch 用 `GC.AllocateArray`（零初始化）保证 padding = 0，使 checksum 跨 peer 一致。 |
+| **Padding 字节** | C# struct 在内存中为对齐而填充的空隙字节。存储仍用 `GC.AllocateArray` 零初始化；但 v6 起 canonical/legacy checksum 都走字段级 codec，显式忽略 CLR padding/offset/pack，**padding 内容不再影响 checksum**。`LayoutKind.Auto` 的 Entity-bearing 图仍被拒绝。 |
 | **LOH** | Large Object Heap。.NET 中 ≥85000 字节的对象分配在此堆，不压缩易导致碎片化。 |
 | **`[SkipLocalsInit]`** | C# 属性，跳过局部变量零初始化，消除 JIT 生成的 `init` 指令开销。 |
 | **`AggressiveInlining`** | `MethodImpl` 选项，提示 JIT 内联薄转发方法。遗漏会导致迭代退化 41%。 |

@@ -2,7 +2,7 @@
 title: Profiling Workflow
 module: Workspace
 description: Reusable CPU sampling workflow for locating MiniArch hotspots without instrumenting runtime hot paths
-updated: 2026-07-09
+updated: 2026-11-17
 ---
 # Profiling Workflow
 
@@ -51,7 +51,7 @@ updated: 2026-07-09
 
 - `entity`：仅遍历 entity ID，定位 chunk 遍历和 outer loop 热点
 - `component-row-wise`：逐行访问组件，定位 `GetComponent<T>()` 热点
-- `component-span`：批量 span 访问，定位 `GetComponentSpan<T>()` 和向量化机会
+- `component-span`：批量 span 访问，定位 `Archetype.GetFlatComponentSpan<T>()`（internal，profiling runner 使用）和向量化机会
 
 ## 结果解读规则
 
